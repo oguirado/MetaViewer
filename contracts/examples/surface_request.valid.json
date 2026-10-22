@@ -1,0 +1,12 @@
+{
+  "schema": "surface_request/v0.1",
+  "op": "create",
+  "params": {
+    "kind": "game_capsule",
+    "geometry": {
+      "w": 800,
+      "h": 600
+    },
+    "profile_id": "profile-demo"
+  }
+}

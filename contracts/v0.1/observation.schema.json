@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.1/observation.schema.json",
+  "title": "Observation",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "observation/v0.1"
+    },
+    "frame_ref": {
+      "$ref": "frame_ref.schema.json"
+    },
+    "vision": {
+      "type": "object",
+      "properties": {
+        "summary": {
+          "type": "string"
+        },
+        "changed_regions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "x": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "y": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "w": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "h": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "x",
+              "y",
+              "w",
+              "h"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "elements": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "bbox": {
+                "type": "object",
+                "properties": {
+                  "x": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "y": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "w": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "h": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                },
+                "required": [
+                  "x",
+                  "y",
+                  "w",
+                  "h"
+                ],
+                "additionalProperties": false
+              },
+              "role": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "name": {
+                "type": "string"
+              },
+              "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            },
+            "required": [
+              "bbox",
+              "role",
+              "name",
+              "confidence"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "summary",
+        "changed_regions",
+        "elements"
+      ],
+      "additionalProperties": false
+    },
+    "ground_truth": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "const": "holdings_lane"
+        },
+        "state_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "tick": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "source",
+        "state_sha256",
+        "tick"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema",
+    "frame_ref"
+  ],
+  "additionalProperties": false
+}

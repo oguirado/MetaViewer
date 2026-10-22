@@ -1,0 +1,39 @@
+name: CI
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  contracts-and-laws:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check commit laws
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          HEAD: ${{ github.sha }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$EVENT_NAME" = push ] && [ -n "$BEFORE" ] && [ "$BEFORE" != 0000000000000000000000000000000000000000 ]; then
+            python3 tools/check_laws.py --range "$BEFORE..$HEAD"
+          elif [ "$EVENT_NAME" = pull_request ]; then
+            python3 tools/check_laws.py --range "$PR_BASE..$PR_HEAD"
+          else
+            python3 tools/check_laws.py
+          fi
+      - run: python3 tools/check_laws.py --version
+      - run: python3 tools/check_contracts.py
+      - run: python3 -m unittest discover -s tests -v

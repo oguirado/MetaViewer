@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.1/action_verdict.schema.json",
+  "title": "Action Verdict",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "action_verdict/v0.1"
+        },
+        "proposal_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "decision": {
+          "const": "refused"
+        },
+        "reason_code": {
+          "type": "string",
+          "enum": [
+            "STALE_FRAME",
+            "SURFACE_NOT_AGENT_CONTROLLED",
+            "LOCKED_BY_OTHER",
+            "BUDGET_EXCEEDED",
+            "OUT_OF_BOUNDS",
+            "POLICY"
+          ]
+        },
+        "core_seq": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "schema",
+        "proposal_id",
+        "decision",
+        "reason_code",
+        "core_seq"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "action_verdict/v0.1"
+        },
+        "proposal_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "decision": {
+          "const": "admitted"
+        },
+        "core_seq": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "schema",
+        "proposal_id",
+        "decision",
+        "core_seq"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}

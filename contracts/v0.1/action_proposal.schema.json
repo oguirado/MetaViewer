@@ -1,0 +1,345 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.1/action_proposal.schema.json",
+  "title": "Action Proposal",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "action_proposal/v0.1"
+    },
+    "proposal_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "surface_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "based_on_frame": {
+      "type": "object",
+      "properties": {
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "sha256",
+        "generation"
+      ],
+      "additionalProperties": false
+    },
+    "action": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "click"
+            },
+            "x": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "y": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "button": {
+              "type": "string",
+              "enum": [
+                "left",
+                "middle",
+                "right"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "x",
+            "y",
+            "button"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "key"
+            },
+            "keys": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            }
+          },
+          "required": [
+            "type",
+            "keys"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "type"
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "scroll"
+            },
+            "dx": {
+              "type": "integer"
+            },
+            "dy": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "dx",
+            "dy"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "wait"
+            },
+            "ms": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": [
+            "type",
+            "ms"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "lane_submit"
+            },
+            "verb": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "nonce": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "seq": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "command": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "args": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "nonce",
+                "seq",
+                "command",
+                "args"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "type",
+            "verb",
+            "payload"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "expectation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "changed_region"
+            },
+            "bbox": {
+              "type": "object",
+              "properties": {
+                "x": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "y": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "w": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "h": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "required": [
+                "x",
+                "y",
+                "w",
+                "h"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "type",
+            "bbox"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "element_state"
+            },
+            "role": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "name": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "type",
+            "role",
+            "name",
+            "state"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "state_sha256_change"
+            },
+            "before": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "min_tick": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "max_tick": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "type",
+            "before",
+            "min_tick",
+            "max_tick"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "text_present"
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "budget": {
+      "type": "object",
+      "properties": {
+        "max_ms": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_retries": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "max_ms",
+        "max_retries"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema",
+    "proposal_id",
+    "surface_id",
+    "based_on_frame",
+    "action",
+    "expectation",
+    "budget"
+  ],
+  "additionalProperties": false
+}

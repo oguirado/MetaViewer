@@ -1,0 +1,7 @@
+{
+  "schema": "wrong/v0.1",
+  "proposal_id": "proposal-demo",
+  "decision": "refused",
+  "reason_code": "STALE_FRAME",
+  "core_seq": 2
+}

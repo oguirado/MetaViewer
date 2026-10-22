@@ -1,0 +1,28 @@
+{
+  "schema": "action_proposal/v0.1",
+  "proposal_id": "proposal-demo",
+  "surface_id": "surface-demo",
+  "based_on_frame": {
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "generation": 1
+  },
+  "action": {
+    "type": "click",
+    "x": 20,
+    "y": 30,
+    "button": "left"
+  },
+  "expectation": {
+    "type": "changed_region",
+    "bbox": {
+      "x": 10,
+      "y": 20,
+      "w": 80,
+      "h": 30
+    }
+  },
+  "budget": {
+    "max_ms": 1000,
+    "max_retries": 1
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "components": [
+    {"name": "vision-engine", "kind": "python_package", "repo": "oguirado/vision-engine", "version": "v0.1.1", "commit": "cff8f3a"},
+    {"name": "wender-agent", "kind": "python_package", "repo": "oguirado/wender-agent", "version": "v0.1.1", "commit": "f24bda5"},
+    {"name": "opensuperficies", "kind": "go_binary", "repo": "TBD", "version": "TBD", "commit": "TBD"}
+  ]
+}

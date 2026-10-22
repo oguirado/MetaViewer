@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+cd "$(git rev-parse --show-toplevel)"
+python3 tools/check_laws.py --message-file "$1"
+python3 tools/check_laws.py --check-ident "$(git var GIT_AUTHOR_IDENT)"
+python3 tools/check_laws.py --check-ident "$(git var GIT_COMMITTER_IDENT)"

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.1/session_record.schema.json",
+  "title": "Session Record",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "session_record/v0.1"
+    },
+    "core_seq": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "received",
+        "admitted",
+        "refused",
+        "executed",
+        "verified",
+        "surface_changed"
+      ]
+    },
+    "msg_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "prev_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "required": [
+    "schema",
+    "core_seq",
+    "kind",
+    "msg_id",
+    "prev_sha256"
+  ],
+  "additionalProperties": false
+}

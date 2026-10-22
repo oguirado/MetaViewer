@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.1/envelope.schema.json",
+  "title": "Envelope",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "envelope/v0.1"
+    },
+    "msg_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "ts_ns": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "from": {
+      "type": "object",
+      "properties": {
+        "component": {
+          "type": "string",
+          "enum": [
+            "core",
+            "ui",
+            "daemon",
+            "agent",
+            "vision",
+            "wender"
+          ]
+        },
+        "instance": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "component",
+        "instance"
+      ],
+      "additionalProperties": false
+    },
+    "to": {
+      "type": "object",
+      "properties": {
+        "component": {
+          "type": "string",
+          "enum": [
+            "core",
+            "ui",
+            "daemon",
+            "agent",
+            "vision",
+            "wender"
+          ]
+        },
+        "instance": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "component",
+        "instance"
+      ],
+      "additionalProperties": false
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "nonce": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "body": {
+      "oneOf": [
+        {
+          "$ref": "surface.schema.json"
+        },
+        {
+          "$ref": "frame_ref.schema.json"
+        },
+        {
+          "$ref": "surface_request.schema.json"
+        },
+        {
+          "$ref": "surface_event.schema.json"
+        },
+        {
+          "$ref": "observation.schema.json"
+        },
+        {
+          "$ref": "action_proposal.schema.json"
+        },
+        {
+          "$ref": "action_verdict.schema.json"
+        },
+        {
+          "$ref": "action_receipt.schema.json"
+        }
+      ]
+    }
+  },
+  "required": [
+    "schema",
+    "msg_id",
+    "ts_ns",
+    "from",
+    "to",
+    "session_id",
+    "seq",
+    "nonce",
+    "body"
+  ],
+  "additionalProperties": false
+}

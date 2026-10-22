@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.1/frame_ref.schema.json",
+  "title": "Frame Ref",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "frame_ref/v0.1"
+    },
+    "surface_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "tick": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "ts_ns": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "width": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "height": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "format": {
+      "const": "rgb24"
+    },
+    "ramws_path": {
+      "type": "string",
+      "pattern": "^/dev/shm/[^\u0000]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "capture_us": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "schema",
+    "surface_id",
+    "generation",
+    "tick",
+    "ts_ns",
+    "width",
+    "height",
+    "format",
+    "ramws_path",
+    "sha256",
+    "capture_us"
+  ],
+  "additionalProperties": false
+}
