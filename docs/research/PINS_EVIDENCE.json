@@ -1,0 +1,111 @@
+{
+ "schema": "mv.pins.v1",
+ "rule": "latest stable version published on or before 2026-10-09 (>= 14 days before 2026-10-23)",
+ "source": "npm registry metadata via npm view (no download)",
+ "pins": [
+  {
+   "package": "vue",
+   "version": "3.5.43",
+   "published": "2026-09-17",
+   "license": "MIT",
+   "integrity": "sha512-o5qZoksdnjIKvW1srZ3ab7pcDNYAerBjRe54D0LBLfRdCYFrSgBHVXokMas35czQc0//lmx4/tuY4ZNQ+Rf2Ng==",
+   "unpacked_bytes": 2553478
+  },
+  {
+   "package": "vite",
+   "version": "8.3.4",
+   "published": "2026-10-08",
+   "license": "MIT",
+   "integrity": "sha512-IftLE8phJhdNRIGNEV4JCCvfNScoZQVfcXaN8TQropWGJtOHcu+iAB9pHcuGvmEb/kddw0LBe/jS8ztdC6xdiQ==",
+   "unpacked_bytes": 2376813
+  },
+  {
+   "package": "@vitejs/plugin-vue",
+   "version": "6.0.9",
+   "published": "2026-09-14",
+   "license": "MIT",
+   "integrity": "sha512-rD/MORlhaZMlXWW0rEn4FB4wMinWC0z/D7Ye160S5+Rs1mC8ZDAdcDp4SjKfUhG5t8q1ktcPVw4xuTkPRlzrSA==",
+   "unpacked_bytes": 77631
+  },
+  {
+   "package": "vue-tsc",
+   "version": "3.3.12",
+   "published": "2026-10-02",
+   "license": "MIT",
+   "integrity": "sha512-kbpaz18O9jPVkXVHD1BEjpUXM6WhXSu+62L1sGGr6Wbzd8GbvkBQWjoj3KZ/C0aq2MZllce7UdtWzwCIYsBMGA==",
+   "unpacked_bytes": 7121
+  },
+  {
+   "package": "dockview-vue",
+   "version": "8.4.1",
+   "published": "2026-10-05",
+   "license": "MIT",
+   "integrity": "sha512-GpgLl1uxzSl9xt6g6+ZHqKJGEVdFHtDmj3z7fxLuhSG2hCXN5UD44F+x3XKhq5aXXVlRL5UZDBOf37IsGMMDDA==",
+   "unpacked_bytes": 235963
+  },
+  {
+   "package": "dockview-core",
+   "version": "8.4.1",
+   "published": "2026-10-05",
+   "license": "MIT",
+   "integrity": "sha512-LcvhGwmK/Q1tFDEPkiBpkLIYctimmu8JJHgG5yhIXwyf9IvWQkJa3EG7/a1NKUS2Q8w82uoYZTL+c84/zpQUjg==",
+   "unpacked_bytes": 5510195
+  },
+  {
+   "package": "openvue",
+   "version": "1.0.0",
+   "published": "2026-09-10",
+   "license": "MIT",
+   "integrity": "sha512-mbc1p+P5TMI2wT9W1Q9eUuK5xG4RJvsxDnfEJ53gBGCoYcr+jwZmsnds673YruEHAko49c958Mn/lzT/G31ZsA==",
+   "unpacked_bytes": 14354245
+  },
+  {
+   "package": "@xterm/xterm",
+   "version": "6.0.0",
+   "published": "2025-12-22",
+   "license": "MIT",
+   "integrity": "sha512-TQwDdQGtwwDt+2cgKDLn0IRaSxYu1tSUjgKarSDkUM0ZNiSRXFpjxEsvc/Zgc5kq5omJ+V0a8/kIM2WD3sMOYg==",
+   "unpacked_bytes": 5921599
+  },
+  {
+   "package": "@xterm/addon-fit",
+   "version": "0.11.0",
+   "published": "2025-12-22",
+   "license": "MIT",
+   "integrity": "sha512-jYcgT6xtVYhnhgxh3QgYDnnNMYTcf8ElbxxFzX0IZo+vabQqSPAjC3c1wJrKB5E19VwQei89QCiZZP86DCPF7g==",
+   "unpacked_bytes": 20727
+  },
+  {
+   "package": "node-pty",
+   "version": "1.1.0",
+   "published": "2025-12-22",
+   "license": "MIT",
+   "integrity": "sha512-20JqtutY6JPXTUnL0ij1uad7Qe1baT46lyolh2sSENDd4sTzKZ4nmAFkeAARDKwmlLjPx6XKRlwRUxwjOy+lUg==",
+   "unpacked_bytes": 64363742
+  },
+  {
+   "package": "pinia",
+   "version": "4.0.3",
+   "published": "2026-08-12",
+   "license": "MIT",
+   "integrity": "sha512-XMQqpvjgG7LMqVhhFUzKLT4KEbsYbfZZ0CZU9PgdFm1O2VKBmIkykL8+SfNhOaT7sR0wT6BEgKT0YNDYWgmVRA==",
+   "unpacked_bytes": 187944
+  },
+  {
+   "package": "@openvue/themes",
+   "version": "1.0.0",
+   "published": "2026-09-10",
+   "license": "MIT",
+   "integrity": "sha512-YiLHzoa+0ic5yz/+vljDaH3UWNofgu5JLENq2FPMY+rPJD9L2F+/QumvUj7vUHvPIFexnb35FwM6fpetw6BfiA==",
+   "unpacked_bytes": null
+  },
+  {
+   "package": "@openvue/icons",
+   "version": "1.0.0",
+   "published": "2026-09-10",
+   "license": "MIT",
+   "integrity": "sha512-xCBcHvs0SjEqrDkL54cwcSKUYkjbAPPbfISfygoxjkE/yibUGk3STyutVsGTAEeV5BIYmK/Hd4eUMN/FOTcsfw==",
+   "unpacked_bytes": null
+  }
+ ]
+}
