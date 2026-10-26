@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 175 | 55 | 120 |
-| Lanes finished OK | 175 | 55 | 120 |
-| Agent steps | 8,905 | 2,705 | 6,200 |
-| Lane-hours of agent work | 22.5 | 5.2 | 17.3 |
-| Fresh input tokens | 38,733,081 | 11,482,034 | 27,251,047 |
-| Cache-read input tokens | 816,978,945 | 226,255,212 | 590,723,733 |
-| Prompt cache hit % | 95.5 | 95.2 | 95.6 |
-| Output tokens | 8,122,675 | 2,135,708 | 5,986,967 |
-| Thinking tokens | 4,293,573 | 1,050,039 | 3,243,534 |
-| Cost (USD) | 7.1318 | 2.0279 | 5.1039 |
-| Cost per lane (USD) | 0.0408 | 0.0369 | 0.0425 |
+| Lanes launched | 179 | 55 | 124 |
+| Lanes finished OK | 179 | 55 | 124 |
+| Agent steps | 9,096 | 2,705 | 6,391 |
+| Lane-hours of agent work | 23.0 | 5.2 | 17.7 |
+| Fresh input tokens | 39,635,670 | 11,482,034 | 28,153,636 |
+| Cache-read input tokens | 831,204,153 | 226,255,212 | 604,948,941 |
+| Prompt cache hit % | 95.4 | 95.2 | 95.6 |
+| Output tokens | 8,284,380 | 2,135,708 | 6,148,672 |
+| Thinking tokens | 4,371,828 | 1,050,039 | 3,321,789 |
+| Cost (USD) | 7.2828 | 2.0279 | 5.255 |
+| Cost per lane (USD) | 0.0407 | 0.0369 | 0.0424 |
 
-Rooms: 36. Peak concurrent lanes [MEASURED from lane start/end]: 32.
+Rooms: 37. Peak concurrent lanes [MEASURED from lane start/end]: 32.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -39,7 +39,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
 | build | 35 | 95.9 | 1.5489 |
-| context | 38 | 96.0 | 1.7583 |
+| context | 42 | 95.9 | 1.9093 |
 | demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
 | docs | 7 | 93.8 | 0.1642 |
@@ -94,6 +94,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0dm | conductor | Oct 27 00:28 | demo | 4 | 90.7 | 0.0557 | Prepare the live demo run sheet, the presentation video storyboard (AC-16, AC-17), the submission text and a rubric gap map so the demo criterion (25 percent) is planned from evidence. |
 | mv0dc | conductor | Oct 27 00:28 | docs | 4 | 94.5 | 0.122 | Draft the product documentation (README quickstart, user guide, testing report, architecture refresh) verified against the integration head, for acceptance criterion AC-15. |
 | mv0r2 | conductor | Oct 27 00:28 | testing | 8 | 93.7 | 0.217 | Write the external testing round-2 prompts (Jules test-writing and ChatGPT adversarial review per topic) targeting the code changed since round 1 and regression checks of every round-1 fix. |
+| mv0w3pk | conductor | Oct 27 00:34 | context | 4 | 94.0 | 0.151 | Draft the context packs of the W3 product-finishing units (packaging, CI matrix, memory budgets, install docs) so their Sol writers start from verified file:line context. |
 
 ## Every lane
 
@@ -274,6 +275,10 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0r2 | T6 | Round-2 prompts T6 | Oct 27 00:29 | yes | 45 | 94.9 | 0.028242 |
 | mv0r2 | T7 | Round-2 prompts T7 | Oct 27 00:29 | yes | 32 | 92.6 | 0.034937 |
 | mv0r2 | T8 | Round-2 prompts T8 | Oct 27 00:29 | yes | 29 | 92.4 | 0.024794 |
+| mv0w3pk | P_PKG | Pack W3-PKG | Oct 27 00:34 | yes | 40 | 91.9 | 0.04142 |
+| mv0w3pk | P_CI_MATRIX | Pack W3-CI-MATRIX | Oct 27 00:34 | yes | 39 | 94.1 | 0.036339 |
+| mv0w3pk | P_BUDGETS | Pack W3-BUDGETS | Oct 27 00:34 | yes | 49 | 94.1 | 0.040309 |
+| mv0w3pk | P_INSTALL_DOCS | Pack W3-INSTALL-DOCS | Oct 27 00:34 | yes | 63 | 95.6 | 0.032982 |
 
 ## Method
 
