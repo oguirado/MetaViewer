@@ -404,6 +404,17 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # setup-node v4.4.0
         with:
           node-version: "24"
+      # The native integration test deliberately disables automatic toolchain
+      # downloads. Put the module-selected Go binary on PATH before it runs.
+      - name: Select adapter Go toolchain
+        run: |
+          set -euo pipefail
+          version="$(awk '$1 == "go" {print $2}' daemon-adapter/go.mod)"
+          test -n "$version"
+          toolchain_root="$(GOTOOLCHAIN="go${version}" go env GOROOT)"
+          test -x "${toolchain_root}/bin/go"
+          "${toolchain_root}/bin/go" version
+          echo "${toolchain_root}/bin" >> "$GITHUB_PATH"
       - name: Run laws and contracts gates
         env:
           JOB_ID: laws-contracts
@@ -1366,6 +1377,10 @@ jobs:
       - name: Install E2E dependencies
         working-directory: ui
         run: npm ci --no-audit --no-fund
+      # Electron 44 uses an explicit installer (no npm postinstall hook).
+      # Its locked package supplies checksums.json to @electron/get.
+      - name: Install and verify pinned Electron binary
+        run: node .github/workflows/install_electron.cjs
       - name: Run E2E gate under xvfb
         env:
           JOB_ID: e2e
