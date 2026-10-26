@@ -7,13 +7,14 @@
  * (resizable separator, persisted open/width). Provider menu entries come
  * from host data through the multislot provider adapter; malformed host
  * data falls back to the shell-only menu. The terminal binding
- * (`{session, port}`) is injected; without one the kit panel projects its
- * designed empty state.
+ * (`{session, port}`) is injected; without one the overlay hands the kit
+ * panel a no-core empty-state facade so it projects its designed empty
+ * state instead of exception text.
  */
 import { computed, markRaw, onBeforeUnmount, ref, toRaw, watch } from 'vue';
 import SideTerminalPanel from '/.kit/capsule-ui-kit/src/side-terminal/SideTerminalPanel.vue';
 import BrokerLaunchControls from './BrokerLaunchControls.vue';
-import { createSideTerminalFacade } from './sideTerminalFacade.js';
+import { createSideTerminalFacade, createEmptySideTerminalFacade } from './sideTerminalFacade.js';
 import { toKitMenuProviders } from '../multislot/multislotProviders.js';
 import './terminal.css';
 
@@ -35,7 +36,7 @@ watch(() => props.open, value => { overlayOpen.value = value !== false; });
 /** @param {boolean} value */
 function updateOpen(value) { overlayOpen.value = value; emit('update:open', value); }
 
-/** @type {import('vue').ShallowRef<ReturnType<typeof createSideTerminalFacade> | null>} */
+/** @type {import('vue').ShallowRef<ReturnType<typeof createSideTerminalFacade> | ReturnType<typeof createEmptySideTerminalFacade> | null>} */
 const facadeRef = ref(null);
 
 function rebind() {
@@ -46,13 +47,13 @@ function rebind() {
   }
   const binding = props.terminalBinding ? toRaw(props.terminalBinding) : null;
   if (!binding || typeof binding.session !== 'string' || !binding.port) {
-    facadeRef.value = null;
+    facadeRef.value = markRaw(createEmptySideTerminalFacade());
     return;
   }
   try {
     facadeRef.value = markRaw(createSideTerminalFacade({ session: binding.session, port: toRaw(binding.port) }));
   } catch {
-    facadeRef.value = null;
+    facadeRef.value = markRaw(createEmptySideTerminalFacade());
   }
 }
 rebind();

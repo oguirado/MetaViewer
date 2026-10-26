@@ -233,6 +233,68 @@ export function resolveRouterCapsuleId(params) {
   return id;
 }
 
+/** Dock tab control id namespace: deterministic per capsule, never a bare numeric index. */
+export const DOCK_TAB_ID_PREFIX = 'wall-tab-';
+/** Tab title fallback when the panel carries no usable title or capsule id. */
+export const DOCK_TAB_FALLBACK_TITLE = 'Capsule';
+
+/** @typedef {Readonly<{ capsuleId: (string | null), id: (string | null), anchor: (string | null), title: string }>} DockTabDescription */
+
+/**
+ * Reads the capsule id behind a dockview tab component invocation. Tab
+ * components receive `{ params, api, containerApi, tabLocation }`: the panel
+ * params carry the authoritative capsuleId, and the panel id re-derives it
+ * through the reversible panel prefix when params are absent.
+ * @param {unknown} tabProps
+ * @returns {string | null}
+ */
+export function resolveDockTabCapsuleId(tabProps) {
+  const fromParams = resolveRouterCapsuleId(tabProps);
+  if (fromParams !== null) return fromParams;
+  const panelId = asNonEmptyString(asRecord(asRecord(tabProps).api).id);
+  if (panelId !== null && panelId.startsWith(WALL_PANEL_ID_PREFIX)) {
+    const candidate = panelId.slice(WALL_PANEL_ID_PREFIX.length);
+    const checked = validateWallCapsuleId(candidate);
+    if (checked.ok) return checked.value;
+  }
+  return null;
+}
+
+/**
+ * Resolves the rendered tab title: the panel title verbatim when it carries
+ * non-blank text, otherwise the capsule id, otherwise the Capsule fallback.
+ * @param {unknown} tabProps
+ * @param {string | null} capsuleId
+ * @returns {string}
+ */
+export function resolveDockTabTitle(tabProps, capsuleId) {
+  const title = asNonEmptyString(asRecord(asRecord(tabProps).api).title);
+  if (title !== null && title.trim().length > 0) return title;
+  return capsuleId ?? DOCK_TAB_FALLBACK_TITLE;
+}
+
+/**
+ * Describes one dock tab for the agent lane: a stable control id plus a
+ * capsule-scoped semantic anchor when a capsule id resolves, title only
+ * otherwise (retired or foreign panels keep legacy unanchored rendering and
+ * never receive an invented identity).
+ * @param {unknown} tabProps
+ * @returns {DockTabDescription}
+ */
+export function describeDockTab(tabProps) {
+  const capsuleId = resolveDockTabCapsuleId(tabProps);
+  const title = resolveDockTabTitle(tabProps, capsuleId);
+  if (capsuleId === null) {
+    return Object.freeze({ capsuleId: null, id: null, anchor: null, title });
+  }
+  return Object.freeze({
+    capsuleId,
+    id: `${DOCK_TAB_ID_PREFIX}${capsuleId}`,
+    anchor: `capsule/${capsuleId}/tab`,
+    title,
+  });
+}
+
 /**
  * Dependency-injected wall controller. Pure except for the kit-owned api
  * object it is given: fully unit-testable without a DOM.
@@ -590,7 +652,19 @@ const WallSurfaceRouter = markRaw(defineComponent({
   },
 }));
 
-const SurfaceTab = defineComponent({ props: { params: { type: Object, required: true } }, setup: p => () => h('span', { class: 'mv-surface-tab' }, p.params?.api?.title ?? 'Capsule') });
+const SurfaceTab = defineComponent({
+  name: 'SurfaceTab',
+  props: { params: { type: Object, required: true } },
+  setup(tabProps) {
+    return () => {
+      const tab = describeDockTab(tabProps.params);
+      if (tab.id === null || tab.anchor === null) {
+        return h('span', { class: 'mv-surface-tab' }, tab.title);
+      }
+      return h('span', { class: 'mv-surface-tab', id: tab.id, 'data-semantic-anchor': tab.anchor }, tab.title);
+    };
+  },
+});
 const tabComponents = markRaw({ SurfaceTab });
 
 const panelComponents = markRaw({

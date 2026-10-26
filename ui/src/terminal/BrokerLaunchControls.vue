@@ -26,11 +26,12 @@ const entries = computed(() => {
 async function enable(event) {
   if (busy.value || !facade.value?.canEnable) return;
   const next = /** @type {HTMLInputElement} */ (event.target).checked;
+  const broker = facade.value;
   try {
-    await facade.value?.setEnabled(next);
-    if (active) { outcome.value = null; }
+    await broker?.setEnabled(next);
+    if (active && broker === facade.value) { outcome.value = null; }
   } catch {
-    if (active) outcome.value = { code: 'TERMINAL_ENABLE_REFUSED', message: 'Terminal access is unavailable.' };
+    if (active && broker === facade.value) outcome.value = { code: 'TERMINAL_ENABLE_REFUSED', message: 'Terminal access is unavailable.' };
   } finally {
     if (active) { /** @type {HTMLInputElement} */ (event.target).checked = enabled.value; }
   }
@@ -42,8 +43,8 @@ async function launch(entry) {
   const broker = facade.value;
   try {
     const opened = await broker?.open({ command: entry.command ?? PROVIDER_COMMAND,
-      args: entry.id === SHELL_COMMAND ? [] : [...entry.argv], cols: 80, rows: 24 });
-    if (!active || broker !== facade.value) {
+      args: entry.id === SHELL_COMMAND ? [] : (Array.isArray(entry.argv) ? [...entry.argv] : []), cols: 80, rows: 24 });
+    if (!active || broker !== facade.value || !facade.value?.state.enabled) {
       const id = typeof opened?.session === 'string' ? opened.session : opened?.session?.session;
       if (typeof id === 'string') { try { broker?.close({ session: id }); } catch { /* Host owns final cleanup. */ } }
       return;

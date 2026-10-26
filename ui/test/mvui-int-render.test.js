@@ -108,7 +108,7 @@ function knownStyle({ origin, tag }) {
   if (origin === kitSource('multislot/AiSlotSplitter')) return knownSplitter(tag) && style === '';
   if (origin === kitSource('saas/SaasFoldedRail')) return id === 'cuk-ai-slot-cap-01-rail'
     && classes === 'saas-rail' && style === 'display:none;';
-  return origin === 'src/surfaces/SurfaceCanvas.vue' && style === 'display:none;' && classes === 'mv-surface__canvas';
+  return false;
 }
 function knownControl({ origin, tag }) {
   let repaired;
@@ -135,14 +135,14 @@ async function attributedChecks(t, html, kind) {
     if (kind === 'CSP') return /\sstyle\s*=/.test(tag);
     try { assertControls(tag); return false; } catch { return true; }
   });
-  const owned = offenders.filter(({ origin }) => origin.startsWith('src/') && !origin.startsWith('src/surfaces/'));
+  const owned = offenders.filter(({ origin }) => origin.startsWith('src/'));
   await t.test(`${kind}: MetaViewer-owned`, () => assert.deepEqual(owned, []));
   if (kind === 'control identities') {
     const ids = elements.map(({ tag }) => tag.match(/\sid="([^"]+)"/)?.[1]).filter(Boolean);
     await t.test('duplicate DOM ids remain hard', () => assert.deepEqual(ids.filter((id, i) => ids.indexOf(id) !== i), []));
   }
-  for (const [group, todo] of [['kit', 'capsule-ui-kit 0.2.1 CSP audit'], ['surfaces', 'surfaces unit: SurfaceCanvas v-show']]) {
-    const external = offenders.filter(({ origin }) => group === 'kit' ? origin.startsWith('.kit/') : origin.startsWith('src/surfaces/'));
+  for (const [group, todo] of [['kit', 'capsule-ui-kit 0.2.1 CSP audit']]) {
+    const external = offenders.filter(({ origin }) => origin.startsWith('.kit/'));
     await t.test(`${kind}: ${group} known-offender subset`, () => assertKnown(external, kind === 'CSP' ? knownStyle : knownControl));
     await t.test(`${kind}: ${group}`, { todo: external.length ? todo : undefined }, subtest => {
       subtest.diagnostic(JSON.stringify(external));
@@ -166,6 +166,7 @@ test('origin attribution preserves owned slots and rejects new external offender
     { origin: kitSource('side-terminal/SideTerminalPanel'), tag: '<div class="new-kit-element" style="display:none;">' },
     { origin: 'src/App.vue', tag: '<div class="cui-side-terminal__body" style="display:none;">' },
     { origin: 'src/surfaces/SurfaceCanvas.vue', tag: '<canvas class="mv-surface__canvas" style="color:red;">' },
+    { origin: 'src/surfaces/SurfaceCanvas.vue', tag: '<canvas class="mv-surface__canvas" style="display:none;">' },
   ]) assert.throws(() => assertKnown([element], knownStyle));
   assert.throws(() => assertKnown([{ origin: kitSource('shell/Sidebar'), tag: '<button id="pv_id_new">' }], knownControl));
 });

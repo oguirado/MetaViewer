@@ -14,6 +14,12 @@ export const AGENT_LANE_SCHEMA = 'agent_lane/v1';
 /** Global key installed on the renderer host object (`window`). */
 export const AGENT_LANE_GLOBAL = '__agentLane';
 
+/** Bench frame-binding hook (fixture installs only, never live). */
+export const BENCH_FRAME_GLOBAL = '__benchCaptureFrame';
+
+/** Upper bound for the bench-supplied frame provenance tag. */
+export const MAX_BENCH_SOURCE_PIN_CHARS = 256;
+
 /** Selector for snapshot candidates. */
 export const ANCHORED_SELECTOR = '[data-semantic-anchor]';
 
@@ -80,6 +86,18 @@ export const MAX_ACCESSIBLE_NAME_CHARS = 140;
  * @property {readonly AgentControl[]} controls
  * @property {string} screen
  * @property {AgentSnapshotState} state
+ */
+
+/**
+ * @typedef {Object} BenchFrame
+ * @property {string} raw_sha256 - Lowercase hex sha256 of the captured RGB bytes.
+ * @property {string|null} source_pin - Bench provenance tag, or null when absent.
+ */
+
+/**
+ * @typedef {Object} BenchFrameBinding
+ * @property {string} snapshot - Lane snapshot id the capture binds to.
+ * @property {BenchFrame} frame - Validated captured-frame descriptor.
  */
 
 /**
@@ -350,8 +368,63 @@ export function createAgentLane(options) {
 }
 
 /**
+ * Closed shape for a 64-character lowercase hex frame digest.
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+function isBenchDigest(value) {
+  return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+}
+
+/**
+ * Validates a bench frame descriptor without throwing. Total function.
+ * @param {unknown} value
+ * @returns {{ ok: true, frame: BenchFrame }|{ ok: false, error: { code: string, message: string } }}
+ */
+export function validateBenchFrameDescriptor(value) {
+  const fail = (/** @type {string} */ message) => ({
+    ok: /** @type {const} */ (false),
+    error: { code: 'ERR_BENCH_FRAME_SHAPE', message },
+  });
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return fail('Bench frame must be an object');
+  }
+  const frame = /** @type {Record<string, unknown>} */ (value);
+  const shape = Object.keys(frame).sort().join(',');
+  if (shape !== 'raw_sha256' && shape !== 'raw_sha256,source_pin') {
+    return fail(`Bench frame has non-closed keys [${shape}]`);
+  }
+  if (!isBenchDigest(frame.raw_sha256)) return fail('Bench frame raw_sha256 must be 64 lowercase hex');
+  const pin = frame.source_pin;
+  if (pin !== undefined && (typeof pin !== 'string' || pin.length === 0 || pin.length > MAX_BENCH_SOURCE_PIN_CHARS)) {
+    return fail('Bench frame source_pin must be 1-256 characters');
+  }
+  return {
+    ok: /** @type {const} */ (true),
+    frame: Object.freeze({
+      raw_sha256: /** @type {string} */ (frame.raw_sha256),
+      source_pin: typeof pin === 'string' ? pin : null,
+    }),
+  };
+}
+
+/**
+ * Deterministic lane snapshot identity: fixture key plus the 1-based
+ * snapshot sequence of the installed lane. No clocks, no random ids.
+ * @param {string} fixture
+ * @param {number} sequence
+ * @returns {string}
+ */
+export function formatBenchSnapshotId(fixture, sequence) {
+  return `fixture:${fixture}:${sequence}`;
+}
+
+/**
  * Installs `__agentLane` on a host object (the renderer `window`).
  * Double installation is a typed error; the returned callback uninstalls.
+ * Fixture installs (non-empty `options.fixture`) also install the bench
+ * frame-binding hook `__benchCaptureFrame`; live installs never do.
+ * Snapshot values stay untouched: the hook only counts snapshots.
  * @param {any} target
  * @param {{ root: any, screen?: string|((root: any) => unknown), fixture?: string|null }} options
  * @returns {() => void}
@@ -363,11 +436,41 @@ export function installAgentLane(target, options) {
   if (target[AGENT_LANE_GLOBAL] !== undefined) {
     throw laneError('ERR_AGENT_LANE_MOUNTED', 'The __agentLane host key is already installed');
   }
+  const fixture = typeof options?.fixture === 'string' && options.fixture.length > 0 ? options.fixture : null;
+  if (fixture !== null && target[BENCH_FRAME_GLOBAL] !== undefined) {
+    throw laneError('ERR_BENCH_FRAME_MOUNTED', 'The __benchCaptureFrame host key is already installed');
+  }
   const lane = createAgentLane(options);
-  target[AGENT_LANE_GLOBAL] = Object.freeze({ snapshot: lane.snapshot });
+  /** @type {() => Promise<AgentSnapshot>} */
+  let installedSnapshot = lane.snapshot;
+  /** @type {((frame: unknown) => BenchFrameBinding)|null} */
+  let bindBenchFrame = null;
+  if (fixture !== null) {
+    let sequence = 0;
+    const installed = lane.snapshot;
+    installedSnapshot = async () => {
+      const snapshot = await installed();
+      sequence += 1;
+      return snapshot;
+    };
+    // Binds a captured bench frame to the most recent lane snapshot id.
+    bindBenchFrame = (frame) => {
+      const validated = validateBenchFrameDescriptor(frame);
+      if (!validated.ok) throw laneError(validated.error.code, validated.error.message);
+      if (sequence === 0) {
+        throw laneError('ERR_BENCH_FRAME_NO_SNAPSHOT', 'Frame binding needs a lane snapshot first');
+      }
+      return Object.freeze({ snapshot: formatBenchSnapshotId(fixture, sequence), frame: validated.frame });
+    };
+    target[BENCH_FRAME_GLOBAL] = bindBenchFrame;
+  }
+  target[AGENT_LANE_GLOBAL] = Object.freeze({ snapshot: installedSnapshot });
   return () => {
-    if (target[AGENT_LANE_GLOBAL]?.snapshot === lane.snapshot) {
+    if (target[AGENT_LANE_GLOBAL]?.snapshot === installedSnapshot) {
       delete target[AGENT_LANE_GLOBAL];
+    }
+    if (bindBenchFrame !== null && target[BENCH_FRAME_GLOBAL] === bindBenchFrame) {
+      delete target[BENCH_FRAME_GLOBAL];
     }
   };
 }

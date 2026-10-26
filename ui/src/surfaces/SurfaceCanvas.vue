@@ -109,7 +109,7 @@ onBeforeUnmount(() => {
     :data-state="resolvedState"
     :aria-label="accessibleName"
   >
-    <canvas ref="canvasRef" v-show="resolvedState === 'live' || resolvedState === 'stale'" class="mv-surface__canvas" aria-hidden="true" />
+    <canvas ref="canvasRef" :hidden="resolvedState !== 'live' && resolvedState !== 'stale'" class="mv-surface__canvas" aria-hidden="true" />
     <div v-if="resolvedState !== 'live' && resolvedState !== 'stale'" class="mv-surface__waiting" role="status">
       <span class="mv-surface__connection-mark" aria-hidden="true">◌</span>
       <strong>{{ resolvedState === 'connecting' ? 'Connecting to surface' : 'Waiting for surface' }}</strong>
@@ -142,6 +142,9 @@ onBeforeUnmount(() => {
   min-height: 0;
   object-fit: contain;
   background-color: var(--mv-primitive-color-neutral-1100, #000000);
+}
+.mv-surface__canvas[hidden] {
+  display: none;
 }
 .mv-surface__waiting { flex:1; min-height:200px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:var(--cuk-semantic-spacing-sm); padding:var(--cuk-semantic-spacing-lg); text-align:center; color:var(--cuk-semantic-text-muted); font-size:12px; }
 .mv-surface__waiting strong { color:var(--cuk-semantic-text-primary); font-size:14px; font-weight:500; }

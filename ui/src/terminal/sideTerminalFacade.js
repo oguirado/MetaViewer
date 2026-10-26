@@ -62,6 +62,36 @@ export function createSideTerminalFacade({ session, port }) {
 }
 
 
+/** No-core empty-state facade for the kit side-terminal model.
+ * Answers the attach/capabilities contract with zero sessions and typed
+ * refusals, so an open panel without a core/broker binding projects the
+ * designed empty state instead of JS exception text. Structurally matches
+ * the session facade so the overlay can hand either to the kit panel.
+ */
+export function createEmptySideTerminalFacade() {
+  return {
+    capabilities: async () => ({ developerMode: false, commands: [] }),
+    attach: async () => ({ enabled: false, sessions: [] }),
+    /** @param {(frame:any)=>void} _receive */
+    onData(_receive) { return () => true; },
+    /** @param {(event:any)=>void} _receive */
+    onExit(_receive) { return () => true; },
+    /** @param {{session:string,seq:number,bytes:number}} _ack */
+    ack: async (_ack) => { throw new Error('Terminal session unavailable'); },
+    /** @param {{session:string,bytes:number[]}} _input */
+    write: async (_input) => { throw new Error('Terminal session unavailable'); },
+    /** @param {{session:string,cols:number,rows:number}} _size */
+    resize: async (_size) => { throw new Error('Terminal session unavailable'); },
+    /** @param {{session:string}} _request */
+    close(_request) {},
+    /** @param {boolean} _enabled */
+    setEnabled: async (_enabled) => { throw new Error('Terminal access unavailable'); },
+    /** @param {{command:string,args:readonly string[],cols:number,rows:number}} _spec */
+    open: async (_spec) => { throw new Error('Terminal launch unavailable'); },
+    dispose() {},
+  };
+}
+
 /** @typedef {{open?: ((spec: {command:string,args:readonly string[],cols:number,rows:number}) => Promise<any>) | null,
  * setEnabled?: ((enabled:boolean) => Promise<unknown>) | null,
  * close?: ((request:{session:string}) => unknown) | null}} SideTerminalBroker */
@@ -93,7 +123,9 @@ export function createSideTerminalBrokerFacade(source) {
     /** @param {{command:string,args:readonly string[],cols:number,rows:number}} spec */
     async open(spec) {
       if (!broker.open || !state.enabled || state.busy) throw new Error('Terminal launch unavailable');
-      return broker.open(spec);
+      state.busy = true;
+      try { return await broker.open(spec); }
+      finally { state.busy = false; }
     },
     /** Host owns process lifetime; close is forwarded only when supplied.
      * @param {{session:string}} request */

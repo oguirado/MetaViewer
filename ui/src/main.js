@@ -43,7 +43,7 @@ const THEME_DATASET = Object.freeze({
 /** Mount selector for the single mount div owned by index.html. */
 const MOUNT_SELECTOR = '#metaviewer-app';
 const REFUSAL_PREFIX = 'MetaViewer cannot start: ';
-const PREVIEW_ERRORS = new Set(['ERR_UNKNOWN_FIXTURE_STATE', 'ERR_INVALID_STATE_QUERY']);
+const PREVIEW_ERRORS = new Set(['ERR_UNKNOWN_FIXTURE_STATE', 'ERR_INVALID_STATE_QUERY', 'ERR_UNKNOWN_SCHEME', 'ERR_INVALID_SCHEME_QUERY']);
 
 /**
  * Bind the closed preload layout facade. A missing or malformed facade is a
@@ -119,7 +119,27 @@ async function bootstrap() {
   if (!parsed.ok && parsed.error.code !== 'ERR_MISSING_STATE_PARAM') throw new Error(parsed.error.code);
   const resolved = parsed.ok ? resolveFixture(parsed.key) : null;
   if (resolved && !resolved.ok) throw new Error(resolved.error.code);
-  const fixture = resolved?.ok ? resolved.fixture : null;
+  const baseFixture = resolved?.ok ? resolved.fixture : null;
+  // Fixture-only vision hook (MV-5): an explicit ?scheme= overrides the
+  // fixture default. Live boot ignores the parameter entirely. Matching is
+  // exact and case-sensitive; unknown, empty, or repeated values refuse boot
+  // with the same fixed preview copy as ?state=. Kept import-free so the
+  // boot harnesses keep executing this entry with their closed stub map.
+  /** @type {typeof baseFixture} */
+  let fixture = baseFixture;
+  if (baseFixture) {
+    const requestedSchemes = new URLSearchParams(window.location.search).getAll('scheme');
+    if (requestedSchemes.length > 1 || (requestedSchemes.length === 1 && requestedSchemes[0].length === 0)) {
+      throw new Error('ERR_INVALID_SCHEME_QUERY');
+    }
+    const requestedScheme = requestedSchemes.length === 1 ? requestedSchemes[0] : null;
+    if (requestedScheme !== null && requestedScheme !== 'mv-light' && requestedScheme !== 'mv-dark') {
+      throw new Error('ERR_UNKNOWN_SCHEME');
+    }
+    if (requestedScheme !== null && requestedScheme !== baseFixture.scheme) {
+      fixture = Object.freeze({ ...baseFixture, scheme: requestedScheme });
+    }
+  }
   const result = fixture ? createFixtureRuntime(fixture) : null;
   if (result && !result.ok) throw new Error(result.error.code);
   const fixtureMount = result?.ok ? result.mount : null;

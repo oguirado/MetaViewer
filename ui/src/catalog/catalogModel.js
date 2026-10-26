@@ -245,6 +245,9 @@ function isKindCarrier(value) {
  * rows. Entries are kind-id strings or `{ kind }` objects. Valid kinds are
  * deduplicated by kind id (first wins); errors are deduplicated by raw kind
  * (first wins); colliding slugs receive unique indexed suffixes.
+ * Malformed entries carry no raw kind, so they collapse to one shared
+ * invalid-entry row by design; indexed suffixes disambiguate distinct
+ * unknown kinds whose slugs collide.
  * @param {unknown} entries Raw host catalog.
  * @returns {Readonly<CatalogEntries>} Frozen `{ types, errors }`.
  */

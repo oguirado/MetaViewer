@@ -184,6 +184,9 @@ export function findSurfaceRow(snapshot, capsuleId) {
 /**
  * Derive one display status. Refusal first, backend truth over transport staleness,
  * unknown lifecycles never live, and transport alone never proves live.
+ * @deprecated Tile decisions moved to deriveTileState in tileStates.js; this
+ * helper stays only for the status-parity tests. New consumers must use
+ * deriveTileState plus refusalCodeFor.
  * @param {PanelProjectionSnapshot|null} snapshot
  * @param {PanelSurfaceRow|null} row
  * @returns {string}
