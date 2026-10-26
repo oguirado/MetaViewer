@@ -4,7 +4,7 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import * as fs from 'node:fs/promises';
-import { isAbsolute, join, resolve, sep } from 'node:path';
+import { dirname, basename, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -174,9 +174,33 @@ export async function sealRendererAssets(app) {
 /** @param {NodeJS.ProcessEnv} env */
 export async function packageShell(env = process.env) {
   if (Number(process.versions.node.split('.')[0]) < 24) throw new Error('Node >=24 required');
-  const requested = validateOutput(env.MV_PKG_OUT, await fs.realpath(repo));
-  await fs.mkdir(requested, { recursive: true });
-  const output = validateOutput(await fs.realpath(requested), await fs.realpath(repo));
+  const repository = await fs.realpath(repo);
+  const requested = validateOutput(env.MV_PKG_OUT, repository);
+  // Validate through the nearest existing ancestor before any filesystem write.
+  let ancestor = requested;
+  const suffix = [];
+  let canonical;
+  for (;;) {
+    try {
+      canonical = await fs.realpath(ancestor);
+      break;
+    } catch (error) {
+      if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') throw error;
+      // A dangling symlink is not a missing directory: fail closed.
+      const entry = await fs.lstat(ancestor).catch(cause => {
+        if (cause.code !== 'ENOENT') throw cause;
+        return null;
+      });
+      if (entry) throw new Error('MV_PKG_OUT ancestor cannot be resolved');
+      const parent = dirname(ancestor);
+      if (parent === ancestor) throw error;
+      suffix.unshift(basename(ancestor));
+      ancestor = parent;
+    }
+  }
+  const destination = validateOutput(join(canonical, ...suffix), repository);
+  await fs.mkdir(destination, { recursive: true });
+  const output = validateOutput(await fs.realpath(destination), repository);
   if (!env.CAPSULE_UI_KIT_REPO) throw new Error('CAPSULE_UI_KIT_REPO is required');
   if (!env.MV_ELECTRON_ZIP_DIR && !env.ELECTRON_OVERRIDE_DIST_PATH) {
     throw new Error('Set MV_ELECTRON_ZIP_DIR or ELECTRON_OVERRIDE_DIST_PATH to a local Electron distribution');

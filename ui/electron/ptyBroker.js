@@ -329,10 +329,11 @@ export function validateProviderEnv(hostEnv, allowlist) {
     if (typeof raw !== 'string') fail('ENV_VALUE', `host value for ${name} must be a string`);
     const text = /** @type {string} */ (raw);
     if (text.includes('\0')) fail('ENV_NUL', `host value for ${name} must not contain NUL`);
-    out[name] =
-      Buffer.byteLength(text, 'utf8') > MAX_ENV_VALUE_BYTES
-        ? Buffer.from(text, 'utf8').subarray(0, MAX_ENV_VALUE_BYTES).toString('utf8')
-        : text;
+    const bytes = Buffer.from(text, 'utf8');
+    let end = Math.min(bytes.length, MAX_ENV_VALUE_BYTES);
+    // If the cut lands inside a code point, omit that entire code point.
+    while (end < bytes.length && (bytes[end] & 0xc0) === 0x80) end -= 1;
+    out[name] = bytes.subarray(0, end).toString('utf8');
   }
   return Object.freeze(out);
 }
@@ -1180,6 +1181,12 @@ export function runBroker({
     if (typeof chunk === 'string') bytes = Buffer.from(chunk, 'utf8');
     else if (chunk instanceof Uint8Array) bytes = Buffer.from(chunk);
     if (bytes === null || bytes.length === 0) return;
+    const capped = bytes.length >= caps.sessionByteCap - session.sent;
+    bytes = bytes.subarray(0, caps.sessionByteCap - session.sent);
+    if (bytes.length === 0) {
+      await closeSession(id, 0, 'SESSION_CAP');
+      return;
+    }
     session.seq += 1;
     session.sent += bytes.length;
     const unacked = session.sent - session.acked;
@@ -1188,7 +1195,7 @@ export function runBroker({
       await closeSession(id, -1, null);
       return;
     }
-    if (session.sent > caps.sessionByteCap) {
+    if (capped) {
       emit({ ev: 'data', id, seq: session.seq, b64: bytes.toString('base64') });
       await closeSession(id, 0, 'SESSION_CAP');
       return;
@@ -1249,6 +1256,7 @@ export function runBroker({
     const admission = /** @type {Record<string, unknown> | null} */ (rawAdmission);
     /** @param {string} code */
     const refuse = (code) => {
+      addTombstone(id);
       sendError(id, code);
       void commit(admission, { event: 'refused', session: id, reason: code }, id);
     };
@@ -1916,13 +1924,22 @@ export function registerTerminalIpc({
         command,
         session: null,
       });
+      if (disposed) return outcome(false, { reason: 'BRIDGE_DISPOSED' });
       if ('refusal' in decided) return decided.refusal;
       const context = readContext(decided.admission);
       if (context === null) return outcome(false, { reason: 'ADMISSION_CONTEXT' });
       if (live.has(context.session)) return outcome(false, { reason: 'SESSION_DUPLICATE' });
       if (closed.has(context.session)) return outcome(false, { reason: 'SESSION_CLOSED' });
       try {
-        assertSpawnProfile(decided.admission.profile);
+        const admitted = assertSpawnProfile(decided.admission.profile);
+        if (admitted.command !== known.command || admitted.executable !== known.executable ||
+            admitted.cwd !== known.cwd || admitted.loginShell !== known.loginShell ||
+            admitted.argv.length !== known.argv.length ||
+            admitted.argv.some((arg, index) => arg !== known.argv[index]) ||
+            Object.keys(admitted.env).length !== Object.keys(known.env).length ||
+            Object.entries(admitted.env).some(([key, value]) => value !== known.env[key])) {
+          return outcome(false, { reason: 'PROFILE_REFUSED' });
+        }
       } catch {
         return outcome(false, { reason: 'PROFILE_REFUSED' });
       }
@@ -1957,6 +1974,7 @@ export function registerTerminalIpc({
       if (!isTerminalId(value.session)) return outcome(false, { reason: 'SESSION_SHAPE' });
       const session = /** @type {string} */ (value.session);
       const decided = await admit(principal, { operation: 'attach', session });
+      if (disposed) return outcome(false, { reason: 'BRIDGE_DISPOSED' });
       if ('refusal' in decided) return decided.refusal;
       const context = readContext(decided.admission);
       if (context === null || context.session !== session) {
@@ -1986,6 +2004,7 @@ export function registerTerminalIpc({
       if (!isTerminalId(value.session)) return outcome(false, { reason: 'SESSION_SHAPE' });
       const session = /** @type {string} */ (value.session);
       const decided = await admit(principal, { operation: 'close', session });
+      if (disposed) return outcome(false, { reason: 'BRIDGE_DISPOSED' });
       if ('refusal' in decided) return decided.refusal;
       const context = readContext(decided.admission);
       if (context === null || context.session !== session) {
@@ -2007,10 +2026,11 @@ export function registerTerminalIpc({
       if (typeof raw !== 'string' || !BASE64_RE.test(raw)) {
         return outcome(false, { reason: 'WRITE_SHAPE' });
       }
-      if (Buffer.byteLength(raw, 'utf8') > MAX_LINE_BYTES) {
+      if (Buffer.byteLength(raw, 'base64') > MAX_WRITE_BYTES) {
         return outcome(false, { reason: 'WRITE_TOO_LARGE' });
       }
       const decided = await admit(principal, { operation: 'write', session });
+      if (disposed) return outcome(false, { reason: 'BRIDGE_DISPOSED' });
       if ('refusal' in decided) return decided.refusal;
       const context = readContext(decided.admission);
       if (context === null || context.session !== session) {
@@ -2040,6 +2060,7 @@ export function registerTerminalIpc({
         return outcome(false, { reason: 'DIMS_RANGE' });
       }
       const decided = await admit(principal, { operation: 'resize', session });
+      if (disposed) return outcome(false, { reason: 'BRIDGE_DISPOSED' });
       if ('refusal' in decided) return decided.refusal;
       const context = readContext(decided.admission);
       if (context === null || context.session !== session) {
@@ -2062,6 +2083,7 @@ export function registerTerminalIpc({
         return outcome(false, { reason: 'ACK_SHAPE' });
       }
       const decided = await admit(principal, { operation: 'ack', session });
+      if (disposed) return outcome(false, { reason: 'BRIDGE_DISPOSED' });
       if ('refusal' in decided) return decided.refusal;
       const context = readContext(decided.admission);
       if (context === null || context.session !== session) {
@@ -2096,8 +2118,9 @@ export function registerTerminalIpc({
       } else {
         try {
           reports = await probe();
+          if (disposed) return outcome(false, { reason: 'BRIDGE_DISPOSED' });
         } catch {
-          return outcome(false, { reason: 'CAPABILITY_FAULT' });
+          return outcome(false, { reason: disposed ? 'BRIDGE_DISPOSED' : 'CAPABILITY_FAULT' });
         }
       }
       if (!Array.isArray(reports)) return outcome(false, { reason: 'CAPABILITY_FAULT' });
@@ -2217,6 +2240,19 @@ export function registerTerminalIpc({
       return;
     }
     if (kind === 'error') {
+      if (isTerminalId(event.id)) {
+        const id = /** @type {string} */ (event.id);
+        const entry = live.get(id);
+        if (entry && entry.pid === null) {
+          live.delete(id);
+          markClosed(id);
+          try {
+            ledger.close(outputContext(entry.session, entry.epoch, entry.attachGen));
+          } catch {
+            // Session revocation must survive an already faulted ledger.
+          }
+        }
+      }
       /** @type {Record<string, unknown>} */
       const payload = { kind: 'error', session: null, code: 'UNKNOWN' };
       if (event.id === null || isTerminalId(event.id)) payload.session = event.id;

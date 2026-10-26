@@ -40,50 +40,88 @@ export async function startDisplay(electron) {
   const { app, BrowserWindow, protocol, session, ipcMain } = electron;
   if (process.versions.electron !== ELECTRON_PIN) throw new Error(`Electron must be ${ELECTRON_PIN}`);
   app.setName('MetaViewer');
-  app.enableSandbox();
-  registerPrivilegedScheme(protocol);
   if (!app.requestSingleInstanceLock()) throw new Error('SINGLE_INSTANCE: profile already in use');
-  await app.whenReady();
-  const root = app.getAppPath();
-  serveBundled(protocol, join(root, 'dist/renderer'), { styleNonce: true });
-  const win = new BrowserWindow({ ...createWindowOptions({ width: 1280, height: 720,
-    preloadPath: join(root, 'dist/preload/preload.cjs') }), title: 'MetaViewer', autoHideMenuBar: true });
-  win.removeMenu();
-  attachWindowPolicy(win, session.defaultSession);
-  win.webContents.on('render-process-gone', () => app.exit(1));
-  win.webContents.on('preload-error', (_event, _path, error) => {
-    console.error(error.message);
-    app.exit(1);
+  // [TARGET, unit decision] Bound the entire startup, including ready/navigation.
+  const deadlineMs = 15000;
+  /** @type {import('electron').BrowserWindow | null} */
+  let win = null;
+  let expired = false;
+  const assertAlive = () => {
+    if (expired || (win && (win.isDestroyed() || win.webContents.isDestroyed()))) {
+      throw new Error('DISPLAY_ONLY: display destroyed or startup deadline exceeded');
+    }
+  };
+  const destroyWindow = () => {
+    if (win && !win.isDestroyed()) win.destroy();
+  };
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      expired = true;
+      reject(new Error('DISPLAY_ONLY: startup deadline exceeded'));
+    }, deadlineMs);
   });
-  installReadOnlyLayout(ipcMain, win.webContents);
-  app.on('window-all-closed', () => app.quit());
-  await win.loadURL(`${PRIVILEGED_ORIGIN}/index.html`);
-  win.show();
-  let settled = false;
-  for (let attempt = 0; attempt < 100; attempt++) {
-    settled = await win.webContents.executeJavaScript(`Boolean(
-      document.querySelector('.metaviewer[data-wall-settled="true"]') &&
-      typeof window.metaviewer?.load === 'function' &&
-      typeof window.require === 'undefined'
-    )`);
-    if (settled) break;
-    await new Promise(resolve => setTimeout(resolve, 100));
+  const startup = async () => {
+    await app.whenReady();
+    assertAlive();
+    const root = app.getAppPath();
+    serveBundled(protocol, join(root, 'dist/renderer'), { styleNonce: true });
+    win = new BrowserWindow({ ...createWindowOptions({ width: 1280, height: 720,
+      preloadPath: join(root, 'dist/preload/preload.cjs') }), title: 'MetaViewer', autoHideMenuBar: true });
+    win.removeMenu();
+    attachWindowPolicy(win, session.defaultSession);
+    win.webContents.on('render-process-gone', () => app.exit(1));
+    win.webContents.on('preload-error', (_event, _path, error) => {
+      console.error(error.message);
+      app.exit(1);
+    });
+    installReadOnlyLayout(ipcMain, win.webContents);
+    app.on('window-all-closed', () => app.quit());
+    await win.loadURL(`${PRIVILEGED_ORIGIN}/index.html`);
+    assertAlive();
+    win.show();
+    let settled = false;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      assertAlive();
+      settled = await win.webContents.executeJavaScript(`Boolean(
+        document.querySelector('.metaviewer[data-wall-settled="true"]') &&
+        typeof window.metaviewer?.load === 'function' &&
+        typeof window.require === 'undefined'
+      )`);
+      assertAlive();
+      if (settled) break;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    if (!settled) throw new Error('DISPLAY_ONLY: isolated renderer wall did not settle');
+    console.log('METAVIEWER_NESTED_DISPLAY_READY');
+    return win;
+  };
+  try {
+    return await Promise.race([startup(), deadline]);
+  } catch (error) {
+    expired = true;
+    destroyWindow();
+    throw new Error(`DISPLAY_ONLY: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    clearTimeout(timer);
   }
-  if (!settled) throw new Error('DISPLAY_ONLY: isolated renderer wall did not settle');
-  console.log('METAVIEWER_NESTED_DISPLAY_READY');
-  return win;
 }
 
 if (process.versions.electron) {
-  // Do not await readiness at ESM top level: Electron emits ready after evaluation.
-  void import('electron').then(async electron => {
-    if (!electron.app.isPackaged && (!process.argv[1]
-        || resolve(process.argv[1]) !== fileURLToPath(import.meta.url))) return;
-    try {
-      await enterNested(process.argv.slice(1), process.env, async () => startDisplay(electron));
-    } catch (error) {
+  // Resolve Electron and install pre-ready policy before ESM evaluation settles.
+  // Readiness itself must remain detached: Electron emits ready after evaluation.
+  const electron = await import('electron');
+  if (electron.app.isPackaged || (process.argv[1]
+      && resolve(process.argv[1]) === fileURLToPath(import.meta.url))) {
+    void enterNested(process.argv.slice(1), process.env, () => {
+      if (process.versions.electron !== ELECTRON_PIN) throw new Error(`Electron must be ${ELECTRON_PIN}`);
+      electron.app.enableSandbox();
+      registerPrivilegedScheme(electron.protocol);
+      return startDisplay(electron);
+    }).catch(error => {
       console.error(error instanceof Error ? error.message : String(error));
       electron.app.exit(1);
-    }
-  });
+    });
+  }
 }
