@@ -98,6 +98,12 @@ pub enum LifecycleUpdate {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event", deny_unknown_fields)]
 pub enum Input {
+    /// [TARGET, unit decision] Journal closed lifecycle requests before forwarding.
+    SurfaceRequest {
+        request: crate::wire::payload::SurfaceRequest,
+    },
+    /// A daemon error is an observation, not a surface authority transition.
+    SurfaceNotice,
     /// [TARGET, unit decision] Daemon lifecycle changes preserve authority fences.
     Lifecycle {
         surface_id: String,
@@ -222,6 +228,21 @@ impl CoreState {
             control_ready: false,
         };
         match input {
+            Input::SurfaceRequest { request } => {
+                let value =
+                    serde_json::to_value(request).map_err(|_| AdmissionError::InvalidInput)?;
+                if !matches!(
+                    value["op"].as_str(),
+                    Some("create" | "destroy" | "list" | "frame_subscribe" | "frame_unsubscribe")
+                ) {
+                    out.reason = Some(Refusal::Policy);
+                } else if self.remaining_budget == 0 {
+                    out.reason = Some(Refusal::BudgetExceeded);
+                } else {
+                    self.remaining_budget -= 1;
+                }
+            }
+            Input::SurfaceNotice => {}
             Input::Refuse { reason } => out.reason = Some(*reason),
             Input::Lifecycle { surface_id, update } => match update {
                 LifecycleUpdate::Created(surface) => {

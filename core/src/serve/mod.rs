@@ -9,6 +9,10 @@
 //! a reserved notification slot before disconnection; normal queue memory is bounded.
 //! Frame witnesses are retained only from regular, non-symlink /dev/shm files,
 //! bounded to 64 MiB and verified against the advertised digest before commit.
+//! [TARGET, unit decision] UI and agent may create/destroy/list and subscribe to
+//! frames. Lifecycle callers observe daemon events for their connection lifetime
+//! (the wire has no reply correlation); frame unsubscribe overrides that default.
+//! Raw input and control requests retain their existing proposal/UI-intent gates.
 use crate::admission::{
     AdmissionRequest, Authority, CoreState, Frame, Input, LifecycleUpdate, Surface,
 };
@@ -16,7 +20,7 @@ use crate::journal::{sha256_hex, Witness};
 use crate::wire::payload::{FrameRef, Hello, SurfaceEvent};
 use crate::*;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, Read};
 use std::os::unix::fs::OpenOptionsExt;
@@ -112,6 +116,9 @@ pub struct Server {
     connections: BTreeMap<Endpoint, Connection>,
     origin: Instant,
     serial: u64,
+    observers: BTreeSet<Endpoint>,
+    subscriptions: BTreeSet<(Endpoint, String)>,
+    unsubscribed: BTreeSet<(Endpoint, String)>,
 }
 impl Server {
     pub fn open(config: Config, state_dir: &Path, uid: u32) -> Result<Self> {
@@ -173,6 +180,9 @@ impl Server {
             connections: BTreeMap::new(),
             origin: Instant::now(),
             serial: 0,
+            observers: BTreeSet::new(),
+            subscriptions: BTreeSet::new(),
+            unsubscribed: BTreeSet::new(),
         })
     }
     pub fn snapshot(&self) -> Result<Vec<u8>> {
@@ -226,10 +236,28 @@ impl Server {
         Ok(())
     }
     fn fanout(&mut self, body: Command) {
+        let frame_surface = match &body {
+            Command::FrameRef(frame) => Some(frame.surface_id.as_str()),
+            Command::SurfaceEvent(event) => match event.as_ref() {
+                SurfaceEvent::Case2(event) => Some(event.data.frame_ref.surface_id.as_str()),
+                _ => None,
+            },
+            _ => None,
+        };
         let peers: Vec<_> = self
             .connections
             .keys()
-            .filter(|p| p.component == Component::Ui)
+            .filter(|p| {
+                let observing = p.component == Component::Ui || self.observers.contains(*p);
+                match frame_surface {
+                    Some(sid) => {
+                        let key = ((*p).clone(), sid.to_owned());
+                        (observing || self.subscriptions.contains(&key))
+                            && !self.unsubscribed.contains(&key)
+                    }
+                    None => observing,
+                }
+            })
             .cloned()
             .collect();
         for peer in peers {
@@ -291,6 +319,61 @@ impl Server {
         let raw = serde_json::to_string(&env)?;
         let boundary = self.authority.retain_witness(raw.as_bytes())?;
         match (&env.from.component, &env.body) {
+            (Component::Ui | Component::Agent, Command::SurfaceRequest(request)) => {
+                let value = serde_json::to_value(request)?;
+                let op = value["op"].as_str().ok_or_else(|| invalid("missing op"))?;
+                if !matches!(
+                    op,
+                    "create" | "destroy" | "list" | "frame_subscribe" | "frame_unsubscribe"
+                ) {
+                    return self.unsupported(&env, boundary);
+                }
+                let daemon = self
+                    .config
+                    .peers
+                    .iter()
+                    .find(|p| p.endpoint.component == Component::Daemon)
+                    .ok_or_else(|| invalid("no daemon"))?
+                    .endpoint
+                    .clone();
+                if !self.connections.contains_key(&daemon) {
+                    return self.unsupported(&env, boundary);
+                }
+                let sid = value["params"]["surface_id"].as_str();
+                if matches!(op, "destroy" | "frame_subscribe" | "frame_unsubscribe")
+                    && !sid.is_some_and(|id| self.authority.state().surfaces.contains_key(id))
+                {
+                    return self.unsupported(&env, boundary);
+                }
+                let out = self.authority.apply_with_witnesses(
+                    Input::SurfaceRequest {
+                        request: request.as_ref().clone(),
+                    },
+                    vec![boundary],
+                )?;
+                if let Some(reason) = out.reason {
+                    return self.refuse(&env.from, &env.msg_id, reason, out.core_seq);
+                }
+                match op {
+                    "frame_subscribe" | "frame_unsubscribe" => {
+                        let key = (
+                            env.from.clone(),
+                            sid.ok_or_else(|| invalid("missing surface"))?.to_owned(),
+                        );
+                        if op == "frame_subscribe" {
+                            self.unsubscribed.remove(&key);
+                            self.subscriptions.insert(key);
+                        } else {
+                            self.subscriptions.remove(&key);
+                            self.unsubscribed.insert(key);
+                        }
+                    }
+                    _ => {
+                        self.observers.insert(env.from.clone());
+                    }
+                }
+                self.send(&daemon, env.body.clone())?;
+            }
             (Component::Daemon, Command::SurfaceEvent(event)) => {
                 if epoch != self.authority.state().epoch {
                     return Err(invalid("old executor"));
@@ -306,14 +389,25 @@ impl Server {
                         self.frame(&e.data.frame_ref, boundary)?;
                         None
                     }
-                    SurfaceEvent::Case4(e) => Some(self.authority.apply_with_witnesses(
-                        Input::Lifecycle {
-                            surface_id: e.data.surface_id.clone(),
-                            update: LifecycleUpdate::Lost,
-                        },
-                        vec![boundary],
-                    )?),
-                    _ => return self.unsupported(&env, boundary),
+                    SurfaceEvent::Case4(e)
+                        if self
+                            .authority
+                            .state()
+                            .surfaces
+                            .contains_key(&e.data.surface_id) =>
+                    {
+                        Some(self.authority.apply_with_witnesses(
+                            Input::Lifecycle {
+                                surface_id: e.data.surface_id.clone(),
+                                update: LifecycleUpdate::Lost,
+                            },
+                            vec![boundary],
+                        )?)
+                    }
+                    SurfaceEvent::Case3(_) | SurfaceEvent::Case4(_) => Some(
+                        self.authority
+                            .apply_with_witnesses(Input::SurfaceNotice, vec![boundary])?,
+                    ),
                 };
                 if let Some(out) = out {
                     if let Some(reason) = out.reason {
@@ -707,6 +801,9 @@ async fn connection(
         .is_some_and(|c| c.id == id)
     {
         s.connections.remove(ready.endpoint());
+        s.observers.remove(ready.endpoint());
+        s.subscriptions.retain(|(peer, _)| peer != ready.endpoint());
+        s.unsubscribed.retain(|(peer, _)| peer != ready.endpoint());
     }
     result
 }

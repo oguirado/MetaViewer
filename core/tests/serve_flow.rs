@@ -69,8 +69,12 @@ impl Peer {
 struct SharedFrame(std::path::PathBuf);
 impl SharedFrame {
     fn new() -> Self {
-        let path =
-            std::path::PathBuf::from(format!("/dev/shm/mv-wire-{}-frame", std::process::id()));
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let path = std::path::PathBuf::from(format!(
+            "/dev/shm/mv-wire-{}-{}-frame",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::write(&path, b"immutable fake frame").unwrap();
         Self(path)
     }
@@ -102,6 +106,146 @@ fn proposal(id: &str, frame: &Value) -> Value {
 }
 fn control(op: &str) -> Value {
     json!({"schema":"ui_intent/v0.2","request_id":format!("control-{op}"),"op":op,"params":{"surface_id":"surface-demo"}})
+}
+#[test]
+fn lifecycle_requests_forward_and_replies_are_durable() {
+    support::run(async {
+        let temp = support::Temp::new();
+        let socket = temp.0.join("runtime/core.sock");
+        let uid = support::uid();
+        let listener = serve::bind(&socket, uid).await.unwrap();
+        let server = Arc::new(Mutex::new(
+            Server::open(config(), &temp.0.join("state"), uid).unwrap(),
+        ));
+        let task = tokio::spawn(serve::serve(listener, server.clone(), uid));
+        let mut daemon = Peer::connect(&socket, "daemon").await;
+        let mut agent = Peer::connect(&socket, "agent").await;
+        let mut ui = Peer::connect(&socket, "ui").await;
+        let create = json!({"schema":"surface_request/v0.2","op":"create","params":{"kind":"desktop_capsule","geometry":{"w":1280,"h":720},"profile_id":"test"}});
+        // A registered executor is not a lifecycle caller.
+        daemon.send(create.clone()).await;
+        daemon.verdict("refused", Some("POLICY")).await;
+        ui.send(create.clone()).await;
+        assert_eq!(
+            serde_json::to_value(daemon.receive().await.body).unwrap(),
+            create
+        );
+        let list = json!({"schema":"surface_request/v0.2","op":"list","params":{}});
+        agent.send(list.clone()).await;
+        assert_eq!(
+            serde_json::to_value(daemon.receive().await.body).unwrap(),
+            list
+        );
+        let surface: Value = serde_json::from_str(include_str!(
+            "../../contracts/examples/v0.2/surface.valid.json"
+        ))
+        .unwrap();
+        let created =
+            json!({"schema":"surface_event/v0.2","event":"created","data":{"surface":surface}});
+        daemon.send(created.clone()).await;
+        for peer in [&mut ui, &mut agent] {
+            assert_eq!(
+                serde_json::to_value(peer.receive().await.body).unwrap(),
+                created
+            );
+        }
+        let frame = SharedFrame::new();
+        let f = frame.value(1);
+        daemon.send(f.clone()).await;
+        for peer in [&mut ui, &mut agent] {
+            assert_eq!(serde_json::to_value(peer.receive().await.body).unwrap(), f);
+        }
+        for op in ["frame_unsubscribe", "frame_subscribe"] {
+            let request = json!({"schema":"surface_request/v0.2","op":op,"params":{"surface_id":"surface-demo"}});
+            agent.send(request.clone()).await;
+            assert_eq!(
+                serde_json::to_value(daemon.receive().await.body).unwrap(),
+                request
+            );
+            let event =
+                json!({"schema":"surface_event/v0.2","event":"frame_ready","data":{"frame_ref":f}});
+            daemon.send(event.clone()).await;
+            assert_eq!(
+                serde_json::to_value(ui.receive().await.body).unwrap(),
+                event
+            );
+            if op == "frame_subscribe" {
+                assert_eq!(
+                    serde_json::to_value(agent.receive().await.body).unwrap(),
+                    event
+                );
+            } else {
+                assert!(tokio::time::timeout(
+                    Duration::from_millis(50),
+                    read_frame(&mut agent.socket)
+                )
+                .await
+                .is_err());
+            }
+        }
+        // Lifecycle permission must not bypass action admission.
+        agent.send(json!({"schema":"surface_request/v0.2","op":"input","params":{"surface_id":"surface-demo","proposal_id":"bypass","action":{"type":"key","keys":["Enter"]}}})).await;
+        agent.verdict("refused", Some("POLICY")).await;
+        let destroy = json!({"schema":"surface_request/v0.2","op":"destroy","params":{"surface_id":"surface-demo"}});
+        for peer in [&mut ui, &mut agent] {
+            peer.send(destroy.clone()).await;
+            assert_eq!(
+                serde_json::to_value(daemon.receive().await.body).unwrap(),
+                destroy
+            );
+        }
+        let mut destroyed = surface;
+        destroyed["state"] = "destroyed".into();
+        let event = json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":destroyed}});
+        daemon.send(event.clone()).await;
+        for peer in [&mut ui, &mut agent] {
+            assert_eq!(
+                serde_json::to_value(peer.receive().await.body).unwrap(),
+                event
+            );
+        }
+        // Failed creates have no surface in authority state, but their error is durable.
+        agent.send(create.clone()).await;
+        assert_eq!(
+            serde_json::to_value(daemon.receive().await.body).unwrap(),
+            create
+        );
+        let error = json!({"schema":"surface_event/v0.2","event":"error","data":{"surface_id":"failed-create","code":"CLI_FAILED","detail":"failed"}});
+        daemon.send(error.clone()).await;
+        for peer in [&mut ui, &mut agent] {
+            assert_eq!(
+                serde_json::to_value(peer.receive().await.body).unwrap(),
+                error
+            );
+        }
+        let snapshot = server.lock().unwrap().snapshot().unwrap();
+        let root = temp.0.join("state/sessions/serve-session");
+        assert_eq!(
+            scan(&root.join("journal.jsonl"), &root)
+                .unwrap()
+                .state
+                .snapshot()
+                .unwrap(),
+            snapshot
+        );
+        // Each forwarded request has its original boundary envelope retained.
+        let mut requests = 0;
+        for entry in std::fs::read_dir(root.join("events")).unwrap() {
+            let event: Value =
+                serde_json::from_slice(&std::fs::read(entry.unwrap().path()).unwrap()).unwrap();
+            if event["input"]["event"] == "SurfaceRequest" {
+                requests += 1;
+                let hash = event["witnesses"][0]["sha256"].as_str().unwrap();
+                let raw = std::fs::read_to_string(root.join("artifacts").join(hash)).unwrap();
+                assert!(matches!(
+                    decode_envelope(&raw).unwrap().body,
+                    Command::SurfaceRequest(_)
+                ));
+            }
+        }
+        assert_eq!(requests, 7);
+        task.abort();
+    });
 }
 #[test]
 fn socket_flow_admission_control_and_replay() {
