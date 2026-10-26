@@ -15,11 +15,15 @@
  * @module main
  */
 
-import { closeSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { constants as fsConstants, closeSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { findForbiddenEnv } from './coreLauncher.js';
+
+// [TARGET, unit decision] Packaging seals ASAR renderer bytes into the loaded
+// main module. A replaced archive cannot change the admitted asset contents.
+const PACKAGED_ASSET_DIGESTS = /** @type {Readonly<Record<string, string>>} */ (Object.freeze({}));
 
 /**
  * Typed main failure; a failure admits nothing.
@@ -824,7 +828,7 @@ function canonicalizeRoot(root) {
  * validated before bytes are read.
  * @param {unknown} rendererRoot Alleged bundle root.
  * @param {unknown} request Fetch-API request delivered by Electron.
- * @param {{styleNonce?: boolean}} [options] Main-owned style policy.
+ * @param {{styleNonce?: boolean, beforeOpen?: () => void}} [options] Main-owned style policy and deterministic open seam.
  * @returns {Promise<Response>} File or refusal, always with the CSP header.
  */
 export async function handleAppRequest(rendererRoot, request, options) {
@@ -957,14 +961,39 @@ export async function handleAppRequest(rendererRoot, request, options) {
     /** @type {Buffer | null} */
     let bytes = null;
     try {
-      fd = openSync(real, 'r');
+      options?.beforeOpen?.();
+      // [TARGET, unit decision] Linux descriptor-relative, no-follow traversal.
+      // The admitted root is pinned before opening any descendant. ASAR paths
+      // are Electron's immutable build namespace (package gate forbids links).
+      if (process.versions.electron && canonicalRoot.includes('.asar/')) {
+        fd = openSync(real, 'r');
+      } else {
+        let parent = openSync(canonicalRoot, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW);
+        try {
+          if (realpathSync(`/proc/self/fd/${parent}`) !== canonicalRoot) return refusal(403, 'forbidden');
+          const parts = relative(canonicalRoot, real).split(sep);
+          for (const part of parts.slice(0, -1)) {
+            const child = openSync(`/proc/self/fd/${parent}/${part}`,
+              fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW);
+            closeSync(parent);
+            parent = child;
+          }
+          fd = openSync(`/proc/self/fd/${parent}/${parts.at(-1)}`, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+        } finally { closeSync(parent); }
+      }
       const opened = fstatSync(fd);
       if (!opened.isFile() || opened.size > APP_MAX_FILE_BYTES) {
         return refusal(403, 'forbidden');
       }
       bytes = readFileSync(fd);
+      if (process.versions.electron && canonicalRoot.includes('.asar/')) {
+        const expected = PACKAGED_ASSET_DIGESTS[relative(canonicalRoot, real).split(sep).join('/')];
+        if (!expected || createHash('sha256').update(bytes).digest('hex') !== expected) {
+          return refusal(403, 'forbidden');
+        }
+      }
     } catch {
-      bytes = null;
+      return refusal(403, 'forbidden');
     } finally {
       if (fd !== null) {
         try {
@@ -1055,7 +1084,7 @@ export function registerPrivilegedScheme(protocol) {
  * header on every response.
  * @param {unknown} protocol Alleged protocol with handle.
  * @param {unknown} root Alleged absolute bundle-root directory.
- * @param {{styleNonce?: boolean}} [options] Main-owned style policy.
+ * @param {{styleNonce?: boolean, beforeOpen?: () => void}} [options] Main-owned style policy.
  * @returns {MainServeSummary} Frozen serving summary with the canonical root.
  */
 export function serveBundled(protocol, root, options) {
@@ -1155,11 +1184,24 @@ export function resolveMainPaths(app, shellRoot, runtime) {
     fail('PATHS_BUNDLE', 'renderer bundle root is not admitted');
     throw new MainError('PATHS_BUNDLE', 'unreachable');
   }
-  const preloadPath = join(root, 'dist', 'preload', 'preload.cjs');
+  let preloadPath = join(root, 'dist', 'preload', 'preload.cjs');
   const preloadStat = lstatOrNull(preloadPath);
   if (preloadStat === null || !preloadStat.isFile() || preloadStat.isSymbolicLink()) {
     fail('PRELOAD_ABSENT', 'preload entry is not a regular file');
   }
+  const canonicalPreload = realpathSync(preloadPath);
+  const preloadRel = relative(rendererRoot, canonicalPreload);
+  if (preloadRel === '' || (preloadRel !== '..' && !preloadRel.startsWith(`..${sep}`))) {
+    fail('PRELOAD_CONTAINMENT', 'preload overlaps renderer root');
+  }
+  // Reject aliases anywhere beneath the canonical app root.
+  const canonicalApp = realpathSync(root);
+  let parent = canonicalApp;
+  for (const part of ['dist', 'preload', 'preload.cjs']) {
+    parent = join(parent, part);
+    if (lstatOrNull(parent)?.isSymbolicLink()) fail('PRELOAD_CONTAINMENT', 'preload parent alias');
+  }
+  preloadPath = canonicalPreload;
   /** @type {unknown} */
   let userData = null;
   try {
@@ -1717,14 +1759,18 @@ export async function bootProductionMain(handles) {
       const channel = entry.channel;
       /**
        * @param {unknown} event Invoke event.
-       * @param {unknown} raw Raw payload.
+       * @param {...unknown} args Positional payload vector.
        * @returns {Promise<unknown>} Forwarded answer.
        */
-      const listener = async (event, raw) => {
+      const listener = async (event, ...args) => {
         const verdict = observeSender(event, contents, PRIVILEGED_ORIGIN);
         if (verdict.verdict !== 'admit') {
           throw new MainError(verdict.code, 'sender refused');
         }
+        if (args.length !== (channel === CHANNELS.load ? 0 : 1)) {
+          throw new MainError('LAYOUT_BOUNDS', 'invalid positional argument count');
+        }
+        const raw = args[0];
         if (channel === CHANNELS.load) {
           decodeLayoutLoad(raw);
         } else {

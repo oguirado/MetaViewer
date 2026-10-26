@@ -757,6 +757,11 @@ export function createFrameReader(options) {
       }));
       dropped = true;
       await lease.release({ reason: SOURCE_RETIRED_REASON });
+      // Release is asynchronous too: acceptance commits only after it settles.
+      if (ref.generation <= state.lastAccepted) {
+        notifyRelease(lease.identity, FRAME_REASONS.STALE_FRAME_GENERATION);
+        return refusal(FRAME_REASONS.STALE_FRAME_GENERATION);
+      }
       state.lastAccepted = ref.generation;
       return { ok: true, frame };
     } catch (error) {

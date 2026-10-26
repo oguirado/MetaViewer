@@ -671,30 +671,37 @@ export function createFramePort(options) {
 
   /**
    * @param {HeldFrame} record
-   * @returns {void}
+   * @returns {boolean}
    */
   function postDelivery(record) {
-    port.postMessage({
-      schema: FRAME_DELIVERY_SCHEMA,
-      kind: 'frame',
-      correlation: record.correlation,
-      principal: record.principal,
-      epoch: record.epoch,
-      surfaceId: record.surfaceId,
-      surfaceGeneration: record.surfaceGeneration,
-      frameGeneration: record.frameGeneration,
-      leaseId: record.leaseId,
-      width: record.width,
-      height: record.height,
-      format: record.format,
-      byteLength: record.byteLength,
-      sha256: record.sha256,
-      pixelSpec: { ...record.pixelSpec },
-      bytes: record.bytes,
-    });
-    sent += 1;
-    ackTimerGen = record.frameGeneration;
-    ackTimer = setTimer(onAckTimeout, limits.ackTimeoutMs);
+    try {
+      port.postMessage({
+        schema: FRAME_DELIVERY_SCHEMA,
+        kind: 'frame',
+        correlation: record.correlation,
+        principal: record.principal,
+        epoch: record.epoch,
+        surfaceId: record.surfaceId,
+        surfaceGeneration: record.surfaceGeneration,
+        frameGeneration: record.frameGeneration,
+        leaseId: record.leaseId,
+        width: record.width,
+        height: record.height,
+        format: record.format,
+        byteLength: record.byteLength,
+        sha256: record.sha256,
+        pixelSpec: { ...record.pixelSpec },
+        bytes: record.bytes,
+      });
+      sent += 1;
+      ackTimerGen = record.frameGeneration;
+      ackTimer = setTimer(onAckTimeout, limits.ackTimeoutMs);
+      return true;
+    } catch {
+      // Covers initial delivery and pending promotion, including timer failure.
+      revokeInternal(PORT_REVOKE_REASONS.PORT_REVOKED);
+      return false;
+    }
   }
 
   /**
@@ -981,7 +988,7 @@ export function createFramePort(options) {
         const next = pending;
         pending = null;
         inFlight = next;
-        postDelivery(next);
+        if (!postDelivery(next)) return refusal(FRAME_REASONS.CLOSED, 'transport send failed');
         promoted = next.frameGeneration;
       }
       return { ok: true, acked: cleared.frameGeneration, promoted };
@@ -1047,7 +1054,7 @@ export function createFramePort(options) {
     };
     if (inFlight === null) {
       inFlight = record;
-      postDelivery(record);
+      if (!postDelivery(record)) return refusal(FRAME_REASONS.CLOSED, 'transport send failed');
       return { ok: true, sent: true, frameGeneration: record.frameGeneration, leaseId: record.leaseId };
     }
     /** @type {number|null} */
