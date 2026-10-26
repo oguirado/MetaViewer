@@ -402,6 +402,10 @@ def validate_manifests(root):
     if isinstance(package.get('scripts'), dict) and 'smoke' in package['scripts']:
         require(package['scripts'].pop('smoke') == 'node test/smoke.mjs',
                 'package.json: smoke script drift')
+    # The nested package build command is optional and admitted verbatim.
+    if isinstance(package.get('scripts'), dict) and 'package' in package['scripts']:
+        require(package['scripts'].pop('package') == 'node tools/package.js',
+                'package.json: package script drift')
     wanted = {'name': 'metaviewer-ui', 'version': version, 'private': True,
                         'type': 'module', 'main': 'electron/main.js', 'engines': {'node': '>=24'},
                         'scripts': SCRIPTS}
