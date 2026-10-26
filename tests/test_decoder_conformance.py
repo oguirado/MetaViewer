@@ -23,9 +23,8 @@ from metaviewer_agents.envelope import validate_envelope as py_agent_validate, E
 
 def run_rust_decoder_test() -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["cargo", "test", "--manifest-path", str(ROOT / "core" / "Cargo.toml"),
-         "--ignore-rust-version", "--offline", "--test", "decode_envelope"],
-        capture_output=True, text=True, cwd=ROOT
+        ["cargo", "test", "--ignore-rust-version", "--test", "decode_envelope"],
+        capture_output=True, text=True, cwd=ROOT / "core"
     )
 
 
