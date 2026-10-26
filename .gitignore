@@ -16,3 +16,6 @@ auth.json
 cookies/
 profiles/
 ui/.kit/
+operator.token
+launch.token
+.beckett/token
