@@ -1,3 +1,25 @@
+# MetaViewer unified CI (W0-CI-MATRIX).
+#
+# Branch protection (set by the maintainer in the hosting UI; comments do not
+# configure it): require the `ci-required` status plus the separately owned
+# `Secrets / secrets` status on `main`, fast-forward merges only from green.
+# Optional jobs (build-macos, build-windows) and the nightly volume workflow
+# are never required statuses.
+#
+# Host-only by design (never in this file): sealed-toolchain capsule runs,
+# live X/docker/capsule runs, secret scanning (sibling secrets.yml), and any
+# test needing host credentials. Runner numbers are [VM], never host evidence.
+#
+# Actions are pinned to full commit SHAs with a human version comment; the
+# ci-policy job fails on any floating tag, branch ref, or abbreviated hash.
+# No artifact-upload action is used: no verified 40-char SHA for an upload
+# action exists in the surveyed corpus, so receipts stay on the runner and are
+# mirrored into $GITHUB_STEP_SUMMARY instead of published artifacts.
+#
+# Matrix legs run on ubuntu-24.04 (x64) and ubuntu-24.04-arm (arm64) with
+# fail-fast false. Each leg verifies its own architecture; an arm64 leg that
+# never schedules cannot diagnose itself, so missing arm64 execution stays
+# BLOCKED in the acceptance record, never silent green.
 name: CI
 on:
   push:
@@ -10,30 +32,1796 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  contracts-and-laws:
+  ci-policy:
     runs-on: ubuntu-24.04
+    timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # checkout v4.2.2
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
         with:
-          python-version: '3.12'
-      - name: Check commit laws
+          python-version: "3.12"
+      - name: Run policy fixtures
         env:
+          JOB_ID: ci-policy
+          PLATFORM: x64
+        run: |
+          set -u -o pipefail
+          EVDIR="${RUNNER_TEMP}/metaviewer-ci/${JOB_ID}/${PLATFORM}"
+          mkdir -p "${EVDIR}"
+          WF_SHA="$(python3 -c 'import hashlib; print(hashlib.sha256(open(".github/workflows/ci.yml","rb").read()).hexdigest())')"
+          ISSUER="CI/${JOB_ID}/${GITHUB_RUN_ID} [VM]"
+          sanitize() {
+            python3 - "$1" "$2" <<'PYEOF'
+          import re, sys
+          text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
+          for prefix in ('gh' + 'p_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
+              text = re.sub(prefix + r'[A-Za-z0-9_\-]{4,}', '[REDACTED]', text)
+          text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
+          open(sys.argv[2], 'w').write(text)
+          PYEOF
+          }
+          finish_gate() {
+            local gate="$1" rc="$2" outcome="$3" reason="$4" raw="$5" fixture="$6" countsrc="$7" parseut="$8"
+            shift 8
+            [ "${1:-}" = "--" ] && shift
+            local sane="${raw}.sane"
+            sanitize "$raw" "$sane" || return 2
+            GATE="$gate" PLATFORM="$PLATFORM" ISSUER="$ISSUER" WF_SHA="$WF_SHA" RC="$rc" OUTCOME="$outcome" \
+            REASON="$reason" EVDIR="$EVDIR" RAW="$raw" SANE="$sane" FIXTURE="$fixture" COUNTSRC="$countsrc" \
+            PARSEUT="$parseut" CWD="$(pwd -P)" GCWD="${GCWD:-}" SHA="$GITHUB_SHA" \
+            ARGV_JSON="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@")" \
+            python3 <<'PYEOF' || return 2
+          import hashlib, json, os, re
+          e = os.environ
+          def sha_file(p):
+              with open(p, 'rb') as f:
+                  return hashlib.sha256(f.read()).hexdigest()
+          rc = None if e['RC'] == 'UNEXEC' else int(e['RC'])
+          passed = failed = skipped = None
+          if e['PARSEUT'] == '1':
+              text = open(e['SANE']).read()
+              m = re.search(r'^Ran (\d+) tests?', text, re.M)
+              if m:
+                  total = int(m.group(1))
+                  f = re.search(r'^FAILED \((.*)\)', text, re.M)
+                  if f:
+                      g = lambda n: (lambda m: int(m.group(1)) if m else 0)(re.search(n + r'=(\d+)', f.group(1)))
+                      failed = g('failures') + g('errors')
+                      skipped = g('skipped')
+                      passed = total - failed - skipped
+                  elif re.search(r'^OK', text, re.M):
+                      s = re.search(r'^OK \(skipped=(\d+)\)', text, re.M)
+                      skipped = int(s.group(1)) if s else 0
+                      failed = 0
+                      passed = total - skipped
+          receipt = {
+              'schema': 'gate_receipt/v1', 'gate_id': e['GATE'], 'leg': e['GATE'], 'profile': 'W0',
+              'owner': 'W0-CI-MATRIX', 'issuer': e['ISSUER'],
+              'scope': {'unit': 'W0-CI-MATRIX', 'platform': e['PLATFORM'], 'feature': e['GATE'],
+                        'artifact': e['GATE'] + '.receipt.json'},
+              'argv': json.loads(e['ARGV_JSON']), 'cwd': e['GCWD'] or e['CWD'],
+              'rc': rc, 'outcome': e['OUTCOME'], 'reason': e['REASON'],
+              'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
+                             'artifact_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
+                             'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
+              'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
+                              'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
+                              'accepted': e['OUTCOME'] == 'PASS'}],
+              'counts': {'passed': passed, 'failed': failed, 'skipped': skipped, 'source': e['COUNTSRC']}}
+          out = os.path.join(e['EVDIR'], e['GATE'] + '.receipt.json')
+          with open(out, 'w') as f:
+              json.dump(receipt, f, indent=2)
+          print('receipt: ' + out)
+          PYEOF
+            {
+              echo "## ${gate} [VM] rc ${rc/UNEXEC/UNKNOWN}"
+              echo "outcome ${outcome}: ${reason}"
+              echo '```'
+              tail -n 40 "$sane"
+              echo '```'
+              echo '```'
+              grep -E '^FAIL' "$sane" | head -40
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+          blocked() {
+            local gate="$1" reason="$2" fixture="$3"
+            shift 3
+            [ "${1:-}" = "--" ] && shift
+            local raw="$EVDIR/${gate}.log"
+            printf 'BLOCKED: %s\n' "$reason" > "$raw"
+            finish_gate "$gate" UNEXEC BLOCKED "$reason" "$raw" "$fixture" "unexecuted" 0 -- "$@"
+            return 2
+          }
+          LOG="$EVDIR/ci-policy.log"
+          : > "$LOG"
+          python3 - <<'PYEOF' >>"$LOG" 2>&1
+          import glob, json, os, re, sys
+          fails = []
+          passed = 0
+          def check(name, cond, detail=""):
+              global passed
+              if cond:
+                  passed += 1
+                  print("PASS " + name)
+              else:
+                  fails.append(name)
+                  print("FAIL " + name + (" " + detail if detail else ""))
+          ci = open(".github/workflows/ci.yml").read()
+          vol = open(".github/workflows/volume.yml").read()
+          def top_block_keys(text, key):
+              lines = text.splitlines()
+              start = next(i for i, l in enumerate(lines) if l == key + ":")
+              keys = []
+              for line in lines[start + 1:]:
+                  if re.match(r"^[A-Za-z]", line):
+                      break
+                  m = re.match(r"^  ([A-Za-z_][\w-]*):", line)
+                  if m:
+                      keys.append(m.group(1))
+              return keys
+          # F1: triggers, permissions, concurrency, timeouts.
+          check("f1-ci-triggers", {"push", "pull_request", "workflow_dispatch"} <= set(top_block_keys(ci, "on")))
+          von = set(top_block_keys(vol, "on"))
+          check("f1-vol-triggers", von == {"schedule", "workflow_dispatch"}, repr(sorted(von)))
+          check("f1-permissions", "contents: read" in ci and "contents: read" in vol)
+          cig = re.search(r"^concurrency:\n  group: (\S+)", ci, re.M).group(1)
+          volg = re.search(r"^concurrency:\n  group: (\S+)", vol, re.M).group(1)
+          check("f1-groups", cig != volg and "ci-" in cig and "volume-" in volg, cig + " / " + volg)
+          check("f1-cancel", ci.count("cancel-in-progress: true") >= 1 and "cancel-in-progress: true" in vol)
+          def job_timeouts(text):
+              lines = text.splitlines()
+              start = next(i for i, l in enumerate(lines) if l == "jobs:")
+              jobs = {}
+              cur = None
+              for line in lines[start + 1:]:
+                  m = re.match(r"^  ([\w-]+):\s*$", line)
+                  if m:
+                      cur = m.group(1)
+                      jobs[cur] = None
+                  elif cur is not None:
+                      t = re.match(r"^    timeout-minutes: (\d+)\s*$", line)
+                      if t:
+                          jobs[cur] = int(t.group(1))
+              return jobs
+          def job_block(text, job):
+              lines = text.splitlines()
+              start = next(i for i, l in enumerate(lines) if l == "  " + job + ":")
+              buf = []
+              for line in lines[start + 1:]:
+                  if re.match(r"^  [\w-]+:\s*$", line):
+                      break
+                  buf.append(line)
+              return "\n".join(buf)
+          cjobs = job_timeouts(ci)
+          vjobs = job_timeouts(vol)
+          check("f1-ci-jobs", set(cjobs) >= {"ci-policy", "laws-contracts", "router", "rust", "go", "python", "js", "e2e",
+                                             "novac", "package", "build-macos", "build-windows", "ci-required"},
+                repr(sorted(cjobs)))
+          check("f1-ci-timeouts", all(v == 25 for v in cjobs.values()), repr(cjobs))
+          check("f1-vol-jobs", set(vjobs) >= {"volume-property", "volume-mutants", "volume-e2e"}, repr(sorted(vjobs)))
+          check("f1-vol-timeouts", all(v == 60 for v in vjobs.values()), repr(vjobs))
+          mut_vol = "on:\n  schedule:\n  pull_request:\n"
+          check("f1-neg-vol-trigger", set(top_block_keys(mut_vol, "on")) != {"schedule", "workflow_dispatch"})
+          mut_jobs = "jobs:\n  lone:\n    runs-on: x\n"
+          check("f1-neg-timeout", job_timeouts(mut_jobs).get("lone") != 60)
+          # F2: full-SHA action pins over every workflow file.
+          def pin_errors(text, root):
+              errs = []
+              for n, line in enumerate(text.splitlines(), 1):
+                  m = re.search(r"^\s*-?\s*uses:\s*(\S+)", line)
+                  if not m:
+                      continue
+                  ref = m.group(1)
+                  if ref.startswith("./"):
+                      if not os.path.exists(os.path.join(root, ref[2:])):
+                          errs.append("line %d missing local action %s" % (n, ref))
+                  elif not re.match(r"^[^@\s]+@[0-9a-f]{40}$", ref):
+                      errs.append("line %d unpinned %s" % (n, ref))
+              return errs
+          real = []
+          for path in sorted(glob.glob(".github/workflows/*.yml")):
+              real += ["%s: %s" % (path, e) for e in pin_errors(open(path).read(), ".")]
+          check("f2-pinned", real == [], "; ".join(real[:4]))
+          good = "steps:\n  - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # checkout v4.2.2\n"
+          check("f2-pos", pin_errors(good, ".") == [])
+          bads = ["- uses: actions/checkout@v4\n", "- uses: actions/checkout@main\n",
+                  "- uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af68\n",
+                  "- uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af68399\n",
+                  "- uses: ./actions/does-not-exist\n",
+                  "- uses: other/repo/.github/workflows/x.yml@v1\n"]
+          check("f2-neg", all(pin_errors("s:\n" + b, ".") != [] for b in bads))
+          check("f2-neg-local", pin_errors("s:\n- uses: ./tools\n", ".") == [])
+          broken = lambda text, root: []
+          check("f2-mutant-caught", pin_errors("s:\n" + bads[0], ".") != broken("s:\n" + bads[0], "."))
+          # F3: revision argv selection mirrors the laws step exactly.
+          def select_rev(event, before, head, pr_base, pr_head):
+              if event == "push" and before and before != "0" * 40:
+                  return ["python3", "tools/check_laws.py", "--range", before + ".." + head]
+              if event == "pull_request":
+                  return ["python3", "tools/check_laws.py", "--range", pr_base + ".." + pr_head]
+              return ["python3", "tools/check_laws.py"]
+          check("f3-push", select_rev("push", "a" * 40, "b" * 40, "", "")[2:] == ["--range", "a" * 40 + ".." + "b" * 40])
+          check("f3-pr", select_rev("pull_request", "", "", "c" * 40, "d" * 40)[3] == "c" * 40 + ".." + "d" * 40)
+          check("f3-manual", select_rev("workflow_dispatch", "", "", "", "") == ["python3", "tools/check_laws.py"])
+          check("f3-neg-zero-base", "--range" not in select_rev("push", "0" * 40, "b" * 40, "", ""))
+          laws_block = job_block(ci, "laws-contracts")
+          bare = False
+          for line in laws_block.splitlines():
+              code = re.sub(r'"[^"]*"', '""', line)
+              if re.search(r"\$(?:BEFORE|HEAD|PR_BASE|PR_HEAD|EVENT_NAME)\b", code):
+                  bare = True
+          check("f3-neg-quoted", not bare and '"$BEFORE"' in laws_block)
+          # F4: receipt schema validation and required-set aggregation.
+          RKEYS = {"schema", "gate_id", "leg", "profile", "owner", "issuer", "scope", "argv", "cwd",
+                   "rc", "outcome", "reason", "identities", "assertions", "counts"}
+          OUTCOMES = {"PASS", "FAIL", "BLOCKED", "UNKNOWN", "NOT_APPLICABLE"}
+          def receipt_errors(r, reg):
+              errs = []
+              if set(r) != RKEYS:
+                  errs.append("keys")
+                  return errs
+              if r["schema"] != "gate_receipt/v1":
+                  errs.append("schema")
+              for k in ("gate_id", "leg", "profile", "owner", "issuer", "reason", "cwd"):
+                  if not isinstance(r[k], str) or not r[k]:
+                      errs.append(k)
+              if r["outcome"] not in OUTCOMES:
+                  errs.append("outcome")
+              if r["outcome"] in ("PASS", "FAIL"):
+                  if type(r["rc"]) is not int:
+                      errs.append("rc-int")
+              elif r["rc"] is not None:
+                  errs.append("rc-null")
+              if not isinstance(r["argv"], list) or not r["argv"] or any(not isinstance(a, str) or not a for a in r["argv"]):
+                  errs.append("argv")
+              if set(r["scope"]) != {"unit", "platform", "feature", "artifact"} or any(not isinstance(v, str) or not v for v in r["scope"].values()):
+                  errs.append("scope")
+              ids = r["identities"]
+              if set(ids) != {"gate_revision", "instrument_sha256", "artifact_sha256", "configuration_sha256",
+                              "log_sha256", "fixture_sha256"}:
+                  errs.append("identities-keys")
+                  return errs
+              hexok = lambda v: isinstance(v, str) and re.fullmatch(r"[0-9a-f]{64}", v) is not None
+              for k in ("instrument_sha256", "artifact_sha256", "configuration_sha256", "log_sha256"):
+                  if not hexok(ids[k]):
+                      errs.append("identities-" + k)
+              if not isinstance(ids["fixture_sha256"], list) or not ids["fixture_sha256"] or any(not hexok(v) for v in ids["fixture_sha256"]):
+                  errs.append("fixture_sha256")
+              if not isinstance(r["assertions"], list) or not r["assertions"]:
+                  errs.append("assertions-empty")
+              else:
+                  for a in r["assertions"]:
+                      if set(a) != {"id", "expected", "observed", "accepted"} or type(a["accepted"]) is not bool:
+                          errs.append("assertion-shape")
+              c = r["counts"]
+              if set(c) != {"passed", "failed", "skipped", "source"} or not isinstance(c["source"], str) or not c["source"]:
+                  errs.append("counts")
+              else:
+                  for k in ("passed", "failed", "skipped"):
+                      if c[k] is not None and type(c[k]) is not int:
+                          errs.append("counts-" + k)
+              for k, v in reg.items():
+                  if ids.get(k) != v:
+                      errs.append("oracle-" + k)
+              return errs
+          genuine = {"schema": "gate_receipt/v1", "gate_id": "g", "leg": "g", "profile": "W0",
+                     "owner": "W0-CI-MATRIX", "issuer": "CI/g/1 [VM]", "argv": ["true"], "cwd": "/tmp",
+                     "rc": 0, "outcome": "PASS", "reason": "ok",
+                     "scope": {"unit": "u", "platform": "x64", "feature": "g", "artifact": "g.receipt.json"},
+                     "identities": {"gate_revision": "r", "instrument_sha256": "a" * 64, "artifact_sha256": "b" * 64,
+                                    "configuration_sha256": "c" * 64, "log_sha256": "d" * 64, "fixture_sha256": ["a" * 64]},
+                     "assertions": [{"id": "exit-status", "expected": "rc 0", "observed": "rc 0", "accepted": True}],
+                     "counts": {"passed": 1, "failed": 0, "skipped": 0, "source": "parsed:true"}}
+          reg = {"instrument_sha256": "a" * 64, "artifact_sha256": "b" * 64, "configuration_sha256": "c" * 64,
+                 "log_sha256": "d" * 64}
+          check("f4-genuine", receipt_errors(genuine, reg) == [], repr(receipt_errors(genuine, reg)[:3]))
+          tampered = json.loads(json.dumps(genuine))
+          tampered["identities"]["artifact_sha256"] = "0" * 64
+          check("f4-neg-tamper", receipt_errors(tampered, reg) != [])
+          missing = json.loads(json.dumps(genuine))
+          del missing["reason"]
+          check("f4-neg-missing", receipt_errors(missing, reg) != [])
+          extra = json.loads(json.dumps(genuine))
+          extra["zzz"] = 1
+          check("f4-neg-extra", receipt_errors(extra, reg) != [])
+          nullpass = json.loads(json.dumps(genuine))
+          nullpass["rc"] = None
+          check("f4-neg-null-pass", receipt_errors(nullpass, reg) != [])
+          blocked = json.loads(json.dumps(genuine))
+          blocked.update({"rc": None, "outcome": "BLOCKED", "reason": "no runner"})
+          blocked["assertions"] = [{"id": "exit-status", "expected": "rc 0", "observed": "unexecuted", "accepted": False}]
+          check("f4-blocked", receipt_errors(blocked, reg) == [])
+          def aggregate(required, receipts, results):
+              seen = [r["gate_id"] for r in receipts]
+              if sorted(seen) != sorted(required):
+                  return (False, "identity-set")
+              for r in receipts:
+                  if results.get(r["gate_id"]) != "success":
+                      return (False, "job-" + r["gate_id"])
+                  if r["outcome"] not in required[r["gate_id"]]:
+                      return (False, "outcome-" + r["gate_id"])
+              return (True, "ok")
+          req = {"rust": {"PASS"}, "novac": {"PASS", "NOT_APPLICABLE"}}
+          rpass = json.loads(json.dumps(genuine))
+          rpass["gate_id"] = "rust"
+          rna = json.loads(json.dumps(genuine))
+          rna.update({"gate_id": "novac", "rc": None, "outcome": "NOT_APPLICABLE", "reason": "w1"})
+          check("f4-agg-ok", aggregate(req, [rpass, rna], {"rust": "success", "novac": "success"})[0])
+          check("f4-neg-agg-missing", not aggregate(req, [rpass], {"rust": "success", "novac": "success"})[0])
+          check("f4-neg-agg-dup", not aggregate(req, [rpass, rpass, rna], {"rust": "success", "novac": "success"})[0])
+          check("f4-neg-agg-job", not aggregate(req, [rpass, rna], {"rust": "failure", "novac": "success"})[0])
+          check("f4-neg-agg-skip", not aggregate(req, [rpass, rna], {"rust": "success", "novac": "skipped"})[0])
+          rna2 = json.loads(json.dumps(rna))
+          rna2["gate_id"] = "rust"
+          check("f4-neg-agg-na", not aggregate(req, [rna2, rna], {"rust": "success", "novac": "success"})[0])
+          # F5: runner label to architecture mapping.
+          ARCH = {"ubuntu-24.04": "x86_64", "ubuntu-24.04-arm": "aarch64"}
+          check("f5-arch", ARCH["ubuntu-24.04"] == "x86_64" and ARCH["ubuntu-24.04-arm"] == "aarch64")
+          check("f5-neg-mismatch", ARCH.get("ubuntu-24.04") != "aarch64")
+          check("f5-neg-unknown", ARCH.get("ubuntu-20.04") is None)
+          # F6: sanitizer redacts synthetic credentials and sentinels, keeps hashes on clean bytes.
+          def redact(text):
+              for prefix in ("gh" + "p_", "github_" + "pat_", "AK" + "IA", "xox" + "b-", "MV0-SYNTHETIC-SENTINEL-"):
+                  text = re.sub(prefix + r"[A-Za-z0-9_\-]{4,}", "[REDACTED]", text)
+              return text.replace("__MV0_PRIVATE_SOURCE_SENTINEL__", "[REDACTED]")
+          synth = "key=" + "gh" + "p_" + "9" * 36 + " tail"
+          check("f6-redact", "[REDACTED]" in redact(synth) and "9" * 36 not in redact(synth))
+          check("f6-sentinel", redact("a MV0-SYNTHETIC-SENTINEL-0001 b __MV0_PRIVATE_SOURCE_SENTINEL__ c") ==
+                "a [REDACTED] b [REDACTED] c")
+          check("f6-clean-kept", redact("plain line 42") == "plain line 42")
+          leaked = [n for n, line in enumerate((ci + vol).splitlines(), 1)
+                    if re.search("(" + "gh" + "p_|github_" + "pat_|AK" + "IA|xox" + "b-)[A-Za-z0-9]{4,}", line)]
+          check("f6-neg-literal", leaked == [], repr(leaked[:4]))
+          # F7: summary section shape.
+          good_sum = "## rust-fmt [VM] rc 0"
+          check("f7-shape", re.match(r"^## [\w\-.]+ \[VM\] rc (UNKNOWN|\d+)$", good_sum) is not None)
+          check("f7-neg", re.match(r"^## [\w\-.]+ \[VM\] rc (UNKNOWN|\d+)$", "## rust-fmt rc 0") is None)
+          # F8: every tools/*.py referenced by ci.yml exists or is a guarded ABSENT registration.
+          refs = set(re.findall(r"tools/[\w\-]+\.py", ci))
+          missing = {r for r in refs if not os.path.exists(r)}
+          check("f8-claims", missing <= {"tools/router_index.py"}, repr(sorted(missing)))
+          check("f8-guard", "BLOCKED" in job_block(ci, "router") and "tools/router_index.py" in job_block(ci, "router"))
+          print("policy-fixtures: %d passed, %d failed" % (passed, len(fails)))
+          sys.exit(1 if fails else 0)
+          PYEOF
+          r=$?
+          if [ $r -eq 0 ]; then
+            finish_gate ci-policy 0 PASS "all policy fixtures green" "$LOG" ".github/workflows/ci.yml" "policy-fixtures" 0 -- python3 -
+          else
+            finish_gate ci-policy "$r" FAIL "policy fixture failures" "$LOG" ".github/workflows/ci.yml" "policy-fixtures" 0 -- python3 -
+          fi
+          exit $r
+
+  laws-contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # checkout v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Run laws and contracts gates
+        env:
+          JOB_ID: laws-contracts
+          PLATFORM: x64
           EVENT_NAME: ${{ github.event_name }}
           BEFORE: ${{ github.event.before }}
           HEAD: ${{ github.sha }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
+          set -u -o pipefail
+          EVDIR="${RUNNER_TEMP}/metaviewer-ci/${JOB_ID}/${PLATFORM}"
+          mkdir -p "${EVDIR}"
+          WF_SHA="$(python3 -c 'import hashlib; print(hashlib.sha256(open(".github/workflows/ci.yml","rb").read()).hexdigest())')"
+          ISSUER="CI/${JOB_ID}/${GITHUB_RUN_ID} [VM]"
+          sanitize() {
+            python3 - "$1" "$2" <<'PYEOF'
+          import re, sys
+          text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
+          for prefix in ('gh' + 'p_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
+              text = re.sub(prefix + r'[A-Za-z0-9_\-]{4,}', '[REDACTED]', text)
+          text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
+          open(sys.argv[2], 'w').write(text)
+          PYEOF
+          }
+          finish_gate() {
+            local gate="$1" rc="$2" outcome="$3" reason="$4" raw="$5" fixture="$6" countsrc="$7" parseut="$8"
+            shift 8
+            [ "${1:-}" = "--" ] && shift
+            local sane="${raw}.sane"
+            sanitize "$raw" "$sane" || return 2
+            GATE="$gate" PLATFORM="$PLATFORM" ISSUER="$ISSUER" WF_SHA="$WF_SHA" RC="$rc" OUTCOME="$outcome" \
+            REASON="$reason" EVDIR="$EVDIR" RAW="$raw" SANE="$sane" FIXTURE="$fixture" COUNTSRC="$countsrc" \
+            PARSEUT="$parseut" CWD="$(pwd -P)" GCWD="${GCWD:-}" SHA="$GITHUB_SHA" \
+            ARGV_JSON="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@")" \
+            python3 <<'PYEOF' || return 2
+          import hashlib, json, os, re
+          e = os.environ
+          def sha_file(p):
+              with open(p, 'rb') as f:
+                  return hashlib.sha256(f.read()).hexdigest()
+          rc = None if e['RC'] == 'UNEXEC' else int(e['RC'])
+          passed = failed = skipped = None
+          if e['PARSEUT'] == '1':
+              text = open(e['SANE']).read()
+              m = re.search(r'^Ran (\d+) tests?', text, re.M)
+              if m:
+                  total = int(m.group(1))
+                  f = re.search(r'^FAILED \((.*)\)', text, re.M)
+                  if f:
+                      g = lambda n: (lambda m: int(m.group(1)) if m else 0)(re.search(n + r'=(\d+)', f.group(1)))
+                      failed = g('failures') + g('errors')
+                      skipped = g('skipped')
+                      passed = total - failed - skipped
+                  elif re.search(r'^OK', text, re.M):
+                      s = re.search(r'^OK \(skipped=(\d+)\)', text, re.M)
+                      skipped = int(s.group(1)) if s else 0
+                      failed = 0
+                      passed = total - skipped
+          receipt = {
+              'schema': 'gate_receipt/v1', 'gate_id': e['GATE'], 'leg': e['GATE'], 'profile': 'W0',
+              'owner': 'W0-CI-MATRIX', 'issuer': e['ISSUER'],
+              'scope': {'unit': 'W0-CI-MATRIX', 'platform': e['PLATFORM'], 'feature': e['GATE'],
+                        'artifact': e['GATE'] + '.receipt.json'},
+              'argv': json.loads(e['ARGV_JSON']), 'cwd': e['GCWD'] or e['CWD'],
+              'rc': rc, 'outcome': e['OUTCOME'], 'reason': e['REASON'],
+              'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
+                             'artifact_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
+                             'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
+              'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
+                              'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
+                              'accepted': e['OUTCOME'] == 'PASS'}],
+              'counts': {'passed': passed, 'failed': failed, 'skipped': skipped, 'source': e['COUNTSRC']}}
+          out = os.path.join(e['EVDIR'], e['GATE'] + '.receipt.json')
+          with open(out, 'w') as f:
+              json.dump(receipt, f, indent=2)
+          print('receipt: ' + out)
+          PYEOF
+            {
+              echo "## ${gate} [VM] rc ${rc/UNEXEC/UNKNOWN}"
+              echo "outcome ${outcome}: ${reason}"
+              echo '```'
+              tail -n 40 "$sane"
+              echo '```'
+              echo '```'
+              grep -E '^FAIL' "$sane" | head -40
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+          blocked() {
+            local gate="$1" reason="$2" fixture="$3"
+            shift 3
+            [ "${1:-}" = "--" ] && shift
+            local raw="$EVDIR/${gate}.log"
+            printf 'BLOCKED: %s\n' "$reason" > "$raw"
+            finish_gate "$gate" UNEXEC BLOCKED "$reason" "$raw" "$fixture" "unexecuted" 0 -- "$@"
+            return 2
+          }
+          rc=0
+          LOG="$EVDIR/laws-range.log"
+          : > "$LOG"
           if [ "$EVENT_NAME" = push ] && [ -n "$BEFORE" ] && [ "$BEFORE" != 0000000000000000000000000000000000000000 ]; then
-            python3 tools/check_laws.py --range "$BEFORE..$HEAD"
+            set -- python3 tools/check_laws.py --range "$BEFORE..$HEAD"
           elif [ "$EVENT_NAME" = pull_request ]; then
-            python3 tools/check_laws.py --range "$PR_BASE..$PR_HEAD"
+            set -- python3 tools/check_laws.py --range "$PR_BASE..$PR_HEAD"
           else
-            python3 tools/check_laws.py
+            set -- python3 tools/check_laws.py
           fi
-      - run: python3 tools/check_laws.py --version
-      - run: python3 tools/check_contracts.py
-      - run: python3 -m unittest discover -s tests -v
+          timeout 1200 "$@" >"$LOG" 2>&1; r=$?
+          if [ $r -eq 0 ]; then oc=PASS; rsn="laws history check green"; else oc=FAIL; rsn="laws history check failed"; fi
+          finish_gate laws-range "$r" "$oc" "$rsn" "$LOG" tools/check_laws.py "unparsed:check_laws" 0 -- "$@"
+          [ $r -ne 0 ] && [ $rc -eq 0 ] && rc=$r
+          LOG="$EVDIR/laws-version.log"
+          : > "$LOG"
+          set -- python3 tools/check_laws.py --version
+          timeout 1200 "$@" >"$LOG" 2>&1; r=$?
+          if [ $r -eq 0 ]; then oc=PASS; rsn="version check green"; else oc=FAIL; rsn="version check failed"; fi
+          finish_gate laws-version "$r" "$oc" "$rsn" "$LOG" tools/check_laws.py "unparsed:check_laws" 0 -- "$@"
+          [ $r -ne 0 ] && [ $rc -eq 0 ] && rc=$r
+          LOG="$EVDIR/contracts.log"
+          : > "$LOG"
+          set -- python3 tools/check_contracts.py
+          timeout 1200 "$@" >"$LOG" 2>&1; r=$?
+          if [ $r -eq 0 ]; then oc=PASS; rsn="contracts check green"; else oc=FAIL; rsn="contracts check failed"; fi
+          finish_gate contracts "$r" "$oc" "$rsn" "$LOG" tools/check_contracts.py "unparsed:check_contracts" 0 -- "$@"
+          [ $r -ne 0 ] && [ $rc -eq 0 ] && rc=$r
+          LOG="$EVDIR/unittest-root.log"
+          : > "$LOG"
+          set -- python3 -m unittest discover -s tests -v
+          timeout 1200 "$@" >"$LOG" 2>&1; r=$?
+          if [ $r -eq 0 ]; then oc=PASS; rsn="root suite green"; else oc=FAIL; rsn="root suite failed"; fi
+          finish_gate unittest-root "$r" "$oc" "$rsn" "$LOG" tests/test_check_laws.py "parsed:unittest" 1 -- "$@"
+          [ $r -ne 0 ] && [ $rc -eq 0 ] && rc=$r
+          exit $rc
+  router:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # checkout v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Run router gate
+        env:
+          JOB_ID: router
+          PLATFORM: x64
+        run: |
+          set -u -o pipefail
+          EVDIR="${RUNNER_TEMP}/metaviewer-ci/${JOB_ID}/${PLATFORM}"
+          mkdir -p "${EVDIR}"
+          WF_SHA="$(python3 -c 'import hashlib; print(hashlib.sha256(open(".github/workflows/ci.yml","rb").read()).hexdigest())')"
+          ISSUER="CI/${JOB_ID}/${GITHUB_RUN_ID} [VM]"
+          sanitize() {
+            python3 - "$1" "$2" <<'PYEOF'
+          import re, sys
+          text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
+          for prefix in ('gh' + 'p_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
+              text = re.sub(prefix + r'[A-Za-z0-9_\-]{4,}', '[REDACTED]', text)
+          text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
+          open(sys.argv[2], 'w').write(text)
+          PYEOF
+          }
+          finish_gate() {
+            local gate="$1" rc="$2" outcome="$3" reason="$4" raw="$5" fixture="$6" countsrc="$7" parseut="$8"
+            shift 8
+            [ "${1:-}" = "--" ] && shift
+            local sane="${raw}.sane"
+            sanitize "$raw" "$sane" || return 2
+            GATE="$gate" PLATFORM="$PLATFORM" ISSUER="$ISSUER" WF_SHA="$WF_SHA" RC="$rc" OUTCOME="$outcome" \
+            REASON="$reason" EVDIR="$EVDIR" RAW="$raw" SANE="$sane" FIXTURE="$fixture" COUNTSRC="$countsrc" \
+            PARSEUT="$parseut" CWD="$(pwd -P)" GCWD="${GCWD:-}" SHA="$GITHUB_SHA" \
+            ARGV_JSON="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@")" \
+            python3 <<'PYEOF' || return 2
+          import hashlib, json, os, re
+          e = os.environ
+          def sha_file(p):
+              with open(p, 'rb') as f:
+                  return hashlib.sha256(f.read()).hexdigest()
+          rc = None if e['RC'] == 'UNEXEC' else int(e['RC'])
+          passed = failed = skipped = None
+          if e['PARSEUT'] == '1':
+              text = open(e['SANE']).read()
+              m = re.search(r'^Ran (\d+) tests?', text, re.M)
+              if m:
+                  total = int(m.group(1))
+                  f = re.search(r'^FAILED \((.*)\)', text, re.M)
+                  if f:
+                      g = lambda n: (lambda m: int(m.group(1)) if m else 0)(re.search(n + r'=(\d+)', f.group(1)))
+                      failed = g('failures') + g('errors')
+                      skipped = g('skipped')
+                      passed = total - failed - skipped
+                  elif re.search(r'^OK', text, re.M):
+                      s = re.search(r'^OK \(skipped=(\d+)\)', text, re.M)
+                      skipped = int(s.group(1)) if s else 0
+                      failed = 0
+                      passed = total - skipped
+          receipt = {
+              'schema': 'gate_receipt/v1', 'gate_id': e['GATE'], 'leg': e['GATE'], 'profile': 'W0',
+              'owner': 'W0-CI-MATRIX', 'issuer': e['ISSUER'],
+              'scope': {'unit': 'W0-CI-MATRIX', 'platform': e['PLATFORM'], 'feature': e['GATE'],
+                        'artifact': e['GATE'] + '.receipt.json'},
+              'argv': json.loads(e['ARGV_JSON']), 'cwd': e['GCWD'] or e['CWD'],
+              'rc': rc, 'outcome': e['OUTCOME'], 'reason': e['REASON'],
+              'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
+                             'artifact_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
+                             'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
+              'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
+                              'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
+                              'accepted': e['OUTCOME'] == 'PASS'}],
+              'counts': {'passed': passed, 'failed': failed, 'skipped': skipped, 'source': e['COUNTSRC']}}
+          out = os.path.join(e['EVDIR'], e['GATE'] + '.receipt.json')
+          with open(out, 'w') as f:
+              json.dump(receipt, f, indent=2)
+          print('receipt: ' + out)
+          PYEOF
+            {
+              echo "## ${gate} [VM] rc ${rc/UNEXEC/UNKNOWN}"
+              echo "outcome ${outcome}: ${reason}"
+              echo '```'
+              tail -n 40 "$sane"
+              echo '```'
+              echo '```'
+              grep -E '^FAIL' "$sane" | head -40
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+          blocked() {
+            local gate="$1" reason="$2" fixture="$3"
+            shift 3
+            [ "${1:-}" = "--" ] && shift
+            local raw="$EVDIR/${gate}.log"
+            printf 'BLOCKED: %s\n' "$reason" > "$raw"
+            finish_gate "$gate" UNEXEC BLOCKED "$reason" "$raw" "$fixture" "unexecuted" 0 -- "$@"
+            return 2
+          }
+          if [ ! -f tools/router_index.py ]; then
+            blocked router-check "tools/router_index.py ABSENT, owned by W0-ROUTER-INDEX" .github/workflows/ci.yml -- python3 tools/router_index.py --check
+            exit 2
+          fi
+          LOG="$EVDIR/router-check.log"
+          : > "$LOG"
+          timeout 1200 python3 tools/router_index.py --check >"$LOG" 2>&1; r=$?
+          if [ $r -eq 0 ]; then oc=PASS; rsn="router index check green"; else oc=FAIL; rsn="router index check failed"; fi
+          finish_gate router-check "$r" "$oc" "$rsn" "$LOG" tools/router_index.py "unparsed:router_index" 0 -- python3 tools/router_index.py --check
+          exit $r
+
+  rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: x64
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            platform: arm64
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # checkout v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Run Rust gates
+        env:
+          JOB_ID: rust
+          PLATFORM: ${{ matrix.platform }}
+          EXPECT_ARCH: ${{ matrix.arch }}
+        run: |
+          set -u -o pipefail
+          EVDIR="${RUNNER_TEMP}/metaviewer-ci/${JOB_ID}/${PLATFORM}"
+          mkdir -p "${EVDIR}"
+          WF_SHA="$(python3 -c 'import hashlib; print(hashlib.sha256(open(".github/workflows/ci.yml","rb").read()).hexdigest())')"
+          ISSUER="CI/${JOB_ID}/${GITHUB_RUN_ID} [VM]"
+          sanitize() {
+            python3 - "$1" "$2" <<'PYEOF'
+          import re, sys
+          text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
+          for prefix in ('gh' + 'p_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
+              text = re.sub(prefix + r'[A-Za-z0-9_\-]{4,}', '[REDACTED]', text)
+          text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
+          open(sys.argv[2], 'w').write(text)
+          PYEOF
+          }
+          finish_gate() {
+            local gate="$1" rc="$2" outcome="$3" reason="$4" raw="$5" fixture="$6" countsrc="$7" parseut="$8"
+            shift 8
+            [ "${1:-}" = "--" ] && shift
+            local sane="${raw}.sane"
+            sanitize "$raw" "$sane" || return 2
+            GATE="$gate" PLATFORM="$PLATFORM" ISSUER="$ISSUER" WF_SHA="$WF_SHA" RC="$rc" OUTCOME="$outcome" \
+            REASON="$reason" EVDIR="$EVDIR" RAW="$raw" SANE="$sane" FIXTURE="$fixture" COUNTSRC="$countsrc" \
+            PARSEUT="$parseut" CWD="$(pwd -P)" GCWD="${GCWD:-}" SHA="$GITHUB_SHA" \
+            ARGV_JSON="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@")" \
+            python3 <<'PYEOF' || return 2
+          import hashlib, json, os, re
+          e = os.environ
+          def sha_file(p):
+              with open(p, 'rb') as f:
+                  return hashlib.sha256(f.read()).hexdigest()
+          rc = None if e['RC'] == 'UNEXEC' else int(e['RC'])
+          passed = failed = skipped = None
+          if e['PARSEUT'] == '1':
+              text = open(e['SANE']).read()
+              m = re.search(r'^Ran (\d+) tests?', text, re.M)
+              if m:
+                  total = int(m.group(1))
+                  f = re.search(r'^FAILED \((.*)\)', text, re.M)
+                  if f:
+                      g = lambda n: (lambda m: int(m.group(1)) if m else 0)(re.search(n + r'=(\d+)', f.group(1)))
+                      failed = g('failures') + g('errors')
+                      skipped = g('skipped')
+                      passed = total - failed - skipped
+                  elif re.search(r'^OK', text, re.M):
+                      s = re.search(r'^OK \(skipped=(\d+)\)', text, re.M)
+                      skipped = int(s.group(1)) if s else 0
+                      failed = 0
+                      passed = total - skipped
+          receipt = {
+              'schema': 'gate_receipt/v1', 'gate_id': e['GATE'], 'leg': e['GATE'], 'profile': 'W0',
+              'owner': 'W0-CI-MATRIX', 'issuer': e['ISSUER'],
+              'scope': {'unit': 'W0-CI-MATRIX', 'platform': e['PLATFORM'], 'feature': e['GATE'],
+                        'artifact': e['GATE'] + '.receipt.json'},
+              'argv': json.loads(e['ARGV_JSON']), 'cwd': e['GCWD'] or e['CWD'],
+              'rc': rc, 'outcome': e['OUTCOME'], 'reason': e['REASON'],
+              'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
+                             'artifact_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
+                             'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
+              'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
+                              'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
+                              'accepted': e['OUTCOME'] == 'PASS'}],
+              'counts': {'passed': passed, 'failed': failed, 'skipped': skipped, 'source': e['COUNTSRC']}}
+          out = os.path.join(e['EVDIR'], e['GATE'] + '.receipt.json')
+          with open(out, 'w') as f:
+              json.dump(receipt, f, indent=2)
+          print('receipt: ' + out)
+          PYEOF
+            {
+              echo "## ${gate} [VM] rc ${rc/UNEXEC/UNKNOWN}"
+              echo "outcome ${outcome}: ${reason}"
+              echo '```'
+              tail -n 40 "$sane"
+              echo '```'
+              echo '```'
+              grep -E '^FAIL' "$sane" | head -40
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+          blocked() {
+            local gate="$1" reason="$2" fixture="$3"
+            shift 3
+            [ "${1:-}" = "--" ] && shift
+            local raw="$EVDIR/${gate}.log"
+            printf 'BLOCKED: %s\n' "$reason" > "$raw"
+            finish_gate "$gate" UNEXEC BLOCKED "$reason" "$raw" "$fixture" "unexecuted" 0 -- "$@"
+            return 2
+          }
+          if [ "$(uname -m)" != "$EXPECT_ARCH" ]; then
+            blocked rust-arch "arch mismatch: expected $EXPECT_ARCH" .github/workflows/ci.yml -- uname -m
+            exit 2
+          fi
+          if [ ! -f core/Cargo.toml ]; then
+            blocked rust-prereq "core/Cargo.toml missing" .github/workflows/ci.yml -- cargo --version
+            exit 2
+          fi
+          if ! command -v cargo >/dev/null 2>&1; then
+            blocked rust-prereq "cargo not installed on runner" core/Cargo.toml -- cargo --version
+            exit 2
+          fi
+          echo "toolchain: $(rustc --version 2>&1) / $(cargo --version 2>&1)"
+          GCWD="$PWD/core"
+          rc=0
+          LOG="$EVDIR/rust-fmt.log"
+          : > "$LOG"
+          ( cd core && timeout 1200 cargo fmt --check >"$LOG" 2>&1 ); r=$?
+          if [ $r -eq 0 ]; then oc=PASS; rsn="cargo fmt green"; else oc=FAIL; rsn="cargo fmt failed"; fi
+          finish_gate rust-fmt "$r" "$oc" "$rsn" "$LOG" core/Cargo.toml "unparsed:cargo-fmt" 0 -- cargo fmt --check
+          [ $r -ne 0 ] && [ $rc -eq 0 ] && rc=$r
+          LOG="$EVDIR/rust-clippy.log"
+          : > "$LOG"
+          ( cd core && timeout 1200 cargo clippy -- -D warnings >"$LOG" 2>&1 ); r=$?
+          if [ $r -eq 0 ]; then oc=PASS; rsn="clippy green"; else oc=FAIL; rsn="clippy failed"; fi
+          finish_gate rust-clippy "$r" "$oc" "$rsn" "$LOG" core/Cargo.toml "unparsed:cargo-clippy" 0 -- cargo clippy -- -D warnings
+          [ $r -ne 0 ] && [ $rc -eq 0 ] && rc=$r
+          LOG="$EVDIR/rust-test.log"
+          : > "$LOG"
+          ( cd core && timeout 1200 cargo test >"$LOG" 2>&1 ); r=$?
+          if [ $r -eq 0 ]; then oc=PASS; rsn="cargo test green"; else oc=FAIL; rsn="cargo test failed"; fi
+          finish_gate rust-test "$r" "$oc" "$rsn" "$LOG" core/Cargo.toml "unparsed:cargo-test" 0 -- cargo test
+          [ $r -ne 0 ] && [ $rc -eq 0 ] && rc=$r
+          exit $rc
+  go:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: x64
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            platform: arm64
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # checkout v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Run Go gates
+        env:
+          JOB_ID: go
+          PLATFORM: ${{ matrix.platform }}
+          EXPECT_ARCH: ${{ matrix.arch }}
+        run: |
+          set -u -o pipefail
+          EVDIR="${RUNNER_TEMP}/metaviewer-ci/${JOB_ID}/${PLATFORM}"
+          mkdir -p "${EVDIR}"
+          WF_SHA="$(python3 -c 'import hashlib; print(hashlib.sha256(open(".github/workflows/ci.yml","rb").read()).hexdigest())')"
+          ISSUER="CI/${JOB_ID}/${GITHUB_RUN_ID} [VM]"
+          sanitize() {
+            python3 - "$1" "$2" <<'PYEOF'
+          import re, sys
+          text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
+          for prefix in ('gh' + 'p_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
+              text = re.sub(prefix + r'[A-Za-z0-9_\-]{4,}', '[REDACTED]', text)
+          text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
+          open(sys.argv[2], 'w').write(text)
+          PYEOF
+          }
+          finish_gate() {
+            local gate="$1" rc="$2" outcome="$3" reason="$4" raw="$5" fixture="$6" countsrc="$7" parseut="$8"
+            shift 8
+            [ "${1:-}" = "--" ] && shift
+            local sane="${raw}.sane"
+            sanitize "$raw" "$sane" || return 2
+            GATE="$gate" PLATFORM="$PLATFORM" ISSUER="$ISSUER" WF_SHA="$WF_SHA" RC="$rc" OUTCOME="$outcome" \
+            REASON="$reason" EVDIR="$EVDIR" RAW="$raw" SANE="$sane" FIXTURE="$fixture" COUNTSRC="$countsrc" \
+            PARSEUT="$parseut" CWD="$(pwd -P)" GCWD="${GCWD:-}" SHA="$GITHUB_SHA" \
+            ARGV_JSON="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@")" \
+            python3 <<'PYEOF' || return 2
+          import hashlib, json, os, re
+          e = os.environ
+          def sha_file(p):
+              with open(p, 'rb') as f:
+                  return hashlib.sha256(f.read()).hexdigest()
+          rc = None if e['RC'] == 'UNEXEC' else int(e['RC'])
+          passed = failed = skipped = None
+          if e['PARSEUT'] == '1':
+              text = open(e['SANE']).read()
+              m = re.search(r'^Ran (\d+) tests?', text, re.M)
+              if m:
+                  total = int(m.group(1))
+                  f = re.search(r'^FAILED \((.*)\)', text, re.M)
+                  if f:
+                      g = lambda n: (lambda m: int(m.group(1)) if m else 0)(re.search(n + r'=(\d+)', f.group(1)))
+                      failed = g('failures') + g('errors')
+                      skipped = g('skipped')
+                      passed = total - failed - skipped
+                  elif re.search(r'^OK', text, re.M):
+                      s = re.search(r'^OK \(skipped=(\d+)\)', text, re.M)
+                      skipped = int(s.group(1)) if s else 0
+                      failed = 0
+                      passed = total - skipped
+          receipt = {
+              'schema': 'gate_receipt/v1', 'gate_id': e['GATE'], 'leg': e['GATE'], 'profile': 'W0',
+              'owner': 'W0-CI-MATRIX', 'issuer': e['ISSUER'],
+              'scope': {'unit': 'W0-CI-MATRIX', 'platform': e['PLATFORM'], 'feature': e['GATE'],
+                        'artifact': e['GATE'] + '.receipt.json'},
+              'argv': json.loads(e['ARGV_JSON']), 'cwd': e['GCWD'] or e['CWD'],
+              'rc': rc, 'outcome': e['OUTCOME'], 'reason': e['REASON'],
+              'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
+                             'artifact_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
+                             'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
+              'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
+                              'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
+                              'accepted': e['OUTCOME'] == 'PASS'}],
+              'counts': {'passed': passed, 'failed': failed, 'skipped': skipped, 'source': e['COUNTSRC']}}
+          out = os.path.join(e['EVDIR'], e['GATE'] + '.receipt.json')
+          with open(out, 'w') as f:
+              json.dump(receipt, f, indent=2)
+          print('receipt: ' + out)
+          PYEOF
+            {
+              echo "## ${gate} [VM] rc ${rc/UNEXEC/UNKNOWN}"
+              echo "outcome ${outcome}: ${reason}"
+              echo '```'
+              tail -n 40 "$sane"
+              echo '```'
+              echo '```'
+              grep -E '^FAIL' "$sane" | head -40
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+          blocked() {
+            local gate="$1" reason="$2" fixture="$3"
+            shift 3
+            [ "${1:-}" = "--" ] && shift
+            local raw="$EVDIR/${gate}.log"
+            printf 'BLOCKED: %s\n' "$reason" > "$raw"
+            finish_gate "$gate" UNEXEC BLOCKED "$reason" "$raw" "$fixture" "unexecuted" 0 -- "$@"
+            return 2
+          }
+          if [ "$(uname -m)" != "$EXPECT_ARCH" ]; then
+            blocked go-arch "arch mismatch: expected $EXPECT_ARCH" .github/workflows/ci.yml -- uname -m
+            exit 2
+          fi
+          if [ ! -f daemon-adapter/go.mod ]; then
+            blocked go-prereq "daemon-adapter/go.mod missing" .github/workflows/ci.yml -- go version
+            exit 2
+          fi
+          if ! command -v go >/dev/null 2>&1; then
+            blocked go-prereq "go toolchain not installed on runner" daemon-adapter/go.mod -- go version
+            exit 2
+          fi
+          if [ "$(go env CGO_ENABLED)" != "1" ]; then
+            blocked go-prereq "go test -race needs CGO_ENABLED=1 on this runner" daemon-adapter/go.mod -- go env CGO_ENABLED
+            exit 2
+          fi
+          echo "toolchain: $(go version 2>&1)"
+          GCWD="$PWD/daemon-adapter"
+          rc=0
+          LOG="$EVDIR/go-vet.log"
+          : > "$LOG"
+          ( cd daemon-adapter && timeout 1200 go vet ./... >"$LOG" 2>&1 ); r=$?
+          if [ $r -eq 0 ]; then oc=PASS; rsn="go vet green"; else oc=FAIL; rsn="go vet failed"; fi
+          finish_gate go-vet "$r" "$oc" "$rsn" "$LOG" daemon-adapter/go.mod "unparsed:go-vet" 0 -- go vet ./...
+          [ $r -ne 0 ] && [ $rc -eq 0 ] && rc=$r
+          LOG="$EVDIR/go-test.log"
+          : > "$LOG"
+          ( cd daemon-adapter && timeout 1200 go test -race ./... >"$LOG" 2>&1 ); r=$?
+          if [ $r -eq 0 ]; then oc=PASS; rsn="go test -race green"; else oc=FAIL; rsn="go test -race failed"; fi
+          finish_gate go-test "$r" "$oc" "$rsn" "$LOG" daemon-adapter/go.mod "unparsed:go-test" 0 -- go test -race ./...
+          [ $r -ne 0 ] && [ $rc -eq 0 ] && rc=$r
+          exit $rc
+
+  python:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: x64
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            platform: arm64
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # checkout v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Run Python agent gates
+        env:
+          JOB_ID: python
+          PLATFORM: ${{ matrix.platform }}
+          EXPECT_ARCH: ${{ matrix.arch }}
+        run: |
+          set -u -o pipefail
+          EVDIR="${RUNNER_TEMP}/metaviewer-ci/${JOB_ID}/${PLATFORM}"
+          mkdir -p "${EVDIR}"
+          WF_SHA="$(python3 -c 'import hashlib; print(hashlib.sha256(open(".github/workflows/ci.yml","rb").read()).hexdigest())')"
+          ISSUER="CI/${JOB_ID}/${GITHUB_RUN_ID} [VM]"
+          sanitize() {
+            python3 - "$1" "$2" <<'PYEOF'
+          import re, sys
+          text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
+          for prefix in ('gh' + 'p_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
+              text = re.sub(prefix + r'[A-Za-z0-9_\-]{4,}', '[REDACTED]', text)
+          text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
+          open(sys.argv[2], 'w').write(text)
+          PYEOF
+          }
+          finish_gate() {
+            local gate="$1" rc="$2" outcome="$3" reason="$4" raw="$5" fixture="$6" countsrc="$7" parseut="$8"
+            shift 8
+            [ "${1:-}" = "--" ] && shift
+            local sane="${raw}.sane"
+            sanitize "$raw" "$sane" || return 2
+            GATE="$gate" PLATFORM="$PLATFORM" ISSUER="$ISSUER" WF_SHA="$WF_SHA" RC="$rc" OUTCOME="$outcome" \
+            REASON="$reason" EVDIR="$EVDIR" RAW="$raw" SANE="$sane" FIXTURE="$fixture" COUNTSRC="$countsrc" \
+            PARSEUT="$parseut" CWD="$(pwd -P)" GCWD="${GCWD:-}" SHA="$GITHUB_SHA" \
+            ARGV_JSON="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@")" \
+            python3 <<'PYEOF' || return 2
+          import hashlib, json, os, re
+          e = os.environ
+          def sha_file(p):
+              with open(p, 'rb') as f:
+                  return hashlib.sha256(f.read()).hexdigest()
+          rc = None if e['RC'] == 'UNEXEC' else int(e['RC'])
+          passed = failed = skipped = None
+          if e['PARSEUT'] == '1':
+              text = open(e['SANE']).read()
+              m = re.search(r'^Ran (\d+) tests?', text, re.M)
+              if m:
+                  total = int(m.group(1))
+                  f = re.search(r'^FAILED \((.*)\)', text, re.M)
+                  if f:
+                      g = lambda n: (lambda m: int(m.group(1)) if m else 0)(re.search(n + r'=(\d+)', f.group(1)))
+                      failed = g('failures') + g('errors')
+                      skipped = g('skipped')
+                      passed = total - failed - skipped
+                  elif re.search(r'^OK', text, re.M):
+                      s = re.search(r'^OK \(skipped=(\d+)\)', text, re.M)
+                      skipped = int(s.group(1)) if s else 0
+                      failed = 0
+                      passed = total - skipped
+          receipt = {
+              'schema': 'gate_receipt/v1', 'gate_id': e['GATE'], 'leg': e['GATE'], 'profile': 'W0',
+              'owner': 'W0-CI-MATRIX', 'issuer': e['ISSUER'],
+              'scope': {'unit': 'W0-CI-MATRIX', 'platform': e['PLATFORM'], 'feature': e['GATE'],
+                        'artifact': e['GATE'] + '.receipt.json'},
+              'argv': json.loads(e['ARGV_JSON']), 'cwd': e['GCWD'] or e['CWD'],
+              'rc': rc, 'outcome': e['OUTCOME'], 'reason': e['REASON'],
+              'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
+                             'artifact_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
+                             'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
+              'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
+                              'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
+                              'accepted': e['OUTCOME'] == 'PASS'}],
+              'counts': {'passed': passed, 'failed': failed, 'skipped': skipped, 'source': e['COUNTSRC']}}
+          out = os.path.join(e['EVDIR'], e['GATE'] + '.receipt.json')
+          with open(out, 'w') as f:
+              json.dump(receipt, f, indent=2)
+          print('receipt: ' + out)
+          PYEOF
+            {
+              echo "## ${gate} [VM] rc ${rc/UNEXEC/UNKNOWN}"
+              echo "outcome ${outcome}: ${reason}"
+              echo '```'
+              tail -n 40 "$sane"
+              echo '```'
+              echo '```'
+              grep -E '^FAIL' "$sane" | head -40
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+          blocked() {
+            local gate="$1" reason="$2" fixture="$3"
+            shift 3
+            [ "${1:-}" = "--" ] && shift
+            local raw="$EVDIR/${gate}.log"
+            printf 'BLOCKED: %s\n' "$reason" > "$raw"
+            finish_gate "$gate" UNEXEC BLOCKED "$reason" "$raw" "$fixture" "unexecuted" 0 -- "$@"
+            return 2
+          }
+          if [ "$(uname -m)" != "$EXPECT_ARCH" ]; then
+            blocked python-arch "arch mismatch: expected $EXPECT_ARCH" .github/workflows/ci.yml -- uname -m
+            exit 2
+          fi
+          if [ ! -d agents/tests ]; then
+            blocked python-prereq "agents/tests missing, owned by R-W0-AGENTS" agents/pyproject.toml -- python3 -m unittest discover -s agents/tests -v
+            exit 2
+          fi
+          LOG="$EVDIR/python-agents.log"
+          : > "$LOG"
+          timeout 1200 python3 -m unittest discover -s agents/tests -v >"$LOG" 2>&1; r=$?
+          if [ $r -eq 0 ]; then oc=PASS; rsn="agents suite green"; else oc=FAIL; rsn="agents suite failed"; fi
+          finish_gate python-agents "$r" "$oc" "$rsn" "$LOG" agents/pyproject.toml "parsed:unittest" 1 -- python3 -m unittest discover -s agents/tests -v
+          exit $r
+  js:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: x64
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            platform: arm64
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # checkout v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # setup-node v4.4.0
+        with:
+          node-version: "24"
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Run JS gates
+        env:
+          JOB_ID: js
+          PLATFORM: ${{ matrix.platform }}
+          EXPECT_ARCH: ${{ matrix.arch }}
+        run: |
+          set -u -o pipefail
+          EVDIR="${RUNNER_TEMP}/metaviewer-ci/${JOB_ID}/${PLATFORM}"
+          mkdir -p "${EVDIR}"
+          WF_SHA="$(python3 -c 'import hashlib; print(hashlib.sha256(open(".github/workflows/ci.yml","rb").read()).hexdigest())')"
+          ISSUER="CI/${JOB_ID}/${GITHUB_RUN_ID} [VM]"
+          sanitize() {
+            python3 - "$1" "$2" <<'PYEOF'
+          import re, sys
+          text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
+          for prefix in ('gh' + 'p_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
+              text = re.sub(prefix + r'[A-Za-z0-9_\-]{4,}', '[REDACTED]', text)
+          text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
+          open(sys.argv[2], 'w').write(text)
+          PYEOF
+          }
+          finish_gate() {
+            local gate="$1" rc="$2" outcome="$3" reason="$4" raw="$5" fixture="$6" countsrc="$7" parseut="$8"
+            shift 8
+            [ "${1:-}" = "--" ] && shift
+            local sane="${raw}.sane"
+            sanitize "$raw" "$sane" || return 2
+            GATE="$gate" PLATFORM="$PLATFORM" ISSUER="$ISSUER" WF_SHA="$WF_SHA" RC="$rc" OUTCOME="$outcome" \
+            REASON="$reason" EVDIR="$EVDIR" RAW="$raw" SANE="$sane" FIXTURE="$fixture" COUNTSRC="$countsrc" \
+            PARSEUT="$parseut" CWD="$(pwd -P)" GCWD="${GCWD:-}" SHA="$GITHUB_SHA" \
+            ARGV_JSON="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@")" \
+            python3 <<'PYEOF' || return 2
+          import hashlib, json, os, re
+          e = os.environ
+          def sha_file(p):
+              with open(p, 'rb') as f:
+                  return hashlib.sha256(f.read()).hexdigest()
+          rc = None if e['RC'] == 'UNEXEC' else int(e['RC'])
+          passed = failed = skipped = None
+          if e['PARSEUT'] == '1':
+              text = open(e['SANE']).read()
+              m = re.search(r'^Ran (\d+) tests?', text, re.M)
+              if m:
+                  total = int(m.group(1))
+                  f = re.search(r'^FAILED \((.*)\)', text, re.M)
+                  if f:
+                      g = lambda n: (lambda m: int(m.group(1)) if m else 0)(re.search(n + r'=(\d+)', f.group(1)))
+                      failed = g('failures') + g('errors')
+                      skipped = g('skipped')
+                      passed = total - failed - skipped
+                  elif re.search(r'^OK', text, re.M):
+                      s = re.search(r'^OK \(skipped=(\d+)\)', text, re.M)
+                      skipped = int(s.group(1)) if s else 0
+                      failed = 0
+                      passed = total - skipped
+          receipt = {
+              'schema': 'gate_receipt/v1', 'gate_id': e['GATE'], 'leg': e['GATE'], 'profile': 'W0',
+              'owner': 'W0-CI-MATRIX', 'issuer': e['ISSUER'],
+              'scope': {'unit': 'W0-CI-MATRIX', 'platform': e['PLATFORM'], 'feature': e['GATE'],
+                        'artifact': e['GATE'] + '.receipt.json'},
+              'argv': json.loads(e['ARGV_JSON']), 'cwd': e['GCWD'] or e['CWD'],
+              'rc': rc, 'outcome': e['OUTCOME'], 'reason': e['REASON'],
+              'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
+                             'artifact_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
+                             'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
+              'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
+                              'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
+                              'accepted': e['OUTCOME'] == 'PASS'}],
+              'counts': {'passed': passed, 'failed': failed, 'skipped': skipped, 'source': e['COUNTSRC']}}
+          out = os.path.join(e['EVDIR'], e['GATE'] + '.receipt.json')
+          with open(out, 'w') as f:
+              json.dump(receipt, f, indent=2)
+          print('receipt: ' + out)
+          PYEOF
+            {
+              echo "## ${gate} [VM] rc ${rc/UNEXEC/UNKNOWN}"
+              echo "outcome ${outcome}: ${reason}"
+              echo '```'
+              tail -n 40 "$sane"
+              echo '```'
+              echo '```'
+              grep -E '^FAIL' "$sane" | head -40
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+          blocked() {
+            local gate="$1" reason="$2" fixture="$3"
+            shift 3
+            [ "${1:-}" = "--" ] && shift
+            local raw="$EVDIR/${gate}.log"
+            printf 'BLOCKED: %s\n' "$reason" > "$raw"
+            finish_gate "$gate" UNEXEC BLOCKED "$reason" "$raw" "$fixture" "unexecuted" 0 -- "$@"
+            return 2
+          }
+          if [ "$(uname -m)" != "$EXPECT_ARCH" ]; then
+            blocked js-arch "arch mismatch: expected $EXPECT_ARCH" .github/workflows/ci.yml -- uname -m
+            exit 2
+          fi
+          if [ ! -f ui/package.json ]; then
+            blocked js-prereq "ui/package.json missing" .github/workflows/ci.yml -- npm --version
+            exit 2
+          fi
+          if ! command -v npm >/dev/null 2>&1; then
+            blocked js-prereq "npm not installed on runner" ui/package.json -- npm --version
+            exit 2
+          fi
+          echo "toolchain: $(node --version 2>&1) / $(npm --version 2>&1)"
+          GCWD="$PWD/ui"
+          rc=0
+          LOG="$EVDIR/js-install.log"
+          : > "$LOG"
+          ( cd ui && timeout 1200 npm install --no-audit --no-fund >"$LOG" 2>&1 ); r=$?
+          if [ $r -eq 0 ]; then oc=PASS; rsn="npm install green"; else oc=FAIL; rsn="npm install failed"; fi
+          finish_gate js-install "$r" "$oc" "$rsn" "$LOG" ui/package.json "unparsed:npm-install" 0 -- npm install --no-audit --no-fund
+          [ $r -ne 0 ] && [ $rc -eq 0 ] && rc=$r
+          if [ $r -ne 0 ]; then
+            blocked js-test "npm install failed" ui/package.json -- npm test; r=$?
+            [ $r -ne 0 ] && [ $rc -eq 0 ] && rc=$r
+            blocked js-check "npm install failed" ui/package.json -- npm run check; r=$?
+            [ $r -ne 0 ] && [ $rc -eq 0 ] && rc=$r
+            blocked js-build "npm install failed" ui/package.json -- npm run build; r=$?
+            [ $r -ne 0 ] && [ $rc -eq 0 ] && rc=$r
+            exit $rc
+          fi
+          if [ -z "$(ls ui/test/*.test.js 2>/dev/null)" ]; then
+            blocked js-test "ui/test/*.test.js missing, owned by R-W0-SHELL" ui/package.json -- npm test; r=$?
+          else
+            LOG="$EVDIR/js-test.log"
+            : > "$LOG"
+            ( cd ui && timeout 1200 npm test >"$LOG" 2>&1 ); r=$?
+            if [ $r -eq 0 ]; then oc=PASS; rsn="npm test green"; else oc=FAIL; rsn="npm test failed"; fi
+            finish_gate js-test "$r" "$oc" "$rsn" "$LOG" ui/package.json "unparsed:npm-test" 0 -- npm test
+          fi
+          [ $r -ne 0 ] && [ $rc -eq 0 ] && rc=$r
+          if [ ! -f ui/tsconfig.json ]; then
+            blocked js-check "ui/tsconfig.json missing, no W0 owner registered" ui/package.json -- npm run check; r=$?
+          else
+            LOG="$EVDIR/js-check.log"
+            : > "$LOG"
+            ( cd ui && timeout 1200 npm run check >"$LOG" 2>&1 ); r=$?
+            if [ $r -eq 0 ]; then oc=PASS; rsn="vue-tsc green"; else oc=FAIL; rsn="vue-tsc failed"; fi
+            finish_gate js-check "$r" "$oc" "$rsn" "$LOG" ui/tsconfig.json "unparsed:vue-tsc" 0 -- npm run check
+          fi
+          [ $r -ne 0 ] && [ $rc -eq 0 ] && rc=$r
+          if [ ! -f ui/index.html ]; then
+            blocked js-build "ui/index.html missing, owned by R-W0-SHELL" ui/package.json -- npm run build; r=$?
+          else
+            LOG="$EVDIR/js-build.log"
+            : > "$LOG"
+            ( cd ui && timeout 1200 npm run build >"$LOG" 2>&1 ); r=$?
+            if [ $r -eq 0 ]; then oc=PASS; rsn="vite build green"; else oc=FAIL; rsn="vite build failed"; fi
+            finish_gate js-build "$r" "$oc" "$rsn" "$LOG" ui/index.html "unparsed:vite-build" 0 -- npm run build
+          fi
+          [ $r -ne 0 ] && [ $rc -eq 0 ] && rc=$r
+          exit $rc
+
+  e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: x64
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            platform: arm64
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # checkout v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Run E2E gate under xvfb
+        env:
+          JOB_ID: e2e
+          PLATFORM: ${{ matrix.platform }}
+          EXPECT_ARCH: ${{ matrix.arch }}
+        run: |
+          set -u -o pipefail
+          EVDIR="${RUNNER_TEMP}/metaviewer-ci/${JOB_ID}/${PLATFORM}"
+          mkdir -p "${EVDIR}"
+          WF_SHA="$(python3 -c 'import hashlib; print(hashlib.sha256(open(".github/workflows/ci.yml","rb").read()).hexdigest())')"
+          ISSUER="CI/${JOB_ID}/${GITHUB_RUN_ID} [VM]"
+          sanitize() {
+            python3 - "$1" "$2" <<'PYEOF'
+          import re, sys
+          text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
+          for prefix in ('gh' + 'p_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
+              text = re.sub(prefix + r'[A-Za-z0-9_\-]{4,}', '[REDACTED]', text)
+          text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
+          open(sys.argv[2], 'w').write(text)
+          PYEOF
+          }
+          finish_gate() {
+            local gate="$1" rc="$2" outcome="$3" reason="$4" raw="$5" fixture="$6" countsrc="$7" parseut="$8"
+            shift 8
+            [ "${1:-}" = "--" ] && shift
+            local sane="${raw}.sane"
+            sanitize "$raw" "$sane" || return 2
+            GATE="$gate" PLATFORM="$PLATFORM" ISSUER="$ISSUER" WF_SHA="$WF_SHA" RC="$rc" OUTCOME="$outcome" \
+            REASON="$reason" EVDIR="$EVDIR" RAW="$raw" SANE="$sane" FIXTURE="$fixture" COUNTSRC="$countsrc" \
+            PARSEUT="$parseut" CWD="$(pwd -P)" GCWD="${GCWD:-}" SHA="$GITHUB_SHA" \
+            ARGV_JSON="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@")" \
+            python3 <<'PYEOF' || return 2
+          import hashlib, json, os, re
+          e = os.environ
+          def sha_file(p):
+              with open(p, 'rb') as f:
+                  return hashlib.sha256(f.read()).hexdigest()
+          rc = None if e['RC'] == 'UNEXEC' else int(e['RC'])
+          passed = failed = skipped = None
+          if e['PARSEUT'] == '1':
+              text = open(e['SANE']).read()
+              m = re.search(r'^Ran (\d+) tests?', text, re.M)
+              if m:
+                  total = int(m.group(1))
+                  f = re.search(r'^FAILED \((.*)\)', text, re.M)
+                  if f:
+                      g = lambda n: (lambda m: int(m.group(1)) if m else 0)(re.search(n + r'=(\d+)', f.group(1)))
+                      failed = g('failures') + g('errors')
+                      skipped = g('skipped')
+                      passed = total - failed - skipped
+                  elif re.search(r'^OK', text, re.M):
+                      s = re.search(r'^OK \(skipped=(\d+)\)', text, re.M)
+                      skipped = int(s.group(1)) if s else 0
+                      failed = 0
+                      passed = total - skipped
+          receipt = {
+              'schema': 'gate_receipt/v1', 'gate_id': e['GATE'], 'leg': e['GATE'], 'profile': 'W0',
+              'owner': 'W0-CI-MATRIX', 'issuer': e['ISSUER'],
+              'scope': {'unit': 'W0-CI-MATRIX', 'platform': e['PLATFORM'], 'feature': e['GATE'],
+                        'artifact': e['GATE'] + '.receipt.json'},
+              'argv': json.loads(e['ARGV_JSON']), 'cwd': e['GCWD'] or e['CWD'],
+              'rc': rc, 'outcome': e['OUTCOME'], 'reason': e['REASON'],
+              'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
+                             'artifact_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
+                             'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
+              'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
+                              'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
+                              'accepted': e['OUTCOME'] == 'PASS'}],
+              'counts': {'passed': passed, 'failed': failed, 'skipped': skipped, 'source': e['COUNTSRC']}}
+          out = os.path.join(e['EVDIR'], e['GATE'] + '.receipt.json')
+          with open(out, 'w') as f:
+              json.dump(receipt, f, indent=2)
+          print('receipt: ' + out)
+          PYEOF
+            {
+              echo "## ${gate} [VM] rc ${rc/UNEXEC/UNKNOWN}"
+              echo "outcome ${outcome}: ${reason}"
+              echo '```'
+              tail -n 40 "$sane"
+              echo '```'
+              echo '```'
+              grep -E '^FAIL' "$sane" | head -40
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+          blocked() {
+            local gate="$1" reason="$2" fixture="$3"
+            shift 3
+            [ "${1:-}" = "--" ] && shift
+            local raw="$EVDIR/${gate}.log"
+            printf 'BLOCKED: %s\n' "$reason" > "$raw"
+            finish_gate "$gate" UNEXEC BLOCKED "$reason" "$raw" "$fixture" "unexecuted" 0 -- "$@"
+            return 2
+          }
+          if [ "$(uname -m)" != "$EXPECT_ARCH" ]; then
+            blocked e2e-arch "arch mismatch: expected $EXPECT_ARCH" .github/workflows/ci.yml -- uname -m
+            exit 2
+          fi
+          HARNESS="tests/e2e/run.py"
+          if [ ! -x "$HARNESS" ]; then
+            blocked e2e-harness "fake-capsule harness $HARNESS ABSENT, no W0 owner registered" .github/workflows/ci.yml -- xvfb-run -a -s "-screen 0 1280x900x24" python3 tests/e2e/run.py
+            exit 2
+          fi
+          if ! command -v xvfb-run >/dev/null 2>&1; then
+            blocked e2e-prereq "xvfb-run not installed on runner" tests/e2e/run.py -- xvfb-run -a -s "-screen 0 1280x900x24" python3 tests/e2e/run.py
+            exit 2
+          fi
+          LOG="$EVDIR/e2e-xvfb.log"
+          : > "$LOG"
+          timeout 1200 xvfb-run -a -s "-screen 0 1280x900x24" python3 tests/e2e/run.py >"$LOG" 2>&1; r=$?
+          if [ $r -eq 0 ]; then oc=PASS; rsn="e2e harness green"; else oc=FAIL; rsn="e2e harness failed"; fi
+          finish_gate e2e-xvfb "$r" "$oc" "$rsn" "$LOG" tests/e2e/run.py "unparsed:e2e-harness" 0 -- xvfb-run -a -s "-screen 0 1280x900x24" python3 tests/e2e/run.py
+          exit $r
+  novac:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # checkout v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Report novac applicability
+        env:
+          JOB_ID: novac
+          PLATFORM: x64
+        run: |
+          set -u -o pipefail
+          EVDIR="${RUNNER_TEMP}/metaviewer-ci/${JOB_ID}/${PLATFORM}"
+          mkdir -p "${EVDIR}"
+          WF_SHA="$(python3 -c 'import hashlib; print(hashlib.sha256(open(".github/workflows/ci.yml","rb").read()).hexdigest())')"
+          ISSUER="CI/${JOB_ID}/${GITHUB_RUN_ID} [VM]"
+          sanitize() {
+            python3 - "$1" "$2" <<'PYEOF'
+          import re, sys
+          text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
+          for prefix in ('gh' + 'p_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
+              text = re.sub(prefix + r'[A-Za-z0-9_\-]{4,}', '[REDACTED]', text)
+          text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
+          open(sys.argv[2], 'w').write(text)
+          PYEOF
+          }
+          finish_gate() {
+            local gate="$1" rc="$2" outcome="$3" reason="$4" raw="$5" fixture="$6" countsrc="$7" parseut="$8"
+            shift 8
+            [ "${1:-}" = "--" ] && shift
+            local sane="${raw}.sane"
+            sanitize "$raw" "$sane" || return 2
+            GATE="$gate" PLATFORM="$PLATFORM" ISSUER="$ISSUER" WF_SHA="$WF_SHA" RC="$rc" OUTCOME="$outcome" \
+            REASON="$reason" EVDIR="$EVDIR" RAW="$raw" SANE="$sane" FIXTURE="$fixture" COUNTSRC="$countsrc" \
+            PARSEUT="$parseut" CWD="$(pwd -P)" GCWD="${GCWD:-}" SHA="$GITHUB_SHA" \
+            ARGV_JSON="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@")" \
+            python3 <<'PYEOF' || return 2
+          import hashlib, json, os, re
+          e = os.environ
+          def sha_file(p):
+              with open(p, 'rb') as f:
+                  return hashlib.sha256(f.read()).hexdigest()
+          rc = None if e['RC'] == 'UNEXEC' else int(e['RC'])
+          passed = failed = skipped = None
+          if e['PARSEUT'] == '1':
+              text = open(e['SANE']).read()
+              m = re.search(r'^Ran (\d+) tests?', text, re.M)
+              if m:
+                  total = int(m.group(1))
+                  f = re.search(r'^FAILED \((.*)\)', text, re.M)
+                  if f:
+                      g = lambda n: (lambda m: int(m.group(1)) if m else 0)(re.search(n + r'=(\d+)', f.group(1)))
+                      failed = g('failures') + g('errors')
+                      skipped = g('skipped')
+                      passed = total - failed - skipped
+                  elif re.search(r'^OK', text, re.M):
+                      s = re.search(r'^OK \(skipped=(\d+)\)', text, re.M)
+                      skipped = int(s.group(1)) if s else 0
+                      failed = 0
+                      passed = total - skipped
+          receipt = {
+              'schema': 'gate_receipt/v1', 'gate_id': e['GATE'], 'leg': e['GATE'], 'profile': 'W0',
+              'owner': 'W0-CI-MATRIX', 'issuer': e['ISSUER'],
+              'scope': {'unit': 'W0-CI-MATRIX', 'platform': e['PLATFORM'], 'feature': e['GATE'],
+                        'artifact': e['GATE'] + '.receipt.json'},
+              'argv': json.loads(e['ARGV_JSON']), 'cwd': e['GCWD'] or e['CWD'],
+              'rc': rc, 'outcome': e['OUTCOME'], 'reason': e['REASON'],
+              'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
+                             'artifact_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
+                             'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
+              'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
+                              'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
+                              'accepted': e['OUTCOME'] == 'PASS'}],
+              'counts': {'passed': passed, 'failed': failed, 'skipped': skipped, 'source': e['COUNTSRC']}}
+          out = os.path.join(e['EVDIR'], e['GATE'] + '.receipt.json')
+          with open(out, 'w') as f:
+              json.dump(receipt, f, indent=2)
+          print('receipt: ' + out)
+          PYEOF
+            {
+              echo "## ${gate} [VM] rc ${rc/UNEXEC/UNKNOWN}"
+              echo "outcome ${outcome}: ${reason}"
+              echo '```'
+              tail -n 40 "$sane"
+              echo '```'
+              echo '```'
+              grep -E '^FAIL' "$sane" | head -40
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+          LOG="$EVDIR/novac.log"
+          printf 'G-NOVAC is required from W1; the meta-oracle interface is ABSENT in W0.\n' > "$LOG"
+          finish_gate novac UNEXEC NOT_APPLICABLE "G-NOVAC required from W1, interface ABSENT in W0" "$LOG" .github/workflows/ci.yml "unexecuted" 0 -- novac-pending
+          exit 0
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: x64
+          - runner: ubuntu-24.04-arm
+            platform: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # checkout v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Report package applicability
+        env:
+          JOB_ID: package
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -u -o pipefail
+          EVDIR="${RUNNER_TEMP}/metaviewer-ci/${JOB_ID}/${PLATFORM}"
+          mkdir -p "${EVDIR}"
+          WF_SHA="$(python3 -c 'import hashlib; print(hashlib.sha256(open(".github/workflows/ci.yml","rb").read()).hexdigest())')"
+          ISSUER="CI/${JOB_ID}/${GITHUB_RUN_ID} [VM]"
+          sanitize() {
+            python3 - "$1" "$2" <<'PYEOF'
+          import re, sys
+          text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
+          for prefix in ('gh' + 'p_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
+              text = re.sub(prefix + r'[A-Za-z0-9_\-]{4,}', '[REDACTED]', text)
+          text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
+          open(sys.argv[2], 'w').write(text)
+          PYEOF
+          }
+          finish_gate() {
+            local gate="$1" rc="$2" outcome="$3" reason="$4" raw="$5" fixture="$6" countsrc="$7" parseut="$8"
+            shift 8
+            [ "${1:-}" = "--" ] && shift
+            local sane="${raw}.sane"
+            sanitize "$raw" "$sane" || return 2
+            GATE="$gate" PLATFORM="$PLATFORM" ISSUER="$ISSUER" WF_SHA="$WF_SHA" RC="$rc" OUTCOME="$outcome" \
+            REASON="$reason" EVDIR="$EVDIR" RAW="$raw" SANE="$sane" FIXTURE="$fixture" COUNTSRC="$countsrc" \
+            PARSEUT="$parseut" CWD="$(pwd -P)" GCWD="${GCWD:-}" SHA="$GITHUB_SHA" \
+            ARGV_JSON="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@")" \
+            python3 <<'PYEOF' || return 2
+          import hashlib, json, os, re
+          e = os.environ
+          def sha_file(p):
+              with open(p, 'rb') as f:
+                  return hashlib.sha256(f.read()).hexdigest()
+          rc = None if e['RC'] == 'UNEXEC' else int(e['RC'])
+          passed = failed = skipped = None
+          if e['PARSEUT'] == '1':
+              text = open(e['SANE']).read()
+              m = re.search(r'^Ran (\d+) tests?', text, re.M)
+              if m:
+                  total = int(m.group(1))
+                  f = re.search(r'^FAILED \((.*)\)', text, re.M)
+                  if f:
+                      g = lambda n: (lambda m: int(m.group(1)) if m else 0)(re.search(n + r'=(\d+)', f.group(1)))
+                      failed = g('failures') + g('errors')
+                      skipped = g('skipped')
+                      passed = total - failed - skipped
+                  elif re.search(r'^OK', text, re.M):
+                      s = re.search(r'^OK \(skipped=(\d+)\)', text, re.M)
+                      skipped = int(s.group(1)) if s else 0
+                      failed = 0
+                      passed = total - skipped
+          receipt = {
+              'schema': 'gate_receipt/v1', 'gate_id': e['GATE'], 'leg': e['GATE'], 'profile': 'W0',
+              'owner': 'W0-CI-MATRIX', 'issuer': e['ISSUER'],
+              'scope': {'unit': 'W0-CI-MATRIX', 'platform': e['PLATFORM'], 'feature': e['GATE'],
+                        'artifact': e['GATE'] + '.receipt.json'},
+              'argv': json.loads(e['ARGV_JSON']), 'cwd': e['GCWD'] or e['CWD'],
+              'rc': rc, 'outcome': e['OUTCOME'], 'reason': e['REASON'],
+              'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
+                             'artifact_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
+                             'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
+              'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
+                              'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
+                              'accepted': e['OUTCOME'] == 'PASS'}],
+              'counts': {'passed': passed, 'failed': failed, 'skipped': skipped, 'source': e['COUNTSRC']}}
+          out = os.path.join(e['EVDIR'], e['GATE'] + '.receipt.json')
+          with open(out, 'w') as f:
+              json.dump(receipt, f, indent=2)
+          print('receipt: ' + out)
+          PYEOF
+            {
+              echo "## ${gate} [VM] rc ${rc/UNEXEC/UNKNOWN}"
+              echo "outcome ${outcome}: ${reason}"
+              echo '```'
+              tail -n 40 "$sane"
+              echo '```'
+              echo '```'
+              grep -E '^FAIL' "$sane" | head -40
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+          LOG="$EVDIR/package.log"
+          printf 'Packager argv is ABSENT in W0; the package job is a non-blocking scaffold until W3.\n' > "$LOG"
+          finish_gate package UNEXEC NOT_APPLICABLE "packager argv ABSENT in W0, blocking from W3" "$LOG" .github/workflows/ci.yml "unexecuted" 0 -- package-pending
+          exit 0
+  build-macos:
+    runs-on: macos-latest
+    timeout-minutes: 25
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # checkout v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Report macos build applicability
+        shell: bash
+        env:
+          JOB_ID: build-macos
+          PLATFORM: macos
+        run: |
+          set -u -o pipefail
+          EVDIR="${RUNNER_TEMP}/metaviewer-ci/${JOB_ID}/${PLATFORM}"
+          mkdir -p "${EVDIR}"
+          WF_SHA="$(python3 -c 'import hashlib; print(hashlib.sha256(open(".github/workflows/ci.yml","rb").read()).hexdigest())')"
+          ISSUER="CI/${JOB_ID}/${GITHUB_RUN_ID} [VM]"
+          sanitize() {
+            python3 - "$1" "$2" <<'PYEOF'
+          import re, sys
+          text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
+          for prefix in ('gh' + 'p_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
+              text = re.sub(prefix + r'[A-Za-z0-9_\-]{4,}', '[REDACTED]', text)
+          text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
+          open(sys.argv[2], 'w').write(text)
+          PYEOF
+          }
+          finish_gate() {
+            local gate="$1" rc="$2" outcome="$3" reason="$4" raw="$5" fixture="$6" countsrc="$7" parseut="$8"
+            shift 8
+            [ "${1:-}" = "--" ] && shift
+            local sane="${raw}.sane"
+            sanitize "$raw" "$sane" || return 2
+            GATE="$gate" PLATFORM="$PLATFORM" ISSUER="$ISSUER" WF_SHA="$WF_SHA" RC="$rc" OUTCOME="$outcome" \
+            REASON="$reason" EVDIR="$EVDIR" RAW="$raw" SANE="$sane" FIXTURE="$fixture" COUNTSRC="$countsrc" \
+            PARSEUT="$parseut" CWD="$(pwd -P)" GCWD="${GCWD:-}" SHA="$GITHUB_SHA" \
+            ARGV_JSON="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@")" \
+            python3 <<'PYEOF' || return 2
+          import hashlib, json, os, re
+          e = os.environ
+          def sha_file(p):
+              with open(p, 'rb') as f:
+                  return hashlib.sha256(f.read()).hexdigest()
+          rc = None if e['RC'] == 'UNEXEC' else int(e['RC'])
+          passed = failed = skipped = None
+          if e['PARSEUT'] == '1':
+              text = open(e['SANE']).read()
+              m = re.search(r'^Ran (\d+) tests?', text, re.M)
+              if m:
+                  total = int(m.group(1))
+                  f = re.search(r'^FAILED \((.*)\)', text, re.M)
+                  if f:
+                      g = lambda n: (lambda m: int(m.group(1)) if m else 0)(re.search(n + r'=(\d+)', f.group(1)))
+                      failed = g('failures') + g('errors')
+                      skipped = g('skipped')
+                      passed = total - failed - skipped
+                  elif re.search(r'^OK', text, re.M):
+                      s = re.search(r'^OK \(skipped=(\d+)\)', text, re.M)
+                      skipped = int(s.group(1)) if s else 0
+                      failed = 0
+                      passed = total - skipped
+          receipt = {
+              'schema': 'gate_receipt/v1', 'gate_id': e['GATE'], 'leg': e['GATE'], 'profile': 'W0',
+              'owner': 'W0-CI-MATRIX', 'issuer': e['ISSUER'],
+              'scope': {'unit': 'W0-CI-MATRIX', 'platform': e['PLATFORM'], 'feature': e['GATE'],
+                        'artifact': e['GATE'] + '.receipt.json'},
+              'argv': json.loads(e['ARGV_JSON']), 'cwd': e['GCWD'] or e['CWD'],
+              'rc': rc, 'outcome': e['OUTCOME'], 'reason': e['REASON'],
+              'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
+                             'artifact_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
+                             'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
+              'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
+                              'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
+                              'accepted': e['OUTCOME'] == 'PASS'}],
+              'counts': {'passed': passed, 'failed': failed, 'skipped': skipped, 'source': e['COUNTSRC']}}
+          out = os.path.join(e['EVDIR'], e['GATE'] + '.receipt.json')
+          with open(out, 'w') as f:
+              json.dump(receipt, f, indent=2)
+          print('receipt: ' + out)
+          PYEOF
+            {
+              echo "## ${gate} [VM] rc ${rc/UNEXEC/UNKNOWN}"
+              echo "outcome ${outcome}: ${reason}"
+              echo '```'
+              tail -n 40 "$sane"
+              echo '```'
+              echo '```'
+              grep -E '^FAIL' "$sane" | head -40
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+          LOG="$EVDIR/build-macos.log"
+          printf 'Packager config build for macos is build-only and non-blocking; packager argv is ABSENT in W0.\n' > "$LOG"
+          finish_gate build-macos UNEXEC NOT_APPLICABLE "packager argv ABSENT in W0, build-only leg" "$LOG" .github/workflows/ci.yml "unexecuted" 0 -- package-pending
+          exit 0
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # checkout v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Report windows build applicability
+        shell: bash
+        env:
+          JOB_ID: build-windows
+          PLATFORM: windows
+        run: |
+          set -u -o pipefail
+          EVDIR="${RUNNER_TEMP}/metaviewer-ci/${JOB_ID}/${PLATFORM}"
+          mkdir -p "${EVDIR}"
+          WF_SHA="$(python3 -c 'import hashlib; print(hashlib.sha256(open(".github/workflows/ci.yml","rb").read()).hexdigest())')"
+          ISSUER="CI/${JOB_ID}/${GITHUB_RUN_ID} [VM]"
+          sanitize() {
+            python3 - "$1" "$2" <<'PYEOF'
+          import re, sys
+          text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
+          for prefix in ('gh' + 'p_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
+              text = re.sub(prefix + r'[A-Za-z0-9_\-]{4,}', '[REDACTED]', text)
+          text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
+          open(sys.argv[2], 'w').write(text)
+          PYEOF
+          }
+          finish_gate() {
+            local gate="$1" rc="$2" outcome="$3" reason="$4" raw="$5" fixture="$6" countsrc="$7" parseut="$8"
+            shift 8
+            [ "${1:-}" = "--" ] && shift
+            local sane="${raw}.sane"
+            sanitize "$raw" "$sane" || return 2
+            GATE="$gate" PLATFORM="$PLATFORM" ISSUER="$ISSUER" WF_SHA="$WF_SHA" RC="$rc" OUTCOME="$outcome" \
+            REASON="$reason" EVDIR="$EVDIR" RAW="$raw" SANE="$sane" FIXTURE="$fixture" COUNTSRC="$countsrc" \
+            PARSEUT="$parseut" CWD="$(pwd -P)" GCWD="${GCWD:-}" SHA="$GITHUB_SHA" \
+            ARGV_JSON="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@")" \
+            python3 <<'PYEOF' || return 2
+          import hashlib, json, os, re
+          e = os.environ
+          def sha_file(p):
+              with open(p, 'rb') as f:
+                  return hashlib.sha256(f.read()).hexdigest()
+          rc = None if e['RC'] == 'UNEXEC' else int(e['RC'])
+          passed = failed = skipped = None
+          if e['PARSEUT'] == '1':
+              text = open(e['SANE']).read()
+              m = re.search(r'^Ran (\d+) tests?', text, re.M)
+              if m:
+                  total = int(m.group(1))
+                  f = re.search(r'^FAILED \((.*)\)', text, re.M)
+                  if f:
+                      g = lambda n: (lambda m: int(m.group(1)) if m else 0)(re.search(n + r'=(\d+)', f.group(1)))
+                      failed = g('failures') + g('errors')
+                      skipped = g('skipped')
+                      passed = total - failed - skipped
+                  elif re.search(r'^OK', text, re.M):
+                      s = re.search(r'^OK \(skipped=(\d+)\)', text, re.M)
+                      skipped = int(s.group(1)) if s else 0
+                      failed = 0
+                      passed = total - skipped
+          receipt = {
+              'schema': 'gate_receipt/v1', 'gate_id': e['GATE'], 'leg': e['GATE'], 'profile': 'W0',
+              'owner': 'W0-CI-MATRIX', 'issuer': e['ISSUER'],
+              'scope': {'unit': 'W0-CI-MATRIX', 'platform': e['PLATFORM'], 'feature': e['GATE'],
+                        'artifact': e['GATE'] + '.receipt.json'},
+              'argv': json.loads(e['ARGV_JSON']), 'cwd': e['GCWD'] or e['CWD'],
+              'rc': rc, 'outcome': e['OUTCOME'], 'reason': e['REASON'],
+              'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
+                             'artifact_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
+                             'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
+              'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
+                              'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
+                              'accepted': e['OUTCOME'] == 'PASS'}],
+              'counts': {'passed': passed, 'failed': failed, 'skipped': skipped, 'source': e['COUNTSRC']}}
+          out = os.path.join(e['EVDIR'], e['GATE'] + '.receipt.json')
+          with open(out, 'w') as f:
+              json.dump(receipt, f, indent=2)
+          print('receipt: ' + out)
+          PYEOF
+            {
+              echo "## ${gate} [VM] rc ${rc/UNEXEC/UNKNOWN}"
+              echo "outcome ${outcome}: ${reason}"
+              echo '```'
+              tail -n 40 "$sane"
+              echo '```'
+              echo '```'
+              grep -E '^FAIL' "$sane" | head -40
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+          LOG="$EVDIR/build-windows.log"
+          printf 'Packager config build for windows is build-only and non-blocking; packager argv is ABSENT in W0.\n' > "$LOG"
+          finish_gate build-windows UNEXEC NOT_APPLICABLE "packager argv ABSENT in W0, build-only leg" "$LOG" .github/workflows/ci.yml "unexecuted" 0 -- package-pending
+          exit 0
+  ci-required:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    needs: [ci-policy, laws-contracts, router, rust, go, python, js, e2e, novac, package]
+    if: always()
+    steps:
+      - name: Aggregate required results
+        run: |
+          fail=0
+          check() {
+            if [ "$2" != "success" ]; then
+              echo "FAIL required job $1: $2"
+              fail=1
+            else
+              echo "PASS required job $1"
+            fi
+          }
+          check ci-policy "${{ needs.ci-policy.result }}"
+          check laws-contracts "${{ needs.laws-contracts.result }}"
+          check router "${{ needs.router.result }}"
+          check rust "${{ needs.rust.result }}"
+          check go "${{ needs.go.result }}"
+          check python "${{ needs.python.result }}"
+          check js "${{ needs.js.result }}"
+          check e2e "${{ needs.e2e.result }}"
+          check novac "${{ needs.novac.result }}"
+          check package "${{ needs.package.result }}"
+          {
+            echo "## ci-required [VM] rc $fail"
+            if [ $fail -eq 0 ]; then echo "outcome PASS: every required job succeeded"; else echo "outcome FAIL: a required job failed"; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $fail
+

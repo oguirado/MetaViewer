@@ -1,0 +1,20 @@
+#!/bin/sh
+# Local G-SECRETS guard. Install from the repository root with:
+#   install -m 755 .githooks/pre-push .git/hooks/pre-push
+# Rejects the push when the shared secrets gate fails. Fails closed: a
+# missing git, python3 or gitleaks binary blocks the push. Git remote
+# arguments and stdin are accepted and ignored; history is never narrowed.
+set -eu
+root=$(git rev-parse --show-toplevel) || exit 1
+cd "$root" || exit 1
+command -v git >/dev/null 2>&1 || { echo "pre-push: git is not installed; the push stays blocked" >&2; exit 1; }
+command -v python3 >/dev/null 2>&1 || { echo "pre-push: python3 is not installed; the push stays blocked" >&2; exit 1; }
+command -v gitleaks >/dev/null 2>&1 || { echo "pre-push: gitleaks is not installed; install v8.18.4 or the push stays blocked" >&2; exit 1; }
+scanner=$(command -v gitleaks)
+case "$scanner" in
+  /*) : ;;
+  *) echo "pre-push: gitleaks resolved to a non-absolute path; the push stays blocked" >&2; exit 1 ;;
+esac
+[ -f "$scanner" ] && [ -x "$scanner" ] || { echo "pre-push: gitleaks is not an executable file; the push stays blocked" >&2; exit 1; }
+python3 -I tests/fixtures/secrets/gate.py gate --gitleaks "$scanner" --repo "$root" || { echo "pre-push: secrets gate rejected the push" >&2; exit 1; }
+exit 0
