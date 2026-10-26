@@ -817,6 +817,9 @@ jobs:
           finish_gate rust-test "$r" "$oc" "$rsn" "$LOG" core/Cargo.toml "unparsed:cargo-test" 0 -- cargo test || rc=2
           [ $r -ne 0 ] && [ $rc -eq 0 ] && rc=$r
           exit $rc
+      - name: Run supervisor process gate
+        if: runner.os == 'Linux'
+        run: bash tests/supervisor/run_process_gate.sh
   go:
     strategy:
       fail-fast: false

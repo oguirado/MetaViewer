@@ -1,0 +1,16 @@
+[package]
+name = "metaviewer-supervisor-process-gate"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Explicitly invoked test package, outside the product's default workspace suite.
+[workspace]
+
+[dependencies]
+metaviewer-core = { path = "../../core" }
+tokio = { version = "=1.53.1", features = ["rt", "time"] }
+
+[[test]]
+name = "supervisor_process"
+path = "process.rs"
