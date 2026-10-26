@@ -818,11 +818,34 @@ def loads_envelope(line: bytes, *, max_bytes: int) -> dict:
     except UnicodeDecodeError:
         raise EnvelopeError("bad_shape", "frame is not valid UTF-8"
                             ) from None
+    # Transport nesting counts containers only (root is level one), unlike
+    # the schema evaluator's separate recursion budget.
+    depth = 0
+    in_string = False
+    escaped = False
+    for char in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        elif char in "[{":
+            depth += 1
+            if depth > 32:
+                raise EnvelopeError("bad_shape", "frame exceeds JSON nesting cap")
+        elif char in "]}":
+            depth -= 1
+            if depth < 0:
+                raise EnvelopeError("bad_shape", "frame has unmatched container")
     try:
         value = json.loads(text,
                            object_pairs_hook=_reject_duplicate_keys,
                            parse_constant=_reject_constant)
-    except ValueError:
+    except (ValueError, RecursionError):
         raise EnvelopeError("bad_shape", "frame is not valid JSON"
                             ) from None
     return validate_envelope(value)

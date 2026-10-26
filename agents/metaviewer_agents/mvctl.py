@@ -177,7 +177,7 @@ def _client_refusal(error, phase):
         return "timeout"
     if code == "unknown_version":
         return "unknown_version"
-    if code == "schema":
+    if code in ("schema", "bad_shape"):
         return "schema_error"
     if code == "length":
         return "transport_error"

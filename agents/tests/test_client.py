@@ -839,7 +839,7 @@ class ClientTests(unittest.TestCase):
         client.connect()
         bad = _wrap(_proposal())
         bad["body"] = {"schema": "action_verdict/v0.1"}
-        self.assertClientCode("schema", client.send, bad)
+        self.assertClientCode("bad_shape", client.send, bad)
         self.assertEqual(client.next_seq, 1)
         self.assertReceivedSettlesAt(core, 0)
         self.assertEqual(client.send(_wrap(_proposal(), seq=1)), 1)
@@ -942,7 +942,7 @@ class ClientTests(unittest.TestCase):
                 client = self._client(core)
                 client.connect()
                 client.send(_wrap(_proposal(), seq=1))
-                self.assertClientCode("schema", client.recv)
+                self.assertClientCode("bad_shape", client.recv)
                 self.assertTerminal(client)
 
     def test_valid_then_malformed_frame(self):
@@ -953,7 +953,7 @@ class ClientTests(unittest.TestCase):
         client.send(_wrap(_proposal(), seq=1))
         first = client.recv()
         self.assertEqual(first["body"]["decision"], "admitted")
-        self.assertClientCode("schema", client.recv)
+        self.assertClientCode("bad_shape", client.recv)
         self.assertTerminal(client)
 
     def test_inbound_oversize_closes_without_parse(self):
@@ -1135,7 +1135,7 @@ class ClientTests(unittest.TestCase):
         client = self._client(core)
         client.connect()
         client.send(_wrap(_proposal(), seq=1))
-        self.assertClientCode("schema", client.recv)
+        self.assertClientCode("bad_shape", client.recv)
         self.assertTerminal(client)
 
     def test_send_failure_is_terminal(self):

@@ -40,6 +40,8 @@ def _map_envelope_error(exc: EnvelopeError) -> ClientError:
         return ClientError("unknown_version", "unknown contract version")
     if exc.code == "length":
         return ClientError("length", "frame exceeds byte limit")
+    if exc.code == "bad_shape":
+        return ClientError("bad_shape", "invalid frame shape")
     return ClientError("schema", "invalid frame shape")
 
 
