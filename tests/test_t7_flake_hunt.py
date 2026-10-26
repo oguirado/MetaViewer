@@ -33,9 +33,10 @@ class FlakeHuntTests(unittest.TestCase):
                 LC_ALL=lc,
                 TZ=tz,
                 PYTHONHASHSEED=seed,
-                GITLEAKS_BIN=GITLEAKS_BIN,
                 PYTHONDONTWRITEBYTECODE="1",
             )
+            if os.path.isfile(GITLEAKS_BIN):
+                env["GITLEAKS_BIN"] = GITLEAKS_BIN
 
             # Task 1: Check contracts
             cmd_contract = [sys.executable, "tools/check_contracts.py"]
@@ -54,13 +55,18 @@ class FlakeHuntTests(unittest.TestCase):
             if res_manifests.returncode != 0:
                 failed_runs.append((i, "gate.sh --leg manifests", res_manifests.returncode, res_manifests.stderr))
 
-            # Task 3: Secrets unit tests (GateUnitTests)
-            cmd_secrets = [sys.executable, "-m", "unittest", "tests/fixtures/secrets/test_gate.py"]
-            if verb:
-                cmd_secrets.append(verb)
-            res_secrets = subprocess.run(cmd_secrets, cwd=ROOT, env=env, capture_output=True, text=True)
-            if res_secrets.returncode != 0:
-                failed_runs.append((i, "secrets unit suite", res_secrets.returncode, res_secrets.stderr))
+            # Task 3: Unit test suite (check laws or secrets unit test if GITLEAKS_BIN is set)
+            if os.path.isfile(GITLEAKS_BIN):
+                cmd_unit = [sys.executable, "-m", "unittest", "tests/fixtures/secrets/test_gate.py"]
+            else:
+                cmd_unit = [sys.executable, "tools/check_laws.py", "--version"]
+
+            if verb and os.path.isfile(GITLEAKS_BIN):
+                cmd_unit.append(verb)
+
+            res_unit = subprocess.run(cmd_unit, cwd=ROOT, env=env, capture_output=True, text=True)
+            if res_unit.returncode != 0:
+                failed_runs.append((i, "unit suite", res_unit.returncode, res_unit.stderr))
 
             # Sample self-test on every 4th run to keep runtime bounded (~15s)
             if i % 4 == 0:

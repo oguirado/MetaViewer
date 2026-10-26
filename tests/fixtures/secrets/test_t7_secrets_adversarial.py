@@ -46,7 +46,6 @@ class AdversarialSecretsTests(unittest.TestCase):
         test_file = self.tmp_dir / "split_secret.txt"
         test_file.write_text(split_secret, encoding="utf-8")
 
-        # Verify shannon entropy or scanner output on split line
         captured = io.StringIO()
         old_stdout = sys.stdout
         try:
@@ -77,7 +76,6 @@ class AdversarialSecretsTests(unittest.TestCase):
         stub = self.create_fake_gitleaks_stub(behavior="sleep", sleep_sec=10)
         report = self.tmp_dir / "report.json"
 
-        # Patch gate.SCAN_TIMEOUT temporarily to 0.1s for fast test execution
         orig_timeout = gate.SCAN_TIMEOUT
         try:
             gate.SCAN_TIMEOUT = 0.1
@@ -121,26 +119,28 @@ class AdversarialSecretsTests(unittest.TestCase):
         repo_dir = self.tmp_dir / "test_repo"
         repo_dir.mkdir()
 
-        subprocess.run(["git", "-C", str(repo_dir), "init"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(["git", "-C", str(repo_dir), "config", "user.name", "Test"], check=True)
-        subprocess.run(["git", "-C", str(repo_dir), "config", "user.email", "test@example.invalid"], check=True)
+        # Isolate git environment so stash operations stay within repo_dir
+        git_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+        subprocess.run(["git", "-C", str(repo_dir), "init"], check=True, env=git_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["git", "-C", str(repo_dir), "config", "user.name", "Test"], check=True, env=git_env)
+        subprocess.run(["git", "-C", str(repo_dir), "config", "user.email", "test@example.invalid"], check=True, env=git_env)
 
         clean_file = repo_dir / "README.md"
         clean_file.write_text("# Test Repo\n", encoding="utf-8")
-        subprocess.run(["git", "-C", str(repo_dir), "add", "README.md"], check=True)
-        subprocess.run(["git", "-C", str(repo_dir), "commit", "-m", "Initial commit"], check=True)
+        subprocess.run(["git", "-C", str(repo_dir), "add", "README.md"], check=True, env=git_env)
+        subprocess.run(["git", "-C", str(repo_dir), "commit", "-m", "Initial commit"], check=True, env=git_env)
 
-        # Plant secret on stash
+        # Plant secret on stash inside repo_dir
         dirty_file = repo_dir / "secret.txt"
         secret_token = "gh" + "p_" + "Z" * 36
         dirty_file.write_text(f"token = '{secret_token}'\n", encoding="utf-8")
-        subprocess.run(["git", "-C", str(repo_dir), "add", "secret.txt"], check=True)
-        subprocess.run(["git", "-C", str(repo_dir), "stash"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["git", "-C", str(repo_dir), "add", "secret.txt"], check=True, env=git_env)
+        subprocess.run(["git", "-C", str(repo_dir), "stash"], check=True, env=git_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         scratch = self.tmp_dir / "scratch"
         scratch.mkdir()
 
-        # Scanner should detect secret or gate should reject
         captured = io.StringIO()
         old_stdout, old_stderr = sys.stdout, sys.stderr
         try:
@@ -151,7 +151,6 @@ class AdversarialSecretsTests(unittest.TestCase):
             sys.stdout, sys.stderr = old_stdout, old_stderr
 
         out = captured.getvalue()
-        # Ensure secret bytes never printed to stdout/stderr
         self.assertNotIn(secret_token, out)
 
 

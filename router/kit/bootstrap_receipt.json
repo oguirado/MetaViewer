@@ -18,7 +18,9 @@
     "python3",
     "-B",
     "tools/bootstrap_kit.py",
-    "--run"
+    "--run",
+    "--deny-list",
+    "<withheld>"
    ],
    "cwd": "router/kit",
    "fixture_sha256": null,
@@ -52,7 +54,7 @@
    "input_sha256": "03966a872b7182249463fe07a4db228a4ca3f882cb8ffdb029f14f895c988741",
    "instrument_sha256": "5695d1db6e04a55cc2db37d0454d79f36563be1442c418c98cf652c19b359b5a",
    "log": "suite_test_T0_freeze.py.log",
-   "log_sha256": "541a99cf6f9a3f5f04be03ed9d9e91071a7212903b47824dbcc3eb699b4ff962",
+   "log_sha256": "2f35bc096be5cb423f838f7be108e5b118c087c27d59ad1567856a981fdf6343",
    "outcome": "PASS",
    "rc": 0
   },
@@ -78,7 +80,7 @@
    "input_sha256": "03966a872b7182249463fe07a4db228a4ca3f882cb8ffdb029f14f895c988741",
    "instrument_sha256": "fdd822be8fa9bdf7af0893592283a12e118f71a2f776b34f6b4e49d2c198d4b0",
    "log": "suite_test_T1_blocks.py.log",
-   "log_sha256": "51d2f51293b915590b81fce357a4786b6df61a30ce9984cb5f53a8173065b767",
+   "log_sha256": "1b80906843d3640ada0521bff35afbf7d02595722423f22319b58926d6b841fa",
    "outcome": "PASS",
    "rc": 0
   },
@@ -104,7 +106,7 @@
    "input_sha256": "03966a872b7182249463fe07a4db228a4ca3f882cb8ffdb029f14f895c988741",
    "instrument_sha256": "6b052c2ccd41ac7e6dd4ab45642255683cd22f8493f56dcf5b372bf6839f7992",
    "log": "suite_test_T2_build.py.log",
-   "log_sha256": "8962d4c98dd531be5b41bbc91cdbf404c48db44e02d5f7a6b2153800aa154e19",
+   "log_sha256": "12e13df0a2bd0914b047498788f9d69e4d2e3af3b0dedf0f58fcb2ccb8a10590",
    "outcome": "PASS",
    "rc": 0
   },
@@ -130,7 +132,7 @@
    "input_sha256": "03966a872b7182249463fe07a4db228a4ca3f882cb8ffdb029f14f895c988741",
    "instrument_sha256": "1db4d519bb78710cb6665f2b96959052a80259b951779ccda04f525e07271ab9",
    "log": "suite_test_T3_route.py.log",
-   "log_sha256": "5b3ca478aa4aa2d162ed06dab552231742ef27228fb04008b9b030e3c4ed485e",
+   "log_sha256": "28909d5365fbe52e04a530417355f93295fa0fc299d524e343485a63822322f3",
    "outcome": "PASS",
    "rc": 0
   },
@@ -156,7 +158,7 @@
    "input_sha256": "03966a872b7182249463fe07a4db228a4ca3f882cb8ffdb029f14f895c988741",
    "instrument_sha256": "faad8af1a1eb500a92e60d4c7f24307fc579e29ae95d683c89d58c542819fbae",
    "log": "suite_test_T5_pool.py.log",
-   "log_sha256": "571b22c48619d9afeb1aae8c68d37f739cc11ee3b3927fdb58615e79bb47f6d5",
+   "log_sha256": "3b1fec28151cf2c8ea87217a9c42416283063bf348ed82a4fd4b1e653d4b0462",
    "outcome": "PASS",
    "rc": 0
   },
@@ -182,7 +184,7 @@
    "input_sha256": "03966a872b7182249463fe07a4db228a4ca3f882cb8ffdb029f14f895c988741",
    "instrument_sha256": "941a0967a797a3892e35910c57713ad3c3dd7547e11a4e2be199fdecbfd53b57",
    "log": "suite_test_T6_eval.py.log",
-   "log_sha256": "100f423254e24a437372b186f94e4bd9db9ed56606777cfa1939471c090dc644",
+   "log_sha256": "ddd959efe195e63574ce297d2109f3ceb50076410eeff6fa86458ea8177532e2",
    "outcome": "PASS",
    "rc": 0
   },
@@ -208,7 +210,7 @@
    "input_sha256": "03966a872b7182249463fe07a4db228a4ca3f882cb8ffdb029f14f895c988741",
    "instrument_sha256": "5208226dc06bab4cf0180b765ef7352750c5bea7c6e2e81086f7989fcc971b9b",
    "log": "suite_test_T7_null.py.log",
-   "log_sha256": "398ad208ff3b63ab6d362ccbadd3b542579edb3c50b88412efc1a7bccb228692",
+   "log_sha256": "31f81c0af63256f7a4e217ba4b1c78daccf2c221bad7c64ee6fe4f6f172c02bb",
    "outcome": "PASS",
    "rc": 0
   },
@@ -234,7 +236,7 @@
    "input_sha256": "03966a872b7182249463fe07a4db228a4ca3f882cb8ffdb029f14f895c988741",
    "instrument_sha256": "1ce90ebcfbbdd293f53e6ff3bf92d1fceaba0fde2fd5600933224829814fb218",
    "log": "suite_test_T8_tune.py.log",
-   "log_sha256": "aab3268451e6b5fe57dea3a1f3a2005b4f4da863f1a6ea3451ebf194374a1b0f",
+   "log_sha256": "d40d0af7b41f25178c691214bba2cd2d8a5144ac086a8a6ab10140de278135ca",
    "outcome": "PASS",
    "rc": 0
   },
@@ -260,7 +262,7 @@
    "input_sha256": "03966a872b7182249463fe07a4db228a4ca3f882cb8ffdb029f14f895c988741",
    "instrument_sha256": "62902a2a368abe7a7aef45c24db344f64b73102e536d6782cf66549407436ce9",
    "log": "suite_test_T9_gates.py.log",
-   "log_sha256": "694fb39066cffb1abfc0df1c5bcfe09e5ac4d9a1dc5ea8c311a8f9084d13dd48",
+   "log_sha256": "7f1d90ba26a8573694e89918be3bc63e63ed7b064f8e73bd54effa2acbc1eb49",
    "outcome": "PASS",
    "rc": 0
   },
@@ -286,7 +288,7 @@
    "input_sha256": "03966a872b7182249463fe07a4db228a4ca3f882cb8ffdb029f14f895c988741",
    "instrument_sha256": "7ab6eba0fd0d990c6db16da1347ebc4b47444d4d4decfca599a7be9dded7a4fb",
    "log": "suite_test_T10_multimount.py.log",
-   "log_sha256": "ca7d0ebfcbf922f5012ae94bb13679adf141e8cd4bad2d0531c389f0ae3f839a",
+   "log_sha256": "4104ca35068b5fbbca76208bdac79c394b06e196f8bd04cb582d8082a1a9af32",
    "outcome": "PASS",
    "rc": 0
   },
@@ -312,7 +314,7 @@
    "input_sha256": "03966a872b7182249463fe07a4db228a4ca3f882cb8ffdb029f14f895c988741",
    "instrument_sha256": "5bb28cc0eaaca3328a85b4ff7a43fb5be0b586ebef0a4a9e0843232d47802efc",
    "log": "suite_test_T11_logging.py.log",
-   "log_sha256": "d5a14f1ef14de1406da0074bb8ffd153c271bb03e2c9d03d3a3733584d34abbb",
+   "log_sha256": "f707d13370702bbe6ca3afb4c58cb17a1eb3799fc7bb29b2d49c04f028e56c84",
    "outcome": "PASS",
    "rc": 0
   },
@@ -338,7 +340,7 @@
    "input_sha256": "03966a872b7182249463fe07a4db228a4ca3f882cb8ffdb029f14f895c988741",
    "instrument_sha256": "49cc275cc1d0b10ecd36e88b296210599c53a79eb145b5e2fcbe73ccd4648c5c",
    "log": "suite_test_bootstrap_contract.py.log",
-   "log_sha256": "4792729a5d597b4d6996b481ec7be0ff58304a81915b49bacf0c698edddbdebe",
+   "log_sha256": "f20ea2c88e50061ef88fa7e6fb6ab4f18f6b6d9b1929927b848a39f5dcd9fc61",
    "outcome": "PASS",
    "rc": 0
   },
@@ -354,7 +356,9 @@
     "tools/bootstrap_kit.py",
     "--check",
     "--root",
-    "<scratch>"
+    "<scratch>",
+    "--deny-list",
+    "<withheld>"
    ],
    "cwd": "<scratch>",
    "fixture_sha256": null,
@@ -362,42 +366,46 @@
    "input_sha256": "03966a872b7182249463fe07a4db228a4ca3f882cb8ffdb029f14f895c988741",
    "instrument_sha256": "4c5f90467f1402a056a52eace2c5f88a7ed730b9bbba95136e3f088997eb062e",
    "log": "mutant_vendor_helper.log",
-   "log_sha256": "2ecad72f25e4f284e34fdffb562a8c021135a4bad4f11d8141cd87445dda5360",
+   "log_sha256": "403bcda6be7c90b8bef6ac965a4e55bea70bbb44ff169e092abf12681a99ffdc",
    "outcome": "PASS",
    "rc": 1
   },
   {
    "assertions": [
-    "external deny list is supplied"
+    "71 files scanned",
+    "1 literals checked",
+    "0 matches"
    ],
    "command": [
     "python3",
     "-B",
     "tools/bootstrap_kit.py",
-    "--run"
+    "--run",
+    "--deny-list",
+    "<withheld>"
    ],
    "cwd": "router/kit",
    "fixture_sha256": null,
    "id": "privacy_denylist",
-   "input_sha256": null,
+   "input_sha256": "13551c26d24d2a17a7150853a825b1e47417b08a69cb5e6b344ce6b1314b557c",
    "instrument_sha256": "4c5f90467f1402a056a52eace2c5f88a7ed730b9bbba95136e3f088997eb062e",
    "log": "privacy.log",
-   "log_sha256": "fb3febccf516b8480ec8f9b31b7c873d2ed783bb3a01291fabec783777e71ccb",
-   "outcome": "BLOCKED",
-   "rc": null
+   "log_sha256": "f142c826870681bdc38effed115e145bc4a0598e36ec651e279327f86d577170",
+   "outcome": "PASS",
+   "rc": 0
   }
  ],
  "notes": [
   "recorded argv is the executed argv; 'python3' is PATH-resolved and pinned to the harness version at startup",
   "deny-list and mutant scratch paths withheld by design; contents bound by input_sha256 digests"
  ],
- "platform": "linux-x86_64",
- "python_version": "3.12.13",
+ "platform": "linux-aarch64",
+ "python_version": "3.12.3",
  "schema": "metaviewer.router-kit-bootstrap.v1",
  "scope": "portable fixture tests and generic-node build only; not UI integration, not application routing quality",
  "source": "Holdings-int router/kit vendor_manifest.json (65 entries, portable subset)",
  "source_manifest_sha256": "21801113d82bbe137695b59424ac90a0f15374b95ad4aa45ca10953756a3be81",
- "status": "BLOCKED",
+ "status": "PASS",
  "vendor_manifest_sha256": "03966a872b7182249463fe07a4db228a4ca3f882cb8ffdb029f14f895c988741",
  "vendor_mutant_rejected": true
 }
