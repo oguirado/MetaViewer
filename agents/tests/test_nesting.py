@@ -53,9 +53,12 @@ class NestingTests(unittest.TestCase):
         # A string ending in an escaped backslash must not hide containers
         # following its closing quote.
         raw = b'["\\\\",' + b'[' * 32 + b'0' + b']' * 32 + b']\n'
-        with self.assertRaises(EnvelopeError) as caught:
-            loads_envelope(raw, max_bytes=_LINE_CAP)
+        with mock.patch('metaviewer_agents.envelope.json.loads',
+                        side_effect=AssertionError('over-depth JSON was parsed')):
+            with self.assertRaises(EnvelopeError) as caught:
+                loads_envelope(raw, max_bytes=_LINE_CAP)
         self.assertEqual(caught.exception.code, 'bad_shape')
+        self.assertEqual(str(caught.exception), 'frame exceeds JSON nesting cap')
 
     def test_parser_recursion_error_backstop(self):
         raw = json.dumps(_wrap(_proposal())).encode() + b'\n'
