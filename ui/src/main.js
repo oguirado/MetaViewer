@@ -1,6 +1,10 @@
 /// <reference path="./kit.d.ts" />
 import { createApp } from 'vue';
 import App from './App.vue';
+import { createAuthorityAdapter, createAuthorityRuntime, createTerminalBroker, requireAck } from './core/hostAdapters.js';
+import { createSettingsHost } from './settings/settingsHost.js';
+import { parseStateQuery, resolveFixture } from './fixtures/resolveState.js';
+import { createFixtureRuntime } from './fixtures/fixtureRuntime.js';
 import 'capsule-ui-kit/theme.css';
 import './design/metaviewer.css';
 import { createWallLayout, migrateWallLayout } from './wall/layout.js';
@@ -39,7 +43,7 @@ const THEME_DATASET = Object.freeze({
 /** Mount selector for the single mount div owned by index.html. */
 const MOUNT_SELECTOR = '#metaviewer-app';
 const REFUSAL_PREFIX = 'MetaViewer cannot start: ';
-const REFUSAL_MAX_CHARS = 280;
+const PREVIEW_ERRORS = new Set(['ERR_UNKNOWN_FIXTURE_STATE', 'ERR_INVALID_STATE_QUERY']);
 
 /**
  * Bind the closed preload layout facade. A missing or malformed facade is a
@@ -79,7 +83,7 @@ function createLayoutStorage(facade) {
       throw new Error('Layout service did not become ready');
     },
     writeAtomic: async (/** @type {string} */ json) => {
-      await facade.save(json);
+      requireAck(await facade.save(json));
     },
   };
 }
@@ -93,33 +97,62 @@ function createInitialLayout(scope) {
   return createWallLayout(scope);
 }
 
-/**
- * Show a bounded plain-text refusal; boot never leaves a partial mount behind.
- * @param {string} message
+/** Render only closed copy; host messages and codes never become visible text.
+ * @param {unknown} error
  */
-function refuseBoot(message) {
-  const text = `${REFUSAL_PREFIX}${message}`.slice(0, REFUSAL_MAX_CHARS);
-  const mount = document.querySelector(MOUNT_SELECTOR);
-  if (mount) {
-    mount.textContent = text;
-    return;
+function refuseBoot(error) {
+  const code = error instanceof Error && /^ERR_[A-Z0-9_]+$/.test(error.message)
+    ? error.message : 'ERR_STARTUP_UNAVAILABLE';
+  const text = REFUSAL_PREFIX + (PREVIEW_ERRORS.has(code)
+    ? 'This preview is unavailable.' : 'The application is unavailable. Please try again.');
+  const target = /** @type {HTMLElement|null} */ (document.querySelector(MOUNT_SELECTOR)) ?? document.body;
+  target.textContent = text;
+  target.dataset.errorCode = code;
+}
+
+async function bootstrap() {
+  const requestedStates = new URLSearchParams(window.location.search).getAll('state');
+  if (requestedStates.length > 1 || (requestedStates.length === 1 && requestedStates[0].length === 0)) {
+    throw new Error('ERR_INVALID_STATE_QUERY');
   }
-  document.body.textContent = text;
+  const parsed = parseStateQuery(window.location.search);
+  if (!parsed.ok && parsed.error.code !== 'ERR_MISSING_STATE_PARAM') throw new Error(parsed.error.code);
+  const resolved = parsed.ok ? resolveFixture(parsed.key) : null;
+  if (resolved && !resolved.ok) throw new Error(resolved.error.code);
+  const fixture = resolved?.ok ? resolved.fixture : null;
+  const result = fixture ? createFixtureRuntime(fixture) : null;
+  if (result && !result.ok) throw new Error(result.error.code);
+  const fixtureMount = result?.ok ? result.mount : null;
+  const storage = fixtureMount
+    ? { readRaw: async () => null, writeAtomic: async (/** @type {string} */ _json) => {} }
+    : createLayoutStorage(getLayoutFacade());
+  const layout = fixture ? createWallLayout(SCOPE, [...fixture.capsules]) : createInitialLayout(SCOPE);
+  const host = fixture ? null : /** @type {{metaviewer?: Partial<import('./settings/settingsModel.js').HostSettingsPort> & {nestedDepth?:()=>Promise<0|1|null>,selfCapsuleId?:()=>Promise<string|null>,recordingDestination?:()=>Promise<string|null>,authority?:import('./core/hostAdapters.js').AuthorityPort,sideTerminal?:import('./core/hostAdapters.js').TerminalPort}}} */ (window).metaviewer;
+  let preferences = /** @type {Storage|null} */ (null);
+  if (!fixture) { try { preferences = globalThis.localStorage; } catch { /* Storage may be unavailable. */ } }
+  const settingsHost = createSettingsHost(host ?? null, preferences, fixture?.scheme ?? null);
+  const depth = fixture ? (fixture.key === 'nested' ? 1 : 0) : (typeof host?.nestedDepth === 'function' ? await host.nestedDepth() : null);
+  const selfId = fixture ? null : (typeof host?.selfCapsuleId === 'function' ? await host.selfCapsuleId() : null);
+  const exportDestination = fixture ? '' : (typeof host?.recordingDestination === 'function' ? await host.recordingDestination() : null) ?? '';
+  const nestedHost = { getNestedDepth: () => depth, getSelfCapsuleId: () => selfId };
+  const authorityHost = fixture ? null : createAuthorityAdapter(host?.authority);
+  const terminalBroker = fixture ? null : createTerminalBroker(host?.sideTerminal);
+  const liveRuntime = fixture ? null : createAuthorityRuntime(host?.authority);
+  const teardown = () => { liveRuntime?.dispose(); window.removeEventListener?.('pagehide', teardown); };
+  if (liveRuntime) window.addEventListener?.('pagehide', teardown, { once: true });
+  try {
+    Object.assign(document.documentElement.dataset, THEME_DATASET);
+    const application = createApp(App, { layout, storage, scope: SCOPE, fixture, nestedHost, exportDestination, settingsHost, preferences, authorityHost, terminalBroker,
+      runtime: /** @type {InstanceType<typeof App>['$props']['runtime']} */ (/** @type {unknown} */ (fixtureMount?.runtime ?? liveRuntime)),
+      terminal: fixtureMount?.terminal ?? null });
+    installKitTheme(application);
+    // Kit declaration predates its shipped MetaViewer schemes.
+    /** @type {(scheme:string)=>void} */ (setKitScheme)(fixture?.scheme ?? 'mv-light');
+    application.onUnmount?.(teardown);
+    application.mount(MOUNT_SELECTOR);
+  } catch (error) { teardown(); throw error; }
 }
 
-function bootstrap() {
-  const storage = createLayoutStorage(getLayoutFacade());
-  const layout = createInitialLayout(SCOPE);
-  Object.assign(document.documentElement.dataset, THEME_DATASET);
-  const application = createApp(App, { layout, storage, scope: SCOPE });
-  installKitTheme(application);
-  // Kit declaration predates its shipped MetaViewer schemes.
-  /** @type {(scheme:string)=>void} */ (setKitScheme)('mv-light');
-  application.mount(MOUNT_SELECTOR);
-}
-
-try {
-  bootstrap();
-} catch (error) {
-  refuseBoot(error instanceof Error ? error.message : 'Unknown startup failure');
-}
+void bootstrap().catch(error => {
+  refuseBoot(error);
+});

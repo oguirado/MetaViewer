@@ -4,7 +4,7 @@
  * Presentation only: builders validate closed inputs and delegate wire
  * encoding to injected host encoders, which own the surface-to-slot mapping
  * and request correlation. This module never touches disk, network, or
- * clipboard, never invents correlation ids, and offers no surface creation
+ * clipboard, and offers no surface creation
  * or teardown path. Domain admission stays in the core.
  */
 
@@ -21,7 +21,7 @@
 /**
  * @typedef {object} WallIntentOptions
  * @property {(request: UiIntentRequest) => unknown} encodeUiIntent Host encoder for ui_intent/v0.2 bodies.
- * @property {(request: ControlRequest) => unknown} encodeControl Host encoder for surface_request/v0.2 bodies.
+ * @property {(request: ControlRequest) => unknown} encodeControl Host encoder for ui_intent/v0.2 control bodies.
  */
 
 /**
@@ -36,6 +36,50 @@ const VISIBILITY_VERBS = Object.freeze(['fold', 'unfold', 'pin']);
 
 /** @type {ReadonlyArray<'take_control' | 'release_control'>} */
 const CONTROL_VERBS = Object.freeze(['take_control', 'release_control']);
+
+/** ui_intent/v0.2 wire shape. Slot identities must come from the host, never
+ * from a surface-id substitution. Kept here so all authority paths share it.
+ * @type {Readonly<Record<string, readonly string[]>>} */
+const AUTHORITY_FIELDS = Object.freeze({
+  fold: ['slot_id'], unfold: ['slot_id'], hide: ['slot_id'], show: ['slot_id'],
+  pin: ['slot_id', 'pinned'], move: ['slot_id', 'group_id', 'index'],
+  tab: ['slot_id', 'group_id', 'index'],
+  float: ['slot_id', 'x_px', 'y_px', 'width_px', 'height_px'],
+  layout_save: ['layout_id'], layout_load: ['layout_id'],
+  take_control: ['surface_id'], release_control: ['surface_id'],
+});
+
+/** Shape and validate every authority submission, allocating correlation per call.
+ * Raw renderer controls may carry surfaceId; other ops require explicit params.
+ * @param {unknown} input
+ * @returns {UiIntentBody} */
+export function buildAuthorityIntent(input) {
+  if (!isPlainObject(input) || typeof input.op !== 'string' || !Object.hasOwn(AUTHORITY_FIELDS, input.op)) {
+    throwIntentError('ERR_INVALID_INTENT_PAYLOAD', 'unknown authority operation');
+  }
+  const op = input.op;
+  const rawControl = CONTROL_VERBS.includes(/** @type {'take_control'|'release_control'} */ (op)) && !Object.hasOwn(input, 'params');
+  assertClosedKeys(input, rawControl ? ['op', 'surfaceId'] : ['schema', 'request_id', 'op', 'params']);
+  if (Object.hasOwn(input, 'schema') && input.schema !== 'ui_intent/v0.2') {
+    throwIntentError('ERR_INVALID_INTENT_PAYLOAD', 'invalid authority schema');
+  }
+  const params = rawControl ? { surface_id: input.surfaceId } : input.params;
+  if (!isPlainObject(params)) throwIntentError('ERR_INVALID_INTENT_PAYLOAD', 'params required');
+  const fields = AUTHORITY_FIELDS[op];
+  assertClosedKeys(params, fields);
+  for (const key of fields) {
+    const value = params[key];
+    let valid;
+    if (key === 'pinned') valid = typeof value === 'boolean';
+    else if (['index', 'x_px', 'y_px', 'width_px', 'height_px'].includes(key)) {
+      const dimension = key === 'width_px' || key === 'height_px';
+      valid = typeof value === 'number' && Number.isInteger(value) && value >= (dimension ? 1 : 0)
+        && value <= (key === 'index' ? 255 : dimension ? 16384 : 16383);
+    } else valid = typeof value === 'string' && value.length <= 128 && /^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(value);
+    if (!valid) throwIntentError('ERR_INVALID_INTENT_PAYLOAD', `invalid ${key}`);
+  }
+  return freezeOwnedCopy({ schema: 'ui_intent/v0.2', request_id: crypto.randomUUID(), op, params });
+}
 
 /** @type {ReadonlyArray<'close' | 'hide' | 'show' | 'float' | 'dock-back'>} */
 const PRESENTATION_VERBS = Object.freeze(['close', 'hide', 'show', 'float', 'dock-back']);

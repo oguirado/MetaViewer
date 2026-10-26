@@ -37,6 +37,7 @@ export const WALL_PRESENTATION_VERBS = Object.freeze(['close', 'hide', 'show', '
  * @property {string} id
  * @property {string} surfaceId
  * @property {string} backendLifecycle
+ * @property {string} [attachmentState]
  * @property {number} generation
  * @property {string} visibility
  * @property {string} control

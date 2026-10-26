@@ -1,0 +1,29 @@
+/*
+ * MetaViewer side-terminal overlay styles (lane U3).
+ *
+ * Classes for SideTerminalOverlay.vue only. The host wrapper contributes no
+ * box (display: contents), so the overlay can never reflow wall tiles; the
+ * kit panel itself is a fixed right-side overlay above the dock layer. No
+ * colour literals, no new fonts.
+ */
+
+.mv-side-terminal-overlay {
+  display: contents;
+}
+
+.mv-broker-launch {
+  padding: var(--cuk-semantic-spacing-sm);
+  background: var(--cuk-semantic-surface-canvas);
+  color: var(--cuk-semantic-text-primary);
+}
+.mv-side-terminal-overlay > .mv-broker-launch {
+  position: fixed;
+  right: var(--cuk-semantic-spacing-md);
+  bottom: var(--cuk-component-app-shell-status-height);
+  z-index: 100;
+  max-width: min(90vw, 28rem);
+  border: 1px solid var(--cuk-semantic-border-default);
+}
+.mv-broker-launch button, .mv-broker-launch label {
+  margin: var(--cuk-semantic-spacing-xs);
+}

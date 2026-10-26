@@ -1,0 +1,35 @@
+/* MetaViewer catalog launcher lane styles (AC-03). Kit tokens only: no colour
+   literals, no new fonts. Error text and surface are the paired kit status
+   tokens, so contrast holds in both schemes without overrides. */
+.mv-catalog-errors {
+  list-style: none;
+  margin: var(--cuk-semantic-spacing-md) 0 0;
+  padding: 0 var(--cuk-semantic-spacing-lg) var(--cuk-semantic-spacing-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--cuk-semantic-spacing-sm);
+}
+
+.mv-catalog-errors__row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--cuk-semantic-spacing-sm);
+  padding: var(--cuk-semantic-spacing-sm) var(--cuk-semantic-spacing-md);
+  background: var(--cuk-semantic-status-error-surface);
+  border: var(--cuk-semantic-border-width) solid var(--cuk-semantic-status-error-border);
+  border-radius: var(--cuk-semantic-radius-sm);
+}
+
+.mv-catalog-errors__code {
+  font-family: var(--cuk-semantic-typography-roles-code-sm-font-family);
+  font-size: var(--cuk-semantic-typography-roles-code-sm-font-size);
+  font-weight: var(--cuk-semantic-typography-roles-code-sm-font-weight);
+  color: var(--cuk-semantic-status-error-text);
+  white-space: nowrap;
+}
+
+.mv-catalog-errors__text {
+  font-size: var(--cuk-semantic-typography-roles-body-sm-font-size);
+  line-height: var(--cuk-semantic-typography-roles-body-sm-line-height);
+  color: var(--cuk-semantic-status-error-text);
+}

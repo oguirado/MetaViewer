@@ -1,0 +1,56 @@
+/**
+ * MetaViewer AI multislot host styles (lane U3).
+ *
+ * Classes for MultislotHost.vue only. Built exclusively from existing kit
+ * CSS custom properties: no colour literals, no new fonts. The typed launch
+ * refusal row reuses the kit error text/surface/border pair on the kit panel
+ * surface, the same pairing the kit side-terminal error row uses.
+ */
+
+.mv-multislot-host {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.mv-multislot__refusal {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  background-color: var(--cuk-semantic-status-error-surface);
+  color: var(--cuk-semantic-status-error-text);
+  border: 1px solid var(--cuk-semantic-status-error-border);
+  border-radius: var(--cuk-semantic-radius-md);
+}
+
+.mv-multislot__refusal-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  font: inherit;
+}
+
+.mv-multislot__refusal-dismiss {
+  flex: none;
+  font: inherit;
+  color: var(--cuk-semantic-status-error-text);
+  background-color: transparent;
+  border: 1px solid currentColor;
+  border-radius: var(--cuk-semantic-radius-sm);
+  padding: 2px 10px;
+  cursor: pointer;
+}
+
+.mv-multislot__refusal-dismiss:hover {
+  text-decoration: underline;
+}
+
+.mv-multislot__refusal-dismiss:focus-visible {
+  outline: var(--cuk-semantic-focus-ring-width) solid var(--cuk-semantic-focus-ring-color);
+  outline-offset: var(--cuk-semantic-focus-ring-offset);
+}

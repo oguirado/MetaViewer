@@ -5,6 +5,8 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import * as vue from 'vue';
 import { parse, compileScript } from '@vue/compiler-sfc';
+import { resolveNestedMode, applyNestedWall } from '../src/nested/nested.js';
+import { createSettingsHost } from '../src/settings/settingsHost.js';
 import { createTileScheduler } from '../src/surfaces/tileScheduler.js';
 
 // Compile the real App with the pinned compiler. Replace only external UI
@@ -22,7 +24,12 @@ async function loadApp(captured, row) {
     'capsule-ui-kit/ui':{UiButton:stub},'capsule-ui-kit/theme':{setKitScheme:()=>{}},
     '../.kit/capsule-ui-kit/src/shell/SettingsModel.js':{SETTINGS_STORAGE_KEYS:{scheme:'scheme'},readStoredSetting:(_s,_k,d)=>d,writeStoredSetting:()=>{}},
     './wall/WallWorkspace.vue':wall,'./surfaces/SurfaceCanvas.vue':canvas,
-    './terminal/sideTerminalFacade.js':{createSideTerminalFacade:()=>null},
+    './wall/EmptyWallView.vue':stub, './catalog/CatalogLauncher.vue':stub,
+    './terminal/SideTerminalOverlay.vue':stub, './multislot/MultislotHost.vue':stub,
+    './recording/MvRecordingPanel.vue':stub, './settings/MvSettingsPanel.vue':stub,
+    './agent/AgentLaneHost.vue':stub,
+    './settings/settingsHost.js':{createSettingsHost},
+    './nested/nested.js':{resolveNestedMode,applyNestedWall},
     './surfaces/tileScheduler.js':{createTileScheduler},
   };
   globalThis.__mvuiEngineDeps=deps;

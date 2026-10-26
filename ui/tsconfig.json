@@ -29,6 +29,18 @@
       ],
       "capsule-ui-kit/theme": [
         ".kit/capsule-ui-kit/types/theme.d.ts"
+      ],
+      "/.kit/capsule-ui-kit/src/multislot/AiMultiSlot.vue": [
+        "src/types/AiMultiSlot.d.ts"
+      ],
+      "/.kit/capsule-ui-kit/src/multislot/AiSlotControlBar.vue": [
+        "src/types/AiSlotControlBar.d.ts"
+      ],
+      "/.kit/capsule-ui-kit/src/side-terminal/SideTerminalPanel.vue": [
+        "src/types/SideTerminalPanel.d.ts"
+      ],
+      "capsule-ui-kit/TerminalView": [
+        "src/types/TerminalView.d.ts"
       ]
     }
   },

@@ -273,6 +273,8 @@ export function roundControlBox(box) {
 <script setup>
 import { computed, onBeforeUnmount, provide, shallowRef, watch } from 'vue';
 import CapsulePanel from 'capsule-ui-kit/CapsulePanel';
+import { deriveTileState, controlVerbForRow } from './tileStates.js';
+import './wall.css';
 
 const props = defineProps({
   capsuleId: { type: String, required: true },
@@ -341,7 +343,9 @@ watch(() => props.projectionView, (next) => { bindView(next); });
 onBeforeUnmount(() => { unbindView(); });
 
 const row = computed(() => findSurfaceRow(snapshot.value, props.capsuleId));
-const status = computed(() => derivePanelStatus(snapshot.value, row.value));
+// Seven tile states share one derivation: the kit status label, the tile-state
+// treatment class and the control verb all read this decision, props in only.
+const tile = computed(() => deriveTileState(snapshot.value, row.value));
 // [TARGET, unit decision] Authoritative visibility drives the display branch;
 // pending UI gestures do not fold capture or change core-owned state.
 watch(row, (current) => {
@@ -381,9 +385,7 @@ function onControlRequest(payload) {
     ? /** @type {Record<string, unknown>} */ (payload)
     : {};
   const asked = record.verb;
-  const verb = asked === 'take_control' || asked === 'release_control'
-    ? asked
-    : (current.control === 'agent' ? 'release_control' : 'take_control');
+  const verb = controlVerbForRow(current, asked);
   uiPhase.value = verb === 'take_control' ? 'taking-control' : 'releasing-control';
   emit('submit-intent', props.intentBuilders.control({ capsuleId: props.capsuleId, verb }));
 }
@@ -403,10 +405,11 @@ function onActivateSurface() {
 }
 </script>
 <template>
+  <div class="mv-tile" :data-tile-state="tile.tile" :data-error-code="row?.refusal?.code ?? snapshot?.error?.code">
   <CapsulePanel
     :capsule-id="props.capsuleId"
     :external-ai-slot="true"
-    :presentation-status="row?.attachmentState === 'attaching' ? 'Connecting' : status"
+    :presentation-status="tile.tile === 'error' ? 'Surface update unavailable' : tile.status"
     :placeholder-title="props.title"
     :presentation-instance="props.presentationInstance"
     :has-keyboard-ownership="props.hasKeyboardOwnership"
@@ -423,4 +426,5 @@ function onActivateSurface() {
       </div>
     </template>
   </CapsulePanel>
+  </div>
 </template>

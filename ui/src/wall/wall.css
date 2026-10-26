@@ -1,0 +1,103 @@
+/* Lane U1 wall styles: empty-wall view and tile-state treatments.
+ * Kit tokens only: no colour literals, no fonts, no remote imports. The empty
+ * view mirrors the product empty-wall copy; tile states render as a layout-
+ * neutral inset bar driven by [data-tile-state] on the tile wrapper. */
+
+/* Empty wall: fills the teleported workspace slot, centres product copy. */
+.mv-wall-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--cuk-semantic-spacing-lg);
+  background: var(--cuk-semantic-surface-canvas);
+  text-align: center;
+}
+
+.mv-wall-empty h1 {
+  font-size: var(--cuk-semantic-typography-font-size-xl);
+  letter-spacing: -0.035em;
+  font-weight: var(--cuk-semantic-typography-font-weight-semibold);
+  line-height: var(--cuk-semantic-typography-line-height-tight);
+  color: var(--cuk-semantic-text-primary);
+  margin: 0 0 var(--cuk-semantic-spacing-sm);
+}
+
+.mv-wall-empty__hint {
+  color: var(--cuk-semantic-text-muted);
+  font-size: var(--cuk-semantic-typography-font-size-md);
+  line-height: var(--cuk-semantic-typography-line-height-normal);
+  margin: 0 0 var(--cuk-semantic-spacing-lg);
+}
+
+.mv-wall-empty__eyebrow {
+  font-size: var(--cuk-semantic-typography-font-size-xs);
+  letter-spacing: 0.16em;
+  font-weight: var(--cuk-semantic-typography-font-weight-semibold);
+  color: var(--cuk-semantic-text-muted);
+  margin: 0 0 var(--cuk-semantic-spacing-md);
+}
+
+.mv-wall-empty__mark {
+  display: grid;
+  grid-template-columns: repeat(2, 20px);
+  gap: 5px;
+  margin-bottom: var(--cuk-semantic-spacing-lg);
+  transform: rotate(-6deg);
+}
+
+.mv-wall-empty__mark span {
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--cuk-semantic-border-default);
+  border-radius: var(--cuk-semantic-radius-sm);
+  background: var(--cuk-semantic-surface-panel);
+}
+
+.mv-wall-empty__mark span:first-child {
+  background: var(--cuk-semantic-accent-primary);
+  border-color: var(--cuk-semantic-accent-primary);
+}
+
+/* Tile wrapper: owns the tile-state bar; never reflows the kit panel. */
+.mv-tile {
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  box-shadow: inset 0 2px 0 var(--cuk-semantic-border-default);
+}
+
+.mv-tile[data-tile-state="connecting"] {
+  box-shadow: inset 0 2px 0 var(--cuk-semantic-status-info-border);
+}
+
+.mv-tile[data-tile-state="live"] {
+  box-shadow: inset 0 2px 0 var(--cuk-semantic-status-success-border);
+}
+
+.mv-tile[data-tile-state="folded"] {
+  box-shadow: inset 0 2px 0 var(--cuk-semantic-border-strong);
+}
+
+.mv-tile[data-tile-state="human-control"] {
+  box-shadow: inset 0 2px 0 var(--cuk-semantic-accent-primary);
+}
+
+.mv-tile[data-tile-state="agent-acting"] {
+  box-shadow: inset 0 2px 0 var(--cuk-semantic-status-warning-border);
+}
+
+.mv-tile[data-tile-state="lost"] {
+  box-shadow: inset 0 2px 0 var(--cuk-semantic-text-disabled);
+}
+
+.mv-tile[data-tile-state="error"] {
+  box-shadow: inset 0 2px 0 var(--cuk-semantic-status-error-border);
+}
+
+.mv-tile:focus-within {
+  outline: var(--cuk-semantic-focus-ring-width) var(--cuk-semantic-focus-ring-style) var(--cuk-semantic-focus-ring-color);
+  outline-offset: var(--cuk-semantic-focus-ring-offset);
+}

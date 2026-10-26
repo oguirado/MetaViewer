@@ -1,0 +1,57 @@
+/* MetaViewer settings lane styles (U4). Kit tokens only; no colour
+ * literals, no new fonts. Pairs verified against WCAG AA in both
+ * mv-light and mv-dark (see mvui-settings-panel.test.js contrast matrix). */
+.mv4-set {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cuk-semantic-spacing-md);
+  padding: var(--cuk-semantic-spacing-md);
+  border: var(--cuk-semantic-border-width) solid var(--cuk-semantic-border-default);
+  border-radius: var(--cuk-semantic-radius-sm);
+  background: var(--cuk-semantic-surface-panel);
+  font-family: var(--cuk-semantic-typography-font-family-sans);
+  font-size: var(--cuk-semantic-typography-font-size-sm);
+  color: var(--cuk-semantic-text-primary);
+}
+.mv4-set-title {
+  margin: 0;
+  font-size: var(--cuk-semantic-typography-font-size-sm);
+  font-weight: var(--cuk-semantic-typography-font-weight-semibold);
+  color: var(--cuk-semantic-text-primary);
+}
+.mv4-scheme {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cuk-semantic-spacing-sm);
+}
+.mv4-scheme-option {
+  display: flex;
+  align-items: center;
+  gap: var(--cuk-semantic-spacing-sm);
+  cursor: pointer;
+}
+.mv4-scheme-option input {
+  accent-color: var(--cuk-semantic-accent-primary);
+  width: var(--cuk-semantic-spacing-md);
+  height: var(--cuk-semantic-spacing-md);
+}
+.mv4-scheme-option input:focus-visible {
+  outline: var(--cuk-semantic-focus-ring-width) solid var(--cuk-semantic-focus-ring-color);
+  outline-offset: var(--cuk-primitive-space-2);
+}
+.mv4-scheme-label {
+  color: var(--cuk-semantic-text-primary);
+}
+.mv4-density {
+  margin: 0;
+  color: var(--cuk-semantic-text-primary);
+}
+.mv4-refusal {
+  margin: 0;
+  padding: var(--cuk-semantic-spacing-sm) var(--cuk-semantic-spacing-md);
+  border: var(--cuk-semantic-border-width) solid var(--cuk-semantic-status-error-border);
+  border-radius: var(--cuk-semantic-radius-sm);
+  background: var(--cuk-semantic-status-error-surface);
+  color: var(--cuk-semantic-status-error-text);
+  font-weight: var(--cuk-semantic-typography-font-weight-medium);
+}

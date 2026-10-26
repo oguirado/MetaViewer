@@ -1,0 +1,166 @@
+/* MetaViewer recording lane styles (U4). Kit tokens only; no colour
+ * literals, no new fonts. Pairs verified against WCAG AA in both
+ * mv-light and mv-dark (see mvui-settings-panel.test.js contrast matrix). */
+.mv4-rec {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cuk-semantic-spacing-md);
+  font-family: var(--cuk-semantic-typography-font-family-sans);
+  font-size: var(--cuk-semantic-typography-font-size-sm);
+  color: var(--cuk-semantic-text-primary);
+}
+.mv4-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--cuk-semantic-spacing-sm);
+  flex-wrap: wrap;
+}
+.mv4-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--cuk-semantic-spacing-sm);
+  padding: var(--cuk-semantic-spacing-sm) var(--cuk-semantic-spacing-md);
+  border: var(--cuk-semantic-border-width) solid var(--cuk-semantic-border-default);
+  border-radius: var(--cuk-semantic-radius-sm);
+  background: var(--cuk-semantic-surface-interactive);
+  color: var(--cuk-semantic-text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+.mv4-btn:hover {
+  background: var(--cuk-semantic-surface-interactive-hover);
+}
+.mv4-btn:disabled {
+  color: var(--cuk-semantic-text-disabled);
+  cursor: not-allowed;
+}
+.mv4-btn:focus-visible {
+  outline: var(--cuk-semantic-focus-ring-width) solid var(--cuk-semantic-focus-ring-color);
+  outline-offset: var(--cuk-primitive-space-2);
+}
+.mv4-toggle-dot {
+  width: var(--cuk-semantic-spacing-sm);
+  height: var(--cuk-semantic-spacing-sm);
+  border-radius: 999px;
+  border: var(--cuk-semantic-border-width) solid currentColor;
+}
+.mv4-toggle-recording {
+  background: var(--cuk-semantic-status-error-surface);
+  border-color: var(--cuk-semantic-status-error-border);
+  color: var(--cuk-semantic-status-error-text);
+}
+.mv4-toggle-recording .mv4-toggle-dot {
+  background: currentColor;
+  border-color: currentColor;
+}
+.mv4-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--cuk-semantic-spacing-sm);
+  border: var(--cuk-semantic-border-width) solid var(--cuk-semantic-border-default);
+  border-radius: var(--cuk-semantic-radius-sm);
+  color: var(--cuk-semantic-text-primary);
+  white-space: nowrap;
+}
+.mv4-tone-success {
+  background: var(--cuk-semantic-status-success-surface);
+  border-color: var(--cuk-semantic-status-success-border);
+  color: var(--cuk-semantic-status-success-text);
+}
+.mv4-tone-warning {
+  background: var(--cuk-semantic-status-warning-surface);
+  border-color: var(--cuk-semantic-status-warning-border);
+  color: var(--cuk-semantic-status-warning-text);
+}
+.mv4-tone-error {
+  background: var(--cuk-semantic-status-error-surface);
+  border-color: var(--cuk-semantic-status-error-border);
+  color: var(--cuk-semantic-status-error-text);
+}
+.mv4-elapsed {
+  font-family: var(--cuk-semantic-typography-font-family-mono);
+  color: var(--cuk-semantic-text-primary);
+}
+.mv4-empty {
+  margin: 0;
+  color: var(--cuk-semantic-text-primary);
+}
+.mv4-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+.mv4-table th,
+.mv4-table td {
+  padding: var(--cuk-semantic-spacing-sm);
+  border-top: var(--cuk-semantic-border-width) solid var(--cuk-semantic-border-subtle);
+  text-align: start;
+  vertical-align: middle;
+}
+.mv4-table th {
+  border-top: 0;
+  font-weight: var(--cuk-semantic-typography-font-weight-semibold);
+  color: var(--cuk-semantic-text-primary);
+}
+.mv4-mono {
+  font-family: var(--cuk-semantic-typography-font-family-mono);
+  color: var(--cuk-semantic-text-primary);
+}
+.mv4-select {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--cuk-semantic-text-accent);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.mv4-select:disabled {
+  color: var(--cuk-semantic-text-disabled);
+  cursor: not-allowed;
+  text-decoration: none;
+}
+.mv4-select:focus-visible {
+  outline: var(--cuk-semantic-focus-ring-width) solid var(--cuk-semantic-focus-ring-color);
+  outline-offset: var(--cuk-primitive-space-2);
+}
+.mv4-row-selected .mv4-select {
+  font-weight: var(--cuk-semantic-typography-font-weight-semibold);
+}
+.mv4-row-error {
+  display: inline-block;
+  margin-left: var(--cuk-semantic-spacing-sm);
+  color: var(--cuk-semantic-status-error-text);
+}
+.mv4-gate-ready {
+  background: var(--cuk-semantic-status-success-surface);
+  border-color: var(--cuk-semantic-status-success-border);
+  color: var(--cuk-semantic-status-success-text);
+}
+.mv4-gate-sealed-required,
+.mv4-gate-destination-required {
+  background: var(--cuk-semantic-status-warning-surface);
+  border-color: var(--cuk-semantic-status-warning-border);
+  color: var(--cuk-semantic-status-warning-text);
+}
+.mv4-gate-unavailable {
+  background: var(--cuk-semantic-status-error-surface);
+  border-color: var(--cuk-semantic-status-error-border);
+  color: var(--cuk-semantic-status-error-text);
+}
+.mv4-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.mv4-refusal {
+  margin: 0;
+  padding: var(--cuk-semantic-spacing-sm) var(--cuk-semantic-spacing-md);
+  border: var(--cuk-semantic-border-width) solid var(--cuk-semantic-status-warning-border);
+  border-radius: var(--cuk-semantic-radius-sm);
+  background: var(--cuk-semantic-status-warning-surface);
+  color: var(--cuk-semantic-status-warning-text);
+  font-weight: var(--cuk-semantic-typography-font-weight-medium);
+}
