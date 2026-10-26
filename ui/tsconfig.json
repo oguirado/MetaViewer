@@ -1,0 +1,41 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": true,
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": [
+      "ES2023",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "types": [
+      "node"
+    ],
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "capsule-ui-kit/DockWorkspace": [
+        ".kit/capsule-ui-kit/types/DockWorkspace.d.ts"
+      ],
+      "capsule-ui-kit/CapsulePanel": [
+        ".kit/capsule-ui-kit/types/CapsulePanel.d.ts"
+      ],
+      "capsule-ui-kit/layout": [
+        ".kit/capsule-ui-kit/src/workspace/layoutProfile.js"
+      ],
+      "capsule-ui-kit/theme": [
+        ".kit/capsule-ui-kit/types/theme.d.ts"
+      ]
+    }
+  },
+  "include": [
+    "src/**/*.js",
+    "src/**/*.vue",
+    "electron/**/*.js",
+    "vite.config.js"
+  ]
+}

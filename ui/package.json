@@ -4,18 +4,24 @@
   "private": true,
   "type": "module",
   "main": "electron/main.js",
-  "engines": { "node": ">=24" },
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "test": "node --test test/*.test.js",
     "check": "vue-tsc --noEmit -p tsconfig.json",
-    "build": "vite build"
+    "build": "vite build",
+    "smoke": "node test/smoke.mjs"
   },
   "dependencies": {
+    "@openvue/icons": "1.0.0",
+    "@openvue/themes": "1.0.0",
     "@xterm/addon-fit": "0.11.0",
     "@xterm/xterm": "6.0.0",
     "dockview-core": "8.4.1",
     "dockview-vue": "8.4.1",
     "electron": "44.9.2",
+    "openvue": "1.0.0",
     "vue": "3.5.43"
   },
   "devDependencies": {
