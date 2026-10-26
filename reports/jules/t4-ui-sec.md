@@ -16,65 +16,57 @@ All security controls and invariants specified in Section 4 obligations 1–9 pa
 
 ## Findings
 
-| ID | Severity | File:Line | Evidence | Proposed Fix or Test |
+| ID | Severity | File:Line | Evidence | Fix |
 |---|---|---|---|---|
-| FINDING-UI-SEC-01 | LOW | `ui/electron/main.js:865` | `handleAppRequest` performs a single `decodeURIComponent(part)` on raw URL segments. Requesting double-encoded dot-segments such as `app://metaviewer/%252e%252e/index.html` yields segment `%2e%2e`, which is not matched by `decoded === '..'`, resulting in a 404 response rather than an early 403 path traversal refusal. While containment remains strictly enforced under `canonicalRoot`, double-encoded inputs are not explicitly rejected as invalid path escapes. | Modify `handleAppRequest` path validation to check if `decoded` still contains `%` or double-decoded dot sequences, returning 403 `forbidden` on any encoded dot-segment attempt. Tested in `ui/test/t4_sec_protocol_traversal.test.js`. |
+| FINDING-UI-SEC-01 | LOW | `ui/electron/main.js:865` | `handleAppRequest` performs a single `decodeURIComponent(part)` on raw URL segments. Requesting double-encoded dot-segments such as `app://metaviewer/%252e%252e/index.html` yields segment `%2e%2e`, which is not matched by `decoded === '..'`, resulting in a 404 response rather than an early 403 path traversal refusal. While containment remains strictly enforced under `canonicalRoot`, double-encoded inputs are not explicitly rejected as invalid path escapes. | Modify `handleAppRequest` path segment validation to check if `decoded` still contains `%` or double-decoded dot sequences, returning 403 `forbidden` on any encoded dot-segment attempt. Tested in `ui/test/t4_sec_protocol_traversal.test.js`. |
 
 ---
 
-## Tests Written or Proposed
+## Tests written
 
-The following test suites were written under `ui/test/`:
-
-1. **`ui/test/t4_sec_window_pins.test.js`** (Obligation 1):
-   - Asserts exact values for all 10 `webPreferences` (`sandbox`, `contextIsolation`, `nodeIntegration`, `nodeIntegrationInWorker`, `nodeIntegrationInSubFrames`, `webSecurity`, `webviewTag`, `allowRunningInsecureContent`, `experimentalFeatures`, `preload`).
-   - Mutation control: proves each inverted pin value fails verification.
-2. **`ui/test/t4_sec_sender_admission.test.js`** (Obligation 2):
-   - Positive witness for top-frame sender admission on `observeSender`.
-   - Matrix of negative controls: subframe identity mismatch, `detached: true`, destroyed sender, null/non-object `senderFrame`, foreign origin mismatch, non-privileged URL, invalid sender IDs (0, negative, non-integer, missing).
-3. **`ui/test/t4_sec_preload_facade.test.js`** (Obligation 3):
-   - Positive witness for `assertFixedCall` load and save.
-   - Attack vectors on `assertFixedCall` and `createPreloadFacade`: off-set channels, non-array args, multibyte payload UTF-8 byte-cap vs char-length, lone surrogates, prototype-polluted and accessor deps, symbol keys, frozen export mutation, and malformed load/save replies (`undefined`, `0`, `{}`, over-cap string, `1`, `'true'`, truthy objects). Asserts zero transport calls on ingress refusals.
-4. **`ui/test/t4_sec_protocol_traversal.test.js`** (Obligation 4):
-   - Attack battery on `handleAppRequest`: `%2e%2e`, `%252e%252e`, backslash `\`, NUL byte `\0`, `?`/`#` smuggling, uppercase host, credentials/port in URL, wrong scheme, dir without index.html, symlink file, symlink dir escape, FIFO pipe, over-8MiB file, HTML without `<head>`, style nonce uniqueness across responses, and 2049-char URL. Asserts exact 403/404 status and exact base CSP header.
-5. **`ui/test/t4_sec_csp_parity.test.js`** (Obligation 5):
-   - Validates `CONTENT_SECURITY_POLICY` header equality for non-HTML, refusals, and 404s.
-   - Style nonce extension verification.
-   - Meta tag CSP equality in `index.html`.
-   - Strict rejection of insecure policy directives (`unsafe-inline`, `unsafe-eval`, `http:`, `https:`, `*`).
-6. **`ui/test/t4_sec_retail_launch.test.js`** (Obligation 6):
-   - Matrix testing of `validateRetailLaunch`: bare and `=value` forbidden flags, prefix lookalikes (`--inspectX`), `--nested-depth` variants, unknown switches, runtime pass-through switches (`--user-data-dir`, `--ozone-platform`), forbidden env names, non-string env values, max argv items (257), max char length (4097), and NUL items. Asserts exact refusal codes.
-7. **`ui/test/t4_sec_nested_display.test.js`** (Obligation 7):
-   - Asserts `enterNested` with depth!=1 or unsafe env records zero display calls.
-   - Asserts `installReadOnlyLayout` load arity refusal, save refusal, and subframe identity refusal.
-8. **`ui/test/t4_sec_packaged_layout.test.js`** (Obligation 8):
-   - Verifies `FUSE_TABLE` parity (9 rows, 6 required) and `buildFuseConfig` index-for-index equality.
-   - `resolveMainPaths` refusal of missing/legacy bundle roots.
-   - `validateOutput` overlap matrix checks.
-   - `writeManifest` refusal on existing files (`wx`), symlinks, and non-files.
-   - `handleAppRequest` refusal of `/preload/preload.cjs` and traversal spellings.
-   - Verification of `dist/renderer` containing no `.cjs` files.
-9. **`ui/test/t4_sec_ipc_parity.test.js`** (Obligation 9):
-   - Source text literal equality check between `main.js` and `preload.js` `CHANNELS` definitions without importing.
-   - `createLayoutBridge` invoke rejection with `LAYOUT_CONTRACT_ABSENT`.
-   - Save decoder byte-cap and JSON parsing boundaries.
-10. **`ui/test/t4_sec_live_electron.test.js`** (Obligation 10):
-    - Live Electron checklist (skips gracefully with printed reason when `ELECTRON_OVERRIDE_DIST_PATH` is absent).
-
-### Commands and Execution Results
-
+Command to run all T4 UI-SEC tests:
 ```bash
 cd ui && node --test test/t4_sec_*.test.js
 ```
 
-Output summary:
+Execution Result:
 ```text
+TAP version 13
+ok 1 - CSP parity: served headers, build meta, nonce extension, and directive restrictions
+ok 2 - main vs preload CHANNELS text literal equality without importing
+ok 3 - createLayoutBridge invoke rejects with LAYOUT_CONTRACT_ABSENT and decodes bounds/JSON
+ok 4 - Live Electron checklist (skip if ELECTRON_OVERRIDE_DIST_PATH is absent) # SKIP
+ok 5 - enterNested refuses when depth!=1 or unsafe env with zero display calls
+ok 6 - installReadOnlyLayout load/save/subframe refusal guarantees
+ok 7 - packaged layout: fuse table parity, manifest refusal, output overlap matrix, and main path resolution
+ok 8 - assertFixedCall refuses off-set channels, non-array args, and bounded save payloads
+ok 9 - createPreloadFacade refuses malformed deps and accessor tricks with zero transport calls
+ok 10 - PRELOAD exported constants are frozen and immutable
+ok 11 - createPreloadFacade load/save reply handling and zero transport call on invalid ingress
+ok 12 - handleAppRequest protocol traversal battery
+ok 13 - validateRetailLaunch positive witness admits valid retail and nested invocations
+ok 14 - validateRetailLaunch matrix testing negative controls and exact refusal codes
+ok 15 - observeSender positive witness admits valid top-frame sender
+ok 16 - observeSender sender admission matrix negative controls
+ok 17 - createWindowOptions pins all ten webPreferences with negative control mutants
+1..17
 # tests 17
 # pass 16
+# skip 1
 # fail 0
-# skipped 1
-# duration_ms 931.84
 ```
+
+Individual test files created:
+1. `ui/test/t4_sec_window_pins.test.js`: Asserts exact values for all 10 `webPreferences` and proves each inverted pin fails. (Passed)
+2. `ui/test/t4_sec_sender_admission.test.js`: Top-frame sender admission and refusal matrix on `observeSender`. (Passed)
+3. `ui/test/t4_sec_preload_facade.test.js`: Attack vectors on `assertFixedCall` and `createPreloadFacade`. (Passed)
+4. `ui/test/t4_sec_protocol_traversal.test.js`: Traversal battery on `handleAppRequest`. (Passed)
+5. `ui/test/t4_sec_csp_parity.test.js`: CSP header equality, style nonce extension, and directive restrictions. (Passed)
+6. `ui/test/t4_sec_retail_launch.test.js`: Matrix test `validateRetailLaunch` for flags, envs, and bounds. (Passed)
+7. `ui/test/t4_sec_nested_display.test.js`: `enterNested` depth/env controls and `installReadOnlyLayout` behavior. (Passed)
+8. `ui/test/t4_sec_packaged_layout.test.js`: Fuse table parity, manifest refusal, output overlap, and `dist/renderer` `.cjs` checks. (Passed)
+9. `ui/test/t4_sec_ipc_parity.test.js`: `CHANNELS` text literal equality and bridge invoke rejection. (Passed)
+10. `ui/test/t4_sec_live_electron.test.js`: Live Electron checklist fallback. (Skipped gracefully)
 
 ---
 
@@ -84,6 +76,33 @@ Output summary:
    - *Reason*: `ELECTRON_OVERRIDE_DIST_PATH` was not defined in the sandbox environment, and local Electron binary distribution paths were unavailable. The test suite handled this gracefully by skipping subtest 10 with a printed diagnostic message.
 2. **UI Kit TypeScript/Vite Compilation (`vue-tsc` & `vite build`)**:
    - *Reason*: Full `vue-tsc` typechecking and `vite build` require the private `capsule-ui-kit` repository (synced via `CAPSULE_UI_KIT_REPO` in packaging tools), which is not present in the standard checkout.
+
+---
+
+## Errors and blockers
+
+During CI execution, the following error messages occurred:
+
+1. **Commit Identity & Message Laws Check (`laws-contracts` job)**:
+   ```text
+   ERROR: 8eb26024fd2124f189e231b8f1bbf6cd95eef8a7: author must be oguirado <247666607+oguirado@users.noreply.github.com>
+   ERROR: 8eb26024fd2124f189e231b8f1bbf6cd95eef8a7: committer must be oguirado <247666607+oguirado@users.noreply.github.com>
+   ERROR: 8eb26024fd2124f189e231b8f1bbf6cd95eef8a7: forbidden message pattern: co-authored-by
+   ERROR: 8eb26024fd2124f189e231b8f1bbf6cd95eef8a7: subject must use an allowed scope followed by ": " and an English imperative
+   ```
+   *Cause*: The git commit author identity and commit message subject format did not conform to `tools/check_laws.py` rules (requires `oguirado` git identity, scope like `ui:` or `tools:`, and an imperative verb).
+
+2. **Router Index Coverage Check (`router` job)**:
+   ```text
+   Stale or incomplete router: /home/runner/work/MetaViewer/MetaViewer/catalogue/nodes.jsonl (coverage mismatch: 373 sources vs 362 committed nodes; 11 digests differ)
+   ```
+   *Cause*: Adding 11 new source files (the 10 test files and report) caused `tools/router_index.py --check` to fail because `catalogue/nodes.jsonl`, `router/index`, and `catalogue/router` were not updated to include the new files. Fixed by running `tools/router_index.py` and `build_index_v2.py`.
+
+3. **End-to-End Test Runner Prerequisite (`e2e` job)**:
+   ```text
+   Error [E2EError]: E2E_PREREQ: electron binary missing or not executable: /home/runner/work/MetaViewer/MetaViewer/ui/node_modules/electron/dist/electron
+   ```
+   *Cause*: The CI runner environment for e2e lacked the downloaded Electron binary at `ui/node_modules/electron/dist/electron`.
 
 ---
 
