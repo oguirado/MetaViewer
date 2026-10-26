@@ -1,11 +1,16 @@
 //! Explicit bounded stream and owner-only Unix socket operations.
 //! [TARGET, unit decision] S12 publication uses a fresh verified 0700 stage;
-//! final-path publication is an atomic rename of an already verified 0600 socket.
+//! final-path publication is atomic and exposes an already verified 0600 socket.
+//! [TARGET, unit decision] R1-020: publishers hold a nonblocking OS lock on the
+//! verified runtime-directory inode through probing and publication. Stale paths
+//! are replaced atomically; absent paths use exclusive hard-link publication.
+//! Directory exclusion covers cooperating publishers, not arbitrary same-UID
+//! directory writers bypassing this protocol.
 use crate::wire::error_type;
 use crate::{
     decode_envelope_with_limits, DecodeError, Endpoint, Envelope, WireLimits, HANDSHAKE_DEADLINE,
 };
-use std::fs::{self, DirBuilder, Metadata, Permissions};
+use std::fs::{self, DirBuilder, File, Metadata, Permissions, TryLockError};
 use std::io::{self, Write};
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Component as PathComponent, Path, PathBuf};
@@ -182,7 +187,7 @@ fn private_dir(path: &Path, uid: u32) -> Result<Metadata, BindError> {
     Ok(meta)
 }
 // [TARGET, unit decision] S12 publication amendment: prepare under a verified
-// 0700 staging directory, then publish an already verified 0600 socket by rename.
+// 0700 staging directory, then atomically publish an already verified 0600 socket.
 // No process-wide umask mutation is used.
 static NEXT_STAGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 struct SocketStage(PathBuf);
@@ -221,7 +226,21 @@ pub async fn bind_owner_only(
         Err(_) => return Err(BindError::Io),
     }
     let directory = private_dir(parent, expected_uid)?;
-    match fs::symlink_metadata(path) {
+    // Lock the directory itself: no removable sidecar lock inode and no stale
+    // lock after a crash/cancelled future. Never block a Tokio executor thread.
+    let publication_lock = File::open(parent).map_err(|_| BindError::Io)?;
+    publication_lock.try_lock().map_err(|error| match error {
+        TryLockError::WouldBlock => BindError::IdentityChanged,
+        TryLockError::Error(_) => BindError::Io,
+    })?;
+    if !same_inode(
+        &directory,
+        &publication_lock.metadata().map_err(|_| BindError::Io)?,
+    ) || !same_inode(&directory, &private_dir(parent, expected_uid)?)
+    {
+        return Err(BindError::IdentityChanged);
+    }
+    let stale = match fs::symlink_metadata(path) {
         Ok(old) => {
             if !old.file_type().is_socket() || old.uid() != expected_uid {
                 return Err(BindError::NotSocket);
@@ -237,11 +256,11 @@ pub async fn bind_owner_only(
             {
                 return Err(BindError::IdentityChanged);
             }
-            fs::remove_file(path).map_err(|_| BindError::Io)?;
+            Some(old)
         }
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) if e.kind() == io::ErrorKind::NotFound => None,
         Err(_) => return Err(BindError::Io),
-    }
+    };
     if !same_inode(&directory, &private_dir(parent, expected_uid)?) {
         return Err(BindError::IdentityChanged);
     }
@@ -269,7 +288,25 @@ pub async fn bind_owner_only(
     {
         return Err(BindError::IdentityChanged);
     }
-    fs::rename(&staged, path).map_err(|_| BindError::Io)?;
+    if let Some(old) = stale {
+        let now = fs::symlink_metadata(path).map_err(|_| BindError::IdentityChanged)?;
+        if !same_inode(&old, &now) {
+            return Err(BindError::IdentityChanged);
+        }
+        // Keep the stale name present until replacement; do not unlink first.
+        fs::rename(&staged, path).map_err(|_| BindError::Io)?;
+    } else {
+        // Atomic no-replace publication even if a noncooperating writer creates
+        // a target after the initial absence check. SocketStage removes the
+        // private staging link after validation, leaving the published link.
+        fs::hard_link(&staged, path).map_err(|error| {
+            if error.kind() == io::ErrorKind::AlreadyExists {
+                BindError::IdentityChanged
+            } else {
+                BindError::Io
+            }
+        })?;
+    }
     let after = fs::symlink_metadata(path).map_err(|_| BindError::Io)?;
     if !same_inode(&prepared, &after)
         || !same_inode(&directory, &private_dir(parent, expected_uid)?)
