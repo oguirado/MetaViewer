@@ -1,7 +1,6 @@
 <script setup>
-/** [TARGET, unit decision] Missing live projection/gateway handoff: mount the
- * real wall against an unavailable view. No invented surfaces or generations.
- * Live capabilities remain unavailable until the conductor supplies the feed.
+/** The optional runtime supplies authoritative rows and the tile scheduler.
+ * Canvas status reads successful presentation witnesses; bytes stay external.
  */
 import { computed, defineComponent, h, markRaw, onBeforeUnmount, onMounted, provide, ref, shallowRef } from 'vue';
 import DockWorkspace from 'capsule-ui-kit/DockWorkspace';
@@ -70,6 +69,20 @@ onBeforeUnmount(() => window.removeEventListener('resize', measureChrome));
 const terminalFacade = props.terminal ? markRaw(createSideTerminalFacade(props.terminal)) : null;
 onBeforeUnmount(() => terminalFacade?.dispose());
 const wall = ref(/** @type {InstanceType<typeof WallWorkspace>|null} */ (null));
+const activeTileScheduler = /** @type {ReturnType<typeof createTileScheduler>} */ (props.runtime?.tileScheduler ?? tileScheduler);
+const presentationRevision = ref(0);
+const stopPresentation = activeTileScheduler.subscribePresentation?.(() => { presentationRevision.value += 1; });
+onBeforeUnmount(() => stopPresentation?.());
+/** @param {{id:string,generation:number}} surface */
+function surfaceWitness(surface) {
+  void presentationRevision.value;
+  const info = activeTileScheduler.getInstrumentation?.(surface.id);
+  if (!info || !('lastPresentedHandle' in info) || info.surfaceGeneration !== surface.generation
+      || info.epoch !== snapshot.value?.envelope?.epoch || info.destroyed || info.contextLost) {
+    return { frame: '', digest: '' };
+  }
+  return { frame: info.lastPresentedHandle, digest: info.lastPresentedDigest };
+}
 const feed = props.runtime?.projectionView ?? projectionView;
 const snapshot = shallowRef(feed.getSnapshot());
 const rows = computed(() => {
@@ -118,7 +131,7 @@ const chromeWorkspace = markRaw(defineComponent({
           :control-registry="props.runtime?.controlRegistry ?? controlRegistry" :scheduler="props.runtime?.scheduler ?? scheduler" :tile-scheduler="props.runtime?.tileScheduler ?? tileScheduler"
           :color-scheme="scheme === 'mv-dark' ? 'dark' : 'light'" density="compact" @ready="revealRows" @wall-settled="onSettled">
           <template #surface="{ surface, capsuleId }">
-            <SurfaceCanvas v-if="surface" :surface-id="capsuleId" :generation="surface.generation" :epoch="String(feed.getSnapshot()?.envelope?.epoch ?? '')" :state="surface.attachmentState === 'live' ? 'live' : 'connecting'" />
+            <SurfaceCanvas v-if="surface" :surface-id="capsuleId" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :state="surface.attachmentState === 'live' ? 'live' : 'connecting'" />
           </template>
         </WallWorkspace>
         <Teleport v-if="settled" to=".cuk-shell-workspace">

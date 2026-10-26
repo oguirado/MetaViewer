@@ -34,3 +34,23 @@ test('MessagePort frame ACK follows actual canvas draw; folded tiles stop drawin
     assert.equal(sender.postFrame({...frame(3),surfaceId:'B'}).ok,false);
   } finally {tile.close();sender.revokeFramePort('SHUTDOWN');}
 });
+
+for (const failure of ['no canvas', 'throwing canvas']) {
+  test(`R1-061: ${failure} refuses the lease without a false presentation`, async () => {
+    const [a,b]=pair(), released=[];
+    const sender=createFramePort({port:a,binding,limits,role:'sender',onReleaseLease:r=>released.push(r),onRevoke:()=>{}});
+    const tile=createFrameTile({port:b,binding,limits,budget,state});
+    try {
+      if (failure === 'throwing canvas') tile.scheduler.attachCanvas({surfaceId:'A',canvas:{getContext(){throw new Error('draw failed');}}});
+      assert.equal(sender.postFrame(frame()).ok,true); await turn();
+      const tick=tile.scheduler.runTick(); await turn();
+      assert.equal(tick.presented.length,0,'failed draw must not enter presented report');
+      assert.equal(tile.scheduler.getInstrumentation('A').presentCount,0);
+      assert.equal(tile.scheduler.getInstrumentation('A').lastPresentedFrameGen,0);
+      assert.equal(tile.scheduler.getInstrumentation('A').presentedPendingFrameGen,null);
+      assert.equal(released.length,1,'failed draw must terminate its lease');
+      assert.equal(released[0].reason,'REFUSED');
+      assert.equal(sender.getInstrumentation().acked,1);
+    } finally { tile.close(); sender.revokeFramePort('SHUTDOWN'); }
+  });
+}

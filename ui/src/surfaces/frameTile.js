@@ -10,7 +10,7 @@ export function createFrameTile({port,binding,limits,budget,state}) {
   /** @type {Map<string,(value:{outcome:string})=>void>} */
   const pending = new Map();
   const scheduler = createTileScheduler({ budget,
-    onPresent: (/** @type {object} */ frame) => { scheduler.presentHandle(frame); },
+    onPresent: (/** @type {object} */ frame) => scheduler.presentHandle(frame),
     onReleaseLease: (/** @type {{leaseId:string,reason:string}} */ release) => {
       const done=pending.get(release.leaseId);pending.delete(release.leaseId);
       done?.({outcome:release.reason});

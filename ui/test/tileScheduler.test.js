@@ -520,9 +520,13 @@ describe('tileScheduler fold lifecycle', () => {
 
 describe('tileScheduler ticks', () => {
   it('schedules fairly across tiles and freezes the tick report', () => {
-    const h = makeHarness({ budget: makeBudget({ maxDrawsPerTick: 1 }) });
+    const h = makeHarness({ budget: makeBudget({ maxDrawsPerTick: 1 }),
+      onPresent: (record, scheduler) => scheduler.presentHandle(record) });
     registerLive(h, 'capsule-a');
     registerLive(h, 'capsule-b');
+    for (const surfaceId of ['capsule-a', 'capsule-b']) {
+      assert.equal(h.scheduler.attachCanvas({ surfaceId, canvas: makeFakeCanvas() }).ok, true);
+    }
     assert.equal(h.scheduler.submitFrame(makeFrame({ frameGeneration: 1 })).ok, true);
     assert.equal(h.scheduler.submitFrame(makeFrame({ surfaceId: 'capsule-b', frameGeneration: 1, leaseId: 'lease-b1' })).ok, true);
     const first = h.scheduler.runTick();
@@ -646,13 +650,15 @@ describe('tileScheduler canvas registry', () => {
       },
     });
     registerLive(h, 'capsule-a');
-    // No canvas attached: the legitimate handle refuses without retiring.
+    // No canvas attached: refusal must retire the candidate and release its lease.
     assert.equal(h.scheduler.submitFrame(makeFrame({})).ok, true);
     assert.equal(h.scheduler.runTick().drawsUsed, 1);
     assert.equal(draws[0].reason, SCHEDULER_REASONS.INVALID_BINDING);
     assert.equal(draws[1].reason, SCHEDULER_REASONS.INVALID_BINDING);
-    assert.equal(h.scheduler.getInstrumentation('capsule-a').presentedPendingFrameGen, 1);
-    assert.equal(h.releases.length, 0);
+    assert.equal(h.scheduler.getInstrumentation('capsule-a').presentedPendingFrameGen, null);
+    assert.equal(h.releases.length, 1);
+    assert.equal(h.releases[0].reason, RELEASE_CAUSES.REFUSED);
+    assert.equal(h.scheduler.getInstrumentation('capsule-a').presentCount, 0);
   });
 
   it('refuses a second draw of a retired handle as stale', () => {

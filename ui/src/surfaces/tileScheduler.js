@@ -67,6 +67,7 @@
  * @property {Uint8Array} bytes - Owned tightly packed top-left RGB24 bytes.
  * @property {string} principal - Bound endpoint principal.
  * @property {number} epoch - Bound endpoint epoch.
+ * @property {string} [sha256] - Verified digest supplied with the frame.
  * @property {number} [submittedAtMs] - Submission timestamp in ms.
  * @property {number} [inputTimestampMs] - Originating input timestamp for input-to-present latency.
  * @property {number} [decodeDurationMs] - Upstream decode duration in ms.
@@ -364,9 +365,10 @@ function drawRgb24ToCanvas(canvas, bytes, width, height) {
  * @param {Object} options
  * @param {FrozenTileBudget} options.budget - Frozen budget limits (exact keys, no defaults).
  * @param {() => number} [options.clock] - Monotonic clock source returning milliseconds.
- * @param {(record: Object) => void} [options.onPresent] - Metadata-only present callback
+ * @param {(record: Object) => unknown} [options.onPresent] - Metadata-only present callback
  *   receiving `{ surfaceId, handle, frameGeneration, box }`; the wall draws via
- *   `presentHandle` reentrantly during the same turn.
+ *   `presentHandle` reentrantly during the same turn. Only a successful draw
+ *   counts as presented; absent callbacks use `presentHandle` directly.
  * @param {(release: TileLeaseRelease) => void} [options.onReleaseLease] - Single-object
  *   callback invoked exactly once per retired display lease.
  * @param {(req: Object) => void} [options.onRequestNewestGeneration] - Callback invoked on
@@ -398,9 +400,17 @@ export function createTileScheduler(options) {
   const liveByHandle = new Map();
   /** @type {Map<string, string>} Newest retired handle -> owning surface. */
   const retiredByHandle = new Map();
+  /** @type {Set<() => void>} Metadata-only presentation observers. */
+  const presentationListeners = new Set();
   let fairCursor = 0;
   let insideTurn = false;
   let handleSeq = 0;
+
+  /** @param {unknown} surfaceId */
+  function missingSurfaceReason(surfaceId) {
+    return tombstones.has(/** @type {string} */ (surfaceId))
+      ? SCHEDULER_REASONS.SURFACE_DESTROYED : SCHEDULER_REASONS.SURFACE_NOT_REGISTERED;
+  }
 
   /**
    * @param {any} entry
@@ -410,7 +420,7 @@ export function createTileScheduler(options) {
    */
   function emitLeaseRelease(entry, leaseId, frameGeneration, cause) {
     if (onReleaseLease && typeof leaseId === 'string' && leaseId.length > 0) {
-      onReleaseLease({
+      try { onReleaseLease({
         principal: entry.principal,
         epoch: entry.epoch,
         surfaceId: entry.surfaceId,
@@ -419,7 +429,7 @@ export function createTileScheduler(options) {
         leaseId,
         reason: cause,
         releasedAtMs: clock()
-      });
+      }); } catch { /* An observer failure cannot restore retired ownership. */ }
     }
   }
 
@@ -468,14 +478,16 @@ export function createTileScheduler(options) {
   function drainDisplayHoldings(entry, cause) {
     if (entry.mailbox !== null) {
       entry.minAdmissibleFrameGen = Math.max(entry.minAdmissibleFrameGen, entry.mailbox.frameGeneration);
-      emitLeaseRelease(entry, entry.mailbox.leaseId, entry.mailbox.frameGeneration, cause);
+      const slot = entry.mailbox;
       entry.mailbox = null;
+      emitLeaseRelease(entry, slot.leaseId, slot.frameGeneration, cause);
     }
     if (entry.presented !== null) {
       entry.minAdmissibleFrameGen = Math.max(entry.minAdmissibleFrameGen, entry.presented.frameGeneration);
-      emitLeaseRelease(entry, entry.presented.leaseId, entry.presented.frameGeneration, cause);
-      retireHandle(entry, entry.presented.handle);
+      const slot = entry.presented;
       entry.presented = null;
+      retireHandle(entry, slot.handle);
+      emitLeaseRelease(entry, slot.leaseId, slot.frameGeneration, cause);
     }
   }
 
@@ -533,8 +545,11 @@ export function createTileScheduler(options) {
         return { ok: false, reason: SCHEDULER_REASONS.INVALID_BINDING, detail: 'epoch cannot regress' };
       }
       drainDisplayHoldings(existing, RELEASE_CAUSES.SUPERSEDED);
+      trimWarmResources(existing, 0);
     }
 
+    const sameLifetime = existing && config.surfaceGeneration === existing.surfaceGeneration && config.epoch === existing.epoch;
+    if (existing?.lastRetiredHandle && !sameLifetime) retiredByHandle.delete(existing.lastRetiredHandle);
     const entry = {
       surfaceId: config.surfaceId,
       surfaceGeneration: config.surfaceGeneration,
@@ -546,11 +561,13 @@ export function createTileScheduler(options) {
       state: initialState,
       mailbox: null,
       presented: null,
-      canvas: null,
-      lastRetiredHandle: null,
-      lastPresentedFrameGen: 0,
-      minAdmissibleFrameGen: 0,
-      lastCaptureGeneration: 0,
+      canvas: sameLifetime ? existing.canvas : null,
+      lastRetiredHandle: sameLifetime ? existing.lastRetiredHandle : null,
+      lastPresentedFrameGen: sameLifetime ? existing.lastPresentedFrameGen : 0,
+      minAdmissibleFrameGen: sameLifetime ? existing.minAdmissibleFrameGen : 0,
+      lastCaptureGeneration: sameLifetime ? existing.lastCaptureGeneration : 0,
+      lastPresentedHandle: sameLifetime ? existing.lastPresentedHandle : '',
+      lastPresentedDigest: sameLifetime ? existing.lastPresentedDigest : '',
       warmResources: new Map(),
       metrics: {
         captureCount: 0,
@@ -592,7 +609,7 @@ export function createTileScheduler(options) {
   function recordCaptureWitness(witness) {
     const entry = witness ? surfaces.get(witness.surfaceId) : undefined;
     if (!entry) {
-      return { ok: false, reason: SCHEDULER_REASONS.SURFACE_NOT_REGISTERED };
+      return { ok: false, reason: missingSurfaceReason(witness?.surfaceId) };
     }
     if (entry.destroyed) {
       return { ok: false, reason: SCHEDULER_REASONS.SURFACE_DESTROYED };
@@ -622,7 +639,7 @@ export function createTileScheduler(options) {
     }
     const entry = surfaces.get(frame.surfaceId);
     if (!entry) {
-      return { ok: false, reason: SCHEDULER_REASONS.SURFACE_NOT_REGISTERED };
+      return { ok: false, reason: missingSurfaceReason(frame.surfaceId) };
     }
     if (entry.destroyed) {
       return { ok: false, reason: SCHEDULER_REASONS.SURFACE_DESTROYED };
@@ -696,7 +713,9 @@ export function createTileScheduler(options) {
     if (entry.mailbox !== null) {
       replacedFrameGeneration = entry.mailbox.frameGeneration;
       entry.metrics.mailboxReplacements += 1;
-      emitLeaseRelease(entry, entry.mailbox.leaseId, entry.mailbox.frameGeneration, RELEASE_CAUSES.SUPERSEDED);
+      const previous = entry.mailbox;
+      entry.mailbox = null;
+      emitLeaseRelease(entry, previous.leaseId, previous.frameGeneration, RELEASE_CAUSES.SUPERSEDED);
     }
     entry.metrics.decodeCount += 1;
     entry.mailbox = {
@@ -709,6 +728,7 @@ export function createTileScheduler(options) {
       width: frame.width,
       height: frame.height,
       bytes: frame.bytes,
+      sha256: typeof frame.sha256 === 'string' ? frame.sha256 : '',
       submittedAtMs: typeof frame.submittedAtMs === 'number' ? frame.submittedAtMs : now,
       inputTimestampMs: typeof frame.inputTimestampMs === 'number' ? frame.inputTimestampMs : null,
       decodeDurationMs: typeof frame.decodeDurationMs === 'number' ? frame.decodeDurationMs : 0,
@@ -727,7 +747,7 @@ export function createTileScheduler(options) {
   function foldSurface(surfaceId, foldOptions = {}) {
     const entry = surfaces.get(/** @type {string} */ (surfaceId));
     if (!entry) {
-      return { ok: false, reason: SCHEDULER_REASONS.SURFACE_NOT_REGISTERED };
+      return { ok: false, reason: missingSurfaceReason(surfaceId) };
     }
     if (entry.destroyed) {
       return { ok: false, reason: SCHEDULER_REASONS.SURFACE_DESTROYED };
@@ -760,7 +780,7 @@ export function createTileScheduler(options) {
   function unfoldSurface(surfaceId, unfoldOptions = {}) {
     const entry = surfaces.get(/** @type {string} */ (surfaceId));
     if (!entry) {
-      return { ok: false, reason: SCHEDULER_REASONS.SURFACE_NOT_REGISTERED };
+      return { ok: false, reason: missingSurfaceReason(surfaceId) };
     }
     if (entry.destroyed) {
       return { ok: false, reason: SCHEDULER_REASONS.SURFACE_DESTROYED };
@@ -802,7 +822,7 @@ export function createTileScheduler(options) {
   function updateSurfaceState(surfaceId, patch) {
     const entry = surfaces.get(/** @type {string} */ (surfaceId));
     if (!entry) {
-      return { ok: false, reason: SCHEDULER_REASONS.SURFACE_NOT_REGISTERED };
+      return { ok: false, reason: missingSurfaceReason(surfaceId) };
     }
     if (entry.destroyed) {
       return { ok: false, reason: SCHEDULER_REASONS.SURFACE_DESTROYED };
@@ -828,7 +848,7 @@ export function createTileScheduler(options) {
   function presentSurfaceNow(surfaceId) {
     const entry = surfaces.get(/** @type {string} */ (surfaceId));
     if (!entry) {
-      return { ok: false, reason: SCHEDULER_REASONS.SURFACE_NOT_REGISTERED };
+      return { ok: false, reason: missingSurfaceReason(surfaceId) };
     }
     if (entry.destroyed) {
       return { ok: false, reason: SCHEDULER_REASONS.SURFACE_DESTROYED };
@@ -857,8 +877,10 @@ export function createTileScheduler(options) {
    * @param {{ targetSurfaceId?: string }} [tickOptions]
    */
   function runTick(tickOptions = {}) {
-    const empty = { ok: true, presented: [], drawsUsed: 0, bytesUploaded: 0, timeSpentMs: 0, budgetDeferrals: 0, rejectedStaleLeases: 0 };
-    const n = surfaceOrder.length;
+    const empty = { ok: true, scannedSurfaces: 0, presented: [], drawsUsed: 0, bytesUploaded: 0, timeSpentMs: 0, budgetDeferrals: 0, rejectedStaleLeases: 0 };
+    // Stable scan membership if a release observer destroys another surface.
+    const turnOrder = surfaceOrder.slice();
+    const n = turnOrder.length;
     if (n === 0) {
       return Object.freeze({ ...empty, presented: Object.freeze([]) });
     }
@@ -876,7 +898,7 @@ export function createTileScheduler(options) {
     try {
       for (let offset = 0; offset < n; offset += 1) {
         const idx = (startIdx + offset) % n;
-        const id = surfaceOrder[idx];
+        const id = turnOrder[idx];
         if (tickOptions.targetSurfaceId && id !== tickOptions.targetSurfaceId) {
           continue;
         }
@@ -914,21 +936,22 @@ export function createTileScheduler(options) {
           continue;
         }
         if (entry.presented !== null) {
-          emitLeaseRelease(entry, entry.presented.leaseId, entry.presented.frameGeneration, RELEASE_CAUSES.SUPERSEDED);
-          retireHandle(entry, entry.presented.handle);
+          const previous = entry.presented;
           entry.presented = null;
+          retireHandle(entry, previous.handle);
+          emitLeaseRelease(entry, previous.leaseId, previous.frameGeneration, RELEASE_CAUSES.SUPERSEDED);
         }
         entry.mailbox = null;
         drawsUsed += 1;
         bytesUploaded += candidate.byteLength;
-        timeSpentMs += candidate.estimatedPresentMs;
-        nextCursor = (idx + 1) % n;
+        if (budgetDeferrals === 0) nextCursor = (idx + 1) % n;
 
         handleSeq += 1;
         const handle = `tile/${entry.surfaceId}/g${candidate.frameGeneration}/h${handleSeq}`;
         entry.presented = {
           handle,
           bytes: candidate.bytes,
+          sha256: candidate.sha256,
           width: candidate.width,
           height: candidate.height,
           frameGeneration: candidate.frameGeneration,
@@ -939,9 +962,26 @@ export function createTileScheduler(options) {
         };
         liveByHandle.set(handle, entry.surfaceId);
 
-        const presentAgeMs = Math.max(0, now - candidate.submittedAtMs);
+        const attemptStartedAtMs = clock();
+        const request = Object.freeze({ surfaceId: entry.surfaceId, handle, frameGeneration: candidate.frameGeneration, box: eligibility.box });
+        try {
+          if (onPresent) onPresent(request);
+          else presentHandle(request);
+        } catch { /* A failed canvas/callback terminates the candidate below. */ }
+        timeSpentMs += Math.max(0, clock() - attemptStartedAtMs);
+        if (entry.lastPresentedFrameGen !== candidate.frameGeneration) {
+          // No successful draw witness: release and retire the failed handle.
+          if (entry.presented?.handle === handle) {
+            entry.presented = null;
+            retireHandle(entry, handle);
+            emitLeaseRelease(entry, candidate.leaseId, candidate.frameGeneration, RELEASE_CAUSES.REFUSED);
+          }
+          continue;
+        }
+        const presentedAtMs = clock();
+        const presentAgeMs = Math.max(0, presentedAtMs - candidate.submittedAtMs);
         const inputToPresentMs = typeof candidate.inputTimestampMs === 'number'
-          ? Math.max(0, now - candidate.inputTimestampMs)
+          ? Math.max(0, presentedAtMs - candidate.inputTimestampMs)
           : null;
         entry.metrics.presentCount += 1;
         entry.metrics.drawSubmissions += 1;
@@ -949,11 +989,11 @@ export function createTileScheduler(options) {
         entry.metrics.bytesUploadedTotal += candidate.byteLength;
         entry.metrics.lastPresentAgeMs = presentAgeMs;
         entry.metrics.inputToPresentMs = inputToPresentMs;
-        entry.metrics.lastPresentTimestampMs = now;
+        entry.metrics.lastPresentTimestampMs = presentedAtMs;
         entry.metrics.timingScopes = {
           submissionMs: candidate.submittedAtMs,
           parserConsumptionMs: candidate.submittedAtMs + candidate.decodeDurationMs,
-          presentationMs: now,
+          presentationMs: presentedAtMs,
           verifiedDomainEffectMs: null
         };
         const record = Object.freeze({
@@ -963,19 +1003,20 @@ export function createTileScheduler(options) {
           frameGeneration: candidate.frameGeneration,
           handle,
           box: eligibility.box,
-          presentedAtMs: now
+          presentedAtMs
         });
-        if (onPresent) {
-          onPresent(Object.freeze({ surfaceId: entry.surfaceId, handle, frameGeneration: candidate.frameGeneration, box: eligibility.box }));
-        }
         presented.push(record);
+        notifyPresentation();
       }
     } finally {
       insideTurn = false;
     }
-    fairCursor = nextCursor % n;
+    const nextId = turnOrder[nextCursor % n];
+    const liveNextIndex = surfaceOrder.indexOf(nextId);
+    fairCursor = liveNextIndex >= 0 ? liveNextIndex : 0;
     return Object.freeze({
       ok: true,
+      scannedSurfaces: n,
       presented: Object.freeze(presented),
       drawsUsed,
       bytesUploaded,
@@ -994,7 +1035,7 @@ export function createTileScheduler(options) {
   function allocateWarmResource(surfaceId, spec) {
     const entry = surfaces.get(/** @type {string} */ (surfaceId));
     if (!entry) {
-      return { ok: false, reason: SCHEDULER_REASONS.SURFACE_NOT_REGISTERED };
+      return { ok: false, reason: missingSurfaceReason(surfaceId) };
     }
     if (entry.destroyed) {
       return { ok: false, reason: SCHEDULER_REASONS.SURFACE_DESTROYED };
@@ -1037,7 +1078,7 @@ export function createTileScheduler(options) {
   function onContextLost(surfaceId) {
     const entry = surfaces.get(/** @type {string} */ (surfaceId));
     if (!entry) {
-      return { ok: false, reason: SCHEDULER_REASONS.SURFACE_NOT_REGISTERED };
+      return { ok: false, reason: missingSurfaceReason(surfaceId) };
     }
     if (entry.destroyed) {
       return { ok: false, reason: SCHEDULER_REASONS.SURFACE_DESTROYED };
@@ -1056,7 +1097,7 @@ export function createTileScheduler(options) {
   function onContextRestored(surfaceId) {
     const entry = surfaces.get(/** @type {string} */ (surfaceId));
     if (!entry) {
-      return { ok: false, reason: SCHEDULER_REASONS.SURFACE_NOT_REGISTERED };
+      return { ok: false, reason: missingSurfaceReason(surfaceId) };
     }
     if (entry.destroyed) {
       return { ok: false, reason: SCHEDULER_REASONS.SURFACE_DESTROYED };
@@ -1087,7 +1128,7 @@ export function createTileScheduler(options) {
   function destroySurface(surfaceId) {
     const entry = surfaces.get(/** @type {string} */ (surfaceId));
     if (!entry) {
-      return { ok: false, reason: SCHEDULER_REASONS.SURFACE_NOT_REGISTERED };
+      return { ok: false, reason: missingSurfaceReason(surfaceId) };
     }
     drainDisplayHoldings(entry, RELEASE_CAUSES.SURFACE_DESTROYED);
     trimWarmResources(entry, 0);
@@ -1095,6 +1136,14 @@ export function createTileScheduler(options) {
     entry.destroyed = true;
     entry.captureLeaseActive = false;
     tombstones.add(entry.surfaceId);
+    surfaces.delete(entry.surfaceId);
+    if (entry.lastRetiredHandle) retiredByHandle.delete(entry.lastRetiredHandle);
+    const index = surfaceOrder.indexOf(entry.surfaceId);
+    if (index >= 0) {
+      surfaceOrder.splice(index, 1);
+      if (index < fairCursor) fairCursor -= 1;
+    }
+    notifyPresentation();
     return { ok: true, destroyed: true };
   }
 
@@ -1105,7 +1154,9 @@ export function createTileScheduler(options) {
   function getInstrumentation(surfaceId) {
     const entry = surfaces.get(/** @type {string} */ (surfaceId));
     if (!entry) {
-      return null;
+      return tombstones.has(/** @type {string} */ (surfaceId))
+        ? Object.freeze({ surfaceId, destroyed: true, captureLeaseActive: false, canvasAttached: false })
+        : null;
     }
     const eligibility = evaluateTileEligibility(entry.state);
     return Object.freeze({
@@ -1122,6 +1173,8 @@ export function createTileScheduler(options) {
       canvasAttached: entry.canvas !== null,
       lastCaptureGeneration: entry.lastCaptureGeneration,
       lastPresentedFrameGen: entry.lastPresentedFrameGen,
+      lastPresentedHandle: entry.lastPresentedHandle,
+      lastPresentedDigest: entry.lastPresentedDigest,
       pendingMailboxFrameGen: entry.mailbox ? entry.mailbox.frameGeneration : null,
       presentedPendingFrameGen: entry.presented ? entry.presented.frameGeneration : null,
       warmResourceCount: entry.warmResources.size,
@@ -1153,7 +1206,7 @@ export function createTileScheduler(options) {
     }
     const entry = surfaces.get(args.surfaceId);
     if (!entry) {
-      return { ok: false, reason: SCHEDULER_REASONS.SURFACE_NOT_REGISTERED };
+      return { ok: false, reason: missingSurfaceReason(args.surfaceId) };
     }
     if (entry.destroyed) {
       return { ok: false, reason: SCHEDULER_REASONS.SURFACE_DESTROYED };
@@ -1196,7 +1249,7 @@ export function createTileScheduler(options) {
     }
     const entry = surfaces.get(args.surfaceId);
     if (!entry) {
-      return { ok: false, reason: SCHEDULER_REASONS.SURFACE_NOT_REGISTERED };
+      return { ok: false, reason: missingSurfaceReason(args.surfaceId) };
     }
     if (entry.destroyed) {
       return { ok: false, reason: SCHEDULER_REASONS.SURFACE_DESTROYED };
@@ -1227,10 +1280,25 @@ export function createTileScheduler(options) {
     const convertedBytes = slot.width * slot.height * 4;
     entry.metrics.convertedBytesTotal += convertedBytes;
     entry.lastPresentedFrameGen = slot.frameGeneration;
-    emitLeaseRelease(entry, slot.leaseId, slot.frameGeneration, RELEASE_CAUSES.PRESENTED);
+    entry.lastPresentedHandle = slot.handle;
+    entry.lastPresentedDigest = slot.sha256;
     retireHandle(entry, slot.handle);
     entry.presented = null;
+    emitLeaseRelease(entry, slot.leaseId, slot.frameGeneration, RELEASE_CAUSES.PRESENTED);
     return { ok: true, frameGeneration: slot.frameGeneration, convertedBytes };
+  }
+
+  /** Invalidates read-only canvas witnesses without exposing frame bytes. */
+  function notifyPresentation() {
+    for (const listener of presentationListeners) {
+      try { listener(); } catch { /* Observer does not own renderer state. */ }
+    }
+  }
+
+  /** @param {() => void} listener */
+  function subscribePresentation(listener) {
+    presentationListeners.add(listener);
+    return () => { presentationListeners.delete(listener); };
   }
 
   /**
@@ -1252,6 +1320,8 @@ export function createTileScheduler(options) {
     retiredByHandle.clear();
     fairCursor = 0;
     insideTurn = false;
+    notifyPresentation();
+    presentationListeners.clear();
   }
 
   return Object.freeze({
@@ -1269,6 +1339,7 @@ export function createTileScheduler(options) {
     onContextRestored,
     destroySurface,
     getInstrumentation,
+    subscribePresentation,
     attachCanvas,
     detachCanvas,
     presentHandle,
