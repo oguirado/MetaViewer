@@ -9,6 +9,7 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 - **Default context feeder and parallel generator.** Work is cut into *rooms*: one shared, byte-identical prefix
   (preamble + context) and N independent *lanes*, each with its own narrow surface and acceptance checks. Lanes run
   concurrently at effort `max`; their output is verified by gates before anything is integrated.
+- **Two orchestrators.** A MetaViewer conductor (core, adapter, agents, integration) and a UI orchestrator (UI rooms) each run Muse rooms on a shared, admission-controlled lane budget; both are listed below.
 - **Cache-first prompt design.** Every lane of a room shares the same prefix, so after the first lane the prefix is
   read from the provider's prompt cache. The cache-hit column below is measured from the usage counters, not estimated.
 - **Roles.** Research of the exact component APIs, architecture audits, context packs for code writers,
@@ -18,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 138 | 55 | 83 |
-| Lanes finished OK | 138 | 55 | 83 |
-| Agent steps | 6,999 | 2,705 | 4,294 |
-| Lane-hours of agent work | 17.6 | 5.2 | 12.3 |
-| Fresh input tokens | 30,205,963 | 11,482,034 | 18,723,929 |
-| Cache-read input tokens | 639,529,719 | 226,255,212 | 413,274,507 |
-| Prompt cache hit % | 95.5 | 95.2 | 95.7 |
-| Output tokens | 6,499,546 | 2,135,708 | 4,363,838 |
-| Thinking tokens | 3,418,259 | 1,050,039 | 2,368,220 |
-| Cost (USD) | 5.5996 | 2.0279 | 3.5717 |
-| Cost per lane (USD) | 0.0406 | 0.0369 | 0.043 |
+| Lanes launched | 151 | 55 | 96 |
+| Lanes finished OK | 151 | 55 | 96 |
+| Agent steps | 7,724 | 2,705 | 5,019 |
+| Lane-hours of agent work | 19.4 | 5.2 | 14.2 |
+| Fresh input tokens | 33,735,168 | 11,482,034 | 22,253,134 |
+| Cache-read input tokens | 706,993,101 | 226,255,212 | 480,737,889 |
+| Prompt cache hit % | 95.4 | 95.2 | 95.6 |
+| Output tokens | 7,098,881 | 2,135,708 | 4,963,173 |
+| Thinking tokens | 3,744,016 | 1,050,039 | 2,693,977 |
+| Cost (USD) | 6.2073 | 2.0279 | 4.1794 |
+| Cost per lane (USD) | 0.0411 | 0.0369 | 0.0435 |
 
-Rooms: 28. Peak concurrent lanes [MEASURED from lane start/end]: 32.
+Rooms: 30. Peak concurrent lanes [MEASURED from lane start/end]: 32.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -45,41 +46,44 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | ops | 4 | 88.1 | 0.0468 |
 | plan | 12 | 92.6 | 0.3072 |
 | research | 14 | 94.6 | 0.5673 |
-| review | 16 | 94.6 | 0.597 |
+| review | 24 | 94.4 | 0.7832 |
 | test | 12 | 95.6 | 0.5657 |
+| ui | 5 | 95.5 | 0.4215 |
 
 ## By room (why and what for)
 
-| Room | Started (CET) | Stage | Lanes | Cache hit % | USD | Why |
-|---|---|---|---:|---:|---:|---|
-| mv0ri | Oct 25 21:12 | research | 8 | 94.1 | 0.2776 | Research the eight hard engineering areas (authority core, journal and replay, supervision, IPC, Electron security, wall UI, terminal, gates) before any code is written. |
-| mv0cf | Oct 25 21:15 | plan | 6 | 94.0 | 0.1626 | Audit the architecture norm section by section so every later writer inherits one consistent rule set. |
-| mv0rvb | Oct 25 21:21 | plan | 6 | 90.4 | 0.1446 | Stress-test the build plan before the event: critical path, wave parallelism, seat matrix, testing volume, risks and the demo plan. |
-| mv0pk1 | Oct 25 21:31 | context | 8 | 96.5 | 0.3376 | Write the context packs for the first eight W0 units (repo, kit, core, adapter, contracts, router): the best possible context for every code writer. |
-| mv0pk2 | Oct 25 21:31 | context | 8 | 95.6 | 0.2837 | Write the context packs for router index, CI, agents client/mvctl and the Electron shell units. |
-| mv0pk3 | Oct 25 21:31 | context | 8 | 96.0 | 0.435 | Write the context packs for the theme, core admission, supervisor, adapter and the W1 frames/wall/terminal/mvctl rooms. |
-| mv0api | Oct 25 22:11 | research | 6 | 95.1 | 0.2897 | Extract the exact API truth of every component MetaViewer drives (OpenSuperficies CLI, UI kit, Electron 44, wender/vision, xterm/PTY) from installed files, so no writer invents an API. |
-| mv0kit | Oct 25 22:13 | design | 2 | 91.6 | 0.0547 | Derive the MetaViewer theme tokens and the anchor/registry needs the UI kit must provide. |
-| mv0v011 | Oct 26 16:53 | docs | 3 | 90.6 | 0.0422 | Prepare the public 0.1.1 release docs: README, pre-existing declaration, public roadmap, changelog checks. |
-| mv0w0contracts2 | Oct 26 17:27 | build | 2 | 93.4 | 0.0515 | Author the MCP tool-call and tool-result contracts. |
-| mv0w0contractscopy | Oct 26 17:27 | build | 1 | 92.7 | 0.0204 | Assemble the contract lanes into one coherent contracts/v0.2 tree. |
-| mv0w0router | Oct 26 17:27 | build | 3 | 96.6 | 0.1486 | Build the repository router (kit, entry docs, index) so every AI reader finds the right file in one hop. |
-| mv0w0contracts1 | Oct 26 17:27 | build | 8 | 92.7 | 0.1548 | Author the v0.2 wire contracts in parallel, one JSON schema with valid and invalid examples per lane. |
-| mv0w0agents | Oct 26 17:39 | build | 2 | 97.1 | 0.127 | Build the Python agents client and the mvctl command line. |
-| mv0w0ci | Oct 26 17:39 | build | 2 | 96.7 | 0.1171 | Build the CI matrix and the secrets gate with negative controls. |
-| mv0w0shell | Oct 26 17:59 | build | 4 | 96.7 | 0.2416 | Build the Electron shell: main process, preload, app and theme. |
-| mv0w1mvctl | Oct 26 18:28 | build | 3 | 94.0 | 0.148 | Build the agent tools, the MCP server and observe for mvctl. |
-| mv0w1tests | Oct 26 18:28 | test | 4 | 95.1 | 0.1989 | Write integration, end-to-end, mutation and safety tests for W1. |
-| mv0w1wall | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
-| mv0w1frames | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
-| mv0w1term | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| mv0w1rv | Oct 26 18:44 | review | 8 | 94.3 | 0.2749 | Adversarial review of every W0 surface in parallel; findings were adjudicated by a judge and became the binding fix list. |
-| mv0w2pk1 | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
-| mv0w2pk2 | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
-| mv0w1fx | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
-| mv0cq | Oct 26 19:17 | ops | 4 | 88.1 | 0.0468 | Continuity quiz: four lanes played the orchestrator after a context reset and found eleven ambiguities in the hand-off, all fixed. |
-| mv0tp | Oct 26 20:05 | test | 8 | 95.8 | 0.3668 | Generate self-contained, paper-grounded testing prompts (verbatim excerpts from the software papers and OmniCodex) for the external web testers Jules and ChatGPT, one pair per code area, to test the current integration branch. |
-| mv0ta | Oct 26 21:24 | review | 8 | 94.9 | 0.322 | Verify and de-duplicate the 126 findings of external testing round 1 (Jules + ChatGPT) against the current code, rank them for G-W1 and the v0.2.0 release, select the Jules tests worth keeping, and turn the confirmed issues into disjoint Sol fix units. |
+| Room | Orchestrator | Started (CET) | Stage | Lanes | Cache hit % | USD | Why |
+|---|---|---|---|---:|---:|---:|---|
+| mv0ri | conductor | Oct 25 21:12 | research | 8 | 94.1 | 0.2776 | Research the eight hard engineering areas (authority core, journal and replay, supervision, IPC, Electron security, wall UI, terminal, gates) before any code is written. |
+| mv0cf | conductor | Oct 25 21:15 | plan | 6 | 94.0 | 0.1626 | Audit the architecture norm section by section so every later writer inherits one consistent rule set. |
+| mv0rvb | conductor | Oct 25 21:21 | plan | 6 | 90.4 | 0.1446 | Stress-test the build plan before the event: critical path, wave parallelism, seat matrix, testing volume, risks and the demo plan. |
+| mv0pk1 | conductor | Oct 25 21:31 | context | 8 | 96.5 | 0.3376 | Write the context packs for the first eight W0 units (repo, kit, core, adapter, contracts, router): the best possible context for every code writer. |
+| mv0pk2 | conductor | Oct 25 21:31 | context | 8 | 95.6 | 0.2837 | Write the context packs for router index, CI, agents client/mvctl and the Electron shell units. |
+| mv0pk3 | conductor | Oct 25 21:31 | context | 8 | 96.0 | 0.435 | Write the context packs for the theme, core admission, supervisor, adapter and the W1 frames/wall/terminal/mvctl rooms. |
+| mv0api | conductor | Oct 25 22:11 | research | 6 | 95.1 | 0.2897 | Extract the exact API truth of every component MetaViewer drives (OpenSuperficies CLI, UI kit, Electron 44, wender/vision, xterm/PTY) from installed files, so no writer invents an API. |
+| mv0kit | conductor | Oct 25 22:13 | design | 2 | 91.6 | 0.0547 | Derive the MetaViewer theme tokens and the anchor/registry needs the UI kit must provide. |
+| mv0v011 | conductor | Oct 26 16:53 | docs | 3 | 90.6 | 0.0422 | Prepare the public 0.1.1 release docs: README, pre-existing declaration, public roadmap, changelog checks. |
+| mv0w0contracts2 | conductor | Oct 26 17:27 | build | 2 | 93.4 | 0.0515 | Author the MCP tool-call and tool-result contracts. |
+| mv0w0contractscopy | conductor | Oct 26 17:27 | build | 1 | 92.7 | 0.0204 | Assemble the contract lanes into one coherent contracts/v0.2 tree. |
+| mv0w0router | conductor | Oct 26 17:27 | build | 3 | 96.6 | 0.1486 | Build the repository router (kit, entry docs, index) so every AI reader finds the right file in one hop. |
+| mv0w0contracts1 | conductor | Oct 26 17:27 | build | 8 | 92.7 | 0.1548 | Author the v0.2 wire contracts in parallel, one JSON schema with valid and invalid examples per lane. |
+| mv0w0agents | conductor | Oct 26 17:39 | build | 2 | 97.1 | 0.127 | Build the Python agents client and the mvctl command line. |
+| mv0w0ci | conductor | Oct 26 17:39 | build | 2 | 96.7 | 0.1171 | Build the CI matrix and the secrets gate with negative controls. |
+| mv0w0shell | conductor | Oct 26 17:59 | build | 4 | 96.7 | 0.2416 | Build the Electron shell: main process, preload, app and theme. |
+| mv0w1mvctl | conductor | Oct 26 18:28 | build | 3 | 94.0 | 0.148 | Build the agent tools, the MCP server and observe for mvctl. |
+| mv0w1tests | conductor | Oct 26 18:28 | test | 4 | 95.1 | 0.1989 | Write integration, end-to-end, mutation and safety tests for W1. |
+| mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
+| mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
+| mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
+| mv0w1rv | conductor | Oct 26 18:44 | review | 8 | 94.3 | 0.2749 | Adversarial review of every W0 surface in parallel; findings were adjudicated by a judge and became the binding fix list. |
+| mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
+| mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
+| mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
+| mv0cq | conductor | Oct 26 19:17 | ops | 4 | 88.1 | 0.0468 | Continuity quiz: four lanes played the orchestrator after a context reset and found eleven ambiguities in the hand-off, all fixed. |
+| mv0tp | conductor | Oct 26 20:05 | test | 8 | 95.8 | 0.3668 | Generate self-contained, paper-grounded testing prompts (verbatim excerpts from the software papers and OmniCodex) for the external web testers Jules and ChatGPT, one pair per code area, to test the current integration branch. |
+| mv0ta | conductor | Oct 26 21:24 | review | 8 | 94.9 | 0.322 | Verify and de-duplicate the 126 findings of external testing round 1 (Jules + ChatGPT) against the current code, rank them for G-W1 and the v0.2.0 release, select the Jules tests worth keeping, and turn the confirmed issues into disjoint Sol fix units. |
+| mv0av | conductor | Oct 26 22:10 | review | 8 | 93.5 | 0.1863 | Verify the 56 findings of the Gemini Argon cross-review of today's integrated Sol code against the current head, rank them and turn the confirmed ones into disjoint Sol fix units. |
+| mvui1 | UI orchestrator | Oct 26 22:12 | ui | 5 | 95.5 | 0.4215 | UI orchestrator room: Wall screens + tile states; New Capsule launcher / catalog; AI multislot + side terminal wiring; Recording, settings, nested mode; agent_lane snapshot + state fixtures |
 
 ## Every lane
 
@@ -223,6 +227,19 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0ta | T6 | Analysis T6 Contracts v0.2 cross-language | Oct 26 21:24 | yes | 63 | 96.1 | 0.037596 |
 | mv0ta | T7 | Analysis T7 CI and supply chain | Oct 26 21:24 | yes | 66 | 96.0 | 0.042541 |
 | mv0ta | T8 | Analysis T8 End-to-end scenario | Oct 26 21:24 | yes | 54 | 95.5 | 0.039981 |
+| mv0av | CORE | Verify Argon findings core | Oct 26 22:10 | yes | 33 | 92.8 | 0.025852 |
+| mv0av | ADAPTER | Verify Argon findings adapter | Oct 26 22:10 | yes | 26 | 91.8 | 0.016858 |
+| mv0av | AGENTS | Verify Argon findings agents | Oct 26 22:10 | yes | 36 | 94.9 | 0.018099 |
+| mv0av | CI | Verify Argon findings ci | Oct 26 22:10 | yes | 31 | 93.6 | 0.023692 |
+| mv0av | UI_PTY | Verify Argon findings ui_pty | Oct 26 22:10 | yes | 35 | 89.4 | 0.028726 |
+| mv0av | UI_FRAMES | Verify Argon findings ui_frames | Oct 26 22:10 | yes | 44 | 94.4 | 0.029635 |
+| mv0av | UI_SHELL | Verify Argon findings ui_shell | Oct 26 22:10 | yes | 30 | 92.5 | 0.019574 |
+| mv0av | UI_SURFACES | Verify Argon findings ui_surfaces | Oct 26 22:11 | yes | 45 | 95.9 | 0.023821 |
+| mvui1 | U1 | Wall screens + tile states | Oct 26 22:12 | yes | 97 | 96.6 | 0.083064 |
+| mvui1 | U2 | New Capsule launcher / catalog | Oct 26 22:12 | yes | 80 | 96.2 | 0.062871 |
+| mvui1 | U3 | AI multislot + side terminal wiring | Oct 26 22:12 | yes | 101 | 91.0 | 0.143107 |
+| mvui1 | U4 | Recording, settings, nested mode | Oct 26 22:13 | yes | 97 | 97.1 | 0.07956 |
+| mvui1 | U5 | agent_lane snapshot + state fixtures | Oct 26 22:13 | yes | 70 | 97.0 | 0.052854 |
 
 ## Method
 
