@@ -111,7 +111,7 @@ func testLiveCapsule(t *testing.T, kind, binary string) {
 	})
 	pub, e := NewPublisher(PublishConfig{RAMRoot: root, MaxFrameBytes: 16 << 20, MaxPixels: 1280 * 900, MaxSurfaces: 1})
 	if e != nil {
-		t.Fatal(e)
+		t.Fatalf("publisher allocation: %v", e)
 	}
 	t.Cleanup(func() {
 		if e := pub.Close(); e != nil {
@@ -122,6 +122,7 @@ func testLiveCapsule(t *testing.T, kind, binary string) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	t.Logf("native frame: generation=%s seq=%d size=%dx%d window=%+v path=%s", frame.Generation, frame.Seq, frame.Width, frame.Height, frame.Window, frame.Path)
 	ref, e := pub.Publish(id, binding, frame)
 	if e != nil {
 		t.Fatal(e)

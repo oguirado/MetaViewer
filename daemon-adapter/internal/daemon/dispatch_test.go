@@ -73,6 +73,10 @@ func lifecycleOracle(t *testing.T, broken bool) error {
 		return err
 	}
 	defer os.RemoveAll(root)
+	// Reproduce the real producer root and a CLI window smaller than the profile.
+	if err = os.Chmod(root, 0775); err != nil {
+		return err
+	}
 	source := filepath.Join(root, "demo-run/frames/w1")
 	if err = os.MkdirAll(source, 0700); err != nil {
 		return err
@@ -100,7 +104,7 @@ func lifecycleOracle(t *testing.T, broken bool) error {
 	if err != nil {
 		return err
 	}
-	manager, err := capsule.NewManager(capsule.Config{BinDir: bin, Profiles: map[string]capsule.Profile{"demo": {Kind: "browser", NativeKind: "browser", RAMRoot: root, Display: ":100", Width: 2, Height: 1}}, MaxSurfaces: 1, MaxOutputBytes: 8192, Timeout: time.Second, OriginNS: 100}, runner, func() uint64 { return 200 })
+	manager, err := capsule.NewManager(capsule.Config{BinDir: bin, Profiles: map[string]capsule.Profile{"demo": {Kind: "browser", NativeKind: "browser", RAMRoot: root, Display: ":100", Width: 3, Height: 2}}, MaxSurfaces: 1, MaxOutputBytes: 8192, Timeout: time.Second, OriginNS: 100}, runner, func() uint64 { return 200 })
 	if err != nil {
 		return err
 	}
@@ -203,7 +207,7 @@ func lifecycleOracle(t *testing.T, broken bool) error {
 			Params     any
 		}{"surface_request/v0.2", op, params})
 	}
-	if err = request("create", map[string]any{"kind": "browser", "profile_id": "demo", "geometry": map[string]int{"w": 2, "h": 1}}); err != nil {
+	if err = request("create", map[string]any{"kind": "browser", "profile_id": "demo", "geometry": map[string]int{"w": 3, "h": 2}}); err != nil {
 		return fmt.Errorf("dispatch create: %w", err)
 	}
 	raw, err := read()
@@ -238,7 +242,7 @@ func lifecycleOracle(t *testing.T, broken bool) error {
 		return err
 	}
 	sum := sha256.Sum256(pixels)
-	if !reflect.DeepEqual(pixels, []byte{255, 0, 0, 0, 255, 0}) || ref.SHA256 != hex.EncodeToString(sum[:]) || ref.SurfaceID != id || ref.Schema != "frame_ref/v0.2" || ref.Generation != 1 || ref.Tick != 1 || ref.TsNS != 100 {
+	if !reflect.DeepEqual(pixels, []byte{255, 0, 0, 0, 255, 0}) || ref.SHA256 != hex.EncodeToString(sum[:]) || ref.SurfaceID != id || ref.Schema != "frame_ref/v0.2" || ref.Generation != 1 || ref.Tick != 1 || ref.TsNS != 100 || ref.Width != 2 || ref.Height != 1 {
 		return errors.New("published frame identity/pixels mismatch")
 	}
 	if err = request("input", map[string]any{"surface_id": id, "proposal_id": "proposal-1", "action": map[string]any{"type": "click", "x": 1, "y": 0, "button": "left"}}); err != nil {

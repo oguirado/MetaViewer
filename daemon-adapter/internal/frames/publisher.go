@@ -3,6 +3,9 @@ package frames
 // [TARGET, unit decision] Each immutable raw allocation is a publication generation;
 // native sequence remains tick. Retain the latest two publications per surface.
 // Only adapter-created raw files are reclaimed; native PNGs remain producer-owned.
+// [TARGET, unit decision] The configured producer root may be group-writable
+// (OpenSuperficies uses 0775); world writes are refused. Output stays 0700
+// and source files retain owner, mode, no-follow, immutability and hash checks.
 import (
 	"bytes"
 	"crypto/rand"
@@ -47,7 +50,7 @@ func NewPublisher(cfg PublishConfig) (*Publisher, error) {
 	if cfg.MaxFrameBytes < 1 || cfg.MaxFrameBytes > 64<<20 || cfg.MaxPixels < 1 || cfg.MaxPixels > 64<<20 || cfg.MaxSurfaces < 1 || filepath.Clean(cfg.RAMRoot) != cfg.RAMRoot || !strings.HasPrefix(cfg.RAMRoot, "/dev/shm/") {
 		return nil, frameError()
 	}
-	root, e := openRAMRoot(cfg.RAMRoot)
+	root, e := openRAMRoot(cfg.RAMRoot, false)
 	if e != nil {
 		return nil, e
 	}
@@ -56,7 +59,7 @@ func NewPublisher(cfg PublishConfig) (*Publisher, error) {
 		_ = root.Close()
 		return nil, e
 	}
-	output, e := openRAMRoot(path)
+	output, e := openRAMRoot(path, true)
 	if e != nil {
 		_ = root.Close()
 		_ = os.Remove(path)
@@ -64,7 +67,7 @@ func NewPublisher(cfg PublishConfig) (*Publisher, error) {
 	}
 	return &Publisher{cfg: cfg, root: root, output: output, outputPath: path, surfaces: make(map[string]publication)}, nil
 }
-func openRAMRoot(path string) (*os.File, error) {
+func openRAMRoot(path string, private bool) (*os.File, error) {
 	fd, e := syscall.Open("/", syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
 	if e != nil {
 		return nil, e
@@ -84,7 +87,7 @@ func openRAMRoot(path string) (*os.File, error) {
 	file := os.NewFile(uintptr(fd), path)
 	var st syscall.Stat_t
 	var fs syscall.Statfs_t
-	if syscall.Fstat(fd, &st) != nil || syscall.Fstatfs(fd, &fs) != nil || fs.Type != 0x01021994 || st.Uid != uint32(os.Geteuid()) || st.Mode&0777 != 0700 {
+	if syscall.Fstat(fd, &st) != nil || syscall.Fstatfs(fd, &fs) != nil || fs.Type != 0x01021994 || st.Uid != uint32(os.Geteuid()) || (st.Mode&0002 != 0 || (private && st.Mode&0777 != 0700)) {
 		_ = file.Close()
 		return nil, frameError()
 	}
@@ -141,7 +144,7 @@ func (p *Publisher) Publish(id string, b capsule.Binding, f capsule.NativeFrame)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	old, exists := p.surfaces[id]
-	if p.closed || id == "" || id != b.Surface.SurfaceID || b.Container != f.Generation || f.Seq == 0 || (exists && (old.native != f.Generation || f.Seq <= old.seq)) || (!exists && len(p.surfaces) >= p.cfg.MaxSurfaces) || f.Width < 1 || f.Height < 1 || f.Width != b.Surface.Geometry.W || f.Height != b.Surface.Geometry.H || uint64(f.Width) > p.cfg.MaxPixels/uint64(f.Height) || uint64(f.Width)*uint64(f.Height) > uint64(p.cfg.MaxFrameBytes)/3 || (b.Window != "" && (f.Window == nil || f.Window.ID != b.Window)) {
+	if p.closed || id == "" || id != b.Surface.SurfaceID || b.Container != f.Generation || f.Seq == 0 || (exists && (old.native != f.Generation || f.Seq <= old.seq)) || (!exists && len(p.surfaces) >= p.cfg.MaxSurfaces) || f.Width < 1 || f.Height < 1 || f.Width > b.Surface.Geometry.W || f.Height > b.Surface.Geometry.H || uint64(f.Width) > p.cfg.MaxPixels/uint64(f.Height) || uint64(f.Width)*uint64(f.Height) > uint64(p.cfg.MaxFrameBytes)/3 || (b.Window != "" && (f.Window == nil || f.Window.ID != b.Window || f.Window.W != f.Width || f.Window.H != f.Height)) {
 		return Ref{}, frameError()
 	}
 	encoded, e := p.readSource(b.FramesRoot, f.Path)

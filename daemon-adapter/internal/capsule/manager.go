@@ -4,6 +4,8 @@ package capsule
 // geometry, display and RAM allocation. The caller supplies hello's monotonic origin.
 // Local observation IDs are opaque and never reused within this manager's session.
 // Uncertain native effects quarantine the profile until explicit reconciliation.
+// [TARGET, unit decision] Profile geometry is a per-axis ceiling for native
+// windows and captures; CLI window geometry may be smaller than requested.
 import (
 	"bytes"
 	"context"
@@ -284,7 +286,7 @@ func (m *Manager) create(ctx context.Context, r Request, version string) ([]json
 		if e := cli.ParseLine(out, m.cfg.MaxOutputBytes, &c); e != nil {
 			return nil, e
 		}
-		if !identityContainer.MatchString(c.Container) || !runID.MatchString(c.RunID) || len(c.Windows) != 1 || c.Windows[0].ID != "w1" || c.Windows[0].W != p.Width || c.Windows[0].H != p.Height || c.Windows[0].X < 0 || c.Windows[0].Y < 0 || (c.Kind != p.NativeKind && !(p.NativeKind == "browser" && c.Kind == "")) {
+		if !identityContainer.MatchString(c.Container) || !runID.MatchString(c.RunID) || len(c.Windows) != 1 || c.Windows[0].ID != "w1" || c.Windows[0].W < 1 || c.Windows[0].H < 1 || c.Windows[0].W > p.Width || c.Windows[0].H > p.Height || c.Windows[0].X < 0 || c.Windows[0].Y < 0 || (c.Kind != p.NativeKind && !(p.NativeKind == "browser" && c.Kind == "")) {
 			return nil, fault("malformed_cli", "invalid identity readiness or binding")
 		}
 		b.Container = c.Container
@@ -355,7 +357,7 @@ func (m *Manager) Capture(ctx context.Context, id string) (Binding, NativeFrame,
 	if e = cli.ParseLine(out, m.cfg.MaxOutputBytes, &f); e != nil {
 		return b, f, e
 	}
-	if f.Seq == 0 || f.Generation != b.Container || f.Width != b.Surface.Geometry.W || f.Height != b.Surface.Geometry.H || !digest.MatchString(f.SHA256RGB24) || !under(b.FramesRoot, f.Path) || f.CaptureMonoNS < m.cfg.OriginNS || f.CaptureMonoNS < before || f.CaptureMonoNS > after || after < before || (b.Window != "" && (f.Window == nil || f.Window.ID != b.Window || f.Window.W != f.Width || f.Window.H != f.Height)) || (b.Window == "" && f.Window != nil) {
+	if f.Seq == 0 || f.Generation != b.Container || f.Width < 1 || f.Height < 1 || f.Width > b.Surface.Geometry.W || f.Height > b.Surface.Geometry.H || !digest.MatchString(f.SHA256RGB24) || !under(b.FramesRoot, f.Path) || f.CaptureMonoNS < m.cfg.OriginNS || f.CaptureMonoNS < before || f.CaptureMonoNS > after || after < before || (b.Window != "" && (f.Window == nil || f.Window.ID != b.Window || f.Window.W != f.Width || f.Window.H != f.Height)) || (b.Window == "" && f.Window != nil) {
 		return b, f, fault("frame", "native frame identity, time or allocation mismatch")
 	}
 	f.TSNS = f.CaptureMonoNS - m.cfg.OriginNS

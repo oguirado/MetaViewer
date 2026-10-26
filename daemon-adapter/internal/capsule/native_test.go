@@ -255,3 +255,45 @@ func TestCorrelatedError(t *testing.T) {
 		t.Fatal("malformed native output did not refuse")
 	}
 }
+
+func TestRealFrameReplyGeometry(t *testing.T) {
+	r := &scriptRunner{output: []byte(`{"container":"srf-id-demo","run_id":"demo-run","windows":[{"id":"w1","x":0,"y":0,"w":1280,"h":900,"title":"","url":""}]}`)}
+	m := testManager(t, r)
+	p := m.cfg.Profiles["demo"]
+	p.Width, p.Height = 1280, 900
+	m.cfg.Profiles["demo"] = p
+	if _, e := m.Handle(context.Background(), req("create", `{"kind":"browser","profile_id":"demo","geometry":{"w":1280,"h":900}}`)); e != nil {
+		t.Fatal(e)
+	}
+	var id string
+	for key := range m.bindings {
+		id = key
+	}
+	// Real CLI shape: PNG path, RGB24 hash, container generation and resized window.
+	const reply = `{"path":"/dev/shm/demo-run/frames/w1/f000004.png","seq":4,"sha256_rgb24":"71b4000000000000000000000000000000000000000000000000000000000000","width":1280,"height":720,"capture_mono_ns":200,"generation":"srf-id-demo","window":{"id":"w1","x":0,"y":0,"w":1280,"h":720,"title":"MetaViewer","url":""}}`
+	r.output = []byte(reply)
+	if _, f, e := m.Capture(context.Background(), id); e != nil || f.Height != 720 {
+		t.Fatalf("documented reply refused: %v", e)
+	}
+	var f NativeFrame
+	if e := json.Unmarshal([]byte(reply), &f); e != nil {
+		t.Fatal(e)
+	}
+	for _, mutate := range []func(*NativeFrame){
+		func(f *NativeFrame) { f.Generation = "srf-id-other" },
+		func(f *NativeFrame) { f.Width = 1281; f.Window.W = 1281 },
+		func(f *NativeFrame) { f.Height = 901; f.Window.H = 901 },
+		func(f *NativeFrame) { f.CaptureMonoNS = 199 },
+		func(f *NativeFrame) { f.Path = "/dev/shm/other/frames/w1/f000004.png" },
+		func(f *NativeFrame) { f.Window.ID = "w2" },
+	} {
+		bad := f
+		window := *f.Window
+		bad.Window = &window
+		mutate(&bad)
+		r.output, _ = json.Marshal(bad)
+		if _, _, e := m.Capture(context.Background(), id); e == nil {
+			t.Fatal("invalid frame accepted")
+		}
+	}
+}

@@ -138,3 +138,41 @@ func TestLease(t *testing.T) {
 		t.Fatal("native source removed")
 	}
 }
+
+func TestProducerRootAndNativeGeometry(t *testing.T) {
+	root, b, f := ramFixture(t)
+	if e := os.Chmod(root, 0775); e != nil {
+		t.Fatal(e)
+	}
+	b.Surface.Geometry = capsule.Geometry{W: 3, H: 2}
+	p := publisher(t, root)
+	st, e := os.Stat(p.outputPath)
+	if e != nil || st.Mode().Perm() != 0700 {
+		t.Fatalf("publication not private: %v", e)
+	}
+	ref, e := p.Publish("a", b, f)
+	if e != nil || ref.Width != 2 || ref.Height != 1 {
+		t.Fatalf("native geometry refused: %v", e)
+	}
+	for _, mutate := range []func(*capsule.NativeFrame){
+		func(f *capsule.NativeFrame) { f.Generation = "srf-id-foreign" },
+		func(f *capsule.NativeFrame) { f.Width = 4 },
+		func(f *capsule.NativeFrame) { f.Height = 3 },
+		func(f *capsule.NativeFrame) { f.Window = &capsule.Window{ID: "w1", W: 1, H: 1} },
+		func(f *capsule.NativeFrame) { f.SHA256RGB24 = fmt.Sprintf("%064x", 0) },
+	} {
+		bad := f
+		bad.Seq++
+		mutate(&bad)
+		if _, e := p.Publish("a", b, bad); e == nil {
+			t.Fatal("invalid native frame accepted")
+		}
+	}
+	if e := os.Chmod(root, 0777); e != nil {
+		t.Fatal(e)
+	}
+	if other, e := NewPublisher(p.cfg); e == nil {
+		_ = other.Close()
+		t.Fatal("world-writable root accepted")
+	}
+}
