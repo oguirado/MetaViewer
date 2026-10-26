@@ -1157,8 +1157,19 @@ jobs:
           set -euo pipefail
           test -d kit-checkout
           KIT_REPO="$(python3 -c 'import json; print(json.load(open("ui/kit.lock.json"))["repo"])')"
-          git -C kit-checkout remote set-url origin "$KIT_REPO"
+          KIT_ORIGIN="$(git -C kit-checkout remote get-url origin)"
+          # Canonicalize only the checkout's own URL, never a value from the lock.
+          KIT_CANONICAL="${KIT_ORIGIN%.git}.git"
+          if [ "$KIT_REPO" != "$KIT_CANONICAL" ]; then
+            echo "Kit repository mismatch: checkout origin differs from lock" >&2
+            exit 1
+          fi
+          git -C kit-checkout remote set-url origin "$KIT_CANONICAL"
           echo "MV_KIT_CHECKOUT=${GITHUB_WORKSPACE}/kit-checkout" >> "$GITHUB_ENV"
+      - name: Test CI admission regressions
+        run: |
+          node --test tests/ci/*.test.cjs
+          python3 -m unittest discover -s tests/ci -p 'test_*.py' -v
       - name: Run JS gates
         env:
           JOB_ID: js
@@ -1392,7 +1403,14 @@ jobs:
           set -euo pipefail
           test -d kit-checkout
           KIT_REPO="$(python3 -c 'import json; print(json.load(open("ui/kit.lock.json"))["repo"])')"
-          git -C kit-checkout remote set-url origin "$KIT_REPO"
+          KIT_ORIGIN="$(git -C kit-checkout remote get-url origin)"
+          # Canonicalize only the checkout's own URL, never a value from the lock.
+          KIT_CANONICAL="${KIT_ORIGIN%.git}.git"
+          if [ "$KIT_REPO" != "$KIT_CANONICAL" ]; then
+            echo "Kit repository mismatch: checkout origin differs from lock" >&2
+            exit 1
+          fi
+          git -C kit-checkout remote set-url origin "$KIT_CANONICAL"
           echo "MV_KIT_CHECKOUT=${GITHUB_WORKSPACE}/kit-checkout" >> "$GITHUB_ENV"
       # [TARGET, unit decision] These tests compile Rust drivers and validate
       # frozen offline resolution; provision their toolchain/cache explicitly.

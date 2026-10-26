@@ -61,7 +61,10 @@ test('negative controls reject missing binary, nonexecutable binary and wrong ve
     const { ui, binary } = fixture(t);
     if (mode === 'missing') fs.unlinkSync(binary);
     if (mode === 'nonexecutable') fs.chmodSync(binary, 0o644);
-    assert.throws(() => install(ui, () => 'v44.9.1\n'));
+    const expected = mode === 'missing' ? { code: 'ENOENT' }
+      : mode === 'nonexecutable' ? { code: 'EACCES' }
+      : /installed Electron version differs/;
+    assert.throws(() => install(ui, () => mode === 'version' ? 'v44.9.1\n' : 'v44.9.2\n'), expected);
   }
 });
 
