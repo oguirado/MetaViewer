@@ -1,0 +1,617 @@
+{
+  "$defs": {
+    "b64": {
+      "description": "Base64 of one PTY byte chunk; encoded string at most 65536 ASCII bytes, decoded chunk at most 49152 bytes.",
+      "maxLength": 65536,
+      "minLength": 0,
+      "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
+      "type": "string"
+    },
+    "id": {
+      "description": "Closed identifier string.",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "type": "string"
+    },
+    "nullable_id": {
+      "description": "Identifier string or null when no session exists.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/id"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "p": {
+      "description": "Positive safe exact integer.",
+      "maximum": 9007199254740991,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "text": {
+      "description": "Bounded human-readable text; never carries credentials.",
+      "maxLength": 4096,
+      "minLength": 0,
+      "type": "string"
+    },
+    "u": {
+      "description": "Nonnegative safe exact integer.",
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "$id": "https://metaviewer.local/contracts/v0.2/terminal_session.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Login-shell terminal session protocol: spawn by provider id with server-owned argv, resize, sequenced base64 byte stream, cumulative ACK and resync.",
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "description": "Request a login-shell terminal for a provider id; the server builds argv.",
+      "properties": {
+        "op": {
+          "const": "spawn"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "cols": {
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "provider_id": {
+              "$ref": "#/$defs/id"
+            },
+            "rows": {
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "surface_id": {
+              "$ref": "#/$defs/id"
+            }
+          },
+          "required": [
+            "surface_id",
+            "provider_id",
+            "cols",
+            "rows"
+          ],
+          "type": "object",
+          "maxProperties": 256
+        },
+        "request_id": {
+          "$ref": "#/$defs/id"
+        },
+        "schema": {
+          "const": "terminal_session/v0.2"
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "type": "object",
+      "maxProperties": 256
+    },
+    {
+      "additionalProperties": false,
+      "description": "Broker announces a started terminal session.",
+      "properties": {
+        "op": {
+          "const": "started"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "cols": {
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "provider_id": {
+              "$ref": "#/$defs/id"
+            },
+            "rows": {
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "session_id": {
+              "$ref": "#/$defs/id"
+            },
+            "surface_id": {
+              "$ref": "#/$defs/id"
+            },
+            "terminal_generation": {
+              "$ref": "#/$defs/p"
+            }
+          },
+          "required": [
+            "session_id",
+            "surface_id",
+            "provider_id",
+            "terminal_generation",
+            "cols",
+            "rows"
+          ],
+          "type": "object",
+          "maxProperties": 256
+        },
+        "request_id": {
+          "$ref": "#/$defs/id"
+        },
+        "schema": {
+          "const": "terminal_session/v0.2"
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "type": "object",
+      "maxProperties": 256
+    },
+    {
+      "additionalProperties": false,
+      "description": "Resize a live terminal session.",
+      "properties": {
+        "op": {
+          "const": "resize"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "cols": {
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "rows": {
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "session_id": {
+              "$ref": "#/$defs/id"
+            },
+            "terminal_generation": {
+              "$ref": "#/$defs/p"
+            }
+          },
+          "required": [
+            "session_id",
+            "terminal_generation",
+            "cols",
+            "rows"
+          ],
+          "type": "object",
+          "maxProperties": 256
+        },
+        "request_id": {
+          "$ref": "#/$defs/id"
+        },
+        "schema": {
+          "const": "terminal_session/v0.2"
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "type": "object",
+      "maxProperties": 256
+    },
+    {
+      "additionalProperties": false,
+      "description": "Sequenced terminal output chunk; never truncated.",
+      "properties": {
+        "op": {
+          "const": "data"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "b64": {
+              "$ref": "#/$defs/b64"
+            },
+            "byte_count": {
+              "maximum": 49152,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "gap": {
+              "const": false
+            },
+            "seq": {
+              "$ref": "#/$defs/p"
+            },
+            "session_id": {
+              "$ref": "#/$defs/id"
+            },
+            "terminal_generation": {
+              "$ref": "#/$defs/p"
+            },
+            "truncated": {
+              "const": false
+            }
+          },
+          "required": [
+            "session_id",
+            "terminal_generation",
+            "seq",
+            "b64",
+            "byte_count",
+            "truncated",
+            "gap"
+          ],
+          "type": "object",
+          "maxProperties": 256
+        },
+        "request_id": {
+          "$ref": "#/$defs/id"
+        },
+        "schema": {
+          "const": "terminal_session/v0.2"
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "type": "object",
+      "maxProperties": 256
+    },
+    {
+      "additionalProperties": false,
+      "description": "Terminal input chunk with its own input sequence.",
+      "properties": {
+        "op": {
+          "const": "write"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "b64": {
+              "$ref": "#/$defs/b64"
+            },
+            "byte_count": {
+              "maximum": 49152,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "input_seq": {
+              "$ref": "#/$defs/p"
+            },
+            "session_id": {
+              "$ref": "#/$defs/id"
+            },
+            "terminal_generation": {
+              "$ref": "#/$defs/p"
+            }
+          },
+          "required": [
+            "session_id",
+            "terminal_generation",
+            "input_seq",
+            "b64",
+            "byte_count"
+          ],
+          "type": "object",
+          "maxProperties": 256
+        },
+        "request_id": {
+          "$ref": "#/$defs/id"
+        },
+        "schema": {
+          "const": "terminal_session/v0.2"
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "type": "object",
+      "maxProperties": 256
+    },
+    {
+      "additionalProperties": false,
+      "description": "Cumulative ACK of contiguous output chunks and decoded bytes.",
+      "properties": {
+        "op": {
+          "const": "ack"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "ack_bytes": {
+              "$ref": "#/$defs/u"
+            },
+            "ack_seq": {
+              "$ref": "#/$defs/u"
+            },
+            "session_id": {
+              "$ref": "#/$defs/id"
+            },
+            "terminal_generation": {
+              "$ref": "#/$defs/p"
+            }
+          },
+          "required": [
+            "session_id",
+            "terminal_generation",
+            "ack_seq",
+            "ack_bytes"
+          ],
+          "type": "object",
+          "maxProperties": 256
+        },
+        "request_id": {
+          "$ref": "#/$defs/id"
+        },
+        "schema": {
+          "const": "terminal_session/v0.2"
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "type": "object",
+      "maxProperties": 256
+    },
+    {
+      "additionalProperties": false,
+      "description": "Request output replay from a sequence number.",
+      "properties": {
+        "op": {
+          "const": "resync"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "from_seq": {
+              "$ref": "#/$defs/p"
+            },
+            "session_id": {
+              "$ref": "#/$defs/id"
+            },
+            "terminal_generation": {
+              "$ref": "#/$defs/p"
+            }
+          },
+          "required": [
+            "session_id",
+            "terminal_generation",
+            "from_seq"
+          ],
+          "type": "object",
+          "maxProperties": 256
+        },
+        "request_id": {
+          "$ref": "#/$defs/id"
+        },
+        "schema": {
+          "const": "terminal_session/v0.2"
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "type": "object",
+      "maxProperties": 256
+    },
+    {
+      "additionalProperties": false,
+      "description": "Reattach to a live session; never spawns a process.",
+      "properties": {
+        "op": {
+          "const": "attach"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "ack_bytes": {
+              "$ref": "#/$defs/u"
+            },
+            "ack_seq": {
+              "$ref": "#/$defs/u"
+            },
+            "session_id": {
+              "$ref": "#/$defs/id"
+            },
+            "terminal_generation": {
+              "$ref": "#/$defs/p"
+            }
+          },
+          "required": [
+            "session_id",
+            "terminal_generation",
+            "ack_seq",
+            "ack_bytes"
+          ],
+          "type": "object",
+          "maxProperties": 256
+        },
+        "request_id": {
+          "$ref": "#/$defs/id"
+        },
+        "schema": {
+          "const": "terminal_session/v0.2"
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "type": "object",
+      "maxProperties": 256
+    },
+    {
+      "additionalProperties": false,
+      "description": "Close a terminal session.",
+      "properties": {
+        "op": {
+          "const": "close"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "session_id": {
+              "$ref": "#/$defs/id"
+            },
+            "terminal_generation": {
+              "$ref": "#/$defs/p"
+            }
+          },
+          "required": [
+            "session_id",
+            "terminal_generation"
+          ],
+          "type": "object",
+          "maxProperties": 256
+        },
+        "request_id": {
+          "$ref": "#/$defs/id"
+        },
+        "schema": {
+          "const": "terminal_session/v0.2"
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "type": "object",
+      "maxProperties": 256
+    },
+    {
+      "additionalProperties": false,
+      "description": "Broker reports terminal process exit.",
+      "properties": {
+        "op": {
+          "const": "exit"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "exit_code": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "session_id": {
+              "$ref": "#/$defs/id"
+            },
+            "signal": {
+              "$ref": "#/$defs/nullable_id"
+            },
+            "terminal_generation": {
+              "$ref": "#/$defs/p"
+            }
+          },
+          "required": [
+            "session_id",
+            "terminal_generation",
+            "exit_code",
+            "signal"
+          ],
+          "type": "object",
+          "maxProperties": 256
+        },
+        "request_id": {
+          "$ref": "#/$defs/id"
+        },
+        "schema": {
+          "const": "terminal_session/v0.2"
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "type": "object",
+      "maxProperties": 256
+    },
+    {
+      "additionalProperties": false,
+      "description": "Broker reports a terminal session failure.",
+      "properties": {
+        "op": {
+          "const": "error"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "enum": [
+                "UNKNOWN_PROVIDER",
+                "UNKNOWN_SESSION",
+                "STALE_GENERATION",
+                "READ_ONLY",
+                "RESYNC_UNAVAILABLE",
+                "BACKPRESSURE",
+                "POLICY"
+              ],
+              "type": "string",
+              "maxLength": 65536
+            },
+            "detail": {
+              "$ref": "#/$defs/text"
+            },
+            "session_id": {
+              "$ref": "#/$defs/nullable_id"
+            }
+          },
+          "required": [
+            "session_id",
+            "code",
+            "detail"
+          ],
+          "type": "object",
+          "maxProperties": 256
+        },
+        "request_id": {
+          "$ref": "#/$defs/id"
+        },
+        "schema": {
+          "const": "terminal_session/v0.2"
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "type": "object",
+      "maxProperties": 256
+    }
+  ],
+  "title": "Terminal Session"
+}

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Fail-closed validator for the documented contract schema subset, not full JSON Schema."""
 import json
+import math
 from pathlib import Path
 import re
 import sys
@@ -8,14 +9,47 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 DRAFT = 'https://json-schema.org/draft/2020-12/schema'
 BASE = 'https://metaviewer.local/contracts/v0.1/'
+SUPPORTED_VERSIONS = ('v0.1', 'v0.2')
 KEYWORDS = {'$schema', '$id', 'title', 'description', '$defs', '$ref', 'type',
             'properties', 'required', 'additionalProperties', 'enum', 'const',
             'oneOf', 'items', 'minItems', 'minimum', 'maximum', 'minLength',
-            'maxLength', 'pattern'}
+            'maxLength', 'maxItems', 'maxProperties', 'pattern'}
 TYPES = {'object', 'array', 'string', 'integer', 'number', 'boolean', 'null'}
 
 class ValidationError(ValueError):
     pass
+
+def _finite(value, depth=0):
+    if depth > 100:
+        raise ValidationError('JSON nesting limit')
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValidationError('nonfinite number')
+    if isinstance(value, dict):
+        for child in value.values():
+            _finite(child, depth + 1)
+    elif isinstance(value, list):
+        for child in value:
+            _finite(child, depth + 1)
+
+
+def loads_strict(raw):
+    def pairs(entries):
+        result = {}
+        for key, value in entries:
+            if key in result:
+                raise ValidationError('duplicate JSON key: ' + key)
+            result[key] = value
+        return result
+
+    def constant(value):
+        raise ValidationError('invalid JSON constant: ' + value)
+
+    try:
+        value = json.loads(raw, object_pairs_hook=pairs, parse_constant=constant)
+    except (ValueError, RecursionError) as exc:
+        raise ValidationError(str(exc)) from exc
+    _finite(value)
+    return value
 
 class Validator:
     def __init__(self, directory):
@@ -23,14 +57,22 @@ class Validator:
         self.cache = {}
 
     def load(self, filename):
+        if (not isinstance(filename, str) or not filename.endswith('.schema.json')
+                or '/' in filename or '\\' in filename or '..' in filename):
+            raise ValidationError('reference must name a sibling schema')
         path = (self.directory / filename).resolve()
         if path.parent != self.directory or not path.name.endswith('.schema.json'):
             raise ValidationError('reference must name a sibling schema')
         if path not in self.cache:
-            self.cache[path] = json.loads(path.read_text())
+            schema = loads_strict(path.read_text())
+            if not isinstance(schema, dict):
+                raise ValidationError('schema must be an object')
+            self.cache[path] = schema
         return self.cache[path]
 
     def resolve(self, ref, root):
+        if not isinstance(ref, str) or not ref:
+            raise ValidationError('reference must be a nonempty string')
         filename, separator, fragment = ref.partition('#')
         target = self.load(filename) if filename else root
         if separator:
@@ -44,29 +86,48 @@ class Validator:
         return target, self.load(filename) if filename else root
 
     def audit(self, schema, root=None):
-        root = schema if root is None else root
+        _finite(schema)
+        self._audit(schema, schema if root is None else root, set(), 0)
+
+    def _audit(self, schema, root, active, depth):
+        if depth > 100 or id(schema) in active:
+            raise ValidationError('cyclic schema or schema nesting limit')
         if not isinstance(schema, dict) or set(schema) - KEYWORDS:
             raise ValidationError('bad schema or unsupported keyword')
+        active = active | {id(schema)}
+        def child(value, child_root=root):
+            self._audit(value, child_root, active, depth + 1)
+
         typ = schema.get('type')
-        if typ is not None and (not isinstance(typ, str) or typ not in TYPES):
+        if 'type' in schema and (not isinstance(typ, str) or typ not in TYPES):
             raise ValidationError('unsupported schema type')
-        if typ == 'object' or 'properties' in schema:
+        for key in ('$schema', '$id', 'title', 'description'):
+            if key in schema and not isinstance(schema[key], str):
+                raise ValidationError(key + ' must be a string')
+        if 'additionalProperties' in schema and schema['additionalProperties'] is not False:
+            raise ValidationError('additionalProperties must be false')
+        if typ == 'object' or 'properties' in schema or 'required' in schema or 'additionalProperties' in schema:
             if schema.get('additionalProperties') is not False:
                 raise ValidationError('every object schema must set additionalProperties false')
-            props = schema.get('properties', {})
+            props = schema.get('properties')
             if not isinstance(props, dict):
                 raise ValidationError('properties must be an object')
             required = schema.get('required', [])
-            if not isinstance(required, list) or any(not isinstance(x, str) or x not in props for x in required):
-                raise ValidationError('required must name declared properties')
-            for child in props.values():
-                self.audit(child, root)
+            if (not isinstance(required, list)
+                    or any(not isinstance(x, str) or x not in props for x in required)
+                    or len(set(required)) != len(required)):
+                raise ValidationError('required must name unique declared properties')
+            for value in props.values():
+                child(value)
         for key in ('minimum', 'maximum'):
-            if key in schema and (type(schema[key]) not in (int, float)):
+            if key in schema and type(schema[key]) not in (int, float):
                 raise ValidationError(key + ' must be numeric')
-        for key in ('minLength', 'maxLength', 'minItems'):
+        for key in ('minLength', 'maxLength', 'minItems', 'maxItems', 'maxProperties'):
             if key in schema and (type(schema[key]) is not int or schema[key] < 0):
                 raise ValidationError(key + ' must be a nonnegative integer')
+        for low, high in (('minimum', 'maximum'), ('minLength', 'maxLength'), ('minItems', 'maxItems')):
+            if low in schema and high in schema and schema[low] > schema[high]:
+                raise ValidationError('inverted bounds')
         if 'pattern' in schema:
             try:
                 re.compile(schema['pattern'])
@@ -75,18 +136,24 @@ class Validator:
         if 'enum' in schema and (not isinstance(schema['enum'], list) or not schema['enum']):
             raise ValidationError('enum must be a nonempty array')
         if '$ref' in schema:
-            self.resolve(schema['$ref'], root)
-        for child in schema.get('$defs', {}).values():
-            self.audit(child, root)
+            target, target_root = self.resolve(schema['$ref'], root)
+            child(target, target_root)
+        if '$defs' in schema:
+            if not isinstance(schema['$defs'], dict):
+                raise ValidationError('$defs must be an object')
+            for value in schema['$defs'].values():
+                child(value)
         if 'oneOf' in schema:
             if not isinstance(schema['oneOf'], list) or not schema['oneOf']:
                 raise ValidationError('oneOf must be a nonempty array')
-            for child in schema['oneOf']:
-                self.audit(child, root)
+            for value in schema['oneOf']:
+                child(value)
         if 'items' in schema:
-            self.audit(schema['items'], root)
+            child(schema['items'])
 
     def validate(self, value, schema, root=None, path='$', depth=0):
+        if depth == 0:
+            _finite(value)
         if depth > 100:
             raise ValidationError(path + ': reference nesting limit')
         root = schema if root is None else root
@@ -126,6 +193,8 @@ class Validator:
             if count != 1:
                 fail('oneOf must match exactly one branch')
         if isinstance(value, dict):
+            if len(value) > schema.get('maxProperties', float('inf')):
+                fail('too many properties')
             for key in schema.get('required', []):
                 if key not in value:
                     fail('missing ' + key)
@@ -137,6 +206,8 @@ class Validator:
         if isinstance(value, list):
             if len(value) < schema.get('minItems', 0):
                 fail('too few items')
+            if len(value) > schema.get('maxItems', float('inf')):
+                fail('too many items')
             if 'items' in schema:
                 for index, item in enumerate(value):
                     self.validate(item, schema['items'], root, f'{path}[{index}]', depth + 1)
@@ -149,41 +220,59 @@ class Validator:
             if value < schema.get('minimum', -float('inf')) or value > schema.get('maximum', float('inf')):
                 fail('number outside bounds')
 
-def check_repository(root=ROOT):
-    directory = root / 'contracts/v0.1'
-    validator = Validator(directory)
+def check_repository(root=ROOT, *, versions=SUPPORTED_VERSIONS):
+    if (not isinstance(versions, tuple) or not versions
+            or any(not isinstance(v, str) or v not in SUPPORTED_VERSIONS for v in versions)
+            or len(set(versions)) != len(versions)):
+        return ['unsupported, empty or duplicate version selection']
+    root = Path(root)
     errors = []
-    schemas = sorted(directory.glob('*.schema.json'))
-    if not schemas:
-        return ['no schemas found']
-    known_examples = set()
-    for path in schemas:
-        name = path.name.removesuffix('.schema.json')
-        try:
-            schema = validator.load(path.name)
-            if schema.get('$id') != BASE + path.name or schema.get('$schema') != DRAFT or not schema.get('title'):
-                raise ValidationError('schema identity, draft or title invalid')
-            validator.audit(schema)
-            groups = [list((root / 'contracts/examples').glob(name + '.valid.json')),
-                      list((root / 'contracts/examples').glob(name + '.invalid.*.json'))]
+    for version in versions:
+        directory = root / 'contracts' / version
+        examples = root / 'contracts/examples'
+        if version != 'v0.1':
+            examples /= version
+        validator = Validator(directory)
+        schemas = sorted(directory.glob('*.schema.json'))
+        if not schemas:
+            errors.append(f'{version}: {directory}: no schemas found')
+        if not examples.is_dir():
+            errors.append(f'{version}: {examples}: example directory missing')
+        known_examples = set()
+        for path in schemas:
+            name = path.name.removesuffix('.schema.json')
+            groups = [sorted(examples.glob(name + '.valid.json')),
+                      sorted(examples.glob(name + '.invalid.*.json'))]
+            known_examples.update(example for group in groups for example in group)
+            try:
+                schema = validator.load(path.name)
+                prefix = f'https://metaviewer.local/contracts/{version}/'
+                if (schema.get('$id') != prefix + path.name or schema.get('$schema') != DRAFT
+                        or not isinstance(schema.get('title'), str) or not schema['title']):
+                    raise ValidationError('schema identity, draft or title invalid')
+                validator.audit(schema)
+            except (OSError, ValueError, TypeError, KeyError, RecursionError) as exc:
+                errors.append(f'{version}: {path}: {exc}')
+                continue
             if any(not group for group in groups):
-                raise ValidationError('valid and invalid examples required')
+                errors.append(f'{version}: {path}: valid and invalid examples required')
             for valid, group in zip((True, False), groups):
                 for example in group:
-                    known_examples.add(example)
-                    value = json.loads(example.read_text())
+                    try:
+                        value = loads_strict(example.read_text())
+                    except (OSError, ValueError, RecursionError) as exc:
+                        errors.append(f'{version}: {example}: {exc}')
+                        continue
                     try:
                         validator.validate(value, schema)
                         passed = True
                     except ValidationError:
                         passed = False
                     if valid != passed:
-                        errors.append(f'{example.name}: expected {"pass" if valid else "failure"}')
-        except (OSError, ValueError, TypeError, KeyError) as exc:
-            errors.append(f'{path.name}: {exc}')
-    for path in (root / 'contracts/examples').glob('*.json'):
-        if path not in known_examples:
-            errors.append('unrecognized or unchecked example: ' + path.name)
+                        errors.append(f'{version}: {example}: expected {"pass" if valid else "failure"}')
+        for path in sorted(examples.glob('*.json')):
+            if path not in known_examples:
+                errors.append(f'{version}: {path}: unrecognized or unchecked example')
     return errors
 
 def main():

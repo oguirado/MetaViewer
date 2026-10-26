@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.2/catalog_entry.schema.json",
+  "title": "CatalogEntry",
+  "description": "Closed host projection of one add-capsule catalog entry (Core -> UI).",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "catalog_entry/v0.2"
+    },
+    "entry_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "browser",
+        "program",
+        "desktop_capsule",
+        "game_capsule",
+        "vm"
+      ],
+      "maxLength": 65536
+    },
+    "profile_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "image": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "window_width_px": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 16384
+    },
+    "window_height_px": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 16384
+    },
+    "display_width_px": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 16384
+    },
+    "display_height_px": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 16384
+    },
+    "display_only": {
+      "type": "boolean"
+    },
+    "network": {
+      "type": "string",
+      "enum": [
+        "none",
+        "proxy"
+      ],
+      "maxLength": 65536
+    },
+    "seccomp_identity": {
+      "type": "boolean"
+    },
+    "nested_depth": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "memory_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1073741824
+        },
+        "cpu_milli": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20000
+        }
+      },
+      "required": [
+        "memory_bytes",
+        "cpu_milli"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    }
+  },
+  "required": [
+    "schema",
+    "entry_id",
+    "kind",
+    "profile_id",
+    "label",
+    "image",
+    "window_width_px",
+    "window_height_px",
+    "display_width_px",
+    "display_height_px",
+    "display_only",
+    "network",
+    "seccomp_identity",
+    "nested_depth",
+    "limits"
+  ],
+  "additionalProperties": false,
+  "maxProperties": 256
+}

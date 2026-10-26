@@ -1,0 +1,471 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.2/ui_intent.schema.json",
+  "title": "UI Intent",
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "fold"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "slot_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "slot_id"
+          ],
+          "type": "object",
+          "maxProperties": 256
+        },
+        "request_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "schema": {
+          "const": "ui_intent/v0.2"
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "type": "object",
+      "maxProperties": 256
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "unfold"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "slot_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "slot_id"
+          ],
+          "type": "object",
+          "maxProperties": 256
+        },
+        "request_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "schema": {
+          "const": "ui_intent/v0.2"
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "type": "object",
+      "maxProperties": 256
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "hide"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "slot_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "slot_id"
+          ],
+          "type": "object",
+          "maxProperties": 256
+        },
+        "request_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "schema": {
+          "const": "ui_intent/v0.2"
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "type": "object",
+      "maxProperties": 256
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "show"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "slot_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "slot_id"
+          ],
+          "type": "object",
+          "maxProperties": 256
+        },
+        "request_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "schema": {
+          "const": "ui_intent/v0.2"
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "type": "object",
+      "maxProperties": 256
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "pin"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "pinned": {
+              "type": "boolean"
+            },
+            "slot_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "pinned",
+            "slot_id"
+          ],
+          "type": "object",
+          "maxProperties": 256
+        },
+        "request_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "schema": {
+          "const": "ui_intent/v0.2"
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "type": "object",
+      "maxProperties": 256
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "move"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "group_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "type": "string"
+            },
+            "index": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "slot_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "group_id",
+            "index",
+            "slot_id"
+          ],
+          "type": "object",
+          "maxProperties": 256
+        },
+        "request_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "schema": {
+          "const": "ui_intent/v0.2"
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "type": "object",
+      "maxProperties": 256
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "tab"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "group_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "type": "string"
+            },
+            "index": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "slot_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "group_id",
+            "index",
+            "slot_id"
+          ],
+          "type": "object",
+          "maxProperties": 256
+        },
+        "request_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "schema": {
+          "const": "ui_intent/v0.2"
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "type": "object",
+      "maxProperties": 256
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "float"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "height_px": {
+              "maximum": 16384,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "slot_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "type": "string"
+            },
+            "width_px": {
+              "maximum": 16384,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "x_px": {
+              "maximum": 16383,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "y_px": {
+              "maximum": 16383,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "height_px",
+            "slot_id",
+            "width_px",
+            "x_px",
+            "y_px"
+          ],
+          "type": "object",
+          "maxProperties": 256
+        },
+        "request_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "schema": {
+          "const": "ui_intent/v0.2"
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "type": "object",
+      "maxProperties": 256
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "layout_save"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "layout_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "layout_id"
+          ],
+          "type": "object",
+          "maxProperties": 256
+        },
+        "request_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "schema": {
+          "const": "ui_intent/v0.2"
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "type": "object",
+      "maxProperties": 256
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "layout_load"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "layout_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "layout_id"
+          ],
+          "type": "object",
+          "maxProperties": 256
+        },
+        "request_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "schema": {
+          "const": "ui_intent/v0.2"
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "type": "object",
+      "maxProperties": 256
+    }
+  ]
+}

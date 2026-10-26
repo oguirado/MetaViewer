@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.2/settings.schema.json",
+  "title": "Settings",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "settings/v0.2"
+    },
+    "theme": {
+      "type": "string",
+      "enum": [
+        "metaviewer-light",
+        "metaviewer-dark"
+      ],
+      "maxLength": 65536
+    },
+    "providers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "enabled",
+          "model"
+        ],
+        "additionalProperties": false,
+        "maxProperties": 256
+      },
+      "minItems": 0,
+      "maxItems": 32
+    },
+    "recording_destination": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "capability_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^/[^\\u0000\\r\\n]*$"
+            }
+          },
+          "required": [
+            "capability_id",
+            "path"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 256
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "memory_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1073741824
+        },
+        "max_fps": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 120
+        },
+        "ring_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1073741824
+        }
+      },
+      "required": [
+        "memory_bytes",
+        "max_fps",
+        "ring_bytes"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    }
+  },
+  "required": [
+    "schema",
+    "theme",
+    "providers",
+    "recording_destination",
+    "limits"
+  ],
+  "additionalProperties": false,
+  "maxProperties": 256
+}

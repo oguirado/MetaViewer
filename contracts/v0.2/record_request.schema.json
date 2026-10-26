@@ -1,0 +1,280 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.2/record_request.schema.json",
+  "title": "Record Request",
+  "description": "UI/CLI to core request: start or stop RAM ring or host-side disk recording, or take a screenshot.",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "record_request/v0.2"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "op": {
+          "const": "ram_start"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "surface_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            },
+            "recording_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            },
+            "ring_bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1073741824
+            },
+            "max_fps": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 120
+            }
+          },
+          "required": [
+            "surface_id",
+            "recording_id",
+            "ring_bytes",
+            "max_fps"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 256
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "record_request/v0.2"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "op": {
+          "const": "ram_stop"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "surface_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            },
+            "recording_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            }
+          },
+          "required": [
+            "surface_id",
+            "recording_id"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 256
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "record_request/v0.2"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "op": {
+          "const": "disk_start"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "surface_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            },
+            "recording_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            },
+            "destination_capability_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            },
+            "destination_path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^/[^\\u0000\\r\\n]*$"
+            },
+            "max_fps": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 120
+            }
+          },
+          "required": [
+            "surface_id",
+            "recording_id",
+            "destination_capability_id",
+            "destination_path",
+            "max_fps"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 256
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "record_request/v0.2"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "op": {
+          "const": "disk_stop"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "surface_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            },
+            "recording_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            }
+          },
+          "required": [
+            "surface_id",
+            "recording_id"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 256
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "record_request/v0.2"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "op": {
+          "const": "screenshot"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "surface_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            },
+            "capture_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            }
+          },
+          "required": [
+            "surface_id",
+            "capture_id"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 256
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    }
+  ]
+}

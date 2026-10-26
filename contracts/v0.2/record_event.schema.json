@@ -1,0 +1,335 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.2/record_event.schema.json",
+  "title": "Record Event",
+  "description": "Core to UI recording lifecycle events for RAM ring, host export and screenshot flows.",
+  "$defs": {
+    "id": {
+      "description": "Opaque identifier shared by requests, surfaces and recordings.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "text": {
+      "description": "Human readable detail without credentials.",
+      "type": "string",
+      "minLength": 0,
+      "maxLength": 4096
+    },
+    "path": {
+      "description": "Absolute host path; syntax only, never authorization.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^/[^\u0000\r\n]*$"
+    },
+    "ram_path": {
+      "description": "RAM-only frame path under shared memory.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^/dev/shm/[^\u0000\r\n]+$"
+    },
+    "hash": {
+      "description": "Lowercase hex SHA-256 digest of artifact bytes.",
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "counter": {
+      "description": "Unsigned counter or monotonic timestamp in nanoseconds.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "positive": {
+      "description": "Positive count starting at one.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "byte_size": {
+      "description": "Byte count bounded to the recording size cap.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1073741824
+    },
+    "refusal": {
+      "description": "Closed admission refusal code.",
+      "type": "string",
+      "enum": [
+        "STALE_FRAME",
+        "SURFACE_NOT_AGENT_CONTROLLED",
+        "LOCKED_BY_OTHER",
+        "BUDGET_EXCEEDED",
+        "OUT_OF_BOUNDS",
+        "POLICY"
+      ],
+      "maxLength": 65536
+    }
+  },
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "record_event/v0.2"
+        },
+        "request_id": {
+          "$ref": "#/$defs/id"
+        },
+        "surface_id": {
+          "$ref": "#/$defs/id"
+        },
+        "recording_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event": {
+          "const": "started"
+        },
+        "mono_ns": {
+          "$ref": "#/$defs/counter"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "ram",
+            "disk",
+            "screenshot"
+          ],
+          "maxLength": 65536
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "surface_id",
+        "recording_id",
+        "event",
+        "mono_ns",
+        "mode"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "record_event/v0.2"
+        },
+        "request_id": {
+          "$ref": "#/$defs/id"
+        },
+        "surface_id": {
+          "$ref": "#/$defs/id"
+        },
+        "recording_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event": {
+          "const": "stopped"
+        },
+        "mono_ns": {
+          "$ref": "#/$defs/counter"
+        },
+        "frame_count": {
+          "$ref": "#/$defs/counter"
+        },
+        "byte_count": {
+          "$ref": "#/$defs/byte_size"
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "surface_id",
+        "recording_id",
+        "event",
+        "mono_ns",
+        "frame_count",
+        "byte_count"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "record_event/v0.2"
+        },
+        "request_id": {
+          "$ref": "#/$defs/id"
+        },
+        "surface_id": {
+          "$ref": "#/$defs/id"
+        },
+        "recording_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event": {
+          "const": "frame_captured"
+        },
+        "mono_ns": {
+          "$ref": "#/$defs/counter"
+        },
+        "ram_path": {
+          "$ref": "#/$defs/ram_path"
+        },
+        "sha256": {
+          "$ref": "#/$defs/hash"
+        },
+        "byte_count": {
+          "$ref": "#/$defs/byte_size"
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "surface_id",
+        "recording_id",
+        "event",
+        "mono_ns",
+        "ram_path",
+        "sha256",
+        "byte_count"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "record_event/v0.2"
+        },
+        "request_id": {
+          "$ref": "#/$defs/id"
+        },
+        "surface_id": {
+          "$ref": "#/$defs/id"
+        },
+        "recording_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event": {
+          "const": "exported"
+        },
+        "mono_ns": {
+          "$ref": "#/$defs/counter"
+        },
+        "destination_capability_id": {
+          "$ref": "#/$defs/id"
+        },
+        "destination_path": {
+          "$ref": "#/$defs/path"
+        },
+        "sha256": {
+          "$ref": "#/$defs/hash"
+        },
+        "byte_count": {
+          "$ref": "#/$defs/byte_size"
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "surface_id",
+        "recording_id",
+        "event",
+        "mono_ns",
+        "destination_capability_id",
+        "destination_path",
+        "sha256",
+        "byte_count"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "record_event/v0.2"
+        },
+        "request_id": {
+          "$ref": "#/$defs/id"
+        },
+        "surface_id": {
+          "$ref": "#/$defs/id"
+        },
+        "recording_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event": {
+          "const": "dropped"
+        },
+        "mono_ns": {
+          "$ref": "#/$defs/counter"
+        },
+        "dropped_frames": {
+          "$ref": "#/$defs/positive"
+        },
+        "policy": {
+          "const": "ram_ring_oldest"
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "surface_id",
+        "recording_id",
+        "event",
+        "mono_ns",
+        "dropped_frames",
+        "policy"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "record_event/v0.2"
+        },
+        "request_id": {
+          "$ref": "#/$defs/id"
+        },
+        "surface_id": {
+          "$ref": "#/$defs/id"
+        },
+        "recording_id": {
+          "$ref": "#/$defs/id"
+        },
+        "event": {
+          "const": "refused"
+        },
+        "mono_ns": {
+          "$ref": "#/$defs/counter"
+        },
+        "reason_code": {
+          "$ref": "#/$defs/refusal"
+        },
+        "detail": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "surface_id",
+        "recording_id",
+        "event",
+        "mono_ns",
+        "reason_code",
+        "detail"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    }
+  ]
+}

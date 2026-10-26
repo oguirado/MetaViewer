@@ -1,0 +1,14 @@
+{
+  "schema": "wrong/v0.2",
+  "surface_id": "surface-demo",
+  "kind": "game_capsule",
+  "display": ":101",
+  "geometry": {
+    "w": 800,
+    "h": 600
+  },
+  "state": "active",
+  "visibility": "unfolded",
+  "control": "agent",
+  "profile_id": "profile-demo"
+}

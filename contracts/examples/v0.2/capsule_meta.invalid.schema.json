@@ -1,0 +1,20 @@
+{
+  "schema": "capsule_meta/v0.0",
+  "surface_id": "surface-demo",
+  "kind": "program",
+  "container": "srf-pg-demo",
+  "run_id": "srf-pg-demo",
+  "display": ":99",
+  "fb_path": "/dev/shm/ramws/demo.rgb",
+  "lane_socket": "/run/metaviewer/lane-demo.sock",
+  "ready_line": "READY",
+  "windows": [
+    {
+      "window_id": "w1",
+      "x_px": 0,
+      "y_px": 0,
+      "width_px": 1280,
+      "height_px": 720
+    }
+  ]
+}

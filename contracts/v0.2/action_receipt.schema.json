@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.2/action_receipt.schema.json",
+  "title": "Action Receipt",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "action_receipt/v0.2"
+    },
+    "proposal_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "executed_at_ns": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "after_frame": {
+      "$ref": "frame_ref.schema.json"
+    },
+    "verified": {
+      "type": "boolean"
+    },
+    "verification": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "pixel",
+            "element",
+            "state_sha256"
+          ],
+          "maxLength": 65536
+        },
+        "detail": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        }
+      },
+      "required": [
+        "method",
+        "detail"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    },
+    "error": {
+      "type": "string",
+      "maxLength": 65536
+    }
+  },
+  "required": [
+    "schema",
+    "proposal_id",
+    "executed_at_ns",
+    "after_frame",
+    "verified",
+    "verification",
+    "error"
+  ],
+  "additionalProperties": false,
+  "maxProperties": 256
+}

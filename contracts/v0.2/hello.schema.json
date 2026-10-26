@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.2/hello.schema.json",
+  "title": "Hello",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "hello/v0.2"
+    },
+    "contract_version": {
+      "const": "v0.2"
+    },
+    "component": {
+      "type": "string",
+      "enum": [
+        "core",
+        "ui",
+        "daemon",
+        "agent",
+        "vision",
+        "wender"
+      ],
+      "maxLength": 65536
+    },
+    "component_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "component_commit": {
+      "type": "string",
+      "minLength": 40,
+      "maxLength": 40,
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "dependencies": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "commit": {
+            "type": "string",
+            "minLength": 40,
+            "maxLength": 40,
+            "pattern": "^[0-9a-f]{40}$"
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "commit"
+        ],
+        "additionalProperties": false,
+        "maxProperties": 256
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "contract_version",
+    "component",
+    "component_version",
+    "component_commit",
+    "dependencies"
+  ],
+  "additionalProperties": false,
+  "maxProperties": 256
+}

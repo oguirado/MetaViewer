@@ -1,0 +1,184 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.2/surface_event.schema.json",
+  "title": "Surface Event",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "surface_event/v0.2"
+        },
+        "event": {
+          "const": "created"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "surface": {
+              "$ref": "surface.schema.json"
+            }
+          },
+          "required": [
+            "surface"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 256
+        }
+      },
+      "required": [
+        "schema",
+        "event",
+        "data"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "surface_event/v0.2"
+        },
+        "event": {
+          "const": "state_changed"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "surface": {
+              "$ref": "surface.schema.json"
+            }
+          },
+          "required": [
+            "surface"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 256
+        }
+      },
+      "required": [
+        "schema",
+        "event",
+        "data"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "surface_event/v0.2"
+        },
+        "event": {
+          "const": "frame_ready"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "frame_ref": {
+              "$ref": "frame_ref.schema.json"
+            }
+          },
+          "required": [
+            "frame_ref"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 256
+        }
+      },
+      "required": [
+        "schema",
+        "event",
+        "data"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "surface_event/v0.2"
+        },
+        "event": {
+          "const": "input_applied"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "surface_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "proposal_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "surface_id",
+            "proposal_id"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 256
+        }
+      },
+      "required": [
+        "schema",
+        "event",
+        "data"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "surface_event/v0.2"
+        },
+        "event": {
+          "const": "error"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "surface_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "code": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "detail": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 65536
+            }
+          },
+          "required": [
+            "surface_id",
+            "code",
+            "detail"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 256
+        }
+      },
+      "required": [
+        "schema",
+        "event",
+        "data"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    }
+  ]
+}

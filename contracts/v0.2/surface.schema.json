@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.2/surface.schema.json",
+  "title": "Surface",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "surface/v0.2"
+    },
+    "surface_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "desktop_capsule",
+        "browser",
+        "game_capsule",
+        "vm"
+      ],
+      "maxLength": 65536
+    },
+    "display": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 65536
+    },
+    "geometry": {
+      "type": "object",
+      "properties": {
+        "w": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "h": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "w",
+        "h"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "active",
+        "standby",
+        "ceded",
+        "destroyed",
+        "lost"
+      ],
+      "maxLength": 65536
+    },
+    "visibility": {
+      "type": "string",
+      "enum": [
+        "folded",
+        "unfolded",
+        "pinned"
+      ],
+      "maxLength": 65536
+    },
+    "control": {
+      "type": "string",
+      "enum": [
+        "agent",
+        "human",
+        "shared"
+      ],
+      "maxLength": 65536
+    },
+    "profile_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    }
+  },
+  "required": [
+    "schema",
+    "surface_id",
+    "kind",
+    "display",
+    "geometry",
+    "state",
+    "visibility",
+    "control",
+    "profile_id"
+  ],
+  "additionalProperties": false,
+  "maxProperties": 256
+}

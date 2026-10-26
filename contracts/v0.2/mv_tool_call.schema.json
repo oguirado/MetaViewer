@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.2/mv_tool_call.schema.json",
+  "title": "mv_tool_call",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "mv_tool_call/v0.2"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "op": {
+          "const": "observe"
+        },
+        "args": {
+          "type": "object",
+          "properties": {
+            "surface_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            }
+          },
+          "required": [
+            "surface_id"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 256
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "args"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "mv_tool_call/v0.2"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "op": {
+          "const": "list"
+        },
+        "args": {
+          "type": "object",
+          "properties": {
+            "cursor": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 256
+            }
+          },
+          "required": [
+            "cursor",
+            "limit"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 256
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "args"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "mv_tool_call/v0.2"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "op": {
+          "const": "propose"
+        },
+        "args": {
+          "type": "object",
+          "properties": {
+            "proposal": {
+              "$ref": "action_proposal.schema.json"
+            }
+          },
+          "required": [
+            "proposal"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 256
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "args"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "mv_tool_call/v0.2"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "op": {
+          "const": "wait_verify"
+        },
+        "args": {
+          "type": "object",
+          "properties": {
+            "proposal_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            },
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60000
+            }
+          },
+          "required": [
+            "proposal_id",
+            "timeout_ms"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 256
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "args"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    }
+  ]
+}

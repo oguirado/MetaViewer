@@ -1,0 +1,563 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.2/surface_request.schema.json",
+  "title": "Surface Request",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "surface_request/v0.2"
+        },
+        "op": {
+          "const": "create"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "desktop_capsule",
+                "browser",
+                "game_capsule",
+                "vm"
+              ],
+              "maxLength": 65536
+            },
+            "geometry": {
+              "type": "object",
+              "properties": {
+                "w": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "h": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "required": [
+                "w",
+                "h"
+              ],
+              "additionalProperties": false,
+              "maxProperties": 256
+            },
+            "profile_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "kind",
+            "geometry",
+            "profile_id"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 256
+        }
+      },
+      "required": [
+        "schema",
+        "op",
+        "params"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "surface_request/v0.2"
+        },
+        "op": {
+          "const": "list"
+        },
+        "params": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false,
+          "maxProperties": 256
+        }
+      },
+      "required": [
+        "schema",
+        "op",
+        "params"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "surface_request/v0.2"
+        },
+        "op": {
+          "const": "destroy"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "surface_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "surface_id"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 256
+        }
+      },
+      "required": [
+        "schema",
+        "op",
+        "params"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "surface_request/v0.2"
+        },
+        "op": {
+          "const": "frame_subscribe"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "surface_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "surface_id"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 256
+        }
+      },
+      "required": [
+        "schema",
+        "op",
+        "params"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "surface_request/v0.2"
+        },
+        "op": {
+          "const": "frame_unsubscribe"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "surface_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "surface_id"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 256
+        }
+      },
+      "required": [
+        "schema",
+        "op",
+        "params"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "surface_request/v0.2"
+        },
+        "op": {
+          "const": "input"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "surface_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "proposal_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "action": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "const": "click"
+                    },
+                    "x": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "y": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "button": {
+                      "type": "string",
+                      "enum": [
+                        "left",
+                        "middle",
+                        "right"
+                      ],
+                      "maxLength": 65536
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "x",
+                    "y",
+                    "button"
+                  ],
+                  "additionalProperties": false,
+                  "maxProperties": 256
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "const": "key"
+                    },
+                    "keys": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 65536
+                      },
+                      "minItems": 1,
+                      "maxItems": 4096
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "keys"
+                  ],
+                  "additionalProperties": false,
+                  "maxProperties": 256
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "const": "type"
+                    },
+                    "text": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 65536
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "text"
+                  ],
+                  "additionalProperties": false,
+                  "maxProperties": 256
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "const": "scroll"
+                    },
+                    "dx": {
+                      "type": "integer"
+                    },
+                    "dy": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "dx",
+                    "dy"
+                  ],
+                  "additionalProperties": false,
+                  "maxProperties": 256
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "const": "wait"
+                    },
+                    "ms": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "ms"
+                  ],
+                  "additionalProperties": false,
+                  "maxProperties": 256
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "const": "lane_submit"
+                    },
+                    "verb": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "payload": {
+                      "type": "object",
+                      "properties": {
+                        "nonce": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128
+                        },
+                        "seq": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "command": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128
+                        },
+                        "args": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "maxLength": 65536
+                          },
+                          "maxItems": 4096
+                        }
+                      },
+                      "required": [
+                        "nonce",
+                        "seq",
+                        "command",
+                        "args"
+                      ],
+                      "additionalProperties": false,
+                      "maxProperties": 256
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "verb",
+                    "payload"
+                  ],
+                  "additionalProperties": false,
+                  "maxProperties": 256
+                }
+              ]
+            }
+          },
+          "required": [
+            "surface_id",
+            "proposal_id",
+            "action"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 256
+        }
+      },
+      "required": [
+        "schema",
+        "op",
+        "params"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "surface_request/v0.2"
+        },
+        "op": {
+          "const": "record_start"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "surface_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "recording_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "surface_id",
+            "recording_id"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 256
+        }
+      },
+      "required": [
+        "schema",
+        "op",
+        "params"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "surface_request/v0.2"
+        },
+        "op": {
+          "const": "record_stop"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "surface_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "recording_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "surface_id",
+            "recording_id"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 256
+        }
+      },
+      "required": [
+        "schema",
+        "op",
+        "params"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "surface_request/v0.2"
+        },
+        "op": {
+          "const": "take_control"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "surface_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "owner": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "human",
+                "shared"
+              ],
+              "maxLength": 65536
+            }
+          },
+          "required": [
+            "surface_id",
+            "owner"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 256
+        }
+      },
+      "required": [
+        "schema",
+        "op",
+        "params"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "surface_request/v0.2"
+        },
+        "op": {
+          "const": "release_control"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "surface_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "surface_id"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 256
+        }
+      },
+      "required": [
+        "schema",
+        "op",
+        "params"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    }
+  ]
+}
