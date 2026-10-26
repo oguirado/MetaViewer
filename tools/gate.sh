@@ -47,9 +47,13 @@ REQUIRED_IGNORE = ('dist/', 'build/', 'coverage/', '.env', '.env.*',
                    '.beckett/token', 'cookies/', 'profiles/')
 DEPENDENCIES = {'@xterm/addon-fit': '0.11.0', '@xterm/xterm': '6.0.0',
                 'dockview-core': '8.4.1', 'dockview-vue': '8.4.1',
-                'electron': '44.9.2', 'vue': '3.5.43'}
+                'electron': '44.9.2', 'vue': '3.5.43', 'openvue': '1.0.0',
+                '@openvue/themes': '1.0.0', '@openvue/icons': '1.0.0',
+                'node-pty': '1.1.0'}
 DEV_DEPENDENCIES = {'@vitejs/plugin-vue': '6.0.9', 'typescript': '5.9.3',
-                    'vite': '8.3.4', 'vue-tsc': '3.3.12'}
+                    'vite': '8.3.4', 'vue-tsc': '3.3.12',
+                    '@electron/packager': '20.3.0'}
+RUST_DEPENDENCIES = {'serde', 'serde_json', 'sha2', 'libc', 'tokio'}
 SCRIPTS = {'test': 'node --test test/*.test.js',
            'check': 'vue-tsc --noEmit -p tsconfig.json', 'build': 'vite build'}
 
@@ -134,6 +138,7 @@ class GateTests(unittest.TestCase):
             data = json.loads((self.fixture / 'ui/package.json').read_text())
             data['dependencies']['vue'] = value
             self.refused_manifest('ui/package.json', json.dumps(data))
+        data = json.loads((self.fixture / 'ui/package.json').read_text())
         data['dependencies']['unapproved'] = '1.0.0'
         self.refused_manifest('ui/package.json', json.dumps(data))
         data = json.loads((self.fixture / 'ui/package.json').read_text())
@@ -146,6 +151,32 @@ class GateTests(unittest.TestCase):
             ('agents/pyproject.toml', '\n[build-system]\nrequires = ["unapproved"]\n'),
         ):
             self.refused_manifest(name, (self.fixture / name).read_text() + addition)
+
+    def test_rust_dependency_policy(self):
+        path = self.fixture / 'core/Cargo.toml'
+        identity = path.read_text().split('[dependencies]')[0]
+        self.write('core/Cargo.toml', identity + '[dependencies]\nsha2 = "=0.10.9"\n'
+                   '[dev-dependencies]\nproptest = "=1.12.0"\n')
+        self.call('--leg', 'manifests')
+        for section, dependency in (
+            ('dependencies', 'serde = "1.0.229"'),
+            ('dependencies', 'serde = { version = "=1.0.229", path = "../serde" }'),
+            ('dependencies', 'unapproved = "=1.0.0"'),
+            ('dependencies', 'proptest = "=1.12.0"'),
+            ('dev-dependencies', 'unapproved = "=1.0.0"'),
+        ):
+            with self.subTest(dependency=dependency, section=section):
+                self.refused_manifest('core/Cargo.toml', identity +
+                                      '[' + section + ']\n' + dependency + '\n')
+
+    def test_npm_dependency_subsets(self):
+        data = json.loads((self.fixture / 'ui/package.json').read_text())
+        data['dependencies'] = {'openvue': '1.0.0', 'node-pty': '1.1.0'}
+        data['devDependencies'] = {'@electron/packager': '20.3.0'}
+        self.write('ui/package.json', json.dumps(data))
+        self.call('--leg', 'manifests')
+        data['dependencies']['@electron/packager'] = '20.3.0'
+        self.refused_manifest('ui/package.json', json.dumps(data))
 
     def test_ignore_preservation(self):
         original = (self.fixture / '.gitignore').read_text()
@@ -227,6 +258,34 @@ class GateTests(unittest.TestCase):
         self.assertIn('child rc=7', output)
         self.assertIn('FAIL laws', output)
 
+    def test_laws_excludes_only_stash(self):
+        shutil.copyfile(ROOT / 'tools/check_laws.py', self.fixture / 'tools/check_laws.py')
+        bin_dir = Path(self.temp.name) / 'git-bin'
+        bin_dir.mkdir()
+        fake_git = bin_dir / 'git'
+        fake_git.write_text('#!' + sys.executable + '\n' +
+            "import pathlib, sys\n"
+            "args = sys.argv[1:]\n"
+            "if args[0] == 'rev-list':\n"
+            "    print('valid')\n"
+            "    if '--exclude=refs/stash' not in args: print('stash')\n"
+            "    if pathlib.Path('bad-branch').exists(): print('bad-branch')\n"
+            "elif args[0] == 'show':\n"
+            "    identity = ['oguirado', '247666607+oguirado@users.noreply.github.com'] * 2\n"
+            "    message = 'tools: check history' if args[-1] == 'valid' else 'WIP on local work'\n"
+            "    print('\\0'.join(identity + [message]))\n"
+            "else: sys.exit(3)\n")
+        fake_git.chmod(0o700)
+        environment = dict(os.environ, PATH=str(bin_dir) + os.pathsep + os.environ['PATH'])
+        # Negative contrast: the unwrapped checker sees the invalid stash commit.
+        result = subprocess.run(['python3', 'tools/check_laws.py'], cwd=self.fixture,
+                                env=environment, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('stash:', result.stderr)
+        self.call('--leg', 'laws', env=environment)
+        self.write('bad-branch', '')
+        self.assertIn('bad-branch:', self.call('--leg', 'laws', env=environment, expected=1))
+
     def test_contract_failure_propagates(self):
         self.call('--leg', 'contracts')
         self.assertEqual((self.fixture / 'contract.calls').read_text(), 'called\n')
@@ -279,10 +338,38 @@ class GateTests(unittest.TestCase):
         self.assertTrue(all(not path.exists() for path in paths))
 
 
+def validate_rust_dependencies(table, section):
+    require(isinstance(table, dict), section + ': expected dependency table')
+    allowed = RUST_DEPENDENCIES | ({'proptest'} if section == 'dev-dependencies' else set())
+    for name, specification in table.items():
+        require(name in allowed, section + ': unlisted dependency: ' + name)
+        if isinstance(specification, dict):
+            require(set(specification) <= {'version', 'features', 'optional', 'default-features'},
+                    name + ': unsupported dependency source or option')
+            if 'features' in specification:
+                require(isinstance(specification['features'], list) and
+                        all(isinstance(feature, str) for feature in specification['features']),
+                        name + ': invalid features')
+            for flag in ('optional', 'default-features'):
+                if flag in specification:
+                    require(type(specification[flag]) is bool, name + ': invalid ' + flag)
+            specification = specification.get('version')
+        require(isinstance(specification, str) and re.fullmatch(
+            r'=(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)'
+            r'(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?', specification),
+            name + ': Rust dependency must use an exact =version')
+
+
+def validate_npm_dependencies(table, pins):
+    require(isinstance(table, dict), 'package.json: expected dependency object')
+    for name, version in table.items():
+        require(name in pins and version == pins[name],
+                'package.json: unlisted or unpinned dependency: ' + name)
+
+
 def validate_manifests(root):
     version = (root / 'VERSION').read_text().strip()
-    require(re.fullmatch(r'\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?', version),
-            'invalid VERSION')
+    require(version == '0.1.1', 'VERSION: metadata drift')
     expected = {
         'Cargo.toml': {
             'workspace': {'resolver': '2', 'members': ['core'], 'package': {
@@ -290,21 +377,34 @@ def validate_manifests(root):
             'profile': {'release': {'overflow-checks': True}}},
         'core/Cargo.toml': {'package': {'name': 'metaviewer-core', **{
             key: {'workspace': True} for key in ('version', 'edition', 'publish', 'rust-version')}},
-            'dependencies': {}},
+            },
         'agents/pyproject.toml': {'project': {'name': 'metaviewer-agents', 'version': version,
                                             'requires-python': '>=3.11', 'dependencies': []}},
     }
     for name, wanted in expected.items():
         actual = tomllib.loads((root / name).read_text())
+        if name in ('Cargo.toml', 'core/Cargo.toml'):
+            for section in ('dependencies', 'dev-dependencies', 'build-dependencies'):
+                if section in actual:
+                    validate_rust_dependencies(actual.pop(section), section)
+            workspace = actual.get('workspace', {})
+            if 'dependencies' in workspace:
+                validate_rust_dependencies(workspace.pop('dependencies'), 'dependencies')
         require(json.dumps(actual, sort_keys=True) == json.dumps(wanted, sort_keys=True),
                 name + ': metadata drift')
     require(re.fullmatch(r'module metaviewer/daemon-adapter[ \t]*\n(?:[ \t]*\n)*go 1\.26\.0[ \t]*\n?',
                          (root / 'daemon-adapter/go.mod').read_text()), 'go.mod: metadata drift')
     package = json.loads((root / 'ui/package.json').read_text())
+    require(isinstance(package, dict), 'package.json: expected object')
+    validate_npm_dependencies(package.pop('dependencies', {}), DEPENDENCIES)
+    validate_npm_dependencies(package.pop('devDependencies', {}), DEV_DEPENDENCIES)
+    # The shell's admitted smoke command is optional; all other scripts stay pinned.
+    if isinstance(package.get('scripts'), dict) and 'smoke' in package['scripts']:
+        require(package['scripts'].pop('smoke') == 'node test/smoke.mjs',
+                'package.json: smoke script drift')
     wanted = {'name': 'metaviewer-ui', 'version': version, 'private': True,
                         'type': 'module', 'main': 'electron/main.js', 'engines': {'node': '>=24'},
-                        'scripts': SCRIPTS, 'dependencies': DEPENDENCIES,
-                        'devDependencies': DEV_DEPENDENCIES}
+                        'scripts': SCRIPTS}
     require(json.dumps(package, sort_keys=True) == json.dumps(wanted, sort_keys=True),
             'package.json: metadata drift')
     patterns = (root / '.gitignore').read_text().splitlines()
@@ -323,6 +423,20 @@ def validate_manifests(root):
                 candidates += list(parts)
             require(not any(fnmatch.fnmatchcase(value, pattern) for value in candidates),
                     '.gitignore: protected file exclusion: ' + name)
+
+
+# Keep the shared laws checker unchanged: exclude only the local stash ref from
+# its all-ref walk. Branch/tag commits remain checked, even if also in the stash.
+LAWS_CODE = '''import runpy, subprocess
+from unittest.mock import patch
+original = subprocess.check_output
+def history_output(argv, *args, **kwargs):
+    if argv == ['git', 'rev-list', '--all']:
+        argv = ['git', 'rev-list', '--exclude=refs/stash', '--all']
+    return original(argv, *args, **kwargs)
+with patch('subprocess.check_output', side_effect=history_output):
+    runpy.run_path('tools/check_laws.py', run_name='__main__')
+'''
 
 
 UNIT_CODE = '''import sys, unittest
@@ -443,7 +557,7 @@ def leaf(leg, root, environment):
             print(f'{leg}: child rc={rc}', file=sys.stderr)
         return rc if rc in (0, 2, 124) else 1
     commands = [['python3', 'tools/check_contracts.py']] if leg == 'contracts' else [
-        ['python3', 'tools/check_laws.py', '--version'], ['python3', 'tools/check_laws.py']]
+        ['python3', 'tools/check_laws.py', '--version'], ['python3', '-c', LAWS_CODE]]
     deadline = time.monotonic() + 300
     for command in commands:
         remaining = deadline - time.monotonic()
