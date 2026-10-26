@@ -313,7 +313,7 @@ class MvctlTests(unittest.TestCase):
                 code, out, err = self._run(argv, probe)
                 self.assertEqual(code, 2, argv)
                 self.assertEqual(out, "")
-                self._assert_refusal(err, "usage_error")
+                self._assert_refusal(err, "unsupported_operation" if argv and argv[0] == "observe" else "usage_error")
                 self.assertEqual(probe.calls, [])
 
     def test_transport_parameters(self):

@@ -254,6 +254,13 @@ def _matches_request(checked_reply, verdict, checked_request):
 def run(argv: Sequence[str] | None = None,
         send: Callable[[dict], dict] | None = None) -> int:
     """Parse argv, send one envelope, print one verdict; return 0, 1 or 2."""
+    # [TARGET, unit decision] Observe has no CLI transport implementation.
+    # Refuse the entire reserved command before parsing any arguments; emit no
+    # help, observation fragment or caller-controlled diagnostic.
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    if raw_argv and raw_argv[0] == "observe":
+        _refuse("unsupported_operation")
+        return 2
     parser = build_parser()
     try:
         args = parser.parse_args(argv)

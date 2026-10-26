@@ -455,7 +455,10 @@ function checkTileReport(tile) {
  * Strict closed validation of the probe report, including the
  * cross-capsule routing rule: a frame published for capsule A and
  * observed on tile B refuses the run. Frame tags are opaque probe
- * strings; only their tile placement is judged here.
+ * strings; ownership comes from the publisher map, never observed placement.
+ * [TARGET, unit decision] The existing synthetic wall uses the independently
+ * specified frame-<capsule>-gen7 publication recipe. Real publishers must supply
+ * frameOwners (Map<frameId, capsuleId>) from their capture ledger.
  * @param {unknown} value Parsed probe report.
  * @param {{ minTiles?: number }} [options] Minimum visible tiles.
  * @returns {{ tiles: WallTileReport[], visible: number, errors: string[] }} Normalized summary.
@@ -482,6 +485,14 @@ function validateWallReport(value, options = {}) {
     const prior = owners.get(tile.frameId);
     if (prior !== undefined && prior !== tile.capsuleId) {
       fail('E2E_ROUTING', `frame routed to two tiles: ${prior} and ${tile.capsuleId}`);
+    }
+    // The default is the wall fixture's publication contract, independent of
+    // the observed frame ID. Opaque/live IDs require the publisher ledger.
+    const expectedOwner = options.frameOwners === undefined
+      ? (tile.frameId === `frame-${tile.capsuleId}-gen7` ? tile.capsuleId : undefined)
+      : options.frameOwners.get(tile.frameId);
+    if (expectedOwner !== tile.capsuleId) {
+      fail('E2E_ROUTING', `unpublished or foreign frame on ${tile.capsuleId}`);
     }
     owners.set(tile.frameId, tile.capsuleId);
   }

@@ -146,6 +146,25 @@ describe('e2e1 wall harness contract', () => {
     rejectsWith(() => validateWallReport(mutant), ['E2E_ROUTING']);
   });
 
+  it('negative control: reciprocal distinct frame swaps are refused', () => {
+    const mutant = validReport(4);
+    [mutant.tiles[0].frameId, mutant.tiles[1].frameId] =
+      [mutant.tiles[1].frameId, mutant.tiles[0].frameId];
+    rejectsWith(() => validateWallReport(mutant), ['E2E_ROUTING']);
+  });
+
+  it('binds opaque frame IDs to an independent publisher ownership map', () => {
+    const report = validReport(4);
+    const owners = new Map(report.tiles.map((tile, i) => [`opaque-${i}`, tile.capsuleId]));
+    report.tiles.forEach((tile, i) => { tile.frameId = `opaque-${i}`; });
+    assert.equal(validateWallReport(report, { frameOwners: owners }).visible, 4);
+    [report.tiles[0].frameId, report.tiles[1].frameId] =
+      [report.tiles[1].frameId, report.tiles[0].frameId];
+    rejectsWith(() => validateWallReport(report, { frameOwners: owners }), ['E2E_ROUTING']);
+    report.tiles[0].frameId = 'unpublished';
+    rejectsWith(() => validateWallReport(report, { frameOwners: owners }), ['E2E_ROUTING']);
+  });
+
   it('negative control: duplicate tile id is refused', () => {
     const mutant = validReport(4);
     mutant.tiles[3].capsuleId = mutant.tiles[0].capsuleId;
@@ -364,7 +383,9 @@ describe('e2e1 live wall journey', () => {
       console.log(`E2E_PROCESS: ${diagnostic}`);
       let summary;
       try {
-        summary = readProbeReport(reportPath);
+        summary = readProbeReport(reportPath, { frameOwners: new Map(
+          FOUR_FAKES.map(({ capsuleId }) => [`frame-${capsuleId}-gen7`, capsuleId]),
+        ) });
       } catch (error) {
         if (!(error instanceof E2EError)) throw error;
         throw new E2EError(error.code, `${error.message} | report: ${(existsSync(reportPath) ? readFileSync(reportPath, "utf8").slice(0, 3000) : "absent")} | process: ${diagnostic}`);
