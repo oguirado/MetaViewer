@@ -9,7 +9,18 @@ pub fn environment_key_allowed(key: &str) -> bool {
         && !["LD_", "DYLD_", "PYTHON", "NODE_", "ELECTRON_"]
             .iter()
             .any(|prefix| key.starts_with(prefix))
-        && !["BASH_ENV", "ENV", "GCONV_PATH", "HOSTALIASES", "ZDOTDIR", "GLIBC_TUNABLES", "LOCPATH", "NLSPATH", "TZDIR"].contains(&key)
+        && ![
+            "BASH_ENV",
+            "ENV",
+            "GCONV_PATH",
+            "HOSTALIASES",
+            "ZDOTDIR",
+            "GLIBC_TUNABLES",
+            "LOCPATH",
+            "NLSPATH",
+            "TZDIR",
+        ]
+        .contains(&key)
 }
 
 pub(crate) fn validate_limits(l: &SupervisorLimits) -> Result<(), SupervisorError> {

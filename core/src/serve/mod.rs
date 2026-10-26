@@ -3,14 +3,15 @@
 //! The core endpoint instance is a fresh process identity on each restart.
 //! A created surface belongs to the single registered agent. Multiple agent
 //! registrations are refused until an ownership wire contract exists.
-//! Each connected UI subscribes to daemon events. Unsupported body/role pairs
-//! close the connection. The v0.2 UI contract has no takeover/release variants;
-//! they cannot be accepted without a separately owned contract change.
-//! [TARGET, unit decision] UI control uses the existing closed surface_request
-//! take_control/release_control bodies (human owner only) pending that change.
+//! [TARGET, unit decision] Each UI subscribes to daemon events; unsupported
+//! well-formed messages receive journalled POLICY verdicts keyed by request/msg id.
+//! Saturated peers receive a terminal surface_event.error QUEUE_OVERFLOW through
+//! a reserved notification slot before disconnection; normal queue memory is bounded.
 //! Frame witnesses are retained only from regular, non-symlink /dev/shm files,
 //! bounded to 64 MiB and verified against the advertised digest before commit.
-use crate::admission::{AdmissionRequest, Authority, CoreState, Frame, Input, Surface};
+use crate::admission::{
+    AdmissionRequest, Authority, CoreState, Frame, Input, LifecycleUpdate, Surface,
+};
 use crate::journal::{sha256_hex, Witness};
 use crate::wire::payload::{FrameRef, Hello, SurfaceEvent};
 use crate::*;
@@ -85,11 +86,22 @@ impl Config {
     }
 }
 
+#[derive(Debug)]
+pub enum SendFailure {
+    QueueOverflow(Endpoint),
+    Disconnected(Endpoint),
+}
+impl std::fmt::Display for SendFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+impl std::error::Error for SendFailure {}
 struct Connection {
     id: u64,
     epoch: u64,
     queue: mpsc::SyncSender<Envelope>,
-    closed: Arc<std::sync::atomic::AtomicBool>,
+    terminal: Arc<Mutex<Option<Envelope>>>,
 }
 /// One serialization point for all authority transitions and publication.
 pub struct Server {
@@ -190,9 +202,26 @@ impl Server {
             .connections
             .get(to)
             .ok_or_else(|| invalid("recipient disconnected"))?;
-        if c.queue.try_send(env).is_err() {
-            c.closed.store(true, std::sync::atomic::Ordering::Release);
-            return Err(invalid("send queue overflow or disconnected recipient"));
+        match c.queue.try_send(env) {
+            Ok(()) => {}
+            Err(mpsc::TrySendError::Full(mut env)) => {
+                env.body = Command::SurfaceEvent(Box::new(serde_json::from_value(
+                    serde_json::json!({"schema":"surface_event/v0.2","event":"error",
+                        "data":{"surface_id":to.instance,"code":"QUEUE_OVERFLOW",
+                        "detail":"Peer send queue exhausted; reconnect and refresh state"}}),
+                )?));
+                let mut terminal = c
+                    .terminal
+                    .lock()
+                    .map_err(|_| invalid("poisoned terminal slot"))?;
+                if terminal.is_none() {
+                    *terminal = Some(env);
+                }
+                return Err(SendFailure::QueueOverflow(to.clone()).into());
+            }
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                return Err(SendFailure::Disconnected(to.clone()).into());
+            }
         }
         Ok(())
     }
@@ -266,36 +295,31 @@ impl Server {
                 if epoch != self.authority.state().epoch {
                     return Err(invalid("old executor"));
                 }
-                match event.as_ref() {
-                    SurfaceEvent::Case0(event) => {
-                        let s = &event.data.surface;
-                        let owner = self
-                            .config
-                            .peers
-                            .iter()
-                            .find(|p| p.endpoint.component == Component::Agent)
-                            .ok_or_else(|| invalid("no owner"))?
-                            .endpoint
-                            .clone();
-                        let value = serde_json::to_value(s)?;
-                        self.authority.apply_with_witnesses(
-                            Input::Surface {
-                                id: s.surface_id.clone(),
-                                surface: Surface {
-                                    display: s.display.clone(),
-                                    owner,
-                                    agent_controlled: value["control"] == "agent",
-                                    live: value["state"] == "active",
-                                    frame: None,
-                                    refresh_after: None,
-                                    allowed_verbs: Vec::new(),
-                                },
-                            },
-                            vec![boundary],
-                        )?;
+                let out = match event.as_ref() {
+                    SurfaceEvent::Case0(e) => {
+                        Some(self.lifecycle(&e.data.surface, true, boundary)?)
                     }
-                    SurfaceEvent::Case2(event) => self.frame(&event.data.frame_ref, boundary)?,
-                    _ => return Err(invalid("unsupported surface transition")),
+                    SurfaceEvent::Case1(e) => {
+                        Some(self.lifecycle(&e.data.surface, false, boundary)?)
+                    }
+                    SurfaceEvent::Case2(e) => {
+                        self.frame(&e.data.frame_ref, boundary)?;
+                        None
+                    }
+                    SurfaceEvent::Case4(e) => Some(self.authority.apply_with_witnesses(
+                        Input::Lifecycle {
+                            surface_id: e.data.surface_id.clone(),
+                            update: LifecycleUpdate::Lost,
+                        },
+                        vec![boundary],
+                    )?),
+                    _ => return self.unsupported(&env, boundary),
+                };
+                if let Some(out) = out {
+                    if let Some(reason) = out.reason {
+                        return self.refuse(&env.from, &env.msg_id, reason, out.core_seq);
+                    }
+                    self.notify_cancellations(&out.cancelled, out.core_seq)?;
                 }
                 self.fanout(env.body.clone());
             }
@@ -316,7 +340,7 @@ impl Server {
                     .endpoint
                     .clone();
                 if !self.connections.contains_key(&daemon) {
-                    return Err(invalid("executor disconnected"));
+                    return self.unsupported(&env, boundary);
                 }
                 let request = AdmissionRequest::decode(
                     &raw,
@@ -360,38 +384,40 @@ impl Server {
                     }
                 }
             }
-            (Component::Ui, Command::SurfaceRequest(request)) => {
+            (Component::Ui, Command::UiIntent(request)) => {
                 let value = serde_json::to_value(request)?;
+                let take = match value["op"].as_str() {
+                    Some("take_control") => true,
+                    Some("release_control") => false,
+                    _ => return self.unsupported(&env, boundary),
+                };
                 let sid = value["params"]["surface_id"]
                     .as_str()
                     .ok_or_else(|| invalid("surface required"))?
                     .to_string();
-                let take = match value["op"].as_str() {
-                    Some("take_control") if value["params"]["owner"] == "human" => true,
-                    Some("release_control") => false,
-                    _ => return Err(invalid("unsupported UI surface request")),
-                };
                 let input = if take {
                     Input::TakeControl { surface_id: sid }
                 } else {
                     Input::ReleaseControl { surface_id: sid }
                 };
+                if !self
+                    .authority
+                    .state()
+                    .surfaces
+                    .contains_key(value["params"]["surface_id"].as_str().unwrap_or(""))
+                {
+                    return self.unsupported(&env, boundary);
+                }
                 let out = self.authority.apply_with_witnesses(input, vec![boundary])?;
-                if out.reason.is_some() {
-                    return Err(invalid("control transition refused"));
+                if let Some(reason) = out.reason {
+                    return self.refuse(
+                        &env.from,
+                        value["request_id"].as_str().unwrap_or(&env.msg_id),
+                        reason,
+                        out.core_seq,
+                    );
                 }
-                let agent = self
-                    .config
-                    .peers
-                    .iter()
-                    .find(|p| p.endpoint.component == Component::Agent)
-                    .ok_or_else(|| invalid("no agent"))?
-                    .endpoint
-                    .clone();
-                for id in &out.cancelled {
-                    let _ =
-                        self.refuse(&agent, id, Refusal::SurfaceNotAgentControlled, out.core_seq);
-                }
+                self.notify_cancellations(&out.cancelled, out.core_seq)?;
                 let daemon = self
                     .config
                     .peers
@@ -400,7 +426,14 @@ impl Server {
                     .ok_or_else(|| invalid("no daemon"))?
                     .endpoint
                     .clone();
-                self.send(&daemon, env.body.clone())?;
+                let mut params = serde_json::json!({"surface_id":value["params"]["surface_id"]});
+                if take {
+                    params["owner"] = "human".into();
+                }
+                let body = serde_json::from_value(
+                    serde_json::json!({"schema":"surface_request/v0.2","op":value["op"],"params":params}),
+                )?;
+                self.send(&daemon, Command::SurfaceRequest(Box::new(body)))?;
             }
             (Component::Daemon, Command::ActionReceipt(receipt)) => {
                 let input = if self
@@ -420,8 +453,8 @@ impl Server {
                     }
                 };
                 let out = self.authority.apply_with_witnesses(input, vec![boundary])?;
-                if out.reason.is_some() {
-                    return Err(invalid("receipt refused"));
+                if let Some(reason) = out.reason {
+                    return self.refuse(&env.from, &receipt.proposal_id, reason, out.core_seq);
                 }
                 let agent = self
                     .config
@@ -433,9 +466,77 @@ impl Server {
                     .clone();
                 self.send(&agent, env.body.clone())?;
             }
-            _ => return Err(invalid("unsupported body for authenticated role")),
+            _ => return self.unsupported(&env, boundary),
         }
         Ok(())
+    }
+    fn notify_cancellations(&mut self, ids: &[String], seq: u64) -> Result<()> {
+        let agent = self.agent()?;
+        if self.connections.contains_key(&agent) {
+            for id in ids {
+                if let Err(error) = self.refuse(&agent, id, Refusal::SurfaceNotAgentControlled, seq)
+                {
+                    // A slow agent must never prevent forwarding human control
+                    // to the daemon. Saturation has its own reserved diagnostic.
+                    if error.downcast_ref::<SendFailure>().is_none() {
+                        return Err(error);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    fn agent(&self) -> Result<Endpoint> {
+        self.config
+            .peers
+            .iter()
+            .find(|p| p.endpoint.component == Component::Agent)
+            .map(|p| p.endpoint.clone())
+            .ok_or_else(|| invalid("no agent"))
+    }
+    fn lifecycle(
+        &mut self,
+        s: &crate::wire::payload::Surface,
+        created: bool,
+        boundary: Witness,
+    ) -> Result<crate::admission::Outcome> {
+        use crate::wire::payload::{SurfaceControl, SurfaceState};
+        let surface = Surface {
+            display: s.display.clone(),
+            owner: self.agent()?,
+            agent_controlled: s.control == SurfaceControl::Agent,
+            live: s.state == SurfaceState::Active,
+            frame: None,
+            refresh_after: None,
+            allowed_verbs: Vec::new(),
+        };
+        let update = if created {
+            LifecycleUpdate::Created(surface)
+        } else {
+            match s.state {
+                SurfaceState::Lost => LifecycleUpdate::Lost,
+                SurfaceState::Destroyed => LifecycleUpdate::Destroyed,
+                _ => LifecycleUpdate::Updated(surface),
+            }
+        };
+        Ok(self.authority.apply_with_witnesses(
+            Input::Lifecycle {
+                surface_id: s.surface_id.clone(),
+                update,
+            },
+            vec![boundary],
+        )?)
+    }
+    fn unsupported(&mut self, env: &Envelope, boundary: Witness) -> Result<()> {
+        let value = serde_json::to_value(&env.body)?;
+        let id = value["request_id"].as_str().unwrap_or(&env.msg_id);
+        let out = self.authority.apply_with_witnesses(
+            Input::Refuse {
+                reason: Refusal::Policy,
+            },
+            vec![boundary],
+        )?;
+        self.refuse(&env.from, id, Refusal::Policy, out.core_seq)
     }
     fn refuse(&mut self, peer: &Endpoint, id: &str, reason: Refusal, seq: u64) -> Result<()> {
         let body = serde_json::from_value(
@@ -499,6 +600,7 @@ async fn connection(
     hello_writer.await??;
     let (tx, rx) = mpsc::sync_channel(MAX_SEND_QUEUE);
     let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let terminal = Arc::new(Mutex::new(None));
     let (id, epoch) = {
         let mut s = server.lock().map_err(|_| invalid("poisoned authority"))?;
         if s.connections.contains_key(ready.endpoint()) {
@@ -525,7 +627,7 @@ async fn connection(
                 id,
                 epoch,
                 queue: tx,
-                closed: closed.clone(),
+                terminal: terminal.clone(),
             },
         );
         let hello = s.config.core.hello.clone();
@@ -536,6 +638,11 @@ async fn connection(
     let writer_closed = closed.clone();
     let writer_task = tokio::spawn(async move {
         while !writer_closed.load(std::sync::atomic::Ordering::Acquire) {
+            let notification = terminal.lock().ok().and_then(|mut slot| slot.take());
+            if let Some(env) = notification {
+                let _ = write_frame(&mut writer, &env).await;
+                break;
+            }
             match rx.try_recv() {
                 Ok(env) => {
                     if write_frame(&mut writer, &env).await.is_err() {
@@ -556,7 +663,18 @@ async fn connection(
                 return Err(invalid("connection closed"));
             }
             // Polling avoids an unbounded channel or requiring extra Tokio features.
-            let env = read_frame(&mut reader).await?;
+            let reading = read_frame(&mut reader);
+            tokio::pin!(reading);
+            let env = loop {
+                if let Ok(result) =
+                    tokio::time::timeout(Duration::from_millis(2), &mut reading).await
+                {
+                    break result?;
+                }
+                if closed.load(std::sync::atomic::Ordering::Acquire) {
+                    return Err(invalid("connection closed"));
+                }
+            };
             let Some(env) = env else {
                 return Ok(());
             };
@@ -568,7 +686,16 @@ async fn connection(
             if c.id != id || c.epoch != epoch {
                 return Err(invalid("connection superseded"));
             }
-            s.route(&ready, epoch, env)?;
+            if let Err(error) = s.route(&ready, epoch, env) {
+                // The recipient's reserved slot reports saturation. Keep the
+                // originating peer alive long enough to receive that signal.
+                if !matches!(
+                    error.downcast_ref::<SendFailure>(),
+                    Some(SendFailure::QueueOverflow(_))
+                ) {
+                    return Err(error);
+                }
+            }
         }
     }
     .await;
@@ -596,3 +723,6 @@ pub fn effective_uid() -> Result<u32> {
 pub fn state_dir() -> Result<PathBuf> {
     Ok(crate::journal::default_state_dir()?)
 }
+
+#[cfg(test)]
+mod tests;

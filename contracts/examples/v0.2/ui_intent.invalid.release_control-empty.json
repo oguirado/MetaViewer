@@ -1,0 +1,8 @@
+{
+  "schema": "ui_intent/v0.2",
+  "request_id": "control",
+  "op": "release_control",
+  "params": {
+    "surface_id": ""
+  }
+}

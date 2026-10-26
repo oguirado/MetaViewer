@@ -23,9 +23,12 @@ pub(crate) fn validate_signal_target(
 }
 
 fn proc_identity(pid: u32) -> Result<(u64, bool, i32), SupervisorError> {
-    let text = std::fs::read(format!("/proc/{pid}/stat"))
-        .map_err(|_| SupervisorError::OwnershipLost)?;
-    let end = text.iter().rposition(|b| *b == b')').ok_or(SupervisorError::OwnershipLost)?;
+    let text =
+        std::fs::read(format!("/proc/{pid}/stat")).map_err(|_| SupervisorError::OwnershipLost)?;
+    let end = text
+        .iter()
+        .rposition(|b| *b == b')')
+        .ok_or(SupervisorError::OwnershipLost)?;
     let tail = std::str::from_utf8(&text[end + 1..]).map_err(|_| SupervisorError::OwnershipLost)?;
     let parts: Vec<_> = tail.split_whitespace().collect();
     let start = parts
@@ -92,7 +95,8 @@ impl OwnedProcess {
         }
         let input = child.stdin.as_mut().ok_or(SupervisorError::SpawnFailed)?;
         // A closed pipe is handled by the normal terminal/evidence path below.
-        let _ = writeln!(input, "{}", environment.len()).and_then(|_| input.write_all(&environment));
+        let _ =
+            writeln!(input, "{}", environment.len()).and_then(|_| input.write_all(&environment));
         let evidence = Arc::new(Mutex::new(Evidence::default()));
         let stdout = child.stdout.take().ok_or(SupervisorError::SpawnFailed)?;
         let stderr = child.stderr.take().ok_or(SupervisorError::SpawnFailed)?;
@@ -111,7 +115,10 @@ impl OwnedProcess {
                 if n == 0 {
                     break;
                 }
-                let fields: Vec<_> = std::str::from_utf8(&bytes).unwrap_or("").split_whitespace().collect();
+                let fields: Vec<_> = std::str::from_utf8(&bytes)
+                    .unwrap_or("")
+                    .split_whitespace()
+                    .collect();
                 let pid = fields.first().and_then(|s| s.parse::<u32>().ok());
                 let mut shared = output.lock().expect("evidence lock");
                 let Some(pid) = pid.filter(|pid| *pid > 1 && *pid <= i32::MAX as u32) else {
@@ -121,18 +128,23 @@ impl OwnedProcess {
                 if first {
                     first = false;
                     match fields.get(1).and_then(|s| s.parse::<u64>().ok()) {
-                        Some(start) if fields.len() == 2 && start > 0 => shared.root = Some((pid, start)),
+                        Some(start) if fields.len() == 2 && start > 0 => {
+                            shared.root = Some((pid, start))
+                        }
                         _ => shared.invalid = true,
                     }
                 } else if fields.len() == 1 {
                     // Bounded recent history, always retaining root terminal proof.
                     if shared.reaped.len() >= cap && !shared.reaped.contains(&pid) {
                         let root = shared.root.map(|r| r.0);
-                        if let Some(old) = shared.reaped.iter().find(|p| Some(**p) != root).copied() {
+                        if let Some(old) = shared.reaped.iter().find(|p| Some(**p) != root).copied()
+                        {
                             shared.reaped.remove(&old);
                         }
                     }
-                    if shared.reaped.len() < cap { shared.reaped.insert(pid); }
+                    if shared.reaped.len() < cap {
+                        shared.reaped.insert(pid);
+                    }
                 } else {
                     shared.invalid = true;
                 }
@@ -261,17 +273,34 @@ mod tests {
     fn captured_root_identity_does_not_require_live_proc_entry() {
         use std::os::unix::fs::PermissionsExt;
         let path = std::env::temp_dir().join(format!("supervisor-evidence-{}", std::process::id()));
-        std::fs::write(&path, b"#!/bin/sh\nprintf '2147483646 123\\n2147483646\\n'\n").unwrap();
+        std::fs::write(
+            &path,
+            b"#!/bin/sh\nprintf '2147483646 123\\n2147483646\\n'\n",
+        )
+        .unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let spec = LaunchSpec { service: super::super::ServiceId::Daemon, program: path.clone(), args: vec![],
-            cwd: std::env::temp_dir().canonicalize().unwrap(), environment: Default::default(), initial_epoch: 1 };
-        let limits = SupervisorLimits { startup_timeout: std::time::Duration::from_secs(1),
-            graceful_timeout: std::time::Duration::from_millis(10), reap_timeout: std::time::Duration::from_secs(1),
-            poll_interval: std::time::Duration::from_millis(1), stderr_chunk_bytes: 128,
-            max_diagnostics_bytes: 128, max_descendants: 4 };
+        let spec = LaunchSpec {
+            service: super::super::ServiceId::Daemon,
+            program: path.clone(),
+            args: vec![],
+            cwd: std::env::temp_dir().canonicalize().unwrap(),
+            environment: Default::default(),
+            initial_epoch: 1,
+        };
+        let limits = SupervisorLimits {
+            startup_timeout: std::time::Duration::from_secs(1),
+            graceful_timeout: std::time::Duration::from_millis(10),
+            reap_timeout: std::time::Duration::from_secs(1),
+            poll_interval: std::time::Duration::from_millis(1),
+            stderr_chunk_bytes: 128,
+            max_diagnostics_bytes: 128,
+            max_descendants: 4,
+        };
         let mut process = OwnedProcess::spawn(&path, &spec, &limits).unwrap();
         process.child.wait().unwrap();
-        for reader in process.readers.drain(..) { reader.join().unwrap(); }
+        for reader in process.readers.drain(..) {
+            reader.join().unwrap();
+        }
         let result = process.finish();
         std::fs::remove_file(path).unwrap();
         assert!(result.is_ok(), "{result:?}");

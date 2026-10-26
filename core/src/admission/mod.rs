@@ -86,18 +86,54 @@ pub struct Pending {
     dispatched: bool,
     unknown: bool,
 }
+/// [TARGET, unit decision] Private, journalled daemon lifecycle ABI.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "surface", deny_unknown_fields)]
+pub enum LifecycleUpdate {
+    Created(Surface),
+    Updated(Surface),
+    Lost,
+    Destroyed,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event", deny_unknown_fields)]
 pub enum Input {
+    /// [TARGET, unit decision] Daemon lifecycle changes preserve authority fences.
+    Lifecycle {
+        surface_id: String,
+        update: LifecycleUpdate,
+    },
+    Refuse {
+        reason: Refusal,
+    },
     Connect,
-    Surface { id: String, surface: Surface },
-    Frame { surface_id: String, frame: Frame },
+    Surface {
+        id: String,
+        surface: Surface,
+    },
+    Frame {
+        surface_id: String,
+        frame: Frame,
+    },
     Propose(AdmissionRequest),
-    Dispatch { proposal_id: String, now_ns: u64 },
-    Receipt { proposal_id: String, epoch: u64 },
-    TakeControl { surface_id: String },
-    ReleaseControl { surface_id: String },
-    Drain { proposal_id: String, epoch: u64 },
+    Dispatch {
+        proposal_id: String,
+        now_ns: u64,
+    },
+    Receipt {
+        proposal_id: String,
+        epoch: u64,
+    },
+    TakeControl {
+        surface_id: String,
+    },
+    ReleaseControl {
+        surface_id: String,
+    },
+    Drain {
+        proposal_id: String,
+        epoch: u64,
+    },
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -186,6 +222,46 @@ impl CoreState {
             control_ready: false,
         };
         match input {
+            Input::Refuse { reason } => out.reason = Some(*reason),
+            Input::Lifecycle { surface_id, update } => match update {
+                LifecycleUpdate::Created(surface) => {
+                    if surface_id.is_empty()
+                        || surface.display.is_empty()
+                        || surface.frame.is_some()
+                        || self.surfaces.contains_key(surface_id)
+                    {
+                        out.reason = Some(Refusal::Policy);
+                    } else {
+                        self.surfaces.insert(surface_id.clone(), surface.clone());
+                    }
+                }
+                _ => {
+                    if let Some(old) = self.surfaces.get_mut(surface_id) {
+                        match update {
+                            LifecycleUpdate::Updated(surface) => {
+                                if surface.display.is_empty() || surface.frame.is_some() {
+                                    return Err(AdmissionError::InvalidInput);
+                                }
+                                old.display = surface.display.clone();
+                                old.live = surface.live;
+                                old.agent_controlled &= surface.agent_controlled;
+                                old.allowed_verbs = surface.allowed_verbs.clone();
+                            }
+                            LifecycleUpdate::Lost | LifecycleUpdate::Destroyed => {
+                                old.live = false;
+                            }
+                            LifecycleUpdate::Created(_) => unreachable!(),
+                        }
+                        old.refresh_after = Some(next);
+                        if !old.live || !old.agent_controlled {
+                            out.cancelled = self.cancel_surface(surface_id);
+                            out.cancellation_reason = Some(Refusal::SurfaceNotAgentControlled);
+                        }
+                    } else {
+                        out.reason = Some(Refusal::Policy);
+                    }
+                }
+            },
             Input::Connect => {
                 self.epoch = self.epoch.checked_add(1).ok_or(AdmissionError::Overflow)?;
                 for p in self.pending.values_mut() {
@@ -325,27 +401,7 @@ impl CoreState {
                     .ok_or(AdmissionError::InvalidInput)?;
                 s.agent_controlled = false;
                 s.refresh_after = Some(next);
-                out.cancelled = self
-                    .pending
-                    .iter()
-                    .filter_map(|(id, p)| {
-                        p.request
-                            .proposal()
-                            .ok()
-                            .filter(|p| p.surface_id == *surface_id)
-                            .map(|_| id.clone())
-                    })
-                    .collect();
-                for id in &out.cancelled {
-                    if let Some(p) = self.pending.get(id) {
-                        if p.dispatched || p.unknown {
-                            self.draining.insert(id.clone(), surface_id.clone());
-                            self.pending.remove(id);
-                            continue;
-                        }
-                    }
-                    self.remove_pending(id);
-                }
+                out.cancelled = self.cancel_surface(surface_id);
                 out.control_ready = !self.draining.values().any(|sid| sid == surface_id);
                 // Each cancelled proposal carries the typed takeover refusal.
                 out.cancellation_reason = Some(Refusal::SurfaceNotAgentControlled);
@@ -378,6 +434,32 @@ impl CoreState {
         self.core_seq = next;
         Ok(out)
     }
+    fn cancel_surface(&mut self, surface_id: &str) -> Vec<String> {
+        let ids: Vec<_> = self
+            .pending
+            .iter()
+            .filter_map(|(id, p)| {
+                p.request
+                    .proposal()
+                    .ok()
+                    .filter(|p| p.surface_id == surface_id)
+                    .map(|_| id.clone())
+            })
+            .collect();
+        for id in &ids {
+            if self
+                .pending
+                .get(id)
+                .is_some_and(|p| p.dispatched || p.unknown)
+            {
+                self.draining.insert(id.clone(), surface_id.into());
+                self.pending.remove(id);
+            } else {
+                self.remove_pending(id);
+            }
+        }
+        ids
+    }
     fn remove_pending(&mut self, id: &str) {
         if let Some(p) = self.pending.remove(id) {
             if let Ok(p) = p.request.proposal() {
@@ -400,14 +482,14 @@ impl CoreState {
         let Some(f) = &s.frame else {
             return Ok(Some(Refusal::StaleFrame));
         };
+        if !s.agent_controlled || !s.live || s.owner != r.envelope.from {
+            return Ok(Some(Refusal::SurfaceNotAgentControlled));
+        }
         if s.refresh_after.is_some()
             || f.sha256 != p.based_on_frame.sha256
             || f.generation != p.based_on_frame.generation
         {
             return Ok(Some(Refusal::StaleFrame));
-        }
-        if !s.agent_controlled || !s.live || s.owner != r.envelope.from {
-            return Ok(Some(Refusal::SurfaceNotAgentControlled));
         }
         let conflict = self.leases.iter().any(|(sid, id)| {
             (sid == &p.surface_id

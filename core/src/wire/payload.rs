@@ -2034,8 +2034,29 @@ pub struct UiIntentCase9 {
     pub schema: UiIntentCase0Schema,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UiControlOp {
+    #[serde(rename = "take_control")]
+    TakeControl,
+    #[serde(rename = "release_control")]
+    ReleaseControl,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiControlParams {
+    pub surface_id: String,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiControl {
+    pub schema: UiIntentCase0Schema,
+    pub request_id: String,
+    pub op: UiControlOp,
+    pub params: UiControlParams,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum UiIntent {
+    Control(Box<UiControl>),
     Case0(Box<UiIntentCase0>),
     Case1(Box<UiIntentCase1>),
     Case2(Box<UiIntentCase2>),

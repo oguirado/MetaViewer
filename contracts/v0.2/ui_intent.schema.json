@@ -466,6 +466,88 @@
       ],
       "type": "object",
       "maxProperties": 256
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "take_control"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "surface_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "surface_id"
+          ],
+          "type": "object",
+          "maxProperties": 256
+        },
+        "request_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "schema": {
+          "const": "ui_intent/v0.2"
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "type": "object",
+      "maxProperties": 256
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "release_control"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "surface_id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "surface_id"
+          ],
+          "type": "object",
+          "maxProperties": 256
+        },
+        "request_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "type": "string"
+        },
+        "schema": {
+          "const": "ui_intent/v0.2"
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "type": "object",
+      "maxProperties": 256
     }
   ]
 }

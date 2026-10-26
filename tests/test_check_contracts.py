@@ -130,6 +130,17 @@ class VersionedContractTests(unittest.TestCase):
              'record_request', 'record_event', 'settings', 'mv_tool_call', 'mv_tool_result',
              'session_record')
 
+    def test_ui_control_fixtures(self):
+        validator = Validator(ROOT / 'contracts/v0.2')
+        schema = validator.load('ui_intent.schema.json')
+        fixture = json.loads((ROOT / 'contracts/examples/v0.2/ui_intent.valid.json').read_text())
+        for op in ('take_control', 'release_control'):
+            with self.subTest(op=op):
+                validator.validate({**fixture, 'op': op}, schema)
+                for params in ({}, {'surface_id': ''}, {'surface_id': 's', 'owner': 'human'}):
+                    with self.assertRaises(ValidationError):
+                        validator.validate({**fixture, 'op': op, 'params': params}, schema)
+
     def make_repository(self, root, versions=('v0.1', 'v0.2')):
         for version in versions:
             directory = root / 'contracts' / version

@@ -101,12 +101,7 @@ fn proposal(id: &str, frame: &Value) -> Value {
     p
 }
 fn control(op: &str) -> Value {
-    let mut body =
-        json!({"schema":"surface_request/v0.2","op":op,"params":{"surface_id":"surface-demo"}});
-    if op == "take_control" {
-        body["params"]["owner"] = "human".into();
-    }
-    body
+    json!({"schema":"ui_intent/v0.2","request_id":format!("control-{op}"),"op":op,"params":{"surface_id":"surface-demo"}})
 }
 #[test]
 fn socket_flow_admission_control_and_replay() {
@@ -134,6 +129,11 @@ fn socket_flow_admission_control_and_replay() {
         let mut daemon = Peer::connect(&socket, "daemon").await;
         let mut agent = Peer::connect(&socket, "agent").await;
         let mut ui = Peer::connect(&socket, "ui").await;
+        ui.send(json!({"schema":"ui_intent/v0.2","request_id":"unsupported","op":"fold","params":{"slot_id":"slot"}})).await;
+        ui.verdict("refused", Some("POLICY")).await;
+        // A well-formed body sent by the wrong role also preserves the connection.
+        agent.send(control("take_control")).await;
+        agent.verdict("refused", Some("POLICY")).await;
         let surface: Value = serde_json::from_str(include_str!(
             "../../contracts/examples/v0.2/surface.valid.json"
         ))
@@ -144,6 +144,13 @@ fn socket_flow_admission_control_and_replay() {
             )
             .await;
         assert!(matches!(ui.receive().await.body, Command::SurfaceEvent(_)));
+        // Duplicate lifecycle creation is refused durably without retiring the daemon.
+        daemon
+            .send(
+                json!({"schema":"surface_event/v0.2","event":"created","data":{"surface":surface}}),
+            )
+            .await;
+        daemon.verdict("refused", Some("POLICY")).await;
         let frame = SharedFrame::new();
         let f1 = frame.value(1);
         daemon.send(f1.clone()).await;
@@ -177,6 +184,16 @@ fn socket_flow_admission_control_and_replay() {
             serde_json::to_value(daemon.receive().await.body).unwrap()["op"],
             "take_control"
         );
+        // Daemon metadata must not undo a human takeover.
+        daemon.send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":surface}})).await;
+        ui.receive().await;
+        agent.send(proposal("human-before-frame", &f1)).await;
+        agent
+            .verdict("refused", Some("SURFACE_NOT_AGENT_CONTROLLED"))
+            .await;
+        // Release cannot bypass a dispatched action awaiting its receipt.
+        ui.send(control("release_control")).await;
+        ui.verdict("refused", Some("POLICY")).await;
         // A fresh frame under human ownership proves ownership refusal independently
         // of the stale-frame fence's precedence in the admission reducer.
         daemon.send(frame.value(2)).await;
@@ -202,6 +219,50 @@ fn socket_flow_admission_control_and_replay() {
         agent.send(proposal("readmitted", &frame.value(3))).await;
         agent.verdict("admitted", None).await;
         daemon.receive().await;
+        let mut changed = surface.clone();
+        changed["state"] = "lost".into();
+        daemon.send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":changed}})).await;
+        ui.receive().await;
+        agent
+            .verdict("refused", Some("SURFACE_NOT_AGENT_CONTROLLED"))
+            .await;
+        agent.send(proposal("lost-surface", &frame.value(3))).await;
+        agent
+            .verdict("refused", Some("SURFACE_NOT_AGENT_CONTROLLED"))
+            .await;
+        let mut settled: Value = serde_json::from_str(include_str!(
+            "../../contracts/examples/v0.2/action_receipt.valid.json"
+        ))
+        .unwrap();
+        settled["proposal_id"] = "readmitted".into();
+        daemon.send(settled).await;
+        agent.receive().await;
+        daemon.send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":surface}})).await;
+        ui.receive().await;
+        agent
+            .send(proposal("updated-needs-frame", &frame.value(3)))
+            .await;
+        agent.verdict("refused", Some("STALE_FRAME")).await;
+        daemon.send(frame.value(4)).await;
+        ui.receive().await;
+        agent
+            .send(proposal("updated-admitted", &frame.value(4)))
+            .await;
+        agent.verdict("admitted", None).await;
+        daemon.receive().await;
+        let mut destroyed = surface.clone();
+        destroyed["state"] = "destroyed".into();
+        daemon.send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":destroyed}})).await;
+        ui.receive().await;
+        agent
+            .verdict("refused", Some("SURFACE_NOT_AGENT_CONTROLLED"))
+            .await;
+        agent
+            .send(proposal("destroyed-surface", &frame.value(4)))
+            .await;
+        agent
+            .verdict("refused", Some("SURFACE_NOT_AGENT_CONTROLLED"))
+            .await;
         let snapshot = server.lock().unwrap().snapshot().unwrap();
         let root = temp.0.join("state/sessions/serve-session");
         let replay = scan(&root.join("journal.jsonl"), &root).unwrap();
@@ -292,6 +353,21 @@ fn rejects_foreign_uid_unknown_registration_pin_and_oversized_frame() {
                 .unwrap();
             assert!(!matches!(refused, Ok(Some(_))), "{kind}");
         }
+        let mut malformed = Peer::connect(&socket, "ui").await;
+        let mut env = PeerEnvelope::value();
+        env["seq"] = 2.into();
+        env["body"]["params"] = json!({});
+        use tokio::io::AsyncWriteExt;
+        malformed
+            .socket
+            .write_all(format!("{env}\n").as_bytes())
+            .await
+            .unwrap();
+        let closed =
+            tokio::time::timeout(Duration::from_secs(3), read_frame(&mut malformed.socket))
+                .await
+                .unwrap();
+        assert!(!matches!(closed, Ok(Some(_))));
         assert_eq!(
             serde_json::from_slice::<Value>(&server.lock().unwrap().snapshot().unwrap()).unwrap()
                 ["core_seq"],
@@ -301,9 +377,20 @@ fn rejects_foreign_uid_unknown_registration_pin_and_oversized_frame() {
     });
 }
 #[test]
-fn unsupported_ui_intent_control_is_closed_before_effects() {
-    let p = PeerEnvelope::value();
-    assert!(decode_envelope(&p.to_string()).is_err());
+fn control_intents_are_closed_and_reject_malformed_params() {
+    for op in ["take_control", "release_control"] {
+        let mut p = PeerEnvelope::value();
+        p["body"]["op"] = op.into();
+        assert!(decode_envelope(&p.to_string()).is_ok());
+        for params in [
+            json!({}),
+            json!({"surface_id":""}),
+            json!({"surface_id":"s","owner":"human"}),
+        ] {
+            p["body"]["params"] = params;
+            assert!(decode_envelope(&p.to_string()).is_err());
+        }
+    }
 }
 struct PeerEnvelope;
 impl PeerEnvelope {

@@ -1,0 +1,6 @@
+{
+  "schema": "ui_intent/v0.2",
+  "request_id": "control",
+  "op": "take_control",
+  "params": {}
+}

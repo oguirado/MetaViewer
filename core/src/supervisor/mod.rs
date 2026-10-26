@@ -85,7 +85,10 @@ impl Supervisor {
         );
         let result = self.launch(id).await;
         if result.is_err()
-            && self.entries.get(&id).is_some_and(|e| e.process.is_none() && e.receipt.is_none())
+            && self
+                .entries
+                .get(&id)
+                .is_some_and(|e| e.process.is_none() && e.receipt.is_none())
         {
             self.entries.remove(&id);
         }
@@ -412,15 +415,25 @@ impl Supervisor {
 mod regression_tests {
     use super::*;
     fn limits() -> SupervisorLimits {
-        SupervisorLimits { startup_timeout: std::time::Duration::from_secs(1),
+        SupervisorLimits {
+            startup_timeout: std::time::Duration::from_secs(1),
             graceful_timeout: std::time::Duration::from_millis(10),
             reap_timeout: std::time::Duration::from_secs(1),
             poll_interval: std::time::Duration::from_millis(1),
-            stderr_chunk_bytes: 128, max_diagnostics_bytes: 128, max_descendants: 4 }
+            stderr_chunk_bytes: 128,
+            max_diagnostics_bytes: 128,
+            max_descendants: 4,
+        }
     }
     fn spec() -> LaunchSpec {
-        LaunchSpec { service: ServiceId::Daemon, program: std::env::current_exe().unwrap().canonicalize().unwrap(),
-            args: vec![], cwd: std::env::temp_dir().canonicalize().unwrap(), environment: BTreeMap::new(), initial_epoch: 1 }
+        LaunchSpec {
+            service: ServiceId::Daemon,
+            program: std::env::current_exe().unwrap().canonicalize().unwrap(),
+            args: vec![],
+            cwd: std::env::temp_dir().canonicalize().unwrap(),
+            environment: BTreeMap::new(),
+            initial_epoch: 1,
+        }
     }
     #[test]
     fn failed_receipt_is_retried_but_complete_receipt_is_cached() {
@@ -447,15 +460,26 @@ mod regression_tests {
     }
     #[test]
     fn initial_spawn_failure_does_not_poison_entries() {
-        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
-            let path = std::env::temp_dir().join(format!("supervisor-nonexec-{}", std::process::id()));
-            std::fs::write(&path, b"not executable").unwrap();
-            let mut s = Supervisor::new(limits()).unwrap();
-            s.set_reaper_runtime(path.clone()).unwrap();
-            assert_eq!(s.start(spec()).await.unwrap_err(), SupervisorError::SpawnFailed);
-            assert_eq!(s.start(spec()).await.unwrap_err(), SupervisorError::SpawnFailed);
-            assert!(s.entries.is_empty());
-            std::fs::remove_file(path).unwrap();
-        });
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let path =
+                    std::env::temp_dir().join(format!("supervisor-nonexec-{}", std::process::id()));
+                std::fs::write(&path, b"not executable").unwrap();
+                let mut s = Supervisor::new(limits()).unwrap();
+                s.set_reaper_runtime(path.clone()).unwrap();
+                assert_eq!(
+                    s.start(spec()).await.unwrap_err(),
+                    SupervisorError::SpawnFailed
+                );
+                assert_eq!(
+                    s.start(spec()).await.unwrap_err(),
+                    SupervisorError::SpawnFailed
+                );
+                assert!(s.entries.is_empty());
+                std::fs::remove_file(path).unwrap();
+            });
     }
 }
