@@ -5,11 +5,15 @@ no generated source or executable is written into the adapter surface.
 """
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+
+# The Go toolchain from PATH (hosted runners), else the host install.
+GO = shutil.which("go") or "/usr/local/go/bin/go"
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -25,7 +29,7 @@ class NativeAdapterTests(unittest.TestCase):
             env = dict(os.environ, GOPROXY="off", GOSUMDB="off", GOTOOLCHAIN="local",
                        MV_W1_FAKE_CLI=str(Path(__file__).with_name("fake_capsule.py")),
                        MV_W1_PYTHON=sys.executable)
-            proc = subprocess.run(["/usr/local/go/bin/go", "test", "-count=1",
+            proc = subprocess.run([GO, "test", "-count=1",
                                    "-overlay", str(overlay), "-run", "^TestW1FakeCLIContract$",
                                    "-v", "./internal/cli"], cwd=module, env=env,
                                   capture_output=True, text=True, timeout=60)

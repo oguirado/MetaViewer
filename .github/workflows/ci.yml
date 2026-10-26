@@ -1467,7 +1467,7 @@ jobs:
             exit 2
           fi
           HARNESS="tests/e2e/run.py"
-          if [ ! -x "$HARNESS" ]; then
+          if [ ! -f "$HARNESS" ]; then
             blocked e2e-harness "fake-capsule harness $HARNESS ABSENT, no W0 owner registered" .github/workflows/ci.yml -- xvfb-run -a -s "-screen 0 1280x900x24" python3 tests/e2e/run.py
             exit 2
           fi
