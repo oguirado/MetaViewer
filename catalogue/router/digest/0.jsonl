@@ -252,5 +252,5 @@
 {"g":["mvui-wall-csp.test"],"i":251,"id":"mvui-wall-csp.test.js","o":[],"p":"Routed repository file ui/test/mvui-wall-csp.test.js","t":"mvui-wall-csp.test.js"}
 {"g":["mvui-wall-sfc.test"],"i":252,"id":"mvui-wall-sfc.test.js","o":[],"p":"Routed repository file ui/test/mvui-wall-sfc.test.js","t":"mvui-wall-sfc.test.js"}
 {"g":["mvui-x-schema"],"i":253,"id":"mvui-x-schema.js","o":[],"p":"Routed repository file ui/test/mvui-x-schema.js","t":"mvui-x-schema.js"}
-{"g":["mvui-agent-contract.test"],"i":254,"id":"mvuiage-560946abd537","o":[],"p":"Routed repository file ui/test/mvui-agent-contract.test.js","t":"mvui-agent-contract.test.js"}
-{"g":["mvui-agent-snapshot.test"],"i":255,"id":"mvuiage-fe4e0bd99d38","o":[],"p":"Routed repository file ui/test/mvui-agent-snapshot.test.js","t":"mvui-agent-snapshot.test.js"}
+{"g":["mvui2-contrast-tokens.test"],"i":254,"id":"mvui2co-ac677845cb36","o":[],"p":"Routed repository file ui/test/mvui2-contrast-tokens.test.js","t":"mvui2-contrast-tokens.test.js"}
+{"g":["mvui2-hooks-frame.test"],"i":255,"id":"mvui2ho-83c44de816a4","o":[],"p":"Routed repository file ui/test/mvui2-hooks-frame.test.js","t":"mvui2-hooks-frame.test.js"}
