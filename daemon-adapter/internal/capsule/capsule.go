@@ -33,23 +33,15 @@ func NewErrorEvent(surfaceID string, fault *cli.Fault) (ErrorEvent, error) {
 type Backend interface {
 	Handle(context.Context, Request) ([]json.RawMessage, error)
 }
-type backend struct {
-	runner cli.Runner
-	clock  cli.Clock
-}
 
-func New(r cli.Runner, clock cli.Clock) Backend { return &backend{runner: r, clock: clock} }
-func (b *backend) Handle(ctx context.Context, r Request) ([]json.RawMessage, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
+// New retains the skeleton seam. Runtime configuration is explicit in NewManager.
+func New(r cli.Runner, clock cli.Clock) Backend { return unconfigured{} }
+
+type unconfigured struct{}
+
+func (unconfigured) Handle(ctx context.Context, r Request) ([]json.RawMessage, error) {
+	if e := ctx.Err(); e != nil {
+		return nil, e
 	}
-	if r.Schema != "surface_request/v0.1" && r.Schema != "surface_request/v0.2" {
-		return nil, &cli.Fault{Code: "schema", Detail: "unsupported request schema"}
-	}
-	switch r.Op {
-	case "create", "list", "destroy", "take_control", "release_control", "input", "frame_subscribe", "frame_unsubscribe":
-		return nil, cli.Unsupported(r.Op)
-	default:
-		return nil, &cli.Fault{Code: "unknown_op", Detail: "unknown surface operation"}
-	}
+	return nil, &cli.Fault{Code: "configuration", Detail: "native profile and session configuration required"}
 }

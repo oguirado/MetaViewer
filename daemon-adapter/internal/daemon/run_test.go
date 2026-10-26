@@ -10,15 +10,19 @@ import (
 
 func TestStubRefusal(t *testing.T) {
 	table := Commands()
-	for _, op := range []string{"create", "list", "destroy", "take_control", "release_control", "input", "frame_subscribe", "frame_unsubscribe", "view", "login", "view-stop", "record_start", "record_stop", "screenshot"} {
+	operations := []string{"create", "list", "destroy", "take_control", "release_control", "input", "frame_subscribe", "frame_unsubscribe", "view", "login", "view-stop", "record_start", "record_stop", "screenshot"}
+	if len(table) != len(operations) {
+		t.Fatal("command routes changed; extend configuration refusal coverage")
+	}
+	for _, op := range operations {
 		t.Run(op, func(t *testing.T) {
 			fn, ok := table[op]
 			if !ok {
 				t.Fatal("missing command")
 			}
 			var fault *cli.Fault
-			if err := fn(context.Background(), nil); !errors.As(err, &fault) || fault.Code != "unsupported" {
-				t.Fatalf("stub fabricated success: %v", err)
+			if err := fn(context.Background(), nil); !errors.As(err, &fault) || fault.Code != "configuration" || fault.Detail == "" {
+				t.Fatalf("unconfigured command must refuse with a typed configuration error: %v", err)
 			}
 		})
 	}

@@ -1,0 +1,17 @@
+#!/usr/bin/env python3
+import json
+import os
+import sys
+import time
+
+verb = sys.argv[1]
+if verb == "start":
+    print(json.dumps({"container": "srf-id-demo", "run_id": "demo-run", "windows": [{"id": "w1", "x": 0, "y": 0, "w": 2, "h": 1, "title": "", "url": ""}]}))
+elif verb == "overflow":
+    print("x" * 65536)
+elif verb == "delay":
+    time.sleep(5)
+elif verb == "environment":
+    print(json.dumps({"clean": "UNADMITTED_TEST_SECRET" not in os.environ}))
+else:
+    sys.exit(6)

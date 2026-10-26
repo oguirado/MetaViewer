@@ -1,0 +1,499 @@
+package capsule
+
+// [TARGET, unit decision] Profiles bind public kinds to admitted native programs,
+// geometry, display and RAM allocation. The caller supplies hello's monotonic origin.
+// Local observation IDs are opaque and never reused within this manager's session.
+// Uncertain native effects quarantine the profile until explicit reconciliation.
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"metaviewer/daemon-adapter/internal/cli"
+)
+
+type Profile struct {
+	Kind, NativeKind, Program, AppDir, RAMRoot, Display string
+	Width, Height                                       int
+}
+type Config struct {
+	BinDir                      string
+	Profiles                    map[string]Profile
+	MaxSurfaces, MaxOutputBytes int
+	Timeout                     time.Duration
+	OriginNS                    uint64
+	// BeforeDestroy drains any capture subscriptions before native stop.
+	BeforeDestroy func(context.Context, string) error
+}
+type Geometry struct {
+	W int `json:"w"`
+	H int `json:"h"`
+}
+type Surface struct {
+	Schema     string   `json:"schema"`
+	SurfaceID  string   `json:"surface_id"`
+	Kind       string   `json:"kind"`
+	Display    string   `json:"display"`
+	Geometry   Geometry `json:"geometry"`
+	State      string   `json:"state"`
+	Visibility string   `json:"visibility"`
+	Control    string   `json:"control"`
+	ProfileID  string   `json:"profile_id"`
+}
+type Window struct {
+	ID    string `json:"id"`
+	X     int    `json:"x"`
+	Y     int    `json:"y"`
+	W     int    `json:"w"`
+	H     int    `json:"h"`
+	Title string `json:"title"`
+	URL   string `json:"url"`
+}
+type Binding struct {
+	Surface                                                   Surface
+	Container, RunID, Window, FramesRoot, NativeKind, Program string
+}
+type NativeFrame struct {
+	Path            string          `json:"path"`
+	Seq             uint64          `json:"seq"`
+	SHA256RGB24     string          `json:"sha256_rgb24"`
+	Width           int             `json:"width"`
+	Height          int             `json:"height"`
+	CaptureMonoNS   uint64          `json:"capture_mono_ns"`
+	Generation      string          `json:"generation"`
+	Window          *Window         `json:"window,omitempty"`
+	State           json.RawMessage `json:"state,omitempty"`
+	TSNS, CaptureUS uint64          `json:"-"`
+}
+type Manager struct {
+	mu          sync.Mutex
+	cfg         Config
+	runner      cli.Runner
+	clock       cli.Clock
+	bindings    map[string]Binding
+	quarantined map[string]bool
+}
+
+var profileID = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
+var identityContainer = regexp.MustCompile(`^srf-(id|pg|vm)-[a-z0-9][a-z0-9-]{0,39}$`)
+var holdingsContainer = regexp.MustCompile(`^srf-ng-hcap-hc-[0-9a-f]{12}-[0-9]{1,2}$`)
+var runID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
+var digest = regexp.MustCompile(`^[0-9a-f]{64}$`)
+var displayID = regexp.MustCompile(`^:[0-9]+(\.[0-9]+)?$`)
+
+func fault(code, detail string) error { return &cli.Fault{Code: code, Detail: detail} }
+func NewManager(cfg Config, r cli.Runner, clock cli.Clock) (*Manager, error) {
+	if r == nil || clock == nil || cfg.OriginNS == 0 || !filepath.IsAbs(cfg.BinDir) || cfg.MaxSurfaces < 1 || cfg.MaxOutputBytes < 1 || cfg.MaxOutputBytes > 1<<20 || cfg.Timeout <= 0 || cfg.Timeout > 3*time.Minute || len(cfg.Profiles) == 0 {
+		return nil, fault("configuration", "complete bounded native configuration required")
+	}
+	copyProfiles := make(map[string]Profile, len(cfg.Profiles))
+	for id, p := range cfg.Profiles {
+		if !profileID.MatchString(id) || p.Width < 1 || p.Height < 1 || p.Width > 8192 || p.Height > 8192 || !displayID.MatchString(p.Display) || !filepath.IsAbs(p.RAMRoot) || !withinRAM(p.RAMRoot) {
+			return nil, fault("configuration", "invalid profile geometry or allocation")
+		}
+		switch p.Kind {
+		case "browser":
+			if p.NativeKind != "browser" || p.Program != "" {
+				return nil, fault("configuration", "browser mapping invalid")
+			}
+		case "desktop_capsule":
+			if p.NativeKind != "program" || !profileID.MatchString(p.Program) {
+				return nil, fault("configuration", "program mapping required")
+			}
+		case "vm":
+			if p.NativeKind != "vm" || !profileID.MatchString(p.Program) {
+				return nil, fault("configuration", "virtual program mapping required")
+			}
+		case "game_capsule":
+			if p.NativeKind != "holdings" || !filepath.IsAbs(p.AppDir) {
+				return nil, fault("configuration", "game application mapping required")
+			}
+		default:
+			return nil, fault("configuration", "unsupported public kind")
+		}
+		copyProfiles[id] = p
+	}
+	cfg.Profiles = copyProfiles
+	return &Manager{cfg: cfg, runner: r, clock: clock, bindings: make(map[string]Binding), quarantined: make(map[string]bool)}, nil
+}
+func withinRAM(path string) bool {
+	return path == "/dev/shm" || len(path) > 9 && path[:9] == "/dev/shm/" && filepath.Clean(path) == path
+}
+func (m *Manager) execute(ctx context.Context, p Profile, args []string, in []byte) ([]byte, error) {
+	name := "srf-identity-surface"
+	if p.NativeKind == "holdings" {
+		name = "srf-holdings-capsule"
+	}
+	ctx, cancel := context.WithTimeout(ctx, m.cfg.Timeout)
+	defer cancel()
+	out, err := m.runner.Run(ctx, append([]string{filepath.Join(m.cfg.BinDir, name)}, args...), in)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) > m.cfg.MaxOutputBytes {
+		return nil, fault("malformed_cli", "native output exceeds cap")
+	}
+	return out, nil
+}
+func event(version, event string, data any) json.RawMessage {
+	b, _ := json.Marshal(struct {
+		Schema string `json:"schema"`
+		Event  string `json:"event"`
+		Data   any    `json:"data"`
+	}{"surface_event/" + version, event, data})
+	return b
+}
+func surfaceEvent(version, kind string, s Surface) json.RawMessage {
+	s.Schema = "surface/" + version
+	return event(version, kind, struct {
+		Surface Surface `json:"surface"`
+	}{s})
+}
+func (m *Manager) Handle(ctx context.Context, r Request) ([]json.RawMessage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	version := "v0.2"
+	if r.Schema == "surface_request/v0.1" {
+		version = "v0.1"
+	} else if r.Schema != "surface_request/v0.2" {
+		return nil, fault("schema", "unsupported request schema")
+	}
+	// Unsubscribe may wait for a capture that itself acquires mu.
+	if r.Op == "destroy" && m.cfg.BeforeDestroy != nil {
+		var p struct {
+			SurfaceID string `json:"surface_id"`
+		}
+		if e := cli.ParseLine(r.Params, m.cfg.MaxOutputBytes, &p); e != nil || p.SurfaceID == "" {
+			return nil, fault("params", "surface identity required")
+		}
+		if e := m.cfg.BeforeDestroy(ctx, p.SurfaceID); e != nil {
+			return nil, e
+		}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	switch r.Op {
+	case "create":
+		return m.create(ctx, r, version)
+	case "list":
+		var p struct{}
+		if e := cli.ParseLine(r.Params, m.cfg.MaxOutputBytes, &p); e != nil {
+			return nil, e
+		}
+		ids := make([]string, 0, len(m.bindings))
+		for id, b := range m.bindings {
+			if b.Surface.State != "destroyed" {
+				ids = append(ids, id)
+			}
+		}
+		sort.Strings(ids)
+		out := make([]json.RawMessage, 0, len(ids))
+		for _, id := range ids {
+			out = append(out, surfaceEvent(version, "created", m.bindings[id].Surface))
+		}
+		return out, nil
+	case "destroy":
+		return m.destroy(ctx, r, version)
+	case "input":
+		return m.input(ctx, r, version)
+	case "take_control", "release_control", "frame_subscribe", "frame_unsubscribe", "record_start", "record_stop":
+		return nil, cli.Unsupported(r.Op)
+	default:
+		return nil, fault("unknown_op", "unknown surface operation")
+	}
+}
+func (m *Manager) create(ctx context.Context, r Request, version string) ([]json.RawMessage, error) {
+	var q struct {
+		Kind      string   `json:"kind"`
+		ProfileID string   `json:"profile_id"`
+		Geometry  Geometry `json:"geometry"`
+	}
+	if e := cli.ParseLine(r.Params, m.cfg.MaxOutputBytes, &q); e != nil {
+		return nil, e
+	}
+	p, ok := m.cfg.Profiles[q.ProfileID]
+	if !ok || !profileID.MatchString(q.ProfileID) || p.Kind != q.Kind || q.Geometry.W != p.Width || q.Geometry.H != p.Height {
+		return nil, fault("profile", "unadmitted profile, kind or geometry")
+	}
+	if len(m.bindings) >= m.cfg.MaxSurfaces || m.quarantined[q.ProfileID] {
+		return nil, fault("uncertain", "surface capacity or unresolved native outcome")
+	}
+	// Quarantine before execution: malformed success can still have created a capsule.
+	m.quarantined[q.ProfileID] = true
+	idBytes := make([]byte, 16)
+	if _, e := rand.Read(idBytes); e != nil {
+		return nil, e
+	}
+	id := "surface-" + hex.EncodeToString(idBytes)
+	args := []string{"start", "--kind", p.NativeKind, "--identity", q.ProfileID, "--windows", "1"}
+	if p.NativeKind == "program" || p.NativeKind == "vm" {
+		args = append(args, "--program", p.Program)
+	}
+	if p.NativeKind == "holdings" {
+		args = []string{"start", "--slots", "1", "--app", p.AppDir}
+	}
+	out, e := m.execute(ctx, p, args, nil)
+	if e != nil {
+		return nil, e
+	}
+	b := Binding{Surface: Surface{Schema: "surface/" + version, SurfaceID: id, Kind: p.Kind, Display: p.Display, Geometry: q.Geometry, State: "active", Visibility: "unfolded", Control: "agent", ProfileID: q.ProfileID}, NativeKind: p.NativeKind, Program: p.Program}
+	if p.NativeKind == "holdings" {
+		var records []struct {
+			Slot       int    `json:"slot"`
+			Container  string `json:"container"`
+			RunID      string `json:"run_id"`
+			Display    string `json:"display"`
+			Width      int    `json:"width"`
+			Height     int    `json:"height"`
+			LaneSocket string `json:"lane_socket"`
+			ReadyLine  string `json:"ready_line"`
+			ReadyMS    *int64 `json:"ready_ms"`
+			FramesDir  string `json:"frames_dir"`
+		}
+		if e := parseArray(out, m.cfg.MaxOutputBytes, &records); e != nil {
+			return nil, e
+		}
+		if len(records) != 1 {
+			return nil, fault("malformed_cli", "one game capsule required")
+		}
+		c := records[0]
+		if c.Slot != 1 || !holdingsContainer.MatchString(c.Container) || !runID.MatchString(c.RunID) || c.Display != p.Display || c.Width != p.Width || c.Height != p.Height || c.ReadyLine == "" || c.ReadyMS == nil || *c.ReadyMS < 0 || !under(p.RAMRoot, c.FramesDir) {
+			return nil, fault("malformed_cli", "invalid game readiness or binding")
+		}
+		b.Container = c.Container
+		b.RunID = c.RunID
+		b.FramesRoot = c.FramesDir
+	} else {
+		var c struct {
+			Kind      string   `json:"kind,omitempty"`
+			Container string   `json:"container"`
+			RunID     string   `json:"run_id"`
+			Windows   []Window `json:"windows"`
+		}
+		if e := cli.ParseLine(out, m.cfg.MaxOutputBytes, &c); e != nil {
+			return nil, e
+		}
+		if !identityContainer.MatchString(c.Container) || !runID.MatchString(c.RunID) || len(c.Windows) != 1 || c.Windows[0].ID != "w1" || c.Windows[0].W != p.Width || c.Windows[0].H != p.Height || c.Windows[0].X < 0 || c.Windows[0].Y < 0 || (c.Kind != p.NativeKind && !(p.NativeKind == "browser" && c.Kind == "")) {
+			return nil, fault("malformed_cli", "invalid identity readiness or binding")
+		}
+		b.Container = c.Container
+		b.RunID = c.RunID
+		b.Window = c.Windows[0].ID
+		b.FramesRoot = filepath.Join(p.RAMRoot, c.RunID, "frames", b.Window)
+	}
+	for _, old := range m.bindings {
+		if old.Container == b.Container {
+			return nil, fault("binding", "native container already observed")
+		}
+	}
+	m.bindings[id] = b
+	delete(m.quarantined, q.ProfileID)
+	return []json.RawMessage{surfaceEvent(version, "created", b.Surface)}, nil
+}
+func under(root, path string) bool {
+	rel, e := filepath.Rel(root, path)
+	return e == nil && filepath.Clean(path) == path && rel != "." && rel != ".." && len(rel) > 0 && rel[0] != '.' && !filepath.IsAbs(rel)
+}
+func (m *Manager) destroy(ctx context.Context, r Request, version string) ([]json.RawMessage, error) {
+	var q struct {
+		SurfaceID string `json:"surface_id"`
+	}
+	if e := cli.ParseLine(r.Params, m.cfg.MaxOutputBytes, &q); e != nil {
+		return nil, e
+	}
+	b, ok := m.bindings[q.SurfaceID]
+	if !ok || b.Surface.State == "destroyed" {
+		return nil, fault("surface", "unknown or terminal surface")
+	}
+	out, e := m.execute(ctx, m.cfg.Profiles[b.Surface.ProfileID], []string{"stop", "--container", b.Container}, nil)
+	if e != nil {
+		return nil, e
+	}
+	var stopped struct {
+		Stopped         string `json:"stopped"`
+		RemovedVerified *bool  `json:"removed_verified,omitempty"`
+	}
+	if e := cli.ParseLine(out, m.cfg.MaxOutputBytes, &stopped); e != nil {
+		return nil, e
+	}
+	if stopped.Stopped != b.Container || (b.NativeKind != "holdings" && (stopped.RemovedVerified == nil || !*stopped.RemovedVerified)) {
+		return nil, fault("malformed_cli", "native removal was not verified")
+	}
+	b.Surface.State = "destroyed"
+	m.bindings[q.SurfaceID] = b
+	return []json.RawMessage{surfaceEvent(version, "state_changed", b.Surface)}, nil
+}
+func (m *Manager) Capture(ctx context.Context, id string) (Binding, NativeFrame, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	b, ok := m.bindings[id]
+	if !ok || b.Surface.State != "active" {
+		return Binding{}, NativeFrame{}, fault("surface", "capture requires an active surface")
+	}
+	args := []string{"frame", "--container", b.Container}
+	if b.Window != "" {
+		args = append(args, "--window", b.Window)
+	}
+	before := m.clock()
+	out, e := m.execute(ctx, m.cfg.Profiles[b.Surface.ProfileID], args, nil)
+	after := m.clock()
+	if e != nil {
+		return b, NativeFrame{}, e
+	}
+	var f NativeFrame
+	if e = cli.ParseLine(out, m.cfg.MaxOutputBytes, &f); e != nil {
+		return b, f, e
+	}
+	if f.Seq == 0 || f.Generation != b.Container || f.Width != b.Surface.Geometry.W || f.Height != b.Surface.Geometry.H || !digest.MatchString(f.SHA256RGB24) || !under(b.FramesRoot, f.Path) || f.CaptureMonoNS < m.cfg.OriginNS || f.CaptureMonoNS < before || f.CaptureMonoNS > after || after < before || (b.Window != "" && (f.Window == nil || f.Window.ID != b.Window || f.Window.W != f.Width || f.Window.H != f.Height)) || (b.Window == "" && f.Window != nil) {
+		return b, f, fault("frame", "native frame identity, time or allocation mismatch")
+	}
+	f.TSNS = f.CaptureMonoNS - m.cfg.OriginNS
+	f.CaptureUS = (after - before) / 1000
+	return b, f, nil
+}
+
+// MarkLost is called only after the owner independently proves native absence.
+func (m *Manager) MarkLost(id string, confirmedAbsent bool) (json.RawMessage, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	b, ok := m.bindings[id]
+	if !confirmedAbsent || !ok || b.Surface.State != "active" {
+		return nil, fault("surface", "confirmed active disappearance required")
+	}
+	b.Surface.State = "lost"
+	m.bindings[id] = b
+	return surfaceEvent("v0.2", "state_changed", b.Surface), nil
+}
+func (m *Manager) input(ctx context.Context, r Request, version string) ([]json.RawMessage, error) {
+	var q struct {
+		SurfaceID  string `json:"surface_id"`
+		ProposalID string `json:"proposal_id"`
+		Action     struct {
+			Type   string   `json:"type"`
+			X      *int     `json:"x,omitempty"`
+			Y      *int     `json:"y,omitempty"`
+			Button string   `json:"button,omitempty"`
+			Keys   []string `json:"keys,omitempty"`
+			Text   string   `json:"text,omitempty"`
+		} `json:"action"`
+	}
+	if e := cli.ParseLine(r.Params, m.cfg.MaxOutputBytes, &q); e != nil {
+		return nil, e
+	}
+	b, ok := m.bindings[q.SurfaceID]
+	if !ok || b.Surface.State != "active" || q.ProposalID == "" || len(q.ProposalID) > 128 {
+		return nil, fault("surface", "input identity required")
+	}
+	args := []string{"input", "--container", b.Container}
+	if b.Window != "" {
+		args = append(args, "--window", b.Window)
+	}
+	var stdin []byte
+	nativeAction := q.Action.Type
+	switch q.Action.Type {
+	case "click":
+		button, valid := map[string]string{"left": "1", "middle": "2", "right": "3"}[q.Action.Button]
+		if !valid || q.Action.X == nil || q.Action.Y == nil || *q.Action.X < 0 || *q.Action.Y < 0 || *q.Action.X >= b.Surface.Geometry.W || *q.Action.Y >= b.Surface.Geometry.H || len(q.Action.Keys) != 0 || q.Action.Text != "" {
+			return nil, fault("input", "invalid click")
+		}
+		args = append(args, "--click", strconv.Itoa(*q.Action.X)+","+strconv.Itoa(*q.Action.Y), "--button", button)
+	case "key":
+		if len(q.Action.Keys) < 1 || len(q.Action.Keys) > 8 || q.Action.X != nil || q.Action.Y != nil || q.Action.Button != "" || q.Action.Text != "" {
+			return nil, fault("input", "invalid key")
+		}
+		key := strings.Join(q.Action.Keys, "+")
+		if !regexp.MustCompile(`^[A-Za-z0-9_+]{1,32}$`).MatchString(key) {
+			return nil, fault("input", "invalid key chord")
+		}
+		args = append(args, "--key", key)
+	case "type":
+		if b.NativeKind == "holdings" || len(q.Action.Text) == 0 || len(q.Action.Text) > 16384 || q.Action.X != nil || q.Action.Y != nil || q.Action.Button != "" || len(q.Action.Keys) != 0 {
+			return nil, fault("input", "invalid text")
+		}
+		nativeAction = "text"
+		args = append(args, "--type-stdin")
+		stdin = []byte(q.Action.Text)
+	default:
+		return nil, cli.Unsupported("input action")
+	}
+	out, e := m.execute(ctx, m.cfg.Profiles[b.Surface.ProfileID], args, stdin)
+	if e != nil {
+		return nil, e
+	}
+	var receipt struct {
+		SurfaceID     string  `json:"surface_id,omitempty"`
+		Kind          string  `json:"kind,omitempty"`
+		InputMonoNS   *uint64 `json:"input_mono_ns"`
+		FocusVerified *bool   `json:"focus_verified,omitempty"`
+		Result        string  `json:"result,omitempty"`
+	}
+	if e := cli.ParseLine(out, m.cfg.MaxOutputBytes, &receipt); e != nil {
+		return nil, e
+	}
+	if receipt.InputMonoNS == nil || *receipt.InputMonoNS < m.cfg.OriginNS || (b.Window != "" && (receipt.SurfaceID != b.Window || receipt.Kind != nativeAction || receipt.FocusVerified == nil || !*receipt.FocusVerified || receipt.Result != "ok")) {
+		return nil, fault("input", "unverified input receipt")
+	}
+	return []json.RawMessage{event(version, "input_applied", struct {
+		SurfaceID  string `json:"surface_id"`
+		ProposalID string `json:"proposal_id"`
+	}{q.SurfaceID, q.ProposalID})}, nil
+}
+func parseArray(b []byte, max int, dst any) error {
+	if len(b) > max {
+		return fault("malformed_cli", "oversize native array")
+	}
+	// Reuse the closed JSON decoder with a synthetic object; native start is an array.
+	wrapper := append([]byte(`{"items":`), bytes.TrimSuffix(b, []byte{'\n'})...)
+	wrapper = append(wrapper, '}')
+	var w struct {
+		Items json.RawMessage `json:"items"`
+	}
+	if e := cli.ParseLine(wrapper, max+16, &w); e != nil {
+		return e
+	}
+	decoder := json.NewDecoder(bytes.NewReader(w.Items))
+	decoder.DisallowUnknownFields()
+	if e := decoder.Decode(dst); e != nil {
+		return fault("malformed_cli", "invalid native array")
+	}
+	return nil
+}
+
+// HandleFor translates failures using a correlation identity reserved by the caller.
+// Create has no surface_id on the wire, so no synthetic error identity is invented.
+func (m *Manager) HandleFor(ctx context.Context, id string, r Request) ([]json.RawMessage, error) {
+	if id == "" || len(id) > 128 {
+		return nil, fault("correlation", "reserved correlation identity required")
+	}
+	out, e := m.Handle(ctx, r)
+	if e == nil {
+		return out, nil
+	}
+	var f *cli.Fault
+	if !errors.As(e, &f) {
+		f = &cli.Fault{Code: "native_failed", Detail: "native operation has no verified result"}
+	}
+	ev, eventErr := NewErrorEvent(id, f)
+	if eventErr != nil {
+		return nil, e
+	}
+	if r.Schema == "surface_request/v0.2" {
+		ev.Schema = "surface_event/v0.2"
+	}
+	raw, eventErr := json.Marshal(ev)
+	if eventErr != nil {
+		return nil, eventErr
+	}
+	return []json.RawMessage{raw}, nil
+}
