@@ -542,3 +542,296 @@ impl PeerEnvelope {
         json!({"schema":"envelope/v0.2","msg_id":"control","ts_ns":0,"from":{"component":"ui","instance":"ui-test"},"to":{"component":"core","instance":"core-test"},"session_id":"serve-session","seq":1,"nonce":"control","body":{"schema":"ui_intent/v0.2","request_id":"control","op":"take_control","params":{"surface_id":"surface-demo"}}})
     }
 }
+
+fn tool_call(op: &str, args: Value) -> Value {
+    json!({"schema":"mv_tool_call/v0.2","request_id":"body-request","op":op,"args":args})
+}
+async fn tool_result(peer: &mut Peer, op: &str, status: &str) -> Value {
+    let expected = format!("agent-test-{}", peer.seq);
+    let env = peer.receive().await;
+    assert!(matches!(env.body, Command::MvToolResult(_)), "{env:?}");
+    let result = serde_json::to_value(env.body).unwrap();
+    assert_eq!(result["request_id"], expected);
+    assert_eq!(result["op"], op);
+    assert_eq!(result["status"], status, "{result}");
+    result
+}
+#[test]
+fn agent_tools_observe_propose_and_wait_for_receipt() {
+    support::run(async {
+        let temp = support::Temp::new();
+        let socket = temp.0.join("runtime/core.sock");
+        let uid = support::uid();
+        let listener = serve::bind(&socket, uid).await.unwrap();
+        let server = Arc::new(Mutex::new(
+            Server::open(config(), &temp.0.join("state"), uid).unwrap(),
+        ));
+        let task = tokio::spawn(serve::serve(listener, server.clone(), uid));
+        let mut daemon = Peer::connect(&socket, "daemon").await;
+        let mut agent = Peer::connect(&socket, "agent").await;
+        let mut ui = Peer::connect(&socket, "ui").await;
+        agent
+            .send(tool_call("observe", json!({"surface_id":"missing"})))
+            .await;
+        assert_eq!(
+            tool_result(&mut agent, "observe", "error").await["code"],
+            "NOT_FOUND"
+        );
+        agent
+            .send(tool_call("list", json!({"cursor":null,"limit":1})))
+            .await;
+        assert_eq!(
+            tool_result(&mut agent, "list", "ok").await["surfaces"],
+            json!([])
+        );
+        let surface: Value = serde_json::from_str(include_str!(
+            "../../contracts/examples/v0.2/surface.valid.json"
+        ))
+        .unwrap();
+        for id in ["surface-demo", "surface-next"] {
+            let mut s = surface.clone();
+            s["surface_id"] = id.into();
+            daemon
+                .send(json!({"schema":"surface_event/v0.2","event":"created","data":{"surface":s}}))
+                .await;
+            ui.receive().await;
+        }
+        agent
+            .send(tool_call("observe", json!({"surface_id":"surface-demo"})))
+            .await;
+        assert_eq!(
+            tool_result(&mut agent, "observe", "error").await["code"],
+            "UNAVAILABLE"
+        );
+        let frame = SharedFrame::new();
+        let f = frame.value(1);
+        daemon.send(f.clone()).await;
+        ui.receive().await;
+        agent
+            .send(tool_call("observe", json!({"surface_id":"surface-demo"})))
+            .await;
+        let observed = tool_result(&mut agent, "observe", "ok").await;
+        let mut expected = f.clone();
+        expected["schema"] = "frame_ref/v0.1".into();
+        assert_eq!(observed["observation"]["frame_ref"], expected);
+        agent
+            .send(tool_call("list", json!({"cursor":null,"limit":1})))
+            .await;
+        let page = tool_result(&mut agent, "list", "ok").await;
+        assert_eq!(page["surfaces"].as_array().unwrap().len(), 1);
+        assert_eq!(page["surfaces"][0]["profile_id"], surface["profile_id"]);
+        assert_eq!(page["next_cursor"], "surface-demo");
+        agent
+            .send(tool_call(
+                "list",
+                json!({"cursor":page["next_cursor"],"limit":1}),
+            ))
+            .await;
+        let page = tool_result(&mut agent, "list", "ok").await;
+        assert_eq!(page["surfaces"][0]["surface_id"], "surface-next");
+        assert!(page["next_cursor"].is_null());
+        let mut p = proposal("tool-proposal", &f);
+        // Bind the proposal to the observed frame rather than an out-of-band frame.
+        p["based_on_frame"]["sha256"] = observed["observation"]["frame_ref"]["sha256"].clone();
+        p["based_on_frame"]["generation"] =
+            observed["observation"]["frame_ref"]["generation"].clone();
+        agent
+            .send(tool_call("propose", json!({"proposal":p})))
+            .await;
+        let admitted = tool_result(&mut agent, "propose", "admitted").await;
+        assert_eq!(admitted["verdict"]["proposal_id"], "tool-proposal");
+        assert_eq!(
+            serde_json::to_value(daemon.receive().await.body).unwrap()["params"]["proposal_id"],
+            "tool-proposal"
+        );
+        agent
+            .send(tool_call(
+                "wait_verify",
+                json!({"proposal_id":"tool-proposal","timeout_ms":30}),
+            ))
+            .await;
+        let timeout = tool_result(&mut agent, "wait_verify", "timeout").await;
+        assert_eq!(timeout["verified"], false);
+        agent
+            .send(tool_call(
+                "wait_verify",
+                json!({"proposal_id":"tool-proposal","timeout_ms":1000}),
+            ))
+            .await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(30), read_frame(&mut agent.socket))
+                .await
+                .is_err()
+        );
+        let mut receipt: Value = serde_json::from_str(include_str!(
+            "../../contracts/examples/v0.2/action_receipt.valid.json"
+        ))
+        .unwrap();
+        receipt["proposal_id"] = "tool-proposal".into();
+        receipt["after_frame"] = f.clone();
+        daemon.send(receipt).await;
+        assert!(matches!(
+            agent.receive().await.body,
+            Command::ActionReceipt(_)
+        ));
+        // Outcome verification alone is not focus proof. Missing evidence is never true.
+        assert_eq!(
+            tool_result(&mut agent, "wait_verify", "error").await["code"],
+            "VERIFICATION_FAILED"
+        );
+        agent
+            .send(tool_call(
+                "wait_verify",
+                json!({"proposal_id":"tool-proposal","timeout_ms":1000}),
+            ))
+            .await;
+        assert_eq!(
+            tool_result(&mut agent, "wait_verify", "error").await["code"],
+            "VERIFICATION_FAILED"
+        );
+        agent
+            .send(tool_call(
+                "wait_verify",
+                json!({"proposal_id":"unknown","timeout_ms":1}),
+            ))
+            .await;
+        assert_eq!(
+            tool_result(&mut agent, "wait_verify", "error").await["code"],
+            "NOT_FOUND"
+        );
+        agent
+            .send(tool_call(
+                "propose",
+                json!({"proposal":proposal("stale-tool", &frame.value(2))}),
+            ))
+            .await;
+        assert_eq!(
+            tool_result(&mut agent, "propose", "refused").await["reason_code"],
+            "STALE_FRAME"
+        );
+        ui.send(control("take_control")).await;
+        daemon.receive().await;
+        agent
+            .send(tool_call("list", json!({"cursor":null,"limit":1})))
+            .await;
+        assert_eq!(
+            tool_result(&mut agent, "list", "ok").await["surfaces"][0]["control"],
+            "human"
+        );
+        agent
+            .send(tool_call(
+                "propose",
+                json!({"proposal":proposal("human-tool", &f)}),
+            ))
+            .await;
+        assert_eq!(
+            tool_result(&mut agent, "propose", "refused").await["reason_code"],
+            "SURFACE_NOT_AGENT_CONTROLLED"
+        );
+        let snapshot = server.lock().unwrap().snapshot().unwrap();
+        drop((daemon, agent, ui));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        task.abort();
+        let _ = task.await;
+        drop(server);
+        let recovered = Server::open(config(), &temp.0.join("state"), uid).unwrap();
+        assert_eq!(recovered.snapshot().unwrap(), snapshot);
+        let listener = serve::bind(&socket, uid).await.unwrap();
+        let recovered = Arc::new(Mutex::new(recovered));
+        let task = tokio::spawn(serve::serve(listener, recovered, uid));
+        // Resume above the persisted sender nonce/sequence rail.
+        let mut agent = Peer {
+            socket: UnixStream::connect(&socket).await.unwrap(),
+            config: config(),
+            registration: registration("agent"),
+            seq: 100,
+        };
+        agent
+            .send(serde_json::to_value(&agent.registration.hello).unwrap())
+            .await;
+        agent.receive().await;
+        agent
+            .send(tool_call("observe", json!({"surface_id":"surface-demo"})))
+            .await;
+        assert_eq!(
+            tool_result(&mut agent, "observe", "ok").await["observation"]["frame_ref"],
+            expected
+        );
+        agent
+            .send(tool_call("list", json!({"cursor":null,"limit":1})))
+            .await;
+        assert_eq!(
+            tool_result(&mut agent, "list", "ok").await["surfaces"][0]["control"],
+            "human"
+        );
+        agent
+            .send(tool_call(
+                "wait_verify",
+                json!({"proposal_id":"tool-proposal","timeout_ms":1}),
+            ))
+            .await;
+        assert_eq!(
+            tool_result(&mut agent, "wait_verify", "error").await["code"],
+            "VERIFICATION_FAILED"
+        );
+        task.abort();
+    });
+}
+#[test]
+fn unknown_tool_operation_is_refused_by_closed_decoding() {
+    let mut value = PeerEnvelope::value();
+    value["from"] = json!({"component":"agent","instance":"agent-test"});
+    value["body"] = tool_call("unknown", json!({}));
+    assert!(matches!(
+        decode_envelope(&value.to_string()),
+        Err(DecodeError::Malformed)
+    ));
+    for (op, args) in [
+        ("observe", json!({"surface_id":"s"})),
+        ("list", json!({"cursor":null,"limit":1})),
+    ] {
+        value["body"] = tool_call(op, args);
+        assert!(decode_envelope(&value.to_string()).is_ok());
+    }
+    support::run(async {
+        let temp = support::Temp::new();
+        let socket = temp.0.join("runtime/core.sock");
+        let uid = support::uid();
+        let listener = serve::bind(&socket, uid).await.unwrap();
+        let server = Arc::new(Mutex::new(
+            Server::open(config(), &temp.0.join("state"), uid).unwrap(),
+        ));
+        let task = tokio::spawn(serve::serve(listener, server.clone(), uid));
+        let mut agent = Peer::connect(&socket, "agent").await;
+        agent
+            .send(tool_call("observe", json!({"surface_id":"missing"})))
+            .await;
+        assert_eq!(
+            tool_result(&mut agent, "observe", "error").await["code"],
+            "NOT_FOUND"
+        );
+        let snapshot = server.lock().unwrap().snapshot().unwrap();
+        let mut unknown = serde_json::to_value(
+            agent.envelope(tool_call("list", json!({"cursor":null,"limit":1}))),
+        )
+        .unwrap();
+        unknown["seq"] = (agent.seq + 1).into();
+        unknown["nonce"] = "unknown-tool".into();
+        unknown["body"]["op"] = "unknown".into();
+        use tokio::io::AsyncWriteExt;
+        agent
+            .socket
+            .write_all(format!("{unknown}\n").as_bytes())
+            .await
+            .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), read_frame(&mut agent.socket))
+                .await
+                .unwrap()
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(server.lock().unwrap().snapshot().unwrap(), snapshot);
+        task.abort();
+    });
+}

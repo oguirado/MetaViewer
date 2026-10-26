@@ -13,6 +13,8 @@
 //! frames. Lifecycle callers observe daemon events for their connection lifetime
 //! (the wire has no reply correlation); frame unsubscribe overrides that default.
 //! Raw input and control requests retain their existing proposal/UI-intent gates.
+mod tools;
+
 use crate::admission::{
     AdmissionRequest, Authority, CoreState, Frame, Input, LifecycleUpdate, Surface,
 };
@@ -119,6 +121,7 @@ pub struct Server {
     observers: BTreeSet<Endpoint>,
     subscriptions: BTreeSet<(Endpoint, String)>,
     unsubscribed: BTreeSet<(Endpoint, String)>,
+    tool_state: tools::ToolState,
 }
 impl Server {
     pub fn open(config: Config, state_dir: &Path, uid: u32) -> Result<Self> {
@@ -148,6 +151,7 @@ impl Server {
         // Boundary envelope witnesses also persist sender nonce/sequence evidence.
         // Artifacts are validated by recovery before they are considered here.
         let mut envelopes = BTreeMap::new();
+        let mut tool_state = tools::ToolState::default();
         for seq in 1..=authority.state().core_seq {
             let event: serde_json::Value = serde_json::from_slice(&fs::read(
                 root.join("events").join(format!("{seq}.json")),
@@ -163,6 +167,9 @@ impl Server {
                         if env.session_id == config.session_id
                             && env.to.component == Component::Core
                         {
+                            if event["outcome"]["reason"].is_null() {
+                                tool_state.retain(&env.body);
+                            }
                             envelopes.insert((env.from.clone(), env.seq), env);
                         }
                     }
@@ -183,6 +190,7 @@ impl Server {
             observers: BTreeSet::new(),
             subscriptions: BTreeSet::new(),
             unsubscribed: BTreeSet::new(),
+            tool_state,
         })
     }
     pub fn snapshot(&self) -> Result<Vec<u8>> {
@@ -298,7 +306,7 @@ impl Server {
     }
     fn frame(&mut self, frame: &FrameRef, boundary: Witness) -> Result<()> {
         let witness = self.witness(frame)?;
-        self.authority.apply_with_witnesses(
+        let out = self.authority.apply_with_witnesses(
             Input::Frame {
                 surface_id: frame.surface_id.clone(),
                 frame: Frame {
@@ -310,6 +318,10 @@ impl Server {
             },
             vec![boundary, witness],
         )?;
+        if out.reason.is_none() {
+            self.tool_state
+                .retain(&Command::FrameRef(Box::new(frame.clone())));
+        }
         Ok(())
     }
     fn route(&mut self, peer: &ReadyPeer, epoch: u64, env: Envelope) -> Result<()> {
@@ -319,6 +331,9 @@ impl Server {
         let raw = serde_json::to_string(&env)?;
         let boundary = self.authority.retain_witness(raw.as_bytes())?;
         match (&env.from.component, &env.body) {
+            (Component::Agent, Command::MvToolCall(call)) => {
+                return self.tool_call(peer, epoch, &env, call, boundary);
+            }
             (Component::Ui | Component::Agent, Command::SurfaceRequest(request)) => {
                 let value = serde_json::to_value(request)?;
                 let op = value["op"].as_str().ok_or_else(|| invalid("missing op"))?;
@@ -415,6 +430,7 @@ impl Server {
                     }
                     self.notify_cancellations(&out.cancelled, out.core_seq)?;
                 }
+                self.tool_state.retain(&env.body);
                 self.fanout(env.body.clone());
             }
             (Component::Daemon, Command::FrameRef(frame)) => {
@@ -425,59 +441,9 @@ impl Server {
                 self.fanout(env.body.clone());
             }
             (Component::Agent, Command::ActionProposal(proposal)) => {
-                let daemon = self
-                    .config
-                    .peers
-                    .iter()
-                    .find(|p| p.endpoint.component == Component::Daemon)
-                    .ok_or_else(|| invalid("no executor"))?
-                    .endpoint
-                    .clone();
-                if !self.connections.contains_key(&daemon) {
-                    return self.unsupported(&env, boundary);
-                }
-                let request = AdmissionRequest::decode(
-                    &raw,
-                    peer.endpoint(),
-                    &self.config.session_id,
-                    self.authority.state().epoch,
-                    self.now()?,
-                )?;
-                let mut witnesses = vec![boundary];
-                // A stale proposal needs no retained pixel witness.
-                let artifact = self
-                    .root
-                    .join("artifacts")
-                    .join(&proposal.based_on_frame.sha256);
-                if let Ok(meta) = fs::metadata(artifact) {
-                    witnesses.push(Witness {
-                        sha256: proposal.based_on_frame.sha256.clone(),
-                        byte_len: meta.len(),
-                    });
-                }
-                let verdict = self.authority.admit(request, witnesses)?;
-                let admitted = serde_json::to_value(&verdict)?["decision"] == "admitted";
-                self.send(&env.from, Command::ActionVerdict(Box::new(verdict)))?;
-                if admitted {
-                    let out = self.authority.apply(Input::Dispatch {
-                        proposal_id: proposal.proposal_id.clone(),
-                        now_ns: self.now()?,
-                    })?;
-                    if out.dispatch {
-                        let body = serde_json::from_value(
-                            serde_json::json!({"schema":"surface_request/v0.2","op":"input","params":{"surface_id":proposal.surface_id,"proposal_id":proposal.proposal_id,"action":proposal.action}}),
-                        )?;
-                        self.send(&daemon, Command::SurfaceRequest(Box::new(body)))?;
-                    } else {
-                        self.refuse(
-                            &env.from,
-                            &proposal.proposal_id,
-                            out.reason.unwrap_or(Refusal::Policy),
-                            out.core_seq,
-                        )?;
-                    }
-                }
+                self.admit_proposal(peer, &env, proposal, boundary, None)?;
             }
+
             (Component::Ui, Command::UiIntent(request)) => {
                 let value = serde_json::to_value(request)?;
                 let take = match value["op"].as_str() {
@@ -558,9 +524,74 @@ impl Server {
                     .ok_or_else(|| invalid("no agent"))?
                     .endpoint
                     .clone();
+                self.tool_state.retain(&env.body);
                 self.send(&agent, env.body.clone())?;
+                self.poll_tool_waiters()?;
             }
             _ => return self.unsupported(&env, boundary),
+        }
+        Ok(())
+    }
+    fn admit_proposal(
+        &mut self,
+        peer: &ReadyPeer,
+        env: &Envelope,
+        proposal: &crate::wire::payload::ActionProposal,
+        boundary: Witness,
+        tool: Option<&str>,
+    ) -> Result<()> {
+        let daemon = self
+            .config
+            .peers
+            .iter()
+            .find(|p| p.endpoint.component == Component::Daemon)
+            .ok_or_else(|| invalid("no executor"))?
+            .endpoint
+            .clone();
+        if !self.connections.contains_key(&daemon) {
+            return self.proposal_refusal(env, tool, Refusal::Policy, boundary);
+        }
+        let request = AdmissionRequest::decode(
+            &serde_json::to_string(env)?,
+            peer.endpoint(),
+            &self.config.session_id,
+            self.authority.state().epoch,
+            self.now()?,
+        )?;
+        let mut witnesses = vec![boundary];
+        // A stale proposal needs no retained pixel witness.
+        let artifact = self
+            .root
+            .join("artifacts")
+            .join(&proposal.based_on_frame.sha256);
+        if let Ok(meta) = fs::metadata(artifact) {
+            witnesses.push(Witness {
+                sha256: proposal.based_on_frame.sha256.clone(),
+                byte_len: meta.len(),
+            });
+        }
+        let verdict = self.authority.admit(request, witnesses)?;
+        let admitted = serde_json::to_value(&verdict)?["decision"] == "admitted";
+        self.proposal_verdict(env, tool, verdict)?;
+        if admitted {
+            let out = self.authority.apply(Input::Dispatch {
+                proposal_id: proposal.proposal_id.clone(),
+                now_ns: self.now()?,
+            })?;
+            if out.dispatch {
+                let body = serde_json::from_value(
+                    serde_json::json!({"schema":"surface_request/v0.2","op":"input","params":{"surface_id":proposal.surface_id,"proposal_id":proposal.proposal_id,"action":proposal.action}}),
+                )?;
+                self.send(&daemon, Command::SurfaceRequest(Box::new(body)))?;
+            } else {
+                self.proposal_dispatch_refusal(
+                    env,
+                    tool,
+                    &proposal.proposal_id,
+                    out.reason.unwrap_or(Refusal::Policy),
+                    out.core_seq,
+                )?;
+            }
         }
         Ok(())
     }
@@ -765,6 +796,10 @@ async fn connection(
                 {
                     break result?;
                 }
+                server
+                    .lock()
+                    .map_err(|_| invalid("poisoned authority"))?
+                    .poll_tool_waiters()?;
                 if closed.load(std::sync::atomic::Ordering::Acquire) {
                     return Err(invalid("connection closed"));
                 }
@@ -801,6 +836,7 @@ async fn connection(
         .is_some_and(|c| c.id == id)
     {
         s.connections.remove(ready.endpoint());
+        s.tool_state.remove_peer(ready.endpoint());
         s.observers.remove(ready.endpoint());
         s.subscriptions.retain(|(peer, _)| peer != ready.endpoint());
         s.unsubscribed.retain(|(peer, _)| peer != ready.endpoint());
