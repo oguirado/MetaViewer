@@ -1,14 +1,21 @@
-"""Closed envelope/v0.1 frames and bounded NDJSON wire codecs.
+"""Closed envelope/v0.2 and legacy v0.1 frames with bounded NDJSON codecs.
 
 Transport-only validation for the agent side of the core mailbox. Every
-inbound or outbound frame is runtime-validated against the embedded v0.1
+inbound or outbound frame is runtime-validated against the embedded versioned
 contract data before any effect; unknown contract versions are refused and
 byte caps gate before any parse or write. The embedded data mirrors the
-frozen v0.1 schemas file for file; the repository contract checker stays
+frozen schemas; the repository contract checker stays
 the independent oracle for parity tests.
+
+[TARGET, unit decision] v0.1 and v0.2 remain isolated by discriminator.
+Both versions require safe JSON integers and Unicode scalar strings.
+The v0.2 mv_tool_result snapshot upgrades its stale nested v0.1 pins;
+the source contract requires the matching change outside this unit surface.
 """
 
 from __future__ import annotations
+
+from ._contracts_v02 import FILES as _V02_FILES
 
 import copy
 import json
@@ -27,7 +34,9 @@ __all__ = [
     "loads_envelope",
 ]
 
-SCHEMA = "envelope/v0.1"
+SCHEMA = "envelope/v0.2"
+_LEGACY_SCHEMA = "envelope/v0.1"
+_MAX_SAFE_INT = (1 << 53) - 1
 COMPONENTS = frozenset({"core", "ui", "daemon", "agent", "vision", "wender"})
 
 _OUTER_KEYS = frozenset((
@@ -518,7 +527,7 @@ _FILES = {
 _KEYWORDS = frozenset((
     "$ref", "type", "properties", "required", "additionalProperties",
     "enum", "const", "oneOf", "items", "minItems", "minimum", "maximum",
-    "minLength", "maxLength", "pattern",
+    "minLength", "maxLength", "pattern", "maxItems", "maxProperties",
 ))
 _TYPES = frozenset(("object", "array", "string", "integer", "number",
                     "boolean", "null"))
@@ -572,6 +581,28 @@ def _audit(schema, seen=None):
     if "items" in schema:
         _audit(schema["items"], seen)
 
+
+_V02_FILES = copy.deepcopy(_V02_FILES)
+_FILES = {**_FILES, **{f"v0.2/{k}": v for k, v in _V02_FILES.items()}}
+
+def _version_refs(value):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key == "$ref":
+                value[key] = "v0.2/" + child
+            elif key == "const" and isinstance(child, str) and child.endswith("/v0.1"):
+                value[key] = child.removesuffix("/v0.1") + "/v0.2"
+            else:
+                _version_refs(child)
+    elif isinstance(value, list):
+        for child in value:
+            _version_refs(child)
+
+for _schema in _V02_FILES.values():
+    _version_refs(_schema)
+for _name, _schema in _V02_FILES.items():
+    if _name != "envelope.schema.json":
+        _BODIES[_name.removesuffix(".schema.json") + "/v0.2"] = _schema
 
 for _schema in _BODIES.values():
     _audit(_schema)
@@ -634,6 +665,8 @@ def _check(value, schema, depth):
         if matches != 1:
             raise _Mismatch("oneOf")
     if isinstance(value, dict):
+        if len(value) > schema.get("maxProperties", math.inf):
+            raise _Mismatch("maxProperties")
         for key in schema.get("required", []):
             if key not in value:
                 raise _Mismatch("required")
@@ -645,6 +678,8 @@ def _check(value, schema, depth):
         for key in value.keys() & props.keys():
             _check(value[key], props[key], depth + 1)
     if isinstance(value, list):
+        if len(value) > schema.get("maxItems", math.inf):
+            raise _Mismatch("maxItems")
         if len(value) < schema.get("minItems", 0):
             raise _Mismatch("minItems")
         if "items" in schema:
@@ -658,7 +693,7 @@ def _check(value, schema, depth):
                 value):
             raise _Mismatch("pattern")
     if type(value) in (int, float):
-        if not math.isfinite(value):
+        if type(value) is float and not math.isfinite(value):
             raise _Mismatch("non-finite")
         if (value < schema.get("minimum", -math.inf)
                 or value > schema.get("maximum", math.inf)):
@@ -680,6 +715,26 @@ def _valid_name(value):
     return isinstance(value, str) and 1 <= len(value) <= _MAX_STRING
 
 
+def _check_json_values(value, depth=0):
+    # [TARGET, unit decision] Both versions use exact safe JSON integers and
+    # Unicode scalar strings; validate without converting integers to float.
+    if depth > _MAX_DEPTH:
+        raise _Mismatch("nesting limit")
+    if type(value) is int and not -_MAX_SAFE_INT <= value <= _MAX_SAFE_INT:
+        raise _Mismatch("unsafe integer")
+    if type(value) is float and not math.isfinite(value):
+        raise _Mismatch("non-finite")
+    if isinstance(value, str) and any(0xD800 <= ord(c) <= 0xDFFF for c in value):
+        raise _Mismatch("surrogate")
+    if isinstance(value, dict):
+        for key, child in value.items():
+            _check_json_values(key, depth + 1)
+            _check_json_values(child, depth + 1)
+    elif isinstance(value, list):
+        for child in value:
+            _check_json_values(child, depth + 1)
+
+
 def validate_envelope(value: object) -> dict:
     """Runtime-validate a closed envelope; returns it unchanged.
 
@@ -689,10 +744,14 @@ def validate_envelope(value: object) -> dict:
     """
     if not isinstance(value, dict) or set(value) != _OUTER_KEYS:
         raise EnvelopeError("bad_shape", "envelope keys are not exact")
+    try:
+        _check_json_values(value)
+    except _Mismatch:
+        raise EnvelopeError("bad_shape", "envelope contains invalid JSON values") from None
     schema = value["schema"]
     if not isinstance(schema, str) or not schema:
         raise EnvelopeError("bad_shape", "envelope schema malformed")
-    if schema != SCHEMA:
+    if schema not in (SCHEMA, _LEGACY_SCHEMA):
         raise EnvelopeError("unknown_version", "unknown envelope version")
     if not _valid_endpoint(value["from"]) or not _valid_endpoint(value["to"]):
         raise EnvelopeError("bad_shape", "envelope endpoint malformed")
@@ -712,7 +771,7 @@ def validate_envelope(value: object) -> dict:
     if not isinstance(discriminator, str) or not discriminator:
         raise EnvelopeError("bad_shape", "body discriminator malformed")
     target = _BODIES.get(discriminator)
-    if target is None:
+    if target is None or discriminator.rsplit("/", 1)[-1] != schema.rsplit("/", 1)[-1]:
         raise EnvelopeError("unknown_version", "unknown body version")
     try:
         _check(body, target, 0)
@@ -738,7 +797,7 @@ def make_envelope(*, msg_id: str, from_component: str,
     if ts_ns is None:
         ts_ns = time.monotonic_ns()
     envelope = {
-        "schema": SCHEMA,
+        "schema": (_LEGACY_SCHEMA if isinstance(body, dict) and str(body.get("schema", "")).endswith("/v0.1") else SCHEMA),
         "msg_id": msg_id,
         "ts_ns": ts_ns,
         "from": {"component": from_component, "instance": from_instance},

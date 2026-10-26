@@ -36,11 +36,11 @@ _CALL_FAMILY = "mv_tool_call/"
 _RESULT_FAMILY = "mv_tool_result/"
 _PROPOSAL_SCHEMA = "action_proposal/v0.2"
 _PROPOSAL_FAMILY = "action_proposal/"
-_OBSERVATION_SCHEMA = "observation/v0.1"
-_FRAME_SCHEMA = "frame_ref/v0.1"
-_VERDICT_SCHEMA = "action_verdict/v0.1"
-_RECEIPT_SCHEMA = "action_receipt/v0.1"
-_SURFACE_SCHEMA = "surface/v0.1"
+_OBSERVATION_SCHEMA = "observation/v0.2"
+_FRAME_SCHEMA = "frame_ref/v0.2"
+_VERDICT_SCHEMA = "action_verdict/v0.2"
+_RECEIPT_SCHEMA = "action_receipt/v0.2"
+_SURFACE_SCHEMA = "surface/v0.2"
 
 _ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]*")
 _SHA_PATTERN = re.compile(r"[0-9a-f]{64}")
@@ -444,7 +444,8 @@ def _check_observation(observation: object) -> dict:
         _check_ground_truth(body["ground_truth"])
     try:
         validate_observation(body, surface_id=body["frame_ref"]["surface_id"],
-                             generation=body["frame_ref"]["generation"])
+                             generation=body["frame_ref"]["generation"],
+                             contract_version="v0.2")
     except ObservationError as exc:
         _fail(str(exc))
     return body

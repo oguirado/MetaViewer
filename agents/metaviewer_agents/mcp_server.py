@@ -5,6 +5,9 @@ matching synchronous tools.* function off the event loop, and map its
 outcome to a CallToolResult. Admission and verification stay with the
 core; this module never opens sockets and stdout carries protocol
 frames only.
+
+[TARGET, unit decision] JSON-RPC IDs use at most 128 encoded JSON bytes
+and safe integers. Final frames, including fallback errors, obey the cap.
 """
 
 from __future__ import annotations
@@ -382,6 +385,13 @@ async def _call_tool_impl(
     return _success(payload)
 
 
+def _bounded_id(ident):
+    if type(ident) is int:
+        return -(2**53 - 1) <= ident <= 2**53 - 1
+    return (isinstance(ident, str) and len(ident) <= 128
+            and len(json.dumps(ident).encode("utf-8")) <= 128)
+
+
 class Server:
     """Minimal serial MCP server; framing is UTF-8 NDJSON with byte caps."""
 
@@ -408,6 +418,10 @@ class Server:
                 or ("id" in message and type(message["id"]) not in (str, int))):
             return error(-32600, "Invalid Request")
         ident = message.get("id")
+        # [TARGET, unit decision] IDs are correlation tokens, capped at an
+        # ASCII-encoded JSON size of 128 bytes; numeric IDs use safe integers.
+        if "id" in message and not _bounded_id(ident):
+            return error(-32603, "Response too large")
         method = message["method"]
         params = message.get("params", {})
         if not isinstance(params, dict):
@@ -484,10 +498,22 @@ async def serve(*, client: ToolClient) -> None:
             else:
                 response = await server.handle(message)
         if response is not None:
-            output = json.dumps(response, separators=(",", ":"), allow_nan=False).encode("utf-8")
+            try:
+                output = json.dumps(response, separators=(",", ":"), allow_nan=False).encode("utf-8")
+            except (ValueError, TypeError, OverflowError, RecursionError):
+                output = b""
+            if not output or len(output) + 1 > MAX_FRAME_BYTES:
+                ident = response.get("id")
+                if not _bounded_id(ident):
+                    ident = None
+                output = json.dumps({"jsonrpc": "2.0", "id": ident,
+                                     "error": {"code": -32603, "message": "Response too large"}},
+                                    separators=(",", ":")).encode("utf-8")
+            # Check the actual final frame, including the fallback and LF.
             if len(output) + 1 > MAX_FRAME_BYTES:
-                output = json.dumps({"jsonrpc": "2.0", "id": response["id"],
-                                     "error": {"code": -32603, "message": "Response too large"}}).encode()
+                output = b'{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"Response too large"}}'
+            if len(output) + 1 > MAX_FRAME_BYTES:
+                return
             writer.write(output + b"\n")
             writer.flush()
         if len(raw) > MAX_FRAME_BYTES or not raw.endswith(b"\n"):

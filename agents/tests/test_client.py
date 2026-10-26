@@ -412,7 +412,7 @@ class ClientTests(unittest.TestCase):
     # Version and shape: exact versions accepted, anything else refused.
 
     def test_constants_match_contract(self):
-        self.assertEqual(SCHEMA, "envelope/v0.1")
+        self.assertEqual(SCHEMA, "envelope/v0.2")
         self.assertEqual(
             COMPONENTS, {"core", "ui", "daemon", "agent", "vision", "wender"}
         )

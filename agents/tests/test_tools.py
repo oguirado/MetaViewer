@@ -37,7 +37,7 @@ _ERROR_CODES = ("PROTOCOL", "UNAVAILABLE", "NOT_FOUND")
 
 def _frame(**over):
     frame = {
-        "schema": "frame_ref/v0.1",
+        "schema": "frame_ref/v0.2",
         "surface_id": "surf-1",
         "generation": 2,
         "tick": 11,
@@ -81,7 +81,7 @@ def _ground_truth(**over):
 
 
 def _observation(*, full=False, **over):
-    observation = {"schema": "observation/v0.1", "frame_ref": _frame()}
+    observation = {"schema": "observation/v0.2", "frame_ref": _frame()}
     if full:
         observation["vision"] = _vision()
         observation["ground_truth"] = _ground_truth()
@@ -91,7 +91,7 @@ def _observation(*, full=False, **over):
 
 def _surface(**over):
     surface = {
-        "schema": "surface/v0.1",
+        "schema": "surface/v0.2",
         "surface_id": "surf-1",
         "kind": "browser",
         "display": ":99",
@@ -107,7 +107,7 @@ def _surface(**over):
 
 def _verdict(**over):
     verdict = {
-        "schema": "action_verdict/v0.1",
+        "schema": "action_verdict/v0.2",
         "proposal_id": "p-1",
         "decision": "admitted",
         "core_seq": 7,
@@ -118,7 +118,7 @@ def _verdict(**over):
 
 def _receipt(**over):
     receipt = {
-        "schema": "action_receipt/v0.1",
+        "schema": "action_receipt/v0.2",
         "proposal_id": "p-1",
         "executed_at_ns": 2000000,
         "after_frame": _frame(),
@@ -287,7 +287,7 @@ class ObserveTests(unittest.TestCase):
     def test_ok_returns_full_observation(self):
         fake = _FakeClient([lambda call: _ok_observe(call["request_id"])])
         out = tools.observe("surf-1", client=fake, timeout_ms=500)
-        self.assertEqual(out["schema"], "observation/v0.1")
+        self.assertEqual(out["schema"], "observation/v0.2")
         self.assertEqual(out["frame_ref"]["surface_id"], "surf-1")
         self.assertIn("vision", out)
         self.assertIn("ground_truth", out)
@@ -428,7 +428,7 @@ class ObserveTests(unittest.TestCase):
                            ("generation", "2"), ("tick", -1),
                            ("width", 0), ("width", 16385),
                            ("height", 16385), ("capture_us", -1),
-                           ("surface_id", ""), ("schema", "frame_ref/v0.2")):
+                           ("surface_id", ""), ("schema", "frame_ref/v0.1")):
             bad = copy.deepcopy(good)
             bad[key] = value
             cases.append(bad)
@@ -651,7 +651,7 @@ class ListTests(unittest.TestCase):
         for key, value in (("kind", "terminal"), ("state", "broken"),
                            ("visibility", "hidden"), ("control", "nobody"),
                            ("surface_id", ""), ("profile_id", ""),
-                           ("display", ""), ("schema", "surface/v0.2")):
+                           ("display", ""), ("schema", "surface/v0.1")):
             bad = copy.deepcopy(good)
             bad[key] = value
             cases.append(bad)
@@ -715,7 +715,7 @@ class ProposeTests(unittest.TestCase):
         fake = _FakeClient([lambda call: _admitted(call["request_id"])])
         proposal = _proposal()
         out = tools.propose(proposal, client=fake, timeout_ms=500)
-        self.assertEqual(out, {"schema": "action_verdict/v0.1",
+        self.assertEqual(out, {"schema": "action_verdict/v0.2",
                                "proposal_id": "p-1",
                                "decision": "admitted",
                                "core_seq": 7})
@@ -865,7 +865,7 @@ class ProposeTests(unittest.TestCase):
         del bad["decision"]
         bad["verdict"] = "admitted"
         cases.append(("legacy verdict spelling", bad))
-        bad = _verdict(schema="action_verdict/v0.2")
+        bad = _verdict(schema="action_verdict/v0.1")
         cases.append(("wrong verdict version", bad))
         bad = _verdict()
         bad["extra"] = 1
@@ -904,7 +904,7 @@ class WaitVerifyTests(unittest.TestCase):
     def test_verified_first_try_returns_receipt(self):
         fake = _FakeClient([lambda call: _verified(call["request_id"])])
         out = tools.wait_verify("p-1", _expectation(), 500, client=fake)
-        self.assertEqual(out["schema"], "action_receipt/v0.1")
+        self.assertEqual(out["schema"], "action_receipt/v0.2")
         self.assertTrue(out["verified"] is True)
         self.assertEqual(out["verification"]["method"], "pixel")
         self.assertEqual(out["error"], "")
@@ -980,7 +980,7 @@ class WaitVerifyTests(unittest.TestCase):
             mutate(error="boom"),
             mutate(proposal_id="p-2"),
             mutate(method="nope"),
-            mutate(schema="action_receipt/v0.2"),
+            mutate(schema="action_receipt/v0.1"),
         ]
         no_verification = _verified("placeholder")
         del no_verification["receipt"]["verification"]
@@ -1127,7 +1127,7 @@ class _AlwaysAccept:
     """Mutant double: claims success without validating anything."""
 
     def observe(self, surface_id, *, client, timeout_ms):
-        return {"schema": "observation/v0.1", "admitted": True}
+        return {"schema": "observation/v0.2", "admitted": True}
 
     def list_surfaces(self, *, cursor, limit, client, timeout_ms):
         return {"surfaces": [], "next_cursor": None}
@@ -1207,7 +1207,7 @@ class TestMalformedDomainInputs(unittest.TestCase):
                         check(result)
 
     def test_frame_escape_in_tool_observation_refused(self):
-        good = {"schema": "observation/v0.1", "frame_ref": _frame(), "vision": _vision()}
+        good = {"schema": "observation/v0.2", "frame_ref": _frame(), "vision": _vision()}
         tools._check_observation(good)
         good["vision"]["elements"][0]["bbox"]["x"] = 8
         with self.assertRaises(ToolValidationError):

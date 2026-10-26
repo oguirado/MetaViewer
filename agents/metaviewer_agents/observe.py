@@ -104,14 +104,14 @@ def _check_ramws_path(value: object) -> None:
         _fail("bad_shape", "ramws_path leaves shared memory")
 
 
-def _check_frame_ref(frame: object) -> dict:
+def _check_frame_ref(frame: object, *, version="v0.1") -> dict:
     if not isinstance(frame, dict) or set(frame) != _FRAME_KEYS:
         _fail("bad_shape", "frame_ref keys are not exact")
     assert isinstance(frame, dict)
     schema = frame["schema"]
     if not isinstance(schema, str) or not schema:
         _fail("bad_shape", "frame_ref schema malformed")
-    if schema != _FRAME_REF_SCHEMA:
+    if schema != "frame_ref/" + version:
         _fail("unknown_version", "unknown frame_ref version")
     surface_id = frame["surface_id"]
     if (not isinstance(surface_id, str)
@@ -192,7 +192,7 @@ def _check_trusted(surface_id: object, generation: object) -> None:
 
 
 def validate_observation(observation: object, *, surface_id: str,
-                         generation: int) -> None:
+                         generation: int, contract_version: str = "v0.1") -> None:
     """Runtime-validate an observation against its trusted binding.
 
     The payload must be a closed ``observation/v0.1`` object whose
@@ -209,9 +209,9 @@ def validate_observation(observation: object, *, surface_id: str,
     schema = observation["schema"]
     if not isinstance(schema, str) or not schema:
         _fail("bad_shape", "observation schema malformed")
-    if schema != _OBSERVATION_SCHEMA:
+    if contract_version not in ("v0.1", "v0.2") or schema != "observation/" + contract_version:
         _fail("unknown_version", "unknown observation version")
-    frame = _check_frame_ref(observation["frame_ref"])
+    frame = _check_frame_ref(observation["frame_ref"], version=contract_version)
     if (frame["surface_id"] != surface_id
             or frame["generation"] != generation):
         _fail("identity_mismatch", "frame_ref breaks trusted binding")
