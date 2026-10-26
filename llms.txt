@@ -1,0 +1,6 @@
+# MetaViewer
+Rust authority; Electron/Vue renders admitted snapshots and submits intents.
+Read first: AGENTS.md, then catalogue/protocol.json.
+Route: python3 router/kit/tools/route_v2.py --q "<task>" --index catalogue/router --params catalogue/router/params.json
+No shell: catalogue/subjects.json -> subjects/<sid>/index.json -> one page -> catalogue/routes.tsv -> anchor.
+Status: router unavailable.

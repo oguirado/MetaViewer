@@ -1,0 +1,411 @@
+{
+ "application_qualification": {
+  "reasons": [
+   "no application DEV/TEST benchmark or fitted params in this unit",
+   "privacy evidence is fixture-scoped; CI must supply the unpublished deny list",
+   "foreign calibration never qualifies application routing"
+  ],
+  "status": "BLOCKED"
+ },
+ "gates": [
+  {
+   "assertions": [
+    "71 manifest entries verified",
+    "0 unknown files",
+    "0 symlinks"
+   ],
+   "command": [
+    "python3",
+    "-B",
+    "tools/bootstrap_kit.py",
+    "--run",
+    "--deny-list",
+    "<withheld>"
+   ],
+   "cwd": "router/kit",
+   "fixture_sha256": null,
+   "id": "inventory",
+   "input_sha256": "1fa4f964acb868e76be1b9d1f405e6026c1bab7059f348ee0922cdb41154c271",
+   "instrument_sha256": "4c5f90467f1402a056a52eace2c5f88a7ed730b9bbba95136e3f088997eb062e",
+   "log": "inventory.log",
+   "log_sha256": "448a956b55cdf0bc113f4703691a8fe0c7aa0caeb042ac9287f7217d5b80c8c1",
+   "outcome": "PASS",
+   "rc": 0
+  },
+  {
+   "assertions": [
+    "ran 4 tests",
+    "unittest OK"
+   ],
+   "command": [
+    "python3",
+    "-B",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests",
+    "-p",
+    "test_T0_freeze.py"
+   ],
+   "cwd": "router/kit",
+   "fixture_sha256": "ae0e84867e4a661fad67c0ce54640cce6af437f094f6de2c384dbba1e268a6f6",
+   "id": "suite:test_T0_freeze.py",
+   "input_sha256": "1fa4f964acb868e76be1b9d1f405e6026c1bab7059f348ee0922cdb41154c271",
+   "instrument_sha256": "5695d1db6e04a55cc2db37d0454d79f36563be1442c418c98cf652c19b359b5a",
+   "log": "suite_test_T0_freeze.py.log",
+   "log_sha256": "78b437235a868be16db03deb316f479b7ca95869799208557c61173f0672d35a",
+   "outcome": "PASS",
+   "rc": 0
+  },
+  {
+   "assertions": [
+    "ran 5 tests",
+    "unittest OK"
+   ],
+   "command": [
+    "python3",
+    "-B",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests",
+    "-p",
+    "test_T1_blocks.py"
+   ],
+   "cwd": "router/kit",
+   "fixture_sha256": "ae0e84867e4a661fad67c0ce54640cce6af437f094f6de2c384dbba1e268a6f6",
+   "id": "suite:test_T1_blocks.py",
+   "input_sha256": "1fa4f964acb868e76be1b9d1f405e6026c1bab7059f348ee0922cdb41154c271",
+   "instrument_sha256": "fdd822be8fa9bdf7af0893592283a12e118f71a2f776b34f6b4e49d2c198d4b0",
+   "log": "suite_test_T1_blocks.py.log",
+   "log_sha256": "4ace32007ef4a33c695047ebcb04fbc01575b5338f501f73b64959c5c18e1f47",
+   "outcome": "PASS",
+   "rc": 0
+  },
+  {
+   "assertions": [
+    "ran 7 tests",
+    "unittest OK"
+   ],
+   "command": [
+    "python3",
+    "-B",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests",
+    "-p",
+    "test_T2_build.py"
+   ],
+   "cwd": "router/kit",
+   "fixture_sha256": "ae0e84867e4a661fad67c0ce54640cce6af437f094f6de2c384dbba1e268a6f6",
+   "id": "suite:test_T2_build.py",
+   "input_sha256": "1fa4f964acb868e76be1b9d1f405e6026c1bab7059f348ee0922cdb41154c271",
+   "instrument_sha256": "6b052c2ccd41ac7e6dd4ab45642255683cd22f8493f56dcf5b372bf6839f7992",
+   "log": "suite_test_T2_build.py.log",
+   "log_sha256": "4538ecd726ee098b55ece0d6a48fb772175e291b85690177dd7712b7bb3fd639",
+   "outcome": "PASS",
+   "rc": 0
+  },
+  {
+   "assertions": [
+    "ran 19 tests",
+    "unittest OK"
+   ],
+   "command": [
+    "python3",
+    "-B",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests",
+    "-p",
+    "test_T3_route.py"
+   ],
+   "cwd": "router/kit",
+   "fixture_sha256": "ae0e84867e4a661fad67c0ce54640cce6af437f094f6de2c384dbba1e268a6f6",
+   "id": "suite:test_T3_route.py",
+   "input_sha256": "1fa4f964acb868e76be1b9d1f405e6026c1bab7059f348ee0922cdb41154c271",
+   "instrument_sha256": "1db4d519bb78710cb6665f2b96959052a80259b951779ccda04f525e07271ab9",
+   "log": "suite_test_T3_route.py.log",
+   "log_sha256": "dad9730ab5378cf52ba8d90cc580c602c022bdf95c478523dc1dd05bec28ae36",
+   "outcome": "PASS",
+   "rc": 0
+  },
+  {
+   "assertions": [
+    "ran 11 tests",
+    "unittest OK"
+   ],
+   "command": [
+    "python3",
+    "-B",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests",
+    "-p",
+    "test_T5_pool.py"
+   ],
+   "cwd": "router/kit",
+   "fixture_sha256": "ae0e84867e4a661fad67c0ce54640cce6af437f094f6de2c384dbba1e268a6f6",
+   "id": "suite:test_T5_pool.py",
+   "input_sha256": "1fa4f964acb868e76be1b9d1f405e6026c1bab7059f348ee0922cdb41154c271",
+   "instrument_sha256": "faad8af1a1eb500a92e60d4c7f24307fc579e29ae95d683c89d58c542819fbae",
+   "log": "suite_test_T5_pool.py.log",
+   "log_sha256": "94761391090b55e72da1ed27446f6327d51519e4c54ec09174fcc922c3ea55b3",
+   "outcome": "PASS",
+   "rc": 0
+  },
+  {
+   "assertions": [
+    "ran 7 tests",
+    "unittest OK"
+   ],
+   "command": [
+    "python3",
+    "-B",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests",
+    "-p",
+    "test_T6_eval.py"
+   ],
+   "cwd": "router/kit",
+   "fixture_sha256": "ae0e84867e4a661fad67c0ce54640cce6af437f094f6de2c384dbba1e268a6f6",
+   "id": "suite:test_T6_eval.py",
+   "input_sha256": "1fa4f964acb868e76be1b9d1f405e6026c1bab7059f348ee0922cdb41154c271",
+   "instrument_sha256": "941a0967a797a3892e35910c57713ad3c3dd7547e11a4e2be199fdecbfd53b57",
+   "log": "suite_test_T6_eval.py.log",
+   "log_sha256": "975f84817060567e266666824d7a7300202538a345e0cadf5c3bd569760c61b0",
+   "outcome": "PASS",
+   "rc": 0
+  },
+  {
+   "assertions": [
+    "ran 4 tests",
+    "unittest OK"
+   ],
+   "command": [
+    "python3",
+    "-B",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests",
+    "-p",
+    "test_T7_null.py"
+   ],
+   "cwd": "router/kit",
+   "fixture_sha256": "ae0e84867e4a661fad67c0ce54640cce6af437f094f6de2c384dbba1e268a6f6",
+   "id": "suite:test_T7_null.py",
+   "input_sha256": "1fa4f964acb868e76be1b9d1f405e6026c1bab7059f348ee0922cdb41154c271",
+   "instrument_sha256": "5208226dc06bab4cf0180b765ef7352750c5bea7c6e2e81086f7989fcc971b9b",
+   "log": "suite_test_T7_null.py.log",
+   "log_sha256": "e4195ac39ec6defa8bd1cdee8df35f807ea79b914619301e78a9846c40ba5c02",
+   "outcome": "PASS",
+   "rc": 0
+  },
+  {
+   "assertions": [
+    "ran 6 tests",
+    "unittest OK"
+   ],
+   "command": [
+    "python3",
+    "-B",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests",
+    "-p",
+    "test_T8_tune.py"
+   ],
+   "cwd": "router/kit",
+   "fixture_sha256": "ae0e84867e4a661fad67c0ce54640cce6af437f094f6de2c384dbba1e268a6f6",
+   "id": "suite:test_T8_tune.py",
+   "input_sha256": "1fa4f964acb868e76be1b9d1f405e6026c1bab7059f348ee0922cdb41154c271",
+   "instrument_sha256": "1ce90ebcfbbdd293f53e6ff3bf92d1fceaba0fde2fd5600933224829814fb218",
+   "log": "suite_test_T8_tune.py.log",
+   "log_sha256": "a54284e2fd597c37d47ed8afcf2a4e164dcd08197a6f20c44d07bc9fd3d7eafd",
+   "outcome": "PASS",
+   "rc": 0
+  },
+  {
+   "assertions": [
+    "ran 23 tests",
+    "unittest OK"
+   ],
+   "command": [
+    "python3",
+    "-B",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests",
+    "-p",
+    "test_T9_gates.py"
+   ],
+   "cwd": "router/kit",
+   "fixture_sha256": "ae0e84867e4a661fad67c0ce54640cce6af437f094f6de2c384dbba1e268a6f6",
+   "id": "suite:test_T9_gates.py",
+   "input_sha256": "1fa4f964acb868e76be1b9d1f405e6026c1bab7059f348ee0922cdb41154c271",
+   "instrument_sha256": "62902a2a368abe7a7aef45c24db344f64b73102e536d6782cf66549407436ce9",
+   "log": "suite_test_T9_gates.py.log",
+   "log_sha256": "aaa195b2efa69bd658d9a8a7da0554412d3d31605b58b33ac566182750ef35c7",
+   "outcome": "PASS",
+   "rc": 0
+  },
+  {
+   "assertions": [
+    "ran 6 tests",
+    "unittest OK"
+   ],
+   "command": [
+    "python3",
+    "-B",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests",
+    "-p",
+    "test_T10_multimount.py"
+   ],
+   "cwd": "router/kit",
+   "fixture_sha256": "ae0e84867e4a661fad67c0ce54640cce6af437f094f6de2c384dbba1e268a6f6",
+   "id": "suite:test_T10_multimount.py",
+   "input_sha256": "1fa4f964acb868e76be1b9d1f405e6026c1bab7059f348ee0922cdb41154c271",
+   "instrument_sha256": "7ab6eba0fd0d990c6db16da1347ebc4b47444d4d4decfca599a7be9dded7a4fb",
+   "log": "suite_test_T10_multimount.py.log",
+   "log_sha256": "fab24c823d40faae27e8bf3c5337216850613a2c4c7564a08b680639c1bb2a19",
+   "outcome": "PASS",
+   "rc": 0
+  },
+  {
+   "assertions": [
+    "ran 4 tests",
+    "unittest OK"
+   ],
+   "command": [
+    "python3",
+    "-B",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests",
+    "-p",
+    "test_T11_logging.py"
+   ],
+   "cwd": "router/kit",
+   "fixture_sha256": "ae0e84867e4a661fad67c0ce54640cce6af437f094f6de2c384dbba1e268a6f6",
+   "id": "suite:test_T11_logging.py",
+   "input_sha256": "1fa4f964acb868e76be1b9d1f405e6026c1bab7059f348ee0922cdb41154c271",
+   "instrument_sha256": "5bb28cc0eaaca3328a85b4ff7a43fb5be0b586ebef0a4a9e0843232d47802efc",
+   "log": "suite_test_T11_logging.py.log",
+   "log_sha256": "d3a71ae0fb1ff25f78bda0b2bd907e2a48210f2314e53f8de84db7b98579f921",
+   "outcome": "PASS",
+   "rc": 0
+  },
+  {
+   "assertions": [
+    "ran 57 tests",
+    "unittest OK"
+   ],
+   "command": [
+    "python3",
+    "-B",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests",
+    "-p",
+    "test_bootstrap_contract.py"
+   ],
+   "cwd": "router/kit",
+   "fixture_sha256": "ae0e84867e4a661fad67c0ce54640cce6af437f094f6de2c384dbba1e268a6f6",
+   "id": "suite:test_bootstrap_contract.py",
+   "input_sha256": "1fa4f964acb868e76be1b9d1f405e6026c1bab7059f348ee0922cdb41154c271",
+   "instrument_sha256": "df085f4c55a06f8e99a377b978148c8e15e7eea7ed28013137d83b25264fa08e",
+   "log": "suite_test_bootstrap_contract.py.log",
+   "log_sha256": "c01fff7fb8fbfb9f23edf5180e9f9f460bc5bb052711034052ec38e64d8de608",
+   "outcome": "PASS",
+   "rc": 0
+  },
+  {
+   "assertions": [
+    "clean baseline passes inventory",
+    "mutated tools/blocks.py rejected before execution",
+    "restored bytes verify clean"
+   ],
+   "command": [
+    "python3",
+    "-B",
+    "tools/bootstrap_kit.py",
+    "--check",
+    "--root",
+    "<scratch>",
+    "--deny-list",
+    "<withheld>"
+   ],
+   "cwd": "<scratch>",
+   "fixture_sha256": null,
+   "id": "mutant_vendor_helper",
+   "input_sha256": "1fa4f964acb868e76be1b9d1f405e6026c1bab7059f348ee0922cdb41154c271",
+   "instrument_sha256": "4c5f90467f1402a056a52eace2c5f88a7ed730b9bbba95136e3f088997eb062e",
+   "log": "mutant_vendor_helper.log",
+   "log_sha256": "403bcda6be7c90b8bef6ac965a4e55bea70bbb44ff169e092abf12681a99ffdc",
+   "outcome": "PASS",
+   "rc": 1
+  },
+  {
+   "assertions": [
+    "71 files scanned",
+    "2 literals checked",
+    "0 matches"
+   ],
+   "command": [
+    "python3",
+    "-B",
+    "tools/bootstrap_kit.py",
+    "--run",
+    "--deny-list",
+    "<withheld>"
+   ],
+   "cwd": "router/kit",
+   "fixture_sha256": null,
+   "id": "privacy_denylist",
+   "input_sha256": "ff9ab86e8fda1d18780121fa3b45de96b1cfe64a22713b57393c769e1fb74234",
+   "instrument_sha256": "4c5f90467f1402a056a52eace2c5f88a7ed730b9bbba95136e3f088997eb062e",
+   "log": "privacy.log",
+   "log_sha256": "f32a7655c40e14c23a760bf74d72f28a9dcbacde466a8aa2c280f594b9ea3031",
+   "outcome": "PASS",
+   "rc": 0
+  }
+ ],
+ "notes": [
+  "recorded argv is the executed argv; 'python3' is PATH-resolved and pinned to the harness version at startup",
+  "deny-list and mutant scratch paths withheld by design; contents bound by input_sha256 digests"
+ ],
+ "platform": "linux-aarch64",
+ "python_version": "3.12.3",
+ "schema": "metaviewer.router-kit-bootstrap.v1",
+ "scope": "portable fixture tests and generic-node build only; not UI integration, not application routing quality",
+ "source": "Holdings-int router/kit vendor_manifest.json (65 entries, portable subset)",
+ "source_manifest_sha256": "21801113d82bbe137695b59424ac90a0f15374b95ad4aa45ca10953756a3be81",
+ "status": "PASS",
+ "vendor_manifest_sha256": "1fa4f964acb868e76be1b9d1f405e6026c1bab7059f348ee0922cdb41154c271",
+ "vendor_mutant_rejected": true
+}
