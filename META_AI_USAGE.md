@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 154 | 55 | 99 |
-| Lanes finished OK | 154 | 55 | 99 |
-| Agent steps | 7,973 | 2,705 | 5,268 |
-| Lane-hours of agent work | 20.1 | 5.2 | 14.9 |
-| Fresh input tokens | 34,719,386 | 11,482,034 | 23,237,352 |
-| Cache-read input tokens | 733,913,661 | 226,255,212 | 507,658,449 |
+| Lanes launched | 175 | 55 | 120 |
+| Lanes finished OK | 175 | 55 | 120 |
+| Agent steps | 8,905 | 2,705 | 6,200 |
+| Lane-hours of agent work | 22.5 | 5.2 | 17.3 |
+| Fresh input tokens | 38,733,081 | 11,482,034 | 27,251,047 |
+| Cache-read input tokens | 816,978,945 | 226,255,212 | 590,723,733 |
 | Prompt cache hit % | 95.5 | 95.2 | 95.6 |
-| Output tokens | 7,336,107 | 2,135,708 | 5,200,399 |
-| Thinking tokens | 3,886,821 | 1,050,039 | 2,836,782 |
-| Cost (USD) | 6.407 | 2.0279 | 4.3791 |
-| Cost per lane (USD) | 0.0416 | 0.0369 | 0.0442 |
+| Output tokens | 8,122,675 | 2,135,708 | 5,986,967 |
+| Thinking tokens | 4,293,573 | 1,050,039 | 3,243,534 |
+| Cost (USD) | 7.1318 | 2.0279 | 5.1039 |
+| Cost per lane (USD) | 0.0408 | 0.0369 | 0.0425 |
 
-Rooms: 32. Peak concurrent lanes [MEASURED from lane start/end]: 32.
+Rooms: 36. Peak concurrent lanes [MEASURED from lane start/end]: 32.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -40,8 +40,9 @@ Pre-event lanes produced plans, research and specifications only; product code w
 |---|---:|---:|---:|
 | build | 35 | 95.9 | 1.5489 |
 | context | 38 | 96.0 | 1.7583 |
+| demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
-| docs | 3 | 90.6 | 0.0422 |
+| docs | 7 | 93.8 | 0.1642 |
 | fix | 2 | 97.4 | 0.1115 |
 | kit | 3 | 96.5 | 0.1997 |
 | ops | 4 | 88.1 | 0.0468 |
@@ -49,7 +50,9 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | research | 14 | 94.6 | 0.5673 |
 | review | 24 | 94.4 | 0.7832 |
 | test | 12 | 95.6 | 0.5657 |
+| testing | 8 | 93.7 | 0.217 |
 | ui | 5 | 95.5 | 0.4215 |
+| vision | 5 | 96.6 | 0.3302 |
 
 ## By room (why and what for)
 
@@ -87,6 +90,10 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0av | conductor | Oct 26 22:10 | review | 8 | 93.5 | 0.1863 | Verify the 56 findings of the Gemini Argon cross-review of today's integrated Sol code against the current head, rank them and turn the confirmed ones into disjoint Sol fix units. |
 | mvui1 | UI orchestrator | Oct 26 22:12 | ui | 5 | 95.5 | 0.4215 | Build every MetaViewer renderer screen (wall, launcher, multislot + side terminal, recording/settings/nested, agent lane + state fixtures) on the shared kit as drops for the MetaViewer orchestrator. |
 | kw1 | UI orchestrator | Oct 26 22:57 | kit | 2 | 96.7 | 0.1565 | Add wall tile states with take/release control and a kit-wide CSP audit to the shared kit (kit 0.2.1) for the MetaViewer wall and its strict CSP. |
+| mvui2 | UI orchestrator | Oct 26 23:45 | vision | 5 | 96.6 | 0.3302 | Fix the MetaViewer renderer findings of the vision loop (wender-agent + vision-engine round on the integrated screens) and the remaining independent-judge notes, toward 0 medium/high findings. |
+| mv0dm | conductor | Oct 27 00:28 | demo | 4 | 90.7 | 0.0557 | Prepare the live demo run sheet, the presentation video storyboard (AC-16, AC-17), the submission text and a rubric gap map so the demo criterion (25 percent) is planned from evidence. |
+| mv0dc | conductor | Oct 27 00:28 | docs | 4 | 94.5 | 0.122 | Draft the product documentation (README quickstart, user guide, testing report, architecture refresh) verified against the integration head, for acceptance criterion AC-15. |
+| mv0r2 | conductor | Oct 27 00:28 | testing | 8 | 93.7 | 0.217 | Write the external testing round-2 prompts (Jules test-writing and ChatGPT adversarial review per topic) targeting the code changed since round 1 and regression checks of every round-1 fix. |
 
 ## Every lane
 
@@ -246,6 +253,27 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui1 | U5 | agent_lane snapshot + state fixtures | Oct 26 22:13 | yes | 70 | 97.0 | 0.052854 |
 | kw1 | T | Wall tile states + take/release | Oct 26 22:57 | yes | 96 | 96.5 | 0.078896 |
 | kw1 | C | Kit-wide CSP audit | Oct 26 22:57 | yes | 101 | 96.9 | 0.077633 |
+| mvui2 | V1 | Side terminal no-core empty state (MV-1) + terminal judge notes | Oct 26 23:45 | yes | 91 | 96.7 | 0.080473 |
+| mvui2 | V2 | Dock tab anchors + wall/catalog judge notes (MV-2) | Oct 26 23:46 | yes | 74 | 97.1 | 0.069468 |
+| mvui2 | V3 | Contrast (MV-3, MV-4) in MetaViewer tokens | Oct 26 23:46 | yes | 72 | 97.0 | 0.055331 |
+| mvui2 | V4 | Vision hooks: ?scheme= and frame binding | Oct 26 23:46 | yes | 83 | 96.1 | 0.083357 |
+| mvui2 | V5 | SurfaceCanvas v-show + engine notes | Oct 26 23:47 | yes | 58 | 96.2 | 0.041545 |
+| mv0dm | DEMO | Live demo run sheet | Oct 27 00:28 | yes | 17 | 87.7 | 0.013046 |
+| mv0dc | README | README with first-person quickstart | Oct 27 00:28 | yes | 35 | 91.5 | 0.025479 |
+| mv0r2 | T1 | Round-2 prompts T1 | Oct 27 00:28 | yes | 28 | 93.6 | 0.024157 |
+| mv0r2 | T2 | Round-2 prompts T2 | Oct 27 00:28 | yes | 35 | 93.5 | 0.026001 |
+| mv0dc | USER_GUIDE | docs/USER_GUIDE.md first draft | Oct 27 00:28 | yes | 43 | 94.8 | 0.027043 |
+| mv0dm | STORY | Video storyboard and shot list | Oct 27 00:28 | yes | 27 | 92.7 | 0.014227 |
+| mv0dc | TESTING | docs/TESTING.md with measured counts | Oct 27 00:28 | yes | 66 | 96.0 | 0.038237 |
+| mv0dm | SUBMIT | Submission text draft | Oct 27 00:28 | yes | 22 | 90.8 | 0.013933 |
+| mv0r2 | T3 | Round-2 prompts T3 | Oct 27 00:28 | yes | 27 | 91.7 | 0.021159 |
+| mv0dm | JUDGE | Rubric gap map | Oct 27 00:28 | yes | 22 | 90.4 | 0.014449 |
+| mv0r2 | T4 | Round-2 prompts T4 | Oct 27 00:28 | yes | 47 | 95.0 | 0.030298 |
+| mv0dc | ARCH | docs/ARCHITECTURE.md refresh | Oct 27 00:28 | yes | 39 | 93.9 | 0.031267 |
+| mv0r2 | T5 | Round-2 prompts T5 | Oct 27 00:29 | yes | 40 | 94.2 | 0.02737 |
+| mv0r2 | T6 | Round-2 prompts T6 | Oct 27 00:29 | yes | 45 | 94.9 | 0.028242 |
+| mv0r2 | T7 | Round-2 prompts T7 | Oct 27 00:29 | yes | 32 | 92.6 | 0.034937 |
+| mv0r2 | T8 | Round-2 prompts T8 | Oct 27 00:29 | yes | 29 | 92.4 | 0.024794 |
 
 ## Method
 
