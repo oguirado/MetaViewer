@@ -1,0 +1,8 @@
+{
+  "schema": "mv_tool_result/v0.2",
+  "request_id": "x",
+  "op": "propose",
+  "status": "refused",
+  "reason_code": "STALE_FRAME",
+  "detail": "x"
+}

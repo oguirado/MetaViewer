@@ -1,0 +1,8 @@
+{
+  "schema": "surface_request/v0.2",
+  "op": "record_stop",
+  "params": {
+    "surface_id": "x",
+    "recording_id": "x"
+  }
+}

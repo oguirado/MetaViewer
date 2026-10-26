@@ -1,0 +1,9 @@
+{
+  "schema": "mv_tool_call/v0.2",
+  "request_id": "x",
+  "op": "list",
+  "args": {
+    "cursor": "x",
+    "limit": 1
+  }
+}

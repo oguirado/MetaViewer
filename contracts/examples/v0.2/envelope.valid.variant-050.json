@@ -1,0 +1,61 @@
+{
+  "schema": "envelope/v0.2",
+  "msg_id": "x",
+  "ts_ns": 0,
+  "from": {
+    "component": "core",
+    "instance": "x"
+  },
+  "to": {
+    "component": "core",
+    "instance": "x"
+  },
+  "session_id": "x",
+  "seq": 1,
+  "nonce": "x",
+  "body": {
+    "schema": "observation/v0.2",
+    "frame_ref": {
+      "schema": "frame_ref/v0.2",
+      "surface_id": "x",
+      "generation": 1,
+      "tick": 0,
+      "ts_ns": 0,
+      "width": 1,
+      "height": 1,
+      "format": "rgb24",
+      "ramws_path": "/dev/shm/frame.rgb",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "capture_us": 0
+    },
+    "vision": {
+      "summary": "x",
+      "changed_regions": [
+        {
+          "x": 0,
+          "y": 0,
+          "w": 1,
+          "h": 1
+        }
+      ],
+      "elements": [
+        {
+          "bbox": {
+            "x": 0,
+            "y": 0,
+            "w": 1,
+            "h": 1
+          },
+          "role": "x",
+          "name": "x",
+          "confidence": 0
+        }
+      ]
+    },
+    "ground_truth": {
+      "source": "holdings_lane",
+      "state_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "tick": 0
+    }
+  }
+}

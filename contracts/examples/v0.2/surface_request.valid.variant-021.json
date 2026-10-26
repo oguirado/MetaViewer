@@ -1,0 +1,7 @@
+{
+  "schema": "surface_request/v0.2",
+  "op": "release_control",
+  "params": {
+    "surface_id": "x"
+  }
+}

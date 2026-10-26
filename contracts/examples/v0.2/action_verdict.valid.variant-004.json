@@ -1,0 +1,7 @@
+{
+  "schema": "action_verdict/v0.2",
+  "proposal_id": "x",
+  "decision": "refused",
+  "reason_code": "OUT_OF_BOUNDS",
+  "core_seq": 1
+}

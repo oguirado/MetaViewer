@@ -1,0 +1,7 @@
+{
+  "request_id": "take-control",
+  "op": "take_control",
+  "params": {
+    "surface_id": "surface-demo"
+  }
+}

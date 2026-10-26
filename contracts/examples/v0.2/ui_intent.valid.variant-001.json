@@ -1,0 +1,8 @@
+{
+  "op": "fold",
+  "params": {
+    "slot_id": "x"
+  },
+  "request_id": "x",
+  "schema": "ui_intent/v0.2"
+}

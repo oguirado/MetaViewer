@@ -1,0 +1,13 @@
+{
+  "op": "started",
+  "params": {
+    "cols": 1,
+    "provider_id": "x",
+    "rows": 1,
+    "session_id": "x",
+    "surface_id": "x",
+    "terminal_generation": 1
+  },
+  "request_id": "x",
+  "schema": "terminal_session/v0.2"
+}

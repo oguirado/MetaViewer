@@ -1,0 +1,20 @@
+{
+  "schema": "surface_request/v0.2",
+  "op": "input",
+  "params": {
+    "surface_id": "x",
+    "proposal_id": "x",
+    "action": {
+      "type": "lane_submit",
+      "verb": "x",
+      "payload": {
+        "nonce": "x",
+        "seq": 1,
+        "command": "x",
+        "args": [
+          "x"
+        ]
+      }
+    }
+  }
+}

@@ -185,6 +185,8 @@ class VersionedContractTests(unittest.TestCase):
         expected['properties']['schema']['const'] = 'envelope/v0.2'
         expected['properties']['body']['oneOf'] = [{'$ref': name + '.schema.json'} for name in self.names]
         expected['maxProperties'] = 256
+        for name in ('seq', 'ts_ns'):
+            expected['properties'][name]['maximum'] = (1 << 53) - 1
         for name in ('from', 'to'):
             expected['properties'][name]['maxProperties'] = 256
             expected['properties'][name]['properties']['component']['maxLength'] = 65536

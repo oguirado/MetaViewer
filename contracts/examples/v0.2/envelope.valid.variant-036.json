@@ -1,0 +1,29 @@
+{
+  "schema": "envelope/v0.2",
+  "msg_id": "x",
+  "ts_ns": 0,
+  "from": {
+    "component": "core",
+    "instance": "x"
+  },
+  "to": {
+    "component": "core",
+    "instance": "x"
+  },
+  "session_id": "x",
+  "seq": 1,
+  "nonce": "x",
+  "body": {
+    "schema": "surface_request/v0.2",
+    "op": "input",
+    "params": {
+      "surface_id": "x",
+      "proposal_id": "x",
+      "action": {
+        "type": "scroll",
+        "dx": 0,
+        "dy": 0
+      }
+    }
+  }
+}

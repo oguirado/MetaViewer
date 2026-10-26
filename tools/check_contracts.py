@@ -15,6 +15,7 @@ KEYWORDS = {'$schema', '$id', 'title', 'description', '$defs', '$ref', 'type',
             'oneOf', 'items', 'minItems', 'minimum', 'maximum', 'minLength',
             'maxLength', 'maxItems', 'maxProperties', 'pattern'}
 TYPES = {'object', 'array', 'string', 'integer', 'number', 'boolean', 'null'}
+MAX_SAFE_INTEGER = (1 << 53) - 1
 
 class ValidationError(ValueError):
     pass
@@ -214,11 +215,83 @@ class Validator:
         if isinstance(value, str):
             if len(value) < schema.get('minLength', 0) or len(value) > schema.get('maxLength', float('inf')):
                 fail('string length outside bounds')
-            if 'pattern' in schema and not re.search(schema['pattern'], value):
-                fail('pattern mismatch')
+            if 'pattern' in schema:
+                pattern = schema['pattern']
+                # Wire patterns use exact end anchors, as the Rust decoder does.
+                if pattern.endswith('$') and not pattern.endswith(r'\$'):
+                    pattern = pattern[:-1] + r'\Z'
+                if (not re.search(pattern, value)
+                        or (pattern.startswith('^/') and any(c in value for c in '\r\n'))):
+                    fail('pattern mismatch')
         if type(value) in (int, float):
             if value < schema.get('minimum', -float('inf')) or value > schema.get('maximum', float('inf')):
                 fail('number outside bounds')
+
+def positive_examples(directory, name):
+    """Include the original positive and explicitly named positive variants."""
+    directory = Path(directory)
+    return sorted([*directory.glob(name + '.valid.json'),
+                   *directory.glob(name + '.valid.*.json')])
+
+
+def variant_coverage(validator, schema, values):
+    """Return unwitnessed enum members / oneOf branches reachable from schema.
+
+    [TARGET, unit decision] v0.2 positive fixtures must cover each reachable
+    schema alternative, including optional properties and referenced definitions.
+    Only whole-document valid values can witness an alternative. Node identity
+    shares referenced obligations without requiring a Cartesian product.
+    """
+    required, witnessed, visited = {}, set(), set()
+
+    def discover(node, root, path):
+        if id(node) in visited:
+            return
+        visited.add(id(node))
+        for keyword in ('enum', 'oneOf'):
+            for index, _ in enumerate(node.get(keyword, [])):
+                required[(id(node), keyword, index)] = f'{path}/{keyword}/{index}'
+        if '$ref' in node:
+            target, target_root = validator.resolve(node['$ref'], root)
+            discover(target, target_root, path + '/$ref:' + node['$ref'])
+        for key, child in node.get('properties', {}).items():
+            discover(child, root, path + '/properties/' + key)
+        if 'items' in node:
+            discover(node['items'], root, path + '/items')
+        for index, child in enumerate(node.get('oneOf', [])):
+            discover(child, root, f'{path}/oneOf/{index}')
+
+    def observe(value, node, root):
+        for index, member in enumerate(node.get('enum', [])):
+            try:
+                validator.validate(value, {'const': member})
+            except ValidationError:
+                continue
+            witnessed.add((id(node), 'enum', index))
+        if '$ref' in node:
+            target, target_root = validator.resolve(node['$ref'], root)
+            observe(value, target, target_root)
+        for index, branch in enumerate(node.get('oneOf', [])):
+            try:
+                validator.validate(value, branch, root)
+            except ValidationError:
+                continue
+            witnessed.add((id(node), 'oneOf', index))
+            observe(value, branch, root)
+        if isinstance(value, dict):
+            for key, child in node.get('properties', {}).items():
+                if key in value:
+                    observe(value[key], child, root)
+        if isinstance(value, list) and 'items' in node:
+            for child in value:
+                observe(child, node['items'], root)
+
+    discover(schema, schema, '$')
+    for value in values:
+        validator.validate(value, schema)
+        observe(value, schema, schema)
+    return sorted(label for key, label in required.items() if key not in witnessed)
+
 
 def check_repository(root=ROOT, *, versions=SUPPORTED_VERSIONS):
     if (not isinstance(versions, tuple) or not versions
@@ -241,7 +314,7 @@ def check_repository(root=ROOT, *, versions=SUPPORTED_VERSIONS):
         known_examples = set()
         for path in schemas:
             name = path.name.removesuffix('.schema.json')
-            groups = [sorted(examples.glob(name + '.valid.json')),
+            groups = [positive_examples(examples, name),
                       sorted(examples.glob(name + '.invalid.*.json'))]
             known_examples.update(example for group in groups for example in group)
             try:
@@ -256,6 +329,7 @@ def check_repository(root=ROOT, *, versions=SUPPORTED_VERSIONS):
                 continue
             if any(not group for group in groups):
                 errors.append(f'{version}: {path}: valid and invalid examples required')
+            positives = []
             for valid, group in zip((True, False), groups):
                 for example in group:
                     try:
@@ -270,6 +344,11 @@ def check_repository(root=ROOT, *, versions=SUPPORTED_VERSIONS):
                         passed = False
                     if valid != passed:
                         errors.append(f'{version}: {example}: expected {"pass" if valid else "failure"}')
+                    if valid and passed:
+                        positives.append(value)
+            if version == 'v0.2':
+                for missing in variant_coverage(validator, schema, positives):
+                    errors.append(f'{version}: {path}: unwitnessed alternative {missing}')
         for path in sorted(examples.glob('*.json')):
             if path not in known_examples:
                 errors.append(f'{version}: {path}: unrecognized or unchecked example')

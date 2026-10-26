@@ -1,0 +1,30 @@
+{
+  "schema": "envelope/v0.2",
+  "msg_id": "x",
+  "ts_ns": 0,
+  "from": {
+    "component": "core",
+    "instance": "x"
+  },
+  "to": {
+    "component": "core",
+    "instance": "x"
+  },
+  "session_id": "x",
+  "seq": 1,
+  "nonce": "x",
+  "body": {
+    "op": "data",
+    "params": {
+      "b64": "0000000000000000000000000000000000000000000000000000000000000000",
+      "byte_count": 48,
+      "gap": false,
+      "seq": 1,
+      "session_id": "x",
+      "terminal_generation": 1,
+      "truncated": false
+    },
+    "request_id": "x",
+    "schema": "terminal_session/v0.2"
+  }
+}

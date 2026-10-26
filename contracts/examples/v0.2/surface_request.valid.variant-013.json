@@ -1,0 +1,13 @@
+{
+  "schema": "surface_request/v0.2",
+  "op": "input",
+  "params": {
+    "surface_id": "x",
+    "proposal_id": "x",
+    "action": {
+      "type": "scroll",
+      "dx": 0,
+      "dy": 0
+    }
+  }
+}

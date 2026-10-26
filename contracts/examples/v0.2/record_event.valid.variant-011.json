@@ -1,0 +1,10 @@
+{
+  "schema": "record_event/v0.2",
+  "request_id": "x",
+  "surface_id": "x",
+  "recording_id": "x",
+  "event": "refused",
+  "mono_ns": 0,
+  "reason_code": "OUT_OF_BOUNDS",
+  "detail": "x"
+}

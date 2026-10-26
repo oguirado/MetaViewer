@@ -1,0 +1,14 @@
+{
+  "schema": "surface/v0.2",
+  "surface_id": "x",
+  "kind": "desktop_capsule",
+  "display": "x",
+  "geometry": {
+    "w": 1,
+    "h": 1
+  },
+  "state": "ceded",
+  "visibility": "folded",
+  "control": "agent",
+  "profile_id": "x"
+}

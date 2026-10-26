@@ -1,0 +1,9 @@
+{
+  "schema": "record_request/v0.2",
+  "request_id": "x",
+  "op": "screenshot",
+  "params": {
+    "surface_id": "x",
+    "capture_id": "x"
+  }
+}

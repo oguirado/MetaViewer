@@ -1,0 +1,9 @@
+{
+  "schema": "record_request/v0.2",
+  "request_id": "x",
+  "op": "disk_stop",
+  "params": {
+    "surface_id": "x",
+    "recording_id": "x"
+  }
+}

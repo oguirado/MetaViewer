@@ -1,0 +1,37 @@
+{
+  "schema": "envelope/v0.2",
+  "msg_id": "x",
+  "ts_ns": 0,
+  "from": {
+    "component": "core",
+    "instance": "x"
+  },
+  "to": {
+    "component": "core",
+    "instance": "x"
+  },
+  "session_id": "x",
+  "seq": 1,
+  "nonce": "x",
+  "body": {
+    "schema": "settings/v0.2",
+    "theme": "metaviewer-dark",
+    "providers": [
+      {
+        "id": "x",
+        "label": "x",
+        "enabled": false,
+        "model": "x"
+      }
+    ],
+    "recording_destination": {
+      "capability_id": "x",
+      "path": "/dev/shm/frame.rgb"
+    },
+    "limits": {
+      "memory_bytes": 1,
+      "max_fps": 1,
+      "ring_bytes": 1
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "op": "spawn",
+  "params": {
+    "cols": 1,
+    "provider_id": "x",
+    "rows": 1,
+    "surface_id": "x"
+  },
+  "request_id": "x",
+  "schema": "terminal_session/v0.2"
+}

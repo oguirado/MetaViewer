@@ -1,0 +1,20 @@
+{
+  "schema": true,
+  "entry_id": "metaviewer-nested",
+  "kind": "program",
+  "profile_id": "nested-program",
+  "label": "MetaViewer Nested",
+  "image": "opensuperficies-program-electron-arm64:0.1.0",
+  "window_width_px": 1280,
+  "window_height_px": 720,
+  "display_width_px": 1280,
+  "display_height_px": 900,
+  "display_only": true,
+  "network": "none",
+  "seccomp_identity": true,
+  "nested_depth": 1,
+  "limits": {
+    "memory_bytes": 536870912,
+    "cpu_milli": 2000
+  }
+}

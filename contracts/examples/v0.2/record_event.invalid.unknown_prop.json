@@ -1,0 +1,12 @@
+{
+  "schema": "record_event/v0.2",
+  "request_id": "req-9f2c4a01",
+  "surface_id": "surface-demo",
+  "recording_id": "rec-demo-001",
+  "event": "frame_captured",
+  "mono_ns": 1834000255000,
+  "ram_path": "/dev/shm/ramws/demo.rgb",
+  "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "byte_count": 921600,
+  "zz_unknown_prop": 123
+}

@@ -1,0 +1,27 @@
+{
+  "schema": true,
+  "theme": "metaviewer-dark",
+  "providers": [
+    {
+      "id": "provider-demo-1",
+      "label": "Demo provider one",
+      "enabled": true,
+      "model": "demo-model-a"
+    },
+    {
+      "id": "provider-demo-2",
+      "label": "Demo provider two",
+      "enabled": false,
+      "model": "demo-model-b"
+    }
+  ],
+  "recording_destination": {
+    "capability_id": "dest-cap-demo",
+    "path": "/recordings/demo"
+  },
+  "limits": {
+    "memory_bytes": 536870912,
+    "max_fps": 30,
+    "ring_bytes": 134217728
+  }
+}

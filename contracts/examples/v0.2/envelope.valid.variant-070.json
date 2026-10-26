@@ -1,0 +1,40 @@
+{
+  "schema": "envelope/v0.2",
+  "msg_id": "x",
+  "ts_ns": 0,
+  "from": {
+    "component": "core",
+    "instance": "x"
+  },
+  "to": {
+    "component": "core",
+    "instance": "x"
+  },
+  "session_id": "x",
+  "seq": 1,
+  "nonce": "x",
+  "body": {
+    "schema": "action_receipt/v0.2",
+    "proposal_id": "x",
+    "executed_at_ns": 0,
+    "after_frame": {
+      "schema": "frame_ref/v0.2",
+      "surface_id": "x",
+      "generation": 1,
+      "tick": 0,
+      "ts_ns": 0,
+      "width": 1,
+      "height": 1,
+      "format": "rgb24",
+      "ramws_path": "/dev/shm/frame.rgb",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "capture_us": 0
+    },
+    "verified": false,
+    "verification": {
+      "method": "state_sha256",
+      "detail": "x"
+    },
+    "error": "x"
+  }
+}

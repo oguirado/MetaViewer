@@ -1,0 +1,28 @@
+{
+  "schema": "envelope/v0.2",
+  "msg_id": "x",
+  "ts_ns": 0,
+  "from": {
+    "component": "core",
+    "instance": "x"
+  },
+  "to": {
+    "component": "core",
+    "instance": "x"
+  },
+  "session_id": "x",
+  "seq": 1,
+  "nonce": "x",
+  "body": {
+    "op": "float",
+    "params": {
+      "height_px": 1,
+      "slot_id": "x",
+      "width_px": 1,
+      "x_px": 0,
+      "y_px": 0
+    },
+    "request_id": "x",
+    "schema": "ui_intent/v0.2"
+  }
+}

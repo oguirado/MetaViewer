@@ -1,0 +1,35 @@
+{
+  "schema": "mv_tool_call/v0.2",
+  "request_id": "x",
+  "op": "propose",
+  "args": {
+    "proposal": {
+      "schema": "action_proposal/v0.2",
+      "proposal_id": "x",
+      "surface_id": "x",
+      "based_on_frame": {
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "generation": 1
+      },
+      "action": {
+        "type": "click",
+        "x": 0,
+        "y": 0,
+        "button": "left"
+      },
+      "expectation": {
+        "type": "changed_region",
+        "bbox": {
+          "x": 0,
+          "y": 0,
+          "w": 1,
+          "h": 1
+        }
+      },
+      "budget": {
+        "max_ms": 1,
+        "max_retries": 0
+      }
+    }
+  }
+}

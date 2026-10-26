@@ -1,0 +1,13 @@
+{
+  "params": {
+    "b64": "aGVsbG8=",
+    "byte_count": 5,
+    "gap": false,
+    "seq": 1,
+    "session_id": "term-01",
+    "terminal_generation": 1,
+    "truncated": false
+  },
+  "request_id": "req-01",
+  "schema": "terminal_session/v0.2"
+}

@@ -1,0 +1,23 @@
+{
+  "schema": "envelope/v0.2",
+  "msg_id": "x",
+  "ts_ns": 0,
+  "from": {
+    "component": "core",
+    "instance": "x"
+  },
+  "to": {
+    "component": "core",
+    "instance": "x"
+  },
+  "session_id": "x",
+  "seq": 1,
+  "nonce": "x",
+  "body": {
+    "schema": "session_record/v0.2",
+    "core_seq": 1,
+    "kind": "refused",
+    "msg_id": "x",
+    "prev_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  }
+}

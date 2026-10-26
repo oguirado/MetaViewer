@@ -1,0 +1,10 @@
+{
+  "op": "error",
+  "params": {
+    "code": "UNKNOWN_PROVIDER",
+    "detail": "x",
+    "session_id": "x"
+  },
+  "request_id": "x",
+  "schema": "terminal_session/v0.2"
+}

@@ -1,0 +1,8 @@
+{
+  "schema": "surface_event/v0.2",
+  "event": "input_applied",
+  "data": {
+    "surface_id": "x",
+    "proposal_id": "x"
+  }
+}

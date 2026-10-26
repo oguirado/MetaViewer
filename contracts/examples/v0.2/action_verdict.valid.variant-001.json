@@ -1,0 +1,7 @@
+{
+  "schema": "action_verdict/v0.2",
+  "proposal_id": "x",
+  "decision": "refused",
+  "reason_code": "SURFACE_NOT_AGENT_CONTROLLED",
+  "core_seq": 1
+}

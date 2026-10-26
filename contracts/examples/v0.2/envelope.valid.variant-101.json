@@ -1,0 +1,29 @@
+{
+  "schema": "envelope/v0.2",
+  "msg_id": "x",
+  "ts_ns": 0,
+  "from": {
+    "component": "core",
+    "instance": "x"
+  },
+  "to": {
+    "component": "core",
+    "instance": "x"
+  },
+  "session_id": "x",
+  "seq": 1,
+  "nonce": "x",
+  "body": {
+    "op": "started",
+    "params": {
+      "cols": 1,
+      "provider_id": "x",
+      "rows": 1,
+      "session_id": "x",
+      "surface_id": "x",
+      "terminal_generation": 1
+    },
+    "request_id": "x",
+    "schema": "terminal_session/v0.2"
+  }
+}

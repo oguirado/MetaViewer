@@ -14,7 +14,8 @@
     },
     "executed_at_ns": {
       "type": "integer",
-      "minimum": 0
+      "minimum": 0,
+      "maximum": 9007199254740991
     },
     "after_frame": {
       "$ref": "frame_ref.schema.json"

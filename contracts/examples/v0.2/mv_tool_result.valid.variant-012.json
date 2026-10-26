@@ -1,0 +1,23 @@
+{
+  "schema": "mv_tool_result/v0.2",
+  "request_id": "x",
+  "op": "list",
+  "status": "ok",
+  "surfaces": [
+    {
+      "schema": "surface/v0.1",
+      "surface_id": "x",
+      "kind": "desktop_capsule",
+      "display": "x",
+      "geometry": {
+        "w": 1,
+        "h": 1
+      },
+      "state": "active",
+      "visibility": "folded",
+      "control": "human",
+      "profile_id": "x"
+    }
+  ],
+  "next_cursor": "x"
+}

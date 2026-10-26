@@ -1,0 +1,9 @@
+{
+  "op": "pin",
+  "params": {
+    "pinned": false,
+    "slot_id": "x"
+  },
+  "request_id": "x",
+  "schema": "ui_intent/v0.2"
+}

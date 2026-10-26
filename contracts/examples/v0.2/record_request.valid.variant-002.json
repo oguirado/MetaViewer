@@ -1,0 +1,9 @@
+{
+  "schema": "record_request/v0.2",
+  "request_id": "x",
+  "op": "ram_stop",
+  "params": {
+    "surface_id": "x",
+    "recording_id": "x"
+  }
+}

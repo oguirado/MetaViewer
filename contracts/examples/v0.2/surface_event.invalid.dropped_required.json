@@ -1,0 +1,18 @@
+{
+  "event": "frame_ready",
+  "data": {
+    "frame_ref": {
+      "schema": "frame_ref/v0.2",
+      "surface_id": "surface-demo",
+      "generation": 1,
+      "tick": 7,
+      "ts_ns": 1000000,
+      "width": 800,
+      "height": 600,
+      "format": "rgb24",
+      "ramws_path": "/dev/shm/ramws/demo.rgb",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "capture_us": 120
+    }
+  }
+}

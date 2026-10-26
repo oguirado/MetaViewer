@@ -1,0 +1,10 @@
+{
+  "op": "resync",
+  "params": {
+    "from_seq": 1,
+    "session_id": "x",
+    "terminal_generation": 1
+  },
+  "request_id": "x",
+  "schema": "terminal_session/v0.2"
+}

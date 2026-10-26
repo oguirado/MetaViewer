@@ -1,0 +1,36 @@
+{
+  "schema": "envelope/v0.2",
+  "msg_id": "x",
+  "ts_ns": 0,
+  "from": {
+    "component": "core",
+    "instance": "x"
+  },
+  "to": {
+    "component": "core",
+    "instance": "x"
+  },
+  "session_id": "x",
+  "seq": 1,
+  "nonce": "x",
+  "body": {
+    "schema": "catalog_entry/v0.2",
+    "entry_id": "x",
+    "kind": "vm",
+    "profile_id": "x",
+    "label": "x",
+    "image": "x",
+    "window_width_px": 1,
+    "window_height_px": 1,
+    "display_width_px": 1,
+    "display_height_px": 1,
+    "display_only": false,
+    "network": "none",
+    "seccomp_identity": false,
+    "nested_depth": 0,
+    "limits": {
+      "memory_bytes": 1,
+      "cpu_milli": 1
+    }
+  }
+}

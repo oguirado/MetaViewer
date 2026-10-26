@@ -1,0 +1,14 @@
+{
+  "schema": "hello/v0.2",
+  "contract_version": "v0.2",
+  "component": "daemon",
+  "component_version": "x",
+  "component_commit": "0000000000000000000000000000000000000000",
+  "dependencies": [
+    {
+      "name": "x",
+      "version": "x",
+      "commit": "0000000000000000000000000000000000000000"
+    }
+  ]
+}

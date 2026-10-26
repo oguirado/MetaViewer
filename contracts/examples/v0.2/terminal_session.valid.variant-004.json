@@ -1,0 +1,12 @@
+{
+  "op": "write",
+  "params": {
+    "b64": "0000000000000000000000000000000000000000000000000000000000000000",
+    "byte_count": 48,
+    "input_seq": 1,
+    "session_id": "x",
+    "terminal_generation": 1
+  },
+  "request_id": "x",
+  "schema": "terminal_session/v0.2"
+}

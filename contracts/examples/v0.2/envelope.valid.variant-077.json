@@ -1,0 +1,36 @@
+{
+  "schema": "envelope/v0.2",
+  "msg_id": "x",
+  "ts_ns": 0,
+  "from": {
+    "component": "core",
+    "instance": "x"
+  },
+  "to": {
+    "component": "core",
+    "instance": "x"
+  },
+  "session_id": "x",
+  "seq": 1,
+  "nonce": "x",
+  "body": {
+    "schema": "capsule_meta/v0.2",
+    "surface_id": "x",
+    "kind": "browser",
+    "container": "x",
+    "run_id": "x",
+    "display": "x",
+    "fb_path": "/dev/shm/frame.rgb",
+    "lane_socket": "/dev/shm/frame.rgb",
+    "ready_line": "x",
+    "windows": [
+      {
+        "window_id": "x",
+        "x_px": 0,
+        "y_px": 0,
+        "width_px": 1,
+        "height_px": 1
+      }
+    ]
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "schema": "surface_request/v0.2",
+  "op": "frame_unsubscribe",
+  "params": {
+    "surface_id": "x"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "schema": "surface_event/v0.2",
+  "event": "created",
+  "data": {
+    "surface": {
+      "schema": "surface/v0.2",
+      "surface_id": "x",
+      "kind": "game_capsule",
+      "display": "x",
+      "geometry": {
+        "w": 1,
+        "h": 1
+      },
+      "state": "active",
+      "visibility": "folded",
+      "control": "agent",
+      "profile_id": "x"
+    }
+  }
+}

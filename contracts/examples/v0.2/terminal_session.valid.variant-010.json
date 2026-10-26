@@ -1,0 +1,11 @@
+{
+  "op": "exit",
+  "params": {
+    "exit_code": 0,
+    "session_id": "x",
+    "signal": null,
+    "terminal_generation": 1
+  },
+  "request_id": "x",
+  "schema": "terminal_session/v0.2"
+}

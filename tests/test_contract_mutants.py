@@ -11,7 +11,8 @@ import copy
 import json
 import unittest
 
-from tools.check_contracts import ROOT, SUPPORTED_VERSIONS, ValidationError, Validator
+from tools.check_contracts import (ROOT, SUPPORTED_VERSIONS, ValidationError, Validator,
+                                   positive_examples, variant_coverage)
 
 MIN_MUTANTS_PER_SCHEMA = 10
 UNKNOWN_KEY = "zz_mutant_unexpected"
@@ -344,16 +345,28 @@ class ContractMutantTests(unittest.TestCase):
                 with self.subTest(version=version, schema=name):
                     schema = validator.load(schema_path.name)
                     validator.audit(schema)
-                    valid = json.loads((_examples_dir(version) / f"{name}.valid.json").read_text())
-                    validator.validate(valid, schema)
-                    mutants = generate_mutants(validator, schema, valid)
-                    self.assertGreaterEqual(
-                        len(mutants), MIN_MUTANTS_PER_SCHEMA, f"only {len(mutants)} mutants for {name}"
-                    )
-                    for _tag, description, mutant in mutants:
-                        with self.subTest(mutant=description):
-                            with self.assertRaises(ValidationError):
-                                validator.validate(mutant, schema)
+                    fixtures = positive_examples(_examples_dir(version), name)
+                    self.assertTrue(fixtures, name)
+                    values = [json.loads(path.read_text()) for path in fixtures]
+                    if version == 'v0.2':
+                        self.assertEqual(variant_coverage(validator, schema, values), [],
+                                         f'{name}: missing per-variant positive witnesses')
+                    for fixture, valid in zip(fixtures, values):
+                        with self.subTest(fixture=fixture.name):
+                            validator.validate(valid, schema)
+                            mutants = generate_mutants(validator, schema, valid)
+                            self.assertGreaterEqual(
+                                len(mutants), MIN_MUTANTS_PER_SCHEMA,
+                                f"only {len(mutants)} mutants for {fixture.name}"
+                            )
+                            # Designated oracles for every variant: closed shape,
+                            # required fields, and const/enum discriminator rails.
+                            tags = {tag for tag, _, _ in mutants}
+                            self.assertTrue({'drop', 'add_unknown', 'flip_const'} <= tags, tags)
+                            for _tag, description, mutant in mutants:
+                                with self.subTest(mutant=description):
+                                    with self.assertRaises(ValidationError):
+                                        validator.validate(mutant, schema)
 
 
 if __name__ == "__main__":

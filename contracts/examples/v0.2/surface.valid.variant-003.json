@@ -1,0 +1,14 @@
+{
+  "schema": "surface/v0.2",
+  "surface_id": "x",
+  "kind": "vm",
+  "display": "x",
+  "geometry": {
+    "w": 1,
+    "h": 1
+  },
+  "state": "active",
+  "visibility": "folded",
+  "control": "agent",
+  "profile_id": "x"
+}

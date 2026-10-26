@@ -1,0 +1,14 @@
+{
+  "schema": "surface_request/v0.2",
+  "op": "input",
+  "params": {
+    "surface_id": "x",
+    "proposal_id": "x",
+    "action": {
+      "type": "click",
+      "x": 0,
+      "y": 0,
+      "button": "middle"
+    }
+  }
+}

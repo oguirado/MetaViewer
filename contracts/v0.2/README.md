@@ -90,6 +90,21 @@ Write every id, sequence and counter as `integer` with explicit
 part of the contract: unknown properties, unknown versions and
 out-of-range values are refused before any effect.
 
+The interoperable integer range is -9007199254740991 through
+9007199254740991 [TARGET, wire parity]; field-specific bounds can be tighter.
+The checker interprets an unescaped final regex `$` as an exact end anchor,
+and rejects CR and LF in absolute-path patterns, matching the Rust decoder.
+
+[TARGET, unit decision] Named positive fixtures use
+`<name>.valid.<variant>.json`; the original `<name>.valid.json` remains a
+positive control. The v0.2 gate requires positive witnesses for every enum
+member and every `oneOf` alternative reachable through properties, array
+items and references, including optional fields. Unreferenced definitions
+do not count as reachable alternatives. Only whole-document valid fixtures
+count; duplicate positives cannot replace missing alternatives. The mutant
+gate checks this coverage before mutating every persisted positive, with
+required-field, closed-object and discriminator rejection oracles per fixture.
+
 ## Envelope body union
 
 `envelope.schema.json` dispatches `body` over all 19 [TARGET, conductor

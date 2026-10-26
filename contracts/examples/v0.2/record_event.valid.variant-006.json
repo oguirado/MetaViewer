@@ -1,0 +1,10 @@
+{
+  "schema": "record_event/v0.2",
+  "request_id": "x",
+  "surface_id": "x",
+  "recording_id": "x",
+  "event": "dropped",
+  "mono_ns": 0,
+  "dropped_frames": 1,
+  "policy": "ram_ring_oldest"
+}

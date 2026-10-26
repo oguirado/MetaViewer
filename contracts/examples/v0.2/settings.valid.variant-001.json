@@ -1,0 +1,21 @@
+{
+  "schema": "settings/v0.2",
+  "theme": "metaviewer-light",
+  "providers": [
+    {
+      "id": "x",
+      "label": "x",
+      "enabled": false,
+      "model": "x"
+    }
+  ],
+  "recording_destination": {
+    "capability_id": "x",
+    "path": "/dev/shm/frame.rgb"
+  },
+  "limits": {
+    "memory_bytes": 1,
+    "max_fps": 1,
+    "ring_bytes": 1
+  }
+}

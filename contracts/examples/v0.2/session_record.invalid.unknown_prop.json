@@ -1,0 +1,8 @@
+{
+  "schema": "session_record/v0.2",
+  "core_seq": 1,
+  "kind": "received",
+  "msg_id": "message-demo",
+  "prev_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "zz_unknown_prop": 123
+}

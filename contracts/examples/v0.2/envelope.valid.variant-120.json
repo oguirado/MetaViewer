@@ -1,0 +1,28 @@
+{
+  "schema": "envelope/v0.2",
+  "msg_id": "x",
+  "ts_ns": 0,
+  "from": {
+    "component": "core",
+    "instance": "x"
+  },
+  "to": {
+    "component": "core",
+    "instance": "x"
+  },
+  "session_id": "x",
+  "seq": 1,
+  "nonce": "x",
+  "body": {
+    "schema": "record_request/v0.2",
+    "request_id": "x",
+    "op": "disk_start",
+    "params": {
+      "surface_id": "x",
+      "recording_id": "x",
+      "destination_capability_id": "x",
+      "destination_path": "/dev/shm/frame.rgb",
+      "max_fps": 1
+    }
+  }
+}

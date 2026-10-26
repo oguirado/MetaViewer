@@ -1,0 +1,44 @@
+{
+  "schema": "envelope/v0.2",
+  "msg_id": "x",
+  "ts_ns": 0,
+  "from": {
+    "component": "core",
+    "instance": "x"
+  },
+  "to": {
+    "component": "core",
+    "instance": "x"
+  },
+  "session_id": "x",
+  "seq": 1,
+  "nonce": "x",
+  "body": {
+    "schema": "action_proposal/v0.2",
+    "proposal_id": "x",
+    "surface_id": "x",
+    "based_on_frame": {
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "generation": 1
+    },
+    "action": {
+      "type": "click",
+      "x": 0,
+      "y": 0,
+      "button": "middle"
+    },
+    "expectation": {
+      "type": "changed_region",
+      "bbox": {
+        "x": 0,
+        "y": 0,
+        "w": 1,
+        "h": 1
+      }
+    },
+    "budget": {
+      "max_ms": 1,
+      "max_retries": 0
+    }
+  }
+}

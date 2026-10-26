@@ -1,0 +1,8 @@
+{
+  "schema": "mv_tool_result/v0.2",
+  "request_id": "x",
+  "op": "observe",
+  "status": "refused",
+  "reason_code": "OUT_OF_BOUNDS",
+  "detail": "x"
+}

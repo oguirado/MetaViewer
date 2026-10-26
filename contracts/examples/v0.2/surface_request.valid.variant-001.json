@@ -1,0 +1,12 @@
+{
+  "schema": "surface_request/v0.2",
+  "op": "create",
+  "params": {
+    "kind": "desktop_capsule",
+    "geometry": {
+      "w": 1,
+      "h": 1
+    },
+    "profile_id": "x"
+  }
+}

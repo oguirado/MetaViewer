@@ -1,0 +1,10 @@
+{
+  "op": "move",
+  "params": {
+    "group_id": "x",
+    "index": 0,
+    "slot_id": "x"
+  },
+  "request_id": "x",
+  "schema": "ui_intent/v0.2"
+}
