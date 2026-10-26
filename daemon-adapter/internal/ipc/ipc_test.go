@@ -11,7 +11,7 @@ import (
 )
 
 func testConfig(path string) Config {
-	return Config{SocketPath: path, UID: uint32(os.Getuid()), MaxFrameBytes: 64, MaxDepth: 8, MaxStringBytes: 64, MaxKeys: 8, MaxArrayItems: 8, MaxReplayEntries: 8, MaxConnections: 2, ReadTimeout: 50 * time.Millisecond, WriteTimeout: 50 * time.Millisecond, ProbeTimeout: 50 * time.Millisecond, ShutdownTimeout: time.Second}
+	return Config{SocketPath: path, UID: uint32(os.Getuid()), MaxFrameBytes: 64, MaxDepth: 8, MaxStringBytes: 64, MaxKeys: 8, MaxArrayItems: 8, MaxReplayEntries: 8, MaxConnections: 2, HelloTimeout: 50 * time.Millisecond, ReadTimeout: 50 * time.Millisecond, WriteTimeout: 50 * time.Millisecond, ProbeTimeout: 50 * time.Millisecond, ShutdownTimeout: time.Second}
 }
 func TestRuntimeSocketPath(t *testing.T) {
 	dir := t.TempDir()

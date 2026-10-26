@@ -7,6 +7,18 @@ import time
 verb = sys.argv[1]
 if verb == "start":
     print(json.dumps({"container": "srf-id-demo", "run_id": "demo-run", "windows": [{"id": "w1", "x": 0, "y": 0, "w": 2, "h": 1, "title": "", "url": ""}]}))
+elif verb == "frame":
+    root = os.environ["SRF_IDENTITY_STORE_ROOT"]
+    print(json.dumps({"path": root + "/demo-run/frames/w1/f.png", "seq": 1,
+                      "sha256_rgb24": __import__("hashlib").sha256(bytes([255, 0, 0, 0, 255, 0])).hexdigest(),
+                      "width": 2, "height": 1, "capture_mono_ns": 200,
+                      "generation": "srf-id-demo",
+                      "window": {"id": "w1", "x": 0, "y": 0, "w": 2, "h": 1, "title": "", "url": ""}}))
+elif verb == "input":
+    print(json.dumps({"surface_id": "w1", "kind": "click", "input_mono_ns": 200,
+                      "focus_verified": True, "result": "ok"}))
+elif verb == "stop":
+    print(json.dumps({"stopped": "srf-id-demo", "removed_verified": True}))
 elif verb == "overflow":
     print("x" * 65536)
 elif verb == "delay":

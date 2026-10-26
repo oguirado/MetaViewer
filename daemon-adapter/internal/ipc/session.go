@@ -75,7 +75,13 @@ func Serve(ctx context.Context, listener *net.UnixListener, cfg Config, policy P
 			}
 			first := true
 			for {
-				frame, err := framer.Read(ctx)
+				readCtx := ctx
+				cancelRead := func() {}
+				if first {
+					readCtx, cancelRead = context.WithTimeout(ctx, cfg.HelloTimeout)
+				}
+				frame, err := framer.Read(readCtx)
+				cancelRead()
 				if err != nil {
 					return
 				}
