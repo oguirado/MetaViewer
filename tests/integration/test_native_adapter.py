@@ -5,15 +5,14 @@ no generated source or executable is written into the adapter surface.
 """
 import json
 import os
-import shutil
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
 
-# The Go toolchain from PATH (hosted runners), else the host install.
-GO = shutil.which("go") or "/usr/local/go/bin/go"
+# Resolve the admitted toolchain from an explicit override or PATH.
+GO = os.environ.get("GO", "go")
 
 ROOT = Path(__file__).resolve().parents[2]
 

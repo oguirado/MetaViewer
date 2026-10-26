@@ -163,9 +163,8 @@ class GateTests(unittest.TestCase):
                    '[dev-dependencies]\nproptest = "=1.12.0"\n')
         # A changed dependency set requires a corresponding offline frozen lock.
         self.write('core/src/lib.rs', '')
-        result = subprocess.run(['/home/admin/.cargo/bin/cargo', 'generate-lockfile', '--offline'],
-                                cwd=self.fixture, env=dict(os.environ,
-                                CARGO_TARGET_DIR='/home/admin/.cache/cargo-target/metaviewer-workers'),
+        result = subprocess.run([os.environ.get('CARGO', 'cargo'), 'generate-lockfile', '--offline'],
+                                cwd=self.fixture, env=os.environ.copy(),
                                 capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.call('--leg', 'manifests')
@@ -521,9 +520,9 @@ def validate_frozen_dependencies(root):
         require(locked_root.get(key) == package.get(key), 'package-lock.json: stale root ' + key)
     # Cargo resolves only the current host's graph: cross-platform archives need not
     # be present in the offline cache. --locked still checks the full lock resolution.
-    rustc = '/home/admin/.cargo/bin/rustc'
-    cargo = '/home/admin/.cargo/bin/cargo'
-    require(Path(rustc).is_file() and Path(cargo).is_file(), 'Cargo.lock: missing Rust toolchain')
+    rustc = shutil.which(os.environ.get('RUSTC', 'rustc'))
+    cargo = shutil.which(os.environ.get('CARGO', 'cargo'))
+    require(rustc is not None and cargo is not None, 'Cargo.lock: missing Rust toolchain')
     identity = subprocess.run([rustc, '-vV'], capture_output=True, text=True, timeout=30)
     host = re.search(r'^host: (\S+)$', identity.stdout, re.MULTILINE)
     require(identity.returncode == 0 and host is not None, 'Cargo.lock: unproven Rust host')
@@ -538,8 +537,7 @@ def validate_frozen_dependencies(root):
             shutil.copyfile(root / name, target)
         (scratch / 'core/src').mkdir()
         (scratch / 'core/src/lib.rs').write_text('')
-        environment = dict(os.environ,
-                           CARGO_TARGET_DIR='/home/admin/.cache/cargo-target/metaviewer-workers')
+        environment = os.environ.copy()
         commands = (
             ('Cargo.lock', [cargo, 'metadata', '--offline', '--locked', '--format-version', '1',
                             '--filter-platform', host.group(1)], scratch),

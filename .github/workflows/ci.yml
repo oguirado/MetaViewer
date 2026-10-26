@@ -404,6 +404,17 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # setup-node v4.4.0
         with:
           node-version: "24"
+      # [TARGET, unit decision] These tests compile Rust drivers and validate
+      # frozen offline resolution; provision their toolchain/cache explicitly.
+      - name: Prepare Rust for offline checks
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.97.0 --profile minimal
+          rustup override set 1.97.0
+          cargo fetch --locked
+      - name: Prime npm cache for frozen manifest checks
+        working-directory: ui
+        run: npm ci --ignore-scripts --no-audit --no-fund
       # The native integration test deliberately disables automatic toolchain
       # downloads. Put the module-selected Go binary on PATH before it runs.
       - name: Select adapter Go toolchain
@@ -1296,6 +1307,12 @@ jobs:
             [ $r -ne 0 ] && [ $rc -eq 0 ] && rc=$r
             exit $rc
           fi
+          # Electron has no npm postinstall hook; the ASAR test needs its real binary.
+          LOG="$EVDIR/js-electron.log"
+          node .github/workflows/install_electron.cjs >"$LOG" 2>&1; r=$?
+          if [ $r -eq 0 ]; then oc=PASS; rsn="pinned Electron verified"; else oc=FAIL; rsn="Electron installation failed"; fi
+          finish_gate js-electron "$r" "$oc" "$rsn" "$LOG" .github/workflows/install_electron.cjs "unparsed:electron-install" 0 -- node .github/workflows/install_electron.cjs || rc=2
+          [ $r -ne 0 ] && [ $rc -eq 0 ] && rc=$r
           if [ -z "$(ls ui/test/*.test.js 2>/dev/null)" ]; then
             blocked js-test "ui/test/*.test.js missing, owned by R-W0-SHELL" ui/package.json -- npm test; r=$?
           else
@@ -1377,6 +1394,14 @@ jobs:
           KIT_REPO="$(python3 -c 'import json; print(json.load(open("ui/kit.lock.json"))["repo"])')"
           git -C kit-checkout remote set-url origin "$KIT_REPO"
           echo "MV_KIT_CHECKOUT=${GITHUB_WORKSPACE}/kit-checkout" >> "$GITHUB_ENV"
+      # [TARGET, unit decision] These tests compile Rust drivers and validate
+      # frozen offline resolution; provision their toolchain/cache explicitly.
+      - name: Prepare Rust for offline checks
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.97.0 --profile minimal
+          rustup override set 1.97.0
+          cargo fetch --locked
       - name: Install E2E dependencies
         working-directory: ui
         run: npm ci --no-audit --no-fund

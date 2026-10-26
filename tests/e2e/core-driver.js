@@ -5,12 +5,13 @@ const { execFileSync, spawnSync } = require('node:child_process');
 const { writeFileSync } = require('node:fs');
 const { join, dirname } = require('node:path');
 const ROOT = join(__dirname, '../..');
-const TARGET = '/home/admin/.cache/cargo-target/metaviewer-workers';
-const env = { ...process.env, CARGO_TARGET_DIR: TARGET };
+const env = { ...process.env };
+const cargo = process.env.CARGO || 'cargo';
+const rustc = process.env.RUSTC || 'rustc';
 let artifacts;
 function buildCore() {
   if (!artifacts) {
-    const output = execFileSync('/home/admin/.cargo/bin/cargo',
+    const output = execFileSync(cargo,
       ['build', '--offline', '--manifest-path', join(ROOT, 'Cargo.toml'), '--message-format=json'],
       { env, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
     artifacts = new Map();
@@ -32,7 +33,7 @@ function compileRust(scratch, source) {
     if (!file) throw new Error(`E2E_PREREQ: Cargo artifact absent: ${name}`);
     args.push('--extern', `${name}=${file}`, '-L', `dependency=${dirname(file)}`);
   }
-  execFileSync('/home/admin/.cargo/bin/rustc', args, { env });
+  execFileSync(rustc, args, { env });
   return binary;
 }
 function runRust(scratch, source) {

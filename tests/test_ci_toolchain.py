@@ -1,5 +1,6 @@
 """Run the hosted toolchain-selection step against an offline Go fixture."""
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -48,3 +49,36 @@ class CIToolchainTests(unittest.TestCase):
             (scratch / "daemon-adapter/go.mod").write_text("module fixture\n")
             self.assertNotEqual(run().returncode, 0)
             self.assertFalse(github_path.exists())
+
+    def test_rust_prerequisites_execute_before_offline_consumers_and_fail_closed(self):
+        root = Path(__file__).resolve().parents[1]
+        workflow = (root / ".github/workflows/ci.yml").read_text()
+        for job_name, consumer in (("laws-contracts", "Prime npm cache"),
+                                   ("e2e", "Install E2E dependencies")):
+            with self.subTest(job=job_name), tempfile.TemporaryDirectory() as directory:
+                job = re.split(r"\n  [a-z][\w-]*:\n", workflow.split(f"  {job_name}:\n", 1)[1], 1)[0]
+                step = job.split("      - name: Prepare Rust for offline checks\n", 1)[1]
+                script, rest = step.split("      - name:", 1)
+                self.assertTrue(rest.startswith(" " + consumer))
+                script = "\n".join(line[10:] for line in script.split("        run: |\n", 1)[1].splitlines())
+                scratch = Path(directory)
+                log = scratch / "commands"
+                for tool in ('rustup', 'cargo'):
+                    binary = scratch / tool
+                    binary.write_text('#!/bin/sh\nprintf "%s\\n" "' + tool +
+                                      ' $*" >> "$COMMAND_LOG"\n'
+                                      '[ "${FAIL_TOOL:-}" != "' + tool + '" ]\n')
+                    binary.chmod(0o755)
+                env = dict(os.environ, PATH=str(scratch) + os.pathsep + os.environ['PATH'],
+                           COMMAND_LOG=str(log))
+                def run(extra=None):
+                    return subprocess.run(['bash', '-c', script], cwd=root,
+                                          env=dict(env, **(extra or {})), capture_output=True,
+                                          text=True, timeout=10)
+                proc = run()
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertEqual(log.read_text().splitlines(), [
+                    'rustup toolchain install 1.97.0 --profile minimal',
+                    'rustup override set 1.97.0', 'cargo fetch --locked'])
+                for tool in ('rustup', 'cargo'):
+                    self.assertNotEqual(run({'FAIL_TOOL': tool}).returncode, 0)

@@ -152,15 +152,29 @@ describe('Real tileScheduler newest-mailbox conservation', () => {
         maxPresentMsPerTick: 8, maxWarmResourcesPerSurface: 0, maxDrainSteps: 4 }),
       clock: () => 0,
       onReleaseLease: (event) => releases.push(event),
-      onPresent: (event) => presented.add(event.frameGeneration),
+      onPresent: (event) => {
+        assert.equal(scheduler.presentHandle(event).ok, true);
+        presented.add(event.frameGeneration);
+      },
     });
     assert.equal(scheduler.registerSurface({ surfaceId: 'a', surfaceGeneration: 1,
       epoch: 1, principal: 'core', state: { width: 1, height: 1, viewportIntersecting: true } }).ok, true);
+    // A callback alone is no draw witness. Keep all scheduling synchronous and
+    // attach a canvas whose writes we can assert independently of the callback.
+    const draws = [];
+    const canvas = { width: 0, height: 0, getContext: () => ({
+      createImageData: (width, height) => ({ width, height,
+        data: new Uint8ClampedArray(width * height * 4) }),
+      putImageData: (image) => draws.push(image),
+    }) };
+    assert.equal(scheduler.attachCanvas({ surfaceId: 'a', canvas }).ok, true);
     function conserve() {
       const stats = scheduler.getInstrumentation('a');
       const dropped = new Set(releases.filter((event) => accepted.has(event.frameGeneration)
         && !presented.has(event.frameGeneration)).map((event) => event.frameGeneration));
-      const queued = stats?.pendingMailboxFrameGen === null || !stats ? 0 : 1;
+      // A destruction tombstone has no mailbox field; absence is not a queued frame.
+      const queued = !stats || stats.destroyed || stats.pendingMailboxFrameGen === null ? 0 : 1;
+      if (queued) assert.ok(Number.isInteger(stats.pendingMailboxFrameGen));
       assert.equal(accepted.size, presented.size + dropped.size + queued);
       assert.equal(new Set(releases.map((event) => event.leaseId)).size, releases.length,
         'a display lease must be released only once');
@@ -178,6 +192,9 @@ describe('Real tileScheduler newest-mailbox conservation', () => {
     assert.equal(scheduler.getInstrumentation('a').mailboxReplacements, 1);
     assert.equal(scheduler.runTick().presented.length, 1);
     conserve();
+    assert.equal(draws.length, 1);
+    assert.deepEqual([...draws[0].data], [0, 0, 0, 255]);
+    assert.deepEqual([...presented], [2]);
     assert.equal(submit(3).ok, true);
     assert.equal(scheduler.foldSurface('a').ok, true);
     conserve();
@@ -189,5 +206,28 @@ describe('Real tileScheduler newest-mailbox conservation', () => {
     assert.equal(scheduler.submitFrame({ surfaceId: 'foreign' }).ok, false);
     assert.equal(accepted.size, before);
     scheduler.destroy();
+  });
+
+  it('does not count a callback without a successful canvas draw as presentation', async () => {
+    const { createTileScheduler } = await import('../../ui/src/surfaces/tileScheduler.js');
+    const releases = [];
+    const scheduler = createTileScheduler({
+      budget: Object.freeze({ maxDrawsPerTick: 1, maxUploadBytesPerTick: 100,
+        maxPresentMsPerTick: 8, maxWarmResourcesPerSurface: 0, maxDrainSteps: 4 }),
+      clock: () => 0,
+      onPresent: () => {},
+      onReleaseLease: (event) => releases.push(event),
+    });
+    scheduler.registerSurface({ surfaceId: 'a', surfaceGeneration: 1, epoch: 1,
+      principal: 'core', state: { width: 1, height: 1, viewportIntersecting: true } });
+    assert.equal(scheduler.submitFrame({ surfaceId: 'a', surfaceGeneration: 1, epoch: 1,
+      principal: 'core', frameGeneration: 1, leaseId: 'undrawn', width: 1, height: 1,
+      byteLength: 3, bytes: new Uint8Array(3) }).ok, true);
+    assert.equal(scheduler.runTick().presented.length, 0);
+    assert.equal(scheduler.getInstrumentation('a').presentCount, 0);
+    assert.equal(releases.length, 1);
+    assert.equal(releases[0].leaseId, 'undrawn');
+    scheduler.destroy();
+    assert.equal(releases.length, 1);
   });
 });

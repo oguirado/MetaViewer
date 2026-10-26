@@ -1,5 +1,6 @@
 """R1-012/R1-091/R1-100: exercise the shipped manifest CLI on private fixtures."""
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -22,12 +23,12 @@ class DependencyAdmissionTests(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / name, target)
 
-    def gate(self, rc=0, diagnostic='PASS manifests'):
+    def gate(self, rc=0, diagnostic='PASS manifests', env=None):
         before = {str(p.relative_to(self.root)): p.read_bytes()
                   for p in self.root.rglob('*') if p.is_file()}
         result = subprocess.run(['bash', str(self.root / 'tools/gate.sh'),
                                  '--leg', 'manifests'], cwd=self.temp.name,
-                                capture_output=True, text=True, timeout=60)
+                                capture_output=True, text=True, timeout=60, env=env)
         self.assertEqual(result.returncode, rc, result.stdout + result.stderr)
         self.assertIn(diagnostic, result.stdout + result.stderr)
         after = {str(p.relative_to(self.root)): p.read_bytes()
@@ -42,6 +43,17 @@ class DependencyAdmissionTests(unittest.TestCase):
 
     def test_clean_tree(self):
         self.gate()
+
+    def test_toolchain_path_and_explicit_missing_overrides(self):
+        environment = dict(os.environ)
+        environment.pop('CARGO', None)
+        environment.pop('RUSTC', None)
+        self.gate(env=environment)
+        for name in ('CARGO', 'RUSTC'):
+            with self.subTest(tool=name):
+                missing = str(self.root / 'missing-tool')
+                self.gate(1, 'Cargo.lock: missing Rust toolchain',
+                          env=dict(environment, **{name: missing}))
 
     def test_component_commit_mutants(self):
         for index, name in enumerate(('vision-engine', 'wender-agent', 'opensuperficies')):
