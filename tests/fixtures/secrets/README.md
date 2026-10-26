@@ -20,6 +20,8 @@ python3 -I tests/fixtures/secrets/gate.py controls --gitleaks <absolute-executab
 python3 -I tests/fixtures/secrets/gate.py gate --gitleaks <absolute-executable> --repo <absolute-root>
 ```
 
+`--repo .` also selects the current repository.
+
 `history` scans history only; `controls` runs the four isolated plants
 only; `gate` runs both and passes only when both pass. Exit codes: `0`
 clean, `1` rejected, `2` malformed invocation. `gate.py --help` prints
@@ -34,11 +36,15 @@ GITLEAKS_BIN=<absolute-pinned-binary> python3 -I -m unittest discover -s tests/f
 
 `GateIntegrationTests` requires absolute `GITLEAKS_BIN`; a missing tool
 fails the suite instead of skipping it. The four plants are a token
-shape, a high-entropy hex key, a token appended to the checksum line of
-`.github/workflows/secrets.yml`, and a private-key block. Values are
-random and generated at runtime into private scratch directories; no
+shape, a deterministic high-entropy mixed-case key, a token appended to the checksum line of
+`.github/workflows/secrets.yml`, and a private-key block. Token and key-block values are
+random; the entropy key is constructed deterministically at runtime in private scratch directories; no
 live credential is committed, and the generator splits token/key markers
 so its own source scans clean (proven by the committed-source test).
+
+The entropy plant avoids random hex stopword collisions (`dead`, `feed`) in
+the default generic-key rule. Its assignment is assembled only in scratch;
+the scanner still uses the pinned tool’s default rules without overrides.
 
 ## Hook
 

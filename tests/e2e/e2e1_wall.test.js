@@ -15,8 +15,7 @@
  *    typed E2E_* error when a prerequisite is missing (live flag,
  *    xvfb, Electron binary, built renderer); it never skips.
  *
- * Entry contract for the missing CI runner (tests/e2e/run.py, ABSENT
- * and unowned): exec `node --test tests/e2e/e2e1_wall.test.js` under
+ * CI entry (tests/e2e/run.py): exec `node --test tests/e2e/e2e1_wall.test.js` under
  * `xvfb-run -a -s "-screen 0 1280x900x24"` with MV_E2E_LIVE=1 and the
  * repository root as cwd, and exit nonzero on any failure.
  *
@@ -26,7 +25,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
-const { chmodSync, mkdirSync, writeFileSync } = require('node:fs');
+const { chmodSync, mkdirSync, writeFileSync, readFileSync, existsSync } = require('node:fs');
 const { join } = require('node:path');
 
 const {
@@ -327,7 +326,7 @@ describe('e2e1 live wall journey', () => {
     try {
       const manifestPath = writeFakeManifest(scratch, FOUR_FAKES);
       const reportPath = join(scratch, 'report.json');
-      const mainEntry = join(root, 'ui', 'electron', 'main.js');
+      const mainEntry = join(root, 'tests', 'e2e', 'live-main.cjs');
       const mainUrl = `file://${mainEntry}`;
       writeProbeFile(scratch, {
         profile: join(scratch, 'profile'),
@@ -335,18 +334,19 @@ describe('e2e1 live wall journey', () => {
         manifestPath,
         reportPath,
       });
-      const outcome = runUnderXvfb({ electron, appDir: scratch });
+      const outcome = runUnderXvfb({ electron, appDir: join(scratch, 'probe.cjs') });
       const tail = outcome.stderr.slice(0, 2000);
       let summary;
       try {
         summary = readProbeReport(reportPath);
       } catch (error) {
         if (!(error instanceof E2EError)) throw error;
-        throw new E2EError(error.code, `${error.message} | stderr: ${tail}`);
+        throw new E2EError(error.code, `${error.message} | report: ${(existsSync(reportPath) ? readFileSync(reportPath, "utf8").slice(0, 3000) : "absent")} | stderr: ${tail}`);
       }
       assert.equal(outcome.timedOut, false, `stderr: ${tail}`);
       assert.equal(outcome.status, 0, `report errors: ${summary.errors.join(' | ').slice(0, 2000)} | stderr: ${tail}`);
       assert.equal(summary.visible, 4);
+      assert.ok(summary.tiles.every((tile) => tile.frameId !== null), "every live tile needs a frame");
     } finally {
       removeScratch(scratch);
     }

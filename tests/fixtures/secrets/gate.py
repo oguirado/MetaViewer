@@ -34,8 +34,6 @@ CONFIG_TEXT = "[extend]\nuseDefault = true\n"
 CONTROL_IDS = ("github", "entropy", "appended", "pem")
 SCAN_TIMEOUT = 120
 GIT_TIMEOUT = 60
-GENERATION_ATTEMPTS = 100
-ENTROPY_FLOOR = 3.7
 MAX_SUMMARY_ROWS = 25
 FINDING_EXIT_HISTORY = 1
 FINDING_EXIT_CONTROL = 7
@@ -71,10 +69,6 @@ def _github_shaped_token() -> str:
     return "gh" + "p_" + _token_suffix(36)
 
 
-def _random_hex(nbytes: int) -> str:
-    return secrets.token_hex(nbytes)
-
-
 def _shannon_entropy(text: str) -> float:
     if not text:
         return 0.0
@@ -83,12 +77,12 @@ def _shannon_entropy(text: str) -> float:
                 for count in collections.Counter(text).values())
 
 
-def _high_entropy_hex() -> str:
-    for _ in range(GENERATION_ATTEMPTS):
-        value = _random_hex(32)
-        if _shannon_entropy(value) >= ENTROPY_FLOOR:
-            return value
-    raise GateFailure("entropy budget exhausted")
+def _entropy_control() -> str:
+    # Fixed mixed-case alphabet: above the default generic-api-key entropy
+    # threshold, with no random stopword collisions or SHA-shaped allowlisting.
+    # Construct at runtime so the committed source is inert under history scans.
+    return "".join(chr(n) for n in range(65, 91)) + "".join(
+        chr(n) for n in range(97, 123)) + "".join(chr(n) for n in range(48, 58))
 
 
 def _pem_block() -> str:
@@ -124,7 +118,7 @@ def generate_controls(destination: Path, context_file: Path) -> dict[str, Path]:
         raise GateFailure("context lacks checksum line")
     plants = {
         "github": 'token = "' + _github_shaped_token() + '"\n',
-        "entropy": 'secret_key = "' + _high_entropy_hex() + '"\n',
+        "entropy": 'secret_key = "' + _entropy_control() + '"\n',
         "appended": context_line + " " + _github_shaped_token() + "\n",
         "pem": _pem_block(),
     }
@@ -305,9 +299,9 @@ def _parse(items: list[str]) -> tuple[str, Path, Path]:
         raise GateFailure("options")
     gitleaks = Path(options["--gitleaks"])
     repo = Path(options["--repo"])
-    if not gitleaks.is_absolute() or not repo.is_absolute():
+    if not gitleaks.is_absolute() or (not repo.is_absolute() and repo != Path(".")):
         raise GateFailure("relative path")
-    return command, gitleaks, repo
+    return command, gitleaks, repo.resolve()
 
 
 def main(argv: Sequence[str] | None = None) -> int:

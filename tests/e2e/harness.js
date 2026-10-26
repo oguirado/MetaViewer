@@ -557,26 +557,37 @@ async function probeMain(config) {
   };
   setTimeout(() => app.exit(2), config.watchdogMs).unref();
   app.on('browser-window-created', (_, win) => {
+    const errors = [];
+    win.webContents.on('console-message', (event) => {
+      if (event.level === 'error' || event.level === 3) {
+        errors.push(String(event.message).slice(0, 512));
+        console.error(String(event.message).slice(0, 512));
+      }
+    });
     win.webContents.once('did-finish-load', async () => {
       try {
         const wc = win.webContents;
-        const errors = [];
-        wc.on('console-message', (event) => {
-          if (event.level === 'error') errors.push(String(event.message).slice(0, 512));
-        });
-        await pause(400);
         const mount = await wc.executeJavaScript('!!document.querySelector("#metaviewer-app")');
         assert.equal(mount, true, 'wall mount #metaviewer-app must exist');
-        const tiles = await wc.executeJavaScript(
+        const sampleTiles = () => wc.executeJavaScript(
           `(${() => {
             const nodes = Array.from(document.querySelectorAll('[data-capsule-id]'));
             return nodes.map((node) => ({
               capsuleId: node.getAttribute('data-capsule-id'),
               visible: node.checkVisibility(),
-              frameId: node.getAttribute('data-frame-tag'),
+              frameId: node.querySelector('[data-frame-tag]')?.getAttribute('data-frame-tag') ?? null,
             }));
           }})()`,
         );
+        const deadline = Date.now() + Math.floor(config.watchdogMs / 2);
+        let tiles = [];
+        do {
+          tiles = await sampleTiles();
+          if (wanted.every((id) => tiles.some((tile) => tile.capsuleId === id
+              && tile.visible && tile.frameId !== null))) break;
+          if (errors.length) throw new Error(errors.join(' | '));
+          await pause(50);
+        } while (Date.now() < deadline);
         const rows = observeTiles(tiles);
         const seen = new Set(rows.map((row) => row.capsuleId));
         for (const id of wanted) assert.ok(seen.has(id), `manifest tile missing: ${id}`);
@@ -600,6 +611,7 @@ async function probeMain(config) {
       }
     });
   });
+  process.env.MV_E2E_MANIFEST = config.manifestPath;
   await import(config.mainUrl);
 }
 
@@ -678,12 +690,15 @@ function runUnderXvfb(options) {
   if (!Array.isArray(extra) || !extra.every((entry) => typeof entry === 'string' && !entry.includes('\0'))) {
     fail('E2E_ARGS', 'extraArgs must be NUL-free strings');
   }
+  const childEnv = { ...process.env };
+  delete childEnv.ELECTRON_RUN_AS_NODE;
   let result;
   try {
     result = spawnSync('xvfb-run', [...XVFB_ARGV, electron, appDir, ...extra], {
       encoding: 'utf8',
       timeout: timeoutMs,
       maxBuffer: MAX_CHILD_BYTES,
+      env: childEnv,
     });
   } catch (error) {
     const code = /** @type {{ code?: unknown }} */ (error).code;

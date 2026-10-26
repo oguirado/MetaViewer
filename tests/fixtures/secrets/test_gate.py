@@ -482,13 +482,10 @@ class GateUnitTests(unittest.TestCase):
             encoding="utf-8")
         key_head = 'secret_key = "'
         self.assertTrue(entropy.startswith(key_head))
-        hexpart = entropy[len(key_head):-2]
-        self.assertEqual(len(hexpart), 64)
-        int(hexpart, 16)
-        counts = collections.Counter(hexpart)
-        observed = -sum(v / 64 * math.log2(v / 64)
-                        for v in counts.values())
-        self.assertGreaterEqual(observed, 3.7)
+        value = entropy[len(key_head):-2]
+        self.assertEqual(value, gate._entropy_control())
+        self.assertEqual(len(set(value)), len(value))
+        self.assertGreater(gate._shannon_entropy(value), 5.0)
         appended = (result["appended"] / "appended.txt").read_text(
             encoding="utf-8")
         self.assertTrue(appended.startswith(line[:200] + " "))
@@ -507,14 +504,9 @@ class GateUnitTests(unittest.TestCase):
             for child in control.iterdir():
                 self.assertEqual(stat.S_IMODE(os.stat(child).st_mode), 0o600)
 
-    def test_generate_exhaustion_rejects(self):
-        tmp = _scratch(self)
-        context = tmp / "secrets.yml"
-        context.write_text("digest " + gate.GITLEAKS_SHA256 + "\n",
-                           encoding="utf-8")
-        with mock.patch.object(gate, "_random_hex", return_value="00" * 32):
-            with self.assertRaises(gate.GateFailure):
-                gate.generate_controls(tmp / "plants", context)
+    def test_entropy_control_is_deterministic(self):
+        self.assertEqual(gate._entropy_control(), gate._entropy_control())
+        self.assertGreater(gate._shannon_entropy(gate._entropy_control()), 5.0)
 
     def test_generate_missing_or_empty_context_rejects(self):
         tmp = _scratch(self)
@@ -1027,6 +1019,28 @@ class GateIntegrationTests(unittest.TestCase):
         for control in ("github", "entropy", "appended", "pem"):
             self.assertIn("control " + control + ": detected", text)
         self.assertIn("controls: clean", text)
+
+    def test_real_generic_entropy_and_stopword_negative(self):
+        tmp = _scratch(self)
+        source = tmp / "plant"
+        source.mkdir()
+        config, report = tmp / "cfg.toml", tmp / "report.json"
+        gate.write_default_config(config)
+        fixed = gate._entropy_control()
+        # Equal-frequency hex with a default-rule stopword still passes the
+        # old generator's Shannon floor. Entropy alone never proved detection.
+        stopword_hex = "dead" + "".join(format(n, "x") for n in range(16)) * 4
+        self.assertGreater(gate._shannon_entropy(stopword_hex), 3.7)
+        for value, expected in ((fixed, True), (stopword_hex, False), ("0" * 64, False)):
+            (source / "settings.txt").write_text('secret_key = "' + value + '"\n')
+            status = gate._run_scanner(
+                [str(self.gitleaks), "detect", "--no-git", "--source", str(source),
+                 "--config", str(config), "--redact", "--no-banner",
+                 "--exit-code", "7", "--report-format", "json",
+                 "--report-path", str(report)], report)
+            findings = gate.summarize_findings(report)
+            self.assertEqual(status, 7 if expected else 0)
+            self.assertEqual(findings, [("generic-api-key", 1)] if expected else [])
 
     def test_real_committed_source_clean(self):
         tmp = _scratch(self)
