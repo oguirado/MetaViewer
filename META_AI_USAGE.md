@@ -18,19 +18,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 122 | 55 | 67 |
-| Lanes finished OK | 122 | 55 | 67 |
-| Agent steps | 6,090 | 2,705 | 3,385 |
-| Lane-hours of agent work | 15.3 | 5.2 | 10.1 |
-| Fresh input tokens | 26,383,918 | 11,482,034 | 14,901,884 |
-| Cache-read input tokens | 559,716,088 | 226,255,212 | 333,460,876 |
+| Lanes launched | 130 | 55 | 75 |
+| Lanes finished OK | 130 | 55 | 75 |
+| Agent steps | 6,553 | 2,705 | 3,848 |
+| Lane-hours of agent work | 16.3 | 5.2 | 11.1 |
+| Fresh input tokens | 28,370,059 | 11,482,034 | 16,888,025 |
+| Cache-read input tokens | 605,393,818 | 226,255,212 | 379,138,606 |
 | Prompt cache hit % | 95.5 | 95.2 | 95.7 |
-| Output tokens | 5,764,748 | 2,135,708 | 3,629,040 |
-| Thinking tokens | 3,047,276 | 1,050,039 | 1,997,237 |
-| Cost (USD) | 4.9108 | 2.0279 | 2.8829 |
-| Cost per lane (USD) | 0.0403 | 0.0369 | 0.043 |
+| Output tokens | 6,148,674 | 2,135,708 | 4,012,966 |
+| Thinking tokens | 3,222,379 | 1,050,039 | 2,172,340 |
+| Cost (USD) | 5.2775 | 2.0279 | 3.2497 |
+| Cost per lane (USD) | 0.0406 | 0.0369 | 0.0433 |
 
-Rooms: 26. Peak concurrent lanes [MEASURED from lane start/end]: 32.
+Rooms: 27. Peak concurrent lanes [MEASURED from lane start/end]: 32.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -46,7 +46,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | plan | 12 | 92.6 | 0.3072 |
 | research | 14 | 94.6 | 0.5673 |
 | review | 8 | 94.3 | 0.2749 |
-| test | 4 | 95.1 | 0.1989 |
+| test | 12 | 95.6 | 0.5657 |
 
 ## By room (why and what for)
 
@@ -78,6 +78,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w2pk2 | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
 | mv0cq | Oct 26 19:17 | ops | 4 | 88.1 | 0.0468 | Continuity quiz: four lanes played the orchestrator after a context reset and found eleven ambiguities in the hand-off, all fixed. |
+| mv0tp | Oct 26 20:05 | test | 8 | 95.8 | 0.3668 | Generate self-contained, paper-grounded testing prompts (verbatim excerpts from the software papers and OmniCodex) for the external web testers Jules and ChatGPT, one pair per code area, to test the current integration branch. |
 
 ## Every lane
 
@@ -205,6 +206,14 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0cq | CQ2 | Continuity quiz 2 | Oct 26 19:17 | yes | 11 | 86.0 | 0.010783 |
 | mv0cq | CQ3 | Continuity quiz 3 | Oct 26 19:17 | yes | 12 | 81.8 | 0.013452 |
 | mv0cq | CQ4 | Continuity quiz 4 | Oct 26 19:17 | yes | 23 | 92.8 | 0.012211 |
+| mv0tp | T1 | Testing prompts T1 CORE | Oct 26 20:05 | yes | 58 | 96.1 | 0.049412 |
+| mv0tp | T2 | Testing prompts T2 ADAPTER | Oct 26 20:06 | yes | 64 | 96.3 | 0.057087 |
+| mv0tp | T3 | Testing prompts T3 AGENTS | Oct 26 20:06 | yes | 33 | 92.1 | 0.03335 |
+| mv0tp | T4 | Testing prompts T4 UI-SEC | Oct 26 20:06 | yes | 41 | 91.2 | 0.043924 |
+| mv0tp | T5 | Testing prompts T5 UI-WALL | Oct 26 20:06 | yes | 76 | 97.0 | 0.050686 |
+| mv0tp | T6 | Testing prompts T6 CONTRACTS | Oct 26 20:06 | yes | 59 | 96.1 | 0.041277 |
+| mv0tp | T7 | Testing prompts T7 CI-SUPPLY | Oct 26 20:06 | yes | 55 | 95.8 | 0.045032 |
+| mv0tp | T8 | Testing prompts T8 E2E | Oct 26 20:06 | yes | 77 | 97.1 | 0.045986 |
 
 ## Method
 
