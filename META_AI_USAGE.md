@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 151 | 55 | 96 |
-| Lanes finished OK | 151 | 55 | 96 |
-| Agent steps | 7,724 | 2,705 | 5,019 |
-| Lane-hours of agent work | 19.4 | 5.2 | 14.2 |
-| Fresh input tokens | 33,735,168 | 11,482,034 | 22,253,134 |
-| Cache-read input tokens | 706,993,101 | 226,255,212 | 480,737,889 |
-| Prompt cache hit % | 95.4 | 95.2 | 95.6 |
-| Output tokens | 7,098,881 | 2,135,708 | 4,963,173 |
-| Thinking tokens | 3,744,016 | 1,050,039 | 2,693,977 |
-| Cost (USD) | 6.2073 | 2.0279 | 4.1794 |
-| Cost per lane (USD) | 0.0411 | 0.0369 | 0.0435 |
+| Lanes launched | 154 | 55 | 99 |
+| Lanes finished OK | 154 | 55 | 99 |
+| Agent steps | 7,973 | 2,705 | 5,268 |
+| Lane-hours of agent work | 20.1 | 5.2 | 14.9 |
+| Fresh input tokens | 34,719,386 | 11,482,034 | 23,237,352 |
+| Cache-read input tokens | 733,913,661 | 226,255,212 | 507,658,449 |
+| Prompt cache hit % | 95.5 | 95.2 | 95.6 |
+| Output tokens | 7,336,107 | 2,135,708 | 5,200,399 |
+| Thinking tokens | 3,886,821 | 1,050,039 | 2,836,782 |
+| Cost (USD) | 6.407 | 2.0279 | 4.3791 |
+| Cost per lane (USD) | 0.0416 | 0.0369 | 0.0442 |
 
-Rooms: 30. Peak concurrent lanes [MEASURED from lane start/end]: 32.
+Rooms: 32. Peak concurrent lanes [MEASURED from lane start/end]: 32.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -43,6 +43,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | design | 2 | 91.6 | 0.0547 |
 | docs | 3 | 90.6 | 0.0422 |
 | fix | 2 | 97.4 | 0.1115 |
+| kit | 3 | 96.5 | 0.1997 |
 | ops | 4 | 88.1 | 0.0468 |
 | plan | 12 | 92.6 | 0.3072 |
 | research | 14 | 94.6 | 0.5673 |
@@ -82,8 +83,10 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0cq | conductor | Oct 26 19:17 | ops | 4 | 88.1 | 0.0468 | Continuity quiz: four lanes played the orchestrator after a context reset and found eleven ambiguities in the hand-off, all fixed. |
 | mv0tp | conductor | Oct 26 20:05 | test | 8 | 95.8 | 0.3668 | Generate self-contained, paper-grounded testing prompts (verbatim excerpts from the software papers and OmniCodex) for the external web testers Jules and ChatGPT, one pair per code area, to test the current integration branch. |
 | mv0ta | conductor | Oct 26 21:24 | review | 8 | 94.9 | 0.322 | Verify and de-duplicate the 126 findings of external testing round 1 (Jules + ChatGPT) against the current code, rank them for G-W1 and the v0.2.0 release, select the Jules tests worth keeping, and turn the confirmed issues into disjoint Sol fix units. |
+| ew1 | UI orchestrator | Oct 26 21:47 | kit | 1 | 95.4 | 0.0432 | Add the generic EmptyWall component to the shared capsule UI kit (kit 0.2.1) because MetaViewer needs an empty-wall state. |
 | mv0av | conductor | Oct 26 22:10 | review | 8 | 93.5 | 0.1863 | Verify the 56 findings of the Gemini Argon cross-review of today's integrated Sol code against the current head, rank them and turn the confirmed ones into disjoint Sol fix units. |
-| mvui1 | UI orchestrator | Oct 26 22:12 | ui | 5 | 95.5 | 0.4215 | UI orchestrator room: Wall screens + tile states; New Capsule launcher / catalog; AI multislot + side terminal wiring; Recording, settings, nested mode; agent_lane snapshot + state fixtures |
+| mvui1 | UI orchestrator | Oct 26 22:12 | ui | 5 | 95.5 | 0.4215 | Build every MetaViewer renderer screen (wall, launcher, multislot + side terminal, recording/settings/nested, agent lane + state fixtures) on the shared kit as drops for the MetaViewer orchestrator. |
+| kw1 | UI orchestrator | Oct 26 22:57 | kit | 2 | 96.7 | 0.1565 | Add wall tile states with take/release control and a kit-wide CSP audit to the shared kit (kit 0.2.1) for the MetaViewer wall and its strict CSP. |
 
 ## Every lane
 
@@ -227,6 +230,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0ta | T6 | Analysis T6 Contracts v0.2 cross-language | Oct 26 21:24 | yes | 63 | 96.1 | 0.037596 |
 | mv0ta | T7 | Analysis T7 CI and supply chain | Oct 26 21:24 | yes | 66 | 96.0 | 0.042541 |
 | mv0ta | T8 | Analysis T8 End-to-end scenario | Oct 26 21:24 | yes | 54 | 95.5 | 0.039981 |
+| ew1 | E | EmptyWall + 0.2.1 | Oct 26 21:47 | yes | 52 | 95.4 | 0.043179 |
 | mv0av | CORE | Verify Argon findings core | Oct 26 22:10 | yes | 33 | 92.8 | 0.025852 |
 | mv0av | ADAPTER | Verify Argon findings adapter | Oct 26 22:10 | yes | 26 | 91.8 | 0.016858 |
 | mv0av | AGENTS | Verify Argon findings agents | Oct 26 22:10 | yes | 36 | 94.9 | 0.018099 |
@@ -240,6 +244,8 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui1 | U3 | AI multislot + side terminal wiring | Oct 26 22:12 | yes | 101 | 91.0 | 0.143107 |
 | mvui1 | U4 | Recording, settings, nested mode | Oct 26 22:13 | yes | 97 | 97.1 | 0.07956 |
 | mvui1 | U5 | agent_lane snapshot + state fixtures | Oct 26 22:13 | yes | 70 | 97.0 | 0.052854 |
+| kw1 | T | Wall tile states + take/release | Oct 26 22:57 | yes | 96 | 96.5 | 0.078896 |
+| kw1 | C | Kit-wide CSP audit | Oct 26 22:57 | yes | 101 | 96.9 | 0.077633 |
 
 ## Method
 

@@ -1,17 +1,17 @@
 {
  "schema": "metaviewer.meta_ai_usage/v1",
  "totals": {
-  "lanes": 151,
-  "ok": 151,
-  "input_tokens": 33735168,
-  "cache_read_tokens": 706993101,
-  "output_tokens": 7098881,
-  "thinking_tokens": 3744016,
-  "cache_hit_pct": 95.4,
-  "usd": 6.2073,
-  "usd_per_lane": 0.0411,
-  "steps": 7724,
-  "lane_hours": 19.4
+  "lanes": 154,
+  "ok": 154,
+  "input_tokens": 34719386,
+  "cache_read_tokens": 733913661,
+  "output_tokens": 7336107,
+  "thinking_tokens": 3886821,
+  "cache_hit_pct": 95.5,
+  "usd": 6.407,
+  "usd_per_lane": 0.0416,
+  "steps": 7973,
+  "lane_hours": 20.1
  },
  "peak_concurrent_lanes": 32,
  "rooms": {
@@ -20,9 +20,19 @@
    "why": "Prepare the public 0.1.1 release docs: README, pre-existing declaration, public roadmap, changelog checks.",
    "orchestrator": "conductor"
   },
+  "ew1": {
+   "stage": "kit",
+   "why": "Add the generic EmptyWall component to the shared capsule UI kit (kit 0.2.1) because MetaViewer needs an empty-wall state.",
+   "orchestrator": "UI orchestrator"
+  },
+  "kw1": {
+   "stage": "kit",
+   "why": "Add wall tile states with take/release control and a kit-wide CSP audit to the shared kit (kit 0.2.1) for the MetaViewer wall and its strict CSP.",
+   "orchestrator": "UI orchestrator"
+  },
   "mvui1": {
    "stage": "ui",
-   "why": "UI orchestrator room: Wall screens + tile states; New Capsule launcher / catalog; AI multislot + side terminal wiring; Recording, settings, nested mode; agent_lane snapshot + state fixtures",
+   "why": "Build every MetaViewer renderer screen (wall, launcher, multislot + side terminal, recording/settings/nested, agent lane + state fixtures) on the shared kit as drops for the MetaViewer orchestrator.",
    "orchestrator": "UI orchestrator"
   },
   "mv0w1term": {
@@ -3066,6 +3076,27 @@
    "usd": 0.039981
   },
   {
+   "room": "ew1",
+   "lane": "E",
+   "title": "EmptyWall + 0.2.1",
+   "stage": "kit",
+   "model": "muse-spark-1.3",
+   "orchestrator": "UI orchestrator",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-26T20:47:34.248000+00:00",
+   "duration_s": 652.1,
+   "end_utc": "2026-10-26T20:58:26.311000+00:00",
+   "phase": "build",
+   "steps": 52,
+   "input_tokens": 214465,
+   "cache_read_tokens": 4468385,
+   "output_tokens": 63980,
+   "thinking_tokens": 38871,
+   "cache_hit_pct": 95.4,
+   "usd": 0.043179
+  },
+  {
    "room": "mv0av",
    "lane": "CORE",
    "title": "Verify Argon findings core",
@@ -3337,6 +3368,48 @@
    "thinking_tokens": 31667,
    "cache_hit_pct": 97.0,
    "usd": 0.052854
+  },
+  {
+   "room": "kw1",
+   "lane": "T",
+   "title": "Wall tile states + take/release",
+   "stage": "kit",
+   "model": "muse-spark-1.3",
+   "orchestrator": "UI orchestrator",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-26T21:57:36.380000+00:00",
+   "duration_s": 852.0,
+   "end_utc": "2026-10-26T22:11:48.370000+00:00",
+   "phase": "build",
+   "steps": 96,
+   "input_tokens": 409200,
+   "cache_read_tokens": 11189788,
+   "output_tokens": 77981,
+   "thinking_tokens": 44075,
+   "cache_hit_pct": 96.5,
+   "usd": 0.078896
+  },
+  {
+   "room": "kw1",
+   "lane": "C",
+   "title": "Kit-wide CSP audit",
+   "stage": "kit",
+   "model": "muse-spark-1.3",
+   "orchestrator": "UI orchestrator",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-26T21:57:56.372000+00:00",
+   "duration_s": 1148.8,
+   "end_utc": "2026-10-26T22:17:05.138000+00:00",
+   "phase": "build",
+   "steps": 101,
+   "input_tokens": 360553,
+   "cache_read_tokens": 11262387,
+   "output_tokens": 95265,
+   "thinking_tokens": 59859,
+   "cache_hit_pct": 96.9,
+   "usd": 0.077633
   }
  ]
 }
