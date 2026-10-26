@@ -21,3 +21,19 @@ input_applied, then state_changed/destroyed. Its disconnected-handler twin must
 fail the same lifecycle oracle. The IPC tests cover individual admission refusals
 and outbound failures; Wrap failure occurs after handler execution by design.
 All test policies use in-memory replay state and are not production authorities.
+
+The runtime reads `MV_SRF_STATE_DIR` from its own environment. Before every
+`srf-identity-surface` invocation the process runner checks that this is a
+current-uid directory with mode `0700` [TARGET] and appends `--state-dir`.
+A missing final directory is created privately; its parent must already exist.
+Unset configuration, wrong ownership or permissions, symlinks and caller-supplied
+state flags return a typed configuration fault before spawning the CLI. The
+surface handler converts this fault to a correlated `surface_event.error`.
+`MV_SRF_STATE_DIR` is adapter configuration and is removed from the child
+environment. `SRF_IDENTITY_STORE_ROOT` and `SRF_PROXY_REGISTRY` pass through
+when set; no identity environment files are read.
+
+`NewProcessRunner` takes an explicit trusted environment snapshot; include
+`MV_SRF_STATE_DIR` there when constructing it directly. `NewRuntime` collects it
+automatically. Live identity tests use the same setting. Holdings argv remains
+unchanged: PACK_OS_CLI and its corrections do not document `--state-dir` for it.

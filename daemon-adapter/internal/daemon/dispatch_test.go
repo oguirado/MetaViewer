@@ -96,7 +96,7 @@ func lifecycleOracle(t *testing.T, broken bool) error {
 	if err != nil {
 		return err
 	}
-	runner, err := capsule.NewProcessRunner(bin, []string{"PATH=/usr/bin:/bin", "SRF_IDENTITY_STORE_ROOT=" + root}, 8192, time.Second)
+	runner, err := capsule.NewProcessRunner(bin, []string{"PATH=/usr/bin:/bin", "SRF_IDENTITY_STORE_ROOT=" + root, "MV_SRF_STATE_DIR=" + filepath.Join(root, "state")}, 8192, time.Second)
 	if err != nil {
 		return err
 	}

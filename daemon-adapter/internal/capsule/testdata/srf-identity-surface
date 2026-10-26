@@ -5,6 +5,9 @@ import sys
 import time
 
 verb = sys.argv[1]
+if "SRF_IDENTITY_STORE_ROOT" in os.environ:
+    with open(os.path.join(os.environ["SRF_IDENTITY_STORE_ROOT"], "cli-calls.jsonl"), "a") as log:
+        log.write(json.dumps({"argv": sys.argv[1:], "env": {k: v for k, v in os.environ.items() if k in ("SRF_IDENTITY_STORE_ROOT", "SRF_PROXY_REGISTRY", "MV_SRF_STATE_DIR")}}) + "\n")
 if verb == "start":
     print(json.dumps({"container": "srf-id-demo", "run_id": "demo-run", "windows": [{"id": "w1", "x": 0, "y": 0, "w": 2, "h": 1, "title": "", "url": ""}]}))
 elif verb == "frame":
@@ -19,6 +22,8 @@ elif verb == "input":
                       "focus_verified": True, "result": "ok"}))
 elif verb == "stop":
     print(json.dumps({"stopped": "srf-id-demo", "removed_verified": True}))
+elif verb in ("capabilities", "observe", "probe"):
+    print(json.dumps({"argv": sys.argv[1:], "env": {k: v for k, v in os.environ.items() if k in ("SRF_IDENTITY_STORE_ROOT", "SRF_PROXY_REGISTRY", "MV_SRF_STATE_DIR")}}))
 elif verb == "overflow":
     print("x" * 65536)
 elif verb == "delay":

@@ -12,7 +12,7 @@ func TestProcessBoundary(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	r, e := NewProcessRunner(root, []string{"PATH=/usr/bin:/bin"}, 4096, 100*time.Millisecond)
+	r, e := NewProcessRunner(root, []string{"PATH=/usr/bin:/bin", "MV_SRF_STATE_DIR=" + filepath.Join(t.TempDir(), "state")}, 4096, 100*time.Millisecond)
 	if e != nil {
 		t.Fatal(e)
 	}

@@ -2,7 +2,7 @@
 
 package frames
 
-// [TARGET, unit decision] Live configuration uses MV_SRF_BIN_DIR plus
+// [TARGET, unit decision] Live configuration uses MV_SRF_BIN_DIR and MV_SRF_STATE_DIR plus
 // MV_SRF_LIVE_RAM_ROOT and MV_SRF_LIVE_PROFILE. Holdings additionally requires
 // MV_SRF_LIVE_APP_DIR and its own binary; run TestLiveHoldingsCapsule explicitly.
 // Missing prerequisites fail the tagged gate; the default suite is fully fake.
@@ -60,7 +60,7 @@ func testLiveCapsule(t *testing.T, kind, binary string) {
 		nativeKind = "holdings"
 	}
 	env := []string{"PATH=" + os.Getenv("PATH")}
-	for _, key := range []string{"HOME", "XDG_RUNTIME_DIR", "SRF_IDENTITY_STORE_ROOT", "SRF_PROXY_REGISTRY", "SRF_EGRESS_PROXY"} {
+	for _, key := range []string{"MV_SRF_STATE_DIR", "HOME", "XDG_RUNTIME_DIR", "SRF_IDENTITY_STORE_ROOT", "SRF_PROXY_REGISTRY", "SRF_EGRESS_PROXY"} {
 		if value, ok := os.LookupEnv(key); ok {
 			env = append(env, key+"="+value)
 		}
