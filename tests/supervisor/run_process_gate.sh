@@ -49,3 +49,5 @@ print(paths[0])
     MV_SUPERVISOR_NAMESPACE=1 \
     "$process_bin" --test-threads=1
 "${namespace[@]}" "$python_bin" -I -S -B "$root/tests/supervisor/check_mutations.py"
+
+"$python_bin" -I -S -B "$root/tests/supervisor/test_mutations.py"

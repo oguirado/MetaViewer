@@ -17,8 +17,12 @@ MUTATIONS = (
     ("own-group", "and pid != os.getpgrp()", "and True"),
     ("send-guard", "if not signalable(pid, pid in self.owned):", "if False:"),
     ("signal-permission", "except ProcessLookupError:", "except OSError:"),
-    ("proc-permission", "except (FileNotFoundError, ProcessLookupError):",
-     "except (FileNotFoundError, ProcessLookupError, PermissionError):"),
+    ("retained-proc-permission", "except (FileNotFoundError, ProcessLookupError):  # retained identity",
+     "except (FileNotFoundError, ProcessLookupError, PermissionError):  # retained identity"),
+    ("candidate-proc-permission", "except (FileNotFoundError, ProcessLookupError):  # candidate identity",
+     "except (FileNotFoundError, ProcessLookupError, PermissionError):  # candidate identity"),
+    ("parent-proc-permission", "except (FileNotFoundError, ProcessLookupError):  # parent traversal",
+     "except (FileNotFoundError, ProcessLookupError, PermissionError):  # parent traversal"),
     ("capacity-failure", "self.failed = True", "self.failed = False"),
     ("reap-evidence", "print(pid, flush=True)", "pass"),
 )
@@ -29,6 +33,12 @@ def run(directory):
         [sys.executable, "-I", "-S", "-B", str(directory / "reaper_tests.py")],
         capture_output=True, text=True, timeout=20, check=False,
     )
+
+
+def apply_mutation(source, name, before, after):
+    if source.count(before) != 1:
+        raise RuntimeError(f"mutation anchor must be unique: {name} (count={source.count(before)})")
+    return source.replace(before, after, 1)
 
 
 def main():
@@ -43,9 +53,7 @@ def main():
             sys.stderr.write(baseline.stdout + baseline.stderr)
             raise RuntimeError("unmodified reaper failed")
         for name, before, after in MUTATIONS:
-            if before not in source:
-                raise RuntimeError(f"missing mutation anchor: {name}")
-            changed = source.replace(before, after)
+            changed = apply_mutation(source, name, before, after)
             compile(changed, name, "exec")
             candidate.write_text(changed, encoding="utf-8")
             result = run(directory)

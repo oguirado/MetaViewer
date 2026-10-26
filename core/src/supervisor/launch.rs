@@ -9,7 +9,7 @@ pub fn environment_key_allowed(key: &str) -> bool {
         && !["LD_", "DYLD_", "PYTHON", "NODE_", "ELECTRON_"]
             .iter()
             .any(|prefix| key.starts_with(prefix))
-        && !["BASH_ENV", "ENV", "GCONV_PATH", "HOSTALIASES", "ZDOTDIR"].contains(&key)
+        && !["BASH_ENV", "ENV", "GCONV_PATH", "HOSTALIASES", "ZDOTDIR", "GLIBC_TUNABLES", "LOCPATH", "NLSPATH", "TZDIR"].contains(&key)
 }
 
 pub(crate) fn validate_limits(l: &SupervisorLimits) -> Result<(), SupervisorError> {
@@ -53,7 +53,8 @@ pub(crate) fn validate(spec: &LaunchSpec) -> Result<(), SupervisorError> {
             .iter()
             .any(|s| s.len() > 65536 || s.as_encoded_bytes().contains(&0))
         || spec.environment.iter().any(|(k, v)| {
-            k.len() > 256
+            !k.to_str().is_some_and(environment_key_allowed)
+                || k.len() > 256
                 || v.len() > 65536
                 || k.as_encoded_bytes().contains(&0)
                 || v.as_encoded_bytes().contains(&0)

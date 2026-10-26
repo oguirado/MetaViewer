@@ -42,6 +42,10 @@ fn environment_is_closed_even_when_explicitly_allowlisted() {
         "BASH_ENV",
         "ENV",
         "GCONV_PATH",
+        "GLIBC_TUNABLES",
+        "LOCPATH",
+        "NLSPATH",
+        "TZDIR",
     ] {
         assert!(!environment_key_allowed(key), "{key}");
     }

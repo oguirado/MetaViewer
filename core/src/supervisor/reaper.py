@@ -1,7 +1,13 @@
-"""Private per-service reaper; component traffic uses authenticated sockets."""
+"""Private per-service reaper; component traffic uses authenticated sockets.
+
+[TARGET, unit decision] The private control pipe begins with a byte length and
+raw NUL-separated service environment. Runtime ownership and evidence storage
+are bounded independently of cumulative service births.
+"""
 import ctypes
 import os
 import selectors
+import select
 import signal
 import subprocess
 import sys
@@ -13,9 +19,15 @@ def signalable(pid, owned):
             and pid != os.getpid() and pid != os.getpgrp())
 
 
+def exited(fd):
+    poller = select.poll()
+    poller.register(fd, select.POLLIN)
+    return bool(poller.poll(0))
+
+
 def identity(pid):
-    with open(f"/proc/{pid}/stat", encoding="ascii") as source:
-        fields = source.read(8192).rsplit(")", 1)[1].split()
+    with open(f"/proc/{pid}/stat", "rb") as source:
+        fields = source.read(8192).rsplit(b")", 1)[1].split()
     return int(fields[1]), int(fields[19])
 
 
@@ -25,15 +37,22 @@ class Reaper:
         self.owned = {}
         self.failed = False
         self.reaped = set()
+        self.root = None
+        self.root_status = None
 
     def discover(self):
+        # Exited non-adopted children may already have been waited by the service.
+        for pid, (fd, _) in list(self.owned.items()):
+            if exited(fd):
+                os.close(fd)
+                del self.owned[pid]
         # Walk only retained descendants, including all threads' child lists.
         pending = [(os.getpid(), identity(os.getpid())[1])]
         for pid, (_, start) in self.owned.items():
             try:
                 if identity(pid)[1] == start:
                     pending.append((pid, start))
-            except (FileNotFoundError, ProcessLookupError):
+            except (FileNotFoundError, ProcessLookupError):  # retained identity
                 continue
         visited = set()
         while pending:
@@ -57,8 +76,6 @@ class Reaper:
                             pid = int(word)
                             if pid in self.owned:
                                 continue
-                            if len(self.owned) >= self.cap:
-                                raise OverflowError("descendant_budget")
                             if not signalable(pid, True):
                                 raise PermissionError("unsafe_target")
                             try:
@@ -66,14 +83,17 @@ class Reaper:
                                 if ppid != parent:
                                     continue
                                 fd = os.pidfd_open(pid)
-                                if identity(pid)[1] != start:
+                                if identity(pid)[1] != start or exited(fd):
                                     os.close(fd)
                                     continue
-                            except (FileNotFoundError, ProcessLookupError):
+                            except (FileNotFoundError, ProcessLookupError):  # candidate identity
                                 continue
+                            if len(self.owned) >= self.cap:
+                                os.close(fd)
+                                raise OverflowError("descendant_budget")
                             self.owned[pid] = (fd, start)
                             pending.append((pid, start))
-            except (FileNotFoundError, ProcessLookupError):
+            except (FileNotFoundError, ProcessLookupError):  # parent traversal
                 continue
 
     def send(self, sig):
@@ -86,16 +106,24 @@ class Reaper:
                 pass
 
     def reap(self):
+        count = 0
+        self.reaped.clear()
         while True:
             try:
-                pid, _ = os.waitpid(-1, os.WNOHANG)
+                pid, status = os.waitpid(-1, os.WNOHANG)
             except ChildProcessError:
                 return True
             if pid == 0:
                 return False
+            entry = self.owned.pop(pid, None)
+            if entry is not None:
+                os.close(entry[0])
+            if pid == self.root:
+                self.root_status = os.waitstatus_to_exitcode(status)
+            count += 1
             # Every direct/adopted child belongs exclusively to this reaper.
             if pid not in self.reaped:
-                if len(self.reaped) < self.cap:
+                if count <= self.cap:
                     self.reaped.add(pid)
                     print(pid, flush=True)
                 else:
@@ -117,7 +145,12 @@ def main():
     reaper = Reaper(cap)
     child = None
     try:
-        child = subprocess.Popen([program, *sys.argv[7:]], cwd=cwd,
+        # [TARGET, unit decision] Private environment pipe preserves arbitrary OS
+        # bytes; no service key is installed in the reaper's environment.
+        environment_size = int(sys.stdin.buffer.readline(32))
+        words = sys.stdin.buffer.read(environment_size).split(b"\0")
+        environment = dict(word.split(b"=", 1) for word in words if word)
+        child = subprocess.Popen([program, *sys.argv[7:]], cwd=cwd, env=environment,
                                  stdin=subprocess.DEVNULL,
                                  stdout=subprocess.DEVNULL,
                                  stderr=sys.stderr, close_fds=True)
@@ -131,17 +164,17 @@ def main():
             os.close(root_fd)
             raise
         reaper.owned[child.pid] = (root_fd, root_start)
+        reaper.root = child.pid
+        print(child.pid, root_start, flush=True)
         reaper.discover()
-        print(child.pid, flush=True)
         control = selectors.DefaultSelector()
         control.register(sys.stdin, selectors.EVENT_READ)
         unexpected = False
         while not control.select(poll):
             reaper.discover()
-            if child.poll() is not None:
-                # Popen reaped the direct child; include its terminal evidence.
-                reaper.reaped.add(child.pid)
-                print(child.pid, flush=True)
+            reaper.reap()
+            if reaper.root_status is not None:
+                child.returncode = reaper.root_status
                 unexpected = True
                 break
         control.close()
@@ -168,9 +201,17 @@ def main():
         # An observation failure never becomes an empty-success receipt.
         if child is not None:
             try:
-                reaper.send(signal.SIGKILL)
                 until = time.monotonic() + budget
-                while time.monotonic() < until and not reaper.reap():
+                while time.monotonic() < until:
+                    # Drain bounded ownership batches, including overflow victims
+                    # adopted after their parents die.
+                    try:
+                        reaper.discover()
+                    except OverflowError:
+                        pass
+                    reaper.send(signal.SIGKILL)
+                    if reaper.reap():
+                        break
                     time.sleep(poll)
             except OSError:
                 pass

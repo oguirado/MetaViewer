@@ -83,7 +83,13 @@ impl Supervisor {
                 receipt: None,
             },
         );
-        self.launch(id).await
+        let result = self.launch(id).await;
+        if result.is_err()
+            && self.entries.get(&id).is_some_and(|e| e.process.is_none() && e.receipt.is_none())
+        {
+            self.entries.remove(&id);
+        }
+        result
     }
 
     async fn launch(&mut self, id: ServiceId) -> Result<SupervisorStatus, SupervisorError> {
@@ -119,8 +125,12 @@ impl Supervisor {
             }
             if p.poll()?.is_some() || !p.valid() {
                 self.record_loss(id, LossReason::Exit)?;
-                let _receipt = self.stop_inner(id).await?;
-                return Err(SupervisorError::SpawnFailed);
+                let receipt = self.stop_inner(id).await?;
+                return Err(if receipt.complete {
+                    SupervisorError::SpawnFailed
+                } else {
+                    SupervisorError::CleanupIncomplete
+                });
             }
             if e.started.elapsed() >= self.limits.startup_timeout {
                 self.record_loss(id, LossReason::StartTimeout)?;
@@ -326,7 +336,7 @@ impl Supervisor {
             .entries
             .get_mut(&id)
             .ok_or(SupervisorError::UnknownService)?;
-        if let Some(receipt) = &e.receipt {
+        if let Some(receipt) = e.receipt.as_ref().filter(|receipt| receipt.complete) {
             return Ok(receipt.clone());
         }
         e.lifecycle = Lifecycle::Stopping;
@@ -395,5 +405,57 @@ impl Supervisor {
             }
         }
         receipts
+    }
+}
+
+#[cfg(test)]
+mod regression_tests {
+    use super::*;
+    fn limits() -> SupervisorLimits {
+        SupervisorLimits { startup_timeout: std::time::Duration::from_secs(1),
+            graceful_timeout: std::time::Duration::from_millis(10),
+            reap_timeout: std::time::Duration::from_secs(1),
+            poll_interval: std::time::Duration::from_millis(1),
+            stderr_chunk_bytes: 128, max_diagnostics_bytes: 128, max_descendants: 4 }
+    }
+    fn spec() -> LaunchSpec {
+        LaunchSpec { service: ServiceId::Daemon, program: std::env::current_exe().unwrap().canonicalize().unwrap(),
+            args: vec![], cwd: std::env::temp_dir().canonicalize().unwrap(), environment: BTreeMap::new(), initial_epoch: 1 }
+    }
+    #[test]
+    fn failed_receipt_is_retried_but_complete_receipt_is_cached() {
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+            let mut s = Supervisor::new(limits()).unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            let recipe = spec();
+            let runtime = std::env::temp_dir().join(format!("supervisor-retry-{}", std::process::id()));
+            std::fs::write(&runtime, b"#!/bin/sh\nread length\nprintf '2147483646 123\\n'\nwhile read control; do :; done\nprintf '2147483646\\n'\n").unwrap();
+            std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let process = OwnedProcess::spawn(&runtime, &recipe, &limits()).unwrap();
+            let reaper_pid = process.child.id();
+            let failed = ReapReceipt { service: recipe.service, service_epoch: 1, reaped: vec![], surviving: vec![],
+                failures: vec![SupervisorError::DeadlineExceeded], complete: false };
+            s.entries.insert(recipe.service, Entry { spec: recipe, epoch: 1, lifecycle: Lifecycle::Unavailable,
+                started: Instant::now(), process: Some(process), loss_recorded: false, receipt: Some(failed) });
+            let receipt = s.stop(ServiceId::Daemon).await.unwrap();
+            assert!(receipt.complete);
+            assert!(receipt.reaped.contains(&reaper_pid));
+            assert!(!std::path::Path::new(&format!("/proc/{reaper_pid}")).exists());
+            assert_eq!(s.stop(ServiceId::Daemon).await.unwrap(), receipt);
+            std::fs::remove_file(runtime).unwrap();
+        });
+    }
+    #[test]
+    fn initial_spawn_failure_does_not_poison_entries() {
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+            let path = std::env::temp_dir().join(format!("supervisor-nonexec-{}", std::process::id()));
+            std::fs::write(&path, b"not executable").unwrap();
+            let mut s = Supervisor::new(limits()).unwrap();
+            s.set_reaper_runtime(path.clone()).unwrap();
+            assert_eq!(s.start(spec()).await.unwrap_err(), SupervisorError::SpawnFailed);
+            assert_eq!(s.start(spec()).await.unwrap_err(), SupervisorError::SpawnFailed);
+            assert!(s.entries.is_empty());
+            std::fs::remove_file(path).unwrap();
+        });
     }
 }

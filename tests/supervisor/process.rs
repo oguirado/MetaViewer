@@ -187,6 +187,8 @@ fn stderr_flood_is_bounded_and_environment_scrubbed() {
         ] {
             launch.environment.insert(key.into(), val.into());
         }
+        assert_eq!(s.start(launch.clone()).await.unwrap_err(), SupervisorError::InvalidConfig);
+        launch.environment.retain(|key, _| key == "MV_FIXTURE");
         s.start(launch).await.unwrap();
         tokio::time::sleep(Duration::from_millis(150)).await;
         assert!(
@@ -322,5 +324,78 @@ fn unauthenticated_startup_expires_and_requires_cleanup() {
         assert_eq!(s.take_losses()[0].reason, LossReason::StartTimeout);
         assert!(s.reap_all().await[0].complete);
         assert!(!std::path::Path::new(&format!("/proc/{}", status.pid.unwrap())).exists());
+    });
+}
+
+#[test]
+fn fast_exit_has_complete_cleanup() {
+    run(async {
+        let (mut s, python) = setup();
+        let result = s.start(spec(&python, "pass", 1)).await;
+        assert!(result.is_ok() || matches!(result, Err(SupervisorError::SpawnFailed)));
+        let receipt = s.stop(ServiceId::Daemon).await.unwrap();
+        assert!(receipt.complete, "{receipt:?}");
+        assert!(receipt.surviving.is_empty());
+    });
+}
+
+#[test]
+fn cumulative_descendants_do_not_exhaust_live_cap() {
+    run(async {
+        let (_, python) = setup();
+        // Same live cap, more cumulative children than slots.
+        let mut s = Supervisor::new(SupervisorLimits {
+            startup_timeout: Duration::from_secs(3), graceful_timeout: Duration::from_millis(40),
+            reap_timeout: Duration::from_secs(3), poll_interval: Duration::from_millis(5),
+            stderr_chunk_bytes: 1024, max_diagnostics_bytes: 4096, max_descendants: 4,
+        }).unwrap();
+        s.set_reaper_runtime(python.clone()).unwrap();
+        let code = "import os,time,ctypes\nctypes.CDLL(None).prctl(15,b'bad\\xff)comm',0,0,0)\nfor i in range(6):\n pid=os.fork()\n if pid==0:\n  if os.fork()==0: time.sleep(.02)\n  os._exit(0)\n os.waitpid(pid,0)\n time.sleep(.08)\ntime.sleep(60)";
+        s.start(spec(&python, code, 1)).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        assert!(s.confirm_ready(ServiceId::Daemon, 1).await.unwrap().available);
+        assert!(s.take_losses().is_empty());
+        assert!(s.stop(ServiceId::Daemon).await.unwrap().complete);
+    });
+}
+
+#[test]
+fn overflow_drains_even_unretained_descendants() {
+    run(async {
+        let (_, python) = setup();
+        let mut s = Supervisor::new(SupervisorLimits {
+            startup_timeout: Duration::from_secs(3), graceful_timeout: Duration::from_millis(40),
+            reap_timeout: Duration::from_secs(3), poll_interval: Duration::from_millis(5),
+            stderr_chunk_bytes: 1024, max_diagnostics_bytes: 4096, max_descendants: 4,
+        }).unwrap();
+        s.set_reaper_runtime(python.clone()).unwrap();
+        let path = std::env::temp_dir().join(format!("supervisor-overflow-{}", std::process::id()));
+        let mut launch = spec(&python, "import os,time\nf=open(os.environ['MV_PID_FILE'],'a',buffering=1)\nf.write(str(os.getpid())+'\\n')\ntime.sleep(.05)\nfor i in range(12):\n if os.fork()==0:\n  f.write(str(os.getpid())+'\\n');time.sleep(60);os._exit(0)\ntime.sleep(60)", 1);
+        launch.environment.insert("MV_PID_FILE".into(), path.clone().into_os_string());
+        s.start(launch).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let _receipt = s.stop(ServiceId::Daemon).await.unwrap();
+        let pids = std::fs::read_to_string(&path).unwrap();
+        assert!(!pids.is_empty());
+        for pid in pids.lines() {
+            assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists(), "overflow survivor {pid}");
+        }
+        std::fs::remove_file(path).unwrap();
+    });
+}
+
+#[test]
+fn service_environment_does_not_reach_reaper() {
+    run(async {
+        let (mut s, python) = setup();
+        let mut launch = spec(&python, "import os,time\nassert os.environ['MV_FIXTURE']=='target-only'\ntime.sleep(60)", 1);
+        launch.environment.insert("MV_FIXTURE".into(), "target-only".into());
+        let status = s.start(launch).await.unwrap();
+        let stat = std::fs::read_to_string(format!("/proc/{}/stat", status.pid.unwrap())).unwrap();
+        let parent = stat.rsplit_once(')').unwrap().1.split_whitespace().nth(1).unwrap();
+        let environment = std::fs::read(format!("/proc/{parent}/environ")).unwrap();
+        assert!(environment.is_empty(), "service environment leaked to runtime");
+        assert!(s.confirm_ready(ServiceId::Daemon, 1).await.unwrap().available);
+        assert!(s.stop(ServiceId::Daemon).await.unwrap().complete);
     });
 }
