@@ -1,7 +1,25 @@
 {
   "components": [
-    {"name": "vision-engine", "kind": "python_package", "repo": "oguirado/vision-engine", "version": "v0.2.0", "commit": "9bbb49f"},
-    {"name": "wender-agent", "kind": "python_package", "repo": "oguirado/wender-agent", "version": "v0.3.0", "commit": "7648b25"},
-    {"name": "opensuperficies", "kind": "go_binary", "repo": "oguirado/OpenSuperficies", "version": "os-cu-w9-mv0", "commit": "9c28784b3c7cbea77735ac39944d9f40e60e1cdd"}
+    {
+      "name": "vision-engine",
+      "kind": "python_package",
+      "repo": "oguirado/vision-engine",
+      "version": "v0.2.0",
+      "commit": "9bbb49f220837388e1ab90c34ae0eedee27a66eb"
+    },
+    {
+      "name": "wender-agent",
+      "kind": "python_package",
+      "repo": "oguirado/wender-agent",
+      "version": "v0.3.0",
+      "commit": "7648b258d1d04953bacffe8627de5acd7c75d817"
+    },
+    {
+      "name": "opensuperficies",
+      "kind": "go_binary",
+      "repo": "oguirado/OpenSuperficies",
+      "version": "os-cu-w9-mv1",
+      "commit": "a9ac1ac8543872b428990ea23fa2629cd0a6d1d5"
+    }
   ]
 }

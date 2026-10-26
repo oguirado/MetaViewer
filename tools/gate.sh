@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# [TARGET, unit decision] Require complete release pins and npm dependency sets;
+# verify frozen offline resolution in disposable trees, for the current Rust host.
 set -u
 
 usage() {
@@ -75,7 +77,8 @@ class GateTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.fixture = Path(self.temp.name) / 'repo'
         self.fixture.mkdir()
-        for name in (*FILES, 'VERSION', 'tools/gate.sh'):
+        for name in (*FILES, 'VERSION', 'tools/gate.sh', 'deps.lock',
+                     'Cargo.lock', 'ui/package-lock.json'):
             destination = self.fixture / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / name, destination)
@@ -158,6 +161,13 @@ class GateTests(unittest.TestCase):
         identity = path.read_text().split('[dependencies]')[0]
         self.write('core/Cargo.toml', identity + '[dependencies]\nsha2 = "=0.10.9"\n'
                    '[dev-dependencies]\nproptest = "=1.12.0"\n')
+        # A changed dependency set requires a corresponding offline frozen lock.
+        self.write('core/src/lib.rs', '')
+        result = subprocess.run(['/home/admin/.cargo/bin/cargo', 'generate-lockfile', '--offline'],
+                                cwd=self.fixture, env=dict(os.environ,
+                                CARGO_TARGET_DIR='/home/admin/.cache/cargo-target/metaviewer-workers'),
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.call('--leg', 'manifests')
         for section, dependency in (
             ('dependencies', 'serde = "1.0.229"'),
@@ -175,7 +185,7 @@ class GateTests(unittest.TestCase):
         data['dependencies'] = {'openvue': '1.0.0', 'node-pty': '1.1.0'}
         data['devDependencies'] = {'@electron/packager': '20.3.0'}
         self.write('ui/package.json', json.dumps(data))
-        self.call('--leg', 'manifests')
+        self.assertIn('dependency closure', self.call('--leg', 'manifests', expected=1))
         data['dependencies']['@electron/packager'] = '20.3.0'
         self.refused_manifest('ui/package.json', json.dumps(data))
 
@@ -464,6 +474,83 @@ def validate_npm_dependencies(table, pins):
     for name, version in table.items():
         require(name in pins and version == pins[name],
                 'package.json: unlisted or unpinned dependency: ' + name)
+    require(set(table) == set(pins), 'package.json: incomplete dependency closure: ' +
+            ', '.join(sorted(set(pins) - set(table))))
+
+
+# [TARGET, unit decision] Admission pins the complete component release identities.
+# Frozen package-manager resolution runs only in disposable manifest-only trees;
+# no installs, lifecycle scripts, network access or repository writes are admitted.
+COMPONENT_PINS = {
+    'vision-engine': ('python_package', 'oguirado/vision-engine', 'v0.2.0',
+                      '9bbb49f220837388e1ab90c34ae0eedee27a66eb'),
+    'wender-agent': ('python_package', 'oguirado/wender-agent', 'v0.3.0',
+                     '7648b258d1d04953bacffe8627de5acd7c75d817'),
+    'opensuperficies': ('go_binary', 'oguirado/OpenSuperficies', 'os-cu-w9-mv1',
+                       'a9ac1ac8543872b428990ea23fa2629cd0a6d1d5'),
+}
+
+
+def validate_frozen_dependencies(root):
+    data = json.loads((root / 'deps.lock').read_text())
+    require(isinstance(data, dict) and set(data) == {'components'} and
+            isinstance(data['components'], list), 'deps.lock: expected component list')
+    seen = set()
+    for component in data['components']:
+        require(isinstance(component, dict), 'deps.lock: expected component object')
+        name = component.get('name')
+        require(isinstance(name, str) and name in COMPONENT_PINS,
+                'deps.lock: unknown component: ' + str(name))
+        require(name not in seen, 'deps.lock: duplicate component: ' + name)
+        seen.add(name)
+        commit = component.get('commit')
+        require(isinstance(commit, str) and re.fullmatch(r'[0-9a-f]{40}', commit),
+                'deps.lock: ' + name + ': commit must be full 40-character lowercase hex')
+        expected = dict(zip(('kind', 'repo', 'version', 'commit'), COMPONENT_PINS[name]))
+        require(component == dict(name=name, **expected), 'deps.lock: ' + name + ': release pin drift')
+    require(seen == set(COMPONENT_PINS), 'deps.lock: incomplete component closure')
+    for name in ('Cargo.lock', 'ui/package-lock.json'):
+        require((root / name).is_file(), name + ': missing frozen resolution')
+    package = json.loads((root / 'ui/package.json').read_text())
+    lock = json.loads((root / 'ui/package-lock.json').read_text())
+    require(isinstance(lock, dict) and lock.get('lockfileVersion') == 3 and
+            isinstance(lock.get('packages'), dict), 'package-lock.json: invalid lock format')
+    locked_root = lock['packages'].get('')
+    require(isinstance(locked_root, dict), 'package-lock.json: missing root package')
+    for key in ('name', 'version', 'dependencies', 'devDependencies', 'engines'):
+        require(locked_root.get(key) == package.get(key), 'package-lock.json: stale root ' + key)
+    # Cargo resolves only the current host's graph: cross-platform archives need not
+    # be present in the offline cache. --locked still checks the full lock resolution.
+    rustc = '/home/admin/.cargo/bin/rustc'
+    cargo = '/home/admin/.cargo/bin/cargo'
+    require(Path(rustc).is_file() and Path(cargo).is_file(), 'Cargo.lock: missing Rust toolchain')
+    identity = subprocess.run([rustc, '-vV'], capture_output=True, text=True, timeout=30)
+    host = re.search(r'^host: (\S+)$', identity.stdout, re.MULTILINE)
+    require(identity.returncode == 0 and host is not None, 'Cargo.lock: unproven Rust host')
+    npm = shutil.which('npm')
+    require(npm is not None, 'package-lock.json: missing npm')
+    with tempfile.TemporaryDirectory(prefix='metaviewer-frozen-') as temporary:
+        scratch = Path(temporary)
+        for name in ('Cargo.toml', 'core/Cargo.toml', 'Cargo.lock',
+                     'ui/package.json', 'ui/package-lock.json'):
+            target = scratch / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(root / name, target)
+        (scratch / 'core/src').mkdir()
+        (scratch / 'core/src/lib.rs').write_text('')
+        environment = dict(os.environ,
+                           CARGO_TARGET_DIR='/home/admin/.cache/cargo-target/metaviewer-workers')
+        commands = (
+            ('Cargo.lock', [cargo, 'metadata', '--offline', '--locked', '--format-version', '1',
+                            '--filter-platform', host.group(1)], scratch),
+            ('package-lock.json', [npm, 'ci', '--offline', '--ignore-scripts', '--dry-run',
+                                  '--no-audit', '--no-fund'], scratch / 'ui'),
+        )
+        for name, command, directory in commands:
+            result = subprocess.run(command, cwd=directory, env=environment,
+                                    capture_output=True, text=True, timeout=60)
+            require(result.returncode == 0, name + ': frozen offline resolution failed: ' +
+                    (result.stderr + result.stdout)[-4000:])
 
 
 def validate_manifests(root):
@@ -510,6 +597,7 @@ def validate_manifests(root):
                         'scripts': SCRIPTS}
     require(json.dumps(package, sort_keys=True) == json.dumps(wanted, sort_keys=True),
             'package.json: metadata drift')
+    validate_frozen_dependencies(root)
     patterns = (root / '.gitignore').read_text().splitlines()
     require(all(pattern in patterns for pattern in (*ORIGINAL_IGNORE, *REQUIRED_IGNORE)),
             '.gitignore: missing exclusion')

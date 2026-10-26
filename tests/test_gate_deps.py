@@ -1,0 +1,94 @@
+"""R1-012/R1-091/R1-100: exercise the shipped manifest CLI on private fixtures."""
+import json
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class DependencyAdmissionTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        for name in ('tools/gate.sh', 'VERSION', '.gitignore', 'Cargo.toml',
+                     'core/Cargo.toml', 'Cargo.lock', 'deps.lock',
+                     'agents/pyproject.toml', 'daemon-adapter/go.mod',
+                     'ui/package.json', 'ui/package-lock.json'):
+            target = self.root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / name, target)
+
+    def gate(self, rc=0, diagnostic='PASS manifests'):
+        before = {str(p.relative_to(self.root)): p.read_bytes()
+                  for p in self.root.rglob('*') if p.is_file()}
+        result = subprocess.run(['bash', str(self.root / 'tools/gate.sh'),
+                                 '--leg', 'manifests'], cwd=self.temp.name,
+                                capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, rc, result.stdout + result.stderr)
+        self.assertIn(diagnostic, result.stdout + result.stderr)
+        after = {str(p.relative_to(self.root)): p.read_bytes()
+                 for p in self.root.rglob('*') if p.is_file()}
+        self.assertEqual(before, after, 'admission must never rewrite manifests or locks')
+
+    def mutate_json(self, name, mutation):
+        path = self.root / name
+        data = json.loads(path.read_text())
+        mutation(data)
+        path.write_text(json.dumps(data))
+
+    def test_clean_tree(self):
+        self.gate()
+
+    def test_component_commit_mutants(self):
+        for index, name in enumerate(('vision-engine', 'wender-agent', 'opensuperficies')):
+            for bad in ('123abcd', 'g' * 40):
+                with self.subTest(component=name, commit=bad):
+                    shutil.copyfile(ROOT / 'deps.lock', self.root / 'deps.lock')
+                    self.mutate_json('deps.lock', lambda d: d['components'][index].update(commit=bad))
+                    self.gate(1, name)
+
+    def test_component_closure_and_tag_drift(self):
+        for mutation in (lambda d: d['components'].pop(),
+                         lambda d: d['components'].append(d['components'][0]),
+                         lambda d: d['components'][2].update(version='os-cu-w9-mv0'),
+                         lambda d: d['components'][0].update(commit='a' * 40)):
+            shutil.copyfile(ROOT / 'deps.lock', self.root / 'deps.lock')
+            self.mutate_json('deps.lock', mutation)
+            self.gate(1, 'deps.lock')
+
+    def test_missing_locks(self):
+        for name in ('deps.lock', 'Cargo.lock', 'ui/package-lock.json'):
+            with self.subTest(lock=name):
+                path = self.root / name
+                original = path.read_bytes()
+                path.unlink()
+                self.gate(1, name)
+                path.write_bytes(original)
+
+    def test_dropped_npm_dependency(self):
+        for section in ('dependencies', 'devDependencies'):
+            with self.subTest(section=section):
+                shutil.copyfile(ROOT / 'ui/package.json', self.root / 'ui/package.json')
+                self.mutate_json('ui/package.json', lambda d: d[section].pop(next(iter(d[section]))))
+                self.gate(1, 'package.json')
+
+    def test_stale_npm_root_and_transitive_locks(self):
+        for mutation in (lambda d: d['packages']['']['dependencies'].update(vue='3.5.42'),
+                         lambda d: d['packages']['node_modules/vue'].update(version='3.5.42'),
+                         lambda d: d['packages'].pop('node_modules/@babel/parser')):
+            shutil.copyfile(ROOT / 'ui/package-lock.json', self.root / 'ui/package-lock.json')
+            self.mutate_json('ui/package-lock.json', mutation)
+            self.gate(1, 'package-lock.json')
+
+    def test_stale_cargo_lock(self):
+        path = self.root / 'Cargo.lock'
+        path.write_text(path.read_text().replace('version = "1.0.229"', 'version = "1.0.228"'))
+        self.gate(1, 'Cargo.lock')
+
+
+if __name__ == '__main__':
+    unittest.main()
