@@ -97,6 +97,8 @@ func RuntimeFromEnv() (Runtime, error) {
 		}
 		pubs[profile.RAMRoot] = p
 	}
+	var subscriptions []*frames.Subscriptions
+
 	handler := wireHandler(manager, profiles, pubs, origin)
 	cfg := ipc.Config{SocketPath: filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "metaviewer", "core.sock"), UID: uint32(os.Getuid()), MaxFrameBytes: 1 << 20, MaxDepth: 32, MaxStringBytes: 65536, MaxKeys: 256, MaxArrayItems: 4096, MaxReplayEntries: 100000, MaxConnections: 1, HelloTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, ProbeTimeout: time.Second, ShutdownTimeout: 5 * time.Second}
 	authority, err := newClientAuthority(filepath.Join(state, "wire-replay.jsonl"), origin)
@@ -104,7 +106,13 @@ func RuntimeFromEnv() (Runtime, error) {
 		closePubs()
 		return zero, configuration(err.Error())
 	}
-	cleanup := func() { closePubs(); _ = authority.file.Close() }
+	cleanup := func() {
+		for _, s := range subscriptions {
+			_ = s.Close(context.Background())
+		}
+		closePubs()
+		_ = authority.file.Close()
+	}
 	dir := os.Getenv("MV_CONTRACT_DIR")
 	if dir == "" {
 		dir = "contracts/v0.2"
@@ -143,11 +151,24 @@ func RuntimeFromEnv() (Runtime, error) {
 			if err != nil {
 				return nil, err
 			}
-			handler = wireHandler(fresh, profiles, pubs, authority.origin)
+			session, ok := ctx.Value(streamKey{}).(streamSession)
+			if !ok {
+				return nil, configuration("session emission required")
+			}
+			byRoot := map[string]*frames.Subscriptions{}
+			for root, pub := range pubs {
+				sub, err := frames.NewSubscriptions(session.ctx, frames.SubscriptionConfig{MaxSubscriptions: 16, PollInterval: 100 * time.Millisecond, CaptureTimeout: 90 * time.Second, ShutdownTimeout: 5 * time.Second, CaptureLock: session.work}, fresh, pub, session.emit)
+				if err != nil {
+					return nil, err
+				}
+				subscriptions = append(subscriptions, sub)
+				byRoot[root] = sub
+			}
+			handler = subscriptionHandler(fresh, profiles, byRoot, wireHandler(fresh, profiles, pubs, authority.origin))
 			return nil, nil
 		}
 		return handler(ctx, e)
-	}, Client: true, Registration: probe, Close: cleanup}, nil
+	}, Client: true, Streaming: true, Registration: probe, Close: cleanup}, nil
 }
 
 func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs map[string]*frames.Publisher, origin uint64) ipc.Handler {

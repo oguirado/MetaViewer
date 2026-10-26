@@ -5,5 +5,6 @@ package daemon
 import "testing"
 
 // TestLiveCapsuleBinary requires the admitted mv-live-1 browser configuration.
-// Missing live prerequisites fail; this test never skips at runtime.
+// The shared oracle covers post-release subscription, periodic generations and
+// unsubscribe/resubscribe drain barriers. Missing live prerequisites fail; this test never skips at runtime.
 func TestLiveCapsuleBinary(t *testing.T) { binaryOracle(t, true, "") }

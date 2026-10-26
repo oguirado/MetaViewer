@@ -35,6 +35,7 @@ type Runtime struct {
 	Policy       ipc.Policy
 	Handler      ipc.Handler
 	Client       bool
+	Streaming    bool
 	Registration ipc.Envelope
 	Close        func()
 }
@@ -65,7 +66,11 @@ func Run(ctx context.Context, args []string, stderr io.Writer, configured ...Run
 			return 2
 		}
 		if runtime.Client {
-			if err := ipc.Connect(ctx, runtime.Config, runtime.Policy, runtime.Registration, runtime.Handler); err != nil {
+			connect := ipc.Connect
+			if runtime.Streaming {
+				connect = connectStreaming
+			}
+			if err := connect(ctx, runtime.Config, runtime.Policy, runtime.Registration, runtime.Handler); err != nil {
 				fmt.Fprintln(stderr, err)
 				return 2
 			}

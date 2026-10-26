@@ -592,3 +592,14 @@ func (m *Manager) HandleFor(ctx context.Context, id string, r Request) ([]json.R
 	}
 	return []json.RawMessage{raw}, nil
 }
+
+// SubscriptionBinding admits only active surfaces; no native capture is needed.
+func (m *Manager) SubscriptionBinding(id string) (Binding, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	b, ok := m.bindings[id]
+	if !ok || b.Surface.State != "active" || m.destroying[id] {
+		return Binding{}, fault("surface", "subscription requires an active surface")
+	}
+	return b, nil
+}

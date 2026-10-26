@@ -123,7 +123,7 @@ func binaryOracle(t *testing.T, live bool, negative string) {
 	if err != nil {
 		t.Fatalf("Go compiler required on PATH for binary oracle: %v", err)
 	}
-	build := exec.Command(goBinary, "build", "-o", binary, "./cmd/mv-daemon-adapter")
+	build := exec.Command(goBinary, "build", "-race", "-o", binary, "./cmd/mv-daemon-adapter")
 	build.Dir = filepath.Join(repo, "daemon-adapter")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v %s", err, out)
@@ -222,7 +222,10 @@ func binaryOracle(t *testing.T, live bool, negative string) {
 		t.Helper()
 		raw, err := f.Read(ctx)
 		if err != nil {
-			t.Fatalf("read: %v", err)
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			waited = true
+			t.Fatalf("read: %v; binary: %s", err, output.String())
 		}
 		e, err := validator.ValidateEnvelope(raw)
 		if err != nil {
@@ -317,10 +320,93 @@ func binaryOracle(t *testing.T, live bool, negative string) {
 	if receipt.Schema != "action_receipt/v0.2" || receipt.ProposalID != "wire-input" || receipt.Verified {
 		t.Fatal("receipt correlation or verification claim invalid")
 	}
-	request("destroy", map[string]string{"surface_id": id})
+
+	// Subscription requests must reach the configured binary, including the live
+	// oracle. A list response is the ordered barrier proving unsubscribe drained.
+	lastGeneration := event.Data.FrameRef.Generation
+	request("frame_subscribe", map[string]string{"surface_id": "foreign"})
 	_ = json.Unmarshal(read(), &event)
-	if event.Event != "state_changed" || event.Data.Surface.State != "destroyed" {
-		t.Fatalf("destroy: %s", event.Event)
+	if event.Event != "error" {
+		t.Fatal("foreign subscription admitted")
+	}
+	request("take_control", map[string]string{"surface_id": id, "owner": "human"})
+	_ = json.Unmarshal(read(), &event)
+	if event.Event != "state_changed" {
+		t.Fatal("takeover failed")
+	}
+	request("release_control", map[string]string{"surface_id": id})
+	_ = json.Unmarshal(read(), &event)
+	if event.Event != "state_changed" {
+		t.Fatal("release failed")
+	}
+	request("frame_subscribe", map[string]string{"surface_id": id})
+	for i := 0; i < 2; i++ {
+		_ = json.Unmarshal(read(), &event)
+		if event.Event != "frame_ready" || event.Data.FrameRef.Schema != "frame_ref/v0.2" || event.Data.FrameRef.SurfaceID != id || event.Data.FrameRef.Generation <= lastGeneration {
+			t.Fatalf("subscription did not deliver a fresh ordered frame: %+v", event)
+		}
+		lastGeneration = event.Data.FrameRef.Generation
+	}
+
+	request("input", map[string]any{"surface_id": id, "proposal_id": "after-release", "action": map[string]any{"type": "key", "keys": []string{"Escape"}}})
+	for {
+		body := read()
+		var header struct{ Schema string }
+		_ = json.Unmarshal(body, &header)
+		if header.Schema == "action_receipt/v0.2" {
+			break
+		}
+		_ = json.Unmarshal(body, &event)
+		if event.Event == "frame_ready" {
+			if event.Data.FrameRef.Generation <= lastGeneration {
+				t.Fatal("input and polling reordered generations")
+			}
+			lastGeneration = event.Data.FrameRef.Generation
+		} else if event.Event != "input_applied" {
+			t.Fatalf("fresh-frame input readmission failed: %+v", event)
+		}
+	}
+	request("frame_unsubscribe", map[string]string{"surface_id": id})
+	request("list", map[string]any{})
+	for {
+		_ = json.Unmarshal(read(), &event)
+		if event.Event == "created" {
+			break
+		}
+		if event.Event != "frame_ready" {
+			t.Fatalf("unsubscribe failed: %+v", event)
+		}
+	}
+	// Wait across several poll intervals, then verify the next response is still
+	// the list barrier, rather than an unsolicited frame.
+	time.Sleep(250 * time.Millisecond)
+	request("list", map[string]any{})
+	_ = json.Unmarshal(read(), &event)
+	if event.Event != "created" {
+		t.Fatalf("frame delivered after unsubscribe barrier: %+v", event)
+	}
+	request("frame_subscribe", map[string]string{"surface_id": id})
+	_ = json.Unmarshal(read(), &event)
+	if event.Event != "frame_ready" || event.Data.FrameRef.Generation <= lastGeneration {
+		t.Fatal("resubscribe failed")
+	}
+	request("destroy", map[string]string{"surface_id": id})
+	for {
+		_ = json.Unmarshal(read(), &event)
+		if event.Event == "state_changed" && event.Data.Surface.State == "destroyed" {
+			break
+		}
+		if event.Event != "frame_ready" {
+			t.Fatalf("destroy while subscribed: %+v", event)
+		}
+	}
+	request("list", map[string]any{})
+	// Destroyed surfaces produce no list events; an invalid subscription supplies
+	// a response barrier and must be refused before another frame can arrive.
+	request("frame_subscribe", map[string]string{"surface_id": id})
+	_ = json.Unmarshal(read(), &event)
+	if event.Event != "error" {
+		t.Fatal("destroyed surface still captures")
 	}
 	destroyed = true
 	_ = cmd.Process.Signal(syscall.SIGTERM)

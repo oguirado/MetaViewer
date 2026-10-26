@@ -19,7 +19,9 @@ type Source interface {
 }
 type Emit func(context.Context, json.RawMessage) error
 type SubscriptionConfig struct {
-	MaxSubscriptions                              int
+	MaxSubscriptions int
+	// CaptureLock serializes capture/publication with synchronous runtime capture.
+	CaptureLock                                   *sync.Mutex
 	PollInterval, CaptureTimeout, ShutdownTimeout time.Duration
 }
 type task struct {
@@ -82,12 +84,25 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 		case <-timer.C:
 		}
 		capture, cancel := context.WithTimeout(ctx, s.cfg.CaptureTimeout)
+		if s.cfg.CaptureLock != nil {
+			for !s.cfg.CaptureLock.TryLock() {
+				select {
+				case <-capture.Done():
+					cancel()
+					return
+				case <-time.After(time.Millisecond):
+				}
+			}
+		}
 		binding, native, e := s.source.Capture(capture, id)
 		if e == nil {
 			e = capture.Err()
 		}
 		cancel()
 		if ctx.Err() != nil {
+			if s.cfg.CaptureLock != nil {
+				s.cfg.CaptureLock.Unlock()
+			}
 			return
 		}
 		var msg json.RawMessage
@@ -110,6 +125,9 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 		if failed {
 			event, eventErr := capsule.NewErrorEvent(id, &cli.Fault{Code: "capture_failed", Detail: "capture or publication refused"})
 			if eventErr != nil {
+				if s.cfg.CaptureLock != nil {
+					s.cfg.CaptureLock.Unlock()
+				}
 				t.err = eventErr
 				return
 			}
@@ -122,6 +140,9 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 			deliveryErr = delivery.Err()
 		}
 		stop()
+		if s.cfg.CaptureLock != nil {
+			s.cfg.CaptureLock.Unlock()
+		}
 		if deliveryErr != nil {
 			t.err = deliveryErr
 			return
