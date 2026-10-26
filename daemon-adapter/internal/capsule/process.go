@@ -49,7 +49,7 @@ func NewProcessRunner(binDir string, environment []string, maxOutput int, timeou
 	if !seen["PATH"] {
 		return nil, fault("configuration", "explicit process search path required")
 	}
-	return &ProcessRunner{env: childEnv, stateDir: stateDir, stat: os.Lstat, limit: maxOutput, timeout: timeout, root: filepath.Clean(binDir)}, nil
+	return &ProcessRunner{env: childEnv, stateDir: stateDir, stat: stateDirInfo, limit: maxOutput, timeout: timeout, root: filepath.Clean(binDir)}, nil
 }
 
 // [TARGET, unit decision] State configuration is captured with the trusted
@@ -59,16 +59,10 @@ func (r *ProcessRunner) validateStateDir() error {
 	refuse := func() error {
 		return fault("configuration", "MV_SRF_STATE_DIR must be a current-uid directory with mode 0700")
 	}
-	if r.stateDir == "" {
+	if !filepath.IsAbs(r.stateDir) || filepath.Clean(r.stateDir) != r.stateDir {
 		return refuse()
 	}
 	st, err := r.stat(r.stateDir)
-	if os.IsNotExist(err) {
-		if err = os.Mkdir(r.stateDir, 0700); err != nil && !os.IsExist(err) {
-			return refuse()
-		}
-		st, err = r.stat(r.stateDir)
-	}
 	if err != nil {
 		return refuse()
 	}
@@ -105,8 +99,8 @@ func (r *ProcessRunner) Run(ctx context.Context, argv []string, stdin []byte) ([
 			return nil, &preSpawnRefusal{err}
 		}
 		// Own the flag so callers cannot override the configured directory.
-		for _, arg := range argv[2:] {
-			if arg == "--state-dir" || strings.HasPrefix(arg, "--state-dir=") || arg == "-state-dir" || strings.HasPrefix(arg, "-state-dir=") {
+		for _, arg := range argv[1:] {
+			if arg == "--" || arg == "--state-dir" || strings.HasPrefix(arg, "--state-dir=") || arg == "-state-dir" || strings.HasPrefix(arg, "-state-dir=") {
 				return nil, fault("configuration", "state directory flag is adapter-owned")
 			}
 		}

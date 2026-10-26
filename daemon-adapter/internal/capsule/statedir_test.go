@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -218,5 +219,85 @@ func TestRuntimeCapturesStateAndIdentityEnvironment(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.Argv, []string{"probe", "--state-dir", os.Getenv("MV_SRF_STATE_DIR")}) || !reflect.DeepEqual(got.Env, map[string]string{"SRF_IDENTITY_STORE_ROOT": os.Getenv("SRF_IDENTITY_STORE_ROOT"), "SRF_PROXY_REGISTRY": "registry-test"}) {
 		t.Fatalf("runtime configuration lost: %s", out)
+	}
+}
+
+func TestStateDirPathBypassesRefused(t *testing.T) {
+	for _, mode := range []string{"relative", "dot", "dotdot", "double-slash", "symlink-slash", "symlink-dot", "ancestor-symlink", "ancestor-symlink-create"} {
+		t.Run(mode, func(t *testing.T) {
+			root, logs := t.TempDir(), t.TempDir()
+			state := filepath.Join(root, "state")
+			if err := os.Mkdir(state, 0700); err != nil {
+				t.Fatal(err)
+			}
+			link := filepath.Join(root, "link")
+			target := root
+			if mode == "symlink-slash" || mode == "symlink-dot" {
+				target = state
+			}
+			if err := os.Symlink(target, link); err != nil {
+				t.Fatal(err)
+			}
+			switch mode {
+			case "relative":
+				cwd, err := os.Getwd()
+				if err != nil {
+					t.Fatal(err)
+				}
+				state, err = filepath.Rel(cwd, state)
+				if err != nil {
+					t.Fatal(err)
+				}
+			case "dot":
+				state += "/."
+			case "dotdot":
+				state = root + "/state/../state"
+			case "double-slash":
+				state = root + "//state"
+			case "symlink-slash":
+				state = link + "/"
+			case "symlink-dot":
+				state = link + "/."
+			case "ancestor-symlink":
+				state = link + "/state"
+			case "ancestor-symlink-create":
+				state = link + "/new-state"
+			}
+			r, binary := stateRunner(t, state, "SRF_IDENTITY_STORE_ROOT="+logs)
+			_, err := r.Run(context.Background(), []string{binary, "start"}, nil)
+			var f *cli.Fault
+			if !errors.As(err, &f) || f.Code != "configuration" {
+				t.Errorf("path bypass accepted: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(logs, "cli-calls.jsonl")); !os.IsNotExist(err) {
+				t.Error("refused path reached CLI")
+			}
+			if _, err := os.Stat(filepath.Join(root, "new-state")); !os.IsNotExist(err) {
+				t.Error("created state through symlink ancestor")
+			}
+		})
+	}
+}
+
+func TestStateDirArgumentBypassesRefused(t *testing.T) {
+	for _, args := range [][]string{
+		{"--state-dir=/evil"}, {"--state-dir", "/evil"},
+		{"-state-dir=/evil"}, {"-state-dir", "/evil"},
+		{"start", "--"}, {"start", "--", "--state-dir", "/evil"},
+		{"--", "start"},
+	} {
+		t.Run(args[0]+"/"+strings.Join(args[1:], "_"), func(t *testing.T) {
+			logs := t.TempDir()
+			r, binary := stateRunner(t, filepath.Join(t.TempDir(), "state"), "SRF_IDENTITY_STORE_ROOT="+logs)
+			argv := append([]string{binary}, args...)
+			_, err := r.Run(context.Background(), argv, nil)
+			var f *cli.Fault
+			if !errors.As(err, &f) || f.Code != "configuration" {
+				t.Errorf("argument bypass accepted: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(logs, "cli-calls.jsonl")); !os.IsNotExist(err) {
+				t.Error("refused arguments reached CLI")
+			}
+		})
 	}
 }
