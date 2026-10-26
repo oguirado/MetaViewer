@@ -4,9 +4,7 @@
 
 The T7 CI-SUPPLY topic evaluated and verified the supply-chain security, CI gate integrity, hermeticity, reproducibility, exit-code matrix, and test determinism across the `MetaViewer` repository.
 
-All 8 Test Obligations (O1 through O8) were implemented via new, dedicated test suites in `tests/` and `tests/fixtures/secrets/`. All written tests pass without regressions or flakes across 20 iterations under environmental variation.
-
-Key findings include abbreviated 7-character SHAs in `deps.lock`, pin regex gaps in `ci.yml` permitting `docker://` references, sanitizer regex gaps allowing URL-encoded tokens to pass unredacted, and unreleased toolchain version requirements in `daemon-adapter/go.mod`.
+All 8 Test Obligations (O1 through O8) were implemented via new, dedicated test suites in `tests/` and `tests/fixtures/secrets/`.
 
 ---
 
@@ -21,9 +19,9 @@ Key findings include abbreviated 7-character SHAs in `deps.lock`, pin regex gaps
 
 ---
 
-## Tests Written or Proposed
+## Tests Written
 
-The following new test suites were created and verified:
+The following new test suites were created and executed:
 
 1. **O1: Pin-integrity harness** (`tests/test_t7_pin_integrity.py`)
    - **Command:** `python3 -m unittest tests/test_t7_pin_integrity.py -v`
@@ -62,6 +60,38 @@ The following new test suites were created and verified:
 ## Not Verified
 
 - Network isolation via `unshare -n` kernel namespace isolation was tested via proxy fallback (`HTTP_PROXY=127.0.0.1:1`) due to container sandbox unprivileged user namespace permissions.
+
+---
+
+## Errors and Blockers
+
+1. **`GITLEAKS_BIN must be an absolute file` in `laws-contracts` CI job:**
+   > ```
+   > ERROR: setUpClass (tests.fixtures.secrets.test_gate.GateIntegrationTests)
+   > Traceback (most recent call last):
+   >   File "/home/runner/work/MetaViewer/MetaViewer/tests/fixtures/secrets/test_gate.py", line 928, in setUpClass
+   >     raise AssertionError("GITLEAKS_BIN must be an absolute file")
+   > AssertionError: GITLEAKS_BIN must be an absolute file
+   > ```
+   *Root Cause:* In `laws-contracts` job, `GITLEAKS_BIN` environment variable is not set. `test_t7_flake_hunt.py` invoked `test_gate.py` without validating if `GITLEAKS_BIN` points to an existing absolute file, causing `setUpClass` in `GateIntegrationTests` to fail.
+
+2. **`router` coverage mismatch in `router` CI job:**
+   > ```
+   > Stale or incomplete router: /home/runner/work/MetaViewer/MetaViewer/catalogue/nodes.jsonl (coverage mismatch: 371 sources vs 362 committed nodes; 9 digests differ)
+   > ```
+   *Root Cause:* Adding new committed test files changed the git tracked source universe count from 362 to 371 files. The router index checker `tools/router_index.py --check` enforces that every tracked file in git is listed in `catalogue/nodes.jsonl`.
+
+3. **`gate.py gate` history rejection in `secrets` CI job:**
+   > ```
+   > 1 generic-api-key
+   > control github: detected (1 finding(s))
+   > control entropy: detected (1 finding(s))
+   > control appended: detected (1 finding(s))
+   > control pem: detected (1 finding(s))
+   > controls: clean
+   > gate: rejected
+   > ```
+   *Root Cause:* `test_real_scanner_nested_repo_and_stash_rejects` in `test_t7_secrets_adversarial.py` ran `git -C repo_dir stash` without stripping `GIT_*` environment variables, causing a secret plant to be pushed into `$GITHUB_WORKSPACE/.git/refs/stash`, which was then detected by `gitleaks` when `gate.py gate` ran on `$GITHUB_WORKSPACE`.
 
 ---
 
