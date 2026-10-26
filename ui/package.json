@@ -27,6 +27,7 @@
     "vue": "3.5.43"
   },
   "devDependencies": {
+    "@electron/asar": "4.3.1",
     "@electron/packager": "20.3.0",
     "@vitejs/plugin-vue": "6.0.9",
     "typescript": "5.9.3",

@@ -1226,7 +1226,25 @@ describe('W0-SHELL-MAIN production boot', () => {
       assert.deepEqual(world.invoked, [['save', '"{}"']]);
       const load = world.handlers.get(CHANNELS.load);
       await rejectsCode(load({ sender: world.webContents, senderFrame: world.frame }, 'payload'), 'LAYOUT_BOUNDS');
-      assert.equal(await load({ sender: world.webContents, senderFrame: world.frame }, undefined), 'layout-json');
+      assert.equal(await load({ sender: world.webContents, senderFrame: world.frame }), 'layout-json');
+    } finally {
+      world.cleanup();
+    }
+  });
+
+  it('refuses surplus receiver arguments before decode or invoke', async () => {
+    const world = bootWorld();
+    try {
+      await bootProductionMain(world.handles);
+      const event = { sender: world.webContents, senderFrame: world.frame };
+      for (const [channel, args] of [
+        [CHANNELS.load, [undefined]],
+        [CHANNELS.save, ['"{}"', 'surplus']],
+      ]) {
+        await rejectsCode(world.handlers.get(channel)(event, ...args), 'LAYOUT_BOUNDS');
+      }
+      assert.deepEqual(world.decoded, []);
+      assert.deepEqual(world.invoked, []);
     } finally {
       world.cleanup();
     }

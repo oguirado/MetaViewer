@@ -53,7 +53,7 @@ DEPENDENCIES = {'@xterm/addon-fit': '0.11.0', '@xterm/xterm': '6.0.0',
                 'node-pty': '1.1.0'}
 DEV_DEPENDENCIES = {'@vitejs/plugin-vue': '6.0.9', 'typescript': '5.9.3',
                     'vite': '8.3.4', 'vue-tsc': '3.3.12',
-                    '@electron/packager': '20.3.0'}
+                    '@electron/packager': '20.3.0', '@electron/asar': '4.3.1'}
 RUST_DEPENDENCIES = {'serde', 'serde_json', 'sha2', 'libc', 'tokio'}
 SCRIPTS = {'test': 'node --test test/*.test.js',
            'check': 'vue-tsc --noEmit -p tsconfig.json', 'build': 'vite build'}

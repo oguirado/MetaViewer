@@ -1,8 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm, copyFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, copyFile, access, readdir } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { constants, createReadStream } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createPackage, uncache } from '@electron/asar';
 import { buildFuseConfig } from '../electron/main.js';
@@ -12,10 +15,47 @@ import * as packaging from '../tools/package.js';
 const sentinel = Buffer.from('dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX');
 const pristine = () => Buffer.concat([Buffer.from('ELF-fixture'), sentinel, Buffer.from([1, 9]), Buffer.from('101100011')]);
 
+// [TARGET, unit decision] Keep the real Electron ASAR check after offline npm
+// installs: use an explicit distribution, an installed binary, or a checksum-
+// verified local Electron cache archive. Never import the downloading wrapper.
+async function localElectron(root) {
+  if (process.env.ELECTRON_OVERRIDE_DIST_PATH) {
+    const binary = join(process.env.ELECTRON_OVERRIDE_DIST_PATH, 'electron');
+    await access(binary, constants.X_OK);
+    return binary;
+  }
+  const installed = fileURLToPath(new URL('../node_modules/electron/dist/electron', import.meta.url));
+  try { await access(installed, constants.X_OK); return installed; }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const pkg = JSON.parse(await readFile(new URL('../node_modules/electron/package.json', import.meta.url), 'utf8'));
+  const checksums = JSON.parse(await readFile(new URL('../node_modules/electron/checksums.json', import.meta.url), 'utf8'));
+  const name = `electron-v${pkg.version}-${process.platform}-${process.arch}.zip`;
+  assert.equal(typeof checksums[name], 'string', 'Electron archive must have a pinned checksum');
+  const cache = process.env.electron_config_cache || join(process.env.XDG_CACHE_HOME || join(homedir(), '.cache'), 'electron');
+  for (const entry of await readdir(cache, {withFileTypes: true})) {
+    if (!entry.isDirectory()) continue;
+    const archive = join(cache, entry.name, name);
+    try { await access(archive); }
+    catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+    const hash = createHash('sha256');
+    for await (const bytes of createReadStream(archive)) hash.update(bytes);
+    assert.equal(hash.digest('hex'), checksums[name], 'Cached Electron checksum mismatch');
+    const dist = join(root, 'electron-dist');
+    await mkdir(dist);
+    const unpack = spawnSync('unzip', ['-q', archive, '-d', dist], {encoding: 'utf8'});
+    assert.equal(unpack.status, 0, unpack.error?.message || unpack.stderr);
+    const binary = join(dist, 'electron');
+    await access(binary, constants.X_OK);
+    return binary;
+  }
+  throw new Error(`Local ${name} required; set ELECTRON_OVERRIDE_DIST_PATH (no downloads)`);
+}
+
 test('R1-050 package requires ASAR, applies sole fuse config and verifies finished binary', async () => {
   assert.equal(typeof packaging.applyFuses, 'function');
   const root = await mkdtemp(join(tmpdir(), 'uiel-fuses-'));
   try {
+    const electron = await localElectron(root);
     const app = join(root, 'source'); const built = join(root, 'built');
     await mkdir(join(app, 'dist/renderer'), {recursive: true});
     await mkdir(join(app, 'dist/preload'), {recursive: true});
@@ -41,9 +81,9 @@ test('R1-050 package requires ASAR, applies sole fuse config and verifies finish
     const script = `const {handleAppRequest, PRIVILEGED_ORIGIN} = await import(${JSON.stringify('file://' + archive + '/electron/main.js')});
       const response = await handleAppRequest(${JSON.stringify(archive + '/dist/renderer')}, {url: PRIVILEGED_ORIGIN + '/index.html'});
       console.log(response.status);`;
-    const serve = () => spawnSync(new URL('../node_modules/electron/dist/electron', import.meta.url).pathname,
+    const serve = () => spawnSync(electron,
       ['--input-type=module', '-e', script], {encoding: 'utf8', env: {...process.env, ELECTRON_RUN_AS_NODE: '1'}});
-    const normal = serve(); assert.equal(normal.status, 0, normal.stderr); assert.equal(normal.stdout.trim(), '200');
+    const normal = serve(); assert.equal(normal.status, 0, normal.error?.message || normal.stderr); assert.equal(normal.stdout.trim(), '200');
     await writeFile(join(app, 'dist/renderer/index.html'), 'SECRET');
     await rm(archive); await createPackage(app, archive);
     uncache(archive);
