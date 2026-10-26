@@ -1,0 +1,56 @@
+{
+  "scenario_id": "golden-wall-journey-v1",
+  "steps": [
+    {
+      "step_seq": 1,
+      "capsule_id": "capsule-e2e-1",
+      "action": "create",
+      "kind": "browser",
+      "w": 1280,
+      "h": 900
+    },
+    {
+      "step_seq": 2,
+      "capsule_id": "capsule-e2e-1",
+      "action": "frame_publish",
+      "generation": 1,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "step_seq": 3,
+      "capsule_id": "capsule-e2e-1",
+      "action": "observe_act",
+      "generation": 1,
+      "verb": "click",
+      "x": 100,
+      "y": 200,
+      "verdict": "admitted"
+    },
+    {
+      "step_seq": 4,
+      "capsule_id": "capsule-e2e-1",
+      "action": "frame_publish",
+      "generation": 2,
+      "sha256": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb"
+    },
+    {
+      "step_seq": 5,
+      "capsule_id": "capsule-e2e-1",
+      "action": "observe_act",
+      "generation": 1,
+      "verb": "click",
+      "x": 100,
+      "y": 200,
+      "verdict": "refused",
+      "reason_code": "STALE_FRAME"
+    },
+    {
+      "step_seq": 6,
+      "capsule_id": "capsule-e2e-1",
+      "action": "take_control",
+      "owner": "human",
+      "verdict": "admitted"
+    }
+  ],
+  "expected_digest": "84cb8689e0e93771027367c5de996cab625824ba327f5d2184c391436eca726c"
+}

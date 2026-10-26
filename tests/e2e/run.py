@@ -17,9 +17,14 @@ def main():
     with tempfile.TemporaryDirectory(prefix="mv-e2e-build-") as build:
         env["MV_E2E_BUILD"] = build
         subprocess.run(["node", "tests/e2e/build.mjs"], cwd=ROOT, env=env, check=True)
-        command = ["node", "--test", "tests/e2e/e2e1_wall.test.js"]
+        # Run all E2E node tests in tests/e2e/
+        e2e_tests = sorted([str(p.relative_to(ROOT)) for p in (ROOT / "tests" / "e2e").glob("*.test.js")])
+        command = ["node", "--test", *e2e_tests]
         subprocess.run(command, cwd=ROOT, env=env, check=True)
-        mutant = subprocess.run(command, cwd=ROOT, env=dict(env, MV_E2E_CROSS_ROUTE="1"),
+
+        # Cross-routing mutant check on e2e1
+        mutant_cmd = ["node", "--test", "tests/e2e/e2e1_wall.test.js"]
+        mutant = subprocess.run(mutant_cmd, cwd=ROOT, env=dict(env, MV_E2E_CROSS_ROUTE="1"),
                                 capture_output=True, text=True)
         if mutant.returncode == 0 or "E2E_ROUTING" not in mutant.stdout + mutant.stderr:
             raise RuntimeError("E2E_MUTANT: cross-routing must fail the live assertion")
