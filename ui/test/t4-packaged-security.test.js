@@ -95,7 +95,7 @@ test('R1-050 package requires ASAR, applies sole fuse config and verifies finish
     assert.throws(() => packaging.assertPackagingPolicy(false, buildFuseConfig()), /ASAR/);
     assert.throws(() => packaging.assertPackagingPolicy(true, {...buildFuseConfig(), 0: true}), /fuse/i);
     const cli = new URL('../tools/package.js', import.meta.url);
-    const run = () => spawnSync(process.execPath, [cli.pathname, '--verify', built], {encoding: 'utf8'});
+    const run = () => spawnSync(process.execPath, [fileURLToPath(cli), '--verify', built], {encoding: 'utf8'});
     assert.equal(run().status, 0);
     const tampered = await readFile(binary); tampered[tampered.length - 9] = 49;
     await writeFile(binary, tampered);
