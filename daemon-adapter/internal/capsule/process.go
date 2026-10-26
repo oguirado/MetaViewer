@@ -79,6 +79,12 @@ func (r *ProcessRunner) validateStateDir() error {
 	return nil
 }
 
+// preSpawnRefusal is evidence produced only before exec. A generic configuration
+// fault from a Runner is insufficient to clear a native-effect quarantine.
+type preSpawnRefusal struct{ error }
+
+func (e *preSpawnRefusal) Unwrap() error { return e.error }
+
 type cappedBuffer struct {
 	buffer bytes.Buffer
 	limit  int
@@ -96,7 +102,7 @@ func (r *ProcessRunner) Run(ctx context.Context, argv []string, stdin []byte) ([
 	}
 	if filepath.Base(argv[0]) == "srf-identity-surface" {
 		if err := r.validateStateDir(); err != nil {
-			return nil, err
+			return nil, &preSpawnRefusal{err}
 		}
 		// Own the flag so callers cannot override the configured directory.
 		for _, arg := range argv[2:] {

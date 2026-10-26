@@ -2,6 +2,9 @@ package capsule
 
 // [TARGET, unit decision] Profiles bind public kinds to admitted native programs,
 // geometry, display and RAM allocation. The caller supplies hello's monotonic origin.
+// [TARGET, unit decision] Holdings' documented timestamp-only input receipt and
+// stopped-only stop reply lack independent proof. Trusted verification hooks
+// must affirm the bound operation/removal; absent hooks fail closed.
 // Local observation IDs are opaque and never reused within this manager's session.
 // Uncertain native effects quarantine the profile until explicit reconciliation.
 // [TARGET, unit decision] Profile geometry is a per-axis ceiling for native
@@ -35,7 +38,9 @@ type Config struct {
 	Timeout                     time.Duration
 	OriginNS                    uint64
 	// BeforeDestroy drains any capture subscriptions before native stop.
-	BeforeDestroy func(context.Context, string) error
+	BeforeDestroy         func(context.Context, string) error
+	VerifyHoldingsInput   func(context.Context, Binding, string, json.RawMessage, uint64) error
+	VerifyHoldingsRemoval func(context.Context, Binding) error
 }
 type Geometry struct {
 	W int `json:"w"`
@@ -84,6 +89,10 @@ type Manager struct {
 	clock       cli.Clock
 	bindings    map[string]Binding
 	quarantined map[string]bool
+	destroying  map[string]bool
+	pending     map[string]*pendingInput
+	used        map[string]bool
+	refresh     map[string]bool
 }
 
 var profileID = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
@@ -126,7 +135,7 @@ func NewManager(cfg Config, r cli.Runner, clock cli.Clock) (*Manager, error) {
 		copyProfiles[id] = p
 	}
 	cfg.Profiles = copyProfiles
-	return &Manager{cfg: cfg, runner: r, clock: clock, bindings: make(map[string]Binding), quarantined: make(map[string]bool)}, nil
+	return &Manager{cfg: cfg, runner: r, clock: clock, bindings: make(map[string]Binding), quarantined: make(map[string]bool), destroying: make(map[string]bool), pending: make(map[string]*pendingInput), used: make(map[string]bool), refresh: make(map[string]bool)}, nil
 }
 func withinRAM(path string) bool {
 	return path == "/dev/shm" || len(path) > 9 && path[:9] == "/dev/shm/" && filepath.Clean(path) == path
@@ -171,18 +180,6 @@ func (m *Manager) Handle(ctx context.Context, r Request) ([]json.RawMessage, err
 	} else if r.Schema != "surface_request/v0.2" {
 		return nil, fault("schema", "unsupported request schema")
 	}
-	// Unsubscribe may wait for a capture that itself acquires mu.
-	if r.Op == "destroy" && m.cfg.BeforeDestroy != nil {
-		var p struct {
-			SurfaceID string `json:"surface_id"`
-		}
-		if e := cli.ParseLine(r.Params, m.cfg.MaxOutputBytes, &p); e != nil || p.SurfaceID == "" {
-			return nil, fault("params", "surface identity required")
-		}
-		if e := m.cfg.BeforeDestroy(ctx, p.SurfaceID); e != nil {
-			return nil, e
-		}
-	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	switch r.Op {
@@ -209,7 +206,9 @@ func (m *Manager) Handle(ctx context.Context, r Request) ([]json.RawMessage, err
 		return m.destroy(ctx, r, version)
 	case "input":
 		return m.input(ctx, r, version)
-	case "take_control", "release_control", "frame_subscribe", "frame_unsubscribe", "record_start", "record_stop":
+	case "take_control", "release_control":
+		return m.control(r, version)
+	case "frame_subscribe", "frame_unsubscribe", "record_start", "record_stop":
 		return nil, cli.Unsupported(r.Op)
 	default:
 		return nil, fault("unknown_op", "unknown surface operation")
@@ -228,11 +227,15 @@ func (m *Manager) create(ctx context.Context, r Request, version string) ([]json
 	if !ok || !profileID.MatchString(q.ProfileID) || p.Kind != q.Kind || q.Geometry.W != p.Width || q.Geometry.H != p.Height {
 		return nil, fault("profile", "unadmitted profile, kind or geometry")
 	}
-	if len(m.bindings) >= m.cfg.MaxSurfaces || m.quarantined[q.ProfileID] {
+	active := len(m.quarantined)
+	for _, b := range m.bindings {
+		if b.Surface.State != "destroyed" {
+			active++
+		}
+	}
+	if active >= m.cfg.MaxSurfaces || m.quarantined[q.ProfileID] {
 		return nil, fault("uncertain", "surface capacity or unresolved native outcome")
 	}
-	// Quarantine before execution: malformed success can still have created a capsule.
-	m.quarantined[q.ProfileID] = true
 	idBytes := make([]byte, 16)
 	if _, e := rand.Read(idBytes); e != nil {
 		return nil, e
@@ -245,8 +248,14 @@ func (m *Manager) create(ctx context.Context, r Request, version string) ([]json
 	if p.NativeKind == "holdings" {
 		args = []string{"start", "--slots", "1", "--app", p.AppDir}
 	}
+	// Quarantine before execution; clear only on a proven pre-spawn refusal.
+	m.quarantined[q.ProfileID] = true
 	out, e := m.execute(ctx, p, args, nil)
 	if e != nil {
+		var refused *preSpawnRefusal
+		if errors.As(e, &refused) {
+			delete(m.quarantined, q.ProfileID)
+		}
 		return nil, e
 	}
 	b := Binding{Surface: Surface{Schema: "surface/" + version, SurfaceID: id, Kind: p.Kind, Display: p.Display, Geometry: q.Geometry, State: "active", Visibility: "unfolded", Control: "agent", ProfileID: q.ProfileID}, NativeKind: p.NativeKind, Program: p.Program}
@@ -295,7 +304,7 @@ func (m *Manager) create(ctx context.Context, r Request, version string) ([]json
 		b.FramesRoot = filepath.Join(p.RAMRoot, c.RunID, "frames", b.Window)
 	}
 	for _, old := range m.bindings {
-		if old.Container == b.Container {
+		if old.Container == b.Container && old.Surface.State != "destroyed" {
 			return nil, fault("binding", "native container already observed")
 		}
 	}
@@ -315,9 +324,27 @@ func (m *Manager) destroy(ctx context.Context, r Request, version string) ([]jso
 		return nil, e
 	}
 	b, ok := m.bindings[q.SurfaceID]
-	if !ok || b.Surface.State == "destroyed" {
+	if !ok || b.Surface.State == "destroyed" || m.destroying[q.SurfaceID] {
 		return nil, fault("surface", "unknown or terminal surface")
 	}
+	if m.hasPending(q.SurfaceID) {
+		return nil, fault("POLICY", "input must be drained before destroy")
+	}
+	m.destroying[q.SurfaceID] = true
+	defer delete(m.destroying, q.SurfaceID)
+	// Drain outside mu: capture subscribers may be waiting to acquire it.
+	if m.cfg.BeforeDestroy != nil {
+		m.mu.Unlock()
+		e := m.cfg.BeforeDestroy(ctx, q.SurfaceID)
+		m.mu.Lock()
+		if e != nil {
+			return nil, e
+		}
+	}
+	// Stop may have effects even without a usable receipt. Keep the binding lost
+	// until verified removal; never reopen input/capture after an uncertain stop.
+	b.Surface.State = "lost"
+	m.bindings[q.SurfaceID] = b
 	out, e := m.execute(ctx, m.cfg.Profiles[b.Surface.ProfileID], []string{"stop", "--container", b.Container}, nil)
 	if e != nil {
 		return nil, e
@@ -329,8 +356,19 @@ func (m *Manager) destroy(ctx context.Context, r Request, version string) ([]jso
 	if e := cli.ParseLine(out, m.cfg.MaxOutputBytes, &stopped); e != nil {
 		return nil, e
 	}
-	if stopped.Stopped != b.Container || (b.NativeKind != "holdings" && (stopped.RemovedVerified == nil || !*stopped.RemovedVerified)) {
+	if stopped.Stopped != b.Container || (stopped.RemovedVerified != nil && !*stopped.RemovedVerified) || (b.NativeKind != "holdings" && stopped.RemovedVerified == nil) {
 		return nil, fault("malformed_cli", "native removal was not verified")
+	}
+	if b.NativeKind == "holdings" {
+		if m.cfg.VerifyHoldingsRemoval == nil {
+			return nil, fault("uncertain", "independent Holdings removal proof required")
+		}
+		m.mu.Unlock()
+		e := m.cfg.VerifyHoldingsRemoval(ctx, b)
+		m.mu.Lock()
+		if e != nil {
+			return nil, e
+		}
 	}
 	b.Surface.State = "destroyed"
 	m.bindings[q.SurfaceID] = b
@@ -340,7 +378,7 @@ func (m *Manager) Capture(ctx context.Context, id string) (Binding, NativeFrame,
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	b, ok := m.bindings[id]
-	if !ok || b.Surface.State != "active" {
+	if !ok || b.Surface.State != "active" || m.destroying[id] {
 		return Binding{}, NativeFrame{}, fault("surface", "capture requires an active surface")
 	}
 	args := []string{"frame", "--container", b.Container}
@@ -360,6 +398,7 @@ func (m *Manager) Capture(ctx context.Context, id string) (Binding, NativeFrame,
 	if f.Seq == 0 || f.Generation != b.Container || f.Width < 1 || f.Height < 1 || f.Width > b.Surface.Geometry.W || f.Height > b.Surface.Geometry.H || !digest.MatchString(f.SHA256RGB24) || !under(b.FramesRoot, f.Path) || f.CaptureMonoNS < m.cfg.OriginNS || f.CaptureMonoNS < before || f.CaptureMonoNS > after || after < before || (b.Window != "" && (f.Window == nil || f.Window.ID != b.Window || f.Window.W != f.Width || f.Window.H != f.Height)) || (b.Window == "" && f.Window != nil) {
 		return b, f, fault("frame", "native frame identity, time or allocation mismatch")
 	}
+	delete(m.refresh, id)
 	f.TSNS = f.CaptureMonoNS - m.cfg.OriginNS
 	f.CaptureUS = (after - before) / 1000
 	return b, f, nil
@@ -370,7 +409,7 @@ func (m *Manager) MarkLost(id string, confirmedAbsent bool) (json.RawMessage, er
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	b, ok := m.bindings[id]
-	if !confirmedAbsent || !ok || b.Surface.State != "active" {
+	if !confirmedAbsent || !ok || b.Surface.State != "active" || m.destroying[id] {
 		return nil, fault("surface", "confirmed active disappearance required")
 	}
 	b.Surface.State = "lost"
@@ -396,6 +435,15 @@ func (m *Manager) input(ctx context.Context, r Request, version string) ([]json.
 	b, ok := m.bindings[q.SurfaceID]
 	if !ok || b.Surface.State != "active" || q.ProposalID == "" || len(q.ProposalID) > 128 {
 		return nil, fault("surface", "input identity required")
+	}
+	if m.destroying[q.SurfaceID] {
+		return nil, fault("POLICY", "surface is draining")
+	}
+	if b.Surface.Control != "agent" {
+		return nil, fault("SURFACE_NOT_AGENT_CONTROLLED", "human control blocks agent input")
+	}
+	if m.refresh[q.SurfaceID] || m.hasPending(q.SurfaceID) || m.used[q.ProposalID] || len(m.used) >= 100000 {
+		return nil, fault("POLICY", "fresh frame and unused input permit required")
 	}
 	args := []string{"input", "--container", b.Container}
 	if b.Window != "" {
@@ -429,7 +477,23 @@ func (m *Manager) input(ctx context.Context, r Request, version string) ([]json.
 	default:
 		return nil, cli.Unsupported("input action")
 	}
-	out, e := m.execute(ctx, m.cfg.Profiles[b.Surface.ProfileID], args, stdin)
+	run, cancel := context.WithCancel(ctx)
+	pending := &pendingInput{surface: q.SurfaceID, cancel: cancel}
+	m.pending[q.ProposalID] = pending
+	m.used[q.ProposalID] = true
+	m.mu.Unlock()
+	out, e := m.execute(run, m.cfg.Profiles[b.Surface.ProfileID], args, stdin)
+	m.mu.Lock()
+	defer func() {
+		cancel()
+		pending.done = true
+		if !pending.cancelled {
+			delete(m.pending, q.ProposalID)
+		}
+	}()
+	if pending.cancelled {
+		return nil, fault("SURFACE_NOT_AGENT_CONTROLLED", "input cancelled by control takeover")
+	}
 	if e != nil {
 		return nil, e
 	}
@@ -443,8 +507,31 @@ func (m *Manager) input(ctx context.Context, r Request, version string) ([]json.
 	if e := cli.ParseLine(out, m.cfg.MaxOutputBytes, &receipt); e != nil {
 		return nil, e
 	}
+	if receipt.Result == "refused" {
+		return nil, fault("refused", "native input refused")
+	}
 	if receipt.InputMonoNS == nil || *receipt.InputMonoNS < m.cfg.OriginNS || (b.Window != "" && (receipt.SurfaceID != b.Window || receipt.Kind != nativeAction || receipt.FocusVerified == nil || !*receipt.FocusVerified || receipt.Result != "ok")) {
 		return nil, fault("input", "unverified input receipt")
+	}
+	if b.NativeKind == "holdings" {
+		// The component documents only input_mono_ns. Never interpret extra fields
+		// as proof of identity or action: the verifier owns independent correlation.
+		if receipt.Result != "" || receipt.SurfaceID != "" || receipt.Kind != "" || receipt.FocusVerified != nil || m.cfg.VerifyHoldingsInput == nil {
+			return nil, fault("input", "independent Holdings input proof required")
+		}
+		action, _ := json.Marshal(q.Action)
+		m.mu.Unlock()
+		e := m.cfg.VerifyHoldingsInput(run, b, q.ProposalID, action, *receipt.InputMonoNS)
+		m.mu.Lock()
+		if pending.cancelled {
+			return nil, fault("SURFACE_NOT_AGENT_CONTROLLED", "input verification cancelled by takeover")
+		}
+		if e != nil {
+			return nil, e
+		}
+		if e := run.Err(); e != nil {
+			return nil, e
+		}
 	}
 	return []json.RawMessage{event(version, "input_applied", struct {
 		SurfaceID  string `json:"surface_id"`
