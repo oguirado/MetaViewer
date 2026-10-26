@@ -4,6 +4,7 @@
 - Add pre-event design and research notes (commit e06d627).
 - Rewrite the README and add the pre-existing declaration.
 - Publish the public hackathon roadmap.
+- License the repository under the PolyForm Strict License 1.0.0.
 
 ## 0.1.0 (never tagged; superseded by 0.1.1)
 - Preserve repository laws and the initial version.

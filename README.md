@@ -49,3 +49,7 @@ Set both author and committer to the identity in `docs/COMMIT_LAWS.md` before co
 ## Hackathon timeline
 
 Assembly runs during the event only [TARGET]: day 0 contracts (v0.2) and skeletons, day 1 vertical slice (admission, capsule adapter, frames to the wall, terminal, AI control CLI), day 2 feature complete, day 3 packaged linux-arm64 product, then large-scale testing, polish, code seal v1.0.0 on Nov 1, demo video and submission [all TARGET]. See docs/ROADMAP.md for the day-by-day plan and verification gates.
+
+## License
+
+MetaViewer is licensed under the [PolyForm Strict License 1.0.0](LICENSE). The external components it integrates (wender-agent, vision-engine, OpenSuperficies and the capsule UI kit) are proprietary and are not covered by this license.
