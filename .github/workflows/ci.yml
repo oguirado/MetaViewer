@@ -3,7 +3,7 @@
 # Branch protection (set by the maintainer in the hosting UI; comments do not
 # configure it): require the `ci-required` status plus the separately owned
 # `Secrets / secrets` status on `main`, fast-forward merges only from green.
-# Optional jobs (build-macos, build-windows) and the nightly volume workflow
+# Optional jobs (build-macos, build-windows; manual-only while the repository is private) and the nightly volume workflow
 # are never required statuses.
 #
 # Host-only by design (never in this file): sealed-toolchain capsule runs,
@@ -1641,6 +1641,9 @@ jobs:
           finish_gate package UNEXEC NOT_APPLICABLE "packager argv ABSENT in W0, blocking from W3" "$LOG" .github/workflows/ci.yml "unexecuted" 0 -- package-pending || exit 2
           exit 0
   build-macos:
+    # Manual runs only while the repository is private (hosted minutes are billed x10 on macOS, x2 on Windows);
+    # remove this condition when the repository goes public, before submission.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     timeout-minutes: 25
     continue-on-error: true
@@ -1741,6 +1744,9 @@ jobs:
           finish_gate build-macos UNEXEC NOT_APPLICABLE "packager argv ABSENT in W0, build-only leg" "$LOG" .github/workflows/ci.yml "unexecuted" 0 -- package-pending || exit 2
           exit 0
   build-windows:
+    # Manual runs only while the repository is private (hosted minutes are billed x10 on macOS, x2 on Windows);
+    # remove this condition when the repository goes public, before submission.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     timeout-minutes: 25
     continue-on-error: true
