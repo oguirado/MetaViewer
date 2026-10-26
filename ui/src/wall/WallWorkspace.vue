@@ -1,0 +1,649 @@
+<script>
+/**
+ * @fileoverview MetaViewer wall workspace: presentation-only composition over
+ * the kit DockWorkspace. Exactly one permanent panel per capsuleId; the kit
+ * owns the layout host, controller and restore barrier. This module never
+ * touches storage, layout bytes or backend verbs: reveal and presentation
+ * intents use only the Dockview api handed over by the kit `ready` event,
+ * which the kit emits after its cold restore settles.
+ */
+import { defineComponent, h } from 'vue';
+
+/** Panel id namespace: deterministic, reversible, never a bare numeric index. */
+export const WALL_PANEL_ID_PREFIX = 'panel-';
+/** Minimum live tile size, shared with the Holdings grid exemplar. */
+export const WALL_PANEL_MIN_WIDTH = 240;
+export const WALL_PANEL_MIN_HEIGHT = 200;
+/** Initial viewport seed; the kit remeasures the outer stage after restore. */
+export const WALL_INITIAL_VIEWPORT_WIDTH = 1280;
+export const WALL_INITIAL_VIEWPORT_HEIGHT = 720;
+/** Closed reveal placements. Popout stays unavailable by design (R2). */
+export const WALL_PLACEMENTS = Object.freeze(['tab', 'split', 'floating']);
+/** Closed local presentation verbs. None of them ends a backend surface. */
+export const WALL_PRESENTATION_VERBS = Object.freeze(['close', 'hide', 'show', 'float', 'dock-back']);
+
+/** @typedef {Readonly<{ code: string, message: string }>} WallAdmissionError */
+
+/**
+ * @template T
+ * @typedef {Readonly<{ ok: true, value: T }> | Readonly<{ ok: false, error: WallAdmissionError }>} WallAdmissionResult
+ */
+
+/**
+ * Authoritative surface row. The workspace reads id, surfaceId, lifecycle
+ * and title; the remaining fields keep the view opaque-compatible with the
+ * sibling panel contract.
+ * @typedef {Object} WallSurfaceRow
+ * @property {string} id
+ * @property {string} surfaceId
+ * @property {string} backendLifecycle
+ * @property {number} generation
+ * @property {string} visibility
+ * @property {string} control
+ * @property {string} [title]
+ * @property {WallAdmissionError | null} [refusal]
+ */
+
+/**
+ * The controller still refuses rowless answers at runtime; the row type stays
+ * required here so the shared view keeps matching the sibling panel prop.
+ * @typedef {Object} WallProjectionView
+ * @property {() => ({ rows: ReadonlyArray<WallSurfaceRow> } | null)} getProjection
+ */
+
+/** @typedef {Object} WallDockviewApi
+ * @property {(id: string) => WallDockviewPanel | undefined} getPanel
+ * @property {(options: WallAddPanelOptions) => WallDockviewPanel} addPanel
+ */
+
+/**
+ * @typedef {Object} WallDockviewPanel
+ * @property {string} id
+ * @property {WallDockviewPanelApi} api
+ */
+
+/**
+ * @typedef {Object} WallDockviewPanelApi
+ * @property {() => void} close
+ * @property {() => void} setActive
+ */
+
+/**
+ * @typedef {Object} WallAddPanelOptions
+ * @property {string} id
+ * @property {string} component
+ * @property {string} [title]
+ * @property {{ capsuleId: string }} params
+ * @property {'always'} renderer
+ * @property {number} minimumWidth
+ * @property {number} minimumHeight
+ * @property {{ direction: 'right' }} [position]
+ */
+
+/**
+ * @typedef {Object} WallWindowPresentation
+ * @property {(id: string) => { hidden: boolean }} state
+ * @property {(id: string) => void} show
+ * @property {(id: string) => void} hide
+ * @property {(id: string) => void} float
+ * @property {(id: string) => void} dock
+ */
+
+/**
+ * @typedef {Object} WallWorkspaceControllerOptions
+ * @property {WallProjectionView | null} [projectionView]
+ */
+
+/** @typedef {'submit-intent' | 'activate-surface'} WallForwardedEmit */
+
+/** @typedef {(name: WallForwardedEmit, payload: unknown) => void} WallEmitFn */
+
+/**
+ * @typedef {Object} WallPanelCallbacks
+ * @property {(body: unknown) => void} onSubmitIntent
+ * @property {(payload: unknown) => void} onActivateSurface
+ * @property {(intent: unknown) => WallAdmissionResult<Readonly<{ panelId: string, type: string }>>} onPresentationIntent
+ */
+
+/**
+ * @typedef {Object} WallWorkspaceController
+ * @property {(payload: unknown) => WallAdmissionResult<Readonly<{ ready: boolean }>>} handleReady
+ * @property {() => void} dispose
+ * @property {(capsuleId: unknown, placement: unknown) => WallAdmissionResult<Readonly<{ panelId: string }>>} revealSurface
+ * @property {(intent: unknown) => WallAdmissionResult<Readonly<{ panelId: string, type: string }>>} applyPresentationIntent
+ * @property {(emit: WallEmitFn) => WallPanelCallbacks} createPanelCallbacks
+ */
+
+/**
+ * Snapshot mirror of the sibling panel view. Field-for-field compatible so
+ * the shared projection object passes through without a cast.
+ * @typedef {Object} WallSnapshotLike
+ * @property {string} status
+ * @property {boolean} stale
+ * @property {WallEnvelopeLike | null} envelope
+ * @property {WallAdmissionError | null} error
+ */
+
+/**
+ * @typedef {Object} WallEnvelopeLike
+ * @property {string} schema
+ * @property {number} epoch
+ * @property {number} revision
+ * @property {string} query
+ * @property {{ rows: ReadonlyArray<WallSurfaceRow> }} projection
+ */
+
+/**
+ * Shared projection view: the controller reads getProjection, the sibling
+ * panel reads getSnapshot and subscribe. Both ride on one object.
+ * @typedef {Object} WallSharedProjectionView
+ * @property {() => ({ rows: ReadonlyArray<WallSurfaceRow> } | null)} getProjection
+ * @property {() => WallSnapshotLike | null} getSnapshot
+ * @property {(listener: (snapshot: WallSnapshotLike | null) => void) => () => void} subscribe
+ */
+
+/**
+ * Shared intent builders, mirroring the sibling intent inputs exactly.
+ * @typedef {Object} WallSharedIntentBuilders
+ * @property {(input: { capsuleId: string, verb: string, pinned?: boolean }) => unknown} visibility
+ * @property {(input: { capsuleId: string, verb: string }) => unknown} control
+ * @property {(input: { capsuleId: string, verb: string }) => unknown} presentation
+ */
+
+/** @typedef {import('capsule-ui-kit/layout').LayoutProfileScope} KitLayoutScope */
+
+/** @typedef {import('capsule-ui-kit/layout').LayoutProfileEnvelope} KitLayoutProfile */
+
+/**
+ * Storage mirror of the kit `LayoutStorage` declaration: raw bytes in,
+ * atomic payload plus owner metadata out. Never implemented here.
+ * @typedef {Object} KitLayoutStorage
+ * @property {() => Promise<string | null>} readRaw
+ * @property {(payload: string, meta: { ownerWindowId: string, scope: KitLayoutScope }) => Promise<void>} writeAtomic
+ */
+
+/**
+ * @param {unknown} value
+ * @returns {Record<string, unknown>}
+ */
+function asRecord(value) {
+  if (typeof value !== 'object' || value === null) return {};
+  return /** @type {Record<string, unknown>} */ (value);
+}
+
+/**
+ * @param {unknown} value
+ * @returns {string | null}
+ */
+function asNonEmptyString(value) {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+/**
+ * @param {unknown} value
+ * @returns {value is Record<string, unknown>}
+ */
+function isPlainObject(value) {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+/**
+ * @param {string} code
+ * @param {string} message
+ * @returns {WallAdmissionError}
+ */
+export function wallError(code, message) {
+  return Object.freeze({ code, message });
+}
+
+/**
+ * Capsule ids arrive from layout params and panel intents, never invented
+ * here: blank or whitespace-bearing values refuse before any admission work.
+ * @param {unknown} value
+ * @returns {WallAdmissionResult<string>}
+ */
+export function validateWallCapsuleId(value) {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    /** @type {WallAdmissionResult<string>} */
+    const result = { ok: false, error: wallError('ERR_INVALID_CAPSULE_ID', 'capsuleId must be a non-empty string') };
+    return Object.freeze(result);
+  }
+  if (value !== value.trim() || /\s/.test(value)) {
+    /** @type {WallAdmissionResult<string>} */
+    const result = { ok: false, error: wallError('ERR_INVALID_CAPSULE_ID', `capsuleId must not contain whitespace: "${value}"`) };
+    return Object.freeze(result);
+  }
+  /** @type {WallAdmissionResult<string>} */
+  const result = { ok: true, value };
+  return Object.freeze(result);
+}
+
+/**
+ * Reads the capsule id from dockview panel props (`{ params: { capsuleId },
+ * api }`). Anything else renders the missing-id alert, never a guessed panel.
+ * @param {unknown} params
+ * @returns {string | null}
+ */
+export function resolveRouterCapsuleId(params) {
+  const id = asNonEmptyString(asRecord(asRecord(params).params).capsuleId);
+  if (id === null || id !== id.trim() || /\s/.test(id)) return null;
+  return id;
+}
+
+/**
+ * Dependency-injected wall controller. Pure except for the kit-owned api
+ * object it is given: fully unit-testable without a DOM.
+ * @param {WallWorkspaceControllerOptions} [options]
+ * @returns {WallWorkspaceController}
+ */
+export function createWallWorkspaceController(options = {}) {
+  const projectionView = options.projectionView ?? null;
+  /** @type {WallDockviewApi | null} */
+  let api = null;
+  /** @type {WallWindowPresentation | null} */
+  let windows = null;
+
+  /**
+   * @template T
+   * @param {T} value
+   * @returns {WallAdmissionResult<T>}
+   */
+  function succeed(value) {
+    /** @type {WallAdmissionResult<T>} */
+    const result = { ok: true, value };
+    return Object.freeze(result);
+  }
+
+  /**
+   * @param {string} code
+   * @param {string} message
+   * @returns {WallAdmissionResult<never>}
+   */
+  function fail(code, message) {
+    /** @type {WallAdmissionResult<never>} */
+    const result = { ok: false, error: wallError(code, message) };
+    return Object.freeze(result);
+  }
+
+  /**
+   * @param {unknown} payload
+   * @returns {WallAdmissionResult<Readonly<{ ready: boolean }>>}
+   */
+  function handleReady(payload) {
+    const record = asRecord(payload);
+    const candidateApi = asRecord(record.api);
+    const candidateWindows = asRecord(record.windows);
+    const apiOk = typeof candidateApi.getPanel === 'function' && typeof candidateApi.addPanel === 'function';
+    const windowsOk = ['state', 'show', 'hide', 'float', 'dock']
+      .every((key) => typeof candidateWindows[key] === 'function');
+    if (!apiOk || !windowsOk) {
+      return fail('ERR_INVALID_READY', 'ready payload must carry a Dockview api and window presentation');
+    }
+    api = /** @type {WallDockviewApi} */ (/** @type {unknown} */ (record.api));
+    windows = /** @type {WallWindowPresentation} */ (/** @type {unknown} */ (record.windows));
+    return succeed(Object.freeze({ ready: true }));
+  }
+
+  function dispose() {
+    api = null;
+    windows = null;
+  }
+
+  /**
+   * Exact identity only: the row must exist, its id must equal its surface id
+   * and the requested id, and its backend lifecycle must still be present.
+   * @param {string} capsuleId
+   * @returns {WallAdmissionResult<WallSurfaceRow>}
+   */
+  function findRow(capsuleId) {
+    if (!projectionView || typeof projectionView.getProjection !== 'function') {
+      return fail('ERR_PROJECTION_UNAVAILABLE', 'projection view is unavailable');
+    }
+    const projection = projectionView.getProjection();
+    const rows = projection && Array.isArray(projection.rows) ? projection.rows : null;
+    if (!rows) {
+      return fail('ERR_PROJECTION_UNAVAILABLE', 'projection carries no surface rows');
+    }
+    const row = rows.find((candidate) => candidate?.surfaceId === capsuleId);
+    if (!row) {
+      return fail('ERR_UNKNOWN_SURFACE', `unknown surface "${capsuleId}"`);
+    }
+    if (row.id !== capsuleId) {
+      return fail('ERR_ROW_IDENTITY_MISMATCH', `row identity mismatch for "${capsuleId}"`);
+    }
+    if (row.backendLifecycle === 'lost' || row.backendLifecycle === 'destroyed') {
+      return fail('ERR_SURFACE_GONE', `surface "${capsuleId}" is ${row.backendLifecycle}`);
+    }
+    if (row.backendLifecycle !== 'active' && row.backendLifecycle !== 'standby' && row.backendLifecycle !== 'ceded') {
+      return fail('ERR_UNKNOWN_LIFECYCLE', `unknown lifecycle for "${capsuleId}"`);
+    }
+    return succeed(row);
+  }
+
+  /**
+   * @param {WallSurfaceRow} row
+   * @returns {string}
+   */
+  function panelTitle(row) {
+    return typeof row.title === 'string' && row.title.trim().length > 0 ? row.title : row.surfaceId;
+  }
+
+  /**
+   * Reveals the single permanent panel for a capsule id, creating its
+   * presentation when absent. Backend state is only read, never written.
+   * @param {unknown} capsuleId
+   * @param {unknown} placement
+   * @returns {WallAdmissionResult<Readonly<{ panelId: string }>>}
+   */
+  function revealSurface(capsuleId, placement) {
+    const idCheck = validateWallCapsuleId(capsuleId);
+    if (!idCheck.ok) return idCheck;
+    if (typeof placement !== 'string' || !WALL_PLACEMENTS.includes(placement)) {
+      return fail('ERR_INVALID_PLACEMENT', `unknown placement "${String(placement)}"`);
+    }
+    if (api === null || windows === null) {
+      return fail('ERR_NOT_READY', 'wall is not ready: cold restore has not settled');
+    }
+    const rowCheck = findRow(idCheck.value);
+    if (!rowCheck.ok) return rowCheck;
+    const panelId = `${WALL_PANEL_ID_PREFIX}${idCheck.value}`;
+    try {
+      const existing = api.getPanel(panelId);
+      if (existing) {
+        if (placement === 'floating') windows.float(panelId);
+        else if (windows.state(panelId).hidden) windows.show(panelId);
+        else existing.api.setActive();
+        return succeed(Object.freeze({ panelId }));
+      }
+      /** @type {WallAddPanelOptions} */
+      const options = {
+        id: panelId,
+        component: 'CapsulePanel',
+        title: panelTitle(rowCheck.value),
+        params: { capsuleId: idCheck.value },
+        renderer: 'always',
+        minimumWidth: WALL_PANEL_MIN_WIDTH,
+        minimumHeight: WALL_PANEL_MIN_HEIGHT,
+      };
+      if (placement === 'split') options.position = { direction: 'right' };
+      const panel = api.addPanel(options);
+      if (placement === 'floating') windows.float(panelId);
+      else panel.api.setActive();
+      return succeed(Object.freeze({ panelId }));
+    } catch (error) {
+      return fail('ERR_REVEAL_FAILED', error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  /**
+   * Applies a local presentation intent. Unknown verbs, unknown panels and
+   * missing readiness refuse; nothing here creates or ends a surface.
+   * @param {unknown} intent
+   * @returns {WallAdmissionResult<Readonly<{ panelId: string, type: string }>>}
+   */
+  function applyPresentationIntent(intent) {
+    if (!isPlainObject(intent) || typeof intent.type !== 'string' || !WALL_PRESENTATION_VERBS.includes(intent.type)) {
+      return fail('ERR_UNKNOWN_PRESENTATION', 'unknown local presentation intent');
+    }
+    const idCheck = validateWallCapsuleId(intent.capsuleId);
+    if (!idCheck.ok) return idCheck;
+    if (api === null || windows === null) {
+      return fail('ERR_NOT_READY', 'wall is not ready: cold restore has not settled');
+    }
+    const panelId = `${WALL_PANEL_ID_PREFIX}${idCheck.value}`;
+    try {
+      const panel = api.getPanel(panelId);
+      if (!panel) {
+        return fail('ERR_UNKNOWN_PANEL', `unknown panel "${panelId}"`);
+      }
+      if (intent.type === 'close') panel.api.close();
+      else if (intent.type === 'hide') windows.hide(panelId);
+      else if (intent.type === 'show') windows.show(panelId);
+      else if (intent.type === 'float') windows.float(panelId);
+      else windows.dock(panelId);
+      return succeed(Object.freeze({ panelId, type: intent.type }));
+    } catch (error) {
+      return fail('ERR_PRESENTATION_FAILED', error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  /**
+   * @param {WallEmitFn} emit
+   * @returns {WallPanelCallbacks}
+   */
+  function createPanelCallbacks(emit) {
+    return Object.freeze({
+      onSubmitIntent: (/** @type {unknown} */ body) => { emit('submit-intent', body); },
+      onActivateSurface: (/** @type {unknown} */ payload) => { emit('activate-surface', payload); },
+      onPresentationIntent: (/** @type {unknown} */ intent) => applyPresentationIntent(intent),
+    });
+  }
+
+  return Object.freeze({ handleReady, dispose, revealSurface, applyPresentationIntent, createPanelCallbacks });
+}
+
+/**
+ * Fallback for retired panel types. The kit routes unknown component names
+ * here with their ids and params preserved; the message stays honest about
+ * the retired type instead of rendering a live-looking tile.
+ */
+export const WallMissingPanel = defineComponent({
+  name: 'WallMissingPanel',
+  props: {
+    params: { type: Object, required: true },
+  },
+  setup(routerProps) {
+    return () => {
+      const outer = asRecord(routerProps.params);
+      const inner = asRecord(outer.params);
+      const panelId = asNonEmptyString(asRecord(outer.api).id)
+        ?? asNonEmptyString(inner.capsuleId)
+        ?? 'unknown panel';
+      const reason = asNonEmptyString(inner.unavailableReason)
+        ?? 'Panel type retired. Reset the workspace layout.';
+      return h('div', { role: 'alert', class: 'wall-missing-panel', 'data-panel-id': panelId }, [
+        h('p', { class: 'wall-missing-panel-title' }, `Panel unavailable: ${panelId}.`),
+        h('p', { class: 'wall-missing-panel-reason' }, reason),
+      ]);
+    };
+  },
+});
+</script>
+<script setup>
+import { markRaw, onBeforeUnmount, useSlots } from 'vue';
+import DockWorkspace from 'capsule-ui-kit/DockWorkspace';
+import SurfacePanel from './SurfacePanel.vue';
+
+const props = defineProps({
+  scope: {
+    type: /** @type {import('vue').PropType<KitLayoutScope>} */ (Object),
+    required: true,
+  },
+  storage: {
+    type: /** @type {import('vue').PropType<KitLayoutStorage>} */ (Object),
+    required: true,
+  },
+  ownerWindowId: { type: String, required: true },
+  projectionView: {
+    type: /** @type {import('vue').PropType<WallSharedProjectionView>} */ (Object),
+    required: true,
+  },
+  intentBuilders: {
+    type: /** @type {import('vue').PropType<WallSharedIntentBuilders>} */ (Object),
+    required: true,
+  },
+  controlRegistry: { type: Object, required: true },
+  scheduler: { type: Object, required: true },
+  tileScheduler: { type: Object, required: true },
+  colorScheme: {
+    type: String,
+    default: 'light',
+    validator: (/** @type {unknown} */ value) => value === 'light' || value === 'dark',
+  },
+  density: {
+    type: String,
+    default: 'regular',
+    validator: (/** @type {unknown} */ value) => value === 'compact' || value === 'regular' || value === 'comfortable',
+  },
+  defaultProfile: {
+    type: /** @type {import('vue').PropType<KitLayoutProfile | null>} */ (Object),
+    default: null,
+  },
+});
+
+const emit = defineEmits([
+  'ready',
+  'wall-settled',
+  'layout-saved',
+  'quarantine-detected',
+  'popout-blocked',
+  'active-panel-change',
+  'submit-intent',
+  'activate-surface',
+]);
+
+const controller = createWallWorkspaceController({ projectionView: props.projectionView });
+const callbacks = controller.createPanelCallbacks(emit);
+
+const slots = useSlots();
+const surfaceSlot = slots.surface ?? null;
+
+const viewportWidth = WALL_INITIAL_VIEWPORT_WIDTH;
+const viewportHeight = WALL_INITIAL_VIEWPORT_HEIGHT;
+
+/**
+ * @param {unknown} payload
+ */
+function onReady(payload) {
+  controller.handleReady(payload);
+  emit('ready', payload);
+}
+
+/**
+ * @param {unknown} payload
+ */
+function onWallSettled(payload) {
+  emit('wall-settled', payload);
+}
+
+/**
+ * @param {unknown} payload
+ */
+function onLayoutSaved(payload) {
+  emit('layout-saved', payload);
+}
+
+/**
+ * @param {unknown} payload
+ */
+function onQuarantineDetected(payload) {
+  emit('quarantine-detected', payload);
+}
+
+/**
+ * @param {unknown} payload
+ */
+function onPopoutBlocked(payload) {
+  emit('popout-blocked', payload);
+}
+
+/**
+ * @param {unknown} payload
+ */
+function onActivePanelChange(payload) {
+  emit('active-panel-change', payload);
+}
+
+const WallSurfaceRouter = markRaw(defineComponent({
+  name: 'WallSurfaceRouter',
+  props: {
+    params: { type: Object, required: true },
+  },
+  setup(routerProps) {
+    return () => {
+      const capsuleId = resolveRouterCapsuleId(routerProps.params);
+      if (capsuleId === null) {
+        return h('p', { role: 'alert', class: 'wall-missing-id' }, 'Missing capsule id. Reset the workspace layout.');
+      }
+      const api = asRecord(asRecord(routerProps.params).api);
+      const instance = asNonEmptyString(api.id) ?? capsuleId;
+      return h(SurfacePanel, {
+        capsuleId,
+        projectionView: props.projectionView,
+        intentBuilders: props.intentBuilders,
+        controlRegistry: props.controlRegistry,
+        scheduler: props.scheduler,
+        tileScheduler: props.tileScheduler,
+        presentationInstance: instance,
+        onSubmitIntent: callbacks.onSubmitIntent,
+        onPresentationIntent: callbacks.onPresentationIntent,
+        onActivateSurface: callbacks.onActivateSurface,
+      }, {
+        surface: (/** @type {unknown} */ slotProps) => (surfaceSlot ? surfaceSlot(slotProps) : []),
+      });
+    };
+  },
+}));
+
+const panelComponents = markRaw({
+  CapsulePanel: WallSurfaceRouter,
+  MissingPanel: WallMissingPanel,
+});
+
+/**
+ * @param {unknown} capsuleId
+ * @param {unknown} placement
+ */
+function revealSurface(capsuleId, placement) {
+  return controller.revealSurface(capsuleId, placement);
+}
+
+defineExpose({ revealSurface });
+
+onBeforeUnmount(() => {
+  controller.dispose();
+});
+</script>
+<template>
+  <div class="wall-workspace" data-testid="wall-workspace">
+    <DockWorkspace
+      :scope="props.scope"
+      :storage="props.storage"
+      :default-profile="props.defaultProfile ?? undefined"
+      :owner-window-id="props.ownerWindowId"
+      :panel-components="panelComponents"
+      :color-scheme="props.colorScheme"
+      :density="props.density"
+      workspace-title="MetaViewer"
+      :initial-viewport-width="viewportWidth"
+      :initial-viewport-height="viewportHeight"
+      @ready="onReady"
+      @wall-settled="onWallSettled"
+      @layout-saved="onLayoutSaved"
+      @quarantine-detected="onQuarantineDetected"
+      @popout-blocked="onPopoutBlocked"
+      @active-panel-change="onActivePanelChange"
+    />
+  </div>
+</template>
+<style>
+.wall-workspace {
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+.wall-missing-panel,
+.wall-missing-id {
+  font: inherit;
+  padding: 12px 16px;
+}
+.wall-missing-panel-title {
+  font-weight: 600;
+  margin: 0 0 4px;
+}
+.wall-missing-panel-reason {
+  margin: 0;
+}
+</style>

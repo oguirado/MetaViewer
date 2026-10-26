@@ -1,154 +1,63 @@
 <script setup>
-import { defineComponent, h, markRaw, ref } from 'vue';
-import DockWorkspace from 'capsule-ui-kit/DockWorkspace';
-import CapsulePanel from 'capsule-ui-kit/CapsulePanel';
-
+/** [TARGET, unit decision] Missing live projection/gateway handoff: mount the
+ * real wall against an unavailable view. No invented surfaces or generations.
+ * Live capabilities remain unavailable until the conductor supplies the feed.
+ */
+import { markRaw, onBeforeUnmount, ref } from 'vue';
+import WallWorkspace from './wall/WallWorkspace.vue';
+import SurfaceCanvas from './surfaces/SurfaceCanvas.vue';
+import TerminalView from './terminal/TerminalView.vue';
+import { createTileScheduler } from './surfaces/tileScheduler.js';
 /** @typedef {import('capsule-ui-kit/layout').LayoutProfileEnvelope} LayoutProfile */
 /** @typedef {import('capsule-ui-kit/layout').LayoutProfileScope} LayoutScope */
-/** @typedef {{ readRaw: () => Promise<string|null>, writeAtomic: (json: string) => Promise<void> }} LayoutStorage */
-
+/** @typedef {Pick<InstanceType<typeof WallWorkspace>['$props'], 'projectionView'|'intentBuilders'|'controlRegistry'|'scheduler'|'tileScheduler'>} WallRuntime */
+/** @typedef {{readRaw:()=>Promise<string|null>,writeAtomic:(json:string)=>Promise<void>}} LayoutStorage */
 const props = defineProps({
-  layout: {
-    type: /** @type {import('vue').PropType<LayoutProfile>} */ (Object),
-    required: true,
-  },
-  storage: {
-    type: /** @type {import('vue').PropType<LayoutStorage>} */ (Object),
-    required: true,
-  },
-  scope: {
-    type: /** @type {import('vue').PropType<LayoutScope>} */ (Object),
-    required: true,
-  },
+  runtime: { type: /** @type {import('vue').PropType<WallRuntime|null>} */ (Object), default: null },
+  terminal: { type: /** @type {import('vue').PropType<{session:string,port:MessagePort}|null>} */ (Object), default: null },
+  layout: { type: /** @type {import('vue').PropType<LayoutProfile>} */ (Object), required: true },
+  scope: { type: /** @type {import('vue').PropType<LayoutScope>} */ (Object), required: true },
+  storage: { type: /** @type {import('vue').PropType<LayoutStorage>} */ (Object), required: true },
 });
-
 const settled = ref(false);
-
-/**
- * W0 closed capsule allowlist. Empty until a later unit owns capsule
- * components; every id renders honest unavailable content, never a demo.
- * @type {Readonly<Record<string, import('vue').Component>>}
- */
-const capsuleTypes = Object.freeze({});
-
-/**
- * @param {string} id
- * @returns {import('vue').Component}
- */
-function resolveCapsuleType(id) {
-  if (!Object.hasOwn(capsuleTypes, id)) throw new Error('Unknown capsule type');
-  return /** @type {import('vue').Component} */ (
-    /** @type {Record<string, unknown>} */ (capsuleTypes)[id]
-  );
-}
-
-/**
- * @param {unknown} value
- * @returns {Record<string, unknown>}
- */
-function asRecord(value) {
-  if (typeof value !== 'object' || value === null) return {};
-  return /** @type {Record<string, unknown>} */ (value);
-}
-
-/**
- * @param {unknown} value
- * @returns {string|null}
- */
-function asNonEmptyString(value) {
-  return typeof value === 'string' && value.length > 0 ? value : null;
-}
-
-const CapsuleRouter = markRaw(
-  defineComponent({
-    name: 'CapsuleRouter',
-    props: {
-      params: { type: Object, required: true },
-    },
-    setup(routerProps) {
-      return () => {
-        const outer = asRecord(routerProps.params);
-        const id = asNonEmptyString(asRecord(outer.params).capsuleId);
-        if (id === null) {
-          return h('p', { role: 'alert' }, 'Missing capsule id. Reset the workspace layout.');
-        }
-        const api = asRecord(outer.api);
-        const title = asNonEmptyString(api.title) ?? id;
-        const instance = asNonEmptyString(api.id) ?? id;
-        const closeFn = api.close;
-        const onClosePanel =
-          typeof closeFn === 'function'
-            ? () => {
-                /** @type {() => unknown} */ (closeFn)();
-              }
-            : undefined;
-        // Only the allowlist lookup runs inside try; render faults stay visible.
-        /** @type {import('vue').Component|null} */
-        let component = null;
-        try {
-          component = resolveCapsuleType(id);
-        } catch {
-          component = null;
-        }
-        if (component === null) {
-          return h(
-            CapsulePanel,
-            {
-              capsuleId: id,
-              placeholderTitle: title,
-              presentationInstance: instance,
-              onClosePanel,
-            },
-            {
-              surface: () =>
-                h('p', { role: 'alert' }, 'Unknown capsule type. Reset the workspace layout.'),
-            },
-          );
-        }
-        const surface = component;
-        return h(
-          CapsulePanel,
-          {
-            capsuleId: id,
-            placeholderTitle: title,
-            presentationInstance: instance,
-            onClosePanel,
-          },
-          { surface: () => h(surface) },
-        );
-      };
-    },
-  }),
-);
-
-const panelComponents = markRaw({ CapsulePanel: CapsuleRouter });
-
-function onWallSettled() {
-  settled.value = true;
-}
+const unavailable = Object.freeze({ status: 'unavailable', stale: true, envelope: null,
+  error: Object.freeze({ code: 'PROJECTION_UNAVAILABLE', message: 'Authoritative surface feed unavailable' }) });
+const projectionView = markRaw({
+  getProjection: () => null,
+  getSnapshot: () => unavailable,
+  subscribe: () => () => {},
+});
+function refuseAuthority() { throw new Error('Authoritative intent gateway unavailable'); }
+const intentBuilders = markRaw({ visibility: refuseAuthority, control: refuseAuthority, presentation: refuseAuthority });
+const controlRegistry = markRaw({});
+const scheduler = markRaw({});
+const tileScheduler = markRaw(createTileScheduler({ budget: Object.freeze({
+  maxDrawsPerTick: 4, maxUploadBytesPerTick: 16777216, maxPresentMsPerTick: 8,
+  maxWarmResourcesPerSurface: 1, maxDrainSteps: 4,
+}) }));
+onBeforeUnmount(() => tileScheduler.destroy());
 </script>
 <template>
   <div class="metaviewer" :data-wall-settled="String(settled)">
     <main aria-label="MetaViewer capsule wall">
-      <DockWorkspace
-        :scope="props.scope"
-        :default-profile="props.layout"
-        :storage="props.storage"
-        :panel-components="panelComponents"
-        color-scheme="light"
-        density="regular"
-        workspace-title="MetaViewer"
-        @wall-settled="onWallSettled"
-      />
+      <WallWorkspace :scope="props.scope" :default-profile="props.layout" :storage="props.storage"
+        owner-window-id="main-wall" :projection-view="props.runtime?.projectionView ?? projectionView" :intent-builders="props.runtime?.intentBuilders ?? intentBuilders"
+        :control-registry="props.runtime?.controlRegistry ?? controlRegistry" :scheduler="props.runtime?.scheduler ?? scheduler" :tile-scheduler="props.runtime?.tileScheduler ?? tileScheduler"
+        @wall-settled="settled = true">
+        <template #surface="{ surface, capsuleId }">
+          <SurfaceCanvas v-if="surface" :surface-id="capsuleId" :generation="surface.generation" :epoch="props.runtime?.projectionView.getSnapshot()?.envelope?.epoch ?? ''" state="connecting" />
+        </template>
+      </WallWorkspace>
     </main>
-    <footer role="status">{{ settled ? 'Wall ready.' : 'Opening wall…' }}</footer>
+    <details><summary>Session terminal</summary><TerminalView :session="props.terminal?.session ?? ''" :port="props.terminal?.port ?? null" /></details>
+    <footer role="status">{{ settled ? (props.runtime ? 'Wall ready.' : 'Wall ready. Authoritative surface feed unavailable.') : 'Opening wall…' }}</footer>
   </div>
 </template>
 <style>
 .metaviewer {
   height: 100dvh;
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto auto;
 }
 .metaviewer main {
   min-height: 0;

@@ -34,6 +34,7 @@ try {
   for (let attempt = 0; attempt < 100; attempt++) {
     ready = await win.webContents.executeJavaScript(`Boolean(
       document.querySelector('.metaviewer[data-wall-settled="true"]') &&
+      document.querySelector('.mv-terminal') &&
       typeof window.metaviewer?.load === 'function' &&
       typeof window.require === 'undefined'
     )`);
