@@ -232,6 +232,8 @@ func (p *Publisher) Publish(id string, b capsule.Binding, f capsule.NativeFrame)
 // [TARGET, unit decision] Release is called by the owner only after capture
 // subscriptions drain and native removal is verified. Failure retains capacity;
 // retries tolerate already unlinked owned leases. Source PNGs are never removed.
+// [TARGET, unit decision] Record each successful unlink immediately so a partial
+// release followed by Close never attempts to reclaim the same lease twice.
 func (p *Publisher) Release(id string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -239,10 +241,13 @@ func (p *Publisher) Release(id string) error {
 	if p.closed || !ok {
 		return frameError()
 	}
-	for _, r := range s.refs {
+	for len(s.refs) > 0 {
+		r := s.refs[0]
 		if e := syscall.Unlinkat(int(p.output.Fd()), filepath.Base(r.RAMWSPath)); e != nil && !errors.Is(e, syscall.ENOENT) {
 			return e
 		}
+		s.refs = s.refs[1:]
+		p.surfaces[id] = s
 	}
 	delete(p.surfaces, id)
 	return nil
