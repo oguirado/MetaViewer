@@ -45,7 +45,7 @@ export async function startDisplay(electron) {
   if (!app.requestSingleInstanceLock()) throw new Error('SINGLE_INSTANCE: profile already in use');
   await app.whenReady();
   const root = app.getAppPath();
-  serveBundled(protocol, join(root, 'dist'), { styleNonce: true });
+  serveBundled(protocol, join(root, 'dist/renderer'), { styleNonce: true });
   const win = new BrowserWindow({ ...createWindowOptions({ width: 1280, height: 720,
     preloadPath: join(root, 'dist/preload/preload.cjs') }), title: 'MetaViewer', autoHideMenuBar: true });
   win.removeMenu();

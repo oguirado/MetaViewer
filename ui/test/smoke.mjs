@@ -8,13 +8,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 if (!process.env.ELECTRON_OVERRIDE_DIST_PATH) throw new Error('Set ELECTRON_OVERRIDE_DIST_PATH to a local Electron dist');
-await access(new URL('../dist/index.html', import.meta.url));
+await access(new URL('../dist/renderer/index.html', import.meta.url));
 await access(new URL('../dist/preload/preload.cjs', import.meta.url));
 await access(join(process.env.ELECTRON_OVERRIDE_DIST_PATH, 'electron'));
 const electron = createRequire(import.meta.url)('electron');
 const profile = await mkdtemp(join(tmpdir(), 'metaviewer-smoke-'));
 try {
-  const env = { ...process.env };
+  const env = { ...process.env, XDG_RUNTIME_DIR: profile };
   delete env.ELECTRON_RUN_AS_NODE;
   const child = spawn('xvfb-run', ['-a', electron,
     fileURLToPath(new URL('../electron/smoke.js', import.meta.url)), `--user-data-dir=${profile}`],

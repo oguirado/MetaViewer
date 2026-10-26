@@ -81,7 +81,7 @@ export async function packageShell(env = process.env) {
     await syncKit({ kitRepo: env.CAPSULE_UI_KIT_REPO,
       dest: join(builder, '.kit/capsule-ui-kit'), lockPath: join(ui, 'kit.lock.json') });
     await execute(process.execPath, [join(ui, 'node_modules/vite/bin/vite.js'), 'build',
-      '--outDir', join(app, 'dist')], { cwd: builder, env, maxBuffer: 1024 * 1024 });
+      '--outDir', join(app, 'dist/renderer')], { cwd: builder, env, maxBuffer: 1024 * 1024 });
     await fs.cp(join(ui, 'electron'), join(app, 'electron'), { recursive: true });
     const pkg = JSON.parse(await fs.readFile(join(ui, 'package.json'), 'utf8'));
     await fs.writeFile(join(app, 'package.json'), JSON.stringify({ name: 'metaviewer',

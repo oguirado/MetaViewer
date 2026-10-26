@@ -1,7 +1,8 @@
 // The kit must first pass tools/sync_kit.mjs against kit.lock.json.
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const kit = fileURLToPath(new URL('./.kit/capsule-ui-kit/', import.meta.url));
@@ -14,17 +15,22 @@ const alias = Object.entries(pkg.exports).map(([key, value]) => ({
 
 export default defineConfig({
   base: './',
+  build: { outDir: 'dist/renderer' },
   plugins: [vue(), {
     name: 'sandbox-preload',
-    generateBundle() {
+    writeBundle(output) {
       // The preload is deliberately a single import-free JS source. Strip only
       // its declaration exports to retain the guarded CommonJS native entry.
       const source = readFileSync(new URL('./electron/preload.js', import.meta.url), 'utf8');
       if (/^import\s|^export\s+(?!const |class |function )/m.test(source)) {
         throw new Error('Preload bundling contract changed');
       }
-      this.emitFile({ type: 'asset', fileName: 'preload/preload.cjs',
-        source: source.replace(/^export (?=const |class |function )/gm, '') });
+      // Resolve beside the renderer output, including the packager's --outDir.
+      if (!output.dir) throw new Error('Renderer output directory is required');
+      const preloadDir = resolve(output.dir, '../preload');
+      mkdirSync(preloadDir, { recursive: true });
+      writeFileSync(resolve(preloadDir, 'preload.cjs'),
+        source.replace(/^export (?=const |class |function )/gm, ''));
     },
   }],
   resolve: { alias, dedupe: ['vue', 'dockview-core', 'dockview-vue'] },

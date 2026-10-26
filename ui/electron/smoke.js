@@ -3,7 +3,7 @@
 import { app, BrowserWindow, ipcMain, protocol, session } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { createWindowOptions, attachWindowPolicy, registerPrivilegedScheme,
-  serveBundled, observeSender, CHANNELS, ELECTRON_PIN, PRIVILEGED_ORIGIN } from './main.js';
+  resolveMainPaths, serveBundled, observeSender, CHANNELS, ELECTRON_PIN, PRIVILEGED_ORIGIN } from './main.js';
 
 const deadline = setTimeout(() => app.exit(1), 15000);
 registerPrivilegedScheme(protocol);
@@ -14,9 +14,17 @@ async function runSmoke() {
 try {
   if (process.versions.electron !== ELECTRON_PIN) throw new Error('Electron version mismatch');
   await app.whenReady();
-  serveBundled(protocol, fileURLToPath(new URL('../dist/', import.meta.url)), { styleNonce: true });
+  if (!process.getuid) throw new Error('Smoke requires a host UID');
+  const shellRoot = fileURLToPath(new URL('../', import.meta.url));
+  // Direct-file launches use electron/ as getAppPath(). Adapt that launch-only
+  // identity to the shell root; keep Electron's real userData path provider.
+  const smokeApp = { getAppPath: () => shellRoot, getPath: app.getPath.bind(app) };
+  const paths = resolveMainPaths(smokeApp, shellRoot, {
+    xdgRuntimeDir: process.env.XDG_RUNTIME_DIR, uid: process.getuid(),
+  });
+  serveBundled(protocol, paths.rendererRoot, { styleNonce: true });
   const win = new BrowserWindow(createWindowOptions({ width: 1280, height: 720,
-    preloadPath: fileURLToPath(new URL('../dist/preload/preload.cjs', import.meta.url)) }));
+    preloadPath: paths.preloadPath }));
   attachWindowPolicy(win, session.defaultSession);
   win.webContents.on('console-message', (event) => console.error('renderer:', event.message));
   win.webContents.on('preload-error', (_event, _path, error) => console.error('preload:', error));
