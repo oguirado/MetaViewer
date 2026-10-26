@@ -4,7 +4,7 @@
 set -u
 
 usage() {
-    printf '%s\n' 'Usage: tools/gate.sh [--leg skeleton|laws|contracts|unit|manifests|js | --self-test]' >&2
+    printf '%s\n' 'Usage: tools/gate.sh [--leg skeleton|laws|contracts|unit|manifests|js|rust|ui | --self-test]' >&2
     exit 2
 }
 selector=skeleton
@@ -14,7 +14,7 @@ case $# in
     2) [[ $1 == --leg ]] || usage; selector=$2 ;;
     *) usage ;;
 esac
-case $selector in skeleton|laws|contracts|unit|manifests|js|self-test) ;; *) usage ;; esac
+case $selector in skeleton|laws|contracts|unit|manifests|js|rust|ui|self-test) ;; *) usage ;; esac
 [[ $selector != self-test || ${1:-} == --self-test ]] || usage
 root=$(cd -- "${BASH_SOURCE[0]%/*}/.." && pwd -P) || exit 2
 if ! command -v python3 >/dev/null; then
@@ -40,7 +40,8 @@ import unittest
 
 ROOT = Path(sys.argv[1])
 SELECTOR = sys.argv[2]
-LEAVES = ('manifests', 'laws', 'contracts', 'unit')
+BASE_LEAVES = ('manifests', 'laws', 'contracts', 'unit')
+LEAVES = (*BASE_LEAVES, 'js', 'rust', 'ui')
 FILES = ('Cargo.toml', 'core/Cargo.toml', 'daemon-adapter/go.mod',
          'agents/pyproject.toml', 'ui/package.json', '.gitignore')
 ORIGINAL_IGNORE = ('__pycache__/', '*.py[cod]', '.venv/', 'venv/',
@@ -106,7 +107,7 @@ class GateTests(unittest.TestCase):
     def call(self, *args, expected=0, env=None):
         result = subprocess.run(
             ['bash', str(self.fixture / 'tools/gate.sh'), *args],
-            cwd=self.temp.name, env=env, text=True, capture_output=True, timeout=30)
+            cwd=self.temp.name, env=env, text=True, capture_output=True, timeout=120)
         self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
         self.assertNotIn('SKIP', result.stdout)
         return result.stdout + result.stderr
@@ -202,7 +203,7 @@ class GateTests(unittest.TestCase):
                      ('--leg', 'self-test')):
             self.assertIn('Usage:', self.call(*args, expected=2))
         self.assertFalse((self.fixture / 'unit.calls').exists())
-        for leg in LEAVES:
+        for leg in BASE_LEAVES:
             output = self.call('--leg', leg)
             self.assertEqual(output.count('PASS ' + leg + '\n'), 1)
             self.assertEqual(output.count('PASS aggregate\n'), 1)
@@ -400,8 +401,103 @@ class GateTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn('kit absent', result.stderr)
 
+    def prepare_build_fixture(self):
+        self.write('Cargo.toml', '[workspace]\nmembers = ["core"]\nresolver = "2"\n')
+        self.write('core/Cargo.toml', '[package]\nname = "gate-fixture"\n'
+                   'version = "0.1.0"\nedition = "2021"\n')
+        (self.fixture / 'Cargo.lock').unlink()
+        self.write('core/src/lib.rs', 'pub fn value() -> u32 {\n    1\n}\n')
+        package = {'name': 'gate-fixture', 'version': '0.1.0', 'private': True,
+                   'devDependencies': {'typescript': '5.9.3', 'vue-tsc': '3.3.12',
+                                       'vite': '8.3.4'}}
+        self.write('ui/package.json', json.dumps(package))
+        # Extract the actual frozen transitive graph without resolving or fetching.
+        lock = json.loads((ROOT / 'ui/package-lock.json').read_text())
+        lock['name'] = package['name']
+        lock['packages'][''] = package
+        self.write('ui/package-lock.json', json.dumps(lock))
+        self.write('ui/test/fixture.test.js',
+                   "const {test} = require('node:test'); test('witness', () => {});\n")
+        self.write('ui/tsconfig.json', '{"compilerOptions":{"strict":true},"files":["value.ts"]}')
+        self.write('ui/value.ts', 'const value: number = 1;\n')
+        self.write('ui/index.html', '<html><body>fixture</body></html>')
+        environment = dict(os.environ)
+        environment.pop('ELECTRON_OVERRIDE_DIST_PATH', None)
+        return environment
+
+    def test_rust_leg_negative_controls(self):
+        environment = self.prepare_build_fixture()
+        self.assertIn('PASS rust', self.call('--leg', 'rust', env=environment))
+        for source, diagnostic in (
+            ('pub fn value()->u32{1}\n', 'fmt'),
+            ('pub fn value() -> u32 {\n    return 1;\n}\n', 'clippy'),
+            ('#[test]\nfn fails() {\n    panic!("planted");\n}\n', 'test'),
+        ):
+            with self.subTest(defect=diagnostic):
+                self.write('core/src/lib.rs', source)
+                output = self.call('--leg', 'rust', expected=1, env=environment)
+                self.assertIn('FAIL rust', output)
+                self.assertIn("'" + diagnostic + "'", output)
+
+    def test_ui_leg_negative_controls(self):
+        environment = self.prepare_build_fixture()
+        self.assertIn('PASS ui', self.call('--leg', 'ui', env=environment))
+        self.write('ui/test/fixture.test.js',
+                   "const {test} = require('node:test'); test('planted', () => {throw Error('planted')});\n")
+        output = self.call('--leg', 'ui', expected=1, env=environment)
+        self.assertIn('FAIL ui', output)
+        self.assertIn('planted', output)
+        self.write('ui/test/fixture.test.js',
+                   "const {test} = require('node:test'); test('witness', () => {});\n")
+        self.write('ui/value.ts', 'const value: number = "wrong";\n')
+        output = self.call('--leg', 'ui', expected=1, env=environment)
+        self.assertIn('FAIL ui', output)
+        self.assertIn('vue-tsc', output)
+        self.assertIn('TS2322', output)
+        self.write('ui/value.ts', 'const value: number = 1;\n')
+        self.write('ui/test/fixture.test.js', "require('gate-undeclared-dependency');\n")
+        self.assertIn('MODULE_NOT_FOUND', self.call('--leg', 'ui', expected=1, env=environment))
+
+    def test_build_tools_absent_are_blocked(self):
+        environment = self.prepare_build_fixture()
+        for leg, variable in (('rust', 'RUSTUP'), ('rust', 'CARGO'),
+                              ('ui', 'NODE'), ('ui', 'NPM')):
+            with self.subTest(tool=variable):
+                child = dict(environment, **{variable: str(self.fixture / 'absent')})
+                output = self.call('--leg', leg, expected=2, env=child)
+                self.assertIn('BLOCKED ' + leg, output)
+                self.assertIn('FAIL aggregate', output)
+        rustup = self.fixture / 'absent-toolchain'
+        rustup.write_text('#!/bin/sh\nexit 1\n')
+        rustup.chmod(0o700)
+        self.assertIn('pinned formatter unavailable', self.call(
+            '--leg', 'rust', expected=2, env=dict(environment, RUSTUP=str(rustup))))
+
     def test_aggregation_and_isolation(self):
-        output = self.call()
+        self.write('core/src/lib.rs', '')
+        self.write('ui/tsconfig.json', '{}')
+        self.write('ui/test/fixture.test.js', '')
+        # Real new legs have separate positive/negative controls below. Here the
+        # subprocess contract is stubbed to isolate aggregate ordering/continuation.
+        binary = self.fixture / 'fake-tool'
+        binary.write_text('#!' + sys.executable + '\nimport sys\n'
+                          'if "-p" in sys.argv: print(24)\n')
+        binary.chmod(0o700)
+        environment = dict(os.environ, **{key: str(binary) for key in
+                           ('RUSTUP', 'CARGO', 'NODE', 'NPM', 'VUE_TSC', 'VITE')})
+        environment.pop('ELECTRON_OVERRIDE_DIST_PATH', None)
+        self.write('tools/sync_kit.mjs', '')
+        self.write('ui/kit.lock.json', '{}')
+        environment['MV_KIT_CHECKOUT'] = str(self.fixture)
+        # Manifests still use the genuine cargo for frozen metadata resolution.
+        cargo = self.fixture / 'fixture-cargo'
+        cargo.write_text('#!' + sys.executable + '\nimport os, sys\n'
+                         'if sys.argv[1] == "metadata": os.execv(' +
+                         repr(shutil.which(os.environ.get('CARGO', 'cargo'))) +
+                         ', ["cargo", *sys.argv[1:]])\n')
+        cargo.chmod(0o700)
+        environment['CARGO'] = str(cargo)
+        output = self.call(env=environment)
         self.assertEqual([line for line in output.splitlines() if line in
                           ['PASS ' + leg for leg in LEAVES]], ['PASS ' + leg for leg in LEAVES])
         self.assertEqual((self.fixture / 'unit.calls').read_text(), 'asserted\n')
@@ -412,11 +508,11 @@ class GateTests(unittest.TestCase):
         self.assertNotEqual(scratch[0], scratch[2])
         self.assertTrue(all(not Path(path).exists() for path in scratch))
         self.write('Cargo.toml', 'broken')
-        output = self.call('--leg', 'skeleton', expected=1)
+        output = self.call('--leg', 'skeleton', expected=1, env=environment)
         self.assertIn('FAIL aggregate', output)
         self.assertIn('PASS unit', output)
         (self.fixture / 'tools/check_contracts.py').unlink()
-        self.assertIn('BLOCKED aggregate', self.call(expected=2))
+        self.assertIn('FAIL aggregate', self.call(expected=2, env=environment))
 
     def test_bounded_cleanup(self):
         with private_environment() as (_, environment):
@@ -712,6 +808,86 @@ class private_environment:
         shutil.rmtree(self.path)
 
 
+# [TARGET, unit decision] Offline installs may run native build scripts, but
+# Electron's network downloader is disabled; smoke requires an explicit local dist.
+# All tool overrides are executable paths/names, never shell command fragments.
+def build_leg(leg, root, environment):
+    names = ('rustup', 'cargo') if leg == 'rust' else ('node', 'npm')
+    tools = {}
+    for name in names:
+        tool = shutil.which(environment.get(name.upper(), name), path=environment.get('PATH'))
+        if tool is None:
+            print(f'{leg}: missing tool: {name}', file=sys.stderr)
+            return 2
+        tools[name] = tool
+    child = dict(environment)
+    if leg == 'rust':
+        # rustup run must never attempt to fetch an absent pinned toolchain.
+        probe = subprocess.run([tools['rustup'], 'run', '1.92.0', 'cargo', 'fmt', '--version'],
+                               env=child, capture_output=True, text=True, timeout=30)
+        if probe.returncode:
+            print('rust: pinned formatter unavailable: ' + probe.stderr, file=sys.stderr)
+            return 2
+        probe = subprocess.run([tools['cargo'], 'clippy', '--version'], env=child,
+                               capture_output=True, text=True, timeout=30)
+        if probe.returncode:
+            print('rust: clippy toolchain unavailable: ' + probe.stderr, file=sys.stderr)
+            return 2
+        child['CARGO_TARGET_DIR'] = environment.get('CARGO_TARGET_DIR') or str(
+            Path(environment['TMPDIR']) / 'cargo-target')
+        commands = [
+            [tools['rustup'], 'run', '1.92.0', 'cargo', 'fmt', '--all', '--check'],
+            [tools['cargo'], 'clippy', '--offline', '--all-targets', '--', '-D', 'warnings'],
+            [tools['cargo'], 'test', '--offline'],
+        ]
+        directory = root
+    else:
+        version = subprocess.run([tools['node'], '-p', 'process.versions.node.split(".")[0]'],
+                                 env=child, capture_output=True, text=True, timeout=30)
+        if version.returncode or not version.stdout.strip().isdigit() or int(version.stdout) < 24:
+            print('ui: Node >=24 required', file=sys.stderr)
+            return 2
+        directory = root / 'ui'
+        tests = sorted(directory.glob('test/*.test.js'))
+        if not tests:
+            print('ui: missing node test suite', file=sys.stderr)
+            return 2
+        # npm ci removes an installed Electron binary. Preserve access to the
+        # caller's offline archive cache across the gate's private XDG tree.
+        child.setdefault('electron_config_cache', str(Path(os.environ.get(
+            'XDG_CACHE_HOME', str(Path.home() / '.cache'))) / 'electron'))
+        child.update(ELECTRON_SKIP_BINARY_DOWNLOAD='1', npm_config_offline='true',
+                     npm_config_audit='false', npm_config_fund='false')
+        commands = [[tools['npm'], 'ci', '--offline'],
+                    [tools['node'], '--test', *[str(p.relative_to(directory)) for p in tests]]]
+    for command in commands:
+        rc = bounded(command, directory, child)
+        if rc:
+            print(f'{leg}: child rc={rc}: {command!r}', file=sys.stderr)
+            return 1
+    if leg == 'ui':
+        for name, arguments in (('vue-tsc', ['--noEmit']), ('vite', ['build'])):
+            tool = shutil.which(environment.get(name.upper().replace('-', '_'),
+                                str(directory / 'node_modules/.bin' / name)),
+                                path=environment.get('PATH'))
+            if tool is None:
+                print(f'ui: missing tool: {name}', file=sys.stderr)
+                return 2
+            rc = bounded([tool, *arguments], directory, child)
+            if rc:
+                print(f'ui: child rc={rc}: {name}', file=sys.stderr)
+                return 1
+        if environment.get('ELECTRON_OVERRIDE_DIST_PATH'):
+            if shutil.which('xvfb-run', path=environment.get('PATH')) is None:
+                print('ui: missing tool: xvfb-run', file=sys.stderr)
+                return 2
+            rc = bounded([tools['node'], 'test/smoke.mjs'], directory, child)
+            if rc:
+                print(f'ui: smoke child rc={rc}', file=sys.stderr)
+                return 1
+    return 0
+
+
 def leaf(leg, root, environment):
     targets = {
         'manifests': ('VERSION', *FILES),
@@ -719,6 +895,8 @@ def leaf(leg, root, environment):
         'contracts': ('tools/check_contracts.py', 'contracts'),
         'unit': ('tests',),
         'js': ('tools/sync_kit.mjs', 'ui/kit.lock.json'),
+        'rust': ('Cargo.toml', 'core/Cargo.toml'),
+        'ui': ('ui/package.json', 'ui/package-lock.json', 'ui/tsconfig.json'),
     }
     for name in targets[leg]:
         path = root / name
@@ -726,6 +904,8 @@ def leaf(leg, root, environment):
         if not (path.is_dir() if directory else path.is_file()):
             print(f'missing target: {name}', file=sys.stderr)
             return 2
+    if leg in ('rust', 'ui'):
+        return build_leg(leg, root, environment)
     if leg == 'manifests':
         previous = signal.signal(signal.SIGALRM, manifest_timeout)
         signal.setitimer(signal.ITIMER_REAL, 300)
@@ -813,7 +993,7 @@ def main():
             results.append(rc)
             print(f'{status(rc)} {leg}', flush=True)
         aggregate = next((rc for rc in (124, 2, 1) if rc in results), 0)
-        print(f'{status(aggregate)} aggregate', flush=True)
+        print(f'{"PASS" if aggregate == 0 else "FAIL"} aggregate', flush=True)
         return aggregate
 
 
