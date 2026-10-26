@@ -220,6 +220,9 @@ func lifecycleOracle(t *testing.T, broken bool) error {
 	if err = json.Unmarshal(raw, &created); err != nil {
 		return err
 	}
+	if created.Data.Surface.Geometry != (capsule.Geometry{W: 2, H: 1}) {
+		return errors.New("created geometry differs from actual CLI window")
+	}
 	id := created.Data.Surface.SurfaceID
 	if id == "" || created.Data.Surface.State != "active" {
 		return errors.New("created identity/state missing")
@@ -295,5 +298,85 @@ func TestConfiguredDaemonBrokenDispatchControl(t *testing.T) {
 func TestNewHandlerRequiresConfiguration(t *testing.T) {
 	if _, err := NewHandler(nil, nil); err == nil {
 		t.Fatal("missing dependencies accepted")
+	}
+}
+
+// Reports a larger start window, then a smaller current window at first capture.
+type shrinkingWindowRunner struct{ root string }
+
+func (r shrinkingWindowRunner) Run(_ context.Context, a []string, _ []byte) ([]byte, error) {
+	switch a[1] {
+	case "start":
+		return []byte(`{"container":"srf-id-demo","run_id":"demo-run","windows":[{"id":"w1","x":0,"y":0,"w":3,"h":2}]}`), nil
+	case "frame":
+		sum := sha256.Sum256(make([]byte, 2*1*3))
+		return json.Marshal(capsule.NativeFrame{Path: filepath.Join(r.root, "demo-run/frames/w1/f.png"), Seq: 1, SHA256RGB24: hex.EncodeToString(sum[:]), Width: 2, Height: 1, CaptureMonoNS: 200, Generation: "srf-id-demo", Window: &capsule.Window{ID: "w1", W: 2, H: 1}})
+	}
+	return nil, errors.New("unexpected native operation")
+}
+
+func TestCreatedGeometryMatchesInitialCapture(t *testing.T) {
+	root, err := os.MkdirTemp("/dev/shm", "mv-shrinking-window-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(root)
+	source := filepath.Join(root, "demo-run/frames/w1/f.png")
+	if err = os.MkdirAll(filepath.Dir(source), 0700); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(source, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img := image.NewNRGBA(image.Rect(0, 0, 2, 1))
+	img.SetNRGBA(0, 0, color.NRGBA{A: 255})
+	img.SetNRGBA(1, 0, color.NRGBA{A: 255})
+	encodeErr := png.Encode(file, img)
+	closeErr := file.Close()
+	if encodeErr != nil || closeErr != nil {
+		t.Fatalf("PNG fixture: %v %v", encodeErr, closeErr)
+	}
+	m, err := capsule.NewManager(capsule.Config{BinDir: t.TempDir(), Profiles: map[string]capsule.Profile{"demo": {Kind: "browser", NativeKind: "browser", RAMRoot: root, Display: ":100", Width: 3, Height: 2}}, MaxSurfaces: 1, MaxOutputBytes: 8192, Timeout: time.Second, OriginNS: 100}, shrinkingWindowRunner{root}, func() uint64 { return 200 })
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := frames.NewPublisher(frames.PublishConfig{RAMRoot: root, MaxFrameBytes: 8192, MaxPixels: 6, MaxSurfaces: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := pub.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	handler, err := NewHandler(m, pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := handler(context.Background(), ipc.Envelope{Body: json.RawMessage(`{"schema":"surface_request/v0.2","op":"create","params":{"kind":"browser","profile_id":"demo","geometry":{"w":3,"h":2}}}`)})
+	if err != nil || len(events) != 2 {
+		t.Fatalf("create: %s %v", events, err)
+	}
+	var created struct {
+		Schema, Event string
+		Data          struct{ Surface capsule.Surface }
+	}
+	if err = json.Unmarshal(events[0], &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Schema != "surface_event/v0.2" || created.Event != "created" || created.Data.Surface.Geometry != (capsule.Geometry{W: 2, H: 1}) {
+		t.Fatalf("created does not reflect captured window: %s", events[0])
+	}
+	var ready struct {
+		Data struct {
+			FrameRef frames.Ref `json:"frame_ref"`
+		}
+	}
+	if err = json.Unmarshal(events[1], &ready); err != nil {
+		t.Fatal(err)
+	}
+	if ready.Data.FrameRef.Width != 2 || ready.Data.FrameRef.Height != 1 {
+		t.Fatalf("published geometry: %s", events[1])
 	}
 }

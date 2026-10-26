@@ -54,7 +54,9 @@ func NewHandler(manager *capsule.Manager, publisher *frames.Publisher) (ipc.Hand
 			return nil, errors.New("create must return one surface")
 		}
 		var created struct {
-			Data struct {
+			Schema string `json:"schema"`
+			Event  string `json:"event"`
+			Data   struct {
 				Surface capsule.Surface `json:"surface"`
 			} `json:"data"`
 		}
@@ -72,6 +74,12 @@ func NewHandler(manager *capsule.Manager, publisher *frames.Publisher) (ipc.Hand
 			return nil, &CreationError{SurfaceID: id, Cause: cause, Rollback: rollback}
 		}
 		binding, native, err := manager.Capture(ctx, id)
+		if err != nil {
+			return compensate(err)
+		}
+		// Initial capture may report a smaller window than start readiness.
+		created.Data.Surface = binding.Surface
+		events[0], err = json.Marshal(created)
 		if err != nil {
 			return compensate(err)
 		}

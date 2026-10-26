@@ -7,8 +7,9 @@ package capsule
 // must affirm the bound operation/removal; absent hooks fail closed.
 // Local observation IDs are opaque and never reused within this manager's session.
 // Uncertain native effects quarantine the profile until explicit reconciliation.
-// [TARGET, unit decision] Profile geometry is a per-axis ceiling for native
-// windows and captures; CLI window geometry may be smaller than requested.
+// [TARGET, unit decision] Profile geometry caps identity readiness; surface and
+// input bounds track the actual CLI window, including valid smaller captures.
+// Holdings has no window identity and requires exact configured capture geometry.
 import (
 	"bytes"
 	"context"
@@ -301,6 +302,7 @@ func (m *Manager) create(ctx context.Context, r Request, version string) ([]json
 		b.Container = c.Container
 		b.RunID = c.RunID
 		b.Window = c.Windows[0].ID
+		b.Surface.Geometry = Geometry{W: c.Windows[0].W, H: c.Windows[0].H}
 		b.FramesRoot = filepath.Join(p.RAMRoot, c.RunID, "frames", b.Window)
 	}
 	for _, old := range m.bindings {
@@ -395,8 +397,12 @@ func (m *Manager) Capture(ctx context.Context, id string) (Binding, NativeFrame,
 	if e = cli.ParseLine(out, m.cfg.MaxOutputBytes, &f); e != nil {
 		return b, f, e
 	}
-	if f.Seq == 0 || f.Generation != b.Container || f.Width < 1 || f.Height < 1 || f.Width > b.Surface.Geometry.W || f.Height > b.Surface.Geometry.H || !digest.MatchString(f.SHA256RGB24) || !under(b.FramesRoot, f.Path) || f.CaptureMonoNS < m.cfg.OriginNS || f.CaptureMonoNS < before || f.CaptureMonoNS > after || after < before || (b.Window != "" && (f.Window == nil || f.Window.ID != b.Window || f.Window.W != f.Width || f.Window.H != f.Height)) || (b.Window == "" && f.Window != nil) {
+	if f.Seq == 0 || f.Generation != b.Container || f.Width < 1 || f.Height < 1 || f.Width > b.Surface.Geometry.W || f.Height > b.Surface.Geometry.H || !digest.MatchString(f.SHA256RGB24) || !under(b.FramesRoot, f.Path) || f.CaptureMonoNS < m.cfg.OriginNS || f.CaptureMonoNS < before || f.CaptureMonoNS > after || after < before || (b.Window != "" && (f.Window == nil || f.Window.ID != b.Window || f.Window.W != f.Width || f.Window.H != f.Height)) || (b.Window == "" && (f.Window != nil || f.Width != b.Surface.Geometry.W || f.Height != b.Surface.Geometry.H)) {
 		return b, f, fault("frame", "native frame identity, time or allocation mismatch")
+	}
+	if b.Window != "" {
+		b.Surface.Geometry = Geometry{W: f.Window.W, H: f.Window.H}
+		m.bindings[id] = b
 	}
 	delete(m.refresh, id)
 	f.TSNS = f.CaptureMonoNS - m.cfg.OriginNS
