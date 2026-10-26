@@ -211,4 +211,5 @@ Pre-event lanes produced plans, research and specifications only; product code w
 - Source: the per-lane run record of each Muse Spark 1.3 call (model id, effort, usage counters, USD as reported
   by the client, agent steps, wall time). Start time comes from the session UUIDv7.
 - Cache hit % = cache-read input tokens / (fresh input + cache-read input tokens).
-- Only Meta models are listed in this ledger.
+- Scope: this ledger lists Meta model usage only. Other development tools I used (editor, CI and non-Meta
+  coding assistants) are outside its scope and are not part of the product.

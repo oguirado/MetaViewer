@@ -62,6 +62,29 @@ All pins are finalised in a `deps:` commit at the start of the build period
 [TARGET]. Per L2, a pin changes only in a commit whose message starts with
 `deps:` [CITED: LAWS.md].
 
+## Pre-event planning with Meta models
+
+Before kickoff I used Meta Muse Spark 1.3 for planning only: **55 lanes**
+[MEASURED: META_AI_USAGE.md] on **October 25** (21:12-22:14 CET) and
+**October 26** (16:53 CET, before the 17:00 kickoff). Every lane is listed
+with its start time, purpose and cost in `META_AI_USAGE.md` (phase
+"pre-event").
+
+| Room | Lanes | Output |
+| --- | --- | --- |
+| `mv0ri` | 8 | Research notes on the eight hard engineering areas |
+| `mv0cf` | 6 | Audit of the architecture norm |
+| `mv0rvb` | 6 | Review of the build plan: critical path, risks, demo plan |
+| `mv0pk1`-`mv0pk3` | 24 | Context packs: specifications and source citations for the build-period writers |
+| `mv0api` | 6 | Extracts of the installed APIs of the pre-existing components |
+| `mv0kit` | 2 | Theme token proposal (design data) and the UI kit needs list |
+| `mv0v011` | 3 | The 0.1.1 release documents (`ebc5546`) |
+
+No product code was written before kickoff. Apart from the 0.1.1 documents,
+these outputs stay in my private planning workspace and are not committed
+here; the context packs and research notes were inputs for the writers of
+the build period.
+
 ## Built during the event
 
 The hackathon product is the assembly of MetaViewer [TARGET]: the Rust
