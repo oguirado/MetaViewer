@@ -28,14 +28,21 @@ func Commands() map[string]Command {
 }
 
 // [TARGET, unit decision] Runtime is the explicit authority integration seam.
-// A bare CLI launch retains the configuration refusal; no authority is fabricated.
+// The executable supplies an environment-built client runtime; explicit listener
+// runtimes remain available to embedders.
 type Runtime struct {
-	Config  ipc.Config
-	Policy  ipc.Policy
-	Handler ipc.Handler
+	Config       ipc.Config
+	Policy       ipc.Policy
+	Handler      ipc.Handler
+	Client       bool
+	Registration ipc.Envelope
+	Close        func()
 }
 
 func Run(ctx context.Context, args []string, stderr io.Writer, configured ...Runtime) int {
+	if len(configured) == 1 && configured[0].Close != nil {
+		defer configured[0].Close()
+	}
 	if stderr == nil {
 		return 2
 	}
@@ -56,6 +63,13 @@ func Run(ctx context.Context, args []string, stderr io.Writer, configured ...Run
 		if runtime.Policy == nil || runtime.Handler == nil {
 			fmt.Fprintln(stderr, "adapter: policy and handler required")
 			return 2
+		}
+		if runtime.Client {
+			if err := ipc.Connect(ctx, runtime.Config, runtime.Policy, runtime.Registration, runtime.Handler); err != nil {
+				fmt.Fprintln(stderr, err)
+				return 2
+			}
+			return 0
 		}
 		listener, err := ipc.Listen(ctx, runtime.Config)
 		if err == nil {
