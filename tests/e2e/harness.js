@@ -6,8 +6,8 @@
  * Owns the Electron-under-xvfb spawn, the scratch profile layout, the
  * fake-capsule manifest fixture, the serialized probe, and the strict
  * closed validation of the probe report. The CI e2e job (see
- * .github/workflows/ci.yml, job e2e) executes tests/e2e/run.py; that entry
- * is ABSENT and unowned, and must exec node --test over this directory.
+ * .github/workflows/ci.yml, job e2e) executes tests/e2e/run.py, which
+ * executes node --test over this journey and its live routing mutant.
  *
  * Patterns reused from the Holdings live shell suite (reference only):
  * serialized probe file run by the Electron binary under xvfb with a fixed
@@ -677,8 +677,9 @@ function removeScratch(dir) {
  * are validated as NUL-free strings; the spawn itself is bounded by
  * timeout so nothing outlives the caller.
  * @param {{ electron: string, appDir: string, extraArgs?: ReadonlyArray<string>,
- * timeoutMs?: number }} options Spawn options.
- * @returns {{ status: number|null, stdout: string, stderr: string, timedOut: boolean }}
+ * timeoutMs?: number, diagnosticsPath?: string }} options Spawn options.
+ * @returns {{ status: number|null, signal: string|null, error: string|null,
+ * stdout: string, stderr: string, timedOut: boolean }}
  * Spawn outcome.
  */
 function runUnderXvfb(options) {
@@ -686,6 +687,8 @@ function runUnderXvfb(options) {
   const electron = resolve(needString(options.electron, 'electron'));
   const appDir = resolve(needString(options.appDir, 'appDir'));
   const timeoutMs = options.timeoutMs === undefined ? XVFB_TIMEOUT_MS : needPositiveInt(options.timeoutMs, 'timeoutMs');
+  const diagnosticsPath = options.diagnosticsPath === undefined ? null
+    : resolve(needString(options.diagnosticsPath, 'diagnosticsPath'));
   const extra = options.extraArgs === undefined ? [] : options.extraArgs;
   if (!Array.isArray(extra) || !extra.every((entry) => typeof entry === 'string' && !entry.includes('\0'))) {
     fail('E2E_ARGS', 'extraArgs must be NUL-free strings');
@@ -694,8 +697,14 @@ function runUnderXvfb(options) {
   delete childEnv.ELECTRON_RUN_AS_NODE;
   let result;
   try {
-    result = spawnSync('xvfb-run', [...XVFB_ARGV, electron, appDir, ...extra], {
+    // [TARGET, unit decision] Native startup failures happen before the probe
+    // can write its closed report. Send Chromium logging to the captured pipe.
+    // xvfb-run merges the command's stderr into stdout ("$@" 2>&1).
+    // Keep a separate inherited pipe for native Electron diagnostics.
+    result = spawnSync('xvfb-run', [...XVFB_ARGV, 'sh', '-c', 'exec "$@" 2>&3',
+      'mv-e2e', electron, '--enable-logging=stderr', appDir, ...extra], {
       encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe', 'pipe'],
       timeout: timeoutMs,
       maxBuffer: MAX_CHILD_BYTES,
       env: childEnv,
@@ -706,17 +715,22 @@ function runUnderXvfb(options) {
   }
   const outcome = /** @type {{ status: number|null, stdout: unknown, stderr: unknown,
     error?: { code?: unknown } }} */ (result);
-  if (outcome.error) {
-    const code = String(outcome.error.code || 'unknown');
-    if (code === 'ENOENT') fail('E2E_PREREQ', 'xvfb-run not installed on PATH');
-    fail('E2E_SPAWN', `xvfb-run failed: ${code}`);
-  }
-  return {
+  const diagnostics = {
     status: outcome.status,
+    signal: result.signal || null,
+    error: outcome.error ? String(outcome.error.code || 'unknown') : null,
     stdout: typeof outcome.stdout === 'string' ? outcome.stdout : '',
-    stderr: typeof outcome.stderr === 'string' ? outcome.stderr : '',
-    timedOut: outcome.status === null,
+    stderr: (typeof outcome.stderr === 'string' ? outcome.stderr : '')
+      + (typeof result.output?.[3] === 'string' ? result.output[3] : ''),
+    timedOut: outcome.error?.code === 'ETIMEDOUT',
   };
+  // Separate from the strict renderer report; survives even a native abort.
+  if (diagnosticsPath) writeFileSync(diagnosticsPath, `${JSON.stringify(diagnostics)}\n`, 'utf8');
+  if (diagnostics.error) {
+    const code = diagnostics.error === 'ENOENT' ? 'E2E_PREREQ' : 'E2E_SPAWN';
+    fail(code, `xvfb-run failed: ${JSON.stringify(diagnostics)}`);
+  }
+  return diagnostics;
 }
 
 module.exports = {

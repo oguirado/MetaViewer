@@ -39,7 +39,7 @@ test('explicit installer precedes executable version verification under xvfb', (
   assert.equal(calls[0].command, process.execPath);
   assert.deepEqual(calls[0].args, [path.join(ui, 'node_modules/electron/install.js')]);
   assert.equal(calls[1].command, 'xvfb-run');
-  assert.deepEqual(calls[1].args, ['-a', binary, '--no-sandbox', '--version']);
+  assert.deepEqual(calls[1].args, ['-a', binary, '--version']);
 });
 
 test('negative controls reject drift or missing checksum before any download', (t) => {

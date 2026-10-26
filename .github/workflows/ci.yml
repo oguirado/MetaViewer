@@ -1380,6 +1380,16 @@ jobs:
       - name: Install E2E dependencies
         working-directory: ui
         run: npm ci --no-audit --no-fund
+      # [TARGET, unit decision] Ubuntu's AppArmor restriction blocks the
+      # downloaded Electron binary's user namespace sandbox. Its bundled
+      # chrome-sandbox is not a root-owned setuid installation. Permit user
+      # namespaces on this ephemeral CI runner; Chromium stays sandboxed.
+      - name: Permit Chromium user namespace sandbox on hosted Ubuntu
+        run: |
+          set -euo pipefail
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          test "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)" = 0
+          unshare --user --map-root-user true
       # Electron 44 uses an explicit installer (no npm postinstall hook).
       # Its locked package supplies checksums.json to @electron/get.
       - name: Install and verify pinned Electron binary

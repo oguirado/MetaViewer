@@ -312,6 +312,27 @@ describe('e2e1 wall harness contract', () => {
     rejectsWith(() => runUnderXvfb({ electron: '/bin/true', appDir: '/tmp/x', extraArgs: ['ok', 7] }), ['E2E_ARGS']);
     rejectsWith(() => runUnderXvfb({ electron: '', appDir: '/tmp/x' }), ['E2E_ARGS']);
   });
+
+  it('captures a startup abort before any probe report exists', () => {
+    const scratch = makeScratch('mv0-e2e1');
+    try {
+      const stub = join(scratch, 'electron');
+      writeFileSync(stub, '#!/bin/sh\nprintf "startup stdout\\n"\nprintf "sandbox startup failed\\n" >&2\nexit 37\n');
+      chmodSync(stub, 0o755);
+      const diagnosticsPath = join(scratch, 'electron-process.json');
+      const outcome = runUnderXvfb({ electron: stub, appDir: join(scratch, 'probe.cjs'), diagnosticsPath });
+      assert.equal(outcome.status, 37);
+      assert.equal(outcome.signal, null);
+      assert.equal(outcome.error, null);
+      assert.equal(outcome.timedOut, false);
+      assert.match(outcome.stdout, /startup stdout/);
+      assert.match(outcome.stderr, /sandbox startup failed/);
+      assert.deepEqual(JSON.parse(readFileSync(diagnosticsPath, 'utf8')), outcome);
+      assert.equal(existsSync(join(scratch, 'report.json')), false);
+    } finally {
+      removeScratch(scratch);
+    }
+  });
 });
 
 describe('e2e1 live wall journey', () => {
@@ -334,17 +355,22 @@ describe('e2e1 live wall journey', () => {
         manifestPath,
         reportPath,
       });
-      const outcome = runUnderXvfb({ electron, appDir: join(scratch, 'probe.cjs') });
-      const tail = outcome.stderr.slice(0, 2000);
+      const outcome = runUnderXvfb({ electron, appDir: join(scratch, 'probe.cjs'),
+        diagnosticsPath: join(scratch, 'electron-process.json') });
+      // Preserve startup diagnostics in the CI report before scratch cleanup,
+      // including successful launches and reports rejected by the validator.
+      const diagnostic = JSON.stringify({ ...outcome,
+        stdout: outcome.stdout.slice(-2000), stderr: outcome.stderr.slice(-4000) });
+      console.log(`E2E_PROCESS: ${diagnostic}`);
       let summary;
       try {
         summary = readProbeReport(reportPath);
       } catch (error) {
         if (!(error instanceof E2EError)) throw error;
-        throw new E2EError(error.code, `${error.message} | report: ${(existsSync(reportPath) ? readFileSync(reportPath, "utf8").slice(0, 3000) : "absent")} | stderr: ${tail}`);
+        throw new E2EError(error.code, `${error.message} | report: ${(existsSync(reportPath) ? readFileSync(reportPath, "utf8").slice(0, 3000) : "absent")} | process: ${diagnostic}`);
       }
-      assert.equal(outcome.timedOut, false, `stderr: ${tail}`);
-      assert.equal(outcome.status, 0, `report errors: ${summary.errors.join(' | ').slice(0, 2000)} | stderr: ${tail}`);
+      assert.equal(outcome.timedOut, false, diagnostic);
+      assert.equal(outcome.status, 0, `report errors: ${summary.errors.join(' | ').slice(0, 2000)} | process: ${diagnostic}`);
       assert.equal(summary.visible, 4);
       assert.ok(summary.tiles.every((tile) => tile.frameId !== null), "every live tile needs a frame");
     } finally {
