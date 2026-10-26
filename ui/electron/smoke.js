@@ -2,6 +2,7 @@
 // Launch only through test/smoke.mjs, after a successful renderer build.
 import { app, BrowserWindow, ipcMain, protocol, session } from 'electron';
 import { fileURLToPath } from 'node:url';
+import { installAuthorityWire } from './authorityWire.js';
 import { createWindowOptions, attachWindowPolicy, registerPrivilegedScheme,
   resolveMainPaths, serveBundled, observeSender, CHANNELS, ELECTRON_PIN, PRIVILEGED_ORIGIN } from './main.js';
 
@@ -36,6 +37,10 @@ try {
   });
   // Saving is outside this read-only smoke fixture.
   ipcMain.handle(CHANNELS.save, () => { throw new Error('Smoke storage is read-only'); });
+  const wire=installAuthorityWire({ipcMain,contents:win.webContents,
+    env:{XDG_CONFIG_HOME:process.env.XDG_RUNTIME_DIR},argv:[],
+    core:{request:async()=>({schema:'action_verdict/v0.2',proposal_id:'smoke',decision:'admitted',core_seq:1})}});
+  app.once('will-quit',()=>{void wire.dispose();});
   win.webContents.on('render-process-gone', () => app.exit(1));
   await win.loadURL(`${PRIVILEGED_ORIGIN}/index.html`);
   let ready = false;
@@ -53,6 +58,15 @@ try {
     console.error(await win.webContents.executeJavaScript('document.body.innerText.slice(0, 1000)'));
     throw new Error('Renderer wall did not settle with isolated preload');
   }
+  const wireReady=await win.webContents.executeJavaScript(`(async()=> {
+    const api=window.metaviewer;
+    return typeof api.authority?.subscribeFrames==='function'
+      && typeof api.sideTerminal?.open==='function' && typeof api.sideTerminal?.setEnabled==='function'
+      && await api.loadSettings()===null && await api.recordingDestination()===null
+      && await api.nestedDepth()===null && await api.selfCapsuleId()===null
+      && (await api.authority.propose('{}')).proposal_id==='smoke';
+  })()`);
+  if(!wireReady) throw new Error('Domain preload facade did not cross contextBridge');
   console.log('METAVIEWER_SMOKE_OK');
   clearTimeout(deadline);
   app.exit(0);

@@ -1,0 +1,243 @@
+// @ts-check
+/** [TARGET, unit decision] Host binding for the authority lane. Core requests use
+ * {op:'propose'|'intent',json}; the core remains the admission authority. A trusted
+ * frame source supplies reader/port capabilities; paths never cross IPC.
+ * Side-terminal commands are host-owned profile IDs and exact argv matches.
+ * Frame stream cap = 64 [TARGET, unit decision]; stream lifetimes follow the
+ * existing port revocation/ACK deadlines and the main window's teardown.
+ */
+import { open, mkdir, rename, unlink, lstat, realpath } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { join, isAbsolute, relative, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { homedir } from 'node:os';
+import { randomUUID } from 'node:crypto';
+import { observeSender, PRIVILEGED_ORIGIN } from './main.js';
+import { createFrameReader } from './frameReader.js';
+import { createFramePort } from './framePort.js';
+import { createTerminalFacade, validateProviderArgv } from './ptyBroker.js';
+
+export const WIRE_CHANNELS = Object.freeze({
+  loadSettings:'metaviewer:settings.load', saveSettings:'metaviewer:settings.save',
+  recordingDestination:'metaviewer:recording.destination', nestedDepth:'metaviewer:nested.depth',
+  selfCapsuleId:'metaviewer:nested.self', propose:'metaviewer:authority.propose',
+  intent:'metaviewer:authority.intent', subscribeFrames:'metaviewer:authority.subscribe',
+  unsubscribeFrames:'metaviewer:authority.unsubscribe',
+  terminalOpen:'metaviewer:side-terminal.open', terminalEnabled:'metaviewer:side-terminal.enabled',
+});
+export const WIRE_MAX_BYTES = 256 * 1024;
+/** @param {unknown} value @returns {any} */
+export function jsonObject(value) {
+  if (typeof value !== 'string' || Buffer.byteLength(value,'utf8') > WIRE_MAX_BYTES) throw new Error('PAYLOAD');
+  const parsed = JSON.parse(value);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('PAYLOAD');
+  return parsed;
+}
+/** @param {any} value */
+export function verdictReply(value) {
+  const keys = value && Object.keys(value).sort().join(',');
+  const refused = value?.decision === 'refused';
+  if (!value || value.schema !== 'action_verdict/v0.2'
+      || typeof value.proposal_id !== 'string' || !value.proposal_id.length || value.proposal_id.length > 128
+      || !Number.isSafeInteger(value.core_seq) || value.core_seq < 1
+      || (value.decision !== 'admitted' && !refused)
+      || keys !== (refused ? 'core_seq,decision,proposal_id,reason_code,schema' : 'core_seq,decision,proposal_id,schema')
+      || (refused && !['STALE_FRAME','SURFACE_NOT_AGENT_CONTROLLED','LOCKED_BY_OTHER','BUDGET_EXCEEDED','OUT_OF_BOUNDS','POLICY'].includes(value.reason_code))) throw new Error('OUTCOME');
+  return value;
+}
+/** Atomic private settings file. No caller-supplied pathname.
+ * @param {NodeJS.ProcessEnv} env */
+export function createSettingsStore(env) {
+  const base = env.XDG_CONFIG_HOME || join(env.HOME || homedir(), '.config');
+  if (!isAbsolute(base)) throw new Error('CONFIG_PATH');
+  const dir = join(base,'metaviewer');
+  const path = join(dir,'settings.json');
+  const sourceRoot=fileURLToPath(new URL('../..',import.meta.url));
+  /** @param {string} candidate */
+  const outsideSource=(candidate)=>{
+    const rel=relative(sourceRoot,resolve(candidate));
+    if(rel==='' || (rel!=='..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))) throw new Error('SETTINGS_IN_REPO');
+  };
+  outsideSource(path);
+  const checkDirectory=async()=> {
+    const info=await lstat(dir);
+    if(!info.isDirectory() || info.isSymbolicLink() || (info.mode&0o077)!==0
+      || (process.getuid && info.uid!==process.getuid())) throw new Error('SETTINGS_DIRECTORY');
+    outsideSource(await realpath(dir));
+  };
+  return Object.freeze({
+    async load() {
+      let file;
+      try { await checkDirectory(); file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW); }
+      catch (e) { if (/** @type {NodeJS.ErrnoException} */(e).code === 'ENOENT') return null; throw e; }
+      try {
+        const stat = await file.stat();
+        if (!stat.isFile() || stat.size > WIRE_MAX_BYTES || (stat.mode & 0o777) !== 0o600
+            || (process.getuid && stat.uid !== process.getuid())) throw new Error('SETTINGS_FILE');
+        const buffer = Buffer.alloc(WIRE_MAX_BYTES + 1);
+        const {bytesRead} = await file.read(buffer,0,buffer.length,0);
+        if (bytesRead > WIRE_MAX_BYTES) throw new Error('PAYLOAD');
+        const text = buffer.subarray(0,bytesRead).toString('utf8'); jsonObject(text); return text;
+      } finally { await file.close(); }
+    },
+    /** @param {string} json */
+    async save(json) {
+      jsonObject(json); await mkdir(dir,{recursive:true,mode:0o700});await checkDirectory();
+      const temp = join(dir,`.settings-${randomUUID()}.tmp`);
+      try {
+        const file = await open(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,0o600);
+        try { await file.writeFile(json,'utf8'); await file.sync(); } finally { await file.close(); }
+        await rename(temp,path);
+        const directory = await open(dir,constants.O_RDONLY);
+        try { await directory.sync(); } finally { await directory.close(); }
+        return true;
+      } finally { await unlink(temp).catch(e => { if(e.code !== 'ENOENT') throw e; }); }
+    },
+  });
+}
+/** @param {string[]} argv @param {NodeJS.ProcessEnv} env */
+export function nestedIdentity(argv,env) {
+  const flags = argv.filter(x=>x.startsWith('--nested-depth'));
+  if (flags.length > 1 || (flags.length && !['--nested-depth=0','--nested-depth=1'].includes(flags[0]))) throw new Error('NESTED_DEPTH');
+  const self = env.MV_SELF_CAPSULE_ID ?? null;
+  if (self !== null && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(self)) throw new Error('CAPSULE_ID');
+  return {depth:flags.length ? Number(flags[0].slice(-1)) : null,self};
+}
+/** @param {any} options */
+export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv=process.argv.slice(1),terminal=null,profiles=new Map(),frames=null}) {
+  if (terminal?.request && terminal?.subscribe) terminal=createSideTerminalAdapter(terminal);
+  const store = createSettingsStore(env);
+  const identity = nestedIdentity(argv,env);
+  const channels = /** @type {string[]} */([]);
+  const ownedProfiles = new Map([...profiles].map(([id,profile])=>[id,{args:[...validateProviderArgv([id,...profile.args])].slice(1)}]));
+  let subscribed = false, enabled = false, disposed = false;
+  const handlers = {
+    loadSettings: async () => store.load(),
+    saveSettings: async (/** @type {string} */json) => store.save(json),
+    recordingDestination: async () => {
+      const text = await store.load(); const dest = text === null ? null : jsonObject(text).recording_destination;
+      if (dest == null) return null;
+      if (!dest || typeof dest.path !== 'string' || !isAbsolute(dest.path) || dest.path.length > 4096 || /[\0\r\n]/.test(dest.path)) throw new Error('OUTCOME');
+      return dest.path;
+    },
+    nestedDepth: async () => identity.depth,
+    selfCapsuleId: async () => identity.self,
+    propose: async (/** @type {string} */json) => {
+      jsonObject(json); return verdictReply(await core.request({op:'propose',json}));
+    },
+    intent: async (/** @type {string} */json) => {
+      const body=jsonObject(json);
+      if (!['take_control','release_control','fold'].includes(body.op)) throw new Error('INTENT');
+      if (await core.request({op:'intent',json}) !== true) throw new Error('OUTCOME'); return true;
+    },
+    subscribeFrames: async () => { subscribed=true; return true; },
+    unsubscribeFrames: async () => { subscribed=false; return true; },
+    terminalEnabled: async (/** @type {boolean} */value) => {
+      if (typeof value !== 'boolean') throw new Error('PAYLOAD');
+      if (!terminal || await terminal.setEnabled(value) !== true) throw new Error('OUTCOME'); enabled=value; return true;
+    },
+    terminalOpen: async (/** @type {any} */value) => {
+      if (!value || Object.keys(value).sort().join(',') !== 'args,cols,command,rows'
+          || typeof value.command !== 'string' || !Array.isArray(value.args)
+          || !Number.isSafeInteger(value.cols) || value.cols < 2 || value.cols > 500
+          || !Number.isSafeInteger(value.rows) || value.rows < 2 || value.rows > 300) throw new Error('PAYLOAD');
+      const argv = validateProviderArgv([value.command,...value.args]);
+      const profile=ownedProfiles.get(value.command);
+      if (!profile || JSON.stringify(profile.args) !== JSON.stringify(argv.slice(1))) throw new Error('COMMAND_NOT_ALLOWED');
+      if (!terminal || !enabled) throw new Error('TERMINAL_DISABLED');
+      const result=await terminal.open({command:'provider',provider:value.command,cols:value.cols,rows:value.rows});
+      if (!result || Object.keys(result).join(',') !== 'session' || typeof result.session !== 'string'
+          || !/^[A-Za-z0-9._-]{1,128}$/.test(result.session)) throw new Error('OUTCOME');
+      return {session:result.session};
+    },
+  };
+  try {
+    for (const [name,fn] of Object.entries(handlers)) {
+      const channel=WIRE_CHANNELS[/** @type {keyof typeof WIRE_CHANNELS} */(name)];
+      const arity=['saveSettings','propose','intent','terminalOpen','terminalEnabled'].includes(name) ? 1 : 0;
+      ipcMain.handle(channel,/** @param {unknown} event @param {...any} args */ async (event,...args) => {
+        if (disposed || observeSender(event,contents,PRIVILEGED_ORIGIN).verdict !== 'admit') throw new Error('SENDER');
+        if (args.length !== arity) throw new Error('ARGS');
+        if (arity && (JSON.stringify(args[0]) === undefined || Buffer.byteLength(typeof args[0] === 'string' ? args[0] : JSON.stringify(args[0]),'utf8') > WIRE_MAX_BYTES)) throw new Error('PAYLOAD');
+        return /** @type {any} */(fn)(...args);
+      }); channels.push(channel);
+    }
+  } catch(e) { for (const channel of channels) ipcMain.removeHandler?.(channel); throw e; }
+  // The source owns reader/port capabilities and calls deliver; no frame path is sent.
+  /** @type {Set<any>} */ const streams = new Set();
+  const stopFrames = frames ? frames.subscribe(async (/** @type {any} */entry) => {
+    if (!subscribed || disposed) return;
+    await deliverAuthorityFrame(entry,contents,streams);
+  }) : () => {};
+  return {async dispose() { disposed=true; subscribed=false; stopFrames();
+    for(const stream of [...streams]) {await stream.reader.closeReader();stream.port.revokeFramePort('SHUTDOWN');}
+    streams.clear();terminal?.dispose?.();for(const channel of channels) ipcMain.removeHandler?.(channel);
+  }};
+}
+/** Trusted host frame capability entry: readerOptions/portOptions, state, frameRef.
+ * @param {any} entry @param {any} contents @param {Set<any>} streams */
+export async function deliverAuthorityFrame(entry,contents,streams) {
+  const binding=entry.readerOptions.binding;
+  const bindingKeys=['principal','epoch','surfaceId','surfaceGeneration'];
+  const key=JSON.stringify(bindingKeys.map(name=>binding[name]));
+  let stream=[...streams].find(item=>item.key===key);
+  if (!stream) {
+    if (streams.size>=64) throw new Error('FRAME_STREAM_CAP');
+    if (bindingKeys.some(name=>binding[name]!==entry.portOptions.binding?.[name]) || entry.portOptions.role!=='sender') throw new Error('FRAME_BINDING');
+    const reader=createFrameReader(entry.readerOptions);
+    let port;
+    const revoke=entry.portOptions.onRevoke;
+    try { port=createFramePort({...entry.portOptions,onRevoke:(/** @type {any} */notice)=>{
+      streams.delete(stream);void reader.closeReader();revoke(notice);
+    }}); } catch(e) {await reader.closeReader();throw e;}
+    stream={key,reader,port,announced:false};streams.add(stream);
+  }
+  const raw=entry.frameRef;
+  const ref={schema:raw.schema,surface_id:raw.surface_id,generation:raw.generation,tick:raw.tick,
+    ts_ns:raw.ts_ns,width:raw.width,height:raw.height,format:raw.format,sha256:raw.sha256,capture_us:raw.capture_us};
+  // Closed metadata projection, never spreads adapter state or frame paths.
+  const rawState=entry.state;
+  const state={schema:rawState.schema,surface_id:rawState.surface_id,kind:rawState.kind,display:rawState.display,
+    geometry:{w:rawState.geometry?.w,h:rawState.geometry?.h},state:rawState.state,
+    visibility:rawState.visibility,control:rawState.control,profile_id:rawState.profile_id};
+  if(state.schema!=='surface/v0.2' || state.surface_id!==ref.surface_id
+      || !['desktop_capsule','browser','game_capsule','vm'].includes(state.kind)
+      || typeof state.display!=='string' || !state.display.length || state.display.length>65536
+      || !Number.isSafeInteger(state.geometry.w) || state.geometry.w<1
+      || !Number.isSafeInteger(state.geometry.h) || state.geometry.h<1
+      || !['active','standby','ceded','destroyed','lost'].includes(state.state)
+      || !['folded','unfolded','pinned'].includes(state.visibility)
+      || !['agent','human','shared'].includes(state.control)
+      || typeof state.profile_id!=='string' || !state.profile_id.length || state.profile_id.length>128) throw new Error('SURFACE_STATE');
+  const result=await stream.reader.readFrame(entry.frameRef);
+  if (!result.ok) return false;
+  const sent=stream.port.postFrame(result.frame);
+  if (!sent.ok) return false;
+  try {
+    contents.postMessage('metaviewer:authority.frames',{frame_ref:ref,surface:state},stream.announced ? [] : (entry.rendererPorts || []));
+    stream.announced=true;
+  } catch(error) {stream.port.revokeFramePort('SHUTDOWN');throw error;}
+
+  return sent.ok;
+}
+
+/** [TARGET, unit decision] Adapter to the existing closed PTY facade. The host
+ * supplies registerTerminalIpc request/subscribe seams; the renderer has no owner
+ * envelope, executable, cwd, environment, or shell-string capability.
+ * @param {any} options */
+export function createSideTerminalAdapter(options) {
+  const facade=createTerminalFacade(options);
+  return {
+    /** @param {boolean} enabled */
+    async setEnabled(enabled) { facade.setEnabled(enabled);return true; },
+    /** @param {any} spec */
+    async open(spec) {
+      const capabilities=await facade.capabilities();
+      if (capabilities.ok!==true) throw new Error('TERMINAL_UNAVAILABLE');
+      const result=await facade.open(spec);
+      if(result.ok!==true || typeof result.session!=='string') throw new Error('TERMINAL_REFUSED');
+      return {session:result.session};
+    },
+    dispose:()=>facade.dispose(),
+  };
+}

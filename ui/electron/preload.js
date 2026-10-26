@@ -19,6 +19,13 @@
 
 /**
  * @typedef {object} MetaViewerFacade Narrow renderer API.
+ * @property {() => Promise<string|null>} loadSettings
+ * @property {(json:string) => Promise<true>} saveSettings
+ * @property {() => Promise<string|null>} recordingDestination
+ * @property {() => Promise<0|1|null>} nestedDepth
+ * @property {() => Promise<string|null>} selfCapsuleId
+ * @property {{propose:(json:string)=>Promise<any>,intent:(json:string)=>Promise<true>,subscribeFrames:(cb:(frame:any)=>void)=>(()=>void)}} authority
+ * @property {{open:(spec:any)=>Promise<{session:string}>,setEnabled:(value:boolean)=>Promise<true>}} sideTerminal
  * @property {() => Promise<string|null>} load Read the stored layout text,
  * or null when no profile exists.
  * @property {(json: unknown) => Promise<true>} save Store layout text after
@@ -29,6 +36,7 @@
  * @typedef {object} PreloadTransport Injected main-side invoke handle.
  * @property {(channel: string, args: ReadonlyArray<unknown>) => Promise<unknown>} invoke
  * Fixed-channel invoke returning the main outcome.
+ * @property {(channel:string,cb:(message:any)=>void)=>(()=>void)} [subscribe]
  */
 
 /**
@@ -258,7 +266,7 @@ function assertSaveReply(reply) {
 export function createPreloadFacade(deps) {
   const { transport, bridge } = assertDeps(deps);
   /** @type {MetaViewerFacade} */
-  const api = {
+  const api = /** @type {MetaViewerFacade} */ ({
     /**
      * @param {...unknown} args Must be empty; any argument is refused.
      * @returns {Promise<string|null>} Stored layout text or null.
@@ -275,10 +283,140 @@ export function createPreloadFacade(deps) {
       const call = assertFixedCall(CHANNELS.save, args);
       return transport.invoke(call.channel, call.args).then(assertSaveReply);
     },
-  };
+  });
+  // [TARGET, unit decision] Retain the enumerable legacy layout inventory;
+  // domain additions are own, immutable properties. Native transports supporting
+  // subscriptions enumerate them so contextBridge copies the complete facade.
+  Object.defineProperties(api, Object.fromEntries(Object.entries(wireFacade(transport))
+    .map(([name,value]) => [name,{value,enumerable:typeof transport.subscribe === 'function'}])));
   const frozen = /** @type {MetaViewerFacade} */ (Object.freeze(api));
   bridge.exposeInMainWorld(FACADE_NAME, frozen);
   return frozen;
+}
+
+// [TARGET, unit decision] Closed domain channels; all values are rechecked in main.
+const WIRE_NAMES = Object.freeze({loadSettings:'settings.load',saveSettings:'settings.save',
+  recordingDestination:'recording.destination',nestedDepth:'nested.depth',selfCapsuleId:'nested.self',
+  propose:'authority.propose',intent:'authority.intent',subscribeFrames:'authority.subscribe',
+  unsubscribeFrames:'authority.unsubscribe',terminalOpen:'side-terminal.open',terminalEnabled:'side-terminal.enabled'});
+/** @param {string} channel @param {ReadonlyArray<unknown>} args */
+function wireCall(channel,args) {
+  const name=Object.entries(WIRE_NAMES).find(([,suffix]) => channel === `metaviewer:${suffix}`)?.[0];
+  if (!name) throw new ContractError('CHANNEL','unknown domain channel');
+  const arity=['saveSettings','propose','intent','terminalOpen','terminalEnabled'].includes(name) ? 1 : 0;
+  if (!Array.isArray(args) || args.length !== arity) throw new ContractError('ARGS','wrong arity');
+  if (arity) {
+    const encoded=JSON.stringify(args[0]);
+    if (encoded === undefined || utf8Bytes(typeof args[0] === 'string' ? args[0] : encoded)>IPC_BOUNDS.maxLayoutBytes) throw new ContractError('PAYLOAD','byte cap');
+  }
+  if (['saveSettings','propose','intent'].includes(name)) {
+    const value=args[0];
+    if (typeof value !== 'string' || utf8Bytes(value)>IPC_BOUNDS.maxLayoutBytes) throw new ContractError('PAYLOAD','expected JSON text');
+    const parsed=JSON.parse(value);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new ContractError('PAYLOAD','expected object');
+  }
+  if (name==='terminalEnabled' && typeof args[0] !== 'boolean') throw new ContractError('PAYLOAD','expected boolean');
+  if (name==='terminalOpen') {
+    const v=/** @type {any} */(args[0]);
+    if (!v || Object.keys(v).sort().join(',') !== 'args,cols,command,rows'
+      || typeof v.command !== 'string' || !Array.isArray(v.args) || v.args.length>32
+      || !v.args.every((/** @type {unknown} */x)=>typeof x==='string' && utf8Bytes(x)<=4096 && !x.includes('\0'))
+      || !Number.isSafeInteger(v.cols) || v.cols<2 || v.cols>500
+      || !Number.isSafeInteger(v.rows) || v.rows<2 || v.rows>300) throw new ContractError('PAYLOAD','terminal spec');
+  }
+  return {channel,args:Object.freeze([...args])};
+}
+/** @param {any} value @returns {boolean} */
+function validFrameNotice(value) {
+  if (!value || Object.keys(value).sort().join(',')!=='frame_ref,surface') return false;
+  const f=value.frame_ref,s=value.surface;
+  if (!f || !s || Object.keys(f).sort().join(',')!=='capture_us,format,generation,height,schema,sha256,surface_id,tick,ts_ns,width'
+    || Object.keys(s).sort().join(',')!=='control,display,geometry,kind,profile_id,schema,state,surface_id,visibility'
+    || f.schema!=='frame_ref/v0.1' || f.format!=='rgb24' || !/^[a-f0-9]{64}$/.test(f.sha256)
+    || typeof f.surface_id!=='string' || !f.surface_id.length || f.surface_id.length>128
+    || !['generation','width','height'].every(key=>Number.isSafeInteger(f[key]) && f[key]>0)
+    || !['tick','ts_ns','capture_us'].every(key=>Number.isSafeInteger(f[key]) && f[key]>=0)
+    || s.schema!=='surface/v0.2' || s.surface_id!==f.surface_id
+    || !['desktop_capsule','browser','game_capsule','vm'].includes(s.kind)
+    || typeof s.display!=='string' || !s.display.length || s.display.length>65536
+    || !s.geometry || Object.keys(s.geometry).sort().join(',')!=='h,w'
+    || !Number.isSafeInteger(s.geometry.w) || s.geometry.w<1 || !Number.isSafeInteger(s.geometry.h) || s.geometry.h<1
+    || !['active','standby','ceded','destroyed','lost'].includes(s.state)
+    || !['folded','unfolded','pinned'].includes(s.visibility) || !['agent','human','shared'].includes(s.control)
+    || typeof s.profile_id!=='string' || !s.profile_id.length || s.profile_id.length>128) return false;
+  return utf8Bytes(JSON.stringify(value))<=IPC_BOUNDS.maxLayoutBytes;
+}
+/** @param {PreloadTransport} transport */
+function wireFacade(transport) {
+  /** @param {keyof typeof WIRE_NAMES} name @param {unknown[]} args */
+  const call=async(name,args) => {
+    const admitted=wireCall(`metaviewer:${WIRE_NAMES[name]}`,args);
+    const reply=await transport.invoke(admitted.channel,admitted.args);
+    if (['saveSettings','intent','subscribeFrames','unsubscribeFrames','terminalEnabled'].includes(name)) return assertSaveReply(reply);
+    if (['loadSettings','recordingDestination','selfCapsuleId'].includes(name)) return assertLoadReply(reply);
+    if (name==='nestedDepth') {
+      if (reply!==null && reply!==0 && reply!==1) throw new ContractError('OUTCOME','nested depth');return reply;
+    }
+    const value=/** @type {any} */(reply);
+    if (name==='terminalOpen') {
+      if (!value || Object.keys(value).join(',')!=='session' || typeof value.session!=='string'
+          || !/^[A-Za-z0-9._-]{1,128}$/.test(value.session)) throw new ContractError('OUTCOME','session');return Object.freeze({session:value.session});
+    }
+    const refused=value?.decision==='refused';
+    if (!value || value.schema!=='action_verdict/v0.2' || typeof value.proposal_id!=='string'
+      || !value.proposal_id.length || value.proposal_id.length>128 || !Number.isSafeInteger(value.core_seq) || value.core_seq<1
+      || !['admitted','refused'].includes(value.decision)
+      || Object.keys(value).sort().join(',') !== (refused?'core_seq,decision,proposal_id,reason_code,schema':'core_seq,decision,proposal_id,schema')
+      || (refused && !['STALE_FRAME','SURFACE_NOT_AGENT_CONTROLLED','LOCKED_BY_OTHER','BUDGET_EXCEEDED','OUT_OF_BOUNDS','POLICY'].includes(value.reason_code))) throw new ContractError('OUTCOME','verdict');
+    return Object.freeze({...value});
+  };
+  /** @type {Record<string,any>} */ const api={};
+  for (const name of ['loadSettings','saveSettings','recordingDestination','nestedDepth','selfCapsuleId']) {
+    /** @param {...unknown} args */
+    api[name]=(...args)=>call(/** @type {keyof typeof WIRE_NAMES} */(name),args);
+  }
+  /** @type {Set<(frame:any)=>void>} */ const listeners=new Set();
+  /** @type {null|(()=>void)} */ let revokeFrames=null;
+  let subscriptionGeneration=0;
+  api.authority=Object.freeze({
+    /** @param {...unknown} args */
+    propose:(...args)=>call('propose',args),
+    /** @param {...unknown} args */
+    intent:(...args)=>call('intent',args),
+    /** @param {...unknown} args */
+    subscribeFrames:(...args)=> {
+      if (args.length!==1 || typeof args[0]!=='function' || !transport.subscribe) throw new ContractError('ARGS','frame callback');
+      const cb=/** @type {(frame:any)=>void} */(args[0]);
+      // Give each subscription its own identity, including repeated callbacks.
+      const listener=(/** @type {any} */value)=>cb(value);
+      listeners.add(listener);let active=true;
+      if(listeners.size===1) {
+        const generation=++subscriptionGeneration;
+        revokeFrames=transport.subscribe('metaviewer:authority.frames',value=> {
+          if (!validFrameNotice(value)) return;
+          for(const notify of [...listeners]) notify(value);
+        });
+        void call('subscribeFrames',[]).catch(()=>{
+          if(generation!==subscriptionGeneration) return;
+          ++subscriptionGeneration;listeners.clear();revokeFrames?.();revokeFrames=null;
+        });
+      }
+      return ()=>{
+        if(!active) return;active=false;listeners.delete(listener);
+        if(!listeners.size && revokeFrames) {
+          ++subscriptionGeneration;revokeFrames();revokeFrames=null;
+          void call('unsubscribeFrames',[]).catch(()=>{});
+        }
+      };
+
+    },
+  });
+  api.sideTerminal=Object.freeze({
+    /** @param {...unknown} args */
+    open:(...args)=>call('terminalOpen',args),
+    /** @param {...unknown} args */
+    setEnabled:(...args)=>call('terminalEnabled',args)});
+  return api;
 }
 
 /**
@@ -328,13 +466,28 @@ export function installPreload(electron) {
   const renderer = /** @type {Record<string, (...args: Array<unknown>) => Promise<unknown>>} */ (ipcRenderer);
   return createPreloadFacade({
     transport: {
+      subscribe: typeof /** @type {any} */(ipcRenderer).on === 'function' ?
+      /** @param {string} channel @param {(value:any)=>void} cb */
+      (channel,cb) => {
+        if (channel !== 'metaviewer:authority.frames') throw new ContractError('CHANNEL','subscription refused');
+        const native = /** @type {any} */(ipcRenderer);
+        const listener = (/** @type {any} */event,/** @type {any} */value) => {
+          // Transfer only this authenticated host channel's byte-plane ports.
+          if (!validFrameNotice(value)) return;
+          if (event.ports?.length && typeof window !== 'undefined') window.postMessage(
+            {type:'metaviewer:frame-port',surface_id:value?.surface?.surface_id},'*',event.ports);
+          cb(value);
+        };
+        native.on(channel,listener);
+        return () => native.removeListener(channel,listener);
+      } : undefined,
       /**
        * @param {string} channel Fixed channel.
        * @param {ReadonlyArray<unknown>} args Bounded arguments.
        * @returns {Promise<unknown>} Main outcome.
        */
       invoke: (channel, args) => {
-        const call = assertFixedCall(channel, args);
+        const call = channel.startsWith('metaviewer:layout.') ? assertFixedCall(channel, args) : wireCall(channel,args);
         return renderer.invoke(call.channel, ...call.args);
       },
     },

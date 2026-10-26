@@ -1446,6 +1446,7 @@ export function createLayoutBridge() {
  * @property {CoreLauncher} core Constructed core launcher.
  * @property {ReadonlyArray<BridgeEntry>} bridge Parity-gated IPC registry.
  * @property {{width: number, height: number}} geometry Window geometry.
+ * @property {any} [wire] Trusted frame and PTY capabilities, never renderer values.
  */
 
 /**
@@ -1545,7 +1546,7 @@ export async function bootProductionMain(handles) {
     fail('BOOT_HANDLES', 'handles must be an object');
   }
   const typed = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (handles));
-  const ownKeys = Object.keys(typed);
+  const ownKeys = Object.keys(typed).filter(key => key !== 'wire');
   if (ownKeys.length !== HANDLE_KEYS.length) {
     fail('BOOT_HANDLES', 'handles must carry exactly the boot keys');
   }
@@ -1618,6 +1619,7 @@ export async function bootProductionMain(handles) {
   let window = null;
   /** @type {Array<string>} */
   const registered = [];
+  let wireBridge = /** @type {{dispose:()=>Promise<void>} | null} */(null);
   let schemeRegistered = false;
   let unwound = false;
 
@@ -1640,6 +1642,7 @@ export async function bootProductionMain(handles) {
         /* unwind best-effort */
       }
     }
+    await wireBridge?.dispose();
     registered.length = 0;
     if (window !== null) {
       try {
@@ -1789,6 +1792,10 @@ export async function bootProductionMain(handles) {
     }
   }
   try {
+    if (!retail.nested) wireBridge = (await import('./authorityWire.js')).installAuthorityWire({ ...(typed.wire || {}), ipcMain,
+      contents: contentsUnknown, core, env: typed.env, argv: typed.argv });
+  } catch (error) { await unwind(); throw error; }
+  try {
     built.once('ready-to-show', () => {
       try {
         built.show();
@@ -1867,9 +1874,10 @@ export async function bootProductionMain(handles) {
  * Direct production entry. Runs only behind the Electron versions
  * guard; plain Node imports stay inert. Coded failures set a
  * non-success exit status. Production core seams (binary command, UDS
- * transport, handshake, limits, ownership ledger) land with the core
- * and contracts units; no path is guessed here, so the entry refuses
- * closed until they exist.
+ * transport, handshake, limits, ownership ledger) are supplied by the trusted
+ * MV_CORE_BOOTSTRAP module's createMainBindings() factory. That returns
+ * {core,wire}; core implements the existing CoreLauncher lifecycle and wire
+ * supplies frame-source and PTY broker capabilities. No binary path is guessed.
  * @returns {Promise<void>}
  */
 async function mainDirectEntry() {
@@ -1915,13 +1923,25 @@ async function mainDirectEntry() {
     if (running !== ELECTRON_PIN) {
       throw new MainError('ELECTRON_PIN', `electron version must be ${ELECTRON_PIN}`);
     }
-    throw new MainError('CORE_SEAMS_ABSENT', 'core binary command and wire bounds are absent');
+    // [TARGET, unit decision] Host deployment supplies the launcher/transport
+    // factory explicitly. Never load a renderer-selected module or guess binaries.
+    const bootstrap = process.env.MV_CORE_BOOTSTRAP;
+    if (!bootstrap || !isAbsolute(bootstrap)) throw new MainError('CORE_SEAMS_ABSENT','MV_CORE_BOOTSTRAP must name a trusted absolute host module');
+    const host = await import((await import('node:url')).pathToFileURL(bootstrap).href);
+    if (typeof host.createMainBindings !== 'function') throw new MainError('CORE_SEAMS_ABSENT','host module must export createMainBindings');
+    const bindings = await host.createMainBindings();
+    await bootProductionMain({ core:bindings.core, wire:bindings.wire, electronVersion: running,
+      app: electron.app, BrowserWindow: electron.BrowserWindow, ipcMain: electron.ipcMain,
+      protocol: electron.protocol, session: electron.session, argv, env: process.env,
+      shellRoot: fileURLToPath(new URL('..',import.meta.url)),
+      runtime: {xdgRuntimeDir:process.env.XDG_RUNTIME_DIR || '',uid:process.getuid ? process.getuid() : -1},
+      geometry: DEFAULT_GEOMETRY, bridge:createLayoutBridge() });
   } catch (error) {
     failClosed(error);
   }
 }
 
 if (typeof process !== 'undefined' && process.versions?.electron !== undefined
-    && process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+    && process.argv[1] && [fileURLToPath(import.meta.url), resolve(fileURLToPath(new URL('..',import.meta.url)))].includes(resolve(process.argv[1]))) {
   void mainDirectEntry();
 }
