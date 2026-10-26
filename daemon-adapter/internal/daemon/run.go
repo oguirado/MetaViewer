@@ -7,6 +7,7 @@ import (
 	"io"
 	"metaviewer/daemon-adapter/internal/capsule"
 	"metaviewer/daemon-adapter/internal/cli"
+	"metaviewer/daemon-adapter/internal/ipc"
 )
 
 type Command func(context.Context, json.RawMessage) error
@@ -25,7 +26,16 @@ func Commands() map[string]Command {
 	}
 	return table
 }
-func Run(ctx context.Context, args []string, stderr io.Writer) int {
+
+// [TARGET, unit decision] Runtime is the explicit authority integration seam.
+// A bare CLI launch retains the configuration refusal; no authority is fabricated.
+type Runtime struct {
+	Config  ipc.Config
+	Policy  ipc.Policy
+	Handler ipc.Handler
+}
+
+func Run(ctx context.Context, args []string, stderr io.Writer, configured ...Runtime) int {
 	if stderr == nil {
 		return 2
 	}
@@ -36,6 +46,26 @@ func Run(ctx context.Context, args []string, stderr io.Writer) int {
 	if err := ctx.Err(); err != nil {
 		fmt.Fprintln(stderr, "adapter: startup cancelled")
 		return 2
+	}
+	if len(configured) > 1 {
+		fmt.Fprintln(stderr, "adapter: one runtime required")
+		return 2
+	}
+	if len(configured) == 1 {
+		runtime := configured[0]
+		if runtime.Policy == nil || runtime.Handler == nil {
+			fmt.Fprintln(stderr, "adapter: policy and handler required")
+			return 2
+		}
+		listener, err := ipc.Listen(ctx, runtime.Config)
+		if err == nil {
+			err = ipc.Serve(ctx, listener, runtime.Config, runtime.Policy, runtime.Handler, stderr)
+		}
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 2
+		}
+		return 0
 	}
 	_ = Commands()
 	fmt.Fprintln(stderr, cli.Unsupported("authority policy: authenticated sender binding, durable replay and outbound identity"))
