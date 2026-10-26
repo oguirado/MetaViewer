@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,rm,stat,readFile,readdir,writeFile,chmod,symlink} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
 import {EventEmitter} from 'node:events';
 import {installAuthorityWire,WIRE_CHANNELS,createSettingsStore,deliverAuthorityFrame,createSideTerminalAdapter,nestedIdentity} from '../electron/authorityWire.js';
@@ -153,7 +154,7 @@ test('nested identity distinguishes absent fields and refuses malformed depth or
   assert.throws(()=>nestedIdentity([],{MV_SELF_CAPSULE_ID:'/host/path'}));
 });
 test('settings never write inside the source tree',()=>{
-  assert.throws(()=>createSettingsStore({XDG_CONFIG_HOME:new URL('../',import.meta.url).pathname}),/IN_REPO/);
+  assert.throws(()=>createSettingsStore({XDG_CONFIG_HOME:fileURLToPath(new URL('../',import.meta.url))}),/IN_REPO/);
 });
 test('multiple frame listeners share one host subscription until the last revocation',async()=>{
   let listener,stops=0;const calls=[],received=[];

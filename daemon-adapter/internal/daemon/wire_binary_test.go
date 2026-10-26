@@ -119,7 +119,11 @@ func binaryOracle(t *testing.T, live bool, negative string) {
 		t.Fatal(err)
 	}
 	binary := filepath.Join(t.TempDir(), "mv-daemon-adapter")
-	build := exec.Command("/usr/local/go/bin/go", "build", "-o", binary, "./cmd/mv-daemon-adapter")
+	goBinary, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatalf("Go compiler required on PATH for binary oracle: %v", err)
+	}
+	build := exec.Command(goBinary, "build", "-o", binary, "./cmd/mv-daemon-adapter")
 	build.Dir = filepath.Join(repo, "daemon-adapter")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v %s", err, out)

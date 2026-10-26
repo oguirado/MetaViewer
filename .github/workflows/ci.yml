@@ -1170,6 +1170,14 @@ jobs:
         run: |
           node --test tests/ci/*.test.cjs
           python3 -m unittest discover -s tests/ci -p 'test_*.py' -v
+      # Enable the same Chromium user namespace sandbox as the E2E job before
+      # the JS gates install and launch Electron on hosted Ubuntu.
+      - name: Permit Chromium user namespace sandbox on hosted Ubuntu
+        run: |
+          set -euo pipefail
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          test "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)" = 0
+          unshare --user --map-root-user true
       - name: Run JS gates
         env:
           JOB_ID: js
