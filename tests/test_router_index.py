@@ -3,7 +3,10 @@
 Every fixture lives under a TemporaryDirectory created by the test. The
 script under test is copied into the scratch tree, git is replaced by a
 stub on PATH, and the router kit is replaced by pinned fixture bytes, so
-no test reads or mutates the live repository.
+fixture compiler tests never mutate the live repository.
+[TARGET, unit decision] The bootstrap gate test reads the published kit
+and receipt evidence, then verifies and mutates an isolated scratch copy;
+this wires bootstrap --check through the existing root gate unit leg.
 """
 import hashlib
 import importlib.util
@@ -668,6 +671,11 @@ class RouterIndexTests(unittest.TestCase):
         self.assertEqual(len(rows), len(self._base_files()) + 5)
         for row in rows:
             self.assertNotIn(json.loads(row)["source_sha256"], generated_digests)
+        self._publish_mount(root)
+        # Cover the additional generated fixture too.
+        sha = root / "router/index/SHA256SUMS"
+        rel = "catalogue/router/r.json"
+        sha.write_text(sha.read_text() + hashlib.sha256((root / rel).read_bytes()).hexdigest() + "  " + rel + "\n")
         checked = self._run_cli(root, "--check", extra_env=env)
         self.assertEqual(checked.returncode, 0, checked.stderr)
         (root / "b.md").unlink()
@@ -693,17 +701,51 @@ class RouterIndexTests(unittest.TestCase):
             with self.assertRaises(mod.RouterError):
                 mod.tracked_paths(root)
 
+    def _publish_mount(self, root):
+        self._write_file(root, "catalogue/router/docs/0.jsonl",
+                         (root / "catalogue/nodes.jsonl").read_text())
+        paths = ["catalogue/nodes.jsonl", "catalogue/router/docs/0.jsonl"]
+        self._write_file(root, "router/index/SHA256SUMS", "".join(
+            hashlib.sha256((root / rel).read_bytes()).hexdigest() + "  " + rel + "\n"
+            for rel in paths))
+
+    def test_mount_freshness_controls(self):
+        root, env = self._tree(self._base_files())
+        self.assertEqual(self._run_cli(root, extra_env=env).returncode, 0)
+        self._publish_mount(root)
+        self.assertEqual(self._run_cli(root, "--check", extra_env=env).returncode, 0)
+        docs = root / "catalogue/router/docs/0.jsonl"
+        original = docs.read_bytes()
+        docs.write_bytes(b"".join(original.splitlines(keepends=True)[1:]))
+        rejected = self._run_cli(root, "--check", extra_env=env)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("SHA256SUMS mismatch", rejected.stderr)
+        # Even fresh hashes cannot bless a mount with a missing id.
+        sha = root / "router/index/SHA256SUMS"
+        sha.write_text("".join(hashlib.sha256((root / rel).read_bytes()).hexdigest() + "  " + rel + "\n"
+                               for rel in ("catalogue/nodes.jsonl", "catalogue/router/docs/0.jsonl")))
+        rejected = self._run_cli(root, "--check", extra_env=env)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("mount ids != nodes ids", rejected.stderr)
+        self._publish_mount(root)
+        sha.write_text("")
+        self.assertNotEqual(self._run_cli(root, "--check", extra_env=env).returncode, 0)
+        self._publish_mount(root)
+        sha.unlink()
+        self.assertNotEqual(self._run_cli(root, "--check", extra_env=env).returncode, 0)
+
     def test_corpus_agreement(self):
         root, env = self._tree(self._base_files())
         self.assertEqual(self._run_cli(root, "--check", extra_env=env).returncode, 1)
         self.assertEqual(self._run_cli(root, extra_env=env).returncode, 0)
-        self._write_file(root, "catalogue/protocol.json", '{"corpus": "metaviewer"}\n')
+        self._write_file(root, "catalogue/protocol.json", '{"mounts": [{"corpus": "metaviewer", "path": "catalogue/router"}]}\n')
         manifest = (root / "bin" / "manifest.bin").read_bytes().decode("utf-8")
         entries = sorted(e for e in manifest.split("\0") if e) + ["catalogue/protocol.json"]
         self._set_manifest(root, sorted(entries))
         self.assertEqual(self._run_cli(root, extra_env=env).returncode, 0)
+        self._publish_mount(root)
         self.assertEqual(self._run_cli(root, "--check", extra_env=env).returncode, 0)
-        self._write_file(root, "catalogue/protocol.json", '{"corpus": "other"}\n')
+        self._write_file(root, "catalogue/protocol.json", '{"mounts": [{"corpus": "other", "path": "catalogue/router"}]}\n')
         mismatch_build = self._run_cli(root, extra_env=env)
         self.assertNotEqual(mismatch_build.returncode, 0)
         self.assertIn("corpus mismatch", mismatch_build.stderr)
@@ -715,6 +757,33 @@ class RouterIndexTests(unittest.TestCase):
         self.assertNotEqual(broken_build.returncode, 0)
         broken = self._run_cli(root, "--check", extra_env=env)
         self.assertNotEqual(broken.returncode, 0)
+
+    def test_live_bootstrap_check_and_mutant(self):
+        # [TARGET, unit decision] tools/gate.sh's unit discovery runs this
+        # inventory/receipt check. Privacy here is fixture-scoped only.
+        repo = SCRIPT_SRC.parent.parent
+        kit = Path(self.harness) / "kit"
+        shutil.copytree(repo / "router/kit", kit,
+                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "tmp"))
+        # Restore published receipt evidence; *.log is intentionally git-ignored.
+        evidence = json.loads((repo / "router/index/bootstrap_logs.json").read_text())
+        for name, content in evidence.items():
+            self.assertEqual(Path(name).name, name)
+            log = kit / "logs" / name
+            log.parent.mkdir(exist_ok=True)
+            log.write_text(content)
+        deny = Path(self.harness) / "deny.txt"
+        deny.write_text("FIXTURE-ONLY-" + "9f807521bca641d38d7e" + "\n")
+        argv = [sys.executable, "-B", str(kit / "tools/bootstrap_kit.py"),
+                "--check", "--root", str(kit), "--deny-list", str(deny)]
+        clean = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+        self.assertEqual(clean.returncode, 0, clean.stdout + clean.stderr)
+        victim = kit / "tools/gates_v2.py"
+        raw = victim.read_bytes()
+        victim.write_bytes(bytes([raw[0] ^ 1]) + raw[1:])
+        mutant = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+        self.assertNotEqual(mutant.returncode, 0)
+        self.assertIn("tools/gates_v2.py", mutant.stdout + mutant.stderr)
 
     def test_usage_errors(self):
         root, env = self._tree(self._base_files())

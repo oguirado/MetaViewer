@@ -5,7 +5,8 @@ Build mode compiles one ctx.node.v2 record per tracked source file into
 catalogue/nodes.jsonl. Check mode (--check) rebuilds the same bytes in
 memory and fails when the committed artifact is stale, when a tracked
 source is missing or unrouted, when a routed document links to a missing
-path, or when the kit builder leg cannot run deterministically.
+path, when the published mount or its SHA evidence disagrees with the
+nodes, or when the kit builder leg cannot run deterministically.
 
 Source universe: the git tracked manifest (git ls-files -z --cached),
 minus the generated set below. No filesystem recursion and no untracked
@@ -46,6 +47,9 @@ KIT_THESAURUS = Path("router/kit/standards/thesaurus.json")
 KIT_VALIDATOR = Path("router/kit/tools/jsonschema_lite.py")
 NODES_REL = "catalogue/nodes.jsonl"
 PROTOCOL_REL = "catalogue/protocol.json"
+MOUNT_PATH = "catalogue/router"
+MOUNT_DOCS_DIR = "catalogue/router/docs"
+INDEX_SHA_REL = "router/index/SHA256SUMS"
 GENERATED_EXACT = frozenset({NODES_REL})
 GENERATED_PREFIXES = ("router/index/", "catalogue/router/")
 PROHIBITED_BASENAMES = frozenset({"operator.token", "launch.token", "auth.json", ".env"})
@@ -550,9 +554,105 @@ def _check_corpus_agreement(root):
         obj = json.loads(path.read_bytes().decode("utf-8"))
     except (OSError, ValueError) as exc:
         raise RouterError("Router error: unreadable %s" % PROTOCOL_REL) from exc
-    if isinstance(obj, dict) and "corpus" in obj and obj["corpus"] != CORPUS:
+    if not isinstance(obj, dict):
+        raise RouterError("Router error: invalid protocol: not an object")
+    mounts = obj.get("mounts")
+    if not isinstance(mounts, list):
+        raise RouterError("Router error: invalid protocol: mounts is not a list")
+    if len(mounts) != 1:
+        raise RouterError("Router error: protocol must declare exactly one mount, found %d"
+                          % len(mounts))
+    mount = mounts[0]
+    if not isinstance(mount, dict):
+        raise RouterError("Router error: invalid protocol: mount is not an object")
+    if mount.get("corpus") != CORPUS:
         raise RouterError("Router error: corpus mismatch: protocol %r != %r"
-                          % (str(obj["corpus"])[:64], CORPUS))
+                          % (str(mount.get("corpus"))[:64], CORPUS))
+    if mount.get("path") != MOUNT_PATH:
+        raise RouterError("Router error: protocol mount path %r != %r"
+                          % (str(mount.get("path"))[:64], MOUNT_PATH))
+
+
+def _read_id_set(path, display):
+    try:
+        raw = path.read_bytes().decode("utf-8")
+    except (OSError, ValueError) as exc:
+        raise RouterError("Stale or incomplete router: unreadable %s" % display) from exc
+    ids = set()
+    for lineno, line in enumerate(raw.split("\n"), 1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError as exc:
+            raise RouterError("Stale or incomplete router: unparsable %s line %d"
+                              % (display, lineno)) from exc
+        if not isinstance(row, dict) or not isinstance(row.get("id"), str):
+            raise RouterError("Stale or incomplete router: unparsable %s line %d"
+                              % (display, lineno))
+        if row["id"] in ids:
+            raise RouterError("Stale or incomplete router: duplicate id in %s" % display)
+        ids.add(row["id"])
+    return ids
+
+
+def check_mount_freshness(root, material):
+    """Fail when the published mount or its SHA evidence disagrees.
+
+    Published protocol trees require complete mount and hash evidence.
+    Bare compiler fixtures without a protocol or mount have nothing published.
+    """
+    docs_dir = root / MOUNT_DOCS_DIR
+    sha_path = root / INDEX_SHA_REL
+    if not any((root / rel).exists() for rel in (PROTOCOL_REL, MOUNT_PATH, INDEX_SHA_REL)):
+        return
+    try:
+        shards = sorted(path for path in docs_dir.iterdir()
+                        if path.is_file() and path.suffix == ".jsonl")
+    except OSError as exc:
+        raise RouterError("Stale or incomplete router: missing mount docs") from exc
+    if not shards or not sha_path.is_file():
+        raise RouterError("Stale or incomplete router: missing mount or SHA256SUMS")
+    try:
+        sha_text = sha_path.read_bytes().decode("utf-8")
+    except (OSError, ValueError) as exc:
+        raise RouterError("Stale or incomplete router: unreadable %s" % INDEX_SHA_REL) from exc
+    covered = set()
+    for lineno, line in enumerate(sha_text.split("\n"), 1):
+        if not line.strip():
+            continue
+        digest, sep, rel = line.partition("  ")
+        if (not sep or len(digest) != 64
+                or any(char not in "0123456789abcdef" for char in digest)):
+            raise RouterError("Stale or incomplete router: unparsable %s line %d"
+                              % (INDEX_SHA_REL, lineno))
+        _check_canonical(rel)
+        if rel in covered:
+            raise RouterError("Stale or incomplete router: duplicate SHA256SUMS entry")
+        covered.add(rel)
+        try:
+            actual = hashlib.sha256((root / rel).read_bytes()).hexdigest()
+        except OSError as exc:
+            raise RouterError("Stale or incomplete router: SHA256SUMS mismatch for %s" % rel) from exc
+        if actual != digest:
+            raise RouterError("Stale or incomplete router: SHA256SUMS mismatch for %s" % rel)
+    required = {NODES_REL} | {p.relative_to(root).as_posix()
+                                 for p in (root / MOUNT_PATH).rglob("*") if p.is_file()}
+    if not required <= covered:
+        raise RouterError("Stale or incomplete router: incomplete SHA256SUMS")
+    want = set()
+    for line in material.nodes_jsonl.decode("utf-8").split("\n"):
+        if line.strip():
+            want.add(json.loads(line)["id"])
+    got = set()
+    for shard in shards:
+        ids = _read_id_set(shard, "%s/%s" % (MOUNT_DOCS_DIR, shard.name))
+        if got & ids:
+            raise RouterError("Stale or incomplete router: duplicate mount ids")
+        got |= ids
+    if got != want:
+        raise RouterError("Stale or incomplete router: mount ids != nodes ids "
+                          "(%d mount vs %d nodes)" % (len(got), len(want)))
 
 
 def main(argv=None):
@@ -588,6 +688,7 @@ def main(argv=None):
             except RouterError as exc:
                 raise RouterError(
                     str(exc) + _coverage_diagnostic(nodes_path, material)) from exc
+            check_mount_freshness(root, material)
             check_doc_links(root, sources)
         else:
             nodes_path.parent.mkdir(parents=True, exist_ok=True)

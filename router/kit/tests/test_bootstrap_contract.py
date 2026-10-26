@@ -2,6 +2,7 @@ import copy
 import hashlib
 import json
 import os
+import shutil
 import sys
 import unittest
 
@@ -559,6 +560,34 @@ class TestNodeSchema(unittest.TestCase):
         n["anchors"] = [{"a": "é" * 40, "role": "symbol"}]
         self.assertEqual(len(n["anchors"][0]["a"].encode()), 80)
         self.assertEqual(JS.validate(n, self.schema), [])
+
+
+class TestLiveManifest(unittest.TestCase):
+    """F6: the committed tree must verify against the committed manifest.
+
+    Regenerable bytecode (__pycache__/*.pyc, emitted by -I children that
+    ignore -B; see DEVIATIONS.md) is tolerated here: the inventory gate
+    still refuses it on a clean tree, and every manifest entry is re-hashed.
+    """
+
+    def test_live_tree_matches_manifest(self):
+        manifest = BK.load_json_strict(os.path.join(W, "vendor_manifest.json"))
+        errs = [err for err in BK.verify_manifest(W, manifest)
+                if "__pycache__" not in err and not err.endswith((".pyc", ".pyo"))]
+        self.assertEqual(errs, [])
+
+    def test_flipped_gates_byte_is_named(self):
+        rel = os.path.join("tools", "gates_v2.py")
+        data = open(os.path.join(W, rel), "rb").read()
+        d = tmp()
+        self.addCleanup(shutil.rmtree, d, True)
+        dest = os.path.join(d, rel)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        open(dest, "wb").write(bytes([(data[0] + 1) % 256]) + data[1:])
+        manifest = BK.load_json_strict(os.path.join(W, "vendor_manifest.json"))
+        errs = BK.verify_manifest(d, {rel: manifest[rel]})
+        self.assertEqual(len(errs), 1)
+        self.assertIn(rel, errs[0])
 
 
 if __name__ == "__main__":

@@ -9,10 +9,8 @@ agent edit. Status: router unavailable.
   no edit as routed.
 - L1: read this file, `LAWS.md`, and `catalogue/protocol.json`; declare the affected
   unit and its dependency closure.
-- L2: run `python3 router/kit/tools/route_v2.py --q "<task>" --index catalogue/router
-  --params catalogue/router/params.json` when it is qualified; otherwise read
-  `catalogue/subjects.json`, then `subjects/<sid>/index.json`, then one page.
-  Missing chain evidence blocks dependent edits.
+- L2: routing and the browse chain remain unavailable. Use explicitly supplied
+  source coordinates and verify them against the governing contract.
 - L3: resolve exact identity first, then declared aliases, then bounded lexical
   search, then explicit source resolution; ranking never overrides fixed decisions.
 - L4: open only the selected anchored section and its governing contract, companion,

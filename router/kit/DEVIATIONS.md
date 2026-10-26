@@ -2,8 +2,8 @@
 
 Source: `Holdings-int/router/kit/vendor_manifest.json`, SHA-256
 `21801113d82bbe137695b59424ac90a0f15374b95ad4aa45ca10953756a3be81`
-(65 entries, all verified before copying). 61 files are byte-identical;
-4 are adapted below. The canonical P1 source identity, licence, and notice
+(65 entries, all verified before copying). 59 files are byte-identical;
+6 are adapted below. The canonical P1 source identity, licence, and notice
 files are ABSENT: review and enumerate them before any publish step.
 
 ## Portability adaptations (destination-authored)
@@ -23,6 +23,15 @@ files are ABSENT: review and enumerate them before any publish step.
   because eval defaults resolve `--index`/`--v1-index` to the absent
   `out/` area. The v2 and v1 indexes are now built from a generated
   scratch fixture and passed explicitly; all original assertions kept.
+
+## Privacy scrub adaptations (conductor-ordered, kept per JUDGE W0 F6)
+
+- `tools/gates_v2.py`: one operator-username alternative was removed from
+  the `PRIV` matcher. Matching of home paths, mail addresses, secrets and
+  tokens is unchanged; no matcher behaviour relied on the removed literal.
+- `tests/fixtures/gates/privacy_path.txt`: the operator home path became
+  a synthetic `/home/someone/` path. The fixture still exercises one path
+  match and one mail match.
 
 ## Excluded from the source tree (later Step E units)
 
