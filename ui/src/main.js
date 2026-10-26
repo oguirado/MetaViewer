@@ -1,9 +1,10 @@
+/// <reference path="./kit.d.ts" />
 import { createApp } from 'vue';
 import App from './App.vue';
 import 'capsule-ui-kit/theme.css';
 import './design/metaviewer.css';
-import { createDefaultLayoutProfile, decodeAndMigrateLayoutProfile } from 'capsule-ui-kit/layout';
-import { installKitTheme } from 'capsule-ui-kit/theme';
+import { createWallLayout, migrateWallLayout } from './wall/layout.js';
+import { installKitTheme, setKitScheme } from 'capsule-ui-kit/theme';
 
 /** @typedef {import('capsule-ui-kit/layout').LayoutProfileScope} LayoutScope */
 /** @typedef {import('capsule-ui-kit/layout').LayoutProfileEnvelope} LayoutProfile */
@@ -27,9 +28,9 @@ const READ_RETRY_MS = 20;
 
 /** Light-first paint seed; mirrors the static dataset attributes in index.html. */
 const THEME_DATASET = Object.freeze({
-  themeScheme: 'light',
+  themeScheme: 'mv-light',
   themeContrast: 'normal',
-  themeDensity: 'regular',
+  themeDensity: 'compact',
   themeTextScale: '1',
   themeForcedColors: 'none',
   themeMotion: 'no-preference',
@@ -69,7 +70,7 @@ function createLayoutStorage(facade) {
         try {
           const raw = await facade.load();
           if (raw !== null && typeof raw !== 'string') throw new Error('Invalid layout payload');
-          return raw;
+          return migrateWallLayout(raw);
         } catch (error) {
           if (!String(error).includes(HANDLER_NOT_INSTALLED)) throw error;
           await new Promise((resolve) => setTimeout(resolve, READ_RETRY_MS));
@@ -89,10 +90,7 @@ function createLayoutStorage(facade) {
  * @returns {LayoutProfile}
  */
 function createInitialLayout(scope) {
-  const candidate = createDefaultLayoutProfile(scope);
-  const checked = decodeAndMigrateLayoutProfile(candidate, { expectedScope: scope });
-  if (!checked.ok) throw new Error(checked.reason);
-  return checked.profile;
+  return createWallLayout(scope);
 }
 
 /**
@@ -115,6 +113,8 @@ function bootstrap() {
   Object.assign(document.documentElement.dataset, THEME_DATASET);
   const application = createApp(App, { layout, storage, scope: SCOPE });
   installKitTheme(application);
+  // Kit declaration predates its shipped MetaViewer schemes.
+  /** @type {(scheme:string)=>void} */ (setKitScheme)('mv-light');
   application.mount(MOUNT_SELECTOR);
 }
 

@@ -457,6 +457,7 @@ import DockWorkspace from 'capsule-ui-kit/DockWorkspace';
 import SurfacePanel from './SurfacePanel.vue';
 
 const props = defineProps({
+  workspaceComponent: { type: Object, default: () => DockWorkspace },
   scope: {
     type: /** @type {import('vue').PropType<KitLayoutScope>} */ (Object),
     required: true,
@@ -571,6 +572,7 @@ const WallSurfaceRouter = markRaw(defineComponent({
       const instance = asNonEmptyString(api.id) ?? capsuleId;
       return h(SurfacePanel, {
         capsuleId,
+        title: typeof api.title === 'string' ? api.title : capsuleId,
         projectionView: props.projectionView,
         intentBuilders: props.intentBuilders,
         controlRegistry: props.controlRegistry,
@@ -587,9 +589,12 @@ const WallSurfaceRouter = markRaw(defineComponent({
   },
 }));
 
+const SurfaceTab = defineComponent({ props: { params: { type: Object, required: true } }, setup: p => () => h('span', { class: 'mv-surface-tab' }, p.params?.api?.title ?? 'Capsule') });
+const tabComponents = markRaw({ SurfaceTab });
+
 const panelComponents = markRaw({
   CapsulePanel: WallSurfaceRouter,
-  MissingPanel: WallMissingPanel,
+
 });
 
 /**
@@ -608,12 +613,14 @@ onBeforeUnmount(() => {
 </script>
 <template>
   <div class="wall-workspace" data-testid="wall-workspace">
-    <DockWorkspace
+    <component :is="props.workspaceComponent"
       :scope="props.scope"
       :storage="props.storage"
       :default-profile="props.defaultProfile ?? undefined"
       :owner-window-id="props.ownerWindowId"
       :panel-components="panelComponents"
+      :tab-components="tabComponents"
+      default-tab-component="SurfaceTab"
       :color-scheme="props.colorScheme"
       :density="props.density"
       workspace-title="MetaViewer"

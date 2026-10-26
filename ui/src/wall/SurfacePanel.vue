@@ -6,7 +6,7 @@
  */
 
 /** @typedef {{ code: string, message: string }} PanelAdmissionError */
-/** @typedef {{ id: string, surfaceId: string, backendLifecycle: string, generation: number, visibility: string, control: string, refusal?: PanelAdmissionError|null }} PanelSurfaceRow */
+/** @typedef {{ id: string, surfaceId: string, backendLifecycle: string, generation: number, visibility: string, control: string, attachmentState?: string, refusal?: PanelAdmissionError|null }} PanelSurfaceRow */
 /** @typedef {{ rows: readonly PanelSurfaceRow[] }} PanelProjectionBody */
 /** @typedef {{ schema: string, epoch: number, revision: number, query: string, projection: PanelProjectionBody }} PanelProjectionEnvelope */
 /** @typedef {{ status: string, stale: boolean, envelope: PanelProjectionEnvelope|null, error: PanelAdmissionError|null }} PanelProjectionSnapshot */
@@ -406,7 +406,7 @@ function onActivateSurface() {
   <CapsulePanel
     :capsule-id="props.capsuleId"
     :external-ai-slot="true"
-    :presentation-status="status"
+    :presentation-status="row?.attachmentState === 'attaching' ? 'Connecting' : status"
     :placeholder-title="props.title"
     :presentation-instance="props.presentationInstance"
     :has-keyboard-ownership="props.hasKeyboardOwnership"

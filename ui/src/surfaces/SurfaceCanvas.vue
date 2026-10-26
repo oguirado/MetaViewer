@@ -96,9 +96,14 @@ onBeforeUnmount(() => {
     :data-state="resolvedState"
     :aria-label="accessibleName"
   >
-    <canvas ref="canvasRef" class="mv-surface__canvas" aria-hidden="true" />
-    <p class="mv-surface__state" aria-hidden="true">{{ resolvedState }}</p>
-    <div class="mv-surface__strip" role="group" :aria-label="stripName">
+    <canvas ref="canvasRef" v-show="resolvedState === 'live' || resolvedState === 'stale'" class="mv-surface__canvas" aria-hidden="true" />
+    <div v-if="resolvedState !== 'live' && resolvedState !== 'stale'" class="mv-surface__waiting" role="status">
+      <span class="mv-surface__connection-mark" aria-hidden="true">◌</span>
+      <strong>{{ resolvedState === 'connecting' ? 'Connecting to surface' : 'Waiting for surface' }}</strong>
+      <span>The surface will appear here when it is ready.</span>
+    </div>
+    <p v-if="props.frame" class="mv-surface__state" aria-hidden="true">{{ resolvedState }}</p>
+    <div v-if="props.frame" class="mv-surface__strip" role="group" :aria-label="stripName">
       <span class="mv-surface__key">FRAME: {{ strip.frameText.length > 0 ? strip.frameText : '—' }}</span>
       <span class="mv-surface__key">GEN: {{ strip.generationText.length > 0 ? strip.generationText : '—' }}</span>
       <span class="mv-surface__key">SHA256: {{ strip.digestText.length > 0 ? strip.digestText : '—' }}</span>
@@ -112,15 +117,22 @@ onBeforeUnmount(() => {
   flex-direction: column;
   min-width: 0;
   overflow: hidden;
-  background-color: var(--mv-primitive-color-neutral-1000, #0a1317);
-  border: 1px solid var(--mv-primitive-color-neutral-600, #525b66);
+  width: 100%;
+  height: 100%;
+  background: var(--cuk-semantic-surface-canvas);
+  color: var(--cuk-semantic-text-primary);
 }
 .mv-surface__canvas {
   display: block;
   width: 100%;
-  aspect-ratio: 16 / 10;
+  flex: 1;
+  min-height: 0;
+  object-fit: contain;
   background-color: var(--mv-primitive-color-neutral-1100, #000000);
 }
+.mv-surface__waiting { flex:1; min-height:200px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:var(--cuk-semantic-spacing-sm); padding:var(--cuk-semantic-spacing-lg); text-align:center; color:var(--cuk-semantic-text-muted); font-size:12px; }
+.mv-surface__waiting strong { color:var(--cuk-semantic-text-primary); font-size:14px; font-weight:500; }
+.mv-surface__connection-mark { font-size:32px; color:var(--cuk-semantic-accent-primary); }
 .mv-surface__state {
   margin: 0;
   padding: 2px 8px;

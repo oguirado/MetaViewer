@@ -599,7 +599,7 @@ export function resetStub() {
 }
 export default defineComponent({
   name: 'StubDockWorkspace',
-  props: ['scope', 'storage', 'defaultProfile', 'ownerWindowId', 'panelComponents', 'colorScheme', 'density', 'workspaceTitle', 'initialViewportWidth', 'initialViewportHeight'],
+  props: ['scope', 'storage', 'defaultProfile', 'ownerWindowId', 'panelComponents', 'tabComponents', 'defaultTabComponent', 'colorScheme', 'density', 'workspaceTitle', 'initialViewportWidth', 'initialViewportHeight'],
   emits: ['ready', 'wall-settled', 'layout-saved', 'quarantine-detected', 'popout-blocked', 'active-panel-change'],
   setup(props, { emit }) {
     capturedProps.push(props);
@@ -749,7 +749,8 @@ export default defineComponent({
       assert.equal(kitProps.initialViewportWidth, 1280);
       assert.equal(kitProps.initialViewportHeight, 720);
       assert.ok(kitProps.panelComponents?.CapsulePanel, 'CapsulePanel router is registered');
-      assert.ok(kitProps.panelComponents?.MissingPanel, 'MissingPanel fallback is registered');
+      assert.deepEqual(Object.keys(kitProps.panelComponents), ['CapsulePanel'], 'only product panel types are registered');
+      assert.ok(kitProps.tabComponents?.SurfaceTab, 'product tab is registered');
       assert.ok(html.includes('data-scope-product="metaviewer"'));
       assert.ok(html.includes('data-viewport="1280x720"'));
       assert.ok(html.includes('data-color-scheme="light"'));
@@ -818,15 +819,15 @@ export default defineComponent({
     }
   });
 
-  test('retired panel renders MissingPanel with the preserved id and reason', async () => {
+  test('retired panel type cannot enter the product component registry', async () => {
     const loaded = await loadCompiledWall();
     loaded.dockStub.resetStub();
     loaded.panelStub.resetPanelStub();
     const { app, html } = mountWall(loaded);
     try {
-      assert.ok(html.includes('panel-cap-9'), 'retired panel id is preserved');
-      assert.ok(html.includes('retired in test'), 'unavailable reason is rendered');
-      assert.ok(html.includes('role="alert"'));
+      assert.ok(!html.includes('panel-cap-9'), 'foreign panel is never rendered');
+      assert.ok(!html.includes('retired in test'), 'migration replaces foreign layouts before mount');
+      assert.equal(loaded.dockStub.capturedProps[0].panelComponents.MissingPanel, undefined);
     } finally {
       app.unmount();
     }
