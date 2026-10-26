@@ -3,6 +3,7 @@ use metaviewer_core::admission::*;
 use metaviewer_core::journal::*;
 use serde_json::json;
 use std::fs;
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -14,7 +15,7 @@ impl Temp {
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
-        fs::create_dir(&p).unwrap();
+        fs::DirBuilder::new().mode(0o700).create(&p).unwrap();
         Self(p)
     }
 }
@@ -407,4 +408,56 @@ fn witness_corruption_uses_cli_witness_exit() {
         .unwrap();
     assert_eq!(out.status.code(), Some(4));
     assert!(out.stdout.is_empty());
+}
+
+#[test]
+fn pending_checkpoint_recovers_only_a_proven_chain() {
+    for pending_is_current in [false, true] {
+        let t = Temp::new();
+        let mut c = Authority::create(&t.0, CoreState::new("session-1", 10).unwrap()).unwrap();
+        let root = t.0.join("sessions/session-1");
+        let old = fs::read(root.join("checkpoint.json")).unwrap();
+        c.apply(Input::Connect).unwrap();
+        drop(c);
+        if pending_is_current {
+            // Crash after fsync(next), before rename(next, current).
+            fs::rename(root.join("checkpoint.json"), root.join("checkpoint.next")).unwrap();
+            fs::write(root.join("checkpoint.json"), &old).unwrap();
+        } else {
+            fs::write(root.join("checkpoint.next"), &old).unwrap();
+        }
+        let path = root.join("journal.jsonl");
+        let mut recovered = Authority::recover(&path, &root).unwrap();
+        assert_eq!(recovered.state().core_seq, 1);
+        recovered.apply(Input::Connect).unwrap();
+        drop(recovered);
+        assert!(!root.join("checkpoint.next").exists());
+        assert_eq!(scan(&path, &root).unwrap().state.core_seq, 2);
+        // Neither a corrupt current nor an unrelated next may certify a chain.
+        fs::write(root.join("checkpoint.json"), &old).unwrap();
+        fs::write(root.join("checkpoint.next"), b"{}").unwrap();
+        assert!(Authority::recover(&path, &root).is_err());
+    }
+}
+#[test]
+fn journal_directories_require_private_mode_and_owner() {
+    let t = Temp::new();
+    fs::set_permissions(&t.0, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(Authority::create(&t.0, CoreState::new("session-1", 10).unwrap()).is_err());
+    fs::set_permissions(&t.0, fs::Permissions::from_mode(0o700)).unwrap();
+    let c = Authority::create(&t.0, CoreState::new("session-1", 10).unwrap()).unwrap();
+    drop(c);
+    let root = t.0.join("sessions/session-1");
+    for dir in [
+        t.0.clone(),
+        t.0.join("sessions"),
+        root.clone(),
+        root.join("events"),
+        root.join("artifacts"),
+    ] {
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(Authority::recover(&root.join("journal.jsonl"), &root).is_err());
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    assert!(Authority::recover(&root.join("journal.jsonl"), &root).is_ok());
 }

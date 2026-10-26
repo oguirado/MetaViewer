@@ -360,9 +360,24 @@ fn bounds_tick_interval_and_deadline_overflow_refuse_without_domain_mutation() {
             2 => raw["body"]["budget"]["max_ms"] = json!(u64::MAX),
             _ => raw["body"]["action"] = json!({"type":"wait","ms":101}),
         }
-        let r = AdmissionRequest::decode(&raw.to_string(), &sender(), "session-1", 1, 0).unwrap();
         let mut s = state();
         let before = s.domain_snapshot().unwrap();
+        if mode == 0 || mode == 2 {
+            // The frozen wire rail now refuses u64::MAX before admission.
+            assert_eq!(
+                AdmissionRequest::decode(&raw.to_string(), &sender(), "session-1", 1, 0),
+                Err(AdmissionError::OutOfBounds)
+            );
+            assert_eq!(s.domain_snapshot().unwrap(), before);
+            // Also retain admission bounds/deadline-overflow coverage for the
+            // largest admitted integer (milliseconds still overflow nanoseconds).
+            if mode == 0 {
+                raw["body"]["expectation"]["bbox"]["x"] = metaviewer_core::MAX_WIRE_INTEGER.into();
+            } else {
+                raw["body"]["budget"]["max_ms"] = metaviewer_core::MAX_WIRE_INTEGER.into();
+            }
+        }
+        let r = AdmissionRequest::decode(&raw.to_string(), &sender(), "session-1", 1, 0).unwrap();
         assert_eq!(s.apply(&Input::Propose(r)).unwrap().reason, Some(reason));
         assert_eq!(s.domain_snapshot().unwrap(), before);
     }
@@ -413,4 +428,29 @@ fn failed_dispatch_consumes_stale_permit() {
     );
     assert!(s.pending.is_empty());
     assert!(s.leases.is_empty());
+}
+
+#[test]
+fn scroll_executor_rails_refuse_before_effect() {
+    for field in ["dx", "dy"] {
+        for delta in [
+            i64::from(i32::MIN),
+            i64::from(i32::MAX),
+            i64::from(i32::MIN) - 1,
+            i64::from(i32::MAX) + 1,
+        ] {
+            let mut s = state();
+            let before = s.domain_snapshot().unwrap();
+            let mut action = json!({"type":"scroll", "dx":0, "dy":0});
+            action[field] = delta.into();
+            let out = s.apply(&Input::Propose(request(1, action))).unwrap();
+            if i32::try_from(delta).is_ok() {
+                assert_eq!(out.reason, None);
+            } else {
+                assert_eq!(out.reason, Some(Refusal::OutOfBounds));
+                assert_eq!(s.domain_snapshot().unwrap(), before);
+                assert!(s.leases.is_empty());
+            }
+        }
+    }
 }

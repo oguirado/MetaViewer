@@ -1,4 +1,6 @@
 //! Explicit bounded stream and owner-only Unix socket operations.
+//! [TARGET, unit decision] S12 publication uses a fresh verified 0700 stage;
+//! final-path publication is an atomic rename of an already verified 0600 socket.
 use crate::wire::error_type;
 use crate::{
     decode_envelope_with_limits, DecodeError, Endpoint, Envelope, WireLimits, HANDSHAKE_DEADLINE,
@@ -133,6 +135,7 @@ error_type!(BindError {
     ProbeInconclusive,
     IdentityChanged,
     WrongMode,
+    CreationModeUnavailable,
     Io
 });
 error_type!(PeerCredError {
@@ -178,8 +181,28 @@ fn private_dir(path: &Path, uid: u32) -> Result<Metadata, BindError> {
     }
     Ok(meta)
 }
-/// The private directory prevents other UIDs from traversing the socket during
-/// bind/chmod. No process-wide umask mutation or unsafe call is required.
+// [TARGET, unit decision] S12 publication amendment: prepare under a verified
+// 0700 staging directory, then publish an already verified 0600 socket by rename.
+// No process-wide umask mutation is used.
+static NEXT_STAGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+struct SocketStage(PathBuf);
+impl Drop for SocketStage {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(self.0.join("s"));
+        let _ = fs::remove_dir(&self.0);
+    }
+}
+fn create_stage(path: PathBuf, uid: u32) -> Result<(SocketStage, Metadata), BindError> {
+    // A collision is a refusal, never permission repair of an existing object.
+    DirBuilder::new()
+        .mode(0o700)
+        .create(&path)
+        .map_err(|_| BindError::CreationModeUnavailable)?;
+    let stage = SocketStage(path);
+    let metadata = private_dir(&stage.0, uid).map_err(|_| BindError::CreationModeUnavailable)?;
+    Ok((stage, metadata))
+}
+/// The final path is first visible with mode 0600 and the expected owner.
 pub async fn bind_owner_only(
     path: &Path,
     expected_uid: u32,
@@ -222,14 +245,34 @@ pub async fn bind_owner_only(
     if !same_inode(&directory, &private_dir(parent, expected_uid)?) {
         return Err(BindError::IdentityChanged);
     }
-    let listener = UnixListener::bind(path).map_err(|_| BindError::Io)?;
-    let before = fs::symlink_metadata(path).map_err(|_| BindError::Io)?;
+    let stage_path = parent.join(format!(
+        ".mv-{}-{}",
+        std::process::id(),
+        NEXT_STAGE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let (stage, stage_meta) = create_stage(stage_path, expected_uid)?;
+    let staged = stage.0.join("s");
+    let listener = UnixListener::bind(&staged).map_err(|_| BindError::Io)?;
+    let before = fs::symlink_metadata(&staged).map_err(|_| BindError::Io)?;
     if !before.file_type().is_socket() || before.uid() != expected_uid {
         return Err(BindError::IdentityChanged);
     }
-    fs::set_permissions(path, Permissions::from_mode(0o600)).map_err(|_| BindError::Io)?;
+    fs::set_permissions(&staged, Permissions::from_mode(0o600)).map_err(|_| BindError::Io)?;
+    let prepared = fs::symlink_metadata(&staged).map_err(|_| BindError::Io)?;
+    if !same_inode(&before, &prepared) || prepared.mode() & 0o7777 != 0o600 {
+        return Err(BindError::WrongMode);
+    }
+    if !same_inode(
+        &stage_meta,
+        &private_dir(&stage.0, expected_uid).map_err(|_| BindError::CreationModeUnavailable)?,
+    ) || !same_inode(&directory, &private_dir(parent, expected_uid)?)
+    {
+        return Err(BindError::IdentityChanged);
+    }
+    fs::rename(&staged, path).map_err(|_| BindError::Io)?;
     let after = fs::symlink_metadata(path).map_err(|_| BindError::Io)?;
-    if !same_inode(&before, &after) || !same_inode(&directory, &private_dir(parent, expected_uid)?)
+    if !same_inode(&prepared, &after)
+        || !same_inode(&directory, &private_dir(parent, expected_uid)?)
     {
         return Err(BindError::IdentityChanged);
     }
@@ -362,7 +405,10 @@ pub async fn handshake_at(
     tokio::time::timeout_at(deadline, async {
         let env = read_frame_with_limits(stream, limits)
             .await
-            .map_err(HandshakeError::Frame)?
+            .map_err(|error| match error {
+                FrameError::Decode(DecodeError::UnknownVersion) => HandshakeError::VersionMismatch,
+                _ => HandshakeError::Frame(error),
+            })?
             .ok_or(HandshakeError::ExpectedHello)?;
         if env.from != policy.sender
             || env.to != policy.recipient
@@ -391,4 +437,22 @@ pub async fn handshake_at(
     })
     .await
     .map_err(|_| HandshakeError::Timeout)?
+}
+
+#[cfg(test)]
+mod staging_tests {
+    use super::*;
+    #[test]
+    fn preexisting_nonprivate_stage_refused() {
+        let root = std::env::temp_dir().join(format!("mv-stage-{}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, Permissions::from_mode(0o755)).unwrap();
+        let uid = fs::metadata(&root).unwrap().uid();
+        assert!(matches!(
+            create_stage(root.clone(), uid),
+            Err(BindError::CreationModeUnavailable)
+        ));
+        assert_eq!(fs::metadata(&root).unwrap().mode() & 0o7777, 0o755);
+        fs::remove_dir(root).unwrap();
+    }
 }

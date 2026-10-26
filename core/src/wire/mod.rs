@@ -1,4 +1,7 @@
 //! Pure closed decoding and checked logical clocks.
+//! [TARGET, unit decision] Until contract upper rails are published, all wire
+//! integers use the interoperable JSON safe-integer range, +/- 9007199254740991.
+//! Existing schema bounds remain authoritative when narrower.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -31,6 +34,7 @@ error_type!(LimitError {
 });
 error_type!(DecodeError {
     Oversized,
+    OutOfBounds,
     Malformed,
     DuplicateField,
     UnknownVersion,
@@ -257,6 +261,19 @@ pub fn decode_envelope_with_limits(
         return Err(DecodeError::Oversized);
     }
     preflight(raw, limits)?;
+    let value: Value = serde_json::from_str(raw).map_err(|_| DecodeError::Malformed)?;
+    check_integer_rails(&value)?;
+    // Diagnose version refusal before the closed typed enum rejects it as shape.
+    if value["schema"]
+        .as_str()
+        .is_some_and(|v| v != "envelope/v0.2")
+        || value["body"]["schema"] == "hello/v0.2"
+            && value["body"]["contract_version"]
+                .as_str()
+                .is_some_and(|v| v != "v0.2")
+    {
+        return Err(DecodeError::UnknownVersion);
+    }
     let envelope: Envelope = serde_json::from_str(raw).map_err(|_| DecodeError::Malformed)?;
     if envelope.schema != "envelope/v0.2" {
         return Err(DecodeError::UnknownVersion);
@@ -267,6 +284,34 @@ pub fn decode_envelope_with_limits(
         return Err(DecodeError::InvalidField);
     }
     Ok(envelope)
+}
+
+pub const MAX_WIRE_INTEGER: u64 = 9_007_199_254_740_991;
+fn check_integer_rails(value: &Value) -> Result<(), DecodeError> {
+    match value {
+        Value::Number(n) => {
+            if n.as_u64().is_some_and(|v| v > MAX_WIRE_INTEGER)
+                || n.as_i64().is_some_and(|v| v < -(MAX_WIRE_INTEGER as i64))
+                || n.is_f64()
+                    && n.as_f64()
+                        .is_some_and(|v| v.abs() > MAX_WIRE_INTEGER as f64)
+            {
+                return Err(DecodeError::OutOfBounds);
+            }
+        }
+        Value::Array(a) => {
+            for v in a {
+                check_integer_rails(v)?;
+            }
+        }
+        Value::Object(o) => {
+            for v in o.values() {
+                check_integer_rails(v)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn terminal_lengths(v: &Value) -> bool {
@@ -311,16 +356,8 @@ fn pattern_ok(s: &str, pattern: &str) -> bool {
         } else {
             "/"
         };
-        // Match the schema's literal escaped character class, including the
-        // legacy double-escaped patterns, rather than silently relaxing it.
         let tail = s.strip_prefix(prefix);
-        let forbidden = if pattern.contains("\\\\u0000") {
-            "\\u0rn"
-        } else if pattern.contains("\\r") || pattern.contains('\r') {
-            "\0\r\n"
-        } else {
-            "\0"
-        };
+        let forbidden = "\0\r\n";
         return tail.is_some_and(|t| {
             (!pattern.ends_with("+$") || !t.is_empty()) && !t.chars().any(|c| forbidden.contains(c))
         });

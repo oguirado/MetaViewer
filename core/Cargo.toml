@@ -9,3 +9,4 @@ rust-version.workspace = true
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
 tokio = { version = "=1.53.1", features = ["io-util", "net", "rt", "time"] }
+sha2 = "=0.10.9"

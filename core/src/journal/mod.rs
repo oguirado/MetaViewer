@@ -2,6 +2,9 @@
 //! [TARGET, unit decision] Private archive v1: canonical event sidecars retain
 //! replay inputs/outcomes and complete boundary bytes; a durable checkpoint binds
 //! header, count, record tail and archive chain. Unsealed crash tails fail closed.
+//! [TARGET, unit decision] Recovery may promote checkpoint.next only after
+//! replay proves its complete closure; stale pending files are replaced under
+//! the exclusive writer lock. State/archive directories require effective uid/0700.
 //! The archive read budget is 64 MiB [TARGET, unit decision], including
 //! retained boundary snapshots. Artifacts are opaque authorized state witnesses; callers must authorize any
 //! disk export. Raw pixel retention is never implied by a frame reference.
@@ -76,6 +79,7 @@ pub struct Replay {
     pub state: CoreState,
     pub boundaries: Vec<Vec<u8>>,
     archive_bytes: u64,
+    checkpoint: Checkpoint,
 }
 pub struct Journal {
     root: PathBuf,
@@ -138,6 +142,61 @@ fn confined(path: &Path) -> Result<(), JournalError> {
     }
     Ok(())
 }
+fn private_directory(path: &Path) -> Result<(), JournalError> {
+    confined(path)?;
+    // Linux host effective uid, without unsafe FFI or process-wide state changes.
+    let status = fs::read_to_string("/proc/self/status").map_err(|_| JournalError::Io)?;
+    let uid: u32 = status
+        .lines()
+        .find_map(|line| line.strip_prefix("Uid:"))
+        .and_then(|line| line.split_whitespace().nth(1))
+        .ok_or(JournalError::Invalid)?
+        .parse()
+        .map_err(|_| JournalError::Invalid)?;
+    private_directory_for_uid(path, uid)
+}
+fn private_directory_for_uid(path: &Path, uid: u32) -> Result<(), JournalError> {
+    confined(path)?;
+    let meta = fs::symlink_metadata(path).map_err(|_| JournalError::Io)?;
+    if !meta.is_dir() || meta.uid() != uid || meta.mode() & 0o7777 != 0o700 {
+        return Err(JournalError::Invalid);
+    }
+    Ok(())
+}
+fn private_archive(root: &Path) -> Result<(), JournalError> {
+    let sessions = root.parent().ok_or(JournalError::Invalid)?;
+    let state = sessions.parent().ok_or(JournalError::Invalid)?;
+    for dir in [
+        state.to_path_buf(),
+        sessions.to_path_buf(),
+        root.to_path_buf(),
+        root.join("events"),
+        root.join("artifacts"),
+    ] {
+        private_directory(&dir)?;
+    }
+    Ok(())
+}
+// [TARGET, unit decision] Pending checkpoints are evidence only when their full
+// closure matches a replay from genesis. A valid current checkpoint wins over a
+// stale next file; recovery holds the journal lock before cleaning or promoting.
+fn matching_checkpoint(root: &Path, expected: &Checkpoint) -> Result<Checkpoint, JournalError> {
+    for name in ["checkpoint.json", "checkpoint.next"] {
+        if let Ok(bytes) = read_file(&root.join(name), MAX_LINE as u64) {
+            if let Ok(c) = parse::<Checkpoint>(&bytes) {
+                if c.schema == expected.schema
+                    && c.count == expected.count
+                    && c.tail == expected.tail
+                    && c.archive == expected.archive
+                    && c.genesis == expected.genesis
+                {
+                    return Ok(c);
+                }
+            }
+        }
+    }
+    Err(JournalError::Corrupt)
+}
 fn read_file(path: &Path, cap: u64) -> Result<Vec<u8>, JournalError> {
     confined(path)?;
     let before = fs::symlink_metadata(path).map_err(|_| JournalError::Io)?;
@@ -173,7 +232,7 @@ fn sync_dir(path: &Path) -> Result<(), JournalError> {
 }
 fn publish(path: &Path, bytes: &[u8]) -> Result<(), JournalError> {
     let parent = path.parent().ok_or(JournalError::Invalid)?;
-    confined(parent)?;
+    private_directory(parent)?;
     let mut f = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -187,6 +246,14 @@ fn publish(path: &Path, bytes: &[u8]) -> Result<(), JournalError> {
 }
 fn checkpoint(root: &Path, c: &Checkpoint) -> Result<(), JournalError> {
     let tmp = root.join("checkpoint.next");
+    // Only called by a new journal or the exclusive, replay-verified writer.
+    private_directory(root)?;
+    match fs::symlink_metadata(&tmp) {
+        Ok(meta) if meta.is_file() => fs::remove_file(&tmp).map_err(|_| JournalError::Io)?,
+        Ok(_) => return Err(JournalError::Invalid),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(JournalError::Io),
+    }
     publish(&tmp, &json(c)?)?;
     fs::rename(tmp, root.join("checkpoint.json")).map_err(|_| JournalError::Io)?;
     sync_dir(root)
@@ -265,7 +332,7 @@ impl Journal {
                 .create(state_dir)
                 .map_err(|_| JournalError::Io)?;
         }
-        confined(state_dir)?;
+        private_directory(state_dir)?;
         let sessions = state_dir.join("sessions");
         if !sessions.exists() {
             fs::DirBuilder::new()
@@ -273,7 +340,7 @@ impl Journal {
                 .create(&sessions)
                 .map_err(|_| JournalError::Io)?;
         }
-        confined(&sessions)?;
+        private_directory(&sessions)?;
         let root = sessions.join(&state.session_id);
         fs::DirBuilder::new()
             .mode(0o700)
@@ -285,6 +352,7 @@ impl Journal {
                 .create(root.join(name))
                 .map_err(|_| JournalError::Io)?;
         }
+        private_archive(&root)?;
         let header = json(&Header {
             schema: "metaviewer.journal/v1".into(),
             session_id: state.session_id.clone(),
@@ -341,7 +409,8 @@ impl Journal {
             .map_err(|_| JournalError::Io)?;
         file.try_lock().map_err(|_| JournalError::Locked)?;
         let replay = scan(path, root)?;
-        let c: Checkpoint = parse(&read_file(&root.join("checkpoint.json"), MAX_LINE as u64)?)?;
+        let c = replay.checkpoint.clone();
+        checkpoint(root, &c)?;
         let uncommitted = root.join("events").join(format!(
             "{}.json",
             c.count.checked_add(1).ok_or(JournalError::Policy)?
@@ -486,7 +555,7 @@ pub fn verify_chain(path: &Path, root: &Path) -> Result<(), JournalError> {
 }
 pub fn scan(path: &Path, root: &Path) -> Result<Replay, JournalError> {
     confined(path)?;
-    confined(root)?;
+    private_archive(root)?;
     let metadata = fs::metadata(path).map_err(|_| JournalError::Io)?;
     if !metadata.is_file() || metadata.len() > MAX_BYTES {
         return Err(JournalError::Corrupt);
@@ -580,22 +649,21 @@ pub fn scan(path: &Path, root: &Path) -> Result<Replay, JournalError> {
         tail = sha256_hex(&bytes);
         archive = archive_next(&archive, &event_bytes);
     }
-    let c: Checkpoint = parse(
-        &read_file(&root.join("checkpoint.json"), MAX_LINE as u64)
-            .map_err(|_| JournalError::Unsealed)?,
+    let checkpoint = matching_checkpoint(
+        root,
+        &Checkpoint {
+            schema: "metaviewer.checkpoint/v1".into(),
+            count,
+            tail,
+            archive,
+            genesis: sha256_hex(&genesis_bytes),
+        },
     )?;
-    if c.schema != "metaviewer.checkpoint/v1"
-        || c.count != count
-        || c.tail != tail
-        || c.archive != archive
-        || c.genesis != sha256_hex(&genesis_bytes)
-    {
-        return Err(JournalError::Corrupt);
-    }
     Ok(Replay {
         state,
         boundaries,
         archive_bytes: archive_budget,
+        checkpoint,
     })
 }
 /// Resolves the conductor's default state destination without creating it.
@@ -615,4 +683,21 @@ pub fn default_state_dir() -> Result<PathBuf, JournalError> {
         return Err(JournalError::Invalid);
     }
     Ok(p.join(".local/state/metaviewer"))
+}
+
+#[cfg(test)]
+mod directory_tests {
+    use super::*;
+    #[test]
+    fn foreign_owner_is_refused_even_with_private_mode() {
+        let root = std::env::temp_dir().join(format!("mv-journal-owner-{}", std::process::id()));
+        fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        let uid = fs::metadata(&root).unwrap().uid();
+        assert_eq!(private_directory_for_uid(&root, uid), Ok(()));
+        assert_eq!(
+            private_directory_for_uid(&root, uid.checked_add(1).unwrap()),
+            Err(JournalError::Invalid)
+        );
+        fs::remove_dir(root).unwrap();
+    }
 }

@@ -171,3 +171,62 @@ fn explicit_wire_limits_and_terminal_byte_count() {
     env["body"]["params"]["byte_count"] = 2.into();
     assert!(decode_envelope(&env.to_string()).is_err());
 }
+
+#[test]
+fn integer_upper_rails_are_exact_and_recursive() {
+    use metaviewer_core::{DecodeError, MAX_WIRE_INTEGER};
+    let base: serde_json::Value = serde_json::from_str(&fixture()).unwrap();
+    for pointer in [
+        "/seq",
+        "/ts_ns",
+        "/body/based_on_frame/generation",
+        "/body/action/x",
+        "/body/budget/max_ms",
+    ] {
+        let mut value = base.clone();
+        *value.pointer_mut(pointer).unwrap() = MAX_WIRE_INTEGER.into();
+        assert!(decode_envelope(&value.to_string()).is_ok(), "{pointer}");
+        *value.pointer_mut(pointer).unwrap() = (MAX_WIRE_INTEGER + 1).into();
+        assert_eq!(
+            decode_envelope(&value.to_string()),
+            Err(DecodeError::OutOfBounds),
+            "{pointer}"
+        );
+    }
+    for delta in [
+        MAX_WIRE_INTEGER as i64,
+        -(MAX_WIRE_INTEGER as i64),
+        MAX_WIRE_INTEGER as i64 + 1,
+        -(MAX_WIRE_INTEGER as i64) - 1,
+    ] {
+        let mut value = base.clone();
+        value["body"]["action"] = serde_json::json!({"type":"scroll", "dx":delta, "dy":0});
+        let result = decode_envelope(&value.to_string());
+        assert_eq!(result.is_ok(), delta.unsigned_abs() <= MAX_WIRE_INTEGER);
+        if result.is_err() {
+            assert_eq!(result, Err(DecodeError::OutOfBounds));
+        }
+    }
+}
+
+#[test]
+fn frame_paths_accept_literal_rn_and_refuse_controls() {
+    let mut env: serde_json::Value = serde_json::from_str(&fixture()).unwrap();
+    env["body"] = serde_json::from_str(include_str!(
+        "../../contracts/examples/v0.2/frame_ref.valid.json"
+    ))
+    .unwrap();
+    // Locate the schema's path property rather than assuming the fixture layout.
+    let object = env["body"].as_object_mut().unwrap();
+    let key = object
+        .iter()
+        .find(|(_, v)| v.as_str().is_some_and(|s| s.starts_with("/dev/shm/")))
+        .map(|(k, _)| k.clone())
+        .unwrap();
+    env["body"][&key] = "/dev/shm/frame_rn".into();
+    assert!(decode_envelope(&env.to_string()).is_ok());
+    for control in ['\0', '\r', '\n'] {
+        env["body"][&key] = format!("/dev/shm/frame{control}").into();
+        assert!(decode_envelope(&env.to_string()).is_err());
+    }
+}

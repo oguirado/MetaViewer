@@ -69,10 +69,16 @@ fn command_identity_pin_version_uid_and_timeout_controls() {
                 .write_all(format!("{value}\n").as_bytes())
                 .await
                 .unwrap();
-            assert!(
-                handshake(&mut receiver, &expected, &WireLimits::default())
-                    .await
-                    .is_err(),
+            let error = match change {
+                "command" => HandshakeError::ExpectedHello,
+                "identity" => HandshakeError::IdentityMismatch,
+                "pin" => HandshakeError::PinMismatch,
+                "version" => HandshakeError::VersionMismatch,
+                _ => unreachable!(),
+            };
+            assert_eq!(
+                handshake(&mut receiver, &expected, &WireLimits::default()).await,
+                Err(error),
                 "{change}"
             );
         }

@@ -2,6 +2,8 @@
 //! [TARGET, unit decision] Trusted host events form a private replay ABI, not
 //! component messages. Callers serialize Authority access and authenticate host
 //! events; proposals enter only through closed decoding and peer binding.
+//! [TARGET, unit decision] Scroll dx/dy must fit signed 32-bit executor inputs;
+//! larger deltas return OutOfBounds before reservation and again before dispatch.
 //! Budget counts admitted attempts; unknown dispatched work is never refunded.
 //! Each proposal is dispatched at most once, below its retry ceiling; retries
 //! require a new frame-bound admission. Receipt here settles execution only,
@@ -13,6 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 crate::wire::error_type!(AdmissionError {
     InvalidInput,
+    OutOfBounds,
     Overflow
 });
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,7 +34,10 @@ impl AdmissionRequest {
         epoch: u64,
         received_ns: u64,
     ) -> Result<Self, AdmissionError> {
-        let envelope = decode_envelope(raw).map_err(|_| AdmissionError::InvalidInput)?;
+        let envelope = decode_envelope(raw).map_err(|error| match error {
+            crate::DecodeError::OutOfBounds => AdmissionError::OutOfBounds,
+            _ => AdmissionError::InvalidInput,
+        })?;
         if envelope.from != *peer
             || envelope.session_id != session
             || envelope.to.component != Component::Core
@@ -424,6 +430,13 @@ impl CoreState {
         if let ActionProposalAction::Case4(a) = &p.action {
             if a.ms > p.budget.max_ms {
                 return Ok(Some(Refusal::BudgetExceeded));
+            }
+        }
+        // [TARGET, unit decision] Scroll deltas must fit a signed 32-bit executor
+        // input before reservation or dispatch; bounds are inclusive.
+        if let ActionProposalAction::Case3(a) = &p.action {
+            if i32::try_from(a.dx).is_err() || i32::try_from(a.dy).is_err() {
+                return Ok(Some(Refusal::OutOfBounds));
             }
         }
         if let ActionProposalAction::Case0(a) = &p.action {
