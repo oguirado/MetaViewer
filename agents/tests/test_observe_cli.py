@@ -14,4 +14,6 @@ class ObserveCLI(unittest.TestCase):
                     env=dict(os.environ, PYTHONPATH=str(root)), capture_output=True, text=True)
                 self.assertEqual(result.returncode, 2)
                 self.assertEqual(result.stdout, "")
-                self.assertIn("unsupported_operation", result.stderr)
+                self.assertEqual(result.stderr,
+                    '{"verdict":"refuse","code":"unsupported_operation",'
+                    '"error":"unsupported operation"}\n')

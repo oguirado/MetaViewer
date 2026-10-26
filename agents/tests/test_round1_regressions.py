@@ -36,6 +36,19 @@ def _target_oracle():
     return TargetValidator(Path(__file__).resolve().parents[2] / 'contracts' / 'v0.2')
 
 class CodecRegressions(unittest.TestCase):
+    def test_control_intents_match_admitted_contract(self):
+        for op in ('take_control', 'release_control'):
+            body = dict(schema='ui_intent/v0.2', request_id='control', op=op,
+                        params={'surface_id': 'surface-demo'})
+            env = fixtures._wrap(body)
+            self.assertEqual(e.loads_envelope(e.dumps_envelope(env, max_bytes=M),
+                                             max_bytes=M), env)
+            for params in ({}, {'slot_id': 'surface-demo'},
+                           {'surface_id': 'surface-demo', 'extra': True}):
+                bad = copy.deepcopy(env)
+                bad['body']['params'] = params
+                self.assert_bad(bad)
+
     def test_v02_hello_and_legacy_version_isolation(self):
         hello = dict(schema='hello/v0.2', contract_version='v0.2', component='agent',
                      component_version='test', component_commit='a'*40, dependencies=[])
@@ -175,3 +188,11 @@ class FramingRegressions(unittest.TestCase):
         out = self.serve_frames([dict(jsonrpc='2.0', id='normal', method='ping')], 'x'*(M+100))[0]
         self.assertEqual(out['error']['code'], -32603)
         self.assertEqual(out['id'], 'normal')
+
+    def test_fallback_does_not_trust_handler_id(self):
+        # Bypass request admission to exercise the final framing gate itself.
+        out = self.serve_frames(
+            [dict(jsonrpc='2.0', id='x'*(M-50), method='ping')],
+            'x'*(M+100))[0]
+        self.assertEqual(out['error']['code'], -32603)
+        self.assertIsNone(out['id'])

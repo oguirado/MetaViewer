@@ -826,10 +826,10 @@ def dumps_envelope(env: dict, *, max_bytes: int) -> bytes:
     try:
         text = json.dumps(env, ensure_ascii=False, allow_nan=False,
                           separators=(",", ":"))
+        raw = text.encode("utf-8") + b"\n"
     except (ValueError, TypeError):
         raise EnvelopeError("bad_shape",
                             "envelope is not JSON-encodable") from None
-    raw = text.encode("utf-8") + b"\n"
     if b"\n" in raw[:-1] or b"\r" in raw[:-1]:
         raise EnvelopeError("bad_shape", "encoded frame is not one line")
     if len(raw) > max_bytes:

@@ -2,6 +2,10 @@
 
 This module is an untrusted caller: it validates every flag, input byte and
 core reply, and leaves admission, ownership and replay decisions to the core.
+
+The observe CLI is reserved and always refuses, including when arguments are
+supplied. Observation-to-action coverage uses the frame/admission path;
+it does not establish CLI observe-to-act support.
 """
 
 import argparse
