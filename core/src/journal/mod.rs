@@ -17,6 +17,8 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::{Component, Path, PathBuf};
+/// Verification against a separately protected, externally supplied journal head.
+pub mod anchor;
 mod sha256;
 pub use sha256::sha256_hex;
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
@@ -91,6 +93,8 @@ pub struct Journal {
     genesis: String,
     archive_bytes: u64,
     poisoned: bool,
+    // Last durably committed reduction boundary; supplied transitions are untrusted.
+    state: CoreState,
 }
 fn json<T: Serialize>(value: &T) -> Result<Vec<u8>, JournalError> {
     canonical_bytes(&serde_json::to_value(value).map_err(|_| JournalError::Invalid)?)
@@ -386,6 +390,7 @@ impl Journal {
             genesis: sha256_hex(&genesis),
             archive_bytes: genesis.len() as u64,
             poisoned: false,
+            state: state.clone(),
         };
         checkpoint(&journal.root, &journal.closure())?;
         sync_dir(&sessions)?;
@@ -410,15 +415,27 @@ impl Journal {
         file.try_lock().map_err(|_| JournalError::Locked)?;
         let replay = scan(path, root)?;
         let c = replay.checkpoint.clone();
-        checkpoint(root, &c)?;
-        let uncommitted = root.join("events").join(format!(
-            "{}.json",
-            c.count.checked_add(1).ok_or(JournalError::Policy)?
-        ));
-        if fs::symlink_metadata(uncommitted).is_ok() {
-            return Err(JournalError::Unsealed);
-        }
         let bytes = file.metadata().map_err(|_| JournalError::Io)?.len();
+        // scan has validated every tail before any recovery mutation. Keep a
+        // matching published checkpoint byte/inode-stable; only promote if needed.
+        let current_matches = read_file(&root.join("checkpoint.json"), MAX_LINE as u64)
+            .is_ok_and(|bytes| json(&c).is_ok_and(|expected| bytes == expected));
+        let pending = root.join("checkpoint.next");
+        match fs::symlink_metadata(&pending) {
+            Ok(meta) if meta.is_file() => {}
+            Ok(_) => return Err(JournalError::Invalid),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(JournalError::Io),
+        }
+        if current_matches {
+            match fs::remove_file(&pending) {
+                Ok(()) => sync_dir(root)?,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return Err(JournalError::Io),
+            }
+        } else {
+            checkpoint(root, &c)?;
+        }
         Ok((
             Self {
                 root: root.into(),
@@ -430,6 +447,7 @@ impl Journal {
                 genesis: c.genesis,
                 archive_bytes: replay.archive_bytes,
                 poisoned: false,
+                state: replay.state.clone(),
             },
             replay.state,
         ))
@@ -468,6 +486,14 @@ impl Journal {
         }
         let next = self.count.checked_add(1).ok_or(JournalError::Policy)?;
         if outcome.core_seq != next || state.core_seq != next {
+            return Err(JournalError::Invalid);
+        }
+        let mut reduced = self.state.clone();
+        let expected = reduced.apply(input).map_err(|_| JournalError::Invalid)?;
+        if expected != *outcome
+            || reduced.snapshot().map_err(|_| JournalError::Invalid)?
+                != state.snapshot().map_err(|_| JournalError::Invalid)?
+        {
             return Err(JournalError::Invalid);
         }
         let record = SessionRecord {
@@ -532,6 +558,7 @@ impl Journal {
         self.archive = archive_next(&self.archive, &event);
         checkpoint(&self.root, &self.closure())?;
         self.archive_bytes = archive_bytes;
+        self.state = reduced;
         self.poisoned = false;
         Ok(())
     }
@@ -648,6 +675,15 @@ pub fn scan(path: &Path, root: &Path) -> Result<Replay, JournalError> {
         boundaries.push(snapshot);
         tail = sha256_hex(&bytes);
         archive = archive_next(&archive, &event_bytes);
+    }
+    let uncommitted = root.join("events").join(format!(
+        "{}.json",
+        count.checked_add(1).ok_or(JournalError::Policy)?
+    ));
+    match fs::symlink_metadata(uncommitted) {
+        Ok(_) => return Err(JournalError::Unsealed),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(JournalError::Io),
     }
     let checkpoint = matching_checkpoint(
         root,

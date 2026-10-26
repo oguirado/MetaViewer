@@ -6,6 +6,7 @@ fn run() -> Result<(), JournalError> {
     let mut journal = None;
     let mut root = None;
     let mut verify = false;
+    let mut anchor = None;
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--journal") if journal.is_none() => {
@@ -14,14 +15,21 @@ fn run() -> Result<(), JournalError> {
             Some("--witness-root") if root.is_none() => {
                 root = Some(PathBuf::from(args.next().ok_or(JournalError::Invalid)?))
             }
+            Some("--anchor") if anchor.is_none() => {
+                anchor = Some(PathBuf::from(args.next().ok_or(JournalError::Invalid)?))
+            }
             Some("--verify-only") if !verify => verify = true,
             _ => return Err(JournalError::Invalid),
         }
     }
-    let replay = scan(
-        &journal.ok_or(JournalError::Invalid)?,
-        &root.ok_or(JournalError::Invalid)?,
-    )?;
+    let journal = journal.ok_or(JournalError::Invalid)?;
+    let root = root.ok_or(JournalError::Invalid)?;
+    let replay = match anchor {
+        Some(anchor) => {
+            metaviewer_core::journal::anchor::scan_with_anchor(&journal, &root, &anchor)?
+        }
+        None => scan(&journal, &root)?,
+    };
     if !verify {
         println!(
             "{}",
