@@ -30,7 +30,7 @@ const props = defineProps({
 
 const emit = defineEmits(['canvas-ready', 'canvas-released']);
 
-/** @type {{ attachCanvas: (args: any) => unknown, detachCanvas: (id: string) => void } | null} */
+/** @type {{ attachCanvas: (args: any) => { ok: boolean }, detachCanvas: (id: string) => void } | null} */
 const scheduler = /** @type {any} */ (inject('tileScheduler', null));
 
 /** @type {{ value: HTMLCanvasElement | null }} */
@@ -67,18 +67,31 @@ const stripName = computed(() => {
   return parts.length > 0 ? parts.join(', ') : 'Frame state unavailable';
 });
 
-onMounted(() => {
+/** @param {number | string} value */
+function bindingNumber(value) {
+  if (value === '') return undefined;
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number > 0 ? number : NaN;
+}
+
+function attachCanvas() {
   if (scheduler !== null && canvasRef.value !== null) {
-    scheduler.attachCanvas({ surfaceId: props.surfaceId, surfaceGeneration: props.generation, epoch: props.epoch, canvas: canvasRef.value });
+    const result = scheduler.attachCanvas({ surfaceId: props.surfaceId,
+      surfaceGeneration: bindingNumber(props.generation), epoch: bindingNumber(props.epoch), canvas: canvasRef.value });
+    if (result?.ok === true) {
+      emit('canvas-ready', { surfaceId: props.surfaceId });
+      return;
+    }
   }
-  emit('canvas-ready', { surfaceId: props.surfaceId });
-});
+  emit('canvas-released', { surfaceId: props.surfaceId });
+}
+
+onMounted(attachCanvas);
 
 watch(() => [props.surfaceId, props.generation, props.epoch], (_current, previous) => {
   if (scheduler === null) return;
   scheduler.detachCanvas(String(previous[0]));
-  if (canvasRef.value) scheduler.attachCanvas({ surfaceId: props.surfaceId,
-    surfaceGeneration: props.generation, epoch: props.epoch, canvas: canvasRef.value });
+  attachCanvas();
 });
 
 onBeforeUnmount(() => {

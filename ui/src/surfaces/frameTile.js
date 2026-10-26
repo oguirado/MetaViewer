@@ -22,10 +22,17 @@ export function createFrameTile({port,binding,limits,budget,state}) {
     onReleaseLease:()=>{},
     onRevoke:()=>scheduler.destroySurface(binding.surfaceId),
     onFrame:frame=>new Promise(resolve=>{
+      if(pending.has(frame.leaseId)) {
+        resolve({outcome:'REFUSED'});return;
+      }
       pending.set(frame.leaseId,resolve);
-      scheduler.recordCaptureWitness({surfaceId:frame.surfaceId,surfaceGeneration:frame.surfaceGeneration,
-        captureGeneration:frame.frameGeneration});
       const admitted=scheduler.submitFrame(frame);
+      // The port verifies shape; submitFrame checks identity before its
+      // folded refusal. Valid folded captures still advance the reopen floor.
+      if(admitted.ok || admitted.reason==='FOLDED_DISPLAY_DISABLED') {
+        scheduler.recordCaptureWitness({surfaceId:frame.surfaceId,surfaceGeneration:frame.surfaceGeneration,
+          captureGeneration:frame.frameGeneration});
+      }
       if(!admitted.ok) {
         pending.delete(frame.leaseId);resolve({outcome:'REFUSED'});
       }
