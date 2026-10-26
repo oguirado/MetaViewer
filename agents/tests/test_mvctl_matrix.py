@@ -182,8 +182,8 @@ class MvctlMatrixTests(unittest.TestCase):
             self.assertEqual(rc, 1)
 
     def test_no_caller_input_echoed_to_stderr(self):
-        secret_input = "SECRET_SENSITIVE_STRING_12345"
-        self._write_req(secret_input)
+        untrusted_input = "UNTRUSTED_CLI_INPUT_98765"
+        self._write_req(untrusted_input)
 
         out_stderr = []
         with mock.patch("sys.stderr.write", side_effect=out_stderr.append):
@@ -197,7 +197,7 @@ class MvctlMatrixTests(unittest.TestCase):
             self.assertEqual(rc, 2)
 
         full_stderr = "".join(out_stderr)
-        self.assertNotIn(secret_input, full_stderr)
+        self.assertNotIn(untrusted_input, full_stderr)
         self.assertIn("invalid input file", full_stderr)
 
 
