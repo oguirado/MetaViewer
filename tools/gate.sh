@@ -2,7 +2,7 @@
 set -u
 
 usage() {
-    printf '%s\n' 'Usage: tools/gate.sh [--leg skeleton|laws|contracts|unit|manifests | --self-test]' >&2
+    printf '%s\n' 'Usage: tools/gate.sh [--leg skeleton|laws|contracts|unit|manifests|js | --self-test]' >&2
     exit 2
 }
 selector=skeleton
@@ -12,7 +12,7 @@ case $# in
     2) [[ $1 == --leg ]] || usage; selector=$2 ;;
     *) usage ;;
 esac
-case $selector in skeleton|laws|contracts|unit|manifests|self-test) ;; *) usage ;; esac
+case $selector in skeleton|laws|contracts|unit|manifests|js|self-test) ;; *) usage ;; esac
 [[ $selector != self-test || ${1:-} == --self-test ]] || usage
 root=$(cd -- "${BASH_SOURCE[0]%/*}/.." && pwd -P) || exit 2
 if ! command -v python3 >/dev/null; then
@@ -22,6 +22,7 @@ fi
 export PYTHONDONTWRITEBYTECODE=1
 exec python3 - "$root" "$selector" <<'PY'
 import fnmatch
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -292,6 +293,104 @@ class GateTests(unittest.TestCase):
         self.write('tools/check_contracts.py', "print('PASS contracts')\nraise SystemExit(9)\n")
         self.assertIn('child rc=9', self.call('--leg', 'contracts', expected=1))
 
+    def test_js_leg_kit_absent(self):
+        shutil.copyfile(ROOT / 'tools/sync_kit.mjs', self.fixture / 'tools/sync_kit.mjs')
+        shutil.copyfile(ROOT / 'ui/kit.lock.json', self.fixture / 'ui/kit.lock.json')
+        environment = {key: value for key, value in os.environ.items()
+                       if key not in ('MV_KIT_CHECKOUT', 'CAPSULE_UI_KIT_REPO')}
+        output = self.call('--leg', 'js', expected=1, env=environment)
+        self.assertIn('FAIL js', output)
+        self.assertIn('kit absent', output)
+
+    @unittest.skipUnless(shutil.which('node') and shutil.which('git'), 'node and git required')
+    def test_js_leg_sync_failure_propagates(self):
+        shutil.copyfile(ROOT / 'tools/sync_kit.mjs', self.fixture / 'tools/sync_kit.mjs')
+        shutil.copyfile(ROOT / 'ui/kit.lock.json', self.fixture / 'ui/kit.lock.json')
+        checkout = Path(self.temp.name) / 'not-a-repo'
+        checkout.mkdir()
+        environment = dict(os.environ, MV_KIT_CHECKOUT=str(checkout))
+        environment.pop('CAPSULE_UI_KIT_REPO', None)
+        output = self.call('--leg', 'js', expected=1, env=environment)
+        self.assertIn('FAIL js', output)
+        self.assertIn('child rc=1', output)
+
+    @unittest.skipUnless(shutil.which('node'), 'node required')
+    def test_js_leg_runs_sync_then_check(self):
+        self.write('tools/sync_kit.mjs',
+                   "import fs from 'node:fs';\n"
+                   "fs.appendFileSync('kit.calls', JSON.stringify({argv: process.argv.slice(2), "
+                   "checkout: process.env.MV_KIT_CHECKOUT || ''}) + '\\n');\n")
+        self.write('ui/kit.lock.json', '{}')
+        checkout = str(Path(self.temp.name) / 'checkout')
+        for variable in ('MV_KIT_CHECKOUT', 'CAPSULE_UI_KIT_REPO'):
+            with self.subTest(variable=variable):
+                log = self.fixture / 'kit.calls'
+                if log.exists():
+                    log.unlink()
+                environment = {key: value for key, value in os.environ.items()
+                               if key not in ('MV_KIT_CHECKOUT', 'CAPSULE_UI_KIT_REPO')}
+                environment[variable] = checkout
+                output = self.call('--leg', 'js', env=environment)
+                self.assertIn('PASS js', output)
+                lines = log.read_text().splitlines()
+                self.assertEqual(len(lines), 2)
+                first, second = (json.loads(line) for line in lines)
+                self.assertEqual(first['argv'], [])
+                self.assertEqual(second['argv'], ['--check'])
+                self.assertEqual(first['checkout'], checkout)
+                self.assertEqual(second['checkout'], checkout)
+
+    @unittest.skipUnless(shutil.which('node'), 'node required')
+    def test_kit_check_mode_roundtrip(self):
+        shutil.copyfile(ROOT / 'tools/sync_kit.mjs', self.fixture / 'tools/sync_kit.mjs')
+        package = self.fixture / 'ui/.kit/capsule-ui-kit'
+        package.mkdir(parents=True)
+        (package / 'package.json').write_text(json.dumps(
+            {'name': 'capsule-ui-kit', 'version': '0.2.0'}))
+        (package / 'index.js').write_text('export const value = 1;\n')
+
+        def digest(root):
+            result = hashlib.sha256()
+
+            def walk(directory, prefix=''):
+                for entry in sorted(directory.iterdir(), key=lambda p: p.name.encode()):
+                    if entry.name in ('KIT_SOURCE.json', 'node_modules', '.git'):
+                        continue
+                    name = prefix + entry.name
+                    if entry.is_dir():
+                        walk(entry, name + '/')
+                    else:
+                        key, data = name.encode(), entry.read_bytes()
+                        result.update(str(len(key)).encode() + b':' + key)
+                        result.update(str(len(data)).encode() + b':' + data)
+            walk(root)
+            return result.hexdigest()
+
+        content_hash = digest(package)
+        (package / 'KIT_SOURCE.json').write_text(json.dumps(
+            {'schema': 'capsule-ui-kit-source/v1', 'version': '0.2.0',
+             'contentHash': content_hash, 'algorithm': 'sha256-length-framed-tree',
+             'direction': 'vendor'}))
+        (self.fixture / 'ui/kit.lock.json').write_text(json.dumps(
+            {'repo': 'https://example.invalid/kit.git', 'commit': '0' * 40,
+             'version': '0.2.0', 'contentHash': content_hash}))
+        environment = {key: value for key, value in os.environ.items()
+                       if key not in ('MV_KIT_CHECKOUT', 'CAPSULE_UI_KIT_REPO')}
+
+        def run_check():
+            return subprocess.run(['node', 'tools/sync_kit.mjs', '--check'],
+                                  cwd=self.fixture, env=environment, text=True,
+                                  capture_output=True, timeout=30)
+
+        result = run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        (package / 'index.js').write_text('tampered')
+        self.assertEqual(run_check().returncode, 1)
+        shutil.rmtree(self.fixture / 'ui/.kit')
+        result = run_check()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('kit absent', result.stderr)
+
     def test_aggregation_and_isolation(self):
         output = self.call()
         self.assertEqual([line for line in output.splitlines() if line in
@@ -533,6 +632,7 @@ def leaf(leg, root, environment):
         'laws': ('VERSION', 'CHANGELOG.md', 'tools/check_laws.py'),
         'contracts': ('tools/check_contracts.py', 'contracts'),
         'unit': ('tests',),
+        'js': ('tools/sync_kit.mjs', 'ui/kit.lock.json'),
     }
     for name in targets[leg]:
         path = root / name
@@ -554,6 +654,27 @@ def leaf(leg, root, environment):
         finally:
             signal.setitimer(signal.ITIMER_REAL, 0)
             signal.signal(signal.SIGALRM, previous)
+        return 0
+    if leg == 'js':
+        checkout = (environment.get('MV_KIT_CHECKOUT') or
+                    environment.get('CAPSULE_UI_KIT_REPO') or '').strip()
+        if not checkout:
+            print('kit absent: set MV_KIT_CHECKOUT (or CAPSULE_UI_KIT_REPO) to the pinned '
+                  'capsule-ui-kit checkout', file=sys.stderr)
+            return 1
+        if shutil.which('node') is None:
+            print('missing target: node', file=sys.stderr)
+            return 2
+        deadline = time.monotonic() + 300
+        child = dict(environment, MV_KIT_CHECKOUT=checkout)
+        for command in (['node', 'tools/sync_kit.mjs'], ['node', 'tools/sync_kit.mjs', '--check']):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return 124
+            rc = bounded(command, root, child, seconds=remaining)
+            if rc:
+                print(f'{leg}: child rc={rc}', file=sys.stderr)
+                return rc if rc in (2, 124) else 1
         return 0
     if leg == 'unit':
         rc = bounded(['python3', '-c', UNIT_CODE], root, environment)

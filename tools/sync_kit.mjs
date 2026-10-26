@@ -55,6 +55,36 @@ export async function verifyKit(root, pin) {
   return { version: pin.version, contentHash };
 }
 
+/** @param {string} lockPath @returns {Promise<KitPin>} */
+async function readPin(lockPath) {
+  /** @type {KitPin} */
+  const pin = await json(lockPath);
+  if (Object.keys(pin).sort().join(',') !== 'commit,contentHash,repo,version' ||
+      typeof pin.repo !== 'string' || !pin.repo || typeof pin.version !== 'string' ||
+      !pin.version || !/^[0-9a-f]{40}$/.test(pin.commit) ||
+      !/^[0-9a-f]{64}$/.test(pin.contentHash)) throw new Error('Invalid kit lock');
+  return pin;
+}
+
+/**
+ * Verify the materialised tree against the lock without a source checkout.
+ * @param {{dest?:string, lockPath?:string}} options
+ * @returns {Promise<{version:string, contentHash:string, direction:string}>}
+ */
+export async function checkInstalled({ dest = path.join(project, 'ui/.kit/capsule-ui-kit'),
+  lockPath = path.join(project, 'ui/kit.lock.json') } = {}) {
+  const pin = await readPin(lockPath);
+  let present = false;
+  try { present = (await fs.lstat(dest)).isDirectory(); }
+  catch (error) {
+    if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'ENOENT') throw error;
+  }
+  if (!present) throw new Error(`kit absent: ${dest} is not materialised; run node tools/sync_kit.mjs from the pinned checkout`);
+  const verified = await verifyKit(dest, pin);
+  const record = await json(path.join(dest, metadata));
+  return { ...verified, direction: record.direction };
+}
+
 /** @param {string} filename */
 async function statOrMissing(filename) {
   try { return await fs.lstat(filename); }
@@ -93,12 +123,7 @@ async function git(directory, args) {
  */
 export async function syncKit({ kitRepo, dest = path.join(project, 'ui/.kit/capsule-ui-kit'),
   lockPath = path.join(project, 'ui/kit.lock.json'), check = false }) {
-  /** @type {KitPin} */
-  const pin = await json(lockPath);
-  if (Object.keys(pin).sort().join(',') !== 'commit,contentHash,repo,version' ||
-      typeof pin.repo !== 'string' || !pin.repo || typeof pin.version !== 'string' ||
-      !pin.version || !/^[0-9a-f]{40}$/.test(pin.commit) ||
-      !/^[0-9a-f]{64}$/.test(pin.contentHash)) throw new Error('Invalid kit lock');
+  const pin = await readPin(lockPath);
   const local = await fs.realpath(kitRepo);
   const repo = await fs.realpath(await git(local, ['rev-parse', '--show-toplevel']));
   const source = path.join(repo, 'packages/capsule-ui-kit');
@@ -156,15 +181,20 @@ export async function syncKit({ kitRepo, dest = path.join(project, 'ui/.kit/caps
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);
+  const checks = args.filter(arg => arg === '--check').length;
   const positional = args.filter(arg => arg !== '--check');
-  const kitRepo = positional[0] || process.env.CAPSULE_UI_KIT_REPO;
-  if (!kitRepo || positional.length > 1 || args.filter(arg => arg === '--check').length > 1 ||
-      positional.some(arg => arg.startsWith('-'))) {
-    console.error('ERROR: Usage: node tools/sync_kit.mjs [kit-repo] [--check] (or CAPSULE_UI_KIT_REPO)');
+  const check = checks === 1;
+  const kitRepo = positional[0] || process.env.MV_KIT_CHECKOUT || process.env.CAPSULE_UI_KIT_REPO;
+  if (checks > 1 || positional.length > 1 || positional.some(arg => arg.startsWith('-')) ||
+      (!check && !kitRepo)) {
+    console.error('ERROR: Usage: node tools/sync_kit.mjs [kit-repo] [--check] (or MV_KIT_CHECKOUT / CAPSULE_UI_KIT_REPO); --check alone verifies ui/.kit against the lock');
     process.exitCode = 1;
   } else {
-    try { console.log(JSON.stringify(await syncKit({ kitRepo, check: args.includes('--check') }))); }
-    catch (error) {
+    try {
+      console.log(JSON.stringify(check && !kitRepo
+        ? await checkInstalled({})
+        : await syncKit({ kitRepo, check })));
+    } catch (error) {
       console.error(`ERROR: ${/** @type {Error} */ (error).message}`);
       process.exitCode = 1;
     }
