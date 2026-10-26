@@ -6,3 +6,12 @@ venv/
 target/
 node_modules/
 *.log
+dist/
+build/
+coverage/
+.env
+.env.*
+*.key
+auth.json
+cookies/
+profiles/
