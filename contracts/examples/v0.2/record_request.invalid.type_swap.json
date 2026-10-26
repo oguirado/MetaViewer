@@ -1,0 +1,12 @@
+{
+  "schema": true,
+  "request_id": "req-demo-001",
+  "op": "disk_start",
+  "params": {
+    "surface_id": "surface-demo",
+    "recording_id": "rec-demo-001",
+    "destination_capability_id": "dest-cap-demo",
+    "destination_path": "/exports/demo/rec-demo-001",
+    "max_fps": 30
+  }
+}

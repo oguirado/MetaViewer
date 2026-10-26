@@ -1,0 +1,18 @@
+{
+  "contract_version": "v0.2",
+  "component": "ui",
+  "component_version": "0.2.0",
+  "component_commit": "0123456789abcdef0123456789abcdef01234567",
+  "dependencies": [
+    {
+      "name": "wall",
+      "version": "0.2.0",
+      "commit": "89abcdef0123456789abcdef0123456789abcdef"
+    },
+    {
+      "name": "terminal",
+      "version": "0.2.0",
+      "commit": "cdef0123456789abcdef0123456789abcdef0123"
+    }
+  ]
+}
