@@ -21,6 +21,7 @@ Everything in this release predates the event; everything runnable is built duri
 | `docs/ARCHITECTURE.md` | Authority, IPC, capture and replay design |
 | `docs/ROADMAP.md` | Public hackathon day-by-day plan and gates |
 | `docs/PREEXISTING.md` | Pre-existing declaration: what predates the event |
+| `META_AI_USAGE.md`, `docs/meta-ai/` | Meta AI usage ledger: every Muse Spark lane, why, cost and prompt-cache hit rate |
 | `docs/UI_ARCHITECTURE.md` | Shared capsule visual architecture design |
 | `docs/ROUTER_BOOTSTRAP.md` | Context router bootstrap design |
 | `docs/RESEARCH_LOG.md` | Visual-layer research ledger |
