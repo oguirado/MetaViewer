@@ -501,5 +501,11 @@ export async function createMainBindings({env = process.env, createMessageChanne
         } catch {shutdown();throw fail();}
         return () => listeners.delete(listener);
       }}}};
-  } catch {socket?.destroy();throw fail();}
+  } catch (error) {
+    socket?.destroy();
+    if (error && typeof error === 'object' && ['SETTINGS_DESTINATION', 'SETTINGS_IN_REPO'].includes(/** @type {any} */ (error).code)) {
+      throw error;
+    }
+    throw fail();
+  }
 }

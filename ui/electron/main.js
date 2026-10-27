@@ -2289,7 +2289,12 @@ export async function loadMainBindings(env = process.env, options = {}) {
       });
     }
     return bindings;
-  } catch {throw new MainError('CORE_SEAMS_ABSENT','trusted host bindings unavailable');}
+  } catch (error) {
+    if (error instanceof MainError && (error.code === 'SETTINGS_DESTINATION' || error.code === 'SETTINGS_IN_REPO')) {
+      throw error;
+    }
+    throw new MainError('CORE_SEAMS_ABSENT','trusted host bindings unavailable');
+  }
 }
 
 /** Direct Electron entry: use the shipped host or an absolute trusted override.

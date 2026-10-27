@@ -7,12 +7,12 @@
  * existing port revocation/ACK deadlines and the main window's teardown.
  */
 import { open, mkdir, rename, unlink, lstat, realpath } from 'node:fs/promises';
-import { constants, realpathSync } from 'node:fs';
+import { constants, realpathSync, statSync } from 'node:fs';
 import { join, isAbsolute, relative, resolve, sep, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { observeSender, PRIVILEGED_ORIGIN } from './main.js';
+import { MainError, observeSender, PRIVILEGED_ORIGIN } from './main.js';
 import { createFrameReader } from './frameReader.js';
 import { createFramePort } from './framePort.js';
 import { createTerminalFacade, validateProviderArgv } from './ptyBroker.js';
@@ -102,9 +102,21 @@ function outsideSource(candidate) {
 export function recordingDestination(env) {
   const destination=env.MV_RECORDING_DESTINATION;
   if(destination===undefined || destination==='') return null;
-  if(!isAbsolute(destination) || destination.length>4096 || /[\0\r\n]/.test(destination)) throw new Error('SETTINGS_DESTINATION');
-  const path=realpathSync(resolve(destination));
-  outsideSource(path);
+  if(typeof destination!=='string' || !isAbsolute(destination) || destination.length>4096 || /[\0\r\n]/.test(destination)) {
+    throw new MainError('SETTINGS_DESTINATION','MV_RECORDING_DESTINATION must be an existing directory');
+  }
+  let path;
+  try {
+    path=realpathSync(resolve(destination));
+    if(!statSync(path).isDirectory()) throw new Error('NOT_DIRECTORY');
+  } catch {
+    throw new MainError('SETTINGS_DESTINATION','MV_RECORDING_DESTINATION must be an existing directory');
+  }
+  try {
+    outsideSource(path);
+  } catch {
+    throw new MainError('SETTINGS_IN_REPO','MV_RECORDING_DESTINATION must be outside the source tree');
+  }
   return path;
 }
 /** Atomic private settings file. No caller-supplied pathname.
@@ -294,9 +306,22 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
   }) : () => {};
   return {async dispose() { disposed=true; subscribed=false; stopFrames();
     pendingEntries.clear();
-    for(const stream of [...streams]) {await stream.reader.closeReader();stream.port.revokeFramePort('SHUTDOWN');}
+    for(const stream of [...streams]) {
+      try { await stream.reader.closeReader(); } catch {}
+      finally { stream.port.revokeFramePort('SHUTDOWN'); }
+    }
     streams.clear();terminal?.dispose?.();for(const channel of channels) ipcMain.removeHandler?.(channel);
   }};
+}
+/** @param {unknown} key @returns {string | null} */
+function streamKeySurfaceId(key) {
+  if (typeof key !== 'string') return null;
+  try {
+    const parsed = JSON.parse(key);
+    return Array.isArray(parsed) && typeof parsed[2] === 'string' ? parsed[2] : null;
+  } catch {
+    return null;
+  }
 }
 /** Trusted host frame capability entry: readerOptions/portOptions, state, frameRef.
  * @param {any} entry @param {any} contents @param {Set<any>} streams @param {any} [frameDiag] */
@@ -320,10 +345,10 @@ export async function deliverAuthorityFrame(entry,contents,streams,frameDiag=nul
       || typeof state.profile_id!=='string' || !state.profile_id.length || state.profile_id.length>128) throw new Error('SURFACE_STATE');
   if (entry.stateOnly) {
     if (['destroyed','lost'].includes(state.state)) {
-      const deadList=[...streams].filter(item=>item.surfaceId===state.surface_id || (typeof item.key==='string' && JSON.parse(item.key)[2]===state.surface_id));
+      const deadList=[...streams].filter(item=>item.surfaceId===state.surface_id || streamKeySurfaceId(item.key)===state.surface_id);
       for (const dead of deadList) {
         streams.delete(dead);
-        try { await dead.reader.closeReader(); }
+        try { await dead.reader.closeReader(); } catch {}
         finally { dead.port.revokeFramePort('SHUTDOWN'); }
       }
     }
@@ -346,7 +371,7 @@ export async function deliverAuthorityFrame(entry,contents,streams,frameDiag=nul
     try { port=createFramePort({...entry.portOptions,
       onAck:(/** @type {any} */ack)=>{frameDiag?.recordAck?.(ack);origOnAck?.(ack);},
       onRevoke:(/** @type {any} */notice)=>{
-        streams.delete(stream);void reader.closeReader();frameDiag?.recordRevocation?.(notice);revoke(notice);
+        streams.delete(stream);void reader.closeReader().catch(() => {});frameDiag?.recordRevocation?.(notice);revoke(notice);
       }}); } catch(e) {await reader.closeReader();throw e;}
     stream={key,surfaceId:binding.surfaceId,reader,port,announced:false,setAcquire:(/** @type {any} */fn)=>{currentAcquire=fn;}};streams.add(stream);
   } else {

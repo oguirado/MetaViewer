@@ -309,11 +309,7 @@ export async function writeFrameDiagSnapshot(runDir, snapshot) {
     }
     return true;
   } finally {
-    await unlink(tempPath).catch((error) => {
-      if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'ENOENT') {
-        throw error;
-      }
-    });
+    await unlink(tempPath).catch(() => {});
   }
 }
 
@@ -428,6 +424,8 @@ export function installFrameDiag(options = {}) {
 
   /** @type {Promise<unknown>} */
   let writeChain = Promise.resolve();
+  /** @type {{ snapshot: Record<string, unknown>, batch: Promise<true> } | null} */
+  let pendingBatch = null;
 
   function buildSnapshot() {
     return Object.freeze({
@@ -464,10 +462,27 @@ export function installFrameDiag(options = {}) {
     }
     seq += 1;
     const snap = buildSnapshot();
-    const next = writeChain.then(
-      () => writeFrameDiagSnapshot(targetDir, snap),
-      () => writeFrameDiagSnapshot(targetDir, snap),
-    );
+    if (pendingBatch !== null) {
+      pendingBatch.snapshot = snap;
+      return pendingBatch.batch;
+    }
+    /** @type {{ snapshot: Record<string, unknown>, batch: Promise<true> }} */
+    const entry = {
+      snapshot: snap,
+      batch: /** @type {any} */ (null),
+    };
+    pendingBatch = entry;
+    const runQueued = async () => {
+      if (pendingBatch === entry) {
+        pendingBatch = null;
+      }
+      if (disposed) {
+        throw new MainError('FRAME_DIAG_DISPOSED', 'frame diag bridge is disposed');
+      }
+      return writeFrameDiagSnapshot(targetDir, entry.snapshot);
+    };
+    const next = writeChain.then(runQueued, runQueued);
+    entry.batch = next;
     writeChain = next.catch(() => {});
     return next;
   }

@@ -615,10 +615,14 @@ function wireFacade(transport) {
       void Promise.resolve(transport.invoke(admitted.channel,admitted.args)).catch(()=>{});
     } catch {}
   };
+  const clearFrameDiagTimer=()=>{
+    if(diagTimer!==null && typeof globalThis.clearTimeout==='function') globalThis.clearTimeout(diagTimer);
+    diagTimer=null;
+  };
   const scheduleFrameDiag=()=>{
     reportFrameDiag();
     if(transport.frameDiag===true && !transport.nested && typeof globalThis.setTimeout==='function') {
-      if(diagTimer!==null && typeof globalThis.clearTimeout==='function') globalThis.clearTimeout(diagTimer);
+      clearFrameDiagTimer();
       diagTimer=globalThis.setTimeout(()=>{diagTimer=null;reportFrameDiag();},250);
     }
   };
@@ -655,8 +659,8 @@ function wireFacade(transport) {
           diagFramesReceived+=1;
           diagInWallApp=inWallApp;
           diagOrigin=typeof window!=='undefined' && typeof window.location?.origin==='string' ? window.location.origin : '';
-          diagLastSurfaceId=sid;
-          diagLastSurfaceGeneration=value.frame_ref.generation;
+          diagLastSurfaceId=captureId(sid) ? sid : null;
+          diagLastSurfaceGeneration=null;
           if (ports?.length) diagPortsReceived+=1;
           if (inWallApp && !seededCaptureSurfaces.has(sid) && captureId(sid)) {
             seededCaptureSurfaces.add(sid);
@@ -689,13 +693,13 @@ function wireFacade(transport) {
         });
         void call('subscribeFrames',[]).catch(()=>{
           if(generation!==subscriptionGeneration) return;
-          ++subscriptionGeneration;listeners.clear();revokeFrames?.();revokeFrames=null;
+          ++subscriptionGeneration;listeners.clear();clearFrameDiagTimer();revokeFrames?.();revokeFrames=null;
         });
       }
       return ()=>{
         if(!active) return;active=false;listeners.delete(listener);
         if(!listeners.size && revokeFrames) {
-          ++subscriptionGeneration;revokeFrames();revokeFrames=null;
+          ++subscriptionGeneration;clearFrameDiagTimer();revokeFrames();revokeFrames=null;
           void call('unsubscribeFrames',[]).catch(()=>{});
         }
       };

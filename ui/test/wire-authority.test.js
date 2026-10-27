@@ -387,14 +387,14 @@ test('EVUI-03 regression: stateOnly destroyed/lost closes all matching surfaceId
     assert.equal(s1NoBinding.getRevocations(), 1);
     assert.equal(s2Gen1.getRevocations(), 0, 'negative control: s2 stream must still survive');
 
-    // 3. If reader.closeReader() throws during stateOnly cleanup, port.revokeFramePort('SHUTDOWN') still runs in finally.
+    // 3. If reader.closeReader() throws during stateOnly cleanup, port.revokeFramePort('SHUTDOWN') still runs in finally and stateOnly delivery completes.
     const s1Throw = makeEntry('s1', 1);
     assert.equal(await deliverAuthorityFrame(s1Throw.entry, { postMessage() {} }, streams), true);
     const s1Stream = [...streams].find(item => JSON.parse(item.key)[2] === 's1');
     assert.ok(s1Stream);
     s1Stream.reader = { closeReader: async () => { throw new Error('CLOSE_READER_BOOM'); } };
-    await assert.rejects(
-      deliverAuthorityFrame(
+    assert.equal(
+      await deliverAuthorityFrame(
         {
           stateOnly: true,
           frameRef,
@@ -403,7 +403,7 @@ test('EVUI-03 regression: stateOnly destroyed/lost closes all matching surfaceId
         { postMessage() {} },
         streams,
       ),
-      /CLOSE_READER_BOOM/,
+      true,
     );
     assert.equal(s1Throw.getRevocations(), 1, 'port must be revoked in finally even when closeReader throws');
     assert.equal(streams.size, 1);
