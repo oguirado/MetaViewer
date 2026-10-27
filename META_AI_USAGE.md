@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 273 | 55 | 218 |
-| Lanes finished OK | 273 | 55 | 218 |
-| Agent steps | 13,952 | 2,705 | 11,247 |
-| Lane-hours of agent work | 35.7 | 5.2 | 30.5 |
-| Fresh input tokens | 58,904,622 | 11,482,034 | 47,422,588 |
-| Cache-read input tokens | 1,278,467,939 | 226,255,212 | 1,052,212,727 |
+| Lanes launched | 277 | 55 | 222 |
+| Lanes finished OK | 277 | 55 | 222 |
+| Agent steps | 14,114 | 2,705 | 11,409 |
+| Lane-hours of agent work | 36.0 | 5.2 | 30.8 |
+| Fresh input tokens | 59,495,758 | 11,482,034 | 48,013,724 |
+| Cache-read input tokens | 1,289,414,094 | 226,255,212 | 1,063,158,882 |
 | Prompt cache hit % | 95.6 | 95.2 | 95.7 |
-| Output tokens | 12,668,893 | 2,135,708 | 10,533,185 |
-| Thinking tokens | 6,660,830 | 1,050,039 | 5,610,791 |
-| Cost (USD) | 10.9812 | 2.0279 | 8.9533 |
-| Cost per lane (USD) | 0.0402 | 0.0369 | 0.0411 |
+| Output tokens | 12,761,451 | 2,135,708 | 10,625,743 |
+| Thinking tokens | 6,711,388 | 1,050,039 | 5,661,349 |
+| Cost (USD) | 11.0807 | 2.0279 | 9.0528 |
+| Cost per lane (USD) | 0.04 | 0.0369 | 0.0408 |
 
-Rooms: 59. Peak concurrent lanes [MEASURED from lane start/end]: 24.
+Rooms: 60. Peak concurrent lanes [MEASURED from lane start/end]: 24.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -50,6 +50,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | release | 5 | 93.2 | 0.0945 |
 | research | 14 | 94.6 | 0.5673 |
 | review | 51 | 94.4 | 1.4856 |
+| submission | 4 | 94.9 | 0.0995 |
 | test | 12 | 95.6 | 0.5657 |
 | testing | 38 | 95.6 | 1.5247 |
 | ui | 13 | 96.6 | 0.9938 |
@@ -118,6 +119,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvr2c | conductor | Oct 27 08:01 | testing | 8 | 96.9 | 0.4935 | Context-engineer the round-2 external testing prompts (Jules and ChatGPT, T1-T8): embed verbatim excerpts of the software papers and OmniCodex language books, which the web testers cannot access, so each tester runs a complete, evidence-driven job on the public repo. |
 | mvui9 | UI orchestrator | Oct 27 08:17 | ui | 4 | 97.1 | 0.2974 | Operator saw no recording menus, screenshot action or capsule action icons on wall tiles: add per-tile record-for-AI/screenshot/recording chrome over the new closed capture facade, adopt kit 0.2.1 tile actions and anchors, and audit every capsule action icon. |
 | mvrv6 | conductor | Oct 27 08:48 | review | 4 | 93.6 | 0.0926 | Verify the findings (1 critical, 6 high, 10 medium) of the Gemini Argon cross-review of the day-2 integrations before any fix, and turn confirmed ones into Sol fix units. |
+| mvvd2 | conductor | Oct 27 10:26 | submission | 4 | 94.9 | 0.0995 | Turn the measured day-2 evidence (live G-W1 with verified receipts, live G-AI with vision-engine and wender-agent, 25 fps wall, per-tile capture) into the demo video script, the shot list, a fact-checked TESTING.md and README update, all claims traceable to evidence. |
 
 ## Every lane
 
@@ -396,6 +398,10 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvrv6 | d2adapter | Verify Argon findings d2adapter | Oct 27 08:49 | yes | 39 | 94.5 | 0.024701 |
 | mvrv6 | d2agents | Verify Argon findings d2agents | Oct 27 08:49 | yes | 34 | 92.7 | 0.023151 |
 | mvrv6 | d2uiel | Verify Argon findings d2uiel | Oct 27 08:49 | yes | 33 | 93.4 | 0.020509 |
+| mvvd2 | SCRIPT | Video/docs SCRIPT | Oct 27 10:26 | yes | 26 | 91.6 | 0.015845 |
+| mvvd2 | SHOTS | Video/docs SHOTS | Oct 27 10:26 | yes | 49 | 95.1 | 0.027942 |
+| mvvd2 | TESTING | Video/docs TESTING | Oct 27 10:26 | yes | 67 | 96.7 | 0.036815 |
+| mvvd2 | README | Video/docs README | Oct 27 10:27 | yes | 20 | 89.0 | 0.018915 |
 
 ## Method
 
