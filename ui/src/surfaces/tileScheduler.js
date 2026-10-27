@@ -569,6 +569,8 @@ export function createTileScheduler(options) {
       lastCaptureGeneration: sameLifetime ? existing.lastCaptureGeneration : 0,
       lastPresentedHandle: sameLifetime ? existing.lastPresentedHandle : '',
       lastPresentedDigest: sameLifetime ? existing.lastPresentedDigest : '',
+      lastPresentedWidth: sameLifetime ? existing.lastPresentedWidth : 0,
+      lastPresentedHeight: sameLifetime ? existing.lastPresentedHeight : 0,
       warmResources: new Map(),
       metrics: {
         captureCount: 0,
@@ -1185,6 +1187,8 @@ export function createTileScheduler(options) {
       lastPresentedFrameGen: entry.lastPresentedFrameGen,
       lastPresentedHandle: entry.lastPresentedHandle,
       lastPresentedDigest: entry.lastPresentedDigest,
+      lastPresentedWidth: entry.lastPresentedWidth,
+      lastPresentedHeight: entry.lastPresentedHeight,
       pendingMailboxFrameGen: entry.mailbox ? entry.mailbox.frameGeneration : null,
       presentedPendingFrameGen: entry.presented ? entry.presented.frameGeneration : null,
       warmResourceCount: entry.warmResources.size,
@@ -1296,6 +1300,8 @@ export function createTileScheduler(options) {
     entry.lastPresentedFrameGen = slot.frameGeneration;
     entry.lastPresentedHandle = slot.handle;
     entry.lastPresentedDigest = slot.sha256;
+    entry.lastPresentedWidth = slot.width;
+    entry.lastPresentedHeight = slot.height;
     retireHandle(entry, slot.handle);
     entry.presented = null;
     emitLeaseRelease(entry, slot.leaseId, slot.frameGeneration, RELEASE_CAUSES.PRESENTED);

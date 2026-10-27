@@ -2,7 +2,7 @@
 /** The optional runtime supplies authoritative rows and the tile scheduler.
  * Canvas status reads successful presentation witnesses; bytes stay external.
  */
-import { computed, defineComponent, h, markRaw, onBeforeUnmount, onMounted, provide, ref, shallowRef, watch } from 'vue';
+import { computed, defineComponent, h, inject, markRaw, onBeforeUnmount, onMounted, provide, ref, shallowRef, watch } from 'vue';
 import CreativeCapsule from './creative/CreativeCapsule.vue';
 import HostOutcome from './core/HostOutcome.vue';
 import DockWorkspace from 'capsule-ui-kit/DockWorkspace';
@@ -436,6 +436,8 @@ onBeforeUnmount(() => window.removeEventListener('resize', measureChrome));
 const wall = ref(/** @type {InstanceType<typeof WallWorkspace>|null} */ (null));
 const activeTileScheduler = /** @type {ReturnType<typeof createTileScheduler>} */ (props.runtime?.tileScheduler ?? tileScheduler);
 provide('tileScheduler', activeTileScheduler);
+/** Live-only frame-port router provided by the entry; null on fixture/legacy boots. */
+const framePortRouter = /** @type {unknown} */ (inject('framePortRouter', null));
 const presentationRevision = ref(0);
 const stopPresentation = activeTileScheduler.subscribePresentation?.(() => { presentationRevision.value += 1; });
 onBeforeUnmount(() => stopPresentation?.());
@@ -443,11 +445,30 @@ onBeforeUnmount(() => stopPresentation?.());
 function surfaceWitness(surface) {
   void presentationRevision.value;
   const info = activeTileScheduler.getInstrumentation?.(surface.id);
-  if (!info || !('lastPresentedHandle' in info) || info.surfaceGeneration !== surface.generation
-      || info.epoch !== snapshot.value?.envelope?.epoch || info.destroyed || info.contextLost) {
-    return { frame: '', digest: '' };
+  const sizeOf = (/** @type {any} */ record) => ({
+    width: Number.isSafeInteger(record?.lastPresentedWidth) && record.lastPresentedWidth > 0 ? record.lastPresentedWidth : 0,
+    height: Number.isSafeInteger(record?.lastPresentedHeight) && record.lastPresentedHeight > 0 ? record.lastPresentedHeight : 0,
+  });
+  if (!info || !('lastPresentedHandle' in info) || info.destroyed || info.contextLost) {
+    return { frame: '', digest: '', width: 0, height: 0 };
   }
-  return { frame: info.lastPresentedHandle, digest: info.lastPresentedDigest };
+  if (framePortRouter === null
+      && (info.surfaceGeneration !== surface.generation || info.epoch !== snapshot.value?.envelope?.epoch)) {
+    // Fixture/legacy path only (R1-074): without the frame-port router the
+    // projection generation is the surface lifetime authority, so a skewed
+    // entry is stale and must not label the tile live.
+    return { frame: '', digest: '', width: 0, height: 0 };
+  }
+  // L3-1 live path: the scheduler entry carries the DELIVERY identity pinned
+  // by the frame-port router (delivery surfaceGeneration/epoch), which the
+  // contract forbids comparing with projection generations: surface.generation
+  // and the snapshot epoch advance independently (e.g. 886+ vs 1/E on the real
+  // host), so such a check blanks every live witness and the tile never leaves
+  // Connecting. Staleness needs no projection check here: the scheduler resets
+  // the witness on lifetime change and reports destroyed/contextLost.
+  // L2-8: returning the witness across projection advances also stops the
+  // per-frame witness flash; sizes come from the presented delivery.
+  return { frame: info.lastPresentedHandle, digest: info.lastPresentedDigest, ...sizeOf(info) };
 }
 const feed = props.runtime?.projectionView ?? projectionView;
 const snapshot = shallowRef(feed.getSnapshot());
@@ -546,7 +567,7 @@ const chromeWorkspace = markRaw(defineComponent({
         <HostOutcome :row="hostOutcome" />
         <section v-if="nestedMode.displayOnly" class="mv-nested-wall" aria-label="Nested capsule wall">
           <article v-for="surface in rows" :key="surface.id" :aria-label="surface.title || surface.id">
-            <SurfaceCanvas :surface-id="surface.id" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :state="surface.attachmentState === 'live' ? 'live' : 'connecting'" />
+            <SurfaceCanvas :surface-id="surface.id" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :frame-width="surfaceWitness(surface).width" :frame-height="surfaceWitness(surface).height" :state="surface.attachmentState === 'live' ? 'live' : 'connecting'" />
           </article>
         </section>
         <WallWorkspace v-else-if="!creativeOpen" :key="wallView" :hidden="!rows.length" ref="wall" :workspace-component="chromeWorkspace" :scope="props.scope" :default-profile="props.layout" :storage="workspaceStorage"
@@ -554,7 +575,7 @@ const chromeWorkspace = markRaw(defineComponent({
           :control-registry="props.runtime?.controlRegistry ?? controlRegistry" :scheduler="props.runtime?.scheduler ?? scheduler" :tile-scheduler="props.runtime?.tileScheduler ?? tileScheduler"
           :color-scheme="scheme === 'mv-dark' ? 'dark' : 'light'" density="compact" @ready="onWallReady" @wall-settled="onWorkspaceSettled" @activate-surface="selectCapsule" @submit-intent="dispatch">
           <template #surface="{ surface, capsuleId }">
-            <SurfaceCanvas v-if="surface && (!multislotOpen || capsuleId !== selectedSurface?.id)" :surface-id="capsuleId" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :state="surface.attachmentState === 'live' ? 'live' : 'connecting'" />
+            <SurfaceCanvas v-if="surface && (!multislotOpen || capsuleId !== selectedSurface?.id)" :surface-id="capsuleId" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :frame-width="surfaceWitness(surface).width" :frame-height="surfaceWitness(surface).height" :state="surface.attachmentState === 'live' ? 'live' : 'connecting'" />
           </template>
         </WallWorkspace>
         <EmptyWallView v-if="!rows.length && !nestedMode.displayOnly && !creativeOpen" @add-capsule="launcherOpen = true" />
@@ -568,7 +589,7 @@ const chromeWorkspace = markRaw(defineComponent({
             :group-id="selectedPlacement.groupId" :placement-index="selectedPlacement.index"
             :last-dock-group-id="selectedPlacement.lastDockGroupId" :last-dock-index="selectedPlacement.lastDockIndex"
             :layout-pending="placementPending[selectedSurface.id] === true" :agent-controlled="selectedSurface.control === 'agent'" v-model:input-mode="inputMode" @submit-intent="dispatchMultislot">
-            <template #surface><SurfaceCanvas :surface-id="selectedSurface.id" :generation="selectedSurface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(selectedSurface).frame" :digest="surfaceWitness(selectedSurface).digest" :state="selectedSurface.attachmentState === 'live' ? 'live' : 'connecting'" /></template>
+            <template #surface><SurfaceCanvas :surface-id="selectedSurface.id" :generation="selectedSurface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(selectedSurface).frame" :digest="surfaceWitness(selectedSurface).digest" :frame-width="surfaceWitness(selectedSurface).width" :frame-height="surfaceWitness(selectedSurface).height" :state="selectedSurface.attachmentState === 'live' ? 'live' : 'connecting'" /></template>
             <template #record><MvRecordingPanel :capsule-id="selectedSurface.id" :export-destination="props.exportDestination" :phase="props.fixture?.key === 'recording' ? 'recording' : 'idle'" :capture-state="captureState" :capture-available="captureAvailable" @submit-intent="dispatch" /></template>
           </MultislotHost>
         </section>

@@ -408,7 +408,7 @@ provide('tileScheduler', props.tileScheduler);
 const kitViewSource = props.projectionView;
 const kitProjectionView = {
   getSnapshot: () => mirrorKitFoldedSnapshot(kitViewSource.getSnapshot()),
-  subscribe: (/** @type {(snapshot: PanelProjectionSnapshot|null) => void} */ listener) => kitViewSource.subscribe(listener),
+  subscribe: (/** @type {(snapshot: PanelProjectionSnapshot|null) => void} */ listener) => kitViewSource.subscribe((s) => listener(mirrorKitFoldedSnapshot(s))),
 };
 provide('publicProjectionView', kitProjectionView);
 // Metadata-only authority runtimes can omit these optional kit capabilities.

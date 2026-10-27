@@ -26,6 +26,8 @@ const props = defineProps({
   frame: { type: String, default: '' },
   digest: { type: String, default: '' },
   state: { type: String, default: 'empty' },
+  frameWidth: { type: Number, default: 0 },
+  frameHeight: { type: Number, default: 0 },
 });
 
 const emit = defineEmits(['canvas-ready', 'canvas-released']);
@@ -36,26 +38,70 @@ const scheduler = /** @type {any} */ (inject('tileScheduler', null));
 const framePortRouter = /** @type {{ bindSurface?: (binding: any) => boolean, unbindSurface?: (surfaceId: unknown) => void } | null} */ (inject('framePortRouter', null));
 /** @type {symbol | null} */
 let canvasToken = null;
+/**
+ * L3-1: delivery identity pinned by the frame-port router notice
+ * (surfaceGeneration/epoch from deliveries, e.g. 1/E on the real host).
+ * The PROJECTION props (generation/epoch, e.g. 886+/snapshot epoch) never
+ * match the scheduler entry the router registered, so the canvas attaches
+ * with this identity once known. Null keeps the legacy props path.
+ * @type {{ surfaceGeneration: number, epoch: number } | null}
+ */
+let registeredIdentity = null;
 
 /** @type {{ value: HTMLCanvasElement | null }} */
 const canvasRef = ref(/** @type {HTMLCanvasElement | null} */ (null));
 
+// L2-8: retain the last painted witness per surface. The projection
+// generation advances before the async port frame arrives; without the
+// retain the tile flashes to the waiting placeholder at a different scale.
+// Only a surface change resets: generation/epoch gaps keep the last frame.
+const retainedFrame = ref(props.frame.length > 0 ? props.frame : '');
+const retainedDigest = ref(props.frame.length > 0 && typeof props.digest === 'string' ? props.digest : '');
+const retainedWidth = ref(typeof props.frameWidth === 'number' && Number.isSafeInteger(props.frameWidth) && props.frameWidth > 0 ? props.frameWidth : 0);
+const retainedHeight = ref(typeof props.frameHeight === 'number' && Number.isSafeInteger(props.frameHeight) && props.frameHeight > 0 ? props.frameHeight : 0);
+
+watch(() => [props.surfaceId, props.frame, props.digest, props.frameWidth, props.frameHeight],
+  (current, previous) => {
+    if (!Array.isArray(current)) return;
+    const [surfaceId, frame, digest, width, height] = current;
+    if (previous !== undefined && Array.isArray(previous) && surfaceId !== previous[0]) {
+      retainedFrame.value = '';
+      retainedDigest.value = '';
+      retainedWidth.value = 0;
+      retainedHeight.value = 0;
+    }
+    if (typeof frame === 'string' && frame.length > 0) {
+      retainedFrame.value = frame;
+      retainedDigest.value = typeof digest === 'string' ? digest : '';
+      if (typeof width === 'number' && Number.isSafeInteger(width) && width > 0) retainedWidth.value = width;
+      if (typeof height === 'number' && Number.isSafeInteger(height) && height > 0) retainedHeight.value = height;
+    }
+  });
+
+const effectiveFrame = computed(() => props.frame.length > 0 ? props.frame : retainedFrame.value);
+const effectiveDigest = computed(() => props.frame.length > 0 ? props.digest : retainedDigest.value);
+const effectiveWidth = computed(() => typeof props.frameWidth === 'number' && Number.isSafeInteger(props.frameWidth) && props.frameWidth > 0
+  ? props.frameWidth : retainedWidth.value);
+const effectiveHeight = computed(() => typeof props.frameHeight === 'number' && Number.isSafeInteger(props.frameHeight) && props.frameHeight > 0
+  ? props.frameHeight : retainedHeight.value);
+
 // Live display requires a presented witness: a live claim with no frame
 // handle degrades to connecting instead of rendering a fake-live tile.
+// A retained handle from the same surface keeps the last painted frame.
 const resolvedState = computed(() => {
   const normalized = props.state === 'stale' ? 'stale' : normalizeSurfaceState(props.state);
-  if (normalized === 'live' && props.frame.length === 0) {
+  if (normalized === 'live' && effectiveFrame.value.length === 0) {
     return 'connecting';
   }
   return normalized;
 });
-const showWitness = computed(() => props.frame.length > 0
+const showWitness = computed(() => effectiveFrame.value.length > 0
   && (resolvedState.value === 'live' || resolvedState.value === 'stale'));
 
 const strip = computed(() => formatFrameStrip({
-  frame: props.frame,
+  frame: effectiveFrame.value,
   generation: props.generation,
-  digest: props.digest,
+  digest: effectiveDigest.value,
 }));
 
 const domId = computed(() => surfaceCanvasDomId(props.surfaceId));
@@ -82,8 +128,14 @@ function bindingNumber(value) {
 
 function attachCanvas() {
   if (scheduler !== null && canvasRef.value !== null) {
+    // L3-1: attach with the identity the router registered, verbatim from
+    // its notice; the scheduler's identity check stays intact. Only the
+    // legacy path (no router notice yet) uses the projection props.
+    const identity = registeredIdentity;
     const result = scheduler.attachCanvas({ surfaceId: props.surfaceId,
-      surfaceGeneration: bindingNumber(props.generation), epoch: bindingNumber(props.epoch), canvas: canvasRef.value });
+      surfaceGeneration: identity !== null ? identity.surfaceGeneration : bindingNumber(props.generation),
+      epoch: identity !== null ? identity.epoch : bindingNumber(props.epoch),
+      canvas: canvasRef.value });
     if (result?.ok === true) {
       canvasToken = result.token ?? null;
       emit('canvas-ready', { surfaceId: props.surfaceId });
@@ -106,8 +158,37 @@ function bindFramePort() {
     framePortRouter.bindSurface({
       surfaceId: props.surfaceId,
       scheduler,
-      onRegistered: (/** @type {{ surfaceId: string }} */ notice) => {
-        if (notice.surfaceId === props.surfaceId && canvasToken === null) attachCanvas();
+      onRegistered: (/** @type {{ surfaceId: string, surfaceGeneration: number, epoch: number }} */ notice) => {
+        if (notice.surfaceId !== props.surfaceId) return;
+        // L3-1: pin the delivery identity for every later attach (including
+        // the generation/epoch-only prop refresh below); malformed notices
+        // keep the legacy props attach instead of bricking the tile.
+        if (Number.isSafeInteger(notice.surfaceGeneration) && Number.isSafeInteger(notice.epoch)) {
+          const changed = registeredIdentity === null
+            || registeredIdentity.surfaceGeneration !== notice.surfaceGeneration
+            || registeredIdentity.epoch !== notice.epoch;
+          registeredIdentity = { surfaceGeneration: notice.surfaceGeneration, epoch: notice.epoch };
+          if (changed) {
+            // MVUI18D: a NEW delivery identity on this surfaceId starts a new
+            // stream, so the previous stream's retained witness is dropped:
+            // without this the recreated surface reports the old handle/size
+            // as 'live' before its first frame arrives.
+            retainedFrame.value = '';
+            retainedDigest.value = '';
+            retainedWidth.value = 0;
+            retainedHeight.value = 0;
+          }
+          if (changed && canvasToken !== null && scheduler !== null) {
+            // MVUI18C: a newer stream re-registers with ITS delivery
+            // identity and the scheduler drops the old canvas binding, so
+            // the stale token is released and the canvas re-attaches below
+            // with the new identity; otherwise the present finds no canvas
+            // and the delivery acks REFUSED.
+            scheduler.detachCanvas(props.surfaceId, canvasToken);
+            canvasToken = null;
+          }
+        }
+        if (canvasToken === null) attachCanvas();
       },
     });
   } catch { /* Binding failures keep the legacy path. */ }
@@ -130,6 +211,17 @@ watch(() => [props.surfaceId, props.generation, props.epoch], (_current, previou
   const surfaceChanged = props.surfaceId !== previous[0];
   if (surfaceChanged) {
     unbindFramePort(previous[0]);
+    // L3-1: the pinned delivery identity belongs to the old surface; the
+    // rebind below receives a fresh notice for the new one.
+    registeredIdentity = null;
+  }
+  if (!surfaceChanged && registeredIdentity !== null && canvasToken !== null) {
+    // MVUI18D: the canvas is bound with the pinned delivery identity, which a
+    // projection generation/epoch-only update never changes, so detaching and
+    // re-attaching here is per-frame churn with a mid-update window where a
+    // presentation finds no canvas. Only a surfaceId change or a new
+    // registered identity re-attaches.
+    return;
   }
   if (scheduler === null) return;
   scheduler.detachCanvas(String(previous[0]), canvasToken);
@@ -157,7 +249,7 @@ onBeforeUnmount(() => {
     :data-state="resolvedState"
     :aria-label="accessibleName"
   >
-    <canvas ref="canvasRef" :hidden="resolvedState !== 'live' && resolvedState !== 'stale'" class="mv-surface__canvas" aria-hidden="true" />
+    <canvas ref="canvasRef" :hidden="resolvedState !== 'live' && resolvedState !== 'stale'" :width="effectiveWidth" :height="effectiveHeight" class="mv-surface__canvas" aria-hidden="true" />
     <div v-if="resolvedState !== 'live' && resolvedState !== 'stale'" class="mv-surface__waiting" role="status">
       <span class="mv-surface__connection-mark" aria-hidden="true">◌</span>
       <strong>{{ resolvedState === 'connecting' ? 'Connecting to surface' : 'Waiting for surface' }}</strong>
