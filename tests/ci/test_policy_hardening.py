@@ -90,7 +90,9 @@ class SanitizerTests(unittest.TestCase):
                 with self.subTest(workflow=workflow, copy=number), tempfile.TemporaryDirectory() as tmp:
                     raw, sane = Path(tmp) / 'raw', Path(tmp) / 'sane'
                     tokens = ['ghp%5F' + 'a' * 36, 'GHP_' + 'b' * 36,
-                              'github%5fpat%5F' + 'c' * 36, 'ghp_' + 'd' * 36]
+                              'github%5fpat%5F' + 'c' * 36, 'ghp_' + 'd' * 36,
+                              'ghs_' + 'e' * 36, 'gho_' + 'f' * 36,
+                              'ghu_' + 'g' * 36, 'ghr_' + 'h' * 36]
                     raw.write_text('\n'.join(tokens) + '\nclean line 42\n')
                     result = subprocess.run(['python3', '-c', textwrap.dedent(body), str(raw), str(sane)],
                                             capture_output=True, text=True)

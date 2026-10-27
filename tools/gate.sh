@@ -451,7 +451,7 @@ class GateTests(unittest.TestCase):
         self.write('Cargo.toml', '[workspace]\nmembers = ["core"]\nresolver = "2"\n')
         self.write('core/Cargo.toml', '[package]\nname = "gate-fixture"\n'
                    'version = "0.1.0"\nedition = "2021"\n')
-        (self.fixture / 'Cargo.lock').unlink()
+        self.write('Cargo.lock', 'version = 4\n\n[[package]]\nname = "gate-fixture"\nversion = "0.1.0"\n')
         self.write('core/src/lib.rs', 'pub fn value() -> u32 {\n    1\n}\n')
         package = {'name': 'gate-fixture', 'version': '0.1.0', 'private': True,
                    'devDependencies': {'typescript': '5.9.3', 'vue-tsc': '3.3.12',
@@ -562,6 +562,11 @@ class GateTests(unittest.TestCase):
     def test_rust_leg_negative_controls(self):
         environment = self.prepare_build_fixture()
         self.assertIn('PASS rust', self.call('--leg', 'rust', env=environment))
+        locked = (self.fixture / 'Cargo.lock').read_text()
+        self.write('Cargo.lock', locked.replace('0.1.0', '0.2.0'))
+        self.assertIn('FAIL rust', self.call('--leg', 'rust', expected=1, env=environment))
+        self.assertIn('0.2.0', (self.fixture / 'Cargo.lock').read_text())
+        self.write('Cargo.lock', locked)
         for source, diagnostic in (
             ('pub fn value()->u32{1}\n', 'fmt'),
             ('pub fn value() -> u32 {\n    return 1;\n}\n', 'clippy'),
@@ -996,8 +1001,8 @@ def build_leg(leg, root, environment):
             Path(environment['TMPDIR']) / 'cargo-target')
         commands = [
             [tools['rustup'], 'run', '1.92.0', 'cargo', 'fmt', '--all', '--check'],
-            [tools['cargo'], 'clippy', '--offline', '--all-targets', '--', '-D', 'warnings'],
-            [tools['cargo'], 'test', '--offline'],
+            [tools['cargo'], 'clippy', '--locked', '--offline', '--all-targets', '--', '-D', 'warnings'],
+            [tools['cargo'], 'test', '--locked', '--offline'],
         ]
         directory = root
     else:

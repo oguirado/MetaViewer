@@ -19,10 +19,13 @@ CI = ROOT / '.github/workflows/ci.yml'
 
 def workflow_aggregate():
     text = CI.read_text()
-    source = textwrap.dedent(text[text.index('          def aggregate('):
-                                  text.index('          req = ')])
-    namespace = dict(distribution_errors=distribution_errors)
-    exec(source, namespace)
+    f4_head = textwrap.dedent(text[text.index('          RKEYS = '):
+                                   text.index('          genuine = ')])
+    agg_src = textwrap.dedent(text[text.index('          def aggregate('):
+                                   text.index('          req = ')])
+    import re
+    namespace = dict(re=re, hashlib=hashlib, os=os, distribution_errors=distribution_errors)
+    exec(f4_head + '\n' + agg_src, namespace)
     return namespace['aggregate']
 
 
@@ -32,27 +35,46 @@ class PackageIdentityTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.product = self.root / 'package.tar'
-        self.manifest = b'fixture manifest bytes\n'
         self.write_product()
         self.evidence = {'artifact': 'package.tar',
             'artifact_sha256': hashlib.sha256(self.product.read_bytes()).hexdigest(),
             'manifest_sha256': hashlib.sha256(self.manifest).hexdigest(),
             'architecture': 'arm64', 'smoke_marker': 'METAVIEWER_MAIN_SMOKE_OK'}
         (self.root / 'product-evidence.json').write_text(json.dumps(self.evidence))
-        self.receipt = {'gate_id': 'package', 'outcome': 'PASS', 'rc': 0,
-                        'scope': {'platform': 'arm64'},
+        self.receipt = {'schema': 'gate_receipt/v1', 'gate_id': 'package', 'leg': 'package',
+                        'profile': 'W0', 'owner': 'W0-CI-MATRIX', 'issuer': 'CI/package/1 [VM]',
+                        'argv': ['python3', 'tests/ci/test_package_identity.py', '--build'],
+                        'cwd': '/tmp', 'outcome': 'PASS', 'rc': 0, 'reason': 'ok',
+                        'scope': {'unit': 'W0-CI-MATRIX', 'platform': 'arm64',
+                                  'feature': 'package', 'artifact': 'package.receipt.json'},
                         'identities': {'gate_revision': 'revision',
-                                       'artifact_sha256': 'a' * 64},
-                        'product_identity': dict(self.evidence)}
+                                       'instrument_sha256': 'a' * 64,
+                                       'sanitized_log_sha256': 'b' * 64,
+                                       'configuration_sha256': hashlib.sha256(CI.read_bytes()).hexdigest(),
+                                       'log_sha256': 'd' * 64,
+                                       'fixture_sha256': ['a' * 64]},
+                        'product_identity': dict(self.evidence),
+                        'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
+                                        'observed': 'rc 0', 'accepted': True}],
+                        'counts': {'passed': None, 'failed': None, 'skipped': None,
+                                   'source': 'unparsed:package-smoke'}}
 
-    def write_product(self, machine=183, arch='arm64'):
+    def write_product(self, machine=183, arch='arm64', extra_members=(), manifest_override=None):
         binary = bytearray(64)
         binary[:6] = b'\x7fELF\x02\x01'
         binary[18:20] = machine.to_bytes(2, 'little')
+        files = [(name, bytes(binary)) for name in
+                 ('metaviewer', 'resources/bin/metaviewer-core', 'resources/bin/mv-daemon-adapter')]
+        if manifest_override is None:
+            self.manifest = ''.join(
+                f'{hashlib.sha256(data).hexdigest()}  {name}\n' for name, data in files
+            ).encode()
+        else:
+            self.manifest = manifest_override
         with tarfile.open(self.product, 'w') as archive:
             for name, data in [(f'MetaViewer-linux-{arch}.sha256', self.manifest),
-                    *[(f'MetaViewer-linux-{arch}/{name}', bytes(binary)) for name in
-                      ('metaviewer', 'resources/bin/metaviewer-core', 'resources/bin/mv-daemon-adapter')]]:
+                    *[(f'MetaViewer-linux-{arch}/{name}', data) for name, data in files],
+                    *extra_members]:
                 entry = tarfile.TarInfo(name)
                 entry.size = len(data)
                 archive.addfile(entry, io.BytesIO(data))
@@ -60,6 +82,7 @@ class PackageIdentityTests(unittest.TestCase):
     def test_wrong_architecture_bytes_rejected(self):
         self.write_product(machine=62)
         self.receipt['product_identity']['artifact_sha256'] = hashlib.sha256(self.product.read_bytes()).hexdigest()
+        self.receipt['product_identity']['manifest_sha256'] = hashlib.sha256(self.manifest).hexdigest()
         (self.root / 'product-evidence.json').write_text(json.dumps(self.receipt['product_identity']))
         self.assertFalse(self.aggregate(self.receipt))
 
@@ -91,14 +114,16 @@ class PackageIdentityTests(unittest.TestCase):
             with self.subTest(arch=arch):
                 self.write_product(machine=machine, arch=arch)
                 evidence = dict(self.evidence, architecture=arch,
-                    artifact_sha256=hashlib.sha256(self.product.read_bytes()).hexdigest())
-                self.receipt.update(scope={'platform': arch}, product_identity=evidence)
+                    artifact_sha256=hashlib.sha256(self.product.read_bytes()).hexdigest(),
+                    manifest_sha256=hashlib.sha256(self.manifest).hexdigest())
+                self.receipt.update(scope=dict(self.receipt['scope'], platform=arch), product_identity=evidence)
                 (self.root / 'product-evidence.json').write_text(json.dumps(evidence))
                 self.assertTrue(self.aggregate(self.receipt))
                 other = 'x64' if arch == 'arm64' else 'arm64'
                 self.assertTrue(distribution_errors(self.receipt, self.root, 'revision', other))
                 self.write_product(machine=62 if machine == 183 else 183, arch=arch)
                 evidence['artifact_sha256'] = hashlib.sha256(self.product.read_bytes()).hexdigest()
+                evidence['manifest_sha256'] = hashlib.sha256(self.manifest).hexdigest()
                 (self.root / 'product-evidence.json').write_text(json.dumps(evidence))
                 self.assertIn('wrong product architecture', distribution_errors(
                     self.receipt, self.root, 'revision', arch))
@@ -148,13 +173,16 @@ class PackageIdentityTests(unittest.TestCase):
         for arch, machine in (('arm64', 183), ('x64', 62)):
             self.write_product(machine=machine, arch=arch)
             evidence = dict(self.evidence, architecture=arch,
-                artifact_sha256=hashlib.sha256(self.product.read_bytes()).hexdigest())
+                artifact_sha256=hashlib.sha256(self.product.read_bytes()).hexdigest(),
+                manifest_sha256=hashlib.sha256(self.manifest).hexdigest())
             (self.root / 'product-evidence.json').write_text(json.dumps(evidence))
-            for mode in ('valid', 'forged', 'absent', 'malformed', 'not-applicable', 'wrong-arch'):
+            for mode in ('valid', 'forged', 'absent', 'malformed', 'not-applicable', 'wrong-arch', 'forged-config'):
                 receipt = json.loads(json.dumps(self.receipt))
-                receipt.update(scope={'platform': arch}, product_identity=dict(evidence))
+                receipt.update(scope=dict(self.receipt['scope'], platform=arch), product_identity=dict(evidence))
                 if mode == 'forged':
                     receipt['product_identity']['artifact_sha256'] = '0' * 64
+                elif mode == 'forged-config':
+                    receipt['identities']['configuration_sha256'] = 'f' * 64
                 elif mode == 'absent':
                     receipt['product_identity'] = None
                 elif mode == 'not-applicable':
@@ -167,6 +195,22 @@ class PackageIdentityTests(unittest.TestCase):
                 with self.subTest(arch=arch, mode=mode):
                     self.assertEqual(result.returncode, 0 if mode == 'valid' else 1,
                                      result.stdout + result.stderr)
+
+    def test_manifest_inventory_and_extra_members_rejected(self):
+        for label, extra, override in [
+            ('extra-root', [('evil-extra', b'evil')], None),
+            ('extra-nested', [('MetaViewer-linux-arm64/evil-extra', b'evil')], None),
+            ('garbage-manifest', (), b'fixture manifest bytes\n'),
+            ('tampered-line', (), f"{'0' * 64}  metaviewer\n".encode()),
+        ]:
+            with self.subTest(case=label):
+                self.write_product(extra_members=extra, manifest_override=override)
+                evidence = dict(self.evidence,
+                    artifact_sha256=hashlib.sha256(self.product.read_bytes()).hexdigest(),
+                    manifest_sha256=hashlib.sha256(self.manifest).hexdigest())
+                self.receipt['product_identity'] = evidence
+                (self.root / 'product-evidence.json').write_text(json.dumps(evidence))
+                self.assertFalse(self.aggregate(self.receipt))
 
     def test_hosted_aggregator_checks_receipt(self):
         text = CI.read_text()
@@ -245,6 +289,8 @@ def distribution_errors(receipt, product_root, revision, expected_arch=None):
     identities = receipt.get('identities')
     if not revision or not isinstance(identities, dict) or identities.get('gate_revision') != revision:
         return ['package revision mismatch']
+    if 'configuration_sha256' in identities and identities.get('configuration_sha256') != hashlib.sha256(CI.read_bytes()).hexdigest():
+        return ['package configuration_sha256 mismatch']
     product = receipt.get('product_identity')
     if not isinstance(product, dict) or set(product) != {'artifact', 'artifact_sha256', 'manifest_sha256', 'architecture', 'smoke_marker'}:
         return ['independent product evidence absent']
@@ -280,14 +326,63 @@ def distribution_errors(receipt, product_root, revision, expected_arch=None):
         if proof.is_symlink() or json.loads(proof.read_text()) != product:
             return ['local smoke evidence mismatch']
         with tarfile.open(path, 'r:') as archive:
-            manifest = archive.extractfile(f'MetaViewer-linux-{arch}.sha256')
-            if manifest is None or hashlib.file_digest(manifest, 'sha256').hexdigest() != product['manifest_sha256']:
-                return ['manifest digest mismatch']
-            for name in ('metaviewer', 'resources/bin/metaviewer-core', 'resources/bin/mv-daemon-adapter'):
-                member = archive.getmember(f'MetaViewer-linux-{arch}/' + name)
+            members = archive.getmembers()
+            prefix = f'MetaViewer-linux-{arch}/'
+            manifest_member = f'MetaViewer-linux-{arch}.sha256'
+            seen_names = set()
+            actual_files = {}
+            for member in members:
+                if member.name in seen_names:
+                    return ['duplicate archive member']
+                seen_names.add(member.name)
+                norm = member.name.rstrip('/')
+                if not norm or member.name.startswith('/') or any(p in ('', '.', '..') for p in norm.split('/')):
+                    return ['invalid archive member path']
+                if member.isdir():
+                    if norm != f'MetaViewer-linux-{arch}' and not norm.startswith(prefix):
+                        return ['unexpected archive directory']
+                    continue
                 if not member.isfile():
+                    return ['non-regular archive member']
+                if member.name == manifest_member:
+                    continue
+                if not member.name.startswith(prefix) or member.name == prefix:
+                    return ['unexpected archive member']
+                actual_files[member.name] = member
+            manifest_info = archive.getmember(manifest_member)
+            if not manifest_info.isfile():
+                return ['manifest digest mismatch']
+            manifest_bytes = archive.extractfile(manifest_info).read()
+            if hashlib.sha256(manifest_bytes).hexdigest() != product['manifest_sha256']:
+                return ['manifest digest mismatch']
+            manifest_text = manifest_bytes.decode('utf-8')
+            if not manifest_text or not manifest_text.endswith('\n'):
+                return ['invalid manifest format']
+            expected_hashes = {}
+            for line in manifest_text.splitlines():
+                m = re.fullmatch(r'([0-9a-f]{64})  ?([^\r\n\\]+)', line)
+                if not m:
+                    return ['invalid manifest inventory line']
+                digest_hex, rel_path = m.group(1), m.group(2)
+                if rel_path.startswith('/') or any(p in ('', '.', '..') for p in rel_path.split('/')):
+                    return ['invalid manifest member path']
+                full_name = rel_path if rel_path.startswith(prefix) else prefix + rel_path
+                if full_name == manifest_member or not full_name.startswith(prefix) or full_name == prefix:
+                    return ['invalid manifest member path']
+                if full_name in expected_hashes:
+                    return ['duplicate manifest entry']
+                expected_hashes[full_name] = digest_hex
+            if set(actual_files) != set(expected_hashes):
+                return ['archive member inventory mismatch']
+            for full_name, expected_digest in expected_hashes.items():
+                with archive.extractfile(actual_files[full_name]) as stream:
+                    if hashlib.file_digest(stream, 'sha256').hexdigest() != expected_digest:
+                        return ['manifest member digest mismatch']
+            for name in ('metaviewer', 'resources/bin/metaviewer-core', 'resources/bin/mv-daemon-adapter'):
+                full_name = prefix + name
+                if full_name not in actual_files:
                     return ['invalid binary member']
-                binary = archive.extractfile(member).read(64)
+                binary = archive.extractfile(actual_files[full_name]).read(64)
                 if binary[:6] != b'\x7fELF\x02\x01' or int.from_bytes(binary[18:20], 'little') != (183 if arch == 'arm64' else 62):
                     return ['wrong product architecture']
     except (OSError, ValueError, KeyError, tarfile.TarError):

@@ -155,7 +155,7 @@ jobs:
           LOG="$EVDIR/ci-policy.log"
           : > "$LOG"
           python3 - <<'PYEOF' >>"$LOG" 2>&1
-          import glob, json, os, re, sys
+          import glob, hashlib, json, os, pathlib, re, sys
           fails = []
           passed = 0
           def check(name, cond, detail=""):
@@ -232,12 +232,14 @@ jobs:
           mut_jobs = "jobs:\n  lone:\n    runs-on: x\n"
           check("f1-neg-timeout", job_timeouts(mut_jobs).get("lone") != 60)
           # F2: full-SHA action pins over every workflow file.
-          def pin_errors(text, root):
+          def pin_errors(text, root, checker_src=None):
               import subprocess
               checker = os.path.join(os.environ.get("GITHUB_WORKSPACE", os.getcwd()),
                                      ".github/workflows/workflow_pins.py")
-              result = subprocess.run([os.environ.get("MV_YAML_PYTHON", "python3"), checker, root],
-                                      input=text, capture_output=True, text=True, timeout=30)
+              cmd = ([os.environ.get("MV_YAML_PYTHON", "python3"), "-c", checker_src, root]
+                     if checker_src is not None else
+                     [os.environ.get("MV_YAML_PYTHON", "python3"), checker, root])
+              result = subprocess.run(cmd, input=text, capture_output=True, text=True, timeout=30)
               if result.returncode:
                   return ["YAML checker unavailable: " + result.stderr]
               try:
@@ -259,8 +261,13 @@ jobs:
                   "- uses: other/repo/.github/workflows/x.yml@v1\n"]
           check("f2-neg", all(pin_errors("s:\n" + b, ".") != [] for b in bads))
           check("f2-neg-local", pin_errors("s:\n- uses: ./tools\n", ".") != [])
-          broken = lambda text, root: []
-          check("f2-mutant-caught", pin_errors("s:\n" + bads[0], ".") != broken("s:\n" + bads[0], "."))
+          import pathlib
+          pins_file = os.path.join(os.environ.get("GITHUB_WORKSPACE", os.getcwd()),
+                                   ".github/workflows/workflow_pins.py")
+          mutant_pins_src = pathlib.Path(pins_file).read_text().replace("{40}", "{7,40}")
+          broken = lambda text, root, _src=mutant_pins_src, _fn=pin_errors: _fn(text, root, _src)
+          check("f2-mutant-caught", pin_errors("s:\n" + bads[2], ".") != [] and broken("s:\n" + bads[2], ".") == []
+                and broken(good, ".") == [] and broken("steps: [broken", ".") != [])
           # F3 executes the same range selector used by the laws job.
           import subprocess
           range_tests = subprocess.run(["python3", "-I", "-m", "unittest", "discover",
@@ -279,7 +286,7 @@ jobs:
           OUTCOMES = {"PASS", "FAIL", "BLOCKED", "UNKNOWN", "NOT_APPLICABLE"}
           def receipt_errors(r, reg):
               errs = []
-              if set(r) != RKEYS:
+              if not isinstance(r, dict) or set(r) != RKEYS:
                   errs.append("keys")
                   return errs
               if r["schema"] != "gate_receipt/v1":
@@ -292,15 +299,19 @@ jobs:
               if r["outcome"] in ("PASS", "FAIL"):
                   if type(r["rc"]) is not int:
                       errs.append("rc-int")
+                  elif r["outcome"] == "PASS" and r["rc"] != 0:
+                      errs.append("rc-pass")
+                  elif r["outcome"] == "FAIL" and r["rc"] == 0:
+                      errs.append("rc-fail")
               elif r["rc"] is not None:
                   errs.append("rc-null")
               if not isinstance(r["argv"], list) or not r["argv"] or any(not isinstance(a, str) or not a for a in r["argv"]):
                   errs.append("argv")
-              if set(r["scope"]) != {"unit", "platform", "feature", "artifact"} or any(not isinstance(v, str) or not v for v in r["scope"].values()):
+              if not isinstance(r["scope"], dict) or set(r["scope"]) != {"unit", "platform", "feature", "artifact"} or any(not isinstance(v, str) or not v for v in r["scope"].values()):
                   errs.append("scope")
               ids = r["identities"]
-              if set(ids) != {"gate_revision", "instrument_sha256", "sanitized_log_sha256", "configuration_sha256",
-                              "log_sha256", "fixture_sha256"}:
+              if not isinstance(ids, dict) or set(ids) != {"gate_revision", "instrument_sha256", "sanitized_log_sha256", "configuration_sha256",
+                               "log_sha256", "fixture_sha256"}:
                   errs.append("identities-keys")
                   return errs
               hexok = lambda v: isinstance(v, str) and re.fullmatch(r"[0-9a-f]{64}", v) is not None
@@ -313,29 +324,42 @@ jobs:
                   errs.append("assertions-empty")
               else:
                   for a in r["assertions"]:
-                      if set(a) != {"id", "expected", "observed", "accepted"} or type(a["accepted"]) is not bool:
+                      if not isinstance(a, dict) or set(a) != {"id", "expected", "observed", "accepted"} or type(a["accepted"]) is not bool:
                           errs.append("assertion-shape")
+                      elif r["outcome"] == "PASS" and not a["accepted"]:
+                          errs.append("assertion-unaccepted")
               c = r["counts"]
-              if set(c) != {"passed", "failed", "skipped", "source"} or not isinstance(c["source"], str) or not c["source"]:
+              if not isinstance(c, dict) or set(c) != {"passed", "failed", "skipped", "source"} or not isinstance(c["source"], str) or not c["source"]:
                   errs.append("counts")
               else:
+                  vals = [c[k] for k in ("passed", "failed", "skipped")]
                   for k in ("passed", "failed", "skipped"):
-                      if c[k] is not None and type(c[k]) is not int:
+                      if c[k] is not None and (type(c[k]) is not int or c[k] < 0):
                           errs.append("counts-" + k)
+                  if any(v is None for v in vals) and not all(v is None for v in vals):
+                      errs.append("counts-inconsistent")
+                  elif all(type(v) is int and v >= 0 for v in vals):
+                      if r["outcome"] == "PASS" and (c["failed"] != 0 or sum(vals) <= 0):
+                          errs.append("counts-failed-pass")
+                  elif c["source"].startswith("parsed:") and r["outcome"] == "PASS":
+                      errs.append("counts-unparsed-pass")
               for k, v in reg.items():
                   if ids.get(k) != v:
                       errs.append("oracle-" + k)
               return errs
+          import hashlib, pathlib
           genuine = {"schema": "gate_receipt/v1", "gate_id": "g", "leg": "g", "profile": "W0",
                      "owner": "W0-CI-MATRIX", "issuer": "CI/g/1 [VM]", "argv": ["true"], "cwd": "/tmp",
                      "rc": 0, "outcome": "PASS", "reason": "ok",
                      "scope": {"unit": "u", "platform": "x64", "feature": "g", "artifact": "g.receipt.json"},
                      "identities": {"gate_revision": "r", "instrument_sha256": "a" * 64, "sanitized_log_sha256": "b" * 64,
-                                    "configuration_sha256": "c" * 64, "log_sha256": "d" * 64, "fixture_sha256": ["a" * 64]},
+                                    "configuration_sha256": hashlib.sha256(pathlib.Path(".github/workflows/ci.yml").read_bytes()).hexdigest(),
+                                    "log_sha256": "d" * 64, "fixture_sha256": ["a" * 64]},
                      "product_identity": None,
                      "assertions": [{"id": "exit-status", "expected": "rc 0", "observed": "rc 0", "accepted": True}],
                      "counts": {"passed": 1, "failed": 0, "skipped": 0, "source": "parsed:true"}}
-          reg = {"instrument_sha256": "a" * 64, "sanitized_log_sha256": "b" * 64, "configuration_sha256": "c" * 64,
+          reg = {"instrument_sha256": "a" * 64, "sanitized_log_sha256": "b" * 64,
+                 "configuration_sha256": genuine["identities"]["configuration_sha256"],
                  "log_sha256": "d" * 64}
           check("f4-genuine", receipt_errors(genuine, reg) == [], repr(receipt_errors(genuine, reg)[:3]))
           tampered = json.loads(json.dumps(genuine))
@@ -350,21 +374,41 @@ jobs:
           nullpass = json.loads(json.dumps(genuine))
           nullpass["rc"] = None
           check("f4-neg-null-pass", receipt_errors(nullpass, reg) != [])
+          rc7pass = json.loads(json.dumps(genuine))
+          rc7pass["rc"] = 7
+          check("f4-neg-rc-pass", receipt_errors(rc7pass, reg) != [])
+          unacc = json.loads(json.dumps(genuine))
+          unacc["assertions"][0]["accepted"] = False
+          check("f4-neg-unaccepted", receipt_errors(unacc, reg) != [])
+          failcnt = json.loads(json.dumps(genuine))
+          failcnt["counts"]["failed"] = 1
+          check("f4-neg-failed-count", receipt_errors(failcnt, reg) != [])
+          negcnt = json.loads(json.dumps(genuine))
+          negcnt["counts"]["passed"] = -1
+          check("f4-neg-neg-count", receipt_errors(negcnt, reg) != [])
           blocked = json.loads(json.dumps(genuine))
           blocked.update({"rc": None, "outcome": "BLOCKED", "reason": "no runner"})
           blocked["assertions"] = [{"id": "exit-status", "expected": "rc 0", "observed": "unexecuted", "accepted": False}]
           check("f4-blocked", receipt_errors(blocked, reg) == [])
           # [TARGET, unit decision] Share the byte verifier with ci-required.
-          import importlib.util
+          import importlib.util, pathlib
           spec = importlib.util.spec_from_file_location("package_identity", "tests/ci/test_package_identity.py")
           product_module = importlib.util.module_from_spec(spec)
           spec.loader.exec_module(product_module)
           distribution_errors = product_module.distribution_errors
-          def aggregate(required, receipts, results, product_root=None, revision=None):
-              seen = [r["gate_id"] for r in receipts]
-              if sorted(seen) != sorted(required):
+          def aggregate(required, receipts, results, product_root=None, revision=None, reg=None):
+              import hashlib, os, pathlib
+              seen = [r.get("gate_id") for r in receipts if isinstance(r, dict)]
+              if len(seen) != len(receipts) or sorted(seen) != sorted(required):
                   return (False, "identity-set")
+              ci_path = os.path.join(os.environ.get("GITHUB_WORKSPACE", "."), ".github/workflows/ci.yml")
+              oracle = {"configuration_sha256": hashlib.sha256(pathlib.Path(ci_path).read_bytes()).hexdigest()}
+              if reg:
+                  oracle.update(reg)
               for r in receipts:
+                  errs = receipt_errors(r, oracle)
+                  if errs:
+                      return (False, "receipt-" + str(r.get("gate_id")) + ":" + ",".join(errs))
                   if results.get(r["gate_id"]) != "success":
                       return (False, "job-" + r["gate_id"])
                   if r["outcome"] not in required[r["gate_id"]]:
@@ -376,7 +420,9 @@ jobs:
           rpass = json.loads(json.dumps(genuine))
           rpass["gate_id"] = "rust"
           rna = json.loads(json.dumps(genuine))
-          rna.update({"gate_id": "novac", "rc": None, "outcome": "NOT_APPLICABLE", "reason": "w1"})
+          rna.update({"gate_id": "novac", "rc": None, "outcome": "NOT_APPLICABLE", "reason": "w1",
+                      "assertions": [{"id": "exit-status", "expected": "rc 0", "observed": "unexecuted", "accepted": False}],
+                      "counts": {"passed": None, "failed": None, "skipped": None, "source": "unexecuted"}})
           check("f4-agg-ok", aggregate(req, [rpass, rna], {"rust": "success", "novac": "success"})[0])
           check("f4-neg-agg-missing", not aggregate(req, [rpass], {"rust": "success", "novac": "success"})[0])
           check("f4-neg-agg-dup", not aggregate(req, [rpass, rpass, rna], {"rust": "success", "novac": "success"})[0])
@@ -385,6 +431,12 @@ jobs:
           rna2 = json.loads(json.dumps(rna))
           rna2["gate_id"] = "rust"
           check("f4-neg-agg-na", not aggregate(req, [rna2, rna], {"rust": "success", "novac": "success"})[0])
+          rbad_rc = json.loads(json.dumps(rpass))
+          rbad_rc["rc"] = 7
+          check("f4-neg-agg-rc", not aggregate(req, [rbad_rc, rna], {"rust": "success", "novac": "success"})[0])
+          rbad_cfg = json.loads(json.dumps(rpass))
+          rbad_cfg["identities"]["configuration_sha256"] = "f" * 64
+          check("f4-neg-agg-cfg", not aggregate(req, [rbad_cfg, rna], {"rust": "success", "novac": "success"})[0])
           product_tests = subprocess.run(["python3", "-m", "unittest", "discover", "-s", "tests/ci",
               "-p", "test_package_identity.py", "-v"], capture_output=True, text=True)
           check("f4-product-identity", product_tests.returncode == 0, product_tests.stdout + product_tests.stderr)
@@ -395,16 +447,17 @@ jobs:
           check("f5-neg-unknown", ARCH.get("ubuntu-20.04") is None)
           # F6: sanitizer redacts synthetic credentials and sentinels, keeps hashes on clean bytes.
           def redact(text):
-              for prefix in ("gh" + "p_", "github_" + "pat_", "AK" + "IA", "xox" + "b-", "MV0-SYNTHETIC-SENTINEL-"):
+              for prefix in ("gh" + "p_", "gh" + "s_", "gh" + "o_", "gh" + "u_", "gh" + "r_", "github_" + "pat_", "AK" + "IA", "xox" + "b-", "MV0-SYNTHETIC-SENTINEL-"):
                   text = re.sub(re.escape(prefix).replace("_", "(?:_|%5[fF])") + r"(?:[A-Za-z0-9_\-]|%[0-9a-fA-F]{2}){4,}", "[REDACTED]", text, flags=re.I)
               return text.replace("__MV0_PRIVATE_SOURCE_SENTINEL__", "[REDACTED]")
           synth = "key=" + "gh" + "p_" + "9" * 36 + " tail"
-          check("f6-redact", "[REDACTED]" in redact(synth) and "9" * 36 not in redact(synth))
+          check("f6-redact", all("[REDACTED]" in redact("key=" + pfx + "9" * 36 + " tail") and "9" * 36 not in redact("key=" + pfx + "9" * 36 + " tail")
+                                 for pfx in ("gh" + "p_", "gh" + "s_", "gh" + "o_", "gh" + "u_", "gh" + "r_", "github_" + "pat_", "AK" + "IA", "xox" + "b-")))
           check("f6-sentinel", redact("a MV0-SYNTHETIC-SENTINEL-0001 b __MV0_PRIVATE_SOURCE_SENTINEL__ c") ==
                 "a [REDACTED] b [REDACTED] c")
           check("f6-clean-kept", redact("plain line 42") == "plain line 42")
           leaked = [n for n, line in enumerate((ci + vol).splitlines(), 1)
-                    if re.search("(" + "gh" + "p_|github_" + "pat_|AK" + "IA|xox" + "b-)[A-Za-z0-9]{4,}", line)]
+                    if re.search("(" + "gh" + "p_|" + "gh" + "s_|" + "gh" + "o_|" + "gh" + "u_|" + "gh" + "r_|github_" + "pat_|AK" + "IA|xox" + "b-)[A-Za-z0-9]{4,}", line)]
           check("f6-neg-literal", leaked == [], repr(leaked[:4]))
           # F7: summary section shape.
           good_sum = "## rust-fmt [VM] rc 0"
@@ -456,6 +509,7 @@ jobs:
         run: |
           set -euo pipefail
           go mod download
+          export GOPROXY=off GOSUMDB=off GOFLAGS=-mod=readonly
           go build ./...
           go test -race -run '^$' ./...
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
@@ -779,6 +833,7 @@ jobs:
         run: |
           set -euo pipefail
           go mod download
+          export GOPROXY=off GOSUMDB=off GOFLAGS=-mod=readonly
           go build ./...
           go test -race -run '^$' ./...
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
@@ -968,6 +1023,7 @@ jobs:
         run: |
           set -euo pipefail
           go mod download
+          export GOPROXY=off GOSUMDB=off GOFLAGS=-mod=readonly
           go build ./...
           go test -race -run '^$' ./...
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
@@ -1560,6 +1616,7 @@ jobs:
         run: |
           set -euo pipefail
           go mod download
+          export GOPROXY=off GOSUMDB=off GOFLAGS=-mod=readonly
           go build ./...
           go test -race -run '^$' ./...
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0

@@ -47,12 +47,14 @@ def policy_errors(text):
                     errors.append(f'{job}: offline namespace before userns setup')
             if not step.get('if'):
                 formatter |= FORMATTER in run
-                # Cache priming must run online with automatic toolchain fetches off.
+                # Cache priming must run online for download only, then lock Go build/test offline.
                 if (step.get('working-directory') == 'daemon-adapter' and
                         step.get('env', {}).get('GOTOOLCHAIN') == 'local' and
                         'offline.sh' not in run and go_ready):
                     modules |= 'go mod download' in run
-                    builds |= 'go build ./...' in run
+                    offline_go = all(flag in run for flag in ('GOPROXY=off', 'GOSUMDB=off', 'GOFLAGS=-mod=readonly'))
+                    builds |= (offline_go and 'go build ./...' in run and
+                               run.find('GOPROXY=off') < run.find('go build ./...'))
     return errors
 
 
@@ -70,6 +72,9 @@ class ToolchainPolicyTests(unittest.TestCase):
                 ('go-version-file: daemon-adapter/go.mod', 'go-version: "1.24"'),
                 ('go mod download', 'true # module cache omitted'),
                 ('go build ./...', 'true # build cache omitted'),
+                ('GOPROXY=off', 'GOPROXY=https://proxy.golang.org'),
+                ('GOSUMDB=off', 'GOSUMDB=sum.golang.org'),
+                ('GOFLAGS=-mod=readonly', 'GOFLAGS=-mod=mod'),
                 ('GOTOOLCHAIN: local', 'GOTOOLCHAIN: auto'),
                 (USERNS, 'true # namespace preparation omitted'),
             ):
