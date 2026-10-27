@@ -122,6 +122,15 @@ test('ARG-ui_pty-1 child failed open cannot reuse session identity', async () =>
     assert.equal(f.sent.at(-1).code, 'SESSION_CLOSED');
   } finally { await f.dispose(); }
 });
+test('ARG-ui_pty-1 malformed admission closes an unstarted child session', async () => {
+  const f = child();
+  try {
+    f.send({ op: 'open', id: 'session', provider: 'provider', command: 'provider', admission: 'invalid' }); await tick();
+    assert.equal(f.sent.at(-1).code, 'ADMISSION_SHAPE');
+    f.send({ op: 'write', id: 'session', b64: 'YQ==' }); await tick();
+    assert.equal(f.sent.at(-1).code, 'SESSION_CLOSED');
+  } finally { await f.dispose(); }
+});
 test('ARG-ui_pty-6 output never exceeds lifetime cap; under-cap output stays open', async () => {
   const f = child();
   try {

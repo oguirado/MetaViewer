@@ -1250,6 +1250,7 @@ export function runBroker({
     }
     const rawAdmission = msg.admission === undefined ? null : msg.admission;
     if (rawAdmission !== null && !isRecord(rawAdmission)) {
+      addTombstone(id);
       sendError(id, 'ADMISSION_SHAPE');
       return;
     }
