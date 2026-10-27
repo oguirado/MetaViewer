@@ -1,0 +1,14 @@
+{
+  "schema": "metaviewer.perf.rss-receipt/v1",
+  "basis": "synthetic positive control, not measured",
+  "duration_ms": 120000,
+  "workload": [
+    "ready",
+    "resize",
+    "reload",
+    "terminal-toggle",
+    "shutdown"
+  ],
+  "orphans": [],
+  "samples": []
+}

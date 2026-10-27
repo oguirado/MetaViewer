@@ -1,0 +1,45 @@
+{
+  "schema": "metaviewer.perf.rss-budgets/v1",
+  "basis": "[CITED] AC-14 ratified decimal MB, revised main/renderer caps per section 9.3; [TARGET, unit decision] utility diagnostic and shell-only workload",
+  "budgets": [
+    {
+      "id": "rss_main_bytes",
+      "unit": "bytes",
+      "dir": "max",
+      "bound": 200000000,
+      "basis": "[CITED] AC-14",
+      "gating": true
+    },
+    {
+      "id": "rss_renderer_bytes",
+      "unit": "bytes",
+      "dir": "max",
+      "bound": 370000000,
+      "basis": "[CITED] AC-14",
+      "gating": true
+    },
+    {
+      "id": "rss_tree_bytes",
+      "unit": "bytes",
+      "dir": "max",
+      "bound": 1150000000,
+      "basis": "[CITED] AC-14",
+      "gating": true
+    },
+    {
+      "id": "rss_utility_bytes",
+      "unit": "bytes",
+      "dir": "max",
+      "bound": 260000000,
+      "basis": "[TARGET] diagnostic only",
+      "gating": false
+    }
+  ],
+  "viewport": {
+    "width": 1280,
+    "height": 900
+  },
+  "sampleMs": 5000,
+  "gateDurationMs": 120000,
+  "exitDurationMs": 600000
+}

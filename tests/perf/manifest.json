@@ -1,0 +1,26 @@
+[
+  {
+    "file": "clean.json",
+    "expected_ok": true
+  },
+  {
+    "file": "leak-main.json",
+    "expected_ok": false
+  },
+  {
+    "file": "leak-renderer.json",
+    "expected_ok": false
+  },
+  {
+    "file": "leak-tree.json",
+    "expected_ok": false
+  },
+  {
+    "file": "empty.json",
+    "expected_ok": false
+  },
+  {
+    "file": "truncated.json",
+    "expected_ok": false
+  }
+]

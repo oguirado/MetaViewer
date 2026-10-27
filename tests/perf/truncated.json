@@ -1,0 +1,190 @@
+{
+  "schema": "metaviewer.perf.rss-receipt/v1",
+  "basis": "synthetic positive control, not measured",
+  "duration_ms": 1000,
+  "workload": [
+    "ready",
+    "resize",
+    "reload",
+    "terminal-toggle",
+    "shutdown"
+  ],
+  "orphans": [],
+  "samples": [
+    {
+      "at_ms": 0,
+      "rss_main_bytes": 150000000,
+      "rss_renderer_bytes": 100000000,
+      "rss_utility_bytes": 30000000,
+      "rss_tree_bytes": 400000000
+    },
+    {
+      "at_ms": 5000,
+      "rss_main_bytes": 150000000,
+      "rss_renderer_bytes": 100000000,
+      "rss_utility_bytes": 30000000,
+      "rss_tree_bytes": 400000000
+    },
+    {
+      "at_ms": 10000,
+      "rss_main_bytes": 150000000,
+      "rss_renderer_bytes": 100000000,
+      "rss_utility_bytes": 30000000,
+      "rss_tree_bytes": 400000000
+    },
+    {
+      "at_ms": 15000,
+      "rss_main_bytes": 150000000,
+      "rss_renderer_bytes": 100000000,
+      "rss_utility_bytes": 30000000,
+      "rss_tree_bytes": 400000000
+    },
+    {
+      "at_ms": 20000,
+      "rss_main_bytes": 150000000,
+      "rss_renderer_bytes": 100000000,
+      "rss_utility_bytes": 30000000,
+      "rss_tree_bytes": 400000000
+    },
+    {
+      "at_ms": 25000,
+      "rss_main_bytes": 150000000,
+      "rss_renderer_bytes": 100000000,
+      "rss_utility_bytes": 30000000,
+      "rss_tree_bytes": 400000000
+    },
+    {
+      "at_ms": 30000,
+      "rss_main_bytes": 150000000,
+      "rss_renderer_bytes": 100000000,
+      "rss_utility_bytes": 30000000,
+      "rss_tree_bytes": 400000000
+    },
+    {
+      "at_ms": 35000,
+      "rss_main_bytes": 150000000,
+      "rss_renderer_bytes": 100000000,
+      "rss_utility_bytes": 30000000,
+      "rss_tree_bytes": 400000000
+    },
+    {
+      "at_ms": 40000,
+      "rss_main_bytes": 150000000,
+      "rss_renderer_bytes": 100000000,
+      "rss_utility_bytes": 30000000,
+      "rss_tree_bytes": 400000000
+    },
+    {
+      "at_ms": 45000,
+      "rss_main_bytes": 150000000,
+      "rss_renderer_bytes": 100000000,
+      "rss_utility_bytes": 30000000,
+      "rss_tree_bytes": 400000000
+    },
+    {
+      "at_ms": 50000,
+      "rss_main_bytes": 150000000,
+      "rss_renderer_bytes": 100000000,
+      "rss_utility_bytes": 30000000,
+      "rss_tree_bytes": 400000000
+    },
+    {
+      "at_ms": 55000,
+      "rss_main_bytes": 150000000,
+      "rss_renderer_bytes": 100000000,
+      "rss_utility_bytes": 30000000,
+      "rss_tree_bytes": 400000000
+    },
+    {
+      "at_ms": 60000,
+      "rss_main_bytes": 150000000,
+      "rss_renderer_bytes": 100000000,
+      "rss_utility_bytes": 30000000,
+      "rss_tree_bytes": 400000000
+    },
+    {
+      "at_ms": 65000,
+      "rss_main_bytes": 150000000,
+      "rss_renderer_bytes": 100000000,
+      "rss_utility_bytes": 30000000,
+      "rss_tree_bytes": 400000000
+    },
+    {
+      "at_ms": 70000,
+      "rss_main_bytes": 150000000,
+      "rss_renderer_bytes": 100000000,
+      "rss_utility_bytes": 30000000,
+      "rss_tree_bytes": 400000000
+    },
+    {
+      "at_ms": 75000,
+      "rss_main_bytes": 150000000,
+      "rss_renderer_bytes": 100000000,
+      "rss_utility_bytes": 30000000,
+      "rss_tree_bytes": 400000000
+    },
+    {
+      "at_ms": 80000,
+      "rss_main_bytes": 150000000,
+      "rss_renderer_bytes": 100000000,
+      "rss_utility_bytes": 30000000,
+      "rss_tree_bytes": 400000000
+    },
+    {
+      "at_ms": 85000,
+      "rss_main_bytes": 150000000,
+      "rss_renderer_bytes": 100000000,
+      "rss_utility_bytes": 30000000,
+      "rss_tree_bytes": 400000000
+    },
+    {
+      "at_ms": 90000,
+      "rss_main_bytes": 150000000,
+      "rss_renderer_bytes": 100000000,
+      "rss_utility_bytes": 30000000,
+      "rss_tree_bytes": 400000000
+    },
+    {
+      "at_ms": 95000,
+      "rss_main_bytes": 150000000,
+      "rss_renderer_bytes": 100000000,
+      "rss_utility_bytes": 30000000,
+      "rss_tree_bytes": 400000000
+    },
+    {
+      "at_ms": 100000,
+      "rss_main_bytes": 150000000,
+      "rss_renderer_bytes": 100000000,
+      "rss_utility_bytes": 30000000,
+      "rss_tree_bytes": 400000000
+    },
+    {
+      "at_ms": 105000,
+      "rss_main_bytes": 150000000,
+      "rss_renderer_bytes": 100000000,
+      "rss_utility_bytes": 30000000,
+      "rss_tree_bytes": 400000000
+    },
+    {
+      "at_ms": 110000,
+      "rss_main_bytes": 150000000,
+      "rss_renderer_bytes": 100000000,
+      "rss_utility_bytes": 30000000,
+      "rss_tree_bytes": 400000000
+    },
+    {
+      "at_ms": 115000,
+      "rss_main_bytes": 150000000,
+      "rss_renderer_bytes": 100000000,
+      "rss_utility_bytes": 30000000,
+      "rss_tree_bytes": 400000000
+    },
+    {
+      "at_ms": 120000,
+      "rss_main_bytes": 150000000,
+      "rss_renderer_bytes": 100000000,
+      "rss_utility_bytes": 30000000,
+      "rss_tree_bytes": 400000000
+    }
+  ]
+}
