@@ -133,3 +133,22 @@
 .mv-tile-freshness[hidden] {
   display: none;
 }
+
+/* Folded tile: the wrapper collapses to the header rail and the lane body
+ * hosts never reserve space; the kit hides its own body host as well. */
+.mv-tile[data-tile-state="folded"] {
+  height: auto;
+}
+
+.mv-tile[data-tile-state="folded"] .mv-surface-host,
+.mv-tile[data-tile-state="folded"] .mv-tile-capture-host,
+.mv-tile[data-tile-state="folded"] .mv-tile-freshness,
+.mv-tile[data-tile-state="folded"] .mv-tile-status {
+  display: none;
+}
+
+/* Connecting tile: the waiting placeholder scrolls inside the capture host
+ * instead of clipping its second line in short tiles. */
+.mv-tile[data-tile-state="connecting"] .mv-tile-capture-host {
+  overflow: auto;
+}

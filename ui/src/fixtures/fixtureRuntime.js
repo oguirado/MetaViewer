@@ -12,12 +12,17 @@ import { resolveFixture } from './resolveState.js';
 // already-imported module so `main.js` keeps its closed stub-map import
 // surface (the boot harnesses rewrite static imports with a fixed map).
 export {
+  LIVE_REPLAY_BENCH_NAMES,
   LIVE_REPLAY_FIXTURE,
   LIVE_REPLAY_KEY,
+  LIVE_REPLAY_MULTISLOT_SLOT,
   LIVE_REPLAY_SCRIPT,
+  LIVE_REPLAY_STEP_MAP,
   LIVE_REPLAY_SURFACE_ID,
+  LIVE_REPLAY_TERMINAL_SESSION,
   createLiveReplayHarness,
   createLiveReplayMount,
+  createLiveReplayTerminalHarness,
   parseStepQuery,
 } from './liveReplay.js';
 
@@ -48,7 +53,7 @@ export {
  * @property {{ visibility: (input: unknown) => Readonly<Record<string, unknown>>, control: (input: unknown) => Readonly<Record<string, unknown>>, presentation: (input: unknown) => Readonly<Record<string, unknown>> }} intentBuilders
  * @property {Record<string, never>} controlRegistry
  * @property {Record<string, never>} scheduler
- * @property {{ attachCanvas: () => void, detachCanvas: () => void, foldSurface: () => void, unfoldSurface: () => void, updateSurfaceState: () => void, destroy: () => void }} tileScheduler
+ * @property {{ attachCanvas: () => void, detachCanvas: () => void, foldSurface: () => void, unfoldSurface: () => void, updateSurfaceState: () => void, destroy: () => void, getInstrumentation: () => null, subscribePresentation: () => () => void }} tileScheduler
  */
 
 /**
@@ -81,6 +86,10 @@ function buildSnapshot(fixture) {
 
 /**
  * No-op tile scheduler stub matching the SurfacePanel/SurfaceCanvas call surface.
+ * MVUI6 (lane W request): `getInstrumentation` affirmatively reports no
+ * presented frame (fixtures present none, so the Frame badge hides pre-frame)
+ * and `subscribePresentation` is a noop unsub, matching the live scheduler
+ * shape the panel subscribes to.
  * @returns {FixtureRuntime['tileScheduler']}
  */
 function createStubTileScheduler() {
@@ -91,6 +100,8 @@ function createStubTileScheduler() {
     unfoldSurface: () => {},
     updateSurfaceState: () => {},
     destroy: () => {},
+    getInstrumentation: () => null,
+    subscribePresentation: () => () => {},
   };
 }
 

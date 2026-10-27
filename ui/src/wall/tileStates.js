@@ -100,6 +100,41 @@ export function frameFreshnessText(row) {
 }
 
 /**
+ * Presented-frame witness for one tile scheduler: the opaque handle of the
+ * last frame the scheduler presented for this surface lifetime, or the
+ * empty string when the scheduler affirmatively reports nothing presented
+ * (unknown surface, stale generation or epoch, terminal flags, empty
+ * handle), or null when presentation is unknowable (no scheduler API,
+ * unreadable or malformed instrumentation, refused read). Callers hide the
+ * Frame badge on the empty string so it never shares the tile with the
+ * waiting placeholder; null keeps the admitted-generation badge.
+ * @param {unknown} scheduler
+ * @param {string} capsuleId
+ * @param {unknown} generation
+ * @param {unknown} epoch
+ * @returns {string|null}
+ */
+export function presentedFrameHandle(scheduler, capsuleId, generation, epoch) {
+  if (scheduler === null || typeof scheduler !== 'object') return null;
+  const reader = /** @type {{ getInstrumentation?: unknown }} */ (scheduler);
+  if (typeof reader.getInstrumentation !== 'function') return null;
+  /** @type {unknown} */
+  let info;
+  try {
+    info = reader.getInstrumentation(capsuleId);
+  } catch {
+    return null;
+  }
+  if (info === null || info === undefined) return '';
+  if (typeof info !== 'object') return null;
+  const record = /** @type {Record<string, unknown>} */ (info);
+  if (record.destroyed === true || record.contextLost === true) return '';
+  if (!('lastPresentedHandle' in record)) return '';
+  if (record.surfaceGeneration !== generation || record.epoch !== epoch) return '';
+  return typeof record.lastPresentedHandle === 'string' ? record.lastPresentedHandle : null;
+}
+
+/**
  * Resolve one control verb. An explicit asked verb wins (bare or kit
  * `surface_request.*` namespaced); otherwise the authoritative row control
  * decides, defaulting to take_control when no row is bound.

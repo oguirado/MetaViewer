@@ -179,6 +179,23 @@ async function submitHost(action) {
     if (hostActive) recordActivity({ code: 'HOST_REQUEST_REFUSED' });
   }
 }
+/** Fixture-only bench hook (MVUI4L lane V): replay steps drive the real
+ * dispatch paths (propose/intent/multislot) through this handle, so every
+ * row appears through production code, plus the real openers for the
+ * multislot and terminal screens the steps screenshot. Installed only when
+ * a fixture key is present; live boot never installs it. Lane R reads it
+ * after mount and no-ops when it is absent. */
+/** Deterministic bench-only opener: the UI toggles the terminal, the bench opens it. */
+function openTerminalBench() { if (!terminalOpen.value) toggleTerminal(); }
+const benchHook = Object.freeze({ dispatch, dispatchMultislot, createCapsule: onCreateCapsule,
+  openMultislot, openTerminal: openTerminalBench });
+const benchWindow = /** @type {any} */ (typeof window !== 'undefined' ? window : null);
+onMounted(() => {
+  if (benchWindow && props.fixture) benchWindow.__metaviewerBench = benchHook;
+});
+onBeforeUnmount(() => {
+  if (benchWindow && benchWindow.__metaviewerBench === benchHook) delete benchWindow.__metaviewerBench;
+});
 /** @param {{capsuleId?:unknown}} payload */
 function selectCapsule(payload) {
   if (typeof payload?.capsuleId === 'string' && rows.value.some(row => row.id === payload.capsuleId)) selectedCapsuleId.value = payload.capsuleId;
@@ -237,10 +254,15 @@ function surfaceWitness(surface) {
 const feed = props.runtime?.projectionView ?? projectionView;
 const snapshot = shallowRef(feed.getSnapshot());
 const diagnosticTileStates = props.fixture?.key === 'tile-states';
+/** Lost-row admission (MVUI4L lane V, for lane W MV-7): the live runtime
+ * path (live boot and the live-replay bench) keeps Lost tiles exactly as
+ * the tile-states diagnostic does; stub-fixture mounts keep the pinned
+ * diagnostic-only scope. */
+const admitLostRows = computed(() => diagnosticTileStates || !props.fixture || props.fixture.ui?.liveReplay === true);
 const rows = computed(() => {
   void snapshot.value;
   const admitted = feed.getProjection()?.rows.filter(row => row.backendLifecycle !== 'destroyed'
-    && (row.backendLifecycle !== 'lost' || diagnosticTileStates)) ?? [];
+    && (row.backendLifecycle !== 'lost' || admitLostRows.value)) ?? [];
   return admitted.filter(row => !nestedMode.displayOnly || applyNestedWall([row], nestedMode).rows.length > 0);
 });
 // Reconcile only changed authoritative visibility, retaining pending local
@@ -317,7 +339,7 @@ const chromeWorkspace = markRaw(defineComponent({
           </article>
         </section>
         <WallWorkspace v-else-if="!creativeOpen" :key="wallView" :hidden="!rows.length" ref="wall" :workspace-component="chromeWorkspace" :scope="props.scope" :default-profile="props.layout" :storage="props.storage"
-          owner-window-id="main-wall" :projection-view="feed" :allow-lost-surface="diagnosticTileStates" :intent-builders="props.runtime?.intentBuilders ?? intentBuilders"
+          owner-window-id="main-wall" :projection-view="feed" :allow-lost-surface="admitLostRows" :intent-builders="props.runtime?.intentBuilders ?? intentBuilders"
           :control-registry="props.runtime?.controlRegistry ?? controlRegistry" :scheduler="props.runtime?.scheduler ?? scheduler" :tile-scheduler="props.runtime?.tileScheduler ?? tileScheduler"
           :color-scheme="scheme === 'mv-dark' ? 'dark' : 'light'" density="compact" @ready="revealRows" @wall-settled="onWorkspaceSettled" @activate-surface="selectCapsule" @submit-intent="dispatch">
           <template #surface="{ surface, capsuleId }">

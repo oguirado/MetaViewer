@@ -6,7 +6,7 @@
  */
 
 /** @typedef {{ code: string, message: string }} PanelAdmissionError */
-/** @typedef {{ id: string, surfaceId: string, backendLifecycle: string, generation: number, visibility: string, control: string, attachmentState?: string, refusal?: PanelAdmissionError|null }} PanelSurfaceRow */
+/** @typedef {{ id: string, surfaceId: string, backendLifecycle: string, generation: number, visibility: string, control: string, attachmentState?: string, refusal?: PanelAdmissionError|null, readinessError?: PanelAdmissionError|null }} PanelSurfaceRow */
 /** @typedef {{ rows: readonly PanelSurfaceRow[] }} PanelProjectionBody */
 /** @typedef {{ schema: string, epoch: number, revision: number, query: string, projection: PanelProjectionBody }} PanelProjectionEnvelope */
 /** @typedef {{ status: string, stale: boolean, envelope: PanelProjectionEnvelope|null, error: PanelAdmissionError|null }} PanelProjectionSnapshot */
@@ -162,7 +162,9 @@ export function validatePanelDeps(deps) {
   assertIntentBuilders(deps.intentBuilders);
   assertObject(deps.controlRegistry, 'controlRegistry');
   assertObject(deps.scheduler, 'scheduler');
-  assertObject(deps.tileScheduler, 'tileScheduler');
+  // An explicit null permits a scheduler to arrive later; missing or malformed
+  // dependencies still fail admission.
+  if (deps.tileScheduler !== null) assertObject(deps.tileScheduler, 'tileScheduler');
 }
 
 /**
@@ -276,7 +278,7 @@ export function roundControlBox(box) {
 <script setup>
 import { computed, onBeforeUnmount, provide, shallowRef, watch } from 'vue';
 import CapsulePanel from 'capsule-ui-kit/CapsulePanel';
-import { deriveTileState, controlVerbForRow, frameFreshnessText } from './tileStates.js';
+import { deriveTileState, controlVerbForRow, frameFreshnessText, presentedFrameHandle, TILE_ERROR_DISPLAY_STATUS } from './tileStates.js';
 import './wall.css';
 
 const props = defineProps({
@@ -298,7 +300,7 @@ const props = defineProps({
     required: true,
   },
   tileScheduler: {
-    type: /** @type {import('vue').PropType<TileSchedulerLike>} */ (Object),
+    type: /** @type {import('vue').PropType<TileSchedulerLike|null>} */ ([Object, null]),
     required: true,
   },
   presentationInstance: { type: String, required: true },
@@ -349,6 +351,27 @@ function bindView(view) {
 bindView(props.projectionView);
 watch(() => props.projectionView, (next) => { bindView(next); });
 onBeforeUnmount(() => { unbindView(); });
+// Presentation witness revision: the tile scheduler notifies outside the
+// projection feed, so the badge re-reads its instrumentation per notice.
+// Schedulers without the presentation API keep the legacy badge path.
+const presentationRevision = shallowRef(0);
+/** @type {unknown} */
+let stopPresentation = null;
+function unbindPresentation() {
+  if (typeof stopPresentation === 'function') stopPresentation();
+  stopPresentation = null;
+}
+/** @param {TileSchedulerLike|null} scheduler */
+function bindPresentation(scheduler) {
+  unbindPresentation();
+  if (typeof scheduler?.subscribePresentation === 'function') {
+    stopPresentation = scheduler.subscribePresentation(() => { presentationRevision.value += 1; });
+  }
+  presentationRevision.value += 1;
+}
+bindPresentation(props.tileScheduler);
+watch(() => props.tileScheduler, (next) => { bindPresentation(next); });
+onBeforeUnmount(() => { unbindPresentation(); });
 
 const row = computed(() => findSurfaceRow(snapshot.value, props.capsuleId));
 // Last admitted row for this capsule. A missing row with a resident feed
@@ -374,14 +397,35 @@ const tile = computed(() => {
 // keep the placeholder with no frame claim, and lost/error tiles keep the
 // typed status row. Plain text (never a live region): it changes per frame.
 const freshness = computed(() => {
+  void presentationRevision.value;
   const state = tile.value.tile;
   if (state === 'connecting' || state === 'lost' || state === 'error') return '';
+  // The scheduler has the final say on presentation: an affirmative
+  // nothing-presented witness hides the badge so it never shares the tile
+  // with the waiting placeholder; unknowable presentation keeps the
+  // admitted-generation badge.
+  if (presentedFrameHandle(props.tileScheduler, props.capsuleId,
+    (row.value ?? lastRow.value)?.generation, snapshot.value?.envelope?.epoch) === '') {
+    return '';
+  }
   return frameFreshnessText(lastRow.value);
+});
+// Single-statement status line: lost tiles always name their state, while
+// error tiles defer to the kit readiness banner when the row carries one
+// (the banner owns the message) and otherwise state the typed copy once.
+const kitBannerShown = computed(() => {
+  const readiness = row.value?.readinessError;
+  return typeof readiness === 'object' && readiness !== null;
+});
+const bodyStatus = computed(() => {
+  if (tile.value.tile === 'lost') return tile.value.status;
+  if (tile.value.tile === 'error' && !kitBannerShown.value) return TILE_ERROR_DISPLAY_STATUS;
+  return '';
 });
 // [TARGET, unit decision] Authoritative visibility drives the display branch;
 // pending UI gestures do not fold capture or change core-owned state.
 watch(row, (current) => {
-  const method = current?.visibility === 'folded' ? props.tileScheduler.foldSurface : props.tileScheduler.unfoldSurface;
+  const method = current?.visibility === 'folded' ? props.tileScheduler?.foldSurface : props.tileScheduler?.unfoldSurface;
   if (current && typeof method === 'function') method(current.surfaceId);
 }, { immediate: true });
 const drawable = computed(() => isDrawableRow(row.value));
@@ -458,7 +502,7 @@ function onActivateSurface() {
         <div :hidden="tile.tile === 'lost' || tile.tile === 'error'" class="mv-tile-capture-host">
           <slot name="surface" :capsule-id="props.capsuleId" :surface="row" :drawable="drawable" />
         </div>
-        <p :hidden="tile.tile !== 'lost' && tile.tile !== 'error'" role="status" class="mv-tile-status">{{ tile.tile === 'error' ? 'Surface update unavailable' : tile.status }}</p>
+        <p :hidden="bodyStatus === ''" role="status" class="mv-tile-status">{{ bodyStatus }}</p>
       </div>
     </template>
   </CapsulePanel>

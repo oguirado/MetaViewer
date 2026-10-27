@@ -97,6 +97,66 @@ function createInitialLayout(scope) {
   return createWallLayout(scope);
 }
 
+/**
+ * Fixture-only replay bench driver (lane R, mvui6): named `?step=<name>`
+ * outcomes drive the REAL App dispatch paths through the fixture-only hook
+ * installed by lane V (`window.__metaviewerBench` when a fixture key is
+ * present, never live). Propose/intent/multislot steps call the same
+ * dispatch the UI controls call; terminal steps open the real panels and
+ * emit through the fixture fake ports. Pending launches click the real
+ * provider button (same control the operator clicks). Never throws: a
+ * missing hook or a refused dispatch leaves frames mounted for the bench.
+ * @param {{ bench?: { kind?: string, body?: unknown, capsuleId?: string, lifecycle?: string }, terminalHarness?: { emitExit?: () => void, emitFrame?: () => void } }} mount
+ */
+function driveReplayBench(mount) {
+  try {
+    const bench = mount?.bench;
+    if (!bench || typeof bench !== 'object') return;
+    const hook = /** @type {{ dispatch?: unknown, dispatchMultislot?: unknown, openMultislot?: unknown, openTerminal?: unknown }|null} */ (
+      /** @type {{ __metaviewerBench?: unknown }} */ (/** @type {unknown} */ (window)).__metaviewerBench ?? null
+    );
+    if (bench.kind === 'propose' || bench.kind === 'intent') {
+      if (hook && typeof hook.dispatch === 'function') {
+        try { /** @type {(intent: unknown) => void} */ (hook.dispatch)(bench.body); } catch { /* Bench hook failures never break boot. */ }
+      }
+      return;
+    }
+    if (bench.kind === 'multislot') {
+      if (hook && typeof hook.dispatchMultislot === 'function') {
+        try { void /** @type {(intent: unknown, capsuleId: string) => unknown} */ (hook.dispatchMultislot)(bench.body, bench.capsuleId ?? ''); } catch { /* Bench hook failures never break boot. */ }
+      }
+      return;
+    }
+    if (bench.kind === 'terminal') {
+      if (bench.lifecycle === 'pending') {
+        if (hook && typeof hook.openTerminal === 'function') {
+          try { /** @type {() => void} */ (hook.openTerminal)(); } catch { /* Bench hook failures never break boot. */ }
+        }
+        try {
+          setTimeout(() => {
+            try {
+              const getById = /** @type {{ getElementById?: unknown }} */ (/** @type {unknown} */ (document)).getElementById;
+              if (typeof getById !== 'function') return;
+              const button = /** @type {{ click?: unknown }|null} */ (getById.call(document, 'mv-terminal-broker-launch-shell'));
+              if (button && typeof button.click === 'function') /** @type {() => void} */ (button.click).call(button);
+            } catch { /* Missing button never breaks boot. */ }
+          }, 50);
+        } catch { /* Timer failures never break boot. */ }
+        return;
+      }
+      if (hook && typeof hook.openMultislot === 'function') {
+        try { /** @type {() => void} */ (hook.openMultislot)(); } catch { /* Bench hook failures never break boot. */ }
+      }
+      const harness = mount?.terminalHarness;
+      if (bench.lifecycle === 'exited' && harness && typeof harness.emitExit === 'function') {
+        try { setTimeout(() => { try { harness.emitExit?.(); } catch {} }, 100); } catch { /* Timer failures never break boot. */ }
+      } else if (bench.lifecycle === 'failed' && harness && typeof harness.emitFrame === 'function') {
+        try { setTimeout(() => { try { harness.emitFrame?.(); } catch {} }, 100); } catch { /* Timer failures never break boot. */ }
+      }
+    }
+  } catch { /* Bench driver never breaks boot. */ }
+}
+
 /** Render only closed copy; host messages and codes never become visible text.
  * @param {unknown} error
  */
@@ -160,10 +220,11 @@ async function bootstrap() {
   const selfId = fixture ? null : (typeof host?.selfCapsuleId === 'function' ? await host.selfCapsuleId() : null);
   const exportDestination = fixture ? '' : (typeof host?.recordingDestination === 'function' ? await host.recordingDestination() : null) ?? '';
   const nestedHost = { getNestedDepth: () => depth, getSelfCapsuleId: () => selfId };
-  const replayMount = /** @type {{ authorityPort?: import('./core/hostAdapters.js').AuthorityPort }|null} */ (/** @type {unknown} */ (isLiveReplay ? fixtureMount : null));
+  const replayMount = /** @type {{ authorityPort?: import('./core/hostAdapters.js').AuthorityPort, terminalBrokerPort?: import('./core/hostAdapters.js').TerminalPort }|null} */ (/** @type {unknown} */ (isLiveReplay ? fixtureMount : null));
   const replayPort = replayMount?.authorityPort ?? null;
+  const replayTerminalPort = replayMount?.terminalBrokerPort ?? null;
   const authorityHost = replayPort ? createAuthorityAdapter(replayPort) : (fixture ? null : createAuthorityAdapter(host?.authority));
-  const terminalBroker = fixture ? null : createTerminalBroker(host?.sideTerminal);
+  const terminalBroker = fixture ? (replayTerminalPort ? createTerminalBroker(replayTerminalPort) : null) : createTerminalBroker(host?.sideTerminal);
   const liveRuntime = fixture ? null : createAuthorityRuntime(host?.authority);
   const replayRuntime = /** @type {{ dispose?: () => void }|null} */ (/** @type {unknown} */ (isLiveReplay ? fixtureMount?.runtime ?? null : null));
   const teardown = () => { liveRuntime?.dispose(); replayRuntime?.dispose?.(); window.removeEventListener?.('pagehide', teardown); };
@@ -178,6 +239,12 @@ async function bootstrap() {
     /** @type {(scheme:string)=>void} */ (setKitScheme)(fixture?.scheme ?? 'mv-light');
     application.onUnmount?.(teardown);
     application.mount(MOUNT_SELECTOR);
+    // Fixture-only bench outcomes (mvui6): named replay steps drive the real
+    // App dispatch paths through the lane-V hook. Numeric steps and live boot
+    // carry no bench descriptor and ignore this branch entirely.
+    if (isLiveReplay && fixtureMount && typeof fixtureMount === 'object' && 'bench' in fixtureMount) {
+      try { driveReplayBench(/** @type {{ bench?: { kind?: string } }} */ (fixtureMount)); } catch { /* Bench driver never breaks boot. */ }
+    }
   } catch (error) { teardown(); throw error; }
 }
 
