@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 277 | 55 | 222 |
-| Lanes finished OK | 277 | 55 | 222 |
-| Agent steps | 14,114 | 2,705 | 11,409 |
-| Lane-hours of agent work | 36.0 | 5.2 | 30.8 |
-| Fresh input tokens | 59,495,758 | 11,482,034 | 48,013,724 |
-| Cache-read input tokens | 1,289,414,094 | 226,255,212 | 1,063,158,882 |
+| Lanes launched | 285 | 55 | 230 |
+| Lanes finished OK | 285 | 55 | 230 |
+| Agent steps | 14,739 | 2,705 | 12,034 |
+| Lane-hours of agent work | 37.3 | 5.2 | 32.0 |
+| Fresh input tokens | 61,975,714 | 11,482,034 | 50,493,680 |
+| Cache-read input tokens | 1,362,121,089 | 226,255,212 | 1,135,865,877 |
 | Prompt cache hit % | 95.6 | 95.2 | 95.7 |
-| Output tokens | 12,761,451 | 2,135,708 | 10,625,743 |
-| Thinking tokens | 6,711,388 | 1,050,039 | 5,661,349 |
-| Cost (USD) | 11.0807 | 2.0279 | 9.0528 |
-| Cost per lane (USD) | 0.04 | 0.0369 | 0.0408 |
+| Output tokens | 13,251,099 | 2,135,708 | 11,115,391 |
+| Thinking tokens | 6,863,888 | 1,050,039 | 5,813,849 |
+| Cost (USD) | 11.572 | 2.0279 | 9.5442 |
+| Cost per lane (USD) | 0.0406 | 0.0369 | 0.0415 |
 
-Rooms: 60. Peak concurrent lanes [MEASURED from lane start/end]: 24.
+Rooms: 61. Peak concurrent lanes [MEASURED from lane start/end]: 24.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -52,7 +52,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | review | 51 | 94.4 | 1.4856 |
 | submission | 4 | 94.9 | 0.0995 |
 | test | 12 | 95.6 | 0.5657 |
-| testing | 38 | 95.6 | 1.5247 |
+| testing | 46 | 95.9 | 2.016 |
 | ui | 13 | 96.6 | 0.9938 |
 | vision | 8 | 97.2 | 0.537 |
 
@@ -120,6 +120,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui9 | UI orchestrator | Oct 27 08:17 | ui | 4 | 97.1 | 0.2974 | Operator saw no recording menus, screenshot action or capsule action icons on wall tiles: add per-tile record-for-AI/screenshot/recording chrome over the new closed capture facade, adopt kit 0.2.1 tile actions and anchors, and audit every capsule action icon. |
 | mvrv6 | conductor | Oct 27 08:48 | review | 4 | 93.6 | 0.0926 | Verify the findings (1 critical, 6 high, 10 medium) of the Gemini Argon cross-review of the day-2 integrations before any fix, and turn confirmed ones into Sol fix units. |
 | mvvd2 | conductor | Oct 27 10:26 | submission | 4 | 94.9 | 0.0995 | Turn the measured day-2 evidence (live G-W1 with verified receipts, live G-AI with vision-engine and wender-agent, 25 fps wall, per-tile capture) into the demo video script, the shot list, a fact-checked TESTING.md and README update, all claims traceable to evidence. |
+| mvr3 | conductor | Oct 27 11:09 | testing | 8 | 96.7 | 0.4913 | Write round-3 external testing prompts: ChatGPT as a mathematical reasoner using Context7 math-router plus the software papers and OmniCodex to prove invariants, derive test oracles and propose optimizations of the day-2 core features; Jules as pure tester of the same features. |
 
 ## Every lane
 
@@ -402,6 +403,14 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvvd2 | SHOTS | Video/docs SHOTS | Oct 27 10:26 | yes | 49 | 95.1 | 0.027942 |
 | mvvd2 | TESTING | Video/docs TESTING | Oct 27 10:26 | yes | 67 | 96.7 | 0.036815 |
 | mvvd2 | README | Video/docs README | Oct 27 10:27 | yes | 20 | 89.0 | 0.018915 |
+| mvr3 | T1 | Round-3 prompts T1 | Oct 27 11:09 | yes | 66 | 95.7 | 0.054374 |
+| mvr3 | T2 | Round-3 prompts T2 | Oct 27 11:09 | yes | 68 | 96.4 | 0.047621 |
+| mvr3 | T3 | Round-3 prompts T3 | Oct 27 11:10 | yes | 47 | 94.6 | 0.041853 |
+| mvr3 | T4 | Round-3 prompts T4 | Oct 27 11:10 | yes | 88 | 97.4 | 0.085894 |
+| mvr3 | T5 | Round-3 prompts T5 | Oct 27 11:10 | yes | 97 | 96.2 | 0.087655 |
+| mvr3 | T6 | Round-3 prompts T6 | Oct 27 11:10 | yes | 96 | 97.4 | 0.069752 |
+| mvr3 | T7 | Round-3 prompts T7 | Oct 27 11:10 | yes | 92 | 97.4 | 0.055781 |
+| mvr3 | T8 | Round-3 prompts T8 | Oct 27 11:10 | yes | 71 | 96.6 | 0.048409 |
 
 ## Method
 
