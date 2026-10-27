@@ -118,6 +118,7 @@ function isNonNegativeSafeInt(value) {
  *   origin: string,
  *   lastSurfaceId: string | null,
  *   lastSurfaceGeneration: number | null,
+ *   lastFrameGeneration: number | null,
  *   domSurfaceState: string | null,
  *   domWaitingText: string | null,
  *   domStripText: string | null,
@@ -125,10 +126,16 @@ function isNonNegativeSafeInt(value) {
  */
 export function validateFrameDiagPreload(payload) {
   const expectedKeys =
+    'domStripText,domSurfaceState,domWaitingText,framesReceived,inWallApp,invalidNotices,lastFrameGeneration,lastSurfaceGeneration,lastSurfaceId,legacyNoticesForwarded,noticesForwarded,origin,portsClosed,portsReceived,schema';
+  const prevKeys =
     'domStripText,domSurfaceState,domWaitingText,framesReceived,inWallApp,invalidNotices,lastSurfaceGeneration,lastSurfaceId,legacyNoticesForwarded,noticesForwarded,origin,portsClosed,portsReceived,schema';
   const legacyKeys =
     'framesReceived,inWallApp,invalidNotices,lastSurfaceGeneration,lastSurfaceId,legacyNoticesForwarded,noticesForwarded,origin,portsClosed,portsReceived,schema';
-  if (!hasClosedDataKeys(payload, expectedKeys) && !hasClosedDataKeys(payload, legacyKeys)) {
+  if (
+    !hasClosedDataKeys(payload, expectedKeys) &&
+    !hasClosedDataKeys(payload, prevKeys) &&
+    !hasClosedDataKeys(payload, legacyKeys)
+  ) {
     throw new MainError('FRAME_DIAG_PAYLOAD', 'preload diag must have closed keys');
   }
   if (payload.schema !== FRAME_DIAG_PRELOAD_SCHEMA) {
@@ -168,6 +175,15 @@ export function validateFrameDiagPreload(payload) {
   ) {
     throw new MainError('FRAME_DIAG_PAYLOAD', 'preload diag lastSurfaceGeneration is invalid');
   }
+  if (
+    payload.lastFrameGeneration !== undefined &&
+    payload.lastFrameGeneration !== null &&
+    (typeof payload.lastFrameGeneration !== 'number' ||
+      !Number.isSafeInteger(payload.lastFrameGeneration) ||
+      payload.lastFrameGeneration < 1)
+  ) {
+    throw new MainError('FRAME_DIAG_PAYLOAD', 'preload diag lastFrameGeneration is invalid');
+  }
   for (const domField of ['domSurfaceState', 'domWaitingText', 'domStripText']) {
     const val = payload[domField];
     if (val !== undefined && val !== null && (typeof val !== 'string' || val.length > 512 || val.includes('\0'))) {
@@ -186,6 +202,7 @@ export function validateFrameDiagPreload(payload) {
     origin: payload.origin,
     lastSurfaceId: payload.lastSurfaceId,
     lastSurfaceGeneration: payload.lastSurfaceGeneration,
+    lastFrameGeneration: typeof payload.lastFrameGeneration === 'number' ? payload.lastFrameGeneration : null,
     domSurfaceState: typeof payload.domSurfaceState === 'string' ? payload.domSurfaceState : null,
     domWaitingText: typeof payload.domWaitingText === 'string' ? payload.domWaitingText : null,
     domStripText: typeof payload.domStripText === 'string' ? payload.domStripText : null,
@@ -401,6 +418,7 @@ export function installFrameDiag(options = {}) {
    *   origin: string,
    *   lastSurfaceId: string | null,
    *   lastSurfaceGeneration: number | null,
+   *   lastFrameGeneration: number | null,
    *   domSurfaceState: string | null,
    *   domWaitingText: string | null,
    *   domStripText: string | null,
@@ -417,6 +435,7 @@ export function installFrameDiag(options = {}) {
     origin: '',
     lastSurfaceId: null,
     lastSurfaceGeneration: null,
+    lastFrameGeneration: null,
     domSurfaceState: null,
     domWaitingText: null,
     domStripText: null,

@@ -477,9 +477,10 @@ function assertQaSnapshot(args) {
 function assertFrameDiagPreload(args) {
   if (!Array.isArray(args) || args.length !== 1) throw new ContractError('ARGS','frame.diag arity');
   const v = /** @type {any} */(args[0]);
-  const keys = 'domStripText,domSurfaceState,domWaitingText,framesReceived,inWallApp,invalidNotices,lastSurfaceGeneration,lastSurfaceId,legacyNoticesForwarded,noticesForwarded,origin,portsClosed,portsReceived,schema';
+  const keys = 'domStripText,domSurfaceState,domWaitingText,framesReceived,inWallApp,invalidNotices,lastFrameGeneration,lastSurfaceGeneration,lastSurfaceId,legacyNoticesForwarded,noticesForwarded,origin,portsClosed,portsReceived,schema';
+  const prevKeys = 'domStripText,domSurfaceState,domWaitingText,framesReceived,inWallApp,invalidNotices,lastSurfaceGeneration,lastSurfaceId,legacyNoticesForwarded,noticesForwarded,origin,portsClosed,portsReceived,schema';
   const legacyKeys = 'framesReceived,inWallApp,invalidNotices,lastSurfaceGeneration,lastSurfaceId,legacyNoticesForwarded,noticesForwarded,origin,portsClosed,portsReceived,schema';
-  if ((!captureKeys(v, keys) && !captureKeys(v, legacyKeys))
+  if ((!captureKeys(v, keys) && !captureKeys(v, prevKeys) && !captureKeys(v, legacyKeys))
     || (Object.getPrototypeOf(v) !== Object.prototype && Object.getPrototypeOf(v) !== null)
     || v.schema !== 'frame_diag_preload/v1'
     || !['framesReceived','invalidNotices','portsReceived','noticesForwarded','legacyNoticesForwarded','portsClosed'].every(k => captureNumber(v[k]))
@@ -487,6 +488,7 @@ function assertFrameDiagPreload(args) {
     || typeof v.origin !== 'string' || v.origin.length > 256 || v.origin.includes('\0')
     || (v.lastSurfaceId !== null && !captureId(v.lastSurfaceId))
     || (v.lastSurfaceGeneration !== null && (!Number.isSafeInteger(v.lastSurfaceGeneration) || v.lastSurfaceGeneration < 1))
+    || (v.lastFrameGeneration !== undefined && v.lastFrameGeneration !== null && (!Number.isSafeInteger(v.lastFrameGeneration) || v.lastFrameGeneration < 1))
     || !['domSurfaceState','domWaitingText','domStripText'].every(k => v[k] === undefined || v[k] === null || (typeof v[k] === 'string' && v[k].length <= 512 && !v[k].includes('\0')))) {
     throw new ContractError('PAYLOAD','frame.diag payload shape');
   }
@@ -588,6 +590,7 @@ function wireFacade(transport) {
   let diagOrigin='';
   /** @type {string|null} */ let diagLastSurfaceId=null;
   /** @type {number|null} */ let diagLastSurfaceGeneration=null;
+  /** @type {number|null} */ let diagLastFrameGeneration=null;
   /** @type {ReturnType<typeof setTimeout>|null} */ let diagTimer=null;
   const reportFrameDiag=()=>{
     if(transport.frameDiag!==true || transport.nested) return;
@@ -608,6 +611,7 @@ function wireFacade(transport) {
         origin:diagOrigin,
         lastSurfaceId:diagLastSurfaceId,
         lastSurfaceGeneration:diagLastSurfaceGeneration,
+        lastFrameGeneration:diagLastFrameGeneration,
         domSurfaceState:typeof domSurfaceState==='string'?domSurfaceState:null,
         domWaitingText:typeof domWaitingText==='string'?domWaitingText.slice(0,128):null,
         domStripText:typeof domStripText==='string'?domStripText.slice(0,256):null,
@@ -660,7 +664,7 @@ function wireFacade(transport) {
           diagInWallApp=inWallApp;
           diagOrigin=typeof window!=='undefined' && typeof window.location?.origin==='string' ? window.location.origin : '';
           diagLastSurfaceId=captureId(sid) ? sid : null;
-          diagLastSurfaceGeneration=null;
+          diagLastFrameGeneration=value.frame_ref.generation;
           if (ports?.length) diagPortsReceived+=1;
           if (inWallApp && !seededCaptureSurfaces.has(sid) && captureId(sid)) {
             seededCaptureSurfaces.add(sid);
@@ -673,11 +677,13 @@ function wireFacade(transport) {
           if (ports?.length && typeof window !== 'undefined' && window.location.origin===PRIVILEGED_ORIGIN) {
             if (inWallApp) {
               // [TARGET, unit decision] Forward live-wall frame ports to the renderer main world under frame_port/v1.
+              const surfaceGeneration=value.frame_ref.generation;
               window.postMessage(
-                {type:'metaviewer:frame-port',schema:'frame_port/v1',surface_id:sid,surface_generation:value.frame_ref.generation},
+                {type:'metaviewer:frame-port',schema:'frame_port/v1',surface_id:sid,surface_generation:surfaceGeneration},
                 window.location.origin,
                 [ports[0]],
               );
+              diagLastSurfaceGeneration=surfaceGeneration;
               diagNoticesForwarded+=1;
               for (const extra of ports.slice(1)) { try { extra.close?.(); } catch {} }
             } else {

@@ -30,6 +30,7 @@ import {
   FRAME_DIAG_FILE,
   installFrameDiag,
   resolveFrameDiagConfig,
+  validateFrameDiagPreload,
   writeFrameDiagSnapshot,
 } from '../electron/frameDiag.js';
 import { createMainBindings } from '../electron/hostBindings.js';
@@ -301,7 +302,32 @@ test('navigation keeps refusing residual percent escapes (strict bundled app pol
   }
 });
 
-test('preload diag does not report frame generation as surface generation', () => {
+test('preload diag records forwarded frame_port/v1 surface_generation in lastSurfaceGeneration and frame_ref.generation in lastFrameGeneration', (t) => {
+  const prevWin = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  const prevDoc = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  let wallPresent = false;
+  /** @type {any[]} */
+  const postedMessages = [];
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: {
+      location: { origin: PRIVILEGED_ORIGIN },
+      postMessage: (/** @type {any[]} */ ...args) => postedMessages.push(args),
+    },
+  });
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    value: {
+      getElementById: (/** @type {string} */ id) => (id === 'metaviewer-app' && wallPresent ? {} : null),
+    },
+  });
+  t.after(() => {
+    if (prevWin) Object.defineProperty(globalThis, 'window', prevWin);
+    else delete (/** @type {any} */ (globalThis)).window;
+    if (prevDoc) Object.defineProperty(globalThis, 'document', prevDoc);
+    else delete (/** @type {any} */ (globalThis)).document;
+  });
+
   /** @type {any[]} */
   const diagPayloads = [];
   /** @type {((value: any, ports?: any[]) => void) | null} */
@@ -326,13 +352,57 @@ test('preload diag does not report frame generation as surface generation', () =
   const unsub = api.authority.subscribeFrames(() => {});
   try {
     assert.ok(frameListener);
+    // Negative control 1: without a forwarded frame_port/v1 notice (no ports), lastSurfaceGeneration stays null
+    // while lastFrameGeneration records frame_ref.generation (5).
     frameListener(validNotice, []);
     assert.equal(diagPayloads.length, 1);
     assert.equal(diagPayloads[0].framesReceived, 1);
     assert.equal(diagPayloads[0].lastSurfaceId, 's1');
     assert.equal(diagPayloads[0].lastSurfaceGeneration, null);
+    assert.equal(diagPayloads[0].lastFrameGeneration, 5);
 
-    // Negative control: generation 0 is rejected by validFrameNotice, increments invalidNotices, and still reports diag.
+    // Negative control 2: legacy schemaless notice when #metaviewer-app is absent does not set lastSurfaceGeneration.
+    frameListener(
+      { ...validNotice, frame_ref: { ...validNotice.frame_ref, generation: 2 } },
+      [{ close() {} }],
+    );
+    assert.equal(diagPayloads.length, 2);
+    assert.equal(diagPayloads[1].legacyNoticesForwarded, 1);
+    assert.equal(diagPayloads[1].noticesForwarded, 0);
+    assert.equal(diagPayloads[1].lastSurfaceGeneration, null);
+    assert.equal(diagPayloads[1].lastFrameGeneration, 2);
+
+    // Positive: forwarding a frame_port/v1 notice in the wall app records its surface_generation (1),
+    // and subsequent frames (2, 3) without ports advance lastFrameGeneration while preserving lastSurfaceGeneration (1).
+    wallPresent = true;
+    const port1 = { close() {} };
+    frameListener(
+      { ...validNotice, frame_ref: { ...validNotice.frame_ref, generation: 1 } },
+      [port1],
+    );
+    assert.equal(diagPayloads.length, 3);
+    assert.equal(diagPayloads[2].noticesForwarded, 1);
+    assert.equal(diagPayloads[2].lastSurfaceGeneration, 1);
+    assert.equal(diagPayloads[2].lastFrameGeneration, 1);
+
+    frameListener(
+      { ...validNotice, frame_ref: { ...validNotice.frame_ref, generation: 2 } },
+      [],
+    );
+    frameListener(
+      { ...validNotice, frame_ref: { ...validNotice.frame_ref, generation: 3 } },
+      [],
+    );
+    assert.equal(diagPayloads.length, 5);
+    assert.equal(diagPayloads[4].noticesForwarded, 1);
+    assert.equal(diagPayloads[4].lastSurfaceGeneration, 1);
+    assert.equal(diagPayloads[4].lastFrameGeneration, 3);
+    const validated = validateFrameDiagPreload(diagPayloads[4]);
+    assert.equal(validated.lastSurfaceGeneration, 1);
+    assert.equal(validated.lastFrameGeneration, 3);
+
+    // Negative control 3: generation 0 is rejected by validFrameNotice, increments invalidNotices,
+    // and preserves both lastSurfaceGeneration (1) and lastFrameGeneration (3); validateFrameDiagPreload also rejects lastFrameGeneration: 0.
     frameListener(
       {
         ...validNotice,
@@ -340,10 +410,15 @@ test('preload diag does not report frame generation as surface generation', () =
       },
       [],
     );
-    assert.equal(diagPayloads.length, 2);
-    assert.equal(diagPayloads[1].invalidNotices, 1);
-    assert.equal(diagPayloads[1].framesReceived, 1);
-    assert.equal(diagPayloads[1].lastSurfaceGeneration, null);
+    assert.equal(diagPayloads.length, 6);
+    assert.equal(diagPayloads[5].invalidNotices, 1);
+    assert.equal(diagPayloads[5].framesReceived, 5);
+    assert.equal(diagPayloads[5].lastSurfaceGeneration, 1);
+    assert.equal(diagPayloads[5].lastFrameGeneration, 3);
+    assert.throws(
+      () => validateFrameDiagPreload({ ...diagPayloads[4], lastFrameGeneration: 0 }),
+      { code: 'FRAME_DIAG_PAYLOAD' },
+    );
   } finally {
     unsub();
   }

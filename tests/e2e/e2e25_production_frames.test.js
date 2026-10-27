@@ -1130,7 +1130,8 @@ test('W2-FRAME-LIVE-DIAG: production main + preload + hostBindings records main 
   assert.equal(diag.preload.noticesForwarded, 1);
   assert.equal(diag.preload.framesReceived, 3);
   assert.equal(diag.preload.lastSurfaceId, surfaceId);
-  assert.equal(diag.preload.lastSurfaceGeneration, 3);
+  assert.equal(diag.preload.lastSurfaceGeneration, 1);
+  assert.equal(diag.preload.lastFrameGeneration, 3);
 });
 
 test('W2-FRAME-LIVE-DIAG: production renderer keeps tile in live state and PRESENTs frames across generations >= 2', async () => {
