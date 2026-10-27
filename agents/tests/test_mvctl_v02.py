@@ -1,9 +1,10 @@
 """CLI tool-protocol integration against an owner-only fake core socket.
 
-[TARGET, unit decision] --v02 selects tool verbs with explicit identity/caps;
+[TARGET, unit decision] Default tool verbs require trusted registration and caps;
 --json-arg holds a proposal for propose or an expectation for wait-verify.
 """
 
+import asyncio
 import contextlib
 import copy
 import json
@@ -19,6 +20,21 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from metaviewer_agents.envelope import make_envelope, validate_envelope
+from metaviewer_agents.client import ClientError, ToolClient
+from metaviewer_agents import mcp_server
+
+def registration(component):
+    return {"endpoint": {"component": component, "instance": component + "-1"},
+            "hello": {"schema": "hello/v0.2", "contract_version": "v0.2",
+                      "component": component, "component_version": "0.1.1",
+                      "component_commit": "0123456789abcdef0123456789abcdef01234567",
+                      "dependencies": []}}
+
+
+def config():
+    return {"session_id": "sess-1", "core": registration("core"),
+            "peers": [registration("agent"), registration("daemon")]}
+
 
 DIGEST = "a" * 64
 FRAME = {"schema": "frame_ref/v0.2", "surface_id": "surf-1",
@@ -61,6 +77,18 @@ class MvctlV02Tests(unittest.TestCase):
                             with conn:
                                 conn.settimeout(5)
                                 with conn.makefile("rb") as reader:
+                                    hello = validate_envelope(json.loads(reader.readline(65537)))
+                                    self.assertEqual(hello["body"], registration("agent")["hello"])
+                                    reply = make_envelope(
+                                        msg_id="hello", from_component="core", from_instance="core-1",
+                                        to_component="agent", to_instance="agent-1", session_id="sess-1",
+                                        seq=1, body=registration("core")["hello"])
+                                    if getattr(self, "_bad_hello", False):
+                                        reply["body"]["component_commit"] = "f" * 40
+                                    conn.sendall((json.dumps(reply) + "\n").encode())
+                                    if getattr(self, "_bad_hello", False):
+                                        self.assertEqual(reader.read(1), b"")
+                                        continue
                                     for builder in builders:
                                         raw = reader.readline(65537)
                                         self.assertTrue(raw.endswith(b"\n"))
@@ -90,8 +118,11 @@ class MvctlV02Tests(unittest.TestCase):
                         raise errors[0]
 
     def cli(self, socket_path, command, *flags):
+        trusted = socket_path.parent / "config.json"
+        trusted.write_text(json.dumps(config()))
         return subprocess.run(
-            [sys.executable, "-m", "metaviewer_agents.mvctl", "--v02", command,
+            [sys.executable, "-m", "metaviewer_agents.mvctl", command,
+             "--config", str(trusted),
              "--socket", str(socket_path), "--session-id", "sess-1",
              "--agent-instance", "agent-1", "--core-instance", "core-1",
              "--timeout-ms", "2000", "--max-line-bytes", "65536",
@@ -110,6 +141,70 @@ class MvctlV02Tests(unittest.TestCase):
     def reply(op, **fields):
         return lambda call: {"schema": "mv_tool_result/v0.2",
                              "request_id": call["request_id"], "op": op, **fields}
+
+    def client(self, path):
+        trusted = config()
+        return ToolClient(str(path), session_id="sess-1", local=trusted["peers"][0],
+                          core=trusted["core"], dependency_pins=[],
+                          sequence_path=path.parent / "direct.seq", timeout_s=2,
+                          max_line_bytes=65536, max_reply_bytes=65536)
+
+    def test_default_proposal_rejects_hostile_files_locally(self):
+        canary = "MVCTL-INPUT-CANARY"
+        for raw in (b'{"schema":"action_proposal/v0.2","schema":"duplicate"}',
+                    b'{"schema":"action_proposal/v0.2","x":NaN}',
+                    b"[" * 2000 + b"]" * 2000,
+                    b"{\xff}", b"x" * 65537, canary.encode()):
+            with self.subTest(prefix=raw[:20]):
+                with tempfile.TemporaryDirectory(prefix="mvctl-invalid-") as directory:
+                    path = Path(directory) / "core.sock"
+                    payload = Path(directory) / "proposal.json"
+                    payload.write_bytes(raw)
+                    result = self.cli(path, "propose", "--json-arg", str(payload))
+                    self.assertEqual(result.returncode, 2, result.stderr)
+                    self.assertEqual(result.stdout, "")
+                    self.assertEqual(len(result.stderr.splitlines()), 1)
+                    self.assertNotIn(canary, result.stderr)
+                    self.assertEqual(json.loads(result.stderr)["code"], "schema_error")
+
+    def test_mcp_uses_production_transport(self):
+        with self.core([[self.reply("observe", status="ok", observation=OBSERVATION)]]) as (path, calls):
+            with self.client(path) as client:
+                bridge = mcp_server.create_server(client=client)
+                result = asyncio.run(bridge.call_tool("mv_observe", {
+                    "surface_id": "surf-1", "timeout_ms": 1000}))
+                self.assertFalse(result.isError)
+                self.assertEqual(result.structuredContent, OBSERVATION)
+            self.assertEqual(len(calls), 1)
+
+    def test_untrusted_hello_closes_before_tool_dispatch(self):
+        self._bad_hello = True
+        try:
+            with self.core([[]]) as (path, calls):
+                client = self.client(path)
+                with self.assertRaises(ClientError) as failed:
+                    with client:
+                        self.fail("foreign core hello admitted")
+                self.assertEqual(failed.exception.code, "version")
+                self.assertEqual(calls, [])
+                self.assertTrue(client.active._terminal)
+        finally:
+            self._bad_hello = False
+
+    def test_sequence_symlink_is_refused_without_modifying_target(self):
+        with tempfile.TemporaryDirectory(prefix="mvctl-seq-") as directory:
+            path = Path(directory) / "core.sock"
+            # Endpoint validation precedes sequence file effects.
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+                listener.bind(str(path))
+                path.chmod(0o600)
+                target = Path(directory) / "target"
+                target.write_text("42")
+                (Path(directory) / "direct.seq").symlink_to(target)
+                with self.assertRaises(OSError):
+                    with self.client(path):
+                        self.fail("sequence symlink admitted")
+                self.assertEqual(target.read_text(), "42")
 
     def test_observe_propose_wait_verify_loop(self):
         replies = [[self.reply("observe", status="ok", observation=OBSERVATION)],
@@ -135,7 +230,7 @@ class MvctlV02Tests(unittest.TestCase):
             self.assertEqual(receipt, RECEIPT)
         self.assertEqual([call["body"]["op"] for call in calls],
                          ["observe", "propose", "wait_verify", "wait_verify"])
-        self.assertEqual([call["seq"] for call in calls], [1, 1, 1, 2])
+        self.assertEqual([call["seq"] for call in calls], [2, 4, 6, 7])
         self.assertEqual(calls[0]["body"]["args"], {"surface_id": "surf-1"})
         self.assertEqual(calls[1]["body"]["args"], {"proposal": proposal})
         self.assertEqual(calls[2]["body"]["args"]["proposal_id"], "p-1")

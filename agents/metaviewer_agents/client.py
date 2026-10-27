@@ -29,7 +29,7 @@ from .envelope import (
     validate_envelope,
 )
 
-__all__ = ["ClientError", "CoreClient"]
+__all__ = ["ClientError", "CoreClient", "ToolClient"]
 
 
 class ClientError(Exception):
@@ -325,4 +325,145 @@ class CoreClient:
 
     def __exit__(self, exc_type: object, exc: object,
                  traceback: object) -> None:
+        self.close()
+
+
+class ToolClient:
+    """Production tool mailbox, usable by tools and the MCP bridge.
+
+    [TARGET, unit decision] Trusted registrations use the core's startup
+    config. An owner-only sequence file serializes connections and persists
+    sequence reservations before writes, including failed sends. Never erase
+    this file while reusing a core session. Use as a context manager.
+    """
+
+    def __init__(self, socket_path, *, session_id, local, core,
+                 dependency_pins, sequence_path, timeout_s,
+                 max_line_bytes, max_reply_bytes):
+        self.active = CoreClient(socket_path, timeout_s=timeout_s,
+                                 max_line_bytes=max_line_bytes,
+                                 max_reply_bytes=max_reply_bytes)
+        self.session_id = session_id
+        self.local = copy.deepcopy(local)
+        self.core = copy.deepcopy(core)
+        self.pins = copy.deepcopy(dependency_pins)
+        self.sequence_path = sequence_path
+        self._sequence_fd = None
+        self._ready = False
+        self._receipts = {}
+
+    def _envelope(self, body, msg_id):
+        from .envelope import make_envelope
+        return make_envelope(msg_id=msg_id,
+                             from_component="agent",
+                             from_instance=self.local["endpoint"]["instance"],
+                             to_component="core",
+                             to_instance=self.core["endpoint"]["instance"],
+                             session_id=self.session_id,
+                             seq=self.active.next_seq, body=body)
+
+    def _reserve(self):
+        # Reserve before send: uncertain transport outcomes must not reuse seq.
+        os.lseek(self._sequence_fd, 0, os.SEEK_SET)
+        data = str(self.active.next_seq + 1).encode("ascii")
+        if os.write(self._sequence_fd, data) != len(data):
+            raise ClientError("socket", "sequence reservation failed")
+        os.ftruncate(self._sequence_fd, len(data))
+        os.fsync(self._sequence_fd)
+
+    def __enter__(self):
+        import fcntl
+        import secrets
+        try:
+            hello = self.local["hello"]
+            if (self.local["endpoint"]["component"] != "agent"
+                    or self.core["endpoint"]["component"] != "core"
+                    or hello["component"] != "agent"
+                    or hello["dependencies"] != self.pins
+                    or self.core["hello"]["component"] != "core"):
+                raise ClientError("version", "invalid trusted registration")
+            self.active._check_endpoint(os.fspath(self.active._socket_path))
+            fd = os.open(self.sequence_path,
+                         os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+            self._sequence_fd = fd
+            info = os.fstat(fd)
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                    or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1):
+                raise ClientError("socket", "invalid sequence file")
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            raw = os.read(fd, 32)
+            if raw and (not raw.isdigit() or len(raw) > 16):
+                raise ClientError("schema", "invalid sequence state")
+            self.active._next_seq = int(raw) if raw else 1
+            request = self._envelope(hello, secrets.token_hex(16))
+            expected = copy.deepcopy(request)
+            expected["from"], expected["to"] = request["to"], request["from"]
+            expected["body"] = copy.deepcopy(self.core["hello"])
+            validate_envelope(expected)
+            self.active.connect()
+            self._reserve()
+            reply = self.active.call(request)
+            if any(reply[key] != expected[key]
+                   for key in ("schema", "from", "to", "session_id", "body")):
+                raise ClientError("version", "peer hello does not match registration")
+            self._ready = True
+            return self
+        except BaseException:
+            self.close()
+            raise
+
+    def request(self, body, expect, *, timeout_ms):
+        from .tools import ToolValidationError
+        if not self._ready:
+            raise ClientError("socket", "tool client requires hello")
+        if type(timeout_ms) is not int or timeout_ms <= 0:
+            raise ClientError("timeout", "invalid request timeout")
+        envelope = self._envelope(body, body["request_id"])
+        previous = self.active._timeout_s
+        deadline = time.monotonic() + min(previous, timeout_ms / 1000)
+        try:
+            self.active._timeout_s = max(0.000001, deadline - time.monotonic())
+            self._reserve()
+            self.active.send(envelope)
+            while True:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    raise ClientError("timeout", "request timed out")
+                self.active._timeout_s = left
+                reply = self.active.recv()
+                if (reply["from"] != envelope["to"]
+                        or reply["to"] != envelope["from"]
+                        or reply["session_id"] != self.session_id):
+                    raise ToolValidationError("uncorrelated envelope")
+                result = reply["body"]
+                # Core forwards settled receipts asynchronously before tool replies.
+                # Retain bounded evidence, never turn it into missing focus proof.
+                if result.get("schema") == "action_receipt/v0.2":
+                    self._receipts[result["proposal_id"]] = copy.deepcopy(result)
+                    if len(self._receipts) > 128:
+                        del self._receipts[next(iter(self._receipts))]
+                    continue
+                if (result.get("schema") != expect
+                        or result.get("request_id") != body["request_id"]
+                        or result.get("op") != body["op"]):
+                    raise ToolValidationError("uncorrelated tool result")
+                return result
+        except BaseException:
+            self.close()
+            raise
+        finally:
+            self.active._timeout_s = previous
+
+    def receipt(self, proposal_id):
+        """Return received core evidence, without claiming tool verification."""
+        return copy.deepcopy(self._receipts.get(proposal_id))
+
+    def close(self):
+        self._ready = False
+        self.active.close()
+        if self._sequence_fd is not None:
+            os.close(self._sequence_fd)
+            self._sequence_fd = None
+
+    def __exit__(self, *exc):
         self.close()

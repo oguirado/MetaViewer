@@ -1,14 +1,14 @@
 """Closed command client for MetaViewer core admission.
 
-[TARGET, unit decision] --v02 enables tool-protocol CLI verbs with explicit
-identity and resource limits; legacy invocations retain their closed parser.
+[TARGET, unit decision] Default CLI verbs use v0.2 and trusted MV_CORE_CONFIG
+(or --config) registration. --v02 is a compatibility spelling of that path.
+Proposal files contain action_proposal/v0.2 bodies, never legacy envelopes.
 
 This module is an untrusted caller: it validates every flag, input byte and
 core reply, and leaves admission, ownership and replay decisions to the core.
 
-The observe CLI is reserved and always refuses, including when arguments are
-supplied. Observation-to-action coverage uses the frame/admission path;
-it does not establish CLI observe-to-act support.
+The core owns admission and verification. Missing focus/input evidence remains
+a verification refusal; receiving a receipt alone never fabricates that proof.
 """
 
 import argparse
@@ -71,7 +71,7 @@ def _positive_int(text):
     return int(text)
 
 
-def build_parser() -> argparse.ArgumentParser:
+def _build_legacy_parser() -> argparse.ArgumentParser:
     """Build the closed mvctl parser (propose plus reserved observe)."""
     parser = _UsageParser(
         prog="mvctl",
@@ -258,19 +258,14 @@ def _matches_request(checked_reply, verdict, checked_request):
     )
 
 
-def run(argv: Sequence[str] | None = None,
+def _run_legacy(argv: Sequence[str] | None = None,
         send: Callable[[dict], dict] | None = None) -> int:
     """Parse argv, send one envelope, print one verdict; return 0, 1 or 2."""
-    # [TARGET, unit decision] Observe has no CLI transport implementation.
-    # Refuse the entire reserved command before parsing any arguments; emit no
-    # help, observation fragment or caller-controlled diagnostic.
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     if raw_argv and raw_argv[0] == "observe":
         _refuse("unsupported_operation")
         return 2
-    if raw_argv and raw_argv[0] == "--v02":
-        return _run_v02(raw_argv[1:])
-    parser = build_parser()
+    parser = _build_legacy_parser()
     try:
         args = parser.parse_args(argv)
     except SystemExit as done:
@@ -396,15 +391,10 @@ def run(argv: Sequence[str] | None = None,
     return 2
 
 
-# [TARGET, unit decision] Explicit --v02 opts into the existing tool protocol;
-# legacy invocations retain their closed parser. Identity and resource limits
-# are mandatory caller inputs. JSON files contain proposal/expectation bodies.
-def _run_v02(argv):
-    from . import tools
-    from .client import ClientError, CoreClient
-    from .envelope import EnvelopeError, make_envelope
-
-    parser = _UsageParser(prog="mvctl --v02", allow_abbrev=False)
+def build_parser() -> argparse.ArgumentParser:
+    """Build the default closed v0.2 tool parser."""
+    parser = _UsageParser(prog="mvctl", allow_abbrev=False)
+    parser.add_argument("--config", action=_OnceAction, default=os.environ.get("MV_CORE_CONFIG"))
     parser.add_argument("command", choices=("observe", "propose", "wait-verify"))
     for flag in ("socket", "session-id", "agent-instance", "core-instance"):
         parser.add_argument("--" + flag, required=True, action=_OnceAction)
@@ -413,6 +403,17 @@ def _run_v02(argv):
                             type=_positive_int)
     for flag in ("surface-id", "proposal-id", "json-arg"):
         parser.add_argument("--" + flag, action=_OnceAction)
+    return parser
+
+
+# [TARGET, unit decision] Identity and caps are mandatory. Trusted startup
+# registration supplies hello pins; persistent sequences survive CLI reconnects.
+def _run_v02(argv):
+    from . import tools
+    from .client import ClientError, ToolClient
+    from .envelope import EnvelopeError, make_envelope
+
+    parser = build_parser()
     try:
         args = parser.parse_args(argv)
     except SystemExit as done:
@@ -429,30 +430,41 @@ def _run_v02(argv):
         _refuse(failure)
         return 2
 
-    class Mailbox:
-        def __init__(self, active):
-            self.active = active
-
-        def request(self, body, expect, *, timeout_ms):
-            envelope = make_envelope(
-                msg_id=body["request_id"], from_component="agent",
-                from_instance=args.agent_instance, to_component="core",
-                to_instance=args.core_instance, session_id=args.session_id,
-                seq=self.active.next_seq, body=body)
-            reply = self.active.call(envelope)
-            if (reply["from"] != envelope["to"]
-                    or reply["to"] != envelope["from"]
-                    or reply["session_id"] != envelope["session_id"]):
-                raise tools.ToolValidationError("uncorrelated envelope")
-            return reply["body"]
-
     try:
         payload = (_read_request(args.json_arg, args.max_line_bytes)
                    if args.json_arg else None)
-        with CoreClient(endpoint, timeout_s=args.timeout_ms / 1000,
+        if payload is not None and args.command == "propose":
+            if payload.get("schema") != "action_proposal/v0.2":
+                _refuse("unknown_version")
+                return 2
+            tools._check_proposal(payload)
+            # Apply the closed wire contract (including numeric rails) before
+            # opening a connection. This validation envelope is never sent.
+            make_envelope(msg_id="proposal-preflight", from_component="agent",
+                          from_instance=args.agent_instance, to_component="core",
+                          to_instance=args.core_instance, session_id=args.session_id,
+                          seq=1, ts_ns=0, body=payload)
+        if args.command == "wait-verify":
+            tools._check_expectation(payload)
+        if not args.config:
+            _refuse("usage_error")
+            return 2
+        config = _read_request(args.config, args.max_line_bytes)
+        local = next(peer for peer in config["peers"]
+                     if peer["endpoint"] == {"component": "agent", "instance": args.agent_instance})
+        if (config["session_id"] != args.session_id
+                or config["core"]["endpoint"] != {"component": "core", "instance": args.core_instance}):
+            raise ValueError("registration mismatch")
+        import hashlib
+        scope = json.dumps([args.session_id, local["endpoint"], config["core"]["endpoint"]],
+                           sort_keys=True).encode()
+        sequence_path = os.path.join(os.path.dirname(endpoint),
+                                     ".mvctl-" + hashlib.sha256(scope).hexdigest() + ".seq")
+        with ToolClient(endpoint, session_id=args.session_id, local=local,
+                        core=config["core"], dependency_pins=local["hello"]["dependencies"],
+                        sequence_path=sequence_path, timeout_s=args.timeout_ms / 1000,
                         max_line_bytes=args.max_line_bytes,
-                        max_reply_bytes=args.max_reply_bytes) as active:
-            client = Mailbox(active)
+                        max_reply_bytes=args.max_reply_bytes) as client:
             if args.command == "observe":
                 result = tools.observe(args.surface_id, client=client,
                                        timeout_ms=args.timeout_ms)
@@ -473,7 +485,7 @@ def _run_v02(argv):
         _refuse("unknown_version" if err.code == "unknown_version"
                 else _client_refusal(err, "call"))
         return 2
-    except (ValueError, OSError, TimeoutError, TypeError) as err:
+    except (ValueError, OSError, TimeoutError, TypeError, KeyError, StopIteration) as err:
         code = ("unknown_version" if isinstance(err, tools.ToolValidationError)
                 and "unknown result version" in err.detail
                 else _client_refusal(err, "call"))
@@ -481,6 +493,15 @@ def _run_v02(argv):
         return 2
     print(json.dumps(result, separators=(",", ":"), allow_nan=False))
     return 0
+
+
+def run(argv: Sequence[str] | None = None,
+        send: Callable[[dict], dict] | None = None) -> int:
+    """Run v0.2; the explicit injected v0.1 harness remains test-only."""
+    if send is not None:
+        return _run_legacy(argv, send)
+    raw = list(sys.argv[1:] if argv is None else argv)
+    return _run_v02(raw[1:] if raw[:1] == ["--v02"] else raw)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

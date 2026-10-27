@@ -134,15 +134,18 @@ class CodecRegressions(unittest.TestCase):
         self.assertIsNone(client._sock)
 
     def test_mvctl_huge_integer_exact_refusal(self):
-        env = fixtures._wrap(fixtures._proposal())
-        env['body']['action']['x'] = 10**400
+        proposal = fixtures._proposal(schema='action_proposal/v0.2')
+        proposal['action']['x'] = 10**400
         with tempfile.TemporaryDirectory() as root:
             path = Path(root)/'request.json'
-            path.write_text(json.dumps(env))
+            path.write_text(json.dumps(proposal))
             err = io.StringIO()
-            with mock.patch('sys.stderr', err):
-                rc = mvctl.run(['propose', '--json-arg', str(path), '--timeout-ms', '2000', '--max-line-bytes', str(M), '--max-reply-bytes', str(M), '--socket', str(Path(root)/'core.sock')])
+            with mock.patch('sys.stderr', err), mock.patch('metaviewer_agents.client.ToolClient') as transport:
+                rc = mvctl.run(['propose', '--json-arg', str(path), '--timeout-ms', '2000', '--max-line-bytes', str(M), '--max-reply-bytes', str(M), '--socket', str(Path(root)/'core.sock'),
+                                '--session-id', 'sess-1', '--agent-instance', 'agent-1',
+                                '--core-instance', 'core-1'])
             self.assertEqual(rc, 2)
+            transport.assert_not_called()
             self.assertEqual(err.getvalue(), '{"verdict":"refuse","code":"schema_error","error":"schema validation failed"}\n')
 
     def test_surrogate_both_directions_and_unicode_control(self):

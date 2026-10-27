@@ -1,4 +1,4 @@
-"""Unit tests for the mvctl command skeleton (standard library only)."""
+"""Legacy injected harness regressions; production v0.2 is covered separately."""
 
 import contextlib
 import copy
@@ -245,9 +245,9 @@ class MvctlTests(unittest.TestCase):
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             if send is None:
-                code = mvctl.run(list(argv))
+                code = mvctl._run_legacy(list(argv))
             else:
-                code = mvctl.run(list(argv), send)
+                code = mvctl._run_legacy(list(argv), send)
         return code, out.getvalue(), err.getvalue()
 
     def _main(self, argv):
@@ -794,7 +794,7 @@ class MvctlTests(unittest.TestCase):
                 self.assertEqual(len(probe.calls), 1)
                 self.assertNotIn(_CANARY, err)
 
-    def test_reserved_observe(self):
+    def test_legacy_observe_and_default_missing_identity(self):
         send = _FakeSend()
         code, out, err = self._run(["observe"], send)
         self.assertEqual(code, 2)
@@ -804,7 +804,7 @@ class MvctlTests(unittest.TestCase):
         code, out, err = self._main(["observe"])
         self.assertEqual(code, 2)
         self.assertEqual(out, "")
-        self._assert_refusal(err, "unsupported_operation")
+        self._assert_refusal(err, "usage_error")
         with mock.patch.dict(os.environ):
             os.environ.pop("XDG_RUNTIME_DIR", None)
             probe = _FakeSend()

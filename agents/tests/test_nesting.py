@@ -9,9 +9,10 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from metaviewer_agents.envelope import EnvelopeError, loads_envelope
+from metaviewer_agents.envelope import EnvelopeError, loads_envelope, make_envelope
 import test_client as fixtures
 from test_client import _FakeCore, _LINE_CAP, _proposal, _wrap
+from test_mvctl_v02 import config, registration, PROPOSAL
 
 
 def _object_frame(depth):
@@ -88,12 +89,20 @@ class NestingTests(unittest.TestCase):
         for raw in _HOSTILE:
             with self.subTest(prefix=raw[:20]):
                 core = _FakeCore(self)
-                core.queue(raw)
+                hello = make_envelope(
+                    msg_id='hello', from_component='core', from_instance='core-1',
+                    to_component='agent', to_instance='agent-1', session_id='sess-1',
+                    seq=1, body=registration('core')['hello'])
+                core.queue(json.dumps(hello).encode() + b'\n', raw)
+                trusted = Path(core.root) / 'config.json'
+                trusted.write_text(json.dumps(config()))
                 request = Path(core.root) / 'request.json'
-                request.write_text(json.dumps(_wrap(_proposal())))
+                request.write_text(json.dumps(PROPOSAL))
                 result = subprocess.run(
                     [sys.executable, '-m', 'metaviewer_agents.mvctl',
                      'propose', '--json-arg', str(request),
+                     '--config', str(trusted), '--session-id', 'sess-1',
+                     '--agent-instance', 'agent-1', '--core-instance', 'core-1',
                      '--timeout-ms', '2000',
                      '--max-line-bytes', str(_LINE_CAP),
                      '--max-reply-bytes', str(_LINE_CAP),
@@ -107,3 +116,8 @@ class NestingTests(unittest.TestCase):
                     'verdict': 'refuse', 'code': 'schema_error',
                     'error': 'schema validation failed',
                 })
+                received = core.received_envelopes()
+                self.assertEqual(len(received), 2)
+                self.assertEqual(received[0]['body'], registration('agent')['hello'])
+                self.assertEqual(received[1]['body']['op'], 'propose')
+                self.assertEqual(received[1]['body']['args']['proposal'], PROPOSAL)
