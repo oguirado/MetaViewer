@@ -4,6 +4,7 @@ import copy
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -217,6 +218,49 @@ class WenderBridgeTests(unittest.TestCase):
                 WenderSubprocessAdapter(wender_root=self.root, command=[sys.executable], timeout=timeout)
         with self.assertRaises(ObservationError):
             WenderSubprocessAdapter(wender_root=self.root / "absent", command=[sys.executable])
+
+    def test_timeout_kills_and_reaps_planner_child(self):
+        # Mutation: skip process.kill() or process.wait() in _run_bounded finally.
+        real_popen = subprocess.Popen
+        children = []
+
+        def spawn(*args, **kwargs):
+            child = real_popen(*args, **kwargs)
+            children.append(child)
+            return child
+
+        pid_file = self.root / "child.pid"
+        with patch("subprocess.Popen", side_effect=spawn):
+            action, expectation, state, target = self.run_plan(
+                self.adapter(prelude="import pathlib\npathlib.Path('child.pid').write_text(str(os.getpid()))\n")
+            )
+        self.assertEqual(action, reply()["action"])
+        self.assertEqual(expectation, reply()["expectation"])
+        self.assertEqual(target, state["nodes"][0])
+        self.assertEqual(len(children), 1)
+        quick = children.pop()
+        self.assertEqual(int(pid_file.read_text(encoding="utf-8")), quick.pid)
+        self.assertEqual(quick.returncode, 0)
+        with self.assertRaises(ChildProcessError):
+            os.waitpid(quick.pid, os.WNOHANG)
+
+        pid_file.unlink()
+        with patch("subprocess.Popen", side_effect=spawn):
+            with self.assertRaises(ObservationError) as caught:
+                self.run_plan(
+                    self.adapter(
+                        prelude="import pathlib, time\npathlib.Path('child.pid').write_text(str(os.getpid()))\ntime.sleep(0.5)\n",
+                        timeout=0.05,
+                    )
+                )
+        self.assertEqual(caught.exception.code, "timeout")
+        self.assertEqual(len(children), 1)
+        child = children.pop()
+        self.assertEqual(int(pid_file.read_text(encoding="utf-8")), child.pid)
+        self.assertIsNotNone(child.returncode)
+        self.assertLess(child.returncode, 0)
+        with self.assertRaises(ChildProcessError):
+            os.waitpid(child.pid, os.WNOHANG)
 
 
 if __name__ == "__main__":

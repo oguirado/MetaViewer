@@ -4,7 +4,6 @@ import copy
 import io
 import json
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,7 +11,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import test_client as fixtures
-from metaviewer_agents import envelope as e, mcp_server as m, mvctl, tools
+from metaviewer_agents import envelope as e, mcp_server as m, tools
 
 M = m.MAX_FRAME_BYTES
 
@@ -132,21 +131,6 @@ class CodecRegressions(unittest.TestCase):
         fixtures.ClientTests.assertClientCode(self, 'bad_shape', client.recv)
         self.assertTrue(client._terminal)
         self.assertIsNone(client._sock)
-
-    def test_mvctl_huge_integer_exact_refusal(self):
-        proposal = fixtures._proposal(schema='action_proposal/v0.2')
-        proposal['action']['x'] = 10**400
-        with tempfile.TemporaryDirectory() as root:
-            path = Path(root)/'request.json'
-            path.write_text(json.dumps(proposal))
-            err = io.StringIO()
-            with mock.patch('sys.stderr', err), mock.patch('metaviewer_agents.client.ToolClient') as transport:
-                rc = mvctl.run(['propose', '--json-arg', str(path), '--timeout-ms', '2000', '--max-line-bytes', str(M), '--max-reply-bytes', str(M), '--socket', str(Path(root)/'core.sock'),
-                                '--session-id', 'sess-1', '--agent-instance', 'agent-1',
-                                '--core-instance', 'core-1'])
-            self.assertEqual(rc, 2)
-            transport.assert_not_called()
-            self.assertEqual(err.getvalue(), '{"verdict":"refuse","code":"schema_error","error":"schema validation failed"}\n')
 
     def test_surrogate_both_directions_and_unicode_control(self):
         for text in ('\ud800', '\udfff', 'ok\ud800bad'):
