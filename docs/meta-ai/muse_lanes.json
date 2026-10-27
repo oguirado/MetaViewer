@@ -205,6 +205,11 @@
    "why": "Blind adversarial review of the two candidates of A/B pair 1 (same test unit written by two different writer models), to measure writer quality before choosing the cheaper seat for test units.",
    "orchestrator": "conductor"
   },
+  "mvr2vj8": {
+   "stage": "testing",
+   "why": "Verify the Jules round-2 test branches T4 (updated), T6 and T7 on the current head with Meta Muse Spark before adopting any test or opening any fix unit.",
+   "orchestrator": "conductor"
+  },
   "mv0tg3": {
    "stage": "testing",
    "why": "Refresh the AC test-gap map on the integration head after the night (about 80 new commits), and prepare the round-2 tester index and the TESTING.md fact base, so local testing with Muse Spark drives the remaining test units to v0.2.0.",
