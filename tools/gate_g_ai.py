@@ -304,6 +304,9 @@ def run_gate(report, roots, session_factory=None):
         report['live_evidence'] = {k: v for k, v in session.report.items() if k != 'wire_evidence'}
         if hasattr(session, 'cleanup'):
             report['cleanup'] = session.cleanup
+    require(isinstance(report.get('cleanup'), dict)
+            and report['cleanup'].get('ram_absent') is True
+            and not report['cleanup'].get('remaining'), 'cleanup proof missing')
 
 
 def main(argv=None):
@@ -317,7 +320,8 @@ def main(argv=None):
         roots = preflight(report)
         run_gate(report, roots)
         require(all(report['assertions'].values()) and all(report['negative_controls'].values()), 'incomplete gates')
-        require(report.get('cleanup', {}).get('ram_absent') is True, 'cleanup proof missing')
+        require(report.get('cleanup', {}).get('ram_absent') is True
+                and not report.get('cleanup', {}).get('remaining'), 'cleanup proof missing')
         report.update(rc=0, status='DONE')
     except Exception as error:
         report['error'] = dict(code=getattr(error, 'code', type(error).__name__), detail=str(error))

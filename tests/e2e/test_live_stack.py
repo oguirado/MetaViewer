@@ -31,8 +31,7 @@ class LiveStackTests(unittest.TestCase):
         work = self.root / "run-test"
         work.mkdir()
         return {"schema": "metaviewer.live-stack/v1", "work": str(work),
-                "pids": [], "before": ["unrelated"], "capsules": [],
-                "ram_before": [], "published": [], "status": "starting"}
+                "pids": [], "capsules": [], "published": [], "status": "starting"}
 
     def environment(self):
         env = {key: str(self.root) for key in stack.REQUIRED}
@@ -271,36 +270,90 @@ try {
         ram = self.root / "ram"
         ram.mkdir()
         (ram / "srf-id-owned").mkdir()
-        (ram / "unrelated").mkdir()
+        (ram / "srf-id-foreign").mkdir()
+        (ram / "srf-pg-other").mkdir()
         with patch.dict(os.environ, dict(self.environment(), MV_SRF_LIVE_RAM_ROOT=str(ram)), clear=True), \
-                patch.object(stack, "inventory", side_effect=[{"unrelated", "srf-id-owned"}, {"unrelated"}]), \
+                patch.object(stack, "inventory", side_effect=[{"srf-id-foreign", "srf-id-owned"}, {"srf-id-foreign"}]), \
                 patch.object(stack.live, "profile_containers", return_value=set()), \
-                patch.object(stack, "checked", return_value="") as checked:
+                patch.object(stack, "checked", return_value="") as checked, \
+                redirect_stdout(io.StringIO()) as out:
             stack.cleanup(state, self.root)
         self.assertFalse((ram / "srf-id-owned").exists())
-        self.assertTrue((ram / "unrelated").exists())
+        self.assertTrue((ram / "srf-id-foreign").exists())
+        self.assertTrue((ram / "srf-pg-other").exists())
         self.assertFalse((self.root / "state.json").exists())
         self.assertFalse(Path(state["work"]).exists())
+        receipt = json.loads(out.getvalue().split("LIVE_STACK_CLEANUP ", 1)[1])
+        self.assertTrue(receipt["ram_absent"])
+        self.assertEqual(receipt["owned_allocations_removed"], [str(ram / "srf-id-owned")])
         self.assertEqual(checked.call_count, 1)
         self.assertEqual(checked.call_args.args[0][2:4], ["--container", "srf-id-owned"])
 
     def test_cleanup_leak_retains_receipt_and_existing_ram(self):
         state = self.state()
         state["capsules"] = ["srf-id-owned"]
-        state["ram_before"] = ["srf-id-owned"]
         ram = self.root / "ram"
         ram.mkdir()
         (ram / "srf-id-owned").mkdir()
+        (ram / "srf-id-foreign").mkdir()
+        (ram / "srf-pg-other").mkdir()
         leak = self.root / "published"
         leak.mkdir()
         state["published"] = [str(leak)]
         with patch.dict(os.environ, dict(self.environment(), MV_SRF_LIVE_RAM_ROOT=str(ram)), clear=True), \
-                patch.object(stack, "inventory", return_value={"unrelated"}), \
-                patch.object(stack.live, "profile_containers", return_value=set()):
-            with self.assertRaisesRegex(RuntimeError, "published RAM cleanup failed"):
+                patch.object(stack, "inventory", return_value={"srf-id-owned", "srf-id-foreign"}), \
+                patch.object(stack.live, "profile_containers", return_value=set()), \
+                patch.object(stack, "checked", return_value=""):
+            with self.assertRaisesRegex(RuntimeError, "capsule cleanup failed|published RAM cleanup failed"):
                 stack.cleanup(state, self.root)
         self.assertTrue((ram / "srf-id-owned").exists())
+        self.assertTrue((ram / "srf-id-foreign").exists())
+        self.assertTrue((ram / "srf-pg-other").exists())
         self.assertTrue((self.root / "state.json").exists())
+
+    def test_state_stays_bounded_and_stop_works_after_long_run(self):
+        state = self.state()
+        state["supervisor"] = {"pid": 456789, "identity": "birth"}
+        state["pids"] = [{"pid": 1001, "identity": "1001:999999"}]
+        state["before"] = [f"srf-id-old-{i}" for i in range(500)]
+        state["ram_before"] = [f"srf-id-ram-{i}" for i in range(500)]
+        state["capsules"] = [f"srf-id-cap-{i:04d}" for i in range(60)] + ["srf-pg-ignore"]
+        state["published"] = [str(self.root / f"pub-{i}") for i in range(60)]
+        state["error"] = "x" * 20000
+        live_pids = {1001, 1002, 1003, 1004}
+
+        def fake_alive(row):
+            return isinstance(row, dict) and row.get("pid") in live_pids
+
+        batches = [
+            [(pid, 1001, "S", f"{pid}:999999") for pid in [1002, 1003, 1004]
+             + list(range(2000 + step * 25, 2025 + step * 25))]
+            for step in range(80)
+        ] + [[(pid, 1001, "S", f"{pid}:999999") for pid in (1002, 1003, 1004)]]
+        with patch.object(stack, "alive", side_effect=fake_alive), \
+                patch.object(stack, "_proc_stat_entries", side_effect=batches):
+            for _ in batches:
+                stack.remember_tree(state, self.root)
+        path = self.root / "state.json"
+        self.assertLessEqual(path.stat().st_size, stack.MAX_STATE_BYTES)
+        loaded = stack.load_state(self.root)
+        self.assertNotIn("before", loaded)
+        self.assertNotIn("ram_before", loaded)
+        self.assertEqual([row["pid"] for row in loaded["pids"]], [1001, 1002, 1003, 1004])
+        self.assertEqual(len(loaded["capsules"]), stack.MAX_STATE_CAPSULES)
+        self.assertNotIn("srf-pg-ignore", loaded["capsules"])
+        self.assertEqual(len(loaded["published"]), stack.MAX_STATE_PUBLISHED)
+        self.assertEqual(len(loaded["error"]), stack.MAX_STATE_ERROR_CHARS)
+
+        def finish(*_):
+            path.unlink()
+
+        with patch.object(stack, "identity", return_value="birth"), \
+                patch.object(stack, "signal_record", side_effect=finish) as send, \
+                redirect_stdout(io.StringIO()) as out:
+            stack.stop_stack(self.root)
+        send.assert_called_once_with(state["supervisor"], signal.SIGTERM)
+        self.assertIn("state=absent", out.getvalue())
 
     def test_stop_absent_idempotent_and_dead_supervisor_preserves_receipt(self):
         with redirect_stdout(io.StringIO()) as out:

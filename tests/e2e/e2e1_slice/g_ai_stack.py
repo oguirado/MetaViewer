@@ -50,12 +50,14 @@ class Session:
             time.sleep(60)
         self.temp = tempfile.TemporaryDirectory(prefix='mv-g-ai-')
         self.root = Path(self.temp.name)
+        self.root.chmod(0o700)
         work = self.root / 'run-g-ai'
         work.mkdir(mode=0o700)
         self.work = work
-        ram = Path(os.environ['MV_SRF_LIVE_RAM_ROOT']).resolve(strict=True)
-        self.state = dict(schema='metaviewer.live-stack/v1', work=str(work), before=sorted(before),
-                          ram_before=[p.name for p in ram.iterdir()], published=[], pids=[], capsules=[])
+        Path(os.environ['MV_SRF_LIVE_RAM_ROOT']).resolve(strict=True)
+        self.state = dict(schema='metaviewer.live-stack/v1', status='starting', work=str(work),
+                          published=[], pids=[], capsules=[])
+        stack.save_state(self.root, self.state)
         binaries = stack.binaries(work)
         commit = stack.checked(['git', 'rev-parse', 'HEAD'], cwd=live.ROOT)
         suffix = uuid.uuid4().hex
@@ -98,11 +100,14 @@ class Session:
         created = self.receive(self.ui, lambda b: b.get('event') == 'created')
         self.surface = created['data']['surface']
         self.surface_id = self.surface['surface_id']
-        self.frame = self.receive(self.ui, lambda b: b.get('event') == 'frame_ready')['data']['frame_ref']
-        self.state['published'].append(str(Path(self.frame['ramws_path']).parent))
+        self.state['surface_id'] = self.surface_id
         self.state['capsules'] = sorted(live.profile_containers('mv-live-1') - before)
         if len(self.state['capsules']) != 1:
             raise RuntimeError('capsule ownership witness missing')
+        stack.save_state(self.root, self.state)
+        self.frame = self.receive(self.ui, lambda b: b.get('event') == 'frame_ready')['data']['frame_ref']
+        self.state['published'].append(str(Path(self.frame['ramws_path']).parent))
+        stack.save_state(self.root, self.state)
         return self
 
     def receive(self, peer, predicate):
@@ -161,12 +166,24 @@ class Session:
 
     def __exit__(self, *unused):
         try:
-            for peer in self.peers:
-                peer.close()
             if self.state is not None:
                 for proc in self.processes:
                     if proc.poll() is None:
                         proc.send_signal(signal.SIGCONT)
+                self.state['capsules'] = sorted(set(self.state.get('capsules', ())) | live.profile_containers('mv-live-1'))
+                if hasattr(self, 'surface_id') and hasattr(self, 'ui'):
+                    try:
+                        live.send(self.ui, self.regs['ui'], self.config,
+                                  dict(schema='surface_request/v0.2', op='destroy',
+                                       params=dict(surface_id=self.surface_id)))
+                        self.receive(self.ui, lambda b: b.get('event') == 'state_changed'
+                                     and b['data']['surface']['state'] == 'destroyed')
+                    except Exception as error:
+                        self.report['destroy_error'] = str(error)
+            for peer in self.peers:
+                peer.close()
+            if self.state is not None:
+                stack.remember_tree(self.state, self.root)
                 with contextlib.redirect_stdout(io.StringIO()) as output:
                     stack.cleanup(self.state, self.root)
                 self.cleanup = json.loads(output.getvalue().split('LIVE_STACK_CLEANUP ', 1)[1])

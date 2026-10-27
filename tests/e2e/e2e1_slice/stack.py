@@ -30,6 +30,15 @@ ROOT = live.ROOT
 REQUIRED = ("XDG_RUNTIME_DIR", "MV_SRF_BIN_DIR", "MV_SRF_LIVE_PROFILE",
             "MV_SRF_LIVE_RAM_ROOT", "MV_SRF_STATE_DIR", "SRF_IDENTITY_STORE_ROOT",
             "SRF_PROXY_REGISTRY", "MV_E2E_ELECTRON_BIN")
+MAX_STATE_BYTES = 65536
+MAX_STATE_PIDS = 256
+MAX_STATE_CAPSULES = 16
+MAX_STATE_PUBLISHED = 16
+MAX_STATE_ERROR_CHARS = 4096
+ALLOWED_STATE_KEYS = (
+    "schema", "status", "supervisor", "pids", "capsules", "published",
+    "work", "display", "xauthority", "surface_id", "expires", "error",
+)
 
 
 def ttl_seconds(value):
@@ -66,11 +75,41 @@ def state_root():
     return private_dir(root)
 
 
+def bounded_state(value):
+    result = {key: value[key] for key in ALLOWED_STATE_KEYS if key in value}
+    if "pids" in result:
+        seen = set()
+        pids = []
+        for row in result["pids"]:
+            if isinstance(row, dict):
+                key = (row.get("pid"), row.get("identity"))
+                if key not in seen:
+                    seen.add(key)
+                    pids.append({"pid": row.get("pid"), "identity": row.get("identity")})
+        result["pids"] = pids[:MAX_STATE_PIDS]
+    if "capsules" in result:
+        result["capsules"] = sorted(
+            name for name in set(result["capsules"])
+            if isinstance(name, str) and live.CAPSULE_ID_RE.fullmatch(name)
+        )[:MAX_STATE_CAPSULES]
+    if "published" in result:
+        result["published"] = sorted(set(str(p) for p in result["published"]))[:MAX_STATE_PUBLISHED]
+    if isinstance(result.get("error"), str) and len(result["error"]) > MAX_STATE_ERROR_CHARS:
+        result["error"] = result["error"][-MAX_STATE_ERROR_CHARS:]
+    return result
+
+
 def save_state(root, value):
+    bounded = bounded_state(value)
+    value.clear()
+    value.update(bounded)
+    payload = json.dumps(bounded, sort_keys=True)
+    if len(payload.encode("utf-8")) > MAX_STATE_BYTES:
+        raise RuntimeError("bounded live stack state exceeds limit")
     fd, temporary = tempfile.mkstemp(prefix=".state-", dir=root)
     try:
         with os.fdopen(fd, "w") as stream:
-            json.dump(value, stream, sort_keys=True)
+            stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, root / "state.json")
@@ -83,7 +122,7 @@ def load_state(root):
     fd = os.open(root / "state.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd) as stream:
         info = os.fstat(stream.fileno())
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o600 or info.st_size > 65536:
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o600 or info.st_size > MAX_STATE_BYTES:
             raise RuntimeError("unsafe live stack state")
         state = json.load(stream)
     if state.get("schema") != "metaviewer.live-stack/v1":
@@ -202,34 +241,52 @@ def electron_environment(env):
             if key not in exact and not key.startswith(prefixes)}
 
 
+def _proc_stat_entries():
+    entries = []
+    for path in Path("/proc").glob("[0-9]*/stat"):
+        try:
+            fields = path.read_text().rsplit(")", 1)[1].split()
+            entries.append((int(path.parent.name), int(fields[1]), fields[0], fields[19]))
+        except (FileNotFoundError, ProcessLookupError, ValueError):
+            continue
+    return entries
+
+
 def remember_tree(state, root):
-    """Record identities of descendants before any later signal; never killpg."""
-    parents = {row["pid"] for row in state["pids"] if alive(row)}
+    """Record identities of live descendants before any later signal; never killpg."""
+    live_rows = []
+    parents = set()
+    for row in state.get("pids", ()):
+        pid = row.get("pid")
+        if pid not in parents and alive(row):
+            live_rows.append({"pid": pid, "identity": row["identity"]})
+            parents.add(pid)
     known = set(parents)
+    entries = _proc_stat_entries()
     pending = True
-    while pending:
+    while pending and len(live_rows) < MAX_STATE_PIDS:
         pending = False
-        for path in Path("/proc").glob("[0-9]*/stat"):
-            try:
-                fields = path.read_text().rsplit(")", 1)[1].split()
-                pid = int(path.parent.name)
-                if int(fields[1]) in parents and pid not in known and fields[0] != "Z":
-                    state["pids"].append({"pid": pid, "identity": fields[19]})
-                    parents.add(pid)
-                    known.add(pid)
-                    pending = True
-            except (FileNotFoundError, ProcessLookupError):
-                continue
+        for pid, ppid, proc_state, start_time in entries:
+            if len(live_rows) >= MAX_STATE_PIDS:
+                break
+            if ppid in parents and pid not in known and proc_state != "Z":
+                live_rows.append({"pid": pid, "identity": start_time})
+                parents.add(pid)
+                known.add(pid)
+                pending = True
+    state["pids"] = live_rows
     save_state(root, state)
 
 
 def cleanup(state, root):
-    # Stop native capsule only with ownership bound to this run's initial snapshot.
-    owned = set(state["capsules"])
-    owned |= live.profile_containers("mv-live-1") - set(state["before"])
+    # Stop native capsule only with ownership bound to this run's create receipt.
+    owned = set(state.get("capsules", ()))
+    owned |= live.profile_containers("mv-live-1")
     state["capsules"] = sorted(owned)
     save_state(root, state)
     for name in sorted(owned & inventory()):
+        if not live.CAPSULE_ID_RE.fullmatch(name):
+            raise RuntimeError("unsafe or non-identity capsule allocation: " + repr(name))
         checked([Path(os.environ["MV_SRF_BIN_DIR"]) / "srf-identity-surface", "stop",
                  "--container", name, "--state-dir", os.environ["MV_SRF_STATE_DIR"]])
     for sig in (signal.SIGTERM, signal.SIGKILL):
@@ -240,19 +297,14 @@ def cleanup(state, root):
             time.sleep(0.05)
     if any(alive(r) for r in state["pids"]):
         raise RuntimeError("process cleanup failed")
-    if owned & inventory() or live.profile_containers("mv-live-1"):
+    active = inventory()
+    if (owned & active) or live.profile_containers("mv-live-1"):
         raise RuntimeError("capsule cleanup failed")
     ram_root = Path(os.environ["MV_SRF_LIVE_RAM_ROOT"]).resolve(strict=True)
-    for name in owned:
-        path = ram_root / name
-        if name not in state["ram_before"] and path.exists():
-            if path.is_symlink() or path.resolve().parent != ram_root:
-                raise RuntimeError("unsafe RAM allocation")
-            shutil.rmtree(path)
+    ram_receipt = live.cleanup_capsule_ram(ram_root, owned, state.get("published", ()), active)
     # Adapter normally releases published frames; retain receipt on any leak.
-    remaining = [p for p in state["published"] if Path(p).exists()]
-    if remaining:
-        raise RuntimeError("published RAM cleanup failed: " + repr(remaining))
+    if not ram_receipt["ram_absent"]:
+        raise RuntimeError("published RAM cleanup failed: " + repr(ram_receipt["remaining"]))
     work = Path(state["work"])
     if work.parent != root or not work.name.startswith("run-") or work.is_symlink():
         raise RuntimeError("unsafe work directory")
@@ -261,9 +313,14 @@ def cleanup(state, root):
     if work.exists() or (display and Path("/tmp/.X11-unix", "X" + display[1:]).exists()):
         raise RuntimeError("socket/work cleanup failed")
     (root / "state.json").unlink()
-    print("LIVE_STACK_CLEANUP " + json.dumps({"pids": state["pids"], "capsules": sorted(owned),
-          "processes_absent": True, "ram_absent": True, "work_absent": True,
-          "display_socket_absent": True, "state_absent": True}), flush=True)
+    receipt = {"pids": state["pids"], "capsules": sorted(owned),
+               "owned_allocations": ram_receipt["owned_allocations"],
+               "owned_allocations_removed": ram_receipt["owned_allocations_removed"],
+               "processes_absent": True, "ram_absent": ram_receipt["ram_absent"],
+               "remaining": ram_receipt["remaining"],
+               "work_absent": True, "display_socket_absent": True, "state_absent": True}
+    print("LIVE_STACK_CLEANUP " + json.dumps(receipt, sort_keys=True), flush=True)
+    return receipt
 
 
 def free_display(sockets=Path("/tmp/.X11-unix"), locks=Path("/tmp")):
@@ -390,10 +447,11 @@ def supervise(root, seconds, lock_fd):
         report = {}
         created = live.receive(peer, lambda b: b.get("event") == "created", report)
         state["surface_id"] = created["data"]["surface"]["surface_id"]
-        frame = live.receive(peer, lambda b: b.get("event") == "frame_ready", report)["data"]["frame_ref"]
-        state["capsules"] = sorted(live.profile_containers("mv-live-1") - set(state["before"]))
+        state["capsules"] = sorted(live.profile_containers("mv-live-1"))
         if len(state["capsules"]) != 1:
             raise RuntimeError("expected exactly one ownership-proven capsule")
+        save_state(root, state)
+        frame = live.receive(peer, lambda b: b.get("event") == "frame_ready", report)["data"]["frame_ref"]
         state["published"] = [str(Path(frame["ramws_path"]).parent)]
         state["expires"] = time.time() + seconds
         state["status"] = "ready"
@@ -411,6 +469,8 @@ def supervise(root, seconds, lock_fd):
         save_state(root, state)
         print(error, file=sys.stderr, flush=True)
     finally:
+        state["capsules"] = sorted(set(state.get("capsules", ())) | live.profile_containers("mv-live-1"))
+        save_state(root, state)
         if peer:
             if state.get("surface_id"):
                 try:
@@ -442,11 +502,10 @@ def start(root, seconds):
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise RuntimeError("another live stack is active; refusing") from exc
-        before = preflight(root)
+        preflight(root)
         work = Path(tempfile.mkdtemp(prefix="run-", dir=root))
         state = {"schema": "metaviewer.live-stack/v1", "status": "starting", "pids": [],
-                 "work": str(work), "before": sorted(before), "capsules": [], "published": [],
-                 "ram_before": sorted(p.name for p in Path(os.environ["MV_SRF_LIVE_RAM_ROOT"]).iterdir())}
+                 "work": str(work), "capsules": [], "published": []}
         save_state(root, state)
         with open(root / "supervisor.log", "w") as log:
             proc = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "_supervise",

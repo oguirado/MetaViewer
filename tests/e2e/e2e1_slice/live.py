@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import socket
@@ -20,6 +21,7 @@ import time
 import uuid
 
 ROOT = Path(__file__).resolve().parents[3]
+CAPSULE_ID_RE = re.compile(r"^srf-id-[a-z0-9][a-z0-9-]{0,39}$")
 sys.path.insert(0, str(ROOT / "agents"))
 from metaviewer_agents.client import CoreClient  # noqa: E402
 from metaviewer_agents.envelope import make_envelope  # noqa: E402
@@ -60,19 +62,86 @@ def digest(value):
                                      ensure_ascii=False).encode()).hexdigest()
 
 
+def capsule_from_receipt(receipt, profile="mv-live-1"):
+    """Extract only an identity-surface capsule ID bound to the admitted profile."""
+    if not isinstance(receipt, dict):
+        return None
+    if "Lease" in receipt or "Capsule" in receipt:
+        lease = receipt.get("Lease")
+        capsule = receipt.get("Capsule")
+        if not isinstance(lease, dict) or lease.get("ProfileID") != profile or not isinstance(capsule, dict):
+            return None
+    else:
+        profile_val = receipt.get("profile_id", receipt.get("profile", receipt.get("identity")))
+        if profile_val != profile:
+            return None
+        capsule = receipt
+    name = capsule.get("container")
+    run_id = capsule.get("run_id")
+    if not isinstance(name, str) or not CAPSULE_ID_RE.fullmatch(name):
+        return None
+    if run_id is not None and (not isinstance(run_id, str) or run_id != name):
+        return None
+    return name
+
+
 def profile_containers(profile):
     """Project only identity ownership from native control JSON, never env files.
 
     Container names are opaque. Name substrings cannot prove native ownership.
     """
     names = set()
-    for path in Path(os.environ["MV_SRF_STATE_DIR"]).glob("*.json"):
-        value = json.loads(path.read_text())
-        if isinstance(value, dict) and value.get("Lease", {}).get("ProfileID") == profile:
-            name = value.get("Capsule", {}).get("container")
-            if isinstance(name, str) and name.startswith("srf-id-"):
+    state_dir = os.environ.get("MV_SRF_STATE_DIR", "")
+    if not state_dir:
+        return names
+    for path in Path(state_dir).glob("*.json"):
+        try:
+            value = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(value, dict) and "Lease" in value:
+            name = capsule_from_receipt(value, profile)
+            if name is not None:
                 names.add(name)
     return names
+
+
+def cleanup_capsule_ram(ram_root, capsules, published=(), active_containers=()):
+    """Remove only the RAM allocation directories of owned destroyed srf-id capsules."""
+    root = Path(ram_root)
+    if root.is_symlink():
+        raise RuntimeError("unsafe symlink RAM root: " + str(root))
+    root = root.resolve(strict=True)
+    if not root.is_dir():
+        raise RuntimeError("RAM root directory required: " + str(root))
+    owned = sorted(set(capsules))
+    active = set(active_containers)
+    removed = []
+    owned_paths = []
+    for name in owned:
+        if not isinstance(name, str) or not CAPSULE_ID_RE.fullmatch(name):
+            raise RuntimeError("unsafe or non-identity capsule allocation: " + repr(name))
+        path = root / name
+        owned_paths.append(str(path))
+        if path.is_symlink():
+            raise RuntimeError("unsafe RAM allocation: " + str(path))
+        if name not in active and path.exists():
+            if not path.is_dir() or path.resolve().parent != root:
+                raise RuntimeError("unsafe RAM allocation: " + str(path))
+            shutil.rmtree(path)
+            removed.append(str(path))
+    published_dirs = sorted(str(p) for p in set(published))
+    remaining = [p for p in owned_paths + published_dirs if Path(p).exists() or Path(p).is_symlink()]
+    ram_absent = len(remaining) == 0 and all(not Path(p).exists() and not Path(p).is_symlink() for p in owned_paths)
+    return {
+        "status": "PASS" if ram_absent else "FAIL",
+        "ram_absent": ram_absent,
+        "capsules": owned,
+        "owned_allocations": owned_paths,
+        "owned_allocations_removed": removed,
+        "published_directories": published_dirs,
+        "remaining": remaining,
+    }
 
 
 def run(report, argv, **kwargs):
@@ -240,7 +309,6 @@ def main():
             assert not profile_containers(profile), "profile already allocated; refusing to touch it"
             assert not any(profile in name for name in before.stdout.splitlines()), "profile already running; refusing to touch it"
             ram_root = Path(os.environ["MV_SRF_LIVE_RAM_ROOT"]).resolve(strict=True)
-            original_ram_dirs = {p.name for p in ram_root.iterdir()}
             commit = run(report, ["git", "rev-parse", "HEAD"], cwd=ROOT)
             assert commit.returncode == 0, "build pin unavailable"
             suffix = uuid.uuid4().hex
@@ -409,6 +477,8 @@ def main():
                 processes[0].send_signal(signal.SIGCONT)
             if len(processes) > 1 and processes[1].poll() is None:
                 processes[1].send_signal(signal.SIGCONT)
+            if "before" in locals() and before.returncode == 0:
+                owned |= profile_containers(profile) - set(before.stdout.splitlines())
             if "surface_id" in locals():
                 try:
                     send(ui, regs["ui"], config, {"schema": "surface_request/v0.2", "op": "destroy",
@@ -446,28 +516,25 @@ def main():
                 if leftovers:
                     after = run(report, ["docker", "ps", "--format", "{{.Names}}"])
             # Native stop retains source captures. Delete only this run's
-            # ownership-proven allocation; pre-existing allocations are excluded.
-            ram_paths = []
+            # ownership-proven allocation after the capsule is destroyed.
             if "ram_root" in locals():
-                for name in sorted(owned):
-                    path = ram_root / name
-                    if name not in original_ram_dirs and path.exists() and not path.is_symlink():
-                        assert path.resolve().parent == ram_root, "allocation escaped RAM root"
-                        if name not in after.stdout.splitlines():
-                            shutil.rmtree(path)
-                            ram_paths.append(str(path))
                 published_dirs = {str(Path(b["data"]["frame_ref"]["ramws_path"]).parent)
                                   for b in report.get("wire_evidence", []) if b.get("event") == "frame_ready"}
-                remaining = [p for p in ram_paths + list(published_dirs) if Path(p).exists()]
-                report["ram_cleanup"] = {"status": "FAIL" if remaining else "PASS",
-                                         "owned_allocations_removed": ram_paths,
-                                         "published_directories": sorted(published_dirs), "remaining": remaining}
+                active = set(after.stdout.splitlines()) if after.returncode == 0 else set(owned)
+                try:
+                    report["ram_cleanup"] = cleanup_capsule_ram(ram_root, owned, published_dirs, active)
+                except Exception as error:
+                    report["ram_cleanup"] = {"status": "FAIL", "ram_absent": False, "error": str(error)}
             report["container_cleanup"] = "PASS" if after.returncode == 0 and not (
                 owned & set(after.stdout.splitlines())) and not profile_containers(profile) else "FAIL"
     report["process_cleanup"] = {"status": "PASS" if all(p.poll() is not None for p in processes) else "FAIL",
                                   "pids": [p.pid for p in processes], "temporary_tree_absent": not scratch.exists(),
                                   "socket_absent": not locals().get("socket_path", scratch).exists()}
-    if report["container_cleanup"] == "PASS" and report["process_cleanup"]["status"] == "PASS" and report.get("ram_cleanup", {}).get("status") == "PASS" and all(v == "PASS" for v in report["assertions"].values()):
+    if (report["container_cleanup"] == "PASS"
+            and report["process_cleanup"]["status"] == "PASS"
+            and report.get("ram_cleanup", {}).get("status") == "PASS"
+            and report.get("ram_cleanup", {}).get("ram_absent") is True
+            and all(v == "PASS" for v in report["assertions"].values())):
         report["status"] = "DONE"
     print(json.dumps(report, sort_keys=True))
     return 0 if report["status"] == "DONE" else 1
