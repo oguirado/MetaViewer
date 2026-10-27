@@ -2,13 +2,34 @@
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import tempfile
 import unittest
-import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
+LAW_NAME = "oguirado"
+LAW_EMAIL = "247666607+oguirado@users.noreply.github.com"
+
+
+def _job_timeouts(text: str) -> dict[str, int | None]:
+    lines = text.splitlines()
+    start = next(i for i, line in enumerate(lines) if line == "jobs:")
+    jobs: dict[str, int | None] = {}
+    cur: str | None = None
+    for line in lines[start + 1 :]:
+        if re.match(r"^[A-Za-z]", line):
+            break
+        m = re.match(r"^  ([\w-]+):\s*$", line)
+        if m:
+            cur = m.group(1)
+            jobs[cur] = None
+        elif cur is not None:
+            t = re.match(r"^    timeout-minutes: (\d+)\s*$", line)
+            if t:
+                jobs[cur] = int(t.group(1))
+    return jobs
 
 
 def find_node() -> str:
@@ -40,16 +61,91 @@ class TestT7R2CArgonVolume(unittest.TestCase):
         self.assertGreaterEqual(out["passed"], 6)
 
     def test_o7_check_laws_version_and_history_pass(self):
-        for args in (["--version"], []):
-            with self.subTest(args=args):
-                res = subprocess.run(
-                    ["python3", "tools/check_laws.py", *args],
-                    cwd=ROOT,
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                )
-                self.assertEqual(res.returncode, 0, res.stderr)
+        with tempfile.TemporaryDirectory(prefix="t7r2c-laws-") as tmp:
+            repo = pathlib.Path(tmp)
+            (repo / "tools").mkdir()
+            shutil.copy2(ROOT / "VERSION", repo / "VERSION")
+            shutil.copy2(ROOT / "CHANGELOG.md", repo / "CHANGELOG.md")
+            shutil.copy2(ROOT / "tools" / "check_laws.py", repo / "tools" / "check_laws.py")
+            git_env = {
+                k: v
+                for k, v in os.environ.items()
+                if not k.startswith(("GIT_AUTHOR_", "GIT_COMMITTER_")) and k != "EMAIL"
+            }
+            git_env["GIT_CONFIG_GLOBAL"] = "/dev/null"
+            git_env["GIT_CONFIG_NOSYSTEM"] = "1"
+            subprocess.run(
+                ["git", "init", "-q"],
+                cwd=repo,
+                env=git_env,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    f"user.name={LAW_NAME}",
+                    "-c",
+                    f"user.email={LAW_EMAIL}",
+                    "commit",
+                    "-q",
+                    "--allow-empty",
+                    "-m",
+                    "core: add initial state",
+                ],
+                cwd=repo,
+                env=git_env,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            for args in (["--version"], []):
+                with self.subTest(args=args):
+                    res = subprocess.run(
+                        ["python3", "tools/check_laws.py", *args],
+                        cwd=repo,
+                        env=git_env,
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    self.assertEqual(res.returncode, 0, res.stderr)
+
+            # Negative control: a commit with a wrong author is rejected by the history check.
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=wrong",
+                    "-c",
+                    "user.email=wrong@example.org",
+                    "commit",
+                    "-q",
+                    "--allow-empty",
+                    "-m",
+                    "core: add bad author",
+                ],
+                cwd=repo,
+                env=git_env,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            res_bad = subprocess.run(
+                ["python3", "tools/check_laws.py"],
+                cwd=repo,
+                env=git_env,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertNotEqual(res_bad.returncode, 0)
+            self.assertIn(f"author must be {LAW_NAME} <{LAW_EMAIL}>", res_bad.stderr)
 
     def test_o7_check_laws_range_rejects_bad_ranges(self):
         for bad_range in ("a..b..c", "--not-a-range", "0000000..HEAD", "nonexistent-ref..HEAD"):
@@ -74,12 +170,11 @@ class TestT7R2CArgonVolume(unittest.TestCase):
         self.assertIn(res.returncode, (0, 1), res.stderr)
 
     def test_o7_volume_yml_structure_and_guards(self):
-        vol = yaml.safe_load((ROOT / ".github" / "workflows" / "volume.yml").read_text(encoding="utf-8"))
-        jobs = vol["jobs"]
+        jobs = _job_timeouts((ROOT / ".github" / "workflows" / "volume.yml").read_text(encoding="utf-8"))
         self.assertEqual(set(jobs), {"volume-property", "volume-mutants", "volume-e2e"})
         expected_timeouts = {"volume-property": 60, "volume-mutants": 60, "volume-e2e": 180}
-        for jname, job in jobs.items():
-            self.assertEqual(job.get("timeout-minutes"), expected_timeouts[jname], jname)
+        for jname, timeout_val in jobs.items():
+            self.assertEqual(timeout_val, expected_timeouts[jname], jname)
 
     def test_o7_sync_kit_check_against_fixture(self):
         node = find_node()

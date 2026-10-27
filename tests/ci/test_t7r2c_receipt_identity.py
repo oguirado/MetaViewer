@@ -9,10 +9,16 @@ import subprocess
 import tempfile
 import textwrap
 import unittest
-import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 CI_YML = ROOT / ".github" / "workflows" / "ci.yml"
+
+
+def _extract_step_run(ci_text: str, job_name: str, step_name: str) -> str:
+    job_sec = re.split(r"\n  [a-z][\w-]*:\n", ci_text.split(f"  {job_name}:\n", 1)[1], 1)[0]
+    step_sec = re.split(r"\n      - (?:name|uses):", job_sec.split(f"      - name: {step_name}\n", 1)[1], 1)[0]
+    run_block = step_sec.split("        run: |\n", 1)[1]
+    return textwrap.dedent(run_block)
 
 
 def load_f4_validator():
@@ -125,10 +131,11 @@ class TestT7R2CReceiptIdentity(unittest.TestCase):
 
     def test_o4_r1_092_ci_required_evaluates_receipts_and_rejects_tampered(self):
         """Regression test for R1-092: ci-required Aggregate required results evaluates receipts and fails on tampered receipts."""
-        ci_doc = yaml.safe_load(CI_YML.read_text(encoding="utf-8"))
-        ci_req = ci_doc["jobs"]["ci-required"]
-        agg_step = [s for s in ci_req["steps"] if s.get("name") == "Aggregate required results"][0]
-        raw_script = agg_step["run"]
+        raw_script = _extract_step_run(
+            CI_YML.read_text(encoding="utf-8"),
+            "ci-required",
+            "Aggregate required results",
+        )
         rendered = re.sub(r"\$\{\{\s*job\.status\s*\}\}", "success", raw_script)
         rendered = re.sub(r"\$\{\{\s*needs\.[\w-]+\.result\s*\}\}", "success", rendered)
 
@@ -192,10 +199,11 @@ class TestT7R2CReceiptIdentity(unittest.TestCase):
 
     def test_arg_ci_6_laws_range_failure_writes_blocked_receipt_and_continues(self):
         """Regression test for ARG-ci-6: laws_range.py failure writes BLOCKED receipt and continues to remaining gates."""
-        ci_doc = yaml.safe_load(CI_YML.read_text(encoding="utf-8"))
-        laws_job = ci_doc["jobs"]["laws-contracts"]
-        gate_step = [s for s in laws_job["steps"] if "laws_range.py" in s.get("run", "")][0]
-        script = gate_step["run"]
+        script = _extract_step_run(
+            CI_YML.read_text(encoding="utf-8"),
+            "laws-contracts",
+            "Run laws and contracts gates",
+        )
         fast_script = script.replace(
             "set -- python3 -m unittest discover -s tests -v",
             "set -- python3 -m unittest tests/test_check_laws.py -v",

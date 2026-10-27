@@ -911,10 +911,10 @@ test('E2E-U20n-tile: outer tile renders inner surface frame via relay; cross-sur
     assert.equal(depth2Attempt.closed, true);
 
     const stderrDeadline = Date.now() + 5000;
-    while (!/Decode\(Malformed\)/.test(outerStderr) && Date.now() < stderrDeadline) {
+    while (!/Decode\(InvalidField\)/.test(outerStderr) && Date.now() < stderrDeadline) {
       await new Promise((r) => setTimeout(r, 20));
     }
-    assert.match(outerStderr, /Decode\(Malformed\)/);
+    assert.match(outerStderr, /Decode\(InvalidField\)/);
 
     const journalAfter = readFileSync(outerJournalPath, 'utf8').trim().split('\n');
     const eventsAfter = readdirSync(outerEventsDir).sort();
