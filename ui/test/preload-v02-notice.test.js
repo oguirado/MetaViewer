@@ -15,7 +15,7 @@ function fixture(t) {
   let listener;
   const previous=Object.getOwnPropertyDescriptor(globalThis,'window');
   Object.defineProperty(globalThis,'window',{configurable:true,value:{
-    location:{origin:'metaviewer://app'},postMessage:(...args)=>posts.push(args),
+    location:{origin:'app://metaviewer'},postMessage:(...args)=>posts.push(args),
   }});
   t.after(()=>{if(previous) Object.defineProperty(globalThis,'window',previous);else delete globalThis.window;});
   const api=installPreload({contextBridge:{exposeInMainWorld(){}},ipcRenderer:{

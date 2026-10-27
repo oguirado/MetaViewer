@@ -74,7 +74,7 @@ export const IPC_BOUNDS = Object.freeze({ maxLayoutBytes: 256 * 1024 });
 
 /** Private allowlist; exports stay frozen literals so no consumer can widen it. */
 const CHANNEL_SET = new Set(Object.values(CHANNELS));
-const PRIVILEGED_ORIGIN = 'metaviewer://app';
+const PRIVILEGED_ORIGIN = 'app://metaviewer';
 
 /**
  * Coded preload failure. Local codes (DEPS, CHANNEL, ARGS, PAYLOAD, OUTCOME)

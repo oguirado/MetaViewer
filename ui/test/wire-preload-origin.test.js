@@ -33,21 +33,23 @@ function fixture(t, origin) {
 }
 
 test('ARG-n_uisrc-4: frame port targets the privileged origin with its transfer list',t=>{
-  const f=fixture(t,'metaviewer://app'), value=notice(), port={};
+  const f=fixture(t,'app://metaviewer'), value=notice(), port={};
   f.emit(value,[port]);
-  assert.deepEqual(f.posts,[[{type:'metaviewer:frame-port',surface_id:'s1'},'metaviewer://app',[port]]]);
+  assert.deepEqual(f.posts,[[{type:'metaviewer:frame-port',surface_id:'s1'},'app://metaviewer',[port]]]);
   assert.deepEqual(f.delivered,[value]);
 });
 
-test('ARG-n_uisrc-4: unexpected origins refuse port transfer but retain notice delivery',t=>{
-  const f=fixture(t,'https://unexpected.invalid'), value=notice();
+for (const origin of ['https://unexpected.invalid', 'metaviewer://app']) {
+test(`ARG-n_uisrc-4: ${origin} refuses port transfer but retains notice delivery`,t=>{
+  const f=fixture(t,origin), value=notice();
   f.emit(value,[{}]);
   assert.deepEqual(f.posts,[]);
   assert.deepEqual(f.delivered,[value]);
 });
+}
 
 test('ARG-n_uisrc-4: each frame is validated once even with multiple subscribers',t=>{
-  const f=fixture(t,'metaviewer://app');
+  const f=fixture(t,'app://metaviewer');
   const other=[];
   t.after(f.subscribe(value=>other.push(value)));
   const stringify=JSON.stringify;
@@ -61,7 +63,7 @@ test('ARG-n_uisrc-4: each frame is validated once even with multiple subscribers
 });
 
 test('ARG-n_uisrc-4 negative control: malformed notices deliver neither ports nor callbacks',t=>{
-  const f=fixture(t,'metaviewer://app'), value=notice();
+  const f=fixture(t,'app://metaviewer'), value=notice();
   value.frame_ref.sha256='invalid';
   f.emit(value,[{}]);
   assert.deepEqual(f.posts,[]);
