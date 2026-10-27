@@ -7,6 +7,13 @@ travel as anonymous memfd descriptors (``/proc/self/fd/N``), marks stay
 under ``/dev/shm/vqa-cu``, and children inherit a scrubbed environment.
 Never imports ``vision-engine`` or ``wender``: the engine is driven
 only through its CLI over an explicit checkout.
+
+[TARGET, unit decision] The projection is the plan's minimal visual table:
+schema/frame_sha256/width/height/elements, with bbox/role/name/score_ppm rows.
+It is visual evidence, not Wender's richer fused/actionable table. Scores use
+nearest-integer ppm (ties to even), matching the local vision boundary.
+TODO [TARGET, unit decision]: S1 supplies resolve_locked_component(name);
+verified selection requires its environment-selected checkout to match ve_root.
 """
 
 from __future__ import annotations
@@ -36,6 +43,7 @@ __all__ = [
     "VQA_SCHEMAS",
     "VCORE_VERBS",
     "MAX_MARKS",
+    "project_element_table",
 ]
 
 C2_SCHEMA = "ve.cu_describe/v1"
@@ -52,6 +60,7 @@ VCORE_VERBS = frozenset((
 
 # Known engine output contracts; anything else is a foreign version.
 VQA_SCHEMAS = frozenset((
+    "vqa.element-table/v1",
     "ve.cu_describe/v1",
     "vqa.vision/v1",
     "vqa.frame/v1",
@@ -163,7 +172,10 @@ def _png_bytes(frame: Frame) -> bytes:
             + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 
 
-def _resolve_ve_root(ve_root: str | Path | None) -> Path:
+def _resolve_ve_root(ve_root: str | Path | None, *,
+                     verify_lock: bool = False) -> Path:
+    if type(verify_lock) is not bool:
+        _fail("bad_shape", "verify_lock must be a boolean")
     raw = ve_root if ve_root is not None else os.environ.get("VQA_VE_ROOT")
     if raw is None or (isinstance(raw, str) and not raw):
         _fail("unavailable", "ve_root or VQA_VE_ROOT is required")
@@ -175,6 +187,14 @@ def _resolve_ve_root(ve_root: str | Path | None) -> Path:
         raise AssertionError("unreachable")
     if not root.is_dir():
         _fail("unavailable", "vision-engine checkout is not a directory")
+    if verify_lock:
+        try:
+            from .deps_lock import resolve_locked_component
+        except ImportError as exc:
+            raise PerceptionError("unavailable", "dependency resolver unavailable") from exc
+        locked_root = Path(resolve_locked_component("vision-engine")).resolve()
+        if locked_root != root:
+            _fail("commit_mismatch", "verified checkout differs from ve_root")
     return root
 
 
@@ -428,6 +448,41 @@ def _vision_from_c2(parsed: dict[str, Any],
             "changed_regions": regions, "elements": elements}
 
 
+def project_element_table(frame_ref: Mapping[str, Any],
+                          vision_or_c2: dict[str, Any]) -> dict[str, Any]:
+    """Project validated vision or a raw C2 response into integer-only evidence.
+
+    Raw C2 evidence must carry the same RGB24 digest as the caller's frame_ref.
+    Normalized vision relies on the caller's existing frame binding.
+    """
+    width, height = _bound_dims(frame_ref)
+    _check_hex64(frame_ref.get("sha256"), name="frame_ref.sha256")
+    if not isinstance(vision_or_c2, dict):
+        _fail("bad_shape", "vision or C2 must be an object")
+    vision = vision_or_c2
+    if "schema" in vision_or_c2:
+        parsed = _parse_c2_payload(
+            json.dumps(vision_or_c2).encode("utf-8"), width=width, height=height,
+            prev_given=vision_or_c2.get("changed") is not None,
+            marks_out=None, ocr_requested=False)
+        if vision_or_c2["frame_sha256"] != frame_ref["sha256"]:
+            _fail("identity_mismatch", "C2 digest disagrees with frame_ref")
+        vision = _vision_from_c2(parsed, width, height)
+    check_vision(vision, width=width, height=height)
+    return {
+        "schema": "vqa.element-table/v1",
+        "frame_sha256": frame_ref["sha256"],
+        "width": width,
+        "height": height,
+        "elements": [
+            {"bbox": dict(element["bbox"]), "role": element["role"],
+             "name": element["name"],
+             "score_ppm": round(element["confidence"] * 1_000_000)}
+            for element in vision["elements"]
+        ],
+    }
+
+
 class VCorePerceptionAdapter(PerceptionAdapter):
     """Subprocess adapter over the pinned vision-engine checkout.
 
@@ -441,7 +496,8 @@ class VCorePerceptionAdapter(PerceptionAdapter):
                  timeout: float = 2.0,
                  python: str = "python3",
                  marks_out: str | Path | None = None,
-                 ocr_marks: bool = False) -> None:
+                 ocr_marks: bool = False,
+                 verify_lock: bool = False) -> None:
         if (isinstance(timeout, bool)
                 or not isinstance(timeout, (int, float))
                 or not math.isfinite(timeout) or timeout <= 0):
@@ -452,7 +508,7 @@ class VCorePerceptionAdapter(PerceptionAdapter):
             _fail("bad_shape", "ocr_marks must be a boolean")
         if ocr_marks and marks_out is None:
             _fail("bad_shape", "OCR requires a RAM marks output")
-        self.ve_root = _resolve_ve_root(ve_root)
+        self.ve_root = _resolve_ve_root(ve_root, verify_lock=verify_lock)
         self.timeout = timeout
         self.python = python
         self.marks_out = (_ram_marks_path(marks_out)

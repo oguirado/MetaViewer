@@ -224,7 +224,8 @@ def validate_observation(observation: object, *, surface_id: str,
 
 def build_observation(frame_ref: dict, *, surface_id: str,
                       generation: int, vision: dict | None = None,
-                      ground_truth: dict | None = None) -> dict:
+                      ground_truth: dict | None = None,
+                      contract_version: str = "v0.1") -> dict:
     """Build an isolated observation from trusted parts.
 
     Emits only ``schema``/``frame_ref`` plus the optionals actually
@@ -239,7 +240,7 @@ def build_observation(frame_ref: dict, *, surface_id: str,
     if ground_truth is not None and not isinstance(ground_truth, dict):
         _fail("bad_shape", "ground_truth is not an object")
     observation: dict = {
-        "schema": _OBSERVATION_SCHEMA,
+        "schema": f"observation/{contract_version}",
         "frame_ref": copy.deepcopy(frame_ref),
     }
     if vision is not None:
@@ -247,7 +248,7 @@ def build_observation(frame_ref: dict, *, surface_id: str,
     if ground_truth is not None:
         observation["ground_truth"] = copy.deepcopy(ground_truth)
     validate_observation(observation, surface_id=surface_id,
-                         generation=generation)
+                         generation=generation, contract_version=contract_version)
     return observation
 
 
