@@ -1,17 +1,17 @@
 {
  "schema": "metaviewer.meta_ai_usage/v1",
  "totals": {
-  "lanes": 351,
-  "ok": 351,
-  "input_tokens": 78041574,
-  "cache_read_tokens": 1813740257,
-  "output_tokens": 17010305,
-  "thinking_tokens": 9026455,
+  "lanes": 353,
+  "ok": 353,
+  "input_tokens": 78654445,
+  "cache_read_tokens": 1827915188,
+  "output_tokens": 17155594,
+  "thinking_tokens": 9124780,
   "cache_hit_pct": 95.9,
-  "usd": 14.8337,
-  "usd_per_lane": 0.0423,
-  "steps": 19213,
-  "lane_hours": 49.6
+  "usd": 14.9524,
+  "usd_per_lane": 0.0424,
+  "steps": 19351,
+  "lane_hours": 50.1
  },
  "peak_concurrent_lanes": 24,
  "rooms": {
@@ -133,6 +133,11 @@
   "mvui23": {
    "stage": "fix",
    "why": "TOP PRIORITY: on the real app the wall tile stays black from READY until a multislot round trip (startup race between frame-port notice/deliveries and the first canvas binding).",
+   "orchestrator": "UI orchestrator"
+  },
+  "mvui23e": {
+   "stage": "fix",
+   "why": "Align seven older frame tests with the corrected canvas sizing contract (the reactive canvas dimensions they pinned wiped the first frame, L8-1).",
    "orchestrator": "UI orchestrator"
   },
   "mvui23c": {
@@ -7902,6 +7907,48 @@
    "thinking_tokens": 41534,
    "cache_hit_pct": 96.5,
    "usd": 0.04701
+  },
+  {
+   "room": "mvui23d",
+   "lane": "C",
+   "title": "canvas dimensions + unmount + blanking",
+   "stage": "fix",
+   "model": "muse-spark-1.3",
+   "orchestrator": "UI orchestrator",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-27T20:58:03.679000+00:00",
+   "duration_s": 1064.8,
+   "end_utc": "2026-10-27T21:15:48.501000+00:00",
+   "phase": "build",
+   "steps": 75,
+   "input_tokens": 382257,
+   "cache_read_tokens": 8085591,
+   "output_tokens": 78969,
+   "thinking_tokens": 53215,
+   "cache_hit_pct": 95.5,
+   "usd": 0.070191
+  },
+  {
+   "room": "mvui23e",
+   "lane": "T",
+   "title": "mvui18 tests vs new sizing contract",
+   "stage": "fix",
+   "model": "muse-spark-1.3",
+   "orchestrator": "UI orchestrator",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-27T21:16:46.940000+00:00",
+   "duration_s": 957.3,
+   "end_utc": "2026-10-27T21:32:44.225000+00:00",
+   "phase": "build",
+   "steps": 63,
+   "input_tokens": 230614,
+   "cache_read_tokens": 6089340,
+   "output_tokens": 66320,
+   "thinking_tokens": 45110,
+   "cache_hit_pct": 96.4,
+   "usd": 0.048504
   }
  ]
 }
