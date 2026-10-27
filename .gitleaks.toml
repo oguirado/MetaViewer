@@ -1,0 +1,18 @@
+# [TARGET, unit decision] Only the observed digest-confusable rule is exempted
+# on the router builder's generated mount and checksum inventory.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "square-access-token"
+# v8.18.4 keeps the local rule rather than merging its default definition.
+# Preserve the pinned default expression and keyword prefilter verbatim.
+description = "Detected a Square Access Token"
+regex = '''(?i)\b((EAAA|sq0atp-)[0-9A-Za-z\-_]{22,60})(?:['|\"|\n|\r|\s|\x60|;]|$)'''
+keywords = ["sq0atp-", "eaaa"]
+[rules.allowlist]
+description = "Generated router digests can begin with the Square EAAA marker"
+paths = [
+  '''^catalogue/router/[^\r\n]+$''',
+  '''^router/index/SHA256SUMS$''',
+]
