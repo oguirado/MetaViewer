@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
 import {EventEmitter} from 'node:events';
-import {installAuthorityWire,WIRE_CHANNELS,INTENT_OPS,createSettingsStore,deliverAuthorityFrame,createSideTerminalAdapter,nestedIdentity} from '../electron/authorityWire.js';
+import {installAuthorityWire,WIRE_CHANNELS,INTENT_OPS,createSettingsStore,deliverAuthorityFrame,createSideTerminalAdapter,nestedIdentity,validateIntentBody} from '../electron/authorityWire.js';
 import {createPreloadFacade,installPreload} from '../electron/preload.js';
 
 const surface={schema:'surface/v0.2',surface_id:'s1',kind:'browser',display:':1',geometry:{w:1,h:1},state:'active',visibility:'unfolded',control:'human',profile_id:'test'};
@@ -290,3 +290,159 @@ for (const [op,params] of [
     f.intentReply(false);await assert.rejects(f.call('intent',json),/OUTCOME/);
   });
 }
+
+test('EVUI-03 regression: stateOnly destroyed/lost closes all matching surfaceId streams regardless of generation or absent binding and revokes port in finally', async () => {
+  const bytes = new Uint8Array([1, 2, 3]);
+  const sha = createHash('sha256').update(bytes).digest('hex');
+  const frameRef = {
+    schema: 'frame_ref/v0.2',
+    surface_id: 's1',
+    generation: 1,
+    tick: 1,
+    ts_ns: 1,
+    width: 1,
+    height: 1,
+    format: 'rgb24',
+    ramws_path: '/dev/shm/private.rgb',
+    sha256: sha,
+    capture_us: 1,
+  };
+  const makeEntry = (surfaceId, surfaceGen) => {
+    const binding = { principal: 'ui', epoch: 1, surfaceId, surfaceGeneration: surfaceGen };
+    const wirePort = new EventEmitter();
+    wirePort.postMessage = () => {};
+    wirePort.start = () => {};
+    wirePort.close = () => {};
+    const ref = { ...frameRef, surface_id: surfaceId };
+    const st = { ...surface, surface_id: surfaceId };
+    let revocations = 0;
+    return {
+      entry: {
+        frameRef: ref,
+        state: st,
+        readerOptions: {
+          binding,
+          limits: { maxFrameBytes: 4096, maxWidth: 64, maxHeight: 64, readTimeoutMs: 1000, maxConcurrentReads: 1 },
+          pixelEnvironment: { environmentId: 'test', zoom: 1, dpr: 1 },
+          onReleaseLease() {},
+          acquirePublishedLease: async () => ({
+            identity: { ...binding, frameGeneration: 1, leaseId: `lease-${surfaceId}-${surfaceGen}` },
+            published: true,
+            byteLength: 3,
+            readOwnedBytes: async () => bytes,
+            release: async () => {},
+          }),
+        },
+        portOptions: {
+          port: wirePort,
+          role: 'sender',
+          binding,
+          limits: { maxFrameBytes: 4096, ackTimeoutMs: 1000, maxSurfacesPerPort: 1 },
+          onReleaseLease() {},
+          onRevoke() { revocations += 1; },
+        },
+      },
+      getRevocations: () => revocations,
+    };
+  };
+
+  // 1. Stream opened at surfaceGeneration 1, destroyed stateOnly arrives at surfaceGeneration 2; negative control stream for s2 survives.
+  const streams = new Set();
+  const s1Gen1 = makeEntry('s1', 1);
+  const s2Gen1 = makeEntry('s2', 1);
+  try {
+    assert.equal(await deliverAuthorityFrame(s1Gen1.entry, { postMessage() {} }, streams), true);
+    assert.equal(await deliverAuthorityFrame(s2Gen1.entry, { postMessage() {} }, streams), true);
+    assert.equal(streams.size, 2);
+
+    await deliverAuthorityFrame(
+      {
+        stateOnly: true,
+        frameRef,
+        state: { ...surface, surface_id: 's1', state: 'destroyed' },
+        readerOptions: { binding: { principal: 'ui', epoch: 1, surfaceId: 's1', surfaceGeneration: 2 } },
+      },
+      { postMessage() {} },
+      streams,
+    );
+    assert.equal(streams.size, 1, 's1 stream must be removed even when surfaceGeneration advanced');
+    assert.equal(s1Gen1.getRevocations(), 1, 's1 port must be revoked on generation-advanced destroy');
+    assert.equal(s2Gen1.getRevocations(), 0, 'negative control: s2 stream must survive');
+
+    // 2. Stream opened for s1, lost stateOnly arrives without readerOptions/binding.
+    const s1NoBinding = makeEntry('s1', 1);
+    assert.equal(await deliverAuthorityFrame(s1NoBinding.entry, { postMessage() {} }, streams), true);
+    assert.equal(streams.size, 2);
+
+    await deliverAuthorityFrame(
+      {
+        stateOnly: true,
+        frameRef,
+        state: { ...surface, surface_id: 's1', state: 'lost' },
+      },
+      { postMessage() {} },
+      streams,
+    );
+    assert.equal(streams.size, 1, 's1 stream must be removed even when stateOnly has no readerOptions.binding');
+    assert.equal(s1NoBinding.getRevocations(), 1);
+    assert.equal(s2Gen1.getRevocations(), 0, 'negative control: s2 stream must still survive');
+
+    // 3. If reader.closeReader() throws during stateOnly cleanup, port.revokeFramePort('SHUTDOWN') still runs in finally.
+    const s1Throw = makeEntry('s1', 1);
+    assert.equal(await deliverAuthorityFrame(s1Throw.entry, { postMessage() {} }, streams), true);
+    const s1Stream = [...streams].find(item => JSON.parse(item.key)[2] === 's1');
+    assert.ok(s1Stream);
+    s1Stream.reader = { closeReader: async () => { throw new Error('CLOSE_READER_BOOM'); } };
+    await assert.rejects(
+      deliverAuthorityFrame(
+        {
+          stateOnly: true,
+          frameRef,
+          state: { ...surface, surface_id: 's1', state: 'destroyed' },
+        },
+        { postMessage() {} },
+        streams,
+      ),
+      /CLOSE_READER_BOOM/,
+    );
+    assert.equal(s1Throw.getRevocations(), 1, 'port must be revoked in finally even when closeReader throws');
+    assert.equal(streams.size, 1);
+  } finally {
+    for (const stream of [...streams]) {
+      await stream.reader.closeReader().catch(() => {});
+      stream.port.revokeFramePort('SHUTDOWN');
+    }
+  }
+});
+
+test('EVUI-04 regression: validateIntentBody rejects Symbol-keyed body or params with the caller error instead of TypeError', () => {
+  const customErr = () => new Error('CUSTOM_INTENT_ERR');
+  const sym = Symbol('s');
+
+  const bodyWithSymbol = {
+    [sym]: 1,
+    op: 'fold',
+    params: { slot_id: 's1' },
+    request_id: 'r1',
+    schema: 'ui_intent/v0.2',
+  };
+  assert.throws(() => validateIntentBody(bodyWithSymbol, customErr), /^Error: CUSTOM_INTENT_ERR$/);
+
+  const paramsWithSymbol = {
+    op: 'fold',
+    params: { [sym]: 1, slot_id: 's1' },
+    request_id: 'r1',
+    schema: 'ui_intent/v0.2',
+  };
+  assert.throws(() => validateIntentBody(paramsWithSymbol, customErr), /^Error: CUSTOM_INTENT_ERR$/);
+
+  // Negative control: valid body passes and returns the body.
+  const valid = {
+    op: 'fold',
+    params: { slot_id: 's1' },
+    request_id: 'r1',
+    schema: 'ui_intent/v0.2',
+  };
+  assert.equal(validateIntentBody(valid, customErr), valid);
+});
+

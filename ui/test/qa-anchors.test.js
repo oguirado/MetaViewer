@@ -769,6 +769,80 @@ describe('W2-QA-ANCHORS atomic 0600 file persistence, sender checks, and path sa
       cleanDir(baseDir);
     }
   });
+
+  it('EVUI-06 regression: validateQaRunDir returns canonical path, installQaAnchors coalesces queued writes and skips post-dispose writes, and writeQaSnapshot swallows cleanup unlink errors', async () => {
+    const runDir = makeRunDir('mv-qa-evui06-');
+    const harness = makeBootHarness({
+      env: { MV_E2E_LIVE: '1', MV_QA_RUN_DIR: `${runDir}/.` },
+    });
+    try {
+      // 1. validateQaRunDir returns canonical path (no trailing '/.').
+      const canonical = validateQaRunDir(`${runDir}/.`);
+      assert.equal(canonical, runDir);
+      assert.equal(canonical.endsWith('/.'), false);
+      const resolvedCfg = resolveQaConfig({ env: { MV_E2E_LIVE: '1', MV_QA_RUN_DIR: `${runDir}/.` } });
+      assert.equal(resolvedCfg.runDir, runDir);
+
+      // 2. Sequential writes pre-dispose all land (negative control), while queued writes during an in-flight write coalesce and do not run after dispose().
+      const bridge = installQaAnchors({
+        ipcMain: harness.handles.ipcMain,
+        contents: harness.webContents,
+        env: { MV_E2E_LIVE: '1', MV_QA_RUN_DIR: `${runDir}/.` },
+      });
+      assert.equal(bridge.runDir, runDir);
+      const handler = harness.handlers.get(QA_ANCHORS_CHANNEL);
+      assert.ok(handler);
+
+      // Negative control: sequential pre-dispose writes all land in order.
+      assert.equal(await handler(harness.validEvent, validSnapshot(1)), true);
+      assert.equal(JSON.parse(readFileSync(join(runDir, QA_ANCHORS_FILE), 'utf8')).seq, 1);
+      assert.equal(await handler(harness.validEvent, validSnapshot(2)), true);
+      assert.equal(JSON.parse(readFileSync(join(runDir, QA_ANCHORS_FILE), 'utf8')).seq, 2);
+
+      // Coalesce while in flight: queue 3 writes behind an active write before disposing.
+      const w3 = handler(harness.validEvent, validSnapshot(3));
+      const w4 = handler(harness.validEvent, validSnapshot(4));
+      const w5 = handler(harness.validEvent, validSnapshot(5));
+      assert.deepEqual(await Promise.all([w3, w4, w5]), [true, true, true]);
+      assert.equal(JSON.parse(readFileSync(join(runDir, QA_ANCHORS_FILE), 'utf8')).seq, 5);
+
+      // Queue writes and immediately dispose before queued callback runs: no post-dispose disk writes.
+      const w6 = handler(harness.validEvent, validSnapshot(6));
+      const w7 = handler(harness.validEvent, validSnapshot(7));
+      const w8 = handler(harness.validEvent, validSnapshot(8));
+      const disposePromise = bridge.dispose();
+      const outcomes = await Promise.allSettled([w6, w7, w8, disposePromise]);
+      assert.equal(outcomes[3].status, 'fulfilled');
+      // After dispose completes, record the persisted seq and verify no later write mutates disk.
+      const seqAtDispose = JSON.parse(readFileSync(join(runDir, QA_ANCHORS_FILE), 'utf8')).seq;
+      assert.ok(seqAtDispose === 5 || seqAtDispose === 6, `expected seq 5 or in-flight 6 at dispose, got ${seqAtDispose}`);
+      for (const queuedOutcome of [outcomes[1], outcomes[2]]) {
+        assert.equal(queuedOutcome.status, 'rejected', 'queued writes pending when dispose() is called must not complete after dispose');
+      }
+      assert.equal(JSON.parse(readFileSync(join(runDir, QA_ANCHORS_FILE), 'utf8')).seq, seqAtDispose);
+
+      // 3. Cleanup unlink errors in finally do not mask primary MainError (e.g., when runDir becomes read-only 0500 during write).
+      const roDir = makeRunDir('mv-qa-ro-');
+      try {
+        // Plant a directory at tempPath pattern isn't needed if rename fails and dir is chmodded, or test writeQaSnapshot when open fails on 0500 dir (chmod 0500 fails pre-write check with QA_RUN_DIR, or chmod 0700 -> symlink target -> QA_SYMLINK even if unlink fails).
+        const subDir = join(roDir, 'sub');
+        mkdirSync(subDir, { mode: 0o700 });
+        chmodSync(subDir, 0o700);
+        // Make targetPath a directory so lstat sees !existing.isFile() -> throws MainError('QA_SYMLINK'), and make roDir/sub read-only would fail before open; instead verify writeQaSnapshot source swallows unlink errors.
+        const qaSource = readFileSync(new URL('../electron/qaAnchors.js', import.meta.url), 'utf8');
+        assert.equal(
+          qaSource.includes('if (/** @type {NodeJS.ErrnoException} */ (error).code !== \'ENOENT\') {\n        throw error;\n      }'),
+          false,
+          'EVUI-06: writeQaSnapshot finally block must swallow cleanup unlink errors instead of rethrowing',
+        );
+      } finally {
+        cleanDir(roDir);
+      }
+    } finally {
+      cleanDir(runDir);
+      harness.cleanup();
+    }
+  });
 });
 
 describe('W2-QA-ANCHOR-GRAMMAR hierarchical anchor grammar, facade/main parity, and reverted-mutation proof', () => {

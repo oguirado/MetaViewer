@@ -835,6 +835,90 @@ test('R2-T4-023 regression: receive validates exact envelope keys and ts_ns boun
   assert.equal(bindings.core.getStatus().availability, 'unavailable');
 });
 
+test('EVUI-01 regression: peer auth masks 64-bit cino to 32 bits, requires integer cred.ino equality, and spawns /usr/bin/python3 with scrubbed PATH', async t => {
+  const hostBindingsSource = await readFile(new URL('../electron/hostBindings.js', import.meta.url), 'utf8');
+  assert.match(
+    hostBindingsSource,
+    /cino\s*=\s*os\.fstat\(3\)\.st_ino\s*&\s*0xffffffff/i,
+    'EVUI-01: PEERCRED_PY must mask cino to 32 bits (& 0xffffffff)',
+  );
+  assert.match(
+    hostBindingsSource,
+    /spawnSync\(['"]\/usr\/bin\/python3['"][\s\S]*?env:\s*\{\s*PATH:\s*['"]\/usr\/bin:\/bin['"]\s*\}/,
+    'EVUI-01: readPeerCredentials must spawn /usr/bin/python3 with scrubbed env {PATH: "/usr/bin:/bin"}',
+  );
+
+  // Undefined or non-integer cred.ino must fail closed (refuse before hello).
+  for (const badCred of [
+    { pid: process.pid, uid: process.getuid(), gid: process.getgid() },
+    { pid: process.pid, uid: process.getuid(), gid: process.getgid(), ino: undefined },
+    { pid: process.pid, uid: process.getuid(), gid: process.getgid(), ino: null },
+    { pid: process.pid, uid: process.getuid(), gid: process.getgid(), ino: '123' },
+    { pid: process.pid, uid: process.getuid(), gid: process.getgid(), ino: 1.5 },
+  ]) {
+    const fBad = await fixture(t);
+    await assert.rejects(
+      createMainBindings({
+        ...fBad,
+        getPeerCredentials: () => badCred,
+      }),
+      /CORE_SEAMS_ABSENT/,
+    );
+    assert.equal(fBad.requests.length, 0, 'undefined/non-integer cred.ino must be refused before hello');
+  }
+
+  // Unit-test 32-bit mask with high inode (2**32 + low32): matching low 32 bits admitted, mismatched low 32 bits refused.
+  const fMask = await fixture(t);
+  const sockStat = await lstat(join(fMask.root, 'metaviewer/core.sock'));
+  const highInoMatching = 2 ** 32 + (sockStat.ino >>> 0);
+  const bindingsHigh = await createMainBindings({
+    ...fMask,
+    getPeerCredentials: () => ({
+      pid: process.pid,
+      uid: process.getuid(),
+      gid: process.getgid(),
+      ino: highInoMatching,
+    }),
+  });
+  t.after(() => bindingsHigh.core.dispose());
+  assert.equal(bindingsHigh.core.getStatus().availability, 'live');
+
+  const fMismatch = await fixture(t);
+  const mismatchStat = await lstat(join(fMismatch.root, 'metaviewer/core.sock'));
+  await assert.rejects(
+    createMainBindings({
+      ...fMismatch,
+      getPeerCredentials: () => ({
+        pid: process.pid,
+        uid: process.getuid(),
+        gid: process.getgid(),
+        ino: 2 ** 32 + (((mismatchStat.ino >>> 0) + 1) >>> 0),
+      }),
+    }),
+    /CORE_SEAMS_ABSENT/,
+  );
+
+  // Poisoned ambient PATH must not hijack readPeerCredentials.
+  const fPath = await fixture(t);
+  const poisonedBin = await mkdtemp(join(tmpdir(), 'mv-poison-py-'));
+  t.after(() => rm(poisonedBin, { recursive: true, force: true }));
+  const fakePy = join(poisonedBin, 'python3');
+  await writeFile(fakePy, '#!/bin/sh\nexit 1\n', { mode: 0o700 });
+  const prevPath = process.env.PATH;
+  process.env.PATH = `${poisonedBin}:${prevPath ?? ''}`;
+  try {
+    const liveWithPoisonedPath = await createMainBindings({
+      ...fPath,
+      env: { ...fPath.env, PATH: `${poisonedBin}:${prevPath ?? ''}` },
+    });
+    t.after(() => liveWithPoisonedPath.core.dispose());
+    assert.equal(liveWithPoisonedPath.core.getStatus().availability, 'live');
+  } finally {
+    process.env.PATH = prevPath;
+  }
+});
+
+
 test('W2-HOST-L2 L2-1 and L2-8 regression: valid hide/show/control/fold intents resolve literal true while local multislot view/mode toggles are refused; frame_ref dimensions remain constant across deliveries', async t => {
   const f = await fixture(t);
   const handlers = new Map();

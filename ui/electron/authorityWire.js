@@ -39,9 +39,11 @@ export function validateIntentBody(body, error = () => new Error('INTENT')) {
   const keys = body && typeof body.op === 'string' && Object.hasOwn(INTENT_OPS, body.op)
     ? INTENT_OPS[/** @type {keyof typeof INTENT_OPS} */ (body.op)] : null;
   const idKey = keys === 'surface_id' ? 'surface_id' : 'slot_id';
-  if (!keys || Reflect.ownKeys(body).sort().join(',') !== 'op,params,request_id,schema'
+  if (!keys || Reflect.ownKeys(body).length !== Object.keys(body).length
+      || Reflect.ownKeys(body).sort().join(',') !== 'op,params,request_id,schema'
       || body.schema !== 'ui_intent/v0.2' || !validId(body.request_id)
       || !body.params || Array.isArray(body.params) || typeof body.params !== 'object'
+      || Reflect.ownKeys(body.params).length !== Object.keys(body.params).length
       || Reflect.ownKeys(body.params).sort().join(',') !== keys || !validId(body.params[idKey])) throw error();
   const p = body.params;
   if (keys === 'group_id,index,slot_id' && (!validId(p.group_id)
@@ -298,10 +300,13 @@ export async function deliverAuthorityFrame(entry,contents,streams,frameDiag=nul
       || !['agent','human','shared'].includes(state.control)
       || typeof state.profile_id!=='string' || !state.profile_id.length || state.profile_id.length>128) throw new Error('SURFACE_STATE');
   if (entry.stateOnly) {
-    if (['destroyed','lost'].includes(state.state) && entry.readerOptions?.binding) {
-      const key=JSON.stringify(['principal','epoch','surfaceId','surfaceGeneration'].map(name=>entry.readerOptions.binding[name]));
-      const dead=[...streams].find(item=>item.key===key);
-      if (dead) {streams.delete(dead);await dead.reader.closeReader();dead.port.revokeFramePort('SHUTDOWN');}
+    if (['destroyed','lost'].includes(state.state)) {
+      const deadList=[...streams].filter(item=>item.surfaceId===state.surface_id || (typeof item.key==='string' && JSON.parse(item.key)[2]===state.surface_id));
+      for (const dead of deadList) {
+        streams.delete(dead);
+        try { await dead.reader.closeReader(); }
+        finally { dead.port.revokeFramePort('SHUTDOWN'); }
+      }
     }
     contents.postMessage('metaviewer:authority.frames',{frame_ref:ref,surface:state},[]);
     frameDiag?.recordStateOnly?.({surfaceId:ref.surface_id});
@@ -324,7 +329,7 @@ export async function deliverAuthorityFrame(entry,contents,streams,frameDiag=nul
       onRevoke:(/** @type {any} */notice)=>{
         streams.delete(stream);void reader.closeReader();frameDiag?.recordRevocation?.(notice);revoke(notice);
       }}); } catch(e) {await reader.closeReader();throw e;}
-    stream={key,reader,port,announced:false,setAcquire:(/** @type {any} */fn)=>{currentAcquire=fn;}};streams.add(stream);
+    stream={key,surfaceId:binding.surfaceId,reader,port,announced:false,setAcquire:(/** @type {any} */fn)=>{currentAcquire=fn;}};streams.add(stream);
   } else {
     stream.setAcquire?.(entry.readerOptions.acquirePublishedLease);
   }

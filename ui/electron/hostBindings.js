@@ -26,7 +26,7 @@ const PEERCRED_PY = [
   'import os, socket, struct, sys',
   's = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM, 0, 3)',
   'pid, uid, gid = struct.unpack("3i", s.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")))',
-  'cino = os.fstat(3).st_ino',
+  'cino = os.fstat(3).st_ino & 0xffffffff',
   's.detach()',
   'nl = socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, 4)',
   'nl.bind((0, 0))',
@@ -63,8 +63,9 @@ const PEERCRED_PY = [
 export function readPeerCredentials(socket) {
   const fd = /** @type {any} */ (socket)?._handle?.fd;
   if (!Number.isInteger(fd) || fd < 0) throw fail();
-  const res = spawnSync('python3', ['-S', '-c', PEERCRED_PY], {
+  const res = spawnSync('/usr/bin/python3', ['-S', '-c', PEERCRED_PY], {
     stdio: ['ignore', 'pipe', 'pipe', fd], encoding: 'utf8', timeout: DEADLINE,
+    env: {PATH: '/usr/bin:/bin'},
   });
   if (res.status !== 0 || typeof res.stdout !== 'string') throw fail();
   const parts = res.stdout.trim().split(':').map(Number);
@@ -93,7 +94,7 @@ async function openPinned(path) {
 }
 
 /** Trusted options are host-only; no renderer pathname or capability is accepted.
- * @param {{env?:NodeJS.ProcessEnv,createMessageChannel?:()=>any,getPeerCredentials?:(socket:import('node:net').Socket)=>{pid:number,uid:number,gid:number,ino?:number}}} [options]
+ * @param {{env?:NodeJS.ProcessEnv,createMessageChannel?:()=>any,getPeerCredentials?:(socket:import('node:net').Socket)=>{pid:number,uid:number,gid:number,ino:number}}} [options]
  * @returns {Promise<{core: any, wire: any}>} */
 export async function createMainBindings({env = process.env, createMessageChannel, getPeerCredentials = readPeerCredentials} = {}) {
   /** @type {import('node:net').Socket | undefined} */ let socket;
@@ -331,7 +332,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
         const cred = getPeerCredentials(clientSocket);
         if (!cred || typeof process.getuid !== 'function' || cred.uid !== process.getuid()
             || !Number.isInteger(cred.pid) || cred.pid < 1 || !Number.isInteger(cred.gid) || cred.gid < 0
-            || (cred.ino !== undefined && cred.ino !== (socketInfo.ino >>> 0))) throw fail();
+            || typeof cred.ino !== 'number' || !Number.isInteger(cred.ino) || (cred.ino >>> 0) !== (socketInfo.ino >>> 0)) throw fail();
         send(ui.hello);
       } catch {shutdown();}
     });

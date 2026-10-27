@@ -262,7 +262,7 @@ export function validateQaRunDir(rawDir) {
   ) {
     throw new MainError('QA_RUN_DIR', 'canonical qa run dir must be an owner-only 0700 directory');
   }
-  return rawDir;
+  return canonical;
 }
 
 /**
@@ -376,11 +376,7 @@ export async function writeQaSnapshot(runDir, snapshot) {
     }
     return true;
   } finally {
-    await unlink(tempPath).catch((error) => {
-      if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'ENOENT') {
-        throw error;
-      }
-    });
+    await unlink(tempPath).catch(() => {});
   }
 }
 
@@ -410,6 +406,8 @@ export function installQaAnchors(options) {
   let disposed = false;
   /** @type {Promise<unknown>} */
   let writeChain = Promise.resolve();
+  /** @type {{ snapshot: unknown, batch: Promise<true> } | null} */
+  let pendingBatch = null;
 
   ipcMain.handle(
     QA_ANCHORS_CHANNEL,
@@ -430,10 +428,27 @@ export function installQaAnchors(options) {
         throw new MainError('QA_ARGS', 'qa.anchors requires exactly one snapshot argument');
       }
       const validated = validateQaSnapshot(args[0]);
-      const next = writeChain.then(
-        () => writeQaSnapshot(targetDir, validated),
-        () => writeQaSnapshot(targetDir, validated),
-      );
+      if (pendingBatch !== null) {
+        pendingBatch.snapshot = validated;
+        return pendingBatch.batch;
+      }
+      /** @type {{ snapshot: unknown, batch: Promise<true> }} */
+      const entry = {
+        snapshot: validated,
+        batch: /** @type {any} */ (null),
+      };
+      pendingBatch = entry;
+      const runQueued = async () => {
+        if (pendingBatch === entry) {
+          pendingBatch = null;
+        }
+        if (disposed) {
+          throw new MainError('QA_DISPOSED', 'qa anchors bridge is disposed');
+        }
+        return writeQaSnapshot(targetDir, entry.snapshot);
+      };
+      const next = writeChain.then(runQueued, runQueued);
+      entry.batch = next;
       writeChain = next.catch(() => {});
       return next;
     },

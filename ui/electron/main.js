@@ -351,9 +351,10 @@ export function isPrivilegedAppUrl(value) {
 }
 
 /**
- * Decode and validate one raw URL path segment, including a second
- * decode-then-validate pass so `%25`-encoded traversal spellings are
- * refused identically by navigation and protocol gates.
+ * Decode and validate one raw URL path segment, rejecting any residual
+ * `%` after the single decode so multi-encoded traversal spellings are
+ * refused identically by navigation and protocol gates while literal
+ * single-encoded `%` filenames (`%25`) remain valid.
  * @param {string} part Raw non-empty path segment between '/' delimiters.
  * @returns {string | null} Single-decoded segment when safe, or null on escape.
  */
@@ -371,24 +372,8 @@ function decodeSafeSegment(part) {
     decoded === '..' ||
     decoded.includes('/') ||
     decoded.includes('\\') ||
-    decoded.includes(String.fromCharCode(0))
-  ) {
-    return null;
-  }
-  /** @type {string | null} */
-  let second = null;
-  try {
-    second = decodeURIComponent(decoded);
-  } catch {
-    return null;
-  }
-  if (
-    second === '' ||
-    second === '.' ||
-    second === '..' ||
-    second.includes('/') ||
-    second.includes('\\') ||
-    second.includes(String.fromCharCode(0))
+    decoded.includes(String.fromCharCode(0)) ||
+    /%(?=[0-9a-z%])/i.test(decoded)
   ) {
     return null;
   }

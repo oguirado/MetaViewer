@@ -673,6 +673,26 @@ describe('Electron security regressions and contract locks', () => {
       const present = await handleAppRequest(rendererRoot, { url: `${PRIVILEGED_ORIGIN}/app.js` });
       assert.equal(present.status, 200);
       assert.equal(present.headers.get('content-security-policy'), CONTENT_SECURITY_POLICY);
+
+      // EVUI-05: single-encoded literal '%' in a valid filename (100%25.svg -> 100%.svg) is allowed and served,
+      // while residual '%'-encoded sequences (%252e%252e, %25252e%25252e, %2e%2e) and '../secret' are denied.
+      writeFileSync(join(rendererRoot, '100%.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>\n');
+      const percentAssetUrl = `${PRIVILEGED_ORIGIN}/100%25.svg`;
+      assert.equal(decideNavigation(percentAssetUrl), 'allow', 'EVUI-05: 100%25.svg must be allowed by decideNavigation');
+      const percentRes = await handleAppRequest(rendererRoot, { url: percentAssetUrl });
+      assert.equal(percentRes.status, 200, 'EVUI-05: 100%25.svg must resolve to 100%.svg');
+      assert.equal(percentRes.headers.get('content-type'), 'image/svg+xml');
+
+      for (const badUrl of [
+        `${PRIVILEGED_ORIGIN}/%252e%252e/secret`,
+        `${PRIVILEGED_ORIGIN}/%25252e%25252e/secret`,
+        `${PRIVILEGED_ORIGIN}/%2e%2e/secret`,
+        `${PRIVILEGED_ORIGIN}/../secret`,
+      ]) {
+        assert.equal(decideNavigation(badUrl), 'deny', `EVUI-05: must deny ${badUrl}`);
+        const badRes = await handleAppRequest(rendererRoot, { url: badUrl });
+        assert.equal(badRes.status, 403, `EVUI-05: must return 403 for ${badUrl}`);
+      }
     } finally {
       rmRoot(root);
     }
