@@ -1340,6 +1340,7 @@ ptyInte-075619416ca8	ui/test/ptyIntegration.test.js
 qa-anchors.test.js	ui/test/qa-anchors.test.js
 r2t4new-a5225175abe1	ui/test/r2t4-new-surface.test.js
 r2t4reg-c43c6f37375b	ui/test/r2t4-regressions.test.js
+rv9elec-3b07d2eb24f6	ui/test/rv9-elec-regressions.test.js
 security.test.js	ui/test/security.test.js
 shellFixture.html	ui/test/shellFixture.html
 shellFixture.js	ui/test/shellFixture.js
