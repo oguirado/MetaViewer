@@ -150,7 +150,7 @@ function assertKitIcon(button, label) {
 
 test('capsule action icons use the kit wrapper and reject every removed icon', () => {
   for (const [rel, count] of [
-    ['src/recording/MvRecordingPanel.vue', 4],
+    ['src/recording/MvRecordingPanel.vue', 5],
     ['src/multislot/MultislotHost.vue', 2],
     ['src/terminal/BrokerLaunchControls.vue', 1],
   ]) {
@@ -168,11 +168,33 @@ test('capsule action icons use the kit wrapper and reject every removed icon', (
   }
 });
 
-test('recording panel controls are contracted: toggle, screenshot, select, export', () => {
+test('recording panel controls are contracted: toggle, screenshot, select, export, shots export', () => {
   const sfc = readScope('src/recording/MvRecordingPanel.vue');
-  const { buttons } = splitControls(templateOf(sfc));
-  assert.equal(buttons.length, 4, `toggle, screenshot, select and export buttons, saw ${buttons.length}`);
+  const template = templateOf(sfc);
+  const { buttons } = splitControls(template);
+  assert.equal(buttons.length, 5, `toggle, screenshot, select, export and shots-export buttons, saw ${buttons.length}`);
   for (const button of buttons) assertNativeContract(button, 'MvRecordingPanel.vue');
+  // MVUI19B lane I: the five-control inventory pins each family, so a
+  // swapped-in foreign button cannot hold the count at 5.
+  for (const [token, family] of [
+    ['mvRecordToggleAnchor', 'toggle'],
+    ['mvScreenshotAnchor', 'screenshot'],
+    ['entry.selectAnchor', 'select'],
+  ]) {
+    assert.ok(buttons.some((button) => button.includes(token)), `${family} present`);
+  }
+  assert.equal(
+    buttons.filter((button) => button.includes('entry.exportAnchor')).length,
+    2,
+    'recordings export plus screenshots-section export present',
+  );
+  // The fifth control lives in the screenshots section and is its only action.
+  const shotsSection = template.indexOf('mv4-shots-title');
+  assert.ok(shotsSection >= 0, 'screenshots section present');
+  const shotsButtons = template.slice(shotsSection).match(/<button\b[\s\S]*?<\/button>/g) ?? [];
+  assert.equal(shotsButtons.length, 1, `screenshots section owns one action, saw ${shotsButtons.length}`);
+  assert.ok(shotsButtons[0].includes('entry.exportDomId'), 'shots export keeps a stable id binding');
+  assert.ok(shotsButtons[0].includes('entry.exportAnchor'), 'shots export keeps an anchor binding');
   for (const helper of [
     'mvRecordToggleAnchor',
     'mvScreenshotAnchor',

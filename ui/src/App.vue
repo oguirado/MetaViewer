@@ -213,10 +213,10 @@ async function dispatchMultislot(intent, capsuleId) {
       : surface.control === 'agent' ? 'LAYOUT_INPUT_MODE_READ'
       : inputMode.value !== 'write' ? 'ERR_INPUT_MODE_READ'
       : previous.hidden !== (body.op === 'show') ? 'LAYOUT_ILLEGAL_TRANSITION' : null;
-    if (code) { hostOutcome.value = { code, message:'', tone:'refusal' }; return; }
+    if (code) { hostOutcome.value = { code, message:'', tone:'refusal' }; recordActivity({ code }); return; }
     const submitIntent = props.authorityHost?.intent;
     if (!submitIntent) {
-      hostOutcome.value = { code:'HOST_REQUEST_REFUSED', message:'', tone:'refusal' }; return;
+      hostOutcome.value = { code:'HOST_REQUEST_REFUSED', message:'', tone:'refusal' }; recordActivity({ code: 'HOST_REQUEST_REFUSED' }); return;
     }
     placementPending.value = { ...placementPending.value, [capsuleId]:true };
     try {
@@ -261,6 +261,7 @@ async function dispatchMultislot(intent, capsuleId) {
         if (hostActive) {
           const code = typeof echo.error?.code === 'string' && echo.error.code ? echo.error.code : 'HOST_REQUEST_REFUSED';
           hostOutcome.value = { code, message: '', tone: 'refusal' };
+          recordActivity({ code });
         }
       }
     } finally {
@@ -276,6 +277,10 @@ async function dispatchMultislot(intent, capsuleId) {
       hostOutcome.value = { code: 'LAYOUT_ILLEGAL_TRANSITION', message: '', tone: 'refusal' }; return;
     }
     // MVUI16 lane P (ARG-pmui-5): hidden fold/unfold is a typed refusal, never silent.
+    // MVUI19 lane A (L3-2): the operator's own refused request reaches the feed.
+    // This mirror keeps the pinned guard line below byte-identical; foreign
+    // slot/capsule confusion above stays unrecorded (it must not invent rows).
+    if (placements.value[capsuleId]?.hidden) recordActivity({ code: 'LAYOUT_ILLEGAL_TRANSITION' });
     if (placements.value[capsuleId]?.hidden) { hostOutcome.value = { code:'LAYOUT_ILLEGAL_TRANSITION', message:'', tone:'refusal' }; return; }
     // MVUI16D lane P (L2-1): fold/unfold forward unchanged. The kit slot id
     // is the pinned wire contract (mvui3/mvui6/mvui12) and the host resolves
@@ -352,6 +357,26 @@ async function submitHost(action) {
     }
   }
 }
+/** Settled-outcome toast lifetime (MVUI19 lane A, L3-3): every ack/refusal
+ * toast auto-dismisses after this delay, so a stale toast can never sit over
+ * interactive rows. One bounded timer, re-armed per outcome and cleared on
+ * unmount. The watcher only arms the timer (it writes no reactive state);
+ * the timer callback clears a stale outcome without recording, so dismissal
+ * never moves the activity count. */
+const OUTCOME_DISMISS_MS = 4000;
+/** Pending dismissal handle; undefined when none is armed. @type {any} */
+let outcomeTimer;
+function armOutcomeDismiss() {
+  if (outcomeTimer !== undefined) clearTimeout(outcomeTimer);
+  outcomeTimer = setTimeout(() => {
+    outcomeTimer = undefined;
+    if (hostActive) hostOutcome.value = null;
+  }, OUTCOME_DISMISS_MS);
+}
+watch(hostOutcome, (row) => { if (row) armOutcomeDismiss(); });
+onBeforeUnmount(() => {
+  if (outcomeTimer !== undefined) { clearTimeout(outcomeTimer); outcomeTimer = undefined; }
+});
 /** Fixture-only bench hook (MVUI4L lane V): replay steps drive the real
  * dispatch paths (propose/intent/multislot) through this handle, so every
  * row appears through production code, plus the real openers for the
@@ -623,6 +648,9 @@ body { font-family:var(--cuk-semantic-typography-font-family-sans, system-ui, sa
 .mv-shell-body { grid-row:3; display:flex; min-width:0; min-height:0; position:relative; }
 .mv-shell-rail { width:var(--cuk-semantic-size-rail-collapsed-width); flex:none; position:relative; }
 .mv-shell main { position:relative; flex:1; min-height:0; min-width:0; }
+/* MVUI19 lane A (L3-3): the settled outcome toast is transient and never
+   intercepts pointer events on interactive rows beneath it. */
+#shell-wall #mv-host-outcome { pointer-events:none; }
 /* Both paragraphs share one flow-sized cell; the reserve never enters the accessibility tree. */
 .mv-layout-notice { grid-row:2; display:grid; min-width:0; }
 .mv-layout-notice-reserve, .mv-layout-unavailable { grid-area:1 / 1; margin:0; padding:var(--cuk-semantic-spacing-sm); color:var(--cuk-semantic-text-primary); background:var(--cuk-semantic-surface-canvas); border:var(--cuk-semantic-border-width) solid var(--cuk-semantic-border-default); font-size:var(--cuk-semantic-typography-font-size-sm); }

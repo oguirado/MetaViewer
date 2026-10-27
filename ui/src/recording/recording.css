@@ -168,3 +168,9 @@
   color: var(--cuk-semantic-status-warning-text);
   font-weight: var(--cuk-semantic-typography-font-weight-medium);
 }
+.mv4-shots-title {
+  margin: 0;
+  font-size: var(--cuk-semantic-typography-font-size-sm);
+  font-weight: var(--cuk-semantic-typography-font-weight-semibold);
+  color: var(--cuk-semantic-text-primary);
+}

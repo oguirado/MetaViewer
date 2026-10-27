@@ -19,6 +19,29 @@ const launching = ref(false);
 const outcome = ref(/** @type {{code:string,message:string}|null} */ (null));
 let active = true;
 onBeforeUnmount(() => { active = false; });
+const ANCHOR_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
+/** Derive the QA-anchor segment for a host provider id (MVUI19B lane U).
+ * Ids that already fit the anchor segment grammar pass through byte-identical,
+ * so every existing valid anchor is unchanged; longer ids or non-alnum
+ * leaders (both legal provider ids) map to a deterministic
+ * lead-plus-rest-plus-fnv1a32 segment that always validates. Launch keeps the
+ * raw id for host resolution; only the anchor segment is derived.
+ * @param {unknown} id Host provider id.
+ * @returns {string} Grammar-valid anchor segment, at most 61 chars.
+ */
+function providerAnchorSegment(id) {
+  if (typeof id === 'string' && ANCHOR_SEGMENT_RE.test(id)) return id;
+  const text = typeof id === 'string' ? id : '';
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  const suffix = (hash >>> 0).toString(16).padStart(8, '0');
+  const lead = /^[A-Za-z0-9]/.test(text) ? text[0] : 'p';
+  const rest = text.slice(1, 52).replace(/[^A-Za-z0-9._:-]/g, '-');
+  return `${lead}${rest}-${suffix}`;
+}
 const entries = computed(() => {
   try { return toKitMenuProviders(props.providers); }
   catch { return toKitMenuProviders([]); }
@@ -64,7 +87,7 @@ async function launch(entry) {
     </label>
     <div v-if="showMenu && facade?.canOpen" role="group" aria-label="Terminal providers">
       <button v-for="entry in entries" :key="entry.id" type="button" :id="`${idPrefix}-launch-${entry.id}`"
-        :data-semantic-anchor="`${anchorPrefix}/provider/${entry.id}`" :disabled="busy || (facade?.canEnable && !enabled)" @click="launch(entry)"><SidebarIcon name="console" aria-hidden="true" />{{ entry.label }}</button>
+        :data-semantic-anchor="`${anchorPrefix}/provider/${providerAnchorSegment(entry.id)}`" :disabled="busy || (facade?.canEnable && !enabled)" @click="launch(entry)"><SidebarIcon name="console" aria-hidden="true" />{{ entry.label }}</button>
     </div>
     <p v-if="launching" :id="`${idPrefix}-pending`" :data-semantic-anchor="`${anchorPrefix}/pending`"
       class="mv-broker-launch__pending" role="status">Starting session…</p>

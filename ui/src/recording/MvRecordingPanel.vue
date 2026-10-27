@@ -12,6 +12,8 @@ import {
   MV_RECORD_EMPTY_TEXT,
   captureEntryFor,
   captureRowsFor,
+  captureShotsFor,
+  mvCaptureKindLabel,
   formatMvCount,
   formatMvElapsed,
   formatMvTtl,
@@ -125,6 +127,11 @@ const elapsedEff = computed(() => {
 const recordingsEff = computed(() => (captureBound.value
   ? captureRowsFor(props.captureState, props.capsuleId)
   : props.recordings));
+// MVUI19 lane C (L3-5): sealed screenshots list alongside recordings in
+// their own section; legacy unbound mounts keep no shots list.
+const shotsEff = computed(() => (captureBound.value
+  ? captureShotsFor(props.captureState, props.capsuleId)
+  : []));
 const captureHeld = computed(() => captureBound.value && !props.captureAvailable);
 
 // MVUI11 lane E: per-row export outcome keyed by display row id. The store
@@ -232,6 +239,7 @@ const storeText = computed(() => mvStoreLabel(props.store));
 
 const hasRows = computed(() => Array.isArray(recordingsEff.value) && recordingsEff.value.length > 0);
 const rowCount = computed(() => (Array.isArray(recordingsEff.value) ? recordingsEff.value.length : 0));
+const hasShots = computed(() => Array.isArray(shotsEff.value) && shotsEff.value.length > 0);
 
 const displayRows = computed(() => {
   if (!Array.isArray(recordingsEff.value)) return [];
@@ -311,6 +319,104 @@ const displayRows = computed(() => {
       ttlText: formatMvTtl(source.ttlSeconds),
       errorText: mvRowErrorText(source),
       errorCode: normalizeMvRecordPhase(source.phase) === 'error' ? 'ERR_RECORDING_FAILED' : undefined,
+    };
+  });
+});
+
+// MVUI19 lane C (L3-5): sealed screenshot rows. No select control:
+// screenshots list for visibility and export only, so the recordings
+// manifest select count stays recordings-only. Typed label, no path,
+// bounded by the store cap.
+const displayShots = computed(() => {
+  if (!Array.isArray(shotsEff.value)) return [];
+  // MVUI19C lane R: recording rows claim their display ids first; shots
+  // resolve against every claimed id so DOM ids, anchors and export keys
+  // stay unique across both sections. Recording-row ids/anchors above
+  // are untouched, so existing rows render byte-identical.
+  const claimed = new Set();
+  for (const claimedRow of displayRows.value) {
+    if (claimedRow && typeof claimedRow.id === 'string') claimed.add(claimedRow.id);
+  }
+  const counts = new Map();
+  for (const row of shotsEff.value) {
+    const id = row && typeof row === 'object' && 'id' in row && typeof row.id === 'string' ? row.id.trim() : '';
+    if (id) counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+  const used = new Set([...claimed, ...counts.keys()]);
+  const rowLen = Array.isArray(recordingsEff.value) ? recordingsEff.value.length : 0;
+  const fallbackCap = (rowLen + shotsEff.value.length) * 2 + 2;
+  return shotsEff.value.map((row, index) => {
+    const source = /** @type {Record<string, any>} */ (row !== null && typeof row === 'object' ? row : {});
+    const sourceId = typeof source.id === 'string' ? source.id.trim() : '';
+    const validId = /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(sourceId) && counts.get(sourceId) === 1 && sourceId === source.id;
+    // validId stays section-local so a well-formed shot id keeps its
+    // export even when a recording claims the same text; only the
+    // display id below is disambiguated for document uniqueness.
+    let id = sourceId;
+    if (!validId) {
+      id = `unknown-${index}`;
+      for (let suffix = 0; used.has(id) && suffix <= fallbackCap; suffix++) {
+        id = `unknown-${index}-${suffix}`;
+      }
+      used.add(id);
+    } else if (claimed.has(sourceId)) {
+      id = `${sourceId}-shot`;
+      for (let suffix = 0; used.has(id) && suffix <= fallbackCap; suffix++) {
+        id = `${sourceId}-shot-${suffix}`;
+      }
+      used.add(id);
+    }
+    const gate = rowExportGateFor({
+      phase: source.phase,
+      destination: props.exportDestination,
+      unavailableReason: props.unavailableReason,
+    });
+    const held = props.disabled && !gate.disabled;
+    // The display id above is unique across both sections, so the bare
+    // id keys this section's export status without sharing (MVUI19C R).
+    const exportEntry = exportStatus.get(id);
+    const rowExportState = normalizeMvExportState(exportEntry?.state);
+    const rowExportBusy = mvRowExportBusy(rowExportState);
+    return {
+      source,
+      validId,
+      key: id,
+      id,
+      rowDomId: mvManifestRowDomId(id),
+      rowAnchor: mvManifestRowAnchor(id),
+      exportDomId: mvExportDomId(id),
+      exportAnchor: mvExportAnchor(id),
+      exportName: mvExportAccessibleName({ id }),
+      gateDomId: mvExportGateDomId(id),
+      gateAnchor: mvExportGateAnchor(id),
+      gate: held ? 'unavailable' : gate.gate,
+      gateLabel: held ? 'Unavailable' : gate.gateLabel,
+      exportDisabled: !validId || gate.disabled || props.disabled
+        || captureHeld.value || rowExportBusy || rowExportState === 'exported',
+      exportReason: gate.reason
+        || (props.unavailableReason ? 'Recording is unavailable' : '')
+        || (captureHeld.value ? 'Recording is unavailable' : '')
+        || (rowExportState === 'exported' ? MV_EXPORT_ALREADY_EXPORTED_REASON : ''),
+      exportState: rowExportState,
+      exportBusy: rowExportBusy,
+      exportLabel: mvRowExportLabel(rowExportState),
+      exportText: rowExportState === 'exported'
+        ? mvExportedText(exportEntry?.sha256)
+        : rowExportState === 'refused'
+          ? mvExportRefusalText(exportEntry?.code)
+          : '',
+      exportCode: rowExportState === 'refused'
+        ? normalizeMvExportCode(exportEntry?.code)
+        : undefined,
+      exportStatusDomId: mvExportStatusDomId(id),
+      exportStatusAnchor: mvExportStatusAnchor(id),
+      exportStatusTone: rowExportState === 'exported' ? 'success' : 'error',
+      kindText: mvCaptureKindLabel('shot'),
+      phaseText: mvPhaseLabel(source.phase),
+      phaseTone: mvPhaseTone(source.phase),
+      storeText: mvStoreLabel(source.store),
+      elapsedText: formatMvElapsed(source.elapsedSeconds),
+      framesText: formatMvCount(source.frames),
     };
   });
 });
@@ -543,6 +649,87 @@ function onExport(entry) {
           </td>
           <td class="mv4-mono">
             {{ entry.ttlText }}
+          </td>
+          <td>
+            <span
+              :id="entry.gateDomId"
+              :class="'mv4-chip mv4-gate mv4-gate-' + entry.gate"
+              role="status"
+              :data-semantic-anchor="entry.gateAnchor"
+              :title="entry.exportReason || entry.gateLabel"
+            >{{ entry.gateLabel }}</span>
+          </td>
+          <td>
+            <button
+              :id="entry.exportDomId"
+              type="button"
+              class="mv4-btn mv4-export"
+              :data-semantic-anchor="entry.exportAnchor"
+              :aria-label="entry.exportName"
+              :title="entry.exportReason || entry.exportName"
+              :disabled="entry.exportDisabled"
+              :aria-busy="entry.exportBusy ? 'true' : undefined"
+              :data-unavailable-reason="entry.exportReason || undefined"
+              @click="onExport(entry)"
+            >
+              <SidebarIcon name="save" aria-hidden="true" />
+              {{ entry.exportLabel }}
+            </button>
+            <span
+              v-if="entry.exportText"
+              :id="entry.exportStatusDomId"
+              :class="'mv4-chip mv4-export-status mv4-tone-' + entry.exportStatusTone"
+              role="status"
+              :data-semantic-anchor="entry.exportStatusAnchor"
+              :data-export-state="entry.exportState"
+              :data-export-code="entry.exportCode"
+              :title="entry.exportText"
+            >{{ entry.exportText }}</span>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    <h3 v-if="hasShots" class="mv4-shots-title">Screenshots</h3>
+    <table v-if="hasShots" class="mv4-table" aria-label="RAM screenshots list">
+      <thead>
+        <tr>
+          <th scope="col">Screenshot</th>
+          <th scope="col">Type</th>
+          <th scope="col">Phase</th>
+          <th scope="col">Store</th>
+          <th scope="col">Elapsed</th>
+          <th scope="col">Frames</th>
+          <th scope="col">Export gate</th>
+          <th scope="col"><span class="mv4-visually-hidden">Actions</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr
+          v-for="entry in displayShots"
+          :key="entry.key"
+          :id="entry.rowDomId"
+          class="mv4-row"
+          :data-semantic-anchor="entry.rowAnchor"
+        >
+          <td class="mv4-mono" :title="entry.id">
+            {{ entry.id }}
+          </td>
+          <td>
+            <span class="mv4-chip" :title="'Type ' + entry.kindText">{{ entry.kindText }}</span>
+          </td>
+          <td>
+            <span :class="'mv4-chip mv4-tone-' + entry.phaseTone" :title="'Phase ' + entry.phaseText">{{
+              entry.phaseText
+            }}</span>
+          </td>
+          <td>
+            <span class="mv4-chip" :title="'Store ' + entry.storeText">{{ entry.storeText }}</span>
+          </td>
+          <td class="mv4-mono">
+            {{ entry.elapsedText }}
+          </td>
+          <td class="mv4-mono">
+            {{ entry.framesText }}
           </td>
           <td>
             <span

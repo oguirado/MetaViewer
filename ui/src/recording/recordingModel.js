@@ -731,10 +731,22 @@ export function captureEntryFor(captureState, surfaceId) {
 }
 
 /**
+ * Typed capture-kind label for manifest rows (MVUI19 lane C, L3-5).
+ * Fixed strings only; host data never reaches the label, and no path
+ * is ever rendered.
+ * @param {unknown} kind Host-projected capture kind.
+ * @returns {string} `Screenshot` for sealed shots, else `Recording`.
+ */
+export function mvCaptureKindLabel(kind) {
+  return kind === 'shot' ? 'Screenshot' : 'Recording';
+}
+
+/**
  * Panel-shaped manifest rows for a surface from the capture store list
  * (MVUI9 lane A). Keeps `kind: 'recording'` rows for this surface only;
- * screenshots surface through the screenshot control state, never the
- * recordings manifest. Unknown shapes yield an empty frozen list.
+ * sealed screenshots list separately via `captureShotsFor` (MVUI19 lane
+ * C, L3-5). Unsealed shots stay on the screenshot control state.
+ * Unknown shapes yield an empty frozen list.
  * @param {unknown} captureState
  * @param {unknown} surfaceId
  * @returns {ReadonlyArray<Readonly<Record<string, unknown>>>}
@@ -754,6 +766,45 @@ export function captureRowsFor(captureState, surfaceId) {
     mapped.push(Object.freeze({
       id: source.id,
       capsuleId: surfaceId,
+      phase: normalizeMvRecordPhase(source.phase),
+      store: MV_RECORDING_STORE,
+      elapsedSeconds: typeof source.duration_ms === 'number' && Number.isFinite(source.duration_ms) && source.duration_ms >= 0
+        ? Math.floor(source.duration_ms / 1000)
+        : null,
+      frames: source.frames,
+    }));
+  }
+  return Object.freeze(mapped);
+}
+
+/**
+ * Panel-shaped sealed screenshot rows for a surface (MVUI19 lane C,
+ * L3-5). Keeps `kind: 'shot'` rows with a sealed receipt for this
+ * surface only; unsealed shots and shots without `sealed: true` stay
+ * on the screenshot control state. Shot rows carry `kind: 'shot'` for
+ * the typed label. Unknown shapes yield an empty frozen list. Bounded
+ * by the store cap (subset per surface).
+ * @param {unknown} captureState
+ * @param {unknown} surfaceId
+ * @returns {ReadonlyArray<Readonly<Record<string, unknown>>>}
+ */
+export function captureShotsFor(captureState, surfaceId) {
+  if (!captureState || typeof captureState !== 'object') return Object.freeze([]);
+  if (typeof surfaceId !== 'string' || surfaceId.length === 0) return Object.freeze([]);
+  const rows = /** @type {{ rows?: unknown }} */ (captureState).rows;
+  if (!Array.isArray(rows)) return Object.freeze([]);
+  /** @type {Array<Readonly<Record<string, unknown>>>} */
+  const mapped = [];
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    const source = /** @type {{ id?: unknown, kind?: unknown, surface_id?: unknown, phase?: unknown, frames?: unknown, duration_ms?: unknown, sealed?: unknown }} */ (row);
+    if (source.kind !== 'shot' || source.surface_id !== surfaceId) continue;
+    if (typeof source.id !== 'string' || source.id.length === 0) continue;
+    if (source.sealed !== true || normalizeMvRecordPhase(source.phase) !== 'sealed') continue;
+    mapped.push(Object.freeze({
+      id: source.id,
+      capsuleId: surfaceId,
+      kind: 'shot',
       phase: normalizeMvRecordPhase(source.phase),
       store: MV_RECORDING_STORE,
       elapsedSeconds: typeof source.duration_ms === 'number' && Number.isFinite(source.duration_ms) && source.duration_ms >= 0

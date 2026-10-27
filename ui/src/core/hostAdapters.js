@@ -94,7 +94,7 @@ export function createAuthorityRuntime(port) {
         || !['desktop_capsule', 'browser', 'game_capsule', 'vm'].includes(s.kind)
         || !s.geometry || Object.keys(s.geometry).sort().join(',') !== 'h,w'
         || !Number.isSafeInteger(s.geometry.w) || s.geometry.w < 1 || !Number.isSafeInteger(s.geometry.h) || s.geometry.h < 1
-        || (s.profile_id !== undefined && (typeof s.profile_id !== 'string' || s.profile_id.length > 128))
+        || (s.profile_id !== undefined && s.profile_id !== '' && (typeof s.profile_id !== 'string' || s.profile_id.length > 128))
         || typeof s.surface_id !== 'string' || !s.surface_id.length || s.surface_id.length > 128
         || f.surface_id !== s.surface_id || !Number.isSafeInteger(f.generation) || f.generation < 1
         || !['active','standby','ceded','destroyed','lost'].includes(s.state)
@@ -114,7 +114,8 @@ export function createAuthorityRuntime(port) {
       // display locator (X11-style ':100') stays as secondary metadata. When
       // the host sends no profile, the surface id is the stable fallback and
       // the row keeps an empty profile_id instead of inventing one.
-      const profileId = typeof s.profile_id === 'string' ? s.profile_id : '';
+      // MVUI19 lane A (EVUI-08): '' counts as missing (surface-id title below), never malformed.
+      const profileId = typeof s.profile_id === 'string' && s.profile_id.length > 0 ? s.profile_id : '';
       rows.set(s.surface_id, Object.freeze({ id: s.surface_id, surfaceId: s.surface_id,
         title: profileId.length > 0 ? profileId : s.surface_id,
         display: s.display, profile_id: profileId,

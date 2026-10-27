@@ -678,8 +678,13 @@ export function createCaptureState(port) {
    * CAPTURE_ROWS_CAP. Unfiltered runs replace every row; a surface
    * filter merges fresh rows for that surface ahead of the kept rows
    * for the other surfaces, so per-surface callers never drop rows
-   * they did not ask about. The scan stops once the cap is full, so
-   * a hostile oversized reply costs O(cap) added space.
+   * they did not ask about. When no fresh row names the filter
+   * surface, fresh rows for unseen surfaces (no stored row names that
+   * surface) are kept too, so a filtered refresh that meets only
+   * other-surface rows never wipes to empty (MVUI19 lane C, EVUI-07);
+   * otherwise the run stays narrow and stored surfaces keep their
+   * stored rows. The scan stops once the cap is full, so a hostile
+   * oversized reply costs O(cap) added space.
    * @param {ReadonlyArray<CaptureRow>} incoming Validated host rows.
    * @param {string|undefined} filter Surface filter, else all rows.
    */
@@ -709,6 +714,18 @@ export function createCaptureState(port) {
       for (const row of incoming) {
         if (isRecord(row) && row.surface_id === filter && !push(row)) break;
       }
+      if (next.length === 0 && next.length < CAPTURE_ROWS_CAP) {
+        /** @type {Set<string>} */
+        const storedSurfaces = new Set();
+        for (const row of rows) {
+          if (isRecord(row) && isId(row.surface_id)) storedSurfaces.add(row.surface_id);
+        }
+        for (const row of incoming) {
+          if (!isRecord(row) || row.surface_id === filter) continue;
+          if (!isId(row.surface_id) || storedSurfaces.has(row.surface_id)) continue;
+          if (!push(row)) break;
+        }
+      }
       if (next.length < CAPTURE_ROWS_CAP) {
         for (const row of rows) {
           if (!isRecord(row) || row.surface_id === filter) continue;
@@ -724,9 +741,19 @@ export function createCaptureState(port) {
    * @returns {Promise<CaptureListResult>} Single host list round trip.
    */
   async function runRefresh(filter) {
-    const result = await typed.list();
+    /** @type {CaptureListResult} */
+    let result;
+    try {
+      result = await typed.list();
+    } catch (error) {
+      if (disposed) return unavailable();
+      throw error;
+    }
     if (disposed) return unavailable();
-    if (result.ok) storeRows(result.rows, filter);
+    if (result.ok) {
+      storeRows(result.rows, filter);
+      return Object.freeze({ ok: true, rows: Object.freeze([...rows]) });
+    }
     return result;
   }
 
