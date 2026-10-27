@@ -100,6 +100,11 @@
    "why": "Clean redo of MV-UI8 after the quarantined attempt: fix five confirmed AC-06 placement and AC-07 export review findings with strict memory-safety rules.",
    "orchestrator": "UI orchestrator"
   },
+  "mvui16b": {
+   "stage": "fix",
+   "why": "Finish MV-UI8 (one type error) and fix real-app round 2 renderer findings: Float enabled in agent/READ mode, status bar contrast, recordings list never refreshed from the host.",
+   "orchestrator": "UI orchestrator"
+  },
   "mvui2": {
    "stage": "vision",
    "why": "Fix the MetaViewer renderer findings of the vision loop (wender-agent + vision-engine round on the integrated screens) and the remaining independent-judge notes, toward 0 medium/high findings.",
