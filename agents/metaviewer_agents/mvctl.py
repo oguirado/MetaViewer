@@ -1,4 +1,7 @@
-"""Closed command client for MetaViewer core admission (legacy v0.1).
+"""Closed command client for MetaViewer core admission.
+
+[TARGET, unit decision] --v02 enables tool-protocol CLI verbs with explicit
+identity and resource limits; legacy invocations retain their closed parser.
 
 This module is an untrusted caller: it validates every flag, input byte and
 core reply, and leaves admission, ownership and replay decisions to the core.
@@ -265,6 +268,8 @@ def run(argv: Sequence[str] | None = None,
     if raw_argv and raw_argv[0] == "observe":
         _refuse("unsupported_operation")
         return 2
+    if raw_argv and raw_argv[0] == "--v02":
+        return _run_v02(raw_argv[1:])
     parser = build_parser()
     try:
         args = parser.parse_args(argv)
@@ -389,6 +394,93 @@ def run(argv: Sequence[str] | None = None,
         return 1
     _refuse("schema_error")
     return 2
+
+
+# [TARGET, unit decision] Explicit --v02 opts into the existing tool protocol;
+# legacy invocations retain their closed parser. Identity and resource limits
+# are mandatory caller inputs. JSON files contain proposal/expectation bodies.
+def _run_v02(argv):
+    from . import tools
+    from .client import ClientError, CoreClient
+    from .envelope import EnvelopeError, make_envelope
+
+    parser = _UsageParser(prog="mvctl --v02", allow_abbrev=False)
+    parser.add_argument("command", choices=("observe", "propose", "wait-verify"))
+    for flag in ("socket", "session-id", "agent-instance", "core-instance"):
+        parser.add_argument("--" + flag, required=True, action=_OnceAction)
+    for flag in ("timeout-ms", "max-line-bytes", "max-reply-bytes"):
+        parser.add_argument("--" + flag, required=True, action=_OnceAction,
+                            type=_positive_int)
+    for flag in ("surface-id", "proposal-id", "json-arg"):
+        parser.add_argument("--" + flag, action=_OnceAction)
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as done:
+        return done.code
+    expected = {"observe": (True, False, False),
+                "propose": (False, False, True),
+                "wait-verify": (False, True, True)}[args.command]
+    if tuple(value is not None for value in
+             (args.surface_id, args.proposal_id, args.json_arg)) != expected:
+        _refuse("usage_error")
+        return 2
+    endpoint, failure = _resolve_endpoint(args.socket)
+    if failure:
+        _refuse(failure)
+        return 2
+
+    class Mailbox:
+        def __init__(self, active):
+            self.active = active
+
+        def request(self, body, expect, *, timeout_ms):
+            envelope = make_envelope(
+                msg_id=body["request_id"], from_component="agent",
+                from_instance=args.agent_instance, to_component="core",
+                to_instance=args.core_instance, session_id=args.session_id,
+                seq=self.active.next_seq, body=body)
+            reply = self.active.call(envelope)
+            if (reply["from"] != envelope["to"]
+                    or reply["to"] != envelope["from"]
+                    or reply["session_id"] != envelope["session_id"]):
+                raise tools.ToolValidationError("uncorrelated envelope")
+            return reply["body"]
+
+    try:
+        payload = (_read_request(args.json_arg, args.max_line_bytes)
+                   if args.json_arg else None)
+        with CoreClient(endpoint, timeout_s=args.timeout_ms / 1000,
+                        max_line_bytes=args.max_line_bytes,
+                        max_reply_bytes=args.max_reply_bytes) as active:
+            client = Mailbox(active)
+            if args.command == "observe":
+                result = tools.observe(args.surface_id, client=client,
+                                       timeout_ms=args.timeout_ms)
+            elif args.command == "propose":
+                result = tools.propose(payload, client=client,
+                                       timeout_ms=args.timeout_ms)
+            else:
+                result = tools.wait_verify(args.proposal_id, payload,
+                                           args.timeout_ms, client=client)
+    except tools.ToolRefusal as err:
+        print(json.dumps({"verdict": "refuse", "reason_code": err.reason_code},
+                         separators=(",", ":")), file=sys.stdout)
+        return 1
+    except tools.VerificationFailed as err:
+        print(json.dumps(err.receipt, separators=(",", ":")), file=sys.stdout)
+        return 1
+    except (ClientError, EnvelopeError) as err:
+        _refuse("unknown_version" if err.code == "unknown_version"
+                else _client_refusal(err, "call"))
+        return 2
+    except (ValueError, OSError, TimeoutError, TypeError) as err:
+        code = ("unknown_version" if isinstance(err, tools.ToolValidationError)
+                and "unknown result version" in err.detail
+                else _client_refusal(err, "call"))
+        _refuse(code)
+        return 2
+    print(json.dumps(result, separators=(",", ":"), allow_nan=False))
+    return 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:
