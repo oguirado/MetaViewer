@@ -99,6 +99,42 @@ export function normalizeActivityEntry(input) {
 }
 
 /**
+ * Recover the live total of recorded authority outcomes from a (possibly
+ * windowed) feed (MVUI17 lane A, L2-6). App.vue caps the feed to the
+ * newest MV_ACTIVITY_LIMIT rows but keeps their feed sequences, which
+ * recordActivity assigns contiguously from 1, so the maximum valid
+ * sequence equals the true total. Malformed rows are ignored; an empty
+ * or fully malformed feed totals 0.
+ * @param {unknown} feed Reported feed rows (ActivityFeedItem[]).
+ * @returns {number} Total recorded outcomes, or 0 when unreadable.
+ */
+export function mvActivityFeedTotal(feed) {
+  if (!Array.isArray(feed)) return 0;
+  let total = 0;
+  for (const item of feed) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const seq = /** @type {{seq?:unknown}} */ (item).seq;
+    if (Number.isSafeInteger(seq) && /** @type {number} */ (seq) > total) total = /** @type {number} */ (seq);
+  }
+  return total;
+}
+
+/**
+ * Visible count copy (MVUI17 lane A, L2-6): the plain shown number while
+ * the whole history fits, otherwise the bounded-window label
+ * `latest S of N` so the count keeps moving once the feed is windowed.
+ * @param {unknown} shown Rendered row count.
+ * @param {unknown} total Live total from mvActivityFeedTotal.
+ * @returns {string} Human count copy carrying no raw code.
+ */
+export function mvActivityCountText(shown, total) {
+  const visible = Number.isSafeInteger(shown) && /** @type {number} */ (shown) >= 0 ? /** @type {number} */ (shown) : 0;
+  const all = Number.isSafeInteger(total) && /** @type {number} */ (total) >= 0 ? /** @type {number} */ (total) : 0;
+  if (all > visible) return `latest ${visible} of ${all}`;
+  return String(visible);
+}
+
+/**
  * @param {unknown} seq Feed sequence number.
  * @returns {number} Safe positive sequence, or 0 when unreadable.
  */
@@ -157,10 +193,15 @@ export function mvActivityListAnchor() {
 
 /**
  * @param {unknown} count Rendered row count.
+ * @param {unknown} [total] Live total; when it exceeds `count` the name
+ * carries the same bounded-window label as the visible count (MVUI17 lane
+ * A, L2-6). Omitted, the name keeps its historical single-count shape.
  * @returns {string} Stable accessible name for the outcomes list (agent_lane/v1).
  */
-export function mvActivityListAccessibleName(count) {
+export function mvActivityListAccessibleName(count, total) {
   const shown = Number.isSafeInteger(count) && /** @type {number} */ (count) >= 0 ? /** @type {number} */ (count) : 0;
+  const all = Number.isSafeInteger(total) && /** @type {number} */ (total) >= 0 ? /** @type {number} */ (total) : shown;
+  if (all > shown) return `Latest authority outcomes, latest ${shown} of ${all}`;
   return `Latest authority outcomes, ${shown} shown`;
 }
 

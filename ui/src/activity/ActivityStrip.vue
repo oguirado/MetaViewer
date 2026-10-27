@@ -4,6 +4,8 @@ import { UiButton } from 'capsule-ui-kit/ui';
 import {
   MV_ACTIVITY_EMPTY_TEXT,
   MV_ACTIVITY_LIMIT,
+  mvActivityCountText,
+  mvActivityFeedTotal,
   mvActivityListAccessibleName,
   mvActivityListAnchor,
   mvActivityListDomId,
@@ -51,7 +53,9 @@ const rows = computed(() => {
   }
   return normalized;
 });
-const listName = computed(() => mvActivityListAccessibleName(rows.value.length));
+const total = computed(() => mvActivityFeedTotal(Array.isArray(props.entries) ? props.entries : []));
+const countText = computed(() => mvActivityCountText(rows.value.length, total.value));
+const listName = computed(() => mvActivityListAccessibleName(rows.value.length, total.value));
 
 function toggle() {
   expanded.value = !expanded.value;
@@ -61,7 +65,7 @@ function toggle() {
   <section :id="stripId" class="mv-activity" :data-semantic-anchor="stripAnchor" :aria-label="stripName">
     <div class="mv-activity__bar">
       <UiButton :id="toggleId" :data-semantic-anchor="toggleAnchor" label="Activity" :aria-expanded="expanded" @click="toggle" />
-      <span class="mv-activity__count" aria-hidden="true">{{ rows.length }}</span>
+      <span class="mv-activity__count" aria-hidden="true">{{ countText }}</span>
     </div>
     <ol v-if="expanded" :id="listId" class="mv-activity__list" :data-semantic-anchor="listAnchor" role="log" tabindex="0" :aria-label="listName">
       <li v-if="!rows.length" class="mv-activity__empty">{{ emptyText }}</li>

@@ -274,6 +274,80 @@ export function roundControlBox(box) {
   return Object.freeze({ x: Math.round(x), y: Math.round(y), width: Math.round(width),
     height: Math.round(height) });
 }
+
+/**
+ * Live-axis tile states on which a fold gesture can commit. Pending busy
+ * arms only here, so gestures on waiting/lost/error tiles never enter a
+ * busy presentation that no authority movement would clear.
+ * @param {unknown} state
+ * @returns {boolean}
+ */
+export function isLiveAxisTileState(state) {
+  return state === 'live' || state === 'folded' || state === 'human-control'
+    || state === 'agent-acting';
+}
+
+/**
+ * Pending-busy status-row label for one UI request phase. Only fold-axis
+ * gestures arm the busy presentation; every other phase renders the
+ * authoritative status untouched.
+ * @param {unknown} phase
+ * @returns {string}
+ */
+export function foldPendingStatus(phase) {
+  if (phase === 'folding') return 'Folding';
+  if (phase === 'unfolding') return 'Unfolding';
+  return '';
+}
+
+/**
+ * Mirror the authoritative visibility string into the kit presentation
+ * boolean the kit panel reads (`rawRow.folded`). Live authority rows carry
+ * only the `visibility` string, so without the mirror the kit re-syncs
+ * unfolded on every projection notice and a committed fold never hides the
+ * kit body. Rows already carrying the correct boolean keep identity, so
+ * fixture-shaped feeds pass through untouched; inputs are never mutated.
+ * @param {PanelSurfaceRow} row
+ * @returns {PanelSurfaceRow}
+ */
+export function mirrorKitFoldedRow(row) {
+  if (typeof row !== 'object' || row === null) return row;
+  const folded = row.visibility === 'folded';
+  if (/** @type {Record<string, unknown>} */ (row).folded === folded) return row;
+  const next = /** @type {PanelSurfaceRow & { folded: boolean }} */ ({ ...row, folded });
+  return next;
+}
+
+/**
+ * Mirror one projection snapshot for the kit panel: same envelope, rows
+ * mapped through mirrorKitFoldedRow. Snapshots without a rows array, and
+ * snapshots whose rows all keep identity, pass through by reference.
+ * @param {PanelProjectionSnapshot|null} snapshot
+ * @returns {PanelProjectionSnapshot|null}
+ */
+export function mirrorKitFoldedSnapshot(snapshot) {
+  if (snapshot === null || typeof snapshot !== 'object') return snapshot;
+  const envelope = snapshot.envelope;
+  if (envelope === null || typeof envelope !== 'object') return snapshot;
+  const projection = envelope.projection;
+  if (projection === null || typeof projection !== 'object') return snapshot;
+  const rows = projection.rows;
+  if (!Array.isArray(rows)) return snapshot;
+  let changed = false;
+  const mapped = rows.map((row) => {
+    const next = mirrorKitFoldedRow(row);
+    if (next !== row) changed = true;
+    return next;
+  });
+  if (!changed) return snapshot;
+  return {
+    ...snapshot,
+    envelope: {
+      ...envelope,
+      projection: { ...projection, rows: mapped },
+    },
+  };
+}
 </script>
 <script setup>
 import { computed, onBeforeUnmount, provide, shallowRef, watch } from 'vue';
@@ -327,7 +401,16 @@ validatePanelDeps({
 // and registry through its documented inject fallback, and the frames lane reads
 // the tile scheduler under the same key it injects.
 provide('tileScheduler', props.tileScheduler);
-provide('publicProjectionView', props.projectionView);
+// Kit-facing projection view: the kit subscribes once at mount, so the
+// source view binds here exactly as the previously provided raw view did;
+// only the snapshot gains the visibility-derived folded mirror, letting a
+// committed fold hide the kit body on live-shaped rows.
+const kitViewSource = props.projectionView;
+const kitProjectionView = {
+  getSnapshot: () => mirrorKitFoldedSnapshot(kitViewSource.getSnapshot()),
+  subscribe: (/** @type {(snapshot: PanelProjectionSnapshot|null) => void} */ listener) => kitViewSource.subscribe(listener),
+};
+provide('publicProjectionView', kitProjectionView);
 // Metadata-only authority runtimes can omit these optional kit capabilities.
 // Empty placeholders must not masquerade as callable scheduler/registry APIs.
 provide('presentationScheduler', typeof props.scheduler.updateSurfaceState === 'function'
@@ -427,6 +510,11 @@ const kitBannerShown = computed(() => {
   return typeof readiness === 'object' && readiness !== null;
 });
 const bodyStatus = computed(() => {
+  // In-flight fold intents are the freshest tile truth: the live-region row
+  // reads Folding/Unfolding until the authority moves, then the settled
+  // branch below renders again. Pending arms on live-axis tiles only and
+  // clears on any settle-axis movement, so this never masks lost/error rows.
+  if (foldPending.value !== '') return foldPending.value;
   if (tile.value.tile === 'lost') return tile.value.status;
   if (tile.value.tile === 'error' && !kitBannerShown.value) return TILE_ERROR_DISPLAY_STATUS;
   return '';
@@ -440,8 +528,20 @@ watch(row, (current) => {
 const drawable = computed(() => isDrawableRow(row.value));
 const surfaceHostVisible = computed(() => isSurfaceHostVisible(row.value));
 const uiPhase = shallowRef('idle');
-watch(() => [row.value?.visibility, row.value?.control, row.value?.backendLifecycle],
-  () => { uiPhase.value = 'idle'; });
+// Pending gestures settle only when the authority actually moves: the feed
+// re-issues row objects on every frame notice, so values (not identities)
+// are compared, keeping busy visible across unrelated ticks. Refusal codes
+// and transport status join the axis so a refused fold clears busy and the
+// tile keeps its authoritative state with the typed refusal row.
+watch(() => [row.value?.visibility ?? null, row.value?.control ?? null,
+  row.value?.backendLifecycle ?? null, row.value?.refusal?.code ?? null,
+  snapshot.value?.status ?? null, snapshot.value?.error?.code ?? null],
+  (next, previous) => {
+    if (next.some((value, index) => value !== previous[index])) uiPhase.value = 'idle';
+  });
+// Pending-busy status label: fold-axis gestures read Folding/Unfolding until
+// the authority moves; every other phase renders authoritative status.
+const foldPending = computed(() => foldPendingStatus(uiPhase.value));
 
 // One gesture emits one intent. Only the kit panel's specialized emits are wired;
 // its generic submit-intent stays unwired so a gesture can never submit twice.
@@ -450,7 +550,9 @@ function onFoldChange() {
   const current = row.value;
   if (current === null) return;
   const verb = current.visibility === 'folded' ? 'unfold' : 'fold';
-  uiPhase.value = verb === 'fold' ? 'folding' : 'unfolding';
+  if (isLiveAxisTileState(tile.value.tile)) {
+    uiPhase.value = verb === 'fold' ? 'folding' : 'unfolding';
+  }
   emit('submit-intent', props.intentBuilders.visibility({ capsuleId: props.capsuleId, verb }));
 }
 

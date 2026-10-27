@@ -5,7 +5,19 @@
 /** @typedef {{now:()=>number, setTimeout:(callback:()=>void, delay:number)=>number, clearTimeout:(id:number)=>void}} Scheduler */
 /** @typedef {CollectorWindow & Pick<Window, 'addEventListener'|'removeEventListener'|'setTimeout'|'clearTimeout'|'performance'> & {MutationObserver:typeof MutationObserver, ResizeObserver?:typeof ResizeObserver}} ReporterWindow */
 
-const ANCHOR = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
+
+/** Hierarchical anchor grammar v2: 1..6 segments joined by '/', each an
+ * alnum-led token of at most 64 chars, 200 chars total, no empty/'.'/'..'
+ * segment and no leading or trailing '/'.
+ * @param {string} anchor @returns {boolean}
+ */
+function isAnchor(anchor) {
+  if (typeof anchor !== 'string' || anchor.length === 0 || anchor.length > 200) return false;
+  const segments = anchor.split('/');
+  if (segments.length > 6) return false;
+  return segments.every(segment => segment !== '.' && segment !== '..' && SEGMENT.test(segment));
+}
 const INTERACTIVE = new Set(['button', 'link', 'checkbox', 'radio', 'textbox', 'searchbox', 'combobox', 'listbox', 'option', 'tab', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'switch', 'slider', 'spinbutton', 'treeitem']);
 // Do not descend into application payloads, even when referenced by aria-labelledby.
 const PRIVATE = 'canvas,iframe,object,embed,script,style,.xterm,.mv-terminal,.mv-terminal-host,.mv-surface__canvas,.mv-surface-host,.mv-creative__frames,[contenteditable]:not([contenteditable="false"])';
@@ -104,7 +116,7 @@ export function collectQaAnchors(root, window, seq = 1) {
     const role = roleOf(element);
     const valueAncestor = element.parentElement?.closest(VALUE_CONTROL);
     const optionInSelect = element.localName === 'option' && valueAncestor?.localName === 'select';
-    if (!ANCHOR.test(anchor) || !role || element.closest(PRIVATE) || (valueAncestor && !optionInSelect) || !visible(element, window)) continue;
+    if (!isAnchor(anchor) || !role || element.closest(PRIVATE) || (valueAncestor && !optionInSelect) || !visible(element, window)) continue;
     const box = element.getBoundingClientRect();
     if (![box.x, box.y, box.width, box.height].every(Number.isFinite) || box.width <= 0 || box.height <= 0 || box.right <= 0 || box.bottom <= 0 || box.left >= window.innerWidth || box.top >= window.innerHeight) continue;
     const rect = { x: Math.round(box.x), y: Math.round(box.y), w: Math.round(box.width), h: Math.round(box.height) };

@@ -138,7 +138,7 @@ test('values, terminal, canvas, embedded capsule and editable text cannot become
 
 test('invalid anchors, hidden ancestors, inert controls and offscreen/empty boxes are excluded', () => {
   const d = dom();
-  for (const invalid of ['', '/legacy/slash', ' space', '.prefix', 'x'.repeat(129), 'ümlaut']) d.element('button', anchor(invalid), 'invalid');
+  for (const invalid of ['', '/legacy/slash', ' space', '.prefix', 'x'.repeat(129), 'ümlaut', 'x'.repeat(65), 'a//b', 'a/b/', 'a/./b', 'a/../b', 'a/b/c/d/e/f/g', 'has space/ok']) d.element('button', anchor(invalid), 'invalid');
   for (const attrs of [{ hidden: '' }, { inert: '' }, { 'aria-hidden': 'true' }]) {
     d.element('button', anchor('hidden'), 'hidden', d.element('div', attrs));
   }
