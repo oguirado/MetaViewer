@@ -680,6 +680,18 @@ def _check(value, schema, depth):
                     raise _Mismatch("closed")
         for key in value.keys() & props.keys():
             _check(value[key], props[key], depth + 1)
+        if (value.get("schema") == "terminal_session/v0.2"
+                and value.get("op") in ("data", "write")):
+            params = value.get("params")
+            if not isinstance(params, dict):
+                raise _Mismatch("terminal params")
+            b64 = params.get("b64")
+            byte_count = params.get("byte_count")
+            if not isinstance(b64, str) or type(byte_count) is not int:
+                raise _Mismatch("terminal lengths")
+            decoded_len = len(b64) // 4 * 3 - (len(b64) - len(b64.rstrip("=")))
+            if byte_count != decoded_len:
+                raise _Mismatch("terminal byte_count mismatch")
     if isinstance(value, list):
         if len(value) > schema.get("maxItems", math.inf):
             raise _Mismatch("maxItems")

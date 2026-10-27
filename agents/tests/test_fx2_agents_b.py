@@ -24,6 +24,7 @@ from metaviewer_agents import _contracts_v02, envelope
 from metaviewer_agents.client import ClientError, CoreClient, ToolClient
 from metaviewer_agents.envelope import (
     EnvelopeError,
+    loads_envelope,
     make_envelope,
     validate_envelope,
 )
@@ -436,6 +437,113 @@ class Fx2AgentsBTests(unittest.TestCase):
                 body=_proposal_v02(),
             )
         self.assertEqual(ctx.exception.code, "bad_shape")
+
+    def test_t6r2_006_lone_surrogate_refused(self):
+        receipt_body = json.loads(
+            (REPO_ROOT / "contracts" / "examples" / "v0.2" / "action_receipt.valid.json").read_text(encoding="utf-8")
+        )
+        env = _wrap_v02(receipt_body)
+        for bad_err in ("x\ud800y", "\ud800", "\udfff"):
+            bad_env = copy.deepcopy(env)
+            bad_env["body"]["error"] = bad_err
+            with self.subTest(error=repr(bad_err)):
+                with self.assertRaises(EnvelopeError) as ctx:
+                    validate_envelope(bad_env)
+                self.assertEqual(ctx.exception.code, "bad_shape")
+        raw_line = (
+            json.dumps(env, separators=(",", ":")).replace('"error":""', '"error":"x\\ud800y"') + "\n"
+        ).encode("utf-8")
+        with self.assertRaises(EnvelopeError) as ctx:
+            loads_envelope(raw_line, max_bytes=65536)
+        self.assertEqual(ctx.exception.code, "bad_shape")
+
+        # Negative control: accented UTF-8 and valid astral surrogate pair admitted.
+        for good_literal in ('"é"', '"\\ud83d\\ude00"'):
+            good_line = (
+                json.dumps(env, separators=(",", ":")).replace('"error":""', '"error":' + good_literal) + "\n"
+            ).encode("utf-8")
+            decoded = loads_envelope(good_line, max_bytes=65536)
+            self.assertIs(validate_envelope(decoded), decoded)
+
+    def test_t6r2_007_terminal_byte_count_cross_check(self):
+        for bad_body in (
+            {
+                "schema": "terminal_session/v0.2",
+                "request_id": "req-1",
+                "op": "write",
+                "params": {
+                    "session_id": "s-1",
+                    "terminal_generation": 1,
+                    "input_seq": 1,
+                    "b64": "YQ==",
+                    "byte_count": 2,
+                },
+            },
+            {
+                "schema": "terminal_session/v0.2",
+                "request_id": "req-1",
+                "op": "write",
+                "params": {
+                    "session_id": "s-1",
+                    "terminal_generation": 1,
+                    "input_seq": 1,
+                    "b64": "YQ==",
+                    "byte_count": 0,
+                },
+            },
+            {
+                "schema": "terminal_session/v0.2",
+                "request_id": "req-1",
+                "op": "data",
+                "params": {
+                    "session_id": "s-1",
+                    "terminal_generation": 1,
+                    "seq": 1,
+                    "b64": "YQ==",
+                    "byte_count": 2,
+                    "truncated": False,
+                    "gap": False,
+                },
+            },
+        ):
+            env = _wrap_v02(_proposal_v02())
+            env["body"] = bad_body
+            with self.subTest(op=bad_body["op"], byte_count=bad_body["params"]["byte_count"]):
+                with self.assertRaises(EnvelopeError) as ctx:
+                    validate_envelope(env)
+                self.assertEqual(ctx.exception.code, "bad_shape")
+
+        # Negative controls: matching decoded byte counts admitted for write and data.
+        for good_body in (
+            {
+                "schema": "terminal_session/v0.2",
+                "request_id": "req-1",
+                "op": "write",
+                "params": {
+                    "session_id": "s-1",
+                    "terminal_generation": 1,
+                    "input_seq": 1,
+                    "b64": "YQ==",
+                    "byte_count": 1,
+                },
+            },
+            {
+                "schema": "terminal_session/v0.2",
+                "request_id": "req-1",
+                "op": "data",
+                "params": {
+                    "session_id": "s-1",
+                    "terminal_generation": 1,
+                    "seq": 1,
+                    "b64": "YQ==",
+                    "byte_count": 1,
+                    "truncated": False,
+                    "gap": False,
+                },
+            },
+        ):
+            good_env = _wrap_v02(good_body)
+            self.assertIs(validate_envelope(good_env), good_env)
 
 
 if __name__ == "__main__":

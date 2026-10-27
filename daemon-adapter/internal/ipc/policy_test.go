@@ -376,3 +376,189 @@ func TestT6Open03FixtureCountAndSchemaCoverage(t *testing.T) {
 		t.Fatal("empty fixture directory accepted")
 	}
 }
+
+func TestT6R2006LoneSurrogateRefused(t *testing.T) {
+	cfg := ceilingConfig()
+	for _, bad := range []string{
+		`{"error":"\ud800"}`,
+		`{"error":"\udbff"}`,
+		`{"error":"\udc00"}`,
+		`{"error":"\udfff"}`,
+		`{"error":"x\ud800y"}`,
+		`{"error":"\ud800\u0041"}`,
+		`{"error":"\ud800\ud800\udc00"}`,
+		`{"\ud800":1}`,
+	} {
+		if err := ValidateJSON([]byte(bad), cfg); err == nil {
+			t.Fatalf("lone surrogate admitted by ValidateJSON: %s", bad)
+		}
+	}
+	// Negative control: valid UTF-8, escaped backslash before ud800, and valid astral surrogate pair pass.
+	for _, good := range []string{
+		`{"error":"é"}`,
+		`{"error":"\\ud800"}`,
+		`{"error":"\ud83d\ude00"}`,
+	} {
+		if err := ValidateJSON([]byte(good), cfg); err != nil {
+			t.Fatalf("valid string refused by ValidateJSON (%s): %v", good, err)
+		}
+	}
+
+	p, err := NewPolicy(cfg, os.DirFS("../../../contracts/v0.2"), &dummyPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawEnv, err := os.ReadFile("../../../contracts/examples/v0.2/envelope.valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawReceipt, err := os.ReadFile("../../../contracts/examples/v0.2/action_receipt.valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapRawBody := func(bodyRaw string) []byte {
+		prefix := strings.TrimSuffix(strings.TrimSpace(string(rawEnv)), "}")
+		idx := strings.Index(prefix, `"body":`)
+		if idx < 0 {
+			t.Fatal("missing body in envelope.valid.json")
+		}
+		return []byte(prefix[:idx] + `"body": ` + bodyRaw + "}")
+	}
+	badBody := strings.Replace(string(rawReceipt), `"error": ""`, `"error": "x\ud800y"`, 1)
+	if _, err := p.ValidateEnvelope(wrapRawBody(badBody)); err == nil {
+		t.Fatal("lone surrogate in action_receipt.error admitted by ValidateEnvelope")
+	}
+	for _, goodLiteral := range []string{`"é"`, `"\ud83d\ude00"`} {
+		goodBody := strings.Replace(string(rawReceipt), `"error": ""`, `"error": `+goodLiteral, 1)
+		if _, err := p.ValidateEnvelope(wrapRawBody(goodBody)); err != nil {
+			t.Fatalf("valid action_receipt.error %s refused: %v", goodLiteral, err)
+		}
+	}
+}
+
+func TestT6R2007TerminalByteCountCrossCheck(t *testing.T) {
+	p, err := NewPolicy(ceilingConfig(), os.DirFS("../../../contracts/v0.2"), &dummyPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawEnv, err := os.ReadFile("../../../contracts/examples/v0.2/envelope.valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapBody := func(bodyJSON string) []byte {
+		var env map[string]any
+		if err := json.Unmarshal(rawEnv, &env); err != nil {
+			t.Fatal(err)
+		}
+		env["body"] = json.RawMessage(bodyJSON)
+		out, err := json.Marshal(env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	for _, badBody := range []string{
+		`{"schema":"terminal_session/v0.2","request_id":"req-1","op":"write","params":{"session_id":"s-1","terminal_generation":1,"input_seq":1,"b64":"YQ==","byte_count":2}}`,
+		`{"schema":"terminal_session/v0.2","request_id":"req-1","op":"write","params":{"session_id":"s-1","terminal_generation":1,"input_seq":1,"b64":"YQ==","byte_count":0}}`,
+		`{"schema":"terminal_session/v0.2","request_id":"req-1","op":"data","params":{"session_id":"s-1","terminal_generation":1,"seq":1,"b64":"YQ==","byte_count":2,"truncated":false,"gap":false}}`,
+		`{"schema":"terminal_session/v0.2","request_id":"req-1","op":"data","params":{"session_id":"s-1","terminal_generation":1,"seq":1,"b64":"YWJj","byte_count":2,"truncated":false,"gap":false}}`,
+	} {
+		if _, err := p.ValidateEnvelope(wrapBody(badBody)); err == nil {
+			t.Fatalf("mismatched terminal byte_count admitted: %s", badBody)
+		}
+	}
+	// Negative controls: matching decoded lengths for write and data are admitted.
+	for _, goodBody := range []string{
+		`{"schema":"terminal_session/v0.2","request_id":"req-1","op":"write","params":{"session_id":"s-1","terminal_generation":1,"input_seq":1,"b64":"YQ==","byte_count":1}}`,
+		`{"schema":"terminal_session/v0.2","request_id":"req-1","op":"write","params":{"session_id":"s-1","terminal_generation":1,"input_seq":1,"b64":"","byte_count":0}}`,
+		`{"schema":"terminal_session/v0.2","request_id":"req-1","op":"data","params":{"session_id":"s-1","terminal_generation":1,"seq":1,"b64":"YQ==","byte_count":1,"truncated":false,"gap":false}}`,
+		`{"schema":"terminal_session/v0.2","request_id":"req-1","op":"data","params":{"session_id":"s-1","terminal_generation":1,"seq":1,"b64":"YWJj","byte_count":3,"truncated":false,"gap":false}}`,
+	} {
+		if _, err := p.ValidateEnvelope(wrapBody(goodBody)); err != nil {
+			t.Fatalf("matching terminal byte_count refused (%s): %v", goodBody, err)
+		}
+	}
+}
+
+func TestSharedConformanceCases(t *testing.T) {
+	p, err := NewPolicy(ceilingConfig(), os.DirFS("../../../contracts/v0.2"), &dummyPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawEnv, err := os.ReadFile("../../../contracts/examples/v0.2/envelope.valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawReceipt, err := os.ReadFile("../../../contracts/examples/v0.2/action_receipt.valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapRawBody := func(bodyRaw string) string {
+		prefix := strings.TrimSuffix(strings.TrimSpace(string(rawEnv)), "}")
+		idx := strings.Index(prefix, `"body":`)
+		if idx < 0 {
+			t.Fatal("missing body in envelope.valid.json")
+		}
+		return prefix[:idx] + `"body": ` + bodyRaw + "}"
+	}
+	builtin := []struct {
+		Name  string `json:"name"`
+		Raw   string `json:"raw"`
+		Admit bool   `json:"admit"`
+	}{
+		{
+			Name:  "T6R2-006-lone-surrogate-refused",
+			Raw:   wrapRawBody(strings.Replace(string(rawReceipt), `"error": ""`, `"error": "x\ud800y"`, 1)),
+			Admit: false,
+		},
+		{
+			Name:  "T6R2-006-astral-pair-admitted",
+			Raw:   wrapRawBody(strings.Replace(string(rawReceipt), `"error": ""`, `"error": "\ud83d\ude00"`, 1)),
+			Admit: true,
+		},
+		{
+			Name:  "T6R2-007-terminal-write-mismatch-refused",
+			Raw:   wrapRawBody(`{"schema":"terminal_session/v0.2","request_id":"req-1","op":"write","params":{"session_id":"s-1","terminal_generation":1,"input_seq":1,"b64":"YQ==","byte_count":2}}`),
+			Admit: false,
+		},
+		{
+			Name:  "T6R2-007-terminal-write-match-admitted",
+			Raw:   wrapRawBody(`{"schema":"terminal_session/v0.2","request_id":"req-1","op":"write","params":{"session_id":"s-1","terminal_generation":1,"input_seq":1,"b64":"YQ==","byte_count":1}}`),
+			Admit: true,
+		},
+		{
+			Name:  "R1-082-unversioned-schema-const-refused",
+			Raw:   wrapRawBody(strings.Replace(string(rawReceipt), `"action_receipt/v0.2"`, `"action_receipt"`, 1)),
+			Admit: false,
+		},
+		{
+			Name:  "R1-083-above-safe-int-ceiling-refused",
+			Raw:   strings.Replace(string(rawEnv), `"seq": 1`, `"seq": 9007199254740992`, 1),
+			Admit: false,
+		},
+		{
+			Name:  "R1-083-at-safe-int-ceiling-admitted",
+			Raw:   strings.Replace(string(rawEnv), `"seq": 1`, `"seq": 9007199254740991`, 1),
+			Admit: true,
+		},
+	}
+	if path := os.Getenv("MV_CONFORMANCE_FILE"); path != "" {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(raw, &builtin); err != nil {
+			t.Fatal(err)
+		}
+		if len(builtin) == 0 {
+			t.Fatal("empty conformance case list")
+		}
+	}
+	for _, tc := range builtin {
+		_, vErr := p.ValidateEnvelope([]byte(tc.Raw))
+		got := vErr == nil
+		if got != tc.Admit {
+			t.Fatalf("case %s: ValidateEnvelope got admit=%v (err=%v), want admit=%v", tc.Name, got, vErr, tc.Admit)
+		}
+	}
+}

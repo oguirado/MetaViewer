@@ -234,11 +234,50 @@ func (p *SchemaPolicy) ValidateEnvelope(raw []byte) (Envelope, error) {
 	if err := d.Decode(&v); err != nil {
 		return e, err
 	}
-	if !p.envelope.accept(v) {
+	if !p.envelope.accept(v) || !terminalLengthsOK(v) {
 		return e, errors.New("closed v0.2 envelope/body refused")
 	}
 	err := json.Unmarshal(raw, &e)
 	return e, err
+}
+
+func terminalLengthsOK(v any) bool {
+	obj, ok := v.(map[string]any)
+	if !ok {
+		return true
+	}
+	if body, ok := obj["body"].(map[string]any); ok {
+		obj = body
+	}
+	if obj["schema"] != "terminal_session/v0.2" {
+		return true
+	}
+	op, _ := obj["op"].(string)
+	if op != "data" && op != "write" {
+		return true
+	}
+	params, ok := obj["params"].(map[string]any)
+	if !ok {
+		return false
+	}
+	b64, ok := params["b64"].(string)
+	if !ok {
+		return false
+	}
+	bcNum, ok := params["byte_count"].(json.Number)
+	if !ok {
+		return false
+	}
+	bc, err := bcNum.Int64()
+	if err != nil {
+		return false
+	}
+	pad := 0
+	for i := len(b64) - 1; i >= 0 && b64[i] == '='; i-- {
+		pad++
+	}
+	decodedLen := int64(len(b64)/4*3 - pad)
+	return bc == decodedLen
 }
 func (n *schemaNode) accept(v any) bool {
 	if n.ref != nil && !n.ref.accept(v) {

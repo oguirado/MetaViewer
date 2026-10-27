@@ -25,8 +25,11 @@ def _finite(value, depth=0):
         raise ValidationError('JSON nesting limit')
     if isinstance(value, float) and not math.isfinite(value):
         raise ValidationError('nonfinite number')
+    if isinstance(value, str) and any(0xD800 <= ord(ch) <= 0xDFFF for ch in value):
+        raise ValidationError('lone surrogate in string')
     if isinstance(value, dict):
-        for child in value.values():
+        for key, child in value.items():
+            _finite(key, depth + 1)
             _finite(child, depth + 1)
     elif isinstance(value, list):
         for child in value:
@@ -118,14 +121,22 @@ class Validator:
                     or any(not isinstance(x, str) or x not in props for x in required)
                     or len(set(required)) != len(required)):
                 raise ValidationError('required must name unique declared properties')
+            if 'schema' in props or '$id' in schema:
+                schema_prop = props.get('schema')
+                const_val = schema_prop.get('const') if isinstance(schema_prop, dict) else None
+                if ('schema' not in required
+                        or not isinstance(const_val, str)
+                        or not re.fullmatch(r'[a-z_]+/v0\.[12]', const_val)):
+                    raise ValidationError('schema property must be required with a versioned const')
             for value in props.values():
                 child(value)
         for key in ('minimum', 'maximum'):
-            if key in schema and type(schema[key]) not in (int, float):
-                raise ValidationError(key + ' must be numeric')
+            if key in schema and (type(schema[key]) not in (int, float)
+                                  or not (-MAX_SAFE_INTEGER <= schema[key] <= MAX_SAFE_INTEGER)):
+                raise ValidationError(key + ' must be numeric within safe integer rails')
         for key in ('minLength', 'maxLength', 'minItems', 'maxItems', 'maxProperties'):
-            if key in schema and (type(schema[key]) is not int or schema[key] < 0):
-                raise ValidationError(key + ' must be a nonnegative integer')
+            if key in schema and (type(schema[key]) is not int or schema[key] < 0 or schema[key] > 65536):
+                raise ValidationError(key + ' must be a nonnegative integer within ceiling')
         for low, high in (('minimum', 'maximum'), ('minLength', 'maxLength'), ('minItems', 'maxItems')):
             if low in schema and high in schema and schema[low] > schema[high]:
                 raise ValidationError('inverted bounds')
@@ -204,6 +215,16 @@ class Validator:
                 fail('unexpected properties: ' + ', '.join(sorted(value.keys() - props.keys())))
             for key in value.keys() & props.keys():
                 self.validate(value[key], props[key], root, path + '.' + key, depth + 1)
+            if (value.get('schema') == 'terminal_session/v0.2'
+                    and value.get('op') in ('data', 'write')):
+                params = value.get('params')
+                if isinstance(params, dict):
+                    b64 = params.get('b64')
+                    byte_count = params.get('byte_count')
+                    if isinstance(b64, str) and type(byte_count) is int:
+                        decoded_len = len(b64) // 4 * 3 - (len(b64) - len(b64.rstrip('=')))
+                        if byte_count != decoded_len:
+                            fail('terminal byte_count mismatch')
         if isinstance(value, list):
             if len(value) < schema.get('minItems', 0):
                 fail('too few items')
@@ -215,7 +236,7 @@ class Validator:
         if isinstance(value, str):
             if (len(value) < schema.get('minLength', 0)
                     or len(value) > schema.get('maxLength', float('inf'))
-                    or len(value.encode('utf-8', 'surrogatepass')) > 65536):
+                    or len(value.encode('utf-8')) > 65536):
                 fail('string length outside bounds')
             if 'pattern' in schema:
                 pattern = schema['pattern']
