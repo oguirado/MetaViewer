@@ -1,17 +1,17 @@
 {
  "schema": "metaviewer.meta_ai_usage/v1",
  "totals": {
-  "lanes": 332,
-  "ok": 332,
-  "input_tokens": 72712284,
-  "cache_read_tokens": 1640744617,
-  "output_tokens": 15526269,
-  "thinking_tokens": 8176299,
+  "lanes": 333,
+  "ok": 333,
+  "input_tokens": 73160802,
+  "cache_read_tokens": 1652911369,
+  "output_tokens": 15607561,
+  "thinking_tokens": 8236271,
   "cache_hit_pct": 95.8,
-  "usd": 13.658,
-  "usd_per_lane": 0.0411,
-  "steps": 17706,
-  "lane_hours": 45.0
+  "usd": 13.7434,
+  "usd_per_lane": 0.0413,
+  "steps": 17807,
+  "lane_hours": 45.3
  },
  "peak_concurrent_lanes": 24,
  "rooms": {
@@ -133,6 +133,11 @@
   "mvui20": {
    "stage": "fix",
    "why": "URGENT: after the first live frame is presented, the following frames of the stream are refused and the tile falls back to Connecting (production-path e2e evidence).",
+   "orchestrator": "UI orchestrator"
+  },
+  "mvui20b": {
+   "stage": "fix",
+   "why": "Live tile turns black after a multislot round trip (second canvas for the same surface replaces and then removes the binding); black placeholder before the first frame.",
    "orchestrator": "UI orchestrator"
   },
   "mvui19": {
@@ -308,6 +313,11 @@
   "mv0mv": {
    "stage": "review",
    "why": "Verify the 16 findings of the second Gemini Argon cross-review (492d6d0..e19feb6: serve tools, frame subscriptions, journal anchor, contracts checker, catalog) and turn confirmed ones into Sol fix units.",
+   "orchestrator": "conductor"
+  },
+  "mvr3v3": {
+   "stage": "testing",
+   "why": "Refresh the 16 round-3 tester prompts (8 ChatGPT, 8 Jules) to the CURRENT bridge/integration head before the operator launches them: they were written at midday and about 60 integrations landed since.",
    "orchestrator": "conductor"
   },
   "mv0av": {
@@ -7458,6 +7468,27 @@
    "thinking_tokens": 41563,
    "cache_hit_pct": 95.5,
    "usd": 0.083317
+  },
+  {
+   "room": "mvui20",
+   "lane": "F",
+   "title": "subsequent frames REFUSED",
+   "stage": "fix",
+   "model": "muse-spark-1.3",
+   "orchestrator": "UI orchestrator",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-27T18:43:45.087000+00:00",
+   "duration_s": 1179.5,
+   "end_utc": "2026-10-27T19:03:24.540000+00:00",
+   "phase": "build",
+   "steps": 101,
+   "input_tokens": 448518,
+   "cache_read_tokens": 12166752,
+   "output_tokens": 81292,
+   "thinking_tokens": 59972,
+   "cache_hit_pct": 96.4,
+   "usd": 0.085444
   }
  ]
 }
