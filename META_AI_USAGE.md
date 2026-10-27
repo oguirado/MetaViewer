@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 217 | 55 | 162 |
-| Lanes finished OK | 217 | 55 | 162 |
-| Agent steps | 10,657 | 2,705 | 7,952 |
-| Lane-hours of agent work | 27.4 | 5.2 | 22.2 |
-| Fresh input tokens | 46,612,068 | 11,482,034 | 35,130,034 |
-| Cache-read input tokens | 944,454,371 | 226,255,212 | 718,199,159 |
-| Prompt cache hit % | 95.3 | 95.2 | 95.3 |
-| Output tokens | 9,795,614 | 2,135,708 | 7,659,906 |
-| Thinking tokens | 5,245,398 | 1,050,039 | 4,195,359 |
-| Cost (USD) | 8.5092 | 2.0279 | 6.4814 |
-| Cost per lane (USD) | 0.0392 | 0.0369 | 0.04 |
+| Lanes launched | 229 | 55 | 174 |
+| Lanes finished OK | 229 | 55 | 174 |
+| Agent steps | 11,314 | 2,705 | 8,609 |
+| Lane-hours of agent work | 29.3 | 5.2 | 24.0 |
+| Fresh input tokens | 49,007,249 | 11,482,034 | 37,525,215 |
+| Cache-read input tokens | 1,012,521,232 | 226,255,212 | 786,266,020 |
+| Prompt cache hit % | 95.4 | 95.2 | 95.4 |
+| Output tokens | 10,351,234 | 2,135,708 | 8,215,526 |
+| Thinking tokens | 5,563,904 | 1,050,039 | 4,513,865 |
+| Cost (USD) | 8.996 | 2.0279 | 6.9681 |
+| Cost per lane (USD) | 0.0393 | 0.0369 | 0.04 |
 
-Rooms: 48. Peak concurrent lanes [MEASURED from lane start/end]: 24.
+Rooms: 51. Peak concurrent lanes [MEASURED from lane start/end]: 24.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -48,10 +48,10 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | ops | 4 | 88.1 | 0.0468 |
 | plan | 12 | 92.6 | 0.3072 |
 | research | 14 | 94.6 | 0.5673 |
-| review | 39 | 94.4 | 1.1812 |
+| review | 47 | 94.4 | 1.393 |
 | test | 12 | 95.6 | 0.5657 |
 | testing | 14 | 93.6 | 0.392 |
-| ui | 5 | 95.5 | 0.4215 |
+| ui | 9 | 96.4 | 0.6965 |
 | vision | 5 | 96.6 | 0.3302 |
 
 ## By room (why and what for)
@@ -106,6 +106,9 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0ab1r | conductor | Oct 27 01:25 | review | 2 | 91.5 | 0.035 | Blind adversarial review of the two candidates of A/B pair 1 (same test unit written by two different writer models), to measure writer quality before choosing the cheaper seat for test units. |
 | mv0jb | conductor | Oct 27 01:41 | review | 3 | 94.0 | 0.1343 | Prepare the W1 judgement: evidence bundle per acceptance criterion, consolidated open findings across all testers and reviews, and the XML judge brief for the Opus and Argon judges. |
 | mv0rv | conductor | Oct 27 01:47 | review | 3 | 95.0 | 0.0654 | Verify the 12 findings of the third Gemini Argon cross-review (integrations since e19feb6: frame_ref v0.2 path, preload origin, no-follow witness, journal lock, UI drops) and turn confirmed ones into Sol fix units. |
+| mv0p1 | conductor | Oct 27 02:00 | review | 4 | 94.9 | 0.1175 | Re-verify the 35 open P1 findings on the current head and turn the still-open ones into disjoint, ordered Sol fix units: the morning work queue towards the v0.2.0 release. |
+| mvui3n | UI orchestrator | Oct 27 02:52 | ui | 4 | 97.5 | 0.275 | Polish the MetaViewer wall for live data after the live G-W1 gate passed: a live-replay fixture through the real authority runtime, live tile states, multislot real terminal sessions and a receipt/verdict activity strip. |
+| mv0sv | conductor | Oct 27 04:07 | review | 4 | 94.4 | 0.0942 | Verify the 26 findings of the fourth Gemini Argon cross-review (integrations 102f2e0..b64ec5a after G-W1) and turn confirmed ones into Sol fix units. |
 
 ## Every lane
 
@@ -328,6 +331,18 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0rv | R_CORE | Verify Argon findings r_core | Oct 27 01:47 | yes | 52 | 96.5 | 0.028434 |
 | mv0rv | R_UI | Verify Argon findings r_ui | Oct 27 01:47 | yes | 47 | 94.9 | 0.026538 |
 | mv0rv | R_ADAPTER | Verify Argon findings r_adapter | Oct 27 01:47 | yes | 15 | 86.0 | 0.010406 |
+| mv0p1 | CORE | P1 backlog CORE | Oct 27 02:00 | yes | 37 | 93.6 | 0.033091 |
+| mv0p1 | ADAPTER | P1 backlog ADAPTER | Oct 27 02:00 | yes | 58 | 96.4 | 0.034043 |
+| mv0p1 | UIEL | P1 backlog UIEL | Oct 27 02:00 | yes | 24 | 90.2 | 0.016941 |
+| mv0p1 | CI | P1 backlog CI | Oct 27 02:00 | yes | 47 | 95.5 | 0.033459 |
+| mvui3n | R | Live-replay fixture through the real authority runtime | Oct 27 02:52 | yes | 78 | 97.6 | 0.074263 |
+| mvui3n | T | Live tile states UX | Oct 27 02:53 | yes | 92 | 97.7 | 0.068771 |
+| mvui3n | M | Multislot real terminal sessions | Oct 27 02:53 | yes | 91 | 97.7 | 0.072079 |
+| mvui3n | V | Receipt and verdict activity strip | Oct 27 02:53 | yes | 73 | 96.7 | 0.059905 |
+| mv0sv | S_CORE | Verify Argon findings s_core | Oct 27 04:07 | yes | 49 | 95.4 | 0.030601 |
+| mv0sv | S_UI | Verify Argon findings s_ui | Oct 27 04:08 | yes | 39 | 94.5 | 0.021885 |
+| mv0sv | S_ADAPTER | Verify Argon findings s_adapter | Oct 27 04:08 | yes | 44 | 94.5 | 0.023579 |
+| mv0sv | S_CI | Verify Argon findings s_ci | Oct 27 04:08 | yes | 25 | 90.9 | 0.018159 |
 
 ## Method
 
