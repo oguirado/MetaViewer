@@ -149,6 +149,12 @@ function checkAc02TileSample(tile, minFps) {
   if (sample.visible && sample.fps < minFps) {
     throw new E2EError('E2E_FPS', `tile ${sample.capsuleId} renders ${sample.fps} fps, need ${minFps}`);
   }
+  if (sample.visible && (sample.hidden || sample.frameId === null)) {
+    throw new E2EError('E2E_REPORT', `visible tile ${sample.capsuleId} must be unfolded and have a frame`);
+  }
+  if (sample.visible && !(sample.genAfter > sample.genBefore)) {
+    throw new E2EError('E2E_FPS', `visible tile ${sample.capsuleId} claims fps without advancing capture generation`);
+  }
   if (sample.hidden && !(sample.genAfter > sample.genBefore)) {
     throw new E2EError('E2E_FOLD', `folded tile ${sample.capsuleId} stopped capturing`);
   }
@@ -393,6 +399,34 @@ describe('ac02 wall harness contract', () => {
     rejectsWith(() => validateAc02Report(report, { frameOwners: owners }), ['E2E_ROUTING']);
   });
 
+  it('ARG-s_ci-5: visible tile without a frame is refused', () => {
+    const mutant = validAc02Report();
+    mutant.tiles[0].frameId = null;
+    rejectsWith(() => validateAc02Report(mutant), ['E2E_REPORT']);
+  });
+
+  it('ARG-s_ci-5: a tile cannot be visible and hidden simultaneously', () => {
+    const mutant = validAc02Report();
+    mutant.tiles[0].hidden = true;
+    rejectsWith(() => validateAc02Report(mutant), ['E2E_REPORT']);
+  });
+
+  it('ARG-s_ci-5: visible tile with stalled or regressed generation is refused', () => {
+    for (const delta of [0, -1]) {
+      const mutant = validAc02Report();
+      mutant.tiles[0].genAfter = mutant.tiles[0].genBefore + delta;
+      rejectsWith(() => validateAc02Report(mutant), ['E2E_FPS']);
+    }
+  });
+
+  it('ARG-s_ci-5: a folded tile can capture without a presented frame', () => {
+    const report = validAc02Report();
+    report.tiles[3].frameId = null;
+    const summary = validateAc02Report(report);
+    assert.equal(summary.live, 4);
+    assert.equal(summary.folded, 1);
+  });
+
   it('negative control: visible tile below the fps floor is refused', () => {
     const mutant = validAc02Report();
     mutant.tiles[0].fps = 9.5;
@@ -493,9 +527,7 @@ describe('ac02 live wall journey', () => {
     assert.ok(summary.tiles.every((tile) => tile.frameId !== null), 'every live tile needs a frame');
   });
 
-  it('live folded capture and fps soak reports telemetry', {
-    todo: 'GAP-AC02-CADENCE: daemon-adapter/internal/daemon/environment.go:160 and internal/frames/subscriptions.go:154 wait 100ms after capture/publication, below the sustained 10fps floor',
-  }, () => {
+  it('live folded capture and fps soak reports telemetry', () => {
     // Fail on the product cadence defect before an unrelated fixture prerequisite.
     const root = findRepoRoot(__dirname);
     const polling = readFileSync(join(root, 'daemon-adapter/internal/frames/subscriptions.go'), 'utf8');
