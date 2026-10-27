@@ -21,18 +21,36 @@ export async function enterNested(argv, env, display) {
 }
 
 /**
- * Read-only in-memory layout service; no core or persistent storage capability.
+ * Read-only display bootstrap; no core or persistent storage capability.
  * @param {Pick<import('electron').IpcMain, 'handle'>} ipcMain
  * @param {unknown} contents
  */
 export function installReadOnlyLayout(ipcMain, contents) {
-  ipcMain.handle(CHANNELS.load, (event, ...args) => {
-    if (observeSender(event, contents, PRIVILEGED_ORIGIN).verdict !== 'admit' || args.length) {
-      throw new Error('DISPLAY_ONLY: layout sender refused');
-    }
-    return null;
-  });
-  ipcMain.handle(CHANNELS.save, () => { throw new Error('DISPLAY_ONLY: layout persistence is disabled'); });
+  // [TARGET, unit decision] The shared renderer awaits these read-only domain
+  // channels before mounting. Nested display has fixed depth and no self id,
+  // export destination or persisted settings; every privileged action refuses.
+  /** @type {Map<string, number|null>} */
+  const reads = new Map([
+    [CHANNELS.load, null],
+    ['metaviewer:nested.depth', 1],
+    ['metaviewer:nested.self', null],
+    ['metaviewer:recording.destination', null],
+    ['metaviewer:settings.load', null],
+  ]);
+  for (const [channel, value] of reads) {
+    ipcMain.handle(channel, (event, ...args) => {
+      if (observeSender(event, contents, PRIVILEGED_ORIGIN).verdict !== 'admit' || args.length) {
+        throw new Error('DISPLAY_ONLY: layout sender refused');
+      }
+      return value;
+    });
+  }
+  for (const channel of [CHANNELS.save, 'metaviewer:settings.save',
+    'metaviewer:authority.propose', 'metaviewer:authority.intent',
+    'metaviewer:authority.subscribe', 'metaviewer:authority.unsubscribe',
+    'metaviewer:side-terminal.open', 'metaviewer:side-terminal.enabled']) {
+    ipcMain.handle(channel, () => { throw new Error('DISPLAY_ONLY: layout persistence is disabled; privileged actions are disabled'); });
+  }
 }
 
 /** @param {typeof import('electron')} electron */
