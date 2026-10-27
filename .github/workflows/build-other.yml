@@ -1,0 +1,198 @@
+# Hosted runner evidence is [VM]; sealed capsule/runtime gates remain host-only.
+name: Other platform build references
+'on':
+  workflow_dispatch:
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  build-other-reference:
+    # Re-enable on push when the repository is public.
+    if: github.event_name == 'workflow_dispatch'
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            platform: darwin
+          - runner: windows-latest
+            platform: win32
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+      - name: Read locked kit identity
+        id: kit
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, re
+          lock = json.load(open('ui/kit.lock.json'))
+          assert re.fullmatch(r'[0-9a-f]{40}', lock['commit'])
+          match = re.fullmatch(r'https://github.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\.git', lock['repo'])
+          assert match, 'kit repository is not a GitHub checkout'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              print('repository=' + match[1], file=output)
+              print('commit=' + lock['commit'], file=output)
+          PYEOF
+      - name: Require kit access
+        env:
+          KIT_REPO_TOKEN: ${{ secrets.KIT_REPO_TOKEN }}
+        run: test -n "$KIT_REPO_TOKEN"
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ steps.kit.outputs.repository }}
+          ref: ${{ steps.kit.outputs.commit }}
+          token: ${{ secrets.KIT_REPO_TOKEN }}
+          path: kit-checkout
+          persist-credentials: false
+      - name: Canonicalize checkout origin for lock verification
+        run: |
+          origin="$(git -C kit-checkout remote get-url origin)"
+          git -C kit-checkout remote set-url origin "${origin%.git}.git"
+      - name: Prime locked dependencies
+        working-directory: ui
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify locked platform archive checksum availability
+        run: |
+          node --input-type=module - <<'JSEOF'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          const read = name => JSON.parse(fs.readFileSync(`ui/${name}`, 'utf8'));
+          const version = read('package.json').dependencies.electron;
+          assert.equal(read('package-lock.json').packages['node_modules/electron'].version, version);
+          assert.equal(read('node_modules/electron/package.json').version, version);
+          const archive = `electron-v${version}-${process.platform}-${process.arch}.zip`;
+          assert.match(read('node_modules/electron/checksums.json')[archive] || '', /^[a-f0-9]{64}$/);
+          JSEOF
+      - name: Execute gate and publish receipt
+        if: always()
+        env:
+          JOB_ID: build-other-reference
+          PLATFORM: ${{ matrix.platform }}
+          SETUP_RESULT: ${{ job.status }}
+          MV_PKG_OUT: ${{ runner.temp }}/metaviewer-package
+          CAPSULE_UI_KIT_REPO: ${{ github.workspace }}/kit-checkout
+          ELECTRON_OVERRIDE_DIST_PATH: ${{ github.workspace }}/ui/node_modules/electron/dist
+        run: |
+          set +e
+          set -u -o pipefail
+          EVDIR="${RUNNER_TEMP}/metaviewer-ci/${JOB_ID}/${PLATFORM}"
+          mkdir -p "$EVDIR"
+          WF_SHA="$(python3 -c 'import hashlib; print(hashlib.sha256(open(".github/workflows/build-other.yml","rb").read()).hexdigest())')"
+          ISSUER="CI/${JOB_ID}/${GITHUB_RUN_ID} [VM]"
+          sanitize() {
+            python3 - "$1" "$2" <<'PYEOF'
+          import re, sys
+          text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
+          for prefix in ('gh' + 'p_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
+              text = re.sub(re.escape(prefix).replace('_', '(?:_|%5[fF])') + r'(?:[A-Za-z0-9_\-]|%[0-9a-fA-F]{2}){4,}', '[REDACTED]', text, flags=re.I)
+          text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
+          open(sys.argv[2], 'w').write(text)
+          PYEOF
+          }
+          finish_gate() {
+            local gate="$1" rc="$2" outcome="$3" reason="$4" raw="$5" fixture="$6" countsrc="$7" parseut="$8"
+            shift 8
+            [ "${1:-}" = "--" ] && shift
+            local sane="${raw}.sane"
+            sanitize "$raw" "$sane" || return 2
+            GATE="$gate" PLATFORM="$PLATFORM" ISSUER="$ISSUER" WF_SHA="$WF_SHA" RC="$rc" OUTCOME="$outcome" \
+            REASON="$reason" EVDIR="$EVDIR" RAW="$raw" SANE="$sane" FIXTURE="$fixture" COUNTSRC="$countsrc" \
+            PARSEUT="$parseut" CWD="$(pwd -P)" GCWD="${GCWD:-}" SHA="$GITHUB_SHA" \
+            ARGV_JSON="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@")" \
+            python3 <<'PYEOF' || return 2
+          import hashlib, json, os, re
+          e = os.environ
+          def sha_file(p):
+              with open(p, 'rb') as f:
+                  return hashlib.sha256(f.read()).hexdigest()
+          rc = None if e['RC'] == 'UNEXEC' else int(e['RC'])
+          passed = failed = skipped = None
+          if e['PARSEUT'] == '1':
+              text = open(e['SANE']).read()
+              m = re.search(r'^Ran (\d+) tests?', text, re.M)
+              if m:
+                  total = int(m.group(1))
+                  f = re.search(r'^FAILED \((.*)\)', text, re.M)
+                  if f:
+                      g = lambda n: (lambda m: int(m.group(1)) if m else 0)(re.search(n + r'=(\d+)', f.group(1)))
+                      failed = g('failures') + g('errors')
+                      skipped = g('skipped')
+                      passed = total - failed - skipped
+                  elif re.search(r'^OK', text, re.M):
+                      s = re.search(r'^OK \(skipped=(\d+)\)', text, re.M)
+                      skipped = int(s.group(1)) if s else 0
+                      failed = 0
+                      passed = total - skipped
+          if e['PARSEUT'] == '1' and passed is None:
+              text = open(e['SANE']).read()
+              values = {key: int(value) for key, value in re.findall(r'^# (pass|fail|skipped) (\d+)$', text, re.M)}
+              if 'pass' in values and 'fail' in values:
+                  passed, failed, skipped = values['pass'], values['fail'], values.get('skipped', 0)
+          print('passed %s failed %s skipped %s' % (passed, failed, skipped),
+                file=open(e['GITHUB_STEP_SUMMARY'], 'a'))
+          receipt = {
+              'schema': 'gate_receipt/v1', 'gate_id': e['GATE'], 'leg': e['GATE'], 'profile': 'W3',
+              'owner': 'W3-CI-MATRIX', 'issuer': e['ISSUER'],
+              'scope': {'unit': 'W3-CI-MATRIX', 'platform': e['PLATFORM'], 'feature': e['GATE'],
+                        'artifact': e['GATE'] + '.receipt.json'},
+              'argv': json.loads(e['ARGV_JSON']), 'cwd': e['GCWD'] or e['CWD'],
+              'rc': rc, 'outcome': e['OUTCOME'], 'reason': e['REASON'],
+              'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
+                             'artifact_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
+                             'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
+              'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
+                              'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
+                              'accepted': e['OUTCOME'] == 'PASS'}],
+              'counts': {'passed': passed, 'failed': failed, 'skipped': skipped, 'source': e['COUNTSRC']}}
+          out = os.path.join(e['EVDIR'], e['GATE'] + '.receipt.json')
+          with open(out, 'w') as f:
+              json.dump(receipt, f, indent=2)
+          print('receipt: ' + out)
+          PYEOF
+            {
+              echo "## ${gate} [VM] rc ${rc/UNEXEC/UNKNOWN}"
+              echo "outcome ${outcome}: ${reason}"
+              echo '```'
+              tail -n 40 "$sane"
+              echo '```'
+              echo '```'
+              grep -E '^FAIL' "$sane" | head -40
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            tail -n 40 "$sane"
+          }
+          LOG="$EVDIR/build-other-reference.log"
+          if [ "$SETUP_RESULT" != success ]; then
+            printf 'FAIL prerequisite step did not complete successfully\n' > "$LOG"
+            finish_gate build-other-reference 1 FAIL "prerequisite failure" "$LOG" .github/workflows/build-other.yml unexecuted 0 -- prerequisites || exit 2
+            exit 1
+          fi
+          # [TARGET, unit decision] Build references do not claim capsule runtime support.
+          (
+            set -e
+            npm --prefix ui ci --offline --ignore-scripts --no-audit --no-fund
+            node tools/sync_kit.mjs
+            node tools/sync_kit.mjs --check
+            npm --prefix ui test
+            npm --prefix ui run check
+            npm --prefix ui run build
+          ) > "$LOG" 2>&1
+          rc=$?
+          outcome=PASS
+          [ "$rc" -eq 0 ] || outcome=FAIL
+          finish_gate build-other-reference "$rc" "$outcome" "executed hosted reference" "$LOG" .github/workflows/build-other.yml "unparsed:node-tap-or-build" 1 -- npm --prefix ui test/check/build || exit 2
+          exit "$rc"
