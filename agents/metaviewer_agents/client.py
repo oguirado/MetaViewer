@@ -6,10 +6,15 @@ pins the sender identity and sequence after the first send. Any inbound
 violation, transport failure or timeout closes the socket and leaves the
 instance terminal; callers then start over with a fresh client instead of
 retrying on compromised state. Single-thread ownership only.
+
+[TARGET, unit decision] Explicit hello/v0.2 exchanges take trusted peer
+registration and deps.lock entries from the caller; a matching core hello
+acknowledges acceptance. Legacy transport-only connections remain supported.
 """
 
 from __future__ import annotations
 
+import copy
 import math
 import os
 import socket
@@ -76,6 +81,56 @@ class CoreClient:
         self._terminal = False
         self._rx = bytearray()
         self._pinned: tuple | None = None
+        self._hello_complete = False
+
+    @property
+    def connected(self) -> bool:
+        """Whether the live channel completed the explicit hello exchange."""
+        return self._hello_complete and self._sock is not None and not self._terminal
+
+    def handshake(self, envelope: dict, *, expected_peer: dict,
+                  dependency_pins: list[dict]) -> dict:
+        """Exchange hello/v0.2 against trusted registration and dependency pins.
+
+        [TARGET, unit decision] The caller supplies the local hello, exact
+        expected core hello and dependency entries projected from deps.lock.
+        The core's registered hello is its acceptance (serve::connection).
+        This opt-in exchange precedes every verb on this channel; legacy
+        transport-only callers retain their explicit connect/send interface.
+        Any failed exchange is terminal, including local pin mismatches.
+        """
+        if self._terminal or self._next_seq != 1 or self._hello_complete:
+            self._terminate()
+            raise ClientError("socket", "hello requires a fresh client")
+        try:
+            validate_envelope(envelope)
+            local = envelope["body"]
+            if (local["schema"] != "hello/v0.2"
+                    or local["component"] != envelope["from"]["component"]
+                    or local["dependencies"] != dependency_pins):
+                raise ClientError("version", "hello does not match registration")
+            expected = copy.deepcopy(envelope)
+            expected["from"], expected["to"] = expected["to"], expected["from"]
+            expected["body"] = copy.deepcopy(expected_peer)
+            validate_envelope(expected)
+            if (expected_peer["schema"] != "hello/v0.2"
+                    or expected_peer["component"] != envelope["to"]["component"]):
+                raise ClientError("version", "invalid peer registration")
+            self.connect()
+            reply = self.call(envelope)
+            if (reply["body"] != expected["body"]
+                    or reply["from"] != expected["from"]
+                    or reply["to"] != expected["to"]
+                    or reply["session_id"] != expected["session_id"]):
+                raise ClientError("version", "peer hello does not match registration")
+            self._hello_complete = True
+            return reply
+        except EnvelopeError as exc:
+            self._terminate()
+            raise _map_envelope_error(exc) from None
+        except ClientError:
+            self._terminate()
+            raise
 
     @property
     def next_seq(self) -> int:
