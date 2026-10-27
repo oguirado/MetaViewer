@@ -19,6 +19,7 @@ import installFramePortRouter, {
   FRAME_PORT_NOTICE_TYPE,
 } from '../src/frames/framePortRouter.js';
 import { createTileScheduler } from '../src/surfaces/tileScheduler.js';
+import { tick, untilAcks } from './frame-wait.mjs';
 
 const ORIGIN = 'app://metaviewer';
 // REAL-like identities (live3): notice stream id 886, delivery binding 1/7,
@@ -32,20 +33,6 @@ const BUDGET = Object.freeze({
   maxDrawsPerTick: 4, maxUploadBytesPerTick: 16777216, maxPresentMsPerTick: 8,
   maxWarmResourcesPerSurface: 1, maxDrainSteps: 4,
 });
-const flush = () => new Promise((resolve) => setImmediate(resolve));
-async function tick() {
-  for (let i = 0; i < 5; i += 1) await flush();
-}
-async function until(condition, label) {
-  for (let i = 0; i < 2000; i += 1) {
-    if (condition()) return;
-    await flush();
-  }
-  throw new Error(`timed out waiting for ${label}`);
-}
-async function untilAcks(port, count) {
-  await until(() => port.acks.length >= count, `${count} acks`);
-}
 async function hexDigest(bytes) {
   const digest = await webcrypto.subtle.digest('SHA-256', bytes);
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');

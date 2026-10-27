@@ -15,31 +15,13 @@ import installFramePortRouter, {
   isFramePortNotice,
 } from '../src/frames/framePortRouter.js';
 import { createTileScheduler } from '../src/surfaces/tileScheduler.js';
+import { tick, untilAcks } from './frame-wait.mjs';
 
 const ORIGIN = 'app://metaviewer';
 const BUDGET = Object.freeze({
   maxDrawsPerTick: 4, maxUploadBytesPerTick: 16777216, maxPresentMsPerTick: 8,
   maxWarmResourcesPerSurface: 1, maxDrainSteps: 4,
 });
-const flush = () => new Promise((resolve) => setImmediate(resolve));
-// Quiescence for synchronous paths (refusals, silent drops, adoptions):
-// nothing async is ever scheduled, so a few turns prove the outcome.
-async function tick() {
-  for (let i = 0; i < 5; i += 1) await flush();
-}
-// Deterministic wait for async outcomes (digest-gated paints): poll the
-// expected condition under a generous bound instead of counting turns,
-// so loaded machines cannot flake the suite.
-async function until(condition, label) {
-  for (let i = 0; i < 2000; i += 1) {
-    if (condition()) return;
-    await flush();
-  }
-  throw new Error(`timed out waiting for ${label}`);
-}
-async function untilAcks(port, count) {
-  await until(() => port.acks.length >= count, `${count} acks`);
-}
 async function hexDigest(bytes) {
   const digest = await webcrypto.subtle.digest('SHA-256', bytes);
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
