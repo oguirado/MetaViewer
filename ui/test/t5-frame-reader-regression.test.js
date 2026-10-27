@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createFrameReader, FRAME_REASONS } from '../electron/frameReader.js';
 const rgbBytes = () => new Uint8Array(36).fill(7);
-const validRef = (over = {}) => ({schema: 'frame_ref/v0.1', surface_id: 'capsule-A',
+const validRef = (over = {}) => ({schema: 'frame_ref/v0.2', surface_id: 'capsule-A',
   generation: 1, tick: 11, ts_ns: 22, width: 4, height: 3, format: 'rgb24',
   ramws_path: '/dev/shm/mv-test/f000001.rgb', capture_us: 33,
   sha256: createHash('sha256').update(rgbBytes()).digest('hex'), ...over});

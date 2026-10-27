@@ -4,7 +4,7 @@
 /**
  * W1-FRAMES-READER: verify immutable rgb24 frame generations before publishing.
  *
- * Runs in an Electron utility process. Consumes `frame_ref/v0.1` references,
+ * Runs in an Electron utility process. Consumes `frame_ref/v0.2` references,
  * acquires the published source through the injected trusted producer
  * capability, copies a bounded private snapshot, declares the C-PIXEL layout
  * before hashing, and verifies packed size plus SHA-256 before returning an
@@ -21,8 +21,8 @@
  * propagate loudly; reader state stays consistent either way.
  *
  * mmap / native-shm reads are ABSENT; the bounded owned copy is the target.
- * Per-frame epoch / pixel-environment wire witnesses await the v0.2 producer
- * reference (ABSENT, never invented): the configured contract-reviewed
+ * Per-frame epoch / pixel-environment wire witnesses are absent from the v0.2
+ * reference: the configured contract-reviewed
  * `pixelEnvironment` is stamped into every verified `pixelSpec`.
  *
  * @module frameReader
@@ -55,18 +55,18 @@ import { createHash } from 'node:crypto';
  */
 
 /**
- * @typedef {object} FrameRef Admitted `frame_ref/v0.1` fields.
- * @property {string} schema Must equal `frame_ref/v0.1`.
+ * @typedef {object} FrameRef Admitted `frame_ref/v0.2` fields.
+ * @property {string} schema Must equal `frame_ref/v0.2`.
  * @property {string} surface_id Surface identity.
- * @property {number} generation Frame generation, integer >= 1.
- * @property {number} tick Source tick.
- * @property {number} ts_ns Source timestamp.
- * @property {number} width Frame width.
- * @property {number} height Frame height.
+ * @property {number} generation Frame generation, positive safe integer.
+ * @property {number} tick Source tick, non-negative safe integer.
+ * @property {number} ts_ns Source timestamp, non-negative safe integer.
+ * @property {number} width Frame width, positive safe integer.
+ * @property {number} height Frame height, positive safe integer.
  * @property {string} format Must equal `rgb24`.
  * @property {string} ramws_path Source path under `/dev/shm/`.
  * @property {string} sha256 Lowercase hex digest of the packed rgb24 bytes.
- * @property {number} capture_us Capture duration.
+ * @property {number} capture_us Capture duration, non-negative safe integer.
  */
 
 /**
@@ -220,7 +220,7 @@ export const SOURCE_RETIRED_REASON = 'SNAPSHOT_VERIFIED';
 const NULL_DIGEST = '0'.repeat(64);
 
 /** Expected schema tag of consumed frame references. */
-const FRAME_REF_SCHEMA = 'frame_ref/v0.1';
+const FRAME_REF_SCHEMA = 'frame_ref/v0.2';
 
 /** Only root the reader accepts lexically; deeper checks are the capability's. */
 const SHM_PREFIX = '/dev/shm/';
@@ -348,7 +348,7 @@ function isNonNegativeInt(value) {
 }
 
 /**
- * Lexical ramws path bounds: `/dev/shm/` root, no NUL, no `..` segment.
+ * Lexical ramws path bounds: `/dev/shm/` root, no NUL or empty/dot segments.
  * Symlink ancestry, ownership and file type stay with the trusted capability.
  * @param {unknown} value Alleged source path.
  * @returns {ReadRefusal|null} Refusal on violation, else null.
@@ -356,6 +356,9 @@ function isNonNegativeInt(value) {
 function checkRamwsPath(value) {
   if (typeof value !== 'string') {
     return refusal(FRAME_REASONS.INVALID_PATH, 'bad-path');
+  }
+  if ([...value].length > 65536) {
+    return refusal(FRAME_REASONS.INVALID_PATH, 'path-too-long');
   }
   if (!value.startsWith(SHM_PREFIX) || value.length === SHM_PREFIX.length) {
     return refusal(FRAME_REASONS.INVALID_PATH, 'wrong-root');
@@ -366,11 +369,14 @@ function checkRamwsPath(value) {
   if (value.split('/').includes('..')) {
     return refusal(FRAME_REASONS.INVALID_PATH, 'traversal');
   }
+  if (value.slice(SHM_PREFIX.length).split('/').some(segment => segment === '' || segment === '.')) {
+    return refusal(FRAME_REASONS.INVALID_PATH, 'noncanonical-path');
+  }
   return null;
 }
 
 /**
- * Admit a closed `frame_ref/v0.1` object into a fresh copy. Never returns the
+ * Admit a closed `frame_ref/v0.2` object into a fresh copy. Never returns the
  * caller object, so later caller mutation cannot widen an admitted read.
  * @param {unknown} frameRef Alleged frame reference.
  * @returns {{ok: true, ref: FrameRef}|{ok: false, outcome: ReadRefusal}} Admitted copy or refusal.
@@ -383,7 +389,7 @@ function admitFrameRef(frameRef) {
   if (raw.schema !== FRAME_REF_SCHEMA) {
     return { ok: false, outcome: refusal(FRAME_REASONS.INVALID_CONTRACT, 'bad-schema') };
   }
-  if (typeof raw.surface_id !== 'string' || raw.surface_id.length < 1 || raw.surface_id.length > 128) {
+  if (typeof raw.surface_id !== 'string' || raw.surface_id.length < 1 || [...raw.surface_id].length > 128) {
     return { ok: false, outcome: refusal(FRAME_REASONS.INVALID_CONTRACT, 'bad-surface-id') };
   }
   if (!isPositiveInt(raw.generation)) {
@@ -398,7 +404,7 @@ function admitFrameRef(frameRef) {
   if (raw.format !== 'rgb24') {
     return { ok: false, outcome: refusal(FRAME_REASONS.INVALID_CONTRACT, 'bad-format') };
   }
-  if (typeof raw.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(raw.sha256)) {
+  if (typeof raw.sha256 !== 'string' || raw.sha256.length !== 64 || !/^[0-9a-f]{64}$/.test(raw.sha256)) {
     return { ok: false, outcome: refusal(FRAME_REASONS.INVALID_CONTRACT, 'bad-sha256') };
   }
   const pathOutcome = checkRamwsPath(raw.ramws_path);
@@ -443,7 +449,7 @@ function assertReaderOptions(value) {
   if (typeof binding.principal !== 'string' || binding.principal.length === 0) {
     throw new FrameReaderError(FRAME_REASONS.INVALID_BINDING, 'binding.principal must be a non-empty string');
   }
-  if (typeof binding.surfaceId !== 'string' || binding.surfaceId.length === 0 || binding.surfaceId.length > 128) {
+  if (typeof binding.surfaceId !== 'string' || binding.surfaceId.length === 0 || [...binding.surfaceId].length > 128) {
     throw new FrameReaderError(FRAME_REASONS.INVALID_BINDING, 'binding.surfaceId must be a 1..128 character string');
   }
   if (!isPositiveInt(binding.epoch) || !isPositiveInt(binding.surfaceGeneration)) {
@@ -826,7 +832,7 @@ export function createFrameReader(options) {
    * Verify one frame reference. Pre-acquisition refusals touch neither the
    * producer nor the accepted floor; post-acquisition failures drop the
    * lease exactly once, still without advancing the floor.
-   * @param {unknown} frameRef Alleged `frame_ref/v0.1` object.
+   * @param {unknown} frameRef Alleged `frame_ref/v0.2` object.
    * @param {{signal?: AbortSignal}} [options] Optional caller abort.
    * @returns {Promise<ReadOutcome>} Verification outcome.
    */

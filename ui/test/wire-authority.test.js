@@ -134,7 +134,7 @@ test('verified frames use frameReader and framePort; digest tampering and replay
   const bytes=new Uint8Array([1,2,3]),messages=[],metadata=[],streams=new Set();
   const binding={principal:'ui',epoch:1,surfaceId:'s1',surfaceGeneration:1};
   const wirePort=new EventEmitter();wirePort.postMessage=value=>messages.push(value);wirePort.start=()=>{};wirePort.close=()=>{};
-  const frameRef={schema:'frame_ref/v0.1',surface_id:'s1',generation:1,tick:1,ts_ns:1,width:1,height:1,format:'rgb24',ramws_path:'/dev/shm/private.rgb',sha256:createHash('sha256').update(bytes).digest('hex'),capture_us:1};
+  const frameRef={schema:'frame_ref/v0.2',surface_id:'s1',generation:1,tick:1,ts_ns:1,width:1,height:1,format:'rgb24',ramws_path:'/dev/shm/private.rgb',sha256:createHash('sha256').update(bytes).digest('hex'),capture_us:1};
   const entry={frameRef,state:{...surface,secret_path:'/private'},readerOptions:{binding,limits:{maxFrameBytes:4096,maxWidth:64,maxHeight:64,readTimeoutMs:1000,maxConcurrentReads:1},pixelEnvironment:{environmentId:'test',zoom:1,dpr:1},onReleaseLease(){},acquirePublishedLease:async()=>({identity:{...binding,frameGeneration:entry.frameRef.generation,leaseId:`lease-${entry.frameRef.generation}`},published:true,byteLength:3,readOwnedBytes:async()=>bytes,release:async()=>{}})},portOptions:{port:wirePort,role:'sender',binding,limits:{maxFrameBytes:4096,ackTimeoutMs:1000,maxSurfacesPerPort:1},onReleaseLease(){},onRevoke(){}}};
   const contents={postMessage:(...args)=>metadata.push(args)};
   try {

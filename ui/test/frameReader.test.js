@@ -62,12 +62,12 @@ function sha256Hex(bytes) {
 
 /**
  * @param {object} [overrides] Field overrides.
- * @returns {Record<string, unknown>} Fresh closed `frame_ref/v0.1` object.
+ * @returns {Record<string, unknown>} Fresh closed `frame_ref/v0.2` object.
  */
 function validRef(overrides = {}) {
   const bytes = rgbBytes(4, 3);
   return {
-    schema: 'frame_ref/v0.1',
+    schema: 'frame_ref/v0.2',
     surface_id: SURFACE,
     generation: 1,
     tick: 11,
@@ -487,8 +487,8 @@ describe('readFrame contract refusals', () => {
     const missing = validRef();
     delete missing.capture_us;
     badRefs.push(missing);
-    badRefs.push(validRef({ schema: 'frame_ref/v0.2' }));
-    badRefs.push(validRef({ schema: 'frame_ref/v0.1 ' }));
+    badRefs.push(validRef({ schema: 'frame_ref/v0.1' }));
+    badRefs.push(validRef({ schema: 'frame_ref/v0.2 ' }));
     badRefs.push(validRef({ surface_id: '' }));
     badRefs.push(validRef({ surface_id: 'x'.repeat(129) }));
     badRefs.push(validRef({ surface_id: 7 }));

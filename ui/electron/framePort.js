@@ -13,6 +13,9 @@
  * A mismatch of epoch or a regressing generation is refused; the port is
  * revoked when either endpoint restarts or closes. No Electron import:
  * unit tests run directly under Node with fake ports.
+ * Public acceptAck accepts the FrameAck data shape; wire arrivals additionally
+ * require their schema and kind envelope. Consumer leases survive supersession
+ * and revocation until the consumer settles.
  *
  * @module framePort
  */
@@ -121,6 +124,8 @@ export const FRAME_ACK_SCHEMA = 'frame_ack/v0.2';
 
 /**
  * @typedef {object} FrameAck
+ * @property {string} [schema] Optional for the public API; wire ACKs require FRAME_ACK_SCHEMA.
+ * @property {string} [kind] Optional for the public API; when present must be 'ack'.
  * @property {string} principal
  * @property {number} epoch
  * @property {string} surfaceId
@@ -539,6 +544,10 @@ export function createFramePort(options) {
   let pending = null;
   /** @type {HeldFrame|null} */
   let held = null;
+  /** Active consumer owns its lease until onFrame settles. @type {HeldFrame|null} */
+  let consuming = null;
+  /** Deferred terminal outcome for the active consumer. @type {string|null} */
+  let consumingOutcome = null;
   /** @type {unknown} */
   let ackTimer = null;
   let ackTimerGen = 0;
@@ -639,6 +648,9 @@ export function createFramePort(options) {
       held = null;
       releaseRecord(record, reason);
     }
+    if (consuming !== null) {
+      consumingOutcome = reason;
+    }
     /** @type {PortRevokeNotice} */
     const notice = { binding: { ...binding }, reason };
     guardOwner(() => onRevoke(notice));
@@ -712,17 +724,21 @@ export function createFramePort(options) {
    * @returns {void}
    */
   function postRefusedAck(raw) {
+    if (checkIdentity(raw, binding) !== null || !isPositiveSafeInt(raw.frameGeneration) ||
+        !isNonEmptyString(raw.leaseId) || !isNonEmptyString(raw.correlation)) {
+      return;
+    }
     /** @type {Record<string, unknown>} */
     const ack = {
       schema: FRAME_ACK_SCHEMA,
       kind: 'ack',
-      correlation: typeof raw.correlation === 'string' ? raw.correlation : '',
-      principal: binding.principal,
-      epoch: binding.epoch,
-      surfaceId: binding.surfaceId,
-      surfaceGeneration: binding.surfaceGeneration,
-      frameGeneration: isPositiveSafeInt(raw.frameGeneration) ? raw.frameGeneration : 0,
-      leaseId: typeof raw.leaseId === 'string' ? raw.leaseId : '',
+      correlation: raw.correlation,
+      principal: raw.principal,
+      epoch: raw.epoch,
+      surfaceId: raw.surfaceId,
+      surfaceGeneration: raw.surfaceGeneration,
+      frameGeneration: raw.frameGeneration,
+      leaseId: raw.leaseId,
       outcome: ACK_OUTCOMES.REFUSED,
     };
     try {
@@ -766,6 +782,9 @@ export function createFramePort(options) {
     if (revoked || held !== record || onFrame === null) {
       return;
     }
+    held = null;
+    consuming = record;
+    consumingOutcome = null;
     /** @type {VerifiedFrame} */
     const frame = /** @type {VerifiedFrame} */ (
       Object.freeze({
@@ -780,7 +799,7 @@ export function createFramePort(options) {
         format: record.format,
         sha256: record.sha256,
         byteLength: record.byteLength,
-        pixelSpec: { ...record.pixelSpec },
+        pixelSpec: Object.freeze({ ...record.pixelSpec }),
         bytes: record.bytes,
       })
     );
@@ -796,23 +815,23 @@ export function createFramePort(options) {
     } catch {
       outcome = ACK_OUTCOMES.REFUSED;
     }
-    if (revoked || held !== record) {
-      return;
-    }
-    held = null;
-    try {
-      postOutcomeAck(record, outcome);
-    } catch {
-      // The frame is already consumed and released below; a dead port
-      // surfaces through the sender timeout and the revoke notice.
+    outcome = consumingOutcome === null ? outcome : consumingOutcome;
+    consuming = null;
+    consumingOutcome = null;
+    if (!revoked) {
+      try {
+        postOutcomeAck(record, outcome);
+      } catch {
+        // A dead port surfaces through the sender timeout/revoke notice.
+      }
     }
     releaseRecord(record, outcome);
   }
 
   /**
-   * Admit a validated delivery into the single newest-only slot. A replaced
-   * holding is released and ACKed SUPERSEDED at once, so every admitted
-   * delivery is exactly-once ACKed even when it never reaches the consumer.
+   * Admit a validated delivery into the single newest-only queue slot. Replaced
+   * queued holdings are released and ACKed at once; an active consumer defers
+   * its superseded outcome and release until its promise settles.
    *
    * @param {any} raw Delivery with checked identity and shape.
    * @returns {void}
@@ -838,6 +857,10 @@ export function createFramePort(options) {
         : `${binding.surfaceId}#${raw.frameGeneration}#${raw.leaseId}`,
     };
     acceptedFloor = record.frameGeneration;
+    if (consuming !== null && consumingOutcome === null) {
+      consumingOutcome = ACK_OUTCOMES.SUPERSEDED;
+      superseded += 1;
+    }
     if (held !== null) {
       const replaced = held;
       releaseRecord(replaced, ACK_OUTCOMES.SUPERSEDED);
@@ -867,21 +890,24 @@ export function createFramePort(options) {
       return;
     }
     if (role === 'sender') {
-      if (raw.kind !== 'ack') {
+      if (raw.kind !== 'ack' || raw.schema !== FRAME_ACK_SCHEMA) {
         refused += 1;
         return;
       }
       acceptAckInternal(/** @type {any} */ (raw));
       return;
     }
-    if (raw.kind !== 'frame') {
+    if (raw.kind !== 'frame' || raw.schema !== FRAME_DELIVERY_SCHEMA) {
       refused += 1;
       return;
     }
     const identity = checkIdentity(raw, binding);
     if (identity !== null) {
       refused += 1;
-      postRefusedAck(raw);
+      return;
+    }
+    if (!isNonEmptyString(raw.correlation)) {
+      refused += 1;
       return;
     }
     const shape = checkFrameShape(raw, limits);
@@ -950,9 +976,10 @@ export function createFramePort(options) {
       refused += 1;
       return identity;
     }
-    if (raw.kind !== 'ack') {
+    if ((raw.kind !== undefined && raw.kind !== 'ack') ||
+        (raw.schema !== undefined && raw.schema !== FRAME_ACK_SCHEMA)) {
       refused += 1;
-      return refusal(FRAME_REASONS.INVALID_CONTRACT, 'kind must be ack');
+      return refusal(FRAME_REASONS.INVALID_CONTRACT, 'invalid ACK envelope');
     }
     if (!isPositiveSafeInt(raw.frameGeneration)) {
       refused += 1;
@@ -1096,8 +1123,9 @@ export function createFramePort(options) {
 
   /**
    * Terminal teardown for either role: idempotent, detaches listeners,
-   * clears the ACK timer, closes the port, releases every holding exactly
-   * once, and notifies the owner exactly once.
+   * clears the ACK timer, closes the port, releases queued holdings exactly
+   * once, and notifies the owner exactly once. An active consumer retains its
+   * lease until settlement, then releases it with the revocation cause.
    *
    * @param {string} [reason] One of PORT_REVOKE_REASONS; defaults to PORT_REVOKED.
    * @returns {void}
@@ -1125,7 +1153,7 @@ export function createFramePort(options) {
         ackedFloor,
         inFlightGeneration: inFlight === null ? null : inFlight.frameGeneration,
         pendingGeneration: pending === null ? null : pending.frameGeneration,
-        heldGeneration: held === null ? null : held.frameGeneration,
+        heldGeneration: held !== null ? held.frameGeneration : consuming === null ? null : consuming.frameGeneration,
         sent,
         acked,
         acksSent,

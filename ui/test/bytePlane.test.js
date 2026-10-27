@@ -346,7 +346,8 @@ describe('ingest', () => {
       plane.ingest(ctx(), { seq: 1, b64: b64([9]) });
       const before = plane.snapshot(ctx());
       rejectsWith(() => plane.ingest(ctx(), { seq: 2, b64: bad }), 'bad-base64');
-      assert.deepEqual(plane.snapshot(ctx()), before);
+      // ARG-ui_frames-6: fatal input preserves counters but releases pending state.
+      assert.deepEqual(plane.snapshot(ctx()), { ...before, pendingFrames: 0, paused: false });
       assert.deepEqual(events.at(-1), ['fault', 's1', 'output', 'bad-base64']);
     }
   });
@@ -416,7 +417,7 @@ describe('ingest', () => {
     });
   });
 
-  it('pauses at 128 KiB and resumes strictly below 64 KiB', () => {
+  it('ARG-ui_frames-6: pauses at 128 KiB and resumes at 64 KiB', () => {
     const { plane, events } = makePlane();
     plane.open(ctx());
     const chunk = new Array(32768).fill(1);
@@ -428,8 +429,11 @@ describe('ingest', () => {
     assert.deepEqual(plane.snapshot(ctx()).paused, true);
     assert.deepEqual(events, [['pause', 's1', 'output']]);
     plane.acknowledge(ctx(), { seq: 1, bytes: 32768 });
-    plane.acknowledge(ctx(), { seq: 2, bytes: 65536 });
     assert.equal(plane.snapshot(ctx()).paused, true);
+    assert.equal(events.filter(event => event[0] === 'resume').length, 0);
+    plane.acknowledge(ctx(), { seq: 2, bytes: 65536 });
+    assert.equal(plane.snapshot(ctx()).paused, false);
+    assert.equal(events.filter(event => event[0] === 'resume').length, 1);
     plane.acknowledge(ctx(), { seq: 3, bytes: 98304 });
     assert.equal(plane.snapshot(ctx()).paused, false);
     assert.deepEqual(events.at(-1), ['resume', 's1', 'output']);
@@ -668,7 +672,7 @@ describe('attach', () => {
 });
 
 describe('fault boundaries', () => {
-  it('off-by-one: high-1 open, high paused, low equal paused, low-1 resumed', () => {
+  it('ARG-ui_frames-6: high-1 open, high paused, low+1 paused, low resumed', () => {
     const { plane, events } = makePlane(
       tinyLimits({ highWaterBytes: 32, lowWaterBytes: 8, maxPendingFrames: 64 }),
     );
@@ -680,8 +684,12 @@ describe('fault boundaries', () => {
     plane.ingest(ctx(), { seq: 32, b64: b64([32]) });
     assert.equal(plane.snapshot(ctx()).paused, true);
     assert.deepEqual(events, [['pause', 's1', 'output']]);
-    plane.acknowledge(ctx(), { seq: 24, bytes: 24 });
+    plane.acknowledge(ctx(), { seq: 23, bytes: 23 });
     assert.equal(plane.snapshot(ctx()).paused, true);
+    assert.equal(events.filter(event => event[0] === 'resume').length, 0);
+    plane.acknowledge(ctx(), { seq: 24, bytes: 24 });
+    assert.equal(plane.snapshot(ctx()).paused, false);
+    assert.equal(events.filter(event => event[0] === 'resume').length, 1);
     plane.acknowledge(ctx(), { seq: 25, bytes: 25 });
     assert.equal(plane.snapshot(ctx()).paused, false);
     assert.deepEqual(events.at(-1), ['resume', 's1', 'output']);

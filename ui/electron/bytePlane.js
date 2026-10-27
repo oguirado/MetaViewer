@@ -30,7 +30,7 @@
  * @typedef {object} PlaneLimits
  * @property {number} maxFrameBytes largest accepted decoded frame
  * @property {number} highWaterBytes unacked bytes that pause the producer
- * @property {number} lowWaterBytes unacked bytes must drop below to resume
+ * @property {number} lowWaterBytes resume when unacked bytes reach or fall below this value
  * @property {number} maxPendingBytes unacked bytes that fault the session
  * @property {number} maxPendingFrames unacked frames that fault the session
  * @property {number} replayBytes retained replay-suffix bound
@@ -386,9 +386,20 @@ function requireGeneration(ledger, context) {
  * @returns {never} always throws
  */
 function fail(ledger, context, code, detail, onFault) {
-  ledger.closed = true;
+  closeLedger(ledger);
   onFault(copyContext(context), code);
   throw new PlaneError(code, detail);
+}
+
+/** Release retained payload and ACK boundaries, preserving lifetime counters.
+ * @param {Ledger} ledger
+ */
+function closeLedger(ledger) {
+  ledger.closed = true;
+  ledger.replay = [];
+  ledger.replayBytes = 0;
+  ledger.frames.clear();
+  ledger.paused = false;
 }
 
 /**
@@ -398,6 +409,7 @@ function fail(ledger, context, code, detail, onFault) {
  * @param {Uint8Array} bytes owned chunk, retained by reference
  */
 function appendReplay(ledger, limits, seq, bytes) {
+  if (bytes.length === 0) return;
   ledger.replay.push({ seq, bytes });
   ledger.replayBytes += bytes.length;
   let excess = ledger.replayBytes - limits.replayBytes;
@@ -529,7 +541,7 @@ export function createBytePlane(options) {
           ledger.frames.delete(seq);
         }
       }
-      if (ledger.paused && ledger.sent - ledger.acked < limits.lowWaterBytes) {
+      if (ledger.paused && ledger.sent - ledger.acked <= limits.lowWaterBytes) {
         ledger.paused = false;
         onResume(copyContext(context));
       }
@@ -558,7 +570,8 @@ export function createBytePlane(options) {
       if (!ledger) {
         throw new PlaneError('unknown-session', `no ledger for ${context.direction}:${context.session}`);
       }
-      ledger.closed = true;
+      if (!ledger.closed) requireGeneration(ledger, context);
+      closeLedger(ledger);
     },
     snapshot(rawContext) {
       const context = assertContext(rawContext);

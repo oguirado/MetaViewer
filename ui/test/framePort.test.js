@@ -761,17 +761,16 @@ describe('receiver: validate, consume newest, ACK after consume', () => {
     port.emitMessage(deliveryFor(makeFrame({ frameGeneration: 2, leaseId: 'lease-2' })));
     port.emitMessage(deliveryFor(makeFrame({ frameGeneration: 3, leaseId: 'lease-3' })));
     await drain();
-    // Supersede-on-arrival replaces even the mid-consume holding: gen1 and
-    // gen2 are released SUPERSEDED and ACKed so a conforming sender never
-    // wedges into timeout; only the newest survivor reaches the consumer.
+    // ARG-ui_frames-4: only queued gen2 is released immediately. Active gen1
+    // retains its lease and ACK until the consumer settles.
     assert.deepEqual(seen, [1]);
     assert.deepEqual(
       sinks.releases.map((release) => [release.frameGeneration, release.reason]),
       [
-        [1, 'SUPERSEDED'],
         [2, 'SUPERSEDED'],
       ],
     );
+    assert.deepEqual(port.sent.map(ack => [ack.frameGeneration, ack.outcome]), [[2, 'SUPERSEDED']]);
     gates[0]({ outcome: 'PRESENTED' });
     await drain();
     assert.deepEqual(seen, [1, 3]);
@@ -780,16 +779,16 @@ describe('receiver: validate, consume newest, ACK after consume', () => {
     assert.deepEqual(
       sinks.releases.map((release) => [release.frameGeneration, release.reason]),
       [
-        [1, 'SUPERSEDED'],
         [2, 'SUPERSEDED'],
+        [1, 'SUPERSEDED'],
         [3, 'PRESENTED'],
       ],
     );
     assert.deepEqual(
       port.sent.map((ack) => [ack.frameGeneration, ack.outcome]),
       [
-        [1, 'SUPERSEDED'],
         [2, 'SUPERSEDED'],
+        [1, 'SUPERSEDED'],
         [3, 'PRESENTED'],
       ],
     );
@@ -812,26 +811,24 @@ describe('receiver: validate, consume newest, ACK after consume', () => {
       deliveryFor(makeFrame({ frameGeneration: 6, leaseId: 'lease-6', byteLength: 1 })),
       { schema: FRAME_DELIVERY_SCHEMA, kind: 'frame', correlation: 'junk' },
     ];
-    for (const message of bad) {
+    // ARG-ui_frames-3: foreign identities and missing correlation are silent;
+    // bound stale or malformed payloads still receive correlated refusals.
+    const ackedIndices = new Set([0, 1, 5, 6]);
+    for (const [index, message] of bad.entries()) {
+      const before = port.sent.length;
       port.emitMessage(message);
+      assert.equal(port.sent.length, before + (ackedIndices.has(index) ? 1 : 0));
+      if (ackedIndices.has(index)) {
+        assert.equal(port.sent.at(-1).correlation, message.correlation);
+        assert.equal(port.sent.at(-1).frameGeneration, message.frameGeneration);
+      }
     }
     await drain();
     assert.equal(consumed.length, 1);
     assert.equal(endpoint.getInstrumentation().acceptedFloor, 5);
     assert.equal(endpoint.getInstrumentation().refused, bad.length);
-    // Every refused arrival with a wire identity draws a REFUSED ACK; the
-    // malformed envelope without identity is dropped without retention.
-    const outcomes = port.sent.map((ack) => ack.outcome);
-    assert.deepEqual(outcomes, [
-      'PRESENTED',
-      'REFUSED',
-      'REFUSED',
-      'REFUSED',
-      'REFUSED',
-      'REFUSED',
-      'REFUSED',
-      'REFUSED',
-      'REFUSED',
+    assert.deepEqual(port.sent.map(ack => ack.outcome), [
+      'PRESENTED', 'REFUSED', 'REFUSED', 'REFUSED', 'REFUSED',
     ]);
     assert.ok(
       sinks.releases.every((release) => release.frameGeneration === 5),
@@ -849,8 +846,8 @@ describe('receiver: validate, consume newest, ACK after consume', () => {
     });
     await drain();
     assert.equal(consumed.length, 0);
-    assert.equal(port.sent.length, 1);
-    assert.equal(port.sent[0].outcome, 'REFUSED');
+    // ARG-ui_frames-3: a foreign arrival must not expose capsule-B's binding.
+    assert.equal(port.sent.length, 0);
   });
 
   it('ignores ACKs on the receiver port and refuses the sender methods', () => {
