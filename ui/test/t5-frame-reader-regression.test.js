@@ -12,10 +12,10 @@ const makeLease = ({identity, readImpl, releaseImpl}) => ({lease: {
   identity: {...binding, ...identity}, byteLength: 36, published: true,
   readOwnedBytes: readImpl, release: releaseImpl,
 }});
-const makeReader = ({acquireImpl}) => ({reader: createFrameReader({binding,
+const makeReader = ({acquireImpl, onReleaseLease = () => {}}) => ({reader: createFrameReader({binding,
   limits: {maxFrameBytes: 4096, maxWidth: 64, maxHeight: 64, readTimeoutMs: 1000, maxConcurrentReads: 4},
   pixelEnvironment: {environmentId: 'test-rig', zoom: 1, dpr: 1},
-  acquirePublishedLease: acquireImpl, onReleaseLease() {},
+  acquirePublishedLease: acquireImpl, onReleaseLease,
 })});
 it('R1-060 reversed completions never roll back the generation floor', async () => {
   const resolveRead = new Map();
@@ -37,4 +37,75 @@ it('R1-060 reversed completions never roll back the generation floor', async () 
   assert.equal((await reader.readFrame(validRef({generation: 2}))).reason, FRAME_REASONS.STALE_FRAME_GENERATION);
   assert.deepEqual(releases.sort(), [1, 2]);
   await reader.closeReader();
+});
+
+it('T5-R2-03 closeReader or abort during lease.release settles without delivery or floor advance', async () => {
+  let resolveRelease;
+  let markReleaseEntered;
+  const releaseEntered = new Promise(resolve => { markReleaseEntered = resolve; });
+  const releaseGate = new Promise(resolve => { resolveRelease = resolve; });
+  const sourceReleases = [];
+  const ownerDrops = [];
+  const { reader } = makeReader({
+    acquireImpl: async ({ frameRef }) => makeLease({
+      identity: { frameGeneration: frameRef.generation, leaseId: `lease-${frameRef.generation}` },
+      readImpl: async () => rgbBytes(),
+      releaseImpl: async (req) => {
+        sourceReleases.push(req);
+        markReleaseEntered();
+        await releaseGate;
+      },
+    }).lease,
+    onReleaseLease: notice => ownerDrops.push(notice),
+  });
+  const pendingCloseRead = reader.readFrame(validRef({ generation: 1 }));
+  await releaseEntered;
+  const closing = reader.closeReader();
+  resolveRelease();
+  await closing;
+  const closedOutcome = await pendingCloseRead;
+  assert.deepEqual(closedOutcome, { ok: false, reason: FRAME_REASONS.CLOSED });
+  assert.equal(sourceReleases.length, 1);
+  assert.equal(ownerDrops.length, 1);
+  assert.equal(ownerDrops[0].reason, FRAME_REASONS.CLOSED);
+  assert.equal(ownerDrops[0].frameGeneration, 1);
+
+  // Control + caller abort mid-release: abort does not advance floor; uninterrupted retry delivers.
+  let resolveAbortRelease;
+  let markAbortEntered;
+  const abortEntered = new Promise(resolve => { markAbortEntered = resolve; });
+  const abortGate = new Promise(resolve => { resolveAbortRelease = resolve; });
+  let attempt = 0;
+  const retryDrops = [];
+  const { reader: reader2 } = makeReader({
+    acquireImpl: async ({ frameRef }) => {
+      attempt += 1;
+      const currentAttempt = attempt;
+      return makeLease({
+        identity: { frameGeneration: frameRef.generation, leaseId: `lease-attempt-${currentAttempt}` },
+        readImpl: async () => rgbBytes(),
+        releaseImpl: async () => {
+          if (currentAttempt === 1) {
+            markAbortEntered();
+            await abortGate;
+          }
+        },
+      }).lease;
+    },
+    onReleaseLease: notice => retryDrops.push(notice),
+  });
+  const controller = new AbortController();
+  const abortedRead = reader2.readFrame(validRef({ generation: 1 }), { signal: controller.signal });
+  await abortEntered;
+  controller.abort();
+  resolveAbortRelease();
+  const abortedOutcome = await abortedRead;
+  assert.deepEqual(abortedOutcome, { ok: false, reason: FRAME_REASONS.TIMEOUT, detail: 'aborted' });
+  assert.equal(retryDrops.length, 1);
+  assert.equal(retryDrops[0].reason, FRAME_REASONS.TIMEOUT);
+
+  const delivered = await reader2.readFrame(validRef({ generation: 1 }));
+  assert.equal(delivered.ok, true);
+  assert.equal(delivered.frame.frameGeneration, 1);
+  await reader2.closeReader();
 });

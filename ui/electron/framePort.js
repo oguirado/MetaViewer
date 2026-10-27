@@ -551,6 +551,8 @@ export function createFramePort(options) {
   /** @type {unknown} */
   let ackTimer = null;
   let ackTimerGen = 0;
+  let ackTimerToken = 0;
+  let ackTimerSeq = 0;
   let sent = 0;
   let acked = 0;
   let acksSent = 0;
@@ -608,6 +610,7 @@ export function createFramePort(options) {
       const handle = ackTimer;
       ackTimer = null;
       ackTimerGen = 0;
+      ackTimerToken = 0;
       guardOwner(() => clearTimer(handle));
     }
   }
@@ -657,12 +660,24 @@ export function createFramePort(options) {
   }
 
   /**
+   * @param {number} timerGen
+   * @param {number} timerToken
    * @returns {void}
    */
-  function onAckTimeout() {
-    if (revoked || inFlight === null || inFlight.frameGeneration !== ackTimerGen) {
+  function onAckTimeout(timerGen, timerToken) {
+    if (
+      revoked ||
+      inFlight === null ||
+      ackTimer === null ||
+      ackTimerGen !== timerGen ||
+      ackTimerToken !== timerToken ||
+      inFlight.frameGeneration !== timerGen
+    ) {
       return;
     }
+    ackTimer = null;
+    ackTimerGen = 0;
+    ackTimerToken = 0;
     timeouts += 1;
     revokeInternal(PORT_REVOKE_REASONS.TIMEOUT);
   }
@@ -706,8 +721,16 @@ export function createFramePort(options) {
         bytes: record.bytes,
       });
       sent += 1;
-      ackTimerGen = record.frameGeneration;
-      ackTimer = setTimer(onAckTimeout, limits.ackTimeoutMs);
+      if (!revoked && inFlight === record && inFlight.frameGeneration === record.frameGeneration) {
+        disarmAckTimer();
+        const timerGen = record.frameGeneration;
+        const timerToken = (ackTimerSeq += 1);
+        ackTimerGen = timerGen;
+        ackTimerToken = timerToken;
+        ackTimer = setTimer(() => {
+          onAckTimeout(timerGen, timerToken);
+        }, limits.ackTimeoutMs);
+      }
       return true;
     } catch {
       // Covers initial delivery and pending promotion, including timer failure.

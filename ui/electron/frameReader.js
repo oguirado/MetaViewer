@@ -768,6 +768,14 @@ export function createFrameReader(options) {
       dropped = true;
       await lease.release({ reason: SOURCE_RETIRED_REASON });
       // Release is asynchronous too: acceptance commits only after it settles.
+      if (state.closed || internal.signal.aborted) {
+        const abortCause = abortCauseOf(internal.signal);
+        const outcome = state.closed || abortCause === 'closed'
+          ? refusal(FRAME_REASONS.CLOSED)
+          : refusal(FRAME_REASONS.TIMEOUT, abortCause === 'caller' ? 'aborted' : 'read-timeout');
+        notifyRelease(lease.identity, outcome.reason);
+        return outcome;
+      }
       if (ref.generation <= state.lastAccepted) {
         notifyRelease(lease.identity, FRAME_REASONS.STALE_FRAME_GENERATION);
         return refusal(FRAME_REASONS.STALE_FRAME_GENERATION);
