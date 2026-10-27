@@ -323,8 +323,13 @@ validatePanelDeps({
 // the tile scheduler under the same key it injects.
 provide('tileScheduler', props.tileScheduler);
 provide('publicProjectionView', props.projectionView);
-provide('presentationScheduler', props.scheduler);
-provide('controlRegistry', props.controlRegistry);
+// Metadata-only authority runtimes can omit these optional kit capabilities.
+// Empty placeholders must not masquerade as callable scheduler/registry APIs.
+provide('presentationScheduler', typeof props.scheduler.updateSurfaceState === 'function'
+  && typeof props.scheduler.foldSurface === 'function' && typeof props.scheduler.unfoldSurface === 'function'
+  ? props.scheduler : null);
+provide('controlRegistry', typeof props.controlRegistry.register === 'function'
+  && typeof props.controlRegistry.markNeedsRevalidation === 'function' ? props.controlRegistry : null);
 
 const snapshot = shallowRef(props.projectionView.getSnapshot());
 /** @type {(() => void)|null} */

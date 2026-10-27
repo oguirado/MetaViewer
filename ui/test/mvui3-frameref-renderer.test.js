@@ -35,7 +35,7 @@ test('frame_ref/v0.2 metadata drives a live tile row without exposing frame meta
     assert.equal(view.getSnapshot().error, null);
     assert.deepEqual(view.getProjection().rows, [{
       id: 'surface-a', surfaceId: 'surface-a', title: 'Desktop', generation: 1,
-      backendLifecycle: 'active', visibility: 'unfolded', control: 'shared', attachmentState: 'live',
+      backendLifecycle: 'active', visibility: 'unfolded', control: 'shared', controlOwner: 'none', attachmentState: 'live',
     }]);
     assert.equal(deriveTileState(view.getSnapshot(), view.getProjection().rows[0]).tile, 'live');
     assert.doesNotMatch(JSON.stringify(view.getSnapshot()), /frame_ref|sha256|ramws_path|capture_us/);

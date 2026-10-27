@@ -34,6 +34,7 @@ import { createPublicProjectionCoordinator } from '../../.kit/capsule-ui-kit/src
  *   generation: number,
  *   visibility: 'folded' | 'unfolded' | 'pinned',
  *   control: 'agent' | 'human' | 'shared',
+ *   controlOwner?: 'agent' | 'human' | 'none',
  *   title?: string,
  *   aiSessionActivity?: KitActivity,
  *   attachmentState?: KitAttachment,

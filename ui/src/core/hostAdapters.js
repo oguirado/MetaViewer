@@ -99,7 +99,10 @@ export function createAuthorityRuntime(port) {
       if ((previous && previous.generation > f.generation) || (!previous && rows.size >= 256)) return invalid();
       rows.set(s.surface_id, Object.freeze({ id: s.surface_id, surfaceId: s.surface_id,
         title: s.display, generation: f.generation, backendLifecycle: s.state,
-        visibility: s.visibility, control: s.control, attachmentState: 'live' }));
+        visibility: s.visibility, control: s.control,
+        // surface/v0.2 has no exclusive owner for shared control and no lease.
+        // The kit's control button consumes this axis; focus leases stay absent.
+        controlOwner: s.control === 'shared' ? 'none' : s.control, attachmentState: 'live' }));
       return { ok: true, value: { schema: SCHEMA, epoch: 1, revision: ++revision, query: QUERY,
         mode: 'snapshot', projection: { rows: Object.freeze([...rows.values()]) } } };
     },
