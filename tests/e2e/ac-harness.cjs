@@ -59,4 +59,119 @@ function writeProbeFile(dir, config) {
   writeFileSync(path, `(${telemetryProbe.toString()})(${JSON.stringify(config)});\n`);
   return path;
 }
-module.exports = { ...harness, prepareWall, electronBinary, writeProbeFile };
+// [TARGET, unit decision] E2E-U29: documented native prerequisite set for E2E
+// journeys (`cc` and `strace` for e2e12 replay purity, `xvfb-run` for wall journeys).
+const E2E_NATIVE_PREREQS = Object.freeze({
+  cc: Object.freeze({
+    binary: 'cc',
+    envVar: 'CC',
+    purpose: 'C compiler for replay-deny LD_PRELOAD interposer and probe binary',
+  }),
+  strace: Object.freeze({
+    binary: 'strace',
+    envVar: 'STRACE',
+    purpose: 'Linux syscall tracer and network fault injector for replay purity',
+  }),
+  'xvfb-run': Object.freeze({
+    binary: 'xvfb-run',
+    envVar: null,
+    purpose: 'Virtual X11 display server for Electron wall journeys',
+  }),
+});
+
+/**
+ * Resolve a required native tool on PATH or via its documented environment
+ * override, throwing a typed `E2EError('E2E_PREREQ', ...)` when absent or not
+ * executable.
+ * @param {string} name Canonical tool name (e.g. 'cc', 'strace', 'xvfb-run').
+ * @param {{ env?: NodeJS.ProcessEnv, pathEnv?: string, envVar?: string | null }} [options]
+ * @returns {string} Resolved absolute executable path.
+ */
+function requireNativeTool(name, options = {}) {
+  if (typeof name !== 'string' || name.length === 0) {
+    throw new harness.E2EError('E2E_ARGS', 'native tool name must be a non-empty string');
+  }
+  const spec = Object.prototype.hasOwnProperty.call(E2E_NATIVE_PREREQS, name)
+    ? E2E_NATIVE_PREREQS[name]
+    : null;
+  const env = options && typeof options.env === 'object' && options.env !== null
+    ? options.env
+    : process.env;
+  const pathEnv = options && typeof options.pathEnv === 'string'
+    ? options.pathEnv
+    : (typeof env.PATH === 'string' ? env.PATH : '');
+  const envVar = options && options.envVar !== undefined
+    ? options.envVar
+    : (spec ? spec.envVar : null);
+  const rawOverride = envVar && typeof env[envVar] === 'string' ? env[envVar].trim() : '';
+  const candidate = rawOverride.length > 0 ? rawOverride : (spec ? spec.binary : name);
+
+  if (candidate.includes('/')) {
+    try {
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      throw new harness.E2EError(
+        'E2E_PREREQ',
+        `required native tool '${name}' missing or not executable at ${candidate}`,
+      );
+    }
+  }
+  const resolved = harness.whichBinary(candidate, pathEnv);
+  if (!resolved) {
+    throw new harness.E2EError(
+      'E2E_PREREQ',
+      `required native tool '${name}' (${candidate}) not installed on PATH`,
+    );
+  }
+  return resolved;
+}
+
+/**
+ * Execute a native tool synchronously, converting missing-binary spawn failures
+ * (`ENOENT` / `EACCES`) into a typed `E2EError('E2E_PREREQ', ...)` even if the
+ * caller skipped the upfront probe.
+ * @param {string} name Canonical tool name.
+ * @param {ReadonlyArray<string>} args Argument vector.
+ * @param {{ env?: NodeJS.ProcessEnv, pathEnv?: string, envVar?: string | null, skipProbe?: boolean, spawnOptions?: import('node:child_process').SpawnSyncOptions }} [options]
+ */
+function spawnNativeTool(name, args, options = {}) {
+  const { spawnSync } = require('node:child_process');
+  const env = options && typeof options.env === 'object' && options.env !== null
+    ? options.env
+    : process.env;
+  const pathEnv = options && typeof options.pathEnv === 'string'
+    ? options.pathEnv
+    : (typeof env.PATH === 'string' ? env.PATH : '');
+  const binary = options && options.skipProbe
+    ? name
+    : requireNativeTool(name, { env, pathEnv, envVar: options.envVar });
+  const spawnOpts = {
+    encoding: 'utf8',
+    timeout: 10000,
+    ...(options && options.spawnOptions ? options.spawnOptions : {}),
+    env: { ...env, PATH: pathEnv },
+  };
+  const result = spawnSync(binary, Array.isArray(args) ? args : [], spawnOpts);
+  if (result.error) {
+    const code = /** @type {{ code?: unknown }} */ (result.error).code;
+    if (code === 'ENOENT' || code === 'EACCES') {
+      throw new harness.E2EError(
+        'E2E_PREREQ',
+        `native tool '${name}' failed to spawn (${String(code)}): ${result.error.message}`,
+      );
+    }
+    throw result.error;
+  }
+  return result;
+}
+
+module.exports = {
+  ...harness,
+  prepareWall,
+  electronBinary,
+  writeProbeFile,
+  E2E_NATIVE_PREREQS,
+  requireNativeTool,
+  spawnNativeTool,
+};
