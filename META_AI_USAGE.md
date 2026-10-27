@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 219 | 55 | 164 |
-| Lanes finished OK | 219 | 55 | 164 |
-| Agent steps | 10,755 | 2,705 | 8,050 |
-| Lane-hours of agent work | 27.8 | 5.2 | 22.6 |
-| Fresh input tokens | 47,058,568 | 11,482,034 | 35,576,534 |
-| Cache-read input tokens | 951,394,793 | 226,255,212 | 725,139,581 |
+| Lanes launched | 217 | 55 | 162 |
+| Lanes finished OK | 217 | 55 | 162 |
+| Agent steps | 10,657 | 2,705 | 7,952 |
+| Lane-hours of agent work | 27.4 | 5.2 | 22.2 |
+| Fresh input tokens | 46,612,068 | 11,482,034 | 35,130,034 |
+| Cache-read input tokens | 944,454,371 | 226,255,212 | 718,199,159 |
 | Prompt cache hit % | 95.3 | 95.2 | 95.3 |
-| Output tokens | 9,879,160 | 2,135,708 | 7,743,452 |
-| Thinking tokens | 5,323,119 | 1,050,039 | 4,273,080 |
-| Cost (USD) | 8.5845 | 2.0279 | 6.5566 |
+| Output tokens | 9,795,614 | 2,135,708 | 7,659,906 |
+| Thinking tokens | 5,245,398 | 1,050,039 | 4,195,359 |
+| Cost (USD) | 8.5092 | 2.0279 | 6.4814 |
 | Cost per lane (USD) | 0.0392 | 0.0369 | 0.04 |
 
-Rooms: 47. Peak concurrent lanes [MEASURED from lane start/end]: 32.
+Rooms: 48. Peak concurrent lanes [MEASURED from lane start/end]: 24.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -48,7 +48,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | ops | 4 | 88.1 | 0.0468 |
 | plan | 12 | 92.6 | 0.3072 |
 | research | 14 | 94.6 | 0.5673 |
-| review | 41 | 94.4 | 1.2565 |
+| review | 39 | 94.4 | 1.1812 |
 | test | 12 | 95.6 | 0.5657 |
 | testing | 14 | 93.6 | 0.392 |
 | ui | 5 | 95.5 | 0.4215 |
@@ -79,7 +79,6 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| mv0w1rv | conductor | Oct 26 18:44 | review | 8 | 94.3 | 0.2749 | Adversarial review of every W0 surface in parallel; findings were adjudicated by a judge and became the binding fix list. |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -105,6 +104,8 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0rw3testsearly | conductor | Oct 27 01:12 | build | 2 | 94.9 | 0.0738 | Muse Spark writer room mv0rw3testsearly: build the W2 component lanes (AC09, AC12) from the Argon-compiled context pack, with tests first. |
 | mv0w2perception | conductor | Oct 27 01:13 | build | 3 | 94.7 | 0.098 | Muse Spark writer room mv0w2perception: build the W2 component lanes (PLUGIN, META, VCORE) from the Argon-compiled context pack, with tests first. |
 | mv0ab1r | conductor | Oct 27 01:25 | review | 2 | 91.5 | 0.035 | Blind adversarial review of the two candidates of A/B pair 1 (same test unit written by two different writer models), to measure writer quality before choosing the cheaper seat for test units. |
+| mv0jb | conductor | Oct 27 01:41 | review | 3 | 94.0 | 0.1343 | Prepare the W1 judgement: evidence bundle per acceptance criterion, consolidated open findings across all testers and reviews, and the XML judge brief for the Opus and Argon judges. |
+| mv0rv | conductor | Oct 27 01:47 | review | 3 | 95.0 | 0.0654 | Verify the 12 findings of the third Gemini Argon cross-review (integrations since e19feb6: frame_ref v0.2 path, preload origin, no-follow witness, journal lock, UI drops) and turn confirmed ones into Sol fix units. |
 
 ## Every lane
 
@@ -204,28 +205,20 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1frames | VIEW | W1-FRAMES-VIEW | Oct 26 18:41 | yes | 35 | 91.1 | 0.052826 |
 | mv0w1term | PROVIDERS | W1-TERM-PROVIDERS | Oct 26 18:41 | yes | 28 | 91.9 | 0.02418 |
 | mv0w1wall | PROJECTION | W1-WALL-PROJECTION | Oct 26 18:41 | yes | 62 | 96.8 | 0.0531 |
-| mv0w1rv | CORE | Review core/ (Rust authority core skeleton) | Oct 26 18:44 | yes | 44 | 91.5 | 0.048306 |
 | mv0w2pk1 | Q01 | Pack W2-AILOOP | Oct 26 18:44 | yes | 43 | 94.3 | 0.031738 |
 | mv0w2pk2 | Q08 | Pack R-W2-PERCEPTION | Oct 26 18:44 | yes | 35 | 93.5 | 0.031159 |
-| mv0w1rv | ADAPT | Review daemon-adapter/ (Go adapter skeleton) | Oct 26 18:44 | yes | 27 | 92.6 | 0.022319 |
 | mv0w2pk1 | Q02 | Pack W2-HUMAN-INPUT | Oct 26 18:44 | yes | 78 | 96.2 | 0.065015 |
 | mv0w2pk2 | Q09 | Pack R-W2-TESTS | Oct 26 18:44 | yes | 76 | 97.0 | 0.051277 |
-| mv0w1rv | SHELL | Review ui/electron and ui/src (Electron shell) | Oct 26 18:44 | yes | 53 | 95.4 | 0.034877 |
 | mv0w2pk1 | Q03 | Pack W2-REC | Oct 26 18:44 | yes | 53 | 94.9 | 0.042427 |
 | mv0w2pk2 | Q10 | Pack W2-CATALOG-CORE | Oct 26 18:44 | yes | 43 | 93.7 | 0.029309 |
-| mv0w1rv | CONTR | Review contracts/v0.2 and tools/check_contracts.py | Oct 26 18:44 | yes | 56 | 96.0 | 0.042677 |
 | mv0w2pk1 | Q04 | Pack R-W2-MULTISLOT | Oct 26 18:44 | yes | 64 | 96.7 | 0.049057 |
 | mv0w2pk2 | Q11 | Pack R-W2-DOCS-EARLY | Oct 26 18:44 | yes | 88 | 97.3 | 0.052906 |
-| mv0w1rv | CI | Review the .github workflows, .githooks/pre-push and tests/fixtures/secrets | Oct 26 18:44 | yes | 55 | 95.7 | 0.032664 |
 | mv0w2pk1 | Q05 | Pack R-W2-CATALOG | Oct 26 18:44 | yes | 101 | 96.6 | 0.082158 |
 | mv0w2pk2 | Q12 | Pack R-W3-TESTS-EARLY | Oct 26 18:44 | yes | 83 | 96.7 | 0.063206 |
-| mv0w1rv | ROUTER | Review router/, catalogue/, llms.txt, AGENTS.md, tools/router_index.py | Oct 26 18:44 | yes | 48 | 95.1 | 0.03112 |
 | mv0w2pk1 | Q06 | Pack R-W2-SETTINGS | Oct 26 18:44 | yes | 79 | 94.7 | 0.092337 |
 | mv0w2pk2 | Q13 | Pack W2-OPENWEIGHT | Oct 26 18:44 | yes | 43 | 95.6 | 0.028391 |
-| mv0w1rv | KIT | Review tools/sync_kit.mjs, ui/kit.lock.json, tests/test_kit_source.py | Oct 26 18:44 | yes | 28 | 87.5 | 0.028901 |
 | mv0w2pk1 | Q07 | Pack R-W2-NESTED | Oct 26 18:44 | yes | 53 | 94.7 | 0.039962 |
 | mv0w2pk2 | Q14 | Pack R-W2-MUSE-IMAGE | Oct 26 18:44 | yes | 45 | 94.4 | 0.042933 |
-| mv0w1rv | AGENTS | Review agents/metaviewer_agents and agents/tests (committed files only) | Oct 26 18:44 | yes | 44 | 94.5 | 0.034065 |
 | mv0w1fx | ROUTERFIX | Router fixes F6-F8 | Oct 26 19:07 | yes | 94 | 97.6 | 0.070623 |
 | mv0w1fx | CIKIT | CI and kit sync fix F4 | Oct 26 19:07 | yes | 66 | 96.8 | 0.04088 |
 | mv0cq | CQ1 | Continuity quiz 1 | Oct 26 19:17 | yes | 13 | 87.1 | 0.010361 |
@@ -329,6 +322,12 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w2perception | VCORE | W2-PER-VCORE | Oct 27 01:13 | yes | 46 | 95.7 | 0.041913 |
 | mv0ab1r | X | Blind review candidate X | Oct 27 01:25 | yes | 31 | 92.6 | 0.019299 |
 | mv0ab1r | Y | Blind review candidate Y | Oct 27 01:25 | yes | 21 | 89.6 | 0.015651 |
+| mv0jb | EVIDENCE | W1 evidence bundle | Oct 27 01:41 | yes | 42 | 94.2 | 0.023844 |
+| mv0jb | OPEN | Consolidated open findings | Oct 27 01:41 | yes | 75 | 94.1 | 0.092762 |
+| mv0jb | BRIEF | Judge brief draft (XML) | Oct 27 01:41 | yes | 26 | 93.3 | 0.017704 |
+| mv0rv | R_CORE | Verify Argon findings r_core | Oct 27 01:47 | yes | 52 | 96.5 | 0.028434 |
+| mv0rv | R_UI | Verify Argon findings r_ui | Oct 27 01:47 | yes | 47 | 94.9 | 0.026538 |
+| mv0rv | R_ADAPTER | Verify Argon findings r_adapter | Oct 27 01:47 | yes | 15 | 86.0 | 0.010406 |
 
 ## Method
 
