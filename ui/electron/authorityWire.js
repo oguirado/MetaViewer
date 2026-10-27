@@ -39,10 +39,10 @@ export function validateIntentBody(body, error = () => new Error('INTENT')) {
   const keys = body && typeof body.op === 'string' && Object.hasOwn(INTENT_OPS, body.op)
     ? INTENT_OPS[/** @type {keyof typeof INTENT_OPS} */ (body.op)] : null;
   const idKey = keys === 'surface_id' ? 'surface_id' : 'slot_id';
-  if (!keys || Object.keys(body).sort().join(',') !== 'op,params,request_id,schema'
+  if (!keys || Reflect.ownKeys(body).sort().join(',') !== 'op,params,request_id,schema'
       || body.schema !== 'ui_intent/v0.2' || !validId(body.request_id)
       || !body.params || Array.isArray(body.params) || typeof body.params !== 'object'
-      || Object.keys(body.params).sort().join(',') !== keys || !validId(body.params[idKey])) throw error();
+      || Reflect.ownKeys(body.params).sort().join(',') !== keys || !validId(body.params[idKey])) throw error();
   const p = body.params;
   if (keys === 'group_id,index,slot_id' && (!validId(p.group_id)
       || !Number.isInteger(p.index) || p.index < 0 || p.index > 255)) throw error();
@@ -256,6 +256,10 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     if (!subscribed) {
       const sid = entry?.frameRef?.surface_id;
       if (typeof sid === 'string') {
+        if (['destroyed','lost'].includes(entry?.state?.state)) {
+          pendingEntries.delete(sid);
+          return;
+        }
         const prior = pendingEntries.get(sid);
         if (entry.stateOnly && prior && !prior.stateOnly) {
           pendingEntries.set(sid, {...prior, state: entry.state});
@@ -294,6 +298,11 @@ export async function deliverAuthorityFrame(entry,contents,streams) {
       || !['agent','human','shared'].includes(state.control)
       || typeof state.profile_id!=='string' || !state.profile_id.length || state.profile_id.length>128) throw new Error('SURFACE_STATE');
   if (entry.stateOnly) {
+    if (['destroyed','lost'].includes(state.state) && entry.readerOptions?.binding) {
+      const key=JSON.stringify(['principal','epoch','surfaceId','surfaceGeneration'].map(name=>entry.readerOptions.binding[name]));
+      const dead=[...streams].find(item=>item.key===key);
+      if (dead) {streams.delete(dead);await dead.reader.closeReader();dead.port.revokeFramePort('SHUTDOWN');}
+    }
     contents.postMessage('metaviewer:authority.frames',{frame_ref:ref,surface:state},[]);
     return true;
   }

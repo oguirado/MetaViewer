@@ -13,6 +13,7 @@ import { INTENT_OPS, recordingDestination, validateIntentBody } from './authorit
 export { INTENT_OPS };
 import { assertCaptureCall, assertCaptureReply, validCaptureState } from './captureBridge.js';
 import { createConnection } from 'node:net';
+import { spawnSync } from 'node:child_process';
 import { open, lstat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
@@ -21,6 +22,56 @@ import { isDeepStrictEqual } from 'node:util';
 
 const MAX_WIRE = 1024 * 1024, MAX_FRAME = 64 * 1024 * 1024, MAX_ITEMS = 64, DEADLINE = 3000;
 const fail = () => new Error('CORE_SEAMS_ABSENT');
+const PEERCRED_PY = [
+  'import os, socket, struct, sys',
+  's = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM, 0, 3)',
+  'pid, uid, gid = struct.unpack("3i", s.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")))',
+  'cino = os.fstat(3).st_ino',
+  's.detach()',
+  'nl = socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, 4)',
+  'nl.bind((0, 0))',
+  'req = struct.pack("=BBHIIIII", socket.AF_UNIX, 0, 0, 0xfff, 0, 6, 0, 0)',
+  'nl.send(struct.pack("=IHHII", 16 + len(req), 20, 0x301, 1, 0) + req)',
+  'table, done = {}, False',
+  'while not done:',
+  '    data = nl.recv(65536)',
+  '    pos = 0',
+  '    while pos + 16 <= len(data):',
+  '        nllen, nltype, flags, seq, rpid = struct.unpack_from("=IHHII", data, pos)',
+  '        if nltype in (2, 3): done = True; break',
+  '        if nltype == 20:',
+  '            m_ino = struct.unpack_from("=I", data, pos + 20)[0]',
+  '            apos, vfs, peer = pos + 32, None, None',
+  '            while apos + 4 <= pos + nllen:',
+  '                alen, atype = struct.unpack_from("=HH", data, apos)',
+  '                if alen < 4: break',
+  '                p = data[apos+4:apos+alen]',
+  '                if atype == 1 and len(p) >= 8: vfs = struct.unpack_from("=II", p, 0)[0]',
+  '                elif atype == 2 and len(p) >= 4: peer = struct.unpack_from("=I", p, 0)[0]',
+  '                apos += (alen + 3) & ~3',
+  '            table[m_ino] = (vfs, peer)',
+  '        pos += (nllen + 3) & ~3',
+  'nl.close()',
+  'peer_ino = table.get(cino, (None, None))[1]',
+  'vfs_ino = table.get(peer_ino, (None, None))[0]',
+  'if vfs_ino is None: sys.exit(1)',
+  'print(f"{pid}:{uid}:{gid}:{vfs_ino}")',
+].join('\n');
+/** Authenticate the connected unix domain socket peer via SO_PEERCRED and kernel peer VFS inode.
+ * @param {import('node:net').Socket} socket
+ * @returns {{pid:number,uid:number,gid:number,ino:number}} */
+export function readPeerCredentials(socket) {
+  const fd = /** @type {any} */ (socket)?._handle?.fd;
+  if (!Number.isInteger(fd) || fd < 0) throw fail();
+  const res = spawnSync('python3', ['-S', '-c', PEERCRED_PY], {
+    stdio: ['ignore', 'pipe', 'pipe', fd], encoding: 'utf8', timeout: DEADLINE,
+  });
+  if (res.status !== 0 || typeof res.stdout !== 'string') throw fail();
+  const parts = res.stdout.trim().split(':').map(Number);
+  if (parts.length !== 4 || parts.some(n => !Number.isInteger(n))) throw fail();
+  const [pid, uid, gid, ino] = parts;
+  return Object.freeze({pid, uid, gid, ino});
+}
 /** @param {any} info @param {number} mode */
 function owned(info, mode) {
   if (typeof process.getuid !== 'function' || info.uid !== process.getuid() || (info.mode & 0o777) !== mode) throw fail();
@@ -42,9 +93,9 @@ async function openPinned(path) {
 }
 
 /** Trusted options are host-only; no renderer pathname or capability is accepted.
- * @param {{env?:NodeJS.ProcessEnv,createMessageChannel?:()=>any}} [options]
+ * @param {{env?:NodeJS.ProcessEnv,createMessageChannel?:()=>any,getPeerCredentials?:(socket:import('node:net').Socket)=>{pid:number,uid:number,gid:number,ino?:number}}} [options]
  * @returns {Promise<{core: any, wire: any}>} */
-export async function createMainBindings({env = process.env, createMessageChannel} = {}) {
+export async function createMainBindings({env = process.env, createMessageChannel, getPeerCredentials = readPeerCredentials} = {}) {
   /** @type {import('node:net').Socket | undefined} */ let socket;
   try {
     if (!env.MV_CORE_CONFIG || !isAbsolute(env.MV_CORE_CONFIG) || !env.XDG_RUNTIME_DIR || !isAbsolute(env.XDG_RUNTIME_DIR)) throw fail();
@@ -176,9 +227,16 @@ export async function createMainBindings({env = process.env, createMessageChanne
     }
     /** @param {any} env */
     function receive(env) {
-      if (env?.schema !== 'envelope/v0.2' || env.session_id !== config.session_id
+      const ownKeys = env && typeof env === 'object' && !Array.isArray(env) ? Reflect.ownKeys(env) : null;
+      const keyList = ownKeys && ownKeys.length === Object.keys(env).length ? ownKeys.sort().join(',') : '';
+      const validKeys = keyList === 'body,from,msg_id,nonce,schema,seq,session_id,to,ts_ns'
+        || (!live && keyList === 'body,from,msg_id,nonce,schema,seq,session_id,to');
+      if (!validKeys
+          || env.schema !== 'envelope/v0.2' || env.session_id !== config.session_id
           || !isDeepStrictEqual(env.from,config.core.endpoint) || !isDeepStrictEqual(env.to,ui.endpoint)
-          || !Number.isSafeInteger(env.seq) || env.seq <= received || !id(env.nonce) || !id(env.msg_id) || !env.body) throw fail();
+          || ((live || Object.hasOwn(env,'ts_ns')) && (!Number.isSafeInteger(env.ts_ns) || env.ts_ns < 0))
+          || !Number.isSafeInteger(env.seq) || env.seq <= received || !id(env.nonce) || !id(env.msg_id)
+          || !env.body || typeof env.body !== 'object' || Array.isArray(env.body)) throw fail();
       received = env.seq;const body = env.body;
       if (!live) {
         if (!isDeepStrictEqual(body,config.core.hello)) throw fail();
@@ -209,10 +267,24 @@ export async function createMainBindings({env = process.env, createMessageChanne
       if (body.schema === 'surface_event/v0.2' && ['created','state_changed'].includes(body.event)) {
         const state = body.data?.surface;
         if (state?.schema !== 'surface/v0.2' || !id(state.surface_id)) throw fail();
-        if (!surfaces.has(state.surface_id) && surfaces.size >= MAX_ITEMS) throw fail();
-        surfaces.set(state.surface_id,Object.freeze({...state}));
-        subscribeSurface(state);
-        if (body.event === 'state_changed') publishState(state);
+        if (['destroyed','lost'].includes(state.state)) {
+          if (body.event === 'state_changed') publishState(state);
+          surfaces.delete(state.surface_id);
+          latestFrames.delete(state.surface_id);
+          subscriptions.delete(state.surface_id);
+          delivering.delete(state.surface_id);
+          const channel = channels.get(state.surface_id);
+          if (channel) {
+            channels.delete(state.surface_id);
+            channel.port1.close();
+            channel.port2.close();
+          }
+        } else {
+          if (!surfaces.has(state.surface_id) && surfaces.size >= MAX_ITEMS) throw fail();
+          surfaces.set(state.surface_id,Object.freeze({...state}));
+          subscribeSurface(state);
+          if (body.event === 'state_changed') publishState(state);
+        }
       }
       const layoutError = body.schema === 'surface_event/v0.2' && body.event === 'error'
         && ['LAYOUT_UNKNOWN_SLOT','LAYOUT_ILLEGAL_TRANSITION','LAYOUT_INPUT_MODE_READ'].includes(body.data?.code)
@@ -248,11 +320,20 @@ export async function createMainBindings({env = process.env, createMessageChanne
       if (body.schema === 'frame_ref/v0.2') publish(body);
       else if (body.schema === 'surface_event/v0.2' && body.event === 'frame_ready') publish(body.data?.frame_ref);
     }
-    socket = createConnection(socketPath);
+    const clientSocket = createConnection(socketPath);
+    socket = clientSocket;
     let buffer = Buffer.alloc(0);
-    socket.on('error',shutdown);socket.on('close',shutdown);
-    socket.on('connect',() => {try {send(ui.hello);} catch {shutdown();}});
-    socket.on('data',data => {
+    clientSocket.on('error',shutdown);clientSocket.on('close',shutdown);
+    clientSocket.on('connect',() => {
+      try {
+        const cred = getPeerCredentials(clientSocket);
+        if (!cred || typeof process.getuid !== 'function' || cred.uid !== process.getuid()
+            || !Number.isInteger(cred.pid) || cred.pid < 1 || !Number.isInteger(cred.gid) || cred.gid < 0
+            || (cred.ino !== undefined && cred.ino !== (socketInfo.ino >>> 0))) throw fail();
+        send(ui.hello);
+      } catch {shutdown();}
+    });
+    clientSocket.on('data',data => {
       try {
         buffer = Buffer.concat([buffer,data]);let newline;
         while ((newline = buffer.indexOf(10)) !== -1) {

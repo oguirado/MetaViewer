@@ -4,11 +4,11 @@ import net, { createServer } from 'node:net';
 import fsPromises from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { once, EventEmitter } from 'node:events';
-import { mkdtemp, mkdir, chmod, writeFile, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, chmod, writeFile, rm, readFile, rename, lstat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { createMainBindings, INTENT_OPS as HOST_INTENT_OPS } from '../electron/hostBindings.js';
+import { createMainBindings, readPeerCredentials, INTENT_OPS as HOST_INTENT_OPS } from '../electron/hostBindings.js';
 import { loadMainBindings, bootProductionMain, ELECTRON_PIN, CHANNELS } from '../electron/main.js';
 import { deliverAuthorityFrame, WIRE_CHANNELS, INTENT_OPS as WIRE_INTENT_OPS, validateIntentBody } from '../electron/authorityWire.js';
 import { installPreload } from '../electron/preload.js';
@@ -443,4 +443,272 @@ test('W2-REALAPP regression: preload wall port consumer paints surface canvas an
   assert.equal(attrs.get('data-state'), 'live');
   assert.equal(attrs.get('data-frame'), sha);
   assert.deepEqual([...putImage.data], [10, 20, 30, 255]);
+});
+
+test('R2-T4-003 and R2-T4-004 regression: non-enumerable extra keys on intent body/params and unknown ops are rejected before reaching core', async t => {
+  const f = await fixture(t);
+  const bindings = await createMainBindings({ ...f });
+  t.after(() => bindings.core.dispose());
+  const before = f.requests.length;
+
+  const withHiddenTop = { schema: 'ui_intent/v0.2', request_id: 'r1', op: 'take_control', params: { surface_id: 's1' } };
+  Object.defineProperty(withHiddenTop, 'hidden', { value: 1, enumerable: false });
+  assert.throws(() => validateIntentBody(withHiddenTop), /INTENT/);
+
+  const withHiddenParam = { schema: 'ui_intent/v0.2', request_id: 'r1', op: 'release_control', params: { surface_id: 's1' } };
+  Object.defineProperty(withHiddenParam.params, 'hidden', { value: 1, enumerable: false });
+  assert.throws(() => validateIntentBody(withHiddenParam), /INTENT/);
+
+  for (const unknownOp of ['pin', 'layout_save', 'layout_load', 'unknown_op']) {
+    await assert.rejects(
+      bindings.core.request({ op: 'intent', json: JSON.stringify({ schema: 'ui_intent/v0.2', request_id: 'r1', op: unknownOp, params: { slot_id: 's1' } }) }),
+      /CORE_SEAMS_ABSENT/,
+    );
+  }
+  assert.equal(f.requests.length, before);
+});
+
+test('R2-T4-005 regression: swapped peer and foreign SO_PEERCRED uid are rejected before hello; unswapped peer reaches live', async t => {
+  // 1. Swapped-peer fixture: swap core.sock after pre-connect lstat to an attacker listener, and restore before post-hello lstat.
+  const root = await mkdtemp(join(tmpdir(), 'mv-r2t4-005-'));
+  const config = { session_id: 'host-test', core: registration('core'), peers: [registration('ui')] };
+  await mkdir(join(root, 'metaviewer'), { mode: 0o700 });
+  const configPath = join(root, 'config.json');
+  await writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
+  const sockPath = join(root, 'metaviewer/core.sock');
+  const origSockPath = join(root, 'metaviewer/core.sock.orig');
+  const attackerSockPath = join(root, 'metaviewer/attacker.sock');
+
+  const legitSockets = new Set();
+  const legitServer = createServer(socket => { legitSockets.add(socket); });
+  legitServer.listen(sockPath);
+  await once(legitServer, 'listening');
+  await chmod(sockPath, 0o600);
+
+  let attackerBytes = 0;
+  const attackerSockets = new Set();
+  const attackerServer = createServer(socket => {
+    attackerSockets.add(socket);
+    socket.on('data', async data => {
+      attackerBytes += data.length;
+      if (!data.toString().includes('\n')) return;
+      await rename(origSockPath, sockPath);
+      socket.write(JSON.stringify({
+        schema: 'envelope/v0.2', msg_id: 'reply-1', ts_ns: 0,
+        from: config.core.endpoint, to: config.peers[0].endpoint,
+        session_id: config.session_id, seq: 1, nonce: 'nonce-1',
+        body: config.core.hello,
+      }) + '\n');
+    });
+  });
+  attackerServer.listen(attackerSockPath);
+  await once(attackerServer, 'listening');
+  await chmod(attackerSockPath, 0o600);
+
+  t.after(async () => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    for (const s of [...legitSockets, ...attackerSockets]) s.destroy();
+    await new Promise(resolve => legitServer.close(resolve));
+    await new Promise(resolve => attackerServer.close(resolve));
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const origOpen = fsPromises.open;
+  let swapped = false;
+  t.mock.method(fsPromises, 'open', async (...args) => {
+    const handle = await origOpen(...args);
+    if (!swapped && String(args[0]).endsWith('/config.json')) {
+      swapped = true;
+      await rename(sockPath, origSockPath);
+      await rename(attackerSockPath, sockPath);
+    }
+    return handle;
+  });
+  syncBuiltinESMExports();
+
+  await assert.rejects(
+    createMainBindings({
+      env: { MV_CORE_CONFIG: configPath, XDG_RUNTIME_DIR: root },
+      createMessageChannel: () => ({ port1: { close() {} }, port2: { close() {} } }),
+    }),
+    /CORE_SEAMS_ABSENT/,
+  );
+  assert.equal(attackerBytes, 0, 'swapped peer must be refused before hello is written');
+
+  t.mock.restoreAll();
+  syncBuiltinESMExports();
+
+  // 2. Foreign SO_PEERCRED uid is rejected before writing hello.
+  const f = await fixture(t);
+  await assert.rejects(
+    createMainBindings({
+      ...f,
+      getPeerCredentials: () => ({ pid: process.pid, uid: process.getuid() + 1, gid: process.getgid() }),
+    }),
+    /CORE_SEAMS_ABSENT/,
+  );
+  assert.equal(f.requests.length, 0);
+
+  // 3. Negative control: unswapped peer with real SO_PEERCRED reaches live and matches uid/pid/ino.
+  const sockInfo = await lstat(join(f.root, 'metaviewer/core.sock'));
+  let observedCred = null;
+  const liveBindings = await createMainBindings({
+    ...f,
+    getPeerCredentials: sock => {
+      observedCred = readPeerCredentials(sock);
+      return observedCred;
+    },
+  });
+  t.after(() => liveBindings.core.dispose());
+  assert.equal(liveBindings.core.getStatus().availability, 'live');
+  assert.equal(observedCred.uid, process.getuid());
+  assert.equal(observedCred.pid, process.pid);
+  assert.equal(observedCred.ino, sockInfo.ino >>> 0);
+});
+
+test('R2-T4-006 regression: destroyed and lost surfaces release map slots, channels, subscriptions and streams; 65 concurrent active surfaces fail closed', async t => {
+  const f = await fixture(t);
+  const closedPorts = new Set();
+  const createTrackedChannel = () => {
+    const ch = f.createMessageChannel();
+    const origClose1 = ch.port1.close.bind(ch.port1);
+    const origClose2 = ch.port2.close.bind(ch.port2);
+    ch.port1.close = () => { closedPorts.add(ch.port1); origClose1(); };
+    ch.port2.close = () => { closedPorts.add(ch.port2); origClose2(); };
+    return ch;
+  };
+  const bindings = await createMainBindings({ env: f.env, createMessageChannel: createTrackedChannel });
+  t.after(() => bindings.core.dispose());
+
+  const streams = new Set();
+  const notices = [];
+  let resolveEntry = null;
+  bindings.wire.frames.subscribe(async entry => {
+    await deliverAuthorityFrame(entry, { postMessage: (...args) => notices.push(args) }, streams);
+    resolveEntry?.(entry);
+  });
+
+  t.after(async () => {
+    for (const stream of [...streams]) {
+      await stream.reader.closeReader();
+      stream.port.revokeFramePort('SHUTDOWN');
+    }
+  });
+
+  // 64 create + frame + destroy/lost cycles, followed by a 65th surface create + frame.
+  for (let i = 1; i <= 64; i += 1) {
+    const sid = `s-cycle-${i}`;
+    const terminalState = i % 2 === 0 ? 'destroyed' : 'lost';
+    const createdSurface = { ...surface, surface_id: sid, state: 'active' };
+    const frameDone = new Promise(resolve => { resolveEntry = resolve; });
+    f.send({ schema: 'surface_event/v0.2', event: 'created', data: { surface: createdSurface } });
+    f.send({ schema: 'surface_event/v0.2', event: 'frame_ready', data: { frame_ref: { ...f.frame, surface_id: sid } } });
+    await frameDone;
+
+    const stateDone = new Promise(resolve => { resolveEntry = resolve; });
+    f.send({ schema: 'surface_event/v0.2', event: 'state_changed', data: { surface: { ...createdSurface, state: terminalState } } });
+    await stateDone;
+  }
+
+  assert.equal(closedPorts.size, 128, 'both ports of each of the 64 destroyed/lost channels must be closed');
+  assert.equal(streams.size, 0, 'authorityWire streams must be cleaned up on destroyed/lost');
+
+  // 65th surface after 64 lifecycles succeeds and stays live; re-creating s-cycle-1 also re-subscribes.
+  const subCountBefore = f.requests.filter(r => r.body.schema === 'surface_request/v0.2' && r.body.op === 'frame_subscribe').length;
+  assert.equal(subCountBefore, 64);
+
+  const finalDone = new Promise(resolve => { resolveEntry = resolve; });
+  f.send({ schema: 'surface_event/v0.2', event: 'created', data: { surface: { ...surface, surface_id: 's-cycle-65', state: 'active' } } });
+  f.send({ schema: 'surface_event/v0.2', event: 'frame_ready', data: { frame_ref: { ...f.frame, surface_id: 's-cycle-65' } } });
+  await finalDone;
+
+  f.send({ schema: 'surface_event/v0.2', event: 'created', data: { surface: { ...surface, surface_id: 's-cycle-1', state: 'active' } } });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const subCountAfter = f.requests.filter(r => r.body.schema === 'surface_request/v0.2' && r.body.op === 'frame_subscribe').length;
+  assert.equal(subCountAfter, 66, 'recreated surface must be subscribed again after prior destroy/lost');
+  assert.equal(bindings.core.getStatus().availability, 'live');
+
+  // Negative control: 65 concurrent active surfaces exceed MAX_ITEMS (64) and shut down the connection.
+  const fCap = await fixture(t);
+  const capBindings = await createMainBindings({ ...fCap });
+  t.after(() => capBindings.core.dispose());
+  for (let i = 1; i <= 65; i += 1) {
+    fCap.send({ schema: 'surface_event/v0.2', event: 'created', data: { surface: { ...surface, surface_id: `s-active-${i}`, state: 'active' } } });
+  }
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(capBindings.core.getStatus().availability, 'unavailable');
+});
+
+test('R2-T4-023 regression: receive validates exact envelope keys and ts_ns bounds; exact envelopes are admitted', async t => {
+  const makeServerWithHelloEnvelope = async mutateEnvelope => {
+    const root = await mkdtemp(join(tmpdir(), 'mv-r2t4-023-'));
+    const config = { session_id: 'host-test', core: registration('core'), peers: [registration('ui')] };
+    await mkdir(join(root, 'metaviewer'), { mode: 0o700 });
+    const configPath = join(root, 'config.json');
+    await writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
+    const sockPath = join(root, 'metaviewer/core.sock');
+    const sockets = new Set();
+    let activeSocket = null;
+    const server = createServer(socket => {
+      activeSocket = socket;
+      sockets.add(socket);
+      socket.on('data', data => {
+        if (!data.toString().includes('\n')) return;
+        const base = {
+          schema: 'envelope/v0.2', msg_id: 'reply-1', ts_ns: 0,
+          from: config.core.endpoint, to: config.peers[0].endpoint,
+          session_id: config.session_id, seq: 1, nonce: 'nonce-1',
+          body: config.core.hello,
+        };
+        socket.write(JSON.stringify(mutateEnvelope(base)) + '\n');
+      });
+    });
+    server.listen(sockPath);
+    await once(server, 'listening');
+    await chmod(sockPath, 0o600);
+    t.after(async () => {
+      for (const s of sockets) s.destroy();
+      await new Promise(resolve => server.close(resolve));
+      await rm(root, { recursive: true, force: true });
+    });
+    return {
+      env: { MV_CORE_CONFIG: configPath, XDG_RUNTIME_DIR: root },
+      config,
+      writeRaw: obj => activeSocket?.write(JSON.stringify(obj) + '\n'),
+    };
+  };
+
+  for (const mutate of [
+    env => ({ ...env, extra: true }),
+    env => ({ ...env, ts_ns: 'invalid' }),
+    env => ({ ...env, ts_ns: -1 }),
+    env => ({ ...env, ts_ns: 1.5 }),
+    env => ({ ...env, ts_ns: null }),
+    env => ({ ...env, ts_ns: Number.MAX_SAFE_INTEGER + 1 }),
+  ]) {
+    const fBad = await makeServerWithHelloEnvelope(mutate);
+    await assert.rejects(
+      createMainBindings({ ...fBad, createMessageChannel: () => ({ port1: { close() {} }, port2: { close() {} } }) }),
+      /CORE_SEAMS_ABSENT/,
+    );
+  }
+
+  // Negative control: exact envelope with boundary ts_ns = Number.MAX_SAFE_INTEGER is admitted,
+  // while a post-hello envelope missing ts_ns shuts down the live connection.
+  const fGood = await makeServerWithHelloEnvelope(env => ({ ...env, ts_ns: Number.MAX_SAFE_INTEGER }));
+  const bindings = await createMainBindings({
+    ...fGood,
+    createMessageChannel: () => ({ port1: { close() {} }, port2: { close() {} } }),
+  });
+  t.after(() => bindings.core.dispose());
+  assert.equal(bindings.core.getStatus().availability, 'live');
+  fGood.writeRaw({
+    schema: 'envelope/v0.2', msg_id: 'reply-2',
+    from: fGood.config.core.endpoint, to: fGood.config.peers[0].endpoint,
+    session_id: fGood.config.session_id, seq: 2, nonce: 'nonce-2',
+    body: { schema: 'surface_event/v0.2', event: 'created', data: { surface } },
+  });
+  await new Promise(resolve => setTimeout(resolve, 25));
+  assert.equal(bindings.core.getStatus().availability, 'unavailable');
 });
