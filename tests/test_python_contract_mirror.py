@@ -109,6 +109,22 @@ class PythonContractMirrorTests(unittest.TestCase):
             "description": {"type": "string"}, "title": {"type": "boolean"}}}
         self.assertEqual(normalized(schema, schema), schema)
 
+    def test_inlined_frame_blocks_match_canonical_frame_ref(self):
+        canonical_frame = _RAW_V02_FILES["frame_ref.schema.json"]
+        tool_result = _RAW_V02_FILES["mv_tool_result.schema.json"]
+        inlined_frames = []
+        for branch in tool_result["oneOf"]:
+            props = branch.get("properties", {})
+            obs_props = props.get("observation", {}).get("properties", {})
+            if "frame_ref" in obs_props:
+                inlined_frames.append(obs_props["frame_ref"])
+            receipt_props = props.get("receipt", {}).get("properties", {})
+            if "after_frame" in receipt_props:
+                inlined_frames.append(receipt_props["after_frame"])
+        self.assertEqual(len(inlined_frames), 2)
+        for frame_block in inlined_frames:
+            self.assertEqual(frame_block, canonical_frame)
+
 
 if __name__ == "__main__":
     unittest.main()

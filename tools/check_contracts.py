@@ -316,6 +316,21 @@ def variant_coverage(validator, schema, values):
     return sorted(label for key, label in required.items() if key not in witnessed)
 
 
+def inline_frame_def(frame_ref_schema):
+    """Project canonical frame_ref.schema.json into its inlined $defs.frame form."""
+    def strip_meta(node):
+        if isinstance(node, list):
+            return [strip_meta(item) for item in node]
+        if not isinstance(node, dict):
+            return node
+        return {
+            key: strip_meta(value)
+            for key, value in node.items()
+            if key not in ('$schema', '$id', 'title', 'description', '$defs')
+        }
+    return strip_meta(frame_ref_schema)
+
+
 def check_repository(root=ROOT, *, versions=SUPPORTED_VERSIONS):
     if (not isinstance(versions, tuple) or not versions
             or any(not isinstance(v, str) or v not in SUPPORTED_VERSIONS for v in versions)
@@ -375,9 +390,27 @@ def check_repository(root=ROOT, *, versions=SUPPORTED_VERSIONS):
         for path in sorted(examples.glob('*.json')):
             if path not in known_examples:
                 errors.append(f'{version}: {path}: unrecognized or unchecked example')
+        if version == 'v0.2':
+            frame_ref_path = directory / 'frame_ref.schema.json'
+            mv_tool_result_path = directory / 'mv_tool_result.schema.json'
+            if frame_ref_path.is_file() and mv_tool_result_path.is_file():
+                try:
+                    canonical_frame = inline_frame_def(validator.load('frame_ref.schema.json'))
+                    tool_result_schema = validator.load('mv_tool_result.schema.json')
+                    inlined_frame = tool_result_schema.get('$defs', {}).get('frame')
+                    if inlined_frame != canonical_frame:
+                        errors.append(
+                            f'{version}: {mv_tool_result_path}: $defs.frame drifted from canonical {frame_ref_path}'
+                        )
+                except (OSError, ValueError, TypeError, KeyError, RecursionError) as exc:
+                    errors.append(f'{version}: {mv_tool_result_path}: {exc}')
     return errors
 
-def main():
+def main(argv=None):
+    args = sys.argv[1:] if argv is None else list(argv)
+    if args in (['--help'], ['-h']):
+        print('usage: check_contracts.py [--help]')
+        return 0
     errors = check_repository()
     for error in errors:
         print('ERROR: ' + error, file=sys.stderr)

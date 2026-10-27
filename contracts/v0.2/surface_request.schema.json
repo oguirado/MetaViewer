@@ -31,12 +31,12 @@
                 "w": {
                   "type": "integer",
                   "minimum": 1,
-                  "maximum": 9007199254740991
+                  "maximum": 16384
                 },
                 "h": {
                   "type": "integer",
                   "minimum": 1,
-                  "maximum": 9007199254740991
+                  "maximum": 16384
                 }
               },
               "required": [
@@ -329,7 +329,7 @@
                     "ms": {
                       "type": "integer",
                       "minimum": 1,
-                      "maximum": 9007199254740991
+                      "maximum": 3600000
                     }
                   },
                   "required": [

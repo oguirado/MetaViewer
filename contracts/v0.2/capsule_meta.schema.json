@@ -43,10 +43,11 @@
       "maxLength": 256
     },
     "fb_path": {
+      "description": "Shared-memory framebuffer path under /dev/shm with 1..8 segments ([A-Za-z0-9_][A-Za-z0-9._-]{0,127}), without '.', '..', hidden names, empty segments, NUL, or \r\n.",
       "type": "string",
-      "minLength": 1,
-      "maxLength": 4096,
-      "pattern": "^/dev/shm/[^\\u0000\\r\\n]+$"
+      "minLength": 10,
+      "maxLength": 255,
+      "pattern": "^/dev/shm(/[A-Za-z0-9_][A-Za-z0-9._-]{0,127}){1,8}$"
     },
     "lane_socket": {
       "type": "string",

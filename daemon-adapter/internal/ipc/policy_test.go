@@ -2,6 +2,9 @@ package ipc
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -541,6 +544,41 @@ func TestSharedConformanceCases(t *testing.T) {
 			Raw:   strings.Replace(string(rawEnv), `"seq": 1`, `"seq": 9007199254740991`, 1),
 			Admit: true,
 		},
+		{
+			Name:  "RV7-ramws-two-segment-admitted",
+			Raw:   wrapRawBody(string(rawReceipt)),
+			Admit: true,
+		},
+		{
+			Name:  "RV7-ramws-adapter-layout-admitted",
+			Raw:   wrapRawBody(strings.Replace(string(rawReceipt), `"/dev/shm/ramws/demo.rgb"`, `"/dev/shm/mv-adapter-1/frames-123456/0123456789abcdef0123456789abcdef.rgb"`, 1)),
+			Admit: true,
+		},
+		{
+			Name:  "RV7-ramws-traversal-refused",
+			Raw:   wrapRawBody(strings.Replace(string(rawReceipt), `"/dev/shm/ramws/demo.rgb"`, `"/dev/shm/../etc/x"`, 1)),
+			Admit: false,
+		},
+		{
+			Name:  "RV7-ramws-empty-segment-refused",
+			Raw:   wrapRawBody(strings.Replace(string(rawReceipt), `"/dev/shm/ramws/demo.rgb"`, `"/dev/shm/a//b"`, 1)),
+			Admit: false,
+		},
+		{
+			Name:  "RV7-ramws-hidden-segment-refused",
+			Raw:   wrapRawBody(strings.Replace(string(rawReceipt), `"/dev/shm/ramws/demo.rgb"`, `"/dev/shm/.x"`, 1)),
+			Admit: false,
+		},
+		{
+			Name:  "RV7-ramws-newline-refused",
+			Raw:   wrapRawBody(strings.Replace(string(rawReceipt), `"/dev/shm/ramws/demo.rgb"`, `"/dev/shm/a\nb"`, 1)),
+			Admit: false,
+		},
+		{
+			Name:  "RV7-ramws-bare-root-refused",
+			Raw:   wrapRawBody(strings.Replace(string(rawReceipt), `"/dev/shm/ramws/demo.rgb"`, `"/dev/shm"`, 1)),
+			Admit: false,
+		},
 	}
 	if path := os.Getenv("MV_CONFORMANCE_FILE"); path != "" {
 		raw, err := os.ReadFile(path)
@@ -559,6 +597,89 @@ func TestSharedConformanceCases(t *testing.T) {
 		got := vErr == nil
 		if got != tc.Admit {
 			t.Fatalf("case %s: ValidateEnvelope got admit=%v (err=%v), want admit=%v", tc.Name, got, vErr, tc.Admit)
+		}
+	}
+}
+
+func TestPublisherFrameValidatesEndToEnd(t *testing.T) {
+	p, err := NewPolicy(ceilingConfig(), os.DirFS("../../../contracts/v0.2"), &dummyPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ramRoot, err := os.MkdirTemp("/dev/shm", "mv-pub-policy-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(ramRoot); err != nil {
+			t.Error(err)
+		}
+	})
+	outputPath, err := os.MkdirTemp(ramRoot, "frames-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	random := make([]byte, 16)
+	if _, err := rand.Read(random); err != nil {
+		t.Fatal(err)
+	}
+	name := hex.EncodeToString(random) + ".rgb"
+	publishedPath := filepath.Join(outputPath, name)
+	rawPixels := []byte{255, 0, 0, 0, 255, 0}
+	if err := os.WriteFile(publishedPath, rawPixels, 0600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(rawPixels)
+	sha := hex.EncodeToString(sum[:])
+
+	frameRef := map[string]any{
+		"schema":     "frame_ref/v0.2",
+		"surface_id": "surf-1",
+		"generation": 1,
+		"tick":       1,
+		"ts_ns":      100,
+		"width":      2,
+		"height":     1,
+		"format":     "rgb24",
+		"ramws_path": publishedPath,
+		"sha256":     sha,
+		"capture_us": 20,
+	}
+	rawEnv, err := os.ReadFile("../../../contracts/examples/v0.2/envelope.valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapBody := func(body any) []byte {
+		var env map[string]any
+		if err := json.Unmarshal(rawEnv, &env); err != nil {
+			t.Fatal(err)
+		}
+		env["body"] = body
+		wire, err := json.Marshal(env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return wire
+	}
+	if _, err := p.ValidateEnvelope(wrapBody(frameRef)); err != nil {
+		t.Fatalf("published frame_ref %q refused by ValidateEnvelope: %v", publishedPath, err)
+	}
+	eventBody := map[string]any{
+		"schema": "surface_event/v0.2",
+		"event":  "frame_ready",
+		"data":   map[string]any{"frame_ref": frameRef},
+	}
+	if _, err := p.ValidateEnvelope(wrapBody(eventBody)); err != nil {
+		t.Fatalf("published surface_event.frame_ready (%q) refused by ValidateEnvelope: %v", publishedPath, err)
+	}
+	for _, badPath := range []string{"/dev/shm/../etc/x", "/dev/shm/a//b", "/dev/shm/.x", "/dev/shm/a\nb", "/dev/shm"} {
+		badRef := map[string]any{}
+		for k, v := range frameRef {
+			badRef[k] = v
+		}
+		badRef["ramws_path"] = badPath
+		if _, err := p.ValidateEnvelope(wrapBody(badRef)); err == nil {
+			t.Fatalf("invalid ramws_path %q admitted by ValidateEnvelope", badPath)
 		}
 	}
 }

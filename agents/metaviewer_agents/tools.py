@@ -52,8 +52,8 @@ _RECORD_EVENT_FAMILY = "record_event/"
 
 _ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]*")
 _SHA_PATTERN = re.compile(r"[0-9a-f]{64}")
-_RAMWS_PATTERN = re.compile(r"/dev/shm/[^\x00]+")
-_RAM_RECORD_PATTERN = re.compile(r"/dev/shm/[^\x00\r\n]+")
+_RAMWS_PATTERN = re.compile(r"/dev/shm(/[A-Za-z0-9_][A-Za-z0-9._-]{0,127}){1,8}\Z")
+_RAM_RECORD_PATTERN = _RAMWS_PATTERN
 _ABS_PATH_PATTERN = re.compile(r"/[^\x00\r\n]*")
 _MAX_SAFE_INT = 9007199254740991
 _MAX_RING_BYTES = 1073741824
@@ -240,7 +240,7 @@ def _check_scroll(action: dict) -> None:
 
 def _check_wait(action: dict) -> None:
     _check_exact(action, frozenset({"type", "ms"}), "wait action")
-    _check_int(action["ms"], minimum=1, what="wait ms")
+    _check_int(action["ms"], minimum=1, maximum=3600000, what="wait ms")
 
 
 def _check_lane_submit(action: dict) -> None:
@@ -291,8 +291,8 @@ def _check_changed_region(expectation: dict) -> None:
                         "expectation bbox")
     _check_int(bbox["x"], minimum=0, what="bbox x")
     _check_int(bbox["y"], minimum=0, what="bbox y")
-    _check_int(bbox["w"], minimum=1, what="bbox w")
-    _check_int(bbox["h"], minimum=1, what="bbox h")
+    _check_int(bbox["w"], minimum=1, maximum=16384, what="bbox w")
+    _check_int(bbox["h"], minimum=1, maximum=16384, what="bbox h")
 
 
 def _check_element_state(expectation: dict) -> None:
@@ -370,8 +370,10 @@ def _check_proposal(proposal: object) -> dict:
     _check_expectation(body["expectation"])
     budget = _check_exact(body["budget"], frozenset({"max_ms", "max_retries"}),
                           "budget")
-    _check_int(budget["max_ms"], minimum=1, what="budget max_ms")
-    _check_int(budget["max_retries"], minimum=0, what="budget max_retries")
+    _check_int(budget["max_ms"], minimum=1, maximum=3600000,
+               what="budget max_ms")
+    _check_int(budget["max_retries"], minimum=0, maximum=10,
+               what="budget max_retries")
     return body
 
 
@@ -393,7 +395,7 @@ def _check_frame(frame: object) -> dict:
     _check_int(body["width"], minimum=1, maximum=16384, what="frame width")
     _check_int(body["height"], minimum=1, maximum=16384, what="frame height")
     _check_const(body["format"], "rgb24", "frame format")
-    _check_str(body["ramws_path"], min_length=10, max_length=4096,
+    _check_str(body["ramws_path"], min_length=10, max_length=255,
                pattern=_RAMWS_PATTERN, what="frame ramws_path")
     _check_str(body["sha256"], min_length=64, max_length=64,
                pattern=_SHA_PATTERN, what="frame sha256")
@@ -928,7 +930,7 @@ def _check_record_event(event_obj: object, *, request_id: str,
                        "event", "mono_ns", "ram_path", "sha256",
                        "byte_count"}),
             "frame_captured record_event")
-        _check_str(body["ram_path"], min_length=1, max_length=4096,
+        _check_str(body["ram_path"], min_length=10, max_length=255,
                    pattern=_RAM_RECORD_PATTERN, what="ram_path")
         _check_str(body["sha256"], min_length=64, max_length=64,
                    pattern=_SHA_PATTERN, what="sha256")

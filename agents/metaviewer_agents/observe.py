@@ -34,6 +34,10 @@ _FRAME_REF_SCHEMA = "frame_ref/v0.1"
 _RGB24 = "rgb24"
 _HOLDINGS_SOURCE = "holdings_lane"
 _RAMWS_PREFIX = "/dev/shm/"
+_RAMWS_RE = re.compile(r"/dev/shm(/[A-Za-z0-9_][A-Za-z0-9._-]{0,127}){1,8}\Z")
+_RAMWS_MIN_LEN = 10
+_RAMWS_MAX_LEN = 255
+_MAX_DIMENSION = 16384
 # NUL spelled as code: shared-memory paths must exclude it.
 _NUL = chr(0)
 _HEX64 = re.compile(r"[0-9a-f]{64}")
@@ -99,8 +103,10 @@ def _check_hex64(value: object, *, name: str) -> None:
 
 
 def _check_ramws_path(value: object) -> None:
-    if (not isinstance(value, str) or not value.startswith(_RAMWS_PREFIX)
-            or len(value) <= len(_RAMWS_PREFIX) or _NUL in value):
+    if (not isinstance(value, str)
+            or not (_RAMWS_MIN_LEN <= len(value) <= _RAMWS_MAX_LEN)
+            or _NUL in value
+            or _RAMWS_RE.match(value) is None):
         _fail("bad_shape", "ramws_path leaves shared memory")
 
 
@@ -121,8 +127,10 @@ def _check_frame_ref(frame: object, *, version="v0.1") -> dict:
                name="frame_ref.generation")
     _check_int(frame["tick"], minimum=0, name="frame_ref.tick")
     _check_int(frame["ts_ns"], minimum=0, name="frame_ref.ts_ns")
-    _check_int(frame["width"], minimum=1, name="frame_ref.width")
-    _check_int(frame["height"], minimum=1, name="frame_ref.height")
+    width = _check_int(frame["width"], minimum=1, name="frame_ref.width")
+    height = _check_int(frame["height"], minimum=1, name="frame_ref.height")
+    if width > _MAX_DIMENSION or height > _MAX_DIMENSION:
+        _fail("bad_shape", "frame_ref dimensions exceed 16384")
     if frame["format"] != _RGB24:
         _fail("bad_shape", "frame_ref format is not rgb24")
     _check_ramws_path(frame["ramws_path"])

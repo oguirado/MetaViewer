@@ -340,13 +340,22 @@ class Fx2AgentsBTests(unittest.TestCase):
         result_schema = validator.load("mv_tool_result.schema.json")
         self.assertEqual(
             frame_schema["properties"]["ramws_path"]["pattern"],
-            "^/dev/shm/[^\x00\r\n]+$",
+            "^/dev/shm(/[A-Za-z0-9_][A-Za-z0-9._-]{0,127}){1,8}$",
         )
         self.assertEqual(
             result_schema["$defs"]["frame"]["properties"]["ramws_path"]["pattern"],
-            "^/dev/shm/[^\x00\r\n]+$",
+            "^/dev/shm(/[A-Za-z0-9_][A-Za-z0-9._-]{0,127}){1,8}$",
         )
-        for bad_path in ("/dev/shm/a\nb", "/dev/shm/a\rb", "/dev/shm/ab\n", "/dev/shm/ab\r"):
+        for bad_path in (
+            "/dev/shm/a\nb",
+            "/dev/shm/a\rb",
+            "/dev/shm/ab\n",
+            "/dev/shm/ab\r",
+            "/dev/shm/../etc/x",
+            "/dev/shm/a//b",
+            "/dev/shm/.x",
+            "/dev/shm",
+        ):
             with self.subTest(ramws_path=bad_path):
                 bad_frame = _frame_v02(ramws_path=bad_path)
                 with self.assertRaises(ValidationError):
@@ -358,10 +367,15 @@ class Fx2AgentsBTests(unittest.TestCase):
                 self.assertEqual(ctx.exception.code, "bad_shape")
 
         # Negative control: clean path admitted.
-        clean_frame = _frame_v02(ramws_path="/dev/shm/clean-frame")
-        validator.validate(clean_frame, frame_schema)
-        clean_env = _wrap_v02(clean_frame)
-        self.assertIs(validate_envelope(clean_env), clean_env)
+        for good_path in (
+            "/dev/shm/clean-frame",
+            "/dev/shm/ramws/demo.rgb",
+            "/dev/shm/mv-adapter-1/frames-123456/0123456789abcdef0123456789abcdef.rgb",
+        ):
+            clean_frame = _frame_v02(ramws_path=good_path)
+            validator.validate(clean_frame, frame_schema)
+            clean_env = _wrap_v02(clean_frame)
+            self.assertIs(validate_envelope(clean_env), clean_env)
 
     def test_t6r2_004_sha256_trailing_lf_refused(self):
         env = _wrap_v02(_frame_v02())

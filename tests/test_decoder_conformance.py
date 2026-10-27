@@ -215,6 +215,15 @@ class DecoderConformanceTests(unittest.TestCase):
             ),
             ("pos-002-int-generation", wrap_obj({**frame_valid, "generation": 1})),
             ("pos-003-clean-ramws", wrap_obj({**frame_valid, "ramws_path": "/dev/shm/ramws/demo.rgb"})),
+            (
+                "pos-003b-adapter-ramws",
+                wrap_obj(
+                    {
+                        **frame_valid,
+                        "ramws_path": "/dev/shm/mv-adapter-1/frames-123456/0123456789abcdef0123456789abcdef.rgb",
+                    }
+                ),
+            ),
             ("pos-004-clean-sha256", wrap_obj({**frame_valid, "sha256": "a" * 64})),
             ("pos-005-65536-ascii", wrap_obj({**rcpt_valid, "error": "a" * 65536})),
             ("pos-006-valid-unicode", wrap_obj({**rcpt_valid, "error": "é-\U0001f600"})),
@@ -261,6 +270,26 @@ class DecoderConformanceTests(unittest.TestCase):
             ("T6R2-005", raw_005, dict(unanimous_refusal)),
             ("T6R2-006", raw_006, dict(unanimous_refusal)),
             ("T6R2-007", raw_007, dict(unanimous_refusal)),
+            (
+                "RV7-ramws-traversal",
+                wrap_obj({**frame_valid, "ramws_path": "/dev/shm/../etc/x"}),
+                {"rust": False, "go": False, "python": False, "checker": False},
+            ),
+            (
+                "RV7-ramws-empty-seg",
+                wrap_obj({**frame_valid, "ramws_path": "/dev/shm/a//b"}),
+                {"rust": False, "go": False, "python": False, "checker": False},
+            ),
+            (
+                "RV7-ramws-hidden-seg",
+                wrap_obj({**frame_valid, "ramws_path": "/dev/shm/.x"}),
+                {"rust": False, "go": False, "python": False, "checker": False},
+            ),
+            (
+                "RV7-ramws-bare-root",
+                wrap_obj({**frame_valid, "ramws_path": "/dev/shm"}),
+                {"rust": False, "go": False, "python": False, "checker": False},
+            ),
         ]
 
         all_raw = (

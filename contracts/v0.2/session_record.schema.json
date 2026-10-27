@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://metaviewer.local/contracts/v0.2/session_record.schema.json",
   "title": "Session Record",
+  "description": "Session journal record. Timestamps in associated session events are session-relative monotonic nanoseconds since core/capsule start; never wall-clock UNIX epoch ns. Bounded by 2^53 - 1 (~104.25 days); at the ceiling the core fails closed (refuses new work with a logged typed error) so the session must be restarted (never re-origined).",
   "type": "object",
   "properties": {
     "schema": {

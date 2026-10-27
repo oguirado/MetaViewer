@@ -30,21 +30,41 @@ type SchemaPolicy struct {
 
 var _ Policy = (*SchemaPolicy)(nil)
 
+const ramwsPathPatternLiteral = "^/dev/shm(/[A-Za-z0-9_][A-Za-z0-9._-]{0,127}){1,8}$"
+
 var integerLexeme = regexp.MustCompile(`^-?(0|[1-9][0-9]*)$`)
+var ramwsSegmentPattern = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$`)
+
+func validRAMWSPath(s string) bool {
+	if len(s) < 10 || len(s) > 255 || !strings.HasPrefix(s, "/dev/shm/") {
+		return false
+	}
+	parts := strings.Split(s[len("/dev/shm/"):], "/")
+	if len(parts) < 1 || len(parts) > 8 {
+		return false
+	}
+	for _, part := range parts {
+		if !ramwsSegmentPattern.MatchString(part) {
+			return false
+		}
+	}
+	return true
+}
 
 type schemaNode struct {
-	ref      *schemaNode
-	kind     string
-	constant any
-	hasConst bool
-	enums    []any
-	required []string
-	props    map[string]*schemaNode
-	closed   bool
-	choices  []*schemaNode
-	items    *schemaNode
-	pattern  *regexp.Regexp
-	limits   map[string]int
+	ref       *schemaNode
+	kind      string
+	constant  any
+	hasConst  bool
+	enums     []any
+	required  []string
+	props     map[string]*schemaNode
+	closed    bool
+	choices   []*schemaNode
+	items     *schemaNode
+	pattern   *regexp.Regexp
+	ramwsPath bool
+	limits    map[string]int
 }
 
 func NewPolicy(c Config, source fs.FS, authority Authority) (policy *SchemaPolicy, err error) {
@@ -188,8 +208,16 @@ func NewPolicy(c Config, source fs.FS, authority Authority) (policy *SchemaPolic
 					n.choices = append(n.choices, child)
 				}
 			case "pattern":
+				pat, ok := v.(string)
+				if !ok {
+					return nil, errors.New("invalid pattern")
+				}
+				if pat == ramwsPathPatternLiteral {
+					n.ramwsPath = true
+					break
+				}
 				var err error
-				n.pattern, err = regexp.Compile(strings.ReplaceAll(v.(string), `\u0000`, `\x{0000}`))
+				n.pattern, err = regexp.Compile(strings.ReplaceAll(pat, `\u0000`, `\x{0000}`))
 				if err != nil {
 					return nil, err
 				}
@@ -346,7 +374,7 @@ func (n *schemaNode) accept(v any) bool {
 		}
 	case "string":
 		s, ok := v.(string)
-		if !ok || !bounded(utf8.RuneCountInString(s), "minLength", "maxLength") || (n.pattern != nil && !n.pattern.MatchString(s)) {
+		if !ok || !bounded(utf8.RuneCountInString(s), "minLength", "maxLength") || (n.ramwsPath && !validRAMWSPath(s)) || (n.pattern != nil && !n.pattern.MatchString(s)) {
 			return false
 		}
 	case "integer", "number":

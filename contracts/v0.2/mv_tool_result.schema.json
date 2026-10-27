@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://metaviewer.local/contracts/v0.2/mv_tool_result.schema.json",
   "title": "MV Tool Result",
-  "description": "Core to agent/CLI outcome for one mv_tool_call. request_id echoes the call envelope msg_id.",
+  "description": "Core to agent/CLI outcome for one mv_tool_call. request_id echoes the call envelope msg_id. All *_ns fields (frame.ts_ns, receipt.executed_at_ns, input_mono_ns) are session-relative monotonic nanoseconds since core/capsule start; never wall-clock UNIX epoch ns. Bounded by 2^53 - 1 (9007199254740991, ~104.25 days); at the ceiling the core fails closed (refuses new work with a logged typed error) so the session must be restarted (never re-origined).",
   "$defs": {
     "bbox": {
       "type": "object",
@@ -84,8 +84,8 @@
         "ramws_path": {
           "type": "string",
           "minLength": 10,
-          "maxLength": 4096,
-          "pattern": "^/dev/shm/[^\u0000\r\n]+$"
+          "maxLength": 255,
+          "pattern": "^/dev/shm(/[A-Za-z0-9_][A-Za-z0-9._-]{0,127}){1,8}$"
         },
         "sha256": {
           "type": "string",

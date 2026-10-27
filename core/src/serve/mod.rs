@@ -27,6 +27,9 @@
 //! a terminal writer retires its endpoint after flushing its diagnostic.
 //! [TARGET, unit decision] A failed receipt must have verified=false; contradictory receipts are refused
 //! before settlement and cannot clear a lease.
+//! [TARGET, unit decision] The session-relative monotonic clock is bounded below
+//! MAX_WIRE_INTEGER ns (~104.25 days). Reaching the ceiling logs and fails closed
+//! with ClockCeilingError without mutating authority state; the session must be restarted.
 mod capture;
 mod layout;
 mod tools;
@@ -119,6 +122,20 @@ impl std::fmt::Display for SendFailure {
     }
 }
 impl std::error::Error for SendFailure {}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClockCeilingError {
+    pub elapsed_ns: u128,
+}
+impl std::fmt::Display for ClockCeilingError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "session monotonic clock reached wire ceiling ({} ns >= {} ns); restart session",
+            self.elapsed_ns, MAX_WIRE_INTEGER
+        )
+    }
+}
+impl std::error::Error for ClockCeilingError {}
 struct Connection {
     id: u64,
     epoch: u64,
@@ -133,6 +150,7 @@ pub struct Server {
     replay: ReplayTable,
     connections: BTreeMap<Endpoint, Connection>,
     origin: Instant,
+    clock_offset: Duration,
     serial: u64,
     observers: BTreeSet<Endpoint>,
     subscriptions: BTreeSet<(Endpoint, String)>,
@@ -221,6 +239,7 @@ impl Server {
             replay,
             connections: BTreeMap::new(),
             origin: Instant::now(),
+            clock_offset: Duration::ZERO,
             serial: 0,
             observers: BTreeSet::new(),
             subscriptions: BTreeSet::new(),
@@ -242,9 +261,20 @@ impl Server {
         }
     }
     fn now(&self) -> Result<u64> {
-        Ok(u64::try_from(self.origin.elapsed().as_nanos())?)
+        let elapsed_ns = self
+            .origin
+            .elapsed()
+            .saturating_add(self.clock_offset)
+            .as_nanos();
+        if elapsed_ns >= u128::from(MAX_WIRE_INTEGER) {
+            let err = ClockCeilingError { elapsed_ns };
+            eprintln!("core clock exhausted: {err}");
+            return Err(err.into());
+        }
+        Ok(u64::try_from(elapsed_ns)?)
     }
     fn send(&mut self, to: &Endpoint, body: Command) -> Result<()> {
+        let ts_ns = self.now()?;
         self.serial = self
             .serial
             .checked_add(1)
@@ -252,7 +282,7 @@ impl Server {
         let env = Envelope {
             schema: "envelope/v0.2".into(),
             msg_id: format!("core-{}-{}", self.authority.state().epoch, self.serial),
-            ts_ns: Clock::new(self.now()?),
+            ts_ns: Clock::new(ts_ns),
             from: self.config.core.endpoint.clone(),
             to: to.clone(),
             session_id: self.config.session_id.clone(),
@@ -418,6 +448,7 @@ impl Server {
     }
     fn route(&mut self, peer: &ReadyPeer, epoch: u64, env: Envelope) -> Result<()> {
         peer.check_sender(&env)?;
+        self.now()?;
         self.replay
             .record(&env.session_id, &env.from, &env.nonce, env.seq)?;
         let raw = serde_json::to_string(&env)?;
@@ -680,12 +711,13 @@ impl Server {
         if !self.connections.contains_key(&daemon) {
             return self.proposal_refusal(env, tool, Refusal::Policy, boundary);
         }
+        let now_ns = self.now()?;
         let request = AdmissionRequest::decode(
             &serde_json::to_string(env)?,
             peer.endpoint(),
             &self.config.session_id,
             self.authority.state().epoch,
-            self.now()?,
+            now_ns,
         )?;
         let mut witnesses = vec![boundary];
         // A stale proposal needs no retained pixel witness.
@@ -711,9 +743,10 @@ impl Server {
             return Err(error);
         }
         if admitted {
+            let now_ns = self.now()?;
             let out = self.authority.apply(Input::Dispatch {
                 proposal_id: proposal.proposal_id.clone(),
-                now_ns: self.now()?,
+                now_ns,
             })?;
             if out.dispatch {
                 let body = serde_json::from_value(
@@ -1031,6 +1064,7 @@ async fn connection(
         if s.connections.contains_key(ready.endpoint()) {
             return Err(invalid("endpoint already connected"));
         }
+        s.now()?;
         s.replay
             .record_reconnect(&env.session_id, &env.from, &env.nonce, env.seq)?;
         if env.from.component == Component::Daemon {
@@ -1905,6 +1939,82 @@ mod nv_regressions {
                 .expect("EOF must drain queued verdicts");
             assert!(matches!(reply.body, Command::ActionVerdict(_)));
             task.abort();
+        });
+    }
+    #[test]
+    fn rv7_clock_ceiling_fails_closed_without_domain_mutation() {
+        run(async {
+            let mut f = Fixture::new();
+            f.seed();
+            let daemon = f.attach(Component::Daemon, 8);
+            let agent = f.attach(Component::Agent, 8);
+            let over_ceiling = f.envelope(
+                Component::Agent,
+                1,
+                serde_json::to_value(&f.server.config.peers[0].hello).unwrap(),
+            );
+            let mut raw_over = serde_json::to_value(&over_ceiling).unwrap();
+            raw_over["ts_ns"] = json!(MAX_WIRE_INTEGER + 1);
+            assert!(
+                decode_envelope(&serde_json::to_string(&raw_over).unwrap()).is_err(),
+                "negative control: ts_ns above MAX_WIRE_INTEGER must be rejected by decode_envelope"
+            );
+
+            // Positive control: just below the ceiling works and admits work.
+            f.server.origin = Instant::now();
+            f.server.clock_offset = Duration::from_nanos(MAX_WIRE_INTEGER - 500_000_000);
+            let ts_below = f.server.now().unwrap();
+            assert!(ts_below >= MAX_WIRE_INTEGER - 500_000_000);
+            assert!(ts_below < MAX_WIRE_INTEGER);
+            f.route(Component::Agent, 2, f.proposal()).await.unwrap();
+            let verdict_env = agent.try_recv().unwrap();
+            assert!(verdict_env.ts_ns.get() < MAX_WIRE_INTEGER);
+            let dispatched_env = daemon.try_recv().unwrap();
+            assert!(dispatched_env.ts_ns.get() < MAX_WIRE_INTEGER);
+            assert_eq!(f.server.authority.state().pending.len(), 1);
+
+            // Negative controls: at the ceiling and above the ceiling refuse new work
+            // with typed ClockCeilingError and no domain or sequence mutation.
+            let before_domain = f.server.authority.state().domain_snapshot().unwrap();
+            let before_state = f.server.snapshot().unwrap();
+            let before_seq = f.server.authority.state().core_seq;
+            let before_serial = f.server.serial;
+            for (idx, offset) in [
+                Duration::from_nanos(MAX_WIRE_INTEGER),
+                Duration::from_secs(200 * 86_400),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                f.server.origin = Instant::now();
+                f.server.clock_offset = offset;
+                let now_err = f.server.now().unwrap_err();
+                let ceiling_err = now_err
+                    .downcast_ref::<ClockCeilingError>()
+                    .expect("now() at/above ceiling must fail with ClockCeilingError");
+                assert!(ceiling_err.elapsed_ns >= u128::from(MAX_WIRE_INTEGER));
+
+                let mut next_proposal = f.proposal();
+                next_proposal["proposal_id"] = format!("nv-ceiling-{idx}").into();
+                let route_err = f
+                    .route(Component::Agent, 3 + idx as u64, next_proposal)
+                    .await
+                    .unwrap_err();
+                assert!(
+                    route_err.downcast_ref::<ClockCeilingError>().is_some(),
+                    "route() at/above ceiling must refuse with ClockCeilingError: {route_err}"
+                );
+                assert_eq!(
+                    f.server.authority.state().domain_snapshot().unwrap(),
+                    before_domain,
+                    "refusal at/above clock ceiling must not mutate domain state"
+                );
+                assert_eq!(f.server.snapshot().unwrap(), before_state);
+                assert_eq!(f.server.authority.state().core_seq, before_seq);
+                assert_eq!(f.server.serial, before_serial);
+                assert!(agent.try_recv().is_err());
+                assert!(daemon.try_recv().is_err());
+            }
         });
     }
 }

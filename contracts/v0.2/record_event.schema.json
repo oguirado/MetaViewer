@@ -25,11 +25,11 @@
       "pattern": "^/[^\u0000\r\n]*$"
     },
     "ram_path": {
-      "description": "RAM-only frame path under shared memory.",
+      "description": "RAM-only frame path under /dev/shm with 1..8 segments ([A-Za-z0-9_][A-Za-z0-9._-]{0,127}), without '.', '..', hidden names, empty segments, NUL, or \r\n.",
       "type": "string",
-      "minLength": 1,
-      "maxLength": 4096,
-      "pattern": "^/dev/shm/[^\u0000\r\n]+$"
+      "minLength": 10,
+      "maxLength": 255,
+      "pattern": "^/dev/shm(/[A-Za-z0-9_][A-Za-z0-9._-]{0,127}){1,8}$"
     },
     "hash": {
       "description": "Lowercase hex SHA-256 digest of artifact bytes.",
@@ -39,7 +39,7 @@
       "pattern": "^[0-9a-f]{64}$"
     },
     "counter": {
-      "description": "Unsigned counter or monotonic timestamp in nanoseconds.",
+      "description": "Unsigned counter or session-relative monotonic timestamp in nanoseconds (never wall-clock UNIX epoch ns; bounded by 2^53 - 1, ~104.25 days; at the ceiling the core fails closed with a logged typed error and the session must be restarted).",
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991

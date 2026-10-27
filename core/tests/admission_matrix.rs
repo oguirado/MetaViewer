@@ -397,18 +397,88 @@ fn bounds_tick_interval_and_deadline_overflow_refuse_without_domain_mutation() {
         let mut s = state();
         let before = s.domain_snapshot().unwrap();
         if mode == 0 || mode == 2 {
-            // The frozen wire rail now refuses u64::MAX before admission.
+            // The frozen wire rail refuses u64::MAX before admission.
             assert_eq!(
                 AdmissionRequest::decode(&raw.to_string(), &sender(), "session-1", 1, 0),
                 Err(AdmissionError::OutOfBounds)
             );
             assert_eq!(s.domain_snapshot().unwrap(), before);
-            // Also retain admission bounds/deadline-overflow coverage for the
-            // largest admitted integer (milliseconds still overflow nanoseconds).
             if mode == 0 {
-                raw["body"]["expectation"]["bbox"]["x"] = metaviewer_core::MAX_WIRE_INTEGER.into();
+                // Values above the new 16384 bbox w/h caps are refused at decode.
+                for over_dim in [16_385_u64, metaviewer_core::MAX_WIRE_INTEGER] {
+                    raw["body"]["expectation"] =
+                        json!({"type":"changed_region","bbox":{"x":0,"y":0,"w":over_dim,"h":1}});
+                    assert_eq!(
+                        AdmissionRequest::decode(&raw.to_string(), &sender(), "session-1", 1, 0),
+                        Err(AdmissionError::InvalidInput)
+                    );
+                    raw["body"]["expectation"] =
+                        json!({"type":"changed_region","bbox":{"x":0,"y":0,"w":1,"h":over_dim}});
+                    assert_eq!(
+                        AdmissionRequest::decode(&raw.to_string(), &sender(), "session-1", 1, 0),
+                        Err(AdmissionError::InvalidInput)
+                    );
+                }
+                assert_eq!(s.domain_snapshot().unwrap(), before);
+                // Largest admitted bbox coordinates/dimensions still refuse OutOfBounds at admission.
+                raw["body"]["expectation"] = json!({
+                    "type":"changed_region",
+                    "bbox":{"x":metaviewer_core::MAX_WIRE_INTEGER,"y":0,"w":16_384,"h":16_384}
+                });
             } else {
-                raw["body"]["budget"]["max_ms"] = metaviewer_core::MAX_WIRE_INTEGER.into();
+                // Values above the new budget/wait caps (max_ms <= 3_600_000, max_retries <= 10)
+                // are refused at decode with no domain mutation.
+                for over_ms in [3_600_001_u64, metaviewer_core::MAX_WIRE_INTEGER] {
+                    raw["body"]["budget"]["max_ms"] = over_ms.into();
+                    assert_eq!(
+                        AdmissionRequest::decode(&raw.to_string(), &sender(), "session-1", 1, 0),
+                        Err(AdmissionError::InvalidInput)
+                    );
+                }
+                raw["body"]["budget"]["max_ms"] = 3_600_000.into();
+                raw["body"]["budget"]["max_retries"] = 11.into();
+                assert_eq!(
+                    AdmissionRequest::decode(&raw.to_string(), &sender(), "session-1", 1, 0),
+                    Err(AdmissionError::InvalidInput)
+                );
+                raw["body"]["budget"]["max_retries"] = 1.into();
+                assert_eq!(s.domain_snapshot().unwrap(), before);
+                // With budget.max_ms capped at 3_600_000, max_ms * 1_000_000 (3.6e12 ns)
+                // can no longer overflow u64 on its own or when added to MAX_WIRE_INTEGER.
+                assert_eq!(
+                    3_600_000_u64
+                        .checked_mul(1_000_000)
+                        .and_then(|ns| metaviewer_core::MAX_WIRE_INTEGER.checked_add(ns)),
+                    Some(metaviewer_core::MAX_WIRE_INTEGER + 3_600_000_000_000)
+                );
+                let within_wire_clock = AdmissionRequest::decode(
+                    &raw.to_string(),
+                    &sender(),
+                    "session-1",
+                    1,
+                    metaviewer_core::MAX_WIRE_INTEGER,
+                )
+                .unwrap();
+                assert_eq!(
+                    s.clone()
+                        .apply(&Input::Propose(within_wire_clock))
+                        .unwrap()
+                        .reason,
+                    None
+                );
+                // Keep the deadline checked_add overflow refusal covered with the largest
+                // admitted max_ms (3_600_000) and a host received_ns that overflows u64.
+                let r = AdmissionRequest::decode(
+                    &raw.to_string(),
+                    &sender(),
+                    "session-1",
+                    1,
+                    u64::MAX - 3_600_000 * 1_000_000 + 1,
+                )
+                .unwrap();
+                assert_eq!(s.apply(&Input::Propose(r)).unwrap().reason, Some(reason));
+                assert_eq!(s.domain_snapshot().unwrap(), before);
+                continue;
             }
         }
         let r = AdmissionRequest::decode(&raw.to_string(), &sender(), "session-1", 1, 0).unwrap();

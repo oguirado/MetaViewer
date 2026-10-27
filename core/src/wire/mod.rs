@@ -338,7 +338,37 @@ fn terminal_lengths(v: &Value) -> bool {
     body["params"]["byte_count"].as_u64() == u64::try_from(n).ok()
 }
 
+fn ramws_path_ok(s: &str) -> bool {
+    if s.len() > 255 {
+        return false;
+    }
+    let Some(tail) = s.strip_prefix("/dev/shm/") else {
+        return false;
+    };
+    let mut count = 0usize;
+    for seg in tail.split('/') {
+        count += 1;
+        if count > 8 || seg.is_empty() || seg.len() > 128 {
+            return false;
+        }
+        let first = seg.as_bytes()[0];
+        if !(first.is_ascii_alphanumeric() || first == b'_') {
+            return false;
+        }
+        if !seg
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+        {
+            return false;
+        }
+    }
+    (1..=8).contains(&count)
+}
+
 fn pattern_ok(s: &str, pattern: &str) -> bool {
+    if pattern == "^/dev/shm(/[A-Za-z0-9_][A-Za-z0-9._-]{0,127}){1,8}$" {
+        return ramws_path_ok(s);
+    }
     if pattern == "^[A-Za-z0-9][A-Za-z0-9._:-]*$" {
         return s.as_bytes().first().is_some_and(u8::is_ascii_alphanumeric)
             && s.bytes()

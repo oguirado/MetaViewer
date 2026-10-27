@@ -181,11 +181,32 @@ fn integer_upper_rails_are_exact_and_recursive() {
         "/ts_ns",
         "/body/based_on_frame/generation",
         "/body/action/x",
-        "/body/budget/max_ms",
     ] {
         let mut value = base.clone();
         *value.pointer_mut(pointer).unwrap() = MAX_WIRE_INTEGER.into();
         assert!(decode_envelope(&value.to_string()).is_ok(), "{pointer}");
+        *value.pointer_mut(pointer).unwrap() = (MAX_WIRE_INTEGER + 1).into();
+        assert_eq!(
+            decode_envelope(&value.to_string()),
+            Err(DecodeError::OutOfBounds),
+            "{pointer}"
+        );
+    }
+    for (pointer, cap) in [
+        ("/body/budget/max_ms", 3_600_000_u64),
+        ("/body/budget/max_retries", 10_u64),
+        ("/body/expectation/bbox/w", 16_384_u64),
+        ("/body/expectation/bbox/h", 16_384_u64),
+    ] {
+        let mut value = base.clone();
+        *value.pointer_mut(pointer).unwrap() = cap.into();
+        assert!(decode_envelope(&value.to_string()).is_ok(), "{pointer}");
+        *value.pointer_mut(pointer).unwrap() = (cap + 1).into();
+        assert_eq!(
+            decode_envelope(&value.to_string()),
+            Err(DecodeError::InvalidField),
+            "{pointer}"
+        );
         *value.pointer_mut(pointer).unwrap() = (MAX_WIRE_INTEGER + 1).into();
         assert_eq!(
             decode_envelope(&value.to_string()),

@@ -421,6 +421,12 @@ class ObserveTests(unittest.TestCase):
         for key, value in (("format", "rgba8"), ("format", "RGB24"),
                            ("ramws_path", "/tmp/frame.rgb"),
                            ("ramws_path", "/dev/shm/"),
+                           ("ramws_path", "/dev/shm"),
+                           ("ramws_path", "/dev/shm/../etc/x"),
+                           ("ramws_path", "/dev/shm/a//b"),
+                           ("ramws_path", "/dev/shm/.x"),
+                           ("ramws_path", "/dev/shm/a\nb"),
+                           ("ramws_path", "/dev/shm/" + ("a" * 250)),
                            ("ramws_path", "/dev/shm/a\x00b"),
                            ("sha256", "xyz"), ("sha256", _DIGEST.upper()),
                            ("sha256", _DIGEST[:63]),
@@ -784,6 +790,9 @@ class ProposeTests(unittest.TestCase):
         bad["action"] = {"type": "wait", "ms": 0}
         cases.append(bad)
         bad = copy.deepcopy(good)
+        bad["action"] = {"type": "wait", "ms": 3600001}
+        cases.append(bad)
+        bad = copy.deepcopy(good)
         bad["expectation"] = {"type": "text_present"}
         cases.append(bad)
         bad = copy.deepcopy(good)
@@ -794,6 +803,14 @@ class ProposeTests(unittest.TestCase):
                               "bbox": {"x": 0, "y": 0, "w": 0, "h": 1}}
         cases.append(bad)
         bad = copy.deepcopy(good)
+        bad["expectation"] = {"type": "changed_region",
+                              "bbox": {"x": 0, "y": 0, "w": 16385, "h": 1}}
+        cases.append(bad)
+        bad = copy.deepcopy(good)
+        bad["expectation"] = {"type": "changed_region",
+                              "bbox": {"x": 0, "y": 0, "w": 1, "h": 16385}}
+        cases.append(bad)
+        bad = copy.deepcopy(good)
         bad["expectation"] = {"type": "state_sha256_change",
                               "before": _DIGEST, "min_tick": 0,
                               "max_tick": True}
@@ -802,7 +819,13 @@ class ProposeTests(unittest.TestCase):
         bad["budget"] = {"max_ms": 0, "max_retries": 0}
         cases.append(bad)
         bad = copy.deepcopy(good)
+        bad["budget"] = {"max_ms": 3600001, "max_retries": 0}
+        cases.append(bad)
+        bad = copy.deepcopy(good)
         bad["budget"] = {"max_ms": 5, "max_retries": -1}
+        cases.append(bad)
+        bad = copy.deepcopy(good)
+        bad["budget"] = {"max_ms": 5, "max_retries": 11}
         cases.append(bad)
         for index, proposal in enumerate(cases):
             with self.subTest(index=index):

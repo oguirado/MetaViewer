@@ -180,6 +180,9 @@ class VersionedContractTests(unittest.TestCase):
     def test_envelope_v02_union_manifest(self):
         legacy = json.loads((ROOT / 'contracts/v0.1/envelope.schema.json').read_text())
         actual = json.loads((ROOT / 'contracts/v0.2/envelope.schema.json').read_text())
+        actual.pop('description', None)
+        for prop in actual['properties'].values():
+            prop.pop('description', None)
         expected = copy.deepcopy(legacy)
         expected['$id'] = expected['$id'].replace('v0.1', 'v0.2')
         expected['properties']['schema']['const'] = 'envelope/v0.2'

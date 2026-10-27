@@ -185,6 +185,8 @@ class ObservationValidationTests(unittest.TestCase):
 
     def test_ramws_path_outside_shared_memory_refused(self):
         for path in ("/tmp/demo.rgb", "/dev/shm/", "/dev/shm",
+                     "/dev/shm/../etc/x", "/dev/shm/a//b", "/dev/shm/.x",
+                     "/dev/shm/a\nb", "/dev/shm/" + ("a" * 250),
                      "/dev/shm/a" + chr(0), 42, None):
             with self.subTest(path=path):
                 observation = _observation()
@@ -192,6 +194,29 @@ class ObservationValidationTests(unittest.TestCase):
                 self.assertCode("bad_shape", validate_observation,
                                 observation, surface_id="surface-demo",
                                 generation=1)
+        for good_path in (
+            "/dev/shm/ramws/demo.rgb",
+            "/dev/shm/mv-adapter-1/frames-123456/0123456789abcdef0123456789abcdef.rgb",
+        ):
+            observation = _observation(frame_ref=_frame(ramws_path=good_path))
+            validate_observation(observation, surface_id="surface-demo", generation=1)
+
+    def test_frame_dimensions_above_16384_refused(self):
+        for key, value in (("width", 16385), ("height", 16385)):
+            with self.subTest(key=key, value=value):
+                observation = _observation()
+                observation["frame_ref"][key] = value
+                self.assertCode("bad_shape", validate_observation,
+                                observation, surface_id="surface-demo",
+                                generation=1)
+        boundary = _observation(
+            frame_ref=_frame(width=16384, height=16384),
+            vision=_vision(
+                changed_regions=[{"x": 0, "y": 0, "w": 16384, "h": 16384}],
+                elements=[_element(bbox={"x": 0, "y": 0, "w": 16384, "h": 16384})],
+            ),
+        )
+        validate_observation(boundary, surface_id="surface-demo", generation=1)
 
     def test_non_rgb24_format_refused(self):
         observation = _observation()
