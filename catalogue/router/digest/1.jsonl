@@ -253,4 +253,4 @@
 {"g":["llms"],"i":508,"id":"llms.txt","o":[],"p":"Routed repository file llms.txt","t":"llms.txt"}
 {"g":["main"],"i":509,"id":"main.go","o":[],"p":"Routed repository file daemon-adapter/cmd/mv-daemon-adapter/main.go","t":"main.go"}
 {"g":["main"],"i":510,"id":"main.js","o":[],"p":"Routed repository file ui/electron/main.js","t":"main.js"}
-{"g":["make_pool"],"i":511,"id":"make_pool.py","o":[],"p":"Routed repository file router/kit/v1_frozen/make_pool.py","t":"make_pool.py"}
+{"g":["main-startup-order.test"],"i":511,"id":"mainsta-a4716a4c64fe","o":[],"p":"Routed repository file ui/test/main-startup-order.test.js","t":"main-startup-order.test.js"}
