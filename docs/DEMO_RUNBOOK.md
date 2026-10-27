@@ -114,6 +114,8 @@ systemd-run --user --scope --unit mv-demo -p MemoryMax=8G -p MemoryHigh=6G -p Me
   python3 tests/e2e/e2e1_slice/stack.py start --ttl 45m
 ```
 
+- `--agent-tick-page` (default off): opt-in agent-driven ticking `data:text/html` page after the first `frame_ready` (`LIVE_STACK_TICK step=N outcome=...`, fail-open); for test/QA only, not for the demo recording [CITED: tests/e2e/e2e1_slice/stack.py].
+
 ### Startup sequence and readiness receipt
 
 `stack.py start` spawns a detached supervisor holding an exclusive flock on `$XDG_RUNTIME_DIR/metaviewer-live-stack/lock` and executes:

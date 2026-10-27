@@ -18,6 +18,12 @@ SPEC = importlib.util.spec_from_file_location(
 stack = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(stack)
 
+CONTRACTS_SPEC = importlib.util.spec_from_file_location(
+    "check_contracts_mod", stack.ROOT / "tools/check_contracts.py"
+)
+check_contracts = importlib.util.module_from_spec(CONTRACTS_SPEC)
+CONTRACTS_SPEC.loader.exec_module(check_contracts)
+
 SAMPLE_XDPYINFO = """name of display:    :91
 version number:    11.0
 vendor string:    The X.Org Foundation
@@ -81,13 +87,15 @@ class StackDemoTests(unittest.TestCase):
         self.assertEqual(default_args.ttl, 2700)
         self.assertEqual(default_args.display, "private")
         self.assertIsNone(default_args.record)
+        self.assertFalse(default_args.agent_tick_page)
 
         visible_args = stack.parser().parse_args(
-            ["start", "--ttl", "10m", "--display", "visible", "--record", "/tmp/demo.mp4"]
+            ["start", "--ttl", "10m", "--display", "visible", "--record", "/tmp/demo.mp4", "--agent-tick-page"]
         )
         self.assertEqual(visible_args.ttl, 600)
         self.assertEqual(visible_args.display, "visible")
         self.assertEqual(visible_args.record, "/tmp/demo.mp4")
+        self.assertTrue(visible_args.agent_tick_page)
 
         private_args = stack.parser().parse_args(["start", "--display", "private"])
         self.assertEqual(private_args.display, "private")
@@ -316,6 +324,294 @@ class StackDemoTests(unittest.TestCase):
         broken_events = [(5001, signal.SIGTERM), (5003, signal.SIGTERM), (5002, signal.SIGINT)]
         with self.assertRaises(AssertionError):
             assert_recorder_sigint_ordered_first(self, broken_events, 5002, {5001, 5003})
+
+    def _make_injected_peer(self, regs, config, surface_id="s-live-1", step_handler=None):
+        class InjectedPeer:
+            def __init__(self):
+                self.next_seq = 1
+                self.inbound_seq = 0
+                self.core_seq = 0
+                self.sent_envelopes = []
+                self.rx_queue = []
+                self.step_count = 0
+
+            def _frame_ref(self, generation, sha_char):
+                return {
+                    "schema": "frame_ref/v0.2",
+                    "surface_id": surface_id,
+                    "generation": generation,
+                    "tick": generation,
+                    "ts_ns": generation * 1000,
+                    "width": 1280,
+                    "height": 900,
+                    "format": "rgb24",
+                    "ramws_path": f"/dev/shm/metaviewer_test/srf_id_12345678/frames/w1/{generation}.rgb",
+                    "sha256": sha_char * 64,
+                    "capture_us": 500,
+                }
+
+            def _enqueue(self, body):
+                self.inbound_seq += 1
+                self.rx_queue.append(
+                    stack.live.make_envelope(
+                        msg_id=f"core-msg-{self.inbound_seq}",
+                        from_component="core",
+                        from_instance=regs["core"]["endpoint"]["instance"],
+                        to_component="agent",
+                        to_instance=regs["agent"]["endpoint"]["instance"],
+                        session_id=config["session_id"],
+                        seq=self.inbound_seq,
+                        body=body,
+                        ts_ns=0,
+                    )
+                )
+
+            def send(self, envelope):
+                self.sent_envelopes.append(envelope)
+                self.next_seq += 1
+                body = envelope["body"]
+                schema = body.get("schema")
+                if schema == "hello/v0.2":
+                    self._enqueue(regs["core"]["hello"])
+                elif schema == "surface_request/v0.2" and body.get("op") == "create":
+                    self._enqueue(
+                        {
+                            "schema": "surface_event/v0.2",
+                            "event": "created",
+                            "data": {
+                                "surface": {
+                                    "schema": "surface/v0.2",
+                                    "surface_id": surface_id,
+                                    "kind": "browser",
+                                    "display": ":91",
+                                    "geometry": {"w": 1280, "h": 900},
+                                    "state": "active",
+                                    "visibility": "unfolded",
+                                    "control": "agent",
+                                    "profile_id": "mv-live-1",
+                                }
+                            },
+                        }
+                    )
+                    self._enqueue(
+                        {
+                            "schema": "surface_event/v0.2",
+                            "event": "frame_ready",
+                            "data": {
+                                "frame_ref": self._frame_ref(1, "1"),
+                            },
+                        }
+                    )
+                elif schema == "action_proposal/v0.2":
+                    self.step_count += 1
+                    self.core_seq += 1
+                    if step_handler is not None:
+                        step_handler(self, self.step_count, body)
+                    else:
+                        next_gen = self.step_count + 1
+                        next_frame = self._frame_ref(next_gen, str(next_gen))
+                        self._enqueue(
+                            {
+                                "schema": "action_verdict/v0.2",
+                                "proposal_id": body["proposal_id"],
+                                "decision": "admitted",
+                                "core_seq": self.core_seq,
+                            }
+                        )
+                        self._enqueue(
+                            {
+                                "schema": "action_receipt/v0.2",
+                                "proposal_id": body["proposal_id"],
+                                "executed_at_ns": next_gen * 1000,
+                                "after_frame": next_frame,
+                                "verified": True,
+                                "verification": {
+                                    "method": "pixel",
+                                    "detail": "frame captured after input",
+                                },
+                                "error": "",
+                            }
+                        )
+
+            def recv(self):
+                if not self.rx_queue:
+                    raise RuntimeError("injected peer receive queue empty")
+                return self.rx_queue.pop(0)
+
+        return InjectedPeer()
+
+    def _regs_and_config(self):
+        commit = "a" * 40
+        regs = {
+            c: stack.live.registration(c, commit, f"{c}inst01")
+            for c in ("core", "ui", "agent", "daemon")
+        }
+        config = {
+            "session_id": "stack-testsession01",
+            "core": regs["core"],
+            "peers": [regs[c] for c in ("ui", "agent", "daemon")],
+        }
+        return regs, config
+
+    def test_agent_tick_page_with_flag_produces_exact_ordered_schema_valid_requests(self):
+        validator = check_contracts.Validator(stack.ROOT / "contracts/v0.2")
+        envelope_schema = validator.load("envelope.schema.json")
+        surface_request_schema = validator.load("surface_request.schema.json")
+        proposal_schema = validator.load("action_proposal.schema.json")
+
+        regs, config = self._regs_and_config()
+        peer = self._make_injected_peer(regs, config)
+        state = self.base_state()
+        state["agent_tick_page"] = True
+        stack.save_state(self.root, state)
+        self.assertTrue(stack.load_state(self.root)["agent_tick_page"])
+
+        logged = []
+        seq_ids = iter(["aa01", "bb02", "cc03"])
+        stack.bootstrap_agent_surface(
+            peer,
+            regs,
+            config,
+            state,
+            self.root,
+            600,
+            containers_fn=lambda _profile: {"srf-id-12345678"},
+            remember_fn=lambda s, r: stack.save_state(r, s),
+            id_fn=lambda: next(seq_ids),
+            log_fn=logged.append,
+        )
+
+        self.assertEqual(state["status"], "ready")
+        self.assertEqual(
+            logged,
+            [
+                "LIVE_STACK_TICK step=1 outcome=admitted",
+                "LIVE_STACK_TICK step=2 outcome=admitted",
+                "LIVE_STACK_TICK step=3 outcome=admitted",
+            ],
+        )
+
+        # Validate every sent envelope and body against contracts/v0.2.
+        for env in peer.sent_envelopes:
+            validator.validate(env, envelope_schema)
+        bodies = [env["body"] for env in peer.sent_envelopes]
+        self.assertEqual(len(bodies), 5)
+        self.assertEqual(bodies[0]["schema"], "hello/v0.2")
+        self.assertEqual(bodies[1]["schema"], "surface_request/v0.2")
+        self.assertEqual(bodies[1]["op"], "create")
+        validator.validate(bodies[1], surface_request_schema)
+
+        proposals = bodies[2:]
+        self.assertEqual(len(proposals), 3)
+        for prop in proposals:
+            validator.validate(prop, proposal_schema)
+
+        proposal_ids = [prop["proposal_id"] for prop in proposals]
+        self.assertEqual(proposal_ids, ["tick-1-aa01", "tick-2-bb02", "tick-3-cc03"])
+        self.assertEqual(len(set(proposal_ids)), 3)
+
+        self.assertEqual(
+            [prop["action"] for prop in proposals],
+            [
+                {"type": "key", "keys": ["ctrl", "l"]},
+                {"type": "type", "text": stack.TICK_URL},
+                {"type": "key", "keys": ["Return"]},
+            ],
+        )
+        self.assertEqual(
+            [prop["based_on_frame"] for prop in proposals],
+            [
+                {"generation": 1, "sha256": "1" * 64},
+                {"generation": 2, "sha256": "2" * 64},
+                {"generation": 3, "sha256": "3" * 64},
+            ],
+        )
+
+        # Negative control: an invalid proposal (empty keys array or unapproved schema field)
+        # is rejected by the repo's contract validator.
+        invalid_proposal = dict(proposals[0], action={"type": "key", "keys": []})
+        with self.assertRaises(check_contracts.ValidationError):
+            validator.validate(invalid_proposal, proposal_schema)
+
+    def test_agent_tick_page_without_flag_sends_nothing(self):
+        regs, config = self._regs_and_config()
+        peer = self._make_injected_peer(regs, config)
+        state = self.base_state()
+        logged = []
+
+        stack.bootstrap_agent_surface(
+            peer,
+            regs,
+            config,
+            state,
+            self.root,
+            600,
+            containers_fn=lambda _profile: {"srf-id-12345678"},
+            remember_fn=lambda s, r: stack.save_state(r, s),
+            log_fn=logged.append,
+        )
+
+        self.assertEqual(state["status"], "ready")
+        self.assertEqual(logged, [])
+        bodies = [env["body"] for env in peer.sent_envelopes]
+        self.assertEqual([b["schema"] for b in bodies], ["hello/v0.2", "surface_request/v0.2"])
+        self.assertEqual(bodies[1]["op"], "create")
+
+    def test_agent_tick_page_refusal_and_error_are_fail_open_and_never_block_ready(self):
+        regs, config = self._regs_and_config()
+
+        def refuse_or_fail(peer_obj, step, body):
+            if step == 1:
+                peer_obj._enqueue(
+                    {
+                        "schema": "action_verdict/v0.2",
+                        "proposal_id": body["proposal_id"],
+                        "decision": "refused",
+                        "reason_code": "SURFACE_NOT_AGENT_CONTROLLED",
+                        "core_seq": peer_obj.core_seq,
+                    }
+                )
+            elif step == 2:
+                peer_obj._enqueue(
+                    {
+                        "schema": "action_verdict/v0.2",
+                        "proposal_id": body["proposal_id"],
+                        "decision": "refused",
+                        "reason_code": "STALE_FRAME",
+                        "core_seq": peer_obj.core_seq,
+                    }
+                )
+            else:
+                # Leave rx_queue empty so step 3 raises RuntimeError("injected peer receive queue empty").
+                pass
+
+        peer = self._make_injected_peer(regs, config, step_handler=refuse_or_fail)
+        state = self.base_state()
+        state["agent_tick_page"] = True
+        logged = []
+
+        stack.bootstrap_agent_surface(
+            peer,
+            regs,
+            config,
+            state,
+            self.root,
+            600,
+            containers_fn=lambda _profile: {"srf-id-12345678"},
+            remember_fn=lambda s, r: stack.save_state(r, s),
+            log_fn=logged.append,
+        )
+
+        # Fail-open: all 3 steps logged their refusal/error outcomes and state still reached ready.
+        self.assertEqual(state["status"], "ready")
+        self.assertEqual(
+            logged,
+            [
+                "LIVE_STACK_TICK step=1 outcome=refused:SURFACE_NOT_AGENT_CONTROLLED",
+                "LIVE_STACK_TICK step=2 outcome=refused:STALE_FRAME",
+                "LIVE_STACK_TICK step=3 outcome=error:injected peer receive queue empty",
+            ],
+        )
 
 
 if __name__ == "__main__":

@@ -38,9 +38,21 @@ MAX_STATE_ERROR_CHARS = 4096
 ALLOWED_STATE_KEYS = (
     "schema", "status", "supervisor", "pids", "capsules", "published",
     "work", "display", "xauthority", "surface_id", "expires", "error",
-    "display_mode", "record_path", "recorder",
+    "display_mode", "record_path", "recorder", "agent_tick_page",
 )
 RECORDER_STOP_TIMEOUT_S = 10.0
+TICK_URL = (
+    'data:text/html,<body style="margin:0;background:#123">'
+    '<h1 id=c style="font-size:140px;color:#ff0;margin:40px"></h1>'
+    '<div id=b style="height:200px;background:#f0f"></div>'
+    '<script>setInterval(function(){c.textContent=new Date().toISOString().slice(11,22);'
+    'b.style.width=(Date.now()/10%1200)+"px"},100)</script>'
+)
+TICK_ACTIONS = (
+    {"type": "key", "keys": ["ctrl", "l"]},
+    {"type": "type", "text": TICK_URL},
+    {"type": "key", "keys": ["Return"]},
+)
 
 
 class StackError(RuntimeError):
@@ -69,6 +81,7 @@ def parser():
     start_cmd.add_argument("--ttl", type=ttl_seconds, default="45m")
     start_cmd.add_argument("--display", choices=("private", "visible"), default="private")
     start_cmd.add_argument("--record", default=None, metavar="PATH.mp4")
+    start_cmd.add_argument("--agent-tick-page", action="store_true", default=False)
     commands.add_parser("stop")
     return result
 
@@ -114,6 +127,8 @@ def bounded_state(value):
             result["recorder"] = {"pid": rec.get("pid"), "identity": rec.get("identity")}
         else:
             result.pop("recorder", None)
+    if "agent_tick_page" in result:
+        result["agent_tick_page"] = bool(result["agent_tick_page"])
     if isinstance(result.get("error"), str) and len(result["error"]) > MAX_STATE_ERROR_CHARS:
         result["error"] = result["error"][-MAX_STATE_ERROR_CHARS:]
     return result
@@ -506,6 +521,184 @@ def monitor(peer, children, seconds, should_stop, tick, keepalive=None):
                 raise RuntimeError("native surface error: " + repr(body))
 
 
+def tick_proposal(surface_id, frame, proposal_id, action):
+    """[TARGET, unit decision] Build a schema-valid action_proposal/v0.2 for a tick step."""
+    width = int(frame.get("width", 1280))
+    height = int(frame.get("height", 900))
+    copied_action = dict(action)
+    if "keys" in copied_action:
+        copied_action["keys"] = list(copied_action["keys"])
+    return {
+        "schema": "action_proposal/v0.2",
+        "proposal_id": proposal_id,
+        "surface_id": surface_id,
+        "based_on_frame": {
+            "generation": int(frame["generation"]),
+            "sha256": frame["sha256"],
+        },
+        "action": copied_action,
+        "expectation": {
+            "type": "changed_region",
+            "bbox": {"x": 0, "y": 0, "w": max(1, width), "h": max(1, height)},
+        },
+        "budget": {"max_ms": 10000, "max_retries": 0},
+    }
+
+
+def drive_agent_tick_page(
+    peer,
+    agent_reg,
+    config,
+    surface_id,
+    frame,
+    *,
+    enabled=False,
+    report=None,
+    send_fn=None,
+    receive_fn=None,
+    id_fn=None,
+    log_fn=None,
+):
+    """[TARGET, unit decision] Opt-in fail-open agent-driven ticking page sequence."""
+    if not enabled:
+        return []
+    send_fn = live.send if send_fn is None else send_fn
+    receive_fn = live.receive if receive_fn is None else receive_fn
+    id_fn = (lambda: uuid.uuid4().hex) if id_fn is None else id_fn
+    log_fn = (lambda line: print(line, flush=True)) if log_fn is None else log_fn
+    report = {} if report is None else report
+    current_frame = [dict(frame)]
+    outcomes = []
+
+    def observe_frame(body):
+        if (
+            isinstance(body, dict)
+            and body.get("schema") == "surface_event/v0.2"
+            and body.get("event") == "frame_ready"
+        ):
+            frame_ref = body.get("data", {}).get("frame_ref")
+            if (
+                isinstance(frame_ref, dict)
+                and frame_ref.get("surface_id") in (None, surface_id)
+                and "generation" in frame_ref
+                and "sha256" in frame_ref
+            ):
+                current_frame[0] = dict(frame_ref)
+
+    for step, action in enumerate(TICK_ACTIONS, start=1):
+        proposal_id = f"tick-{step}-{id_fn()}"
+        proposal = tick_proposal(surface_id, current_frame[0], proposal_id, action)
+        try:
+            send_fn(peer, agent_reg, config, proposal)
+
+            def is_verdict(body, pid=proposal_id):
+                observe_frame(body)
+                return (
+                    isinstance(body, dict)
+                    and body.get("schema") == "action_verdict/v0.2"
+                    and body.get("proposal_id") == pid
+                )
+
+            verdict = receive_fn(peer, is_verdict, report, reject_errors=False)
+            decision = verdict.get("decision")
+            if decision != "admitted":
+                reason = verdict.get("reason_code") or "refused"
+                outcome = f"refused:{reason}"
+            else:
+                def is_settlement(body, pid=proposal_id):
+                    observe_frame(body)
+                    return (
+                        isinstance(body, dict)
+                        and body.get("proposal_id") == pid
+                        and body.get("schema") in ("action_receipt/v0.2", "action_verdict/v0.2")
+                    )
+
+                settled = receive_fn(peer, is_settlement, report, reject_errors=False)
+                if settled.get("schema") == "action_receipt/v0.2":
+                    after_frame = settled.get("after_frame")
+                    if (
+                        isinstance(after_frame, dict)
+                        and "generation" in after_frame
+                        and "sha256" in after_frame
+                    ):
+                        current_frame[0] = dict(after_frame)
+                    if settled.get("error"):
+                        outcome = f"error:{settled['error']}"
+                    else:
+                        outcome = "admitted"
+                else:
+                    reason = settled.get("reason_code") or "cancelled"
+                    outcome = f"refused:{reason}"
+        except Exception as exc:
+            outcome = f"error:{exc}"
+        log_fn(f"LIVE_STACK_TICK step={step} outcome={outcome}")
+        outcomes.append({"step": step, "proposal_id": proposal_id, "outcome": outcome})
+    return outcomes
+
+
+def bootstrap_agent_surface(
+    peer,
+    regs,
+    config,
+    state,
+    root,
+    seconds,
+    *,
+    work=None,
+    env=None,
+    recorder_children=None,
+    containers_fn=None,
+    remember_fn=None,
+    recorder_fn=None,
+    send_fn=None,
+    receive_fn=None,
+    id_fn=None,
+    log_fn=None,
+):
+    """[TARGET, unit decision] Drive agent hello, surface create, optional tick page, and READY."""
+    containers_fn = live.profile_containers if containers_fn is None else containers_fn
+    remember_fn = remember_tree if remember_fn is None else remember_fn
+    recorder_fn = start_recorder if recorder_fn is None else recorder_fn
+    send_fn = live.send if send_fn is None else send_fn
+    receive_fn = live.receive if receive_fn is None else receive_fn
+    send_fn(peer, regs["agent"], config, regs["agent"]["hello"])
+    if peer.recv()["body"] != regs["core"]["hello"]:
+        raise RuntimeError("core pin mismatch")
+    send_fn(peer, regs["agent"], config, {"schema": "surface_request/v0.2", "op": "create", "params": {
+        "kind": "browser", "geometry": {"w": 1280, "h": 900}, "profile_id": "mv-live-1"}})
+    report = {}
+    created = receive_fn(peer, lambda b: b.get("event") == "created", report)
+    state["surface_id"] = created["data"]["surface"]["surface_id"]
+    state["capsules"] = sorted(containers_fn("mv-live-1"))
+    if len(state["capsules"]) != 1:
+        raise RuntimeError("expected exactly one ownership-proven capsule")
+    save_state(root, state)
+    frame = receive_fn(peer, lambda b: b.get("event") == "frame_ready", report)["data"]["frame_ref"]
+    state["published"] = [str(Path(frame["ramws_path"]).parent)]
+    drive_agent_tick_page(
+        peer,
+        regs["agent"],
+        config,
+        state["surface_id"],
+        frame,
+        enabled=bool(state.get("agent_tick_page")),
+        report=report,
+        send_fn=send_fn,
+        receive_fn=receive_fn,
+        id_fn=id_fn,
+        log_fn=log_fn,
+    )
+    if state.get("record_path"):
+        rec_proc = recorder_fn(state, work, env)
+        if recorder_children is not None:
+            recorder_children.append(rec_proc)
+        save_state(root, state)
+    state["expires"] = time.time() + seconds
+    state["status"] = "ready"
+    remember_fn(state, root)
+    return report
+
+
 def supervise(root, seconds, lock_fd):
     os.umask(0o077)
     stop = False
@@ -604,27 +797,17 @@ def supervise(root, seconds, lock_fd):
         wait(lambda: '"MetaViewer"' in checked(["xwininfo", "-root", "-tree"], env=env), "shipped UI window")
         peer = live.CoreClient(str(socket_path), timeout_s=20, max_line_bytes=1 << 20, max_reply_bytes=1 << 20)
         peer.connect()
-        live.send(peer, regs["agent"], config, regs["agent"]["hello"])
-        if peer.recv()["body"] != regs["core"]["hello"]:
-            raise RuntimeError("core pin mismatch")
-        live.send(peer, regs["agent"], config, {"schema": "surface_request/v0.2", "op": "create", "params": {
-            "kind": "browser", "geometry": {"w": 1280, "h": 900}, "profile_id": "mv-live-1"}})
-        report = {}
-        created = live.receive(peer, lambda b: b.get("event") == "created", report)
-        state["surface_id"] = created["data"]["surface"]["surface_id"]
-        state["capsules"] = sorted(live.profile_containers("mv-live-1"))
-        if len(state["capsules"]) != 1:
-            raise RuntimeError("expected exactly one ownership-proven capsule")
-        save_state(root, state)
-        frame = live.receive(peer, lambda b: b.get("event") == "frame_ready", report)["data"]["frame_ref"]
-        state["published"] = [str(Path(frame["ramws_path"]).parent)]
-        if state.get("record_path"):
-            rec_proc = start_recorder(state, work, env)
-            recorder_children.append(rec_proc)
-            save_state(root, state)
-        state["expires"] = time.time() + seconds
-        state["status"] = "ready"
-        remember_tree(state, root)
+        bootstrap_agent_surface(
+            peer,
+            regs,
+            config,
+            state,
+            root,
+            seconds,
+            work=work,
+            env=env,
+            recorder_children=recorder_children,
+        )
         # Drain fan-out continuously so the core never retires a full agent queue.
         monitor(peer, children, seconds, lambda: stop, lambda: remember_tree(state, root),
                 lambda: live.send(peer, regs["agent"], config,
@@ -665,7 +848,7 @@ def supervise(root, seconds, lock_fd):
     return 1 if error or (root / "state.json").exists() else 0
 
 
-def start(root, seconds, display_mode="private", record_path=None):
+def start(root, seconds, display_mode="private", record_path=None, agent_tick_page=False):
     fd = os.open(root / "lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
         try:
@@ -680,6 +863,8 @@ def start(root, seconds, display_mode="private", record_path=None):
                  "work": str(work), "capsules": [], "published": [], "display_mode": display_mode}
         if resolved_record is not None:
             state["record_path"] = str(resolved_record)
+        if agent_tick_page:
+            state["agent_tick_page"] = True
         save_state(root, state)
         with open(root / "supervisor.log", "w") as log:
             proc = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "_supervise",
@@ -690,6 +875,10 @@ def start(root, seconds, display_mode="private", record_path=None):
             if (root / "state.json").exists():
                 state = load_state(root)
                 if state["status"] == "ready":
+                    if (root / "supervisor.log").exists():
+                        for line in (root / "supervisor.log").read_text(errors="replace").splitlines():
+                            if line.startswith("LIVE_STACK_TICK "):
+                                print(line, flush=True)
                     print(f"LIVE_STACK_READY display={state['display']} xauthority={state['xauthority']} capsule={state['capsules'][0]}", flush=True)
                     return
                 if state["status"] in ("failed", "cleanup_failed"):
@@ -735,7 +924,8 @@ def main():
             return supervise(root, int(sys.argv[2]), int(sys.argv[3]))
         args = parser().parse_args()
         if args.command == "start":
-            start(root, args.ttl, display_mode=args.display, record_path=args.record)
+            start(root, args.ttl, display_mode=args.display, record_path=args.record,
+                  agent_tick_page=args.agent_tick_page)
         else:
             stop_stack(root)
         return 0
