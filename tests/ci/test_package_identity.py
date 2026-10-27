@@ -142,21 +142,31 @@ class PackageIdentityTests(unittest.TestCase):
 
     def test_distribution_cli_verifies_bytes_and_fails_closed(self):
         import sys
-        for mode in ('valid', 'forged', 'absent', 'malformed', 'not-applicable'):
-            receipt = json.loads(json.dumps(self.receipt))
-            if mode == 'forged':
-                receipt['product_identity']['artifact_sha256'] = '0' * 64
-            elif mode == 'absent':
-                receipt['product_identity'] = None
-            elif mode == 'not-applicable':
-                receipt.update(outcome='NOT_APPLICABLE', rc=None)
-            result = subprocess.run([sys.executable, str(Path(__file__)), '--distribution'],
-                capture_output=True, text=True, env=dict(os.environ,
-                    PACKAGE_RECEIPT='{' if mode == 'malformed' else json.dumps(receipt),
-                    PRODUCT_ROOT=str(self.root), GITHUB_SHA='revision'))
-            with self.subTest(mode=mode):
-                self.assertEqual(result.returncode, 0 if mode == 'valid' else 1,
-                                 result.stdout + result.stderr)
+        # [TARGET, unit decision] Match the CLI's explicit platform contract,
+        # including hosted ci-policy's inherited PLATFORM=x64. Exercise both
+        # architectures so host defaults cannot hide a mismatched fixture.
+        for arch, machine in (('arm64', 183), ('x64', 62)):
+            self.write_product(machine=machine, arch=arch)
+            evidence = dict(self.evidence, architecture=arch,
+                artifact_sha256=hashlib.sha256(self.product.read_bytes()).hexdigest())
+            (self.root / 'product-evidence.json').write_text(json.dumps(evidence))
+            for mode in ('valid', 'forged', 'absent', 'malformed', 'not-applicable', 'wrong-arch'):
+                receipt = json.loads(json.dumps(self.receipt))
+                receipt.update(scope={'platform': arch}, product_identity=dict(evidence))
+                if mode == 'forged':
+                    receipt['product_identity']['artifact_sha256'] = '0' * 64
+                elif mode == 'absent':
+                    receipt['product_identity'] = None
+                elif mode == 'not-applicable':
+                    receipt.update(outcome='NOT_APPLICABLE', rc=None)
+                result = subprocess.run([sys.executable, str(Path(__file__)), '--distribution'],
+                    capture_output=True, text=True, env=dict(os.environ,
+                        PLATFORM=('x64' if arch == 'arm64' else 'arm64') if mode == 'wrong-arch' else arch,
+                        PACKAGE_RECEIPT='{' if mode == 'malformed' else json.dumps(receipt),
+                        PRODUCT_ROOT=str(self.root), GITHUB_SHA='revision'))
+                with self.subTest(arch=arch, mode=mode):
+                    self.assertEqual(result.returncode, 0 if mode == 'valid' else 1,
+                                     result.stdout + result.stderr)
 
     def test_hosted_aggregator_checks_receipt(self):
         text = CI.read_text()

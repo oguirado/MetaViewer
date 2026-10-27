@@ -23,10 +23,13 @@ test('real Electron main/renderer/tree stay within frozen RSS caps; a measured-r
     });
     const python = process.env.PYTHON || 'python3';
     const measured = spawnSync('xvfb-run', ['-a', python, join(root, 'tools/budget_gate.py'),
-      '--probe', '--electron', harness.electronBinary(root)], {
-      cwd: root, env: process.env, encoding: 'utf8', timeout: 200000, maxBuffer: 8 * 1024 * 1024,
+      '--probe', '--electron', join(__dirname, 'rss-electron-wrapper.py')], {
+      cwd: root, env: { ...process.env, MV_RSS_ELECTRON: harness.electronBinary(root) },
+      encoding: 'utf8', timeout: 200000, maxBuffer: 8 * 1024 * 1024,
     });
     assert.equal(measured.status, 0, measured.stderr + measured.stdout);
+    assert.doesNotMatch(measured.stderr, /No handler registered for 'metaviewer:capture\./,
+      'full renderer capture startup must use the production IPC bridge');
     const summary = JSON.parse(measured.stdout.trim().split('\n').at(-1));
     assert.equal(summary.failed, 0);
     assert.equal(summary.receipt.schema, 'metaviewer.perf.rss-receipt/v1');
