@@ -12,7 +12,7 @@ let artifacts;
 function buildCore() {
   if (!artifacts) {
     const output = execFileSync(cargo,
-      ['build', '--offline', '--manifest-path', join(ROOT, 'Cargo.toml'), '--message-format=json'],
+      ['build', '--ignore-rust-version', '--offline', '--manifest-path', join(ROOT, 'Cargo.toml'), '--message-format=json'],
       { env, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
     artifacts = new Map();
     for (const line of output.trim().split('\n')) {
