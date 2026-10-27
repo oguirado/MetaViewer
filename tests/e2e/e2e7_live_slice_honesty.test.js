@@ -4,8 +4,9 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { existsSync, rmSync, writeFileSync } = require('node:fs');
+const { mkdirSync, writeFileSync } = require('node:fs');
 const { join } = require('node:path');
+const { spawnSync } = require('node:child_process');
 const { hosted, requireLive } = require('./e2e1_slice/index.js');
 const { E2EError, makeScratch, removeScratch } = require('./harness.js');
 
@@ -35,30 +36,29 @@ test('Item 1: LIVE legs fail closed with E2E_GATE without flag and E2E_PREREQ wi
 test('Item 1: Bounded live stack retains recovery receipt and refuses second start (E9, E11)', () => {
   const scratch = makeScratch('mv-live-stack-test');
   try {
-    const recoveryPath = join(scratch, 'recovery.json');
+    const stackDir = join(scratch, 'metaviewer-live-stack');
+    mkdirSync(stackDir, { mode: 0o700, recursive: true });
 
+    // Seed state.json representing a retained receipt from uncertain/failed cleanup
     const receipt = {
-      status: 'UNCERTAIN_CLEANUP',
-      timestamp: Date.now(),
-      pid: process.pid,
-      reason: 'simulated_uncertain_cleanup'
+      schema: 'metaviewer.live-stack/v1',
+      status: 'failed',
+      error: 'uncertain_cleanup_retained_receipt'
     };
-    writeFileSync(recoveryPath, JSON.stringify(receipt));
+    writeFileSync(join(stackDir, 'state.json'), JSON.stringify(receipt), { mode: 0o600 });
 
-    function startStack(receiptFile) {
-      if (existsSync(receiptFile)) {
-        throw new E2EError('E2E_LIVE', 'Uncertain cleanup retains recovery receipt; refusing start');
-      }
-      return { status: 'STARTED' };
-    }
-
-    assert.throws(() => startStack(recoveryPath), (err) => {
-      return err instanceof E2EError && err.code === 'E2E_LIVE' && err.message.includes('recovery receipt');
+    const stackPy = join(__dirname, 'e2e1_slice', 'stack.py');
+    const res = spawnSync(process.env.PYTHON || 'python3', [stackPy, 'start'], {
+      encoding: 'utf8',
+      env: { ...process.env, XDG_RUNTIME_DIR: scratch }
     });
 
-    rmSync(recoveryPath);
-    const result = startStack(recoveryPath);
-    assert.equal(result.status, 'STARTED', 'mutant: start succeeds when receipt cleared');
+    assert.notEqual(res.status, 0, 'stack start must refuse when existing state/receipt is present');
+    assert.ok(
+      res.stderr.includes('another live stack or G-W1 run is active; refusing') ||
+      res.stderr.includes('LIVE_STACK_BLOCKED'),
+      'stderr must state refusal reason'
+    );
   } finally {
     removeScratch(scratch);
   }
