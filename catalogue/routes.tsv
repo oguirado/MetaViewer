@@ -511,10 +511,14 @@ surface-7baa97b9be92	contracts/examples/v0.2/surface_event.valid.variant-013.jso
 surface-0949e492dbd9	contracts/examples/v0.2/surface_event.valid.variant-014.json
 surface-6f1cd4e92e76	contracts/examples/v0.2/surface_event.valid.variant-015.json
 surface-4f027f509f4f	contracts/examples/v0.2/surface_request.invalid.dropped_required.json
+surface-dfca270c5ba5	contracts/examples/v0.2/surface_request.invalid.nested_depth_2.json
+surface-210d0919f5fb	contracts/examples/v0.2/surface_request.invalid.nested_depth_negative.json
 surface-569990f8778a	contracts/examples/v0.2/surface_request.invalid.schema.json
 surface-4dc75d7c59d6	contracts/examples/v0.2/surface_request.invalid.type_swap.json
 surface-95da43197272	contracts/examples/v0.2/surface_request.invalid.unknown_prop.json
 surface-a8522f97486b	contracts/examples/v0.2/surface_request.valid.json
+surface-fd9b5ac9ff93	contracts/examples/v0.2/surface_request.valid.nested_depth_0.json
+surface-351db44c1df4	contracts/examples/v0.2/surface_request.valid.nested_depth_1.json
 surface-a1d371bf756d	contracts/examples/v0.2/surface_request.valid.variant-001.json
 surface-5fc07a822f6e	contracts/examples/v0.2/surface_request.valid.variant-002.json
 surface-0203c15b00a2	contracts/examples/v0.2/surface_request.valid.variant-003.json
@@ -708,6 +712,7 @@ nv_adapter_test.go	daemon-adapter/internal/capsule/nv_adapter_test.go
 process.go	daemon-adapter/internal/capsule/process.go
 process-23b8a8b760ec	daemon-adapter/internal/capsule/process_boundary_test.go
 process_test.go	daemon-adapter/internal/capsule/process_test.go
+program_inner_test.go	daemon-adapter/internal/capsule/program_inner_test.go
 r2regre-d63f27719b98	daemon-adapter/internal/capsule/r2_regressions_test.go
 reap_test.go	daemon-adapter/internal/capsule/reap_test.go
 receipt-e7a340c634f2	daemon-adapter/internal/capsule/receipt_evidence_test.go
