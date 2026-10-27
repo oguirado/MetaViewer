@@ -97,8 +97,8 @@ fi
 	if !ok {
 		t.Fatalf("expected *cli.Fault for signal death, got %T: %v", err, err)
 	}
-	if f.Code != "invalid_exit" {
-		t.Errorf("signal death: expected fault code 'invalid_exit', got %q", f.Code)
+	if f.Code != "uncertain" {
+		t.Errorf("signal death: expected fault code 'uncertain', got %q", f.Code)
 	}
 
 	// 3. Stderr garbage output does not leak into stdout

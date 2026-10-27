@@ -30,6 +30,8 @@ type SchemaPolicy struct {
 
 var _ Policy = (*SchemaPolicy)(nil)
 
+var integerLexeme = regexp.MustCompile(`^-?(0|[1-9][0-9]*)$`)
+
 type schemaNode struct {
 	ref      *schemaNode
 	kind     string
@@ -174,7 +176,11 @@ func NewPolicy(c Config, source fs.FS, authority Authority) (policy *SchemaPolic
 					return nil, err
 				}
 			case "oneOf":
-				for _, x := range v.([]any) {
+				choices := v.([]any)
+				if len(choices) == 0 {
+					return nil, errors.New("empty oneOf refused")
+				}
+				for _, x := range choices {
 					child, err := compile(x.(map[string]any), base)
 					if err != nil {
 						return nil, err
@@ -196,6 +202,9 @@ func NewPolicy(c Config, source fs.FS, authority Authority) (policy *SchemaPolic
 			default:
 				return nil, fmt.Errorf("unsupported schema keyword %s", k)
 			}
+		}
+		if (n.kind == "object" || len(n.props) > 0 || len(n.required) > 0) && (n.kind != "object" || !n.closed) {
+			return nil, errors.New("open schema refused")
 		}
 		return n, nil
 	}
@@ -310,7 +319,7 @@ func (n *schemaNode) accept(v any) bool {
 		if !ok {
 			return false
 		}
-		if n.kind == "integer" && (!r.IsInt() || r.Cmp(big.NewRat(9007199254740991, 1)) > 0 || r.Cmp(big.NewRat(-9007199254740991, 1)) < 0) {
+		if n.kind == "integer" && (!integerLexeme.MatchString(string(num)) || !r.IsInt() || r.Cmp(big.NewRat(9007199254740991, 1)) > 0 || r.Cmp(big.NewRat(-9007199254740991, 1)) < 0) {
 			return false
 		}
 		if a, ok := n.limits["minimum"]; ok && r.Cmp(big.NewRat(int64(a), 1)) < 0 {

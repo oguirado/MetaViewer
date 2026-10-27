@@ -169,3 +169,144 @@ func TestCancelVsCompleteRace(t *testing.T) {
 		mu.Unlock()
 	}
 }
+
+type cancelBeforePublishSource struct {
+	subs     *Subscriptions
+	b        capsule.Binding
+	f        capsule.NativeFrame
+	captured chan struct{}
+	once     sync.Once
+}
+
+func (s *cancelBeforePublishSource) Capture(ctx context.Context, id string) (capsule.Binding, capsule.NativeFrame, error) {
+	s.once.Do(func() {
+		// Hold s.subs.mu across the return from Capture so poll reaches the
+		// pre-Publish point while ctx.Err() is still nil, then the test cancels
+		// the task under s.subs.mu before releasing the lock.
+		s.subs.mu.Lock()
+		close(s.captured)
+	})
+	return s.b, s.f, nil
+}
+
+func TestT2R205CancelBeforePublishDoesNotCommit(t *testing.T) {
+	t.Run("cancel_before_publish_preserves_generations_and_refs", func(t *testing.T) {
+		root, b, f := ramFixture(t)
+		p := publisher(t, root)
+		f.Seq = 1
+		r1, err := p.Publish("a", b, f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.Seq = 2
+		r2, err := p.Publish("a", b, f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f3 := f
+		f3.Seq = 3
+		src := &cancelBeforePublishSource{b: b, f: f3, captured: make(chan struct{})}
+		events := make(chan json.RawMessage, 4)
+		subs, err := NewSubscriptions(context.Background(), SubscriptionConfig{
+			MaxSubscriptions: 1,
+			PollInterval:     time.Hour,
+			CaptureTimeout:   time.Second,
+			ShutdownTimeout:  time.Second,
+		}, src, p, func(ctx context.Context, msg json.RawMessage) error {
+			select {
+			case events <- msg:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		src.subs = subs
+		t.Cleanup(func() { _ = subs.Close(context.Background()) })
+
+		if err := subs.Subscribe(context.Background(), "a"); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-src.captured:
+		case <-time.After(time.Second):
+			t.Fatal("capture did not start")
+		}
+		// Give poll time to pass the initial ctx.Err() check and reach Publish.
+		time.Sleep(10 * time.Millisecond)
+		if task := subs.tasks["a"]; task != nil {
+			task.cancel()
+		}
+		subs.mu.Unlock()
+
+		if err := subs.Unsubscribe(context.Background(), "a"); err != nil {
+			t.Fatalf("Unsubscribe failed: %v", err)
+		}
+		if len(events) != 0 {
+			t.Fatalf("cancelled poll emitted event: %d", len(events))
+		}
+		p.mu.Lock()
+		nextGen := p.next
+		refs := append([]Ref(nil), p.surfaces["a"].refs...)
+		p.mu.Unlock()
+		if nextGen != 2 {
+			t.Fatalf("cancelled poll committed generation: got %d, want 2", nextGen)
+		}
+		if len(refs) != 2 || refs[0].RAMWSPath != r1.RAMWSPath || refs[1].RAMWSPath != r2.RAMWSPath {
+			t.Fatalf("retained refs mutated by cancelled poll: %+v", refs)
+		}
+		if _, err := os.Stat(r1.RAMWSPath); err != nil {
+			t.Fatalf("oldest retained ref was evicted after cancel: %v", err)
+		}
+	})
+
+	t.Run("negative_control_cancel_after_publish_keeps_frame", func(t *testing.T) {
+		root, b, f := ramFixture(t)
+		p := publisher(t, root)
+		source := &captureSource{b: b, f: f}
+		events := make(chan json.RawMessage, 4)
+		subs, err := NewSubscriptions(context.Background(), SubscriptionConfig{
+			MaxSubscriptions: 1,
+			PollInterval:     time.Hour,
+			CaptureTimeout:   time.Second,
+			ShutdownTimeout:  time.Second,
+		}, source, p, func(ctx context.Context, msg json.RawMessage) error {
+			events <- msg
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = subs.Close(context.Background()) })
+		if err := subs.Subscribe(context.Background(), "a"); err != nil {
+			t.Fatal(err)
+		}
+		var published Ref
+		select {
+		case msg := <-events:
+			var ev struct {
+				Event string `json:"event"`
+				Data  struct {
+					FrameRef Ref `json:"frame_ref"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(msg, &ev); err != nil || ev.Event != "frame_ready" {
+				t.Fatalf("unexpected event: %s (%v)", msg, err)
+			}
+			published = ev.Data.FrameRef
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for frame_ready")
+		}
+		if err := subs.Unsubscribe(context.Background(), "a"); err != nil {
+			t.Fatalf("Unsubscribe failed: %v", err)
+		}
+		if published.Generation != 1 {
+			t.Fatalf("expected generation 1, got %d", published.Generation)
+		}
+		if _, err := os.Stat(published.RAMWSPath); err != nil {
+			t.Fatalf("published frame removed on unsubscribe: %v", err)
+		}
+	})
+}

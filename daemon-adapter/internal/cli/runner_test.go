@@ -81,3 +81,34 @@ func TestParseLineControls(t *testing.T) {
 		}
 	}
 }
+
+func TestExitFaultSignalAndCodes(t *testing.T) {
+	for _, family := range []string{"srf-identity-surface", "srf-holdings-capsule", "srfd"} {
+		err := cli.ExitFault(family, -1, "")
+		var fault *cli.Fault
+		if !errors.As(err, &fault) || fault.Code != "uncertain" {
+			t.Fatalf("%s exit=-1: got %v, want uncertain fault", family, err)
+		}
+		if cli.ExitFault(family, 0, "") != nil {
+			t.Fatalf("%s exit=0: expected nil", family)
+		}
+	}
+	for _, tc := range []struct {
+		family string
+		code   int
+		want   string
+	}{
+		{"srf-identity-surface", 2, "usage"},
+		{"srf-holdings-capsule", 2, "usage"},
+		{"srf-identity-surface", 99, "invalid_exit"},
+		{"srf-holdings-capsule", 99, "invalid_exit"},
+		{"srfd", 99, "cli_failed"},
+		{"unlisted-family", -1, "unknown_family"},
+	} {
+		err := cli.ExitFault(tc.family, tc.code, "")
+		var fault *cli.Fault
+		if !errors.As(err, &fault) || fault.Code != tc.want {
+			t.Fatalf("%s exit=%d: got %v, want %s", tc.family, tc.code, err, tc.want)
+		}
+	}
+}

@@ -13,6 +13,13 @@ import (
 
 type Handler func(context.Context, Envelope) ([]json.RawMessage, error)
 
+// [TARGET, unit decision] Serve cancels the parent context passed to every
+// connection and handler on shutdown, closes the listener and all tracked client
+// sockets, and waits up to cfg.ShutdownTimeout for active handler goroutines.
+// If a ctx-ignoring handler exceeds ShutdownTimeout, Serve returns a deadline
+// error rather than hanging; post-handler ctx.Err() checks prevent any late
+// Authority.Wrap or socket write after cancellation, and defer conn.Close()
+// reclaims the descriptor when the abandoned handler eventually returns.
 // Serve requires externally supplied authority policy; it never substitutes a local replay map.
 func Serve(ctx context.Context, listener *net.UnixListener, cfg Config, policy Policy, handler Handler, log io.Writer) error {
 	if err := cfg.Validate(); err != nil {
@@ -50,6 +57,11 @@ func Serve(ctx context.Context, listener *net.UnixListener, cfg Config, policy P
 			break
 		}
 		mu.Lock()
+		if ctx.Err() != nil {
+			mu.Unlock()
+			_ = conn.Close()
+			break
+		}
 		if len(clients) >= cfg.MaxConnections {
 			mu.Unlock()
 			refuse()
@@ -121,8 +133,14 @@ func Serve(ctx context.Context, listener *net.UnixListener, cfg Config, policy P
 					refuse()
 					return
 				}
+				if ctx.Err() != nil {
+					return
+				}
 				// Synchronous writes retain backpressure without an unbounded send queue.
 				for _, reply := range replies {
+					if ctx.Err() != nil {
+						return
+					}
 					outgoing, err := policy.Wrap(ctx, envelope, reply)
 					if err != nil {
 						refuse()

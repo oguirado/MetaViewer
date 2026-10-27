@@ -44,6 +44,12 @@ func ExitFault(family string, exitCode int, _ string) error {
 	if exitCode == 0 {
 		return nil
 	}
+	if family != "srf-identity-surface" && family != "srf-holdings-capsule" && family != "srfd" {
+		return &Fault{Code: "unknown_family", Detail: fmt.Sprintf("CLI failed with exit status %d", exitCode)}
+	}
+	if exitCode < 0 {
+		return &Fault{Code: "uncertain", Detail: "native killed by signal, effect unverified"}
+	}
 	code := "cli_failed"
 	if family == "srf-identity-surface" || family == "srf-holdings-capsule" {
 		codes := map[int]string{2: "usage", 3: "setup", 4: "unavailable", 5: "malformed", 6: "refused", 7: "cli_failed"}
@@ -52,8 +58,6 @@ func ExitFault(family string, exitCode int, _ string) error {
 		} else {
 			code = "invalid_exit"
 		}
-	} else if family != "srfd" {
-		code = "unknown_family"
 	}
 	return &Fault{Code: code, Detail: fmt.Sprintf("CLI failed with exit status %d", exitCode)}
 }

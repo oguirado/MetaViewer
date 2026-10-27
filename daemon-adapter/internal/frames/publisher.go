@@ -214,10 +214,8 @@ func (p *Publisher) Publish(id string, b capsule.Binding, f capsule.NativeFrame)
 		_ = syscall.Unlinkat(int(p.output.Fd()), name)
 		return Ref{}, e
 	}
-	p.next++
-	ref := Ref{Schema: "frame_ref/v0.2", SurfaceID: id, Generation: p.next, Tick: f.Seq, TsNS: f.TSNS, Width: uint32(f.Width), Height: uint32(f.Height), Format: "rgb24", RAMWSPath: path, SHA256: sha, CaptureUS: f.CaptureUS}
-	refs := append(old.refs, ref)
-	if len(refs) > 2 {
+	refs := old.refs
+	if len(refs) >= 2 {
 		expired := refs[0]
 		if e = syscall.Unlinkat(int(p.output.Fd()), filepath.Base(expired.RAMWSPath)); e != nil {
 			_ = syscall.Unlinkat(int(p.output.Fd()), name)
@@ -225,6 +223,9 @@ func (p *Publisher) Publish(id string, b capsule.Binding, f capsule.NativeFrame)
 		}
 		refs = refs[1:]
 	}
+	p.next++
+	ref := Ref{Schema: "frame_ref/v0.2", SurfaceID: id, Generation: p.next, Tick: f.Seq, TsNS: f.TSNS, Width: uint32(f.Width), Height: uint32(f.Height), Format: "rgb24", RAMWSPath: path, SHA256: sha, CaptureUS: f.CaptureUS}
+	refs = append(refs, ref)
 	p.surfaces[id] = publication{native: f.Generation, seq: f.Seq, refs: refs}
 	return ref, nil
 }
@@ -258,13 +259,25 @@ func (p *Publisher) Close() error {
 	if p.closed {
 		return nil
 	}
-	p.closed = true
 	var errs []error
-	for _, s := range p.surfaces {
+	for id, s := range p.surfaces {
+		var remaining []Ref
 		for _, r := range s.refs {
-			errs = append(errs, syscall.Unlinkat(int(p.output.Fd()), filepath.Base(r.RAMWSPath)))
+			if e := syscall.Unlinkat(int(p.output.Fd()), filepath.Base(r.RAMWSPath)); e != nil && !errors.Is(e, syscall.ENOENT) {
+				errs = append(errs, e)
+				remaining = append(remaining, r)
+			}
+		}
+		if len(remaining) == 0 {
+			delete(p.surfaces, id)
+		} else {
+			s.refs = remaining
+			p.surfaces[id] = s
 		}
 	}
-	errs = append(errs, p.output.Close(), p.root.Close(), os.Remove(p.outputPath))
-	return errors.Join(errs...)
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	p.closed = true
+	return errors.Join(p.output.Close(), p.root.Close(), os.Remove(p.outputPath))
 }

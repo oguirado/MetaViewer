@@ -31,9 +31,10 @@ type SubscriptionConfig struct {
 	PollInterval, CaptureTimeout, ShutdownTimeout time.Duration
 }
 type task struct {
-	cancel context.CancelFunc
-	done   chan struct{}
-	err    error
+	cancel    context.CancelFunc
+	done      chan struct{}
+	err       error
+	cancelled bool
 }
 
 type pollTimer interface {
@@ -173,7 +174,18 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 		var msg json.RawMessage
 		if e == nil {
 			var ref Ref
-			ref, e = s.publisher.Publish(id, binding, native)
+			s.mu.Lock()
+			cancelled := t.cancelled || s.closed || ctx.Err() != nil
+			if !cancelled {
+				ref, e = s.publisher.Publish(id, binding, native)
+			}
+			s.mu.Unlock()
+			if cancelled {
+				if locked {
+					s.cfg.CaptureLock.Unlock()
+				}
+				return
+			}
 			if e == nil {
 				msg, _ = json.Marshal(struct {
 					Schema string `json:"schema"`
@@ -250,6 +262,7 @@ func (s *Subscriptions) Unsubscribe(ctx context.Context, id string) error {
 	s.mu.Lock()
 	t, ok := s.tasks[id]
 	if ok {
+		t.cancelled = true
 		t.cancel()
 	} else {
 		s.forgetFailure(id)
@@ -302,7 +315,9 @@ func (s *Subscriptions) Close(ctx context.Context) error {
 	s.closed = true
 	s.cancel()
 	ids := make([]string, 0, len(s.tasks))
-	for id := range s.tasks {
+	for id, t := range s.tasks {
+		t.cancelled = true
+		t.cancel()
 		ids = append(ids, id)
 	}
 	s.mu.Unlock()
