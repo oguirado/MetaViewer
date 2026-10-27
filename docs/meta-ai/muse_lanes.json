@@ -110,6 +110,11 @@
    "why": "Operator saw no recording menus, screenshot action or capsule action icons on wall tiles: add per-tile record-for-AI/screenshot/recording chrome over the new closed capture facade, adopt kit 0.2.1 tile actions and anchors, and audit every capsule action icon.",
    "orchestrator": "UI orchestrator"
   },
+  "mvui15": {
+   "stage": "fix",
+   "why": "Fix five cross-review findings confirmed on the head for AC-06 placement (dock-back, float geometry and echo, hidden fold refusal, state leak across capsules) and AC-07 export status.",
+   "orchestrator": "UI orchestrator"
+  },
   "mvui4l": {
    "stage": "vision",
    "why": "Fix the MetaViewer live-state findings of vision round mv5 (lost tile vanishes, badge/placeholder, folded/error tile layout) and make refusal, verdict, activity, multislot outcome and terminal lifecycle rows reachable for the vision loop.",
