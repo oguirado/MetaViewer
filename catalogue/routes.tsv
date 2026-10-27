@@ -1275,8 +1275,14 @@ mvui2wa-1a7e2ac77b6f	ui/test/mvui2-wall-judge.test.js
 mvui2wa-d1e02b360aa1	ui/test/mvui2-wall-tabs.test.js
 mvui20m-d1ca0a8a915e	ui/test/mvui20-multislot-roundtrip.test.js
 mvui22f-a0bb03356ead	ui/test/mvui22-frames-judge.test.js
+mvui22u-752aa40f26f7	ui/test/mvui22-ui-strip.test.js
+mvui22u-408d2490db6f	ui/test/mvui22-ui-toast.test.js
 mvui23s-2ff0e67369a3	ui/test/mvui23-startup-race.test.js
 mvui23s-ad986b54311a	ui/test/mvui23-surface-canvas.test.js
+mvui24r-4935b3d2d199	ui/test/mvui24-rec-capture-refresh.test.js
+mvui24r-54f47bf35d90	ui/test/mvui24-rec-shot-rows.test.js
+mvui24s-e69f8ea7cba2	ui/test/mvui24-sched-domid.test.js
+mvui24s-3baa463ff8a6	ui/test/mvui24-sched-evict.test.js
 mvui3co-58b252aa0364	ui/test/mvui3-control-owner-wall.test.js
 mvui3cr-400b1a21a53e	ui/test/mvui3-creative-harness.js
 mvui3cr-3b8cf3406706	ui/test/mvui3-creative-integration.test.js
