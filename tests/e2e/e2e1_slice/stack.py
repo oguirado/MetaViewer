@@ -266,12 +266,21 @@ def cleanup(state, root):
           "display_socket_absent": True, "state_absent": True}), flush=True)
 
 
+def free_display(sockets=Path("/tmp/.X11-unix"), locks=Path("/tmp")):
+    """[TARGET, unit decision] Dedicated high display; Xvfb's lock arbitrates races."""
+    for number in range(91, 65536):
+        if not (sockets / f"X{number}").exists() and not (locks / f".X{number}-lock").exists():
+            return f":{number}"
+    raise RuntimeError("no free high X display")
+
+
 def monitor(peer, children, seconds, should_stop, tick):
     """Monotonic TTL and stop requests converge on the same cleanup path."""
     deadline = time.monotonic() + seconds
     while not should_stop() and time.monotonic() < deadline:
-        if any(p.poll() is not None for p in children):
-            raise RuntimeError("stack process exited")
+        exited = [(index, p.poll()) for index, p in enumerate(children) if p.poll() is not None]
+        if exited:
+            raise RuntimeError("stack process exited: " + repr(exited))
         tick()
         # CoreClient buffers complete frames; drain those before waiting again.
         readable, _, _ = select.select([peer._sock], [], [], 0.2)
@@ -341,35 +350,20 @@ def supervise(root, seconds, lock_fd):
         wait(lambda: (archive / "events/1.json").exists(), "adapter handshake")
         auth = work / "Xauthority"
         auth.touch(mode=0o600)
-        # Xvfb chooses the display atomically. Seed its cookie, then add the
-        # selected display number for clients before making any X connection.
+        # Never let -displayfd allocate the operator's low display numbers.
+        # If a competing server wins the lock, fail closed before any client starts.
+        state["display"] = free_display()
         cookie = secrets.token_hex(16)
-        checked(["xauth", "-f", auth, "add", ":0", ".", cookie])
-        read_fd, write_fd = os.pipe()
-        try:
-            with open(work / "xvfb.log", "w") as log:
-                proc = subprocess.Popen(["Xvfb", "-displayfd", str(write_fd), "-screen", "0",
-                                         "1600x1000x24", "-auth", str(auth), "-nolisten", "tcp"],
-                                        pass_fds=(write_fd,), stdout=log, stderr=log,
-                                        start_new_session=True)
-            children.append(proc)
-            state["pids"].append({"pid": proc.pid, "identity": identity(proc.pid)})
-            save_state(root, state)
-            os.set_blocking(read_fd, False)
-            number = bytearray()
-
-            def display_ready():
-                try:
-                    number.extend(os.read(read_fd, 32))
-                except BlockingIOError:
-                    pass
-                return b"\n" in number
-
-            wait(display_ready, "Xvfb display")
-            state["display"] = ":" + str(int(number.strip()))
-        finally:
-            os.close(read_fd)
-            os.close(write_fd)
+        checked(["xauth", "-f", auth, "add", state["display"], ".", cookie])
+        save_state(root, state)
+        with open(work / "xvfb.log", "w") as log:
+            proc = subprocess.Popen(["Xvfb", state["display"], "-screen", "0",
+                                     "1600x1000x24", "-auth", str(auth), "-nolisten", "tcp"],
+                                    stdout=log, stderr=log, start_new_session=True)
+        children.append(proc)
+        state["pids"].append({"pid": proc.pid, "identity": identity(proc.pid)})
+        save_state(root, state)
+        wait(lambda: Path("/tmp/.X11-unix", "X" + state["display"][1:]).exists(), "Xvfb display")
         state["xauthority"] = str(auth)
         checked(["xauth", "-f", auth, "add", state["display"], ".", cookie])
         auth.chmod(0o600)

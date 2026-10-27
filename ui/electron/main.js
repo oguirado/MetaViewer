@@ -2,6 +2,9 @@
 'use strict';
 
 /**
+ * [TARGET, unit decision] Layout presentation storage is host-local and
+ * validated by the pinned kit decoder; it carries no core authority.
+ *
  * W0-SHELL-MAIN Electron main entry: window lifecycle, default-deny
  * navigation/permission policy, strict top-frame sender admission,
  * privileged bundle serving with a strict CSP, retail launch guards,
@@ -15,7 +18,7 @@
  * @module main
  */
 
-import { constants as fsConstants, closeSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { constants as fsConstants, closeSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs';
 import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -1374,22 +1377,65 @@ function decodeLayoutSave(raw) {
 }
 
 /**
- * Create the production layout bridge over the mirrored channel
- * literals. Activation waits on the agreed closed layout contract and
- * core routing, so every invoke refuses without writing anything.
- * @returns {ReadonlyArray<BridgeEntry>} Frozen refusing registry.
+ * [TARGET, unit decision] Host-local presentation storage uses the shipped kit's
+ * closed layout decoder and fixed product scope. No core authority is persisted.
+ * An unconfigured bridge remains closed for capability-free callers.
+ * @param {{directory?:string,app?:BootAppHandle}} [options]
+ * @returns {ReadonlyArray<BridgeEntry>} Fixed layout registry.
  */
-export function createLayoutBridge() {
-  /**
-   * @param {unknown} _decoded Decoded payload, refused by design.
-   * @returns {Promise<never>} Always rejects.
-   */
-  const refuseInvoke = async (_decoded) => {
-    throw new MainError('LAYOUT_CONTRACT_ABSENT', 'layout contract activation is blocked');
+export function createLayoutBridge({directory,app} = {}) {
+  const absent = () => { throw new MainError('LAYOUT_CONTRACT_ABSENT', 'layout storage unavailable'); };
+  const invalid = () => { throw new MainError('LAYOUT_CONTRACT_INVALID', 'layout contract refused'); };
+  /** @param {unknown} raw */
+  const validate = async (raw) => {
+    if (typeof raw !== 'string' || utf8Length(raw) > LAYOUT_MAX_BYTES) return invalid();
+    const { decodeAndMigrateLayoutProfile } = await import('../.kit/capsule-ui-kit/src/workspace/layoutProfile.js');
+    let value;
+    try { value = JSON.parse(raw); } catch { return invalid(); }
+    const result = decodeAndMigrateLayoutProfile(value, { expectedScope: {
+      product:'metaviewer', profileId:'default', workspaceId:'main-wall',
+    } });
+    if (!result.ok) return invalid();
+    return raw;
+  };
+  const location = () => {
+    if (directory === undefined && app) directory = join(String(app.getPath('userData')), 'presentation');
+    if (!directory || !isAbsolute(directory)) return absent();
+    mkdirSync(directory, {recursive:true,mode:0o700});
+    const info = lstatSync(directory);
+    if (!info.isDirectory() || info.isSymbolicLink() || info.uid !== process.getuid?.() || (info.mode & 0o077)) return invalid();
+    return join(directory,'layout.json');
   };
   return Object.freeze([
-    Object.freeze({ channel: CHANNELS.load, decode: decodeLayoutLoad, invoke: refuseInvoke }),
-    Object.freeze({ channel: CHANNELS.save, decode: decodeLayoutSave, invoke: refuseInvoke }),
+    Object.freeze({ channel: CHANNELS.load, decode: decodeLayoutLoad, invoke: async () => {
+      const path = location();
+      let fd;
+      try { fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK); }
+      catch (error) {
+        if (/** @type {NodeJS.ErrnoException} */ (error).code === 'ENOENT') return null;
+        throw error;
+      }
+      try {
+        const info = fstatSync(fd);
+        if (!info.isFile() || info.size > LAYOUT_MAX_BYTES || info.uid !== process.getuid?.() || (info.mode & 0o022)) return invalid();
+        const bytes = Buffer.alloc(LAYOUT_MAX_BYTES + 1);
+        const size = readSync(fd, bytes, 0, bytes.length, 0);
+        if (size > LAYOUT_MAX_BYTES) return invalid();
+        return await validate(new TextDecoder('utf-8', {fatal:true}).decode(bytes.subarray(0,size)));
+      } finally { closeSync(fd); }
+    } }),
+    Object.freeze({ channel: CHANNELS.save, decode: decodeLayoutSave, invoke: async (/** @type {unknown} */ raw) => {
+      const path = location();
+      const value = await validate(raw);
+      const fs = await import('node:fs/promises');
+      const temp = path + '.' + randomBytes(16).toString('hex');
+      try {
+        const file = await fs.open(temp,'wx',0o600);
+        try { await file.writeFile(value); await file.sync(); } finally { await file.close(); }
+        await fs.rename(temp,path);
+        return true;
+      } finally { await fs.rm(temp,{force:true}); }
+    } }),
   ]);
 }
 
@@ -1955,7 +2001,7 @@ async function mainDirectEntry() {
       protocol: electron.protocol, session: electron.session, argv, env: process.env,
       shellRoot: fileURLToPath(new URL('..',import.meta.url)),
       runtime: {xdgRuntimeDir:process.env.XDG_RUNTIME_DIR || '',uid:process.getuid ? process.getuid() : -1},
-      geometry: DEFAULT_GEOMETRY, bridge:createLayoutBridge() });
+      geometry: DEFAULT_GEOMETRY, bridge:createLayoutBridge({app:/** @type {BootAppHandle} */ (electron.app)}) });
     console.log('METAVIEWER_MAIN_READY');
   } catch (error) {
     failClosed(error);

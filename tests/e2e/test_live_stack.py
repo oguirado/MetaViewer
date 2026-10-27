@@ -38,6 +38,17 @@ class LiveStackTests(unittest.TestCase):
         env.update(MV_E2E_LIVE="1", MV_SRF_LIVE_PROFILE="mv-live-1")
         return env
 
+    def test_display_starts_high_and_skips_socket_or_lock(self):
+        x11 = self.root / "x11"
+        x11.mkdir()
+        locks = self.root / "locks"
+        locks.mkdir()
+        (x11 / "X91").touch()
+        (locks / ".X92-lock").touch()
+        self.assertEqual(stack.free_display(x11, locks), ":93")
+        (x11 / "X91").unlink()
+        self.assertEqual(stack.free_display(x11, locks), ":91")
+
     def test_ttl_and_parser(self):
         for value, seconds in (("1s", 1), ("45m", 2700), ("24h", 86400)):
             self.assertEqual(stack.ttl_seconds(value), seconds)
