@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 323 | 55 | 268 |
-| Lanes finished OK | 323 | 55 | 268 |
-| Agent steps | 17,084 | 2,705 | 14,379 |
-| Lane-hours of agent work | 43.6 | 5.2 | 38.3 |
-| Fresh input tokens | 70,436,898 | 11,482,034 | 58,954,864 |
-| Cache-read input tokens | 1,580,939,767 | 226,255,212 | 1,354,684,555 |
+| Lanes launched | 325 | 55 | 270 |
+| Lanes finished OK | 325 | 55 | 270 |
+| Agent steps | 17,227 | 2,705 | 14,522 |
+| Lane-hours of agent work | 43.8 | 5.2 | 38.6 |
+| Fresh input tokens | 71,038,566 | 11,482,034 | 59,556,532 |
+| Cache-read input tokens | 1,595,107,741 | 226,255,212 | 1,368,852,529 |
 | Prompt cache hit % | 95.7 | 95.2 | 95.8 |
-| Output tokens | 15,089,719 | 2,135,708 | 12,954,011 |
-| Thinking tokens | 7,920,643 | 1,050,039 | 6,870,604 |
-| Cost (USD) | 13.2235 | 2.0279 | 11.1956 |
-| Cost per lane (USD) | 0.0409 | 0.0369 | 0.0418 |
+| Output tokens | 15,197,258 | 2,135,708 | 13,061,550 |
+| Thinking tokens | 7,982,779 | 1,050,039 | 6,932,740 |
+| Cost (USD) | 13.3335 | 2.0279 | 11.3057 |
+| Cost per lane (USD) | 0.041 | 0.0369 | 0.0419 |
 
-Rooms: 77. Peak concurrent lanes [MEASURED from lane start/end]: 24.
+Rooms: 79. Peak concurrent lanes [MEASURED from lane start/end]: 24.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -43,7 +43,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
 | docs | 15 | 94.8 | 0.5371 |
-| fix | 13 | 96.8 | 0.6895 |
+| fix | 15 | 96.7 | 0.7995 |
 | kit | 3 | 96.5 | 0.1997 |
 | ops | 4 | 88.1 | 0.0468 |
 | plan | 12 | 92.6 | 0.3072 |
@@ -136,7 +136,9 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui16b | UI orchestrator | Oct 27 16:46 | fix | 2 | 96.4 | 0.127 | Finish MV-UI8 (one type error) and fix real-app round 2 renderer findings: Float enabled in agent/READ mode, status bar contrast, recordings list never refreshed from the host. |
 | mvui16d | UI orchestrator | Oct 27 17:04 | fix | 2 | 97.3 | 0.14 | Fix the judge notes on the MV-UI8 drop (stale echo replay, float geometry not applied by the kit, recordings refresh coalescing) and real-app L2-1 (local multislot toggles reaching the host). |
 | mvui16e | UI orchestrator | Oct 27 17:30 | fix | 1 | 96.5 | 0.0489 | Reconcile four failures after rebasing the MV-UI8/MV-UI9 drop: respect the wall no-fromJSON contract, repair a stale negative control, align one host test assertion that pinned the recordings defect. |
-| mvui18 | UI orchestrator | Oct 27 18:23 | fix | 1 | 96.5 | 0.0265 | BLOCKER: live frames never paint on the real app (canvas attach identity mismatch between frame router and SurfaceCanvas); plus frame scale jitter and kit view subscribe mirroring. |
+| mvui18 | UI orchestrator | Oct 27 18:23 | fix | 1 | 97.4 | 0.0635 | BLOCKER: live frames never paint on the real app (canvas attach identity mismatch between frame router and SurfaceCanvas); plus frame scale jitter and kit view subscribe mirroring. |
+| mvui18c | UI orchestrator | Oct 27 18:39 | fix | 1 | 95.1 | 0.0234 | Unblock the live-frames fix: one regression where a recreated frame stream acks REFUSED instead of PRESENTED. |
+| mvui18d | UI orchestrator | Oct 27 18:48 | fix | 1 | 93.3 | 0.0496 | Before handing over the live-frames blocker fix: stop per-frame canvas detach/re-attach, clear retained frames on stream identity change, tidy duplicated checks. |
 
 ## Every lane
 
@@ -464,7 +466,9 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui16d | P | placement echo, float geometry, L2-1 | Oct 27 17:04 | yes | 102 | 97.5 | 0.096288 |
 | mvui16d | R | recordings refresh coalescing | Oct 27 17:04 | yes | 61 | 96.6 | 0.043733 |
 | mvui16e | E | post-rebase reconciliation | Oct 27 17:30 | yes | 70 | 96.5 | 0.048876 |
-| mvui18 | J | live frames paint (L3-1) + jitter + subscribe mirror | Oct 27 18:23 | yes | 47 | 96.5 | 0.026484 |
+| mvui18 | J | live frames paint (L3-1) + jitter + subscribe mirror | Oct 27 18:23 | yes | 96 | 97.4 | 0.063491 |
+| mvui18c | S | second stream re-registration | Oct 27 18:39 | yes | 45 | 95.1 | 0.023382 |
+| mvui18d | D | SurfaceCanvas judge notes | Oct 27 18:48 | yes | 49 | 93.3 | 0.049622 |
 
 ## Method
 
