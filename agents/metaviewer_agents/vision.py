@@ -37,8 +37,18 @@ def _pairs(pairs):
 def _ram_path(value):
     if not isinstance(value, str) or '\x00' in value or not Path(value).is_absolute():
         raise VisionBridgeError('invalid RAM path')
-    if not Path(value).resolve().is_relative_to('/dev/shm/vqa-cu'):
+    path = Path(value)
+    # Validate the supplied spelling before resolution can hide traversal or aliases.
+    if str(path) != value or '..' in path.parts:
+        raise VisionBridgeError('noncanonical RAM path')
+    if not path.is_relative_to('/dev/shm/vqa-cu'):
         raise VisionBridgeError('path outside RAM workspace')
+    try:
+        resolved = path.resolve()
+    except (OSError, RuntimeError) as exc:
+        raise VisionBridgeError('unresolvable RAM path') from exc
+    if resolved != path:
+        raise VisionBridgeError('symlink in RAM path')
 
 
 def _box(row, width, height):
