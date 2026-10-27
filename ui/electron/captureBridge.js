@@ -4,13 +4,18 @@
  * Only metadata crosses this bridge; operational transport failure is unavailable.
  * hostBindings admits this operation over the frozen core transport.
  * Calls without a request (list/subscription) use an empty refusal request_id.
+ * [TARGET, unit decision] export({schema:"capture_request/v1",request_id,
+ * capture_id,destination:"recording:configured"|null}) returns metadata only.
+ * Native bindings must dispatch export via record_request disk_start for the
+ * sealed ID, with the main-only configured grant. Core inherits that setting.
  */
 import { ContractError } from './preload.js';
 export const CAPTURE_CHANNELS = Object.freeze({screenshot:'capture.screenshot',
-  recordStart:'capture.record.start',recordStop:'capture.record.stop',list:'capture.list',
+  recordStart:'capture.record.start',recordStop:'capture.record.stop',export:'capture.export',list:'capture.list',
   subscribe:'capture.subscribe',unsubscribe:'capture.unsubscribe'});
 const CAPTURE_CODES = new Set(['SURFACE_UNKNOWN','ALREADY_RECORDING','NOT_RECORDING',
-  'CAPTURE_UNAVAILABLE','NESTED_DISPLAY_ONLY','LIMIT']);
+  'CAPTURE_UNAVAILABLE','NESTED_DISPLAY_ONLY','LIMIT','DESTINATION_UNSET',
+  'CAPTURE_UNKNOWN','NOT_SEALED','DESTINATION_UNAVAILABLE','DESTINATION_EXISTS']);
 const CAPTURE_PHASES = new Set(['idle','starting','recording','stopping','sealed','error']);
 /** @param {any} v @param {string} keys */
 function captureKeys(v,keys) {
@@ -29,10 +34,11 @@ export function assertCaptureCall(method,args) {
   if (!Array.isArray(args) || args.length!==(['list','subscribe','unsubscribe'].includes(method)?0:1)) throw new ContractError('ARGS','capture arity');
   if (!args.length) return;
   const v=/** @type {any} */(args[0]);
-  const keys=method==='recordStop'?'recording_id,request_id,schema':method==='recordStart'?'mode,request_id,schema,surface_id':'request_id,schema,surface_id';
+  const keys=method==='export'?'capture_id,destination,request_id,schema':method==='recordStop'?'recording_id,request_id,schema':method==='recordStart'?'mode,request_id,schema,surface_id':'request_id,schema,surface_id';
   if (!captureKeys(v,keys) || v.schema!=='capture_request/v1'
     || typeof v.request_id!=='string' || !/^[\x20-\x7e]{1,64}$/.test(v.request_id)
-    || !captureId(method==='recordStop'?v.recording_id:v.surface_id)
+    || !captureId(method==='export'?v.capture_id:method==='recordStop'?v.recording_id:v.surface_id)
+    || (method==='export' && v.destination!==null && v.destination!=='recording:configured')
     || (method==='recordStart' && v.mode!=='ai')) throw new ContractError('PAYLOAD','capture request');
 }
 /** @param {string} method @param {any} v @param {string} [requestId] */
@@ -47,6 +53,9 @@ export function assertCaptureReply(method,v,requestId='') {
     && ['frames','duration_ms','created_ms'].every(k=>captureNumber(r[k]));
   const digest=(/** @type {any} */x)=>typeof x==='string' && /^[a-f0-9]{64}$/.test(x);
   if (method==='list' && captureKeys(v,'ok,rows') && Array.isArray(v.rows) && v.rows.length<=64 && v.rows.every(row)) return Object.freeze({ok:true,rows:Object.freeze(v.rows.map((/** @type {any} */r)=>Object.freeze({...r})))});
+  if (method==='export' && captureKeys(v,'export,ok') && captureKeys(v.export,'bytes,id,sha256')
+    && captureId(v.export.id) && captureNumber(v.export.bytes) && v.export.bytes>0
+    && v.export.bytes<=16*1024*1024 && digest(v.export.sha256)) return Object.freeze({ok:true,export:Object.freeze({...v.export})});
   if (method==='recordStart' && captureKeys(v,'ok,recording_id') && captureId(v.recording_id)) return Object.freeze({...v});
   if (method==='screenshot' && captureKeys(v,'ok,shot') && captureKeys(v.shot,'created_ms,height,id,sha256,surface_id,width')) {
     const r=v.shot;
@@ -69,6 +78,7 @@ export function validCaptureState(v) {
 }
 
 import { observeSender, PRIVILEGED_ORIGIN } from './main.js';
+import { recordingDestination } from './authorityWire.js';
 
 /** @param {any} core @param {string} method @param {any} request */
 export async function requestCapture(core,method,request) {
@@ -80,8 +90,11 @@ export async function requestCapture(core,method,request) {
 }
 
 /** @param {any} options */
-export function installCaptureBridge({ipcMain,contents,core,nested=false}) {
+export function installCaptureBridge({ipcMain,contents,core,nested=false,env=process.env}) {
   if(nested) return {async dispose(){}};
+  // [TARGET, unit decision] Validate the same main-only grant as authorityWire.
+  // Core inherits MV_RECORDING_DESTINATION; no path is supplied by the renderer.
+  const destination=recordingDestination(env);
   let disposed=false,subscribed=false;
   /** @type {string[]} */ const installed=[];
   /** @type {()=>void} */ let revoke=()=>{};
@@ -94,6 +107,9 @@ export function installCaptureBridge({ipcMain,contents,core,nested=false}) {
         if(nested) return {ok:false,code:'NESTED_DISPLAY_ONLY',request_id:args[0]?.request_id??''};
         if(method==='subscribe' || method==='unsubscribe') {
           subscribed=method==='subscribe';return {ok:true};
+        }
+        if(method==='export' && (destination===null || args[0].destination===null)) {
+          return {ok:false,code:'DESTINATION_UNSET',request_id:args[0].request_id};
         }
         return requestCapture(core,method,args[0]);
       });

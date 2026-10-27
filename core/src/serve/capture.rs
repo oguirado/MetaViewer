@@ -1,11 +1,59 @@
 //! [TARGET, unit decision] Existing record_request/v0.2 is the UI wire seam.
 //! Capture v1 is a host API; no new transport schema is silently admitted.
 //! RAM captures expire on process restart; metadata witnesses remain replayable.
+//! [TARGET, unit decision] Export grants are the host MV_RECORDING_DESTINATION
+//! and opaque recording:configured token. The core must inherit the operator
+//! setting. Completion witnesses contain digest/byte count, never a pathname.
+//! Export start is durable before publication; completion follows publication.
+//! [TARGET, unit decision] Recovery is lazy at the first capture dispatch after
+//! Server::open, before any capture operation resumes (within this unit surface).
+//! Start witnesses keep the host grant locally; no pathname enters a UI reply.
 use super::*;
 use crate::wire::payload::RecordRequest;
 use serde_json::{json, Value};
 
 impl Server {
+    fn capture_recover_exports(&mut self) -> Result<()> {
+        if self.capture.exports_recovered {
+            return Ok(());
+        }
+        let mut pending = std::collections::BTreeMap::new();
+        for seq in 1..=self.authority.state().core_seq {
+            let event: Value = serde_json::from_slice(&fs::read(
+                self.root.join("events").join(format!("{seq}.json")),
+            )?)?;
+            let witnesses: Vec<Witness> = serde_json::from_value(event["witnesses"].clone())?;
+            for witness in witnesses {
+                let bytes = fs::read(self.root.join("artifacts").join(witness.sha256))?;
+                let Ok(data) = serde_json::from_slice::<Value>(&bytes) else {
+                    continue;
+                };
+                if let Some(transaction) = data["export_transaction"].as_u64() {
+                    if data["method"] == "export-started" {
+                        pending.insert(transaction, data);
+                    } else if data["method"] == "export" {
+                        pending.remove(&transaction);
+                    }
+                }
+            }
+        }
+        for (transaction, start) in pending {
+            let destination = start["host_destination"]
+                .as_str()
+                .ok_or_else(|| invalid("export recovery grant"))?;
+            let completed = crate::record::capture::export::recover(
+                Path::new(destination),
+                &start["receipt"],
+                transaction,
+            )?;
+            self.capture_journal(vec![], &json!({"method":"export","export_transaction":transaction,
+                "recovered":true,"reply":if completed {json!({"ok":true,"export":start["receipt"]})}
+                else {json!({"ok":false,"code":"CAPTURE_UNAVAILABLE","request_id":start["request"]["request_id"]})}}))?;
+        }
+        self.capture.exports_recovered = true;
+        Ok(())
+    }
+
     // [TARGET, unit decision] Frozen surface_event.error carries closed capture
     // metadata under CAPTURE_REPLY / CAPTURE_STATE; detail is bounded JSON.
     fn capture_metadata(&mut self, peer: &Endpoint, code: &str, value: Value) -> Result<()> {
@@ -18,6 +66,7 @@ impl Server {
         )
     }
     pub(super) fn capture_list_wire(&mut self, env: &Envelope, boundary: Witness) -> Result<()> {
+        self.capture_recover_exports()?;
         let (reply, _) = self.capture_transition("list", Value::Null, vec![boundary])?;
         self.capture_metadata(
             &env.from,
@@ -72,6 +121,7 @@ impl Server {
         Ok(())
     }
     pub(super) fn capture_frame(&mut self, frame: &FrameRef, pixels: Vec<u8>) -> Result<()> {
+        self.capture_recover_exports()?;
         let mut next = self.capture.clone();
         // Oversized/unavailable frames do not disable normal authority rendering.
         let Ok(events) = next.frame(frame, pixels, self.origin.elapsed().as_millis() as u64) else {
@@ -96,10 +146,12 @@ impl Server {
         {
             return Err(invalid("capture requires registered UI"));
         }
+        self.capture_recover_exports()?;
         let keys = match method {
             "screenshot" => vec!["request_id", "schema", "surface_id"],
             "recordStart" => vec!["mode", "request_id", "schema", "surface_id"],
             "recordStop" => vec!["recording_id", "request_id", "schema"],
+            "export" => vec!["capture_id", "destination", "request_id", "schema"],
             "list" if request.is_null() => vec![],
             _ => return Err(invalid("capture method")),
         };
@@ -112,7 +164,9 @@ impl Server {
                 || !request["request_id"].as_str().is_some_and(|id| {
                     !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| (32..=126).contains(&b))
                 })
-                || !request[if method == "recordStop" {
+                || !request[if method == "export" {
+                    "capture_id"
+                } else if method == "recordStop" {
                     "recording_id"
                 } else {
                     "surface_id"
@@ -120,12 +174,65 @@ impl Server {
                 .as_str()
                 .is_some_and(crate::record::valid_id)
                 || (method == "recordStart" && request["mode"] != "ai")
+                || (method == "export"
+                    && !request["destination"].is_null()
+                    && request["destination"] != "recording:configured")
             {
                 return Err(invalid("capture shape"));
             }
         }
+        if method == "export" {
+            let destination = std::env::var_os("MV_RECORDING_DESTINATION")
+                .filter(|p| !p.is_empty())
+                .map(PathBuf::from);
+            return self.capture_export_to(request, destination.as_deref(), vec![]);
+        }
         self.capture_transition(method, request, vec![])
             .map(|(reply, _)| reply)
+    }
+    fn capture_export_to(
+        &mut self,
+        request: Value,
+        destination: Option<&Path>,
+        boundary: Vec<Witness>,
+    ) -> Result<Value> {
+        self.capture_recover_exports()?;
+        let plan = (|| -> std::result::Result<_, &'static str> {
+            let destination = destination
+                .filter(|_| request["destination"] == "recording:configured")
+                .ok_or("DESTINATION_UNSET")?;
+            let plan = self
+                .capture
+                .export_plan(request["capture_id"].as_str().unwrap_or(""))?;
+            Ok((destination, plan))
+        })();
+        let transaction = self.authority.state().core_seq + 1;
+        if let Ok((destination, plan)) = &plan {
+            self.capture_journal(
+                vec![],
+                &json!({"method":"export-started","export_transaction":transaction,
+                "request":request,"host_destination":destination,"receipt":plan.receipt}),
+            )?;
+        }
+        let outcome = plan.and_then(|(destination, plan)| {
+            plan.publish_transaction(destination, transaction)
+                .map(|publication| (publication, plan.receipt))
+        });
+        let (publication, reply) = match outcome {
+            Ok((publication, receipt)) => (Some(publication), json!({"ok":true,"export":receipt})),
+            Err(code) => (
+                None,
+                json!({"ok":false,"code":code,"request_id":request["request_id"]}),
+            ),
+        };
+        self.capture_journal(
+            boundary,
+            &json!({"method":"export","export_transaction":transaction,"request":request,"reply":reply}),
+        )?;
+        if let Some(publication) = publication {
+            publication.commit();
+        }
+        Ok(reply)
     }
     fn capture_transition(
         &mut self,
@@ -163,7 +270,28 @@ impl Server {
         request: &RecordRequest,
         boundary: Witness,
     ) -> Result<()> {
+        self.capture_recover_exports()?;
         let raw = serde_json::to_value(request)?;
+        // [TARGET, unit decision] Existing disk_start carrier exports an already
+        // sealed capture. It never starts a disk recorder. Host binding supplies
+        // the configured capability/path; the core independently checks its grant.
+        if raw["op"] == "disk_start" {
+            let destination = std::env::var_os("MV_RECORDING_DESTINATION")
+                .filter(|p| !p.is_empty())
+                .map(PathBuf::from);
+            let granted = destination.as_ref().is_some_and(|p| {
+                p.to_str() == raw["params"]["destination_path"].as_str()
+                    && raw["params"]["destination_capability_id"] == "recording:configured"
+            });
+            let req = json!({"schema":"capture_request/v1","request_id":raw["request_id"],
+                "capture_id":raw["params"]["recording_id"],"destination":if granted {json!("recording:configured")} else {Value::Null}});
+            let reply = self.capture_export_to(req, destination.as_deref(), vec![boundary])?;
+            return self.capture_metadata(
+                &env.from,
+                "CAPTURE_REPLY",
+                json!({"request_id":raw["request_id"],"method":"export","reply":reply}),
+            );
+        }
         let method = match raw["op"].as_str() {
             Some("ram_start") => "recordStart",
             Some("ram_stop") => "recordStop",
@@ -213,6 +341,207 @@ impl Server {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn export_journals_receipts_refusals_and_rolls_back_if_journal_fails() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("mv-capture-export-{}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let reg = |component: &str| -> Registration {
+            serde_json::from_value(json!({"endpoint":{"component":component,"instance":format!("{component}-export")},"hello":{"schema":"hello/v0.2","contract_version":"v0.2","component":component,"component_version":"0.2.0","component_commit":"0123456789abcdef0123456789abcdef01234567","dependencies":[]}})).unwrap()
+        };
+        let config = Config {
+            session_id: "export-session".into(),
+            core: reg("core"),
+            peers: vec![reg("agent"), reg("daemon"), reg("ui")],
+        };
+        let mut server = Server::open(config.clone(), &root, effective_uid().unwrap()).unwrap();
+        let mut frame: Value = serde_json::from_str(include_str!(
+            "../../../contracts/examples/v0.2/frame_ref.valid.json"
+        ))
+        .unwrap();
+        frame["width"] = 1.into();
+        frame["height"] = 1.into();
+        frame["sha256"] = sha256_hex(&[255, 0, 0]).into();
+        server
+            .capture
+            .frame(&serde_json::from_value(frame).unwrap(), vec![255, 0, 0], 0)
+            .unwrap();
+        let surfaces = BTreeSet::from(["surface-demo".to_owned()]);
+        let (next, shot, _) = server
+            .capture
+            .prepare(
+                "screenshot",
+                &json!({"request_id":"shot","surface_id":"surface-demo"}),
+                surfaces.clone(),
+                0,
+            )
+            .unwrap();
+        server.capture = next;
+        let request = json!({"schema":"capture_request/v1","request_id":"export","capture_id":shot["shot"]["id"],"destination":"recording:configured"});
+        let destination = root.join("exports");
+        fs::create_dir(&destination).unwrap();
+        for (req, dest, expected) in [
+            (request.clone(), None, "DESTINATION_UNSET"),
+            (
+                {
+                    let mut req = request.clone();
+                    req["capture_id"] = "unknown".into();
+                    req
+                },
+                Some(destination.as_path()),
+                "CAPTURE_UNKNOWN",
+            ),
+            (
+                request.clone(),
+                Some(root.join("vanished").as_path()),
+                "DESTINATION_UNAVAILABLE",
+            ),
+        ] {
+            let seq = server.authority.state().core_seq;
+            assert_eq!(
+                server.capture_export_to(req, dest, vec![]).unwrap()["code"],
+                expected
+            );
+            assert_eq!(
+                server.authority.state().core_seq,
+                seq + if expected == "DESTINATION_UNAVAILABLE" {
+                    2
+                } else {
+                    1
+                }
+            );
+            assert_eq!(fs::read_dir(&destination).unwrap().count(), 0);
+        }
+        let reply = server
+            .capture_export_to(request.clone(), Some(&destination), vec![])
+            .unwrap();
+        assert_eq!(reply["ok"], true);
+        let archive = fs::read_dir(&destination)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let bytes = fs::read(&archive).unwrap();
+        assert_eq!(reply["export"]["sha256"], sha256_hex(&bytes));
+        assert_eq!(reply["export"]["bytes"], bytes.len());
+        let session = root.join("sessions/export-session");
+        let event: Value = serde_json::from_slice(
+            &fs::read(
+                session
+                    .join("events")
+                    .join(format!("{}.json", server.authority.state().core_seq)),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let witnesses = event["witnesses"].as_array().unwrap();
+        let witness: Value = serde_json::from_slice(
+            &fs::read(
+                session
+                    .join("artifacts")
+                    .join(witnesses[0]["sha256"].as_str().unwrap()),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(witness["method"], "export");
+        assert_eq!(witness["reply"], reply);
+        assert!(!witness.to_string().contains(destination.to_str().unwrap()));
+        assert_eq!(
+            server
+                .capture_export_to(request.clone(), Some(&destination), vec![])
+                .unwrap()["code"],
+            "DESTINATION_EXISTS"
+        );
+        fs::remove_file(archive).unwrap();
+        // A failed write-ahead witness prevents any archive publication.
+        fs::rename(session.join("artifacts"), session.join("artifacts-offline")).unwrap();
+        fs::write(session.join("artifacts"), b"unavailable").unwrap();
+        assert!(server
+            .capture_export_to(request, Some(&destination), vec![])
+            .is_err());
+        assert_eq!(fs::read_dir(&destination).unwrap().count(), 0);
+        fs::remove_file(session.join("artifacts")).unwrap();
+        fs::rename(session.join("artifacts-offline"), session.join("artifacts")).unwrap();
+        let state = server.snapshot().unwrap();
+        drop(server);
+        let recovered = Server::open(config.clone(), &root, effective_uid().unwrap()).unwrap();
+        assert_eq!(recovered.snapshot().unwrap(), state);
+        drop(recovered);
+        // Crash fixture: durable start + published file, no completion witness.
+        // Matching digest completes; altered bytes are removed. Temporary files
+        // from a crash before linking are reclaimed in either path.
+        for valid in [true, false] {
+            let mut interrupted =
+                Server::open(config.clone(), &root, effective_uid().unwrap()).unwrap();
+            let transaction = interrupted.authority.state().core_seq + 1;
+            interrupted
+                .capture_journal(
+                    vec![],
+                    &json!({"method":"export-started",
+                "export_transaction":transaction,"host_destination":destination,
+                "request":{"request_id":"crash"},"receipt":reply["export"]}),
+                )
+                .unwrap();
+            let name = format!(
+                "{}-{}.tar",
+                reply["export"]["id"].as_str().unwrap(),
+                reply["export"]["sha256"].as_str().unwrap()
+            );
+            let archive = destination.join(&name);
+            fs::write(&archive, if valid { bytes.as_slice() } else { b"corrupt" }).unwrap();
+            fs::set_permissions(&archive, fs::Permissions::from_mode(0o600)).unwrap();
+            let temporary = destination.join(format!(".mv-export-{name}-{transaction}"));
+            fs::write(&temporary, b"interrupted").unwrap();
+            drop(interrupted);
+            let mut restarted =
+                Server::open(config.clone(), &root, effective_uid().unwrap()).unwrap();
+            restarted
+                .capture_request(&config.peers[2].endpoint, "list", Value::Null)
+                .unwrap();
+            assert_eq!(archive.exists(), valid);
+            assert!(!temporary.exists());
+            let completed_seq = restarted.authority.state().core_seq;
+            let event: Value = serde_json::from_slice(
+                &fs::read(
+                    session
+                        .join("events")
+                        .join(format!("{}.json", completed_seq - 1)),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            let receipt: Value = serde_json::from_slice(
+                &fs::read(
+                    session
+                        .join("artifacts")
+                        .join(event["witnesses"][0]["sha256"].as_str().unwrap()),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(receipt["recovered"], true);
+            assert_eq!(receipt["export_transaction"], transaction);
+            assert_eq!(receipt["reply"]["ok"], valid);
+            if valid {
+                assert_eq!(receipt["reply"]["export"], reply["export"]);
+            }
+            restarted.capture_recover_exports().unwrap();
+            assert_eq!(restarted.authority.state().core_seq, completed_seq);
+            drop(restarted);
+            let mut replayed =
+                Server::open(config.clone(), &root, effective_uid().unwrap()).unwrap();
+            replayed.capture_recover_exports().unwrap();
+            assert_eq!(replayed.authority.state().core_seq, completed_seq);
+            drop(replayed);
+            if valid {
+                fs::remove_file(archive).unwrap();
+            }
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn host_capture_is_journaled_replays_and_expires_ram_on_restart() {
         use std::os::unix::fs::PermissionsExt;

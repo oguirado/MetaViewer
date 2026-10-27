@@ -10,9 +10,15 @@ const MEMORY: u64 = 64 * 1024 * 1024;
 pub struct Host {
     coordinator: Option<Coordinator>,
     rows: BTreeMap<String, Value>,
-    pixels: BTreeMap<String, VecDeque<Vec<u8>>>,
+    pixels: BTreeMap<String, VecDeque<CapturedFrame>>,
     latest: BTreeMap<String, (FrameRef, Vec<u8>)>,
     serial: u64,
+    pub(crate) exports_recovered: bool,
+}
+#[derive(Clone)]
+struct CapturedFrame {
+    frame: FrameRef,
+    bytes: Vec<u8>,
 }
 #[derive(Default)]
 struct Events(Vec<Value>);
@@ -90,10 +96,13 @@ impl Host {
             .ok_or(Error::Configuration)?
             .observe(event, events)?;
         let ring = self.pixels.entry(id.to_owned()).or_default();
-        while ring.iter().map(Vec::len).sum::<usize>() + bytes.len() > RING as usize {
+        while ring.iter().map(|f| f.bytes.len()).sum::<usize>() + bytes.len() > RING as usize {
             ring.pop_front();
         }
-        ring.push_back(bytes.clone());
+        ring.push_back(CapturedFrame {
+            frame: frame.clone(),
+            bytes: bytes.clone(),
+        });
         let row = self.rows.get_mut(id).ok_or(Error::Event)?;
         row["frames"] = json!(ring.len());
         row["duration_ms"] =
@@ -213,7 +222,10 @@ impl Host {
             row["sealed"] = true.into();
             row["duration_ms"] =
                 json!(now_ms.saturating_sub(row["created_ms"].as_u64().ok_or(Error::Event)?));
-            let bytes: Vec<u8> = next.pixels[&id].iter().flatten().copied().collect();
+            let bytes: Vec<u8> = next.pixels[&id]
+                .iter()
+                .flat_map(|f| f.bytes.iter().copied())
+                .collect();
             json!({"ok":true,"recording":{"id":id,"surface_id":surface,"frames":row["frames"],"duration_ms":row["duration_ms"],"sealed":true,"sha256":sha256_hex(&bytes)}})
         } else {
             next.rows.insert(id.clone(),json!({"id":id,"kind":if method=="screenshot"{"shot"}else{"recording"},"surface_id":surface,"phase":"recording","frames":0,"duration_ms":0,"sealed":false,"created_ms":now_ms}));
@@ -347,3 +359,5 @@ mod tests {
         );
     }
 }
+
+pub(crate) mod export;

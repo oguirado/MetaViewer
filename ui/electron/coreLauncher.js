@@ -4,6 +4,8 @@
 /**
  * W0-SHELL-MAIN Rust core launcher: single-flight native child supervisor.
  *
+ * [TARGET, unit decision] Pass the validated host recording destination grant
+ * separately from the generic environment allowlist.
  * Main supervises; Rust owns state. This module spawns the pinned core
  * binary at most once per instance (never respawns), scrubs the child
  * environment to an allowlist, bounds every stdio and queue byte, and
@@ -13,7 +15,9 @@
  * @module coreLauncher
  */
 
-import { isAbsolute } from 'node:path';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 /**
  * Typed launcher failure; a failure admits nothing.
@@ -215,6 +219,21 @@ export function scrubChildEnv(rawEnv, runtimeDir) {
     fail('ENV_PATH', 'PATH must sanitize to at least one absolute segment');
   }
   out.PATH = /** @type {string} */ (path);
+  // Same host grant validation as authorityWire, kept self-contained so the
+  // packaged main/launcher security probe needs no authority runtime modules.
+  const destination = parent.MV_RECORDING_DESTINATION;
+  if (destination !== undefined && destination !== '') {
+    if (typeof destination !== 'string' || !isAbsolute(destination)
+        || destination.length > CORE_MAX_PATH_CHARS || /[\0\r\n]/.test(destination)) {
+      fail('SETTINGS_DESTINATION', 'recording destination must be a bounded absolute path');
+    }
+    const canonical = realpathSync(resolve(destination));
+    const rel = relative(fileURLToPath(new URL('../..', import.meta.url)), canonical);
+    if (rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))) {
+      fail('SETTINGS_IN_REPO', 'recording destination must be outside the source tree');
+    }
+    out.MV_RECORDING_DESTINATION = canonical;
+  }
   out.XDG_RUNTIME_DIR = /** @type {string} */ (runtimeDir);
   return Object.freeze(out);
 }

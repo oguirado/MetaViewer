@@ -25,7 +25,7 @@
  * @property {() => Promise<0|1|null>} nestedDepth
  * @property {() => Promise<string|null>} selfCapsuleId
  * @property {{propose:(json:string)=>Promise<any>,intent:(json:string)=>Promise<true>,subscribeFrames:(cb:(frame:any)=>void)=>(()=>void)}} authority
- * @property {{screenshot:(req:any)=>Promise<any>,recordStart:(req:any)=>Promise<any>,recordStop:(req:any)=>Promise<any>,list:()=>Promise<any>,subscribe:(cb:(state:any)=>void)=>(()=>void)}} capture
+ * @property {{screenshot:(req:any)=>Promise<any>,recordStart:(req:any)=>Promise<any>,recordStop:(req:any)=>Promise<any>,export:(req:any)=>Promise<any>,list:()=>Promise<any>,subscribe:(cb:(state:any)=>void)=>(()=>void)}} capture
  * @property {{open:(spec:any)=>Promise<{session:string}>,setEnabled:(value:boolean)=>Promise<true>}} sideTerminal
  * @property {() => Promise<string|null>} load Read the stored layout text,
  * or null when no profile exists.
@@ -297,12 +297,13 @@ export function createPreloadFacade(deps) {
   return frozen;
 }
 
-// [TARGET, unit decision] Capture metadata is a closed RAM-only projection.
+// [TARGET, unit decision] Capture metadata exposes no host paths or pixel bytes.
 const CAPTURE_CHANNELS = Object.freeze({screenshot:'capture.screenshot',
-  recordStart:'capture.record.start',recordStop:'capture.record.stop',list:'capture.list',
+  recordStart:'capture.record.start',recordStop:'capture.record.stop',export:'capture.export',list:'capture.list',
   subscribe:'capture.subscribe',unsubscribe:'capture.unsubscribe'});
 const CAPTURE_CODES = new Set(['SURFACE_UNKNOWN','ALREADY_RECORDING','NOT_RECORDING',
-  'CAPTURE_UNAVAILABLE','NESTED_DISPLAY_ONLY','LIMIT']);
+  'CAPTURE_UNAVAILABLE','NESTED_DISPLAY_ONLY','LIMIT','DESTINATION_UNSET',
+  'CAPTURE_UNKNOWN','NOT_SEALED','DESTINATION_UNAVAILABLE','DESTINATION_EXISTS']);
 const CAPTURE_PHASES = new Set(['idle','starting','recording','stopping','sealed','error']);
 /** @param {any} v @param {string} keys */
 function captureKeys(v,keys) {
@@ -321,10 +322,11 @@ function assertCaptureCall(method,args) {
   if (!Array.isArray(args) || args.length!==(['list','subscribe','unsubscribe'].includes(method)?0:1)) throw new ContractError('ARGS','capture arity');
   if (!args.length) return;
   const v=/** @type {any} */(args[0]);
-  const keys=method==='recordStop'?'recording_id,request_id,schema':method==='recordStart'?'mode,request_id,schema,surface_id':'request_id,schema,surface_id';
+  const keys=method==='export'?'capture_id,destination,request_id,schema':method==='recordStop'?'recording_id,request_id,schema':method==='recordStart'?'mode,request_id,schema,surface_id':'request_id,schema,surface_id';
   if (!captureKeys(v,keys) || v.schema!=='capture_request/v1'
     || typeof v.request_id!=='string' || !/^[\x20-\x7e]{1,64}$/.test(v.request_id)
-    || !captureId(method==='recordStop'?v.recording_id:v.surface_id)
+    || !captureId(method==='export'?v.capture_id:method==='recordStop'?v.recording_id:v.surface_id)
+    || (method==='export' && v.destination!==null && v.destination!=='recording:configured')
     || (method==='recordStart' && v.mode!=='ai')) throw new ContractError('PAYLOAD','capture request');
 }
 /** @param {string} method @param {any} v @param {string} [requestId] */
@@ -339,6 +341,9 @@ function assertCaptureReply(method,v,requestId='') {
     && ['frames','duration_ms','created_ms'].every(k=>captureNumber(r[k]));
   const digest=(/** @type {any} */x)=>typeof x==='string' && /^[a-f0-9]{64}$/.test(x);
   if (method==='list' && captureKeys(v,'ok,rows') && Array.isArray(v.rows) && v.rows.length<=64 && v.rows.every(row)) return Object.freeze({ok:true,rows:Object.freeze(v.rows.map((/** @type {any} */r)=>Object.freeze({...r})))});
+  if (method==='export' && captureKeys(v,'export,ok') && captureKeys(v.export,'bytes,id,sha256')
+    && captureId(v.export.id) && captureNumber(v.export.bytes) && v.export.bytes>0
+    && v.export.bytes<=16*1024*1024 && digest(v.export.sha256)) return Object.freeze({ok:true,export:Object.freeze({...v.export})});
   if (method==='recordStart' && captureKeys(v,'ok,recording_id') && captureId(v.recording_id)) return Object.freeze({...v});
   if (method==='screenshot' && captureKeys(v,'ok,shot') && captureKeys(v.shot,'created_ms,height,id,sha256,surface_id,width')) {
     const r=v.shot;
@@ -374,6 +379,7 @@ function captureFacade(transport) {
     /** @param {...unknown} args */ screenshot:(...args)=>call('screenshot',args),
     /** @param {...unknown} args */ recordStart:(...args)=>call('recordStart',args),
     /** @param {...unknown} args */ recordStop:(...args)=>call('recordStop',args),
+    /** @param {...unknown} args */ export:(...args)=>call('export',args),
     /** @param {...unknown} args */ list:(...args)=>call('list',args),
     /** @param {...unknown} args */ subscribe:(...args)=>{
       if(args.length!==1 || typeof args[0]!=='function' || (!transport.nested && !transport.subscribe)) throw new ContractError('ARGS','capture callback');

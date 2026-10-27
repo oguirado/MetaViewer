@@ -6,16 +6,16 @@ const req={schema:'capture_request/v1',request_id:'request',surface_id:'surface-
 const digest='a'.repeat(64);
 const replies={screenshot:{ok:true,shot:{id:'shot',surface_id:'surface-demo',width:1,height:1,sha256:digest,created_ms:0}},
   recordStart:{ok:true,recording_id:'record'},recordStop:{ok:true,recording:{id:'record',surface_id:'surface-demo',frames:1,duration_ms:10,sealed:true,sha256:digest}},
-  list:{ok:true,rows:[]},subscribe:{ok:true},unsubscribe:{ok:true}};
+  export:{ok:true,export:{id:'record',bytes:2048,sha256:digest}},list:{ok:true,rows:[]},subscribe:{ok:true},unsubscribe:{ok:true}};
 function facade(invoke,subscribe=()=>()=>{},nested=false) {
   return createPreloadFacade({transport:{invoke,subscribe,nested},bridge:{exposeInMainWorld(){}}}).capture;
 }
 test('capture facade has exact frozen keys and each method routes to its closed channel',async()=>{
   const calls=[];
   const api=facade(async(channel,args)=>{calls.push([channel,args]);return replies[Object.keys(CAPTURE_CHANNELS).find(k=>`metaviewer:${CAPTURE_CHANNELS[k]}`===channel)];});
-  assert.deepEqual(Object.keys(api).sort(),['list','recordStart','recordStop','screenshot','subscribe']);assert.ok(Object.isFrozen(api));
+  assert.deepEqual(Object.keys(api).sort(),['export','list','recordStart','recordStop','screenshot','subscribe']);assert.ok(Object.isFrozen(api));
   assert.deepEqual(await api.screenshot(req),replies.screenshot);
-  await api.recordStart({...req,mode:'ai'});await api.recordStop({schema:req.schema,request_id:req.request_id,recording_id:'record'});await api.list();
+  await api.recordStart({...req,mode:'ai'});await api.recordStop({schema:req.schema,request_id:req.request_id,recording_id:'record'});await api.export({schema:req.schema,request_id:req.request_id,capture_id:'record',destination:'recording:configured'});await api.list();
   const stop=api.subscribe(()=>{});stop();await new Promise(resolve=>setImmediate(resolve));
   assert.deepEqual(calls.map(c=>c[0]),Object.values(CAPTURE_CHANNELS).map(s=>`metaviewer:${s}`));
 });

@@ -1855,7 +1855,7 @@ export async function bootProductionMain(handles) {
     }
   }
   try {
-    if (!retail.nested) captureBridge = (await import('./captureBridge.js')).installCaptureBridge({ipcMain, contents:contentsUnknown, core, nested:retail.nested});
+    if (!retail.nested) captureBridge = (await import('./captureBridge.js')).installCaptureBridge({ipcMain, contents:contentsUnknown, core, nested:retail.nested, env:typed.env});
     if (!retail.nested) wireBridge = (await import('./authorityWire.js')).installAuthorityWire({ ...(typed.wire || {}), ipcMain,
       contents: contentsUnknown, core, env: typed.env, argv: typed.argv });
   } catch (error) { await unwind(); throw error; }

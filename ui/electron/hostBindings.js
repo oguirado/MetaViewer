@@ -4,9 +4,12 @@
  * hello pinned by MV_CORE_CONFIG (the live runner's ABI). Never spawn a guessed
  * binary. Intent success requires a matching core surface update; proposals
  * return the core verdict, including POLICY refusals on the UI lane.
+ * [TARGET, unit decision] Capture export uses the disk_start carrier with the
+ * sealed capture ID and host-owned destination grant, never a renderer path.
  * Bounds [TARGET, unit decision]: 1 MiB wire/config, 64 surfaces/pending calls,
  * 64 MiB frame, 4096 pixels per axis, 3 s request/hello deadline.
  */
+import { recordingDestination } from './authorityWire.js';
 import { assertCaptureCall, assertCaptureReply, validCaptureState } from './captureBridge.js';
 import { createConnection } from 'node:net';
 import { open, lstat } from 'node:fs/promises';
@@ -67,6 +70,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
     const peers = config.peers?.filter((/** @type {any} */ peer) => peer?.endpoint?.component === 'ui');
     if (!id(config.session_id) || !hello(config.core, 'core') || peers?.length !== 1 || !hello(peers[0], 'ui')) throw fail();
     const ui = peers[0];
+    const destination = recordingDestination(env);
     if (!createMessageChannel) {
       const electron = /** @type {any} */ (await import('electron'));
       if (typeof electron.MessageChannelMain !== 'function') throw fail();
@@ -257,22 +261,27 @@ export async function createMainBindings({env = process.env, createMessageChanne
         if (message?.op === 'capture') {
           if (!live || disposed || pending.size >= MAX_ITEMS
               || Object.keys(message).sort().join(',') !== 'method,op,request'
-              || !['screenshot','recordStart','recordStop','list'].includes(message.method)) throw fail();
+              || !['screenshot','recordStart','recordStop','export','list'].includes(message.method)) throw fail();
           assertCaptureCall(message.method,message.request === undefined ? [] : [message.request]);
+          if (message.method === 'export' && (destination === null || message.request.destination === null)) {
+            return {ok:false,code:'DESTINATION_UNSET',request_id:message.request.request_id};
+          }
           const key = message.method === 'list' ? `capture-list:${randomUUID()}` : randomUUID();
           const request = message.request;
           const captureId = randomUUID();
           // Stop identity is host-owned; the core resolves unknown IDs and journals refusals.
-          const surfaceId = message.method === 'recordStop' ? (captureSurfaces.get(request.recording_id) ?? 'capture') : request?.surface_id;
-          const params = message.method === 'recordStart' ? {surface_id:surfaceId,recording_id:captureId,ring_bytes:8388608,max_fps:30}
+          const surfaceId = ['recordStop','export'].includes(message.method) ? (captureSurfaces.get(request.recording_id ?? request.capture_id) ?? 'capture') : request?.surface_id;
+          const params = message.method === 'export' ? {surface_id:surfaceId,recording_id:request.capture_id,destination_capability_id:'recording:configured',destination_path:destination,max_fps:30}
+            : message.method === 'recordStart' ? {surface_id:surfaceId,recording_id:captureId,ring_bytes:8388608,max_fps:30}
             : message.method === 'recordStop' ? {surface_id:surfaceId,recording_id:request.recording_id}
             : {surface_id:surfaceId,capture_id:captureId};
           const body = message.method === 'list' ? {schema:'surface_request/v0.2',op:'list',params:{}}
-            : {schema:'record_request/v0.2',request_id:key,op:(/** @type {Record<string,string>} */ ({screenshot:'screenshot',recordStart:'ram_start',recordStop:'ram_stop'}))[message.method],params};
+            : {schema:'record_request/v0.2',request_id:key,op:(/** @type {Record<string,string>} */ ({screenshot:'screenshot',recordStart:'ram_start',recordStop:'ram_stop',export:'disk_start'}))[message.method],params};
           return new Promise((resolve,reject) => {
             const timer = setTimeout(() => {pending.delete(key);reject(fail());shutdown();},DEADLINE);
             pending.set(key,{body:{schema:'capture_host/v1',method:message.method,requestId:request?.request_id ?? ''},resolve:value=>{
               if(value.ok && message.method === 'recordStart') captureSurfaces.set(value.recording_id,request.surface_id);
+              if(value.ok && message.method === 'screenshot') captureSurfaces.set(value.shot.id,request.surface_id);
               resolve(value);
             },reject,timer});
             try {send(body,key);} catch {shutdown();}
