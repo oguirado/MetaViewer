@@ -156,3 +156,47 @@ func TestT2R208CaptureReleasesMutexAcrossNativeCLI(t *testing.T) {
 		t.Fatalf("destroyed mid-capture mutated geometry to %+v", got)
 	}
 }
+
+func TestCaptureRefusesInputEpochAdvanceAcrossUnlock(t *testing.T) {
+	frameEntered := make(chan struct{})
+	releaseFrame := make(chan struct{})
+	var frameCalls atomic.Int32
+	m := testManager(t, &scriptRunner{output: []byte(startOK)})
+	m.runner = a2Runner(func(_ context.Context, args []string, _ []byte) ([]byte, error) {
+		switch args[1] {
+		case "start":
+			return []byte(startOK), nil
+		case "frame":
+			if frameCalls.Add(1) == 1 {
+				close(frameEntered)
+				<-releaseFrame
+			}
+			return []byte(`{"path":"/dev/shm/demo-run/frames/w1/f.png","seq":1,"sha256_rgb24":"0000000000000000000000000000000000000000000000000000000000000000","width":2,"height":1,"capture_mono_ns":200,"generation":"srf-id-demo","window":{"id":"w1","w":2,"h":1}}`), nil
+		case "input":
+			return []byte(`{"surface_id":"w1","kind":"key","input_mono_ns":200,"focus_verified":true,"result":"ok"}`), nil
+		}
+		return nil, fault("unexpected", "unexpected command")
+	})
+	id := createID(t, m)
+	ctx := context.Background()
+
+	capDone := make(chan error, 1)
+	go func() {
+		_, _, e := m.Capture(ctx, id)
+		capDone <- e
+	}()
+	awaitSignal(t, frameEntered)
+
+	if _, err := m.Handle(ctx, req("input", `{"surface_id":"`+id+`","proposal_id":"in-window","action":{"type":"key","keys":["a"]}}`)); err != nil {
+		close(releaseFrame)
+		<-capDone
+		t.Fatalf("input inside capture window failed: %v", err)
+	}
+	close(releaseFrame)
+	requireFault(t, <-capDone, "POLICY")
+
+	// Negative control: capture with no overlapping input succeeds.
+	if _, _, err := m.Capture(ctx, id); err != nil {
+		t.Fatalf("clean capture after input drained failed: %v", err)
+	}
+}

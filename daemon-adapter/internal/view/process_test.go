@@ -243,3 +243,27 @@ func TestStateDirPathBypassesRefused(t *testing.T) {
 	}
 	child.Close()
 }
+
+func TestRemovedStateDirRefusedWithoutRecreation(t *testing.T) {
+	r := processFixture(t, `json.dumps({'url':'http://127.0.0.1:1234/', 'native':str(os.getpid()), 'socket':'/runtime/view.sock'})`)
+	if err := os.Remove(r.stateDir); err != nil {
+		t.Fatal(err)
+	}
+	_, err := r.Start(context.Background(), []string{"srf-identity-surface", "view", "--container", "srf-id-demo"})
+	var f *cli.Fault
+	if !errors.As(err, &f) || f.Code != "configuration" {
+		t.Fatalf("removed stateDir not refused with configuration fault: %v", err)
+	}
+	if _, statErr := os.Stat(r.stateDir); !os.IsNotExist(statErr) {
+		t.Fatalf("removed stateDir was recreated on Start: %v", statErr)
+	}
+	// Negative control: restoring valid 0700 stateDir allows Start to succeed.
+	if err := os.Mkdir(r.stateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	child, err := r.Start(context.Background(), []string{"srf-identity-surface", "view", "--container", "srf-id-demo"})
+	if err != nil {
+		t.Fatalf("restored stateDir refused: %v", err)
+	}
+	child.Close()
+}

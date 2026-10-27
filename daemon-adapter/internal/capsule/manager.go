@@ -120,6 +120,8 @@ type Manager struct {
 	quarantined map[string]bool
 	destroying  map[string]bool
 	pending     map[string]*pendingInput
+	inputEpochs map[string]uint64
+	capturing   map[string]int
 	used        map[string]bool
 	refresh     map[string]bool
 	views       map[string]bool
@@ -180,7 +182,7 @@ func NewManager(cfg Config, r cli.Runner, clock cli.Clock) (*Manager, error) {
 		copyProfiles[id] = p
 	}
 	cfg.Profiles = copyProfiles
-	return &Manager{cfg: cfg, runner: r, clock: clock, bindings: make(map[string]Binding), quarantined: make(map[string]bool), destroying: make(map[string]bool), pending: make(map[string]*pendingInput), used: make(map[string]bool), refresh: make(map[string]bool), views: make(map[string]bool)}, nil
+	return &Manager{cfg: cfg, runner: r, clock: clock, bindings: make(map[string]Binding), quarantined: make(map[string]bool), destroying: make(map[string]bool), pending: make(map[string]*pendingInput), inputEpochs: make(map[string]uint64), capturing: make(map[string]int), used: make(map[string]bool), refresh: make(map[string]bool), views: make(map[string]bool)}, nil
 }
 func withinRAM(path string) bool {
 	return path == "/dev/shm" || len(path) > 9 && path[:9] == "/dev/shm/" && filepath.Clean(path) == path
@@ -563,6 +565,7 @@ func (m *Manager) Capture(ctx context.Context, id string) (Binding, NativeFrame,
 		m.mu.Unlock()
 		return Binding{}, NativeFrame{}, fault("POLICY", "input must be drained before capture")
 	}
+	epoch := m.beginCapture(id)
 	profile := m.cfg.Profiles[b.Surface.ProfileID]
 	args := []string{"frame", "--container", b.Container}
 	if b.Window != "" {
@@ -574,11 +577,12 @@ func (m *Manager) Capture(ctx context.Context, id string) (Binding, NativeFrame,
 	after := m.clock()
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	defer m.endCapture(id)
 	current, ok := m.bindings[id]
 	if !ok || current.Surface.State != "active" || m.destroying[id] || current.Container != b.Container || current.RunID != b.RunID {
 		return Binding{}, NativeFrame{}, fault("surface", "capture requires an active surface")
 	}
-	if m.hasPending(id) {
+	if m.hasPending(id) || m.inputEpochs[id] != epoch {
 		return Binding{}, NativeFrame{}, fault("POLICY", "input must be drained before capture")
 	}
 	b = current
@@ -691,7 +695,7 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 		return nil, cli.Unsupported("input action")
 	}
 	run, cancel := context.WithCancel(ctx)
-	pending := &pendingInput{surface: q.SurfaceID, cancel: cancel}
+	pending := &pendingInput{surface: q.SurfaceID, epoch: m.nextInputEpoch(q.SurfaceID), cancel: cancel}
 	m.pending[q.ProposalID] = pending
 	m.used[q.ProposalID] = true
 	before := m.clock()

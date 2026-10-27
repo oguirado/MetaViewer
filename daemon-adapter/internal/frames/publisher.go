@@ -144,7 +144,7 @@ func (p *Publisher) Publish(id string, b capsule.Binding, f capsule.NativeFrame)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	old, exists := p.surfaces[id]
-	if p.closed || id == "" || id != b.Surface.SurfaceID || b.Container != f.Generation || f.Seq == 0 || (exists && (old.native != f.Generation || f.Seq <= old.seq)) || (!exists && len(p.surfaces) >= p.cfg.MaxSurfaces) || f.Width < 1 || f.Height < 1 || f.Width > b.Surface.Geometry.W || f.Height > b.Surface.Geometry.H || uint64(f.Width) > p.cfg.MaxPixels/uint64(f.Height) || uint64(f.Width)*uint64(f.Height) > uint64(p.cfg.MaxFrameBytes)/3 || (b.Window != "" && (f.Window == nil || f.Window.ID != b.Window || f.Window.W != f.Width || f.Window.H != f.Height)) {
+	if p.closed || p.output == nil || id == "" || id != b.Surface.SurfaceID || b.Container != f.Generation || f.Seq == 0 || (exists && (old.native != f.Generation || f.Seq <= old.seq)) || (!exists && len(p.surfaces) >= p.cfg.MaxSurfaces) || f.Width < 1 || f.Height < 1 || f.Width > b.Surface.Geometry.W || f.Height > b.Surface.Geometry.H || uint64(f.Width) > p.cfg.MaxPixels/uint64(f.Height) || uint64(f.Width)*uint64(f.Height) > uint64(p.cfg.MaxFrameBytes)/3 || (b.Window != "" && (f.Window == nil || f.Window.ID != b.Window || f.Window.W != f.Width || f.Window.H != f.Height)) {
 		return Ref{}, frameError()
 	}
 	encoded, e := p.readSource(b.FramesRoot, f.Path)
@@ -239,7 +239,7 @@ func (p *Publisher) Release(id string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	s, ok := p.surfaces[id]
-	if p.closed || !ok {
+	if p.closed || p.output == nil || !ok {
 		return frameError()
 	}
 	for len(s.refs) > 0 {
@@ -278,6 +278,19 @@ func (p *Publisher) Close() error {
 	if len(errs) > 0 {
 		return errors.Join(errs...)
 	}
+	var closeErrs []error
+	if p.output != nil {
+		closeErrs = append(closeErrs, p.output.Close())
+		p.output = nil
+	}
+	if p.root != nil {
+		closeErrs = append(closeErrs, p.root.Close())
+		p.root = nil
+	}
+	if e := os.Remove(p.outputPath); e != nil && !errors.Is(e, os.ErrNotExist) {
+		closeErrs = append(closeErrs, e)
+		return errors.Join(closeErrs...)
+	}
 	p.closed = true
-	return errors.Join(p.output.Close(), p.root.Close(), os.Remove(p.outputPath))
+	return errors.Join(closeErrs...)
 }

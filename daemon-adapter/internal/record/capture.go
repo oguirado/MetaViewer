@@ -169,11 +169,15 @@ func (m *Manager) capture(ctx context.Context, requestID, id string, r *recordin
 		evicted += r.frames[dropped].bytes
 		dropped++
 	}
+	removedBytes := uint64(0)
 	for i := uint64(0); i < dropped; i++ {
 		if err = os.Remove(r.frames[i].path); err != nil {
+			r.frames = r.frames[i:]
+			r.size -= removedBytes
 			_ = os.Remove(path)
 			return nil, err
 		}
+		removedBytes += r.frames[i].bytes
 	}
 	r.frames = append(r.frames[dropped:], frame{path: path, hash: f.Hash, bytes: size, generation: generation})
 	r.size = r.size - evicted + size
@@ -233,16 +237,21 @@ func (m *Manager) export(base Event, r *recording) (result Event, exportErr erro
 	defer func() {
 		if !complete {
 			var removeErr error
+			var pathStat syscall.Stat_t
 			fdInfo, fErr := destination.Stat()
-			pathInfo, lErr := os.Lstat(d.Path)
-			if fErr == nil && lErr == nil && os.SameFile(fdInfo, pathInfo) {
-				removeErr = syscall.Unlinkat(int(parent.Fd()), baseName)
-				if errors.Is(removeErr, os.ErrNotExist) || errors.Is(removeErr, syscall.ENOENT) {
-					removeErr = nil
+			lErr := syscall.Fstatat(int(parent.Fd()), baseName, &pathStat, 0x100)
+			if fErr == nil && lErr == nil {
+				if fdStat, ok := fdInfo.Sys().(*syscall.Stat_t); ok && fdStat.Dev == pathStat.Dev && fdStat.Ino == pathStat.Ino {
+					removeErr = syscall.Unlinkat(int(parent.Fd()), baseName)
+					if errors.Is(removeErr, os.ErrNotExist) || errors.Is(removeErr, syscall.ENOENT) {
+						removeErr = nil
+					}
 				}
+			} else if errors.Is(lErr, os.ErrNotExist) || errors.Is(lErr, syscall.ENOENT) {
+				lErr = nil
 			}
 			closeErr := destination.Close()
-			exportErr = errors.Join(exportErr, closeErr, removeErr)
+			exportErr = errors.Join(exportErr, fErr, lErr, closeErr, removeErr)
 		}
 		_ = parent.Close()
 	}()

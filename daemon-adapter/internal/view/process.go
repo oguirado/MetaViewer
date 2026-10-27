@@ -146,15 +146,8 @@ func stateDirInfo(path string) (os.FileInfo, error) {
 		}
 	}()
 	if path != "/" {
-		parts := strings.Split(path[1:], "/")
-		for i, part := range parts {
+		for _, part := range strings.Split(path[1:], "/") {
 			next, err := syscall.Openat(fd, part, flags, 0)
-			if err == syscall.ENOENT && i == len(parts)-1 {
-				if err = syscall.Mkdirat(fd, part, 0700); err != nil && err != syscall.EEXIST {
-					return nil, err
-				}
-				next, err = syscall.Openat(fd, part, flags, 0)
-			}
 			if err != nil {
 				return nil, err
 			}

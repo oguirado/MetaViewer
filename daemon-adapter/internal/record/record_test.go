@@ -636,8 +636,18 @@ func TestRingEvictionAtomicOnSecondUnlinkFailure(t *testing.T) {
 	if _, err := m.Poll(ctx, "p3", "r"); err == nil {
 		t.Fatal("expected second unlink failure")
 	}
-	if len(m.records["r"].frames) != 2 || m.records["r"].size != smallSize*2 {
-		t.Fatalf("partial eviction mutated state: frames=%d size=%d (want 2, %d)", len(m.records["r"].frames), m.records["r"].size, smallSize*2)
+	if len(m.records["r"].frames) != 1 || m.records["r"].size != smallSize {
+		t.Fatalf("failed eviction did not commit removed prefix: frames=%d size=%d (want 1, %d)", len(m.records["r"].frames), m.records["r"].size, smallSize)
+	}
+	var sum uint64
+	for i, f := range m.records["r"].frames {
+		if _, statErr := os.Stat(f.path); statErr != nil {
+			t.Fatalf("failed eviction left unlinked frame %d referenced: %v", i, statErr)
+		}
+		sum += f.bytes
+	}
+	if m.records["r"].size != sum {
+		t.Fatalf("r.size=%d != sum(frames)=%d", m.records["r"].size, sum)
 	}
 	entries, err := os.ReadDir(m.root)
 	if err != nil || len(entries) != 1 {
@@ -771,5 +781,71 @@ func TestExportFailureAfterReplaceSparesReplacement(t *testing.T) {
 	}
 	if _, err := os.Stat(dest2); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("ordinary failed export left partial file: %v", err)
+	}
+}
+
+func TestExportFailureWithRenamedAncestorUnlinksPartialFile(t *testing.T) {
+	source, reply, size := fixture(t)
+	runner := &fakeRunner{reply: reply}
+	root := t.TempDir()
+	ancestor := filepath.Join(root, "ancestor")
+	if err := os.Mkdir(ancestor, 0700); err != nil {
+		t.Fatal(err)
+	}
+	renamed := filepath.Join(root, "renamed")
+	dest := filepath.Join(ancestor, "capture.tar")
+	surf := Surface{Family: "srf-identity-surface", Container: "capsule", Window: "w1"}
+	_ = setSurfaceFramesRoot(&surf, filepath.Dir(source))
+	m, err := NewManager(Config{
+		Runner:      runner,
+		Clock:       func() uint64 { return 10 },
+		OriginNS:    100,
+		BinDir:      t.TempDir(),
+		Surfaces:    map[string]Surface{"s": surf},
+		Destination: &Destination{CapabilityID: "cap", Path: dest},
+		MemoryBytes: size * 4,
+		RingBytes:   size,
+		MaxFPS:      30,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+	ctx := context.Background()
+	if _, err := m.Handle(ctx, disk(dest, "cap")); err != nil {
+		t.Fatal(err)
+	}
+	events, err := m.Poll(ctx, "poll", "r")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownedPath := events[0].RAMPath
+	const sparseLen = 512 << 20
+	if err := os.Truncate(ownedPath, sparseLen); err != nil {
+		t.Fatal(err)
+	}
+	m.records["r"].frames[0].bytes = sparseLen
+	done := make(chan error, 1)
+	go func() {
+		for {
+			if _, sErr := os.Lstat(dest); sErr == nil {
+				if rErr := os.Rename(ancestor, renamed); rErr != nil {
+					done <- rErr
+					return
+				}
+				done <- os.Truncate(ownedPath, 0)
+				return
+			}
+		}
+	}()
+	if _, err := m.Handle(ctx, stop("disk_stop")); err == nil {
+		t.Fatal("expected export failure after truncated frame")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	renamedDest := filepath.Join(renamed, "capture.tar")
+	if _, err := os.Stat(renamedDest); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed export leaked partial file across ancestor rename: %v", err)
 	}
 }

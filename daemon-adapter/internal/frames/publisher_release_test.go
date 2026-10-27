@@ -2,6 +2,7 @@ package frames
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -133,6 +134,37 @@ func TestR1039CloseRetryableAndToleratesENOENT(t *testing.T) {
 		t.Fatalf("output directory still exists after successful Close retry: %v", err)
 	}
 	// Negative control: Close after success is a nil no-op.
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close after success failed: %v", err)
+	}
+}
+
+func TestCloseOutputPathObstructionRetryable(t *testing.T) {
+	root, b, f := ramFixture(t)
+	p := publisher(t, root)
+	if _, err := p.Publish("a", b, f); err != nil {
+		t.Fatal(err)
+	}
+	stray := filepath.Join(p.outputPath, "stray")
+	if err := os.WriteFile(stray, []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Close(); err == nil {
+		t.Fatal("Close succeeded despite obstructed outputPath")
+	}
+	if p.closed {
+		t.Fatal("failed outputPath removal marked publisher closed")
+	}
+	if err := os.Remove(stray); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close retry after removing stray failed: %v", err)
+	}
+	if _, err := os.Stat(p.outputPath); !os.IsNotExist(err) {
+		t.Fatalf("output directory still exists after Close retry: %v", err)
+	}
+	// Negative control: Close after success stays a nil no-op.
 	if err := p.Close(); err != nil {
 		t.Fatalf("Close after success failed: %v", err)
 	}
