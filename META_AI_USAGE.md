@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 269 | 55 | 214 |
-| Lanes finished OK | 269 | 55 | 214 |
-| Agent steps | 13,811 | 2,705 | 11,106 |
-| Lane-hours of agent work | 35.4 | 5.2 | 30.1 |
-| Fresh input tokens | 58,356,891 | 11,482,034 | 46,874,857 |
-| Cache-read input tokens | 1,270,459,822 | 226,255,212 | 1,044,204,610 |
+| Lanes launched | 272 | 55 | 217 |
+| Lanes finished OK | 272 | 55 | 217 |
+| Agent steps | 13,917 | 2,705 | 11,212 |
+| Lane-hours of agent work | 35.6 | 5.2 | 30.4 |
+| Fresh input tokens | 58,764,546 | 11,482,034 | 47,282,512 |
+| Cache-read input tokens | 1,276,466,785 | 226,255,212 | 1,050,211,573 |
 | Prompt cache hit % | 95.6 | 95.2 | 95.7 |
-| Output tokens | 12,559,870 | 2,135,708 | 10,424,162 |
-| Thinking tokens | 6,598,882 | 1,050,039 | 5,548,843 |
-| Cost (USD) | 10.8886 | 2.0279 | 8.8607 |
-| Cost per lane (USD) | 0.0405 | 0.0369 | 0.0414 |
+| Output tokens | 12,637,775 | 2,135,708 | 10,502,067 |
+| Thinking tokens | 6,642,007 | 1,050,039 | 5,591,968 |
+| Cost (USD) | 10.9569 | 2.0279 | 8.9291 |
+| Cost per lane (USD) | 0.0403 | 0.0369 | 0.0411 |
 
-Rooms: 58. Peak concurrent lanes [MEASURED from lane start/end]: 24.
+Rooms: 59. Peak concurrent lanes [MEASURED from lane start/end]: 24.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -49,7 +49,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | plan | 12 | 92.6 | 0.3072 |
 | release | 5 | 93.2 | 0.0945 |
 | research | 14 | 94.6 | 0.5673 |
-| review | 47 | 94.4 | 1.393 |
+| review | 50 | 94.4 | 1.4613 |
 | test | 12 | 95.6 | 0.5657 |
 | testing | 38 | 95.6 | 1.5247 |
 | ui | 13 | 96.6 | 0.9938 |
@@ -117,6 +117,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvkp | conductor | Oct 27 07:32 | release | 5 | 93.2 | 0.0945 | Prove with Meta Muse Spark 1.3 that the capsule-ui-kit repository holds no secret, personal data or unsafe workflow in any reachable ref before the developer makes it public, and design its full code router. |
 | mvr2c | conductor | Oct 27 08:01 | testing | 8 | 96.9 | 0.4935 | Context-engineer the round-2 external testing prompts (Jules and ChatGPT, T1-T8): embed verbatim excerpts of the software papers and OmniCodex language books, which the web testers cannot access, so each tester runs a complete, evidence-driven job on the public repo. |
 | mvui9 | UI orchestrator | Oct 27 08:17 | ui | 4 | 97.1 | 0.2974 | Operator saw no recording menus, screenshot action or capsule action icons on wall tiles: add per-tile record-for-AI/screenshot/recording chrome over the new closed capture facade, adopt kit 0.2.1 tile actions and anchors, and audit every capsule action icon. |
+| mvrv6 | conductor | Oct 27 08:49 | review | 3 | 93.6 | 0.0684 | Verify the findings (1 critical, 6 high, 10 medium) of the Gemini Argon cross-review of the day-2 integrations before any fix, and turn confirmed ones into Sol fix units. |
 
 ## Every lane
 
@@ -391,6 +392,9 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui9 | T | Per-tile capsule chrome on the wall | Oct 27 08:18 | yes | 100 | 97.4 | 0.079043 |
 | mvui9 | A | Kit 0.2.1 adoption, capture mounting and tile-chrome fixture | Oct 27 08:18 | yes | 100 | 96.3 | 0.111255 |
 | mvui9 | I | Capsule action icon and anchor audit | Oct 27 08:18 | yes | 102 | 98.0 | 0.075807 |
+| mvrv6 | d2adapter | Verify Argon findings d2adapter | Oct 27 08:49 | yes | 39 | 94.5 | 0.024701 |
+| mvrv6 | d2agents | Verify Argon findings d2agents | Oct 27 08:49 | yes | 34 | 92.7 | 0.023151 |
+| mvrv6 | d2uiel | Verify Argon findings d2uiel | Oct 27 08:49 | yes | 33 | 93.4 | 0.020509 |
 
 ## Method
 
