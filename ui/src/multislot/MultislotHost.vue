@@ -76,6 +76,9 @@ const props = defineProps({
   hidden: { type: Boolean, default: false },
   groupId: { type: String, default: '' },
   placementIndex: { type: Number, default: null },
+  // MVUI16 lane P (ARG-pmui-3): dock target displaced by the current float.
+  lastDockGroupId: { type: String, default: '' },
+  lastDockIndex: { type: Number, default: null },
   floatX: { type: Number, default: null },
   floatY: { type: Number, default: null },
   floatWidth: { type: Number, default: null },
@@ -197,6 +200,10 @@ watch(() => props.folded, (value) => { foldedRef.value = value; });
 watch(() => props.floating, (value) => { floatingRef.value = value; });
 watch(() => props.surfaceHidden, (value) => { surfaceVisibleRef.value = !value; });
 watch(() => props.terminalHidden, (value) => { terminalVisibleRef.value = !value; });
+// MVUI16 lane P (ARG-pmui-6, memory-safe): the host stays mounted while the
+// rail switches capsules, so placement refusal + drafts reset on capsule id.
+// Primitive-id getter; the local refs it resets are never read by the getter.
+watch(() => props.capsuleId, () => { placementRefusal.value = null; placementGroup.value = ''; placementIndexInput.value = ''; });
 
 /** @type {ReturnType<typeof createSideTerminalFacade> | null} */
 let facade = null;
@@ -369,26 +376,37 @@ function onSubmitIntent(intent) {
     requestPlacement(type);
     return;
   }
+  // Explicit props await parent acceptance. Omitted props retain the local
+  // presentation mode for standalone hosts without a controlling parent.
+  const supplied = instance?.vnode.props ?? {};
+  const controlled = (/** @type {string} */ camel, /** @type {string} */ kebab = camel) =>
+    Object.prototype.hasOwnProperty.call(supplied, camel) || Object.prototype.hasOwnProperty.call(supplied, kebab);
   if (type === 'input-mode-read' || type === 'input-mode-write') {
+    // MVUI16D lane P (L2-1): input mode is a purely local lease toggle.
     emit('update:inputMode', type === 'input-mode-write' ? 'write' : 'read');
-  } else if (type === 'copy-id') {
-    void runCopy();
-  } else {
-    // Explicit props await parent acceptance. Omitted props retain the local
-    // presentation mode for standalone hosts without a controlling parent.
-    const supplied = instance?.vnode.props ?? {};
-    const controlled = (/** @type {string} */ camel, /** @type {string} */ kebab = camel) =>
-      Object.prototype.hasOwnProperty.call(supplied, camel) || Object.prototype.hasOwnProperty.call(supplied, kebab);
-    if (!controlled('folded') && (type === 'fold' || type === 'unfold')) foldedRef.value = type === 'fold';
-
-    if (!controlled('surfaceHidden', 'surface-hidden') && (type === 'hide-surface' || type === 'show-surface')) surfaceVisibleRef.value = type === 'show-surface';
-    if (!controlled('terminalHidden', 'terminal-hidden') && (type === 'hide-terminal' || type === 'show-terminal')) terminalVisibleRef.value = type === 'show-terminal';
+    return;
   }
-  // Bind to AiMultiSlot.multislotDomIds().root (pinned by the mounted test),
-  // never substitute a surface id for a slot id.
-  emit('submit-intent', type === 'fold' || type === 'unfold'
-    ? buildMultislotFoldIntent(type, props.capsuleId)
-    : intent, props.capsuleId);
+  if (type === 'copy-id') {
+    void runCopy();
+    return;
+  }
+  if (type === 'fold' || type === 'unfold') {
+    if (!controlled('folded')) foldedRef.value = type === 'fold';
+    // Bind to AiMultiSlot.multislotDomIds().root (pinned by the mounted test),
+    // never substitute a surface id for a slot id.
+    emit('submit-intent', buildMultislotFoldIntent(type, props.capsuleId), props.capsuleId);
+    return;
+  }
+  // MVUI16D lane P (L2-1): half-view toggles are purely local presentation.
+  // Only exact ui_intent/v0.2 bodies (fold, unfold, placement) are host-bound.
+  if (type === 'hide-surface' || type === 'show-surface') {
+    if (!controlled('surfaceHidden', 'surface-hidden')) surfaceVisibleRef.value = type === 'show-surface';
+    return;
+  }
+  if (type === 'hide-terminal' || type === 'show-terminal') {
+    if (!controlled('terminalHidden', 'terminal-hidden')) terminalVisibleRef.value = type === 'show-terminal';
+    return;
+  }
 }
 
 /** Build only admitted closed bodies; never mutate the presentation here.
@@ -405,8 +423,11 @@ function requestPlacement(type) {
       const root = /** @type {HTMLElement|null} */ (slotWrap.value);
       const box = roundFloatBox(props.measureSlotBox ? props.measureSlotBox() : root?.querySelector?.('.ai-slot')?.getBoundingClientRect());
       body = buildMultislotFloatIntent(props.capsuleId, box);
-    } else if (type === 'dock-back') body = buildMultislotMoveIntent(props.capsuleId, props.groupId || MULTISLOT_DOCK_GROUP,
-      props.placementIndex ?? MULTISLOT_DOCK_INDEX);
+    // MVUI16 lane P (ARG-pmui-3): dock-back returns to the pre-float dock
+    // target when the parent kept one, else the live props, else the default.
+    } else if (type === 'dock-back') body = buildMultislotMoveIntent(props.capsuleId,
+      props.lastDockGroupId || props.groupId || MULTISLOT_DOCK_GROUP,
+      props.lastDockIndex ?? props.placementIndex ?? MULTISLOT_DOCK_INDEX);
     else {
       const build = op === 'tab' ? buildMultislotTabIntent : buildMultislotMoveIntent;
       body = build(props.capsuleId, placementGroup.value, parsePlacementIndex(placementIndexInput.value));

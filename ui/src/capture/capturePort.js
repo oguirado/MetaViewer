@@ -509,11 +509,18 @@ function freshEntry() {
 const ACTIVE_PHASES = Object.freeze(['starting', 'recording', 'stopping']);
 
 /**
+ * Manifest row cap, mirroring the host seam (MVUI16B lane R): the store
+ * keeps at most this many rows, however large a list reply arrives.
+ * @type {number}
+ */
+export const CAPTURE_ROWS_CAP = 64;
+
+/**
  * Build a Vue-reactive capture store over a port. Subscribes exactly once
  * at creation; `dispose()` releases that subscription, after which actions
  * resolve to CAPTURE_UNAVAILABLE without touching the facade.
  * @param {CapturePort} port Port from `createCapturePort`.
- * @returns {{bySurface:Record<string,CaptureSurfaceEntry>,rows:CaptureRow[],available:boolean,port:CapturePort,toggleRecord:(surfaceId:string)=>Promise<CaptureRecordStartResult|CaptureRecordStopResult>,screenshot:(surfaceId:string)=>Promise<CaptureScreenshotResult>,refresh:()=>Promise<CaptureListResult>,exportCapture:(captureId:string)=>Promise<CaptureExportResult>,dispose:()=>void}} Reactive store.
+ * @returns {{bySurface:Record<string,CaptureSurfaceEntry>,rows:CaptureRow[],available:boolean,port:CapturePort,toggleRecord:(surfaceId:string)=>Promise<CaptureRecordStartResult|CaptureRecordStopResult>,screenshot:(surfaceId:string)=>Promise<CaptureScreenshotResult>,refresh:(surfaceId?:string)=>Promise<CaptureListResult>,exportCapture:(captureId:string)=>Promise<CaptureExportResult>,dispose:()=>void}} Reactive store.
  */
 export function createCaptureState(port) {
   if (!isRecord(port)
@@ -532,6 +539,18 @@ export function createCaptureState(port) {
   const pendingStarts = new Map();
   /** @type {Set<string>} Capture ids with an export in flight. */
   const exporting = new Set();
+  // MVUI16B lane R: refresh coalescing slots. At most one list call is in
+  // flight and at most one follow-up run is queued; every caller that
+  // arrives while busy shares the single queued promise, so a burst of
+  // sealed events, stops and screenshots issues at most two host calls.
+  // Fixed slots only: no waiter list ever grows.
+  let refreshBusy = false;
+  /** @type {Promise<CaptureListResult>|null} */
+  let refreshQueuedPromise = null;
+  /** @type {{resolve:(result:CaptureListResult)=>void,reject:(error:unknown)=>void}|null} */
+  let refreshQueuedSettle = null;
+  /** @type {string|undefined} Surface filter for the queued run; undefined lists all. */
+  let refreshQueuedFilter = undefined;
 
   /**
    * @param {string} surfaceId
@@ -556,6 +575,9 @@ export function createCaptureState(port) {
     entry.frames = event.frames;
     entry.elapsedMs = event.elapsed_ms;
     entry.recordingId = ACTIVE_PHASES.includes(event.phase) ? event.recording_id : null;
+    // MVUI16B lane R (L2-2): a sealed row just landed on the host; relist
+    // so the manifest shows it. Fire-and-forget, coalesced with any run.
+    if (event.phase === 'sealed') queueAutoRefresh(event.surface_id);
   }
 
   const unsubscribe = typed.subscribe(applyEvent);
@@ -580,6 +602,9 @@ export function createCaptureState(port) {
         entry.frames = 0;
         entry.elapsedMs = 0;
         entry.lastCode = '';
+        // MVUI16B lane R (L2-2): the stop sealed a host row; relist even
+        // when its event never arrives. Coalesces with the event refresh.
+        queueAutoRefresh(surfaceId);
       } else {
         if (entry.phase === 'stopping') entry.phase = previousPhase;
         entry.lastCode = stopped.code;
@@ -626,6 +651,8 @@ export function createCaptureState(port) {
     if (result.ok) {
       entry.lastShot = result.shot;
       entry.lastCode = '';
+      // MVUI16B lane R (L2-2): a screenshot sealed a host row; relist.
+      queueAutoRefresh(surfaceId);
     } else {
       entry.lastCode = result.code;
     }
@@ -633,14 +660,146 @@ export function createCaptureState(port) {
   }
 
   /**
-   * @returns {Promise<CaptureListResult>} Replaces `rows` on success.
+   * @param {unknown} surfaceId Requested surface filter.
+   * @returns {string|undefined} Usable filter, else undefined for all rows.
    */
-  async function refresh() {
-    if (disposed) return unavailable();
+  function normalizeRefreshFilter(surfaceId) {
+    return typeof surfaceId === 'string'
+      && surfaceId.length > 0
+      && surfaceId !== '__proto__'
+      && surfaceId !== 'constructor'
+      && surfaceId !== 'prototype'
+      ? surfaceId
+      : undefined;
+  }
+
+  /**
+   * Store one list reply: dedupe by id (first wins), cap at
+   * CAPTURE_ROWS_CAP. Unfiltered runs replace every row; a surface
+   * filter merges fresh rows for that surface ahead of the kept rows
+   * for the other surfaces, so per-surface callers never drop rows
+   * they did not ask about. The scan stops once the cap is full, so
+   * a hostile oversized reply costs O(cap) added space.
+   * @param {ReadonlyArray<CaptureRow>} incoming Validated host rows.
+   * @param {string|undefined} filter Surface filter, else all rows.
+   */
+  function storeRows(incoming, filter) {
+    /** @type {Set<string>} */
+    const seen = new Set();
+    /** @type {CaptureRow[]} */
+    const next = [];
+    /**
+     * @param {unknown} row Candidate row.
+     * @returns {boolean} False once the cap is full.
+     */
+    function push(row) {
+      if (next.length >= CAPTURE_ROWS_CAP) return false;
+      if (!isRecord(row)) return true;
+      const id = row.id;
+      if (!isId(id) || seen.has(id)) return true;
+      seen.add(id);
+      next.push(/** @type {CaptureRow} */ (row));
+      return next.length < CAPTURE_ROWS_CAP;
+    }
+    if (filter === undefined) {
+      for (const row of incoming) {
+        if (!push(row)) break;
+      }
+    } else {
+      for (const row of incoming) {
+        if (isRecord(row) && row.surface_id === filter && !push(row)) break;
+      }
+      if (next.length < CAPTURE_ROWS_CAP) {
+        for (const row of rows) {
+          if (!isRecord(row) || row.surface_id === filter) continue;
+          if (!push(row)) break;
+        }
+      }
+    }
+    rows.splice(0, rows.length, ...next);
+  }
+
+  /**
+   * @param {string|undefined} filter Surface filter, else all rows.
+   * @returns {Promise<CaptureListResult>} Single host list round trip.
+   */
+  async function runRefresh(filter) {
     const result = await typed.list();
     if (disposed) return unavailable();
-    if (result.ok) rows.splice(0, rows.length, ...result.rows);
+    if (result.ok) storeRows(result.rows, filter);
     return result;
+  }
+
+  /**
+   * Finish one refresh run: start the queued follow-up when one waits,
+   * else release the busy flag. Runs synchronously at settle time, so
+   * the next run (if any) is already in flight before waiters resolve.
+   */
+  function finishRefresh() {
+    const settle = refreshQueuedSettle;
+    const filter = refreshQueuedFilter;
+    refreshQueuedPromise = null;
+    refreshQueuedSettle = null;
+    refreshQueuedFilter = undefined;
+    if (settle === null) {
+      refreshBusy = false;
+      return;
+    }
+    if (disposed) {
+      refreshBusy = false;
+      settle.resolve(unavailable());
+      return;
+    }
+    runRefresh(filter).then(
+      (result) => { finishRefresh(); settle.resolve(result); },
+      (error) => { finishRefresh(); settle.reject(error); },
+    );
+  }
+
+  /**
+   * Relist the host manifest into `rows`. Coalesced: at most one list
+   * call in flight plus one queued follow-up; concurrent callers share
+   * the queued run (an unfiltered request, or a different surface
+   * filter, widens it to the full list). Refusals keep the previous
+   * rows; disposed stores
+   * resolve unavailable without touching the facade.
+   * @param {string} [surfaceId] Optional surface filter: only that
+   *   surface's rows are replaced, other surfaces are kept.
+   * @returns {Promise<CaptureListResult>} The list result of this
+   *   caller's run (the queued run for coalesced callers).
+   */
+  function refresh(surfaceId) {
+    if (disposed) return Promise.resolve(unavailable());
+    const filter = normalizeRefreshFilter(surfaceId);
+    if (!refreshBusy) {
+      refreshBusy = true;
+      return runRefresh(filter).then(
+        (result) => { finishRefresh(); return result; },
+        (error) => { finishRefresh(); throw error; },
+      );
+    }
+    if (refreshQueuedPromise === null) {
+      refreshQueuedFilter = filter;
+      let resolve = (/** @type {CaptureListResult} */ _result) => {};
+      let reject = (/** @type {unknown} */ _error) => {};
+      refreshQueuedPromise = new Promise((done, fail) => { resolve = done; reject = fail; });
+      refreshQueuedSettle = { resolve, reject };
+    } else if (filter === undefined || filter !== refreshQueuedFilter) {
+      // MVUI16D lane R: a coalesced caller for a different surface widens
+      // the queued run to the full list, so neither surface drops rows.
+      refreshQueuedFilter = undefined;
+    }
+    return refreshQueuedPromise;
+  }
+
+  /**
+   * Fire-and-forget relist after a local mutation or host event. Never
+   * rejects into callers; a throwing custom port settles quietly.
+   * @param {string} surfaceId Surface that just sealed a row.
+   */
+  function queueAutoRefresh(surfaceId) {
+    if (disposed) return;
+    refresh(surfaceId).then(undefined, () => {});
   }
 
   /**
@@ -670,6 +829,13 @@ export function createCaptureState(port) {
     disposed = true;
     pendingStarts.clear();
     exporting.clear();
+    // MVUI16B lane R: queued refresh waiters resolve promptly instead of
+    // hanging on the in-flight run; the run itself settles unavailable.
+    const queued = refreshQueuedSettle;
+    refreshQueuedPromise = null;
+    refreshQueuedSettle = null;
+    refreshQueuedFilter = undefined;
+    if (queued !== null) queued.resolve(unavailable());
     unsubscribe();
   }
 

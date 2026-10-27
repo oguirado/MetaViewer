@@ -59,6 +59,10 @@ export const WALL_PRESENTATION_VERBS = Object.freeze(['close', 'hide', 'show', '
  * @property {(id:string) => unknown} [getGroup]
  * @property {(options:{id:string,referencePanel:string,direction:string}) => unknown} [addGroup]
  * @property {(options: WallAddPanelOptions) => WallDockviewPanel} addPanel
+ * @property {Function} [toJSON]
+ * @property {Function} [fromJSON]
+ * @property {number} [width]
+ * @property {number} [height]
  */
 
 /**
@@ -87,11 +91,22 @@ export const WALL_PRESENTATION_VERBS = Object.freeze(['close', 'hide', 'show', '
  */
 
 /**
+ * Committed float geometry in wall pixels. The kit `float` accepts it as an
+ * optional second argument (MVUI16 lane P, ARG-pmui-4); older kit builds
+ * ignore the extra argument and keep their fixed defaults.
+ * @typedef {Object} WallFloatBounds
+ * @property {number} x
+ * @property {number} y
+ * @property {number} width
+ * @property {number} height
+ */
+
+/**
  * @typedef {Object} WallWindowPresentation
  * @property {(id: string) => { hidden: boolean }} state
  * @property {(id: string) => void} show
  * @property {(id: string) => void} hide
- * @property {(id: string) => void} float
+ * @property {(id: string, bounds?: WallFloatBounds) => void} float
  * @property {(id: string) => void} dock
  */
 
@@ -491,6 +506,35 @@ export function createWallWorkspaceController(options = {}) {
     }
   }
 
+  /** Apply a committed float to the existing panel (MVUI16 lane P,
+   * ARG-pmui-4; MVUI16E lane E contract fix). Params mirror the
+   * ui_intent/v0.2 float bounds; anything else refuses without touching
+   * presentation. Geometry rides the kit windows.float bounds argument;
+   * the kit ignores bounds today (kit queue item 15 adds bounds) and the
+   * wall contract forbids any renderer layout round trip, so no geometry
+   * is applied or asserted here.
+   * @param {string} capsuleId @param {any} body @returns {WallAdmissionResult<unknown>} */
+  function applyFloatEcho(capsuleId, body) {
+    const row = findRow(capsuleId);
+    if (!row.ok) return row;
+    if (!api || !windows) return fail('ERR_NOT_READY', 'Placement is not ready.');
+    const p = body?.params;
+    const inRange = (/** @type {any} */ v, /** @type {number} */ min, /** @type {number} */ max) =>
+      Number.isInteger(v) && v >= min && v <= max;
+    if (!p || ![capsuleId, `cuk-ai-slot-${capsuleId}`].includes(p.slot_id)
+        || !inRange(p.x_px, 0, 16383) || !inRange(p.y_px, 0, 16383)
+        || !inRange(p.width_px, 1, 16384) || !inRange(p.height_px, 1, 16384)) {
+      return fail('ERR_INVALID_PLACEMENT', 'Placement is unavailable.');
+    }
+    const panelId = `${WALL_PANEL_ID_PREFIX}${capsuleId}`;
+    const panel = api.getPanel(panelId);
+    if (!panel) return fail('ERR_UNKNOWN_PANEL', `unknown panel "${panelId}"`);
+    try {
+      windows.float(panelId, { x: p.x_px, y: p.y_px, width: p.width_px, height: p.height_px });
+      return succeed(Object.freeze({ panelId }));
+    } catch { return fail('ERR_PRESENTATION_FAILED', 'Placement is unavailable.'); }
+  }
+
   /** Apply a committed move/tab to the existing panel, keeping its live renderer.
    * The caller owns correlation and waits for the authority echo first.
    * @param {string} capsuleId @param {any} body @returns {WallAdmissionResult<unknown>} */
@@ -498,6 +542,7 @@ export function createWallWorkspaceController(options = {}) {
     const row = findRow(capsuleId);
     if (!row.ok) return row;
     if (!api || !windows) return fail('ERR_NOT_READY', 'Placement is not ready.');
+    if (body?.op === 'float') return applyFloatEcho(capsuleId, body);
     if (!['move','tab'].includes(body?.op)) return applyPresentationIntent({ type:body?.op, capsuleId });
     const p = body.params;
     if (!p || ![capsuleId, `cuk-ai-slot-${capsuleId}`].includes(p.slot_id)

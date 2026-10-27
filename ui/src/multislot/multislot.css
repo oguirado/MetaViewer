@@ -126,3 +126,7 @@
 .mv-multislot-placement p { flex-basis:100%; margin:0; }
 .mv-multislot-placement button, .mv-multislot-placement input { color:var(--cuk-semantic-text-primary); background:var(--cuk-semantic-surface-canvas); border:var(--cuk-semantic-border-width) solid var(--cuk-semantic-border-default); border-radius:var(--cuk-semantic-radius-sm); padding:var(--cuk-semantic-spacing-xs); font:inherit; }
 .mv-multislot-placement :disabled { color:var(--cuk-semantic-text-muted); cursor:not-allowed; }
+/* L2-5: the kit slot-header actions (Float/Fold) carry no disabled prop; the
+ * host gates Float through the DOM (syncShellPlacementGate), so the host owns
+ * its disabled presentation too. Same muted/no-drop pair as above. */
+.mv-multislot-host .ai-slot__action:disabled { color:var(--cuk-semantic-text-muted); cursor:not-allowed; }

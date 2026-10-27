@@ -142,8 +142,10 @@ test('sealed recordings list roundtrips through hostBindings and preload with su
     assert.equal(stopped.recording.sealed,true);
   }
 
-  // Without refresh(), renderer state.rows stays empty even though host list() has all 3 sealed rows.
-  assert.deepEqual(captureRowsFor(state,'surface-demo'),[]);
+  // L2-2 auto-refresh: sealed events and stop success already relisted, so the renderer rows equal the host rows for surface-demo with no explicit refresh() (other surface excluded).
+  const autoRows=captureRowsFor(state,'surface-demo');
+  assert.equal(autoRows.length,2);
+  assert.ok(autoRows.every(r=>r.capsuleId==='surface-demo' && r.phase==='sealed' && r.frames===2 && r.elapsedSeconds===4));
   const listed=await state.refresh();
   assert.equal(listed.ok,true);
   assert.equal(listed.rows.length,3);

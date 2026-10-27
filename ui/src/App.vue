@@ -149,8 +149,33 @@ function dispatch(intent) {
   else emit('submit-intent', intent);
 }
 /** Committed placement echoes, keyed by surface; transport acceptance is never optimistic. */
-const placements = ref(/** @type {Record<string, {hidden:boolean, floating:boolean, groupId?:string, index?:number, x?:number, y?:number, width?:number, height?:number}>} */ ({}));
+const placements = ref(/** @type {Record<string, {hidden:boolean, floating:boolean, groupId?:string, index?:number, x?:number, y?:number, width?:number, height?:number, lastDockGroupId?:string, lastDockIndex?:number}>} */ ({}));
 const placementPending = ref(/** @type {Record<string, boolean>} */ ({}));
+/** Failed layout echoes awaiting wall readiness (MVUI16 lane P, ARG-pmui-4):
+ * one entry per capsule, retried once on wall @ready, then dropped. Plain
+ * non-reactive Map with a fixed cap so pre-ready commits cannot grow it. */
+/** @type {Map<string, unknown>} */
+const pendingEchoRetry = new Map();
+const PENDING_ECHO_RETRY_LIMIT = 8;
+/** @param {string} capsuleId @param {unknown} body */
+function stashLayoutEchoRetry(capsuleId, body) {
+  if (pendingEchoRetry.size >= PENDING_ECHO_RETRY_LIMIT && !pendingEchoRetry.has(capsuleId)) {
+    // The size guard proves a key exists; narrow the undefined case
+    // explicitly instead of casting it away.
+    const oldest = pendingEchoRetry.keys().next().value;
+    if (oldest !== undefined) pendingEchoRetry.delete(oldest);
+  }
+  pendingEchoRetry.set(capsuleId, body);
+}
+function retryPendingEchoes() {
+  if (!pendingEchoRetry.size || !wall.value?.applyLayoutEcho) return;
+  const pending = [...pendingEchoRetry];
+  pendingEchoRetry.clear();
+  for (const [capsuleId, body] of pending) {
+    try { wall.value.applyLayoutEcho(capsuleId, body); }
+    catch { /* Presentation-only; authority truth is already committed. */ }
+  }
+}
 const selectedPlacement = computed(() => placements.value[selectedSurface.value?.id ?? ''] ?? { hidden: false, floating: false });
 /** Closed placement boundary, including direct programmatic submissions.
  * @param {unknown} input @param {string} capsuleId */
@@ -207,14 +232,37 @@ async function dispatchMultislot(intent, capsuleId) {
       const next = { ...previous };
       if (body.op === 'hide' || body.op === 'show') next.hidden = body.op === 'hide';
       else if (body.op === 'float') {
+        // MVUI16 lane P (ARG-pmui-3): remember the displaced dock target for
+        // dock-back; the groupId/index deletions below stay untouched.
+        if (previous.groupId !== undefined) next.lastDockGroupId = previous.groupId;
+        else delete next.lastDockGroupId;
+        if (previous.index !== undefined) next.lastDockIndex = previous.index;
+        else delete next.lastDockIndex;
         delete next.groupId; delete next.index;
         Object.assign(next, { floating:true, x:p.x_px, y:p.y_px, width:p.width_px, height:p.height_px });
       } else {
         delete next.x; delete next.y; delete next.width; delete next.height;
+        delete next.lastDockGroupId; delete next.lastDockIndex;
         Object.assign(next, { floating:false, groupId:p.group_id, index:p.index });
       }
-      wall.value?.applyLayoutEcho?.(capsuleId, body);
+      // MVUI16 lane P (ARG-pmui-4): the wall echo is presentation-only. A
+      // failed echo surfaces a typed outcome (and a single retry on @ready)
+      // but never skips the committed placements update: the commit reflects
+      // journaled authority truth. Non-object replies (unmounted wall, test
+      // stubs returning a count) are not failures.
+      const echo = wall.value?.applyLayoutEcho?.(capsuleId, body);
+      // MVUI16D lane P (JUDGE_p1 note 1): this new echo supersedes any older
+      // failed echo for the capsule, so a stale body can never replay on
+      // @ready over the newer commit. A failed new echo re-stashes below.
+      pendingEchoRetry.delete(capsuleId);
       placements.value = { ...placements.value, [capsuleId]:next };
+      if (echo && typeof echo === 'object' && echo.ok === false) {
+        stashLayoutEchoRetry(capsuleId, body);
+        if (hostActive) {
+          const code = typeof echo.error?.code === 'string' && echo.error.code ? echo.error.code : 'HOST_REQUEST_REFUSED';
+          hostOutcome.value = { code, message: '', tone: 'refusal' };
+        }
+      }
     } finally {
       if (hostActive) placementPending.value = { ...placementPending.value, [capsuleId]:false };
     }
@@ -227,7 +275,12 @@ async function dispatchMultislot(intent, capsuleId) {
         || body.params?.slot_id !== `cuk-ai-slot-${capsuleId}`) {
       hostOutcome.value = { code: 'LAYOUT_ILLEGAL_TRANSITION', message: '', tone: 'refusal' }; return;
     }
-    if (placements.value[capsuleId]?.hidden) return;
+    // MVUI16 lane P (ARG-pmui-5): hidden fold/unfold is a typed refusal, never silent.
+    if (placements.value[capsuleId]?.hidden) { hostOutcome.value = { code:'LAYOUT_ILLEGAL_TRANSITION', message:'', tone:'refusal' }; return; }
+    // MVUI16D lane P (L2-1): fold/unfold forward unchanged. The kit slot id
+    // is the pinned wire contract (mvui3/mvui6/mvui12) and the host resolves
+    // it (core/src/serve/layout.rs slot_surface strips the kit prefix), so
+    // no renderer-side slot mapping belongs here.
     const visibility = surface.visibility;
     const submitIntent = props.authorityHost?.intent;
     const accepted = !props.authorityHost ? (dispatch(intent), true)
@@ -241,7 +294,18 @@ async function dispatchMultislot(intent, capsuleId) {
     }
     return;
   }
-  dispatch(intent);
+  // MVUI16D lane P (L2-1): purely local multislot toggles (hide/show surface
+  // view, hide/show terminal, input mode, copy id) and unknown bodies never
+  // reach the host: op-less, they would fall into authority.propose with a
+  // non-action_proposal body. Op computation mirrors dispatch() below: every
+  // op-bearing body keeps its dispatch path (exact ui_intent/v0.2 to the
+  // intent port, legacy type-events to the local emit boundary pinned by
+  // mvui3), as do creative service intents. Placement/fold returned above.
+  const record = /** @type {{schema?:string,op?:string,type?:string}} */ (intent);
+  const op = record?.op ?? (['take_control', 'release_control', 'fold', 'unfold'].includes(record?.type ?? '') ? record.type : null);
+  if (op || record?.type?.startsWith('creative/')) {
+    dispatch(intent);
+  }
 }
 /** @param {unknown} intent */
 function onCreateCapsule(intent) {
@@ -438,6 +502,9 @@ function revealRows() {
   }
 }
 function onWorkspaceSettled() { if (wallView.value === 'workspace') onSettled(); }
+/** Wall @ready: reveal admitted rows, then replay layout echoes that failed
+ * while the wall was not ready (MVUI16 lane P, ARG-pmui-4). */
+function onWallReady() { revealRows(); retryPendingEchoes(); }
 function onSettled() { settled.value = true; revealRows(); }
 /** @param {any} payload */
 function openCapsule(payload) {
@@ -485,7 +552,7 @@ const chromeWorkspace = markRaw(defineComponent({
         <WallWorkspace v-else-if="!creativeOpen" :key="wallView" :hidden="!rows.length" ref="wall" :workspace-component="chromeWorkspace" :scope="props.scope" :default-profile="props.layout" :storage="workspaceStorage"
           owner-window-id="main-wall" :projection-view="feed" :capture-state="captureAvailable ? captureState : undefined" :display-only="nestedMode.displayOnly" :allow-lost-surface="admitLostRows" :intent-builders="props.runtime?.intentBuilders ?? intentBuilders"
           :control-registry="props.runtime?.controlRegistry ?? controlRegistry" :scheduler="props.runtime?.scheduler ?? scheduler" :tile-scheduler="props.runtime?.tileScheduler ?? tileScheduler"
-          :color-scheme="scheme === 'mv-dark' ? 'dark' : 'light'" density="compact" @ready="revealRows" @wall-settled="onWorkspaceSettled" @activate-surface="selectCapsule" @submit-intent="dispatch">
+          :color-scheme="scheme === 'mv-dark' ? 'dark' : 'light'" density="compact" @ready="onWallReady" @wall-settled="onWorkspaceSettled" @activate-surface="selectCapsule" @submit-intent="dispatch">
           <template #surface="{ surface, capsuleId }">
             <SurfaceCanvas v-if="surface && (!multislotOpen || capsuleId !== selectedSurface?.id)" :surface-id="capsuleId" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :state="surface.attachmentState === 'live' ? 'live' : 'connecting'" />
           </template>
@@ -499,6 +566,7 @@ const chromeWorkspace = markRaw(defineComponent({
           <MultislotHost :capsule-id="selectedSurface.id" :capsule-label="selectedSurface.title" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" :folded="selectedFolded" :hidden="selectedPlacement.hidden" :floating="selectedPlacement.floating"
             :float-x="selectedPlacement.x" :float-y="selectedPlacement.y" :float-width="selectedPlacement.width" :float-height="selectedPlacement.height"
             :group-id="selectedPlacement.groupId" :placement-index="selectedPlacement.index"
+            :last-dock-group-id="selectedPlacement.lastDockGroupId" :last-dock-index="selectedPlacement.lastDockIndex"
             :layout-pending="placementPending[selectedSurface.id] === true" :agent-controlled="selectedSurface.control === 'agent'" v-model:input-mode="inputMode" @submit-intent="dispatchMultislot">
             <template #surface><SurfaceCanvas :surface-id="selectedSurface.id" :generation="selectedSurface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(selectedSurface).frame" :digest="surfaceWitness(selectedSurface).digest" :state="selectedSurface.attachmentState === 'live' ? 'live' : 'connecting'" /></template>
             <template #record><MvRecordingPanel :capsule-id="selectedSurface.id" :export-destination="props.exportDestination" :phase="props.fixture?.key === 'recording' ? 'recording' : 'idle'" :capture-state="captureState" :capture-available="captureAvailable" @submit-intent="dispatch" /></template>
@@ -511,7 +579,9 @@ const chromeWorkspace = markRaw(defineComponent({
       </main>
     </div>
     <ActivityStrip v-if="!nestedMode.displayOnly" :entries="activityFeed" />
-    <StatusBar v-if="!nestedMode.displayOnly" :crumbs="[{ id: 'wall', label: 'Main wall' }]" :shortcuts="[]">
+    <!-- L2-7: strong tone keeps the wall crumb at AA on the sunken bar in
+      mv-light and mv-dark; the kit accent default measures 4.35:1 rendered. -->
+    <StatusBar v-if="!nestedMode.displayOnly" :crumbs="[{ id: 'wall', label: 'Main wall', tone: 'strong' }]" :shortcuts="[]">
       <template #telemetry><span id="shell-feed-status" class="mv-feed-status" role="status"><i aria-hidden="true"></i>{{ snapshot?.envelope ? 'Core connected' : 'Core not connected' }}</span></template>
       <template #shortcuts><span class="mv-shell-caption">{{ rows.length ? `${rows.length} capsules` : 'Ready when you are' }}</span></template>
     </StatusBar>
