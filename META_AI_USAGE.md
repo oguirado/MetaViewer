@@ -19,26 +19,26 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 204 | 55 | 149 |
-| Lanes finished OK | 204 | 55 | 149 |
-| Agent steps | 10,184 | 2,705 | 7,479 |
-| Lane-hours of agent work | 25.9 | 5.2 | 20.7 |
-| Fresh input tokens | 44,560,741 | 11,482,034 | 33,078,707 |
-| Cache-read input tokens | 906,947,190 | 226,255,212 | 680,691,978 |
-| Prompt cache hit % | 95.3 | 95.2 | 95.4 |
-| Output tokens | 9,189,808 | 2,135,708 | 7,054,100 |
-| Thinking tokens | 4,909,282 | 1,050,039 | 3,859,243 |
-| Cost (USD) | 8.1079 | 2.0279 | 6.0801 |
-| Cost per lane (USD) | 0.0397 | 0.0369 | 0.0408 |
+| Lanes launched | 214 | 55 | 159 |
+| Lanes finished OK | 214 | 55 | 159 |
+| Agent steps | 10,565 | 2,705 | 7,860 |
+| Lane-hours of agent work | 27.2 | 5.2 | 21.9 |
+| Fresh input tokens | 46,223,088 | 11,482,034 | 34,741,054 |
+| Cache-read input tokens | 935,780,898 | 226,255,212 | 709,525,686 |
+| Prompt cache hit % | 95.3 | 95.2 | 95.3 |
+| Output tokens | 9,629,466 | 2,135,708 | 7,493,758 |
+| Thinking tokens | 5,169,425 | 1,050,039 | 4,119,386 |
+| Cost (USD) | 8.4198 | 2.0279 | 6.3919 |
+| Cost per lane (USD) | 0.0393 | 0.0369 | 0.0402 |
 
-Rooms: 42. Peak concurrent lanes [MEASURED from lane start/end]: 32.
+Rooms: 46. Peak concurrent lanes [MEASURED from lane start/end]: 32.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 35 | 95.9 | 1.5489 |
+| build | 45 | 95.7 | 1.8607 |
 | context | 42 | 95.9 | 1.9093 |
 | demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
@@ -100,6 +100,10 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0pr | conductor | Oct 27 01:04 | review | 8 | 93.6 | 0.228 | Adversarial pre-integration review of the eight Sol units finished tonight (journal lock, frame_ref v0.2, agent loop, recording, human input, serve and adapter P0 fixes, budget gate), so defects are caught before they land. |
 | mv0tg | conductor | Oct 27 01:06 | testing | 6 | 93.4 | 0.175 | Map every acceptance criterion AC-01..AC-17 to the tests that prove its positive pass and negative control, per component, and specify the missing tests as Sol units, so the v0.2.0 release is provably complete. |
 | mv0mv | conductor | Oct 27 01:08 | review | 3 | 94.9 | 0.0828 | Verify the 16 findings of the second Gemini Argon cross-review (492d6d0..e19feb6: serve tools, frame subscriptions, journal anchor, contracts checker, catalog) and turn confirmed ones into Sol fix units. |
+| mv0w2museimage | conductor | Oct 27 01:12 | build | 2 | 95.0 | 0.0695 | Muse Spark writer room mv0w2museimage: build the W2 component lanes (CLIENT, UI) from the Argon-compiled context pack, with tests first. |
+| mv0w2tests | conductor | Oct 27 01:12 | build | 4 | 94.3 | 0.1125 | Muse Spark writer room mv0w2tests: build the W2 component lanes (AC02, AC03, AC04, AC05, AC06, AC07) from the Argon-compiled context pack, with tests first. |
+| mv0rw3testsearly | conductor | Oct 27 01:12 | build | 2 | 94.9 | 0.0738 | Muse Spark writer room mv0rw3testsearly: build the W2 component lanes (AC09, AC12) from the Argon-compiled context pack, with tests first. |
+| mv0w2perception | conductor | Oct 27 01:13 | build | 2 | 93.8 | 0.0561 | Muse Spark writer room mv0w2perception: build the W2 component lanes (PLUGIN, META, VCORE) from the Argon-compiled context pack, with tests first. |
 
 ## Every lane
 
@@ -309,6 +313,16 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0mv | M_CORE | Verify Argon findings m_core | Oct 27 01:08 | yes | 45 | 94.8 | 0.0244 |
 | mv0mv | M_ADAPTER | Verify Argon findings m_adapter | Oct 27 01:08 | yes | 52 | 95.7 | 0.033758 |
 | mv0mv | M_CONTRACTS | Verify Argon findings m_contracts | Oct 27 01:09 | yes | 37 | 93.6 | 0.024674 |
+| mv0w2museimage | CLIENT | W2-MI-CLIENT | Oct 27 01:12 | yes | 45 | 94.9 | 0.035014 |
+| mv0w2tests | AC02 | W2-T-AC02 | Oct 27 01:12 | yes | 18 | 90.2 | 0.020141 |
+| mv0rw3testsearly | AC09 | W3-T-AC09 | Oct 27 01:12 | yes | 44 | 94.4 | 0.036937 |
+| mv0w2museimage | UI | W2-MI-UI | Oct 27 01:12 | yes | 46 | 95.1 | 0.034444 |
+| mv0rw3testsearly | AC12 | W3-T-AC12 | Oct 27 01:12 | yes | 47 | 95.4 | 0.036836 |
+| mv0w2tests | AC03 | W2-T-AC03 | Oct 27 01:12 | yes | 44 | 95.9 | 0.031771 |
+| mv0w2tests | AC06 | W2-T-AC06 | Oct 27 01:12 | yes | 34 | 94.2 | 0.025351 |
+| mv0w2perception | PLUGIN | W2-PER-PLUGIN | Oct 27 01:13 | yes | 29 | 92.6 | 0.024535 |
+| mv0w2tests | AC07 | W2-T-AC07 | Oct 27 01:13 | yes | 35 | 94.1 | 0.035233 |
+| mv0w2perception | META | W2-PER-META | Oct 27 01:13 | yes | 39 | 94.6 | 0.031569 |
 
 ## Method
 
