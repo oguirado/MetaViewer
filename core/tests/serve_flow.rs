@@ -116,6 +116,66 @@ fn proposal(id: &str, frame: &Value) -> Value {
 fn control(op: &str) -> Value {
     json!({"schema":"ui_intent/v0.2","request_id":format!("control-{op}"),"op":op,"params":{"surface_id":"surface-demo"}})
 }
+
+#[test]
+fn live_frame_fanout_isolates_surface_subscriptions() {
+    // Mutation: replace the per-surface subscription lookup in fanout with true.
+    support::run(async {
+        let temp = support::Temp::new();
+        let socket = temp.0.join("runtime/core.sock");
+        let uid = support::uid();
+        let listener = serve::bind(&socket, uid).await.unwrap();
+        let server = Arc::new(Mutex::new(
+            Server::open(config(), &temp.0.join("state"), uid).unwrap(),
+        ));
+        let task = tokio::spawn(serve::serve(listener, server, uid));
+        let mut daemon = Peer::connect(&socket, "daemon").await;
+        let mut agent = Peer::connect(&socket, "agent").await;
+        let mut ui = Peer::connect(&socket, "ui").await;
+        let surface: Value = serde_json::from_str(include_str!(
+            "../../contracts/examples/v0.2/surface.valid.json"
+        ))
+        .unwrap();
+        for id in ["surface-demo", "surface-b"] {
+            let mut s = surface.clone();
+            s["surface_id"] = id.into();
+            daemon
+                .send(json!({"schema":"surface_event/v0.2","event":"created","data":{"surface":s}}))
+                .await;
+            ui.receive().await;
+        }
+        agent.send(json!({"schema":"surface_request/v0.2","op":"frame_subscribe","params":{"surface_id":"surface-demo"}})).await;
+        assert_eq!(
+            serde_json::to_value(daemon.receive().await.body).unwrap()["op"],
+            "frame_subscribe"
+        );
+        let a = SharedFrame::new();
+        let b = SharedFrame::new();
+        std::fs::write(&b.0, b"different immutable frame").unwrap();
+        let fa = a.value(1);
+        let mut fb = b.value(1);
+        fb["surface_id"] = "surface-b".into();
+        fb["sha256"] = sha256_hex(b"different immutable frame").into();
+        // A subscribed UI receives B while the A-only agent must not.
+        daemon.send(fb.clone()).await;
+        assert_eq!(serde_json::to_value(ui.receive().await.body).unwrap(), fb);
+        daemon.send(fa.clone()).await;
+        assert_eq!(serde_json::to_value(ui.receive().await.body).unwrap(), fa);
+        // A is also a barrier: an incorrectly queued B would be read first.
+        assert_eq!(
+            serde_json::to_value(agent.receive().await.body).unwrap(),
+            fa
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), read_frame(&mut agent.socket))
+                .await
+                .is_err()
+        );
+        drop((daemon, agent, ui));
+        task.abort();
+        let _ = task.await;
+    });
+}
 #[test]
 fn lifecycle_requests_forward_and_replies_are_durable() {
     support::run(async {

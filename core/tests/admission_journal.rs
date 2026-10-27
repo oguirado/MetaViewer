@@ -83,6 +83,69 @@ fn durable_replay_exact_boundaries_and_exclusive_writer() {
         sha256_hex(&final_state)
     );
 }
+
+#[test]
+fn replay_digest_is_stable_across_scans_timezones_and_process_input() {
+    // Mutation: replace mv-replay's snapshot digest with sha256_hex(b"wrong").
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let t = Temp::new();
+    let (mut authority, witness) = setup_admission(&t);
+    authority
+        .apply_with_witnesses(
+            Input::Propose(admission_fixture(1, &witness.sha256)),
+            vec![witness.clone()],
+        )
+        .unwrap();
+    let snapshot = authority.state().snapshot().unwrap();
+    drop(authority);
+    let path = t.0.join("sessions/session-1/journal.jsonl");
+    let root = path.parent().unwrap();
+    let original = fs::read(&path).unwrap();
+    let expected = sha256_hex(&snapshot);
+    for _ in 0..2 {
+        let replay = scan(&path, root).unwrap();
+        assert_eq!(replay.state.snapshot().unwrap(), snapshot);
+        assert_eq!(sha256_hex(&replay.state.snapshot().unwrap()), expected);
+    }
+    let cli = |tz: &str, input: &[u8]| {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_mv-replay"))
+            .arg("--journal")
+            .arg(&path)
+            .arg("--witness-root")
+            .arg(root)
+            .env("TZ", tz)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(input).unwrap();
+        child.wait_with_output().unwrap()
+    };
+    for (tz, input) in [
+        ("UTC0", b"first ignored input\n".as_slice()),
+        ("JST-9", b"different ignored input\n".as_slice()),
+    ] {
+        let output = cli(tz, input);
+        assert!(output.status.success(), "{:?}", output);
+        assert_eq!(output.stdout, format!("{expected}\n").as_bytes());
+        assert!(output.stderr.is_empty());
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(fs::read(&path).unwrap(), original);
+    // Negative control: identical journal, corrupted retained witness.
+    fs::write(
+        root.join("artifacts").join(&witness.sha256),
+        b"corrupted frame",
+    )
+    .unwrap();
+    assert!(scan(&path, root).is_err());
+    let rejected = cli("UTC0", b"");
+    assert_eq!(rejected.status.code(), Some(4));
+    assert!(rejected.stdout.is_empty());
+    assert!(!rejected.stderr.is_empty());
+}
 #[test]
 fn corruption_tail_deletion_duplicate_and_artifact_mutants_refuse() {
     for mode in 0..5 {

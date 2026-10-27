@@ -208,6 +208,22 @@ fn arg_6_directory_frame_paths_are_rejected() {
 }
 
 #[test]
+fn absolute_non_shm_frame_path_is_atomic_and_shm_control_commits() {
+    // Mutation: delete the !f.ram_path.starts_with("/dev/shm/") guard.
+    reject_frame("/tmp/x.png", &"a".repeat(64));
+    let mut c = coordinator();
+    let mut sink = Sink::default();
+    start(&mut c, &mut sink, "r");
+    let before = c.clone();
+    let journal_len = sink.0.len();
+    c.observe(frame("r", "/dev/shm/x.png", &"a".repeat(64)), &mut sink)
+        .unwrap();
+    assert_ne!(c, before);
+    assert_eq!(c.recording("r").unwrap().byte_count, 8);
+    assert_eq!(sink.0.len(), journal_len + 1);
+}
+
+#[test]
 fn arg_6_zero_byte_export_is_rejected() {
     let (mut c, mut sink) = sealed_disk();
     let before = c.clone();

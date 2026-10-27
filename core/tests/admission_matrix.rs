@@ -118,6 +118,40 @@ fn matrix_and_order() {
         Some(Refusal::StaleFrame)
     );
 }
+
+#[test]
+fn cross_surface_digest_is_not_authority_and_unknown_frame_is_atomic() {
+    // Mutation: remove the frame digest comparison in CoreState::admit.
+    let mut s = state();
+    let mut b = s.surfaces["surface-1"].clone();
+    b.display = "display-2".into();
+    b.frame.as_mut().unwrap().sha256 = "b".repeat(64);
+    s.apply(&Input::Surface {
+        id: "surface-2".into(),
+        surface: b,
+    })
+    .unwrap();
+    let encoded = serde_json::to_value(proposal(1)).unwrap();
+    let mut raw: serde_json::Value =
+        serde_json::from_str(encoded["raw"].as_str().unwrap()).unwrap();
+    raw["body"]["based_on_frame"]["sha256"] = "b".repeat(64).into();
+    let cross = AdmissionRequest::decode(&raw.to_string(), &sender(), "session-1", 1, 0).unwrap();
+    let before = s.domain_snapshot().unwrap();
+    assert_eq!(
+        s.apply(&Input::Propose(cross)).unwrap().reason,
+        Some(Refusal::StaleFrame)
+    );
+    assert_eq!(s.domain_snapshot().unwrap(), before);
+    let unknown = Input::Frame {
+        surface_id: "missing".into(),
+        frame: s.surfaces["surface-2"].frame.clone().unwrap(),
+    };
+    assert_eq!(s.apply(&unknown), Err(AdmissionError::InvalidInput));
+    assert_eq!(s.domain_snapshot().unwrap(), before);
+    assert_eq!(s.apply(&Input::Propose(proposal(2))).unwrap().reason, None);
+    assert_eq!(s.remaining_budget, 9);
+    assert_eq!(s.pending.len(), 1);
+}
 #[test]
 fn replay_identity_preempts_and_reservations_are_atomic() {
     let mut s = state();
