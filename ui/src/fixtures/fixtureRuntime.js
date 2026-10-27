@@ -26,6 +26,15 @@ export {
   parseStepQuery,
 } from './liveReplay.js';
 
+// MVUI9 lane A re-export: the tile-chrome alias fixture and the capture
+// factories travel through this already-imported module so `main.js`
+// keeps its closed stub-map import surface (the boot harness rewrites
+// static imports with a fixed map; unknown names arrive as undefined and
+// the entry guards them with typeof, degrading capture to null).
+export { TILE_CHROME_FIXTURE, TILE_CHROME_KEY, fixtureCaptureSeed } from './tileChrome.js';
+export { createCapturePort, createCaptureState } from '../capture/capturePort.js';
+export { createCaptureDouble } from '../capture/captureDouble.js';
+
 /**
  * @typedef {Object} FixtureProjectionSnapshot
  * @property {string} status

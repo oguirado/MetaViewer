@@ -34,6 +34,9 @@ export async function compileSfc(file, deps) {
   }
 }
 
+// Compile the real kit icon once for the closed dependency maps below.
+export const SidebarIcon = await compileSfc('../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue', {});
+
 /** @param {string} name @param {Record<string, any>} children */
 export function childStub(name, children) {
   return vue.defineComponent({

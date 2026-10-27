@@ -4,14 +4,23 @@ import * as vue from 'vue';
 import { compileSfc, nodes, flush, text } from './mvui2-terminal-mount.mjs';
 import { createFixtureRuntime } from '../src/fixtures/fixtureRuntime.js';
 import * as tileStates from '../src/wall/tileStates.js';
+import * as tileCapture from '../src/wall/tileCapture.js';
 
 const Chrome = vue.defineComponent({ props: ['label'], setup: (p, c) => () => vue.h('div', {},
   [p.label, ...Object.values(c.slots).flatMap(slot => slot?.() ?? [])]) });
 const CapsulePanel = await compileSfc('../.kit/capsule-ui-kit/src/capsules/CapsulePanel.vue', {
   '../ui/UiTag.vue': Chrome, '../ui/UiToolbar.vue': Chrome,
 });
+const SidebarIcon = await compileSfc('../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue', {});
+const SaasRecordButton = await compileSfc('../.kit/capsule-ui-kit/src/saas/SaasRecordButton.vue', {});
+const TileCaptureChrome = await compileSfc('wall/TileCaptureChrome.vue', {
+  '../../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue': SidebarIcon,
+  '../../.kit/capsule-ui-kit/src/saas/SaasRecordButton.vue': SaasRecordButton,
+  './tileCapture.js': tileCapture,
+});
 const SurfacePanel = await compileSfc('wall/SurfacePanel.vue', {
   'capsule-ui-kit/CapsulePanel': CapsulePanel, './tileStates.js': tileStates,
+  './TileCaptureChrome.vue': TileCaptureChrome,
 });
 let rows = [];
 // Real renderer tabs and kit panels share a mounted wall; only Dockview hosting
@@ -94,6 +103,10 @@ for (const colorScheme of ['light', 'dark']) {
       const controls = nodes(mounted.root).filter(n => n.props?.['data-semantic-anchor']);
       uniqueAnchors(controls);
       for (const row of rows) {
+        for (const action of ['record-ai', 'screenshot', 'recording-badge']) {
+          assert.equal(controls.filter(n => n.props['data-semantic-anchor'] === `tile-${row.id}-${action}`).length, 1,
+            `real capture chrome ${action} mounts for ${row.id}`);
+        }
         assert.equal(controls.filter(n => n.props['data-semantic-anchor'] === `capsule/${row.id}/tab`).length, 1);
         assert.equal(controls.filter(n => n.props['data-semantic-anchor'] === `workspace/tab/${row.id}`).length, 1);
         assert.equal(row.controlOwner, row.control === 'shared' ? 'none' : row.control);

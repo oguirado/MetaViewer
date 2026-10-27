@@ -28,6 +28,15 @@ import { createTileScheduler } from './surfaces/tileScheduler.js';
 const props = defineProps({
   authorityHost: { type: /** @type {import('vue').PropType<ReturnType<typeof import('./core/hostAdapters.js').createAuthorityAdapter>|null>} */ (Object), default: null },
   terminalBroker: { type: /** @type {import('vue').PropType<ReturnType<typeof import('./core/hostAdapters.js').createTerminalBroker>>} */ (Object), default: null },
+  // MVUI9 lane A: reactive capture store built by the entry (lane C
+  // `createCaptureState` shape, read structurally so App never imports
+  // the port). Null keeps the legacy intent path.
+  captureState: { type: Object, default: null },
+  // MVUI9 lane A: false when no capture facade backs the store (or the
+  // store is absent); the wall binding then passes undefined (the wall
+  // default null applies, so the wall still sees null) and the panel
+  // renders its controls disabled with the fixed unavailable reason.
+  captureAvailable: { type: Boolean, default: false },
   settingsHost: { type: /** @type {import('vue').PropType<import('./settings/settingsModel.js').HostSettingsPort|null>} */ (Object), default: null },
   preferences: { type: /** @type {import('vue').PropType<Storage|null>} */ (Object), default: null },
   exportDestination: { type: String, default: '' },
@@ -404,7 +413,7 @@ const chromeWorkspace = markRaw(defineComponent({
           </article>
         </section>
         <WallWorkspace v-else-if="!creativeOpen" :key="wallView" :hidden="!rows.length" ref="wall" :workspace-component="chromeWorkspace" :scope="props.scope" :default-profile="props.layout" :storage="workspaceStorage"
-          owner-window-id="main-wall" :projection-view="feed" :allow-lost-surface="admitLostRows" :intent-builders="props.runtime?.intentBuilders ?? intentBuilders"
+          owner-window-id="main-wall" :projection-view="feed" :capture-state="captureAvailable ? captureState : undefined" :display-only="nestedMode.displayOnly" :allow-lost-surface="admitLostRows" :intent-builders="props.runtime?.intentBuilders ?? intentBuilders"
           :control-registry="props.runtime?.controlRegistry ?? controlRegistry" :scheduler="props.runtime?.scheduler ?? scheduler" :tile-scheduler="props.runtime?.tileScheduler ?? tileScheduler"
           :color-scheme="scheme === 'mv-dark' ? 'dark' : 'light'" density="compact" @ready="revealRows" @wall-settled="onWorkspaceSettled" @activate-surface="selectCapsule" @submit-intent="dispatch">
           <template #surface="{ surface, capsuleId }">
@@ -419,7 +428,7 @@ const chromeWorkspace = markRaw(defineComponent({
           <UiButton id="multislot-back" data-semantic-anchor="multislot/back" label="Back to wall" @click="multislotOpen = false" />
           <MultislotHost :capsule-id="selectedSurface.id" :capsule-label="selectedSurface.title" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" :folded="selectedFolded" v-model:input-mode="inputMode" @submit-intent="dispatchMultislot">
             <template #surface><SurfaceCanvas :surface-id="selectedSurface.id" :generation="selectedSurface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(selectedSurface).frame" :digest="surfaceWitness(selectedSurface).digest" :state="selectedSurface.attachmentState === 'live' ? 'live' : 'connecting'" /></template>
-            <template #record><MvRecordingPanel :capsule-id="selectedSurface.id" :export-destination="props.exportDestination" :phase="props.fixture?.key === 'recording' ? 'recording' : 'idle'" @submit-intent="dispatch" /></template>
+            <template #record><MvRecordingPanel :capsule-id="selectedSurface.id" :export-destination="props.exportDestination" :phase="props.fixture?.key === 'recording' ? 'recording' : 'idle'" :capture-state="captureState" :capture-available="captureAvailable" @submit-intent="dispatch" /></template>
           </MultislotHost>
         </section>
         <section v-if="!nestedMode.displayOnly" :hidden="!settingsOpen" class="mv-settings-screen" aria-label="Settings">

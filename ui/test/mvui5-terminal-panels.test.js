@@ -18,6 +18,7 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import * as vue from 'vue';
 import { parse, compileScript } from '@vue/compiler-sfc';
+import { SidebarIcon } from './mvui2-terminal-mount.mjs';
 import * as sideTerminal from '../src/terminal/sideTerminalFacade.js';
 
 let serial = 0;
@@ -130,6 +131,7 @@ function brokerFacadeDouble(hooks) {
 async function compileControls(entries, hooks) {
   const doubles = brokerFacadeDouble(hooks);
   const component = await compileSfc('terminal/BrokerLaunchControls.vue', {
+    '../../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue': SidebarIcon,
     '../multislot/multislotProviders.js': { toKitMenuProviders: () => entries },
     './sideTerminalFacade.js': { createSideTerminalBrokerFacade: () => doubles.facade },
     './providers.js': { SHELL_COMMAND: 'shell', PROVIDER_COMMAND: 'provider' },
@@ -260,6 +262,7 @@ async function mountHost(options = {}) {
           close: (request) => calls.brokerClosed.push(request),
         };
   const component = await compileSfc('multislot/MultislotHost.vue', {
+    '../../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue': SidebarIcon,
     '@xterm/xterm': { Terminal: class {} },
     '@xterm/addon-fit': { FitAddon: class {} },
     '/.kit/capsule-ui-kit/src/multislot/AiMultiSlot.vue': childStub('slot', children),

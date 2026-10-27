@@ -17,6 +17,10 @@ async function component(file, apply = () => {}) {
   const require = createRequire(import.meta.url);
   const code = compiled.content.replace(/^import\s+([\s\S]+?)\s+from\s+(['"])(.*?)\2;?/gm, (all, binding, _q, specifier) => {
     if (specifier === 'capsule-ui-kit/theme') return `const ${binding} = globalThis.__f2Theme;`;
+    if (specifier === '../../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue') {
+      const helper = new URL('./mvui2-terminal-mount.mjs', import.meta.url).href;
+      return `import { SidebarIcon as ${binding.trim()} } from ${JSON.stringify(helper)};`;
+    }
     const resolved = specifier === 'vue' ? pathToFileURL(require.resolve('vue')).href : new URL(specifier, url).href;
     return `import ${binding} from ${JSON.stringify(resolved)};`;
   });

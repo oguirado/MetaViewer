@@ -1,4 +1,5 @@
 <script setup>
+import SidebarIcon from '../../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue';
 import { computed } from 'vue';
 import {
   buildRecordAiIntent,
@@ -8,6 +9,8 @@ import {
 } from '../../.kit/capsule-ui-kit/src/recordings/recordingsIntents.js';
 import {
   MV_RECORD_EMPTY_TEXT,
+  captureEntryFor,
+  captureRowsFor,
   formatMvCount,
   formatMvElapsed,
   formatMvTtl,
@@ -59,6 +62,12 @@ import {
  * Rendering is MetaViewer-owned; the kit intent vocabulary, anchor
  * families and phase semantics are reused. Props in, `submit-intent`
  * out; the host owns every sink.
+ *
+ * MVUI9 lane A: with the optional `captureState` store bound, phase,
+ * elapsed, screenshot state and manifest rows read from the store and
+ * the record/screenshot actions call the store instead of emitting
+ * intents (select/export keep emitting as today). Without the store
+ * every binding falls back to the legacy props.
  */
 
 const props = defineProps({
@@ -73,6 +82,8 @@ const props = defineProps({
   exportDestination: { type: String, default: '' },
   disabled: { type: Boolean, default: false },
   unavailableReason: { type: String, default: '' },
+  captureState: { type: Object, default: null },
+  captureAvailable: { type: Boolean, default: true },
 });
 
 const emit = defineEmits(['submit-intent']);
@@ -86,53 +97,76 @@ const barName = computed(() => {
   return `Record controls for ${panelName.value.slice('Recordings for '.length)}`;
 });
 
-const phaseN = computed(() => normalizeMvRecordPhase(props.phase));
-const shotN = computed(() => normalizeMvScreenshotState(props.screenshotState));
-const toggleBusy = computed(() => mvRecordPhaseBusy(props.phase));
-const shotBusy = computed(() => mvScreenshotStateBusy(props.screenshotState));
-const toggleDisabled = computed(() => props.disabled || toggleBusy.value);
-const shotDisabled = computed(() => props.disabled || shotBusy.value);
-const toggleLabel = computed(() => mvRecordToggleLabel(props.phase));
-const shotLabel = computed(() => mvScreenshotButtonLabel(props.screenshotState));
+// MVUI9 lane A: a bound capture store supplies phase, elapsed, screenshot
+// state and manifest rows (preamble store names only). Without a store
+// every effective binding below is the legacy prop, so existing mounts
+// render exactly as before.
+const captureBound = computed(() => !!props.captureState);
+const captureEntry = computed(() => captureEntryFor(props.captureState, props.capsuleId));
+const phaseEff = computed(() => (captureBound.value ? captureEntry.value?.phase : props.phase));
+const shotStateEff = computed(() => {
+  if (!captureBound.value) return props.screenshotState;
+  return captureEntry.value?.lastShot ? 'done' : 'idle';
+});
+const elapsedEff = computed(() => {
+  if (!captureBound.value) return props.elapsedSeconds;
+  const ms = captureEntry.value?.elapsedMs;
+  return typeof ms === 'number' && Number.isFinite(ms) && ms >= 0 ? Math.floor(ms / 1000) : null;
+});
+const recordingsEff = computed(() => (captureBound.value
+  ? captureRowsFor(props.captureState, props.capsuleId)
+  : props.recordings));
+const captureHeld = computed(() => captureBound.value && !props.captureAvailable);
+
+const phaseN = computed(() => normalizeMvRecordPhase(phaseEff.value));
+const shotN = computed(() => normalizeMvScreenshotState(shotStateEff.value));
+const toggleBusy = computed(() => mvRecordPhaseBusy(phaseEff.value));
+const shotBusy = computed(() => mvScreenshotStateBusy(shotStateEff.value));
+const toggleDisabled = computed(() => props.disabled || captureHeld.value || toggleBusy.value);
+const shotDisabled = computed(() => props.disabled || captureHeld.value || shotBusy.value);
+const toggleLabel = computed(() => mvRecordToggleLabel(phaseEff.value));
+const shotLabel = computed(() => mvScreenshotButtonLabel(shotStateEff.value));
 const toggleName = computed(() =>
   mvRecordToggleAccessibleName({
     capsuleLabel: props.capsuleLabel,
     capsuleId: props.capsuleId,
-    phase: props.phase,
+    phase: phaseEff.value,
   }),
 );
 const shotName = computed(() =>
   mvScreenshotAccessibleName({
     capsuleLabel: props.capsuleLabel,
     capsuleId: props.capsuleId,
-    state: props.screenshotState,
+    state: shotStateEff.value,
   }),
 );
 const toggleReason = computed(() => {
   if (props.unavailableReason) return 'Recording is unavailable';
+  if (captureHeld.value) return 'Recording is unavailable';
   if (toggleBusy.value) return `Recording is ${phaseN.value}`;
   return '';
 });
 const shotReason = computed(() => {
   if (props.unavailableReason) return 'Recording is unavailable';
+  if (captureHeld.value) return 'Recording is unavailable';
   if (shotBusy.value) return 'Screenshot capture is pending';
   return '';
 });
-const elapsedLabel = computed(() => formatMvElapsed(props.elapsedSeconds));
+const elapsedLabel = computed(() => formatMvElapsed(elapsedEff.value));
 const storeText = computed(() => mvStoreLabel(props.store));
 
-const hasRows = computed(() => Array.isArray(props.recordings) && props.recordings.length > 0);
-const rowCount = computed(() => (Array.isArray(props.recordings) ? props.recordings.length : 0));
+const hasRows = computed(() => Array.isArray(recordingsEff.value) && recordingsEff.value.length > 0);
+const rowCount = computed(() => (Array.isArray(recordingsEff.value) ? recordingsEff.value.length : 0));
 
 const displayRows = computed(() => {
-  if (!Array.isArray(props.recordings)) return [];
+  if (!Array.isArray(recordingsEff.value)) return [];
   const counts = new Map();
-  for (const row of props.recordings) {
+  for (const row of recordingsEff.value) {
     const id = row && typeof row === 'object' && 'id' in row && typeof row.id === 'string' ? row.id.trim() : '';
     if (id) counts.set(id, (counts.get(id) ?? 0) + 1);
   }
   const used = new Set(counts.keys());
-  return props.recordings.map((row, index) => {
+  return recordingsEff.value.map((row, index) => {
     const source = /** @type {Record<string, any>} */ (row !== null && typeof row === 'object' ? row : {});
     const sourceId = typeof source.id === 'string' ? source.id.trim() : '';
     const validId = /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(sourceId) && counts.get(sourceId) === 1 && sourceId === source.id;
@@ -140,7 +174,7 @@ const displayRows = computed(() => {
     if (!validId) {
       id = `unknown-${index}`;
       // At most the number of reserved IDs can collide with a fallback.
-      for (let suffix = 0; used.has(id) && suffix <= props.recordings.length; suffix++) {
+      for (let suffix = 0; used.has(id) && suffix <= recordingsEff.value.length; suffix++) {
         id = `unknown-${index}-${suffix}`;
       }
       used.add(id);
@@ -202,11 +236,29 @@ const refusalName = computed(() =>
 
 function onToggleClick() {
   if (toggleDisabled.value) return;
+  if (captureBound.value) {
+    // MVUI9: bound record-for-AI calls the store, never the intent channel.
+    const action = props.captureState?.toggleRecord;
+    if (typeof action === 'function') {
+      return Promise.resolve().then(() => action.call(props.captureState, props.capsuleId))
+        .catch(() => ({ ok: false, code: 'CAPTURE_UNAVAILABLE' }));
+    }
+    return;
+  }
   emit('submit-intent', buildRecordAiIntent({ capsuleId: props.capsuleId, phase: props.phase }));
 }
 
 function onScreenshotClick() {
   if (shotDisabled.value) return;
+  if (captureBound.value) {
+    // MVUI9: bound screenshots call the store, never the intent channel.
+    const action = props.captureState?.screenshot;
+    if (typeof action === 'function') {
+      return Promise.resolve().then(() => action.call(props.captureState, props.capsuleId))
+        .catch(() => ({ ok: false, code: 'CAPTURE_UNAVAILABLE' }));
+    }
+    return;
+  }
   emit('submit-intent', buildScreenshotIntent({ capsuleId: props.capsuleId }));
 }
 
@@ -260,7 +312,7 @@ function onExport(entry) {
         :data-unavailable-reason="toggleReason || undefined"
         @click="onToggleClick"
       >
-        <span class="mv4-toggle-dot" aria-hidden="true"></span>
+        <SidebarIcon name="marker" aria-hidden="true" />
         <span>{{ toggleLabel }}</span>
       </button>
       <span
@@ -290,6 +342,7 @@ function onExport(entry) {
         :data-unavailable-reason="shotReason || undefined"
         @click="onScreenshotClick"
       >
+        <SidebarIcon name="box" aria-hidden="true" />
         {{ shotLabel }}
       </button>
     </div>
@@ -327,6 +380,7 @@ function onExport(entry) {
               :disabled="disabled || !entry.validId"
               @click="onSelect(entry)"
             >
+              <SidebarIcon name="dashboard" aria-hidden="true" />
               {{ entry.id }}
             </button>
             <span v-if="entry.errorText" class="mv4-row-error" :data-error-code="entry.errorCode" :title="entry.errorText">{{ entry.errorText }}</span>
@@ -369,6 +423,7 @@ function onExport(entry) {
               :data-unavailable-reason="entry.exportReason || undefined"
               @click="onExport(entry)"
             >
+              <SidebarIcon name="save" aria-hidden="true" />
               Export
             </button>
           </td>

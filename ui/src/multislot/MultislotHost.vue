@@ -1,4 +1,5 @@
 <script setup>
+import SidebarIcon from '../../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue';
 /**
  * MetaViewer AI multislot host (lane U3): one capsule live surface with its
  * attached real-login-shell terminal, travelling together on the kit
@@ -502,6 +503,7 @@ function passThrough(name) {
         aria-label="Dismiss session notice"
         @click="sessionNotice = null"
       >
+        <SidebarIcon name="marker" aria-hidden="true" />
         Dismiss
       </button>
     </div>
@@ -522,6 +524,7 @@ function passThrough(name) {
         aria-label="Dismiss launch notice"
         @click="refusal = null"
       >
+        <SidebarIcon name="marker" aria-hidden="true" />
         Dismiss
       </button>
     </div>

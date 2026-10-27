@@ -563,3 +563,62 @@ export function mvSelectAccessibleName(row) {
 export function mvExportAccessibleName(row) {
   return `Export ${mvRowLabel(row)} to host destination`;
 }
+
+/**
+ * Capture-store entry for a surface (MVUI9 lane A). Reads only the
+ * preamble store names (`bySurface`); tolerates the store exposing the
+ * map as a plain object or a `Map`. Unknown or hostile shapes yield
+ * null, never a throw, so bound panels fail closed to idle.
+ * @param {unknown} captureState
+ * @param {unknown} surfaceId
+ * @returns {{ phase?: unknown, recordingId?: unknown, frames?: unknown, elapsedMs?: unknown, lastShot?: unknown, lastCode?: unknown } | null}
+ */
+export function captureEntryFor(captureState, surfaceId) {
+  if (!captureState || typeof captureState !== 'object') return null;
+  if (typeof surfaceId !== 'string' || surfaceId.length === 0) return null;
+  if (surfaceId === '__proto__' || surfaceId === 'constructor' || surfaceId === 'prototype') return null;
+  const bySurface = /** @type {{ bySurface?: unknown }} */ (captureState).bySurface;
+  /** @type {unknown} */
+  let entry = null;
+  if (bySurface instanceof Map) {
+    entry = bySurface.get(surfaceId) ?? null;
+  } else if (bySurface && typeof bySurface === 'object') {
+    entry = /** @type {Record<string, unknown>} */ (bySurface)[surfaceId] ?? null;
+  }
+  return entry && typeof entry === 'object' ? /** @type {{ phase?: unknown }} */ (entry) : null;
+}
+
+/**
+ * Panel-shaped manifest rows for a surface from the capture store list
+ * (MVUI9 lane A). Keeps `kind: 'recording'` rows for this surface only;
+ * screenshots surface through the screenshot control state, never the
+ * recordings manifest. Unknown shapes yield an empty frozen list.
+ * @param {unknown} captureState
+ * @param {unknown} surfaceId
+ * @returns {ReadonlyArray<Readonly<Record<string, unknown>>>}
+ */
+export function captureRowsFor(captureState, surfaceId) {
+  if (!captureState || typeof captureState !== 'object') return Object.freeze([]);
+  if (typeof surfaceId !== 'string' || surfaceId.length === 0) return Object.freeze([]);
+  const rows = /** @type {{ rows?: unknown }} */ (captureState).rows;
+  if (!Array.isArray(rows)) return Object.freeze([]);
+  /** @type {Array<Readonly<Record<string, unknown>>>} */
+  const mapped = [];
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    const source = /** @type {{ id?: unknown, kind?: unknown, surface_id?: unknown, phase?: unknown, frames?: unknown, duration_ms?: unknown }} */ (row);
+    if (source.kind !== 'recording' || source.surface_id !== surfaceId) continue;
+    if (typeof source.id !== 'string' || source.id.length === 0) continue;
+    mapped.push(Object.freeze({
+      id: source.id,
+      capsuleId: surfaceId,
+      phase: normalizeMvRecordPhase(source.phase),
+      store: MV_RECORDING_STORE,
+      elapsedSeconds: typeof source.duration_ms === 'number' && Number.isFinite(source.duration_ms) && source.duration_ms >= 0
+        ? Math.floor(source.duration_ms / 1000)
+        : null,
+      frames: source.frames,
+    }));
+  }
+  return Object.freeze(mapped);
+}

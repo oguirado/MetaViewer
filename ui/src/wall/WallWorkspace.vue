@@ -558,6 +558,8 @@ const props = defineProps({
     type: /** @type {import('vue').PropType<KitLayoutProfile | null>} */ (Object),
     default: null,
   },
+  captureState: { type: Object, default: null },
+  displayOnly: { type: Boolean, default: false },
 });
 
 const emit = defineEmits([
@@ -644,6 +646,8 @@ const WallSurfaceRouter = markRaw(defineComponent({
         controlRegistry: props.controlRegistry,
         scheduler: props.scheduler,
         tileScheduler: props.tileScheduler,
+        captureState: props.captureState,
+        displayOnly: props.displayOnly,
         presentationInstance: instance,
         onSubmitIntent: callbacks.onSubmitIntent,
         onPresentationIntent: callbacks.onPresentationIntent,

@@ -278,6 +278,7 @@ export function roundControlBox(box) {
 <script setup>
 import { computed, onBeforeUnmount, provide, shallowRef, watch } from 'vue';
 import CapsulePanel from 'capsule-ui-kit/CapsulePanel';
+import TileCaptureChrome from './TileCaptureChrome.vue';
 import { deriveTileState, controlVerbForRow, frameFreshnessText, presentedFrameHandle, TILE_ERROR_DISPLAY_STATUS } from './tileStates.js';
 import './wall.css';
 
@@ -306,6 +307,8 @@ const props = defineProps({
   presentationInstance: { type: String, required: true },
   hasKeyboardOwnership: { type: Boolean, default: false },
   title: { type: String, default: '' },
+  captureState: { type: Object, default: null },
+  displayOnly: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(['submit-intent', 'presentation-intent', 'activate-surface']);
@@ -482,6 +485,12 @@ function onActivateSurface() {
 </script>
 <template>
   <div class="mv-tile" :data-tile-state="tile.tile" :data-error-code="row?.refusal?.code ?? snapshot?.error?.code">
+  <TileCaptureChrome
+    :capsule-id="props.capsuleId"
+    :capsule-label="props.title"
+    :capture-state="props.captureState"
+    :display-only="props.displayOnly"
+  />
   <CapsulePanel
     :capsule-id="props.capsuleId"
     :external-ai-slot="true"

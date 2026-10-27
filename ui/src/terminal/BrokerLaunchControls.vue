@@ -1,4 +1,5 @@
 <script setup>
+import SidebarIcon from '../../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue';
 import { computed, onBeforeUnmount, ref } from 'vue';
 import { toKitMenuProviders } from '../multislot/multislotProviders.js';
 import { createSideTerminalBrokerFacade } from './sideTerminalFacade.js';
@@ -63,7 +64,7 @@ async function launch(entry) {
     </label>
     <div v-if="showMenu && facade?.canOpen" role="group" aria-label="Terminal providers">
       <button v-for="entry in entries" :key="entry.id" type="button" :id="`${idPrefix}-launch-${entry.id}`"
-        :data-semantic-anchor="`${anchorPrefix}/provider/${entry.id}`" :disabled="busy || (facade?.canEnable && !enabled)" @click="launch(entry)">{{ entry.label }}</button>
+        :data-semantic-anchor="`${anchorPrefix}/provider/${entry.id}`" :disabled="busy || (facade?.canEnable && !enabled)" @click="launch(entry)"><SidebarIcon name="console" aria-hidden="true" />{{ entry.label }}</button>
     </div>
     <p v-if="launching" :id="`${idPrefix}-pending`" :data-semantic-anchor="`${anchorPrefix}/pending`"
       class="mv-broker-launch__pending" role="status">Starting session…</p>

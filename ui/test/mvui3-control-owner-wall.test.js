@@ -4,6 +4,7 @@ import * as vue from 'vue';
 import { compileSfc, nodes, flush } from './mvui2-terminal-mount.mjs';
 import { createAuthorityRuntime, createAuthorityAdapter } from '../src/core/hostAdapters.js';
 import * as tileStates from '../src/wall/tileStates.js';
+import * as tileCapture from '../src/wall/tileCapture.js';
 import { intentSchema, validates } from './mvui-x-schema.js';
 
 // Only decorative children and Dockview hosting are replaced. The control
@@ -13,8 +14,16 @@ const Chrome = vue.defineComponent({ setup: (_, ctx) => () => vue.h('div', {},
 const CapsulePanel = await compileSfc('../.kit/capsule-ui-kit/src/capsules/CapsulePanel.vue', {
   '../ui/UiTag.vue': Chrome, '../ui/UiToolbar.vue': Chrome,
 });
+const SidebarIcon = await compileSfc('../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue', {});
+const SaasRecordButton = await compileSfc('../.kit/capsule-ui-kit/src/saas/SaasRecordButton.vue', {});
+const TileCaptureChrome = await compileSfc('wall/TileCaptureChrome.vue', {
+  '../../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue': SidebarIcon,
+  '../../.kit/capsule-ui-kit/src/saas/SaasRecordButton.vue': SaasRecordButton,
+  './tileCapture.js': tileCapture,
+});
 const SurfacePanel = await compileSfc('wall/SurfacePanel.vue', {
   'capsule-ui-kit/CapsulePanel': CapsulePanel, './tileStates.js': tileStates,
+  './TileCaptureChrome.vue': TileCaptureChrome,
 });
 const Workspace = vue.defineComponent({
   props: ['panelComponents'],
@@ -93,6 +102,10 @@ test('authority notices drive real kit owner, pressed state and schema-valid tak
       assert.equal(row.controlOwner, owner);
       assert.equal(Object.hasOwn(row, 'controlLeaseId'), false);
       assert.equal(nodes(h.root).find(n => n.props?.['data-tile-state']).props['data-tile-state'], tile);
+      const shot = nodes(h.root).find(n => n.props?.['data-semantic-anchor'] === 'tile-surface-a-screenshot');
+      assert.ok(shot, 'real tile capture chrome mounts alongside ownership controls');
+      assert.equal(shot.props.disabled, true, 'missing capture store disables screenshot');
+      assert.ok(nodes(shot).some(n => n.tag === 'svg'), 'real kit screenshot icon mounts');
       const buttons = h.buttons();
       assert.ok(buttons.length > 0);
       for (const button of buttons) {

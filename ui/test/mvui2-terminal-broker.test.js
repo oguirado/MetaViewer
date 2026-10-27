@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { createSideTerminalBrokerFacade } from '../src/terminal/sideTerminalFacade.js';
 import * as sideTerminal from '../src/terminal/sideTerminalFacade.js';
 import * as terminalProviders from '../src/terminal/providers.js';
-import { compileSfc, mountComponent, nodes, flush } from './mvui2-terminal-mount.mjs';
+import { compileSfc, mountComponent, nodes, flush, SidebarIcon } from './mvui2-terminal-mount.mjs';
 
 function deferred() {
   let resolve;
@@ -16,6 +16,7 @@ function deferred() {
 /** @param {Array<{ id: string, label: string, hint: string, argv: unknown, command: string }>} entries */
 async function compileControls(entries) {
   return compileSfc('terminal/BrokerLaunchControls.vue', {
+    '../../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue': SidebarIcon,
     '../multislot/multislotProviders.js': { toKitMenuProviders: () => entries },
     './sideTerminalFacade.js': sideTerminal,
     './providers.js': terminalProviders,

@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import * as vue from 'vue';
 import { parse, compileScript } from '@vue/compiler-sfc';
+import { SidebarIcon } from './mvui2-terminal-mount.mjs';
 import * as gate from '../src/multislot/multislotInputGate.js';
 import * as attach from '../src/multislot/multislotAttach.js';
 import * as providers from '../src/multislot/multislotProviders.js';
@@ -39,6 +40,7 @@ async function mount(file, initial = {}, facades = []) {
     disposeSession(id) { calls.disposed.push(id); }, forgetSession(id) { calls.forgotten.push(id); }, dispose() { calls.registryDisposed++; },
   };
   const deps = {
+    '../../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue': SidebarIcon,
     '@xterm/xterm':{ Terminal:class {} }, '@xterm/addon-fit':{ FitAddon:class {} },
     '/.kit/capsule-ui-kit/src/multislot/AiMultiSlot.vue':child('slot'),
     '/.kit/capsule-ui-kit/src/multislot/AiSlotControlBar.vue':child('bar'),

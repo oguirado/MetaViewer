@@ -4,7 +4,7 @@ import App from './App.vue';
 import { createAuthorityAdapter, createAuthorityRuntime, createTerminalBroker, requireAck } from './core/hostAdapters.js';
 import { createSettingsHost } from './settings/settingsHost.js';
 import { parseStateQuery, resolveFixture } from './fixtures/resolveState.js';
-import { createFixtureRuntime, createLiveReplayMount, LIVE_REPLAY_FIXTURE } from './fixtures/fixtureRuntime.js';
+import { createFixtureRuntime, createLiveReplayMount, LIVE_REPLAY_FIXTURE, TILE_CHROME_FIXTURE, TILE_CHROME_KEY, fixtureCaptureSeed, createCapturePort, createCaptureState, createCaptureDouble } from './fixtures/fixtureRuntime.js';
 import 'capsule-ui-kit/theme.css';
 import './design/metaviewer.css';
 import { createWallLayout, migrateWallLayout } from './wall/layout.js';
@@ -187,12 +187,18 @@ async function bootstrap() {
   // Live boot and every other fixture ignore this branch entirely.
   const isLiveReplay = new URLSearchParams(window.location.search).get('state') === 'live-replay';
   const isLayoutUnavailable = requestedStates[0] === 'layout-unavailable';
+  // MVUI9 lane A: tile-chrome travels as an alias fixture (see
+  // fixtures/tileChrome.js), never a FIXTURES key. The guards keep the
+  // boot harness (which stubs this module) on the legacy path.
+  const tileChromeFixture = typeof TILE_CHROME_KEY === 'string' && TILE_CHROME_FIXTURE
+      && requestedStates[0] === TILE_CHROME_KEY ? TILE_CHROME_FIXTURE : null;
+  const isTileChrome = tileChromeFixture !== null;
   const parsed = parseStateQuery(window.location.search);
-  if (!parsed.ok && parsed.error.code !== 'ERR_MISSING_STATE_PARAM' && !isLiveReplay && !isLayoutUnavailable) throw new Error(parsed.error.code);
+  if (!parsed.ok && parsed.error.code !== 'ERR_MISSING_STATE_PARAM' && !isLiveReplay && !isLayoutUnavailable && !isTileChrome) throw new Error(parsed.error.code);
   // A diagnostic alias keeps the canonical fixture inventory unchanged.
-  const resolved = isLayoutUnavailable ? resolveFixture('one') : parsed.ok ? resolveFixture(parsed.key) : null;
+  const resolved = isLayoutUnavailable ? resolveFixture('one') : (!isTileChrome && parsed.ok) ? resolveFixture(parsed.key) : null;
   if (resolved && !resolved.ok) throw new Error(resolved.error.code);
-  const baseFixture = resolved?.ok ? (isLayoutUnavailable
+  const baseFixture = isTileChrome ? tileChromeFixture : resolved?.ok ? (isLayoutUnavailable
     ? Object.freeze({ ...resolved.fixture, key: 'layout-unavailable' }) : resolved.fixture) : (isLiveReplay ? LIVE_REPLAY_FIXTURE : null);
   // Fixture-only vision hook (MV-5): an explicit ?scheme= overrides the
   // fixture default. Live boot ignores the parameter entirely. Matching is
@@ -223,7 +229,7 @@ async function bootstrap() {
     ? { readRaw: async () => null, writeAtomic: async (/** @type {string} */ _json) => {} }
     : createLayoutStorage(getLayoutFacade());
   const layout = fixture ? createWallLayout(SCOPE, [...fixture.capsules]) : createInitialLayout(SCOPE);
-  const host = fixture ? null : /** @type {{metaviewer?: Partial<import('./settings/settingsModel.js').HostSettingsPort> & {nestedDepth?:()=>Promise<0|1|null>,selfCapsuleId?:()=>Promise<string|null>,recordingDestination?:()=>Promise<string|null>,authority?:import('./core/hostAdapters.js').AuthorityPort,sideTerminal?:import('./core/hostAdapters.js').TerminalPort}}} */ (window).metaviewer;
+  const host = fixture ? null : /** @type {{metaviewer?: Partial<import('./settings/settingsModel.js').HostSettingsPort> & {nestedDepth?:()=>Promise<0|1|null>,selfCapsuleId?:()=>Promise<string|null>,recordingDestination?:()=>Promise<string|null>,authority?:import('./core/hostAdapters.js').AuthorityPort,sideTerminal?:import('./core/hostAdapters.js').TerminalPort,capture?:unknown}}} */ (window).metaviewer;
   let preferences = /** @type {Storage|null} */ (null);
   if (!fixture) { try { preferences = globalThis.localStorage; } catch { /* Storage may be unavailable. */ } }
   const settingsHost = createSettingsHost(host ?? null, preferences, fixture?.scheme ?? null);
@@ -237,12 +243,33 @@ async function bootstrap() {
   const authorityHost = replayPort ? createAuthorityAdapter(replayPort) : (fixture ? null : createAuthorityAdapter(host?.authority));
   const terminalBroker = fixture ? (replayTerminalPort ? createTerminalBroker(replayTerminalPort) : null) : createTerminalBroker(host?.sideTerminal);
   const liveRuntime = fixture ? null : createAuthorityRuntime(host?.authority);
+  // MVUI9 lane A: capture port plus reactive store. The port always
+  // comes from createCapturePort; its facade is the in-memory double on
+  // fixture boots and the host capture facade on live boots, reached as
+  // host.capture (never a fresh window read, so the boot tests' single
+  // live-read pin stays exact). The factories arrive through the
+  // fixtureRuntime re-export; unknown names (stub harness) degrade
+  // capture to null and the UI keeps its legacy intent path.
+  const captureDouble = fixture && typeof createCaptureDouble === 'function' ? createCaptureDouble() : null;
+  const capturePort = typeof createCapturePort === 'function' && (fixture ? captureDouble !== null : true)
+    ? createCapturePort(/** @type {any} */ (fixture ? captureDouble : host?.capture))
+    : null;
+  const captureState = capturePort && typeof createCaptureState === 'function' ? createCaptureState(capturePort) : null;
+  const captureAvailable = capturePort !== null && capturePort.available === true;
+  if (captureState && fixture && typeof fixtureCaptureSeed === 'function') {
+    // Fixture capture seeding: the recording screen and tile-chrome
+    // declare seed surfaces; the double applies them deterministically
+    // before mount so badges and rows render settled.
+    const seed = fixtureCaptureSeed(fixture);
+    for (const surfaceId of seed.record) await captureState.toggleRecord(surfaceId);
+    for (const surfaceId of seed.shots) await captureState.screenshot(surfaceId);
+  }
   const replayRuntime = /** @type {{ dispose?: () => void }|null} */ (/** @type {unknown} */ (isLiveReplay ? fixtureMount?.runtime ?? null : null));
-  const teardown = () => { liveRuntime?.dispose(); replayRuntime?.dispose?.(); window.removeEventListener?.('pagehide', teardown); };
-  if (liveRuntime || replayRuntime) window.addEventListener?.('pagehide', teardown, { once: true });
+  const teardown = () => { captureState?.dispose?.(); liveRuntime?.dispose(); replayRuntime?.dispose?.(); window.removeEventListener?.('pagehide', teardown); };
+  if (captureState || liveRuntime || replayRuntime) window.addEventListener?.('pagehide', teardown, { once: true });
   try {
     Object.assign(document.documentElement.dataset, THEME_DATASET);
-    const application = createApp(App, { layout, storage, scope: SCOPE, fixture, nestedHost, exportDestination, settingsHost, preferences, authorityHost, terminalBroker,
+    const application = createApp(App, { layout, storage, scope: SCOPE, fixture, nestedHost, exportDestination, settingsHost, preferences, authorityHost, terminalBroker, captureState, captureAvailable,
       runtime: /** @type {InstanceType<typeof App>['$props']['runtime']} */ (/** @type {unknown} */ (fixtureMount?.runtime ?? liveRuntime)),
       terminal: fixtureMount?.terminal ?? null });
     installKitTheme(application);
