@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 319 | 55 | 264 |
-| Lanes finished OK | 319 | 55 | 264 |
-| Agent steps | 16,804 | 2,705 | 14,099 |
-| Lane-hours of agent work | 42.6 | 5.2 | 37.3 |
-| Fresh input tokens | 69,451,300 | 11,482,034 | 57,969,266 |
-| Cache-read input tokens | 1,548,666,840 | 226,255,212 | 1,322,411,628 |
+| Lanes launched | 320 | 55 | 265 |
+| Lanes finished OK | 320 | 55 | 265 |
+| Agent steps | 16,865 | 2,705 | 14,160 |
+| Lane-hours of agent work | 42.8 | 5.2 | 37.5 |
+| Fresh input tokens | 69,660,052 | 11,482,034 | 58,178,018 |
+| Cache-read input tokens | 1,554,649,714 | 226,255,212 | 1,328,394,502 |
 | Prompt cache hit % | 95.7 | 95.2 | 95.8 |
-| Output tokens | 14,828,343 | 2,135,708 | 12,692,635 |
-| Thinking tokens | 7,750,514 | 1,050,039 | 6,700,475 |
-| Cost (USD) | 13.0081 | 2.0279 | 10.9803 |
+| Output tokens | 14,882,801 | 2,135,708 | 12,747,093 |
+| Thinking tokens | 7,786,259 | 1,050,039 | 6,736,220 |
+| Cost (USD) | 13.0519 | 2.0279 | 11.024 |
 | Cost per lane (USD) | 0.0408 | 0.0369 | 0.0416 |
 
-Rooms: 74. Peak concurrent lanes [MEASURED from lane start/end]: 24.
+Rooms: 75. Peak concurrent lanes [MEASURED from lane start/end]: 24.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -43,7 +43,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
 | docs | 15 | 94.8 | 0.5371 |
-| fix | 9 | 96.7 | 0.4741 |
+| fix | 10 | 96.7 | 0.5178 |
 | kit | 3 | 96.5 | 0.1997 |
 | ops | 4 | 88.1 | 0.0468 |
 | plan | 12 | 92.6 | 0.3072 |
@@ -134,6 +134,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvac17 | conductor | Oct 27 15:59 | testing | 1 | 94.1 | 0.023 | Map AC-17 (nested demo) on the integration head and specify the smallest Argon units that make it pass live, with its negative control. |
 | mvui17 | UI orchestrator | Oct 27 16:30 | fix | 3 | 96.2 | 0.1455 | Fix renderer findings from the second real-app vision round: QA anchor grammar (kit anchors with '/' were rejected), wall tile Fold with no visible effect, Activity count stuck. |
 | mvui16b | UI orchestrator | Oct 27 16:46 | fix | 2 | 96.4 | 0.127 | Finish MV-UI8 (one type error) and fix real-app round 2 renderer findings: Float enabled in agent/READ mode, status bar contrast, recordings list never refreshed from the host. |
+| mvui16d | UI orchestrator | Oct 27 17:04 | fix | 1 | 96.6 | 0.0437 | Fix the judge notes on the MV-UI8 drop (stale echo replay, float geometry not applied by the kit, recordings refresh coalescing) and real-app L2-1 (local multislot toggles reaching the host). |
 
 ## Every lane
 
@@ -458,6 +459,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui17 | A | Activity count | Oct 27 16:31 | yes | 47 | 95.1 | 0.025678 |
 | mvui16b | T | type error, Float gating, status bar contrast | Oct 27 16:46 | yes | 82 | 97.5 | 0.057206 |
 | mvui16b | R | recordings list refresh | Oct 27 16:46 | yes | 72 | 95.2 | 0.069815 |
+| mvui16d | R | recordings refresh coalescing | Oct 27 17:04 | yes | 61 | 96.6 | 0.043733 |
 
 ## Method
 

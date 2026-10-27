@@ -1,17 +1,17 @@
 {
  "schema": "metaviewer.meta_ai_usage/v1",
  "totals": {
-  "lanes": 319,
-  "ok": 319,
-  "input_tokens": 69451300,
-  "cache_read_tokens": 1548666840,
-  "output_tokens": 14828343,
-  "thinking_tokens": 7750514,
+  "lanes": 320,
+  "ok": 320,
+  "input_tokens": 69660052,
+  "cache_read_tokens": 1554649714,
+  "output_tokens": 14882801,
+  "thinking_tokens": 7786259,
   "cache_hit_pct": 95.7,
-  "usd": 13.0081,
+  "usd": 13.0519,
   "usd_per_lane": 0.0408,
-  "steps": 16804,
-  "lane_hours": 42.6
+  "steps": 16865,
+  "lane_hours": 42.8
  },
  "peak_concurrent_lanes": 24,
  "rooms": {
@@ -7145,6 +7145,27 @@
    "thinking_tokens": 44465,
    "cache_hit_pct": 95.2,
    "usd": 0.069815
+  },
+  {
+   "room": "mvui16d",
+   "lane": "R",
+   "title": "recordings refresh coalescing",
+   "stage": "fix",
+   "model": "muse-spark-1.3",
+   "orchestrator": "UI orchestrator",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-27T16:04:59.493000+00:00",
+   "duration_s": 678.7,
+   "end_utc": "2026-10-27T16:16:18.217000+00:00",
+   "phase": "build",
+   "steps": 61,
+   "input_tokens": 208752,
+   "cache_read_tokens": 5982874,
+   "output_tokens": 54458,
+   "thinking_tokens": 35745,
+   "cache_hit_pct": 96.6,
+   "usd": 0.043733
   }
  ]
 }
