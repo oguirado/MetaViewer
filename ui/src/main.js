@@ -229,7 +229,7 @@ async function bootstrap() {
     ? { readRaw: async () => null, writeAtomic: async (/** @type {string} */ _json) => {} }
     : createLayoutStorage(getLayoutFacade());
   const layout = fixture ? createWallLayout(SCOPE, [...fixture.capsules]) : createInitialLayout(SCOPE);
-  const host = fixture ? null : /** @type {{metaviewer?: Partial<import('./settings/settingsModel.js').HostSettingsPort> & {nestedDepth?:()=>Promise<0|1|null>,selfCapsuleId?:()=>Promise<string|null>,recordingDestination?:()=>Promise<string|null>,authority?:import('./core/hostAdapters.js').AuthorityPort,sideTerminal?:import('./core/hostAdapters.js').TerminalPort,capture?:unknown}}} */ (window).metaviewer;
+  const host = fixture ? null : /** @type {{metaviewer?: Partial<import('./settings/settingsModel.js').HostSettingsPort> & {nestedDepth?:()=>Promise<0|1|null>,selfCapsuleId?:()=>Promise<string|null>,recordingDestination?:()=>Promise<string|null>,authority?:import('./core/hostAdapters.js').AuthorityPort,qa?:import('./qa/anchorCollector.js').QaFacade,sideTerminal?:import('./core/hostAdapters.js').TerminalPort,capture?:unknown}}} */ (window).metaviewer;
   let preferences = /** @type {Storage|null} */ (null);
   if (!fixture) { try { preferences = globalThis.localStorage; } catch { /* Storage may be unavailable. */ } }
   const settingsHost = createSettingsHost(host ?? null, preferences, fixture?.scheme ?? null);
@@ -265,8 +265,10 @@ async function bootstrap() {
     for (const surfaceId of seed.shots) await captureState.screenshot(surfaceId);
   }
   const replayRuntime = /** @type {{ dispose?: () => void }|null} */ (/** @type {unknown} */ (isLiveReplay ? fixtureMount?.runtime ?? null : null));
-  const teardown = () => { captureState?.dispose?.(); liveRuntime?.dispose(); replayRuntime?.dispose?.(); window.removeEventListener?.('pagehide', teardown); };
-  if (captureState || liveRuntime || replayRuntime) window.addEventListener?.('pagehide', teardown, { once: true });
+  let disposeQa = () => {};
+  let tornDown = false;
+  const teardown = () => { tornDown = true; disposeQa(); captureState?.dispose?.(); liveRuntime?.dispose(); replayRuntime?.dispose?.(); window.removeEventListener?.('pagehide', teardown); };
+  if (captureState || liveRuntime || replayRuntime || (!fixture && typeof host?.qa?.reportAnchors === 'function')) window.addEventListener?.('pagehide', teardown, { once: true });
   try {
     Object.assign(document.documentElement.dataset, THEME_DATASET);
     const application = createApp(App, { layout, storage, scope: SCOPE, fixture, nestedHost, exportDestination, settingsHost, preferences, authorityHost, terminalBroker, captureState, captureAvailable,
@@ -277,6 +279,12 @@ async function bootstrap() {
     /** @type {(scheme:string)=>void} */ (setKitScheme)(fixture?.scheme ?? 'mv-light');
     application.onUnmount?.(teardown);
     application.mount(MOUNT_SELECTOR);
+    if (!fixture && depth !== 1 && typeof host?.qa?.reportAnchors === 'function') {
+      const { installQaAnchorReporter } = await import('./qa/anchorCollector.js');
+      if (!tornDown) disposeQa = installQaAnchorReporter({
+        window: /** @type {import('./qa/anchorCollector.js').ReporterWindow} */ (window), document, facade: host.qa,
+      });
+    }
     // Fixture-only bench outcomes (mvui6): named replay steps drive the real
     // App dispatch paths through the lane-V hook. Numeric steps and live boot
     // carry no bench descriptor and ignore this branch entirely.
