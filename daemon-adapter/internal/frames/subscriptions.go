@@ -84,23 +84,34 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 		case <-timer.C:
 		}
 		capture, cancel := context.WithTimeout(ctx, s.cfg.CaptureTimeout)
+		var binding capsule.Binding
+		var native capsule.NativeFrame
+		var e error
+		locked := false
 		if s.cfg.CaptureLock != nil {
-			for !s.cfg.CaptureLock.TryLock() {
+			for {
+				if e = capture.Err(); e != nil {
+					break
+				}
+				if s.cfg.CaptureLock.TryLock() {
+					locked = true
+					break
+				}
 				select {
 				case <-capture.Done():
-					cancel()
-					return
 				case <-time.After(time.Millisecond):
 				}
 			}
 		}
-		binding, native, e := s.source.Capture(capture, id)
+		if e == nil {
+			binding, native, e = s.source.Capture(capture, id)
+		}
 		if e == nil {
 			e = capture.Err()
 		}
 		cancel()
 		if ctx.Err() != nil {
-			if s.cfg.CaptureLock != nil {
+			if locked {
 				s.cfg.CaptureLock.Unlock()
 			}
 			return
@@ -125,7 +136,7 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 		if failed {
 			event, eventErr := capsule.NewErrorEvent(id, &cli.Fault{Code: "capture_failed", Detail: "capture or publication refused"})
 			if eventErr != nil {
-				if s.cfg.CaptureLock != nil {
+				if locked {
 					s.cfg.CaptureLock.Unlock()
 				}
 				t.err = eventErr
@@ -140,7 +151,7 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 			deliveryErr = delivery.Err()
 		}
 		stop()
-		if s.cfg.CaptureLock != nil {
+		if locked {
 			s.cfg.CaptureLock.Unlock()
 		}
 		if deliveryErr != nil {
