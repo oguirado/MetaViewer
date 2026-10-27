@@ -316,6 +316,36 @@ class PackageIdentityTests(unittest.TestCase):
             self.assertTrue(receipt['reason'])
             self.assertIn('receipt_' , output.read_text())
 
+    def test_aggregate_rejects_package_spoofing_budgets(self):
+        text = CI.read_text().split('  ci-required:\n', 1)[1]
+        body = textwrap.dedent(text.split('      - name: Aggregate required results\n', 1)[1].split('        run: |\n', 1)[1])
+        rendered = re.sub(r'\$\{\{\s*job\.status\s*\}\}', 'success', body)
+        rendered = re.sub(r'\$\{\{\s*needs\.[\w-]+\.result\s*\}\}', 'success', rendered)
+        spoofed = json.loads(json.dumps(self.receipt))
+        spoofed['gate_id'] = 'budgets'
+        spoofed['leg'] = 'budgets'
+        spoofed['identities']['gate_revision'] = 'a' * 40
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = Path(tmp) / 'summary.md'
+            summary.write_text('')
+            env = dict(os.environ, GITHUB_STEP_SUMMARY=str(summary),
+                       RUNNER_TEMP='', MV_REQUIRED_RECEIPTS_DIR='',
+                       MV_REQUIRED_RECEIPTS='budgets',
+                       PACKAGE_RECEIPT=json.dumps(spoofed))
+            result = subprocess.run(['bash', '-e', '-u', '-o', 'pipefail', '-c', rendered],
+                                    cwd=ROOT, capture_output=True, text=True, env=env, timeout=15)
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('mismatched gate_id', result.stdout + result.stderr)
+            self.assertIn('FAIL required receipt missing: budgets', result.stdout + result.stderr)
+
+    def test_package_receipt_selector_has_no_cross_arch_fallback(self):
+        text = CI.read_text()
+        selectors = [line.strip() for line in text.splitlines() if line.strip().startswith('PACKAGE_RECEIPT:')]
+        self.assertGreaterEqual(len(selectors), 2)
+        for selector in selectors:
+            self.assertNotIn('|| needs.package.outputs.receipt_arm64', selector)
+            self.assertIn("needs.package.outputs[format('receipt_{0}', matrix.platform)]", selector)
+
 
 # Defined below the tests so workflow extraction can share the same verifier.
 def distribution_errors(receipt, product_root, revision, expected_arch=None):

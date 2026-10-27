@@ -388,7 +388,7 @@ def _strip_rust_cfg_test(text):
             m = _RUST_CFG_TEST_RE.match(text, i)
             if m is not None:
                 j = m.end()
-                brace = bracket = paren = 0
+                brace = bracket = paren = angle = 0
                 in_body_brace = False
                 semi_only = None
                 while j < n:
@@ -397,19 +397,39 @@ def _strip_rust_cfg_test(text):
                         j = nxt
                         continue
                     ch = text[j]
-                    if brace == 0 and bracket == 0 and paren == 0 and semi_only is None:
+                    if brace == 0 and bracket == 0 and paren == 0 and angle == 0 and semi_only is None:
                         if ch.isalpha() or ch == "_":
                             ident_m = re.match(r"[A-Za-z_][A-Za-z0-9_]*", text[j:])
                             if ident_m:
                                 kw = ident_m.group(0)
                                 if kw in ("use", "static", "type"):
                                     semi_only = True
+                                elif kw == "const":
+                                    if re.match(
+                                        r"^const\s+(?:unsafe\s+)?(?:extern\s+(?:\"[^\"]*\"\s+)?)?fn\b",
+                                        text[j:],
+                                    ):
+                                        semi_only = False
+                                    else:
+                                        semi_only = True
                                 elif kw in ("mod", "fn", "struct", "enum", "union", "trait", "impl"):
                                     semi_only = False
                                 j += len(kw)
                                 continue
                         elif ch == "=":
                             semi_only = True
+                    if brace == 0 and bracket == 0 and paren == 0 and not in_body_brace:
+                        if text.startswith(("->", "=>", "<<", ">>", "<=", ">="), j):
+                            j += 2
+                            continue
+                        if ch == "<":
+                            angle += 1
+                            j += 1
+                            continue
+                        if ch == ">":
+                            angle = max(0, angle - 1)
+                            j += 1
+                            continue
                     if ch == "[":
                         bracket += 1
                     elif ch == "]":
@@ -419,7 +439,7 @@ def _strip_rust_cfg_test(text):
                     elif ch == ")":
                         paren = max(0, paren - 1)
                     elif ch == "{":
-                        if brace == 0 and bracket == 0 and paren == 0 and not semi_only:
+                        if brace == 0 and bracket == 0 and paren == 0 and angle == 0 and not semi_only:
                             in_body_brace = True
                         brace += 1
                     elif ch == "}":
@@ -427,7 +447,7 @@ def _strip_rust_cfg_test(text):
                         if in_body_brace and brace == 0:
                             j += 1
                             break
-                    elif ch == ";" and brace == 0 and bracket == 0 and paren == 0 and not in_body_brace:
+                    elif ch == ";" and brace == 0 and bracket == 0 and paren == 0 and angle == 0 and not in_body_brace:
                         j += 1
                         break
                     j += 1

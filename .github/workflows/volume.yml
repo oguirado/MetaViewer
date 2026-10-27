@@ -314,7 +314,7 @@ jobs:
             echo "stress flake hunt rc $fr" >>"$LOG"
             [ $fr -ne 0 ] && [ $rc -eq 0 ] && rc=$fr
           fi
-          if [ $rc -eq 0 ]; then oc=PASS; rsn="100 mutant repetitions green"; else oc=FAIL; rsn="$iter_fail of 100 mutant repetitions failed"; fi
+          if [ $rc -eq 0 ]; then oc=PASS; rsn="100 mutant repetitions green"; elif [ "$iter_fail" -gt 0 ]; then oc=FAIL; rsn="$iter_fail of 100 mutant repetitions failed"; elif [ "${mr:-0}" -ne 0 ] && [ "${fr:-0}" -ne 0 ]; then oc=FAIL; rsn="agents mutant harness and flake-hunt failed"; elif [ "${mr:-0}" -ne 0 ]; then oc=FAIL; rsn="agents mutant harness failed (rc $mr)"; elif [ "${fr:-0}" -ne 0 ]; then oc=FAIL; rsn="flake-hunt failed (rc $fr)"; else oc=FAIL; rsn="$iter_fail of 100 mutant repetitions failed"; fi
           finish_gate volume-mutants "$rc" "$oc" "$rsn" "$LOG" tests/test_contract_mutants.py "volume:100-iters" 0 -- python3 -m unittest tests.test_contract_mutants -v
           exit $rc
   volume-e2e:

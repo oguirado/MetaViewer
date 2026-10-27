@@ -786,6 +786,60 @@ class GateTests(unittest.TestCase):
                     os.environ[key] = val
         self.assertTrue(all(not path.exists() for path in paths))
 
+    def test_descendants_ignores_later_sibling(self):
+        first = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'],
+                                 start_new_session=True)
+        second = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'],
+                                  start_new_session=True)
+        try:
+            self.assertNotIn(second.pid, descendants(first.pid))
+        finally:
+            for proc in (first, second):
+                proc.kill()
+                proc.wait()
+        libc = ctypes.CDLL(None)
+        subreaper = ctypes.c_int(-1)
+        if libc.prctl(36, 1, 0, 0, 0) == 0:
+            try:
+                with private_environment() as (_, environment):
+                    self.assertEqual(bounded([sys.executable, '-c', 'pass'],
+                                             self.fixture, environment, seconds=5), 0)
+                if libc.prctl(37, ctypes.byref(subreaper), 0, 0, 0) == 0:
+                    self.assertEqual(subreaper.value, 1)
+            finally:
+                libc.prctl(36, 0, 0, 0, 0)
+
+    def test_ui_smoke_reaps_setsid_grandchild(self):
+        environment = dict(os.environ)
+        self.prepare_smoke_fixture(environment)
+        environment['NODE'] = sys.executable
+        setsid_parent = Path(self.temp.name) / 'smoke-setsid-parent'
+        setsid_grandchild = Path(self.temp.name) / 'smoke-setsid-grandchild'
+        self.write(
+            'ui/test/smoke.mjs',
+            "import os,pathlib,time\n"
+            f"pathlib.Path({str(setsid_parent)!r}).write_text(str(os.getpid()))\n"
+            "r, w = os.pipe()\n"
+            "mid = os.fork()\n"
+            "if mid == 0:\n"
+            "    os.close(r)\n"
+            "    gc = os.fork()\n"
+            "    if gc == 0:\n"
+            "        os.setsid()\n"
+            f"        pathlib.Path({str(setsid_grandchild)!r}).write_text(str(os.getpid()))\n"
+            "        os.close(w)\n"
+            "        time.sleep(30)\n"
+            "    os._exit(0)\n"
+            "os.close(w)\n"
+            "os.waitpid(mid, 0)\n"
+            "os.read(r, 1)\n"
+            "time.sleep(30)\n",
+        )
+        self.assertEqual(ui_smoke_leg(self.fixture, environment, timeout=0.2), 1)
+        for marker_path in (setsid_parent, setsid_grandchild):
+            self.assertTrue(marker_path.is_file())
+            self.assertFalse(Path('/proc', marker_path.read_text()).exists())
+
 
 def validate_rust_dependencies(table, section):
     require(isinstance(table, dict), section + ': expected dependency table')
@@ -994,6 +1048,20 @@ def descendants(parent):
     caller_pid = os.getpid()
     caller_pgrp = os.getpgrp()
     parent_start = process_identity(parent) if type(parent) is int and parent > 1 else None
+    tokens = descendants.__dict__.setdefault('_tokens', {})
+    parent_token = None
+    if type(parent) is int and parent > 1:
+        try:
+            for item in Path('/proc', str(parent), 'environ').read_bytes().split(b'\0'):
+                if item.startswith(b'MV_SUBREAPER_TOKEN=') and len(item) > 19:
+                    parent_token = item
+                    if parent_start is not None:
+                        tokens[(parent, parent_start)] = item
+                    break
+        except OSError:
+            pass
+        if parent_token is None and parent_start is not None:
+            parent_token = tokens.get((parent, parent_start))
     for path in Path('/proc').glob('[0-9]*/stat'):
         try:
             pid = int(path.parent.name)
@@ -1004,9 +1072,13 @@ def descendants(parent):
                 pgrp, sid = int(fields[2]), int(fields[3])
                 if pgrp == parent or sid == parent:
                     children.setdefault(parent, []).append(pid)
-                elif (ppid == caller_pid and pgrp != caller_pgrp and
+                elif (parent_token is not None and ppid == caller_pid and pgrp != caller_pgrp and
                       (parent_start is None or int(fields[19]) >= int(parent_start))):
-                    children.setdefault(parent, []).append(pid)
+                    try:
+                        if parent_token in path.parent.joinpath('environ').read_bytes().split(b'\0'):
+                            children.setdefault(parent, []).append(pid)
+                    except OSError:
+                        pass
         except (FileNotFoundError, ProcessLookupError, ValueError):
             continue
     found = []
@@ -1024,10 +1096,21 @@ def descendants(parent):
 
 def stop_process_tree(process):
     # Only a recorded child tree in a separate session may receive signals.
+    prior = None
     try:
-        ctypes.CDLL(None).prctl(36, 1, 0, 0, 0)
+        import ctypes
+        libc = ctypes.CDLL(None)
+        state = ctypes.c_int(0)
+        if libc.prctl(37, ctypes.byref(state), 0, 0, 0) == 0:
+            prior = state.value
+        libc.prctl(36, 1, 0, 0, 0)
     except Exception:
         pass
+    token = getattr(process, '_subreaper_token', None)
+    if isinstance(token, bytes) and hasattr(descendants, '__dict__'):
+        ident = process_identity(process.pid)
+        if ident is not None:
+            descendants.__dict__.setdefault('_tokens', {})[(process.pid, ident)] = token
     pids = {}
 
     def refresh_pids():
@@ -1042,35 +1125,42 @@ def stop_process_tree(process):
                 if pid not in pids:
                     pids[pid] = process_identity(pid)
 
-    for sig in (signal.SIGTERM, signal.SIGKILL):
-        refresh_pids()
-        for pid in reversed(list(pids)):
-            if type(pid) is not int or pid <= 1 or pid == os.getpid():
-                raise ValueError('unsafe child pid')
-            try:
-                if pids[pid] is None or process_identity(pid) != pids[pid]:
-                    continue
-                if os.getpgid(pid) == os.getpgrp():
-                    raise ValueError('child shares caller process group')
-                os.kill(pid, sig)
-            except ProcessLookupError:
-                continue
-        if sig == signal.SIGTERM:
-            for _ in range(5):
-                time.sleep(0.01)
-                refresh_pids()
-    refresh_pids()
-    process.wait()
-    for pid in pids:
-        if type(pid) is int and pid > 1 and pid != process.pid:
-            for _ in range(20):
+    try:
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            refresh_pids()
+            for pid in reversed(list(pids)):
+                if type(pid) is not int or pid <= 1 or pid == os.getpid():
+                    raise ValueError('unsafe child pid')
                 try:
-                    wpid, _ = os.waitpid(pid, os.WNOHANG)
-                    if wpid == pid or not Path('/proc', str(pid)).exists():
+                    if pids[pid] is None or process_identity(pid) != pids[pid]:
+                        continue
+                    if os.getpgid(pid) == os.getpgrp():
+                        raise ValueError('child shares caller process group')
+                    os.kill(pid, sig)
+                except ProcessLookupError:
+                    continue
+            if sig == signal.SIGTERM:
+                for _ in range(5):
+                    time.sleep(0.01)
+                    refresh_pids()
+        refresh_pids()
+        process.wait()
+        for pid in pids:
+            if type(pid) is int and pid > 1 and pid != process.pid:
+                for _ in range(20):
+                    try:
+                        wpid, _ = os.waitpid(pid, os.WNOHANG)
+                        if wpid == pid or not Path('/proc', str(pid)).exists():
+                            break
+                        time.sleep(0.005)
+                    except ChildProcessError:
                         break
-                    time.sleep(0.005)
-                except ChildProcessError:
-                    break
+    finally:
+        try:
+            import ctypes
+            ctypes.CDLL(None).prctl(36, 1 if prior else 0, 0, 0, 0)
+        except Exception:
+            pass
 
 
 def process_identity(pid):
@@ -1081,13 +1171,22 @@ def process_identity(pid):
 
 
 def bounded(argv, cwd, environment, seconds=300):
+    prior = None
     try:
-        ctypes.CDLL(None).prctl(36, 1, 0, 0, 0)
+        import ctypes
+        libc = ctypes.CDLL(None)
+        state = ctypes.c_int(0)
+        if libc.prctl(37, ctypes.byref(state), 0, 0, 0) == 0:
+            prior = state.value
+        libc.prctl(36, 1, 0, 0, 0)
     except Exception:
         pass
     process = None
+    token = f'{os.getpid()}:{time.monotonic_ns()}:{os.urandom(8).hex()}'
+    child_env = dict(environment, MV_SUBREAPER_TOKEN=token)
     try:
-        process = subprocess.Popen(argv, cwd=cwd, env=environment, start_new_session=True)
+        process = subprocess.Popen(argv, cwd=cwd, env=child_env, start_new_session=True)
+        process._subreaper_token = f'MV_SUBREAPER_TOKEN={token}'.encode()
         try:
             return process.wait(timeout=seconds)
         except subprocess.TimeoutExpired:
@@ -1099,7 +1198,8 @@ def bounded(argv, cwd, environment, seconds=300):
                 stop_process_tree(process)
         finally:
             try:
-                ctypes.CDLL(None).prctl(36, 0, 0, 0, 0)
+                import ctypes
+                ctypes.CDLL(None).prctl(36, 1 if prior else 0, 0, 0, 0)
             except Exception:
                 pass
 
@@ -1242,7 +1342,7 @@ def electron_dist(root, environment):
     return None
 
 
-def ui_smoke_leg(root, environment):
+def ui_smoke_leg(root, environment, timeout=90):
     node = shutil.which(environment.get('NODE', 'node'), path=environment.get('PATH'))
     dist = electron_dist(root, environment)
     if node is None:
@@ -1261,17 +1361,39 @@ def ui_smoke_leg(root, environment):
                            ('smoke-main.mjs', 'METAVIEWER_MAIN_SMOKE_OK')):
         # Spool output to disk so diagnostics and marker checks remain bounded.
         with tempfile.TemporaryFile(mode='w+') as output:
-            process = subprocess.Popen([node, 'test/' + script], cwd=root / 'ui',
-                                       env=child, stdout=output, stderr=subprocess.STDOUT,
-                                       start_new_session=True)
+            prior = None
             try:
-                rc = process.wait(timeout=90)
-            except subprocess.TimeoutExpired:
-                stop_process_tree(process)
-                rc = 124
-            finally:
-                if process.poll() is None:
+                import ctypes
+                libc = ctypes.CDLL(None)
+                state = ctypes.c_int(0)
+                if libc.prctl(37, ctypes.byref(state), 0, 0, 0) == 0:
+                    prior = state.value
+                libc.prctl(36, 1, 0, 0, 0)
+            except Exception:
+                pass
+            token = f'{os.getpid()}:{time.monotonic_ns()}:{os.urandom(8).hex()}'
+            smoke_env = dict(child, MV_SUBREAPER_TOKEN=token)
+            process = None
+            try:
+                process = subprocess.Popen([node, 'test/' + script], cwd=root / 'ui',
+                                           env=smoke_env, stdout=output, stderr=subprocess.STDOUT,
+                                           start_new_session=True)
+                process._subreaper_token = f'MV_SUBREAPER_TOKEN={token}'.encode()
+                try:
+                    rc = process.wait(timeout=timeout)
+                except subprocess.TimeoutExpired:
                     stop_process_tree(process)
+                    rc = 124
+            finally:
+                try:
+                    if process is not None and process.poll() is None:
+                        stop_process_tree(process)
+                finally:
+                    try:
+                        import ctypes
+                        ctypes.CDLL(None).prctl(36, 1 if prior else 0, 0, 0, 0)
+                    except Exception:
+                        pass
             output.seek(0)
             witnessed = False
             for line in output:

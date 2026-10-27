@@ -260,6 +260,53 @@ class TestT7R2CArgonVolume(unittest.TestCase):
             self.assertEqual(res_valid.returncode, 0, res_valid.stderr)
             self.assertEqual(loaded_marker.read_text(encoding="utf-8"), str(build_dir / "index.html"))
 
+    def test_volume_mutants_rsn_names_flake_stage(self):
+        volume_text = (ROOT / ".github" / "workflows" / "volume.yml").read_text(encoding="utf-8")
+        mutants_sec = volume_text.split("  volume-mutants:\n", 1)[1].split("  volume-e2e:\n", 1)[0]
+        rsn_lines = [
+            line.strip()
+            for line in mutants_sec.splitlines()
+            if 'rsn="100 mutant repetitions green"' in line
+        ]
+        self.assertEqual(len(rsn_lines), 1)
+        rsn_stmt = rsn_lines[0]
+
+        def eval_rsn(rc: int, iter_fail: int, mr: int | None = None, fr: int | None = None) -> tuple[str, str]:
+            prelude = ["set -u -o pipefail", f"rc={rc}", f"iter_fail={iter_fail}"]
+            if mr is not None:
+                prelude.append(f"mr={mr}")
+            if fr is not None:
+                prelude.append(f"fr={fr}")
+            prelude.append(rsn_stmt)
+            prelude.append('printf "%s\\n%s\\n" "$oc" "$rsn"')
+            proc = subprocess.run(
+                ["bash", "-c", "\n".join(prelude)],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=10,
+            )
+            oc_val, rsn_val = proc.stdout.splitlines()
+            return oc_val, rsn_val
+
+        oc_flake, rsn_flake = eval_rsn(rc=1, iter_fail=0, mr=0, fr=1)
+        self.assertEqual(oc_flake, "FAIL")
+        self.assertIn("flake-hunt", rsn_flake)
+        self.assertNotEqual(rsn_flake, "0 of 100 mutant repetitions failed")
+
+        oc_mr, rsn_mr = eval_rsn(rc=1, iter_fail=0, mr=1, fr=0)
+        self.assertEqual(oc_mr, "FAIL")
+        self.assertIn("mutant harness", rsn_mr)
+        self.assertNotEqual(rsn_mr, "0 of 100 mutant repetitions failed")
+
+        oc_iter, rsn_iter = eval_rsn(rc=1, iter_fail=3)
+        self.assertEqual(oc_iter, "FAIL")
+        self.assertEqual(rsn_iter, "3 of 100 mutant repetitions failed")
+
+        oc_pass, rsn_pass = eval_rsn(rc=0, iter_fail=0)
+        self.assertEqual(oc_pass, "PASS")
+        self.assertEqual(rsn_pass, "100 mutant repetitions green")
+
 
 if __name__ == "__main__":
     unittest.main()

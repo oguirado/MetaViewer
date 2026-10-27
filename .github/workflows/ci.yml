@@ -2519,7 +2519,8 @@ jobs:
       - name: Verify independent package product
         env:
           PLATFORM: ${{ matrix.platform }}
-          PACKAGE_RECEIPT: ${{ matrix.platform == 'x64' && needs.package.outputs.receipt_x64 || needs.package.outputs.receipt_arm64 }}
+          # Per-arch package outputs: needs.package.outputs.receipt_x64 / needs.package.outputs.receipt_arm64
+          PACKAGE_RECEIPT: ${{ needs.package.outputs[format('receipt_{0}', matrix.platform)] }}
           PRODUCT_ROOT: ${{ runner.temp }}/metaviewer-products
         run: |
           # [TARGET, unit decision] Path 2B: reproduce and smoke local bytes;
@@ -2697,7 +2698,8 @@ jobs:
         if: always()
         env:
           PLATFORM: ${{ matrix.platform }}
-          PACKAGE_RECEIPT: ${{ matrix.platform == 'x64' && needs.package.outputs.receipt_x64 || needs.package.outputs.receipt_arm64 }}
+          # Per-arch package outputs: needs.package.outputs.receipt_x64 / needs.package.outputs.receipt_arm64
+          PACKAGE_RECEIPT: ${{ needs.package.outputs[format('receipt_{0}', matrix.platform)] }}
           MV_REQUIRED_RECEIPTS: budgets
         run: |
           fail=0
@@ -2737,8 +2739,11 @@ jobs:
               if not isinstance(r, dict): return ['not an object']
               if FORBIDDEN & set(r): return ['forbidden volatile keys']
               if r.get('schema') != 'gate_receipt/v1': return ['bad schema']
-              if name.endswith('.receipt.json') and norm_id(r.get('gate_id', '')) != norm_id(name):
-                  return ['mismatched gate_id: ' + str(r.get('gate_id'))]
+              gid = r.get('gate_id')
+              if not isinstance(gid, str) or not norm_id(gid):
+                  return ['missing gate_id']
+              if (name == 'package' or name.endswith('.receipt.json')) and norm_id(gid) != norm_id(name):
+                  return ['mismatched gate_id: ' + str(gid)]
               if r.get('outcome') not in ('PASS', 'FAIL', 'TIMEOUT', 'BLOCKED'): return ['bad outcome']
               ident = r.get('identities')
               if not isinstance(ident, dict): return ['bad identities']
@@ -2796,15 +2801,12 @@ jobs:
           errs = []
           seen_ids = set()
           for name, rec in receipts:
-              if name == 'package':
-                  seen_ids.add('package')
-              if isinstance(rec, dict) and isinstance(rec.get('gate_id'), str) and rec.get('gate_id'):
-                  seen_ids.add(norm_id(rec['gate_id']))
               e = check_receipt(rec, name)
               if e:
                   print(f'FAIL required receipt {name}: {e}')
                   errs.extend(e)
               else:
+                  seen_ids.add(norm_id(name if name else rec['gate_id']))
                   print(f'PASS required receipt {name}')
           for req_id in required_ids:
               if req_id not in seen_ids:

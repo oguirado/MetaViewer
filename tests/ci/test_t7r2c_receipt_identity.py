@@ -155,13 +155,14 @@ class TestT7R2CReceiptIdentity(unittest.TestCase):
             receipts_dir = pathlib.Path(tmp) / "receipts"
             receipts_dir.mkdir()
             good = valid_receipt()
+            good_pkg = dict(good, gate_id="package", leg="package")
             (receipts_dir / "unit.receipt.json").write_text(json.dumps(good), encoding="utf-8")
 
             # Negative control: valid PASS receipts in PACKAGE_RECEIPT and MV_REQUIRED_RECEIPTS_DIR pass.
             env_good = dict(
                 os.environ,
                 GITHUB_STEP_SUMMARY=str(summary),
-                PACKAGE_RECEIPT=json.dumps(good),
+                PACKAGE_RECEIPT=json.dumps(good_pkg),
                 MV_REQUIRED_RECEIPTS_DIR=str(receipts_dir),
             )
             res_ok = subprocess.run(
@@ -207,7 +208,7 @@ class TestT7R2CReceiptIdentity(unittest.TestCase):
                     env_bad = dict(
                         os.environ,
                         GITHUB_STEP_SUMMARY=str(summary),
-                        PACKAGE_RECEIPT=json.dumps(good),
+                        PACKAGE_RECEIPT=json.dumps(good_pkg),
                         MV_REQUIRED_RECEIPTS_DIR=str(receipts_dir),
                     )
                     res_bad = subprocess.run(
@@ -250,7 +251,7 @@ class TestT7R2CReceiptIdentity(unittest.TestCase):
                 env=dict(
                     os.environ,
                     GITHUB_STEP_SUMMARY=str(summary),
-                    PACKAGE_RECEIPT=json.dumps(good),
+                    PACKAGE_RECEIPT=json.dumps(good_pkg),
                     MV_REQUIRED_RECEIPTS_DIR=str(receipts_dir),
                     MV_REQUIRED_RECEIPTS="unit,rust",
                 ),

@@ -1076,6 +1076,34 @@ class RouterIndexTests(unittest.TestCase):
         )
         self.assertIn("publish_frame", control_syms)
 
+    def test_strip_cfg_test_where_brace_does_not_leak(self):
+        root, _env = self._tree(self._base_files())
+        mod = self._load_mod(root)
+        where_and_const_rs = (
+            b"#[cfg(test)]\n"
+            b"const TEST_CONST_GENERIC: MyType<{ 1 }> = MyType::new();\n"
+            b"#[cfg(test)]\n"
+            b"fn helper() where MyType<{ 1 }>: Sized {\n"
+            b"    fn leaked_test_symbol() {}\n"
+            b"}\n"
+            b"#[cfg(test)]\n"
+            b"const fn const_test_helper() -> u32 {\n"
+            b"    let _x = 1;\n"
+            b"    fn leaked_const_fn_symbol() {}\n"
+            b"    0\n"
+            b"}\n"
+            b"pub fn real_prod_symbol() {}\n"
+        )
+        stripped = mod._strip_rust_cfg_test(where_and_const_rs.decode("utf-8"))
+        self.assertNotIn("leaked_test_symbol", stripped)
+        self.assertNotIn("leaked_const_fn_symbol", stripped)
+        self.assertNotIn(">: Sized", stripped)
+        syms, _ = mod._extract_symbols_and_docs("src/lib.rs", "rs", where_and_const_rs)
+        self.assertNotIn("leaked_test_symbol", syms)
+        self.assertNotIn("leaked_const_fn_symbol", syms)
+        self.assertNotIn("TEST_CONST_GENERIC", syms)
+        self.assertIn("real_prod_symbol", syms)
+
 
 if __name__ == "__main__":
     unittest.main()
