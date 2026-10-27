@@ -758,6 +758,170 @@ export async function bundlePackage(root, arch = architecture.arch) {
   return {artifact,artifact_sha256:await digest(artifact),size_bytes:(await fs.stat(artifact)).size};
 }
 
+/** @type {Readonly<Record<string, { archiveSha256: string, treeSha256: string }>>} */
+export const PINNED_ELECTRON_DIST_TREES = Object.freeze({
+  [`electron-v${ELECTRON_PIN}-linux-arm64.zip`]: Object.freeze({
+    archiveSha256: 'f113a7f1f04ddb09f2e9b7bf4785f45eb1cb310dd9f2183e01f44c0a7b8df77d',
+    treeSha256: '1fb4bc1f410365889baf6fe046a190579da3a6bdf1de48d7afdee366af8cb244',
+  }),
+});
+
+/**
+ * Compute per-file SHA-256 digests and a deterministic tree digest over an
+ * unpacked Electron distribution directory.
+ * @param {string} dist
+ */
+export async function computeElectronDistTreeDigest(dist) {
+  /** @type {Array<{ name: string, mode: string }>} */
+  const entries = [];
+  /** @param {string} part */
+  async function walk(part) {
+    const dirPath = part ? join(dist, part) : dist;
+    const items = (await fs.readdir(dirPath, { withFileTypes: true })).slice().sort(compareEntryNames);
+    for (const item of items) {
+      const name = part ? `${part}/${item.name}` : item.name;
+      if (/[\r\n\\]/.test(name) || item.isSymbolicLink()) throw new Error('PKG_ELECTRON_CHECKSUM');
+      if (item.isDirectory()) {
+        await walk(name);
+      } else if (item.isFile()) {
+        const st = await fs.lstat(join(dist, name));
+        entries.push({ name, mode: (st.mode & 0o111) !== 0 ? '0755' : '0644' });
+      } else {
+        throw new Error('PKG_ELECTRON_CHECKSUM');
+      }
+    }
+  }
+  await walk('');
+  entries.sort(compareEntryNames);
+  if (entries.length === 0) throw new Error('PKG_ELECTRON_CHECKSUM');
+  /** @type {Map<string, string>} */
+  const files = new Map();
+  const lines = [];
+  for (const entry of entries) {
+    const fileDigest = await digest(join(dist, entry.name));
+    files.set(entry.name, fileDigest);
+    lines.push(`${fileDigest} ${entry.mode}  ${entry.name}\n`);
+  }
+  const treeSha256 = createHash('sha256').update(lines.join('')).digest('hex');
+  return { treeSha256, files };
+}
+
+/**
+ * Verify an unpacked Electron distribution against checksums.json, a pinned
+ * per-file tree digest, or a checksum-verified local upstream archive.
+ * @param {string} dist
+ * @param {string} [arch]
+ * @param {{ checksumsPath?: string, zipCandidates?: string[], expectedTreeDigest?: string }} [options]
+ */
+export async function verifyElectronDist(dist, arch = architecture.arch, options = {}) {
+  const { archive: expectedArchive } = packageArchitecture(arch);
+  await fs.access(join(dist, 'electron')).catch(() => {
+    throw new Error('PKG_ELECTRON_CHECKSUM');
+  });
+  const versionRaw = await fs.readFile(join(dist, 'version'), 'utf8').catch(() => '');
+  if (versionRaw.trim().replace(/^v/, '') !== ELECTRON_PIN) throw new Error('PKG_ELECTRON_PIN');
+  await verifyBinary(join(dist, 'electron'), arch);
+  const checksumsCandidates = [
+    ...(options.checksumsPath ? [options.checksumsPath] : []),
+    join(dirname(dist), 'checksums.json'),
+    join(ui, 'node_modules/electron/checksums.json'),
+  ];
+  /** @type {Record<string, any> | null} */
+  let checksums = null;
+  for (const candidate of checksumsCandidates) {
+    try {
+      checksums = JSON.parse(await fs.readFile(candidate, 'utf8'));
+      break;
+    } catch {}
+  }
+  const expectedArchiveSha = checksums?.[expectedArchive];
+  if (typeof expectedArchiveSha !== 'string' || !/^[0-9a-f]{64}$/.test(expectedArchiveSha)) {
+    throw new Error('PKG_ELECTRON_CHECKSUM');
+  }
+  const { treeSha256, files } = await computeElectronDistTreeDigest(dist);
+  const expectedTree = options.expectedTreeDigest ?? checksums?.[`${expectedArchive}:tree`];
+  if (typeof expectedTree === 'string') {
+    if (treeSha256 !== expectedTree) throw new Error('PKG_ELECTRON_CHECKSUM');
+    return { archiveSha256: expectedArchiveSha, treeSha256 };
+  }
+  const expectedFiles = checksums?.[`${expectedArchive}:files`];
+  if (expectedFiles && typeof expectedFiles === 'object' && !Array.isArray(expectedFiles)) {
+    const keys = Object.keys(expectedFiles);
+    if (keys.length === 0 || keys.length !== files.size) throw new Error('PKG_ELECTRON_CHECKSUM');
+    for (const key of keys) {
+      if (files.get(key) !== expectedFiles[key]) throw new Error('PKG_ELECTRON_CHECKSUM');
+    }
+    return { archiveSha256: expectedArchiveSha, treeSha256 };
+  }
+  const pinned = PINNED_ELECTRON_DIST_TREES[expectedArchive];
+  if (pinned && pinned.archiveSha256 === expectedArchiveSha) {
+    if (treeSha256 !== pinned.treeSha256) throw new Error('PKG_ELECTRON_CHECKSUM');
+    return { archiveSha256: expectedArchiveSha, treeSha256 };
+  }
+  const zipCandidates = options.zipCandidates ?? [join(tmpdir(), expectedArchive), join('/tmp', expectedArchive)];
+  for (const zipPath of zipCandidates) {
+    const zipStat = await fs.stat(zipPath).catch(() => null);
+    if (!zipStat?.isFile()) continue;
+    if ((await digest(zipPath)) !== expectedArchiveSha) continue;
+    const unpackTmp = await fs.mkdtemp(join(tmpdir(), '.mv-el-verify-'));
+    try {
+      await execute('unzip', ['-q', zipPath, '-d', unpackTmp]);
+      const unpacked = await computeElectronDistTreeDigest(unpackTmp);
+      if (unpacked.treeSha256 !== treeSha256) throw new Error('PKG_ELECTRON_CHECKSUM');
+      return { archiveSha256: expectedArchiveSha, treeSha256 };
+    } finally {
+      await fs.rm(unpackTmp, { recursive: true, force: true });
+    }
+  }
+  throw new Error('PKG_ELECTRON_CHECKSUM');
+}
+
+/**
+ * Stage package directory and manifest together under workDir and publish with
+ * manifest-first fsync + single directory rename, rolling back on any fault so
+ * a partial final directory without its manifest is never visible.
+ * @param {string} stagedDir
+ * @param {string} workDir
+ * @param {string} finalDir
+ * @param {{ rename?: typeof fs.rename }} [options]
+ */
+export async function publishStagedPackage(stagedDir, workDir, finalDir, options = {}) {
+  const renameFn = options.rename ?? fs.rename;
+  const outputDir = dirname(finalDir);
+  const archName = basename(finalDir);
+  const prior = await fs.readdir(outputDir);
+  if (prior.includes(archName) || prior.includes(`${archName}.sha256`)) {
+    throw new Error('Package destination already exists');
+  }
+  const bundleStage = join(workDir, 'publish-stage');
+  await fs.mkdir(bundleStage, { recursive: true });
+  const stagedTargetDir = join(bundleStage, archName);
+  const stagedManifest = join(bundleStage, `${archName}.sha256`);
+  await fs.rename(stagedDir, stagedTargetDir);
+  await writeManifest(stagedTargetDir, stagedManifest);
+  const manifestFd = await fs.open(stagedManifest, 'r');
+  try {
+    await manifestFd.sync();
+  } finally {
+    await manifestFd.close();
+  }
+  const finalManifest = `${finalDir}.sha256`;
+  try {
+    await renameFn(stagedManifest, finalManifest);
+    await renameFn(stagedTargetDir, finalDir);
+  } catch (error) {
+    await fs.rm(finalDir, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(finalManifest, { force: true }).catch(() => {});
+    throw error;
+  }
+  const outFd = await fs.open(outputDir, 'r');
+  try {
+    await outFd.sync();
+  } finally {
+    await outFd.close();
+  }
+}
+
 /**
  * Format bounded process diagnostics carrying exit code, signal, and the last
  * 3000 characters of stdout and stderr.
@@ -1084,18 +1248,21 @@ export async function packageShell(env = process.env) {
     await fs.writeFile(join(app, 'package.json'), JSON.stringify({ name: 'metaviewer',
       version: pkg.version, type: 'module', main: 'electron/nesting.js' }));
     let zipDir = env.MV_ELECTRON_ZIP_DIR;
+    let expectedZipDigest = '';
     if (!zipDir) {
       const dist = await fs.realpath(/** @type {string} */ (env.ELECTRON_OVERRIDE_DIST_PATH));
-      await fs.access(join(dist, 'electron'));
-      if ((await fs.readFile(join(dist,'version'),'utf8')).trim().replace(/^v/,'') !== ELECTRON_PIN) throw new Error('PKG_ELECTRON_PIN');
+      await verifyElectronDist(dist, architecture.arch);
       zipDir = join(work, 'electron-zip');
       await fs.mkdir(zipDir);
       await execute('zip', ['-q', '-r', join(zipDir, archive), '.'], { cwd: dist });
+      expectedZipDigest = await digest(join(zipDir, archive));
+    } else {
+      const checksums = JSON.parse(await fs.readFile(join(ui, 'node_modules/electron/checksums.json'), 'utf8'));
+      expectedZipDigest = checksums[archive] || '';
     }
     await fs.access(join(zipDir, archive));
-    if (env.MV_ELECTRON_ZIP_DIR) {
-      const checksums=JSON.parse(await fs.readFile(join(ui,'node_modules/electron/checksums.json'),'utf8'));
-      if (!checksums[archive] || await digest(join(zipDir,archive)) !== checksums[archive]) throw new Error('PKG_ELECTRON_CHECKSUM');
+    if (!expectedZipDigest || (await digest(join(zipDir, archive))) !== expectedZipDigest) {
+      throw new Error('PKG_ELECTRON_CHECKSUM');
     }
     const native = join(work,'native');
     await fs.mkdir(native);
@@ -1142,10 +1309,7 @@ the core; when absent, it starts core-only in a typed degraded state.
     await applyFuses(join(built[0], 'metaviewer'), fuseConfig);
     await normalizePackageModes(built[0]);
     await verifyPackagedSecurity(built[0]);
-    const stagedManifest = join(work, 'package.sha256');
-    await writeManifest(built[0], stagedManifest);
-    await fs.rename(built[0], final);
-    await fs.rename(stagedManifest, `${final}.sha256`);
+    await publishStagedPackage(built[0], work, final);
     const product = await bundlePackage(final);
     console.log(JSON.stringify({ ...product, directory: final, manifest: `${final}.sha256`,
       argv: [join(final, 'metaviewer')], wmClassExpected: ['metaviewer', 'metaviewer'] }));

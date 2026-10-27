@@ -1,19 +1,29 @@
 // [TARGET, unit decision] CI Electron host for the real wall component.
-const { app, BrowserWindow } = require('electron');
-const { readFileSync, writeFileSync } = require('node:fs');
+const { existsSync, readFileSync, writeFileSync } = require('node:fs');
 const { join } = require('node:path');
+const manifestPath = process.env.MV_E2E_MANIFEST;
+const buildDir = process.env.MV_E2E_BUILD;
+if (!manifestPath || !existsSync(manifestPath)) {
+  process.stderr.write('MV_E2E_MANIFEST missing or unreadable\n');
+  process.exit(2);
+}
+if (!buildDir || !existsSync(join(buildDir, 'index.html'))) {
+  process.stderr.write('MV_E2E_BUILD missing index.html\n');
+  process.exit(2);
+}
+const { app, BrowserWindow } = require('electron');
 app.whenReady().then(async () => {
   const win = new BrowserWindow({ width: 1280, height: 900,
     webPreferences: { preload: join(__dirname, 'preload.cjs'),
       contextIsolation: true, sandbox: true, nodeIntegration: false,
       additionalArguments: ['--mv-e2e-fixture=' + JSON.stringify({
-        capsules: JSON.parse(readFileSync(process.env.MV_E2E_MANIFEST, 'utf8')).capsules,
+        capsules: JSON.parse(readFileSync(manifestPath, 'utf8')).capsules,
         crossRoute: process.env.MV_E2E_CROSS_ROUTE === '1',
         advancingFrames: process.env.MV_E2E_ADVANCING_FRAMES === '1',
         stalledTile: process.env.MV_E2E_STALLED_TILE ?? null,
       })] } });
   if (process.env.MV_E2E_TELEMETRY) installTelemetry(win, JSON.parse(process.env.MV_E2E_TELEMETRY));
-  await win.loadFile(join(process.env.MV_E2E_BUILD, 'index.html'));
+  await win.loadFile(join(buildDir, 'index.html'));
 });
 
 // [TARGET, unit decision] Observe the existing frame tag and permanent body

@@ -23,6 +23,7 @@ if ! command -v python3 >/dev/null; then
 fi
 export PYTHONDONTWRITEBYTECODE=1
 exec python3 - "$root" "$selector" <<'PY'
+import ctypes
 import fnmatch
 import hashlib
 import json
@@ -677,30 +678,59 @@ class GateTests(unittest.TestCase):
         self.assertIn('FAIL aggregate', self.call(expected=2, env=environment))
 
     def test_bounded_cleanup(self):
-        with private_environment() as (_, environment):
-            paths = [Path(environment[key]) for key in
-                     ('TMPDIR', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_RUNTIME_DIR')]
-            self.assertEqual(len(set(paths)), len(paths))
-            self.assertTrue(all(path.stat().st_mode & 0o777 == 0o700 for path in paths))
-            marker = Path(self.temp.name) / 'pid'
-            code = ("import os,time,pathlib; pathlib.Path(" + repr(str(marker)) +
-                    ").write_text(str(os.getpid())); time.sleep(30)")
-            self.assertEqual(bounded([sys.executable, '-c', code], self.fixture,
-                                     environment, seconds=0.2), 124)
-            pid = int(marker.read_text())
-            self.assertFalse(Path('/proc', str(pid)).exists())
-            parent_marker = Path(self.temp.name) / 'parent'
-            child_marker = Path(self.temp.name) / 'child'
-            code = (
-                "import os,pathlib,signal,subprocess,sys,time; "
-                "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)']); "
-                "pathlib.Path(" + repr(str(parent_marker)) + ").write_text(str(os.getpid())); "
-                "pathlib.Path(" + repr(str(child_marker)) + ").write_text(str(child.pid)); "
-                "signal.signal(signal.SIGTERM,lambda *_: (child.wait(),sys.exit(0))); time.sleep(30)")
-            self.assertEqual(bounded([sys.executable, '-c', code], self.fixture,
-                                     environment, seconds=0.2), 124)
-            for marker_path in (parent_marker, child_marker):
-                self.assertFalse(Path('/proc', marker_path.read_text()).exists())
+        saved = {key: os.environ.get(key) for key in SANITIZED_ENV_KEYS}
+        try:
+            for key in ('LD_PRELOAD', 'LD_LIBRARY_PATH', 'NODE_OPTIONS', 'PYTHONPATH', 'BASH_ENV'):
+                os.environ[key] = '/tmp/planted-injected-value'
+            with private_environment() as (_, environment):
+                for key in ('LD_PRELOAD', 'LD_LIBRARY_PATH', 'NODE_OPTIONS', 'PYTHONPATH', 'BASH_ENV'):
+                    self.assertNotIn(key, environment)
+                paths = [Path(environment[key]) for key in
+                         ('TMPDIR', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_RUNTIME_DIR')]
+                self.assertEqual(len(set(paths)), len(paths))
+                self.assertTrue(all(path.stat().st_mode & 0o777 == 0o700 for path in paths))
+                marker = Path(self.temp.name) / 'pid'
+                code = ("import os,time,pathlib; pathlib.Path(" + repr(str(marker)) +
+                        ").write_text(str(os.getpid())); time.sleep(30)")
+                self.assertEqual(bounded([sys.executable, '-c', code], self.fixture,
+                                         environment, seconds=0.2), 124)
+                pid = int(marker.read_text())
+                self.assertFalse(Path('/proc', str(pid)).exists())
+                parent_marker = Path(self.temp.name) / 'parent'
+                child_marker = Path(self.temp.name) / 'child'
+                code = (
+                    "import os,pathlib,signal,subprocess,sys,time; "
+                    "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)']); "
+                    "pathlib.Path(" + repr(str(parent_marker)) + ").write_text(str(os.getpid())); "
+                    "pathlib.Path(" + repr(str(child_marker)) + ").write_text(str(child.pid)); "
+                    "signal.signal(signal.SIGTERM,lambda *_: (child.wait(),sys.exit(0))); time.sleep(30)")
+                self.assertEqual(bounded([sys.executable, '-c', code], self.fixture,
+                                         environment, seconds=0.2), 124)
+                for marker_path in (parent_marker, child_marker):
+                    self.assertFalse(Path('/proc', marker_path.read_text()).exists())
+                late_parent = Path(self.temp.name) / 'late-parent'
+                late_child = Path(self.temp.name) / 'late-child'
+                late_code = (
+                    "import os,pathlib,signal,subprocess,sys,time\n"
+                    "def on_term(*_):\n"
+                    "    c = subprocess.Popen([sys.executable,'-c','import signal,time; "
+                    "signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)'])\n"
+                    "    pathlib.Path(" + repr(str(late_child)) + ").write_text(str(c.pid))\n"
+                    "    time.sleep(30)\n"
+                    "signal.signal(signal.SIGTERM, on_term)\n"
+                    "pathlib.Path(" + repr(str(late_parent)) + ").write_text(str(os.getpid()))\n"
+                    "time.sleep(30)\n"
+                )
+                self.assertEqual(bounded([sys.executable, '-c', late_code], self.fixture,
+                                         environment, seconds=0.2), 124)
+                for marker_path in (late_parent, late_child):
+                    self.assertFalse(Path('/proc', marker_path.read_text()).exists())
+        finally:
+            for key, val in saved.items():
+                if val is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = val
         self.assertTrue(all(not path.exists() for path in paths))
 
 
@@ -899,18 +929,34 @@ sys.exit(0 if result.wasSuccessful() and not
 '''
 
 
+SANITIZED_ENV_KEYS = (
+    'LD_PRELOAD', 'LD_LIBRARY_PATH', 'LD_AUDIT', 'LD_DEBUG',
+    'NODE_OPTIONS', 'PYTHONPATH', 'PYTHONSTARTUP', 'PYTHONINSPECT',
+    'BASH_ENV', 'ENV', 'DYLD_INSERT_LIBRARIES',
+)
+
+
 def descendants(parent):
     children = {}
+    caller_pgrp = os.getpgrp()
     for path in Path('/proc').glob('[0-9]*/stat'):
         try:
+            pid = int(path.parent.name)
             fields = path.read_text().rsplit(')', 1)[1].split()
-            children.setdefault(int(fields[1]), []).append(int(path.parent.name))
-        except (FileNotFoundError, ProcessLookupError):
+            children.setdefault(int(fields[1]), []).append(pid)
+            if type(parent) is int and parent > 1 and parent != caller_pgrp and len(fields) > 3:
+                if int(fields[2]) == parent or int(fields[3]) == parent:
+                    children.setdefault(parent, []).append(pid)
+        except (FileNotFoundError, ProcessLookupError, ValueError):
             continue
     found = []
+    seen = set()
     pending = [parent]
     while pending:
         current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
         found.append(current)
         pending.extend(children.get(current, ()))
     return found
@@ -918,9 +964,27 @@ def descendants(parent):
 
 def stop_process_tree(process):
     # Only a recorded child tree in a separate session may receive signals.
-    pids = {pid: process_identity(pid) for pid in descendants(process.pid)}
+    try:
+        ctypes.CDLL(None).prctl(36, 1, 0, 0, 0)
+    except Exception:
+        pass
+    pids = {}
+
+    def refresh_pids():
+        roots = [process.pid, *[pid for pid, ident in pids.items()
+                                if ident is not None and process_identity(pid) == ident]]
+        visited = set()
+        for root_pid in roots:
+            if root_pid in visited:
+                continue
+            for pid in descendants(root_pid):
+                visited.add(pid)
+                if pid not in pids:
+                    pids[pid] = process_identity(pid)
+
     for sig in (signal.SIGTERM, signal.SIGKILL):
-        for pid in reversed(pids):
+        refresh_pids()
+        for pid in reversed(list(pids)):
             if type(pid) is not int or pid <= 1 or pid == os.getpid():
                 raise ValueError('unsafe child pid')
             try:
@@ -932,8 +996,16 @@ def stop_process_tree(process):
             except ProcessLookupError:
                 continue
         if sig == signal.SIGTERM:
-            time.sleep(0.05)
+            for _ in range(5):
+                time.sleep(0.01)
+                refresh_pids()
     process.wait()
+    for pid in pids:
+        if type(pid) is int and pid > 1 and pid != process.pid:
+            try:
+                os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                continue
 
 
 def process_identity(pid):
@@ -962,6 +1034,8 @@ class private_environment:
         self.path = Path(path)
         self.path.chmod(0o700)
         environment = dict(os.environ, PYTHONDONTWRITEBYTECODE='1')
+        for key in SANITIZED_ENV_KEYS:
+            environment.pop(key, None)
         for key in ('TMPDIR', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_RUNTIME_DIR'):
             target = self.path / key.lower()
             target.mkdir(mode=0o700)

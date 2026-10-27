@@ -57,7 +57,7 @@ jobs:
           echo "MV_YAML_PYTHON=$yaml_python" >> "$GITHUB_ENV"
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
         with:
-          python-version: "3.12"
+          python-version: "3.12.3"
       - name: Run policy fixtures
         env:
           JOB_ID: ci-policy
@@ -516,10 +516,10 @@ jobs:
           go test -race -run '^$' ./...
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
         with:
-          python-version: "3.12"
+          python-version: "3.12.3"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # setup-node v4.4.0
         with:
-          node-version: "24"
+          node-version: "24.14.0"
       # [TARGET, unit decision] These tests compile Rust drivers and validate
       # frozen offline resolution; provision their toolchain/cache explicitly.
       - name: Prepare pinned Rust formatter
@@ -656,16 +656,20 @@ jobs:
           LOG="$EVDIR/laws-range.log"
           : > "$LOG"
           : "$BEFORE" # Already exported by the step env.
-          RANGE=$(python3 .github/workflows/laws_range.py) || exit 1
-          if [ -n "$RANGE" ]; then
-            set -- python3 tools/check_laws.py --range "$RANGE"
+          if RANGE=$(python3 .github/workflows/laws_range.py 2>"$LOG"); then
+            if [ -n "$RANGE" ]; then
+              set -- python3 tools/check_laws.py --range "$RANGE"
+            else
+              set -- python3 tools/check_laws.py
+            fi
+            timeout 1200 "$@" >"$LOG" 2>&1; r=$?
+            if [ $r -eq 0 ]; then oc=PASS; rsn="laws history check green"; else oc=FAIL; rsn="laws history check failed"; fi
+            finish_gate laws-range "$r" "$oc" "$rsn" "$LOG" tools/check_laws.py "unparsed:check_laws" 0 -- "$@" || rc=2
+            [ $r -ne 0 ] && [ $rc -eq 0 ] && rc=$r
           else
-            set -- python3 tools/check_laws.py
+            blocked laws-range "laws range selection failed" .github/workflows/laws_range.py -- python3 .github/workflows/laws_range.py || r=$?
+            [ "${r:-2}" -ne 0 ] && [ $rc -eq 0 ] && rc=${r:-2}
           fi
-          timeout 1200 "$@" >"$LOG" 2>&1; r=$?
-          if [ $r -eq 0 ]; then oc=PASS; rsn="laws history check green"; else oc=FAIL; rsn="laws history check failed"; fi
-          finish_gate laws-range "$r" "$oc" "$rsn" "$LOG" tools/check_laws.py "unparsed:check_laws" 0 -- "$@" || rc=2
-          [ $r -ne 0 ] && [ $rc -eq 0 ] && rc=$r
           LOG="$EVDIR/laws-version.log"
           : > "$LOG"
           set -- python3 tools/check_laws.py --version
@@ -697,7 +701,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
         with:
-          python-version: "3.12"
+          python-version: "3.12.3"
       - name: Run router gate
         env:
           JOB_ID: router
@@ -840,7 +844,7 @@ jobs:
           go test -race -run '^$' ./...
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
         with:
-          python-version: "3.12"
+          python-version: "3.12.3"
       - name: Prepare locked Rust dependencies
         run: |
           set -euo pipefail
@@ -1030,7 +1034,7 @@ jobs:
           go test -race -run '^$' ./...
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
         with:
-          python-version: "3.12"
+          python-version: "3.12.3"
       - name: Require build network namespace
         run: |
           set -euo pipefail
@@ -1190,7 +1194,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
         with:
-          python-version: "3.12"
+          python-version: "3.12.3"
       - name: Run Python agent gates
         env:
           JOB_ID: python
@@ -1326,7 +1330,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # setup-node v4.4.0
         with:
-          node-version: "24"
+          node-version: "24.14.0"
       - name: Resolve runner YAML parser
         run: |
           set -euo pipefail
@@ -1341,7 +1345,7 @@ jobs:
           echo "MV_YAML_PYTHON=$yaml_python" >> "$GITHUB_ENV"
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
         with:
-          python-version: "3.12"
+          python-version: "3.12.3"
       - name: Prepare pinned Rust formatter
         run: |
           set -euo pipefail
@@ -1635,10 +1639,10 @@ jobs:
           go test -race -run '^$' ./...
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
         with:
-          python-version: "3.12"
+          python-version: "3.12.3"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # setup-node v4.4.0
         with:
-          node-version: "24"
+          node-version: "24.14.0"
       - name: Require kit access token
         env:
           KIT_REPO_TOKEN: ${{ secrets.KIT_REPO_TOKEN }}
@@ -1918,7 +1922,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
         with:
-          python-version: "3.12"
+          python-version: "3.12.3"
       - name: Report novac applicability
         env:
           JOB_ID: novac
@@ -2031,10 +2035,10 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: "24"
+          node-version: "24.14.0"
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
-          python-version: "3.12"
+          python-version: "3.12.3"
       - name: Read locked kit identity
         id: kit
         run: |
@@ -2210,7 +2214,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
         with:
-          python-version: "3.12"
+          python-version: "3.12.3"
       - name: Report macos build applicability
         shell: bash
         env:
@@ -2315,7 +2319,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
         with:
-          python-version: "3.12"
+          python-version: "3.12.3"
       - name: Report windows build applicability
         shell: bash
         env:
@@ -2426,10 +2430,10 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # checkout v4.2.2
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: "24"
+          node-version: "24.14.0"
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
-          python-version: "3.12"
+          python-version: "3.12.3"
       - name: Read locked kit identity
         id: kit
         run: |
@@ -2679,6 +2683,9 @@ jobs:
           exit $r
       - name: Aggregate required results
         if: always()
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          PACKAGE_RECEIPT: ${{ matrix.platform == 'x64' && needs.package.outputs.receipt_x64 || needs.package.outputs.receipt_arm64 }}
         run: |
           fail=0
           check_distribution="${{ job.status }}"
@@ -2701,6 +2708,61 @@ jobs:
           check e2e "${{ needs.e2e.result }}"
           check novac "${{ needs.novac.result }}"
           check package "${{ needs.package.result }}"
+          if [ -n "${PACKAGE_RECEIPT:-}" ] || [ -n "${MV_REQUIRED_RECEIPTS_DIR:-}" ] || [ -n "${RUNNER_TEMP:-}" ]; then
+            python3 - <<'PYEOF' || fail=1
+          import json, os, pathlib, re, sys
+          HEX = re.compile(r'^[0-9a-f]{64}$')
+          SHA = re.compile(r'^[0-9a-f]{40}$')
+          FORBIDDEN = {'timestamp', 'started_at', 'finished_at', 'duration_ms', 'pid', 'ppid', 'hostname', 'runner_name', 'temp_dir'}
+          def check_receipt(r):
+              if not isinstance(r, dict): return ['not an object']
+              if FORBIDDEN & set(r): return ['forbidden volatile keys']
+              if r.get('schema') != 'gate_receipt/v1': return ['bad schema']
+              if r.get('outcome') not in ('PASS', 'FAIL', 'TIMEOUT', 'BLOCKED'): return ['bad outcome']
+              ident = r.get('identities')
+              if not isinstance(ident, dict): return ['bad identities']
+              if not SHA.match(str(ident.get('gate_revision', ''))): return ['bad gate_revision']
+              for k in ('instrument_sha256', 'sanitized_log_sha256', 'configuration_sha256'):
+                  if not HEX.match(str(ident.get(k, ''))): return ['bad ' + k]
+              counts = r.get('counts')
+              if not isinstance(counts, dict): return ['bad counts']
+              src = counts.get('source', '')
+              if str(src).startswith('parsed:') and (type(counts.get('passed')) is not int or counts.get('passed', 0) <= 0):
+                  return ['parsed count must have passed > 0']
+              if r.get('outcome') == 'PASS' and r.get('rc') != 0: return ['PASS requires rc 0']
+              if r.get('outcome') != 'PASS': return ['non-PASS outcome: ' + str(r.get('outcome'))]
+              assertions = r.get('assertions')
+              if not isinstance(assertions, list) or not assertions or not all(isinstance(a, dict) and a.get('accepted') is True for a in assertions):
+                  return ['unaccepted assertions']
+              return []
+          receipts = []
+          pkg_raw = os.environ.get('PACKAGE_RECEIPT', '').strip()
+          if pkg_raw:
+              try:
+                  receipts.append(('package', json.loads(pkg_raw)))
+              except Exception as exc:
+                  print(f'FAIL required receipt package: {exc}')
+                  sys.exit(1)
+          for base in [os.environ.get('MV_REQUIRED_RECEIPTS_DIR', '').strip(),
+                       os.path.join(os.environ['RUNNER_TEMP'], 'metaviewer-ci', 'ci-required', os.environ.get('PLATFORM', 'x64'))
+                       if os.environ.get('RUNNER_TEMP') else '']:
+              if base and os.path.isdir(base):
+                  for p in sorted(pathlib.Path(base).rglob('*.receipt.json')):
+                      try:
+                          receipts.append((p.name, json.loads(p.read_text(encoding='utf-8'))))
+                      except Exception as exc:
+                          print(f'FAIL required receipt {p.name}: {exc}')
+                          sys.exit(1)
+          errs = []
+          for name, rec in receipts:
+              e = check_receipt(rec)
+              if e:
+                  print(f'FAIL required receipt {name}: {e}')
+                  errs.extend(e)
+          if errs:
+              sys.exit(1)
+          PYEOF
+          fi
           {
             echo "## ci-required [VM] rc $fail"
             if [ $fail -eq 0 ]; then echo "outcome PASS: every required job succeeded"; else echo "outcome FAIL: a required job failed"; fi
