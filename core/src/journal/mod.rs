@@ -8,6 +8,8 @@
 //! The archive read budget is 64 MiB [TARGET, unit decision], including
 //! retained boundary snapshots. Artifacts are opaque authorized state witnesses; callers must authorize any
 //! disk export. Raw pixel retention is never implied by a frame reference.
+//! [TARGET, unit decision] A recognized journal header from another core version
+//! requires an explicit fresh-session upgrade; it is never replayed or migrated.
 use crate::admission::{CoreState, Input, Outcome};
 use crate::wire::payload::{SessionRecord, SessionRecordKind, SessionRecordSchema};
 use serde::{Deserialize, Serialize};
@@ -25,7 +27,8 @@ const MAX_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_RECORDS: u64 = 100_000;
 const MAX_LINE: usize = crate::MAX_FRAME_BYTES;
 const ZERO: &str = "0000000000000000000000000000000000000000000000000000000000000000";
-crate::wire::error_type!(JournalError {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum JournalError {
     Invalid,
     Io,
     Corrupt,
@@ -34,8 +37,21 @@ crate::wire::error_type!(JournalError {
     Unsealed,
     Policy,
     Locked,
-    Poisoned
-});
+    Poisoned,
+    UpgradeRequired { expected: String, found: String },
+}
+impl std::fmt::Display for JournalError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UpgradeRequired { expected, found } => write!(
+                f,
+                "UPGRADE-REQUIRED: expected core version {expected}, found {found}; stop peers, archive the complete session directory unchanged, and start a fresh session with a new session_id"
+            ),
+            _ => write!(f, "{self:?}"),
+        }
+    }
+}
+impl std::error::Error for JournalError {}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Header {
@@ -617,11 +633,14 @@ pub fn scan(path: &Path, root: &Path) -> Result<Replay, JournalError> {
     let mut reader = BufReader::new(File::open(path).map_err(|_| JournalError::Io)?);
     let header_bytes = line(&mut reader)?.ok_or(JournalError::Corrupt)?;
     let header: Header = parse(&header_bytes)?;
-    if header.schema != "metaviewer.journal/v1"
-        || !safe_component(&header.session_id)
-        || header.core_version != env!("CARGO_PKG_VERSION")
-    {
+    if header.schema != "metaviewer.journal/v1" || !safe_component(&header.session_id) {
         return Err(JournalError::Corrupt);
+    }
+    if header.core_version != env!("CARGO_PKG_VERSION") {
+        return Err(JournalError::UpgradeRequired {
+            expected: env!("CARGO_PKG_VERSION").into(),
+            found: header.core_version,
+        });
     }
     let genesis_bytes = read_file(&root.join("genesis.json"), MAX_BYTES)?;
     let genesis: Genesis = parse(&genesis_bytes)?;
