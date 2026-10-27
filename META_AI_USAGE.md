@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 194 | 55 | 139 |
-| Lanes finished OK | 194 | 55 | 139 |
-| Agent steps | 9,758 | 2,705 | 7,053 |
-| Lane-hours of agent work | 24.6 | 5.2 | 19.4 |
-| Fresh input tokens | 42,668,571 | 11,482,034 | 31,186,537 |
-| Cache-read input tokens | 876,055,164 | 226,255,212 | 649,799,952 |
-| Prompt cache hit % | 95.4 | 95.2 | 95.4 |
-| Output tokens | 8,810,074 | 2,135,708 | 6,674,366 |
-| Thinking tokens | 4,665,183 | 1,050,039 | 3,615,144 |
-| Cost (USD) | 7.781 | 2.0279 | 5.7531 |
-| Cost per lane (USD) | 0.0401 | 0.0369 | 0.0414 |
+| Lanes launched | 204 | 55 | 149 |
+| Lanes finished OK | 204 | 55 | 149 |
+| Agent steps | 10,184 | 2,705 | 7,479 |
+| Lane-hours of agent work | 25.9 | 5.2 | 20.7 |
+| Fresh input tokens | 44,560,741 | 11,482,034 | 33,078,707 |
+| Cache-read input tokens | 906,947,190 | 226,255,212 | 680,691,978 |
+| Prompt cache hit % | 95.3 | 95.2 | 95.4 |
+| Output tokens | 9,189,808 | 2,135,708 | 7,054,100 |
+| Thinking tokens | 4,909,282 | 1,050,039 | 3,859,243 |
+| Cost (USD) | 8.1079 | 2.0279 | 6.0801 |
+| Cost per lane (USD) | 0.0397 | 0.0369 | 0.0408 |
 
-Rooms: 41. Peak concurrent lanes [MEASURED from lane start/end]: 32.
+Rooms: 42. Peak concurrent lanes [MEASURED from lane start/end]: 32.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -48,9 +48,9 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | ops | 4 | 88.1 | 0.0468 |
 | plan | 12 | 92.6 | 0.3072 |
 | research | 14 | 94.6 | 0.5673 |
-| review | 32 | 94.4 | 1.0033 |
+| review | 39 | 94.4 | 1.2215 |
 | test | 12 | 95.6 | 0.5657 |
-| testing | 11 | 93.6 | 0.2833 |
+| testing | 14 | 93.6 | 0.392 |
 | ui | 5 | 95.5 | 0.4215 |
 | vision | 5 | 96.6 | 0.3302 |
 
@@ -97,8 +97,9 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w3pk | conductor | Oct 27 00:34 | context | 4 | 94.0 | 0.151 | Draft the context packs of the W3 product-finishing units (packaging, CI matrix, memory budgets, install docs) so their Sol writers start from verified file:line context. |
 | mv0nv | conductor | Oct 27 00:38 | review | 4 | 95.5 | 0.1275 | Verify the 30 findings of the Gemini Argon cross-review of the night's integrated code (60f9239..492d6d0) against the current head and turn confirmed ones into disjoint Sol fix units. |
 | mv0dc2 | conductor | Oct 27 00:54 | docs | 4 | 92.8 | 0.2117 | Adversarial fact-check of the documentation drafts against the integration head, so the public README, user guide, testing report and architecture contain only verified claims (AC-15). |
-| mv0pr | conductor | Oct 27 01:04 | review | 4 | 92.2 | 0.0926 | Adversarial pre-integration review of the eight Sol units finished tonight (journal lock, frame_ref v0.2, agent loop, recording, human input, serve and adapter P0 fixes, budget gate), so defects are caught before they land. |
-| mv0tg | conductor | Oct 27 01:06 | testing | 3 | 93.4 | 0.0663 | Map every acceptance criterion AC-01..AC-17 to the tests that prove its positive pass and negative control, per component, and specify the missing tests as Sol units, so the v0.2.0 release is provably complete. |
+| mv0pr | conductor | Oct 27 01:04 | review | 8 | 93.6 | 0.228 | Adversarial pre-integration review of the eight Sol units finished tonight (journal lock, frame_ref v0.2, agent loop, recording, human input, serve and adapter P0 fixes, budget gate), so defects are caught before they land. |
+| mv0tg | conductor | Oct 27 01:06 | testing | 6 | 93.4 | 0.175 | Map every acceptance criterion AC-01..AC-17 to the tests that prove its positive pass and negative control, per component, and specify the missing tests as Sol units, so the v0.2.0 release is provably complete. |
+| mv0mv | conductor | Oct 27 01:08 | review | 3 | 94.9 | 0.0828 | Verify the 16 findings of the second Gemini Argon cross-review (492d6d0..e19feb6: serve tools, frame subscriptions, journal anchor, contracts checker, catalog) and turn confirmed ones into Sol fix units. |
 
 ## Every lane
 
@@ -291,13 +292,23 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0dc2 | USER_GUIDE | Fact-check USER_GUIDE.md | Oct 27 00:55 | yes | 76 | 94.9 | 0.06418 |
 | mv0dc2 | TESTING | Fact-check TESTING.md | Oct 27 00:55 | yes | 42 | 88.9 | 0.048864 |
 | mv0dc2 | ARCH | Fact-check ARCHITECTURE.md | Oct 27 00:55 | yes | 82 | 93.5 | 0.069783 |
+| mv0pr | JLOCK | Pre-integration review JLOCK | Oct 27 01:04 | yes | 38 | 93.9 | 0.029251 |
+| mv0pr | FRAMEREF | Pre-integration review FRAMEREF | Oct 27 01:04 | yes | 51 | 95.9 | 0.037604 |
 | mv0pr | AILOOP | Pre-integration review AILOOP | Oct 27 01:04 | yes | 22 | 90.1 | 0.020601 |
+| mv0pr | REC | Pre-integration review REC | Oct 27 01:04 | yes | 41 | 94.6 | 0.02858 |
 | mv0pr | HUMAN | Pre-integration review HUMAN | Oct 27 01:04 | yes | 26 | 93.0 | 0.016742 |
+| mv0pr | NVSERVE | Pre-integration review NVSERVE | Oct 27 01:04 | yes | 46 | 92.3 | 0.039935 |
 | mv0pr | NVADAPTER | Pre-integration review NVADAPTER | Oct 27 01:04 | yes | 47 | 93.1 | 0.037064 |
 | mv0pr | BUDGETS | Pre-integration review BUDGETS | Oct 27 01:04 | yes | 25 | 90.9 | 0.018235 |
 | mv0tg | CORE | Test gaps CORE | Oct 27 01:06 | yes | 36 | 93.5 | 0.024217 |
+| mv0tg | ADAPTER | Test gaps ADAPTER | Oct 27 01:06 | yes | 41 | 94.1 | 0.040359 |
 | mv0tg | AGENTS | Test gaps AGENTS | Oct 27 01:07 | yes | 38 | 94.1 | 0.022923 |
+| mv0tg | UIEL | Test gaps UIEL | Oct 27 01:07 | yes | 38 | 94.0 | 0.032417 |
 | mv0tg | UISRC | Test gaps UISRC | Oct 27 01:07 | yes | 29 | 91.9 | 0.019161 |
+| mv0tg | E2E | Test gaps E2E | Oct 27 01:07 | yes | 37 | 91.3 | 0.035968 |
+| mv0mv | M_CORE | Verify Argon findings m_core | Oct 27 01:08 | yes | 45 | 94.8 | 0.0244 |
+| mv0mv | M_ADAPTER | Verify Argon findings m_adapter | Oct 27 01:08 | yes | 52 | 95.7 | 0.033758 |
+| mv0mv | M_CONTRACTS | Verify Argon findings m_contracts | Oct 27 01:09 | yes | 37 | 93.6 | 0.024674 |
 
 ## Method
 
