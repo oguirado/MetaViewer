@@ -1392,9 +1392,10 @@ export function resolveMainPaths(app, shellRoot, runtime) {
  * ELECTRON/loader/debug environment names refuse.
  * @param {unknown} argv Alleged application argument vector.
  * @param {unknown} env Alleged environment record.
+ * @param {{packaged?: boolean}} [options] Launch packaging context.
  * @returns {RetailVerdict} Frozen verdict.
  */
-export function validateRetailLaunch(argv, env) {
+export function validateRetailLaunch(argv, env, options = {}) {
   /**
    * @param {string} code Refusal code.
    * @returns {RetailVerdict} Frozen refusal.
@@ -1419,6 +1420,15 @@ export function validateRetailLaunch(argv, env) {
   }
   if (findForbiddenEnv(env).length > 0) {
     return refuse('RETAIL_ENV');
+  }
+  const packaged = Boolean(options?.packaged) ||
+    fileURLToPath(import.meta.url).includes('.asar/') ||
+    fileURLToPath(import.meta.url).includes('.asar\\');
+  const liveRaw = /** @type {Record<string, unknown>} */ (env).MV_E2E_LIVE;
+  if (liveRaw !== undefined && liveRaw !== '') {
+    if (packaged || liveRaw !== '1') {
+      return refuse('RETAIL_ENV');
+    }
   }
   let nested = 0;
   for (const item of /** @type {Array<string>} */ (argv)) {
@@ -1828,7 +1838,11 @@ export async function bootProductionMain(handles) {
     fail('BOOT_HANDLES', 'geometry must be an object');
   }
 
-  const retail = validateRetailLaunch(typed.argv, typed.env);
+  const isPackaged = Boolean(appRec.isPackaged) ||
+    (typeof typed.shellRoot === 'string' && typed.shellRoot.includes('.asar')) ||
+    fileURLToPath(import.meta.url).includes('.asar/') ||
+    fileURLToPath(import.meta.url).includes('.asar\\');
+  const retail = validateRetailLaunch(typed.argv, typed.env, { packaged: isPackaged });
   if (!retail.ok) {
     fail(retail.code, 'retail launch refused');
   }
@@ -1857,6 +1871,7 @@ export async function bootProductionMain(handles) {
   const registered = [];
   let wireBridge = /** @type {{dispose:()=>Promise<void>} | null} */(null);
   let captureBridge = /** @type {{dispose:()=>Promise<void>} | null} */(null);
+  let qaBridge = /** @type {{enabled:boolean, dispose:()=>Promise<void>} | null} */(null);
   let schemeRegistered = false;
   let unwound = false;
 
@@ -1878,6 +1893,14 @@ export async function bootProductionMain(handles) {
       } catch {
         /* unwind best-effort */
       }
+    }
+    if (qaBridge !== null && qaBridge !== undefined) {
+      try {
+        await qaBridge.dispose();
+      } catch {
+        /* unwind best-effort */
+      }
+      qaBridge = null;
     }
     if (captureBridge !== null && captureBridge !== undefined) {
       try {
@@ -2076,9 +2099,31 @@ export async function bootProductionMain(handles) {
     }
   }
   try {
+    const envRec = /** @type {Record<string, unknown>} */ (typed.env);
+    const packagedLaunch = isPackaged || paths.rendererRoot.includes('.asar/');
+    if (packagedLaunch && envRec.MV_E2E_LIVE !== undefined && envRec.MV_E2E_LIVE !== '') {
+      fail('RETAIL_ENV', 'packaged launch refuses MV_E2E_LIVE');
+    }
     if (!retail.nested) captureBridge = (await import('./captureBridge.js')).installCaptureBridge({ipcMain, contents:contentsUnknown, core, nested:retail.nested, env:typed.env});
     if (!retail.nested) wireBridge = (await import('./authorityWire.js')).installAuthorityWire({ ...(typed.wire || {}), ipcMain,
       contents: contentsUnknown, core, env: typed.env, argv: typed.argv });
+    if (!retail.nested && envRec.MV_E2E_LIVE !== undefined && envRec.MV_E2E_LIVE !== '') {
+      qaBridge = (await import('./qaAnchors.js')).installQaAnchors({
+        ipcMain,
+        contents: contentsUnknown,
+        env: /** @type {NodeJS.ProcessEnv} */ (typed.env),
+        runtime: /** @type {{xdgRuntimeDir?: string, uid?: number}} */ (typed.runtime),
+        packaged: packagedLaunch,
+        nested: retail.nested,
+        argv: /** @type {ReadonlyArray<string>} */ (typed.argv),
+      });
+      if (qaBridge.enabled) {
+        const contentsRec = assertHandleObject(contentsUnknown, 'win.webContents');
+        if (typeof contentsRec.setUserAgent === 'function') {
+          contentsRec.setUserAgent('MetaViewer --qa-anchors=1');
+        }
+      }
+    }
   } catch (error) { await unwind(); throw error; }
   try {
     built.once('ready-to-show', () => {
@@ -2266,7 +2311,8 @@ async function mainDirectEntry() {
   };
   try {
     const argv = Array.isArray(process.argv) ? process.argv.slice(1) : [];
-    const retail = validateRetailLaunch(argv, process.env);
+    const packaged = Boolean(/** @type {{isPackaged?: unknown} | null} */ (app)?.isPackaged);
+    const retail = validateRetailLaunch(argv, process.env, { packaged });
     if (!retail.ok) {
       throw new MainError(retail.code, 'retail launch refused');
     }

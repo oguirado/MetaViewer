@@ -404,7 +404,7 @@ def supervise(root, seconds, lock_fd):
                    XDG_STATE_HOME=str(work / "state"), XDG_CONFIG_HOME=str(work / "config"),
                    MV_SESSION_ID=config["session_id"], MV_CORE_INSTANCE=regs["core"]["endpoint"]["instance"],
                    MV_DAEMON_INSTANCE=regs["daemon"]["endpoint"]["instance"], MV_COMPONENT_COMMIT=commit,
-                   MV_SRF_PROFILES="", MV_CONTRACT_DIR=str(ROOT / "contracts/v0.2"))
+                   MV_SRF_PROFILES="", MV_CONTRACT_DIR=str(ROOT / "contracts/v0.2"), MV_QA_RUN_DIR=str(work))
         socket_path = runtime / "metaviewer/core.sock"
         spawn([bins["core"]], env)
         wait(socket_path.exists, "core socket")

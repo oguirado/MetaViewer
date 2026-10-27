@@ -27,6 +27,7 @@
  * @property {{propose:(json:string)=>Promise<any>,intent:(json:string)=>Promise<true>,subscribeFrames:(cb:(frame:any)=>void)=>(()=>void)}} authority
  * @property {{screenshot:(req:any)=>Promise<any>,recordStart:(req:any)=>Promise<any>,recordStop:(req:any)=>Promise<any>,export:(req:any)=>Promise<any>,list:()=>Promise<any>,subscribe:(cb:(state:any)=>void)=>(()=>void)}} capture
  * @property {{open:(spec:any)=>Promise<{session:string}>,setEnabled:(value:boolean)=>Promise<true>}} sideTerminal
+ * @property {{reportAnchors:(snapshot:any)=>Promise<true>}} [qa]
  * @property {() => Promise<string|null>} load Read the stored layout text,
  * or null when no profile exists.
  * @property {(json: unknown) => Promise<true>} save Store layout text after
@@ -38,6 +39,7 @@
  * @property {(channel: string, args: ReadonlyArray<unknown>) => Promise<unknown>} invoke
  * Fixed-channel invoke returning the main outcome.
  * @property {boolean} [nested]
+ * @property {boolean} [qa]
  * @property {(channel:string,cb:(message:any,ports?:MessagePort[])=>void)=>(()=>void)} [subscribe]
  */
 
@@ -291,7 +293,7 @@ export function createPreloadFacade(deps) {
   // domain additions are own, immutable properties. Native transports supporting
   // subscriptions enumerate them so contextBridge copies the complete facade.
   Object.defineProperties(api, Object.fromEntries(Object.entries(wireFacade(transport))
-    .map(([name,value]) => [name,{value,enumerable:typeof transport.subscribe === 'function'}])));
+    .map(([name,value]) => [name,{value,enumerable:name === 'qa' || typeof transport.subscribe === 'function'}])));
   const frozen = /** @type {MetaViewerFacade} */ (Object.freeze(api));
   bridge.exposeInMainWorld(FACADE_NAME, frozen);
   return frozen;
@@ -405,12 +407,68 @@ function captureFacade(transport, captureCallbacks = new Set(), seededCaptureSur
 }
 
 // [TARGET, unit decision] Closed domain channels; all values are rechecked in main.
+const QA_ANCHORS_CHANNEL = 'metaviewer:qa.anchors';
+const QA_ROLE_RE = /^[a-z][a-z0-9_-]{0,63}$/;
+/** @param {string} text */
+function isWellFormedName(text) {
+  for (let i = 0; i < text.length; i += 1) {
+    const c = text.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const n = text.charCodeAt(i + 1);
+      if (n >= 0xdc00 && n <= 0xdfff) i += 1;
+      else return false;
+    } else if (c >= 0xdc00 && c <= 0xdfff) return false;
+  }
+  return true;
+}
+/** @param {readonly unknown[]} args */
+function assertQaSnapshot(args) {
+  if (!Array.isArray(args) || args.length !== 1) throw new ContractError('ARGS','qa.reportAnchors arity');
+  const v = /** @type {any} */(args[0]);
+  if (!captureKeys(v,'rows,schema,seq')
+    || (Object.getPrototypeOf(v) !== Object.prototype && Object.getPrototypeOf(v) !== null)
+    || v.schema !== 'qa_anchors/v1'
+    || !Number.isSafeInteger(v.seq) || v.seq < 1
+    || !Array.isArray(v.rows) || Object.getPrototypeOf(v.rows) !== Array.prototype
+    || v.rows.length > 512 || Reflect.ownKeys(v.rows).length !== v.rows.length + 1) {
+    throw new ContractError('PAYLOAD','qa snapshot shape');
+  }
+  const rows = [];
+  for (let i = 0; i < v.rows.length; i += 1) {
+    const desc = Object.getOwnPropertyDescriptor(v.rows, i);
+    if (!desc || !('value' in desc)) throw new ContractError('PAYLOAD','qa row descriptor');
+    const r = desc.value;
+    if (!captureKeys(r,'anchor,name,rect,role')
+      || (Object.getPrototypeOf(r) !== Object.prototype && Object.getPrototypeOf(r) !== null)
+      || !captureId(r.anchor)
+      || typeof r.role !== 'string' || !QA_ROLE_RE.test(r.role)
+      || typeof r.name !== 'string' || r.name.length > 128 || r.name.includes('\0') || !isWellFormedName(r.name)
+      || !captureKeys(r.rect,'h,w,x,y')
+      || (Object.getPrototypeOf(r.rect) !== Object.prototype && Object.getPrototypeOf(r.rect) !== null)
+      || !Number.isSafeInteger(r.rect.x) || !Number.isSafeInteger(r.rect.y)
+      || !Number.isSafeInteger(r.rect.w) || r.rect.w <= 0
+      || !Number.isSafeInteger(r.rect.h) || r.rect.h <= 0) {
+      throw new ContractError('PAYLOAD','qa row shape');
+    }
+    rows.push(Object.freeze({
+      anchor: r.anchor,
+      role: r.role,
+      name: r.name,
+      rect: Object.freeze({ x: r.rect.x, y: r.rect.y, w: r.rect.w, h: r.rect.h }),
+    }));
+  }
+  const normalized = Object.freeze({ schema: 'qa_anchors/v1', seq: v.seq, rows: Object.freeze(rows) });
+  const encoded = JSON.stringify(normalized);
+  if (encoded === undefined || utf8Bytes(encoded) > 64 * 1024) throw new ContractError('PAYLOAD','qa snapshot byte cap');
+  return normalized;
+}
 const WIRE_NAMES = Object.freeze({loadSettings:'settings.load',saveSettings:'settings.save',
   recordingDestination:'recording.destination',nestedDepth:'nested.depth',selfCapsuleId:'nested.self',
   propose:'authority.propose',intent:'authority.intent',subscribeFrames:'authority.subscribe',
   unsubscribeFrames:'authority.unsubscribe',terminalOpen:'side-terminal.open',terminalEnabled:'side-terminal.enabled'});
 /** @param {string} channel @param {ReadonlyArray<unknown>} args */
 function wireCall(channel,args) {
+  if(channel===QA_ANCHORS_CHANNEL) return {channel,args:Object.freeze([assertQaSnapshot(args)])};
   const captureName=Object.entries(CAPTURE_CHANNELS).find(([,suffix])=>channel===`metaviewer:${suffix}`)?.[0];
   if(captureName){assertCaptureCall(captureName,args);return {channel,args:Object.freeze([...args])};}
   const name=Object.entries(WIRE_NAMES).find(([,suffix]) => channel === `metaviewer:${suffix}`)?.[0];
@@ -649,6 +707,15 @@ function wireFacade(transport) {
     open:(...args)=>call('terminalOpen',args),
     /** @param {...unknown} args */
     setEnabled:(...args)=>call('terminalEnabled',args)});
+  if (transport.qa === true && !transport.nested) {
+    api.qa = Object.freeze({
+      /** @param {...unknown} args */
+      reportAnchors: (...args) => {
+        const admitted = wireCall(QA_ANCHORS_CHANNEL, args);
+        return transport.invoke(admitted.channel, admitted.args).then(assertSaveReply);
+      },
+    });
+  }
   return api;
 }
 
@@ -697,9 +764,19 @@ export function installPreload(electron) {
   assertCallableMethod(contextBridge, 'exposeInMainWorld', 'contextBridge.exposeInMainWorld');
   assertCallableMethod(ipcRenderer, 'invoke', 'ipcRenderer.invoke');
   const renderer = /** @type {Record<string, (...args: Array<unknown>) => Promise<unknown>>} */ (ipcRenderer);
+  const nested = typeof navigator !== 'undefined' && navigator.userAgent.split(' ').includes('--nested-depth=1');
+  const qaDesc = Object.getOwnPropertyDescriptor(electron, 'qa');
+  if (qaDesc !== undefined && !('value' in qaDesc)) {
+    throw new ContractError('DEPS', 'electron.qa must be a data property');
+  }
+  const qaEnabled = !nested && (
+    qaDesc?.value === true ||
+    (typeof navigator !== 'undefined' && navigator.userAgent.split(' ').includes('--qa-anchors=1'))
+  );
   return createPreloadFacade({
     transport: {
-      nested: typeof navigator !== 'undefined' && navigator.userAgent.split(' ').includes('--nested-depth=1'),
+      nested,
+      ...(qaEnabled ? { qa: true } : {}),
       subscribe: typeof /** @type {any} */(ipcRenderer).on === 'function' ?
       /** @param {string} channel @param {(value:any,ports?:MessagePort[])=>void} cb */
       (channel,cb) => {
@@ -718,6 +795,9 @@ export function installPreload(electron) {
        * @returns {Promise<unknown>} Main outcome.
        */
       invoke: (channel, args) => {
+        if (channel === QA_ANCHORS_CHANNEL && !qaEnabled) {
+          throw new ContractError('CHANNEL', 'qa channel disabled');
+        }
         const call = channel.startsWith('metaviewer:layout.') ? assertFixedCall(channel, args) : wireCall(channel,args);
         return renderer.invoke(call.channel, ...call.args);
       },
