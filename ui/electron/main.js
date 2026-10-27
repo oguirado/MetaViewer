@@ -273,8 +273,15 @@ export function createWindowOptions(request) {
     fail('OPTIONS', 'window request must be an object');
   }
   const o = /** @type {Record<string, unknown>} */ (request);
+  const ownKeys = Reflect.ownKeys(o);
   const keys = Object.keys(o);
-  if (keys.length !== 3 || !Object.hasOwn(o, 'width') || !Object.hasOwn(o, 'height') || !Object.hasOwn(o, 'preloadPath')) {
+  if (
+    ownKeys.length !== 3 ||
+    keys.length !== 3 ||
+    !Object.hasOwn(o, 'width') ||
+    !Object.hasOwn(o, 'height') ||
+    !Object.hasOwn(o, 'preloadPath')
+  ) {
     fail('OPTIONS', 'window request must be exactly {width,height,preloadPath}');
   }
   const width = o.width;
@@ -824,6 +831,15 @@ function canonicalizeRoot(root) {
 }
 
 /**
+ * Pinned bundle root identity captured at scheme registration.
+ * @typedef {object} PinnedRootIdentity
+ * @property {string} canonicalRoot Canonical path at registration time.
+ * @property {number} dev Device id of the canonical directory.
+ * @property {number} ino Inode number of the canonical directory.
+ * @property {number | null} fd Open O_DIRECTORY descriptor when backed by host fs.
+ */
+
+/**
  * Serve one `app://` request from the admitted bundle root. Total:
  * every refusal is a status response carrying the CSP header, never a
  * throw. The traversal analysis runs on the raw request-target
@@ -832,7 +848,7 @@ function canonicalizeRoot(root) {
  * validated before bytes are read.
  * @param {unknown} rendererRoot Alleged bundle root.
  * @param {unknown} request Fetch-API request delivered by Electron.
- * @param {{styleNonce?: boolean, beforeOpen?: () => void}} [options] Main-owned style policy and deterministic open seam.
+ * @param {{styleNonce?: boolean, beforeOpen?: () => void, pinnedRoot?: PinnedRootIdentity}} [options] Main-owned style policy and deterministic open seam.
  * @returns {Promise<Response>} File or refusal, always with the CSP header.
  */
 export async function handleAppRequest(rendererRoot, request, options) {
@@ -849,11 +865,31 @@ export async function handleAppRequest(rendererRoot, request, options) {
     },
   });
   try {
+    const pinnedRoot = typeof options === 'object' && options !== null && !Array.isArray(options)
+      ? /** @type {{pinnedRoot?: PinnedRootIdentity}} */ (options).pinnedRoot
+      : undefined;
     /** @type {string} */
     let canonicalRoot;
     try {
       canonicalRoot = canonicalizeRoot(rendererRoot);
     } catch {
+      return refusal(403, 'forbidden');
+    }
+    if (pinnedRoot !== undefined && canonicalRoot !== pinnedRoot.canonicalRoot) {
+      return refusal(403, 'forbidden');
+    }
+    const isAsar = Boolean(process.versions.electron && canonicalRoot.includes('.asar/'));
+    /** @type {import('node:fs').Stats | null} */
+    let currentRootStat = null;
+    try {
+      currentRootStat = isAsar ? statSync(canonicalRoot) : lstatSync(canonicalRoot);
+    } catch {
+      currentRootStat = null;
+    }
+    if (currentRootStat === null || !currentRootStat.isDirectory() || (!isAsar && currentRootStat.isSymbolicLink())) {
+      return refusal(403, 'forbidden');
+    }
+    if (pinnedRoot !== undefined && (currentRootStat.dev !== pinnedRoot.dev || currentRootStat.ino !== pinnedRoot.ino)) {
       return refusal(403, 'forbidden');
     }
     const nonceEnabled = typeof options === 'object' && options !== null && !Array.isArray(options)
@@ -964,17 +1000,39 @@ export async function handleAppRequest(rendererRoot, request, options) {
     let fd = null;
     /** @type {Buffer | null} */
     let bytes = null;
+    const expectedDev = pinnedRoot !== undefined ? pinnedRoot.dev : currentRootStat.dev;
+    const expectedIno = pinnedRoot !== undefined ? pinnedRoot.ino : currentRootStat.ino;
     try {
       options?.beforeOpen?.();
       // [TARGET, unit decision] Linux descriptor-relative, no-follow traversal.
       // The admitted root is pinned before opening any descendant. ASAR paths
       // are Electron's immutable build namespace (package gate forbids links).
-      if (process.versions.electron && canonicalRoot.includes('.asar/')) {
+      if (isAsar) {
         fd = openSync(real, 'r');
       } else {
+        if (pinnedRoot?.fd !== null && pinnedRoot?.fd !== undefined) {
+          const pinnedFdStat = fstatSync(pinnedRoot.fd);
+          if (
+            !pinnedFdStat.isDirectory() ||
+            pinnedFdStat.dev !== expectedDev ||
+            pinnedFdStat.ino !== expectedIno ||
+            pinnedFdStat.nlink < 1 ||
+            realpathSync(`/proc/self/fd/${pinnedRoot.fd}`) !== canonicalRoot
+          ) {
+            return refusal(403, 'forbidden');
+          }
+        }
         let parent = openSync(canonicalRoot, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW);
         try {
-          if (realpathSync(`/proc/self/fd/${parent}`) !== canonicalRoot) return refusal(403, 'forbidden');
+          const parentStat = fstatSync(parent);
+          if (
+            !parentStat.isDirectory() ||
+            parentStat.dev !== expectedDev ||
+            parentStat.ino !== expectedIno ||
+            realpathSync(`/proc/self/fd/${parent}`) !== canonicalRoot
+          ) {
+            return refusal(403, 'forbidden');
+          }
           const parts = relative(canonicalRoot, real).split(sep);
           for (const part of parts.slice(0, -1)) {
             const child = openSync(`/proc/self/fd/${parent}/${part}`,
@@ -1057,6 +1115,8 @@ export async function handleAppRequest(rendererRoot, request, options) {
  */
 
 const privilegedProtocols = new WeakSet();
+/** @type {WeakMap<object, number>} */
+const pinnedProtocolFds = new WeakMap();
 
 /**
  * Register the privileged bundled scheme on an injected protocol
@@ -1102,9 +1162,54 @@ export function serveBundled(protocol, root, options) {
     fail('HANDLE', 'protocol must provide handle');
   }
   const canonicalRoot = canonicalizeRoot(root);
+  const isAsar = Boolean(process.versions.electron && canonicalRoot.includes('.asar/'));
+  /** @type {PinnedRootIdentity} */
+  let pinnedRoot;
+  if (isAsar) {
+    const rootStat = statSync(canonicalRoot);
+    pinnedRoot = Object.freeze({ canonicalRoot, dev: rootStat.dev, ino: rootStat.ino, fd: null });
+  } else {
+    let rootFd = null;
+    try {
+      rootFd = openSync(canonicalRoot, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW);
+      const rootStat = fstatSync(rootFd);
+      if (!rootStat.isDirectory() || realpathSync(`/proc/self/fd/${rootFd}`) !== canonicalRoot) {
+        closeSync(rootFd);
+        rootFd = null;
+        fail('ROOT', 'bundle root identity mismatch');
+      }
+      const priorFd = pinnedProtocolFds.get(rec);
+      if (typeof priorFd === 'number') {
+        try {
+          closeSync(priorFd);
+        } catch {
+          /* descriptor release best-effort */
+        }
+      }
+      pinnedProtocolFds.set(rec, rootFd);
+      pinnedRoot = Object.freeze({ canonicalRoot, dev: rootStat.dev, ino: rootStat.ino, fd: rootFd });
+    } catch (error) {
+      if (rootFd !== null) {
+        try {
+          closeSync(rootFd);
+        } catch {
+          /* descriptor release best-effort */
+        }
+      }
+      if (error instanceof MainError) {
+        throw error;
+      }
+      fail('ROOT', 'bundle root is not a directory');
+      throw new MainError('ROOT', 'unreachable');
+    }
+  }
   const nonceEnabled = typeof options === 'object' && options !== null && !Array.isArray(options)
     ? /** @type {{styleNonce?: unknown}} */ (options).styleNonce === true
     : false;
+  const beforeOpen = typeof options === 'object' && options !== null && !Array.isArray(options) &&
+      typeof /** @type {{beforeOpen?: unknown}} */ (options).beforeOpen === 'function'
+    ? /** @type {() => void} */ (/** @type {{beforeOpen?: unknown}} */ (options).beforeOpen)
+    : undefined;
   const typed = /** @type {{ handle: (scheme: string, handler: (request: Request) => Promise<Response>) => unknown }} */ (
     /** @type {unknown} */ (rec)
   );
@@ -1114,7 +1219,11 @@ export function serveBundled(protocol, root, options) {
      * @param {Request} request Fetch-API request delivered by Electron.
      * @returns {Promise<Response>} File or refusal, always with the CSP header.
      */
-    (request) => handleAppRequest(canonicalRoot, request, { styleNonce: nonceEnabled }),
+    (request) => handleAppRequest(canonicalRoot, request, {
+      styleNonce: nonceEnabled,
+      ...(beforeOpen !== undefined ? { beforeOpen } : {}),
+      pinnedRoot,
+    }),
   );
   return Object.freeze({ scheme: PRIVILEGED_SCHEME, root: canonicalRoot });
 }
@@ -1376,6 +1485,20 @@ function decodeLayoutSave(raw) {
   return raw;
 }
 
+const SOURCE_ROOT = fileURLToPath(new URL('../..', import.meta.url));
+
+/**
+ * Refuse any candidate path inside or equal to the repository source tree.
+ * @param {string} candidate Candidate path.
+ * @returns {void}
+ */
+function outsideSource(candidate) {
+  const rel = relative(SOURCE_ROOT, resolve(candidate));
+  if (rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))) {
+    fail('LAYOUT_IN_REPO', 'layout contract refused: inside source tree');
+  }
+}
+
 /**
  * [TARGET, unit decision] Host-local presentation storage uses the shipped kit's
  * closed layout decoder and fixed product scope. No core authority is persisted.
@@ -1401,9 +1524,30 @@ export function createLayoutBridge({directory,app} = {}) {
   const location = () => {
     if (directory === undefined && app) directory = join(String(app.getPath('userData')), 'presentation');
     if (!directory || !isAbsolute(directory)) return absent();
+    outsideSource(directory);
+    let ancestor = directory;
+    for (;;) {
+      const st = lstatOrNull(ancestor);
+      if (st === null) {
+        const parent = resolve(ancestor, '..');
+        if (parent === ancestor) return absent();
+        ancestor = parent;
+        continue;
+      }
+      /** @type {string} */
+      let canonicalAncestor;
+      try {
+        canonicalAncestor = realpathSync(ancestor);
+      } catch {
+        return invalid();
+      }
+      outsideSource(canonicalAncestor);
+      break;
+    }
     mkdirSync(directory, {recursive:true,mode:0o700});
     const info = lstatSync(directory);
     if (!info.isDirectory() || info.isSymbolicLink() || info.uid !== process.getuid?.() || (info.mode & 0o077)) return invalid();
+    outsideSource(realpathSync(directory));
     return join(directory,'layout.json');
   };
   return Object.freeze([
@@ -1712,8 +1856,22 @@ export async function bootProductionMain(handles) {
         /* unwind best-effort */
       }
     }
-    await captureBridge?.dispose();
-    await wireBridge?.dispose();
+    if (captureBridge !== null && captureBridge !== undefined) {
+      try {
+        await captureBridge.dispose();
+      } catch {
+        /* unwind best-effort */
+      }
+      captureBridge = null;
+    }
+    if (wireBridge !== null && wireBridge !== undefined) {
+      try {
+        await wireBridge.dispose();
+      } catch {
+        /* unwind best-effort */
+      }
+      wireBridge = null;
+    }
     registered.length = 0;
     if (window !== null) {
       try {
@@ -1725,6 +1883,15 @@ export async function bootProductionMain(handles) {
     }
     if (schemeRegistered) {
       schemeRegistered = false;
+      const pinnedFd = pinnedProtocolFds.get(protocolRec);
+      if (typeof pinnedFd === 'number') {
+        pinnedProtocolFds.delete(protocolRec);
+        try {
+          closeSync(pinnedFd);
+        } catch {
+          /* descriptor release best-effort */
+        }
+      }
       const unhandle = protocolRec.unhandle;
       try {
         if (typeof unhandle === 'function') {
@@ -1984,8 +2151,30 @@ export async function bootProductionMain(handles) {
 export async function loadMainBindings(env = process.env, options = {}) {
   try {
     const bootstrap = env.MV_CORE_BOOTSTRAP;
-    if (bootstrap !== undefined && (!bootstrap || !isAbsolute(bootstrap))) throw new Error();
-    const host = await import(bootstrap === undefined ? './hostBindings.js' : (await import('node:url')).pathToFileURL(bootstrap).href);
+    let bootstrapSpecifier = './hostBindings.js';
+    if (bootstrap !== undefined) {
+      if (
+        typeof bootstrap !== 'string' ||
+        bootstrap.length < 1 ||
+        bootstrap.length > APP_MAX_ROOT_CHARS ||
+        bootstrap.includes(String.fromCharCode(0)) ||
+        !isAbsolute(bootstrap)
+      ) {
+        throw new Error();
+      }
+      const uid = typeof process.getuid === 'function' ? process.getuid() : -1;
+      const st = lstatSync(bootstrap);
+      if (!st.isFile() || st.isSymbolicLink() || st.uid !== uid || (st.mode & 0o077) !== 0) {
+        throw new Error();
+      }
+      const canonicalBootstrap = realpathSync(bootstrap);
+      const cst = lstatSync(canonicalBootstrap);
+      if (!cst.isFile() || cst.isSymbolicLink() || cst.uid !== uid || (cst.mode & 0o077) !== 0) {
+        throw new Error();
+      }
+      bootstrapSpecifier = (await import('node:url')).pathToFileURL(canonicalBootstrap).href;
+    }
+    const host = await import(bootstrapSpecifier);
     if (typeof host.createMainBindings !== 'function') throw new Error();
     const bindings = await host.createMainBindings({...options,env});
     if (!bindings?.core || ['start','request','dispose','getStatus'].some(name => typeof bindings.core[name] !== 'function')

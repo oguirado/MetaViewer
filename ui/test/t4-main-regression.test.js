@@ -3,16 +3,21 @@ import { it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CHANNELS, ELECTRON_PIN, PRIVILEGED_ORIGIN, bootProductionMain, handleAppRequest,
-  resolveMainPaths } from '../electron/main.js';
+import { fileURLToPath } from 'node:url';
+import { CHANNELS, CONTENT_SECURITY_POLICY, ELECTRON_PIN, PRIVILEGED_ORIGIN, bootProductionMain,
+  createLayoutBridge, createWindowOptions, handleAppRequest, loadMainBindings, resolveMainPaths,
+  serveBundled } from '../electron/main.js';
+import { createWallLayout } from '../src/wall/layout.js';
 
 function makeTempRoot(prefix) {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -310,4 +315,203 @@ it('R1-052 aliased renderer aborts boot before protocol serving', async () => {
     assert.ok(!world.calls.includes('protocol.handle:app'));
     assert.equal(world.constructed.length, 0);
   } finally {world.cleanup();}
+});
+
+it('R2-T4-001 serveBundled pins root identity and refuses swapped root with 403 and base CSP', async () => {
+  const scratch = makeTempRoot('mv0main-r2t4001-');
+  try {
+    const rootA = join(scratch, 'rootA');
+    const rootB = join(scratch, 'rootB');
+    mkdirSync(rootA, { recursive: true });
+    mkdirSync(rootB, { recursive: true });
+    writeFileSync(join(rootA, 'index.html'), 'AAA');
+    writeFileSync(join(rootB, 'secret.txt'), 'BBB');
+    let handler = null;
+    const protocol = {
+      handle: (scheme, fn) => {
+        assert.equal(scheme, 'app');
+        handler = fn;
+      },
+    };
+    serveBundled(protocol, rootA, { styleNonce: false });
+    assert.equal(typeof handler, 'function');
+
+    // Negative control: no swap serves 200 with base CSP.
+    const before = await handler({ url: `${PRIVILEGED_ORIGIN}/index.html` });
+    assert.equal(before.status, 200);
+    assert.equal(before.headers.get('Content-Security-Policy'), CONTENT_SECURITY_POLICY);
+    assert.equal(await before.text(), 'AAA');
+
+    // Swap rootA with a symlink to rootB.
+    renameSync(rootA, join(scratch, 'rootA-moved'));
+    symlinkSync(rootB, rootA);
+    const swappedSecret = await handler({ url: `${PRIVILEGED_ORIGIN}/secret.txt` });
+    assert.equal(swappedSecret.status, 403);
+    assert.equal(swappedSecret.headers.get('Content-Security-Policy'), CONTENT_SECURITY_POLICY);
+    assert.ok(!(await swappedSecret.text()).includes('BBB'));
+
+    const swappedIndex = await handler({ url: `${PRIVILEGED_ORIGIN}/index.html` });
+    assert.equal(swappedIndex.status, 403);
+    assert.equal(swappedIndex.headers.get('Content-Security-Policy'), CONTENT_SECURITY_POLICY);
+
+    // Swap rootA with a real directory rootB (different dev/ino).
+    rmSync(rootA, { force: true });
+    renameSync(rootB, rootA);
+    const replacedSecret = await handler({ url: `${PRIVILEGED_ORIGIN}/secret.txt` });
+    assert.equal(replacedSecret.status, 403);
+    assert.equal(replacedSecret.headers.get('Content-Security-Policy'), CONTENT_SECURITY_POLICY);
+    assert.ok(!(await replacedSecret.text()).includes('BBB'));
+  } finally {
+    rmRoot(scratch);
+  }
+});
+
+it('R2-T4-007 unwind guards throwing bridge dispose and preserves original boot failure', async () => {
+  const world = bootWorld();
+  try {
+    world.handles.core.subscribeCapture = () => () => {
+      world.calls.push('capture.revoke');
+      throw new Error('capture dispose boom');
+    };
+    world.handles.wire = {
+      frames: {
+        subscribe: () => () => {
+          world.calls.push('wire.stop');
+          throw new Error('wire dispose boom');
+        },
+      },
+    };
+    world.webContents.loadURL = async () => {
+      world.calls.push('loadURL:fail');
+      throw new Error('load boom');
+    };
+    await assert.rejects(bootProductionMain(world.handles), { name: 'MainError', code: 'LOAD' });
+    assert.ok(world.calls.includes('capture.revoke'));
+    assert.ok(world.calls.includes('wire.stop'));
+    assert.ok(world.calls.includes('window.destroy'));
+    assert.ok(world.calls.includes('protocol.unhandle:app'));
+    assert.ok(world.calls.includes('core.dispose'));
+    assert.equal(world.handlers.has(CHANNELS.load), false);
+    assert.equal(world.handlers.has(CHANNELS.save), false);
+  } finally {
+    world.cleanup();
+  }
+
+  // Negative control: clean unwind completes identically and preserves original error.
+  const clean = bootWorld();
+  try {
+    clean.handles.core.subscribeCapture = () => () => {
+      clean.calls.push('capture.revoke');
+    };
+    clean.handles.wire = {
+      frames: {
+        subscribe: () => () => {
+          clean.calls.push('wire.stop');
+        },
+      },
+    };
+    clean.webContents.loadURL = async () => {
+      clean.calls.push('loadURL:fail');
+      throw new Error('load boom');
+    };
+    await assert.rejects(bootProductionMain(clean.handles), { name: 'MainError', code: 'LOAD' });
+    assert.ok(clean.calls.includes('capture.revoke'));
+    assert.ok(clean.calls.includes('wire.stop'));
+    assert.ok(clean.calls.includes('window.destroy'));
+    assert.ok(clean.calls.includes('protocol.unhandle:app'));
+    assert.ok(clean.calls.includes('core.dispose'));
+    assert.equal(clean.handlers.size, 0);
+  } finally {
+    clean.cleanup();
+  }
+});
+
+it('R2-T4-008 loadMainBindings refuses non-owner-only MV_CORE_BOOTSTRAP and admits owner-only regular file', async () => {
+  const scratch = makeTempRoot('mv0main-r2t4008-');
+  chmodSync(scratch, 0o700);
+  try {
+    const modPath = join(scratch, 'bootstrap.mjs');
+    const source = [
+      'export const createMainBindings = async () => ({',
+      '  core: {',
+      "    start: async () => ({ availability: 'live', pid: 1, authority_epoch: 1, reason: null }),",
+      '    request: async () => true,',
+      '    dispose: async () => {},',
+      "    getStatus: () => ({ availability: 'live', pid: 1, authority_epoch: 1, reason: null }),",
+      '  },',
+      '  wire: { frames: { subscribe: () => () => {} } },',
+      '});',
+    ].join('\n');
+    writeFileSync(modPath, source, { mode: 0o666 });
+    chmodSync(modPath, 0o666);
+    await assert.rejects(loadMainBindings({ MV_CORE_BOOTSTRAP: modPath }), {
+      name: 'MainError',
+      code: 'CORE_SEAMS_ABSENT',
+    });
+
+    chmodSync(modPath, 0o600);
+    const linkPath = join(scratch, 'bootstrap-link.mjs');
+    symlinkSync(modPath, linkPath);
+    await assert.rejects(loadMainBindings({ MV_CORE_BOOTSTRAP: linkPath }), {
+      name: 'MainError',
+      code: 'CORE_SEAMS_ABSENT',
+    });
+
+    // Negative control: owner-only regular file loads.
+    const bindings = await loadMainBindings({ MV_CORE_BOOTSTRAP: modPath });
+    assert.equal(typeof bindings.core.start, 'function');
+    await bindings.core.dispose();
+  } finally {
+    rmRoot(scratch);
+  }
+});
+
+it('R2-T4-010 createLayoutBridge refuses in-repo userData before mkdir and admits external userData', async () => {
+  const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
+  const inRepoUserData = join(repoRoot, 'ui', 'test', 'in-repo-userdata-r2t4010');
+  rmRoot(inRepoUserData);
+  try {
+    const inRepoBridge = createLayoutBridge({
+      app: { getPath: (name) => { assert.equal(name, 'userData'); return inRepoUserData; } },
+    });
+    const loadInRepo = inRepoBridge.find((x) => x.channel === CHANNELS.load);
+    const saveInRepo = inRepoBridge.find((x) => x.channel === CHANNELS.save);
+    const validLayout = JSON.stringify(createWallLayout());
+    await assert.rejects(loadInRepo.invoke(null), /LAYOUT_/);
+    assert.equal(existsSync(inRepoUserData), false);
+    await assert.rejects(saveInRepo.invoke(validLayout), /LAYOUT_/);
+    assert.equal(existsSync(inRepoUserData), false);
+
+    // Negative control: external userData works.
+    const externalUserData = makeTempRoot('mv0main-r2t4010-');
+    try {
+      const externalBridge = createLayoutBridge({
+        app: { getPath: (name) => { assert.equal(name, 'userData'); return externalUserData; } },
+      });
+      const loadExt = externalBridge.find((x) => x.channel === CHANNELS.load);
+      const saveExt = externalBridge.find((x) => x.channel === CHANNELS.save);
+      assert.equal(await loadExt.invoke(null), null);
+      assert.equal(await saveExt.invoke(validLayout), true);
+      assert.equal(await loadExt.invoke(null), validLayout);
+    } finally {
+      rmRoot(externalUserData);
+    }
+  } finally {
+    rmRoot(inRepoUserData);
+  }
+});
+
+it('R2-T4-019 createWindowOptions refuses non-enumerable extra keys via Reflect.ownKeys', () => {
+  const withHidden = { width: 800, height: 600, preloadPath: '/preload.cjs' };
+  Object.defineProperty(withHidden, 'extra', { value: 1, enumerable: false });
+  assert.throws(() => createWindowOptions(withHidden), { name: 'MainError', code: 'OPTIONS' });
+
+  const withSymbol = { width: 800, height: 600, preloadPath: '/preload.cjs', [Symbol('extra')]: 1 };
+  assert.throws(() => createWindowOptions(withSymbol), { name: 'MainError', code: 'OPTIONS' });
+
+  // Negative control: exact 3-key request is admitted.
+  const admitted = createWindowOptions({ width: 800, height: 600, preloadPath: '/preload.cjs' });
+  assert.equal(admitted.width, 800);
+  assert.equal(admitted.height, 600);
+  assert.equal(admitted.webPreferences.preload, '/preload.cjs');
 });
