@@ -160,6 +160,11 @@
    "why": "Write round-3 external testing prompts: ChatGPT as a mathematical reasoner using Context7 math-router plus the software papers and OmniCodex to prove invariants, derive test oracles and propose optimizations of the day-2 core features; Jules as pure tester of the same features.",
    "orchestrator": "conductor"
   },
+  "mvr2vj": {
+   "stage": "testing",
+   "why": "Verify the Jules round-2 test branches T4 (updated), T6 and T7 on the current head with Meta Muse Spark before adopting any test or opening any fix unit.",
+   "orchestrator": "conductor"
+  },
   "mv0dc4": {
    "stage": "docs",
    "why": "Regenerate the testing report from the conductor's measured integration-gate counts and update the demo run sheet and storyboard with the live G-W1 evidence and the Argon demo judgement.",
@@ -238,6 +243,11 @@
   "mvr2v2": {
    "stage": "testing",
    "why": "Verify every external round-2 finding (ChatGPT static reviews T2, T3, T5, T6, T8 and Jules T4 tests) on the current head with Meta Muse Spark before any fix, and group confirmed ones into disjoint fix units.",
+   "orchestrator": "conductor"
+  },
+  "mv0tg4": {
+   "stage": "testing",
+   "why": "Refresh the AC test-gap map on the integration head after the day-2 morning (about 50 integrations, round-2 fixes in flight) and audit the repository router, so Argon test and router units start from verified specs.",
    "orchestrator": "conductor"
   },
   "mv0rv": {
