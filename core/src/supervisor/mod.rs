@@ -9,6 +9,9 @@
 //! [TARGET, unit decision] Limits are caller supplied, capped at a minute and
 //! bounded storage; explicit restart requires draining losses. Resume revokes and
 //! stops services without automatic recovery. Core consumes losses before effects.
+//! [TARGET, unit decision] Spawn failures preserve the optional OS errno through
+//! the public error; synthetic pipe/evidence failures have no OS errno. Executable
+//! test fixtures are immutable repository files, excluding inherited-writer races.
 //! Scope: this module implements lifecycle authority within the admitted corpus.
 mod launch;
 mod process;
@@ -111,9 +114,9 @@ impl Supervisor {
         let process = OwnedProcess::spawn(runtime, &e.spec, &self.limits);
         match process {
             Ok(p) => e.process = Some(p),
-            Err(_) => {
+            Err(error) => {
                 e.lifecycle = Lifecycle::Unavailable;
-                return Err(SupervisorError::SpawnFailed);
+                return Err(error);
             }
         }
         // Private spawn acknowledgement does not authenticate the service.
@@ -130,7 +133,7 @@ impl Supervisor {
                 self.record_loss(id, LossReason::Exit)?;
                 let receipt = self.stop_inner(id).await?;
                 return Err(if receipt.complete {
-                    SupervisorError::SpawnFailed
+                    SupervisorError::SpawnFailed { errno: None }
                 } else {
                     SupervisorError::CleanupIncomplete
                 });
@@ -437,26 +440,75 @@ mod regression_tests {
     }
     #[test]
     fn failed_receipt_is_retried_but_complete_receipt_is_cached() {
-        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
-            let mut s = Supervisor::new(limits()).unwrap();
-            use std::os::unix::fs::PermissionsExt;
-            let recipe = spec();
-            let runtime = std::env::temp_dir().join(format!("supervisor-retry-{}", std::process::id()));
-            std::fs::write(&runtime, b"#!/bin/sh\nread length\nprintf '2147483646 123\\n'\nwhile read control; do :; done\nprintf '2147483646\\n'\n").unwrap();
-            std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
-            let process = OwnedProcess::spawn(&runtime, &recipe, &limits()).unwrap();
-            let reaper_pid = process.child.id();
-            let failed = ReapReceipt { service: recipe.service, service_epoch: 1, reaped: vec![], surviving: vec![],
-                failures: vec![SupervisorError::DeadlineExceeded], complete: false };
-            s.entries.insert(recipe.service, Entry { spec: recipe, epoch: 1, lifecycle: Lifecycle::Unavailable,
-                started: Instant::now(), process: Some(process), loss_recorded: false, receipt: Some(failed) });
-            let receipt = s.stop(ServiceId::Daemon).await.unwrap();
-            assert!(receipt.complete);
-            assert!(receipt.reaped.contains(&reaper_pid));
-            assert!(!std::path::Path::new(&format!("/proc/{reaper_pid}")).exists());
-            assert_eq!(s.stop(ServiceId::Daemon).await.unwrap(), receipt);
-            std::fs::remove_file(runtime).unwrap();
-        });
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let mut s = Supervisor::new(limits()).unwrap();
+                let recipe = spec();
+                // A checked-in executable is never opened for writing by test threads.
+                // Closing a local writer alone cannot exclude fork-inherited writers.
+                let runtime = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("src/supervisor/testdata/receipt-runtime.sh");
+                let process = OwnedProcess::spawn(&runtime, &recipe, &limits()).unwrap();
+                let reaper_pid = process.child.id();
+                let failed = ReapReceipt {
+                    service: recipe.service,
+                    service_epoch: 1,
+                    reaped: vec![],
+                    surviving: vec![],
+                    failures: vec![SupervisorError::DeadlineExceeded],
+                    complete: false,
+                };
+                s.entries.insert(
+                    recipe.service,
+                    Entry {
+                        spec: recipe,
+                        epoch: 1,
+                        lifecycle: Lifecycle::Unavailable,
+                        started: Instant::now(),
+                        process: Some(process),
+                        loss_recorded: false,
+                        receipt: Some(failed),
+                    },
+                );
+                let receipt = s.stop(ServiceId::Daemon).await.unwrap();
+                assert!(receipt.complete);
+                assert!(receipt.reaped.contains(&reaper_pid));
+                assert!(!std::path::Path::new(&format!("/proc/{reaper_pid}")).exists());
+                assert_eq!(s.stop(ServiceId::Daemon).await.unwrap(), receipt);
+            });
+    }
+    #[test]
+    fn busy_executable_preserves_errno_without_poisoning_entries() {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let path =
+                    std::env::temp_dir().join(format!("supervisor-busy-{}", std::process::id()));
+                let mut writer = std::fs::File::create(&path).unwrap();
+                writer.write_all(b"#!/bin/sh\nexit 0\n").unwrap();
+                writer
+                    .set_permissions(std::fs::Permissions::from_mode(0o700))
+                    .unwrap();
+                let mut supervisor = Supervisor::new(limits()).unwrap();
+                supervisor.set_reaper_runtime(path.clone()).unwrap();
+                // Linux rejects exec while any writer owns the inode. Keeping it
+                // open models the inherited descriptor without scheduling or sleeps.
+                assert_eq!(
+                    supervisor.start(spec()).await.unwrap_err(),
+                    SupervisorError::SpawnFailed { errno: Some(26) }
+                );
+                assert!(supervisor.entries.is_empty());
+                drop(writer);
+                std::fs::remove_file(path).unwrap();
+            });
     }
     #[test]
     fn initial_spawn_failure_does_not_poison_entries() {
@@ -472,11 +524,11 @@ mod regression_tests {
                 s.set_reaper_runtime(path.clone()).unwrap();
                 assert_eq!(
                     s.start(spec()).await.unwrap_err(),
-                    SupervisorError::SpawnFailed
+                    SupervisorError::SpawnFailed { errno: Some(13) }
                 );
                 assert_eq!(
                     s.start(spec()).await.unwrap_err(),
-                    SupervisorError::SpawnFailed
+                    SupervisorError::SpawnFailed { errno: Some(13) }
                 );
                 assert!(s.entries.is_empty());
                 std::fs::remove_file(path).unwrap();

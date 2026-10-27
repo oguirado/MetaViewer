@@ -34,7 +34,10 @@ pub enum SupervisorError {
     UnknownService,
     AlreadyRunning,
     ShuttingDown,
-    SpawnFailed,
+    /// OS errno is retained for failed exec; None denotes missing pipe/evidence.
+    SpawnFailed {
+        errno: Option<i32>,
+    },
     Unavailable,
     StaleEpoch,
     EpochOverflow,

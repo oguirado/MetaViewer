@@ -83,7 +83,11 @@ impl OwnedProcess {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let mut child = command.spawn().map_err(|_| SupervisorError::SpawnFailed)?;
+        let mut child = command
+            .spawn()
+            .map_err(|error| SupervisorError::SpawnFailed {
+                errno: error.raw_os_error(),
+            })?;
         // [TARGET, unit decision] Length-prefixed raw OS environment travels only
         // on the private input pipe; the runtime itself receives env_clear().
         let mut environment = Vec::new();
@@ -93,13 +97,22 @@ impl OwnedProcess {
             environment.extend_from_slice(value.as_encoded_bytes());
             environment.push(0);
         }
-        let input = child.stdin.as_mut().ok_or(SupervisorError::SpawnFailed)?;
+        let input = child
+            .stdin
+            .as_mut()
+            .ok_or(SupervisorError::SpawnFailed { errno: None })?;
         // A closed pipe is handled by the normal terminal/evidence path below.
         let _ =
             writeln!(input, "{}", environment.len()).and_then(|_| input.write_all(&environment));
         let evidence = Arc::new(Mutex::new(Evidence::default()));
-        let stdout = child.stdout.take().ok_or(SupervisorError::SpawnFailed)?;
-        let stderr = child.stderr.take().ok_or(SupervisorError::SpawnFailed)?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or(SupervisorError::SpawnFailed { errno: None })?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or(SupervisorError::SpawnFailed { errno: None })?;
         let output = Arc::clone(&evidence);
         let cap = limits.max_descendants;
         let root_reader = std::thread::spawn(move || {
@@ -271,14 +284,9 @@ mod tests {
     use super::*;
     #[test]
     fn captured_root_identity_does_not_require_live_proc_entry() {
-        use std::os::unix::fs::PermissionsExt;
-        let path = std::env::temp_dir().join(format!("supervisor-evidence-{}", std::process::id()));
-        std::fs::write(
-            &path,
-            b"#!/bin/sh\nprintf '2147483646 123\\n2147483646\\n'\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        // Immutable fixture: no executable writer can leak into a concurrent fork.
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src/supervisor/testdata/evidence-runtime.sh");
         let spec = LaunchSpec {
             service: super::super::ServiceId::Daemon,
             program: path.clone(),
@@ -302,7 +310,6 @@ mod tests {
             reader.join().unwrap();
         }
         let result = process.finish();
-        std::fs::remove_file(path).unwrap();
         assert!(result.is_ok(), "{result:?}");
     }
     #[test]
