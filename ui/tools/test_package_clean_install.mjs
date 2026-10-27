@@ -1,7 +1,8 @@
 // [TARGET, unit decision] Run with node --test tools/test_package_clean_install.mjs.
 // Real product: node tools/package.js --smoke /external/MetaViewer-linux-arm64.tar.
 // All fixtures are outside the checkout; no source mutation or skipped tests.
-import { test } from 'node:test';
+import { test as nodeTest } from 'node:test';
+const test = process.env.MV_CHECK_CLEAN_CI_PREREQ_ONLY === '1' ? () => {} : nodeTest;
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import { join } from 'node:path';
@@ -1028,7 +1029,121 @@ test('W3-ADOPT-J7-R2 verifyElectronZip and verifyElectronDist bind zip and lockf
   }
 });
 
-test('W3-ADOPT-J7-R2 reproduce hosted case locally with a dist from a clean npm ci --offline in a temp copy', async () => {
+export async function checkCleanCiReproPrerequisites(env = process.env) {
+  const { dirname } = await import('node:path');
+  const uiRoot = fileURLToPath(new URL('../', import.meta.url));
+  const { archive } = packageArchitecture(process.arch);
+  const prevHome = process.env.HOME;
+  let zipCandidates;
+  try {
+    if (env !== process.env && typeof env.HOME === 'string') {
+      process.env.HOME = env.HOME;
+    }
+    zipCandidates = defaultElectronZipCandidates(archive, env);
+  } finally {
+    if (prevHome === undefined) delete process.env.HOME;
+    else process.env.HOME = prevHome;
+  }
+
+  let existingCachedZip = null;
+  for (const candidate of zipCandidates) {
+    const st = await fs.stat(candidate).catch(() => null);
+    if (st?.isFile()) {
+      existingCachedZip = candidate;
+      break;
+    }
+  }
+
+  const fallbackDist =
+    env.ELECTRON_OVERRIDE_DIST_PATH !== undefined
+      ? env.ELECTRON_OVERRIDE_DIST_PATH
+      : join(uiRoot, 'node_modules/electron/dist');
+  let hasFallbackDist = false;
+  if (fallbackDist) {
+    const requiredFiles = ['electron', 'version', 'resources.pak'];
+    const checks = await Promise.all(
+      requiredFiles.map((name) =>
+        fs
+          .stat(join(fallbackDist, name))
+          .then((st) => st.isFile())
+          .catch(() => false),
+      ),
+    );
+    hasFallbackDist = checks.every(Boolean);
+  }
+
+  if (!existingCachedZip && !hasFallbackDist) {
+    const detail = `CLEAN_CI_REPRO_PREREQ: PKG_CLEAN_CI_PREREQ_ELECTRON_MISSING archive=${archive} fallbackDist=${fallbackDist || 'none'}`;
+    writeFdSync(2, detail);
+    return {
+      ok: false,
+      code: 'PKG_CLEAN_CI_PREREQ_ELECTRON_MISSING',
+      reason: detail,
+      existingCachedZip: null,
+      fallbackDist: fallbackDist || null,
+    };
+  }
+
+  const npmCacheDir =
+    env.npm_config_cache ||
+    env.NPM_CONFIG_CACHE ||
+    (env.HOME ? join(env.HOME, '.npm') : '');
+  const contentRoot = npmCacheDir ? join(npmCacheDir, '_cacache/content-v2/sha512') : '';
+  const lockRaw = await fs.readFile(join(uiRoot, 'package-lock.json'), 'utf8');
+  const lock = JSON.parse(lockRaw);
+  const missingPackages = [];
+  for (const [pkgPath, entry] of Object.entries(lock.packages || {})) {
+    if (!pkgPath || !entry || typeof entry.integrity !== 'string' || !entry.integrity.startsWith('sha512-')) {
+      continue;
+    }
+    if (entry.optional && Array.isArray(entry.os) && !entry.os.includes('linux')) continue;
+    if (entry.optional && Array.isArray(entry.cpu) && !entry.cpu.includes(process.arch)) continue;
+    const hex = Buffer.from(entry.integrity.slice('sha512-'.length), 'base64').toString('hex');
+    const blobPath = contentRoot ? join(contentRoot, hex.slice(0, 2), hex.slice(2, 4), hex.slice(4)) : '';
+    const st = blobPath ? await fs.stat(blobPath).catch(() => null) : null;
+    if (!st?.isFile()) {
+      missingPackages.push(pkgPath);
+    }
+  }
+  if (missingPackages.length > 0) {
+    const detail = `CLEAN_CI_REPRO_PREREQ: PKG_CLEAN_CI_PREREQ_NPM_CACHE_MISSING cache=${npmCacheDir || 'none'} missing=${missingPackages.length} first=${missingPackages[0]}`;
+    writeFdSync(2, detail);
+    return {
+      ok: false,
+      code: 'PKG_CLEAN_CI_PREREQ_NPM_CACHE_MISSING',
+      reason: detail,
+      existingCachedZip,
+      fallbackDist: hasFallbackDist ? fallbackDist : null,
+      missingPackages,
+    };
+  }
+
+  const npmCandidates = [join(dirname(process.execPath), 'npm'), 'npm'];
+  let npmBin = 'npm';
+  for (const candidate of npmCandidates) {
+    try {
+      await fs.access(candidate);
+      npmBin = candidate;
+      break;
+    } catch {}
+  }
+
+  const detail = `CLEAN_CI_REPRO_PREREQ: PKG_CLEAN_CI_PREREQ_OK zip=${existingCachedZip || 'none'} dist=${hasFallbackDist ? fallbackDist : 'none'} cache=${npmCacheDir}`;
+  writeFdSync(2, detail);
+  return {
+    ok: true,
+    code: 'PKG_CLEAN_CI_PREREQ_OK',
+    reason: detail,
+    existingCachedZip,
+    fallbackDist: hasFallbackDist ? fallbackDist : null,
+    npmCacheDir,
+    npmBin,
+  };
+}
+
+export async function runHostedCleanNpmCiRepro(env = process.env) {
+  const prereq = await checkCleanCiReproPrerequisites(env);
+  assert.equal(prereq.ok, true, `${prereq.code}: ${prereq.reason}`);
   const { dirname } = await import('node:path');
   const { createHash } = await import('node:crypto');
   const uiRoot = fileURLToPath(new URL('../', import.meta.url));
@@ -1049,26 +1164,24 @@ test('W3-ADOPT-J7-R2 reproduce hosted case locally with a dist from a clean npm 
       } catch {}
     }
 
+    const childEnv = {
+      ...env,
+      PATH: `${dirname(process.execPath)}:${env.PATH || process.env.PATH || ''}`,
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1',
+    };
     const ciRun = spawnSync(
       npmBin,
       ['--prefix', tempUi, 'ci', '--offline', '--ignore-scripts', '--no-audit', '--no-fund'],
       {
         encoding: 'utf8',
-        env: { ...process.env, ELECTRON_SKIP_BINARY_DOWNLOAD: '1' },
+        env: childEnv,
         timeout: 60000,
       },
     );
     assert.equal(ciRun.status, 0, `npm ci --offline failed: ${ciRun.stderr || ciRun.stdout}`);
 
     const { archive } = packageArchitecture(process.arch);
-    let existingCachedZip = null;
-    for (const candidate of defaultElectronZipCandidates(archive)) {
-      const st = await fs.stat(candidate).catch(() => null);
-      if (st?.isFile()) {
-        existingCachedZip = candidate;
-        break;
-      }
-    }
+    const existingCachedZip = prereq.existingCachedZip;
 
     const tempDist = join(tempUi, 'node_modules/electron/dist');
     if (existingCachedZip) {
@@ -1076,12 +1189,12 @@ test('W3-ADOPT-J7-R2 reproduce hosted case locally with a dist from a clean npm 
       const installRun = spawnSync(process.execPath, [join(tempUi, 'node_modules/electron/install.js')], {
         cwd: tempUi,
         encoding: 'utf8',
-        env: { ...process.env, ELECTRON_OVERRIDE_DIST_PATH: '' },
+        env: { ...env, ELECTRON_OVERRIDE_DIST_PATH: '' },
         timeout: 60000,
       });
       assert.equal(installRun.status, 0, `electron/install.js failed: ${installRun.stderr || installRun.stdout}`);
     } else {
-      const fallbackDist = process.env.ELECTRON_OVERRIDE_DIST_PATH || join(uiRoot, 'node_modules/electron/dist');
+      const fallbackDist = env.ELECTRON_OVERRIDE_DIST_PATH || join(uiRoot, 'node_modules/electron/dist');
       await fs.cp(fallbackDist, tempDist, { recursive: true });
     }
 
@@ -1151,4 +1264,56 @@ test('W3-ADOPT-J7-R2 reproduce hosted case locally with a dist from a clean npm 
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });
   }
+}
+
+test('W3-ADOPT-J7-R2 prerequisite check fails closed with typed codes when Electron dist/cache or offline npm cache is absent', async () => {
+  const tempRoot = await fs.mkdtemp(join(tmpdir(), 'mv-j7r2-prereq-'));
+  try {
+    const emptyHome = join(tempRoot, 'empty-home');
+    await fs.mkdir(emptyHome, { recursive: true });
+    const envNoElectron = {
+      ...process.env,
+      HOME: emptyHome,
+      XDG_CACHE_HOME: join(emptyHome, '.cache'),
+      electron_config_cache: join(emptyHome, '.cache/electron'),
+      ELECTRON_OVERRIDE_DIST_PATH: join(emptyHome, 'missing-dist'),
+      npm_config_cache: join(emptyHome, '.npm'),
+    };
+    const prereqNoElectron = await checkCleanCiReproPrerequisites(envNoElectron);
+    assert.equal(prereqNoElectron.ok, false);
+    assert.equal(prereqNoElectron.code, 'PKG_CLEAN_CI_PREREQ_ELECTRON_MISSING');
+    await assert.rejects(runHostedCleanNpmCiRepro(envNoElectron), /PKG_CLEAN_CI_PREREQ_ELECTRON_MISSING/);
+
+    const fakeDist = join(tempRoot, 'fake-dist');
+    await fs.mkdir(fakeDist, { recursive: true });
+    await fs.writeFile(join(fakeDist, 'electron'), 'stub');
+    await fs.writeFile(join(fakeDist, 'version'), `${MAIN_ELECTRON_PIN}\n`);
+    await fs.writeFile(join(fakeDist, 'resources.pak'), 'stub-pak');
+    const envNoNpmCache = {
+      ...envNoElectron,
+      ELECTRON_OVERRIDE_DIST_PATH: fakeDist,
+    };
+    const prereqNoNpm = await checkCleanCiReproPrerequisites(envNoNpmCache);
+    assert.equal(prereqNoNpm.ok, false);
+    assert.equal(prereqNoNpm.code, 'PKG_CLEAN_CI_PREREQ_NPM_CACHE_MISSING');
+    assert.equal(Array.isArray(prereqNoNpm.missingPackages) && prereqNoNpm.missingPackages.length > 0, true);
+    await assert.rejects(runHostedCleanNpmCiRepro(envNoNpmCache), /PKG_CLEAN_CI_PREREQ_NPM_CACHE_MISSING/);
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
 });
+
+const shouldRunCleanNpmCiRepro =
+  process.env.MV_CHECK_CLEAN_CI_PREREQ_ONLY === '1'
+    ? false
+    : process.env.MV_REQUIRE_CLEAN_CI_REPRO === '1' || process.env.MV_RUN_CLEAN_NPM_CI_REPRO === '1'
+      ? true
+      : process.env.MV_RUN_CLEAN_NPM_CI_REPRO === '0'
+        ? false
+        : (await checkCleanCiReproPrerequisites(process.env)).ok;
+
+if (shouldRunCleanNpmCiRepro) {
+  test('W3-ADOPT-J7-R2 reproduce hosted case locally with a dist from a clean npm ci --offline in a temp copy', async () => {
+    await runHostedCleanNpmCiRepro(process.env);
+  });
+}

@@ -1,19 +1,88 @@
 """[TARGET, unit decision] Execute FX2-PACKAGE regression suite under tests/ci unit leg."""
+import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import unittest
+from urllib.request import pathname2url
 
 ROOT = Path(__file__).resolve().parents[2]
+SUITE = ROOT / 'ui/tools/test_package_clean_install.mjs'
+
+
+def find_node() -> str:
+    env_node = os.environ.get('NODE')
+    if env_node and shutil.which(env_node):
+        return shutil.which(env_node) or env_node
+    node = shutil.which('node')
+    if node:
+        res = subprocess.run([node, '-p', "process.versions.node.split('.')[0]"], capture_output=True, text=True)
+        if res.returncode == 0 and res.stdout.strip().isdigit() and int(res.stdout.strip()) >= 24:
+            return node
+    nvm_base = Path.home() / '.nvm/versions/node'
+    if nvm_base.is_dir():
+        for cand in sorted(nvm_base.glob('v24*/bin/node'), reverse=True):
+            if cand.is_file():
+                return str(cand)
+    return node or 'node'
+
+
+def suite_url() -> str:
+    return 'file://' + pathname2url(str(SUITE.resolve()))
 
 
 class Fx2PackageRegressionTests(unittest.TestCase):
     def test_package_clean_install_and_round2_regressions(self):
-        node = os.environ.get('NODE') or shutil.which('node') or 'node'
-        result = subprocess.run(
-            [node, '--test', str(ROOT / 'ui/tools/test_package_clean_install.mjs')],
+        node = find_node()
+        probe_script = (
+            f"import {{ checkCleanCiReproPrerequisites }} from {json.dumps(suite_url())};\n"
+            "const prereq = await checkCleanCiReproPrerequisites(process.env);\n"
+            "console.log('PREREQ_JSON:' + JSON.stringify(prereq));\n"
+        )
+        probe = subprocess.run(
+            [node, '--input-type=module', '-e', probe_script],
             cwd=ROOT,
+            env=dict(os.environ, MV_CHECK_CLEAN_CI_PREREQ_ONLY='1'),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(
+            probe.returncode,
+            0,
+            msg=f"checkCleanCiReproPrerequisites probe failed:\nSTDOUT:\n{probe.stdout}\nSTDERR:\n{probe.stderr}",
+        )
+        json_line = next((line for line in probe.stdout.splitlines() if line.startswith('PREREQ_JSON:')), '')
+        self.assertTrue(json_line, f"missing PREREQ_JSON line in:\n{probe.stdout}\n{probe.stderr}")
+        prereq = json.loads(json_line[len('PREREQ_JSON:'):])
+        self.assertIn(
+            prereq.get('code'),
+            (
+                'PKG_CLEAN_CI_PREREQ_OK',
+                'PKG_CLEAN_CI_PREREQ_ELECTRON_MISSING',
+                'PKG_CLEAN_CI_PREREQ_NPM_CACHE_MISSING',
+            ),
+        )
+        print(
+            f"FX2_CLEAN_CI_PREREQ code={prereq['code']} ok={prereq['ok']} reason={prereq.get('reason', '')}",
+            file=sys.stderr,
+        )
+        if os.environ.get('MV_REQUIRE_CLEAN_CI_REPRO') == '1':
+            self.assertTrue(
+                prereq['ok'],
+                msg=f"MV_REQUIRE_CLEAN_CI_REPRO=1 but prerequisite check returned {prereq}",
+            )
+        run_env = dict(
+            os.environ,
+            MV_RUN_CLEAN_NPM_CI_REPRO='1' if prereq['ok'] else '0',
+        )
+        result = subprocess.run(
+            [node, '--test', str(SUITE)],
+            cwd=ROOT,
+            env=run_env,
             capture_output=True,
             text=True,
             timeout=120,

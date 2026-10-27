@@ -310,6 +310,9 @@ jobs:
             timeout 1200 python3 agents/tests/run_mutant_harness.py >>"$LOG" 2>&1; mr=$?
             echo "agents mutant harness rc $mr" >>"$LOG"
             [ $mr -ne 0 ] && [ $rc -eq 0 ] && rc=$mr
+            timeout 120 python3 tests/test_t7r2c_reproducibility.py --flake-hunt >>"$LOG" 2>&1; fr=$?
+            echo "stress flake hunt rc $fr" >>"$LOG"
+            [ $fr -ne 0 ] && [ $rc -eq 0 ] && rc=$fr
           fi
           if [ $rc -eq 0 ]; then oc=PASS; rsn="100 mutant repetitions green"; else oc=FAIL; rsn="$iter_fail of 100 mutant repetitions failed"; fi
           finish_gate volume-mutants "$rc" "$oc" "$rsn" "$LOG" tests/test_contract_mutants.py "volume:100-iters" 0 -- python3 -m unittest tests.test_contract_mutants -v
@@ -405,6 +408,10 @@ jobs:
       # Its locked package supplies checksums.json to @electron/get.
       - name: Install and verify pinned Electron binary
         run: node .github/workflows/install_electron.cjs
+      - name: Verify clean offline npm ci and Electron dist binding
+        env:
+          MV_REQUIRE_CLEAN_CI_REPRO: "1"
+        run: python3 -m unittest tests/ci/test_fx2_package.py -v
       - name: Run E2E repeat x20 then qualification x300
         env:
           JOB_ID: volume-e2e

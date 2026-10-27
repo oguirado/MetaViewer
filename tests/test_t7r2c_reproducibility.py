@@ -11,9 +11,14 @@ from urllib.request import pathname2url
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PACKAGE_JS = ROOT / "ui" / "tools" / "package.js"
+FLAKE_HUNT_BUSY_LOOPS = 2
+FLAKE_HUNT_TIMEOUT_SECONDS = 120
 
 
 def find_node() -> str:
+    env_node = os.environ.get("NODE")
+    if env_node and shutil.which(env_node):
+        return shutil.which(env_node) or env_node
     node = shutil.which("node")
     if node:
         res = subprocess.run([node, "-p", "process.versions.node.split('.')[0]"], capture_output=True, text=True)
@@ -234,11 +239,26 @@ try {{
             h2 = hashlib.sha256((tpath / "run2" / "MetaViewer-linux-arm64.tar").read_bytes()).hexdigest()
             self.assertEqual(h1, h2)
 
-    def test_o8_flake_hunt_3x_under_cpu_stress_passes_deterministically(self):
+    def test_o8_flake_hunt_bound_and_volume_schedule_wiring(self):
+        self.assertGreaterEqual(FLAKE_HUNT_BUSY_LOOPS, 1)
+        self.assertLessEqual(FLAKE_HUNT_BUSY_LOOPS, 4)
+        self.assertGreaterEqual(FLAKE_HUNT_TIMEOUT_SECONDS, 1)
+        self.assertLessEqual(FLAKE_HUNT_TIMEOUT_SECONDS, 120)
+        vol_text = (ROOT / ".github" / "workflows" / "volume.yml").read_text(encoding="utf-8")
+        self.assertIn("timeout 120 python3 tests/test_t7r2c_reproducibility.py --flake-hunt", vol_text)
+        if os.environ.get("MV_VOLUME_FLAKE_HUNT") != "1":
+            self.assertFalse(
+                hasattr(TestT7R2CReproducibility, "test_o8_flake_hunt_3x_under_cpu_stress_passes_deterministically"),
+                "stress flake hunt must not run inside per-push required jobs",
+            )
+
+    def _o8_flake_hunt_3x_under_cpu_stress_passes_deterministically(self):
+        self.assertLessEqual(FLAKE_HUNT_BUSY_LOOPS, 4)
+        self.assertLessEqual(FLAKE_HUNT_TIMEOUT_SECONDS, 120)
         stress_code = "import time; end = time.monotonic() + 8\nwhile time.monotonic() < end: _ = sum(i*i for i in range(500))"
         stress_procs = [
             subprocess.Popen([sys.executable, "-c", stress_code], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            for _ in range(2)
+            for _ in range(FLAKE_HUNT_BUSY_LOOPS)
         ]
         try:
             for iteration in range(3):
@@ -268,5 +288,14 @@ try {{
                     p.kill()
 
 
+if os.environ.get("MV_VOLUME_FLAKE_HUNT") == "1" or "--flake-hunt" in sys.argv:
+    TestT7R2CReproducibility.test_o8_flake_hunt_3x_under_cpu_stress_passes_deterministically = (
+        TestT7R2CReproducibility._o8_flake_hunt_3x_under_cpu_stress_passes_deterministically
+    )
+
+
 if __name__ == "__main__":
+    if "--flake-hunt" in sys.argv:
+        sys.argv = [arg for arg in sys.argv if arg != "--flake-hunt"]
+        os.environ["MV_VOLUME_FLAKE_HUNT"] = "1"
     unittest.main()

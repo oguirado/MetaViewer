@@ -668,7 +668,7 @@ jobs:
           LOG="$EVDIR/laws-range.log"
           : > "$LOG"
           : "$BEFORE" # Already exported by the step env.
-          if RANGE=$(python3 .github/workflows/laws_range.py 2>"$LOG"); then
+          if RANGE=$(python3 .github/workflows/laws_range.py 2>"$LOG") && { [ -z "$RANGE" ] || { git rev-parse --verify "${RANGE%..*}^{commit}" >/dev/null 2>>"$LOG" && git rev-parse --verify "${RANGE#*..}^{commit}" >/dev/null 2>>"$LOG"; }; }; then
             if [ -n "$RANGE" ]; then
               set -- python3 tools/check_laws.py --range "$RANGE"
             else

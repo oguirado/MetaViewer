@@ -209,42 +209,59 @@ class TestT7R2CReceiptIdentity(unittest.TestCase):
             "set -- python3 -m unittest tests/test_check_laws.py -v",
         )
         with tempfile.TemporaryDirectory(prefix="t7r2c-argci6-") as tmp:
-            summary = pathlib.Path(tmp) / "summary.md"
-            env_fail = dict(
+            head_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+            for case_name, head_val in (("missing_head", ""), ("hosted_head_set", head_sha)):
+                with self.subTest(case=case_name):
+                    case_tmp = pathlib.Path(tmp) / case_name
+                    case_tmp.mkdir()
+                    summary = case_tmp / "summary.md"
+                    env_fail = dict(
+                        os.environ,
+                        RUNNER_TEMP=str(case_tmp),
+                        GITHUB_STEP_SUMMARY=str(summary),
+                        GITHUB_SHA=head_sha,
+                        GITHUB_RUN_ID="1001",
+                        JOB_ID="laws-contracts",
+                        PLATFORM="x64",
+                        EVENT_NAME="push",
+                        BEFORE="not-a-valid-sha",
+                        HEAD=head_val,
+                    )
+                    res_fail = subprocess.run(
+                        ["bash", "-c", fast_script],
+                        cwd=ROOT,
+                        env=env_fail,
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                    )
+                    self.assertNotEqual(res_fail.returncode, 0)
+                    evdir = case_tmp / "metaviewer-ci" / "laws-contracts" / "x64"
+                    for gate_name in ("laws-range", "laws-version", "contracts", "unittest-root"):
+                        self.assertTrue((evdir / f"{gate_name}.receipt.json").is_file(), f"missing receipt for {gate_name}")
+                    range_receipt = json.loads((evdir / "laws-range.receipt.json").read_text(encoding="utf-8"))
+                    self.assertEqual(range_receipt["outcome"], "BLOCKED")
+                    self.assertIsNone(range_receipt["rc"])
+                    self.assertEqual(range_receipt["counts"]["source"], "unexecuted")
+                    version_receipt = json.loads((evdir / "laws-version.receipt.json").read_text(encoding="utf-8"))
+                    self.assertEqual(version_receipt["outcome"], "PASS")
+
+            # Negative control: valid BEFORE and HEAD succeeds and writes PASS receipt for laws-range.
+            tmp_ok = pathlib.Path(tmp) / "ok"
+            tmp_ok.mkdir()
+            summary_ok = tmp_ok / "summary.md"
+            env_ok = dict(
                 os.environ,
-                RUNNER_TEMP=tmp,
-                GITHUB_STEP_SUMMARY=str(summary),
-                GITHUB_SHA="a" * 40,
+                RUNNER_TEMP=str(tmp_ok),
+                GITHUB_STEP_SUMMARY=str(summary_ok),
+                GITHUB_SHA=head_sha,
                 GITHUB_RUN_ID="1001",
                 JOB_ID="laws-contracts",
                 PLATFORM="x64",
                 EVENT_NAME="push",
-                BEFORE="not-a-valid-sha",
+                BEFORE=head_sha,
+                HEAD=head_sha,
             )
-            res_fail = subprocess.run(
-                ["bash", "-c", fast_script],
-                cwd=ROOT,
-                env=env_fail,
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-            self.assertNotEqual(res_fail.returncode, 0)
-            evdir = pathlib.Path(tmp) / "metaviewer-ci" / "laws-contracts" / "x64"
-            for gate_name in ("laws-range", "laws-version", "contracts", "unittest-root"):
-                self.assertTrue((evdir / f"{gate_name}.receipt.json").is_file(), f"missing receipt for {gate_name}")
-            range_receipt = json.loads((evdir / "laws-range.receipt.json").read_text(encoding="utf-8"))
-            self.assertEqual(range_receipt["outcome"], "BLOCKED")
-            self.assertIsNone(range_receipt["rc"])
-            self.assertEqual(range_receipt["counts"]["source"], "unexecuted")
-            version_receipt = json.loads((evdir / "laws-version.receipt.json").read_text(encoding="utf-8"))
-            self.assertEqual(version_receipt["outcome"], "PASS")
-
-            # Negative control: valid BEFORE and HEAD succeeds and writes PASS receipt for laws-range.
-            head_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-            tmp_ok = pathlib.Path(tmp) / "ok"
-            tmp_ok.mkdir()
-            env_ok = dict(env_fail, RUNNER_TEMP=str(tmp_ok), BEFORE=head_sha, HEAD=head_sha)
             res_ok = subprocess.run(
                 ["bash", "-c", fast_script],
                 cwd=ROOT,
