@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 233 | 55 | 178 |
-| Lanes finished OK | 233 | 55 | 178 |
-| Agent steps | 11,592 | 2,705 | 8,887 |
-| Lane-hours of agent work | 29.8 | 5.2 | 24.5 |
-| Fresh input tokens | 49,806,754 | 11,482,034 | 38,324,720 |
-| Cache-read input tokens | 1,036,737,952 | 226,255,212 | 810,482,740 |
-| Prompt cache hit % | 95.4 | 95.2 | 95.5 |
-| Output tokens | 10,515,181 | 2,135,708 | 8,379,473 |
-| Thinking tokens | 5,632,715 | 1,050,039 | 4,582,676 |
-| Cost (USD) | 9.1572 | 2.0279 | 7.1293 |
-| Cost per lane (USD) | 0.0393 | 0.0369 | 0.0401 |
+| Lanes launched | 244 | 55 | 189 |
+| Lanes finished OK | 244 | 55 | 189 |
+| Agent steps | 12,296 | 2,705 | 9,591 |
+| Lane-hours of agent work | 31.6 | 5.2 | 26.4 |
+| Fresh input tokens | 52,566,087 | 11,482,034 | 41,084,053 |
+| Cache-read input tokens | 1,116,923,743 | 226,255,212 | 890,668,531 |
+| Prompt cache hit % | 95.5 | 95.2 | 95.6 |
+| Output tokens | 11,185,774 | 2,135,708 | 9,050,066 |
+| Thinking tokens | 5,945,058 | 1,050,039 | 4,895,019 |
+| Cost (USD) | 9.7276 | 2.0279 | 7.6997 |
+| Cost per lane (USD) | 0.0399 | 0.0369 | 0.0407 |
 
-Rooms: 52. Peak concurrent lanes [MEASURED from lane start/end]: 24.
+Rooms: 54. Peak concurrent lanes [MEASURED from lane start/end]: 24.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -50,9 +50,9 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | research | 14 | 94.6 | 0.5673 |
 | review | 47 | 94.4 | 1.393 |
 | test | 12 | 95.6 | 0.5657 |
-| testing | 14 | 93.6 | 0.392 |
+| testing | 22 | 94.7 | 0.7556 |
 | ui | 9 | 96.4 | 0.6965 |
-| vision | 5 | 96.6 | 0.3302 |
+| vision | 8 | 97.2 | 0.537 |
 
 ## By room (why and what for)
 
@@ -110,6 +110,8 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui3n | UI orchestrator | Oct 27 02:52 | ui | 4 | 97.5 | 0.275 | Polish the MetaViewer wall for live data after the live G-W1 gate passed: a live-replay fixture through the real authority runtime, live tile states, multislot real terminal sessions and a receipt/verdict activity strip. |
 | mv0sv | conductor | Oct 27 04:07 | review | 4 | 94.4 | 0.0942 | Verify the 26 findings of the fourth Gemini Argon cross-review (integrations 102f2e0..b64ec5a after G-W1) and turn confirmed ones into Sol fix units. |
 | mv0dc3 | conductor | Oct 27 04:14 | docs | 4 | 96.8 | 0.1612 | Second fact-check and refresh of the product documentation against the integration head after G-W1, so README, user guide, testing report and architecture can be committed with only verified claims (AC-15). |
+| mvui4l | UI orchestrator | Oct 27 04:21 | vision | 3 | 97.9 | 0.2069 | Fix the MetaViewer live-state findings of vision round mv5 (lost tile vanishes, badge/placeholder, folded/error tile layout) and make refusal, verdict, activity, multislot outcome and terminal lifecycle rows reachable for the vision loop. |
+| mv0r2b | conductor | Oct 27 05:24 | testing | 8 | 95.6 | 0.3636 | Refresh the external testing round-2 prompts (Jules and ChatGPT, T1-T8) to the integration head after G-W1 and the W1 judgement, so testers target new code and still-open items. |
 
 ## Every lane
 
@@ -348,6 +350,17 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0dc3 | USER_GUIDE | Final docs USER_GUIDE.md | Oct 27 04:14 | yes | 92 | 97.4 | 0.059736 |
 | mv0dc3 | TESTING | Final docs TESTING.md | Oct 27 04:14 | yes | 71 | 96.6 | 0.035632 |
 | mv0dc3 | ARCH | Final docs ARCHITECTURE.md | Oct 27 04:14 | yes | 81 | 97.1 | 0.044512 |
+| mvui4l | W | Lost tile + tile layout (MV-7, MV-8, MV-9) | Oct 27 04:21 | yes | 98 | 97.8 | 0.075483 |
+| mvui4l | R | Replay steps for refusal, verdict, multislot outcomes, terminal lifecycle | Oct 27 04:22 | yes | 100 | 98.6 | 0.084558 |
+| mvui4l | V | Activity strip + fixture-only bench dispatch hook | Oct 27 04:22 | yes | 55 | 95.9 | 0.046832 |
+| mv0r2b | T1 | Round-2 prompts T1 | Oct 27 05:24 | yes | 37 | 93.3 | 0.03246 |
+| mv0r2b | T2 | Round-2 prompts T2 | Oct 27 05:24 | yes | 65 | 96.3 | 0.052145 |
+| mv0r2b | T3 | Round-2 prompts T3 | Oct 27 05:24 | yes | 78 | 96.7 | 0.057313 |
+| mv0r2b | T4 | Round-2 prompts T4 | Oct 27 05:24 | yes | 58 | 94.6 | 0.064222 |
+| mv0r2b | T5 | Round-2 prompts T5 | Oct 27 05:24 | yes | 52 | 95.0 | 0.037282 |
+| mv0r2b | T6 | Round-2 prompts T6 | Oct 27 05:24 | yes | 40 | 94.3 | 0.031806 |
+| mv0r2b | T7 | Round-2 prompts T7 | Oct 27 05:24 | yes | 53 | 95.6 | 0.039991 |
+| mv0r2b | T8 | Round-2 prompts T8 | Oct 27 05:25 | yes | 68 | 96.2 | 0.048332 |
 
 ## Method
 
