@@ -2,6 +2,11 @@
 //! [TARGET, unit decision] Frame publication only. Operator control transitions
 //! belong exclusively to serve, including cancellation notices and daemon forwarding.
 //! Refusals are journal entries too; a resumed surface needs a newer frame.
+//!
+//! Control transitions must use serve's authenticated routing:
+//! ```compile_fail
+//! use metaviewer_core::control::transition;
+//! ```
 use crate::admission::{Authority, Frame, Input, Outcome};
 use crate::journal::JournalError;
 use crate::Refusal;
@@ -51,7 +56,10 @@ pub fn publish_frame(
         },
         witnesses,
     ) {
-        Err(JournalError::Witness) => authority.apply(Input::Refuse {
+        // [TARGET, unit decision] Any rejected publication attempts a durable
+        // refusal. Storage failure/poisoning may also prevent that refusal;
+        // propagate its error rather than claiming an unjournalled success.
+        Err(_) => authority.apply(Input::Refuse {
             reason: Refusal::Policy,
         }),
         result => result,
