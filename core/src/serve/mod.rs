@@ -44,6 +44,7 @@ use crate::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::future::Future;
 use std::io::{self, Read};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
@@ -472,6 +473,143 @@ impl Server {
                 .retain(&Command::FrameRef(Box::new(frame.clone())));
         }
         Ok(out.reason.is_none())
+    }
+    fn daemon_frame_ref(body: &Command) -> Option<&FrameRef> {
+        match body {
+            Command::FrameRef(frame) => Some(frame.as_ref()),
+            Command::SurfaceEvent(event) => match event.as_ref() {
+                SurfaceEvent::Case2(event) => Some(&event.data.frame_ref),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+    fn can_supersede_frame(&self, epoch: u64, frame: &FrameRef) -> bool {
+        if epoch != self.authority.state().epoch
+            || frame.generation < 1
+            || frame.width < 1
+            || frame.height < 1
+            || frame.sha256.len() != 64
+            || !frame
+                .sha256
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            return false;
+        }
+        let path = Path::new(&frame.ramws_path);
+        if !path.starts_with("/dev/shm")
+            || path == Path::new("/dev/shm")
+            || path
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+            || !fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && m.len() > 0)
+        {
+            return false;
+        }
+        if self.authority.state().is_destroyed(&frame.surface_id) {
+            return false;
+        }
+        let Some(surface) = self.authority.state().surfaces.get(&frame.surface_id) else {
+            return false;
+        };
+        surface.live
+            && surface
+                .frame
+                .as_ref()
+                .is_none_or(|f| frame.generation >= f.generation)
+    }
+    fn skip_superseded_frame(
+        &mut self,
+        peer: &ReadyPeer,
+        epoch: u64,
+        env: &Envelope,
+        frame: &FrameRef,
+    ) -> Result<bool> {
+        if !self.can_supersede_frame(epoch, frame) {
+            return Ok(false);
+        }
+        peer.check_sender(env)?;
+        self.replay
+            .record(&env.session_id, &env.from, &env.nonce, env.seq)?;
+        Ok(true)
+    }
+    fn route_peer_envelope(
+        server: &Arc<Mutex<Server>>,
+        ready: &ReadyPeer,
+        id: u64,
+        epoch: u64,
+        env: Envelope,
+    ) -> Result<()> {
+        let mut s = server.lock().map_err(|_| invalid("poisoned authority"))?;
+        let c = s
+            .connections
+            .get(ready.endpoint())
+            .ok_or_else(|| invalid("connection retired"))?;
+        if c.id != id || c.epoch != epoch {
+            return Err(invalid("connection superseded"));
+        }
+        if let Err(error) = s.route(ready, epoch, env) {
+            // The recipient's reserved slot reports saturation. Keep the
+            // originating peer alive long enough to receive that signal.
+            if !error
+                .downcast_ref::<SendFailure>()
+                .is_some_and(|failure| match failure {
+                    SendFailure::QueueOverflow(_) => true,
+                    SendFailure::Disconnected(to) => to != ready.endpoint(),
+                })
+            {
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+    fn route_daemon_batch(
+        server: &Arc<Mutex<Server>>,
+        ready: &ReadyPeer,
+        id: u64,
+        epoch: u64,
+        batch: Vec<Envelope>,
+    ) -> Result<bool> {
+        let mut had_frame = false;
+        let len = batch.len();
+        for (i, env) in batch.iter().enumerate() {
+            let mut superseded = false;
+            if let Some(frame_i) = Self::daemon_frame_ref(&env.body) {
+                had_frame = true;
+                for next in batch.iter().skip(i + 1).take(len - i - 1) {
+                    let Some(frame_j) = Self::daemon_frame_ref(&next.body) else {
+                        break;
+                    };
+                    if frame_j.surface_id == frame_i.surface_id {
+                        if frame_j.generation <= frame_i.generation {
+                            superseded = false;
+                            break;
+                        }
+                        if fs::symlink_metadata(&frame_j.ramws_path)
+                            .is_ok_and(|m| m.is_file() && m.len() > 0)
+                        {
+                            superseded = true;
+                        }
+                    }
+                }
+                if superseded {
+                    let mut s = server.lock().map_err(|_| invalid("poisoned authority"))?;
+                    let c = s
+                        .connections
+                        .get(ready.endpoint())
+                        .ok_or_else(|| invalid("connection retired"))?;
+                    if c.id != id || c.epoch != epoch {
+                        return Err(invalid("connection superseded"));
+                    }
+                    if s.skip_superseded_frame(ready, epoch, env, frame_i)? {
+                        continue;
+                    }
+                }
+            }
+            Self::route_peer_envelope(server, ready, id, epoch, env.clone())?;
+        }
+        Ok(had_frame)
     }
     fn route(&mut self, peer: &ReadyPeer, epoch: u64, env: Envelope) -> Result<()> {
         peer.check_sender(&env)?;
@@ -1212,7 +1350,9 @@ async fn connection(
         }
         writer_closed.store(true, std::sync::atomic::Ordering::Release);
     });
+    let is_daemon = ready.endpoint().component == Component::Daemon;
     let result = async {
+        let mut batch: Vec<Envelope> = Vec::new();
         loop {
             if closed.load(std::sync::atomic::Ordering::Acquire) {
                 return Err(invalid("connection closed"));
@@ -1221,8 +1361,38 @@ async fn connection(
             let reading = read_frame(&mut reader);
             tokio::pin!(reading);
             let env = loop {
-                if let Ok(result) =
-                    tokio::time::timeout(Duration::from_millis(2), &mut reading).await
+                if !batch.is_empty() {
+                    if let std::task::Poll::Ready(result) = std::future::poll_fn(|cx| {
+                        let mut unconstrained = tokio::task::unconstrained(reading.as_mut());
+                        match std::pin::Pin::new(&mut unconstrained).poll(cx) {
+                            std::task::Poll::Ready(res) => {
+                                std::task::Poll::Ready(std::task::Poll::Ready(res))
+                            }
+                            std::task::Poll::Pending => {
+                                std::task::Poll::Ready(std::task::Poll::Pending)
+                            }
+                        }
+                    })
+                    .await
+                    {
+                        break result?;
+                    }
+                    let had_frame = Server::route_daemon_batch(
+                        &server,
+                        &ready,
+                        id,
+                        epoch,
+                        std::mem::take(&mut batch),
+                    )?;
+                    if had_frame {
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                    }
+                }
+                if let Ok(result) = tokio::time::timeout(
+                    Duration::from_millis(2),
+                    tokio::task::unconstrained(&mut reading),
+                )
+                .await
                 {
                     break result?;
                 }
@@ -1235,29 +1405,34 @@ async fn connection(
                 }
             };
             let Some(env) = env else {
+                if !batch.is_empty() {
+                    Server::route_daemon_batch(
+                        &server,
+                        &ready,
+                        id,
+                        epoch,
+                        std::mem::take(&mut batch),
+                    )?;
+                }
                 return Ok(());
             };
-            let mut s = server.lock().map_err(|_| invalid("poisoned authority"))?;
-            let c = s
-                .connections
-                .get(ready.endpoint())
-                .ok_or_else(|| invalid("connection retired"))?;
-            if c.id != id || c.epoch != epoch {
-                return Err(invalid("connection superseded"));
-            }
-            if let Err(error) = s.route(&ready, epoch, env) {
-                // The recipient's reserved slot reports saturation. Keep the
-                // originating peer alive long enough to receive that signal.
-                if !error
-                    .downcast_ref::<SendFailure>()
-                    .is_some_and(|failure| match failure {
-                        SendFailure::QueueOverflow(_) => true,
-                        SendFailure::Disconnected(to) => to != ready.endpoint(),
-                    })
-                {
-                    return Err(error);
+            if is_daemon {
+                batch.push(env);
+                if batch.len() >= 32 {
+                    let had_frame = Server::route_daemon_batch(
+                        &server,
+                        &ready,
+                        id,
+                        epoch,
+                        std::mem::take(&mut batch),
+                    )?;
+                    if had_frame {
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                    }
                 }
+                continue;
             }
+            Server::route_peer_envelope(&server, &ready, id, epoch, env)?;
         }
     }
     .await;

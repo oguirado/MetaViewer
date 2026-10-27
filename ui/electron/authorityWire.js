@@ -271,7 +271,10 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     }
     const prior = pendingEntries.get(sid);
     if (entry.stateOnly && prior && !prior.stateOnly && !['destroyed','lost'].includes(entry?.state?.state)) {
-      pendingEntries.set(sid, {...prior, state: entry.state});
+      pendingEntries.set(sid, {...prior, state: entry.state, stateUpdated: true});
+    } else if (!entry.stateOnly && prior && (prior.stateOnly || prior.stateUpdated) && !['destroyed','lost'].includes(prior?.state?.state)) {
+      const freshState = typeof entry.resolveLatestState === 'function' ? entry.resolveLatestState() : prior.state;
+      pendingEntries.set(sid, {...entry, state: freshState, stateUpdated: true});
     } else {
       pendingEntries.set(sid, entry);
     }
@@ -286,9 +289,12 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
           if (next.done) break;
           const [sid, nextEntry] = next.value;
           pendingEntries.delete(sid);
-          const freshEntry = !nextEntry.stateOnly && typeof nextEntry.resolveLatestEntry === 'function'
+          let freshEntry = !nextEntry.stateOnly && typeof nextEntry.resolveLatestEntry === 'function'
             ? (nextEntry.resolveLatestEntry() ?? nextEntry)
             : nextEntry;
+          if (nextEntry.stateUpdated && !freshEntry.stateUpdated) {
+            freshEntry = {...freshEntry, stateUpdated: true};
+          }
           await deliverAuthorityFrame(freshEntry,contents,streams,frameDiag);
         }
       } finally {
@@ -300,6 +306,15 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
   }
   const stopFrames = frames ? frames.subscribe(async (/** @type {any} */entry) => {
     if (disposed) return;
+    if (subscribed && entry?.stateOnly && !['destroyed','lost'].includes(entry?.state?.state)) {
+      const sid = entry?.frameRef?.surface_id;
+      const prior = typeof sid === 'string' ? pendingEntries.get(sid) : undefined;
+      if (prior && !prior.stateOnly) {
+        pendingEntries.set(sid, {...prior, state: entry.state});
+      }
+      await deliverAuthorityFrame(entry,contents,streams,frameDiag);
+      return;
+    }
     stageEntry(entry);
     if (!subscribed) return;
     await drainPendingEntries();
@@ -323,18 +338,12 @@ function streamKeySurfaceId(key) {
     return null;
   }
 }
-/** Trusted host frame capability entry: readerOptions/portOptions, state, frameRef.
- * @param {any} entry @param {any} contents @param {Set<any>} streams @param {any} [frameDiag] */
-export async function deliverAuthorityFrame(entry,contents,streams,frameDiag=null) {
-  const raw=entry.frameRef;
-  const ref={schema:raw.schema,surface_id:raw.surface_id,generation:raw.generation,tick:raw.tick,
-    ts_ns:raw.ts_ns,width:raw.width,height:raw.height,format:raw.format,sha256:raw.sha256,capture_us:raw.capture_us};
-  // Closed metadata projection, never spreads adapter state or frame paths.
-  const rawState=entry.state;
-  const state={schema:rawState.schema,surface_id:rawState.surface_id,kind:rawState.kind,display:rawState.display,
-    geometry:{w:rawState.geometry?.w,h:rawState.geometry?.h},state:rawState.state,
-    visibility:rawState.visibility,control:rawState.control,profile_id:rawState.profile_id};
-  if(state.schema!=='surface/v0.2' || state.surface_id!==ref.surface_id
+/** @param {any} rawState @param {string} refSurfaceId */
+function projectSurfaceState(rawState, refSurfaceId) {
+  const state={schema:rawState?.schema,surface_id:rawState?.surface_id,kind:rawState?.kind,display:rawState?.display,
+    geometry:{w:rawState?.geometry?.w,h:rawState?.geometry?.h},state:rawState?.state,
+    visibility:rawState?.visibility,control:rawState?.control,profile_id:rawState?.profile_id};
+  if(state.schema!=='surface/v0.2' || state.surface_id!==refSurfaceId
       || !['desktop_capsule','browser','game_capsule','vm'].includes(state.kind)
       || typeof state.display!=='string' || !state.display.length || state.display.length>65536
       || !Number.isSafeInteger(state.geometry.w) || state.geometry.w<1
@@ -343,6 +352,16 @@ export async function deliverAuthorityFrame(entry,contents,streams,frameDiag=nul
       || !['folded','unfolded','pinned'].includes(state.visibility)
       || !['agent','human','shared'].includes(state.control)
       || typeof state.profile_id!=='string' || !state.profile_id.length || state.profile_id.length>128) throw new Error('SURFACE_STATE');
+  return state;
+}
+/** Trusted host frame capability entry: readerOptions/portOptions, state, frameRef.
+ * @param {any} entry @param {any} contents @param {Set<any>} streams @param {any} [frameDiag] */
+export async function deliverAuthorityFrame(entry,contents,streams,frameDiag=null) {
+  const raw=entry.frameRef;
+  const ref={schema:raw.schema,surface_id:raw.surface_id,generation:raw.generation,tick:raw.tick,
+    ts_ns:raw.ts_ns,width:raw.width,height:raw.height,format:raw.format,sha256:raw.sha256,capture_us:raw.capture_us};
+  // Closed metadata projection, never spreads adapter state or frame paths.
+  let state=projectSurfaceState(entry.state, ref.surface_id);
   if (entry.stateOnly) {
     if (['destroyed','lost'].includes(state.state)) {
       const deadList=[...streams].filter(item=>item.surfaceId===state.surface_id || streamKeySurfaceId(item.key)===state.surface_id);
@@ -378,6 +397,12 @@ export async function deliverAuthorityFrame(entry,contents,streams,frameDiag=nul
     stream.setAcquire?.(entry.readerOptions.acquirePublishedLease);
   }
   const result=await stream.reader.readFrame(entry.frameRef);
+  if (typeof entry.resolveLatestState === 'function') {
+    const latestState = entry.resolveLatestState();
+    if (latestState && latestState.surface_id === ref.surface_id) {
+      state=projectSurfaceState(latestState, ref.surface_id);
+    }
+  }
   if (!result.ok) {
     frameDiag?.recordReaderRefusal?.({
       surfaceId:ref.surface_id,
@@ -386,10 +411,21 @@ export async function deliverAuthorityFrame(entry,contents,streams,frameDiag=nul
       detail:result.detail,
       ...(typeof /** @type {any} */ (result).cause === 'string' ? {cause: /** @type {any} */ (result).cause} : {}),
     });
+    if (entry.stateUpdated) {
+      contents.postMessage('metaviewer:authority.frames',{frame_ref:ref,surface:state},[]);
+      frameDiag?.recordStateOnly?.({surfaceId:ref.surface_id});
+    }
     return false;
   }
   const sent=stream.port.postFrame(result.frame);
-  if (!sent.ok) { frameDiag?.recordPortRefusal?.({surfaceId:ref.surface_id,frameGeneration:ref.generation,reason:sent.reason}); return false; }
+  if (!sent.ok) {
+    frameDiag?.recordPortRefusal?.({surfaceId:ref.surface_id,frameGeneration:ref.generation,reason:sent.reason});
+    if (entry.stateUpdated) {
+      contents.postMessage('metaviewer:authority.frames',{frame_ref:ref,surface:state},[]);
+      frameDiag?.recordStateOnly?.({surfaceId:ref.surface_id});
+    }
+    return false;
+  }
   const wasAnnounced=stream.announced;
   try {
     contents.postMessage('metaviewer:authority.frames',{frame_ref:ref,surface:state},stream.announced ? [] : (entry.rendererPorts || []));

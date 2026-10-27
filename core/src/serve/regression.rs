@@ -794,3 +794,90 @@ fn stale_daemon_state_changed_does_not_clobber_release_control() {
         close_server(server, task, daemon, _agent, ui).await;
     });
 }
+
+#[test]
+fn w3_control_intent_under_daemon_frame_burst_coalesces_and_preserves_checks() {
+    support::run(async {
+        let (_temp, server, task, mut daemon, _agent, mut ui) = setup().await;
+        created(&mut daemon, &mut ui).await;
+
+        let shared = SharedFrame::new();
+        for gen in 1..=16_u64 {
+            let f = shared.value(gen);
+            daemon
+                .send(json!({"schema":"surface_event/v0.2","event":"frame_ready","data":{"frame_ref":f}}))
+                .await;
+        }
+        ui.send(control("take_control")).await;
+        let forwarded_take = serde_json::to_value(daemon.receive().await.body).unwrap();
+        assert_eq!(forwarded_take["op"], "take_control");
+        assert!(
+            !server.lock().unwrap().authority.state().surfaces["surface-demo"].agent_controlled
+        );
+        assert_eq!(
+            server.lock().unwrap().authority.state().surfaces["surface-demo"]
+                .frame
+                .as_ref()
+                .unwrap()
+                .generation,
+            16
+        );
+
+        let mut human = surface();
+        human["control"] = "human".into();
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":human}}))
+            .await;
+        for gen in 17..=24_u64 {
+            let f = shared.value(gen);
+            daemon
+                .send(json!({"schema":"surface_event/v0.2","event":"frame_ready","data":{"frame_ref":f}}))
+                .await;
+        }
+        ui.send(control("release_control")).await;
+        let forwarded_release = serde_json::to_value(daemon.receive().await.body).unwrap();
+        assert_eq!(forwarded_release["op"], "release_control");
+        assert!(server.lock().unwrap().authority.state().surfaces["surface-demo"].agent_controlled);
+
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":surface()}}))
+            .await;
+
+        let mut saw_human = false;
+        let mut saw_agent = false;
+        let mut latest_gen = 0_u64;
+        while !saw_agent || latest_gen < 24 {
+            let body = serde_json::to_value(ui.receive().await.body).unwrap();
+            if body["event"] == "frame_ready" {
+                latest_gen = body["data"]["frame_ref"]["generation"].as_u64().unwrap();
+            } else if body["event"] == "state_changed" {
+                match body["data"]["surface"]["control"].as_str() {
+                    Some("human") => saw_human = true,
+                    Some("agent") if saw_human => saw_agent = true,
+                    _ => {}
+                }
+            }
+        }
+        assert!(saw_human && saw_agent);
+        assert_eq!(latest_gen, 24);
+
+        // Negative control: a generation regression inside a burst is never masked by coalescing.
+        let f_bad = shared.value(20);
+        let f_newer = shared.value(25);
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"frame_ready","data":{"frame_ref":f_bad}}))
+            .await;
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"frame_ready","data":{"frame_ref":f_newer}}))
+            .await;
+        assert!(
+            read_frame(&mut daemon.socket)
+                .await
+                .unwrap_or(None)
+                .is_none(),
+            "generation regression in a frame burst must retire the daemon connection"
+        );
+
+        close_server(server, task, daemon, _agent, ui).await;
+    });
+}

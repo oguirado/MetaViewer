@@ -199,12 +199,19 @@ export async function createMainBindings({env = process.env, createMessageChanne
       }
       const binding = Object.freeze({principal:'ui',epoch:1,surfaceId:published.surface_id,surfaceGeneration:1});
       return {frameRef:published,state:{...state},rendererPorts:[channel.port2],
+        resolveLatestState() {
+          const curState = surfaces.get(published.surface_id);
+          return curState ? {...curState} : {...state};
+        },
         resolveLatestEntry() {
           const latest = latestFrames.get(published.surface_id);
           const curState = surfaces.get(published.surface_id);
           if (latest && curState && curState.state === 'active' && latest.generation > published.generation) {
             pendingDeliveries.delete(published.surface_id);
             return buildFrameEntry(latest, curState);
+          }
+          if (curState && !isDeepStrictEqual(curState, state)) {
+            return buildFrameEntry(published, curState);
           }
           return null;
         },
@@ -439,6 +446,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
     // Binding epoch is local to this single, never-reconnected host connection.
     const getStatus = () => ({availability:live ? 'live' : 'unavailable',pid:null,authority_epoch:live ? 1 : null,reason:live ? null : 'CORE_SEAMS_ABSENT'});
     /** @type {Map<string,string>} */ const captureSurfaces = new Map();
+    let timeoutAtSeq = 0;
     return {core:{
       /** @param {(state:any)=>void} cb */
       subscribeCapture(cb) {
@@ -483,8 +491,21 @@ export async function createMainBindings({env = process.env, createMessageChanne
         else if (body?.schema !== 'action_proposal/v0.2') throw fail();
         const key = message.op === 'intent' ? body.request_id : body.proposal_id;
         if (!id(key) || pending.has(key)) throw fail();
+        // [TARGET, unit decision] One intent CORE_TIMEOUT on a healthy active
+        // session (socket writable, surfaces present, and core traffic advanced
+        // since any prior timeout) rejects that intent with CORE_TIMEOUT while
+        // keeping the authority wire and frame streams alive; silent peers or
+        // repeated timeouts without core progress call shutdown().
         return new Promise((resolve,reject) => {
-          const timer = setTimeout(() => {pending.delete(key);reject(new Error('CORE_TIMEOUT'));shutdown();},DEADLINE);
+          const timer = setTimeout(() => {
+            pending.delete(key);
+            const healthyIntentTimeout = message.op === 'intent'
+              && !disposed && live && socket && !socket.destroyed && socket.writable
+              && surfaces.size > 0 && timeoutAtSeq !== received;
+            if (healthyIntentTimeout) timeoutAtSeq = received;
+            else shutdown();
+            reject(new Error('CORE_TIMEOUT'));
+          },DEADLINE);
           pending.set(key,{body,resolve,reject,timer});
           try {send(body);} catch {shutdown();}
         });
