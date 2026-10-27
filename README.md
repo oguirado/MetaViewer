@@ -64,6 +64,7 @@ Electron renders state and submits intents; it never injects input [CITED: docs/
 External components stay in their own repositories, pinned in deps.lock and never copied: vision-engine v0.2.0, wender-agent v0.3.0, OpenSuperficies os-cu-w9-mv1 [CITED: deps.lock].
 
 I build and run from source (below). A deterministic Linux package build exists (314.8 MB, byte-identical across two builds [MEASURED]) with clean-install checks via `scripts/bootstrap.sh` (needs `MV_PKG_OUT`, `CAPSULE_UI_KIT_REPO`, and local Electron files via `MV_ELECTRON_ZIP_DIR` or `ELECTRON_OVERRIDE_DIST_PATH` [CITED: scripts/bootstrap.sh]) and `npm run package` in `ui/` [CITED: ui/package.json]; while hosted CI package runs complete, building from source stays the primary documented path [CITED: docs/USER_GUIDE.md].
+See [docs/INSTALL.md](docs/INSTALL.md) for the full Linux (`arm64` and `x64`) installation, packaging, and troubleshooting guide.
 
 ### Build
 
