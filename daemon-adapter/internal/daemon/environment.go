@@ -434,5 +434,12 @@ func (s *helloState) accept(ctx context.Context, profiles map[string]capsule.Pro
 	s.subscriptions = append(s.subscriptions, pending...)
 	s.handler = subscriptionHandler(fresh, profiles, byRoot, wireHandler(fresh, profiles, pubs, origin))
 	s.welcomed = true
+	go func() {
+		_ = fresh.MonitorLiveness(session.ctx, func(ctx context.Context, body json.RawMessage) error {
+			session.work.Lock()
+			defer session.work.Unlock()
+			return session.emit(ctx, body)
+		})
+	}()
 	return nil
 }

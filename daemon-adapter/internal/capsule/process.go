@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -142,6 +143,22 @@ func (r *ProcessRunner) Run(ctx context.Context, argv []string, stdin []byte) ([
 // NewRuntime resolves the native binary directory only from the admitted environment.
 func NewRuntime(cfg Config, clock cli.Clock) (*Manager, error) {
 	cfg.BinDir = os.Getenv("MV_SRF_BIN_DIR")
+	// [TARGET, unit decision] Optional trusted runtime knobs use the same bounded
+	// validation as Config. Invalid explicit values fail startup, never default.
+	if raw, ok := os.LookupEnv("MV_LIVENESS_INTERVAL"); ok {
+		value, err := time.ParseDuration(raw)
+		if err != nil || value <= 0 {
+			return nil, fault("configuration", "invalid MV_LIVENESS_INTERVAL")
+		}
+		cfg.LivenessInterval = value
+	}
+	if raw, ok := os.LookupEnv("MV_LIVENESS_MISSES"); ok {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value <= 0 {
+			return nil, fault("configuration", "invalid MV_LIVENESS_MISSES")
+		}
+		cfg.LivenessMisses = value
+	}
 	var environment []string
 	for _, key := range []string{"PATH", "HOME", "XDG_RUNTIME_DIR", "MV_SRF_STATE_DIR", "SRF_IDENTITY_STORE_ROOT", "SRF_PROXY_REGISTRY", "SRF_EGRESS_PROXY"} {
 		if value, ok := os.LookupEnv(key); ok {

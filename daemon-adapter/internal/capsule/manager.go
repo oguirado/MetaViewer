@@ -45,6 +45,9 @@ type Config struct {
 	MaxSurfaces, MaxOutputBytes int
 	Timeout                     time.Duration
 	OriginNS                    uint64
+	LivenessInterval            time.Duration
+	LivenessMisses              int
+	LivenessTimeout             time.Duration
 	// BeforeDestroy drains any capture subscriptions before native stop.
 	BeforeDestroy         func(context.Context, string) error
 	VerifyHoldingsInput   func(context.Context, Binding, string, json.RawMessage, uint64) error
@@ -126,6 +129,21 @@ func fault(code, detail string) error { return &cli.Fault{Code: code, Detail: de
 func NewManager(cfg Config, r cli.Runner, clock cli.Clock) (*Manager, error) {
 	if r == nil || clock == nil || cfg.OriginNS == 0 || !filepath.IsAbs(cfg.BinDir) || cfg.MaxSurfaces < 1 || cfg.MaxOutputBytes < 1 || cfg.MaxOutputBytes > 1<<20 || cfg.Timeout <= 0 || cfg.Timeout > 3*time.Minute || len(cfg.Profiles) == 0 {
 		return nil, fault("configuration", "complete bounded native configuration required")
+	}
+	if cfg.LivenessInterval == 0 {
+		cfg.LivenessInterval = 5 * time.Second
+	}
+	if cfg.LivenessMisses == 0 {
+		cfg.LivenessMisses = 2
+	}
+	if cfg.LivenessTimeout == 0 {
+		cfg.LivenessTimeout = min(cfg.Timeout, 2*time.Second)
+	}
+	if cfg.LivenessTimeout <= 0 || cfg.LivenessTimeout > cfg.Timeout {
+		return nil, fault("configuration", "bounded liveness timeout required")
+	}
+	if cfg.LivenessInterval < time.Millisecond || cfg.LivenessInterval > time.Hour || cfg.LivenessMisses < 1 || cfg.LivenessMisses > 100 {
+		return nil, fault("configuration", "bounded liveness configuration required")
 	}
 	copyProfiles := make(map[string]Profile, len(cfg.Profiles))
 	for id, p := range cfg.Profiles {
@@ -505,6 +523,10 @@ func (m *Manager) Capture(ctx context.Context, id string) (Binding, NativeFrame,
 func (m *Manager) MarkLost(id string, confirmedAbsent bool) (json.RawMessage, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.markLostLocked(id, confirmedAbsent)
+}
+
+func (m *Manager) markLostLocked(id string, confirmedAbsent bool) (json.RawMessage, error) {
 	b, ok := m.bindings[id]
 	if confirmedAbsent && ok && b.Surface.State == "lost" {
 		return nil, nil
