@@ -1,17 +1,17 @@
 {
  "schema": "metaviewer.meta_ai_usage/v1",
  "totals": {
-  "lanes": 314,
-  "ok": 314,
-  "input_tokens": 68055193,
-  "cache_read_tokens": 1512030697,
-  "output_tokens": 14530316,
-  "thinking_tokens": 7568796,
+  "lanes": 316,
+  "ok": 316,
+  "input_tokens": 68358886,
+  "cache_read_tokens": 1519024450,
+  "output_tokens": 14591325,
+  "thinking_tokens": 7596460,
   "cache_hit_pct": 95.7,
-  "usd": 12.7356,
-  "usd_per_lane": 0.0406,
-  "steps": 16439,
-  "lane_hours": 41.5
+  "usd": 12.7922,
+  "usd_per_lane": 0.0405,
+  "steps": 16550,
+  "lane_hours": 41.8
  },
  "peak_concurrent_lanes": 24,
  "rooms": {
@@ -95,6 +95,11 @@
    "why": "Fix the judge's blocking notes on MV-UI7: SurfaceCanvas retired the live frame port on every generation update, and CONTEXT_LOST did not close the stream.",
    "orchestrator": "UI orchestrator"
   },
+  "mvui16": {
+   "stage": "fix",
+   "why": "Clean redo of MV-UI8 after the quarantined attempt: fix five confirmed AC-06 placement and AC-07 export review findings with strict memory-safety rules.",
+   "orchestrator": "UI orchestrator"
+  },
   "mvui2": {
    "stage": "vision",
    "why": "Fix the MetaViewer renderer findings of the vision loop (wender-agent + vision-engine round on the integrated screens) and the remaining independent-judge notes, toward 0 medium/high findings.",
@@ -123,6 +128,11 @@
   "mvui15b": {
    "stage": "fix",
    "why": "Quarantine: find and remove the runaway memory allocation left by the previous MV-UI8 lane (it crashed the desktop app), then finish the five confirmed AC-06/AC-07 review fixes.",
+   "orchestrator": "UI orchestrator"
+  },
+  "mvui17": {
+   "stage": "fix",
+   "why": "Fix renderer findings from the second real-app vision round: QA anchor grammar (kit anchors with '/' were rejected), wall tile Fold with no visible effect, Activity count stuck.",
    "orchestrator": "UI orchestrator"
   },
   "mvui4l": {
@@ -7020,6 +7030,48 @@
    "thinking_tokens": 5674,
    "cache_hit_pct": 94.1,
    "usd": 0.023028
+  },
+  {
+   "room": "mvui17",
+   "lane": "Q",
+   "title": "QA anchor grammar v2",
+   "stage": "fix",
+   "model": "muse-spark-1.3",
+   "orchestrator": "UI orchestrator",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-27T15:30:31.609000+00:00",
+   "duration_s": 436.8,
+   "end_utc": "2026-10-27T15:37:48.373000+00:00",
+   "phase": "build",
+   "steps": 64,
+   "input_tokens": 162501,
+   "cache_read_tokens": 4260845,
+   "output_tokens": 30546,
+   "thinking_tokens": 13647,
+   "cache_hit_pct": 96.3,
+   "usd": 0.030881
+  },
+  {
+   "room": "mvui17",
+   "lane": "A",
+   "title": "Activity count",
+   "stage": "fix",
+   "model": "muse-spark-1.3",
+   "orchestrator": "UI orchestrator",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-27T15:31:11.582000+00:00",
+   "duration_s": 459.2,
+   "end_utc": "2026-10-27T15:38:50.749000+00:00",
+   "phase": "build",
+   "steps": 47,
+   "input_tokens": 141192,
+   "cache_read_tokens": 2732908,
+   "output_tokens": 30463,
+   "thinking_tokens": 14017,
+   "cache_hit_pct": 95.1,
+   "usd": 0.025678
   }
  ]
 }
