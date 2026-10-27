@@ -248,9 +248,9 @@
 {"an":[["file","section"]],"aq":[],"fam":759,"i":759,"id":"smoke.mjs","oa":"file","st":1}
 {"an":[["file","section"]],"aq":[],"fam":760,"i":760,"id":"socket.go","oa":"file","st":1}
 {"an":[["file","section"]],"aq":[],"fam":761,"i":761,"id":"socket_bind.rs","oa":"file","st":1}
-{"an":[["file","section"]],"aq":[],"fam":762,"i":762,"id":"src-main.js","oa":"file","st":1}
-{"an":[["file","section"]],"aq":[],"fam":763,"i":763,"id":"srf-identity-surface","oa":"file","st":1}
-{"an":[["file","section"]],"aq":[],"fam":764,"i":764,"id":"statedir.go","oa":"file","st":1}
-{"an":[["file","section"]],"aq":[],"fam":765,"i":765,"id":"statedir_test.go","oa":"file","st":1}
-{"an":[["file","section"]],"aq":[],"fam":766,"i":766,"id":"states.js","oa":"file","st":1}
-{"an":[["file","section"]],"aq":[],"fam":767,"i":767,"id":"stream.go","oa":"file","st":1}
+{"an":[["file","section"]],"aq":[],"fam":762,"i":762,"id":"socket_hostile.rs","oa":"file","st":1}
+{"an":[["file","section"]],"aq":[],"fam":763,"i":763,"id":"src-main.js","oa":"file","st":1}
+{"an":[["file","section"]],"aq":[],"fam":764,"i":764,"id":"srf-identity-surface","oa":"file","st":1}
+{"an":[["file","section"]],"aq":[],"fam":765,"i":765,"id":"statedir.go","oa":"file","st":1}
+{"an":[["file","section"]],"aq":[],"fam":766,"i":766,"id":"statedir_test.go","oa":"file","st":1}
+{"an":[["file","section"]],"aq":[],"fam":767,"i":767,"id":"states.js","oa":"file","st":1}
