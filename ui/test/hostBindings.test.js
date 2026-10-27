@@ -336,38 +336,63 @@ test('W2-REALAPP regression: sustained multi-frame delivery, pre-subscribe repla
   assert.equal(bindings.core.getStatus().availability, 'live');
 });
 
-test('W2-REALAPP regression: preload wall port consumer paints surface canvas and ACKs frame_delivery', async t => {
+test('W2-FRAMEPORT-HANDOFF: preload wall port forwarder posts frame_port/v1 once without DOM writes or ACKs; negative control fails planted paint or ACK', async t => {
   const prevWin = Object.getOwnPropertyDescriptor(globalThis, 'window');
   const prevDoc = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  let domWrites = 0;
   let putImage = null;
+  let wallPresent = true;
   const attrs = new Map([['data-state', 'connecting']]);
   const canvas = {
     width: 0,
     height: 0,
     hidden: true,
-    removeAttribute(name) { if (name === 'hidden') this.hidden = false; },
-    getContext(kind) {
-      assert.equal(kind, '2d');
+    removeAttribute(name) {
+      domWrites += 1;
+      if (name === 'hidden') this.hidden = false;
+    },
+    getContext() {
+      domWrites += 1;
       return {
         createImageData: (w, h) => ({ width: w, height: h, data: new Uint8ClampedArray(w * h * 4) }),
-        putImageData: img => { putImage = img; },
+        putImageData: img => {
+          domWrites += 1;
+          putImage = img;
+        },
       };
     },
   };
   const waiting = { hidden: false, style: { display: '' } };
   const section = {
-    setAttribute: (k, v) => attrs.set(k, v),
+    setAttribute: (k, v) => {
+      domWrites += 1;
+      attrs.set(k, v);
+    },
     getAttribute: k => attrs.get(k),
-    querySelector: sel => (sel === 'canvas.mv-surface__canvas' ? canvas : sel === '.mv-surface__waiting' ? waiting : null),
+    querySelector: sel => {
+      domWrites += 1;
+      return sel === 'canvas.mv-surface__canvas' ? canvas : sel === '.mv-surface__waiting' ? waiting : null;
+    },
   };
+  const posts = [];
   Object.defineProperty(globalThis, 'window', {
     configurable: true,
-    value: { location: { origin: 'app://metaviewer' }, postMessage() {} },
+    value: {
+      location: { origin: 'app://metaviewer' },
+      postMessage: (...args) => posts.push(args),
+    },
   });
   Object.defineProperty(globalThis, 'document', {
     configurable: true,
     value: {
-      getElementById: id => (id === 'metaviewer-app' ? {} : id === 'mv-surface-canvas-s1' ? section : null),
+      getElementById: id => {
+        if (id === 'metaviewer-app') return wallPresent ? {} : null;
+        if (id === 'mv-surface-canvas-s1') {
+          domWrites += 1;
+          return section;
+        }
+        return null;
+      },
     },
   });
   t.after(() => {
@@ -383,17 +408,22 @@ test('W2-REALAPP regression: preload wall port consumer paints surface canvas an
     ipcRenderer: { invoke: async () => true, on: (_ch, fn) => { ipcListener = fn; }, removeListener() {} },
   });
   const seen = [];
-  t.after(api.authority.subscribeFrames(v => seen.push(v)));
+  const unsubscribe = api.authority.subscribeFrames(v => seen.push(v));
+  t.after(unsubscribe);
 
   const acks = [];
+  let port2Closed = 0;
+  let extraClosed = 0;
+  let port2Started = 0;
   const port2 = new EventEmitter();
   port2.postMessage = msg => acks.push(msg);
-  port2.start = () => {};
-  port2.close = () => {};
+  port2.start = () => { port2Started += 1; };
+  port2.close = () => { port2Closed += 1; };
+  const extraPort = { close: () => { extraClosed += 1; } };
 
   const sha = createHash('sha256').update(Buffer.from([10, 20, 30])).digest('hex');
   ipcListener(
-    { ports: [port2] },
+    { ports: [port2, extraPort] },
     {
       frame_ref: {
         schema: 'frame_ref/v0.2',
@@ -433,16 +463,108 @@ test('W2-REALAPP regression: preload wall port consumer paints surface canvas an
     },
   });
 
-  assert.equal(acks.length, 1);
-  assert.equal(acks[0].schema, 'frame_ack/v0.2');
-  assert.equal(acks[0].outcome, 'PRESENTED');
-  assert.equal(acks[0].frameGeneration, 1);
-  assert.equal(canvas.hidden, false);
-  assert.equal(waiting.hidden, true);
-  assert.equal(waiting.style.display, 'none');
-  assert.equal(attrs.get('data-state'), 'live');
-  assert.equal(attrs.get('data-frame'), sha);
-  assert.deepEqual([...putImage.data], [10, 20, 30, 255]);
+  const assertCleanHandoff = state => {
+    assert.equal(state.posts.length, 1);
+    const [message, targetOrigin, transfer] = state.posts[0];
+    assert.deepEqual(Object.keys(message).sort(), ['schema', 'surface_generation', 'surface_id', 'type']);
+    assert.deepEqual(message, {
+      type: 'metaviewer:frame-port',
+      schema: 'frame_port/v1',
+      surface_id: 's1',
+      surface_generation: 1,
+    });
+    assert.equal(targetOrigin, globalThis.window.location.origin);
+    assert.equal(Array.isArray(transfer), true);
+    assert.equal(transfer.length, 1);
+    assert.strictEqual(transfer[0], port2);
+    assert.equal(state.extraClosed, 1);
+    assert.equal(state.port2Closed, 0);
+    assert.equal(state.port2Started, 0);
+    assert.equal(state.port2Listeners, 0);
+    assert.equal(state.acks.length, 0);
+    assert.equal(state.domWrites, 0);
+    assert.equal(state.putImage, null);
+    assert.equal(state.canvasHidden, true);
+    assert.equal(state.waitingHidden, false);
+    assert.equal(state.dataState, 'connecting');
+  };
+
+  const handoffState = {
+    posts,
+    extraClosed,
+    port2Closed,
+    port2Started,
+    port2Listeners: port2.listenerCount('message'),
+    acks,
+    domWrites,
+    putImage,
+    canvasHidden: canvas.hidden,
+    waitingHidden: waiting.hidden,
+    dataState: attrs.get('data-state'),
+  };
+  assertCleanHandoff(handoffState);
+
+  // Subsequent frame notice on the same stream carries no new port and triggers no second postMessage.
+  ipcListener(
+    { ports: [] },
+    {
+      frame_ref: {
+        schema: 'frame_ref/v0.2',
+        surface_id: 's1',
+        generation: 2,
+        tick: 2,
+        ts_ns: 2,
+        width: 1,
+        height: 1,
+        format: 'rgb24',
+        sha256: sha,
+        capture_us: 1,
+      },
+      surface,
+    },
+  );
+  assert.equal(seen.length, 2);
+  assert.equal(posts.length, 1);
+
+  // Unsubscribing does not close port2 because preload never retained it.
+  unsubscribe();
+  assert.equal(port2Closed, 0);
+
+  // When #metaviewer-app is absent, frame_port/v1 is not forwarded.
+  wallPresent = false;
+  const legacyPosts = [];
+  globalThis.window.postMessage = (...args) => legacyPosts.push(args);
+  const stopLegacy = api.authority.subscribeFrames(() => {});
+  t.after(stopLegacy);
+  const relayPort = {};
+  ipcListener(
+    { ports: [relayPort] },
+    {
+      frame_ref: {
+        schema: 'frame_ref/v0.2',
+        surface_id: 's1',
+        generation: 1,
+        tick: 1,
+        ts_ns: 1,
+        width: 1,
+        height: 1,
+        format: 'rgb24',
+        sha256: sha,
+        capture_us: 1,
+      },
+      surface,
+    },
+  );
+  assert.equal(legacyPosts.filter(([msg]) => msg?.schema === 'frame_port/v1').length, 0);
+
+  // Negative controls: a planted DOM paint or a planted preload ACK must fail the audit.
+  assert.throws(() => assertCleanHandoff({ ...handoffState, domWrites: 1 }));
+  assert.throws(() => assertCleanHandoff({ ...handoffState, canvasHidden: false }));
+  assert.throws(() => assertCleanHandoff({ ...handoffState, dataState: 'live' }));
+  assert.throws(() => assertCleanHandoff({
+    ...handoffState,
+    acks: [{ schema: 'frame_ack/v0.2', outcome: 'PRESENTED' }],
+  }));
 });
 
 test('R2-T4-003 and R2-T4-004 regression: non-enumerable extra keys on intent body/params and unknown ops are rejected before reaching core', async t => {
