@@ -157,6 +157,39 @@ class ContractEvolutionTests(unittest.TestCase):
                 except ValidationError as exc:
                     self.fail(f"Carried v0.1 valid example for {name} failed under v0.2 schema: {exc}")
 
+    def test_ui_intent_and_native_evidence_evolution_rules(self):
+        """Rule explicitly on ui_intent oneOf branches and native_evidence optionality under SW-0244 / SW-0139."""
+        ui_v2 = self.v02.load("ui_intent.schema.json")
+
+        # Construct a synthetic old ui_intent schema with only 10 branches (before take_control/release_control)
+        ui_v1_synth = copy.deepcopy(ui_v2)
+        ui_v1_synth["oneOf"] = [b for b in ui_v2["oneOf"] if b.get("properties", {}).get("op", {}).get("const") not in ("take_control", "release_control")]
+
+        # Adding 2 oneOf branches to ui_intent is backward-compatible for stored data/requests (den(v1) <= den(v2))
+        self.assertFalse(is_request_breaking(ui_v1_synth, ui_v2))
+
+        # But adding 2 oneOf branches is breaking for old readers of new data (den(v2) not in den(v1))
+        # An old reader encountering take_control / release_control will refuse
+        take_control_msg = {
+            "schema": "ui_intent/v0.2",
+            "op": "take_control",
+            "params": {"surface_id": "s1", "owner": "human"}
+        }
+        with self.assertRaises(ValidationError):
+            self.v02.validate(take_control_msg, ui_v1_synth)
+
+        # Optional native_evidence in action_receipt:
+        receipt_v2 = self.v02.load("action_receipt.schema.json")
+        receipt_example = json.loads((ROOT / "contracts/examples/v0.2/action_receipt.valid.json").read_text())
+
+        # Without native_evidence, receipt validates
+        no_evidence = {k: v for k, v in receipt_example.items() if k != "native_evidence"}
+        self.v02.validate(no_evidence, receipt_v2)
+
+        # With complete native_evidence, receipt validates
+        if "native_evidence" in receipt_example:
+            self.v02.validate(receipt_example, receipt_v2)
+
 
 if __name__ == "__main__":
     unittest.main()
