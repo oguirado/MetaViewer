@@ -1252,6 +1252,15 @@ mvui18f-82f74cd4d855	ui/test/mvui18-frame-jitter.test.js
 mvui18j-086d2287f7a1	ui/test/mvui18-judge-notes.test.js
 mvui18l-4313691554b0	ui/test/mvui18-live-frames.test.js
 mvui18s-42d371dd3f10	ui/test/mvui18-subscribe-mirror.test.js
+mvui19a-a85e2320bd92	ui/test/mvui19-app-activity.test.js
+mvui19a-18c83002097e	ui/test/mvui19-app-profile.test.js
+mvui19a-d8cd6e289a65	ui/test/mvui19-app-toast.test.js
+mvui19c-15d32f0c2482	ui/test/mvui19-cap-refresh.test.js
+mvui19c-84e0b6808ead	ui/test/mvui19-cap-shots.test.js
+mvui19b-beda08e23030	ui/test/mvui19b-icons-shots.test.js
+mvui19b-485b5cc4d94e	ui/test/mvui19b-ui-anchors.test.js
+mvui19b-92cf3b08c55c	ui/test/mvui19b-ui-contrast.test.js
+mvui19c-7268c1f7e469	ui/test/mvui19c-cross-ids.test.js
 mvui2co-ac677845cb36	ui/test/mvui2-contrast-tokens.test.js
 mvui2ho-83c44de816a4	ui/test/mvui2-hooks-frame.test.js
 mvui2ho-c784211240fa	ui/test/mvui2-hooks-scheme.test.js
