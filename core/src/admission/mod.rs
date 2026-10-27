@@ -11,6 +11,8 @@
 //! [TARGET, unit decision] Destroyed IDs are terminal tombstones. Metadata updates
 //! preserve admitted verbs; DispatchFailed releases only provably unqueued work,
 //! without refunding its admitted-attempt budget.
+//! [TARGET, unit decision] Metadata updates can restore liveness; only explicit
+//! Lost/Destroyed transitions revoke it. Control cession still cancels work.
 use crate::wire::payload::{ActionProposal, ActionProposalAction, ActionProposalExpectation};
 use crate::{decode_envelope, Command, Component, Endpoint, Envelope, Refusal};
 use serde::{Deserialize, Serialize};
@@ -288,7 +290,7 @@ impl CoreState {
                                     return Err(AdmissionError::InvalidInput);
                                 }
                                 old.display = surface.display.clone();
-                                old.live = surface.live;
+                                old.live |= surface.live;
                                 old.agent_controlled &= surface.agent_controlled;
                                 // Wire metadata carries no capability grant.
                             }
