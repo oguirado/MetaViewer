@@ -220,6 +220,11 @@
    "why": "Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested).",
    "orchestrator": "conductor"
   },
+  "mvr2c": {
+   "stage": "testing",
+   "why": "Context-engineer the round-2 external testing prompts (Jules and ChatGPT, T1-T8): embed verbatim excerpts of the software papers and OmniCodex language books, which the web testers cannot access, so each tester runs a complete, evidence-driven job on the public repo.",
+   "orchestrator": "conductor"
+  },
   "mv0jb": {
    "stage": "review",
    "why": "Prepare the W1 judgement: evidence bundle per acceptance criterion, consolidated open findings across all testers and reviews, and the XML judge brief for the Opus and Argon judges.",
