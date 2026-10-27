@@ -1,17 +1,17 @@
 {
  "schema": "metaviewer.meta_ai_usage/v1",
  "totals": {
-  "lanes": 187,
-  "ok": 187,
-  "input_tokens": 41691015,
-  "cache_read_tokens": 863540554,
-  "output_tokens": 8629281,
-  "thinking_tokens": 4555118,
+  "lanes": 194,
+  "ok": 194,
+  "input_tokens": 42668571,
+  "cache_read_tokens": 876055164,
+  "output_tokens": 8810074,
+  "thinking_tokens": 4665183,
   "cache_hit_pct": 95.4,
-  "usd": 7.622,
-  "usd_per_lane": 0.0408,
-  "steps": 9535,
-  "lane_hours": 24.1
+  "usd": 7.781,
+  "usd_per_lane": 0.0401,
+  "steps": 9758,
+  "lane_hours": 24.6
  },
  "peak_concurrent_lanes": 32,
  "rooms": {
@@ -21,8 +21,8 @@
    "orchestrator": "conductor"
   },
   "mv0rw3testsearly": {
-   "stage": "other",
-   "why": "ABSENT: reason not recorded",
+   "stage": "build",
+   "why": "Muse Spark writer room mv0rw3testsearly: build the W2 component lanes (AC09, AC12) from the Argon-compiled context pack, with tests first.",
    "orchestrator": "conductor"
   },
   "mv0w2multislot": {
@@ -41,13 +41,13 @@
    "orchestrator": "conductor"
   },
   "mv0w2tests": {
-   "stage": "other",
-   "why": "ABSENT: reason not recorded",
+   "stage": "build",
+   "why": "Muse Spark writer room mv0w2tests: build the W2 component lanes (AC02, AC03, AC04, AC05, AC06, AC07) from the Argon-compiled context pack, with tests first.",
    "orchestrator": "conductor"
   },
   "mv0w2perception": {
-   "stage": "other",
-   "why": "ABSENT: reason not recorded",
+   "stage": "build",
+   "why": "Muse Spark writer room mv0w2perception: build the W2 component lanes (PLUGIN, META, VCORE) from the Argon-compiled context pack, with tests first.",
    "orchestrator": "conductor"
   },
   "mv0w2docsearly": {
@@ -61,8 +61,8 @@
    "orchestrator": "conductor"
   },
   "mv0w2museimage": {
-   "stage": "other",
-   "why": "ABSENT: reason not recorded",
+   "stage": "build",
+   "why": "Muse Spark writer room mv0w2museimage: build the W2 component lanes (CLIENT, UI) from the Argon-compiled context pack, with tests first.",
    "orchestrator": "conductor"
   },
   "mv0w3tests": {
@@ -150,6 +150,11 @@
    "why": "Prepare the live demo run sheet, the presentation video storyboard (AC-16, AC-17), the submission text and a rubric gap map so the demo criterion (25 percent) is planned from evidence.",
    "orchestrator": "conductor"
   },
+  "mv0mv": {
+   "stage": "review",
+   "why": "Verify the 16 findings of the second Gemini Argon cross-review (492d6d0..e19feb6: serve tools, frame subscriptions, journal anchor, contracts checker, catalog) and turn confirmed ones into Sol fix units.",
+   "orchestrator": "conductor"
+  },
   "mv0av": {
    "stage": "review",
    "why": "Verify the 56 findings of the Gemini Argon cross-review of today's integrated Sol code against the current head, rank them and turn the confirmed ones into disjoint Sol fix units.",
@@ -193,6 +198,11 @@
   "mv0w2pk2": {
    "stage": "context",
    "why": "Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image).",
+   "orchestrator": "conductor"
+  },
+  "mv0tg": {
+   "stage": "testing",
+   "why": "Map every acceptance criterion AC-01..AC-17 to the tests that prove its positive pass and negative control, per component, and specify the missing tests as Sol units, so the v0.2.0 release is provably complete.",
    "orchestrator": "conductor"
   },
   "mv0ri": {
@@ -4198,6 +4208,153 @@
    "thinking_tokens": 19931,
    "cache_hit_pct": 93.5,
    "usd": 0.069783
+  },
+  {
+   "room": "mv0pr",
+   "lane": "AILOOP",
+   "title": "Pre-integration review AILOOP",
+   "stage": "review",
+   "model": "muse-spark-1.3",
+   "orchestrator": "conductor",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-27T00:04:32.415000+00:00",
+   "duration_s": 325.6,
+   "end_utc": "2026-10-27T00:09:58.048000+00:00",
+   "phase": "build",
+   "steps": 22,
+   "input_tokens": 124050,
+   "cache_read_tokens": 1125317,
+   "output_tokens": 29729,
+   "thinking_tokens": 21435,
+   "cache_hit_pct": 90.1,
+   "usd": 0.020601
+  },
+  {
+   "room": "mv0pr",
+   "lane": "HUMAN",
+   "title": "Pre-integration review HUMAN",
+   "stage": "review",
+   "model": "muse-spark-1.3",
+   "orchestrator": "conductor",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-27T00:04:42.440000+00:00",
+   "duration_s": 262.4,
+   "end_utc": "2026-10-27T00:09:04.880000+00:00",
+   "phase": "build",
+   "steps": 26,
+   "input_tokens": 95588,
+   "cache_read_tokens": 1274264,
+   "output_tokens": 23175,
+   "thinking_tokens": 15353,
+   "cache_hit_pct": 93.0,
+   "usd": 0.016742
+  },
+  {
+   "room": "mv0pr",
+   "lane": "NVADAPTER",
+   "title": "Pre-integration review NVADAPTER",
+   "stage": "review",
+   "model": "muse-spark-1.3",
+   "orchestrator": "conductor",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-27T00:04:52.556000+00:00",
+   "duration_s": 462.5,
+   "end_utc": "2026-10-27T00:12:35.088000+00:00",
+   "phase": "build",
+   "steps": 47,
+   "input_tokens": 238934,
+   "cache_read_tokens": 3241053,
+   "output_tokens": 33440,
+   "thinking_tokens": 22090,
+   "cache_hit_pct": 93.1,
+   "usd": 0.037064
+  },
+  {
+   "room": "mv0pr",
+   "lane": "BUDGETS",
+   "title": "Pre-integration review BUDGETS",
+   "stage": "review",
+   "model": "muse-spark-1.3",
+   "orchestrator": "conductor",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-27T00:04:57.520000+00:00",
+   "duration_s": 272.2,
+   "end_utc": "2026-10-27T00:09:29.758000+00:00",
+   "phase": "build",
+   "steps": 25,
+   "input_tokens": 110821,
+   "cache_read_tokens": 1111847,
+   "output_tokens": 24644,
+   "thinking_tokens": 15399,
+   "cache_hit_pct": 90.9,
+   "usd": 0.018235
+  },
+  {
+   "room": "mv0tg",
+   "lane": "CORE",
+   "title": "Test gaps CORE",
+   "stage": "testing",
+   "model": "muse-spark-1.3",
+   "orchestrator": "conductor",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-27T00:06:54.127000+00:00",
+   "duration_s": 311.8,
+   "end_utc": "2026-10-27T00:12:05.883000+00:00",
+   "phase": "build",
+   "steps": 36,
+   "input_tokens": 148108,
+   "cache_read_tokens": 2145395,
+   "output_tokens": 25576,
+   "thinking_tokens": 14187,
+   "cache_hit_pct": 93.5,
+   "usd": 0.024217
+  },
+  {
+   "room": "mv0tg",
+   "lane": "AGENTS",
+   "title": "Test gaps AGENTS",
+   "stage": "testing",
+   "model": "muse-spark-1.3",
+   "orchestrator": "conductor",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-27T00:07:04.102000+00:00",
+   "duration_s": 252.6,
+   "end_utc": "2026-10-27T00:11:16.689000+00:00",
+   "phase": "build",
+   "steps": 38,
+   "input_tokens": 140743,
+   "cache_read_tokens": 2261235,
+   "output_tokens": 21633,
+   "thinking_tokens": 10742,
+   "cache_hit_pct": 94.1,
+   "usd": 0.022923
+  },
+  {
+   "room": "mv0tg",
+   "lane": "UISRC",
+   "title": "Test gaps UISRC",
+   "stage": "testing",
+   "model": "muse-spark-1.3",
+   "orchestrator": "conductor",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-27T00:07:14.120000+00:00",
+   "duration_s": 249.5,
+   "end_utc": "2026-10-27T00:11:23.615000+00:00",
+   "phase": "build",
+   "steps": 29,
+   "input_tokens": 119312,
+   "cache_read_tokens": 1355499,
+   "output_tokens": 22596,
+   "thinking_tokens": 10859,
+   "cache_hit_pct": 91.9,
+   "usd": 0.019161
   }
  ]
 }
