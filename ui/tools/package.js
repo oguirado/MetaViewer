@@ -2,7 +2,7 @@
 // [TARGET, unit decision] Deterministic Linux bundle with an owned real-core session.
 // Local archives are mandatory; packager never reaches its download branch.
 import { createHash } from 'node:crypto';
-import { createReadStream, closeSync, openSync, statSync, unlinkSync } from 'node:fs';
+import { createReadStream, closeSync, openSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import { dirname, basename, isAbsolute, join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -15,6 +15,33 @@ import { syncKit } from '../../tools/sync_kit.mjs';
 
 export { ELECTRON_PIN };
 export const PKG_BOOT_BUDGET_MS = 10000;
+export const SMOKE_DIAGNOSTIC_TAIL_CHARS = 3000;
+
+/**
+ * Synchronously write a line to a file descriptor (1 for stdout, 2 for stderr)
+ * so piped output reaches the parent before an immediate app.exit / process.exit.
+ * @param {number} fd
+ * @param {unknown} value
+ */
+export function writeFdSync(fd, value) {
+  const text = String(value ?? '');
+  const bytes = Buffer.from(text.endsWith('\n') ? text : `${text}\n`, 'utf8');
+  let offset = 0;
+  while (offset < bytes.length) {
+    try {
+      const written = writeSync(fd, bytes, offset, bytes.length - offset);
+      if (written <= 0) break;
+      offset += written;
+    } catch (error) {
+      const code = /** @type {NodeJS.ErrnoException} */ (error)?.code;
+      if (code === 'EINTR' || code === 'EAGAIN') continue;
+      try {
+        (fd === 1 ? process.stdout : process.stderr).write(bytes.subarray(offset));
+      } catch {}
+      break;
+    }
+  }
+}
 
 const execute = promisify(execFile);
 const ui = fileURLToPath(new URL('../', import.meta.url));
@@ -402,15 +429,41 @@ export async function runPackagedBootWait({
 export const productionEntry = String.raw`
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { lstatSync, readdirSync, readFileSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync, writeSync } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
+import { format } from 'node:util';
 const PACKAGED_EXEC_DIGESTS = Object.freeze({});
 const root = dirname(fileURLToPath(import.meta.url));
 const appRoot = dirname(root);
+function writeFdSync(fd, value) {
+  const text = String(value ?? '');
+  const bytes = Buffer.from(text.endsWith('\n') ? text : text + '\n', 'utf8');
+  let offset = 0;
+  while (offset < bytes.length) {
+    try {
+      const written = writeSync(fd, bytes, offset, bytes.length - offset);
+      if (written <= 0) break;
+      offset += written;
+    } catch (err) {
+      if (err && (err.code === 'EINTR' || err.code === 'EAGAIN')) continue;
+      try {
+        (fd === 1 ? process.stdout : process.stderr).write(bytes.subarray(offset));
+      } catch {}
+      break;
+    }
+  }
+}
+function formatErrorLine(error) {
+  if (error instanceof Error) return error.stack || error.message || String(error);
+  return typeof error === 'string' ? error : format(error);
+}
+console.error = (...args) => {
+  writeFdSync(2, format(...args));
+};
 function verifyBootSeal(baseDir) {
   const keys = Object.keys(PACKAGED_EXEC_DIGESTS);
   if (keys.length === 0) throw new Error('PKG_SEAL_MISSING');
@@ -476,17 +529,21 @@ function verifyBootSeal(baseDir) {
 try {
   verifyBootSeal(appRoot);
 } catch (error) {
-  console.error(error?.message || String(error));
+  writeFdSync(2, error?.message || String(error));
   process.exit(1);
 }
-const { app } = await import('electron').catch(() => ({ app: { exit: code => process.exit(code), on: () => {} } }));
-const { mainDirectEntry, validateRetailLaunch } = await import('./main.js');
+const { app, protocol } = await import('electron').catch(() => ({ app: { exit: code => process.exit(code), on: () => {}, removeAllListeners: () => {} }, protocol: null }));
+const mainModule = await import('./main.js');
+const { mainDirectEntry, validateRetailLaunch } = mainModule;
 const { scrubChildEnv, validateKillTarget } = await import('./coreLauncher.js');
 const retail = validateRetailLaunch(process.argv.slice(1), process.env);
-if (!retail.ok) {console.error(retail.code + ': retail launch refused');app.exit(1);}
+if (!retail.ok) {writeFdSync(2, retail.code + ': retail launch refused');app.exit(1);}
 else if (process.argv.includes('--nested-depth=1')) {
   await import('./nested-display.js');
 } else {
+  if (protocol && typeof mainModule.registerPrivilegedScheme === 'function') {
+    try { mainModule.registerPrivilegedScheme(protocol); } catch {}
+  }
   const resourcesPath = process.resourcesPath || dirname(appRoot);
   const pin = JSON.parse(await fs.readFile(join(root, 'package-pin.json'), 'utf8'));
   const runtime = await fs.mkdtemp(join(tmpdir(), 'mv-pkg-'));
@@ -527,28 +584,37 @@ else if (process.argv.includes('--nested-depth=1')) {
   let failure;
   core.on('error', error => {failure=error;});
   core.stdout.on('data', () => {});
-  core.stderr.on('data', bytes => process.stderr.write(bytes));
+  core.stderr.on('data', bytes => writeFdSync(2, bytes.toString('utf8')));
   let boot = null;
   let stopping = false;
-  const stop = async () => {
+  let stopPromise = null;
+  const stop = () => {
+    if (stopPromise !== null) return stopPromise;
     stopping = true;
-    await boot?.dispose?.();
-    if (validateKillTarget(core.pid, process.pid, process.pid) && core.exitCode === null && core.signalCode === null) {
-      const exited = once(core,'exit');
-      try {process.kill(core.pid,'SIGTERM');} catch {}
-      const killer = setTimeout(() => {
-        if (validateKillTarget(core.pid, process.pid, process.pid) && core.exitCode === null && core.signalCode === null) {
-          try {process.kill(core.pid,'SIGKILL');} catch {}
-        }
-      }, 1500);
-      await exited;
-      clearTimeout(killer);
-    }
-    await fs.rm(runtime,{recursive:true,force:true});
+    stopPromise = (async () => {
+      try {
+        app.removeAllListeners?.('window-all-closed');
+        app.on?.('window-all-closed', () => {});
+      } catch {}
+      try { await boot?.dispose?.(); } catch {}
+      if (validateKillTarget(core.pid, process.pid, process.pid) && core.exitCode === null && core.signalCode === null) {
+        const exited = once(core,'exit');
+        try {process.kill(core.pid,'SIGTERM');} catch {}
+        const killer = setTimeout(() => {
+          if (validateKillTarget(core.pid, process.pid, process.pid) && core.exitCode === null && core.signalCode === null) {
+            try {process.kill(core.pid,'SIGKILL');} catch {}
+          }
+        }, 1500);
+        await exited;
+        clearTimeout(killer);
+      }
+      await fs.rm(runtime,{recursive:true,force:true});
+    })();
+    return stopPromise;
   };
   app.on('will-quit', event => {
-    if (stopping) {try {event?.preventDefault?.();} catch {}}
-    if (validateKillTarget(core.pid, process.pid, process.pid)) {try {process.kill(core.pid,'SIGTERM');} catch {}}
+    if (stopping || process.env.MV_PACKAGE_SMOKE === '1') {try {event?.preventDefault?.();} catch {}}
+    if (!stopping && validateKillTarget(core.pid, process.pid, process.pid)) {try {process.kill(core.pid,'SIGTERM');} catch {}}
   });
   process.on('exit', () => {
     if (validateKillTarget(core.pid, process.pid, process.pid)) {try {process.kill(core.pid,'SIGKILL');} catch {}}
@@ -565,10 +631,11 @@ else if (process.argv.includes('--nested-depth=1')) {
     }
     let entry;
     if (process.env.MV_PACKAGE_SMOKE === '1') {
-      const log = console.log;
+      let smokeHandled = false;
       console.log = (...args) => {
-        log(...args);
-        if (args[0] === 'METAVIEWER_MAIN_READY') {
+        writeFdSync(1, format(...args));
+        if (!smokeHandled && args[0] === 'METAVIEWER_MAIN_READY') {
+          smokeHandled = true;
           void Promise.resolve().then(() => entry).then(async resolvedBoot => {
             boot = resolvedBoot;
             if (process.env.MV_SRF_BIN_DIR) {
@@ -578,9 +645,13 @@ else if (process.argv.includes('--nested-depth=1')) {
               }
             }
             await stop();
-            log('METAVIEWER_MAIN_SMOKE_OK');
+            writeFdSync(1, 'METAVIEWER_MAIN_SMOKE_OK\n');
             app.exit(0);
-          }).catch(error => {console.error(error);app.exit(1);});
+          }).catch(async error => {
+            writeFdSync(2, formatErrorLine(error));
+            try { await stop(); } catch {}
+            app.exit(1);
+          });
         }
       };
     }
@@ -591,13 +662,17 @@ else if (process.argv.includes('--nested-depth=1')) {
       bootTimer = setTimeout(() => reject(new Error('PKG_CORE_START_FAILED')), remainingBootMs);
     });
     entry = Promise.race([
-      mainDirectEntry().then(resolved => {boot = resolved; return resolved;}),
+      mainDirectEntry().then(resolved => {
+        if (!resolved || process.exitCode) throw new Error('PKG_MAIN_ENTRY_FAILED');
+        boot = resolved;
+        return resolved;
+      }),
       bootTimeout,
     ]).finally(() => {
       if (bootTimer !== undefined) clearTimeout(bootTimer);
     });
-    void entry.catch(async error => {console.error(error);await stop();app.exit(1);});
-  } catch(error) {console.error(error);await stop();app.exit(1);}
+    void entry.catch(async error => {writeFdSync(2, formatErrorLine(error));try {await stop();} catch {}app.exit(1);});
+  } catch(error) {writeFdSync(2, formatErrorLine(error));try {await stop();} catch {}app.exit(1);}
 }
 `;
 
@@ -683,9 +758,94 @@ export async function bundlePackage(root, arch = architecture.arch) {
   return {artifact,artifact_sha256:await digest(artifact),size_bytes:(await fs.stat(artifact)).size};
 }
 
-/** @param {string} stdout */
-export function assertSmokeOutput(stdout) {
-  if (!stdout.split('\n').includes('METAVIEWER_MAIN_SMOKE_OK')) throw new Error('PKG_SMOKE_MARKER_MISSING');
+/**
+ * Format bounded process diagnostics carrying exit code, signal, and the last
+ * 3000 characters of stdout and stderr.
+ * @param {{ code?: number | string | null, signal?: NodeJS.Signals | string | null, stdout?: string | Buffer, stderr?: string | Buffer }} [details]
+ */
+export function formatSmokeDiagnostics(details = {}) {
+  const code = details?.code !== undefined ? details.code : 0;
+  const signal = details?.signal !== undefined ? details.signal : null;
+  const stdout = String(details?.stdout ?? '').slice(-SMOKE_DIAGNOSTIC_TAIL_CHARS);
+  const stderr = String(details?.stderr ?? '').slice(-SMOKE_DIAGNOSTIC_TAIL_CHARS);
+  return JSON.stringify({ code, signal, stdout, stderr });
+}
+
+/**
+ * Build a self-explaining Error carrying child exit code, signal, and the last
+ * 3000 characters of stdout and stderr.
+ * @param {string} reason
+ * @param {{ code?: number | string | null, signal?: NodeJS.Signals | string | null, stdout?: string | Buffer, stderr?: string | Buffer }} [details]
+ * @param {unknown} [cause]
+ */
+export function createSmokeDiagnosticError(reason, details = {}, cause = undefined) {
+  const code = details?.code !== undefined ? details.code : 0;
+  const signal = details?.signal !== undefined ? details.signal : null;
+  const stdout = String(details?.stdout ?? '').slice(-SMOKE_DIAGNOSTIC_TAIL_CHARS);
+  const stderr = String(details?.stderr ?? '').slice(-SMOKE_DIAGNOSTIC_TAIL_CHARS);
+  const serialized = formatSmokeDiagnostics({ code, signal, stdout, stderr });
+  const error = /** @type {Error & { code?: number | string | null, signal?: NodeJS.Signals | string | null, stdout?: string, stderr?: string }} */ (
+    cause !== undefined ? new Error(`${reason}: ${serialized}`, { cause }) : new Error(`${reason}: ${serialized}`)
+  );
+  error.code = code;
+  error.signal = signal;
+  error.stdout = stdout;
+  error.stderr = stderr;
+  return error;
+}
+
+/**
+ * @param {string | { stdout?: string | Buffer, stderr?: string | Buffer, code?: number | string | null, signal?: NodeJS.Signals | string | null }} stdout
+ * @param {{ stdout?: string | Buffer, stderr?: string | Buffer, code?: number | string | null, signal?: NodeJS.Signals | string | null }} [details]
+ */
+export function assertSmokeOutput(stdout, details = {}) {
+  const isRecord = typeof stdout === 'object' && stdout !== null && !(stdout instanceof Buffer);
+  const merged = isRecord ? { ...details, ...stdout } : { ...details, stdout };
+  const code = merged.code !== undefined ? merged.code : 0;
+  const signal = merged.signal !== undefined ? merged.signal : null;
+  const outText = String(merged.stdout ?? '');
+  const errText = String(merged.stderr ?? '');
+  if (!outText.split('\n').includes('METAVIEWER_MAIN_SMOKE_OK')) {
+    throw createSmokeDiagnosticError('PKG_SMOKE_MARKER_MISSING', { code, signal, stdout: outText, stderr: errText });
+  }
+}
+
+/**
+ * Execute the packaged smoke child process and verify both zero exit and the
+ * exact smoke marker on stdout. On a non-zero child exit or missing marker,
+ * throw an Error carrying child exit code, signal, and the last 3000 characters
+ * of stdout and stderr.
+ * @param {() => Promise<{ stdout?: string | Buffer, stderr?: string | Buffer, code?: number | string | null, signal?: NodeJS.Signals | string | null }>} launch
+ */
+export async function runSmokeCommand(launch) {
+  let result;
+  try {
+    result = await launch();
+  } catch (error) {
+    const rec = /** @type {Record<string, unknown>} */ (error && typeof error === 'object' ? error : {});
+    const code = typeof rec.code === 'number' || typeof rec.code === 'string'
+      ? rec.code
+      : typeof rec.status === 'number'
+        ? rec.status
+        : null;
+    const signal = typeof rec.signal === 'string' ? rec.signal : null;
+    const stdout = rec.stdout !== undefined ? String(rec.stdout) : '';
+    const stderr = rec.stderr !== undefined
+      ? String(rec.stderr)
+      : error instanceof Error
+        ? error.message
+        : String(error);
+    throw createSmokeDiagnosticError('PKG_SMOKE_CHILD_FAILED', { code, signal, stdout, stderr }, error);
+  }
+  const code = result?.code !== undefined ? result.code : 0;
+  const signal = result?.signal !== undefined ? result.signal : null;
+  const stdout = String(result?.stdout ?? '');
+  const stderr = String(result?.stderr ?? '');
+  if ((typeof code === 'number' && code !== 0) || code === null || signal !== null) {
+    throw createSmokeDiagnosticError('PKG_SMOKE_CHILD_FAILED', { code, signal, stdout, stderr });
+  }
+  assertSmokeOutput(stdout, { code, signal, stdout, stderr });
+  return { stdout, stderr, code, signal };
 }
 
 /**
@@ -832,9 +992,8 @@ export async function cleanInstallSmoke(artifact) {
       await writeFakeSmokeAdapter(adapter,receiptPath);
       const trace=join(clean,'files.trace');
       const env={PATH:process.env.PATH,HOME:clean,LANG:'C.UTF-8',MV_PACKAGE_SMOKE:'1',MV_SRF_BIN_DIR:srfBinDir};
-      const result=await execute('xvfb-run',['-a','strace','-f','-e','trace=file','-o',trace,
-        join(installed,'metaviewer'),`--user-data-dir=${join(clean,'profile')}`],{cwd:clean,env,timeout:30000,maxBuffer:1024*1024});
-      assertSmokeOutput(result.stdout);
+      await runSmokeCommand(() => execute('xvfb-run',['-a','strace','-f','-e','trace=file','-o',trace,
+        join(installed,'metaviewer'),`--user-data-dir=${join(clean,'profile')}`],{cwd:clean,env,timeout:30000,maxBuffer:1024*1024}));
       await verifySmokeAdapterReceipt(receiptPath,srfBinDir);
       const accesses=await fs.readFile(trace,'utf8');
       if (accesses.includes(repo) || accesses.includes(await fs.realpath(repo))) throw new Error('PKG_SOURCE_ACCESS');

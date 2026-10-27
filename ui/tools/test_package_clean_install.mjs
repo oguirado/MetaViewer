@@ -11,8 +11,8 @@ import { createPackage } from '@electron/asar';
 import { buildFuseConfig, ELECTRON_PIN as MAIN_ELECTRON_PIN } from '../electron/main.js';
 import { createAdapterLauncher } from '../electron/coreLauncher.js';
 import * as packaging from './package.js';
-import { packageArchitecture, verifyBinary, applyFuses, assertSmokeOutput, bundlePackage, sealRendererAssets, verifyInstall, verifyPackagedSecurity, verifySmokeAdapterReceipt, writeFakeSmokeAdapter, writeManifest } from './package.js';
-import { spawnSync } from 'node:child_process';
+import { SMOKE_DIAGNOSTIC_TAIL_CHARS, packageArchitecture, verifyBinary, applyFuses, assertSmokeOutput, bundlePackage, createSmokeDiagnosticError, formatSmokeDiagnostics, runSmokeCommand, sealRendererAssets, verifyInstall, verifyPackagedSecurity, verifySmokeAdapterReceipt, writeFakeSmokeAdapter, writeFdSync, writeManifest } from './package.js';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 async function fixture(run) {
@@ -502,4 +502,320 @@ test('T7R2C-006 sealRendererAssets sorts readdir entries and emits deterministic
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
+});
+
+test('W3-PKG-SMOKE2 diagnostics on PKG_SMOKE_MARKER_MISSING and non-zero child exit carry code, signal and last 3000 chars of stdout/stderr', async () => {
+  assert.equal(SMOKE_DIAGNOSTIC_TAIL_CHARS, 3000);
+  const droppedStdoutPrefix = 'DROPPED_STDOUT_HEAD_' + 'A'.repeat(480);
+  const retainedStdoutTail = 'KEPT_STDOUT_TAIL_' + 'B'.repeat(3000 - 'KEPT_STDOUT_TAIL_'.length);
+  const droppedStderrPrefix = 'DROPPED_STDERR_HEAD_' + 'C'.repeat(480);
+  const retainedStderrTail = 'KEPT_STDERR_TAIL_' + 'D'.repeat(3000 - 'KEPT_STDERR_TAIL_'.length);
+  assert.equal(retainedStdoutTail.length, 3000);
+  assert.equal(retainedStderrTail.length, 3000);
+  const longStdout = droppedStdoutPrefix + retainedStdoutTail;
+  const longStderr = droppedStderrPrefix + retainedStderrTail;
+
+  // 1. PKG_SMOKE_MARKER_MISSING (child exited 0, signal null, marker absent) carries code, signal, and last 3000 chars of stdout/stderr.
+  await assert.rejects(
+    runSmokeCommand(async () => ({
+      code: 0,
+      signal: null,
+      stdout: longStdout,
+      stderr: longStderr,
+    })),
+    (err) => {
+      assert.match(err.message, /^PKG_SMOKE_MARKER_MISSING:/);
+      assert.equal(err.code, 0);
+      assert.equal(err.signal, null);
+      assert.equal(err.stdout, retainedStdoutTail);
+      assert.equal(err.stderr, retainedStderrTail);
+      assert.equal(err.message.includes(retainedStdoutTail), true);
+      assert.equal(err.message.includes(retainedStderrTail), true);
+      assert.equal(err.message.includes('DROPPED_STDOUT_HEAD_'), false);
+      assert.equal(err.message.includes('DROPPED_STDERR_HEAD_'), false);
+      const parsed = JSON.parse(err.message.slice('PKG_SMOKE_MARKER_MISSING: '.length));
+      assert.deepEqual(parsed, {
+        code: 0,
+        signal: null,
+        stdout: retainedStdoutTail,
+        stderr: retainedStderrTail,
+      });
+      return true;
+    },
+  );
+
+  // Direct assertSmokeOutput also carries code, signal, and last 3000 chars of stdout/stderr.
+  assert.throws(
+    () => assertSmokeOutput(longStdout, { code: 0, signal: null, stderr: longStderr }),
+    (err) => {
+      assert.match(err.message, /^PKG_SMOKE_MARKER_MISSING:/);
+      assert.equal(err.code, 0);
+      assert.equal(err.signal, null);
+      assert.equal(err.stdout, retainedStdoutTail);
+      assert.equal(err.stderr, retainedStderrTail);
+      return true;
+    },
+  );
+
+  // 2. Non-zero child exit (rejected execFile error with exit code 1, signal null) carries code, signal, and last 3000 chars of stdout/stderr.
+  await assert.rejects(
+    runSmokeCommand(async () => {
+      const childErr = Object.assign(new Error('Command failed: metaviewer'), {
+        code: 1,
+        signal: null,
+        stdout: longStdout,
+        stderr: longStderr,
+      });
+      throw childErr;
+    }),
+    (err) => {
+      assert.match(err.message, /^PKG_SMOKE_CHILD_FAILED:/);
+      assert.equal(err.code, 1);
+      assert.equal(err.signal, null);
+      assert.equal(err.stdout, retainedStdoutTail);
+      assert.equal(err.stderr, retainedStderrTail);
+      assert.equal(err.message.includes(retainedStdoutTail), true);
+      assert.equal(err.message.includes(retainedStderrTail), true);
+      assert.equal(err.message.includes('DROPPED_STDOUT_HEAD_'), false);
+      assert.equal(err.message.includes('DROPPED_STDERR_HEAD_'), false);
+      const parsed = JSON.parse(err.message.slice('PKG_SMOKE_CHILD_FAILED: '.length));
+      assert.deepEqual(parsed, {
+        code: 1,
+        signal: null,
+        stdout: retainedStdoutTail,
+        stderr: retainedStderrTail,
+      });
+      return true;
+    },
+  );
+
+  // 3. Signal-terminated child exit (code null, signal SIGABRT) carries code, signal, and last 3000 chars of stdout/stderr.
+  await assert.rejects(
+    runSmokeCommand(async () => {
+      const sigErr = Object.assign(new Error('Command terminated by signal'), {
+        code: null,
+        signal: 'SIGABRT',
+        stdout: longStdout,
+        stderr: longStderr,
+      });
+      throw sigErr;
+    }),
+    (err) => {
+      assert.match(err.message, /^PKG_SMOKE_CHILD_FAILED:/);
+      assert.equal(err.code, null);
+      assert.equal(err.signal, 'SIGABRT');
+      assert.equal(err.stdout, retainedStdoutTail);
+      assert.equal(err.stderr, retainedStderrTail);
+      const parsed = JSON.parse(err.message.slice('PKG_SMOKE_CHILD_FAILED: '.length));
+      assert.deepEqual(parsed, {
+        code: null,
+        signal: 'SIGABRT',
+        stdout: retainedStdoutTail,
+        stderr: retainedStderrTail,
+      });
+      return true;
+    },
+  );
+
+  // 4. Negative control: zero exit with exact METAVIEWER_MAIN_SMOKE_OK marker succeeds.
+  const okResult = await runSmokeCommand(async () => ({
+    code: 0,
+    signal: null,
+    stdout: `${longStdout}\nMETAVIEWER_MAIN_SMOKE_OK\n`,
+    stderr: longStderr,
+  }));
+  assert.equal(okResult.code, 0);
+  assert.equal(okResult.signal, null);
+});
+
+test('W3-PKG-SMOKE2 productionEntry flushes smoke marker and errors to non-TTY pipes before immediate app.exit', async () => {
+  await fixture(async (root, app) => {
+    const loaderPath = join(root, 'resources/electron-pipe-loader.mjs');
+    // Loader simulates Electron's immediate C++ Browser::Exit on app.exit(code) when Node's
+    // user-space stdout/stderr stream buffers are corked/unflushed on a non-TTY pipe, and
+    // emits window-all-closed during boot.dispose() to exercise the teardown race.
+    const loaderSource = [
+      'export async function resolve(specifier, context, nextResolve) {',
+      '  if (specifier === "electron") {',
+      '    return { shortCircuit: true, url: "data:text/javascript," + encodeURIComponent([',
+      '      "import { EventEmitter } from \\"node:events\\";",',
+      '      "const emitter = new EventEmitter();",',
+      '      "export const app = {",',
+      '      "  on: (ev, fn) => emitter.on(ev, fn),",',
+      '      "  removeAllListeners: (ev) => emitter.removeAllListeners(ev),",',
+      '      "  emit: (ev, ...args) => emitter.emit(ev, ...args),",',
+      '      "  quit: () => {",',
+      '      "    let prevented = false;",',
+      '      "    emitter.emit(\\"will-quit\\", { preventDefault: () => { prevented = true; } });",',
+      '      "    if (!prevented) { process.kill(process.pid, \\"SIGKILL\\"); }",',
+      '      "  },",',
+      '      "  exit: (code) => {",',
+      '      "    process.stdout.cork();",',
+      '      "    process.stderr.cork();",',
+      '      "    if (process.stdout._writableState) process.stdout._writableState.length = 0;",',
+      '      "    if (process.stderr._writableState) process.stderr._writableState.length = 0;",',
+      '      "    process.exit(code);",',
+      '      "  },",',
+      '      "};",',
+      '      "export const protocol = { registerSchemesAsPrivileged: () => {} };",',
+      '    ].join("\\n")) };',
+      '  }',
+      '  return nextResolve(specifier, context);',
+      '}',
+      '',
+    ].join('\n');
+    await fs.writeFile(loaderPath, loaderSource, 'utf8');
+
+    await fs.writeFile(
+      join(app, 'package.json'),
+      JSON.stringify({ name: 'metaviewer', version: '0.1.2', type: 'module', main: 'electron/nesting.js' }),
+    );
+    await fs.writeFile(
+      join(app, 'electron/coreLauncher.js'),
+      'export function scrubChildEnv(env) { return { ...env }; }\nexport function validateKillTarget() { return false; }\n',
+    );
+    await fs.writeFile(
+      join(app, 'electron/package-pin.json'),
+      JSON.stringify({ version: '0.1.2', commit: 'a'.repeat(40) }),
+    );
+    await fs.writeFile(
+      join(app, 'electron/main.js'),
+      [
+        'import { writeSync } from "node:fs";',
+        'const PACKAGED_ASSET_DIGESTS = /** @type {Readonly<Record<string, string>>} */ (Object.freeze({}));',
+        'export function validateRetailLaunch(argv) {',
+        '  if (argv.includes("--remote-debugging-port=9222")) return { ok: false, code: "RETAIL_FLAG" };',
+        '  return { ok: true };',
+        '}',
+        'export function registerPrivilegedScheme() {}',
+        'export async function mainDirectEntry() {',
+        '  const { app } = await import("electron");',
+        '  if (process.stdout.isTTY || process.stderr.isTTY) throw new Error("EXPECTED_NON_TTY_PIPE");',
+        '  process.stdout.cork();',
+        '  process.stderr.cork();',
+        '  writeSync(1, "NON_TTY_STDOUT_PIPE=" + String(Boolean(process.stdout.isTTY)) + "\\n");',
+        '  app.on("window-all-closed", () => { app.quit(); });',
+        '  setTimeout(() => console.log("METAVIEWER_MAIN_READY"), 10);',
+        '  return {',
+        '    adapter: process.env.MV_TEST_ADAPTER_FAIL === "1"',
+        '      ? { getStatus: () => ({ availability: "degraded", handshakeSeen: false }) }',
+        '      : { getStatus: () => ({ availability: "live", handshakeSeen: true }) },',
+        '    dispose: async () => {',
+        '      app.emit("window-all-closed");',
+        '      await new Promise(r => setTimeout(r, 20));',
+        '    },',
+        '  };',
+        '}',
+        'export { PACKAGED_ASSET_DIGESTS };',
+        '',
+      ].join('\n'),
+    );
+    await fs.writeFile(join(app, 'electron/nesting.js'), packaging.productionEntry);
+    await sealRendererAssets(app);
+
+    const stagedApp = join(root, 'resources/staged-app');
+    await fs.cp(app, stagedApp, { recursive: true });
+    const realCore = join(root, 'resources/bin/metaviewer-core');
+    const savedCore = await fs.readFile(realCore);
+    const fakeCore = `#!${process.execPath}\nimport { writeFileSync } from 'node:fs';\nimport { join } from 'node:path';\nwriteFileSync(join(process.env.XDG_RUNTIME_DIR, 'metaviewer/core.sock'), '');\nsetInterval(() => {}, 1000);\n`;
+    await fs.writeFile(realCore, fakeCore, { mode: 0o755 });
+
+    const runPipedChild = (extraArgs = [], extraEnv = {}) => new Promise((resolveRun, rejectRun) => {
+      const registerScript = `import { register } from 'node:module'; import { pathToFileURL } from 'node:url'; register(pathToFileURL(${JSON.stringify(loaderPath)}).href);`;
+      const child = spawn(
+        process.execPath,
+        ['--import', `data:text/javascript,${encodeURIComponent(registerScript)}`, join(stagedApp, 'electron/nesting.js'), ...extraArgs],
+        {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          env: { ...process.env, MV_PACKAGE_SMOKE: '1', MV_SRF_BIN_DIR: '/tmp/srf-bin', ...extraEnv },
+        },
+      );
+      let stdout = '';
+      let stderr = '';
+      child.stdout.setEncoding('utf8');
+      child.stderr.setEncoding('utf8');
+      child.stdout.on('data', chunk => { stdout += chunk; });
+      child.stderr.on('data', chunk => { stderr += chunk; });
+      child.on('error', rejectRun);
+      child.on('close', (code, signal) => resolveRun({ code, signal, stdout, stderr }));
+    });
+
+    try {
+      // 1. Positive piped run: stdout is a non-TTY pipe, corked before app.exit(0), window-all-closed fires during dispose,
+      // and METAVIEWER_MAIN_SMOKE_OK still reaches the parent pipe before exit 0.
+      const passRun = await runPipedChild();
+      assert.equal(passRun.code, 0, `expected exit 0, got code=${passRun.code} signal=${passRun.signal} stderr=${passRun.stderr}`);
+      assert.equal(passRun.signal, null);
+      assert.match(passRun.stdout, /^NON_TTY_STDOUT_PIPE=false$/m);
+      assert.match(passRun.stdout, /^METAVIEWER_MAIN_READY$/m);
+      assert.match(passRun.stdout, /^METAVIEWER_MAIN_SMOKE_OK$/m);
+      assertSmokeOutput(passRun.stdout, passRun);
+
+      // 2. Negative control A (adapter failure before app.exit(1) on corked non-TTY pipe):
+      // PKG_ADAPTER_START_FAILED reaches stderr pipe and METAVIEWER_MAIN_SMOKE_OK is absent.
+      const failAdapterRun = await runPipedChild([], { MV_TEST_ADAPTER_FAIL: '1' });
+      assert.equal(failAdapterRun.code, 1);
+      assert.equal(failAdapterRun.signal, null);
+      assert.match(failAdapterRun.stderr, /PKG_ADAPTER_START_FAILED/);
+      assert.doesNotMatch(failAdapterRun.stdout, /METAVIEWER_MAIN_SMOKE_OK/);
+      assert.throws(() => assertSmokeOutput(failAdapterRun.stdout, failAdapterRun), /PKG_SMOKE_MARKER_MISSING/);
+
+      // 3. Negative control B (retail flag refusal before app.exit(1) on corked non-TTY pipe):
+      // RETAIL_FLAG reaches stderr pipe before app.exit(1).
+      const failRetailRun = await runPipedChild(['--remote-debugging-port=9222']);
+      assert.equal(failRetailRun.code, 1);
+      assert.equal(failRetailRun.signal, null);
+      assert.match(failRetailRun.stderr, /RETAIL_FLAG: retail launch refused/);
+      assert.doesNotMatch(failRetailRun.stdout, /METAVIEWER_MAIN_SMOKE_OK/);
+
+      // 4. Negative control C (pre-fix console.log without synchronous fd write loses marker on buffered pipe before app.exit(0)):
+      const unpatchedEntry = packaging.productionEntry
+        .replace("writeFdSync(1, format(...args));", "process.stdout.write(format(...args) + '\\n');")
+        .replace("writeFdSync(1, 'METAVIEWER_MAIN_SMOKE_OK\\n');", "process.stdout.write('METAVIEWER_MAIN_SMOKE_OK\\n');");
+      await fs.writeFile(join(app, 'electron/nesting.js'), unpatchedEntry);
+      await sealRendererAssets(app);
+      await fs.cp(app, stagedApp, { recursive: true, force: true });
+      const unpatchedRun = await runPipedChild();
+      assert.equal(unpatchedRun.code, 0);
+      assert.doesNotMatch(unpatchedRun.stdout, /^METAVIEWER_MAIN_SMOKE_OK$/m);
+      assert.throws(() => assertSmokeOutput(unpatchedRun.stdout, unpatchedRun), /^Error: PKG_SMOKE_MARKER_MISSING:/);
+    } finally {
+      await fs.rm(stagedApp, { recursive: true, force: true });
+      await fs.rm(loaderPath, { force: true });
+      await fs.writeFile(realCore, savedCore, { mode: 0o755 });
+    }
+  });
+});
+
+test('W3-PKG-SMOKE2 cleanInstallSmoke keeps marker, adapter receipt and source-access trace mandatory and builds byte-deterministically', async () => {
+  const pkgSource = await fs.readFile(fileURLToPath(new URL('./package.js', import.meta.url)), 'utf8');
+  assert.match(pkgSource, /assertSmokeOutput\(/);
+  assert.match(pkgSource, /await verifySmokeAdapterReceipt\(receiptPath,\s*srfBinDir\)/);
+  assert.match(pkgSource, /throw new Error\('PKG_SOURCE_ACCESS'\)/);
+
+  await fixture(async (root) => {
+    const dirA = await fs.mkdtemp(join(tmpdir(), 'mv-det-a-'));
+    const dirB = await fs.mkdtemp(join(tmpdir(), 'mv-det-b-'));
+    try {
+      const rootA = join(dirA, 'MetaViewer-linux-arm64');
+      const rootB = join(dirB, 'MetaViewer-linux-arm64');
+      await fs.cp(root, rootA, { recursive: true });
+      await fs.cp(root, rootB, { recursive: true });
+      await fs.copyFile(`${root}.sha256`, `${rootA}.sha256`);
+      await fs.copyFile(`${root}.sha256`, `${rootB}.sha256`);
+      await fs.utimes(join(rootB, 'metaviewer'), new Date(1700000000000), new Date(1700000000000));
+
+      const buildA = await bundlePackage(rootA, 'arm64');
+      const buildB = await bundlePackage(rootB, 'arm64');
+      assert.equal(buildA.artifact_sha256, buildB.artifact_sha256);
+      const [bytesA, bytesB] = await Promise.all([
+        fs.readFile(buildA.artifact),
+        fs.readFile(buildB.artifact),
+      ]);
+      assert.equal(Buffer.compare(bytesA, bytesB), 0);
+    } finally {
+      await fs.rm(dirA, { recursive: true, force: true });
+      await fs.rm(dirB, { recursive: true, force: true });
+    }
+  });
 });
