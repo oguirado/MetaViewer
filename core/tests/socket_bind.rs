@@ -5,6 +5,23 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::time::Duration;
 #[test]
 fn private_bind_peer_credentials_live_and_stale_socket() {
+    // [TARGET, unit decision] Keep listener ownership in an isolated process:
+    // sibling tests spawn children, which inherit even CLOEXEC descriptors until
+    // exec. Dropping only this process's listener cannot prove socket staleness.
+    const CHILD: &str = "MV_SOCKET_LIFECYCLE_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "private_bind_peer_credentials_live_and_stale_socket",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .status()
+            .unwrap();
+        assert!(status.success(), "isolated socket lifecycle: {status}");
+        return;
+    }
     support::run(async {
         let tmp = support::Temp::new();
         let dir = tmp.0.join("runtime");
@@ -29,13 +46,48 @@ fn private_bind_peer_credentials_live_and_stale_socket() {
         ));
         drop(client);
         drop(server);
+
+        // Hold a child before exec to make descriptor inheritance deterministic.
+        // The child performs only socket read/write syscalls in pre_exec; no
+        // allocation, locking, sleeps, or scheduler-dependent observation.
+        use std::io::{Read, Write};
+        use std::os::unix::process::CommandExt;
+        let (mut parent_barrier, mut child_barrier) =
+            std::os::unix::net::UnixStream::pair().unwrap();
+        let spawn = std::thread::spawn(move || {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command.arg("--list");
+            // SAFETY: the callback only exchanges fixed stack buffers through
+            // already-open descriptors, then returns to exec.
+            unsafe {
+                command.pre_exec(move || {
+                    child_barrier.write_all(b"H")?;
+                    child_barrier.read_exact(&mut [0])?;
+                    Ok(())
+                });
+            }
+            command.spawn().unwrap().wait().unwrap()
+        });
+        parent_barrier.read_exact(&mut [0]).unwrap();
+        let live_inode = fs::symlink_metadata(&path).unwrap().ino();
         drop(listener);
+        let inherited = bind_owner_only(&path, uid, Duration::from_millis(100)).await;
+        eprintln!(
+            "listener dropped, child before exec, {}: {inherited:?}",
+            path.display()
+        );
+        // Release and reap even if the subsequent assertion fails.
+        parent_barrier.write_all(b"E").unwrap();
+        assert!(spawn.join().unwrap().success());
+        assert!(matches!(inherited, Err(BindError::LiveSocket)));
+        assert_eq!(fs::symlink_metadata(&path).unwrap().ino(), live_inode);
         let rebound = bind_owner_only(&path, uid, Duration::from_millis(100))
             .await
-            .unwrap();
+            .unwrap_or_else(|error| panic!("stale socket {}: {error:?}", path.display()));
         drop(rebound);
     });
 }
+
 #[test]
 fn unsafe_paths_and_regular_targets_are_preserved() {
     support::run(async {
