@@ -5,9 +5,9 @@
 //! contract tags and field sets. SurfaceNotice journals read calls.
 //! Waits hold no authority lock, resolve cancellations (including draining work),
 //! and expire with a typed timeout. List returns live surfaces only; dead views
-//! and layout overrides are pruned against authority on lifecycle/recovery. Receipts currently
-//! carry no focus proof or input monotonic timestamp: never fabricate those fields
-//! to claim verified success; return VERIFICATION_FAILED once such a receipt arrives.
+//! and layout overrides are pruned against authority on lifecycle/recovery.
+//! [TARGET, unit decision] Native focus and timing gate core-owned pixel
+//! expectation verification. Missing semantic capture witnesses fail closed.
 use super::*;
 use crate::wire::payload::{ActionVerdict, MvToolCall};
 use serde_json::{json, Value};
@@ -21,6 +21,7 @@ pub(super) struct ToolState {
     surfaces: BTreeMap<String, Value>,
     frames: BTreeMap<String, Value>,
     receipts: BTreeMap<String, Value>,
+    verification_contexts: BTreeMap<String, (Value, Value)>,
     waiters: Vec<Waiter>,
     receipt_order: VecDeque<String>,
     layout: BTreeMap<String, String>,
@@ -61,6 +62,12 @@ impl ToolState {
                 _ => {}
             },
             Command::FrameRef(_) => self.retain_frame(&value),
+            Command::ActionProposal(proposal) => self.retain_proposal(proposal),
+            Command::MvToolCall(call) => {
+                if let MvToolCall::Case2(call) = call.as_ref() {
+                    self.retain_proposal(&call.args.proposal);
+                }
+            }
             Command::ActionReceipt(receipt) => {
                 let id = &receipt.proposal_id;
                 self.receipt_order.retain(|old| old != id);
@@ -69,6 +76,7 @@ impl ToolState {
                 while self.receipt_order.len() > RECEIPT_CAP {
                     if let Some(old) = self.receipt_order.pop_front() {
                         self.receipts.remove(&old);
+                        self.verification_contexts.remove(&old);
                     }
                 }
             }
@@ -90,6 +98,14 @@ impl ToolState {
                 }
             }
             _ => {}
+        }
+    }
+    fn retain_proposal(&mut self, proposal: &crate::wire::payload::ActionProposal) {
+        if let Some(frame) = self.frames.get(&proposal.surface_id) {
+            if let Ok(value) = serde_json::to_value(proposal) {
+                self.verification_contexts
+                    .insert(proposal.proposal_id.clone(), (value, frame.clone()));
+            }
         }
     }
     pub(super) fn has_surface(&self, id: &str) -> bool {
@@ -298,9 +314,27 @@ impl Server {
         });
         for (peer, request, proposal) in ready {
             let fields = if self.tool_state.receipts.contains_key(&proposal) {
-                json!({"status":"error","code":"VERIFICATION_FAILED",
-                    "detail":"Receipt settled execution; focus proof and input_mono_ns are absent"})
+                self.tool_state
+                    .verification_contexts
+                    .get(&proposal)
+                    .and_then(|(action, before)| {
+                        verified_native_fields(
+                            action,
+                            before,
+                            &self.tool_state.receipts[&proposal],
+                            &self.root.join("artifacts"),
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        json!({"status":"error","code":"VERIFICATION_FAILED",
+                        "detail": if self.tool_state.receipts[&proposal].get("native_evidence").is_none() {
+                            "Receipt settled execution; focus proof and input_mono_ns are absent"
+                        } else {
+                            "Missing, stale or unmatched native/frame evidence"
+                        }})
+                    })
             } else if !self.authority.state().pending.contains_key(&proposal) {
+                self.tool_state.verification_contexts.remove(&proposal);
                 json!({"status":"error","code":"UNAVAILABLE","detail":"Proposal cancelled"})
             } else {
                 json!({"status":"timeout","proposal_id":proposal,"verified":false})
@@ -320,6 +354,15 @@ impl Server {
         tool: Option<&str>,
         verdict: ActionVerdict,
     ) -> Result<()> {
+        if serde_json::to_value(&verdict)?["decision"] == "admitted" {
+            if let Command::ActionProposal(proposal) = &env.body {
+                self.tool_state.verification_contexts.retain(|id, _| {
+                    self.authority.state().pending.contains_key(id)
+                        || self.tool_state.receipts.contains_key(id)
+                });
+                self.tool_state.retain_proposal(proposal);
+            }
+        }
         if let Some(id) = tool {
             let value = serde_json::to_value(&verdict)?;
             if value["decision"] == "admitted" {
@@ -383,3 +426,85 @@ mod regression;
 #[cfg(test)]
 #[path = "tools_state_regression.rs"]
 mod tools_state_regression;
+
+// [TARGET, unit decision] This helper is reached only for authority-settled
+// receipts. Read hash-addressed core artifacts, never executor-provided paths.
+fn verified_native_fields(
+    proposal: &Value,
+    before: &Value,
+    receipt: &Value,
+    artifacts: &std::path::Path,
+) -> Option<Value> {
+    use crate::verify::{verify_receipt, Evidence, MAX_RGB_BYTES};
+    use crate::wire::payload::{ActionProposal, ActionReceipt, Observation};
+    use crate::wire::Optional;
+    use std::io::Read;
+    let p: ActionProposal = serde_json::from_value(proposal.clone()).ok()?;
+    let r: ActionReceipt = serde_json::from_value(receipt.clone()).ok()?;
+    let Optional::Present(native) = &r.native_evidence else {
+        return None;
+    };
+    let expected_kind = if proposal["action"]["type"] == "type" {
+        json!("text")
+    } else {
+        proposal["action"]["type"].clone()
+    };
+    if native.surface_id != p.surface_id
+        || native.focus_verified != Optional::Present(true)
+        || !matches!(&native.native_surface_id, Optional::Present(id) if !id.is_empty())
+        || serde_json::to_value(&native.kind).ok()? != expected_kind
+        || serde_json::to_value(&native.result).ok()? != "ok"
+        || native.input_mono_ns < native.input_ts_ns
+        || native.input_ts_ns < before["ts_ns"].as_u64()?
+        || native.input_ts_ns > r.executed_at_ns
+    {
+        return None;
+    }
+    let observation = |frame: Value| -> Option<Observation> {
+        serde_json::from_value(json!({"schema":"observation/v0.2", "frame_ref":frame,
+            "vision":{"summary":"", "changed_regions":[], "elements":[]}}))
+        .ok()
+    };
+    let b = observation(before.clone())?;
+    let a = observation(serde_json::to_value(&r.after_frame).ok()?)?;
+    let read = |hash: &str| -> Option<Vec<u8>> {
+        // Strict decoding already validates the digest; guard direct test callers too.
+        if hash.len() != 64 || !hash.bytes().all(|c| c.is_ascii_hexdigit()) {
+            return None;
+        }
+        let file = std::fs::File::open(artifacts.join(hash)).ok()?;
+        if file.metadata().ok()?.len() > MAX_RGB_BYTES {
+            return None;
+        }
+        let mut bytes = Vec::new();
+        file.take(MAX_RGB_BYTES + 1).read_to_end(&mut bytes).ok()?;
+        Some(bytes)
+    };
+    let before_rgb = read(&b.frame_ref.sha256)?;
+    let after_rgb = read(&a.frame_ref.sha256)?;
+    let verified = verify_receipt(
+        &p,
+        &b,
+        &a,
+        &r,
+        &Evidence {
+            before_rgb: Some(&before_rgb),
+            after_rgb: Some(&after_rgb),
+            ..Evidence::default()
+        },
+    );
+    if !verified.verified {
+        return None;
+    }
+    let mut result = serde_json::to_value(&verified).ok()?;
+    // The wait result has its own frozen receipt projection; native witnesses
+    // are exposed by the result's explicit focus/timestamp/hash fields.
+    result.as_object_mut()?.remove("native_evidence");
+    Some(
+        json!({"status":"verified", "receipt":result, "focus_verified":true,
+        "input_mono_ns":native.input_mono_ns, "frame_sha256":r.after_frame.sha256}),
+    )
+}
+#[cfg(test)]
+#[path = "receipt_evidence_tests.rs"]
+mod receipt_evidence_tests;

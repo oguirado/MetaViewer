@@ -14,6 +14,9 @@ package capsule
 // [TARGET, unit decision] Profile geometry caps identity readiness; surface and
 // input bounds track the actual CLI window, including valid smaller captures.
 // Holdings has no window identity and requires exact configured capture geometry.
+// [TARGET, unit decision] HandleInputWithEvidence returns request-local native
+// evidence only after all input checks pass. Holdings never acquires synthetic
+// focus proof; its independent verifier does not supply native focus fields.
 import (
 	"bytes"
 	"context"
@@ -86,6 +89,18 @@ type NativeFrame struct {
 	Window          *Window         `json:"window,omitempty"`
 	State           json.RawMessage `json:"state,omitempty"`
 	TSNS, CaptureUS uint64          `json:"-"`
+}
+
+// InputEvidence keeps the native clock and window identity alongside the public
+// surface binding and the hello-relative timestamp. No evidence is cached/reused.
+type InputEvidence struct {
+	SurfaceID       string `json:"surface_id"`
+	NativeSurfaceID string `json:"native_surface_id,omitempty"`
+	Kind            string `json:"kind,omitempty"`
+	InputMonoNS     uint64 `json:"input_mono_ns"`
+	InputTSNS       uint64 `json:"input_ts_ns"`
+	FocusVerified   *bool  `json:"focus_verified,omitempty"`
+	Result          string `json:"result,omitempty"`
 }
 type Manager struct {
 	mu          sync.Mutex
@@ -176,6 +191,19 @@ func surfaceEvent(version, kind string, s Surface) json.RawMessage {
 	}{s})
 }
 func (m *Manager) Handle(ctx context.Context, r Request) ([]json.RawMessage, error) {
+	return m.handle(ctx, r, nil)
+}
+
+func (m *Manager) HandleInputWithEvidence(ctx context.Context, r Request) ([]json.RawMessage, InputEvidence, error) {
+	var evidence InputEvidence
+	if r.Op != "input" {
+		return nil, evidence, fault("input", "input request required for evidence")
+	}
+	events, err := m.handle(ctx, r, &evidence)
+	return events, evidence, err
+}
+
+func (m *Manager) handle(ctx context.Context, r Request, evidence *InputEvidence) ([]json.RawMessage, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -210,7 +238,7 @@ func (m *Manager) Handle(ctx context.Context, r Request) ([]json.RawMessage, err
 	case "destroy":
 		return m.destroy(ctx, r, version)
 	case "input":
-		return m.input(ctx, r, version)
+		return m.input(ctx, r, version, evidence)
 	case "take_control", "release_control":
 		return m.control(r, version)
 	case "frame_subscribe", "frame_unsubscribe", "record_start", "record_stop":
@@ -496,7 +524,7 @@ func (m *Manager) MarkLost(id string, confirmedAbsent bool) (json.RawMessage, er
 	m.bindings[id] = b
 	return surfaceEvent("v0.2", "state_changed", b.Surface), nil
 }
-func (m *Manager) input(ctx context.Context, r Request, version string) ([]json.RawMessage, error) {
+func (m *Manager) input(ctx context.Context, r Request, version string, evidence *InputEvidence) ([]json.RawMessage, error) {
 	var q struct {
 		SurfaceID  string `json:"surface_id"`
 		ProposalID string `json:"proposal_id"`
@@ -622,6 +650,14 @@ func (m *Manager) input(ctx context.Context, r Request, version string) ([]json.
 	}
 	if m.bindings[q.SurfaceID].Surface.State != "active" {
 		return nil, fault("surface", "surface lost during input verification")
+	}
+	if evidence != nil {
+		*evidence = InputEvidence{
+			SurfaceID: q.SurfaceID, NativeSurfaceID: receipt.SurfaceID,
+			Kind: receipt.Kind, InputMonoNS: *receipt.InputMonoNS,
+			InputTSNS:     *receipt.InputMonoNS - m.cfg.OriginNS,
+			FocusVerified: receipt.FocusVerified, Result: receipt.Result,
+		}
 	}
 	return []json.RawMessage{event(version, "input_applied", struct {
 		SurfaceID  string `json:"surface_id"`

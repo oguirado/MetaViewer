@@ -235,6 +235,47 @@ pub struct ActionReceiptVerification {
     pub method: ActionReceiptVerificationMethod,
     pub detail: String,
 }
+// [TARGET, unit decision] Native evidence is optional for older receipts;
+// absent focus proof remains distinct from false and never verifies success.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeInputEvidence {
+    pub surface_id: String,
+    pub input_mono_ns: u64,
+    pub input_ts_ns: u64,
+    #[serde(
+        default = "Optional::missing",
+        skip_serializing_if = "Optional::is_missing"
+    )]
+    pub native_surface_id: Optional<String>,
+    #[serde(
+        default = "Optional::missing",
+        skip_serializing_if = "Optional::is_missing"
+    )]
+    pub kind: Optional<NativeInputKind>,
+    #[serde(
+        default = "Optional::missing",
+        skip_serializing_if = "Optional::is_missing"
+    )]
+    pub focus_verified: Optional<bool>,
+    #[serde(
+        default = "Optional::missing",
+        skip_serializing_if = "Optional::is_missing"
+    )]
+    pub result: Optional<NativeInputResult>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NativeInputKind {
+    Click,
+    Key,
+    Text,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NativeInputResult {
+    #[serde(rename = "ok")]
+    Ok,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ActionReceipt {
@@ -245,6 +286,11 @@ pub struct ActionReceipt {
     pub verified: bool,
     pub verification: ActionReceiptVerification,
     pub error: String,
+    #[serde(
+        default = "Optional::missing",
+        skip_serializing_if = "Optional::is_missing"
+    )]
+    pub native_evidence: Optional<NativeInputEvidence>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ActionVerdictCase0Schema {

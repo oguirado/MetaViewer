@@ -114,9 +114,9 @@ func RuntimeFromEnv() (Runtime, error) {
 		}
 		pubs[profile.RAMRoot] = p
 	}
-	var subscriptions []*frames.Subscriptions
+	helloSession := helloState{}
 
-	handler := wireHandler(manager, profiles, pubs, origin)
+	helloSession.handler = wireHandler(manager, profiles, pubs, origin)
 	cfg := ipc.Config{SocketPath: filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "metaviewer", "core.sock"), UID: uint32(os.Getuid()), MaxFrameBytes: 1 << 20, MaxDepth: 32, MaxStringBytes: 65536, MaxKeys: 256, MaxArrayItems: 4096, MaxReplayEntries: 100000, MaxConnections: 1, HelloTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, ProbeTimeout: time.Second, ShutdownTimeout: 5 * time.Second}
 	authority, err := newClientAuthority(fmt.Sprintf("/proc/self/fd/%d/wire-replay.jsonl", stateFile.Fd()), origin)
 	if err != nil {
@@ -125,7 +125,7 @@ func RuntimeFromEnv() (Runtime, error) {
 	}
 	authority.expectedCoreCommit = expectedCoreCommit
 	cleanup := func() {
-		for _, s := range subscriptions {
+		for _, s := range helloSession.subscriptions {
 			_ = s.Close(context.Background())
 		}
 		closePubs()
@@ -160,41 +160,13 @@ func RuntimeFromEnv() (Runtime, error) {
 	}
 	probe.From, probe.To = probe.To, probe.From
 	authority.bound = &probe
-	welcomed := false
 	return Runtime{Config: cfg, Policy: policy, Handler: func(ctx context.Context, e ipc.Envelope) ([]json.RawMessage, error) {
 		var header struct{ Schema string }
 		_ = json.Unmarshal(e.Body, &header)
 		if header.Schema == "hello/v0.2" {
-			if welcomed {
-				return nil, &cli.Fault{Code: "handshake", Detail: "hello already accepted"}
-			}
-			origin := monotonic()
-			if origin == 0 {
-				return nil, configuration("CLOCK_MONOTONIC unavailable")
-			}
-			authority.origin = origin
-			fresh, err := capsule.NewRuntime(capsule.Config{Profiles: profiles, OriginNS: authority.origin, MaxSurfaces: 16, MaxOutputBytes: 1 << 20, Timeout: 90 * time.Second}, monotonic)
-			if err != nil {
-				return nil, err
-			}
-			session, ok := ctx.Value(streamKey{}).(streamSession)
-			if !ok {
-				return nil, configuration("session emission required")
-			}
-			byRoot := map[string]*frames.Subscriptions{}
-			for root, pub := range pubs {
-				sub, err := frames.NewSubscriptions(session.ctx, frames.SubscriptionConfig{MaxSubscriptions: 16, PollInterval: 100 * time.Millisecond, CaptureTimeout: 90 * time.Second, ShutdownTimeout: 5 * time.Second, CaptureLock: session.work}, fresh, pub, session.emit)
-				if err != nil {
-					return nil, err
-				}
-				subscriptions = append(subscriptions, sub)
-				byRoot[root] = sub
-			}
-			welcomed = true
-			handler = subscriptionHandler(fresh, profiles, byRoot, wireHandler(fresh, profiles, pubs, authority.origin))
-			return nil, nil
+			return nil, helloSession.accept(ctx, profiles, pubs, authority, monotonic, capsule.NewRuntime, frames.NewSubscriptions)
 		}
-		return handler(ctx, e)
+		return helloSession.handler(ctx, e)
 	}, Client: true, Streaming: true, Registration: probe, Close: cleanup}, nil
 }
 
@@ -271,7 +243,16 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 			}
 			return wireFailure(e, q, err)
 		}
-		events, err := m.Handle(ctx, q)
+		// [TARGET, unit decision] Carry the checked native result directly from
+		// this input call; never recover proof from another request or a cache.
+		var events []json.RawMessage
+		var evidence capsule.InputEvidence
+		var err error
+		if q.Op == "input" {
+			events, evidence, err = m.HandleInputWithEvidence(ctx, q)
+		} else {
+			events, err = m.Handle(ctx, q)
+		}
 		// [TARGET, unit decision] The wire owner acknowledges cancelled native
 		// completion here; direct Manager callers retain explicit DrainInput.
 		if q.Op == "input" && err != nil {
@@ -310,7 +291,7 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 		// [TARGET, unit decision] Execution time is adapter-observed native
 		// completion, before capture; expectation verification remains false.
 		completed := monotonic()
-		if completed < origin {
+		if completed < origin || evidence.InputTSNS > completed-origin {
 			return failure(configuration("monotonic completion refused"))
 		}
 		var params struct {
@@ -323,6 +304,9 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 		if err != nil {
 			return failure(err)
 		}
+		if evidence.SurfaceID != id || native.CaptureMonoNS < evidence.InputMonoNS {
+			return failure(configuration("post-input capture evidence refused"))
+		}
 		ref, err := pubs[profiles[binding.Surface.ProfileID].RAMRoot].Publish(id, binding, native)
 		if err != nil {
 			return failure(err)
@@ -333,7 +317,7 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 		frameMu.Unlock()
 		ready, _ := json.Marshal(map[string]any{"schema": "surface_event/v0.2", "event": "frame_ready", "data": map[string]any{"frame_ref": ref}})
 		events = append(events, ready)
-		receipt, _ := json.Marshal(map[string]any{"schema": "action_receipt/v0.2", "proposal_id": proposal, "executed_at_ns": completed - origin, "after_frame": ref, "verified": false, "verification": map[string]string{"method": "pixel", "detail": "post-input capture only; expectation verification belongs to core"}, "error": ""})
+		receipt, _ := json.Marshal(map[string]any{"schema": "action_receipt/v0.2", "proposal_id": proposal, "executed_at_ns": completed - origin, "after_frame": ref, "native_evidence": evidence, "verified": false, "verification": map[string]string{"method": "pixel", "detail": "post-input capture only; expectation verification belongs to core"}, "error": ""})
 		events = append(events, receipt)
 		return events, nil
 	}
@@ -399,4 +383,53 @@ func openStateDir(path string) (*os.File, error) {
 	file := os.NewFile(uintptr(fd), path)
 	fd = -1
 	return file, nil
+}
+
+// helloState owns the state published by an accepted session handshake.
+// Constructor arguments permit deterministic failure testing without global hooks.
+type helloState struct {
+	handler       ipc.Handler
+	subscriptions []*frames.Subscriptions
+	welcomed      bool
+}
+
+func (s *helloState) accept(ctx context.Context, profiles map[string]capsule.Profile, pubs map[string]*frames.Publisher, authority *clientAuthority, clock cli.Clock,
+	newRuntime func(capsule.Config, cli.Clock) (*capsule.Manager, error),
+	newSubscriptions func(context.Context, frames.SubscriptionConfig, frames.Source, *frames.Publisher, frames.Emit) (*frames.Subscriptions, error),
+) error {
+	if s.welcomed {
+		return &cli.Fault{Code: "handshake", Detail: "hello already accepted"}
+	}
+	origin := clock()
+	if origin == 0 {
+		return configuration("CLOCK_MONOTONIC unavailable")
+	}
+	fresh, err := newRuntime(capsule.Config{Profiles: profiles, OriginNS: origin, MaxSurfaces: 16, MaxOutputBytes: 1 << 20, Timeout: 90 * time.Second}, clock)
+	if err != nil {
+		return err
+	}
+	session, ok := ctx.Value(streamKey{}).(streamSession)
+	if !ok {
+		return configuration("session emission required")
+	}
+	byRoot := map[string]*frames.Subscriptions{}
+	var pending []*frames.Subscriptions
+	for root, pub := range pubs {
+		sub, err := newSubscriptions(session.ctx, frames.SubscriptionConfig{MaxSubscriptions: 16, PollInterval: 100 * time.Millisecond, CaptureTimeout: 90 * time.Second, ShutdownTimeout: 5 * time.Second, CaptureLock: session.work}, fresh, pub, session.emit)
+		if err != nil {
+			for _, staged := range pending {
+				_ = staged.Close(context.Background())
+			}
+			return err
+		}
+		pending = append(pending, sub)
+		byRoot[root] = sub
+	}
+	// Publish only after all fallible setup succeeds. Pending subscriptions have
+	// no capture tasks yet, so rollback closes them without touching live state.
+	authority.origin = origin
+	s.subscriptions = append(s.subscriptions, pending...)
+	s.handler = subscriptionHandler(fresh, profiles, byRoot, wireHandler(fresh, profiles, pubs, origin))
+	s.welcomed = true
+	return nil
 }
