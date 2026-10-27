@@ -484,21 +484,34 @@ func (m *Manager) stopNative(ctx context.Context, b Binding) error {
 }
 func (m *Manager) Capture(ctx context.Context, id string) (Binding, NativeFrame, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	b, ok := m.bindings[id]
 	if !ok || b.Surface.State != "active" || m.destroying[id] {
+		m.mu.Unlock()
 		return Binding{}, NativeFrame{}, fault("surface", "capture requires an active surface")
 	}
 	if m.hasPending(id) {
+		m.mu.Unlock()
 		return Binding{}, NativeFrame{}, fault("POLICY", "input must be drained before capture")
 	}
+	profile := m.cfg.Profiles[b.Surface.ProfileID]
 	args := []string{"frame", "--container", b.Container}
 	if b.Window != "" {
 		args = append(args, "--window", b.Window)
 	}
 	before := m.clock()
-	out, e := m.execute(ctx, m.cfg.Profiles[b.Surface.ProfileID], args, nil)
+	m.mu.Unlock()
+	out, e := m.execute(ctx, profile, args, nil)
 	after := m.clock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	current, ok := m.bindings[id]
+	if !ok || current.Surface.State != "active" || m.destroying[id] || current.Container != b.Container || current.RunID != b.RunID {
+		return Binding{}, NativeFrame{}, fault("surface", "capture requires an active surface")
+	}
+	if m.hasPending(id) {
+		return Binding{}, NativeFrame{}, fault("POLICY", "input must be drained before capture")
+	}
+	b = current
 	if e != nil {
 		return b, NativeFrame{}, e
 	}
@@ -611,8 +624,10 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 	pending := &pendingInput{surface: q.SurfaceID, cancel: cancel}
 	m.pending[q.ProposalID] = pending
 	m.used[q.ProposalID] = true
+	before := m.clock()
 	m.mu.Unlock()
 	out, e := m.execute(run, m.cfg.Profiles[b.Surface.ProfileID], args, stdin)
+	after := m.clock()
 	m.mu.Lock()
 	defer func() {
 		cancel()
@@ -644,7 +659,7 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 	if receipt.Result == "refused" {
 		return nil, fault("refused", "native input refused")
 	}
-	if receipt.InputMonoNS == nil || *receipt.InputMonoNS < m.cfg.OriginNS || (b.Window != "" && (receipt.SurfaceID != b.Window || receipt.Kind != nativeAction || receipt.FocusVerified == nil || !*receipt.FocusVerified || receipt.Result != "ok")) {
+	if receipt.InputMonoNS == nil || *receipt.InputMonoNS < m.cfg.OriginNS || *receipt.InputMonoNS > 9007199254740991 || *receipt.InputMonoNS < before || *receipt.InputMonoNS > after || after < before || (b.Window != "" && (receipt.SurfaceID != b.Window || receipt.Kind != nativeAction || receipt.FocusVerified == nil || !*receipt.FocusVerified || receipt.Result != "ok")) {
 		return nil, fault("input", "unverified input receipt")
 	}
 	if b.NativeKind == "holdings" {
