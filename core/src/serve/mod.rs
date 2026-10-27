@@ -1,7 +1,9 @@
 //! [TARGET, unit decision] Layout slots use surface_id as slot_id until a slot
-//! registry ABI exists. Fold/unfold commit SurfaceNotice plus the closed intent
-//! witness, rebuild visibility on replay, and publish state_changed from core;
-//! the daemon adapter defines no layout operation. Unknown/dead slots use POLICY.
+//! registry ABI exists (kit DOM aliases are resolved by layout.rs). Layout
+//! operations commit SurfaceNotice plus the closed intent witness and rebuild
+//! placement/visibility on replay. Fold/unfold publish state_changed from core;
+//! the daemon adapter defines no layout operation. See layout.rs for policy and
+//! typed refusals; accepted placement intents are fanned out unchanged.
 //! [TARGET, unit decision] Trusted startup registration is a closed JSON config:
 //! {session_id, core:{endpoint,hello}, peers:[{endpoint,hello}]} at MV_CORE_CONFIG.
 //! The core endpoint instance is a fresh process identity on each restart.
@@ -26,6 +28,7 @@
 //! [TARGET, unit decision] A failed receipt must have verified=false; contradictory receipts are refused
 //! before settlement and cannot clear a lease.
 mod capture;
+mod layout;
 mod tools;
 
 use crate::admission::{
@@ -545,7 +548,10 @@ impl Server {
 
             (Component::Ui, Command::UiIntent(request)) => {
                 let value = serde_json::to_value(request)?;
-                if matches!(value["op"].as_str(), Some("fold" | "unfold")) {
+                if matches!(
+                    value["op"].as_str(),
+                    Some("fold" | "unfold" | "move" | "tab" | "float" | "hide" | "show")
+                ) {
                     return self.layout_intent(&env, &value, boundary);
                 }
                 let take = match value["op"].as_str() {
@@ -807,24 +813,40 @@ impl Server {
         let sid = value["params"]["slot_id"]
             .as_str()
             .ok_or_else(|| invalid("slot required"))?;
+        let sid = self.tool_state.slot_surface(sid).to_owned();
+        let extended = !matches!(value["op"].as_str(), Some("fold" | "unfold"));
         if !self
             .authority
             .state()
             .surfaces
-            .get(sid)
+            .get(&sid)
             .is_some_and(|s| s.live)
-            || !self.tool_state.has_surface(sid)
+            || !self.tool_state.has_surface(&sid)
         {
-            return self.unsupported(env, boundary);
+            return if extended {
+                self.layout_refusal(env, boundary, "LAYOUT_UNKNOWN_SLOT")
+            } else {
+                self.unsupported(env, boundary)
+            };
+        }
+        if extended && self.authority.state().surfaces[&sid].agent_controlled {
+            return self.layout_refusal(env, boundary, "LAYOUT_INPUT_MODE_READ");
+        }
+        if let Err(code) = self.tool_state.placement_change(&sid, value) {
+            return self.layout_refusal(env, boundary, code);
         }
         self.authority
             .apply_with_witnesses(Input::SurfaceNotice, vec![boundary])?;
         self.tool_state.retain(&env.body);
         let event = self
             .tool_state
-            .surface_event(sid, self.authority.state())
+            .surface_event(&sid, self.authority.state())
             .ok_or_else(|| invalid("missing layout view"))?;
-        self.fanout(event);
+        if extended {
+            self.fanout(env.body.clone());
+        } else {
+            self.fanout(event);
+        }
         Ok(())
     }
     fn unsupported(&mut self, env: &Envelope, boundary: Witness) -> Result<()> {

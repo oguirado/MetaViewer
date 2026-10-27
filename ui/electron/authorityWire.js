@@ -176,14 +176,25 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     },
     intent: async (/** @type {string} */json) => {
       const body=jsonObject(json);
-      if (!['take_control','release_control','fold','unfold'].includes(body.op)) throw new Error('INTENT');
-      if (body.op==='fold' || body.op==='unfold') {
+      if (!['take_control','release_control','fold','unfold','move','tab','float','hide','show'].includes(body.op)) throw new Error('INTENT');
+      if (!['take_control','release_control'].includes(body.op)) {
         const validId=(/** @type {unknown} */value)=>typeof value==='string'
           && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}(?![\s\S])/.test(value);
+        const keys = body.op==='move' || body.op==='tab' ? 'group_id,index,slot_id'
+          : body.op==='float' ? 'height_px,slot_id,width_px,x_px,y_px' : 'slot_id';
         if (Object.keys(body).sort().join(',')!=='op,params,request_id,schema'
             || body.schema!=='ui_intent/v0.2' || !validId(body.request_id)
             || !body.params || Array.isArray(body.params) || typeof body.params!=='object'
-            || Object.keys(body.params).join(',')!=='slot_id' || !validId(body.params.slot_id)) throw new Error('INTENT');
+            || Object.keys(body.params).sort().join(',')!==keys || !validId(body.params.slot_id)) throw new Error('INTENT');
+        const p=body.params;
+        if (keys==='group_id,index,slot_id' && (!validId(p.group_id)
+            || !Number.isInteger(p.index) || p.index<0 || p.index>255)) throw new Error('INTENT');
+        if (body.op==='float') {
+          for (const key of ['height_px','width_px','x_px','y_px']) {
+            const size=key==='height_px' || key==='width_px';
+            if (!Number.isInteger(p[key]) || p[key]<(size?1:0) || p[key]>(size?16384:16383)) throw new Error('INTENT');
+          }
+        }
       }
       if (await core.request({op:'intent',json}) !== true) throw new Error('OUTCOME'); return true;
     },

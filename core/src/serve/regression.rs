@@ -634,7 +634,7 @@ async fn close_server(
 
 #[test]
 fn layout_intents_reject_open_or_malformed_decoding() {
-    for op in ["fold", "unfold"] {
+    for op in ["fold", "unfold", "hide", "show", "move", "tab", "float"] {
         for params in [
             json!({}),
             json!({"slot_id":""}),
@@ -645,4 +645,109 @@ fn layout_intents_reject_open_or_malformed_decoding() {
             assert!(decode_envelope(&value.to_string()).is_err());
         }
     }
+}
+
+#[test]
+fn layout_placement_is_authoritative_atomic_and_replay_stable() {
+    support::run(async {
+        let (temp, server, task, mut daemon, mut agent, mut ui) = setup().await;
+        let mut human = surface();
+        human["control"] = "human".into();
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"created","data":{"surface":human}}))
+            .await;
+        ui.receive().await;
+        let mut other = surface();
+        other["surface_id"] = "other".into();
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"created","data":{"surface":other}}))
+            .await;
+        ui.receive().await;
+        let slot = "cuk-ai-slot-surface-demo";
+        let intent = |op: &str, params: Value| json!({"schema":"ui_intent/v0.2","request_id":format!("layout-{op}"),"op":op,"params":params});
+        for (op, params) in [
+            (
+                "move",
+                json!({"slot_id":slot,"group_id":"destination","index":0}),
+            ),
+            ("tab", json!({"slot_id":slot,"group_id":"tabs","index":1})),
+            (
+                "float",
+                json!({"slot_id":slot,"x_px":12,"y_px":34,"width_px":800,"height_px":600}),
+            ),
+            ("hide", json!({"slot_id":slot})),
+            ("show", json!({"slot_id":slot})),
+            ("move", json!({"slot_id":slot,"group_id":"final","index":2})),
+            ("hide", json!({"slot_id":slot})),
+        ] {
+            let body = intent(op, params);
+            ui.send(body.clone()).await;
+            assert_eq!(serde_json::to_value(ui.receive().await.body).unwrap(), body);
+            let current = server.lock().unwrap().tool_state.placements.clone();
+            if matches!(op, "move" | "tab" | "float") {
+                assert_eq!(current["surface-demo"].position.as_ref(), Some(&body));
+            } else {
+                assert_eq!(current["surface-demo"].hidden, op == "hide");
+            }
+            // Recover every committed operation, so a later move cannot mask a
+            // broken tab/float/show reducer during the final restart check.
+            // The journal deliberately excludes a second writer. Recover an
+            // exact copy under the authority mutex, preserving that lock gate.
+            fn copy_tree(source: &std::path::Path, target: &std::path::Path) {
+                std::fs::create_dir(target).unwrap();
+                std::fs::set_permissions(target, std::fs::metadata(source).unwrap().permissions())
+                    .unwrap();
+                for entry in std::fs::read_dir(source).unwrap() {
+                    let entry = entry.unwrap();
+                    let destination = target.join(entry.file_name());
+                    if entry.file_type().unwrap().is_dir() {
+                        copy_tree(&entry.path(), &destination);
+                    } else {
+                        std::fs::copy(entry.path(), destination).unwrap();
+                    }
+                }
+            }
+            let checkpoint_dir = support::Temp::new();
+            {
+                let _guard = server.lock().unwrap();
+                copy_tree(&temp.0.join("state"), &checkpoint_dir.0.join("state"));
+            }
+            let checkpoint =
+                Server::open(config(), &checkpoint_dir.0.join("state"), support::uid()).unwrap();
+            assert_eq!(checkpoint.tool_state.placements, current);
+        }
+        let expected = server.lock().unwrap().tool_state.placements.clone();
+        assert!(expected["surface-demo"].hidden);
+        assert_eq!(
+            expected["surface-demo"].position.as_ref().unwrap()["params"]["group_id"],
+            "final"
+        );
+        assert!(!expected.contains_key("other"));
+        for (op, params, code) in [
+            ("hide", json!({"slot_id":slot}), "LAYOUT_ILLEGAL_TRANSITION"),
+            (
+                "tab",
+                json!({"slot_id":slot,"group_id":"tabs","index":0}),
+                "LAYOUT_ILLEGAL_TRANSITION",
+            ),
+            ("show", json!({"slot_id":"missing"}), "LAYOUT_UNKNOWN_SLOT"),
+            ("hide", json!({"slot_id":"other"}), "LAYOUT_INPUT_MODE_READ"),
+        ] {
+            ui.send(intent(op, params)).await;
+            ui.verdict("refused", Some("POLICY")).await;
+            let error = serde_json::to_value(ui.receive().await.body).unwrap();
+            assert_eq!(error["event"], "error");
+            assert_eq!(error["data"]["code"], code);
+            assert_eq!(server.lock().unwrap().tool_state.placements, expected);
+        }
+        agent.send(intent("show", json!({"slot_id":slot}))).await;
+        agent.verdict("refused", Some("POLICY")).await;
+        // No layout operation is dispatched to the daemon; identity and capsule
+        // liveness remain intact, so attached terminal sessions cannot be rebound.
+        daemon_barrier(&mut daemon).await;
+        assert_eq!(server.lock().unwrap().authority.state().surfaces.len(), 2);
+        close_server(server, task, daemon, agent, ui).await;
+        let recovered = Server::open(config(), &temp.0.join("state"), support::uid()).unwrap();
+        assert_eq!(recovered.tool_state.placements, expected);
+    });
 }

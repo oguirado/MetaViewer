@@ -232,7 +232,7 @@ for(const op of ['fold','unfold']) {
 }
 test('intent allow-list still refuses other schema operations',async t=>{
   const f=await fixture(t);
-  for(const op of ['hide','show','pin','move','tab','float','layout_save','layout_load','execute_shell'])
+  for(const op of ['pin','move','tab','float','layout_save','layout_load','execute_shell'])
     await assert.rejects(f.call('intent',JSON.stringify({schema:'ui_intent/v0.2',request_id:'r',op,params:{slot_id:'s'}})),/INTENT/);
   assert.deepEqual(f.coreCalls,[]);
 });
@@ -244,3 +244,31 @@ test('control intents retain their existing forwarding behavior',async t=>{
     assert.deepEqual(f.coreCalls.at(-1),{op:'intent',json});
   }
 });
+
+for (const [op,params] of [
+  ['hide',{slot_id:'cuk-ai-slot-s1'}], ['show',{slot_id:'s1'}],
+  ['move',{slot_id:'s1',group_id:'group-2',index:0}],
+  ['tab',{slot_id:'s1',group_id:'group-2',index:255}],
+  ['float',{slot_id:'s1',x_px:0,y_px:16383,width_px:16384,height_px:1}],
+]) {
+  test(`${op}: exact layout contract forwards and rejects field/bound mutants`,async t=>{
+    const f=await fixture(t);
+    const intent={schema:'ui_intent/v0.2',request_id:'layout',op,params};
+    const json=JSON.stringify(intent);
+    assert.equal(await f.call('intent',json),true);
+    assert.deepEqual(f.coreCalls,[{op:'intent',json}]);
+    const bad=[{...intent,extra:0},{...intent,schema:'wrong'},{...intent,request_id:'a\n'},
+      {...intent,params:{...params,extra:0}}, {...intent,params:{...params,slot_id:'a\n'}}];
+    for (const key of Object.keys(params)) {
+      const missing={...params};delete missing[key];bad.push({...intent,params:missing});
+      bad.push({...intent,params:{...params,[key]:null}});
+    }
+    for(const key of ['index','x_px','y_px','width_px','height_px'].filter(key=>key in params)) {
+      for(const n of [-1,0.5,Number.MAX_SAFE_INTEGER,'1']) bad.push({...intent,params:{...params,[key]:n}});
+    }
+    if ('group_id' in params) bad.push({...intent,params:{...params,group_id:'bad group'}});
+    for(const candidate of bad) await assert.rejects(f.call('intent',JSON.stringify(candidate)),/INTENT/);
+    assert.equal(f.coreCalls.length,1);
+    f.intentReply(false);await assert.rejects(f.call('intent',json),/OUTCOME/);
+  });
+}

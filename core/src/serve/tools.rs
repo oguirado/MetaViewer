@@ -25,6 +25,7 @@ pub(super) struct ToolState {
     waiters: Vec<Waiter>,
     receipt_order: VecDeque<String>,
     layout: BTreeMap<String, String>,
+    pub(super) placements: BTreeMap<String, super::layout::Placement>,
 }
 struct Waiter {
     peer: Endpoint,
@@ -47,6 +48,7 @@ impl ToolState {
                             self.surfaces.remove(id);
                             self.frames.remove(id);
                             self.layout.remove(id);
+                            self.placements.remove(id);
                         } else {
                             let mut surface = surface.clone();
                             if matches!(event.as_ref(), SurfaceEvent::Case1(_)) {
@@ -84,13 +86,17 @@ impl ToolState {
                 if let (Some(id), Some(op)) =
                     (value["params"]["slot_id"].as_str(), value["op"].as_str())
                 {
+                    let id = self.slot_surface(id).to_owned();
+                    if let Ok(next) = self.placement_change(&id, &value) {
+                        self.placements.insert(id.clone(), next);
+                    }
                     let visibility = match op {
                         "fold" => Some("folded"),
                         "unfold" => Some("unfolded"),
                         _ => None,
                     };
                     if let (Some(surface), Some(visibility)) =
-                        (self.surfaces.get_mut(id), visibility)
+                        (self.surfaces.get_mut(&id), visibility)
                     {
                         surface["visibility"] = visibility.into();
                         self.layout.insert(id.to_owned(), visibility.to_owned());
@@ -129,6 +135,7 @@ impl ToolState {
         self.surfaces.retain(|id, _| live(id));
         self.frames.retain(|id, _| live(id));
         self.layout.retain(|id, _| live(id));
+        self.placements.retain(|id, _| live(id));
     }
     fn retain_frame(&mut self, frame: &Value) {
         if let Some(id) = frame["surface_id"].as_str() {
