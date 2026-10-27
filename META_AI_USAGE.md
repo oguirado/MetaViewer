@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 333 | 55 | 278 |
-| Lanes finished OK | 333 | 55 | 278 |
-| Agent steps | 17,807 | 2,705 | 15,102 |
-| Lane-hours of agent work | 45.3 | 5.2 | 40.0 |
-| Fresh input tokens | 73,160,802 | 11,482,034 | 61,678,768 |
-| Cache-read input tokens | 1,652,911,369 | 226,255,212 | 1,426,656,157 |
+| Lanes launched | 335 | 55 | 280 |
+| Lanes finished OK | 335 | 55 | 280 |
+| Agent steps | 17,916 | 2,705 | 15,211 |
+| Lane-hours of agent work | 45.6 | 5.2 | 40.3 |
+| Fresh input tokens | 73,555,103 | 11,482,034 | 62,073,069 |
+| Cache-read input tokens | 1,662,255,985 | 226,255,212 | 1,436,000,773 |
 | Prompt cache hit % | 95.8 | 95.2 | 95.9 |
-| Output tokens | 15,607,561 | 2,135,708 | 13,471,853 |
-| Thinking tokens | 8,236,271 | 1,050,039 | 7,186,232 |
-| Cost (USD) | 13.7434 | 2.0279 | 11.7155 |
+| Output tokens | 15,693,914 | 2,135,708 | 13,558,206 |
+| Thinking tokens | 8,286,716 | 1,050,039 | 7,236,677 |
+| Cost (USD) | 13.8188 | 2.0279 | 11.7909 |
 | Cost per lane (USD) | 0.0413 | 0.0369 | 0.0421 |
 
-Rooms: 82. Peak concurrent lanes [MEASURED from lane start/end]: 24.
+Rooms: 84. Peak concurrent lanes [MEASURED from lane start/end]: 24.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -43,7 +43,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
 | docs | 15 | 94.8 | 0.5371 |
-| fix | 19 | 96.7 | 1.1133 |
+| fix | 20 | 96.7 | 1.1513 |
 | kit | 3 | 96.5 | 0.1997 |
 | ops | 4 | 88.1 | 0.0468 |
 | plan | 12 | 92.6 | 0.3072 |
@@ -52,7 +52,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | review | 59 | 94.6 | 1.7206 |
 | submission | 4 | 94.9 | 0.0995 |
 | test | 12 | 95.6 | 0.5657 |
-| testing | 65 | 95.8 | 2.6353 |
+| testing | 66 | 95.8 | 2.6727 |
 | ui | 17 | 96.7 | 1.3092 |
 | vision | 8 | 97.2 | 0.537 |
 
@@ -142,6 +142,8 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvrv8 | conductor | Oct 27 19:27 | review | 4 | 94.8 | 0.0961 | Verify the findings of the Gemini Argon cross-review of the day-2 evening integrations before any fix, and turn confirmed ones into disjoint fix units. |
 | mvui19 | UI orchestrator | Oct 27 19:35 | fix | 3 | 97.0 | 0.2283 | Fix the renderer items from the evening cross-review (capture rows, empty profile id) and the minor findings of real-app round 3 (activity count, sticky toast, folded tile height, screenshots list, contrast, multislot anchors). |
 | mvui20 | UI orchestrator | Oct 27 19:43 | fix | 1 | 96.4 | 0.0854 | URGENT: after the first live frame is presented, the following frames of the stream are refused and the tile falls back to Connecting (production-path e2e evidence). |
+| mvui19b | UI orchestrator | Oct 27 19:58 | fix | 1 | 96.3 | 0.038 | Finish MV-UI11: give the new screenshots control a kit icon and contract it in the icon audit; complete the multislot anchor grammar fix and contrast items from real-app round 3. |
+| mvr3v3 | conductor | Oct 27 20:03 | testing | 1 | 95.5 | 0.0374 | Refresh the 16 round-3 tester prompts (8 ChatGPT, 8 Jules) to the CURRENT bridge/integration head before the operator launches them: they were written at midday and about 60 integrations landed since. |
 
 ## Every lane
 
@@ -480,6 +482,8 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui19 | A | activity count, sticky toast, empty profile id | Oct 27 19:36 | yes | 93 | 97.7 | 0.07481 |
 | mvui19 | U | folded height, contrast, multislot anchors | Oct 27 19:36 | yes | 100 | 95.5 | 0.083317 |
 | mvui20 | F | subsequent frames REFUSED | Oct 27 19:43 | yes | 101 | 96.4 | 0.085444 |
+| mvui19b | I | icon audit for the new screenshots control | Oct 27 19:58 | yes | 59 | 96.3 | 0.038018 |
+| mvr3v3 | T1 | Refresh round-3 T1 | Oct 27 20:03 | yes | 50 | 95.5 | 0.037372 |
 
 ## Method
 
