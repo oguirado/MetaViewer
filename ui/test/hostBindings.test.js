@@ -11,6 +11,7 @@ import { createHash } from 'node:crypto';
 import { createMainBindings, INTENT_OPS as HOST_INTENT_OPS } from '../electron/hostBindings.js';
 import { loadMainBindings, bootProductionMain, ELECTRON_PIN, CHANNELS } from '../electron/main.js';
 import { deliverAuthorityFrame, WIRE_CHANNELS, INTENT_OPS as WIRE_INTENT_OPS, validateIntentBody } from '../electron/authorityWire.js';
+import { installPreload } from '../electron/preload.js';
 
 const surface = {schema:'surface/v0.2',surface_id:'s1',kind:'browser',display:':1',geometry:{w:1,h:1},state:'active',visibility:'unfolded',control:'agent',profile_id:'test'};
 const registration = component => ({endpoint:{component,instance:component+'-test'},hello:{schema:'hello/v0.2',contract_version:'v0.2',component,component_version:'0.1.1',component_commit:'a'.repeat(40),dependencies:[]}});
@@ -236,4 +237,210 @@ test('core layout refusals propagate as typed errors across hostBindings', async
       assert.deepEqual(f.requests.at(-1).body, body);
     }
   }
+});
+
+test('W2-REALAPP regression: sustained multi-frame delivery, pre-subscribe replay, state_changed propagation, port-revoke resilience', async t => {
+  const f = await fixture(t), handlers = new Map();
+  const bindings = await loadMainBindings(f.env, { createMessageChannel: f.createMessageChannel });
+  t.after(() => bindings.core.dispose());
+  const shell = join(f.root, 'shell');
+  await mkdir(join(shell, 'dist/renderer'), { recursive: true });
+  await mkdir(join(shell, 'dist/preload'), { recursive: true });
+  await writeFile(join(shell, 'dist/renderer/index.html'), '<!doctype html><title>host test</title>');
+  await writeFile(join(shell, 'dist/preload/preload.cjs'), '');
+  const session = { setPermissionRequestHandler() {}, setPermissionCheckHandler() {} };
+  const frame = { origin: 'app://metaviewer', url: 'app://metaviewer/index.html' };
+  const notices = [];
+  let onNotice = () => {};
+  const contents = {
+    id: 23,
+    mainFrame: frame,
+    session,
+    isDestroyed: () => false,
+    setWindowOpenHandler() {},
+    on() {},
+    loadURL: async () => {},
+    postMessage: (...args) => { notices.push(args); onNotice(args); },
+  };
+  class Window {
+    constructor() { this.webContents = contents; }
+    once() {} on() {} show() {} destroy() {} isDestroyed() { return false; }
+  }
+  const booted = await bootProductionMain({
+    ...bindings,
+    app: { requestSingleInstanceLock: () => true, whenReady: async () => {}, on() {}, quit() {}, getAppPath: () => shell, getPath: () => join(f.root, 'user') },
+    BrowserWindow: Window,
+    ipcMain: { handle: (key, fn) => handlers.set(key, fn), removeHandler: key => handlers.delete(key) },
+    protocol: { registerSchemesAsPrivileged() {}, handle() {}, unhandle() {} },
+    session: { defaultSession: session },
+    electronVersion: ELECTRON_PIN,
+    shellRoot: shell,
+    argv: ['metaviewer'],
+    env: f.env,
+    runtime: { xdgRuntimeDir: f.root, uid: process.getuid() },
+    geometry: { width: 1280, height: 720 },
+    bridge: [CHANNELS.load, CHANNELS.save].map(channel => ({ channel, decode: value => value, invoke: async () => null })),
+  });
+  t.after(() => booted.dispose());
+
+  // 1. L1 pre-subscribe race: frame_ready (generation 1) arrives BEFORE renderer calls subscribeFrames.
+  f.send({ schema: 'surface_event/v0.2', event: 'created', data: { surface } });
+  f.send({ schema: 'surface_event/v0.2', event: 'frame_ready', data: { frame_ref: f.frame } });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(notices.length, 0);
+
+  // Subscribing replays the pending generation-1 frame and announces port2.
+  await handlers.get(WIRE_CHANNELS.subscribeFrames)({ sender: contents, senderFrame: frame });
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0][1].frame_ref.generation, 1);
+  assert.deepEqual(notices[0][2], [f.channels[0].port2]);
+  assert.equal(f.messages.length, 1);
+
+  // ACK generation 1 on port1, then deliver generation 2 (previously failed with FRAME_BINDING).
+  const firstDelivery = f.messages[0];
+  f.channels[0].port1.emit('message', {
+    schema: 'frame_ack/v0.2',
+    kind: 'ack',
+    correlation: firstDelivery.correlation,
+    principal: firstDelivery.principal,
+    epoch: firstDelivery.epoch,
+    surfaceId: firstDelivery.surfaceId,
+    surfaceGeneration: firstDelivery.surfaceGeneration,
+    frameGeneration: firstDelivery.frameGeneration,
+    leaseId: firstDelivery.leaseId,
+    outcome: 'PRESENTED',
+  });
+
+  const nextNotice = new Promise(resolve => { onNotice = resolve; });
+  const frame2 = { ...f.frame, generation: 2, tick: 2, ts_ns: 2 };
+  f.send({ schema: 'surface_event/v0.2', event: 'frame_ready', data: { frame_ref: frame2 } });
+  await nextNotice;
+  assert.equal(notices.length, 2);
+  assert.equal(notices[1][1].frame_ref.generation, 2);
+  assert.deepEqual(notices[1][2], []);
+  assert.equal(f.messages.length, 2);
+  assert.equal(f.messages[1].frameGeneration, 2);
+
+  // 2. L4 control handoff: take_control / release_control state_changed updates renderer notice immediately.
+  const controlNotice = new Promise(resolve => { onNotice = resolve; });
+  assert.equal(
+    await handlers.get(WIRE_CHANNELS.intent)(
+      { sender: contents, senderFrame: frame },
+      JSON.stringify({ schema: 'ui_intent/v0.2', request_id: 'take-1', op: 'take_control', params: { surface_id: 's1' } }),
+    ),
+    true,
+  );
+  await controlNotice;
+  assert.equal(notices.at(-1)[1].surface.control, 'human');
+
+  assert.equal(bindings.core.getStatus().availability, 'live');
+});
+
+test('W2-REALAPP regression: preload wall port consumer paints surface canvas and ACKs frame_delivery', async t => {
+  const prevWin = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  const prevDoc = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  let putImage = null;
+  const attrs = new Map([['data-state', 'connecting']]);
+  const canvas = {
+    width: 0,
+    height: 0,
+    hidden: true,
+    removeAttribute(name) { if (name === 'hidden') this.hidden = false; },
+    getContext(kind) {
+      assert.equal(kind, '2d');
+      return {
+        createImageData: (w, h) => ({ width: w, height: h, data: new Uint8ClampedArray(w * h * 4) }),
+        putImageData: img => { putImage = img; },
+      };
+    },
+  };
+  const waiting = { hidden: false, style: { display: '' } };
+  const section = {
+    setAttribute: (k, v) => attrs.set(k, v),
+    getAttribute: k => attrs.get(k),
+    querySelector: sel => (sel === 'canvas.mv-surface__canvas' ? canvas : sel === '.mv-surface__waiting' ? waiting : null),
+  };
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { location: { origin: 'app://metaviewer' }, postMessage() {} },
+  });
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    value: {
+      getElementById: id => (id === 'metaviewer-app' ? {} : id === 'mv-surface-canvas-s1' ? section : null),
+    },
+  });
+  t.after(() => {
+    if (prevWin) Object.defineProperty(globalThis, 'window', prevWin);
+    else delete globalThis.window;
+    if (prevDoc) Object.defineProperty(globalThis, 'document', prevDoc);
+    else delete globalThis.document;
+  });
+
+  let ipcListener = null;
+  const api = installPreload({
+    contextBridge: { exposeInMainWorld() {} },
+    ipcRenderer: { invoke: async () => true, on: (_ch, fn) => { ipcListener = fn; }, removeListener() {} },
+  });
+  const seen = [];
+  t.after(api.authority.subscribeFrames(v => seen.push(v)));
+
+  const acks = [];
+  const port2 = new EventEmitter();
+  port2.postMessage = msg => acks.push(msg);
+  port2.start = () => {};
+  port2.close = () => {};
+
+  const sha = createHash('sha256').update(Buffer.from([10, 20, 30])).digest('hex');
+  ipcListener(
+    { ports: [port2] },
+    {
+      frame_ref: {
+        schema: 'frame_ref/v0.2',
+        surface_id: 's1',
+        generation: 1,
+        tick: 1,
+        ts_ns: 1,
+        width: 1,
+        height: 1,
+        format: 'rgb24',
+        sha256: sha,
+        capture_us: 1,
+      },
+      surface,
+    },
+  );
+  assert.equal(seen.length, 1);
+
+  port2.emit('message', {
+    data: {
+      schema: 'frame_delivery/v0.2',
+      kind: 'frame',
+      correlation: 's1#1#lease-1',
+      principal: 'ui',
+      epoch: 1,
+      surfaceId: 's1',
+      surfaceGeneration: 1,
+      frameGeneration: 1,
+      leaseId: 'lease-1',
+      width: 1,
+      height: 1,
+      format: 'rgb24',
+      byteLength: 3,
+      sha256: sha,
+      pixelSpec: {},
+      bytes: new Uint8Array([10, 20, 30]),
+    },
+  });
+
+  assert.equal(acks.length, 1);
+  assert.equal(acks[0].schema, 'frame_ack/v0.2');
+  assert.equal(acks[0].outcome, 'PRESENTED');
+  assert.equal(acks[0].frameGeneration, 1);
+  assert.equal(canvas.hidden, false);
+  assert.equal(waiting.hidden, true);
+  assert.equal(waiting.style.display, 'none');
+  assert.equal(attrs.get('data-state'), 'live');
+  assert.equal(attrs.get('data-frame'), sha);
+  assert.deepEqual([...putImage.data], [10, 20, 30, 255]);
 });

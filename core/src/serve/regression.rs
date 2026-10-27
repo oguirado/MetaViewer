@@ -751,3 +751,46 @@ fn layout_placement_is_authoritative_atomic_and_replay_stable() {
         assert_eq!(recovered.tool_state.placements, expected);
     });
 }
+
+#[test]
+fn stale_daemon_state_changed_does_not_clobber_release_control() {
+    support::run(async {
+        let (_temp, server, task, mut daemon, _agent, mut ui) = setup().await;
+        created(&mut daemon, &mut ui).await;
+
+        ui.send(control("take_control")).await;
+        assert_eq!(
+            serde_json::to_value(daemon.receive().await.body).unwrap()["op"],
+            "take_control"
+        );
+        let mut human = surface();
+        human["control"] = "human".into();
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":human.clone()}}))
+            .await;
+        let taken = serde_json::to_value(ui.receive().await.body).unwrap();
+        assert_eq!(taken["data"]["surface"]["control"], "human");
+
+        ui.send(control("release_control")).await;
+        assert_eq!(
+            serde_json::to_value(daemon.receive().await.body).unwrap()["op"],
+            "release_control"
+        );
+        // An in-flight list snapshot arriving from daemon with stale control:"human"
+        // before daemon processes release_control must not clobber agent_controlled.
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":human}}))
+            .await;
+        let interim = serde_json::to_value(ui.receive().await.body).unwrap();
+        assert_eq!(interim["data"]["surface"]["control"], "agent");
+        assert!(server.lock().unwrap().authority.state().surfaces["surface-demo"].agent_controlled);
+
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":surface()}}))
+            .await;
+        let released = serde_json::to_value(ui.receive().await.body).unwrap();
+        assert_eq!(released["data"]["surface"]["control"], "agent");
+
+        close_server(server, task, daemon, _agent, ui).await;
+    });
+}

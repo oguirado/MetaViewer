@@ -166,9 +166,10 @@ def wait_for(predicate, processes, detail):
 
 
 def registration(component, commit, suffix):
+    version = (ROOT / "VERSION").read_text().strip() if component == "core" else "0.1.1"
     return {"endpoint": {"component": component, "instance": component + "-" + suffix},
             "hello": {"schema": "hello/v0.2", "contract_version": "v0.2",
-                      "component": component, "component_version": "0.1.1",
+                      "component": component, "component_version": version,
                       "component_commit": commit, "dependencies": []}}
 
 

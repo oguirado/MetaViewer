@@ -364,8 +364,8 @@ function validCaptureState(v) {
     && v.type==='capture.state' && captureId(v.recording_id) && captureId(v.surface_id)
     && CAPTURE_PHASES.has(v.phase) && captureNumber(v.frames) && captureNumber(v.elapsed_ms);
 }
-/** @param {PreloadTransport} transport */
-function captureFacade(transport) {
+/** @param {PreloadTransport} transport @param {Set<(value:any)=>void>} [captureCallbacks] @param {Set<string>} [seededCaptureSurfaces] */
+function captureFacade(transport, captureCallbacks = new Set(), seededCaptureSurfaces = new Set()) {
   /** @param {string} name @param {unknown[]} args */
   const call=(name,args)=>{
     assertCaptureCall(name,args);
@@ -387,10 +387,16 @@ function captureFacade(transport) {
       if(transport.nested) return Object.assign(()=>{}, {then:(/** @type {any} */resolve)=>Promise.resolve({ok:false,code:'NESTED_DISPLAY_ONLY',request_id:''}).then(resolve)});
       const cb=/** @type {(value:any)=>void} */(args[0]);
       const token=Symbol();
+      captureCallbacks.add(cb);
       const revoke=transport.subscribe?.('metaviewer:capture.state',value=>{
         if(validCaptureState(value)) cb(Object.freeze({...value}));
       });
-      subscriptions.set(token,revoke ?? (()=>{}));
+      subscriptions.set(token,()=>{captureCallbacks.delete(cb);revoke?.();});
+      if (typeof document!=='undefined' && typeof document?.getElementById==='function' && document.getElementById('metaviewer-app')!==null) {
+        for (const sid of seededCaptureSurfaces) {
+          try { cb(Object.freeze({type:'capture.state',recording_id:'idle',surface_id:sid,phase:'idle',frames:0,elapsed_ms:0})); } catch {}
+        }
+      }
       void call('subscribe',[]).catch(()=>{subscriptions.get(token)?.();subscriptions.delete(token);});
       return ()=>{const stop=subscriptions.get(token);if(!stop)return;stop();subscriptions.delete(token);
         if(!subscriptions.size)void call('unsubscribe',[]).catch(()=>{});};
@@ -478,7 +484,9 @@ function wireFacade(transport) {
     return Object.freeze({...value});
   };
   /** @type {Record<string,any>} */ const api={};
-  api.capture=captureFacade(transport);
+  /** @type {Set<(value:any)=>void>} */ const captureCallbacks=new Set();
+  /** @type {Set<string>} */ const seededCaptureSurfaces=new Set();
+  api.capture=captureFacade(transport,captureCallbacks,seededCaptureSurfaces);
   for (const name of ['loadSettings','saveSettings','recordingDestination','nestedDepth','selfCapsuleId']) {
     /** @param {...unknown} args */
     api[name]=(...args)=>call(/** @type {keyof typeof WIRE_NAMES} */(name),args);
@@ -486,6 +494,90 @@ function wireFacade(transport) {
   /** @type {Set<(frame:any)=>void>} */ const listeners=new Set();
   /** @type {null|(()=>void)} */ let revokeFrames=null;
   let subscriptionGeneration=0;
+  /** @type {Map<string,any>} */ const surfaceFrames=new Map();
+  /** @type {Map<string,any>} */ const surfacePorts=new Map();
+  /** @type {any} */ let wallObserver=null;
+  /** @param {string} surfaceId */
+  const presentSurfaceFrame=(surfaceId)=>{
+    if (typeof document==='undefined' || typeof document?.getElementById!=='function') return false;
+    const raw=surfaceFrames.get(surfaceId);
+    if (!raw) return false;
+    const section=document.getElementById(`mv-surface-canvas-${surfaceId}`);
+    if (!section) return false;
+    const canvas=/** @type {any} */(section.querySelector?.('canvas.mv-surface__canvas'));
+    if (!canvas) return false;
+    if (canvas.width!==raw.width) canvas.width=raw.width;
+    if (canvas.height!==raw.height) canvas.height=raw.height;
+    const ctx=canvas.getContext?.('2d');
+    if (ctx && typeof ctx.createImageData==='function' && raw.bytes instanceof Uint8Array && raw.bytes.byteLength===raw.width*raw.height*3) {
+      const img=ctx.createImageData(raw.width,raw.height);
+      const dst=img.data;
+      const src=raw.bytes;
+      for (let i=0,j=0;i<src.length;i+=3,j+=4) {
+        dst[j]=src[i];
+        dst[j+1]=src[i+1];
+        dst[j+2]=src[i+2];
+        dst[j+3]=255;
+      }
+      ctx.putImageData(img,0,0);
+    }
+    canvas.hidden=false;
+    canvas.removeAttribute?.('hidden');
+    const waiting=/** @type {any} */(section.querySelector?.('.mv-surface__waiting'));
+    if (waiting) {
+      waiting.hidden=true;
+      if (waiting.style) waiting.style.display='none';
+    }
+    section.setAttribute?.('data-state','live');
+    section.setAttribute?.('data-frame',String(raw.sha256||''));
+    section.setAttribute?.('data-generation',String(raw.frameGeneration||0));
+    return true;
+  };
+  const ensureWallObserver=()=>{
+    if (wallObserver!==null || typeof document==='undefined' || typeof MutationObserver!=='function') return;
+    const root=document.getElementById?.('metaviewer-app');
+    if (!root) return;
+    wallObserver=new MutationObserver(()=>{
+      for (const sid of surfaceFrames.keys()) {
+        const el=document.getElementById?.(`mv-surface-canvas-${sid}`);
+        if (!el) continue;
+        const c=/** @type {any} */(el.querySelector?.('canvas.mv-surface__canvas'));
+        if (el.getAttribute?.('data-state')!=='live' || c?.hidden) presentSurfaceFrame(sid);
+      }
+    });
+    wallObserver.observe(root,{childList:true,subtree:true,attributes:true,attributeFilter:['hidden','data-state','id']});
+  };
+  /** @param {string} surfaceId @param {any} port */
+  const attachWallPort=(surfaceId,port)=>{
+    const prior=surfacePorts.get(surfaceId);
+    if (prior && prior!==port) { try { prior.close?.(); } catch {} }
+    surfacePorts.set(surfaceId,port);
+    const onMessage=(/** @type {any} */event)=>{
+      const raw=event!==null && typeof event==='object' && 'data' in event ? event.data : event;
+      if (!raw || typeof raw!=='object' || raw.schema!=='frame_delivery/v0.2' || raw.kind!=='frame') return;
+      surfaceFrames.set(surfaceId,raw);
+      try {
+        port.postMessage({
+          schema:'frame_ack/v0.2',
+          kind:'ack',
+          correlation:raw.correlation,
+          principal:raw.principal,
+          epoch:raw.epoch,
+          surfaceId:raw.surfaceId,
+          surfaceGeneration:raw.surfaceGeneration,
+          frameGeneration:raw.frameGeneration,
+          leaseId:raw.leaseId,
+          outcome:'PRESENTED',
+        });
+      } catch { /* Port closed before ACK. */ }
+      ensureWallObserver();
+      presentSurfaceFrame(surfaceId);
+    };
+    if (typeof port.addEventListener==='function') port.addEventListener('message',onMessage);
+    else if (typeof port.on==='function') port.on('message',onMessage);
+    else port.onmessage=onMessage;
+    try { port.start?.(); } catch {}
+  };
   api.authority=Object.freeze({
     /** @param {...unknown} args */
     propose:(...args)=>call('propose',args),
@@ -508,13 +600,31 @@ function wireFacade(transport) {
             }
           };
           if (!validFrameNotice(value)) { closePorts();return; }
+          const sid=value.surface.surface_id;
+          const inWallApp=typeof document!=='undefined' && typeof document?.getElementById==='function' && document.getElementById('metaviewer-app')!==null;
+          if (inWallApp && !seededCaptureSurfaces.has(sid) && captureId(sid)) {
+            seededCaptureSurfaces.add(sid);
+            const initCapture=Object.freeze({type:'capture.state',recording_id:'idle',surface_id:sid,phase:'idle',frames:0,elapsed_ms:0});
+            for (const notifyCapture of [...captureCallbacks]) {
+              try { notifyCapture(initCapture); } catch {}
+            }
+          }
           // Validate once before forwarding either the notice or its byte-plane ports.
           if (ports?.length && typeof window !== 'undefined' && window.location.origin===PRIVILEGED_ORIGIN) {
-            window.postMessage({type:'metaviewer:frame-port',surface_id:value.surface.surface_id},PRIVILEGED_ORIGIN,ports);
+            if (inWallApp) {
+              attachWallPort(sid,ports[0]);
+              for (const extra of ports.slice(1)) { try { extra.close?.(); } catch {} }
+            } else {
+              window.postMessage({type:'metaviewer:frame-port',surface_id:sid},PRIVILEGED_ORIGIN,ports);
+            }
           } else {
             closePorts();
           }
           for(const notify of [...listeners]) notify(value);
+          if (inWallApp) {
+            ensureWallObserver();
+            presentSurfaceFrame(sid);
+          }
         });
         void call('subscribeFrames',[]).catch(()=>{
           if(generation!==subscriptionGeneration) return;
@@ -525,6 +635,9 @@ function wireFacade(transport) {
         if(!active) return;active=false;listeners.delete(listener);
         if(!listeners.size && revokeFrames) {
           ++subscriptionGeneration;revokeFrames();revokeFrames=null;
+          wallObserver?.disconnect?.();wallObserver=null;
+          for (const port of surfacePorts.values()) { try { port.close?.(); } catch {} }
+          surfacePorts.clear();surfaceFrames.clear();
           void call('unsubscribeFrames',[]).catch(()=>{});
         }
       };

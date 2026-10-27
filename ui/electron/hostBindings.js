@@ -80,6 +80,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
     const channelFactory = createMessageChannel;
     /** @type {Set<(entry:any)=>any>} */ const listeners = new Set();
     /** @type {Map<string,any>} */ const surfaces = new Map();
+    /** @type {Map<string,any>} */ const latestFrames = new Map();
     /** @type {Map<string,any>} */ const channels = new Map();
     /** @type {Set<string>} */ const subscriptions = new Set();
     /** @type {Set<string>} */ const delivering = new Set();
@@ -97,7 +98,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
       rejectReady(fail()); socket?.destroy();
       for (const item of pending.values()) {clearTimeout(item.timer);item.reject(fail());} pending.clear();
       for (const channel of channels.values()) {channel.port1.close();channel.port2.close();}
-      channels.clear();surfaces.clear();subscriptions.clear();listeners.clear();captureListeners.clear();
+      channels.clear();surfaces.clear();latestFrames.clear();subscriptions.clear();listeners.clear();captureListeners.clear();
     };
     /** @type {Set<(state:any)=>void>} */ const captureListeners = new Set();
     const helloTimer = setTimeout(shutdown, DEADLINE);
@@ -112,18 +113,20 @@ export async function createMainBindings({env = process.env, createMessageChanne
     /** @param {any} frame */
     function publish(frame) {
       const state = surfaces.get(frame?.surface_id);
-      if (!state || state.state !== 'active' || listeners.size === 0 || delivering.has(frame.surface_id)) return;
+      if (!state || state.state !== 'active') return;
       if (!id(frame.surface_id) || frame.schema !== 'frame_ref/v0.2' || !Number.isSafeInteger(frame.generation) || frame.generation < 1
           || typeof frame.ramws_path !== 'string' || !frame.ramws_path.startsWith('/dev/shm/')
           || !Number.isSafeInteger(frame.width) || !Number.isSafeInteger(frame.height)
           || frame.width < 1 || frame.height < 1 || frame.width > 4096 || frame.height > 4096) throw fail();
+      const published = Object.freeze({...frame});
+      latestFrames.set(frame.surface_id, published);
+      if (listeners.size === 0 || delivering.has(frame.surface_id)) return;
       let channel = channels.get(frame.surface_id);
       if (!channel) {
         if (channels.size >= MAX_ITEMS) throw fail();
         channel = channelFactory();channels.set(frame.surface_id, channel);
       }
       const binding = Object.freeze({principal:'ui',epoch:1,surfaceId:frame.surface_id,surfaceGeneration:1});
-      const published = Object.freeze({...frame});
       const entry = {frameRef:published,state:{...state},rendererPorts:[channel.port2],
         readerOptions:{binding,limits:{maxFrameBytes:MAX_FRAME,maxWidth:4096,maxHeight:4096,readTimeoutMs:1000,maxConcurrentReads:1},
           pixelEnvironment:{environmentId:config.session_id,zoom:1,dpr:1},onReleaseLease(){},
@@ -152,9 +155,17 @@ export async function createMainBindings({env = process.env, createMessageChanne
                 },release};
             } catch(error) {await file.close();throw error;}
           }},
-        portOptions:{port:channel.port1,role:'sender',binding,limits:{maxFrameBytes:MAX_FRAME,ackTimeoutMs:10000,maxSurfacesPerPort:1},onReleaseLease(){},onRevoke(){shutdown();}}};
+        portOptions:{port:channel.port1,role:'sender',binding,limits:{maxFrameBytes:MAX_FRAME,ackTimeoutMs:10000,maxSurfacesPerPort:1},onReleaseLease(){},onRevoke(){}}};
       delivering.add(frame.surface_id);
       for (const listener of listeners) Promise.resolve().then(() => listener(entry)).catch(shutdown).finally(() => delivering.delete(frame.surface_id));
+    }
+    /** @param {any} state */
+    function publishState(state) {
+      const frame = latestFrames.get(state?.surface_id);
+      if (!frame || listeners.size === 0) return;
+      const binding = Object.freeze({principal:'ui',epoch:1,surfaceId:state.surface_id,surfaceGeneration:1});
+      const entry = {stateOnly:true,frameRef:frame,state:{...state},readerOptions:{binding}};
+      for (const listener of listeners) Promise.resolve().then(() => listener(entry)).catch(shutdown);
     }
     /** @param {any} state */
     function subscribeSurface(state) {
@@ -201,6 +212,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
         if (!surfaces.has(state.surface_id) && surfaces.size >= MAX_ITEMS) throw fail();
         surfaces.set(state.surface_id,Object.freeze({...state}));
         subscribeSurface(state);
+        if (body.event === 'state_changed') publishState(state);
       }
       const layoutError = body.schema === 'surface_event/v0.2' && body.event === 'error'
         && ['LAYOUT_UNKNOWN_SLOT','LAYOUT_ILLEGAL_TRANSITION','LAYOUT_INPUT_MODE_READ'].includes(body.data?.code)
@@ -319,7 +331,13 @@ export async function createMainBindings({env = process.env, createMessageChanne
       /** @param {(entry:any)=>any} listener */
       subscribe(listener) {
         if (disposed || listeners.size) throw fail();listeners.add(listener);
-        try {for (const state of surfaces.values()) subscribeSurface(state);} catch {shutdown();throw fail();}
+        try {
+          for (const state of surfaces.values()) {
+            subscribeSurface(state);
+            const latest = latestFrames.get(state.surface_id);
+            if (latest && state.state === 'active') publish(latest);
+          }
+        } catch {shutdown();throw fail();}
         return () => listeners.delete(listener);
       }}}};
   } catch {socket?.destroy();throw fail();}

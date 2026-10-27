@@ -206,7 +206,16 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
       validateIntentBody(jsonObject(json));
       if (await core.request({op:'intent',json}) !== true) throw new Error('OUTCOME'); return true;
     },
-    subscribeFrames: async () => { subscribed=true; return true; },
+    subscribeFrames: async () => {
+      subscribed=true;
+      const queued=[...pendingEntries.values()];
+      pendingEntries.clear();
+      for (const entry of queued) {
+        if (!subscribed || disposed) break;
+        await deliverAuthorityFrame(entry,contents,streams);
+      }
+      return true;
+    },
     unsubscribeFrames: async () => { subscribed=false; return true; },
     terminalEnabled: async (/** @type {boolean} */value) => {
       if (typeof value !== 'boolean') throw new Error('PAYLOAD');
@@ -240,12 +249,26 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     }
   } catch(e) { for (const channel of channels) ipcMain.removeHandler?.(channel); throw e; }
   // The source owns reader/port capabilities and calls deliver; no frame path is sent.
+  /** @type {Map<string, any>} */ const pendingEntries = new Map();
   /** @type {Set<any>} */ const streams = new Set();
   const stopFrames = frames ? frames.subscribe(async (/** @type {any} */entry) => {
-    if (!subscribed || disposed) return;
+    if (disposed) return;
+    if (!subscribed) {
+      const sid = entry?.frameRef?.surface_id;
+      if (typeof sid === 'string') {
+        const prior = pendingEntries.get(sid);
+        if (entry.stateOnly && prior && !prior.stateOnly) {
+          pendingEntries.set(sid, {...prior, state: entry.state});
+        } else {
+          pendingEntries.set(sid, entry);
+        }
+      }
+      return;
+    }
     await deliverAuthorityFrame(entry,contents,streams);
   }) : () => {};
   return {async dispose() { disposed=true; subscribed=false; stopFrames();
+    pendingEntries.clear();
     for(const stream of [...streams]) {await stream.reader.closeReader();stream.port.revokeFramePort('SHUTDOWN');}
     streams.clear();terminal?.dispose?.();for(const channel of channels) ipcMain.removeHandler?.(channel);
   }};
@@ -253,21 +276,6 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
 /** Trusted host frame capability entry: readerOptions/portOptions, state, frameRef.
  * @param {any} entry @param {any} contents @param {Set<any>} streams */
 export async function deliverAuthorityFrame(entry,contents,streams) {
-  const binding=entry.readerOptions.binding;
-  const bindingKeys=['principal','epoch','surfaceId','surfaceGeneration'];
-  const key=JSON.stringify(bindingKeys.map(name=>binding[name]));
-  let stream=[...streams].find(item=>item.key===key);
-  if (!stream) {
-    if (streams.size>=64) throw new Error('FRAME_STREAM_CAP');
-    if (bindingKeys.some(name=>binding[name]!==entry.portOptions.binding?.[name]) || entry.portOptions.role!=='sender') throw new Error('FRAME_BINDING');
-    const reader=createFrameReader(entry.readerOptions);
-    let port;
-    const revoke=entry.portOptions.onRevoke;
-    try { port=createFramePort({...entry.portOptions,onRevoke:(/** @type {any} */notice)=>{
-      streams.delete(stream);void reader.closeReader();revoke(notice);
-    }}); } catch(e) {await reader.closeReader();throw e;}
-    stream={key,reader,port,announced:false};streams.add(stream);
-  }
   const raw=entry.frameRef;
   const ref={schema:raw.schema,surface_id:raw.surface_id,generation:raw.generation,tick:raw.tick,
     ts_ns:raw.ts_ns,width:raw.width,height:raw.height,format:raw.format,sha256:raw.sha256,capture_us:raw.capture_us};
@@ -285,6 +293,28 @@ export async function deliverAuthorityFrame(entry,contents,streams) {
       || !['folded','unfolded','pinned'].includes(state.visibility)
       || !['agent','human','shared'].includes(state.control)
       || typeof state.profile_id!=='string' || !state.profile_id.length || state.profile_id.length>128) throw new Error('SURFACE_STATE');
+  if (entry.stateOnly) {
+    contents.postMessage('metaviewer:authority.frames',{frame_ref:ref,surface:state},[]);
+    return true;
+  }
+  const binding=entry.readerOptions.binding;
+  const bindingKeys=['principal','epoch','surfaceId','surfaceGeneration'];
+  const key=JSON.stringify(bindingKeys.map(name=>binding[name]));
+  let stream=[...streams].find(item=>item.key===key);
+  if (!stream) {
+    if (streams.size>=64) throw new Error('FRAME_STREAM_CAP');
+    if (bindingKeys.some(name=>binding[name]!==entry.portOptions.binding?.[name]) || entry.portOptions.role!=='sender') throw new Error('FRAME_BINDING');
+    let currentAcquire=entry.readerOptions.acquirePublishedLease;
+    const reader=createFrameReader({...entry.readerOptions,acquirePublishedLease:(/** @type {any} */req)=>currentAcquire(req)});
+    let port;
+    const revoke=entry.portOptions.onRevoke;
+    try { port=createFramePort({...entry.portOptions,onRevoke:(/** @type {any} */notice)=>{
+      streams.delete(stream);void reader.closeReader();revoke(notice);
+    }}); } catch(e) {await reader.closeReader();throw e;}
+    stream={key,reader,port,announced:false,setAcquire:(/** @type {any} */fn)=>{currentAcquire=fn;}};streams.add(stream);
+  } else {
+    stream.setAcquire?.(entry.readerOptions.acquirePublishedLease);
+  }
   const result=await stream.reader.readFrame(entry.frameRef);
   if (!result.ok) return false;
   const sent=stream.port.postFrame(result.frame);

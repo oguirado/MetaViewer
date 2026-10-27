@@ -778,10 +778,21 @@ impl Server {
         boundary: Witness,
     ) -> Result<crate::admission::Outcome> {
         use crate::wire::payload::{SurfaceControl, SurfaceState};
+        let agent_controlled = if created {
+            s.control == SurfaceControl::Agent
+        } else {
+            self.authority
+                .state()
+                .surfaces
+                .get(&s.surface_id)
+                .map_or(s.control == SurfaceControl::Agent, |old| {
+                    old.agent_controlled
+                })
+        };
         let surface = Surface {
             display: s.display.clone(),
             owner: self.agent()?,
-            agent_controlled: s.control == SurfaceControl::Agent,
+            agent_controlled,
             live: s.state == SurfaceState::Active,
             frame: None,
             refresh_after: None,
