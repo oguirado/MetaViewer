@@ -200,6 +200,11 @@
    "why": "Verify the 56 findings of the Gemini Argon cross-review of today's integrated Sol code against the current head, rank them and turn the confirmed ones into disjoint Sol fix units.",
    "orchestrator": "conductor"
   },
+  "mvrv6": {
+   "stage": "review",
+   "why": "Verify the findings (1 critical, 6 high, 10 medium) of the Gemini Argon cross-review of the day-2 integrations before any fix, and turn confirmed ones into Sol fix units.",
+   "orchestrator": "conductor"
+  },
   "mv0r2b": {
    "stage": "testing",
    "why": "Refresh the external testing round-2 prompts (Jules and ChatGPT, T1-T8) to the integration head after G-W1 and the W1 judgement, so testers target new code and still-open items.",
