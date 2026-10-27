@@ -351,6 +351,51 @@ export function isPrivilegedAppUrl(value) {
 }
 
 /**
+ * Decode and validate one raw URL path segment, including a second
+ * decode-then-validate pass so `%25`-encoded traversal spellings are
+ * refused identically by navigation and protocol gates.
+ * @param {string} part Raw non-empty path segment between '/' delimiters.
+ * @returns {string | null} Single-decoded segment when safe, or null on escape.
+ */
+function decodeSafeSegment(part) {
+  /** @type {string | null} */
+  let decoded = null;
+  try {
+    decoded = decodeURIComponent(part);
+  } catch {
+    return null;
+  }
+  if (
+    decoded === '' ||
+    decoded === '.' ||
+    decoded === '..' ||
+    decoded.includes('/') ||
+    decoded.includes('\\') ||
+    decoded.includes(String.fromCharCode(0))
+  ) {
+    return null;
+  }
+  /** @type {string | null} */
+  let second = null;
+  try {
+    second = decodeURIComponent(decoded);
+  } catch {
+    return null;
+  }
+  if (
+    second === '' ||
+    second === '.' ||
+    second === '..' ||
+    second.includes('/') ||
+    second.includes('\\') ||
+    second.includes(String.fromCharCode(0))
+  ) {
+    return null;
+  }
+  return decoded;
+}
+
+/**
  * True when the raw request-target path carries an escape: dot
  * segments, decoded separators, NUL or undecodable escapes. The scan
  * runs on the raw segments because WHATWG normalization would erase
@@ -381,17 +426,7 @@ function hasPathEscape(rawUrl) {
     if (part === '') {
       continue;
     }
-    /** @type {string | null} */
-    let decoded = null;
-    try {
-      decoded = decodeURIComponent(part);
-    } catch {
-      return true;
-    }
-    if (decoded === '' || decoded === '.' || decoded === '..') {
-      return true;
-    }
-    if (decoded.includes('/') || decoded.includes('\\') || decoded.includes(String.fromCharCode(0))) {
+    if (decodeSafeSegment(part) === null) {
       return true;
     }
   }
@@ -945,20 +980,8 @@ export async function handleAppRequest(rendererRoot, request, options) {
       if (part === '') {
         continue;
       }
-      /** @type {string | null} */
-      let decoded = null;
-      try {
-        decoded = decodeURIComponent(part);
-      } catch {
-        decoded = null;
-      }
+      const decoded = decodeSafeSegment(part);
       if (decoded === null) {
-        return refusal(403, 'forbidden');
-      }
-      if (decoded === '' || decoded === '.' || decoded === '..') {
-        return refusal(403, 'forbidden');
-      }
-      if (decoded.includes('/') || decoded.includes('\\') || decoded.includes(String.fromCharCode(0))) {
         return refusal(403, 'forbidden');
       }
       segments.push(decoded);
