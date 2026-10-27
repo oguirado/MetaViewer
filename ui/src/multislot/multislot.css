@@ -114,3 +114,9 @@
   outline: var(--cuk-semantic-focus-ring-width) solid var(--cuk-semantic-focus-ring-color);
   outline-offset: var(--cuk-semantic-focus-ring-offset);
 }
+
+/* The kit identity plate reserves unknown metadata chips. Omit those absent
+ * fields in the host; known fields retain their labelled titles and Copy ID. */
+.mv-multislot-host .ms2-plate-chip-unknown {
+  display: none;
+}

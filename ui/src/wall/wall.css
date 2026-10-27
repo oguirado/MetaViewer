@@ -152,3 +152,12 @@
 .mv-tile[data-tile-state="connecting"] .mv-tile-capture-host {
   overflow: auto;
 }
+
+/* Fit the waiting copy into short wall tiles. The kit surface's fixed minimum
+ * otherwise clips inside its own overflow boundary before host scrolling helps. */
+.mv-tile[data-tile-state="connecting"] .mv-surface__waiting {
+  min-height: 0;
+  box-sizing: border-box;
+  padding: var(--cuk-semantic-spacing-sm);
+  overflow-wrap: anywhere;
+}

@@ -40,6 +40,36 @@ const props = defineProps({
   storage: { type: /** @type {import('vue').PropType<LayoutStorage>} */ (Object), required: true },
 });
 const settled = ref(false);
+/** @typedef {Readonly<{code:string, saveRefused:boolean}>} LayoutUnavailableRow */
+const layoutUnavailable = ref(/** @type {LayoutUnavailableRow|null} */ (null));
+// The preload adapter continues to reject failed reads. Only this presentation
+// boundary supplies an explicit in-memory default, with a session-long write lock.
+// Never turn a failed read into the kit's writable "missing profile" null path.
+const workspaceStorage = markRaw({
+  readRaw: async () => {
+    if (layoutUnavailable.value) return JSON.stringify(props.layout);
+    try { return await props.storage.readRaw(); }
+    catch (error) {
+      const code = String(error).match(/\bLAYOUT_[A-Z_]+\b/)?.[0] ?? 'LAYOUT_LOAD_FAILED';
+      const current = /** @type {LayoutUnavailableRow|null} */ (layoutUnavailable.value);
+      if (!current?.saveRefused) layoutUnavailable.value = Object.freeze({ code, saveRefused: false });
+      return JSON.stringify(props.layout);
+    }
+  },
+  writeAtomic: async (/** @type {string} */ json) => {
+    if (layoutUnavailable.value) {
+      layoutUnavailable.value = Object.freeze({ code: 'LAYOUT_SAVE_REFUSED', saveRefused: true });
+      throw new Error('LAYOUT_SAVE_REFUSED');
+    }
+    try { await props.storage.writeAtomic(json); }
+    catch (error) {
+      if (layoutUnavailable.value || /\bLAYOUT_SAVE_REFUSED\b/.test(String(error))) {
+        layoutUnavailable.value = Object.freeze({ code: 'LAYOUT_SAVE_REFUSED', saveRefused: true });
+      }
+      throw error;
+    }
+  },
+});
 const unavailable = Object.freeze({ status: 'unavailable', stale: true, envelope: null,
   error: Object.freeze({ code: 'PROJECTION_UNAVAILABLE', message: 'Authoritative surface feed unavailable' }) });
 const projectionView = markRaw({
@@ -200,7 +230,11 @@ onBeforeUnmount(() => {
 function selectCapsule(payload) {
   if (typeof payload?.capsuleId === 'string' && rows.value.some(row => row.id === payload.capsuleId)) selectedCapsuleId.value = payload.capsuleId;
 }
+let terminalGeneration = 0;
+let terminalOpening = false;
+function cancelTerminalOpening() { terminalGeneration += 1; terminalOpening = false; }
 function toggleCreative() {
+  cancelTerminalOpening();
   if (!selectedSurface.value) return;
   creativeOpen.value = !creativeOpen.value;
   settingsOpen.value = false;
@@ -208,6 +242,7 @@ function toggleCreative() {
   terminalOpen.value = false;
 }
 function openMultislot() {
+  cancelTerminalOpening();
   creativeOpen.value = false;
   if (!selectedSurface.value) return;
   settingsOpen.value = false;
@@ -215,19 +250,38 @@ function openMultislot() {
   multislotOpen.value = true;
 }
 function toggleSettings() {
+  cancelTerminalOpening();
   creativeOpen.value = false;
   const next = !settingsOpen.value;
   multislotOpen.value = false;
   terminalOpen.value = false;
   settingsOpen.value = next;
 }
-function toggleTerminal() {
-  creativeOpen.value = false;
-  const next = !terminalOpen.value;
-  multislotOpen.value = false;
-  settingsOpen.value = false;
-  terminalOpen.value = next;
+async function toggleTerminal() {
+  const next = !(terminalOpen.value || terminalOpening);
+  const generation = ++terminalGeneration;
+  terminalOpening = next;
+  try {
+    // Only replay opts into its fake broker; live access uses explicit enable.
+    if (next && props.fixture?.key === 'live-replay' && props.terminalBroker) {
+      const { createSideTerminalBrokerFacade } = await import('./terminal/sideTerminalFacade.js');
+      if (!hostActive || generation !== terminalGeneration) return;
+      const broker = createSideTerminalBrokerFacade(props.terminalBroker);
+      if (broker?.canEnable && !broker.state.enabled) await broker.setEnabled(true);
+    }
+    if (!hostActive || generation !== terminalGeneration) return;
+    creativeOpen.value = false;
+    multislotOpen.value = false;
+    settingsOpen.value = false;
+    terminalOpen.value = next;
+  } catch {
+    if (!hostActive || generation !== terminalGeneration) return;
+    hostOutcome.value = { code: 'HOST_REQUEST_REFUSED', message: 'This request is unavailable. Please try again.', tone: 'refusal' };
+  } finally {
+    if (generation === terminalGeneration) terminalOpening = false;
+  }
 }
+
 const terminalTop = ref(0), terminalBottom = ref(0);
 function measureChrome() {
   terminalTop.value = document.getElementById('shell/header')?.offsetHeight ?? 0;
@@ -333,12 +387,18 @@ const chromeWorkspace = markRaw(defineComponent({
       <div v-if="!nestedMode.displayOnly && !creativeOpen" class="mv-shell-rail"><Sidebar :groups="groups" :collapsed="!railOpen" :overlay="true" workspace-label="MetaViewer" @open="openCapsule" /></div>
       <main id="shell-wall" aria-label="MetaViewer capsule wall">
         <HostOutcome :row="hostOutcome" />
+        <p v-if="layoutUnavailable && !creativeOpen && !settingsOpen && !multislotOpen && !nestedMode.displayOnly" id="mv-layout-unavailable" data-semantic-anchor="layout/unavailable"
+          class="mv-layout-unavailable" role="alert" :data-error-code="layoutUnavailable.code">
+          <strong>Layout unavailable.</strong> {{ layoutUnavailable.saveRefused
+            ? 'Changes cannot be saved in this session.'
+            : 'The default layout is shown read-only. Changes will not be saved.' }}
+        </p>
         <section v-if="nestedMode.displayOnly" class="mv-nested-wall" aria-label="Nested capsule wall">
           <article v-for="surface in rows" :key="surface.id" :aria-label="surface.title || surface.id">
             <SurfaceCanvas :surface-id="surface.id" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :state="surface.attachmentState === 'live' ? 'live' : 'connecting'" />
           </article>
         </section>
-        <WallWorkspace v-else-if="!creativeOpen" :key="wallView" :hidden="!rows.length" ref="wall" :workspace-component="chromeWorkspace" :scope="props.scope" :default-profile="props.layout" :storage="props.storage"
+        <WallWorkspace v-else-if="!creativeOpen" :key="wallView" :hidden="!rows.length" ref="wall" :workspace-component="chromeWorkspace" :scope="props.scope" :default-profile="props.layout" :storage="workspaceStorage"
           owner-window-id="main-wall" :projection-view="feed" :allow-lost-surface="admitLostRows" :intent-builders="props.runtime?.intentBuilders ?? intentBuilders"
           :control-registry="props.runtime?.controlRegistry ?? controlRegistry" :scheduler="props.runtime?.scheduler ?? scheduler" :tile-scheduler="props.runtime?.tileScheduler ?? tileScheduler"
           :color-scheme="scheme === 'mv-dark' ? 'dark' : 'light'" density="compact" @ready="revealRows" @wall-settled="onWorkspaceSettled" @activate-surface="selectCapsule" @submit-intent="dispatch">
@@ -379,12 +439,13 @@ const chromeWorkspace = markRaw(defineComponent({
 html, body, #metaviewer-app { width:100%; height:100%; margin:0; overflow:hidden; }
 body { font-family:var(--cuk-semantic-typography-font-family-sans, system-ui, sans-serif); color:var(--cuk-semantic-text-primary); background:var(--cuk-semantic-surface-canvas); }
 .mv-shell { height:100dvh; display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:var(--cuk-component-app-shell-topbar-height) minmax(0,1fr) auto var(--cuk-component-app-shell-status-height); background:var(--cuk-semantic-surface-canvas); }
-.mv-terminal { position:fixed; inset:0; pointer-events:none; }
+.mv-terminal { position:fixed; inset:0; z-index:var(--cuk-semantic-z-index-overlay); pointer-events:none; }
 .mv-terminal[hidden] { display:none; }
 .mv-terminal > * { pointer-events:auto; }
 .mv-shell-body { display:flex; min-width:0; min-height:0; position:relative; }
 .mv-shell-rail { width:var(--cuk-semantic-size-rail-collapsed-width); flex:none; position:relative; }
 .mv-shell main { position:relative; flex:1; min-height:0; min-width:0; }
+.mv-layout-unavailable { position:absolute; top:var(--cuk-semantic-spacing-md); left:var(--cuk-semantic-spacing-md); right:var(--cuk-semantic-spacing-md); z-index:5; margin:0; padding:var(--cuk-semantic-spacing-sm); color:var(--cuk-semantic-text-primary); background:var(--cuk-semantic-surface-canvas); border:var(--cuk-semantic-border-width) solid var(--cuk-semantic-border-default); font-size:var(--cuk-semantic-typography-font-size-sm); }
 .mv-shell .cuk-capsule-panel { height:100%; }
 .mv-shell .mv-surface-host { width:100%; height:100%; min-height:0; }
 .mv-shell .wall-workspace, .mv-shell .cuk-shell-workspace { height:100%; }

@@ -66,6 +66,7 @@ function getLayoutFacade() {
  * @returns {LayoutStorage}
  */
 function createLayoutStorage(facade) {
+  let loadFailed = false;
   return {
     readRaw: async () => {
       // Mount can precede main's handler binding. Wait only for handler
@@ -76,13 +77,18 @@ function createLayoutStorage(facade) {
           if (raw !== null && typeof raw !== 'string') throw new Error('Invalid layout payload');
           return migrateWallLayout(raw);
         } catch (error) {
-          if (!String(error).includes(HANDLER_NOT_INSTALLED)) throw error;
+          if (!String(error).includes(HANDLER_NOT_INSTALLED)) {
+            loadFailed = true;
+            throw error;
+          }
           await new Promise((resolve) => setTimeout(resolve, READ_RETRY_MS));
         }
       }
+      loadFailed = true;
       throw new Error('Layout service did not become ready');
     },
     writeAtomic: async (/** @type {string} */ json) => {
+      if (loadFailed) throw new Error('LAYOUT_SAVE_REFUSED');
       requireAck(await facade.save(json));
     },
   };
@@ -180,11 +186,14 @@ async function bootstrap() {
   // FIXTURES key, so the room's exact key-set contract stays untouched.
   // Live boot and every other fixture ignore this branch entirely.
   const isLiveReplay = new URLSearchParams(window.location.search).get('state') === 'live-replay';
+  const isLayoutUnavailable = requestedStates[0] === 'layout-unavailable';
   const parsed = parseStateQuery(window.location.search);
-  if (!parsed.ok && parsed.error.code !== 'ERR_MISSING_STATE_PARAM' && !isLiveReplay) throw new Error(parsed.error.code);
-  const resolved = parsed.ok ? resolveFixture(parsed.key) : null;
+  if (!parsed.ok && parsed.error.code !== 'ERR_MISSING_STATE_PARAM' && !isLiveReplay && !isLayoutUnavailable) throw new Error(parsed.error.code);
+  // A diagnostic alias keeps the canonical fixture inventory unchanged.
+  const resolved = isLayoutUnavailable ? resolveFixture('one') : parsed.ok ? resolveFixture(parsed.key) : null;
   if (resolved && !resolved.ok) throw new Error(resolved.error.code);
-  const baseFixture = resolved?.ok ? resolved.fixture : (isLiveReplay ? LIVE_REPLAY_FIXTURE : null);
+  const baseFixture = resolved?.ok ? (isLayoutUnavailable
+    ? Object.freeze({ ...resolved.fixture, key: 'layout-unavailable' }) : resolved.fixture) : (isLiveReplay ? LIVE_REPLAY_FIXTURE : null);
   // Fixture-only vision hook (MV-5): an explicit ?scheme= overrides the
   // fixture default. Live boot ignores the parameter entirely. Matching is
   // exact and case-sensitive; unknown, empty, or repeated values refuse boot
@@ -208,7 +217,9 @@ async function bootstrap() {
   const result = fixture ? (isLiveReplay ? createLiveReplayMount(window.location.search) : createFixtureRuntime(fixture)) : null;
   if (result && !result.ok) throw new Error(result.error.code);
   const fixtureMount = result?.ok ? result.mount : null;
-  const storage = fixtureMount
+  const storage = isLayoutUnavailable
+    ? createLayoutStorage({ load: async () => { throw new Error('LAYOUT_CONTRACT_ABSENT'); }, save: async () => { throw new Error('LAYOUT_SAVE_REFUSED'); } })
+    : fixtureMount
     ? { readRaw: async () => null, writeAtomic: async (/** @type {string} */ _json) => {} }
     : createLayoutStorage(getLayoutFacade());
   const layout = fixture ? createWallLayout(SCOPE, [...fixture.capsules]) : createInitialLayout(SCOPE);

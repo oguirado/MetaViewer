@@ -20,7 +20,7 @@
   position: fixed;
   right: var(--cuk-semantic-spacing-md);
   bottom: var(--cuk-component-app-shell-status-height);
-  z-index: 100;
+  z-index: calc(var(--cuk-semantic-z-index-overlay) + 1);
   max-width: min(90vw, 28rem);
   border: 1px solid var(--cuk-semantic-border-default);
 }
