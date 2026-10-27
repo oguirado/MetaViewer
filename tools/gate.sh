@@ -485,6 +485,30 @@ class GateTests(unittest.TestCase):
                    ' })\n}\n')
         environment = dict(os.environ)
         self.assertIn('PASS go', self.call('--leg', 'go', env=environment))
+        for symbol in ('Fstatat', 'Dup2'):
+            self.write('daemon-adapter/xarch_plant_test.go',
+                       'package adapter\nimport ("syscall"; "testing")\n'
+                       f'var _ = syscall.{symbol}\n'
+                       'func TestXArchPlant(t *testing.T) {}\n')
+            output = self.call('--leg', 'go', expected=1, env=environment)
+            self.assertIn(f'syscall.{symbol}', output)
+            self.assertIn('FAIL go', output)
+            self.assertIn('FAIL aggregate', output)
+        self.assertFalse((ROOT / 'daemon-adapter/xarch_plant_test.go').exists())
+        (self.fixture / 'daemon-adapter/xarch_plant_test.go').unlink()
+        other_arch = 'amd64' if os.uname().machine in ('aarch64', 'arm64') else 'arm64'
+        self.write(f'daemon-adapter/xarch_{other_arch}_test.go',
+                   'package adapter\nimport (_ "unsafe"; "testing")\n'
+                   '//go:linkname missingXArch syscall.missing_xarch_symbol\n'
+                   'func missingXArch()\n'
+                   'func TestXArchLink(t *testing.T) { missingXArch() }\n')
+        output = self.call('--leg', 'go', expected=1, env=environment)
+        self.assertIn('missing_xarch_symbol', output)
+        self.assertIn("'-exec'", output)
+        self.assertIn('FAIL go', output)
+        self.assertIn('FAIL aggregate', output)
+        self.assertFalse((ROOT / f'daemon-adapter/xarch_{other_arch}_test.go').exists())
+        (self.fixture / f'daemon-adapter/xarch_{other_arch}_test.go').unlink()
         self.write('daemon-adapter/gate_test.go',
                    'package adapter\nimport "testing"\n'
                    'func TestGate(t *testing.T) { t.Fatal("planted Go failure") }\n')
@@ -1132,11 +1156,21 @@ def go_leg(root, environment):
         print('go: missing tool: go', file=sys.stderr)
         return 1
     child = dict(environment, GOPROXY='off', GOSUMDB='off', GOTOOLCHAIN='local')
+    host_arch = environment.get('GOARCH') or (
+        'arm64' if os.uname().machine in ('aarch64', 'arm64') else 'amd64')
+    other_arch = 'amd64' if host_arch == 'arm64' else 'arm64'
+    cross = dict(child, GOOS='linux', GOARCH=other_arch)
     # Go appends test/subtest names to TMPDIR; keep Unix socket paths short.
     with tempfile.TemporaryDirectory(prefix='g-', dir='/tmp') as temporary:
         child['TMPDIR'] = temporary
-        for arguments in (['vet', './...'], ['test', '-race', '-count=1', './...']):
-            rc = bounded([go, *arguments], root / 'daemon-adapter', child)
+        cross['TMPDIR'] = temporary
+        for env, arguments in (
+            (child, ['vet', './...']),
+            (child, ['test', '-race', '-count=1', './...']),
+            (cross, ['vet', './...']),
+            (cross, ['test', '-run', '^$', '-exec', '/bin/true', './...']),
+        ):
+            rc = bounded([go, *arguments], root / 'daemon-adapter', env)
             if rc:
                 print(f'go: child rc={rc}: {arguments!r}', file=sys.stderr)
                 return 1
