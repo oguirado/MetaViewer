@@ -308,6 +308,22 @@ fn socket_flow_admission_control_and_replay() {
         let f1 = frame.value(1);
         daemon.send(f1.clone()).await;
         assert!(matches!(ui.receive().await.body, Command::FrameRef(_)));
+        // Unsupported executor actions are refused before any attempt is reserved.
+        for (id, action) in [
+            ("scroll-refused", json!({"type":"scroll","dx":0,"dy":1})),
+            ("wait-refused", json!({"type":"wait","ms":1})),
+        ] {
+            let before: Value =
+                serde_json::from_slice(&server.lock().unwrap().snapshot().unwrap()).unwrap();
+            let mut p = proposal(id, &f1);
+            p["action"] = action;
+            agent.send(p).await;
+            agent.verdict("refused", Some("POLICY")).await;
+            let after: Value =
+                serde_json::from_slice(&server.lock().unwrap().snapshot().unwrap()).unwrap();
+            assert_eq!(before["leases"], after["leases"]);
+            assert_eq!(before["remaining_budget"], after["remaining_budget"]);
+        }
         agent.send(proposal("first", &f1)).await;
         agent.verdict("admitted", None).await;
         let input = serde_json::to_value(daemon.receive().await.body).unwrap();
@@ -317,16 +333,42 @@ fn socket_flow_admission_control_and_replay() {
             "../../contracts/examples/v0.2/action_receipt.valid.json"
         ))
         .unwrap();
+        receipt["verified"] = false.into();
+        receipt["error"] = "native input failed; no post-input frame".into();
+        receipt["proposal_id"] = "unknown".into();
+        let before: Value =
+            serde_json::from_slice(&server.lock().unwrap().snapshot().unwrap()).unwrap();
+        daemon.send(receipt.clone()).await;
+        daemon.verdict("refused", Some("POLICY")).await;
+        let after: Value =
+            serde_json::from_slice(&server.lock().unwrap().snapshot().unwrap()).unwrap();
+        assert_eq!(before["leases"], after["leases"]);
+        assert_eq!(before["remaining_budget"], after["remaining_budget"]);
         receipt["proposal_id"] = "first".into();
         receipt["after_frame"] = f1.clone();
+        // An error can never be reported as verified, nor clear the live lease.
+        receipt["verified"] = true.into();
+        let before: Value =
+            serde_json::from_slice(&server.lock().unwrap().snapshot().unwrap()).unwrap();
         daemon.send(receipt.clone()).await;
-        assert!(matches!(
-            agent.receive().await.body,
-            Command::ActionReceipt(_)
-        ));
+        daemon.verdict("refused", Some("POLICY")).await;
+        let after: Value =
+            serde_json::from_slice(&server.lock().unwrap().snapshot().unwrap()).unwrap();
+        assert_eq!(before["leases"], after["leases"]);
+        assert_eq!(before["remaining_budget"], after["remaining_budget"]);
+        receipt["verified"] = false.into();
+        daemon.send(receipt.clone()).await;
+        let settled = serde_json::to_value(agent.receive().await.body).unwrap();
+        assert_eq!(settled["verified"], false);
+        assert_ne!(settled["error"], "");
+        let state: Value =
+            serde_json::from_slice(&server.lock().unwrap().snapshot().unwrap()).unwrap();
+        assert_eq!(state["leases"], json!({}));
         agent.send(proposal("stale", &frame.value(2))).await;
         agent.verdict("refused", Some("STALE_FRAME")).await;
-        agent.send(proposal("cancel", &f1)).await;
+        daemon.send(frame.value(2)).await;
+        ui.receive().await;
+        agent.send(proposal("cancel", &frame.value(2))).await;
         agent.verdict("admitted", None).await;
         daemon.receive().await;
         ui.send(control("take_control")).await;
@@ -357,7 +399,9 @@ fn socket_flow_admission_control_and_replay() {
             .await;
         receipt["proposal_id"] = "cancel".into();
         daemon.send(receipt).await;
-        agent.receive().await;
+        let drained = serde_json::to_value(agent.receive().await.body).unwrap();
+        assert_eq!(drained["verified"], false);
+        assert_ne!(drained["error"], "");
         ui.send(control("release_control")).await;
         assert_eq!(
             serde_json::to_value(daemon.receive().await.body).unwrap()["op"],
@@ -676,6 +720,8 @@ fn agent_tools_observe_propose_and_wait_for_receipt() {
             "../../contracts/examples/v0.2/action_receipt.valid.json"
         ))
         .unwrap();
+        receipt["verified"] = false.into();
+        receipt["error"] = "native execution failed".into();
         receipt["proposal_id"] = "tool-proposal".into();
         receipt["after_frame"] = f.clone();
         daemon.send(receipt).await;

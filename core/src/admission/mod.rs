@@ -4,6 +4,8 @@
 //! events; proposals enter only through closed decoding and peer binding.
 //! [TARGET, unit decision] Scroll dx/dy must fit signed 32-bit executor inputs;
 //! larger deltas return OutOfBounds before reservation and again before dispatch.
+//! [TARGET, unit decision] Scroll and wait are unsupported by the native adapter;
+//! after numeric/budget rails they receive Policy before reservation or dispatch.
 //! Budget counts admitted attempts; unknown dispatched work is never refunded.
 //! Each proposal is dispatched at most once, below its retry ceiling; retries
 //! require a new frame-bound admission. Receipt here settles execution only,
@@ -581,6 +583,12 @@ impl CoreState {
             if i32::try_from(a.dx).is_err() || i32::try_from(a.dy).is_err() {
                 return Ok(Some(Refusal::OutOfBounds));
             }
+        }
+        if matches!(
+            p.action,
+            ActionProposalAction::Case3(_) | ActionProposalAction::Case4(_)
+        ) {
+            return Ok(Some(Refusal::Policy));
         }
         if let ActionProposalAction::Case0(a) = &p.action {
             if a.x >= f.width || a.y >= f.height {

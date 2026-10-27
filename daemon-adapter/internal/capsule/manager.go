@@ -478,11 +478,19 @@ func (m *Manager) MarkLost(id string, confirmedAbsent bool) (json.RawMessage, er
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	b, ok := m.bindings[id]
+	if confirmedAbsent && ok && b.Surface.State == "lost" {
+		return nil, nil
+	}
 	if !confirmedAbsent || !ok || b.Surface.State != "active" || m.destroying[id] {
 		return nil, fault("surface", "confirmed active disappearance required")
 	}
-	if m.hasPending(id) {
-		return nil, fault("POLICY", "input must be drained before marking lost")
+	// [TARGET, unit decision] Confirmed native loss invalidates in-flight input.
+	// Cancel its execution/proof without waiting under mu; completion must fail
+	// against the lost binding and the wire owner settles the proposal as failed.
+	for _, p := range m.pending {
+		if p.surface == id {
+			p.cancel()
+		}
 	}
 	b.Surface.State = "lost"
 	m.bindings[id] = b
@@ -599,6 +607,9 @@ func (m *Manager) input(ctx context.Context, r Request, version string) ([]json.
 		m.mu.Unlock()
 		e := m.cfg.VerifyHoldingsInput(run, b, q.ProposalID, action, *receipt.InputMonoNS)
 		m.mu.Lock()
+		if m.bindings[q.SurfaceID].Surface.State != "active" {
+			return nil, fault("surface", "surface lost during input verification")
+		}
 		if pending.cancelled {
 			return nil, fault("SURFACE_NOT_AGENT_CONTROLLED", "input verification cancelled by takeover")
 		}

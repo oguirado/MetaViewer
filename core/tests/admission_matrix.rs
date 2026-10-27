@@ -445,12 +445,48 @@ fn scroll_executor_rails_refuse_before_effect() {
             action[field] = delta.into();
             let out = s.apply(&Input::Propose(request(1, action))).unwrap();
             if i32::try_from(delta).is_ok() {
-                assert_eq!(out.reason, None);
+                assert_eq!(out.reason, Some(Refusal::Policy));
             } else {
                 assert_eq!(out.reason, Some(Refusal::OutOfBounds));
-                assert_eq!(s.domain_snapshot().unwrap(), before);
-                assert!(s.leases.is_empty());
             }
+            assert_eq!(s.domain_snapshot().unwrap(), before);
+            assert!(s.leases.is_empty());
+            assert!(s.pending.is_empty());
         }
+    }
+}
+
+#[test]
+fn unsupported_wait_refuses_before_reservation_but_native_inputs_admit() {
+    let mut s = state();
+    let before = s.domain_snapshot().unwrap();
+    let out = s
+        .apply(&Input::Propose(request(1, json!({"type":"wait", "ms":1}))))
+        .unwrap();
+    assert_eq!(out.reason, Some(Refusal::Policy));
+    assert_eq!(s.domain_snapshot().unwrap(), before);
+    assert!(s.leases.is_empty());
+    assert!(s.pending.is_empty());
+
+    for action in [
+        json!({"type":"click", "x":3, "y":4, "button":"left"}),
+        json!({"type":"key", "keys":["a"]}),
+        json!({"type":"type", "text":"ready"}),
+    ] {
+        let mut s = state();
+        let budget = s.remaining_budget;
+        let out = s.apply(&Input::Propose(request(1, action))).unwrap();
+        assert_eq!(out.reason, None);
+        assert_eq!(s.remaining_budget, budget - 1);
+        assert_eq!(s.leases.len(), 1);
+        assert_eq!(s.pending.len(), 1);
+        assert!(
+            s.apply(&Input::Dispatch {
+                proposal_id: "proposal-1".into(),
+                now_ns: 1,
+            })
+            .unwrap()
+            .dispatch
+        );
     }
 }

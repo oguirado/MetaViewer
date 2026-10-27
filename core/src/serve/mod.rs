@@ -20,6 +20,8 @@
 //! [TARGET, unit decision] Replay evidence remains session-wide: reconnects must
 //! use fresh increasing sequences and nonces. EOF drains bounded queued replies;
 //! a terminal writer retires its endpoint after flushing its diagnostic.
+//! [TARGET, unit decision] A failed receipt must have verified=false; contradictory receipts are refused
+//! before settlement and cannot clear a lease.
 mod tools;
 
 use crate::admission::{
@@ -561,6 +563,20 @@ impl Server {
                 self.send(&daemon, Command::SurfaceRequest(Box::new(body)))?;
             }
             (Component::Daemon, Command::ActionReceipt(receipt)) => {
+                if !receipt.error.is_empty() && receipt.verified {
+                    let out = self.authority.apply_with_witnesses(
+                        Input::Refuse {
+                            reason: Refusal::Policy,
+                        },
+                        vec![boundary],
+                    )?;
+                    return self.refuse(
+                        &env.from,
+                        &receipt.proposal_id,
+                        Refusal::Policy,
+                        out.core_seq,
+                    );
+                }
                 let input = if self
                     .authority
                     .state()

@@ -68,7 +68,9 @@ func TestA2MarkLostDuringInput(t *testing.T) {
 	m := testManager(t, &scriptRunner{output: []byte(startOK)})
 	id := createID(t, m)
 	started, finish := make(chan struct{}), make(chan struct{})
+	calls := 0
 	m.runner = a2Runner(func(context.Context, []string, []byte) ([]byte, error) {
+		calls++
 		close(started)
 		<-finish
 		return []byte(`{"surface_id":"w1","kind":"key","input_mono_ns":200,"focus_verified":true,"result":"ok"}`), nil
@@ -76,8 +78,8 @@ func TestA2MarkLostDuringInput(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		out, e := m.Handle(context.Background(), req("input", `{"surface_id":"`+id+`","proposal_id":"a2","action":{"type":"key","keys":["a"]}}`))
-		if e == nil && len(out) != 1 {
-			e = fault("test", "missing applied event")
+		if len(out) != 0 {
+			e = fault("test", "lost input emitted an applied event")
 		}
 		done <- e
 	}()
@@ -85,15 +87,22 @@ func TestA2MarkLostDuringInput(t *testing.T) {
 	ev, e := m.MarkLost(id, true)
 	close(finish)
 	inputErr := <-done
-	requireFault(t, e, "POLICY")
-	if len(ev) != 0 {
-		t.Fatal("pending input marked lost")
+	if e != nil || len(ev) == 0 {
+		t.Fatalf("pending input did not mark lost: %s %v", ev, e)
 	}
-	if inputErr != nil {
-		t.Fatal(inputErr)
+	requireFault(t, inputErr, "surface")
+	if m.hasPending(id) || len(m.pending) != 0 {
+		t.Fatal("lost input was not drained")
 	}
-	if _, e = m.MarkLost(id, true); e != nil {
-		t.Fatal(e)
+	if ev, e = m.MarkLost(id, true); e != nil || len(ev) != 0 {
+		t.Fatalf("repeated loss was not idempotent: %s %v", ev, e)
+	}
+	for _, proposal := range []string{"a2", "after-lost"} {
+		out, err := m.Handle(context.Background(), req("input", `{"surface_id":"`+id+`","proposal_id":"`+proposal+`","action":{"type":"key","keys":["a"]}}`))
+		requireFault(t, err, "surface")
+		if len(out) != 0 || calls != 1 {
+			t.Fatal("input executed or settled again after loss")
+		}
 	}
 }
 

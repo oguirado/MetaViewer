@@ -12,6 +12,9 @@ package daemon
 // is anchored to a descriptor obtained by a canonical no-symlink directory walk.
 // [TARGET, unit decision] MV_EXPECTED_CORE_COMMIT optionally pins the core hello
 // to a lowercase full revision; a configured invalid pin fails startup closed.
+// [TARGET, unit decision] Failed inputs settle with verified=false and the last
+// wire-published frame as diagnostic context, never as post-input proof. No new
+// capture is required to release a dispatched lease, including after takeover.
 import (
 	"context"
 	"encoding/json"
@@ -22,6 +25,7 @@ import (
 	"regexp"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -196,6 +200,8 @@ func RuntimeFromEnv() (Runtime, error) {
 
 func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs map[string]*frames.Publisher, origin uint64) ipc.Handler {
 	owned := map[string]*frames.Publisher{}
+	var frameMu sync.Mutex
+	lastFrames := map[string]json.RawMessage{}
 	return func(ctx context.Context, e ipc.Envelope) ([]json.RawMessage, error) {
 		var q capsule.Request
 		if err := json.Unmarshal(e.Body, &q); err != nil {
@@ -220,10 +226,50 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 					}
 					_ = json.Unmarshal(events[0], &created)
 					owned[created.Data.Surface.SurfaceID] = pubs[profile.RAMRoot]
+					for _, raw := range events {
+						var ready struct {
+							Event string
+							Data  struct {
+								FrameRef json.RawMessage `json:"frame_ref"`
+							}
+						}
+						if json.Unmarshal(raw, &ready) == nil && ready.Event == "frame_ready" {
+							frameMu.Lock()
+							lastFrames[created.Data.Surface.SurfaceID] = ready.Data.FrameRef
+							frameMu.Unlock()
+						}
+					}
 					return events, nil
 				}
 				return wireFailure(e, q, err)
 			}
+		}
+		var input struct {
+			SurfaceID  string `json:"surface_id"`
+			ProposalID string `json:"proposal_id"`
+		}
+		_ = json.Unmarshal(q.Params, &input)
+		frameMu.Lock()
+		before := lastFrames[input.SurfaceID]
+		frameMu.Unlock()
+		failure := func(err error) ([]json.RawMessage, error) {
+			if q.Op == "input" && input.ProposalID != "" && len(before) != 0 {
+				completed := monotonic()
+				if completed < origin {
+					return nil, configuration("monotonic completion refused")
+				}
+				receipt, e := json.Marshal(map[string]any{
+					"schema": "action_receipt/v0.2", "proposal_id": input.ProposalID,
+					"executed_at_ns": completed - origin, "after_frame": before, "verified": false,
+					"verification": map[string]string{"method": "pixel", "detail": "input failed; last wire-published frame is diagnostic context only; no post-input proof"},
+					"error":        "input failed: " + err.Error(),
+				})
+				if e != nil {
+					return nil, e
+				}
+				return []json.RawMessage{receipt}, nil
+			}
+			return wireFailure(e, q, err)
 		}
 		events, err := m.Handle(ctx, q)
 		// [TARGET, unit decision] The wire owner acknowledges cancelled native
@@ -240,7 +286,6 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 				_ = m.DrainInput(input.SurfaceID, input.ProposalID)
 			}
 		}
-		failure := func(err error) ([]json.RawMessage, error) { return wireFailure(e, q, err) }
 		if err != nil {
 			return failure(err)
 		}
@@ -254,6 +299,9 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 					return failure(err)
 				}
 				delete(owned, params.SurfaceID)
+				frameMu.Lock()
+				delete(lastFrames, params.SurfaceID)
+				frameMu.Unlock()
 			}
 		}
 		if q.Op != "input" {
@@ -279,6 +327,10 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 		if err != nil {
 			return failure(err)
 		}
+		rawRef, _ := json.Marshal(ref)
+		frameMu.Lock()
+		lastFrames[id] = rawRef
+		frameMu.Unlock()
 		ready, _ := json.Marshal(map[string]any{"schema": "surface_event/v0.2", "event": "frame_ready", "data": map[string]any{"frame_ref": ref}})
 		events = append(events, ready)
 		receipt, _ := json.Marshal(map[string]any{"schema": "action_receipt/v0.2", "proposal_id": proposal, "executed_at_ns": completed - origin, "after_frame": ref, "verified": false, "verification": map[string]string{"method": "pixel", "detail": "post-input capture only; expectation verification belongs to core"}, "error": ""})
