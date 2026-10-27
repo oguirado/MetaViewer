@@ -834,3 +834,143 @@ test('R2-T4-023 regression: receive validates exact envelope keys and ts_ns boun
   await new Promise(resolve => setTimeout(resolve, 25));
   assert.equal(bindings.core.getStatus().availability, 'unavailable');
 });
+
+test('W2-HOST-L2 L2-1 and L2-8 regression: valid hide/show/control/fold intents resolve literal true while local multislot view/mode toggles are refused; frame_ref dimensions remain constant across deliveries', async t => {
+  const f = await fixture(t);
+  const handlers = new Map();
+  const bindings = await loadMainBindings(f.env, { createMessageChannel: f.createMessageChannel });
+  t.after(() => bindings.core.dispose());
+  const shell = join(f.root, 'shell');
+  await mkdir(join(shell, 'dist/renderer'), { recursive: true });
+  await mkdir(join(shell, 'dist/preload'), { recursive: true });
+  await writeFile(join(shell, 'dist/renderer/index.html'), '<!doctype html><title>host l2 test</title>');
+  await writeFile(join(shell, 'dist/preload/preload.cjs'), '');
+  const session = { setPermissionRequestHandler() {}, setPermissionCheckHandler() {} };
+  const frame = { origin: 'app://metaviewer', url: 'app://metaviewer/index.html' };
+  const notices = [];
+  let onNotice = () => {};
+  const contents = {
+    id: 31,
+    mainFrame: frame,
+    session,
+    isDestroyed: () => false,
+    setWindowOpenHandler() {},
+    on() {},
+    loadURL: async () => {},
+    postMessage: (...args) => { notices.push(args); onNotice(args); },
+  };
+  class Window {
+    constructor() { this.webContents = contents; }
+    once() {} on() {} show() {} destroy() {} isDestroyed() { return false; }
+  }
+  const booted = await bootProductionMain({
+    ...bindings,
+    app: { requestSingleInstanceLock: () => true, whenReady: async () => {}, on() {}, quit() {}, getAppPath: () => shell, getPath: () => join(f.root, 'user') },
+    BrowserWindow: Window,
+    ipcMain: { handle: (key, fn) => handlers.set(key, fn), removeHandler: key => handlers.delete(key) },
+    protocol: { registerSchemesAsPrivileged() {}, handle() {}, unhandle() {} },
+    session: { defaultSession: session },
+    electronVersion: ELECTRON_PIN,
+    shellRoot: shell,
+    argv: ['metaviewer'],
+    env: f.env,
+    runtime: { xdgRuntimeDir: f.root, uid: process.getuid() },
+    geometry: { width: 1280, height: 720 },
+    bridge: [CHANNELS.load, CHANNELS.save].map(channel => ({ channel, decode: value => value, invoke: async () => null })),
+  });
+  t.after(() => booted.dispose());
+
+  const api = installPreload({
+    contextBridge: { exposeInMainWorld() {} },
+    ipcRenderer: {
+      invoke: (channel, ...args) => handlers.get(channel)({ sender: contents, senderFrame: frame }, ...args),
+      on() {},
+      removeListener() {},
+    },
+  });
+
+  f.send({ schema: 'surface_event/v0.2', event: 'created', data: { surface } });
+
+  // 1. L2-1: valid ui_intent/v0.2 bodies for hide, show, fold/unfold (with cuk-ai-slot-<id>) and control handoff
+  // (take_control / release_control) resolve with literal true across hostBindings, authorityWire and preload.
+  const admittedIntents = [
+    { schema: 'ui_intent/v0.2', request_id: 'l2-1-take', op: 'take_control', params: { surface_id: 's1' } },
+    { schema: 'ui_intent/v0.2', request_id: 'l2-1-hide', op: 'hide', params: { slot_id: 'cuk-ai-slot-s1' } },
+    { schema: 'ui_intent/v0.2', request_id: 'l2-1-show', op: 'show', params: { slot_id: 'cuk-ai-slot-s1' } },
+    { schema: 'ui_intent/v0.2', request_id: 'l2-1-fold', op: 'fold', params: { slot_id: 'cuk-ai-slot-s1' } },
+    { schema: 'ui_intent/v0.2', request_id: 'l2-1-unfold', op: 'unfold', params: { slot_id: 'cuk-ai-slot-s1' } },
+    { schema: 'ui_intent/v0.2', request_id: 'l2-1-release', op: 'release_control', params: { surface_id: 's1' } },
+  ];
+  for (const body of admittedIntents) {
+    const reply = await api.authority.intent(JSON.stringify(body));
+    assert.strictEqual(reply, true, `expected literal true for ${body.op}`);
+    assert.deepEqual(f.requests.filter(r => r.body.schema === 'ui_intent/v0.2').at(-1)?.body, body);
+  }
+
+  // 2. L2-1 reproduction: the three local multislot control-bar toggle payloads ('hide-surface', 'show-surface',
+  // 'input-mode-write' for READ->WRITE) are not ui_intent/v0.2 or action_proposal/v0.2 operations; when the
+  // renderer forwards them to authority.propose or authority.intent, the host refuses them before core socket send.
+  const reqCountBeforeLocal = f.requests.length;
+  const localMultislotRequests = [
+    { type: 'hide-surface', capsuleId: 's1' },
+    { type: 'show-surface', capsuleId: 's1' },
+    { type: 'input-mode-write', capsuleId: 's1', mode: 'write' },
+  ];
+  for (const localPayload of localMultislotRequests) {
+    await assert.rejects(
+      api.authority.propose(JSON.stringify(localPayload)),
+      /CORE_SEAMS_ABSENT/,
+    );
+    await assert.rejects(
+      api.authority.intent(JSON.stringify(localPayload)),
+      /INTENT/,
+    );
+    const wrappedAsUiIntent = {
+      schema: 'ui_intent/v0.2',
+      request_id: `l2-1-${localPayload.type}`,
+      op: localPayload.type,
+      params: { slot_id: 'cuk-ai-slot-s1' },
+    };
+    await assert.rejects(
+      api.authority.intent(JSON.stringify(wrappedAsUiIntent)),
+      /INTENT/,
+    );
+    await assert.rejects(
+      bindings.core.request({ op: 'intent', json: JSON.stringify(wrappedAsUiIntent) }),
+      /CORE_SEAMS_ABSENT/,
+    );
+  }
+  assert.equal(f.requests.length, reqCountBeforeLocal, 'unadmitted local multislot toggles must never reach core');
+
+  // 3. L2-8: consecutive frame deliveries for the same surface preserve constant frame_ref width/height,
+  // surface geometry, and MessagePort frame_delivery/v0.2 width/height.
+  await handlers.get(WIRE_CHANNELS.subscribeFrames)({ sender: contents, senderFrame: frame });
+  for (let gen = 1; gen <= 3; gen += 1) {
+    const delivered = new Promise(resolve => { onNotice = resolve; });
+    f.send({
+      schema: 'surface_event/v0.2',
+      event: 'frame_ready',
+      data: { frame_ref: { ...f.frame, generation: gen, tick: gen, ts_ns: gen } },
+    });
+    const [, notice] = await delivered;
+    assert.equal(notice.frame_ref.width, f.frame.width);
+    assert.equal(notice.frame_ref.height, f.frame.height);
+    assert.deepEqual(notice.surface.geometry, surface.geometry);
+    const portMsg = f.messages.at(-1);
+    assert.equal(portMsg.width, f.frame.width);
+    assert.equal(portMsg.height, f.frame.height);
+    assert.equal(portMsg.bytes.byteLength, f.frame.width * f.frame.height * 3);
+    f.channels[0].port1.emit('message', {
+      schema: 'frame_ack/v0.2',
+      kind: 'ack',
+      correlation: portMsg.correlation,
+      principal: portMsg.principal,
+      epoch: portMsg.epoch,
+      surfaceId: portMsg.surfaceId,
+      surfaceGeneration: portMsg.surfaceGeneration,
+      frameGeneration: portMsg.frameGeneration,
+      leaseId: portMsg.leaseId,
+      outcome: 'PRESENTED',
+    });
+  }
+});

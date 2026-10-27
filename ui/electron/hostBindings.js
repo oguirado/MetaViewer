@@ -305,8 +305,10 @@ export async function createMainBindings({env = process.env, createMessageChanne
         }
         const state = body.schema === 'surface_event/v0.2' && body.event === 'state_changed' ? body.data?.surface : null;
         const request = item.body;
+        const slot = request.params?.surface_id || request.params?.slot_id;
+        const target = surfaces.has(slot) ? slot : String(slot ?? '').replace(/^cuk-ai-slot-/, '');
         if (request.schema === 'ui_intent/v0.2' && ['take_control','release_control','fold','unfold'].includes(request.op)
-            && state?.surface_id === (request.params.surface_id || request.params.slot_id)) {
+            && state?.surface_id === target) {
           const satisfied = request.op === 'take_control' ? state.control === 'human'
             : request.op === 'release_control' ? state.control === 'agent'
             : state.visibility === (request.op === 'fold' ? 'folded' : 'unfolded');
