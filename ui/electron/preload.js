@@ -408,7 +408,16 @@ function captureFacade(transport, captureCallbacks = new Set(), seededCaptureSur
 
 // [TARGET, unit decision] Closed domain channels; all values are rechecked in main.
 const QA_ANCHORS_CHANNEL = 'metaviewer:qa.anchors';
+const QA_ANCHOR_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
+const QA_ANCHOR_RE = /^(?=.{1,200}$)[A-Za-z0-9][A-Za-z0-9._:-]{0,63}(?:\/[A-Za-z0-9][A-Za-z0-9._:-]{0,63}){0,5}$/;
 const QA_ROLE_RE = /^[a-z][a-z0-9_-]{0,63}$/;
+/** @param {unknown} v @returns {v is string} */
+function qaAnchorId(v) {
+  if (typeof v !== 'string' || v.length < 1 || v.length > 200 || !QA_ANCHOR_RE.test(v)) return false;
+  const parts = v.split('/');
+  return parts.length >= 1 && parts.length <= 6
+    && parts.every((seg) => seg.length >= 1 && seg.length <= 64 && seg !== '.' && seg !== '..' && QA_ANCHOR_SEGMENT_RE.test(seg));
+}
 /** @param {string} text */
 function isWellFormedName(text) {
   for (let i = 0; i < text.length; i += 1) {
@@ -440,7 +449,7 @@ function assertQaSnapshot(args) {
     const r = desc.value;
     if (!captureKeys(r,'anchor,name,rect,role')
       || (Object.getPrototypeOf(r) !== Object.prototype && Object.getPrototypeOf(r) !== null)
-      || !captureId(r.anchor)
+      || !qaAnchorId(r.anchor)
       || typeof r.role !== 'string' || !QA_ROLE_RE.test(r.role)
       || typeof r.name !== 'string' || r.name.length > 128 || r.name.includes('\0') || !isWellFormedName(r.name)
       || !captureKeys(r.rect,'h,w,x,y')

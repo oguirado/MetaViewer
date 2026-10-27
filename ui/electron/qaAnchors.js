@@ -21,10 +21,57 @@ export const QA_USER_AGENT_TOKEN = '--qa-anchors=1';
 export const QA_MAX_ROWS = 512;
 export const QA_MAX_BYTES = 64 * 1024;
 export const QA_MAX_NAME_CHARS = 128;
+export const QA_MAX_ANCHOR_CHARS = 200;
+export const QA_MAX_ANCHOR_SEGMENTS = 6;
+export const QA_MAX_ANCHOR_SEGMENT_CHARS = 64;
 
-const QA_ANCHOR_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+export const QA_ANCHOR_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
+export const ANCHOR = /^(?=.{1,200}$)[A-Za-z0-9][A-Za-z0-9._:-]{0,63}(?:\/[A-Za-z0-9][A-Za-z0-9._:-]{0,63}){0,5}$/;
+export const QA_ANCHOR_RE = ANCHOR;
 const QA_ROLE_RE = /^[a-z][a-z0-9_-]{0,63}$/;
 const SOURCE_ROOT = fileURLToPath(new URL('../..', import.meta.url));
+
+/**
+ * Validate a QA semantic anchor against the hierarchical grammar:
+ * one to six segments joined by "/", each segment ^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$,
+ * total length <= 200, no empty segment, no "." or ".." segment, no leading or trailing "/".
+ * @param {unknown} anchor Candidate anchor value.
+ * @returns {anchor is string}
+ */
+export function isValidQaAnchor(anchor) {
+  if (typeof anchor !== 'string' || anchor.length < 1 || anchor.length > QA_MAX_ANCHOR_CHARS) {
+    return false;
+  }
+  if (!ANCHOR.test(anchor)) {
+    return false;
+  }
+  const segments = anchor.split('/');
+  if (segments.length < 1 || segments.length > QA_MAX_ANCHOR_SEGMENTS) {
+    return false;
+  }
+  return segments.every(
+    (segment) =>
+      segment.length >= 1 &&
+      segment.length <= QA_MAX_ANCHOR_SEGMENT_CHARS &&
+      segment !== '.' &&
+      segment !== '..' &&
+      QA_ANCHOR_SEGMENT_RE.test(segment),
+  );
+}
+
+export const isValidAnchor = isValidQaAnchor;
+
+/**
+ * Assert that a candidate value is a valid QA semantic anchor.
+ * @param {unknown} anchor Candidate anchor value.
+ * @returns {string}
+ */
+export function validateQaAnchor(anchor) {
+  if (!isValidQaAnchor(anchor)) {
+    throw new MainError('QA_PAYLOAD', 'row anchor is invalid');
+  }
+  return anchor;
+}
 
 /**
  * Check whether an object is a plain record with exact own data keys and no symbols.
@@ -106,9 +153,7 @@ export function validateQaSnapshot(snapshot) {
     if (!hasClosedDataKeys(row, 'anchor,name,rect,role')) {
       throw new MainError('QA_PAYLOAD', 'row must have closed {anchor,role,name,rect} keys');
     }
-    if (typeof row.anchor !== 'string' || !QA_ANCHOR_RE.test(row.anchor)) {
-      throw new MainError('QA_PAYLOAD', 'row anchor is invalid');
-    }
+    const anchor = validateQaAnchor(row.anchor);
     if (typeof row.role !== 'string' || !QA_ROLE_RE.test(row.role)) {
       throw new MainError('QA_PAYLOAD', 'row role is invalid');
     }
@@ -134,7 +179,7 @@ export function validateQaSnapshot(snapshot) {
     }
     normalizedRows.push(
       Object.freeze({
-        anchor: row.anchor,
+        anchor,
         role: row.role,
         name: row.name,
         rect: Object.freeze({

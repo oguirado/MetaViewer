@@ -31,13 +31,22 @@ import {
   validateRetailLaunch,
 } from '../electron/main.js';
 import {
+  ANCHOR,
+  QA_ANCHOR_RE,
+  QA_ANCHOR_SEGMENT_RE,
   QA_ANCHORS_CHANNEL,
   QA_ANCHORS_FILE,
   QA_ANCHORS_SCHEMA,
+  QA_MAX_ANCHOR_CHARS,
+  QA_MAX_ANCHOR_SEGMENT_CHARS,
+  QA_MAX_ANCHOR_SEGMENTS,
   QA_MAX_BYTES,
   QA_MAX_ROWS,
   installQaAnchors,
+  isValidAnchor,
+  isValidQaAnchor,
   resolveQaConfig,
+  validateQaAnchor,
   validateQaRunDir,
   validateQaSnapshot,
   writeQaSnapshot,
@@ -76,7 +85,13 @@ function validSnapshot(seq = 1) {
     seq,
     rows: [
       {
-        anchor: 'wall.tile-1:fold_btn.0',
+        anchor: 'capsule/srf-id-4cf09207d83e/record',
+        role: 'button',
+        name: 'Record capsule',
+        rect: { x: 8, y: 12, w: 96, h: 28 },
+      },
+      {
+        anchor: 'wall/main/fold',
         role: 'button',
         name: 'Fold capsule',
         rect: { x: 12, y: 34, w: 120, h: 32 },
@@ -417,7 +432,31 @@ describe('W2-QA-ANCHORS preload fail-fast validation and main revalidation', () 
         api.qa.reportAnchors({
           schema: QA_ANCHORS_SCHEMA,
           seq: 1,
-          rows: [{ ...good.rows[0], anchor: 'bad/slash' }],
+          rows: [{ ...good.rows[0], anchor: 'bad//slash' }],
+        }),
+      () =>
+        api.qa.reportAnchors({
+          schema: QA_ANCHORS_SCHEMA,
+          seq: 1,
+          rows: [{ ...good.rows[0], anchor: '/leading/slash' }],
+        }),
+      () =>
+        api.qa.reportAnchors({
+          schema: QA_ANCHORS_SCHEMA,
+          seq: 1,
+          rows: [{ ...good.rows[0], anchor: 'trailing/slash/' }],
+        }),
+      () =>
+        api.qa.reportAnchors({
+          schema: QA_ANCHORS_SCHEMA,
+          seq: 1,
+          rows: [{ ...good.rows[0], anchor: 'capsule/../record' }],
+        }),
+      () =>
+        api.qa.reportAnchors({
+          schema: QA_ANCHORS_SCHEMA,
+          seq: 1,
+          rows: [{ ...good.rows[0], anchor: 'a/b/c/d/e/f/g' }],
         }),
       () =>
         api.qa.reportAnchors({
@@ -429,7 +468,16 @@ describe('W2-QA-ANCHORS preload fail-fast validation and main revalidation', () 
         api.qa.reportAnchors({
           schema: QA_ANCHORS_SCHEMA,
           seq: 1,
-          rows: [{ ...good.rows[0], anchor: 'a'.repeat(129) }],
+          rows: [{ ...good.rows[0], anchor: 'a'.repeat(65) }],
+        }),
+      () =>
+        api.qa.reportAnchors({
+          schema: QA_ANCHORS_SCHEMA,
+          seq: 1,
+          rows: [{
+            ...good.rows[0],
+            anchor: `${'a'.repeat(50)}/${'b'.repeat(50)}/${'c'.repeat(50)}/${'d'.repeat(48)}`,
+          }],
         }),
       () =>
         api.qa.reportAnchors({
@@ -511,7 +559,7 @@ describe('W2-QA-ANCHORS preload fail-fast validation and main revalidation', () 
 
     // <= 512 rows, each valid individually, but combined JSON exceeds 64 KiB (65536 UTF-8 bytes).
     const heavyRows = Array.from({ length: 300 }, (_, i) => ({
-      anchor: `anchor.${String(i).padStart(4, '0')}.${'x'.repeat(80)}`,
+      anchor: `capsule/srf-${String(i).padStart(4, '0')}/${'x'.repeat(40)}/${'y'.repeat(40)}`,
       role: 'button',
       name: 'é'.repeat(90),
       rect: { x: 100, y: 200, w: 300, h: 40 },
@@ -720,5 +768,247 @@ describe('W2-QA-ANCHORS atomic 0600 file persistence, sender checks, and path sa
     } finally {
       cleanDir(baseDir);
     }
+  });
+});
+
+describe('W2-QA-ANCHOR-GRAMMAR hierarchical anchor grammar, facade/main parity, and reverted-mutation proof', () => {
+  const exact200Anchor = `${'a'.repeat(50)}/${'b'.repeat(50)}/${'c'.repeat(50)}/${'d'.repeat(47)}`;
+  const over201Anchor = `${'a'.repeat(50)}/${'b'.repeat(50)}/${'c'.repeat(50)}/${'d'.repeat(48)}`;
+
+  const positiveAnchors = [
+    'capsule/srf-id-4cf09207d83e/record',
+    'capsule/srf_01.main:slot-2/screenshot',
+    'wall/main/fold',
+    'screenshot',
+    'wall.tile-1:fold_btn.0',
+    'a',
+    '9',
+    'a'.repeat(64),
+    'seg1/seg2',
+    's1/s2/s3',
+    's1/s2/s3/s4',
+    's1/s2/s3/s4/s5',
+    's1/s2/s3/s4/s5/s6',
+    exact200Anchor,
+  ];
+
+  const negativeAnchors = [
+    '',
+    '//',
+    'capsule//record',
+    'a//b/c',
+    '.',
+    '..',
+    './record',
+    '../record',
+    'capsule/./record',
+    'capsule/../record',
+    'capsule/.',
+    'capsule/..',
+    '/',
+    '/capsule/srf-id-4cf09207d83e/record',
+    '/wall/main/fold',
+    'capsule/srf-id-4cf09207d83e/record/',
+    'wall/main/fold/',
+    's1/s2/s3/s4/s5/s6/s7',
+    over201Anchor,
+    'a'.repeat(65),
+    `capsule/${'a'.repeat(65)}/record`,
+    'capsule/srf\0id/record',
+    'capsule/srf\nid/record',
+    'capsule/srf\rid/record',
+    'capsule/srf\tid/record',
+    'capsule/\x1f/record',
+    'capsule/\x7f/record',
+    '.leading-dot',
+    '-leading-dash',
+    '_leading-underscore',
+    ':leading-colon',
+    'capsule/.hidden/record',
+    'capsule/-dash/record',
+    'capsule/bad space/record',
+    'capsule\\record',
+    'capsule/ümlaut/record',
+  ];
+
+  it('exports ANCHOR / QA_ANCHOR_RE grammar constants and validator functions with exact bounds', () => {
+    assert.equal(ANCHOR instanceof RegExp, true);
+    assert.equal(QA_ANCHOR_RE, ANCHOR);
+    assert.equal(QA_ANCHOR_SEGMENT_RE instanceof RegExp, true);
+    assert.equal(QA_MAX_ANCHOR_CHARS, 200);
+    assert.equal(QA_MAX_ANCHOR_SEGMENTS, 6);
+    assert.equal(QA_MAX_ANCHOR_SEGMENT_CHARS, 64);
+    assert.equal(isValidAnchor, isValidQaAnchor);
+    assert.equal(exact200Anchor.length, 200);
+    assert.equal(over201Anchor.length, 201);
+  });
+
+  it('admits all positive hierarchical and single-segment anchors in regex, validator, main, and preload facade', async () => {
+    /** @type {Array<{ channel: string, args: ReadonlyArray<unknown> }>} */
+    const invoked = [];
+    const api = createPreloadFacade({
+      transport: {
+        qa: true,
+        invoke: async (channel, args) => {
+          invoked.push({ channel, args });
+          return true;
+        },
+        subscribe: () => () => {},
+      },
+      bridge: { exposeInMainWorld: () => {} },
+    });
+
+    for (const candidate of positiveAnchors) {
+      assert.equal(ANCHOR.test(candidate), true, `ANCHOR regex should admit ${candidate}`);
+      assert.equal(isValidQaAnchor(candidate), true, `isValidQaAnchor should admit ${candidate}`);
+      assert.equal(validateQaAnchor(candidate), candidate);
+
+      const snapshot = {
+        schema: QA_ANCHORS_SCHEMA,
+        seq: 1,
+        rows: [
+          {
+            anchor: candidate,
+            role: 'button',
+            name: 'Action',
+            rect: { x: 10, y: 20, w: 80, h: 24 },
+          },
+        ],
+      };
+      const mainValidated = validateQaSnapshot(snapshot);
+      assert.equal(mainValidated.rows[0].anchor, candidate);
+      assert.equal(await api.qa.reportAnchors(snapshot), true);
+    }
+    assert.equal(invoked.length, positiveAnchors.length);
+  });
+
+  it('refuses all negative anchors (empty, //, ., .., leading/trailing /, 7 segments, 201 chars, 65-char segment, control chars) in regex, validator, main, and preload facade', () => {
+    /** @type {Array<unknown>} */
+    const invoked = [];
+    const api = createPreloadFacade({
+      transport: {
+        qa: true,
+        invoke: async (... call) => {
+          invoked.push(call);
+          return true;
+        },
+        subscribe: () => () => {},
+      },
+      bridge: { exposeInMainWorld: () => {} },
+    });
+
+    for (const invalid of negativeAnchors) {
+      assert.equal(ANCHOR.test(invalid), false, `ANCHOR regex must reject ${JSON.stringify(invalid)}`);
+      assert.equal(isValidQaAnchor(invalid), false, `isValidQaAnchor must reject ${JSON.stringify(invalid)}`);
+      assert.throws(
+        () => validateQaAnchor(invalid),
+        (err) => err instanceof MainError && err.code === 'QA_PAYLOAD',
+        `validateQaAnchor must reject ${JSON.stringify(invalid)}`,
+      );
+
+      const snapshot = {
+        schema: QA_ANCHORS_SCHEMA,
+        seq: 1,
+        rows: [
+          {
+            anchor: invalid,
+            role: 'button',
+            name: 'Action',
+            rect: { x: 10, y: 20, w: 80, h: 24 },
+          },
+        ],
+      };
+      assert.throws(
+        () => validateQaSnapshot(snapshot),
+        (err) => err instanceof MainError && err.code === 'QA_PAYLOAD',
+        `validateQaSnapshot must reject ${JSON.stringify(invalid)}`,
+      );
+      assert.throws(
+        () => api.qa.reportAnchors(snapshot),
+        (err) => err instanceof ContractError && err.code === 'PAYLOAD',
+        `preload qa.reportAnchors must reject ${JSON.stringify(invalid)}`,
+      );
+    }
+
+    for (const nonString of [null, undefined, 42, {}, ['wall/main/fold']]) {
+      assert.equal(isValidQaAnchor(nonString), false);
+      assert.throws(
+        () => validateQaAnchor(nonString),
+        (err) => err instanceof MainError && err.code === 'QA_PAYLOAD',
+      );
+    }
+    assert.equal(invoked.length, 0);
+  });
+
+  it('keeps preload capture surface/recording id regex strict (no slashes) while qa.reportAnchors accepts hierarchical anchors', () => {
+    const api = createPreloadFacade({
+      transport: {
+        qa: true,
+        invoke: async () => ({
+          ok: true,
+          shot: {
+            id: 'shot-1',
+            surface_id: 'srf-id-4cf09207d83e',
+            sha256: 'a'.repeat(64),
+            created_ms: 1,
+            width: 100,
+            height: 100,
+          },
+        }),
+        subscribe: () => () => {},
+      },
+      bridge: { exposeInMainWorld: () => {} },
+    });
+
+    assert.throws(
+      () =>
+        api.capture.screenshot({
+          schema: 'capture_request/v1',
+          request_id: 'req-1',
+          surface_id: 'capsule/srf-id-4cf09207d83e/record',
+        }),
+      (err) => err instanceof ContractError && err.code === 'PAYLOAD',
+    );
+  });
+
+  it('reverted-mutation proof: legacy single-segment regex and weakened bounds fail the oracle', () => {
+    /**
+     * Run the grammar oracle against a candidate validator.
+     * @param {(v: unknown) => boolean} candidate
+     */
+    const runOracle = (candidate) => {
+      for (const good of positiveAnchors) {
+        assert.equal(candidate(good), true, `expected positive ${good}`);
+      }
+      for (const bad of negativeAnchors) {
+        assert.equal(candidate(bad), false, `expected negative ${JSON.stringify(bad)}`);
+      }
+    };
+
+    // Shipped implementation passes the oracle.
+    runOracle(isValidQaAnchor);
+    runOracle((v) => typeof v === 'string' && ANCHOR.test(v));
+
+    // Mutant 1 (reverted legacy single-segment regex): rejects capsule/<id>/record and wall/main/fold.
+    const legacyMutant = (/** @type {unknown} */ v) =>
+      typeof v === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(v);
+    assert.throws(() => runOracle(legacyMutant), /capsule\/srf-id-4cf09207d83e\/record/);
+
+    // Mutant 2 (missing 6-segment cap): admits 7 segments.
+    const sevenSegMutant = (/** @type {unknown} */ v) =>
+      typeof v === 'string' &&
+      /^(?=.{1,200}$)[A-Za-z0-9][A-Za-z0-9._:-]{0,63}(?:\/[A-Za-z0-9][A-Za-z0-9._:-]{0,63}){0,6}$/.test(v);
+    assert.throws(() => runOracle(sevenSegMutant), /s1\/s2\/s3\/s4\/s5\/s6\/s7/);
+
+    // Mutant 3 (missing <= 200 total char cap): admits 201-char 4-segment anchor.
+    const noTotalCapMutant = (/** @type {unknown} */ v) =>
+      typeof v === 'string' &&
+      /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}(?:\/[A-Za-z0-9][A-Za-z0-9._:-]{0,63}){0,5}$/.test(v);
+    assert.throws(() => runOracle(noTotalCapMutant));
+
+    // Mutant 4 (allowing '.' or '..' or empty segments): admits traversal or empty segment.
+    const dotSegmentMutant = (/** @type {unknown} */ v) =>
+      typeof v === 'string' && v.length <= 200 && /^[A-Za-z0-9._:/-]+$/.test(v);
+    assert.throws(() => runOracle(dotSegmentMutant));
   });
 });
