@@ -80,10 +80,10 @@ export function createAuthorityRuntime(port) {
       const value = /** @type {any} */ (raw), f = value?.frame_ref, s = value?.surface;
       const invalid = () => ({ ok: /** @type {false} */ (false), error: { code: 'ERR_FRAME_NOTICE', message: 'Surface update unavailable.' } });
       if (!value || Object.keys(value).sort().join(',') !== 'frame_ref,surface'
-        || f?.schema !== 'frame_ref/v0.1' || s?.schema !== 'surface/v0.2'
+        || f?.schema !== 'frame_ref/v0.2' || s?.schema !== 'surface/v0.2'
         || Object.keys(f).sort().join(',') !== 'capture_us,format,generation,height,schema,sha256,surface_id,tick,ts_ns,width'
         || Object.keys(s).sort().join(',') !== 'control,display,geometry,kind,profile_id,schema,state,surface_id,visibility'
-        || f.format !== 'rgb24' || !/^[a-f0-9]{64}$/.test(f.sha256)
+        || f.format !== 'rgb24' || typeof f.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(f.sha256)
         || !['generation', 'width', 'height'].every(key => Number.isSafeInteger(f[key]) && f[key] > 0)
         || !['tick', 'ts_ns', 'capture_us'].every(key => Number.isSafeInteger(f[key]) && f[key] >= 0)
         || !['desktop_capsule', 'browser', 'game_capsule', 'vm'].includes(s.kind)

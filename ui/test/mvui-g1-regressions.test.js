@@ -38,7 +38,7 @@ const allNodes = node => [node, ...(node.children ?? []).flatMap(allNodes)];
 const renderedText = node => [node.text ?? '', ...(node.children ?? []).map(renderedText)].join(' ');
 
 function notice(id = 'surface-a', changes = {}) {
-  return { frame_ref: { schema: 'frame_ref/v0.1', surface_id: id, generation: 1,
+  return { frame_ref: { schema: 'frame_ref/v0.2', surface_id: id, generation: 1,
     width: 10, height: 10, tick: 1, ts_ns: 1, capture_us: 1, format: 'rgb24', sha256: 'a'.repeat(64) },
   surface: { schema: 'surface/v0.2', surface_id: id, kind: 'desktop_capsule', display: 'Desktop',
     geometry: { w: 10, h: 10 }, state: 'active', visibility: 'unfolded', control: 'agent', profile_id: 'default', ...changes } };
