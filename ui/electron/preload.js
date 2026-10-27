@@ -395,10 +395,18 @@ function wireFacade(transport) {
       if(listeners.size===1) {
         const generation=++subscriptionGeneration;
         revokeFrames=transport.subscribe('metaviewer:authority.frames',(value,ports)=> {
-          if (!validFrameNotice(value)) return;
+          const closePorts=()=>{
+            for (const port of ports??[]) {
+              // Teardown must attempt every port even if one is already detached.
+              try { port.close?.(); } catch { /* Continue releasing unused ports. */ }
+            }
+          };
+          if (!validFrameNotice(value)) { closePorts();return; }
           // Validate once before forwarding either the notice or its byte-plane ports.
           if (ports?.length && typeof window !== 'undefined' && window.location.origin===PRIVILEGED_ORIGIN) {
             window.postMessage({type:'metaviewer:frame-port',surface_id:value.surface.surface_id},PRIVILEGED_ORIGIN,ports);
+          } else {
+            closePorts();
           }
           for(const notify of [...listeners]) notify(value);
         });
