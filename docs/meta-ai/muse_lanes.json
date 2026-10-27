@@ -1,17 +1,17 @@
 {
  "schema": "metaviewer.meta_ai_usage/v1",
  "totals": {
-  "lanes": 217,
-  "ok": 217,
-  "input_tokens": 46841765,
-  "cache_read_tokens": 949067803,
-  "output_tokens": 9836082,
-  "thinking_tokens": 5295572,
+  "lanes": 219,
+  "ok": 219,
+  "input_tokens": 47058568,
+  "cache_read_tokens": 951394793,
+  "output_tokens": 9879160,
+  "thinking_tokens": 5323119,
   "cache_hit_pct": 95.3,
-  "usd": 8.5495,
-  "usd_per_lane": 0.0394,
-  "steps": 10703,
-  "lane_hours": 27.7
+  "usd": 8.5845,
+  "usd_per_lane": 0.0392,
+  "steps": 10755,
+  "lane_hours": 27.8
  },
  "peak_concurrent_lanes": 32,
  "rooms": {
@@ -148,6 +148,11 @@
   "mv0dm": {
    "stage": "demo",
    "why": "Prepare the live demo run sheet, the presentation video storyboard (AC-16, AC-17), the submission text and a rubric gap map so the demo criterion (25 percent) is planned from evidence.",
+   "orchestrator": "conductor"
+  },
+  "mv0ab1r": {
+   "stage": "review",
+   "why": "Blind adversarial review of the two candidates of A/B pair 1 (same test unit written by two different writer models), to measure writer quality before choosing the cheaper seat for test units.",
    "orchestrator": "conductor"
   },
   "mv0mv": {
@@ -4838,6 +4843,48 @@
    "thinking_tokens": 36903,
    "cache_hit_pct": 95.7,
    "usd": 0.041913
+  },
+  {
+   "room": "mv0ab1r",
+   "lane": "X",
+   "title": "Blind review candidate X",
+   "stage": "review",
+   "model": "muse-spark-1.3",
+   "orchestrator": "conductor",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-27T00:25:33.427000+00:00",
+   "duration_s": 263.5,
+   "end_utc": "2026-10-27T00:29:56.883000+00:00",
+   "phase": "build",
+   "steps": 31,
+   "input_tokens": 117628,
+   "cache_read_tokens": 1472476,
+   "output_tokens": 22954,
+   "thinking_tokens": 14940,
+   "cache_hit_pct": 92.6,
+   "usd": 0.019299
+  },
+  {
+   "room": "mv0ab1r",
+   "lane": "Y",
+   "title": "Blind review candidate Y",
+   "stage": "review",
+   "model": "muse-spark-1.3",
+   "orchestrator": "conductor",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-27T00:25:38.336000+00:00",
+   "duration_s": 213.0,
+   "end_utc": "2026-10-27T00:29:11.293000+00:00",
+   "phase": "build",
+   "steps": 21,
+   "input_tokens": 99175,
+   "cache_read_tokens": 854514,
+   "output_tokens": 20124,
+   "thinking_tokens": 12607,
+   "cache_hit_pct": 89.6,
+   "usd": 0.015651
   }
  ]
 }

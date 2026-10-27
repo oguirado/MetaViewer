@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 217 | 55 | 162 |
-| Lanes finished OK | 217 | 55 | 162 |
-| Agent steps | 10,703 | 2,705 | 7,998 |
-| Lane-hours of agent work | 27.7 | 5.2 | 22.4 |
-| Fresh input tokens | 46,841,765 | 11,482,034 | 35,359,731 |
-| Cache-read input tokens | 949,067,803 | 226,255,212 | 722,812,591 |
+| Lanes launched | 219 | 55 | 164 |
+| Lanes finished OK | 219 | 55 | 164 |
+| Agent steps | 10,755 | 2,705 | 8,050 |
+| Lane-hours of agent work | 27.8 | 5.2 | 22.6 |
+| Fresh input tokens | 47,058,568 | 11,482,034 | 35,576,534 |
+| Cache-read input tokens | 951,394,793 | 226,255,212 | 725,139,581 |
 | Prompt cache hit % | 95.3 | 95.2 | 95.3 |
-| Output tokens | 9,836,082 | 2,135,708 | 7,700,374 |
-| Thinking tokens | 5,295,572 | 1,050,039 | 4,245,533 |
-| Cost (USD) | 8.5495 | 2.0279 | 6.5217 |
-| Cost per lane (USD) | 0.0394 | 0.0369 | 0.0403 |
+| Output tokens | 9,879,160 | 2,135,708 | 7,743,452 |
+| Thinking tokens | 5,323,119 | 1,050,039 | 4,273,080 |
+| Cost (USD) | 8.5845 | 2.0279 | 6.5566 |
+| Cost per lane (USD) | 0.0392 | 0.0369 | 0.04 |
 
-Rooms: 46. Peak concurrent lanes [MEASURED from lane start/end]: 32.
+Rooms: 47. Peak concurrent lanes [MEASURED from lane start/end]: 32.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -48,7 +48,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | ops | 4 | 88.1 | 0.0468 |
 | plan | 12 | 92.6 | 0.3072 |
 | research | 14 | 94.6 | 0.5673 |
-| review | 39 | 94.4 | 1.2215 |
+| review | 41 | 94.4 | 1.2565 |
 | test | 12 | 95.6 | 0.5657 |
 | testing | 14 | 93.6 | 0.392 |
 | ui | 5 | 95.5 | 0.4215 |
@@ -104,6 +104,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w2tests | conductor | Oct 27 01:12 | build | 6 | 94.9 | 0.2003 | Muse Spark writer room mv0w2tests: build the W2 component lanes (AC02, AC03, AC04, AC05, AC06, AC07) from the Argon-compiled context pack, with tests first. |
 | mv0rw3testsearly | conductor | Oct 27 01:12 | build | 2 | 94.9 | 0.0738 | Muse Spark writer room mv0rw3testsearly: build the W2 component lanes (AC09, AC12) from the Argon-compiled context pack, with tests first. |
 | mv0w2perception | conductor | Oct 27 01:13 | build | 3 | 94.7 | 0.098 | Muse Spark writer room mv0w2perception: build the W2 component lanes (PLUGIN, META, VCORE) from the Argon-compiled context pack, with tests first. |
+| mv0ab1r | conductor | Oct 27 01:25 | review | 2 | 91.5 | 0.035 | Blind adversarial review of the two candidates of A/B pair 1 (same test unit written by two different writer models), to measure writer quality before choosing the cheaper seat for test units. |
 
 ## Every lane
 
@@ -326,6 +327,8 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w2tests | AC07 | W2-T-AC07 | Oct 27 01:13 | yes | 35 | 94.1 | 0.035233 |
 | mv0w2perception | META | W2-PER-META | Oct 27 01:13 | yes | 39 | 94.6 | 0.031569 |
 | mv0w2perception | VCORE | W2-PER-VCORE | Oct 27 01:13 | yes | 46 | 95.7 | 0.041913 |
+| mv0ab1r | X | Blind review candidate X | Oct 27 01:25 | yes | 31 | 92.6 | 0.019299 |
+| mv0ab1r | Y | Blind review candidate Y | Oct 27 01:25 | yes | 21 | 89.6 | 0.015651 |
 
 ## Method
 
