@@ -110,6 +110,11 @@
    "why": "Build every MetaViewer renderer screen (wall, launcher, multislot + side terminal, recording/settings/nested, agent lane + state fixtures) on the shared kit as drops for the MetaViewer orchestrator.",
    "orchestrator": "UI orchestrator"
   },
+  "mvui11": {
+   "stage": "ui",
+   "why": "Close the renderer halves of AC-06 (multislot placement routed to the new authoritative layout intents) and AC-07 (recording panel export routed to capture.export with typed refusals), assigned to us by the MetaViewer orchestrator after the core contracts landed.",
+   "orchestrator": "UI orchestrator"
+  },
   "mv0w1term": {
    "stage": "build",
    "why": "Build the terminal broker, byte plane and provider menu.",
@@ -158,6 +163,11 @@
   "mv0dc4": {
    "stage": "docs",
    "why": "Regenerate the testing report from the conductor's measured integration-gate counts and update the demo run sheet and storyboard with the live G-W1 evidence and the Argon demo judgement.",
+   "orchestrator": "conductor"
+  },
+  "mvr2v": {
+   "stage": "testing",
+   "why": "Verify every external round-2 finding (ChatGPT static reviews T2, T3, T5, T6, T8 and Jules T4 tests) on the current head with Meta Muse Spark before any fix, and group confirmed ones into disjoint fix units.",
    "orchestrator": "conductor"
   },
   "mvkp": {
@@ -223,6 +233,11 @@
   "mv0pr": {
    "stage": "review",
    "why": "Adversarial pre-integration review of the eight Sol units finished tonight (journal lock, frame_ref v0.2, agent loop, recording, human input, serve and adapter P0 fixes, budget gate), so defects are caught before they land.",
+   "orchestrator": "conductor"
+  },
+  "mvr2v2": {
+   "stage": "testing",
+   "why": "Verify every external round-2 finding (ChatGPT static reviews T2, T3, T5, T6, T8 and Jules T4 tests) on the current head with Meta Muse Spark before any fix, and group confirmed ones into disjoint fix units.",
    "orchestrator": "conductor"
   },
   "mv0rv": {
