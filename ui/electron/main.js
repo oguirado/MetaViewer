@@ -1873,16 +1873,25 @@ export async function bootProductionMain(handles) {
   return Object.freeze({ window: built, core, dispose });
 }
 
-/**
- * Direct production entry. Runs only behind the Electron versions
- * guard; plain Node imports stay inert. Coded failures set a
- * non-success exit status. Production core seams (binary command, UDS
- * transport, handshake, limits, ownership ledger) are supplied by the trusted
- * MV_CORE_BOOTSTRAP module's createMainBindings() factory. That returns
- * {core,wire}; core implements the existing CoreLauncher lifecycle and wire
- * supplies frame-source and PTY broker capabilities. No binary path is guessed.
- * @returns {Promise<void>}
- */
+/** Resolve and validate host capabilities before constructing any window.
+ * @param {NodeJS.ProcessEnv} [env] @param {any} [options] */
+export async function loadMainBindings(env = process.env, options = {}) {
+  try {
+    const bootstrap = env.MV_CORE_BOOTSTRAP;
+    if (bootstrap !== undefined && (!bootstrap || !isAbsolute(bootstrap))) throw new Error();
+    const host = await import(bootstrap === undefined ? './hostBindings.js' : (await import('node:url')).pathToFileURL(bootstrap).href);
+    if (typeof host.createMainBindings !== 'function') throw new Error();
+    const bindings = await host.createMainBindings({...options,env});
+    if (!bindings?.core || ['start','request','dispose','getStatus'].some(name => typeof bindings.core[name] !== 'function')
+        || typeof bindings.wire?.frames?.subscribe !== 'function') {
+      await bindings?.core?.dispose?.();throw new Error();
+    }
+    return bindings;
+  } catch {throw new MainError('CORE_SEAMS_ABSENT','trusted host bindings unavailable');}
+}
+
+/** Direct Electron entry: use the shipped host or an absolute trusted override.
+ * Plain Node imports remain inert. @returns {Promise<void>} */
 async function mainDirectEntry() {
   /** @type {Record<string, unknown>} */
   let electron = {};
@@ -1926,13 +1935,7 @@ async function mainDirectEntry() {
     if (running !== ELECTRON_PIN) {
       throw new MainError('ELECTRON_PIN', `electron version must be ${ELECTRON_PIN}`);
     }
-    // [TARGET, unit decision] Host deployment supplies the launcher/transport
-    // factory explicitly. Never load a renderer-selected module or guess binaries.
-    const bootstrap = process.env.MV_CORE_BOOTSTRAP;
-    if (!bootstrap || !isAbsolute(bootstrap)) throw new MainError('CORE_SEAMS_ABSENT','MV_CORE_BOOTSTRAP must name a trusted absolute host module');
-    const host = await import((await import('node:url')).pathToFileURL(bootstrap).href);
-    if (typeof host.createMainBindings !== 'function') throw new MainError('CORE_SEAMS_ABSENT','host module must export createMainBindings');
-    const bindings = await host.createMainBindings();
+    const bindings = await loadMainBindings();
     await bootProductionMain({ core:bindings.core, wire:bindings.wire, electronVersion: running,
       app: electron.app, BrowserWindow: electron.BrowserWindow, ipcMain: electron.ipcMain,
       protocol: electron.protocol, session: electron.session, argv, env: process.env,
