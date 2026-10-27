@@ -7,7 +7,7 @@
  * existing port revocation/ACK deadlines and the main window's teardown.
  */
 import { open, mkdir, rename, unlink, lstat, realpath } from 'node:fs/promises';
-import { constants } from 'node:fs';
+import { constants, realpathSync } from 'node:fs';
 import { join, isAbsolute, relative, resolve, sep, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
@@ -58,15 +58,24 @@ export function validateSettings(text) {
   if(density!=='compact') throw new Error('SETTINGS_DENSITY');
   return {scheme,density};
 }
+const sourceRoot=fileURLToPath(new URL('../..',import.meta.url));
+/** @param {string} candidate */
+function outsideSource(candidate) {
+  const rel=relative(sourceRoot,resolve(candidate));
+  if(rel==='' || (rel!=='..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))) throw new Error('SETTINGS_IN_REPO');
+}
 /** [TARGET, unit decision] Recording is host configuration, separate from
  * renderer preferences. MV_RECORDING_DESTINATION is an explicit operator
- * directory; unset stays null. The renderer receives only its opaque token.
+ * directory, validated once at wire installation; unset/empty stays null.
+ * This resolved path stays main-side; the renderer receives only its opaque token.
  * @param {NodeJS.ProcessEnv} env */
 export function recordingDestination(env) {
   const destination=env.MV_RECORDING_DESTINATION;
-  if(destination===undefined) return null;
+  if(destination===undefined || destination==='') return null;
   if(!isAbsolute(destination) || destination.length>4096 || /[\0\r\n]/.test(destination)) throw new Error('SETTINGS_DESTINATION');
-  return resolve(destination);
+  const path=realpathSync(resolve(destination));
+  outsideSource(path);
+  return path;
 }
 /** Atomic private settings file. No caller-supplied pathname.
  * @param {NodeJS.ProcessEnv} env */
@@ -75,24 +84,27 @@ export function createSettingsStore(env) {
   if (!isAbsolute(base)) throw new Error('CONFIG_PATH');
   const dir = join(base,'metaviewer');
   const path = join(dir,'settings.json');
-  const sourceRoot=fileURLToPath(new URL('../..',import.meta.url));
-  /** @param {string} candidate */
-  const outsideSource=(candidate)=>{
-    const rel=relative(sourceRoot,resolve(candidate));
-    if(rel==='' || (rel!=='..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))) throw new Error('SETTINGS_IN_REPO');
-  };
   outsideSource(path);
   // Check the nearest existing ancestor before mkdir can follow parent aliases.
   const checkAncestors=async()=> {
     let ancestor=dir;
     for(;;) {
-      try { outsideSource(await realpath(ancestor)); return; }
+      try { await lstat(ancestor); }
       catch(e) {
         if(/** @type {NodeJS.ErrnoException} */(e).code!=='ENOENT') throw e;
         const parent=dirname(ancestor);
         if(parent===ancestor) throw new Error('CONFIG_PATH');
-        ancestor=parent;
+        ancestor=parent; continue;
       }
+      // An existing but unresolvable entry is not an absent directory. Live
+      // outside-source symlink ancestors remain supported, as before.
+      let canonical;
+      try { canonical=await realpath(ancestor); }
+      catch(e) {
+        if(/** @type {NodeJS.ErrnoException} */(e).code==='ENOENT') throw new Error('SETTINGS_DIRECTORY');
+        throw e;
+      }
+      outsideSource(canonical); return;
     }
   };
   const checkDirectory=async()=> {
@@ -147,6 +159,8 @@ export function nestedIdentity(argv,env) {
 export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv=process.argv.slice(1),terminal=null,profiles=new Map(),frames=null}) {
   if (terminal?.request && terminal?.subscribe) terminal=createSideTerminalAdapter(terminal);
   const store = createSettingsStore(env);
+  const destination = recordingDestination(env);
+  const destinationToken = destination === null ? null : 'recording:configured';
   const identity = nestedIdentity(argv,env);
   const channels = /** @type {string[]} */([]);
   const ownedProfiles = new Map([...profiles].map(([id,profile])=>[id,{args:[...validateProviderArgv([id,...profile.args])].slice(1)}]));
@@ -154,7 +168,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
   const handlers = {
     loadSettings: async () => store.load(),
     saveSettings: async (/** @type {string} */json) => store.save(json),
-    recordingDestination: async () => recordingDestination(env),
+    recordingDestination: async () => destinationToken,
     nestedDepth: async () => identity.depth,
     selfCapsuleId: async () => identity.self,
     propose: async (/** @type {string} */json) => {

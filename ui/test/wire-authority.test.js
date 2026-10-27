@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,rm,stat,readFile,readdir,writeFile,chmod,symlink} from 'node:fs/promises';
+import {mkdtemp,mkdir,rm,stat,readFile,readdir,writeFile,chmod,symlink} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -19,6 +19,7 @@ const calls={loadSettings:[],saveSettings:[settings],recordingDestination:[],nes
   terminalEnabled:[true],terminalOpen:[spec]};
 async function fixture(t,env={}) {
   const root=await mkdtemp(join(tmpdir(),'wire-'));
+  t.after(()=>rm(root,{recursive:true,force:true}));
   const handlers=new Map(),forwarded=[];
   const frame={origin:'app://metaviewer',url:'app://metaviewer/index.html'};
   const contents={id:9,mainFrame:frame,isDestroyed:()=>false,postMessage(...args){forwarded.push(args);}};
@@ -86,14 +87,46 @@ test('settings replacement is atomic, private, bounded, and leaves no temporary 
   await chmod(path,0o644);await assert.rejects(f.call('loadSettings'),/SETTINGS_FILE/);
   await rm(path);await symlink('/etc/passwd',path);await assert.rejects(f.call('loadSettings'));
 });
-test('recording destination is host configured; relative refused and unset stays null',async t=>{
+test('recording destination is validated at install and exposes only a frozen opaque token',async t=>{
   const f=await fixture(t);assert.equal(await f.call('recordingDestination'),null);
   await f.call('saveSettings',settings);
   assert.equal(await f.call('recordingDestination'),null);
-  const relative=await fixture(t,{MV_RECORDING_DESTINATION:'relative'});
-  await assert.rejects(relative.call('recordingDestination'),/SETTINGS_DESTINATION/);
-  const absolute=await fixture(t,{MV_RECORDING_DESTINATION:join(f.root,'recordings')});
-  assert.equal(await absolute.call('recordingDestination'),join(f.root,'recordings'));
+  const destination=join(f.root,'secret-host-dir');await mkdir(destination);
+  const absolute=await fixture(t,{MV_RECORDING_DESTINATION:destination});
+  const token=await absolute.call('recordingDestination');
+  assert.equal(token,'recording:configured');
+  assert.ok(!token.includes('/'));assert.notEqual(token,destination);
+  const empty=await fixture(t,{MV_RECORDING_DESTINATION:''});
+  assert.equal(await empty.call('recordingDestination'),null);
+  await assert.rejects(fixture(t,{MV_RECORDING_DESTINATION:'relative'}),/SETTINGS_DESTINATION/);
+  const source=fileURLToPath(new URL('../',import.meta.url));
+  await assert.rejects(fixture(t,{MV_RECORDING_DESTINATION:source}),/SETTINGS_IN_REPO/);
+  const alias=join(f.root,'source-alias');await symlink(source,alias);
+  await assert.rejects(fixture(t,{MV_RECORDING_DESTINATION:alias}),/SETTINGS_IN_REPO/);
+});
+test('dangling settings ancestors reject load and save with SETTINGS_DIRECTORY',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'wire-dangling-'));
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  const alias=join(root,'config');
+  await symlink(fileURLToPath(new URL('../missing-config-target',import.meta.url)),alias);
+  const store=createSettingsStore({XDG_CONFIG_HOME:alias});
+  await assert.rejects(store.load(),/^Error: SETTINGS_DIRECTORY$/);
+  await assert.rejects(store.save(settings),/^Error: SETTINGS_DIRECTORY$/);
+});
+test('missing and live outside-source symlink settings ancestors still round-trip',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'wire-ancestors-'));
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  const base=join(root,'missing','config');
+  const missing=createSettingsStore({XDG_CONFIG_HOME:base});
+  assert.equal(await missing.load(),null);
+  assert.equal(await missing.save(settings),true);
+  assert.equal(await missing.load(),settings);
+  const alias=join(root,'live');await symlink(base,alias);
+  const live=createSettingsStore({XDG_CONFIG_HOME:alias});
+  assert.equal(await live.load(),settings);
+  const dark=JSON.stringify({scheme:'mv-dark',density:'compact'});
+  assert.equal(await live.save(dark),true);
+  assert.equal(await live.load(),dark);assert.equal(await missing.load(),dark);
 });
 test('terminal refuses arbitrary commands, argv changes, disabled state, malformed broker replies',async t=>{
   const f=await fixture(t);

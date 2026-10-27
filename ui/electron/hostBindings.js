@@ -87,8 +87,8 @@ export async function createMainBindings({env = process.env, createMessageChanne
     // Attach the rejection handler before any socket callbacks can fire.
     void handshake.catch(() => {});
     const shutdown = () => {
-      if (disposed) return; disposed = true; live = false; clearTimeout(helloTimer);
-      clearInterval(keepalive);
+      clearTimeout(helloTimer); clearInterval(keepalive);
+      if (disposed) return; disposed = true; live = false;
       rejectReady(fail()); socket?.destroy();
       for (const item of pending.values()) {clearTimeout(item.timer);item.reject(fail());} pending.clear();
       for (const channel of channels.values()) {channel.port1.close();channel.port2.close();}
@@ -234,10 +234,12 @@ export async function createMainBindings({env = process.env, createMessageChanne
     await handshake;
     const after = await lstat(socketPath);
     if (after.ino !== socketInfo.ino || after.dev !== socketInfo.dev || after.mode !== socketInfo.mode || after.uid !== socketInfo.uid) {shutdown();throw fail();}
+    if (disposed || !live) {shutdown();throw fail();}
     // [TARGET, unit decision] The frozen transport closes receive-idle peers
     // after 30 s. An admitted list round trip keeps UI/core/daemon live even
     // when no user input or frame subscription is active. Never reconnect.
     keepalive = setInterval(() => {
+      if (disposed || !live) return;
       try {send({schema:'surface_request/v0.2',op:'list',params:{}});} catch {shutdown();}
     }, 10000);
     keepalive.unref();

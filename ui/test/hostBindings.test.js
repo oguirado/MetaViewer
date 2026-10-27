@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createServer } from 'node:net';
+import net, { createServer } from 'node:net';
+import fsPromises from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { once, EventEmitter } from 'node:events';
 import { mkdtemp, mkdir, chmod, writeFile, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -37,7 +39,7 @@ async function fixture(t, {badHello=false,refuseIntent=false}={}) {
   const messages=[];const channels=[];
   const createMessageChannel=()=>{const port1=new EventEmitter();Object.assign(port1,{postMessage:value=>messages.push(value),start(){},close(){}});const port2={close(){}};channels.push({port1,port2});return {port1,port2};};
   const env={MV_CORE_CONFIG:configPath,XDG_RUNTIME_DIR:root};
-  return {env,root,frame,send,requests,messages,channels,createMessageChannel};
+  return {env,root,frame,send,requests,messages,channels,createMessageChannel,disconnect:()=>peer.destroy()};
 }
 test('default bootstrap connects, pins hello, delivers real bytes and routes intents/proposals',async t=>{
   const f=await fixture(t);
@@ -132,3 +134,50 @@ test('production boot installs the default socket wire and delivers a subscribed
   assert.deepEqual(delivered[2],[f.channels[0].port2]);
   assert.equal(await handlers.get(WIRE_CHANNELS.intent)({sender:contents,senderFrame:frame},JSON.stringify({schema:'ui_intent/v0.2',request_id:'boot-take',op:'take_control',params:{surface_id:'s1'}})),true);
 });
+
+// Exercise the post-hello filesystem await deterministically, without timing sleeps.
+for (const closeDuringStat of [true, false]) {
+  test(`keepalive post-hello lstat race: close=${closeDuringStat}`, async t => {
+    const f = await fixture(t);
+    const originalConnect = net.createConnection, originalStat = fsPromises.lstat;
+    const originalInterval = globalThis.setInterval, originalClear = globalThis.clearInterval;
+    const active = new Set();
+    let client, socketStats = 0, bindings;
+    t.after(async () => {
+      await bindings?.core.dispose();
+      for (const timer of active) originalClear(timer);
+      t.mock.restoreAll(); syncBuiltinESMExports();
+    });
+    t.mock.method(net, 'createConnection', (...args) => {
+      client = originalConnect(...args); return client;
+    });
+    t.mock.method(fsPromises, 'lstat', async (...args) => {
+      const info = await originalStat(...args);
+      if (args[0] === join(f.root, 'metaviewer/core.sock') && ++socketStats === 2 && closeDuringStat) {
+        const closed = once(client, 'close');
+        f.disconnect(); await closed;
+      }
+      return info;
+    });
+    t.mock.method(globalThis, 'setInterval', (...args) => {
+      const timer = originalInterval(...args); active.add(timer); return timer;
+    });
+    t.mock.method(globalThis, 'clearInterval', timer => {
+      active.delete(timer); return originalClear(timer);
+    });
+    syncBuiltinESMExports();
+    const creating = createMainBindings({...f}).then(value => { bindings = value; return value; });
+    if (closeDuringStat) {
+      await assert.rejects(creating, /CORE_SEAMS_ABSENT/);
+      assert.equal(active.size, 0);
+    } else {
+      await creating;
+      assert.equal(bindings.core.getStatus().availability, 'live');
+      assert.equal(active.size, 1);
+      assert.equal([...active][0].hasRef(), false);
+      await bindings.core.dispose();
+      assert.equal(active.size, 0);
+    }
+    assert.equal(socketStats, 2);
+  });
+}
