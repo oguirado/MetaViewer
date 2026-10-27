@@ -36,7 +36,7 @@
  * @typedef {object} PreloadTransport Injected main-side invoke handle.
  * @property {(channel: string, args: ReadonlyArray<unknown>) => Promise<unknown>} invoke
  * Fixed-channel invoke returning the main outcome.
- * @property {(channel:string,cb:(message:any)=>void)=>(()=>void)} [subscribe]
+ * @property {(channel:string,cb:(message:any,ports?:MessagePort[])=>void)=>(()=>void)} [subscribe]
  */
 
 /**
@@ -74,6 +74,7 @@ export const IPC_BOUNDS = Object.freeze({ maxLayoutBytes: 256 * 1024 });
 
 /** Private allowlist; exports stay frozen literals so no consumer can widen it. */
 const CHANNEL_SET = new Set(Object.values(CHANNELS));
+const PRIVILEGED_ORIGIN = 'metaviewer://app';
 
 /**
  * Coded preload failure. Local codes (DEPS, CHANNEL, ARGS, PAYLOAD, OUTCOME)
@@ -392,8 +393,12 @@ function wireFacade(transport) {
       listeners.add(listener);let active=true;
       if(listeners.size===1) {
         const generation=++subscriptionGeneration;
-        revokeFrames=transport.subscribe('metaviewer:authority.frames',value=> {
+        revokeFrames=transport.subscribe('metaviewer:authority.frames',(value,ports)=> {
           if (!validFrameNotice(value)) return;
+          // Validate once before forwarding either the notice or its byte-plane ports.
+          if (ports?.length && typeof window !== 'undefined' && window.location.origin===PRIVILEGED_ORIGIN) {
+            window.postMessage({type:'metaviewer:frame-port',surface_id:value.surface.surface_id},PRIVILEGED_ORIGIN,ports);
+          }
           for(const notify of [...listeners]) notify(value);
         });
         void call('subscribeFrames',[]).catch(()=>{
@@ -467,16 +472,13 @@ export function installPreload(electron) {
   return createPreloadFacade({
     transport: {
       subscribe: typeof /** @type {any} */(ipcRenderer).on === 'function' ?
-      /** @param {string} channel @param {(value:any)=>void} cb */
+      /** @param {string} channel @param {(value:any,ports?:MessagePort[])=>void} cb */
       (channel,cb) => {
         if (channel !== 'metaviewer:authority.frames') throw new ContractError('CHANNEL','subscription refused');
         const native = /** @type {any} */(ipcRenderer);
         const listener = (/** @type {any} */event,/** @type {any} */value) => {
-          // Transfer only this authenticated host channel's byte-plane ports.
-          if (!validFrameNotice(value)) return;
-          if (event.ports?.length && typeof window !== 'undefined') window.postMessage(
-            {type:'metaviewer:frame-port',surface_id:value?.surface?.surface_id},'*',event.ports);
-          cb(value);
+          // The facade validates this authenticated host channel before transfer.
+          cb(value,event.ports);
         };
         native.on(channel,listener);
         return () => native.removeListener(channel,listener);
