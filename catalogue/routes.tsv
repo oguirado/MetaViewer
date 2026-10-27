@@ -65,6 +65,7 @@ testnat-bd9857859b1f	agents/tests/test_native_receipts.py
 test_nesting.py	agents/tests/test_nesting.py
 test_observe.py	agents/tests/test_observe.py
 test_observe_cli.py	agents/tests/test_observe_cli.py
+test_record.py	agents/tests/test_record.py
 testres-d06e75457090	agents/tests/test_resource_bounds.py
 testrou-1e6213ca9682	agents/tests/test_round1_regressions.py
 test_tg_cli.py	agents/tests/test_tg_cli.py
