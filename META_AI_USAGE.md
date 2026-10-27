@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 342 | 55 | 287 |
-| Lanes finished OK | 342 | 55 | 287 |
-| Agent steps | 18,553 | 2,705 | 15,848 |
-| Lane-hours of agent work | 47.2 | 5.2 | 41.9 |
-| Fresh input tokens | 75,689,567 | 11,482,034 | 64,207,533 |
-| Cache-read input tokens | 1,739,511,988 | 226,255,212 | 1,513,256,776 |
-| Prompt cache hit % | 95.8 | 95.2 | 95.9 |
-| Output tokens | 16,297,296 | 2,135,708 | 14,161,588 |
-| Thinking tokens | 8,589,583 | 1,050,039 | 7,539,544 |
-| Cost (USD) | 14.3074 | 2.0279 | 12.2796 |
-| Cost per lane (USD) | 0.0418 | 0.0369 | 0.0428 |
+| Lanes launched | 345 | 55 | 290 |
+| Lanes finished OK | 345 | 55 | 290 |
+| Agent steps | 18,774 | 2,705 | 16,069 |
+| Lane-hours of agent work | 48.1 | 5.2 | 42.9 |
+| Fresh input tokens | 76,607,273 | 11,482,034 | 65,125,239 |
+| Cache-read input tokens | 1,769,286,412 | 226,255,212 | 1,543,031,200 |
+| Prompt cache hit % | 95.8 | 95.2 | 96.0 |
+| Output tokens | 16,621,933 | 2,135,708 | 14,486,225 |
+| Thinking tokens | 8,774,144 | 1,050,039 | 7,724,105 |
+| Cost (USD) | 14.5237 | 2.0279 | 12.4958 |
+| Cost per lane (USD) | 0.0421 | 0.0369 | 0.0431 |
 
-Rooms: 84. Peak concurrent lanes [MEASURED from lane start/end]: 24.
+Rooms: 86. Peak concurrent lanes [MEASURED from lane start/end]: 24.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -43,7 +43,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
 | docs | 15 | 94.8 | 0.5371 |
-| fix | 21 | 96.8 | 1.2105 |
+| fix | 23 | 96.9 | 1.3414 |
 | kit | 3 | 96.5 | 0.1997 |
 | ops | 4 | 88.1 | 0.0468 |
 | plan | 12 | 92.6 | 0.3072 |
@@ -52,7 +52,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | review | 59 | 94.6 | 1.7206 |
 | submission | 4 | 94.9 | 0.0995 |
 | test | 12 | 95.6 | 0.5657 |
-| testing | 72 | 96.1 | 3.1021 |
+| testing | 73 | 96.1 | 3.1874 |
 | ui | 17 | 96.7 | 1.3092 |
 | vision | 8 | 97.2 | 0.537 |
 
@@ -143,7 +143,9 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui19 | UI orchestrator | Oct 27 19:35 | fix | 3 | 97.0 | 0.2283 | Fix the renderer items from the evening cross-review (capture rows, empty profile id) and the minor findings of real-app round 3 (activity count, sticky toast, folded tile height, screenshots list, contrast, multislot anchors). |
 | mvui20 | UI orchestrator | Oct 27 19:43 | fix | 1 | 96.4 | 0.0854 | URGENT: after the first live frame is presented, the following frames of the stream are refused and the tile falls back to Connecting (production-path e2e evidence). |
 | mvui19b | UI orchestrator | Oct 27 19:58 | fix | 2 | 96.9 | 0.0973 | Finish MV-UI11: give the new screenshots control a kit icon and contract it in the icon audit; complete the multislot anchor grammar fix and contrast items from real-app round 3. |
-| mvr3v3 | conductor | Oct 27 20:03 | testing | 7 | 97.2 | 0.4668 | Refresh the 16 round-3 tester prompts (8 ChatGPT, 8 Jules) to the CURRENT bridge/integration head before the operator launches them: they were written at midday and about 60 integrations landed since. |
+| mvr3v3 | conductor | Oct 27 20:03 | testing | 8 | 97.0 | 0.5521 | Refresh the 16 round-3 tester prompts (8 ChatGPT, 8 Jules) to the CURRENT bridge/integration head before the operator launches them: they were written at midday and about 60 integrations landed since. |
+| mvui20b | UI orchestrator | Oct 27 20:05 | fix | 1 | 98.3 | 0.0746 | Live tile turns black after a multislot round trip (second canvas for the same surface replaces and then removes the binding); black placeholder before the first frame. |
+| mvui19c | UI orchestrator | Oct 27 20:15 | fix | 1 | 96.9 | 0.0563 | Fix a judge-found id/anchor collision between the recording panel's recordings and new screenshots sections before handover. |
 
 ## Every lane
 
@@ -488,9 +490,12 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvr3v3 | T2 | Refresh round-3 T2 | Oct 27 20:03 | yes | 100 | 97.4 | 0.091518 |
 | mvr3v3 | T3 | Refresh round-3 T3 | Oct 27 20:03 | yes | 98 | 97.8 | 0.069307 |
 | mvr3v3 | T4 | Refresh round-3 T4 | Oct 27 20:04 | yes | 95 | 97.6 | 0.06823 |
+| mvr3v3 | T5 | Refresh round-3 T5 | Oct 27 20:04 | yes | 49 | 94.5 | 0.085346 |
 | mvr3v3 | T6 | Refresh round-3 T6 | Oct 27 20:04 | yes | 98 | 97.3 | 0.076588 |
 | mvr3v3 | T7 | Refresh round-3 T7 | Oct 27 20:04 | yes | 98 | 97.1 | 0.083823 |
 | mvr3v3 | T8 | Refresh round-3 T8 | Oct 27 20:04 | yes | 50 | 95.5 | 0.039923 |
+| mvui20b | M | multi-canvas binding + placeholder | Oct 27 20:05 | yes | 100 | 98.3 | 0.074583 |
+| mvui19c | R | cross-section id uniqueness | Oct 27 20:15 | yes | 72 | 96.9 | 0.056318 |
 
 ## Method
 
