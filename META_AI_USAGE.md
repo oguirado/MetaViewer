@@ -19,17 +19,17 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 266 | 55 | 211 |
-| Lanes finished OK | 266 | 55 | 211 |
-| Agent steps | 13,509 | 2,705 | 10,804 |
-| Lane-hours of agent work | 34.4 | 5.2 | 29.2 |
-| Fresh input tokens | 57,137,526 | 11,482,034 | 45,655,492 |
-| Cache-read input tokens | 1,227,995,466 | 226,255,212 | 1,001,740,254 |
-| Prompt cache hit % | 95.6 | 95.2 | 95.6 |
-| Output tokens | 12,263,671 | 2,135,708 | 10,127,963 |
-| Thinking tokens | 6,419,256 | 1,050,039 | 5,369,217 |
-| Cost (USD) | 10.6225 | 2.0279 | 8.5946 |
-| Cost per lane (USD) | 0.0399 | 0.0369 | 0.0407 |
+| Lanes launched | 268 | 55 | 213 |
+| Lanes finished OK | 268 | 55 | 213 |
+| Agent steps | 13,711 | 2,705 | 11,006 |
+| Lane-hours of agent work | 35.0 | 5.2 | 29.8 |
+| Fresh input tokens | 57,779,565 | 11,482,034 | 46,297,531 |
+| Cache-read input tokens | 1,255,629,134 | 226,255,212 | 1,029,373,922 |
+| Prompt cache hit % | 95.6 | 95.2 | 95.7 |
+| Output tokens | 12,440,566 | 2,135,708 | 10,304,858 |
+| Thinking tokens | 6,522,464 | 1,050,039 | 5,472,425 |
+| Cost (USD) | 10.7773 | 2.0279 | 8.7495 |
+| Cost per lane (USD) | 0.0402 | 0.0369 | 0.0411 |
 
 Rooms: 58. Peak concurrent lanes [MEASURED from lane start/end]: 24.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
@@ -52,7 +52,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | review | 47 | 94.4 | 1.393 |
 | test | 12 | 95.6 | 0.5657 |
 | testing | 38 | 95.6 | 1.5247 |
-| ui | 10 | 96.4 | 0.7277 |
+| ui | 12 | 96.7 | 0.8826 |
 | vision | 8 | 97.2 | 0.537 |
 
 ## By room (why and what for)
@@ -116,7 +116,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0tg3 | conductor | Oct 27 07:22 | testing | 8 | 95.0 | 0.2757 | Refresh the AC test-gap map on the integration head after the night (about 80 new commits), and prepare the round-2 tester index and the TESTING.md fact base, so local testing with Muse Spark drives the remaining test units to v0.2.0. |
 | mvkp | conductor | Oct 27 07:32 | release | 5 | 93.2 | 0.0945 | Prove with Meta Muse Spark 1.3 that the capsule-ui-kit repository holds no secret, personal data or unsafe workflow in any reachable ref before the developer makes it public, and design its full code router. |
 | mvr2c | conductor | Oct 27 08:01 | testing | 8 | 96.9 | 0.4935 | Context-engineer the round-2 external testing prompts (Jules and ChatGPT, T1-T8): embed verbatim excerpts of the software papers and OmniCodex language books, which the web testers cannot access, so each tester runs a complete, evidence-driven job on the public repo. |
-| mvui9 | UI orchestrator | Oct 27 08:17 | ui | 1 | 95.1 | 0.0312 | Operator saw no recording menus, screenshot action or capsule action icons on wall tiles: add per-tile record-for-AI/screenshot/recording chrome over the new closed capture facade, adopt kit 0.2.1 tile actions and anchors, and audit every capsule action icon. |
+| mvui9 | UI orchestrator | Oct 27 08:17 | ui | 3 | 97.5 | 0.1861 | Operator saw no recording menus, screenshot action or capsule action icons on wall tiles: add per-tile record-for-AI/screenshot/recording chrome over the new closed capture facade, adopt kit 0.2.1 tile actions and anchors, and audit every capsule action icon. |
 
 ## Every lane
 
@@ -388,6 +388,8 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvr2c | T7 | Round-2 context-engineered prompts T7 | Oct 27 08:02 | yes | 80 | 96.0 | 0.067963 |
 | mvr2c | T8 | Round-2 context-engineered prompts T8 | Oct 27 08:02 | yes | 95 | 97.5 | 0.062708 |
 | mvui9 | C | Capture port, reactive capture state and contract double | Oct 27 08:17 | yes | 43 | 95.1 | 0.031247 |
+| mvui9 | T | Per-tile capsule chrome on the wall | Oct 27 08:18 | yes | 100 | 97.4 | 0.079043 |
+| mvui9 | I | Capsule action icon and anchor audit | Oct 27 08:18 | yes | 102 | 98.0 | 0.075807 |
 
 ## Method
 
