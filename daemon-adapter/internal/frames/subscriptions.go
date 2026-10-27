@@ -3,6 +3,9 @@ package frames
 // [TARGET, unit decision] Capture pacing belongs to the session, independently
 // of UI visibility. Emit must honor its context; delivery failure terminates the
 // subscription instead of growing a queue. Unsubscribe drains in-flight work.
+// [TARGET, unit decision] Terminal tasks release capacity automatically. Retain
+// at most MaxSubscriptions recent failures for TerminalError, clearing a
+// surface's prior failure on resubscription or explicit unsubscribe.
 import (
 	"context"
 	"encoding/json"
@@ -38,6 +41,8 @@ type Subscriptions struct {
 	publisher *Publisher
 	emit      Emit
 	tasks     map[string]*task
+	failures  map[string]*task
+	failedIDs []string
 	closed    bool
 }
 
@@ -49,7 +54,7 @@ func NewSubscriptions(ctx context.Context, cfg SubscriptionConfig, source Source
 		return nil, e
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	return &Subscriptions{ctx: ctx, cancel: cancel, cfg: cfg, source: source, publisher: publisher, emit: emit, tasks: make(map[string]*task)}, nil
+	return &Subscriptions{ctx: ctx, cancel: cancel, cfg: cfg, source: source, publisher: publisher, emit: emit, tasks: make(map[string]*task), failures: make(map[string]*task)}, nil
 }
 func (s *Subscriptions) Subscribe(ctx context.Context, id string) error {
 	if e := ctx.Err(); e != nil {
@@ -67,13 +72,28 @@ func (s *Subscriptions) Subscribe(ctx context.Context, id string) error {
 		return errors.New("subscription capacity reached")
 	}
 	run, cancel := context.WithCancel(s.ctx)
+	s.forgetFailure(id)
 	t := &task{cancel: cancel, done: make(chan struct{})}
 	s.tasks[id] = t
 	go s.poll(run, id, t)
 	return nil
 }
 func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
-	defer close(t.done)
+	defer func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.tasks[id] == t {
+			delete(s.tasks, id)
+			if t.err != nil {
+				if len(s.failedIDs) == s.cfg.MaxSubscriptions {
+					s.forgetFailure(s.failedIDs[0])
+				}
+				s.failures[id] = t
+				s.failedIDs = append(s.failedIDs, id)
+			}
+		}
+		close(t.done)
+	}()
 	defer t.cancel()
 	timer := time.NewTimer(0)
 	defer timer.Stop()
@@ -134,7 +154,8 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 		}
 		failed := e != nil
 		if failed {
-			event, eventErr := capsule.NewErrorEvent(id, &cli.Fault{Code: "capture_failed", Detail: "capture or publication refused"})
+			var eventErr error
+			msg, eventErr = captureFailure(id)
 			if eventErr != nil {
 				if locked {
 					s.cfg.CaptureLock.Unlock()
@@ -142,8 +163,6 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 				t.err = eventErr
 				return
 			}
-			event.Schema = "surface_event/v0.2"
-			msg, _ = json.Marshal(event)
 		}
 		delivery, stop := context.WithTimeout(ctx, s.cfg.CaptureTimeout)
 		deliveryErr := s.emit(delivery, msg)
@@ -155,7 +174,16 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 			s.cfg.CaptureLock.Unlock()
 		}
 		if deliveryErr != nil {
-			t.err = deliveryErr
+			t.err = errors.Join(e, deliveryErr)
+			// A failed frame delivery gets one bounded failure notification.
+			// Do not retry a failure notification or emit after cancellation.
+			if !failed && ctx.Err() == nil {
+				if failure, eventErr := captureFailure(id); eventErr == nil {
+					notice, stop := context.WithTimeout(ctx, s.cfg.CaptureTimeout)
+					_ = s.emit(notice, failure)
+					stop()
+				}
+			}
 			return
 		}
 		if failed {
@@ -165,11 +193,23 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 		timer.Reset(s.cfg.PollInterval)
 	}
 }
+
+func captureFailure(id string) (json.RawMessage, error) {
+	event, err := capsule.NewErrorEvent(id, &cli.Fault{Code: "capture_failed", Detail: "capture, publication or delivery refused"})
+	if err != nil {
+		return nil, err
+	}
+	event.Schema = "surface_event/v0.2"
+	return json.Marshal(event)
+}
+
 func (s *Subscriptions) Unsubscribe(ctx context.Context, id string) error {
 	s.mu.Lock()
 	t, ok := s.tasks[id]
 	if ok {
 		t.cancel()
+	} else {
+		s.forgetFailure(id)
 	}
 	s.mu.Unlock()
 	if !ok {
@@ -186,24 +226,33 @@ func (s *Subscriptions) Unsubscribe(ctx context.Context, id string) error {
 	if s.tasks[id] == t {
 		delete(s.tasks, id)
 	}
+	// A replacement subscription must keep its own terminal result.
+	if s.failures[id] == t {
+		s.forgetFailure(id)
+	}
 	s.mu.Unlock()
 	return nil
 }
 
-// TerminalError is read only after the task completes; it does not hide failure.
+// forgetFailure requires s.mu.
+func (s *Subscriptions) forgetFailure(id string) {
+	delete(s.failures, id)
+	for i, failedID := range s.failedIDs {
+		if failedID == id {
+			s.failedIDs = append(s.failedIDs[:i], s.failedIDs[i+1:]...)
+			return
+		}
+	}
+}
+
+// TerminalError returns a retained completed failure, if any.
 func (s *Subscriptions) TerminalError(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	t, ok := s.tasks[id]
-	if !ok {
-		return nil
-	}
-	select {
-	case <-t.done:
+	if t := s.failures[id]; t != nil {
 		return t.err
-	default:
-		return nil
 	}
+	return nil
 }
 func (s *Subscriptions) Close(ctx context.Context) error {
 	s.mu.Lock()

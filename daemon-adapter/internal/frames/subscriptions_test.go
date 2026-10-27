@@ -166,31 +166,83 @@ func TestSubscriptionDeliveryFailure(t *testing.T) {
 	p := publisher(t, root)
 	source := &captureSource{b: b, f: f}
 	sentinel := errors.New("delivery refused")
-	delivered := make(chan struct{})
-	s, e := NewSubscriptions(context.Background(), SubscriptionConfig{MaxSubscriptions: 1, PollInterval: time.Millisecond, CaptureTimeout: time.Second, ShutdownTimeout: time.Second}, source, p, func(context.Context, json.RawMessage) error { close(delivered); return sentinel })
+	delivered := make(chan json.RawMessage, 8)
+	var mu sync.Mutex
+	refuse := true
+	s, e := NewSubscriptions(context.Background(), SubscriptionConfig{MaxSubscriptions: 1, PollInterval: time.Millisecond, CaptureTimeout: time.Second, ShutdownTimeout: time.Second}, source, p, func(ctx context.Context, msg json.RawMessage) error {
+		select {
+		case delivered <- msg:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if refuse {
+			return sentinel
+		}
+		return nil
+	})
 	if e != nil {
 		t.Fatal(e)
 	}
+	t.Cleanup(func() {
+		if e := s.Close(context.Background()); e != nil {
+			t.Error(e)
+		}
+	})
 	if e = s.Subscribe(context.Background(), "a"); e != nil {
 		t.Fatal(e)
 	}
-	select {
-	case <-delivered:
-	case <-time.After(time.Second):
-		t.Fatal("delivery never attempted")
-	}
-	s.mu.Lock()
-	done := s.tasks["a"].done
-	s.mu.Unlock()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("delivery failure failed to terminate subscription")
+	deadline := time.After(time.Second)
+	for {
+		s.mu.Lock()
+		_, active := s.tasks["a"]
+		s.mu.Unlock()
+		if !active {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("delivery failure failed to remove subscription")
+		case <-time.After(time.Millisecond):
+		}
 	}
 	if !errors.Is(s.TerminalError("a"), sentinel) {
 		t.Fatal("delivery failure was hidden")
 	}
-	if e = s.Close(context.Background()); e != nil {
+	// Completion includes notification delivery: require exactly one attempted
+	// frame and one failure, even when the failure notification is refused too.
+	if len(delivered) != 2 {
+		t.Fatalf("expected one frame attempt and one failure notification, got %d", len(delivered))
+	}
+	var frame struct{ Event string }
+	if msg := <-delivered; json.Unmarshal(msg, &frame) != nil || frame.Event != "frame_ready" {
+		t.Fatalf("missing initial frame attempt: %s", msg)
+	}
+	var failure capsule.ErrorEvent
+	if msg := <-delivered; json.Unmarshal(msg, &failure) != nil || failure.Event != "error" || failure.Data.Code != "capture_failed" || failure.Data.SurfaceID != "a" {
+		t.Fatalf("missing capture_failed notification: %s", msg)
+	}
+	mu.Lock()
+	refuse = false
+	mu.Unlock()
+	if e = s.Subscribe(context.Background(), "a"); e != nil {
+		t.Fatalf("failed subscription retained capacity: %v", e)
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case msg := <-delivered:
+			if json.Unmarshal(msg, &frame) != nil || frame.Event != "frame_ready" {
+				t.Fatalf("healthy subscription did not resume frames: %s", msg)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("healthy subscription stalled after delivery failure")
+		}
+	}
+	if e = s.Unsubscribe(context.Background(), "a"); e != nil {
 		t.Fatal(e)
+	}
+	if s.TerminalError("a") != nil {
+		t.Fatal("healthy subscription retained a terminal failure")
 	}
 }
