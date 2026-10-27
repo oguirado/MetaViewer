@@ -6,6 +6,7 @@ import json
 import os
 import platform
 from pathlib import Path
+import re
 import subprocess
 import tarfile
 import io
@@ -59,23 +60,27 @@ class PackageIdentityTests(unittest.TestCase):
                         'counts': {'passed': None, 'failed': None, 'skipped': None,
                                    'source': 'unparsed:package-smoke'}}
 
-    def write_product(self, machine=183, arch='arm64', extra_members=(), manifest_override=None):
+    def write_product(self, machine=183, arch='arm64', extra_members=(), manifest_override=None, omit_members=()):
         binary = bytearray(64)
         binary[:6] = b'\x7fELF\x02\x01'
         binary[18:20] = machine.to_bytes(2, 'little')
-        files = [(name, bytes(binary)) for name in
-                 ('metaviewer', 'resources/bin/metaviewer-core', 'resources/bin/mv-daemon-adapter')]
+        files = [('metaviewer', 0o755, bytes(binary)),
+                 ('resources/bin/metaviewer-core', 0o755, bytes(binary)),
+                 ('resources/bin/mv-daemon-adapter', 0o755, bytes(binary)),
+                 ('INSTALL.md', 0o644, b'# MetaViewer\n')]
         if manifest_override is None:
             self.manifest = ''.join(
-                f'{hashlib.sha256(data).hexdigest()}  {name}\n' for name, data in files
+                f'{hashlib.sha256(data).hexdigest()} {mode:04o}  {name}\n' for name, mode, data in files
             ).encode()
         else:
             self.manifest = manifest_override
         with tarfile.open(self.product, 'w') as archive:
-            for name, data in [(f'MetaViewer-linux-{arch}.sha256', self.manifest),
-                    *[(f'MetaViewer-linux-{arch}/{name}', data) for name, data in files],
-                    *extra_members]:
+            for name, mode, data in [(f'MetaViewer-linux-{arch}.sha256', 0o644, self.manifest),
+                    *[(f'MetaViewer-linux-{arch}/{name}', mode, data) for name, mode, data in files
+                      if name not in omit_members],
+                    *[(name, 0o644, data) for name, data in extra_members]]:
                 entry = tarfile.TarInfo(name)
+                entry.mode = mode
                 entry.size = len(data)
                 archive.addfile(entry, io.BytesIO(data))
 
@@ -197,20 +202,52 @@ class PackageIdentityTests(unittest.TestCase):
                                      result.stdout + result.stderr)
 
     def test_manifest_inventory_and_extra_members_rejected(self):
-        for label, extra, override in [
-            ('extra-root', [('evil-extra', b'evil')], None),
-            ('extra-nested', [('MetaViewer-linux-arm64/evil-extra', b'evil')], None),
-            ('garbage-manifest', (), b'fixture manifest bytes\n'),
-            ('tampered-line', (), f"{'0' * 64}  metaviewer\n".encode()),
+        import sys
+        modeless = ''.join(
+            re.sub(r'^([0-9a-f]{64}) [0-7]{4}  ', r'\1  ', line) + '\n'
+            for line in self.manifest.decode('utf-8').splitlines()
+        ).encode('utf-8')
+        self.write_product(manifest_override=modeless)
+        evidence = dict(self.evidence,
+            artifact_sha256=hashlib.sha256(self.product.read_bytes()).hexdigest(),
+            manifest_sha256=hashlib.sha256(self.manifest).hexdigest())
+        self.receipt['product_identity'] = evidence
+        (self.root / 'product-evidence.json').write_text(json.dumps(evidence))
+        self.assertTrue(self.aggregate(self.receipt))
+        self.write_product()
+        default_manifest = self.manifest.decode('utf-8')
+        tampered_mode = default_manifest.replace(' 0755  metaviewer\n', ' 0644  metaviewer\n', 1).encode('utf-8')
+        invalid_mode = default_manifest.replace(' 0755  metaviewer\n', ' 0999  metaviewer\n', 1).encode('utf-8')
+        for label, extra, omit, override, expected_err in [
+            ('extra-root', [('evil-extra', b'evil')], (), None, 'unexpected archive member'),
+            ('extra-nested', [('MetaViewer-linux-arm64/evil-extra', b'evil')], (), None,
+             "archive member inventory mismatch: ['MetaViewer-linux-arm64/evil-extra']"),
+            ('missing-member', (), ('INSTALL.md',), None,
+             "archive member inventory mismatch: ['MetaViewer-linux-arm64/INSTALL.md']"),
+            ('extra-and-missing', [('MetaViewer-linux-arm64/evil-extra', b'evil')], ('INSTALL.md',), None,
+             "archive member inventory mismatch: ['MetaViewer-linux-arm64/INSTALL.md', 'MetaViewer-linux-arm64/evil-extra']"),
+            ('garbage-manifest', (), (), b'fixture manifest bytes\n', 'invalid manifest inventory line'),
+            ('invalid-mode', (), (), invalid_mode, 'invalid manifest inventory line'),
+            ('tampered-mode', (), (), tampered_mode, 'manifest member mode mismatch'),
+            ('tampered-line', (), (), f"{'0' * 64}  metaviewer\n".encode(),
+             "archive member inventory mismatch: ['MetaViewer-linux-arm64/INSTALL.md', 'MetaViewer-linux-arm64/resources/bin/metaviewer-core', 'MetaViewer-linux-arm64/resources/bin/mv-daemon-adapter']"),
         ]:
             with self.subTest(case=label):
-                self.write_product(extra_members=extra, manifest_override=override)
+                self.write_product(extra_members=extra, manifest_override=override, omit_members=omit)
                 evidence = dict(self.evidence,
                     artifact_sha256=hashlib.sha256(self.product.read_bytes()).hexdigest(),
                     manifest_sha256=hashlib.sha256(self.manifest).hexdigest())
                 self.receipt['product_identity'] = evidence
                 (self.root / 'product-evidence.json').write_text(json.dumps(evidence))
+                self.assertEqual(distribution_errors(self.receipt, self.root, 'revision', 'arm64'), [expected_err])
                 self.assertFalse(self.aggregate(self.receipt))
+                if label in ('extra-nested', 'missing-member'):
+                    cli = subprocess.run([sys.executable, str(Path(__file__)), '--distribution'],
+                        capture_output=True, text=True, env=dict(os.environ,
+                            PLATFORM='arm64', PACKAGE_RECEIPT=json.dumps(self.receipt),
+                            PRODUCT_ROOT=str(self.root), GITHUB_SHA='revision'))
+                    self.assertEqual(cli.returncode, 1)
+                    self.assertIn(expected_err, cli.stdout)
 
     def test_hosted_aggregator_checks_receipt(self):
         text = CI.read_text()
@@ -359,11 +396,12 @@ def distribution_errors(receipt, product_root, revision, expected_arch=None):
             if not manifest_text or not manifest_text.endswith('\n'):
                 return ['invalid manifest format']
             expected_hashes = {}
+            expected_modes = {}
             for line in manifest_text.splitlines():
-                m = re.fullmatch(r'([0-9a-f]{64})  ?([^\r\n\\]+)', line)
+                m = re.fullmatch(r'([0-9a-f]{64})(?: ([0-7]{4}))?  ([^\r\n\\]+)', line)
                 if not m:
                     return ['invalid manifest inventory line']
-                digest_hex, rel_path = m.group(1), m.group(2)
+                digest_hex, mode_oct, rel_path = m.group(1), m.group(2), m.group(3)
                 if rel_path.startswith('/') or any(p in ('', '.', '..') for p in rel_path.split('/')):
                     return ['invalid manifest member path']
                 full_name = rel_path if rel_path.startswith(prefix) else prefix + rel_path
@@ -372,9 +410,14 @@ def distribution_errors(receipt, product_root, revision, expected_arch=None):
                 if full_name in expected_hashes:
                     return ['duplicate manifest entry']
                 expected_hashes[full_name] = digest_hex
+                if mode_oct is not None:
+                    expected_modes[full_name] = int(mode_oct, 8)
             if set(actual_files) != set(expected_hashes):
-                return ['archive member inventory mismatch']
+                diff = sorted(set(actual_files) ^ set(expected_hashes))
+                return [f'archive member inventory mismatch: {diff}']
             for full_name, expected_digest in expected_hashes.items():
+                if full_name in expected_modes and (actual_files[full_name].mode & 0o777) != expected_modes[full_name]:
+                    return ['manifest member mode mismatch']
                 with archive.extractfile(actual_files[full_name]) as stream:
                     if hashlib.file_digest(stream, 'sha256').hexdigest() != expected_digest:
                         return ['manifest member digest mismatch']
