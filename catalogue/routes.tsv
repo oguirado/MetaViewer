@@ -1067,6 +1067,7 @@ preload.js	ui/electron/preload.js
 ptyBroker.js	ui/electron/ptyBroker.js
 ptySession.js	ui/electron/ptySession.js
 ptyUtility.js	ui/electron/ptyUtility.js
+qaAnchors.js	ui/electron/qaAnchors.js
 smoke.js	ui/electron/smoke.js
 terminalHost.js	ui/electron/terminalHost.js
 ui-index.html	ui/index.html
@@ -1269,6 +1270,7 @@ projection.test.js	ui/test/projection.test.js
 providers.test.js	ui/test/providers.test.js
 ptyBrok-cfb026cc6e99	ui/test/ptyBrokerGuards.test.js
 ptyInte-075619416ca8	ui/test/ptyIntegration.test.js
+qa-anchors.test.js	ui/test/qa-anchors.test.js
 r2t4new-a5225175abe1	ui/test/r2t4-new-surface.test.js
 r2t4reg-c43c6f37375b	ui/test/r2t4-regressions.test.js
 security.test.js	ui/test/security.test.js
