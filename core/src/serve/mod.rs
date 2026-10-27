@@ -1090,6 +1090,50 @@ mod nv_regressions {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT: AtomicU64 = AtomicU64::new(0);
+    struct ShmFixture(PathBuf);
+    impl ShmFixture {
+        fn new() -> Self {
+            loop {
+                let root = Path::new("/dev/shm").join(format!(
+                    "mv-nv-layout-{}-{}",
+                    std::process::id(),
+                    NEXT.fetch_add(1, Ordering::Relaxed)
+                ));
+                match fs::create_dir(&root) {
+                    Ok(()) => return Self(root),
+                    Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+                    Err(e) => panic!("shared-memory fixture directory: {e}"),
+                }
+            }
+        }
+    }
+    impl Drop for ShmFixture {
+        fn drop(&mut self) {
+            // Do not double-panic while unwinding a failed assertion.
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn shm_fixture_is_unique_and_cleans_up_on_unwind() {
+        let first = ShmFixture::new();
+        let second = ShmFixture::new();
+        assert_ne!(first.0, second.0);
+        let root = first.0.clone();
+        let cleanup_path = root.clone();
+        let result = std::panic::catch_unwind(move || {
+            let _guard = first;
+            fs::create_dir(root.join("ramws")).unwrap();
+            fs::write(root.join("ramws/demo.rgb"), b"pixels").unwrap();
+            panic!("exercise fixture unwinding");
+        });
+        assert!(result.is_err());
+        assert!(!cleanup_path.exists());
+        assert!(second.0.is_dir(), "cleanup must preserve another fixture");
+        let second_path = second.0.clone();
+        drop(second);
+        assert!(!second_path.exists());
+    }
     struct Fixture {
         server: Server,
         root: PathBuf,
@@ -1265,17 +1309,14 @@ mod nv_regressions {
     #[test]
     fn nv_r2_contract_adapter_layout_and_component_guards() {
         let mut f = Fixture::new();
-        let root = PathBuf::from(format!(
-            "/dev/shm/mv-nv-layout-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
+        let shm = ShmFixture::new();
+        let root = &shm.0;
         let adapter = root.join("frames-ABC123");
         fs::create_dir_all(&adapter).unwrap();
         let frame_path = adapter.join("f.rgb");
         fs::write(&frame_path, b"pixels").unwrap();
-        let alias = root.with_extension("alias");
-        std::os::unix::fs::symlink(&root, &alias).unwrap();
+        let alias = root.join("root-alias");
+        std::os::unix::fs::symlink(root, &alias).unwrap();
         let inner_alias = root.join("alias");
         std::os::unix::fs::symlink(&adapter, &inner_alias).unwrap();
         let final_alias = adapter.join("alias.rgb");
@@ -1285,14 +1326,14 @@ mod nv_regressions {
         ))
         .unwrap();
         frame.sha256 = sha256_hex(b"pixels");
-        // Use the contract path verbatim, creating exclusively and never replacing data.
-        let contract_path = PathBuf::from(&frame.ramws_path);
+        // Preserve the contract's nested layout under this test's exclusive root.
+        let contract_path = root.join(
+            Path::new(&frame.ramws_path)
+                .strip_prefix("/dev/shm")
+                .unwrap(),
+        );
         let contract_dir = contract_path.parent().unwrap();
-        let own_contract_dir = match fs::create_dir(contract_dir) {
-            Ok(()) => true,
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => false,
-            Err(e) => panic!("contract fixture directory: {e}"),
-        };
+        fs::create_dir_all(contract_dir).unwrap();
         let mut contract_file = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -1300,6 +1341,7 @@ mod nv_regressions {
             .unwrap();
         use std::io::Write;
         contract_file.write_all(b"pixels").unwrap();
+        frame.ramws_path = contract_path.to_str().unwrap().into();
         let contract_admitted = f.server.witness(&frame).is_ok();
         frame.ramws_path = frame_path.to_str().unwrap().into();
         let adapter_admitted = f.server.witness(&frame).is_ok();
@@ -1322,12 +1364,6 @@ mod nv_regressions {
         frame.ramws_path = frame_path.to_str().unwrap().into();
         frame.sha256 = "0".repeat(64);
         let bad_digest_refused = f.server.witness(&frame).is_err();
-        fs::remove_file(alias).unwrap();
-        fs::remove_dir_all(root).unwrap();
-        fs::remove_file(&contract_path).unwrap();
-        if own_contract_dir {
-            fs::remove_dir(contract_dir).unwrap();
-        }
         assert!(contract_admitted, "contract example path must be admitted");
         assert!(
             adapter_admitted,
