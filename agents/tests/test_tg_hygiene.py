@@ -189,6 +189,9 @@ def environment_audit(source, filename=None):
                 parent = parents.get(parent)
         # Wender alone may select its locked planner checkout from this key.
         allowed = ENV_KEYS | ({"MV_WENDER_ROOT"} if filename == WENDER else set())
+        # verify.py reads a JSON planner argv array, never a credential or shell command.
+        if filename == "verify.py":
+            allowed |= {"MV_WENDER_PLANNER_CMD"}
         if not keys or not keys <= allowed:
             violations.append("unapproved environment key")
     return violations
@@ -232,6 +235,16 @@ class HygieneGapTests(unittest.TestCase):
         for code in ("import os\ndict(os.environ)", "import os\nos.environ.get(key)",
                      "from os import environ as env\nenv.get('ACCESS_TOKEN')"):
             self.assertTrue(environment_audit(code))
+
+    def test_planner_command_exception_remains_exact_and_file_scoped(self):
+        source = (PRODUCT / "verify.py").read_text(encoding="utf-8")
+        self.assertEqual(environment_audit(source, "verify.py"), [])
+        mutant = source.replace("MV_WENDER_PLANNER_CMD", "NEW_UNAPPROVED_KEY")
+        self.assertNotEqual(mutant, source)
+        self.assertIn("unapproved environment key", environment_audit(mutant, "verify.py"))
+        for filename in (None, "other.py", WENDER, DEPS_LOCK):
+            self.assertIn("unapproved environment key", environment_audit(
+                'import os\nos.environ.get("MV_WENDER_PLANNER_CMD")', filename))
 
     def test_dependency_lock_exceptions_remain_exact_and_file_scoped(self):
         source = (PRODUCT / DEPS_LOCK).read_text(encoding="utf-8")
