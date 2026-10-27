@@ -1392,10 +1392,12 @@ jobs:
             exit $rc
           fi
           # Electron has no npm postinstall hook; the ASAR test needs its real binary.
+          # Bootstrap the checksum-verified archive, then require the installer
+          # and its xvfb version probe to pass in the test network namespace.
           LOG="$EVDIR/js-electron.log"
-          node .github/workflows/install_electron.cjs >"$LOG" 2>&1; r=$?
+          ( node .github/workflows/install_electron.cjs && offline timeout 1200 node .github/workflows/install_electron.cjs ) >"$LOG" 2>&1; r=$?
           if [ $r -eq 0 ]; then oc=PASS; rsn="pinned Electron verified"; else oc=FAIL; rsn="Electron installation failed"; fi
-          finish_gate js-electron "$r" "$oc" "$rsn" "$LOG" .github/workflows/install_electron.cjs "unparsed:electron-install" 0 -- node .github/workflows/install_electron.cjs || rc=2
+          finish_gate js-electron "$r" "$oc" "$rsn" "$LOG" .github/workflows/install_electron.cjs "unparsed:electron-install" 0 -- offline timeout 1200 node .github/workflows/install_electron.cjs || rc=2
           [ $r -ne 0 ] && [ $rc -eq 0 ] && rc=$r
           if [ -z "$(ls ui/test/*.test.js 2>/dev/null)" ]; then
             blocked js-test "ui/test/*.test.js missing, owned by R-W0-SHELL" ui/package.json -- npm test; r=$?
@@ -1517,7 +1519,11 @@ jobs:
       # Electron 44 uses an explicit installer (no npm postinstall hook).
       # Its locked package supplies checksums.json to @electron/get.
       - name: Install and verify pinned Electron binary
-        run: node .github/workflows/install_electron.cjs
+        run: |
+          set -euo pipefail
+          # Bootstrap online, then verify again under the exact test wrapper.
+          node .github/workflows/install_electron.cjs
+          bash "$GITHUB_WORKSPACE/.github/workflows/offline.sh" timeout 1200 node .github/workflows/install_electron.cjs
       - name: Run E2E gate under xvfb
         env:
           JOB_ID: e2e
