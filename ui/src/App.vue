@@ -73,6 +73,10 @@ const terminalOpen = ref(props.fixture?.key === 'side-terminal-open');
 const multislotOpen = ref(['multislot', 'recording'].includes(props.fixture?.key ?? ''));
 const selectedCapsuleId = ref(props.fixture?.capsules[0]?.id ?? '');
 const inputMode = ref('read');
+// App owns the controlled presentation until the authoritative row changes.
+const foldOverrides = ref(/** @type {Record<string, boolean>} */ ({}));
+const selectedFolded = computed(() => selectedSurface.value
+  ? foldOverrides.value[selectedSurface.value.id] ?? selectedSurface.value.visibility === 'folded' : false);
 const selectedSurface = computed(() => rows.value.find(row => row.id === selectedCapsuleId.value) ?? rows.value[0] ?? null);
 /** Renderer intents remain events until a host supplies an authoritative dispatcher. */
 const emit = defineEmits(['submit-intent', 'create-capsule']);
@@ -94,6 +98,30 @@ function dispatch(intent) {
   } else if (propose) void submitHost(() => propose(intent));
   else emit('submit-intent', intent);
 }
+/** The multislot host builds protocol bodies at its kit-event boundary.
+ * App owns the controlled presentation, including hosts without an intent port.
+ * @param {unknown} intent
+ * @param {string} capsuleId Capsule identity supplied by the multislot boundary. */
+async function dispatchMultislot(intent, capsuleId) {
+  if (nestedMode.displayOnly) return;
+  const body = /** @type {{schema?:string,op?:string,params?:{slot_id?:string}}} */ (intent);
+  const surface = selectedSurface.value;
+  if (surface && body?.schema === 'ui_intent/v0.2' && ['fold', 'unfold'].includes(body.op ?? '')
+      && capsuleId === surface.id) {
+    const visibility = surface.visibility;
+    const submitIntent = props.authorityHost?.intent;
+    const accepted = !props.authorityHost || await submitHost(async () => {
+      const result = await submitIntent?.(intent);
+      if (result !== true) throw new Error('Host acknowledgement unavailable');
+      return true;
+    });
+    if (accepted === true && hostActive && rows.value.some(row => row.id === surface.id && row.visibility === visibility)) {
+      foldOverrides.value = { ...foldOverrides.value, [surface.id]: body.op === 'fold' };
+    }
+    return;
+  }
+  dispatch(intent);
+}
 /** @param {unknown} intent */
 function onCreateCapsule(intent) {
   if (nestedMode.displayOnly) return;
@@ -111,6 +139,7 @@ async function submitHost(action) {
     if (hostActive) hostOutcome.value = result === true
       ? { code: 'INTENT_ACKNOWLEDGED', message: 'Request sent.', tone: 'success' }
       : /** @type {import('./core/hostAdapters.js').OutcomeRow} */ (result);
+    return result;
   } catch {
     if (hostActive) hostOutcome.value = { code: 'HOST_REQUEST_REFUSED', message: 'This request is unavailable. Please try again.', tone: 'refusal' };
   }
@@ -166,6 +195,14 @@ const rows = computed(() => {
   void snapshot.value;
   const admitted = feed.getProjection()?.rows.filter(row => !['lost', 'destroyed'].includes(row.backendLifecycle)) ?? [];
   return admitted.filter(row => !nestedMode.displayOnly || applyNestedWall([row], nestedMode).rows.length > 0);
+});
+// Reconcile only changed authoritative visibility, retaining pending local
+// presentation across unrelated feed updates and removing departed surfaces.
+watch(() => rows.value.map(row => /** @type {[string, string]} */ ([row.id, row.visibility])), (next, previous = []) => {
+  const prior = new Map(previous);
+  foldOverrides.value = Object.fromEntries(next.flatMap(([id, visibility]) =>
+    prior.get(id) === visibility && Object.hasOwn(foldOverrides.value, id)
+      ? [[id, foldOverrides.value[id]]] : []));
 });
 // Readiness belongs to the branch actually rendered, including display-only walls.
 const wallView = computed(() => nestedMode.displayOnly ? 'nested' : rows.value.length ? 'workspace' : 'empty');
@@ -242,7 +279,7 @@ const chromeWorkspace = markRaw(defineComponent({
         <EmptyWallView v-if="!rows.length && !nestedMode.displayOnly" @add-capsule="launcherOpen = true" />
         <section v-if="multislotOpen && selectedSurface && !nestedMode.displayOnly" class="mv-multislot-screen" aria-label="Capsule multislot">
           <UiButton id="multislot-back" data-semantic-anchor="multislot/back" label="Back to wall" @click="multislotOpen = false" />
-          <MultislotHost :capsule-id="selectedSurface.id" :capsule-label="selectedSurface.title" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" :folded="selectedSurface.visibility === 'folded'" v-model:input-mode="inputMode" @submit-intent="dispatch">
+          <MultislotHost :capsule-id="selectedSurface.id" :capsule-label="selectedSurface.title" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" :folded="selectedFolded" v-model:input-mode="inputMode" @submit-intent="dispatchMultislot">
             <template #surface><SurfaceCanvas :surface-id="selectedSurface.id" :generation="selectedSurface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(selectedSurface).frame" :digest="surfaceWitness(selectedSurface).digest" :state="selectedSurface.attachmentState === 'live' ? 'live' : 'connecting'" /></template>
             <template #record><MvRecordingPanel :capsule-id="selectedSurface.id" :export-destination="props.exportDestination" :phase="props.fixture?.key === 'recording' ? 'recording' : 'idle'" @submit-intent="dispatch" /></template>
           </MultislotHost>

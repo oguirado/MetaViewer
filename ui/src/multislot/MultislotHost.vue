@@ -23,6 +23,7 @@ import BrokerLaunchControls from '../terminal/BrokerLaunchControls.vue';
 import { createSideTerminalFacade, createSideTerminalBrokerFacade } from '../terminal/sideTerminalFacade.js';
 import {
   createGatedTerminalWriter,
+  buildMultislotFoldIntent,
   leaseForInputMode,
   normalizeMultislotInputMode,
 } from './multislotInputGate.js';
@@ -292,7 +293,7 @@ function onSubmitIntent(intent) {
     void runCopy();
   } else {
     // Explicit props await parent acceptance. Omitted props retain the local
-    // presentation mode used by App, which owns no presentation-state adapter.
+    // presentation mode for standalone hosts without a controlling parent.
     const supplied = instance?.vnode.props ?? {};
     const controlled = (/** @type {string} */ camel, /** @type {string} */ kebab = camel) =>
       Object.prototype.hasOwnProperty.call(supplied, camel) || Object.prototype.hasOwnProperty.call(supplied, kebab);
@@ -301,7 +302,11 @@ function onSubmitIntent(intent) {
     if (!controlled('surfaceHidden', 'surface-hidden') && (type === 'hide-surface' || type === 'show-surface')) surfaceVisibleRef.value = type === 'show-surface';
     if (!controlled('terminalHidden', 'terminal-hidden') && (type === 'hide-terminal' || type === 'show-terminal')) terminalVisibleRef.value = type === 'show-terminal';
   }
-  emit('submit-intent', intent);
+  // Bind to AiMultiSlot.multislotDomIds().root (pinned by the mounted test),
+  // never substitute a surface id for a slot id.
+  emit('submit-intent', type === 'fold' || type === 'unfold'
+    ? buildMultislotFoldIntent(type, props.capsuleId)
+    : intent, props.capsuleId);
 }
 
 /**

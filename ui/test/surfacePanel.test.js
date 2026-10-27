@@ -259,7 +259,8 @@ test('surface slot forwards exact identity; host never unmounts', () => {
   assert.match(template, /:capsule-id="props\.capsuleId"/);
   assert.match(template, /:surface="row"/);
   assert.match(template, /:drawable="drawable"/);
-  assert.match(template, /v-show/);
+  // The hidden attribute preserves mounting without CSP-blocked inline styles.
+  assert.match(template, /:hidden="!surfaceHostVisible"/);
   assert.doesNotMatch(template, /v-if/);
 });
 

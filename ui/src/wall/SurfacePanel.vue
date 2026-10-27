@@ -424,7 +424,7 @@ function onActivateSurface() {
     @dock-back="onDockBack"
   >
     <template #surface>
-      <div v-show="surfaceHostVisible" class="mv-surface-host">
+      <div :hidden="!surfaceHostVisible" class="mv-surface-host">
         <slot name="surface" :capsule-id="props.capsuleId" :surface="row" :drawable="drawable" />
       </div>
     </template>

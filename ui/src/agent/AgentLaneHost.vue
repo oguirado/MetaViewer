@@ -23,14 +23,14 @@ function apply() {
   if (props.enabled) {
     uninstall = installAgentLane(globalThis, {
       root: document,
-      screen: props.screen,
+      screen: () => props.screen,
       fixture: props.fixtureKey || null,
     });
   }
 }
 
 onMounted(apply);
-watch(() => [props.enabled, props.screen, props.fixtureKey], apply);
+watch(() => [props.enabled, props.fixtureKey], apply);
 onBeforeUnmount(() => {
   if (uninstall) {
     uninstall();

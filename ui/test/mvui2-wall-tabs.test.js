@@ -176,7 +176,11 @@ async function compileWall(deps) {
     if (spec === 'vue') return all.replace(/(['"])vue\1/, JSON.stringify(pathToFileURL(require.resolve('vue')).href));
     return `const ${binding.trim()} = globalThis.__v2WallDeps[${JSON.stringify(spec)}];`;
   });
-  return (await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}#v2-wall-${serial}`)).default;
+  try {
+    return (await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}#v2-wall-${serial}`)).default;
+  } finally {
+    delete globalThis.__v2WallDeps;
+  }
 }
 
 function mountComponent(Component, props) {

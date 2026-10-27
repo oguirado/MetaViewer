@@ -1,7 +1,9 @@
+import { buildAuthorityIntent } from '../core/intents.js';
+
 /**
  * Operator input-mode gate for the MetaViewer AI multislot.
  *
- * Pure renderer module: no DOM, no framework, no imports. The host projects
+ * Pure renderer module: no DOM or framework. The host projects
  * one operator input mode (`read|write`, default `read`, aligned with the kit
  * `AiInputModeChip` normalizer) and this module decides, at two boundaries,
  * whether operator keystrokes may travel:
@@ -22,6 +24,13 @@ export const MULTISLOT_INPUT_MODES = Object.freeze(['read', 'write']);
 
 /** Typed reason carried by a dropped write. */
 export const INPUT_GATE_REFUSAL = 'ERR_INPUT_MODE_READ';
+
+// Pinned against AiMultiSlot.multislotDomIds().root by mvui3-renderer.test.js.
+const MULTISLOT_ID_PREFIX = 'cuk-ai-slot-';
+/** @param {string} capsuleId */
+export function multislotSlotId(capsuleId) {
+  return `${MULTISLOT_ID_PREFIX}${capsuleId}`;
+}
 
 /**
  * @param {unknown} mode Candidate projected mode.
@@ -82,4 +91,14 @@ export function createGatedTerminalWriter({ facade, getInputMode }) {
       return { delivered: true, reason: '' };
     },
   };
+}
+
+/** Admit kit fold controls through the shared authority builder. The slot
+ * identity matches AiMultiSlot.multislotDomIds().root; mounted tests pin it.
+ * @param {'fold'|'unfold'} op
+ * @param {string} capsuleId
+ * @returns {Readonly<Record<string, unknown>>}
+ */
+export function buildMultislotFoldIntent(op, capsuleId) {
+  return buildAuthorityIntent({ op, params: { slot_id: multislotSlotId(capsuleId) } });
 }

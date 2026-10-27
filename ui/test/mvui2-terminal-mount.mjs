@@ -27,7 +27,11 @@ export async function compileSfc(file, deps) {
     return `const ${bindings.trim()} = globalThis.__mvui2v1Deps[${JSON.stringify(spec)}];`;
   });
   globalThis.__mvui2v1Deps = deps;
-  return (await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}#${serial++}`)).default;
+  try {
+    return (await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}#${serial++}`)).default;
+  } finally {
+    delete globalThis.__mvui2v1Deps;
+  }
 }
 
 /** @param {string} name @param {Record<string, any>} children */
