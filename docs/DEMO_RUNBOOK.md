@@ -27,10 +27,11 @@ Before I run `stack.py start`, preflight verifies every prerequisite and fails c
 
 ## 2. Environment Variables
 
-I export absolute paths using `$HOME`-relative, `<clone>`, or `/dev/shm` locations (never hard-coding personal host paths in tracked files):
+I export absolute paths using `$HOME`-relative, `<clone>`, or `/dev/shm` locations (never hard-coding personal host paths in tracked files). Because `stack.py` preflight rejects a missing `MV_SRF_LIVE_RAM_ROOT` or `MV_SRF_STATE_DIR` with `"live path AUSENTE"` [CITED: tests/e2e/e2e1_slice/stack.py], I run `mkdir -p` to create both directories first; both paths are per lane (one RAM root and one state dir per live lane). `MV_RECORDING_DESTINATION` also enables the **Export** control in the UI: without it, the **Export** control is disabled (`"No export destination advertised by the host"` [CITED: ui/src/recording/recordingModel.js]); with it, **Export** writes a `.tar` archive there, and the destination directory must exist (`mkdir -p`):
 
 ```bash
 export MV_E2E_LIVE=1
+export ELECTRON_OVERRIDE_DIST_PATH="<directory holding electron 44.9.2>"
 export MV_E2E_ELECTRON_BIN="$ELECTRON_OVERRIDE_DIST_PATH/electron"
 export CARGO_TARGET_DIR="$HOME/.cache/cargo-target/metaviewer-demo"
 export MV_SRF_BIN_DIR="<opensuperficies-clone>/build/bin"
@@ -40,6 +41,7 @@ export MV_SRF_STATE_DIR="/dev/shm/metaviewer-ramws/identity-state"
 export SRF_IDENTITY_STORE_ROOT="$HOME/.local/share/opensuperficies/identities"
 export SRF_PROXY_REGISTRY="$HOME/.local/state/opensuperficies/identity/registry/registry.json"
 export MV_RECORDING_DESTINATION="/tmp/metaviewer-recordings"
+mkdir -p "$MV_SRF_LIVE_RAM_ROOT" "$MV_SRF_STATE_DIR" "$MV_RECORDING_DESTINATION"
 # XDG_RUNTIME_DIR is inherited from the login session (mode 0700);
 # stack state is stored at $XDG_RUNTIME_DIR/metaviewer-live-stack/state.json
 ```
@@ -47,42 +49,52 @@ export MV_RECORDING_DESTINATION="/tmp/metaviewer-recordings"
 | Variable | Role |
 | --- | --- |
 | `MV_E2E_LIVE` | Must be `1`; enables live stack admission and writes `qa-anchors.json` into the run directory |
-| `MV_E2E_ELECTRON_BIN` | Absolute path to the local Electron `44.9.2` binary [CITED: ui/package.json] |
+| `ELECTRON_OVERRIDE_DIST_PATH` | `<directory holding electron 44.9.2>` [CITED: ui/package.json], used to derive `MV_E2E_ELECTRON_BIN` (and honored by `tools/gate.sh`) |
+| `MV_E2E_ELECTRON_BIN` | Absolute path to the local Electron `44.9.2` binary (`$ELECTRON_OVERRIDE_DIST_PATH/electron`), read directly by `stack.py` [CITED: tests/e2e/e2e1_slice/stack.py, ui/package.json] |
 | `CARGO_TARGET_DIR` | Absolute per-worktree Cargo build directory (required when `MV_E2E_CORE_BIN` is unset) |
 | `MV_E2E_CORE_BIN` | Optional prebuilt `metaviewer-core` binary path |
 | `MV_E2E_ADAPTER_BIN` | Optional prebuilt `mv-daemon-adapter` binary path |
 | `MV_SRF_BIN_DIR` | Directory containing `srf-identity-surface` |
 | `MV_SRF_LIVE_PROFILE` | Must be `mv-live-1` |
-| `MV_SRF_LIVE_RAM_ROOT` | `/dev/shm` root where live capsule RGB frames are published in RAM |
-| `MV_SRF_STATE_DIR` | Dedicated per-lane OpenSuperficies identity state directory in `/dev/shm` |
+| `MV_SRF_LIVE_RAM_ROOT` | Per-lane `/dev/shm` root where live capsule RGB frames are published in RAM (one RAM root per live lane; must be created first with `mkdir -p`, or preflight rejects it with `"live path AUSENTE"`) |
+| `MV_SRF_STATE_DIR` | Dedicated per-lane OpenSuperficies identity state directory in `/dev/shm` (one state dir per live lane; must be created first with `mkdir -p`, or preflight rejects it with `"live path AUSENTE"`) |
 | `SRF_IDENTITY_STORE_ROOT` | Provisioned OpenSuperficies identity store root (`$HOME/.local/share/opensuperficies/identities`) |
 | `SRF_PROXY_REGISTRY` | Provisioned OpenSuperficies proxy registry JSON (`$HOME/.local/state/opensuperficies/identity/registry/registry.json`) |
-| `MV_RECORDING_DESTINATION` | Destination directory outside `<clone>` for exported per-tile capture `.tar` archives |
+| `MV_RECORDING_DESTINATION` | Existing destination directory outside `<clone>` (`mkdir -p`) for exported per-tile capture `.tar` archives; also enables the **Export** control in the UI (without it, **Export** is disabled with `"No export destination advertised by the host"` [CITED: ui/src/recording/recordingModel.js]) |
 | `MV_KIT_CHECKOUT` / `CAPSULE_UI_KIT_REPO` | Optional local `capsule-ui-kit` git checkout path read by `tools/sync_kit.mjs` when no positional `[kit-repo]` argument is passed [CITED: tools/sync_kit.mjs] |
 
 ## 3. Capped Start (`systemd-run --user --scope`)
 
 ### Stage `capsule-ui-kit` and build `ui/` on a fresh clone
 
-On a fresh clone, `<clone>/ui/.kit/capsule-ui-kit` is git-ignored and absent. Before running `npm ci --offline` and `npm run build` in `<clone>/ui`, I stage the pinned `capsule-ui-kit` tree from a local checkout at commit `bf31bc201987206d16dbd88d93102f9d5ce026f9` [CITED: ui/kit.lock.json] whose `origin` remote URL (`git remote get-url origin`) equals `https://github.com/oguirado/capsule-ui-kit.git` [CITED: ui/kit.lock.json]:
+On a fresh clone, `<clone>/ui/.kit/capsule-ui-kit` is git-ignored and absent. Before running `npm ci --offline` and `npm run build` in `<clone>/ui`, I stage the pinned `capsule-ui-kit` tree from a local checkout at commit `bf31bc201987206d16dbd88d93102f9d5ce026f9` [CITED: ui/kit.lock.json] whose `origin` remote URL (`git remote get-url origin`) equals `https://github.com/oguirado/capsule-ui-kit.git` [CITED: ui/kit.lock.json].
+
+To obtain an offline kit checkout `<dir>` from a local `capsule-ui-kit` clone whose `origin` remote URL equals the lock URL in `ui/kit.lock.json`:
+
+```bash
+git clone --local --no-checkout <local capsule-ui-kit clone> <dir> && git -C <dir> checkout <commit from ui/kit.lock.json> && git -C <dir> remote set-url origin <url from ui/kit.lock.json>
+```
+
+I run `tools/sync_kit.mjs`, `npm ci --offline`, and `npm run build` inside a memory-capped `systemd-run --user --scope` unit (`MemoryMax=8G`, `MemoryHigh=6G`, `MemorySwapMax=0` [TARGET]) too:
 
 ```bash
 cd /path/to/metaviewer
-node tools/sync_kit.mjs <capsule-ui-kit-checkout>
-node tools/sync_kit.mjs --check
-cd ui
-npm ci --offline
-npm run build
-cd ..
+systemd-run --user --scope -p MemoryMax=8G -p MemoryHigh=6G -p MemorySwapMax=0 -- bash -c '
+  node tools/sync_kit.mjs <dir>
+  node tools/sync_kit.mjs --check
+  cd ui
+  npm ci --offline
+  npm run build
+'
 ```
 
 `tools/sync_kit.mjs` resolves the checkout path from its positional `[kit-repo]` argument, or from `MV_KIT_CHECKOUT`, or from `CAPSULE_UI_KIT_REPO` (`node tools/sync_kit.mjs [kit-repo] [--check]` [CITED: tools/sync_kit.mjs]). Running `node tools/sync_kit.mjs --check` verifies the materialized `ui/.kit/capsule-ui-kit` directory (`version: "0.2.1"`, `contentHash: "1bee78c76a0a2a41d085beed918ca6ca791beaf53b952d4a9367dad660fd6dc2"` [CITED: ui/kit.lock.json]) against `ui/kit.lock.json`.
 
-I always launch the stack inside a memory-capped `systemd-run --user --scope` unit (`MemoryMax=8G`, `MemoryHigh=6G`, `MemorySwapMax=0`, `RuntimeMaxSec=2700` [TARGET]) rather than bare in the desktop scope.
+I always launch the stack inside a memory-capped `systemd-run --user --scope` unit (`MemoryMax=8G`, `MemoryHigh=6G`, `MemorySwapMax=0`, `RuntimeMaxSec=2700` [TARGET]) rather than bare in the desktop scope. Each `systemd-run --user --scope` command below relies on the Section 2 exports being inherited (a `--scope` unit keeps the caller environment).
 
 ### Interactive desktop window (`--display visible`)
 
-When I drive the demo live on my desktop display, I pass `--display visible` so `stack.py` uses my existing `$DISPLAY` and `$XAUTHORITY` instead of starting `Xvfb`:
+When I drive the demo live on my desktop display, I pass `--display visible` so `stack.py` uses my existing `$DISPLAY` and `$XAUTHORITY` instead of starting `Xvfb` (relying on the Section 2 exports being inherited by the `--scope` unit from the caller environment):
 
 ```bash
 cd /path/to/metaviewer
@@ -93,7 +105,7 @@ systemd-run --user --scope --unit mv-demo -p MemoryMax=8G -p MemoryHigh=6G -p Me
 
 ### Dedicated headless Xvfb display (`--display private`, default)
 
-When I run an isolated display (`1600x1000x24` [TARGET] on a free high display `:91`..`:65535` [TARGET]), I omit `--display` or pass `--display private`:
+When I run an isolated display (`1600x1000x24` [TARGET] on a free high display `:91`..`:65535` [TARGET]), I omit `--display` or pass `--display private` (relying on the Section 2 exports being inherited by the `--scope` unit from the caller environment):
 
 ```bash
 cd /path/to/metaviewer
@@ -125,24 +137,26 @@ LIVE_STACK_READY display=:91 xauthority=/run/user/1000/metaviewer-live-stack/run
 Once `LIVE_STACK_READY` is printed, I drive the following walkthrough in the MetaViewer window (`1280x720` window [TARGET]):
 
 1. **Wall with live browser capsule tile**:
-   - I observe the `mv-live-1` browser capsule tile rendering live `rgb24` frames on the wall (first paint `0.7` s after `LIVE_STACK_READY` [MEASURED], with `0` scale jitter over `30` s [MEASURED]).
-2. **Per-tile record (`Record for AI`)**:
+   - I observe the `mv-live-1` browser capsule tile rendering live `rgb24` frames on the wall.
+2. **Per-tile record (`Record` / `Stop`)**:
    - I click the **Record** control in the browser tile header chrome to start a bounded in-RAM capture segment (`metaviewer.capture`), let several frame generations accumulate, and click **Stop** to seal the capture in RAM and the session journal.
 3. **Per-tile screenshot**:
    - I click the **Screenshot** control in the tile chrome to capture an immediate frame witness into the capture store and verify the updated capture badge.
 4. **Human ↔ agent control handoff**:
-   - I click **Take control** on the browser tile (`ui_intent/v0.2` takeover). The Rust core immediately cancels any pending agent proposal with `SURFACE_NOT_AGENT_CONTROLLED` and transfers input authority to me [CITED: docs/ARCHITECTURE.md].
-   - I interact with the live browser surface directly, then click **Release control**. The core holds agent admission closed until a fresh post-release frame generation arrives.
+   - There is one **Control** button per tile (accessible name `"Take control of <surface>"`); the tile badge flips between `"Agent acting"` and `"Human control"` (there are no separate Take/Release buttons).
+   - I click **Control** on the browser tile (`ui_intent/v0.2` takeover): the badge flips from `"Agent acting"` to `"Human control"`, and the Rust core immediately cancels any pending agent proposal with `SURFACE_NOT_AGENT_CONTROLLED` and transfers input authority to me [CITED: docs/ARCHITECTURE.md].
+   - I interact with the live browser surface directly, then click **Control** again to return control to the agent: the badge flips back to `"Agent acting"`, and the core holds agent admission closed until a fresh post-release frame generation arrives.
 5. **Fold and unfold**:
-   - I click **Fold** on the tile header to collapse the tile to compact status chrome while the capsule continues running and publishing frames in the background, then click **Unfold** to restore the live canvas [MEASURED].
+   - I click **Fold** on the tile header: the tile body blanks and the label becomes **Unfold** while the tile keeps its height and the capsule continues running and publishing frames in the background; I then click **Unfold** to restore the live canvas.
 6. **Multislot layout**:
-   - I switch from the wall to the **Multislot** view and back (`wall -> multislot -> wall`) to show multi-surface workspace slots alongside the wall; on the real app, the multislot round trip (`wall -> multislot -> wall`) painted correctly `3` times, with first paint `0.7` s after `LIVE_STACK_READY` [MEASURED].
-7. **Recordings list and disk export**:
-   - I open the **Recordings** panel to review the sealed per-tile recordings and screenshots, inspect their frame counts and RAM footprint, and trigger write-ahead journaled export (`capture_request/v1`) as a deterministic PNG `.tar` under `MV_RECORDING_DESTINATION`.
+   - I click **Open in multislot** in the top bar to switch from the wall to the multislot view, and click **Back to wall** to return to the wall (`wall -> multislot -> wall`) [CITED: ui/src/App.vue].
+7. **Recording and Screenshots tables and disk export**:
+   - There is no separate `"Recordings"` panel: the **Recording** and **Screenshots** tables are rendered at the bottom of the multislot view (scroll down), and **Export** is there (`MvRecordingPanel` [CITED: ui/src/App.vue]).
+   - I scroll to the bottom of the multislot view to review the sealed per-tile recordings and screenshots (frame counts and RAM footprint) and click **Export** to trigger write-ahead journaled export (`capture_request/v1`) as a deterministic PNG `.tar` under `MV_RECORDING_DESTINATION` (when `MV_RECORDING_DESTINATION` is set; without it, **Export** is disabled with `"No export destination advertised by the host"` [CITED: ui/src/recording/recordingModel.js]).
 
 ## 5. Whole-Screen Demo Recording (`--record <path.mp4>`)
 
-To record the entire stack display automatically into an H.264 `.mp4` video starting right after the first `frame_ready`, I pass `--record <path.mp4>` with a destination path **outside** `<clone>` that does not yet exist:
+To record the entire stack display automatically into an H.264 `.mp4` video starting right after the first `frame_ready`, I pass `--record <path.mp4>` with a destination path **outside** `<clone>` that does not yet exist (this `systemd-run --user --scope` command relies on the Section 2 exports being inherited, as a `--scope` unit keeps the caller environment):
 
 ```bash
 cd /path/to/metaviewer
@@ -185,10 +199,14 @@ LIVE_STACK_STOPPED processes=absent capsule=absent sockets=absent ram=absent sta
 - `systemctl --user is-active mv-demo.scope` reports `inactive`.
 - For `--display private`, `/tmp/.X11-unix/X<NN>` is absent.
 - `docker ps -a --format '{{.Names}}'` and `ls "$MV_SRF_LIVE_RAM_ROOT"` contain no leftover `srf-id-*` entries from the run.
-- When `--record /tmp/metaviewer-demo.mp4` was used, `ls -lh /tmp/metaviewer-demo.mp4` shows a non-empty finalized MP4 file.
+- When `--record /tmp/metaviewer-demo.mp4` was used, I run `ffprobe -v error -show_entries format=duration,size:stream=codec_name -of json /tmp/metaviewer-demo.mp4` as the finalization check (the file is `~48` bytes [MEASURED] until the recorder is stopped; after `stop`, `ffprobe` confirms the finalized `h264` stream, duration, and byte size).
 
 ## 7. Known Issues
 
+- **Wall tile may stay black until the first multislot round trip (`L8-1`, under investigation)**:
+  - On initial startup, the wall tile may stay black until the first multislot round trip (**Open in multislot** followed by **Back to wall**).
+- **Tile rescales slightly when an Activity row appears (`L7-1`)**:
+  - The wall tile rescales slightly when an Activity row appears in the activity strip.
 - **Chromium `"Restore pages?"` prompt after stop (`L2-9`, capsule owner scope)**:
   - Stopping the capsule container via `srf-identity-surface stop` terminates Chromium inside the container, so the persistent profile records an unclean exit and displays `"Restore pages?"` on subsequent launches (observed across live verification runs through `f256bc40` [MEASURED]).
   - This behavior lives inside the OpenSuperficies capsule runtime (out of scope for `stack.py`) and is tracked for the capsule owner (either closing Chromium gracefully before container stop or passing `--hide-crash-restore-bubble` / `--disable-session-crashed-bubble` in the capsule entrypoint). During a live demo, I dismiss the bubble or click takeover and close it once.
@@ -229,9 +247,9 @@ When a preflight, display, recording, or cleanup check fails, `stack.py` exits w
 | `another live stack or G-W1 run is active; refusing` | `$XDG_RUNTIME_DIR/metaviewer-live-stack/state.json` exists or `live.py` / `index.js --live` is running | Run `python3 tests/e2e/e2e1_slice/stack.py stop` or inspect retained recovery state |
 | `live env AUSENTE: <keys>` | One or more required environment variables in Section 2 are unset | Export all required variables from Section 2 |
 | `explicit MV_E2E_LIVE=1 and mv-live-1 required` | `MV_E2E_LIVE` is not `1` or `MV_SRF_LIVE_PROFILE` is not `mv-live-1` | Set `MV_E2E_LIVE=1` and `MV_SRF_LIVE_PROFILE=mv-live-1` |
-| `live path AUSENTE: <key>` | A required path variable is relative or does not exist on disk | Create the directory (such as `$MV_SRF_LIVE_RAM_ROOT` and `$MV_SRF_STATE_DIR`) and use absolute paths |
+| `live path AUSENTE: <key>` | A required path variable is relative or does not exist on disk | Create the directory (`mkdir -p "$MV_SRF_LIVE_RAM_ROOT" "$MV_SRF_STATE_DIR"`) and use absolute paths |
 | `tool AUSENTE: <tool>` | Required host tool (`docker`, `Xvfb`, `xauth`, `xdpyinfo`, or `xwininfo`) is missing from `PATH` | Ensure all required X11 and container tools are on `PATH` |
 | `shipped host bindings require MV_CORE_BOOTSTRAP unset` | `MV_CORE_BOOTSTRAP` is set in the environment | Run `unset MV_CORE_BOOTSTRAP` |
 | `profile already allocated; refusing` | A container or lease for `mv-live-1` already exists | Stop the existing capsule or wait for the active session to release `mv-live-1` |
-| `shipped UI build AUSENTE: <path>` | `ui/dist/renderer/index.html` or `ui/dist/preload/preload.cjs` is missing | Stage the kit (`node tools/sync_kit.mjs <capsule-ui-kit-checkout> && node tools/sync_kit.mjs --check`) and build the UI (`cd ui && npm ci --offline && npm run build`) before launching the live stack |
+| `shipped UI build AUSENTE: <path>` | `ui/dist/renderer/index.html` or `ui/dist/preload/preload.cjs` is missing | Stage the kit and build the UI inside a capped scope (`systemd-run --user --scope -p MemoryMax=8G -p MemoryHigh=6G -p MemorySwapMax=0 -- bash -c 'node tools/sync_kit.mjs <dir> && node tools/sync_kit.mjs --check && cd ui && npm ci --offline && npm run build'`) before launching the live stack |
 | `supervisor absent; private recovery state retained for review` | `stop` found `state.json` whose supervisor PID is no longer alive | Inspect `$XDG_RUNTIME_DIR/metaviewer-live-stack/supervisor.log` and `state.json`, verify no capsule or RAM allocation remains, then remove stale `state.json` |
