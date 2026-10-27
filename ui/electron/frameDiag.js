@@ -43,6 +43,22 @@ const REVOKE_KEYS = Object.freeze([
   'TIMEOUT',
 ]);
 
+export const FRAME_DIAG_ACQUIRE_CAUSES = Object.freeze([
+  'FRAME_BINDING',
+  'OPEN_EACCES',
+  'OPEN_ENOENT',
+  'OPEN_IO',
+  'OPEN_PATH',
+  'OPEN_SYMLINK',
+  'SIZE',
+  'STALE',
+  'STAT_IO',
+  'STAT_MODE',
+  'STAT_NOT_FILE',
+  'STAT_UID',
+  'UNKNOWN',
+]);
+
 /**
  * Ensure candidate path lies strictly outside the repository source root.
  * @param {string} candidate Absolute path.
@@ -309,7 +325,7 @@ export async function writeFrameDiagSnapshot(runDir, snapshot) {
  *   enabled: boolean,
  *   runDir: string | null,
  *   recordDelivery: (info: { surfaceId: string, surfaceGeneration: number, frameGeneration: number, epoch: number, announced?: boolean }) => void,
- *   recordReaderRefusal: (info?: { surfaceId?: string, frameGeneration?: number, reason?: string, detail?: string }) => void,
+ *   recordReaderRefusal: (info?: { surfaceId?: string, frameGeneration?: number, reason?: string, detail?: string, cause?: string }) => void,
  *   recordPortRefusal: (info?: { surfaceId?: string, frameGeneration?: number, reason?: string }) => void,
  *   recordStateOnly: (info?: { surfaceId?: string }) => void,
  *   recordAck: (ack: { surfaceId: string, surfaceGeneration: number, frameGeneration: number, outcome: string }) => void,
@@ -358,9 +374,11 @@ export function installFrameDiag(options = {}) {
   let revocationsTotal = 0;
   /** @type {Record<string, number>} */
   const revocationsByReason = Object.fromEntries(REVOKE_KEYS.map((key) => [key, 0]));
+  /** @type {Record<string, number>} */
+  const readerRefusalsByCause = Object.fromEntries(FRAME_DIAG_ACQUIRE_CAUSES.map((key) => [key, 0]));
   /** @type {Readonly<{ surfaceId: string, surfaceGeneration: number, frameGeneration: number, epoch: number }> | null} */
   let lastDelivery = null;
-  /** @type {Readonly<{ surfaceId: string | null, frameGeneration: number | null, reason: string | null, detail: string | null }> | null} */
+  /** @type {Readonly<{ surfaceId: string | null, frameGeneration: number | null, reason: string | null, detail: string | null, cause: string | null }> | null} */
   let lastReaderRefusal = null;
   /** @type {Readonly<{ surfaceId: string | null, frameGeneration: number | null, reason: string | null }> | null} */
   let lastPortRefusal = null;
@@ -425,6 +443,7 @@ export function installFrameDiag(options = {}) {
         acksByOutcome: Object.freeze({ ...acksByOutcome }),
         revocationsTotal,
         revocationsByReason: Object.freeze({ ...revocationsByReason }),
+        readerRefusalsByCause: Object.freeze({ ...readerRefusalsByCause }),
         lastDelivery,
         lastReaderRefusal,
         lastPortRefusal,
@@ -513,13 +532,30 @@ export function installFrameDiag(options = {}) {
       }
       deliveriesRefusedByReader += 1;
       if (info && typeof info === 'object') {
+        const detail = typeof info.detail === 'string' ? info.detail : null;
+        const cause =
+          typeof info.cause === 'string' && Object.hasOwn(readerRefusalsByCause, info.cause)
+            ? info.cause
+            : detail === 'acquire-failed'
+              ? 'UNKNOWN'
+              : null;
+        if (cause !== null) {
+          readerRefusalsByCause[cause] += 1;
+        }
         lastReaderRefusal = Object.freeze({
-          surfaceId: typeof info.surfaceId === 'string' ? info.surfaceId : null,
+          surfaceId: typeof info.surfaceId === 'string' && SURFACE_ID_RE.test(info.surfaceId) ? info.surfaceId : null,
           frameGeneration: Number.isSafeInteger(info.frameGeneration) ? /** @type {number} */ (info.frameGeneration) : null,
           reason: typeof info.reason === 'string' ? info.reason : null,
-          detail: typeof info.detail === 'string' ? info.detail : null,
+          detail,
+          cause,
         });
-        pushEvent({ kind: 'reader_refusal', frameGeneration: lastReaderRefusal.frameGeneration, reason: lastReaderRefusal.reason, detail: lastReaderRefusal.detail });
+        pushEvent({
+          kind: 'reader_refusal',
+          frameGeneration: lastReaderRefusal.frameGeneration,
+          reason: lastReaderRefusal.reason,
+          detail: lastReaderRefusal.detail,
+          cause: lastReaderRefusal.cause,
+        });
       }
       void scheduleWrite();
     },

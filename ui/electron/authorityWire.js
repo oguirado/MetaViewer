@@ -210,12 +210,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     },
     subscribeFrames: async () => {
       subscribed=true;
-      const queued=[...pendingEntries.values()];
-      pendingEntries.clear();
-      for (const entry of queued) {
-        if (!subscribed || disposed) break;
-        await deliverAuthorityFrame(entry,contents,streams,frameDiag);
-      }
+      await drainPendingEntries();
       return true;
     },
     unsubscribeFrames: async () => { subscribed=false; return true; },
@@ -253,25 +248,49 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
   // The source owns reader/port capabilities and calls deliver; no frame path is sent.
   /** @type {Map<string, any>} */ const pendingEntries = new Map();
   /** @type {Set<any>} */ const streams = new Set();
-  const stopFrames = frames ? frames.subscribe(async (/** @type {any} */entry) => {
-    if (disposed) return;
-    if (!subscribed) {
-      const sid = entry?.frameRef?.surface_id;
-      if (typeof sid === 'string') {
-        if (['destroyed','lost'].includes(entry?.state?.state)) {
-          pendingEntries.delete(sid);
-          return;
-        }
-        const prior = pendingEntries.get(sid);
-        if (entry.stateOnly && prior && !prior.stateOnly) {
-          pendingEntries.set(sid, {...prior, state: entry.state});
-        } else {
-          pendingEntries.set(sid, entry);
-        }
-      }
+  /** @type {Promise<void> | null} */ let drainPromise = null;
+  /** @param {any} entry */
+  function stageEntry(entry) {
+    const sid = entry?.frameRef?.surface_id;
+    if (typeof sid !== 'string') return;
+    if (!subscribed && ['destroyed','lost'].includes(entry?.state?.state)) {
+      pendingEntries.delete(sid);
       return;
     }
-    await deliverAuthorityFrame(entry,contents,streams,frameDiag);
+    const prior = pendingEntries.get(sid);
+    if (entry.stateOnly && prior && !prior.stateOnly && !['destroyed','lost'].includes(entry?.state?.state)) {
+      pendingEntries.set(sid, {...prior, state: entry.state});
+    } else {
+      pendingEntries.set(sid, entry);
+    }
+  }
+  function drainPendingEntries() {
+    if (drainPromise) return drainPromise;
+    if (!subscribed || disposed || pendingEntries.size === 0) return Promise.resolve();
+    const run = Promise.resolve().then(async () => {
+      try {
+        while (subscribed && !disposed && pendingEntries.size > 0) {
+          const next = pendingEntries.entries().next();
+          if (next.done) break;
+          const [sid, nextEntry] = next.value;
+          pendingEntries.delete(sid);
+          const freshEntry = !nextEntry.stateOnly && typeof nextEntry.resolveLatestEntry === 'function'
+            ? (nextEntry.resolveLatestEntry() ?? nextEntry)
+            : nextEntry;
+          await deliverAuthorityFrame(freshEntry,contents,streams,frameDiag);
+        }
+      } finally {
+        if (drainPromise === run) drainPromise = null;
+      }
+    });
+    drainPromise = run;
+    return run;
+  }
+  const stopFrames = frames ? frames.subscribe(async (/** @type {any} */entry) => {
+    if (disposed) return;
+    stageEntry(entry);
+    if (!subscribed) return;
+    await drainPendingEntries();
   }) : () => {};
   return {async dispose() { disposed=true; subscribed=false; stopFrames();
     pendingEntries.clear();
@@ -334,7 +353,16 @@ export async function deliverAuthorityFrame(entry,contents,streams,frameDiag=nul
     stream.setAcquire?.(entry.readerOptions.acquirePublishedLease);
   }
   const result=await stream.reader.readFrame(entry.frameRef);
-  if (!result.ok) { frameDiag?.recordReaderRefusal?.({surfaceId:ref.surface_id,frameGeneration:ref.generation,reason:result.reason,detail:result.detail}); return false; }
+  if (!result.ok) {
+    frameDiag?.recordReaderRefusal?.({
+      surfaceId:ref.surface_id,
+      frameGeneration:ref.generation,
+      reason:result.reason,
+      detail:result.detail,
+      ...(typeof /** @type {any} */ (result).cause === 'string' ? {cause: /** @type {any} */ (result).cause} : {}),
+    });
+    return false;
+  }
   const sent=stream.port.postFrame(result.frame);
   if (!sent.ok) { frameDiag?.recordPortRefusal?.({surfaceId:ref.surface_id,frameGeneration:ref.generation,reason:sent.reason}); return false; }
   const wasAnnounced=stream.announced;

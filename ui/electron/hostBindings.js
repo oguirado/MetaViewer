@@ -8,6 +8,9 @@
  * sealed capture ID and host-owned destination grant, never a renderer path.
  * Bounds [TARGET, unit decision]: 1 MiB wire/config, 64 surfaces/pending calls,
  * 64 MiB frame, 4096 pixels per axis, 3 s request/hello deadline.
+ * [TARGET, unit decision] Coalesce in-flight frame_ready deliveries per surface
+ * to the latest published frame_ref so main always reads the newest generation;
+ * classify acquire failures with closed cause tokens without paths or bytes.
  */
 import { INTENT_OPS, recordingDestination, validateIntentBody } from './authorityWire.js';
 export { INTENT_OPS };
@@ -22,6 +25,23 @@ import { isDeepStrictEqual } from 'node:util';
 
 const MAX_WIRE = 1024 * 1024, MAX_FRAME = 64 * 1024 * 1024, MAX_ITEMS = 64, DEADLINE = 3000;
 const fail = () => new Error('CORE_SEAMS_ABSENT');
+/** @param {string} cause @param {string} [msg] */
+function acquireFail(cause, msg = 'CORE_SEAMS_ABSENT') {
+  const err = new Error(`${msg}: ${cause}`);
+  /** @type {any} */ (err).causeCode = cause;
+  return err;
+}
+/** @param {unknown} error */
+function mapOpenError(error) {
+  if (error && typeof error === 'object' && typeof /** @type {any} */ (error).causeCode === 'string') {
+    return /** @type {Error} */ (error);
+  }
+  const code = /** @type {NodeJS.ErrnoException} */ (error)?.code;
+  if (code === 'ENOENT') return acquireFail('OPEN_ENOENT');
+  if (code === 'ELOOP' || code === 'ENOTDIR') return acquireFail('OPEN_SYMLINK');
+  if (code === 'EACCES' || code === 'EPERM') return acquireFail('OPEN_EACCES');
+  return acquireFail('OPEN_IO');
+}
 const PEERCRED_PY = [
   'import os, socket, struct, sys',
   's = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM, 0, 3)',
@@ -81,15 +101,22 @@ function owned(info, mode) {
  * /proc/self/fd anchors openat-like access on the Linux host, as in core.
  * @param {string} path */
 async function openPinned(path) {
-  if (!isAbsolute(path) || path.split('/').some(x => x === '..' || x === '.')) throw fail();
+  if (!isAbsolute(path) || path.split('/').some(x => x === '..' || x === '.')) throw acquireFail('OPEN_PATH');
   const parts = path.split('/').filter(Boolean);
-  let dir = await open('/', constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  let dir;
+  try {
+    dir = await open('/', constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  } catch (error) {
+    throw mapOpenError(error);
+  }
   try {
     for (const part of parts.slice(0, -1)) {
       const next = await open(`/proc/self/fd/${dir.fd}/${part}`, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
       await dir.close(); dir = next;
     }
     return await open(`/proc/self/fd/${dir.fd}/${parts.at(-1)}`, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (error) {
+    throw mapOpenError(error);
   } finally { await dir.close(); }
 }
 
@@ -136,6 +163,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
     /** @type {Map<string,any>} */ const channels = new Map();
     /** @type {Set<string>} */ const subscriptions = new Set();
     /** @type {Set<string>} */ const delivering = new Set();
+    /** @type {Set<string>} */ const pendingDeliveries = new Set();
     /** @type {Map<string,{body:any,resolve:(value:any)=>void,reject:(error:Error)=>void,timer:ReturnType<typeof setTimeout>}>} */ const pending = new Map();
     let live = false, disposed = false, seq = 0, received = 0;
     /** @type {ReturnType<typeof setInterval> | undefined} */ let keepalive;
@@ -150,7 +178,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
       rejectReady(fail()); socket?.destroy();
       for (const item of pending.values()) {clearTimeout(item.timer);item.reject(fail());} pending.clear();
       for (const channel of channels.values()) {channel.port1.close();channel.port2.close();}
-      channels.clear();surfaces.clear();latestFrames.clear();subscriptions.clear();listeners.clear();captureListeners.clear();
+      channels.clear();surfaces.clear();latestFrames.clear();subscriptions.clear();delivering.clear();pendingDeliveries.clear();listeners.clear();captureListeners.clear();
     };
     /** @type {Set<(state:any)=>void>} */ const captureListeners = new Set();
     const helloTimer = setTimeout(shutdown, DEADLINE);
@@ -162,34 +190,47 @@ export async function createMainBindings({env = process.env, createMessageChanne
       const line = JSON.stringify(value) + '\n'; if (Buffer.byteLength(line) > MAX_WIRE || socket.writableLength > MAX_WIRE) throw fail();
       socket.write(line);
     }
-    /** @param {any} frame */
-    function publish(frame) {
-      const state = surfaces.get(frame?.surface_id);
-      if (!state || state.state !== 'active') return;
-      if (!id(frame.surface_id) || frame.schema !== 'frame_ref/v0.2' || !Number.isSafeInteger(frame.generation) || frame.generation < 1
-          || typeof frame.ramws_path !== 'string' || !frame.ramws_path.startsWith('/dev/shm/')
-          || !Number.isSafeInteger(frame.width) || !Number.isSafeInteger(frame.height)
-          || frame.width < 1 || frame.height < 1 || frame.width > 4096 || frame.height > 4096) throw fail();
-      const published = Object.freeze({...frame});
-      latestFrames.set(frame.surface_id, published);
-      if (listeners.size === 0 || delivering.has(frame.surface_id)) return;
-      let channel = channels.get(frame.surface_id);
+    /** @param {any} published @param {any} state */
+    function buildFrameEntry(published, state) {
+      let channel = channels.get(published.surface_id);
       if (!channel) {
         if (channels.size >= MAX_ITEMS) throw fail();
-        channel = channelFactory();channels.set(frame.surface_id, channel);
+        channel = channelFactory();channels.set(published.surface_id, channel);
       }
-      const binding = Object.freeze({principal:'ui',epoch:1,surfaceId:frame.surface_id,surfaceGeneration:1});
-      const entry = {frameRef:published,state:{...state},rendererPorts:[channel.port2],
+      const binding = Object.freeze({principal:'ui',epoch:1,surfaceId:published.surface_id,surfaceGeneration:1});
+      return {frameRef:published,state:{...state},rendererPorts:[channel.port2],
+        resolveLatestEntry() {
+          const latest = latestFrames.get(published.surface_id);
+          const curState = surfaces.get(published.surface_id);
+          if (latest && curState && curState.state === 'active' && latest.generation > published.generation) {
+            pendingDeliveries.delete(published.surface_id);
+            return buildFrameEntry(latest, curState);
+          }
+          return null;
+        },
         readerOptions:{binding,limits:{maxFrameBytes:MAX_FRAME,maxWidth:4096,maxHeight:4096,readTimeoutMs:1000,maxConcurrentReads:1},
           pixelEnvironment:{environmentId:config.session_id,zoom:1,dpr:1},onReleaseLease(){},
           /** @param {any} request */
           async acquirePublishedLease(request) {
-            if (disposed || !isDeepStrictEqual(request.binding,binding) || !isDeepStrictEqual(request.frameRef,published)
-                || published.surface_id !== binding.surfaceId) throw new Error('FRAME_BINDING');
+            if (disposed || !isDeepStrictEqual(request.binding,binding) || published.surface_id !== binding.surfaceId) {
+              throw acquireFail('FRAME_BINDING', 'FRAME_BINDING');
+            }
+            if (!isDeepStrictEqual(request.frameRef,published)) {
+              if (request.frameRef?.surface_id === published.surface_id
+                  && Number.isSafeInteger(request.frameRef?.generation)
+                  && request.frameRef.generation < published.generation) {
+                throw acquireFail('STALE', 'FRAME_BINDING');
+              }
+              throw acquireFail('FRAME_BINDING', 'FRAME_BINDING');
+            }
             const file = await openPinned(published.ramws_path);
             try {
-              const info = await file.stat();
-              if (!info.isFile() || info.uid !== process.getuid?.() || (info.mode & 0o022) || info.size > MAX_FRAME) throw fail();
+              let info;
+              try { info = await file.stat(); } catch { throw acquireFail('STAT_IO'); }
+              if (!info.isFile()) throw acquireFail('STAT_NOT_FILE');
+              if (info.uid !== process.getuid?.()) throw acquireFail('STAT_UID');
+              if (info.mode & 0o022) throw acquireFail('STAT_MODE');
+              if (info.size > MAX_FRAME) throw acquireFail('SIZE');
               let released = false;
               const release = async () => {if (!released) {released=true;await file.close();}};
               return {identity:{...binding,frameGeneration:published.generation,leaseId:randomUUID()},published:true,byteLength:info.size,
@@ -207,9 +248,44 @@ export async function createMainBindings({env = process.env, createMessageChanne
                 },release};
             } catch(error) {await file.close();throw error;}
           }},
-        portOptions:{port:channel.port1,role:'sender',binding,limits:{maxFrameBytes:MAX_FRAME,ackTimeoutMs:10000,maxSurfacesPerPort:1},onReleaseLease(){},onRevoke(){if(channels.get(frame.surface_id)===channel)channels.delete(frame.surface_id);}}};
+        portOptions:{port:channel.port1,role:'sender',binding,limits:{maxFrameBytes:MAX_FRAME,ackTimeoutMs:10000,maxSurfacesPerPort:1},onReleaseLease(){},onRevoke(){if(channels.get(published.surface_id)===channel)channels.delete(published.surface_id);}}};
+    }
+    /** @param {string} surfaceId */
+    async function drainSurface(surfaceId) {
+      try {
+        while (!disposed && listeners.size > 0 && pendingDeliveries.has(surfaceId)) {
+          pendingDeliveries.delete(surfaceId);
+          const state = surfaces.get(surfaceId);
+          const published = latestFrames.get(surfaceId);
+          if (!state || state.state !== 'active' || !published) break;
+          const entry = buildFrameEntry(published, state);
+          for (const listener of listeners) {
+            await listener(entry);
+          }
+        }
+      } finally {
+        delivering.delete(surfaceId);
+      }
+    }
+    /** @param {any} frame */
+    function publish(frame) {
+      const state = surfaces.get(frame?.surface_id);
+      if (!state || state.state !== 'active') return;
+      if (!id(frame.surface_id) || frame.schema !== 'frame_ref/v0.2' || !Number.isSafeInteger(frame.generation) || frame.generation < 1
+          || typeof frame.ramws_path !== 'string' || !frame.ramws_path.startsWith('/dev/shm/')
+          || !Number.isSafeInteger(frame.width) || !Number.isSafeInteger(frame.height)
+          || frame.width < 1 || frame.height < 1 || frame.width > 4096 || frame.height > 4096) throw fail();
+      const published = Object.freeze({...frame});
+      latestFrames.set(frame.surface_id, published);
+      if (listeners.size === 0) return;
+      if (!channels.has(frame.surface_id)) {
+        if (channels.size >= MAX_ITEMS) throw fail();
+        channels.set(frame.surface_id, channelFactory());
+      }
+      pendingDeliveries.add(frame.surface_id);
+      if (delivering.has(frame.surface_id)) return;
       delivering.add(frame.surface_id);
-      for (const listener of listeners) Promise.resolve().then(() => listener(entry)).catch(shutdown).finally(() => delivering.delete(frame.surface_id));
+      Promise.resolve().then(() => drainSurface(frame.surface_id)).catch(shutdown);
     }
     /** @param {any} state */
     function publishState(state) {
@@ -274,6 +350,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
           latestFrames.delete(state.surface_id);
           subscriptions.delete(state.surface_id);
           delivering.delete(state.surface_id);
+          pendingDeliveries.delete(state.surface_id);
           const channel = channels.get(state.surface_id);
           if (channel) {
             channels.delete(state.surface_id);

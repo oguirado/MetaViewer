@@ -8,15 +8,19 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
-const { createHash, randomUUID } = require('node:crypto');
+const { createHash, randomBytes, randomUUID } = require('node:crypto');
 const { once } = require('node:events');
+const { constants: fsConstants } = require('node:fs');
 const {
   chmod,
+  link,
   lstat,
   mkdir,
   mkdtemp,
+  open,
   readFile,
   rm,
+  unlink,
   writeFile,
 } = require('node:fs/promises');
 const { createConnection, createServer } = require('node:net');
@@ -256,7 +260,11 @@ function callProbeControl(ctlSock, payload, timeoutMs = 4000) {
   });
 }
 
-async function runProductionFrameJourney({ diagEnabled = true, multislotRoundTrip = false } = {}) {
+async function runProductionFrameJourney({
+  diagEnabled = true,
+  multislotRoundTrip = false,
+  rotateFrames = false,
+} = {}) {
   harness.requireNativeTool('xvfb-run');
   harness.ensureFreshUiDist({ root: ROOT, uiRoot: UI_ROOT });
   const electron = harness.electronBinary(ROOT);
@@ -305,11 +313,43 @@ async function runProductionFrameJourney({ diagEnabled = true, multislotRoundTri
       makeRgbFrame(width, height, 0x19, 0xc3, 0x7d), // gen 7: wall after return 2 (changing pixels)
     ];
     const framePaths = [];
-    for (let i = 0; i < frames.length; i += 1) {
-      const p = join(shmRoot, `frame-${i + 1}.rgb`);
-      await writeFile(p, frames[i].buf, { mode: 0o600 });
-      await chmod(p, 0o600);
-      framePaths.push(p);
+    const publisherDir = await mkdtemp(join(shmRoot, 'frames-'));
+    await chmod(publisherDir, 0o700);
+    const retainedRotatingPaths = [];
+    const unlinkedRotatingPaths = [];
+    const publishRotatingFile = async (genIndex) => {
+      const idx = genIndex - 1;
+      const name = `${randomBytes(16).toString('hex')}.rgb`;
+      const tempPath = join(publisherDir, `${name}.tmp`);
+      const finalPath = join(publisherDir, name);
+      const fh = await open(
+        tempPath,
+        fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
+        0o600,
+      );
+      try {
+        await fh.writeFile(frames[idx].buf);
+      } finally {
+        await fh.close();
+      }
+      await link(tempPath, finalPath);
+      await unlink(tempPath);
+      if (retainedRotatingPaths.length >= 2) {
+        const expired = retainedRotatingPaths.shift();
+        await unlink(expired);
+        unlinkedRotatingPaths.push(expired);
+      }
+      retainedRotatingPaths.push(finalPath);
+      framePaths[idx] = finalPath;
+      return finalPath;
+    };
+    if (!rotateFrames) {
+      for (let i = 0; i < frames.length; i += 1) {
+        const p = join(shmRoot, `frame-${i + 1}.rgb`);
+        await writeFile(p, frames[i].buf, { mode: 0o600 });
+        await chmod(p, 0o600);
+        framePaths.push(p);
+      }
     }
 
     const registration = (component) => ({
@@ -421,17 +461,28 @@ async function runProductionFrameJourney({ diagEnabled = true, multislotRoundTri
             !subscribed
           ) {
             subscribed = true;
-            const scheduleInitial = (gen, delayMs) => {
-              const timer = setTimeout(() => {
-                timers.delete(timer);
-                sendFrameReady(gen);
-                initialFramesSent = gen;
-              }, delayMs);
-              timers.add(timer);
-            };
-            scheduleInitial(1, 300);
-            scheduleInitial(2, 650);
-            scheduleInitial(3, 1000);
+            if (rotateFrames) {
+              const tFirst = setTimeout(() => {
+                timers.delete(tFirst);
+                void publishRotatingFile(1).then(() => {
+                  sendFrameReady(1);
+                  initialFramesSent = 1;
+                });
+              }, 300);
+              timers.add(tFirst);
+            } else {
+              const scheduleInitial = (gen, delayMs) => {
+                const timer = setTimeout(() => {
+                  timers.delete(timer);
+                  sendFrameReady(gen);
+                  initialFramesSent = gen;
+                }, delayMs);
+                timers.add(timer);
+              };
+              scheduleInitial(1, 300);
+              scheduleInitial(2, 650);
+              scheduleInitial(3, 1000);
+            }
           }
         }
       });
@@ -473,7 +524,7 @@ async function runProductionFrameJourney({ diagEnabled = true, multislotRoundTri
       delete env.MV_FRAME_DIAG;
     }
 
-    const launchTarget = multislotRoundTrip ? probePath : UI_ROOT;
+    const launchTarget = multislotRoundTrip || rotateFrames ? probePath : UI_ROOT;
     let spawnError = null;
     child = harness.trackChildProcess(
       spawn(
@@ -523,7 +574,35 @@ async function runProductionFrameJourney({ diagEnabled = true, multislotRoundTri
 
     let diag = null;
     let lastObservedDiag = null;
-    if (diagEnabled) {
+    if (rotateFrames) {
+      const wallSlotSelector = `[data-capsule-id="${surfaceId}"] [data-anchor="capsule/${surfaceId}/slot"]`;
+      diag = await waitForBounded(
+        async () => {
+          const parsed = await readDiagOrNull();
+          if (parsed) lastObservedDiag = parsed;
+          const sample = await callProbeControl(ctlSock, {
+            op: 'sampleSlot',
+            selector: wallSlotSelector,
+          }).catch(() => null);
+          if (
+            parsed?.main?.deliveriesPosted >= 1 &&
+            parsed?.main?.acksReceived >= 1 &&
+            sample?.slotExists === true
+          ) {
+            return parsed;
+          }
+          return null;
+        },
+        {
+          timeoutMs: 18000,
+          intervalMs: 60,
+          code: 'E2E_ROTATE_SLOT_READY_TIMEOUT',
+          checkChild: checkChildAlive,
+          describe: () =>
+            `Timed out waiting for wall slot ${wallSlotSelector} to mount (lastDiag=${JSON.stringify(lastObservedDiag)})\n${output}`,
+        },
+      );
+    } else if (diagEnabled) {
       diag = await waitForBounded(
         async () => {
           const parsed = await readDiagOrNull();
@@ -559,6 +638,67 @@ async function runProductionFrameJourney({ diagEnabled = true, multislotRoundTri
             `Timed out waiting for mainReady=${mainReady}, subscribed=${subscribed}, initialFramesSent=${initialFramesSent}\n${output}`,
         },
       );
+    }
+
+    let rotationEvidence = null;
+    if (rotateFrames) {
+      const wallSlotSelector = `[data-capsule-id="${surfaceId}"] [data-anchor="capsule/${surfaceId}/slot"]`;
+      const basePresented = diag.main.acksByOutcome.PRESENTED;
+      const baseRefused = diag.main.acksByOutcome.REFUSED;
+      const sampledGenerations = [];
+      for (let gen = 2; gen <= 7; gen += 1) {
+        await publishRotatingFile(gen);
+        publishFrameReady(gen);
+        let lastSample = null;
+        const observed = await waitForBounded(
+          async () => {
+            const currentDiag = await readDiagOrNull();
+            if (currentDiag) lastObservedDiag = currentDiag;
+            const sample = await callProbeControl(ctlSock, {
+              op: 'sampleSlot',
+              selector: wallSlotSelector,
+            });
+            lastSample = sample;
+            if (
+              currentDiag?.main?.deliveriesPosted >= gen &&
+              currentDiag?.main?.acksReceived >= gen &&
+              currentDiag?.main?.lastAck?.frameGeneration === gen &&
+              currentDiag?.main?.lastAck?.outcome === 'PRESENTED' &&
+              sample?.slotExists === true &&
+              sample.dataState === 'live' &&
+              sample.canvasExists === true &&
+              sample.canvasHidden === false &&
+              sample.nonBlack === true &&
+              sample.uniform === true &&
+              Array.isArray(sample.rgba) &&
+              sample.rgba.every((v, idx) => v === frames[gen - 1].rgba[idx])
+            ) {
+              return { diag: currentDiag, rgba: sample.rgba };
+            }
+            return null;
+          },
+          {
+            timeoutMs: 10000,
+            intervalMs: 40,
+            code: `E2E_ROTATE_GEN_${gen}`,
+            checkChild: checkChildAlive,
+            describe: () =>
+              `Rotating generation ${gen} did not PRESENT expected pixels ${JSON.stringify(frames[gen - 1].rgba)}: lastSample=${JSON.stringify(lastSample)}, lastDiag=${JSON.stringify(lastObservedDiag?.main)}`,
+          },
+        );
+        sampledGenerations.push({ generation: gen, rgba: observed.rgba });
+        diag = observed.diag;
+      }
+      for (const expiredPath of unlinkedRotatingPaths) {
+        await assert.rejects(lstat(expiredPath), { code: 'ENOENT' });
+      }
+      rotationEvidence = {
+        basePresented,
+        baseRefused,
+        sampledGenerations,
+        unlinkedCount: unlinkedRotatingPaths.length,
+        retainedCount: retainedRotatingPaths.length,
+      };
     }
 
     let roundTripEvidence = null;
@@ -867,6 +1007,7 @@ async function runProductionFrameJourney({ diagEnabled = true, multislotRoundTri
       diagMode: diagStat ? diagStat.mode & 0o777 : null,
       surfaceId,
       roundTripEvidence,
+      rotationEvidence,
     };
   } finally {
     stopChild();
@@ -1035,6 +1176,33 @@ test('W3-E2E25-MULTISLOT: production frames journey proves the multislot round t
   assert.ok(roundTripEvidence.basePresented >= 2, 'expected initial wall frames PRESENTED');
   assert.equal(diag.main.acksByOutcome.PRESENTED, roundTripEvidence.basePresented + 4);
   assert.equal(diag.main.acksByOutcome.REFUSED, roundTripEvidence.baseRefused);
+  assert.equal(diag.main.revocationsTotal, 0);
+  assert.equal(diag.preload.framesReceived, 7);
+});
+
+test('W3-FRAME-ACQUIRE: rotating publisher replaces/rotates frame files across >= 5 consecutive PRESENTED generations with changing pixels', async () => {
+  const { diag, rotationEvidence } = await runProductionFrameJourney({
+    diagEnabled: true,
+    rotateFrames: true,
+  });
+  assert.ok(rotationEvidence !== null, 'expected rotationEvidence from rotating publisher journey');
+  assert.equal(rotationEvidence.sampledGenerations.length, 6);
+  assert.equal(rotationEvidence.unlinkedCount, 5);
+  assert.equal(rotationEvidence.retainedCount, 2);
+  for (let i = 1; i < rotationEvidence.sampledGenerations.length; i += 1) {
+    assert.notDeepEqual(
+      rotationEvidence.sampledGenerations[i - 1].rgba,
+      rotationEvidence.sampledGenerations[i].rgba,
+      `expected changing pixels between rotating step ${i} and ${i + 1}`,
+    );
+  }
+  assert.equal(diag.main.deliveriesPosted, 7);
+  assert.equal(diag.main.deliveriesRefusedByReader, 0);
+  assert.equal(diag.main.deliveriesRefusedByPort, 0);
+  assert.equal(diag.main.lastReaderRefusal, null);
+  assert.equal(diag.main.acksReceived, 7);
+  assert.equal(diag.main.acksByOutcome.PRESENTED, rotationEvidence.basePresented + 6);
+  assert.equal(diag.main.acksByOutcome.REFUSED, rotationEvidence.baseRefused);
   assert.equal(diag.main.revocationsTotal, 0);
   assert.equal(diag.preload.framesReceived, 7);
 });

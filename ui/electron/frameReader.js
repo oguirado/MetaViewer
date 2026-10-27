@@ -153,6 +153,7 @@ import { createHash } from 'node:crypto';
  * @property {false} ok Refusal marker.
  * @property {string} reason Frozen `FRAME_REASONS` value.
  * @property {string} [detail] Free-form diagnostic, never a second vocabulary.
+ * @property {string} [cause] Closed acquire-check failure token when `detail === 'acquire-failed'`.
  */
 
 /**
@@ -206,6 +207,26 @@ export const FRAME_REASONS = Object.freeze({
   TIMEOUT: 'TIMEOUT',
   IO_ERROR: 'IO_ERROR',
   CLOSED: 'CLOSED',
+});
+
+/**
+ * Closed vocabulary of acquire-check failure codes surfaced to frameDiag
+ * without paths or raw bytes when `acquirePublishedLease` rejects.
+ * @type {Readonly<{FRAME_BINDING: string, STALE: string, OPEN_PATH: string, OPEN_ENOENT: string, OPEN_SYMLINK: string, OPEN_EACCES: string, OPEN_IO: string, STAT_IO: string, STAT_NOT_FILE: string, STAT_UID: string, STAT_MODE: string, SIZE: string}>}
+ */
+export const ACQUIRE_CAUSE_CODES = Object.freeze({
+  FRAME_BINDING: 'FRAME_BINDING',
+  STALE: 'STALE',
+  OPEN_PATH: 'OPEN_PATH',
+  OPEN_ENOENT: 'OPEN_ENOENT',
+  OPEN_SYMLINK: 'OPEN_SYMLINK',
+  OPEN_EACCES: 'OPEN_EACCES',
+  OPEN_IO: 'OPEN_IO',
+  STAT_IO: 'STAT_IO',
+  STAT_NOT_FILE: 'STAT_NOT_FILE',
+  STAT_UID: 'STAT_UID',
+  STAT_MODE: 'STAT_MODE',
+  SIZE: 'SIZE',
 });
 
 /**
@@ -283,13 +304,37 @@ class ReadAborted extends Error {
 /**
  * @param {string} reason Frozen refusal reason.
  * @param {string} [detail] Free-form diagnostic.
+ * @param {string} [cause] Closed acquire failure code.
  * @returns {ReadRefusal} The refusal outcome.
  */
-function refusal(reason, detail) {
+function refusal(reason, detail, cause) {
   if (detail === undefined) {
     return { ok: false, reason };
   }
-  return { ok: false, reason, detail };
+  if (cause === undefined) {
+    return { ok: false, reason, detail };
+  }
+  return { ok: false, reason, detail, cause };
+}
+
+/**
+ * Extract a closed acquire failure code from an acquisition error without
+ * exposing paths, messages, or raw bytes.
+ * @param {unknown} error Caught acquisition error.
+ * @returns {string|undefined} Closed acquire cause token if recognized.
+ */
+function extractAcquireCause(error) {
+  if (!isRecord(error)) {
+    return undefined;
+  }
+  const err = /** @type {Record<string, unknown>} */ (error);
+  const candidate = typeof err.causeCode === 'string'
+    ? err.causeCode
+    : (typeof err.code === 'string' ? err.code : undefined);
+  if (candidate !== undefined && Object.hasOwn(ACQUIRE_CAUSE_CODES, candidate)) {
+    return candidate;
+  }
+  return undefined;
 }
 
 /**
@@ -797,7 +842,13 @@ export function createFrameReader(options) {
         }
         return outcome;
       }
-      const outcome = refusal(FRAME_REASONS.IO_ERROR, acquired && lease === null ? 'acquire-failed' : 'read-failed');
+      const isAcquireFailure = acquired && lease === null;
+      const acquireCause = isAcquireFailure ? extractAcquireCause(error) : undefined;
+      const outcome = refusal(
+        FRAME_REASONS.IO_ERROR,
+        isAcquireFailure ? 'acquire-failed' : 'read-failed',
+        acquireCause,
+      );
       if (lease !== null) {
         await dropAdmitted(outcome.reason);
       } else if (acquired) {

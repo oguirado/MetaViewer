@@ -176,3 +176,125 @@ func TestProducerRootAndNativeGeometry(t *testing.T) {
 		t.Fatal("world-writable root accepted")
 	}
 }
+
+func TestLiveBudgetRetentionRingAndNegativeControl(t *testing.T) {
+	root, b, f := ramFixture(t)
+	livePub, e := NewPublisher(PublishConfig{RAMRoot: root, MaxFrameBytes: 16 << 20, MaxPixels: 64, MaxSurfaces: 4})
+	if e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() { _ = livePub.Close() })
+
+	var livePaths []string
+	for seq := uint64(1); seq <= 17; seq++ {
+		f.Seq = seq
+		r, err := livePub.Publish("a", b, f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		livePaths = append(livePaths, r.RAMWSPath)
+		if seq == 3 {
+			// Generation 1 must still exist when generation 3 is published so a
+			// 2-hop core+UI pipeline never hits ENOENT on generation >= 2.
+			if _, statErr := os.Stat(livePaths[0]); statErr != nil {
+				t.Fatalf("live-budget publisher unlinked generation 1 at generation 3: %v", statErr)
+			}
+		}
+	}
+	if _, err := os.Stat(livePaths[0]); !os.IsNotExist(err) {
+		t.Fatal("expected generation 1 to be evicted on generation 17")
+	}
+	for i := 1; i < len(livePaths); i++ {
+		if _, err := os.Stat(livePaths[i]); err != nil {
+			t.Fatalf("expected retained generation %d to exist: %v", i+1, err)
+		}
+	}
+
+	// Negative control: a 2-slot ring evicts generation 1 as soon as generation 3 is published.
+	shortPub, e := NewPublisher(PublishConfig{RAMRoot: root, MaxFrameBytes: 16 << 20, MaxPixels: 64, MaxSurfaces: 4, MaxRetained: 2})
+	if e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() { _ = shortPub.Close() })
+	var shortPaths []string
+	for seq := uint64(1); seq <= 3; seq++ {
+		f.Seq = seq
+		r, err := shortPub.Publish("a", b, f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		shortPaths = append(shortPaths, r.RAMWSPath)
+	}
+	if _, err := os.Stat(shortPaths[0]); !os.IsNotExist(err) {
+		t.Fatal("negative control failed: expected MaxRetained=2 to unlink generation 1 at generation 3")
+	}
+	if _, err := NewPublisher(PublishConfig{RAMRoot: root, MaxFrameBytes: 16 << 20, MaxPixels: 64, MaxSurfaces: 4, MaxRetained: 1}); err == nil {
+		t.Fatal("expected MaxRetained=1 (< 2) to be refused")
+	}
+
+	// Per-surface RAM byte cap: with MaxFrameBytes = 1_200_000 (>= 1 MiB, so slot cap is 16),
+	// maxRetainedBytes is 4 * 1_200_000 = 4_800_000 bytes. A 600x600 RGB24 frame is 1_080_000 bytes,
+	// so at most 4 frames (4_320_000 bytes <= 4_800_000) may be retained; the 5th publish must evict frame 1.
+	largePath := filepath.Join(b.FramesRoot, "large.png")
+	largeFile, err := os.OpenFile(largePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const side = 600
+	largeImg := image.NewRGBA(image.Rect(0, 0, side, side))
+	rawRGB := make([]byte, side*side*3)
+	for y := 0; y < side; y++ {
+		for x := 0; x < side; x++ {
+			largeImg.SetRGBA(x, y, color.RGBA{R: 0x20, G: 0x40, B: 0x60, A: 0xff})
+			off := (y*side + x) * 3
+			rawRGB[off], rawRGB[off+1], rawRGB[off+2] = 0x20, 0x40, 0x60
+		}
+	}
+	if err := png.Encode(largeFile, largeImg); err != nil {
+		t.Fatal(err)
+	}
+	if err := largeFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	largeBinding := b
+	largeBinding.Surface.Geometry = capsule.Geometry{W: side, H: side}
+	largeFrame := capsule.NativeFrame{
+		Path:        largePath,
+		Generation:  largeBinding.Container,
+		Width:       side,
+		Height:      side,
+		SHA256RGB24: fmt.Sprintf("%x", sha256.Sum256(rawRGB)),
+		Window:      &capsule.Window{ID: "w1", W: side, H: side},
+		TSNS:        1,
+		CaptureUS:   2,
+	}
+	byteCappedPub, err := NewPublisher(PublishConfig{RAMRoot: root, MaxFrameBytes: 1_200_000, MaxPixels: side * side, MaxSurfaces: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = byteCappedPub.Close() })
+	var cappedPaths []string
+	for seq := uint64(1); seq <= 5; seq++ {
+		largeFrame.Seq = seq
+		r, pubErr := byteCappedPub.Publish("a", largeBinding, largeFrame)
+		if pubErr != nil {
+			t.Fatal(pubErr)
+		}
+		cappedPaths = append(cappedPaths, r.RAMWSPath)
+		if seq == 4 {
+			for i := 0; i < 4; i++ {
+				if _, statErr := os.Stat(cappedPaths[i]); statErr != nil {
+					t.Fatalf("expected frame %d within 4x byte cap to remain at seq 4: %v", i+1, statErr)
+				}
+			}
+		}
+	}
+	if _, err := os.Stat(cappedPaths[0]); !os.IsNotExist(err) {
+		t.Fatal("expected 5th 1.08MB frame to evict 1st frame under 4.8MB per-surface byte cap")
+	}
+	for i := 1; i < 5; i++ {
+		if _, err := os.Stat(cappedPaths[i]); err != nil {
+			t.Fatalf("expected retained frame %d within byte cap to exist: %v", i+1, err)
+		}
+	}
+}

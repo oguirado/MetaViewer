@@ -1,7 +1,11 @@
 package frames
 
 // [TARGET, unit decision] Each immutable raw allocation is a publication generation;
-// native sequence remains tick. Retain the latest two publications per surface.
+// native sequence remains tick. Retain a bounded ring of recent publications per
+// surface: total retained bytes per surface stay within min(4 * MaxFrameBytes, 64 MiB)
+// and at most 16 generations (2 for small-budget fixtures < 1 MiB unless MaxRetained
+// is set), never fewer than 2 generations, so multi-hop core/UI readers do not hit
+// ENOENT while core journals witnesses.
 // Only adapter-created raw files are reclaimed; native PNGs remain producer-owned.
 // [TARGET, unit decision] The configured producer root may be group-writable
 // (OpenSuperficies uses 0775); world writes are refused. Output stays 0700
@@ -29,6 +33,7 @@ type PublishConfig struct {
 	MaxFrameBytes int64
 	MaxPixels     uint64
 	MaxSurfaces   int
+	MaxRetained   int
 }
 type publication struct {
 	native string
@@ -45,9 +50,34 @@ type Publisher struct {
 	closed       bool
 }
 
+const maxRetainedSurfaceBytes int64 = 64 << 20
+
 func frameError() error { return errors.New("frame identity, allocation or pixels refused") }
+func (p *Publisher) maxRetained() int {
+	if p.cfg.MaxRetained >= 2 {
+		return p.cfg.MaxRetained
+	}
+	if p.cfg.MaxFrameBytes >= 1<<20 {
+		return 16
+	}
+	return 2
+}
+func (p *Publisher) maxRetainedBytes() int64 {
+	limit := p.cfg.MaxFrameBytes * 4
+	if limit <= 0 || limit > maxRetainedSurfaceBytes {
+		return maxRetainedSurfaceBytes
+	}
+	return limit
+}
+func retainedBytes(refs []Ref) int64 {
+	var total int64
+	for _, r := range refs {
+		total += int64(r.Width) * int64(r.Height) * 3
+	}
+	return total
+}
 func NewPublisher(cfg PublishConfig) (*Publisher, error) {
-	if cfg.MaxFrameBytes < 1 || cfg.MaxFrameBytes > 64<<20 || cfg.MaxPixels < 1 || cfg.MaxPixels > 64<<20 || cfg.MaxSurfaces < 1 || filepath.Clean(cfg.RAMRoot) != cfg.RAMRoot || !strings.HasPrefix(cfg.RAMRoot, "/dev/shm/") {
+	if cfg.MaxFrameBytes < 1 || cfg.MaxFrameBytes > 64<<20 || cfg.MaxPixels < 1 || cfg.MaxPixels > 64<<20 || cfg.MaxSurfaces < 1 || cfg.MaxRetained < 0 || cfg.MaxRetained == 1 || cfg.MaxRetained > 64 || filepath.Clean(cfg.RAMRoot) != cfg.RAMRoot || !strings.HasPrefix(cfg.RAMRoot, "/dev/shm/") {
 		return nil, frameError()
 	}
 	root, e := openRAMRoot(cfg.RAMRoot, false)
@@ -215,10 +245,17 @@ func (p *Publisher) Publish(id string, b capsule.Binding, f capsule.NativeFrame)
 		return Ref{}, e
 	}
 	refs := old.refs
-	if len(refs) >= 2 {
+	maxSlots := p.maxRetained()
+	maxBytes := p.maxRetainedBytes()
+	newBytes := int64(len(raw))
+	for len(refs) >= maxSlots || (len(refs) >= 2 && retainedBytes(refs)+newBytes > maxBytes) {
 		expired := refs[0]
 		if e = syscall.Unlinkat(int(p.output.Fd()), filepath.Base(expired.RAMWSPath)); e != nil {
 			_ = syscall.Unlinkat(int(p.output.Fd()), name)
+			if exists {
+				old.refs = refs
+				p.surfaces[id] = old
+			}
 			return Ref{}, fmt.Errorf("frame lease release: %w", e)
 		}
 		refs = refs[1:]
