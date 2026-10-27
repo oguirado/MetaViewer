@@ -818,4 +818,32 @@ test('W3-PKG-SMOKE2 cleanInstallSmoke keeps marker, adapter receipt and source-a
       await fs.rm(dirB, { recursive: true, force: true });
     }
   });
+
+});
+
+test('W3-CI-JS-ASAR ci.yml js job primes locked ui npm dependencies before running tests/ci regressions', async () => {
+  const ciPath = fileURLToPath(new URL('../../.github/workflows/ci.yml', import.meta.url));
+  const ciText = await fs.readFile(ciPath, 'utf8');
+  const checkJsOrder = (workflowText) => {
+    const jsAfter = workflowText.split('\n  js:\n')[1];
+    if (!jsAfter) return false;
+    const jsBlock = jsAfter.split(/\n  [a-z][\w-]*:\n/)[0];
+    const primeMatch = /      - name: Prime locked npm cache\n        working-directory: ui\n        run: \|\n(?:          .*\n)+/.exec(jsBlock);
+    const regressionsIndex = jsBlock.indexOf('      - name: Test CI admission regressions\n');
+    const runGatesIndex = jsBlock.indexOf('      - name: Run JS gates\n');
+    if (!primeMatch || regressionsIndex < 0 || runGatesIndex < 0) return false;
+    if (!primeMatch[0].includes('npm ci --ignore-scripts --no-audit --no-fund')) return false;
+    return primeMatch.index < regressionsIndex && regressionsIndex < runGatesIndex;
+  };
+  assert.equal(checkJsOrder(ciText), true, 'js job must install ui dependencies before Test CI admission regressions');
+
+  // Negative control: moving Prime locked npm cache after Test CI admission regressions is rejected.
+  const jsAfter = ciText.split('\n  js:\n')[1];
+  const jsBlock = jsAfter.split(/\n  [a-z][\w-]*:\n/)[0];
+  const primeBlock = /      - name: Prime locked npm cache\n        working-directory: ui\n        run: \|\n(?:          .*\n)+/.exec(jsBlock)[0];
+  const regBlock = /      - name: Test CI admission regressions\n        run: \|\n(?:          .*\n)+/.exec(jsBlock)[0];
+  const mutatedJsBlock = jsBlock.replace(primeBlock, '').replace(regBlock, regBlock + primeBlock);
+  const mutatedCiText = ciText.replace(jsBlock, mutatedJsBlock);
+  assert.notEqual(mutatedCiText, ciText);
+  assert.equal(checkJsOrder(mutatedCiText), false, 'regression order check must reject unprimed tests/ci execution');
 });

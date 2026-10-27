@@ -1375,17 +1375,6 @@ jobs:
           fi
           git -C kit-checkout remote set-url origin "$KIT_CANONICAL"
           echo "MV_KIT_CHECKOUT=${GITHUB_WORKSPACE}/kit-checkout" >> "$GITHUB_ENV"
-      - name: Require build network namespace
-        run: |
-          set -euo pipefail
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          bash .github/workflows/offline.sh true
-      - name: Test CI admission regressions
-        run: |
-          node --test tests/ci/*.test.cjs
-          "$MV_YAML_PYTHON" -m unittest discover -s tests/ci -p 'test_*.py' -v
-      # Enable the same Chromium user namespace sandbox as the E2E job before
-      # the JS gates install and launch Electron on hosted Ubuntu.
       - name: Prime locked npm cache
         working-directory: ui
         run: |
@@ -1397,6 +1386,17 @@ jobs:
           test -f "$node_prefix/include/node/node.h"
           test -f "$node_prefix/include/node/config.gypi"
           printf 'npm_config_nodedir=%s\n' "$node_prefix" >> "$GITHUB_ENV"
+      - name: Require build network namespace
+        run: |
+          set -euo pipefail
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bash .github/workflows/offline.sh true
+      - name: Test CI admission regressions
+        run: |
+          node --test tests/ci/*.test.cjs
+          "$MV_YAML_PYTHON" -m unittest discover -s tests/ci -p 'test_*.py' -v
+      # Enable the same Chromium user namespace sandbox as the E2E job before
+      # the JS gates install and launch Electron on hosted Ubuntu.
       - name: Permit Chromium user namespace sandbox on hosted Ubuntu
         run: |
           set -euo pipefail
