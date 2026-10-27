@@ -361,6 +361,59 @@ class Round2T7RegressionTests(unittest.TestCase):
         gate_text = GATE.read_text(encoding='utf-8').replace("tools['cargo'], ", '')
         self.assertEqual("['clippy', '--locked', '--offline'" in gate_text, True, 'cargo clippy missing --locked')
         self.assertEqual("['test', '--locked', '--offline'" in gate_text, True, 'cargo test missing --locked')
+        self.assertNotIn("['clippy', '--offline'", gate_text, 'cargo clippy must not omit --locked')
+        self.assertNotIn("['test', '--offline'", gate_text, 'cargo test must not omit --locked')
+
+        # Hosted js job runs tests/ci discovery and must provision the pinned Rust
+        # toolchains (1.97.0 clippy default + 1.92.0 rustfmt) before offline tests.
+        ci_jobs = yaml.safe_load(CI.read_text(encoding='utf-8'))['jobs']
+        js_steps = ci_jobs['js']['steps']
+        prep_idx = next(
+            (
+                idx for idx, step in enumerate(js_steps)
+                if 'rustup toolchain install 1.97.0 --profile minimal --component clippy' in step.get('run', '')
+                and 'rustup toolchain install 1.92.0 --profile minimal --component rustfmt' in step.get('run', '')
+                and 'rustup default 1.97.0' in step.get('run', '')
+                and not step.get('if')
+            ),
+            None,
+        )
+        offline_idx = next(
+            (idx for idx, step in enumerate(js_steps) if '.github/workflows/offline.sh' in step.get('run', '')),
+            None,
+        )
+        reg_idx = next(
+            (idx for idx, step in enumerate(js_steps) if 'unittest discover -s tests/ci' in step.get('run', '')),
+            None,
+        )
+        self.assertIsNotNone(prep_idx, 'js job must provision 1.97.0 clippy and 1.92.0 rustfmt for R1-095')
+        self.assertIsNotNone(offline_idx)
+        self.assertIsNotNone(reg_idx)
+        self.assertLess(prep_idx, offline_idx, 'Rust toolchain provisioning in js job must precede offline namespace')
+        self.assertLess(prep_idx, reg_idx, 'Rust toolchain provisioning in js job must precede tests/ci regressions')
+
+        # Explicit prerequisite check: never silently skip when cargo/rustup are absent.
+        cargo_bin = shutil.which(os.environ.get('CARGO', 'cargo'))
+        rustup_bin = shutil.which(os.environ.get('RUSTUP', 'rustup'))
+        self.assertIsNotNone(cargo_bin, 'R1_095_PREREQ: cargo executable required on PATH or via CARGO')
+        self.assertIsNotNone(rustup_bin, 'R1_095_PREREQ: rustup executable required on PATH or via RUSTUP')
+        fmt_probe = subprocess.run(
+            [rustup_bin, 'run', '1.92.0', 'cargo', 'fmt', '--version'],
+            capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(
+            fmt_probe.returncode, 0,
+            f'R1_095_PREREQ: pinned 1.92.0 rustfmt required: {fmt_probe.stdout}{fmt_probe.stderr}',
+        )
+        clippy_probe = subprocess.run(
+            [cargo_bin, 'clippy', '--version'],
+            capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(
+            clippy_probe.returncode, 0,
+            f'R1_095_PREREQ: cargo clippy required: {clippy_probe.stdout}{clippy_probe.stderr}',
+        )
+
         with tempfile.TemporaryDirectory(prefix='r1-095-') as tmp:
             repo = Path(tmp) / 'repo'
             target = Path(tmp) / 'cargo-target'
@@ -375,7 +428,7 @@ class Round2T7RegressionTests(unittest.TestCase):
             (repo / 'core/src/lib.rs').write_text('pub fn value() -> u32 {\n    1\n}\n', encoding='utf-8')
             valid_lock = 'version = 4\n\n[[package]]\nname = "gate-fixture"\nversion = "0.1.0"\n'
             (repo / 'Cargo.lock').write_text(valid_lock, encoding='utf-8')
-            env = dict(os.environ, CARGO_TARGET_DIR=str(target))
+            env = dict(os.environ, CARGO_TARGET_DIR=str(target), CARGO=cargo_bin, RUSTUP=rustup_bin)
 
             # Negative control: matching Cargo.lock succeeds.
             ok_run = subprocess.run(['bash', str(repo / 'tools/gate.sh'), '--leg', 'rust'],

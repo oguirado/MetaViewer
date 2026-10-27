@@ -6,6 +6,15 @@ const { join } = require('node:path');
 // Electron preserves leading switches in argv on some platforms.
 const [build, report, config] = process.argv.slice(-3);
 const options = JSON.parse(config);
+for (const flag of [
+  'disable-renderer-backgrounding',
+  'disable-background-timer-throttling',
+  'disable-backgrounding-occluded-windows',
+  'disable-frame-rate-limit',
+  'disable-gpu-vsync',
+]) {
+  app.commandLine.appendSwitch(flag);
+}
 app.setPath('userData', join(report + '.profile'));
 const deadline = setTimeout(() => app.exit(2), ((options.seconds || 10) + 30) * 1000);
 app.whenReady().then(async () => {
@@ -14,6 +23,11 @@ app.whenReady().then(async () => {
       webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false,
         backgroundThrottling: false } });
     await win.loadFile(join(build, 'index.html'));
+    win.show();
+    win.focus();
+    await win.webContents.executeJavaScript(
+      'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))',
+    );
     const method = options.journey === 'launcher' ? 'runLauncherJourney' : 'runPerfSoak';
     const result = await win.webContents.executeJavaScript(`window.${method}(${JSON.stringify(options)})`);
     writeFileSync(report, JSON.stringify(result));
