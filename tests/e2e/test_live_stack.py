@@ -301,11 +301,45 @@ try {
         leak.mkdir()
         state["published"] = [str(leak)]
         with patch.dict(os.environ, dict(self.environment(), MV_SRF_LIVE_RAM_ROOT=str(ram)), clear=True), \
-                patch.object(stack, "inventory", return_value={"srf-id-owned", "srf-id-foreign"}), \
+                patch.object(stack, "inventory", side_effect=[{"srf-id-owned", "srf-id-foreign"}, {"srf-id-foreign"}]) as inv, \
                 patch.object(stack.live, "profile_containers", return_value=set()), \
                 patch.object(stack, "checked", return_value=""):
-            with self.assertRaisesRegex(RuntimeError, "capsule cleanup failed|published RAM cleanup failed"):
+            with self.assertRaisesRegex(RuntimeError, "^published RAM cleanup failed:"):
                 stack.cleanup(state, self.root)
+        self.assertEqual(inv.call_count, 2)
+        self.assertFalse((ram / "srf-id-owned").exists())
+        self.assertTrue((ram / "srf-id-foreign").exists())
+        self.assertTrue((ram / "srf-pg-other").exists())
+        self.assertTrue(leak.exists())
+        self.assertTrue((self.root / "state.json").exists())
+        # Negative control: stubbing cleanup_capsule_ram to ram_absent=True clears the published-RAM failure.
+        with patch.dict(os.environ, dict(self.environment(), MV_SRF_LIVE_RAM_ROOT=str(ram)), clear=True), \
+                patch.object(stack, "inventory", side_effect=[{"srf-id-owned", "srf-id-foreign"}, {"srf-id-foreign"}]), \
+                patch.object(stack.live, "profile_containers", return_value=set()), \
+                patch.object(stack, "checked", return_value=""), \
+                patch.object(stack.live, "cleanup_capsule_ram", return_value={
+                    "owned_allocations": [], "owned_allocations_removed": [],
+                    "ram_absent": True, "remaining": [],
+                }), \
+                redirect_stdout(io.StringIO()):
+            receipt = stack.cleanup(state, self.root)
+        self.assertTrue(receipt["ram_absent"])
+
+    def test_cleanup_capsule_leak_retains_receipt_and_existing_ram(self):
+        state = self.state()
+        state["capsules"] = ["srf-id-owned"]
+        ram = self.root / "ram"
+        ram.mkdir()
+        (ram / "srf-id-owned").mkdir()
+        (ram / "srf-id-foreign").mkdir()
+        (ram / "srf-pg-other").mkdir()
+        with patch.dict(os.environ, dict(self.environment(), MV_SRF_LIVE_RAM_ROOT=str(ram)), clear=True), \
+                patch.object(stack, "inventory", side_effect=[{"srf-id-owned", "srf-id-foreign"}, {"srf-id-owned", "srf-id-foreign"}]) as inv, \
+                patch.object(stack.live, "profile_containers", return_value=set()), \
+                patch.object(stack, "checked", return_value=""):
+            with self.assertRaisesRegex(RuntimeError, "^capsule cleanup failed$"):
+                stack.cleanup(state, self.root)
+        self.assertEqual(inv.call_count, 2)
         self.assertTrue((ram / "srf-id-owned").exists())
         self.assertTrue((ram / "srf-id-foreign").exists())
         self.assertTrue((ram / "srf-pg-other").exists())

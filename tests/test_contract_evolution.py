@@ -43,7 +43,7 @@ def classify_field_diff(old_prop, new_prop):
         if "maximum" not in old_prop or new_prop["maximum"] < old_prop["maximum"]:
             changes.append("maximum_narrowed")
 
-    for lower_key in ("minLength", "minItems"):
+    for lower_key in ("minLength", "minItems", "minProperties"):
         if lower_key in new_prop:
             if lower_key not in old_prop:
                 if new_prop[lower_key] > 0:
@@ -80,6 +80,10 @@ def classify_field_diff(old_prop, new_prop):
             changes.append("closed_narrowed")
         if not set(old_subprops).issubset(set(new_subprops)):
             changes.append("properties_removed")
+    if old_prop.get("additionalProperties", True) is not False:
+        for sub_name, sub_new in new_subprops.items():
+            if sub_name not in old_subprops and classify_field_diff({}, sub_new):
+                changes.append(f"property_{sub_name}_narrowed")
     for sub_name, sub_old in old_subprops.items():
         if sub_name in new_subprops and classify_field_diff(sub_old, new_subprops[sub_name]):
             changes.append(f"property_{sub_name}_narrowed")
@@ -109,7 +113,7 @@ def classify_response_field_diff(old_prop, new_prop):
         if "maximum" not in new_prop or new_prop["maximum"] > old_prop["maximum"]:
             changes.append("maximum_widened")
 
-    for lower_key in ("minLength", "minItems"):
+    for lower_key in ("minLength", "minItems", "minProperties"):
         if lower_key in old_prop:
             if lower_key not in new_prop:
                 if old_prop[lower_key] > 0:
@@ -146,6 +150,10 @@ def classify_response_field_diff(old_prop, new_prop):
             changes.append("closed_widened")
         if not set(new_subprops).issubset(set(old_subprops)):
             changes.append("properties_added")
+    if new_prop.get("additionalProperties", True) is not False:
+        for sub_name, sub_old in old_subprops.items():
+            if sub_name not in new_subprops and classify_response_field_diff(sub_old, {}):
+                changes.append(f"property_{sub_name}_widened")
     for sub_name, sub_new in new_subprops.items():
         if sub_name in old_subprops and classify_response_field_diff(old_subprops[sub_name], sub_new):
             changes.append(f"property_{sub_name}_widened")
@@ -168,6 +176,16 @@ def is_request_breaking(old_schema, new_schema):
     if not new_req.issubset(old_req):
         return True
 
+    if "minProperties" in new_schema:
+        if "minProperties" not in old_schema:
+            if new_schema["minProperties"] > 0:
+                return True
+        elif new_schema["minProperties"] > old_schema["minProperties"]:
+            return True
+    if "maxProperties" in new_schema:
+        if "maxProperties" not in old_schema or new_schema["maxProperties"] < old_schema["maxProperties"]:
+            return True
+
     old_props = old_schema.get("properties", {})
     new_props = new_schema.get("properties", {})
 
@@ -176,6 +194,11 @@ def is_request_breaking(old_schema, new_schema):
             return True
         if not set(old_props).issubset(set(new_props)):
             return True
+
+    if old_schema.get("additionalProperties", True) is not False:
+        for name, new_p in new_props.items():
+            if name not in old_props and classify_field_diff({}, new_p):
+                return True
 
     for name, old_p in old_props.items():
         if name in new_props:
@@ -196,6 +219,16 @@ def is_response_breaking(old_schema, new_schema):
     if not old_req.issubset(new_req):
         return True
 
+    if "minProperties" in old_schema:
+        if "minProperties" not in new_schema:
+            if old_schema["minProperties"] > 0:
+                return True
+        elif new_schema["minProperties"] < old_schema["minProperties"]:
+            return True
+    if "maxProperties" in old_schema:
+        if "maxProperties" not in new_schema or new_schema["maxProperties"] > old_schema["maxProperties"]:
+            return True
+
     old_props = old_schema.get("properties", {})
     new_props = new_schema.get("properties", {})
 
@@ -204,6 +237,11 @@ def is_response_breaking(old_schema, new_schema):
             return True
         if not set(new_props).issubset(set(old_props)):
             return True
+
+    if new_schema.get("additionalProperties", True) is not False:
+        for name, old_p in old_props.items():
+            if name not in new_props and classify_response_field_diff(old_p, {}):
+                return True
 
     for name, new_p in new_props.items():
         if name in old_props:
@@ -309,6 +347,70 @@ class ContractEvolutionTests(unittest.TestCase):
                 self.assertTrue(is_response_breaking(s_new, s_old))
                 self.assertFalse(is_response_breaking(s_old, s_new))
                 self.assertFalse(is_request_breaking(s_new, s_old))
+
+    def test_min_max_properties_and_open_object_added_constraints_with_negative_controls(self):
+        """ARG-pmtests-2: minProperties/maxProperties and added constrained properties on open objects."""
+        # Nested minProperties / maxProperties in classify_field_diff & classify_response_field_diff
+        self.assertIn(
+            "minProperties_narrowed",
+            classify_field_diff({"type": "object", "minProperties": 1}, {"type": "object", "minProperties": 2}),
+        )
+        self.assertIn(
+            "minProperties_widened",
+            classify_response_field_diff({"type": "object", "minProperties": 2}, {"type": "object", "minProperties": 1}),
+        )
+        self.assertEqual(
+            classify_field_diff({"type": "object"}, {"type": "object", "minProperties": 0}),
+            [],
+        )
+        self.assertEqual(
+            classify_response_field_diff({"type": "object", "minProperties": 0}, {"type": "object"}),
+            [],
+        )
+
+        # Top-level minProperties (1 -> 2) and maxProperties (4 -> 2) mirror & negative controls
+        s_min1 = {"type": "object", "minProperties": 1, "properties": {}}
+        s_min2 = {"type": "object", "minProperties": 2, "properties": {}}
+        self.assertTrue(is_request_breaking(s_min1, s_min2))
+        self.assertTrue(is_response_breaking(s_min2, s_min1))
+        self.assertFalse(is_response_breaking(s_min1, s_min2))
+        self.assertFalse(is_request_breaking(s_min2, s_min1))
+
+        s_max4 = {"type": "object", "maxProperties": 4, "properties": {}}
+        s_max2 = {"type": "object", "maxProperties": 2, "properties": {}}
+        self.assertTrue(is_request_breaking(s_max4, s_max2))
+        self.assertTrue(is_response_breaking(s_max2, s_max4))
+        self.assertFalse(is_response_breaking(s_max4, s_max2))
+        self.assertFalse(is_request_breaking(s_max2, s_max4))
+
+        # Open object: adding a constrained property narrows allowed requests (and dropping it widens responses)
+        open_base = {"type": "object", "properties": {}}
+        open_constrained = {"type": "object", "properties": {"a": {"type": "integer"}}}
+        self.assertTrue(is_request_breaking(open_base, open_constrained))
+        self.assertTrue(is_response_breaking(open_constrained, open_base))
+        self.assertFalse(is_response_breaking(open_base, open_constrained))
+        self.assertFalse(is_request_breaking(open_constrained, open_base))
+        self.assertIn("property_a_narrowed", classify_field_diff(open_base, open_constrained))
+        self.assertIn("property_a_widened", classify_response_field_diff(open_constrained, open_base))
+
+        # Negative control: adding an unconstrained property on an open object stays non-breaking
+        open_unconstrained = {"type": "object", "properties": {"a": {}}}
+        self.assertFalse(is_request_breaking(open_base, open_unconstrained))
+        self.assertFalse(is_response_breaking(open_unconstrained, open_base))
+        self.assertEqual(classify_field_diff(open_base, open_unconstrained), [])
+        self.assertEqual(classify_response_field_diff(open_unconstrained, open_base), [])
+
+        # Negative control: adding an optional constrained property on a closed object widens requests (non-breaking)
+        closed_base = {"type": "object", "properties": {}, "additionalProperties": False}
+        closed_with_opt = {
+            "type": "object",
+            "properties": {"a": {"type": "integer"}},
+            "additionalProperties": False,
+        }
+        self.assertFalse(is_request_breaking(closed_base, closed_with_opt))
+        self.assertFalse(is_response_breaking(closed_with_opt, closed_base))
+        self.assertTrue(is_response_breaking(closed_base, closed_with_opt))
+        self.assertTrue(is_request_breaking(closed_with_opt, closed_base))
 
     def test_mutant_harness_exits_nonzero_on_surviving_mutant(self):
         """T6-OPEN-02 regression: surviving mutant (dead oracle) exits with code 1."""

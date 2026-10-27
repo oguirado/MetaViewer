@@ -13,6 +13,7 @@ controls (documenting the pre-U1..U5 splits until U1..U5 land, and enforcing
 unanimous refusal once each decoder fix is present).
 """
 
+import ast
 import json
 import os
 from pathlib import Path
@@ -30,59 +31,13 @@ from metaviewer_agents.envelope import EnvelopeError, validate_envelope
 from tools.check_contracts import ValidationError, Validator, loads_strict
 
 
-def _u1_rust_nested_alias_fixed() -> bool:
-    payload_rs = (ROOT / "core/src/wire/payload.rs").read_text()
-    return 'alias = "observation/v0.1"' not in payload_rs
-
-
-def _u2_go_int_lexeme_fixed() -> bool:
-    policy_go = (ROOT / "daemon-adapter/internal/ipc/policy.go").read_text()
-    return "0|[1-9]" in policy_go or "strings.ContainsAny" in policy_go
-
-
-def _u4_ramws_schema_fixed() -> bool:
-    schema_text = (ROOT / "contracts/v0.2/frame_ref.schema.json").read_text()
-    return r"\r\n" in schema_text or "\\r\\n" in schema_text
-
-
-def _u3_py_anchor_fixed() -> bool:
-    env_py = (ROOT / "agents/metaviewer_agents/envelope.py").read_text()
-    return r"\Z" in env_py
-
-
-def _u3_py_byte_cap_fixed() -> bool:
-    env_py = (ROOT / "agents/metaviewer_agents/envelope.py").read_text()
-    return "65536" in env_py and ".encode(" in env_py
-
-
-def _u5_chk_byte_cap_fixed() -> bool:
-    chk_py = (ROOT / "tools/check_contracts.py").read_text()
-    return "65536" in chk_py and ".encode(" in chk_py
-
-
-def _u2_go_surrogate_fixed() -> bool:
-    json_go = (ROOT / "daemon-adapter/internal/ipc/json.go").read_text()
-    return any(tok in json_go for tok in ("surrogate", "0xd800", "0xD800", "utf16", "RuneError"))
-
-
-def _u5_chk_surrogate_fixed() -> bool:
-    chk_py = (ROOT / "tools/check_contracts.py").read_text()
-    return "0xD800" in chk_py or "0xd800" in chk_py
-
-
-def _u2_go_terminal_fixed() -> bool:
-    policy_go = (ROOT / "daemon-adapter/internal/ipc/policy.go").read_text()
-    return "terminal_session/v0.2" in policy_go and "byte_count" in policy_go
-
-
-def _u3_py_terminal_fixed() -> bool:
-    env_py = (ROOT / "agents/metaviewer_agents/envelope.py").read_text()
-    return "terminal_session/v0.2" in env_py and "byte_count" in env_py
-
-
-def _u5_chk_terminal_fixed() -> bool:
-    chk_py = (ROOT / "tools/check_contracts.py").read_text()
-    return "terminal_session/v0.2" in chk_py and "byte_count" in chk_py
+def _find_conditional_oracle_defs(source: str) -> list[str]:
+    tree = ast.parse(source)
+    return [
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name.endswith("_fixed")
+    ]
 
 
 def _run_rust_probe(raw_lines: list[str], schema_cases: list[tuple[dict, dict]] | None = None) -> tuple[list[bool], list[bool]]:
@@ -292,77 +247,20 @@ class DecoderConformanceTests(unittest.TestCase):
             {**term_valid, "params": {**term_valid["params"], "b64": "YQ==", "byte_count": 2}}
         )
 
+        unanimous_refusal = {
+            "rust": False,
+            "go": False,
+            "python": False,
+            "checker": False,
+        }
         cls.mutation_cases = [
-            (
-                "T6R2-001",
-                raw_001,
-                {
-                    "rust": False if _u1_rust_nested_alias_fixed() else True,
-                    "go": False,
-                    "python": False,
-                    "checker": False,
-                },
-            ),
-            (
-                "T6R2-002",
-                raw_002,
-                {
-                    "rust": False,
-                    "go": False if _u2_go_int_lexeme_fixed() else True,
-                    "python": False,
-                    "checker": False,
-                },
-            ),
-            (
-                "T6R2-003",
-                raw_003,
-                {
-                    "rust": False,
-                    "go": False if _u4_ramws_schema_fixed() else True,
-                    "python": False if _u3_py_anchor_fixed() else True,
-                    "checker": False,
-                },
-            ),
-            (
-                "T6R2-004",
-                raw_004,
-                {
-                    "rust": False,
-                    "go": False,
-                    "python": False if _u3_py_anchor_fixed() else True,
-                    "checker": False,
-                },
-            ),
-            (
-                "T6R2-005",
-                raw_005,
-                {
-                    "rust": False,
-                    "go": False,
-                    "python": False if _u3_py_byte_cap_fixed() else True,
-                    "checker": False if _u5_chk_byte_cap_fixed() else True,
-                },
-            ),
-            (
-                "T6R2-006",
-                raw_006,
-                {
-                    "rust": False,
-                    "go": False if _u2_go_surrogate_fixed() else True,
-                    "python": False,
-                    "checker": False if _u5_chk_surrogate_fixed() else True,
-                },
-            ),
-            (
-                "T6R2-007",
-                raw_007,
-                {
-                    "rust": False,
-                    "go": False if _u2_go_terminal_fixed() else True,
-                    "python": False if _u3_py_terminal_fixed() else True,
-                    "checker": False if _u5_chk_terminal_fixed() else True,
-                },
-            ),
+            ("T6R2-001", raw_001, dict(unanimous_refusal)),
+            ("T6R2-002", raw_002, dict(unanimous_refusal)),
+            ("T6R2-003", raw_003, dict(unanimous_refusal)),
+            ("T6R2-004", raw_004, dict(unanimous_refusal)),
+            ("T6R2-005", raw_005, dict(unanimous_refusal)),
+            ("T6R2-006", raw_006, dict(unanimous_refusal)),
+            ("T6R2-007", raw_007, dict(unanimous_refusal)),
         ]
 
         all_raw = (
@@ -466,17 +364,23 @@ class DecoderConformanceTests(unittest.TestCase):
                 )
 
     def test_adversarial_mutations_001_to_007_negative_controls(self):
-        require_unanimous = os.environ.get("MV_REQUIRE_UNANIMOUS_MUTATIONS") == "1"
         offset = len(self.fixture_cases) + len(self.positive_controls)
+        unanimous_refusal = {"rust": False, "go": False, "python": False, "checker": False}
         for idx, (uid, _, expected_map) in enumerate(self.mutation_cases):
             verdict = self.verdicts[offset + idx]
-            target = (
-                {"rust": False, "go": False, "python": False, "checker": False}
-                if require_unanimous
-                else expected_map
-            )
             with self.subTest(uid=uid):
-                self.assertEqual(verdict, target)
+                self.assertEqual(expected_map, unanimous_refusal)
+                self.assertEqual(verdict, unanimous_refusal)
+
+    def test_no_source_sniffing_oracles_in_conformance_module(self):
+        source = Path(__file__).read_text()
+        self.assertEqual(_find_conditional_oracle_defs(source), [])
+        # Negative control: synthetic copy with a dummy *_fixed helper is detected.
+        mutated_source = source + "\ndef _u1_dummy_fixed() -> bool:\n    return True\n"
+        self.assertEqual(
+            _find_conditional_oracle_defs(mutated_source),
+            ["_u1_dummy_fixed"],
+        )
 
     def test_r1_084_ref_with_sibling_const_mirrored_across_decoders(self):
         for idx, (name, _, _, expected) in enumerate(self.r1_084_cases):
