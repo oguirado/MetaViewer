@@ -30,6 +30,7 @@
 //! [TARGET, unit decision] The session-relative monotonic clock is bounded below
 //! MAX_WIRE_INTEGER ns (~104.25 days). Reaching the ceiling logs and fails closed
 //! with ClockCeilingError without mutating authority state; the session must be restarted.
+//! Idle waiter poll ticks sample the session clock once before dequeuing ready waiters.
 mod capture;
 mod layout;
 mod tools;
@@ -592,7 +593,7 @@ impl Server {
                 }
                 self.tool_state.retain(&env.body);
                 self.tool_state.prune(self.authority.state());
-                self.poll_tool_waiters()?;
+                self.poll_tool_waiters_at(now_ns)?;
                 let body = match event.as_ref() {
                     SurfaceEvent::Case1(e) => self
                         .tool_state
@@ -732,7 +733,7 @@ impl Server {
                         return Err(error);
                     }
                 }
-                self.poll_tool_waiters()?;
+                self.poll_tool_waiters_at(now_ns)?;
             }
             _ => return self.unsupported_at(now_ns, &env, boundary),
         }
@@ -858,7 +859,17 @@ impl Server {
                 }
             }
         }
-        self.poll_tool_waiters()
+        self.poll_tool_waiters_at(now_ns)
+    }
+    fn poll_tool_waiters_tick(&mut self) -> Result<()> {
+        let now_ns = self.route_now_ns.map_or_else(|| self.now(), Ok)?;
+        self.poll_tool_waiters_at(now_ns)
+    }
+    fn poll_tool_waiters_at(&mut self, now_ns: u64) -> Result<()> {
+        let prev = self.route_now_ns.replace(now_ns);
+        let result = self.poll_tool_waiters();
+        self.route_now_ns = prev;
+        result
     }
     fn agent(&self) -> Result<Endpoint> {
         self.config
@@ -1218,7 +1229,7 @@ async fn connection(
                 server
                     .lock()
                     .map_err(|_| invalid("poisoned authority"))?
-                    .poll_tool_waiters()?;
+                    .poll_tool_waiters_tick()?;
                 if closed.load(std::sync::atomic::Ordering::Acquire) {
                     return Err(invalid("connection closed"));
                 }
@@ -2186,6 +2197,82 @@ mod nv_regressions {
             assert_eq!(f.server.serial, before_serial);
             assert!(agent.try_recv().is_err());
             assert!(daemon.try_recv().is_err());
+        });
+    }
+    #[test]
+    fn nv_poll_tick_samples_clock_once_and_never_loses_waiters_on_ceiling_crossing() {
+        run(async {
+            let mut f = Fixture::new();
+            f.seed();
+            let daemon = f.attach(Component::Daemon, 8);
+            let agent = f.attach(Component::Agent, 8);
+            f.route(Component::Agent, 2, f.proposal()).await.unwrap();
+            let _ = agent.try_recv().unwrap();
+            let _ = daemon.try_recv().unwrap();
+            for seq in [3, 4] {
+                f.route(
+                    Component::Agent,
+                    seq,
+                    json!({
+                        "schema": "mv_tool_call/v0.2",
+                        "request_id": format!("wait-{seq}"),
+                        "op": "wait_verify",
+                        "args": {"proposal_id": "nv-proposal", "timeout_ms": 60_000}
+                    }),
+                )
+                .await
+                .unwrap();
+            }
+            assert!(agent.try_recv().is_err());
+
+            let mut receipt: Value = serde_json::from_str(include_str!(
+                "../../../contracts/examples/v0.2/action_receipt.valid.json"
+            ))
+            .unwrap();
+            receipt["proposal_id"] = "nv-proposal".into();
+            f.server.tool_state.retain(&Command::ActionReceipt(Box::new(
+                serde_json::from_value(receipt).unwrap(),
+            )));
+
+            // Negative control at the ceiling: an idle poll tick at/above
+            // MAX_WIRE_INTEGER must fail closed before retain dequeues waiters.
+            f.server.origin = Instant::now();
+            f.server.clock_offset = Duration::from_nanos(MAX_WIRE_INTEGER);
+            f.server.clock_step_ns.store(0, Ordering::Relaxed);
+            let ceiling_err = f.server.poll_tool_waiters_tick().unwrap_err();
+            assert!(
+                ceiling_err.downcast_ref::<ClockCeilingError>().is_some(),
+                "expected ClockCeilingError at poll entry, got: {ceiling_err}"
+            );
+            assert!(agent.try_recv().is_err());
+
+            // Start 500 ms below the ceiling and step 600 ms per sample:
+            // sample 0 (-500 ms) is valid; sample 1 (+100 ms) crosses MAX_WIRE_INTEGER.
+            // One idle poll tick must sample once and reply to both waiters identically.
+            f.server.clock_offset = Duration::from_nanos(MAX_WIRE_INTEGER - 500_000_000);
+            f.server.clock_step_ns.store(600_000_000, Ordering::Relaxed);
+            f.server.clock_samples.store(0, Ordering::Relaxed);
+            f.server
+                .poll_tool_waiters_tick()
+                .expect("idle poll starting below ceiling must not fail mid-tick");
+            assert_eq!(
+                f.server.clock_samples.load(Ordering::Relaxed),
+                1,
+                "idle poll tick must sample now() exactly once across woken waiters"
+            );
+            let first = agent.try_recv().expect("first waiter reply must arrive");
+            let second = agent
+                .try_recv()
+                .expect("second waiter reply must not be lost");
+            assert_eq!(first.ts_ns.get(), second.ts_ns.get());
+            assert_eq!(
+                serde_json::to_value(&first.body).unwrap()["request_id"],
+                "nv-Agent-3"
+            );
+            assert_eq!(
+                serde_json::to_value(&second.body).unwrap()["request_id"],
+                "nv-Agent-4"
+            );
         });
     }
 }
