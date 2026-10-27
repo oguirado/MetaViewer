@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 295 | 55 | 240 |
-| Lanes finished OK | 295 | 55 | 240 |
-| Agent steps | 15,363 | 2,705 | 12,658 |
-| Lane-hours of agent work | 38.9 | 5.2 | 33.7 |
-| Fresh input tokens | 64,411,211 | 11,482,034 | 52,929,177 |
-| Cache-read input tokens | 1,421,197,454 | 226,255,212 | 1,194,942,242 |
+| Lanes launched | 299 | 55 | 244 |
+| Lanes finished OK | 299 | 55 | 244 |
+| Agent steps | 15,543 | 2,705 | 12,838 |
+| Lane-hours of agent work | 39.2 | 5.2 | 34.0 |
+| Fresh input tokens | 64,967,619 | 11,482,034 | 53,485,585 |
+| Cache-read input tokens | 1,431,726,187 | 226,255,212 | 1,205,470,975 |
 | Prompt cache hit % | 95.7 | 95.2 | 95.8 |
-| Output tokens | 13,759,090 | 2,135,708 | 11,623,382 |
-| Thinking tokens | 7,160,202 | 1,050,039 | 6,110,163 |
-| Cost (USD) | 12.0353 | 2.0279 | 10.0075 |
-| Cost per lane (USD) | 0.0408 | 0.0369 | 0.0417 |
+| Output tokens | 13,867,457 | 2,135,708 | 11,731,749 |
+| Thinking tokens | 7,211,595 | 1,050,039 | 6,161,556 |
+| Cost (USD) | 12.1337 | 2.0279 | 10.1058 |
+| Cost per lane (USD) | 0.0406 | 0.0369 | 0.0414 |
 
-Rooms: 64. Peak concurrent lanes [MEASURED from lane start/end]: 24.
+Rooms: 66. Peak concurrent lanes [MEASURED from lane start/end]: 24.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -52,7 +52,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | review | 51 | 94.4 | 1.4856 |
 | submission | 4 | 94.9 | 0.0995 |
 | test | 12 | 95.6 | 0.5657 |
-| testing | 54 | 95.9 | 2.3118 |
+| testing | 58 | 95.9 | 2.4102 |
 | ui | 15 | 96.6 | 1.1614 |
 | vision | 8 | 97.2 | 0.537 |
 
@@ -124,6 +124,8 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui11 | UI orchestrator | Oct 27 11:30 | ui | 2 | 96.1 | 0.1675 | Close the renderer halves of AC-06 (multislot placement routed to the new authoritative layout intents) and AC-07 (recording panel export routed to capture.export with typed refusals), assigned to us by the MetaViewer orchestrator after the core contracts landed. |
 | mvr2v | conductor | Oct 27 11:32 | testing | 6 | 96.3 | 0.2373 | Verify every external round-2 finding (ChatGPT static reviews T2, T3, T5, T6, T8 and Jules T4 tests) on the current head with Meta Muse Spark before any fix, and group confirmed ones into disjoint fix units. |
 | mvr2v2 | conductor | Oct 27 11:32 | testing | 2 | 94.6 | 0.0584 | Verify every external round-2 finding (ChatGPT static reviews T2, T3, T5, T6, T8 and Jules T4 tests) on the current head with Meta Muse Spark before any fix, and group confirmed ones into disjoint fix units. |
+| mvr2vj | conductor | Oct 27 12:08 | testing | 3 | 95.4 | 0.0758 | Verify the Jules round-2 test branches T4 (updated), T6 and T7 on the current head with Meta Muse Spark before adopting any test or opening any fix unit. |
+| mv0tg4 | conductor | Oct 27 12:11 | testing | 1 | 93.1 | 0.0225 | Refresh the AC test-gap map on the integration head after the day-2 morning (about 50 integrations, round-2 fixes in flight) and audit the repository router, so Argon test and router units start from verified specs. |
 
 ## Every lane
 
@@ -424,6 +426,10 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvr2v | J4 | Verify round-2 J4 | Oct 27 11:32 | yes | 39 | 93.4 | 0.026407 |
 | mvr2v2 | T7 | Verify round-2 T7 | Oct 27 11:32 | yes | 30 | 92.5 | 0.021523 |
 | mvr2v2 | T4 | Verify round-2 T4 | Oct 27 11:32 | yes | 56 | 95.5 | 0.03689 |
+| mvr2vj | J4 | Verify round-2 J4 | Oct 27 12:08 | yes | 54 | 95.5 | 0.030159 |
+| mvr2vj | J6 | Verify round-2 J6 | Oct 27 12:08 | yes | 34 | 94.4 | 0.015961 |
+| mvr2vj | J7 | Verify round-2 J7 | Oct 27 12:09 | yes | 56 | 95.7 | 0.029714 |
+| mv0tg4 | ROUTER | Router audit | Oct 27 12:11 | yes | 36 | 93.1 | 0.022537 |
 
 ## Method
 
