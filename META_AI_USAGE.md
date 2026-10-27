@@ -19,16 +19,16 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 249 | 55 | 194 |
-| Lanes finished OK | 249 | 55 | 194 |
-| Agent steps | 12,510 | 2,705 | 9,805 |
-| Lane-hours of agent work | 32.1 | 5.2 | 26.8 |
-| Fresh input tokens | 53,467,243 | 11,482,034 | 41,985,209 |
-| Cache-read input tokens | 1,132,100,474 | 226,255,212 | 905,845,262 |
+| Lanes launched | 252 | 55 | 197 |
+| Lanes finished OK | 252 | 55 | 197 |
+| Agent steps | 12,687 | 2,705 | 9,982 |
+| Lane-hours of agent work | 32.5 | 5.2 | 27.3 |
+| Fresh input tokens | 54,112,253 | 11,482,034 | 42,630,219 |
+| Cache-read input tokens | 1,146,283,720 | 226,255,212 | 920,028,508 |
 | Prompt cache hit % | 95.5 | 95.2 | 95.6 |
-| Output tokens | 11,349,798 | 2,135,708 | 9,214,090 |
-| Thinking tokens | 6,023,142 | 1,050,039 | 4,973,103 |
-| Cost (USD) | 9.8809 | 2.0279 | 7.853 |
+| Output tokens | 11,497,455 | 2,135,708 | 9,361,747 |
+| Thinking tokens | 6,104,223 | 1,050,039 | 5,054,184 |
+| Cost (USD) | 10.0033 | 2.0279 | 7.9754 |
 | Cost per lane (USD) | 0.0397 | 0.0369 | 0.0405 |
 
 Rooms: 55. Peak concurrent lanes [MEASURED from lane start/end]: 24.
@@ -50,7 +50,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | research | 14 | 94.6 | 0.5673 |
 | review | 47 | 94.4 | 1.393 |
 | test | 12 | 95.6 | 0.5657 |
-| testing | 27 | 94.6 | 0.9088 |
+| testing | 30 | 94.8 | 1.0312 |
 | ui | 9 | 96.4 | 0.6965 |
 | vision | 8 | 97.2 | 0.537 |
 
@@ -112,7 +112,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0dc3 | conductor | Oct 27 04:14 | docs | 4 | 96.8 | 0.1612 | Second fact-check and refresh of the product documentation against the integration head after G-W1, so README, user guide, testing report and architecture can be committed with only verified claims (AC-15). |
 | mvui4l | UI orchestrator | Oct 27 04:21 | vision | 3 | 97.9 | 0.2069 | Fix the MetaViewer live-state findings of vision round mv5 (lost tile vanishes, badge/placeholder, folded/error tile layout) and make refusal, verdict, activity, multislot outcome and terminal lifecycle rows reachable for the vision loop. |
 | mv0r2b | conductor | Oct 27 05:24 | testing | 8 | 95.6 | 0.3636 | Refresh the external testing round-2 prompts (Jules and ChatGPT, T1-T8) to the integration head after G-W1 and the W1 judgement, so testers target new code and still-open items. |
-| mv0tg3 | conductor | Oct 27 07:22 | testing | 5 | 94.4 | 0.1533 | Refresh the AC test-gap map on the integration head after the night (about 80 new commits), and prepare the round-2 tester index and the TESTING.md fact base, so local testing with Muse Spark drives the remaining test units to v0.2.0. |
+| mv0tg3 | conductor | Oct 27 07:22 | testing | 8 | 95.0 | 0.2757 | Refresh the AC test-gap map on the integration head after the night (about 80 new commits), and prepare the round-2 tester index and the TESTING.md fact base, so local testing with Muse Spark drives the remaining test units to v0.2.0. |
 
 ## Every lane
 
@@ -364,9 +364,12 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0r2b | T8 | Round-2 prompts T8 | Oct 27 05:25 | yes | 68 | 96.2 | 0.048332 |
 | mv0tg3 | CORE | Test gaps CORE | Oct 27 07:22 | yes | 50 | 94.9 | 0.031108 |
 | mv0tg3 | ADAPTER | Test gaps ADAPTER | Oct 27 07:23 | yes | 53 | 95.1 | 0.032759 |
+| mv0tg3 | AGENTS | Test gaps AGENTS | Oct 27 07:23 | yes | 56 | 95.2 | 0.040303 |
+| mv0tg3 | UIEL | Test gaps UIEL | Oct 27 07:23 | yes | 56 | 95.6 | 0.044436 |
 | mv0tg3 | UISRC | Test gaps UISRC | Oct 27 07:23 | yes | 33 | 92.1 | 0.025485 |
 | mv0tg3 | E2E | Test gaps E2E | Oct 27 07:23 | yes | 52 | 95.6 | 0.038849 |
 | mv0tg3 | IDX | Round-2 tester index | Oct 27 07:23 | yes | 26 | 91.0 | 0.025073 |
+| mv0tg3 | TST | TESTING.md fact base | Oct 27 07:23 | yes | 65 | 96.1 | 0.03766 |
 
 ## Method
 

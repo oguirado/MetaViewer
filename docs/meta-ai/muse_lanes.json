@@ -1,17 +1,17 @@
 {
  "schema": "metaviewer.meta_ai_usage/v1",
  "totals": {
-  "lanes": 249,
-  "ok": 249,
-  "input_tokens": 53467243,
-  "cache_read_tokens": 1132100474,
-  "output_tokens": 11349798,
-  "thinking_tokens": 6023142,
+  "lanes": 252,
+  "ok": 252,
+  "input_tokens": 54112253,
+  "cache_read_tokens": 1146283720,
+  "output_tokens": 11497455,
+  "thinking_tokens": 6104223,
   "cache_hit_pct": 95.5,
-  "usd": 9.8809,
+  "usd": 10.0033,
   "usd_per_lane": 0.0397,
-  "steps": 12510,
-  "lane_hours": 32.1
+  "steps": 12687,
+  "lane_hours": 32.5
  },
  "peak_concurrent_lanes": 24,
  "rooms": {
@@ -148,6 +148,11 @@
   "mv0dc4": {
    "stage": "docs",
    "why": "Regenerate the testing report from the conductor's measured integration-gate counts and update the demo run sheet and storyboard with the live G-W1 evidence and the Argon demo judgement.",
+   "orchestrator": "conductor"
+  },
+  "mvkp": {
+   "stage": "release",
+   "why": "Prove with Meta Muse Spark 1.3 that the capsule-ui-kit repository holds no secret, personal data or unsafe workflow in any reachable ref before the developer makes it public, and design its full code router.",
    "orchestrator": "conductor"
   },
   "mv0p1": {
@@ -5500,6 +5505,48 @@
   },
   {
    "room": "mv0tg3",
+   "lane": "AGENTS",
+   "title": "Test gaps AGENTS",
+   "stage": "testing",
+   "model": "muse-spark-1.3",
+   "orchestrator": "conductor",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-27T06:23:09.428000+00:00",
+   "duration_s": 544.3,
+   "end_utc": "2026-10-27T06:32:13.694000+00:00",
+   "phase": "build",
+   "steps": 56,
+   "input_tokens": 217866,
+   "cache_read_tokens": 4319687,
+   "output_tokens": 49384,
+   "thinking_tokens": 28186,
+   "cache_hit_pct": 95.2,
+   "usd": 0.040303
+  },
+  {
+   "room": "mv0tg3",
+   "lane": "UIEL",
+   "title": "Test gaps UIEL",
+   "stage": "testing",
+   "model": "muse-spark-1.3",
+   "orchestrator": "conductor",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-27T06:23:14.783000+00:00",
+   "duration_s": 535.5,
+   "end_utc": "2026-10-27T06:32:10.291000+00:00",
+   "phase": "build",
+   "steps": 56,
+   "input_tokens": 239121,
+   "cache_read_tokens": 5201863,
+   "output_tokens": 50599,
+   "thinking_tokens": 28723,
+   "cache_hit_pct": 95.6,
+   "usd": 0.044436
+  },
+  {
+   "room": "mv0tg3",
    "lane": "UISRC",
    "title": "Test gaps UISRC",
    "stage": "testing",
@@ -5560,6 +5607,27 @@
    "thinking_tokens": 18277,
    "cache_hit_pct": 91.0,
    "usd": 0.025073
+  },
+  {
+   "room": "mv0tg3",
+   "lane": "TST",
+   "title": "TESTING.md fact base",
+   "stage": "testing",
+   "model": "muse-spark-1.3",
+   "orchestrator": "conductor",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-27T06:23:34.616000+00:00",
+   "duration_s": 535.2,
+   "end_utc": "2026-10-27T06:32:29.860000+00:00",
+   "phase": "build",
+   "steps": 65,
+   "input_tokens": 188023,
+   "cache_read_tokens": 4661696,
+   "output_tokens": 47674,
+   "thinking_tokens": 24172,
+   "cache_hit_pct": 96.1,
+   "usd": 0.03766
   }
  ]
 }
