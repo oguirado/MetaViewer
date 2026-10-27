@@ -10,7 +10,7 @@ import {installAuthorityWire,WIRE_CHANNELS,createSettingsStore,deliverAuthorityF
 import {createPreloadFacade,installPreload} from '../electron/preload.js';
 
 const surface={schema:'surface/v0.2',surface_id:'s1',kind:'browser',display:':1',geometry:{w:1,h:1},state:'active',visibility:'unfolded',control:'human',profile_id:'test'};
-const notice={surface,frame_ref:{schema:'frame_ref/v0.1',surface_id:'s1',generation:1,tick:1,ts_ns:1,width:1,height:1,format:'rgb24',sha256:'a'.repeat(64),capture_us:1}};
+const notice={surface,frame_ref:{schema:'frame_ref/v0.2',surface_id:'s1',generation:1,tick:1,ts_ns:1,width:1,height:1,format:'rgb24',sha256:'a'.repeat(64),capture_us:1}};
 const verdict={schema:'action_verdict/v0.2',proposal_id:'p',decision:'admitted',core_seq:1};
 const settings=JSON.stringify({schema:'settings/v0.2',recording_destination:{capability_id:'disk',path:'/tmp/recordings'}});
 const spec={command:'luna',args:['--safe'],cols:80,rows:24};
@@ -23,16 +23,16 @@ async function fixture(t) {
   const frame={origin:'app://metaviewer',url:'app://metaviewer/index.html'};
   const contents={id:9,mainFrame:frame,isDestroyed:()=>false,postMessage(...args){forwarded.push(args);}};
   const event={sender:contents,senderFrame:frame};
-  let coreReply=verdict,terminalReply={session:'s1'};
+  let intentReply=true,coreReply=verdict,terminalReply={session:'s1'};
   const coreCalls=[],terminalCalls=[];
   const ipcMain={handle:(channel,fn)=>handlers.set(channel,fn),removeHandler:channel=>handlers.delete(channel)};
   const binding=installAuthorityWire({ipcMain,contents,env:{XDG_CONFIG_HOME:root,MV_SELF_CAPSULE_ID:'capsule-1'},argv:['--nested-depth=1'],
-    core:{request:async value=>{coreCalls.push(value);return value.op==='intent'?true:coreReply;}},
+    core:{request:async value=>{coreCalls.push(value);return value.op==='intent'?intentReply:coreReply;}},
     profiles:new Map([['luna',{args:['--safe']}]]),terminal:{setEnabled:async()=>true,open:async value=>{terminalCalls.push(value);return terminalReply;}}});
   t.after(async()=>{await binding.dispose();await rm(root,{recursive:true,force:true});});
   const call=(name,...args)=>handlers.get(WIRE_CHANNELS[name])(event,...args);
   return {root,handlers,event,call,contents,forwarded,coreCalls,terminalCalls,
-    coreReply:value=>{coreReply=value;},terminalReply:value=>{terminalReply=value;}};
+    intentReply:value=>{intentReply=value;},coreReply:value=>{coreReply=value;},terminalReply:value=>{terminalReply=value;}};
 }
 for(const [name,args] of Object.entries(calls)) {
   test(`${name}: admitted and refuses foreign sender, subframe, surplus and oversized input`,async t=>{
@@ -164,4 +164,45 @@ test('multiple frame listeners share one host subscription until the last revoca
   first();listener(notice);assert.deepEqual(received,['b']);assert.equal(stops,0);
   second();await new Promise(resolve=>setImmediate(resolve));assert.equal(stops,1);
   assert.deepEqual(calls,['metaviewer:authority.subscribe','metaviewer:authority.unsubscribe']);
+});
+
+for(const op of ['fold','unfold']) {
+  const intent={schema:'ui_intent/v0.2',request_id:'r1',op,params:{slot_id:'slot-1'}};
+  test(`${op}: closed intent forwards unchanged and requires literal true acknowledgement`,async t=>{
+    const f=await fixture(t),json=JSON.stringify(intent);
+    assert.equal(await f.call('intent',json),true);
+    assert.deepEqual(f.coreCalls,[{op:'intent',json}]);
+    for(const reply of [false,null,1,'true',{},undefined]) {
+      f.intentReply(reply);await assert.rejects(f.call('intent',json),/OUTCOME/);
+    }
+    for(const slot_id of ['a','A0._:-','a'.repeat(128)]) {
+      f.intentReply(true);
+      assert.equal(await f.call('intent',JSON.stringify({...intent,params:{slot_id}})),true);
+    }
+  });
+  test(`${op}: malformed closed intent never reaches core`,async t=>{
+    const f=await fixture(t);
+    const bad=[{...intent,extra:true},{...intent,schema:'ui_intent/v0.1'},
+      ...Object.keys(intent).map(key=>{const v={...intent};delete v[key];return v;}),
+      ...[null,[],{}, {slot_id:'s',extra:true}, {surface_id:'s'},
+        ...['', 'a'.repeat(129),'-slot','has space','é','a\n',1,null].map(slot_id=>({slot_id}))].map(params=>({...intent,params})),
+      ...['','bad id',1,null].map(request_id=>({...intent,request_id}))];
+    for(const value of bad) await assert.rejects(f.call('intent',JSON.stringify(value)),/INTENT/);
+    await assert.rejects(f.call('intent',JSON.stringify(intent),'extra'),/ARGS/);
+    assert.deepEqual(f.coreCalls,[]);
+  });
+}
+test('intent allow-list still refuses other schema operations',async t=>{
+  const f=await fixture(t);
+  for(const op of ['hide','show','pin','move','tab','float','layout_save','layout_load','execute_shell'])
+    await assert.rejects(f.call('intent',JSON.stringify({schema:'ui_intent/v0.2',request_id:'r',op,params:{slot_id:'s'}})),/INTENT/);
+  assert.deepEqual(f.coreCalls,[]);
+});
+
+test('control intents retain their existing forwarding behavior',async t=>{
+  const f=await fixture(t);
+  for(const op of ['take_control','release_control']) {
+    const json=JSON.stringify({op});assert.equal(await f.call('intent',json),true);
+    assert.deepEqual(f.coreCalls.at(-1),{op:'intent',json});
+  }
 });

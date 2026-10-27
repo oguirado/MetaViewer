@@ -333,7 +333,8 @@ function validFrameNotice(value) {
   const f=value.frame_ref,s=value.surface;
   if (!f || !s || Object.keys(f).sort().join(',')!=='capture_us,format,generation,height,schema,sha256,surface_id,tick,ts_ns,width'
     || Object.keys(s).sort().join(',')!=='control,display,geometry,kind,profile_id,schema,state,surface_id,visibility'
-    || f.schema!=='frame_ref/v0.1' || f.format!=='rgb24' || !/^[a-f0-9]{64}$/.test(f.sha256)
+    || f.schema!=='frame_ref/v0.2' || f.format!=='rgb24'
+    || typeof f.sha256!=='string' || f.sha256.length!==64 || !/^[a-f0-9]{64}$/.test(f.sha256)
     || typeof f.surface_id!=='string' || !f.surface_id.length || f.surface_id.length>128
     || !['generation','width','height'].every(key=>Number.isSafeInteger(f[key]) && f[key]>0)
     || !['tick','ts_ns','capture_us'].every(key=>Number.isSafeInteger(f[key]) && f[key]>=0)

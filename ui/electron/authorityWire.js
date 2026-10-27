@@ -127,7 +127,15 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     },
     intent: async (/** @type {string} */json) => {
       const body=jsonObject(json);
-      if (!['take_control','release_control','fold'].includes(body.op)) throw new Error('INTENT');
+      if (!['take_control','release_control','fold','unfold'].includes(body.op)) throw new Error('INTENT');
+      if (body.op==='fold' || body.op==='unfold') {
+        const validId=(/** @type {unknown} */value)=>typeof value==='string'
+          && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}(?![\s\S])/.test(value);
+        if (Object.keys(body).sort().join(',')!=='op,params,request_id,schema'
+            || body.schema!=='ui_intent/v0.2' || !validId(body.request_id)
+            || !body.params || Array.isArray(body.params) || typeof body.params!=='object'
+            || Object.keys(body.params).join(',')!=='slot_id' || !validId(body.params.slot_id)) throw new Error('INTENT');
+      }
       if (await core.request({op:'intent',json}) !== true) throw new Error('OUTCOME'); return true;
     },
     subscribeFrames: async () => { subscribed=true; return true; },

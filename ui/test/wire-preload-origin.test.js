@@ -6,7 +6,7 @@ function notice() {
   return {
     surface:{schema:'surface/v0.2',surface_id:'s1',kind:'browser',display:':1',
       geometry:{w:1,h:1},state:'active',visibility:'unfolded',control:'human',profile_id:'test'},
-    frame_ref:{schema:'frame_ref/v0.1',surface_id:'s1',generation:1,tick:1,ts_ns:1,
+    frame_ref:{schema:'frame_ref/v0.2',surface_id:'s1',generation:1,tick:1,ts_ns:1,
       width:1,height:1,format:'rgb24',sha256:'a'.repeat(64),capture_us:1},
   };
 }
