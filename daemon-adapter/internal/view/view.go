@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"metaviewer/daemon-adapter/internal/cli"
@@ -48,13 +49,17 @@ type Manager struct {
 	views  map[string]*active
 	busy   map[string]bool
 	closed bool
+	ctx    context.Context
+	cancel context.CancelFunc
+	idle   chan struct{}
 }
 
 var identity = regexp.MustCompile(`^srf-(id|pg|vm)-[a-z0-9][a-z0-9-]{0,39}$`)
 
 func New() Backend { return NewManager(nil) }
 func NewManager(r Runner) *Manager {
-	return &Manager{runner: r, views: make(map[string]*active), busy: make(map[string]bool)}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Manager{runner: r, views: make(map[string]*active), busy: make(map[string]bool), ctx: ctx, cancel: cancel}
 }
 func fault(code, detail string) error { return &cli.Fault{Code: code, Detail: detail} }
 func (b *Manager) check(ctx context.Context, id string) error {
@@ -85,7 +90,18 @@ func (b *Manager) Open(ctx context.Context, id string, login bool) error {
 	if login {
 		verb = "login"
 	}
-	child, err := b.runner.Start(ctx, []string{"srf-identity-surface", verb, "--container", id})
+	startCtx, cancel := context.WithCancel(ctx)
+	var stop func() bool
+	if b.ctx != nil {
+		stop = context.AfterFunc(b.ctx, cancel)
+	}
+	defer func() {
+		if stop != nil {
+			stop()
+		}
+		cancel()
+	}()
+	child, err := b.runner.Start(startCtx, []string{"srf-identity-surface", verb, "--container", id})
 	if err != nil {
 		return err
 	}
@@ -113,7 +129,15 @@ func (b *Manager) Open(ctx context.Context, id string, login bool) error {
 	}()
 	return nil
 }
-func (b *Manager) finish(id string) { b.mu.Lock(); delete(b.busy, id); b.mu.Unlock() }
+func (b *Manager) finish(id string) {
+	b.mu.Lock()
+	delete(b.busy, id)
+	if len(b.busy) == 0 && b.idle != nil {
+		close(b.idle)
+		b.idle = nil
+	}
+	b.mu.Unlock()
+}
 func (b *Manager) acquire(id string) (*active, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -132,11 +156,29 @@ func (b *Manager) acquire(id string) (*active, error) {
 func (b *Manager) Close() {
 	b.mu.Lock()
 	b.closed = true
+	if b.cancel != nil {
+		b.cancel()
+	}
 	views := b.views
 	b.views = make(map[string]*active)
+	var wait <-chan struct{}
+	if len(b.busy) > 0 {
+		if b.idle == nil {
+			b.idle = make(chan struct{})
+		}
+		wait = b.idle
+	}
 	b.mu.Unlock()
 	for _, v := range views {
 		v.child.Close()
+	}
+	if wait != nil {
+		timer := time.NewTimer(5 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-wait:
+		case <-timer.C:
+		}
 	}
 }
 

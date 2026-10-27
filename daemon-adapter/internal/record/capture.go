@@ -100,6 +100,9 @@ func (m *Manager) capture(ctx context.Context, requestID, id string, r *recordin
 	if *f.Width > capBytes/4 || *f.Height > capBytes/4/(*f.Width) || *f.Width*(*f.Height)*4 > m.cfg.MemoryBytes {
 		return nil, errors.New("frame geometry exceeds memory")
 	}
+	if !under("/dev/shm", s.FramesRoot) || !under(s.FramesRoot, f.Path) {
+		return nil, errors.New("frame is outside surface RAM root")
+	}
 	file, err := ramFile(f.Path)
 	if err != nil {
 		return nil, err
@@ -161,18 +164,19 @@ func (m *Manager) capture(ctx context.Context, requestID, id string, r *recordin
 	base := Event{Schema: "record_event/v0.2", RequestID: requestID, SurfaceID: r.surface, RecordingID: id, MonoNS: mono}
 	var events []Event
 	dropped := uint64(0)
-	for r.size > r.ring-size {
-		old := r.frames[0]
-		if err = os.Remove(old.path); err != nil {
+	evicted := uint64(0)
+	for r.size-evicted > r.ring-size {
+		evicted += r.frames[dropped].bytes
+		dropped++
+	}
+	for i := uint64(0); i < dropped; i++ {
+		if err = os.Remove(r.frames[i].path); err != nil {
 			_ = os.Remove(path)
 			return nil, err
 		}
-		r.frames = r.frames[1:]
-		r.size -= old.bytes
-		dropped++
 	}
-	r.frames = append(r.frames, frame{path: path, hash: f.Hash, bytes: size, generation: generation})
-	r.size += size
+	r.frames = append(r.frames[dropped:], frame{path: path, hash: f.Hash, bytes: size, generation: generation})
+	r.size = r.size - evicted + size
 	r.generation = generation
 	r.lastNS = mono
 	r.captured = true
@@ -219,7 +223,7 @@ func (m *Manager) export(base Event, r *recording) (result Event, exportErr erro
 		}
 		files = append(files, file)
 	}
-	destination, err := openNoLinks(d.Path, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL, 0600)
+	parent, destination, baseName, err := openNoLinksParent(d.Path, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL, 0600)
 	if err != nil {
 		return Event{}, err
 	}
@@ -228,13 +232,19 @@ func (m *Manager) export(base Event, r *recording) (result Event, exportErr erro
 	complete := false
 	defer func() {
 		if !complete {
-			closeErr := destination.Close()
-			removeErr := os.Remove(d.Path)
-			if errors.Is(removeErr, os.ErrNotExist) {
-				removeErr = nil
+			var removeErr error
+			fdInfo, fErr := destination.Stat()
+			pathInfo, lErr := os.Lstat(d.Path)
+			if fErr == nil && lErr == nil && os.SameFile(fdInfo, pathInfo) {
+				removeErr = syscall.Unlinkat(int(parent.Fd()), baseName)
+				if errors.Is(removeErr, os.ErrNotExist) || errors.Is(removeErr, syscall.ENOENT) {
+					removeErr = nil
+				}
 			}
+			closeErr := destination.Close()
 			exportErr = errors.Join(exportErr, closeErr, removeErr)
 		}
+		_ = parent.Close()
 	}()
 	digest := sha256.New()
 	counter := &countWriter{writer: io.MultiWriter(destination, digest)}

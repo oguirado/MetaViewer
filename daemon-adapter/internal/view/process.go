@@ -57,7 +57,7 @@ func (r *ProcessRunner) Start(ctx context.Context, args []string) (*Process, err
 		return nil, err
 	}
 	// Refuse a changed private state root before launching the foreground helper.
-	info, err := os.Lstat(r.stateDir)
+	info, err := stateDirInfo(r.stateDir)
 	if err != nil || !filepath.IsAbs(r.stateDir) || filepath.Clean(r.stateDir) != r.stateDir || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode() != os.ModeDir|0700 {
 		return nil, fault("configuration", "private operator state directory required")
 	}
@@ -129,6 +129,43 @@ func (r *ProcessRunner) Start(ctx context.Context, args []string) (*Process, err
 		return nil, err
 	}
 	return &Process{Announcement: line, Done: reaped, Close: func() { cancel(); <-reaped }}, nil
+}
+
+func stateDirInfo(path string) (os.FileInfo, error) {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return nil, syscall.EINVAL
+	}
+	flags := syscall.O_RDONLY | syscall.O_DIRECTORY | syscall.O_NOFOLLOW | syscall.O_CLOEXEC
+	fd, err := syscall.Open("/", flags, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if fd >= 0 {
+			_ = syscall.Close(fd)
+		}
+	}()
+	if path != "/" {
+		parts := strings.Split(path[1:], "/")
+		for i, part := range parts {
+			next, err := syscall.Openat(fd, part, flags, 0)
+			if err == syscall.ENOENT && i == len(parts)-1 {
+				if err = syscall.Mkdirat(fd, part, 0700); err != nil && err != syscall.EEXIST {
+					return nil, err
+				}
+				next, err = syscall.Openat(fd, part, flags, 0)
+			}
+			if err != nil {
+				return nil, err
+			}
+			_ = syscall.Close(fd)
+			fd = next
+		}
+	}
+	file := os.NewFile(uintptr(fd), path)
+	fd = -1
+	defer func() { _ = file.Close() }()
+	return file.Stat()
 }
 
 // NewFromEnvironment is called only by the trusted host configuration layer.

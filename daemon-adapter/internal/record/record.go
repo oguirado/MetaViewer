@@ -55,9 +55,10 @@ type Destination struct {
 	Path         string
 }
 type Surface struct {
-	Family    string
-	Container string
-	Window    string
+	Family     string
+	Container  string
+	Window     string
+	FramesRoot string
 }
 
 // Clock returns session-relative monotonic nanoseconds. OriginNS converts CLI stamps.
@@ -149,7 +150,7 @@ func NewManager(c Config) (*Manager, error) {
 	}
 	surfaces := make(map[string]Surface, len(c.Surfaces))
 	for id, s := range c.Surfaces {
-		if !identity.MatchString(id) || (s.Family != "srf-identity-surface" && s.Family != "srf-holdings-capsule") || !identity.MatchString(s.Container) || (s.Family == "srf-identity-surface" && !regexp.MustCompile(`^w[0-9]+$`).MatchString(s.Window)) {
+		if !identity.MatchString(id) || (s.Family != "srf-identity-surface" && s.Family != "srf-holdings-capsule") || !identity.MatchString(s.Container) || (s.Family == "srf-identity-surface" && !regexp.MustCompile(`^w[0-9]+$`).MatchString(s.Window)) || !under("/dev/shm", s.FramesRoot) {
 			return nil, errors.New("invalid surface binding")
 		}
 		surfaces[id] = s
@@ -159,6 +160,13 @@ func NewManager(c Config) (*Manager, error) {
 }
 func cleanAbsolute(p string) bool {
 	return filepath.IsAbs(p) && len(p) <= 4096 && filepath.Clean(p) == p && !strings.ContainsAny(p, "\x00\r\n")
+}
+func under(root, path string) bool {
+	if !cleanAbsolute(root) || !cleanAbsolute(path) {
+		return false
+	}
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != "." && rel != ".." && len(rel) > 0 && rel[0] != '.' && !filepath.IsAbs(rel)
 }
 func ptr(v uint64) *uint64 { return &v }
 func (m *Manager) base(q request, p params, id string) Event {
@@ -378,28 +386,37 @@ func (m *Manager) Close() error {
 
 // openNoLinks traverses pinned directory descriptors; symlink races fail closed.
 func openNoLinks(path string, flags int, mode uint32) (*os.File, error) {
+	dir, file, _, err := openNoLinksParent(path, flags, mode)
+	if dir != nil {
+		_ = dir.Close()
+	}
+	return file, err
+}
+func openNoLinksParent(path string, flags int, mode uint32) (*os.File, *os.File, string, error) {
 	if !cleanAbsolute(path) || path == "/" {
-		return nil, errors.New("invalid file path")
+		return nil, nil, "", errors.New("invalid file path")
 	}
 	dir, err := os.Open("/")
 	if err != nil {
-		return nil, err
+		return nil, nil, "", err
 	}
-	defer func() { _ = dir.Close() }()
 	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
 	for _, part := range parts[:len(parts)-1] {
 		fd, e := syscall.Openat(int(dir.Fd()), part, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
 		if e != nil {
-			return nil, e
+			_ = dir.Close()
+			return nil, nil, "", e
 		}
 		_ = dir.Close()
 		dir = os.NewFile(uintptr(fd), part)
 	}
-	fd, err := syscall.Openat(int(dir.Fd()), parts[len(parts)-1], flags|syscall.O_NOFOLLOW|syscall.O_CLOEXEC|syscall.O_NONBLOCK, mode)
+	base := parts[len(parts)-1]
+	fd, err := syscall.Openat(int(dir.Fd()), base, flags|syscall.O_NOFOLLOW|syscall.O_CLOEXEC|syscall.O_NONBLOCK, mode)
 	if err != nil {
-		return nil, err
+		_ = dir.Close()
+		return nil, nil, "", err
 	}
-	return os.NewFile(uintptr(fd), path), nil
+	return dir, os.NewFile(uintptr(fd), path), base, nil
 }
 func ramFile(path string) (*os.File, error) {
 	if !strings.HasPrefix(path, "/dev/shm/") {

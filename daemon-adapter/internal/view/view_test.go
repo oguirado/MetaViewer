@@ -192,3 +192,71 @@ func TestSlowContainerDoesNotBlockOtherViews(t *testing.T) {
 		<-slow
 	}
 }
+
+type closeDuringStartRunner struct {
+	entered     chan struct{}
+	childClosed chan struct{}
+}
+
+func (r *closeDuringStartRunner) Run(_ context.Context, _ []string, _ []byte) ([]byte, error) {
+	return nil, nil
+}
+
+func (r *closeDuringStartRunner) Start(ctx context.Context, _ []string) (*Process, error) {
+	close(r.entered)
+	<-ctx.Done()
+	time.Sleep(20 * time.Millisecond)
+	done := make(chan struct{})
+	var once sync.Once
+	return &Process{
+		Announcement: []byte(`{"url":"http://127.0.0.1:1234/","native":"x","socket":"/runtime/s"}`),
+		Done:         done,
+		Close:        func() { once.Do(func() { close(done); close(r.childClosed) }) },
+	}, nil
+}
+
+func TestCloseJoinsInFlightStart(t *testing.T) {
+	r := &closeDuringStartRunner{entered: make(chan struct{}), childClosed: make(chan struct{})}
+	b := NewManager(r)
+	openDone := make(chan error, 1)
+	go func() {
+		openDone <- b.Open(context.Background(), "srf-id-slow", false)
+	}()
+	<-r.entered
+	closeDone := make(chan struct{})
+	go func() {
+		b.Close()
+		close(closeDone)
+	}()
+	select {
+	case <-closeDone:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Close did not cancel and join in-flight Start")
+	}
+	select {
+	case err := <-openDone:
+		if err == nil {
+			t.Fatal("Open succeeded after Close")
+		}
+	default:
+		t.Fatal("Close returned before in-flight Open finished")
+	}
+	select {
+	case <-r.childClosed:
+	default:
+		t.Fatal("late child was not closed before Close returned")
+	}
+	// Negative control: ordinary Open/Close lifecycle remains intact.
+	normal := &fakeRunner{output: []byte(`{"url":"http://127.0.0.1:1234/","native":"xpra","socket":"/runtime/view.sock"}`)}
+	b2 := NewManager(normal)
+	if err := b2.Open(context.Background(), "srf-id-demo", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := b2.Info("srf-id-demo"); !ok {
+		t.Fatal("expected active view")
+	}
+	b2.Close()
+	if _, ok := b2.Info("srf-id-demo"); ok {
+		t.Fatal("expected view closed")
+	}
+}

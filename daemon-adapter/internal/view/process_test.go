@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"metaviewer/daemon-adapter/internal/cli"
 )
 
 func processFixture(t *testing.T, announcement string) *ProcessRunner {
@@ -164,4 +166,80 @@ func TestManagerEvictsExitedChild(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatal("exited child still registered")
+}
+
+func TestStateDirPathBypassesRefused(t *testing.T) {
+	interpreter, err := exec.LookPath("python3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"relative", "dot", "dotdot", "double-slash", "symlink-slash", "symlink-dot", "ancestor-symlink", "ancestor-symlink-create"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			marker := filepath.Join(root, "launched")
+			state := filepath.Join(root, "state")
+			if err := os.Mkdir(state, 0700); err != nil {
+				t.Fatal(err)
+			}
+			link := filepath.Join(root, "link")
+			target := root
+			if mode == "symlink-slash" || mode == "symlink-dot" {
+				target = state
+			}
+			if err := os.Symlink(target, link); err != nil {
+				t.Fatal(err)
+			}
+			switch mode {
+			case "relative":
+				cwd, err := os.Getwd()
+				if err != nil {
+					t.Fatal(err)
+				}
+				state, err = filepath.Rel(cwd, state)
+				if err != nil {
+					t.Fatal(err)
+				}
+			case "dot":
+				state += "/."
+			case "dotdot":
+				state = root + "/state/../state"
+			case "double-slash":
+				state = root + "//state"
+			case "symlink-slash":
+				state = link + "/"
+			case "symlink-dot":
+				state = link + "/."
+			case "ancestor-symlink":
+				state = link + "/state"
+			case "ancestor-symlink-create":
+				state = link + "/new-state"
+			}
+			script := "#!" + interpreter + "\n" + fmt.Sprintf("open(%q, 'w').write('1')\n", marker)
+			if err := os.WriteFile(filepath.Join(root, "srf-identity-surface"), []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			r, err := NewProcessRunner(root, []string{"PATH=" + os.Getenv("PATH"), "MV_SRF_STATE_DIR=" + state})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = r.Start(context.Background(), []string{"srf-identity-surface", "view", "--container", "srf-id-demo"})
+			var f *cli.Fault
+			if !errors.As(err, &f) || f.Code != "configuration" {
+				t.Fatalf("path bypass %s accepted: %v", mode, err)
+			}
+			if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
+				t.Fatalf("helper launched on refused path %s", mode)
+			}
+			if _, statErr := os.Stat(filepath.Join(root, "new-state")); !os.IsNotExist(statErr) {
+				t.Fatalf("created state through symlink ancestor in %s", mode)
+			}
+		})
+	}
+	// Negative control: normal 0700 state directory launches.
+	valid := processFixture(t, `json.dumps({'url':'http://127.0.0.1:1234/', 'native':str(os.getpid()), 'socket':'/runtime/view.sock'})`)
+	child, err := valid.Start(context.Background(), []string{"srf-identity-surface", "view", "--container", "srf-id-demo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child.Close()
 }

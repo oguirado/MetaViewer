@@ -64,7 +64,16 @@ func fixture(t *testing.T) (string, []byte, uint64) {
 }
 func manager(t *testing.T, runner *fakeRunner, ring uint64, dest *Destination) *Manager {
 	t.Helper()
-	m, err := NewManager(Config{Runner: runner, Clock: func() uint64 { return 10 }, OriginNS: 100, BinDir: t.TempDir(), Surfaces: map[string]Surface{"s": {Family: "srf-identity-surface", Container: "capsule", Window: "w1"}}, Destination: dest, MemoryBytes: ring * 4, RingBytes: ring, MaxFPS: 30})
+	framesRoot := "/dev/shm/record-test-surface"
+	if runner != nil && len(runner.reply) > 0 {
+		var f struct {
+			Path string `json:"path"`
+		}
+		if json.Unmarshal(runner.reply, &f) == nil && under("/dev/shm", filepath.Dir(f.Path)) {
+			framesRoot = filepath.Dir(f.Path)
+		}
+	}
+	m, err := NewManager(Config{Runner: runner, Clock: func() uint64 { return 10 }, OriginNS: 100, BinDir: t.TempDir(), Surfaces: map[string]Surface{"s": {Family: "srf-identity-surface", Container: "capsule", Window: "w1", FramesRoot: framesRoot}}, Destination: dest, MemoryBytes: ring * 4, RingBytes: ring, MaxFPS: 30})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -456,5 +465,311 @@ func TestSyntheticFiveMinuteRAMRecordingNoDiskWrites(t *testing.T) {
 		if err != nil || len(entries) != 0 {
 			t.Fatalf("recording wrote outside RAM: %s %v", dir, err)
 		}
+	}
+}
+
+func setSurfaceFramesRoot(s *Surface, root string) bool {
+	v := reflect.ValueOf(s).Elem().FieldByName("FramesRoot")
+	if !v.IsValid() || !v.CanSet() {
+		return false
+	}
+	v.SetString(root)
+	return true
+}
+
+func encodePatternPNG(t *testing.T, w, h int, noisy bool) ([]byte, string) {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	digest := sha256.New()
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			var c color.RGBA
+			if noisy {
+				c = color.RGBA{R: uint8(x*17 + y*31 + 1), G: uint8(x*53 - y*19 + 2), B: uint8((x*97 ^ y*43) + 3), A: 255}
+			} else {
+				c = color.RGBA{R: 200, G: 100, B: 50, A: 255}
+			}
+			img.Set(x, y, c)
+			_, _ = digest.Write([]byte{c.R, c.G, c.B})
+		}
+	}
+	var b bytes.Buffer
+	if err := png.Encode(&b, img); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes(), hex.EncodeToString(digest.Sum(nil))
+}
+
+func TestForeignSurfaceRAMProvenanceRefused(t *testing.T) {
+	ownPath, reply, size := fixture(t)
+	foreignPath, _, _ := fixture(t)
+	runner := &fakeRunner{reply: update(t, reply, map[string]any{"path": foreignPath})}
+	surf := Surface{Family: "srf-identity-surface", Container: "capsule", Window: "w1"}
+	_ = setSurfaceFramesRoot(&surf, filepath.Dir(ownPath))
+	m, err := NewManager(Config{
+		Runner:      runner,
+		Clock:       func() uint64 { return 10 },
+		OriginNS:    100,
+		BinDir:      t.TempDir(),
+		Surfaces:    map[string]Surface{"s": surf},
+		MemoryBytes: size * 4,
+		RingBytes:   size,
+		MaxFPS:      30,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+	ctx := context.Background()
+	if _, err := m.Handle(ctx, start(size)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Poll(ctx, "poll-foreign", "r"); err == nil {
+		t.Fatal("foreign surface RAM provenance accepted")
+	}
+	if len(m.records["r"].frames) != 0 || m.records["r"].size != 0 {
+		t.Fatalf("foreign frame mutated recording: %+v", m.records["r"])
+	}
+	for _, badRoot := range []string{"", "/dev/shm", "/tmp/frames", "/dev/shm/../tmp"} {
+		badSurf := Surface{Family: "srf-identity-surface", Container: "capsule", Window: "w1", FramesRoot: badRoot}
+		if _, err := NewManager(Config{
+			Runner:      runner,
+			Clock:       func() uint64 { return 10 },
+			OriginNS:    100,
+			BinDir:      t.TempDir(),
+			Surfaces:    map[string]Surface{"s": badSurf},
+			MemoryBytes: size * 4,
+			RingBytes:   size,
+			MaxFPS:      30,
+		}); err == nil {
+			t.Fatalf("accepted invalid FramesRoot %q", badRoot)
+		}
+	}
+	// Negative control: own surface path with valid PNG is captured.
+	runner.reply = reply
+	events, err := m.Poll(ctx, "poll-own", "r")
+	if err != nil || len(events) != 1 || events[0].Event != "frame_captured" {
+		t.Fatalf("own frame rejected: %+v %v", events, err)
+	}
+}
+
+func TestRingEvictionAtomicOnSecondUnlinkFailure(t *testing.T) {
+	dir, err := os.MkdirTemp("/dev/shm", "record-evict-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	smallBytes, smallHash := encodePatternPNG(t, 16, 16, false)
+	largeBytes, largeHash := encodePatternPNG(t, 16, 16, true)
+	smallSize := uint64(len(smallBytes))
+	largeSize := uint64(len(largeBytes))
+	if smallSize*2 > largeSize {
+		t.Fatalf("expected 2*small (%d) <= large (%d)", smallSize*2, largeSize)
+	}
+	smallPath := filepath.Join(dir, "small.png")
+	largePath := filepath.Join(dir, "large.png")
+	if err := os.WriteFile(smallPath, smallBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(largePath, largeBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
+	makeReply := func(path, hash string, seq uint64, mono uint64) []byte {
+		raw, e := json.Marshal(map[string]any{
+			"path":            path,
+			"seq":             seq,
+			"sha256_rgb24":    hash,
+			"width":           16,
+			"height":          16,
+			"capture_mono_ns": mono,
+			"generation":      seq,
+			"window":          "w1",
+		})
+		if e != nil {
+			t.Fatal(e)
+		}
+		return raw
+	}
+	runner := &fakeRunner{reply: makeReply(smallPath, smallHash, 1, 1_000_000_100)}
+	surf := Surface{Family: "srf-identity-surface", Container: "capsule", Window: "w1"}
+	_ = setSurfaceFramesRoot(&surf, dir)
+	m, err := NewManager(Config{
+		Runner:      runner,
+		Clock:       func() uint64 { return 10 },
+		OriginNS:    100,
+		BinDir:      t.TempDir(),
+		Surfaces:    map[string]Surface{"s": surf},
+		MemoryBytes: largeSize * 4,
+		RingBytes:   largeSize,
+		MaxFPS:      30,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+	ctx := context.Background()
+	if _, err := m.Handle(ctx, start(largeSize)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Poll(ctx, "p1", "r"); err != nil {
+		t.Fatal(err)
+	}
+	runner.reply = makeReply(smallPath, smallHash, 2, 2_000_000_100)
+	if _, err := m.Poll(ctx, "p2", "r"); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.records["r"].frames) != 2 || m.records["r"].size != smallSize*2 {
+		t.Fatalf("expected 2 retained frames before double eviction, got %+v", m.records["r"])
+	}
+	// Plant a non-empty directory at the second lease path so the 2nd unlink fails.
+	secondLease := m.records["r"].frames[1].path
+	if err := os.Remove(secondLease); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(secondLease, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(secondLease, "pin"), []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	runner.reply = makeReply(largePath, largeHash, 3, 3_000_000_100)
+	if _, err := m.Poll(ctx, "p3", "r"); err == nil {
+		t.Fatal("expected second unlink failure")
+	}
+	if len(m.records["r"].frames) != 2 || m.records["r"].size != smallSize*2 {
+		t.Fatalf("partial eviction mutated state: frames=%d size=%d (want 2, %d)", len(m.records["r"].frames), m.records["r"].size, smallSize*2)
+	}
+	entries, err := os.ReadDir(m.root)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("new copy was not cleaned up on eviction failure: entries=%v err=%v", entries, err)
+	}
+
+	// Negative control: clean double eviction emits one dropped event with count 2.
+	m2, err := NewManager(Config{
+		Runner:      runner,
+		Clock:       func() uint64 { return 10 },
+		OriginNS:    100,
+		BinDir:      t.TempDir(),
+		Surfaces:    map[string]Surface{"s": surf},
+		MemoryBytes: largeSize * 4,
+		RingBytes:   largeSize,
+		MaxFPS:      30,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m2.Close() })
+	if _, err := m2.Handle(ctx, start(largeSize)); err != nil {
+		t.Fatal(err)
+	}
+	runner.reply = makeReply(smallPath, smallHash, 1, 1_000_000_100)
+	if _, err := m2.Poll(ctx, "c1", "r"); err != nil {
+		t.Fatal(err)
+	}
+	runner.reply = makeReply(smallPath, smallHash, 2, 2_000_000_100)
+	if _, err := m2.Poll(ctx, "c2", "r"); err != nil {
+		t.Fatal(err)
+	}
+	runner.reply = makeReply(largePath, largeHash, 3, 3_000_000_100)
+	events, err := m2.Poll(ctx, "c3", "r")
+	if err != nil || len(events) != 2 || events[0].Event != "dropped" || events[0].DroppedFrames == nil || *events[0].DroppedFrames != 2 || events[1].Event != "frame_captured" {
+		t.Fatalf("clean double eviction failed: %+v %v", events, err)
+	}
+}
+
+func TestExportFailureAfterReplaceSparesReplacement(t *testing.T) {
+	source, reply, size := fixture(t)
+	runner := &fakeRunner{reply: reply}
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "capture.tar")
+	moved := filepath.Join(dir, "moved.tar")
+	surf := Surface{Family: "srf-identity-surface", Container: "capsule", Window: "w1"}
+	_ = setSurfaceFramesRoot(&surf, filepath.Dir(source))
+	m, err := NewManager(Config{
+		Runner:      runner,
+		Clock:       func() uint64 { return 10 },
+		OriginNS:    100,
+		BinDir:      t.TempDir(),
+		Surfaces:    map[string]Surface{"s": surf},
+		Destination: &Destination{CapabilityID: "cap", Path: dest},
+		MemoryBytes: size * 4,
+		RingBytes:   size,
+		MaxFPS:      30,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+	ctx := context.Background()
+	if _, err := m.Handle(ctx, disk(dest, "cap")); err != nil {
+		t.Fatal(err)
+	}
+	events, err := m.Poll(ctx, "poll", "r")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownedPath := events[0].RAMPath
+	const sparseLen = 512 << 20
+	if err := os.Truncate(ownedPath, sparseLen); err != nil {
+		t.Fatal(err)
+	}
+	m.records["r"].frames[0].bytes = sparseLen
+	replacement := []byte("replacement file must survive")
+	done := make(chan error, 1)
+	go func() {
+		for {
+			if err := os.Rename(dest, moved); err == nil {
+				if wErr := os.WriteFile(dest, replacement, 0600); wErr != nil {
+					done <- wErr
+					return
+				}
+				done <- os.Truncate(ownedPath, 0)
+				return
+			}
+		}
+	}()
+	if _, err := m.Handle(ctx, stop("disk_stop")); err == nil {
+		t.Fatal("expected export failure after truncated frame")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil || !bytes.Equal(got, replacement) {
+		t.Fatalf("replacement file was removed or modified: got=%q err=%v", got, err)
+	}
+
+	// Negative control: ordinary export failure still removes the partial file.
+	dest2 := filepath.Join(dir, "ordinary.tar")
+	m2, err := NewManager(Config{
+		Runner:      runner,
+		Clock:       func() uint64 { return 10 },
+		OriginNS:    100,
+		BinDir:      t.TempDir(),
+		Surfaces:    map[string]Surface{"s": surf},
+		Destination: &Destination{CapabilityID: "cap", Path: dest2},
+		MemoryBytes: size * 4,
+		RingBytes:   size,
+		MaxFPS:      30,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m2.Close() })
+	if _, err := m2.Handle(ctx, disk(dest2, "cap")); err != nil {
+		t.Fatal(err)
+	}
+	events2, err := m2.Poll(ctx, "poll2", "r")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(events2[0].RAMPath, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m2.Handle(ctx, stop("disk_stop")); err == nil {
+		t.Fatal("expected ordinary export failure")
+	}
+	if _, err := os.Stat(dest2); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ordinary failed export left partial file: %v", err)
 	}
 }
