@@ -1,33 +1,48 @@
 # MetaViewer
 
-I built MetaViewer as a wall of live, isolated application surfaces. I fold, unfold, pin and take control of surfaces while an agent keeps observing, acting and verifying outcomes, including on hidden surfaces [TARGET]. I designed perception and reasoning to use Meta models through the Meta Model API [TARGET], with vision-engine for capture analysis and wender-agent for input execution [CITED: docs/ARCHITECTURE.md]; the built-in terminal also accepts any provider CLI I choose [TARGET].
+I build MetaViewer as a Linux-first desktop wall of live, isolated application surfaces. I fold, unfold, pin, and take control of surfaces while an agent observes, proposes, and verifies actions through a Rust authority core (`core/`, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)). Every action and layout intent is admitted and journaled by the core; the Electron renderer paints frames and submits intents, and never injects input directly.
 
 ## Status
 
-I am an indie developer building MetaViewer, a Linux-first desktop wall of live capsules, during the hackathon build period [CITED: docs/ROADMAP.md]. `VERSION` reads **0.1.2** [CITED: VERSION]. The public repository integrates toward **v0.2.0** [TARGET] on `bridge/integration` (head `2015cbfc`, 38 green integrations on day 2 and 142 integrations total [MEASURED]).
+`VERSION` is **0.1.2** [MEASURED: `cat VERSION`; CITED: `VERSION`]. The repository is at commit `b0e7feaf` [MEASURED: `git rev-parse --short HEAD`] (`573` commits on the branch [MEASURED: `git rev-list --count HEAD`]), integrating toward **v0.2.0** [TARGET].
 
-What is proven on the real stack today:
+Current gate and suite status on this tree:
 
-- Live gate G-W1 passes 11/11 assertions on two consecutive runs on head `f92edd6c` [MEASURED], with the agent receipt `verified: true` by pixel verification (`"frame-bound witness matched"`).
-- Live gate G-AI passes 8/8 assertions (`A1`–`A8`) on two consecutive runs on base `9055b82d` with `receipt_verified: true` and 19/19 negative controls [MEASURED]: `vision-engine` and `wender-agent` drive a real capsule through core admission.
-- The full 10-leg offline gate (`tools/gate.sh`) and its 25-test harness self-test (`tools/gate.sh --self-test`) pass on the integration head [MEASURED: docs/TESTING.md].
-
-Hosted CI on GitHub Actions is fully green on both Linux architectures (20 of 20 jobs on the v0.1.2 commit `b8ec7413`) [MEASURED]. Still ahead for **v0.2.0** [TARGET]: a 10-minute wall soak, visual QA polish, and the demo video finish. The product is about 70% toward the v0.2.0 milestone [TARGET].
+- **Offline gate (`tools/gate.sh`).** All `10` legs pass (`PASS aggregate`) [MEASURED: `bash tools/gate.sh`], and the `25`-test gate harness self-test passes (`PASS self-test`, `PASS aggregate`) [MEASURED: `bash tools/gate.sh --self-test`]:
+  - `manifests`: `PASS` [MEASURED: `bash tools/gate.sh --leg manifests`]
+  - `laws`: `PASS` [MEASURED: `bash tools/gate.sh --leg laws`]
+  - `contracts`: `PASS` over `10` v0.1 schemas [MEASURED: `ls -1 contracts/v0.1/*.schema.json | wc -l`] and `20` v0.2 schemas [MEASURED: `ls -1 contracts/v0.2/*.schema.json | wc -l`] with `20` v0.1 fixtures [MEASURED: `ls -1 contracts/examples/*.json | wc -l`] and `479` v0.2 fixtures [MEASURED: `ls -1 contracts/examples/v0.2/*.json | wc -l`] [MEASURED: `bash tools/gate.sh --leg contracts`]
+  - `unit`: `363` tests, `OK` [MEASURED: `bash tools/gate.sh --leg unit`]
+  - `agents`: `553` tests, `OK` [MEASURED: `bash tools/gate.sh --leg agents`]
+  - `js`: `PASS` against `capsule-ui-kit` `0.2.1` [MEASURED: `bash tools/gate.sh --leg js`; CITED: `ui/kit.lock.json`]
+  - `rust`: `214` passed, `0` failed across `39` test binaries [MEASURED: `bash tools/gate.sh --leg rust`]
+  - `go`: `7` packages `ok` on native `go test -race -count=1 ./...` plus `7` cross-architecture `GOARCH=amd64` compile/vet checks (`14` `ok` package lines total) [MEASURED: `bash tools/gate.sh --leg go`]
+  - `ui`: `2,259` tests across `237` suites (`2,258` pass, `0` fail, `1` skipped) [MEASURED: `bash tools/gate.sh --leg ui`]
+  - `ui-smoke`: `2` markers witnessed (`METAVIEWER_SMOKE_OK` and `METAVIEWER_MAIN_SMOKE_OK`) [MEASURED: `bash tools/gate.sh --leg ui-smoke`]
+- **End-to-end journeys (`tests/e2e/`).** `32` Node journey test files [MEASURED: `ls -1 tests/e2e/*.test.js | wc -l`] and `2` Python E2E test suites [MEASURED: `ls -1 tests/e2e/test_*.py | wc -l`]. Running `tests/e2e/run.py` under `xvfb-run` executes `223` tests across `20` suites (`222` pass, `0` fail, `0` skipped, `1` todo) plus `1` cross-routing negative control [MEASURED: `xvfb-run -a -s "-screen 0 1280x900x24" python3 tests/e2e/run.py`], and the production frame path journey passes `3` of `3` tests (`0` fail, `0` todo) when `MV_E2E_STRICT_RENDERER=1` is set [MEASURED: `MV_E2E_STRICT_RENDERER=1 xvfb-run -a -s "-screen 0 1280x900x24" node --test tests/e2e/e2e25_production_frames.test.js`].
+- **CI workflows (`.github/workflows/`).** `5` workflow files [MEASURED: `ls -1 .github/workflows/*.yml | wc -l`] define `19` job keys [MEASURED: `grep -E '^  [a-z0-9-]+:$' .github/workflows/*.yml | wc -l`], with `13` job keys in `.github/workflows/ci.yml` [MEASURED: `grep -E '^  [a-z0-9-]+:$' .github/workflows/ci.yml | wc -l`] where `ci-required` aggregates `10` required `needs` jobs across `x64` (`ubuntu-24.04`) and `arm64` (`ubuntu-24.04-arm`) [CITED: `.github/workflows/ci.yml`]. See [docs/TESTING.md](docs/TESTING.md) for the full job matrix and local commands.
 
 ## Features
 
-- **Wall of live capsules.** I watch real browsers and apps running in isolated OpenSuperficies containers as tiles on one wall (4 tiles at 24.93 fps measured telemetry [MEASURED]). I fold, unfold, pin, move, tab, float, hide and show tiles through closed `ui_intent/v0.2` layout intents admitted and journaled by the Rust core (`core/src/serve/layout.rs`, `ui/electron/authorityWire.js`).
-- **Human control first.** I take control from the agent at any time; every action is admitted by the Rust core and journaled [CITED: docs/ARCHITECTURE.md]. Human takeover, pending proposal cancellation (`SURFACE_NOT_AGENT_CONTROLLED`), human refusal, release, and fresh-frame readmission pass live in G-W1 (11/11 twice [MEASURED]).
-- **AI agent acts on real capsules, with verified receipts.** The agent loop (`observe` → `propose` → `admit` → `act` → `verify`) runs against a live capsule: G-AI passes 8/8 twice with `receipt_verified: true` [MEASURED], and G-W1 passes 11/11 twice with `verified: true` [MEASURED]. Perception uses `vision-engine` and input execution uses `wender-agent`, both external and pinned in `deps.lock` (`vision-engine v0.2.0 @ 9bbb49f`, `wender-agent v0.3.0 @ 7648b25`, verified at runtime in the live receipts [CITED: deps.lock; MEASURED]).
-- **Journal and replay integrity.** The core keeps a hash-chained journal; `mv-replay` reproduces the snapshot digest on repeated replay (rc `0` [MEASURED]) and refuses corrupted journals (`Corrupt`, rc `2` [MEASURED]).
-- **Recording in RAM and disk export, per tile.** The `metaviewer.capture` namespace provides per-tile screenshot capture and record-for-AI with RAM and journal accounting, per-tile recording chrome in the UI, and write-ahead journaled disk export (`capture_request/v1`) of sealed captures as deterministic PNG tars under `MV_RECORDING_DESTINATION` (`core/src/record/capture/export.rs`, `ui/electron/captureBridge.js`).
-- **Theme and settings.** XDG settings are closed and validated, and the theme gate checks AA contrast with no bundled fonts [MEASURED].
-- **Contracts first.** 20 versioned JSON schemas [MEASURED: `ls contracts/v0.2/*.schema.json | wc -l`] in `contracts/v0.2/` (plus 10 closed schemas in `contracts/v0.1/` [MEASURED]); a new message type needs its schema before the code that sends or reads it [CITED: LAWS.md L3].
-- **Built-in terminal.** The wall shell includes a built-in terminal (`@xterm/xterm` 6.0.0 and `node-pty` 1.1.0 [CITED: ui/package.json]) that also accepts any provider CLI I choose [TARGET].
+- **Renderer frame painting through the frame port (`frame_port/v1`, `frame_ack/v0.2`).** When the main process announces a surface stream on the live wall, the preload forwards the stream's `MessagePort` once per stream to the renderer with a closed `frame_port/v1` notice (`type`, `schema`, `surface_id`, `surface_generation`) (`ui/electron/preload.js`). The renderer (`ui/src/frames/framePortRouter.js`, `ui/src/surfaces/SurfaceCanvas.vue`, `ui/src/surfaces/tileScheduler.js`) validates each delivery's closed shape, byte length, and SHA-256 digest, attaches the tile canvas with the registered delivery identity, retains the last painted frame across generation ticks, paints RGB24 pixels onto the canvas, and replies with exactly one `frame_ack/v0.2` (`PRESENTED`, `SUPERSEDED`, `FOLD_DRAIN`, `HIDDEN`, `CONTEXT_LOST`, `SURFACE_DESTROYED`, or `REFUSED`) [CITED: `ui/src/frames/framePortRouter.js`, `ui/electron/framePort.js`]. Optional frame diagnostics (`MV_FRAME_DIAG=1`, `ui/electron/frameDiag.js`) and live QA anchor collection (`MV_QA_ANCHORS=1`, `ui/electron/qaAnchors.js`, `ui/src/qa/anchorCollector.js`) are off by default and refused in packaged retail runs [CITED: `ui/electron/frameDiag.js`, `ui/electron/qaAnchors.js`].
+- **Wall layout, fold, and nested depth.** I fold, unfold, pin, move, tab, float, hide, and show tiles through closed `ui_intent/v0.2` layout intents admitted and journaled by the Rust core (`core/src/serve/layout.rs`, `ui/electron/authorityWire.js`, `ui/src/wall/SurfacePanel.vue`). Folding a tile stops canvas draw submissions while capture continues behind it; fold/unfold of a hidden surface is refused rather than dropped, float honours the committed placement echo, and dock-back after float returns the tile to its previous group and position [CITED: `ui/src/App.vue`, `ui/src/wall/WallWorkspace.vue`, `ui/src/wall/SurfacePanel.vue`]. For nested capsules (AC-17), `surface_request/v0.2` `create` carries an optional `nested_depth` of `0` or `1`, admitted only for the `metaviewer-nested` program entry at depth `1` and refused at depth `>= 2` or for non-program kinds [CITED: `contracts/v0.2/surface_request.schema.json`, `core/src/catalog/mod.rs`, `daemon-adapter/internal/capsule/manager.go`].
+- **Human and agent control.** I take and release control of any surface through `take_control` and `release_control` (`ui_intent/v0.2`). Human takeover cancels pending agent proposals for that surface with `SURFACE_NOT_AGENT_CONTROLLED` and blocks new agent admission until `release_control` and a fresh frame generation [CITED: `core/src/control/mod.rs`, `ui/src/core/hostAdapters.js`]. Tile titles use `profile_id` when present, and agent-controlled tiles display `"Agent acting"` only when there is live evidence of an acting agent (`"Agent ready"` otherwise) [CITED: `ui/src/core/hostAdapters.js`, `ui/src/wall/tileStates.js`]. The agent loop (`observe` → `propose` → `admit` → `act` → `verify`) drives capsules through core admission using the external `vision-engine` (`v0.2.0`) and `wender-agent` (`v0.3.0`) pins in `deps.lock` [CITED: `deps.lock`, `tools/gate_g_ai.py`].
+- **Capture, recording list, and disk export.** The `metaviewer.capture` namespace provides per-tile screenshot capture and RAM-first recording (`idle` → `starting` → `recording` → `stopping` → `sealed` / `error`) with RAM and journal accounting, reactive per-tile recording chrome on the wall, coalesced per-surface recording list refresh in the UI (`listRecordings` on mount, after `sealed`, `stopped`, and `screenshot` events, and on capsule switch), and write-ahead journaled disk export (`capture_request/v1`) of sealed recordings as deterministic PNG tars under `MV_RECORDING_DESTINATION` (`core/src/serve/capture.rs`, `core/src/record/capture/export.rs`, `ui/src/capture/capturePort.js`, `ui/src/recording/MvRecordingPanel.vue`).
+- **Multislot and built-in side terminal.** I open a selected surface in the multislot view (`ui/src/multislot/MultislotHost.vue`) with a closed `read` / `write` operator input mode (`read` by default; `read` blocks keystrokes, `write` forwards them) and embedded recording controls. The side terminal overlay (`@xterm/xterm` `6.0.0` and `node-pty` `1.1.0` [CITED: `ui/package.json`]) runs over a dedicated `MessagePort` byte plane and offers an interactive login shell plus host-configured provider CLIs (`ui/src/terminal/SideTerminalOverlay.vue`, `ui/electron/terminalBroker.js`).
+- **Journal and replay (`mv-replay`).** The Rust core records every admitted or refused session event in a hash-chained JSONL journal (`metaviewer.journal/v1`); `mv-replay` verifies the chain and reproduces the state digest (`rc 0`), refusing corrupted input (`rc 2`), duplicate records (`rc 3`), and witness mismatches (`rc 4`) [CITED: `core/src/bin/mv-replay.rs`].
+- **Theme and settings.** XDG settings are closed and validated (`ui/electron/settingsStore.js`), switching between `mv-light` and `mv-dark` with AA contrast checked and zero bundled fonts (`tests/test_theme.py`).
+- **Contracts first.** `20` versioned JSON schemas [MEASURED: `ls -1 contracts/v0.2/*.schema.json | wc -l`] in `contracts/v0.2/` and `10` closed schemas [MEASURED: `ls -1 contracts/v0.1/*.schema.json | wc -l`] in `contracts/v0.1/`; a new message type requires its schema and valid/invalid examples before any producer or consumer code [CITED: `LAWS.md` L3].
+- **Not available yet.** Features not wired end to end report explicit refusal states rather than faking behavior:
+  - The Storyboard / creative screen (`ui/src/creative/CreativeCapsule.vue`) has no wire schema yet and reports `Creative service unavailable.` (`CREATIVE_SERVICE_UNAVAILABLE`) [CITED: `ui/src/App.vue`].
+  - Catalog management in the UI beyond the closed `4`-kind launcher set (`identity-browser`, `program`, `holdings-app`, `desktop`) is not available yet [CITED: `ui/src/catalog/CatalogLauncher.vue`].
+  - Legacy `mvctl observe` without `--v02` is not available and exits with `unsupported_operation` (rc `2`; use `mvctl --v02 observe`) [CITED: `agents/metaviewer_agents/mvctl.py`].
+  - Direct agent `observation` envelope intake on the core (outside `mv_tool_call`) is not available yet and returns a journaled `POLICY` verdict [CITED: `docs/ARCHITECTURE.md`].
+  - The `100,000`-case nightly property entrypoint (`tools/volume_property.py`) and the `G-NOVAC` meta-oracle interface in CI are not available yet and emit `BLOCKED` / `NOT_APPLICABLE` receipts [CITED: `.github/workflows/volume.yml`, `.github/workflows/ci.yml`].
+  - OS-level desktop installers (`.deb`, `.rpm`, Flatpak, AppImage) and macOS/Windows builds are not available [CITED: `docs/INSTALL.md`, `.github/workflows/ci.yml`].
 
 ## Platform
 
-I build Linux-first: I develop and test on Linux [CITED: docs/USER_GUIDE.md]. The packaged product targets **linux-arm64** as primary [TARGET] [CITED: docs/ROADMAP.md], and the hosted CI matrix runs `ubuntu-24.04` on both **arm64 and x64** [CITED: .github/workflows/ci.yml], so **linux-x64** is supported. macOS and Windows are **not supported**: `build-macos` and `build-windows` in `.github/workflows/ci.yml` only report platform applicability and are never required statuses [CITED: .github/workflows/ci.yml].
+I build Linux-first: I develop and test on Linux [CITED: `docs/USER_GUIDE.md`]. The packaged product targets **`linux-arm64`** (`aarch64`) as primary and supports **`linux-x64`** (`x86_64`) [CITED: `ui/tools/package.js`, `.github/workflows/ci.yml`]. macOS and Windows are **not supported**: `build-macos` and `build-windows` in `.github/workflows/ci.yml` only emit `NOT_APPLICABLE` receipts and are never required statuses [CITED: `.github/workflows/ci.yml`].
 
 ## Architecture
 
@@ -36,7 +51,7 @@ Electron wall + terminal          Rust authority core           Go daemon adapte
 (snapshots in, intents out)       (admits, journals, serves)    (capsule bridge)
         |                                  |                            |
         +--- envelope/v0.2 over NDJSON ----+--- surface_request/event --+
-        |          core.sock               |        surfaces.sock       |
+        |     core.sock + frame_port/v1    |        core.sock           |
         |                                  |                            v
         |                                  |                    OpenSuperficies
         |                                  |                    capsules (rgb24,
@@ -46,25 +61,25 @@ Electron wall + terminal          Rust authority core           Go daemon adapte
         |                          vision-engine + wender-agent behind core admission
 ```
 
-Electron renders state and submits intents; it never injects input [CITED: docs/ARCHITECTURE.md]. I can take control from an agent at any time; every action is admitted by the core and journaled.
+Electron renders state and submits intents; it never injects input [CITED: `docs/ARCHITECTURE.md`]. I can take control from an agent at any time; every action is admitted by the core and journaled.
 
 ## Quickstart
 
 ### Prerequisites
 
-| Tool | Required | Installed here [MEASURED] |
+| Tool | Required | Installed on reference host |
 | --- | --- | --- |
-| Rust | 1.97 [CITED: Cargo.toml `rust-version`] | 1.97.0 (`rustc --version`) |
-| Go | 1.26.0 [CITED: daemon-adapter/go.mod] | go1.26.4 (`go version`) |
-| Node | >= 24 [CITED: ui/package.json `engines`] | v24.14.0 (`node --version`) |
-| Python | >= 3.11 [CITED: agents/pyproject.toml; tools/gate.sh uses `tomllib`] | 3.12.3 (`python3 --version`) |
-| Capsule UI kit | Checkout pinned by ui/kit.lock.json (v0.2.0) | via `CAPSULE_UI_KIT_REPO` |
-| Electron dist | 44.9.2 local files [CITED: ui/package.json] | via `ELECTRON_OVERRIDE_DIST_PATH` |
+| Rust | `1.97` [CITED: `Cargo.toml` `rust-version`] | `rustc 1.97.0` [MEASURED: `rustc --version`] |
+| Rust formatter | `1.92.0` [CITED: `tools/gate.sh`] | `rustfmt 1.8.0-stable` [MEASURED: `rustup run 1.92.0 cargo fmt --version`] |
+| Go | `1.26.0` [CITED: `daemon-adapter/go.mod`] | `go1.26.4 linux/arm64` [MEASURED: `go version`] |
+| Node | `>=24` [CITED: `ui/package.json` `engines.node`] | `v24.14.0` [MEASURED: `node --version`] |
+| Python | `>=3.11` [CITED: `agents/pyproject.toml`] | `Python 3.12.3` [MEASURED: `python3 --version`] |
+| Capsule UI kit | `0.2.1` (`bf31bc201987206d16dbd88d93102f9d5ce026f9`) [MEASURED: `python3 -c 'import json; print(json.load(open("ui/kit.lock.json"))["version"])'`; CITED: `ui/kit.lock.json`] | via `CAPSULE_UI_KIT_REPO` |
+| Electron dist | `44.9.2` local files [CITED: `ui/package.json`] | via `ELECTRON_OVERRIDE_DIST_PATH` |
 
-External components stay in their own repositories, pinned in deps.lock and never copied: vision-engine v0.2.0, wender-agent v0.3.0, OpenSuperficies os-cu-w9-mv1 [CITED: deps.lock].
+External components stay in their own repositories, pinned in `deps.lock` (`3` components [MEASURED: `python3 -c 'import json; print(len(json.load(open("deps.lock"))["components"]))'`]) and never copied: `vision-engine` `v0.2.0` (`9bbb49f220837388e1ab90c34ae0eedee27a66eb`), `wender-agent` `v0.3.0` (`7648b258d1d04953bacffe8627de5acd7c75d817`), and `opensuperficies` `os-cu-w9-mv1` (`a9ac1ac8543872b428990ea23fa2629cd0a6d1d5`) [CITED: `deps.lock`].
 
-I build and run from source (below). A deterministic Linux package build exists (314.8 MB, byte-identical across two builds [MEASURED]) with clean-install checks via `scripts/bootstrap.sh` (needs `MV_PKG_OUT`, `CAPSULE_UI_KIT_REPO`, and local Electron files via `MV_ELECTRON_ZIP_DIR` or `ELECTRON_OVERRIDE_DIST_PATH` [CITED: scripts/bootstrap.sh]) and `npm run package` in `ui/` [CITED: ui/package.json]; while hosted CI package runs complete, building from source stays the primary documented path [CITED: docs/USER_GUIDE.md].
-See [docs/INSTALL.md](docs/INSTALL.md) for the full Linux (`arm64` and `x64`) installation, packaging, and troubleshooting guide.
+See [docs/INSTALL.md](docs/INSTALL.md) for the full Linux (`arm64` and `x64`) installation, deterministic tarball packaging (`scripts/bootstrap.sh` and `ui/tools/package.js`), and troubleshooting guide.
 
 ### Build
 
@@ -72,7 +87,7 @@ See [docs/INSTALL.md](docs/INSTALL.md) for the full Linux (`arm64` and `x64`) in
 export CARGO_TARGET_DIR=$HOME/.cache/cargo-target/metaviewer
 cargo build --offline -p metaviewer-core
 go -C daemon-adapter build ./...
-node tools/sync_kit.mjs "$CAPSULE_UI_KIT_REPO"   # from repo root
+node tools/sync_kit.mjs "$CAPSULE_UI_KIT_REPO"
 cd ui && npm ci --offline && npm test && npm run check && npm run build
 ```
 
@@ -80,13 +95,12 @@ cd ui && npm ci --offline && npm test && npm run check && npm run build
 
 ```sh
 # Core: config + runtime dir are mandatory (see core/src/bin/metaviewer-core.rs)
-# Binary lands under $CARGO_TARGET_DIR/debug/ when CARGO_TARGET_DIR is set
-MV_CORE_CONFIG=/path/to/core.json XDG_RUNTIME_DIR=/run/user/$UID $CARGO_TARGET_DIR/debug/metaviewer-core
+MV_CORE_CONFIG=/path/to/core.json XDG_RUNTIME_DIR=/run/user/$UID "$CARGO_TARGET_DIR/debug/metaviewer-core"
 # Adapter: takes no arguments; configuration comes from the environment
 go -C daemon-adapter run ./cmd/mv-daemon-adapter
 # UI smoke (needs ELECTRON_OVERRIDE_DIST_PATH + xvfb-run)
 cd ui && npm run smoke
-# CLI probe (legacy v0.1 envelope in FILE)
+# CLI probe (legacy v0.1 envelope in FILE, or pass --v02 for the v0.2 tool protocol)
 python3 agents/metaviewer_agents/mvctl.py propose --json-arg FILE --timeout-ms 5000 \
   --max-line-bytes 65536 --max-reply-bytes 65536
 # Hosted slice (no devices needed); --live needs the admitted capsule profile + env in tests/e2e/e2e1_slice/README.md
@@ -95,20 +109,19 @@ node tests/e2e/e2e1_slice/index.js
 
 ### Checks
 
-No package installation is required for the standard-library checks:
-
 ```sh
 python3 tools/check_laws.py
 python3 tools/check_laws.py --version
 python3 tools/check_contracts.py
 python3 -m unittest discover -s tests -v
-tools/gate.sh                        # all legs: manifests, laws, contracts, unit, js, rust, ui
-tools/gate.sh --leg contracts        # single leg; PASS [MEASURED: rc 0]
+bash tools/gate.sh                   # all 10 legs: manifests, laws, contracts, unit, agents, js, rust, go, ui, ui-smoke
+bash tools/gate.sh --leg contracts   # single leg
+bash tools/gate.sh --self-test       # 25 harness self-tests
 ```
 
-Secret scanning is scoped to its own workflow (`.github/workflows/secrets.yml`: pinned gitleaks history scan plus controls), not to `tools/gate.sh`.
+Secret scanning runs in `.github/workflows/secrets.yml` (pinned `gitleaks` `v8.18.4` history scan plus controls).
 
-Enable the local hook when preparing to contribute:
+Enable the local commit hook before contributing:
 
 ```sh
 git config core.hooksPath .githooks
@@ -119,42 +132,36 @@ git config core.hooksPath .githooks
 | Path | Purpose |
 | --- | --- |
 | `README.md` | Project overview and quickstart (this file) |
-| `LAWS.md`, `docs/COMMIT_LAWS.md` | Repository and commit policy |
-| `VERSION`, `CHANGELOG.md`, `deps.lock` | Release identity and component pins |
-| `contracts/v0.2/` | Versioned JSON wire schemas |
-| `contracts/v0.1/`, `contracts/examples/` | Closed schemas and valid/invalid fixtures |
+| `LAWS.md`, [docs/COMMIT_LAWS.md](docs/COMMIT_LAWS.md) | Repository and commit policy |
+| `VERSION`, `CHANGELOG.md`, `deps.lock` | Release identity and external component pins |
+| [contracts/v0.2/](contracts/v0.2/) | `20` versioned v0.2 JSON wire schemas [MEASURED: `ls -1 contracts/v0.2/*.schema.json | wc -l`] |
+| `contracts/v0.1/`, `contracts/examples/` | `10` closed v0.1 schemas [MEASURED: `ls -1 contracts/v0.1/*.schema.json | wc -l`] and valid/invalid fixtures |
 | `core/` | Rust authority core (`metaviewer-core`, `mv-replay`) |
-| `daemon-adapter/` | Go surface-daemon bridge |
+| `daemon-adapter/` | Go surface-daemon bridge (`mv-daemon-adapter`) |
 | `agents/` | Python agent adapters, `mvctl`, MCP server |
-| `ui/` | Electron 44 + Vue wall, terminal, multislot |
-| `tests/e2e/e2e1_slice/` | Hosted slice + live core/adapter/capsule runner |
-| `tools/gate.sh` | Unified offline gate (all legs) |
-| `tools/`, `tests/`, `.githooks/` | Checkers, suites, commit hook |
-| `.github/workflows/ci.yml` | Unified CI matrix (ubuntu-24.04 x64 + arm64) |
-| `.github/workflows/secrets.yml` | Secret scanning (gitleaks + controls) |
-| `scripts/bootstrap.sh` | Packaging bootstrap (needs `MV_PKG_OUT`, kit checkout, Electron files) |
-| `docs/ARCHITECTURE.md` | Authority, IPC, capture and replay design |
-| `docs/UI_ARCHITECTURE.md` | Shared capsule visual architecture |
-| `docs/ROADMAP.md` | Hackathon day-by-day plan and gates |
-| `docs/PREEXISTING.md` | Pre-existing declaration: what predates the event |
-| `META_AI_USAGE.md` | Meta AI usage ledger |
-
-USER_GUIDE and TESTING guides are planned for v0.2.0.
-
-## Meta AI usage
-
-I build MetaViewer with Meta Muse Spark 1.3 as my default context feeder and parallel generator [CITED: META_AI_USAGE.md]: I cut work into rooms (one shared byte-identical prefix, N independent lanes at effort `max`), verify every lane by gates before integrating, and design prompts cache-first so lanes after the first read the shared prefix from the provider cache [CITED: META_AI_USAGE.md]. Lanes cover API research, architecture audits, context packs, wire contracts, subsystem code, adversarial review, tests, fixes, and hand-off quizzes, under two orchestrators (product conductor and UI orchestrator) [CITED: META_AI_USAGE.md].
-
-Totals to date [CITED: META_AI_USAGE.md]: 285 lanes launched (55 pre-event design, 230 build period), 285 finished OK, 14,739 agent steps, 37.3 lane-hours of agent work, 95.6% prompt cache hit (1,362,121,089 cache-read input tokens vs 61,975,714 fresh input tokens), $11.572 total cost ($0.0406 per lane), across 61 rooms with a peak of 24 concurrent lanes [MEASURED from lane start/end, CITED: META_AI_USAGE.md]. The ledger regenerates from raw run records after every batch; per-lane data lives in `docs/meta-ai/muse_lanes.json` and the full ledger is in `META_AI_USAGE.md` [CITED: META_AI_USAGE.md].
+| `ui/` | Electron `44.9.2` + Vue `3.5.43` wall, frame port router, terminal, multislot, capture |
+| `tests/e2e/` | `32` Node E2E journeys [MEASURED: `ls -1 tests/e2e/*.test.js | wc -l`], `2` Python E2E suites [MEASURED: `ls -1 tests/e2e/test_*.py | wc -l`], and `e2e1_slice/` |
+| `tools/gate.sh` | Unified `10`-leg offline gate and `25`-test self-test [MEASURED: `bash tools/gate.sh --self-test`] |
+| `tools/`, `tests/`, `.githooks/` | Checkers, unit suites, budget gate (`tools/budget_gate.py`), commit hook |
+| `.github/workflows/` | `5` CI workflow files (`ci.yml`, `secrets.yml`, `package.yml`, `build-other.yml`, `volume.yml`) [MEASURED: `ls -1 .github/workflows/*.yml | wc -l`] |
+| `scripts/bootstrap.sh` | Deterministic Linux packaging bootstrap |
+| [docs/INSTALL.md](docs/INSTALL.md) | Linux (`arm64` and `x64`) installation, packaging, and troubleshooting guide |
+| [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | Operator guide for the wall, control handoff, multislot, recording, `mvctl`, and replay |
+| [docs/TESTING.md](docs/TESTING.md) | Gate legs, live gates, E2E journeys, CI job table, hosted-like checks, and mutation proofs |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Authority, IPC, capture, and replay design |
+| [docs/UI_ARCHITECTURE.md](docs/UI_ARCHITECTURE.md) | Shared capsule visual architecture |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Hackathon day-by-day plan and gates |
+| [docs/PREEXISTING.md](docs/PREEXISTING.md) | Pre-existing work declaration |
+| [META_AI_USAGE.md](META_AI_USAGE.md) | Meta model usage ledger (`335` lanes across `84` rooms [MEASURED: `python3 -c 'import json; d=json.load(open("docs/meta-ai/muse_lanes.json")); print(len(d["lanes"]), len({x["room"] for x in d["lanes"]}))'`]) |
 
 ## Contributing
 
-Set both author and committer to the identity in `docs/COMMIT_LAWS.md` before committing. CI repeats the checks independently of the local hook. Components talk only through versioned JSON contracts: a new message type needs its schema before the code that sends or reads it [CITED: LAWS.md L3].
+Set both author and committer to the maintainer identity in [docs/COMMIT_LAWS.md](docs/COMMIT_LAWS.md) before committing. CI repeats the checks independently of the local hook. Components talk only through versioned JSON contracts: a new message type needs its schema before the code that sends or reads it [CITED: `LAWS.md` L3].
 
 ## Pre-existing vs built during the event
 
-Everything runnable here is built during the event; the v0.1 scaffold, design notes and external private components predate it. See docs/PREEXISTING.md for the item-by-item declaration.
+Everything runnable in this repository is built during the event; the v0.1 scaffold, design notes, and external private components predate it. See [docs/PREEXISTING.md](docs/PREEXISTING.md) for the item-by-item declaration.
 
 ## License
 
-MetaViewer is licensed under the [PolyForm Strict License 1.0.0](LICENSE). The external components it integrates (wender-agent, vision-engine, OpenSuperficies and the capsule UI kit) are proprietary and are not covered by this license.
+MetaViewer is licensed under the [PolyForm Strict License 1.0.0](LICENSE). The external components it integrates (`wender-agent`, `vision-engine`, `OpenSuperficies`, and `capsule-ui-kit`) are proprietary and are not covered by this license.
