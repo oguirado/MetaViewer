@@ -181,7 +181,7 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 			return errors.New("registered core route refused")
 		}
 		isHello := first && body.Schema == "hello/v0.2" && body.Component == "core"
-		if !isHello && body.Schema != "surface_request/v0.2" {
+		if !isHello && body.Schema != "surface_request/v0.2" && body.Schema != "record_request/v0.2" {
 			return errors.New("core surface request required")
 		}
 		authority.Lock()

@@ -39,6 +39,11 @@ type Profile struct {
 	Kind, NativeKind, Program, AppDir, RAMRoot, Display string
 	Width, Height                                       int
 }
+type ViewBackend interface {
+	Open(context.Context, string, bool) error
+	Stop(context.Context, string) error
+}
+
 type Config struct {
 	BinDir                      string
 	Profiles                    map[string]Profile
@@ -48,6 +53,7 @@ type Config struct {
 	LivenessInterval            time.Duration
 	LivenessMisses              int
 	LivenessTimeout             time.Duration
+	View                        ViewBackend
 	// BeforeDestroy drains any capture subscriptions before native stop.
 	BeforeDestroy         func(context.Context, string) error
 	VerifyHoldingsInput   func(context.Context, Binding, string, json.RawMessage, uint64) error
@@ -116,6 +122,7 @@ type Manager struct {
 	pending     map[string]*pendingInput
 	used        map[string]bool
 	refresh     map[string]bool
+	views       map[string]bool
 }
 
 var profileID = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
@@ -173,7 +180,7 @@ func NewManager(cfg Config, r cli.Runner, clock cli.Clock) (*Manager, error) {
 		copyProfiles[id] = p
 	}
 	cfg.Profiles = copyProfiles
-	return &Manager{cfg: cfg, runner: r, clock: clock, bindings: make(map[string]Binding), quarantined: make(map[string]bool), destroying: make(map[string]bool), pending: make(map[string]*pendingInput), used: make(map[string]bool), refresh: make(map[string]bool)}, nil
+	return &Manager{cfg: cfg, runner: r, clock: clock, bindings: make(map[string]Binding), quarantined: make(map[string]bool), destroying: make(map[string]bool), pending: make(map[string]*pendingInput), used: make(map[string]bool), refresh: make(map[string]bool), views: make(map[string]bool)}, nil
 }
 func withinRAM(path string) bool {
 	return path == "/dev/shm" || len(path) > 9 && path[:9] == "/dev/shm/" && filepath.Clean(path) == path
@@ -259,11 +266,68 @@ func (m *Manager) handle(ctx context.Context, r Request, evidence *InputEvidence
 		return m.input(ctx, r, version, evidence)
 	case "take_control", "release_control":
 		return m.control(r, version)
+	case "view", "login", "view-stop":
+		return m.view(ctx, r, version)
 	case "frame_subscribe", "frame_unsubscribe", "record_start", "record_stop":
 		return nil, cli.Unsupported(r.Op)
 	default:
 		return nil, fault("unknown_op", "unknown surface operation")
 	}
+}
+func (m *Manager) view(ctx context.Context, r Request, version string) ([]json.RawMessage, error) {
+	var q struct {
+		SurfaceID string `json:"surface_id"`
+	}
+	if e := cli.ParseLine(r.Params, m.cfg.MaxOutputBytes, &q); e != nil {
+		return nil, e
+	}
+	if q.SurfaceID == "" {
+		return nil, fault("usage", "surface_id required")
+	}
+	if m.cfg.View == nil {
+		return nil, cli.Unsupported(r.Op)
+	}
+	var b Binding
+	found := false
+	if cand, ok := m.bindings[q.SurfaceID]; ok && cand.Surface.State == "active" && !m.destroying[q.SurfaceID] {
+		b, found = cand, true
+	} else {
+		for id, cand := range m.bindings {
+			if cand.Container == q.SurfaceID && cand.Surface.State == "active" && !m.destroying[id] {
+				b, found = cand, true
+				break
+			}
+		}
+	}
+	if !found {
+		if !identityContainer.MatchString(q.SurfaceID) {
+			return nil, fault("usage", "invalid identity capsule")
+		}
+		return nil, fault("surface", "active surface required")
+	}
+	if b.NativeKind == "holdings" {
+		return nil, fault("usage", "invalid identity capsule")
+	}
+	m.mu.Unlock()
+	var err error
+	if r.Op == "view-stop" {
+		err = m.cfg.View.Stop(ctx, b.Container)
+	} else {
+		err = m.cfg.View.Open(ctx, b.Container, r.Op == "login")
+	}
+	m.mu.Lock()
+	if err != nil {
+		return nil, err
+	}
+	if r.Op == "view-stop" {
+		delete(m.views, b.Container)
+	} else {
+		m.views[b.Container] = true
+	}
+	if current, ok := m.bindings[b.Surface.SurfaceID]; ok {
+		b = current
+	}
+	return []json.RawMessage{surfaceEvent(version, "state_changed", b.Surface)}, nil
 }
 func (m *Manager) create(ctx context.Context, r Request, version string) (events []json.RawMessage, err error) {
 	var q struct {
@@ -440,6 +504,12 @@ func (m *Manager) destroy(ctx context.Context, r Request, version string) ([]jso
 		if e != nil {
 			return nil, e
 		}
+	}
+	if m.cfg.View != nil && m.views[b.Container] {
+		delete(m.views, b.Container)
+		m.mu.Unlock()
+		_ = m.cfg.View.Stop(ctx, b.Container)
+		m.mu.Lock()
 	}
 	// Stop may have effects even without a usable receipt. Keep the binding lost
 	// until verified removal; never reopen input/capture after an uncertain stop.

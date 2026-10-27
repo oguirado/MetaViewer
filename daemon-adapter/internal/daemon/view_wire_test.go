@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"metaviewer/daemon-adapter/internal/capsule"
 	"metaviewer/daemon-adapter/internal/cli"
@@ -52,9 +53,9 @@ func TestViewWireContractBoundary(t *testing.T) {
 	}
 }
 
-// Mutation 1: return nil, nil from Manager's default unknown_op branch in
-// internal/capsule/manager.go; uncontracted view/login/view-stop/screenshot
-// requests no longer produce correlated error events on the runtime handler.
+// Mutation 1: drop View backend wiring in RuntimeFromEnv/helloState or remove
+// the view/login/view-stop branch in internal/capsule/manager.go; wired view
+// operations no longer execute the native CLI and return state_changed events.
 // Mutation 2: skip parseInfo validation in internal/view/view.go Open; a
 // malformed native view announcement is published instead of closed.
 func TestViewWireRuntimeHandlerAndEnvironmentBridge(t *testing.T) {
@@ -93,6 +94,30 @@ else: sys.exit(2)
 		t.Fatal(err)
 	}
 
+	// Negative control: unconfigured Manager (View == nil) refuses view/login/view-stop
+	// with typed unsupported code and zero native CLI executions.
+	unconfRunner := &initialRunner{}
+	unconfProfiles := map[string]capsule.Profile{"demo": {Kind: "browser", NativeKind: "browser", RAMRoot: "/dev/shm", Display: ":100", Width: 2, Height: 1}}
+	unconfMgr, err := capsule.NewManager(capsule.Config{BinDir: t.TempDir(), Profiles: unconfProfiles, MaxSurfaces: 1, MaxOutputBytes: 4096, Timeout: time.Second, OriginNS: 100}, unconfRunner, func() uint64 { return 200 })
+	if err != nil {
+		t.Fatal(err)
+	}
+	unconfHandler := wireHandler(unconfMgr, unconfProfiles, nil, 100)
+	for _, op := range []string{"view", "login", "view-stop"} {
+		raw, _ := json.Marshal(map[string]any{"schema": "surface_request/v0.2", "op": op, "params": map[string]string{"surface_id": "srf-id-demo"}})
+		out, err := unconfHandler(context.Background(), ipc.Envelope{MsgID: "msg-unconf-" + op, Body: raw})
+		if err != nil || len(out) != 1 {
+			t.Fatalf("unconfigured %s: out=%s err=%v", op, out, err)
+		}
+		var ev capsule.ErrorEvent
+		if err := json.Unmarshal(out[0], &ev); err != nil || ev.Schema != "surface_event/v0.2" || ev.Event != "error" || ev.Data.SurfaceID != "srf-id-demo" || !strings.Contains(ev.Data.Detail, "unsupported: "+op) {
+			t.Fatalf("unconfigured %s missing unsupported refusal: %s %v", op, out[0], err)
+		}
+	}
+	if len(unconfRunner.calls) != 0 {
+		t.Fatalf("unconfigured view executed runner: %v", unconfRunner.calls)
+	}
+
 	r, err := RuntimeFromEnv()
 	if err != nil {
 		t.Fatal(err)
@@ -112,6 +137,16 @@ else: sys.exit(2)
 	if err != nil || len(createOut) != 2 {
 		t.Fatalf("create: %s %v", createOut, err)
 	}
+	var created struct {
+		Data struct {
+			Surface capsule.Surface `json:"surface"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(createOut[0], &created); err != nil || created.Data.Surface.SurfaceID == "" {
+		t.Fatalf("unmarshal created: %s %v", createOut[0], err)
+	}
+	surfaceID := created.Data.Surface.SurfaceID
+
 	countLines := func() int {
 		data, err := os.ReadFile(callLog)
 		if os.IsNotExist(err) {
@@ -131,32 +166,78 @@ else: sys.exit(2)
 		t.Fatalf("expected start+frame calls (2), got %d", beforeCalls)
 	}
 
-	for _, id := range []string{"srf-id-demo", "../foreign"} {
-		for _, op := range []string{"view", "view-stop", "login", "screenshot"} {
-			raw, err := json.Marshal(map[string]any{
-				"schema": "surface_request/v0.2",
-				"op":     op,
-				"params": map[string]string{"surface_id": id},
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			out, err := r.Handler(ctx, ipc.Envelope{MsgID: "msg-" + op, Body: raw})
-			if err != nil || len(out) != 1 {
-				t.Fatalf("op=%s id=%s: out=%s err=%v", op, id, out, err)
-			}
-			var ev capsule.ErrorEvent
-			if err := json.Unmarshal(out[0], &ev); err != nil || ev.Schema != "surface_event/v0.2" || ev.Event != "error" || ev.Data.SurfaceID != id || !strings.Contains(ev.Data.Detail, "unknown_op") {
-				t.Fatalf("op=%s id=%s missing correlated unknown_op error: %s %v", op, id, out[0], err)
-			}
+	// Positive wired path: view -> view-stop via container ID, and login -> view-stop via surfaceID.
+	for _, step := range []struct {
+		op string
+		id string
+	}{
+		{op: "view", id: "srf-id-demo"},
+		{op: "view-stop", id: "srf-id-demo"},
+		{op: "login", id: surfaceID},
+		{op: "view-stop", id: surfaceID},
+	} {
+		raw, err := json.Marshal(map[string]any{
+			"schema": "surface_request/v0.2",
+			"op":     step.op,
+			"params": map[string]string{"surface_id": step.id},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := r.Handler(ctx, ipc.Envelope{MsgID: "msg-" + step.op, Body: raw})
+		if err != nil || len(out) != 1 {
+			t.Fatalf("wired op=%s id=%s: out=%s err=%v", step.op, step.id, out, err)
+		}
+		var ev struct {
+			Schema string `json:"schema"`
+			Event  string `json:"event"`
+			Data   struct {
+				Surface capsule.Surface `json:"surface"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(out[0], &ev); err != nil || ev.Schema != "surface_event/v0.2" || ev.Event != "state_changed" || ev.Data.Surface.SurfaceID != surfaceID {
+			t.Fatalf("wired op=%s id=%s unexpected event: %s %v", step.op, step.id, out[0], err)
 		}
 	}
-	if got := countLines(); got != beforeCalls {
-		t.Fatalf("wire view/login/view-stop/screenshot executed native CLI: before=%d after=%d", beforeCalls, got)
+	afterWiredCalls := countLines()
+	if afterWiredCalls != beforeCalls+4 {
+		t.Fatalf("expected 4 wired view CLI calls, got %d (total %d)", afterWiredCalls-beforeCalls, afterWiredCalls)
 	}
+
+	// Negative wired controls: invalid identity "../foreign", unadmitted container, and unknown_op "screenshot"
+	// must refuse without executing the native CLI.
+	for _, tc := range []struct {
+		id         string
+		op         string
+		wantDetail string
+	}{
+		{id: "../foreign", op: "view", wantDetail: "usage: invalid identity capsule"},
+		{id: "../foreign", op: "view-stop", wantDetail: "usage: invalid identity capsule"},
+		{id: "../foreign", op: "login", wantDetail: "usage: invalid identity capsule"},
+		{id: "srf-id-unadmitted", op: "view", wantDetail: "surface: active surface required"},
+		{id: "srf-id-demo", op: "screenshot", wantDetail: "unknown_op"},
+	} {
+		raw, _ := json.Marshal(map[string]any{
+			"schema": "surface_request/v0.2",
+			"op":     tc.op,
+			"params": map[string]string{"surface_id": tc.id},
+		})
+		out, err := r.Handler(ctx, ipc.Envelope{MsgID: "msg-neg-" + tc.op, Body: raw})
+		if err != nil || len(out) != 1 {
+			t.Fatalf("op=%s id=%s: out=%s err=%v", tc.op, tc.id, out, err)
+		}
+		var ev capsule.ErrorEvent
+		if err := json.Unmarshal(out[0], &ev); err != nil || ev.Schema != "surface_event/v0.2" || ev.Event != "error" || ev.Data.SurfaceID != tc.id || !strings.Contains(ev.Data.Detail, tc.wantDetail) {
+			t.Fatalf("op=%s id=%s missing %q error: %s %v", tc.op, tc.id, tc.wantDetail, out[0], err)
+		}
+	}
+	if got := countLines(); got != afterWiredCalls {
+		t.Fatalf("negative view/screenshot refusals executed native CLI: before=%d after=%d", afterWiredCalls, got)
+	}
+
 	listed, err := r.Handler(ctx, ipc.Envelope{Body: json.RawMessage(`{"schema":"surface_request/v0.2","op":"list","params":{}}`)})
 	if err != nil || len(listed) != 1 {
-		t.Fatalf("active surface disturbed after wire refusals: %s %v", listed, err)
+		t.Fatalf("active surface disturbed after view operations: %s %v", listed, err)
 	}
 
 	vm, err := view.NewFromEnvironment()
@@ -173,8 +254,8 @@ else: sys.exit(2)
 			t.Fatalf("invalid identity %q stop: %v", badID, err)
 		}
 	}
-	if got := countLines(); got != beforeCalls {
-		t.Fatalf("invalid identity executed native CLI: before=%d after=%d", beforeCalls, got)
+	if got := countLines(); got != afterWiredCalls {
+		t.Fatalf("invalid identity executed native CLI: before=%d after=%d", afterWiredCalls, got)
 	}
 
 	var fault *cli.Fault

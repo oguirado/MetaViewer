@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"metaviewer/daemon-adapter/internal/capsule"
 	"metaviewer/daemon-adapter/internal/cli"
 	"os"
 	"path/filepath"
@@ -21,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 )
 
 const capBytes uint64 = 1 << 30
@@ -157,6 +159,83 @@ func NewManager(c Config) (*Manager, error) {
 	}
 	c.Surfaces = surfaces
 	return &Manager{cfg: c, records: map[string]*recording{}, released: map[string]struct{}{}}, nil
+}
+
+// NewFromEnvironment constructs the RAM-first recording authority from the
+// trusted host environment; disk export remains disabled unless MV_RECORDING_DESTINATION is set.
+func NewFromEnvironment(originNS uint64, clock cli.Clock) (*Manager, error) {
+	if originNS == 0 || clock == nil {
+		return nil, errors.New("valid monotonic origin and clock required")
+	}
+	var environment []string
+	for _, key := range []string{"PATH", "HOME", "XDG_RUNTIME_DIR", "MV_SRF_STATE_DIR", "SRF_IDENTITY_STORE_ROOT", "SRF_PROXY_REGISTRY", "SRF_EGRESS_PROXY"} {
+		if value, ok := os.LookupEnv(key); ok {
+			environment = append(environment, key+"="+value)
+		}
+	}
+	binDir := os.Getenv("MV_SRF_BIN_DIR")
+	runner, err := capsule.NewProcessRunner(binDir, environment, 1<<20, 90*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	var dest *Destination
+	if destPath := os.Getenv("MV_RECORDING_DESTINATION"); destPath != "" {
+		capID := os.Getenv("MV_RECORDING_CAPABILITY_ID")
+		if capID == "" {
+			capID = "recording:configured"
+		}
+		dest = &Destination{CapabilityID: capID, Path: destPath}
+	}
+	return NewManager(Config{
+		Runner: runner,
+		Clock: func() uint64 {
+			now := clock()
+			if now < originNS {
+				return 0
+			}
+			return now - originNS
+		},
+		OriginNS:    originNS,
+		BinDir:      binDir,
+		Destination: dest,
+		MemoryBytes: 64 << 20,
+		RingBytes:   8 << 20,
+		MaxFPS:      30,
+	})
+}
+
+func (m *Manager) RegisterSurface(id string, s Surface) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return errors.New("recorder is closed")
+	}
+	if !identity.MatchString(id) || (s.Family != "srf-identity-surface" && s.Family != "srf-holdings-capsule") || !identity.MatchString(s.Container) || (s.Family == "srf-identity-surface" && !regexp.MustCompile(`^w[0-9]+$`).MatchString(s.Window)) || !under("/dev/shm", s.FramesRoot) {
+		return errors.New("invalid surface binding")
+	}
+	if m.cfg.Surfaces == nil {
+		m.cfg.Surfaces = make(map[string]Surface)
+	}
+	m.cfg.Surfaces[id] = s
+	return nil
+}
+
+func (m *Manager) UnregisterSurface(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.cfg.Surfaces, id)
+}
+
+func (m *Manager) DefaultRingBytes() uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.cfg.RingBytes
+}
+
+func (m *Manager) DefaultMaxFPS() uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.cfg.MaxFPS
 }
 func cleanAbsolute(p string) bool {
 	return filepath.IsAbs(p) && len(p) <= 4096 && filepath.Clean(p) == p && !strings.ContainsAny(p, "\x00\r\n")

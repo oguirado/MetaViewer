@@ -34,6 +34,8 @@ import (
 	"metaviewer/daemon-adapter/internal/cli"
 	"metaviewer/daemon-adapter/internal/frames"
 	"metaviewer/daemon-adapter/internal/ipc"
+	"metaviewer/daemon-adapter/internal/record"
+	"metaviewer/daemon-adapter/internal/view"
 )
 
 func monotonic() uint64 {
@@ -92,8 +94,19 @@ func RuntimeFromEnv() (Runtime, error) {
 	if origin == 0 {
 		return zero, configuration("CLOCK_MONOTONIC unavailable")
 	}
-	manager, err := capsule.NewRuntime(capsule.Config{Profiles: profiles, OriginNS: origin, MaxSurfaces: 16, MaxOutputBytes: 1 << 20, Timeout: 90 * time.Second}, monotonic)
+	viewMgr, err := view.NewFromEnvironment()
 	if err != nil {
+		return zero, err
+	}
+	recorder, err := record.NewFromEnvironment(origin, monotonic)
+	if err != nil {
+		viewMgr.Close()
+		return zero, err
+	}
+	manager, err := capsule.NewRuntime(capsule.Config{Profiles: profiles, OriginNS: origin, MaxSurfaces: 16, MaxOutputBytes: 1 << 20, Timeout: 90 * time.Second, View: viewMgr}, monotonic)
+	if err != nil {
+		_ = recorder.Close()
+		viewMgr.Close()
 		return zero, err
 	}
 	// One publisher per allocation supports disjoint profile RAM roots.
@@ -109,17 +122,21 @@ func RuntimeFromEnv() (Runtime, error) {
 		}
 		p, e := frames.NewPublisher(frames.PublishConfig{RAMRoot: profile.RAMRoot, MaxFrameBytes: 64 << 20, MaxPixels: 64 << 20, MaxSurfaces: 16})
 		if e != nil {
+			_ = recorder.Close()
+			viewMgr.Close()
 			closePubs()
 			return zero, configuration(fmt.Sprintf("frame root: %v", e))
 		}
 		pubs[profile.RAMRoot] = p
 	}
-	helloSession := helloState{manager: manager}
+	helloSession := helloState{manager: manager, view: viewMgr, recorder: recorder, newRecorder: record.NewFromEnvironment}
 
-	helloSession.handler = wireHandler(manager, profiles, pubs, origin)
+	helloSession.handler = wireHandler(manager, profiles, pubs, origin, recorder)
 	cfg := ipc.Config{SocketPath: filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "metaviewer", "core.sock"), UID: uint32(os.Getuid()), MaxFrameBytes: 1 << 20, MaxDepth: 32, MaxStringBytes: 65536, MaxKeys: 256, MaxArrayItems: 4096, MaxReplayEntries: 100000, MaxConnections: 1, HelloTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, ProbeTimeout: time.Second, ShutdownTimeout: 5 * time.Second}
 	authority, err := newClientAuthority(fmt.Sprintf("/proc/self/fd/%d/wire-replay.jsonl", stateFile.Fd()), origin)
 	if err != nil {
+		_ = recorder.Close()
+		viewMgr.Close()
 		closePubs()
 		return zero, configuration(err.Error())
 	}
@@ -131,6 +148,10 @@ func RuntimeFromEnv() (Runtime, error) {
 		if err := helloSession.closeManager(context.Background()); err != nil {
 			_, _ = fmt.Fprintln(os.Stderr, err)
 		}
+		if helloSession.recorder != nil {
+			_ = helloSession.recorder.Close()
+		}
+		viewMgr.Close()
 		closePubs()
 		_ = authority.file.Close()
 	}
@@ -173,15 +194,142 @@ func RuntimeFromEnv() (Runtime, error) {
 	}, Client: true, Streaming: true, Registration: probe, Close: cleanup}, nil
 }
 
-func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs map[string]*frames.Publisher, origin uint64) ipc.Handler {
+func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs map[string]*frames.Publisher, origin uint64, recorders ...*record.Manager) ipc.Handler {
+	var recorder *record.Manager
+	if len(recorders) > 0 {
+		recorder = recorders[0]
+	}
 	owned := map[string]*frames.Publisher{}
 	pendingRelease := map[string][]json.RawMessage{}
 	var frameMu sync.Mutex
 	lastFrames := map[string]json.RawMessage{}
+	syncSurface := func(surfaceID string) {
+		if recorder == nil || m == nil || surfaceID == "" {
+			return
+		}
+		b, err := m.SubscriptionBinding(surfaceID)
+		if err != nil {
+			return
+		}
+		family := "srf-identity-surface"
+		if b.NativeKind == "holdings" {
+			family = "srf-holdings-capsule"
+		}
+		_ = recorder.RegisterSurface(surfaceID, record.Surface{
+			Family:     family,
+			Container:  b.Container,
+			Window:     b.Window,
+			FramesRoot: b.FramesRoot,
+		})
+	}
+	dispatchRecord := func(ctx context.Context, e ipc.Envelope, q capsule.Request, raw []byte, op string) ([]json.RawMessage, error) {
+		var p struct {
+			SurfaceID string `json:"surface_id"`
+		}
+		_ = json.Unmarshal(q.Params, &p)
+		syncSurface(p.SurfaceID)
+		evs, err := recorder.Handle(ctx, raw)
+		if err != nil {
+			var refusal *record.Refusal
+			if errors.As(err, &refusal) && len(evs) > 0 {
+				out := make([]json.RawMessage, 0, len(evs))
+				for _, ev := range evs {
+					b, mErr := json.Marshal(ev)
+					if mErr != nil {
+						return nil, mErr
+					}
+					out = append(out, b)
+				}
+				return out, nil
+			}
+			return wireFailure(e, q, err)
+		}
+		if (op == "ram_start" || op == "disk_start") && len(evs) > 0 && evs[0].Event == "started" {
+			polled, pollErr := recorder.Poll(ctx, evs[0].RequestID, evs[0].RecordingID)
+			if pollErr != nil {
+				return wireFailure(e, q, pollErr)
+			}
+			evs = append(evs, polled...)
+		}
+		out := make([]json.RawMessage, 0, len(evs))
+		for _, ev := range evs {
+			b, mErr := json.Marshal(ev)
+			if mErr != nil {
+				return nil, mErr
+			}
+			out = append(out, b)
+		}
+		return out, nil
+	}
 	return func(ctx context.Context, e ipc.Envelope) ([]json.RawMessage, error) {
 		var q capsule.Request
 		if err := json.Unmarshal(e.Body, &q); err != nil {
 			return nil, err
+		}
+		if q.Schema == "record_request/v0.2" {
+			if recorder == nil {
+				var req struct {
+					RequestID string `json:"request_id"`
+					Params    struct {
+						SurfaceID   string `json:"surface_id"`
+						RecordingID string `json:"recording_id"`
+						CaptureID   string `json:"capture_id"`
+					} `json:"params"`
+				}
+				_ = json.Unmarshal(e.Body, &req)
+				recID := req.Params.RecordingID
+				if recID == "" {
+					recID = req.Params.CaptureID
+				}
+				if req.RequestID != "" && req.Params.SurfaceID != "" && recID != "" {
+					b, _ := json.Marshal(record.Event{
+						Schema:      "record_event/v0.2",
+						RequestID:   req.RequestID,
+						SurfaceID:   req.Params.SurfaceID,
+						RecordingID: recID,
+						Event:       "refused",
+						MonoNS:      0,
+						ReasonCode:  "POLICY",
+						Detail:      "unsupported: recording authority is not configured",
+					})
+					return []json.RawMessage{b}, nil
+				}
+				return wireFailure(e, q, cli.Unsupported("recording authority"))
+			}
+			return dispatchRecord(ctx, e, q, e.Body, q.Op)
+		}
+		if q.Schema == "surface_request/v0.2" && (q.Op == "record_start" || q.Op == "record_stop") && recorder != nil {
+			var p struct {
+				SurfaceID   string `json:"surface_id"`
+				RecordingID string `json:"recording_id"`
+			}
+			if err := cli.ParseLine(q.Params, 1<<20, &p); err != nil || p.SurfaceID == "" || p.RecordingID == "" {
+				return wireFailure(e, q, &cli.Fault{Code: "usage", Detail: "surface_id and recording_id required"})
+			}
+			reqID := e.MsgID
+			if reqID == "" {
+				reqID = "req-" + p.RecordingID
+			}
+			op := "ram_stop"
+			params := map[string]any{
+				"surface_id":   p.SurfaceID,
+				"recording_id": p.RecordingID,
+			}
+			if q.Op == "record_start" {
+				op = "ram_start"
+				params["ring_bytes"] = recorder.DefaultRingBytes()
+				params["max_fps"] = recorder.DefaultMaxFPS()
+			}
+			raw, err := json.Marshal(map[string]any{
+				"schema":     "record_request/v0.2",
+				"request_id": reqID,
+				"op":         op,
+				"params":     params,
+			})
+			if err != nil {
+				return nil, err
+			}
+			return dispatchRecord(ctx, e, q, raw, op)
 		}
 		if q.Op == "create" {
 			var p struct {
@@ -201,6 +349,7 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 						} `json:"data"`
 					}
 					_ = json.Unmarshal(events[0], &created)
+					syncSurface(created.Data.Surface.SurfaceID)
 					frameMu.Lock()
 					owned[created.Data.Surface.SurfaceID] = pubs[profile.RAMRoot]
 					delete(pendingRelease, created.Data.Surface.SurfaceID)
@@ -292,6 +441,9 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 				SurfaceID string `json:"surface_id"`
 			}
 			_ = json.Unmarshal(q.Params, &params)
+			if recorder != nil {
+				recorder.UnregisterSurface(params.SurfaceID)
+			}
 			frameMu.Lock()
 			p := owned[params.SurfaceID]
 			frameMu.Unlock()
@@ -418,6 +570,9 @@ type helloState struct {
 	manager       *capsule.Manager
 	handler       ipc.Handler
 	subscriptions []*frames.Subscriptions
+	view          capsule.ViewBackend
+	recorder      *record.Manager
+	newRecorder   func(uint64, cli.Clock) (*record.Manager, error)
 	welcomed      bool
 }
 
@@ -464,7 +619,7 @@ func (s *helloState) accept(ctx context.Context, profiles map[string]capsule.Pro
 		return configuration("CLOCK_MONOTONIC unavailable")
 	}
 	byRoot := map[string]*frames.Subscriptions{}
-	fresh, err := newRuntime(capsule.Config{Profiles: profiles, OriginNS: origin, MaxSurfaces: 16, MaxOutputBytes: 1 << 20, Timeout: 90 * time.Second, BeforeDestroy: unsubscribeSurface(byRoot)}, clock)
+	fresh, err := newRuntime(capsule.Config{Profiles: profiles, OriginNS: origin, MaxSurfaces: 16, MaxOutputBytes: 1 << 20, Timeout: 90 * time.Second, View: s.view, BeforeDestroy: unsubscribeSurface(byRoot)}, clock)
 	if err != nil {
 		return err
 	}
@@ -484,12 +639,26 @@ func (s *helloState) accept(ctx context.Context, profiles map[string]capsule.Pro
 		pending = append(pending, sub)
 		byRoot[root] = sub
 	}
+	var freshRecorder *record.Manager
+	if s.newRecorder != nil {
+		freshRecorder, err = s.newRecorder(origin, clock)
+		if err != nil {
+			for _, staged := range pending {
+				_ = staged.Close(context.Background())
+			}
+			return err
+		}
+	}
 	// Publish only after all fallible setup succeeds. Pending subscriptions have
 	// no capture tasks yet, so rollback closes them without touching live state.
 	authority.origin = origin
 	s.manager = fresh
+	if s.recorder != nil {
+		_ = s.recorder.Close()
+	}
+	s.recorder = freshRecorder
 	s.subscriptions = append(s.subscriptions, pending...)
-	s.handler = subscriptionHandler(fresh, profiles, byRoot, wireHandler(fresh, profiles, pubs, origin))
+	s.handler = subscriptionHandler(fresh, profiles, byRoot, wireHandler(fresh, profiles, pubs, origin, s.recorder))
 	s.welcomed = true
 	go func() {
 		_ = fresh.MonitorLiveness(session.ctx, func(ctx context.Context, body json.RawMessage) error {
