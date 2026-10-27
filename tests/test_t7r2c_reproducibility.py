@@ -6,7 +6,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
+import unittest.mock
 from urllib.request import pathname2url
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -21,7 +23,12 @@ def find_node() -> str:
         return shutil.which(env_node) or env_node
     node = shutil.which("node")
     if node:
-        res = subprocess.run([node, "-p", "process.versions.node.split('.')[0]"], capture_output=True, text=True)
+        res = subprocess.run(
+            [node, "-p", "process.versions.node.split('.')[0]"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
         if res.returncode == 0 and res.stdout.strip().isdigit() and int(res.stdout.strip()) >= 24:
             return node
     nvm_base = pathlib.Path.home() / ".nvm" / "versions" / "node"
@@ -29,7 +36,7 @@ def find_node() -> str:
         for cand in sorted(nvm_base.glob("v24*/bin/node"), reverse=True):
             if cand.is_file():
                 return str(cand)
-    return "node"
+    raise RuntimeError("node >= 24 required, none found")
 
 
 def package_js_url() -> str:
@@ -245,16 +252,62 @@ try {{
         self.assertGreaterEqual(FLAKE_HUNT_TIMEOUT_SECONDS, 1)
         self.assertLessEqual(FLAKE_HUNT_TIMEOUT_SECONDS, 120)
         vol_text = (ROOT / ".github" / "workflows" / "volume.yml").read_text(encoding="utf-8")
-        self.assertIn("timeout 120 python3 tests/test_t7r2c_reproducibility.py --flake-hunt", vol_text)
+        self.assertIn(
+            f"timeout {FLAKE_HUNT_TIMEOUT_SECONDS} python3 tests/test_t7r2c_reproducibility.py --flake-hunt",
+            vol_text,
+        )
         if os.environ.get("MV_VOLUME_FLAKE_HUNT") != "1":
             self.assertFalse(
                 hasattr(TestT7R2CReproducibility, "test_o8_flake_hunt_3x_under_cpu_stress_passes_deterministically"),
                 "stress flake hunt must not run inside per-push required jobs",
             )
 
+    def test_o8_flake_hunt_selects_only_stress_test(self):
+        with unittest.mock.patch.object(sys.modules[__name__], "FLAKE_HUNT_TIMEOUT_SECONDS", 60):
+            with self.assertRaises(AssertionError):
+                self.test_o8_flake_hunt_bound_and_volume_schedule_wiring()
+        had_attr = hasattr(
+            TestT7R2CReproducibility,
+            "test_o8_flake_hunt_3x_under_cpu_stress_passes_deterministically",
+        )
+        try:
+            with unittest.mock.patch.object(unittest, "main") as mock_main:
+                run_cli(["tests/test_t7r2c_reproducibility.py", "--flake-hunt"])
+                mock_main.assert_called_once_with(
+                    argv=["tests/test_t7r2c_reproducibility.py"],
+                    defaultTest="TestT7R2CReproducibility.test_o8_flake_hunt_3x_under_cpu_stress_passes_deterministically",
+                )
+        finally:
+            if not had_attr and hasattr(
+                TestT7R2CReproducibility,
+                "test_o8_flake_hunt_3x_under_cpu_stress_passes_deterministically",
+            ):
+                delattr(
+                    TestT7R2CReproducibility,
+                    "test_o8_flake_hunt_3x_under_cpu_stress_passes_deterministically",
+                )
+
+    def test_find_node_rejects_under_version_node(self):
+        with tempfile.TemporaryDirectory(prefix="mv-node20-repro-") as tmp:
+            td = pathlib.Path(tmp)
+            stub_node = td / "node"
+            stub_node.write_text("#!/bin/sh\necho 20\n", encoding="utf-8")
+            stub_node.chmod(0o755)
+            empty_home = td / "home"
+            empty_home.mkdir()
+            with unittest.mock.patch.dict(
+                os.environ,
+                {"PATH": str(td), "HOME": str(empty_home)},
+                clear=False,
+            ):
+                os.environ.pop("NODE", None)
+                with self.assertRaisesRegex(RuntimeError, "node >= 24 required"):
+                    find_node()
+
     def _o8_flake_hunt_3x_under_cpu_stress_passes_deterministically(self):
         self.assertLessEqual(FLAKE_HUNT_BUSY_LOOPS, 4)
         self.assertLessEqual(FLAKE_HUNT_TIMEOUT_SECONDS, 120)
+        deadline = time.monotonic() + FLAKE_HUNT_TIMEOUT_SECONDS
         stress_code = "import time; end = time.monotonic() + 8\nwhile time.monotonic() < end: _ = sum(i*i for i in range(500))"
         stress_procs = [
             subprocess.Popen([sys.executable, "-c", stress_code], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -263,6 +316,8 @@ try {{
         try:
             for iteration in range(3):
                 with self.subTest(iteration=iteration):
+                    remaining = deadline - time.monotonic()
+                    self.assertGreater(remaining, 0, "FLAKE_HUNT_TIMEOUT_SECONDS deadline exceeded")
                     res = subprocess.run(
                         [
                             sys.executable,
@@ -275,7 +330,7 @@ try {{
                         cwd=ROOT,
                         capture_output=True,
                         text=True,
-                        timeout=45,
+                        timeout=min(45.0, remaining),
                     )
                     self.assertEqual(res.returncode, 0, res.stderr + res.stdout)
         finally:
@@ -288,14 +343,28 @@ try {{
                     p.kill()
 
 
-if os.environ.get("MV_VOLUME_FLAKE_HUNT") == "1" or "--flake-hunt" in sys.argv:
+def _enable_flake_hunt_test() -> None:
     TestT7R2CReproducibility.test_o8_flake_hunt_3x_under_cpu_stress_passes_deterministically = (
         TestT7R2CReproducibility._o8_flake_hunt_3x_under_cpu_stress_passes_deterministically
     )
 
 
+if os.environ.get("MV_VOLUME_FLAKE_HUNT") == "1" or "--flake-hunt" in sys.argv:
+    _enable_flake_hunt_test()
+
+
+def run_cli(argv: list[str] | None = None) -> None:
+    args = list(sys.argv if argv is None else argv)
+    if "--flake-hunt" in args:
+        args = [arg for arg in args if arg != "--flake-hunt"]
+        _enable_flake_hunt_test()
+        unittest.main(
+            argv=args,
+            defaultTest="TestT7R2CReproducibility.test_o8_flake_hunt_3x_under_cpu_stress_passes_deterministically",
+        )
+    else:
+        unittest.main(argv=args)
+
+
 if __name__ == "__main__":
-    if "--flake-hunt" in sys.argv:
-        sys.argv = [arg for arg in sys.argv if arg != "--flake-hunt"]
-        os.environ["MV_VOLUME_FLAKE_HUNT"] = "1"
-    unittest.main()
+    run_cli()

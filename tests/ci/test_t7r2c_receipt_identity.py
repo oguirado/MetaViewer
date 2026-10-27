@@ -17,8 +17,19 @@ CI_YML = ROOT / ".github" / "workflows" / "ci.yml"
 def _extract_step_run(ci_text: str, job_name: str, step_name: str) -> str:
     job_sec = re.split(r"\n  [a-z][\w-]*:\n", ci_text.split(f"  {job_name}:\n", 1)[1], 1)[0]
     step_sec = re.split(r"\n      - (?:name|uses):", job_sec.split(f"      - name: {step_name}\n", 1)[1], 1)[0]
-    run_block = step_sec.split("        run: |\n", 1)[1]
-    return textwrap.dedent(run_block)
+    after_header = re.split(r"        run: \|-?\n", step_sec, maxsplit=1)[1]
+    run_lines: list[str] = []
+    for line in after_header.splitlines():
+        if not line.strip():
+            run_lines.append("")
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if indent < 10:
+            break
+        run_lines.append(line)
+    while run_lines and not run_lines[-1]:
+        run_lines.pop()
+    return textwrap.dedent("\n".join(run_lines) + "\n")
 
 
 def load_f4_validator():
@@ -327,6 +338,24 @@ class TestT7R2CReceiptIdentity(unittest.TestCase):
             evdir_ok = tmp_ok / "metaviewer-ci" / "laws-contracts" / "x64"
             range_ok = json.loads((evdir_ok / "laws-range.receipt.json").read_text(encoding="utf-8"))
             self.assertEqual(range_ok["outcome"], "PASS")
+
+    def test_extract_step_run_stops_before_trailing_step_keys(self):
+        synthetic_ci = (
+            "jobs:\n"
+            "  demo:\n"
+            "    runs-on: ubuntu-24.04\n"
+            "    steps:\n"
+            "      - name: Demo step\n"
+            "        run: |\n"
+            "          echo ok\n"
+            "        env:\n"
+            "          FOO: 1\n"
+            "      - run: echo unnamed\n"
+        )
+        extracted = _extract_step_run(synthetic_ci, "demo", "Demo step")
+        self.assertEqual(extracted, "echo ok\n")
+        self.assertNotIn("FOO", extracted)
+        self.assertNotIn("unnamed", extracted)
 
 
 if __name__ == "__main__":

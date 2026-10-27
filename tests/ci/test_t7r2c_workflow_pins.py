@@ -6,6 +6,7 @@ import re
 import subprocess
 import sys
 import unittest
+import unittest.mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 CHECKER = ROOT / ".github" / "workflows" / "workflow_pins.py"
@@ -51,7 +52,7 @@ def _pin_errors(text: str, root: pathlib.Path) -> list[str]:
         timeout=30,
     )
     if res.returncode != 0:
-        return ["YAML checker unavailable: " + res.stderr]
+        raise RuntimeError(f"workflow_pins.py exited {res.returncode}: {res.stderr}")
     errors = json.loads(res.stdout)
     if not isinstance(errors, list):
         return ["invalid checker result"]
@@ -169,13 +170,43 @@ jobs:
                     if "permissions" in job:
                         self.assertEqual(job["permissions"], {"contents": "read"}, f"{wf.name}:{job_name}")
 
+    def _assert_no_pull_request_target(self, doc: dict, wf_name: str = "<synthetic>") -> None:
+        on_block = doc.get("on") if "on" in doc else doc.get("True")
+        self.assertIsNotNone(on_block, f"{wf_name} missing on: trigger")
+        if isinstance(on_block, str):
+            self.assertNotEqual(on_block, "pull_request_target", wf_name)
+        elif isinstance(on_block, list):
+            self.assertNotIn("pull_request_target", on_block, wf_name)
+        elif isinstance(on_block, dict):
+            self.assertNotIn("pull_request_target", on_block, wf_name)
+        else:
+            self.fail(f"{wf_name} unexpected on: trigger type {type(on_block).__name__}")
+
     def test_o1_pull_request_target_forbidden(self):
         for wf in self.workflows:
             with self.subTest(workflow=wf.name):
                 doc = _yaml_safe_load(wf.read_text(encoding="utf-8"))
-                on_block = doc.get("on") or doc.get(True) or doc.get("True") or {}
-                if isinstance(on_block, dict):
-                    self.assertNotIn("pull_request_target", on_block)
+                self._assert_no_pull_request_target(doc, wf.name)
+
+    def test_o1_pull_request_target_forbidden_blocks_scalar_and_list_forms(self):
+        for bad_yaml in (
+            "name: s\non: pull_request_target\njobs: {}\n",
+            "name: l\non: [push, pull_request_target]\njobs: {}\n",
+        ):
+            doc = _yaml_safe_load(bad_yaml)
+            with self.assertRaises(AssertionError):
+                self._assert_no_pull_request_target(doc)
+
+    def test_pin_errors_raises_on_checker_crash(self):
+        fake = subprocess.CompletedProcess(
+            args=["python3"],
+            returncode=1,
+            stdout="",
+            stderr="Traceback: unpinned action: actions/checkout@v4",
+        )
+        with unittest.mock.patch.object(subprocess, "run", return_value=fake):
+            with self.assertRaisesRegex(RuntimeError, "workflow_pins.py exited 1"):
+                _pin_errors("name: x\n", ROOT)
 
     def test_r1_099_toolchain_versions_exact_semver_pinned_and_negative_controls(self):
         semver = re.compile(r"^\d+\.\d+\.\d+$")

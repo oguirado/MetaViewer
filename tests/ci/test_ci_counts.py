@@ -193,8 +193,16 @@ def validate_receipt_artifact(receipt: dict, expected_gate_id: str, expected_pla
 
 def _unquote_yaml_scalar(value: str) -> str:
     val = value.strip()
-    if not val.startswith(('"', "'")):
-        val = re.sub(r"\s+#.*$", "", val).strip()
+    in_quote: str | None = None
+    for idx, ch in enumerate(val):
+        if in_quote:
+            if ch == in_quote:
+                in_quote = None
+        elif ch in ('"', "'"):
+            in_quote = ch
+        elif ch == "#" and (idx == 0 or val[idx - 1].isspace()):
+            val = val[:idx].strip()
+            break
     if len(val) >= 2 and val[0] == val[-1] and val[0] in ('"', "'"):
         return val[1:-1]
     return val
@@ -243,13 +251,33 @@ def _load_workflow_doc(ci_text: str) -> dict:
                 if key in ("runs-on", "if"):
                     job[key] = _unquote_yaml_scalar(rest)
                     i += 1
-                elif key == "needs" and rest.startswith("[") and rest.endswith("]"):
-                    job["needs"] = [
-                        _unquote_yaml_scalar(item)
-                        for item in rest[1:-1].split(",")
-                        if item.strip()
-                    ]
-                    i += 1
+                elif key == "needs":
+                    if rest.startswith("[") and rest.endswith("]"):
+                        job["needs"] = [
+                            _unquote_yaml_scalar(item)
+                            for item in rest[1:-1].split(",")
+                            if item.strip()
+                        ]
+                        i += 1
+                    elif rest:
+                        job["needs"] = _unquote_yaml_scalar(rest)
+                        i += 1
+                    else:
+                        needs_list: list[str] = []
+                        job["needs"] = needs_list
+                        i += 1
+                        while i < n:
+                            nline = lines[i]
+                            nstrip = nline.strip()
+                            if not nstrip or nstrip.startswith("#"):
+                                i += 1
+                                continue
+                            nindent = len(nline) - len(nline.lstrip(" "))
+                            if nindent <= 4:
+                                break
+                            if nstrip.startswith("- "):
+                                needs_list.append(_unquote_yaml_scalar(nstrip[2:]))
+                            i += 1
                 elif key == "outputs" and not rest:
                     outputs: dict[str, str] = {}
                     job["outputs"] = outputs
@@ -351,7 +379,7 @@ def _load_workflow_doc(ci_text: str) -> dict:
                                     fk, fv = fstrip.split(":", 1)
                                     fk = fk.strip()
                                     fv = fv.strip()
-                                    if fk == "run" and fv == "|":
+                                    if fk == "run" and fv in ("|", "|-"):
                                         i += 1
                                         run_lines: list[str] = []
                                         while i < n:
@@ -365,7 +393,9 @@ def _load_workflow_doc(ci_text: str) -> dict:
                                                 break
                                             run_lines.append(rline[10:])
                                             i += 1
-                                        step["run"] = "\n".join(run_lines) + "\n"
+                                        while run_lines and not run_lines[-1]:
+                                            run_lines.pop()
+                                        step["run"] = ("\n".join(run_lines) + "\n") if fv == "|" else "\n".join(run_lines)
                                     elif fk == "env" and not fv:
                                         env_map: dict[str, str] = {}
                                         step["env"] = env_map
@@ -929,6 +959,25 @@ class CiCountsAndRedBlocksMainTests(unittest.TestCase):
             self.assertIn("PASS required receipt budgets.receipt.json", out)
             self.assertIn("outcome PASS: every required job succeeded", summary)
 
+            # Unset MV_REQUIRED_RECEIPTS fallback probe (RV9-01):
+            unset_ok_rc, unset_ok_out, unset_ok_sum = run_aggregator(
+                all_green, "success", platform=platform, required_receipts=None
+            )
+            self.assertEqual(unset_ok_rc, 0, unset_ok_out)
+            self.assertIn("PASS required receipt budgets.receipt.json", unset_ok_out)
+            self.assertIn("outcome PASS: every required job succeeded", unset_ok_sum)
+
+            unset_miss_rc, unset_miss_out, unset_miss_sum = run_aggregator(
+                all_green,
+                "success",
+                platform=platform,
+                receipts={"rust": make_receipt("rust", platform=platform)},
+                required_receipts=None,
+            )
+            self.assertNotEqual(unset_miss_rc, 0)
+            self.assertIn("FAIL required receipt missing: budgets", unset_miss_out)
+            self.assertIn("outcome FAIL: a required job failed", unset_miss_sum)
+
         # Receipt aggregate probes across both required legs (x64, arm64):
         # 1. All required PASS (passes):
         req_set = ("budgets", "package", "rust", "js")
@@ -1123,12 +1172,9 @@ class CiCountsAndRedBlocksMainTests(unittest.TestCase):
             candidate_sha = git("rev-parse", "HEAD").stdout.strip()
             git("checkout", "main")
 
+            # Red leg: ci-required aggregator returns nonzero when any required job fails.
             red_rc, _, _ = run_aggregator(dict(all_green, js="failure"), "success")
             self.assertNotEqual(red_rc, 0)
-            # Gate enforcement: when red_rc != 0, main does not advance.
-            if red_rc == 0:
-                git("merge", "--ff-only", "green-candidate")
-            self.assertEqual(git("rev-parse", "HEAD").stdout.strip(), main_sha)
 
             # When all required gates are green (rc == 0), fast-forward succeeds cleanly.
             green_rc, _, _ = run_aggregator(all_green, "success")
@@ -1177,6 +1223,121 @@ class CiCountsAndRedBlocksMainTests(unittest.TestCase):
         self.assertNotEqual(missing_check_ci, self.ci_text)
         with self.assertRaisesRegex(AssertionError, "Aggregate required results check calls mismatch"):
             validate_red_blocks_main(missing_check_ci, self.laws_text)
+
+    def test_u27_aggregator_unset_required_receipts_falls_back_to_budgets(self) -> None:
+        """RV9-01: when MV_REQUIRED_RECEIPTS is unset, ci-required falls back to requiring budgets."""
+        agg_steps = [
+            s
+            for s in self.ci_doc["jobs"]["ci-required"]["steps"]
+            if s.get("name") == "Aggregate required results"
+        ]
+        self.assertEqual(len(agg_steps), 1)
+        raw_script = agg_steps[0]["run"]
+        rendered = raw_script.replace("${{ job.status }}", "success")
+        for job in EXPECTED_REQUIRED_JOBS:
+            rendered = rendered.replace(f"${{{{ needs.{job}.result }}}}", "success")
+        with tempfile.TemporaryDirectory(prefix="mv-ci-unset-req-") as tmp:
+            td = Path(tmp)
+            summary = td / "summary.md"
+            summary.write_text("", encoding="utf-8")
+            runner_temp = td / "runner_temp"
+            evdir = runner_temp / "metaviewer-ci" / "ci-required" / "x64"
+            evdir.mkdir(parents=True, exist_ok=True)
+            env = dict(os.environ)
+            env.pop("MV_REQUIRED_RECEIPTS_DIR", None)
+            env.pop("MV_REQUIRED_RECEIPTS", None)
+            env.pop("PACKAGE_RECEIPT", None)
+            env.update(
+                {
+                    "GITHUB_STEP_SUMMARY": str(summary),
+                    "PLATFORM": "x64",
+                    "RUNNER_TEMP": str(runner_temp),
+                    "GIT_CONFIG_GLOBAL": "/dev/null",
+                }
+            )
+            proc = subprocess.run(
+                ["bash", "-e", "-u", "-o", "pipefail", "-c", rendered],
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=30,
+            )
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("FAIL required receipts: none collected", proc.stdout + proc.stderr)
+
+            wf_sha = hashlib.sha256(self.ci_text.encode("utf-8")).hexdigest()
+            other_receipt = {
+                "schema": "gate_receipt/v1",
+                "gate_id": "rust",
+                "leg": "rust",
+                "profile": "W0",
+                "owner": "W0-CI-MATRIX",
+                "issuer": "CI/rust/1 [VM]",
+                "scope": {
+                    "unit": "W0-CI-MATRIX",
+                    "platform": "x64",
+                    "feature": "rust",
+                    "artifact": "rust.receipt.json",
+                },
+                "argv": ["python3", "-m", "unittest"],
+                "cwd": "/workspace",
+                "rc": 0,
+                "outcome": "PASS",
+                "reason": "rust PASS",
+                "identities": {
+                    "gate_revision": "a" * 40,
+                    "instrument_sha256": "b" * 64,
+                    "sanitized_log_sha256": "c" * 64,
+                    "configuration_sha256": wf_sha,
+                    "log_sha256": "e" * 64,
+                    "fixture_sha256": ["b" * 64],
+                },
+                "product_identity": None,
+                "assertions": [{"id": "exit-status", "expected": "rc 0", "observed": "rc 0", "accepted": True}],
+                "counts": {"passed": 5, "failed": 0, "skipped": 0, "source": "parsed:unittest"},
+            }
+            (evdir / "rust.receipt.json").write_text(json.dumps(other_receipt), encoding="utf-8")
+            proc2 = subprocess.run(
+                ["bash", "-e", "-u", "-o", "pipefail", "-c", rendered],
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=30,
+            )
+            self.assertNotEqual(proc2.returncode, 0)
+            self.assertIn("FAIL required receipt missing: budgets", proc2.stdout + proc2.stderr)
+
+    def test_load_workflow_doc_scalar_and_block_needs_and_quoted_comment(self) -> None:
+        """RV9-05: _unquote_yaml_scalar and _load_workflow_doc handle quoted comments, scalar/block needs, and run: |-."""
+        self.assertEqual(_unquote_yaml_scalar('"ubuntu-24.04" # comment'), "ubuntu-24.04")
+        self.assertEqual(_unquote_yaml_scalar("'ubuntu-24.04' # comment"), "ubuntu-24.04")
+        self.assertEqual(_unquote_yaml_scalar('"val#with#hash" # trailing'), "val#with#hash")
+        synthetic = (
+            "jobs:\n"
+            "  a:\n"
+            '    runs-on: "ubuntu-24.04" # inline comment\n'
+            "    needs: b\n"
+            "    steps:\n"
+            "      - name: dash-run\n"
+            "        run: |-\n"
+            "          echo one\n"
+            "\n"
+            "      - name: pipe-run\n"
+            "        run: |\n"
+            "          echo two\n"
+            "\n"
+            "  c:\n"
+            "    runs-on: ubuntu-24.04\n"
+            "    needs:\n"
+            "      - a # first dep\n"
+            '      - "b" # second dep\n'
+        )
+        doc = _load_workflow_doc(synthetic)
+        self.assertEqual(doc["jobs"]["a"]["runs-on"], "ubuntu-24.04")
+        self.assertEqual(doc["jobs"]["a"]["needs"], "b")
+        self.assertEqual(doc["jobs"]["a"]["steps"][0]["run"], "echo one")
+        self.assertEqual(doc["jobs"]["a"]["steps"][1]["run"], "echo two\n")
+        self.assertEqual(doc["jobs"]["c"]["needs"], ["a", "b"])
 
 
 if __name__ == "__main__":
