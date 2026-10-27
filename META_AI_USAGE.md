@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 229 | 55 | 174 |
-| Lanes finished OK | 229 | 55 | 174 |
-| Agent steps | 11,314 | 2,705 | 8,609 |
-| Lane-hours of agent work | 29.3 | 5.2 | 24.0 |
-| Fresh input tokens | 49,007,249 | 11,482,034 | 37,525,215 |
-| Cache-read input tokens | 1,012,521,232 | 226,255,212 | 786,266,020 |
-| Prompt cache hit % | 95.4 | 95.2 | 95.4 |
-| Output tokens | 10,351,234 | 2,135,708 | 8,215,526 |
-| Thinking tokens | 5,563,904 | 1,050,039 | 4,513,865 |
-| Cost (USD) | 8.996 | 2.0279 | 6.9681 |
-| Cost per lane (USD) | 0.0393 | 0.0369 | 0.04 |
+| Lanes launched | 233 | 55 | 178 |
+| Lanes finished OK | 233 | 55 | 178 |
+| Agent steps | 11,592 | 2,705 | 8,887 |
+| Lane-hours of agent work | 29.8 | 5.2 | 24.5 |
+| Fresh input tokens | 49,806,754 | 11,482,034 | 38,324,720 |
+| Cache-read input tokens | 1,036,737,952 | 226,255,212 | 810,482,740 |
+| Prompt cache hit % | 95.4 | 95.2 | 95.5 |
+| Output tokens | 10,515,181 | 2,135,708 | 8,379,473 |
+| Thinking tokens | 5,632,715 | 1,050,039 | 4,582,676 |
+| Cost (USD) | 9.1572 | 2.0279 | 7.1293 |
+| Cost per lane (USD) | 0.0393 | 0.0369 | 0.0401 |
 
-Rooms: 51. Peak concurrent lanes [MEASURED from lane start/end]: 24.
+Rooms: 52. Peak concurrent lanes [MEASURED from lane start/end]: 24.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -42,7 +42,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | context | 42 | 95.9 | 1.9093 |
 | demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
-| docs | 11 | 93.3 | 0.3759 |
+| docs | 15 | 94.8 | 0.5371 |
 | fix | 2 | 97.4 | 0.1115 |
 | kit | 3 | 96.5 | 0.1997 |
 | ops | 4 | 88.1 | 0.0468 |
@@ -109,6 +109,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0p1 | conductor | Oct 27 02:00 | review | 4 | 94.9 | 0.1175 | Re-verify the 35 open P1 findings on the current head and turn the still-open ones into disjoint, ordered Sol fix units: the morning work queue towards the v0.2.0 release. |
 | mvui3n | UI orchestrator | Oct 27 02:52 | ui | 4 | 97.5 | 0.275 | Polish the MetaViewer wall for live data after the live G-W1 gate passed: a live-replay fixture through the real authority runtime, live tile states, multislot real terminal sessions and a receipt/verdict activity strip. |
 | mv0sv | conductor | Oct 27 04:07 | review | 4 | 94.4 | 0.0942 | Verify the 26 findings of the fourth Gemini Argon cross-review (integrations 102f2e0..b64ec5a after G-W1) and turn confirmed ones into Sol fix units. |
+| mv0dc3 | conductor | Oct 27 04:14 | docs | 4 | 96.8 | 0.1612 | Second fact-check and refresh of the product documentation against the integration head after G-W1, so README, user guide, testing report and architecture can be committed with only verified claims (AC-15). |
 
 ## Every lane
 
@@ -343,6 +344,10 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0sv | S_UI | Verify Argon findings s_ui | Oct 27 04:08 | yes | 39 | 94.5 | 0.021885 |
 | mv0sv | S_ADAPTER | Verify Argon findings s_adapter | Oct 27 04:08 | yes | 44 | 94.5 | 0.023579 |
 | mv0sv | S_CI | Verify Argon findings s_ci | Oct 27 04:08 | yes | 25 | 90.9 | 0.018159 |
+| mv0dc3 | README | Final docs README.md | Oct 27 04:14 | yes | 34 | 93.3 | 0.021293 |
+| mv0dc3 | USER_GUIDE | Final docs USER_GUIDE.md | Oct 27 04:14 | yes | 92 | 97.4 | 0.059736 |
+| mv0dc3 | TESTING | Final docs TESTING.md | Oct 27 04:14 | yes | 71 | 96.6 | 0.035632 |
+| mv0dc3 | ARCH | Final docs ARCHITECTURE.md | Oct 27 04:14 | yes | 81 | 97.1 | 0.044512 |
 
 ## Method
 
