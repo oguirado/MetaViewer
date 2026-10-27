@@ -51,5 +51,18 @@ pub(super) fn schema(name: &str) -> Option<serde_json::Value> {
         "ui_intent.schema.json" => include_str!("../../../contracts/v0.2/ui_intent.schema.json"),
         _ => return None,
     };
-    serde_json::from_str(raw).ok()
+    let mut schema: serde_json::Value = serde_json::from_str(raw).ok()?;
+    // [TARGET, unit decision] The v0.2 tool-result contract retains legacy tags
+    // in its embedded definitions. Match the agents codec's version projection;
+    // preserve every field, bound and closed-object constraint verbatim.
+    if name == "mv_tool_result.schema.json" {
+        for definition in schema.get_mut("$defs")?.as_object_mut()?.values_mut() {
+            if let Some(tag) = definition.pointer_mut("/properties/schema/const") {
+                if let Some(current) = tag.as_str().and_then(|s| s.strip_suffix("/v0.1")) {
+                    *tag = format!("{current}/v0.2").into();
+                }
+            }
+        }
+    }
+    Some(schema)
 }

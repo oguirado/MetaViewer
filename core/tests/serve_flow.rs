@@ -1,3 +1,4 @@
+mod serve_v02_tags;
 mod support;
 use metaviewer_core::journal::{scan, sha256_hex};
 use metaviewer_core::serve::{self, Config, Registration, Server};
@@ -51,11 +52,19 @@ impl Peer {
         decode_envelope(&json!({"schema":"envelope/v0.2","msg_id":format!("{}-{}", self.registration.endpoint.instance,self.seq),"ts_ns":0,"from":self.registration.endpoint,"to":self.config.core.endpoint,"session_id":self.config.session_id,"seq":self.seq,"nonce":format!("{}-{}",self.registration.endpoint.instance,self.seq),"body":body}).to_string()).unwrap()
     }
     async fn receive(&mut self) -> Envelope {
-        tokio::time::timeout(Duration::from_secs(3), read_frame(&mut self.socket))
+        let env = tokio::time::timeout(Duration::from_secs(3), read_frame(&mut self.socket))
             .await
             .unwrap()
             .unwrap()
-            .unwrap()
+            .unwrap();
+        let value = serde_json::to_value(&env).unwrap();
+        if matches!(
+            value["body"]["schema"].as_str(),
+            Some("surface_event/v0.2" | "frame_ref/v0.2")
+        ) {
+            serve_v02_tags::assert_v02_output(&value);
+        }
+        env
     }
     async fn verdict(&mut self, decision: &str, reason: Option<&str>) {
         let env = self.receive().await;
@@ -550,6 +559,7 @@ async fn tool_result(peer: &mut Peer, op: &str, status: &str) -> Value {
     let expected = format!("agent-test-{}", peer.seq);
     let env = peer.receive().await;
     assert!(matches!(env.body, Command::MvToolResult(_)), "{env:?}");
+    serve_v02_tags::assert_v02_output(&serde_json::to_value(&env).unwrap());
     let result = serde_json::to_value(env.body).unwrap();
     assert_eq!(result["request_id"], expected);
     assert_eq!(result["op"], op);
@@ -611,8 +621,7 @@ fn agent_tools_observe_propose_and_wait_for_receipt() {
             .send(tool_call("observe", json!({"surface_id":"surface-demo"})))
             .await;
         let observed = tool_result(&mut agent, "observe", "ok").await;
-        let mut expected = f.clone();
-        expected["schema"] = "frame_ref/v0.1".into();
+        let expected = f.clone();
         assert_eq!(observed["observation"]["frame_ref"], expected);
         agent
             .send(tool_call("list", json!({"cursor":null,"limit":1})))

@@ -1,3 +1,7 @@
+//! [TARGET, unit decision] Layout slots use surface_id as slot_id until a slot
+//! registry ABI exists. Fold/unfold commit SurfaceNotice plus the closed intent
+//! witness, rebuild visibility on replay, and publish state_changed from core;
+//! the daemon adapter defines no layout operation. Unknown/dead slots use POLICY.
 //! [TARGET, unit decision] Trusted startup registration is a closed JSON config:
 //! {session_id, core:{endpoint,hello}, peers:[{endpoint,hello}]} at MV_CORE_CONFIG.
 //! The core endpoint instance is a fresh process identity on each restart.
@@ -188,6 +192,7 @@ impl Server {
                 }
             }
         }
+        tool_state.prune(authority.state());
         for env in envelopes.into_values() {
             replay.record(&env.session_id, &env.from, &env.nonce, env.seq)?;
         }
@@ -474,7 +479,16 @@ impl Server {
                     self.notify_cancellations(&out.cancelled, out.core_seq)?;
                 }
                 self.tool_state.retain(&env.body);
-                self.fanout(env.body.clone());
+                self.tool_state.prune(self.authority.state());
+                self.poll_tool_waiters()?;
+                let body = match event.as_ref() {
+                    SurfaceEvent::Case1(e) => self
+                        .tool_state
+                        .surface_event(&e.data.surface.surface_id, self.authority.state())
+                        .unwrap_or_else(|| env.body.clone()),
+                    _ => env.body.clone(),
+                };
+                self.fanout(body);
             }
             (Component::Daemon, Command::FrameRef(frame)) => {
                 if epoch != self.authority.state().epoch {
@@ -491,6 +505,9 @@ impl Server {
 
             (Component::Ui, Command::UiIntent(request)) => {
                 let value = serde_json::to_value(request)?;
+                if matches!(value["op"].as_str(), Some("fold" | "unfold")) {
+                    return self.layout_intent(&env, &value, boundary);
+                }
                 let take = match value["op"].as_str() {
                     Some("take_control") => true,
                     Some("release_control") => false,
@@ -684,7 +701,7 @@ impl Server {
                 }
             }
         }
-        Ok(())
+        self.poll_tool_waiters()
     }
     fn agent(&self) -> Result<Endpoint> {
         self.config
@@ -726,6 +743,35 @@ impl Server {
             },
             vec![boundary],
         )?)
+    }
+    fn layout_intent(
+        &mut self,
+        env: &Envelope,
+        value: &serde_json::Value,
+        boundary: Witness,
+    ) -> Result<()> {
+        let sid = value["params"]["slot_id"]
+            .as_str()
+            .ok_or_else(|| invalid("slot required"))?;
+        if !self
+            .authority
+            .state()
+            .surfaces
+            .get(sid)
+            .is_some_and(|s| s.live)
+            || !self.tool_state.has_surface(sid)
+        {
+            return self.unsupported(env, boundary);
+        }
+        self.authority
+            .apply_with_witnesses(Input::SurfaceNotice, vec![boundary])?;
+        self.tool_state.retain(&env.body);
+        let event = self
+            .tool_state
+            .surface_event(sid, self.authority.state())
+            .ok_or_else(|| invalid("missing layout view"))?;
+        self.fanout(event);
+        Ok(())
     }
     fn unsupported(&mut self, env: &Envelope, boundary: Witness) -> Result<()> {
         let value = serde_json::to_value(&env.body)?;

@@ -1,14 +1,20 @@
 //! [TARGET, unit decision] Tool read views are rebuilt from committed boundary
 //! witnesses; authority state fences every observation and owns control/liveness.
 //! List cursors are exclusive surface IDs in lexical order. Results echo envelope
-//! msg_id, as required by mv_tool_result. Embedded v0.1 payload tags are a contract
-//! projection, not a different source of state. SurfaceNotice journals read calls.
-//! Waits hold no authority lock and expire with a typed timeout. Receipts currently
+//! msg_id, as required by mv_tool_result. Nested payloads retain their v0.2
+//! contract tags and field sets. SurfaceNotice journals read calls.
+//! Waits hold no authority lock, resolve cancellations (including draining work),
+//! and expire with a typed timeout. List returns live surfaces only; dead views
+//! and layout overrides are pruned against authority on lifecycle/recovery. Receipts currently
 //! carry no focus proof or input monotonic timestamp: never fabricate those fields
 //! to claim verified success; return VERIFICATION_FAILED once such a receipt arrives.
 use super::*;
 use crate::wire::payload::{ActionVerdict, MvToolCall};
 use serde_json::{json, Value};
+use std::collections::VecDeque;
+
+// [TARGET, unit decision] Retain the latest 128 receipts by arrival, including replay.
+const RECEIPT_CAP: usize = 128;
 
 #[derive(Default)]
 pub(super) struct ToolState {
@@ -16,6 +22,8 @@ pub(super) struct ToolState {
     frames: BTreeMap<String, Value>,
     receipts: BTreeMap<String, Value>,
     waiters: Vec<Waiter>,
+    receipt_order: VecDeque<String>,
+    layout: BTreeMap<String, String>,
 }
 struct Waiter {
     peer: Endpoint,
@@ -34,7 +42,19 @@ impl ToolState {
                 SurfaceEvent::Case0(_) | SurfaceEvent::Case1(_) => {
                     let surface = &value["data"]["surface"];
                     if let Some(id) = surface["surface_id"].as_str() {
-                        self.surfaces.insert(id.to_owned(), surface.clone());
+                        if matches!(surface["state"].as_str(), Some("destroyed" | "lost")) {
+                            self.surfaces.remove(id);
+                            self.frames.remove(id);
+                            self.layout.remove(id);
+                        } else {
+                            let mut surface = surface.clone();
+                            if matches!(event.as_ref(), SurfaceEvent::Case1(_)) {
+                                if let Some(visibility) = self.layout.get(id) {
+                                    surface["visibility"] = visibility.clone().into();
+                                }
+                            }
+                            self.surfaces.insert(id.to_owned(), surface);
+                        }
                     }
                 }
                 SurfaceEvent::Case2(_) => self.retain_frame(&value["data"]["frame_ref"]),
@@ -42,14 +62,63 @@ impl ToolState {
             },
             Command::FrameRef(_) => self.retain_frame(&value),
             Command::ActionReceipt(receipt) => {
-                self.receipts.insert(receipt.proposal_id.clone(), value);
+                let id = &receipt.proposal_id;
+                self.receipt_order.retain(|old| old != id);
+                self.receipt_order.push_back(id.clone());
+                self.receipts.insert(id.clone(), value);
+                while self.receipt_order.len() > RECEIPT_CAP {
+                    if let Some(old) = self.receipt_order.pop_front() {
+                        self.receipts.remove(&old);
+                    }
+                }
+            }
+            Command::UiIntent(_) => {
+                if let (Some(id), Some(op)) =
+                    (value["params"]["slot_id"].as_str(), value["op"].as_str())
+                {
+                    let visibility = match op {
+                        "fold" => Some("folded"),
+                        "unfold" => Some("unfolded"),
+                        _ => None,
+                    };
+                    if let (Some(surface), Some(visibility)) =
+                        (self.surfaces.get_mut(id), visibility)
+                    {
+                        surface["visibility"] = visibility.into();
+                        self.layout.insert(id.to_owned(), visibility.to_owned());
+                    }
+                }
             }
             _ => {}
         }
     }
+    pub(super) fn has_surface(&self, id: &str) -> bool {
+        self.surfaces.contains_key(id)
+    }
+    pub(super) fn surface_event(&self, id: &str, state: &CoreState) -> Option<Command> {
+        let mut surface = self.surfaces.get(id)?.clone();
+        surface["control"] = if state.surfaces.get(id)?.agent_controlled {
+            "agent"
+        } else {
+            "human"
+        }
+        .into();
+        let event = serde_json::from_value(json!({"schema":"surface_event/v0.2",
+            "event":"state_changed","data":{"surface":surface}}))
+        .ok()?;
+        Some(Command::SurfaceEvent(Box::new(event)))
+    }
+    pub(super) fn prune(&mut self, state: &CoreState) {
+        let live = |id: &String| state.surfaces.get(id).is_some_and(|s| s.live);
+        self.surfaces.retain(|id, _| live(id));
+        self.frames.retain(|id, _| live(id));
+        self.layout.retain(|id, _| live(id));
+    }
     fn retain_frame(&mut self, frame: &Value) {
         if let Some(id) = frame["surface_id"].as_str() {
-            self.frames.insert(id.to_owned(), frame.clone());
+            if self.surfaces.contains_key(id) {
+                self.frames.insert(id.to_owned(), frame.clone());
+            }
         }
     }
     pub(super) fn remove_peer(&mut self, peer: &Endpoint) {
@@ -112,7 +181,7 @@ impl Server {
                 if !surface.live {
                     return self.tool_error(env, "observe", "UNAVAILABLE", "Surface is not live");
                 }
-                let Some(mut frame) = self.tool_state.frames.get(sid).cloned().filter(|frame| {
+                let Some(frame) = self.tool_state.frames.get(sid).cloned().filter(|frame| {
                     surface.frame.as_ref().is_some_and(|current| {
                         frame["sha256"] == current.sha256
                             && frame["generation"] == current.generation
@@ -120,13 +189,12 @@ impl Server {
                 }) else {
                     return self.tool_error(env, "observe", "UNAVAILABLE", "No current frame");
                 };
-                frame["schema"] = "frame_ref/v0.1".into();
                 self.tool_result(
                     &env.from,
                     &env.msg_id,
                     "observe",
                     json!({"status":"ok",
-                    "observation":{"schema":"observation/v0.1","frame_ref":frame}}),
+                    "observation":{"schema":"observation/v0.2","frame_ref":frame}}),
                 )
             }
             MvToolCall::Case1(call) => {
@@ -135,9 +203,20 @@ impl Server {
                     crate::wire::payload::MvToolCallCase1ArgsCursor::Case1(()) => None,
                 };
                 let mut entries = Vec::new();
+                let mut next = Value::Null;
                 for (id, state) in &self.authority.state().surfaces {
+                    if !state.live {
+                        continue;
+                    }
                     if cursor.is_some_and(|cursor| id.as_str() <= cursor) {
                         continue;
+                    }
+                    if entries.len() == call.args.limit as usize {
+                        next = entries
+                            .last()
+                            .map(|s: &Value| s["surface_id"].clone())
+                            .unwrap_or(Value::Null);
+                        break;
                     }
                     let Some(mut surface) = self.tool_state.surfaces.get(id).cloned() else {
                         return self.tool_error(
@@ -147,7 +226,6 @@ impl Server {
                             "Missing surface metadata",
                         );
                     };
-                    surface["schema"] = "surface/v0.1".into();
                     // Metadata cannot reverse authority's human takeover fence.
                     surface["control"] = if state.agent_controlled {
                         "agent"
@@ -155,23 +233,8 @@ impl Server {
                         "human"
                     }
                     .into();
-                    if !state.live && surface["state"] == "active" {
-                        surface["state"] = "lost".into();
-                    }
                     entries.push(surface);
-                    if entries.len() > call.args.limit as usize {
-                        break;
-                    }
                 }
-                let next = if entries.len() > call.args.limit as usize {
-                    entries.pop();
-                    entries
-                        .last()
-                        .map(|s| s["surface_id"].clone())
-                        .unwrap_or(Value::Null)
-                } else {
-                    Value::Null
-                };
                 self.tool_result(
                     &env.from,
                     &env.msg_id,
@@ -217,8 +280,12 @@ impl Server {
         let now = Instant::now();
         let mut ready = Vec::new();
         let receipts = &self.tool_state.receipts;
+        let pending = &self.authority.state().pending;
         self.tool_state.waiters.retain(|waiter| {
-            if receipts.contains_key(&waiter.proposal_id) || now >= waiter.deadline {
+            if receipts.contains_key(&waiter.proposal_id)
+                || !pending.contains_key(&waiter.proposal_id)
+                || now >= waiter.deadline
+            {
                 ready.push((
                     waiter.peer.clone(),
                     waiter.request_id.clone(),
@@ -233,6 +300,8 @@ impl Server {
             let fields = if self.tool_state.receipts.contains_key(&proposal) {
                 json!({"status":"error","code":"VERIFICATION_FAILED",
                     "detail":"Receipt settled execution; focus proof and input_mono_ns are absent"})
+            } else if !self.authority.state().pending.contains_key(&proposal) {
+                json!({"status":"error","code":"UNAVAILABLE","detail":"Proposal cancelled"})
             } else {
                 json!({"status":"timeout","proposal_id":proposal,"verified":false})
             };
@@ -252,9 +321,8 @@ impl Server {
         verdict: ActionVerdict,
     ) -> Result<()> {
         if let Some(id) = tool {
-            let mut value = serde_json::to_value(&verdict)?;
+            let value = serde_json::to_value(&verdict)?;
             if value["decision"] == "admitted" {
-                value["schema"] = "action_verdict/v0.1".into();
                 self.tool_result(
                     &env.from,
                     id,
@@ -307,3 +375,7 @@ impl Server {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "regression.rs"]
+mod regression;
