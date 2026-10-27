@@ -6,6 +6,10 @@ interpreting it. This module never opens sockets: envelope framing,
 sender identity, sequence, nonce replay and byte caps belong to the
 client. Core admission and verification outcomes pass through verbatim;
 local failures never fabricate core metadata.
+
+[TARGET, unit decision] Recording verbs ``record_start`` and ``record_stop``
+send validated ``record_request/v0.2`` frames and validate ``record_event/v0.2``
+stream outcomes without modifying the frozen ``__all__`` MCP tool surface.
 """
 
 from __future__ import annotations
@@ -41,11 +45,20 @@ _FRAME_SCHEMA = "frame_ref/v0.2"
 _VERDICT_SCHEMA = "action_verdict/v0.2"
 _RECEIPT_SCHEMA = "action_receipt/v0.2"
 _SURFACE_SCHEMA = "surface/v0.2"
+_RECORD_REQUEST_SCHEMA = "record_request/v0.2"
+_RECORD_REQUEST_FAMILY = "record_request/"
+_RECORD_EVENT_SCHEMA = "record_event/v0.2"
+_RECORD_EVENT_FAMILY = "record_event/"
 
 _ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]*")
 _SHA_PATTERN = re.compile(r"[0-9a-f]{64}")
 _RAMWS_PATTERN = re.compile(r"/dev/shm/[^\x00]+")
+_RAM_RECORD_PATTERN = re.compile(r"/dev/shm/[^\x00\r\n]+")
+_ABS_PATH_PATTERN = re.compile(r"/[^\x00\r\n]*")
 _MAX_SAFE_INT = 9007199254740991
+_MAX_RING_BYTES = 1073741824
+_MAX_FPS = 120
+_MAX_RECORD_STREAM_EVENTS = 256
 _LIST_LIMIT_MAX = 256
 _WAIT_TIMEOUT_MAX_MS = 60000
 _MAX_VISION_SUMMARY = 4096
@@ -796,3 +809,277 @@ def wait_verify(proposal_id: str, expectation: dict, timeout_ms: int,
         if status == "error":
             _raise_error(head)
         _fail("invalid wait_verify status")
+
+
+_RECORD_MODES = frozenset({"ram", "disk", "screenshot"})
+
+
+def _check_record_request(request: object, *,
+                          expected_op: str | None = None) -> dict:
+    body = _check_exact(
+        request,
+        frozenset({"schema", "request_id", "op", "params"}),
+        "record_request")
+    schema = body["schema"]
+    if schema != _RECORD_REQUEST_SCHEMA:
+        if (isinstance(schema, str)
+                and schema.startswith(_RECORD_REQUEST_FAMILY)):
+            _fail("unknown record_request version")
+        _fail("invalid record_request")
+    _check_id(body["request_id"], "request_id")
+    op = body["op"]
+    if not isinstance(op, str):
+        _fail("invalid record_request op")
+    if expected_op is not None and op != expected_op:
+        _fail("unexpected record_request op")
+    params = body["params"]
+    if op == "ram_start":
+        checked_params = _check_exact(
+            params,
+            frozenset({"surface_id", "recording_id", "ring_bytes", "max_fps"}),
+            "ram_start params")
+        _check_id(checked_params["surface_id"], "surface_id")
+        _check_id(checked_params["recording_id"], "recording_id")
+        _check_int(checked_params["ring_bytes"], minimum=1,
+                   maximum=_MAX_RING_BYTES, what="ring_bytes")
+        _check_int(checked_params["max_fps"], minimum=1,
+                   maximum=_MAX_FPS, what="max_fps")
+    elif op in ("ram_stop", "disk_stop"):
+        checked_params = _check_exact(
+            params,
+            frozenset({"surface_id", "recording_id"}),
+            "%s params" % op)
+        _check_id(checked_params["surface_id"], "surface_id")
+        _check_id(checked_params["recording_id"], "recording_id")
+    elif op == "disk_start":
+        checked_params = _check_exact(
+            params,
+            frozenset({"surface_id", "recording_id",
+                       "destination_capability_id", "destination_path",
+                       "max_fps"}),
+            "disk_start params")
+        _check_id(checked_params["surface_id"], "surface_id")
+        _check_id(checked_params["recording_id"], "recording_id")
+        _check_id(checked_params["destination_capability_id"],
+                  "destination_capability_id")
+        _check_str(checked_params["destination_path"], min_length=1,
+                   max_length=4096, pattern=_ABS_PATH_PATTERN,
+                   what="destination_path")
+        _check_int(checked_params["max_fps"], minimum=1,
+                   maximum=_MAX_FPS, what="max_fps")
+    elif op == "screenshot":
+        checked_params = _check_exact(
+            params,
+            frozenset({"surface_id", "capture_id"}),
+            "screenshot params")
+        _check_id(checked_params["surface_id"], "surface_id")
+        _check_id(checked_params["capture_id"], "capture_id")
+    else:
+        _fail("invalid record_request op")
+    return body
+
+
+def _check_record_event(event_obj: object, *, request_id: str,
+                        surface_id: str, recording_id: str) -> dict:
+    if not isinstance(event_obj, dict):
+        _fail("invalid record_event")
+    assert isinstance(event_obj, dict)
+    schema = event_obj.get("schema")
+    if schema != _RECORD_EVENT_SCHEMA:
+        if isinstance(schema, str) and schema.startswith(_RECORD_EVENT_FAMILY):
+            _fail("unknown record_event version")
+        _fail("invalid record_event")
+    _check_id(event_obj.get("request_id"), "request_id")
+    if event_obj["request_id"] != request_id:
+        _fail("uncorrelated request_id")
+    _check_id(event_obj.get("surface_id"), "surface_id")
+    if event_obj["surface_id"] != surface_id:
+        _fail("uncorrelated surface_id")
+    _check_id(event_obj.get("recording_id"), "recording_id")
+    if event_obj["recording_id"] != recording_id:
+        _fail("uncorrelated recording_id")
+    _check_int(event_obj.get("mono_ns"), minimum=0, maximum=_MAX_SAFE_INT,
+               what="mono_ns")
+    kind = event_obj.get("event")
+    if kind == "started":
+        body = _check_exact(
+            event_obj,
+            frozenset({"schema", "request_id", "surface_id", "recording_id",
+                       "event", "mono_ns", "mode"}),
+            "started record_event")
+        if not isinstance(body["mode"], str) or body["mode"] not in _RECORD_MODES:
+            _fail("invalid record mode")
+        return body
+    if kind == "stopped":
+        body = _check_exact(
+            event_obj,
+            frozenset({"schema", "request_id", "surface_id", "recording_id",
+                       "event", "mono_ns", "frame_count", "byte_count"}),
+            "stopped record_event")
+        _check_int(body["frame_count"], minimum=0, maximum=_MAX_SAFE_INT,
+                   what="frame_count")
+        _check_int(body["byte_count"], minimum=0, maximum=_MAX_RING_BYTES,
+                   what="byte_count")
+        return body
+    if kind == "frame_captured":
+        body = _check_exact(
+            event_obj,
+            frozenset({"schema", "request_id", "surface_id", "recording_id",
+                       "event", "mono_ns", "ram_path", "sha256",
+                       "byte_count"}),
+            "frame_captured record_event")
+        _check_str(body["ram_path"], min_length=1, max_length=4096,
+                   pattern=_RAM_RECORD_PATTERN, what="ram_path")
+        _check_str(body["sha256"], min_length=64, max_length=64,
+                   pattern=_SHA_PATTERN, what="sha256")
+        _check_int(body["byte_count"], minimum=0, maximum=_MAX_RING_BYTES,
+                   what="byte_count")
+        return body
+    if kind == "exported":
+        body = _check_exact(
+            event_obj,
+            frozenset({"schema", "request_id", "surface_id", "recording_id",
+                       "event", "mono_ns", "destination_capability_id",
+                       "destination_path", "sha256", "byte_count"}),
+            "exported record_event")
+        _check_id(body["destination_capability_id"],
+                  "destination_capability_id")
+        _check_str(body["destination_path"], min_length=1, max_length=4096,
+                   pattern=_ABS_PATH_PATTERN, what="destination_path")
+        _check_str(body["sha256"], min_length=64, max_length=64,
+                   pattern=_SHA_PATTERN, what="sha256")
+        _check_int(body["byte_count"], minimum=0, maximum=_MAX_RING_BYTES,
+                   what="byte_count")
+        return body
+    if kind == "dropped":
+        body = _check_exact(
+            event_obj,
+            frozenset({"schema", "request_id", "surface_id", "recording_id",
+                       "event", "mono_ns", "dropped_frames", "policy"}),
+            "dropped record_event")
+        _check_int(body["dropped_frames"], minimum=1, maximum=_MAX_SAFE_INT,
+                   what="dropped_frames")
+        _check_const(body["policy"], "ram_ring_oldest", "drop policy")
+        return body
+    if kind == "refused":
+        body = _check_exact(
+            event_obj,
+            frozenset({"schema", "request_id", "surface_id", "recording_id",
+                       "event", "mono_ns", "reason_code", "detail"}),
+            "refused record_event")
+        reason = body["reason_code"]
+        if not isinstance(reason, str) or reason not in _REFUSAL_CODES:
+            _fail("invalid reason_code")
+        _check_str(body["detail"], min_length=0, max_length=4096,
+                   pattern=None, what="refusal detail")
+        raise ToolRefusal(reason, None)
+    _fail("invalid record_event kind")
+    raise AssertionError("unreachable")
+
+
+def record_start(surface_id: str, recording_id: str, *, mode: str = "ram",
+                 ring_bytes: int | None = None, max_fps: int = 30,
+                 destination_capability_id: str | None = None,
+                 destination_path: str | None = None,
+                 client: ToolClient, timeout_ms: int,
+                 events: list[dict] | None = None) -> dict:
+    """Start a RAM ring or host disk recording; return the started event.
+
+    Disk recording requires both destination_capability_id and an absolute
+    destination_path; missing or malformed destination fields fail closed
+    locally before transport dispatch and without writing to disk.
+    """
+    active = _checked_client(client)
+    budget = _check_timeout(timeout_ms, "timeout_ms")
+    if mode == "ram":
+        if destination_capability_id is not None or destination_path is not None:
+            _fail("ram recording forbids disk destination")
+        op = "ram_start"
+        params = {
+            "surface_id": surface_id,
+            "recording_id": recording_id,
+            "ring_bytes": ring_bytes,
+            "max_fps": max_fps,
+        }
+    elif mode == "disk":
+        if ring_bytes is not None:
+            _fail("disk recording forbids ring_bytes")
+        if destination_capability_id is None or destination_path is None:
+            _fail("disk recording requires destination_path and destination_capability_id")
+        op = "disk_start"
+        params = {
+            "surface_id": surface_id,
+            "recording_id": recording_id,
+            "destination_capability_id": destination_capability_id,
+            "destination_path": destination_path,
+            "max_fps": max_fps,
+        }
+    else:
+        _fail("invalid record mode")
+        raise AssertionError("unreachable")
+    call = {
+        "schema": _RECORD_REQUEST_SCHEMA,
+        "request_id": _new_request_id(),
+        "op": op,
+        "params": params,
+    }
+    _check_record_request(call, expected_op=op)
+    reply = active.request(copy.deepcopy(call), _RECORD_EVENT_SCHEMA,
+                           timeout_ms=budget)
+    checked = _check_record_event(
+        reply, request_id=call["request_id"],
+        surface_id=surface_id, recording_id=recording_id)
+    if checked["event"] != "started" or checked["mode"] != mode:
+        _fail("unexpected record_start event")
+    out = copy.deepcopy(checked)
+    if events is not None:
+        events.append(copy.deepcopy(out))
+    return out
+
+
+def record_stop(surface_id: str, recording_id: str, *, mode: str = "ram",
+                client: ToolClient, timeout_ms: int,
+                events: list[dict] | None = None) -> dict:
+    """Drain intermediate recording events and stop a RAM or disk recording.
+
+    Any malformed or uncorrelated event in the stream raises
+    ToolValidationError immediately and aborts further stream consumption.
+    """
+    active = _checked_client(client)
+    budget = _check_int(timeout_ms, minimum=1, maximum=_WAIT_TIMEOUT_MAX_MS,
+                        what="timeout_ms")
+    if mode == "ram":
+        op = "ram_stop"
+        allowed_stream = frozenset({"frame_captured", "dropped"})
+    elif mode == "disk":
+        op = "disk_stop"
+        allowed_stream = frozenset({"exported"})
+    else:
+        _fail("invalid record mode")
+        raise AssertionError("unreachable")
+    params = {"surface_id": surface_id, "recording_id": recording_id}
+    for _ in range(_MAX_RECORD_STREAM_EVENTS):
+        call = {
+            "schema": _RECORD_REQUEST_SCHEMA,
+            "request_id": _new_request_id(),
+            "op": op,
+            "params": copy.deepcopy(params),
+        }
+        _check_record_request(call, expected_op=op)
+        reply = active.request(copy.deepcopy(call), _RECORD_EVENT_SCHEMA,
+                               timeout_ms=budget)
+        checked = _check_record_event(
+            reply, request_id=call["request_id"],
+            surface_id=surface_id, recording_id=recording_id)
+        if checked["event"] in allowed_stream:
+            if events is not None:
+                events.append(copy.deepcopy(checked))
+            continue
+        if checked["event"] == "stopped":
+            out = copy.deepcopy(checked)
+            if events is not None:
+                events.append(copy.deepcopy(out))
+            return out
+        _fail("unexpected record_stop event")
+    _fail("record event stream exceeded cap")
+    raise AssertionError("unreachable")

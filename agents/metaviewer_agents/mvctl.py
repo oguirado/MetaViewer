@@ -5,6 +5,8 @@
 Proposal files contain action_proposal/v0.2 bodies, never legacy envelopes.
 [TARGET, unit decision] List exposes the existing single-page tool protocol:
 --limit is required and --cursor is optional; no implicit page size is chosen.
+[TARGET, unit decision] record-start and record-stop take --json-arg holding a
+record_request/v0.2 body and preflight-validate disk destination fields locally.
 
 This module is an untrusted caller: it validates every flag, input byte and
 core reply, and leaves admission, ownership and replay decisions to the core.
@@ -402,7 +404,8 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the default closed v0.2 tool parser."""
     parser = _UsageParser(prog="mvctl", allow_abbrev=False)
     parser.add_argument("--config", action=_OnceAction, default=os.environ.get("MV_CORE_CONFIG"))
-    parser.add_argument("command", choices=("observe", "list", "propose", "wait-verify"))
+    parser.add_argument("command", choices=("observe", "list", "propose", "wait-verify",
+                                            "record-start", "record-stop"))
     for flag in ("socket", "session-id", "agent-instance", "core-instance"):
         parser.add_argument("--" + flag, required=True, action=_OnceAction)
     for flag in ("timeout-ms", "max-line-bytes", "max-reply-bytes"):
@@ -429,7 +432,9 @@ def _run_v02(argv):
     expected = {"observe": (True, False, False),
                 "list": (False, False, False),
                 "propose": (False, False, True),
-                "wait-verify": (False, True, True)}[args.command]
+                "wait-verify": (False, True, True),
+                "record-start": (False, False, True),
+                "record-stop": (False, False, True)}[args.command]
     if tuple(value is not None for value in
              (args.surface_id, args.proposal_id, args.json_arg)) != expected:
         _refuse("usage_error")
@@ -456,6 +461,20 @@ def _run_v02(argv):
             # Apply the closed wire contract (including numeric rails) before
             # opening a connection. This validation envelope is never sent.
             make_envelope(msg_id="proposal-preflight", from_component="agent",
+                          from_instance=args.agent_instance, to_component="core",
+                          to_instance=args.core_instance, session_id=args.session_id,
+                          seq=1, ts_ns=0, body=payload)
+        if payload is not None and args.command in ("record-start", "record-stop"):
+            if payload.get("schema") != "record_request/v0.2":
+                _refuse("unknown_version" if isinstance(payload.get("schema"), str) else "schema_error")
+                return 2
+            allowed_ops = (("ram_start", "disk_start") if args.command == "record-start"
+                           else ("ram_stop", "disk_stop"))
+            if payload.get("op") not in allowed_ops:
+                _refuse("schema_error")
+                return 2
+            tools._check_record_request(payload, expected_op=payload["op"])
+            make_envelope(msg_id="record-preflight", from_component="agent",
                           from_instance=args.agent_instance, to_component="core",
                           to_instance=args.core_instance, session_id=args.session_id,
                           seq=1, ts_ns=0, body=payload)
@@ -493,6 +512,22 @@ def _run_v02(argv):
             elif args.command == "propose":
                 result = tools.propose(payload, client=client,
                                        timeout_ms=args.timeout_ms)
+            elif args.command == "record-start":
+                params = payload["params"]
+                mode = "ram" if payload["op"] == "ram_start" else "disk"
+                result = tools.record_start(
+                    params["surface_id"], params["recording_id"], mode=mode,
+                    ring_bytes=params.get("ring_bytes"),
+                    max_fps=params["max_fps"],
+                    destination_capability_id=params.get("destination_capability_id"),
+                    destination_path=params.get("destination_path"),
+                    client=client, timeout_ms=args.timeout_ms)
+            elif args.command == "record-stop":
+                params = payload["params"]
+                mode = "ram" if payload["op"] == "ram_stop" else "disk"
+                result = tools.record_stop(
+                    params["surface_id"], params["recording_id"], mode=mode,
+                    client=client, timeout_ms=args.timeout_ms)
             else:
                 result = tools.wait_verify(args.proposal_id, payload,
                                            args.timeout_ms, client=client)
@@ -509,7 +544,9 @@ def _run_v02(argv):
         return 2
     except (ValueError, OSError, TimeoutError, TypeError, KeyError, StopIteration) as err:
         code = ("unknown_version" if isinstance(err, tools.ToolValidationError)
-                and "unknown result version" in err.detail
+                and ("unknown result version" in err.detail
+                     or "unknown record_event version" in err.detail
+                     or "unknown record_request version" in err.detail)
                 else _client_refusal(err, "call"))
         _refuse(code)
         return 2
