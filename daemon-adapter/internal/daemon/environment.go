@@ -7,9 +7,13 @@ package daemon
 // Go VCS build metadata is unavailable; no synthetic commit is used.
 // MV_SESSION_ID, MV_CORE_INSTANCE and MV_DAEMON_INSTANCE supply trusted core
 // registration, required by the existing client-first core handshake.
+// [TARGET, unit decision] The wire owner drains cancelled input on native return;
+// direct Manager callers keep the explicit DrainInput contract. Replay creation
+// is anchored to a descriptor obtained by a canonical no-symlink directory walk.
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -48,10 +52,12 @@ func RuntimeFromEnv() (Runtime, error) {
 		}
 	}
 	state := os.Getenv("MV_SRF_STATE_DIR")
-	if err := os.Mkdir(state, 0700); err != nil && !os.IsExist(err) {
-		return zero, configuration(err.Error())
+	stateFile, err := openStateDir(state)
+	if err != nil {
+		return zero, configuration("private canonical state directory required: " + err.Error())
 	}
-	st, err := os.Lstat(state)
+	defer stateFile.Close()
+	st, err := stateFile.Stat()
 	if err != nil || st.Mode() != os.ModeDir|0700 {
 		return zero, configuration("private state directory required")
 	}
@@ -101,7 +107,7 @@ func RuntimeFromEnv() (Runtime, error) {
 
 	handler := wireHandler(manager, profiles, pubs, origin)
 	cfg := ipc.Config{SocketPath: filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "metaviewer", "core.sock"), UID: uint32(os.Getuid()), MaxFrameBytes: 1 << 20, MaxDepth: 32, MaxStringBytes: 65536, MaxKeys: 256, MaxArrayItems: 4096, MaxReplayEntries: 100000, MaxConnections: 1, HelloTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, ProbeTimeout: time.Second, ShutdownTimeout: 5 * time.Second}
-	authority, err := newClientAuthority(filepath.Join(state, "wire-replay.jsonl"), origin)
+	authority, err := newClientAuthority(fmt.Sprintf("/proc/self/fd/%d/wire-replay.jsonl", stateFile.Fd()), origin)
 	if err != nil {
 		closePubs()
 		return zero, configuration(err.Error())
@@ -142,11 +148,19 @@ func RuntimeFromEnv() (Runtime, error) {
 	}
 	probe.From, probe.To = probe.To, probe.From
 	authority.bound = &probe
+	welcomed := false
 	return Runtime{Config: cfg, Policy: policy, Handler: func(ctx context.Context, e ipc.Envelope) ([]json.RawMessage, error) {
 		var header struct{ Schema string }
 		_ = json.Unmarshal(e.Body, &header)
 		if header.Schema == "hello/v0.2" {
-			authority.origin = monotonic()
+			if welcomed {
+				return nil, &cli.Fault{Code: "handshake", Detail: "hello already accepted"}
+			}
+			origin := monotonic()
+			if origin == 0 {
+				return nil, configuration("CLOCK_MONOTONIC unavailable")
+			}
+			authority.origin = origin
 			fresh, err := capsule.NewRuntime(capsule.Config{Profiles: profiles, OriginNS: authority.origin, MaxSurfaces: 16, MaxOutputBytes: 1 << 20, Timeout: 90 * time.Second}, monotonic)
 			if err != nil {
 				return nil, err
@@ -164,6 +178,7 @@ func RuntimeFromEnv() (Runtime, error) {
 				subscriptions = append(subscriptions, sub)
 				byRoot[root] = sub
 			}
+			welcomed = true
 			handler = subscriptionHandler(fresh, profiles, byRoot, wireHandler(fresh, profiles, pubs, authority.origin))
 			return nil, nil
 		}
@@ -203,6 +218,20 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 			}
 		}
 		events, err := m.Handle(ctx, q)
+		// [TARGET, unit decision] The wire owner acknowledges cancelled native
+		// completion here; direct Manager callers retain explicit DrainInput.
+		if q.Op == "input" && err != nil {
+			var f *cli.Fault
+			if errors.As(err, &f) && f.Code == "SURFACE_NOT_AGENT_CONTROLLED" {
+				var input struct {
+					SurfaceID  string `json:"surface_id"`
+					ProposalID string `json:"proposal_id"`
+				}
+				_ = json.Unmarshal(q.Params, &input)
+				// A refusal before dispatch has no pending entry to drain.
+				_ = m.DrainInput(input.SurfaceID, input.ProposalID)
+			}
+		}
 		failure := func(err error) ([]json.RawMessage, error) { return wireFailure(e, q, err) }
 		if err != nil {
 			return failure(err)
@@ -272,4 +301,42 @@ func decodeProfiles(raw string, dst *map[string]capsule.Profile) error {
 	decoder := json.NewDecoder(strings.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	return decoder.Decode(dst)
+}
+
+// [TARGET, unit decision] Hold each directory descriptor while opening the next
+// component; anchor replay creation to the verified final descriptor.
+func openStateDir(path string) (*os.File, error) {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return nil, syscall.EINVAL
+	}
+	flags := syscall.O_RDONLY | syscall.O_DIRECTORY | syscall.O_NOFOLLOW | syscall.O_CLOEXEC
+	fd, err := syscall.Open("/", flags, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if fd >= 0 {
+			syscall.Close(fd)
+		}
+	}()
+	if path != "/" {
+		parts := strings.Split(path[1:], "/")
+		for i, part := range parts {
+			next, e := syscall.Openat(fd, part, flags, 0)
+			if e == syscall.ENOENT && i == len(parts)-1 {
+				if e = syscall.Mkdirat(fd, part, 0700); e != nil && e != syscall.EEXIST {
+					return nil, e
+				}
+				next, e = syscall.Openat(fd, part, flags, 0)
+			}
+			if e != nil {
+				return nil, e
+			}
+			syscall.Close(fd)
+			fd = next
+		}
+	}
+	file := os.NewFile(uintptr(fd), path)
+	fd = -1
+	return file, nil
 }

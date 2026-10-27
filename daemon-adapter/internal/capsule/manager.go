@@ -231,6 +231,9 @@ func (m *Manager) create(ctx context.Context, r Request, version string) ([]json
 	active := len(m.quarantined)
 	for _, b := range m.bindings {
 		if b.Surface.State != "destroyed" {
+			if b.Surface.ProfileID == q.ProfileID {
+				return nil, fault("binding", "profile already bound")
+			}
 			active++
 		}
 	}
@@ -383,6 +386,9 @@ func (m *Manager) Capture(ctx context.Context, id string) (Binding, NativeFrame,
 	if !ok || b.Surface.State != "active" || m.destroying[id] {
 		return Binding{}, NativeFrame{}, fault("surface", "capture requires an active surface")
 	}
+	if m.hasPending(id) {
+		return Binding{}, NativeFrame{}, fault("POLICY", "input must be drained before capture")
+	}
 	args := []string{"frame", "--container", b.Container}
 	if b.Window != "" {
 		args = append(args, "--window", b.Window)
@@ -500,6 +506,9 @@ func (m *Manager) input(ctx context.Context, r Request, version string) ([]json.
 	if pending.cancelled {
 		return nil, fault("SURFACE_NOT_AGENT_CONTROLLED", "input cancelled by control takeover")
 	}
+	if m.bindings[q.SurfaceID].Surface.State != "active" {
+		return nil, fault("surface", "surface lost during input")
+	}
 	if e != nil {
 		return nil, e
 	}
@@ -538,6 +547,9 @@ func (m *Manager) input(ctx context.Context, r Request, version string) ([]json.
 		if e := run.Err(); e != nil {
 			return nil, e
 		}
+	}
+	if m.bindings[q.SurfaceID].Surface.State != "active" {
+		return nil, fault("surface", "surface lost during input verification")
 	}
 	return []json.RawMessage{event(version, "input_applied", struct {
 		SurfaceID  string `json:"surface_id"`

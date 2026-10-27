@@ -2,6 +2,8 @@ package daemon
 
 // [TARGET, unit decision] Replay reservations are fsynced before dispatch.
 // The bounded private ledger has an exclusive lock; corruption fails closed.
+// [TARGET, unit decision] Failed appends are truncated and synced before retry;
+// an unverified rollback disables further reservations for this authority.
 import (
 	"bufio"
 	"context"
@@ -21,8 +23,18 @@ type replayEntry struct {
 	Seq   uint64
 	Nonce string
 }
+
+// replayFile permits deterministic disk-failure tests without changing persistence.
+type replayFile interface {
+	io.Writer
+	Stat() (os.FileInfo, error)
+	Sync() error
+	Truncate(int64) error
+	Close() error
+}
 type clientAuthority struct {
-	file        *os.File
+	file        replayFile
+	failed      bool
 	seq         map[ipc.SenderKey]uint64
 	nonces      map[string]bool
 	count       int
@@ -88,9 +100,15 @@ func nonceKey(r replayEntry) string {
 	}{r.Key, r.Nonce})
 	return string(b)
 }
-func (a *clientAuthority) admit(r replayEntry) error {
+func (a *clientAuthority) check(r replayEntry) error {
 	if a.count >= 100000 || r.Seq == 0 || r.Seq <= a.seq[r.Key] || r.Nonce == "" || a.nonces[nonceKey(r)] {
 		return errors.New("replay or capacity refused")
+	}
+	return nil
+}
+func (a *clientAuthority) admit(r replayEntry) error {
+	if err := a.check(r); err != nil {
+		return err
 	}
 	a.seq[r.Key] = r.Seq
 	a.nonces[nonceKey(r)] = true
@@ -112,7 +130,10 @@ func (a *clientAuthority) Authenticate(_ context.Context, c ipc.PeerCredentials,
 }
 func (a *clientAuthority) Reserve(_ context.Context, key ipc.SenderKey, seq uint64, nonce string) error {
 	r := replayEntry{key, seq, nonce}
-	if err := a.admit(r); err != nil {
+	if a.failed {
+		return errors.New("replay rollback unverified")
+	}
+	if err := a.check(r); err != nil {
 		return err
 	}
 	b, err := json.Marshal(r)
@@ -123,15 +144,37 @@ func (a *clientAuthority) Reserve(_ context.Context, key ipc.SenderKey, seq uint
 	if a.bytes+int64(len(b)) > 32<<20 {
 		return errors.New("replay byte capacity refused")
 	}
-	a.bytes += int64(len(b))
-	n, err := a.file.Write(b)
+	st, err := a.file.Stat()
 	if err != nil {
 		return err
 	}
-	if n != len(b) {
-		return io.ErrShortWrite
+	rollback := func(cause error) error {
+		if err := a.file.Truncate(st.Size()); err != nil {
+			a.failed = true
+			return errors.Join(cause, err)
+		}
+		if err := a.file.Sync(); err != nil {
+			a.failed = true
+			return errors.Join(cause, err)
+		}
+		return cause
 	}
-	return a.file.Sync()
+	n, err := a.file.Write(b)
+	if err != nil {
+		return rollback(err)
+	}
+	if n != len(b) {
+		return rollback(io.ErrShortWrite)
+	}
+	if err := a.file.Sync(); err != nil {
+		return rollback(err)
+	}
+	// Commit replay state only after durable append. check already passed.
+	if err := a.admit(r); err != nil {
+		return rollback(err)
+	}
+	a.bytes += int64(len(b))
+	return nil
 }
 func (a *clientAuthority) Wrap(_ context.Context, in ipc.Envelope, body json.RawMessage) (ipc.Envelope, error) {
 	key := ipc.SenderKey{SessionID: in.SessionID, Component: in.To.Component, Instance: in.To.Instance}
