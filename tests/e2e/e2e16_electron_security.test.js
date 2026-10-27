@@ -25,7 +25,7 @@ function audit(report) {
   assert.deepEqual(report.facade, ['authority', 'capture', 'load', 'loadSettings', 'nestedDepth',
     'recordingDestination', 'save', 'saveSettings', 'selfCapsuleId', 'sideTerminal']);
   assert.deepEqual(report.authority, ['intent', 'propose', 'subscribeFrames']);
-  assert.deepEqual(report.capture, ['list', 'recordStart', 'recordStop', 'screenshot', 'subscribe']);
+  assert.deepEqual(report.capture, ['export', 'list', 'recordStart', 'recordStop', 'screenshot', 'subscribe']);
   assert.deepEqual(report.terminal, ['open', 'setEnabled']);
 }
 
