@@ -6,11 +6,14 @@ package frames
 // [TARGET, unit decision] Terminal tasks release capacity automatically. Retain
 // at most MaxSubscriptions recent failures for TerminalError, clearing a
 // surface's prior failure on resubscription or explicit unsubscribe.
+// [TARGET, unit decision] Poll deadlines use the monotonic session clock.
+// Missed deadlines are skipped, counted across subscriptions, and never queued.
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"metaviewer/daemon-adapter/internal/capsule"
@@ -32,6 +35,27 @@ type task struct {
 	done   chan struct{}
 	err    error
 }
+
+type pollTimer interface {
+	Ticks() <-chan time.Time
+	Reset(time.Duration) bool
+	Stop() bool
+}
+
+type pollClock interface {
+	Now() time.Time
+	NewTimer(time.Duration) pollTimer
+}
+
+type monotonicPollClock struct{}
+type realPollTimer struct{ *time.Timer }
+
+func (monotonicPollClock) Now() time.Time { return time.Now() }
+func (monotonicPollClock) NewTimer(d time.Duration) pollTimer {
+	return realPollTimer{time.NewTimer(d)}
+}
+func (t realPollTimer) Ticks() <-chan time.Time { return t.C }
+
 type Subscriptions struct {
 	mu        sync.Mutex
 	ctx       context.Context
@@ -44,7 +68,13 @@ type Subscriptions struct {
 	failures  map[string]*task
 	failedIDs []string
 	closed    bool
+	clock     pollClock
+	skipped   atomic.Uint64
 }
+
+// SkippedPolls returns missed cadence deadlines over this service's lifetime.
+// It excludes delivery drops, whose existing policy is unchanged.
+func (s *Subscriptions) SkippedPolls() uint64 { return s.skipped.Load() }
 
 func NewSubscriptions(ctx context.Context, cfg SubscriptionConfig, source Source, publisher *Publisher, emit Emit) (*Subscriptions, error) {
 	if ctx == nil || cfg.MaxSubscriptions < 1 || cfg.PollInterval <= 0 || cfg.CaptureTimeout <= 0 || cfg.ShutdownTimeout <= 0 || source == nil || publisher == nil || emit == nil {
@@ -54,7 +84,7 @@ func NewSubscriptions(ctx context.Context, cfg SubscriptionConfig, source Source
 		return nil, e
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	return &Subscriptions{ctx: ctx, cancel: cancel, cfg: cfg, source: source, publisher: publisher, emit: emit, tasks: make(map[string]*task), failures: make(map[string]*task)}, nil
+	return &Subscriptions{ctx: ctx, cancel: cancel, cfg: cfg, source: source, publisher: publisher, emit: emit, tasks: make(map[string]*task), failures: make(map[string]*task), clock: monotonicPollClock{}}, nil
 }
 func (s *Subscriptions) Subscribe(ctx context.Context, id string) error {
 	if e := ctx.Err(); e != nil {
@@ -95,13 +125,17 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 		close(t.done)
 	}()
 	defer t.cancel()
-	timer := time.NewTimer(0)
+	next := s.clock.Now()
+	timer := s.clock.NewTimer(0)
 	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-timer.C:
+		case <-timer.Ticks():
+		}
+		if ctx.Err() != nil {
+			return
 		}
 		capture, cancel := context.WithTimeout(ctx, s.cfg.CaptureTimeout)
 		var binding capsule.Binding
@@ -190,7 +224,16 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 			t.err = e
 			return
 		}
-		timer.Reset(s.cfg.PollInterval)
+		next = next.Add(s.cfg.PollInterval)
+		now := s.clock.Now()
+		if !next.After(now) {
+			missed := now.Sub(next)/s.cfg.PollInterval + 1
+			s.skipped.Add(uint64(missed))
+			// Advance from now by the remainder to avoid overflowing a
+			// duration when a long stall misses many intervals.
+			next = now.Add(s.cfg.PollInterval - now.Sub(next)%s.cfg.PollInterval)
+		}
+		timer.Reset(next.Sub(now))
 	}
 }
 
