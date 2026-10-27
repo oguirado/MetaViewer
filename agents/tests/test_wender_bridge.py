@@ -115,9 +115,16 @@ class WenderBridgeTests(unittest.TestCase):
             bad = reply()
             bad["target_node"]["box"] = box
             bad["state"]["nodes"][0]["box"] = box
-            with self.subTest(box=box), self.assertRaises(SurfaceError) as caught:
-                self.run_plan(self.adapter(bad))
-            self.assertEqual(str(caught.exception), "alignment: click")
+            if box == [10, 20, 0, 20]:
+                # Invalid state geometry now fails at the earlier wire gate.
+                with self.subTest(box=box), self.assertRaises(ObservationError) as caught:
+                    self.run_plan(self.adapter(bad))
+                self.assertEqual(caught.exception.code, "bad_shape")
+                self.assertIn("state node box invalid", str(caught.exception))
+            else:
+                with self.subTest(box=box), self.assertRaises(SurfaceError) as caught:
+                    self.run_plan(self.adapter(bad))
+                self.assertEqual(str(caught.exception), "alignment: click")
 
     def test_nonactionable_target_and_click_outside_target(self):
         self.run_plan(self.adapter())

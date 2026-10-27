@@ -12,8 +12,8 @@ only through its CLI over an explicit checkout.
 schema/frame_sha256/width/height/elements, with bbox/role/name/score_ppm rows.
 It is visual evidence, not Wender's richer fused/actionable table. Scores use
 nearest-integer ppm (ties to even), matching the local vision boundary.
-TODO [TARGET, unit decision]: S1 supplies resolve_locked_component(name);
-verified selection requires its environment-selected checkout to match ve_root.
+Optional lock verification requires the environment-selected checkout to match
+ve_root and maps resolver failures to typed perception errors.
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
+from .deps_lock import DependencyLockError
 from .base import (
     Frame,
     PerceptionAdapter,
@@ -179,20 +180,32 @@ def _resolve_ve_root(ve_root: str | Path | None, *,
     raw = ve_root if ve_root is not None else os.environ.get("VQA_VE_ROOT")
     if raw is None or (isinstance(raw, str) and not raw):
         _fail("unavailable", "ve_root or VQA_VE_ROOT is required")
-    assert raw is not None
+    if not isinstance(raw, (str, Path)):
+        _fail("unavailable", "vision-engine checkout is not a path")
     try:
         root = Path(raw).resolve()
-    except OSError:
+        if not root.is_dir():
+            _fail("unavailable", "vision-engine checkout is not a directory")
+    except (OSError, ValueError, RuntimeError):
         _fail("unavailable", "vision-engine checkout is not a directory")
         raise AssertionError("unreachable")
-    if not root.is_dir():
-        _fail("unavailable", "vision-engine checkout is not a directory")
     if verify_lock:
         try:
             from .deps_lock import resolve_locked_component
         except ImportError as exc:
             raise PerceptionError("unavailable", "dependency resolver unavailable") from exc
-        locked_root = Path(resolve_locked_component("vision-engine")).resolve()
+        try:
+            locked = resolve_locked_component("vision-engine")
+        except DependencyLockError as exc:
+            raise PerceptionError(exc.code, str(exc)) from exc
+        if not isinstance(locked, (str, Path)):
+            _fail("unavailable", "dependency resolver returned no checkout")
+        try:
+            locked_root = Path(locked).resolve()
+            if not locked_root.is_dir():
+                _fail("unavailable", "verified checkout is not a directory")
+        except (OSError, ValueError, RuntimeError) as exc:
+            raise PerceptionError("unavailable", "verified checkout is not a directory") from exc
         if locked_root != root:
             _fail("commit_mismatch", "verified checkout differs from ve_root")
     return root

@@ -17,6 +17,12 @@ PRODUCT = Path(__file__).resolve().parents[1] / "metaviewer_agents"
 VCORE = "perception/vcore.py"
 SITES = {"VCorePerceptionAdapter.perceive", "VCorePerceptionAdapter.run_vcore"}
 ENV_KEYS = {"PATH", "HOME", "LANG", "VQA_VE_ROOT", "MV_CORE_CONFIG", "XDG_RUNTIME_DIR"}
+# The pinned-component resolver alone inspects Git provenance through _git.
+DEPS_LOCK = "perception/deps_lock.py"
+# Each key selects the checkout whose revision must match the dependency lock.
+COMPONENT_ROOT_KEYS = {"vision-engine": "VQA_VE_ROOT", "wender-agent": "MV_WENDER_ROOT"}
+# Wender's bounded pipe helper executes the explicitly validated planner argv.
+WENDER = "wender_bridge.py"
 
 
 def process_audit(source, filename):
@@ -29,7 +35,7 @@ def process_audit(source, filename):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 aliases[alias.asname or alias.name] = alias.name
-                if alias.name == "subprocess" and (filename != VCORE or alias.asname):
+                if alias.name == "subprocess" and (filename not in {VCORE, DEPS_LOCK, WENDER} or alias.asname):
                     violations.append("subprocess import")
         if isinstance(node, ast.ImportFrom):
             if node.module == "subprocess":
@@ -66,6 +72,38 @@ def process_audit(source, filename):
                     function = parent
             parent = parents.get(parent)
         site = ".".join(reversed(scope))
+        if filename == WENDER and site == "_run_bounded":
+            expected_calls = {
+                "subprocess.Popen": '''subprocess.Popen(command, cwd=cwd, env=env,
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)''',
+                "subprocess.CompletedProcess": '''subprocess.CompletedProcess(command,
+                    process.returncode, bytes(outputs[process.stdout]), b"")''',
+            }
+            expected = expected_calls.get(name)
+            if expected is not None and ast.dump(node) == ast.dump(ast.parse(expected).body[0].value):
+                if name == "subprocess.Popen":
+                    sites.append(site)
+                continue
+        if filename == DEPS_LOCK and name == "subprocess.run" and site == "_git":
+            sites.append(site)
+            # Admit only the existing bounded, scrubbed Git provenance call.
+            expected = ast.parse('''subprocess.run(
+                ["git", "-c", "core.fsmonitor=false", "-C", str(root), *arguments],
+                env=environment, stdin=subprocess.DEVNULL, capture_output=True,
+                text=True, encoding="utf-8", errors="strict", timeout=2.0,
+                check=False)''').body[0].value
+            if ast.dump(node) != ast.dump(expected):
+                violations.append("unbounded Git spawn")
+            environments = [child.value for child in ast.walk(function)
+                            if isinstance(child, ast.Assign)
+                            and any(isinstance(target, ast.Name) and target.id == "environment"
+                                    for target in child.targets)]
+            scrubbed = ast.parse('''{"PATH": os.environ.get("PATH", os.defpath),
+                "HOME": os.devnull, "LANG": "C", "GIT_CONFIG_NOSYSTEM": "1"}''',
+                                 mode="eval").body
+            if len(environments) != 1 or ast.dump(environments[0]) != ast.dump(scrubbed):
+                violations.append("unscrubbed Git environment")
+            continue
         if filename != VCORE or name != "subprocess.run" or site not in SITES:
             violations.append("unapproved spawn")
             continue
@@ -88,7 +126,7 @@ def process_audit(source, filename):
     return violations, Counter(sites)
 
 
-def environment_audit(source):
+def environment_audit(source, filename=None):
     """Reject credential keys, dynamic lookup and wholesale env inheritance."""
     tree = ast.parse(source)
     parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
@@ -125,6 +163,19 @@ def environment_audit(source):
         keys = set()
         if isinstance(expression, ast.Constant) and isinstance(expression.value, str):
             keys.add(expression.value)
+        elif (filename == DEPS_LOCK and isinstance(expression, ast.Subscript)
+              and ast.unparse(expression) == "_ROOT_VARIABLES[name]"):
+            # Admit the resolver's literal component mapping, never arbitrary dynamic keys.
+            mappings = [child.value for child in tree.body if isinstance(child, ast.Assign)
+                        and any(isinstance(target, ast.Name) and target.id == "_ROOT_VARIABLES"
+                                for target in child.targets)]
+            if len(mappings) == 1 and isinstance(mappings[0], ast.Dict):
+                try:
+                    mapping = ast.literal_eval(mappings[0])
+                except (ValueError, TypeError):
+                    mapping = None
+                if mapping == COMPONENT_ROOT_KEYS:
+                    continue
         elif isinstance(expression, ast.Name):
             # The only admitted dynamic key is a lexical loop over literal keys.
             parent = parents.get(node)
@@ -136,7 +187,9 @@ def environment_audit(source):
                         keys.update(item.value for item in parent.iter.elts)
                     break
                 parent = parents.get(parent)
-        if not keys or not keys <= ENV_KEYS:
+        # Wender alone may select its locked planner checkout from this key.
+        allowed = ENV_KEYS | ({"MV_WENDER_ROOT"} if filename == WENDER else set())
+        if not keys or not keys <= allowed:
             violations.append("unapproved environment key")
     return violations
 
@@ -152,7 +205,7 @@ class HygieneGapTests(unittest.TestCase):
             violations, found = process_audit(path.read_text(encoding="utf-8"), relative)
             self.assertEqual(violations, [], relative)
             sites.update(found)
-        self.assertEqual(sites, Counter({site: 1 for site in SITES}))
+        self.assertEqual(sites, Counter({site: 1 for site in SITES | {"_git", "_run_bounded"}}))
         source = (PRODUCT / VCORE).read_text(encoding="utf-8")
         for old, new in (("subprocess.run(", "subprocess.Popen("),
                          ("timeout=self.timeout", "shell=True, timeout=self.timeout")):
@@ -170,7 +223,8 @@ class HygieneGapTests(unittest.TestCase):
     def test_environment_reads_are_explicit_and_never_credentials(self):
         # Mutation: replace MV_CORE_CONFIG lookup in mvctl with OPENAI_API_KEY.
         for path in sorted(PRODUCT.rglob("*.py")):
-            self.assertEqual(environment_audit(path.read_text(encoding="utf-8")), [], str(path))
+            self.assertEqual(environment_audit(path.read_text(encoding="utf-8"),
+                                              path.relative_to(PRODUCT).as_posix()), [], str(path))
         for key in ("OPENAI_API_KEY", "ACCESS_TOKEN", "CLIENT_SECRET"):
             for expression in (f'os.getenv("{key}")', f'os.environ.get("{key}")',
                                f'os.environ["{key}"]'):
@@ -178,6 +232,45 @@ class HygieneGapTests(unittest.TestCase):
         for code in ("import os\ndict(os.environ)", "import os\nos.environ.get(key)",
                      "from os import environ as env\nenv.get('ACCESS_TOKEN')"):
             self.assertTrue(environment_audit(code))
+
+    def test_dependency_lock_exceptions_remain_exact_and_file_scoped(self):
+        source = (PRODUCT / DEPS_LOCK).read_text(encoding="utf-8")
+        self.assertEqual(process_audit(source, DEPS_LOCK), ([], Counter({"_git": 1})))
+        self.assertEqual(environment_audit(source, DEPS_LOCK), [])
+        self.assertIn("unapproved spawn", process_audit(source, "other.py")[0])
+        self.assertIn("subprocess import", process_audit(source, "other.py")[0])
+        self.assertTrue(environment_audit(source, "other.py"))
+        for old, new in (("timeout=2.0", "timeout=None"),
+                         ('["git",', '["other",'),
+                         ("env=environment", "env=None"),
+                         ('"HOME": os.devnull', '"HOME": os.environ.get("HOME")'),
+                         ("def _git(", "def another_spawn("),
+                         ("subprocess.run(", "subprocess.Popen(")):
+            mutant = source.replace(old, new)
+            self.assertNotEqual(mutant, source)
+            with self.subTest(mutation=new):
+                self.assertTrue(process_audit(mutant, DEPS_LOCK)[0])
+        mutant = source.replace('"MV_WENDER_ROOT"', '"NEW_UNAPPROVED_ROOT"')
+        self.assertNotEqual(mutant, source)
+        self.assertTrue(environment_audit(mutant, DEPS_LOCK))
+        for filename in (DEPS_LOCK, "other.py"):
+            self.assertTrue(environment_audit(
+                'import os\nos.getenv("NEW_UNAPPROVED_ROOT")', filename))
+
+    def test_wender_pipe_exception_remains_exact_and_file_scoped(self):
+        source = (PRODUCT / WENDER).read_text(encoding="utf-8")
+        self.assertEqual(process_audit(source, WENDER), ([], Counter({"_run_bounded": 1})))
+        self.assertEqual(environment_audit(source, WENDER), [])
+        self.assertIn("unapproved spawn", process_audit(source, "other.py")[0])
+        for old, new in (("env=env", "env=None"),
+                         ("stdin=subprocess.PIPE", "stdin=None"),
+                         ("subprocess.Popen(command,", "subprocess.Popen('shell string',"),
+                         ("def _run_bounded(", "def another_spawn(")):
+            mutant = source.replace(old, new)
+            self.assertNotEqual(source, mutant)
+            self.assertTrue(process_audit(mutant, WENDER)[0])
+        self.assertTrue(environment_audit(source.replace(
+            '"MV_WENDER_ROOT"', '"NEW_UNAPPROVED_ROOT"'), WENDER))
 
     def test_timeout_kills_and_reaps_actual_engine_on_both_spawn_paths(self):
         # Mutation: timeout=self.timeout -> timeout=None at either spawn site.

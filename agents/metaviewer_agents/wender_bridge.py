@@ -7,7 +7,9 @@ It reads {observation, element_table, goal} and writes exactly
 are admitted here; their coordinates must fall inside the custody-checked
 actionable target. This adapter does not dispatch or confer admission.
 State fields follow the pinned wender.state/v1 wire schema; no private
-implementation is imported or embedded. Checkout pinning belongs to preflight.
+implementation is imported or embedded. Optional verify_lock checks checkout
+pinning before planning. Depth-tree consistency remains deferred for planner
+compatibility; the adapter has no consumer for that invariant.
 """
 
 from __future__ import annotations
@@ -17,8 +19,11 @@ import math
 import os
 from pathlib import Path
 import re
+import selectors
+import time
 import subprocess
 
+from .perception.deps_lock import DependencyLockError
 from .executor import AdmittedExecutor, SurfaceError
 from .observe import (
     ObservationError, _reject_non_canonical, compute_battery_state_sha256,
@@ -51,16 +56,18 @@ def validate_state(state):
     for key in ("ax_sha256", "ax_stable_sha256"):
         _require(_hex(state[key], 64), key + " invalid")
     source, prune = state["source"], state["prune"]
-    _require(isinstance(source, dict) and {"kind", "url", "title"} <= source.keys(),
+    _require(isinstance(source, dict) and set(source) == {"kind", "url", "title"},
              "state source invalid")
     _require(source["kind"] in ("cdp", "atspi", "godot", "vision")
              and all(source[k] is None or isinstance(source[k], str)
                      for k in ("url", "title")), "state source invalid")
-    _require(isinstance(prune, dict) and isinstance(prune.get("name"), str)
+    _require(isinstance(prune, dict) and set(prune) == {"name", "version"}
+             and isinstance(prune.get("name"), str)
              and type(prune.get("version")) is int, "state prune invalid")
     viewport = state["viewport"]
     _require(viewport is None or (isinstance(viewport, dict)
-             and all(type(v) is int for v in viewport.values())), "state viewport invalid")
+             and set(viewport) == {"w", "h"}
+             and all(type(v) is int and v >= 0 for v in viewport.values())), "state viewport invalid")
     _require(isinstance(state["nodes"], list), "state nodes invalid")
     seen, actionable = set(), []
     for node in state["nodes"]:
@@ -83,13 +90,14 @@ def validate_state(state):
         _require(type(node["actionable"]) is bool, "state node actionable invalid")
         box = node["box"]
         _require(box is None or (isinstance(box, list) and len(box) == 4
-                 and all(type(v) is int for v in box)), "state node box invalid")
+                 and all(type(v) is int for v in box)
+                 and box[2] >= 1 and box[3] >= 1), "state node box invalid")
         if node["actionable"]:
             actionable.append(ident)
     _require(isinstance(state["actionable"], list) and state["actionable"] == actionable,
              "state actionable membership invalid")
     counts = state["counts"]
-    _require(isinstance(counts, dict) and {"raw", "nodes", "actionable"} <= counts.keys()
+    _require(isinstance(counts, dict) and set(counts) == {"raw", "nodes", "actionable"}
              and all(type(v) is int and v >= 0 for v in counts.values()), "state counts invalid")
     _require(counts["nodes"] == len(seen) and counts["actionable"] == len(actionable)
              and counts["raw"] >= len(seen), "state counts disagree")
@@ -104,21 +112,91 @@ def _unique_object(pairs):
     return result
 
 
+def _run_bounded(command, *, cwd, env, request, timeout):
+    """Drain both outputs while feeding stdin, with fixed byte ceilings."""
+    deadline = time.monotonic() + timeout
+    with subprocess.Popen(command, cwd=cwd, env=env, stdin=subprocess.PIPE,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+        try:
+            outputs = {process.stdout: bytearray(), process.stderr: bytearray()}
+            limits = {process.stdout: 1024 * 1024, process.stderr: 64 * 1024}
+            pending = memoryview(request)
+            with selectors.DefaultSelector() as selector:
+                for stream in (process.stdin, process.stdout, process.stderr):
+                    os.set_blocking(stream.fileno(), False)
+                    selector.register(stream, selectors.EVENT_WRITE if stream is process.stdin
+                                      else selectors.EVENT_READ)
+                while selector.get_map():
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise subprocess.TimeoutExpired(command, timeout)
+                    for key, _ in selector.select(remaining):
+                        stream = key.fileobj
+                        if stream is process.stdin:
+                            try:
+                                written = os.write(stream.fileno(), pending[:4096])
+                                pending = pending[written:]
+                            except BrokenPipeError:
+                                pending = pending[:0]
+                            if not pending:
+                                selector.unregister(stream)
+                                stream.close()
+                        else:
+                            buffer = outputs[stream]
+                            chunk = os.read(stream.fileno(), min(65536, limits[stream] - len(buffer) + 1))
+                            if not chunk:
+                                selector.unregister(stream)
+                            else:
+                                buffer.extend(chunk)
+                                if len(buffer) > limits[stream]:
+                                    raise ObservationError("bad_shape", "planner output exceeds maximum size")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(command, timeout)
+            process.wait(timeout=remaining)
+            return subprocess.CompletedProcess(command, process.returncode,
+                                               bytes(outputs[process.stdout]), b"")
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+
+
 class WenderSubprocessAdapter:
     """Host-configured planner with no files, shell, or inherited credentials.
 
-    ``timeout`` is a positive, finite duration in seconds, passed to run().
+    ``timeout`` is a positive, finite duration in seconds, enforced across pipe I/O and process exit.
     ``battery_state_sha256`` is cleared before each attempt, and populated
     only after every response and custody check succeeds.
     """
 
-    def __init__(self, *, command, wender_root=None, timeout=10):
+    def __init__(self, *, command, wender_root=None, timeout=10, verify_lock=False):
         raw = wender_root if wender_root is not None else os.environ.get("MV_WENDER_ROOT")
-        if raw is None or not str(raw):
+        if not isinstance(raw, (str, Path)) or not str(raw):
             raise ObservationError("unavailable", "MV_WENDER_ROOT or wender_root required")
-        self.wender_root = Path(raw).resolve()
-        if not self.wender_root.is_dir():
-            raise ObservationError("unavailable", "Wender checkout is not a directory")
+        try:
+            self.wender_root = Path(raw).resolve()
+            if not self.wender_root.is_dir():
+                raise ObservationError("unavailable", "Wender checkout is not a directory")
+        except (OSError, ValueError, RuntimeError) as exc:
+            raise ObservationError("unavailable", "Wender checkout is not a directory") from exc
+        _require(type(verify_lock) is bool, "verify_lock must be a boolean")
+        if verify_lock:
+            from .perception.deps_lock import resolve_locked_component
+            try:
+                locked = resolve_locked_component("wender-agent")
+            except DependencyLockError as exc:
+                raise ObservationError(exc.code, str(exc)) from exc
+            if not isinstance(locked, (str, Path)):
+                raise ObservationError("unavailable", "dependency resolver returned no checkout")
+            try:
+                locked_root = Path(locked).resolve()
+                if not locked_root.is_dir():
+                    raise ObservationError("unavailable", "verified checkout is not a directory")
+            except (OSError, ValueError, RuntimeError) as exc:
+                raise ObservationError("unavailable", "verified checkout is not a directory") from exc
+            if locked_root != self.wender_root:
+                raise ObservationError("commit_mismatch", "verified checkout differs from wender_root")
         if (not isinstance(command, (list, tuple)) or not command
                 or any(not isinstance(arg, str) or not arg or "\x00" in arg for arg in command)):
             raise ValueError("command must be a nonempty argv sequence")
@@ -137,22 +215,39 @@ class WenderSubprocessAdapter:
                              generation=frame.get("generation"), contract_version="v0.2")
         _reject_non_canonical(element_table, 0)
         _require(isinstance(element_table, dict)
+                 and set(element_table) == {"schema", "frame_sha256", "width", "height", "elements"}
                  and element_table.get("schema") == "vqa.element-table/v1"
                  and isinstance(element_table.get("elements"), list), "element table invalid")
         for key, expected in (("frame_sha256", frame["sha256"]),
                               ("width", frame["width"]), ("height", frame["height"])):
             _require(type(element_table.get(key)) is type(expected)
                      and element_table[key] == expected, "element table frame mismatch")
+        for row in element_table["elements"]:
+            _require(isinstance(row, dict) and set(row) == {"bbox", "role", "name", "score_ppm"},
+                     "element row keys invalid")
+            box = row["bbox"]
+            _require(isinstance(box, dict) and set(box) == {"x", "y", "w", "h"}
+                     and all(type(v) is int for v in box.values())
+                     and box["x"] >= 0 and box["y"] >= 0
+                     and box["w"] >= 1 and box["h"] >= 1
+                     and box["x"] + box["w"] <= frame["width"]
+                     and box["y"] + box["h"] <= frame["height"], "element bbox invalid")
+            _require(isinstance(row["role"], str) and isinstance(row["name"], str)
+                     and type(row["score_ppm"]) is int
+                     and 0 <= row["score_ppm"] <= 1_000_000, "element fields invalid")
         _require(isinstance(goal, str) and bool(goal.strip()), "goal required")
         request = json.dumps(dict(observation=observation, element_table=element_table, goal=goal),
                              sort_keys=True, separators=(",", ":"), ensure_ascii=False,
                              allow_nan=False).encode("utf-8")
-        env = {key: os.environ[key] for key in ("PATH", "LANG") if key in os.environ}
+        env = {}
+        for key in ("PATH", "LANG"):
+            value = os.environ.get(key)
+            if value is not None:
+                env[key] = value
         env.update(PYTHONPATH=str(self.wender_root), PYTHONDONTWRITEBYTECODE="1")
         try:
-            result = subprocess.run(self.command, cwd=self.wender_root, env=env,
-                                    input=request, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                    timeout=self.timeout, check=False)
+            result = _run_bounded(self.command, cwd=self.wender_root, env=env,
+                                  request=request, timeout=self.timeout)
         except subprocess.TimeoutExpired as exc:
             raise ObservationError("timeout", "Wender planner timed out") from exc
         except OSError as exc:
