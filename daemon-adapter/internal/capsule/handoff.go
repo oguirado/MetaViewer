@@ -23,16 +23,7 @@ func (m *Manager) nextInputEpoch(id string) uint64 {
 }
 
 func (m *Manager) beginCapture(id string) uint64 {
-	m.capturing[id]++
 	return m.inputEpochs[id]
-}
-
-func (m *Manager) endCapture(id string) {
-	if m.capturing[id] <= 1 {
-		delete(m.capturing, id)
-		return
-	}
-	m.capturing[id]--
 }
 
 func (m *Manager) hasPending(id string) bool {

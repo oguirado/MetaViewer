@@ -121,7 +121,6 @@ type Manager struct {
 	destroying  map[string]bool
 	pending     map[string]*pendingInput
 	inputEpochs map[string]uint64
-	capturing   map[string]int
 	used        map[string]bool
 	refresh     map[string]bool
 	views       map[string]bool
@@ -203,7 +202,7 @@ func NewManager(cfg Config, r cli.Runner, clock cli.Clock) (*Manager, error) {
 		copyProfiles[id] = p
 	}
 	cfg.Profiles = copyProfiles
-	return &Manager{cfg: cfg, runner: r, clock: clock, bindings: make(map[string]Binding), quarantined: make(map[string]bool), destroying: make(map[string]bool), pending: make(map[string]*pendingInput), inputEpochs: make(map[string]uint64), capturing: make(map[string]int), used: make(map[string]bool), refresh: make(map[string]bool), views: make(map[string]bool)}, nil
+	return &Manager{cfg: cfg, runner: r, clock: clock, bindings: make(map[string]Binding), quarantined: make(map[string]bool), destroying: make(map[string]bool), pending: make(map[string]*pendingInput), inputEpochs: make(map[string]uint64), used: make(map[string]bool), refresh: make(map[string]bool), views: make(map[string]bool)}, nil
 }
 func withinRAM(path string) bool {
 	return path == "/dev/shm" || len(path) > 9 && path[:9] == "/dev/shm/" && filepath.Clean(path) == path
@@ -560,6 +559,8 @@ func (m *Manager) destroy(ctx context.Context, r Request, version string) ([]jso
 	}
 	b.Surface.State = "destroyed"
 	m.bindings[q.SurfaceID] = b
+	delete(m.inputEpochs, q.SurfaceID)
+	delete(m.refresh, q.SurfaceID)
 	return []json.RawMessage{surfaceEvent(version, "state_changed", b.Surface)}, nil
 }
 
@@ -615,7 +616,6 @@ func (m *Manager) Capture(ctx context.Context, id string) (Binding, NativeFrame,
 	after := m.clock()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	defer m.endCapture(id)
 	current, ok := m.bindings[id]
 	if !ok || current.Surface.State != "active" || m.destroying[id] || current.Container != b.Container || current.RunID != b.RunID {
 		return Binding{}, NativeFrame{}, fault("surface", "capture requires an active surface")

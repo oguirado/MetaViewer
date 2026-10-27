@@ -5,8 +5,8 @@ package ipc
 // messages must retain that binding; reconnect/session migration is not implicit.
 // [TARGET, unit decision] Control operations preempt in-flight data while barrier
 // gates ensure data queued after take_control/release_control waits for completion;
-// lanes drain before session cancellation on exit, and sessionErr is checked on every
-// read-loop exit.
+// lanes drain before session cancellation on clean EOF while validation/route/schema/auth
+// failures cancel the session first, and sessionErr is checked on every read-loop exit.
 import (
 	"context"
 	"encoding/json"
@@ -161,26 +161,24 @@ func Connect(ctx context.Context, cfg Config, policy Policy, registration Envelo
 		}
 		in, err := policy.ValidateEnvelope(raw)
 		if err != nil {
-			err = exitLoop(err)
-			cancelSession()
-			return err
+			fail(err)
+			return exitLoop(err)
 		}
 		var body struct{ Schema, Component string }
 		if err = json.Unmarshal(in.Body, &body); err != nil {
-			err = exitLoop(err)
-			cancelSession()
-			return err
+			fail(err)
+			return exitLoop(err)
 		}
 		if in.Schema != "envelope/v0.2" || in.From != registration.From || in.To != registration.To || in.SessionID != registration.SessionID || in.Seq == 0 || in.Nonce == "" {
-			err = exitLoop(errors.New("registered core route refused"))
-			cancelSession()
-			return err
+			err = errors.New("registered core route refused")
+			fail(err)
+			return exitLoop(err)
 		}
 		isHello := first && body.Schema == "hello/v0.2" && body.Component == "core"
 		if !isHello && body.Schema != "surface_request/v0.2" {
-			err = exitLoop(errors.New("core surface request required"))
-			cancelSession()
-			return err
+			err = errors.New("core surface request required")
+			fail(err)
+			return exitLoop(err)
 		}
 		authority.Lock()
 		err = policy.Authenticate(ctx, cred, in)
@@ -189,9 +187,8 @@ func Connect(ctx context.Context, cfg Config, policy Policy, registration Envelo
 		}
 		authority.Unlock()
 		if err != nil {
-			err = exitLoop(err)
-			cancelSession()
-			return err
+			fail(err)
+			return exitLoop(err)
 		}
 		first = false
 		if isHello {

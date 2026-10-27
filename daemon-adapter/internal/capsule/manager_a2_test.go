@@ -3,6 +3,7 @@ package capsule
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -212,5 +213,76 @@ func TestA2HoldingsReadinessCompensation(t *testing.T) {
 				t.Fatal("quarantine disagrees with independent proof")
 			}
 		})
+	}
+}
+
+// RV8-ADAPTER (P2): terminal destroy must delete per-surface inputEpochs and refresh
+// entries while keeping m.used intact. Negative control: omitting destroy retains them.
+func TestRV8DestroyCleansPerSurfaceEpochAndRefreshMaps(t *testing.T) {
+	runLoop := func(t *testing.T, withDestroy bool) *Manager {
+		t.Helper()
+		m := testManager(t, &scriptRunner{})
+		m.cfg.MaxSurfaces = 1000
+		for i := range 1000 {
+			pid := "demo-" + strconv.Itoa(i)
+			m.cfg.Profiles[pid] = m.cfg.Profiles["demo"]
+			cid := "srf-id-demo-" + strconv.Itoa(i)
+			m.runner = a2Runner(func(_ context.Context, args []string, _ []byte) ([]byte, error) {
+				switch args[1] {
+				case "start":
+					return []byte(`{"container":"` + cid + `","run_id":"run-` + strconv.Itoa(i) + `","windows":[{"id":"w1","x":0,"y":0,"w":2,"h":1}]}`), nil
+				case "input":
+					return []byte(`{"surface_id":"w1","kind":"key","input_mono_ns":200,"focus_verified":true,"result":"ok"}`), nil
+				case "stop":
+					return []byte(`{"stopped":"` + cid + `","removed_verified":true}`), nil
+				}
+				t.Fatalf("unexpected command: %v", args)
+				return nil, nil
+			})
+			out, err := m.Handle(context.Background(), req("create", `{"kind":"browser","profile_id":"`+pid+`","geometry":{"w":2,"h":1}}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var ev struct {
+				Data struct {
+					Surface Surface `json:"surface"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(out[0], &ev); err != nil {
+				t.Fatal(err)
+			}
+			sid := ev.Data.Surface.SurfaceID
+			prop := "prop-" + strconv.Itoa(i)
+			if _, err := m.Handle(context.Background(), req("input", `{"surface_id":"`+sid+`","proposal_id":"`+prop+`","action":{"type":"key","keys":["a"]}}`)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := m.Handle(context.Background(), req("take_control", `{"surface_id":"`+sid+`","owner":"human"}`)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := m.Handle(context.Background(), req("release_control", `{"surface_id":"`+sid+`"}`)); err != nil {
+				t.Fatal(err)
+			}
+			if withDestroy {
+				if _, err := m.Handle(context.Background(), req("destroy", `{"surface_id":"`+sid+`"}`)); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		return m
+	}
+
+	// Negative control: without destroy, inputEpochs and refresh retain 1000 entries.
+	neg := runLoop(t, false)
+	if len(neg.inputEpochs) == 0 || len(neg.refresh) == 0 {
+		t.Fatalf("negative control failed: len(inputEpochs)=%d len(refresh)=%d, want >0", len(neg.inputEpochs), len(neg.refresh))
+	}
+
+	// Positive regression: with destroy, inputEpochs and refresh are cleaned to 0 while m.used stays intact.
+	pos := runLoop(t, true)
+	if len(pos.inputEpochs) != 0 || len(pos.refresh) != 0 {
+		t.Fatalf("leaked per-surface maps after destroy: len(inputEpochs)=%d len(refresh)=%d, want 0", len(pos.inputEpochs), len(pos.refresh))
+	}
+	if len(pos.used) != 1000 {
+		t.Fatalf("replay protection m.used modified: len(used)=%d, want 1000", len(pos.used))
 	}
 }

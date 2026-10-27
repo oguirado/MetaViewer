@@ -869,3 +869,206 @@ func TestStreamControlSequenceGateDrainingAndSessionErr(t *testing.T) {
 		t.Fatal("connectStreaming did not join on worker failure")
 	}
 }
+
+type rv8StreamPolicy struct {
+	lifecyclePolicy
+}
+
+func (p *rv8StreamPolicy) Authenticate(ctx context.Context, cred ipc.PeerCredentials, in ipc.Envelope) error {
+	if in.MsgID == "bad-auth" {
+		return fmt.Errorf("authentication refused")
+	}
+	return p.lifecyclePolicy.Authenticate(ctx, cred, in)
+}
+
+// RV8-ADAPTER (P1): validation/route/schema/auth failure branches in connectStreaming
+// must call fail(err) before exitLoop(err) so the session context cancels in-flight
+// handlers immediately, queued envelopes do not drain, and the caller receives the
+// typed error within <2s. Negative control: all-valid frames dispatch R1+R2.
+func TestRV8StreamFailureCancelsInFlightWorkersBeforeDrain(t *testing.T) {
+	for _, tc := range []string{"validate", "body-unmarshal", "route", "schema", "auth", "all-valid"} {
+		t.Run(tc, func(t *testing.T) {
+			sockDir := t.TempDir()
+			if err := os.Chmod(sockDir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			sockPath := filepath.Join(sockDir, "rv8.sock")
+			listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: sockPath, Net: "unix"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+
+			cfg := ipc.Config{SocketPath: sockPath, UID: uint32(os.Getuid()), MaxFrameBytes: 8192, MaxDepth: 32, MaxStringBytes: 4096, MaxKeys: 128, MaxArrayItems: 128, MaxReplayEntries: 128, MaxConnections: 1, HelloTimeout: 2 * time.Second, ReadTimeout: 5 * time.Second, WriteTimeout: 2 * time.Second, ProbeTimeout: time.Second, ShutdownTimeout: time.Second}
+			reg := ipc.Envelope{
+				Schema:    "envelope/v0.2",
+				MsgID:     "reg",
+				From:      ipc.Endpoint{Component: "core", Instance: "core-1"},
+				To:        ipc.Endpoint{Component: "daemon", Instance: "daemon-1"},
+				SessionID: "s-1",
+				Seq:       1,
+				Nonce:     "n-1",
+				Body:      json.RawMessage(`{"schema":"hello/v0.2","component":"daemon"}`),
+			}
+
+			r1Entered := make(chan struct{})
+			r1Release := make(chan struct{})
+			var r1SawCancel, r2Dispatched bool
+			var mu sync.Mutex
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				done <- connectStreaming(ctx, cfg, &rv8StreamPolicy{}, reg, func(c context.Context, e ipc.Envelope) ([]json.RawMessage, error) {
+					var body struct {
+						Schema, Op string
+					}
+					_ = json.Unmarshal(e.Body, &body)
+					if body.Schema == "hello/v0.2" {
+						return nil, nil
+					}
+					switch e.MsgID {
+					case "r1":
+						close(r1Entered)
+						select {
+						case <-c.Done():
+							mu.Lock()
+							r1SawCancel = true
+							mu.Unlock()
+							return nil, c.Err()
+						case <-r1Release:
+						case <-time.After(2200 * time.Millisecond):
+						}
+					case "r2":
+						mu.Lock()
+						r2Dispatched = true
+						mu.Unlock()
+					}
+					reply, _ := json.Marshal(map[string]string{"id": e.MsgID, "op": body.Op})
+					return []json.RawMessage{reply}, nil
+				})
+			}()
+
+			conn, err := listener.AcceptUnix()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			framer, err := ipc.NewFramer(conn, cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := framer.Read(ctx); err != nil {
+				t.Fatal(err)
+			}
+
+			sendEnv := func(env ipc.Envelope) {
+				t.Helper()
+				raw, _ := json.Marshal(env)
+				if err := framer.Write(ctx, raw); err != nil {
+					t.Fatal(err)
+				}
+			}
+			reqBody := json.RawMessage(`{"schema":"surface_request/v0.2","op":"input"}`)
+			sendEnv(ipc.Envelope{
+				Schema: "envelope/v0.2", MsgID: "r1", From: reg.From, To: reg.To, SessionID: reg.SessionID,
+				Seq: 1, Nonce: "n-1", Body: reqBody,
+			})
+			select {
+			case <-r1Entered:
+			case <-time.After(time.Second):
+				t.Fatal("r1 did not enter handler")
+			}
+			sendEnv(ipc.Envelope{
+				Schema: "envelope/v0.2", MsgID: "r2", From: reg.From, To: reg.To, SessionID: reg.SessionID,
+				Seq: 2, Nonce: "n-2", Body: reqBody,
+			})
+
+			if tc == "all-valid" {
+				close(r1Release)
+				_ = conn.CloseWrite()
+				for _, wantID := range []string{"r1", "r2"} {
+					rctx, rcancel := context.WithTimeout(ctx, 2*time.Second)
+					raw, err := framer.Read(rctx)
+					rcancel()
+					if err != nil {
+						t.Fatalf("expected reply %s, got %v", wantID, err)
+					}
+					var out ipc.Envelope
+					if err := json.Unmarshal(raw, &out); err != nil {
+						t.Fatal(err)
+					}
+					var msg struct{ ID string }
+					if err := json.Unmarshal(out.Body, &msg); err != nil || msg.ID != wantID {
+						t.Fatalf("got reply %s, want %s", out.Body, wantID)
+					}
+				}
+				select {
+				case <-done:
+				case <-time.After(2 * time.Second):
+					t.Fatal("connectStreaming did not exit after clean EOF")
+				}
+				mu.Lock()
+				gotR2 := r2Dispatched
+				mu.Unlock()
+				if !gotR2 {
+					t.Fatal("negative control failed: r2 was not dispatched")
+				}
+				return
+			}
+
+			start := time.Now()
+			switch tc {
+			case "validate":
+				if err := framer.Write(ctx, []byte(`[]`)); err != nil {
+					t.Fatal(err)
+				}
+			case "body-unmarshal":
+				sendEnv(ipc.Envelope{
+					Schema: "envelope/v0.2", MsgID: "bad-body", From: reg.From, To: reg.To, SessionID: reg.SessionID,
+					Seq: 3, Nonce: "n-3", Body: json.RawMessage(`[]`),
+				})
+			case "route":
+				sendEnv(ipc.Envelope{
+					Schema: "envelope/v0.2", MsgID: "bad-route", From: ipc.Endpoint{Component: "agents", Instance: "a-1"}, To: reg.To, SessionID: reg.SessionID,
+					Seq: 3, Nonce: "n-3", Body: reqBody,
+				})
+			case "schema":
+				sendEnv(ipc.Envelope{
+					Schema: "envelope/v0.2", MsgID: "bad-schema", From: reg.From, To: reg.To, SessionID: reg.SessionID,
+					Seq: 3, Nonce: "n-3", Body: json.RawMessage(`{"schema":"unknown/v0.2"}`),
+				})
+			case "auth":
+				sendEnv(ipc.Envelope{
+					Schema: "envelope/v0.2", MsgID: "bad-auth", From: reg.From, To: reg.To, SessionID: reg.SessionID,
+					Seq: 3, Nonce: "n-3", Body: reqBody,
+				})
+			}
+
+			var gotErr error
+			select {
+			case gotErr = <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatalf("connectStreaming did not abort in <2s on %s failure", tc)
+			}
+			elapsed := time.Since(start)
+			if elapsed >= 2*time.Second {
+				t.Fatalf("connectStreaming took %v (>= 2s) on %s failure", elapsed, tc)
+			}
+			if gotErr == nil {
+				t.Fatalf("expected non-nil error for %s, got nil", tc)
+			}
+			mu.Lock()
+			cancelled := r1SawCancel
+			dispatchedR2 := r2Dispatched
+			mu.Unlock()
+			if !cancelled {
+				t.Fatalf("r1 did not observe session cancellation on %s failure", tc)
+			}
+			if dispatchedR2 {
+				t.Fatalf("r2 was dispatched after %s failure", tc)
+			}
+		})
+	}
+}
