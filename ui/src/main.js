@@ -4,7 +4,7 @@ import App from './App.vue';
 import { createAuthorityAdapter, createAuthorityRuntime, createTerminalBroker, requireAck } from './core/hostAdapters.js';
 import { createSettingsHost } from './settings/settingsHost.js';
 import { parseStateQuery, resolveFixture } from './fixtures/resolveState.js';
-import { createFixtureRuntime } from './fixtures/fixtureRuntime.js';
+import { createFixtureRuntime, createLiveReplayMount, LIVE_REPLAY_FIXTURE } from './fixtures/fixtureRuntime.js';
 import 'capsule-ui-kit/theme.css';
 import './design/metaviewer.css';
 import { createWallLayout, migrateWallLayout } from './wall/layout.js';
@@ -43,7 +43,7 @@ const THEME_DATASET = Object.freeze({
 /** Mount selector for the single mount div owned by index.html. */
 const MOUNT_SELECTOR = '#metaviewer-app';
 const REFUSAL_PREFIX = 'MetaViewer cannot start: ';
-const PREVIEW_ERRORS = new Set(['ERR_UNKNOWN_FIXTURE_STATE', 'ERR_INVALID_STATE_QUERY', 'ERR_UNKNOWN_SCHEME', 'ERR_INVALID_SCHEME_QUERY']);
+const PREVIEW_ERRORS = new Set(['ERR_UNKNOWN_FIXTURE_STATE', 'ERR_INVALID_STATE_QUERY', 'ERR_UNKNOWN_SCHEME', 'ERR_INVALID_SCHEME_QUERY', 'ERR_INVALID_STEP_QUERY', 'ERR_UNKNOWN_STEP']);
 
 /**
  * Bind the closed preload layout facade. A missing or malformed facade is a
@@ -115,11 +115,16 @@ async function bootstrap() {
   if (requestedStates.length > 1 || (requestedStates.length === 1 && requestedStates[0].length === 0)) {
     throw new Error('ERR_INVALID_STATE_QUERY');
   }
+  // Bench-only live replay (lane R): ?state=live-replay replays a
+  // deterministic script through the real authority runtime. It is not a
+  // FIXTURES key, so the room's exact key-set contract stays untouched.
+  // Live boot and every other fixture ignore this branch entirely.
+  const isLiveReplay = new URLSearchParams(window.location.search).get('state') === 'live-replay';
   const parsed = parseStateQuery(window.location.search);
-  if (!parsed.ok && parsed.error.code !== 'ERR_MISSING_STATE_PARAM') throw new Error(parsed.error.code);
+  if (!parsed.ok && parsed.error.code !== 'ERR_MISSING_STATE_PARAM' && !isLiveReplay) throw new Error(parsed.error.code);
   const resolved = parsed.ok ? resolveFixture(parsed.key) : null;
   if (resolved && !resolved.ok) throw new Error(resolved.error.code);
-  const baseFixture = resolved?.ok ? resolved.fixture : null;
+  const baseFixture = resolved?.ok ? resolved.fixture : (isLiveReplay ? LIVE_REPLAY_FIXTURE : null);
   // Fixture-only vision hook (MV-5): an explicit ?scheme= overrides the
   // fixture default. Live boot ignores the parameter entirely. Matching is
   // exact and case-sensitive; unknown, empty, or repeated values refuse boot
@@ -140,7 +145,7 @@ async function bootstrap() {
       fixture = Object.freeze({ ...baseFixture, scheme: requestedScheme });
     }
   }
-  const result = fixture ? createFixtureRuntime(fixture) : null;
+  const result = fixture ? (isLiveReplay ? createLiveReplayMount(window.location.search) : createFixtureRuntime(fixture)) : null;
   if (result && !result.ok) throw new Error(result.error.code);
   const fixtureMount = result?.ok ? result.mount : null;
   const storage = fixtureMount
@@ -155,11 +160,14 @@ async function bootstrap() {
   const selfId = fixture ? null : (typeof host?.selfCapsuleId === 'function' ? await host.selfCapsuleId() : null);
   const exportDestination = fixture ? '' : (typeof host?.recordingDestination === 'function' ? await host.recordingDestination() : null) ?? '';
   const nestedHost = { getNestedDepth: () => depth, getSelfCapsuleId: () => selfId };
-  const authorityHost = fixture ? null : createAuthorityAdapter(host?.authority);
+  const replayMount = /** @type {{ authorityPort?: import('./core/hostAdapters.js').AuthorityPort }|null} */ (/** @type {unknown} */ (isLiveReplay ? fixtureMount : null));
+  const replayPort = replayMount?.authorityPort ?? null;
+  const authorityHost = replayPort ? createAuthorityAdapter(replayPort) : (fixture ? null : createAuthorityAdapter(host?.authority));
   const terminalBroker = fixture ? null : createTerminalBroker(host?.sideTerminal);
   const liveRuntime = fixture ? null : createAuthorityRuntime(host?.authority);
-  const teardown = () => { liveRuntime?.dispose(); window.removeEventListener?.('pagehide', teardown); };
-  if (liveRuntime) window.addEventListener?.('pagehide', teardown, { once: true });
+  const replayRuntime = /** @type {{ dispose?: () => void }|null} */ (/** @type {unknown} */ (isLiveReplay ? fixtureMount?.runtime ?? null : null));
+  const teardown = () => { liveRuntime?.dispose(); replayRuntime?.dispose?.(); window.removeEventListener?.('pagehide', teardown); };
+  if (liveRuntime || replayRuntime) window.addEventListener?.('pagehide', teardown, { once: true });
   try {
     Object.assign(document.documentElement.dataset, THEME_DATASET);
     const application = createApp(App, { layout, storage, scope: SCOPE, fixture, nestedHost, exportDestination, settingsHost, preferences, authorityHost, terminalBroker,

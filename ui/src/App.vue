@@ -14,6 +14,7 @@ import MultislotHost from './multislot/MultislotHost.vue';
 import MvRecordingPanel from './recording/MvRecordingPanel.vue';
 import MvSettingsPanel from './settings/MvSettingsPanel.vue';
 import AgentLaneHost from './agent/AgentLaneHost.vue';
+import ActivityStrip from './activity/ActivityStrip.vue';
 import { resolveNestedMode, applyNestedWall } from './nested/nested.js';
 import { UiButton } from 'capsule-ui-kit/ui';
 import { setKitScheme } from 'capsule-ui-kit/theme';
@@ -149,6 +150,21 @@ function onCreateCapsule(intent) {
 const hostOutcome = ref(/** @type {import('./core/hostAdapters.js').OutcomeRow|null} */ (null));
 let hostActive = true;
 onBeforeUnmount(() => { hostActive = false; });
+/** Latest authority receipts (propose verdicts, intent acks/refusals) for
+ * the activity strip. Bounded inline so stub harnesses never resolve the
+ * model module; the bound mirrors MV_ACTIVITY_LIMIT in
+ * activity/activityModel.js and the activity app test pins both literals. */
+const activityFeed = ref(/** @type {Array<{seq:number,code:string}>} */ ([]));
+const ACTIVITY_LIMIT = 8;
+let activitySeq = 0;
+/** @param {unknown} outcome */
+function recordActivity(outcome) {
+  if (!hostActive) return;
+  activitySeq += 1;
+  const record = /** @type {{code?:unknown}} */ (outcome);
+  const code = typeof record?.code === 'string' ? record.code : '';
+  activityFeed.value = [...activityFeed.value, Object.freeze({ seq: activitySeq, code })].slice(-ACTIVITY_LIMIT);
+}
 /** @param {()=>Promise<unknown>} action */
 async function submitHost(action) {
   try {
@@ -156,9 +172,11 @@ async function submitHost(action) {
     if (hostActive) hostOutcome.value = result === true
       ? { code: 'INTENT_ACKNOWLEDGED', message: 'Request sent.', tone: 'success' }
       : /** @type {import('./core/hostAdapters.js').OutcomeRow} */ (result);
+    if (hostActive) recordActivity(result === true ? { code: 'INTENT_ACKNOWLEDGED' } : result);
     return result;
   } catch {
     if (hostActive) hostOutcome.value = { code: 'HOST_REQUEST_REFUSED', message: 'This request is unavailable. Please try again.', tone: 'refusal' };
+    if (hostActive) recordActivity({ code: 'HOST_REQUEST_REFUSED' });
   }
 }
 /** @param {{capsuleId?:unknown}} payload */
@@ -323,6 +341,7 @@ const chromeWorkspace = markRaw(defineComponent({
         </section>
       </main>
     </div>
+    <ActivityStrip v-if="!nestedMode.displayOnly" :entries="activityFeed" />
     <StatusBar v-if="!nestedMode.displayOnly" :crumbs="[{ id: 'wall', label: 'Main wall' }]" :shortcuts="[]">
       <template #telemetry><span id="shell-feed-status" class="mv-feed-status" role="status"><i aria-hidden="true"></i>{{ snapshot?.envelope ? 'Core connected' : 'Core not connected' }}</span></template>
       <template #shortcuts><span class="mv-shell-caption">{{ rows.length ? `${rows.length} capsules` : 'Ready when you are' }}</span></template>
@@ -337,7 +356,7 @@ const chromeWorkspace = markRaw(defineComponent({
 <style>
 html, body, #metaviewer-app { width:100%; height:100%; margin:0; overflow:hidden; }
 body { font-family:var(--cuk-semantic-typography-font-family-sans, system-ui, sans-serif); color:var(--cuk-semantic-text-primary); background:var(--cuk-semantic-surface-canvas); }
-.mv-shell { height:100dvh; display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:var(--cuk-component-app-shell-topbar-height) minmax(0,1fr) var(--cuk-component-app-shell-status-height); background:var(--cuk-semantic-surface-canvas); }
+.mv-shell { height:100dvh; display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:var(--cuk-component-app-shell-topbar-height) minmax(0,1fr) auto var(--cuk-component-app-shell-status-height); background:var(--cuk-semantic-surface-canvas); }
 .mv-terminal { position:fixed; inset:0; pointer-events:none; }
 .mv-terminal[hidden] { display:none; }
 .mv-terminal > * { pointer-events:auto; }

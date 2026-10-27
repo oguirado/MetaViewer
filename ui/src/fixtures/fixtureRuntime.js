@@ -8,6 +8,19 @@
 
 import { resolveFixture } from './resolveState.js';
 
+// Lane R re-export: the bench-only live-replay mount travels through this
+// already-imported module so `main.js` keeps its closed stub-map import
+// surface (the boot harnesses rewrite static imports with a fixed map).
+export {
+  LIVE_REPLAY_FIXTURE,
+  LIVE_REPLAY_KEY,
+  LIVE_REPLAY_SCRIPT,
+  LIVE_REPLAY_SURFACE_ID,
+  createLiveReplayHarness,
+  createLiveReplayMount,
+  parseStepQuery,
+} from './liveReplay.js';
+
 /**
  * @typedef {Object} FixtureProjectionSnapshot
  * @property {string} status

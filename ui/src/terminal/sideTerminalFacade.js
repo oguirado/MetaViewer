@@ -134,3 +134,108 @@ export function createSideTerminalBrokerFacade(source) {
   brokerFacades.set(broker, facade);
   return facade;
 }
+
+/**
+ * Typed terminal-session lifecycle rows for the MetaViewer multislot and side
+ * terminal (lane M). Pure helpers with no DOM, framework or host calls. The kit
+ * owns tab ids/anchors (`cui-terminal-tab-<sessionId>`,
+ * `terminal/session/<id>/tab`); this section keeps the host-owned half honest:
+ * pane session records carry the broker session id verbatim (never invented,
+ * never renamed), and session outcomes (exited/failed) project as typed rows
+ * with designed messages. Host error strings and exit codes never reach
+ * visible text; the typed code travels in a data attribute only.
+ */
+
+/** Closed session-id grammar, mirroring the broker adapter. */
+export const TERMINAL_SESSION_ID_RE = /^[A-Za-z0-9._-]{1,128}$/;
+
+/** Typed session-outcome codes surfaced as designed rows. */
+export const TERMINAL_SESSION_OUTCOMES = Object.freeze({
+  EXITED: 'TERMINAL_SESSION_EXITED',
+  FAILED: 'TERMINAL_SESSION_FAILED',
+});
+
+/** Designed outcome messages. No host text, no codes, no ids in text. */
+const TERMINAL_OUTCOME_MESSAGES = Object.freeze({
+  exited: 'Session ended.',
+  failed: 'Session ended unexpectedly.',
+});
+
+/**
+ * @typedef {object} TerminalSessionOutcome
+ * @property {'exited'|'failed'} type Normalized outcome.
+ * @property {string} sessionId Affected session id (broker-issued).
+ * @property {string} code Typed outcome code for data attributes.
+ * @property {string} message Designed visible message (no raw host text).
+ * @property {'info'|'error'} tone Row tone: info renders status, error alert.
+ */
+
+/**
+ * Normalizes one pump/exit event into a typed outcome row. Unknown shapes fail
+ * closed to `failed`; nothing from the host reaches the message.
+ *
+ * @param {unknown} outcome Pump event (`{type:'exited'|'failed',sessionId}`)
+ * or facade exit (`{session}`).
+ * @returns {TerminalSessionOutcome} Typed outcome.
+ */
+export function normalizeTerminalOutcome(outcome) {
+  const record =
+    outcome !== null && typeof outcome === 'object' && !Array.isArray(outcome)
+      ? /** @type {Record<string, unknown>} */ (outcome)
+      : {};
+  const rawType = record.type;
+  const rawSession = record.sessionId ?? record.session;
+  const type = rawType === 'exited' ? 'exited' : 'failed';
+  const sessionId = typeof rawSession === 'string' ? rawSession : '';
+  return {
+    type,
+    sessionId,
+    code:
+      type === 'exited'
+        ? TERMINAL_SESSION_OUTCOMES.EXITED
+        : TERMINAL_SESSION_OUTCOMES.FAILED,
+    message: type === 'exited' ? TERMINAL_OUTCOME_MESSAGES.exited : TERMINAL_OUTCOME_MESSAGES.failed,
+    tone: type === 'exited' ? 'info' : 'error',
+  };
+}
+
+/**
+ * @typedef {object} TerminalPaneSessionRecord
+ * @property {string} sessionId Broker session id, verbatim.
+ * @property {string} title Carried title, else the raw session id (never invented).
+ * @property {string} kind Session kind, else ''.
+ * @property {'unknown'} activity Fresh records start unknown; outcomes arrive via events.
+ */
+
+/**
+ * Builds one terminal-pane session record from an attached broker session. The
+ * id is carried verbatim so kit tabs keep stable ids/anchors per session.
+ *
+ * @param {string} sessionId Attached broker session id.
+ * @param {{ title?: unknown, kind?: unknown } | null | undefined} item Attachment record.
+ * @returns {TerminalPaneSessionRecord} Pane record.
+ */
+export function toPaneSession(sessionId, item) {
+  const title = typeof item?.title === 'string' ? item.title : sessionId;
+  const kind = typeof item?.kind === 'string' ? item.kind : '';
+  return { sessionId, title, kind, activity: 'unknown' };
+}
+
+/**
+ * Stable DOM ids and semantic anchors for the multislot lifecycle rows of one
+ * capsule slot. Deterministic derivations of the capsule id; no randomness.
+ *
+ * @param {string} capsuleId Host-issued capsule id.
+ * @returns {{ pending: string, pendingAnchor: string, notice: string, noticeAnchor: string, noticeDismiss: string, noticeDismissAnchor: string }}
+ */
+export function terminalLifecycleRefs(capsuleId) {
+  const id = typeof capsuleId === 'string' ? capsuleId : '';
+  return {
+    pending: `mv-multislot-${id}-launch-pending`,
+    pendingAnchor: `capsule/${id}/launch-pending`,
+    notice: `mv-multislot-${id}-session-notice`,
+    noticeAnchor: `capsule/${id}/session-notice`,
+    noticeDismiss: `mv-multislot-${id}-session-notice-dismiss`,
+    noticeDismissAnchor: `capsule/${id}/session-notice-dismiss`,
+  };
+}

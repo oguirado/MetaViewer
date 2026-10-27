@@ -54,3 +54,63 @@
   outline: var(--cuk-semantic-focus-ring-width) solid var(--cuk-semantic-focus-ring-color);
   outline-offset: var(--cuk-semantic-focus-ring-offset);
 }
+
+/* Session lifecycle rows: launch pending plus the typed exited/failed notice.
+ * Neutral rows reuse the canvas/primary/default pair; the failed tone reuses
+ * the kit error text/surface/border pair, like the refusal row above. */
+
+.mv-multislot__pending {
+  flex: none;
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  background-color: var(--cuk-semantic-surface-canvas);
+  color: var(--cuk-semantic-text-primary);
+  border: 1px solid var(--cuk-semantic-border-default);
+  border-radius: var(--cuk-semantic-radius-md);
+}
+
+.mv-multislot__notice {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  background-color: var(--cuk-semantic-surface-canvas);
+  color: var(--cuk-semantic-text-primary);
+  border: 1px solid var(--cuk-semantic-border-default);
+  border-radius: var(--cuk-semantic-radius-md);
+}
+
+.mv-multislot__notice--error {
+  background-color: var(--cuk-semantic-status-error-surface);
+  color: var(--cuk-semantic-status-error-text);
+  border-color: var(--cuk-semantic-status-error-border);
+}
+
+.mv-multislot__notice-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  font: inherit;
+}
+
+.mv-multislot__notice-dismiss {
+  flex: none;
+  font: inherit;
+  color: inherit;
+  background-color: transparent;
+  border: 1px solid currentColor;
+  border-radius: var(--cuk-semantic-radius-sm);
+  padding: 2px 10px;
+  cursor: pointer;
+}
+
+.mv-multislot__notice-dismiss:hover {
+  text-decoration: underline;
+}
+
+.mv-multislot__notice-dismiss:focus-visible {
+  outline: var(--cuk-semantic-focus-ring-width) solid var(--cuk-semantic-focus-ring-color);
+  outline-offset: var(--cuk-semantic-focus-ring-offset);
+}

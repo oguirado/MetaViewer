@@ -6,7 +6,7 @@
  */
 
 /** @typedef {{ code: string, message: string }} TileAdmissionError */
-/** @typedef {{ id: string, surfaceId: string, backendLifecycle: string, generation: number, visibility: string, control: string, attachmentState?: string, refusal?: TileAdmissionError|null }} TileSurfaceRow */
+/** @typedef {{ id: string, surfaceId: string, backendLifecycle: string, generation: number, visibility: string, control: string, controlOwner?: string, aiSessionActivity?: string, attachmentState?: string, refusal?: TileAdmissionError|null }} TileSurfaceRow */
 /** @typedef {{ schema: string, epoch: number, revision: number, query: string, projection: { rows: readonly TileSurfaceRow[] } }} TileProjectionEnvelope */
 /** @typedef {{ status: string, stale: boolean, envelope: TileProjectionEnvelope|null, error: TileAdmissionError|null }} TileProjectionSnapshot */
 /** @typedef {Readonly<{ tile: string, status: string, controlVerb: string, keepsCapturing: boolean }>} TileDecision */
@@ -30,6 +30,13 @@ export const CAPTURING_LIFECYCLES = Object.freeze(['active', 'standby', 'ceded']
 
 /** Attachment phases that mean the live binding is not established yet. */
 export const CONNECTING_ATTACHMENTS = Object.freeze(['attaching', 'restoring']);
+
+/**
+ * AI session activities that mean the agent is currently acting on the tile.
+ * Waiting, exited and failed sessions are explicitly not acting: the agent
+ * is blocked on the operator or done, so a shared tile stays plain live.
+ */
+export const AGENT_ACTING_ACTIVITIES = Object.freeze(['busy']);
 
 /** Verbs the wall may request on the control axis. */
 export const CONTROL_VERBS = Object.freeze(['take_control', 'release_control']);
@@ -59,15 +66,37 @@ export function isCapturingRow(row) {
 
 /**
  * Fold/presentation axis over control ownership for an admitted live row:
- * folded wins (capture continues), then human, then agent, else plain live.
+ * folded wins (capture continues), then the exclusive owner when the row
+ * carries one (falling back to the surface control for rows that predate
+ * it), then a busy AI session on shared control, else plain live.
  * @param {TileSurfaceRow|null} row
  * @returns {string}
  */
 export function controlAxisTile(row) {
   if (row?.visibility === 'folded') return 'folded';
-  if (row?.control === 'human') return 'human-control';
-  if (row?.control === 'agent') return 'agent-acting';
+  const owner = row?.controlOwner;
+  const control = owner === 'human' || owner === 'agent' ? owner : row?.control;
+  if (control === 'human') return 'human-control';
+  if (control === 'agent') return 'agent-acting';
+  if (typeof row?.aiSessionActivity === 'string'
+    && AGENT_ACTING_ACTIVITIES.includes(row.aiSessionActivity)) {
+    return 'agent-acting';
+  }
   return 'live';
+}
+
+/**
+ * Latest admitted frame identity for one row: `Frame <generation>`, or the
+ * empty string when no frame was ever admitted. The generation is the
+ * authority-issued frame generation from the notice, never a rendered-frame
+ * count; callers decide which tiles display it.
+ * @param {TileSurfaceRow|null|undefined} row
+ * @returns {string}
+ */
+export function frameFreshnessText(row) {
+  const generation = row?.generation;
+  if (typeof generation !== 'number' || !Number.isSafeInteger(generation) || generation < 1) return '';
+  return `Frame ${generation}`;
 }
 
 /**
@@ -85,7 +114,9 @@ export function controlVerbForRow(row, asked) {
   if (asked === 'release_control' || asked === 'surface_request.release_control') {
     return 'release_control';
   }
-  return row?.control === 'agent' ? 'release_control' : 'take_control';
+  const owner = row?.controlOwner;
+  const control = owner === 'human' || owner === 'agent' ? owner : row?.control;
+  return control === 'agent' ? 'release_control' : 'take_control';
 }
 
 /**
@@ -111,7 +142,8 @@ export function refusalCodeFor(snapshot, row) {
 
 /**
  * Derive one tile decision from the authoritative snapshot and row.
- * Precedence: typed refusal (error) > terminal lifecycle (lost) > unknown
+ * Precedence: typed refusal / error transport > unavailable transport >
+ * departed row with resident live/stale feed (lost) > terminal lifecycle (lost) > unknown
  * lifecycle or missing row (connecting/Waiting, never live) > stale transport
  * (Stale) > non-live transport (connecting/Waiting) > attaching binding
  * (connecting/Connecting) > fold/control axis (Live). Status labels stay
@@ -121,16 +153,28 @@ export function refusalCodeFor(snapshot, row) {
  * parsing the status.
  * @param {TileProjectionSnapshot|null} snapshot
  * @param {TileSurfaceRow|null} row
+ * @param {TileSurfaceRow|null} [lastRow] Last admitted row for the current binding only.
  * @returns {TileDecision}
  */
-export function deriveTileState(snapshot, row) {
+export function deriveTileState(snapshot, row, lastRow = null) {
   const code = refusalCodeFor(snapshot, row);
-  if (code !== null) {
+  if (code !== null || snapshot?.status === 'error') {
     return freezeTile({
       tile: 'error',
-      status: `Refused: ${code}`,
+      status: code !== null ? `Refused: ${code}` : TILE_ERROR_DISPLAY_STATUS,
       controlVerb: controlVerbForRow(row, null),
       keepsCapturing: isCapturingRow(row),
+    });
+  }
+  if (snapshot?.status === 'unavailable') {
+    return freezeTile({
+      tile: 'connecting', status: 'Waiting', controlVerb: controlVerbForRow(row, null), keepsCapturing: false,
+    });
+  }
+  if (row === null && lastRow !== null && snapshot?.envelope != null
+    && (snapshot.status === 'live' || snapshot.status === 'stale')) {
+    return freezeTile({
+      tile: 'lost', status: 'Lost', controlVerb: controlVerbForRow(lastRow, null), keepsCapturing: false,
     });
   }
   const lifecycle = row?.backendLifecycle ?? null;

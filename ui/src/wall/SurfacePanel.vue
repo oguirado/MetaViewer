@@ -276,7 +276,7 @@ export function roundControlBox(box) {
 <script setup>
 import { computed, onBeforeUnmount, provide, shallowRef, watch } from 'vue';
 import CapsulePanel from 'capsule-ui-kit/CapsulePanel';
-import { deriveTileState, controlVerbForRow } from './tileStates.js';
+import { deriveTileState, controlVerbForRow, frameFreshnessText } from './tileStates.js';
 import './wall.css';
 
 const props = defineProps({
@@ -351,14 +351,32 @@ watch(() => props.projectionView, (next) => { bindView(next); });
 onBeforeUnmount(() => { unbindView(); });
 
 const row = computed(() => findSurfaceRow(snapshot.value, props.capsuleId));
+// Last admitted row for this capsule. A missing row with a resident feed
+// means the surface departed (lost), not that it never arrived; recovery
+// (the row returns) flows through the normal derivation again.
+const lastRow = shallowRef(/** @type {PanelSurfaceRow|null} */ (null));
+watch([() => props.capsuleId, () => props.projectionView, row],
+  ([id, view, current], [previousId, previousView]) => {
+    if (id !== previousId || view !== previousView) lastRow.value = null;
+    if (current !== null) lastRow.value = current;
+  }, { immediate: true });
 // Seven tile states share one derivation: the kit status label, the tile-state
 // treatment class and the control verb all read this decision, props in only.
 const tile = computed(() => {
-  const decision = deriveTileState(snapshot.value, row.value);
+  const snapshotValue = snapshot.value;
+  const decision = deriveTileState(snapshotValue, row.value, lastRow.value);
   const labels = new Map([['folded', 'Folded'], ['human-control', 'Human control'], ['agent-acting', 'Agent acting']]);
   return decision.status === 'Live'
     ? { ...decision, status: labels.get(decision.tile) ?? decision.status }
     : decision;
+});
+// Latest admitted frame identity on live-axis tiles only: connecting tiles
+// keep the placeholder with no frame claim, and lost/error tiles keep the
+// typed status row. Plain text (never a live region): it changes per frame.
+const freshness = computed(() => {
+  const state = tile.value.tile;
+  if (state === 'connecting' || state === 'lost' || state === 'error') return '';
+  return frameFreshnessText(lastRow.value);
 });
 // [TARGET, unit decision] Authoritative visibility drives the display branch;
 // pending UI gestures do not fold capture or change core-owned state.
@@ -436,6 +454,7 @@ function onActivateSurface() {
   >
     <template #surface>
       <div :hidden="!surfaceHostVisible" class="mv-surface-host">
+        <p :hidden="freshness === ''" class="mv-tile-freshness">{{ freshness }}</p>
         <div :hidden="tile.tile === 'lost' || tile.tile === 'error'" class="mv-tile-capture-host">
           <slot name="surface" :capsule-id="props.capsuleId" :surface="row" :drawable="drawable" />
         </div>

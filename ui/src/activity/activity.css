@@ -1,0 +1,69 @@
+/* Lane V activity styles: docked authority-receipt bar below the wall.
+ * Kit tokens only: no colour literals, no fonts, no remote imports. The bar
+ * is an in-flow shell-grid row, so it resizes the wall instead of covering
+ * tiles; the outcomes list scrolls internally past its visible cap. Row
+ * tone rides a CSP-safe data attribute driving a status dot. */
+
+.mv-activity {
+  border-top: 1px solid var(--cuk-semantic-border-default);
+  background: var(--cuk-semantic-surface-panel);
+}
+
+.mv-activity__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--cuk-semantic-spacing-sm);
+  padding: var(--cuk-semantic-spacing-sm) var(--cuk-semantic-spacing-md);
+}
+
+.mv-activity__count {
+  font-size: var(--cuk-semantic-typography-font-size-xs);
+  line-height: var(--cuk-semantic-typography-line-height-normal);
+  color: var(--cuk-semantic-text-muted);
+}
+
+.mv-activity__list {
+  margin: 0;
+  padding: 0 var(--cuk-semantic-spacing-md) var(--cuk-semantic-spacing-sm);
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 132px;
+  overflow: auto;
+}
+
+.mv-activity__list:focus-visible {
+  outline-width: var(--cuk-semantic-focus-ring-width);
+  outline-style: var(--cuk-semantic-focus-ring-style);
+  outline-color: var(--cuk-semantic-focus-ring-color);
+  outline-offset: calc(var(--cuk-semantic-focus-ring-offset) * -1);
+}
+
+.mv-activity__empty {
+  font-size: var(--cuk-semantic-typography-font-size-md);
+  line-height: var(--cuk-semantic-typography-line-height-normal);
+  color: var(--cuk-semantic-text-muted);
+}
+
+.mv-activity__row {
+  display: flex;
+  align-items: center;
+  gap: var(--cuk-semantic-spacing-sm);
+  font-size: var(--cuk-semantic-typography-font-size-md);
+  line-height: var(--cuk-semantic-typography-line-height-normal);
+  color: var(--cuk-semantic-text-primary);
+}
+
+.mv-activity__row::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--cuk-semantic-status-success-border);
+}
+
+.mv-activity__row[data-activity-tone='refusal']::before {
+  background: var(--cuk-semantic-status-error-border);
+}

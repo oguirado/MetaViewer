@@ -65,6 +65,8 @@ async function launch(entry) {
       <button v-for="entry in entries" :key="entry.id" type="button" :id="`${idPrefix}-launch-${entry.id}`"
         :data-semantic-anchor="`${anchorPrefix}/provider/${entry.id}`" :disabled="busy || (facade?.canEnable && !enabled)" @click="launch(entry)">{{ entry.label }}</button>
     </div>
+    <p v-if="launching" :id="`${idPrefix}-pending`" :data-semantic-anchor="`${anchorPrefix}/pending`"
+      class="mv-broker-launch__pending" role="status">Starting session…</p>
     <p v-if="outcome" :id="`${idPrefix}-outcome`" :data-semantic-anchor="`${anchorPrefix}/outcome`"
       role="status" :data-outcome-code="outcome.code">{{ outcome.message }}</p>
   </section>

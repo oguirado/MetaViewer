@@ -10,6 +10,8 @@
  * local presentation state. Intents are emitted for the host journal. Launch requests
  * validate against the advertised broker commands; without a broker they
  * project a typed refusal row, never a crash and never raw broker text.
+ * Session outcomes (exited/failed) project as a typed notice row with a
+ * dismiss control; a pending row covers the launch window.
  */
 import { computed, getCurrentInstance, markRaw, onBeforeUnmount, onMounted, ref, toRaw, watch } from 'vue';
 import { Terminal } from '@xterm/xterm';
@@ -20,7 +22,13 @@ import AiSlotControlBar from '/.kit/capsule-ui-kit/src/multislot/AiSlotControlBa
 import { createStreamRegistry } from 'capsule-ui-kit/TerminalView';
 import { createTerminalDocument } from '../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js';
 import BrokerLaunchControls from '../terminal/BrokerLaunchControls.vue';
-import { createSideTerminalFacade, createSideTerminalBrokerFacade } from '../terminal/sideTerminalFacade.js';
+import {
+  createSideTerminalFacade,
+  createSideTerminalBrokerFacade,
+  normalizeTerminalOutcome,
+  terminalLifecycleRefs,
+  toPaneSession,
+} from '../terminal/sideTerminalFacade.js';
 import {
   createGatedTerminalWriter,
   buildMultislotFoldIntent,
@@ -89,6 +97,10 @@ const terminalVisibleRef = ref(props.terminalHidden !== true);
 const copyState = ref('ready');
 /** @type {import('vue').Ref<{ code: string, message: string } | null>} */
 const refusal = ref(null);
+/** Typed session-outcome row (exited/failed); codes stay in data attributes.
+ * @type {import('vue').Ref<{ type: string, sessionId: string, code: string, message: string, tone: string } | null>} */
+const sessionNotice = ref(null);
+const lifecycleRefs = computed(() => terminalLifecycleRefs(props.capsuleId));
 /** @type {import('vue').Ref<PaneSession[]>} */
 const sessions = ref([]);
 const selectedSessionId = ref('');
@@ -158,6 +170,7 @@ const registry = markRaw(
  */
 function onPumpEvent(event) {
   const outcome = event.type === 'failed' ? 'failed' : 'exited';
+  sessionNotice.value = normalizeTerminalOutcome({ type: outcome, sessionId: event.sessionId });
   sessions.value = sessions.value.filter((item) => item.sessionId !== event.sessionId);
   if (selectedSessionId.value === event.sessionId) selectedSessionId.value = sessions.value[0]?.sessionId ?? '';
   attachmentState.value = sessions.value.length ? 'live' : 'disconnected';
@@ -182,6 +195,7 @@ function unbind() {
   facade = null;
   sessions.value = [];
   selectedSessionId.value = '';
+  sessionNotice.value = null;
 }
 
 function bind() {
@@ -242,12 +256,10 @@ function bind() {
  */
 function registerSession(active, item) {
   const id = active.attachSession(item);
-  sessions.value = [...sessions.value, {
-    sessionId: id, title: typeof item?.title === 'string' ? item.title : id,
-    kind: typeof item?.kind === 'string' ? item.kind : '', activity: 'unknown',
-  }];
+  sessions.value = [...sessions.value, { ...toPaneSession(id, item) }];
   if (!selectedSessionId.value) selectedSessionId.value = id;
   attachmentState.value = 'live';
+  sessionNotice.value = null;
 }
 
 onMounted(bind);
@@ -463,6 +475,36 @@ function passThrough(name) {
       </template>
     </AiMultiSlot>
     <section v-if="$slots.record" class="mv-multislot-record" aria-label="Recording"><slot name="record" /></section>
+    <p
+      v-if="launchingRef"
+      :id="lifecycleRefs.pending"
+      class="mv-multislot__pending"
+      role="status"
+      :data-semantic-anchor="lifecycleRefs.pendingAnchor"
+    >
+      Starting session…
+    </p>
+    <div
+      v-if="sessionNotice"
+      :id="lifecycleRefs.notice"
+      class="mv-multislot__notice"
+      :class="{ 'mv-multislot__notice--error': sessionNotice.tone === 'error' }"
+      :role="sessionNotice.tone === 'error' ? 'alert' : 'status'"
+      :data-semantic-anchor="lifecycleRefs.noticeAnchor"
+      :data-outcome-code="sessionNotice.code"
+    >
+      <p class="mv-multislot__notice-text">{{ sessionNotice.message }}</p>
+      <button
+        :id="lifecycleRefs.noticeDismiss"
+        type="button"
+        class="mv-multislot__notice-dismiss"
+        :data-semantic-anchor="lifecycleRefs.noticeDismissAnchor"
+        aria-label="Dismiss session notice"
+        @click="sessionNotice = null"
+      >
+        Dismiss
+      </button>
+    </div>
     <div
       v-if="refusal"
       :id="refusalId"

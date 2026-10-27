@@ -493,6 +493,10 @@ export function selectWallSurface(snapshot, capsuleId) {
       return malformedRow('row refusal must carry string code and message');
     }
   }
+  const owner = found.controlOwner;
+  if (owner !== undefined && owner !== 'agent' && owner !== 'human' && owner !== 'none') {
+    return malformedRow('row controlOwner refused');
+  }
   return /** @type {AdmissionResult<WallSurfaceRow>} */ (
     Object.freeze({ ok: true, value: /** @type {WallSurfaceRow} */ (found) })
   );

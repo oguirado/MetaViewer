@@ -27,3 +27,7 @@
 .mv-broker-launch button, .mv-broker-launch label {
   margin: var(--cuk-semantic-spacing-xs);
 }
+.mv-broker-launch__pending {
+  margin: var(--cuk-semantic-spacing-xs);
+  color: var(--cuk-semantic-text-primary);
+}

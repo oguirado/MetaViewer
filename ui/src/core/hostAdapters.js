@@ -96,7 +96,15 @@ export function createAuthorityRuntime(port) {
         || !['folded','unfolded','pinned'].includes(s.visibility) || !['agent','human','shared'].includes(s.control)
         || typeof s.display !== 'string' || !s.display.length || s.display.length > 65536) return invalid();
       const previous = rows.get(s.surface_id);
-      if ((previous && previous.generation > f.generation) || (!previous && rows.size >= 256)) return invalid();
+      if (!previous && rows.size >= 256) return invalid();
+      if (previous && previous.generation > f.generation) {
+        // An older generation is a routine out-of-order duplicate: keep the
+        // admitted row (domain state unchanged) without raising a snapshot
+        // error, so one duplicate never flips every tile to the error state.
+        // The revision still advances: the kit requires monotonic revisions.
+        return { ok: true, value: { schema: SCHEMA, epoch: 1, revision: ++revision, query: QUERY,
+          mode: 'snapshot', projection: { rows: Object.freeze([...rows.values()]) } } };
+      }
       rows.set(s.surface_id, Object.freeze({ id: s.surface_id, surfaceId: s.surface_id,
         title: s.display, generation: f.generation, backendLifecycle: s.state,
         visibility: s.visibility, control: s.control,
