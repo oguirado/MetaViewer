@@ -32,8 +32,11 @@ const {
   ensureFreshUiDist,
   inspectUiDistFreshness,
   makeScratch,
+  parseCoreLine,
   prepareWall,
   removeScratch,
+  trackChildProcess,
+  waitForChildExit,
 } = require('./ac-harness.cjs');
 
 /**
@@ -119,7 +122,7 @@ const cfg = readFileSync(join(uiRoot, 'vite.config.js'), 'utf8').trim();
 const kit = readFileSync(join(uiRoot, 'kit.lock.json'), 'utf8').trim();
 const preload = readFileSync(join(uiRoot, 'electron', 'preload.js'), 'utf8').trim();
 const main = readFileSync(join(uiRoot, 'electron', 'main.js'), 'utf8').trim();
-mkdirSync(join(uiRoot, 'dist', 'renderer'), { recursive: true });
+mkdirSync(join(uiRoot, 'dist', 'renderer', 'assets'), { recursive: true });
 mkdirSync(join(uiRoot, 'dist', 'preload'), { recursive: true });
 writeFileSync(
   join(uiRoot, 'dist', 'renderer', 'index.html'),
@@ -127,10 +130,22 @@ writeFileSync(
   'utf8',
 );
 writeFileSync(
+  join(uiRoot, 'dist', 'renderer', 'assets', 'app.js'),
+  JSON.stringify({ buildCount: nextCount, app, canvas }) + '\\n',
+  'utf8',
+);
+writeFileSync(
   join(uiRoot, 'dist', 'preload', 'preload.cjs'),
   JSON.stringify({ buildCount: nextCount, preload, main }) + '\\n',
   'utf8',
 );
+if (process.env.MV_TEST_VITE_CONCURRENT_EDIT === '1') {
+  writeFileSync(
+    join(uiRoot, 'src', 'App.vue'),
+    '<template><main id="metaviewer-app">v2-concurrent-edit</main></template>\\n',
+    'utf8',
+  );
+}
 `;
   writeFileSync(join(uiRoot, 'node_modules', 'vite', 'bin', 'vite.js'), viteScript, 'utf8');
 
@@ -390,5 +405,167 @@ writeFileSync(marker, 'ok\\n', 'utf8');
     } finally {
       removeScratch(scratch);
     }
+  });
+
+  it('RV9E2E-01: e2e25 uses the harness freshness gate', () => {
+    const e2e25Source = readFileSync(join(__dirname, 'e2e25_production_frames.test.js'), 'utf8');
+    assert.match(e2e25Source, /harness\.ensureFreshUiDist\(\{\s*root:\s*ROOT,\s*uiRoot:\s*UI_ROOT\s*\}\)/);
+    assert.doesNotMatch(e2e25Source, /ensureShippedUiBuild/);
+  });
+
+  it('RV9E2E-02: multi-generation PRESENT oracle runs by default and asserts surface vs frame generation', () => {
+    const e2e25Source = readFileSync(join(__dirname, 'e2e25_production_frames.test.js'), 'utf8');
+    assert.doesNotMatch(e2e25Source, /MV_E2E_STRICT_RENDERER/);
+    assert.doesNotMatch(e2e25Source, /\btodo\s*:/);
+    assert.match(e2e25Source, /diag\.main\.lastDelivery\.surfaceGeneration,\s*1/);
+    assert.match(e2e25Source, /diag\.main\.lastDelivery\.frameGeneration,\s*3/);
+    assert.match(e2e25Source, /diag\.main\.lastAck\.surfaceGeneration,\s*1/);
+    assert.match(e2e25Source, /diag\.main\.lastAck\.frameGeneration,\s*3/);
+  });
+
+  it('RV9E2E-03: waitForChildExit resolves for an already-exited child', async () => {
+    const { spawn } = require('node:child_process');
+    const { once } = require('node:events');
+    assert.equal(typeof waitForChildExit, 'function');
+    const child = spawn(process.execPath, ['-e', 'process.exit(0)'], { stdio: 'ignore' });
+    trackChildProcess?.(child);
+    await once(child, 'exit');
+    assert.equal(child.exitCode, 0);
+
+    let timedOut = false;
+    const outcome = await Promise.race([
+      waitForChildExit(child),
+      new Promise((resolveTimeout) =>
+        setTimeout(() => {
+          timedOut = true;
+          resolveTimeout('timeout-hang');
+        }, 2000),
+      ),
+    ]);
+    assert.equal(timedOut, false);
+    assert.notEqual(outcome, 'timeout-hang');
+    const e2e25Source = readFileSync(join(__dirname, 'e2e25_production_frames.test.js'), 'utf8');
+    assert.match(e2e25Source, /harness\.waitForChildExit\(child,\s*stopChild\)/);
+  });
+
+  it('RV9E2E-04: concurrent source edit during build fails closed', () => {
+    const scratch = makeScratch('mv-concurrent-edit');
+    try {
+      const { root, uiRoot } = createUiFixtureRepo(scratch);
+      assert.throws(
+        () =>
+          ensureFreshUiDist({
+            root,
+            env: { ...process.env, MV_TEST_VITE_CONCURRENT_EDIT: '1' },
+          }),
+        (error) =>
+          error instanceof E2EError &&
+          error.code === 'E2E_PREREQ' &&
+          /UI sources changed during build/.test(error.message),
+      );
+      assert.equal(existsSync(join(uiRoot, 'dist')), false);
+    } finally {
+      removeScratch(scratch);
+    }
+  });
+
+  it('RV9E2E-05 (1): package.json bump invalidates the stamp', () => {
+    const scratch = makeScratch('mv-pkg-bump');
+    try {
+      const { root, uiRoot, readBuildCount } = createUiFixtureRepo(scratch);
+      const first = ensureFreshUiDist({ root });
+      assert.equal(first.rebuilt, true);
+      assert.equal(readBuildCount(), 1);
+
+      writeFileSync(join(uiRoot, 'package.json'), '{"name":"metaviewer-ui","version":"0.1.3"}\n', 'utf8');
+      const checkAfterBump = inspectUiDistFreshness(uiRoot);
+      assert.equal(checkAfterBump.fresh, false);
+
+      const second = ensureFreshUiDist({ root });
+      assert.equal(second.rebuilt, true);
+      assert.equal(readBuildCount(), 2);
+    } finally {
+      removeScratch(scratch);
+    }
+  });
+
+  it('RV9E2E-05 (2): deleted renderer asset invalidates the stamp', () => {
+    const scratch = makeScratch('mv-asset-delete');
+    try {
+      const { root, uiRoot, readBuildCount } = createUiFixtureRepo(scratch);
+      const first = ensureFreshUiDist({ root });
+      assert.equal(first.rebuilt, true);
+      assert.equal(readBuildCount(), 1);
+
+      const assetPath = join(uiRoot, 'dist', 'renderer', 'assets', 'app.js');
+      assert.equal(existsSync(assetPath), true);
+      rmSync(assetPath, { force: true });
+
+      const checkAfterDelete = inspectUiDistFreshness(uiRoot);
+      assert.equal(checkAfterDelete.fresh, false);
+      assert.equal(checkAfterDelete.reason, 'artifact_hash_mismatch');
+
+      const second = ensureFreshUiDist({ root });
+      assert.equal(second.rebuilt, true);
+      assert.equal(readBuildCount(), 2);
+      assert.equal(existsSync(assetPath), true);
+    } finally {
+      removeScratch(scratch);
+    }
+  });
+
+  it('RV9E2E-NEW-01: parseCoreLine returns null for blank or malformed lines without throwing', () => {
+    assert.equal(typeof parseCoreLine, 'function');
+    assert.equal(parseCoreLine(''), null);
+    assert.equal(parseCoreLine('   \r'), null);
+    assert.equal(parseCoreLine('garbage'), null);
+    assert.deepEqual(parseCoreLine('{"body":{"schema":"hello/v0.2"}}'), {
+      body: { schema: 'hello/v0.2' },
+    });
+    const e2e25Source = readFileSync(join(__dirname, 'e2e25_production_frames.test.js'), 'utf8');
+    assert.match(e2e25Source, /harness\.parseCoreLine\(line\)/);
+  });
+
+  it('RV9E2E-NEW-02: materialised ui/.kit mutation invalidates the stamp and triggers rebuild', () => {
+    const scratch = makeScratch('mv-kit-tree');
+    try {
+      const { root, uiRoot, readBuildCount } = createUiFixtureRepo(scratch);
+      const kitDir = join(uiRoot, '.kit', 'capsule-ui-kit');
+      mkdirSync(kitDir, { recursive: true });
+      const kitFile = join(kitDir, 'index.js');
+      writeFileSync(kitFile, 'export const KIT_VER = "v1";\n', 'utf8');
+
+      const first = ensureFreshUiDist({ root });
+      assert.equal(first.rebuilt, true);
+      assert.equal(readBuildCount(), 1);
+
+      writeFileSync(kitFile, 'export const KIT_VER = "v2-mutated";\n', 'utf8');
+      const checkAfterMutate = inspectUiDistFreshness(uiRoot);
+      assert.equal(checkAfterMutate.fresh, false);
+
+      const second = ensureFreshUiDist({ root });
+      assert.equal(second.rebuilt, true);
+      assert.equal(readBuildCount(), 2);
+    } finally {
+      removeScratch(scratch);
+    }
+  });
+
+  it('RV9E2E-NEW-03: failed spawn rejects promptly', async () => {
+    const { spawn } = require('node:child_process');
+    assert.equal(typeof trackChildProcess, 'function');
+    assert.equal(typeof waitForChildExit, 'function');
+    const child = trackChildProcess(
+      spawn('/nonexistent-mv-e2e25-binary-xyz', [], { stdio: 'ignore' }),
+    );
+    await assert.rejects(
+      Promise.race([
+        waitForChildExit(child),
+        new Promise((_, rejectTimeout) =>
+          setTimeout(() => rejectTimeout(new Error('timeout-hang')), 2000),
+        ),
+      ]),
+      (err) => err && err.message !== 'timeout-hang',
+    );
   });
 });

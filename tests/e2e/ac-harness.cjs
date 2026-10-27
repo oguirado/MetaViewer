@@ -32,7 +32,9 @@ const VITE_CONFIG_PATTERN = /^vite\.config\.[^/\\]+$/;
 /** Required subdirectories under ui/ whose recursive contents feed the build. */
 const UI_SOURCE_DIRS = Object.freeze(['src', 'electron']);
 /** Required top-level files under ui/ that feed the build. */
-const UI_SOURCE_FILES = Object.freeze(['index.html', 'kit.lock.json']);
+const UI_SOURCE_FILES = Object.freeze(['index.html', 'kit.lock.json', 'package.json']);
+/** Required subdirectories under ui/dist whose recursive artifacts are stamped. */
+const UI_DIST_DIRS = Object.freeze(['renderer', 'preload']);
 
 let stage;
 let stageSourceHash;
@@ -163,6 +165,19 @@ function collectUiBuildSources(uiRoot) {
     }
   }
 
+  const kitDir = join(root, '.kit');
+  let kitStat = null;
+  try {
+    kitStat = lstatSync(kitDir);
+  } catch (err) {
+    if (/** @type {NodeJS.ErrnoException} */ (err).code !== 'ENOENT') {
+      throw new harness.E2EError('E2E_PREREQ', 'unreadable UI .kit entry');
+    }
+  }
+  if (kitStat !== null) {
+    walkUiSourceDir(root, '.kit', collected);
+  }
+
   for (const fileName of UI_SOURCE_FILES) {
     const absFile = join(root, fileName);
     let fStat;
@@ -242,6 +257,127 @@ function collectUiBuildSources(uiRoot) {
 }
 
 /**
+ * Recursively collect and hash all regular artifact files under dist/renderer
+ * and dist/preload. Returns null if required artifacts are missing or invalid.
+ * @param {string} distRoot Absolute path to ui/dist.
+ * @returns {{
+ *   files: string[],
+ *   treeSha256: string,
+ *   rendererIndexSha256: string,
+ *   preloadSha256: string,
+ *   minMtimeNs: bigint,
+ * } | null}
+ */
+function collectUiDistArtifacts(distRoot) {
+  const rendererIndex = join(distRoot, 'renderer', 'index.html');
+  const preloadCjs = join(distRoot, 'preload', 'preload.cjs');
+  let rendererStat;
+  let preloadStat;
+  try {
+    rendererStat = lstatSync(rendererIndex, { bigint: true });
+    preloadStat = lstatSync(preloadCjs, { bigint: true });
+  } catch {
+    return null;
+  }
+  if (
+    rendererStat.isSymbolicLink() ||
+    !rendererStat.isFile() ||
+    rendererStat.size <= 0n ||
+    preloadStat.isSymbolicLink() ||
+    !preloadStat.isFile() ||
+    preloadStat.size <= 0n
+  ) {
+    return null;
+  }
+
+  /** @type {string[]} */
+  const collected = [];
+  /**
+   * @param {string} relDir
+   * @returns {boolean}
+   */
+  const walkDist = (relDir) => {
+    const absDir = join(distRoot, ...relDir.split('/'));
+    let dStat;
+    try {
+      dStat = lstatSync(absDir);
+    } catch {
+      return false;
+    }
+    if (dStat.isSymbolicLink() || !dStat.isDirectory()) return false;
+    let entries;
+    try {
+      entries = readdirSync(absDir, { withFileTypes: true }).slice().sort(
+        (a, b) => Buffer.compare(Buffer.from(a.name, 'utf8'), Buffer.from(b.name, 'utf8')),
+      );
+    } catch {
+      return false;
+    }
+    for (const entry of entries) {
+      const childRel = `${relDir}/${entry.name}`;
+      const childAbs = join(absDir, entry.name);
+      let cStat;
+      try {
+        cStat = lstatSync(childAbs);
+      } catch {
+        return false;
+      }
+      if (cStat.isSymbolicLink()) return false;
+      if (cStat.isDirectory()) {
+        if (!walkDist(childRel)) return false;
+      } else if (cStat.isFile()) {
+        collected.push(childRel);
+      } else {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  for (const dirName of UI_DIST_DIRS) {
+    if (!walkDist(dirName)) return null;
+  }
+
+  const files = Array.from(new Set(collected)).sort(
+    (a, b) => Buffer.compare(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8')),
+  );
+  const treeHash = createHash('sha256');
+  let minMtimeNs = rendererStat.mtimeNs;
+  for (const relPath of files) {
+    const absPath = join(distRoot, ...relPath.split('/'));
+    let fStat;
+    let bytes;
+    try {
+      fStat = lstatSync(absPath, { bigint: true });
+      bytes = readFileSync(absPath);
+    } catch {
+      return null;
+    }
+    if (fStat.isSymbolicLink() || !fStat.isFile()) return null;
+    if (fStat.mtimeNs < minMtimeNs) minMtimeNs = fStat.mtimeNs;
+    const key = Buffer.from(relPath, 'utf8');
+    treeHash.update(`${key.length}:`).update(key).update(`${bytes.length}:`).update(bytes);
+  }
+
+  let rendererIndexSha256;
+  let preloadSha256;
+  try {
+    rendererIndexSha256 = sha256File(rendererIndex);
+    preloadSha256 = sha256File(preloadCjs);
+  } catch {
+    return null;
+  }
+
+  return {
+    files,
+    treeSha256: treeHash.digest('hex'),
+    rendererIndexSha256,
+    preloadSha256,
+    minMtimeNs,
+  };
+}
+
+/**
  * Inspect whether ui/dist exists, carries a valid harness content stamp for the
  * current sources, and is newer than every watched source file.
  * @param {string} uiRoot Absolute path to the ui/ directory.
@@ -258,26 +394,10 @@ function collectUiBuildSources(uiRoot) {
 function inspectUiDistFreshness(uiRoot, precomputedSources) {
   const sources = precomputedSources || collectUiBuildSources(uiRoot);
   const distRoot = join(sources.uiRoot, 'dist');
-  const rendererIndex = join(distRoot, 'renderer', 'index.html');
-  const preloadCjs = join(distRoot, 'preload', 'preload.cjs');
   const stampPath = join(distRoot, UI_BUILD_STAMP_FILE);
 
-  let rendererStat;
-  let preloadStat;
-  try {
-    rendererStat = lstatSync(rendererIndex, { bigint: true });
-    preloadStat = lstatSync(preloadCjs, { bigint: true });
-  } catch {
-    return { fresh: false, reason: 'missing_build_artifacts', newerFile: null, stampPath, sources };
-  }
-  if (
-    rendererStat.isSymbolicLink() ||
-    !rendererStat.isFile() ||
-    rendererStat.size <= 0n ||
-    preloadStat.isSymbolicLink() ||
-    !preloadStat.isFile() ||
-    preloadStat.size <= 0n
-  ) {
+  const distArtifacts = collectUiDistArtifacts(distRoot);
+  if (!distArtifacts) {
     return { fresh: false, reason: 'missing_build_artifacts', newerFile: null, stampPath, sources };
   }
 
@@ -312,6 +432,9 @@ function inspectUiDistFreshness(uiRoot, precomputedSources) {
     !/^[0-9a-f]{64}$/.test(stamp.rendererIndexSha256) ||
     typeof stamp.preloadSha256 !== 'string' ||
     !/^[0-9a-f]{64}$/.test(stamp.preloadSha256) ||
+    typeof stamp.distTreeSha256 !== 'string' ||
+    !/^[0-9a-f]{64}$/.test(stamp.distTreeSha256) ||
+    !Array.isArray(stamp.distFiles) ||
     typeof stamp.buildMtimeMs !== 'number' ||
     !Number.isFinite(stamp.buildMtimeMs) ||
     typeof stamp.buildMtimeNs !== 'string' ||
@@ -327,22 +450,17 @@ function inspectUiDistFreshness(uiRoot, precomputedSources) {
     return { fresh: false, reason: 'source_hash_mismatch', newerFile: null, stampPath, sources };
   }
 
-  let actualRendererSha;
-  let actualPreloadSha;
-  try {
-    actualRendererSha = sha256File(rendererIndex);
-    actualPreloadSha = sha256File(preloadCjs);
-  } catch {
-    return { fresh: false, reason: 'missing_build_artifacts', newerFile: null, stampPath, sources };
-  }
   if (
-    actualRendererSha !== stamp.rendererIndexSha256 ||
-    actualPreloadSha !== stamp.preloadSha256
+    distArtifacts.rendererIndexSha256 !== stamp.rendererIndexSha256 ||
+    distArtifacts.preloadSha256 !== stamp.preloadSha256 ||
+    distArtifacts.treeSha256 !== stamp.distTreeSha256 ||
+    distArtifacts.files.length !== stamp.distFiles.length ||
+    distArtifacts.files.some((f, idx) => f !== stamp.distFiles[idx])
   ) {
     return { fresh: false, reason: 'artifact_hash_mismatch', newerFile: null, stampPath, sources };
   }
 
-  const minBuildNs = minBigInt(rendererStat.mtimeNs, preloadStat.mtimeNs, stampStat.mtimeNs);
+  const minBuildNs = minBigInt(distArtifacts.minMtimeNs, stampStat.mtimeNs);
   const minBuildMs = Number(minBuildNs) / 1e6;
   const recordedMtimeNs = /** @type {Record<string, unknown>} */ (stamp.mtimeNs);
 
@@ -405,8 +523,22 @@ function ensureFreshUiDist(options = {}) {
     : (options.uiRoot ? resolve(String(options.uiRoot), '..') : harness.findRepoRoot(__dirname));
   const uiRoot = options.uiRoot ? resolve(String(options.uiRoot)) : join(root, 'ui');
 
-  const check = inspectUiDistFreshness(uiRoot);
+  let check = inspectUiDistFreshness(uiRoot);
   const distRoot = join(uiRoot, 'dist');
+  const syncKitScript = join(root, 'tools', 'sync_kit.mjs');
+  if (check.fresh && !options.skipKitCheck && existsSync(syncKitScript)) {
+    try {
+      execFileSync(process.execPath, [syncKitScript, '--check'], {
+        cwd: root,
+        env,
+        encoding: 'utf8',
+        stdio: 'pipe',
+        timeout: 30000,
+      });
+    } catch {
+      check = { ...check, fresh: false, reason: 'kit_drift' };
+    }
+  }
   if (check.fresh) {
     return {
       uiRoot,
@@ -422,7 +554,6 @@ function ensureFreshUiDist(options = {}) {
   // Never leave a valid stamp or reusable stale build if rebuilding fails.
   rmSync(check.stampPath, { force: true });
 
-  const syncKitScript = join(root, 'tools', 'sync_kit.mjs');
   if (!options.skipKitCheck && existsSync(syncKitScript)) {
     try {
       execFileSync(process.execPath, [syncKitScript, '--check'], {
@@ -480,6 +611,8 @@ function ensureFreshUiDist(options = {}) {
     );
   }
 
+  const preBuildSources = collectUiBuildSources(uiRoot);
+
   try {
     execFileSync(process.execPath, [viteBin, 'build'], {
       cwd: uiRoot,
@@ -497,64 +630,67 @@ function ensureFreshUiDist(options = {}) {
     );
   }
 
-  const rendererIndex = join(distRoot, 'renderer', 'index.html');
-  const preloadCjs = join(distRoot, 'preload', 'preload.cjs');
-  let rendererStat;
-  let preloadStat;
-  try {
-    rendererStat = lstatSync(rendererIndex, { bigint: true });
-    preloadStat = lstatSync(preloadCjs, { bigint: true });
-  } catch {
+  let distArtifacts = collectUiDistArtifacts(distRoot);
+  if (!distArtifacts) {
     rmSync(distRoot, { recursive: true, force: true });
     throw new harness.E2EError(
       'E2E_PREREQ',
-      'ui/dist rebuild did not produce dist/renderer/index.html and dist/preload/preload.cjs',
+      'ui/dist rebuild did not produce valid dist/renderer and dist/preload artifacts',
     );
   }
-  if (
-    rendererStat.isSymbolicLink() ||
-    !rendererStat.isFile() ||
-    rendererStat.size <= 0n ||
-    preloadStat.isSymbolicLink() ||
-    !preloadStat.isFile() ||
-    preloadStat.size <= 0n
-  ) {
+
+  const postBuildSources = collectUiBuildSources(uiRoot);
+  const sourcesChangedDuringBuild =
+    preBuildSources.sourceHash !== postBuildSources.sourceHash ||
+    preBuildSources.files.length !== postBuildSources.files.length ||
+    preBuildSources.files.some(
+      (relPath, idx) =>
+        relPath !== postBuildSources.files[idx] ||
+        preBuildSources.mtimeNs[relPath] !== postBuildSources.mtimeNs[relPath],
+    );
+  if (sourcesChangedDuringBuild) {
     rmSync(distRoot, { recursive: true, force: true });
-    throw new harness.E2EError(
-      'E2E_PREREQ',
-      'ui/dist rebuild produced invalid or empty renderer/preload artifacts',
-    );
+    throw new harness.E2EError('E2E_PREREQ', 'UI sources changed during build');
   }
 
-  const freshSources = collectUiBuildSources(uiRoot);
-  const maxSourceNs = BigInt(freshSources.maxMtimeNs);
-  if (rendererStat.mtimeNs < maxSourceNs || preloadStat.mtimeNs < maxSourceNs) {
-    const bumpedDate = new Date(Math.ceil(freshSources.maxMtimeMs) + 2);
-    utimesSync(rendererIndex, bumpedDate, bumpedDate);
-    utimesSync(preloadCjs, bumpedDate, bumpedDate);
-    rendererStat = lstatSync(rendererIndex, { bigint: true });
-    preloadStat = lstatSync(preloadCjs, { bigint: true });
+  const maxSourceNs = BigInt(preBuildSources.maxMtimeNs);
+  if (distArtifacts.minMtimeNs < maxSourceNs) {
+    const bumpedDate = new Date(Math.ceil(preBuildSources.maxMtimeMs) + 2);
+    for (const relPath of distArtifacts.files) {
+      const absPath = join(distRoot, ...relPath.split('/'));
+      utimesSync(absPath, bumpedDate, bumpedDate);
+    }
+    distArtifacts = collectUiDistArtifacts(distRoot);
+    if (!distArtifacts) {
+      rmSync(distRoot, { recursive: true, force: true });
+      throw new harness.E2EError(
+        'E2E_PREREQ',
+        'ui/dist artifacts became unreadable after mtime update',
+      );
+    }
   }
 
-  const minArtifactNs = minBigInt(rendererStat.mtimeNs, preloadStat.mtimeNs);
+  const minArtifactNs = distArtifacts.minMtimeNs;
   const stampPayload = {
     schema: UI_BUILD_STAMP_SCHEMA,
-    sourceHash: freshSources.sourceHash,
-    rendererIndexSha256: sha256File(rendererIndex),
-    preloadSha256: sha256File(preloadCjs),
+    sourceHash: preBuildSources.sourceHash,
+    rendererIndexSha256: distArtifacts.rendererIndexSha256,
+    preloadSha256: distArtifacts.preloadSha256,
+    distTreeSha256: distArtifacts.treeSha256,
+    distFiles: distArtifacts.files,
     buildMtimeMs: Number(minArtifactNs) / 1e6,
     buildMtimeNs: minArtifactNs.toString(),
-    mtimes: freshSources.mtimes,
-    mtimeNs: freshSources.mtimeNs,
+    mtimes: preBuildSources.mtimes,
+    mtimeNs: preBuildSources.mtimeNs,
   };
   writeFileSync(check.stampPath, `${JSON.stringify(stampPayload, null, 2)}\n`, 'utf8');
   const stampStat = lstatSync(check.stampPath, { bigint: true });
   if (stampStat.mtimeNs < maxSourceNs) {
-    const bumpedDate = new Date(Math.ceil(freshSources.maxMtimeMs) + 2);
+    const bumpedDate = new Date(Math.ceil(preBuildSources.maxMtimeMs) + 2);
     utimesSync(check.stampPath, bumpedDate, bumpedDate);
   }
 
-  const verified = inspectUiDistFreshness(uiRoot, freshSources);
+  const verified = inspectUiDistFreshness(uiRoot);
   if (!verified.fresh) {
     rmSync(distRoot, { recursive: true, force: true });
     throw new harness.E2EError(
@@ -567,7 +703,7 @@ function ensureFreshUiDist(options = {}) {
     uiRoot,
     uiDist: distRoot,
     stampPath: check.stampPath,
-    sourceHash: freshSources.sourceHash,
+    sourceHash: preBuildSources.sourceHash,
     rebuilt: true,
     reason: check.reason,
     newerFile: check.newerFile,
@@ -779,11 +915,118 @@ function spawnNativeTool(name, args, options = {}) {
   return result;
 }
 
+const CHILD_STATE = Symbol('mv.e2e.childState');
+
+/**
+ * Parse a single newline-delimited JSON envelope line from a fixture-core
+ * socket, returning null on blank or malformed lines instead of throwing.
+ * @param {unknown} line Raw line string without trailing LF.
+ * @returns {Record<string, any> | null}
+ */
+function parseCoreLine(line) {
+  if (typeof line !== 'string') return null;
+  const trimmed = line.trim();
+  if (trimmed.length === 0) return null;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Attach error and exit listeners to a spawned child process at creation time
+ * so asynchronous ENOENT/spawn errors never become uncaught exceptions and
+ * exit state is captured even before waitForChildExit is called.
+ * @template {import('node:events').EventEmitter & { exitCode?: number | null, signalCode?: NodeJS.Signals | null }} T
+ * @param {T} child Spawned ChildProcess.
+ * @returns {T}
+ */
+function trackChildProcess(child) {
+  if (!child || typeof child.on !== 'function') return child;
+  if (child[CHILD_STATE]) return child;
+  const state = {
+    error: null,
+    exited:
+      (child.exitCode !== null && child.exitCode !== undefined) ||
+      (child.signalCode !== null && child.signalCode !== undefined),
+    exitCode: child.exitCode ?? null,
+    signalCode: child.signalCode ?? null,
+  };
+  Object.defineProperty(child, CHILD_STATE, {
+    value: state,
+    enumerable: false,
+    configurable: false,
+  });
+  child.on('error', (err) => {
+    if (!state.error) state.error = err;
+  });
+  child.on('exit', (code, signal) => {
+    state.exited = true;
+    state.exitCode = code;
+    state.signalCode = signal;
+  });
+  return child;
+}
+
+/**
+ * Stop (if requested) and wait for a spawned child process to exit, resolving
+ * immediately when the child has already exited and rejecting promptly when
+ * spawn failed with an error event.
+ * @param {import('node:child_process').ChildProcess} child
+ * @param {(() => void) | null} [stopFn]
+ * @returns {Promise<{ code: number | null, signal: NodeJS.Signals | null }>}
+ */
+function waitForChildExit(child, stopFn = null) {
+  if (!child || typeof child !== 'object') {
+    return Promise.reject(new harness.E2EError('E2E_ARGS', 'child process is required'));
+  }
+  trackChildProcess(child);
+  const state = child[CHILD_STATE];
+  if (typeof stopFn === 'function') {
+    stopFn();
+  }
+  if (state && state.error) {
+    return Promise.reject(state.error);
+  }
+  if (
+    (state && state.exited) ||
+    (child.exitCode !== null && child.exitCode !== undefined) ||
+    (child.signalCode !== null && child.signalCode !== undefined)
+  ) {
+    return Promise.resolve({
+      code: child.exitCode ?? (state ? state.exitCode : null),
+      signal: child.signalCode ?? (state ? state.signalCode : null),
+    });
+  }
+  return new Promise((resolveExit, rejectExit) => {
+    const onExit = (code, signal) => {
+      cleanup();
+      resolveExit({ code, signal });
+    };
+    const onError = (err) => {
+      cleanup();
+      rejectExit(err);
+    };
+    const cleanup = () => {
+      child.removeListener('exit', onExit);
+      child.removeListener('error', onError);
+    };
+    child.once('exit', onExit);
+    child.once('error', onError);
+  });
+}
+
 module.exports = {
   ...harness,
   UI_BUILD_STAMP_FILE,
   UI_BUILD_STAMP_SCHEMA,
   collectUiBuildSources,
+  collectUiDistArtifacts,
   inspectUiDistFreshness,
   ensureFreshUiDist,
   prepareWall,
@@ -792,4 +1035,7 @@ module.exports = {
   E2E_NATIVE_PREREQS,
   requireNativeTool,
   spawnNativeTool,
+  parseCoreLine,
+  trackChildProcess,
+  waitForChildExit,
 };

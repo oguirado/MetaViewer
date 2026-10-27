@@ -28,10 +28,6 @@ const harness = require('./ac-harness.cjs');
 const ROOT = resolve(__dirname, '../..');
 const UI_ROOT = join(ROOT, 'ui');
 
-function ensureShippedUiBuild() {
-  return harness.ensureFreshUiDist({ root: ROOT, uiRoot: UI_ROOT });
-}
-
 function makeRgbFrame(width, height, r, g, b) {
   const buf = Buffer.alloc(width * height * 3);
   for (let i = 0; i < buf.length; i += 3) {
@@ -262,7 +258,7 @@ function callProbeControl(ctlSock, payload, timeoutMs = 4000) {
 
 async function runProductionFrameJourney({ diagEnabled = true, multislotRoundTrip = false } = {}) {
   harness.requireNativeTool('xvfb-run');
-  ensureShippedUiBuild();
+  harness.ensureFreshUiDist({ root: ROOT, uiRoot: UI_ROOT });
   const electron = harness.electronBinary(ROOT);
   const { findForbiddenEnv } = await import(
     pathToFileURL(join(UI_ROOT, 'electron/coreLauncher.js')).href
@@ -406,7 +402,8 @@ async function runProductionFrameJourney({ diagEnabled = true, multislotRoundTri
         while ((nl = buffer.indexOf('\n')) >= 0) {
           const line = buffer.slice(0, nl);
           buffer = buffer.slice(nl + 1);
-          const env = JSON.parse(line);
+          const env = harness.parseCoreLine(line);
+          if (!env) continue;
           if (env.body?.schema === 'hello/v0.2') {
             sendCore(config.core.hello);
             const tCreated = setTimeout(() => {
@@ -477,11 +474,17 @@ async function runProductionFrameJourney({ diagEnabled = true, multislotRoundTri
     }
 
     const launchTarget = multislotRoundTrip ? probePath : UI_ROOT;
-    child = spawn(
-      'xvfb-run',
-      ['-a', electron, launchTarget, `--user-data-dir=${profileDir}`],
-      { env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] },
+    let spawnError = null;
+    child = harness.trackChildProcess(
+      spawn(
+        'xvfb-run',
+        ['-a', electron, launchTarget, `--user-data-dir=${profileDir}`],
+        { env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] },
+      ),
     );
+    child.on('error', (err) => {
+      if (!spawnError) spawnError = err;
+    });
 
     let output = '';
     let mainReady = false;
@@ -495,10 +498,16 @@ async function runProductionFrameJourney({ diagEnabled = true, multislotRoundTri
     child.stderr.on('data', onChunk);
 
     const checkChildAlive = () => {
-      if (child.exitCode !== null) {
+      if (spawnError) {
         throw new harness.E2EError(
           'E2E_EARLY_EXIT',
-          `Electron exited early (rc=${child.exitCode}):\n${output}`,
+          `Electron failed to spawn (${spawnError.message || String(spawnError)}):\n${output}`,
+        );
+      }
+      if (child.exitCode !== null || child.signalCode !== null) {
+        throw new harness.E2EError(
+          'E2E_EARLY_EXIT',
+          `Electron exited early (rc=${child.exitCode}, signal=${child.signalCode}):\n${output}`,
         );
       }
     };
@@ -849,8 +858,7 @@ async function runProductionFrameJourney({ diagEnabled = true, multislotRoundTri
       await assert.rejects(lstat(diagPath), { code: 'ENOENT' });
     }
 
-    stopChild();
-    await once(child, 'exit');
+    await harness.waitForChildExit(child, stopChild);
 
     return {
       mainReady,
@@ -964,6 +972,12 @@ test('W2-FRAME-LIVE-DIAG: production main + preload + hostBindings records main 
   assert.equal(diag.main.portAnnouncements, 1);
   assert.equal(diag.main.revocationsTotal, 0);
   assert.equal(diag.main.acksReceived, 3);
+  assert.equal(diag.main.lastDelivery.surfaceId, surfaceId);
+  assert.equal(diag.main.lastDelivery.surfaceGeneration, 1);
+  assert.equal(diag.main.lastDelivery.frameGeneration, 3);
+  assert.equal(diag.main.lastAck.surfaceId, surfaceId);
+  assert.equal(diag.main.lastAck.surfaceGeneration, 1);
+  assert.equal(diag.main.lastAck.frameGeneration, 3);
   assert.ok(
     diag.main.acksByOutcome.PRESENTED >= 1,
     `expected at least 1 PRESENTED ack on initial frame, got ${JSON.stringify(diag.main.acksByOutcome)}`,
