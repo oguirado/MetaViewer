@@ -1,13 +1,13 @@
 {
   "schema": "metaviewer.perf.rss-budgets/v1",
-  "basis": "[CITED] AC-14 ratified decimal MB, revised main/renderer caps per section 9.3; [TARGET, unit decision] utility diagnostic and shell-only workload",
+  "basis": "[TARGET, unit decision] Frozen provisional caps in decimal bytes and shell-only workload; AC-14: AUSENTE — no inventar in docs/, contracts/, core/, daemon-adapter/; ratification evidence pending",
   "budgets": [
     {
       "id": "rss_main_bytes",
       "unit": "bytes",
       "dir": "max",
       "bound": 200000000,
-      "basis": "[CITED] AC-14",
+      "basis": "[TARGET, unit decision] frozen provisional main cap",
       "gating": true
     },
     {
@@ -15,7 +15,7 @@
       "unit": "bytes",
       "dir": "max",
       "bound": 370000000,
-      "basis": "[CITED] AC-14",
+      "basis": "[TARGET, unit decision] frozen provisional renderer cap",
       "gating": true
     },
     {
@@ -23,7 +23,7 @@
       "unit": "bytes",
       "dir": "max",
       "bound": 1150000000,
-      "basis": "[CITED] AC-14",
+      "basis": "[TARGET, unit decision] frozen provisional process-tree cap",
       "gating": true
     },
     {
@@ -31,7 +31,7 @@
       "unit": "bytes",
       "dir": "max",
       "bound": 260000000,
-      "basis": "[TARGET] diagnostic only",
+      "basis": "[TARGET, unit decision] diagnostic only",
       "gating": false
     }
   ],
