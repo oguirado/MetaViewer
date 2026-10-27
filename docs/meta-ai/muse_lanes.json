@@ -1,17 +1,17 @@
 {
  "schema": "metaviewer.meta_ai_usage/v1",
  "totals": {
-  "lanes": 325,
-  "ok": 325,
-  "input_tokens": 71038566,
-  "cache_read_tokens": 1595107741,
-  "output_tokens": 15197258,
-  "thinking_tokens": 7982779,
+  "lanes": 329,
+  "ok": 329,
+  "input_tokens": 71599350,
+  "cache_read_tokens": 1605336096,
+  "output_tokens": 15295196,
+  "thinking_tokens": 8030089,
   "cache_hit_pct": 95.7,
-  "usd": 13.3335,
-  "usd_per_lane": 0.041,
-  "steps": 17227,
-  "lane_hours": 43.8
+  "usd": 13.4296,
+  "usd_per_lane": 0.0408,
+  "steps": 17414,
+  "lane_hours": 44.2
  },
  "peak_concurrent_lanes": 24,
  "rooms": {
@@ -128,6 +128,16 @@
   "mvui9": {
    "stage": "ui",
    "why": "Operator saw no recording menus, screenshot action or capsule action icons on wall tiles: add per-tile record-for-AI/screenshot/recording chrome over the new closed capture facade, adopt kit 0.2.1 tile actions and anchors, and audit every capsule action icon.",
+   "orchestrator": "UI orchestrator"
+  },
+  "mvui20": {
+   "stage": "fix",
+   "why": "URGENT: after the first live frame is presented, the following frames of the stream are refused and the tile falls back to Connecting (production-path e2e evidence).",
+   "orchestrator": "UI orchestrator"
+  },
+  "mvui19": {
+   "stage": "fix",
+   "why": "Fix the renderer items from the evening cross-review (capture rows, empty profile id) and the minor findings of real-app round 3 (activity count, sticky toast, folded tile height, screenshots list, contrast, multislot anchors).",
    "orchestrator": "UI orchestrator"
   },
   "mvui15": {
@@ -333,6 +343,11 @@
   "mv0rv": {
    "stage": "review",
    "why": "Verify the 12 findings of the third Gemini Argon cross-review (integrations since e19feb6: frame_ref v0.2 path, preload origin, no-follow witness, journal lock, UI drops) and turn confirmed ones into Sol fix units.",
+   "orchestrator": "conductor"
+  },
+  "mvrv8": {
+   "stage": "review",
+   "why": "Verify the findings of the Gemini Argon cross-review of the day-2 evening integrations before any fix, and turn confirmed ones into disjoint fix units.",
    "orchestrator": "conductor"
   },
   "mv0w2pk1": {
@@ -7291,6 +7306,90 @@
    "thinking_tokens": 34152,
    "cache_hit_pct": 93.3,
    "usd": 0.049622
+  },
+  {
+   "room": "mvrv8",
+   "lane": "evadapter",
+   "title": "Verify evadapter",
+   "stage": "review",
+   "model": "muse-spark-1.3",
+   "orchestrator": "conductor",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-27T18:27:43.077000+00:00",
+   "duration_s": 370.7,
+   "end_utc": "2026-10-27T18:33:53.806000+00:00",
+   "phase": "build",
+   "steps": 40,
+   "input_tokens": 152204,
+   "cache_read_tokens": 2312887,
+   "output_tokens": 30816,
+   "thinking_tokens": 19399,
+   "cache_hit_pct": 93.8,
+   "usd": 0.026009
+  },
+  {
+   "room": "mvrv8",
+   "lane": "evcontracts",
+   "title": "Verify evcontracts",
+   "stage": "review",
+   "model": "muse-spark-1.3",
+   "orchestrator": "conductor",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-27T18:27:48.111000+00:00",
+   "duration_s": 299.6,
+   "end_utc": "2026-10-27T18:32:47.718000+00:00",
+   "phase": "build",
+   "steps": 50,
+   "input_tokens": 139500,
+   "cache_read_tokens": 2634943,
+   "output_tokens": 23522,
+   "thinking_tokens": 10688,
+   "cache_hit_pct": 95.0,
+   "usd": 0.023924
+  },
+  {
+   "room": "mvrv8",
+   "lane": "evui",
+   "title": "Verify evui",
+   "stage": "review",
+   "model": "muse-spark-1.3",
+   "orchestrator": "conductor",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-27T18:27:53.064000+00:00",
+   "duration_s": 266.0,
+   "end_utc": "2026-10-27T18:32:19.025000+00:00",
+   "phase": "build",
+   "steps": 52,
+   "input_tokens": 139192,
+   "cache_read_tokens": 2808481,
+   "output_tokens": 18040,
+   "thinking_tokens": 5031,
+   "cache_hit_pct": 95.3,
+   "usd": 0.023144
+  },
+  {
+   "room": "mvrv8",
+   "lane": "evci",
+   "title": "Verify evci",
+   "stage": "review",
+   "model": "muse-spark-1.3",
+   "orchestrator": "conductor",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-27T18:27:58.096000+00:00",
+   "duration_s": 319.6,
+   "end_utc": "2026-10-27T18:33:17.731000+00:00",
+   "phase": "build",
+   "steps": 45,
+   "input_tokens": 129888,
+   "cache_read_tokens": 2472044,
+   "output_tokens": 25560,
+   "thinking_tokens": 12192,
+   "cache_hit_pct": 95.0,
+   "usd": 0.023045
   }
  ]
 }

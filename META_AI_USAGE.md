@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 325 | 55 | 270 |
-| Lanes finished OK | 325 | 55 | 270 |
-| Agent steps | 17,227 | 2,705 | 14,522 |
-| Lane-hours of agent work | 43.8 | 5.2 | 38.6 |
-| Fresh input tokens | 71,038,566 | 11,482,034 | 59,556,532 |
-| Cache-read input tokens | 1,595,107,741 | 226,255,212 | 1,368,852,529 |
+| Lanes launched | 329 | 55 | 274 |
+| Lanes finished OK | 329 | 55 | 274 |
+| Agent steps | 17,414 | 2,705 | 14,709 |
+| Lane-hours of agent work | 44.2 | 5.2 | 38.9 |
+| Fresh input tokens | 71,599,350 | 11,482,034 | 60,117,316 |
+| Cache-read input tokens | 1,605,336,096 | 226,255,212 | 1,379,080,884 |
 | Prompt cache hit % | 95.7 | 95.2 | 95.8 |
-| Output tokens | 15,197,258 | 2,135,708 | 13,061,550 |
-| Thinking tokens | 7,982,779 | 1,050,039 | 6,932,740 |
-| Cost (USD) | 13.3335 | 2.0279 | 11.3057 |
-| Cost per lane (USD) | 0.041 | 0.0369 | 0.0419 |
+| Output tokens | 15,295,196 | 2,135,708 | 13,159,488 |
+| Thinking tokens | 8,030,089 | 1,050,039 | 6,980,050 |
+| Cost (USD) | 13.4296 | 2.0279 | 11.4018 |
+| Cost per lane (USD) | 0.0408 | 0.0369 | 0.0416 |
 
-Rooms: 79. Peak concurrent lanes [MEASURED from lane start/end]: 24.
+Rooms: 80. Peak concurrent lanes [MEASURED from lane start/end]: 24.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -49,7 +49,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | plan | 12 | 92.6 | 0.3072 |
 | release | 5 | 93.2 | 0.0945 |
 | research | 14 | 94.6 | 0.5673 |
-| review | 55 | 94.5 | 1.6245 |
+| review | 59 | 94.6 | 1.7206 |
 | submission | 4 | 94.9 | 0.0995 |
 | test | 12 | 95.6 | 0.5657 |
 | testing | 65 | 95.8 | 2.6353 |
@@ -139,6 +139,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui18 | UI orchestrator | Oct 27 18:23 | fix | 1 | 97.4 | 0.0635 | BLOCKER: live frames never paint on the real app (canvas attach identity mismatch between frame router and SurfaceCanvas); plus frame scale jitter and kit view subscribe mirroring. |
 | mvui18c | UI orchestrator | Oct 27 18:39 | fix | 1 | 95.1 | 0.0234 | Unblock the live-frames fix: one regression where a recreated frame stream acks REFUSED instead of PRESENTED. |
 | mvui18d | UI orchestrator | Oct 27 18:48 | fix | 1 | 93.3 | 0.0496 | Before handing over the live-frames blocker fix: stop per-frame canvas detach/re-attach, clear retained frames on stream identity change, tidy duplicated checks. |
+| mvrv8 | conductor | Oct 27 19:27 | review | 4 | 94.8 | 0.0961 | Verify the findings of the Gemini Argon cross-review of the day-2 evening integrations before any fix, and turn confirmed ones into disjoint fix units. |
 
 ## Every lane
 
@@ -469,6 +470,10 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui18 | J | live frames paint (L3-1) + jitter + subscribe mirror | Oct 27 18:23 | yes | 96 | 97.4 | 0.063491 |
 | mvui18c | S | second stream re-registration | Oct 27 18:39 | yes | 45 | 95.1 | 0.023382 |
 | mvui18d | D | SurfaceCanvas judge notes | Oct 27 18:48 | yes | 49 | 93.3 | 0.049622 |
+| mvrv8 | evadapter | Verify evadapter | Oct 27 19:27 | yes | 40 | 93.8 | 0.026009 |
+| mvrv8 | evcontracts | Verify evcontracts | Oct 27 19:27 | yes | 50 | 95.0 | 0.023924 |
+| mvrv8 | evui | Verify evui | Oct 27 19:27 | yes | 52 | 95.3 | 0.023144 |
+| mvrv8 | evci | Verify evci | Oct 27 19:27 | yes | 45 | 95.0 | 0.023045 |
 
 ## Method
 
