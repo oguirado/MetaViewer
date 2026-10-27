@@ -9,7 +9,7 @@
  *
  * Main supervises; Rust owns state. Every privileged receiver admits
  * through observeSender first. No top-level Electron import: the module
- * is inert under plain Node and the direct entry dynamic-imports
+ * is inert under plain Node and the direct entry synchronously requires
  * Electron only behind the versions guard.
  *
  * @module main
@@ -19,6 +19,7 @@ import { constants as fsConstants, closeSync, fstatSync, lstatSync, mkdirSync, o
 import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { findForbiddenEnv } from './coreLauncher.js';
 
 // [TARGET, unit decision] Packaging seals ASAR renderer bytes into the loaded
@@ -1052,6 +1053,8 @@ export async function handleAppRequest(rendererRoot, request, options) {
  * @property {string} root Canonical admitted bundle root.
  */
 
+const privilegedProtocols = new WeakSet();
+
 /**
  * Register the privileged bundled scheme on an injected protocol
  * handle. Main must call this before app ready; the exact privilege
@@ -1068,9 +1071,12 @@ export function registerPrivilegedScheme(protocol) {
   const typed = /** @type {{ registerSchemesAsPrivileged: (specs: Array<{scheme: string, privileges: MainSchemePrivileges}>) => unknown }} */ (
     /** @type {unknown} */ (rec)
   );
-  typed.registerSchemesAsPrivileged([
-    { scheme: PRIVILEGED_SCHEME, privileges: { standard: true, secure: true } },
-  ]);
+  if (!privilegedProtocols.has(rec)) {
+    typed.registerSchemesAsPrivileged([
+      { scheme: PRIVILEGED_SCHEME, privileges: { standard: true, secure: true } },
+    ]);
+    privilegedProtocols.add(rec);
+  }
   return Object.freeze({
     scheme: PRIVILEGED_SCHEME,
     privileges: Object.freeze({ standard: /** @type {true} */ (true), secure: /** @type {true} */ (true) }),
@@ -1896,7 +1902,7 @@ async function mainDirectEntry() {
   /** @type {Record<string, unknown>} */
   let electron = {};
   try {
-    electron = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (await import('electron')));
+    electron = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (createRequire(import.meta.url)('electron')));
   } catch {
     process.exitCode = 1;
     return;
@@ -1935,6 +1941,14 @@ async function mainDirectEntry() {
     if (running !== ELECTRON_PIN) {
       throw new MainError('ELECTRON_PIN', `electron version must be ${ELECTRON_PIN}`);
     }
+    // [TARGET, unit decision] This direct-entry call runs during module
+    // evaluation: privileges must precede every await, including host bootstrap.
+    // bootProductionMain reuses the same protocol registration exactly once.
+    try { registerPrivilegedScheme(electron.protocol); }
+    catch (error) {
+      if (error instanceof MainError) throw error;
+      throw new MainError('PROTOCOL', 'privileged scheme registration refused');
+    }
     const bindings = await loadMainBindings();
     await bootProductionMain({ core:bindings.core, wire:bindings.wire, electronVersion: running,
       app: electron.app, BrowserWindow: electron.BrowserWindow, ipcMain: electron.ipcMain,
@@ -1942,6 +1956,7 @@ async function mainDirectEntry() {
       shellRoot: fileURLToPath(new URL('..',import.meta.url)),
       runtime: {xdgRuntimeDir:process.env.XDG_RUNTIME_DIR || '',uid:process.getuid ? process.getuid() : -1},
       geometry: DEFAULT_GEOMETRY, bridge:createLayoutBridge() });
+    console.log('METAVIEWER_MAIN_READY');
   } catch (error) {
     failClosed(error);
   }
