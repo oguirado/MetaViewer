@@ -1,0 +1,183 @@
+"""Wender planning over an explicit, pipe-only subprocess boundary.
+
+[TARGET, unit decision] The pinned package has no planner CLI entry point.
+The host must supply ``command`` (an argv sequence, never a shell string).
+It reads {observation, element_table, goal} and writes exactly
+{action, expectation, state, target_node} as UTF-8 JSON. Only click plans
+are admitted here; their coordinates must fall inside the custody-checked
+actionable target. This adapter does not dispatch or confer admission.
+State fields follow the pinned wender.state/v1 wire schema; no private
+implementation is imported or embedded. Checkout pinning belongs to preflight.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import os
+from pathlib import Path
+import re
+import subprocess
+
+from .executor import AdmittedExecutor, SurfaceError
+from .observe import (
+    ObservationError, _reject_non_canonical, compute_battery_state_sha256,
+    validate_observation,
+)
+from .tools import _check_action, _check_expectation
+
+
+def _require(condition, message):
+    if not condition:
+        raise ObservationError("bad_shape", message)
+
+
+def _hex(value, length):
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{%d}" % length, value) is not None
+
+
+def validate_state(state):
+    """Validate the closed state wire shape and return its battery digest.
+
+    AX digests are producer witnesses, not recomputed from flattened nodes.
+    Geometry against the bound frame is checked separately by the executor.
+    """
+    _reject_non_canonical(state, 0)
+    _require(isinstance(state, dict) and set(state) == {
+        "schema", "source", "prune", "ax_sha256", "ax_stable_sha256",
+        "viewport", "nodes", "actionable", "counts",
+    }, "state keys invalid")
+    _require(state["schema"] == "wender.state/v1", "state schema invalid")
+    for key in ("ax_sha256", "ax_stable_sha256"):
+        _require(_hex(state[key], 64), key + " invalid")
+    source, prune = state["source"], state["prune"]
+    _require(isinstance(source, dict) and {"kind", "url", "title"} <= source.keys(),
+             "state source invalid")
+    _require(source["kind"] in ("cdp", "atspi", "godot", "vision")
+             and all(source[k] is None or isinstance(source[k], str)
+                     for k in ("url", "title")), "state source invalid")
+    _require(isinstance(prune, dict) and isinstance(prune.get("name"), str)
+             and type(prune.get("version")) is int, "state prune invalid")
+    viewport = state["viewport"]
+    _require(viewport is None or (isinstance(viewport, dict)
+             and all(type(v) is int for v in viewport.values())), "state viewport invalid")
+    _require(isinstance(state["nodes"], list), "state nodes invalid")
+    seen, actionable = set(), []
+    for node in state["nodes"]:
+        _require(isinstance(node, dict) and set(node) == {
+            "id", "role", "name", "depth", "parent", "ordinal", "states",
+            "actionable", "box",
+        }, "state node keys invalid")
+        ident, parent = node["id"], node["parent"]
+        _require(_hex(ident, 16) and ident not in seen, "state node id invalid")
+        _require(parent is None or (isinstance(parent, str) and parent in seen),
+                 "state node parent invalid")
+        seen.add(ident)
+        _require(all(type(node[k]) is int and node[k] >= 0 for k in ("depth", "ordinal")),
+                 "state node integer invalid")
+        _require(all(isinstance(node[k], str) for k in ("role", "name")),
+                 "state node text invalid")
+        _require(isinstance(node["states"], dict)
+                 and all(isinstance(v, str) for v in node["states"].values()),
+                 "state node states invalid")
+        _require(type(node["actionable"]) is bool, "state node actionable invalid")
+        box = node["box"]
+        _require(box is None or (isinstance(box, list) and len(box) == 4
+                 and all(type(v) is int for v in box)), "state node box invalid")
+        if node["actionable"]:
+            actionable.append(ident)
+    _require(isinstance(state["actionable"], list) and state["actionable"] == actionable,
+             "state actionable membership invalid")
+    counts = state["counts"]
+    _require(isinstance(counts, dict) and {"raw", "nodes", "actionable"} <= counts.keys()
+             and all(type(v) is int and v >= 0 for v in counts.values()), "state counts invalid")
+    _require(counts["nodes"] == len(seen) and counts["actionable"] == len(actionable)
+             and counts["raw"] >= len(seen), "state counts disagree")
+    return compute_battery_state_sha256(state)
+
+
+def _unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        _require(key not in result, "duplicate JSON key")
+        result[key] = value
+    return result
+
+
+class WenderSubprocessAdapter:
+    """Host-configured planner with no files, shell, or inherited credentials.
+
+    ``timeout`` is a positive, finite duration in seconds, passed to run().
+    ``battery_state_sha256`` is cleared before each attempt, and populated
+    only after every response and custody check succeeds.
+    """
+
+    def __init__(self, *, command, wender_root=None, timeout=10):
+        raw = wender_root if wender_root is not None else os.environ.get("MV_WENDER_ROOT")
+        if raw is None or not str(raw):
+            raise ObservationError("unavailable", "MV_WENDER_ROOT or wender_root required")
+        self.wender_root = Path(raw).resolve()
+        if not self.wender_root.is_dir():
+            raise ObservationError("unavailable", "Wender checkout is not a directory")
+        if (not isinstance(command, (list, tuple)) or not command
+                or any(not isinstance(arg, str) or not arg or "\x00" in arg for arg in command)):
+            raise ValueError("command must be a nonempty argv sequence")
+        if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("timeout must be positive and finite")
+        self.command = tuple(command)
+        self.timeout = timeout
+        self.battery_state_sha256 = None
+
+    def plan_step(self, observation, element_table, goal):
+        self.battery_state_sha256 = None
+        _require(isinstance(observation, dict) and isinstance(observation.get("frame_ref"), dict),
+                 "observation frame missing")
+        frame = observation["frame_ref"]
+        validate_observation(observation, surface_id=frame.get("surface_id"),
+                             generation=frame.get("generation"), contract_version="v0.2")
+        _reject_non_canonical(element_table, 0)
+        _require(isinstance(element_table, dict)
+                 and element_table.get("schema") == "vqa.element-table/v1"
+                 and isinstance(element_table.get("elements"), list), "element table invalid")
+        for key, expected in (("frame_sha256", frame["sha256"]),
+                              ("width", frame["width"]), ("height", frame["height"])):
+            _require(type(element_table.get(key)) is type(expected)
+                     and element_table[key] == expected, "element table frame mismatch")
+        _require(isinstance(goal, str) and bool(goal.strip()), "goal required")
+        request = json.dumps(dict(observation=observation, element_table=element_table, goal=goal),
+                             sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+                             allow_nan=False).encode("utf-8")
+        env = {key: os.environ[key] for key in ("PATH", "LANG") if key in os.environ}
+        env.update(PYTHONPATH=str(self.wender_root), PYTHONDONTWRITEBYTECODE="1")
+        try:
+            result = subprocess.run(self.command, cwd=self.wender_root, env=env,
+                                    input=request, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    timeout=self.timeout, check=False)
+        except subprocess.TimeoutExpired as exc:
+            raise ObservationError("timeout", "Wender planner timed out") from exc
+        except OSError as exc:
+            raise ObservationError("unavailable", "Wender planner launch failed") from exc
+        if result.returncode:
+            raise ObservationError("subprocess_failed", "Wender planner exited unsuccessfully")
+        try:
+            response = json.loads(result.stdout.decode("utf-8"), object_pairs_hook=_unique_object)
+        except (ValueError, UnicodeError, RecursionError) as exc:
+            raise ObservationError("bad_shape", "Wender response is not unique UTF-8 JSON") from exc
+        _require(isinstance(response, dict) and set(response) == {
+            "action", "expectation", "state", "target_node",
+        }, "planner response keys invalid")
+        state, action, expectation, target = (response[k] for k in (
+            "state", "action", "expectation", "target_node"))
+        digest = validate_state(state)
+        _reject_non_canonical(target, 0)
+        _check_action(action)
+        _check_expectation(expectation)
+        _require(action["type"] == "click", "only custody-bound clicks supported")
+        AdmittedExecutor.check_target(target, latest=state["nodes"], frame=frame)
+        _require(target.get("actionable") is True and target["id"] in state["actionable"],
+                 "target is not actionable")
+        x, y, w, h = target["box"]
+        if not (x <= action["x"] < x + w and y <= action["y"] < y + h):
+            raise SurfaceError("alignment", "click")
+        self.battery_state_sha256 = digest
+        return action, expectation, state, target

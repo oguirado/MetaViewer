@@ -1,0 +1,216 @@
+"""Real pipe subprocess fixtures; private checkouts are never needed."""
+
+import copy
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from metaviewer_agents.executor import SurfaceError, SurfaceRefused
+from metaviewer_agents.observe import ObservationError, compute_battery_state_sha256
+from metaviewer_agents.wender_bridge import WenderSubprocessAdapter, validate_state
+
+
+def observation():
+    return {"schema": "observation/v0.2", "frame_ref": {
+        "schema": "frame_ref/v0.2", "surface_id": "test", "generation": 1,
+        "tick": 0, "ts_ns": 0, "width": 100, "height": 80, "format": "rgb24",
+        "ramws_path": "/dev/shm/test-frame", "sha256": "a" * 64, "capture_us": 0,
+    }}
+
+
+def table():
+    return dict(schema="vqa.element-table/v1", frame_sha256="a" * 64,
+                width=100, height=80, elements=[])
+
+
+def reply():
+    target = dict(id="0123456789abcdef", role="button", name="Continue",
+                  depth=0, parent=None, ordinal=0, states={}, actionable=True,
+                  box=[10, 20, 30, 20])
+    state = dict(schema="wender.state/v1", source=dict(kind="vision", url=None, title="café"),
+                 prune=dict(name="test", version=1), ax_sha256="b" * 64,
+                 ax_stable_sha256="c" * 64, viewport=dict(w=100, h=80),
+                 nodes=[target], actionable=[target["id"]],
+                 counts=dict(raw=1, nodes=1, actionable=1))
+    return dict(action=dict(type="click", x=20, y=30, button="left"),
+                expectation=dict(type="text_present", text="Ready"),
+                state=state, target_node=copy.deepcopy(target))
+
+
+class WenderBridgeTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="wender-café-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.cli = self.root / "fake_planner.py"
+
+    def adapter(self, payload=None, *, raw=None, prelude="", timeout=2):
+        if raw is None:
+            raw = json.dumps(reply() if payload is None else payload, ensure_ascii=False)
+        self.cli.write_text(
+            "import json, os, sys\n"
+            "request = json.load(sys.stdin)\n"
+            "assert request['goal'] == 'Continue'\n"
+            "assert request['observation']['schema'] == 'observation/v0.2'\n"
+            "assert request['element_table']['schema'] == 'vqa.element-table/v1'\n"
+            "assert os.getcwd() == os.environ['PYTHONPATH']\n"
+            "assert set(os.environ) <= {'PATH','LANG','LC_CTYPE','PYTHONPATH','PYTHONDONTWRITEBYTECODE'}\n"
+            "assert os.environ['PYTHONDONTWRITEBYTECODE'] == '1'\n"
+            + prelude + "\nsys.stdout.write(" + repr(raw) + ")\n", encoding="utf-8")
+        return WenderSubprocessAdapter(wender_root=self.root,
+                                       command=[sys.executable, str(self.cli)], timeout=timeout)
+
+    def run_plan(self, adapter):
+        return adapter.plan_step(observation(), table(), "Continue")
+
+    def test_click_roundtrip_isolated_environment_no_files_or_private_import(self):
+        adapter = self.adapter()
+        before = set(self.root.rglob("*"))
+        with patch.dict(os.environ, {"SECRET_TOKEN": "must-not-leak", "PYTHONPATH": "/bad"}):
+            action, expectation, state, target = self.run_plan(adapter)
+        self.assertEqual(action, reply()["action"])
+        self.assertEqual(expectation, reply()["expectation"])
+        self.assertEqual(target, state["nodes"][0])
+        self.assertEqual(adapter.battery_state_sha256, compute_battery_state_sha256(state))
+        self.assertEqual(before, set(self.root.rglob("*")))
+        self.assertFalse(any(name == "wender" or name.startswith("wender.") for name in sys.modules))
+        # Negative control: the same successful transport cannot bless stale custody.
+        bad = reply(); bad["target_node"]["role"] = "link"
+        with self.assertRaisesRegex(ValueError, "target custody"):
+            self.run_plan(self.adapter(bad))
+
+    def test_canonical_digest_and_float_negative_controls(self):
+        state = reply()["state"]
+        original = copy.deepcopy(state)
+        digest = validate_state(state)
+        self.assertEqual(state, original)
+        moved = copy.deepcopy(state); moved["nodes"][0]["box"][0] += 1
+        self.assertEqual(digest, validate_state(moved))
+        renamed = copy.deepcopy(state); renamed["nodes"][0]["name"] = "Changed"
+        self.assertNotEqual(digest, validate_state(renamed))
+        for mutate in (
+            lambda s: s["nodes"][0]["box"].__setitem__(0, 10.0),
+            lambda s: s["source"].__setitem__("extra", 1.0),
+            lambda s: s["prune"].__setitem__("version", True),
+        ):
+            bad = reply(); mutate(bad["state"])
+            with self.subTest(state=bad["state"]), self.assertRaises(ObservationError):
+                self.run_plan(self.adapter(bad))
+
+    def test_stop_and_alignment_have_typed_failures(self):
+        self.run_plan(self.adapter())
+        for name in ("Stop", "Stop generation", "Detener generación"):
+            bad = reply()
+            bad["state"]["nodes"][0]["name"] = name
+            bad["target_node"]["name"] = name
+            with self.subTest(name=name), self.assertRaises(SurfaceRefused) as caught:
+                self.run_plan(self.adapter(bad))
+            self.assertEqual(caught.exception.code, "generation_control")
+            self.assertEqual(str(caught.exception), "generation_control: click")
+        for box in ([99, 20, 2, 20], [-1, 20, 30, 20], [10, 20, 0, 20], None):
+            bad = reply()
+            bad["target_node"]["box"] = box
+            bad["state"]["nodes"][0]["box"] = box
+            with self.subTest(box=box), self.assertRaises(SurfaceError) as caught:
+                self.run_plan(self.adapter(bad))
+            self.assertEqual(str(caught.exception), "alignment: click")
+
+    def test_nonactionable_target_and_click_outside_target(self):
+        self.run_plan(self.adapter())
+        bad = reply()
+        bad["state"]["nodes"][0]["actionable"] = False
+        bad["target_node"]["actionable"] = False
+        bad["state"]["actionable"] = []
+        bad["state"]["counts"]["actionable"] = 0
+        with self.assertRaisesRegex(ObservationError, "not actionable"):
+            self.run_plan(self.adapter(bad))
+        bad = reply(); bad["action"]["x"] = 40
+        with self.assertRaisesRegex(SurfaceError, "alignment"):
+            self.run_plan(self.adapter(bad))
+
+    def test_malformed_state_controls(self):
+        validate_state(reply()["state"])
+        mutations = [
+            lambda s: s.pop("ax_sha256"),
+            lambda s: s.update(schema="foreign/v1"),
+            lambda s: s.update(ax_sha256="A" * 64),
+            lambda s: s.update(ax_stable_sha256="bad"),
+            lambda s: s.update(nodes={}),
+            lambda s: s["nodes"].append(copy.deepcopy(s["nodes"][0])),
+            lambda s: s["nodes"][0].update(parent="missing"),
+            lambda s: s["nodes"][0].update(states={"disabled": True}),
+            lambda s: s["nodes"][0].update(box=[True, 0, 1, 1]),
+            lambda s: s.update(actionable=["missing"]),
+            lambda s: s.update(counts={"raw": 1, "nodes": True, "actionable": 1}),
+            lambda s: s.update(viewport={"w": True}),
+            lambda s: s.update(source={"kind": "foreign"}),
+            lambda s: s.update(prune={}),
+        ]
+        for mutate in mutations:
+            bad = reply(); mutate(bad["state"])
+            with self.subTest(mutation=mutations.index(mutate)), self.assertRaises(ObservationError):
+                self.run_plan(self.adapter(bad))
+
+    def test_transport_failure_controls_and_digest_reset(self):
+        adapter = self.adapter()
+        self.run_plan(adapter)
+        self.assertIsNotNone(adapter.battery_state_sha256)
+        self.adapter(prelude="sys.exit(7)")
+        with self.assertRaises(ObservationError) as caught:
+            self.run_plan(adapter)
+        self.assertEqual(caught.exception.code, "subprocess_failed")
+        self.assertIsNone(adapter.battery_state_sha256)
+        with self.assertRaises(ObservationError) as caught:
+            self.run_plan(self.adapter(prelude="import time; time.sleep(1)", timeout=0.05))
+        self.assertEqual(caught.exception.code, "timeout")
+        missing = WenderSubprocessAdapter(wender_root=self.root,
+                                         command=[str(self.root / "absent")])
+        with self.assertRaises(ObservationError) as caught:
+            self.run_plan(missing)
+        self.assertEqual(caught.exception.code, "unavailable")
+
+    def test_response_decoding_and_contract_controls(self):
+        self.run_plan(self.adapter())
+        for raw in ("not json", "[]", "{}", '{"state":{},"state":{}}',
+                    json.dumps(dict(reply(), extra=True)),
+                    json.dumps(dict(reply(), action=dict(type="wait", ms=1))),
+                    json.dumps(dict(reply(), expectation={"type": "invented"}))):
+            with self.subTest(raw=raw), self.assertRaises(ValueError):
+                self.run_plan(self.adapter(raw=raw))
+
+    def test_input_controls_reject_before_spawn(self):
+        adapter = self.adapter()
+        self.run_plan(adapter)
+        self.cli.write_text("raise AssertionError('must never spawn')\n")
+        for delta in ({"width": 99}, {"width": True}, {"frame_sha256": "b" * 64},
+                      {"schema": "foreign/v1"}, {"elements": None}, {"extra": 1.0}):
+            bad = table(); bad.update(delta)
+            with self.subTest(delta=delta), self.assertRaises(ObservationError):
+                adapter.plan_step(observation(), bad, "Continue")
+        for obs, goal in (({}, "Continue"), (observation(), "")):
+            with self.assertRaises(ObservationError):
+                adapter.plan_step(obs, table(), goal)
+
+    def test_configuration_controls(self):
+        with patch.dict(os.environ, {"MV_WENDER_ROOT": str(self.root)}):
+            adapter = WenderSubprocessAdapter(command=[sys.executable])
+            self.assertEqual(adapter.wender_root, self.root)
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(ObservationError):
+                WenderSubprocessAdapter(command=[sys.executable])
+        for command in ("shell command", [], [""]):
+            with self.assertRaises(ValueError):
+                WenderSubprocessAdapter(wender_root=self.root, command=command)
+        for timeout in (True, 0, -1, float("inf"), float("nan")):
+            with self.assertRaises(ValueError):
+                WenderSubprocessAdapter(wender_root=self.root, command=[sys.executable], timeout=timeout)
+        with self.assertRaises(ObservationError):
+            WenderSubprocessAdapter(wender_root=self.root / "absent", command=[sys.executable])
+
+
+if __name__ == "__main__":
+    unittest.main()
