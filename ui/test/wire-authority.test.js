@@ -12,12 +12,12 @@ import {createPreloadFacade,installPreload} from '../electron/preload.js';
 const surface={schema:'surface/v0.2',surface_id:'s1',kind:'browser',display:':1',geometry:{w:1,h:1},state:'active',visibility:'unfolded',control:'human',profile_id:'test'};
 const notice={surface,frame_ref:{schema:'frame_ref/v0.2',surface_id:'s1',generation:1,tick:1,ts_ns:1,width:1,height:1,format:'rgb24',sha256:'a'.repeat(64),capture_us:1}};
 const verdict={schema:'action_verdict/v0.2',proposal_id:'p',decision:'admitted',core_seq:1};
-const settings=JSON.stringify({schema:'settings/v0.2',recording_destination:{capability_id:'disk',path:'/tmp/recordings'}});
+const settings=JSON.stringify({scheme:'mv-light',density:'compact'});
 const spec={command:'luna',args:['--safe'],cols:80,rows:24};
 const calls={loadSettings:[],saveSettings:[settings],recordingDestination:[],nestedDepth:[],selfCapsuleId:[],
   propose:['{"proposal_id":"p"}'],intent:['{"op":"take_control"}'],subscribeFrames:[],unsubscribeFrames:[],
   terminalEnabled:[true],terminalOpen:[spec]};
-async function fixture(t) {
+async function fixture(t,env={}) {
   const root=await mkdtemp(join(tmpdir(),'wire-'));
   const handlers=new Map(),forwarded=[];
   const frame={origin:'app://metaviewer',url:'app://metaviewer/index.html'};
@@ -26,7 +26,7 @@ async function fixture(t) {
   let intentReply=true,coreReply=verdict,terminalReply={session:'s1'};
   const coreCalls=[],terminalCalls=[];
   const ipcMain={handle:(channel,fn)=>handlers.set(channel,fn),removeHandler:channel=>handlers.delete(channel)};
-  const binding=installAuthorityWire({ipcMain,contents,env:{XDG_CONFIG_HOME:root,MV_SELF_CAPSULE_ID:'capsule-1'},argv:['--nested-depth=1'],
+  const binding=installAuthorityWire({ipcMain,contents,env:{XDG_CONFIG_HOME:root,MV_SELF_CAPSULE_ID:'capsule-1',...env},argv:['--nested-depth=1'],
     core:{request:async value=>{coreCalls.push(value);return value.op==='intent'?intentReply:coreReply;}},
     profiles:new Map([['luna',{args:['--safe']}]]),terminal:{setEnabled:async()=>true,open:async value=>{terminalCalls.push(value);return terminalReply;}}});
   t.after(async()=>{await binding.dispose();await rm(root,{recursive:true,force:true});});
@@ -76,19 +76,24 @@ test('settings replacement is atomic, private, bounded, and leaves no temporary 
   await f.call('saveSettings',settings);
   const first=await stat(path);
   assert.equal(first.mode&0o777,0o600);
-  await f.call('saveSettings','{"theme":"next"}');
+  await f.call('saveSettings','{"scheme":"mv-dark","density":"compact"}');
   assert.notEqual((await stat(path)).ino,first.ino);
-  assert.equal(await readFile(path,'utf8'),'{"theme":"next"}');
+  assert.equal(await readFile(path,'utf8'),'{"scheme":"mv-dark","density":"compact"}');
   assert.deepEqual(await readdir(join(f.root,'metaviewer')),['settings.json']);
   await assert.rejects(f.call('saveSettings','{broken'));
-  assert.equal(await f.call('loadSettings'),'{"theme":"next"}');
+  await assert.rejects(f.call('saveSettings','{"scheme":"next","density":"compact"}'),/SETTINGS_SCHEME/);
+  assert.equal(await f.call('loadSettings'),'{"scheme":"mv-dark","density":"compact"}');
   await chmod(path,0o644);await assert.rejects(f.call('loadSettings'),/SETTINGS_FILE/);
   await rm(path);await symlink('/etc/passwd',path);await assert.rejects(f.call('loadSettings'));
 });
-test('recording destination comes from settings; unset stays null',async t=>{
+test('recording destination is host configured; relative refused and unset stays null',async t=>{
   const f=await fixture(t);assert.equal(await f.call('recordingDestination'),null);
-  await f.call('saveSettings',settings);assert.equal(await f.call('recordingDestination'),'/tmp/recordings');
-  await f.call('saveSettings','{"recording_destination":{"path":"relative"}}');await assert.rejects(f.call('recordingDestination'),/OUTCOME/);
+  await f.call('saveSettings',settings);
+  assert.equal(await f.call('recordingDestination'),null);
+  const relative=await fixture(t,{MV_RECORDING_DESTINATION:'relative'});
+  await assert.rejects(relative.call('recordingDestination'),/SETTINGS_DESTINATION/);
+  const absolute=await fixture(t,{MV_RECORDING_DESTINATION:join(f.root,'recordings')});
+  assert.equal(await absolute.call('recordingDestination'),join(f.root,'recordings'));
 });
 test('terminal refuses arbitrary commands, argv changes, disabled state, malformed broker replies',async t=>{
   const f=await fixture(t);

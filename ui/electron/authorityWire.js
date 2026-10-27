@@ -8,7 +8,7 @@
  */
 import { open, mkdir, rename, unlink, lstat, realpath } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { join, isAbsolute, relative, resolve, sep } from 'node:path';
+import { join, isAbsolute, relative, resolve, sep, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -45,6 +45,29 @@ export function verdictReply(value) {
       || (refused && !['STALE_FRAME','SURFACE_NOT_AGENT_CONTROLLED','LOCKED_BY_OTHER','BUDGET_EXCEEDED','OUT_OF_BOUNDS','POLICY'].includes(value.reason_code))) throw new Error('OUTCOME');
   return value;
 }
+/** Renderer preferences use the exact closed settingsModel.js shape.
+ * Missing keys default only as decodeMvSettings does. Invalid input never
+ * replaces disk; corrupt storage returns the renderer's defaults signal.
+ * @param {string} text */
+export function validateSettings(text) {
+  const value=jsonObject(text);
+  if(Object.keys(value).some(key=>!['scheme','density'].includes(key))) throw new Error('SETTINGS_UNKNOWN_KEY');
+  const scheme=value.scheme===undefined?'mv-light':value.scheme;
+  const density=value.density===undefined?'compact':value.density;
+  if(!['mv-light','mv-dark'].includes(scheme)) throw new Error('SETTINGS_SCHEME');
+  if(density!=='compact') throw new Error('SETTINGS_DENSITY');
+  return {scheme,density};
+}
+/** [TARGET, unit decision] Recording is host configuration, separate from
+ * renderer preferences. MV_RECORDING_DESTINATION is an explicit operator
+ * directory; unset stays null. The renderer receives only its opaque token.
+ * @param {NodeJS.ProcessEnv} env */
+export function recordingDestination(env) {
+  const destination=env.MV_RECORDING_DESTINATION;
+  if(destination===undefined) return null;
+  if(!isAbsolute(destination) || destination.length>4096 || /[\0\r\n]/.test(destination)) throw new Error('SETTINGS_DESTINATION');
+  return resolve(destination);
+}
 /** Atomic private settings file. No caller-supplied pathname.
  * @param {NodeJS.ProcessEnv} env */
 export function createSettingsStore(env) {
@@ -59,30 +82,47 @@ export function createSettingsStore(env) {
     if(rel==='' || (rel!=='..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))) throw new Error('SETTINGS_IN_REPO');
   };
   outsideSource(path);
+  // Check the nearest existing ancestor before mkdir can follow parent aliases.
+  const checkAncestors=async()=> {
+    let ancestor=dir;
+    for(;;) {
+      try { outsideSource(await realpath(ancestor)); return; }
+      catch(e) {
+        if(/** @type {NodeJS.ErrnoException} */(e).code!=='ENOENT') throw e;
+        const parent=dirname(ancestor);
+        if(parent===ancestor) throw new Error('CONFIG_PATH');
+        ancestor=parent;
+      }
+    }
+  };
   const checkDirectory=async()=> {
     const info=await lstat(dir);
-    if(!info.isDirectory() || info.isSymbolicLink() || (info.mode&0o077)!==0
+    if(!info.isDirectory() || info.isSymbolicLink() || (info.mode&0o777)!==0o700
       || (process.getuid && info.uid!==process.getuid())) throw new Error('SETTINGS_DIRECTORY');
     outsideSource(await realpath(dir));
   };
   return Object.freeze({
     async load() {
       let file;
-      try { await checkDirectory(); file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW); }
+      try { await checkAncestors(); await checkDirectory(); file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW); }
       catch (e) { if (/** @type {NodeJS.ErrnoException} */(e).code === 'ENOENT') return null; throw e; }
       try {
         const stat = await file.stat();
-        if (!stat.isFile() || stat.size > WIRE_MAX_BYTES || (stat.mode & 0o777) !== 0o600
+        if (!stat.isFile() || (stat.mode & 0o777) !== 0o600
             || (process.getuid && stat.uid !== process.getuid())) throw new Error('SETTINGS_FILE');
         const buffer = Buffer.alloc(WIRE_MAX_BYTES + 1);
         const {bytesRead} = await file.read(buffer,0,buffer.length,0);
-        if (bytesRead > WIRE_MAX_BYTES) throw new Error('PAYLOAD');
-        const text = buffer.subarray(0,bytesRead).toString('utf8'); jsonObject(text); return text;
+        if (stat.size > WIRE_MAX_BYTES || bytesRead > WIRE_MAX_BYTES) {
+          console.warn('MetaViewer settings: file exceeds byte cap; using defaults'); return null;
+        }
+        const text = buffer.subarray(0,bytesRead).toString('utf8');
+        try { validateSettings(text); return text; }
+        catch { console.warn('MetaViewer settings: invalid JSON or schema; using defaults'); return null; }
       } finally { await file.close(); }
     },
     /** @param {string} json */
     async save(json) {
-      jsonObject(json); await mkdir(dir,{recursive:true,mode:0o700});await checkDirectory();
+      validateSettings(json); await checkAncestors(); await mkdir(dir,{recursive:true,mode:0o700});await checkDirectory();
       const temp = join(dir,`.settings-${randomUUID()}.tmp`);
       try {
         const file = await open(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,0o600);
@@ -114,12 +154,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
   const handlers = {
     loadSettings: async () => store.load(),
     saveSettings: async (/** @type {string} */json) => store.save(json),
-    recordingDestination: async () => {
-      const text = await store.load(); const dest = text === null ? null : jsonObject(text).recording_destination;
-      if (dest == null) return null;
-      if (!dest || typeof dest.path !== 'string' || !isAbsolute(dest.path) || dest.path.length > 4096 || /[\0\r\n]/.test(dest.path)) throw new Error('OUTCOME');
-      return dest.path;
-    },
+    recordingDestination: async () => recordingDestination(env),
     nestedDepth: async () => identity.depth,
     selfCapsuleId: async () => identity.self,
     propose: async (/** @type {string} */json) => {
