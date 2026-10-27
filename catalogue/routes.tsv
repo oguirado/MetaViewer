@@ -765,6 +765,7 @@ ipc-bounds_test.go	daemon-adapter/internal/ipc/bounds_test.go
 client.go	daemon-adapter/internal/ipc/client.go
 client_test.go	daemon-adapter/internal/ipc/client_test.go
 config.go	daemon-adapter/internal/ipc/config.go
+conform-8ca4cdb6f485	daemon-adapter/internal/ipc/conformance_probe_test.go
 ipc-dispatch_test.go	daemon-adapter/internal/ipc/dispatch_test.go
 foreign_peer_test.go	daemon-adapter/internal/ipc/foreign_peer_test.go
 frame.go	daemon-adapter/internal/ipc/frame.go
@@ -1024,6 +1025,7 @@ test_e2e_ai_loop.py	tests/test_e2e_ai_loop.py
 teste2e-f622cd7f46ac	tests/test_e2e_ipc_policy.py
 teste2e-36ffb1d17a05	tests/test_e2e_nested_bootstrap.py
 test_e2e_startup.py	tests/test_e2e_startup.py
+testfre-5de30d9d9550	tests/test_fresh_divergences.py
 test_gate_deps.py	tests/test_gate_deps.py
 testgat-83c5e1ef7679	tests/test_gate_deps_pin_integrity.py
 testgat-3b33fe08e1e5	tests/test_gate_g_ai_harness.py
