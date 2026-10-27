@@ -19,17 +19,17 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 294 | 55 | 239 |
-| Lanes finished OK | 294 | 55 | 239 |
-| Agent steps | 15,265 | 2,705 | 12,560 |
-| Lane-hours of agent work | 38.6 | 5.2 | 33.3 |
-| Fresh input tokens | 63,817,493 | 11,482,034 | 52,335,459 |
-| Cache-read input tokens | 1,407,974,657 | 226,255,212 | 1,181,719,445 |
+| Lanes launched | 295 | 55 | 240 |
+| Lanes finished OK | 295 | 55 | 240 |
+| Agent steps | 15,363 | 2,705 | 12,658 |
+| Lane-hours of agent work | 38.9 | 5.2 | 33.7 |
+| Fresh input tokens | 64,411,211 | 11,482,034 | 52,929,177 |
+| Cache-read input tokens | 1,421,197,454 | 226,255,212 | 1,194,942,242 |
 | Prompt cache hit % | 95.7 | 95.2 | 95.8 |
-| Output tokens | 13,661,526 | 2,135,708 | 11,525,818 |
-| Thinking tokens | 7,083,061 | 1,050,039 | 6,033,022 |
-| Cost (USD) | 11.93 | 2.0279 | 9.9021 |
-| Cost per lane (USD) | 0.0406 | 0.0369 | 0.0414 |
+| Output tokens | 13,759,090 | 2,135,708 | 11,623,382 |
+| Thinking tokens | 7,160,202 | 1,050,039 | 6,110,163 |
+| Cost (USD) | 12.0353 | 2.0279 | 10.0075 |
+| Cost per lane (USD) | 0.0408 | 0.0369 | 0.0417 |
 
 Rooms: 64. Peak concurrent lanes [MEASURED from lane start/end]: 24.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
@@ -53,7 +53,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | submission | 4 | 94.9 | 0.0995 |
 | test | 12 | 95.6 | 0.5657 |
 | testing | 54 | 95.9 | 2.3118 |
-| ui | 14 | 96.6 | 1.056 |
+| ui | 15 | 96.6 | 1.1614 |
 | vision | 8 | 97.2 | 0.537 |
 
 ## By room (why and what for)
@@ -121,7 +121,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvrv6 | conductor | Oct 27 08:48 | review | 4 | 93.6 | 0.0926 | Verify the findings (1 critical, 6 high, 10 medium) of the Gemini Argon cross-review of the day-2 integrations before any fix, and turn confirmed ones into Sol fix units. |
 | mvvd2 | conductor | Oct 27 10:26 | submission | 4 | 94.9 | 0.0995 | Turn the measured day-2 evidence (live G-W1 with verified receipts, live G-AI with vision-engine and wender-agent, 25 fps wall, per-tile capture) into the demo video script, the shot list, a fact-checked TESTING.md and README update, all claims traceable to evidence. |
 | mvr3 | conductor | Oct 27 11:09 | testing | 8 | 96.7 | 0.4913 | Write round-3 external testing prompts: ChatGPT as a mathematical reasoner using Context7 math-router plus the software papers and OmniCodex to prove invariants, derive test oracles and propose optimizations of the day-2 core features; Jules as pure tester of the same features. |
-| mvui11 | UI orchestrator | Oct 27 11:31 | ui | 1 | 96.6 | 0.0622 | Close the renderer halves of AC-06 (multislot placement routed to the new authoritative layout intents) and AC-07 (recording panel export routed to capture.export with typed refusals), assigned to us by the MetaViewer orchestrator after the core contracts landed. |
+| mvui11 | UI orchestrator | Oct 27 11:30 | ui | 2 | 96.1 | 0.1675 | Close the renderer halves of AC-06 (multislot placement routed to the new authoritative layout intents) and AC-07 (recording panel export routed to capture.export with typed refusals), assigned to us by the MetaViewer orchestrator after the core contracts landed. |
 | mvr2v | conductor | Oct 27 11:32 | testing | 6 | 96.3 | 0.2373 | Verify every external round-2 finding (ChatGPT static reviews T2, T3, T5, T6, T8 and Jules T4 tests) on the current head with Meta Muse Spark before any fix, and group confirmed ones into disjoint fix units. |
 | mvr2v2 | conductor | Oct 27 11:32 | testing | 2 | 94.6 | 0.0584 | Verify every external round-2 finding (ChatGPT static reviews T2, T3, T5, T6, T8 and Jules T4 tests) on the current head with Meta Muse Spark before any fix, and group confirmed ones into disjoint fix units. |
 
@@ -414,6 +414,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvr3 | T6 | Round-3 prompts T6 | Oct 27 11:10 | yes | 96 | 97.4 | 0.069752 |
 | mvr3 | T7 | Round-3 prompts T7 | Oct 27 11:10 | yes | 92 | 97.4 | 0.055781 |
 | mvr3 | T8 | Round-3 prompts T8 | Oct 27 11:10 | yes | 71 | 96.6 | 0.048409 |
+| mvui11 | L | AC-06 multislot placement over authoritative layout intents | Oct 27 11:30 | yes | 98 | 95.7 | 0.10533 |
 | mvui11 | E | AC-07 recording export over capture.export | Oct 27 11:31 | yes | 68 | 96.6 | 0.062207 |
 | mvr2v | T5 | Verify round-2 T5 | Oct 27 11:32 | yes | 97 | 97.2 | 0.052739 |
 | mvr2v | T6 | Verify round-2 T6 | Oct 27 11:32 | yes | 94 | 97.1 | 0.059743 |

@@ -1,17 +1,17 @@
 {
  "schema": "metaviewer.meta_ai_usage/v1",
  "totals": {
-  "lanes": 294,
-  "ok": 294,
-  "input_tokens": 63817493,
-  "cache_read_tokens": 1407974657,
-  "output_tokens": 13661526,
-  "thinking_tokens": 7083061,
+  "lanes": 295,
+  "ok": 295,
+  "input_tokens": 64411211,
+  "cache_read_tokens": 1421197454,
+  "output_tokens": 13759090,
+  "thinking_tokens": 7160202,
   "cache_hit_pct": 95.7,
-  "usd": 11.93,
-  "usd_per_lane": 0.0406,
-  "steps": 15265,
-  "lane_hours": 38.6
+  "usd": 12.0353,
+  "usd_per_lane": 0.0408,
+  "steps": 15363,
+  "lane_hours": 38.9
  },
  "peak_concurrent_lanes": 24,
  "rooms": {
@@ -6361,6 +6361,27 @@
    "thinking_tokens": 17205,
    "cache_hit_pct": 96.6,
    "usd": 0.048409
+  },
+  {
+   "room": "mvui11",
+   "lane": "L",
+   "title": "AC-06 multislot placement over authoritative layout intents",
+   "stage": "ui",
+   "model": "muse-spark-1.3",
+   "orchestrator": "UI orchestrator",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-27T10:30:57.405000+00:00",
+   "duration_s": 1149.2,
+   "end_utc": "2026-10-27T10:50:06.589000+00:00",
+   "phase": "build",
+   "steps": 98,
+   "input_tokens": 593718,
+   "cache_read_tokens": 13222797,
+   "output_tokens": 97564,
+   "thinking_tokens": 77141,
+   "cache_hit_pct": 95.7,
+   "usd": 0.10533
   },
   {
    "room": "mvui11",
