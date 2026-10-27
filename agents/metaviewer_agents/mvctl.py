@@ -3,6 +3,8 @@
 [TARGET, unit decision] Default CLI verbs use v0.2 and trusted MV_CORE_CONFIG
 (or --config) registration. --v02 is a compatibility spelling of that path.
 Proposal files contain action_proposal/v0.2 bodies, never legacy envelopes.
+[TARGET, unit decision] List exposes the existing single-page tool protocol:
+--limit is required and --cursor is optional; no implicit page size is chosen.
 
 This module is an untrusted caller: it validates every flag, input byte and
 core reply, and leaves admission, ownership and replay decisions to the core.
@@ -113,7 +115,10 @@ def _build_legacy_parser() -> argparse.ArgumentParser:
 
 def _refuse(code):
     """Write one fixed refusal record to stderr; stdout stays empty."""
-    record = {"verdict": "refuse", "code": code, "error": _REFUSAL_TEXT[code]}
+    # The v0.2 hello pin failure has no legacy command equivalent.
+    text = ("trusted component pins do not match" if code == "version"
+            else _REFUSAL_TEXT[code])
+    record = {"verdict": "refuse", "code": code, "error": text}
     print(json.dumps(record, separators=(",", ":"), allow_nan=False),
           file=sys.stderr)
 
@@ -184,6 +189,8 @@ def _client_refusal(error, phase):
         return "timeout"
     if code == "unknown_version":
         return "unknown_version"
+    if code == "version":
+        return "version"
     if code in ("schema", "bad_shape"):
         return "schema_error"
     if code == "length":
@@ -395,14 +402,15 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the default closed v0.2 tool parser."""
     parser = _UsageParser(prog="mvctl", allow_abbrev=False)
     parser.add_argument("--config", action=_OnceAction, default=os.environ.get("MV_CORE_CONFIG"))
-    parser.add_argument("command", choices=("observe", "propose", "wait-verify"))
+    parser.add_argument("command", choices=("observe", "list", "propose", "wait-verify"))
     for flag in ("socket", "session-id", "agent-instance", "core-instance"):
         parser.add_argument("--" + flag, required=True, action=_OnceAction)
     for flag in ("timeout-ms", "max-line-bytes", "max-reply-bytes"):
         parser.add_argument("--" + flag, required=True, action=_OnceAction,
                             type=_positive_int)
-    for flag in ("surface-id", "proposal-id", "json-arg"):
+    for flag in ("surface-id", "proposal-id", "json-arg", "cursor"):
         parser.add_argument("--" + flag, action=_OnceAction)
+    parser.add_argument("--limit", action=_OnceAction, type=_positive_int)
     return parser
 
 
@@ -419,10 +427,17 @@ def _run_v02(argv):
     except SystemExit as done:
         return done.code
     expected = {"observe": (True, False, False),
+                "list": (False, False, False),
                 "propose": (False, False, True),
                 "wait-verify": (False, True, True)}[args.command]
     if tuple(value is not None for value in
              (args.surface_id, args.proposal_id, args.json_arg)) != expected:
+        _refuse("usage_error")
+        return 2
+    # [TARGET, unit decision] List maps to the existing single-page tool API:
+    # --limit is explicit, --cursor is optional, and neither belongs to other verbs.
+    if ((args.command == "list" and args.limit is None)
+            or (args.command != "list" and (args.limit is not None or args.cursor is not None))):
         _refuse("usage_error")
         return 2
     endpoint, failure = _resolve_endpoint(args.socket)
@@ -449,7 +464,11 @@ def _run_v02(argv):
         if not args.config:
             _refuse("usage_error")
             return 2
-        config = _read_request(args.config, args.max_line_bytes)
+        try:
+            config = _read_request(args.config, args.max_line_bytes)
+        except (ValueError, OSError):
+            _refuse("usage_error")
+            return 2
         local = next(peer for peer in config["peers"]
                      if peer["endpoint"] == {"component": "agent", "instance": args.agent_instance})
         if (config["session_id"] != args.session_id
@@ -465,7 +484,10 @@ def _run_v02(argv):
                         sequence_path=sequence_path, timeout_s=args.timeout_ms / 1000,
                         max_line_bytes=args.max_line_bytes,
                         max_reply_bytes=args.max_reply_bytes) as client:
-            if args.command == "observe":
+            if args.command == "list":
+                result = tools.list_surfaces(cursor=args.cursor, limit=args.limit,
+                                             client=client, timeout_ms=args.timeout_ms)
+            elif args.command == "observe":
                 result = tools.observe(args.surface_id, client=client,
                                        timeout_ms=args.timeout_ms)
             elif args.command == "propose":
