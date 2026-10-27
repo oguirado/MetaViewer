@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 312 | 55 | 257 |
-| Lanes finished OK | 312 | 55 | 257 |
-| Agent steps | 16,326 | 2,705 | 13,621 |
-| Lane-hours of agent work | 41.2 | 5.2 | 36.0 |
-| Fresh input tokens | 67,668,952 | 11,482,034 | 56,186,918 |
-| Cache-read input tokens | 1,502,641,710 | 226,255,212 | 1,276,386,498 |
+| Lanes launched | 313 | 55 | 258 |
+| Lanes finished OK | 313 | 55 | 258 |
+| Agent steps | 16,364 | 2,705 | 13,659 |
+| Lane-hours of agent work | 41.3 | 5.2 | 36.0 |
+| Fresh input tokens | 67,818,853 | 11,482,034 | 56,336,819 |
+| Cache-read input tokens | 1,505,014,817 | 226,255,212 | 1,278,759,605 |
 | Prompt cache hit % | 95.7 | 95.2 | 95.8 |
-| Output tokens | 14,447,958 | 2,135,708 | 12,312,250 |
-| Thinking tokens | 7,522,052 | 1,050,039 | 6,472,013 |
-| Cost (USD) | 12.6618 | 2.0279 | 10.6339 |
-| Cost per lane (USD) | 0.0406 | 0.0369 | 0.0414 |
+| Output tokens | 14,464,417 | 2,135,708 | 12,328,709 |
+| Thinking tokens | 7,527,726 | 1,050,039 | 6,477,687 |
+| Cost (USD) | 12.6848 | 2.0279 | 10.6569 |
+| Cost per lane (USD) | 0.0405 | 0.0369 | 0.0413 |
 
-Rooms: 70. Peak concurrent lanes [MEASURED from lane start/end]: 24.
+Rooms: 71. Peak concurrent lanes [MEASURED from lane start/end]: 24.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -52,7 +52,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | review | 55 | 94.5 | 1.6245 |
 | submission | 4 | 94.9 | 0.0995 |
 | test | 12 | 95.6 | 0.5657 |
-| testing | 64 | 95.9 | 2.6123 |
+| testing | 65 | 95.8 | 2.6353 |
 | ui | 17 | 96.7 | 1.3092 |
 | vision | 8 | 97.2 | 0.537 |
 
@@ -130,6 +130,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui14 | UI orchestrator | Oct 27 13:32 | ui | 2 | 97.4 | 0.1478 | Move live frame painting from the interim preload painter into the renderer (frame_port/v1 + frame_ack/v0.2 after the real paint), and fix three renderer defects measured live by the orchestrator: capture chrome not reacting, tile title ':100', 'Agent acting' without an agent. |
 | mvrv7 | conductor | Oct 27 13:47 | review | 4 | 95.8 | 0.1389 | Verify the 25 findings (1 critical, 8 high) of the Gemini Argon cross-review of the day-2 afternoon integrations before any fix, and turn confirmed ones into disjoint fix units. |
 | mvui14b | UI orchestrator | Oct 27 13:56 | fix | 1 | 97.1 | 0.0393 | Fix a blocking frame-port router defect (notice stream id compared with delivery surfaceGeneration would refuse every real frame) and align three legacy tests with the profile_id title contract. |
+| mvac17 | conductor | Oct 27 15:59 | testing | 1 | 94.1 | 0.023 | Map AC-17 (nested demo) on the integration head and specify the smallest Argon units that make it pass live, with its negative control. |
 
 ## Every lane
 
@@ -447,6 +448,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvrv7 | pmtests | Verify pmtests | Oct 27 13:47 | yes | 39 | 94.0 | 0.023338 |
 | mvrv7 | pmui | Verify pmui | Oct 27 13:47 | yes | 76 | 96.8 | 0.046767 |
 | mvui14b | B | stream id + title tests | Oct 27 13:56 | yes | 75 | 97.1 | 0.039263 |
+| mvac17 | ROUTER | AC-17 plan | Oct 27 15:59 | yes | 38 | 94.1 | 0.023028 |
 
 ## Method
 

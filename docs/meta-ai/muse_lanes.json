@@ -1,17 +1,17 @@
 {
  "schema": "metaviewer.meta_ai_usage/v1",
  "totals": {
-  "lanes": 312,
-  "ok": 312,
-  "input_tokens": 67668952,
-  "cache_read_tokens": 1502641710,
-  "output_tokens": 14447958,
-  "thinking_tokens": 7522052,
+  "lanes": 313,
+  "ok": 313,
+  "input_tokens": 67818853,
+  "cache_read_tokens": 1505014817,
+  "output_tokens": 14464417,
+  "thinking_tokens": 7527726,
   "cache_hit_pct": 95.7,
-  "usd": 12.6618,
-  "usd_per_lane": 0.0406,
-  "steps": 16326,
-  "lane_hours": 41.2
+  "usd": 12.6848,
+  "usd_per_lane": 0.0405,
+  "steps": 16364,
+  "lane_hours": 41.3
  },
  "peak_concurrent_lanes": 24,
  "rooms": {
@@ -6973,6 +6973,27 @@
    "thinking_tokens": 18062,
    "cache_hit_pct": 97.1,
    "usd": 0.039263
+  },
+  {
+   "room": "mvac17",
+   "lane": "ROUTER",
+   "title": "AC-17 plan",
+   "stage": "testing",
+   "model": "muse-spark-1.3",
+   "orchestrator": "conductor",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-27T14:59:00.684000+00:00",
+   "duration_s": 213.3,
+   "end_utc": "2026-10-27T15:02:33.955000+00:00",
+   "phase": "build",
+   "steps": 38,
+   "input_tokens": 149901,
+   "cache_read_tokens": 2373107,
+   "output_tokens": 16459,
+   "thinking_tokens": 5674,
+   "cache_hit_pct": 94.1,
+   "usd": 0.023028
   }
  ]
 }
