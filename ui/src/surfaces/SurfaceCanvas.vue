@@ -35,9 +35,16 @@ const emit = defineEmits(['canvas-ready', 'canvas-released']);
 /** @type {{ attachCanvas: (args: any) => { ok: boolean, token?: symbol }, detachCanvas: (id: string, token: symbol | null) => void } | null} */
 const scheduler = /** @type {any} */ (inject('tileScheduler', null));
 /** Live-only frame-port router provided by the entry; null keeps the legacy path. */
-const framePortRouter = /** @type {{ bindSurface?: (binding: any) => boolean, unbindSurface?: (surfaceId: unknown) => void } | null} */ (inject('framePortRouter', null));
+const framePortRouter = /** @type {{ bindSurface?: (binding: any) => boolean, unbindSurface?: (surfaceId: unknown, bindToken?: unknown, options?: { keepStream?: boolean }) => void } | null} */ (inject('framePortRouter', null));
 /** @type {symbol | null} */
 let canvasToken = null;
+/**
+ * MVUI20: this tile's router binding identity. Wall and multislot tiles
+ * share one surfaceId; the token unbind removes only this tile's entry so
+ * the other tile keeps painting on the shared stream.
+ * @type {symbol}
+ */
+const bindToken = Symbol('mv-surface-binding');
 /**
  * L3-1: delivery identity pinned by the frame-port router notice
  * (surfaceGeneration/epoch from deliveries, e.g. 1/E on the real host).
@@ -158,6 +165,7 @@ function bindFramePort() {
     framePortRouter.bindSurface({
       surfaceId: props.surfaceId,
       scheduler,
+      bindToken,
       onRegistered: (/** @type {{ surfaceId: string, surfaceGeneration: number, epoch: number }} */ notice) => {
         if (notice.surfaceId !== props.surfaceId) return;
         // L3-1: pin the delivery identity for every later attach (including
@@ -178,27 +186,38 @@ function bindFramePort() {
             retainedWidth.value = 0;
             retainedHeight.value = 0;
           }
-          if (changed && canvasToken !== null && scheduler !== null) {
-            // MVUI18C: a newer stream re-registers with ITS delivery
-            // identity and the scheduler drops the old canvas binding, so
-            // the stale token is released and the canvas re-attaches below
-            // with the new identity; otherwise the present finds no canvas
-            // and the delivery acks REFUSED.
-            scheduler.detachCanvas(props.surfaceId, canvasToken);
-            canvasToken = null;
-          }
+          // MVUI18C: a newer stream re-registers with ITS delivery identity
+          // and the scheduler drops the old canvas binding; the re-attach
+          // below reclaims it, otherwise the present finds no canvas and
+          // the delivery acks REFUSED.
         }
-        if (canvasToken === null) attachCanvas();
+        // MVUI20: always re-attach. Registration and bind replay attach the
+        // standing canvas; when the active tile unbinds, the router restores
+        // this tile by re-firing this hook, and the re-attach reclaims the
+        // scheduler canvas with an immediate retained repaint. The detach is
+        // a no-op while unattached or after a superseding attach replaced
+        // this tile's token.
+        if (scheduler !== null) {
+          scheduler.detachCanvas(props.surfaceId, canvasToken);
+          canvasToken = null;
+        }
+        attachCanvas();
       },
     });
   } catch { /* Binding failures keep the legacy path. */ }
 }
 
-/** @param {unknown} surfaceId */
-function unbindFramePort(surfaceId) {
+/**
+ * @param {unknown} surfaceId
+ * @param {boolean} [keepStream] Unmount passes true: the App swaps wall and
+ * multislot tiles through remount gaps, so the shared stream stays open for
+ * the tile that mounts next. A surface change leaves it false so the old
+ * stream retires once its tile was the last binding.
+ */
+function unbindFramePort(surfaceId, keepStream = false) {
   if (framePortRouter === null || typeof framePortRouter.unbindSurface !== 'function') return;
   try {
-    framePortRouter.unbindSurface(surfaceId);
+    framePortRouter.unbindSurface(surfaceId, bindToken, keepStream === true ? { keepStream: true } : undefined);
   } catch { /* Unbind never breaks teardown. */ }
 }
 
@@ -233,7 +252,7 @@ watch(() => [props.surfaceId, props.generation, props.epoch], (_current, previou
 });
 
 onBeforeUnmount(() => {
-  unbindFramePort(props.surfaceId);
+  unbindFramePort(props.surfaceId, true);
   if (scheduler !== null) {
     scheduler.detachCanvas(props.surfaceId, canvasToken);
     canvasToken = null;

@@ -28,6 +28,15 @@
  * The scheduler instance is App-owned, so tiles bind it: SurfaceCanvas calls
  * bindSurface on mount (surfaceId + scheduler + attach-retry hook) and
  * unbindSurface on unmount. Unknown surfaces (no binding) refuse deliveries.
+ * MVUI20: several tiles may bind the same surface (wall + multislot), so
+ * bindings form a stack per surface: the most recently bound entry is
+ * active. A token unbind removes only its own entry: unbinding an inactive
+ * entry never touches the active one, while unbinding the active one
+ * restores the previous entry (its attach hook re-fires so its canvas
+ * becomes active again and repaints the retained frame). Removing the last
+ * entry retires the stream unless the caller keeps it across a remount gap.
+ * The token-less unbind keeps the historical teardown (drop every binding
+ * and retire the stream).
  * Plain JavaScript with JSDoc; no product imports, no timers, no dependencies.
  * @module frames/framePortRouter
  */
@@ -94,6 +103,8 @@ const PRESENT_ATTEMPTS = 3;
  * @property {string} surfaceId
  * @property {SchedulerBinding} scheduler
  * @property {(notice: { surfaceId: string, surfaceGeneration: number, epoch: number }) => void} [onRegistered]
+ * @property {unknown} [bindToken] Tile-owned unbind identity (MVUI20): a
+ * later unbindSurface carrying this token removes only this entry.
  */
 
 /**
@@ -105,7 +116,7 @@ const PRESENT_ATTEMPTS = 3;
 /**
  * @typedef {object} FramePortRouter Frozen router handle.
  * @property {(binding: SurfaceBinding) => boolean} bindSurface
- * @property {(surfaceId: unknown) => void} unbindSurface
+ * @property {(surfaceId: unknown, bindToken?: unknown, options?: { keepStream?: boolean }) => void} unbindSurface
  * @property {(listener: (notice: { surfaceId: string, surfaceGeneration: number, epoch: number }) => void) => () => void} onSurfaceRegistered
  * @property {(surfaceId?: string) => unknown} getSurfaceStatus
  * @property {() => void} dispose
@@ -185,7 +196,7 @@ export function installFramePortRouter(options) {
 
   /** @type {Map<string, any>} surfaceId -> stream entry */
   const streams = new Map();
-  /** @type {Map<string, { scheduler: SchedulerBinding, onRegistered?: SurfaceBinding['onRegistered'] }>} */
+  /** @type {Map<string, Array<{ scheduler: SchedulerBinding, onRegistered?: SurfaceBinding['onRegistered'], bindToken?: unknown }>>} surfaceId -> binding stack, last entry active */
   const bindings = new Map();
   /** @type {Set<(notice: { surfaceId: string, surfaceGeneration: number, epoch: number }) => void>} */
   const registeredListeners = new Set();
@@ -281,6 +292,23 @@ export function installFramePortRouter(options) {
   }
 
   /**
+   * @param {string} surfaceId
+   * @returns {boolean} True when at least one tile binds the surface.
+   */
+  function hasBinding(surfaceId) {
+    return (bindings.get(surfaceId)?.length ?? 0) > 0;
+  }
+
+  /**
+   * @param {string} surfaceId
+   * @returns {{ scheduler: SchedulerBinding } | undefined} Most recently bound entry.
+   */
+  function activeBinding(surfaceId) {
+    const stack = bindings.get(surfaceId);
+    return stack !== undefined && stack.length > 0 ? stack[stack.length - 1] : undefined;
+  }
+
+  /**
    * @param {{ surfaceId: string, surfaceGeneration: number, epoch: number }} notice
    * @returns {void}
    */
@@ -288,9 +316,10 @@ export function installFramePortRouter(options) {
     for (const listener of [...registeredListeners]) {
       try { listener(notice); } catch { /* Observers never break the stream. */ }
     }
-    const binding = bindings.get(notice.surfaceId);
-    if (binding?.onRegistered) {
-      try { binding.onRegistered(notice); } catch { /* A tile retry never breaks the stream. */ }
+    for (const binding of [...(bindings.get(notice.surfaceId) ?? [])]) {
+      if (binding?.onRegistered) {
+        try { binding.onRegistered(notice); } catch { /* A tile retry never breaks the stream. */ }
+      }
     }
   }
 
@@ -355,8 +384,7 @@ export function installFramePortRouter(options) {
     if (raw.sha256 === NULL_DIGEST) return refuse();
     if (raw.pixelSpec === null || typeof raw.pixelSpec !== 'object') return refuse();
     if (raw.frameGeneration <= entry.admittedFloor) return refuse();
-    const binding = bindings.get(entry.surfaceId);
-    if (!binding) return refuse();
+    if (!hasBinding(entry.surfaceId)) return refuse();
     // First accepted delivery pins the stream identity, before the async
     // digest: a racing second delivery cannot hijack the binding.
     if (!entry.pinned) {
@@ -378,7 +406,7 @@ export function installFramePortRouter(options) {
   function canPaint(entry) {
     if (disposed || entry.disposed) return false;
     if (streams.get(entry.surfaceId) !== entry) return false;
-    return bindings.has(entry.surfaceId);
+    return hasBinding(entry.surfaceId);
   }
 
   /**
@@ -392,7 +420,7 @@ export function installFramePortRouter(options) {
    */
   function ensureRegistered(entry, raw) {
     if (entry.registered) return { ok: /** @type {const} */ (true) };
-    const binding = bindings.get(entry.surfaceId);
+    const binding = activeBinding(entry.surfaceId);
     if (!binding) return { ok: /** @type {const} */ (false), outcome: FRAME_OUTCOMES.SURFACE_DESTROYED };
     entry.principal = raw.principal;
     entry.epoch = raw.epoch;
@@ -475,7 +503,7 @@ export function installFramePortRouter(options) {
    * @returns {string} One of FRAME_OUTCOMES.
    */
   function submitAndPresent(entry, record) {
-    const binding = bindings.get(entry.surfaceId);
+    const binding = activeBinding(entry.surfaceId);
     if (!binding) return FRAME_OUTCOMES.SURFACE_DESTROYED;
     const raw = record.raw;
     /** @type {any} */
@@ -749,6 +777,8 @@ export function installFramePortRouter(options) {
 
   /**
    * Bind a mounted tile: its scheduler paints this surface's deliveries.
+   * Bindings stack per surface; the most recent bind is active. Rebinding
+   * the same token moves it to the top instead of duplicating it.
    * @param {SurfaceBinding} binding
    * @returns {boolean} False when the binding is unusable.
    */
@@ -765,8 +795,15 @@ export function installFramePortRouter(options) {
     const record = {
       scheduler: /** @type {SchedulerBinding} */ (scheduler),
       onRegistered: typeof binding.onRegistered === 'function' ? binding.onRegistered : undefined,
+      bindToken: binding.bindToken ?? undefined,
     };
-    bindings.set(binding.surfaceId, record);
+    const stack = bindings.get(binding.surfaceId) ?? [];
+    const again = record.bindToken !== undefined
+      ? stack.findIndex((entry) => entry.bindToken === record.bindToken)
+      : -1;
+    if (again >= 0) stack.splice(again, 1);
+    stack.push(record);
+    bindings.set(binding.surfaceId, stack);
     const entry = streams.get(binding.surfaceId);
     if (entry && entry.registered && record.onRegistered) {
       try {
@@ -777,17 +814,55 @@ export function installFramePortRouter(options) {
   }
 
   /**
-   * Unbind a tile: its stream closes (lost/destroyed) and can never paint
-   * again. The scheduler entry is left to the wall lifecycle (never
-   * tombstoned here: a remount must be able to re-register).
+   * Unbind a tile. With a bind token, only that tile's entry leaves the
+   * stack (an unknown token is a no-op): removing an inactive entry never
+   * touches the active one, while removing the active one restores the
+   * previous entry by re-firing its attach hook with the pinned delivery
+   * identity. Removing the last entry retires the stream, unless
+   * `options.keepStream` keeps it open across a remount gap. Without a
+   * token, every binding drops and the stream retires (lost/destroyed),
+   * the historical teardown. The scheduler entry is left to the wall
+   * lifecycle (never tombstoned here: a remount must re-register).
    * @param {unknown} surfaceId
+   * @param {unknown} [bindToken]
+   * @param {{ keepStream?: boolean }} [options]
    * @returns {void}
    */
-  function unbindSurface(surfaceId) {
+  function unbindSurface(surfaceId, bindToken, options) {
     if (typeof surfaceId !== 'string') return;
-    bindings.delete(surfaceId);
-    const entry = streams.get(surfaceId);
-    if (entry && !entry.disposed) retireStream(entry, FRAME_OUTCOMES.SURFACE_DESTROYED);
+    if (bindToken === undefined || bindToken === null) {
+      bindings.delete(surfaceId);
+      const entry = streams.get(surfaceId);
+      if (entry && !entry.disposed) retireStream(entry, FRAME_OUTCOMES.SURFACE_DESTROYED);
+      return;
+    }
+    const stack = bindings.get(surfaceId);
+    if (!stack) return;
+    const at = stack.findIndex((entry) => entry.bindToken === bindToken);
+    if (at < 0) return;
+    const wasActive = at === stack.length - 1;
+    stack.splice(at, 1);
+    if (stack.length === 0) {
+      bindings.delete(surfaceId);
+      if (options?.keepStream !== true) {
+        const entry = streams.get(surfaceId);
+        if (entry && !entry.disposed) retireStream(entry, FRAME_OUTCOMES.SURFACE_DESTROYED);
+      }
+      return;
+    }
+    if (wasActive) {
+      const stream = streams.get(surfaceId);
+      const restored = stack[stack.length - 1];
+      if (stream?.registered === true && typeof restored?.onRegistered === 'function') {
+        try {
+          restored.onRegistered({
+            surfaceId,
+            surfaceGeneration: stream.deliveryGeneration,
+            epoch: stream.epoch,
+          });
+        } catch { /* A tile retry never breaks the unbind. */ }
+      }
+    }
   }
 
   /**
@@ -813,7 +888,7 @@ export function installFramePortRouter(options) {
     const describe = (/** @type {any} */ entry) => Object.freeze({
       surfaceId: entry.surfaceId,
       surfaceGeneration: entry.streamId,
-      bound: bindings.has(entry.surfaceId),
+      bound: hasBinding(entry.surfaceId),
       portOpen: entry.port !== null && !entry.disposed,
       registered: entry.registered === true,
       presentedFrames: entry.presentedFrames,

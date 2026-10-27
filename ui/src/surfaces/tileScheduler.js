@@ -563,6 +563,7 @@ export function createTileScheduler(options) {
       presented: null,
       canvas: sameLifetime ? existing.canvas : null,
       canvasToken: sameLifetime ? existing.canvasToken : null,
+      lastPaint: sameLifetime ? existing.lastPaint : null,
       lastRetiredHandle: sameLifetime ? existing.lastRetiredHandle : null,
       lastPresentedFrameGen: sameLifetime ? existing.lastPresentedFrameGen : 0,
       minAdmissibleFrameGen: sameLifetime ? existing.minAdmissibleFrameGen : 0,
@@ -1145,6 +1146,7 @@ export function createTileScheduler(options) {
     trimWarmResources(entry, 0);
     entry.canvas = null;
     entry.canvasToken = null;
+    entry.lastPaint = null;
     entry.destroyed = true;
     entry.captureLeaseActive = false;
     tombstones.add(entry.surfaceId);
@@ -1212,7 +1214,12 @@ export function createTileScheduler(options) {
   }
 
   /**
-   * Binds a canvas element to a surface. Called on tile mount.
+   * Binds a canvas element to a surface. Called on tile mount. One canvas
+   * is active per surface: a new element replaces the previous attachment
+   * (R2-12), and the identity checks stay intact. MVUI20: when the attach
+   * swaps in a different element after a frame presented, it repaints the
+   * retained bytes immediately so the tile never shows black; re-attaching
+   * the standing element repaints nothing.
    * @param {any} args
    */
   function attachCanvas(args) {
@@ -1234,8 +1241,14 @@ export function createTileScheduler(options) {
     if (!args.canvas || typeof args.canvas.getContext !== 'function') {
       return { ok: false, reason: SCHEDULER_REASONS.INVALID_BINDING, detail: 'Canvas handle is not drawable' };
     }
+    const previous = entry.canvas;
     entry.canvas = args.canvas;
     entry.canvasToken = Symbol('canvas-owner');
+    if (entry.lastPaint !== null && previous !== args.canvas) {
+      try {
+        drawRgb24ToCanvas(args.canvas, entry.lastPaint.bytes, entry.lastPaint.width, entry.lastPaint.height);
+      } catch { /* Repaint is best-effort; the attach stands for future presents. */ }
+    }
     return { ok: true, surfaceId: entry.surfaceId, token: entry.canvasToken };
   }
 
@@ -1297,6 +1310,9 @@ export function createTileScheduler(options) {
     }
     const convertedBytes = slot.width * slot.height * 4;
     entry.metrics.convertedBytesTotal += convertedBytes;
+    // MVUI20: one retained copy feeds later (re-)attaches; a new surface
+    // lifetime or destroy drops it.
+    entry.lastPaint = { bytes: slot.bytes.slice(), width: slot.width, height: slot.height };
     entry.lastPresentedFrameGen = slot.frameGeneration;
     entry.lastPresentedHandle = slot.handle;
     entry.lastPresentedDigest = slot.sha256;
@@ -1331,6 +1347,7 @@ export function createTileScheduler(options) {
       trimWarmResources(entry, 0);
       entry.canvas = null;
       entry.canvasToken = null;
+      entry.lastPaint = null;
       entry.destroyed = true;
       entry.captureLeaseActive = false;
     }
