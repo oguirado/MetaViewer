@@ -1,10 +1,11 @@
 // @ts-check
-// [TARGET, unit decision] Isolated staging and a display-only package entry.
+// [TARGET, unit decision] Deterministic Linux bundle with an owned real-core session.
 // Local archives are mandatory; packager never reaches its download branch.
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import { dirname, basename, isAbsolute, join, resolve, sep } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -171,6 +172,203 @@ export async function sealRendererAssets(app) {
     `const PACKAGED_ASSET_DIGESTS = /** @type {Readonly<Record<string, string>>} */ (Object.freeze(${JSON.stringify(hashes)}));`));
 }
 
+// [TARGET, unit decision] The delivered entry owns a fresh real-core session.
+// Adapter bytes are shipped and pinned; launching surfaces still requires the
+// operator's pinned OpenSuperficies deployment (MV_SRF_BIN_DIR), never a stub.
+const productionEntry = String.raw`
+import { app } from 'electron';
+import { mainDirectEntry, validateRetailLaunch } from './main.js';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import * as fs from 'node:fs/promises';
+import { join, dirname } from 'node:path';
+import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
+import { randomUUID } from 'node:crypto';
+const root = dirname(fileURLToPath(import.meta.url));
+const retail = validateRetailLaunch(process.argv.slice(1), process.env);
+if (!retail.ok) {console.error(retail.code + ': retail launch refused');app.exit(1);}
+else if (process.argv.includes('--nested-depth=1')) {
+  await import('./nested-display.js');
+} else {
+  const pin = JSON.parse(await fs.readFile(join(root, 'package-pin.json'), 'utf8'));
+  const runtime = await fs.mkdtemp(join(tmpdir(), 'mv-pkg-'));
+  await fs.chmod(runtime, 0o700);
+  await fs.mkdir(join(runtime, 'metaviewer'), {mode:0o700});
+  const registration = component => ({endpoint:{component,instance:component+'-'+randomUUID()},hello:{
+    schema:'hello/v0.2',contract_version:'v0.2',component,component_version:pin.version,
+    component_commit:pin.commit,dependencies:[]}});
+  const config = {session_id:'pkg-'+randomUUID(),core:registration('core'),
+    peers:['daemon','agent','ui'].map(registration)};
+  const configPath = join(runtime, 'config.json');
+  await fs.writeFile(configPath, JSON.stringify(config), {mode:0o600});
+  process.env.XDG_RUNTIME_DIR = runtime;
+  process.env.MV_CORE_CONFIG = configPath;
+  delete process.env.MV_CORE_BOOTSTRAP;
+  const env = {...process.env, XDG_STATE_HOME:join(runtime,'state')};
+  const core = spawn(join(process.resourcesPath,'bin/metaviewer-core'), [], {env,stdio:['ignore','ignore','pipe']});
+  let failure;
+  core.on('error', error => {failure=error;});
+  core.stderr.on('data', bytes => process.stderr.write(bytes));
+  const stop = async () => {
+    if (core.pid && core.exitCode === null && core.signalCode === null) {
+      const exited = once(core,'exit'); core.kill('SIGKILL'); await exited;
+    }
+    await fs.rm(runtime,{recursive:true,force:true});
+  };
+  app.on('will-quit', () => {core.kill('SIGKILL');});
+  process.on('exit', () => {core.kill('SIGKILL');});
+  const deadline = Date.now()+10000;
+  try {
+    for (;;) {
+      if (failure || core.exitCode !== null || Date.now()>deadline) throw new Error('PKG_CORE_START_FAILED');
+      try {await fs.access(join(runtime,'metaviewer/core.sock'));break;} catch {}
+      await new Promise(resolve => setTimeout(resolve,25));
+    }
+    if (process.env.MV_PACKAGE_SMOKE === '1') {
+      const log = console.log;
+      console.log = (...args) => {
+        log(...args);
+        if (args[0] === 'METAVIEWER_MAIN_READY') {
+          void stop().then(() => {log('METAVIEWER_MAIN_SMOKE_OK');app.exit(0);}, error => {console.error(error);app.exit(1);});
+        }
+      };
+    }
+    void mainDirectEntry();
+  } catch(error) {console.error(error);await stop();app.exit(1);}
+}
+`;
+
+/** @param {string} path */
+async function digest(path) {
+  const hash = createHash('sha256');
+  for await (const bytes of createReadStream(path)) hash.update(bytes);
+  return hash.digest('hex');
+}
+
+/** @param {string} name @param {Buffer} bytes */
+function rejectFont(name, bytes) {
+  if (/\.(woff2?|ttf|otf|ttc|eot|pfa|pfb)$/i.test(name) ||
+      ['wOFF','wOF2','OTTO','ttcf','true','typ1'].includes(bytes.subarray(0,4).toString('ascii')) ||
+      bytes.subarray(0,4).equals(Buffer.from([0,1,0,0]))) throw new Error(`PKG_FONT_FORBIDDEN: ${name}`);
+}
+
+/** @param {string} path */
+export async function verifyArm64Binary(path) {
+  const info = await fs.lstat(path).catch(() => null);
+  if (!info?.isFile() || info.isSymbolicLink() || !(info.mode & 0o111)) throw new Error(`PKG_BINARY_MISSING: ${basename(path)}`);
+  const file = await fs.open(path,'r');
+  try {
+    const bytes = Buffer.alloc(64); await file.read(bytes,0,64,0);
+    if (bytes.subarray(0,4).toString('hex') !== '7f454c46' || bytes[4] !== 2 || bytes[5] !== 1 || bytes.readUInt16LE(18) !== 183)
+      throw new Error(`PKG_ARCH_MISMATCH: ${basename(path)}`);
+  } finally {await file.close();}
+}
+
+/** Complete exact inventory: extras, aliases and omissions all fail closed.
+ * @param {string} root */
+export async function verifyInstall(root) {
+  for (const name of ['metaviewer','resources/bin/metaviewer-core','resources/bin/mv-daemon-adapter']) await verifyArm64Binary(join(root,name));
+  const manifest = await fs.readFile(`${root}.sha256`,'utf8');
+  const expected = new Map();
+  for (const line of manifest.trimEnd().split('\n')) {
+    const match = /^([0-9a-f]{64})  (.+)$/.exec(line);
+    if (!match || match[2].split('/').some(part => !part || part === '.' || part === '..') || /[\\\r\n]/.test(match[2]) || expected.has(match[2]))
+      throw new Error('PKG_MANIFEST_INVALID');
+    expected.set(match[2],match[1]);
+  }
+  let count=0;
+  async function walk(part) {
+    for (const item of await fs.readdir(join(root,part),{withFileTypes:true})) {
+      const name = part ? `${part}/${item.name}` : item.name;
+      if (item.isSymbolicLink()) throw new Error('PKG_ALIAS_FORBIDDEN');
+      if (item.isDirectory()) {await walk(name);continue;}
+      if (!item.isFile()) throw new Error('PKG_ENTRY_INVALID');
+      const file = await fs.open(join(root,name),'r');
+      const prefix=Buffer.alloc(4);
+      try {await file.read(prefix,0,4,0);} finally {await file.close();}
+      rejectFont(name,prefix);
+      if (expected.get(name) !== await digest(join(root,name))) throw new Error(`PKG_MANIFEST_MISMATCH: ${name}`);
+      count++;
+    }
+  }
+  await walk('');
+  if (count !== expected.size) throw new Error('PKG_MANIFEST_MISSING');
+  const asar=join(root,'resources/app.asar');
+  uncache(asar);
+  for (const name of listPackage(asar,{})) {
+    const entry=statFile(asar,name.replace(/^\//,''),false);
+    if ('size' in entry) rejectFont(name,extractFile(asar,name.replace(/^\//,'')));
+  }
+  await verifyPackagedSecurity(root);
+}
+
+/** @param {string} root */
+export async function bundlePackage(root) {
+  await verifyInstall(root);
+  const artifact=`${root}.tar`;
+  await execute('tar',['--sort=name','--mtime=@0','--owner=0','--group=0','--numeric-owner',
+    '--format=gnu','--mode=u+rwX,go+rX,go-w','-cf',artifact,'-C',dirname(root),basename(root),`${basename(root)}.sha256`]);
+  return {artifact,artifact_sha256:await digest(artifact),size_bytes:(await fs.stat(artifact)).size};
+}
+
+/** @param {string} stdout */
+export function assertSmokeOutput(stdout) {
+  if (!stdout.split('\n').includes('METAVIEWER_MAIN_SMOKE_OK')) throw new Error('PKG_SMOKE_MARKER_MISSING');
+}
+
+/** Extract actual product bytes, trace all descendants, refuse source access.
+ * @param {string} artifact */
+export async function cleanInstallSmoke(artifact) {
+  const clean=await fs.mkdtemp(join(tmpdir(),'mv-clean-'));
+  validateOutput(clean,repo);
+  try {
+    const types=await execute('tar',['-tvf',artifact],{maxBuffer:1024*1024});
+    if (types.stdout.split('\n').filter(Boolean).some(line => !['-','d'].includes(line[0]))) throw new Error('PKG_ARCHIVE_ALIAS');
+    const listing=await execute('tar',['-tf',artifact],{maxBuffer:1024*1024});
+    if (listing.stdout.split('\n').filter(Boolean).some(name => !/^MetaViewer-linux-arm64(?:\/|\.sha256$)/.test(name) || name.split('/').includes('..'))) throw new Error('PKG_ARCHIVE_INVALID');
+    await execute('tar',['--no-same-owner','-xf',artifact,'-C',clean]);
+    const installed=join(clean,'MetaViewer-linux-arm64');
+    await verifyInstall(installed);
+    // Exercise the delivered bytes, then restore each control before launch.
+    const expectReason = async code => {
+      try {await verifyInstall(installed);}
+      catch (error) {if (error.message.startsWith(code)) return;throw error;}
+      throw new Error(`PKG_NEGATIVE_CONTROL_PASSED: ${code}`);
+    };
+    const notice=join(installed,'INSTALL.md');
+    const original=await fs.readFile(notice);
+    try {await fs.appendFile(notice,'tampered');await expectReason('PKG_MANIFEST_MISMATCH');}
+    finally {await fs.writeFile(notice,original);}
+    const font=join(installed,'planted.woff2');
+    try {await fs.writeFile(font,'wOF2');await expectReason('PKG_FONT_FORBIDDEN');}
+    finally {await fs.rm(font,{force:true});}
+    const adapter=join(installed,'resources/bin/mv-daemon-adapter');
+    await fs.rename(adapter,`${adapter}.control`);
+    try {await expectReason('PKG_BINARY_MISSING: mv-daemon-adapter');}
+    finally {await fs.rename(`${adapter}.control`,adapter);}
+    await verifyInstall(installed);
+    const trace=join(clean,'files.trace');
+    const env={PATH:process.env.PATH,HOME:clean,LANG:'C.UTF-8',MV_PACKAGE_SMOKE:'1'};
+    const result=await execute('xvfb-run',['-a','strace','-f','-e','trace=file','-o',trace,
+      join(installed,'metaviewer'),`--user-data-dir=${join(clean,'profile')}`],{cwd:clean,env,timeout:30000,maxBuffer:1024*1024});
+    assertSmokeOutput(result.stdout);
+    const accesses=await fs.readFile(trace,'utf8');
+    if (accesses.includes(repo) || accesses.includes(await fs.realpath(repo))) throw new Error('PKG_SOURCE_ACCESS');
+    let refused=false, refusalDetail='';
+    try {
+      await execute('xvfb-run',['-a',join(installed,'metaviewer'),
+        `--user-data-dir=${join(clean,'refusal-profile')}`,'--remote-debugging-port=9222'],
+        {cwd:clean,env,timeout:10000,maxBuffer:1024*1024});
+    } catch (error) {
+      refusalDetail=JSON.stringify({code:error.code,signal:error.signal,stdout:error.stdout,stderr:error.stderr,message:error.message}).slice(-3000);
+      refused=typeof error.code === 'number' && error.code !== 0 && /RETAIL_FLAG/.test(String(error.stderr) + String(error.stdout));
+    }
+    if (!refused) throw new Error(`PKG_RETAIL_REFUSAL_MISSING: ${refusalDetail}`);
+    return {marker:'METAVIEWER_MAIN_SMOKE_OK',source_access:false,negative_controls:'PASS'};
+  } finally {await fs.rm(clean,{recursive:true,force:true});}
+}
+
 /** @param {NodeJS.ProcessEnv} env */
 export async function packageShell(env = process.env) {
   if (Number(process.versions.node.split('.')[0]) < 24) throw new Error('Node >=24 required');
@@ -227,6 +425,13 @@ export async function packageShell(env = process.env) {
     await execute(process.execPath, [join(ui, 'node_modules/vite/bin/vite.js'), 'build',
       '--outDir', join(app, 'dist/renderer')], { cwd: builder, env, maxBuffer: 1024 * 1024 });
     await fs.cp(join(ui, 'electron'), join(app, 'electron'), { recursive: true });
+    const pkgVersion = JSON.parse(await fs.readFile(join(ui,'package.json'),'utf8')).version;
+    const commit = (await execute('git',['rev-parse','HEAD'],{cwd:repo})).stdout.trim();
+    if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error('PKG_REVISION_INVALID');
+    await fs.rename(join(app,'electron/nesting.js'),join(app,'electron/nested-display.js'));
+    await fs.appendFile(join(app,'electron/main.js'),'\nexport { mainDirectEntry };\n');
+    await fs.writeFile(join(app,'electron/nesting.js'),productionEntry);
+    await fs.writeFile(join(app,'electron/package-pin.json'),JSON.stringify({version:pkgVersion,commit}));
     await sealRendererAssets(app);
     const pkg = JSON.parse(await fs.readFile(join(ui, 'package.json'), 'utf8'));
     await fs.writeFile(join(app, 'package.json'), JSON.stringify({ name: 'metaviewer',
@@ -235,11 +440,27 @@ export async function packageShell(env = process.env) {
     if (!zipDir) {
       const dist = await fs.realpath(/** @type {string} */ (env.ELECTRON_OVERRIDE_DIST_PATH));
       await fs.access(join(dist, 'electron'));
+      if ((await fs.readFile(join(dist,'version'),'utf8')).trim().replace(/^v/,'') !== '44.9.2') throw new Error('PKG_ELECTRON_PIN');
       zipDir = join(work, 'electron-zip');
       await fs.mkdir(zipDir);
       await execute('zip', ['-q', '-r', join(zipDir, archive), '.'], { cwd: dist });
     }
     await fs.access(join(zipDir, archive));
+    if (env.MV_ELECTRON_ZIP_DIR) {
+      const checksums=JSON.parse(await fs.readFile(join(ui,'node_modules/electron/checksums.json'),'utf8'));
+      if (!checksums[archive] || await digest(join(zipDir,archive)) !== checksums[archive]) throw new Error('PKG_ELECTRON_CHECKSUM');
+    }
+    const native = join(work,'native');
+    await fs.mkdir(native);
+    const cargo = env.CARGO || 'cargo';
+    const target = env.CARGO_TARGET_DIR;
+    if (!target || !isAbsolute(target)) throw new Error('PKG_CARGO_TARGET_REQUIRED');
+    await execute(cargo,['build','--offline','--release','--bin','metaviewer-core'],{cwd:repo,env,maxBuffer:1024*1024});
+    await fs.copyFile(join(target,'release/metaviewer-core'),join(native,'metaviewer-core'));
+    await execute(env.GO || 'go',['build','-trimpath','-buildvcs=false','-ldflags=-buildid=',
+      '-o',join(native,'mv-daemon-adapter'),'./cmd/mv-daemon-adapter'],
+      {cwd:join(repo,'daemon-adapter'),env:{...env,GOPROXY:'off',GOSUMDB:'off',GOTOOLCHAIN:'local'},maxBuffer:1024*1024});
+    for (const name of ['metaviewer-core','mv-daemon-adapter']) await verifyArm64Binary(join(native,name));
     const { packager } = await import('@electron/packager');
     const fuseConfig = buildFuseConfig();
     assertPackagingPolicy(true, fuseConfig);
@@ -247,20 +468,47 @@ export async function packageShell(env = process.env) {
       executableName: 'metaviewer', platform: 'linux', arch: 'arm64', electronVersion: '44.9.2',
       electronZipDir: zipDir, asar: true, prune: false, overwrite: false });
     if (built.length !== 1) throw new Error('Expected exactly one linux-arm64 package');
+    await verifyArm64Binary(join(built[0],'metaviewer'));
+    await fs.cp(native,join(built[0],'resources/bin'),{recursive:true});
+    await fs.cp(join(repo,'contracts/v0.2'),join(built[0],'resources/contracts/v0.2'),{recursive:true});
+    await fs.copyFile(join(repo,'deps.lock'),join(built[0],'resources/deps.lock'));
+    await fs.copyFile(join(ui,'kit.lock.json'),join(built[0],'resources/kit.lock.json'));
+    await fs.writeFile(join(built[0],'INSTALL.md'), `# MetaViewer Linux arm64
+
+Run ./metaviewer to start the production UI with its bundled real core.
+Use --nested-depth=1 only for the separate display-only view.
+Verify every delivered file from this directory with:
+sha256sum -c ../MetaViewer-linux-arm64.sha256
+
+The manifest pins the core, adapter, Electron, renderer and preload bytes.
+resources/kit.lock.json records the build's verified UI kit pin;
+resources/deps.lock records the external component pins.
+Surface execution additionally requires the OpenSuperficies revision in
+resources/deps.lock, supplied by the operator through MV_SRF_BIN_DIR.
+The adapter is resources/bin/mv-daemon-adapter; its deployment requires
+MV_CONTRACT_DIR pointing to resources/contracts/v0.2, MV_COMPONENT_COMMIT
+from electron/package-pin.json inside app.asar, and the trusted session
+registration/runtime environment documented by the adapter's existing ABI.
+This package starts the core and UI; it does not automatically start the adapter
+or create surfaces. The clean-install smoke proves real-core UI startup only.
+`);
     await applyFuses(join(built[0], 'metaviewer'), fuseConfig);
     await verifyPackagedSecurity(built[0]);
     const stagedManifest = join(work, 'package.sha256');
     await writeManifest(built[0], stagedManifest);
     await fs.rename(built[0], final);
     await fs.rename(stagedManifest, `${final}.sha256`);
-    console.log(JSON.stringify({ directory: final, manifest: `${final}.sha256`,
-      argv: [join(final, 'metaviewer'), '--nested-depth=1'], wmClassExpected: ['metaviewer', 'metaviewer'] }));
+    const product = await bundlePackage(final);
+    console.log(JSON.stringify({ ...product, directory: final, manifest: `${final}.sha256`,
+      argv: [join(final, 'metaviewer')], wmClassExpected: ['metaviewer', 'metaviewer'] }));
     return final;
   } finally { await fs.rm(work, { recursive: true, force: true }); }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const action = process.argv[2] === '--verify'
-    ? verifyPackagedSecurity(process.argv[3]) : packageShell();
+    ? verifyPackagedSecurity(process.argv[3]) : process.argv[2] === '--verify-install'
+    ? verifyInstall(process.argv[3]) : process.argv[2] === '--smoke'
+    ? cleanInstallSmoke(process.argv[3]).then(result => console.log(JSON.stringify(result))) : packageShell();
   action.catch(error => { console.error(error.message); process.exitCode = 1; });
 }
