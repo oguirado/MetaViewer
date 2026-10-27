@@ -8,6 +8,7 @@ if [[ -z "${MV_ELECTRON_ZIP_DIR:-}" && -z "${ELECTRON_OVERRIDE_DIST_PATH:-}" ]];
   exit 1
 fi
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$root/core/target}"
 node_bin=${MV_NODE_BIN:-node}
 "$node_bin" --test "$root/ui/test/nesting.test.js"
 exec "$node_bin" "$root/ui/tools/package.js"
