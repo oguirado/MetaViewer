@@ -194,30 +194,58 @@ func TestSlowContainerDoesNotBlockOtherViews(t *testing.T) {
 }
 
 type closeDuringStartRunner struct {
-	entered     chan struct{}
-	childClosed chan struct{}
+	entered      chan struct{}
+	ctxCanceled  chan struct{}
+	activeClosed chan struct{}
+	releaseStart chan struct{}
+	childClosed  chan struct{}
 }
 
 func (r *closeDuringStartRunner) Run(_ context.Context, _ []string, _ []byte) ([]byte, error) {
 	return nil, nil
 }
 
-func (r *closeDuringStartRunner) Start(ctx context.Context, _ []string) (*Process, error) {
+func (r *closeDuringStartRunner) Start(ctx context.Context, args []string) (*Process, error) {
+	announcement := []byte(`{"url":"http://127.0.0.1:1234/","native":"x","socket":"/runtime/s"}`)
+	if args[3] == "srf-id-active" {
+		done := make(chan struct{})
+		var once sync.Once
+		return &Process{
+			Announcement: announcement,
+			Done:         done,
+			Close:        func() { once.Do(func() { close(done); close(r.activeClosed) }) },
+		}, nil
+	}
 	close(r.entered)
 	<-ctx.Done()
-	time.Sleep(20 * time.Millisecond)
+	close(r.ctxCanceled)
+	<-r.releaseStart
+	for range 64 {
+		hop := make(chan struct{})
+		go func() { close(hop) }()
+		<-hop
+	}
 	done := make(chan struct{})
 	var once sync.Once
 	return &Process{
-		Announcement: []byte(`{"url":"http://127.0.0.1:1234/","native":"x","socket":"/runtime/s"}`),
+		Announcement: announcement,
 		Done:         done,
 		Close:        func() { once.Do(func() { close(done); close(r.childClosed) }) },
 	}, nil
 }
 
 func TestCloseJoinsInFlightStart(t *testing.T) {
-	r := &closeDuringStartRunner{entered: make(chan struct{}), childClosed: make(chan struct{})}
+	r := &closeDuringStartRunner{
+		entered:      make(chan struct{}),
+		ctxCanceled:  make(chan struct{}),
+		activeClosed: make(chan struct{}),
+		releaseStart: make(chan struct{}),
+		childClosed:  make(chan struct{}),
+	}
 	b := NewManager(r)
+	if err := b.Open(context.Background(), "srf-id-active", false); err != nil {
+		t.Fatal(err)
+	}
 	openDone := make(chan error, 1)
 	go func() {
 		openDone <- b.Open(context.Background(), "srf-id-slow", false)
@@ -228,23 +256,35 @@ func TestCloseJoinsInFlightStart(t *testing.T) {
 		b.Close()
 		close(closeDone)
 	}()
-	select {
-	case <-closeDone:
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("Close did not cancel and join in-flight Start")
+	<-r.ctxCanceled
+	<-r.activeClosed
+	for range 64 {
+		hop := make(chan struct{})
+		go func() { close(hop) }()
+		<-hop
 	}
 	select {
-	case err := <-openDone:
-		if err == nil {
-			t.Fatal("Open succeeded after Close")
-		}
+	case <-closeDone:
+		close(r.releaseStart)
+		<-openDone
+		t.Fatal("Close returned before in-flight Open finished")
 	default:
+	}
+	close(r.releaseStart)
+	<-closeDone
+	b.mu.Lock()
+	busy := len(b.busy)
+	b.mu.Unlock()
+	if busy != 0 {
 		t.Fatal("Close returned before in-flight Open finished")
 	}
 	select {
 	case <-r.childClosed:
 	default:
 		t.Fatal("late child was not closed before Close returned")
+	}
+	if err := <-openDone; err == nil {
+		t.Fatal("Open succeeded after Close")
 	}
 	// Negative control: ordinary Open/Close lifecycle remains intact.
 	normal := &fakeRunner{output: []byte(`{"url":"http://127.0.0.1:1234/","native":"xpra","socket":"/runtime/view.sock"}`)}
