@@ -669,4 +669,204 @@ mod tests {
         drop(recovered);
         fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn wire_sealed_recordings_are_listed_with_negative_controls() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("mv-capture-reclist-{}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let reg = |component: &str| -> Registration {
+            serde_json::from_value(json!({"endpoint":{"component":component,"instance":format!("{component}-reclist")},"hello":{"schema":"hello/v0.2","contract_version":"v0.2","component":component,"component_version":"0.2.0","component_commit":"0123456789abcdef0123456789abcdef01234567","dependencies":[]}})).unwrap()
+        };
+        let config = Config {
+            session_id: "reclist-session".into(),
+            core: reg("core"),
+            peers: vec![reg("agent"), reg("daemon"), reg("ui")],
+        };
+        let ui = reg("ui").endpoint;
+        let mut server = Server::open(config.clone(), &root, effective_uid().unwrap()).unwrap();
+        for (id, display) in [
+            ("surface-demo", "display-demo"),
+            ("surface-other", "display-other"),
+        ] {
+            server
+                .authority
+                .apply(Input::Surface {
+                    id: id.into(),
+                    surface: Surface {
+                        display: display.into(),
+                        owner: reg("agent").endpoint,
+                        agent_controlled: true,
+                        live: true,
+                        frame: None,
+                        refresh_after: None,
+                        allowed_verbs: vec![],
+                    },
+                })
+                .unwrap();
+            let mut raw: Value = serde_json::from_str(include_str!(
+                "../../../contracts/examples/v0.2/frame_ref.valid.json"
+            ))
+            .unwrap();
+            raw["surface_id"] = id.into();
+            raw["sha256"] = sha256_hex(b"pixels").into();
+            let frame: FrameRef = serde_json::from_value(raw).unwrap();
+            server.capture_frame(&frame, b"pixels".to_vec()).unwrap();
+        }
+        let (queue, rx) = mpsc::sync_channel(64);
+        server.connections.insert(
+            ui.clone(),
+            Connection {
+                id: 1,
+                epoch: 1,
+                queue,
+                terminal: Arc::new(Mutex::new(None)),
+            },
+        );
+        let mut seq = 0_u64;
+        let mut next_seq = || {
+            seq += 1;
+            seq
+        };
+        let drain_reply = |rx: &mpsc::Receiver<Envelope>, req_id: &str| -> Value {
+            let messages: Vec<Value> = rx
+                .try_iter()
+                .map(|env| {
+                    decode_envelope(&serde_json::to_string(&env).unwrap()).unwrap();
+                    serde_json::to_value(env.body).unwrap()
+                })
+                .collect();
+            let carrier = messages
+                .iter()
+                .find(|v| v["data"]["code"] == "CAPTURE_REPLY")
+                .unwrap();
+            let detail: Value =
+                serde_json::from_str(carrier["data"]["detail"].as_str().unwrap()).unwrap();
+            assert_eq!(detail["request_id"], req_id);
+            detail
+        };
+        // Negative control 1: no recordings -> empty list.
+        let empty_list: Envelope = serde_json::from_value(json!({
+            "schema":"envelope/v0.2","msg_id":"capture-list:empty","ts_ns":0,
+            "from":ui,"to":server.config.core.endpoint,"session_id":"reclist-session",
+            "seq":next_seq(),"nonce":"list-empty",
+            "body":{"schema":"surface_request/v0.2","op":"list","params":{}}
+        }))
+        .unwrap();
+        let boundary = server.authority.retain_witness(b"list-empty").unwrap();
+        server.capture_list_wire(&empty_list, boundary).unwrap();
+        let empty_detail = drain_reply(&rx, "capture-list:empty");
+        assert_eq!(empty_detail["method"], "list");
+        assert_eq!(empty_detail["reply"], json!({"ok":true,"rows":[]}));
+
+        // Seal two recordings on surface-demo and one on surface-other via capture_wire.
+        for (rec_id, surface_id) in [
+            ("rec-demo-1", "surface-demo"),
+            ("rec-demo-2", "surface-demo"),
+            ("rec-other-1", "surface-other"),
+        ] {
+            let start_id = format!("start-{rec_id}");
+            let start_req: RecordRequest = serde_json::from_value(json!({
+                "schema":"record_request/v0.2","request_id":start_id,"op":"ram_start",
+                "params":{"surface_id":surface_id,"recording_id":rec_id,"ring_bytes":8_388_608,"max_fps":30}
+            }))
+            .unwrap();
+            let start_env = Envelope {
+                schema: "envelope/v0.2".into(),
+                msg_id: start_id.clone(),
+                ts_ns: Clock::new(0),
+                from: ui.clone(),
+                to: server.config.core.endpoint.clone(),
+                session_id: "reclist-session".into(),
+                seq: next_seq(),
+                nonce: start_id.clone(),
+                body: Command::RecordRequest(Box::new(start_req.clone())),
+            };
+            let boundary = server
+                .authority
+                .retain_witness(serde_json::to_string(&start_env).unwrap().as_bytes())
+                .unwrap();
+            server
+                .capture_wire(&start_env, &start_req, boundary)
+                .unwrap();
+            let start_detail = drain_reply(&rx, &start_id);
+            assert_eq!(start_detail["method"], "recordStart");
+            assert_eq!(
+                start_detail["reply"],
+                json!({"ok":true,"recording_id":rec_id})
+            );
+
+            let mut raw: Value = serde_json::from_str(include_str!(
+                "../../../contracts/examples/v0.2/frame_ref.valid.json"
+            ))
+            .unwrap();
+            raw["surface_id"] = surface_id.into();
+            raw["sha256"] = sha256_hex(b"pixels").into();
+            let frame: FrameRef = serde_json::from_value(raw).unwrap();
+            server.capture_frame(&frame, b"pixels".to_vec()).unwrap();
+            let _ = rx.try_iter().count();
+
+            let stop_id = format!("stop-{rec_id}");
+            let stop_req: RecordRequest = serde_json::from_value(json!({
+                "schema":"record_request/v0.2","request_id":stop_id,"op":"ram_stop",
+                "params":{"surface_id":surface_id,"recording_id":rec_id}
+            }))
+            .unwrap();
+            let stop_env = Envelope {
+                schema: "envelope/v0.2".into(),
+                msg_id: stop_id.clone(),
+                ts_ns: Clock::new(0),
+                from: ui.clone(),
+                to: server.config.core.endpoint.clone(),
+                session_id: "reclist-session".into(),
+                seq: next_seq(),
+                nonce: stop_id.clone(),
+                body: Command::RecordRequest(Box::new(stop_req.clone())),
+            };
+            let boundary = server
+                .authority
+                .retain_witness(serde_json::to_string(&stop_env).unwrap().as_bytes())
+                .unwrap();
+            server.capture_wire(&stop_env, &stop_req, boundary).unwrap();
+            let stop_detail = drain_reply(&rx, &stop_id);
+            assert_eq!(stop_detail["method"], "recordStop");
+            assert_eq!(stop_detail["reply"]["ok"], true);
+            assert_eq!(stop_detail["reply"]["recording"]["id"], rec_id);
+            assert_eq!(stop_detail["reply"]["recording"]["surface_id"], surface_id);
+            assert_eq!(stop_detail["reply"]["recording"]["sealed"], true);
+            assert_eq!(stop_detail["reply"]["recording"]["frames"], 2);
+        }
+
+        let list_env: Envelope = serde_json::from_value(json!({
+            "schema":"envelope/v0.2","msg_id":"capture-list:sealed","ts_ns":0,
+            "from":ui,"to":server.config.core.endpoint,"session_id":"reclist-session",
+            "seq":next_seq(),"nonce":"list-sealed",
+            "body":{"schema":"surface_request/v0.2","op":"list","params":{}}
+        }))
+        .unwrap();
+        let boundary = server.authority.retain_witness(b"list-sealed").unwrap();
+        server.capture_list_wire(&list_env, boundary).unwrap();
+        let list_detail = drain_reply(&rx, "capture-list:sealed");
+        assert_eq!(list_detail["method"], "list");
+        assert_eq!(list_detail["reply"]["ok"], true);
+        let rows = list_detail["reply"]["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 3);
+        let demo_rows: Vec<&Value> = rows
+            .iter()
+            .filter(|r| r["kind"] == "recording" && r["surface_id"] == "surface-demo")
+            .collect();
+        assert_eq!(demo_rows.len(), 2);
+        assert_eq!(demo_rows[0]["id"], "rec-demo-1");
+        assert_eq!(demo_rows[0]["phase"], "sealed");
+        assert_eq!(demo_rows[0]["sealed"], true);
+        assert_eq!(demo_rows[0]["frames"], 2);
+        assert_eq!(demo_rows[1]["id"], "rec-demo-2");
+        assert_eq!(demo_rows[1]["phase"], "sealed");
+        assert_eq!(demo_rows[1]["sealed"], true);
+        assert_eq!(demo_rows[1]["frames"], 2);
+        // Negative control 2: a recording of another surface is not listed for surface-demo.
+        assert!(demo_rows.iter().all(|r| r["surface_id"] == "surface-demo"));
+        drop(server);
+        fs::remove_dir_all(root).unwrap();
+    }
 }
