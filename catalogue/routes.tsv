@@ -1167,6 +1167,7 @@ contrast.test.js	ui/test/contrast.test.js
 coreLauncher.test.js	ui/test/coreLauncher.test.js
 creativ-f3bdf7f2988d	ui/test/creativeCapsule.test.js
 frame-ref-v02.test.js	ui/test/frame-ref-v02.test.js
+frame-wait.mjs	ui/test/frame-wait.mjs
 framePort.test.js	ui/test/framePort.test.js
 frameRe-465cff07ceeb	ui/test/frameReader-lexical.test.js
 frameReader.test.js	ui/test/frameReader.test.js
