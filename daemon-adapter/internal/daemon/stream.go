@@ -3,6 +3,10 @@ package daemon
 // [TARGET, unit decision] Registration supplies the trusted session/endpoints.
 // The client sends hello first, matching the core transport handshake. Core
 // messages must retain that binding; reconnect/session migration is not implicit.
+// [TARGET, unit decision] Control operations preempt in-flight data while barrier
+// gates ensure data queued after take_control/release_control waits for completion;
+// lanes drain before session cancellation on exit, and sessionErr is checked on every
+// read-loop exit.
 import (
 	"context"
 	"encoding/json"
@@ -85,8 +89,13 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 		return err
 	}
 	cancelHello()
-	dataCh := make(chan ipc.Envelope, 64)
-	ctrlCh := make(chan ipc.Envelope, 64)
+	type queuedEnvelope struct {
+		in   ipc.Envelope
+		wait <-chan struct{}
+		done chan struct{}
+	}
+	dataCh := make(chan queuedEnvelope, 64)
+	ctrlCh := make(chan queuedEnvelope, 64)
 	var errOnce sync.Once
 	var sessionErr error
 	fail := func(e error) {
@@ -129,60 +138,81 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		for in := range dataCh {
+		for item := range dataCh {
+			if item.wait != nil {
+				select {
+				case <-item.wait:
+				case <-ctx.Done():
+					return
+				}
+			}
 			if ctx.Err() != nil {
 				return
 			}
 			var op struct{ Op string }
-			_ = json.Unmarshal(in.Body, &op)
+			_ = json.Unmarshal(item.in.Body, &op)
 			locked := op.Op != "frame_unsubscribe" && op.Op != "destroy"
-			dispatch(in, locked)
+			dispatch(item.in, locked)
 		}
 	}()
 	go func() {
 		defer wg.Done()
-		for in := range ctrlCh {
+		for item := range ctrlCh {
 			if ctx.Err() != nil {
+				close(item.done)
 				return
 			}
-			dispatch(in, false)
+			dispatch(item.in, false)
+			close(item.done)
 		}
 	}()
 	stopWorkers := sync.OnceFunc(func() {
-		cancelSession()
 		close(dataCh)
 		close(ctrlCh)
 		wg.Wait()
+		cancelSession()
 	})
 	defer stopWorkers()
+	exitLoop := func(loopErr error) error {
+		visited := ctx.Err() != nil
+		stopWorkers()
+		if sessionErr != nil {
+			return sessionErr
+		}
+		if visited {
+			return nil
+		}
+		return loopErr
+	}
 	first := true
+	var ctrlGate <-chan struct{}
 	for {
 		raw, err := framer.Read(ctx)
 		if err != nil {
-			visited := ctx.Err() != nil
-			stopWorkers()
-			if sessionErr != nil {
-				return sessionErr
-			}
-			if visited {
-				return nil
-			}
-			return err
+			return exitLoop(err)
 		}
 		in, err := policy.ValidateEnvelope(raw)
 		if err != nil {
+			err = exitLoop(err)
+			cancelSession()
 			return err
 		}
 		var body struct{ Schema, Component string }
 		if err = json.Unmarshal(in.Body, &body); err != nil {
+			err = exitLoop(err)
+			cancelSession()
 			return err
 		}
 		if in.Schema != "envelope/v0.2" || in.From != registration.From || in.To != registration.To || in.SessionID != registration.SessionID || in.Seq == 0 || in.Nonce == "" {
-			return errors.New("registered core route refused")
+			err = exitLoop(errors.New("registered core route refused"))
+			cancelSession()
+			return err
 		}
 		isHello := first && body.Schema == "hello/v0.2" && body.Component == "core"
 		if !isHello && body.Schema != "surface_request/v0.2" && body.Schema != "record_request/v0.2" {
-			return errors.New("core surface request required")
+			err = exitLoop(errors.New("core surface request required"))
+			cancelSession()
+			return err
 		}
 		authority.Lock()
 		err = policy.Authenticate(ctx, cred, in)
@@ -191,6 +221,8 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 		}
 		authority.Unlock()
 		if err != nil {
+			err = exitLoop(err)
+			cancelSession()
 			return err
 		}
 		first = false
@@ -200,17 +232,17 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 		var op struct{ Op string }
 		_ = json.Unmarshal(in.Body, &op)
 		target := dataCh
+		item := queuedEnvelope{in: in, wait: ctrlGate}
 		if op.Op == "take_control" || op.Op == "release_control" {
+			done := make(chan struct{})
+			ctrlGate = done
+			item = queuedEnvelope{in: in, done: done}
 			target = ctrlCh
 		}
 		select {
-		case target <- in:
+		case target <- item:
 		case <-ctx.Done():
-			stopWorkers()
-			if sessionErr != nil {
-				return sessionErr
-			}
-			return nil
+			return exitLoop(nil)
 		}
 	}
 }

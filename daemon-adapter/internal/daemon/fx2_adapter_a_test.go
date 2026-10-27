@@ -655,3 +655,217 @@ func TestT2R202StreamTakeoverCancelsBlockedInput(t *testing.T) {
 		t.Fatal("connectStreaming did not join")
 	}
 }
+
+// RV7-ADAPTER-LANES: connectStreaming must order data requests queued after
+// take_control/release_control behind control completion, drain queued lanes on
+// EOF before cancelling the session, and return sessionErr on read-loop exits.
+func TestStreamControlSequenceGateDrainingAndSessionErr(t *testing.T) {
+	root, err := os.MkdirTemp("/dev/shm", "mv-rv7lanes-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(root)
+	pngPath, sha := writeTestPNG(t, root)
+	runner := &r202StreamRunner{pngPath: pngPath, sha: sha, inputStarted: make(chan struct{})}
+	profiles := map[string]capsule.Profile{"demo": {Kind: "browser", NativeKind: "browser", RAMRoot: root, Display: ":100", Width: 2, Height: 1}}
+	m, err := capsule.NewManager(capsule.Config{BinDir: t.TempDir(), Profiles: profiles, MaxSurfaces: 1, MaxOutputBytes: 8192, Timeout: 30 * time.Second, OriginNS: 100}, runner, func() uint64 { return 200 + runner.seq.Load() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := frames.NewPublisher(frames.PublishConfig{RAMRoot: root, MaxFrameBytes: 8192, MaxPixels: 2, MaxSurfaces: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pub.Close()
+	handler := wireHandler(m, profiles, map[string]*frames.Publisher{root: pub}, 100)
+
+	sockDir := t.TempDir()
+	if err := os.Chmod(sockDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	sockPath := filepath.Join(sockDir, "gate.sock")
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: sockPath, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	cfg := ipc.Config{SocketPath: sockPath, UID: uint32(os.Getuid()), MaxFrameBytes: 8192, MaxDepth: 32, MaxStringBytes: 4096, MaxKeys: 128, MaxArrayItems: 128, MaxReplayEntries: 128, MaxConnections: 1, HelloTimeout: 2 * time.Second, ReadTimeout: 5 * time.Second, WriteTimeout: 2 * time.Second, ProbeTimeout: time.Second, ShutdownTimeout: time.Second}
+	reg := ipc.Envelope{
+		Schema:    "envelope/v0.2",
+		MsgID:     "reg",
+		From:      ipc.Endpoint{Component: "core", Instance: "core-1"},
+		To:        ipc.Endpoint{Component: "daemon", Instance: "daemon-1"},
+		SessionID: "s-1",
+		Seq:       1,
+		Nonce:     "n-1",
+		Body:      json.RawMessage(`{"schema":"hello/v0.2","component":"daemon"}`),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	streamDone := make(chan error, 1)
+	go func() {
+		streamDone <- connectStreaming(ctx, cfg, &lifecyclePolicy{}, reg, func(c context.Context, e ipc.Envelope) ([]json.RawMessage, error) {
+			var h struct {
+				Schema, Op string
+			}
+			_ = json.Unmarshal(e.Body, &h)
+			if h.Schema == "hello/v0.2" {
+				return nil, nil
+			}
+			if h.Op == "take_control" || h.Op == "release_control" {
+				// Delay control handler to force any un-gated data worker to race ahead.
+				time.Sleep(35 * time.Millisecond)
+			}
+			return handler(c, e)
+		})
+	}()
+
+	conn, err := listener.AcceptUnix()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	framer, err := ipc.NewFramer(conn, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := framer.Read(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var seq uint64
+	send := func(op string, params any) {
+		t.Helper()
+		seq++
+		body, _ := json.Marshal(map[string]any{"schema": "surface_request/v0.2", "op": op, "params": params})
+		env, _ := json.Marshal(ipc.Envelope{
+			Schema:    "envelope/v0.2",
+			MsgID:     fmt.Sprintf("m-%d", seq),
+			From:      reg.From,
+			To:        reg.To,
+			SessionID: reg.SessionID,
+			Seq:       seq,
+			Nonce:     fmt.Sprintf("n-%d", seq),
+			Body:      body,
+		})
+		if err := framer.Write(ctx, env); err != nil {
+			t.Fatal(err)
+		}
+	}
+	readBody := func(timeout time.Duration) json.RawMessage {
+		t.Helper()
+		rctx, rcancel := context.WithTimeout(ctx, timeout)
+		defer rcancel()
+		raw, err := framer.Read(rctx)
+		if err != nil {
+			t.Fatalf("read failed within %v: %v", timeout, err)
+		}
+		var env ipc.Envelope
+		if err := json.Unmarshal(raw, &env); err != nil {
+			t.Fatal(err)
+		}
+		return env.Body
+	}
+
+	send("create", map[string]any{"kind": "browser", "profile_id": "demo", "geometry": map[string]int{"w": 2, "h": 1}})
+	var created struct {
+		Data struct {
+			Surface capsule.Surface `json:"surface"`
+		}
+	}
+	if err := json.Unmarshal(readBody(2*time.Second), &created); err != nil {
+		t.Fatal(err)
+	}
+	_ = readBody(2 * time.Second) // initial frame_ready
+	id := created.Data.Surface.SurfaceID
+
+	// Pipelined take_control followed immediately by input and EOF:
+	// input MUST wait for take_control (so it is refused with SURFACE_NOT_AGENT_CONTROLLED),
+	// and both queued requests MUST drain before cancelSession on EOF.
+	send("take_control", map[string]any{"surface_id": id, "owner": "human"})
+	send("input", map[string]any{"surface_id": id, "proposal_id": "prop-after-tc", "action": map[string]any{"type": "key", "keys": []string{"a"}}})
+	_ = conn.CloseWrite()
+
+	body1 := readBody(2 * time.Second)
+	body2 := readBody(2 * time.Second)
+	var ev1, ev2 struct {
+		Schema, Event, Error string
+		Data                 struct {
+			Surface capsule.Surface `json:"surface"`
+		}
+	}
+	_ = json.Unmarshal(body1, &ev1)
+	_ = json.Unmarshal(body2, &ev2)
+	if ev1.Schema != "surface_event/v0.2" || ev1.Event != "state_changed" || ev1.Data.Surface.Control != "human" {
+		t.Fatalf("expected take_control reply first, got %s", body1)
+	}
+	if ev2.Schema != "action_receipt/v0.2" || !strings.Contains(ev2.Error, "SURFACE_NOT_AGENT_CONTROLLED") {
+		t.Fatalf("expected input queued after take_control to be refused as human-controlled, got %s", body2)
+	}
+
+	select {
+	case err := <-streamDone:
+		if err == nil {
+			t.Fatal("expected EOF error from connectStreaming")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("connectStreaming did not exit after EOF drain")
+	}
+
+	// Verify sessionErr is returned when a read-loop validation/auth failure races with worker failure.
+	errSock := filepath.Join(sockDir, "err.sock")
+	errListener, err := net.ListenUnix("unix", &net.UnixAddr{Name: errSock, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer errListener.Close()
+	errCfg := cfg
+	errCfg.SocketPath = errSock
+
+	workerEntered := make(chan struct{})
+	errDone := make(chan error, 1)
+	go func() {
+		errDone <- connectStreaming(ctx, errCfg, &lifecyclePolicy{}, reg, func(c context.Context, e ipc.Envelope) ([]json.RawMessage, error) {
+			var h struct{ Schema string }
+			_ = json.Unmarshal(e.Body, &h)
+			if h.Schema == "hello/v0.2" {
+				return nil, nil
+			}
+			close(workerEntered)
+			return nil, fmt.Errorf("stream worker Boom")
+		})
+	}()
+
+	errConn, err := errListener.AcceptUnix()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer errConn.Close()
+	errFramer, err := ipc.NewFramer(errConn, errCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := errFramer.Read(ctx); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(map[string]any{"schema": "surface_request/v0.2", "op": "list", "params": map[string]any{}})
+	rawEnv, _ := json.Marshal(ipc.Envelope{
+		Schema: "envelope/v0.2", MsgID: "m-1", From: reg.From, To: reg.To, SessionID: reg.SessionID,
+		Seq: 1, Nonce: "n-1", Body: body,
+	})
+	if err := errFramer.Write(ctx, rawEnv); err != nil {
+		t.Fatal(err)
+	}
+	<-workerEntered
+	_ = errFramer.Write(ctx, []byte(`{"malformed`))
+
+	select {
+	case gotErr := <-errDone:
+		if gotErr == nil || fmt.Sprint(gotErr) != "dispatch: stream worker Boom" {
+			t.Fatalf("expected sessionErr 'dispatch: stream worker Boom', got %v", gotErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("connectStreaming did not join on worker failure")
+	}
+}
