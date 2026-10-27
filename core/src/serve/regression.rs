@@ -87,11 +87,17 @@ impl Peer {
         decode_envelope(&json!({"schema":"envelope/v0.2","msg_id":format!("{}-{}", self.registration.endpoint.instance,self.seq),"ts_ns":0,"from":self.registration.endpoint,"to":self.config.core.endpoint,"session_id":self.config.session_id,"seq":self.seq,"nonce":format!("{}-{}",self.registration.endpoint.instance,self.seq),"body":body}).to_string()).unwrap()
     }
     async fn receive(&mut self) -> Envelope {
-        tokio::time::timeout(Duration::from_secs(3), read_frame(&mut self.socket))
+        // read_frame already enforces the transport's configured read deadline.
+        // An additional shorter watchdog makes host scheduling a test oracle.
+        read_frame(&mut self.socket)
             .await
-            .unwrap()
-            .unwrap()
-            .unwrap()
+            .expect("test peer frame read failed")
+            .unwrap_or_else(|| {
+                panic!(
+                    "core closed {} after seq {}",
+                    self.registration.endpoint.instance, self.seq
+                )
+            })
     }
     async fn verdict(&mut self, decision: &str, reason: Option<&str>) {
         let env = self.receive().await;
@@ -101,6 +107,16 @@ impl Peer {
             assert_eq!(value["reason_code"], reason);
         }
     }
+}
+
+// [TARGET, unit decision] A daemon cannot issue agent tools. Its POLICY reply
+// fences all earlier messages on that same connection, without a timed probe.
+// Unexpected daemon dispatches precede the reply and fail the verdict assertion.
+async fn daemon_barrier(daemon: &mut Peer) {
+    daemon
+        .send(tool_call("list", json!({"cursor":null,"limit":1})))
+        .await;
+    daemon.verdict("refused", Some("POLICY")).await;
 }
 struct SharedFrame(std::path::PathBuf);
 impl SharedFrame {
@@ -157,13 +173,10 @@ async fn tool_result(peer: &mut Peer, op: &str, status: &str) -> Value {
     result
 }
 
-async fn setup() -> (
+async fn start_server() -> (
     support::Temp,
     Arc<Mutex<Server>>,
     tokio::task::JoinHandle<serve::Result<()>>,
-    Peer,
-    Peer,
-    Peer,
 ) {
     let temp = support::Temp::new();
     let socket = temp.0.join("runtime/core.sock");
@@ -173,6 +186,18 @@ async fn setup() -> (
         Server::open(config(), &temp.0.join("state"), uid).unwrap(),
     ));
     let task = tokio::spawn(serve::serve(listener, server.clone(), uid));
+    (temp, server, task)
+}
+async fn setup() -> (
+    support::Temp,
+    Arc<Mutex<Server>>,
+    tokio::task::JoinHandle<serve::Result<()>>,
+    Peer,
+    Peer,
+    Peer,
+) {
+    let (temp, server, task) = start_server().await;
+    let socket = temp.0.join("runtime/core.sock");
     let daemon = Peer::connect(&socket, "daemon").await;
     let agent = Peer::connect(&socket, "agent").await;
     let ui = Peer::connect(&socket, "ui").await;
@@ -213,17 +238,21 @@ fn cancelled_dispatched_wait_returns_unavailable_promptly() {
             .send(tool_call("list", json!({"cursor":null,"limit":1})))
             .await;
         tool_result(&mut agent, "list", "ok").await;
-        let start = std::time::Instant::now();
+        assert_eq!(server.lock().unwrap().tool_state.waiters.len(), 1);
         ui.send(control("take_control")).await;
         agent
             .verdict("refused", Some("SURFACE_NOT_AGENT_CONTROLLED"))
             .await;
-        let result = tokio::time::timeout(Duration::from_millis(200), agent.receive())
-            .await
-            .expect("cancelled wait must resolve before its deadline");
+        // Control dispatch follows notify_cancellations in the same route call.
+        // Check that causal boundary instead of measuring host scheduling time.
+        assert!(matches!(
+            daemon.receive().await.body,
+            Command::SurfaceRequest(_)
+        ));
+        assert!(server.lock().unwrap().tool_state.waiters.is_empty());
+        let result = agent.receive().await;
         let result = serde_json::to_value(result.body).unwrap();
         assert_eq!(result["code"], "UNAVAILABLE");
-        assert!(start.elapsed() < Duration::from_millis(200));
         assert!(server
             .lock()
             .unwrap()
@@ -243,6 +272,53 @@ fn cancelled_dispatched_wait_returns_unavailable_promptly() {
         );
         task.abort();
     });
+}
+#[test]
+fn cancellation_enqueues_wait_result_in_the_notification_call() {
+    let temp = support::Temp::new();
+    let mut server = Server::open(
+        config(),
+        &temp.0.join("state"),
+        serve::effective_uid().unwrap(),
+    )
+    .unwrap();
+    let peer = registration("agent").endpoint;
+    let (queue, rx) = std::sync::mpsc::sync_channel(MAX_SEND_QUEUE);
+    server.connections.insert(
+        peer.clone(),
+        serve::Connection {
+            id: 1,
+            epoch: 0,
+            queue,
+            terminal: Arc::new(Mutex::new(None)),
+        },
+    );
+    server.tool_state.waiters.push(super::Waiter {
+        peer,
+        request_id: "cancel-wait".into(),
+        proposal_id: "cancelled".into(),
+        deadline: std::time::Instant::now() + IDLE_DEADLINE,
+    });
+    // Negative control: merely retaining a waiter enqueues no result.
+    assert!(matches!(
+        rx.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    server
+        .notify_cancellations(&["cancelled".into()], 1)
+        .unwrap();
+    assert!(server.tool_state.waiters.is_empty());
+    assert!(matches!(
+        rx.try_recv().unwrap().body,
+        Command::ActionVerdict(_)
+    ));
+    let result = serde_json::to_value(rx.try_recv().unwrap().body).unwrap();
+    assert_eq!(result["request_id"], "cancel-wait");
+    assert_eq!(result["code"], "UNAVAILABLE");
+    assert!(matches!(
+        rx.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
 }
 #[test]
 fn list_lookahead_needs_no_metadata_but_returned_entries_do() {
@@ -361,11 +437,7 @@ fn layout_fold_unfold_publishes_and_recovers_without_daemon_dispatch() {
             serde_json::to_value(ui.receive().await.body).unwrap()["data"]["surface"]["visibility"],
             "folded"
         );
-        assert!(
-            tokio::time::timeout(Duration::from_millis(20), read_frame(&mut daemon.socket))
-                .await
-                .is_err()
-        );
+        daemon_barrier(&mut daemon).await;
         ui.send(json!({"schema":"ui_intent/v0.2","request_id":"unknown","op":"fold","params":{"slot_id":"unknown"}})).await;
         ui.verdict("refused", Some("POLICY")).await;
         agent
@@ -387,12 +459,25 @@ fn layout_fold_unfold_publishes_and_recovers_without_daemon_dispatch() {
 #[test]
 fn recovery_retains_only_live_views_and_recent_receipts() {
     support::run(async {
-        let (temp, server, task, mut daemon, mut agent, mut ui) = setup().await;
-        created(&mut daemon, &mut ui).await;
+        let (temp, server, task) = start_server().await;
+        let socket = temp.0.join("runtime/core.sock");
+        let mut daemon = Peer::connect(&socket, "daemon").await;
+        let mut agent = Peer::connect(&socket, "agent").await;
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"created","data":{"surface":surface()}}))
+            .await;
         let frame = SharedFrame::new();
         let f = frame.value(1);
         daemon.send(f.clone()).await;
-        ui.receive().await;
+        daemon_barrier(&mut daemon).await;
+        // [TARGET, unit decision] Receipt traffic does not use the UI. Connecting
+        // it before this journal-heavy batch made success depend on the entire
+        // batch completing before the transport's legitimate idle deadline.
+        assert!(!server
+            .lock()
+            .unwrap()
+            .connections
+            .contains_key(&registration("ui").endpoint));
         for i in 0..200 {
             let id = format!("p-{i}");
             agent.send(proposal(&id, &f)).await;
@@ -407,6 +492,7 @@ fn recovery_retains_only_live_views_and_recent_receipts() {
             daemon.send(r).await;
             agent.receive().await;
         }
+        let mut ui = Peer::connect(&socket, "ui").await;
         let mut dead = surface();
         dead["state"] = "destroyed".into();
         daemon.send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":dead}})).await;
