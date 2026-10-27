@@ -427,7 +427,11 @@ fn pending_checkpoint_recovers_only_a_proven_chain() {
             fs::write(root.join("checkpoint.next"), &old).unwrap();
         }
         let path = root.join("journal.jsonl");
-        let mut recovered = Authority::recover(&path, &root).unwrap();
+        let mut recovered = Authority::recover(&path, &root).unwrap_or_else(|error| {
+            panic!(
+                "pending_is_current={pending_is_current}, root={root:?}: recover failed: {error:?}"
+            )
+        });
         assert_eq!(recovered.state().core_seq, 1);
         recovered.apply(Input::Connect).unwrap();
         drop(recovered);

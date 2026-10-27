@@ -85,7 +85,7 @@ pub struct Replay {
 }
 pub struct Journal {
     root: PathBuf,
-    file: File,
+    file: WriterFile,
     count: u64,
     bytes: u64,
     tail: String,
@@ -95,6 +95,33 @@ pub struct Journal {
     poisoned: bool,
     // Last durably committed reduction boundary; supplied transitions are untrusted.
     state: CoreState,
+}
+// [TARGET, unit decision] Release the writer's lock explicitly, including on
+// error paths. Closing alone leaves flock held by a concurrent fork's inherited
+// open file description until that child execs or exits.
+struct WriterFile(File);
+impl WriterFile {
+    fn lock(file: File) -> Result<Self, JournalError> {
+        file.try_lock().map_err(|_| JournalError::Locked)?;
+        Ok(Self(file))
+    }
+}
+impl std::ops::Deref for WriterFile {
+    type Target = File;
+    fn deref(&self) -> &File {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for WriterFile {
+    fn deref_mut(&mut self) -> &mut File {
+        &mut self.0
+    }
+}
+impl Drop for WriterFile {
+    fn drop(&mut self) {
+        // If unlock fails, closing still preserves the fail-closed kernel lock.
+        let _ = self.0.unlock();
+    }
 }
 fn json<T: Serialize>(value: &T) -> Result<Vec<u8>, JournalError> {
     canonical_bytes(&serde_json::to_value(value).map_err(|_| JournalError::Invalid)?)
@@ -368,14 +395,14 @@ impl Journal {
             state: state.clone(),
         })?;
         publish(&root.join("genesis.json"), &genesis)?;
-        let mut file = OpenOptions::new()
+        let file = OpenOptions::new()
             .read(true)
             .append(true)
             .create_new(true)
             .mode(0o600)
             .open(root.join("journal.jsonl"))
             .map_err(|_| JournalError::Io)?;
-        file.try_lock().map_err(|_| JournalError::Locked)?;
+        let mut file = WriterFile::lock(file)?;
         file.write_all(&header)
             .and_then(|_| file.write_all(b"\n"))
             .and_then(|_| file.sync_all())
@@ -412,7 +439,7 @@ impl Journal {
             .append(true)
             .open(path)
             .map_err(|_| JournalError::Io)?;
-        file.try_lock().map_err(|_| JournalError::Locked)?;
+        let file = WriterFile::lock(file)?;
         let replay = scan(path, root)?;
         let c = replay.checkpoint.clone();
         let bytes = file.metadata().map_err(|_| JournalError::Io)?.len();
@@ -724,6 +751,36 @@ pub fn default_state_dir() -> Result<PathBuf, JournalError> {
 #[cfg(test)]
 mod directory_tests {
     use super::*;
+    #[test]
+    fn writer_drop_releases_lock_with_a_retained_file_description() {
+        let root = std::env::temp_dir().join(format!("mv-journal-lock-{}", std::process::id()));
+        fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        let state = CoreState::session("session-1").unwrap();
+        let journal = Journal::create(&root, &state).unwrap();
+        let session = root.join("sessions/session-1");
+        let path = session.join("journal.jsonl");
+        // A duplicate models the same open file description retained across a
+        // concurrent fork before exec closes the child's inherited descriptor.
+        let inherited = journal.file.try_clone().unwrap();
+        assert!(matches!(
+            Journal::recover(&path, &session),
+            Err(JournalError::Locked)
+        ));
+        drop(journal);
+        let (recovered, _) = Journal::recover(&path, &session).unwrap();
+        assert!(matches!(
+            Journal::recover(&path, &session),
+            Err(JournalError::Locked)
+        ));
+        drop(inherited);
+        // Closing the old descriptor must not release the new writer's lock.
+        assert!(matches!(
+            Journal::recover(&path, &session),
+            Err(JournalError::Locked)
+        ));
+        drop(recovered);
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn foreign_owner_is_refused_even_with_private_mode() {
         let root = std::env::temp_dir().join(format!("mv-journal-owner-{}", std::process::id()));
