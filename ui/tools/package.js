@@ -2,25 +2,42 @@
 // [TARGET, unit decision] Deterministic Linux bundle with an owned real-core session.
 // Local archives are mandatory; packager never reaches its download branch.
 import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
+import { createReadStream, closeSync, openSync, statSync, unlinkSync } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import { dirname, basename, isAbsolute, join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { buildFuseConfig, FUSE_TABLE } from '../electron/main.js';
+import { buildFuseConfig, ELECTRON_PIN, FUSE_TABLE } from '../electron/main.js';
 import { extractFile, listPackage, statFile, uncache } from '@electron/asar';
 import { syncKit } from '../../tools/sync_kit.mjs';
+
+export { ELECTRON_PIN };
+export const PKG_BOOT_BUDGET_MS = 10000;
 
 const execute = promisify(execFile);
 const ui = fileURLToPath(new URL('../', import.meta.url));
 const repo = resolve(ui, '..');
+const DEFAULT_UMASK_FILE_MODE = (() => {
+  const probe = join(tmpdir(), `.mv-mode-probe-${process.pid}-${Date.now()}`);
+  try {
+    const fd = openSync(probe, 'wx', 0o666);
+    try {
+      return statSync(probe).mode & 0o777;
+    } finally {
+      closeSync(fd);
+      unlinkSync(probe);
+    }
+  } catch {
+    return 0o644;
+  }
+})();
 /** @param {string} value */
 export function packageArchitecture(value = process.arch) {
   if (value !== 'arm64' && value !== 'x64') throw new Error('PKG_ARCH_UNSUPPORTED');
   return { arch: value, machine: value === 'arm64' ? 183 : 62,
-    name: `MetaViewer-linux-${value}`, archive: `electron-v44.9.2-linux-${value}.zip` };
+    name: `MetaViewer-linux-${value}`, archive: `electron-v${ELECTRON_PIN}-linux-${value}.zip` };
 }
 const architecture = packageArchitecture();
 const { archive } = architecture;
@@ -36,27 +53,62 @@ export function validateOutput(value, repository) {
   return output;
 }
 
+/** @param {{ name: string }} a @param {{ name: string }} b */
+function compareEntryNames(a, b) {
+  return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+}
+
+/** @param {string} root */
+async function normalizePackageModes(root) {
+  /** @param {string} part */
+  async function walk(part) {
+    const dirPath = part ? join(root, part) : root;
+    await fs.chmod(dirPath, 0o755);
+    const items = (await fs.readdir(dirPath, { withFileTypes: true })).slice().sort(compareEntryNames);
+    for (const item of items) {
+      const name = part ? `${part}/${item.name}` : item.name;
+      const fullPath = join(root, name);
+      if (item.isSymbolicLink()) throw new Error(`Symlink refused: ${name}`);
+      if (item.isDirectory()) {
+        await walk(name);
+      } else if (item.isFile()) {
+        const st = await fs.lstat(fullPath);
+        await fs.chmod(fullPath, (st.mode & 0o111) !== 0 ? 0o755 : 0o644);
+      } else {
+        throw new Error(`Unsupported package entry: ${name}`);
+      }
+    }
+  }
+  await walk('');
+}
+
 /** @param {string} root @param {string} destination */
 export async function writeManifest(root, destination) {
-  /** @type {string[]} */
+  /** @type {{ name: string, mode: number }[]} */
   const files = [];
   /** @param {string} part */
   async function walk(part) {
-    for (const item of await fs.readdir(join(root, part), { withFileTypes: true })) {
+    const items = (await fs.readdir(join(root, part), { withFileTypes: true })).slice().sort(compareEntryNames);
+    for (const item of items) {
       const name = part ? `${part}/${item.name}` : item.name;
       if (/[\r\n\\]/.test(name)) throw new Error('Unsupported manifest filename');
       if (item.isSymbolicLink()) throw new Error(`Symlink refused: ${name}`);
       if (item.isDirectory()) await walk(name);
-      else if (item.isFile()) files.push(name);
-      else throw new Error(`Unsupported package entry: ${name}`);
+      else if (item.isFile()) {
+        const st = await fs.lstat(join(root, name));
+        files.push({ name, mode: st.mode & 0o777 });
+      } else throw new Error(`Unsupported package entry: ${name}`);
     }
   }
   await walk('');
+  files.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  const includeExplicitModes = files.some(file => file.mode !== DEFAULT_UMASK_FILE_MODE);
   const lines = [];
-  for (const name of files.sort()) {
+  for (const file of files) {
     const hash = createHash('sha256');
-    for await (const bytes of createReadStream(join(root, name))) hash.update(bytes);
-    lines.push(`${hash.digest('hex')}  ${name}\n`);
+    for await (const bytes of createReadStream(join(root, file.name))) hash.update(bytes);
+    const modeField = includeExplicitModes ? ` ${file.mode.toString(8).padStart(4, '0')}` : '';
+    lines.push(`${hash.digest('hex')}${modeField}  ${file.name}\n`);
   }
   await fs.writeFile(destination, lines.join(''), { flag: 'wx' });
 }
@@ -65,7 +117,40 @@ export async function writeManifest(root, destination) {
 // count and byte states are checked against the local Electron artifact. Unknown
 // wire layouts fail closed. No runtime dependency or downloaded fuse helper.
 const ASSET_SEAL_PREFIX = 'const PACKAGED_ASSET_DIGESTS = /** @type {Readonly<Record<string, string>>} */ (Object.freeze(';
+const EXEC_SEAL_PREFIX = 'const PACKAGED_EXEC_DIGESTS = Object.freeze(';
 const FUSE_SENTINEL = Buffer.from('dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX');
+
+/** @param {string} source */
+function stripMainSeal(source) {
+  const parts = source.split(ASSET_SEAL_PREFIX);
+  if (parts.length !== 2) throw new Error('ASAR seal marker mismatch');
+  const end = parts[1].indexOf('));');
+  if (end < 0) throw new Error('ASAR seal marker mismatch');
+  return `${parts[0]}${ASSET_SEAL_PREFIX}{}${parts[1].slice(end)}`;
+}
+
+/** @param {string} source */
+function stripEntrySeal(source) {
+  const parts = source.split(EXEC_SEAL_PREFIX);
+  if (parts.length !== 2) return source;
+  const end = parts[1].indexOf(');');
+  if (end < 0) throw new Error('ASAR entry seal marker mismatch');
+  return `${parts[0]}${EXEC_SEAL_PREFIX}{}${parts[1].slice(end)}`;
+}
+
+/**
+ * @param {string} relativePath
+ * @param {Buffer} rawBytes
+ */
+function normalizeSealedBytes(relativePath, rawBytes) {
+  if (relativePath === 'electron/main.js') {
+    return Buffer.from(stripMainSeal(rawBytes.toString('utf8')), 'utf8');
+  }
+  if (relativePath === 'electron/nesting.js') {
+    return Buffer.from(stripEntrySeal(rawBytes.toString('utf8')), 'utf8');
+  }
+  return rawBytes;
+}
 
 /** @param {boolean} asar @param {Readonly<Record<string, boolean | string>>} config */
 export function assertPackagingPolicy(asar, config) {
@@ -133,16 +218,34 @@ export async function verifyPackagedSecurity(root) {
   const end = sealed[1].indexOf('));');
   const hashes = JSON.parse(sealed[1].slice(0, end));
   if (!hashes || typeof hashes !== 'object' || Array.isArray(hashes)) throw new Error('Invalid ASAR asset seal');
+  const nestingSource = extractFile(archivePath, 'electron/nesting.js').toString();
+  const nestingParts = nestingSource.split(EXEC_SEAL_PREFIX);
+  if (nestingParts.length === 2) {
+    const nestingEnd = nestingParts[1].indexOf(');');
+    if (nestingEnd < 0) throw new Error('Invalid ASAR entry seal');
+    const execHashes = JSON.parse(nestingParts[1].slice(0, nestingEnd));
+    if (JSON.stringify(execHashes) !== JSON.stringify(hashes)) {
+      throw new Error('ASAR entry seal mismatch');
+    }
+  }
   let assets = 0;
   // The immutable ASAR namespace must not contain aliases or unpacked files.
   for (const name of listPackage(archivePath, {})) {
     const entry = statFile(archivePath, name.replace(/^\//, ''), false);
     if ('link' in entry || ('unpacked' in entry && entry.unpacked)) throw new Error('ASAR alias/unpacked entry refused');
-    const prefix = '/dist/renderer/';
-    if (name.startsWith(prefix) && 'size' in entry) {
-      const relativeName = name.slice(prefix.length);
-      const digest = createHash('sha256').update(extractFile(archivePath, name.slice(1))).digest('hex');
-      if (hashes[relativeName] !== digest) throw new Error(`ASAR asset mismatch: ${relativeName}`);
+    if (!('size' in entry)) continue;
+    const relPath = name.replace(/^\//, '');
+    /** @type {string | null} */
+    let sealKey = null;
+    if (relPath.startsWith('dist/renderer/')) {
+      sealKey = relPath.slice('dist/renderer/'.length);
+    } else if (relPath.startsWith('dist/preload/') || relPath.startsWith('electron/')) {
+      sealKey = relPath;
+    }
+    if (sealKey !== null) {
+      const rawBytes = extractFile(archivePath, relPath);
+      const digest = createHash('sha256').update(normalizeSealedBytes(relPath, rawBytes)).digest('hex');
+      if (hashes[sealKey] !== digest) throw new Error(`ASAR asset mismatch: ${sealKey}`);
       assets++;
     }
   }
@@ -154,51 +257,237 @@ export async function verifyPackagedSecurity(root) {
   }
 }
 
-/** Seal the bytes that the already-loaded main module may serve from ASAR.
- * @param {string} app */
-export async function sealRendererAssets(app) {
+/** Seal all executed renderer, preload, and electron files in deterministic key order.
+ * @param {string} app
+ * @param {{ readdir?: typeof fs.readdir }} [options] */
+export async function sealRendererAssets(app, options = {}) {
+  const readdirFn = options.readdir ?? fs.readdir;
+  /** @type {Array<[string, string]>} */
+  const collected = [];
+  /**
+   * @param {string} baseDir
+   * @param {string} keyPrefix
+   * @param {string} relPrefix
+   */
+  async function walkSection(baseDir, keyPrefix, relPrefix) {
+    /** @param {string} part */
+    async function walk(part) {
+      const entries = (await readdirFn(join(baseDir, part), { withFileTypes: true })).slice().sort(compareEntryNames);
+      for (const entry of entries) {
+        const name = part ? `${part}/${entry.name}` : entry.name;
+        if (entry.isSymbolicLink()) throw new Error('Renderer alias refused');
+        if (entry.isDirectory()) {
+          await walk(name);
+        } else if (entry.isFile()) {
+          const relPath = `${relPrefix}${name}`;
+          const key = `${keyPrefix}${name}`;
+          const rawBytes = await fs.readFile(join(baseDir, name));
+          const normalized = normalizeSealedBytes(relPath, rawBytes);
+          const fileDigest = createHash('sha256').update(normalized).digest('hex');
+          collected.push([key, fileDigest]);
+        } else {
+          throw new Error('Renderer entry refused');
+        }
+      }
+    }
+    await walk('');
+  }
+  await walkSection(join(app, 'dist/renderer'), '', 'dist/renderer/');
+  const preloadDir = join(app, 'dist/preload');
+  const preloadStat = await fs.lstat(preloadDir).catch(() => null);
+  if (preloadStat) {
+    if (preloadStat.isSymbolicLink() || !preloadStat.isDirectory()) throw new Error('Renderer alias refused');
+    await walkSection(preloadDir, 'dist/preload/', 'dist/preload/');
+  }
+  const electronDir = join(app, 'electron');
+  const electronStat = await fs.lstat(electronDir).catch(() => null);
+  if (electronStat) {
+    if (electronStat.isSymbolicLink() || !electronStat.isDirectory()) throw new Error('Renderer alias refused');
+    await walkSection(electronDir, 'electron/', 'electron/');
+  }
+  collected.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
   /** @type {Record<string, string>} */
   const hashes = {};
-  const renderer = join(app, 'dist/renderer');
-  /** @param {string} part */
-  async function walk(part) {
-    for (const entry of await fs.readdir(join(renderer, part), {withFileTypes: true})) {
-      const name = part ? `${part}/${entry.name}` : entry.name;
-      if (entry.isSymbolicLink()) throw new Error('Renderer alias refused');
-      if (entry.isDirectory()) await walk(name);
-      else if (entry.isFile()) hashes[name] = createHash('sha256').update(await fs.readFile(join(renderer, name))).digest('hex');
-      else throw new Error('Renderer entry refused');
-    }
+  for (const [key, value] of collected) {
+    hashes[key] = value;
   }
-  await walk('');
+  const serialized = JSON.stringify(hashes);
   const mainPath = join(app, 'electron/main.js');
-  const source = await fs.readFile(mainPath, 'utf8');
+  const unsealedMain = stripMainSeal(await fs.readFile(mainPath, 'utf8'));
   const marker = `${ASSET_SEAL_PREFIX}{}));`;
-  if (source.split(marker).length !== 2) throw new Error('ASAR seal marker mismatch');
-  await fs.writeFile(mainPath, source.replace(marker,
-    `const PACKAGED_ASSET_DIGESTS = /** @type {Readonly<Record<string, string>>} */ (Object.freeze(${JSON.stringify(hashes)}));`));
+  if (unsealedMain.split(marker).length !== 2) throw new Error('ASAR seal marker mismatch');
+  await fs.writeFile(mainPath, unsealedMain.replace(marker,
+    `const PACKAGED_ASSET_DIGESTS = /** @type {Readonly<Record<string, string>>} */ (Object.freeze(${serialized}));`));
+  const nestingPath = join(app, 'electron/nesting.js');
+  const nestingRaw = await fs.readFile(nestingPath, 'utf8').catch(() => null);
+  if (nestingRaw !== null && nestingRaw.includes(EXEC_SEAL_PREFIX)) {
+    const unsealedEntry = stripEntrySeal(nestingRaw);
+    const entryMarker = `${EXEC_SEAL_PREFIX}{});`;
+    if (unsealedEntry.split(entryMarker).length !== 2) throw new Error('ASAR entry seal marker mismatch');
+    await fs.writeFile(nestingPath, unsealedEntry.replace(entryMarker, `${EXEC_SEAL_PREFIX}${serialized});`));
+  }
+}
+
+/**
+ * Enforce a single shared boot budget across socket wait and hello/mainDirectEntry.
+ * @template T
+ * @param {{
+ *   socketPath?: string,
+ *   budgetMs?: number,
+ *   pollMs?: number,
+ *   now?: () => number,
+ *   sleep?: (ms: number) => Promise<void>,
+ *   checkSocket?: () => Promise<unknown>,
+ *   isFailed?: () => boolean,
+ *   hasCoreFailed?: () => boolean,
+ *   startMain?: (remainingMs: number) => Promise<T>,
+ *   runEntry?: (remainingMs: number) => Promise<T>,
+ * }} options
+ * @returns {Promise<T>}
+ */
+export async function runPackagedBootWait({
+  socketPath = '',
+  budgetMs = PKG_BOOT_BUDGET_MS,
+  pollMs = 25,
+  now = () => Date.now(),
+  sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
+  checkSocket = () => fs.access(socketPath),
+  isFailed,
+  hasCoreFailed,
+  startMain,
+  runEntry,
+}) {
+  const failed = isFailed ?? hasCoreFailed ?? (() => false);
+  const invokeMain = startMain ?? runEntry;
+  if (typeof invokeMain !== 'function') {
+    throw new Error('PKG_CORE_START_FAILED');
+  }
+  const deadline = now() + budgetMs;
+  for (;;) {
+    if (failed() || now() > deadline) {
+      throw new Error('PKG_CORE_START_FAILED');
+    }
+    let ready = false;
+    try {
+      ready = (await checkSocket()) !== false;
+    } catch {
+      ready = false;
+    }
+    if (ready) break;
+    const remainingBeforePoll = deadline - now();
+    if (remainingBeforePoll <= 0) {
+      throw new Error('PKG_CORE_START_FAILED');
+    }
+    await sleep(Math.min(pollMs, remainingBeforePoll));
+  }
+  const remaining = deadline - now();
+  if (remaining <= 0) {
+    throw new Error('PKG_CORE_START_FAILED');
+  }
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let timer;
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error('PKG_CORE_START_FAILED')), remaining);
+  });
+  try {
+    return await Promise.race([invokeMain(remaining), timeoutPromise]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 // [TARGET, unit decision] The delivered entry owns a fresh real-core session and
 // supervises the bundled adapter next to core when OpenSuperficies (MV_SRF_BIN_DIR)
 // is configured, degrading cleanly to core-only when absent.
-const productionEntry = String.raw`
-import { app } from 'electron';
-import { mainDirectEntry, validateRetailLaunch } from './main.js';
-import { scrubChildEnv, validateKillTarget } from './coreLauncher.js';
+export const productionEntry = String.raw`
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
+import { lstatSync, readdirSync, readFileSync } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+const PACKAGED_EXEC_DIGESTS = Object.freeze({});
 const root = dirname(fileURLToPath(import.meta.url));
+const appRoot = dirname(root);
+function verifyBootSeal(baseDir) {
+  const keys = Object.keys(PACKAGED_EXEC_DIGESTS);
+  if (keys.length === 0) throw new Error('PKG_SEAL_MISSING');
+  const mainPrefix = 'const PACKAGED_ASSET_' + 'DIGESTS = /** @type {Readonly<Record<string, string>>} */ (Object.freeze(';
+  const execPrefix = 'const PACKAGED_EXEC_' + 'DIGESTS = Object.freeze(';
+  const normalize = (relPath, rawBytes) => {
+    if (relPath === 'electron/main.js') {
+      const text = rawBytes.toString('utf8');
+      const parts = text.split(mainPrefix);
+      if (parts.length !== 2) throw new Error('PKG_SEAL_MARKER_MISMATCH');
+      const end = parts[1].indexOf('));');
+      if (end < 0) throw new Error('PKG_SEAL_MARKER_MISMATCH');
+      const embedded = JSON.parse(parts[1].slice(0, end));
+      if (JSON.stringify(embedded) !== JSON.stringify(PACKAGED_EXEC_DIGESTS)) {
+        throw new Error('PKG_SEAL_MISMATCH: electron/main.js');
+      }
+      return Buffer.from(parts[0] + mainPrefix + '{}' + parts[1].slice(end), 'utf8');
+    }
+    if (relPath === 'electron/nesting.js') {
+      const text = rawBytes.toString('utf8');
+      const parts = text.split(execPrefix);
+      if (parts.length !== 2) throw new Error('PKG_SEAL_MARKER_MISMATCH');
+      const end = parts[1].indexOf(');');
+      if (end < 0) throw new Error('PKG_SEAL_MARKER_MISMATCH');
+      return Buffer.from(parts[0] + execPrefix + '{}' + parts[1].slice(end), 'utf8');
+    }
+    return rawBytes;
+  };
+  let verifiedCount = 0;
+  const walkSection = (sectionDir, keyPrefix, relPrefix) => {
+    const walk = part => {
+      const entries = readdirSync(join(sectionDir, part), { withFileTypes: true }).slice()
+        .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+      for (const entry of entries) {
+        const name = part ? part + '/' + entry.name : entry.name;
+        const fullPath = join(sectionDir, name);
+        const st = lstatSync(fullPath);
+        if (st.isSymbolicLink()) throw new Error('PKG_SEAL_SYMLINK: ' + relPrefix + name);
+        if (st.isDirectory()) {
+          walk(name);
+        } else if (st.isFile()) {
+          const relPath = relPrefix + name;
+          const key = keyPrefix + name;
+          const digest = createHash('sha256').update(normalize(relPath, readFileSync(fullPath))).digest('hex');
+          if (PACKAGED_EXEC_DIGESTS[key] !== digest) {
+            throw new Error('PKG_SEAL_MISMATCH: ' + key);
+          }
+          verifiedCount++;
+        } else {
+          throw new Error('PKG_SEAL_ENTRY_INVALID: ' + relPrefix + name);
+        }
+      }
+    };
+    walk('');
+  };
+  walkSection(join(baseDir, 'dist/renderer'), '', 'dist/renderer/');
+  walkSection(join(baseDir, 'dist/preload'), 'dist/preload/', 'dist/preload/');
+  walkSection(join(baseDir, 'electron'), 'electron/', 'electron/');
+  if (verifiedCount !== keys.length) {
+    throw new Error('PKG_SEAL_INVENTORY_MISMATCH');
+  }
+}
+try {
+  verifyBootSeal(appRoot);
+} catch (error) {
+  console.error(error?.message || String(error));
+  process.exit(1);
+}
+const { app } = await import('electron').catch(() => ({ app: { exit: code => process.exit(code), on: () => {} } }));
+const { mainDirectEntry, validateRetailLaunch } = await import('./main.js');
+const { scrubChildEnv, validateKillTarget } = await import('./coreLauncher.js');
 const retail = validateRetailLaunch(process.argv.slice(1), process.env);
 if (!retail.ok) {console.error(retail.code + ': retail launch refused');app.exit(1);}
 else if (process.argv.includes('--nested-depth=1')) {
   await import('./nested-display.js');
 } else {
+  const resourcesPath = process.resourcesPath || dirname(appRoot);
   const pin = JSON.parse(await fs.readFile(join(root, 'package-pin.json'), 'utf8'));
   const runtime = await fs.mkdtemp(join(tmpdir(), 'mv-pkg-'));
   await fs.chmod(runtime, 0o700);
@@ -227,20 +516,22 @@ else if (process.argv.includes('--nested-depth=1')) {
   process.env.MV_CORE_INSTANCE = config.core.endpoint.instance;
   process.env.MV_DAEMON_INSTANCE = daemonPeer.endpoint.instance;
   process.env.MV_COMPONENT_COMMIT = pin.commit;
-  process.env.MV_CONTRACT_DIR = join(process.resourcesPath, 'contracts/v0.2');
+  process.env.MV_CONTRACT_DIR = join(resourcesPath, 'contracts/v0.2');
   process.env.MV_SRF_STATE_DIR = srfStateDir;
   process.env.SRF_IDENTITY_STORE_ROOT = srfIdentityRoot;
   process.env.SRF_PROXY_REGISTRY = process.env.SRF_PROXY_REGISTRY || join(runtime, 'srf-proxy-registry.json');
-  process.env.MV_ADAPTER_BIN = join(process.resourcesPath, 'bin/mv-daemon-adapter');
+  process.env.MV_ADAPTER_BIN = join(resourcesPath, 'bin/mv-daemon-adapter');
   delete process.env.MV_CORE_BOOTSTRAP;
   const coreEnv = {...scrubChildEnv(process.env, runtime), XDG_STATE_HOME:stateHome, MV_CORE_CONFIG:configPath};
-  const core = spawn(join(process.resourcesPath,'bin/metaviewer-core'), [], {env:coreEnv,stdio:['pipe','pipe','pipe'],shell:false});
+  const core = spawn(join(resourcesPath,'bin/metaviewer-core'), [], {env:coreEnv,stdio:['pipe','pipe','pipe'],shell:false});
   let failure;
   core.on('error', error => {failure=error;});
   core.stdout.on('data', () => {});
   core.stderr.on('data', bytes => process.stderr.write(bytes));
   let boot = null;
+  let stopping = false;
   const stop = async () => {
+    stopping = true;
     await boot?.dispose?.();
     if (validateKillTarget(core.pid, process.pid, process.pid) && core.exitCode === null && core.signalCode === null) {
       const exited = once(core,'exit');
@@ -255,18 +546,22 @@ else if (process.argv.includes('--nested-depth=1')) {
     }
     await fs.rm(runtime,{recursive:true,force:true});
   };
-  app.on('will-quit', () => {
+  app.on('will-quit', event => {
+    if (stopping) {try {event?.preventDefault?.();} catch {}}
     if (validateKillTarget(core.pid, process.pid, process.pid)) {try {process.kill(core.pid,'SIGTERM');} catch {}}
   });
   process.on('exit', () => {
     if (validateKillTarget(core.pid, process.pid, process.pid)) {try {process.kill(core.pid,'SIGKILL');} catch {}}
   });
-  const deadline = Date.now()+10000;
+  const bootBudgetMs = Number(process.env.MV_PKG_BOOT_BUDGET_MS) > 0 ? Number(process.env.MV_PKG_BOOT_BUDGET_MS) : 10000;
+  const deadline = Date.now() + bootBudgetMs;
   try {
     for (;;) {
-      if (failure || core.exitCode !== null || Date.now()>deadline) throw new Error('PKG_CORE_START_FAILED');
+      if (failure || core.exitCode !== null || Date.now() > deadline) throw new Error('PKG_CORE_START_FAILED');
       try {await fs.access(join(runtime,'metaviewer/core.sock'));break;} catch {}
-      await new Promise(resolve => setTimeout(resolve,25));
+      const remainingPoll = deadline - Date.now();
+      if (remainingPoll <= 0) throw new Error('PKG_CORE_START_FAILED');
+      await new Promise(resolve => setTimeout(resolve, Math.min(25, remainingPoll)));
     }
     let entry;
     if (process.env.MV_PACKAGE_SMOKE === '1') {
@@ -289,8 +584,19 @@ else if (process.argv.includes('--nested-depth=1')) {
         }
       };
     }
-    entry = mainDirectEntry().then(resolved => {boot = resolved; return resolved;});
-    void entry;
+    const remainingBootMs = deadline - Date.now();
+    if (remainingBootMs <= 0) throw new Error('PKG_CORE_START_FAILED');
+    let bootTimer;
+    const bootTimeout = new Promise((_, reject) => {
+      bootTimer = setTimeout(() => reject(new Error('PKG_CORE_START_FAILED')), remainingBootMs);
+    });
+    entry = Promise.race([
+      mainDirectEntry().then(resolved => {boot = resolved; return resolved;}),
+      bootTimeout,
+    ]).finally(() => {
+      if (bootTimer !== undefined) clearTimeout(bootTimer);
+    });
+    void entry.catch(async error => {console.error(error);await stop();app.exit(1);});
   } catch(error) {console.error(error);await stop();app.exit(1);}
 }
 `;
@@ -322,30 +628,38 @@ export async function verifyBinary(path, arch = architecture.arch) {
   } finally {await file.close();}
 }
 
-/** Complete exact inventory: extras, aliases and omissions all fail closed.
+/** Complete exact inventory: extras, aliases, mode drift and omissions all fail closed.
  * @param {string} root */
 export async function verifyInstall(root, arch = architecture.arch) {
   for (const name of ['metaviewer','resources/bin/metaviewer-core','resources/bin/mv-daemon-adapter']) await verifyBinary(join(root,name), arch);
   const manifest = await fs.readFile(`${root}.sha256`,'utf8');
+  /** @type {Map<string, { digest: string, mode: number }>} */
   const expected = new Map();
   for (const line of manifest.trimEnd().split('\n')) {
-    const match = /^([0-9a-f]{64})  (.+)$/.exec(line);
-    if (!match || match[2].split('/').some(part => !part || part === '.' || part === '..') || /[\\\r\n]/.test(match[2]) || expected.has(match[2]))
+    const match = /^([0-9a-f]{64})(?: ([0-7]{4}))?  (.+)$/.exec(line);
+    if (!match || match[3].split('/').some(part => !part || part === '.' || part === '..') || /[\\\r\n]/.test(match[3]) || expected.has(match[3]))
       throw new Error('PKG_MANIFEST_INVALID');
-    expected.set(match[2],match[1]);
+    const mode = match[2] !== undefined ? Number.parseInt(match[2], 8) : DEFAULT_UMASK_FILE_MODE;
+    expected.set(match[3], { digest: match[1], mode });
   }
   let count=0;
   async function walk(part) {
-    for (const item of await fs.readdir(join(root,part),{withFileTypes:true})) {
+    const items = (await fs.readdir(join(root,part),{withFileTypes:true})).slice().sort(compareEntryNames);
+    for (const item of items) {
       const name = part ? `${part}/${item.name}` : item.name;
       if (item.isSymbolicLink()) throw new Error('PKG_ALIAS_FORBIDDEN');
       if (item.isDirectory()) {await walk(name);continue;}
       if (!item.isFile()) throw new Error('PKG_ENTRY_INVALID');
-      const file = await fs.open(join(root,name),'r');
+      const fullPath = join(root,name);
+      const st = await fs.lstat(fullPath);
+      const file = await fs.open(fullPath,'r');
       const prefix=Buffer.alloc(4);
       try {await file.read(prefix,0,4,0);} finally {await file.close();}
       rejectFont(name,prefix);
-      if (expected.get(name) !== await digest(join(root,name))) throw new Error(`PKG_MANIFEST_MISMATCH: ${name}`);
+      const record = expected.get(name);
+      if (!record || record.digest !== await digest(fullPath) || record.mode !== (st.mode & 0o777)) {
+        throw new Error(`PKG_MANIFEST_MISMATCH: ${name}`);
+      }
       count++;
     }
   }
@@ -486,7 +800,7 @@ export async function cleanInstallSmoke(artifact) {
     if (types.stdout.split('\n').filter(Boolean).some(line => !['-','d'].includes(line[0]))) throw new Error('PKG_ARCHIVE_ALIAS');
     const listing=await execute('tar',['-tf',artifact],{maxBuffer:1024*1024});
     if (listing.stdout.split('\n').filter(Boolean).some(name => !(name.startsWith(architecture.name + '/') || name === architecture.name + '.sha256') || name.split('/').includes('..'))) throw new Error('PKG_ARCHIVE_INVALID');
-    await execute('tar',['--no-same-owner','-xf',artifact,'-C',clean]);
+    await execute('tar',['--no-same-owner','-pxf',artifact,'-C',clean]);
     const installed=join(clean,architecture.name);
     await verifyInstall(installed);
     // Exercise the delivered bytes, then restore each control before launch.
@@ -497,8 +811,11 @@ export async function cleanInstallSmoke(artifact) {
     };
     const notice=join(installed,'INSTALL.md');
     const original=await fs.readFile(notice);
+    const originalMode=(await fs.lstat(notice)).mode & 0o777;
     try {await fs.appendFile(notice,'tampered');await expectReason('PKG_MANIFEST_MISMATCH');}
-    finally {await fs.writeFile(notice,original);}
+    finally {await fs.writeFile(notice,original,{mode:originalMode});await fs.chmod(notice,originalMode);}
+    try {await fs.chmod(notice,0o600);await expectReason('PKG_MANIFEST_MISMATCH');}
+    finally {await fs.chmod(notice,originalMode);}
     const font=join(installed,'planted.woff2');
     try {await fs.writeFile(font,'wOF2');await expectReason('PKG_FONT_FORBIDDEN');}
     finally {await fs.rm(font,{force:true});}
@@ -611,7 +928,7 @@ export async function packageShell(env = process.env) {
     if (!zipDir) {
       const dist = await fs.realpath(/** @type {string} */ (env.ELECTRON_OVERRIDE_DIST_PATH));
       await fs.access(join(dist, 'electron'));
-      if ((await fs.readFile(join(dist,'version'),'utf8')).trim().replace(/^v/,'') !== '44.9.2') throw new Error('PKG_ELECTRON_PIN');
+      if ((await fs.readFile(join(dist,'version'),'utf8')).trim().replace(/^v/,'') !== ELECTRON_PIN) throw new Error('PKG_ELECTRON_PIN');
       zipDir = join(work, 'electron-zip');
       await fs.mkdir(zipDir);
       await execute('zip', ['-q', '-r', join(zipDir, archive), '.'], { cwd: dist });
@@ -636,7 +953,7 @@ export async function packageShell(env = process.env) {
     const fuseConfig = buildFuseConfig();
     assertPackagingPolicy(true, fuseConfig);
     const built = await packager({ dir: app, out: join(work, 'packed'), name: 'MetaViewer',
-      executableName: 'metaviewer', platform: 'linux', arch: architecture.arch, electronVersion: '44.9.2',
+      executableName: 'metaviewer', platform: 'linux', arch: architecture.arch, electronVersion: ELECTRON_PIN,
       electronZipDir: zipDir, asar: true, prune: false, overwrite: false });
     if (built.length !== 1) throw new Error(`Expected exactly one linux-${architecture.arch} package`);
     await verifyBinary(join(built[0],'metaviewer'));
@@ -664,6 +981,7 @@ When MV_SRF_BIN_DIR is configured, main supervises the bundled adapter next to
 the core; when absent, it starts core-only in a typed degraded state.
 `);
     await applyFuses(join(built[0], 'metaviewer'), fuseConfig);
+    await normalizePackageModes(built[0]);
     await verifyPackagedSecurity(built[0]);
     const stagedManifest = join(work, 'package.sha256');
     await writeManifest(built[0], stagedManifest);

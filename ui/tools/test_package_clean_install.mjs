@@ -8,9 +8,12 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:net';
 import { createPackage } from '@electron/asar';
-import { buildFuseConfig } from '../electron/main.js';
+import { buildFuseConfig, ELECTRON_PIN as MAIN_ELECTRON_PIN } from '../electron/main.js';
 import { createAdapterLauncher } from '../electron/coreLauncher.js';
-import { packageArchitecture, verifyBinary, applyFuses, assertSmokeOutput, bundlePackage, sealRendererAssets, verifyInstall, verifySmokeAdapterReceipt, writeFakeSmokeAdapter, writeManifest } from './package.js';
+import * as packaging from './package.js';
+import { packageArchitecture, verifyBinary, applyFuses, assertSmokeOutput, bundlePackage, sealRendererAssets, verifyInstall, verifyPackagedSecurity, verifySmokeAdapterReceipt, writeFakeSmokeAdapter, writeManifest } from './package.js';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 async function fixture(run) {
   const temporary=await fs.mkdtemp(join(tmpdir(),'mv-pkg-test-'));
@@ -208,6 +211,294 @@ test('clean-install smoke fake adapter starts, completes core hello handshake, a
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('R2-T4-002 extended seal covers executed JS and boot self-check refuses tampered non-renderer entry before mainDirectEntry', async () => {
+  assert.equal(typeof packaging.productionEntry, 'string');
+  await fixture(async (root, app) => {
+    await fs.writeFile(
+      join(app, 'package.json'),
+      JSON.stringify({ name: 'metaviewer', version: '0.1.2', type: 'module', main: 'electron/nesting.js' }),
+    );
+    await fs.writeFile(
+      join(app, 'electron/coreLauncher.js'),
+      'export function scrubChildEnv(env) { return { ...env }; }\nexport function validateKillTarget() { return false; }\n',
+    );
+    await fs.writeFile(
+      join(app, 'electron/package-pin.json'),
+      JSON.stringify({ version: '0.1.2', commit: 'a'.repeat(40) }),
+    );
+    await fs.writeFile(
+      join(app, 'electron/main.js'),
+      [
+        'const PACKAGED_ASSET_DIGESTS = /** @type {Readonly<Record<string, string>>} */ (Object.freeze({}));',
+        'export function validateRetailLaunch() { return { ok: true }; }',
+        'export async function mainDirectEntry() { console.log("BOOT_MAIN_DIRECT_ENTRY_OK"); setTimeout(() => console.log("METAVIEWER_MAIN_READY"), 10); return { dispose: async () => {} }; }',
+        'export { PACKAGED_ASSET_DIGESTS };',
+        '',
+      ].join('\n'),
+    );
+    await fs.writeFile(join(app, 'electron/nesting.js'), packaging.productionEntry);
+    await sealRendererAssets(app);
+    await createPackage(app, join(root, 'resources/app.asar'));
+    await fs.rm(`${root}.sha256`);
+    await writeManifest(root, `${root}.sha256`);
+    await verifyInstall(root, 'arm64');
+
+    const stagedApp = join(root, 'resources/staged-app');
+    await fs.cp(app, stagedApp, { recursive: true });
+    const realCore = join(root, 'resources/bin/metaviewer-core');
+    const savedCore = await fs.readFile(realCore);
+    const fakeCore = `#!${process.execPath}\nimport { writeFileSync } from 'node:fs';\nimport { join } from 'node:path';\nwriteFileSync(join(process.env.XDG_RUNTIME_DIR, 'metaviewer/core.sock'), '');\nsetInterval(() => {}, 1000);\n`;
+    await fs.writeFile(realCore, fakeCore, { mode: 0o755 });
+    try {
+      // Negative control: intact sealed package boots and reaches mainDirectEntry.
+      const intactRun = spawnSync(process.execPath, [join(stagedApp, 'electron/nesting.js')], {
+        encoding: 'utf8',
+        env: { ...process.env, MV_PACKAGE_SMOKE: '1', MV_SRF_BIN_DIR: '' },
+        timeout: 10000,
+      });
+      assert.equal(intactRun.status, 0, intactRun.stderr || intactRun.stdout);
+      assert.match(intactRun.stdout, /BOOT_MAIN_DIRECT_ENTRY_OK/);
+
+      // Regression: tamper non-renderer executed JS (coreLauncher.js and preload.cjs) -> refused at verify AND at boot before mainDirectEntry.
+      for (const target of ['electron/coreLauncher.js', 'dist/preload/preload.cjs']) {
+        const file = join(stagedApp, target);
+        const orig = await fs.readFile(file);
+        try {
+          await fs.appendFile(file, '\n// tampered\n');
+          const tamperedBoot = spawnSync(process.execPath, [join(stagedApp, 'electron/nesting.js')], {
+            encoding: 'utf8',
+            env: { ...process.env, MV_PACKAGE_SMOKE: '1', MV_SRF_BIN_DIR: '' },
+            timeout: 10000,
+          });
+          assert.notEqual(tamperedBoot.status, 0, `tampered ${target} must refuse boot`);
+          assert.doesNotMatch(tamperedBoot.stdout, /BOOT_MAIN_DIRECT_ENTRY_OK/);
+          assert.match(tamperedBoot.stderr, /PKG_SEAL_MISMATCH/);
+
+          await fs.appendFile(join(app, target), '\n// tampered\n');
+          await createPackage(app, join(root, 'resources/app.asar'));
+          await assert.rejects(verifyPackagedSecurity(root), /ASAR asset mismatch/);
+        } finally {
+          await fs.writeFile(file, orig);
+          await fs.writeFile(join(app, target), orig);
+          await createPackage(app, join(root, 'resources/app.asar'));
+        }
+      }
+    } finally {
+      await fs.rm(stagedApp, { recursive: true, force: true });
+      await fs.writeFile(realCore, savedCore, { mode: 0o755 });
+    }
+  });
+});
+
+test('R2-T4-021 writeManifest records mode bits and verifyInstall rejects mode-only drift while admitting identical tree', async () => {
+  await fixture(async (root) => {
+    await verifyInstall(root, 'arm64');
+    const manifestBefore = await fs.readFile(`${root}.sha256`, 'utf8');
+    assert.match(manifestBefore, /^[0-9a-f]{64} 0755  metaviewer$/m);
+
+    const adapter = join(root, 'resources/bin/mv-daemon-adapter');
+    await fs.chmod(adapter, 0o700);
+    await assert.rejects(verifyInstall(root, 'arm64'), /PKG_MANIFEST_MISMATCH: resources\/bin\/mv-daemon-adapter/);
+
+    const altManifest = `${root}.alt.sha256`;
+    await writeManifest(root, altManifest);
+    const manifestAfter = await fs.readFile(altManifest, 'utf8');
+    await fs.rm(altManifest);
+    assert.notEqual(manifestAfter, manifestBefore);
+
+    await fs.chmod(adapter, 0o755);
+    await verifyInstall(root, 'arm64');
+
+    const asarFile = join(root, 'resources/app.asar');
+    const origAsarMode = (await fs.lstat(asarFile)).mode & 0o777;
+    await fs.chmod(asarFile, 0o600);
+    await assert.rejects(verifyInstall(root, 'arm64'), /PKG_MANIFEST_MISMATCH: resources\/app\.asar/);
+    await fs.chmod(asarFile, origAsarMode);
+    await verifyInstall(root, 'arm64');
+  });
+});
+
+test('R2-T4-022 package.js imports and re-exports ELECTRON_PIN from main.js without literal version duplication', async () => {
+  assert.equal(packaging.ELECTRON_PIN, MAIN_ELECTRON_PIN);
+  for (const arch of ['arm64', 'x64']) {
+    assert.equal(
+      packageArchitecture(arch).archive,
+      `electron-v${MAIN_ELECTRON_PIN}-linux-${arch}.zip`,
+    );
+  }
+  const pkgSource = await fs.readFile(new URL('./package.js', import.meta.url), 'utf8');
+  assert.match(pkgSource, /import\s*\{[^}]*\bELECTRON_PIN\b[^}]*\}\s*from\s*['"]\.\.\/electron\/main\.js['"]/);
+  assert.equal(pkgSource.includes(MAIN_ELECTRON_PIN), false, 'package.js must not repeat literal Electron version');
+  const mainSource = await fs.readFile(new URL('../electron/main.js', import.meta.url), 'utf8');
+  assert.match(mainSource, new RegExp(`export const ELECTRON_PIN = '${MAIN_ELECTRON_PIN.replace(/\./g, '\\.')}';`));
+});
+
+test('R2-T4-024 packaged boot enforces one total budget across socket wait and hello while preserving fast path', async () => {
+  assert.equal(typeof packaging.runPackagedBootWait, 'function');
+  // Virtual clock simulation of the exact report scenario: 10 s total budget, socket at 9.9 s + 2.9 s hello -> bounded at 10 s.
+  let virtualNow = 0;
+  let helloTimeoutMs = null;
+  await assert.rejects(
+    packaging.runPackagedBootWait({
+      socketPath: '/nonexistent/core.sock',
+      budgetMs: 10000,
+      pollMs: 100,
+      now: () => virtualNow,
+      sleep: async (ms) => { virtualNow += ms; },
+      checkSocket: async () => {
+        if (virtualNow < 9900) throw new Error('ENOENT');
+      },
+      isFailed: () => false,
+      startMain: async (remainingMs) => {
+        helloTimeoutMs = remainingMs;
+        virtualNow += 2900;
+        throw new Error('PKG_CORE_START_FAILED');
+      },
+    }),
+    /PKG_CORE_START_FAILED/,
+  );
+  assert.equal(helloTimeoutMs, 100, 'remaining budget after 9.9 s socket wait must be 100 ms, not a fresh 3 s budget');
+
+  // Real timer test: socket appears at 160 ms of a 220 ms total budget, slow hello takes 200 ms -> rejected near 220 ms.
+  const dir = await fs.mkdtemp(join(tmpdir(), 'mv-budget-'));
+  try {
+    const sock = join(dir, 'core.sock');
+    setTimeout(() => { void fs.writeFile(sock, ''); }, 160);
+    const t0 = Date.now();
+    await assert.rejects(
+      packaging.runPackagedBootWait({
+        socketPath: sock,
+        budgetMs: 220,
+        pollMs: 20,
+        isFailed: () => false,
+        startMain: () => new Promise((resolve) => setTimeout(() => resolve({ ok: true }), 200)),
+      }),
+      /PKG_CORE_START_FAILED/,
+    );
+    const elapsed = Date.now() - t0;
+    assert.ok(elapsed < 340, `total boot wait must be bounded by single budget, got ${elapsed}ms`);
+
+    // Negative control: fast path completes well within total budget.
+    const fastResult = await packaging.runPackagedBootWait({
+      socketPath: sock,
+      budgetMs: 1000,
+      pollMs: 10,
+      isFailed: () => false,
+      startMain: async () => ({ boot: 'ok' }),
+    });
+    assert.deepEqual(fastResult, { boot: 'ok' });
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+
+  // Exercise productionEntry itself under a 250 ms total boot budget when socket wait + mainDirectEntry exceed 250 ms.
+  await fixture(async (root, app) => {
+    await fs.writeFile(
+      join(app, 'package.json'),
+      JSON.stringify({ name: 'metaviewer', version: '0.1.2', type: 'module', main: 'electron/nesting.js' }),
+    );
+    await fs.writeFile(
+      join(app, 'electron/coreLauncher.js'),
+      'export function scrubChildEnv(env) { return { ...env }; }\nexport function validateKillTarget() { return false; }\n',
+    );
+    await fs.writeFile(
+      join(app, 'electron/package-pin.json'),
+      JSON.stringify({ version: '0.1.2', commit: 'a'.repeat(40) }),
+    );
+    await fs.writeFile(
+      join(app, 'electron/main.js'),
+      [
+        'const PACKAGED_ASSET_DIGESTS = /** @type {Readonly<Record<string, string>>} */ (Object.freeze({}));',
+        'export function validateRetailLaunch() { return { ok: true }; }',
+        'export async function mainDirectEntry() { await new Promise(r => setTimeout(r, 200)); console.log("METAVIEWER_MAIN_READY"); return { dispose: async () => {} }; }',
+        'export { PACKAGED_ASSET_DIGESTS };',
+        '',
+      ].join('\n'),
+    );
+    await fs.writeFile(join(app, 'electron/nesting.js'), packaging.productionEntry);
+    await sealRendererAssets(app);
+    const stagedApp = join(root, 'resources/staged-app');
+    await fs.cp(app, stagedApp, { recursive: true });
+    const realCore = join(root, 'resources/bin/metaviewer-core');
+    const savedCore = await fs.readFile(realCore);
+    const delayedCore = `#!${process.execPath}\nimport { writeFileSync } from 'node:fs';\nimport { join } from 'node:path';\nsetTimeout(() => { writeFileSync(join(process.env.XDG_RUNTIME_DIR, 'metaviewer/core.sock'), ''); }, 150);\nsetInterval(() => {}, 1000);\n`;
+    await fs.writeFile(realCore, delayedCore, { mode: 0o755 });
+    try {
+      // 150ms socket + 200ms mainDirectEntry > 250ms total budget -> fails with PKG_CORE_START_FAILED.
+      const overBudget = spawnSync(process.execPath, [join(stagedApp, 'electron/nesting.js')], {
+        encoding: 'utf8',
+        env: { ...process.env, MV_PACKAGE_SMOKE: '1', MV_SRF_BIN_DIR: '', MV_PKG_BOOT_BUDGET_MS: '250' },
+        timeout: 5000,
+      });
+      assert.notEqual(overBudget.status, 0);
+      assert.match(overBudget.stderr, /PKG_CORE_START_FAILED/);
+
+      // Negative control: 150ms socket + 200ms mainDirectEntry < 1500ms total budget -> succeeds.
+      const withinBudget = spawnSync(process.execPath, [join(stagedApp, 'electron/nesting.js')], {
+        encoding: 'utf8',
+        env: { ...process.env, MV_PACKAGE_SMOKE: '1', MV_SRF_BIN_DIR: '', MV_PKG_BOOT_BUDGET_MS: '1500' },
+        timeout: 5000,
+      });
+      assert.equal(withinBudget.status, 0, withinBudget.stderr || withinBudget.stdout);
+      assert.match(withinBudget.stdout, /METAVIEWER_MAIN_SMOKE_OK/);
+    } finally {
+      await fs.rm(stagedApp, { recursive: true, force: true });
+      await fs.writeFile(realCore, savedCore, { mode: 0o755 });
+    }
+  });
+});
+
+test('T7R2C-006 sealRendererAssets sorts readdir entries and emits deterministic bytes when sealed twice or under shuffled readdir', async () => {
+  const dir = await fs.mkdtemp(join(tmpdir(), 'mv-seal-order-'));
+  try {
+    const setupApp = async (name) => {
+      const app = join(dir, name);
+      for (const sub of ['dist/renderer/sub', 'dist/preload', 'electron']) {
+        await fs.mkdir(join(app, sub), { recursive: true });
+      }
+      await fs.copyFile(new URL('../electron/main.js', import.meta.url), join(app, 'electron/main.js'));
+      await fs.writeFile(join(app, 'electron/nesting.js'), packaging.productionEntry || 'entry');
+      await fs.writeFile(join(app, 'dist/preload/preload.cjs'), 'preload-bytes');
+      await fs.writeFile(join(app, 'dist/renderer/z.js'), 'console.log("z");');
+      await fs.writeFile(join(app, 'dist/renderer/a.js'), 'console.log("a");');
+      await fs.writeFile(join(app, 'dist/renderer/index.html'), '<html></html>');
+      await fs.writeFile(join(app, 'dist/renderer/sub/m.css'), 'body{}');
+      await fs.writeFile(join(app, 'dist/renderer/sub/b.css'), 'div{}');
+      return app;
+    };
+    const appA = await setupApp('appA');
+    const appB = await setupApp('appB');
+
+    const forwardReaddir = async (target, opts) => {
+      const list = await fs.readdir(target, opts);
+      return [...list].sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
+    };
+    const reversedReaddir = async (target, opts) => {
+      const list = await fs.readdir(target, opts);
+      return [...list].sort((x, y) => (x.name > y.name ? -1 : x.name < y.name ? 1 : 0));
+    };
+
+    await sealRendererAssets(appA, { readdir: forwardReaddir });
+    const mainAfterFirst = await fs.readFile(join(appA, 'electron/main.js'), 'utf8');
+    // Seal twice on the same directory (idempotence + determinism).
+    await sealRendererAssets(appA, { readdir: forwardReaddir });
+    const mainAfterSecond = await fs.readFile(join(appA, 'electron/main.js'), 'utf8');
+    assert.equal(mainAfterSecond, mainAfterFirst);
+
+    // Negative control / shuffled readdir double: reverse directory entry order yields byte-identical output.
+    await sealRendererAssets(appB, { readdir: reversedReaddir });
+    const mainShuffled = await fs.readFile(join(appB, 'electron/main.js'), 'utf8');
+    assert.equal(mainShuffled, mainAfterFirst);
+
+    const prefix = 'const PACKAGED_ASSET_DIGESTS = /** @type {Readonly<Record<string, string>>} */ (Object.freeze(';
+    const sealedJson = mainShuffled.split(prefix)[1].split('));')[0];
+    const keys = Object.keys(JSON.parse(sealedJson));
+    assert.deepEqual(keys, [...keys].sort());
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
