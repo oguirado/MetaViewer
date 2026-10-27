@@ -156,6 +156,15 @@ def foreign_uid_peer_exchange(sock_path: Path, pid_file: Path, envelopes: list[d
     return res.stdout
 
 
+
+def wait_for_diagnostic(core, needle):
+    """The core logs a refusal after it closes the peer: wait for the line within the test budget."""
+    while needle not in core.diagnostics():
+        if core.process.poll() is not None or time.monotonic() - core.started >= BUDGET_SECONDS:
+            break
+        time.sleep(0.005)
+    return core.diagnostics()
+
 class IpcPolicyEndToEndTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -247,7 +256,7 @@ class IpcPolicyEndToEndTests(unittest.TestCase):
                     "E2E_IPC: foreign-UID peer must be closed pre-hello without reply",
                 )
                 self.assertIsNone(core.process.poll(), core.diagnostics())
-                self.assertIn("ForeignUid", core.diagnostics())
+                self.assertIn("ForeignUid", wait_for_diagnostic(core, "ForeignUid"))
                 self.assertEqual(
                     archive_hashes(core.state),
                     before,
@@ -286,7 +295,7 @@ class IpcPolicyEndToEndTests(unittest.TestCase):
                     b"",
                     "E2E_IPC negative control: inverted owner-UID policy must reject owner peer pre-hello",
                 )
-                self.assertIn("ForeignUid", inverted_core.diagnostics())
+                self.assertIn("ForeignUid", wait_for_diagnostic(inverted_core, "ForeignUid"))
                 self.assertEqual(archive_hashes(inverted_core.state), inverted_before)
 
 
