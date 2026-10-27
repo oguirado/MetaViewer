@@ -80,7 +80,6 @@ class Fx2PackageRegressionTests(unittest.TestCase):
         if (
             os.environ.get('MV_REQUIRE_CLEAN_CI_REPRO') == '1'
             or os.environ.get('MV_RUN_CLEAN_NPM_CI_REPRO') == '1'
-            or os.environ.get('CI') == 'true'
         ):
             self.assertTrue(
                 prereq['ok'],
@@ -109,19 +108,41 @@ class Fx2PackageRegressionTests(unittest.TestCase):
             with tempfile.TemporaryDirectory(prefix='mv-fx2-rv9-') as tmp:
                 empty_home = Path(tmp) / 'empty-home'
                 empty_home.mkdir()
-                env = dict(
+                base_env = dict(
                     os.environ,
                     HOME=str(empty_home),
                     XDG_CACHE_HOME=str(empty_home / '.cache'),
+                    ELECTRON_CACHE=str(empty_home / '.cache/electron'),
                     electron_config_cache=str(empty_home / '.cache/electron'),
                     ELECTRON_OVERRIDE_DIST_PATH=str(empty_home / 'missing-dist'),
                     npm_config_cache=str(empty_home / '.npm'),
-                    MV_RUN_CLEAN_NPM_CI_REPRO='1',
                     NODE=find_node(),
                 )
-                env.pop('MV_REQUIRE_CLEAN_CI_REPRO', None)
-                env.pop('CI', None)
-                proc = subprocess.run(
+                base_env.pop('MV_REQUIRE_CLEAN_CI_REPRO', None)
+                base_env.pop('MV_RUN_CLEAN_NPM_CI_REPRO', None)
+                base_env.pop('CI', None)
+
+                for flag in ('MV_RUN_CLEAN_NPM_CI_REPRO', 'MV_REQUIRE_CLEAN_CI_REPRO'):
+                    with self.subTest(flag=flag):
+                        env = dict(base_env, **{flag: '1'})
+                        proc = subprocess.run(
+                            [
+                                sys.executable,
+                                '-m',
+                                'unittest',
+                                'tests.ci.test_fx2_package.Fx2PackageRegressionTests.test_package_clean_install_and_round2_regressions',
+                            ],
+                            cwd=ROOT,
+                            env=env,
+                            capture_output=True,
+                            text=True,
+                            timeout=30,
+                        )
+                        self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                        self.assertIn('PKG_CLEAN_CI_PREREQ_ELECTRON_MISSING', proc.stdout + proc.stderr)
+
+                ci_env = dict(base_env, CI='true')
+                ci_proc = subprocess.run(
                     [
                         sys.executable,
                         '-m',
@@ -129,13 +150,16 @@ class Fx2PackageRegressionTests(unittest.TestCase):
                         'tests.ci.test_fx2_package.Fx2PackageRegressionTests.test_package_clean_install_and_round2_regressions',
                     ],
                     cwd=ROOT,
-                    env=env,
+                    env=ci_env,
                     capture_output=True,
                     text=True,
-                    timeout=30,
+                    timeout=60,
                 )
-                self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-                self.assertIn('PKG_CLEAN_CI_PREREQ_ELECTRON_MISSING', proc.stdout + proc.stderr)
+                self.assertEqual(ci_proc.returncode, 0, ci_proc.stdout + ci_proc.stderr)
+                self.assertIn(
+                    'FX2_CLEAN_CI_PREREQ code=PKG_CLEAN_CI_PREREQ_ELECTRON_MISSING ok=False',
+                    ci_proc.stdout + ci_proc.stderr,
+                )
 
     def test_find_node_rejects_under_version_node(self):
         with tempfile.TemporaryDirectory(prefix='mv-node20-') as tmp:
