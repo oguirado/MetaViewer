@@ -39,6 +39,27 @@ impl ReplayTable {
         nonce: &str,
         seq: u64,
     ) -> Result<(), ReplayError> {
+        self.record_inner(session_id, sender, nonce, seq, false)
+    }
+    /// Start an authenticated connection's sequence rail without forgetting nonces.
+    /// The caller must first exclude a simultaneous connection for this endpoint.
+    pub fn record_reconnect(
+        &mut self,
+        session_id: &str,
+        sender: &Endpoint,
+        nonce: &str,
+        seq: u64,
+    ) -> Result<(), ReplayError> {
+        self.record_inner(session_id, sender, nonce, seq, true)
+    }
+    fn record_inner(
+        &mut self,
+        session_id: &str,
+        sender: &Endpoint,
+        nonce: &str,
+        seq: u64,
+        reconnect: bool,
+    ) -> Result<(), ReplayError> {
         if [session_id, &sender.instance, nonce]
             .iter()
             .any(|s| s.is_empty() || s.chars().count() > 128)
@@ -52,7 +73,7 @@ impl ReplayTable {
             return Err(ReplayError::DuplicateNonce);
         }
         let key = (session_id.to_owned(), sender.clone());
-        if let Some(previous) = self.state.sequences.get(&key) {
+        if let Some(previous) = self.state.sequences.get(&key).filter(|_| !reconnect) {
             let next = previous.checked_add(1).ok_or(ReplayError::Exhausted)?;
             if seq < next {
                 return Err(ReplayError::NonIncreasingSequence);

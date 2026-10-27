@@ -18,7 +18,7 @@
 //! (the wire has no reply correlation); frame unsubscribe overrides that default.
 //! Raw input and control requests retain their existing proposal/UI-intent gates.
 //! [TARGET, unit decision] Replay evidence remains session-wide: reconnects must
-//! use fresh increasing sequences and nonces. EOF drains bounded queued replies;
+//! use fresh nonces and increasing sequences within each authenticated connection. EOF drains bounded queued replies;
 //! a terminal writer retires its endpoint after flushing its diagnostic.
 //! [TARGET, unit decision] A failed receipt must have verified=false; contradictory receipts are refused
 //! before settlement and cannot clear a lease.
@@ -168,7 +168,8 @@ impl Server {
         let mut replay = ReplayTable::new(100_000)?;
         // Boundary envelope witnesses also persist sender nonce/sequence evidence.
         // Artifacts are validated by recovery before they are considered here.
-        let mut envelopes = BTreeMap::new();
+        let mut envelopes = Vec::new();
+        let mut seen = BTreeSet::new();
         let mut tool_state = tools::ToolState::default();
         for seq in 1..=authority.state().core_seq {
             let event: serde_json::Value = serde_json::from_slice(&fs::read(
@@ -188,15 +189,21 @@ impl Server {
                             if event["outcome"]["reason"].is_null() {
                                 tool_state.retain(&env.body);
                             }
-                            envelopes.insert((env.from.clone(), env.seq), env);
+                            // One envelope can witness several journal records. A restarted
+                            // sequence must not overwrite an older nonce witness.
+                            if seen.insert((env.from.clone(), env.nonce.clone())) {
+                                envelopes.push(env);
+                            }
                         }
                     }
                 }
             }
         }
         tool_state.prune(authority.state());
-        for env in envelopes.into_values() {
-            replay.record(&env.session_id, &env.from, &env.nonce, env.seq)?;
+        for env in envelopes {
+            // Journal order is authoritative across connection generations;
+            // restore every nonce and the latest observed sender sequence.
+            replay.record_reconnect(&env.session_id, &env.from, &env.nonce, env.seq)?;
         }
         Ok(Self {
             config,
@@ -961,7 +968,7 @@ async fn connection(
             return Err(invalid("endpoint already connected"));
         }
         s.replay
-            .record(&env.session_id, &env.from, &env.nonce, env.seq)?;
+            .record_reconnect(&env.session_id, &env.from, &env.nonce, env.seq)?;
         if env.from.component == Component::Daemon {
             let witness = s
                 .authority
@@ -1837,3 +1844,6 @@ mod nv_regressions {
         });
     }
 }
+
+#[cfg(test)]
+mod reconnect_tests;
