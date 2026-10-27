@@ -5,7 +5,10 @@
 //! Screenshots use their supplied capture ID as the wire recording ID. Disk
 //! stop seals a bounded RAM capture; the adapter exports a PNG tar archive.
 //! Counts describe retained frames, including after ring eviction.
-//! [TARGET, unit decision] `release` is local metadata reclamation for terminal
+//! [TARGET, unit decision] Every unreleased capture holds its RAM reservation,
+//! including sealed screenshots and exported recordings. Callers release only
+//! after delivery and RAM reclamation. Budget refusals name held reservations.
+//! `release` is local metadata reclamation for terminal
 //! recordings, retaining session-lifetime ID tombstones. It emits no wire event
 //! (v0.2 has no release event) and leaves the journal chain unchanged. The adapter
 //! owns RAM files and must reclaim its copies separately; observed paths confer
@@ -121,7 +124,8 @@ impl Coordinator {
         self.recordings.get(id)
     }
 
-    /// Reclaim a sealed/exported capture's reservation and retained metadata.
+    /// Release a sealed/exported capture's reservation and retained metadata.
+    /// The caller must first finish delivery and reclaim the adapter-owned RAM.
     /// Unknown (including already released) and active IDs leave state unchanged.
     pub fn release(&mut self, id: &str) -> Result<(), Error> {
         let recording = self.recordings.get(id).ok_or(Error::UnknownRecording)?;
@@ -227,11 +231,12 @@ impl Coordinator {
             return Err(Error::Event);
         }
         let mut next = self.clone();
+        let held_detail;
         let mut reason = None;
         if !self.surfaces.contains(surface) {
             reason = Some(("POLICY", "surface is not admitted"));
         }
-        if stop {
+        if stop && reason.is_none() {
             match next.recordings.get_mut(id) {
                 Some(r)
                     if r.phase == Phase::Recording
@@ -242,24 +247,48 @@ impl Coordinator {
                 }
                 _ => reason = Some(("POLICY", "recording is not active in this mode and surface")),
             }
-        } else {
+        } else if !stop && reason.is_none() {
             if fps == 0 || fps > 120 || ring == 0 || ring > CAP {
                 reason = Some(("POLICY", "recording bounds are invalid"));
             } else if fps > self.limits.max_fps || ring > self.limits.ring_bytes {
                 reason = Some(("BUDGET_EXCEEDED", "recording exceeds configured limits"));
             }
-            let reserved = self
-                .recordings
-                .values()
-                .try_fold(0_u64, |sum, r| sum.checked_add(r.ring_bytes))
-                .ok_or(Error::Overflow)?;
-            if reserved.checked_add(ring).ok_or(Error::Overflow)? > self.limits.memory_bytes {
-                reason = Some(("BUDGET_EXCEEDED", "recording exceeds session memory"));
+            // Every unreleased capture reserves session memory. Preserve the first
+            // refusal and validate bounds before doing arithmetic on the request.
+            if reason.is_none() {
+                let reserved = self
+                    .recordings
+                    .values()
+                    .try_fold(0_u64, |sum, r| sum.checked_add(r.ring_bytes))
+                    .ok_or(Error::Overflow)?;
+                if reserved.checked_add(ring).ok_or(Error::Overflow)? > self.limits.memory_bytes {
+                    // Keep the wire detail bounded even with many tiny captures.
+                    let mut held = String::new();
+                    let mut named = 0;
+                    for (id, recording) in &self.recordings {
+                        let entry = format!("{id}={}", recording.ring_bytes);
+                        if held.len() + entry.len() + 2 > 3500 {
+                            break;
+                        }
+                        if !held.is_empty() {
+                            held.push_str(", ");
+                        }
+                        held.push_str(&entry);
+                        named += 1;
+                    }
+                    held_detail = format!(
+                        "recording exceeds session memory; held reservations (bytes): [{held}]; additional held reservations: {}",
+                        self.recordings.len() - named
+                    );
+                    reason = Some(("BUDGET_EXCEEDED", held_detail.as_str()));
+                }
             }
-            if self.recordings.contains_key(id) || self.released.contains(id) {
+            if reason.is_none() && (self.recordings.contains_key(id) || self.released.contains(id))
+            {
                 reason = Some(("POLICY", "recording identity was already used"));
             }
-            if mode == "disk"
+            if reason.is_none()
+                && mode == "disk"
                 && !destination.is_some_and(|(cap, path)| {
                     self.destination
                         .as_ref()
@@ -324,8 +353,12 @@ impl Coordinator {
                     || f.byte_count > r.ring_bytes
                     || !absolute(&f.ram_path)
                     || !f.ram_path.starts_with("/dev/shm/")
+                    || f.ram_path.ends_with('/')
                     || f.sha256.len() != 64
-                    || !f.sha256.bytes().all(|b| b.is_ascii_hexdigit())
+                    || !f
+                        .sha256
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
                     || !valid_id(&f.request_id)
                 {
                     return Err(Error::Event);
@@ -365,9 +398,13 @@ impl Coordinator {
                 if r.phase != Phase::Sealed
                     || r.mode != "disk"
                     || r.surface_id != f.surface_id
+                    || f.byte_count == 0
                     || f.byte_count > CAP
                     || f.sha256.len() != 64
-                    || !f.sha256.bytes().all(|b| b.is_ascii_hexdigit())
+                    || !f
+                        .sha256
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
                     || !valid_id(&f.request_id)
                     || !self.destination.as_ref().is_some_and(|d| {
                         d.path == f.destination_path
@@ -390,3 +427,6 @@ impl Coordinator {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod guard_tests;

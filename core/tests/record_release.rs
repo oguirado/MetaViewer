@@ -56,11 +56,12 @@ fn release_all_restores_budget_and_tombstones_every_id() {
         ));
         c.handle(&request("ram_stop", id), 1, &mut Sink).unwrap();
     }
-    assert!(matches!(
-        c.handle(&request("ram_start", "fresh"), 2, &mut Sink)
-            .unwrap()[0],
-        RecordEvent::Case5(_)
-    ));
+    let refusal = c
+        .handle(&request("ram_start", "fresh"), 2, &mut Sink)
+        .unwrap();
+    assert!(matches!(&refusal[0], RecordEvent::Case5(r)
+        if r.reason_code == metaviewer_core::wire::payload::RecordEventRefusal::BUDGETEXCEEDED
+        && r.detail.contains("a=16") && r.detail.contains("b=16")));
     for id in ["a", "b"] {
         c.release(id).unwrap();
         assert!(c.recording(id).is_none());
