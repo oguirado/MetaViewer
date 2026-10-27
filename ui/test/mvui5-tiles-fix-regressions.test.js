@@ -169,18 +169,21 @@ for (const entry of precedence) {
   });
 }
 
-test('control verbs resolve exclusive owner before legacy control', () => {
-  for (const [controlOwner, control, expected] of [
-    ['human', 'agent', 'take_control'],
-    ['agent', 'human', 'release_control'],
-    ['agent', 'shared', 'release_control'],
-    ['human', 'shared', 'take_control'],
-    ['none', 'agent', 'release_control'],
-    [undefined, 'human', 'take_control'],
-    ['invalid', 'agent', 'release_control'],
+test('control ownership resolves before legacy control; release requires an explicit verb', () => {
+  for (const [controlOwner, control, expectedTile] of [
+    ['human', 'agent', 'human-control'],
+    ['agent', 'human', 'agent-acting'],
+    ['agent', 'shared', 'agent-acting'],
+    ['human', 'shared', 'human-control'],
+    ['none', 'agent', 'agent-acting'],
+    [undefined, 'human', 'human-control'],
+    ['invalid', 'agent', 'agent-acting'],
   ]) {
     const current = row('a', { controlOwner, control });
-    assert.equal(tiles.controlVerbForRow(current, null), expected);
+    assert.equal(tiles.controlAxisTile(current), expectedTile);
+    assert.equal(tiles.controlVerbForRow(current, null), 'take_control');
+    assert.equal(tiles.controlVerbForRow(current, 'take_control'), 'take_control');
+    assert.equal(tiles.controlVerbForRow(current, 'release_control'), 'release_control');
     assert.equal(tiles.controlVerbForRow(current, 'surface_request.take_control'), 'take_control');
     assert.equal(tiles.controlVerbForRow(current, 'surface_request.release_control'), 'release_control');
   }

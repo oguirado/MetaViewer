@@ -607,7 +607,9 @@ describe('tileScheduler canvas registry', () => {
     registerLive(h, 'capsule-a');
     const canvas = makeFakeCanvas();
     canvases.set('capsule-a', canvas);
-    assert.equal(h.scheduler.attachCanvas({ surfaceId: 'capsule-a', canvas }).ok, true);
+    const attachment = h.scheduler.attachCanvas({ surfaceId: 'capsule-a', canvas });
+    assert.equal(attachment.ok, true);
+    assert.equal(typeof attachment.token, 'symbol');
     assert.equal(h.scheduler.attachCanvas({ surfaceId: 'ghost', canvas }).reason, SCHEDULER_REASONS.SURFACE_NOT_REGISTERED);
     assert.equal(
       h.scheduler.attachCanvas({ surfaceId: 'capsule-a', canvas: { width: 1 } }).reason,
@@ -624,6 +626,18 @@ describe('tileScheduler canvas registry', () => {
     assert.equal(info.lastPresentedFrameGen, 1);
     assert.equal(info.canvasAttached, true);
     h.scheduler.detachCanvas('capsule-a');
+    assert.equal(h.scheduler.getInstrumentation('capsule-a').canvasAttached, true,
+      'tokenless detach cannot reproduce the old unmount defect');
+    const replacement = h.scheduler.attachCanvas({ surfaceId: 'capsule-a', canvas });
+    assert.equal(replacement.ok, true);
+    assert.notEqual(replacement.token, attachment.token, 'each attach owns a fresh token');
+    h.scheduler.detachCanvas('capsule-a', attachment.token);
+    assert.equal(h.scheduler.getInstrumentation('capsule-a').canvasAttached, true,
+      'a stale unmount cannot detach the replacement');
+    assert.equal(h.scheduler.submitFrame(makeFrame({ frameGeneration: 2, leaseId: 'lease-2' })).ok, true);
+    assert.equal(h.scheduler.runTick().drawsUsed, 1, 'replacement remains drawable after stale detach');
+    assertCorners(canvas, 4, 3);
+    h.scheduler.detachCanvas('capsule-a', replacement.token);
     h.scheduler.detachCanvas('ghost-does-not-throw');
     assert.equal(h.scheduler.getInstrumentation('capsule-a').canvasAttached, false);
   });

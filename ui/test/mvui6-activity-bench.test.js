@@ -195,15 +195,33 @@ describe('bench hook behavior', () => {
       await tick();
       assert.equal(renderedTexts(captured.stripEntries()).at(-1), 'Action admitted.');
 
+      const beforeFold = captured.stripEntries().length;
+      const beforeFoldCalls = calls.length;
+      for (const [slot_id, capsuleId] of [
+        ['slot-1', 'surface-a'], // Old fixture: unbound slot must never be acknowledged.
+        ['cuk-ai-slot-surface-b', 'surface-a'],
+        ['cuk-ai-slot-surface-b', 'surface-b'], // Bound, but not the selected capsule.
+      ]) {
+        await hook.dispatchMultislot(
+          { schema: 'ui_intent/v0.2', request_id: 'bench-foreign', op: 'fold', params: { slot_id } }, capsuleId);
+        await tick();
+        assert.equal(calls.length, beforeFoldCalls, 'foreign slot/capsule never reaches the host');
+        assert.equal(captured.stripEntries().length, beforeFold, 'refusal cannot invent an ack activity');
+      }
       await hook.dispatchMultislot(
-        { schema: 'ui_intent/v0.2', request_id: 'bench-1', op: 'fold', params: { slot_id: 'slot-1' } }, 'surface-a');
+        { schema: 'ui_intent/v0.2', request_id: 'bench-1', op: 'fold', params: { slot_id: 'cuk-ai-slot-surface-a' } }, 'surface-a');
       await tick();
+      assert.equal(calls.length, beforeFoldCalls + 1, 'selected bound slot submits once');
+      const foldWire = JSON.parse(calls.at(-1));
+      assert.deepEqual(foldWire, { schema: 'ui_intent/v0.2', request_id: foldWire.request_id,
+        op: 'fold', params: { slot_id: 'cuk-ai-slot-surface-a' } });
+      assert.equal(captured.stripEntries().length, beforeFold + 1, 'ack appends an activity row');
       assert.equal(renderedTexts(captured.stripEntries()).at(-1), 'Request sent.',
         'acked multislot fold records through the production path');
 
       failIntent = true;
       await hook.dispatchMultislot(
-        { schema: 'ui_intent/v0.2', request_id: 'bench-2', op: 'unfold', params: { slot_id: 'slot-1' } }, 'surface-a');
+        { schema: 'ui_intent/v0.2', request_id: 'bench-2', op: 'unfold', params: { slot_id: 'cuk-ai-slot-surface-a' } }, 'surface-a');
       await tick();
       assert.equal(renderedTexts(captured.stripEntries()).at(-1), 'This request is unavailable. Please try again.',
         'refused multislot unfold records through the production path');
@@ -213,7 +231,7 @@ describe('bench hook behavior', () => {
       assert.equal(renderedTexts(captured.stripEntries()).at(-1), 'This request is unavailable. Please try again.');
       assert.equal(captured.stripEntries().length, 6);
       assert.deepEqual(captured.stripEntries().map(entry => entry.seq), [1, 2, 3, 4, 5, 6]);
-      assert.ok(calls.length >= 6, 'every row came from a real port submission');
+      assert.equal(calls.length, 6, 'every row came from exactly one real port submission');
 
       appHandle.unmount(); appHandle = null;
       assert.equal(fakeWindow.__metaviewerBench, undefined, 'unmount removes the handle');

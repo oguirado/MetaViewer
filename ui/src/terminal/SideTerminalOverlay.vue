@@ -11,10 +11,10 @@
  * panel a no-core empty-state facade so it projects its designed empty
  * state instead of exception text.
  */
-import { computed, markRaw, onBeforeUnmount, ref, toRaw, watch } from 'vue';
+import { computed, markRaw, onBeforeUnmount, onMounted, ref, toRaw, watch } from 'vue';
 import SideTerminalPanel from '/.kit/capsule-ui-kit/src/side-terminal/SideTerminalPanel.vue';
 import BrokerLaunchControls from './BrokerLaunchControls.vue';
-import { createSideTerminalFacade, createEmptySideTerminalFacade } from './sideTerminalFacade.js';
+import { createSideTerminalFacade, createEmptySideTerminalFacade, useTerminalChromeGeometry } from './sideTerminalFacade.js';
 import { toKitMenuProviders } from '../multislot/multislotProviders.js';
 import './terminal.css';
 
@@ -36,6 +36,22 @@ watch(() => props.open, value => { overlayOpen.value = value !== false; });
 /** @param {boolean} value */
 function updateOpen(value) { overlayOpen.value = value; emit('update:open', value); }
 
+/** Escape closes this view without affecting host session ownership.
+ * @param {KeyboardEvent} event */
+function onEscape(event) {
+  if (event.key === 'Escape' && overlayOpen.value) updateOpen(false);
+}
+onMounted(() => globalThis.window?.addEventListener?.('keydown', onEscape));
+onBeforeUnmount(() => globalThis.window?.removeEventListener?.('keydown', onEscape));
+
+// Carry measurements through the kit nonce sheet; CSS supplies the top-bar
+// minimum even before App has measured chrome or when no nonce is available.
+const chromeGeometry = useTerminalChromeGeometry(() => ({
+  '--mv-terminal-top': `${Number.isFinite(props.topOffset) ? Math.max(0, Math.round(props.topOffset)) : 0}px`,
+  '--mv-terminal-bottom': `${Number.isFinite(props.bottomOffset) ? Math.max(0, Math.round(props.bottomOffset)) : 0}px`,
+}));
+const bindingState = ref('TERMINAL_UNAVAILABLE');
+
 /** @type {import('vue').ShallowRef<ReturnType<typeof createSideTerminalFacade> | ReturnType<typeof createEmptySideTerminalFacade> | null>} */
 const facadeRef = ref(null);
 
@@ -46,13 +62,16 @@ function rebind() {
     // Teardown is best-effort; the null facade is authoritative.
   }
   const binding = props.terminalBinding ? toRaw(props.terminalBinding) : null;
-  if (!binding || typeof binding.session !== 'string' || !binding.port) {
+  if (!binding) {
+    bindingState.value = 'TERMINAL_UNAVAILABLE';
     facadeRef.value = markRaw(createEmptySideTerminalFacade());
     return;
   }
   try {
     facadeRef.value = markRaw(createSideTerminalFacade({ session: binding.session, port: toRaw(binding.port) }));
+    bindingState.value = 'TERMINAL_ATTACHED';
   } catch {
+    bindingState.value = 'TERMINAL_BINDING_REFUSED';
     facadeRef.value = markRaw(createEmptySideTerminalFacade());
   }
 }
@@ -76,7 +95,7 @@ const kitProviders = computed(() => {
 });
 </script>
 <template>
-  <div id="mv-side-terminal-overlay" class="mv-side-terminal-overlay" data-semantic-anchor="terminal/overlay">
+  <div id="mv-side-terminal-overlay" class="mv-side-terminal-overlay" data-semantic-anchor="terminal/overlay" :data-cuk-geometry-id="chromeGeometry" :data-terminal-state="bindingState">
     <BrokerLaunchControls v-if="terminalBroker" :visible="overlayOpen" :broker="terminalBroker" :providers="hostProviders" />
     <SideTerminalPanel
       :facade="facadeRef ?? undefined"

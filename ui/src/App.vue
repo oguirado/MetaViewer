@@ -220,8 +220,13 @@ async function dispatchMultislot(intent, capsuleId) {
     }
     return;
   }
-  if (surface && body?.schema === 'ui_intent/v0.2' && ['fold', 'unfold'].includes(body.op ?? '')
-      && capsuleId === surface.id) {
+  if (['fold', 'unfold'].includes(body?.op ?? '')) {
+    // Multislot visibility belongs to the selected slot, never a caller's
+    // independently supplied capsule/slot pair. Refuse before host or override.
+    if (!surface || capsuleId !== surface.id || body.schema !== 'ui_intent/v0.2'
+        || body.params?.slot_id !== `cuk-ai-slot-${capsuleId}`) {
+      hostOutcome.value = { code: 'LAYOUT_ILLEGAL_TRANSITION', message: '', tone: 'refusal' }; return;
+    }
     if (placements.value[capsuleId]?.hidden) return;
     const visibility = surface.visibility;
     const submitIntent = props.authorityHost?.intent;

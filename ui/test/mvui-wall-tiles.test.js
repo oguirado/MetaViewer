@@ -1,6 +1,7 @@
 // Lane U1 tile states: seven wall tile states, precedence, control verbs.
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   TILE_STATES,
   CAPTURING_LIFECYCLES,
@@ -88,9 +89,9 @@ describe('control verb resolution', () => {
     assert.equal(controlVerbForRow(agent, 'surface_request.take_control'), 'take_control');
   });
 
-  test('without an explicit verb the row decides; missing rows take control', () => {
-    assert.equal(controlVerbForRow(tileRow('a', { control: 'agent' }), null), 'release_control');
-    assert.equal(controlVerbForRow(tileRow('a', { control: 'agent' }), undefined), 'release_control');
+  test('without an explicit verb every row requests control; release is never inferred', () => {
+    assert.equal(controlVerbForRow(tileRow('a', { control: 'agent' }), null), 'take_control');
+    assert.equal(controlVerbForRow(tileRow('a', { control: 'agent' }), undefined), 'take_control');
     assert.equal(controlVerbForRow(tileRow('a', { control: 'human' }), null), 'take_control');
     assert.equal(controlVerbForRow(tileRow('a', { control: 'shared' }), { verb: 'fold' }), 'take_control');
     assert.equal(controlVerbForRow(null, null), 'take_control');
@@ -98,10 +99,26 @@ describe('control verb resolution', () => {
 
   test('negative controls: garbage verbs never leak through; casing is exact', () => {
     const agent = tileRow('a', { control: 'agent' });
-    for (const bad of ['', 'TAKE_CONTROL', 'take control', 'take-control', 'destroy', 7, {}, []]) {
-      assert.equal(controlVerbForRow(agent, bad), 'release_control', JSON.stringify(bad));
+    for (const bad of ['', 'TAKE_CONTROL', 'RELEASE_CONTROL', 'surface_request.RELEASE_CONTROL',
+      'take control', 'take-control', 'destroy', 7, {}, []]) {
+      assert.equal(controlVerbForRow(agent, bad), 'take_control', JSON.stringify(bad));
       assert.equal(controlVerbForRow(tileRow('a', { control: 'human' }), bad), 'take_control',
         JSON.stringify(bad));
+    }
+  });
+
+  test('negative control: the old agent fallback fails the take-control oracle', async () => {
+    const source = readFileSync(new URL('../src/wall/tileStates.js', import.meta.url), 'utf8');
+    const mutant = source.replace(/(export function controlVerbForRow\(row, asked\) \{[\s\S]*?)  return 'take_control';\n\}/,
+      "$1  return controlAxisTile(row) === 'agent-acting' ? 'release_control' : 'take_control';\n}");
+    assert.notEqual(mutant, source, 'mutation must install the old inferred-release defect');
+    const legacy = await import(`data:text/javascript;base64,${Buffer.from(mutant).toString('base64')}`);
+    const agent = tileRow('a', { control: 'agent' });
+    for (const asked of [null, undefined, '', 'RELEASE_CONTROL']) {
+      assert.equal(legacy.controlVerbForRow(agent, asked), 'release_control', 'old defect reproduced');
+      assert.throws(() => assert.equal(legacy.controlVerbForRow(agent, asked), 'take_control'),
+        assert.AssertionError, 'corrected oracle rejects the old defect');
+      assert.equal(controlVerbForRow(agent, asked), 'take_control');
     }
   });
 });

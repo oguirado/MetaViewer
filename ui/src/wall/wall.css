@@ -257,3 +257,40 @@
   min-height: 0;
   min-width: 0;
 }
+
+/* Renderer-owned tile chrome mitigation until the kit's header fix lands.
+ * Scope to wall tiles so multislot headers remain kit-owned. Permit wrapping
+ * rather than clipping actions or moving controls outside their tile. */
+.mv-shell .mv-tile .cuk-capsule-panel__header {
+  height: auto;
+  padding-inline: var(--cuk-semantic-spacing-sm);
+}
+.mv-shell .mv-tile .ui-capsule-toolbar {
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.mv-shell .mv-tile .ui-capsule-toolbar .p-toolbar-start,
+.mv-shell .mv-tile .ui-capsule-toolbar .p-toolbar-end {
+  max-width: 100%;
+  min-width: 0;
+}
+.mv-shell .mv-tile .cuk-capsule-panel__actions {
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+.mv-shell .mv-tile .cuk-capsule-panel__action-btn:not(:disabled) {
+  color: var(--cuk-semantic-text-primary);
+}
+.mv-shell .mv-tile .mv-tile-chrome {
+  flex-wrap: wrap;
+}
+/* The label uses the semantic text/surface pair in both schemes. Recording
+ * remains signalled by its Stop label, dot, badge and pressed state. Disabled
+ * controls retain their native state/cursor without fading the label. */
+.mv-shell .mv-tile .mv-tile-chrome .saas-record {
+  color: var(--cuk-semantic-text-primary);
+  background: var(--cuk-semantic-surface-panel);
+  border-color: var(--cuk-semantic-status-error-border);
+  opacity: 1;
+}

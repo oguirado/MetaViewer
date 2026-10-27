@@ -110,7 +110,7 @@ export function createAuthorityRuntime(port) {
         visibility: s.visibility, control: s.control,
         // surface/v0.2 has no exclusive owner for shared control and no lease.
         // The kit's control button consumes this axis; focus leases stay absent.
-        controlOwner: s.control === 'shared' ? 'none' : s.control, attachmentState: 'live' }));
+        controlOwner: s.control === 'shared' ? 'none' : s.control, attachmentState: s.state === 'lost' ? 'disconnected' : s.state === 'destroyed' ? 'detached' : 'live' }));
       return { ok: true, value: { schema: SCHEMA, epoch: 1, revision: ++revision, query: QUERY,
         mode: 'snapshot', projection: { rows: Object.freeze([...rows.values()]) } } };
     },

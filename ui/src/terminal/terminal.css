@@ -11,6 +11,13 @@
   display: contents;
 }
 
+/* Renderer chrome boundary wins over the kit panel's zero-offset fallback.
+   The selector is more specific than the kit's geometry attribute rule. */
+.mv-side-terminal-overlay > .cui-side-terminal {
+  top: max(var(--cuk-component-app-shell-topbar-height), var(--mv-terminal-top, 0px));
+  bottom: max(var(--cuk-component-app-shell-status-height), var(--mv-terminal-bottom, 0px));
+}
+
 .mv-broker-launch {
   padding: var(--cuk-semantic-spacing-sm);
   background: var(--cuk-semantic-surface-canvas);

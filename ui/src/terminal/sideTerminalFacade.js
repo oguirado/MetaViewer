@@ -4,10 +4,14 @@
  * The existing client remains the sequence/credit and malformed-frame boundary. */
 import { reactive, toRaw } from 'vue';
 import { createTerminalClient } from './terminalClient.js';
+export { useKitGeometry as useTerminalChromeGeometry } from '../../.kit/capsule-ui-kit/src/workspace/useKitGeometry.js';
 
 /** @param {{session:string,port:MessagePort}} binding */
 export function createSideTerminalFacade({ session, port }) {
-  if (!session || !port || typeof port.postMessage !== 'function') throw new Error('Invalid terminal binding');
+  if (typeof session !== 'string' || !TERMINAL_SESSION_ID_RE.test(session)
+      || !port || typeof port.postMessage !== 'function') {
+    throw Object.assign(new Error('Invalid terminal binding'), { code: 'TERMINAL_BINDING_REFUSED' });
+  }
   /** @type {Set<(frame:any)=>void>} */
   const dataListeners = new Set();
   /** @type {Set<(event:any)=>void>} */

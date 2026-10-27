@@ -30,8 +30,10 @@ const props = defineProps({
 
 const emit = defineEmits(['canvas-ready', 'canvas-released']);
 
-/** @type {{ attachCanvas: (args: any) => { ok: boolean }, detachCanvas: (id: string) => void } | null} */
+/** @type {{ attachCanvas: (args: any) => { ok: boolean, token?: symbol }, detachCanvas: (id: string, token: symbol | null) => void } | null} */
 const scheduler = /** @type {any} */ (inject('tileScheduler', null));
+/** @type {symbol | null} */
+let canvasToken = null;
 
 /** @type {{ value: HTMLCanvasElement | null }} */
 const canvasRef = ref(/** @type {HTMLCanvasElement | null} */ (null));
@@ -39,12 +41,14 @@ const canvasRef = ref(/** @type {HTMLCanvasElement | null} */ (null));
 // Live display requires a presented witness: a live claim with no frame
 // handle degrades to connecting instead of rendering a fake-live tile.
 const resolvedState = computed(() => {
-  const normalized = normalizeSurfaceState(props.state);
+  const normalized = props.state === 'stale' ? 'stale' : normalizeSurfaceState(props.state);
   if (normalized === 'live' && props.frame.length === 0) {
     return 'connecting';
   }
   return normalized;
 });
+const showWitness = computed(() => props.frame.length > 0
+  && (resolvedState.value === 'live' || resolvedState.value === 'stale'));
 
 const strip = computed(() => formatFrameStrip({
   frame: props.frame,
@@ -79,6 +83,7 @@ function attachCanvas() {
     const result = scheduler.attachCanvas({ surfaceId: props.surfaceId,
       surfaceGeneration: bindingNumber(props.generation), epoch: bindingNumber(props.epoch), canvas: canvasRef.value });
     if (result?.ok === true) {
+      canvasToken = result.token ?? null;
       emit('canvas-ready', { surfaceId: props.surfaceId });
       return;
     }
@@ -90,13 +95,15 @@ onMounted(attachCanvas);
 
 watch(() => [props.surfaceId, props.generation, props.epoch], (_current, previous) => {
   if (scheduler === null) return;
-  scheduler.detachCanvas(String(previous[0]));
+  scheduler.detachCanvas(String(previous[0]), canvasToken);
+  canvasToken = null;
   attachCanvas();
 });
 
 onBeforeUnmount(() => {
   if (scheduler !== null) {
-    scheduler.detachCanvas(props.surfaceId);
+    scheduler.detachCanvas(props.surfaceId, canvasToken);
+    canvasToken = null;
   }
   emit('canvas-released', { surfaceId: props.surfaceId });
 });
@@ -115,8 +122,8 @@ onBeforeUnmount(() => {
       <strong>{{ resolvedState === 'connecting' ? 'Connecting to surface' : 'Waiting for surface' }}</strong>
       <span>The surface will appear here when it is ready.</span>
     </div>
-    <p v-if="props.frame" class="mv-surface__state" aria-hidden="true">{{ resolvedState }}</p>
-    <div v-if="props.frame" class="mv-surface__strip" role="group" :aria-label="stripName">
+    <p v-if="showWitness" class="mv-surface__state" aria-hidden="true">{{ resolvedState }}</p>
+    <div v-if="showWitness" class="mv-surface__strip" role="group" :aria-label="stripName">
       <span class="mv-surface__key">FRAME: {{ strip.frameText.length > 0 ? strip.frameText : '—' }}</span>
       <span class="mv-surface__key">GEN: {{ strip.generationText.length > 0 ? strip.generationText : '—' }}</span>
       <span class="mv-surface__key">SHA256: {{ strip.digestText.length > 0 ? strip.digestText : '—' }}</span>

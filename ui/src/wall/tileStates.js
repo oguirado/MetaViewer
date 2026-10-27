@@ -136,8 +136,8 @@ export function presentedFrameHandle(scheduler, capsuleId, generation, epoch) {
 
 /**
  * Resolve one control verb. An explicit asked verb wins (bare or kit
- * `surface_request.*` namespaced); otherwise the authoritative row control
- * decides, defaulting to take_control when no row is bound.
+ * `surface_request.*` namespaced). A missing verb only requests take_control;
+ * releasing control requires an explicit request, including on agent rows.
  * @param {TileSurfaceRow|null} row
  * @param {unknown} asked
  * @returns {string}
@@ -149,9 +149,7 @@ export function controlVerbForRow(row, asked) {
   if (asked === 'release_control' || asked === 'surface_request.release_control') {
     return 'release_control';
   }
-  const owner = row?.controlOwner;
-  const control = owner === 'human' || owner === 'agent' ? owner : row?.control;
-  return control === 'agent' ? 'release_control' : 'take_control';
+  return 'take_control';
 }
 
 /**

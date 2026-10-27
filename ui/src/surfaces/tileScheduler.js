@@ -463,7 +463,7 @@ export function createTileScheduler(options) {
       entry.metrics.warmResourceBytes = Math.max(0, entry.metrics.warmResourceBytes - (removed?.bytes || 0));
       entry.metrics.reclaimedWarmResources += 1;
       if (removed && typeof removed.dispose === 'function') {
-        removed.dispose();
+        try { removed.dispose(); } catch { entry.metrics.disposerFaults += 1; }
       }
     }
   }
@@ -562,6 +562,7 @@ export function createTileScheduler(options) {
       mailbox: null,
       presented: null,
       canvas: sameLifetime ? existing.canvas : null,
+      canvasToken: sameLifetime ? existing.canvasToken : null,
       lastRetiredHandle: sameLifetime ? existing.lastRetiredHandle : null,
       lastPresentedFrameGen: sameLifetime ? existing.lastPresentedFrameGen : 0,
       minAdmissibleFrameGen: sameLifetime ? existing.minAdmissibleFrameGen : 0,
@@ -581,6 +582,7 @@ export function createTileScheduler(options) {
         rejectedHiddenDraws: 0,
         rejectedStaleFrames: 0,
         reclaimedWarmResources: 0,
+        disposerFaults: 0,
         warmResourceBytes: 0,
         lastPresentAgeMs: null,
         inputToPresentMs: null,
@@ -884,7 +886,6 @@ export function createTileScheduler(options) {
     if (n === 0) {
       return Object.freeze({ ...empty, presented: Object.freeze([]) });
     }
-    const now = clock();
     let drawsUsed = 0;
     let bytesUploaded = 0;
     let timeSpentMs = 0;
@@ -894,6 +895,8 @@ export function createTileScheduler(options) {
     const presented = [];
     const startIdx = fairCursor % n;
     let nextCursor = startIdx;
+    /** @type {number | null} First deferred candidate that fits a fresh tick. */
+    let retryCursor = null;
     insideTurn = true;
     try {
       for (let offset = 0; offset < n; offset += 1) {
@@ -913,7 +916,7 @@ export function createTileScheduler(options) {
           continue;
         }
         const candidate = entry.mailbox;
-        const isLeaseExpired = typeof candidate.leaseExpiresAtMs === 'number' && candidate.leaseExpiresAtMs <= now;
+        const isLeaseExpired = typeof candidate.leaseExpiresAtMs === 'number' && candidate.leaseExpiresAtMs <= clock();
         const isFrameStale =
           candidate.surfaceGeneration !== entry.surfaceGeneration ||
           candidate.frameGeneration <= entry.lastPresentedFrameGen ||
@@ -930,8 +933,12 @@ export function createTileScheduler(options) {
             bytesUploaded + candidate.byteLength > budget.maxUploadBytesPerTick ||
             timeSpentMs + candidate.estimatedPresentMs > budget.maxPresentMsPerTick) {
           budgetDeferrals += 1;
-          if (budgetDeferrals === 1) {
+          if (budgetDeferrals === 1 && drawsUsed === 0) {
             nextCursor = idx;
+          }
+          if (retryCursor === null && candidate.byteLength <= budget.maxUploadBytesPerTick
+              && candidate.estimatedPresentMs <= budget.maxPresentMsPerTick) {
+            retryCursor = idx;
           }
           continue;
         }
@@ -944,7 +951,8 @@ export function createTileScheduler(options) {
         entry.mailbox = null;
         drawsUsed += 1;
         bytesUploaded += candidate.byteLength;
-        if (budgetDeferrals === 0) nextCursor = (idx + 1) % n;
+        // A later draw must advance past an earlier permanently deferred tile.
+        nextCursor = (idx + 1) % n;
 
         handleSeq += 1;
         const handle = `tile/${entry.surfaceId}/g${candidate.frameGeneration}/h${handleSeq}`;
@@ -1011,7 +1019,8 @@ export function createTileScheduler(options) {
     } finally {
       insideTurn = false;
     }
-    const nextId = turnOrder[nextCursor % n];
+    // Preserve priority for temporary deferrals, never for an impossible frame.
+    const nextId = turnOrder[(retryCursor ?? nextCursor) % n];
     const liveNextIndex = surfaceOrder.indexOf(nextId);
     fairCursor = liveNextIndex >= 0 ? liveNextIndex : 0;
     return Object.freeze({
@@ -1055,7 +1064,7 @@ export function createTileScheduler(options) {
       entry.warmResources.delete(spec.resourceId);
       entry.metrics.warmResourceBytes = Math.max(0, entry.metrics.warmResourceBytes - (prev?.bytes || 0));
       if (prev && typeof prev.dispose === 'function') {
-        prev.dispose();
+        try { prev.dispose(); } catch { entry.metrics.disposerFaults += 1; }
       }
     }
     const byteLength = /** @type {number} */ (spec.byteLength);
@@ -1133,6 +1142,7 @@ export function createTileScheduler(options) {
     drainDisplayHoldings(entry, RELEASE_CAUSES.SURFACE_DESTROYED);
     trimWarmResources(entry, 0);
     entry.canvas = null;
+    entry.canvasToken = null;
     entry.destroyed = true;
     entry.captureLeaseActive = false;
     tombstones.add(entry.surfaceId);
@@ -1144,7 +1154,7 @@ export function createTileScheduler(options) {
       if (index < fairCursor) fairCursor -= 1;
     }
     notifyPresentation();
-    return { ok: true, destroyed: true };
+    return { ok: true, destroyed: true, disposerFaults: entry.metrics.disposerFaults };
   }
 
   /**
@@ -1180,6 +1190,7 @@ export function createTileScheduler(options) {
       warmResourceCount: entry.warmResources.size,
       warmResourceBytes: entry.metrics.warmResourceBytes,
       reclaimedWarmResources: entry.metrics.reclaimedWarmResources,
+      disposerFaults: entry.metrics.disposerFaults,
       captureCount: entry.metrics.captureCount,
       decodeCount: entry.metrics.decodeCount,
       presentCount: entry.metrics.presentCount,
@@ -1220,17 +1231,20 @@ export function createTileScheduler(options) {
       return { ok: false, reason: SCHEDULER_REASONS.INVALID_BINDING, detail: 'Canvas handle is not drawable' };
     }
     entry.canvas = args.canvas;
-    return { ok: true, surfaceId: entry.surfaceId };
+    entry.canvasToken = Symbol('canvas-owner');
+    return { ok: true, surfaceId: entry.surfaceId, token: entry.canvasToken };
   }
 
   /**
-   * Unbinds a surface canvas. Called on tile unmount; safe no-op when absent.
+   * Unbinds only the canvas owned by this attachment. Stale unmounts are no-ops.
    * @param {unknown} surfaceId
+   * @param {unknown} [token]
    */
-  function detachCanvas(surfaceId) {
+  function detachCanvas(surfaceId, token) {
     const entry = surfaces.get(/** @type {string} */ (surfaceId));
-    if (entry) {
+    if (entry && typeof token === 'symbol' && entry.canvasToken === token) {
       entry.canvas = null;
+      entry.canvasToken = null;
     }
   }
 
@@ -1310,6 +1324,7 @@ export function createTileScheduler(options) {
       drainDisplayHoldings(entry, RELEASE_CAUSES.SURFACE_DESTROYED);
       trimWarmResources(entry, 0);
       entry.canvas = null;
+      entry.canvasToken = null;
       entry.destroyed = true;
       entry.captureLeaseActive = false;
     }

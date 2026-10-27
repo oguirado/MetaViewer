@@ -54,6 +54,8 @@ export const WALL_PRESENTATION_VERBS = Object.freeze(['close', 'hide', 'show', '
 
 /** @typedef {Object} WallDockviewApi
  * @property {(id: string) => WallDockviewPanel | undefined} getPanel
+ * @property {Array<{id:string,size:number}>} [groups]
+ * @property {(group:{id:string,size:number}) => void} [removeGroup]
  * @property {(id:string) => unknown} [getGroup]
  * @property {(options:{id:string,referencePanel:string,direction:string}) => unknown} [addGroup]
  * @property {(options: WallAddPanelOptions) => WallDockviewPanel} addPanel
@@ -335,6 +337,15 @@ export function createWallWorkspaceController(options = {}) {
     return Object.freeze(result);
   }
 
+  function collapseEmptyGroups() {
+    if (!api || !Array.isArray(api.groups) || typeof api.removeGroup !== 'function') return;
+    // Keep the initial empty restore target until a real panel exists. Snapshot
+    // the group list because Dockview mutates it while removing empty groups.
+    const groups = [...api.groups];
+    if (!groups.some(group => group.size > 0)) return;
+    for (const group of groups) if (group.size === 0) api.removeGroup(group);
+  }
+
   /**
    * @param {unknown} payload
    * @returns {WallAdmissionResult<Readonly<{ ready: boolean }>>}
@@ -351,6 +362,7 @@ export function createWallWorkspaceController(options = {}) {
     }
     api = /** @type {WallDockviewApi} */ (/** @type {unknown} */ (record.api));
     windows = /** @type {WallWindowPresentation} */ (/** @type {unknown} */ (record.windows));
+    collapseEmptyGroups();
     return succeed(Object.freeze({ ready: true }));
   }
 
@@ -438,6 +450,7 @@ export function createWallWorkspaceController(options = {}) {
       };
       if (placement === 'split') options.position = { direction: 'right' };
       const panel = api.addPanel(options);
+      collapseEmptyGroups();
       if (placement === 'floating') windows.float(panelId);
       else panel.api.setActive();
       return succeed(Object.freeze({ panelId }));
@@ -749,6 +762,9 @@ onBeforeUnmount(() => {
 </template>
 <style>
 .wall-workspace {
+  /* Contain Dockview sashes below sibling full-screen app panels. */
+  position: relative;
+  z-index: 0;
   height: 100%;
   min-height: 0;
   min-width: 0;
