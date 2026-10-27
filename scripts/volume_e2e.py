@@ -79,10 +79,20 @@ def prepare(root, env, run=subprocess.run):
         raise RuntimeError('E2E_PREREQ: Electron binary version mismatch')
 
 
+def _active_workflow_lines(job):
+    active = []
+    for raw in job.splitlines():
+        uncommented = re.sub(r'(?:^|\s+)#.*$', '', raw).rstrip()
+        if not uncommented or re.match(r'^\s*(?:-\s*)?name\s*:', uncommented):
+            continue
+        active.append(uncommented)
+    return '\n'.join(active)
+
+
 def check_workflow(text):
     """Guard only the volume-e2e job; reject the confirmed workflow mutants."""
     match = re.search(r'^  volume-e2e:\n(.*?)(?=^  [a-zA-Z0-9_-]+:|\Z)', text, re.M | re.S)
-    job = match.group(1) if match else ''
+    job = _active_workflow_lines(match.group(1)) if match else ''
     required = ('[ ! -f "$HARNESS" ]', 'setup-node@', 'kit-checkout',
                 'npm ci', 'install_electron.cjs')
     missing = [item for item in required if item not in job]

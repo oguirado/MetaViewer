@@ -1,10 +1,10 @@
 'use strict';
 // [TARGET, unit decision] LIVE probes the actual registered socket and adapter;
 // a production refusal fails the gate and is reported without synthetic events.
-const { readFileSync } = require('node:fs');
+const { readFileSync, writeFileSync } = require('node:fs');
 const { join } = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
-const { compileRust, replay } = require('../core-driver.js');
+const { compileRust, replay, buildEnv } = require('../core-driver.js');
 const { E2EError, makeScratch, removeScratch } = require('../harness.js');
 function requireLive(env = process.env) {
   if (env.MV_E2E_LIVE !== '1') throw new E2EError('E2E_GATE', 'LIVE requires MV_E2E_LIVE=1');
@@ -50,19 +50,43 @@ function checkLiveResult(report, status) {
     throw new E2EError('E2E_LIVE', 'DONE requires every LIVE assertion and cleanup to pass');
   }
 }
-function hosted() {
-  const scratch = makeScratch('mv-slice');
+function hosted(externalScratch) {
+  const scratch = externalScratch || makeScratch('mv-slice');
   try {
     const source = readFileSync(join(__dirname, 'scenario.rs'), 'utf8');
     const binary = compileRust(scratch, source);
-    const state = JSON.parse(execFileSync(binary, [join(scratch, 'state_dir'), '--full'], { encoding: 'utf8' }));
-    const root = join(scratch, 'state_dir/sessions/session-1');
-    const journal = join(root, 'journal.jsonl');
-    const a = replay(journal, root).trim();
-    const b = replay(journal, root).trim();
+    const stateA = JSON.parse(execFileSync(binary, [join(scratch, 'run-a'), '--full'],
+      { env: buildEnv(), encoding: 'utf8' }));
+    const stateB = JSON.parse(execFileSync(binary, [join(scratch, 'run-b'), '--full'],
+      { env: buildEnv(), encoding: 'utf8' }));
+    const rootA = join(scratch, 'run-a/sessions/session-1');
+    const rootB = join(scratch, 'run-b/sessions/session-1');
+    const journalAPath = join(rootA, 'journal.jsonl');
+    const journalBPath = join(rootB, 'journal.jsonl');
+    const journalA = readFileSync(journalAPath, 'utf8');
+    const journalB = readFileSync(journalBPath, 'utf8');
+    if (journalA !== journalB) throw new Error('E2E_REPLAY: journal bytes diverged across two runs');
+    if (JSON.stringify(stateA) !== JSON.stringify(stateB)) {
+      throw new Error('E2E_REPLAY: state diverged across two runs');
+    }
+    const a = replay(journalAPath, rootA).trim();
+    const b = replay(journalBPath, rootB).trim();
     if (a !== b) throw new Error('E2E_REPLAY: digest diverged');
-    return { mode: 'hosted-core-only', digest: a, state };
-  } finally { removeScratch(scratch); }
+    const mutated = journalB.replace('"session-1"', '"session-2"');
+    if (mutated === journalB) throw new Error('E2E_REPLAY: negative control mutation was a no-op');
+    const corruptPath = join(rootB, 'journal.corrupt.jsonl');
+    writeFileSync(corruptPath, mutated);
+    let corruptThrew = false;
+    try {
+      replay(corruptPath, rootB);
+    } catch (err) {
+      corruptThrew = String(err.message || err).includes('E2E_REPLAY');
+    }
+    if (!corruptThrew) throw new Error('E2E_REPLAY: corrupted journal was not rejected');
+    return { mode: 'hosted-core-only', digest: a, state: stateA };
+  } finally {
+    if (!externalScratch) removeScratch(scratch);
+  }
 }
 module.exports = { hosted, requireLive, live, checkLiveResult };
 if (require.main === module) {

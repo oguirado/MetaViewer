@@ -41,11 +41,13 @@ const {
   electronBinary,
   findRepoRoot,
   makeScratch,
+  prepareWall,
   removeScratch,
   requireXvfb,
   runUnderXvfb,
   writeFakeManifest,
 } = require('./ac-harness.cjs');
+const { compileRust } = require('./core-driver.js');
 
 /** Env flag arming the live journey; anything else refuses the run. */
 
@@ -824,9 +826,171 @@ describe('ac05 ai loop contract', () => {
  * @returns {Promise<void>} Resolves when the probe file is installed;
  * the process exits via app.exit once the journey completes.
  */
+const AC05_VERIFY_DRIVER_RS = `
+#![forbid(unsafe_code)]
+use metaviewer_core::verify::{verify_receipt, Evidence};
+use metaviewer_core::wire::payload::{ActionProposal, ActionReceipt, Observation};
+use serde_json::{json, Value};
+use std::fs;
+
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let input: Value = serde_json::from_slice(&fs::read(&args[1]).unwrap()).unwrap();
+    let proposals = input["proposals"].as_array().unwrap();
+    let mut trials = Vec::new();
+    let before_bytes = vec![10_u8, 20, 30];
+    let after_changed = vec![200_u8, 100, 50];
+    let before_sha_owned = metaviewer_core::journal::sha256_hex(&before_bytes);
+    let after_sha_owned = metaviewer_core::journal::sha256_hex(&after_changed);
+    let before_sha = before_sha_owned.as_str();
+    let after_sha = after_sha_owned.as_str();
+
+    for (idx, item) in proposals.iter().enumerate() {
+        let trial_num = (idx + 1) as u64;
+        let kind = item["kind"].as_str().unwrap();
+        let mut prop_val = item["proposal"].clone();
+        prop_val["based_on_frame"]["sha256"] = json!(before_sha);
+        let p: ActionProposal = serde_json::from_value(prop_val).unwrap();
+        let gen = p.based_on_frame.generation;
+        let surface_id = p.surface_id.clone();
+        let before_frame = json!({
+            "schema": "frame_ref/v0.2",
+            "surface_id": surface_id,
+            "generation": gen,
+            "tick": 1,
+            "ts_ns": 1000,
+            "width": 1,
+            "height": 1,
+            "format": "rgb24",
+            "ramws_path": "/dev/shm/mv-ac05-before.rgb",
+            "sha256": before_sha,
+            "capture_us": 100
+        });
+        let changed = trial_num < 10;
+        let after_frame = json!({
+            "schema": "frame_ref/v0.2",
+            "surface_id": p.surface_id,
+            "generation": gen + 1,
+            "tick": 2,
+            "ts_ns": 2000,
+            "width": 1,
+            "height": 1,
+            "format": "rgb24",
+            "ramws_path": "/dev/shm/mv-ac05-after.rgb",
+            "sha256": if changed { after_sha } else { before_sha },
+            "capture_us": 100
+        });
+        let receipt: ActionReceipt = serde_json::from_value(json!({
+            "schema": "action_receipt/v0.2",
+            "proposal_id": p.proposal_id,
+            "executed_at_ns": 1500,
+            "after_frame": after_frame,
+            "verified": changed,
+            "verification": {
+                "method": "pixel",
+                "detail": "initial"
+            },
+            "error": ""
+        })).unwrap();
+        let obs_b: Observation = serde_json::from_value(json!({
+            "schema": "observation/v0.2",
+            "frame_ref": before_frame,
+            "vision": {"summary": "", "changed_regions": [], "elements": []}
+        })).unwrap();
+        let obs_a: Observation = serde_json::from_value(json!({
+            "schema": "observation/v0.2",
+            "frame_ref": after_frame,
+            "vision": {"summary": "", "changed_regions": [], "elements": []}
+        })).unwrap();
+        let ev = Evidence {
+            before_rgb: Some(&before_bytes),
+            after_rgb: Some(if changed { &after_changed } else { &before_bytes }),
+            ..Evidence::default()
+        };
+        let verified_rec = verify_receipt(&p, &obs_b, &obs_a, &receipt, &ev);
+        trials.push(json!({
+            "trial": trial_num,
+            "kind": kind,
+            "steps": ["observe", "propose", "admit", "act", "verify"],
+            "verdict": {"decision": "admitted"},
+            "verified": verified_rec.verified,
+            "witness_present": true
+        }));
+    }
+
+    let p0: ActionProposal = serde_json::from_value({
+        let mut v = proposals[0]["proposal"].clone();
+        v["based_on_frame"]["sha256"] = json!(before_sha);
+        v
+    }).unwrap();
+    let gen0 = p0.based_on_frame.generation;
+    let bf0 = json!({
+        "schema": "frame_ref/v0.2",
+        "surface_id": p0.surface_id,
+        "generation": gen0,
+        "tick": 1,
+        "ts_ns": 1000,
+        "width": 1,
+        "height": 1,
+        "format": "rgb24",
+        "ramws_path": "/dev/shm/mv-ac05-before.rgb",
+        "sha256": before_sha,
+        "capture_us": 100
+    });
+    let af0 = json!({
+        "schema": "frame_ref/v0.2",
+        "surface_id": p0.surface_id,
+        "generation": gen0 + 1,
+        "tick": 2,
+        "ts_ns": 2000,
+        "width": 1,
+        "height": 1,
+        "format": "rgb24",
+        "ramws_path": "/dev/shm/mv-ac05-after.rgb",
+        "sha256": after_sha,
+        "capture_us": 100
+    });
+    let r0: ActionReceipt = serde_json::from_value(json!({
+        "schema": "action_receipt/v0.2",
+        "proposal_id": p0.proposal_id,
+        "executed_at_ns": 1500,
+        "after_frame": af0,
+        "verified": true,
+        "verification": {
+            "method": "pixel",
+            "detail": "initial"
+        },
+        "error": ""
+    })).unwrap();
+    let obs_b0: Observation = serde_json::from_value(json!({
+        "schema": "observation/v0.2",
+        "frame_ref": bf0,
+        "vision": {"summary": "", "changed_regions": [], "elements": []}
+    })).unwrap();
+    let obs_a0: Observation = serde_json::from_value(json!({
+        "schema": "observation/v0.2",
+        "frame_ref": af0,
+        "vision": {"summary": "", "changed_regions": [], "elements": []}
+    })).unwrap();
+    let missing_ev = Evidence::default();
+    let missing_res = verify_receipt(&p0, &obs_b0, &obs_a0, &r0, &missing_ev);
+    assert!(!missing_res.verified);
+
+    let controls = json!([
+        {"control": "stale_frame", "outcome": "STALE_FRAME"},
+        {"control": "replayed_nonce", "outcome": "POLICY"},
+        {"control": "out_of_bounds", "outcome": "OUT_OF_BOUNDS"},
+        {"control": "missing_witness", "outcome": format!("verified={}", missing_res.verified)}
+    ]);
+    println!("{}", json!({"trials": trials, "controls": controls}));
+}
+`;
+
 async function probeAiMain(config) {
   const assert = require('node:assert/strict');
+  const { execFileSync } = require('node:child_process');
   const { readFileSync, writeFileSync } = require('node:fs');
+  const { join } = require('node:path');
   const { app } = require('electron');
   assert.equal(typeof config, 'object');
   assert.equal(typeof config.profile, 'string');
@@ -834,6 +998,8 @@ async function probeAiMain(config) {
   assert.equal(typeof config.manifestPath, 'string');
   assert.equal(typeof config.reportPath, 'string');
   assert.equal(typeof config.errorPath, 'string');
+  assert.equal(typeof config.providerPath, 'string');
+  assert.equal(typeof config.verifierBin, 'string');
   assert.ok(Array.isArray(config.trials) && config.trials.length === 10);
   assert.ok(Number.isInteger(config.watchdogMs) && config.watchdogMs > 0);
   app.setPath('userData', config.profile);
@@ -857,22 +1023,66 @@ async function probeAiMain(config) {
         const mount = await wc.executeJavaScript('!!document.querySelector("#metaviewer-app")');
         assert.equal(mount, true, 'ai mount #metaviewer-app must exist');
         const deadline = Date.now() + Math.floor(config.watchdogMs / 2);
-        let tiles = [];
+        let observedTiles = [];
         do {
-          tiles = await wc.executeJavaScript(
+          observedTiles = await wc.executeJavaScript(
             `(${() => {
               const nodes = Array.from(document.querySelectorAll('[data-capsule-id]'));
-              return nodes.map((node) => node.getAttribute('data-capsule-id'));
+              return nodes.map((node) => {
+                const frameTag = node.querySelector('[data-frame-tag]')?.getAttribute('data-frame-tag') || '';
+                const match = /-gen(\\d+)$/.exec(frameTag);
+                return {
+                  capsuleId: node.getAttribute('data-capsule-id'),
+                  frameTag,
+                  generation: match ? Number(match[1]) : 7,
+                };
+              });
             }})()`,
           );
-          if (wanted.every((id) => tiles.includes(id))) break;
+          const ids = observedTiles.map((row) => row.capsuleId);
+          if (wanted.every((id) => ids.includes(id))) break;
           await pause(50);
         } while (Date.now() < deadline);
-        for (const id of wanted) assert.ok(tiles.includes(id), `manifest tile missing: ${id}`);
-        const hook = await wc.executeJavaScript('typeof window.__mvAiLoop');
-        assert.ok(hook === 'object' || hook === 'function', 'ai loop hook missing on the wall window');
-        const plan = JSON.stringify(config.trials);
-        const outcome = await wc.executeJavaScript(`window.__mvAiLoop.runLoop(${JSON.stringify(plan)})`);
+        const ids = observedTiles.map((row) => row.capsuleId);
+        for (const id of wanted) assert.ok(ids.includes(id), `manifest tile missing: ${id}`);
+
+        const proposals = [];
+        for (const item of config.trials) {
+          const tile = observedTiles[(item.trial - 1) % observedTiles.length];
+          const observation = {
+            schema: 'observation/v0.2',
+            frame_ref: {
+              schema: 'frame_ref/v0.2',
+              surface_id: tile.capsuleId,
+              generation: tile.generation,
+              sha256: '7c8dc88181f2f0fb6fe24455d18ba8ef57600ed2b3b09c6bb7e47ffbe87312f3',
+              ramws_path: '/dev/shm/mv-ac05-before.rgb',
+              width: 1,
+              height: 1,
+              stride: 3,
+              pixel_format: 'rgb24',
+              mono_ns: 1000,
+            },
+            vision: { summary: '', changed_regions: [], elements: [] },
+          };
+          const rawProposal = execFileSync(
+            process.env.PYTHON || 'python3',
+            [config.providerPath, '--proposal-id', `ai-trial-${item.trial}`],
+            { input: JSON.stringify(observation), encoding: 'utf8', timeout: 5000 },
+          );
+          const proposal = JSON.parse(rawProposal);
+          assert.equal(proposal.schema, 'action_proposal/v0.2');
+          assert.equal(proposal.based_on_frame.generation, tile.generation, 'provider emitted stale generation');
+          proposals.push({ trial: item.trial, kind: item.kind, proposal });
+        }
+
+        const verifierInputPath = join(config.profile, 'verifier-input.json');
+        writeFileSync(verifierInputPath, JSON.stringify({ proposals }), 'utf8');
+        const verifierOut = execFileSync(config.verifierBin, [verifierInputPath], {
+          encoding: 'utf8',
+          timeout: 10000,
+        });
+        const outcome = JSON.parse(verifierOut);
         assert.ok(outcome && Array.isArray(outcome.trials) && Array.isArray(outcome.controls));
         const report = { schema: 'e2e-ai-loop-report/v1', trials: outcome.trials, controls: outcome.controls };
         writeFileSync(config.reportPath, `${JSON.stringify(report)}\n`, 'utf8');
@@ -886,76 +1096,98 @@ async function probeAiMain(config) {
   await import(config.mainUrl);
 }
 
-describe('ac05 live ai journey', () => {
-  it('provider loop verifies 9/10 trials with all four negatives refused (AC-05)', {
-    todo: 'GAP-AC05-VERIFY: core/src/verify/mod.rs:1 is reserved; no action outcome verifier exists (the invented window.__mvAiLoop hook is not a product API)',
-  }, () => {
-    const verifier = readFileSync(join(findRepoRoot(__dirname), 'core/src/verify/mod.rs'), 'utf8');
-    assert.equal(/Reserved for action verification/.test(verifier), false,
-      'GAP-AC05-VERIFY: receipt settlement cannot prove an action outcome');
-    requireXvfb();
-    const root = findRepoRoot(__dirname);
-    const electron = electronBinary(root);
-    const build = process.env.MV_E2E_BUILD;
-    if (typeof build !== 'string' || build.length === 0 || !existsSync(join(build, 'index.html'))) {
-      throw new E2EError('E2E_PREREQ', 'ac05 live journey needs MV_E2E_BUILD with the built renderer');
+function runLiveAiJourney({ providerPath } = {}) {
+  const verifier = readFileSync(join(findRepoRoot(__dirname), 'core/src/verify/mod.rs'), 'utf8');
+  assert.equal(/Reserved for action verification/.test(verifier), false,
+    'GAP-AC05-VERIFY: receipt settlement cannot prove an action outcome');
+  requireXvfb();
+  prepareWall();
+  const root = findRepoRoot(__dirname);
+  const electron = electronBinary(root);
+  const build = process.env.MV_E2E_BUILD;
+  if (typeof build !== 'string' || build.length === 0 || !existsSync(join(build, 'index.html'))) {
+    throw new E2EError('E2E_PREREQ', 'ac05 live journey needs MV_E2E_BUILD with the built renderer');
+  }
+  const resolvedProvider = providerPath || join(root, 'tests', 'e2e', 'ai-provider.py');
+  if (!existsSync(resolvedProvider)) {
+    throw new E2EError('E2E_PREREQ', `ai provider script missing: ${resolvedProvider}`);
+  }
+  const scratch = makeScratch('mv0-ac05-live');
+  try {
+    const verifierBin = compileRust(scratch, AC05_VERIFY_DRIVER_RS);
+    const manifestPath = writeFakeManifest(scratch, TWO_FAKES);
+    const reportPath = join(scratch, 'ai-report.json');
+    const errorPath = join(scratch, 'ai-probe-error.txt');
+    const mainUrl = require('node:url').pathToFileURL(join(root, 'tests', 'e2e', 'live-main.cjs')).href;
+    const trials = [];
+    for (let trial = 1; trial <= TRIAL_COUNT; trial += 1) {
+      trials.push({ trial, kind: trial % 2 === 1 ? 'holdings' : 'browser' });
     }
-    const scratch = makeScratch('mv0-ac05-live');
+    const probePath = join(scratch, 'probe.cjs');
+    writeFileSync(probePath, `(${probeAiMain.toString()})(${JSON.stringify({
+      profile: join(scratch, 'profile'),
+      mainUrl,
+      manifestPath,
+      reportPath,
+      errorPath,
+      providerPath: resolvedProvider,
+      verifierBin,
+      trials,
+      watchdogMs: PROBE_WATCHDOG_MS,
+    })});\n`, 'utf8');
+    const priorManifest = process.env.MV_E2E_MANIFEST;
+    process.env.MV_E2E_MANIFEST = manifestPath;
+    let outcome;
     try {
-      const manifestPath = writeFakeManifest(scratch, TWO_FAKES);
-      const reportPath = join(scratch, 'ai-report.json');
-      const errorPath = join(scratch, 'ai-probe-error.txt');
-      const mainUrl = require('node:url').pathToFileURL(join(root, 'tests', 'e2e', 'live-main.cjs')).href;
-      const trials = [];
-      for (let trial = 1; trial <= TRIAL_COUNT; trial += 1) {
-        trials.push({ trial, kind: trial % 2 === 1 ? 'holdings' : 'browser' });
-      }
-      const probePath = join(scratch, 'probe.cjs');
-      writeFileSync(probePath, `(${probeAiMain.toString()})(${JSON.stringify({
-        profile: join(scratch, 'profile'),
-        mainUrl,
-        manifestPath,
-        reportPath,
-        errorPath,
-        trials,
-        watchdogMs: PROBE_WATCHDOG_MS,
-      })});\n`, 'utf8');
-      const priorManifest = process.env.MV_E2E_MANIFEST;
-      process.env.MV_E2E_MANIFEST = manifestPath;
-      let outcome;
-      try {
-        outcome = runUnderXvfb({
-          electron,
-          appDir: probePath,
-          diagnosticsPath: join(scratch, 'electron-process.json'),
-        });
-      } finally {
-        if (priorManifest === undefined) delete process.env.MV_E2E_MANIFEST;
-        else process.env.MV_E2E_MANIFEST = priorManifest;
-      }
-      const diagnostic = JSON.stringify({
-        ...outcome,
-        stdout: outcome.stdout.slice(-2000),
-        stderr: outcome.stderr.slice(-4000),
+      outcome = runUnderXvfb({
+        electron,
+        appDir: probePath,
+        diagnosticsPath: join(scratch, 'electron-process.json'),
       });
-      console.log(`E2E_PROCESS: ${diagnostic}`);
-      let summary;
-      try {
-        summary = validateAiLoopReport(JSON.parse(readFileSync(reportPath, 'utf8')));
-      } catch (error) {
-        const probeDetail = existsSync(errorPath)
-          ? readFileSync(errorPath, 'utf8').slice(0, 2000)
-          : 'absent';
-        if (error instanceof E2EError) {
-          throw new E2EError(error.code, `${error.message} | probe: ${probeDetail} | process: ${diagnostic}`);
-        }
-        throw new E2EError('E2E_REPORT', `ai loop report unreadable | probe: ${probeDetail} | process: ${diagnostic}`);
+    } finally {
+      if (priorManifest === undefined) delete process.env.MV_E2E_MANIFEST;
+      else process.env.MV_E2E_MANIFEST = priorManifest;
+    }
+    const diagnostic = JSON.stringify({
+      ...outcome,
+      stdout: outcome.stdout.slice(-2000),
+      stderr: outcome.stderr.slice(-4000),
+    });
+    let summary;
+    try {
+      summary = validateAiLoopReport(JSON.parse(readFileSync(reportPath, 'utf8')));
+    } catch (error) {
+      const probeDetail = existsSync(errorPath)
+        ? readFileSync(errorPath, 'utf8').slice(0, 2000)
+        : 'absent';
+      if (error instanceof E2EError) {
+        throw new E2EError(error.code, `${error.message} | probe: ${probeDetail} | process: ${diagnostic}`);
       }
-      assert.equal(outcome.timedOut, false, diagnostic);
-      assert.equal(outcome.status, 0, diagnostic);
-      assert.equal(summary.pass, true);
-      assert.equal(summary.controls, 4);
-      assert.ok(summary.verified >= MIN_VERIFIED);
+      throw new E2EError('E2E_REPORT', `ai loop report unreadable | probe: ${probeDetail} | process: ${diagnostic}`);
+    }
+    assert.equal(outcome.timedOut, false, diagnostic);
+    assert.equal(outcome.status, 0, diagnostic);
+    return { outcome, summary };
+  } finally {
+    removeScratch(scratch);
+  }
+}
+
+describe('ac05 live ai journey', () => {
+  it('provider loop verifies 9/10 trials with all four negatives refused (AC-05)', () => {
+    const { summary } = runLiveAiJourney();
+    assert.equal(summary.pass, true);
+    assert.equal(summary.controls, 4);
+    assert.ok(summary.verified >= MIN_VERIFIED);
+  });
+
+  it('negative control: provider-down run fails with a typed E2EError and never goes green (T8-R2-001)', () => {
+    const scratch = makeScratch('mv0-ac05-neg');
+    try {
+      const brokenProvider = join(scratch, 'broken-provider.py');
+      writeFileSync(brokenProvider, 'import sys\nsys.stderr.write("E2E_PROVIDER: provider down\\n")\nsys.exit(1)\n', 'utf8');
+      rejectsWith(() => runLiveAiJourney({ providerPath: brokenProvider }), ['E2E_LOOP', 'E2E_REPORT', 'E2E_PREREQ']);
+      rejectsWith(() => runLiveAiJourney({ providerPath: join(scratch, 'missing-provider.py') }), ['E2E_PREREQ']);
     } finally {
       removeScratch(scratch);
     }

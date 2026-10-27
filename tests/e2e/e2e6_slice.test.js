@@ -16,11 +16,28 @@ const ROOT = resolve(__dirname, '../..');
 function requireSlice(env) {
   if (env.MV_E2E_LIVE !== '1') throw new E2EError('E2E_GATE', 'slice requires MV_E2E_LIVE=1');
 }
-function processBridge(binary, args, env) {
-  const child = spawn(binary, args, { env, stdio: ['pipe', 'pipe', 'pipe'] });
+function canonicalJson(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return '[' + value.map(canonicalJson).join(',') + ']';
+  const keys = Object.keys(value).sort();
+  return '{' + keys.map((k) => JSON.stringify(k) + ':' + canonicalJson(value[k])).join(',') + '}';
+}
+function directStateDigest(state) {
+  return createHash('sha256').update(canonicalJson(state)).digest('hex');
+}
+function assertCorruptReplayRejected(scratch, journal, root) {
+  const raw = fs.readFileSync(journal, 'utf8');
+  const flipped = raw.replace('"core_seq":1', '"core_seq":9');
+  assert.notEqual(flipped, raw, 'corrupt journal mutation must change at least one byte');
+  const corruptJournal = join(scratch, 'journal.corrupt.jsonl');
+  fs.writeFileSync(corruptJournal, flipped);
+  assert.throws(() => replay(corruptJournal, root), /E2E_REPLAY/);
+}
+function processBridge(binary, args, env, existingChild = null) {
+  const child = existingChild || spawn(binary, args, { env, stdio: ['pipe', 'pipe', 'pipe'] });
   let errors = '';
-  child.stderr.on('data', (chunk) => { errors += chunk; });
-  const lines = createInterface({ input: child.stdout })[Symbol.asyncIterator]();
+  if (child.stderr) child.stderr.on('data', (chunk) => { errors += chunk; });
+  const lines = child.stdout ? createInterface({ input: child.stdout })[Symbol.asyncIterator]() : null;
   return {
     child,
     async call(value) {
@@ -34,11 +51,28 @@ function processBridge(binary, args, env) {
         return JSON.parse(line.value);
       } finally { clearTimeout(timer); }
     },
-    async close() {
+    async close(waitMs = 2000) {
       if (child.exitCode !== null || child.signalCode !== null) return;
-      const exit = once(child, 'exit');
+      const waitForExit = (budgetMs) => new Promise((resolveExit) => {
+        if (child.exitCode !== null || child.signalCode !== null) {
+          resolveExit(true);
+          return;
+        }
+        const onExit = () => {
+          clearTimeout(timer);
+          resolveExit(true);
+        };
+        const timer = setTimeout(() => {
+          child.removeListener('exit', onExit);
+          resolveExit(false);
+        }, budgetMs);
+        child.once('exit', onExit);
+      });
       child.kill('SIGTERM');
-      await exit;
+      if (await waitForExit(waitMs)) return;
+      child.kill('SIGKILL');
+      if (await waitForExit(waitMs)) return;
+      throw new E2EError('E2E_KILL', 'pid survived SIGKILL within budget');
     },
   };
 }
@@ -63,6 +97,50 @@ function route(frame, surfaceId) {
 }
 test('slice refuses missing live flag without a skip', () => {
   assert.throws(() => requireSlice({}), { code: 'E2E_GATE' });
+});
+test('processBridge.close escalates from SIGTERM to SIGKILL and fails closed if child survives (T8-R2-010)', async () => {
+  const bridge = processBridge(
+    process.execPath,
+    ['-e', 'process.on("SIGTERM", () => {}); console.log("READY"); setInterval(() => {}, 1000);'],
+    process.env
+  );
+  await new Promise((resolveReady, rejectReady) => {
+    bridge.child.stdout.once('data', () => resolveReady());
+    bridge.child.once('error', rejectReady);
+  });
+  const start = Date.now();
+  await bridge.close(150);
+  const elapsed = Date.now() - start;
+  assert.ok(elapsed < 2000, `close() took too long: ${elapsed}ms`);
+  assert.equal(bridge.child.signalCode, 'SIGKILL');
+
+  const { EventEmitter } = require('node:events');
+  const stubborn = Object.assign(new EventEmitter(), {
+    exitCode: null,
+    signalCode: null,
+    kill() { return true; },
+  });
+  const badBridge = processBridge(null, [], process.env, stubborn);
+  await assert.rejects(() => badBridge.close(30), { code: 'E2E_KILL' });
+});
+test('hosted slice runs scenario twice across fresh roots and rejects corrupt replay (T8-R2-007, T8-R2-008)', () => {
+  const { hosted } = require('./e2e1_slice/index.js');
+  const scratch = makeScratch('mv-007-008-');
+  try {
+    const res = hosted(scratch);
+    assert.equal(res.mode, 'hosted-core-only');
+    assert.equal(res.digest, directStateDigest(res.state));
+    const rootA = join(scratch, 'run-a/sessions/session-1');
+    const rootB = join(scratch, 'run-b/sessions/session-1');
+    const journalA = join(rootA, 'journal.jsonl');
+    const journalB = join(rootB, 'journal.jsonl');
+    assert.equal(fs.readFileSync(journalA, 'utf8'), fs.readFileSync(journalB, 'utf8'));
+    assert.equal(replay(journalA, rootA).trim(), res.digest);
+    assert.equal(replay(journalB, rootB).trim(), res.digest);
+    assertCorruptReplayRejected(scratch, journalA, rootA);
+  } finally {
+    removeScratch(scratch);
+  }
 });
 test('adapter capsule -> gen7 canvas -> agent action -> stale refusal -> control/drain -> replay', async () => {
   requireSlice(process.env);
@@ -148,8 +226,10 @@ Path(sys.argv[1]).write_bytes(b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>I
     assert.deepEqual(end.state.pending, {});
     const root = join(scratch, 'authority/sessions/slice-session');
     const journal = join(root, 'journal.jsonl');
-    assert.equal(replay(journal, root), replay(journal, root));
+    const directDigest = directStateDigest(end.state);
+    assert.equal(replay(journal, root).trim(), directDigest);
     assert.equal(replay(journal, root, true), '');
+    assertCorruptReplayRejected(scratch, journal, root);
   } finally {
     for (const bridge of bridges.reverse()) await bridge.close();
     removeScratch(scratch); fs.rmSync(ram, { recursive: true, force: true });

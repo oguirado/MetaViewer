@@ -26,8 +26,10 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   readdirSync,
+  rmSync,
   statSync,
   writeFileSync,
 } = require('node:fs');
@@ -41,6 +43,7 @@ const {
   removeScratch,
   requireXvfb,
 } = require('./ac-harness.cjs');
+const { runRust } = require('./core-driver.js');
 
 /** Env flag arming the live journey; anything else refuses the run. */
 /** Env override for the live soak window; unset means the roadmap default. */
@@ -923,13 +926,149 @@ describe('ac07 ram-first contract', () => {
   });
 });
 
+const AC07_RECORD_DRIVER_RS = `
+#![forbid(unsafe_code)]
+use metaviewer_core::journal::sha256_hex;
+use metaviewer_core::record::capture::Host;
+use metaviewer_core::record::{Coordinator, Error, JournalSink};
+use metaviewer_core::wire::payload::{FrameRef, RecordEvent, RecordRequest, SessionRecord, Settings};
+use serde_json::{json, Value};
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::PathBuf;
+
+#[derive(Default)]
+struct Sink(Vec<Value>);
+impl JournalSink for Sink {
+    fn append(&mut self, record: &SessionRecord, events: &[RecordEvent]) -> Result<(), Error> {
+        self.0.push(json!({"record": record, "events": events}));
+        Ok(())
+    }
+}
+
+fn main() {
+    let state_dir = PathBuf::from(std::env::args().nth(1).unwrap());
+    let cfg: Value = serde_json::from_slice(&fs::read(state_dir.join("config.json")).unwrap()).unwrap();
+    let ram_dir = PathBuf::from(cfg["ram_dir"].as_str().unwrap());
+    let dest_dir = PathBuf::from(cfg["dest_dir"].as_str().unwrap());
+
+    let mut surfaces = BTreeSet::new();
+    surfaces.insert("live-surface-1".to_string());
+
+    let settings_no_dest: Settings = serde_json::from_value(json!({
+        "schema": "settings/v0.2",
+        "theme": "metaviewer-dark",
+        "providers": [],
+        "recording_destination": null,
+        "limits": {
+            "memory_bytes": 67108864,
+            "ring_bytes": 8388608,
+            "max_fps": 30
+        }
+    })).unwrap();
+    let mut coord = Coordinator::new(&settings_no_dest, surfaces.clone()).unwrap();
+    let mut sink = Sink::default();
+    assert!(serde_json::from_value::<RecordRequest>(json!({
+        "schema": "record_request/v0.2",
+        "request_id": "req-disk-missing-fields",
+        "op": "disk_start",
+        "params": {
+            "surface_id": "live-surface-1",
+            "recording_id": "rec-disk-no-dest",
+            "max_fps": 30
+        }
+    })).is_err());
+
+    let disk_req: RecordRequest = serde_json::from_value(json!({
+        "schema": "record_request/v0.2",
+        "request_id": "req-disk-no-dest",
+        "op": "disk_start",
+        "params": {
+            "surface_id": "live-surface-1",
+            "recording_id": "rec-disk-no-dest",
+            "destination_capability_id": "unconfigured-cap",
+            "destination_path": "/tmp/unconfigured-dest",
+            "max_fps": 30
+        }
+    })).unwrap();
+    let refused_events = coord.handle(&disk_req, 1000, &mut sink).unwrap();
+    let refused_val = serde_json::to_value(&refused_events[0]).unwrap();
+    assert_eq!(refused_val["event"], "refused");
+    assert_eq!(refused_val["reason_code"], "POLICY");
+    assert_eq!(refused_val["detail"], "host destination is not authorized");
+    assert!(coord.recording("rec-disk-no-dest").is_none());
+
+    let rgb = vec![12_u8, 34, 56, 78, 90, 123];
+    let frame_path = ram_dir.join("ring-1.rgb");
+    fs::write(&frame_path, &rgb).unwrap();
+    let frame_sha = sha256_hex(&rgb);
+    let frame_ref: FrameRef = serde_json::from_value(json!({
+        "schema": "frame_ref/v0.2",
+        "surface_id": "live-surface-1",
+        "generation": 1,
+        "tick": 1,
+        "ts_ns": 1000,
+        "width": 2,
+        "height": 1,
+        "format": "rgb24",
+        "ramws_path": frame_path.to_str().unwrap(),
+        "sha256": frame_sha,
+        "capture_us": 50
+    })).unwrap();
+
+    let mut host = Host::with_serial(0);
+    host.frame(&frame_ref, rgb.clone(), 10).unwrap();
+    let (host, start_reply, _) = host.prepare(
+        "recordStart",
+        &json!({"request_id": "req-ram-1", "surface_id": "live-surface-1", "_host_id": "ring-1"}),
+        surfaces.clone(),
+        20,
+    ).unwrap();
+    assert_eq!(start_reply["ok"], true);
+
+    let (host, shot_reply, _) = host.prepare(
+        "screenshot",
+        &json!({"request_id": "req-shot-1", "surface_id": "live-surface-1", "_host_id": "shot-1"}),
+        surfaces.clone(),
+        25,
+    ).unwrap();
+    assert_eq!(shot_reply["ok"], true);
+    let shot_path = ram_dir.join("shot-1.rgb");
+    fs::write(&shot_path, &rgb).unwrap();
+
+    let (host, stop_reply, _) = host.prepare(
+        "recordStop",
+        &json!({"request_id": "req-stop-1", "recording_id": "ring-1"}),
+        surfaces,
+        40,
+    ).unwrap();
+    assert_eq!(stop_reply["ok"], true);
+    assert_eq!(stop_reply["recording"]["sealed"], true);
+
+    let plan = host.export_plan("ring-1").unwrap();
+    let pub_tx = plan.publish_transaction(&dest_dir, 1).unwrap();
+    pub_tx.commit();
+    let exported_name = format!("ring-1-{}.tar", plan.receipt["sha256"].as_str().unwrap());
+    let exported_path = dest_dir.join(exported_name);
+    let exported_bytes = fs::metadata(&exported_path).unwrap().len();
+
+    println!("{}", json!({
+        "refused_reason": refused_val["reason_code"],
+        "ram_recording_path": frame_path.to_str().unwrap(),
+        "ram_recording_bytes": rgb.len(),
+        "screenshot_path": shot_path.to_str().unwrap(),
+        "screenshot_bytes": rgb.len(),
+        "disk_export_path": exported_path.to_str().unwrap(),
+        "disk_export_bytes": exported_bytes
+    }));
+}
+`;
+
 describe('ac07 live ram-first journey', () => {
-  it('record-for-AI stays in RAM; disk without destination refused (AC-07)', {
-    todo: 'GAP-AC07-RECORD: core/src/record/mod.rs:1 is reserved; daemon-adapter/internal/capsule/manager.go:212-213 refuses record_start/record_stop',
-  }, () => {
-    requireRecordSurface(join(findRepoRoot(__dirname), 'core/src/record/mod.rs'));
-    requireXvfb();
+  it('record-for-AI stays in RAM; disk without destination refused (AC-07)', () => {
     const root = findRepoRoot(__dirname);
+    requireRecordSurface(join(root, 'core/src/record/mod.rs'));
+    requireXvfb();
     const electron = electronBinary(root);
     assert.ok(electron.length > 0, 'electron binary must resolve');
     // The must-FAIL control executes live too: a disk request without
@@ -940,14 +1079,70 @@ describe('ac07 live ram-first journey', () => {
       op: 'disk_start',
       params: { surface_id: 'live-surface-1', recording_id: 'live-disk-1', max_fps: 30 },
     }), ['E2E_DESTINATION']);
-    // Fail closed until the recording unit lands. Past this gate the
-    // soak snapshots the home and repo trees, drives ram_start,
-    // screenshot, refused disk_start and permitted disk_start through
-    // the product, and validates the audit with validateStorageAudit
-    // plus diffSnapshots asserting zero dirty bytes.
-    requireRecordSurface(join(root, 'core', 'src', 'record', 'mod.rs'));
-    // A landed surface without a live driver in this suite must not
-    // go green; wiring the driver removes this second gate.
-    throw new E2EError('E2E_PREREQ', 'live record driver unwired in this suite');
+
+    const scratch = makeScratch('mv0-ac07-live');
+    const ramDir = mkdtempSync(join(RAM_ROOT, 'mv0-ac07-'));
+    try {
+      const homeDir = join(scratch, 'home');
+      const repoDir = join(scratch, 'repo');
+      const destDir = join(scratch, 'dest');
+      const stateDir = join(scratch, 'state_dir');
+      mkdirSync(homeDir, { recursive: true });
+      mkdirSync(repoDir, { recursive: true });
+      mkdirSync(destDir, { recursive: true });
+      mkdirSync(stateDir, { recursive: true });
+      writeFileSync(join(homeDir, 'profile.json'), '{"user":"e2e"}\n', 'utf8');
+      writeFileSync(join(repoDir, 'tracked.txt'), 'clean\n', 'utf8');
+      writeFileSync(join(stateDir, 'config.json'), JSON.stringify({
+        ram_dir: ramDir,
+        dest_dir: destDir,
+      }), 'utf8');
+
+      const beforeHome = snapshotDir(homeDir);
+      const beforeRepo = snapshotDir(repoDir);
+
+      const out = JSON.parse(runRust(scratch, AC07_RECORD_DRIVER_RS).trim());
+      assert.equal(out.refused_reason, 'POLICY');
+
+      const afterHome = snapshotDir(homeDir);
+      const afterRepo = snapshotDir(repoDir);
+      const homeDiff = diffSnapshots(beforeHome.files, afterHome.files);
+      const repoDiff = diffSnapshots(beforeRepo.files, afterRepo.files);
+      assert.deepStrictEqual(homeDiff, { dirty_bytes: 0, changed_paths: [] });
+      assert.deepStrictEqual(repoDiff, { dirty_bytes: 0, changed_paths: [] });
+
+      const ramAuditPath = join(scratch, 'ram-audit.json');
+      writeFileSync(ramAuditPath, JSON.stringify({
+        schema: AUDIT_SCHEMA,
+        phase: AUDIT_PHASE,
+        destination: null,
+        artifacts: [
+          { artifact_id: 'ring-1', kind: 'ram_recording', path: out.ram_recording_path, bytes: out.ram_recording_bytes },
+          { artifact_id: 'shot-1', kind: 'screenshot', path: out.screenshot_path, bytes: out.screenshot_bytes },
+        ],
+        home_dirty_bytes: homeDiff.dirty_bytes,
+        repo_dirty_bytes: repoDiff.dirty_bytes,
+      }) + '\n', 'utf8');
+      const ramSummary = readAuditReport(ramAuditPath);
+      assert.equal(ramSummary.ramBytes, out.ram_recording_bytes + out.screenshot_bytes);
+      assert.equal(ramSummary.diskBytes, 0);
+
+      const diskSummary = validateStorageAudit({
+        schema: AUDIT_SCHEMA,
+        phase: AUDIT_PHASE,
+        destination: destDir,
+        artifacts: [
+          { artifact_id: 'ring-1', kind: 'ram_recording', path: out.ram_recording_path, bytes: out.ram_recording_bytes },
+          { artifact_id: 'disk-1', kind: 'disk_export', path: out.disk_export_path, bytes: out.disk_export_bytes },
+        ],
+        home_dirty_bytes: homeDiff.dirty_bytes,
+        repo_dirty_bytes: repoDiff.dirty_bytes,
+      });
+      assert.equal(diskSummary.diskBytes, out.disk_export_bytes);
+      assert.ok(diskSummary.diskBytes > 0);
+    } finally {
+      rmSync(ramDir, { recursive: true, force: true });
+      removeScratch(scratch);
+    }
   });
 });

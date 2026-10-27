@@ -905,7 +905,57 @@ describe('ac06 live multislot journey (Layer 2)', () => {
       'GAP-AC06-LAYOUT: core has no authoritative layout intent dispatch');
     requireXvfb();
     const root = findRepoRoot(__dirname);
-    electronBinary(root);
-    requireMultislotLiveEntry(root);
+    const { prepareWall, runUnderXvfb } = require('./ac-harness.cjs');
+    prepareWall();
+    const electron = electronBinary(root);
+    const liveEntry = requireMultislotLiveEntry(root);
+    const scratch = makeScratch('mv0-ac06-live');
+    const prevManifest = process.env.MV_E2E_MANIFEST;
+    const prevReport = process.env.MV_E2E_MULTISLOT_REPORT;
+    const prevEvidence = process.env.MV_E2E_MULTISLOT_EVIDENCE;
+    try {
+      rejectsWith(() => requireMultislotLiveEntry(scratch), ['E2E_PREREQ']);
+      const manifestPath = join(scratch, 'manifest.json');
+      const reportPath = join(scratch, 'multislot-report.json');
+      const evidencePath = join(scratch, 'multislot-evidence.json');
+      writeFileSync(manifestPath, JSON.stringify({
+        capsules: [{ capsuleId: 'slot-e2e-a' }, { capsuleId: 'slot-e2e-b' }],
+      }) + '\n', 'utf8');
+      process.env.MV_E2E_MANIFEST = manifestPath;
+      process.env.MV_E2E_MULTISLOT_REPORT = reportPath;
+      process.env.MV_E2E_MULTISLOT_EVIDENCE = evidencePath;
+      const run = runUnderXvfb({
+        electron,
+        appDir: liveEntry,
+        extraArgs: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
+        timeoutMs: 25000,
+      });
+      assert.equal(run.status, 0, `live-multislot exited ${run.status}: ${run.stderr || run.stdout}`);
+      const report = readMultislotReport(reportPath);
+      assert.equal(report.slots.length, 2);
+      assert.deepEqual(report.errors, []);
+      const evidence = JSON.parse(readFileSync(evidencePath, 'utf8'));
+      const travel = checkPairingTravel(evidence.travelLog);
+      assert.equal(travel.capsuleId, 'slot-e2e-a');
+      assert.equal(travel.sessionId, 'term-slot-e2e-a:1');
+      assert.equal(travel.hops, LAYOUT_MUTATIONS.length);
+      const menu = validateProviderMenu(evidence.providerMenu);
+      assert.equal(menu.ids[0], 'shell');
+      const witness = validateCopyWitness(evidence.copyWitness);
+      assert.equal(witness.capsuleId, 'slot-e2e-a');
+      const gate = validateInputGateLog(evidence.inputGateLog);
+      assert.equal(gate.rows, 3);
+      const pty = checkPtyChunk(evidence.ptyChunk);
+      assert.equal(pty.session, 'term-slot-e2e-a:1');
+      assert.ok(pty.byteCount > 0);
+    } finally {
+      if (prevManifest === undefined) delete process.env.MV_E2E_MANIFEST;
+      else process.env.MV_E2E_MANIFEST = prevManifest;
+      if (prevReport === undefined) delete process.env.MV_E2E_MULTISLOT_REPORT;
+      else process.env.MV_E2E_MULTISLOT_REPORT = prevReport;
+      if (prevEvidence === undefined) delete process.env.MV_E2E_MULTISLOT_EVIDENCE;
+      else process.env.MV_E2E_MULTISLOT_EVIDENCE = prevEvidence;
+      removeScratch(scratch);
+    }
   });
 });

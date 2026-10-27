@@ -5,15 +5,24 @@ const { execFileSync, spawnSync } = require('node:child_process');
 const { writeFileSync } = require('node:fs');
 const { join, dirname } = require('node:path');
 const ROOT = join(__dirname, '../..');
-const env = { ...process.env };
+const ALLOWED_ENV_KEYS = Object.freeze(['PATH', 'CARGO', 'RUSTC', 'CARGO_TARGET_DIR']);
+const CARGO_BUILD_ARGS = Object.freeze([
+  'build', '--offline', '--locked', '--manifest-path', join(ROOT, 'Cargo.toml'), '--message-format=json'
+]);
+function buildEnv(source = process.env) {
+  const out = {};
+  for (const key of ALLOWED_ENV_KEYS) {
+    if (typeof source?.[key] === 'string' && source[key].length > 0) out[key] = source[key];
+  }
+  return out;
+}
 const cargo = process.env.CARGO || 'cargo';
 const rustc = process.env.RUSTC || 'rustc';
 let artifacts;
 function buildCore() {
   if (!artifacts) {
-    const output = execFileSync(cargo,
-      ['build', '--offline', '--manifest-path', join(ROOT, 'Cargo.toml'), '--message-format=json'],
-      { env, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
+    const output = execFileSync(cargo, CARGO_BUILD_ARGS,
+      { env: buildEnv(), encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
     artifacts = new Map();
     for (const line of output.trim().split('\n')) {
       const row = JSON.parse(line);
@@ -33,18 +42,18 @@ function compileRust(scratch, source) {
     if (!file) throw new Error(`E2E_PREREQ: Cargo artifact absent: ${name}`);
     args.push('--extern', `${name}=${file}`, '-L', `dependency=${dirname(file)}`);
   }
-  execFileSync(rustc, args, { env });
+  execFileSync(rustc, args, { env: buildEnv() });
   return binary;
 }
 function runRust(scratch, source) {
   return execFileSync(compileRust(scratch, source), [join(scratch, 'state_dir')],
-    { env, encoding: 'utf8', timeout: 30000 });
+    { env: buildEnv(), encoding: 'utf8', timeout: 30000 });
 }
 function replay(journal, root, verify = false) {
   const binary = buildCore().get('mv-replay')?.executable;
   if (!binary) throw new Error('E2E_PREREQ: mv-replay absent');
   const result = spawnSync(binary, ['--journal', journal, '--witness-root', root,
-    ...(verify ? ['--verify-only'] : [])], { env, encoding: 'utf8', timeout: 30000 });
+    ...(verify ? ['--verify-only'] : [])], { env: buildEnv(), encoding: 'utf8', timeout: 30000 });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`E2E_REPLAY: rc=${result.status}: ${result.stderr}`);
   if (verify && (result.stdout !== '' || result.stderr !== '')) {
@@ -52,4 +61,4 @@ function replay(journal, root, verify = false) {
   }
   return result.stdout;
 }
-module.exports = { runRust, compileRust, replay };
+module.exports = { runRust, compileRust, replay, buildEnv, CARGO_BUILD_ARGS };

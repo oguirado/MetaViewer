@@ -67,3 +67,15 @@ class VolumeBootstrap(unittest.TestCase):
         for token in ('-f', 'setup-node@', 'kit-checkout', 'npm ci', 'install_electron.cjs'):
             with self.subTest(token=token), self.assertRaisesRegex(RuntimeError, 'E2E_PREREQ'):
                 volume.check_workflow(job.replace(token, 'mutated'))
+
+    def test_workflow_guard_rejects_commented_or_step_name_markers(self):
+        volume.check_workflow((volume.ROOT / '.github/workflows/volume.yml').read_text())
+        for mutant in (
+            'jobs:\n  volume-e2e:\n    steps:\n      - run: echo noop\n'
+            '        # [ ! -f "$HARNESS" ] setup-node@ kit-checkout npm ci install_electron.cjs\n',
+            'jobs:\n  volume-e2e:\n    steps:\n'
+            '      - name: \'[ ! -f "$HARNESS" ] setup-node@ kit-checkout npm ci install_electron.cjs\'\n'
+            '        run: echo noop # [ ! -f "$HARNESS" ] setup-node@ kit-checkout npm ci install_electron.cjs\n',
+        ):
+            with self.assertRaisesRegex(RuntimeError, 'E2E_PREREQ'):
+                volume.check_workflow(mutant)
