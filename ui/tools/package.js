@@ -461,7 +461,7 @@ export async function packageShell(env = process.env) {
     const native = join(work,'native');
     await fs.mkdir(native);
     const cargo = env.CARGO || 'cargo';
-    const target = env.CARGO_TARGET_DIR;
+    const target = env.CARGO_TARGET_DIR || resolve(repo, 'target');
     if (!target || !isAbsolute(target)) throw new Error('PKG_CARGO_TARGET_REQUIRED');
     await execute(cargo,['build','--offline','--release','--bin','metaviewer-core'],{cwd:repo,env,maxBuffer:1024*1024});
     await fs.copyFile(join(target,'release/metaviewer-core'),join(native,'metaviewer-core'));
