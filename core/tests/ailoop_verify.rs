@@ -207,14 +207,32 @@ fn checked_bounds_and_stale_frames_fail_closed() {
 #[test]
 fn ram_file_integrity_and_path_negative_controls() {
     use metaviewer_core::verify::read_published_frame;
-    use std::os::unix::fs::symlink;
+    use std::io::Write;
+    use std::os::unix::fs::{symlink, OpenOptionsExt, PermissionsExt};
     let root = std::path::Path::new("/dev/shm").join(format!("mv-verify-{}", std::process::id()));
     std::fs::create_dir(&root).unwrap();
     let path = root.join("frame");
-    std::fs::write(&path, [1; 6]).unwrap();
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+        .unwrap();
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))
+        .unwrap();
+    file.write_all(&[1; 6]).unwrap();
     let (_, _, a, _) = fixture(pixel());
     let mut frame = a.frame_ref;
     frame.ramws_path = path.to_str().unwrap().into();
+    assert_eq!(read_published_frame(&frame).unwrap(), [1; 6]);
+    file.set_permissions(std::fs::Permissions::from_mode(0o640))
+        .unwrap();
+    assert_eq!(
+        read_published_frame(&frame).unwrap_err().kind(),
+        std::io::ErrorKind::InvalidData
+    );
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))
+        .unwrap();
     assert_eq!(read_published_frame(&frame).unwrap(), [1; 6]);
     let link = root.join("link");
     symlink(&path, &link).unwrap();

@@ -2,6 +2,8 @@
 //! [TARGET, unit decision] Call only after admission's epoch/lease receipt gate.
 //! Element state and lane predecessor are internal capture-owner witnesses;
 //! the frozen observation wire has no slots for them. Missing evidence refuses.
+//! [TARGET, unit decision] Published frames belong to the core effective UID
+//! and expose no group/other permissions throughout the read.
 #![forbid(unsafe_code)]
 
 use crate::journal::canonical_bytes;
@@ -12,6 +14,9 @@ use std::fs::{self, File};
 use std::io::{self, Read};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
+
+#[cfg(test)]
+mod ownership_tests;
 
 /// [TARGET, unit decision] Bound allocation before reading untrusted frame paths.
 pub const MAX_RGB_BYTES: u64 = 256 * 1024 * 1024;
@@ -61,6 +66,10 @@ fn valid_rgb(frame: &FrameRef, bytes: Option<&[u8]>) -> bool {
 /// The caller retains its generation lease until verification finishes.
 pub fn read_published_frame(frame: &FrameRef) -> io::Result<Vec<u8>> {
     let invalid = || io::Error::new(io::ErrorKind::InvalidData, "invalid frame witness");
+    let uid = crate::serve::effective_uid().map_err(|_| invalid())?;
+    let private_file = |metadata: &fs::Metadata| {
+        metadata.is_file() && metadata.uid() == uid && metadata.mode() & 0o077 == 0
+    };
     let length = byte_len(frame).ok_or_else(invalid)?;
     let path = Path::new(&frame.ramws_path);
     let canonical = fs::canonicalize(path)?;
@@ -68,18 +77,18 @@ pub fn read_published_frame(frame: &FrameRef) -> io::Result<Vec<u8>> {
         return Err(invalid());
     }
     let metadata = fs::symlink_metadata(path)?;
-    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() != length {
+    if !private_file(&metadata) || metadata.file_type().is_symlink() || metadata.len() != length {
         return Err(invalid());
     }
     let file = File::open(path)?;
     let opened = file.metadata()?;
-    if opened.dev() != metadata.dev() || opened.ino() != metadata.ino() {
+    if !private_file(&opened) || opened.dev() != metadata.dev() || opened.ino() != metadata.ino() {
         return Err(invalid());
     }
     let mut bytes = Vec::new();
     file.take(length + 1).read_to_end(&mut bytes)?;
     let final_meta = fs::symlink_metadata(path)?;
-    if !final_meta.is_file()
+    if !private_file(&final_meta)
         || final_meta.dev() != opened.dev()
         || final_meta.ino() != opened.ino()
         || !valid_rgb(frame, Some(&bytes))
