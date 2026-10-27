@@ -210,6 +210,11 @@
    "why": "Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4).",
    "orchestrator": "conductor"
   },
+  "mvac17": {
+   "stage": "testing",
+   "why": "Map AC-17 (nested demo) on the integration head and specify the smallest Argon units that make it pass live, with its negative control.",
+   "orchestrator": "conductor"
+  },
   "mvrv7": {
    "stage": "review",
    "why": "Verify the 25 findings (1 critical, 8 high) of the Gemini Argon cross-review of the day-2 afternoon integrations before any fix, and turn confirmed ones into disjoint fix units.",
