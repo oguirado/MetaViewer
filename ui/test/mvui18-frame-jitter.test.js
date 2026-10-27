@@ -288,14 +288,33 @@ test('mvui18 L2-8: canvas intrinsic size equals the delivery width and height', 
   }
   const mounted = mountTile({ surfaceId: 'A', generation: 1, epoch: 1, frame: 'tile/A/g1/h1', digest: 'c'.repeat(64), state: 'live', frameWidth: 3, frameHeight: 2 });
   try {
-    assert.equal(canvasNode(mounted.root).props.width, 3);
-    assert.equal(canvasNode(mounted.root).props.height, 2);
-    await mounted.setProps({ frame: '', digest: '', frameWidth: 0, frameHeight: 0 });
-    assert.equal(canvasNode(mounted.root).props.width, 3, 'the gap retains the last size');
-    assert.equal(canvasNode(mounted.root).props.height, 2);
-    await mounted.setProps({ frame: 'tile/A/g1/h2', digest: 'd'.repeat(64), frameWidth: 4, frameHeight: 5 });
-    assert.equal(canvasNode(mounted.root).props.width, 4);
-    assert.equal(canvasNode(mounted.root).props.height, 5);
+    const port = tilePort();
+    mounted.target.emit(portNotice(port));
+    await tick();
+    port.deliver(await frameDelivery({ correlation: 'sized', frameGeneration: 1, leaseId: 'l1' }));
+    await untilAcks(port, 1);
+    assert.deepEqual(ackOutcomes(port), [FRAME_OUTCOMES.PRESENTED]);
+    assert.equal(mounted.canvas.width, 3, 'intrinsic width equals the delivery width after paint');
+    assert.equal(mounted.canvas.height, 2, 'intrinsic height equals the delivery height after paint');
+    const info = mounted.scheduler.getInstrumentation('A');
+    await mounted.setProps({
+      frame: info.lastPresentedHandle, digest: info.lastPresentedDigest,
+      frameWidth: info.lastPresentedWidth, frameHeight: info.lastPresentedHeight,
+    });
+    await mounted.setProps({ generation: 2, frame: '', digest: '', frameWidth: 3, frameHeight: 2 });
+    assert.equal(mounted.canvas.width, 3, 'the gap keeps the painted size');
+    assert.equal(mounted.canvas.height, 2);
+    assert.equal(mounted.canvas.paints.length, 1, 'no repaint during the gap');
+    port.deliver(await frameDelivery({
+      correlation: 'resized', frameGeneration: 2, leaseId: 'l2', width: 4, height: 5,
+    }));
+    await untilAcks(port, 2);
+    assert.deepEqual(ackOutcomes(port), [FRAME_OUTCOMES.PRESENTED, FRAME_OUTCOMES.PRESENTED]);
+    assert.equal(mounted.canvas.width, 4, 'a dimension change resizes with the paint, never painted-then-cleared');
+    assert.equal(mounted.canvas.height, 5);
+    assert.equal(mounted.canvas.paints.length, 2);
+    assert.equal(mounted.canvas.paints[1].width, 4);
+    assert.equal(mounted.canvas.paints[1].height, 5);
   } finally {
     mounted.app.unmount();
     mounted.router.dispose();
@@ -305,12 +324,15 @@ test('mvui18 L2-8: canvas intrinsic size equals the delivery width and height', 
 test('mvui18 L2-8 negative: unknown or invalid sizes never break the tile', async () => {
   const mounted = mountTile({ surfaceId: 'A', generation: 1, epoch: 1, frame: '', digest: '', state: 'live', frameWidth: 0, frameHeight: 0 });
   try {
-    assert.equal(canvasNode(mounted.root).props.width, 0);
+    assert.equal(mounted.canvas.width, 0, 'no paint yet: intrinsic size stays zero without a reactive binding');
+    assert.equal(mounted.canvas.height, 0);
+    assert.equal(canvasNode(mounted.root).props.width, undefined, 'no reactive width binding may wipe a paint');
+    assert.equal(canvasNode(mounted.root).props.height, undefined, 'no reactive height binding may wipe a paint');
     assert.equal(canvasNode(mounted.root).props.hidden, true);
     await mounted.setProps({ frame: 'tile/A/g1/h1', digest: '', frameWidth: -1, frameHeight: Number.NaN });
     assert.equal(canvasNode(mounted.root).props.hidden, false, 'visibility follows the frame, not the size');
-    assert.equal(canvasNode(mounted.root).props.width, 0);
-    assert.equal(canvasNode(mounted.root).props.height, 0);
+    assert.equal(mounted.canvas.width, 0, 'invalid sizes never resize the canvas');
+    assert.equal(mounted.canvas.height, 0);
   } finally {
     mounted.app.unmount();
     mounted.router.dispose();
@@ -324,8 +346,9 @@ test('mvui18 L2-8: app wires frame size and the tile scales through its CSS clas
   assert.ok(app.includes(':frame-width="surfaceWitness(selectedSurface).width"'));
   assert.ok(app.includes('lastPresentedWidth'));
   assert.ok(app.includes('lastPresentedHeight'));
-  assert.ok(tileSource.includes(':width="effectiveWidth"'));
-  assert.ok(tileSource.includes(':height="effectiveHeight"'));
+  assert.equal(tileSource.includes(':width='), false, 'no reactive width binding may wipe a painted frame');
+  assert.equal(tileSource.includes(':height='), false, 'no reactive height binding may wipe a painted frame');
+  assert.ok(tileSource.includes('Intrinsic canvas size is owned by the scheduler paint path'), 'the paint path owns the intrinsic size');
   assert.ok(tileSource.includes('retainedFrame'));
   assert.ok(tileSource.includes('effectiveFrame.value.length === 0'));
   assert.doesNotMatch(tileSource, /v-bind:style/);
@@ -335,8 +358,10 @@ test('mvui18 L2-8: app wires frame size and the tile scales through its CSS clas
   const css = tileSource.match(/<style scoped>([\s\S]*?)<\/style>/)[1];
   assert.ok(css.includes('object-fit: contain'), 'aspect-preserving class scaling stays');
   assert.ok(css.includes('.mv-surface__canvas[hidden]'));
-  const stripped = tileSource.replaceAll(':width="effectiveWidth"', '');
-  assert.equal(stripped.includes(':width="effectiveWidth"'), false);
+  const canvasTag = tileSource.match(/<canvas[\s\S]*?\/>/)[0];
+  assert.equal(canvasTag.includes('width'), false, 'the canvas tag carries no width attribute');
+  assert.equal(canvasTag.includes('height'), false, 'the canvas tag carries no height attribute');
+  assert.equal(`${canvasTag} :width="1"`.includes(':width='), true, 'negative control: the check spots a planted binding');
 });
 
 test('mvui18 frame jitter: rss stays bounded', () => {

@@ -451,10 +451,13 @@ export function createTileScheduler(options) {
   /**
    * Evicts oldest warm resources down to `limit`, invoking each native
    * disposer exactly once. Accounting-only deletion would leak natives.
+   * Any eviction also drops the retained repaint frame (MVUI22), the
+   * surface's largest idle holding under memory pressure.
    * @param {any} entry
    * @param {number} limit
    */
   function trimWarmResources(entry, limit) {
+    let evicted = 0;
     while (entry.warmResources.size > limit) {
       const oldestKey = entry.warmResources.keys().next().value;
       if (oldestKey === undefined) break;
@@ -462,20 +465,27 @@ export function createTileScheduler(options) {
       entry.warmResources.delete(oldestKey);
       entry.metrics.warmResourceBytes = Math.max(0, entry.metrics.warmResourceBytes - (removed?.bytes || 0));
       entry.metrics.reclaimedWarmResources += 1;
+      evicted += 1;
       if (removed && typeof removed.dispose === 'function') {
         try { removed.dispose(); } catch { entry.metrics.disposerFaults += 1; }
       }
+    }
+    if (evicted > 0) {
+      entry.lastPaint = null;
+      entry.pendingPaint = null;
     }
   }
 
   /**
    * Releases every display-owned holding of an entry (mailbox + presented
-   * slot + warm resources) exactly once under one cause, keeping the capture
-   * lease untouched. Used by fold/hide/context-loss/destroy paths.
+   * slot + undrawn retain + warm resources) exactly once under one cause,
+   * keeping the capture lease untouched. Used by fold/hide/context-loss/
+   * destroy paths; hidden backlog never replays.
    * @param {any} entry
    * @param {string} cause
    */
   function drainDisplayHoldings(entry, cause) {
+    entry.pendingPaint = null;
     if (entry.mailbox !== null) {
       entry.minAdmissibleFrameGen = Math.max(entry.minAdmissibleFrameGen, entry.mailbox.frameGeneration);
       const slot = entry.mailbox;
@@ -534,6 +544,7 @@ export function createTileScheduler(options) {
     };
 
     const existing = surfaces.get(config.surfaceId);
+    let keptPendingPaint = null;
     if (existing && !existing.destroyed) {
       if (config.surfaceGeneration < existing.surfaceGeneration) {
         return { ok: false, reason: SCHEDULER_REASONS.STALE_SURFACE_GENERATION };
@@ -543,6 +554,9 @@ export function createTileScheduler(options) {
       }
       if (config.epoch < existing.epoch) {
         return { ok: false, reason: SCHEDULER_REASONS.INVALID_BINDING, detail: 'epoch cannot regress' };
+      }
+      if (config.surfaceGeneration === existing.surfaceGeneration && config.epoch === existing.epoch) {
+        keptPendingPaint = existing.pendingPaint;
       }
       drainDisplayHoldings(existing, RELEASE_CAUSES.SUPERSEDED);
       trimWarmResources(existing, 0);
@@ -563,7 +577,9 @@ export function createTileScheduler(options) {
       presented: null,
       canvas: sameLifetime ? existing.canvas : null,
       canvasToken: sameLifetime ? existing.canvasToken : null,
+      lastDetachedCanvas: sameLifetime ? existing.lastDetachedCanvas : null,
       lastPaint: sameLifetime ? existing.lastPaint : null,
+      pendingPaint: sameLifetime ? keptPendingPaint : null,
       lastRetiredHandle: sameLifetime ? existing.lastRetiredHandle : null,
       lastPresentedFrameGen: sameLifetime ? existing.lastPresentedFrameGen : 0,
       minAdmissibleFrameGen: sameLifetime ? existing.minAdmissibleFrameGen : 0,
@@ -985,6 +1001,20 @@ export function createTileScheduler(options) {
           if (entry.presented?.handle === handle) {
             entry.presented = null;
             retireHandle(entry, handle);
+            if (entry.canvas === null) {
+              // MVUI23 guard: registered before the canvas attached. The
+              // lease still releases REFUSED below, but the newest undrawn
+              // frame is retained (bytes by reference, newest wins) so a
+              // later attach paints it instead of waiting for new pixels.
+              entry.pendingPaint = {
+                bytes: candidate.bytes,
+                width: candidate.width,
+                height: candidate.height,
+                frameGeneration: candidate.frameGeneration,
+                handle,
+                sha256: candidate.sha256,
+              };
+            }
             emitLeaseRelease(entry, candidate.leaseId, candidate.frameGeneration, RELEASE_CAUSES.REFUSED);
           }
           continue;
@@ -1146,6 +1176,7 @@ export function createTileScheduler(options) {
     trimWarmResources(entry, 0);
     entry.canvas = null;
     entry.canvasToken = null;
+    entry.lastDetachedCanvas = null;
     entry.lastPaint = null;
     entry.destroyed = true;
     entry.captureLeaseActive = false;
@@ -1218,8 +1249,11 @@ export function createTileScheduler(options) {
    * is active per surface: a new element replaces the previous attachment
    * (R2-12), and the identity checks stay intact. MVUI20: when the attach
    * swaps in a different element after a frame presented, it repaints the
-   * retained bytes immediately so the tile never shows black; re-attaching
-   * the standing element repaints nothing.
+   * retained frame immediately so the tile never shows black; re-attaching
+   * the standing element — including a detach-then-reattach of the same
+   * element — repaints nothing (MVUI22). MVUI23: a frame retained while no
+   * canvas was attached paints on ANY successful attach (it was never
+   * visible, so the MVUI22 no-repaint invariant does not apply to it).
    * @param {any} args
    */
   function attachCanvas(args) {
@@ -1242,9 +1276,33 @@ export function createTileScheduler(options) {
       return { ok: false, reason: SCHEDULER_REASONS.INVALID_BINDING, detail: 'Canvas handle is not drawable' };
     }
     const previous = entry.canvas;
+    // MVUI22: a detach-then-reattach of the same element (the SurfaceCanvas
+    // onRegistered pattern) still shows the retained frame, so it repaints
+    // nothing. Invariant: lastDetachedCanvas is non-null only while no
+    // canvas is attached (every successful attach clears it).
+    const sameElementReattach = entry.lastDetachedCanvas === args.canvas;
     entry.canvas = args.canvas;
     entry.canvasToken = Symbol('canvas-owner');
-    if (entry.lastPaint !== null && previous !== args.canvas) {
+    entry.lastDetachedCanvas = null;
+    if (entry.pendingPaint !== null) {
+      // MVUI23 guard: the newest frame retained while canvas-less was never
+      // painted, so it paints on any attach (newest wins over lastPaint)
+      // and becomes the retained frame plus the presented witness.
+      const retained = entry.pendingPaint;
+      entry.pendingPaint = null;
+      try {
+        drawRgb24ToCanvas(args.canvas, retained.bytes, retained.width, retained.height);
+      } catch {
+        entry.pendingPaint = retained;
+        return { ok: true, surfaceId: entry.surfaceId, token: entry.canvasToken };
+      }
+      entry.lastPaint = { bytes: retained.bytes, width: retained.width, height: retained.height };
+      entry.lastPresentedFrameGen = retained.frameGeneration;
+      entry.lastPresentedHandle = retained.handle;
+      entry.lastPresentedDigest = retained.sha256;
+      entry.lastPresentedWidth = retained.width;
+      entry.lastPresentedHeight = retained.height;
+    } else if (entry.lastPaint !== null && previous !== args.canvas && !sameElementReattach) {
       try {
         drawRgb24ToCanvas(args.canvas, entry.lastPaint.bytes, entry.lastPaint.width, entry.lastPaint.height);
       } catch { /* Repaint is best-effort; the attach stands for future presents. */ }
@@ -1260,6 +1318,7 @@ export function createTileScheduler(options) {
   function detachCanvas(surfaceId, token) {
     const entry = surfaces.get(/** @type {string} */ (surfaceId));
     if (entry && typeof token === 'symbol' && entry.canvasToken === token) {
+      entry.lastDetachedCanvas = entry.canvas;
       entry.canvas = null;
       entry.canvasToken = null;
     }
@@ -1310,9 +1369,13 @@ export function createTileScheduler(options) {
     }
     const convertedBytes = slot.width * slot.height * 4;
     entry.metrics.convertedBytesTotal += convertedBytes;
-    // MVUI20: one retained copy feeds later (re-)attaches; a new surface
-    // lifetime or destroy drops it.
-    entry.lastPaint = { bytes: slot.bytes.slice(), width: slot.width, height: slot.height };
+    // MVUI20: one retained frame feeds later (re-)attaches; a new surface
+    // lifetime, a warm-resource eviction, or destroy drops it. MVUI22: the
+    // scheduler owns the submitted bytes, drawn from the same reference, so
+    // the retain keeps the validated reference instead of copying per frame.
+    // A successful draw also supersedes any MVUI23 undrawn retain.
+    entry.lastPaint = { bytes: slot.bytes, width: slot.width, height: slot.height };
+    entry.pendingPaint = null;
     entry.lastPresentedFrameGen = slot.frameGeneration;
     entry.lastPresentedHandle = slot.handle;
     entry.lastPresentedDigest = slot.sha256;
@@ -1347,6 +1410,7 @@ export function createTileScheduler(options) {
       trimWarmResources(entry, 0);
       entry.canvas = null;
       entry.canvasToken = null;
+      entry.lastDetachedCanvas = null;
       entry.lastPaint = null;
       entry.destroyed = true;
       entry.captureLeaseActive = false;

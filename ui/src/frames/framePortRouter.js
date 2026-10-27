@@ -27,17 +27,31 @@
  *
  * The scheduler instance is App-owned, so tiles bind it: SurfaceCanvas calls
  * bindSurface on mount (surfaceId + scheduler + attach-retry hook) and
- * unbindSurface on unmount. Unknown surfaces (no binding) refuse deliveries.
+ * unbindSurface on unmount. MVUI23: deliveries for a live stream that was
+ * never registered and whose surface has no binding yet (notice + first
+ * frames beat the Vue mount) are HELD, newest-only per stream (replaced
+ * ones ack SUPERSEDED), un-acked within a bounded window, then registered
+ * + attached + painted as soon as the binding appears. MVUI23C: a held
+ * delivery whose window expires unclaimed is sha-verified: a mismatch
+ * settles REFUSED and drops it, while a valid delivery settles HIDDEN
+ * (frees the host inFlight before its 10 s timeout) but is KEPT as the
+ * stream's latest frame; the late binding registers with the kept
+ * identity and paints it with no second ack. A newer delivery replaces
+ * the kept one. REFUSED stays for genuinely invalid input and for
+ * remount-gap deliveries on registered streams.
  * MVUI20: several tiles may bind the same surface (wall + multislot), so
  * bindings form a stack per surface: the most recently bound entry is
  * active. A token unbind removes only its own entry: unbinding an inactive
  * entry never touches the active one, while unbinding the active one
  * restores the previous entry (its attach hook re-fires so its canvas
  * becomes active again and repaints the retained frame). Removing the last
- * entry retires the stream unless the caller keeps it across a remount gap.
- * The token-less unbind keeps the historical teardown (drop every binding
- * and retire the stream).
- * Plain JavaScript with JSDoc; no product imports, no timers, no dependencies.
+ * entry retires the stream unless the caller keeps it across a bounded
+ * remount grace (MVUI22): when no tile rebinds within the grace, the stream
+ * retires and pending deliveries settle per contract. The token-less unbind
+ * keeps the historical teardown (drop every binding and retire the stream).
+ * Plain JavaScript with JSDoc; no product imports, no dependencies; the only
+ * timers are one bounded grace timer per kept stream and one bounded hold
+ * timer per stream with an unbound delivery.
  * @module frames/framePortRouter
  */
 
@@ -84,6 +98,23 @@ const RGB24_BYTES_PER_PIXEL = 3;
 const PRESENT_ATTEMPTS = 3;
 
 /**
+ * Default grace keeping a stream open after its last binding unbinds with
+ * keepStream (MVUI22): the App wall/multislot swap remounts in the same Vue
+ * flush, far inside this window, while a permanently unmounted surface stops
+ * holding its port. Overridable per install for tests.
+ * @type {number}
+ */
+export const KEEP_STREAM_GRACE_MS = 500;
+
+/**
+ * Default window a delivery for an unbound surface stays held (un-acked)
+ * while the tile mounts (MVUI23): far above mount gaps, well below the
+ * host's 10 s ack timeout. Overridable per install for tests.
+ * @type {number}
+ */
+export const PENDING_UNBOUND_MS = 2000;
+
+/**
  * @typedef {object} RouterTarget Window-like event target carrying location.origin.
  * @property {{ origin?: unknown }} [location]
  * @property {(type: string, listener: (event: any) => void) => void} addEventListener
@@ -111,6 +142,8 @@ const PRESENT_ATTEMPTS = 3;
  * @typedef {object} InstallOptions
  * @property {RouterTarget} target Window-like target to listen on.
  * @property {(bytes: Uint8Array) => Promise<string>} [digestSha256] Hex-digest override (tests); defaults to SubtleCrypto.
+ * @property {number} [keepStreamGraceMs] Keep-stream grace override in ms (tests); defaults to KEEP_STREAM_GRACE_MS.
+ * @property {number} [pendingUnboundMs] Unbound-hold window override in ms (tests); defaults to PENDING_UNBOUND_MS.
  */
 
 /**
@@ -193,6 +226,12 @@ export function installFramePortRouter(options) {
   const ownOrigin = target.location?.origin;
   if (typeof ownOrigin !== 'string' || ownOrigin.length === 0) return null;
   const digestSha256 = typeof options?.digestSha256 === 'function' ? options.digestSha256 : defaultDigestSha256;
+  const graceOption = options?.keepStreamGraceMs;
+  const keepStreamGraceMs = typeof graceOption === 'number' && Number.isSafeInteger(graceOption) && graceOption > 0
+    ? graceOption : KEEP_STREAM_GRACE_MS;
+  const pendingOption = options?.pendingUnboundMs;
+  const pendingUnboundMs = typeof pendingOption === 'number' && Number.isSafeInteger(pendingOption) && pendingOption > 0
+    ? pendingOption : PENDING_UNBOUND_MS;
 
   /** @type {Map<string, any>} surfaceId -> stream entry */
   const streams = new Map();
@@ -285,10 +324,139 @@ export function installFramePortRouter(options) {
    * @returns {void}
    */
   function retireStream(entry, outcome) {
+    clearKeepStreamGrace(entry);
+    clearPendingTimer(entry);
     entry.disposed = true;
     if (streams.get(entry.surfaceId) === entry) streams.delete(entry.surfaceId);
     detachPort(entry);
     for (const queued of entry.queue.splice(0)) settle(queued, outcome);
+    if (entry.pending !== null && entry.pending !== undefined) {
+      const held = entry.pending;
+      entry.pending = null;
+      settle(held, outcome);
+    }
+    if (entry.retained !== null && entry.retained !== undefined) {
+      // Already acked HIDDEN at expiry: drop silently, never re-acked.
+      entry.retained = null;
+    }
+  }
+
+  /**
+   * Cancel a pending keep-stream grace retire. Every stream retirement path
+   * funnels through retireStream, so at most one armed timer per kept stream
+   * stays bounded and nothing outlives dispose.
+   * @param {any} entry
+   * @returns {void}
+   */
+  function clearKeepStreamGrace(entry) {
+    if (entry.graceTimer !== null && entry.graceTimer !== undefined) {
+      try { clearTimeout(entry.graceTimer); } catch { /* A dead timer still clears. */ }
+      entry.graceTimer = null;
+    }
+  }
+
+  /**
+   * Arm the bounded grace retire after the last binding left with keepStream.
+   * A rebind (bindSurface) cancels it; otherwise the stream retires and its
+   * queued records settle, while an in-flight record settles when its
+   * validation completes (never painted).
+   * @param {any} entry
+   * @returns {void}
+   */
+  function armKeepStreamGrace(entry) {
+    clearKeepStreamGrace(entry);
+    const surfaceId = entry.surfaceId;
+    entry.graceTimer = setTimeout(() => {
+      entry.graceTimer = null;
+      if (disposed || entry.disposed) return;
+      if (streams.get(surfaceId) !== entry) return;
+      if (hasBinding(surfaceId)) return;
+      retireStream(entry, FRAME_OUTCOMES.SURFACE_DESTROYED);
+    }, keepStreamGraceMs);
+  }
+
+  /**
+   * Cancel a pending unbound-hold expiry. At most one armed timer per stream
+   * stays bounded and nothing outlives dispose (retireStream funnels here).
+   * @param {any} entry
+   * @returns {void}
+   */
+  function clearPendingTimer(entry) {
+    if (entry.pendingTimer !== null && entry.pendingTimer !== undefined) {
+      try { clearTimeout(entry.pendingTimer); } catch { /* A dead timer still clears. */ }
+      entry.pendingTimer = null;
+    }
+  }
+
+  /**
+   * Arm the bounded unbound-hold window for the currently held delivery. A
+   * bind drains the hold; otherwise the delivery is sha-verified off the
+   * hot path (MVUI23C): a mismatch settles REFUSED and drops it, while a
+   * valid delivery settles HIDDEN (frees the host inFlight before its 10 s
+   * timeout) and is KEPT as the stream's latest frame for the late tile.
+   * The stream stays open either way.
+   * @param {any} entry
+   * @returns {void}
+   */
+  function armPendingTimer(entry) {
+    clearPendingTimer(entry);
+    const surfaceId = entry.surfaceId;
+    entry.pendingTimer = setTimeout(() => {
+      entry.pendingTimer = null;
+      if (disposed || entry.disposed) return;
+      if (streams.get(surfaceId) !== entry) return;
+      if (entry.pending === null || entry.pending === undefined) return;
+      if (hasBinding(surfaceId)) {
+        drainHeldOnBind(entry);
+        return;
+      }
+      const held = entry.pending;
+      entry.pending = null;
+      entry.expiring = held;
+      void verifyHeldDelivery(entry, held);
+    }, pendingUnboundMs);
+  }
+
+  /**
+   * Settle one expired held delivery (MVUI23C): replaced-before-paint acks
+   * SUPERSEDED, a sha mismatch acks REFUSED and drops the bytes, and a
+   * valid delivery acks HIDDEN but is KEPT (bytes + identity) as the
+   * stream's latest frame. A bind that landed during verification paints
+   * the kept frame immediately with no second ack.
+   * @param {any} entry
+   * @param {any} held Taken (un-acked) held record.
+   * @returns {Promise<void>}
+   */
+  async function verifyHeldDelivery(entry, held) {
+    let digest = null;
+    try {
+      digest = await digestSha256(held.raw.bytes);
+    } catch {
+      digest = null;
+    }
+    if (entry.expiring === held) entry.expiring = null;
+    if (disposed || entry.disposed || streams.get(entry.surfaceId) !== entry) {
+      settle(held, FRAME_OUTCOMES.SURFACE_DESTROYED);
+      return;
+    }
+    const pendingGen = entry.pending?.raw?.frameGeneration ?? 0;
+    if (pendingGen > held.raw.frameGeneration || entry.admittedFloor >= held.raw.frameGeneration) {
+      // A newer delivery arrived (or drained) during verification: the
+      // expired one was replaced before paint.
+      settle(held, FRAME_OUTCOMES.SUPERSEDED);
+      return;
+    }
+    if (typeof digest !== 'string' || digest !== held.raw.sha256) {
+      settle(held, FRAME_OUTCOMES.REFUSED);
+      return;
+    }
+    entry.admittedFloor = Math.max(entry.admittedFloor, held.raw.frameGeneration);
+    // An older kept frame drops silently: it was already acked at expiry.
+    entry.retained = { raw: held.raw };
+    settle(held, FRAME_OUTCOMES.HIDDEN);
+    if (hasBinding(entry.surfaceId) && !entry.registered) {
+      drainRetained(entry);
+    }
   }
 
   /**
@@ -352,38 +520,51 @@ export function installFramePortRouter(options) {
   }
 
   /**
+   * Pure shape + stream-identity + floor check shared by the bound admit
+   * path and the MVUI23 unbound hold path. The notice stream id is never
+   * compared here: the delivery binding (surfaceGeneration) is pinned from
+   * the first accepted delivery and required consistent only among
+   * deliveries. No side effects (no ack, no pin, no floor advance).
+   * @param {any} entry
+   * @param {any} raw
+   * @returns {boolean} True when the delivery is well-formed for this stream.
+   */
+  function deliveryShapeOk(entry, raw) {
+    if (raw === null || typeof raw !== 'object') return false;
+    if (raw.schema !== FRAME_DELIVERY_SCHEMA || raw.kind !== 'frame') return false;
+    if (!hasExactKeys(raw, DELIVERY_KEYS)) return false;
+    if (!isNonEmptyString(raw.correlation)) return false;
+    if (raw.surfaceId !== entry.surfaceId) return false;
+    if (!isPositiveSafeInt(raw.surfaceGeneration)) return false;
+    if (!isNonEmptyString(raw.principal) || !isPositiveSafeInt(raw.epoch)) return false;
+    if (entry.pinned && (raw.principal !== entry.principal || raw.epoch !== entry.epoch
+      || raw.surfaceGeneration !== entry.deliveryGeneration)) return false;
+    if (!isPositiveSafeInt(raw.frameGeneration)) return false;
+    if (!isNonEmptyString(raw.leaseId)) return false;
+    if (raw.format !== RGB24_FORMAT) return false;
+    if (!isPositiveSafeInt(raw.width) || !isPositiveSafeInt(raw.height)) return false;
+    if (!(raw.bytes instanceof Uint8Array)) return false;
+    if (!Number.isSafeInteger(raw.byteLength)) return false;
+    if (raw.byteLength !== raw.bytes.byteLength) return false;
+    if (raw.byteLength !== raw.width * raw.height * RGB24_BYTES_PER_PIXEL) return false;
+    if (typeof raw.sha256 !== 'string' || !SHA256_RE.test(raw.sha256)) return false;
+    if (raw.sha256 === NULL_DIGEST) return false;
+    if (raw.pixelSpec === null || typeof raw.pixelSpec !== 'object') return false;
+    if (raw.frameGeneration <= entry.admittedFloor) return false;
+    return true;
+  }
+
+  /**
    * Validate a delivery against the stream binding and the packed-rgb24
    * shape. Pure of scheduler state except the admitted floor, which advances
-   * only for accepted records. The notice stream id is never compared here:
-   * the delivery binding (surfaceGeneration) is pinned from the first
-   * accepted delivery and required consistent only among deliveries.
+   * only for accepted records.
    * @param {any} entry
    * @param {any} raw
    * @returns {{ ok: true } | { ok: false }} Refusals ack inside.
    */
   function admitDelivery(entry, raw) {
     const refuse = () => { refuseArrival(entry, raw); return { ok: /** @type {const} */ (false) }; };
-    if (raw === null || typeof raw !== 'object') return refuse();
-    if (raw.schema !== FRAME_DELIVERY_SCHEMA || raw.kind !== 'frame') return refuse();
-    if (!hasExactKeys(raw, DELIVERY_KEYS)) return refuse();
-    if (!isNonEmptyString(raw.correlation)) return refuse();
-    if (raw.surfaceId !== entry.surfaceId) return refuse();
-    if (!isPositiveSafeInt(raw.surfaceGeneration)) return refuse();
-    if (!isNonEmptyString(raw.principal) || !isPositiveSafeInt(raw.epoch)) return refuse();
-    if (entry.pinned && (raw.principal !== entry.principal || raw.epoch !== entry.epoch
-      || raw.surfaceGeneration !== entry.deliveryGeneration)) return refuse();
-    if (!isPositiveSafeInt(raw.frameGeneration)) return refuse();
-    if (!isNonEmptyString(raw.leaseId)) return refuse();
-    if (raw.format !== RGB24_FORMAT) return refuse();
-    if (!isPositiveSafeInt(raw.width) || !isPositiveSafeInt(raw.height)) return refuse();
-    if (!(raw.bytes instanceof Uint8Array)) return refuse();
-    if (!Number.isSafeInteger(raw.byteLength)) return refuse();
-    if (raw.byteLength !== raw.bytes.byteLength) return refuse();
-    if (raw.byteLength !== raw.width * raw.height * RGB24_BYTES_PER_PIXEL) return refuse();
-    if (typeof raw.sha256 !== 'string' || !SHA256_RE.test(raw.sha256)) return refuse();
-    if (raw.sha256 === NULL_DIGEST) return refuse();
-    if (raw.pixelSpec === null || typeof raw.pixelSpec !== 'object') return refuse();
-    if (raw.frameGeneration <= entry.admittedFloor) return refuse();
+    if (!deliveryShapeOk(entry, raw)) return refuse();
     if (!hasBinding(entry.surfaceId)) return refuse();
     // First accepted delivery pins the stream identity, before the async
     // digest: a racing second delivery cannot hijack the binding.
@@ -395,6 +576,131 @@ export function installFramePortRouter(options) {
     }
     entry.admittedFloor = raw.frameGeneration;
     return { ok: /** @type {const} */ (true) };
+  }
+
+  /**
+   * Hold a delivery for a never-registered stream whose surface has no
+   * binding yet (MVUI23 startup race): newest-only per stream, older held
+   * deliveries acked SUPERSEDED immediately, the newest un-acked within the
+   * bounded window until bindSurface drains it. Invalid shapes refuse
+   * exactly as on the bound path (never held). The admitted floor advances
+   * at drain or at a valid expiry, so a held delivery no tile ever claims
+   * never blocks its generation. MVUI23C: a newer arrival while a kept
+   * frame exists is held in a fresh window; it replaces the kept frame
+   * once verified (expiry) or painted (bind). Registered streams keep the
+   * gap-refuse path in the caller.
+   * @param {any} entry
+   * @param {any} raw
+   * @returns {{ ok: true } | { ok: false }} Refusals ack inside.
+   */
+  function holdDelivery(entry, raw) {
+    const refuse = () => { refuseArrival(entry, raw); return { ok: /** @type {const} */ (false) }; };
+    if (!deliveryShapeOk(entry, raw)) return refuse();
+    if (entry.pending !== null && entry.pending !== undefined
+      && raw.frameGeneration <= entry.pending.raw.frameGeneration) return refuse();
+    // MVUI23C: a duplicate/older arrival never disturbs the delivery under
+    // expiry verification nor the kept frame (explicit while the admitted
+    // floor has not advanced past them yet).
+    if (entry.expiring !== null && entry.expiring !== undefined
+      && raw.frameGeneration <= entry.expiring.raw.frameGeneration) return refuse();
+    if (entry.retained !== null && entry.retained !== undefined
+      && raw.frameGeneration <= entry.retained.raw.frameGeneration) return refuse();
+    if (!entry.pinned) {
+      entry.principal = raw.principal;
+      entry.epoch = raw.epoch;
+      entry.deliveryGeneration = raw.surfaceGeneration;
+      entry.pinned = true;
+    }
+    if (entry.pending !== null && entry.pending !== undefined) {
+      clearPendingTimer(entry);
+      const replaced = entry.pending;
+      entry.pending = null;
+      settle(replaced, FRAME_OUTCOMES.SUPERSEDED);
+    }
+    entry.pending = { raw, port: entry.port, settled: false, superseded: false };
+    armPendingTimer(entry);
+    return { ok: /** @type {const} */ (true) };
+  }
+
+  /**
+   * Drain the held delivery now that a binding exists: re-admit through the
+   * bound path (floor advance, queue, async digest, register + attach +
+   * paint). Runs synchronously inside bindSurface.
+   * @param {any} entry
+   * @returns {void}
+   */
+  function drainPending(entry) {
+    if (entry.pending === null || entry.pending === undefined) return;
+    const held = entry.pending;
+    entry.pending = null;
+    clearPendingTimer(entry);
+    if (disposed || entry.disposed || streams.get(entry.surfaceId) !== entry) {
+      settle(held, FRAME_OUTCOMES.SURFACE_DESTROYED);
+      return;
+    }
+    const admitted = admitDelivery(entry, held.raw);
+    if (admitted.ok !== true) return;
+    enqueueRecord(entry, held.raw, held.port);
+  }
+
+  /**
+   * Drain the unbound hold now that a binding exists (MVUI23C): the newest
+   * held delivery drains through the bound path while an older kept frame
+   * drops silently (already acked HIDDEN at expiry, never re-acked). With
+   * no held delivery, the kept frame paints with no second ack.
+   * @param {any} entry
+   * @returns {void}
+   */
+  function drainHeldOnBind(entry) {
+    if (entry.pending !== null && entry.pending !== undefined) {
+      entry.retained = null;
+      drainPending(entry);
+      return;
+    }
+    drainRetained(entry);
+  }
+
+  /**
+   * Paint the kept (already HIDDEN-acked) frame now that a binding exists:
+   * register with the kept identity, attach and paint immediately through
+   * the shared validate+paint path. The record is settled from birth so no
+   * second ack can ever be emitted for it.
+   * @param {any} entry
+   * @returns {void}
+   */
+  function drainRetained(entry) {
+    if (entry.retained === null || entry.retained === undefined) return;
+    const kept = entry.retained;
+    entry.retained = null;
+    if (disposed || entry.disposed || streams.get(entry.surfaceId) !== entry) return;
+    if (!hasBinding(entry.surfaceId)) {
+      entry.retained = kept;
+      return;
+    }
+    const record = { raw: kept.raw, port: entry.port, settled: true, superseded: false };
+    if (entry.validating && entry.current) {
+      // A live record is already painting: the kept frame stays dropped.
+      record.superseded = true;
+    }
+    for (const queued of entry.queue.splice(0)) settle(queued, FRAME_OUTCOMES.SUPERSEDED);
+    entry.queue.push(record);
+    pump(entry);
+  }
+
+  /**
+   * Enqueue one admitted delivery newest-only: a replaced in-flight record
+   * is marked superseded and every queued record settles SUPERSEDED.
+   * @param {any} entry
+   * @param {any} raw Admitted delivery.
+   * @param {any} port Stream port the ack answers on.
+   * @returns {void}
+   */
+  function enqueueRecord(entry, raw, port) {
+    const record = { raw, port, settled: false, superseded: false };
+    if (entry.validating && entry.current) entry.current.superseded = true;
+    for (const queued of entry.queue.splice(0)) settle(queued, FRAME_OUTCOMES.SUPERSEDED);
+    entry.queue.push(record);
+    pump(entry);
   }
 
   /**
@@ -667,13 +973,13 @@ export function installFramePortRouter(options) {
     entry.onPortMessage = (/** @type {any} */ event) => {
       if (disposed || entry.disposed || streams.get(entry.surfaceId) !== entry) return;
       const raw = unwrapMessage(event);
+      if (!hasBinding(entry.surfaceId) && !entry.registered) {
+        holdDelivery(entry, raw);
+        return;
+      }
       const admitted = admitDelivery(entry, raw);
       if (admitted.ok !== true) return;
-      const record = { raw, port, settled: false, superseded: false };
-      if (entry.validating && entry.current) entry.current.superseded = true;
-      for (const queued of entry.queue.splice(0)) settle(queued, FRAME_OUTCOMES.SUPERSEDED);
-      entry.queue.push(record);
-      pump(entry);
+      enqueueRecord(entry, raw, port);
     };
     entry.onPortClose = () => {
       if (!entry.disposed && streams.get(entry.surfaceId) === entry) retireStream(entry, FRAME_OUTCOMES.SURFACE_DESTROYED);
@@ -740,6 +1046,11 @@ export function installFramePortRouter(options) {
         presentedFrames: 0,
         firstPresented: false,
         disposed: false,
+        graceTimer: null,
+        pending: null,
+        pendingTimer: null,
+        retained: null,
+        expiring: null,
       };
       streams.set(data.surface_id, entry);
       attachPort(entry, port);
@@ -766,6 +1077,11 @@ export function installFramePortRouter(options) {
         presentedFrames: 0,
         firstPresented: false,
         disposed: false,
+        graceTimer: null,
+        pending: null,
+        pendingTimer: null,
+        retained: null,
+        expiring: null,
       };
       streams.set(data.surface_id, entry);
       attachPort(entry, port);
@@ -778,7 +1094,10 @@ export function installFramePortRouter(options) {
   /**
    * Bind a mounted tile: its scheduler paints this surface's deliveries.
    * Bindings stack per surface; the most recent bind is active. Rebinding
-   * the same token moves it to the top instead of duplicating it.
+   * the same token moves it to the top instead of duplicating it. A delivery
+   * held while the surface was unbound (MVUI23) drains immediately: register
+   * + attach + paint without waiting for the next frame. MVUI23C: a delivery
+   * kept past its window paints the same way, with no second ack.
    * @param {SurfaceBinding} binding
    * @returns {boolean} False when the binding is unusable.
    */
@@ -805,11 +1124,13 @@ export function installFramePortRouter(options) {
     stack.push(record);
     bindings.set(binding.surfaceId, stack);
     const entry = streams.get(binding.surfaceId);
+    if (entry !== undefined) clearKeepStreamGrace(entry);
     if (entry && entry.registered && record.onRegistered) {
       try {
         record.onRegistered({ surfaceId: entry.surfaceId, surfaceGeneration: entry.deliveryGeneration, epoch: entry.epoch });
       } catch { /* A tile retry never breaks the bind. */ }
     }
+    if (entry !== undefined) drainHeldOnBind(entry);
     return true;
   }
 
@@ -819,7 +1140,8 @@ export function installFramePortRouter(options) {
    * touches the active one, while removing the active one restores the
    * previous entry by re-firing its attach hook with the pinned delivery
    * identity. Removing the last entry retires the stream, unless
-   * `options.keepStream` keeps it open across a remount gap. Without a
+   * `options.keepStream` keeps it open across a bounded remount grace: the
+   * stream retires when no tile rebinds within the grace (MVUI22). Without a
    * token, every binding drops and the stream retires (lost/destroyed),
    * the historical teardown. The scheduler entry is left to the wall
    * lifecycle (never tombstoned here: a remount must re-register).
@@ -844,9 +1166,13 @@ export function installFramePortRouter(options) {
     stack.splice(at, 1);
     if (stack.length === 0) {
       bindings.delete(surfaceId);
-      if (options?.keepStream !== true) {
-        const entry = streams.get(surfaceId);
-        if (entry && !entry.disposed) retireStream(entry, FRAME_OUTCOMES.SURFACE_DESTROYED);
+      const entry = streams.get(surfaceId);
+      if (entry && !entry.disposed) {
+        if (options?.keepStream === true) {
+          armKeepStreamGrace(entry);
+        } else {
+          retireStream(entry, FRAME_OUTCOMES.SURFACE_DESTROYED);
+        }
       }
       return;
     }

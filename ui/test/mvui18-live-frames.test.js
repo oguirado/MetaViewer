@@ -305,8 +305,8 @@ test('L3-1 production path: mounted tile with App-like wiring paints and leaves 
     assert.equal(section().props['data-state'], 'live');
     assert.doesNotMatch(mountText(mounted.root), /Connecting to surface/);
     assert.equal(canvas.props.hidden, false);
-    assert.equal(canvas.props.width, 2);
-    assert.equal(canvas.props.height, 2);
+    assert.equal(canvas.width, 2, 'intrinsic width equals the delivery width after paint');
+    assert.equal(canvas.height, 2, 'intrinsic height equals the delivery height after paint');
     const strip = mountNodes(mounted.root).find((node) => node.props?.class === 'mv-surface__strip');
     assert.ok(strip, 'presented witness strip renders');
   } finally {
@@ -358,7 +358,7 @@ test('L3-1 negative: without the pinned identity the tile never paints', async (
 
 test('L2-8: generation advance before paint keeps the previous canvas', async () => {
   const SurfaceCanvas = await compileTile();
-  const scheduler = createTileScheduler({ budget: BUDGET });
+  const scheduler = createTileScheduler({ budget: BUDGET, onPresent: (r) => scheduler.presentHandle(r) });
   const canvas = drawableCanvasStub();
   const mounted = mountWithProvide(SurfaceCanvas, {
     surfaceId: 'A', generation: NOTICE_GEN, epoch: 1,
@@ -368,14 +368,42 @@ test('L2-8: generation advance before paint keeps the previous canvas', async ()
   try {
     const section = () => mountNodes(mounted.root).find((node) => node.tag === 'section');
     assert.equal(section().props['data-state'], 'live');
+    // The delivery stream paints the mounted canvas through the scheduler:
+    // its identity matches the post-gap projection, so the gap below reads
+    // as a healthy same-stream wait, not a skewed stream.
+    scheduler.registerSurface({ surfaceId: 'A', surfaceGeneration: NOTICE_GEN + 1, principal: 'utility', epoch: 1,
+      state: { panelOpen: true, panelSelected: true, width: 2, height: 2, viewportIntersecting: true, windowPresentationAllowed: true } });
+    assert.equal(scheduler.attachCanvas({ surfaceId: 'A', canvas }).ok, true);
+    const firstRgb = [12, 34, 56, 78, 90, 11, 22, 33, 44, 55, 66, 77];
+    const firstRgba = firstRgb.flatMap((byte, index) => (index % 3 === 2 ? [byte, 255] : [byte]));
+    assert.equal(scheduler.submitFrame({ surfaceId: 'A', surfaceGeneration: NOTICE_GEN + 1, frameGeneration: 1, leaseId: 'lg1',
+      byteLength: 12, width: 2, height: 2, bytes: new Uint8Array(firstRgb),
+      principal: 'utility', epoch: 1, sha256: 'e'.repeat(64) }).ok, true);
+    scheduler.runTick();
+    assert.equal(canvas.width, 2, 'intrinsic width equals the delivery width after paint');
+    assert.equal(canvas.height, 2, 'intrinsic height equals the delivery height after paint');
     // The projection advances before the async port frame arrives: the
     // witness props gap, but the painted canvas must not flash away.
+    // The legacy gap re-attaches through the tile, so the scheduler may
+    // repaint the retained frame; the asserts pin size and bytes, not count.
     await mounted.setProps({ generation: NOTICE_GEN + 1, frame: '', digest: '' });
     assert.equal(section().props['data-state'], 'live', 'no witness flash after a painted frame');
     assert.equal(canvas.props.hidden, false);
     assert.match(mountText(mounted.root), /painted-handle-1/);
-    assert.equal(canvas.props.width, 2, 'intrinsic width retained across the gap');
-    assert.equal(canvas.props.height, 2);
+    assert.equal(canvas.width, 2, 'painted size retained across the gap');
+    assert.equal(canvas.height, 2);
+    assert.deepEqual(canvas.paints.at(-1), { width: 2, height: 2, data: firstRgba }, 'the gap keeps the painted bytes, never cleared');
+    // A dimension change repaints at the new size, never painted-then-cleared.
+    const paintsBeforeResize = canvas.paints.length;
+    assert.equal(scheduler.submitFrame({ surfaceId: 'A', surfaceGeneration: NOTICE_GEN + 1, frameGeneration: 2, leaseId: 'lg2',
+      byteLength: 18, width: 3, height: 2, bytes: Uint8Array.from({ length: 18 }, (_v, i) => (i + 1) % 256),
+      principal: 'utility', epoch: 1, sha256: 'f'.repeat(64) }).ok, true);
+    scheduler.runTick();
+    assert.equal(canvas.width, 3);
+    assert.equal(canvas.height, 2);
+    assert.equal(canvas.paints.length, paintsBeforeResize + 1, 'the resize paints exactly once');
+    assert.equal(canvas.paints.at(-1).width, 3, 'the resize paints synchronously at the new size');
+    assert.equal(canvas.paints.at(-1).height, 2);
     // Negative control: a tile that never painted has nothing to retain.
     const bare = mountWithProvide(SurfaceCanvas, {
       surfaceId: 'A', generation: NOTICE_GEN, epoch: 1, frame: '', digest: '', state: 'live',
@@ -449,8 +477,12 @@ test('L2-8: presented size is the delivery size; App witness keeps it without th
 
 test('L2-8 static: canvas intrinsic size binds delivery size with class-only scaling', () => {
   const style = tileSource.slice(tileSource.indexOf('<style'));
-  assert.ok(tileSource.includes(':width="effectiveWidth"'), 'intrinsic width binds the witness');
-  assert.ok(tileSource.includes(':height="effectiveHeight"'), 'intrinsic height binds the witness');
+  assert.equal(tileSource.includes(':width='), false, 'no reactive width binding may wipe a painted frame');
+  assert.equal(tileSource.includes(':height='), false, 'no reactive height binding may wipe a painted frame');
+  assert.ok(tileSource.includes('Intrinsic canvas size is owned by the scheduler paint path'), 'the paint path owns the intrinsic size');
+  const canvasTag = tileSource.match(/<canvas[\s\S]*?\/>/)[0];
+  assert.equal(canvasTag.includes('width'), false, 'the canvas tag carries no width attribute');
+  assert.equal(canvasTag.includes('height'), false, 'the canvas tag carries no height attribute');
   assert.match(style, /\.mv-surface__canvas\s*\{[\s\S]*?width:\s*100%/, 'class scales the canvas');
   assert.match(style, /\.mv-surface__canvas\s*\{[\s\S]*?object-fit:\s*contain/, 'class preserves aspect ratio');
   const unsafe = (source) => /:style=|v-bind:style|v-show|\.style\.[a-zA-Z]|style\s*=/.test(source);

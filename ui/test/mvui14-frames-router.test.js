@@ -15,7 +15,7 @@ import installFramePortRouter, {
   isFramePortNotice,
 } from '../src/frames/framePortRouter.js';
 import { createTileScheduler } from '../src/surfaces/tileScheduler.js';
-import { tick, untilAcks } from './frame-wait.mjs';
+import { tick, until, untilAcks } from './frame-wait.mjs';
 
 const ORIGIN = 'app://metaviewer';
 const BUDGET = Object.freeze({
@@ -468,18 +468,23 @@ test('unavailable digest refuses without paint', async () => {
   router.dispose();
 });
 
-test('unbound surface refuses as unknown; binding later admits the same generation', async () => {
+test('unbound surface hides but keeps the frame; binding later paints it with no second ack', async () => {
   const { target, router, scheduler, canvas } = setup();
   const port = browserPort();
   target.emit(notice(port));
   port.deliver(await delivery({ correlation: 'unbound-1' }));
   await untilAcks(port, 1);
-  assert.deepEqual(ackOutcomes(port), [FRAME_OUTCOMES.REFUSED]);
+  // MVUI23C: expiry frees the host inFlight with HIDDEN (not REFUSED) and
+  // keeps the bytes for the late tile.
+  assert.deepEqual(ackOutcomes(port), [FRAME_OUTCOMES.HIDDEN]);
   assert.equal(scheduler.getInstrumentation('A'), null);
   bindTile(router, scheduler, canvas);
+  await until(() => canvas.paints.length === 1, 'kept frame paints after bind');
+  // The same generation re-delivered is a stale replay now that the kept
+  // frame (already acked HIDDEN) has painted: refused, never re-acked.
   port.deliver(await delivery({ correlation: 'bound-1' }));
   await untilAcks(port, 2);
-  assert.deepEqual(ackOutcomes(port), [FRAME_OUTCOMES.REFUSED, FRAME_OUTCOMES.PRESENTED]);
+  assert.deepEqual(ackOutcomes(port), [FRAME_OUTCOMES.HIDDEN, FRAME_OUTCOMES.REFUSED]);
   assert.equal(canvas.paints.length, 1);
   router.dispose();
 });

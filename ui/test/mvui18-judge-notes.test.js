@@ -390,8 +390,13 @@ test('mvui18 judge note 2 negative: without the clear, the old witness stays liv
 test('mvui18 judge note 3: retained size initializers carry no duplicated checks', () => {
   assert.doesNotMatch(tileSource, /typeof props\.frameWidth === 'number' && typeof props\.frameWidth/);
   assert.doesNotMatch(tileSource, /typeof props\.frameHeight === 'number' && typeof props\.frameHeight/);
-  assert.ok(tileSource.includes("typeof props.frameWidth === 'number' && Number.isSafeInteger(props.frameWidth) && props.frameWidth > 0"));
-  assert.ok(tileSource.includes("typeof props.frameHeight === 'number' && Number.isSafeInteger(props.frameHeight) && props.frameHeight > 0"));
+  assert.equal(tileSource.includes('retainedWidth'), false, 'no retained-size state competes with the paint path');
+  assert.equal(tileSource.includes('retainedHeight'), false, 'no retained-size state competes with the paint path');
+  assert.equal(tileSource.includes('effectiveWidth'), false, 'no reactive size binding may wipe a painted frame');
+  assert.equal(tileSource.includes('effectiveHeight'), false, 'no reactive size binding may wipe a painted frame');
+  assert.ok(tileSource.includes('Intrinsic canvas size is owned by the scheduler paint path'), 'the paint path owns the intrinsic size');
+  assert.ok(tileSource.includes('frameWidth: { type: Number, default: 0 }'), 'the App-fed size props stay declared');
+  assert.ok(tileSource.includes('frameHeight: { type: Number, default: 0 }'), 'the App-fed size props stay declared');
   // Negative controls: the patterns spot the old duplication.
   assert.match(
     "typeof props.frameWidth === 'number' && typeof props.frameWidth === 'number'",

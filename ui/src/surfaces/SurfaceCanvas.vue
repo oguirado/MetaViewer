@@ -32,7 +32,7 @@ const props = defineProps({
 
 const emit = defineEmits(['canvas-ready', 'canvas-released']);
 
-/** @type {{ attachCanvas: (args: any) => { ok: boolean, token?: symbol }, detachCanvas: (id: string, token: symbol | null) => void } | null} */
+/** @type {{ attachCanvas: (args: any) => { ok: boolean, token?: symbol }, detachCanvas: (id: string, token: symbol | null) => void, getInstrumentation: (surfaceId: unknown) => any } | null} */
 const scheduler = /** @type {any} */ (inject('tileScheduler', null));
 /** Live-only frame-port router provided by the entry; null keeps the legacy path. */
 const framePortRouter = /** @type {{ bindSurface?: (binding: any) => boolean, unbindSurface?: (surfaceId: unknown, bindToken?: unknown, options?: { keepStream?: boolean }) => void } | null} */ (inject('framePortRouter', null));
@@ -62,35 +62,57 @@ const canvasRef = ref(/** @type {HTMLCanvasElement | null} */ (null));
 // generation advances before the async port frame arrives; without the
 // retain the tile flashes to the waiting placeholder at a different scale.
 // Only a surface change resets: generation/epoch gaps keep the last frame.
+// Intrinsic canvas size is owned by the scheduler paint path (RV9-02): no
+// reactive width/height binding may clear a painted frame.
 const retainedFrame = ref(props.frame.length > 0 ? props.frame : '');
 const retainedDigest = ref(props.frame.length > 0 && typeof props.digest === 'string' ? props.digest : '');
-const retainedWidth = ref(typeof props.frameWidth === 'number' && Number.isSafeInteger(props.frameWidth) && props.frameWidth > 0 ? props.frameWidth : 0);
-const retainedHeight = ref(typeof props.frameHeight === 'number' && Number.isSafeInteger(props.frameHeight) && props.frameHeight > 0 ? props.frameHeight : 0);
 
-watch(() => [props.surfaceId, props.frame, props.digest, props.frameWidth, props.frameHeight],
+/**
+ * RV9-03: true when a blanked witness must drop the retained frame: the
+ * scheduler entry reports destroyed/contextLost (either path), or — legacy
+ * path only — the entry is skewed against the projection identity, mirroring
+ * App surfaceWitness R1-074 (props carry surface.generation/snapshot epoch).
+ * The live path (L3-1) never compares delivery/projection identities, and an
+ * unknown entry keeps L2-8 retention.
+ * @param {unknown} surfaceId
+ * @returns {boolean}
+ */
+function retainedWitnessStale(surfaceId) {
+  if (scheduler === null || typeof scheduler.getInstrumentation !== 'function') return false;
+  let info = null;
+  try {
+    info = scheduler.getInstrumentation(surfaceId);
+  } catch {
+    return false;
+  }
+  if (info === null || typeof info !== 'object') return false;
+  if (info.destroyed === true || info.contextLost === true) return true;
+  if (framePortRouter !== null) return false;
+  return info.surfaceGeneration !== props.generation || info.epoch !== props.epoch;
+}
+
+watch(() => [props.surfaceId, props.frame, props.digest],
   (current, previous) => {
     if (!Array.isArray(current)) return;
-    const [surfaceId, frame, digest, width, height] = current;
+    const [surfaceId, frame, digest] = current;
     if (previous !== undefined && Array.isArray(previous) && surfaceId !== previous[0]) {
       retainedFrame.value = '';
       retainedDigest.value = '';
-      retainedWidth.value = 0;
-      retainedHeight.value = 0;
     }
     if (typeof frame === 'string' && frame.length > 0) {
       retainedFrame.value = frame;
       retainedDigest.value = typeof digest === 'string' ? digest : '';
-      if (typeof width === 'number' && Number.isSafeInteger(width) && width > 0) retainedWidth.value = width;
-      if (typeof height === 'number' && Number.isSafeInteger(height) && height > 0) retainedHeight.value = height;
+    } else if (typeof frame === 'string' && frame.length === 0 && retainedFrame.value.length > 0
+        && retainedWitnessStale(surfaceId)) {
+      // A blank over a dead surface drops the retained witness so no stale
+      // frame renders as live; healthy live gaps keep it (L2-8).
+      retainedFrame.value = '';
+      retainedDigest.value = '';
     }
   });
 
 const effectiveFrame = computed(() => props.frame.length > 0 ? props.frame : retainedFrame.value);
 const effectiveDigest = computed(() => props.frame.length > 0 ? props.digest : retainedDigest.value);
-const effectiveWidth = computed(() => typeof props.frameWidth === 'number' && Number.isSafeInteger(props.frameWidth) && props.frameWidth > 0
-  ? props.frameWidth : retainedWidth.value);
-const effectiveHeight = computed(() => typeof props.frameHeight === 'number' && Number.isSafeInteger(props.frameHeight) && props.frameHeight > 0
-  ? props.frameHeight : retainedHeight.value);
 
 // Live display requires a presented witness: a live claim with no frame
 // handle degrades to connecting instead of rendering a fake-live tile.
@@ -183,8 +205,6 @@ function bindFramePort() {
             // as 'live' before its first frame arrives.
             retainedFrame.value = '';
             retainedDigest.value = '';
-            retainedWidth.value = 0;
-            retainedHeight.value = 0;
           }
           // MVUI18C: a newer stream re-registers with ITS delivery identity
           // and the scheduler drops the old canvas binding; the re-attach
@@ -268,7 +288,7 @@ onBeforeUnmount(() => {
     :data-state="resolvedState"
     :aria-label="accessibleName"
   >
-    <canvas ref="canvasRef" :hidden="resolvedState !== 'live' && resolvedState !== 'stale'" :width="effectiveWidth" :height="effectiveHeight" class="mv-surface__canvas" aria-hidden="true" />
+    <canvas ref="canvasRef" :hidden="resolvedState !== 'live' && resolvedState !== 'stale'" class="mv-surface__canvas" aria-hidden="true" />
     <div v-if="resolvedState !== 'live' && resolvedState !== 'stale'" class="mv-surface__waiting" role="status">
       <span class="mv-surface__connection-mark" aria-hidden="true">◌</span>
       <strong>{{ resolvedState === 'connecting' ? 'Connecting to surface' : 'Waiting for surface' }}</strong>
