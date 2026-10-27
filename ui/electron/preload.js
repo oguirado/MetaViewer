@@ -25,6 +25,7 @@
  * @property {() => Promise<0|1|null>} nestedDepth
  * @property {() => Promise<string|null>} selfCapsuleId
  * @property {{propose:(json:string)=>Promise<any>,intent:(json:string)=>Promise<true>,subscribeFrames:(cb:(frame:any)=>void)=>(()=>void)}} authority
+ * @property {{screenshot:(req:any)=>Promise<any>,recordStart:(req:any)=>Promise<any>,recordStop:(req:any)=>Promise<any>,list:()=>Promise<any>,subscribe:(cb:(state:any)=>void)=>(()=>void)}} capture
  * @property {{open:(spec:any)=>Promise<{session:string}>,setEnabled:(value:boolean)=>Promise<true>}} sideTerminal
  * @property {() => Promise<string|null>} load Read the stored layout text,
  * or null when no profile exists.
@@ -36,6 +37,7 @@
  * @typedef {object} PreloadTransport Injected main-side invoke handle.
  * @property {(channel: string, args: ReadonlyArray<unknown>) => Promise<unknown>} invoke
  * Fixed-channel invoke returning the main outcome.
+ * @property {boolean} [nested]
  * @property {(channel:string,cb:(message:any,ports?:MessagePort[])=>void)=>(()=>void)} [subscribe]
  */
 
@@ -295,6 +297,101 @@ export function createPreloadFacade(deps) {
   return frozen;
 }
 
+// [TARGET, unit decision] Capture metadata is a closed RAM-only projection.
+const CAPTURE_CHANNELS = Object.freeze({screenshot:'capture.screenshot',
+  recordStart:'capture.record.start',recordStop:'capture.record.stop',list:'capture.list',
+  subscribe:'capture.subscribe',unsubscribe:'capture.unsubscribe'});
+const CAPTURE_CODES = new Set(['SURFACE_UNKNOWN','ALREADY_RECORDING','NOT_RECORDING',
+  'CAPTURE_UNAVAILABLE','NESTED_DISPLAY_ONLY','LIMIT']);
+const CAPTURE_PHASES = new Set(['idle','starting','recording','stopping','sealed','error']);
+/** @param {any} v @param {string} keys */
+function captureKeys(v,keys) {
+  return v !== null && typeof v==='object' && !Array.isArray(v)
+    && Reflect.ownKeys(v).length===keys.split(',').length
+    && Object.keys(v).sort().join(',')===keys
+    && Object.values(Object.getOwnPropertyDescriptors(v)).every(d=>'value' in d);
+}
+/** @param {any} v */
+const captureId=(v)=>typeof v==='string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(v);
+/** @param {any} v */
+const captureNumber=(v)=>Number.isSafeInteger(v) && v>=0;
+/** @param {string} method @param {readonly unknown[]} args */
+function assertCaptureCall(method,args) {
+  if (!Object.hasOwn(CAPTURE_CHANNELS,method)) throw new ContractError('CHANNEL','capture method');
+  if (!Array.isArray(args) || args.length!==(['list','subscribe','unsubscribe'].includes(method)?0:1)) throw new ContractError('ARGS','capture arity');
+  if (!args.length) return;
+  const v=/** @type {any} */(args[0]);
+  const keys=method==='recordStop'?'recording_id,request_id,schema':method==='recordStart'?'mode,request_id,schema,surface_id':'request_id,schema,surface_id';
+  if (!captureKeys(v,keys) || v.schema!=='capture_request/v1'
+    || typeof v.request_id!=='string' || !/^[\x20-\x7e]{1,64}$/.test(v.request_id)
+    || !captureId(method==='recordStop'?v.recording_id:v.surface_id)
+    || (method==='recordStart' && v.mode!=='ai')) throw new ContractError('PAYLOAD','capture request');
+}
+/** @param {string} method @param {any} v @param {string} [requestId] */
+function assertCaptureReply(method,v,requestId='') {
+  const bad=()=>{throw new ContractError('OUTCOME','capture reply');};
+  if (captureKeys(v,'code,ok,request_id') && v.ok===false && CAPTURE_CODES.has(v.code)
+    && v.request_id===requestId) return Object.freeze({...v});
+  if (!v || v.ok!==true) return bad();
+  const row=(/** @type {any} */r)=>captureKeys(r,'created_ms,duration_ms,frames,id,kind,phase,sealed,surface_id')
+    && captureId(r.id) && captureId(r.surface_id) && ['shot','recording'].includes(r.kind)
+    && CAPTURE_PHASES.has(r.phase) && typeof r.sealed==='boolean'
+    && ['frames','duration_ms','created_ms'].every(k=>captureNumber(r[k]));
+  const digest=(/** @type {any} */x)=>typeof x==='string' && /^[a-f0-9]{64}$/.test(x);
+  if (method==='list' && captureKeys(v,'ok,rows') && Array.isArray(v.rows) && v.rows.length<=64 && v.rows.every(row)) return Object.freeze({ok:true,rows:Object.freeze(v.rows.map((/** @type {any} */r)=>Object.freeze({...r})))});
+  if (method==='recordStart' && captureKeys(v,'ok,recording_id') && captureId(v.recording_id)) return Object.freeze({...v});
+  if (method==='screenshot' && captureKeys(v,'ok,shot') && captureKeys(v.shot,'created_ms,height,id,sha256,surface_id,width')) {
+    const r=v.shot;
+    if(captureId(r.id) && captureId(r.surface_id) && digest(r.sha256) && captureNumber(r.created_ms)
+      && captureNumber(r.width) && r.width>0 && captureNumber(r.height) && r.height>0) return Object.freeze({ok:true,shot:Object.freeze({...r})});
+  }
+  if (method==='recordStop' && captureKeys(v,'ok,recording') && captureKeys(v.recording,'duration_ms,frames,id,sealed,sha256,surface_id')) {
+    const r=v.recording;
+    if(captureId(r.id) && captureId(r.surface_id) && digest(r.sha256) && r.sealed===true
+      && captureNumber(r.frames) && captureNumber(r.duration_ms)) return Object.freeze({ok:true,recording:Object.freeze({...r})});
+  }
+  if (['subscribe','unsubscribe'].includes(method) && captureKeys(v,'ok')) return Object.freeze({ok:true});
+  return bad();
+}
+/** @param {any} v */
+function validCaptureState(v) {
+  return captureKeys(v,'elapsed_ms,frames,phase,recording_id,surface_id,type')
+    && v.type==='capture.state' && captureId(v.recording_id) && captureId(v.surface_id)
+    && CAPTURE_PHASES.has(v.phase) && captureNumber(v.frames) && captureNumber(v.elapsed_ms);
+}
+/** @param {PreloadTransport} transport */
+function captureFacade(transport) {
+  /** @param {string} name @param {unknown[]} args */
+  const call=(name,args)=>{
+    assertCaptureCall(name,args);
+    const requestId=/** @type {any} */(args[0])?.request_id??'';
+    if (transport.nested) return Promise.resolve(Object.freeze({ok:false,code:'NESTED_DISPLAY_ONLY',request_id:requestId}));
+    return transport.invoke(`metaviewer:${CAPTURE_CHANNELS[/** @type {keyof typeof CAPTURE_CHANNELS} */(name)]}`,args)
+      .then(reply=>assertCaptureReply(name,reply,requestId));
+  };
+  /** @type {Map<symbol,()=>void>} */ const subscriptions=new Map();
+  return Object.freeze({
+    /** @param {...unknown} args */ screenshot:(...args)=>call('screenshot',args),
+    /** @param {...unknown} args */ recordStart:(...args)=>call('recordStart',args),
+    /** @param {...unknown} args */ recordStop:(...args)=>call('recordStop',args),
+    /** @param {...unknown} args */ list:(...args)=>call('list',args),
+    /** @param {...unknown} args */ subscribe:(...args)=>{
+      if(args.length!==1 || typeof args[0]!=='function' || (!transport.nested && !transport.subscribe)) throw new ContractError('ARGS','capture callback');
+      // Preserve the callable unsubscribe API; awaiting it yields the local refusal.
+      if(transport.nested) return Object.assign(()=>{}, {then:(/** @type {any} */resolve)=>Promise.resolve({ok:false,code:'NESTED_DISPLAY_ONLY',request_id:''}).then(resolve)});
+      const cb=/** @type {(value:any)=>void} */(args[0]);
+      const token=Symbol();
+      const revoke=transport.subscribe?.('metaviewer:capture.state',value=>{
+        if(validCaptureState(value)) cb(Object.freeze({...value}));
+      });
+      subscriptions.set(token,revoke ?? (()=>{}));
+      void call('subscribe',[]).catch(()=>{subscriptions.get(token)?.();subscriptions.delete(token);});
+      return ()=>{const stop=subscriptions.get(token);if(!stop)return;stop();subscriptions.delete(token);
+        if(!subscriptions.size)void call('unsubscribe',[]).catch(()=>{});};
+    },
+  });
+}
+
 // [TARGET, unit decision] Closed domain channels; all values are rechecked in main.
 const WIRE_NAMES = Object.freeze({loadSettings:'settings.load',saveSettings:'settings.save',
   recordingDestination:'recording.destination',nestedDepth:'nested.depth',selfCapsuleId:'nested.self',
@@ -302,6 +399,8 @@ const WIRE_NAMES = Object.freeze({loadSettings:'settings.load',saveSettings:'set
   unsubscribeFrames:'authority.unsubscribe',terminalOpen:'side-terminal.open',terminalEnabled:'side-terminal.enabled'});
 /** @param {string} channel @param {ReadonlyArray<unknown>} args */
 function wireCall(channel,args) {
+  const captureName=Object.entries(CAPTURE_CHANNELS).find(([,suffix])=>channel===`metaviewer:${suffix}`)?.[0];
+  if(captureName){assertCaptureCall(captureName,args);return {channel,args:Object.freeze([...args])};}
   const name=Object.entries(WIRE_NAMES).find(([,suffix]) => channel === `metaviewer:${suffix}`)?.[0];
   if (!name) throw new ContractError('CHANNEL','unknown domain channel');
   const arity=['saveSettings','propose','intent','terminalOpen','terminalEnabled'].includes(name) ? 1 : 0;
@@ -373,6 +472,7 @@ function wireFacade(transport) {
     return Object.freeze({...value});
   };
   /** @type {Record<string,any>} */ const api={};
+  api.capture=captureFacade(transport);
   for (const name of ['loadSettings','saveSettings','recordingDestination','nestedDepth','selfCapsuleId']) {
     /** @param {...unknown} args */
     api[name]=(...args)=>call(/** @type {keyof typeof WIRE_NAMES} */(name),args);
@@ -480,10 +580,11 @@ export function installPreload(electron) {
   const renderer = /** @type {Record<string, (...args: Array<unknown>) => Promise<unknown>>} */ (ipcRenderer);
   return createPreloadFacade({
     transport: {
+      nested: typeof navigator !== 'undefined' && navigator.userAgent.split(' ').includes('--nested-depth=1'),
       subscribe: typeof /** @type {any} */(ipcRenderer).on === 'function' ?
       /** @param {string} channel @param {(value:any,ports?:MessagePort[])=>void} cb */
       (channel,cb) => {
-        if (channel !== 'metaviewer:authority.frames') throw new ContractError('CHANNEL','subscription refused');
+        if (!['metaviewer:authority.frames','metaviewer:capture.state'].includes(channel)) throw new ContractError('CHANNEL','subscription refused');
         const native = /** @type {any} */(ipcRenderer);
         const listener = (/** @type {any} */event,/** @type {any} */value) => {
           // The facade validates this authenticated host channel before transfer.

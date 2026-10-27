@@ -25,6 +25,7 @@
 //! a terminal writer retires its endpoint after flushing its diagnostic.
 //! [TARGET, unit decision] A failed receipt must have verified=false; contradictory receipts are refused
 //! before settlement and cannot clear a lease.
+mod capture;
 mod tools;
 
 use crate::admission::{
@@ -134,6 +135,7 @@ pub struct Server {
     subscriptions: BTreeSet<(Endpoint, String)>,
     unsubscribed: BTreeSet<(Endpoint, String)>,
     tool_state: tools::ToolState,
+    capture: crate::record::capture::Host,
 }
 impl Server {
     pub fn open(config: Config, state_dir: &Path, uid: u32) -> Result<Self> {
@@ -208,6 +210,7 @@ impl Server {
             // restore every nonce and the latest observed sender sequence.
             replay.record_reconnect(&env.session_id, &env.from, &env.nonce, env.seq)?;
         }
+        let capture = crate::record::capture::Host::with_serial(authority.state().core_seq);
         Ok(Self {
             config,
             authority,
@@ -220,6 +223,7 @@ impl Server {
             subscriptions: BTreeSet::new(),
             unsubscribed: BTreeSet::new(),
             tool_state,
+            capture,
         })
     }
     pub fn snapshot(&self) -> Result<Vec<u8>> {
@@ -310,7 +314,11 @@ impl Server {
             let _ = self.send(&peer, body.clone());
         }
     }
+    #[cfg(test)]
     fn witness(&mut self, frame: &FrameRef) -> Result<Witness> {
+        self.witness_pixels(frame).map(|(witness, _)| witness)
+    }
+    fn witness_pixels(&mut self, frame: &FrameRef) -> Result<(Witness, Vec<u8>)> {
         let path = Path::new(&frame.ramws_path);
         if !path.starts_with("/dev/shm")
             || path == Path::new("/dev/shm")
@@ -372,10 +380,10 @@ impl Server {
         if bytes.len() as u64 != meta.len() || sha256_hex(&bytes) != frame.sha256 {
             return Err(invalid("frame digest mismatch"));
         }
-        Ok(self.authority.retain_witness(&bytes)?)
+        Ok((self.authority.retain_witness(&bytes)?, bytes))
     }
     fn frame(&mut self, frame: &FrameRef, boundary: Witness) -> Result<bool> {
-        let witness = match self.witness(frame) {
+        let (witness, pixels) = match self.witness_pixels(frame) {
             Ok(witness) => witness,
             Err(error)
                 if error
@@ -399,6 +407,7 @@ impl Server {
             vec![boundary, witness],
         )?;
         if out.reason.is_none() {
+            self.capture_frame(frame, pixels)?;
             self.tool_state
                 .retain(&Command::FrameRef(Box::new(frame.clone())));
         }
@@ -411,6 +420,9 @@ impl Server {
         let raw = serde_json::to_string(&env)?;
         let boundary = self.authority.retain_witness(raw.as_bytes())?;
         match (&env.from.component, &env.body) {
+            (Component::Ui, Command::RecordRequest(request)) => {
+                return self.capture_wire(&env, request, boundary);
+            }
             (Component::Agent, Command::MvToolCall(call)) => {
                 return self.tool_call(peer, epoch, &env, call, boundary);
             }
@@ -422,6 +434,12 @@ impl Server {
                     "create" | "destroy" | "list" | "frame_subscribe" | "frame_unsubscribe"
                 ) {
                     return self.unsupported(&env, boundary);
+                }
+                if env.from.component == Component::Ui
+                    && op == "list"
+                    && env.msg_id.starts_with("capture-list:")
+                {
+                    return self.capture_list_wire(&env, boundary);
                 }
                 let daemon = self
                     .config

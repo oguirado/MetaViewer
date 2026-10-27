@@ -7,6 +7,7 @@
  * Bounds [TARGET, unit decision]: 1 MiB wire/config, 64 surfaces/pending calls,
  * 64 MiB frame, 4096 pixels per axis, 3 s request/hello deadline.
  */
+import { assertCaptureCall, assertCaptureReply, validCaptureState } from './captureBridge.js';
 import { createConnection } from 'node:net';
 import { open, lstat } from 'node:fs/promises';
 import { constants } from 'node:fs';
@@ -91,13 +92,14 @@ export async function createMainBindings({env = process.env, createMessageChanne
       rejectReady(fail()); socket?.destroy();
       for (const item of pending.values()) {clearTimeout(item.timer);item.reject(fail());} pending.clear();
       for (const channel of channels.values()) {channel.port1.close();channel.port2.close();}
-      channels.clear();surfaces.clear();subscriptions.clear();listeners.clear();
+      channels.clear();surfaces.clear();subscriptions.clear();listeners.clear();captureListeners.clear();
     };
+    /** @type {Set<(state:any)=>void>} */ const captureListeners = new Set();
     const helloTimer = setTimeout(shutdown, DEADLINE);
-    /** @param {any} body */
-    function send(body) {
+    /** @param {any} body @param {string} [messageId] */
+    function send(body, messageId = undefined) {
       if (disposed || !socket || !Number.isSafeInteger(++seq)) throw fail();
-      const value = {schema:'envelope/v0.2',msg_id:body.request_id || body.proposal_id || randomUUID(),ts_ns:0,
+      const value = {schema:'envelope/v0.2',msg_id:messageId || body.request_id || body.proposal_id || randomUUID(),ts_ns:0,
         from:ui.endpoint,to:config.core.endpoint,session_id:config.session_id,seq,nonce:randomUUID(),body};
       const line = JSON.stringify(value) + '\n'; if (Buffer.byteLength(line) > MAX_WIRE || socket.writableLength > MAX_WIRE) throw fail();
       socket.write(line);
@@ -166,6 +168,28 @@ export async function createMainBindings({env = process.env, createMessageChanne
         if (!isDeepStrictEqual(body,config.core.hello)) throw fail();
         live = true;clearTimeout(helloTimer);ready();return;
       }
+      // [TARGET, unit decision] Capture metadata uses the frozen error-detail
+      // carrier. It never reaches renderer error consumers or exposes raw detail.
+      if (body.schema === 'surface_event/v0.2' && body.event === 'error'
+          && ['CAPTURE_REPLY','CAPTURE_STATE'].includes(body.data?.code)) {
+        if (Object.keys(body).sort().join(',') !== 'data,event,schema'
+            || Object.keys(body.data).sort().join(',') !== 'code,detail,surface_id'
+            || body.data.surface_id !== 'capture' || typeof body.data.detail !== 'string'
+            || Buffer.byteLength(body.data.detail) > 65536) throw fail();
+        const value = JSON.parse(body.data.detail);
+        if (body.data.code === 'CAPTURE_STATE') {
+          if (!validCaptureState(value)) throw fail();
+          for (const cb of captureListeners) cb(Object.freeze({...value}));
+        } else {
+          if (Object.keys(value).sort().join(',') !== 'method,reply,request_id') throw fail();
+          const item = pending.get(value.request_id);
+          if (!item || item.body.schema !== 'capture_host/v1' || value.method !== item.body.method) throw fail();
+          let reply = assertCaptureReply(value.method,value.reply,value.request_id);
+          if (reply.ok === false) reply = {...reply,request_id:item.body.requestId};
+          clearTimeout(item.timer);pending.delete(value.request_id);item.resolve(reply);
+        }
+        return;
+      }
       if (body.schema === 'surface_event/v0.2' && ['created','state_changed'].includes(body.event)) {
         const state = body.data?.surface;
         if (state?.schema !== 'surface/v0.2' || !id(state.surface_id)) throw fail();
@@ -219,9 +243,39 @@ export async function createMainBindings({env = process.env, createMessageChanne
     keepalive.unref();
     // Binding epoch is local to this single, never-reconnected host connection.
     const getStatus = () => ({availability:live ? 'live' : 'unavailable',pid:null,authority_epoch:live ? 1 : null,reason:live ? null : 'CORE_SEAMS_ABSENT'});
-    return {core:{start:async()=>getStatus(),getStatus,dispose:async()=>shutdown(),
+    /** @type {Map<string,string>} */ const captureSurfaces = new Map();
+    return {core:{
+      /** @param {(state:any)=>void} cb */
+      subscribeCapture(cb) {
+        if(disposed || typeof cb !== 'function' || captureListeners.size >= MAX_ITEMS) throw fail();
+        captureListeners.add(cb);return ()=>captureListeners.delete(cb);
+      },start:async()=>getStatus(),getStatus,dispose:async()=>shutdown(),
       /** @param {any} message */
       async request(message) {
+        if (message?.op === 'capture') {
+          if (!live || disposed || pending.size >= MAX_ITEMS
+              || Object.keys(message).sort().join(',') !== 'method,op,request'
+              || !['screenshot','recordStart','recordStop','list'].includes(message.method)) throw fail();
+          assertCaptureCall(message.method,message.request === undefined ? [] : [message.request]);
+          const key = message.method === 'list' ? `capture-list:${randomUUID()}` : randomUUID();
+          const request = message.request;
+          const captureId = randomUUID();
+          // Stop identity is host-owned; the core resolves unknown IDs and journals refusals.
+          const surfaceId = message.method === 'recordStop' ? (captureSurfaces.get(request.recording_id) ?? 'capture') : request?.surface_id;
+          const params = message.method === 'recordStart' ? {surface_id:surfaceId,recording_id:captureId,ring_bytes:8388608,max_fps:30}
+            : message.method === 'recordStop' ? {surface_id:surfaceId,recording_id:request.recording_id}
+            : {surface_id:surfaceId,capture_id:captureId};
+          const body = message.method === 'list' ? {schema:'surface_request/v0.2',op:'list',params:{}}
+            : {schema:'record_request/v0.2',request_id:key,op:(/** @type {Record<string,string>} */ ({screenshot:'screenshot',recordStart:'ram_start',recordStop:'ram_stop'}))[message.method],params};
+          return new Promise((resolve,reject) => {
+            const timer = setTimeout(() => {pending.delete(key);reject(fail());shutdown();},DEADLINE);
+            pending.set(key,{body:{schema:'capture_host/v1',method:message.method,requestId:request?.request_id ?? ''},resolve:value=>{
+              if(value.ok && message.method === 'recordStart') captureSurfaces.set(value.recording_id,request.surface_id);
+              resolve(value);
+            },reject,timer});
+            try {send(body,key);} catch {shutdown();}
+          });
+        }
         if (!live || disposed || !['intent','propose'].includes(message?.op) || typeof message.json !== 'string'
             || Buffer.byteLength(message.json) > 256 * 1024 || pending.size >= MAX_ITEMS) throw fail();
         const body = JSON.parse(message.json);

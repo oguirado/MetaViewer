@@ -1672,6 +1672,7 @@ export async function bootProductionMain(handles) {
   /** @type {Array<string>} */
   const registered = [];
   let wireBridge = /** @type {{dispose:()=>Promise<void>} | null} */(null);
+  let captureBridge = /** @type {{dispose:()=>Promise<void>} | null} */(null);
   let schemeRegistered = false;
   let unwound = false;
 
@@ -1694,6 +1695,7 @@ export async function bootProductionMain(handles) {
         /* unwind best-effort */
       }
     }
+    await captureBridge?.dispose();
     await wireBridge?.dispose();
     registered.length = 0;
     if (window !== null) {
@@ -1768,6 +1770,7 @@ export async function bootProductionMain(handles) {
       height: geometry.height,
       preloadPath: paths.preloadPath,
     });
+
   } catch (error) {
     await unwind();
     throw error;
@@ -1806,6 +1809,11 @@ export async function bootProductionMain(handles) {
     const winRec = /** @type {{webContents?: unknown}} */ (/** @type {unknown} */ (built));
     const contentsRec = assertHandleObject(winRec.webContents, 'win.webContents');
     attachWindowPolicy(built, contentsRec.session);
+    // [TARGET, unit decision] Convey the admitted nested-depth signal through
+    // the native document user agent before preload runs, without host globals.
+    if (retail.nested && typeof contentsRec.setUserAgent === 'function') {
+      contentsRec.setUserAgent('MetaViewer --nested-depth=1');
+    }
     contentsUnknown = winRec.webContents;
   } catch (error) {
     await unwind();
@@ -1847,6 +1855,7 @@ export async function bootProductionMain(handles) {
     }
   }
   try {
+    if (!retail.nested) captureBridge = (await import('./captureBridge.js')).installCaptureBridge({ipcMain, contents:contentsUnknown, core, nested:retail.nested});
     if (!retail.nested) wireBridge = (await import('./authorityWire.js')).installAuthorityWire({ ...(typed.wire || {}), ipcMain,
       contents: contentsUnknown, core, env: typed.env, argv: typed.argv });
   } catch (error) { await unwind(); throw error; }
