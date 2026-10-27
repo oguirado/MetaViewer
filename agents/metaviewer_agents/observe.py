@@ -41,6 +41,7 @@ _MAX_DIMENSION = 16384
 # NUL spelled as code: shared-memory paths must exclude it.
 _NUL = chr(0)
 _HEX64 = re.compile(r"[0-9a-f]{64}")
+_SURFACE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]*")
 _MAX_DEPTH = 100
 _MAX_SURFACE_ID = 128
 _MAX_ROLE = 128
@@ -121,7 +122,8 @@ def _check_frame_ref(frame: object, *, version="v0.1") -> dict:
         _fail("unknown_version", "unknown frame_ref version")
     surface_id = frame["surface_id"]
     if (not isinstance(surface_id, str)
-            or not 1 <= len(surface_id) <= _MAX_SURFACE_ID):
+            or not 1 <= len(surface_id) <= _MAX_SURFACE_ID
+            or _SURFACE_ID_RE.fullmatch(surface_id) is None):
         _fail("bad_shape", "frame_ref surface_id malformed")
     _check_int(frame["generation"], minimum=1,
                name="frame_ref.generation")

@@ -167,6 +167,51 @@ class ObservationValidationTests(unittest.TestCase):
                         _observation(), surface_id="surface-other",
                         generation=1)
 
+    def test_frame_ref_surface_id_pattern_enforced(self):
+        for version in ("v0.1", "v0.2"):
+            for bad_id in (
+                "../bad",
+                "../bad surface",
+                ".hidden",
+                "-leading-dash",
+                "_leading-underscore",
+                ":leading-colon",
+                "bad/slash",
+                "bad space",
+                "surface-demo\n",
+            ):
+                with self.subTest(version=version, bad_id=bad_id):
+                    obs = _observation(
+                        schema="observation/" + version,
+                        frame_ref=_frame(
+                            schema="frame_ref/" + version,
+                            surface_id=bad_id,
+                        ),
+                    )
+                    self.assertCode(
+                        "bad_shape",
+                        validate_observation,
+                        obs,
+                        surface_id=bad_id,
+                        generation=1,
+                        contract_version=version,
+                    )
+            for good_id in ("surface-demo", "a.b-c:d_9", "A", "s" * 128):
+                with self.subTest(version=version, good_id=good_id):
+                    obs = _observation(
+                        schema="observation/" + version,
+                        frame_ref=_frame(
+                            schema="frame_ref/" + version,
+                            surface_id=good_id,
+                        ),
+                    )
+                    validate_observation(
+                        obs,
+                        surface_id=good_id,
+                        generation=1,
+                        contract_version=version,
+                    )
+
     def test_generation_mismatch_refused(self):
         self.assertCode("identity_mismatch", validate_observation,
                         _observation(), surface_id="surface-demo",

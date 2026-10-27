@@ -151,6 +151,11 @@ pub struct Server {
     connections: BTreeMap<Endpoint, Connection>,
     origin: Instant,
     clock_offset: Duration,
+    route_now_ns: Option<u64>,
+    #[cfg(test)]
+    clock_step_ns: std::sync::atomic::AtomicU64,
+    #[cfg(test)]
+    clock_samples: std::sync::atomic::AtomicU64,
     serial: u64,
     observers: BTreeSet<Endpoint>,
     subscriptions: BTreeSet<(Endpoint, String)>,
@@ -240,6 +245,11 @@ impl Server {
             connections: BTreeMap::new(),
             origin: Instant::now(),
             clock_offset: Duration::ZERO,
+            route_now_ns: None,
+            #[cfg(test)]
+            clock_step_ns: std::sync::atomic::AtomicU64::new(0),
+            #[cfg(test)]
+            clock_samples: std::sync::atomic::AtomicU64::new(0),
             serial: 0,
             observers: BTreeSet::new(),
             subscriptions: BTreeSet::new(),
@@ -261,11 +271,24 @@ impl Server {
         }
     }
     fn now(&self) -> Result<u64> {
-        let elapsed_ns = self
-            .origin
-            .elapsed()
-            .saturating_add(self.clock_offset)
-            .as_nanos();
+        #[cfg(test)]
+        let elapsed = {
+            let step = self
+                .clock_step_ns
+                .load(std::sync::atomic::Ordering::Relaxed);
+            if step > 0 {
+                let sample = self
+                    .clock_samples
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                self.clock_offset
+                    .saturating_add(Duration::from_nanos(sample.saturating_mul(step)))
+            } else {
+                self.origin.elapsed().saturating_add(self.clock_offset)
+            }
+        };
+        #[cfg(not(test))]
+        let elapsed = self.origin.elapsed().saturating_add(self.clock_offset);
+        let elapsed_ns = elapsed.as_nanos();
         if elapsed_ns >= u128::from(MAX_WIRE_INTEGER) {
             let err = ClockCeilingError { elapsed_ns };
             eprintln!("core clock exhausted: {err}");
@@ -274,7 +297,10 @@ impl Server {
         Ok(u64::try_from(elapsed_ns)?)
     }
     fn send(&mut self, to: &Endpoint, body: Command) -> Result<()> {
-        let ts_ns = self.now()?;
+        let ts_ns = self.route_now_ns.map_or_else(|| self.now(), Ok)?;
+        self.send_at(ts_ns, to, body)
+    }
+    fn send_at(&mut self, ts_ns: u64, to: &Endpoint, body: Command) -> Result<()> {
         self.serial = self
             .serial
             .checked_add(1)
@@ -318,7 +344,7 @@ impl Server {
         }
         Ok(())
     }
-    fn fanout(&mut self, body: Command) {
+    fn fanout_at(&mut self, now_ns: u64, body: Command) {
         let frame_surface = match &body {
             Command::FrameRef(frame) => Some(frame.surface_id.as_str()),
             Command::SurfaceEvent(event) => match event.as_ref() {
@@ -344,7 +370,7 @@ impl Server {
             .cloned()
             .collect();
         for peer in peers {
-            let _ = self.send(&peer, body.clone());
+            let _ = self.send_at(now_ns, &peer, body.clone());
         }
     }
     #[cfg(test)]
@@ -415,7 +441,7 @@ impl Server {
         }
         Ok((self.authority.retain_witness(&bytes)?, bytes))
     }
-    fn frame(&mut self, frame: &FrameRef, boundary: Witness) -> Result<bool> {
+    fn frame(&mut self, now_ns: u64, frame: &FrameRef, boundary: Witness) -> Result<bool> {
         let (witness, pixels) = match self.witness_pixels(frame) {
             Ok(witness) => witness,
             Err(error)
@@ -440,7 +466,7 @@ impl Server {
             vec![boundary, witness],
         )?;
         if out.reason.is_none() {
-            self.capture_frame(frame, pixels)?;
+            self.capture_frame_at(now_ns, frame, pixels)?;
             self.tool_state
                 .retain(&Command::FrameRef(Box::new(frame.clone())));
         }
@@ -448,14 +474,20 @@ impl Server {
     }
     fn route(&mut self, peer: &ReadyPeer, epoch: u64, env: Envelope) -> Result<()> {
         peer.check_sender(&env)?;
-        self.now()?;
+        let now_ns = self.now()?;
+        self.route_now_ns = Some(now_ns);
+        let result = self.route_at(now_ns, peer, epoch, env);
+        self.route_now_ns = None;
+        result
+    }
+    fn route_at(&mut self, now_ns: u64, peer: &ReadyPeer, epoch: u64, env: Envelope) -> Result<()> {
         self.replay
             .record(&env.session_id, &env.from, &env.nonce, env.seq)?;
         let raw = serde_json::to_string(&env)?;
         let boundary = self.authority.retain_witness(raw.as_bytes())?;
         match (&env.from.component, &env.body) {
             (Component::Ui, Command::RecordRequest(request)) => {
-                return self.capture_wire(&env, request, boundary);
+                return self.capture_wire(now_ns, &env, request, boundary);
             }
             (Component::Agent, Command::MvToolCall(call)) => {
                 return self.tool_call(peer, epoch, &env, call, boundary);
@@ -467,13 +499,13 @@ impl Server {
                     op,
                     "create" | "destroy" | "list" | "frame_subscribe" | "frame_unsubscribe"
                 ) {
-                    return self.unsupported(&env, boundary);
+                    return self.unsupported_at(now_ns, &env, boundary);
                 }
                 if env.from.component == Component::Ui
                     && op == "list"
                     && env.msg_id.starts_with("capture-list:")
                 {
-                    return self.capture_list_wire(&env, boundary);
+                    return self.capture_list_wire(now_ns, &env, boundary);
                 }
                 let daemon = self
                     .config
@@ -484,7 +516,7 @@ impl Server {
                     .endpoint
                     .clone();
                 if !self.connections.contains_key(&daemon) {
-                    return self.unsupported(&env, boundary);
+                    return self.unsupported_at(now_ns, &env, boundary);
                 }
                 let sid = value["params"]["surface_id"].as_str();
                 if matches!(op, "destroy" | "frame_subscribe" | "frame_unsubscribe")
@@ -493,7 +525,7 @@ impl Server {
                             && !self.authority.state().is_destroyed(id)
                     })
                 {
-                    return self.unsupported(&env, boundary);
+                    return self.unsupported_at(now_ns, &env, boundary);
                 }
                 let out = self.authority.apply_with_witnesses(
                     Input::SurfaceRequest {
@@ -502,7 +534,7 @@ impl Server {
                     vec![boundary],
                 )?;
                 if let Some(reason) = out.reason {
-                    return self.refuse(&env.from, &env.msg_id, reason, out.core_seq);
+                    return self.refuse_at(now_ns, &env.from, &env.msg_id, reason, out.core_seq);
                 }
                 match op {
                     "frame_subscribe" | "frame_unsubscribe" => {
@@ -522,7 +554,7 @@ impl Server {
                         self.observers.insert(env.from.clone());
                     }
                 }
-                self.send(&daemon, env.body.clone())?;
+                self.send_at(now_ns, &daemon, env.body.clone())?;
             }
             (Component::Daemon, Command::SurfaceEvent(event)) => {
                 if epoch != self.authority.state().epoch {
@@ -536,7 +568,7 @@ impl Server {
                         Some(self.lifecycle(&e.data.surface, false, boundary)?)
                     }
                     SurfaceEvent::Case2(e) => {
-                        if !self.frame(&e.data.frame_ref, boundary)? {
+                        if !self.frame(now_ns, &e.data.frame_ref, boundary)? {
                             return Ok(());
                         }
                         None
@@ -548,9 +580,15 @@ impl Server {
                 };
                 if let Some(out) = out {
                     if let Some(reason) = out.reason {
-                        return self.refuse(&env.from, &env.msg_id, reason, out.core_seq);
+                        return self.refuse_at(
+                            now_ns,
+                            &env.from,
+                            &env.msg_id,
+                            reason,
+                            out.core_seq,
+                        );
                     }
-                    self.notify_cancellations(&out.cancelled, out.core_seq)?;
+                    self.notify_cancellations_at(now_ns, &out.cancelled, out.core_seq)?;
                 }
                 self.tool_state.retain(&env.body);
                 self.tool_state.prune(self.authority.state());
@@ -562,19 +600,19 @@ impl Server {
                         .unwrap_or_else(|| env.body.clone()),
                     _ => env.body.clone(),
                 };
-                self.fanout(body);
+                self.fanout_at(now_ns, body);
             }
             (Component::Daemon, Command::FrameRef(frame)) => {
                 if epoch != self.authority.state().epoch {
                     return Err(invalid("old executor"));
                 }
-                if !self.frame(frame, boundary)? {
+                if !self.frame(now_ns, frame, boundary)? {
                     return Ok(());
                 }
-                self.fanout(env.body.clone());
+                self.fanout_at(now_ns, env.body.clone());
             }
             (Component::Agent, Command::ActionProposal(proposal)) => {
-                self.admit_proposal(peer, &env, proposal, boundary, None)?;
+                self.admit_proposal_at(now_ns, peer, &env, proposal, boundary, None)?;
             }
 
             (Component::Ui, Command::UiIntent(request)) => {
@@ -583,12 +621,12 @@ impl Server {
                     value["op"].as_str(),
                     Some("fold" | "unfold" | "move" | "tab" | "float" | "hide" | "show")
                 ) {
-                    return self.layout_intent(&env, &value, boundary);
+                    return self.layout_intent(now_ns, &env, &value, boundary);
                 }
                 let take = match value["op"].as_str() {
                     Some("take_control") => true,
                     Some("release_control") => false,
-                    _ => return self.unsupported(&env, boundary),
+                    _ => return self.unsupported_at(now_ns, &env, boundary),
                 };
                 let sid = value["params"]["surface_id"]
                     .as_str()
@@ -605,7 +643,7 @@ impl Server {
                     .surfaces
                     .contains_key(value["params"]["surface_id"].as_str().unwrap_or(""))
                 {
-                    return self.unsupported(&env, boundary);
+                    return self.unsupported_at(now_ns, &env, boundary);
                 }
                 let daemon = self
                     .config
@@ -616,18 +654,19 @@ impl Server {
                     .endpoint
                     .clone();
                 if !self.connections.contains_key(&daemon) {
-                    return self.unsupported(&env, boundary);
+                    return self.unsupported_at(now_ns, &env, boundary);
                 }
                 let out = self.authority.apply_with_witnesses(input, vec![boundary])?;
                 if let Some(reason) = out.reason {
-                    return self.refuse(
+                    return self.refuse_at(
+                        now_ns,
                         &env.from,
                         value["request_id"].as_str().unwrap_or(&env.msg_id),
                         reason,
                         out.core_seq,
                     );
                 }
-                self.notify_cancellations(&out.cancelled, out.core_seq)?;
+                self.notify_cancellations_at(now_ns, &out.cancelled, out.core_seq)?;
                 let mut params = serde_json::json!({"surface_id":value["params"]["surface_id"]});
                 if take {
                     params["owner"] = "human".into();
@@ -635,7 +674,7 @@ impl Server {
                 let body = serde_json::from_value(
                     serde_json::json!({"schema":"surface_request/v0.2","op":value["op"],"params":params}),
                 )?;
-                self.send(&daemon, Command::SurfaceRequest(Box::new(body)))?;
+                self.send_at(now_ns, &daemon, Command::SurfaceRequest(Box::new(body)))?;
             }
             (Component::Daemon, Command::ActionReceipt(receipt)) => {
                 if !receipt.error.is_empty() && receipt.verified {
@@ -645,7 +684,8 @@ impl Server {
                         },
                         vec![boundary],
                     )?;
-                    return self.refuse(
+                    return self.refuse_at(
+                        now_ns,
                         &env.from,
                         &receipt.proposal_id,
                         Refusal::Policy,
@@ -670,7 +710,13 @@ impl Server {
                 };
                 let out = self.authority.apply_with_witnesses(input, vec![boundary])?;
                 if let Some(reason) = out.reason {
-                    return self.refuse(&env.from, &receipt.proposal_id, reason, out.core_seq);
+                    return self.refuse_at(
+                        now_ns,
+                        &env.from,
+                        &receipt.proposal_id,
+                        reason,
+                        out.core_seq,
+                    );
                 }
                 let agent = self
                     .config
@@ -681,19 +727,31 @@ impl Server {
                     .endpoint
                     .clone();
                 self.tool_state.retain(&env.body);
-                if let Err(error) = self.send(&agent, env.body.clone()) {
+                if let Err(error) = self.send_at(now_ns, &agent, env.body.clone()) {
                     if error.downcast_ref::<SendFailure>().is_none() {
                         return Err(error);
                     }
                 }
                 self.poll_tool_waiters()?;
             }
-            _ => return self.unsupported(&env, boundary),
+            _ => return self.unsupported_at(now_ns, &env, boundary),
         }
         Ok(())
     }
     fn admit_proposal(
         &mut self,
+        peer: &ReadyPeer,
+        env: &Envelope,
+        proposal: &crate::wire::payload::ActionProposal,
+        boundary: Witness,
+        tool: Option<&str>,
+    ) -> Result<()> {
+        let now_ns = self.route_now_ns.map_or_else(|| self.now(), Ok)?;
+        self.admit_proposal_at(now_ns, peer, env, proposal, boundary, tool)
+    }
+    fn admit_proposal_at(
+        &mut self,
+        now_ns: u64,
         peer: &ReadyPeer,
         env: &Envelope,
         proposal: &crate::wire::payload::ActionProposal,
@@ -711,7 +769,6 @@ impl Server {
         if !self.connections.contains_key(&daemon) {
             return self.proposal_refusal(env, tool, Refusal::Policy, boundary);
         }
-        let now_ns = self.now()?;
         let request = AdmissionRequest::decode(
             &serde_json::to_string(env)?,
             peer.endpoint(),
@@ -743,7 +800,6 @@ impl Server {
             return Err(error);
         }
         if admitted {
-            let now_ns = self.now()?;
             let out = self.authority.apply(Input::Dispatch {
                 proposal_id: proposal.proposal_id.clone(),
                 now_ns,
@@ -752,7 +808,9 @@ impl Server {
                 let body = serde_json::from_value(
                     serde_json::json!({"schema":"surface_request/v0.2","op":"input","params":{"surface_id":proposal.surface_id,"proposal_id":proposal.proposal_id,"action":proposal.action}}),
                 )?;
-                if let Err(error) = self.send(&daemon, Command::SurfaceRequest(Box::new(body))) {
+                if let Err(error) =
+                    self.send_at(now_ns, &daemon, Command::SurfaceRequest(Box::new(body)))
+                {
                     if error.downcast_ref::<SendFailure>().is_none() {
                         return Err(error);
                     }
@@ -780,11 +838,17 @@ impl Server {
         }
         Ok(())
     }
+    #[cfg(test)]
     fn notify_cancellations(&mut self, ids: &[String], seq: u64) -> Result<()> {
+        let now_ns = self.route_now_ns.map_or_else(|| self.now(), Ok)?;
+        self.notify_cancellations_at(now_ns, ids, seq)
+    }
+    fn notify_cancellations_at(&mut self, now_ns: u64, ids: &[String], seq: u64) -> Result<()> {
         let agent = self.agent()?;
         if self.connections.contains_key(&agent) {
             for id in ids {
-                if let Err(error) = self.refuse(&agent, id, Refusal::SurfaceNotAgentControlled, seq)
+                if let Err(error) =
+                    self.refuse_at(now_ns, &agent, id, Refusal::SurfaceNotAgentControlled, seq)
                 {
                     // A slow agent must never prevent forwarding human control
                     // to the daemon. Saturation has its own reserved diagnostic.
@@ -850,6 +914,7 @@ impl Server {
     }
     fn layout_intent(
         &mut self,
+        now_ns: u64,
         env: &Envelope,
         value: &serde_json::Value,
         boundary: Witness,
@@ -870,7 +935,7 @@ impl Server {
             return if extended {
                 self.layout_refusal(env, boundary, "LAYOUT_UNKNOWN_SLOT")
             } else {
-                self.unsupported(env, boundary)
+                self.unsupported_at(now_ns, env, boundary)
             };
         }
         if extended && self.authority.state().surfaces[&sid].agent_controlled {
@@ -887,13 +952,17 @@ impl Server {
             .surface_event(&sid, self.authority.state())
             .ok_or_else(|| invalid("missing layout view"))?;
         if extended {
-            self.fanout(env.body.clone());
+            self.fanout_at(now_ns, env.body.clone());
         } else {
-            self.fanout(event);
+            self.fanout_at(now_ns, event);
         }
         Ok(())
     }
     fn unsupported(&mut self, env: &Envelope, boundary: Witness) -> Result<()> {
+        let now_ns = self.route_now_ns.map_or_else(|| self.now(), Ok)?;
+        self.unsupported_at(now_ns, env, boundary)
+    }
+    fn unsupported_at(&mut self, now_ns: u64, env: &Envelope, boundary: Witness) -> Result<()> {
         let value = serde_json::to_value(&env.body)?;
         let id = value["request_id"].as_str().unwrap_or(&env.msg_id);
         let out = self.authority.apply_with_witnesses(
@@ -902,13 +971,24 @@ impl Server {
             },
             vec![boundary],
         )?;
-        self.refuse(&env.from, id, Refusal::Policy, out.core_seq)
+        self.refuse_at(now_ns, &env.from, id, Refusal::Policy, out.core_seq)
     }
     fn refuse(&mut self, peer: &Endpoint, id: &str, reason: Refusal, seq: u64) -> Result<()> {
+        let now_ns = self.route_now_ns.map_or_else(|| self.now(), Ok)?;
+        self.refuse_at(now_ns, peer, id, reason, seq)
+    }
+    fn refuse_at(
+        &mut self,
+        now_ns: u64,
+        peer: &Endpoint,
+        id: &str,
+        reason: Refusal,
+        seq: u64,
+    ) -> Result<()> {
         let body = serde_json::from_value(
             serde_json::json!({"schema":"action_verdict/v0.2", "proposal_id":id,"decision":"refused","reason_code":reason,"core_seq":seq}),
         )?;
-        self.send(peer, Command::ActionVerdict(Box::new(body)))
+        self.send_at(now_ns, peer, Command::ActionVerdict(Box::new(body)))
     }
 }
 
@@ -1064,7 +1144,7 @@ async fn connection(
         if s.connections.contains_key(ready.endpoint()) {
             return Err(invalid("endpoint already connected"));
         }
-        s.now()?;
+        let now_ns = s.now()?;
         s.replay
             .record_reconnect(&env.session_id, &env.from, &env.nonce, env.seq)?;
         if env.from.component == Component::Daemon {
@@ -1090,7 +1170,7 @@ async fn connection(
             },
         );
         let hello = s.config.core.hello.clone();
-        s.send(ready.endpoint(), Command::Hello(Box::new(hello)))?;
+        s.send_at(now_ns, ready.endpoint(), Command::Hello(Box::new(hello)))?;
         (id, epoch)
     };
     let (mut reader, mut writer) = stream.into_split();
@@ -2015,6 +2095,97 @@ mod nv_regressions {
                 assert!(agent.try_recv().is_err());
                 assert!(daemon.try_recv().is_err());
             }
+        });
+    }
+    #[test]
+    fn rv8_route_samples_clock_once_and_never_mutates_on_ceiling_crossing() {
+        run(async {
+            let mut f = Fixture::new();
+            f.seed();
+            let mut raw_frame: Value = serde_json::from_str(include_str!(
+                "../../../contracts/examples/v0.2/frame_ref.valid.json"
+            ))
+            .unwrap();
+            raw_frame["sha256"] = sha256_hex(b"pixels").into();
+            let frame: FrameRef = serde_json::from_value(raw_frame).unwrap();
+            f.server.capture_frame(&frame, b"pixels".to_vec()).unwrap();
+            let daemon = f.attach(Component::Daemon, 8);
+            let agent = f.attach(Component::Agent, 8);
+            let ui = f.attach(Component::Ui, 8);
+
+            // Start 500 ms below the ceiling and advance 300 ms per now() sample.
+            // Sample 0 (-500 ms) and sample 1 (-200 ms) are below the ceiling;
+            // sample 2 (+100 ms) crosses MAX_WIRE_INTEGER.
+            f.server.origin = Instant::now();
+            f.server.clock_offset = Duration::from_nanos(MAX_WIRE_INTEGER - 500_000_000);
+            f.server.clock_step_ns.store(300_000_000, Ordering::Relaxed);
+            f.server.clock_samples.store(0, Ordering::Relaxed);
+
+            // Request 1 (proposal): must sample now() exactly once, succeed,
+            // and stamp verdict + dispatch with identical ts_ns.
+            f.route(Component::Agent, 2, f.proposal())
+                .await
+                .expect("proposal starting below ceiling must not fail mid-transition");
+            assert_eq!(
+                f.server.clock_samples.load(Ordering::Relaxed),
+                1,
+                "route(ActionProposal) must sample now() exactly once"
+            );
+            let verdict_env = agent.try_recv().unwrap();
+            let dispatched_env = daemon.try_recv().unwrap();
+            assert_eq!(
+                verdict_env.ts_ns.get(),
+                dispatched_env.ts_ns.get(),
+                "one request must observe a single clock sample across verdict and dispatch"
+            );
+            assert_eq!(f.server.authority.state().pending.len(), 1);
+
+            // Request 2 (capture_wire screenshot): uses sample 1 (-200 ms), must
+            // sample now() once and stamp CAPTURE_REPLY + RecordEvent identically.
+            let shot_req = json!({
+                "schema": "record_request/v0.2",
+                "request_id": "rv8-shot",
+                "op": "screenshot",
+                "params": {"surface_id": "surface-demo", "capture_id": "shot-rv8"}
+            });
+            f.route(Component::Ui, 2, shot_req)
+                .await
+                .expect("capture_wire starting below ceiling must not fail mid-transition");
+            assert_eq!(
+                f.server.clock_samples.load(Ordering::Relaxed),
+                2,
+                "route(RecordRequest) must sample now() exactly once"
+            );
+            let cap_reply = ui.try_recv().unwrap();
+            let cap_event = ui.try_recv().unwrap();
+            assert_eq!(cap_reply.ts_ns.get(), cap_event.ts_ns.get());
+            assert!(cap_reply.ts_ns.get() > verdict_env.ts_ns.get());
+
+            // Request 3: sample 2 (+100 ms) crosses MAX_WIRE_INTEGER at route() entry.
+            // Negative control: must fail closed with ClockCeilingError and zero mutation.
+            let before_domain = f.server.authority.state().domain_snapshot().unwrap();
+            let before_state = f.server.snapshot().unwrap();
+            let before_seq = f.server.authority.state().core_seq;
+            let before_serial = f.server.serial;
+            let mut over_proposal = f.proposal();
+            over_proposal["proposal_id"] = "rv8-over-ceiling".into();
+            let err = f
+                .route(Component::Agent, 3, over_proposal)
+                .await
+                .unwrap_err();
+            assert!(
+                err.downcast_ref::<ClockCeilingError>().is_some(),
+                "expected ClockCeilingError at entry, got: {err}"
+            );
+            assert_eq!(
+                f.server.authority.state().domain_snapshot().unwrap(),
+                before_domain
+            );
+            assert_eq!(f.server.snapshot().unwrap(), before_state);
+            assert_eq!(f.server.authority.state().core_seq, before_seq);
+            assert_eq!(f.server.serial, before_serial);
+            assert!(agent.try_recv().is_err());
+            assert!(daemon.try_recv().is_err());
         });
     }
 }

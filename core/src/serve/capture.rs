@@ -56,8 +56,15 @@ impl Server {
 
     // [TARGET, unit decision] Frozen surface_event.error carries closed capture
     // metadata under CAPTURE_REPLY / CAPTURE_STATE; detail is bounded JSON.
-    fn capture_metadata(&mut self, peer: &Endpoint, code: &str, value: Value) -> Result<()> {
-        self.send(
+    fn capture_metadata(
+        &mut self,
+        now_ns: u64,
+        peer: &Endpoint,
+        code: &str,
+        value: Value,
+    ) -> Result<()> {
+        self.send_at(
+            now_ns,
             peer,
             Command::SurfaceEvent(Box::new(serde_json::from_value(json!({
                 "schema":"surface_event/v0.2","event":"error",
@@ -65,19 +72,25 @@ impl Server {
             }))?)),
         )
     }
-    pub(super) fn capture_list_wire(&mut self, env: &Envelope, boundary: Witness) -> Result<()> {
+    pub(super) fn capture_list_wire(
+        &mut self,
+        now_ns: u64,
+        env: &Envelope,
+        boundary: Witness,
+    ) -> Result<()> {
         self.capture_recover_exports()?;
-        let (reply, _) = self.capture_transition("list", Value::Null, vec![boundary])?;
+        let (reply, _) = self.capture_transition(now_ns, "list", Value::Null, vec![boundary])?;
         self.capture_metadata(
+            now_ns,
             &env.from,
             "CAPTURE_REPLY",
             json!({"request_id":env.msg_id,"method":"list","reply":reply}),
         )
     }
-    fn capture_publish_states(&mut self, events: &[Value]) -> Result<()> {
+    fn capture_publish_states(&mut self, now_ns: u64, events: &[Value]) -> Result<()> {
         let (_, reply, _) = self
             .capture
-            .prepare("list", &Value::Null, Default::default(), 0)
+            .prepare("list", &Value::Null, Default::default(), now_ns / 1_000_000)
             .map_err(|_| invalid("capture states"))?;
         let peers: Vec<_> = self
             .connections
@@ -101,7 +114,7 @@ impl Server {
             let state = json!({"type":"capture.state","recording_id":row["id"],"surface_id":row["surface_id"],
                 "phase":row["phase"],"frames":row["frames"],"elapsed_ms":row["duration_ms"]});
             for peer in &peers {
-                self.capture_metadata(peer, "CAPTURE_STATE", state.clone())?;
+                self.capture_metadata(now_ns, peer, "CAPTURE_STATE", state.clone())?;
             }
         }
         Ok(())
@@ -120,18 +133,28 @@ impl Server {
         self.authority.apply_with_witnesses(input, witnesses)?;
         Ok(())
     }
+    #[cfg(test)]
     pub(super) fn capture_frame(&mut self, frame: &FrameRef, pixels: Vec<u8>) -> Result<()> {
+        let now_ns = self.route_now_ns.map_or_else(|| self.now(), Ok)?;
+        self.capture_frame_at(now_ns, frame, pixels)
+    }
+    pub(super) fn capture_frame_at(
+        &mut self,
+        now_ns: u64,
+        frame: &FrameRef,
+        pixels: Vec<u8>,
+    ) -> Result<()> {
         self.capture_recover_exports()?;
         let mut next = self.capture.clone();
         // Oversized/unavailable frames do not disable normal authority rendering.
-        let Ok(events) = next.frame(frame, pixels, self.origin.elapsed().as_millis() as u64) else {
+        let Ok(events) = next.frame(frame, pixels, now_ns / 1_000_000) else {
             return Ok(());
         };
         if !events.is_empty() {
             self.capture_journal(vec![], &json!({"capture_frame":events}))?;
         }
         self.capture = next;
-        self.capture_publish_states(&events)?;
+        self.capture_publish_states(now_ns, &events)?;
         Ok(())
     }
     /// Host binding seam. Only registered UI principals may call this API.
@@ -146,6 +169,7 @@ impl Server {
         {
             return Err(invalid("capture requires registered UI"));
         }
+        let now_ns = self.now()?;
         self.capture_recover_exports()?;
         let keys = match method {
             "screenshot" => vec!["request_id", "schema", "surface_id"],
@@ -187,7 +211,7 @@ impl Server {
                 .map(PathBuf::from);
             return self.capture_export_to(request, destination.as_deref(), vec![]);
         }
-        self.capture_transition(method, request, vec![])
+        self.capture_transition(now_ns, method, request, vec![])
             .map(|(reply, _)| reply)
     }
     fn capture_export_to(
@@ -236,6 +260,7 @@ impl Server {
     }
     fn capture_transition(
         &mut self,
+        now_ns: u64,
         method: &str,
         request: Value,
         boundary: Vec<Witness>,
@@ -250,12 +275,7 @@ impl Server {
             .collect();
         let (next, reply, events) = self
             .capture
-            .prepare(
-                method,
-                &request,
-                surfaces,
-                self.origin.elapsed().as_millis() as u64,
-            )
+            .prepare(method, &request, surfaces, now_ns / 1_000_000)
             .map_err(|e| invalid(&format!("capture transition: {e:?}")))?;
         self.capture_journal(
             boundary,
@@ -266,6 +286,7 @@ impl Server {
     }
     pub(super) fn capture_wire(
         &mut self,
+        now_ns: u64,
         env: &Envelope,
         request: &RecordRequest,
         boundary: Witness,
@@ -287,6 +308,7 @@ impl Server {
                 "capture_id":raw["params"]["recording_id"],"destination":if granted {json!("recording:configured")} else {Value::Null}});
             let reply = self.capture_export_to(req, destination.as_deref(), vec![boundary])?;
             return self.capture_metadata(
+                now_ns,
                 &env.from,
                 "CAPTURE_REPLY",
                 json!({"request_id":raw["request_id"],"method":"export","reply":reply}),
@@ -296,7 +318,7 @@ impl Server {
             Some("ram_start") => "recordStart",
             Some("ram_stop") => "recordStop",
             Some("screenshot") => "screenshot",
-            _ => return self.unsupported(env, boundary),
+            _ => return self.unsupported_at(now_ns, env, boundary),
         };
         let mut req = json!({"schema":"capture_request/v1","request_id":raw["request_id"]});
         if method == "recordStop" {
@@ -306,7 +328,7 @@ impl Server {
         }
         if method == "recordStart" {
             if raw["params"]["ring_bytes"] != 8 * 1024 * 1024 || raw["params"]["max_fps"] != 30 {
-                return self.unsupported(env, boundary);
+                return self.unsupported_at(now_ns, env, boundary);
             }
             req["mode"] = "ai".into();
             req["_host_id"] = raw["params"]["recording_id"].clone();
@@ -314,13 +336,14 @@ impl Server {
         if method == "screenshot" {
             req["_host_id"] = raw["params"]["capture_id"].clone();
         }
-        let (reply, events) = self.capture_transition(method, req, vec![boundary])?;
+        let (reply, events) = self.capture_transition(now_ns, method, req, vec![boundary])?;
         self.capture_metadata(
+            now_ns,
             &env.from,
             "CAPTURE_REPLY",
             json!({"request_id":raw["request_id"],"method":method,"reply":reply}),
         )?;
-        self.capture_publish_states(&events)?;
+        self.capture_publish_states(now_ns, &events)?;
         for entry in events {
             for event in entry["events"]
                 .as_array()
@@ -328,7 +351,8 @@ impl Server {
             {
                 let mut event = event.clone();
                 event["request_id"] = raw["request_id"].clone();
-                self.send(
+                self.send_at(
+                    now_ns,
                     &env.from,
                     Command::RecordEvent(Box::new(serde_json::from_value(event)?)),
                 )?;
@@ -341,12 +365,33 @@ impl Server {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct Temp(PathBuf);
+    impl Temp {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "mv-capture-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir(&path).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+            Self(path)
+        }
+    }
+    impl Drop for Temp {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
     fn export_journals_receipts_refusals_and_rolls_back_if_journal_fails() {
-        use std::os::unix::fs::PermissionsExt;
-        let root = std::env::temp_dir().join(format!("mv-capture-export-{}", std::process::id()));
-        fs::create_dir(&root).unwrap();
-        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let temp = Temp::new();
+        let root = temp.0.clone();
         let reg = |component: &str| -> Registration {
             serde_json::from_value(json!({"endpoint":{"component":component,"instance":format!("{component}-export")},"hello":{"schema":"hello/v0.2","contract_version":"v0.2","component":component,"component_version":"0.2.0","component_commit":"0123456789abcdef0123456789abcdef01234567","dependencies":[]}})).unwrap()
         };
@@ -540,14 +585,11 @@ mod tests {
                 fs::remove_file(archive).unwrap();
             }
         }
-        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn host_capture_is_journaled_replays_and_expires_ram_on_restart() {
-        use std::os::unix::fs::PermissionsExt;
-        let root = std::env::temp_dir().join(format!("mv-capture-{}", std::process::id()));
-        fs::create_dir(&root).unwrap();
-        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let temp = Temp::new();
+        let root = temp.0.clone();
         let reg = |component: &str| -> Registration {
             serde_json::from_value(json!({"endpoint":{"component":component,"instance":format!("{component}-capture")},"hello":{"schema":"hello/v0.2","contract_version":"v0.2","component":component,"component_version":"0.2.0","component_commit":"0123456789abcdef0123456789abcdef01234567","dependencies":[]}})).unwrap()
         };
@@ -626,7 +668,7 @@ mod tests {
                 .authority
                 .retain_witness(serde_json::to_string(&env).unwrap().as_bytes())
                 .unwrap();
-            server.capture_wire(&env, &request, boundary).unwrap();
+            server.capture_wire(0, &env, &request, boundary).unwrap();
             let messages: Vec<Value> = rx
                 .try_iter()
                 .map(|env| {
@@ -652,7 +694,7 @@ mod tests {
             "ts_ns":0,"from":ui,"to":server.config.core.endpoint,"session_id":"capture-session","seq":2,
             "nonce":"list","body":{"schema":"surface_request/v0.2","op":"list","params":{}}})).unwrap();
         let boundary = server.authority.retain_witness(b"list").unwrap();
-        server.capture_list_wire(&list, boundary).unwrap();
+        server.capture_list_wire(0, &list, boundary).unwrap();
         let carrier = serde_json::to_value(rx.try_recv().unwrap().body).unwrap();
         let result: Value =
             serde_json::from_str(carrier["data"]["detail"].as_str().unwrap()).unwrap();
@@ -667,14 +709,11 @@ mod tests {
             json!([])
         );
         drop(recovered);
-        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn wire_sealed_recordings_are_listed_with_negative_controls() {
-        use std::os::unix::fs::PermissionsExt;
-        let root = std::env::temp_dir().join(format!("mv-capture-reclist-{}", std::process::id()));
-        fs::create_dir(&root).unwrap();
-        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let temp = Temp::new();
+        let root = temp.0.clone();
         let reg = |component: &str| -> Registration {
             serde_json::from_value(json!({"endpoint":{"component":component,"instance":format!("{component}-reclist")},"hello":{"schema":"hello/v0.2","contract_version":"v0.2","component":component,"component_version":"0.2.0","component_commit":"0123456789abcdef0123456789abcdef01234567","dependencies":[]}})).unwrap()
         };
@@ -754,7 +793,7 @@ mod tests {
         }))
         .unwrap();
         let boundary = server.authority.retain_witness(b"list-empty").unwrap();
-        server.capture_list_wire(&empty_list, boundary).unwrap();
+        server.capture_list_wire(0, &empty_list, boundary).unwrap();
         let empty_detail = drain_reply(&rx, "capture-list:empty");
         assert_eq!(empty_detail["method"], "list");
         assert_eq!(empty_detail["reply"], json!({"ok":true,"rows":[]}));
@@ -787,7 +826,7 @@ mod tests {
                 .retain_witness(serde_json::to_string(&start_env).unwrap().as_bytes())
                 .unwrap();
             server
-                .capture_wire(&start_env, &start_req, boundary)
+                .capture_wire(0, &start_env, &start_req, boundary)
                 .unwrap();
             let start_detail = drain_reply(&rx, &start_id);
             assert_eq!(start_detail["method"], "recordStart");
@@ -827,7 +866,9 @@ mod tests {
                 .authority
                 .retain_witness(serde_json::to_string(&stop_env).unwrap().as_bytes())
                 .unwrap();
-            server.capture_wire(&stop_env, &stop_req, boundary).unwrap();
+            server
+                .capture_wire(0, &stop_env, &stop_req, boundary)
+                .unwrap();
             let stop_detail = drain_reply(&rx, &stop_id);
             assert_eq!(stop_detail["method"], "recordStop");
             assert_eq!(stop_detail["reply"]["ok"], true);
@@ -845,7 +886,7 @@ mod tests {
         }))
         .unwrap();
         let boundary = server.authority.retain_witness(b"list-sealed").unwrap();
-        server.capture_list_wire(&list_env, boundary).unwrap();
+        server.capture_list_wire(0, &list_env, boundary).unwrap();
         let list_detail = drain_reply(&rx, "capture-list:sealed");
         assert_eq!(list_detail["method"], "list");
         assert_eq!(list_detail["reply"]["ok"], true);
@@ -867,6 +908,39 @@ mod tests {
         // Negative control 2: a recording of another surface is not listed for surface-demo.
         assert!(demo_rows.iter().all(|r| r["surface_id"] == "surface-demo"));
         drop(server);
-        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn capture_tests_survive_same_process_concurrency_and_unwind() {
+        let first = Temp::new();
+        let second = Temp::new();
+        assert_ne!(first.0, second.0);
+        // Negative control: creating a directory at an active Temp path fails with AlreadyExists.
+        assert_eq!(
+            fs::create_dir(&second.0).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        let unwind_path = first.0.clone();
+        let result = std::panic::catch_unwind(move || {
+            let guard = first;
+            fs::write(guard.0.join("sentinel"), b"data").unwrap();
+            panic!("verify Temp Drop cleanup on unwind");
+        });
+        assert!(result.is_err());
+        assert!(!unwind_path.exists(), "Temp must remove dir on unwind");
+        assert!(second.0.is_dir(), "sibling Temp must remain intact");
+        let second_path = second.0.clone();
+        drop(second);
+        assert!(!second_path.exists());
+
+        std::thread::scope(|s| {
+            let a = s.spawn(wire_sealed_recordings_are_listed_with_negative_controls);
+            let b = s.spawn(wire_sealed_recordings_are_listed_with_negative_controls);
+            let c = s.spawn(host_capture_is_journaled_replays_and_expires_ram_on_restart);
+            let d = s.spawn(host_capture_is_journaled_replays_and_expires_ram_on_restart);
+            a.join().expect("first wire_sealed run must not collide");
+            b.join().expect("second wire_sealed run must not collide");
+            c.join().expect("first host_capture run must not collide");
+            d.join().expect("second host_capture run must not collide");
+        });
     }
 }
