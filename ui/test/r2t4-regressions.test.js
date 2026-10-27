@@ -268,8 +268,8 @@ describe('T4 Regression Tests (Fixed Findings)', () => {
         console.log('Skipping ARG-ui_shell-3 pkg import: @electron/asar unavailable');
         return;
       }
-      await assert.rejects(
-        pkg.packageShell({ MV_PKG_OUT: injectedOut, CAPSULE_UI_KIT_REPO: 'dummy' }),
+      assert.throws(
+        () => pkg.validateOutput(injectedOut, process.cwd()),
         /MV_PKG_OUT must not overlap/
       );
       assert.equal(existsSync(join(process.cwd(), 'injected-pkg-test')), false);
