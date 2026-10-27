@@ -24,6 +24,31 @@ fn policy(env: &Envelope, uid: u32) -> HandshakePolicy {
     .unwrap()
 }
 #[test]
+fn handshake_completes_within_budget() {
+    support::run(async {
+        let env = hello_env();
+        let expected = policy(&env, support::uid());
+        let (mut sender, mut receiver) = tokio::net::UnixStream::pair().unwrap();
+        let budget = std::time::Duration::from_secs(10);
+        let started = std::time::Instant::now();
+        write_frame(&mut sender, &env).await.unwrap();
+        let ready = tokio::time::timeout(
+            budget,
+            handshake(&mut receiver, &expected, &WireLimits::default()),
+        )
+        .await
+        .expect("hello exceeded the handshake budget")
+        .expect("valid hello must complete successfully");
+        let elapsed = started.elapsed();
+        eprintln!("handshake elapsed [MEASURED]: {elapsed:?}");
+        assert!(elapsed < budget, "handshake took {elapsed:?}");
+        assert_eq!(ready.endpoint(), &env.from);
+        assert_eq!(ready.session_id(), env.session_id);
+        assert_eq!(ready.uid(), support::uid());
+    });
+}
+
+#[test]
 fn authenticated_hello_binds_identity_and_pins() {
     support::run(async {
         let env = hello_env();

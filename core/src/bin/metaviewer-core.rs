@@ -6,6 +6,11 @@ async fn run() -> Result<()> {
     let config: Config = serde_json::from_slice(&std::fs::read(
         std::env::var_os("MV_CORE_CONFIG").ok_or("MV_CORE_CONFIG required")?,
     )?)?;
+    // [TARGET, unit decision] Pin this process to its compiled package version;
+    // refuse a foreign registration before creating sockets or session state.
+    if config.core.hello.component_version != env!("CARGO_PKG_VERSION") {
+        return Err("core component version pin mismatch".into());
+    }
     let uid = serve::effective_uid()?;
     config.validate(uid)?;
     let path =
