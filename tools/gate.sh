@@ -148,6 +148,25 @@ class GateTests(unittest.TestCase):
             with self.subTest(name=name, before=before):
                 self.refused_manifest(name, (self.fixture / name).read_text().replace(before, after))
 
+    def test_release_version_consistency(self):
+        version = (self.fixture / 'VERSION').read_text().strip()
+        for name in ('Cargo.toml', 'agents/pyproject.toml', 'ui/package.json',
+                     'Cargo.lock', 'ui/package-lock.json'):
+            with self.subTest(name=name):
+                original = (self.fixture / name).read_text()
+                self.assertIn(version, original)
+                self.refused_manifest(name, original.replace(version, '9.9.9', 1))
+        core = (self.fixture / 'core/Cargo.toml').read_text()
+        self.assertIn('version.workspace = true', core)
+        self.refused_manifest('core/Cargo.toml', core.replace(
+            'version.workspace = true', 'version = "9.9.9"'))
+        # A coordinated release must pass without editing the gate itself.
+        for name in ('VERSION', 'Cargo.toml', 'agents/pyproject.toml',
+                     'ui/package.json', 'Cargo.lock', 'ui/package-lock.json'):
+            original = (self.fixture / name).read_text()
+            self.write(name, original.replace(version, '9.9.9'))
+        self.assertIn('PASS manifests', self.call('--leg', 'manifests'))
+
     def test_dependency_admission(self):
         for value in ('^3.5.43', '~3.5.43', '*', '>=3.5.43', '3.5.42'):
             data = json.loads((self.fixture / 'ui/package.json').read_text())
@@ -750,6 +769,8 @@ def validate_frozen_dependencies(root):
             isinstance(lock.get('packages'), dict), 'package-lock.json: invalid lock format')
     locked_root = lock['packages'].get('')
     require(isinstance(locked_root, dict), 'package-lock.json: missing root package')
+    require(lock.get('version') == package.get('version'),
+            'package-lock.json: stale release version')
     for key in ('name', 'version', 'dependencies', 'devDependencies', 'engines'):
         require(locked_root.get(key) == package.get(key), 'package-lock.json: stale root ' + key)
     # Cargo resolves only the current host's graph: cross-platform archives need not
@@ -787,7 +808,7 @@ def validate_frozen_dependencies(root):
 
 def validate_manifests(root):
     version = (root / 'VERSION').read_text().strip()
-    require(version == '0.1.1', 'VERSION: metadata drift')
+    require(bool(version), 'VERSION: missing release version')
     expected = {
         'Cargo.toml': {
             'workspace': {'resolver': '2', 'members': ['core'], 'package': {
