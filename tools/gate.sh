@@ -105,9 +105,13 @@ class GateTests(unittest.TestCase):
         path.write_text(content)
 
     def call(self, *args, expected=0, env=None):
-        result = subprocess.run(
-            ['bash', str(self.fixture / 'tools/gate.sh'), *args],
-            cwd=self.temp.name, env=env, text=True, capture_output=True, timeout=120)
+        # Each fixture invocation owns fresh artifacts, even when the caller
+        # supplies a shared target. Keep normal CLI Rust builds unchanged.
+        with tempfile.TemporaryDirectory(prefix='cargo-target-', dir=self.temp.name) as target:
+            child = dict(os.environ if env is None else env, CARGO_TARGET_DIR=target)
+            result = subprocess.run(
+                ['bash', str(self.fixture / 'tools/gate.sh'), *args],
+                cwd=self.temp.name, env=child, text=True, capture_output=True, timeout=120)
         self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
         self.assertNotIn('SKIP', result.stdout)
         return result.stdout + result.stderr
