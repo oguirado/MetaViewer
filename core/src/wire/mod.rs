@@ -267,6 +267,7 @@ pub fn decode_envelope_with_limits(
     if value["schema"]
         .as_str()
         .is_some_and(|v| v != "envelope/v0.2")
+        || is_unknown_body_version(value["body"]["schema"].as_str())
         || value["body"]["schema"] == "hello/v0.2"
             && value["body"]["contract_version"]
                 .as_str()
@@ -287,6 +288,15 @@ pub fn decode_envelope_with_limits(
 }
 
 pub const MAX_WIRE_INTEGER: u64 = 9_007_199_254_740_991;
+fn is_unknown_body_version(schema: Option<&str>) -> bool {
+    let Some((family, version)) = schema.and_then(|s| s.split_once('/')) else {
+        return false;
+    };
+    !version.is_empty()
+        && version != "v0.2"
+        && family != "envelope"
+        && schemas::schema(&format!("{family}.schema.json")).is_some()
+}
 fn check_integer_rails(value: &Value) -> Result<(), DecodeError> {
     match value {
         Value::Number(n) => {

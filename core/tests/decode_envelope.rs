@@ -230,3 +230,118 @@ fn frame_paths_accept_literal_rn_and_refuse_controls() {
         assert!(decode_envelope(&env.to_string()).is_err());
     }
 }
+
+#[test]
+fn mv_tool_result_refuses_nested_v01_schemas_and_admits_v02() {
+    let base: serde_json::Value = serde_json::from_str(&fixture()).unwrap();
+    let frame: serde_json::Value = serde_json::from_str(include_str!(
+        "../../contracts/examples/v0.2/frame_ref.valid.json"
+    ))
+    .unwrap();
+    let surface: serde_json::Value = serde_json::from_str(include_str!(
+        "../../contracts/examples/v0.2/surface.valid.json"
+    ))
+    .unwrap();
+    let verified_result: serde_json::Value = serde_json::from_str(include_str!(
+        "../../contracts/examples/v0.2/mv_tool_result.valid.json"
+    ))
+    .unwrap();
+
+    let observe_v02 = serde_json::json!({
+        "schema": "mv_tool_result/v0.2",
+        "request_id": "req-001",
+        "op": "observe",
+        "status": "ok",
+        "observation": {
+            "schema": "observation/v0.2",
+            "frame_ref": frame,
+        }
+    });
+    let list_v02 = serde_json::json!({
+        "schema": "mv_tool_result/v0.2",
+        "request_id": "req-001",
+        "op": "list",
+        "status": "ok",
+        "surfaces": [surface],
+        "next_cursor": null
+    });
+    let propose_v02 = serde_json::json!({
+        "schema": "mv_tool_result/v0.2",
+        "request_id": "req-001",
+        "op": "propose",
+        "status": "admitted",
+        "verdict": {
+            "schema": "action_verdict/v0.2",
+            "proposal_id": "prop-001",
+            "decision": "admitted",
+            "core_seq": 1
+        }
+    });
+
+    for (body, pointer, v01_tag) in [
+        (&observe_v02, "/observation/schema", "observation/v0.1"),
+        (
+            &observe_v02,
+            "/observation/frame_ref/schema",
+            "frame_ref/v0.1",
+        ),
+        (&list_v02, "/surfaces/0/schema", "surface/v0.1"),
+        (&propose_v02, "/verdict/schema", "action_verdict/v0.1"),
+        (&verified_result, "/receipt/schema", "action_receipt/v0.1"),
+        (
+            &verified_result,
+            "/receipt/after_frame/schema",
+            "frame_ref/v0.1",
+        ),
+    ] {
+        let mut valid_env = base.clone();
+        valid_env["body"] = (*body).clone();
+        assert!(
+            decode_envelope(&valid_env.to_string()).is_ok(),
+            "negative control failed for {pointer}"
+        );
+
+        let mut bad_env = valid_env;
+        *bad_env["body"].pointer_mut(pointer).unwrap() = v01_tag.into();
+        assert!(
+            decode_envelope(&bad_env.to_string()).is_err(),
+            "nested v0.1 should be refused at {pointer}"
+        );
+    }
+}
+
+#[test]
+fn body_known_family_version_mismatch_is_unknown_version() {
+    use metaviewer_core::DecodeError;
+    let base: serde_json::Value = serde_json::from_str(&fixture()).unwrap();
+    assert!(decode_envelope(&base.to_string()).is_ok());
+
+    for tag in [
+        "action_proposal/v9.9",
+        "action_proposal/v0.1",
+        "hello/v9.9",
+        "mv_tool_result/v0.1",
+    ] {
+        let mut bad = base.clone();
+        bad["body"]["schema"] = tag.into();
+        assert_eq!(
+            decode_envelope(&bad.to_string()),
+            Err(DecodeError::UnknownVersion),
+            "{tag}"
+        );
+    }
+
+    for unknown_family in [
+        "unknown_family/v0.2",
+        "unknown_family/v9.9",
+        "envelope/v9.9",
+    ] {
+        let mut bad = base.clone();
+        bad["body"]["schema"] = unknown_family.into();
+        assert_eq!(
+            decode_envelope(&bad.to_string()),
+            Err(DecodeError::Malformed),
+            "{unknown_family}"
+        );
+    }
+}

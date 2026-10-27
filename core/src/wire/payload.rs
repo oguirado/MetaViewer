@@ -578,15 +578,13 @@ pub enum MvToolResultCase0Status {
     Value,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-// Legacy aliases are input-only compatibility with the frozen embedded contract.
-// Serialization always emits v0.2, matching standalone contracts and agents.
 pub enum MvToolResultObservationSchema {
-    #[serde(rename = "observation/v0.2", alias = "observation/v0.1")]
+    #[serde(rename = "observation/v0.2")]
     Value,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MvToolResultFrameSchema {
-    #[serde(rename = "frame_ref/v0.2", alias = "frame_ref/v0.1")]
+    #[serde(rename = "frame_ref/v0.2")]
     Value,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -676,7 +674,7 @@ pub enum MvToolResultCase1Op {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MvToolResultSurfaceSchema {
-    #[serde(rename = "surface/v0.2", alias = "surface/v0.1")]
+    #[serde(rename = "surface/v0.2")]
     Value,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -762,7 +760,7 @@ pub enum MvToolResultCase2Status {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MvToolResultVerdictAdmittedSchema {
-    #[serde(rename = "action_verdict/v0.2", alias = "action_verdict/v0.1")]
+    #[serde(rename = "action_verdict/v0.2")]
     Value,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -850,7 +848,7 @@ pub enum MvToolResultCase5Status {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MvToolResultReceiptVerifiedSchema {
-    #[serde(rename = "action_receipt/v0.2", alias = "action_receipt/v0.1")]
+    #[serde(rename = "action_receipt/v0.2")]
     Value,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
