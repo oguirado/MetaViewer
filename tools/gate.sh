@@ -4,7 +4,7 @@
 set -u
 
 usage() {
-    printf '%s\n' 'Usage: tools/gate.sh [--leg skeleton|laws|contracts|unit|manifests|js|rust|go|ui|ui-smoke | --self-test]' >&2
+    printf '%s\n' 'Usage: tools/gate.sh [--leg skeleton|laws|contracts|unit|agents|manifests|js|rust|go|ui|ui-smoke | --self-test]' >&2
     exit 2
 }
 selector=skeleton
@@ -14,7 +14,7 @@ case $# in
     2) [[ $1 == --leg ]] || usage; selector=$2 ;;
     *) usage ;;
 esac
-case $selector in skeleton|laws|contracts|unit|manifests|js|rust|go|ui|ui-smoke|self-test) ;; *) usage ;; esac
+case $selector in skeleton|laws|contracts|unit|agents|manifests|js|rust|go|ui|ui-smoke|self-test) ;; *) usage ;; esac
 [[ $selector != self-test || ${1:-} == --self-test ]] || usage
 root=$(cd -- "${BASH_SOURCE[0]%/*}/.." && pwd -P) || exit 2
 if ! command -v python3 >/dev/null; then
@@ -40,7 +40,7 @@ import unittest
 
 ROOT = Path(sys.argv[1])
 SELECTOR = sys.argv[2]
-BASE_LEAVES = ('manifests', 'laws', 'contracts', 'unit')
+BASE_LEAVES = ('manifests', 'laws', 'contracts', 'unit', 'agents')
 LEAVES = (*BASE_LEAVES, 'js', 'rust', 'go', 'ui', 'ui-smoke')
 FILES = ('Cargo.toml', 'core/Cargo.toml', 'daemon-adapter/go.mod',
          'agents/pyproject.toml', 'ui/package.json', '.gitignore')
@@ -97,6 +97,12 @@ class GateTests(unittest.TestCase):
                    "class Witness(unittest.TestCase):\n"
                    "    def test_witness(self):\n"
                    "        with open('unit.calls', 'a') as f: f.write('asserted\\n')\n"
+                   "        self.assertEqual(2 + 2, 4)\n")
+        self.write('agents/tests/test_witness.py',
+                   "import unittest\n"
+                   "class AgentsWitness(unittest.TestCase):\n"
+                   "    def test_witness(self):\n"
+                   "        with open('agents.calls', 'a') as f: f.write('asserted\\n')\n"
                    "        self.assertEqual(2 + 2, 4)\n")
 
     def write(self, name, content):
@@ -272,6 +278,23 @@ class GateTests(unittest.TestCase):
         output = self.call('--leg', 'laws', expected=1)
         self.assertIn('child rc=7', output)
         self.assertIn('FAIL laws', output)
+
+    def test_agents_leg_failure_and_missing_directory(self):
+        self.assertIn('PASS agents', self.call('--leg', 'agents'))
+        self.assertEqual((self.fixture / 'agents.calls').read_text(), 'asserted\n')
+        self.write('agents/tests/test_witness.py',
+                   'import unittest\nclass T(unittest.TestCase):\n'
+                   ' def test_failure(self): self.fail("planted agents failure")\n')
+        output = self.call('--leg', 'agents', expected=1)
+        self.assertIn('planted agents failure', output)
+        self.assertIn('FAIL agents\n', output)
+        self.assertIn('FAIL aggregate\n', output)
+        shutil.rmtree(self.fixture / 'agents/tests')
+        output = self.call('--leg', 'agents', expected=1)
+        self.assertIn('missing target: agents/tests', output)
+        self.assertIn('FAIL agents\n', output)
+        self.assertIn('FAIL aggregate\n', output)
+        self.assertNotIn('PASS agents', output)
 
     def test_laws_excludes_only_stash(self):
         shutil.copyfile(ROOT / 'tools/check_laws.py', self.fixture / 'tools/check_laws.py')
@@ -600,6 +623,23 @@ class GateTests(unittest.TestCase):
                           ['PASS ' + leg for leg in LEAVES]], ['PASS ' + leg for leg in LEAVES])
         self.assertEqual((self.fixture / 'unit.calls').read_text(), 'asserted\n')
         self.assertEqual((self.fixture / 'contract.calls').read_text(), 'called\n')
+        self.assertEqual((self.fixture / 'agents.calls').read_text(), 'asserted\n')
+        agents_test = self.fixture / 'agents/tests/test_witness.py'
+        original_agents_test = agents_test.read_text()
+        agents_test.write_text('import unittest\nclass T(unittest.TestCase):\n'
+                               ' def test_failure(self): self.fail("planted agents failure")\n')
+        output = self.call(expected=1, env=environment)
+        self.assertIn('planted agents failure', output)
+        self.assertIn('FAIL agents\n', output)
+        self.assertIn('FAIL aggregate\n', output)
+        self.assertIn('PASS ui-smoke\n', output)
+        shutil.rmtree(agents_test.parent)
+        output = self.call(expected=1, env=environment)
+        self.assertIn('missing target: agents/tests', output)
+        self.assertIn('FAIL agents\n', output)
+        self.assertIn('FAIL aggregate\n', output)
+        self.assertNotIn('PASS agents', output)
+        self.write('agents/tests/test_witness.py', original_agents_test)
         self.call('--leg', 'laws')
         scratch = (self.fixture / 'scratch.calls').read_text().splitlines()
         self.assertEqual(scratch[0], scratch[1])
@@ -1058,6 +1098,17 @@ def ui_smoke_leg(root, environment):
 
 
 def leaf(leg, root, environment):
+    # [TARGET, unit decision] Match CI discovery with a bounded run; an absent
+    # agents suite is a failed gate, rather than successful empty discovery.
+    if leg == 'agents':
+        if not (root / 'agents/tests').is_dir():
+            print('missing target: agents/tests', file=sys.stderr)
+            return 1
+        rc = bounded(['python3', '-m', 'unittest', 'discover', '-s', 'agents/tests'],
+                     root, environment, seconds=300)
+        if rc:
+            print(f'{leg}: child rc={rc}', file=sys.stderr)
+        return 0 if rc == 0 else 124 if rc == 124 else 1
     targets = {
         'manifests': ('VERSION', *FILES),
         'laws': ('VERSION', 'CHANGELOG.md', 'tools/check_laws.py'),
