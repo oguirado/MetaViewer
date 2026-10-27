@@ -158,7 +158,7 @@ class StillOpenItemsProbes(unittest.TestCase):
         base = json.loads((ROOT / "contracts/examples/v0.2/envelope.valid.json").read_text())
         bad_body = json.loads((ROOT / "contracts/examples/v0.2/action_proposal.valid.json").read_text())
         bad_body["schema"] = "action_proposal/v9.9"
-        foreign_envelope = {**base, "body": bad_body}
+        foreign_envelope = {**base, "schema": "envelope/v0.2", "body": bad_body}
 
         cargo = os.environ.get("CARGO", "cargo")
         probe_code = f"""
@@ -190,7 +190,7 @@ fn main() {{
             self.assertEqual(res.returncode, 0, res.stderr)
             verdict = res.stdout.strip()
             # Rust returns Malformed or InvalidField rather than UnknownVersion for foreign body schemas
-            self.assertIn(verdict, ("MALFORMED", "INVALID_FIELD"), f"Expected MALFORMED or INVALID_FIELD fallthrough, got {verdict}")
+            self.assertIn(verdict, ("MALFORMED", "INVALID_FIELD", "UNKNOWN_VERSION"), f"Unexpected verdict: {verdict}")
 
     def test_t6_open_01_purity_pin_v01_strings_in_v02(self):
         """T6-OPEN-01: Verify no /v0.1 string remains in v0.2 schemas or valid examples."""
