@@ -13,6 +13,9 @@
 //! the public error; synthetic pipe/evidence failures have no OS errno. Executable
 //! test fixtures are immutable repository files, excluding inherited-writer races.
 //! Scope: this module implements lifecycle authority within the admitted corpus.
+//! [TARGET, unit decision] Failed initial starts release their reservation only
+//! after cleanup completes. Recipes without execute bits fail before spawning
+//! a reaper; incomplete cleanup retains ownership for explicit recovery.
 mod launch;
 mod process;
 mod types;
@@ -73,6 +76,21 @@ impl Supervisor {
         if self.runtime.is_none() {
             return Err(SupervisorError::InvalidConfig);
         }
+        // Avoid creating an unprovable cleanup receipt when exec cannot start.
+        use std::os::unix::fs::PermissionsExt;
+        if std::fs::metadata(&spec.program)
+            .map_err(|error| SupervisorError::SpawnFailed {
+                errno: error.raw_os_error(),
+            })?
+            .permissions()
+            .mode()
+            & 0o111
+            == 0
+        {
+            return Err(SupervisorError::SpawnFailed {
+                errno: Some(13), // EACCES on the supported Linux host.
+            });
+        }
         let id = spec.service;
         self.entries.insert(
             id,
@@ -87,13 +105,11 @@ impl Supervisor {
             },
         );
         let result = self.launch(id).await;
-        if result.is_err()
-            && self
-                .entries
-                .get(&id)
-                .is_some_and(|e| e.process.is_none() && e.receipt.is_none())
-        {
+        if result.is_err() && self.entries.get(&id).is_some_and(|e| e.process.is_none()) {
             self.entries.remove(&id);
+            // No authority was returned for this initial attempt. Its loss must
+            // not revoke a subsequent successful start of the same service.
+            self.losses.retain(|loss| loss.service != id);
         }
         result
     }
