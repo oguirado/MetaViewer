@@ -5,7 +5,7 @@
 # Branch protection (set by the maintainer in the hosting UI; comments do not
 # configure it): require the `ci-required` status plus the separately owned
 # `Secrets / secrets` status on `main`, fast-forward merges only from green.
-# Optional jobs (build-macos, build-windows; manual-only while the repository is private) and the nightly volume workflow
+# Optional build-only jobs (build-macos, build-windows; manual or integration/main push) and the nightly volume workflow
 # are never required statuses.
 #
 # Host-only by design (never in this file): sealed-toolchain capsule runs,
@@ -219,7 +219,14 @@ jobs:
                 repr(sorted(cjobs)))
           check("f1-ci-timeouts", all(v == 25 for v in cjobs.values()), repr(cjobs))
           check("f1-vol-jobs", set(vjobs) >= {"volume-property", "volume-mutants", "volume-e2e"}, repr(sorted(vjobs)))
-          check("f1-vol-timeouts", all(v == 60 for v in vjobs.values()), repr(vjobs))
+          # [TARGET, unit decision] Keep the longer qualification leg's existing
+          # budget: volume.yml runs the AC-13 qualification after E2E smoke;
+          # tests/test_ci_volume_e2e.py guards both loops and their ordering.
+          volume_timeouts = {"volume-property": 60, "volume-mutants": 60, "volume-e2e": 180}
+          check("f1-vol-timeouts", vjobs == volume_timeouts, repr(vjobs))
+          for job, minutes in volume_timeouts.items():
+              mutant = dict(volume_timeouts, **{job: minutes + 1})
+              check("f1-neg-vol-timeout-" + job, mutant != volume_timeouts)
           mut_vol = "on:\n  schedule:\n  pull_request:\n"
           check("f1-neg-vol-trigger", set(top_block_keys(mut_vol, "on")) != {"schedule", "workflow_dispatch"})
           mut_jobs = "jobs:\n  lone:\n    runs-on: x\n"
@@ -735,6 +742,13 @@ jobs:
           rustup toolchain install 1.92.0 --profile minimal --component rustfmt
           rustup override set 1.97.0
           cargo fetch --locked
+          # [TARGET, unit decision] Provision real foreign-owned metadata before
+          # entering the single-UID offline namespace. No subordinate UID map.
+          foreign_frame="$(mktemp "$RUNNER_TEMP/mv-foreign-frame.XXXXXX")"
+          printf '\001\002\003' > "$foreign_frame"
+          sudo chown root:root "$foreign_frame"
+          sudo chmod 600 "$foreign_frame"
+          printf 'MV_VERIFY_FOREIGN_FRAME=%s\n' "$foreign_frame" >> "$GITHUB_ENV"
       - name: Require build network namespace
         run: |
           set -euo pipefail
@@ -1255,7 +1269,15 @@ jobs:
       # the JS gates install and launch Electron on hosted Ubuntu.
       - name: Prime locked npm cache
         working-directory: ui
-        run: npm ci --ignore-scripts --no-audit --no-fund
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          # [TARGET, unit decision] setup-node distributions include the headers
+          # matching process.execPath. Reuse them for node-pty's offline rebuild.
+          node_prefix="$(node -p 'require("node:path").dirname(require("node:path").dirname(process.execPath))')"
+          test -f "$node_prefix/include/node/node.h"
+          test -f "$node_prefix/include/node/config.gypi"
+          printf 'npm_config_nodedir=%s\n' "$node_prefix" >> "$GITHUB_ENV"
       - name: Permit Chromium user namespace sandbox on hosted Ubuntu
         run: |
           set -euo pipefail
@@ -1512,7 +1534,15 @@ jobs:
       # frozen offline resolution; provision their toolchain/cache explicitly.
       - name: Prime locked npm cache
         working-directory: ui
-        run: npm ci --ignore-scripts --no-audit --no-fund
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          # [TARGET, unit decision] setup-node distributions include the headers
+          # matching process.execPath. Reuse them for node-pty's offline rebuild.
+          node_prefix="$(node -p 'require("node:path").dirname(require("node:path").dirname(process.execPath))')"
+          test -f "$node_prefix/include/node/node.h"
+          test -f "$node_prefix/include/node/config.gypi"
+          printf 'npm_config_nodedir=%s\n' "$node_prefix" >> "$GITHUB_ENV"
       - name: Require build network namespace
         run: |
           set -euo pipefail
@@ -1878,9 +1908,8 @@ jobs:
           finish_gate package UNEXEC NOT_APPLICABLE "independent product evidence ABSENT; distribution requires verified bytes" "$LOG" .github/workflows/ci.yml "unexecuted" 0 -- package-pending || exit 2
           exit 1
   build-macos:
-    # Manual runs only while the repository is private (hosted minutes are billed x10 on macOS, x2 on Windows);
-    # remove this condition when the repository goes public, before submission.
-    if: github.event_name == 'workflow_dispatch'
+    # Public-repository build-only evidence; never a required status.
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/bridge/integration' || github.ref == 'refs/heads/main'))
     runs-on: macos-latest
     timeout-minutes: 25
     continue-on-error: true
@@ -1984,9 +2013,8 @@ jobs:
           finish_gate build-macos UNEXEC NOT_APPLICABLE "packager argv ABSENT in W0, build-only leg" "$LOG" .github/workflows/ci.yml "unexecuted" 0 -- package-pending || exit 2
           exit 0
   build-windows:
-    # Manual runs only while the repository is private (hosted minutes are billed x10 on macOS, x2 on Windows);
-    # remove this condition when the repository goes public, before submission.
-    if: github.event_name == 'workflow_dispatch'
+    # Public-repository build-only evidence; never a required status.
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/bridge/integration' || github.ref == 'refs/heads/main'))
     runs-on: windows-latest
     timeout-minutes: 25
     continue-on-error: true

@@ -1,7 +1,13 @@
+// [TARGET, unit decision] CI supplies a non-secret root-owned private file via
+// MV_VERIFY_FOREIGN_FRAME before network isolation. Standalone Linux runs may
+// use the host's private SSH key inode as metadata only: it is never read.
+// Bind it into a private mount namespace so the production RAM-path gate stays
+// exercised. No subordinate mappings, chown, or newuidmap are needed here.
+
 use super::*;
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::os::unix::fs::{chown, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::process::Command;
 
 struct FrameFile(FrameRef);
@@ -58,10 +64,8 @@ fn owner_only_frame_is_accepted() {
 fn foreign_uid_is_rejected() {
     const CHILD: &str = "MV_VERIFY_FOREIGN_UID_CHILD";
     if std::env::var_os(CHILD).is_none() {
-        // A subordinate UID mapping supplies real foreign-owned metadata without sudo.
-        // Failure to establish this runner fails the test; there is no skipped path.
         let output = Command::new("unshare")
-            .args(["--user", "--map-auto", "--map-root-user"])
+            .args(["--user", "--map-root-user", "--mount"])
             .arg(std::env::current_exe().unwrap())
             .args([
                 "--exact",
@@ -79,12 +83,45 @@ fn foreign_uid_is_rejected() {
         );
         return;
     }
-    let fixture = FrameFile::new(0o600);
-    assert_eq!(crate::serve::effective_uid().unwrap(), 0);
-    chown(&fixture.0.ramws_path, Some(1), None).unwrap();
-    assert_eq!(fs::metadata(&fixture.0.ramws_path).unwrap().uid(), 1);
+    let source = std::env::var_os("MV_VERIFY_FOREIGN_FRAME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "/etc/ssh/ssh_host_ed25519_key".into());
+    let metadata = fs::metadata(&source)
+        .expect("provide MV_VERIFY_FOREIGN_FRAME: root-owned private regular fixture required");
+    assert!(metadata.is_file());
+    assert_eq!(metadata.mode() & 0o077, 0, "fixture must be private");
+    assert_ne!(metadata.uid(), crate::serve::effective_uid().unwrap());
+    assert!(metadata.len() > 0 && metadata.len() <= MAX_RGB_BYTES);
+    assert!(metadata.len().is_multiple_of(3));
+
+    let mut fixture = FrameFile::new(0o600);
+    // Negative control in the same namespace: the own-UID frame is accepted.
+    assert_eq!(read_published_frame(&fixture.0).unwrap(), [1, 2, 3]);
+    let status = Command::new("mount")
+        .arg("--bind")
+        .arg(&source)
+        .arg(&fixture.0.ramws_path)
+        .status()
+        .unwrap();
+    assert!(status.success(), "foreign fixture bind mount failed");
+    fixture.0.width = metadata.len() / 3;
+    let foreign = fs::metadata(&fixture.0.ramws_path).unwrap();
+    assert_ne!(foreign.uid(), crate::serve::effective_uid().unwrap());
+    assert_eq!(foreign.mode() & 0o077, 0);
+    assert_eq!(foreign.len(), byte_len(&fixture.0).unwrap());
+    // If the UID check regresses, opening the private foreign inode would yield
+    // PermissionDenied, not the InvalidData rejection asserted below.
     assert_eq!(
-        read_published_frame(&fixture.0).unwrap_err().kind(),
-        io::ErrorKind::InvalidData
+        fs::File::open(&fixture.0.ramws_path).unwrap_err().kind(),
+        io::ErrorKind::PermissionDenied
     );
+    let result = read_published_frame(&fixture.0);
+    let status = Command::new("umount")
+        .arg(&fixture.0.ramws_path)
+        .status()
+        .unwrap();
+    assert!(status.success(), "foreign fixture unmount failed");
+    assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidData);
+    fixture.0.width = 1;
+    assert_eq!(read_published_frame(&fixture.0).unwrap(), [1, 2, 3]);
 }
