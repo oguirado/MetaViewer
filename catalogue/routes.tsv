@@ -890,6 +890,7 @@ volume_e2e.py	scripts/volume_e2e.py
 install-dcff74b4a1e8	tests/ci/install_electron.test.cjs
 install-d80e15635c74	tests/ci/install_electron_mutation.test.cjs
 test_ci_counts.py	tests/ci/test_ci_counts.py
+test_ci_next_gates.py	tests/ci/test_ci_next_gates.py
 test_fx2_package.py	tests/ci/test_fx2_package.py
 test_hosted_fixes.py	tests/ci/test_hosted_fixes.py
 testhos-bd5b7a00eba7	tests/ci/test_hosted_run3_policy.py
