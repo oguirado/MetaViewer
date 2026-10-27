@@ -749,6 +749,35 @@ class GateTests(unittest.TestCase):
                                          environment, seconds=0.2), 124)
                 for marker_path in (late_parent, late_child):
                     self.assertFalse(Path('/proc', marker_path.read_text()).exists())
+                setsid_parent = Path(self.temp.name) / 'setsid-parent'
+                setsid_grandchild = Path(self.temp.name) / 'setsid-grandchild'
+                setsid_code = (
+                    "import os,pathlib,sys,time\n"
+                    "pathlib.Path(sys.argv[1]).write_text(str(os.getpid()))\n"
+                    "r, w = os.pipe()\n"
+                    "mid = os.fork()\n"
+                    "if mid == 0:\n"
+                    "    os.close(r)\n"
+                    "    gc = os.fork()\n"
+                    "    if gc == 0:\n"
+                    "        os.setsid()\n"
+                    "        pathlib.Path(sys.argv[2]).write_text(str(os.getpid()))\n"
+                    "        os.close(w)\n"
+                    "        time.sleep(30)\n"
+                    "    os._exit(0)\n"
+                    "os.close(w)\n"
+                    "os.waitpid(mid, 0)\n"
+                    "os.read(r, 1)\n"
+                    "time.sleep(30)\n"
+                )
+                self.assertEqual(bounded([sys.executable, '-c', setsid_code,
+                                          str(setsid_parent), str(setsid_grandchild)],
+                                         self.fixture, environment, seconds=0.2), 124)
+                for marker_path in (setsid_parent, setsid_grandchild):
+                    self.assertFalse(Path('/proc', marker_path.read_text()).exists())
+                subreaper = ctypes.c_int(-1)
+                if ctypes.CDLL(None).prctl(37, ctypes.byref(subreaper), 0, 0, 0) == 0:
+                    self.assertEqual(subreaper.value, 0)
         finally:
             for key, val in saved.items():
                 if val is None:
@@ -962,14 +991,21 @@ SANITIZED_ENV_KEYS = (
 
 def descendants(parent):
     children = {}
+    caller_pid = os.getpid()
     caller_pgrp = os.getpgrp()
+    parent_start = process_identity(parent) if type(parent) is int and parent > 1 else None
     for path in Path('/proc').glob('[0-9]*/stat'):
         try:
             pid = int(path.parent.name)
             fields = path.read_text().rsplit(')', 1)[1].split()
-            children.setdefault(int(fields[1]), []).append(pid)
-            if type(parent) is int and parent > 1 and parent != caller_pgrp and len(fields) > 3:
-                if int(fields[2]) == parent or int(fields[3]) == parent:
+            ppid = int(fields[1])
+            children.setdefault(ppid, []).append(pid)
+            if type(parent) is int and parent > 1 and parent != caller_pgrp and len(fields) > 19:
+                pgrp, sid = int(fields[2]), int(fields[3])
+                if pgrp == parent or sid == parent:
+                    children.setdefault(parent, []).append(pid)
+                elif (ppid == caller_pid and pgrp != caller_pgrp and
+                      (parent_start is None or int(fields[19]) >= int(parent_start))):
                     children.setdefault(parent, []).append(pid)
         except (FileNotFoundError, ProcessLookupError, ValueError):
             continue
@@ -1023,13 +1059,18 @@ def stop_process_tree(process):
             for _ in range(5):
                 time.sleep(0.01)
                 refresh_pids()
+    refresh_pids()
     process.wait()
     for pid in pids:
         if type(pid) is int and pid > 1 and pid != process.pid:
-            try:
-                os.waitpid(pid, os.WNOHANG)
-            except ChildProcessError:
-                continue
+            for _ in range(20):
+                try:
+                    wpid, _ = os.waitpid(pid, os.WNOHANG)
+                    if wpid == pid or not Path('/proc', str(pid)).exists():
+                        break
+                    time.sleep(0.005)
+                except ChildProcessError:
+                    break
 
 
 def process_identity(pid):
@@ -1040,16 +1081,27 @@ def process_identity(pid):
 
 
 def bounded(argv, cwd, environment, seconds=300):
-    process = subprocess.Popen(argv, cwd=cwd, env=environment, start_new_session=True)
     try:
+        ctypes.CDLL(None).prctl(36, 1, 0, 0, 0)
+    except Exception:
+        pass
+    process = None
+    try:
+        process = subprocess.Popen(argv, cwd=cwd, env=environment, start_new_session=True)
         try:
             return process.wait(timeout=seconds)
         except subprocess.TimeoutExpired:
             print('timeout: ' + repr(argv), file=sys.stderr)
             return 124
     finally:
-        if process.poll() is None:
-            stop_process_tree(process)
+        try:
+            if process is not None and process.poll() is None:
+                stop_process_tree(process)
+        finally:
+            try:
+                ctypes.CDLL(None).prctl(36, 0, 0, 0, 0)
+            except Exception:
+                pass
 
 
 class private_environment:

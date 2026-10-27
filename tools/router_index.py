@@ -252,6 +252,11 @@ _SYM_PATTERNS = {
             r"(?:struct|enum|trait|type)\s+([A-Za-z_][A-Za-z0-9_]*)\b",
             re.M,
         ),
+        re.compile(
+            r"^\s*(?:pub(?:\([^)]*\))?\s+)?"
+            r"const\s+([A-Za-z_][A-Za-z0-9_]*)\s*:",
+            re.M,
+        ),
     ),
     "go": (
         re.compile(
@@ -319,17 +324,127 @@ def _is_test_path(rel):
     return False
 
 
+_RUST_CFG_TEST_RE = re.compile(r"#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]")
+_RUST_RAW_STR_RE = re.compile(r'b?r(#*)"')
+_RUST_CHAR_LIT_RE = re.compile(r"b?'(?:\\.|[^'\\\n])'")
+
+
+def _skip_rust_comment_or_literal(text, i):
+    n = len(text)
+    if text.startswith("//", i):
+        nl = text.find("\n", i + 2)
+        return n if nl == -1 else nl + 1
+    if text.startswith("/*", i):
+        depth = 1
+        j = i + 2
+        while j < n and depth > 0:
+            if text.startswith("/*", j):
+                depth += 1
+                j += 2
+            elif text.startswith("*/", j):
+                depth -= 1
+                j += 2
+            else:
+                j += 1
+        return j
+    if text[i] in ("b", "r", '"'):
+        prev_ok = (i == 0) or not (text[i - 1].isalnum() or text[i - 1] == "_")
+        if prev_ok:
+            m = _RUST_RAW_STR_RE.match(text, i)
+            if m is not None:
+                closing = '"' + m.group(1)
+                end = text.find(closing, m.end())
+                return n if end == -1 else end + len(closing)
+            if text.startswith('b"', i) or text[i] == '"':
+                j = i + (2 if text.startswith('b"', i) else 1)
+                while j < n:
+                    if text[j] == "\\":
+                        j += 2
+                    elif text[j] == '"':
+                        return j + 1
+                    else:
+                        j += 1
+                return n
+    if text[i] == "'" or (
+        text.startswith("b'", i) and (i == 0 or not (text[i - 1].isalnum() or text[i - 1] == "_"))
+    ):
+        m = _RUST_CHAR_LIT_RE.match(text, i)
+        if m is not None:
+            return m.end()
+    return i
+
+
+def _strip_rust_cfg_test(text):
+    out = []
+    i = 0
+    n = len(text)
+    while i < n:
+        nxt = _skip_rust_comment_or_literal(text, i)
+        if nxt > i:
+            out.append(text[i:nxt])
+            i = nxt
+            continue
+        if text[i] == "#":
+            m = _RUST_CFG_TEST_RE.match(text, i)
+            if m is not None:
+                j = m.end()
+                brace = bracket = paren = 0
+                in_body_brace = False
+                semi_only = None
+                while j < n:
+                    nxt = _skip_rust_comment_or_literal(text, j)
+                    if nxt > j:
+                        j = nxt
+                        continue
+                    ch = text[j]
+                    if brace == 0 and bracket == 0 and paren == 0 and semi_only is None:
+                        if ch.isalpha() or ch == "_":
+                            ident_m = re.match(r"[A-Za-z_][A-Za-z0-9_]*", text[j:])
+                            if ident_m:
+                                kw = ident_m.group(0)
+                                if kw in ("use", "static", "type"):
+                                    semi_only = True
+                                elif kw in ("mod", "fn", "struct", "enum", "union", "trait", "impl"):
+                                    semi_only = False
+                                j += len(kw)
+                                continue
+                        elif ch == "=":
+                            semi_only = True
+                    if ch == "[":
+                        bracket += 1
+                    elif ch == "]":
+                        bracket = max(0, bracket - 1)
+                    elif ch == "(":
+                        paren += 1
+                    elif ch == ")":
+                        paren = max(0, paren - 1)
+                    elif ch == "{":
+                        if brace == 0 and bracket == 0 and paren == 0 and not semi_only:
+                            in_body_brace = True
+                        brace += 1
+                    elif ch == "}":
+                        brace = max(0, brace - 1)
+                        if in_body_brace and brace == 0:
+                            j += 1
+                            break
+                    elif ch == ";" and brace == 0 and bracket == 0 and paren == 0 and not in_body_brace:
+                        j += 1
+                        break
+                    j += 1
+                i = j
+                continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+
 def _extract_symbols_and_docs(rel, suffix, raw):
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
         return [], []
     ext = suffix.lower()
-    scan_text = text
-    if ext == "rs":
-        cfg_test = re.search(r"#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]", text)
-        if cfg_test is not None:
-            scan_text = text[:cfg_test.start()]
+    scan_text = _strip_rust_cfg_test(text) if ext == "rs" else text
     syms = []
     for pat in _SYM_PATTERNS.get(ext, ()):
         for match in pat.finditer(scan_text):
@@ -413,9 +528,9 @@ def _build_search(rel, name, stem, trigger, suffix, raw):
             test_kws.append(suffix[:64])
         search = {"triggers": test_trigs[:12], "keywords": test_kws[:24]}
         if neg_terms:
-            phrase = " ".join(neg_terms)[:200]
-            if phrase:
-                search["exclusions"] = [phrase] * 12
+            exclusions = list(dict.fromkeys(t for t in neg_terms if t))[:12]
+            if exclusions:
+                search["exclusions"] = exclusions
         return search
 
     triggers = []
@@ -535,7 +650,7 @@ def _build_search(rel, name, stem, trigger, suffix, raw):
             for stok in _ident_tokens(sym):
                 if stok not in concept_words:
                     concept_words.append(stok)
-        for dtok in doc_toks[:64]:
+        for dtok in doc_toks[:128]:
             if dtok not in concept_words:
                 concept_words.append(dtok)
     if concept_words:
@@ -543,11 +658,30 @@ def _build_search(rel, name, stem, trigger, suffix, raw):
         add_task(phrase)
         add_q(phrase)
     if syms:
-        for chunk_start in range(0, min(len(syms), 64), 8):
-            chunk = syms[chunk_start:chunk_start + 8]
-            sym_phrase = " ".join(chunk)
-            add_task(sym_phrase)
-            add_q(sym_phrase)
+        sym_cur = []
+        for sym in syms[:64]:
+            cand = " ".join(sym_cur + [sym])
+            if sym_cur and len(cand) > 200:
+                add_task(" ".join(sym_cur))
+                add_q(" ".join(sym_cur))
+                sym_cur = [sym]
+            else:
+                sym_cur.append(sym)
+        if sym_cur:
+            add_task(" ".join(sym_cur))
+            add_q(" ".join(sym_cur))
+    rem_cur = []
+    for word in concept_words[24:192]:
+        cand = " ".join(rem_cur + [word])
+        if rem_cur and len(cand) > 200:
+            add_task(" ".join(rem_cur))
+            add_q(" ".join(rem_cur))
+            rem_cur = [word]
+        else:
+            rem_cur.append(word)
+    if rem_cur:
+        add_task(" ".join(rem_cur))
+        add_q(" ".join(rem_cur))
 
     if not triggers:
         triggers.append(trigger)

@@ -415,6 +415,41 @@ class RouterQuerySmokeTests(unittest.TestCase):
             self.assertEqual(proc.stdout, "")
             self.assertIn("missing/invalid", proc.stderr)
 
+    def test_cfg_test_affected_rust_symbols_route_and_exclusions_deduplicated(self):
+        # EVCI-05: production symbols after early #[cfg(test)] items route to their files.
+        for query, expected in (
+            ("export_plan", "core/src/record/capture/export.rs"),
+            ("ElementWitness", "core/src/verify/mod.rs"),
+            ("publish_frame", "core/src/control/mod.rs"),
+        ):
+            ans = self.route_v2.route(self.index, query, k=3)
+            paths = resolve_shortlist_paths(ans, self.lookup, root=REPO_ROOT)
+            self.assertTrue(
+                matches_expected(paths, expected),
+                "query=%r expected=%r got=%r" % (query, expected, paths),
+            )
+        # Negative control: a test-only symbol inside #[cfg(test)] does not route to admission/mod.rs.
+        test_only_ans = self.route_v2.route(self.index, "helper_only_in_cfg_test", k=3)
+        test_only_paths = resolve_shortlist_paths(test_only_ans, self.lookup, root=REPO_ROOT)
+        self.assertNotIn("core/src/admission/mod.rs", test_only_paths)
+
+        # EVCI-03: every test-path node in compiled material has deduplicated exclusions.
+        test_nodes_checked = 0
+        for line in self.fresh_material.nodes_jsonl.decode("utf-8").splitlines():
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            rel = row["purpose"][len(PURPOSE_PREFIX):]
+            exclusions = row["search"].get("exclusions", [])
+            if self.router_mod._is_test_path(rel):
+                if exclusions:
+                    test_nodes_checked += 1
+                    self.assertEqual(len(set(exclusions)), len(exclusions), rel)
+                    self.assertLessEqual(len(exclusions), 12, rel)
+            else:
+                self.assertEqual(exclusions, [], rel)
+        self.assertGreater(test_nodes_checked, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

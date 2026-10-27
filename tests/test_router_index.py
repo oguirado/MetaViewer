@@ -975,7 +975,106 @@ class RouterIndexTests(unittest.TestCase):
             self.assertTrue(mod._is_test_path(test_rel), test_rel)
             t_search = rows_by_path[test_rel]["search"]
             self.assertNotIn("admission", t_search["triggers"])
-            self.assertTrue(t_search.get("exclusions"), test_rel)
+            exclusions = t_search.get("exclusions")
+            self.assertTrue(exclusions, test_rel)
+            self.assertEqual(len(set(exclusions)), len(exclusions), test_rel)
+            self.assertLessEqual(len(exclusions), 12, test_rel)
+
+    def test_test_path_exclusions_deduplicated_and_bounded(self):
+        root, _env = self._tree(self._base_files())
+        mod = self._load_mod(root)
+
+        # EVCI-03: test-path exclusions are deduplicated and capped at 12.
+        gate_search = mod._build_search(
+            "tests/ci/test_gate.py", "test_gate.py", "test_gate", "test_gate", "py",
+            b"def test_gate():\n    pass\n",
+        )
+        exclusions = gate_search.get("exclusions", [])
+        self.assertTrue(exclusions)
+        self.assertEqual(len(set(exclusions)), len(exclusions))
+        self.assertIn("ci", exclusions)
+        self.assertIn("gate", exclusions)
+        self.assertNotIn("test", exclusions)
+
+        long_rel = "tests/alpha_beta_gamma_delta_epsilon_zeta_eta_theta_iota_kappa_lambda_mu_nu_xi_test.py"
+        long_search = mod._build_search(
+            long_rel,
+            long_rel.rsplit("/", 1)[-1],
+            long_rel.rsplit("/", 1)[-1][:-3],
+            "long_test",
+            "py",
+            b"def test_long():\n    pass\n",
+        )
+        long_excl = long_search.get("exclusions", [])
+        self.assertEqual(len(long_excl), 12)
+        self.assertEqual(len(set(long_excl)), 12)
+        # Negative control: non-test paths do not emit test exclusions.
+        repo_root = SCRIPT_SRC.parent.parent
+        prod_search = mod._build_search(
+            "tools/router_index.py", "router_index.py", "router_index", "router_index", "py",
+            (repo_root / "tools/router_index.py").read_bytes(),
+        )
+        self.assertNotIn("exclusions", prod_search)
+
+    def test_rust_cfg_test_stripping_preserves_production_symbols(self):
+        root, _env = self._tree(self._base_files())
+        mod = self._load_mod(root)
+        repo_root = SCRIPT_SRC.parent.parent
+
+        # EVCI-05: comments/strings mentioning #[cfg(test)] and inline #[cfg(test)]
+        # items do not truncate symbol extraction for subsequent production items.
+        comment_and_str_rs = (
+            b"//! Note: #[cfg(test)] is used for unit tests\n"
+            b"/* Block comment mentioning #[cfg(test)] mod tests {} */\n"
+            b"const DOC_HINT: &str = \"#[cfg(test)]\";\n"
+            b"const RAW_HINT: &str = r#\"#[cfg(test)] mod fake {}\"#;\n"
+            b"#[cfg(test)]\n"
+            b"use std::sync::atomic::{AtomicU64, Ordering};\n"
+            b"#[cfg(test)]\n"
+            b"fn test_only_inline_helper() {}\n"
+            b"pub struct AuthorityCore {}\n"
+            b"pub fn production_entry() {}\n"
+            b"#[cfg(test)]\n"
+            b"mod tests {\n"
+            b"    fn helper_only_in_cfg_test() {}\n"
+            b"}\n"
+        )
+        syms, doc_tokens = mod._extract_symbols_and_docs("src/lib.rs", "rs", comment_and_str_rs)
+        self.assertIn("AuthorityCore", syms)
+        self.assertIn("production_entry", syms)
+        self.assertIn("DOC_HINT", syms)
+        self.assertIn("RAW_HINT", syms)
+        self.assertIn("unit", doc_tokens)
+        # Negative control: symbols inside #[cfg(test)] items/blocks are excluded.
+        self.assertNotIn("test_only_inline_helper", syms)
+        self.assertNotIn("helper_only_in_cfg_test", syms)
+
+        # Real repository production files with early #[cfg(test)] items yield their symbols.
+        export_syms, _ = mod._extract_symbols_and_docs(
+            "core/src/record/capture/export.rs",
+            "rs",
+            (repo_root / "core/src/record/capture/export.rs").read_bytes(),
+        )
+        self.assertIn("ExportPlan", export_syms)
+        self.assertIn("Publication", export_syms)
+        self.assertIn("export_plan", export_syms)
+        self.assertNotIn("publish", export_syms)
+
+        verify_syms, _ = mod._extract_symbols_and_docs(
+            "core/src/verify/mod.rs",
+            "rs",
+            (repo_root / "core/src/verify/mod.rs").read_bytes(),
+        )
+        self.assertIn("MAX_RGB_BYTES", verify_syms)
+        self.assertIn("ElementWitness", verify_syms)
+        self.assertIn("verify_receipt", verify_syms)
+
+        control_syms, _ = mod._extract_symbols_and_docs(
+            "core/src/control/mod.rs",
+            "rs",
+            (repo_root / "core/src/control/mod.rs").read_bytes(),
+        )
+        self.assertIn("publish_frame", control_syms)
 
 
 if __name__ == "__main__":
