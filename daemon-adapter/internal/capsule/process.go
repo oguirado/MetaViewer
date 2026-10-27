@@ -109,6 +109,17 @@ func (r *ProcessRunner) Run(ctx context.Context, argv []string, stdin []byte) ([
 	ctx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	// [TARGET, unit decision] Own a fresh group for this native invocation.
+	// CommandContext's default Kill reaches only the leader, leaving helpers
+	// executing after a cancelled operation. Never accept a caller-supplied PID.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
+	}
 	cmd.Env = append([]string(nil), r.env...)
 	cmd.Stdin = bytes.NewReader(stdin)
 	out := &cappedBuffer{limit: r.limit}
