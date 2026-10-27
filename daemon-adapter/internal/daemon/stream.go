@@ -85,11 +85,86 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 		return err
 	}
 	cancelHello()
+	dataCh := make(chan ipc.Envelope, 64)
+	ctrlCh := make(chan ipc.Envelope, 64)
+	var errOnce sync.Once
+	var sessionErr error
+	fail := func(e error) {
+		if e != nil {
+			errOnce.Do(func() {
+				sessionErr = e
+				cancelSession()
+			})
+		}
+	}
+	dispatch := func(in ipc.Envelope, locked bool) {
+		work := ctx.Value(streamKey{}).(streamSession).work
+		if locked {
+			work.Lock()
+		}
+		replies, err := handler(ctx, in)
+		if err != nil {
+			if locked {
+				work.Unlock()
+			}
+			fail(fmt.Errorf("dispatch: %w", err))
+			return
+		}
+		for _, reply := range replies {
+			if err = write(ctx, in, reply); err != nil {
+				if locked {
+					work.Unlock()
+				}
+				if ctx.Err() == nil {
+					fail(err)
+				}
+				return
+			}
+		}
+		if locked {
+			work.Unlock()
+		}
+	}
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for in := range dataCh {
+			if ctx.Err() != nil {
+				return
+			}
+			var op struct{ Op string }
+			_ = json.Unmarshal(in.Body, &op)
+			locked := op.Op != "frame_unsubscribe" && op.Op != "destroy"
+			dispatch(in, locked)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for in := range ctrlCh {
+			if ctx.Err() != nil {
+				return
+			}
+			dispatch(in, false)
+		}
+	}()
+	stopWorkers := sync.OnceFunc(func() {
+		cancelSession()
+		close(dataCh)
+		close(ctrlCh)
+		wg.Wait()
+	})
+	defer stopWorkers()
 	first := true
 	for {
 		raw, err := framer.Read(ctx)
 		if err != nil {
-			if ctx.Err() != nil {
+			visited := ctx.Err() != nil
+			stopWorkers()
+			if sessionErr != nil {
+				return sessionErr
+			}
+			if visited {
 				return nil
 			}
 			return err
@@ -109,11 +184,11 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 		if !isHello && body.Schema != "surface_request/v0.2" {
 			return errors.New("core surface request required")
 		}
-		if err = policy.Authenticate(ctx, cred, in); err != nil {
-			return err
-		}
 		authority.Lock()
-		err = policy.Reserve(ctx, ipc.SenderKey{SessionID: in.SessionID, Component: in.From.Component, Instance: in.From.Instance}, in.Seq, in.Nonce)
+		err = policy.Authenticate(ctx, cred, in)
+		if err == nil {
+			err = policy.Reserve(ctx, ipc.SenderKey{SessionID: in.SessionID, Component: in.From.Component, Instance: in.From.Instance}, in.Seq, in.Nonce)
+		}
 		authority.Unlock()
 		if err != nil {
 			return err
@@ -124,31 +199,18 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 		}
 		var op struct{ Op string }
 		_ = json.Unmarshal(in.Body, &op)
-		work := ctx.Value(streamKey{}).(streamSession).work
-		locked := op.Op != "frame_unsubscribe" && op.Op != "destroy"
-		if locked {
-			work.Lock()
+		target := dataCh
+		if op.Op == "take_control" || op.Op == "release_control" {
+			target = ctrlCh
 		}
-		replies, err := handler(ctx, in)
-		if err != nil {
-			if locked {
-				work.Unlock()
+		select {
+		case target <- in:
+		case <-ctx.Done():
+			stopWorkers()
+			if sessionErr != nil {
+				return sessionErr
 			}
-			return fmt.Errorf("dispatch: %w", err)
-		}
-		for _, reply := range replies {
-			if err = write(ctx, in, reply); err != nil {
-				if locked {
-					work.Unlock()
-				}
-				if ctx.Err() != nil {
-					return nil
-				}
-				return err
-			}
-		}
-		if locked {
-			work.Unlock()
+			return nil
 		}
 	}
 }

@@ -114,7 +114,7 @@ func RuntimeFromEnv() (Runtime, error) {
 		}
 		pubs[profile.RAMRoot] = p
 	}
-	helloSession := helloState{}
+	helloSession := helloState{manager: manager}
 
 	helloSession.handler = wireHandler(manager, profiles, pubs, origin)
 	cfg := ipc.Config{SocketPath: filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "metaviewer", "core.sock"), UID: uint32(os.Getuid()), MaxFrameBytes: 1 << 20, MaxDepth: 32, MaxStringBytes: 65536, MaxKeys: 256, MaxArrayItems: 4096, MaxReplayEntries: 100000, MaxConnections: 1, HelloTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, ProbeTimeout: time.Second, ShutdownTimeout: 5 * time.Second}
@@ -127,6 +127,9 @@ func RuntimeFromEnv() (Runtime, error) {
 	cleanup := func() {
 		for _, s := range helloSession.subscriptions {
 			_ = s.Close(context.Background())
+		}
+		if err := helloSession.closeManager(context.Background()); err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, err)
 		}
 		closePubs()
 		_ = authority.file.Close()
@@ -172,6 +175,7 @@ func RuntimeFromEnv() (Runtime, error) {
 
 func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs map[string]*frames.Publisher, origin uint64) ipc.Handler {
 	owned := map[string]*frames.Publisher{}
+	pendingRelease := map[string][]json.RawMessage{}
 	var frameMu sync.Mutex
 	lastFrames := map[string]json.RawMessage{}
 	return func(ctx context.Context, e ipc.Envelope) ([]json.RawMessage, error) {
@@ -197,7 +201,10 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 						} `json:"data"`
 					}
 					_ = json.Unmarshal(events[0], &created)
+					frameMu.Lock()
 					owned[created.Data.Surface.SurfaceID] = pubs[profile.RAMRoot]
+					delete(pendingRelease, created.Data.Surface.SurfaceID)
+					frameMu.Unlock()
 					for _, raw := range events {
 						var ready struct {
 							Event string
@@ -253,6 +260,16 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 		} else {
 			events, err = m.Handle(ctx, q)
 		}
+		if q.Op == "destroy" && err != nil {
+			var f *cli.Fault
+			if errors.As(err, &f) && f.Code == "surface" && input.SurfaceID != "" {
+				frameMu.Lock()
+				if pending, ok := pendingRelease[input.SurfaceID]; ok {
+					events, err = pending, nil
+				}
+				frameMu.Unlock()
+			}
+		}
 		// [TARGET, unit decision] The wire owner acknowledges cancelled native
 		// completion here; direct Manager callers retain explicit DrainInput.
 		if q.Op == "input" && err != nil {
@@ -275,12 +292,19 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 				SurfaceID string `json:"surface_id"`
 			}
 			_ = json.Unmarshal(q.Params, &params)
-			if p := owned[params.SurfaceID]; p != nil {
+			frameMu.Lock()
+			p := owned[params.SurfaceID]
+			frameMu.Unlock()
+			if p != nil {
 				if err := p.Release(params.SurfaceID); err != nil {
+					frameMu.Lock()
+					pendingRelease[params.SurfaceID] = events
+					frameMu.Unlock()
 					return failure(err)
 				}
-				delete(owned, params.SurfaceID)
 				frameMu.Lock()
+				delete(owned, params.SurfaceID)
+				delete(pendingRelease, params.SurfaceID)
 				delete(lastFrames, params.SurfaceID)
 				frameMu.Unlock()
 			}
@@ -391,9 +415,41 @@ func openStateDir(path string) (*os.File, error) {
 // helloState owns the state published by an accepted session handshake.
 // Constructor arguments permit deterministic failure testing without global hooks.
 type helloState struct {
+	manager       *capsule.Manager
 	handler       ipc.Handler
 	subscriptions []*frames.Subscriptions
 	welcomed      bool
+}
+
+func (s *helloState) closeManager(ctx context.Context) error {
+	if s.manager == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	events, err := s.manager.Handle(ctx, capsule.Request{Schema: "surface_request/v0.2", Op: "list", Params: json.RawMessage(`{}`)})
+	if err != nil {
+		return err
+	}
+	var firstErr error
+	for _, raw := range events {
+		var ev struct {
+			Data struct {
+				Surface capsule.Surface `json:"surface"`
+			} `json:"data"`
+		}
+		if e := json.Unmarshal(raw, &ev); e != nil {
+			if firstErr == nil {
+				firstErr = e
+			}
+			continue
+		}
+		params, _ := json.Marshal(map[string]string{"surface_id": ev.Data.Surface.SurfaceID})
+		if _, e := s.manager.Handle(ctx, capsule.Request{Schema: "surface_request/v0.2", Op: "destroy", Params: params}); e != nil && firstErr == nil {
+			firstErr = e
+		}
+	}
+	return firstErr
 }
 
 func (s *helloState) accept(ctx context.Context, profiles map[string]capsule.Profile, pubs map[string]*frames.Publisher, authority *clientAuthority, clock cli.Clock,
@@ -407,7 +463,8 @@ func (s *helloState) accept(ctx context.Context, profiles map[string]capsule.Pro
 	if origin == 0 {
 		return configuration("CLOCK_MONOTONIC unavailable")
 	}
-	fresh, err := newRuntime(capsule.Config{Profiles: profiles, OriginNS: origin, MaxSurfaces: 16, MaxOutputBytes: 1 << 20, Timeout: 90 * time.Second}, clock)
+	byRoot := map[string]*frames.Subscriptions{}
+	fresh, err := newRuntime(capsule.Config{Profiles: profiles, OriginNS: origin, MaxSurfaces: 16, MaxOutputBytes: 1 << 20, Timeout: 90 * time.Second, BeforeDestroy: unsubscribeSurface(byRoot)}, clock)
 	if err != nil {
 		return err
 	}
@@ -415,7 +472,6 @@ func (s *helloState) accept(ctx context.Context, profiles map[string]capsule.Pro
 	if !ok {
 		return configuration("session emission required")
 	}
-	byRoot := map[string]*frames.Subscriptions{}
 	var pending []*frames.Subscriptions
 	for root, pub := range pubs {
 		sub, err := newSubscriptions(session.ctx, frames.SubscriptionConfig{MaxSubscriptions: 16, PollInterval: 100 * time.Millisecond, CaptureTimeout: 90 * time.Second, ShutdownTimeout: 5 * time.Second, CaptureLock: session.work}, fresh, pub, session.emit)
@@ -431,6 +487,7 @@ func (s *helloState) accept(ctx context.Context, profiles map[string]capsule.Pro
 	// Publish only after all fallible setup succeeds. Pending subscriptions have
 	// no capture tasks yet, so rollback closes them without touching live state.
 	authority.origin = origin
+	s.manager = fresh
 	s.subscriptions = append(s.subscriptions, pending...)
 	s.handler = subscriptionHandler(fresh, profiles, byRoot, wireHandler(fresh, profiles, pubs, origin))
 	s.welcomed = true

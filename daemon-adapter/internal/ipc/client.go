@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync"
 )
 
 // Connect uses a core-to-daemon registration as the reply context for Wrap;
@@ -20,6 +21,8 @@ func Connect(ctx context.Context, cfg Config, policy Policy, registration Envelo
 	if policy == nil || handler == nil || registration.From.Component != "core" || registration.To.Component != "daemon" || registration.SessionID == "" {
 		return errors.New("complete client registration required")
 	}
+	ctx, cancelSession := context.WithCancel(ctx)
+	defer cancelSession()
 	conn, err := (&net.Dialer{Timeout: cfg.HelloTimeout}).DialContext(ctx, "unix", cfg.SocketPath)
 	if err != nil {
 		return err
@@ -37,8 +40,14 @@ func Connect(ctx context.Context, cfg Config, policy Policy, registration Envelo
 	if err != nil {
 		return err
 	}
+	var outbound sync.Mutex
+	var authority sync.Mutex
 	write := func(writeCtx context.Context, in Envelope, body json.RawMessage) error {
+		outbound.Lock()
+		defer outbound.Unlock()
+		authority.Lock()
 		out, err := policy.Wrap(writeCtx, in, body)
+		authority.Unlock()
 		if err != nil {
 			return err
 		}
@@ -60,11 +69,70 @@ func Connect(ctx context.Context, cfg Config, policy Policy, registration Envelo
 		return err
 	}
 	cancelHello()
+	dataCh := make(chan Envelope, 64)
+	ctrlCh := make(chan Envelope, 64)
+	var errOnce sync.Once
+	var sessionErr error
+	fail := func(e error) {
+		if e != nil {
+			errOnce.Do(func() {
+				sessionErr = e
+				cancelSession()
+			})
+		}
+	}
+	dispatch := func(in Envelope) {
+		replies, err := handler(ctx, in)
+		if err != nil {
+			fail(fmt.Errorf("dispatch: %w", err))
+			return
+		}
+		for _, reply := range replies {
+			if err = write(ctx, in, reply); err != nil {
+				if ctx.Err() == nil {
+					fail(err)
+				}
+				return
+			}
+		}
+	}
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for in := range dataCh {
+			if ctx.Err() != nil {
+				return
+			}
+			dispatch(in)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for in := range ctrlCh {
+			if ctx.Err() != nil {
+				return
+			}
+			dispatch(in)
+		}
+	}()
+	stopWorkers := sync.OnceFunc(func() {
+		cancelSession()
+		close(dataCh)
+		close(ctrlCh)
+		wg.Wait()
+	})
+	defer stopWorkers()
 	first := true
 	for {
 		raw, err := framer.Read(ctx)
 		if err != nil {
-			if ctx.Err() != nil {
+			visited := ctx.Err() != nil
+			stopWorkers()
+			if sessionErr != nil {
+				return sessionErr
+			}
+			if visited {
 				return nil
 			}
 			return err
@@ -84,27 +152,33 @@ func Connect(ctx context.Context, cfg Config, policy Policy, registration Envelo
 		if !isHello && body.Schema != "surface_request/v0.2" {
 			return errors.New("core surface request required")
 		}
-		if err = policy.Authenticate(ctx, cred, in); err != nil {
-			return err
+		authority.Lock()
+		err = policy.Authenticate(ctx, cred, in)
+		if err == nil {
+			err = policy.Reserve(ctx, SenderKey{in.SessionID, in.From.Component, in.From.Instance}, in.Seq, in.Nonce)
 		}
-		if err = policy.Reserve(ctx, SenderKey{in.SessionID, in.From.Component, in.From.Instance}, in.Seq, in.Nonce); err != nil {
+		authority.Unlock()
+		if err != nil {
 			return err
 		}
 		first = false
 		if isHello {
 			continue
 		}
-		replies, err := handler(ctx, in)
-		if err != nil {
-			return fmt.Errorf("dispatch: %w", err)
+		var op struct{ Op string }
+		_ = json.Unmarshal(in.Body, &op)
+		target := dataCh
+		if op.Op == "take_control" || op.Op == "release_control" {
+			target = ctrlCh
 		}
-		for _, reply := range replies {
-			if err = write(ctx, in, reply); err != nil {
-				if ctx.Err() != nil {
-					return nil
-				}
-				return err
+		select {
+		case target <- in:
+		case <-ctx.Done():
+			stopWorkers()
+			if sessionErr != nil {
+				return sessionErr
 			}
+			return nil
 		}
 	}
 }
