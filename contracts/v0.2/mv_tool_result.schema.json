@@ -41,7 +41,7 @@
       "type": "object",
       "properties": {
         "schema": {
-          "const": "frame_ref/v0.1",
+          "const": "frame_ref/v0.2",
           "minLength": 14,
           "maxLength": 14
         },
@@ -119,7 +119,7 @@
       "type": "object",
       "properties": {
         "schema": {
-          "const": "observation/v0.1",
+          "const": "observation/v0.2",
           "minLength": 16,
           "maxLength": 16
         },
@@ -227,7 +227,7 @@
       "type": "object",
       "properties": {
         "schema": {
-          "const": "surface/v0.1",
+          "const": "surface/v0.2",
           "minLength": 12,
           "maxLength": 12
         },
@@ -331,7 +331,7 @@
       "type": "object",
       "properties": {
         "schema": {
-          "const": "action_verdict/v0.1",
+          "const": "action_verdict/v0.2",
           "minLength": 19,
           "maxLength": 19
         },
@@ -365,7 +365,7 @@
       "type": "object",
       "properties": {
         "schema": {
-          "const": "action_receipt/v0.1",
+          "const": "action_receipt/v0.2",
           "minLength": 19,
           "maxLength": 19
         },

@@ -5,7 +5,7 @@
   "status": "ok",
   "surfaces": [
     {
-      "schema": "surface/v0.1",
+      "schema": "surface/v0.2",
       "surface_id": "x",
       "kind": "game_capsule",
       "display": "x",

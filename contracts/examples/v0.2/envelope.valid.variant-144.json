@@ -19,9 +19,9 @@
     "op": "observe",
     "status": "ok",
     "observation": {
-      "schema": "observation/v0.1",
+      "schema": "observation/v0.2",
       "frame_ref": {
-        "schema": "frame_ref/v0.1",
+        "schema": "frame_ref/v0.2",
         "surface_id": "x",
         "generation": 1,
         "tick": 0,

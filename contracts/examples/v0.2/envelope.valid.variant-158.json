@@ -19,7 +19,7 @@
     "op": "propose",
     "status": "admitted",
     "verdict": {
-      "schema": "action_verdict/v0.1",
+      "schema": "action_verdict/v0.2",
       "proposal_id": "x",
       "decision": "admitted",
       "core_seq": 1

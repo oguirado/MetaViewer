@@ -19,11 +19,11 @@
     "op": "wait_verify",
     "status": "verified",
     "receipt": {
-      "schema": "action_receipt/v0.1",
+      "schema": "action_receipt/v0.2",
       "proposal_id": "x",
       "executed_at_ns": 0,
       "after_frame": {
-        "schema": "frame_ref/v0.1",
+        "schema": "frame_ref/v0.2",
         "surface_id": "x",
         "generation": 1,
         "tick": 0,
