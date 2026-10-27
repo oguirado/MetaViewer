@@ -16,6 +16,7 @@ and never clipped: semantic-first with a digest-anchored fallback so the
 
 Generated set (hashed node coverage would be circular for these):
   catalogue/nodes.jsonl  proven reachable by the check-mode byte compare
+  catalogue/routes.tsv   proven reachable by the check-mode byte compare
   router/index/**        derived builder output, proven by the check leg
   catalogue/router/**    derived builder output, proven by the check leg
 Only these paths are excluded; every other tracked path needs a node.
@@ -46,11 +47,13 @@ KIT_SCHEMA = Path("router/kit/standards/schemas/ctx.node.v2.schema.json")
 KIT_THESAURUS = Path("router/kit/standards/thesaurus.json")
 KIT_VALIDATOR = Path("router/kit/tools/jsonschema_lite.py")
 NODES_REL = "catalogue/nodes.jsonl"
+ROUTES_REL = "catalogue/routes.tsv"
 PROTOCOL_REL = "catalogue/protocol.json"
+LLMS_REL = "llms.txt"
 MOUNT_PATH = "catalogue/router"
 MOUNT_DOCS_DIR = "catalogue/router/docs"
 INDEX_SHA_REL = "router/index/SHA256SUMS"
-GENERATED_EXACT = frozenset({NODES_REL})
+GENERATED_EXACT = frozenset({NODES_REL, ROUTES_REL})
 GENERATED_PREFIXES = ("router/index/", "catalogue/router/")
 PROHIBITED_BASENAMES = frozenset({"operator.token", "launch.token", "auth.json", ".env"})
 ID_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9._:-]{0,31}")
@@ -540,7 +543,52 @@ def verify_kit(root, material, *, corpus, timeout_s):
                 raise RouterError("Router error: kit builder failed: %s" % _short(exc)) from exc
 
 
-def _check_corpus_agreement(root):
+def _check_regular_target(root, rel, label, raw_value):
+    try:
+        _check_canonical(rel)
+    except RouterError as exc:
+        raise RouterError("Router error: dangling %s %r" % (label, str(raw_value)[:96])) from exc
+    node = root
+    fstat = None
+    for part in rel.split("/"):
+        node = node / part
+        try:
+            fstat = os.lstat(node)
+        except OSError as exc:
+            raise RouterError("Router error: dangling %s %r" % (label, str(raw_value)[:96])) from exc
+        if stat.S_ISLNK(fstat.st_mode):
+            raise RouterError("Router error: dangling %s %r" % (label, str(raw_value)[:96]))
+    if fstat is None or not stat.S_ISREG(fstat.st_mode):
+        raise RouterError("Router error: dangling %s %r" % (label, str(raw_value)[:96]))
+    try:
+        node.read_bytes()
+    except OSError as exc:
+        raise RouterError("Router error: dangling %s %r" % (label, str(raw_value)[:96])) from exc
+
+
+def _is_router_unavailable(root):
+    llms = root / LLMS_REL
+    try:
+        if not llms.is_file() or llms.is_symlink():
+            return False
+        text = llms.read_bytes().decode("utf-8", "replace")
+    except OSError:
+        return False
+    return "Status: router unavailable." in text
+
+
+def _is_untracked_mirror_routes(root, manifest):
+    return (
+        ROUTES_REL not in manifest
+        and not (root / ROUTES_REL).exists()
+        and (root / "router/index/bootstrap_logs.json").is_file()
+        and (root / ".git").is_dir()
+        and not (root / ".git/logs").exists()
+    )
+
+
+def _check_corpus_agreement(root, *, check_targets=False, allow_uncalibrated_params=False,
+                            allow_untracked_mirror_routes=False):
     path = root / PROTOCOL_REL
     if not os.path.lexists(path):
         return
@@ -571,6 +619,58 @@ def _check_corpus_agreement(root):
     if mount.get("path") != MOUNT_PATH:
         raise RouterError("Router error: protocol mount path %r != %r"
                           % (str(mount.get("path"))[:64], MOUNT_PATH))
+    if not check_targets or "router" not in obj:
+        return
+    router = obj.get("router")
+    if not isinstance(router, dict):
+        raise RouterError("Router error: invalid protocol: router is not an object")
+    if "path_rule" in router or "params" in router:
+        path_rule = router.get("path_rule")
+        if not isinstance(path_rule, str) or not path_rule.startswith("lookup:"):
+            raise RouterError("Router error: dangling path_rule %r" % str(path_rule)[:96])
+        lookup_rel = path_rule[len("lookup:"):]
+        if not (allow_untracked_mirror_routes and lookup_rel == ROUTES_REL):
+            _check_regular_target(root, lookup_rel, "path_rule", path_rule)
+        params_rel = router.get("params")
+        if not isinstance(params_rel, str) or not params_rel:
+            raise RouterError("Router error: dangling params %r" % str(params_rel)[:96])
+        try:
+            _check_canonical(params_rel)
+        except RouterError as exc:
+            raise RouterError("Router error: dangling params %r" % str(params_rel)[:96]) from exc
+        if allow_uncalibrated_params and params_rel == "catalogue/router/params.json" and not os.path.lexists(root / params_rel):
+            return
+        _check_regular_target(root, params_rel, "params", params_rel)
+
+
+def _read_routes_lookup(root, material):
+    routes_path = root / ROUTES_REL
+    if routes_path.is_file() and not routes_path.is_symlink():
+        try:
+            raw = routes_path.read_bytes().decode("utf-8")
+        except (OSError, ValueError) as exc:
+            raise RouterError("Stale or incomplete router: unreadable %s" % ROUTES_REL) from exc
+    else:
+        raw = material.routes_tsv.decode("utf-8")
+    lines = [line for line in raw.split("\n") if line]
+    if not lines or lines[0] != "id\tpath":
+        raise RouterError("Stale or incomplete router: unparsable %s header" % ROUTES_REL)
+    lookup = {}
+    valid_paths = set(material.source_paths)
+    for lineno, line in enumerate(lines[1:], 2):
+        parts = line.split("\t")
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            raise RouterError("Stale or incomplete router: unparsable %s line %d"
+                              % (ROUTES_REL, lineno))
+        ident, rel = parts
+        _check_canonical(rel)
+        if ident in lookup:
+            raise RouterError("Stale or incomplete router: duplicate id in %s" % ROUTES_REL)
+        if rel not in valid_paths:
+            raise RouterError("Stale or incomplete router: unknown path in %s: %s"
+                              % (ROUTES_REL, rel))
+        lookup[ident] = rel
+    return lookup
 
 
 def _read_id_set(path, display):
@@ -653,6 +753,11 @@ def check_mount_freshness(root, material):
     if got != want:
         raise RouterError("Stale or incomplete router: mount ids != nodes ids "
                           "(%d mount vs %d nodes)" % (len(got), len(want)))
+    lookup = _read_routes_lookup(root, material)
+    unresolved = sorted(got - set(lookup))
+    if unresolved:
+        raise RouterError("Stale or incomplete router: mount id unresolved in %s: %s"
+                          % (ROUTES_REL, unresolved[0]))
 
 
 def main(argv=None):
@@ -681,18 +786,27 @@ def main(argv=None):
         material = compile_material(root, sources, corpus=CORPUS, ids=ids,
                                     schema=schema, validate=validate)
         nodes_path = root / NODES_REL
+        routes_path = root / ROUTES_REL
         verify_kit(root, material, corpus=CORPUS, timeout_s=KIT_TIMEOUT_S)
         if check:
+            untracked_mirror_routes = _is_untracked_mirror_routes(root, manifest)
+            _check_corpus_agreement(
+                root, check_targets=True,
+                allow_uncalibrated_params=_is_router_unavailable(root),
+                allow_untracked_mirror_routes=untracked_mirror_routes)
             try:
                 check_nodes(nodes_path, material.nodes_jsonl)
             except RouterError as exc:
                 raise RouterError(
                     str(exc) + _coverage_diagnostic(nodes_path, material)) from exc
+            if not untracked_mirror_routes:
+                check_nodes(routes_path, material.routes_tsv)
             check_mount_freshness(root, material)
             check_doc_links(root, sources)
         else:
             nodes_path.parent.mkdir(parents=True, exist_ok=True)
             nodes_path.write_bytes(material.nodes_jsonl)
+            routes_path.write_bytes(material.routes_tsv)
         print("METAVIEWER_ROUTER_COVERAGE 100%% %d files" % len(material.source_paths))
         return 0
     except RouterError as exc:

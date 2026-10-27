@@ -278,7 +278,7 @@ class RouterIndexTests(unittest.TestCase):
 
     def _coverage_line(self, root):
         manifest = (root / "bin" / "manifest.bin").read_bytes().decode("utf-8").split("\0")
-        generated = {"catalogue/nodes.jsonl"}
+        generated = {"catalogue/nodes.jsonl", "catalogue/routes.tsv"}
         prefixes = ("router/index/", "catalogue/router/")
         count = sum(1 for e in manifest if e and e not in generated
                     and not e.startswith(prefixes))
@@ -657,6 +657,7 @@ class RouterIndexTests(unittest.TestCase):
     def test_self_artifact_policy(self):
         files = dict(self._base_files())
         files["catalogue/nodes.jsonl"] = "placeholder\n"
+        files["catalogue/routes.tsv"] = "placeholder\n"
         files["router/index/i.json"] = "{}\n"
         files["catalogue/router/r.json"] = "{}\n"
         root, env = self._tree(files)
@@ -757,6 +758,104 @@ class RouterIndexTests(unittest.TestCase):
         self.assertNotEqual(broken_build.returncode, 0)
         broken = self._run_cli(root, "--check", extra_env=env)
         self.assertNotEqual(broken.returncode, 0)
+
+    def test_routes_lookup_roundtrip_and_negatives(self):
+        root, env = self._tree(self._base_files())
+        built = self._run_cli(root, extra_env=env)
+        self.assertEqual(built.returncode, 0, built.stderr)
+        routes = root / "catalogue" / "routes.tsv"
+        self.assertTrue(routes.is_file())
+        raw_routes = routes.read_bytes()
+        lines = raw_routes.decode("utf-8").splitlines()
+        self.assertEqual(lines[0], "id\tpath")
+        lookup = dict(line.split("\t") for line in lines[1:])
+        self._publish_mount(root)
+        for line in (root / "catalogue/router/docs/0.jsonl").read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                ident = json.loads(line)["id"]
+                self.assertIn(ident, lookup)
+                self.assertTrue((root / lookup[ident]).is_file())
+        checked = self._run_cli(root, "--check", extra_env=env)
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+        # Negative 1: deleting routes.tsv fails --check rc=1 naming routes.tsv.
+        routes.unlink()
+        missing = self._run_cli(root, "--check", extra_env=env)
+        self.assertEqual(missing.returncode, 1)
+        self.assertIn("routes.tsv", missing.stderr)
+        # Negative 2: corrupting one row in routes.tsv fails --check rc=1 naming routes.tsv.
+        corrupted = "\n".join([lines[0], "corrupted-id\ta.md"] + lines[2:]) + "\n"
+        routes.write_text(corrupted, encoding="utf-8")
+        corrupt_res = self._run_cli(root, "--check", extra_env=env)
+        self.assertEqual(corrupt_res.returncode, 1)
+        self.assertIn("routes.tsv", corrupt_res.stderr)
+        # Negative 3: mount id unresolved in lookup fails check_mount_freshness.
+        mod = self._load_mod(root)
+        schema = json.loads((root / "router/kit/standards/schemas/ctx.node.v2.schema.json").read_text())
+        validate = self._load_validate(root)
+        manifest = (root / "bin" / "manifest.bin").read_bytes().decode("utf-8").split("\0")
+        sources = tuple(p for p in manifest if p and not mod._is_generated(p))
+        material = mod.compile_material(
+            root, sources, corpus="metaviewer", ids=mod._derive_ids(sources, "metaviewer"),
+            schema=schema, validate=validate)
+        routes.write_text("\n".join(lines[:-1]) + "\n", encoding="utf-8")
+        with self.assertRaises(mod.RouterError) as ctx:
+            mod.check_mount_freshness(root, material)
+        self.assertIn("routes.tsv", str(ctx.exception))
+        # Restore valid routes.tsv and verify positive pass again.
+        routes.write_bytes(raw_routes)
+        self.assertEqual(self._run_cli(root, "--check", extra_env=env).returncode, 0)
+
+    def test_protocol_targets_and_negatives(self):
+        root, env = self._tree(self._base_files())
+        # Bare fixture without protocol.json is allowed.
+        self.assertEqual(self._run_cli(root, extra_env=env).returncode, 0)
+        self.assertEqual(self._run_cli(root, "--check", extra_env=env).returncode, 0)
+        proto_obj = {
+            "schema": "ctx.protocol.v2",
+            "mounts": [{"corpus": "metaviewer", "path": "catalogue/router", "priority": 0}],
+            "router": {
+                "answer_schema": "ctx.shortlist.v2",
+                "path_rule": "lookup:catalogue/routes.tsv",
+                "params": "catalogue/router/params.json",
+            },
+        }
+        self._write_file(root, "catalogue/protocol.json", json.dumps(proto_obj) + "\n")
+        self._write_file(root, "catalogue/router/params.json", "{}\n")
+        manifest = (root / "bin" / "manifest.bin").read_bytes().decode("utf-8")
+        entries = sorted(e for e in manifest.split("\0") if e) + ["catalogue/protocol.json"]
+        self._set_manifest(root, sorted(entries))
+        self.assertEqual(self._run_cli(root, extra_env=env).returncode, 0)
+        self._publish_mount(root)
+        sha = root / "router/index/SHA256SUMS"
+        rel_params = "catalogue/router/params.json"
+        sha.write_text(
+            sha.read_text()
+            + hashlib.sha256((root / rel_params).read_bytes()).hexdigest()
+            + "  " + rel_params + "\n"
+        )
+        # Valid protocol control: both targets exist -> rc=0.
+        valid = self._run_cli(root, "--check", extra_env=env)
+        self.assertEqual(valid.returncode, 0, valid.stderr)
+        # Dangling path_rule target -> rc=1 with distinct dangling path_rule message.
+        bad_rule = json.loads(json.dumps(proto_obj))
+        bad_rule["router"]["path_rule"] = "lookup:catalogue/missing_routes.tsv"
+        self._write_file(root, "catalogue/protocol.json", json.dumps(bad_rule) + "\n")
+        dangling_rule = self._run_cli(root, "--check", extra_env=env)
+        self.assertEqual(dangling_rule.returncode, 1)
+        self.assertIn("dangling path_rule", dangling_rule.stderr)
+        # Dangling params target -> rc=1 with distinct dangling params message.
+        bad_params = json.loads(json.dumps(proto_obj))
+        bad_params["router"]["params"] = "catalogue/router/missing_params.json"
+        self._write_file(root, "catalogue/protocol.json", json.dumps(bad_params) + "\n")
+        dangling_params = self._run_cli(root, "--check", extra_env=env)
+        self.assertEqual(dangling_params.returncode, 1)
+        self.assertIn("dangling params", dangling_params.stderr)
+        # Restore protocol.json and delete params.json on disk -> rc=1 dangling params.
+        self._write_file(root, "catalogue/protocol.json", json.dumps(proto_obj) + "\n")
+        (root / rel_params).unlink()
+        deleted_params = self._run_cli(root, "--check", extra_env=env)
+        self.assertEqual(deleted_params.returncode, 1)
+        self.assertIn("dangling params", deleted_params.stderr)
 
     def test_live_bootstrap_check_and_mutant(self):
         # [TARGET, unit decision] tools/gate.sh's unit discovery runs this
