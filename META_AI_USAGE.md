@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 304 | 55 | 249 |
-| Lanes finished OK | 304 | 55 | 249 |
-| Agent steps | 15,792 | 2,705 | 13,087 |
-| Lane-hours of agent work | 39.9 | 5.2 | 34.6 |
-| Fresh input tokens | 65,923,641 | 11,482,034 | 54,441,607 |
-| Cache-read input tokens | 1,451,154,523 | 226,255,212 | 1,224,899,311 |
+| Lanes launched | 305 | 55 | 250 |
+| Lanes finished OK | 305 | 55 | 250 |
+| Agent steps | 15,852 | 2,705 | 13,147 |
+| Lane-hours of agent work | 40.0 | 5.2 | 34.7 |
+| Fresh input tokens | 66,075,065 | 11,482,034 | 54,593,031 |
+| Cache-read input tokens | 1,454,608,516 | 226,255,212 | 1,228,353,304 |
 | Prompt cache hit % | 95.7 | 95.2 | 95.7 |
-| Output tokens | 14,065,904 | 2,135,708 | 11,930,196 |
-| Thinking tokens | 7,314,645 | 1,050,039 | 6,264,606 |
-| Cost (USD) | 12.3078 | 2.0279 | 10.28 |
-| Cost per lane (USD) | 0.0405 | 0.0369 | 0.0413 |
+| Output tokens | 14,095,307 | 2,135,708 | 11,959,599 |
+| Thinking tokens | 7,327,988 | 1,050,039 | 6,277,949 |
+| Cost (USD) | 12.3358 | 2.0279 | 10.3079 |
+| Cost per lane (USD) | 0.0404 | 0.0369 | 0.0412 |
 
-Rooms: 66. Peak concurrent lanes [MEASURED from lane start/end]: 24.
+Rooms: 67. Peak concurrent lanes [MEASURED from lane start/end]: 24.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -52,7 +52,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | review | 51 | 94.4 | 1.4856 |
 | submission | 4 | 94.9 | 0.0995 |
 | test | 12 | 95.6 | 0.5657 |
-| testing | 63 | 95.9 | 2.5843 |
+| testing | 64 | 95.9 | 2.6123 |
 | ui | 15 | 96.6 | 1.1614 |
 | vision | 8 | 97.2 | 0.537 |
 
@@ -126,6 +126,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvr2v2 | conductor | Oct 27 11:32 | testing | 2 | 94.6 | 0.0584 | Verify every external round-2 finding (ChatGPT static reviews T2, T3, T5, T6, T8 and Jules T4 tests) on the current head with Meta Muse Spark before any fix, and group confirmed ones into disjoint fix units. |
 | mvr2vj | conductor | Oct 27 12:08 | testing | 3 | 95.4 | 0.0758 | Verify the Jules round-2 test branches T4 (updated), T6 and T7 on the current head with Meta Muse Spark before adopting any test or opening any fix unit. |
 | mv0tg4 | conductor | Oct 27 12:11 | testing | 6 | 95.1 | 0.1967 | Refresh the AC test-gap map on the integration head after the day-2 morning (about 50 integrations, round-2 fixes in flight) and audit the repository router, so Argon test and router units start from verified specs. |
+| mvr2vj8 | conductor | Oct 27 12:23 | testing | 1 | 95.8 | 0.0279 | Verify the Jules round-2 test branches T4 (updated), T6 and T7 on the current head with Meta Muse Spark before adopting any test or opening any fix unit. |
 
 ## Every lane
 
@@ -435,6 +436,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0tg4 | UIEL | Gap map UIEL | Oct 27 12:11 | yes | 38 | 93.7 | 0.029083 |
 | mv0tg4 | E2E | Gap map E2E | Oct 27 12:11 | yes | 57 | 95.6 | 0.041027 |
 | mv0tg4 | ROUTER | Router audit | Oct 27 12:11 | yes | 36 | 93.1 | 0.022537 |
+| mvr2vj8 | J8 | Verify round-2 J8 | Oct 27 12:23 | yes | 60 | 95.8 | 0.027931 |
 
 ## Method
 

@@ -1,17 +1,17 @@
 {
  "schema": "metaviewer.meta_ai_usage/v1",
  "totals": {
-  "lanes": 304,
-  "ok": 304,
-  "input_tokens": 65923641,
-  "cache_read_tokens": 1451154523,
-  "output_tokens": 14065904,
-  "thinking_tokens": 7314645,
+  "lanes": 305,
+  "ok": 305,
+  "input_tokens": 66075065,
+  "cache_read_tokens": 1454608516,
+  "output_tokens": 14095307,
+  "thinking_tokens": 7327988,
   "cache_hit_pct": 95.7,
-  "usd": 12.3078,
-  "usd_per_lane": 0.0405,
-  "steps": 15792,
-  "lane_hours": 39.9
+  "usd": 12.3358,
+  "usd_per_lane": 0.0404,
+  "steps": 15852,
+  "lane_hours": 40.0
  },
  "peak_concurrent_lanes": 24,
  "rooms": {
@@ -6775,6 +6775,27 @@
    "thinking_tokens": 14162,
    "cache_hit_pct": 93.1,
    "usd": 0.022537
+  },
+  {
+   "room": "mvr2vj8",
+   "lane": "J8",
+   "title": "Verify round-2 J8",
+   "stage": "testing",
+   "model": "muse-spark-1.3",
+   "orchestrator": "conductor",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-27T11:23:00.212000+00:00",
+   "duration_s": 469.4,
+   "end_utc": "2026-10-27T11:30:49.565000+00:00",
+   "phase": "build",
+   "steps": 60,
+   "input_tokens": 151424,
+   "cache_read_tokens": 3453993,
+   "output_tokens": 29403,
+   "thinking_tokens": 13343,
+   "cache_hit_pct": 95.8,
+   "usd": 0.027931
   }
  ]
 }
