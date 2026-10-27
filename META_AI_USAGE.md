@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 345 | 55 | 290 |
-| Lanes finished OK | 345 | 55 | 290 |
-| Agent steps | 18,774 | 2,705 | 16,069 |
-| Lane-hours of agent work | 48.1 | 5.2 | 42.9 |
-| Fresh input tokens | 76,607,273 | 11,482,034 | 65,125,239 |
-| Cache-read input tokens | 1,769,286,412 | 226,255,212 | 1,543,031,200 |
-| Prompt cache hit % | 95.8 | 95.2 | 96.0 |
-| Output tokens | 16,621,933 | 2,135,708 | 14,486,225 |
-| Thinking tokens | 8,774,144 | 1,050,039 | 7,724,105 |
-| Cost (USD) | 14.5237 | 2.0279 | 12.4958 |
+| Lanes launched | 346 | 55 | 291 |
+| Lanes finished OK | 346 | 55 | 291 |
+| Agent steps | 18,829 | 2,705 | 16,124 |
+| Lane-hours of agent work | 48.3 | 5.2 | 43.0 |
+| Fresh input tokens | 76,777,321 | 11,482,034 | 65,295,287 |
+| Cache-read input tokens | 1,773,148,032 | 226,255,212 | 1,546,892,820 |
+| Prompt cache hit % | 95.8 | 95.2 | 95.9 |
+| Output tokens | 16,662,528 | 2,135,708 | 14,526,820 |
+| Thinking tokens | 8,797,456 | 1,050,039 | 7,747,417 |
+| Cost (USD) | 14.5565 | 2.0279 | 12.5287 |
 | Cost per lane (USD) | 0.0421 | 0.0369 | 0.0431 |
 
-Rooms: 86. Peak concurrent lanes [MEASURED from lane start/end]: 24.
+Rooms: 87. Peak concurrent lanes [MEASURED from lane start/end]: 24.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -43,7 +43,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
 | docs | 15 | 94.8 | 0.5371 |
-| fix | 23 | 96.9 | 1.3414 |
+| fix | 24 | 96.9 | 1.3743 |
 | kit | 3 | 96.5 | 0.1997 |
 | ops | 4 | 88.1 | 0.0468 |
 | plan | 12 | 92.6 | 0.3072 |
@@ -146,6 +146,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvr3v3 | conductor | Oct 27 20:03 | testing | 8 | 97.0 | 0.5521 | Refresh the 16 round-3 tester prompts (8 ChatGPT, 8 Jules) to the CURRENT bridge/integration head before the operator launches them: they were written at midday and about 60 integrations landed since. |
 | mvui20b | UI orchestrator | Oct 27 20:05 | fix | 1 | 98.3 | 0.0746 | Live tile turns black after a multislot round trip (second canvas for the same surface replaces and then removes the binding); black placeholder before the first frame. |
 | mvui19c | UI orchestrator | Oct 27 20:15 | fix | 1 | 96.9 | 0.0563 | Fix a judge-found id/anchor collision between the recording panel's recordings and new screenshots sections before handover. |
+| mvui21 | UI orchestrator | Oct 27 20:54 | fix | 1 | 95.8 | 0.0328 | URGENT: frame tests bound async waits by setImmediate turns and flake on loaded hosts, reddening unrelated integration gates; bound them by wall-clock deadlines (test-only). |
 
 ## Every lane
 
@@ -496,6 +497,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvr3v3 | T8 | Refresh round-3 T8 | Oct 27 20:04 | yes | 50 | 95.5 | 0.039923 |
 | mvui20b | M | multi-canvas binding + placeholder | Oct 27 20:05 | yes | 100 | 98.3 | 0.074583 |
 | mvui19c | R | cross-section id uniqueness | Oct 27 20:15 | yes | 72 | 96.9 | 0.056318 |
+| mvui21 | W | wall-clock bounded waits | Oct 27 20:54 | yes | 55 | 95.8 | 0.032847 |
 
 ## Method
 
