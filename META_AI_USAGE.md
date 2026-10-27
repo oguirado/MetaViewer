@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 257 | 55 | 202 |
-| Lanes finished OK | 257 | 55 | 202 |
-| Agent steps | 12,840 | 2,705 | 10,135 |
-| Lane-hours of agent work | 32.9 | 5.2 | 27.6 |
-| Fresh input tokens | 54,690,193 | 11,482,034 | 43,208,159 |
-| Cache-read input tokens | 1,154,169,161 | 226,255,212 | 927,913,949 |
+| Lanes launched | 258 | 55 | 203 |
+| Lanes finished OK | 258 | 55 | 203 |
+| Agent steps | 12,926 | 2,705 | 10,221 |
+| Lane-hours of agent work | 33.0 | 5.2 | 27.7 |
+| Fresh input tokens | 54,916,501 | 11,482,034 | 43,434,467 |
+| Cache-read input tokens | 1,162,053,612 | 226,255,212 | 935,798,400 |
 | Prompt cache hit % | 95.5 | 95.2 | 95.6 |
-| Output tokens | 11,601,947 | 2,135,708 | 9,466,239 |
-| Thinking tokens | 6,154,675 | 1,050,039 | 5,104,636 |
-| Cost (USD) | 10.0977 | 2.0279 | 8.0699 |
-| Cost per lane (USD) | 0.0393 | 0.0369 | 0.0399 |
+| Output tokens | 11,652,606 | 2,135,708 | 9,516,898 |
+| Thinking tokens | 6,163,256 | 1,050,039 | 5,113,217 |
+| Cost (USD) | 10.1463 | 2.0279 | 8.1184 |
+| Cost per lane (USD) | 0.0393 | 0.0369 | 0.04 |
 
-Rooms: 56. Peak concurrent lanes [MEASURED from lane start/end]: 24.
+Rooms: 57. Peak concurrent lanes [MEASURED from lane start/end]: 24.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -51,7 +51,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | research | 14 | 94.6 | 0.5673 |
 | review | 47 | 94.4 | 1.393 |
 | test | 12 | 95.6 | 0.5657 |
-| testing | 30 | 94.8 | 1.0312 |
+| testing | 31 | 94.9 | 1.0798 |
 | ui | 9 | 96.4 | 0.6965 |
 | vision | 8 | 97.2 | 0.537 |
 
@@ -115,6 +115,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0r2b | conductor | Oct 27 05:24 | testing | 8 | 95.6 | 0.3636 | Refresh the external testing round-2 prompts (Jules and ChatGPT, T1-T8) to the integration head after G-W1 and the W1 judgement, so testers target new code and still-open items. |
 | mv0tg3 | conductor | Oct 27 07:22 | testing | 8 | 95.0 | 0.2757 | Refresh the AC test-gap map on the integration head after the night (about 80 new commits), and prepare the round-2 tester index and the TESTING.md fact base, so local testing with Muse Spark drives the remaining test units to v0.2.0. |
 | mvkp | conductor | Oct 27 07:32 | release | 5 | 93.2 | 0.0945 | Prove with Meta Muse Spark 1.3 that the capsule-ui-kit repository holds no secret, personal data or unsafe workflow in any reachable ref before the developer makes it public, and design its full code router. |
+| mvr2c | conductor | Oct 27 08:01 | testing | 1 | 97.2 | 0.0485 | Context-engineer the round-2 external testing prompts (Jules and ChatGPT, T1-T8): embed verbatim excerpts of the software papers and OmniCodex language books, which the web testers cannot access, so each tester runs a complete, evidence-driven job on the public repo. |
 
 ## Every lane
 
@@ -377,6 +378,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvkp | WF | Kit public audit WF | Oct 27 07:32 | yes | 20 | 88.6 | 0.015448 |
 | mvkp | LIC | Kit public audit LIC | Oct 27 07:32 | yes | 29 | 94.1 | 0.013866 |
 | mvkp | ROUTER | Kit public audit ROUTER | Oct 27 07:33 | yes | 32 | 92.6 | 0.018948 |
+| mvr2c | T3 | Round-2 context-engineered prompts T3 | Oct 27 08:01 | yes | 86 | 97.2 | 0.048532 |
 
 ## Method
 
