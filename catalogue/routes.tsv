@@ -1363,6 +1363,7 @@ uiel-reap.test.js	ui/test/uiel-reap.test.js
 uielshe-44fcbd32601d	ui/test/uiel-shell-version.test.js
 uielsmo-2d86eec1e39f	ui/test/uiel-smoke-rss.test.js
 uiel2au-1c86966804a4	ui/test/uiel2-authority-confinement.test.js
+w3frame-6611301ee8f6	ui/test/w3-frame-acquire.test.js
 wall.test.js	ui/test/wall.test.js
 wireaut-1b048c3b3100	ui/test/wire-authority.test.js
 wirepre-95bfb7c6fbc5	ui/test/wire-preload-origin.test.js
