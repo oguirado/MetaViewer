@@ -222,7 +222,12 @@ test('E2E-U20n: depth-1 inner runs a live capsule with separate profile and sock
       try {
         const result = harness.runUnderXvfb({ electron: harness.electronBinary(root),
           appDir: scratch, extraArgs: [report, `--nested-depth=${depth}`], timeoutMs: 30000 });
-        return { result, report: JSON.parse(readFileSync(report, 'utf8')), profileDir: join(subDir, `profile-${depth}`) };
+        return {
+          result,
+          report: JSON.parse(readFileSync(report, 'utf8')),
+          baseProfileDir: join(subDir, `profile-${depth}`),
+          profileDir: join(subDir, `profile-${depth}-nested-depth-1`),
+        };
       } finally {
         for (const [k, v] of Object.entries(prev)) {
           if (v === undefined) delete process.env[k];
@@ -310,7 +315,9 @@ test('E2E-U20n: depth-1 inner runs a live capsule with separate profile and sock
     assert.equal(innerDisplay.report.renderer.depth, 1);
     assert.equal(innerDisplay.report.renderer.settled, true);
     assert.notEqual(innerDisplay.profileDir, outerProfile);
+    assert.notEqual(innerDisplay.profileDir, innerDisplay.baseProfileDir);
     assert.equal(existsSync(innerDisplay.profileDir), true);
+    assert.equal(existsSync(innerDisplay.baseProfileDir), false);
 
     // Negative control: inner core attempting to share the outer XDG_RUNTIME_DIR / core.sock path is refused with LiveSocket.
     const sharedSocketAttempt = spawnSync(coreBin, [], {
