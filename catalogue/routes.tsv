@@ -1102,6 +1102,7 @@ multislotCopy.js	ui/src/multislot/multislotCopy.js
 multislotInputGate.js	ui/src/multislot/multislotInputGate.js
 multislotProviders.js	ui/src/multislot/multislotProviders.js
 nested.js	ui/src/nested/nested.js
+anchorCollector.js	ui/src/qa/anchorCollector.js
 MvRecordingPanel.vue	ui/src/recording/MvRecordingPanel.vue
 recording.css	ui/src/recording/recording.css
 recordingModel.js	ui/src/recording/recordingModel.js
@@ -1201,6 +1202,7 @@ mvui12t-2b9339b193c3	ui/test/mvui12-terminal-boundary.test.js
 mvui12w-42b5199a8e9e	ui/test/mvui12-wall-intents.test.js
 mvui12w-772fd07851fb	ui/test/mvui12-wall-renderer.cjs
 mvui12w-3dc8700e9834	ui/test/mvui12-wall-state.test.js
+mvui13q-f266067a436c	ui/test/mvui13-qa-anchors.test.js
 mvui2co-ac677845cb36	ui/test/mvui2-contrast-tokens.test.js
 mvui2ho-83c44de816a4	ui/test/mvui2-hooks-frame.test.js
 mvui2ho-c784211240fa	ui/test/mvui2-hooks-scheme.test.js
