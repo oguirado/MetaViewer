@@ -368,6 +368,49 @@ class ContractMutantTests(unittest.TestCase):
                                     with self.assertRaises(ValidationError):
                                         validator.validate(mutant, schema)
 
+    def test_boundary_mutants_and_named_oracles(self):
+        """Named boundary mutants (exact-at vs 1-over) must be killed by the validator."""
+        validator = Validator(ROOT / "contracts/v0.2")
+
+        schema_props = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
+            "maxProperties": 1,
+        }
+        validator.validate({"a": 1}, schema_props)
+        with self.assertRaises(ValidationError):
+            validator.validate({"a": 1, "b": 2}, schema_props)
+
+        schema_items = {
+            "type": "array",
+            "items": {"type": "integer"},
+            "maxItems": 2,
+        }
+        validator.validate([1, 2], schema_items)
+        with self.assertRaises(ValidationError):
+            validator.validate([1, 2, 3], schema_items)
+
+        schema_len = {
+            "type": "string",
+            "maxLength": 3,
+        }
+        validator.validate("abc", schema_len)
+        with self.assertRaises(ValidationError):
+            validator.validate("abcd", schema_len)
+
+        schema_num = {
+            "type": "integer",
+            "minimum": 10,
+            "maximum": 20,
+        }
+        validator.validate(10, schema_num)
+        validator.validate(20, schema_num)
+        with self.assertRaises(ValidationError):
+            validator.validate(9, schema_num)
+        with self.assertRaises(ValidationError):
+            validator.validate(21, schema_num)
+
 
 if __name__ == "__main__":
     unittest.main()

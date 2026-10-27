@@ -365,6 +365,47 @@ class ContractEvolutionTests(unittest.TestCase):
                 except ValidationError as exc:
                     self.fail(f"Carried v0.1 valid example for {name} failed under v0.2 schema: {exc}")
 
+    def test_ui_intent_and_native_evidence_evolution_rules(self):
+        """Rule on ui_intent oneOf branches and native_evidence optionality under SW-0244 / SW-0139."""
+        ui_v2 = self.v02.load("ui_intent.schema.json")
+
+        ui_v1_synth = copy.deepcopy(ui_v2)
+        ui_v1_synth["oneOf"] = [
+            b
+            for b in ui_v2["oneOf"]
+            if b.get("properties", {}).get("op", {}).get("const") not in ("take_control", "release_control")
+        ]
+
+        # Adding 2 oneOf branches to ui_intent is backward-compatible for stored data/requests (den(v1) <= den(v2))
+        self.assertFalse(is_request_breaking(ui_v1_synth, ui_v2))
+
+        # Positive control: take_control validates under ui_v2, but fails under the 10-branch ui_v1_synth
+        take_control_msg = {
+            "schema": "ui_intent/v0.2",
+            "request_id": "req1",
+            "op": "take_control",
+            "params": {"surface_id": "s1"},
+        }
+        self.v02.validate(take_control_msg, ui_v2)
+        with self.assertRaises(ValidationError):
+            self.v02.validate(take_control_msg, ui_v1_synth)
+
+        # Optional native_evidence in action_receipt:
+        receipt_v2 = self.v02.load("action_receipt.schema.json")
+        receipt_example = json.loads((ROOT / "contracts/examples/v0.2/action_receipt.valid.json").read_text())
+        receipt_native = json.loads(
+            (ROOT / "contracts/examples/v0.2/action_receipt.valid.native-click.json").read_text()
+        )
+
+        no_evidence = {k: v for k, v in receipt_example.items() if k != "native_evidence"}
+        self.v02.validate(no_evidence, receipt_v2)
+        self.v02.validate(receipt_native, receipt_v2)
+
+        bad_evidence = dict(receipt_native["native_evidence"])
+        del bad_evidence["input_ts_ns"]
+        with self.assertRaises(ValidationError):
+            self.v02.validate({**receipt_native, "native_evidence": bad_evidence}, receipt_v2)
+
 
 if __name__ == "__main__":
     unittest.main()

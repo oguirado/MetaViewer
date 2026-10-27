@@ -374,7 +374,7 @@ fn pattern_ok(s: &str, pattern: &str) -> bool {
     }
     false
 }
-fn valid(v: &Value, s: &Value, root: &Value) -> bool {
+pub fn valid(v: &Value, s: &Value, root: &Value) -> bool {
     if let Some(reference) = s["$ref"].as_str() {
         let (file, fragment) = reference.split_once('#').unwrap_or((reference, ""));
         let external;
@@ -395,7 +395,9 @@ fn valid(v: &Value, s: &Value, root: &Value) -> bool {
                 None => return false,
             }
         };
-        return valid(v, target, base);
+        if !valid(v, target, base) {
+            return false;
+        }
     }
     if let Some(c) = s.get("const") {
         if v != c {
@@ -513,5 +515,91 @@ impl<T: Serialize> Serialize for Optional<T> {
             Self::Present(value) => value.serialize(s),
             Self::Missing => s.serialize_none(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{schemas, valid};
+    use serde_json::json;
+
+    #[test]
+    fn ref_evaluates_target_and_sibling_keywords() {
+        let schema = json!({
+            "$defs": {
+                "token": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                    "minLength": 1,
+                    "maxLength": 128
+                }
+            },
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["tag"],
+            "maxProperties": 256,
+            "properties": {
+                "tag": {
+                    "$ref": "#/$defs/token",
+                    "const": "pinned-token"
+                }
+            }
+        });
+        assert!(valid(&json!({"tag": "pinned-token"}), &schema, &schema));
+        assert!(!valid(&json!({"tag": "other-token"}), &schema, &schema));
+
+        let bad_const_schema = json!({
+            "$defs": schema["$defs"],
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["tag"],
+            "maxProperties": 256,
+            "properties": {
+                "tag": {
+                    "$ref": "#/$defs/token",
+                    "const": "!invalid!"
+                }
+            }
+        });
+        assert!(!valid(
+            &json!({"tag": "!invalid!"}),
+            &bad_const_schema,
+            &bad_const_schema
+        ));
+
+        let frame_gen1: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../contracts/examples/v0.2/frame_ref.valid.json"
+        ))
+        .unwrap();
+        let mut frame_gen2 = frame_gen1.clone();
+        frame_gen2["generation"] = json!(2);
+        let mut frame_bad_sha = frame_gen1.clone();
+        frame_bad_sha["sha256"] = json!("not-a-valid-sha256");
+
+        let external_ref_schema = json!({
+            "$ref": "frame_ref.schema.json",
+            "const": frame_gen1
+        });
+        assert!(schemas::schema("frame_ref.schema.json").is_some());
+        assert!(valid(
+            &frame_gen1,
+            &external_ref_schema,
+            &external_ref_schema
+        ));
+        assert!(!valid(
+            &frame_gen2,
+            &external_ref_schema,
+            &external_ref_schema
+        ));
+
+        let external_bad_const_schema = json!({
+            "$ref": "frame_ref.schema.json",
+            "const": frame_bad_sha
+        });
+        assert!(!valid(
+            &frame_bad_sha,
+            &external_bad_const_schema,
+            &external_bad_const_schema
+        ));
     }
 }

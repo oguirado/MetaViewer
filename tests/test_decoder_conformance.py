@@ -85,29 +85,44 @@ def _u5_chk_terminal_fixed() -> bool:
     return "terminal_session/v0.2" in chk_py and "byte_count" in chk_py
 
 
-def _run_rust_probe(raw_lines: list[str]) -> list[bool]:
+def _run_rust_probe(raw_lines: list[str], schema_cases: list[tuple[dict, dict]] | None = None) -> tuple[list[bool], list[bool]]:
     cargo = shutil.which(os.environ.get("CARGO", "cargo"))
     if cargo is None:
         raise RuntimeError("cargo must be supplied by PATH or CARGO")
+    schema_cases = schema_cases or []
     with tempfile.TemporaryDirectory(prefix="conformance-rs-") as temp:
         directory = Path(temp)
         (directory / "src").mkdir()
         (directory / "Cargo.toml").write_text(
             '[package]\nname = "decoder-conformance-probe"\nversion = "0.0.0"\n'
             "edition = \"2021\"\n[workspace]\n[dependencies]\n"
+            'serde_json = "=1.0.154"\n'
             "metaviewer-core = { path = " + json.dumps(str(ROOT / "core")) + " }\n"
         )
         (directory / "src/main.rs").write_text(
             "use std::io::{self, BufRead};\nfn main() {\n"
             "for line in io::stdin().lock().lines() {\n"
-            'println!("{}", metaviewer_core::decode_envelope(&line.unwrap()).is_ok());\n'
+            "let line = line.unwrap();\n"
+            'if let Some(rest) = line.strip_prefix("SCHEMA_VALID:") {\n'
+            "let pair: (serde_json::Value, serde_json::Value) = serde_json::from_str(rest).unwrap();\n"
+            'println!("{}", metaviewer_core::valid(&pair.0, &pair.1, &pair.1));\n'
+            "} else {\n"
+            'println!("{}", metaviewer_core::decode_envelope(&line).is_ok());\n'
+            "}\n"
             "}\n}\n"
         )
         environment = dict(os.environ)
         environment.setdefault("CARGO_TARGET_DIR", str(directory / "target"))
+        stdin_lines = [
+            *(line + "\n" for line in raw_lines),
+            *(
+                "SCHEMA_VALID:" + json.dumps([val, sch], separators=(",", ":")) + "\n"
+                for val, sch in schema_cases
+            ),
+        ]
         result = subprocess.run(
             [cargo, "run", "--offline", "--quiet", "--manifest-path", str(directory / "Cargo.toml")],
-            input="".join(line + "\n" for line in raw_lines),
+            input="".join(stdin_lines),
             text=True,
             capture_output=True,
             env=environment,
@@ -115,59 +130,19 @@ def _run_rust_probe(raw_lines: list[str]) -> list[bool]:
         )
         if result.returncode != 0:
             raise RuntimeError("Rust conformance probe failed: " + result.stderr)
-        answers = result.stdout.splitlines()
-        if len(answers) != len(raw_lines):
-            raise RuntimeError(f"Rust probe line count mismatch: {len(answers)} != {len(raw_lines)}")
-        return [line.strip() == "true" for line in answers]
+        answers = [line.strip() == "true" for line in result.stdout.splitlines()]
+        expected_total = len(raw_lines) + len(schema_cases)
+        if len(answers) != expected_total:
+            raise RuntimeError(f"Rust probe line count mismatch: {len(answers)} != {expected_total}")
+        return answers[: len(raw_lines)], answers[len(raw_lines) :]
 
 
-def _run_go_probe(raw_lines: list[str]) -> list[bool]:
+def _run_go_probe(raw_lines: list[str], envelope_schema_override: str | None = None) -> list[bool]:
     go = shutil.which(os.environ.get("GO", "go"))
     if go is None:
         raise RuntimeError("go must be supplied by PATH or GO")
     with tempfile.TemporaryDirectory(prefix="conformance-go-", dir="/tmp") as temp:
         temp_root = Path(temp)
-        adapter_dir = temp_root / "daemon-adapter"
-        (adapter_dir / "internal").mkdir(parents=True)
-        shutil.copyfile(ROOT / "daemon-adapter/go.mod", adapter_dir / "go.mod")
-        shutil.copytree(ROOT / "daemon-adapter/internal/ipc", adapter_dir / "internal/ipc")
-        (adapter_dir / "internal/ipc/conformance_probe_test.go").write_text(
-            """package ipc
-
-import (
-\t"bufio"
-\t"fmt"
-\t"os"
-\t"testing"
-)
-
-func TestConformanceProbe(t *testing.T) {
-\tp, err := NewPolicy(ceilingConfig(), os.DirFS(os.Getenv("MV_SCHEMA_DIR")), &dummyPolicy{})
-\tif err != nil {
-\t\tt.Fatal(err)
-\t}
-\tinFile, err := os.Open(os.Getenv("MV_PROBE_IN"))
-\tif err != nil {
-\t\tt.Fatal(err)
-\t}
-\tdefer inFile.Close()
-\toutFile, err := os.Create(os.Getenv("MV_PROBE_OUT"))
-\tif err != nil {
-\t\tt.Fatal(err)
-\t}
-\tdefer outFile.Close()
-\tscanner := bufio.NewScanner(inFile)
-\tscanner.Buffer(make([]byte, 1024*1024), 2*1024*1024)
-\tfor scanner.Scan() {
-\t\t_, err := p.ValidateEnvelope(scanner.Bytes())
-\t\tfmt.Fprintln(outFile, err == nil)
-\t}
-\tif err := scanner.Err(); err != nil {
-\t\tt.Fatal(err)
-\t}
-}
-"""
-        )
         in_path = temp_root / "in.jsonl"
         out_path = temp_root / "out.txt"
         in_path.write_text("".join(line + "\n" for line in raw_lines))
@@ -181,9 +156,11 @@ func TestConformanceProbe(t *testing.T) {
             MV_PROBE_IN=str(in_path),
             MV_PROBE_OUT=str(out_path),
         )
+        if envelope_schema_override is not None:
+            environment["MV_ENVELOPE_SCHEMA_JSON"] = envelope_schema_override
         result = subprocess.run(
             [go, "test", "./internal/ipc", "-run", "^TestConformanceProbe$", "-count=1"],
-            cwd=adapter_dir,
+            cwd=ROOT / "daemon-adapter",
             text=True,
             capture_output=True,
             env=environment,
@@ -220,6 +197,21 @@ def _run_checker_decoder(validator: Validator, envelope_schema: dict, raw_line: 
         validator.validate(value, envelope_schema)
         return True
     except (ValidationError, ValueError, TypeError, RecursionError):
+        return False
+
+
+def _run_python_schema_check(value: dict, schema: dict) -> bool:
+    import copy
+    import metaviewer_agents.envelope as env_mod
+
+    versioned = copy.deepcopy(schema)
+    for k in ("$schema", "$id", "title", "description", "$defs"):
+        versioned.pop(k, None)
+    env_mod._version_refs(versioned)
+    try:
+        env_mod._check(value, versioned, 0)
+        return True
+    except env_mod._Mismatch:
         return False
 
 
@@ -378,8 +370,56 @@ class DecoderConformanceTests(unittest.TestCase):
             + [raw for _, raw in cls.positive_controls]
             + [raw for _, raw, _ in cls.mutation_cases]
         )
-        rs_verdicts = _run_rust_probe(all_raw)
+
+        import copy
+
+        synth_good_const = copy.deepcopy(cls.envelope_schema)
+        synth_good_const["properties"]["body"] = {
+            "oneOf": [
+                {
+                    "$ref": "frame_ref.schema.json",
+                    "const": frame_valid,
+                }
+            ]
+        }
+        frame_bad_sha = {**frame_valid, "sha256": "not-a-valid-sha256"}
+        synth_bad_const = copy.deepcopy(cls.envelope_schema)
+        synth_bad_const["properties"]["body"] = {
+            "oneOf": [
+                {
+                    "$ref": "frame_ref.schema.json",
+                    "const": frame_bad_sha,
+                }
+            ]
+        }
+
+        env_gen1 = {**cls.base_envelope, "body": frame_valid}
+        env_gen2 = {**cls.base_envelope, "body": {**frame_valid, "generation": 2}}
+        env_bad_sha = {**cls.base_envelope, "body": frame_bad_sha}
+
+        cls.r1_084_cases = [
+            ("r1-084-pos-both-match", env_gen1, synth_good_const, True),
+            ("r1-084-neg-ref-ok-const-mismatch", env_gen2, synth_good_const, False),
+            ("r1-084-neg-const-ok-ref-mismatch", env_bad_sha, synth_bad_const, False),
+        ]
+
+        rs_verdicts, rs_r1_084 = _run_rust_probe(
+            all_raw,
+            [(val, sch) for _, val, sch, _ in cls.r1_084_cases],
+        )
         go_verdicts = _run_go_probe(all_raw)
+        go_r1_084_good = _run_go_probe(
+            [
+                json.dumps(env_gen1, separators=(",", ":")),
+                json.dumps(env_gen2, separators=(",", ":")),
+            ],
+            envelope_schema_override=json.dumps(synth_good_const),
+        )
+        go_r1_084_bad = _run_go_probe(
+            [json.dumps(env_bad_sha, separators=(",", ":"))],
+            envelope_schema_override=json.dumps(synth_bad_const),
+        )
+        go_r1_084 = go_r1_084_good + go_r1_084_bad
         py_verdicts = [_run_python_decoder(raw) for raw in all_raw]
         chk_verdicts = [
             _run_checker_decoder(cls.validator, cls.envelope_schema, raw) for raw in all_raw
@@ -388,6 +428,17 @@ class DecoderConformanceTests(unittest.TestCase):
         cls.verdicts = [
             {"rust": r, "go": g, "python": p, "checker": c}
             for r, g, p, c in zip(rs_verdicts, go_verdicts, py_verdicts, chk_verdicts)
+        ]
+        cls.r1_084_verdicts = [
+            {
+                "rust": rs_r1_084[i],
+                "go": go_r1_084[i],
+                "python": _run_python_schema_check(val, sch),
+                "checker": _run_checker_decoder(
+                    cls.validator, sch, json.dumps(val, separators=(",", ":"))
+                ),
+            }
+            for i, (_, val, sch, _) in enumerate(cls.r1_084_cases)
         ]
 
     def test_all_v02_example_fixtures_unanimous_across_four_decoders(self):
@@ -426,6 +477,14 @@ class DecoderConformanceTests(unittest.TestCase):
             )
             with self.subTest(uid=uid):
                 self.assertEqual(verdict, target)
+
+    def test_r1_084_ref_with_sibling_const_mirrored_across_decoders(self):
+        for idx, (name, _, _, expected) in enumerate(self.r1_084_cases):
+            with self.subTest(case=name):
+                self.assertEqual(
+                    self.r1_084_verdicts[idx],
+                    {"rust": expected, "go": expected, "python": expected, "checker": expected},
+                )
 
 
 if __name__ == "__main__":

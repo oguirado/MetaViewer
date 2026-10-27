@@ -122,7 +122,28 @@ class RoundOneContracts(unittest.TestCase):
         for key in ('sha256', 'ramws_path'):
             for suffix in ('\n', '\r', '\r\n'):
                 cases.append((key + repr(suffix),
-                              {**base, 'body': {**frame, key: frame[key] + suffix}}, False))
+                              {**base, 'body': {**frame, key: frame[key] + suffix}}, 'false'))
+        proposal = json.loads((examples / 'action_proposal.valid.json').read_text())
+        classify_cases = [
+            ('r1-088-pos-control', base, 'CLASSIFY:OK', None),
+            ('r1-088-body-v9.9', {**base, 'body': {**proposal, 'schema': 'action_proposal/v9.9'}},
+             'CLASSIFY:UnknownVersion', 'unknown_version'),
+            ('r1-088-body-v0.1', {**base, 'body': {**proposal, 'schema': 'action_proposal/v0.1'}},
+             'CLASSIFY:UnknownVersion', 'unknown_version'),
+            ('r1-088-unknown-family', {**base, 'body': {**proposal, 'schema': 'unknown_family/v0.2'}},
+             'CLASSIFY:Malformed', 'unknown_version'),
+        ]
+        import sys
+        sys.path.insert(0, str(ROOT / 'agents'))
+        from metaviewer_agents.envelope import EnvelopeError, validate_envelope
+        for name, env_val, _, py_code in classify_cases:
+            with self.subTest(python_classify=name):
+                if py_code is None:
+                    self.assertEqual(validate_envelope(env_val)['schema'], 'envelope/v0.2')
+                else:
+                    with self.assertRaises(EnvelopeError) as cm:
+                        validate_envelope(env_val)
+                    self.assertEqual(cm.exception.code, py_code)
         with tempfile.TemporaryDirectory(prefix='contract-probe-') as temp:
             directory = Path(temp)
             (directory / 'src').mkdir()
@@ -133,17 +154,33 @@ class RoundOneContracts(unittest.TestCase):
             (directory / 'src/main.rs').write_text(
                 'use std::io::{self, BufRead};\nfn main() {\n'
                 'for line in io::stdin().lock().lines() {\n'
-                'println!("{}", metaviewer_core::decode_envelope(&line.unwrap()).is_ok());\n'
+                'let line = line.unwrap();\n'
+                'if let Some(rest) = line.strip_prefix("CLASSIFY:") {\n'
+                'match metaviewer_core::decode_envelope(rest) {\n'
+                'Ok(_) => println!("CLASSIFY:OK"),\n'
+                'Err(e) => println!("CLASSIFY:{e:?}"),\n'
+                '}\n'
+                '} else {\n'
+                'println!("{}", metaviewer_core::decode_envelope(&line).is_ok());\n'
+                '}\n'
                 '}\n}\n')
             environment = dict(os.environ)
             environment.setdefault('CARGO_TARGET_DIR', str(directory / 'target'))
+            stdin_lines = [
+                *(json.dumps(value) + '\n' for _, value, _ in cases),
+                *('CLASSIFY:' + json.dumps(value) + '\n' for _, value, _, _ in classify_cases),
+            ]
             result = subprocess.run(
                 [cargo, 'run', '--offline', '--quiet', '--manifest-path', str(directory / 'Cargo.toml')],
-                input=''.join(json.dumps(value) + '\n' for _, value, _ in cases),
+                input=''.join(stdin_lines),
                 text=True, capture_output=True, env=environment, timeout=180)
             self.assertEqual(result.returncode, 0, result.stderr)
             answers = result.stdout.splitlines()
-            self.assertEqual(len(answers), len(cases), result.stdout)
-            for (name, _, expected), answer in zip(cases, answers):
+            expected_all = [
+                *((name, str(expected).lower()) for name, _, expected in cases),
+                *((name, expected) for name, _, expected, _ in classify_cases),
+            ]
+            self.assertEqual(len(answers), len(expected_all), result.stdout)
+            for (name, expected), answer in zip(expected_all, answers):
                 with self.subTest(fixture=name):
-                    self.assertEqual(answer, str(expected).lower())
+                    self.assertEqual(answer, expected)
