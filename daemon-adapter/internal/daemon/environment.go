@@ -10,6 +10,8 @@ package daemon
 // [TARGET, unit decision] The wire owner drains cancelled input on native return;
 // direct Manager callers keep the explicit DrainInput contract. Replay creation
 // is anchored to a descriptor obtained by a canonical no-symlink directory walk.
+// [TARGET, unit decision] MV_EXPECTED_CORE_COMMIT optionally pins the core hello
+// to a lowercase full revision; a configured invalid pin fails startup closed.
 import (
 	"context"
 	"encoding/json"
@@ -17,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime/debug"
 	"strings"
 	"syscall"
@@ -50,6 +53,10 @@ func RuntimeFromEnv() (Runtime, error) {
 		if os.Getenv(key) == "" {
 			return zero, configuration(key + " is required for core registration")
 		}
+	}
+	expectedCoreCommit := os.Getenv("MV_EXPECTED_CORE_COMMIT")
+	if expectedCoreCommit != "" && !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(expectedCoreCommit) {
+		return zero, configuration("valid expected core revision required")
 	}
 	state := os.Getenv("MV_SRF_STATE_DIR")
 	stateFile, err := openStateDir(state)
@@ -112,6 +119,7 @@ func RuntimeFromEnv() (Runtime, error) {
 		closePubs()
 		return zero, configuration(err.Error())
 	}
+	authority.expectedCoreCommit = expectedCoreCommit
 	cleanup := func() {
 		for _, s := range subscriptions {
 			_ = s.Close(context.Background())

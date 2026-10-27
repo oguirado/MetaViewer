@@ -32,15 +32,20 @@ type replayFile interface {
 	Truncate(int64) error
 	Close() error
 }
+
+// [TARGET, unit decision] A configured core revision pin is checked before replay
+// reservation or dispatch; requests cannot bypass the pinned hello.
 type clientAuthority struct {
-	file        replayFile
-	failed      bool
-	seq         map[ipc.SenderKey]uint64
-	nonces      map[string]bool
-	count       int
-	bytes       int64
-	origin, out uint64
-	bound       *ipc.Envelope
+	expectedCoreCommit string
+	coreHelloVerified  bool
+	file               replayFile
+	failed             bool
+	seq                map[ipc.SenderKey]uint64
+	nonces             map[string]bool
+	count              int
+	bytes              int64
+	origin, out        uint64
+	bound              *ipc.Envelope
 }
 
 func newClientAuthority(path string, origin uint64) (*clientAuthority, error) {
@@ -118,6 +123,22 @@ func (a *clientAuthority) admit(r replayEntry) error {
 func (a *clientAuthority) Authenticate(_ context.Context, c ipc.PeerCredentials, e ipc.Envelope) error {
 	if !ipc.PeerAdmitted(c, uint32(os.Getuid())) {
 		return errors.New("peer refused")
+	}
+	if a.expectedCoreCommit != "" {
+		var hello struct {
+			Schema    string
+			Component string
+			Commit    string `json:"component_commit"`
+		}
+		if err := json.Unmarshal(e.Body, &hello); err != nil {
+			return err
+		}
+		if !a.coreHelloVerified || hello.Schema == "hello/v0.2" {
+			if hello.Schema != "hello/v0.2" || hello.Component != "core" || hello.Commit != a.expectedCoreCommit {
+				return errors.New("core hello revision pin refused")
+			}
+			a.coreHelloVerified = true
+		}
 	}
 	if a.bound == nil {
 		a.bound = &e
