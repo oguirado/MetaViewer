@@ -75,6 +75,11 @@
    "why": "ABSENT: reason not recorded",
    "orchestrator": "conductor"
   },
+  "mvui14": {
+   "stage": "ui",
+   "why": "Move live frame painting from the interim preload painter into the renderer (frame_port/v1 + frame_ack/v0.2 after the real paint), and fix three renderer defects measured live by the orchestrator: capture chrome not reacting, tile title ':100', 'Agent acting' without an agent.",
+   "orchestrator": "UI orchestrator"
+  },
   "mvui3n": {
    "stage": "ui",
    "why": "Polish the MetaViewer wall for live data after the live G-W1 gate passed: a live-replay fixture through the real authority runtime, live tile states, multislot real terminal sessions and a receipt/verdict activity strip.",
