@@ -96,6 +96,23 @@ jobs:
                       skipped = int(s.group(1)) if s else 0
                       failed = 0
                       passed = total - skipped
+          measured_path = os.path.join(e['EVDIR'], e['GATE'] + '.measured.json')
+          measured = json.load(open(measured_path)) if os.path.exists(measured_path) else None
+          assertions = [{'id': 'exit-status', 'expected': 'rc 0',
+                         'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
+                         'accepted': e['OUTCOME'] == 'PASS'}]
+          if isinstance(measured, dict) and isinstance(measured.get('tiles'), list):
+              for tile in measured['tiles']:
+                  tid = str(tile.get('id', 'tile'))
+                  frames = int(tile.get('frames', 0))
+                  stalls = int(tile.get('stalls', 0))
+                  fps = float(tile.get('fps', 0.0))
+                  assertions.append({
+                      'id': 'soak-tile-' + tid,
+                      'expected': 'fps>=10.0 and stalls==0',
+                      'observed': 'frames=%d fps=%.2f stalls=%d [MEASURED]' % (frames, fps, stalls),
+                      'accepted': bool(fps >= 10.0 and stalls == 0 and e['OUTCOME'] == 'PASS'),
+                  })
           receipt = {
               'schema': 'gate_receipt/v1', 'gate_id': e['GATE'], 'leg': e['GATE'], 'profile': 'W0',
               'owner': 'W0-CI-MATRIX', 'issuer': e['ISSUER'],
@@ -106,10 +123,8 @@ jobs:
               'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
                              'sanitized_log_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
                              'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
-              'product_identity': None,
-              'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
-                              'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
-                              'accepted': e['OUTCOME'] == 'PASS'}],
+              'product_identity': measured,
+              'assertions': assertions,
               'counts': {'passed': passed, 'failed': failed, 'skipped': skipped, 'source': e['COUNTSRC']}}
           out = os.path.join(e['EVDIR'], e['GATE'] + '.receipt.json')
           with open(out, 'w') as f:
@@ -165,6 +180,7 @@ jobs:
         env:
           JOB_ID: volume-mutants
           PLATFORM: ${{ matrix.platform }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: |
           set -u -o pipefail
           EVDIR="${RUNNER_TEMP}/metaviewer-ci/${JOB_ID}/${PLATFORM}"
@@ -215,6 +231,23 @@ jobs:
                       skipped = int(s.group(1)) if s else 0
                       failed = 0
                       passed = total - skipped
+          measured_path = os.path.join(e['EVDIR'], e['GATE'] + '.measured.json')
+          measured = json.load(open(measured_path)) if os.path.exists(measured_path) else None
+          assertions = [{'id': 'exit-status', 'expected': 'rc 0',
+                         'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
+                         'accepted': e['OUTCOME'] == 'PASS'}]
+          if isinstance(measured, dict) and isinstance(measured.get('tiles'), list):
+              for tile in measured['tiles']:
+                  tid = str(tile.get('id', 'tile'))
+                  frames = int(tile.get('frames', 0))
+                  stalls = int(tile.get('stalls', 0))
+                  fps = float(tile.get('fps', 0.0))
+                  assertions.append({
+                      'id': 'soak-tile-' + tid,
+                      'expected': 'fps>=10.0 and stalls==0',
+                      'observed': 'frames=%d fps=%.2f stalls=%d [MEASURED]' % (frames, fps, stalls),
+                      'accepted': bool(fps >= 10.0 and stalls == 0 and e['OUTCOME'] == 'PASS'),
+                  })
           receipt = {
               'schema': 'gate_receipt/v1', 'gate_id': e['GATE'], 'leg': e['GATE'], 'profile': 'W0',
               'owner': 'W0-CI-MATRIX', 'issuer': e['ISSUER'],
@@ -225,10 +258,8 @@ jobs:
               'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
                              'sanitized_log_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
                              'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
-              'product_identity': None,
-              'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
-                              'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
-                              'accepted': e['OUTCOME'] == 'PASS'}],
+              'product_identity': measured,
+              'assertions': assertions,
               'counts': {'passed': passed, 'failed': failed, 'skipped': skipped, 'source': e['COUNTSRC']}}
           out = os.path.join(e['EVDIR'], e['GATE'] + '.receipt.json')
           with open(out, 'w') as f:
@@ -275,6 +306,11 @@ jobs:
             fi
           done
           echo "mutant repetitions: $iters iters, $iter_fail failed" >>"$LOG"
+          if [ "${GITHUB_EVENT_NAME:-}" = "schedule" ]; then
+            timeout 1200 python3 agents/tests/run_mutant_harness.py >>"$LOG" 2>&1; mr=$?
+            echo "agents mutant harness rc $mr" >>"$LOG"
+            [ $mr -ne 0 ] && [ $rc -eq 0 ] && rc=$mr
+          fi
           if [ $rc -eq 0 ]; then oc=PASS; rsn="100 mutant repetitions green"; else oc=FAIL; rsn="$iter_fail of 100 mutant repetitions failed"; fi
           finish_gate volume-mutants "$rc" "$oc" "$rsn" "$LOG" tests/test_contract_mutants.py "volume:100-iters" 0 -- python3 -m unittest tests.test_contract_mutants -v
           exit $rc
@@ -423,6 +459,23 @@ jobs:
                       skipped = int(s.group(1)) if s else 0
                       failed = 0
                       passed = total - skipped
+          measured_path = os.path.join(e['EVDIR'], e['GATE'] + '.measured.json')
+          measured = json.load(open(measured_path)) if os.path.exists(measured_path) else None
+          assertions = [{'id': 'exit-status', 'expected': 'rc 0',
+                         'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
+                         'accepted': e['OUTCOME'] == 'PASS'}]
+          if isinstance(measured, dict) and isinstance(measured.get('tiles'), list):
+              for tile in measured['tiles']:
+                  tid = str(tile.get('id', 'tile'))
+                  frames = int(tile.get('frames', 0))
+                  stalls = int(tile.get('stalls', 0))
+                  fps = float(tile.get('fps', 0.0))
+                  assertions.append({
+                      'id': 'soak-tile-' + tid,
+                      'expected': 'fps>=10.0 and stalls==0',
+                      'observed': 'frames=%d fps=%.2f stalls=%d [MEASURED]' % (frames, fps, stalls),
+                      'accepted': bool(fps >= 10.0 and stalls == 0 and e['OUTCOME'] == 'PASS'),
+                  })
           receipt = {
               'schema': 'gate_receipt/v1', 'gate_id': e['GATE'], 'leg': e['GATE'], 'profile': 'W0',
               'owner': 'W0-CI-MATRIX', 'issuer': e['ISSUER'],
@@ -433,10 +486,8 @@ jobs:
               'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
                              'sanitized_log_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
                              'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
-              'product_identity': None,
-              'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
-                              'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
-                              'accepted': e['OUTCOME'] == 'PASS'}],
+              'product_identity': measured,
+              'assertions': assertions,
               'counts': {'passed': passed, 'failed': failed, 'skipped': skipped, 'source': e['COUNTSRC']}}
           out = os.path.join(e['EVDIR'], e['GATE'] + '.receipt.json')
           with open(out, 'w') as f:
@@ -507,4 +558,111 @@ jobs:
           echo "e2e repetitions: $iters iters, $iter_fail failed" >>"$LOG"
           if [ $rc -eq 0 ]; then oc=PASS; rsn="300 e2e repetitions green"; else oc=FAIL; rsn="$iter_fail of 300 e2e repetitions failed"; fi
           finish_gate volume-e2e-qualification "$rc" "$oc" "$rsn" "$LOG" tests/e2e/run.py "volume:300-iters" 0 -- xvfb-run -a -s "-screen 0 1280x900x24" python3 tests/e2e/run.py
+          [ "$rc" -eq 0 ] || exit "$rc"
+          LOG="$EVDIR/volume-wall-soak.log"
+          : > "$LOG"
+          rc=0
+          SOAK_SECS="${MV_SOAK_SECS:-600}"
+          SOAK_REPORT="$EVDIR/volume-wall-soak-report.json"
+          if [ -n "${MV_SOAK_REPORT_FIXTURE:-}" ]; then
+            cp "$MV_SOAK_REPORT_FIXTURE" "$SOAK_REPORT" >>"$LOG" 2>&1 || rc=1
+          else
+            SOAK_BUILD="$EVDIR/soak-build"
+            (
+              set -e
+              node tools/sync_kit.mjs "${MV_KIT_CHECKOUT:-${CAPSULE_UI_KIT_REPO:-}}"
+              MV_E2E_BUILD="$SOAK_BUILD" timeout 120 node tests/e2e/perf-build.mjs
+              ELECTRON_BIN="$(node -e 'console.log(require("./tests/e2e/ac-harness.cjs").electronBinary(process.cwd()))')"
+              timeout 660 xvfb-run -a -s "-screen 0 1280x900x24" "$ELECTRON_BIN" tests/e2e/perf-main.cjs "$SOAK_BUILD" "$SOAK_REPORT" "{\"seconds\":${SOAK_SECS}}"
+            ) >>"$LOG" 2>&1 || rc=1
+          fi
+          SOAK_REPORT="$SOAK_REPORT" SOAK_SECS="$SOAK_SECS" MEASURED_OUT="$EVDIR/volume-wall-soak.measured.json" \
+          python3 - <<'PYEOF' >>"$LOG" 2>&1 || rc=1
+          import json, os, sys
+          report_path = os.environ["SOAK_REPORT"]
+          soak_secs = int(os.environ["SOAK_SECS"])
+          if soak_secs < 3 or soak_secs > 600:
+              print("FAIL volume-wall-soak: invalid MV_SOAK_SECS=%d" % soak_secs)
+              sys.exit(1)
+          if not os.path.isfile(report_path):
+              print("FAIL volume-wall-soak: soak report missing")
+              sys.exit(1)
+          report = json.load(open(report_path, "r", encoding="utf-8"))
+          if report.get("schema") != "metaviewer.perf-wall/v1" or report.get("capture") != "synthetic-rgb24":
+              print("FAIL volume-wall-soak: invalid report schema")
+              sys.exit(1)
+          visible = report.get("visible")
+          if not isinstance(visible, list) or len(visible) < 4 or len({t.get("id") for t in visible if isinstance(t, dict)}) != len(visible):
+              print("FAIL volume-wall-soak: expected >= 4 distinct visible tiles")
+              sys.exit(1)
+          started = float(report.get("started", 0))
+          ended = float(report.get("ended", 0))
+          duration_ms = ended - started
+          min_duration_ms = max(2900.0, soak_secs * 1000.0 - 100.0)
+          failures = []
+          if duration_ms < min_duration_ms:
+              failures.append("duration_ms=%.1f<%.1f" % (duration_ms, min_duration_ms))
+          tiles_summary = []
+          stalled_tiles = []
+          total_stalls = 0
+          for tile in visible:
+              tid = str(tile.get("id", ""))
+              times = [float(t) for t in (tile.get("times") or [])]
+              frames = len(times)
+              fps = (frames * 1000.0 / duration_ms) if duration_ms > 0 else 0.0
+              seq = [started, *times, ended]
+              gaps = [seq[i] - seq[i - 1] for i in range(1, len(seq))]
+              stalls = sum(1 for g in gaps if g < 0 or g > 2000.0)
+              max_gap_ms = max(gaps) if gaps else 0.0
+              present_count = (tile.get("info") or {}).get("presentCount")
+              last_gen = (tile.get("info") or {}).get("lastCaptureGeneration", 0)
+              pixel_ok = tile.get("pixel") == tile.get("expectedPixel")
+              tile_stalled = stalls > 0 or fps < 10.0 or present_count != frames or last_gen <= 0 or not pixel_ok
+              if tile_stalled:
+                  stalled_tiles.append(tid)
+                  if stalls == 0:
+                      stalls = 1
+                  failures.append("tile:%s(frames=%d,fps=%.2f,stalls=%d,max_gap_ms=%.1f)" % (tid, frames, fps, stalls, max_gap_ms))
+              total_stalls += stalls
+              tiles_summary.append({
+                  "id": tid,
+                  "frames": frames,
+                  "fps": round(fps, 3),
+                  "stalls": stalls,
+                  "max_gap_ms": round(max_gap_ms, 3),
+              })
+          folded = report.get("folded") or {}
+          f_before = folded.get("before") or {}
+          f_after = folded.get("after") or {}
+          folded_ok = (
+              folded.get("hidden") is True
+              and f_after.get("folded") is True
+              and f_after.get("captureLeaseActive") is True
+              and int(f_after.get("lastCaptureGeneration", 0)) > int(f_before.get("lastCaptureGeneration", 0))
+              and f_after.get("drawSubmissions") == f_before.get("drawSubmissions")
+          )
+          if not folded_ok:
+              failures.append("folded_capture_stall")
+          measured = {
+              "schema": "metaviewer.perf-wall.soak-summary/v1",
+              "soak_seconds": soak_secs,
+              "duration_ms": round(duration_ms, 3),
+              "frames_per_tile": {t["id"]: t["frames"] for t in tiles_summary},
+              "stalls_per_tile": {t["id"]: t["stalls"] for t in tiles_summary},
+              "tiles": tiles_summary,
+              "total_stalls": total_stalls,
+              "stalled_tiles": stalled_tiles,
+              "folded_capture_advanced": folded_ok,
+              "failures": failures,
+          }
+          with open(os.environ["MEASURED_OUT"], "w", encoding="utf-8") as mf:
+              json.dump(measured, mf, indent=2)
+          print("SOAK_WALL [MEASURED]: " + json.dumps(measured))
+          if failures:
+              print("FAIL volume-wall-soak: " + ", ".join(failures))
+              sys.exit(1)
+          print("PASS volume-wall-soak: %d tiles, 0 stalls" % len(tiles_summary))
+          PYEOF
+          if [ $rc -eq 0 ]; then oc=PASS; rsn="10-minute live wall soak green"; else oc=FAIL; rsn="10-minute live wall soak failed"; fi
+          finish_gate volume-wall-soak "$rc" "$oc" "$rsn" "$LOG" tests/e2e/e2e14_perf.test.js "volume:soak-600s" 0 -- timeout 660 xvfb-run -a -s "-screen 0 1280x900x24" node --test tests/e2e/e2e14_perf.test.js
           exit $rc

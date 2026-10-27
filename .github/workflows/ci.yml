@@ -27,6 +27,8 @@ on:
   push:
     branches: ['**']
   pull_request:
+  schedule:
+    - cron: "47 2 * * *"
   workflow_dispatch:
 permissions:
   contents: read
@@ -1194,6 +1196,7 @@ jobs:
           JOB_ID: python
           PLATFORM: ${{ matrix.platform }}
           EXPECT_ARCH: ${{ matrix.arch }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: |
           set +e
           set -u -o pipefail
@@ -1297,6 +1300,10 @@ jobs:
           LOG="$EVDIR/python-agents.log"
           : > "$LOG"
           timeout 1200 python3 -m unittest discover -s agents/tests -v >"$LOG" 2>&1; r=$?
+          if [ "${GITHUB_EVENT_NAME:-}" = "schedule" ]; then
+            MLOG="$EVDIR/python-agents-mutants.log"
+            timeout 1200 python3 agents/tests/run_mutant_harness.py >"$MLOG" 2>&1 || r=1
+          fi
           if [ $r -eq 0 ]; then oc=PASS; rsn="agents suite green"; else oc=FAIL; rsn="agents suite failed"; fi
           finish_gate python-agents "$r" "$oc" "$rsn" "$LOG" agents/pyproject.toml "parsed:unittest" 1 -- python3 -m unittest discover -s agents/tests -v || r=2
           exit $r
@@ -1768,6 +1775,22 @@ jobs:
                       skipped = int(s.group(1)) if s else 0
                       failed = 0
                       passed = total - skipped
+          measured_path = os.path.join(e['EVDIR'], e['GATE'] + '.measured.json')
+          measured = json.load(open(measured_path)) if os.path.exists(measured_path) else None
+          assertions = [{'id': 'exit-status', 'expected': 'rc 0',
+                         'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
+                         'accepted': e['OUTCOME'] == 'PASS'}]
+          if isinstance(measured, dict):
+              rss_caps = measured.get('rss_caps_measured') or {}
+              for key, bound in sorted((measured.get('frozen_budgets_bytes') or {}).items()):
+                  val = rss_caps.get(key)
+                  ok_val = type(val) is int and 0 < val <= bound and e['OUTCOME'] == 'PASS'
+                  assertions.append({
+                      'id': key,
+                      'expected': '<= %d' % bound,
+                      'observed': '%s [MEASURED]' % val,
+                      'accepted': bool(ok_val),
+                  })
           receipt = {
               'schema': 'gate_receipt/v1', 'gate_id': e['GATE'], 'leg': e['GATE'], 'profile': 'W0',
               'owner': 'W0-CI-MATRIX', 'issuer': e['ISSUER'],
@@ -1778,10 +1801,8 @@ jobs:
               'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
                              'sanitized_log_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
                              'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
-              'product_identity': None,
-              'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
-                              'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
-                              'accepted': e['OUTCOME'] == 'PASS'}],
+              'product_identity': measured,
+              'assertions': assertions,
               'counts': {'passed': passed, 'failed': failed, 'skipped': skipped, 'source': e['COUNTSRC']}}
           out = os.path.join(e['EVDIR'], e['GATE'] + '.receipt.json')
           with open(out, 'w') as f:
@@ -1830,6 +1851,54 @@ jobs:
           LOG="$EVDIR/e2e-xvfb.log"
           : > "$LOG"
           offline timeout 1200 xvfb-run -a -s "-screen 0 1280x900x24" python3 tests/e2e/run.py >"$LOG" 2>&1; r=$?
+          BUDGET_LOG="$LOG" MEASURED_OUT="$EVDIR/e2e-xvfb.measured.json" \
+          python3 - <<'PYEOF' >>"$LOG" 2>&1 || r=1
+          import json, os, pathlib, re, sys
+          import tools.budget_gate as bg
+          budgets = bg.load_budgets(pathlib.Path("tests/perf/budgets.json"))
+          frozen_caps = {row["id"]: row["bound"] for row in budgets["budgets"] if row["gating"]}
+          log_text = pathlib.Path(os.environ["BUDGET_LOG"]).read_text(encoding="utf-8", errors="replace")
+          rss_matches = re.findall(r"^RSS_CAPS \[MEASURED\]: (\{.*\})\s*$", log_text, re.M)
+          perf_matches = re.findall(r"^PERF_WALL \[MEASURED\]: (\[.*\])\s*$", log_text, re.M)
+          failures = []
+          rss_caps = {}
+          perf_wall = []
+          if not rss_matches:
+              failures.append("missing_rss_caps_measured")
+          else:
+              rss_caps = json.loads(rss_matches[-1])
+              for key, bound in sorted(frozen_caps.items()):
+                  val = rss_caps.get(key)
+                  if type(val) is not int or val <= 0:
+                      failures.append(f"invalid_{key}")
+                  elif val > bound:
+                      failures.append(key)
+          if not perf_matches:
+              failures.append("missing_perf_wall_measured")
+          else:
+              perf_wall = json.loads(perf_matches[-1])
+              if not isinstance(perf_wall, list) or len(perf_wall) < 4:
+                  failures.append("perf_wall_tile_count")
+              else:
+                  for tile in perf_wall:
+                      fps = tile.get("fps") if isinstance(tile, dict) else None
+                      if not isinstance(fps, (int, float)) or fps < 10.0:
+                          failures.append(f"perf_wall_fps:{tile.get('id') if isinstance(tile, dict) else 'unknown'}")
+          measured = {
+              "schema": "metaviewer.perf.budget-gate-receipt/v1",
+              "frozen_budgets_bytes": frozen_caps,
+              "min_tile_fps": 10.0,
+              "rss_caps_measured": rss_caps,
+              "perf_wall_measured": perf_wall,
+              "failures": failures,
+          }
+          with open(os.environ["MEASURED_OUT"], "w", encoding="utf-8") as mf:
+              json.dump(measured, mf, indent=2)
+          if failures:
+              print("FAIL budgets: " + ", ".join(failures))
+              sys.exit(1)
+          print("PASS budgets: RSS_CAPS and PERF_WALL within frozen bounds")
+          PYEOF
           if [ $r -eq 0 ]; then oc=PASS; rsn="e2e harness green"; else oc=FAIL; rsn="e2e harness failed"; fi
           finish_gate e2e-xvfb "$r" "$oc" "$rsn" "$LOG" tests/e2e/run.py "unparsed:e2e-harness" 0 -- xvfb-run -a -s "-screen 0 1280x900x24" python3 tests/e2e/run.py || r=2
           exit $r
@@ -2396,6 +2465,16 @@ jobs:
         with:
           go-version-file: daemon-adapter/go.mod
           cache: false
+      - name: Prime Go module and build caches
+        working-directory: daemon-adapter
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          set -euo pipefail
+          go mod download
+          export GOPROXY=off GOSUMDB=off GOFLAGS=-mod=readonly
+          go build ./...
+          go test -race -run '^$' ./...
       - name: Prime native toolchains
         run: |
           set -euo pipefail
@@ -2423,6 +2502,174 @@ jobs:
           # [TARGET, unit decision] Path 2B: reproduce and smoke local bytes;
           # compare against the producer receipt without an artifact action.
           python3 tests/ci/test_package_identity.py --distribution
+      - name: Run AC-14 budget gate
+        env:
+          JOB_ID: ci-required
+          PLATFORM: ${{ matrix.platform }}
+          CAPSULE_UI_KIT_REPO: ${{ github.workspace }}/kit-checkout
+          MV_KIT_CHECKOUT: ${{ github.workspace }}/kit-checkout
+          ELECTRON_OVERRIDE_DIST_PATH: ${{ github.workspace }}/ui/node_modules/electron/dist
+          CARGO_TARGET_DIR: ${{ runner.temp }}/package-cargo-target
+        run: |
+          offline() { bash "$GITHUB_WORKSPACE/.github/workflows/offline.sh" "$@"; }
+          set +e
+          set -u -o pipefail
+          EVDIR="${RUNNER_TEMP}/metaviewer-ci/${JOB_ID}/${PLATFORM}"
+          mkdir -p "${EVDIR}"
+          WF_SHA="$(python3 -c 'import hashlib; print(hashlib.sha256(open(".github/workflows/ci.yml","rb").read()).hexdigest())')"
+          ISSUER="CI/${JOB_ID}/${GITHUB_RUN_ID} [VM]"
+          sanitize() {
+            python3 - "$1" "$2" <<'PYEOF'
+          import re, sys
+          text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
+          for prefix in ('gh' + 'p_', 'gh' + 's_', 'gh' + 'o_', 'gh' + 'u_', 'gh' + 'r_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
+              text = re.sub(re.escape(prefix).replace('_', '(?:_|%5[fF])') + r'(?:[A-Za-z0-9_\-]|%[0-9a-fA-F]{2}){4,}', '[REDACTED]', text, flags=re.I)
+          text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
+          open(sys.argv[2], 'w').write(text)
+          PYEOF
+          }
+          finish_gate() {
+            local gate="$1" rc="$2" outcome="$3" reason="$4" raw="$5" fixture="$6" countsrc="$7" parseut="$8"
+            shift 8
+            [ "${1:-}" = "--" ] && shift
+            local sane="${raw}.sane"
+            sanitize "$raw" "$sane" || return 2
+            GATE="$gate" PLATFORM="$PLATFORM" ISSUER="$ISSUER" WF_SHA="$WF_SHA" RC="$rc" OUTCOME="$outcome" \
+            REASON="$reason" EVDIR="$EVDIR" RAW="$raw" SANE="$sane" FIXTURE="$fixture" COUNTSRC="$countsrc" \
+            PARSEUT="$parseut" CWD="$(pwd -P)" GCWD="${GCWD:-}" SHA="$GITHUB_SHA" \
+            ARGV_JSON="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@")" \
+            python3 <<'PYEOF' || return 2
+          import hashlib, json, os, re
+          e = os.environ
+          def sha_file(p):
+              with open(p, 'rb') as f:
+                  return hashlib.sha256(f.read()).hexdigest()
+          rc = None if e['RC'] == 'UNEXEC' else int(e['RC'])
+          passed = failed = skipped = None
+          if e['PARSEUT'] == '1':
+              text = open(e['SANE']).read()
+              m = re.search(r'^Ran (\d+) tests?', text, re.M)
+              if m:
+                  total = int(m.group(1))
+                  f = re.search(r'^FAILED \((.*)\)', text, re.M)
+                  if f:
+                      g = lambda n: (lambda m: int(m.group(1)) if m else 0)(re.search(n + r'=(\d+)', f.group(1)))
+                      failed = g('failures') + g('errors')
+                      skipped = g('skipped')
+                      passed = total - failed - skipped
+                  elif re.search(r'^OK', text, re.M):
+                      s = re.search(r'^OK \(skipped=(\d+)\)', text, re.M)
+                      skipped = int(s.group(1)) if s else 0
+                      failed = 0
+                      passed = total - skipped
+          measured_path = os.path.join(e['EVDIR'], e['GATE'] + '.measured.json')
+          measured = json.load(open(measured_path)) if os.path.exists(measured_path) else None
+          assertions = [{'id': 'exit-status', 'expected': 'rc 0',
+                         'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
+                         'accepted': e['OUTCOME'] == 'PASS'}]
+          if isinstance(measured, dict):
+              rss_caps = measured.get('rss_caps_measured') or {}
+              for key, bound in sorted((measured.get('frozen_budgets_bytes') or {}).items()):
+                  val = rss_caps.get(key)
+                  ok_val = type(val) is int and 0 < val <= bound and e['OUTCOME'] == 'PASS'
+                  assertions.append({
+                      'id': key,
+                      'expected': '<= %d' % bound,
+                      'observed': '%s [MEASURED]' % val,
+                      'accepted': bool(ok_val),
+                  })
+          receipt = {
+              'schema': 'gate_receipt/v1', 'gate_id': e['GATE'], 'leg': e['GATE'], 'profile': 'W0',
+              'owner': 'W0-CI-MATRIX', 'issuer': e['ISSUER'],
+              'scope': {'unit': 'W0-CI-MATRIX', 'platform': e['PLATFORM'], 'feature': e['GATE'],
+                        'artifact': e['GATE'] + '.receipt.json'},
+              'argv': json.loads(e['ARGV_JSON']), 'cwd': e['GCWD'] or e['CWD'],
+              'rc': rc, 'outcome': e['OUTCOME'], 'reason': e['REASON'],
+              'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
+                             'sanitized_log_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
+                             'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
+              'product_identity': measured,
+              'assertions': assertions,
+              'counts': {'passed': passed, 'failed': failed, 'skipped': skipped, 'source': e['COUNTSRC']}}
+          out = os.path.join(e['EVDIR'], e['GATE'] + '.receipt.json')
+          with open(out, 'w') as f:
+              json.dump(receipt, f, indent=2)
+          print('receipt: ' + out)
+          PYEOF
+            {
+              echo "## ${gate} [VM] rc ${rc/UNEXEC/UNKNOWN}"
+              echo "outcome ${outcome}: ${reason}"
+              echo '```'
+              tail -n 40 "$sane"
+              echo '```'
+              echo '```'
+              grep -E '^FAIL' "$sane" | head -40
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            tail -n 40 "$sane"
+          }
+          LOG="$EVDIR/budgets.log"
+          : > "$LOG"
+          r=0
+          if [ -n "${MV_BUDGET_LOG_FIXTURE:-}" ]; then
+            cat "$MV_BUDGET_LOG_FIXTURE" >"$LOG"
+            r="${MV_BUDGET_FIXTURE_RC:-0}"
+          else
+            node tools/sync_kit.mjs "$CAPSULE_UI_KIT_REPO" >>"$LOG" 2>&1 || r=1
+            offline timeout 1200 python3 tools/budget_gate.py --self-test >>"$LOG" 2>&1 || r=1
+            offline timeout 1200 xvfb-run -a -s "-screen 0 1280x900x24" node --test tests/e2e/e2e18_budgets.test.js tests/e2e/e2e14_perf.test.js >>"$LOG" 2>&1 || r=1
+          fi
+          BUDGET_LOG="$LOG" MEASURED_OUT="$EVDIR/budgets.measured.json" \
+          python3 - <<'PYEOF' >>"$LOG" 2>&1 || r=1
+          import json, os, pathlib, re, sys
+          import tools.budget_gate as bg
+          budgets = bg.load_budgets(pathlib.Path("tests/perf/budgets.json"))
+          frozen_caps = {row["id"]: row["bound"] for row in budgets["budgets"] if row["gating"]}
+          log_text = pathlib.Path(os.environ["BUDGET_LOG"]).read_text(encoding="utf-8", errors="replace")
+          rss_matches = re.findall(r"^RSS_CAPS \[MEASURED\]: (\{.*\})\s*$", log_text, re.M)
+          perf_matches = re.findall(r"^PERF_WALL \[MEASURED\]: (\[.*\])\s*$", log_text, re.M)
+          failures = []
+          rss_caps = {}
+          perf_wall = []
+          if not rss_matches:
+              failures.append("missing_rss_caps_measured")
+          else:
+              rss_caps = json.loads(rss_matches[-1])
+              for key, bound in sorted(frozen_caps.items()):
+                  val = rss_caps.get(key)
+                  if type(val) is not int or val <= 0:
+                      failures.append(f"invalid_{key}")
+                  elif val > bound:
+                      failures.append(key)
+          if not perf_matches:
+              failures.append("missing_perf_wall_measured")
+          else:
+              perf_wall = json.loads(perf_matches[-1])
+              if not isinstance(perf_wall, list) or len(perf_wall) < 4:
+                  failures.append("perf_wall_tile_count")
+              else:
+                  for tile in perf_wall:
+                      fps = tile.get("fps") if isinstance(tile, dict) else None
+                      if not isinstance(fps, (int, float)) or fps < 10.0:
+                          failures.append(f"perf_wall_fps:{tile.get('id') if isinstance(tile, dict) else 'unknown'}")
+          measured = {
+              "schema": "metaviewer.perf.budget-gate-receipt/v1",
+              "frozen_budgets_bytes": frozen_caps,
+              "min_tile_fps": 10.0,
+              "rss_caps_measured": rss_caps,
+              "perf_wall_measured": perf_wall,
+              "failures": failures,
+          }
+          with open(os.environ["MEASURED_OUT"], "w", encoding="utf-8") as mf:
+              json.dump(measured, mf, indent=2)
+          if failures:
+              print("FAIL budgets: " + ", ".join(failures))
+              sys.exit(1)
+          print("PASS budgets: RSS_CAPS and PERF_WALL within frozen bounds")
+          PYEOF
+          if [ $r -eq 0 ]; then oc=PASS; rsn="AC-14 budget and perf journeys within frozen bounds"; else oc=FAIL; rsn="AC-14 budget gate failed"; fi
+          finish_gate budgets "$r" "$oc" "$rsn" "$LOG" tests/perf/budgets.json "unparsed:budget-gate" 0 -- node --test tests/e2e/e2e18_budgets.test.js tests/e2e/e2e14_perf.test.js || r=2
+          exit $r
       - name: Aggregate required results
         if: always()
         run: |
