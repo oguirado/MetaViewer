@@ -1,17 +1,17 @@
 {
  "schema": "metaviewer.meta_ai_usage/v1",
  "totals": {
-  "lanes": 265,
-  "ok": 265,
-  "input_tokens": 56985121,
-  "cache_read_tokens": 1225012130,
-  "output_tokens": 12213473,
-  "thinking_tokens": 6394711,
+  "lanes": 266,
+  "ok": 266,
+  "input_tokens": 57137526,
+  "cache_read_tokens": 1227995466,
+  "output_tokens": 12263671,
+  "thinking_tokens": 6419256,
   "cache_hit_pct": 95.6,
-  "usd": 10.5912,
-  "usd_per_lane": 0.04,
-  "steps": 13466,
-  "lane_hours": 34.3
+  "usd": 10.6225,
+  "usd_per_lane": 0.0399,
+  "steps": 13509,
+  "lane_hours": 34.4
  },
  "peak_concurrent_lanes": 24,
  "rooms": {
@@ -5911,6 +5911,27 @@
    "thinking_tokens": 18286,
    "cache_hit_pct": 97.5,
    "usd": 0.062708
+  },
+  {
+   "room": "mvui9",
+   "lane": "C",
+   "title": "Capture port, reactive capture state and contract double",
+   "stage": "ui",
+   "model": "muse-spark-1.3",
+   "orchestrator": "UI orchestrator",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-27T07:17:47.735000+00:00",
+   "duration_s": 581.1,
+   "end_utc": "2026-10-27T07:27:28.818000+00:00",
+   "phase": "build",
+   "steps": 43,
+   "input_tokens": 152405,
+   "cache_read_tokens": 2983336,
+   "output_tokens": 50198,
+   "thinking_tokens": 24545,
+   "cache_hit_pct": 95.1,
+   "usd": 0.031247
   }
  ]
 }
