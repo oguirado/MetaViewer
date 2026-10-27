@@ -6,6 +6,9 @@ use crate::admission::{Authority, Frame, Input, Outcome};
 use crate::journal::JournalError;
 use crate::Refusal;
 
+#[cfg(test)]
+mod tests;
+
 /// Publish only a strictly newer generation across a control refresh fence.
 pub fn publish_frame(
     authority: &mut Authority,
@@ -17,10 +20,11 @@ pub fn publish_frame(
         None => Some(Refusal::Policy),
         Some(surface) if !surface.live => Some(Refusal::SurfaceNotAgentControlled),
         Some(surface)
-            if surface
-                .frame
-                .as_ref()
-                .is_some_and(|previous| frame.generation <= previous.generation) =>
+            if frame.generation == 0
+                || surface
+                    .frame
+                    .as_ref()
+                    .is_some_and(|previous| frame.generation <= previous.generation) =>
         {
             Some(Refusal::StaleFrame)
         }
