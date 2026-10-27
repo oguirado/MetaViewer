@@ -633,11 +633,28 @@ METAVIEWER_RUNTIME_MJS = textwrap.dedent(
 
       const manifestPath = installedRoot + '.sha256';
       if (!fs.existsSync(manifestPath)) throw new Error('PKG_MANIFEST_MISSING');
+      const defaultUmaskFileMode = (() => {
+        const probe = join(tmpdir(), `.mv-mode-probe-${process.pid}-${Date.now()}`);
+        try {
+          const fd = fs.openSync(probe, 'wx', 0o666);
+          try {
+            return fs.statSync(probe).mode & 0o777;
+          } finally {
+            fs.closeSync(fd);
+            fs.unlinkSync(probe);
+          }
+        } catch {
+          return 0o644;
+        }
+      })();
       const expected = new Map();
       for (const line of fs.readFileSync(manifestPath, 'utf8').trimEnd().split('\n')) {
-        const m = /^([0-9a-f]{64})  (.+)$/.exec(line);
-        if (!m || expected.has(m[2])) throw new Error('PKG_MANIFEST_INVALID');
-        expected.set(m[2], m[1]);
+        const m = /^([0-9a-f]{64})(?: ([0-7]{4}))?  (.+)$/.exec(line);
+        if (!m || m[3].split('/').some((p) => !p || p === '.' || p === '..') || /[\\\r\n]/.test(m[3]) || expected.has(m[3])) {
+          throw new Error('PKG_MANIFEST_INVALID');
+        }
+        const mode = m[2] !== undefined ? Number.parseInt(m[2], 8) : defaultUmaskFileMode;
+        expected.set(m[3], { digest: m[1], mode });
       }
       const smokeAdapterSwapped = fs.existsSync(join(installedRoot, 'resources/bin/mv-daemon-adapter.real'));
       let count = 0;
@@ -651,14 +668,17 @@ METAVIEWER_RUNTIME_MJS = textwrap.dedent(
             continue;
           }
           if (!item.isFile()) throw new Error('PKG_ENTRY_INVALID');
-          const raw = fs.readFileSync(join(installedRoot, name));
+          const fullPath = join(installedRoot, name);
+          const st = fs.lstatSync(fullPath);
+          const raw = fs.readFileSync(fullPath);
           rejectFontSync(name, raw.subarray(0, 4));
           if (smokeAdapterSwapped && name === 'resources/bin/mv-daemon-adapter') {
             count++;
             continue;
           }
           const actualDigest = createHash('sha256').update(raw).digest('hex');
-          if (expected.get(name) !== actualDigest) {
+          const record = expected.get(name);
+          if (!record || record.digest !== actualDigest || record.mode !== (st.mode & 0o777)) {
             throw new Error('PKG_MANIFEST_MISMATCH: ' + name);
           }
           count++;
@@ -674,20 +694,44 @@ METAVIEWER_RUNTIME_MJS = textwrap.dedent(
       const asar = readAsarSync(join(resourcesPath, 'app.asar'));
       const mainSource = asar.extract('electron/main.js').toString('utf8');
       const sealPrefix = 'const PACKAGED_ASSET_DIGESTS = /** @type {Readonly<Record<string, string>>} */ (Object.freeze(';
+      const execSealPrefix = 'const PACKAGED_EXEC_DIGESTS = Object.freeze(';
       const parts = mainSource.split(sealPrefix);
       if (parts.length !== 2) throw new Error('ASAR asset seal missing');
       const end = parts[1].indexOf('));');
       const hashes = JSON.parse(parts[1].slice(0, end));
+      function normalizeSealedBytes(relPath, rawBytes) {
+        if (relPath === 'electron/main.js') {
+          const p = rawBytes.toString('utf8').split(sealPrefix);
+          if (p.length !== 2) throw new Error('ASAR seal marker mismatch');
+          const e = p[1].indexOf('));');
+          if (e < 0) throw new Error('ASAR seal marker mismatch');
+          return Buffer.from(p[0] + sealPrefix + '{}' + p[1].slice(e), 'utf8');
+        }
+        if (relPath === 'electron/nesting.js') {
+          const p = rawBytes.toString('utf8').split(execSealPrefix);
+          if (p.length !== 2) return rawBytes;
+          const e = p[1].indexOf(');');
+          if (e < 0) throw new Error('ASAR entry seal marker mismatch');
+          return Buffer.from(p[0] + execSealPrefix + '{}' + p[1].slice(e), 'utf8');
+        }
+        return rawBytes;
+      }
       let assets = 0;
       for (const [name, entry] of asar.listAll()) {
         if ('link' in entry || entry.unpacked) throw new Error('ASAR alias/unpacked entry refused');
         if (typeof entry.size === 'number') {
-          const content = asar.extract(name.slice(1));
+          const relPath = name.slice(1);
+          const content = asar.extract(relPath);
           rejectFontSync(name, content.subarray(0, 4));
-          if (name.startsWith('/dist/renderer/')) {
-            const rel = name.slice('/dist/renderer/'.length);
-            const d = createHash('sha256').update(content).digest('hex');
-            if (hashes[rel] !== d) throw new Error('ASAR asset mismatch: ' + rel);
+          let sealKey = null;
+          if (relPath.startsWith('dist/renderer/')) {
+            sealKey = relPath.slice('dist/renderer/'.length);
+          } else if (relPath.startsWith('dist/preload/') || relPath.startsWith('electron/')) {
+            sealKey = relPath;
+          }
+          if (sealKey !== null) {
+            const d = createHash('sha256').update(normalizeSealedBytes(relPath, content)).digest('hex');
+            if (hashes[sealKey] !== d) throw new Error('ASAR asset mismatch: ' + sealKey);
             assets++;
           }
         }
@@ -1099,15 +1143,29 @@ class PackagedInstallAndCapsuleBootTests(unittest.TestCase):
         )
 
         seal_and_bundle = f"""
+        import * as fsp from 'node:fs/promises';
+        import {{ join }} from 'node:path';
         import {{ createPackage }} from '@electron/asar';
         import {{ buildFuseConfig }} from './ui/electron/main.js';
         import * as pkg from './ui/tools/package.js';
 
         const appSrc = {json.dumps(str(app_src))};
         const staged = {json.dumps(str(staged))};
+        async function normalizeModes(dir) {{
+          await fsp.chmod(dir, 0o755);
+          for (const item of await fsp.readdir(dir, {{ withFileTypes: true }})) {{
+            const full = join(dir, item.name);
+            if (item.isDirectory()) await normalizeModes(full);
+            else if (item.isFile()) {{
+              const st = await fsp.lstat(full);
+              await fsp.chmod(full, (st.mode & 0o111) !== 0 ? 0o755 : 0o644);
+            }}
+          }}
+        }}
         await pkg.sealRendererAssets(appSrc);
         await createPackage(appSrc, staged + '/resources/app.asar');
         await pkg.applyFuses(staged + '/metaviewer', buildFuseConfig());
+        await normalizeModes(staged);
         await pkg.verifyPackagedSecurity(staged);
         await pkg.writeManifest(staged, staged + '.sha256');
         const product = await pkg.bundlePackage(staged);
@@ -1122,7 +1180,7 @@ class PackagedInstallAndCapsuleBootTests(unittest.TestCase):
     def _install_to_scratch_root(self, scratch_root: Path) -> tuple[Path, Path]:
         """Extract the packaged tarball into scratch_root and prepare a fresh capsule in srf-bin."""
         subprocess.run(
-            ["tar", "--no-same-owner", "-xf", str(self.artifact_tar), "-C", str(scratch_root)],
+            ["tar", "--no-same-owner", "-pxf", str(self.artifact_tar), "-C", str(scratch_root)],
             check=True,
             timeout=30,
         )
@@ -1143,9 +1201,30 @@ class PackagedInstallAndCapsuleBootTests(unittest.TestCase):
             scratch = Path(tmp)
             installed, srf_bin_dir = self._install_to_scratch_root(scratch)
 
-            # 1. Verify sha256sum -c against the delivered manifest and ui/tools/package.js verifyInstall.
+            # 1. Verify delivered manifest (digest + mode fields) and ui/tools/package.js verifyInstall.
+            manifest_path = scratch / f"{self.pkg_name}.sha256"
+            self.assertTrue(manifest_path.is_file())
+            manifest_lines = manifest_path.read_text(encoding="utf-8").splitlines()
+            self.assertGreaterEqual(len(manifest_lines), 28)
+            sha256sum_lines: list[str] = []
+            for line in manifest_lines:
+                parts = line.split("  ", 1)
+                self.assertEqual(len(parts), 2, f"Invalid manifest line: {line!r}")
+                head_tokens = parts[0].split(" ")
+                self.assertIn(len(head_tokens), (1, 2), f"Invalid manifest header: {line!r}")
+                digest_hex = head_tokens[0]
+                rel_name = parts[1]
+                target_file = installed / rel_name
+                self.assertTrue(target_file.is_file(), f"Missing installed file: {rel_name}")
+                if len(head_tokens) == 2:
+                    expected_mode = int(head_tokens[1], 8)
+                    actual_mode = stat.S_IMODE(target_file.lstat().st_mode)
+                    self.assertEqual(actual_mode, expected_mode, f"Mode mismatch for {rel_name}")
+                sha256sum_lines.append(f"{digest_hex}  {rel_name}\n")
+
             sha_proc = subprocess.run(
-                ["sha256sum", "-c", f"../{self.pkg_name}.sha256"],
+                ["sha256sum", "-c", "-"],
+                input="".join(sha256sum_lines),
                 cwd=str(installed),
                 capture_output=True,
                 text=True,
@@ -1281,25 +1360,61 @@ class PackagedInstallAndCapsuleBootTests(unittest.TestCase):
                 proc = subprocess.run(argv, cwd=str(run_dir), env=env, capture_output=True, text=True, timeout=30)
                 return proc, adapter_receipt, core_audit
 
-            # Negative 1: Tampered INSTALL.md payload in scratch install refuses both verifyInstall and boot before hello.
+            # Negative 1: Tampered INSTALL.md payload or mode in scratch install refuses both verifyInstall and boot before hello.
             notice = installed / "INSTALL.md"
             orig_notice = notice.read_bytes()
+            orig_notice_mode = stat.S_IMODE(notice.lstat().st_mode)
             try:
                 notice.write_bytes(orig_notice + b"TAMPERED_PAYLOAD\n")
                 v_proc = self._run_node_packaging(
                     f"import * as pkg from './ui/tools/package.js'; await pkg.verifyInstall({json.dumps(str(installed))});"
                 )
                 self.assertNotEqual(v_proc.returncode, 0)
-                self.assertIn("PKG_MANIFEST_MISMATCH", v_proc.stderr + v_proc.stdout)
+                self.assertIn("PKG_MANIFEST_MISMATCH: INSTALL.md", v_proc.stderr + v_proc.stdout)
 
                 b_proc, adapter_rec, core_aud = attempt_boot()
                 self.assertNotEqual(b_proc.returncode, 0)
-                self.assertIn("PKG_MANIFEST_MISMATCH", b_proc.stderr + b_proc.stdout)
+                self.assertIn("PKG_MANIFEST_MISMATCH: INSTALL.md", b_proc.stderr + b_proc.stdout)
                 self.assertNotIn("METAVIEWER_MAIN_SMOKE_OK", b_proc.stdout)
                 self.assertFalse(adapter_rec.exists())
                 self.assertFalse(core_aud.exists())
+
+                notice.write_bytes(orig_notice)
+                notice.chmod(0o600)
+                m_proc = self._run_node_packaging(
+                    f"import * as pkg from './ui/tools/package.js'; await pkg.verifyInstall({json.dumps(str(installed))});"
+                )
+                self.assertNotEqual(m_proc.returncode, 0)
+                self.assertIn("PKG_MANIFEST_MISMATCH: INSTALL.md", m_proc.stderr + m_proc.stdout)
+
+                mb_proc, mb_rec, mb_aud = attempt_boot()
+                self.assertNotEqual(mb_proc.returncode, 0)
+                self.assertIn("PKG_MANIFEST_MISMATCH: INSTALL.md", mb_proc.stderr + mb_proc.stdout)
+                self.assertNotIn("METAVIEWER_MAIN_SMOKE_OK", mb_proc.stdout)
+                self.assertFalse(mb_rec.exists())
+                self.assertFalse(mb_aud.exists())
             finally:
                 notice.write_bytes(orig_notice)
+                notice.chmod(orig_notice_mode)
+
+            # Negative 1b: Malformed manifest line refuses both verifyInstall and boot with PKG_MANIFEST_INVALID before hello.
+            manifest_path = Path(f"{installed}.sha256")
+            orig_manifest = manifest_path.read_bytes()
+            try:
+                manifest_path.write_bytes(b"0" * 64 + b"  ../escape\n")
+                inv_v = self._run_node_packaging(
+                    f"import * as pkg from './ui/tools/package.js'; await pkg.verifyInstall({json.dumps(str(installed))});"
+                )
+                self.assertNotEqual(inv_v.returncode, 0)
+                self.assertIn("PKG_MANIFEST_INVALID", inv_v.stderr + inv_v.stdout)
+
+                inv_b, inv_rec, inv_aud = attempt_boot()
+                self.assertNotEqual(inv_b.returncode, 0)
+                self.assertIn("PKG_MANIFEST_INVALID", inv_b.stderr + inv_b.stdout)
+                self.assertFalse(inv_rec.exists())
+                self.assertFalse(inv_aud.exists())
+            finally:
+                manifest_path.write_bytes(orig_manifest)
 
             # Negative 2: Tampered ASAR renderer payload (replacing index.html inside app.asar, even if manifest is updated)
             # refuses ASAR asset seal verification before hello.
