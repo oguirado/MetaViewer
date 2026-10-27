@@ -210,6 +210,7 @@ export const FRAME_ACK_SCHEMA = 'frame_ack/v0.2';
  * @property {OnReleaseLeaseFn} onReleaseLease Required; must not retain.
  * @property {OnRevokeFn} onRevoke Required; runs once after state is final.
  * @property {OnFrameFn} [onFrame] Required for receivers, forbidden for senders.
+ * @property {(ack: { principal: string, epoch: number, surfaceId: string, surfaceGeneration: number, frameGeneration: number, leaseId: string, outcome: string }) => void} [onAck] Optional sender ACK observer.
  * @property {ClockFn} [clock] Timestamp source; defaults to Date.now.
  * @property {SetTimerFn} [setTimer] Timer source; defaults to setTimeout.
  * @property {ClearTimerFn} [clearTimer] Timer sink; defaults to clearTimeout.
@@ -496,7 +497,7 @@ export function createFramePort(options) {
   if (role === 'sender' && rawOptions.onFrame !== undefined) {
     fail(FRAME_REASONS.INVALID_CONTRACT, 'senders must not carry onFrame');
   }
-  for (const key of ['clock', 'setTimer', 'clearTimer']) {
+  for (const key of ['clock', 'setTimer', 'clearTimer', 'onAck']) {
     if (rawOptions[key] !== undefined && typeof rawOptions[key] !== 'function') {
       fail(FRAME_REASONS.INVALID_CONTRACT, `${key} must be a function`);
     }
@@ -523,6 +524,8 @@ export function createFramePort(options) {
   const onRevoke = rawOptions.onRevoke;
   /** @type {OnFrameFn|null} */
   const onFrame = role === 'receiver' ? /** @type {OnFrameFn} */ (rawOptions.onFrame) : null;
+  /** @type {((ack: { principal: string, epoch: number, surfaceId: string, surfaceGeneration: number, frameGeneration: number, leaseId: string, outcome: string }) => void) | null} */
+  const onAck = role === 'sender' && typeof rawOptions.onAck === 'function' ? rawOptions.onAck : null;
   /** @type {ClockFn} */
   const clock = rawOptions.clock !== undefined ? rawOptions.clock : defaultClock;
   /** @type {SetTimerFn} */
@@ -1032,6 +1035,19 @@ export function createFramePort(options) {
       acked += 1;
       ackedFloor = cleared.frameGeneration;
       releaseRecord(cleared, raw.outcome);
+      if (onAck !== null) {
+        guardOwner(() =>
+          onAck({
+            principal: cleared.principal,
+            epoch: cleared.epoch,
+            surfaceId: cleared.surfaceId,
+            surfaceGeneration: cleared.surfaceGeneration,
+            frameGeneration: cleared.frameGeneration,
+            leaseId: cleared.leaseId,
+            outcome: raw.outcome,
+          }),
+        );
+      }
       /** @type {number|null} */
       let promoted = null;
       if (pending !== null) {

@@ -1430,6 +1430,12 @@ export function validateRetailLaunch(argv, env, options = {}) {
       return refuse('RETAIL_ENV');
     }
   }
+  const diagRaw = /** @type {Record<string, unknown>} */ (env).MV_FRAME_DIAG;
+  if (diagRaw !== undefined && diagRaw !== '') {
+    if (packaged || (diagRaw !== '1' && diagRaw !== '0')) {
+      return refuse('RETAIL_ENV');
+    }
+  }
   let nested = 0;
   for (const item of /** @type {Array<string>} */ (argv)) {
     if (item === '--') {
@@ -1872,6 +1878,7 @@ export async function bootProductionMain(handles) {
   let wireBridge = /** @type {{dispose:()=>Promise<void>} | null} */(null);
   let captureBridge = /** @type {{dispose:()=>Promise<void>} | null} */(null);
   let qaBridge = /** @type {{enabled:boolean, dispose:()=>Promise<void>} | null} */(null);
+  let frameDiagBridge = /** @type {{enabled:boolean, dispose:()=>Promise<void>} | null} */(null);
   let schemeRegistered = false;
   let unwound = false;
 
@@ -1917,6 +1924,14 @@ export async function bootProductionMain(handles) {
         /* unwind best-effort */
       }
       wireBridge = null;
+    }
+    if (frameDiagBridge !== null && frameDiagBridge !== undefined) {
+      try {
+        await frameDiagBridge.dispose();
+      } catch {
+        /* unwind best-effort */
+      }
+      frameDiagBridge = null;
     }
     registered.length = 0;
     if (window !== null) {
@@ -2104,9 +2119,24 @@ export async function bootProductionMain(handles) {
     if (packagedLaunch && envRec.MV_E2E_LIVE !== undefined && envRec.MV_E2E_LIVE !== '') {
       fail('RETAIL_ENV', 'packaged launch refuses MV_E2E_LIVE');
     }
+    if (packagedLaunch && envRec.MV_FRAME_DIAG !== undefined && envRec.MV_FRAME_DIAG !== '') {
+      fail('RETAIL_ENV', 'packaged launch refuses MV_FRAME_DIAG');
+    }
+    if (!retail.nested && envRec.MV_FRAME_DIAG !== undefined && envRec.MV_FRAME_DIAG !== '') {
+      frameDiagBridge = (await import('./frameDiag.js')).installFrameDiag({
+        ipcMain,
+        contents: contentsUnknown,
+        env: /** @type {NodeJS.ProcessEnv} */ (typed.env),
+        runtime: /** @type {{xdgRuntimeDir?: string, uid?: number}} */ (typed.runtime),
+        packaged: packagedLaunch,
+        nested: retail.nested,
+        argv: /** @type {ReadonlyArray<string>} */ (typed.argv),
+      });
+    }
     if (!retail.nested) captureBridge = (await import('./captureBridge.js')).installCaptureBridge({ipcMain, contents:contentsUnknown, core, nested:retail.nested, env:typed.env});
     if (!retail.nested) wireBridge = (await import('./authorityWire.js')).installAuthorityWire({ ...(typed.wire || {}), ipcMain,
-      contents: contentsUnknown, core, env: typed.env, argv: typed.argv });
+      contents: contentsUnknown, core, env: typed.env, argv: typed.argv,
+      ...(frameDiagBridge?.enabled ? { frameDiag: frameDiagBridge } : {}) });
     if (!retail.nested && envRec.MV_E2E_LIVE !== undefined && envRec.MV_E2E_LIVE !== '') {
       qaBridge = (await import('./qaAnchors.js')).installQaAnchors({
         ipcMain,
@@ -2117,11 +2147,14 @@ export async function bootProductionMain(handles) {
         nested: retail.nested,
         argv: /** @type {ReadonlyArray<string>} */ (typed.argv),
       });
-      if (qaBridge.enabled) {
-        const contentsRec = assertHandleObject(contentsUnknown, 'win.webContents');
-        if (typeof contentsRec.setUserAgent === 'function') {
-          contentsRec.setUserAgent('MetaViewer --qa-anchors=1');
-        }
+    }
+    if (!retail.nested && (qaBridge?.enabled || frameDiagBridge?.enabled)) {
+      const contentsRec = assertHandleObject(contentsUnknown, 'win.webContents');
+      if (typeof contentsRec.setUserAgent === 'function') {
+        const tokens = ['MetaViewer'];
+        if (qaBridge?.enabled) tokens.push('--qa-anchors=1');
+        if (frameDiagBridge?.enabled) tokens.push('--frame-diag=1');
+        contentsRec.setUserAgent(tokens.join(' '));
       }
     }
   } catch (error) { await unwind(); throw error; }

@@ -40,6 +40,7 @@
  * Fixed-channel invoke returning the main outcome.
  * @property {boolean} [nested]
  * @property {boolean} [qa]
+ * @property {boolean} [frameDiag]
  * @property {(channel:string,cb:(message:any,ports?:MessagePort[])=>void)=>(()=>void)} [subscribe]
  */
 
@@ -408,6 +409,7 @@ function captureFacade(transport, captureCallbacks = new Set(), seededCaptureSur
 
 // [TARGET, unit decision] Closed domain channels; all values are rechecked in main.
 const QA_ANCHORS_CHANNEL = 'metaviewer:qa.anchors';
+const FRAME_DIAG_CHANNEL = 'metaviewer:frame.diag';
 const QA_ANCHOR_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
 const QA_ANCHOR_RE = /^(?=.{1,200}$)[A-Za-z0-9][A-Za-z0-9._:-]{0,63}(?:\/[A-Za-z0-9][A-Za-z0-9._:-]{0,63}){0,5}$/;
 const QA_ROLE_RE = /^[a-z][a-z0-9_-]{0,63}$/;
@@ -471,6 +473,25 @@ function assertQaSnapshot(args) {
   if (encoded === undefined || utf8Bytes(encoded) > 64 * 1024) throw new ContractError('PAYLOAD','qa snapshot byte cap');
   return normalized;
 }
+/** @param {readonly unknown[]} args */
+function assertFrameDiagPreload(args) {
+  if (!Array.isArray(args) || args.length !== 1) throw new ContractError('ARGS','frame.diag arity');
+  const v = /** @type {any} */(args[0]);
+  const keys = 'domStripText,domSurfaceState,domWaitingText,framesReceived,inWallApp,invalidNotices,lastSurfaceGeneration,lastSurfaceId,legacyNoticesForwarded,noticesForwarded,origin,portsClosed,portsReceived,schema';
+  const legacyKeys = 'framesReceived,inWallApp,invalidNotices,lastSurfaceGeneration,lastSurfaceId,legacyNoticesForwarded,noticesForwarded,origin,portsClosed,portsReceived,schema';
+  if ((!captureKeys(v, keys) && !captureKeys(v, legacyKeys))
+    || (Object.getPrototypeOf(v) !== Object.prototype && Object.getPrototypeOf(v) !== null)
+    || v.schema !== 'frame_diag_preload/v1'
+    || !['framesReceived','invalidNotices','portsReceived','noticesForwarded','legacyNoticesForwarded','portsClosed'].every(k => captureNumber(v[k]))
+    || (v.inWallApp !== null && typeof v.inWallApp !== 'boolean')
+    || typeof v.origin !== 'string' || v.origin.length > 256 || v.origin.includes('\0')
+    || (v.lastSurfaceId !== null && !captureId(v.lastSurfaceId))
+    || (v.lastSurfaceGeneration !== null && (!Number.isSafeInteger(v.lastSurfaceGeneration) || v.lastSurfaceGeneration < 1))
+    || !['domSurfaceState','domWaitingText','domStripText'].every(k => v[k] === undefined || v[k] === null || (typeof v[k] === 'string' && v[k].length <= 512 && !v[k].includes('\0')))) {
+    throw new ContractError('PAYLOAD','frame.diag payload shape');
+  }
+  return Object.freeze({ ...v });
+}
 const WIRE_NAMES = Object.freeze({loadSettings:'settings.load',saveSettings:'settings.save',
   recordingDestination:'recording.destination',nestedDepth:'nested.depth',selfCapsuleId:'nested.self',
   propose:'authority.propose',intent:'authority.intent',subscribeFrames:'authority.subscribe',
@@ -478,6 +499,7 @@ const WIRE_NAMES = Object.freeze({loadSettings:'settings.load',saveSettings:'set
 /** @param {string} channel @param {ReadonlyArray<unknown>} args */
 function wireCall(channel,args) {
   if(channel===QA_ANCHORS_CHANNEL) return {channel,args:Object.freeze([assertQaSnapshot(args)])};
+  if(channel===FRAME_DIAG_CHANNEL) return {channel,args:Object.freeze([assertFrameDiagPreload(args)])};
   const captureName=Object.entries(CAPTURE_CHANNELS).find(([,suffix])=>channel===`metaviewer:${suffix}`)?.[0];
   if(captureName){assertCaptureCall(captureName,args);return {channel,args:Object.freeze([...args])};}
   const name=Object.entries(WIRE_NAMES).find(([,suffix]) => channel === `metaviewer:${suffix}`)?.[0];
@@ -561,6 +583,45 @@ function wireFacade(transport) {
   /** @type {Set<(frame:any)=>void>} */ const listeners=new Set();
   /** @type {null|(()=>void)} */ let revokeFrames=null;
   let subscriptionGeneration=0;
+  let diagFramesReceived=0,diagInvalidNotices=0,diagPortsReceived=0,diagNoticesForwarded=0,diagLegacyNoticesForwarded=0,diagPortsClosed=0;
+  /** @type {boolean|null} */ let diagInWallApp=null;
+  let diagOrigin='';
+  /** @type {string|null} */ let diagLastSurfaceId=null;
+  /** @type {number|null} */ let diagLastSurfaceGeneration=null;
+  /** @type {ReturnType<typeof setTimeout>|null} */ let diagTimer=null;
+  const reportFrameDiag=()=>{
+    if(transport.frameDiag!==true || transport.nested) return;
+    try {
+      const surfaceEl=globalThis.document?.querySelector?.('.mv-surface') ?? null;
+      const domSurfaceState=typeof surfaceEl?.getAttribute==='function' ? surfaceEl.getAttribute('data-state') : null;
+      const domWaitingText=surfaceEl?.querySelector?.('.mv-surface__waiting strong')?.textContent ?? null;
+      const domStripText=surfaceEl?.querySelector?.('.mv-surface__strip')?.textContent?.trim?.() ?? null;
+      const admitted=wireCall(FRAME_DIAG_CHANNEL,[Object.freeze({
+        schema:'frame_diag_preload/v1',
+        framesReceived:diagFramesReceived,
+        invalidNotices:diagInvalidNotices,
+        portsReceived:diagPortsReceived,
+        noticesForwarded:diagNoticesForwarded,
+        legacyNoticesForwarded:diagLegacyNoticesForwarded,
+        portsClosed:diagPortsClosed,
+        inWallApp:diagInWallApp,
+        origin:diagOrigin,
+        lastSurfaceId:diagLastSurfaceId,
+        lastSurfaceGeneration:diagLastSurfaceGeneration,
+        domSurfaceState:typeof domSurfaceState==='string'?domSurfaceState:null,
+        domWaitingText:typeof domWaitingText==='string'?domWaitingText.slice(0,128):null,
+        domStripText:typeof domStripText==='string'?domStripText.slice(0,256):null,
+      })]);
+      void Promise.resolve(transport.invoke(admitted.channel,admitted.args)).catch(()=>{});
+    } catch {}
+  };
+  const scheduleFrameDiag=()=>{
+    reportFrameDiag();
+    if(transport.frameDiag===true && !transport.nested && typeof globalThis.setTimeout==='function') {
+      if(diagTimer!==null && typeof globalThis.clearTimeout==='function') globalThis.clearTimeout(diagTimer);
+      diagTimer=globalThis.setTimeout(()=>{diagTimer=null;reportFrameDiag();},250);
+    }
+  };
   api.authority=Object.freeze({
     /** @param {...unknown} args */
     propose:(...args)=>call('propose',args),
@@ -582,9 +643,21 @@ function wireFacade(transport) {
               try { port.close?.(); } catch { /* Continue releasing unused ports. */ }
             }
           };
-          if (!validFrameNotice(value)) { closePorts();return; }
+          if (!validFrameNotice(value)) {
+            diagInvalidNotices+=1;
+            if (ports?.length) diagPortsClosed+=1;
+            closePorts();
+            reportFrameDiag();
+            return;
+          }
           const sid=value.surface.surface_id;
           const inWallApp=typeof document!=='undefined' && typeof document?.getElementById==='function' && document.getElementById('metaviewer-app')!==null;
+          diagFramesReceived+=1;
+          diagInWallApp=inWallApp;
+          diagOrigin=typeof window!=='undefined' && typeof window.location?.origin==='string' ? window.location.origin : '';
+          diagLastSurfaceId=sid;
+          diagLastSurfaceGeneration=value.frame_ref.generation;
+          if (ports?.length) diagPortsReceived+=1;
           if (inWallApp && !seededCaptureSurfaces.has(sid) && captureId(sid)) {
             seededCaptureSurfaces.add(sid);
             const initCapture=Object.freeze({type:'capture.state',recording_id:'idle',surface_id:sid,phase:'idle',frames:0,elapsed_ms:0});
@@ -601,14 +674,18 @@ function wireFacade(transport) {
                 window.location.origin,
                 [ports[0]],
               );
+              diagNoticesForwarded+=1;
               for (const extra of ports.slice(1)) { try { extra.close?.(); } catch {} }
             } else {
               window.postMessage({type:'metaviewer:frame-port',surface_id:sid},PRIVILEGED_ORIGIN,ports);
+              diagLegacyNoticesForwarded+=1;
             }
           } else {
+            if (ports?.length) diagPortsClosed+=1;
             closePorts();
           }
           for(const notify of [...listeners]) notify(value);
+          scheduleFrameDiag();
         });
         void call('subscribeFrames',[]).catch(()=>{
           if(generation!==subscriptionGeneration) return;
@@ -696,10 +773,19 @@ export function installPreload(electron) {
     qaDesc?.value === true ||
     (typeof navigator !== 'undefined' && navigator.userAgent.split(' ').includes('--qa-anchors=1'))
   );
+  const frameDiagDesc = Object.getOwnPropertyDescriptor(electron, 'frameDiag');
+  if (frameDiagDesc !== undefined && !('value' in frameDiagDesc)) {
+    throw new ContractError('DEPS', 'electron.frameDiag must be a data property');
+  }
+  const frameDiagEnabled = !nested && (
+    frameDiagDesc?.value === true ||
+    (typeof navigator !== 'undefined' && navigator.userAgent.split(' ').includes('--frame-diag=1'))
+  );
   return createPreloadFacade({
     transport: {
       nested,
       ...(qaEnabled ? { qa: true } : {}),
+      ...(frameDiagEnabled ? { frameDiag: true } : {}),
       subscribe: typeof /** @type {any} */(ipcRenderer).on === 'function' ?
       /** @param {string} channel @param {(value:any,ports?:MessagePort[])=>void} cb */
       (channel,cb) => {
@@ -720,6 +806,9 @@ export function installPreload(electron) {
       invoke: (channel, args) => {
         if (channel === QA_ANCHORS_CHANNEL && !qaEnabled) {
           throw new ContractError('CHANNEL', 'qa channel disabled');
+        }
+        if (channel === FRAME_DIAG_CHANNEL && !frameDiagEnabled) {
+          throw new ContractError('CHANNEL', 'frame diag channel disabled');
         }
         const call = channel.startsWith('metaviewer:layout.') ? assertFixedCall(channel, args) : wireCall(channel,args);
         return renderer.invoke(call.channel, ...call.args);

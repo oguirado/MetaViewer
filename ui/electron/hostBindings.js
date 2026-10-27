@@ -206,7 +206,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
                 },release};
             } catch(error) {await file.close();throw error;}
           }},
-        portOptions:{port:channel.port1,role:'sender',binding,limits:{maxFrameBytes:MAX_FRAME,ackTimeoutMs:10000,maxSurfacesPerPort:1},onReleaseLease(){},onRevoke(){}}};
+        portOptions:{port:channel.port1,role:'sender',binding,limits:{maxFrameBytes:MAX_FRAME,ackTimeoutMs:10000,maxSurfacesPerPort:1},onReleaseLease(){},onRevoke(){if(channels.get(frame.surface_id)===channel)channels.delete(frame.surface_id);}}};
       delivering.add(frame.surface_id);
       for (const listener of listeners) Promise.resolve().then(() => listener(entry)).catch(shutdown).finally(() => delivering.delete(frame.surface_id));
     }

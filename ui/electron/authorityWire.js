@@ -184,7 +184,7 @@ export function nestedIdentity(argv,env) {
   return {depth:flags.length ? Number(flags[0].slice(-1)) : null,self};
 }
 /** @param {any} options */
-export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv=process.argv.slice(1),terminal=null,profiles=new Map(),frames=null}) {
+export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv=process.argv.slice(1),terminal=null,profiles=new Map(),frames=null,frameDiag=null}) {
   if (terminal?.request && terminal?.subscribe) terminal=createSideTerminalAdapter(terminal);
   const store = createSettingsStore(env);
   const destination = recordingDestination(env);
@@ -212,7 +212,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
       pendingEntries.clear();
       for (const entry of queued) {
         if (!subscribed || disposed) break;
-        await deliverAuthorityFrame(entry,contents,streams);
+        await deliverAuthorityFrame(entry,contents,streams,frameDiag);
       }
       return true;
     },
@@ -269,7 +269,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
       }
       return;
     }
-    await deliverAuthorityFrame(entry,contents,streams);
+    await deliverAuthorityFrame(entry,contents,streams,frameDiag);
   }) : () => {};
   return {async dispose() { disposed=true; subscribed=false; stopFrames();
     pendingEntries.clear();
@@ -278,8 +278,8 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
   }};
 }
 /** Trusted host frame capability entry: readerOptions/portOptions, state, frameRef.
- * @param {any} entry @param {any} contents @param {Set<any>} streams */
-export async function deliverAuthorityFrame(entry,contents,streams) {
+ * @param {any} entry @param {any} contents @param {Set<any>} streams @param {any} [frameDiag] */
+export async function deliverAuthorityFrame(entry,contents,streams,frameDiag=null) {
   const raw=entry.frameRef;
   const ref={schema:raw.schema,surface_id:raw.surface_id,generation:raw.generation,tick:raw.tick,
     ts_ns:raw.ts_ns,width:raw.width,height:raw.height,format:raw.format,sha256:raw.sha256,capture_us:raw.capture_us};
@@ -304,6 +304,7 @@ export async function deliverAuthorityFrame(entry,contents,streams) {
       if (dead) {streams.delete(dead);await dead.reader.closeReader();dead.port.revokeFramePort('SHUTDOWN');}
     }
     contents.postMessage('metaviewer:authority.frames',{frame_ref:ref,surface:state},[]);
+    frameDiag?.recordStateOnly?.({surfaceId:ref.surface_id});
     return true;
   }
   const binding=entry.readerOptions.binding;
@@ -317,20 +318,31 @@ export async function deliverAuthorityFrame(entry,contents,streams) {
     const reader=createFrameReader({...entry.readerOptions,acquirePublishedLease:(/** @type {any} */req)=>currentAcquire(req)});
     let port;
     const revoke=entry.portOptions.onRevoke;
-    try { port=createFramePort({...entry.portOptions,onRevoke:(/** @type {any} */notice)=>{
-      streams.delete(stream);void reader.closeReader();revoke(notice);
-    }}); } catch(e) {await reader.closeReader();throw e;}
+    const origOnAck=entry.portOptions.onAck;
+    try { port=createFramePort({...entry.portOptions,
+      onAck:(/** @type {any} */ack)=>{frameDiag?.recordAck?.(ack);origOnAck?.(ack);},
+      onRevoke:(/** @type {any} */notice)=>{
+        streams.delete(stream);void reader.closeReader();frameDiag?.recordRevocation?.(notice);revoke(notice);
+      }}); } catch(e) {await reader.closeReader();throw e;}
     stream={key,reader,port,announced:false,setAcquire:(/** @type {any} */fn)=>{currentAcquire=fn;}};streams.add(stream);
   } else {
     stream.setAcquire?.(entry.readerOptions.acquirePublishedLease);
   }
   const result=await stream.reader.readFrame(entry.frameRef);
-  if (!result.ok) return false;
+  if (!result.ok) { frameDiag?.recordReaderRefusal?.({surfaceId:ref.surface_id,frameGeneration:ref.generation,reason:result.reason,detail:result.detail}); return false; }
   const sent=stream.port.postFrame(result.frame);
-  if (!sent.ok) return false;
+  if (!sent.ok) { frameDiag?.recordPortRefusal?.({surfaceId:ref.surface_id,frameGeneration:ref.generation,reason:sent.reason}); return false; }
+  const wasAnnounced=stream.announced;
   try {
     contents.postMessage('metaviewer:authority.frames',{frame_ref:ref,surface:state},stream.announced ? [] : (entry.rendererPorts || []));
     stream.announced=true;
+    frameDiag?.recordDelivery?.({
+      surfaceId:binding.surfaceId,
+      surfaceGeneration:binding.surfaceGeneration,
+      frameGeneration:result.frame.frameGeneration,
+      epoch:binding.epoch,
+      announced:!wasAnnounced && Boolean(entry.rendererPorts?.length),
+    });
   } catch(error) {stream.port.revokeFramePort('SHUTDOWN');throw error;}
 
   return sent.ok;
