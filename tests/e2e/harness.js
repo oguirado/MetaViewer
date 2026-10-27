@@ -460,10 +460,13 @@ function checkTileReport(tile) {
  * specified frame-<capsule>-gen7 publication recipe. Real publishers must supply
  * frameOwners (Map<frameId, capsuleId>) from their capture ledger.
  * @param {unknown} value Parsed probe report.
- * @param {{ minTiles?: number }} [options] Minimum visible tiles.
+ * @param {{ minTiles?: number, frameOwners?: Map<string, string> }} [options] Minimum visible tiles.
  * @returns {{ tiles: WallTileReport[], visible: number, errors: string[] }} Normalized summary.
  */
 function validateWallReport(value, options = {}) {
+  if (options.frameOwners !== undefined && !(options.frameOwners instanceof Map)) {
+    fail('E2E_ROUTING', 'publisher frameOwners must be an independent Map');
+  }
   const minTiles = options.minTiles === undefined ? MIN_WALL_TILES : needPositiveInt(options.minTiles, 'minTiles');
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     fail('E2E_REPORT', 'probe report must be an object');
@@ -505,7 +508,7 @@ function validateWallReport(value, options = {}) {
  * Read a probe report file and validate it. Oversized or malformed
  * files refuse with a typed error.
  * @param {string} path Absolute report path.
- * @param {{ minTiles?: number }} [options] Minimum visible tiles.
+ * @param {{ minTiles?: number, frameOwners?: Map<string, string> }} [options] Minimum visible tiles.
  * @returns {{ tiles: WallTileReport[], visible: number, errors: string[] }} Normalized summary.
  */
 function readProbeReport(path, options = {}) {

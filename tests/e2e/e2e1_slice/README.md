@@ -63,3 +63,24 @@ and archives are removed after reporting.
 The relay uses the served `app://metaviewer` origin and the product preload.
 Its scheduler budget matches the flat numeric budget constructed in `App.vue`
 and is frozen before tile creation, as required by the product validator.
+
+## Component integration and golden state
+
+[TARGET, unit decision] The separate `tests/e2e/e2e6_slice.test.js` scenario
+runs through `tests/e2e/run.py` with its required live flag. A test-owned line
+protocol joins the real adapter capsule manager, native process runner and
+immutable frame publisher to the real Rust Authority. Chromium renders the
+published RGB bytes through the production tileScheduler and checks canvas
+pixels before admission. The scenario exercises generation-bound actions,
+stale refusal with an identical domain snapshot and unchanged budget,
+takeover cancellation, blocked release until drain, fresh-frame readmission,
+real adapter input and durable replay. Cross-routing and an absent live flag
+are refusing negative controls. Only the native OpenSuperficies CLI boundary
+is deterministic; this is component integration, not a qualification of a host
+capsule or the production socket/agent UI bridge. The separate LIVE runner
+above supplies its own deployment evidence.
+
+The golden fixture declares the expected state independently of the reducer.
+Its digest is Python hashlib SHA-256 over sorted compact JSON. The same fixture
+is consumed on every architecture; cross-architecture execution requires CI.
+The initial frame is included in create; connect is the first journal event.

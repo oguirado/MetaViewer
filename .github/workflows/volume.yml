@@ -286,7 +286,7 @@ jobs:
           - runner: ubuntu-24.04-arm
             platform: arm64
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # checkout v4.2.2
         with:
@@ -294,7 +294,80 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
         with:
           python-version: "3.12"
-      - name: Run E2E repeat x20
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # setup-node v4.4.0
+        with:
+          node-version: "24"
+      - name: Require kit access token
+        env:
+          KIT_REPO_TOKEN: ${{ secrets.KIT_REPO_TOKEN }}
+        run: |
+          if [ -z "${KIT_REPO_TOKEN:-}" ]; then
+            echo "kit absent: repository secret KIT_REPO_TOKEN is not set; cannot stage the pinned capsule-ui-kit checkout" >&2
+            exit 1
+          fi
+      # The ref must equal ui/kit.lock.json "commit"; tools/sync_kit.mjs
+      # verifies the checkout (repo URL and HEAD) and fails closed on drift.
+      - name: Check out pinned capsule-ui-kit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # checkout v4.2.2
+        with:
+          repository: oguirado/capsule-ui-kit
+          ref: 5c17cb84cdb73a83c4dbe081f20ff1511bcec7f2
+          token: ${{ secrets.KIT_REPO_TOKEN }}
+          path: kit-checkout
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Stage pinned kit checkout
+        run: |
+          set -euo pipefail
+          test -d kit-checkout
+          KIT_REPO="$(python3 -c 'import json; print(json.load(open("ui/kit.lock.json"))["repo"])')"
+          KIT_ORIGIN="$(git -C kit-checkout remote get-url origin)"
+          # Canonicalize only the checkout's own URL, never a value from the lock.
+          KIT_CANONICAL="${KIT_ORIGIN%.git}.git"
+          if [ "$KIT_REPO" != "$KIT_CANONICAL" ]; then
+            echo "Kit repository mismatch: checkout origin differs from lock" >&2
+            exit 1
+          fi
+          git -C kit-checkout remote set-url origin "$KIT_CANONICAL"
+          echo "MV_KIT_CHECKOUT=${GITHUB_WORKSPACE}/kit-checkout" >> "$GITHUB_ENV"
+      # [TARGET, unit decision] These tests compile Rust drivers and validate
+      # frozen offline resolution; provision their toolchain/cache explicitly.
+      - name: Prime locked npm cache
+        working-directory: ui
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Require build network namespace
+        run: |
+          set -euo pipefail
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bash .github/workflows/offline.sh true
+      - name: Install Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # setup-go v5
+        with:
+          go-version-file: daemon-adapter/go.mod
+      - name: Prepare Rust for offline checks
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.97.0 --profile minimal
+          rustup override set 1.97.0
+          cargo fetch --locked
+      - name: Install E2E dependencies
+        working-directory: ui
+        run: bash "$GITHUB_WORKSPACE/.github/workflows/offline.sh" npm ci --offline --no-audit --no-fund
+      # [TARGET, unit decision] Ubuntu's AppArmor restriction blocks the
+      # downloaded Electron binary's user namespace sandbox. Its bundled
+      # chrome-sandbox is not a root-owned setuid installation. Permit user
+      # namespaces on this ephemeral CI runner; Chromium stays sandboxed.
+      - name: Permit Chromium user namespace sandbox on hosted Ubuntu
+        run: |
+          set -euo pipefail
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          test "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)" = 0
+          unshare --user --map-root-user true
+      # Electron 44 uses an explicit installer (no npm postinstall hook).
+      # Its locked package supplies checksums.json to @electron/get.
+      - name: Install and verify pinned Electron binary
+        run: node .github/workflows/install_electron.cjs
+      - name: Run E2E repeat x20 then qualification x300
         env:
           JOB_ID: volume-e2e
           PLATFORM: ${{ matrix.platform }}
@@ -388,8 +461,8 @@ jobs:
             return 2
           }
           HARNESS="tests/e2e/run.py"
-          if [ ! -x "$HARNESS" ]; then
-            blocked volume-e2e "fake-capsule harness $HARNESS ABSENT, no W0 owner registered" .github/workflows/volume.yml -- xvfb-run -a -s "-screen 0 1280x900x24" python3 tests/e2e/run.py
+          if [ ! -f "$HARNESS" ]; then
+            blocked volume-e2e "E2E harness $HARNESS ABSENT" .github/workflows/volume.yml -- xvfb-run -a -s "-screen 0 1280x900x24" python3 tests/e2e/run.py
             exit 2
           fi
           if ! command -v xvfb-run >/dev/null 2>&1; then
@@ -413,4 +486,22 @@ jobs:
           echo "e2e repetitions: $iters iters, $iter_fail failed" >>"$LOG"
           if [ $rc -eq 0 ]; then oc=PASS; rsn="20 e2e repetitions green"; else oc=FAIL; rsn="$iter_fail of 20 e2e repetitions failed"; fi
           finish_gate volume-e2e "$rc" "$oc" "$rsn" "$LOG" tests/e2e/run.py "volume:20-iters" 0 -- xvfb-run -a -s "-screen 0 1280x900x24" python3 tests/e2e/run.py
+          [ "$rc" -eq 0 ] || exit "$rc"
+          LOG="$EVDIR/volume-e2e-qualification.log"
+          : > "$LOG"
+          rc=0
+          iters=0
+          iter_fail=0
+          for i in $(seq 1 300); do
+            iters=$((iters + 1))
+            timeout 120 xvfb-run -a -s "-screen 0 1280x900x24" python3 tests/e2e/run.py >>"$LOG" 2>&1; r=$?
+            echo "iteration $i rc $r" >>"$LOG"
+            if [ $r -ne 0 ]; then
+              iter_fail=$((iter_fail + 1))
+              [ $rc -eq 0 ] && rc=$r
+            fi
+          done
+          echo "e2e repetitions: $iters iters, $iter_fail failed" >>"$LOG"
+          if [ $rc -eq 0 ]; then oc=PASS; rsn="300 e2e repetitions green"; else oc=FAIL; rsn="$iter_fail of 300 e2e repetitions failed"; fi
+          finish_gate volume-e2e-qualification "$rc" "$oc" "$rsn" "$LOG" tests/e2e/run.py "volume:300-iters" 0 -- xvfb-run -a -s "-screen 0 1280x900x24" python3 tests/e2e/run.py
           exit $rc

@@ -31,3 +31,19 @@ test('six-event replay equals the independently declared golden state twice; ver
   }
   assert.deepEqual(runs[0], runs[1]);
 });
+
+// The oracle is a declared state, independently canonicalized here. Never
+// re-pin it from runRust output: that would hide a reducer regression.
+function canonical(value) {
+  if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';
+  if (value !== null && typeof value === 'object') return '{' + Object.keys(value).sort()
+    .map((key) => JSON.stringify(key) + ':' + canonical(value[key])).join(',') + '}';
+  return JSON.stringify(value);
+}
+test('independent six-event golden oracle is pinned and rejects a budget mutant', () => {
+  const digest = (state) => createHash('sha256').update(canonical(state)).digest('hex');
+  assert.equal(digest(fixture.expected_state), fixture.expected_digest);
+  const mutant = structuredClone(fixture.expected_state);
+  mutant.remaining_budget += 1;
+  assert.notEqual(digest(mutant), fixture.expected_digest);
+});

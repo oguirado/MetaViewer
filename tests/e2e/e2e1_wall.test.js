@@ -399,3 +399,7 @@ describe('e2e1 live wall journey', () => {
     }
   });
 });
+
+it('malformed publisher ledger refuses with E2E_ROUTING', () => {
+  assert.throws(() => validateWallReport({}, { frameOwners: {} }), { code: 'E2E_ROUTING' });
+});

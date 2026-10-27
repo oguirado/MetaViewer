@@ -12,5 +12,6 @@ await build({
     ...config.resolve.alias,
     { find: /^vue$/, replacement: `${ui}node_modules/vue/dist/vue.runtime.esm-bundler.js` },
   ] },
-  build: { outDir: process.env.MV_E2E_BUILD, emptyOutDir: true },
+  build: { rollupOptions: { input: { wall: fileURLToPath(new URL('./index.html', import.meta.url)),
+    slice: fileURLToPath(new URL('./slice.html', import.meta.url)) } }, outDir: process.env.MV_E2E_BUILD, emptyOutDir: true },
 });
