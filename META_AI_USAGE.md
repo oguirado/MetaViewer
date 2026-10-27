@@ -19,16 +19,16 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 309 | 55 | 254 |
-| Lanes finished OK | 309 | 55 | 254 |
-| Agent steps | 16,128 | 2,705 | 13,423 |
-| Lane-hours of agent work | 40.7 | 5.2 | 35.5 |
-| Fresh input tokens | 67,019,946 | 11,482,034 | 55,537,912 |
-| Cache-read input tokens | 1,485,299,325 | 226,255,212 | 1,259,044,113 |
+| Lanes launched | 311 | 55 | 256 |
+| Lanes finished OK | 311 | 55 | 256 |
+| Agent steps | 16,251 | 2,705 | 13,546 |
+| Lane-hours of agent work | 41.1 | 5.2 | 35.8 |
+| Fresh input tokens | 67,475,901 | 11,482,034 | 55,993,867 |
+| Cache-read input tokens | 1,496,273,766 | 226,255,212 | 1,270,018,554 |
 | Prompt cache hit % | 95.7 | 95.2 | 95.8 |
-| Output tokens | 14,313,426 | 2,135,708 | 12,177,718 |
-| Thinking tokens | 7,445,012 | 1,050,039 | 6,394,973 |
-| Cost (USD) | 12.5353 | 2.0279 | 10.5074 |
+| Output tokens | 14,411,850 | 2,135,708 | 12,276,142 |
+| Thinking tokens | 7,503,990 | 1,050,039 | 6,453,951 |
+| Cost (USD) | 12.6225 | 2.0279 | 10.5946 |
 | Cost per lane (USD) | 0.0406 | 0.0369 | 0.0414 |
 
 Rooms: 69. Peak concurrent lanes [MEASURED from lane start/end]: 24.
@@ -49,7 +49,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | plan | 12 | 92.6 | 0.3072 |
 | release | 5 | 93.2 | 0.0945 |
 | research | 14 | 94.6 | 0.5673 |
-| review | 53 | 94.4 | 1.5373 |
+| review | 55 | 94.5 | 1.6245 |
 | submission | 4 | 94.9 | 0.0995 |
 | test | 12 | 95.6 | 0.5657 |
 | testing | 64 | 95.9 | 2.6123 |
@@ -128,7 +128,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0tg4 | conductor | Oct 27 12:11 | testing | 6 | 95.1 | 0.1967 | Refresh the AC test-gap map on the integration head after the day-2 morning (about 50 integrations, round-2 fixes in flight) and audit the repository router, so Argon test and router units start from verified specs. |
 | mvr2vj8 | conductor | Oct 27 12:23 | testing | 1 | 95.8 | 0.0279 | Verify the Jules round-2 test branches T4 (updated), T6 and T7 on the current head with Meta Muse Spark before adopting any test or opening any fix unit. |
 | mvui14 | UI orchestrator | Oct 27 13:32 | ui | 2 | 97.4 | 0.1478 | Move live frame painting from the interim preload painter into the renderer (frame_port/v1 + frame_ack/v0.2 after the real paint), and fix three renderer defects measured live by the orchestrator: capture chrome not reacting, tile title ':100', 'Agent acting' without an agent. |
-| mvrv7 | conductor | Oct 27 13:47 | review | 2 | 95.5 | 0.0517 | Verify the 25 findings (1 critical, 8 high) of the Gemini Argon cross-review of the day-2 afternoon integrations before any fix, and turn confirmed ones into disjoint fix units. |
+| mvrv7 | conductor | Oct 27 13:47 | review | 4 | 95.8 | 0.1389 | Verify the 25 findings (1 critical, 8 high) of the Gemini Argon cross-review of the day-2 afternoon integrations before any fix, and turn confirmed ones into disjoint fix units. |
 
 ## Every lane
 
@@ -441,8 +441,10 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvr2vj8 | J8 | Verify round-2 J8 | Oct 27 12:23 | yes | 60 | 95.8 | 0.027931 |
 | mvui14 | F | Frame port consumer and painting | Oct 27 13:32 | yes | 100 | 97.6 | 0.08969 |
 | mvui14 | W | Capture chrome reactivity, tile title, agent chip | Oct 27 13:32 | yes | 82 | 97.1 | 0.058136 |
+| mvrv7 | pmadapter | Verify pmadapter | Oct 27 13:47 | yes | 47 | 94.7 | 0.040462 |
 | mvrv7 | pmagents | Verify pmagents | Oct 27 13:47 | yes | 55 | 96.3 | 0.028329 |
 | mvrv7 | pmtests | Verify pmtests | Oct 27 13:47 | yes | 39 | 94.0 | 0.023338 |
+| mvrv7 | pmui | Verify pmui | Oct 27 13:47 | yes | 76 | 96.8 | 0.046767 |
 
 ## Method
 
