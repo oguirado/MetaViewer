@@ -20,12 +20,16 @@ export async function enterNested(argv, env, display) {
   return display();
 }
 
+const NESTED_PROFILE_SUFFIX = '-nested-depth-1';
+
 /**
  * Read-only display bootstrap; no core or persistent storage capability.
  * @param {Pick<import('electron').IpcMain, 'handle'>} ipcMain
  * @param {unknown} contents
+ * @param {string[]} [registered]
+ * @returns {string[]}
  */
-export function installReadOnlyLayout(ipcMain, contents) {
+export function installReadOnlyLayout(ipcMain, contents, registered = []) {
   // [TARGET, unit decision] The shared renderer awaits these read-only domain
   // channels before mounting. Nested display has fixed depth and no self id,
   // export destination or persisted settings; every privileged action refuses.
@@ -44,13 +48,16 @@ export function installReadOnlyLayout(ipcMain, contents) {
       }
       return value;
     });
+    registered.push(channel);
   }
   for (const channel of [CHANNELS.save, 'metaviewer:settings.save',
     'metaviewer:authority.propose', 'metaviewer:authority.intent',
     'metaviewer:authority.subscribe', 'metaviewer:authority.unsubscribe',
     'metaviewer:side-terminal.open', 'metaviewer:side-terminal.enabled']) {
     ipcMain.handle(channel, () => { throw new Error('DISPLAY_ONLY: layout persistence is disabled; privileged actions are disabled'); });
+    registered.push(channel);
   }
+  return registered;
 }
 
 /** @param {typeof import('electron')} electron */
@@ -58,11 +65,41 @@ export async function startDisplay(electron) {
   const { app, BrowserWindow, protocol, session, ipcMain } = electron;
   if (process.versions.electron !== ELECTRON_PIN) throw new Error(`Electron must be ${ELECTRON_PIN}`);
   app.setName('MetaViewer');
+  if (typeof app.setPath === 'function') {
+    let baseUserData = '';
+    if (typeof app.getPath === 'function') {
+      try {
+        const candidate = app.getPath('userData');
+        if (typeof candidate === 'string') baseUserData = candidate;
+      } catch {
+        baseUserData = '';
+      }
+    }
+    if (!baseUserData && typeof app.getAppPath === 'function') {
+      try {
+        const candidate = app.getAppPath();
+        if (typeof candidate === 'string' && candidate) baseUserData = join(candidate, '.user-data');
+      } catch {
+        baseUserData = '';
+      }
+    }
+    if (baseUserData) {
+      const resolvedUserData = resolve(baseUserData);
+      const nestedUserData = resolvedUserData.endsWith(NESTED_PROFILE_SUFFIX)
+        ? resolvedUserData
+        : `${resolvedUserData}${NESTED_PROFILE_SUFFIX}`;
+      app.setPath('userData', nestedUserData);
+    }
+  }
   if (!app.requestSingleInstanceLock()) throw new Error('SINGLE_INSTANCE: profile already in use');
   // [TARGET, unit decision] Bound the entire startup, including ready/navigation.
   const deadlineMs = 15000;
   /** @type {import('electron').BrowserWindow | null} */
   let win = null;
+  /** @type {string[]} */
+  const registeredChannels = [];
+  /** @type {(() => void) | null} */
+  let onWindowAllClosed = null;
   let expired = false;
   const assertAlive = () => {
     if (expired || (win && (win.isDestroyed() || win.webContents.isDestroyed()))) {
@@ -94,8 +131,9 @@ export async function startDisplay(electron) {
       console.error(error.message);
       app.exit(1);
     });
-    installReadOnlyLayout(ipcMain, win.webContents);
-    app.on('window-all-closed', () => app.quit());
+    installReadOnlyLayout(ipcMain, win.webContents, registeredChannels);
+    onWindowAllClosed = () => app.quit();
+    app.on('window-all-closed', onWindowAllClosed);
     await win.loadURL(`${PRIVILEGED_ORIGIN}/index.html`);
     assertAlive();
     win.show();
@@ -119,8 +157,40 @@ export async function startDisplay(electron) {
     return await Promise.race([startup(), deadline]);
   } catch (error) {
     expired = true;
+    const ipcAny = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (ipcMain));
+    for (let index = registeredChannels.length - 1; index >= 0; index -= 1) {
+      try {
+        if (typeof ipcAny.removeHandler === 'function') {
+          /** @type {(channel: string) => void} */ (ipcAny.removeHandler).call(ipcMain, registeredChannels[index]);
+        }
+      } catch {
+        /* cleanup best-effort */
+      }
+    }
+    registeredChannels.length = 0;
+    const appAny = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (app));
+    if (onWindowAllClosed !== null) {
+      try {
+        if (typeof appAny.removeListener === 'function') {
+          /** @type {(event: string, listener: () => void) => void} */ (appAny.removeListener).call(app, 'window-all-closed', onWindowAllClosed);
+        } else if (typeof appAny.off === 'function') {
+          /** @type {(event: string, listener: () => void) => void} */ (appAny.off).call(app, 'window-all-closed', onWindowAllClosed);
+        }
+      } catch {
+        /* cleanup best-effort */
+      }
+      onWindowAllClosed = null;
+    }
     destroyWindow();
-    throw new Error(`DISPLAY_ONLY: ${error instanceof Error ? error.message : String(error)}`);
+    try {
+      if (typeof appAny.releaseSingleInstanceLock === 'function') {
+        /** @type {() => void} */ (appAny.releaseSingleInstanceLock).call(app);
+      }
+    } catch {
+      /* cleanup best-effort */
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(message.startsWith('DISPLAY_ONLY:') ? message : `DISPLAY_ONLY: ${message}`);
   } finally {
     clearTimeout(timer);
   }
