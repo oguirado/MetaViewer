@@ -1018,6 +1018,7 @@ testcon-7b10a16d8c58	tests/test_contract_mutants.py
 testcon-038b8e08f950	tests/test_contract_round1.py
 testcon-184fae429b22	tests/test_contract_skew_and_subset.py
 testdec-803df0aa31a8	tests/test_decoder_conformance.py
+test_docs_presence.py	tests/test_docs_presence.py
 test_e2e_ai_loop.py	tests/test_e2e_ai_loop.py
 teste2e-f622cd7f46ac	tests/test_e2e_ipc_policy.py
 teste2e-36ffb1d17a05	tests/test_e2e_nested_bootstrap.py
@@ -1033,12 +1034,14 @@ test_kill_guard.py	tests/test_kill_guard.py
 test_kit_source.py	tests/test_kit_source.py
 testlay-30db08e8ee29	tests/test_layout_intents.py
 test_live_teardown.py	tests/test_live_teardown.py
+test_novac_matrix.py	tests/test_novac_matrix.py
 testnvo-3cc17c3863ab	tests/test_nv_offline_uid.py
 testpyt-2879eeaf233d	tests/test_python_contract_mirror.py
 test_router_docs.py	tests/test_router_docs.py
 test_router_index.py	tests/test_router_index.py
 testrou-b1523da28137	tests/test_router_queries.py
 test_theme.py	tests/test_theme.py
+test_video_seal.py	tests/test_video_seal.py
 budget_gate.py	tools/budget_gate.py
 check_contracts.py	tools/check_contracts.py
 check_laws.py	tools/check_laws.py
