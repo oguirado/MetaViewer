@@ -1,5 +1,63 @@
 # Hosted slice and real-process LIVE runner
 
+## Live stack
+
+`python3 tests/e2e/e2e1_slice/stack.py start --ttl 45m` runs the real core,
+adapter, one `mv-live-1` browser capsule, and the shipped Electron entry with
+its default `hostBindings.js`. The UI must already be built (`ui/dist/renderer`
+and `ui/dist/preload`). Supply the same admitted live environment listed below,
+including `MV_E2E_LIVE=1`, `MV_E2E_ELECTRON_BIN` and an owner-only
+`XDG_RUNTIME_DIR`. The replay binary is not needed for this stack.
+
+Use `MV_E2E_CORE_BIN` and `MV_E2E_ADAPTER_BIN` for existing executable builds.
+Otherwise the supervisor builds offline using `CARGO`/`GO` or tools on PATH;
+`CARGO_TARGET_DIR` must be an absolute, worktree-exclusive target directory.
+The adapter build sets `GOPROXY=off` and `GOSUMDB=off`.
+
+The stack creates a dedicated authenticated Xvfb display with geometry
+`1600x1000x24` [TARGET]. Xauthority and state are owner-only mode `0600`
+[TARGET]. TCP listening is disabled. No CDP endpoint or debug flag is used.
+The readiness line is:
+
+```text
+LIVE_STACK_READY display=:N xauthority=/runtime/metaviewer-live-stack/run-ID/Xauthority capsule=NAME
+```
+
+Use the printed `DISPLAY` and `XAUTHORITY` values with the vision tools; for
+example `DISPLAY=:N XAUTHORITY=PATH xdpyinfo` or a screenshot/X input tool.
+The supervisor confirms an authenticated display and the shipped app window
+before creating the capsule through the same core request as `live.py`.
+It waits for an ownership-proven capsule and a real frame before READY.
+
+`python3 tests/e2e/e2e1_slice/stack.py stop` requests supervisor cleanup and
+waits for its proof. The watchdog also runs cleanup at the TTL, measured from
+READY using monotonic time. State under
+`$XDG_RUNTIME_DIR/metaviewer-live-stack/state.json` includes process birth
+identities, capsule ownership, display, Xauthority and wall-clock expiry.
+The supervisor holds the exclusive lock, drains the agent connection, and
+records descendants before signaling individual recorded PIDs. Existing
+profile allocations, another stack, a running G-W1 probe, missing environment
+and host-binding overrides refuse launch. No identity env files are read.
+The Electron child receives a cleaned environment excluding the shipped
+launcher's loader/runtime injection variables (including inherited
+`LD_PRELOAD`); retail admission and sandbox checks remain active.
+
+Cleanup requests native destroy, falls back only to capsules bound to this
+profile and absent from the initial inventory, terminates recorded processes
+after checking birth identities, removes newly owned native RAM allocations,
+and checks published RAM, display sockets and the private runtime tree.
+Success removes the state receipt; an uncertain cleanup keeps it and refuses
+another start. If the supervisor was externally killed, stop retains the
+receipt for operator recovery instead of guessing ownership.
+The private `supervisor.log` records startup errors and the verified cleanup
+receipt, including recorded process identities; it contains no identity secrets.
+
+[TARGET, unit decision] This detached supervisor is test infrastructure, not
+a product launcher API. The mandate is limited to this repository's admitted
+live runner, shipped UI and explicitly supplied OpenSuperficies environment.
+
+## Admission runner
+
 `node tests/e2e/e2e1_slice/index.js` runs the hosted Authority slice.
 `node tests/e2e/e2e1_slice/index.js --live` runs the actual core, adapter and
 OpenSuperficies browser. A partial LIVE result exits nonzero with structured
