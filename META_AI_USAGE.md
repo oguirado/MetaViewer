@@ -19,16 +19,16 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 288 | 55 | 233 |
-| Lanes finished OK | 288 | 55 | 233 |
-| Agent steps | 14,844 | 2,705 | 12,139 |
-| Lane-hours of agent work | 37.6 | 5.2 | 32.3 |
-| Fresh input tokens | 62,385,871 | 11,482,034 | 50,903,837 |
-| Cache-read input tokens | 1,367,878,964 | 226,255,212 | 1,141,623,752 |
+| Lanes launched | 292 | 55 | 237 |
+| Lanes finished OK | 292 | 55 | 237 |
+| Agent steps | 15,103 | 2,705 | 12,398 |
+| Lane-hours of agent work | 38.2 | 5.2 | 32.9 |
+| Fresh input tokens | 63,238,856 | 11,482,034 | 51,756,822 |
+| Cache-read input tokens | 1,389,937,603 | 226,255,212 | 1,163,682,391 |
 | Prompt cache hit % | 95.6 | 95.2 | 95.7 |
-| Output tokens | 13,336,538 | 2,135,708 | 11,200,830 |
-| Thinking tokens | 6,908,600 | 1,050,039 | 5,858,561 |
-| Cost (USD) | 11.6416 | 2.0279 | 9.6138 |
+| Output tokens | 13,521,462 | 2,135,708 | 11,385,754 |
+| Thinking tokens | 7,007,075 | 1,050,039 | 5,957,036 |
+| Cost (USD) | 11.808 | 2.0279 | 9.7802 |
 | Cost per lane (USD) | 0.0404 | 0.0369 | 0.0413 |
 
 Rooms: 63. Peak concurrent lanes [MEASURED from lane start/end]: 24.
@@ -52,7 +52,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | review | 51 | 94.4 | 1.4856 |
 | submission | 4 | 94.9 | 0.0995 |
 | test | 12 | 95.6 | 0.5657 |
-| testing | 49 | 95.9 | 2.0857 |
+| testing | 53 | 95.9 | 2.2521 |
 | ui | 13 | 96.6 | 0.9938 |
 | vision | 8 | 97.2 | 0.537 |
 
@@ -121,8 +121,8 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvrv6 | conductor | Oct 27 08:48 | review | 4 | 93.6 | 0.0926 | Verify the findings (1 critical, 6 high, 10 medium) of the Gemini Argon cross-review of the day-2 integrations before any fix, and turn confirmed ones into Sol fix units. |
 | mvvd2 | conductor | Oct 27 10:26 | submission | 4 | 94.9 | 0.0995 | Turn the measured day-2 evidence (live G-W1 with verified receipts, live G-AI with vision-engine and wender-agent, 25 fps wall, per-tile capture) into the demo video script, the shot list, a fact-checked TESTING.md and README update, all claims traceable to evidence. |
 | mvr3 | conductor | Oct 27 11:09 | testing | 8 | 96.7 | 0.4913 | Write round-3 external testing prompts: ChatGPT as a mathematical reasoner using Context7 math-router plus the software papers and OmniCodex to prove invariants, derive test oracles and propose optimizations of the day-2 core features; Jules as pure tester of the same features. |
-| mvr2v | conductor | Oct 27 11:32 | testing | 2 | 93.7 | 0.0481 | Verify every external round-2 finding (ChatGPT static reviews T2, T3, T5, T6, T8 and Jules T4 tests) on the current head with Meta Muse Spark before any fix, and group confirmed ones into disjoint fix units. |
-| mvr2v2 | conductor | Oct 27 11:32 | testing | 1 | 92.5 | 0.0215 | Verify every external round-2 finding (ChatGPT static reviews T2, T3, T5, T6, T8 and Jules T4 tests) on the current head with Meta Muse Spark before any fix, and group confirmed ones into disjoint fix units. |
+| mvr2v | conductor | Oct 27 11:32 | testing | 5 | 95.9 | 0.1776 | Verify every external round-2 finding (ChatGPT static reviews T2, T3, T5, T6, T8 and Jules T4 tests) on the current head with Meta Muse Spark before any fix, and group confirmed ones into disjoint fix units. |
+| mvr2v2 | conductor | Oct 27 11:32 | testing | 2 | 94.6 | 0.0584 | Verify every external round-2 finding (ChatGPT static reviews T2, T3, T5, T6, T8 and Jules T4 tests) on the current head with Meta Muse Spark before any fix, and group confirmed ones into disjoint fix units. |
 
 ## Every lane
 
@@ -413,9 +413,13 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvr3 | T6 | Round-3 prompts T6 | Oct 27 11:10 | yes | 96 | 97.4 | 0.069752 |
 | mvr3 | T7 | Round-3 prompts T7 | Oct 27 11:10 | yes | 92 | 97.4 | 0.055781 |
 | mvr3 | T8 | Round-3 prompts T8 | Oct 27 11:10 | yes | 71 | 96.6 | 0.048409 |
+| mvr2v | T5 | Verify round-2 T5 | Oct 27 11:32 | yes | 97 | 97.2 | 0.052739 |
 | mvr2v | T8 | Verify round-2 T8 | Oct 27 11:32 | yes | 32 | 92.7 | 0.02389 |
 | mvr2v | T3 | Verify round-2 T3 | Oct 27 11:32 | yes | 43 | 94.5 | 0.024206 |
+| mvr2v | T2 | Verify round-2 T2 | Oct 27 11:32 | yes | 67 | 96.4 | 0.050364 |
+| mvr2v | J4 | Verify round-2 J4 | Oct 27 11:32 | yes | 39 | 93.4 | 0.026407 |
 | mvr2v2 | T7 | Verify round-2 T7 | Oct 27 11:32 | yes | 30 | 92.5 | 0.021523 |
+| mvr2v2 | T4 | Verify round-2 T4 | Oct 27 11:32 | yes | 56 | 95.5 | 0.03689 |
 
 ## Method
 
