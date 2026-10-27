@@ -10,9 +10,9 @@ import 'capsule-ui-kit/theme.css';
 import { createDefaultLayoutProfile } from 'capsule-ui-kit/layout';
 import { installKitTheme } from 'capsule-ui-kit/theme';
 
-const { capsules, crossRoute, stalledTile } = window.e2eFixture;
+const { capsules, crossRoute, stalledTile, advancingFrames } = window.e2eFixture;
 const rows = reactive(capsules.map(({ capsuleId }) => ({ id: capsuleId, surfaceId: capsuleId,
-  backendLifecycle: 'active', generation: 7, visibility: 'unfolded', control: 'agent' })));
+  backendLifecycle: 'active', generation: 7, visibility: 'unfolded', control: 'agent', controlOwner: 'agent' })));
 const listeners = new Set();
 const budget = Object.freeze({ maxDrawsPerTick: 4, maxUploadBytesPerTick: 16777216,
   maxPresentMsPerTick: 8, maxWarmResourcesPerSurface: 1, maxDrainSteps: 4 });
@@ -30,9 +30,10 @@ const scope = { product: 'metaviewer', profileId: 'e2e', workspaceId: 'wall' };
 const intentBuilders = createWallIntentBuilders({
   encodeUiIntent: (input) => input, encodeControl: buildAuthorityIntent,
 });
-function publishProjection() {
+function publishProjection(traceControl = false) {
   snapshot = { ...snapshot, envelope: { ...snapshot.envelope,
     revision: (snapshot.envelope.revision ?? 0) + 1, projection: { rows: rows.map(row => ({ ...row })) } } };
+  if (traceControl) console.log('AC04_TRACE ' + JSON.stringify({ phase: 'authoritative-frame', rows: snapshot.envelope.projection.rows }));
   for (const listener of listeners) listener(snapshot);
 }
 function acceptControl(intent) {
@@ -55,8 +56,22 @@ function acceptControl(intent) {
   const row = rows.find(item => item.id === surfaceId);
   if (!row) return refuse();
   if (visibility) row.visibility = intent.op === 'fold' ? 'folded' : 'unfolded';
-  else row.control = intent.op === 'take_control' ? 'human' : 'agent';
-  publishProjection();
+  else {
+    console.log('AC04_TRACE ' + JSON.stringify({ phase: 'intent', intent }));
+    // [TARGET, unit decision] Replay the core POLICY refusal while work drains.
+    if (intent.op === 'release_control' && window.ac04RefuseRelease === true) {
+      console.log('AC04_TRACE ' + JSON.stringify({ phase: 'ack', op: intent.op, ok: false, code: 'POLICY' }));
+      console.log('AC04_TRACE ' + JSON.stringify({ phase: 'authoritative-frame', rows: rows.map(row => ({ ...row })) }));
+      console.error('INTENT_REFUSED:POLICY');
+      return;
+    }
+    row.control = intent.op === 'take_control' ? 'human' : 'agent';
+    // Match production: the kit reads controlOwner; the wall reads control.
+    row.controlOwner = row.control;
+    if (intent.op === 'release_control') row.generation += 1;
+    console.log('AC04_TRACE ' + JSON.stringify({ phase: 'ack', op: intent.op, ok: true }));
+  }
+  publishProjection(control);
 }
 
 // [TARGET, unit decision] Deliver at fixed deadlines, skipping missed slots
@@ -98,5 +113,6 @@ document.documentElement.style.height = '100%';
 document.body.style.cssText = 'margin:0;height:100vh';
 document.querySelector('#metaviewer-app').style.height = '100%';
 
-deliveryTimer = setTimeout(deliverFrames, Math.max(0, nextFrameAt - performance.now()));
+// [TARGET, unit decision] AC-02 opts into telemetry; other journeys retain fixed publications.
+if (advancingFrames) deliveryTimer = setTimeout(deliverFrames, Math.max(0, nextFrameAt - performance.now()));
 window.addEventListener('pagehide', () => clearTimeout(deliveryTimer), { once: true });

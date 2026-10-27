@@ -179,7 +179,10 @@ function findRepoRoot(start) {
  * @returns {string} Absolute Electron binary path.
  */
 function electronBinary(root) {
-  const binary = join(resolve(needString(root, 'root')), 'ui', 'node_modules', 'electron', 'dist', 'electron');
+  const repo = resolve(needString(root, 'root'));
+  const dist = process.env.ELECTRON_OVERRIDE_DIST_PATH;
+  const binary = dist ? join(resolve(dist), 'electron')
+    : join(repo, 'ui', 'node_modules', 'electron', 'dist', 'electron');
   try {
     accessSync(binary, constants.X_OK);
   } catch {

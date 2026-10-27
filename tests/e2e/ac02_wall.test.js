@@ -315,9 +315,11 @@ function liveWallRun(soakMs, { stalledTile } = {}) {
       reportPath,
       ...(soakMs === undefined ? {} : { soakMs }),
     });
+    const previousAdvancing = process.env.MV_E2E_ADVANCING_FRAMES;
     const previousStalled = process.env.MV_E2E_STALLED_TILE;
     let outcome;
     try {
+      process.env.MV_E2E_ADVANCING_FRAMES = '1';
       if (stalledTile !== undefined) process.env.MV_E2E_STALLED_TILE = stalledTile;
       outcome = runUnderXvfb({
         electron,
@@ -326,6 +328,8 @@ function liveWallRun(soakMs, { stalledTile } = {}) {
         diagnosticsPath: join(scratch, 'electron-process.json'),
       });
     } finally {
+      if (previousAdvancing === undefined) delete process.env.MV_E2E_ADVANCING_FRAMES;
+      else process.env.MV_E2E_ADVANCING_FRAMES = previousAdvancing;
       if (previousStalled === undefined) delete process.env.MV_E2E_STALLED_TILE;
       else process.env.MV_E2E_STALLED_TILE = previousStalled;
     }

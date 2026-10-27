@@ -22,9 +22,10 @@ function audit(report) {
   assert.equal(report.popupDenied, true, 'E2E_WINDOW_OPEN: popup allowed');
   assert.equal(report.windows, 1);
   assert.equal(report.frozen, true);
-  assert.deepEqual(report.facade, ['authority', 'load', 'loadSettings', 'nestedDepth',
+  assert.deepEqual(report.facade, ['authority', 'capture', 'load', 'loadSettings', 'nestedDepth',
     'recordingDestination', 'save', 'saveSettings', 'selfCapsuleId', 'sideTerminal']);
   assert.deepEqual(report.authority, ['intent', 'propose', 'subscribeFrames']);
+  assert.deepEqual(report.capture, ['list', 'recordStart', 'recordStop', 'screenshot', 'subscribe']);
   assert.deepEqual(report.terminal, ['open', 'setEnabled']);
 }
 

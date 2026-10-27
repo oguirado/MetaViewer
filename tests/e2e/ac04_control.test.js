@@ -465,7 +465,7 @@ function controlAnchorSelector(capsuleId) {
  * Self-contained by construction: no closure over suite state, only
  * require calls and the injected config.
  * @param {{ profile: string, mainUrl: string, manifestPath: string,
- * reportPath: string, capsuleId: string, watchdogMs: number }} config Injected probe config.
+ * reportPath: string, capsuleId: string, refuseRelease?: boolean, watchdogMs: number }} config Injected probe config.
  * @returns {Promise<void>} Resolves when the probe file is installed;
  * the process exits via app.exit once the journey completes.
  */
@@ -519,6 +519,7 @@ async function controlProbeMain(config) {
   app.on('browser-window-created', (_, win) => {
     const errors = [];
     win.webContents.on('console-message', (event) => {
+      if (String(event.message).startsWith('AC04_TRACE ')) console.log(event.message);
       if (event.level === 'error' || event.level === 3) {
         errors.push(String(event.message).slice(0, 512));
       }
@@ -545,6 +546,7 @@ async function controlProbeMain(config) {
           + `controlPresent: !!button, controlRect: rect };`
           + `})(${JSON.stringify(tileSel)}, ${JSON.stringify(controlSel)})`;
         const sample = () => wc.executeJavaScript(sampleCode);
+        await wc.executeJavaScript(`window.ac04RefuseRelease = ${config.refuseRelease === true}`);
         const deadline = Date.now() + Math.floor(config.watchdogMs / 2);
         let observed = null;
         do {
@@ -564,23 +566,34 @@ async function controlProbeMain(config) {
           const click = async () => {
             const current = await sample();
             assert.ok(current && current.controlRect, 'control affordance lost before click');
-            const x = Math.round(current.controlRect.x);
-            const y = Math.round(current.controlRect.y);
-            wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
-            wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
+            // [TARGET, unit decision] Activate the real semantic button directly:
+            // xvfb has no window manager guaranteeing native pointer targeting.
+            // State, intent order, host refusal and fresh-frame assertions remain live.
+            await wc.executeJavaScript(`document.querySelector(${JSON.stringify(controlSel)}).click()`);
           };
           await click();
           takeClicked = true;
-          await pause(300);
+          const waitForState = async expected => {
+            const deadline = Date.now() + 5000;
+            while ((await sample()).tileState !== expected && Date.now() < deadline) await pause(25);
+          };
+          await waitForState('human-control');
           assert.equal((await sample()).tileState, 'human-control', 'take must change the authoritative tile state');
           await click();
           releaseClicked = true;
-          await pause(300);
-          assert.equal((await sample()).tileState, tileStateBefore, 'release must restore the authoritative tile state');
+          await waitForState(config.refuseRelease ? 'human-control' : tileStateBefore);
+          // A refused release preserves state, so wait for the host acknowledgement too.
+          if (config.refuseRelease) {
+            const deadline = Date.now() + 5000;
+            while (!errors.includes('INTENT_REFUSED:POLICY') && Date.now() < deadline) await pause(25);
+          }
+          console.log('AC04_TRACE ' + JSON.stringify({ phase: 'after-release-click', ...await sample() }));
+          assert.equal((await sample()).tileState, config.refuseRelease ? 'human-control' : tileStateBefore,
+            config.refuseRelease ? 'refused release must retain human control' : 'release must restore the authoritative tile state');
         }
         const after = await sample();
         const hostError = errors.find((entry) => entry.includes(
-          'Fixture cannot dispatch host actions')) || '';
+          'Fixture cannot dispatch host actions') || entry.includes('INTENT_REFUSED:POLICY')) || '';
         const report = {
           schema: 'e2e-control-report/v1',
           phase: 'control',
@@ -612,7 +625,7 @@ async function controlProbeMain(config) {
  * Render the control probe file text embedding a validated config. The
  * config travels as JSON, so no caller string can inject code.
  * @param {{ profile: string, mainUrl: string, manifestPath: string,
- * reportPath: string, capsuleId: string, watchdogMs?: number }} config Probe config.
+ * reportPath: string, capsuleId: string, refuseRelease?: boolean, watchdogMs?: number }} config Probe config.
  * @returns {string} Probe file text.
  */
 function renderControlProbeFile(config) {
@@ -639,6 +652,7 @@ function renderControlProbeFile(config) {
   }
   const frozen = {
     profile,
+    refuseRelease: config.refuseRelease === true,
     mainUrl: config.mainUrl,
     manifestPath: resolve(config.manifestPath),
     reportPath: resolve(config.reportPath),
@@ -1157,80 +1171,107 @@ describe('ac04 live control journey', () => {
     }
   });
 
-  it('wall tile take and release control through the control button (AC-04)', {
-    todo: 'GAP-AC04-CONTROL-OWNER: ui/src/core/hostAdapters.js:100-102 emits control, SurfacePanel.vue:325 forwards it unchanged; kit CapsulePanel.vue:382,1653 reads controlOwner, so the second click takes control again',
-  }, () => {
-    require('./ac-harness.cjs').prepareWall();
-    requireXvfb();
-    const root = findRepoRoot(__dirname);
-    const electron = electronBinary(root);
-    const buildDir = process.env[BUILD_ENV] || '';
-    if (buildDir === '' || !existsSync(join(buildDir, 'index.html'))) {
-      throw new E2EError('E2E_PREREQ', 'built wall absent: run.py stages MV_E2E_BUILD first');
-    }
-    const scratch = makeScratch('mv0-ac04-live');
+  it('negative control: core refuses release while dispatched work drains and retains human control', () => {
+    const scratch = makeScratch('mv0-ac04-refused');
     try {
-      const manifestPath = writeFakeManifest(scratch, AC04_FAKES);
-      const reportPath = join(scratch, 'control-report.json');
-      const mainEntry = join(root, 'tests', 'e2e', 'live-main.cjs');
-      writeFileSync(join(scratch, 'probe.cjs'), `${renderControlProbeFile({
-        profile: join(scratch, 'profile'),
-        mainUrl: require('node:url').pathToFileURL(mainEntry).href,
-        manifestPath,
-        reportPath,
-        capsuleId: AC04_FAKES[0].capsuleId,
-      })}\n`, 'utf8');
-      const outcome = runUnderXvfb({
-        electron,
-        appDir: join(scratch, 'probe.cjs'),
-        diagnosticsPath: join(scratch, 'electron-process.json'),
-      });
-      const diagnostic = JSON.stringify({
-        ...outcome,
-        stdout: outcome.stdout.slice(-2000),
-        stderr: outcome.stderr.slice(-4000),
-      });
-      console.log(`E2E_PROCESS: ${diagnostic}`);
-      let summary;
-      try {
-        let text;
-        try {
-          text = readFileSync(reportPath, 'utf8');
-        } catch {
-          throw new E2EError('E2E_REPORT', 'control probe report unreadable');
-        }
-        let parsed;
-        try {
-          parsed = JSON.parse(text);
-        } catch {
-          throw new E2EError('E2E_REPORT', 'control probe report is not JSON');
-        }
-        summary = validateControlProbeReport(parsed);
-      } catch (error) {
-        if (!(error instanceof E2EError)) throw error;
-        const seen = existsSync(reportPath) ? readFileSync(reportPath, 'utf8').slice(0, 3000) : 'absent';
-        throw new E2EError(error.code, `${error.message} | report: ${seen} | process: ${diagnostic}`);
-      }
-      assert.equal(outcome.timedOut, false, diagnostic);
-      assert.equal(outcome.status, 0,
-        `probe errors: ${summary.errors.join(' | ').slice(0, 2000)} | process: ${diagnostic}`);
-      if (!summary.affordance_present) {
-        throw new E2EError('E2E_PREREQ', 'control affordance absent on the tile');
-      }
-      if (summary.host_refused) {
-        assert.ok(summary.host_error.includes(FIXTURE_REFUSAL_MARK), diagnostic);
-        throw new E2EError('E2E_PREREQ',
-          `control host unready: ${summary.host_error.slice(0, 200)}`);
-      }
-      assert.equal(summary.take_clicked, true, diagnostic);
-      assert.equal(summary.release_clicked, true, diagnostic);
-      assert.ok(summary.frame_before !== null && summary.frame_after !== null, diagnostic);
-      assert.ok(summary.frame_before !== summary.frame_after,
-        `release must refresh the frame | process: ${diagnostic}`);
-      assert.deepEqual(summary.errors, [], diagnostic);
-    } finally {
-      removeScratch(scratch);
-    }
+      const source = CORE_ARBITRATION_SCRIPT
+        .replace('let w3 =', 'let _w3 =')
+        .replace('let take_out =', 'authority.apply(Input::Dispatch { proposal_id: "proposal-ac04-pending".into(), now_ns: 0 }).unwrap();\n    let take_out =')
+        .replace('let release_out =', 'let refused = authority.apply(Input::ReleaseControl { surface_id: "surface-ac04-1".into() }).unwrap();\n    println!("REFUSED_RELEASE:{:?}", refused.reason);\n    println!("REFUSED_AGENT_CONTROLLED:{}", authority.state().surfaces["surface-ac04-1"].agent_controlled);\n    let release_out =')
+        .split('    let release_out =')[0] + '\n}\n';
+      const lines = runRust(scratch, source).trim().split('\n');
+      assert.ok(lines.includes('REFUSED_RELEASE:Some(Policy)'));
+      assert.ok(lines.includes('REFUSED_AGENT_CONTROLLED:false'));
+      console.log(lines.filter(line => line.startsWith('REFUSED_')).join('\n'));
+    } finally { removeScratch(scratch); }
   });
+
+  for (const refuseRelease of [false, true]) {
+    it(refuseRelease ? 'negative control: refused release keeps the live tile human-controlled (AC-04)'
+      : 'wall tile take and release control through the control button (AC-04)', () => {
+      require('./ac-harness.cjs').prepareWall();
+      requireXvfb();
+      const root = findRepoRoot(__dirname);
+      const electron = electronBinary(root);
+      const buildDir = process.env[BUILD_ENV] || '';
+      if (buildDir === '' || !existsSync(join(buildDir, 'index.html'))) {
+        throw new E2EError('E2E_PREREQ', 'built wall absent: run.py stages MV_E2E_BUILD first');
+      }
+      const scratch = makeScratch('mv0-ac04-live');
+      try {
+        const manifestPath = writeFakeManifest(scratch, AC04_FAKES);
+        const reportPath = join(scratch, 'control-report.json');
+        const mainEntry = join(root, 'tests', 'e2e', 'live-main.cjs');
+        writeFileSync(join(scratch, 'probe.cjs'), `${renderControlProbeFile({
+          refuseRelease,
+          profile: join(scratch, 'profile'),
+          mainUrl: require('node:url').pathToFileURL(mainEntry).href,
+          manifestPath,
+          reportPath,
+          capsuleId: AC04_FAKES[0].capsuleId,
+        })}\n`, 'utf8');
+        const outcome = runUnderXvfb({
+          electron,
+          appDir: join(scratch, 'probe.cjs'),
+          diagnosticsPath: join(scratch, 'electron-process.json'),
+        });
+        const diagnostic = JSON.stringify({
+          report: existsSync(reportPath) ? readFileSync(reportPath, 'utf8') : 'absent',
+          ...outcome,
+          stdout: outcome.stdout.slice(-2000),
+          stderr: outcome.stderr.slice(-4000),
+        });
+        for (const line of outcome.stdout.split('\n').filter(line => line.startsWith('AC04_TRACE '))) console.log(line);
+        console.log(`E2E_PROCESS: ${diagnostic}`);
+        const intents = outcome.stdout.split('\n').filter(line => line.startsWith('AC04_TRACE '))
+          .map(line => JSON.parse(line.slice('AC04_TRACE '.length)))
+          .filter(event => event.phase === 'intent').map(event => event.intent.op);
+        assert.deepEqual(intents, ['take_control', 'release_control'], diagnostic);
+        let summary;
+        try {
+          let text;
+          try {
+            text = readFileSync(reportPath, 'utf8');
+          } catch {
+            throw new E2EError('E2E_REPORT', 'control probe report unreadable');
+          }
+          let parsed;
+          try {
+            parsed = JSON.parse(text);
+          } catch {
+            throw new E2EError('E2E_REPORT', 'control probe report is not JSON');
+          }
+          summary = validateControlProbeReport(parsed);
+        } catch (error) {
+          if (!(error instanceof E2EError)) throw error;
+          const seen = existsSync(reportPath) ? readFileSync(reportPath, 'utf8').slice(0, 3000) : 'absent';
+          throw new E2EError(error.code, `${error.message} | report: ${seen} | process: ${diagnostic}`);
+        }
+        assert.equal(outcome.timedOut, false, diagnostic);
+        assert.equal(outcome.status, 0,
+          `probe errors: ${summary.errors.join(' | ').slice(0, 2000)} | process: ${diagnostic}`);
+        if (!summary.affordance_present) {
+          throw new E2EError('E2E_PREREQ', 'control affordance absent on the tile');
+        }
+        if (refuseRelease) {
+          assert.equal(summary.host_refused, true, diagnostic);
+          assert.equal(summary.host_error, 'INTENT_REFUSED:POLICY', diagnostic);
+          assert.equal(summary.frame_after, summary.frame_before, diagnostic);
+        } else if (summary.host_refused) {
+          assert.ok(summary.host_error.includes(FIXTURE_REFUSAL_MARK), diagnostic);
+          throw new E2EError('E2E_PREREQ',
+            `control host unready: ${summary.host_error.slice(0, 200)}`);
+        }
+        assert.equal(summary.take_clicked, true, diagnostic);
+        assert.equal(summary.release_clicked, true, diagnostic);
+        assert.ok(summary.frame_before !== null && summary.frame_after !== null, diagnostic);
+        if (!refuseRelease) assert.ok(summary.frame_before !== summary.frame_after,
+          `release must refresh the frame | process: ${diagnostic}`);
+        assert.deepEqual(summary.errors, refuseRelease ? ['INTENT_REFUSED:POLICY'] : [], diagnostic);
+      } finally {
+        removeScratch(scratch);
+      }
+    });
+  }
 });
 

@@ -112,6 +112,29 @@ async function rejectsAsyncWith(promise, codes) {
 }
 
 describe('e2e1 wall harness contract', () => {
+  it('resolves the explicit Electron distribution and refuses a missing override', () => {
+    const scratch = makeScratch('mv-electron');
+    const previous = process.env.ELECTRON_OVERRIDE_DIST_PATH;
+    try {
+      const fallback = join(scratch, 'ui', 'node_modules', 'electron', 'dist');
+      const override = join(scratch, 'Música', 'explicit-dist');
+      for (const dist of [fallback, override]) {
+        mkdirSync(dist, { recursive: true });
+        writeFileSync(join(dist, 'electron'), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+      }
+      delete process.env.ELECTRON_OVERRIDE_DIST_PATH;
+      assert.equal(electronBinary(scratch), join(fallback, 'electron'));
+      process.env.ELECTRON_OVERRIDE_DIST_PATH = override;
+      assert.equal(electronBinary(scratch), join(override, 'electron'));
+      process.env.ELECTRON_OVERRIDE_DIST_PATH = join(scratch, 'missing');
+      rejectsWith(() => electronBinary(scratch), ['E2E_PREREQ']);
+    } finally {
+      if (previous === undefined) delete process.env.ELECTRON_OVERRIDE_DIST_PATH;
+      else process.env.ELECTRON_OVERRIDE_DIST_PATH = previous;
+      removeScratch(scratch);
+    }
+  });
+
   it('pins the xvfb geometry shared with the CI e2e job', () => {
     assert.deepEqual([...XVFB_ARGV], ['-a', '-s', '-screen 0 1280x900x24']);
   });
@@ -367,7 +390,7 @@ describe('e2e1 live wall journey', () => {
       const manifestPath = writeFakeManifest(scratch, FOUR_FAKES);
       const reportPath = join(scratch, 'report.json');
       const mainEntry = join(root, 'tests', 'e2e', 'live-main.cjs');
-      const mainUrl = `file://${mainEntry}`;
+      const mainUrl = require('node:url').pathToFileURL(mainEntry).href;
       writeProbeFile(scratch, {
         profile: join(scratch, 'profile'),
         mainUrl,

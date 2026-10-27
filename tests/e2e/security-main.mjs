@@ -27,6 +27,7 @@ try {
   writeFileSync(join(assets, 'probe.js'), `window.securityReport=(async()=>{
     const report={node:typeof require,process:typeof process,inline:window.inlineExecuted===true,
       facade:Object.keys(window.metaviewer||{}).sort(),
+      capture:Object.keys(window.metaviewer?.capture||{}).sort(),
       authority:Object.keys(window.metaviewer?.authority||{}).sort(),
       terminal:Object.keys(window.metaviewer?.sideTerminal||{}).sort(),
       frozen:Object.isFrozen(window.metaviewer),evalBlocked:false,fetchBlocked:false};

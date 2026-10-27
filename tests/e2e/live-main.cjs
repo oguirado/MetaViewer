@@ -9,6 +9,7 @@ app.whenReady().then(async () => {
       additionalArguments: ['--mv-e2e-fixture=' + JSON.stringify({
         capsules: JSON.parse(readFileSync(process.env.MV_E2E_MANIFEST, 'utf8')).capsules,
         crossRoute: process.env.MV_E2E_CROSS_ROUTE === '1',
+        advancingFrames: process.env.MV_E2E_ADVANCING_FRAMES === '1',
         stalledTile: process.env.MV_E2E_STALLED_TILE ?? null,
       })] } });
   if (process.env.MV_E2E_TELEMETRY) installTelemetry(win, JSON.parse(process.env.MV_E2E_TELEMETRY));
