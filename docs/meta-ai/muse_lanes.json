@@ -130,6 +130,11 @@
    "why": "Add wall tile states with take/release control and a kit-wide CSP audit to the shared kit (kit 0.2.1) for the MetaViewer wall and its strict CSP.",
    "orchestrator": "UI orchestrator"
   },
+  "mvui22": {
+   "stage": "fix",
+   "why": "Live round 7 findings: the 4 s outcome toast is invisible on take/release although the activity is recorded; the Activity strip steals tile height (frame rescale); plus the MV-UI12 judge notes on the frame path.",
+   "orchestrator": "UI orchestrator"
+  },
   "mvui9": {
    "stage": "ui",
    "why": "Operator saw no recording menus, screenshot action or capsule action icons on wall tiles: add per-tile record-for-AI/screenshot/recording chrome over the new closed capture facade, adopt kit 0.2.1 tile actions and anchors, and audit every capsule action icon.",
