@@ -15,8 +15,9 @@
  * @module coreLauncher
  */
 
-import { isAbsolute, relative, resolve, sep } from 'node:path';
-import { realpathSync } from 'node:fs';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { realpathSync, statSync } from 'node:fs';
+import { spawn as defaultSpawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 /**
@@ -75,6 +76,35 @@ export const CORE_MAX_PATH_CHARS = 4096;
  * @type {ReadonlyArray<string>}
  */
 export const ALLOWED_CORE_ENV = Object.freeze(['LANG', 'LC_ALL', 'PATH', 'TMPDIR', 'TZ']);
+
+/**
+ * [TARGET, unit decision] Exact environment allowlist for the bundled daemon
+ * adapter child, matching the dev stack (tests/e2e/e2e1_slice/stack.py) and
+ * daemon-adapter RuntimeFromEnv() / NewRuntime() contract.
+ * @type {ReadonlyArray<string>}
+ */
+export const ALLOWED_ADAPTER_ENV = Object.freeze([
+  ...ALLOWED_CORE_ENV,
+  'HOME',
+  'XDG_RUNTIME_DIR',
+  'XDG_STATE_HOME',
+  'XDG_CONFIG_HOME',
+  'MV_CORE_CONFIG',
+  'MV_SESSION_ID',
+  'MV_CORE_INSTANCE',
+  'MV_DAEMON_INSTANCE',
+  'MV_COMPONENT_COMMIT',
+  'MV_CONTRACT_DIR',
+  'MV_EXPECTED_CORE_COMMIT',
+  'MV_SRF_BIN_DIR',
+  'MV_SRF_STATE_DIR',
+  'SRF_IDENTITY_STORE_ROOT',
+  'SRF_PROXY_REGISTRY',
+  'SRF_EGRESS_PROXY',
+  'MV_SRF_PROFILES',
+  'MV_SRF_LIVE_PROFILE',
+  'MV_SRF_LIVE_RAM_ROOT',
+]);
 
 /**
  * Forbidden environment name prefixes (loader/debugger injection
@@ -233,6 +263,37 @@ export function scrubChildEnv(rawEnv, runtimeDir) {
       fail('SETTINGS_IN_REPO', 'recording destination must be outside the source tree');
     }
     out.MV_RECORDING_DESTINATION = canonical;
+  }
+  out.XDG_RUNTIME_DIR = /** @type {string} */ (runtimeDir);
+  return Object.freeze(out);
+}
+
+/**
+ * Build the frozen adapter child environment: starts from the scrubbed
+ * core environment and retains only the dev-stack / OpenSuperficies
+ * allowlist (`ALLOWED_ADAPTER_ENV`), with `XDG_RUNTIME_DIR` pinned to
+ * the validated runtime directory. Throws only CoreLauncherError.
+ * @param {unknown} rawEnv Alleged parent environment record.
+ * @param {unknown} runtimeDir Alleged validated runtime directory.
+ * @returns {Readonly<Record<string, string>>} Frozen adapter child environment.
+ */
+export function scrubAdapterEnv(rawEnv, runtimeDir) {
+  const base = scrubChildEnv(rawEnv, runtimeDir);
+  const parent = /** @type {Record<string, unknown>} */ (rawEnv);
+  const out = /** @type {Record<string, string>} */ ({});
+  for (const name of ALLOWED_ADAPTER_ENV) {
+    if (Object.hasOwn(base, name)) {
+      out[name] = base[name];
+      continue;
+    }
+    if (name === 'PATH' || name === 'XDG_RUNTIME_DIR') {
+      continue;
+    }
+    const raw = parent[name];
+    if (!isKeepableValue(raw)) {
+      continue;
+    }
+    out[name] = /** @type {string} */ (raw);
   }
   out.XDG_RUNTIME_DIR = /** @type {string} */ (runtimeDir);
   return Object.freeze(out);
@@ -992,4 +1053,649 @@ export function createCoreLauncher(options) {
   }
 
   return Object.freeze({ start, request, dispose, getStatus });
+}
+
+/**
+ * Bundled adapter supervisor lifecycle snapshot. When the adapter binary
+ * or OpenSuperficies configuration (`MV_SRF_BIN_DIR`) is absent, or when
+ * the adapter crashes, the app stays up in core-only `degraded` state
+ * with a typed `code` and user-visible `userMessage`.
+ * @typedef {object} AdapterStatus
+ * @property {'idle' | 'starting' | 'live' | 'degraded' | 'unavailable'} availability Lifecycle state.
+ * @property {number | null} pid Owned adapter child pid, or null.
+ * @property {'ADAPTER_LIVE' | 'ADAPTER_ABSENT' | 'OPENSUPERFICIES_ABSENT' | 'ADAPTER_CRASHED' | 'ADAPTER_DISPOSED' | null} code Typed status code.
+ * @property {string | null} reason Technical detail, or null.
+ * @property {string | null} userMessage User-visible degraded status description, or null when live/idle.
+ * @property {number} spawnCount Total spawn attempts (at most 1; never respawned in a loop).
+ * @property {boolean} handshakeSeen True once the adapter handshake has been observed.
+ */
+
+/**
+ * @typedef {object} AdapterLimits
+ * @property {number} [maxStdoutLineBytes] Partial stdout line ceiling before decoding.
+ * @property {number} [maxStderrTailBytes] Retained stderr tail ceiling.
+ * @property {number} [handshakeTimeoutMs] Handshake deadline.
+ * @property {number} [shutdownTimeoutMs] Per-pid TERM/KILL wait deadline.
+ */
+
+/**
+ * @typedef {object} AdapterLauncherOptions
+ * @property {(command: string, args: ReadonlyArray<string>, opts: Record<string, unknown>) => unknown} [spawn] child_process-compatible spawn.
+ * @property {string} command Absolute bundled adapter binary path.
+ * @property {ReadonlyArray<string>} [args] Adapter arguments.
+ * @property {unknown} env Parent environment to scrub.
+ * @property {string} runtimeDir Validated runtime directory.
+ * @property {number} [selfPid] Proven caller pid.
+ * @property {number} [selfPgid] Proven caller process group.
+ * @property {CoreKillFn} [killFn] Single-pid signal function (never a group).
+ * @property {(context: {pid: number, env: Readonly<Record<string, string>>, signal: AbortSignal}) => Promise<unknown>} [handshake] Handshake observer.
+ * @property {(command: string, env: Readonly<Record<string, string>>) => {ok: true} | {ok: false, code: 'ADAPTER_ABSENT' | 'OPENSUPERFICIES_ABSENT', reason: string}} [preflight] Pre-spawn availability check.
+ * @property {AdapterLimits} [limits] Finite bounds.
+ * @property {CoreOwnership} [ownership] Trusted descendant ledger.
+ * @property {{onStatus?: (status: AdapterStatus) => void}} [callbacks] Status listener.
+ */
+
+/**
+ * @typedef {object} AdapterLauncher
+ * @property {() => Promise<AdapterStatus>} start Single-flight start; never respawns.
+ * @property {() => Promise<void>} dispose Idempotent teardown; reaps owned pids with kill-guard rules.
+ * @property {() => AdapterStatus} getStatus Frozen snapshot.
+ */
+
+/**
+ * Default preflight check for the bundled adapter and OpenSuperficies (`MV_SRF_BIN_DIR`).
+ * @param {string} command Bundled adapter binary path.
+ * @param {Readonly<Record<string, string>>} env Scrubbed adapter environment.
+ * @returns {{ok: true} | {ok: false, code: 'ADAPTER_ABSENT' | 'OPENSUPERFICIES_ABSENT', reason: string}}
+ */
+function defaultAdapterPreflight(command, env) {
+  if (
+    typeof command !== 'string' || command.length < 1 || command.length > CORE_MAX_PATH_CHARS ||
+    command.includes(String.fromCharCode(0)) || !isAbsolute(command)
+  ) {
+    return { ok: false, code: 'ADAPTER_ABSENT', reason: 'bundled adapter binary path is absent or not absolute' };
+  }
+  try {
+    const st = statSync(command);
+    if (!st.isFile() || (st.mode & 0o111) === 0) {
+      return { ok: false, code: 'ADAPTER_ABSENT', reason: 'bundled adapter binary is missing or not executable' };
+    }
+  } catch {
+    return { ok: false, code: 'ADAPTER_ABSENT', reason: 'bundled adapter binary is absent on disk' };
+  }
+  const srfBinDir = env.MV_SRF_BIN_DIR;
+  if (
+    typeof srfBinDir !== 'string' || srfBinDir.length < 1 || srfBinDir.length > CORE_MAX_PATH_CHARS ||
+    srfBinDir.includes(String.fromCharCode(0)) || !isAbsolute(srfBinDir)
+  ) {
+    return { ok: false, code: 'OPENSUPERFICIES_ABSENT', reason: 'MV_SRF_BIN_DIR is not configured as an absolute path' };
+  }
+  try {
+    const srfStat = statSync(srfBinDir);
+    if (!srfStat.isDirectory()) {
+      return { ok: false, code: 'OPENSUPERFICIES_ABSENT', reason: 'MV_SRF_BIN_DIR is not a directory' };
+    }
+  } catch {
+    return { ok: false, code: 'OPENSUPERFICIES_ABSENT', reason: 'MV_SRF_BIN_DIR directory is absent on disk' };
+  }
+  return { ok: true };
+}
+
+/**
+ * Create the single-flight bundled adapter supervisor next to core.
+ * Supervises the adapter with the dev-stack environment subset, owned pipes,
+ * kill-guard reaping (`int pid > 1` only), and a typed user-visible degraded
+ * state when the adapter or OpenSuperficies is absent or when the adapter crashes.
+ * Never respawns in a loop.
+ * @param {AdapterLauncherOptions} options Adapter launcher options.
+ * @returns {AdapterLauncher} Frozen adapter launcher.
+ */
+export function createAdapterLauncher(options) {
+  if (options === null || typeof options !== 'object' || Array.isArray(options)) {
+    fail('OPTIONS', 'adapter options must be an object');
+  }
+  const typed = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (options));
+  const spawnFn = typeof typed.spawn === 'function'
+    ? /** @type {(command: string, args: ReadonlyArray<string>, opts: Record<string, unknown>) => unknown} */ (typed.spawn)
+    : /** @type {(command: string, args: ReadonlyArray<string>, opts: Record<string, unknown>) => unknown} */ (defaultSpawn);
+  const command = typeof typed.command === 'string' ? typed.command : '';
+  const rawArgs = Array.isArray(typed.args) ? typed.args : [];
+  for (const arg of rawArgs) {
+    if (typeof arg !== 'string' || arg.length > CORE_MAX_ENV_VALUE_CHARS || arg.includes(String.fromCharCode(0))) {
+      fail('ARGS', 'adapter args must be bounded NUL-free strings');
+    }
+  }
+  const hostArgs = rawArgs.slice();
+  const selfPid = typeof typed.selfPid === 'number' ? typed.selfPid : process.pid;
+  const selfPgid = typeof typed.selfPgid === 'number' ? typed.selfPgid : process.pid;
+  if (
+    typeof selfPid !== 'number' || !Number.isSafeInteger(selfPid) || selfPid < 1 ||
+    typeof selfPgid !== 'number' || !Number.isSafeInteger(selfPgid) || selfPgid < 1
+  ) {
+    fail('IDENTITY', 'caller pid and pgid must be safe integers above zero');
+  }
+  const killFn = typeof typed.killFn === 'function'
+    ? /** @type {CoreKillFn} */ (typed.killFn)
+    : /** @type {CoreKillFn} */ ((target, signal) => { process.kill(target, signal); });
+  const rawLimits = typed.limits !== null && typeof typed.limits === 'object' && !Array.isArray(typed.limits)
+    ? /** @type {Record<string, unknown>} */ (typed.limits)
+    : {};
+  const bounds = {
+    maxStdoutLineBytes: typeof rawLimits.maxStdoutLineBytes === 'number' ? rawLimits.maxStdoutLineBytes : 65536,
+    maxStderrTailBytes: typeof rawLimits.maxStderrTailBytes === 'number' ? rawLimits.maxStderrTailBytes : 65536,
+    handshakeTimeoutMs: typeof rawLimits.handshakeTimeoutMs === 'number' ? rawLimits.handshakeTimeoutMs : 5000,
+    shutdownTimeoutMs: typeof rawLimits.shutdownTimeoutMs === 'number' ? rawLimits.shutdownTimeoutMs : 2000,
+  };
+  for (const [key, value] of Object.entries(bounds)) {
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
+      fail('LIMITS', `adapter limit ${key} must be a positive safe integer`);
+    }
+  }
+  if (bounds.handshakeTimeoutMs > 10000) {
+    fail('LIMITS', 'handshakeTimeoutMs exceeds the startup budget');
+  }
+  const scrubbed = scrubAdapterEnv(typed.env, typed.runtimeDir);
+  const preflight = typeof typed.preflight === 'function'
+    ? /** @type {(command: string, env: Readonly<Record<string, string>>) => {ok: true} | {ok: false, code: 'ADAPTER_ABSENT' | 'OPENSUPERFICIES_ABSENT', reason: string}} */ (typed.preflight)
+    : defaultAdapterPreflight;
+  const onStatus = typed.callbacks !== null && typeof typed.callbacks === 'object' && !Array.isArray(typed.callbacks) &&
+      typeof /** @type {Record<string, unknown>} */ (typed.callbacks).onStatus === 'function'
+    ? /** @type {(status: AdapterStatus) => void} */ (/** @type {Record<string, unknown>} */ (typed.callbacks).onStatus)
+    : null;
+
+  /** @type {'idle' | 'starting' | 'live' | 'degraded' | 'unavailable'} */
+  let availability = 'idle';
+  /** @type {number | null} */
+  let pid = null;
+  /** @type {'ADAPTER_LIVE' | 'ADAPTER_ABSENT' | 'OPENSUPERFICIES_ABSENT' | 'ADAPTER_CRASHED' | 'ADAPTER_DISPOSED' | null} */
+  let code = null;
+  /** @type {string | null} */
+  let reason = null;
+  /** @type {string | null} */
+  let userMessage = null;
+  let spawnCount = 0;
+  let handshakeSeen = false;
+  let disposing = false;
+  /** @type {Promise<AdapterStatus> | null} */
+  let startPromise = null;
+  /** @type {Promise<void> | null} */
+  let disposePromise = null;
+  /** @type {Set<number>} */
+  const exitedPids = new Set();
+  /** @type {Set<() => void>} */
+  const exitWaiters = new Set();
+  /** @type {Array<number>} */
+  let pendingLine = [];
+  /** @type {Array<number>} */
+  let stderrTail = [];
+  let stdoutHandshake = false;
+  /** @type {(() => void) | null} */
+  let resolveStdoutHandshake = null;
+
+  /** @type {CoreOwnership} */
+  const defaultOwnership = {
+    ownedPids: () => (pid !== null && !exitedPids.has(pid) ? Object.freeze([pid]) : Object.freeze([])),
+    waitForExit: (target, signal) => new Promise((resolve) => {
+      if (exitedPids.has(target)) {
+        resolve();
+        return;
+      }
+      const check = () => {
+        if (exitedPids.has(target)) {
+          cleanup();
+          resolve();
+          return;
+        }
+        try {
+          process.kill(target, 0);
+        } catch {
+          exitedPids.add(target);
+          cleanup();
+          resolve();
+        }
+      };
+      const interval = setInterval(check, 15);
+      const onAbort = () => {
+        cleanup();
+        resolve();
+      };
+      const cleanup = () => {
+        clearInterval(interval);
+        exitWaiters.delete(check);
+        signal.removeEventListener('abort', onAbort);
+      };
+      exitWaiters.add(check);
+      signal.addEventListener('abort', onAbort, { once: true });
+    }),
+  };
+  const ledger = typed.ownership !== undefined && typed.ownership !== null && typeof typed.ownership === 'object' && !Array.isArray(typed.ownership)
+    ? /** @type {CoreOwnership} */ (typed.ownership)
+    : defaultOwnership;
+
+  /**
+   * Default handshake observer: waits for either the core Connect journal
+   * event (`$XDG_STATE_HOME/metaviewer/sessions/$MV_SESSION_ID/events/1.json`,
+   * matching `tests/e2e/e2e1_slice/stack.py`) or an `ADAPTER_HANDSHAKE_OK`
+   * stdout line from a test adapter binary.
+   * @param {{pid: number, env: Readonly<Record<string, string>>, signal: AbortSignal}} ctx
+   * @returns {Promise<void>}
+   */
+  async function defaultHandshake(ctx) {
+    const stateHome = ctx.env.XDG_STATE_HOME;
+    const sessionId = ctx.env.MV_SESSION_ID;
+    const eventFile = typeof stateHome === 'string' && stateHome.length > 0 &&
+        typeof sessionId === 'string' && sessionId.length > 0
+      ? join(stateHome, 'metaviewer', 'sessions', sessionId, 'events', '1.json')
+      : null;
+    while (!ctx.signal.aborted) {
+      if (exitedPids.has(ctx.pid) || availability === 'degraded' || availability === 'unavailable') {
+        throw new CoreLauncherError('ADAPTER_EXITED', 'adapter exited before handshake completed');
+      }
+      if (stdoutHandshake) {
+        return;
+      }
+      if (eventFile !== null) {
+        try {
+          const st = statSync(eventFile);
+          if (st.isFile() && st.size > 0) {
+            return;
+          }
+        } catch {
+          /* poll until deadline */
+        }
+      }
+      await new Promise((resolve) => {
+        const timer = setTimeout(resolve, 20);
+        resolveStdoutHandshake = () => {
+          clearTimeout(timer);
+          resolve(undefined);
+        };
+        ctx.signal.addEventListener('abort', () => {
+          clearTimeout(timer);
+          resolve(undefined);
+        }, { once: true });
+      });
+    }
+    throw new CoreLauncherError('ADAPTER_HANDSHAKE_TIMEOUT', 'adapter handshake aborted');
+  }
+
+  const handshakeFn = typeof typed.handshake === 'function'
+    ? /** @type {(context: {pid: number, env: Readonly<Record<string, string>>, signal: AbortSignal}) => Promise<unknown>} */ (typed.handshake)
+    : defaultHandshake;
+
+  /**
+   * @returns {AdapterStatus} Frozen status snapshot.
+   */
+  function getStatus() {
+    return Object.freeze({
+      availability,
+      pid,
+      code,
+      reason,
+      userMessage,
+      spawnCount,
+      handshakeSeen,
+    });
+  }
+
+  /**
+   * @returns {void}
+   */
+  function emitStatus() {
+    if (onStatus !== null) {
+      try {
+        onStatus(getStatus());
+      } catch {
+        /* listener exceptions never escape */
+      }
+    }
+  }
+
+  /**
+   * Transition to a typed, user-visible degraded state (core-only).
+   * @param {'ADAPTER_ABSENT' | 'OPENSUPERFICIES_ABSENT' | 'ADAPTER_CRASHED'} degradedCode
+   * @param {string} detail
+   * @returns {AdapterStatus}
+   */
+  function setDegraded(degradedCode, detail) {
+    if (availability !== 'degraded' && availability !== 'unavailable') {
+      availability = 'degraded';
+      code = degradedCode;
+      reason = detail;
+      userMessage = degradedCode === 'OPENSUPERFICIES_ABSENT'
+        ? `Degraded mode (${degradedCode}): OpenSuperficies (MV_SRF_BIN_DIR) is absent; capsules are unavailable and MetaViewer is running core-only.`
+        : degradedCode === 'ADAPTER_ABSENT'
+          ? `Degraded mode (${degradedCode}): Bundled daemon adapter is absent; capsules are unavailable and MetaViewer is running core-only.`
+          : `Degraded mode (${degradedCode}): Bundled daemon adapter exited unexpectedly (${detail}); capsules are unavailable and MetaViewer is running core-only.`;
+      emitStatus();
+    }
+    return getStatus();
+  }
+
+  /**
+   * Stop the owned adapter child tree using strict kill-guard rules
+   * (`validateKillTarget`: primitive safe integer `pid > 1` only, never
+   * `selfPid` or `selfPgid`).
+   * @returns {Promise<void>}
+   */
+  async function stopChild() {
+    if (pid === null) {
+      return;
+    }
+    /** @type {ReadonlyArray<unknown>} */
+    let listed = [];
+    try {
+      const result = ledger.ownedPids();
+      if (!Array.isArray(result)) {
+        return;
+      }
+      listed = result;
+    } catch {
+      return;
+    }
+    /** @type {Array<number>} */
+    const candidates = [];
+    for (let index = listed.length - 1; index >= 0; index -= 1) {
+      const candidate = listed[index];
+      if (!validateKillTarget(candidate, selfPid, selfPgid)) {
+        continue;
+      }
+      const target = /** @type {number} */ (candidate);
+      if (exitedPids.has(target) || candidates.includes(target)) {
+        continue;
+      }
+      candidates.push(target);
+    }
+    if (pid !== null && validateKillTarget(pid, selfPid, selfPgid) && !exitedPids.has(pid) && !candidates.includes(pid)) {
+      candidates.push(pid);
+    }
+    /** @type {Array<number>} */
+    const signalled = [];
+    for (const target of candidates) {
+      try {
+        killFn(target, 'SIGTERM');
+        signalled.push(target);
+      } catch {
+        signalled.push(target);
+      }
+    }
+    for (const target of signalled) {
+      try {
+        await withTimeout(
+          (signal) => ledger.waitForExit(target, signal),
+          bounds.shutdownTimeoutMs,
+          'SHUTDOWN_TIMEOUT',
+        );
+      } catch {
+        if (validateKillTarget(target, selfPid, selfPgid)) {
+          try {
+            killFn(target, 'SIGKILL');
+          } catch {
+            /* fall through to bounded rewait */
+          }
+        }
+        try {
+          await withTimeout(
+            (signal) => ledger.waitForExit(target, signal),
+            bounds.shutdownTimeoutMs,
+            'SHUTDOWN_TIMEOUT',
+          );
+        } catch {
+          /* teardown never rejects */
+        }
+      }
+    }
+  }
+
+  /**
+   * @param {unknown} chunk
+   * @returns {void}
+   */
+  function onStdoutData(chunk) {
+    if (availability === 'degraded' || availability === 'unavailable') {
+      return;
+    }
+    /** @type {Uint8Array | null} */
+    let bytes = null;
+    if (typeof chunk === 'string') {
+      bytes = Buffer.from(chunk, 'utf8');
+    } else if (chunk instanceof Uint8Array) {
+      bytes = chunk;
+    }
+    if (bytes === null) {
+      setDegraded('ADAPTER_CRASHED', 'adapter stdout protocol violation: chunk is not bytes');
+      void stopChild();
+      return;
+    }
+    for (let index = 0; index < bytes.length; index += 1) {
+      pendingLine.push(/** @type {number} */ (bytes[index]));
+    }
+    for (;;) {
+      const newline = pendingLine.indexOf(10);
+      if (newline === -1) {
+        if (pendingLine.length > bounds.maxStdoutLineBytes) {
+          pendingLine = [];
+          setDegraded('ADAPTER_CRASHED', 'adapter stdout line exceeds byte bound');
+          void stopChild();
+        }
+        return;
+      }
+      const raw = pendingLine.slice(0, newline);
+      pendingLine = pendingLine.slice(newline + 1);
+      if (raw.length > bounds.maxStdoutLineBytes) {
+        pendingLine = [];
+        setDegraded('ADAPTER_CRASHED', 'adapter stdout line exceeds byte bound');
+        void stopChild();
+        return;
+      }
+      try {
+        const line = Buffer.from(raw).toString('utf8').trim();
+        if (line === 'ADAPTER_HANDSHAKE_OK') {
+          stdoutHandshake = true;
+          resolveStdoutHandshake?.();
+        }
+      } catch {
+        pendingLine = [];
+        setDegraded('ADAPTER_CRASHED', 'adapter stdout line is not valid UTF-8');
+        void stopChild();
+        return;
+      }
+    }
+  }
+
+  /**
+   * @param {unknown} chunk
+   * @returns {void}
+   */
+  function onStderrData(chunk) {
+    if (availability === 'degraded' || availability === 'unavailable') {
+      return;
+    }
+    /** @type {Uint8Array | null} */
+    let bytes = null;
+    if (typeof chunk === 'string') {
+      bytes = Buffer.from(chunk, 'utf8');
+    } else if (chunk instanceof Uint8Array) {
+      bytes = chunk;
+    }
+    if (bytes === null) {
+      return;
+    }
+    for (let index = 0; index < bytes.length; index += 1) {
+      stderrTail.push(/** @type {number} */ (bytes[index]));
+    }
+    if (stderrTail.length > bounds.maxStderrTailBytes) {
+      stderrTail = stderrTail.slice(stderrTail.length - bounds.maxStderrTailBytes);
+    }
+  }
+
+  /**
+   * @param {unknown} exitCode
+   * @param {unknown} exitSignal
+   * @returns {void}
+   */
+  function onChildExit(exitCode, exitSignal) {
+    if (pid !== null) {
+      exitedPids.add(pid);
+    }
+    for (const waiter of exitWaiters) {
+      try {
+        waiter();
+      } catch {
+        /* best-effort */
+      }
+    }
+    resolveStdoutHandshake?.();
+    pendingLine = [];
+    if (!disposing) {
+      setDegraded('ADAPTER_CRASHED', `adapter child exited (code=${String(exitCode)} signal=${String(exitSignal)})`);
+    }
+  }
+
+  /**
+   * Single-flight start implementation. Never throws and never respawns.
+   * @returns {Promise<AdapterStatus>}
+   */
+  async function runStart() {
+    const check = preflight(command, scrubbed);
+    if (!check.ok) {
+      return setDegraded(check.code, check.reason);
+    }
+    availability = 'starting';
+    spawnCount += 1;
+    emitStatus();
+    /** @type {unknown} */
+    let spawned = null;
+    try {
+      const result = spawnFn(command, hostArgs, {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        shell: false,
+        env: scrubbed,
+      });
+      if (typeof result === 'object' && result !== null) {
+        spawned = result;
+      }
+    } catch {
+      spawned = null;
+    }
+    if (spawned === null) {
+      return setDegraded('ADAPTER_CRASHED', 'adapter spawn failed');
+    }
+    const child = /** @type {Record<string, unknown>} */ (spawned);
+    const childPid = child.pid;
+    if (!validateKillTarget(childPid, selfPid, selfPgid)) {
+      return setDegraded('ADAPTER_CRASHED', 'adapter spawn failed: unsafe child pid');
+    }
+    pid = /** @type {number} */ (childPid);
+    const stdout = child.stdout;
+    const stderr = child.stderr;
+    if (
+      stdout === null || typeof stdout !== 'object' || Array.isArray(stdout) ||
+      stderr === null || typeof stderr !== 'object' || Array.isArray(stderr) ||
+      typeof /** @type {Record<string, unknown>} */ (stdout).on !== 'function' ||
+      typeof /** @type {Record<string, unknown>} */ (stderr).on !== 'function' ||
+      typeof child.on !== 'function'
+    ) {
+      return setDegraded('ADAPTER_CRASHED', 'adapter spawn failed: malformed child handle');
+    }
+    try {
+      /** @type {{on: (event: string, listener: (...args: Array<unknown>) => void) => unknown}} */ (stdout).on('data', onStdoutData);
+      /** @type {{on: (event: string, listener: (...args: Array<unknown>) => void) => unknown}} */ (stdout).on('error', () => {
+        if (!disposing) {
+          setDegraded('ADAPTER_CRASHED', 'adapter stdout stream error');
+          void stopChild();
+        }
+      });
+      /** @type {{on: (event: string, listener: (...args: Array<unknown>) => void) => unknown}} */ (stderr).on('data', onStderrData);
+      /** @type {{on: (event: string, listener: (...args: Array<unknown>) => void) => unknown}} */ (stderr).on('error', () => {
+        /* stderr alone never fails the child */
+      });
+      /** @type {(event: string, listener: (...args: Array<unknown>) => void) => unknown} */ (child.on).call(child, 'error', () => {
+        if (!disposing) {
+          setDegraded('ADAPTER_CRASHED', 'adapter child error');
+          void stopChild();
+        }
+      });
+      /** @type {(event: string, listener: (...args: Array<unknown>) => void) => unknown} */ (child.on).call(child, 'exit', onChildExit);
+      /** @type {(event: string, listener: (...args: Array<unknown>) => void) => unknown} */ (child.on).call(child, 'close', () => {
+        if (pid !== null) {
+          exitedPids.add(pid);
+        }
+        for (const waiter of exitWaiters) {
+          try {
+            waiter();
+          } catch {
+            /* best-effort */
+          }
+        }
+        resolveStdoutHandshake?.();
+        if (!disposing && availability === 'live') {
+          setDegraded('ADAPTER_CRASHED', 'adapter child closed');
+        }
+      });
+    } catch {
+      return setDegraded('ADAPTER_CRASHED', 'adapter spawn failed: listener wiring refused');
+    }
+    try {
+      await withTimeout(
+        (signal) => handshakeFn({ pid: /** @type {number} */ (pid), env: scrubbed, signal }),
+        bounds.handshakeTimeoutMs,
+        'ADAPTER_HANDSHAKE_TIMEOUT',
+      );
+    } catch (error) {
+      await stopChild();
+      const detail = error instanceof Error ? error.message : 'adapter handshake failed';
+      return setDegraded('ADAPTER_CRASHED', detail);
+    }
+    if (exitedPids.has(pid) || getStatus().availability !== 'starting') {
+      await stopChild();
+      return setDegraded('ADAPTER_CRASHED', 'adapter exited during handshake');
+    }
+    handshakeSeen = true;
+    availability = 'live';
+    code = 'ADAPTER_LIVE';
+    reason = null;
+    userMessage = null;
+    emitStatus();
+    return getStatus();
+  }
+
+  /**
+   * Single-flight start. Repeated calls return the shared promise and never respawn.
+   * @returns {Promise<AdapterStatus>}
+   */
+  function start() {
+    if (disposePromise !== null || availability === 'degraded' || availability === 'unavailable' || availability === 'live') {
+      return Promise.resolve(getStatus());
+    }
+    if (startPromise !== null) {
+      return startPromise;
+    }
+    startPromise = runStart();
+    return startPromise;
+  }
+
+  /**
+   * Idempotent teardown. Reaps owned adapter pids with `validateKillTarget`.
+   * @returns {Promise<void>}
+   */
+  function dispose() {
+    if (disposePromise !== null) {
+      return disposePromise;
+    }
+    disposing = true;
+    if (availability !== 'degraded' && availability !== 'unavailable') {
+      availability = 'unavailable';
+      code = 'ADAPTER_DISPOSED';
+      if (reason === null) {
+        reason = 'disposed';
+      }
+      userMessage = null;
+      emitStatus();
+    }
+    disposePromise = stopChild();
+    return disposePromise;
+  }
+
+  return Object.freeze({ start, dispose, getStatus });
 }

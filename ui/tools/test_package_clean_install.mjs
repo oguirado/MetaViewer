@@ -6,9 +6,11 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { createServer } from 'node:net';
 import { createPackage } from '@electron/asar';
 import { buildFuseConfig } from '../electron/main.js';
-import { packageArchitecture, verifyBinary, applyFuses, assertSmokeOutput, bundlePackage, sealRendererAssets, verifyInstall, writeManifest } from './package.js';
+import { createAdapterLauncher } from '../electron/coreLauncher.js';
+import { packageArchitecture, verifyBinary, applyFuses, assertSmokeOutput, bundlePackage, sealRendererAssets, verifyInstall, verifySmokeAdapterReceipt, writeFakeSmokeAdapter, writeManifest } from './package.js';
 
 async function fixture(run) {
   const temporary=await fs.mkdtemp(join(tmpdir(),'mv-pkg-test-'));
@@ -118,4 +120,95 @@ test('native runner mapping selects archive, package name and ELF machine; unkno
   }
   assert.equal(packageArchitecture().arch, process.arch);
   assert.throws(() => packageArchitecture('riscv64'), /PKG_ARCH_UNSUPPORTED/);
+});
+
+test('clean-install smoke fake adapter starts, completes core hello handshake, and is reaped on quit', async () => {
+  const dir = await fs.mkdtemp(join(tmpdir(), 'mv-smoke-adapter-'));
+  try {
+    const runtime = join(dir, 'runtime');
+    const srfBinDir = join(dir, 'srf-bin');
+    const stateHome = join(dir, 'state');
+    await fs.mkdir(join(runtime, 'metaviewer'), { recursive: true, mode: 0o700 });
+    await fs.mkdir(srfBinDir, { recursive: true, mode: 0o700 });
+    await fs.mkdir(stateHome, { recursive: true, mode: 0o700 });
+    const sessionId = 'pkg-smoke-test-session';
+    const commit = 'a'.repeat(40);
+    const config = {
+      session_id: sessionId,
+      core: {
+        endpoint: { component: 'core', instance: 'core-1' },
+        hello: { schema: 'hello/v0.2', contract_version: 'v0.2', component: 'core', component_version: '0.1.1', component_commit: commit, dependencies: [] },
+      },
+      peers: [{
+        endpoint: { component: 'daemon', instance: 'daemon-1' },
+        hello: { schema: 'hello/v0.2', contract_version: 'v0.2', component: 'daemon', component_version: '0.1.1', component_commit: commit, dependencies: [] },
+      }],
+    };
+    const configPath = join(runtime, 'config.json');
+    await fs.writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
+    const sockPath = join(runtime, 'metaviewer/core.sock');
+    let serverHelloSeen = false;
+    const server = createServer((conn) => {
+      let buf = '';
+      conn.on('data', (chunk) => {
+        buf += chunk.toString('utf8');
+        if (buf.includes('\n')) {
+          const msg = JSON.parse(buf.split('\n')[0]);
+          if (msg.from?.component === 'daemon' && msg.body?.schema === 'hello/v0.2') {
+            serverHelloSeen = true;
+            conn.write(JSON.stringify({
+              schema: 'envelope/v0.2',
+              msg_id: 'core-hello',
+              ts_ns: 0,
+              from: config.core.endpoint,
+              to: msg.from,
+              session_id: sessionId,
+              seq: 1,
+              nonce: 'core-nonce',
+              body: config.core.hello,
+            }) + '\n');
+          }
+        }
+      });
+    });
+    await new Promise((resolve) => server.listen(sockPath, resolve));
+    try {
+      const adapterBin = join(dir, 'mv-daemon-adapter');
+      const receiptPath = join(dir, 'adapter-receipt.json');
+      await writeFakeSmokeAdapter(adapterBin, receiptPath);
+      await assert.rejects(verifySmokeAdapterReceipt(receiptPath, srfBinDir), /PKG_SMOKE_ADAPTER_RECEIPT_MISSING/);
+      const launcher = createAdapterLauncher({
+        command: adapterBin,
+        env: {
+          PATH: process.env.PATH || '/usr/bin:/bin',
+          MV_CORE_CONFIG: configPath,
+          MV_SESSION_ID: sessionId,
+          MV_CORE_INSTANCE: 'core-1',
+          MV_DAEMON_INSTANCE: 'daemon-1',
+          MV_SRF_BIN_DIR: srfBinDir,
+          XDG_STATE_HOME: stateHome,
+        },
+        runtimeDir: runtime,
+      });
+      const status = await launcher.start();
+      assert.equal(status.availability, 'live');
+      assert.equal(status.handshakeSeen, true);
+      assert.equal(serverHelloSeen, true);
+      await launcher.dispose();
+      const receipt = await verifySmokeAdapterReceipt(receiptPath, srfBinDir);
+      assert.equal(receipt.handshake, true);
+      assert.equal(receipt.reaped, true);
+      await assert.rejects(verifySmokeAdapterReceipt(receiptPath, '/wrong/srf'), /PKG_SMOKE_ADAPTER_ENV_MISMATCH/);
+      await fs.writeFile(receiptPath, JSON.stringify({ ...receipt, pid: 1 }));
+      await assert.rejects(verifySmokeAdapterReceipt(receiptPath, srfBinDir), /PKG_SMOKE_ADAPTER_PID_INVALID/);
+      await fs.writeFile(receiptPath, JSON.stringify({ ...receipt, handshake: false }));
+      await assert.rejects(verifySmokeAdapterReceipt(receiptPath, srfBinDir), /PKG_SMOKE_ADAPTER_HANDSHAKE_MISSING/);
+      await fs.writeFile(receiptPath, JSON.stringify({ ...receipt, reaped: false }));
+      await assert.rejects(verifySmokeAdapterReceipt(receiptPath, srfBinDir), /PKG_SMOKE_ADAPTER_NOT_REAPED/);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 });

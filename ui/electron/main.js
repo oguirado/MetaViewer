@@ -23,7 +23,7 @@ import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
-import { findForbiddenEnv } from './coreLauncher.js';
+import { createAdapterLauncher, findForbiddenEnv } from './coreLauncher.js';
 
 // [TARGET, unit decision] Packaging seals ASAR renderer bytes into the loaded
 // main module. A replaced archive cannot change the admitted asset contents.
@@ -1441,6 +1441,8 @@ export function createLayoutBridge({directory,app} = {}) {
 
 /**
  * @typedef {import('./coreLauncher.js').CoreLauncher} CoreLauncher
+ * @typedef {import('./coreLauncher.js').AdapterLauncher} AdapterLauncher
+ * @typedef {import('./coreLauncher.js').AdapterStatus} AdapterStatus
  */
 
 /**
@@ -1499,12 +1501,14 @@ export function createLayoutBridge({directory,app} = {}) {
  * @property {ReadonlyArray<BridgeEntry>} bridge Parity-gated IPC registry.
  * @property {{width: number, height: number}} geometry Window geometry.
  * @property {any} [wire] Trusted frame and PTY capabilities, never renderer values.
+ * @property {AdapterLauncher} [adapter] Optional bundled daemon adapter launcher supervised next to core.
  */
 
 /**
  * @typedef {object} MainBoot
  * @property {BootWindowHandle} window Booted window.
  * @property {CoreLauncher} core Core launcher.
+ * @property {AdapterLauncher} [adapter] Supervised adapter launcher when configured.
  * @property {() => Promise<void>} dispose Idempotent teardown.
  */
 
@@ -1598,7 +1602,7 @@ export async function bootProductionMain(handles) {
     fail('BOOT_HANDLES', 'handles must be an object');
   }
   const typed = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (handles));
-  const ownKeys = Object.keys(typed).filter(key => key !== 'wire');
+  const ownKeys = Object.keys(typed).filter(key => key !== 'wire' && key !== 'adapter');
   if (ownKeys.length !== HANDLE_KEYS.length) {
     fail('BOOT_HANDLES', 'handles must carry exactly the boot keys');
   }
@@ -1637,6 +1641,19 @@ export async function bootProductionMain(handles) {
     fail('BOOT_CORE', 'core must provide start, request, dispose and getStatus');
   }
   const core = /** @type {CoreLauncher} */ (/** @type {unknown} */ (coreRec));
+  /** @type {AdapterLauncher | null} */
+  let adapter = null;
+  if (typed.adapter !== undefined && typed.adapter !== null) {
+    const adapterRec = assertHandleObject(typed.adapter, 'adapter');
+    if (
+      typeof adapterRec.start !== 'function' ||
+      typeof adapterRec.dispose !== 'function' ||
+      typeof adapterRec.getStatus !== 'function'
+    ) {
+      fail('BOOT_ADAPTER', 'adapter must provide start, dispose and getStatus');
+    }
+    adapter = /** @type {AdapterLauncher} */ (/** @type {unknown} */ (adapterRec));
+  }
   if (typed.session === null || typeof typed.session !== 'object' || Array.isArray(typed.session)) {
     fail('BOOT_HANDLES', 'session must be an object');
   }
@@ -1717,6 +1734,13 @@ export async function bootProductionMain(handles) {
         /* unwind best-effort */
       }
     }
+    if (adapter !== null) {
+      try {
+        await adapter.dispose();
+      } catch {
+        /* adapter dispose never rejects; guard foreign handles anyway */
+      }
+    }
     try {
       await core.dispose();
     } catch {
@@ -1793,6 +1817,13 @@ export async function bootProductionMain(handles) {
     if (coreStatus === null || coreStatus.availability !== 'live') {
       await unwind();
       fail('CORE_UNAVAILABLE', 'core did not reach live');
+    }
+    if (adapter !== null) {
+      try {
+        await adapter.start();
+      } catch {
+        /* adapter failure transitions to degraded core-only state, never aborts core */
+      }
     }
   }
   try {
@@ -1885,6 +1916,20 @@ export async function bootProductionMain(handles) {
     await unwind();
     fail('LOAD', 'bundle URL load refused');
   }
+  if (!retail.nested && adapter !== null) {
+    try {
+      const adapterStatus = adapter.getStatus();
+      if (typeof contentsHandle.send === 'function') {
+        /** @type {(channel: string, payload: unknown) => void} */ (contentsHandle.send).call(
+          contentsHandle,
+          'metaviewer:adapter-status',
+          adapterStatus,
+        );
+      }
+    } catch {
+      /* status publication best-effort */
+    }
+  }
   let quitting = false;
   try {
     app.on('will-quit', (event) => {
@@ -1931,7 +1976,7 @@ export async function bootProductionMain(handles) {
     await unwind();
   }
 
-  return Object.freeze({ window: built, core, dispose });
+  return Object.freeze(adapter !== null ? { window: built, core, adapter, dispose } : { window: built, core, dispose });
 }
 
 /** Resolve and validate host capabilities before constructing any window.
@@ -1947,12 +1992,33 @@ export async function loadMainBindings(env = process.env, options = {}) {
         || typeof bindings.wire?.frames?.subscribe !== 'function') {
       await bindings?.core?.dispose?.();throw new Error();
     }
+    if (options?.adapter) {
+      bindings.adapter = options.adapter;
+    } else if (typeof env.MV_ADAPTER_BIN === 'string' && env.MV_ADAPTER_BIN.length > 0 && typeof env.XDG_RUNTIME_DIR === 'string' && isAbsolute(env.XDG_RUNTIME_DIR)) {
+      bindings.adapter = createAdapterLauncher({
+        command: env.MV_ADAPTER_BIN,
+        env,
+        runtimeDir: env.XDG_RUNTIME_DIR,
+        callbacks: {
+          onStatus: (status) => {
+            if (status.availability === 'degraded') {
+              try {
+                console.error(`METAVIEWER_ADAPTER_DEGRADED ${JSON.stringify({ code: status.code, reason: status.reason, userMessage: status.userMessage })}`);
+              } catch {
+                /* diagnostics best-effort */
+              }
+            }
+          },
+        },
+        ...(options?.adapterOptions || {}),
+      });
+    }
     return bindings;
   } catch {throw new MainError('CORE_SEAMS_ABSENT','trusted host bindings unavailable');}
 }
 
 /** Direct Electron entry: use the shipped host or an absolute trusted override.
- * Plain Node imports remain inert. @returns {Promise<void>} */
+ * Plain Node imports remain inert. @returns {Promise<MainBoot | undefined>} */
 async function mainDirectEntry() {
   /** @type {Record<string, unknown>} */
   let electron = {};
@@ -2005,13 +2071,14 @@ async function mainDirectEntry() {
       throw new MainError('PROTOCOL', 'privileged scheme registration refused');
     }
     const bindings = await loadMainBindings();
-    await bootProductionMain({ core:bindings.core, wire:bindings.wire, electronVersion: running,
+    const boot = await bootProductionMain({ core:bindings.core, wire:bindings.wire, ...(bindings.adapter ? {adapter:bindings.adapter} : {}), electronVersion: running,
       app: electron.app, BrowserWindow: electron.BrowserWindow, ipcMain: electron.ipcMain,
       protocol: electron.protocol, session: electron.session, argv, env: process.env,
       shellRoot: fileURLToPath(new URL('..',import.meta.url)),
       runtime: {xdgRuntimeDir:process.env.XDG_RUNTIME_DIR || '',uid:process.getuid ? process.getuid() : -1},
       geometry: DEFAULT_GEOMETRY, bridge:createLayoutBridge({app:/** @type {BootAppHandle} */ (electron.app)}) });
     console.log('METAVIEWER_MAIN_READY');
+    return boot;
   } catch (error) {
     failClosed(error);
   }

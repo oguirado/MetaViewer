@@ -179,12 +179,13 @@ export async function sealRendererAssets(app) {
     `const PACKAGED_ASSET_DIGESTS = /** @type {Readonly<Record<string, string>>} */ (Object.freeze(${JSON.stringify(hashes)}));`));
 }
 
-// [TARGET, unit decision] The delivered entry owns a fresh real-core session.
-// Adapter bytes are shipped and pinned; launching surfaces still requires the
-// operator's pinned OpenSuperficies deployment (MV_SRF_BIN_DIR), never a stub.
+// [TARGET, unit decision] The delivered entry owns a fresh real-core session and
+// supervises the bundled adapter next to core when OpenSuperficies (MV_SRF_BIN_DIR)
+// is configured, degrading cleanly to core-only when absent.
 const productionEntry = String.raw`
 import { app } from 'electron';
 import { mainDirectEntry, validateRetailLaunch } from './main.js';
+import { scrubChildEnv, validateKillTarget } from './coreLauncher.js';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import * as fs from 'node:fs/promises';
@@ -202,6 +203,14 @@ else if (process.argv.includes('--nested-depth=1')) {
   const runtime = await fs.mkdtemp(join(tmpdir(), 'mv-pkg-'));
   await fs.chmod(runtime, 0o700);
   await fs.mkdir(join(runtime, 'metaviewer'), {mode:0o700});
+  const stateHome = join(runtime, 'state');
+  const configHome = join(runtime, 'config');
+  const srfStateDir = process.env.MV_SRF_STATE_DIR || join(runtime, 'srf-state');
+  const srfIdentityRoot = process.env.SRF_IDENTITY_STORE_ROOT || join(runtime, 'srf-identity');
+  for (const dir of [stateHome, configHome, srfStateDir, srfIdentityRoot]) {
+    await fs.mkdir(dir, {recursive:true, mode:0o700});
+    await fs.chmod(dir, 0o700);
+  }
   const registration = component => ({endpoint:{component,instance:component+'-'+randomUUID()},hello:{
     schema:'hello/v0.2',contract_version:'v0.2',component,component_version:pin.version,
     component_commit:pin.commit,dependencies:[]}});
@@ -209,22 +218,49 @@ else if (process.argv.includes('--nested-depth=1')) {
     peers:['daemon','agent','ui'].map(registration)};
   const configPath = join(runtime, 'config.json');
   await fs.writeFile(configPath, JSON.stringify(config), {mode:0o600});
+  const daemonPeer = config.peers.find(p => p.endpoint.component === 'daemon');
   process.env.XDG_RUNTIME_DIR = runtime;
   process.env.MV_CORE_CONFIG = configPath;
+  process.env.XDG_STATE_HOME = stateHome;
+  process.env.XDG_CONFIG_HOME = configHome;
+  process.env.MV_SESSION_ID = config.session_id;
+  process.env.MV_CORE_INSTANCE = config.core.endpoint.instance;
+  process.env.MV_DAEMON_INSTANCE = daemonPeer.endpoint.instance;
+  process.env.MV_COMPONENT_COMMIT = pin.commit;
+  process.env.MV_CONTRACT_DIR = join(process.resourcesPath, 'contracts/v0.2');
+  process.env.MV_SRF_STATE_DIR = srfStateDir;
+  process.env.SRF_IDENTITY_STORE_ROOT = srfIdentityRoot;
+  process.env.SRF_PROXY_REGISTRY = process.env.SRF_PROXY_REGISTRY || join(runtime, 'srf-proxy-registry.json');
+  process.env.MV_ADAPTER_BIN = join(process.resourcesPath, 'bin/mv-daemon-adapter');
   delete process.env.MV_CORE_BOOTSTRAP;
-  const env = {...process.env, XDG_STATE_HOME:join(runtime,'state')};
-  const core = spawn(join(process.resourcesPath,'bin/metaviewer-core'), [], {env,stdio:['ignore','ignore','pipe']});
+  const coreEnv = {...scrubChildEnv(process.env, runtime), XDG_STATE_HOME:stateHome, MV_CORE_CONFIG:configPath};
+  const core = spawn(join(process.resourcesPath,'bin/metaviewer-core'), [], {env:coreEnv,stdio:['pipe','pipe','pipe'],shell:false});
   let failure;
   core.on('error', error => {failure=error;});
+  core.stdout.on('data', () => {});
   core.stderr.on('data', bytes => process.stderr.write(bytes));
+  let boot = null;
   const stop = async () => {
-    if (core.pid && core.exitCode === null && core.signalCode === null) {
-      const exited = once(core,'exit'); core.kill('SIGKILL'); await exited;
+    await boot?.dispose?.();
+    if (validateKillTarget(core.pid, process.pid, process.pid) && core.exitCode === null && core.signalCode === null) {
+      const exited = once(core,'exit');
+      try {process.kill(core.pid,'SIGTERM');} catch {}
+      const killer = setTimeout(() => {
+        if (validateKillTarget(core.pid, process.pid, process.pid) && core.exitCode === null && core.signalCode === null) {
+          try {process.kill(core.pid,'SIGKILL');} catch {}
+        }
+      }, 1500);
+      await exited;
+      clearTimeout(killer);
     }
     await fs.rm(runtime,{recursive:true,force:true});
   };
-  app.on('will-quit', () => {core.kill('SIGKILL');});
-  process.on('exit', () => {core.kill('SIGKILL');});
+  app.on('will-quit', () => {
+    if (validateKillTarget(core.pid, process.pid, process.pid)) {try {process.kill(core.pid,'SIGTERM');} catch {}}
+  });
+  process.on('exit', () => {
+    if (validateKillTarget(core.pid, process.pid, process.pid)) {try {process.kill(core.pid,'SIGKILL');} catch {}}
+  });
   const deadline = Date.now()+10000;
   try {
     for (;;) {
@@ -232,16 +268,29 @@ else if (process.argv.includes('--nested-depth=1')) {
       try {await fs.access(join(runtime,'metaviewer/core.sock'));break;} catch {}
       await new Promise(resolve => setTimeout(resolve,25));
     }
+    let entry;
     if (process.env.MV_PACKAGE_SMOKE === '1') {
       const log = console.log;
       console.log = (...args) => {
         log(...args);
         if (args[0] === 'METAVIEWER_MAIN_READY') {
-          void stop().then(() => {log('METAVIEWER_MAIN_SMOKE_OK');app.exit(0);}, error => {console.error(error);app.exit(1);});
+          void Promise.resolve().then(() => entry).then(async resolvedBoot => {
+            boot = resolvedBoot;
+            if (process.env.MV_SRF_BIN_DIR) {
+              const st = boot?.adapter?.getStatus?.();
+              if (!st || st.availability !== 'live' || st.handshakeSeen !== true) {
+                throw new Error('PKG_ADAPTER_START_FAILED');
+              }
+            }
+            await stop();
+            log('METAVIEWER_MAIN_SMOKE_OK');
+            app.exit(0);
+          }).catch(error => {console.error(error);app.exit(1);});
         }
       };
     }
-    void mainDirectEntry();
+    entry = mainDirectEntry().then(resolved => {boot = resolved; return resolved;});
+    void entry;
   } catch(error) {console.error(error);await stop();app.exit(1);}
 }
 `;
@@ -325,6 +374,108 @@ export function assertSmokeOutput(stdout) {
   if (!stdout.split('\n').includes('METAVIEWER_MAIN_SMOKE_OK')) throw new Error('PKG_SMOKE_MARKER_MISSING');
 }
 
+/**
+ * Write a deterministic fake adapter executable for clean-install smoke testing
+ * (never uses the live capsule). Connects to the real core socket, completes the
+ * daemon hello/v0.2 handshake, records its scrubbed environment and PID, and
+ * records SIGTERM reaping on quit.
+ * @param {string} destination
+ * @param {string} receiptPath
+ */
+export async function writeFakeSmokeAdapter(destination, receiptPath) {
+  const script = `#!${process.execPath}
+import { createConnection } from 'node:net';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+const receiptPath = ${JSON.stringify(receiptPath)};
+const record = {
+  pid: process.pid,
+  started: true,
+  handshake: false,
+  reaped: false,
+  srfBinDir: process.env.MV_SRF_BIN_DIR || null,
+  sessionId: process.env.MV_SESSION_ID || null,
+  envKeys: Object.keys(process.env).sort(),
+};
+const save = () => { try { writeFileSync(receiptPath, JSON.stringify(record)); } catch {} };
+save();
+process.on('SIGTERM', () => {
+  record.reaped = true;
+  save();
+  process.exit(0);
+});
+const config = JSON.parse(readFileSync(process.env.MV_CORE_CONFIG, 'utf8'));
+const daemon = config.peers.find(p => p.endpoint.component === 'daemon');
+const sock = createConnection(join(process.env.XDG_RUNTIME_DIR, 'metaviewer/core.sock'));
+let buf = '';
+sock.on('connect', () => {
+  const env = {
+    schema: 'envelope/v0.2',
+    msg_id: 'smoke-daemon-hello',
+    ts_ns: 0,
+    from: daemon.endpoint,
+    to: config.core.endpoint,
+    session_id: config.session_id,
+    seq: 1,
+    nonce: randomUUID(),
+    body: daemon.hello,
+  };
+  sock.write(JSON.stringify(env) + '\\n');
+});
+sock.on('data', chunk => {
+  buf += chunk.toString('utf8');
+  if (buf.includes('\\n')) {
+    record.handshake = true;
+    save();
+    process.stdout.write('ADAPTER_HANDSHAKE_OK\\n');
+  }
+});
+sock.on('error', () => {});
+setInterval(() => {}, 1000);
+`;
+  await fs.writeFile(destination, script, { mode: 0o755 });
+}
+
+/**
+ * Verify that the fake adapter in the smoke test started with a valid PID > 1,
+ * observed the core handshake, received the scrubbed environment subset, and
+ * was reaped on quit.
+ * @param {string} receiptPath
+ * @param {string} expectedSrfBinDir
+ */
+export async function verifySmokeAdapterReceipt(receiptPath, expectedSrfBinDir) {
+  let receipt;
+  try {
+    receipt = JSON.parse(await fs.readFile(receiptPath, 'utf8'));
+  } catch {
+    throw new Error('PKG_SMOKE_ADAPTER_RECEIPT_MISSING');
+  }
+  if (typeof receipt?.pid !== 'number' || !Number.isSafeInteger(receipt.pid) || receipt.pid <= 1) {
+    throw new Error('PKG_SMOKE_ADAPTER_PID_INVALID');
+  }
+  if (receipt.started !== true || receipt.handshake !== true) {
+    throw new Error('PKG_SMOKE_ADAPTER_HANDSHAKE_MISSING');
+  }
+  if (receipt.srfBinDir !== expectedSrfBinDir || typeof receipt.sessionId !== 'string' || !receipt.sessionId.startsWith('pkg-')) {
+    throw new Error('PKG_SMOKE_ADAPTER_ENV_MISMATCH');
+  }
+  if (receipt.reaped !== true) {
+    throw new Error('PKG_SMOKE_ADAPTER_NOT_REAPED');
+  }
+  let alive = false;
+  try {
+    process.kill(receipt.pid, 0);
+    alive = true;
+  } catch {
+    alive = false;
+  }
+  if (alive) {
+    throw new Error('PKG_SMOKE_ADAPTER_STILL_ALIVE');
+  }
+  return receipt;
+}
+
 /** Extract actual product bytes, trace all descendants, refuse source access.
  * @param {string} artifact */
 export async function cleanInstallSmoke(artifact) {
@@ -356,13 +507,25 @@ export async function cleanInstallSmoke(artifact) {
     try {await expectReason('PKG_BINARY_MISSING: mv-daemon-adapter');}
     finally {await fs.rename(`${adapter}.control`,adapter);}
     await verifyInstall(installed);
-    const trace=join(clean,'files.trace');
+    const srfBinDir=join(clean,'srf-bin');
+    await fs.mkdir(srfBinDir,{mode:0o700});
+    const receiptPath=join(clean,'adapter-smoke-receipt.json');
+    await fs.rename(adapter,`${adapter}.real`);
+    try {
+      await writeFakeSmokeAdapter(adapter,receiptPath);
+      const trace=join(clean,'files.trace');
+      const env={PATH:process.env.PATH,HOME:clean,LANG:'C.UTF-8',MV_PACKAGE_SMOKE:'1',MV_SRF_BIN_DIR:srfBinDir};
+      const result=await execute('xvfb-run',['-a','strace','-f','-e','trace=file','-o',trace,
+        join(installed,'metaviewer'),`--user-data-dir=${join(clean,'profile')}`],{cwd:clean,env,timeout:30000,maxBuffer:1024*1024});
+      assertSmokeOutput(result.stdout);
+      await verifySmokeAdapterReceipt(receiptPath,srfBinDir);
+      const accesses=await fs.readFile(trace,'utf8');
+      if (accesses.includes(repo) || accesses.includes(await fs.realpath(repo))) throw new Error('PKG_SOURCE_ACCESS');
+    } finally {
+      await fs.rename(`${adapter}.real`,adapter);
+    }
+    await verifyInstall(installed);
     const env={PATH:process.env.PATH,HOME:clean,LANG:'C.UTF-8',MV_PACKAGE_SMOKE:'1'};
-    const result=await execute('xvfb-run',['-a','strace','-f','-e','trace=file','-o',trace,
-      join(installed,'metaviewer'),`--user-data-dir=${join(clean,'profile')}`],{cwd:clean,env,timeout:30000,maxBuffer:1024*1024});
-    assertSmokeOutput(result.stdout);
-    const accesses=await fs.readFile(trace,'utf8');
-    if (accesses.includes(repo) || accesses.includes(await fs.realpath(repo))) throw new Error('PKG_SOURCE_ACCESS');
     let refused=false, refusalDetail='';
     try {
       await execute('xvfb-run',['-a',join(installed,'metaviewer'),
@@ -497,8 +660,8 @@ The adapter is resources/bin/mv-daemon-adapter; its deployment requires
 MV_CONTRACT_DIR pointing to resources/contracts/v0.2, MV_COMPONENT_COMMIT
 from electron/package-pin.json inside app.asar, and the trusted session
 registration/runtime environment documented by the adapter's existing ABI.
-This package starts the core and UI; it does not automatically start the adapter
-or create surfaces. The clean-install smoke proves real-core UI startup only.
+When MV_SRF_BIN_DIR is configured, main supervises the bundled adapter next to
+the core; when absent, it starts core-only in a typed degraded state.
 `);
     await applyFuses(join(built[0], 'metaviewer'), fuseConfig);
     await verifyPackagedSecurity(built[0]);
