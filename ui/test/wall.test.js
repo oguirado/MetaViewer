@@ -890,3 +890,19 @@ export default defineComponent({
   });
 });
 
+
+describe('diagnostic lost tile admission', async () => {
+  const wall = await loadWallModule();
+  test('only explicit diagnostic mode presents lost surfaces; destroyed and identity mismatches remain refused', () => {
+    for (const allowLostSurface of [undefined, false, true]) {
+      const rows = [...makeRows(), { id: 'wrong-id', surfaceId: 'cap-mismatch', backendLifecycle: 'lost' }];
+      const controller = wall.createWallWorkspaceController({ projectionView: makeProjectionView(rows), allowLostSurface });
+      const api = makeFakeApi();
+      controller.handleReady({ api, windows: makeFakeWindows() });
+      assert.equal(controller.revealSurface('cap-gone', 'tab').ok, allowLostSurface === true);
+      assert.equal(controller.revealSurface('cap-dead', 'tab').error.code, 'ERR_SURFACE_GONE');
+      assert.equal(controller.revealSurface('cap-mismatch', 'tab').error.code, 'ERR_ROW_IDENTITY_MISMATCH');
+      assert.equal(api.panels.size, allowLostSurface === true ? 1 : 0);
+    }
+  });
+});

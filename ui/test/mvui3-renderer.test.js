@@ -66,6 +66,7 @@ for (const withHost of [true, false]) test(`App multislot fold/unfold with host=
       fixture: { key: 'multislot', ui: {}, capsules: [row] }, layout: {}, scope: {}, storage: {},
       runtime: { projectionView: feed },
       authorityHost: withHost ? { intent: async body => { calls.push(body); return true; } } : null,
+      onSubmitIntent: body => calls.push(body),
     });
     await flush();
     const button = () => nodes(mounted.root).find(n => n.props?.id === 'cuk-ai-slot-cap-01-fold');
@@ -74,8 +75,8 @@ for (const withHost of [true, false]) test(`App multislot fold/unfold with host=
     assert.equal(button().props['aria-expanded'], false, 'fold changes the controlled presentation');
     button().props.onClick(); await flush();
     assert.equal(button().props['aria-expanded'], true, 'unfold restores presentation');
-    if (withHost) {
-      assert.deepEqual(calls.map(c => c.op), ['fold', 'unfold']);
+    assert.deepEqual(calls.map(c => c.op), ['fold', 'unfold']);
+    {
       const schema = JSON.parse(readFileSync(new URL('../../contracts/v0.2/ui_intent.schema.json', import.meta.url)));
       for (const body of calls) {
         const branch = schema.oneOf.find(b => b.properties.op.const === body.op);
@@ -88,6 +89,59 @@ for (const withHost of [true, false]) test(`App multislot fold/unfold with host=
       }
       assert.notEqual(calls[0].request_id, calls[1].request_id);
     }
+  } finally {
+    mounted?.app.unmount(); Object.assign(globalThis, previous);
+  }
+});
+
+for (const nested of [false, true]) test(`multislot dispatch preserves fold refusal and event boundaries, nested=${nested}`, async () => {
+  const previous = { document: globalThis.document, window: globalThis.window };
+  globalThis.document = { documentElement: { dataset: {} }, getElementById: () => null };
+  globalThis.window = { addEventListener() {}, removeEventListener() {} };
+  let mounted;
+  try {
+    let slot, outcome;
+    const Multislot = vue.defineComponent({ props: ['folded'], setup: (props, ctx) => {
+      slot = { props, emit: ctx.emit };
+      return () => null;
+    } });
+    const Outcome = vue.defineComponent({ props: ['row'], setup: props => {
+      outcome = props;
+      return () => null;
+    } });
+    const App = await compile('App.vue', {
+      './multislot/MultislotHost.vue': Multislot,
+      './core/HostOutcome.vue': Outcome,
+      '../.kit/capsule-ui-kit/src/index-shell.js': { ShellWorkspace: Wrap, TopBar: Wrap, Sidebar: Empty, StatusBar: Empty },
+      'capsule-ui-kit/ui': { UiButton: Button },
+    });
+    const row = { id: 'cap-01', title: 'Capsule', visibility: 'unfolded', generation: 1 };
+    const refusal = { code: 'ERR_DENIED', message: 'Policy refusal', tone: 'refusal' };
+    const calls = [], events = [];
+    mounted = mountComponent(App, {
+      fixture: { key: 'multislot', ui: {}, capsules: [row] }, layout: {}, scope: {}, storage: {},
+      runtime: { projectionView: { getProjection: () => ({ rows: [row] }), getSnapshot: () => ({}), subscribe: () => () => {} } },
+      nestedHost: nested ? { getNestedDepth: () => 1, getSelfCapsuleId: () => 'self' } : null,
+      authorityHost: { intent: async body => { calls.push(body); return refusal; } },
+      onSubmitIntent: body => events.push(body),
+    });
+    await flush();
+    const intent = buildMultislotFoldIntent('fold', row.id);
+    if (nested) {
+      assert.equal(slot, undefined, 'display-only mode exposes no multislot event source');
+      assert.deepEqual(calls, []);
+      assert.deepEqual(events, []);
+      return;
+    }
+    assert.equal(slot.props.folded, false);
+    slot.emit('submit-intent', intent, row.id); await flush();
+    assert.equal(slot.props.folded, false, 'refusal leaves the unfolded presentation unchanged');
+    assert.deepEqual(calls, [intent]);
+    assert.deepEqual(outcome.row, refusal, 'structured outcome survives without replacement');
+    const legacy = { type: 'fold', capsuleId: row.id };
+    slot.emit('submit-intent', legacy, row.id); await flush();
+    assert.deepEqual(events, [legacy]);
+    assert.deepEqual(calls, [intent], 'legacy event never enters protocol intent port');
   } finally {
     mounted?.app.unmount(); Object.assign(globalThis, previous);
   }
@@ -115,7 +169,7 @@ for (const reply of ['false', 'undefined', 'truthy', 'typed', 'reject', 'true', 
       let settle;
       const pending = new Promise((resolve, reject) => { settle = () => reply === 'reject'
         ? reject(new Error('wire refusal')) : resolve(({ false: false, undefined: undefined, truthy: 1,
-          typed: { code: 'POLICY', tone: 'refusal', message: 'Refused' }, true: true })[reply]); });
+          typed: { code: 'ERR_DENIED', tone: 'refusal', message: 'Policy refusal' }, true: true })[reply]); });
       const calls = [];
       const row = { id: 'cap-01', title: 'Capsule', visibility: 'folded', generation: 1 };
       let publish;
@@ -139,7 +193,9 @@ for (const reply of ['false', 'undefined', 'truthy', 'typed', 'reject', 'true', 
       assert.equal(button().props['aria-expanded'], reply === 'true');
       const outcome = nodes(mounted.root).find(n => n.props?.id === 'mv-host-outcome');
       assert.ok(outcome, 'typed outcome row is rendered');
-      assert.equal(outcome.props['data-outcome-code'], reply === 'true' ? 'INTENT_ACKNOWLEDGED' : 'HOST_REQUEST_REFUSED');
+      assert.equal(outcome.props['data-outcome-code'], reply === 'true' ? 'INTENT_ACKNOWLEDGED'
+        : reply === 'typed' ? 'ERR_DENIED' : 'HOST_REQUEST_REFUSED');
+      if (reply === 'typed') assert.equal(outcome.text, 'This request is unavailable. Please try again.', 'display sanitization keeps its existing safe message');
       assert.equal(outcome.props.role, reply === 'true' ? 'status' : 'alert');
       publish({}); await flush();
       assert.equal(button().props['aria-expanded'], reply === 'true', 'unchanged authority feed cannot create divergence after refusal');

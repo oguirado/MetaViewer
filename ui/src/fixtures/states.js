@@ -15,6 +15,10 @@
  * @property {number} generation - Immutable surface generation.
  * @property {string} visibility - `folded` or `unfolded`.
  * @property {string} control - `human`, `agent`, or `shared`.
+ * @property {string} controlOwner - `human`, `agent`, or `none`.
+ * @property {boolean} folded - Kit presentation axis, mirrors visibility.
+ * @property {{ code: string, message: string }|null} refusal
+ * @property {{ code: string, message: string }|null} readinessError
  * @property {string} attachmentState - `attaching`, `live`, or `disconnected`.
  * @property {string} aiSessionActivity - `unknown`, `ready`, `busy`, or `failed`.
  * @property {string} dispatchOutcome - `none`, `verified`, or `refused`.
@@ -24,6 +28,7 @@
  * @typedef {Object} FixtureAnchor
  * @property {string} anchor - Expected concrete semantic anchor.
  * @property {string} role - Expected effective role.
+ * @property {boolean} [ifPresent] - Validate role/uniqueness when this kit-version-dependent action exists.
  */
 
 /**
@@ -77,7 +82,7 @@ function deepFreeze(value) {
  * @returns {FixtureCapsule}
  */
 function capsule(id, over = {}) {
-  return {
+  const row = {
     id,
     surfaceId: id,
     title: `Capsule ${id}`,
@@ -85,12 +90,19 @@ function capsule(id, over = {}) {
     backendLifecycle: 'active',
     generation: 1,
     visibility: 'unfolded',
-    control: 'human',
+    control: 'shared',
+    controlOwner: 'none',
+    folded: false,
+    refusal: null,
+    readinessError: null,
     attachmentState: 'live',
     aiSessionActivity: 'ready',
     dispatchOutcome: 'none',
     ...over,
   };
+  row.controlOwner = row.control === 'shared' ? 'none' : row.control;
+  row.folded = row.visibility === 'folded';
+  return row;
 }
 
 /**
@@ -113,10 +125,9 @@ function chromeAnchors() {
 function wallCapsuleAnchors(id, withControl = true) {
   const rows = [
     { anchor: `capsule/${id}/panel`, role: 'region' },
-    { anchor: `capsule/${id}/slot`, role: 'region' },
-    { anchor: `capsule/${id}/fold`, role: 'button' },
+    { anchor: `capsule/${id}/fold`, role: 'button', ifPresent: true },
   ];
-  if (withControl) rows.push({ anchor: `capsule/${id}/control`, role: 'button' });
+  if (withControl) rows.push({ anchor: `capsule/${id}/control`, role: 'button', ifPresent: true });
   return rows;
 }
 
@@ -221,7 +232,7 @@ export const FIXTURES = deepFreeze({
       capsule('cap-04', { title: 'Human control tile', control: 'human' }),
       capsule('cap-05', { title: 'Agent acting tile', control: 'agent', aiSessionActivity: 'busy' }),
       capsule('cap-06', { title: 'Lost tile', backendLifecycle: 'lost', attachmentState: 'disconnected', aiSessionActivity: 'unknown' }),
-      capsule('cap-07', { title: 'Error tile', aiSessionActivity: 'failed', dispatchOutcome: 'refused' }),
+      capsule('cap-07', { title: 'Error tile', aiSessionActivity: 'failed', dispatchOutcome: 'refused', refusal: { code: 'ERR_FIXTURE_SURFACE', message: 'Surface update unavailable' }, readinessError: { code: 'ERR_FIXTURE_SURFACE', message: 'Surface update unavailable' } }),
     ],
     ui: { launcherOpen: false },
     expectedAnchors: wallAnchors([
@@ -257,6 +268,7 @@ export const FIXTURES = deepFreeze({
     },
     expectedAnchors: [
       ...wallAnchors([capsule('cap-01')]),
+      { anchor: 'capsule/cap-01/slot', role: 'region' },
       { anchor: 'capsule/cap-01/input-mode', role: 'switch' },
       { anchor: 'capsule/cap-01/copy-id', role: 'button' },
       { anchor: 'capsule/cap-01/terminal', role: 'region' },

@@ -120,11 +120,18 @@ async function dispatchMultislot(intent, capsuleId) {
       && capsuleId === surface.id) {
     const visibility = surface.visibility;
     const submitIntent = props.authorityHost?.intent;
-    const accepted = !props.authorityHost || await submitHost(async () => {
-      const result = await submitIntent?.(intent);
-      if (result !== true) throw new Error('Host acknowledgement unavailable');
-      return true;
-    });
+    let accepted;
+    if (!props.authorityHost) {
+      dispatch(intent);
+      accepted = true;
+    } else {
+      accepted = await submitHost(async () => {
+        const result = await submitIntent?.(intent);
+        // Preserve structured refusals; malformed acknowledgements still fail closed.
+        if (result === true || (result && typeof result === 'object')) return result;
+        throw new Error('Host acknowledgement unavailable');
+      });
+    }
     if (accepted === true && hostActive && rows.value.some(row => row.id === surface.id && row.visibility === visibility)) {
       foldOverrides.value = { ...foldOverrides.value, [surface.id]: body.op === 'fold' };
     }
@@ -159,6 +166,7 @@ function selectCapsule(payload) {
   if (typeof payload?.capsuleId === 'string' && rows.value.some(row => row.id === payload.capsuleId)) selectedCapsuleId.value = payload.capsuleId;
 }
 function toggleCreative() {
+  if (!selectedSurface.value) return;
   creativeOpen.value = !creativeOpen.value;
   settingsOpen.value = false;
   multislotOpen.value = false;
@@ -210,9 +218,11 @@ function surfaceWitness(surface) {
 }
 const feed = props.runtime?.projectionView ?? projectionView;
 const snapshot = shallowRef(feed.getSnapshot());
+const diagnosticTileStates = props.fixture?.key === 'tile-states';
 const rows = computed(() => {
   void snapshot.value;
-  const admitted = feed.getProjection()?.rows.filter(row => !['lost', 'destroyed'].includes(row.backendLifecycle)) ?? [];
+  const admitted = feed.getProjection()?.rows.filter(row => row.backendLifecycle !== 'destroyed'
+    && (row.backendLifecycle !== 'lost' || diagnosticTileStates)) ?? [];
   return admitted.filter(row => !nestedMode.displayOnly || applyNestedWall([row], nestedMode).rows.length > 0);
 });
 // Reconcile only changed authoritative visibility, retaining pending local
@@ -289,7 +299,7 @@ const chromeWorkspace = markRaw(defineComponent({
           </article>
         </section>
         <WallWorkspace v-else-if="!creativeOpen" :key="wallView" :hidden="!rows.length" ref="wall" :workspace-component="chromeWorkspace" :scope="props.scope" :default-profile="props.layout" :storage="props.storage"
-          owner-window-id="main-wall" :projection-view="feed" :intent-builders="props.runtime?.intentBuilders ?? intentBuilders"
+          owner-window-id="main-wall" :projection-view="feed" :allow-lost-surface="diagnosticTileStates" :intent-builders="props.runtime?.intentBuilders ?? intentBuilders"
           :control-registry="props.runtime?.controlRegistry ?? controlRegistry" :scheduler="props.runtime?.scheduler ?? scheduler" :tile-scheduler="props.runtime?.tileScheduler ?? tileScheduler"
           :color-scheme="scheme === 'mv-dark' ? 'dark' : 'light'" density="compact" @ready="revealRows" @wall-settled="onWorkspaceSettled" @activate-surface="selectCapsule" @submit-intent="dispatch">
           <template #surface="{ surface, capsuleId }">

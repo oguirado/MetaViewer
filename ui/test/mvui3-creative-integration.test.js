@@ -11,7 +11,11 @@ import { createAgentLane } from '../src/agent/agentLane.js';
 async function appComponent(captured) {
   const Capsule = await loadSfc('creative/CreativeCapsule.vue', { 'capsule-ui-kit/ui': ui });
   const Outcome = await loadSfc('core/HostOutcome.vue', { './hostAdapters.js': adapters });
-  const wall = vue.defineComponent({ setup: (_p, ctx) => { captured.wall = ctx; return () => vue.h('div'); } });
+  const wall = vue.defineComponent({ props: ['allowLostSurface'], setup: (p, ctx) => {
+    captured.wall = ctx; captured.wallProps = p;
+    ctx.expose({ revealSurface: id => { (captured.revealed ??= []).push(id); return { ok: true }; } });
+    return () => vue.h('div');
+  } });
   const agent = vue.defineComponent({ props: ['screen'], setup: p => () => { captured.screen = p.screen; return vue.h('aside'); } });
   const catalog = vue.defineComponent({ setup: (_p, ctx) => { captured.catalog = ctx; return () => vue.h('div'); } });
   return loadSfc('App.vue', {
@@ -19,7 +23,9 @@ async function appComponent(captured) {
     'capsule-ui-kit/DockWorkspace': slotStub,
     '../.kit/capsule-ui-kit/src/index-shell.js': { ShellWorkspace: slotStub, TopBar: slotStub, Sidebar: slotStub, StatusBar: slotStub },
     'capsule-ui-kit/ui': ui, 'capsule-ui-kit/theme': { setKitScheme() {} },
-    './wall/WallWorkspace.vue': wall, './wall/EmptyWallView.vue': slotStub,
+    './wall/WallWorkspace.vue': wall, './wall/EmptyWallView.vue': vue.defineComponent({
+      setup: () => () => vue.h('section', { id: 'empty-wall' }),
+    }),
     './catalog/CatalogLauncher.vue': catalog, './terminal/SideTerminalOverlay.vue': slotStub,
     './multislot/MultislotHost.vue': slotStub, './recording/MvRecordingPanel.vue': slotStub,
     './settings/MvSettingsPanel.vue': slotStub, './agent/AgentLaneHost.vue': agent,
@@ -28,6 +34,51 @@ async function appComponent(captured) {
   });
 }
 const tick = async () => { await new Promise(resolve => setImmediate(resolve)); await vue.nextTick(); };
+
+for (const key of ['tile-states', 'four']) test(`App lost-row admission is scoped to the diagnostic fixture: ${key}`, async () => {
+  const previous = { window: globalThis.window, document: globalThis.document };
+  globalThis.window = { addEventListener() {}, removeEventListener() {} };
+  globalThis.document = { documentElement: { dataset: {} }, getElementById: () => null };
+  let view;
+  try {
+    const rows = ['running', 'lost', 'destroyed'].map(backendLifecycle => ({
+      id: backendLifecycle, title: backendLifecycle, backendLifecycle, visibility: 'unfolded', generation: 1,
+    }));
+    const captured = {}, App = await appComponent(captured);
+    view = mount(App, { fixture: { key, ui: {}, capsules: rows }, layout: {}, scope: {},
+      storage: { readRaw: async () => null, writeAtomic: async () => {} },
+      runtime: { projectionView: { getProjection: () => ({ rows }), getSnapshot: () => ({}), subscribe: () => () => {} } },
+    });
+    await tick();
+    assert.equal(captured.wallProps.allowLostSurface, key === 'tile-states');
+    captured.wall.emit('wall-settled'); await tick();
+    assert.deepEqual(captured.revealed, key === 'tile-states' ? ['running', 'lost'] : ['running']);
+  } finally {
+    view?.close(); globalThis.window = previous.window; globalThis.document = previous.document;
+  }
+});
+
+test('creative toggle without a selected surface preserves the empty wall', async () => {
+  const previous = { window: globalThis.window, document: globalThis.document };
+  globalThis.window = { addEventListener() {}, removeEventListener() {} };
+  globalThis.document = { documentElement: { dataset: {} }, getElementById: () => null };
+  let view;
+  try {
+    const captured = {}, App = await appComponent(captured);
+    view = mount(App, { fixture: { key: 'empty', ui: {}, capsules: [] }, layout: {}, scope: {},
+      storage: { readRaw: async () => null, writeAtomic: async () => {} } });
+    await tick();
+    assert.ok(byId(view.root, 'empty-wall'));
+    const button = byId(view.root, 'shell-creative');
+    assert.equal(button.props.disabled, true);
+    button.props.onClick(); await tick();
+    assert.ok(byId(view.root, 'empty-wall'), 'direct handler invocation also preserves the empty view');
+    assert.equal(captured.screen, 'wall');
+    assert.equal(byId(view.root, 'shell-creative').props['aria-expanded'], false);
+  } finally {
+    view?.close(); globalThis.window = previous.window; globalThis.document = previous.document;
+  }
+});
 function agentRoot(root) {
   return { querySelectorAll: () => nodes(root).filter(n => n.props?.['data-semantic-anchor']).map(n => ({
     id: n.props.id, tagName: n.tag.toUpperCase(), textContent: n.text ?? '',

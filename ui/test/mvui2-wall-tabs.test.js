@@ -43,9 +43,10 @@ describe('dock tab description (pure module)', async () => {
     assert.deepEqual({ ...tab }, {
       capsuleId: 'cap-01',
       id: 'wall-tab-cap-01',
-      anchor: 'capsule/cap-01/tab',
+      anchor: 'workspace/tab/cap-01',
       title: 'Research browser',
     });
+    assert.notEqual(tab.anchor, `capsule/${tab.capsuleId}/tab`);
     assert.ok(Object.isFrozen(tab));
   });
 
@@ -56,7 +57,8 @@ describe('dock tab description (pure module)', async () => {
     });
     assert.equal(tab.capsuleId, 'cap-02');
     assert.equal(tab.id, 'wall-tab-cap-02');
-    assert.equal(tab.anchor, 'capsule/cap-02/tab');
+    assert.equal(tab.anchor, 'workspace/tab/cap-02');
+    assert.notEqual(tab.anchor, `capsule/${tab.capsuleId}/tab`);
     assert.equal(tab.title, 'Holdings board');
   });
 
@@ -261,7 +263,8 @@ describe('SurfaceTab render contract', () => {
       assert.equal(spans.length, 1);
       assert.equal(spans[0].props.class, 'mv-surface-tab');
       assert.equal(spans[0].props.id, 'wall-tab-cap-01');
-      assert.equal(spans[0].props['data-semantic-anchor'], 'capsule/cap-01/tab');
+      assert.equal(spans[0].props['data-semantic-anchor'], 'workspace/tab/cap-01');
+      assert.notEqual(spans[0].props['data-semantic-anchor'], 'capsule/cap-01/tab');
       assert.equal(spans[0].text, 'Research browser');
     } finally {
       tabApp.close();

@@ -45,6 +45,7 @@ const {
   IMAGE_SOURCE_ERROR_CODES,
   STORYBOARD_ERROR_CODES,
   STORYBOARD_INTENT_TYPES,
+  STORYBOARD_INTENT_ERROR_CODES,
   validateCapsuleId,
   validateImageSource,
   validateStoryboardFrame,
@@ -96,11 +97,14 @@ describe('pure module loads faithfully', () => {
       'ERR_STORYBOARD_TOO_LARGE', 'ERR_MALFORMED_STORYBOARD_FRAME']);
     assert.deepEqual([...STORYBOARD_INTENT_TYPES],
       ['creative/select-frame', 'creative/regenerate', 'creative/close']);
+    assert.deepEqual([...STORYBOARD_INTENT_ERROR_CODES],
+      ['ERR_UNKNOWN_INTENT_TYPE', 'ERR_MALFORMED_INTENT_DETAIL']);
     expect(MAX_STORYBOARD_FRAMES).toBe(8);
     expect(MAX_PROMPT_LENGTH).toBe(2000);
     expect(MAX_IMAGE_BYTES).toBe(2097152);
     for (const set of [STORYBOARD_FRAME_KEYS, CAPSULE_ID_ERROR_CODES,
-      IMAGE_SOURCE_ERROR_CODES, STORYBOARD_ERROR_CODES, STORYBOARD_INTENT_TYPES]) {
+      IMAGE_SOURCE_ERROR_CODES, STORYBOARD_ERROR_CODES, STORYBOARD_INTENT_TYPES,
+      STORYBOARD_INTENT_ERROR_CODES]) {
       assert.equal(Object.isFrozen(set), true);
       assert.throws(() => set.push('mutant'), TypeError);
     }

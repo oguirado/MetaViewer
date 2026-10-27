@@ -92,6 +92,7 @@ export const WALL_PRESENTATION_VERBS = Object.freeze(['close', 'hide', 'show', '
 
 /**
  * @typedef {Object} WallWorkspaceControllerOptions
+ * @property {boolean} [allowLostSurface] - Diagnostic fixture presentation only.
  * @property {WallProjectionView | null} [projectionView]
  */
 
@@ -290,7 +291,7 @@ export function describeDockTab(tabProps) {
   return Object.freeze({
     capsuleId,
     id: `${DOCK_TAB_ID_PREFIX}${capsuleId}`,
-    anchor: `capsule/${capsuleId}/tab`,
+    anchor: `workspace/tab/${capsuleId}`,
     title,
   });
 }
@@ -376,6 +377,7 @@ export function createWallWorkspaceController(options = {}) {
     if (row.id !== capsuleId) {
       return fail('ERR_ROW_IDENTITY_MISMATCH', `row identity mismatch for "${capsuleId}"`);
     }
+    if (row.backendLifecycle === 'lost' && options.allowLostSurface === true) return succeed(row);
     if (row.backendLifecycle === 'lost' || row.backendLifecycle === 'destroyed') {
       return fail('ERR_SURFACE_GONE', `surface "${capsuleId}" is ${row.backendLifecycle}`);
     }
@@ -530,6 +532,7 @@ const props = defineProps({
     required: true,
   },
   ownerWindowId: { type: String, required: true },
+  allowLostSurface: { type: Boolean, default: false },
   projectionView: {
     type: /** @type {import('vue').PropType<WallSharedProjectionView>} */ (Object),
     required: true,
@@ -568,7 +571,7 @@ const emit = defineEmits([
   'activate-surface',
 ]);
 
-const controller = createWallWorkspaceController({ projectionView: props.projectionView });
+const controller = createWallWorkspaceController({ projectionView: props.projectionView, allowLostSurface: props.allowLostSurface });
 const callbacks = controller.createPanelCallbacks(emit);
 
 const slots = useSlots();
