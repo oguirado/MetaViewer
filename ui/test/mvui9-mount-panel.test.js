@@ -1,6 +1,6 @@
 // MVUI9 lane A: recording panel capture routing. A bound captureState
 // store receives record-for-AI and screenshot actions (zero submit-intent
-// emissions for them); select/export keep emitting as today. The store
+// emissions for them) and exportCapture; only select emits a kit intent. The store
 // fakes below implement only the preamble names and deliberately omit
 // `.available`, proving the panel never reads it.
 import { test, describe } from 'node:test';
@@ -103,6 +103,10 @@ function fakeStore(over = {}) {
       return { ok: true, shot };
     },
     async refresh() { store.calls.push(['refresh']); return { ok: true }; },
+    async exportCapture(captureId) {
+      store.calls.push(['exportCapture', captureId]);
+      return { ok: true, export: { id: captureId, bytes: 2048, sha256: 'ab'.repeat(32) } };
+    },
     dispose() { store.calls.push(['dispose']); },
   };
   return store;
@@ -182,7 +186,7 @@ describe('bound panel routes record-for-AI and screenshot to the store', () => {
     } finally { mounted.close(); }
   });
 
-  test('select and export keep emitting when bound; shots stay out of the manifest', async () => {
+  test('bound select emits and export calls the store once without emitting; shots stay out of the manifest', async () => {
     const Panel = await component('recording/MvRecordingPanel.vue');
     const events = [];
     const store = fakeStore({ rows: [
@@ -194,19 +198,24 @@ describe('bound panel routes record-for-AI and screenshot to the store', () => {
         frames: 3, duration_ms: 1000, sealed: true, created_ms: 1 },
     ] });
     const mounted = mount(Panel, { capsuleId: 'cap-01', captureState: store,
-      captureAvailable: true, exportDestination: 'picker', onSubmitIntent: event => events.push(event) });
+      captureAvailable: true, exportDestination: 'recording:configured', onSubmitIntent: event => events.push(event) });
     try {
       const selects = nodes(mounted.root).filter(n => n.props?.class === 'mv4-select');
       assert.equal(selects.length, 1, 'manifest lists only this surface recordings');
       assert.equal(selects[0].props['aria-label'], 'Select rec-1');
       selects[0].props.onClick();
-      byId(mounted, 'mv-recordings-export-rec-1').props.onClick();
       await flush();
       assert.deepEqual(events, [
         { type: 'recording-select', capsuleId: 'cap-01', recordingId: 'rec-1' },
-        { type: 'recording-export', capsuleId: 'cap-01', recordingId: 'rec-1', phase: 'sealed', destination: 'picker' },
       ]);
-      assert.deepEqual(store.calls, [], 'select/export never touch the store');
+      assert.deepEqual(store.calls, [], 'select never touches the store');
+      const result = await byId(mounted, 'mv-recordings-export-rec-1').props.onClick();
+      await flush();
+      assert.equal(result.ok, true, 'bound export completes through the store');
+      assert.deepEqual(store.calls, [['exportCapture', 'rec-1']], 'one export call with the capture id');
+      assert.deepEqual(events, [
+        { type: 'recording-select', capsuleId: 'cap-01', recordingId: 'rec-1' },
+      ], 'export emits no additional intent');
     } finally { mounted.close(); }
   });
 

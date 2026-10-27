@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import * as vue from 'vue';
 import { parse, compileScript } from '@vue/compiler-sfc';
-import { SidebarIcon } from './mvui2-terminal-mount.mjs';
+import { SidebarIcon, UiButton, rendererElement } from './mvui2-terminal-mount.mjs';
 import * as gate from '../src/multislot/multislotInputGate.js';
 import * as attach from '../src/multislot/multislotAttach.js';
 import * as providers from '../src/multislot/multislotProviders.js';
@@ -40,6 +40,7 @@ async function mount(file, initial = {}, facades = []) {
     disposeSession(id) { calls.disposed.push(id); }, forgetSession(id) { calls.forgotten.push(id); }, dispose() { calls.registryDisposed++; },
   };
   const deps = {
+    'capsule-ui-kit/ui': { UiButton },
     '../../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue': SidebarIcon,
     '@xterm/xterm':{ Terminal:class {} }, '@xterm/addon-fit':{ FitAddon:class {} },
     '/.kit/capsule-ui-kit/src/multislot/AiMultiSlot.vue':child('slot'),
@@ -71,7 +72,7 @@ async function mount(file, initial = {}, facades = []) {
   const component = await compile(file);
   const props = vue.reactive(initial), root = { children:[] };
   const renderer = vue.createRenderer({
-    createElement:tag=>({tag,children:[],props:{}}), createText:text=>({text}),createComment:text=>({text}),
+    createElement:rendererElement, createText:text=>({text}),createComment:text=>({text}),
     insert(node,parent) { node.parent=parent; parent.children.push(node); },
     remove(node) { const a=node.parent?.children; if(a) a.splice(a.indexOf(node),1); },
     setText(n,t) { n.text=t; }, setElementText(n,t) { n.text=t; }, patchProp(n,k,_old,v) { n.props[k]=v; },
@@ -247,12 +248,13 @@ test('late attach allocation is released after unmount as well as before await r
 });
 
 
-test('omitted presentation props retain local controls used by App',async()=>{
+test('omitted props keep local per-half controls while placement still awaits authority',async()=>{
   const f=await mount('multislot/MultislotHost.vue',{capsuleId:'cap-01'});
   try {
     for(const type of ['fold','float','hide-surface','hide-terminal']) f.children.slot.emit('submit-intent',{type});
     await flush();
-    for(const key of ['folded','floating','surface-hidden','terminal-hidden']) assert.equal(f.children.slot.attrs[key],true,key);
+    for(const key of ['folded','surface-hidden','terminal-hidden']) assert.equal(f.children.slot.attrs[key],true,key);
+    assert.equal(f.children.slot.attrs.floating,false,'float never applies optimistically, even without a controlling parent');
     for(const type of ['unfold','dock-back','show-surface','show-terminal']) f.children.slot.emit('submit-intent',{type});
     await flush();
     for(const key of ['folded','floating','surface-hidden','terminal-hidden']) assert.equal(f.children.slot.attrs[key],false,key);

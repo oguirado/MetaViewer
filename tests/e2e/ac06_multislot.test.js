@@ -898,7 +898,6 @@ describe('ac06 multislot contract (Layer 1)', () => {
 
 describe('ac06 live multislot journey (Layer 2)', () => {
   it('capsule and terminal travel together with a gated input mode (AC-06)', {
-    todo: 'GAP-AC06-LAYOUT-UI: core commits and publishes layout intents; live-multislot entry and renderer placement consumption are not implemented on this base',
   }, () => {
     const dispatch = readFileSync(join(findRepoRoot(__dirname), 'core/src/serve/mod.rs'), 'utf8');
     const uiDispatch = dispatch.slice(dispatch.indexOf('(Component::Ui, Command::UiIntent(request))'));

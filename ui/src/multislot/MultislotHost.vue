@@ -1,4 +1,5 @@
 <script setup>
+import { UiButton } from 'capsule-ui-kit/ui';
 import SidebarIcon from '../../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue';
 /**
  * MetaViewer AI multislot host (lane U3): one capsule live surface with its
@@ -14,7 +15,7 @@ import SidebarIcon from '../../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue';
  * Session outcomes (exited/failed) project as a typed notice row with a
  * dismiss control; a pending row covers the launch window.
  */
-import { computed, getCurrentInstance, markRaw, onBeforeUnmount, onMounted, ref, toRaw, watch } from 'vue';
+import { computed, getCurrentInstance, markRaw, onBeforeUnmount, onMounted, onUpdated, ref, toRaw, watch } from 'vue';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
@@ -33,8 +34,17 @@ import {
 import {
   createGatedTerminalWriter,
   buildMultislotFoldIntent,
+  buildMultislotFloatIntent,
+  buildMultislotHideIntent,
+  buildMultislotMoveIntent,
+  buildMultislotShowIntent,
+  buildMultislotTabIntent,
   leaseForInputMode,
   normalizeMultislotInputMode,
+  parsePlacementIndex,
+  roundFloatBox,
+  MULTISLOT_DOCK_GROUP,
+  MULTISLOT_DOCK_INDEX,
 } from './multislotInputGate.js';
 import { MULTISLOT_ATTACH_EPOCH, MULTISLOT_ATTACH_GENERATION, createMultislotPump } from './multislotAttach.js';
 import {
@@ -63,6 +73,16 @@ const props = defineProps({
   floating: { type: Boolean, default: false },
   surfaceHidden: { type: Boolean, default: false },
   terminalHidden: { type: Boolean, default: false },
+  hidden: { type: Boolean, default: false },
+  groupId: { type: String, default: '' },
+  placementIndex: { type: Number, default: null },
+  floatX: { type: Number, default: null },
+  floatY: { type: Number, default: null },
+  floatWidth: { type: Number, default: null },
+  floatHeight: { type: Number, default: null },
+  layoutPending: { type: Boolean, default: false },
+  agentControlled: { type: Boolean, default: false },
+  measureSlotBox: { type: /** @type {import('vue').PropType<(() => unknown) | null>} */ (Function), default: null },
   attachSide: { type: String, default: 'bottom' },
   surfaceState: { type: String, default: 'live' },
   clipboard: { type: /** @type {ClipboardProp} */ (Object), default: null },
@@ -95,9 +115,49 @@ const foldedRef = ref(props.folded === true);
 const floatingRef = ref(props.floating === true);
 const surfaceVisibleRef = ref(props.surfaceHidden !== true);
 const terminalVisibleRef = ref(props.terminalHidden !== true);
+const hiddenRef = ref(props.hidden === true);
 const copyState = ref('ready');
 /** @type {import('vue').Ref<{ code: string, message: string } | null>} */
 const refusal = ref(null);
+/** Typed placement refusal row (codes stay in data attributes).
+ * @type {import('vue').Ref<{ code: string, message: string } | null>} */
+const placementRefusal = ref(null);
+/** Placement form state: free-form group plus a 0..255 index. */
+const placementGroup = ref('');
+const placementIndexInput = ref('');
+/** @type {import('vue').Ref<unknown>} */
+const slotWrap = ref(null);
+/** Local placement gate: pending, agent control, READ mode, then hidden
+ * (show is the way out). Fold/unfold keep the hidden check only. Mirrors
+ * the App dispatchMultislot guards; parity is pinned by mvui11-layout tests.
+ * @param {string} op
+ * @returns {{ code: string, message: string } | null} Refusal, or null when allowed.
+ */
+function placementBarrier(op) {
+  const placement = op !== 'fold' && op !== 'unfold';
+  if (placement && props.layoutPending === true) {
+    return { code: 'ERR_PLACEMENT_PENDING', message: 'Placement request pending.' };
+  }
+  if (placement && props.agentControlled === true) {
+    return { code: 'LAYOUT_INPUT_MODE_READ', message: 'Placement is unavailable while the agent controls this slot.' };
+  }
+  if (placement && mode.value !== 'write') {
+    return { code: 'ERR_INPUT_MODE_READ', message: 'Switch to WRITE mode to place this slot.' };
+  }
+  if (op === 'show') {
+    return hiddenRef.value
+      ? null
+      : { code: 'LAYOUT_ILLEGAL_TRANSITION', message: 'This placement change is unavailable.' };
+  }
+  if (hiddenRef.value) {
+    return { code: 'LAYOUT_ILLEGAL_TRANSITION', message: 'This placement change is unavailable.' };
+  }
+  return null;
+}
+const floatAccess = computed(() => placementBarrier('float'));
+const hideAccess = computed(() => placementBarrier('hide'));
+const moveAccess = computed(() => placementBarrier('move'));
+const showAccess = computed(() => placementBarrier('show'));
 /** Typed session-outcome row (exited/failed); codes stay in data attributes.
  * @type {import('vue').Ref<{ type: string, sessionId: string, code: string, message: string, tone: string } | null>} */
 const sessionNotice = ref(null);
@@ -132,6 +192,7 @@ function refreshProviders() {
 }
 refreshProviders();
 watch(() => props.hostProviders, refreshProviders);
+watch(() => props.hidden, (value) => { hiddenRef.value = value; });
 watch(() => props.folded, (value) => { foldedRef.value = value; });
 watch(() => props.floating, (value) => { floatingRef.value = value; });
 watch(() => props.surfaceHidden, (value) => { surfaceVisibleRef.value = !value; });
@@ -300,6 +361,14 @@ async function runCopy() {
  */
 function onSubmitIntent(intent) {
   const type = typeof intent?.type === 'string' ? intent.type : '';
+  if (['fold','unfold'].includes(type) && hiddenRef.value) {
+    placementRefusal.value = { code:'LAYOUT_ILLEGAL_TRANSITION', message:'Show this slot before changing its placement.' };
+    return;
+  }
+  if (['move','tab','float','dock-back','hide','show'].includes(type)) {
+    requestPlacement(type);
+    return;
+  }
   if (type === 'input-mode-read' || type === 'input-mode-write') {
     emit('update:inputMode', type === 'input-mode-write' ? 'write' : 'read');
   } else if (type === 'copy-id') {
@@ -311,7 +380,7 @@ function onSubmitIntent(intent) {
     const controlled = (/** @type {string} */ camel, /** @type {string} */ kebab = camel) =>
       Object.prototype.hasOwnProperty.call(supplied, camel) || Object.prototype.hasOwnProperty.call(supplied, kebab);
     if (!controlled('folded') && (type === 'fold' || type === 'unfold')) foldedRef.value = type === 'fold';
-    if (!controlled('floating') && (type === 'float' || type === 'dock-back')) floatingRef.value = type === 'float';
+
     if (!controlled('surfaceHidden', 'surface-hidden') && (type === 'hide-surface' || type === 'show-surface')) surfaceVisibleRef.value = type === 'show-surface';
     if (!controlled('terminalHidden', 'terminal-hidden') && (type === 'hide-terminal' || type === 'show-terminal')) terminalVisibleRef.value = type === 'show-terminal';
   }
@@ -321,6 +390,45 @@ function onSubmitIntent(intent) {
     ? buildMultislotFoldIntent(type, props.capsuleId)
     : intent, props.capsuleId);
 }
+
+/** Build only admitted closed bodies; never mutate the presentation here.
+ * @param {string} type */
+function requestPlacement(type) {
+  const op = type === 'dock-back' ? 'move' : type;
+  const blocked = placementBarrier(op);
+  if (blocked) { placementRefusal.value = blocked; return; }
+  try {
+    let body;
+    if (op === 'hide') body = buildMultislotHideIntent(props.capsuleId);
+    else if (op === 'show') body = buildMultislotShowIntent(props.capsuleId);
+    else if (op === 'float') {
+      const root = /** @type {HTMLElement|null} */ (slotWrap.value);
+      const box = roundFloatBox(props.measureSlotBox ? props.measureSlotBox() : root?.querySelector?.('.ai-slot')?.getBoundingClientRect());
+      body = buildMultislotFloatIntent(props.capsuleId, box);
+    } else if (type === 'dock-back') body = buildMultislotMoveIntent(props.capsuleId, props.groupId || MULTISLOT_DOCK_GROUP,
+      props.placementIndex ?? MULTISLOT_DOCK_INDEX);
+    else {
+      const build = op === 'tab' ? buildMultislotTabIntent : buildMultislotMoveIntent;
+      body = build(props.capsuleId, placementGroup.value, parsePlacementIndex(placementIndexInput.value));
+    }
+    placementRefusal.value = null;
+    emit('submit-intent', body, props.capsuleId);
+  } catch {
+    placementRefusal.value = { code:'ERR_INVALID_PLACEMENT_INPUT', message:'Choose a valid group and position, then try again.' };
+  }
+}
+// The vendored shell has a second float control without a disabled prop.
+// Keep its existing id/anchor and apply the same accessible native gate.
+function syncShellPlacementGate() {
+  const root = /** @type {HTMLElement|null} */ (slotWrap.value);
+  const button = root?.querySelector?.(`[id="cuk-ai-slot-${props.capsuleId}-float"]`);
+  if (!button) return;
+  if (floatAccess.value) button.setAttribute('disabled', ''); else button.removeAttribute('disabled');
+  button.setAttribute('aria-describedby', `mv-multislot-${props.capsuleId}-placement-reason`);
+  button.setAttribute('aria-busy', String(props.layoutPending));
+}
+onMounted(syncShellPlacementGate);
+onUpdated(syncShellPlacementGate);
 
 /**
  * @param {{ entryId?: unknown, command?: unknown, args?: unknown, title?: unknown, kind?: unknown } | null | undefined} payload
@@ -425,8 +533,10 @@ function passThrough(name) {
 }
 </script>
 <template>
-  <div class="mv-multislot-host">
+  <div ref="slotWrap" class="mv-multislot-host" :aria-busy="layoutPending" :data-layout-group="groupId" :data-layout-index="props.placementIndex">
+
     <BrokerLaunchControls v-if="terminalBroker" :broker="terminalBroker" :show-menu="false" :anchor-prefix="`capsule/${capsuleId}`" :id-prefix="`mv-multislot-${capsuleId}-broker`" />
+    <div :hidden="hiddenRef" class="mv-multislot-pair">
     <AiMultiSlot
       :capsule-id="capsuleId"
       :capsule-label="capsuleLabel"
@@ -435,6 +545,7 @@ function passThrough(name) {
       :surface-hidden="!surfaceVisibleRef"
       :terminal-hidden="!terminalVisibleRef"
       :floating="floatingRef"
+      :float-x="floatX" :float-y="floatY" :float-width="floatWidth" :float-height="floatHeight"
       :surface-state="surfaceState"
       :input-mode="mode"
       :sessions="sessions"
@@ -468,6 +579,8 @@ function passThrough(name) {
           :terminal-visible="terminalVisibleRef"
           :folded="foldedRef"
           :floating="floatingRef"
+          :fold-disabled="hiddenRef" :fold-reason="hiddenRef ? 'Show this slot before changing its placement.' : ''"
+          :float-disabled="Boolean(floatAccess)" :float-reason="floatAccess?.message ?? ''"
           @submit-intent="onSubmitIntent"
         />
       </template>
@@ -475,6 +588,7 @@ function passThrough(name) {
         <slot name="surface" />
       </template>
     </AiMultiSlot>
+    </div>
     <section v-if="$slots.record" class="mv-multislot-record" aria-label="Recording"><slot name="record" /></section>
     <p
       v-if="launchingRef"
@@ -528,5 +642,21 @@ function passThrough(name) {
         Dismiss
       </button>
     </div>
+    <section class="mv-multislot-placement" aria-label="Slot placement">
+      <p :id="`mv-multislot-${capsuleId}-placement-reason`" role="status">{{ hiddenRef ? showAccess?.message ?? 'Show this slot before changing its placement.' : moveAccess?.message }}</p>
+      <UiButton :id="`mv-multislot-${capsuleId}-visibility`" :data-semantic-anchor="`capsule/${capsuleId}/placement/visibility`" type="button"
+        :aria-label="hiddenRef ? 'Show slot' : 'Hide slot'" :disabled="Boolean(hiddenRef ? showAccess : hideAccess)" :aria-describedby="`mv-multislot-${capsuleId}-placement-reason`"
+        :label="hiddenRef ? 'Show slot' : 'Hide slot'" :loading="layoutPending" @click="requestPlacement(hiddenRef ? 'show' : 'hide')" />
+      <label :for="`mv-multislot-${capsuleId}-group`">Group</label>
+      <input :id="`mv-multislot-${capsuleId}-group`" :data-semantic-anchor="`capsule/${capsuleId}/placement/group`" aria-label="Placement group"
+        :value="placementGroup" @input="placementGroup = /** @type {HTMLInputElement} */ ($event.target).value" :disabled="Boolean(moveAccess)" :aria-describedby="`mv-multislot-${capsuleId}-placement-reason`" maxlength="128" />
+      <label :for="`mv-multislot-${capsuleId}-index`">Position</label>
+      <input :id="`mv-multislot-${capsuleId}-index`" :data-semantic-anchor="`capsule/${capsuleId}/placement/index`" aria-label="Placement position"
+        :value="placementIndexInput" @input="placementIndexInput = /** @type {HTMLInputElement} */ ($event.target).value" :disabled="Boolean(moveAccess)" :aria-describedby="`mv-multislot-${capsuleId}-placement-reason`" inputmode="numeric" maxlength="3" />
+      <UiButton v-for="op in ['move','tab']" :key="op" :id="`mv-multislot-${capsuleId}-${op}`" :data-semantic-anchor="`capsule/${capsuleId}/placement/${op}`" type="button"
+        :aria-label="op === 'move' ? 'Move slot' : 'Tab slot'" :disabled="Boolean(moveAccess)" :aria-describedby="`mv-multislot-${capsuleId}-placement-reason`" :label="op === 'move' ? 'Move slot' : 'Tab slot'" :loading="layoutPending" @click="requestPlacement(op)" />
+      <p v-if="placementRefusal" :id="`mv-multislot-${capsuleId}-placement-refusal`" :data-semantic-anchor="`capsule/${capsuleId}/placement/refusal`"
+        role="alert" :data-error-code="placementRefusal.code">{{ placementRefusal.message }}</p>
+    </section>
   </div>
 </template>

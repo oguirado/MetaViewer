@@ -2,12 +2,17 @@
  * In-memory capture double (MVUI9 lane C): a fake `window.metaviewer.capture`
  * facade honouring the exact host contract, for tests and fixtures.
  *
- * Contract surface (only these five methods): `screenshot`, `recordStart`,
- * `recordStop`, `list`, `subscribe`. Malformed request shapes throw
- * synchronously; well-formed requests resolve to `{ok:true,...}` or a
- * closed-code refusal `{ok:false, code, request_id}`. One active recording
- * per surface; `LIMIT` when `options.limit` is reached; every mutating call
- * refuses `NESTED_DISPLAY_ONLY` when `options.nested` is set.
+ * Contract surface (only these six methods): `screenshot`, `recordStart`,
+ * `recordStop`, `export`, `list`, `subscribe`. Malformed request shapes
+ * throw synchronously; well-formed requests resolve to `{ok:true,...}` or
+ * a closed-code refusal `{ok:false, code, request_id}`. One active
+ * recording per surface; `LIMIT` when `options.limit` is reached; every
+ * mutating call refuses `NESTED_DISPLAY_ONLY` when `options.nested` is
+ * set. `export` keeps no disk: it validates the closed shape, then
+ * honours the host refusal vocabulary (DESTINATION_UNSET,
+ * CAPTURE_UNKNOWN, NOT_SEALED, DESTINATION_UNAVAILABLE,
+ * DESTINATION_EXISTS, LIMIT, CAPTURE_UNAVAILABLE) before resolving a
+ * deterministic receipt `{id, bytes, sha256}`.
  *
  * Ids are deterministic per-double counters (`shot-1`, `rec-1`, ...).
  * Timestamps use the wall clock, exactly like a live host would.
@@ -23,6 +28,11 @@ import { CAPTURE_SCHEMA } from './capturePort.js';
  * @property {string[]} [surfaces] Closed surface world; unknown ids refuse
  *   SURFACE_UNKNOWN. Omit for an open world (any non-empty id is known).
  * @property {number} [limit] Max concurrent active recordings (default: none).
+ * @property {boolean} [noDestination] Destination unset: export refuses DESTINATION_UNSET.
+ * @property {boolean} [destinationUnavailable] Destination I/O failure: export
+ *   refuses DESTINATION_UNAVAILABLE.
+ * @property {number} [exportLimit] Max successful exports (default: none);
+ *   further exports refuse LIMIT.
  */
 
 /**
@@ -66,7 +76,7 @@ function requireRequest(value, fields) {
 /**
  * Build an in-memory capture facade honouring the host contract.
  * @param {CaptureDoubleOptions} [options] Double behaviour switches.
- * @returns {{screenshot:(request:unknown)=>any,recordStart:(request:unknown)=>any,recordStop:(request:unknown)=>any,list:()=>any,subscribe:(cb:unknown)=>()=>void}} Fake facade.
+ * @returns {{screenshot:(request:unknown)=>any,recordStart:(request:unknown)=>any,recordStop:(request:unknown)=>any,export:(request:unknown)=>any,list:()=>any,subscribe:(cb:unknown)=>()=>void}} Fake facade.
  */
 export function createCaptureDouble(options) {
   const opts = isRecord(options) ? options : {};
@@ -79,6 +89,11 @@ export function createCaptureDouble(options) {
   const limit = typeof opts.limit === 'number' && Number.isSafeInteger(opts.limit) && opts.limit >= 0
     ? opts.limit
     : Number.POSITIVE_INFINITY;
+  const noDestination = opts.noDestination === true;
+  const destinationUnavailable = opts.destinationUnavailable === true;
+  const exportLimit = typeof opts.exportLimit === 'number' && Number.isSafeInteger(opts.exportLimit) && opts.exportLimit >= 0
+    ? opts.exportLimit
+    : Number.POSITIVE_INFINITY;
 
   let shotSerial = 0;
   let recSerial = 0;
@@ -86,6 +101,9 @@ export function createCaptureDouble(options) {
   const active = new Map();
   /** @type {any[]} */
   const sealed = [];
+  /** @type {Set<string>} */
+  const exported = new Set();
+  let exportSerial = 0;
   /** @type {Set<(event:any)=>void>} */
   const listeners = new Set();
 
@@ -209,6 +227,37 @@ export function createCaptureDouble(options) {
   }
 
   /**
+   * @param {unknown} request Raw export request.
+   * @returns {any} Export receipt or refusal.
+   */
+  function exportCapture(request) {
+    const req = requireRequest(request, ['capture_id']);
+    if (req.destination !== null && req.destination !== 'recording:configured') {
+      throw new TypeError('captureDouble: bad destination');
+    }
+    const captureId = /** @type {string} */ (req.capture_id);
+    if (nested) return refuse('NESTED_DISPLAY_ONLY', req.request_id);
+    if (unavailable) return refuse('CAPTURE_UNAVAILABLE', req.request_id);
+    if (req.destination === null || noDestination) return refuse('DESTINATION_UNSET', req.request_id);
+    const sealedRow = sealed.find((row) => row.id === captureId);
+    if (sealedRow === undefined) {
+      if (active.has(captureId)) return refuse('NOT_SEALED', req.request_id);
+      return refuse('CAPTURE_UNKNOWN', req.request_id);
+    }
+    if (exportSerial >= exportLimit) return refuse('LIMIT', req.request_id);
+    if (destinationUnavailable) return refuse('DESTINATION_UNAVAILABLE', req.request_id);
+    if (exported.has(captureId)) return refuse('DESTINATION_EXISTS', req.request_id);
+    exported.add(captureId);
+    exportSerial += 1;
+    const receipt = Object.freeze({
+      id: captureId,
+      bytes: 2048,
+      sha256: sealedRow.kind === 'shot' ? '0'.repeat(64) : 'f'.repeat(64),
+    });
+    return Object.freeze({ ok: true, export: receipt });
+  }
+
+  /**
    * @returns {any} Manifest rows (sealed history plus live active rows).
    */
   function list() {
@@ -244,5 +293,5 @@ export function createCaptureDouble(options) {
     };
   }
 
-  return Object.freeze({ screenshot, recordStart, recordStop, list, subscribe });
+  return Object.freeze({ screenshot, recordStart, recordStop, export: exportCapture, list, subscribe });
 }

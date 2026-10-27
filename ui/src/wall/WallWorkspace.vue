@@ -54,6 +54,8 @@ export const WALL_PRESENTATION_VERBS = Object.freeze(['close', 'hide', 'show', '
 
 /** @typedef {Object} WallDockviewApi
  * @property {(id: string) => WallDockviewPanel | undefined} getPanel
+ * @property {(id:string) => unknown} [getGroup]
+ * @property {(options:{id:string,referencePanel:string,direction:string}) => unknown} [addGroup]
  * @property {(options: WallAddPanelOptions) => WallDockviewPanel} addPanel
  */
 
@@ -65,6 +67,7 @@ export const WALL_PRESENTATION_VERBS = Object.freeze(['close', 'hide', 'show', '
 
 /**
  * @typedef {Object} WallDockviewPanelApi
+ * @property {(options:{group:unknown,position:string,index:number}) => void} [moveTo]
  * @property {() => void} close
  * @property {() => void} setActive
  */
@@ -111,6 +114,7 @@ export const WALL_PRESENTATION_VERBS = Object.freeze(['close', 'hide', 'show', '
  * @typedef {Object} WallWorkspaceController
  * @property {(payload: unknown) => WallAdmissionResult<Readonly<{ ready: boolean }>>} handleReady
  * @property {() => void} dispose
+ * @property {(capsuleId:string,body:any) => WallAdmissionResult<unknown>} applyLayoutEcho
  * @property {(capsuleId: unknown, placement: unknown) => WallAdmissionResult<Readonly<{ panelId: string }>>} revealSurface
  * @property {(intent: unknown) => WallAdmissionResult<Readonly<{ panelId: string, type: string }>>} applyPresentationIntent
  * @property {(emit: WallEmitFn) => WallPanelCallbacks} createPanelCallbacks
@@ -474,6 +478,30 @@ export function createWallWorkspaceController(options = {}) {
     }
   }
 
+  /** Apply a committed move/tab to the existing panel, keeping its live renderer.
+   * The caller owns correlation and waits for the authority echo first.
+   * @param {string} capsuleId @param {any} body @returns {WallAdmissionResult<unknown>} */
+  function applyLayoutEcho(capsuleId, body) {
+    const row = findRow(capsuleId);
+    if (!row.ok) return row;
+    if (!api || !windows) return fail('ERR_NOT_READY', 'Placement is not ready.');
+    if (!['move','tab'].includes(body?.op)) return applyPresentationIntent({ type:body?.op, capsuleId });
+    const p = body.params;
+    if (!p || ![capsuleId, `cuk-ai-slot-${capsuleId}`].includes(p.slot_id)
+        || typeof p.group_id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(p.group_id)
+        || !Number.isInteger(p.index) || p.index < 0 || p.index > 255) return fail('ERR_INVALID_PLACEMENT', 'Placement is unavailable.');
+    const panelId = `${WALL_PANEL_ID_PREFIX}${capsuleId}`;
+    const panel = api.getPanel(panelId);
+    if (!panel?.api.moveTo || !api.getGroup || !api.addGroup) return fail('ERR_NOT_READY', 'Placement is not ready.');
+    try {
+      const group = api.getGroup(p.group_id) ?? api.addGroup({ id:p.group_id, referencePanel:panelId, direction:'right' });
+      windows.dock(panelId);
+      panel.api.moveTo({ group, position:'center', index:p.index });
+      panel.api.setActive();
+      return succeed(Object.freeze({ panelId }));
+    } catch { return fail('ERR_PRESENTATION_FAILED', 'Placement is unavailable.'); }
+  }
+
   /**
    * @param {WallEmitFn} emit
    * @returns {WallPanelCallbacks}
@@ -486,7 +514,7 @@ export function createWallWorkspaceController(options = {}) {
     });
   }
 
-  return Object.freeze({ handleReady, dispose, revealSurface, applyPresentationIntent, createPanelCallbacks });
+  return Object.freeze({ handleReady, dispose, revealSurface, applyPresentationIntent, applyLayoutEcho, createPanelCallbacks });
 }
 
 /**
@@ -687,7 +715,9 @@ function revealSurface(capsuleId, placement) {
   return controller.revealSurface(capsuleId, placement);
 }
 
-defineExpose({ revealSurface });
+/** @param {string} capsuleId @param {unknown} body */
+function applyLayoutEcho(capsuleId, body) { return controller.applyLayoutEcho(capsuleId, body); }
+defineExpose({ revealSurface, applyLayoutEcho });
 
 onBeforeUnmount(() => {
   controller.dispose();

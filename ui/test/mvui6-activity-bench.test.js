@@ -171,7 +171,18 @@ describe('bench hook behavior', () => {
 
       hook.dispatch({ op: 'take_control', surfaceId: 'surface-a' });
       await tick();
+      assert.deepEqual(calls, [], 'bare hook control never reaches the host');
+      assert.deepEqual(captured.stripEntries(), [], 'bare control creates no authority activity');
+
+      hook.dispatch({ schema: 'ui_intent/v0.2', request_id: 'bench-take', op: 'take_control', params: { surface_id: 'surface-a' } });
+      await tick();
       assert.deepEqual(renderedTexts(captured.stripEntries()), ['Request sent.']);
+      assert.equal(calls.length, 1, 'one closed control submits once');
+      const wire = JSON.parse(calls[0]);
+      assert.match(wire.request_id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+        'the authority adapter assigns a fresh wire request id');
+      assert.deepEqual(wire, { schema: 'ui_intent/v0.2', request_id: wire.request_id,
+        op: 'take_control', params: { surface_id: 'surface-a' } }, 'closed hook control keeps the exact closed wire shape');
 
       verdict = { schema: 'action_verdict/v0.2', proposal_id: 'q', core_seq: 2, decision: 'refused', reason_code: 'POLICY' };
       hook.dispatch({ action: 'open', target: 'surface-a' });
@@ -197,7 +208,7 @@ describe('bench hook behavior', () => {
       assert.equal(renderedTexts(captured.stripEntries()).at(-1), 'This request is unavailable. Please try again.',
         'refused multislot unfold records through the production path');
 
-      hook.dispatch({ op: 'release_control', surfaceId: 'surface-a' });
+      hook.dispatch({ schema: 'ui_intent/v0.2', request_id: 'bench-release', op: 'release_control', params: { surface_id: 'surface-a' } });
       await tick();
       assert.equal(renderedTexts(captured.stripEntries()).at(-1), 'This request is unavailable. Please try again.');
       assert.equal(captured.stripEntries().length, 6);
@@ -224,9 +235,9 @@ describe('bench hook behavior', () => {
       appHandle = renderer().createApp(App, { authorityHost, runtime: wallRuntime(rows),
         layout: {}, scope: {}, fixture: FIXTURE, nestedHost: NESTED_LIVE, storage: STORAGE });
       appHandle.mount(root);
-      captured.wall.emit('submit-intent', { op: 'take_control', surfaceId: 'surface-a' });
+      captured.wall.emit('submit-intent', { schema: 'ui_intent/v0.2', request_id: 'bench-take', op: 'take_control', params: { surface_id: 'surface-a' } });
       await tick();
-      fakeWindow.__metaviewerBench.dispatch({ op: 'take_control', surfaceId: 'surface-a' });
+      fakeWindow.__metaviewerBench.dispatch({ schema: 'ui_intent/v0.2', request_id: 'bench-take', op: 'take_control', params: { surface_id: 'surface-a' } });
       await tick();
       assert.deepEqual(captured.stripEntries().map(entry => entry.code),
         ['INTENT_ACKNOWLEDGED', 'INTENT_ACKNOWLEDGED'], 'hook and UI emit share one dispatch');
@@ -273,7 +284,7 @@ describe('bench hook behavior', () => {
         layout: {}, scope: {}, fixture: nestedFixture, storage: STORAGE });
       appHandle.mount(root);
       assert.ok(fakeWindow.__metaviewerBench, 'hook installs for the nested fixture key');
-      fakeWindow.__metaviewerBench.dispatch({ op: 'take_control', surfaceId: 'surface-a' });
+      fakeWindow.__metaviewerBench.dispatch({ schema: 'ui_intent/v0.2', request_id: 'bench-take', op: 'take_control', params: { surface_id: 'surface-a' } });
       await tick();
       assert.equal(calls.length, 0, 'display-only dispatch submits nothing');
     } finally {

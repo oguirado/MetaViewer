@@ -120,3 +120,9 @@
 .mv-multislot-host .ms2-plate-chip-unknown {
   display: none;
 }
+
+.mv-multislot-pair[hidden] { display: none; }
+.mv-multislot-placement { display:flex; flex-wrap:wrap; align-items:center; gap:var(--cuk-semantic-spacing-sm); padding:var(--cuk-semantic-spacing-sm); }
+.mv-multislot-placement p { flex-basis:100%; margin:0; }
+.mv-multislot-placement button, .mv-multislot-placement input { color:var(--cuk-semantic-text-primary); background:var(--cuk-semantic-surface-canvas); border:var(--cuk-semantic-border-width) solid var(--cuk-semantic-border-default); border-radius:var(--cuk-semantic-radius-sm); padding:var(--cuk-semantic-spacing-xs); font:inherit; }
+.mv-multislot-placement :disabled { color:var(--cuk-semantic-text-muted); cursor:not-allowed; }

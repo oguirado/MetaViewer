@@ -114,8 +114,9 @@ describe('activity feed behavior', () => {
     try {
       let verdict = { schema: 'action_verdict/v0.2', proposal_id: 'p', core_seq: 1, decision: 'admitted' };
       let failIntent = false;
+      const intentCalls = [];
       const authorityHost = createAuthorityAdapter({
-        intent: async () => { if (failIntent) throw new Error('closed'); return true; },
+        intent: async body => { intentCalls.push(body); if (failIntent) throw new Error('closed'); return true; },
         propose: async () => verdict,
       });
       const captured = {}, App = await loadApp(captured), root = { children: [] };
@@ -131,7 +132,18 @@ describe('activity feed behavior', () => {
 
       captured.wall.emit('submit-intent', { op: 'take_control', surfaceId: 'surface-a' });
       await tick();
+      assert.deepEqual(intentCalls, [], 'bare control never reaches the host');
+      assert.deepEqual(captured.stripEntries(), [], 'bare control creates no authority activity');
+
+      captured.wall.emit('submit-intent', { schema: 'ui_intent/v0.2', request_id: 'activity-take', op: 'take_control', params: { surface_id: 'surface-a' } });
+      await tick();
       assert.deepEqual(captured.stripEntries(), [{ seq: 1, code: 'INTENT_ACKNOWLEDGED' }]);
+      assert.equal(intentCalls.length, 1, 'one closed control submits once');
+      const wire = JSON.parse(intentCalls[0]);
+      assert.match(wire.request_id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+        'the authority adapter assigns a fresh wire request id');
+      assert.deepEqual(wire, { schema: 'ui_intent/v0.2', request_id: wire.request_id,
+        op: 'take_control', params: { surface_id: 'surface-a' } }, 'closed control keeps the exact closed wire shape');
 
       verdict = { schema: 'action_verdict/v0.2', proposal_id: 'q', core_seq: 2, decision: 'refused', reason_code: 'LOCKED_BY_OTHER' };
       captured.catalog.emit('create', { kind: 'browser' });
@@ -140,7 +152,7 @@ describe('activity feed behavior', () => {
       assert.deepEqual(captured.stripEntries().at(-1), { seq: 2, code: 'LOCKED_BY_OTHER' });
 
       failIntent = true;
-      captured.wall.emit('submit-intent', { op: 'release_control', surfaceId: 'surface-a' });
+      captured.wall.emit('submit-intent', { schema: 'ui_intent/v0.2', request_id: 'activity-release', op: 'release_control', params: { surface_id: 'surface-a' } });
       await tick();
       assert.deepEqual(captured.stripEntries().at(-1), { seq: 3, code: 'HOST_REQUEST_REFUSED' });
 
@@ -150,7 +162,7 @@ describe('activity feed behavior', () => {
 
       failIntent = false;
       for (let i = 0; i < 10; i += 1) {
-        captured.wall.emit('submit-intent', { op: 'take_control', surfaceId: 'surface-a' });
+        captured.wall.emit('submit-intent', { schema: 'ui_intent/v0.2', request_id: `activity-overflow-${i}`, op: 'take_control', params: { surface_id: 'surface-a' } });
         await tick();
       }
       const feed = captured.stripEntries();

@@ -16,6 +16,13 @@ import { buildAuthorityIntent } from '../core/intents.js';
  * READ mode never delivers operator keystrokes; WRITE mode delivers them
  * unchanged. Unknown modes fail closed to READ.
  *
+ * AC-06 placement builders share this boundary: hide, show, float (with
+ * measured geometry), move and tab (with group and index) are built as
+ * exact closed ui_intent/v0.2 bodies through the shared authority builder,
+ * so out-of-range values are rejected client-side before anything is sent.
+ * Builders never touch the wire; presentation stays authoritative (the
+ * caller applies placement only on the echoed acknowledgement).
+ *
  * @module multislot/multislotInputGate
  */
 
@@ -101,4 +108,117 @@ export function createGatedTerminalWriter({ facade, getInputMode }) {
  */
 export function buildMultislotFoldIntent(op, capsuleId) {
   return buildAuthorityIntent({ op, params: { slot_id: multislotSlotId(capsuleId) } });
+}
+
+/** Authoritative layout ops the multislot slot may request (AC-06). */
+export const MULTISLOT_LAYOUT_OPS = Object.freeze(['fold', 'unfold', 'move', 'tab', 'float', 'hide', 'show']);
+
+/** Placement subset: full READ/agent/hidden guards apply (fold/unfold keep hidden-only). */
+export const MULTISLOT_PLACEMENT_OPS = Object.freeze(['move', 'tab', 'float', 'hide', 'show']);
+
+/** Conventional dock target for dock-back (groups are declarative names). */
+export const MULTISLOT_DOCK_GROUP = 'multislot-dock';
+export const MULTISLOT_DOCK_INDEX = 0;
+
+/** Index bounds shared by move/tab (mirrors ui_intent/v0.2). */
+export const MULTISLOT_PLACEMENT_INDEX_MIN = 0;
+export const MULTISLOT_PLACEMENT_INDEX_MAX = 255;
+
+/**
+ * @param {string} code
+ * @param {string} message
+ * @returns {never}
+ */
+function throwPlacementError(code, message) {
+  const err = /** @type {Error & {code: string}} */ (new Error(`${code}: ${message}`));
+  err.code = code;
+  throw err;
+}
+
+/** Hide the whole slot (capsule and terminal travel together).
+ * @param {string} capsuleId
+ * @returns {Readonly<Record<string, unknown>>}
+ */
+export function buildMultislotHideIntent(capsuleId) {
+  return buildAuthorityIntent({ op: 'hide', params: { slot_id: multislotSlotId(capsuleId) } });
+}
+
+/** Show a hidden slot again.
+ * @param {string} capsuleId
+ * @returns {Readonly<Record<string, unknown>>}
+ */
+export function buildMultislotShowIntent(capsuleId) {
+  return buildAuthorityIntent({ op: 'show', params: { slot_id: multislotSlotId(capsuleId) } });
+}
+
+/**
+ * @typedef {Readonly<{x: number, y: number, width: number, height: number}>} FloatBox
+ */
+
+/** Float the slot at measured integer geometry. Bounds reject before sending.
+ * @param {string} capsuleId
+ * @param {{x?: unknown, y?: unknown, width?: unknown, height?: unknown} | null | undefined} box
+ * @returns {Readonly<Record<string, unknown>>}
+ */
+export function buildMultislotFloatIntent(capsuleId, box) {
+  const source = box && typeof box === 'object' ? box : {};
+  return buildAuthorityIntent({ op: 'float', params: {
+    height_px: source.height, slot_id: multislotSlotId(capsuleId), width_px: source.width,
+    x_px: source.x, y_px: source.y,
+  } });
+}
+
+/** Move the slot into a dock group at an index (0..255 rejects before sending).
+ * @param {string} capsuleId
+ * @param {unknown} groupId
+ * @param {unknown} index
+ * @returns {Readonly<Record<string, unknown>>}
+ */
+export function buildMultislotMoveIntent(capsuleId, groupId, index) {
+  return buildAuthorityIntent({ op: 'move', params: {
+    group_id: groupId, index, slot_id: multislotSlotId(capsuleId),
+  } });
+}
+
+/** Tab the slot into a group at an index (0..255 rejects before sending).
+ * @param {string} capsuleId
+ * @param {unknown} groupId
+ * @param {unknown} index
+ * @returns {Readonly<Record<string, unknown>>}
+ */
+export function buildMultislotTabIntent(capsuleId, groupId, index) {
+  return buildAuthorityIntent({ op: 'tab', params: {
+    group_id: groupId, index, slot_id: multislotSlotId(capsuleId),
+  } });
+}
+
+/** Round measured geometry to integer pixels; unmeasurable boxes yield null
+ * so the caller refuses instead of fabricating geometry.
+ * @param {unknown} box
+ * @returns {FloatBox | null}
+ */
+export function roundFloatBox(box) {
+  if (typeof box !== 'object' || box === null) return null;
+  const candidate = /** @type {Record<string, unknown>} */ (box);
+  const parts = [candidate.x, candidate.y, candidate.width, candidate.height];
+  if (!parts.every((value) => typeof value === 'number' && Number.isFinite(value))) return null;
+  return Object.freeze({ x: Math.round(/** @type {number} */ (candidate.x)),
+    y: Math.round(/** @type {number} */ (candidate.y)),
+    width: Math.round(/** @type {number} */ (candidate.width)),
+    height: Math.round(/** @type {number} */ (candidate.height)) });
+}
+
+/** Parse a placement index from raw input: digits only, 0..255, no trim.
+ * @param {unknown} raw
+ * @returns {number}
+ */
+export function parsePlacementIndex(raw) {
+  if (typeof raw === 'string' && /^\d{1,3}$/.test(raw)) {
+    const parsed = Number(raw);
+    if (parsed <= MULTISLOT_PLACEMENT_INDEX_MAX) return parsed;
+  } else if (typeof raw === 'number' && Number.isInteger(raw)
+    && raw >= MULTISLOT_PLACEMENT_INDEX_MIN && raw <= MULTISLOT_PLACEMENT_INDEX_MAX) {
+    return raw;
+  }
+  throwPlacementError('ERR_INVALID_PLACEMENT_INPUT', 'placement index must be an integer 0..255');
 }

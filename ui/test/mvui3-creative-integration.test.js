@@ -124,8 +124,12 @@ test('creative fixture boots, publishes controls, and routes creative requests t
       assert.equal(hostCalls.length, 0, 'creative requests never cross the unsupported host boundary');
     }
     byId(view.root, 'shell-creative').props.onClick(); await tick();
-    captured.wall.emit('submit-intent', { type: 'take_control', capsuleId: 'cap-01' }); await tick();
-    assert.deepEqual(hostCalls, [{ op: 'take_control', surfaceId: 'cap-01' }]);
+    captured.wall.emit('submit-intent', { op: 'take_control', surfaceId: 'cap-01' }); await tick();
+    assert.deepEqual(hostCalls, [], 'bare control never crosses the host boundary');
+    const control = { schema: 'ui_intent/v0.2', request_id: 'creative-control-1',
+      op: 'take_control', params: { surface_id: 'cap-01' } };
+    captured.wall.emit('submit-intent', control); await tick();
+    assert.deepEqual(hostCalls, [control], 'the exact closed control body reaches the host');
     assert.equal(byId(view.root, 'mv-host-outcome').props['data-outcome-code'], 'INTENT_ACKNOWLEDGED');
     captured.catalog.emit('create', { schema: 'proposal/v0.1', action: 'existing-catalog-event' }); await tick();
     assert.deepEqual(hostCalls.at(-1), { schema: 'proposal/v0.1', action: 'existing-catalog-event' });

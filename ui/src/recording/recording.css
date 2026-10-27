@@ -147,6 +147,10 @@
   border-color: var(--cuk-semantic-status-error-border);
   color: var(--cuk-semantic-status-error-text);
 }
+.mv4-export-status {
+  margin-left: var(--cuk-semantic-spacing-sm);
+  font-family: var(--cuk-semantic-typography-font-family-mono);
+}
 .mv4-visually-hidden {
   position: absolute;
   width: 1px;

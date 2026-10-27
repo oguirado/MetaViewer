@@ -24,10 +24,11 @@ function stopRequest(overrides = {}) {
 }
 
 describe('capture double contract surface', () => {
-  test('facade exposes exactly the five contract methods', () => {
+  test('facade exposes exactly the six contract methods including export', () => {
     const double = createCaptureDouble();
     assert.deepEqual(Object.keys(double).sort(),
-      ['list', 'recordStart', 'recordStop', 'screenshot', 'subscribe']);
+      ['export', 'list', 'recordStart', 'recordStop', 'screenshot', 'subscribe']);
+    for (const method of Object.values(double)) assert.equal(typeof method, 'function');
     assert.ok(Object.isFrozen(double));
   });
 

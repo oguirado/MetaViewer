@@ -1,6 +1,6 @@
 <script setup>
 import SidebarIcon from '../../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue';
-import { computed } from 'vue';
+import { computed, reactive } from 'vue';
 import {
   buildRecordAiIntent,
   buildRecordingExportIntent,
@@ -8,6 +8,7 @@ import {
   buildScreenshotIntent,
 } from '../../.kit/capsule-ui-kit/src/recordings/recordingsIntents.js';
 import {
+  MV_EXPORT_ALREADY_EXPORTED_REASON,
   MV_RECORD_EMPTY_TEXT,
   captureEntryFor,
   captureRowsFor,
@@ -22,6 +23,14 @@ import {
   mvExportDomId,
   mvExportGateAnchor,
   mvExportGateDomId,
+  mvExportRefusalText,
+  mvExportStatusAnchor,
+  mvExportStatusDomId,
+  mvExportedText,
+  mvRowExportBusy,
+  mvRowExportLabel,
+  normalizeMvExportCode,
+  normalizeMvExportState,
   mvManifestRowAnchor,
   mvManifestRowDomId,
   mvManifestSelectAnchor,
@@ -118,6 +127,12 @@ const recordingsEff = computed(() => (captureBound.value
   : props.recordings));
 const captureHeld = computed(() => captureBound.value && !props.captureAvailable);
 
+// MVUI11 lane E: per-row export outcome keyed by display row id. The store
+// stays the single host boundary; this map only renders status.
+const exportStatus = reactive(
+  /** @type {Map<string, { state: string, sha256?: string, code?: string }>} */ (new Map()),
+);
+
 const phaseN = computed(() => normalizeMvRecordPhase(phaseEff.value));
 const shotN = computed(() => normalizeMvScreenshotState(shotStateEff.value));
 const toggleBusy = computed(() => mvRecordPhaseBusy(phaseEff.value));
@@ -185,6 +200,9 @@ const displayRows = computed(() => {
       unavailableReason: props.unavailableReason,
     });
     const held = props.disabled && !gate.disabled;
+    const exportEntry = exportStatus.get(id);
+    const rowExportState = normalizeMvExportState(exportEntry?.state);
+    const rowExportBusy = mvRowExportBusy(rowExportState);
     return {
       source,
       validId,
@@ -203,8 +221,26 @@ const displayRows = computed(() => {
       gateAnchor: mvExportGateAnchor(id),
       gate: held ? 'unavailable' : gate.gate,
       gateLabel: held ? 'Unavailable' : gate.gateLabel,
-      exportDisabled: !validId || gate.disabled || props.disabled,
-      exportReason: gate.reason || (props.unavailableReason ? 'Recording is unavailable' : ''),
+      exportDisabled: !validId || gate.disabled || props.disabled
+        || captureHeld.value || rowExportBusy || rowExportState === 'exported',
+      exportReason: gate.reason
+        || (props.unavailableReason ? 'Recording is unavailable' : '')
+        || (captureHeld.value ? 'Recording is unavailable' : '')
+        || (rowExportState === 'exported' ? MV_EXPORT_ALREADY_EXPORTED_REASON : ''),
+      exportState: rowExportState,
+      exportBusy: rowExportBusy,
+      exportLabel: mvRowExportLabel(rowExportState),
+      exportText: rowExportState === 'exported'
+        ? mvExportedText(exportEntry?.sha256)
+        : rowExportState === 'refused'
+          ? mvExportRefusalText(exportEntry?.code)
+          : '',
+      exportCode: rowExportState === 'refused'
+        ? normalizeMvExportCode(exportEntry?.code)
+        : undefined,
+      exportStatusDomId: mvExportStatusDomId(id),
+      exportStatusAnchor: mvExportStatusAnchor(id),
+      exportStatusTone: rowExportState === 'exported' ? 'success' : 'error',
       phaseText: mvPhaseLabel(source.phase),
       phaseTone: mvPhaseTone(source.phase),
       storeText: mvStoreLabel(source.store),
@@ -278,13 +314,53 @@ function onSelect(entry) {
 }
 
 /**
- * @param {{ source: Record<string, any>, exportDisabled: boolean }} entry Row to export.
+ * Record a store export outcome for one row. The result is shape-checked
+ * defensively: only an ok receipt with a valid digest renders exported,
+ * anything else renders the typed refusal copy.
+ * @param {string} rowId Display row id.
+ * @param {unknown} result Store export result.
+ */
+function applyExportResult(rowId, result) {
+  const receipt = result !== null && typeof result === 'object'
+    ? /** @type {{ ok?: unknown, export?: unknown, code?: unknown }} */ (result)
+    : null;
+  const detail = receipt?.export !== null && typeof receipt?.export === 'object'
+    ? /** @type {{ sha256?: unknown }} */ (receipt.export)
+    : null;
+  if (receipt?.ok === true
+    && typeof detail?.sha256 === 'string'
+    && /^[a-f0-9]{64}$/.test(detail.sha256)) {
+    exportStatus.set(rowId, { state: 'exported', sha256: detail.sha256 });
+    return;
+  }
+  exportStatus.set(rowId, { state: 'refused', code: normalizeMvExportCode(receipt?.code) });
+}
+
+/**
+ * @param {{ source: Record<string, any>, exportDisabled: boolean, id: string }} entry Row to export.
  */
 function onExport(entry) {
   if (entry.exportDisabled) return;
   const row = entry.source;
   const gate = recordToDiskGate({ destination: props.exportDestination, phase: row.phase });
   if (!gate.allowed) return;
+  if (captureBound.value) {
+    // MVUI11: bound exports call the store, never the intent channel.
+    const action = props.captureState?.exportCapture;
+    if (typeof action !== 'function') return;
+    exportStatus.set(entry.id, { state: 'exporting' });
+    return Promise.resolve()
+      .then(() => action.call(props.captureState, row.id))
+      .then((result) => {
+        applyExportResult(entry.id, result);
+        return result;
+      })
+      .catch(() => {
+        const fallback = { ok: false, code: 'CAPTURE_UNAVAILABLE' };
+        applyExportResult(entry.id, fallback);
+        return fallback;
+      });
+  }
   emit(
     'submit-intent',
     buildRecordingExportIntent({
@@ -420,12 +496,23 @@ function onExport(entry) {
               :aria-label="entry.exportName"
               :title="entry.exportReason || entry.exportName"
               :disabled="entry.exportDisabled"
+              :aria-busy="entry.exportBusy ? 'true' : undefined"
               :data-unavailable-reason="entry.exportReason || undefined"
               @click="onExport(entry)"
             >
               <SidebarIcon name="save" aria-hidden="true" />
-              Export
+              {{ entry.exportLabel }}
             </button>
+            <span
+              v-if="entry.exportText"
+              :id="entry.exportStatusDomId"
+              :class="'mv4-chip mv4-export-status mv4-tone-' + entry.exportStatusTone"
+              role="status"
+              :data-semantic-anchor="entry.exportStatusAnchor"
+              :data-export-state="entry.exportState"
+              :data-export-code="entry.exportCode"
+              :title="entry.exportText"
+            >{{ entry.exportText }}</span>
           </td>
         </tr>
       </tbody>

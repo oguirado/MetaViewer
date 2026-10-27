@@ -18,7 +18,7 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import * as vue from 'vue';
 import { parse, compileScript } from '@vue/compiler-sfc';
-import { SidebarIcon } from './mvui2-terminal-mount.mjs';
+import { SidebarIcon, UiButton, rendererElement } from './mvui2-terminal-mount.mjs';
 import * as sideTerminal from '../src/terminal/sideTerminalFacade.js';
 
 let serial = 0;
@@ -74,7 +74,7 @@ function mountComponent(component, initial = {}) {
   const props = vue.reactive(initial);
   const root = { children: [] };
   const renderer = vue.createRenderer({
-    createElement: (tag) => ({ tag, children: [], props: {} }),
+    createElement: rendererElement,
     createText: (t) => ({ text: t }),
     createComment: (t) => ({ text: t }),
     insert(node, parent) {
@@ -262,6 +262,7 @@ async function mountHost(options = {}) {
           close: (request) => calls.brokerClosed.push(request),
         };
   const component = await compileSfc('multislot/MultislotHost.vue', {
+    'capsule-ui-kit/ui': { UiButton },
     '../../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue': SidebarIcon,
     '@xterm/xterm': { Terminal: class {} },
     '@xterm/addon-fit': { FitAddon: class {} },

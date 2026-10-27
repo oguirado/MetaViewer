@@ -87,15 +87,17 @@ test('tile control handlers flow through App dispatch and the host adapter as sc
       assert.equal(bodies.at(-1).op, verb);
       assert.equal(validates(intentSchema, bodies.at(-1)), true);
       assert.deepEqual(bodies.at(-1).params, { surface_id: 'surface-demo' });
-      // Multislot controls use the event form instead of the wall builder.
+      // Legacy bare controls are refused; the tile path still sends the full body.
+      const sentBefore = bodies.length;
       dispatch({ type: verb, capsuleId: 'surface-demo' });
       await Promise.all(pending.splice(0));
+      assert.equal(bodies.length, sentBefore, 'bare controls cannot reach authority.intent');
       assert.equal(validates(intentSchema, bodies.at(-1)), true);
       assert.equal(bodies.at(-1).op, verb);
     }
     assert.equal(new Set(bodies.map(body => body.request_id)).size, bodies.length);
     for (const op of ['fold', 'unfold', 'pin']) dispatch({ op, surfaceId: 'surface-demo' });
-    assert.equal(local.length, 3);
-    assert.equal(bodies.length, 4);
+    assert.equal(local.length, 5);
+    assert.equal(bodies.length, 2);
   } finally { runtime.dispose(); }
 });

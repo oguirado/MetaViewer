@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import * as vue from 'vue';
+import OpenVueButton from 'openvue/button';
 import { parse, compileScript } from '@vue/compiler-sfc';
 
 let serial = 0;
@@ -23,6 +24,7 @@ export async function compileSfc(file, deps) {
     if (spec === 'vue') {
       return all.replace(/(['"])vue\1/, JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve('vue')).href));
     }
+    if (file === 'multislot/MultislotHost.vue' && spec === 'capsule-ui-kit/ui') deps[spec] = { UiButton };
     assert.ok(spec in deps, `Unmapped SFC dependency: ${spec}`);
     return `const ${bindings.trim()} = globalThis.__mvui2v1Deps[${JSON.stringify(spec)}];`;
   });
@@ -37,6 +39,9 @@ export async function compileSfc(file, deps) {
 // Compile the real kit icon once for the closed dependency maps below.
 export const SidebarIcon = await compileSfc('../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue', {});
 
+// Real kit button and underlying library component for placement controls.
+export const UiButton = await compileSfc('../.kit/capsule-ui-kit/src/ui/UiButton.vue', { 'openvue/button': OpenVueButton });
+
 /** @param {string} name @param {Record<string, any>} children */
 export function childStub(name, children) {
   return vue.defineComponent({
@@ -48,12 +53,24 @@ export function childStub(name, children) {
   });
 }
 
+/** DOM attribute surface used by the real kit button directives. */
+export function rendererElement(tag) {
+  return { tag, children:[], props:{},
+    setAttribute(key,value) { this.props[key]=value; },
+    removeAttribute(key) { delete this.props[key]; },
+    getAttribute(key) { return this.props[key] ?? null; },
+    hasAttribute(key) { return key in this.props; },
+    querySelector() { return null; }, querySelectorAll() { return []; },
+    addEventListener() {}, removeEventListener() {},
+  };
+}
+
 /** @param {any} component @param {Record<string, any>} initial */
 export function mountComponent(component, initial = {}) {
   const props = vue.reactive(initial);
   const root = { children: [] };
   const renderer = vue.createRenderer({
-    createElement: (tag) => ({ tag, children: [], props: {} }),
+    createElement: rendererElement,
     createText: (t) => ({ text: t }),
     createComment: (t) => ({ text: t }),
     insert(node, parent) { node.parent = parent; parent.children.push(node); },

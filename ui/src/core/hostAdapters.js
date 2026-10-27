@@ -137,6 +137,15 @@ export function createAuthorityRuntime(port) {
   });
 }
 
+/** Fixed copy for AC-06 placement refusals; codes stay in data attributes. */
+export const LAYOUT_REFUSAL_COPY = Object.freeze({
+  LAYOUT_UNKNOWN_SLOT: 'This slot is no longer available.',
+  LAYOUT_ILLEGAL_TRANSITION: 'This placement change is unavailable.',
+  LAYOUT_INPUT_MODE_READ: 'Placement is unavailable while the agent controls this slot.',
+  ERR_INPUT_MODE_READ: 'Switch to WRITE mode to place this slot.',
+  ERR_PLACEMENT_PENDING: 'Placement request pending.',
+});
+
 /** Closed renderer copy; outcome messages received as props are never trusted.
  * @param {OutcomeRow|null} row
  * @returns {OutcomeRow|null} */
@@ -145,6 +154,8 @@ export function hostOutcomeFor(row) {
   const success = { ACTION_ADMITTED: 'Action admitted.', INTENT_ACKNOWLEDGED: 'Request sent.' };
   if (Object.hasOwn(success, row.code)) return { code: row.code,
     message: success[/** @type {keyof typeof success} */ (row.code)], tone: 'success' };
+  if (Object.hasOwn(LAYOUT_REFUSAL_COPY, row.code)) return { code: row.code,
+    message: LAYOUT_REFUSAL_COPY[/** @type {keyof typeof LAYOUT_REFUSAL_COPY} */ (row.code)], tone: 'refusal' };
   return { code: row.code, message: Object.hasOwn(REASONS, row.code)
     ? REASONS[/** @type {keyof typeof REASONS} */ (row.code)]
     : 'This request is unavailable. Please try again.', tone: 'refusal' };

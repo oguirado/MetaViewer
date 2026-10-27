@@ -63,6 +63,30 @@ export const MV_EXPORT_DESTINATION_REASON = 'No export destination advertised by
 export const MV_EXPORT_UNSEALED_REASON = 'Only sealed recordings can be exported';
 
 /**
+ * Literal reason shown when the host destination cannot be written.
+ * @type {string}
+ */
+export const MV_EXPORT_DESTINATION_UNAVAILABLE_REASON = 'Export destination is unavailable';
+
+/**
+ * Literal reason shown when the capture was already exported.
+ * @type {string}
+ */
+export const MV_EXPORT_ALREADY_EXPORTED_REASON = 'Recording already exported';
+
+/**
+ * Literal reason shown when the host export budget is exhausted.
+ * @type {string}
+ */
+export const MV_EXPORT_LIMIT_REASON = 'Export limit reached';
+
+/**
+ * Literal reason shown when the capture cannot be resolved.
+ * @type {string}
+ */
+export const MV_EXPORT_RECORDING_GONE_REASON = 'Recording is unavailable';
+
+/**
  * @param {unknown} phase
  * @returns {string} Known record phase, falling back to `idle`.
  */
@@ -134,6 +158,108 @@ export function panelDiskRefusalFor(input) {
     return Object.freeze({ code: MV_EXPORT_WITHOUT_DESTINATION, reason: MV_EXPORT_DESTINATION_REASON });
   }
   return null;
+}
+
+/**
+ * Closed host refusal codes for capture export, mirrored from the capture
+ * port vocabulary (MVUI11 lane E). A nested display refuses locally with
+ * the same nested code.
+ * @type {ReadonlyArray<string>}
+ */
+export const MV_EXPORT_REFUSAL_CODES = Object.freeze([
+  'DESTINATION_UNSET',
+  'CAPTURE_UNKNOWN',
+  'NOT_SEALED',
+  'DESTINATION_UNAVAILABLE',
+  'DESTINATION_EXISTS',
+  'LIMIT',
+  'NESTED_DISPLAY_ONLY',
+  'CAPTURE_UNAVAILABLE',
+]);
+
+/**
+ * Per-row export states: idle, in flight, receipt shown, typed refusal shown.
+ * @type {ReadonlyArray<string>}
+ */
+export const MV_EXPORT_STATES = Object.freeze(['idle', 'exporting', 'exported', 'refused']);
+
+/**
+ * @param {unknown} state
+ * @returns {string} Known export state, falling back to `idle`.
+ */
+export function normalizeMvExportState(state) {
+  return MV_EXPORT_STATES.includes(/** @type {string} */ (state))
+    ? /** @type {string} */ (state)
+    : 'idle';
+}
+
+/**
+ * @param {unknown} code
+ * @returns {string} Known export refusal code, failing closed to CAPTURE_UNAVAILABLE.
+ */
+export function normalizeMvExportCode(code) {
+  return MV_EXPORT_REFUSAL_CODES.includes(/** @type {string} */ (code))
+    ? /** @type {string} */ (code)
+    : 'CAPTURE_UNAVAILABLE';
+}
+
+/**
+ * Fixed user copy for an export refusal code. Unknown codes fail closed to
+ * the generic unavailable copy; the raw code is never user-facing (it rides
+ * a data attribute only).
+ * @param {unknown} code
+ * @returns {string}
+ */
+export function mvExportRefusalText(code) {
+  switch (code) {
+    case 'DESTINATION_UNSET':
+      return MV_EXPORT_DESTINATION_REASON;
+    case 'NOT_SEALED':
+      return MV_EXPORT_UNSEALED_REASON;
+    case 'DESTINATION_UNAVAILABLE':
+      return MV_EXPORT_DESTINATION_UNAVAILABLE_REASON;
+    case 'DESTINATION_EXISTS':
+      return MV_EXPORT_ALREADY_EXPORTED_REASON;
+    case 'LIMIT':
+      return MV_EXPORT_LIMIT_REASON;
+    default:
+      return MV_EXPORT_RECORDING_GONE_REASON;
+  }
+}
+
+/**
+ * Short receipt witness: the first 8 hex chars of a valid sha256, else empty.
+ * @param {unknown} sha256
+ * @returns {string}
+ */
+export function mvExportShaPrefix(sha256) {
+  return typeof sha256 === 'string' && /^[a-f0-9]{64}$/.test(sha256) ? sha256.slice(0, 8) : '';
+}
+
+/**
+ * Success status line. Never a path: the receipt carries id/bytes/digest only.
+ * @param {unknown} sha256 Host receipt digest.
+ * @returns {string}
+ */
+export function mvExportedText(sha256) {
+  const prefix = mvExportShaPrefix(sha256);
+  return prefix === '' ? 'Exported' : `Exported ${prefix}`;
+}
+
+/**
+ * @param {unknown} state
+ * @returns {string} Row export button label.
+ */
+export function mvRowExportLabel(state) {
+  return normalizeMvExportState(state) === 'exporting' ? 'Exporting' : 'Export';
+}
+
+/**
+ * @param {unknown} state
+ * @returns {boolean} True while the row export is in flight.
+ */
+export function mvRowExportBusy(state) {
+  return normalizeMvExportState(state) === 'exporting';
 }
 
 /**
@@ -538,6 +664,22 @@ export function mvExportAnchor(recordingId) {
  */
 export function mvExportGateAnchor(recordingId) {
   return `recording/${mvRecordingIdSegment(recordingId)}/export-gate`;
+}
+
+/**
+ * @param {string} recordingId Host-issued recording id.
+ * @returns {string} Stable DOM id for a row export status readout.
+ */
+export function mvExportStatusDomId(recordingId) {
+  return `mv-recordings-export-status-${mvRecordingIdSegment(recordingId)}`;
+}
+
+/**
+ * @param {string} recordingId Host-issued recording id.
+ * @returns {string} Semantic anchor for a row export status readout.
+ */
+export function mvExportStatusAnchor(recordingId) {
+  return `recording/${mvRecordingIdSegment(recordingId)}/export-status`;
 }
 
 /**

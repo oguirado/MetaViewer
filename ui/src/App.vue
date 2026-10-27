@@ -135,11 +135,11 @@ function dispatch(intent) {
     return;
   }
   const op = record?.op ?? (['take_control', 'release_control', 'fold', 'unfold'].includes(record?.type ?? '') ? record.type : null);
-  const request = record?.op || !op ? intent : { op, surfaceId: record.capsuleId };
+  const request = intent;
   const submitIntent = props.authorityHost?.intent, propose = props.authorityHost?.propose;
   if (op) {
     // Visibility needs an authoritative slot mapping; surface ids are not slot ids.
-    if (!['take_control', 'release_control'].includes(op) && record.schema !== 'ui_intent/v0.2') {
+    if (record.schema !== 'ui_intent/v0.2') {
       emit('submit-intent', intent);
       return;
     }
@@ -148,30 +148,89 @@ function dispatch(intent) {
   } else if (propose) void submitHost(() => propose(intent));
   else emit('submit-intent', intent);
 }
-/** The multislot host builds protocol bodies at its kit-event boundary.
- * App owns the controlled presentation, including hosts without an intent port.
- * @param {unknown} intent
- * @param {string} capsuleId Capsule identity supplied by the multislot boundary. */
+/** Committed placement echoes, keyed by surface; transport acceptance is never optimistic. */
+const placements = ref(/** @type {Record<string, {hidden:boolean, floating:boolean, groupId?:string, index?:number, x?:number, y?:number, width?:number, height?:number}>} */ ({}));
+const placementPending = ref(/** @type {Record<string, boolean>} */ ({}));
+const selectedPlacement = computed(() => placements.value[selectedSurface.value?.id ?? ''] ?? { hidden: false, floating: false });
+/** Closed placement boundary, including direct programmatic submissions.
+ * @param {unknown} input @param {string} capsuleId */
+function validPlacement(input, capsuleId) {
+  const b = /** @type {any} */ (input);
+  const fields = /** @type {Record<string,string[]>} */ ({ hide:['slot_id'], show:['slot_id'],
+    move:['slot_id','group_id','index'], tab:['slot_id','group_id','index'],
+    float:['slot_id','x_px','y_px','width_px','height_px'] });
+  if (!b || b.schema !== 'ui_intent/v0.2' || typeof b.request_id !== 'string'
+      || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(b.request_id)
+      || Object.keys(b).sort().join(',') !== 'op,params,request_id,schema'
+      || !Object.hasOwn(fields, b.op) || !b.params || Array.isArray(b.params)
+      || Object.keys(b.params).sort().join(',') !== [...fields[b.op]].sort().join(',')
+      || ![capsuleId, `cuk-ai-slot-${capsuleId}`].includes(b.params.slot_id)) return false;
+  return fields[b.op].every(key => {
+    const value = b.params[key];
+    if (key === 'slot_id' || key === 'group_id') return typeof value === 'string'
+      && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value);
+    const dimension = key === 'width_px' || key === 'height_px';
+    return Number.isInteger(value) && value >= (dimension ? 1 : 0)
+      && value <= (key === 'index' ? 255 : dimension ? 16384 : 16383);
+  });
+}
+/** @param {unknown} intent @param {string} capsuleId */
 async function dispatchMultislot(intent, capsuleId) {
   if (nestedMode.displayOnly) return;
-  const body = /** @type {{schema?:string,op?:string,params?:{slot_id?:string}}} */ (intent);
+  const body = /** @type {any} */ (intent);
   const surface = selectedSurface.value;
+  if (['move','tab','float','hide','show'].includes(body?.op)) {
+    if (!surface || capsuleId !== surface.id || !validPlacement(body, capsuleId)) {
+      hostOutcome.value = { code: 'LAYOUT_ILLEGAL_TRANSITION', message: '', tone: 'refusal' }; return;
+    }
+    const previous = placements.value[capsuleId] ?? { hidden:false, floating:false };
+    const code = placementPending.value[capsuleId] ? 'ERR_PLACEMENT_PENDING'
+      : surface.control === 'agent' ? 'LAYOUT_INPUT_MODE_READ'
+      : inputMode.value !== 'write' ? 'ERR_INPUT_MODE_READ'
+      : previous.hidden !== (body.op === 'show') ? 'LAYOUT_ILLEGAL_TRANSITION' : null;
+    if (code) { hostOutcome.value = { code, message:'', tone:'refusal' }; return; }
+    const submitIntent = props.authorityHost?.intent;
+    if (!submitIntent) {
+      hostOutcome.value = { code:'HOST_REQUEST_REFUSED', message:'', tone:'refusal' }; return;
+    }
+    placementPending.value = { ...placementPending.value, [capsuleId]:true };
+    try {
+      const result = await submitHost(async () => {
+        const reply = /** @type {unknown} */ (await submitIntent(intent));
+        if (reply === true || (reply && typeof reply === 'object' && 'tone' in reply && reply.tone === 'refusal')) return reply;
+        throw new Error('Host acknowledgement unavailable');
+      });
+      // This port resolves true only after the core echoes the journaled intent.
+      // Refusals, missing acknowledgments and unmounted hosts retain the layout.
+      if (result !== true || !hostActive || !rows.value.some(row => row.id === capsuleId && row.generation === surface.generation)) return;
+      const p = body.params;
+      const next = { ...previous };
+      if (body.op === 'hide' || body.op === 'show') next.hidden = body.op === 'hide';
+      else if (body.op === 'float') {
+        delete next.groupId; delete next.index;
+        Object.assign(next, { floating:true, x:p.x_px, y:p.y_px, width:p.width_px, height:p.height_px });
+      } else {
+        delete next.x; delete next.y; delete next.width; delete next.height;
+        Object.assign(next, { floating:false, groupId:p.group_id, index:p.index });
+      }
+      wall.value?.applyLayoutEcho?.(capsuleId, body);
+      placements.value = { ...placements.value, [capsuleId]:next };
+    } finally {
+      if (hostActive) placementPending.value = { ...placementPending.value, [capsuleId]:false };
+    }
+    return;
+  }
   if (surface && body?.schema === 'ui_intent/v0.2' && ['fold', 'unfold'].includes(body.op ?? '')
       && capsuleId === surface.id) {
+    if (placements.value[capsuleId]?.hidden) return;
     const visibility = surface.visibility;
     const submitIntent = props.authorityHost?.intent;
-    let accepted;
-    if (!props.authorityHost) {
-      dispatch(intent);
-      accepted = true;
-    } else {
-      accepted = await submitHost(async () => {
+    const accepted = !props.authorityHost ? (dispatch(intent), true)
+      : await submitHost(async () => {
         const result = await submitIntent?.(intent);
-        // Preserve structured refusals; malformed acknowledgements still fail closed.
         if (result === true || (result && typeof result === 'object')) return result;
         throw new Error('Host acknowledgement unavailable');
       });
-    }
     if (accepted === true && hostActive && rows.value.some(row => row.id === surface.id && row.visibility === visibility)) {
       foldOverrides.value = { ...foldOverrides.value, [surface.id]: body.op === 'fold' };
     }
@@ -213,9 +272,15 @@ async function submitHost(action) {
       : /** @type {import('./core/hostAdapters.js').OutcomeRow} */ (result);
     if (hostActive) recordActivity(result === true ? { code: 'INTENT_ACKNOWLEDGED' } : result);
     return result;
-  } catch {
-    if (hostActive) hostOutcome.value = { code: 'HOST_REQUEST_REFUSED', message: 'This request is unavailable. Please try again.', tone: 'refusal' };
-    if (hostActive) recordActivity({ code: 'HOST_REQUEST_REFUSED' });
+  } catch (error) {
+    const suppliedCode = /** @type {{code?:unknown}} */ (error)?.code;
+    const code = ['LAYOUT_UNKNOWN_SLOT','LAYOUT_ILLEGAL_TRANSITION','LAYOUT_INPUT_MODE_READ'].find(code =>
+      suppliedCode === code || String(error).includes(code)) ?? 'HOST_REQUEST_REFUSED';
+    if (hostActive) hostOutcome.value = { code, message: 'This request is unavailable. Please try again.', tone: 'refusal' };
+    if (hostActive) {
+      if (code === 'HOST_REQUEST_REFUSED') recordActivity({ code: 'HOST_REQUEST_REFUSED' });
+      else recordActivity({ code });
+    }
   }
 }
 /** Fixture-only bench hook (MVUI4L lane V): replay steps drive the real
@@ -426,7 +491,10 @@ const chromeWorkspace = markRaw(defineComponent({
         </section>
         <section v-if="multislotOpen && selectedSurface && !nestedMode.displayOnly" class="mv-multislot-screen" aria-label="Capsule multislot">
           <UiButton id="multislot-back" data-semantic-anchor="multislot/back" label="Back to wall" @click="multislotOpen = false" />
-          <MultislotHost :capsule-id="selectedSurface.id" :capsule-label="selectedSurface.title" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" :folded="selectedFolded" v-model:input-mode="inputMode" @submit-intent="dispatchMultislot">
+          <MultislotHost :capsule-id="selectedSurface.id" :capsule-label="selectedSurface.title" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" :folded="selectedFolded" :hidden="selectedPlacement.hidden" :floating="selectedPlacement.floating"
+            :float-x="selectedPlacement.x" :float-y="selectedPlacement.y" :float-width="selectedPlacement.width" :float-height="selectedPlacement.height"
+            :group-id="selectedPlacement.groupId" :placement-index="selectedPlacement.index"
+            :layout-pending="placementPending[selectedSurface.id] === true" :agent-controlled="selectedSurface.control === 'agent'" v-model:input-mode="inputMode" @submit-intent="dispatchMultislot">
             <template #surface><SurfaceCanvas :surface-id="selectedSurface.id" :generation="selectedSurface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(selectedSurface).frame" :digest="surfaceWitness(selectedSurface).digest" :state="selectedSurface.attachmentState === 'live' ? 'live' : 'connecting'" /></template>
             <template #record><MvRecordingPanel :capsule-id="selectedSurface.id" :export-destination="props.exportDestination" :phase="props.fixture?.key === 'recording' ? 'recording' : 'idle'" :capture-state="captureState" :capture-available="captureAvailable" @submit-intent="dispatch" /></template>
           </MultislotHost>

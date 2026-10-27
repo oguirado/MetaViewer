@@ -34,6 +34,32 @@ export const CAPTURE_REFUSAL_CODES = Object.freeze([
 ]);
 
 /**
+ * Closed host refusal codes for capture export replies (MVUI11 lane E).
+ * Export travels the same capture namespace but journals its own refusal
+ * vocabulary; the record set above stays pinned for the record methods.
+ * @type {ReadonlyArray<string>}
+ */
+export const EXPORT_REFUSAL_CODES = Object.freeze([
+  'DESTINATION_UNSET',
+  'CAPTURE_UNKNOWN',
+  'NOT_SEALED',
+  'DESTINATION_UNAVAILABLE',
+  'DESTINATION_EXISTS',
+  'LIMIT',
+  'NESTED_DISPLAY_ONLY',
+  'CAPTURE_UNAVAILABLE',
+]);
+
+/**
+ * Opaque export destination token. The renderer never holds a path: export
+ * is offered only when the host advertised a destination, and the request
+ * always carries this token. The host re-validates its own grant and
+ * refuses DESTINATION_UNSET when nothing is configured.
+ * @type {string}
+ */
+export const EXPORT_DESTINATION_TOKEN = 'recording:configured';
+
+/**
  * Schema tag sent on every capture request.
  * @type {string}
  */
@@ -55,6 +81,8 @@ export const CAPTURE_UNAVAILABLE = 'CAPTURE_UNAVAILABLE';
  * @typedef {Readonly<{ok:true,recording_id:string}>|Readonly<{ok:false,code:string}>} CaptureRecordStartResult
  * @typedef {Readonly<{ok:true,recording:CaptureRecording}>|Readonly<{ok:false,code:string}>} CaptureRecordStopResult
  * @typedef {Readonly<{ok:true,rows:ReadonlyArray<CaptureRow>}>|Readonly<{ok:false,code:string}>} CaptureListResult
+ * @typedef {Readonly<{id:string,bytes:number,sha256:string}>} CaptureExport
+ * @typedef {Readonly<{ok:true,export:CaptureExport}>|Readonly<{ok:false,code:string}>} CaptureExportResult
  * @typedef {Readonly<{ok:false,code:string}>} CaptureRefusal
  */
 
@@ -64,6 +92,7 @@ export const CAPTURE_UNAVAILABLE = 'CAPTURE_UNAVAILABLE';
  * @property {(surfaceId:string)=>Promise<CaptureScreenshotResult>} screenshot
  * @property {(surfaceId:string)=>Promise<CaptureRecordStartResult>} recordStart
  * @property {(recordingId:string)=>Promise<CaptureRecordStopResult>} recordStop
+ * @property {(captureId:string)=>Promise<CaptureExportResult>} exportCapture
  * @property {()=>Promise<CaptureListResult>} list
  * @property {(cb:(event:CaptureStateEvent)=>void)=>()=>void} subscribe
  */
@@ -111,6 +140,20 @@ function isMs(value) {
 }
 
 /**
+ * @param {unknown} value
+ * @returns {boolean} Lowercase hex sha256 digest guard.
+ */
+function isSha256(value) {
+  return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+}
+
+/**
+ * Export receipt byte bounds, mirroring the host seam (1..16 MiB).
+ * @type {number}
+ */
+const EXPORT_MAX_BYTES = 16 * 1024 * 1024;
+
+/**
  * @param {unknown} code
  * @returns {boolean} Membership in the closed refusal set.
  */
@@ -124,6 +167,22 @@ function isClosedCode(code) {
  */
 function refusal(code) {
   return Object.freeze({ ok: false, code: isClosedCode(code) ? code : CAPTURE_UNAVAILABLE });
+}
+
+/**
+ * @param {unknown} code
+ * @returns {boolean} Membership in the closed export refusal set.
+ */
+function isExportCode(code) {
+  return typeof code === 'string' && EXPORT_REFUSAL_CODES.includes(code);
+}
+
+/**
+ * @param {string} code
+ * @returns {CaptureRefusal} Frozen export refusal; unknown codes fail closed.
+ */
+function exportRefusal(code) {
+  return Object.freeze({ ok: false, code: isExportCode(code) ? code : CAPTURE_UNAVAILABLE });
 }
 
 /**
@@ -200,6 +259,27 @@ function checkRecordStopReply(reply) {
       duration_ms: recording.duration_ms,
       sealed: true,
       sha256: recording.sha256,
+    }),
+  });
+}
+
+/**
+ * @param {unknown} reply Host reply to an export call.
+ * @returns {CaptureExportResult|null} Frozen result, or null when malformed.
+ */
+function checkExportReply(reply) {
+  if (!isRecord(reply)) return null;
+  if (reply.ok === false) return exportRefusal(/** @type {any} */ (reply.code));
+  if (reply.ok !== true || !isRecord(reply.export)) return null;
+  const receipt = reply.export;
+  if (!isId(receipt.id) || !isSha256(receipt.sha256)) return null;
+  if (!isCount(receipt.bytes) || receipt.bytes <= 0 || receipt.bytes > EXPORT_MAX_BYTES) return null;
+  return Object.freeze({
+    ok: true,
+    export: Object.freeze({
+      id: receipt.id,
+      bytes: receipt.bytes,
+      sha256: receipt.sha256,
     }),
   });
 }
@@ -342,6 +422,27 @@ export function createCapturePort(facade) {
   }
 
   /**
+   * @param {string} captureId Sealed capture id (shot or recording).
+   * @returns {Promise<CaptureExportResult>}
+   */
+  async function exportCapture(captureId) {
+    if (!isId(captureId) || bound === null || typeof bound.export !== 'function') return unavailable();
+    /** @type {unknown} */
+    let reply;
+    try {
+      reply = await bound.export({
+        schema: CAPTURE_SCHEMA,
+        request_id: nextRequestId(),
+        capture_id: captureId,
+        destination: EXPORT_DESTINATION_TOKEN,
+      });
+    } catch {
+      return unavailable();
+    }
+    return checkExportReply(reply) ?? unavailable();
+  }
+
+  /**
    * @returns {Promise<CaptureListResult>}
    */
   async function list() {
@@ -388,6 +489,7 @@ export function createCapturePort(facade) {
     screenshot,
     recordStart,
     recordStop,
+    exportCapture,
     list,
     subscribe,
   });
@@ -411,7 +513,7 @@ const ACTIVE_PHASES = Object.freeze(['starting', 'recording', 'stopping']);
  * at creation; `dispose()` releases that subscription, after which actions
  * resolve to CAPTURE_UNAVAILABLE without touching the facade.
  * @param {CapturePort} port Port from `createCapturePort`.
- * @returns {{bySurface:Record<string,CaptureSurfaceEntry>,rows:CaptureRow[],available:boolean,port:CapturePort,toggleRecord:(surfaceId:string)=>Promise<CaptureRecordStartResult|CaptureRecordStopResult>,screenshot:(surfaceId:string)=>Promise<CaptureScreenshotResult>,refresh:()=>Promise<CaptureListResult>,dispose:()=>void}} Reactive store.
+ * @returns {{bySurface:Record<string,CaptureSurfaceEntry>,rows:CaptureRow[],available:boolean,port:CapturePort,toggleRecord:(surfaceId:string)=>Promise<CaptureRecordStartResult|CaptureRecordStopResult>,screenshot:(surfaceId:string)=>Promise<CaptureScreenshotResult>,refresh:()=>Promise<CaptureListResult>,exportCapture:(captureId:string)=>Promise<CaptureExportResult>,dispose:()=>void}} Reactive store.
  */
 export function createCaptureState(port) {
   if (!isRecord(port)
@@ -428,6 +530,8 @@ export function createCaptureState(port) {
   let disposed = false;
   /** @type {Map<string, CaptureStateEvent|null>} */
   const pendingStarts = new Map();
+  /** @type {Set<string>} Capture ids with an export in flight. */
+  const exporting = new Set();
 
   /**
    * @param {string} surfaceId
@@ -539,10 +643,33 @@ export function createCaptureState(port) {
     return result;
   }
 
+  /**
+   * Export a sealed capture to the host-configured destination. At most
+   * one export per capture id is in flight; a duplicate resolves to
+   * CAPTURE_UNAVAILABLE without touching the facade, like the busy
+   * record transitions.
+   * @param {string} captureId Sealed capture id (shot or recording).
+   * @returns {Promise<CaptureExportResult>}
+   */
+  async function exportCapture(captureId) {
+    if (!isId(captureId) || disposed) return unavailable();
+    if (typeof typed.exportCapture !== 'function') return unavailable();
+    if (exporting.has(captureId)) return unavailable();
+    exporting.add(captureId);
+    try {
+      const result = await typed.exportCapture(captureId);
+      if (disposed) return unavailable();
+      return result;
+    } finally {
+      exporting.delete(captureId);
+    }
+  }
+
   function dispose() {
     if (disposed) return;
     disposed = true;
     pendingStarts.clear();
+    exporting.clear();
     unsubscribe();
   }
 
@@ -554,6 +681,7 @@ export function createCaptureState(port) {
     toggleRecord,
     screenshot,
     refresh,
+    exportCapture,
     dispose,
   });
 }
