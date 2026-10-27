@@ -1720,6 +1720,26 @@ export async function bootProductionMain(handles) {
     await unwind();
     throw error;
   }
+  // Refused core readiness must leave zero windows allocated.
+  try {
+    hardenSession(typed.session);
+  } catch (error) {
+    await unwind();
+    throw error;
+  }
+  if (!retail.nested) {
+    /** @type {import('./coreLauncher.js').CoreStatus | null} */
+    let coreStatus = null;
+    try {
+      coreStatus = await core.start();
+    } catch {
+      coreStatus = null;
+    }
+    if (coreStatus === null || coreStatus.availability !== 'live') {
+      await unwind();
+      fail('CORE_UNAVAILABLE', 'core did not reach live');
+    }
+  }
   try {
     window = new WindowCtor(windowOptions);
   } catch {
@@ -1739,24 +1759,7 @@ export async function bootProductionMain(handles) {
     await unwind();
     throw error;
   }
-  try {
-    hardenSession(typed.session);
-  } catch (error) {
-    await unwind();
-    throw error;
-  }
   if (!retail.nested) {
-    /** @type {import('./coreLauncher.js').CoreStatus | null} */
-    let coreStatus = null;
-    try {
-      coreStatus = await core.start();
-    } catch {
-      coreStatus = null;
-    }
-    if (coreStatus === null || coreStatus.availability !== 'live') {
-      await unwind();
-      fail('CORE_UNAVAILABLE', 'core did not reach live');
-    }
     const contents = contentsUnknown;
     for (const entry of bridge) {
       const channel = entry.channel;

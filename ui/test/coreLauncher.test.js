@@ -818,6 +818,70 @@ describe('W0-SHELL-MAIN main paths', () => {
   });
 });
 
+  /**
+   * @param {Record<string, unknown>} [overrides] Option overrides.
+   * @returns {Record<string, any>} Launcher world.
+   */
+  function launcherWorld(overrides = {}) {
+    const spawned = [];
+    const killed = [];
+    const statuses = [];
+    const waits = [];
+    const child = new EventEmitter();
+    child.pid = 4242;
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    const options = {
+      spawn: (command, args, opts) => {
+        spawned.push({ command, args, opts });
+        if (overrides.spawnThrows) {
+          throw new Error('spawn boom');
+        }
+        return Object.hasOwn(overrides, 'spawnResult') ? overrides.spawnResult : child;
+      },
+      command: '/bundle/metaviewer-core',
+      args: [],
+      env: { LANG: 'C.UTF-8', PATH: '/usr/bin:/bin', ELECTRON_DISABLE_SANDBOX: '1' },
+      runtimeDir: '/run/user/1000/metaviewer',
+      selfPid: 100,
+      selfPgid: 100,
+      killFn: (pid, signal) => {
+        killed.push([pid, signal]);
+        if (overrides.killThrows) {
+          throw new Error('kill boom');
+        }
+      },
+      handshake: overrides.handshake ?? (async () => ({ authority_epoch: 7 })),
+      transport: overrides.transport ?? {
+        connect: async () => {},
+        request: async (message) => ({ echo: message }),
+        close: async () => {},
+      },
+      limits: overrides.limits ?? {
+        maxStdoutLineBytes: 64,
+        maxStderrTailBytes: 256,
+        maxQueuedRequests: 2,
+        maxQueuedBytes: 512,
+        maxRequestBytes: 128,
+        handshakeTimeoutMs: 100,
+        requestTimeoutMs: 100,
+        shutdownTimeoutMs: 100,
+      },
+      ownership: overrides.ownership ?? {
+        ownedPids: () => [4242],
+        waitForExit: async (pid) => {
+          waits.push(pid);
+        },
+      },
+      callbacks: overrides.callbacks ?? {
+        onStatus: (status) => {
+          statuses.push(status);
+        },
+      },
+    };
+    return { spawned, killed, statuses, waits, child, options };
+  }
+
 describe('W0-SHELL-MAIN production boot', () => {
   /**
    * @param {Record<string, unknown>} [overrides] Fault injection.
@@ -1068,6 +1132,39 @@ describe('W0-SHELL-MAIN production boot', () => {
     }
   });
 
+  it('version-mismatch handshake refusal surfaces with zero windows', async () => {
+    for (const mismatch of [true, false]) {
+      const world = bootWorld();
+      const child = launcherWorld({ handshake: async () => {
+        if (mismatch) throw Object.assign(new Error('incompatible core'), { code: 'VERSION_MISMATCH' });
+        return { authority_epoch: 7 };
+      } });
+      const launcher = createCoreLauncher(child.options);
+      world.handles.core = launcher;
+      try {
+        const status = await launcher.start();
+        if (mismatch) {
+          assert.equal(status.availability, 'unavailable');
+          assert.equal(status.authority_epoch, null);
+          assert.match(status.reason, /VERSION_MISMATCH/);
+          await rejectsCode(bootProductionMain(world.handles), 'CORE_UNAVAILABLE');
+          assert.equal(world.constructed.length, 0);
+          assert.equal(world.handlers.size, 0);
+          assert.ok(!world.calls.includes('window.show'));
+        } else {
+          assert.equal(status.availability, 'live');
+          const boot = await bootProductionMain(world.handles);
+          assert.equal(world.constructed.length, 1);
+          await boot.dispose();
+        }
+        assert.equal(child.spawned.length, 1);
+      } finally {
+        await launcher.dispose();
+        world.cleanup();
+      }
+    }
+  });
+
   it('refuses boot gates before any window or spawn', async () => {
     const pin = bootWorld({ electronVersion: '44.9.1' });
     try {
@@ -1129,7 +1226,8 @@ describe('W0-SHELL-MAIN production boot', () => {
     const dead = bootWorld({ coreStatus: { availability: 'unavailable', pid: null, authority_epoch: null, reason: 'nope' } });
     try {
       await rejectsCode(bootProductionMain(dead.handles), 'CORE_UNAVAILABLE');
-      assert.ok(dead.calls.includes('window.destroy'));
+      assert.equal(dead.constructed.length, 0);
+      assert.ok(!dead.calls.includes('new-BrowserWindow'));
       assert.ok(dead.calls.includes('protocol.unhandle:app'));
       assert.ok(dead.calls.includes('core.dispose'));
     } finally {
@@ -1408,70 +1506,6 @@ describe('W0-SHELL-MAIN kill guard', () => {
 });
 
 describe('W0-SHELL-MAIN core launcher lifecycle', () => {
-  /**
-   * @param {Record<string, unknown>} [overrides] Option overrides.
-   * @returns {Record<string, any>} Launcher world.
-   */
-  function launcherWorld(overrides = {}) {
-    const spawned = [];
-    const killed = [];
-    const statuses = [];
-    const waits = [];
-    const child = new EventEmitter();
-    child.pid = 4242;
-    child.stdout = new EventEmitter();
-    child.stderr = new EventEmitter();
-    const options = {
-      spawn: (command, args, opts) => {
-        spawned.push({ command, args, opts });
-        if (overrides.spawnThrows) {
-          throw new Error('spawn boom');
-        }
-        return Object.hasOwn(overrides, 'spawnResult') ? overrides.spawnResult : child;
-      },
-      command: '/bundle/metaviewer-core',
-      args: [],
-      env: { LANG: 'C.UTF-8', PATH: '/usr/bin:/bin', ELECTRON_DISABLE_SANDBOX: '1' },
-      runtimeDir: '/run/user/1000/metaviewer',
-      selfPid: 100,
-      selfPgid: 100,
-      killFn: (pid, signal) => {
-        killed.push([pid, signal]);
-        if (overrides.killThrows) {
-          throw new Error('kill boom');
-        }
-      },
-      handshake: overrides.handshake ?? (async () => ({ authority_epoch: 7 })),
-      transport: overrides.transport ?? {
-        connect: async () => {},
-        request: async (message) => ({ echo: message }),
-        close: async () => {},
-      },
-      limits: overrides.limits ?? {
-        maxStdoutLineBytes: 64,
-        maxStderrTailBytes: 256,
-        maxQueuedRequests: 2,
-        maxQueuedBytes: 512,
-        maxRequestBytes: 128,
-        handshakeTimeoutMs: 100,
-        requestTimeoutMs: 100,
-        shutdownTimeoutMs: 100,
-      },
-      ownership: overrides.ownership ?? {
-        ownedPids: () => [4242],
-        waitForExit: async (pid) => {
-          waits.push(pid);
-        },
-      },
-      callbacks: overrides.callbacks ?? {
-        onStatus: (status) => {
-          statuses.push(status);
-        },
-      },
-    };
-    return { spawned, killed, statuses, waits, child, options };
-  }
-
   it('validates every option before any spawn', () => {
     const world = launcherWorld();
     throwsCode(() => createCoreLauncher(null), 'OPTIONS');
@@ -1548,6 +1582,60 @@ describe('W0-SHELL-MAIN core launcher lifecycle', () => {
     const status = await pending;
     assert.deepEqual(status, { availability: 'live', pid: 4242, authority_epoch: 3, reason: null });
     await launcher.dispose();
+  });
+
+  // [TARGET, unit decision] The host supplies production limits (main.js,
+  // mainDirectEntry). Enforce its deadline ceiling at launcher admission;
+  // a fixture-only limits constant would not guard production callers.
+  it('production handshakeTimeoutMs <= 10000 is enforced at launcher admission', async () => {
+    const world = launcherWorld();
+    const limits = { ...world.options.limits, handshakeTimeoutMs: 10000 };
+    const launcher = createCoreLauncher({ ...world.options, limits });
+    try {
+      assert.equal((await launcher.start()).availability, 'live');
+    } finally {
+      await launcher.dispose();
+    }
+    const rejected = launcherWorld();
+    throwsCode(() => createCoreLauncher({ ...rejected.options,
+      limits: { ...limits, handshakeTimeoutMs: 10001 },
+    }), 'LIMITS');
+    assert.equal(rejected.spawned.length, 0);
+  });
+
+  it('silent-core deadline yields unavailable with one spawn', async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    let signal;
+    const world = launcherWorld({ handshake: (_adapter, abortSignal) => {
+      signal = abortSignal;
+      return new Promise(() => {});
+    } });
+    world.options.limits.handshakeTimeoutMs = 10000;
+    const launcher = createCoreLauncher(world.options);
+    try {
+      const pending = launcher.start();
+      const concurrent = launcher.start();
+      // Drain the immediately successful connect before advancing the hello clock.
+      for (let i = 0; i < 20 && !signal; i += 1) await Promise.resolve();
+      assert.ok(signal);
+      t.mock.timers.tick(9999);
+      await Promise.resolve();
+      assert.equal(launcher.getStatus().availability, 'starting');
+      assert.equal(signal.aborted, false);
+      t.mock.timers.tick(1);
+      const status = await pending;
+      assert.equal(status.availability, 'unavailable');
+      assert.equal(status.authority_epoch, null);
+      assert.match(status.reason, /handshake failed/);
+      assert.equal(signal.aborted, true);
+      assert.deepEqual(await concurrent, status);
+      assert.deepEqual(await launcher.start(), status);
+      assert.equal(world.spawned.length, 1);
+      assert.deepEqual(world.statuses.map((entry) => entry.availability), ['starting', 'unavailable']);
+    } finally {
+      await launcher.dispose();
+      t.mock.timers.reset();
+    }
   });
 
   it('survives callback exceptions without reviving state', async () => {

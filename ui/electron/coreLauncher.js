@@ -500,6 +500,10 @@ export function createCoreLauncher(options) {
       fail('LIMITS', `limit ${key} must be a positive safe integer`);
     }
   }
+  // [TARGET, unit decision] Bound host-supplied production hello deadlines.
+  if (/** @type {number} */ (limits.handshakeTimeoutMs) > 10000) {
+    fail('LIMITS', 'handshakeTimeoutMs exceeds the startup budget');
+  }
   const ownership = typed.ownership;
   if (
     ownership === null || typeof ownership !== 'object' || Array.isArray(ownership) ||
@@ -857,9 +861,14 @@ export function createCoreLauncher(options) {
         bounds.handshakeTimeoutMs,
         'HANDSHAKE_TIMEOUT',
       );
-    } catch {
+    } catch (error) {
       await stopChild();
-      return setUnavailable('core handshake failed: no verified hello');
+      // Surface only the admitted version code; foreign error text is untrusted.
+      const versionMismatch = error !== null && typeof error === 'object' &&
+        'code' in error && error.code === 'VERSION_MISMATCH';
+      return setUnavailable(versionMismatch
+        ? 'core handshake failed: VERSION_MISMATCH'
+        : 'core handshake failed: no verified hello');
     }
     const epoch = /** @type {Record<string, unknown> | null} */ (typeof hello === 'object' && hello !== null && !Array.isArray(hello) ? hello : null);
     const verified = epoch === null ? null : epoch.authority_epoch;
