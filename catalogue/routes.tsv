@@ -901,6 +901,11 @@ test_pkg_install.py	tests/ci/test_pkg_install.py
 testpol-d97a05834ea0	tests/ci/test_policy_hardening.py
 testrou-0aa0e22181f8	tests/ci/test_round2_t7_regressions.py
 testsup-b89713c3bad5	tests/ci/test_supervisor_gate_diagnostics.py
+testt7r-9f4c1c10fa4d	tests/ci/test_t7r2c_argon_volume.py
+testt7r-e23753c097bb	tests/ci/test_t7r2c_offline_enforcement.py
+testt7r-9b9bf3d1294c	tests/ci/test_t7r2c_receipt_identity.py
+testt7r-e9b65ac7d840	tests/ci/test_t7r2c_sanitizer_secrets.py
+testt7r-81e716961c5a	tests/ci/test_t7r2c_workflow_pins.py
 testtoo-e5a3688a7dd8	tests/ci/test_toolchain_policy.py
 ac-build.mjs	tests/e2e/ac-build.mjs
 ac-harness.cjs	tests/e2e/ac-harness.cjs
@@ -1044,6 +1049,9 @@ testpyt-2879eeaf233d	tests/test_python_contract_mirror.py
 test_router_docs.py	tests/test_router_docs.py
 test_router_index.py	tests/test_router_index.py
 testrou-b1523da28137	tests/test_router_queries.py
+testt7r-a955c08eecc9	tests/test_t7r2c_exit_codes.py
+testt7r-688a9d320512	tests/test_t7r2c_gate_admission.py
+testt7r-5a9023bea873	tests/test_t7r2c_reproducibility.py
 test_theme.py	tests/test_theme.py
 test_video_seal.py	tests/test_video_seal.py
 budget_gate.py	tools/budget_gate.py
