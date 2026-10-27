@@ -420,6 +420,15 @@ class StackDemoTests(unittest.TestCase):
                         )
                         self._enqueue(
                             {
+                                "schema": "surface_event/v0.2",
+                                "event": "frame_ready",
+                                "data": {
+                                    "frame_ref": next_frame,
+                                },
+                            }
+                        )
+                        self._enqueue(
+                            {
                                 "schema": "action_receipt/v0.2",
                                 "proposal_id": body["proposal_id"],
                                 "executed_at_ns": next_gen * 1000,
@@ -485,9 +494,9 @@ class StackDemoTests(unittest.TestCase):
         self.assertEqual(
             logged,
             [
-                "LIVE_STACK_TICK step=1 outcome=admitted",
-                "LIVE_STACK_TICK step=2 outcome=admitted",
-                "LIVE_STACK_TICK step=3 outcome=admitted",
+                "LIVE_STACK_TICK step=1 attempt=1 outcome=admitted",
+                "LIVE_STACK_TICK step=2 attempt=1 outcome=admitted",
+                "LIVE_STACK_TICK step=3 attempt=1 outcome=admitted",
             ],
         )
 
@@ -557,11 +566,412 @@ class StackDemoTests(unittest.TestCase):
         self.assertEqual([b["schema"] for b in bodies], ["hello/v0.2", "surface_request/v0.2"])
         self.assertEqual(bodies[1]["op"], "create")
 
+    def test_agent_tick_page_pins_newest_frame_ready_after_settle_not_settlement_after_frame(self):
+        regs, config = self._regs_and_config()
+        clock = [10.0]
+        select_waits = []
+
+        def step_handler(peer_obj, count, body):
+            peer_obj._enqueue(
+                {
+                    "schema": "action_verdict/v0.2",
+                    "proposal_id": body["proposal_id"],
+                    "decision": "admitted",
+                    "core_seq": peer_obj.core_seq,
+                }
+            )
+            if count == 1:
+                # Step 1 produces frame_ready gen 2, then settlement after_frame carries a
+                # distinct digest ("a"*64, gen 9) that must NEVER be pinned because only
+                # surface_event(frame_ready) updates core frame state.
+                peer_obj._enqueue(
+                    {
+                        "schema": "surface_event/v0.2",
+                        "event": "frame_ready",
+                        "data": {"frame_ref": peer_obj._frame_ref(2, "2")},
+                    }
+                )
+                settlement_only = peer_obj._frame_ref(9, "a")
+                peer_obj._enqueue(
+                    {
+                        "schema": "action_receipt/v0.2",
+                        "proposal_id": body["proposal_id"],
+                        "executed_at_ns": 2000,
+                        "after_frame": settlement_only,
+                        "verified": True,
+                        "verification": {"method": "pixel", "detail": "ok"},
+                        "error": "",
+                    }
+                )
+            else:
+                next_gen = count + 3
+                next_frame = peer_obj._frame_ref(next_gen, str(next_gen))
+                peer_obj._enqueue(
+                    {
+                        "schema": "surface_event/v0.2",
+                        "event": "frame_ready",
+                        "data": {"frame_ref": next_frame},
+                    }
+                )
+                peer_obj._enqueue(
+                    {
+                        "schema": "action_receipt/v0.2",
+                        "proposal_id": body["proposal_id"],
+                        "executed_at_ns": next_gen * 1000,
+                        "after_frame": next_frame,
+                        "verified": True,
+                        "verification": {"method": "pixel", "detail": "ok"},
+                        "error": "",
+                    }
+                )
+
+        peer = self._make_injected_peer(regs, config, step_handler=step_handler)
+        peer._sock = object()
+
+        # Simulate omnibox focus / caret frames arriving during the pre-step-2 settle window.
+        burst_delivered = [False]
+
+        def fake_select(rlist, _wlist, _xlist, timeout):
+            select_waits.append(timeout)
+            if peer.step_count == 1 and not burst_delivered[0]:
+                burst_delivered[0] = True
+                clock[0] += 0.05
+                peer._enqueue(
+                    {
+                        "schema": "surface_event/v0.2",
+                        "event": "frame_ready",
+                        "data": {"frame_ref": peer._frame_ref(3, "3")},
+                    }
+                )
+                other_surface_frame = dict(peer._frame_ref(99, "f"), surface_id="s-other-99")
+                peer._enqueue(
+                    {
+                        "schema": "surface_event/v0.2",
+                        "event": "frame_ready",
+                        "data": {"frame_ref": other_surface_frame},
+                    }
+                )
+                peer._enqueue(
+                    {
+                        "schema": "surface_event/v0.2",
+                        "event": "frame_ready",
+                        "data": {"frame_ref": peer._frame_ref(4, "4")},
+                    }
+                )
+                return (rlist, [], [])
+            clock[0] += timeout
+            return ([], [], [])
+
+        state = self.base_state()
+        state["agent_tick_page"] = True
+        logged = []
+        seq_ids = iter(["s1", "s2", "s3"])
+
+        stack.bootstrap_agent_surface(
+            peer,
+            regs,
+            config,
+            state,
+            self.root,
+            600,
+            containers_fn=lambda _profile: {"srf-id-12345678"},
+            remember_fn=lambda s, r: stack.save_state(r, s),
+            id_fn=lambda: next(seq_ids),
+            log_fn=logged.append,
+            select_fn=fake_select,
+            monotonic_fn=lambda: clock[0],
+        )
+
+        self.assertEqual(state["status"], "ready")
+        proposals = [env["body"] for env in peer.sent_envelopes if env["body"]["schema"] == "action_proposal/v0.2"]
+        self.assertEqual(len(proposals), 3)
+        # Step 2 must pin generation 4 ("4"*64), the newest frame_ready for s-live-1,
+        # never settlement after_frame ("a"*64, gen 9) and never s-other-99 (gen 99).
+        self.assertEqual(
+            [prop["based_on_frame"] for prop in proposals],
+            [
+                {"generation": 1, "sha256": "1" * 64},
+                {"generation": 4, "sha256": "4" * 64},
+                {"generation": 5, "sha256": "5" * 64},
+            ],
+        )
+        self.assertTrue(all(0.0 <= w <= stack.TICK_SETTLE_MAX_S for w in select_waits))
+
+    def test_agent_tick_page_stale_frame_twice_then_admitted_succeeds_on_attempt_3(self):
+        validator = check_contracts.Validator(stack.ROOT / "contracts/v0.2")
+        envelope_schema = validator.load("envelope.schema.json")
+        proposal_schema = validator.load("action_proposal.schema.json")
+
+        regs, config = self._regs_and_config()
+
+        def step_handler(peer_obj, count, body):
+            if count == 1:
+                # Step 1 admitted on attempt 1 -> emits frame_ready gen 2.
+                frame2 = peer_obj._frame_ref(2, "2")
+                peer_obj._enqueue(
+                    {
+                        "schema": "action_verdict/v0.2",
+                        "proposal_id": body["proposal_id"],
+                        "decision": "admitted",
+                        "core_seq": peer_obj.core_seq,
+                    }
+                )
+                peer_obj._enqueue(
+                    {
+                        "schema": "surface_event/v0.2",
+                        "event": "frame_ready",
+                        "data": {"frame_ref": frame2},
+                    }
+                )
+                peer_obj._enqueue(
+                    {
+                        "schema": "action_receipt/v0.2",
+                        "proposal_id": body["proposal_id"],
+                        "executed_at_ns": 2000,
+                        "after_frame": frame2,
+                        "verified": True,
+                        "verification": {"method": "pixel", "detail": "ok"},
+                        "error": "",
+                    }
+                )
+            elif count in (2, 3):
+                # Step 2 attempts 1 and 2 refused with STALE_FRAME, each superseded by a fresh frame_ready.
+                next_gen = count + 1  # gen 3 after attempt 1, gen 4 after attempt 2
+                peer_obj._enqueue(
+                    {
+                        "schema": "action_verdict/v0.2",
+                        "proposal_id": body["proposal_id"],
+                        "decision": "refused",
+                        "reason_code": "STALE_FRAME",
+                        "core_seq": peer_obj.core_seq,
+                    }
+                )
+                peer_obj._enqueue(
+                    {
+                        "schema": "surface_event/v0.2",
+                        "event": "frame_ready",
+                        "data": {"frame_ref": peer_obj._frame_ref(next_gen, str(next_gen))},
+                    }
+                )
+            elif count == 4:
+                # Step 2 attempt 3 admitted on gen 4 -> emits frame_ready gen 5.
+                frame5 = peer_obj._frame_ref(5, "5")
+                peer_obj._enqueue(
+                    {
+                        "schema": "action_verdict/v0.2",
+                        "proposal_id": body["proposal_id"],
+                        "decision": "admitted",
+                        "core_seq": peer_obj.core_seq,
+                    }
+                )
+                peer_obj._enqueue(
+                    {
+                        "schema": "surface_event/v0.2",
+                        "event": "frame_ready",
+                        "data": {"frame_ref": frame5},
+                    }
+                )
+                peer_obj._enqueue(
+                    {
+                        "schema": "action_receipt/v0.2",
+                        "proposal_id": body["proposal_id"],
+                        "executed_at_ns": 5000,
+                        "after_frame": frame5,
+                        "verified": True,
+                        "verification": {"method": "pixel", "detail": "ok"},
+                        "error": "",
+                    }
+                )
+            else:
+                # Step 3 attempt 1 admitted on gen 5 -> emits frame_ready gen 6.
+                frame6 = peer_obj._frame_ref(6, "6")
+                peer_obj._enqueue(
+                    {
+                        "schema": "action_verdict/v0.2",
+                        "proposal_id": body["proposal_id"],
+                        "decision": "admitted",
+                        "core_seq": peer_obj.core_seq,
+                    }
+                )
+                peer_obj._enqueue(
+                    {
+                        "schema": "surface_event/v0.2",
+                        "event": "frame_ready",
+                        "data": {"frame_ref": frame6},
+                    }
+                )
+                peer_obj._enqueue(
+                    {
+                        "schema": "action_receipt/v0.2",
+                        "proposal_id": body["proposal_id"],
+                        "executed_at_ns": 6000,
+                        "after_frame": frame6,
+                        "verified": True,
+                        "verification": {"method": "pixel", "detail": "ok"},
+                        "error": "",
+                    }
+                )
+
+        peer = self._make_injected_peer(regs, config, step_handler=step_handler)
+        state = self.base_state()
+        state["agent_tick_page"] = True
+        logged = []
+        seq_ids = iter(["id1a", "id2a", "id2b", "id2c", "id3a"])
+
+        stack.bootstrap_agent_surface(
+            peer,
+            regs,
+            config,
+            state,
+            self.root,
+            600,
+            containers_fn=lambda _profile: {"srf-id-12345678"},
+            remember_fn=lambda s, r: stack.save_state(r, s),
+            id_fn=lambda: next(seq_ids),
+            log_fn=logged.append,
+        )
+
+        self.assertEqual(state["status"], "ready")
+        self.assertEqual(
+            logged,
+            [
+                "LIVE_STACK_TICK step=1 attempt=1 outcome=admitted",
+                "LIVE_STACK_TICK step=2 attempt=1 outcome=refused:STALE_FRAME",
+                "LIVE_STACK_TICK step=2 attempt=2 outcome=refused:STALE_FRAME",
+                "LIVE_STACK_TICK step=2 attempt=3 outcome=admitted",
+                "LIVE_STACK_TICK step=3 attempt=1 outcome=admitted",
+            ],
+        )
+
+        for env in peer.sent_envelopes:
+            validator.validate(env, envelope_schema)
+        proposals = [env["body"] for env in peer.sent_envelopes if env["body"]["schema"] == "action_proposal/v0.2"]
+        self.assertEqual(len(proposals), 5)
+        for prop in proposals:
+            validator.validate(prop, proposal_schema)
+
+        self.assertEqual(
+            [prop["proposal_id"] for prop in proposals],
+            ["tick-1-id1a", "tick-2-id2a", "tick-2-id2b", "tick-2-id2c", "tick-3-id3a"],
+        )
+        self.assertEqual(
+            [prop["based_on_frame"] for prop in proposals],
+            [
+                {"generation": 1, "sha256": "1" * 64},
+                {"generation": 2, "sha256": "2" * 64},
+                {"generation": 3, "sha256": "3" * 64},
+                {"generation": 4, "sha256": "4" * 64},
+                {"generation": 5, "sha256": "5" * 64},
+            ],
+        )
+        self.assertEqual(
+            [prop["action"] for prop in proposals],
+            [
+                {"type": "key", "keys": ["ctrl", "l"]},
+                {"type": "type", "text": stack.TICK_URL},
+                {"type": "type", "text": stack.TICK_URL},
+                {"type": "type", "text": stack.TICK_URL},
+                {"type": "key", "keys": ["Return"]},
+            ],
+        )
+
+    def test_agent_tick_page_always_stale_frame_retries_three_attempts_then_continues(self):
+        regs, config = self._regs_and_config()
+
+        def always_stale_step2(peer_obj, count, body):
+            next_gen = count + 1
+            next_frame = peer_obj._frame_ref(next_gen, format(next_gen, "x"))
+            if body["action"] == {"type": "type", "text": stack.TICK_URL}:
+                peer_obj._enqueue(
+                    {
+                        "schema": "action_verdict/v0.2",
+                        "proposal_id": body["proposal_id"],
+                        "decision": "refused",
+                        "reason_code": "STALE_FRAME",
+                        "core_seq": peer_obj.core_seq,
+                    }
+                )
+                peer_obj._enqueue(
+                    {
+                        "schema": "surface_event/v0.2",
+                        "event": "frame_ready",
+                        "data": {"frame_ref": next_frame},
+                    }
+                )
+            else:
+                peer_obj._enqueue(
+                    {
+                        "schema": "action_verdict/v0.2",
+                        "proposal_id": body["proposal_id"],
+                        "decision": "admitted",
+                        "core_seq": peer_obj.core_seq,
+                    }
+                )
+                peer_obj._enqueue(
+                    {
+                        "schema": "surface_event/v0.2",
+                        "event": "frame_ready",
+                        "data": {"frame_ref": next_frame},
+                    }
+                )
+                peer_obj._enqueue(
+                    {
+                        "schema": "action_receipt/v0.2",
+                        "proposal_id": body["proposal_id"],
+                        "executed_at_ns": next_gen * 1000,
+                        "after_frame": next_frame,
+                        "verified": True,
+                        "verification": {"method": "pixel", "detail": "ok"},
+                        "error": "",
+                    }
+                )
+
+        peer = self._make_injected_peer(regs, config, step_handler=always_stale_step2)
+        state = self.base_state()
+        state["agent_tick_page"] = True
+        logged = []
+        seq_ids = iter(["a1", "b1", "b2", "b3", "c1"])
+
+        stack.bootstrap_agent_surface(
+            peer,
+            regs,
+            config,
+            state,
+            self.root,
+            600,
+            containers_fn=lambda _profile: {"srf-id-12345678"},
+            remember_fn=lambda s, r: stack.save_state(r, s),
+            id_fn=lambda: next(seq_ids),
+            log_fn=logged.append,
+        )
+
+        self.assertEqual(state["status"], "ready")
+        self.assertEqual(
+            logged,
+            [
+                "LIVE_STACK_TICK step=1 attempt=1 outcome=admitted",
+                "LIVE_STACK_TICK step=2 attempt=1 outcome=refused:STALE_FRAME",
+                "LIVE_STACK_TICK step=2 attempt=2 outcome=refused:STALE_FRAME",
+                "LIVE_STACK_TICK step=2 attempt=3 outcome=refused:STALE_FRAME",
+                "LIVE_STACK_TICK step=3 attempt=1 outcome=admitted",
+            ],
+        )
+        proposals = [env["body"] for env in peer.sent_envelopes if env["body"]["schema"] == "action_proposal/v0.2"]
+        self.assertEqual(
+            [prop["proposal_id"] for prop in proposals],
+            ["tick-1-a1", "tick-2-b1", "tick-2-b2", "tick-2-b3", "tick-3-c1"],
+        )
+
+        # Negative control: reusing a refused proposal_id on the same lane is rejected by live.send.
+        with self.assertRaises(RuntimeError) as dup_ctx:
+            stack.live.send(peer, regs["agent"], config, proposals[1])
+        self.assertIn("duplicate proposal_id", str(dup_ctx.exception))
+
     def test_agent_tick_page_refusal_and_error_are_fail_open_and_never_block_ready(self):
         regs, config = self._regs_and_config()
 
-        def refuse_or_fail(peer_obj, step, body):
-            if step == 1:
+        def refuse_or_fail(peer_obj, count, body):
+            if count == 1:
                 peer_obj._enqueue(
                     {
                         "schema": "action_verdict/v0.2",
@@ -571,7 +981,7 @@ class StackDemoTests(unittest.TestCase):
                         "core_seq": peer_obj.core_seq,
                     }
                 )
-            elif step == 2:
+            elif count in (2, 3, 4):
                 peer_obj._enqueue(
                     {
                         "schema": "action_verdict/v0.2",
@@ -579,6 +989,13 @@ class StackDemoTests(unittest.TestCase):
                         "decision": "refused",
                         "reason_code": "STALE_FRAME",
                         "core_seq": peer_obj.core_seq,
+                    }
+                )
+                peer_obj._enqueue(
+                    {
+                        "schema": "surface_event/v0.2",
+                        "event": "frame_ready",
+                        "data": {"frame_ref": peer_obj._frame_ref(count, str(count))},
                     }
                 )
             else:
@@ -602,14 +1019,17 @@ class StackDemoTests(unittest.TestCase):
             log_fn=logged.append,
         )
 
-        # Fail-open: all 3 steps logged their refusal/error outcomes and state still reached ready.
+        # Fail-open: non-STALE_FRAME refusal does not retry; STALE_FRAME retries 3 attempts;
+        # error logs once; state still reaches ready.
         self.assertEqual(state["status"], "ready")
         self.assertEqual(
             logged,
             [
-                "LIVE_STACK_TICK step=1 outcome=refused:SURFACE_NOT_AGENT_CONTROLLED",
-                "LIVE_STACK_TICK step=2 outcome=refused:STALE_FRAME",
-                "LIVE_STACK_TICK step=3 outcome=error:injected peer receive queue empty",
+                "LIVE_STACK_TICK step=1 attempt=1 outcome=refused:SURFACE_NOT_AGENT_CONTROLLED",
+                "LIVE_STACK_TICK step=2 attempt=1 outcome=refused:STALE_FRAME",
+                "LIVE_STACK_TICK step=2 attempt=2 outcome=refused:STALE_FRAME",
+                "LIVE_STACK_TICK step=2 attempt=3 outcome=refused:STALE_FRAME",
+                "LIVE_STACK_TICK step=3 attempt=1 outcome=error:injected peer receive queue empty",
             ],
         )
 

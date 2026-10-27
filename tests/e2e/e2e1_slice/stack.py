@@ -4,6 +4,10 @@
 [TARGET, unit decision] A detached supervisor owns the UI-independent agent
 connection, lock and TTL. State is a private recovery receipt; uncertain cleanup
 retains it and refuses another start. No debug endpoint or host-binding override.
+[TARGET, unit decision] Each --agent-tick-page step pins the newest frame_ready
+seen for the surface (never the previous settlement after_frame) after a bounded
+<= 500 ms frame quiesce wait, and retries STALE_FRAME up to 3 attempts with a
+fresh frame pin and fresh proposal_id while keeping READY fail-open.
 """
 
 import argparse
@@ -53,6 +57,9 @@ TICK_ACTIONS = (
     {"type": "type", "text": TICK_URL},
     {"type": "key", "keys": ["Return"]},
 )
+TICK_MAX_ATTEMPTS = 3
+TICK_SETTLE_MAX_S = 0.5
+TICK_QUIESCE_S = 0.15
 
 
 class StackError(RuntimeError):
@@ -558,6 +565,11 @@ def drive_agent_tick_page(
     receive_fn=None,
     id_fn=None,
     log_fn=None,
+    select_fn=None,
+    monotonic_fn=None,
+    settle_max_s=TICK_SETTLE_MAX_S,
+    quiesce_s=TICK_QUIESCE_S,
+    max_attempts=TICK_MAX_ATTEMPTS,
 ):
     """[TARGET, unit decision] Opt-in fail-open agent-driven ticking page sequence."""
     if not enabled:
@@ -566,6 +578,8 @@ def drive_agent_tick_page(
     receive_fn = live.receive if receive_fn is None else receive_fn
     id_fn = (lambda: uuid.uuid4().hex) if id_fn is None else id_fn
     log_fn = (lambda line: print(line, flush=True)) if log_fn is None else log_fn
+    select_fn = select.select if select_fn is None else select_fn
+    monotonic_fn = time.monotonic if monotonic_fn is None else monotonic_fn
     report = {} if report is None else report
     current_frame = [dict(frame)]
     outcomes = []
@@ -580,59 +594,106 @@ def drive_agent_tick_page(
             if (
                 isinstance(frame_ref, dict)
                 and frame_ref.get("surface_id") in (None, surface_id)
-                and "generation" in frame_ref
-                and "sha256" in frame_ref
+                and isinstance(frame_ref.get("generation"), int)
+                and not isinstance(frame_ref.get("generation"), bool)
+                and isinstance(frame_ref.get("sha256"), str)
+                and int(frame_ref["generation"]) >= int(current_frame[0]["generation"])
             ):
                 current_frame[0] = dict(frame_ref)
+                return True
+        return False
+
+    def settle_frames(known_stale_key=None):
+        deadline = monotonic_fn() + max(0.0, float(settle_max_s))
+        while True:
+            if isinstance(getattr(peer, "_rx", None), (bytes, bytearray)) and b"\n" in peer._rx:
+                body = receive_fn(peer, lambda _b: True, report, reject_errors=False)
+                observe_frame(body)
+                continue
+            if (
+                isinstance(getattr(peer, "rx_queue", None), list)
+                and peer.rx_queue
+                and peer.rx_queue[0].get("body", {}).get("schema") == "surface_event/v0.2"
+            ):
+                body = receive_fn(peer, lambda _b: True, report, reject_errors=False)
+                observe_frame(body)
+                continue
+            sock = getattr(peer, "_sock", None)
+            if sock is None:
+                break
+            remaining = deadline - monotonic_fn()
+            if remaining <= 0:
+                break
+            current_key = (int(current_frame[0]["generation"]), current_frame[0]["sha256"])
+            wait_s = (
+                remaining
+                if known_stale_key is not None and current_key == known_stale_key
+                else min(float(quiesce_s), remaining)
+            )
+            readable, _, _ = select_fn([sock], [], [], max(0.0, wait_s))
+            if not readable and b"\n" not in getattr(peer, "_rx", b""):
+                break
+            body = receive_fn(peer, lambda _b: True, report, reject_errors=False)
+            observe_frame(body)
 
     for step, action in enumerate(TICK_ACTIONS, start=1):
-        proposal_id = f"tick-{step}-{id_fn()}"
-        proposal = tick_proposal(surface_id, current_frame[0], proposal_id, action)
-        try:
-            send_fn(peer, agent_reg, config, proposal)
+        stale_key = None
+        for attempt in range(1, int(max_attempts) + 1):
+            proposal_id = None
+            pinned_frame = dict(current_frame[0])
+            try:
+                settle_frames(known_stale_key=stale_key)
+                pinned_frame = dict(current_frame[0])
+                proposal_id = f"tick-{step}-{id_fn()}"
+                proposal = tick_proposal(surface_id, pinned_frame, proposal_id, action)
+                send_fn(peer, agent_reg, config, proposal)
 
-            def is_verdict(body, pid=proposal_id):
-                observe_frame(body)
-                return (
-                    isinstance(body, dict)
-                    and body.get("schema") == "action_verdict/v0.2"
-                    and body.get("proposal_id") == pid
-                )
-
-            verdict = receive_fn(peer, is_verdict, report, reject_errors=False)
-            decision = verdict.get("decision")
-            if decision != "admitted":
-                reason = verdict.get("reason_code") or "refused"
-                outcome = f"refused:{reason}"
-            else:
-                def is_settlement(body, pid=proposal_id):
+                def is_verdict(body, pid=proposal_id):
                     observe_frame(body)
                     return (
                         isinstance(body, dict)
+                        and body.get("schema") == "action_verdict/v0.2"
                         and body.get("proposal_id") == pid
-                        and body.get("schema") in ("action_receipt/v0.2", "action_verdict/v0.2")
                     )
 
-                settled = receive_fn(peer, is_settlement, report, reject_errors=False)
-                if settled.get("schema") == "action_receipt/v0.2":
-                    after_frame = settled.get("after_frame")
-                    if (
-                        isinstance(after_frame, dict)
-                        and "generation" in after_frame
-                        and "sha256" in after_frame
-                    ):
-                        current_frame[0] = dict(after_frame)
-                    if settled.get("error"):
-                        outcome = f"error:{settled['error']}"
-                    else:
-                        outcome = "admitted"
-                else:
-                    reason = settled.get("reason_code") or "cancelled"
+                verdict = receive_fn(peer, is_verdict, report, reject_errors=False)
+                decision = verdict.get("decision")
+                if decision != "admitted":
+                    reason = verdict.get("reason_code") or "refused"
                     outcome = f"refused:{reason}"
-        except Exception as exc:
-            outcome = f"error:{exc}"
-        log_fn(f"LIVE_STACK_TICK step={step} outcome={outcome}")
-        outcomes.append({"step": step, "proposal_id": proposal_id, "outcome": outcome})
+                else:
+                    def is_settlement(body, pid=proposal_id):
+                        observe_frame(body)
+                        return (
+                            isinstance(body, dict)
+                            and body.get("proposal_id") == pid
+                            and body.get("schema") in ("action_receipt/v0.2", "action_verdict/v0.2")
+                        )
+
+                    settled = receive_fn(peer, is_settlement, report, reject_errors=False)
+                    if settled.get("schema") == "action_receipt/v0.2":
+                        if settled.get("error"):
+                            outcome = f"error:{settled['error']}"
+                        else:
+                            outcome = "admitted"
+                    else:
+                        reason = settled.get("reason_code") or "cancelled"
+                        outcome = f"refused:{reason}"
+            except Exception as exc:
+                outcome = f"error:{exc}"
+            log_fn(f"LIVE_STACK_TICK step={step} attempt={attempt} outcome={outcome}")
+            outcomes.append(
+                {
+                    "step": step,
+                    "attempt": attempt,
+                    "proposal_id": proposal_id,
+                    "outcome": outcome,
+                }
+            )
+            if outcome == "refused:STALE_FRAME" and attempt < int(max_attempts):
+                stale_key = (int(pinned_frame["generation"]), pinned_frame["sha256"])
+                continue
+            break
     return outcomes
 
 
@@ -654,6 +715,11 @@ def bootstrap_agent_surface(
     receive_fn=None,
     id_fn=None,
     log_fn=None,
+    select_fn=None,
+    monotonic_fn=None,
+    settle_max_s=TICK_SETTLE_MAX_S,
+    quiesce_s=TICK_QUIESCE_S,
+    max_attempts=TICK_MAX_ATTEMPTS,
 ):
     """[TARGET, unit decision] Drive agent hello, surface create, optional tick page, and READY."""
     containers_fn = live.profile_containers if containers_fn is None else containers_fn
@@ -687,6 +753,11 @@ def bootstrap_agent_surface(
         receive_fn=receive_fn,
         id_fn=id_fn,
         log_fn=log_fn,
+        select_fn=select_fn,
+        monotonic_fn=monotonic_fn,
+        settle_max_s=settle_max_s,
+        quiesce_s=quiesce_s,
+        max_attempts=max_attempts,
     )
     if state.get("record_path"):
         rec_proc = recorder_fn(state, work, env)
