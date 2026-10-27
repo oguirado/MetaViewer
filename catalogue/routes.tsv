@@ -956,6 +956,7 @@ e2e22co-065988a8c349	tests/e2e/e2e22_correlation_trace.test.js
 e2e23un-1d4e421a06ba	tests/e2e/e2e23_unknown_vs_destroyed.test.js
 e2e24ro-1aa3fa8b643d	tests/e2e/e2e24_routing_ownership.test.js
 e2e25pr-dd2ec19b4571	tests/e2e/e2e25_production_frames.test.js
+e2e26co-d464321269f1	tests/e2e/e2e26_control_with_frames.test.js
 e2e2_scenario.test.js	tests/e2e/e2e2_scenario.test.js
 e2e3_refusals.test.js	tests/e2e/e2e3_refusals.test.js
 e2e4_seams.test.js	tests/e2e/e2e4_seams.test.js
@@ -1364,6 +1365,7 @@ uiel-reap.test.js	ui/test/uiel-reap.test.js
 uielshe-44fcbd32601d	ui/test/uiel-shell-version.test.js
 uielsmo-2d86eec1e39f	ui/test/uiel-smoke-rss.test.js
 uiel2au-1c86966804a4	ui/test/uiel2-authority-confinement.test.js
+w3contr-ee4ed320402b	ui/test/w3-control-timeout.test.js
 w3frame-6611301ee8f6	ui/test/w3-frame-acquire.test.js
 wall.test.js	ui/test/wall.test.js
 wireaut-1b048c3b3100	ui/test/wire-authority.test.js
