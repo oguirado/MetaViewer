@@ -19,17 +19,17 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 256 | 55 | 201 |
-| Lanes finished OK | 256 | 55 | 201 |
-| Agent steps | 12,793 | 2,705 | 10,088 |
-| Lane-hours of agent work | 32.8 | 5.2 | 27.5 |
-| Fresh input tokens | 54,520,548 | 11,482,034 | 43,038,514 |
-| Cache-read input tokens | 1,151,031,035 | 226,255,212 | 924,775,823 |
+| Lanes launched | 257 | 55 | 202 |
+| Lanes finished OK | 257 | 55 | 202 |
+| Agent steps | 12,840 | 2,705 | 10,135 |
+| Lane-hours of agent work | 32.9 | 5.2 | 27.6 |
+| Fresh input tokens | 54,690,193 | 11,482,034 | 43,208,159 |
+| Cache-read input tokens | 1,154,169,161 | 226,255,212 | 927,913,949 |
 | Prompt cache hit % | 95.5 | 95.2 | 95.6 |
-| Output tokens | 11,570,018 | 2,135,708 | 9,434,310 |
-| Thinking tokens | 6,139,311 | 1,050,039 | 5,089,272 |
-| Cost (USD) | 10.0681 | 2.0279 | 8.0403 |
-| Cost per lane (USD) | 0.0393 | 0.0369 | 0.04 |
+| Output tokens | 11,601,947 | 2,135,708 | 9,466,239 |
+| Thinking tokens | 6,154,675 | 1,050,039 | 5,104,636 |
+| Cost (USD) | 10.0977 | 2.0279 | 8.0699 |
+| Cost per lane (USD) | 0.0393 | 0.0369 | 0.0399 |
 
 Rooms: 56. Peak concurrent lanes [MEASURED from lane start/end]: 24.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
@@ -47,7 +47,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | kit | 3 | 96.5 | 0.1997 |
 | ops | 4 | 88.1 | 0.0468 |
 | plan | 12 | 92.6 | 0.3072 |
-| release | 4 | 92.1 | 0.0648 |
+| release | 5 | 93.2 | 0.0945 |
 | research | 14 | 94.6 | 0.5673 |
 | review | 47 | 94.4 | 1.393 |
 | test | 12 | 95.6 | 0.5657 |
@@ -114,7 +114,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui4l | UI orchestrator | Oct 27 04:21 | vision | 3 | 97.9 | 0.2069 | Fix the MetaViewer live-state findings of vision round mv5 (lost tile vanishes, badge/placeholder, folded/error tile layout) and make refusal, verdict, activity, multislot outcome and terminal lifecycle rows reachable for the vision loop. |
 | mv0r2b | conductor | Oct 27 05:24 | testing | 8 | 95.6 | 0.3636 | Refresh the external testing round-2 prompts (Jules and ChatGPT, T1-T8) to the integration head after G-W1 and the W1 judgement, so testers target new code and still-open items. |
 | mv0tg3 | conductor | Oct 27 07:22 | testing | 8 | 95.0 | 0.2757 | Refresh the AC test-gap map on the integration head after the night (about 80 new commits), and prepare the round-2 tester index and the TESTING.md fact base, so local testing with Muse Spark drives the remaining test units to v0.2.0. |
-| mvkp | conductor | Oct 27 07:32 | release | 4 | 92.1 | 0.0648 | Prove with Meta Muse Spark 1.3 that the capsule-ui-kit repository holds no secret, personal data or unsafe workflow in any reachable ref before the developer makes it public, and design its full code router. |
+| mvkp | conductor | Oct 27 07:32 | release | 5 | 93.2 | 0.0945 | Prove with Meta Muse Spark 1.3 that the capsule-ui-kit repository holds no secret, personal data or unsafe workflow in any reachable ref before the developer makes it public, and design its full code router. |
 
 ## Every lane
 
@@ -373,6 +373,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0tg3 | IDX | Round-2 tester index | Oct 27 07:23 | yes | 26 | 91.0 | 0.025073 |
 | mv0tg3 | TST | TESTING.md fact base | Oct 27 07:23 | yes | 65 | 96.1 | 0.03766 |
 | mvkp | SEC | Kit public audit SEC | Oct 27 07:32 | yes | 25 | 91.7 | 0.016575 |
+| mvkp | PATHS | Kit public audit PATHS | Oct 27 07:32 | yes | 47 | 94.9 | 0.029627 |
 | mvkp | WF | Kit public audit WF | Oct 27 07:32 | yes | 20 | 88.6 | 0.015448 |
 | mvkp | LIC | Kit public audit LIC | Oct 27 07:32 | yes | 29 | 94.1 | 0.013866 |
 | mvkp | ROUTER | Kit public audit ROUTER | Oct 27 07:33 | yes | 32 | 92.6 | 0.018948 |
