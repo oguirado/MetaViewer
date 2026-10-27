@@ -16,7 +16,14 @@ import { syncKit } from '../../tools/sync_kit.mjs';
 const execute = promisify(execFile);
 const ui = fileURLToPath(new URL('../', import.meta.url));
 const repo = resolve(ui, '..');
-const archive = 'electron-v44.9.2-linux-arm64.zip';
+/** @param {string} value */
+export function packageArchitecture(value = process.arch) {
+  if (value !== 'arm64' && value !== 'x64') throw new Error('PKG_ARCH_UNSUPPORTED');
+  return { arch: value, machine: value === 'arm64' ? 183 : 62,
+    name: `MetaViewer-linux-${value}`, archive: `electron-v44.9.2-linux-${value}.zip` };
+}
+const architecture = packageArchitecture();
+const { archive } = architecture;
 
 /** @param {string | undefined} value @param {string} repository */
 export function validateOutput(value, repository) {
@@ -254,21 +261,22 @@ function rejectFont(name, bytes) {
 }
 
 /** @param {string} path */
-export async function verifyArm64Binary(path) {
+export async function verifyBinary(path, arch = architecture.arch) {
+  const { machine } = packageArchitecture(arch);
   const info = await fs.lstat(path).catch(() => null);
   if (!info?.isFile() || info.isSymbolicLink() || !(info.mode & 0o111)) throw new Error(`PKG_BINARY_MISSING: ${basename(path)}`);
   const file = await fs.open(path,'r');
   try {
     const bytes = Buffer.alloc(64); await file.read(bytes,0,64,0);
-    if (bytes.subarray(0,4).toString('hex') !== '7f454c46' || bytes[4] !== 2 || bytes[5] !== 1 || bytes.readUInt16LE(18) !== 183)
+    if (bytes.subarray(0,4).toString('hex') !== '7f454c46' || bytes[4] !== 2 || bytes[5] !== 1 || bytes.readUInt16LE(18) !== machine)
       throw new Error(`PKG_ARCH_MISMATCH: ${basename(path)}`);
   } finally {await file.close();}
 }
 
 /** Complete exact inventory: extras, aliases and omissions all fail closed.
  * @param {string} root */
-export async function verifyInstall(root) {
-  for (const name of ['metaviewer','resources/bin/metaviewer-core','resources/bin/mv-daemon-adapter']) await verifyArm64Binary(join(root,name));
+export async function verifyInstall(root, arch = architecture.arch) {
+  for (const name of ['metaviewer','resources/bin/metaviewer-core','resources/bin/mv-daemon-adapter']) await verifyBinary(join(root,name), arch);
   const manifest = await fs.readFile(`${root}.sha256`,'utf8');
   const expected = new Map();
   for (const line of manifest.trimEnd().split('\n')) {
@@ -304,8 +312,8 @@ export async function verifyInstall(root) {
 }
 
 /** @param {string} root */
-export async function bundlePackage(root) {
-  await verifyInstall(root);
+export async function bundlePackage(root, arch = architecture.arch) {
+  await verifyInstall(root, arch);
   const artifact=`${root}.tar`;
   await execute('tar',['--sort=name','--mtime=@0','--owner=0','--group=0','--numeric-owner',
     '--format=gnu','--mode=u+rwX,go+rX,go-w','-cf',artifact,'-C',dirname(root),basename(root),`${basename(root)}.sha256`]);
@@ -326,9 +334,9 @@ export async function cleanInstallSmoke(artifact) {
     const types=await execute('tar',['-tvf',artifact],{maxBuffer:1024*1024});
     if (types.stdout.split('\n').filter(Boolean).some(line => !['-','d'].includes(line[0]))) throw new Error('PKG_ARCHIVE_ALIAS');
     const listing=await execute('tar',['-tf',artifact],{maxBuffer:1024*1024});
-    if (listing.stdout.split('\n').filter(Boolean).some(name => !/^MetaViewer-linux-arm64(?:\/|\.sha256$)/.test(name) || name.split('/').includes('..'))) throw new Error('PKG_ARCHIVE_INVALID');
+    if (listing.stdout.split('\n').filter(Boolean).some(name => !(name.startsWith(architecture.name + '/') || name === architecture.name + '.sha256') || name.split('/').includes('..'))) throw new Error('PKG_ARCHIVE_INVALID');
     await execute('tar',['--no-same-owner','-xf',artifact,'-C',clean]);
-    const installed=join(clean,'MetaViewer-linux-arm64');
+    const installed=join(clean,architecture.name);
     await verifyInstall(installed);
     // Exercise the delivered bytes, then restore each control before launch.
     const expectReason = async code => {
@@ -403,10 +411,10 @@ export async function packageShell(env = process.env) {
   if (!env.MV_ELECTRON_ZIP_DIR && !env.ELECTRON_OVERRIDE_DIST_PATH) {
     throw new Error('Set MV_ELECTRON_ZIP_DIR or ELECTRON_OVERRIDE_DIST_PATH to a local Electron distribution');
   }
-  const final = join(output, 'MetaViewer-linux-arm64');
+  const final = join(output, architecture.name);
   // Refuse replacement of a previously delivered artifact.
   const prior = await fs.readdir(output);
-  if (prior.includes('MetaViewer-linux-arm64') || prior.includes('MetaViewer-linux-arm64.sha256')) {
+  if (prior.includes(architecture.name) || prior.includes(architecture.name + '.sha256')) {
     throw new Error('Package destination already exists');
   }
   const work = await fs.mkdtemp(join(output, '.pkg-'));
@@ -460,25 +468,25 @@ export async function packageShell(env = process.env) {
     await execute(env.GO || 'go',['build','-trimpath','-buildvcs=false','-ldflags=-buildid=',
       '-o',join(native,'mv-daemon-adapter'),'./cmd/mv-daemon-adapter'],
       {cwd:join(repo,'daemon-adapter'),env:{...env,GOPROXY:'off',GOSUMDB:'off',GOTOOLCHAIN:'local'},maxBuffer:1024*1024});
-    for (const name of ['metaviewer-core','mv-daemon-adapter']) await verifyArm64Binary(join(native,name));
+    for (const name of ['metaviewer-core','mv-daemon-adapter']) await verifyBinary(join(native,name));
     const { packager } = await import('@electron/packager');
     const fuseConfig = buildFuseConfig();
     assertPackagingPolicy(true, fuseConfig);
     const built = await packager({ dir: app, out: join(work, 'packed'), name: 'MetaViewer',
-      executableName: 'metaviewer', platform: 'linux', arch: 'arm64', electronVersion: '44.9.2',
+      executableName: 'metaviewer', platform: 'linux', arch: architecture.arch, electronVersion: '44.9.2',
       electronZipDir: zipDir, asar: true, prune: false, overwrite: false });
-    if (built.length !== 1) throw new Error('Expected exactly one linux-arm64 package');
-    await verifyArm64Binary(join(built[0],'metaviewer'));
+    if (built.length !== 1) throw new Error(`Expected exactly one linux-${architecture.arch} package`);
+    await verifyBinary(join(built[0],'metaviewer'));
     await fs.cp(native,join(built[0],'resources/bin'),{recursive:true});
     await fs.cp(join(repo,'contracts/v0.2'),join(built[0],'resources/contracts/v0.2'),{recursive:true});
     await fs.copyFile(join(repo,'deps.lock'),join(built[0],'resources/deps.lock'));
     await fs.copyFile(join(ui,'kit.lock.json'),join(built[0],'resources/kit.lock.json'));
-    await fs.writeFile(join(built[0],'INSTALL.md'), `# MetaViewer Linux arm64
+    await fs.writeFile(join(built[0],'INSTALL.md'), `# MetaViewer Linux ${architecture.arch}
 
 Run ./metaviewer to start the production UI with its bundled real core.
 Use --nested-depth=1 only for the separate display-only view.
 Verify every delivered file from this directory with:
-sha256sum -c ../MetaViewer-linux-arm64.sha256
+sha256sum -c ../${architecture.name}.sha256
 
 The manifest pins the core, adapter, Electron, renderer and preload bytes.
 resources/kit.lock.json records the build's verified UI kit pin;

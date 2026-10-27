@@ -50,6 +50,49 @@ class PackageRegressions(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 self.assert_admission(mutant)
 
+    def assert_local_product_handoff(self, text):
+        package = text.split('  package:\n', 1)[1].split('  build-macos:\n', 1)[0]
+        required = text.split('  ci-required:\n', 1)[1]
+        for job in (package, required):
+            self.assertIn('runs-on: ${{ matrix.runner }}', job)
+            self.assertIn('matrix.platform', job)
+            self.assertIn('runner: ubuntu-24.04\n            platform: x64', job)
+            self.assertIn('runner: ubuntu-24.04-arm\n            platform: arm64', job)
+            self.assertIn('go-version-file: daemon-adapter/go.mod', job)
+            self.assertIn('cargo fetch --locked', job)
+            self.assertIn('CARGO_TARGET_DIR:', job)
+            self.assertIn('CAPSULE_UI_KIT_REPO:', job)
+            self.assertIn('node .github/workflows/install_electron.cjs', job)
+            self.assertIn('python3 tests/ci/test_package_identity.py --build', job)
+            self.assertNotRegex(job, r'uses: actions/(?:upload|download)-artifact')
+            self.assertLess(job.index('Prime locked dependencies'), job.index('test_package_identity.py --build'))
+        for arch in ('x64', 'arm64'):
+            self.assertIn(f'receipt_{arch}: ${{{{ steps.package-evidence.outputs.receipt_{arch} }}}}', package)
+            self.assertIn(f'needs.package.outputs.receipt_{arch}', required)
+        self.assertIn("output.write('receipt_' + e['PLATFORM'] + '='", package)
+        self.assertIn('PLATFORM: ${{ matrix.platform }}', required)
+
+        self.assertLess(required.index('test_package_identity.py --build'),
+                        required.index('test_package_identity.py --distribution'))
+        self.assertIn('check_distribution="${{ job.status }}"', required)
+        self.assertIn('      - name: Aggregate required results\n        if: always()', required)
+        self.assertIn('      - name: Build and witness package\n        if: always()', package)
+        self.assertIn("'product_identity': (json.load", package)
+
+    def test_path_2b_local_product_handoff(self):
+        self.assert_local_product_handoff(source('ci.yml'))
+
+    def test_local_handoff_negative_controls(self):
+        text = source('ci.yml')
+        for mutant in (text.replace('runner: ubuntu-24.04-arm', 'runner: ubuntu-24.04'),
+                       text.replace('python3 tests/ci/test_package_identity.py --build', 'true'),
+                       text.replace('needs.package.outputs.receipt', 'needs.package.result'),
+                       text.replace('receipt_x64:', 'receipt_duplicate:'),
+                       text.replace('platform: x64', 'platform: arm64'),
+                       text.replace('check_distribution="${{ job.status }}"', 'check_distribution=success')):
+            with self.assertRaises(AssertionError):
+                self.assert_local_product_handoff(mutant)
+
     def sanitize(self, text, payload):
         function = textwrap.dedent(re.search(
             r'^          sanitize\(\) \{.*?^          \}', text, re.M | re.S)[0])

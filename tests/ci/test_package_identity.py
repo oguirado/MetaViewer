@@ -4,8 +4,11 @@ Exercise the workflow aggregation against independently available product bytes.
 import hashlib
 import json
 import os
+import platform
 from pathlib import Path
 import subprocess
+import tarfile
+import io
 import tempfile
 import textwrap
 import unittest
@@ -29,12 +32,47 @@ class PackageIdentityTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.product = self.root / 'package.tar'
-        self.product.write_bytes(b'independent package bytes')
+        self.manifest = b'fixture manifest bytes\n'
+        self.write_product()
+        self.evidence = {'artifact': 'package.tar',
+            'artifact_sha256': hashlib.sha256(self.product.read_bytes()).hexdigest(),
+            'manifest_sha256': hashlib.sha256(self.manifest).hexdigest(),
+            'architecture': 'arm64', 'smoke_marker': 'METAVIEWER_MAIN_SMOKE_OK'}
+        (self.root / 'product-evidence.json').write_text(json.dumps(self.evidence))
         self.receipt = {'gate_id': 'package', 'outcome': 'PASS', 'rc': 0,
+                        'scope': {'platform': 'arm64'},
                         'identities': {'gate_revision': 'revision',
                                        'artifact_sha256': 'a' * 64},
-                        'product_identity': {'artifact': 'package.tar',
-                            'artifact_sha256': hashlib.sha256(self.product.read_bytes()).hexdigest()}}
+                        'product_identity': dict(self.evidence)}
+
+    def write_product(self, machine=183, arch='arm64'):
+        binary = bytearray(64)
+        binary[:6] = b'\x7fELF\x02\x01'
+        binary[18:20] = machine.to_bytes(2, 'little')
+        with tarfile.open(self.product, 'w') as archive:
+            for name, data in [(f'MetaViewer-linux-{arch}.sha256', self.manifest),
+                    *[(f'MetaViewer-linux-{arch}/{name}', bytes(binary)) for name in
+                      ('metaviewer', 'resources/bin/metaviewer-core', 'resources/bin/mv-daemon-adapter')]]:
+                entry = tarfile.TarInfo(name)
+                entry.size = len(data)
+                archive.addfile(entry, io.BytesIO(data))
+
+    def test_wrong_architecture_bytes_rejected(self):
+        self.write_product(machine=62)
+        self.receipt['product_identity']['artifact_sha256'] = hashlib.sha256(self.product.read_bytes()).hexdigest()
+        (self.root / 'product-evidence.json').write_text(json.dumps(self.receipt['product_identity']))
+        self.assertFalse(self.aggregate(self.receipt))
+
+    def test_missing_or_forged_smoke_and_manifest_rejected(self):
+        for key, value in [('smoke_marker', ''), ('manifest_sha256', '0' * 64),
+                           ('architecture', 'x64')]:
+            with self.subTest(key=key):
+                self.receipt['product_identity'] = dict(self.evidence, **{key: value})
+                (self.root / 'product-evidence.json').write_text(json.dumps(self.receipt['product_identity']))
+                self.assertFalse(self.aggregate(self.receipt))
+        (self.root / 'product-evidence.json').unlink()
+        self.receipt['product_identity'] = dict(self.evidence)
+        self.assertFalse(self.aggregate(self.receipt))
 
     def aggregate(self, receipt):
         # The actual workflow function, rather than a second policy implementation.
@@ -47,6 +85,27 @@ class PackageIdentityTests(unittest.TestCase):
 
     def test_independent_bytes_accepted(self):
         self.assertTrue(self.aggregate(self.receipt))
+
+    def test_each_architecture_requires_own_bytes_and_evidence(self):
+        for arch, machine in [('arm64', 183), ('x64', 62)]:
+            with self.subTest(arch=arch):
+                self.write_product(machine=machine, arch=arch)
+                evidence = dict(self.evidence, architecture=arch,
+                    artifact_sha256=hashlib.sha256(self.product.read_bytes()).hexdigest())
+                self.receipt.update(scope={'platform': arch}, product_identity=evidence)
+                (self.root / 'product-evidence.json').write_text(json.dumps(evidence))
+                self.assertTrue(self.aggregate(self.receipt))
+                other = 'x64' if arch == 'arm64' else 'arm64'
+                self.assertTrue(distribution_errors(self.receipt, self.root, 'revision', other))
+                self.write_product(machine=62 if machine == 183 else 183, arch=arch)
+                evidence['artifact_sha256'] = hashlib.sha256(self.product.read_bytes()).hexdigest()
+                (self.root / 'product-evidence.json').write_text(json.dumps(evidence))
+                self.assertIn('wrong product architecture', distribution_errors(
+                    self.receipt, self.root, 'revision', arch))
+                self.product.write_bytes(b'tampered')
+                self.assertFalse(self.aggregate(self.receipt))
+                self.product.unlink()
+                self.assertFalse(self.aggregate(self.receipt))
 
     def test_self_attested_only_rejected(self):
         del self.receipt['product_identity']
@@ -105,9 +164,55 @@ class PackageIdentityTests(unittest.TestCase):
         self.assertIn('needs.package.outputs.receipt', required)
         self.assertIn('test_package_identity.py --distribution', required)
 
+    def test_producer_receipt_requires_successful_build(self):
+        text = CI.read_text().split('  package:', 1)[1].split('  build-macos:', 1)[0]
+        body = textwrap.dedent(text.split('      - name: Build and witness package\n', 1)[1].split('        run: |\n', 1)[1])
+        for mode in ('valid', 'valid-x64', 'failed-build', 'wrong-arch', 'failed-setup'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                output = Path(tmp) / 'output'
+                expected = dict(self.evidence, architecture='x64' if mode == 'valid-x64' else 'arm64')
+                (self.root / 'product-evidence.json').write_text(json.dumps(expected))
+                # Stub the external builder only; execute the real receipt writer.
+                script = body.replace('python3 tests/ci/test_package_identity.py --build > "$LOG" 2>&1',
+                                      '(exit %d) > "$LOG" 2>&1' % (7 if mode == 'failed-build' else 0))
+                result = subprocess.run(['bash', '-c', script], cwd=ROOT, capture_output=True,
+                    text=True, env=dict(os.environ, RUNNER_TEMP=tmp, JOB_ID='package',
+                        PLATFORM='riscv64' if mode == 'wrong-arch' else 'x64' if mode == 'valid-x64' else 'arm64',
+                        SETUP_RESULT='failure' if mode == 'failed-setup' else 'success',
+                        MV_PKG_OUT=str(self.root), GITHUB_RUN_ID='test', GITHUB_SHA='revision',
+                        GITHUB_OUTPUT=str(output), GITHUB_STEP_SUMMARY=tmp + '/summary'))
+                receipt = json.loads(next(Path(tmp).rglob('*.receipt.json')).read_text())
+                self.assertEqual(result.returncode == 0, mode in ('valid', 'valid-x64'), result.stderr)
+                self.assertEqual(receipt['outcome'], 'PASS' if mode in ('valid', 'valid-x64') else 'FAIL')
+                self.assertEqual(receipt['product_identity'], expected if mode in ('valid', 'valid-x64') else None)
+                self.assertIn('receipt_' , output.read_text())
+
+    def test_build_requires_real_smoke_marker(self):
+        from unittest.mock import patch
+        for mode in ('valid', 'missing-marker', 'failed-command'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                output = Path(tmp)
+                (output / 'MetaViewer-linux-arm64.tar').write_bytes(b'fixture')
+                (output / 'MetaViewer-linux-arm64.sha256').write_bytes(b'manifest')
+                marker = 'METAVIEWER_MAIN_SMOKE_OK' if mode == 'valid' else ''
+                smoke = json.dumps({'marker': marker, 'source_access': False, 'negative_controls': 'PASS'})
+                calls = [subprocess.CompletedProcess([], 7 if mode == 'failed-command' else 0, ''),
+                         subprocess.CompletedProcess([], 0, ''), subprocess.CompletedProcess([], 0, smoke)]
+                with patch.dict(os.environ, MV_PKG_OUT=tmp, PLATFORM='arm64'), patch.object(subprocess, 'run', side_effect=calls) as runner:
+                    if mode == 'valid':
+                        build_evidence()
+                        self.assertEqual(runner.call_count, 3)
+                        self.assertIn('--verify-install', runner.call_args_list[1].args[0])
+                        self.assertIn('--smoke', runner.call_args_list[2].args[0])
+                        self.assertTrue(all(call.args[0][:2] == ['bash', '.github/workflows/offline.sh'] for call in runner.call_args_list))
+                    else:
+                        with self.assertRaises((ValueError, subprocess.CalledProcessError)):
+                            build_evidence()
+                    self.assertEqual((output / 'product-evidence.json').exists(), mode == 'valid')
+
     def test_package_reports_null_product_and_fails(self):
         text = CI.read_text().split('  package:', 1)[1].split('  build-macos:', 1)[0]
-        body = textwrap.dedent(text.split('        run: |\n', 1)[1])
+        body = textwrap.dedent(text.split('      - name: Build and witness package\n', 1)[1].split('        run: |\n', 1)[1])
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / 'output'
             result = subprocess.run(['bash', '-c', body], cwd=ROOT, capture_output=True,
@@ -118,11 +223,11 @@ class PackageIdentityTests(unittest.TestCase):
             receipt = json.loads(next(Path(tmp).rglob('*.receipt.json')).read_text())
             self.assertIsNone(receipt['product_identity'])
             self.assertTrue(receipt['reason'])
-            self.assertIn('receipt=', output.read_text())
+            self.assertIn('receipt_' , output.read_text())
 
 
 # Defined below the tests so workflow extraction can share the same verifier.
-def distribution_errors(receipt, product_root, revision):
+def distribution_errors(receipt, product_root, revision, expected_arch=None):
     if not isinstance(receipt, dict):
         return ['missing receipt']
     if receipt.get('gate_id') != 'package' or receipt.get('outcome') != 'PASS' or type(receipt.get('rc')) is not int or receipt['rc'] != 0:
@@ -131,7 +236,7 @@ def distribution_errors(receipt, product_root, revision):
     if not revision or not isinstance(identities, dict) or identities.get('gate_revision') != revision:
         return ['package revision mismatch']
     product = receipt.get('product_identity')
-    if not isinstance(product, dict) or set(product) != {'artifact', 'artifact_sha256'}:
+    if not isinstance(product, dict) or set(product) != {'artifact', 'artifact_sha256', 'manifest_sha256', 'architecture', 'smoke_marker'}:
         return ['independent product evidence absent']
     import re
     artifact, digest = product['artifact'], product['artifact_sha256']
@@ -155,17 +260,79 @@ def distribution_errors(receipt, product_root, revision):
             actual = hashlib.file_digest(stream, 'sha256').hexdigest()
     except (OSError, ValueError):
         return ['independent product bytes absent']
-    return [] if actual == digest else ['artifact_sha256 mismatch']
+    if actual != digest:
+        return ['artifact_sha256 mismatch']
+    arch = expected_arch or receipt.get('scope', {}).get('platform')
+    if arch not in ('arm64', 'x64') or product['architecture'] != arch or product['smoke_marker'] != 'METAVIEWER_MAIN_SMOKE_OK':
+        return ['architecture or smoke marker mismatch']
+    try:
+        proof = root / 'product-evidence.json'
+        if proof.is_symlink() or json.loads(proof.read_text()) != product:
+            return ['local smoke evidence mismatch']
+        with tarfile.open(path, 'r:') as archive:
+            manifest = archive.extractfile(f'MetaViewer-linux-{arch}.sha256')
+            if manifest is None or hashlib.file_digest(manifest, 'sha256').hexdigest() != product['manifest_sha256']:
+                return ['manifest digest mismatch']
+            for name in ('metaviewer', 'resources/bin/metaviewer-core', 'resources/bin/mv-daemon-adapter'):
+                member = archive.getmember(f'MetaViewer-linux-{arch}/' + name)
+                if not member.isfile():
+                    return ['invalid binary member']
+                binary = archive.extractfile(member).read(64)
+                if binary[:6] != b'\x7fELF\x02\x01' or int.from_bytes(binary[18:20], 'little') != (183 if arch == 'arm64' else 62):
+                    return ['wrong product architecture']
+    except (OSError, ValueError, KeyError, tarfile.TarError):
+        return ['local manifest or smoke evidence absent']
+    return []
+
+
+def build_evidence():
+    """[TARGET, unit decision] Path 2B shared producer/reproducer, no transport.
+
+    Run all product operations in the existing offline namespace. A proof is
+    published only after the real clean-install smoke returns its exact marker.
+    """
+    arch = os.environ.get('PLATFORM') or {'aarch64': 'arm64', 'x86_64': 'x64'}.get(platform.machine())
+    if arch not in ('arm64', 'x64'):
+        raise ValueError('unsupported package architecture')
+    output = Path(os.environ['MV_PKG_OUT'])
+    proof = output / 'product-evidence.json'
+    if proof.exists():
+        raise ValueError('refuse stale product evidence')
+    offline = ['bash', '.github/workflows/offline.sh']
+    def run(argv):
+        result = subprocess.run(offline + argv, cwd=ROOT, check=False,
+                                text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        print(result.stdout, end='', flush=True)
+        result.check_returncode()
+        return result.stdout
+    run(['bash', 'scripts/bootstrap.sh'])
+    installed = output / f'MetaViewer-linux-{arch}'
+    artifact = output / f'MetaViewer-linux-{arch}.tar'
+    run(['node', 'ui/tools/package.js', '--verify-install', str(installed)])
+    smoke = json.loads(run(['node', 'ui/tools/package.js', '--smoke', str(artifact)]))
+    if smoke != {'marker': 'METAVIEWER_MAIN_SMOKE_OK', 'source_access': False, 'negative_controls': 'PASS'}:
+        raise ValueError('clean-install smoke evidence mismatch')
+    def sha(path):
+        with path.open('rb') as stream:
+            return hashlib.file_digest(stream, 'sha256').hexdigest()
+    evidence = {'artifact': artifact.name, 'artifact_sha256': sha(artifact),
+                'manifest_sha256': sha(Path(str(installed) + '.sha256')),
+                'architecture': arch, 'smoke_marker': smoke['marker']}
+    proof.write_text(json.dumps(evidence, sort_keys=True) + '\n')
+    print(json.dumps(evidence, sort_keys=True))
 
 
 if __name__ == '__main__':
     import sys
+    if sys.argv[1:] == ['--build']:
+        build_evidence()
+        sys.exit(0)
     if sys.argv[1:] == ['--distribution']:
         try:
             receipt = json.loads(os.environ.get('PACKAGE_RECEIPT', 'null'))
         except ValueError:
             receipt = None
-        errors = distribution_errors(receipt, os.environ.get('PRODUCT_ROOT'), os.environ.get('GITHUB_SHA'))
+        errors = distribution_errors(receipt, os.environ.get('PRODUCT_ROOT'), os.environ.get('GITHUB_SHA'), os.environ.get('PLATFORM'))
         print(('FAIL distribution: ' + '; '.join(errors)) if errors else 'PASS distribution')
         sys.exit(1 if errors else 0)
     unittest.main()

@@ -1879,7 +1879,9 @@ jobs:
           exit 0
   package:
     outputs:
-      receipt: ${{ steps.package-evidence.outputs.receipt }}
+      receipt_x64: ${{ steps.package-evidence.outputs.receipt_x64 }}
+      receipt_arm64: ${{ steps.package-evidence.outputs.receipt_arm64 }}
+    # [TARGET, unit decision] Native builds and independent reproduction per arch.
     strategy:
       fail-fast: false
       matrix:
@@ -1894,14 +1896,75 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # checkout v4.2.2
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: "3.12"
-      - name: Report package applicability
+      - name: Read locked kit identity
+        id: kit
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, re
+          lock = json.load(open('ui/kit.lock.json'))
+          assert re.fullmatch(r'[0-9a-f]{40}', lock['commit'])
+          match = re.fullmatch(r'https://github.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\.git', lock['repo'])
+          assert match, 'kit repository is not a GitHub checkout'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              print('repository=' + match[1], file=output)
+              print('commit=' + lock['commit'], file=output)
+          PYEOF
+      - name: Require kit access
+        env:
+          KIT_REPO_TOKEN: ${{ secrets.KIT_REPO_TOKEN }}
+        run: test -n "$KIT_REPO_TOKEN"
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ steps.kit.outputs.repository }}
+          ref: ${{ steps.kit.outputs.commit }}
+          token: ${{ secrets.KIT_REPO_TOKEN }}
+          path: kit-checkout
+          persist-credentials: false
+      - name: Canonicalize checkout origin for lock verification
+        run: |
+          origin="$(git -C kit-checkout remote get-url origin)"
+          git -C kit-checkout remote set-url origin "${origin%.git}.git"
+      - name: Prime locked dependencies
+        working-directory: ui
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Prepare verified Electron and offline namespace
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bash .github/workflows/offline.sh npm --prefix ui ci --offline --ignore-scripts --no-audit --no-fund
+          node .github/workflows/install_electron.cjs
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # setup-go v5
+        with:
+          go-version-file: daemon-adapter/go.mod
+          cache: false
+      - name: Prime native toolchains
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.97.0 --profile minimal
+          rustup override set 1.97.0
+          cargo fetch --locked
+          (cd daemon-adapter && go mod download)
+          command -v xvfb-run
+          command -v strace
+          command -v zip
+      - name: Build and witness package
+        if: always()
         id: package-evidence
         env:
           JOB_ID: package
           PLATFORM: ${{ matrix.platform }}
+          SETUP_RESULT: ${{ job.status }}
+          MV_PKG_OUT: ${{ runner.temp }}/metaviewer-products
+          CAPSULE_UI_KIT_REPO: ${{ github.workspace }}/kit-checkout
+          ELECTRON_OVERRIDE_DIST_PATH: ${{ github.workspace }}/ui/node_modules/electron/dist
+          CARGO_TARGET_DIR: ${{ runner.temp }}/package-cargo-target
         run: |
           set +e
           set -u -o pipefail
@@ -1963,7 +2026,8 @@ jobs:
               'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
                              'sanitized_log_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
                              'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
-              'product_identity': None,
+              'product_identity': (json.load(open(os.path.join(e['MV_PKG_OUT'], 'product-evidence.json')))
+                                   if e['OUTCOME'] == 'PASS' else None),
               'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
                               'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
                               'accepted': e['OUTCOME'] == 'PASS'}],
@@ -1972,7 +2036,7 @@ jobs:
           with open(out, 'w') as f:
               json.dump(receipt, f, indent=2)
           with open(e['GITHUB_OUTPUT'], 'a') as output:
-              output.write('receipt=' + json.dumps(receipt, separators=(',', ':')) + '\n')
+              output.write('receipt_' + e['PLATFORM'] + '=' + json.dumps(receipt, separators=(',', ':')) + '\n')
           print('receipt: ' + out)
           PYEOF
             {
@@ -1988,9 +2052,19 @@ jobs:
             tail -n 40 "$sane"
           }
           LOG="$EVDIR/package.log"
-          printf 'Independent package product evidence is ABSENT; distribution is blocked.\n' > "$LOG"
-          finish_gate package UNEXEC NOT_APPLICABLE "independent product evidence ABSENT; distribution requires verified bytes" "$LOG" .github/workflows/ci.yml "unexecuted" 0 -- package-pending || exit 2
-          exit 1
+          rc=1
+          if [ "${SETUP_RESULT:-failure}" != success ]; then
+            printf 'FAIL prerequisite step did not complete successfully\n' > "$LOG"
+          elif [ "$PLATFORM" != arm64 ] && [ "$PLATFORM" != x64 ]; then
+            printf 'FAIL unsupported package architecture\n' > "$LOG"
+          else
+            python3 tests/ci/test_package_identity.py --build > "$LOG" 2>&1
+            rc=$?
+          fi
+          outcome=FAIL
+          [ "$rc" -eq 0 ] && outcome=PASS
+          finish_gate package "$rc" "$outcome" "independent build and clean-install evidence" "$LOG" tests/ci/test_package_identity.py "unparsed:package-smoke" 0 -- python3 tests/ci/test_package_identity.py --build || exit 2
+          exit "$rc"
   build-macos:
     # Public-repository build-only evidence; never a required status.
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/bridge/integration' || github.ref == 'refs/heads/main'))
@@ -2202,23 +2276,102 @@ jobs:
           finish_gate build-windows UNEXEC NOT_APPLICABLE "packager argv ABSENT in W0, build-only leg" "$LOG" .github/workflows/ci.yml "unexecuted" 0 -- package-pending || exit 2
           exit 0
   ci-required:
-    runs-on: ubuntu-24.04
+    # [TARGET, unit decision] Native builds and independent reproduction per arch.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: x64
+          - runner: ubuntu-24.04-arm
+            platform: arm64
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
     needs: [ci-policy, laws-contracts, router, rust, go, python, js, e2e, novac, package]
     if: always()
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # checkout v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+      - name: Read locked kit identity
+        id: kit
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, re
+          lock = json.load(open('ui/kit.lock.json'))
+          assert re.fullmatch(r'[0-9a-f]{40}', lock['commit'])
+          match = re.fullmatch(r'https://github.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\.git', lock['repo'])
+          assert match, 'kit repository is not a GitHub checkout'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              print('repository=' + match[1], file=output)
+              print('commit=' + lock['commit'], file=output)
+          PYEOF
+      - name: Require kit access
+        env:
+          KIT_REPO_TOKEN: ${{ secrets.KIT_REPO_TOKEN }}
+        run: test -n "$KIT_REPO_TOKEN"
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ steps.kit.outputs.repository }}
+          ref: ${{ steps.kit.outputs.commit }}
+          token: ${{ secrets.KIT_REPO_TOKEN }}
+          path: kit-checkout
+          persist-credentials: false
+      - name: Canonicalize checkout origin for lock verification
+        run: |
+          origin="$(git -C kit-checkout remote get-url origin)"
+          git -C kit-checkout remote set-url origin "${origin%.git}.git"
+      - name: Prime locked dependencies
+        working-directory: ui
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Prepare verified Electron and offline namespace
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bash .github/workflows/offline.sh npm --prefix ui ci --offline --ignore-scripts --no-audit --no-fund
+          node .github/workflows/install_electron.cjs
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # setup-go v5
+        with:
+          go-version-file: daemon-adapter/go.mod
+          cache: false
+      - name: Prime native toolchains
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.97.0 --profile minimal
+          rustup override set 1.97.0
+          cargo fetch --locked
+          (cd daemon-adapter && go mod download)
+          command -v xvfb-run
+          command -v strace
+          command -v zip
+      - name: Rebuild independent package bytes
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          MV_PKG_OUT: ${{ runner.temp }}/metaviewer-products
+          CAPSULE_UI_KIT_REPO: ${{ github.workspace }}/kit-checkout
+          ELECTRON_OVERRIDE_DIST_PATH: ${{ github.workspace }}/ui/node_modules/electron/dist
+          CARGO_TARGET_DIR: ${{ runner.temp }}/package-cargo-target
+        run: python3 tests/ci/test_package_identity.py --build
       - name: Verify independent package product
         env:
-          PACKAGE_RECEIPT: ${{ needs.package.outputs.receipt }}
+          PLATFORM: ${{ matrix.platform }}
+          PACKAGE_RECEIPT: ${{ matrix.platform == 'x64' && needs.package.outputs.receipt_x64 || needs.package.outputs.receipt_arm64 }}
           PRODUCT_ROOT: ${{ runner.temp }}/metaviewer-products
         run: |
-          # [TARGET, unit decision] No admitted artifact transport exists yet.
-          # Missing runner-local bytes or a producer-only assertion must fail.
+          # [TARGET, unit decision] Path 2B: reproduce and smoke local bytes;
+          # compare against the producer receipt without an artifact action.
           python3 tests/ci/test_package_identity.py --distribution
       - name: Aggregate required results
+        if: always()
         run: |
           fail=0
+          check_distribution="${{ job.status }}"
+          [ "$check_distribution" = success ] || fail=1
           check() {
             if [ "$2" != "success" ]; then
               echo "FAIL required job $1: $2"
