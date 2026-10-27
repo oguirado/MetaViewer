@@ -10,23 +10,30 @@ import { createWindowOptions, attachWindowPolicy, registerPrivilegedScheme,
   PRIVILEGED_ORIGIN } from '../../ui/electron/main.js';
 import { installAuthorityWire } from '../../ui/electron/authorityWire.js';
 
-const { app, BrowserWindow, ipcMain, protocol, session } = createRequire(new URL('../../ui/package.json', import.meta.url))('electron');
 const budgets = JSON.parse(readFileSync(new URL('./budgets.json', import.meta.url), 'utf8'));
-const excludes = JSON.parse(process.env.MV_RSS_EXCLUDES);
+const excludes = JSON.parse(process.env.MV_RSS_EXCLUDES || '[]');
 const identities = new Map();
 const samples = [];
-let win;
-let wire;
-const deadline = setTimeout(() => app.exit(2), 170000);
-registerPrivilegedScheme(protocol);
-void run();
+let app, BrowserWindow, ipcMain, protocol, session, win, wire, deadline;
+if (process.versions.electron) {
+  ({ app, BrowserWindow, ipcMain, protocol, session } = createRequire(new URL('../../ui/package.json', import.meta.url))('electron'));
+  deadline = setTimeout(() => app.exit(2), 170000);
+  registerPrivilegedScheme(protocol);
+  void run();
+}
 
-function snapshot(at_ms) {
+export function snapshot(at_ms, io = {}) {
+  const readDir = io.readdirSync || readdirSync;
+  const readText = io.readFileSync || readFileSync;
+  const rootPid = io.rootPid ?? process.pid;
+  const excludedRoots = io.excludes ?? excludes;
+  const seenIdentities = io.identities ?? identities;
+  const recordedSamples = io.samples ?? samples;
   const records = new Map();
-  for (const name of readdirSync('/proc').filter(value => /^[0-9]+$/.test(value))) {
+  for (const name of readDir('/proc').filter(value => /^[0-9]+$/.test(value))) {
     try {
       const pid = Number(name);
-      const fields = statFields(readFileSync(`/proc/${pid}/stat`, 'utf8'));
+      const fields = statFields(readText(`/proc/${pid}/stat`, 'utf8'));
       records.set(pid, { pid, parent: Number(fields[1]), starttime: fields[19], state: fields[0] });
     } catch (error) {
       if (!['ENOENT', 'ESRCH'].includes(error.code)) throw error;
@@ -43,31 +50,38 @@ function snapshot(at_ms) {
     } while (changed);
     return result;
   }
-  const included = tree(process.pid);
-  for (const root of excludes) {
-    if (!included.has(root) || root === process.pid) throw new Error('Capsule root outside recorded app tree');
+  const included = tree(rootPid);
+  for (const root of excludedRoots) {
+    if (!included.has(root) || root === rootPid) throw new Error('Capsule root outside recorded app tree');
     for (const pid of tree(root)) included.delete(pid);
   }
   const row = { at_ms, rss_main_bytes: 0, rss_renderer_bytes: 0, rss_utility_bytes: 0, rss_tree_bytes: 0, processes: [] };
   for (const pid of included) {
     const record = records.get(pid);
     if (!record || record.state === 'Z') continue;
-    identities.set(`${pid}:${record.starttime}`, { pid, starttime: record.starttime });
-    // Fail closed if an included live process cannot be sampled.
-    const status = readFileSync(`/proc/${pid}/status`, 'utf8');
+    seenIdentities.set(`${pid}:${record.starttime}`, { pid, starttime: record.starttime });
+    // Fail closed if an included live process cannot be sampled; a process that
+    // disappears mid-sample (ENOENT/ESRCH) is omitted from this instant's row.
+    let status, command, after;
+    try {
+      status = readText(`/proc/${pid}/status`, 'utf8');
+      command = readText(`/proc/${pid}/cmdline`, 'utf8').replaceAll('\0', ' ');
+      after = statFields(readText(`/proc/${pid}/stat`, 'utf8'));
+    } catch (error) {
+      if (['ENOENT', 'ESRCH'].includes(error.code)) continue;
+      throw error;
+    }
+    if (after[19] !== record.starttime) throw new Error('PID generation changed');
     const match = status.match(/^VmRSS:\s+(\d+) kB$/m);
     if (!match) throw new Error(`VmRSS absent for ${pid}`);
     const rss_bytes = Number(match[1]) * 1024;
-    const command = readFileSync(`/proc/${pid}/cmdline`, 'utf8').replaceAll('\0', ' ');
-    const role = classifyRole(pid, process.pid, command);
+    const role = classifyRole(pid, rootPid, command);
     row.rss_tree_bytes += rss_bytes;
     if (role !== 'helper') row[`rss_${role}_bytes`] += rss_bytes;
     row.processes.push({ ...record, role, rss_bytes });
-    const after = statFields(readFileSync(`/proc/${pid}/stat`, 'utf8'));
-    if (after[19] !== record.starttime) throw new Error('PID generation changed');
   }
   if (!row.rss_main_bytes || !row.rss_renderer_bytes) throw new Error('Required RSS role absent: ' + JSON.stringify(row));
-  samples.push(row);
+  recordedSamples.push(row);
 }
 
 async function settled() {

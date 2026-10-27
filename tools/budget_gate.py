@@ -124,7 +124,7 @@ def cleanup_api():
     return namespace
 
 
-def probe(electron, budgets, excludes):
+def probe(electron, budgets, excludes, read_proc=lambda path: path.read_text()):
     require(Path(electron).is_file(), 'Electron binary absent')
     require(all(integer(pid, 2) for pid in excludes), 'invalid capsule root')
     api = cleanup_api()
@@ -143,7 +143,10 @@ def probe(electron, budgets, excludes):
         for identity in receipt['identities']:
             path = Path('/proc', str(identity['pid']), 'stat')
             if path.exists():
-                fields = path.read_text().rsplit(')', 1)[1].split()
+                try:
+                    fields = read_proc(path).rsplit(')', 1)[1].split()
+                except (FileNotFoundError, ProcessLookupError):
+                    continue
                 if fields[19] == identity['starttime'] and fields[0] != 'Z':
                     orphans.append(identity['pid'])
         receipt['orphans'] = orphans

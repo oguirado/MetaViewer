@@ -91,6 +91,147 @@ class BudgetTests(unittest.TestCase):
             api['stop_process_tree'](process)
         self.assertEqual([c.args[0] for c in fake_os.kill.call_args_list], [42, 42])
 
+    def test_probe_orphan_check_ignores_esrch_and_enoent_between_exists_and_read(self):
+        receipt_data = copy.deepcopy(self.clean)
+        receipt_data['identities'] = [
+            {'pid': 4101, 'starttime': '111'},
+            {'pid': 4102, 'starttime': '222'},
+            {'pid': 4103, 'starttime': '333'},
+        ]
+
+        def fake_bounded(argv, cwd, env, seconds=180):
+            Path(env['MV_RSS_OUTPUT']).write_text(json.dumps(receipt_data))
+            return 0
+
+        def injected_reader(path):
+            if path == Path('/proc/4101/stat'):
+                raise ProcessLookupError(3, 'No such process')
+            if path == Path('/proc/4102/stat'):
+                raise FileNotFoundError(2, 'No such file or directory')
+            if path == Path('/proc/4103/stat'):
+                return '4103 (helper) Z 1 4103 4103 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 333 0 0'
+            raise AssertionError(f'unexpected proc read: {path}')
+
+        real_exists = Path.exists
+
+        def fake_exists(path):
+            if path in {Path('/proc/4101/stat'), Path('/proc/4102/stat'), Path('/proc/4103/stat')}:
+                return True
+            return real_exists(path)
+
+        with patch.object(gate, 'cleanup_api', return_value={'bounded': fake_bounded}), \
+                patch.object(Path, 'exists', autospec=True, side_effect=fake_exists), \
+                patch.object(Path, 'read_text', autospec=True, side_effect=lambda p, *a, **kw:
+                             injected_reader(p) if str(p).startswith('/proc/') else p.read_bytes().decode()):
+            out = gate.probe(__file__, self.budget, [], read_proc=injected_reader)
+            out_default = gate.probe(__file__, self.budget, [])
+        self.assertEqual(out['orphans'], [])
+        self.assertEqual(out_default['orphans'], [])
+        self.assertTrue(gate.evaluate(out, self.budget)['ok'])
+
+        def live_and_error_reader(path):
+            if path == Path('/proc/4101/stat'):
+                return '4101 (helper) S 1 4101 4101 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 111 0 0'
+            if path == Path('/proc/4102/stat'):
+                raise ProcessLookupError(3, 'No such process')
+            if path == Path('/proc/4103/stat'):
+                raise FileNotFoundError(2, 'No such file or directory')
+            raise AssertionError(f'unexpected proc read: {path}')
+
+        with patch.object(gate, 'cleanup_api', return_value={'bounded': fake_bounded}), \
+                patch.object(Path, 'exists', autospec=True, side_effect=fake_exists), \
+                patch.object(Path, 'read_text', autospec=True, side_effect=lambda p, *a, **kw:
+                             live_and_error_reader(p) if str(p).startswith('/proc/') else p.read_bytes().decode()):
+            out_live = gate.probe(__file__, self.budget, [], read_proc=live_and_error_reader)
+        self.assertEqual(out_live['orphans'], [4101])
+        self.assertFalse(gate.evaluate(out_live, self.budget)['ok'])
+
+        def permission_error_reader(path):
+            raise PermissionError(13, 'Permission denied')
+
+        with patch.object(gate, 'cleanup_api', return_value={'bounded': fake_bounded}), \
+                patch.object(Path, 'exists', autospec=True, side_effect=fake_exists):
+            with self.assertRaises(PermissionError):
+                gate.probe(__file__, self.budget, [], read_proc=permission_error_reader)
+
+    def test_rss_probe_snapshot_ignores_esrch_and_enoent_during_sample(self):
+        script = """
+import assert from 'node:assert/strict';
+import { pathToFileURL } from 'node:url';
+const { snapshot } = await import(pathToFileURL(process.argv[1]).href);
+const statLine = (pid, ppid, start) =>
+  `${pid} (proc) S ${ppid} ${pid} ${pid} 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 ${start} 0 0`;
+const errWithCode = code => Object.assign(new Error(code), { code });
+const seenStat = new Set();
+const samples = [];
+const identities = new Map();
+snapshot(15, {
+  rootPid: 100,
+  excludes: [],
+  identities,
+  samples,
+  readdirSync: () => ['100', '101', '102', '103', '104'],
+  readFileSync: path => {
+    if (path.endsWith('/stat')) {
+      const pid = Number(path.split('/')[2]);
+      const first = !seenStat.has(pid);
+      seenStat.add(pid);
+      if (!first && pid === 104) throw errWithCode('ESRCH');
+      return statLine(pid, pid === 100 ? 1 : 100, pid * 10);
+    }
+    if (path === '/proc/102/status') throw errWithCode('ESRCH');
+    if (path === '/proc/103/cmdline') throw errWithCode('ENOENT');
+    if (path.endsWith('/status')) return 'Name:\\tproc\\nVmRSS:\\t1000 kB\\n';
+    if (path === '/proc/100/cmdline') return 'electron\\0';
+    if (path === '/proc/101/cmdline') return 'electron\\0--type=renderer\\0';
+    if (path === '/proc/104/cmdline') return 'electron\\0--type=utility\\0';
+    throw new Error('unexpected path ' + path);
+  },
+});
+assert.equal(samples.length, 1);
+assert.deepEqual(samples[0].processes.map(p => p.pid), [100, 101]);
+assert.equal(samples[0].rss_main_bytes, 1024000);
+assert.equal(samples[0].rss_renderer_bytes, 1024000);
+assert.equal(samples[0].rss_utility_bytes, 0);
+assert.equal(samples[0].rss_tree_bytes, 2048000);
+assert.throws(() => snapshot(20, {
+  rootPid: 100,
+  excludes: [],
+  identities: new Map(),
+  samples: [],
+  readdirSync: () => ['100', '101'],
+  readFileSync: path => {
+    if (path.endsWith('/stat')) {
+      const pid = Number(path.split('/')[2]);
+      return statLine(pid, pid === 100 ? 1 : 100, pid * 10);
+    }
+    if (path === '/proc/101/status') throw errWithCode('ESRCH');
+    if (path.endsWith('/status')) return 'VmRSS:\\t1000 kB\\n';
+    return 'electron\\0';
+  },
+}), /Required RSS role absent/);
+assert.throws(() => snapshot(25, {
+  rootPid: 100,
+  excludes: [],
+  identities: new Map(),
+  samples: [],
+  readdirSync: () => ['100', '101', '102'],
+  readFileSync: path => {
+    if (path.endsWith('/stat')) {
+      const pid = Number(path.split('/')[2]);
+      return statLine(pid, pid === 100 ? 1 : 100, pid * 10);
+    }
+    if (path === '/proc/102/status') throw errWithCode('EACCES');
+    if (path.endsWith('/status')) return 'VmRSS:\\t1000 kB\\n';
+    return path === '/proc/101/cmdline' ? 'electron\\0--type=renderer\\0' : 'electron\\0';
+  },
+}), { code: 'EACCES' });
+"""
+        result = subprocess.run(
+            ['node', '--input-type=module', '-e', script, str(ROOT / 'tests/perf/rss_probe.mjs')],
+            text=True, capture_output=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+
 
 if __name__ == '__main__':
     unittest.main()
