@@ -165,6 +165,11 @@
    "why": "Reconcile four failures after rebasing the MV-UI8/MV-UI9 drop: respect the wall no-fromJSON contract, repair a stale negative control, align one host test assertion that pinned the recordings defect.",
    "orchestrator": "UI orchestrator"
   },
+  "mvui18": {
+   "stage": "fix",
+   "why": "Fix the live frame scale jitter seen in the second real-app round (witness/canvas swap at different scales) and mirror the kit view subscribe snapshot.",
+   "orchestrator": "UI orchestrator"
+  },
   "mv0w1term": {
    "stage": "build",
    "why": "Build the terminal broker, byte plane and provider menu.",
