@@ -517,7 +517,7 @@ fn recovery_retains_only_live_views_and_recent_receipts() {
             .contains_key(&registration("ui").endpoint));
         for i in 0..200 {
             let id = format!("p-{i}");
-            agent.send(proposal(&id, &f)).await;
+            agent.send(recovery_proposal(&id, &f)).await;
             agent.verdict("admitted", None).await;
             daemon.receive().await;
             let mut r: Value = serde_json::from_str(include_str!(
@@ -548,6 +548,67 @@ fn recovery_retains_only_live_views_and_recent_receipts() {
         assert!(state.receipts.len() <= 128);
         assert!(state.receipts.contains_key("p-199"));
         assert!(!state.receipts.contains_key("p-0"));
+    });
+}
+
+// [TARGET, unit decision] Recovery exercises durable receipt retention, not the
+// example's short dispatch budget. Admission persists the journal before the
+// dispatch recheck; a busy host can exhaust that budget and correctly refuse
+// dispatch, leaving the test daemon waiting for input that will never arrive.
+// Bound this fixture by the transport deadline instead, preserving production
+// expiry and every receipt/recovery assertion.
+fn recovery_proposal(id: &str, frame: &Value) -> Value {
+    let mut value = proposal(id, frame);
+    value["budget"]["max_ms"] = u64::try_from(IDLE_DEADLINE.as_millis()).unwrap().into();
+    value
+}
+
+#[test]
+fn recovery_dispatch_budget_tolerates_persistence_and_still_expires() {
+    support::run(async {
+        let (_temp, server, task, mut daemon, mut agent, mut ui) = setup().await;
+        created(&mut daemon, &mut ui).await;
+        let frame = SharedFrame::new();
+        let f = frame.value(1);
+        daemon.send(f.clone()).await;
+        daemon_barrier(&mut daemon).await;
+
+        agent.seq += 1;
+        let env = agent.envelope(recovery_proposal("budget-control", &f));
+        let mut state = server.lock().unwrap().authority.state().clone();
+        let request = crate::admission::AdmissionRequest::decode(
+            &serde_json::to_string(&env).unwrap(),
+            &agent.registration.endpoint,
+            &agent.config.session_id,
+            state.epoch,
+            0,
+        )
+        .unwrap();
+        use crate::admission::Input;
+        assert_eq!(state.apply(&Input::Propose(request)).unwrap().reason, None);
+        let original_budget_ns = proposal("control", &f)["budget"]["max_ms"]
+            .as_u64()
+            .unwrap()
+            * 1_000_000;
+        let dispatch = |now_ns| Input::Dispatch {
+            proposal_id: "budget-control".into(),
+            now_ns,
+        };
+        // A persistence delay that exhausted the example budget still dispatches.
+        assert!(
+            state
+                .clone()
+                .apply(&dispatch(original_budget_ns))
+                .unwrap()
+                .dispatch
+        );
+        // Negative control: the recovery fixture still has a finite deadline.
+        let expired = state
+            .apply(&dispatch(u64::try_from(IDLE_DEADLINE.as_nanos()).unwrap()))
+            .unwrap();
+        assert!(!expired.dispatch);
+        assert_eq!(expired.reason, Some(Refusal::BudgetExceeded));
+        close_server(server, task, daemon, agent, ui).await;
     });
 }
 
