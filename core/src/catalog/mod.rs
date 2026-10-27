@@ -203,6 +203,29 @@ impl<'a> CreateRequest<'a> {
             nested_depth,
         })
     }
+    /// Converts a program-capsule create DTO carrying an explicit `nested_depth`.
+    pub fn from_nested_surface_request(
+        surface_id: &'a str,
+        params: &'a crate::wire::payload::SurfaceRequestCreateNestedParams,
+    ) -> Result<Self, CatalogError> {
+        use crate::wire::payload::SurfaceKind;
+        let nested_depth =
+            u32::try_from(params.nested_depth).map_err(|_| CatalogError::NestedDepth)?;
+        if nested_depth > 1 {
+            return Err(CatalogError::NestedDepth);
+        }
+        if params.kind != SurfaceKind::DesktopCapsule {
+            return Err(CatalogError::NestedPolicy);
+        }
+        Ok(Self {
+            surface_id,
+            kind: "program",
+            profile_id: &params.profile_id,
+            width_px: u32::try_from(params.geometry.w).map_err(|_| CatalogError::Geometry)?,
+            height_px: u32::try_from(params.geometry.h).map_err(|_| CatalogError::Geometry)?,
+            nested_depth,
+        })
+    }
 }
 impl CatalogRegistry {
     pub fn new(entries: Vec<Registration>) -> Result<Self, CatalogError> {
@@ -277,5 +300,139 @@ impl CatalogRegistry {
         }
         self.surfaces.insert(surface_id.into(), terminal);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::wire::{decode_envelope, payload, DecodeError};
+    use serde_json::json;
+
+    #[test]
+    fn nested_program_surface_request_round_trips_and_gates_depth() {
+        let limits = Limits {
+            memory_bytes: 536_870_912,
+            cpu_milli: 2_000,
+        };
+        let nested_reg = Registration::nested("inner-host-1", limits.clone()).unwrap();
+        let notepad_entry = CatalogEntry::try_from(CatalogEntryWire {
+            schema: "catalog_entry/v0.2".into(),
+            entry_id: "notepad-0".into(),
+            kind: Kind::Program,
+            profile_id: "notepad-0".into(),
+            label: "Notepad".into(),
+            image: "opensuperficies-program-notepad-arm64:0.1.0".into(),
+            window_width_px: 1280,
+            window_height_px: 720,
+            display_width_px: 1280,
+            display_height_px: 900,
+            display_only: false,
+            network: Network::None,
+            seccomp_identity: true,
+            nested_depth: 0,
+            limits,
+        })
+        .unwrap();
+        let notepad_reg = Registration::new(
+            notepad_entry,
+            LaunchTarget::Program {
+                program: "notepad".into(),
+            },
+        )
+        .unwrap();
+        let mut registry =
+            CatalogRegistry::new(vec![nested_reg.clone(), notepad_reg.clone()]).unwrap();
+
+        let wire_nested = nested_reg.surface_create_request();
+        let payload::SurfaceRequest::CreateNested(ref nested_box) = wire_nested else {
+            panic!("expected CreateNested for program registration");
+        };
+        assert_eq!(nested_box.params.nested_depth, 1);
+        assert_eq!(nested_box.params.profile_id, "inner-host-1");
+
+        let create_req =
+            CreateRequest::from_nested_surface_request("surface-inner-1", &nested_box.params)
+                .unwrap();
+        let spec = registry.create(create_req).unwrap();
+        assert_eq!(
+            spec.args,
+            [
+                "start",
+                "--kind",
+                "program",
+                "--identity",
+                "inner-host-1",
+                "--windows",
+                "1",
+                "--program",
+                "metaviewer-nested",
+            ]
+        );
+
+        let wire_notepad = notepad_reg.surface_create_request();
+        let payload::SurfaceRequest::CreateNested(ref notepad_box) = wire_notepad else {
+            panic!("expected CreateNested for notepad registration");
+        };
+        assert_eq!(notepad_box.params.nested_depth, 0);
+        let notepad_req =
+            CreateRequest::from_nested_surface_request("surface-notepad-0", &notepad_box.params)
+                .unwrap();
+        assert!(registry.create(notepad_req).is_ok());
+
+        for bad_depth in [-1_i64, 2_i64] {
+            let mut bad_params = nested_box.params.clone();
+            bad_params.nested_depth = bad_depth;
+            assert_eq!(
+                CreateRequest::from_nested_surface_request("surface-bad", &bad_params).unwrap_err(),
+                CatalogError::NestedDepth
+            );
+        }
+        for non_program_kind in [
+            payload::SurfaceKind::Browser,
+            payload::SurfaceKind::GameCapsule,
+            payload::SurfaceKind::Vm,
+        ] {
+            let mut bad_params = nested_box.params.clone();
+            bad_params.kind = non_program_kind;
+            assert_eq!(
+                CreateRequest::from_nested_surface_request("surface-bad", &bad_params).unwrap_err(),
+                CatalogError::NestedPolicy
+            );
+        }
+
+        let mut base_env: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../contracts/examples/v0.2/envelope.valid.json"
+        ))
+        .unwrap();
+        for ok_depth in [0, 1] {
+            base_env["body"] = json!({
+                "schema": "surface_request/v0.2",
+                "op": "create",
+                "params": {
+                    "kind": "desktop_capsule",
+                    "geometry": {"w": 1280, "h": 720},
+                    "profile_id": "inner-host-1",
+                    "nested_depth": ok_depth,
+                }
+            });
+            assert!(decode_envelope(&base_env.to_string()).is_ok());
+        }
+        for bad_depth in [-1, 2] {
+            base_env["body"] = json!({
+                "schema": "surface_request/v0.2",
+                "op": "create",
+                "params": {
+                    "kind": "desktop_capsule",
+                    "geometry": {"w": 1280, "h": 720},
+                    "profile_id": "inner-host-1",
+                    "nested_depth": bad_depth,
+                }
+            });
+            assert_eq!(
+                decode_envelope(&base_env.to_string()),
+                Err(DecodeError::InvalidField)
+            );
+        }
     }
 }

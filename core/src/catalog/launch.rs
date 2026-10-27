@@ -136,6 +136,46 @@ impl Registration {
             },
         )
     }
+    /// Builds the `surface_request/v0.2` `op=create` payload for this registration.
+    pub fn surface_create_request(&self) -> crate::wire::payload::SurfaceRequest {
+        use crate::wire::payload::{
+            SurfaceGeometry, SurfaceKind, SurfaceRequest, SurfaceRequestCase0,
+            SurfaceRequestCase0Op, SurfaceRequestCase0Params, SurfaceRequestCase0Schema,
+            SurfaceRequestCreateNested, SurfaceRequestCreateNestedParams,
+        };
+        let row = self.entry.projection();
+        let geometry = SurfaceGeometry {
+            w: u64::from(row.window_width_px),
+            h: u64::from(row.window_height_px),
+        };
+        if row.kind == Kind::Program {
+            return SurfaceRequest::CreateNested(Box::new(SurfaceRequestCreateNested {
+                schema: SurfaceRequestCase0Schema::Value,
+                op: SurfaceRequestCase0Op::Value,
+                params: SurfaceRequestCreateNestedParams {
+                    kind: SurfaceKind::DesktopCapsule,
+                    geometry,
+                    profile_id: row.profile_id.clone(),
+                    nested_depth: i64::from(row.nested_depth),
+                },
+            }));
+        }
+        let kind = match row.kind {
+            Kind::Browser => SurfaceKind::Browser,
+            Kind::DesktopCapsule | Kind::Program => SurfaceKind::DesktopCapsule,
+            Kind::GameCapsule => SurfaceKind::GameCapsule,
+            Kind::Vm => SurfaceKind::Vm,
+        };
+        SurfaceRequest::Case0(Box::new(SurfaceRequestCase0 {
+            schema: SurfaceRequestCase0Schema::Value,
+            op: SurfaceRequestCase0Op::Value,
+            params: SurfaceRequestCase0Params {
+                kind,
+                geometry,
+                profile_id: row.profile_id.clone(),
+            },
+        }))
+    }
 }
 fn identity_args(kind: &str, profile: &str, program: Option<&str>) -> Vec<String> {
     let mut args = [

@@ -1,0 +1,13 @@
+{
+  "schema": "surface_request/v0.2",
+  "op": "create",
+  "params": {
+    "kind": "desktop_capsule",
+    "geometry": {
+      "w": 1280,
+      "h": 720
+    },
+    "profile_id": "inner-host-1",
+    "nested_depth": -1
+  }
+}

@@ -1512,6 +1512,21 @@ pub struct SurfaceRequestCase0 {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct SurfaceRequestCreateNestedParams {
+    pub kind: SurfaceKind,
+    pub geometry: SurfaceGeometry,
+    pub profile_id: String,
+    pub nested_depth: i64,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SurfaceRequestCreateNested {
+    pub schema: SurfaceRequestCase0Schema,
+    pub op: SurfaceRequestCase0Op,
+    pub params: SurfaceRequestCreateNestedParams,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SurfaceRequestCase1Params {}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1644,6 +1659,7 @@ pub struct SurfaceRequestCase9 {
 #[serde(untagged)]
 pub enum SurfaceRequest {
     Case0(Box<SurfaceRequestCase0>),
+    CreateNested(Box<SurfaceRequestCreateNested>),
     Case1(Box<SurfaceRequestCase1>),
     Case2(Box<SurfaceRequestCase2>),
     Case3(Box<SurfaceRequestCase3>),

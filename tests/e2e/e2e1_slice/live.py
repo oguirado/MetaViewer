@@ -22,6 +22,13 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[3]
 CAPSULE_ID_RE = re.compile(r"^srf-id-[a-z0-9][a-z0-9-]{0,39}$")
+PROGRAM_CAPSULE_ID_RE = re.compile(r"^srf-pg-[a-z0-9][a-z0-9-]{0,39}$")
+PROFILE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+INNER_HOST_KIND = "desktop_capsule"
+INNER_HOST_NATIVE_KIND = "program"
+INNER_HOST_PROGRAM = "metaviewer-nested"
+INNER_HOST_GEOMETRY = {"w": 1280, "h": 720}
+ADMITTED_PROGRAMS = frozenset({"notepad", INNER_HOST_PROGRAM})
 sys.path.insert(0, str(ROOT / "agents"))
 from metaviewer_agents.client import CoreClient  # noqa: E402
 from metaviewer_agents.envelope import (  # noqa: E402
@@ -105,6 +112,103 @@ def profile_containers(profile):
             continue
         if isinstance(value, dict) and "Lease" in value:
             name = capsule_from_receipt(value, profile)
+            if name is not None:
+                names.add(name)
+    return names
+
+
+def inner_host_profile(
+    ram_root,
+    display=":100",
+    program=INNER_HOST_PROGRAM,
+    nested_depth=1,
+):
+    """Build the admitted desktop_capsule profile for the inner MetaViewer host."""
+    if not isinstance(nested_depth, int) or isinstance(nested_depth, bool) or nested_depth not in (0, 1):
+        raise ValueError(f"unsupported nested_depth: {nested_depth!r}")
+    if not isinstance(program, str) or program not in ADMITTED_PROGRAMS:
+        raise ValueError(f"unadmitted program: {program!r}")
+    if nested_depth == 1 and program != INNER_HOST_PROGRAM:
+        raise ValueError(f"nested_depth=1 requires {INNER_HOST_PROGRAM!r}, got {program!r}")
+    return {
+        "kind": INNER_HOST_KIND,
+        "native_kind": INNER_HOST_NATIVE_KIND,
+        "program": program,
+        "width": INNER_HOST_GEOMETRY["w"],
+        "height": INNER_HOST_GEOMETRY["h"],
+        "display": str(display),
+        "ram_root": str(ram_root),
+        "nested_depth": nested_depth,
+    }
+
+
+def inner_host_create_params(profile, nested_depth=1):
+    """Build surface_request/v0.2 op=create params for an inner-host desktop_capsule."""
+    if (
+        not isinstance(profile, str)
+        or not PROFILE_ID_RE.fullmatch(profile)
+        or profile == "mv-live-1"
+    ):
+        raise ValueError(f"unadmitted inner-host profile_id: {profile!r}")
+    if not isinstance(nested_depth, int) or isinstance(nested_depth, bool) or nested_depth not in (0, 1):
+        raise ValueError(f"unsupported nested_depth: {nested_depth!r}")
+    return {
+        "kind": INNER_HOST_KIND,
+        "profile_id": profile,
+        "geometry": dict(INNER_HOST_GEOMETRY),
+        "nested_depth": nested_depth,
+    }
+
+
+def inner_host_create_request(profile, nested_depth=1):
+    """Build surface_request/v0.2 op=create envelope body for an inner-host capsule."""
+    return {
+        "schema": "surface_request/v0.2",
+        "op": "create",
+        "params": inner_host_create_params(profile, nested_depth=nested_depth),
+    }
+
+
+def program_capsule_from_receipt(receipt, profile):
+    """Extract only a program-capsule ID (srf-pg-*) bound to the admitted profile."""
+    if not isinstance(receipt, dict):
+        return None
+    if "Lease" in receipt or "Capsule" in receipt:
+        lease = receipt.get("Lease")
+        capsule = receipt.get("Capsule")
+        if (
+            not isinstance(lease, dict)
+            or lease.get("ProfileID") != profile
+            or not isinstance(capsule, dict)
+        ):
+            return None
+    else:
+        profile_val = receipt.get("profile_id", receipt.get("profile", receipt.get("identity")))
+        if profile_val != profile:
+            return None
+        capsule = receipt
+    name = capsule.get("container")
+    run_id = capsule.get("run_id")
+    if not isinstance(name, str) or not PROGRAM_CAPSULE_ID_RE.fullmatch(name):
+        return None
+    if run_id is not None and (not isinstance(run_id, str) or not run_id):
+        return None
+    return name
+
+
+def profile_program_containers(profile):
+    """Project only program-capsule ownership (srf-pg-*) from native control JSON."""
+    names = set()
+    state_dir = os.environ.get("MV_SRF_STATE_DIR", "")
+    if not state_dir:
+        return names
+    for path in Path(state_dir).glob("*.json"):
+        try:
+            value = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(value, dict) and "Lease" in value:
+            name = program_capsule_from_receipt(value, profile)
             if name is not None:
                 names.add(name)
     return names

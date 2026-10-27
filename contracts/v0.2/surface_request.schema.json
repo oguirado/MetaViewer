@@ -50,6 +50,11 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 128
+            },
+            "nested_depth": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1
             }
           },
           "required": [

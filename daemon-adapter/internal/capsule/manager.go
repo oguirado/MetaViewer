@@ -37,7 +37,7 @@ import (
 
 type Profile struct {
 	Kind, NativeKind, Program, AppDir, RAMRoot, Display string
-	Width, Height                                       int
+	Width, Height, NestedDepth                          int
 }
 type ViewBackend interface {
 	Open(context.Context, string, bool) error
@@ -135,6 +135,24 @@ var digest = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var displayID = regexp.MustCompile(`^:[0-9]+(\.[0-9]+)?$`)
 
 func fault(code, detail string) error { return &cli.Fault{Code: code, Detail: detail} }
+
+// [TARGET, unit decision] desktop_capsule program profiles admit only the
+// catalog-sanctioned programs ("notepad" at nested_depth 0, or
+// "metaviewer-nested" at nested_depth 0 or 1); nested_depth > 1 is refused.
+func admittedProgram(program string, nestedDepth int) bool {
+	if !profileID.MatchString(program) {
+		return false
+	}
+	switch nestedDepth {
+	case 0:
+		return program == "notepad" || program == "metaviewer-nested"
+	case 1:
+		return program == "metaviewer-nested"
+	default:
+		return false
+	}
+}
+
 func NewManager(cfg Config, r cli.Runner, clock cli.Clock) (*Manager, error) {
 	if r == nil || clock == nil || cfg.OriginNS == 0 || !filepath.IsAbs(cfg.BinDir) || cfg.MaxSurfaces < 1 || cfg.MaxOutputBytes < 1 || cfg.MaxOutputBytes > 1<<20 || cfg.Timeout <= 0 || cfg.Timeout > 3*time.Minute || len(cfg.Profiles) == 0 {
 		return nil, fault("configuration", "complete bounded native configuration required")
@@ -156,8 +174,11 @@ func NewManager(cfg Config, r cli.Runner, clock cli.Clock) (*Manager, error) {
 	}
 	copyProfiles := make(map[string]Profile, len(cfg.Profiles))
 	for id, p := range cfg.Profiles {
-		if !profileID.MatchString(id) || p.Width < 1 || p.Height < 1 || p.Width > 8192 || p.Height > 8192 || !displayID.MatchString(p.Display) || !filepath.IsAbs(p.RAMRoot) || !withinRAM(p.RAMRoot) {
+		if !profileID.MatchString(id) || p.Width < 1 || p.Height < 1 || p.Width > 8192 || p.Height > 8192 || p.NestedDepth < 0 || p.NestedDepth > 1 || !displayID.MatchString(p.Display) || !filepath.IsAbs(p.RAMRoot) || !withinRAM(p.RAMRoot) {
 			return nil, fault("configuration", "invalid profile geometry or allocation")
+		}
+		if p.NestedDepth != 0 && (p.Kind != "desktop_capsule" || p.Width != 1280 || p.Height != 720) {
+			return nil, fault("configuration", "nested profile requires 1280x720 desktop_capsule")
 		}
 		switch p.Kind {
 		case "browser":
@@ -165,7 +186,7 @@ func NewManager(cfg Config, r cli.Runner, clock cli.Clock) (*Manager, error) {
 				return nil, fault("configuration", "browser mapping invalid")
 			}
 		case "desktop_capsule":
-			if p.NativeKind != "program" || !profileID.MatchString(p.Program) {
+			if p.NativeKind != "program" || !admittedProgram(p.Program, p.NestedDepth) {
 				return nil, fault("configuration", "program mapping required")
 			}
 		case "vm":
@@ -333,15 +354,32 @@ func (m *Manager) view(ctx context.Context, r Request, version string) ([]json.R
 }
 func (m *Manager) create(ctx context.Context, r Request, version string) (events []json.RawMessage, err error) {
 	var q struct {
-		Kind      string   `json:"kind"`
-		ProfileID string   `json:"profile_id"`
-		Geometry  Geometry `json:"geometry"`
+		Kind        string   `json:"kind"`
+		ProfileID   string   `json:"profile_id"`
+		Geometry    Geometry `json:"geometry"`
+		NestedDepth *int     `json:"nested_depth,omitempty"`
 	}
 	if e := cli.ParseLine(r.Params, m.cfg.MaxOutputBytes, &q); e != nil {
 		return nil, e
 	}
+	if q.NestedDepth != nil && (*q.NestedDepth < 0 || *q.NestedDepth > 1) {
+		return nil, fault("nested_depth", "nested_depth must be 0 or 1")
+	}
+	if q.NestedDepth != nil && q.Kind != "desktop_capsule" {
+		return nil, fault("nested_depth", "nested_depth requires desktop_capsule")
+	}
 	p, ok := m.cfg.Profiles[q.ProfileID]
 	if !ok || !profileID.MatchString(q.ProfileID) || p.Kind != q.Kind || q.Geometry.W != p.Width || q.Geometry.H != p.Height {
+		return nil, fault("profile", "unadmitted profile, kind or geometry")
+	}
+	effectiveDepth := 0
+	if q.NestedDepth != nil {
+		effectiveDepth = *q.NestedDepth
+	}
+	if p.NestedDepth < 0 || p.NestedDepth > 1 || effectiveDepth != p.NestedDepth || (p.Kind != "desktop_capsule" && p.NestedDepth != 0) {
+		return nil, fault("nested_depth", "profile nested_depth mismatch")
+	}
+	if p.Kind == "desktop_capsule" && (p.NativeKind != "program" || !admittedProgram(p.Program, p.NestedDepth) || (p.NestedDepth == 1 && (p.Width != 1280 || p.Height != 720))) {
 		return nil, fault("profile", "unadmitted profile, kind or geometry")
 	}
 	active := len(m.quarantined)

@@ -231,6 +231,36 @@ class DecoderConformanceTests(unittest.TestCase):
                 "pos-007-terminal-len-match",
                 wrap_obj({**term_valid, "params": {**term_valid["params"], "b64": "YQ==", "byte_count": 1}}),
             ),
+            (
+                "pos-008-create-nested-depth-0",
+                wrap_obj(
+                    {
+                        "schema": "surface_request/v0.2",
+                        "op": "create",
+                        "params": {
+                            "kind": "desktop_capsule",
+                            "geometry": {"w": 1280, "h": 720},
+                            "profile_id": "notepad-0",
+                            "nested_depth": 0,
+                        },
+                    }
+                ),
+            ),
+            (
+                "pos-009-create-nested-depth-1",
+                wrap_obj(
+                    {
+                        "schema": "surface_request/v0.2",
+                        "op": "create",
+                        "params": {
+                            "kind": "desktop_capsule",
+                            "geometry": {"w": 1280, "h": 720},
+                            "profile_id": "inner-host-1",
+                            "nested_depth": 1,
+                        },
+                    }
+                ),
+            ),
         ]
 
         # Adversarial mutations T6R2-001..007
@@ -289,6 +319,70 @@ class DecoderConformanceTests(unittest.TestCase):
                 "RV7-ramws-bare-root",
                 wrap_obj({**frame_valid, "ramws_path": "/dev/shm"}),
                 {"rust": False, "go": False, "python": False, "checker": False},
+            ),
+            (
+                "AC17-nested-depth-2",
+                wrap_obj(
+                    {
+                        "schema": "surface_request/v0.2",
+                        "op": "create",
+                        "params": {
+                            "kind": "desktop_capsule",
+                            "geometry": {"w": 1280, "h": 720},
+                            "profile_id": "inner-host-1",
+                            "nested_depth": 2,
+                        },
+                    }
+                ),
+                dict(unanimous_refusal),
+            ),
+            (
+                "AC17-nested-depth-neg1",
+                wrap_obj(
+                    {
+                        "schema": "surface_request/v0.2",
+                        "op": "create",
+                        "params": {
+                            "kind": "desktop_capsule",
+                            "geometry": {"w": 1280, "h": 720},
+                            "profile_id": "inner-host-1",
+                            "nested_depth": -1,
+                        },
+                    }
+                ),
+                dict(unanimous_refusal),
+            ),
+            (
+                "AC17-nested-depth-float",
+                wrap_obj(
+                    {
+                        "schema": "surface_request/v0.2",
+                        "op": "create",
+                        "params": {
+                            "kind": "desktop_capsule",
+                            "geometry": {"w": 1280, "h": 720},
+                            "profile_id": "inner-host-1",
+                            "nested_depth": 1,
+                        },
+                    }
+                ).replace('"nested_depth":1', '"nested_depth":1.0'),
+                dict(unanimous_refusal),
+            ),
+            (
+                "AC17-nested-depth-bool",
+                wrap_obj(
+                    {
+                        "schema": "surface_request/v0.2",
+                        "op": "create",
+                        "params": {
+                            "kind": "desktop_capsule",
+                            "geometry": {"w": 1280, "h": 720},
+                            "profile_id": "inner-host-1",
+                            "nested_depth": True,
+                        },
+                    }
+                ),
+                dict(unanimous_refusal),
             ),
         ]
 
