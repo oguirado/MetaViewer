@@ -7,6 +7,10 @@ package capsule
 // must affirm the bound operation/removal; absent hooks fail closed.
 // Local observation IDs are opaque and never reused within this manager's session.
 // Uncertain native effects quarantine the profile until explicit reconciliation.
+// [TARGET, unit decision] Failed readiness is compensated only for a validated,
+// non-conflicting container identity. Verified removal releases quarantine;
+// otherwise an uncertain fault exposes the retained quarantine. Create has no
+// request dedup key: an uncertain start must never be retried automatically.
 // [TARGET, unit decision] Profile geometry caps identity readiness; surface and
 // input bounds track the actual CLI window, including valid smaller captures.
 // Holdings has no window identity and requires exact configured capture geometry.
@@ -215,7 +219,7 @@ func (m *Manager) Handle(ctx context.Context, r Request) ([]json.RawMessage, err
 		return nil, fault("unknown_op", "unknown surface operation")
 	}
 }
-func (m *Manager) create(ctx context.Context, r Request, version string) ([]json.RawMessage, error) {
+func (m *Manager) create(ctx context.Context, r Request, version string) (events []json.RawMessage, err error) {
 	var q struct {
 		Kind      string   `json:"kind"`
 		ProfileID string   `json:"profile_id"`
@@ -263,6 +267,51 @@ func (m *Manager) create(ctx context.Context, r Request, version string) ([]json
 		return nil, e
 	}
 	b := Binding{Surface: Surface{Schema: "surface/" + version, SurfaceID: id, Kind: p.Kind, Display: p.Display, Geometry: q.Geometry, State: "active", Visibility: "unfolded", Control: "agent", ProfileID: q.ProfileID}, NativeKind: p.NativeKind, Program: p.Program}
+	// Recover only the cleanup identity from syntactically valid bounded JSON.
+	// Readiness validation below remains closed and authoritative for admission.
+	var cleanup struct {
+		Container string `json:"container"`
+		RunID     string `json:"run_id"`
+	}
+	if p.NativeKind == "holdings" {
+		var records []struct {
+			Container string `json:"container"`
+			RunID     string `json:"run_id"`
+		}
+		if len(out) <= m.cfg.MaxOutputBytes && json.Unmarshal(out, &records) == nil && len(records) == 1 {
+			cleanup.Container, cleanup.RunID = records[0].Container, records[0].RunID
+		}
+	} else if len(out) <= m.cfg.MaxOutputBytes {
+		if json.Unmarshal(out, &cleanup) != nil {
+			cleanup.Container, cleanup.RunID = "", ""
+		}
+	}
+	defer func() {
+		if err == nil {
+			return
+		}
+		valid := identityContainer.MatchString(cleanup.Container)
+		if p.NativeKind == "holdings" {
+			valid = holdingsContainer.MatchString(cleanup.Container)
+		}
+		valid = valid && runID.MatchString(cleanup.RunID)
+		for _, old := range m.bindings {
+			if old.Container == cleanup.Container && old.Surface.State != "destroyed" {
+				valid = false
+			}
+		}
+		if valid {
+			candidate := b
+			candidate.Container, candidate.RunID = cleanup.Container, cleanup.RunID
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), m.cfg.Timeout)
+			defer cancel()
+			if stopErr := m.stopNative(cleanupCtx, candidate); stopErr == nil {
+				delete(m.quarantined, q.ProfileID)
+				return
+			}
+		}
+		err = fault("uncertain", "profile "+q.ProfileID+" remains quarantined after failed create: "+err.Error())
+	}()
 	if p.NativeKind == "holdings" {
 		var records []struct {
 			Slot       int    `json:"slot"`
@@ -350,34 +399,42 @@ func (m *Manager) destroy(ctx context.Context, r Request, version string) ([]jso
 	// until verified removal; never reopen input/capture after an uncertain stop.
 	b.Surface.State = "lost"
 	m.bindings[q.SurfaceID] = b
+	if e := m.stopNative(ctx, b); e != nil {
+		return nil, e
+	}
+	b.Surface.State = "destroyed"
+	m.bindings[q.SurfaceID] = b
+	return []json.RawMessage{surfaceEvent(version, "state_changed", b.Surface)}, nil
+}
+
+// stopNative requires mu and preserves the same removal proof for rollback and destroy.
+func (m *Manager) stopNative(ctx context.Context, b Binding) error {
 	out, e := m.execute(ctx, m.cfg.Profiles[b.Surface.ProfileID], []string{"stop", "--container", b.Container}, nil)
 	if e != nil {
-		return nil, e
+		return e
 	}
 	var stopped struct {
 		Stopped         string `json:"stopped"`
 		RemovedVerified *bool  `json:"removed_verified,omitempty"`
 	}
 	if e := cli.ParseLine(out, m.cfg.MaxOutputBytes, &stopped); e != nil {
-		return nil, e
+		return e
 	}
 	if stopped.Stopped != b.Container || (stopped.RemovedVerified != nil && !*stopped.RemovedVerified) || (b.NativeKind != "holdings" && stopped.RemovedVerified == nil) {
-		return nil, fault("malformed_cli", "native removal was not verified")
+		return fault("malformed_cli", "native removal was not verified")
 	}
 	if b.NativeKind == "holdings" {
 		if m.cfg.VerifyHoldingsRemoval == nil {
-			return nil, fault("uncertain", "independent Holdings removal proof required")
+			return fault("uncertain", "independent Holdings removal proof required")
 		}
 		m.mu.Unlock()
 		e := m.cfg.VerifyHoldingsRemoval(ctx, b)
 		m.mu.Lock()
 		if e != nil {
-			return nil, e
+			return e
 		}
 	}
-	b.Surface.State = "destroyed"
-	m.bindings[q.SurfaceID] = b
-	return []json.RawMessage{surfaceEvent(version, "state_changed", b.Surface)}, nil
+	return nil
 }
 func (m *Manager) Capture(ctx context.Context, id string) (Binding, NativeFrame, error) {
 	m.mu.Lock()
@@ -423,6 +480,9 @@ func (m *Manager) MarkLost(id string, confirmedAbsent bool) (json.RawMessage, er
 	b, ok := m.bindings[id]
 	if !confirmedAbsent || !ok || b.Surface.State != "active" || m.destroying[id] {
 		return nil, fault("surface", "confirmed active disappearance required")
+	}
+	if m.hasPending(id) {
+		return nil, fault("POLICY", "input must be drained before marking lost")
 	}
 	b.Surface.State = "lost"
 	m.bindings[id] = b
@@ -506,7 +566,8 @@ func (m *Manager) input(ctx context.Context, r Request, version string) ([]json.
 	if pending.cancelled {
 		return nil, fault("SURFACE_NOT_AGENT_CONTROLLED", "input cancelled by control takeover")
 	}
-	if m.bindings[q.SurfaceID].Surface.State != "active" {
+	b, ok = m.bindings[q.SurfaceID]
+	if !ok || b.Surface.State != "active" {
 		return nil, fault("surface", "surface lost during input")
 	}
 	if e != nil {
