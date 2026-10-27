@@ -77,12 +77,44 @@ class MatrixTests(unittest.TestCase):
             self.assertIsNone(receipt['counts']['passed'])
 
     def test_missing_output_fails_actual_package_command(self):
-        self.run_control('package.yml', 'arm64', 'success', 1, 'FAIL')
+        for arch in ('arm64', 'x64'):
+            with self.subTest(arch=arch):
+                self.run_control('package.yml', arch, 'success', 1, 'FAIL')
+
+    def test_supported_arches_execute_package_gate(self):
+        raw_script = script('package.yml')
+        shim = (
+            'offline_shim() {\n'
+            '  if [ "${1:-}" = node ] && [ "${3:-}" = --smoke ]; then\n'
+            '    printf \'{"marker":"METAVIEWER_MAIN_SMOKE_OK"}\\n\'\n'
+            '  fi\n'
+            '  return 0\n'
+            '}\n'
+        )
+        shimmed = shim + raw_script.replace('bash .github/workflows/offline.sh', 'offline_shim')
+        for arch in ('arm64', 'x64'):
+            with self.subTest(arch=arch), tempfile.TemporaryDirectory() as tmp:
+                temp = Path(tmp)
+                summary = temp / 'summary'
+                env = dict(os.environ, RUNNER_TEMP=tmp, GITHUB_STEP_SUMMARY=str(summary),
+                           GITHUB_SHA='fixture', GITHUB_RUN_ID='fixture', PLATFORM=arch,
+                           JOB_ID='linux-package', SETUP_RESULT='success',
+                           MV_PKG_OUT=str(temp / 'pkg-out'),
+                           CARGO_TARGET_DIR=str(temp / 'cargo-target'))
+                result = subprocess.run(['bash', '-c', shimmed], cwd=ROOT,
+                                        env=env, text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                receipt = json.loads(next(temp.rglob('*.receipt.json')).read_text())
+                self.assertEqual(receipt['outcome'], 'PASS')
+                self.assertEqual(receipt['rc'], 0)
+                self.assertEqual(receipt['scope']['platform'], arch)
 
     def test_unsupported_arch_never_passes(self):
-        receipt = self.run_control('package.yml', 'x64', 'success', 1, 'BLOCKED')
-        self.assertEqual(receipt['counts']['source'], 'unexecuted')
-        self.assertIsNone(receipt['rc'])
+        for arch in ('riscv64', 's390x'):
+            with self.subTest(arch=arch):
+                receipt = self.run_control('package.yml', arch, 'success', 1, 'BLOCKED')
+                self.assertEqual(receipt['counts']['source'], 'unexecuted')
+                self.assertIsNone(receipt['rc'])
 
     def test_other_build_failure_publishes_measured_counts(self):
         receipt = self.run_control('build-other.yml', 'darwin', 'success', 7, 'FAIL',
