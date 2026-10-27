@@ -284,7 +284,8 @@ async function toggleTerminal() {
 
 const terminalTop = ref(0), terminalBottom = ref(0);
 function measureChrome() {
-  terminalTop.value = document.getElementById('shell/header')?.offsetHeight ?? 0;
+  terminalTop.value = (document.getElementById('shell/header')?.offsetHeight ?? 0)
+    + (document.getElementById('mv-layout-notice')?.offsetHeight ?? 0);
   terminalBottom.value = document.getElementById('shell/statusbar')?.offsetHeight ?? 0;
 }
 onMounted(() => { measureChrome(); window.addEventListener('resize', measureChrome); });
@@ -383,16 +384,20 @@ const chromeWorkspace = markRaw(defineComponent({
         <UiButton id="shell-terminal" data-semantic-anchor="terminal/toggle" label="Terminal" :aria-expanded="terminalOpen" @click="toggleTerminal" />
       </template>
     </TopBar>
+    <div v-if="!nestedMode.displayOnly" id="mv-layout-notice" class="mv-layout-notice">
+      <!-- Reserve the longest outcome before the wall becomes interactive, including while panels open. -->
+      <p class="mv-layout-notice-reserve" aria-hidden="true"><strong>Layout unavailable.</strong> The default layout is shown read-only. Changes will not be saved.</p>
+      <p v-if="layoutUnavailable && !creativeOpen && !settingsOpen && !multislotOpen && !nestedMode.displayOnly" id="mv-layout-unavailable" data-semantic-anchor="layout/unavailable"
+        class="mv-layout-unavailable" role="alert" :data-error-code="layoutUnavailable.code">
+        <strong>Layout unavailable.</strong> {{ layoutUnavailable.saveRefused
+          ? 'Changes cannot be saved in this session.'
+          : 'The default layout is shown read-only. Changes will not be saved.' }}
+      </p>
+    </div>
     <div class="mv-shell-body">
       <div v-if="!nestedMode.displayOnly && !creativeOpen" class="mv-shell-rail"><Sidebar :groups="groups" :collapsed="!railOpen" :overlay="true" workspace-label="MetaViewer" @open="openCapsule" /></div>
       <main id="shell-wall" aria-label="MetaViewer capsule wall">
         <HostOutcome :row="hostOutcome" />
-        <p v-if="layoutUnavailable && !creativeOpen && !settingsOpen && !multislotOpen && !nestedMode.displayOnly" id="mv-layout-unavailable" data-semantic-anchor="layout/unavailable"
-          class="mv-layout-unavailable" role="alert" :data-error-code="layoutUnavailable.code">
-          <strong>Layout unavailable.</strong> {{ layoutUnavailable.saveRefused
-            ? 'Changes cannot be saved in this session.'
-            : 'The default layout is shown read-only. Changes will not be saved.' }}
-        </p>
         <section v-if="nestedMode.displayOnly" class="mv-nested-wall" aria-label="Nested capsule wall">
           <article v-for="surface in rows" :key="surface.id" :aria-label="surface.title || surface.id">
             <SurfaceCanvas :surface-id="surface.id" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :state="surface.attachmentState === 'live' ? 'live' : 'connecting'" />
@@ -438,14 +443,17 @@ const chromeWorkspace = markRaw(defineComponent({
 <style>
 html, body, #metaviewer-app { width:100%; height:100%; margin:0; overflow:hidden; }
 body { font-family:var(--cuk-semantic-typography-font-family-sans, system-ui, sans-serif); color:var(--cuk-semantic-text-primary); background:var(--cuk-semantic-surface-canvas); }
-.mv-shell { height:100dvh; display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:var(--cuk-component-app-shell-topbar-height) minmax(0,1fr) auto var(--cuk-component-app-shell-status-height); background:var(--cuk-semantic-surface-canvas); }
+.mv-shell { height:100dvh; display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:var(--cuk-component-app-shell-topbar-height) auto minmax(0,1fr) auto var(--cuk-component-app-shell-status-height); background:var(--cuk-semantic-surface-canvas); }
 .mv-terminal { position:fixed; inset:0; z-index:var(--cuk-semantic-z-index-overlay); pointer-events:none; }
 .mv-terminal[hidden] { display:none; }
 .mv-terminal > * { pointer-events:auto; }
-.mv-shell-body { display:flex; min-width:0; min-height:0; position:relative; }
+.mv-shell-body { grid-row:3; display:flex; min-width:0; min-height:0; position:relative; }
 .mv-shell-rail { width:var(--cuk-semantic-size-rail-collapsed-width); flex:none; position:relative; }
 .mv-shell main { position:relative; flex:1; min-height:0; min-width:0; }
-.mv-layout-unavailable { position:absolute; top:var(--cuk-semantic-spacing-md); left:var(--cuk-semantic-spacing-md); right:var(--cuk-semantic-spacing-md); z-index:5; margin:0; padding:var(--cuk-semantic-spacing-sm); color:var(--cuk-semantic-text-primary); background:var(--cuk-semantic-surface-canvas); border:var(--cuk-semantic-border-width) solid var(--cuk-semantic-border-default); font-size:var(--cuk-semantic-typography-font-size-sm); }
+/* Both paragraphs share one flow-sized cell; the reserve never enters the accessibility tree. */
+.mv-layout-notice { grid-row:2; display:grid; min-width:0; }
+.mv-layout-notice-reserve, .mv-layout-unavailable { grid-area:1 / 1; margin:0; padding:var(--cuk-semantic-spacing-sm); color:var(--cuk-semantic-text-primary); background:var(--cuk-semantic-surface-canvas); border:var(--cuk-semantic-border-width) solid var(--cuk-semantic-border-default); font-size:var(--cuk-semantic-typography-font-size-sm); }
+.mv-layout-notice-reserve { visibility:hidden; }
 .mv-shell .cuk-capsule-panel { height:100%; }
 .mv-shell .mv-surface-host { width:100%; height:100%; min-height:0; }
 .mv-shell .wall-workspace, .mv-shell .cuk-shell-workspace { height:100%; }
@@ -470,6 +478,7 @@ body { font-family:var(--cuk-semantic-typography-font-family-sans, system-ui, sa
 <style>
 .mv-creative-screen, .mv-multislot-screen, .mv-settings-screen { position:absolute; inset:0; z-index:2; overflow:auto; padding:var(--cuk-semantic-spacing-md); background:var(--cuk-semantic-surface-canvas); }
 .mv-shell--nested { grid-template-rows:minmax(0,1fr); }
+.mv-shell--nested > .mv-shell-body { grid-row:1; }
 .mv-nested-wall { display:grid; height:100%; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); }
 .mv-nested-wall article { min-width:0; min-height:0; }
 </style>

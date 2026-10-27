@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { parse } from '@vue/compiler-sfc';
+import { declarationsFor } from './mvui8-css-rules.js';
 import { runInNewContext } from 'node:vm';
-import { loadSfc, mount, slotStub, ui, byId, text, vue } from './mvui3-creative-harness.js';
+import { loadSfc, mount, slotStub, ui, byId, text, nodes, vue } from './mvui3-creative-harness.js';
 import { createWallLayout, migrateWallLayout, SCOPE } from '../src/wall/layout.js';
 import { createLayoutProfileController } from '../.kit/capsule-ui-kit/src/workspace/layoutProfile.js';
 import { resolveNestedMode, applyNestedWall } from '../src/nested/nested.js';
@@ -24,7 +26,7 @@ function storageFor(facade) {
   });
 }
 const tick = async () => { await new Promise(resolve => setImmediate(resolve)); await vue.nextTick(); };
-async function mountApp(storage, scheme = 'mv-light') {
+async function mountApp(storage, scheme = 'mv-light', displayOnly = false) {
   const oldWindow = globalThis.window, oldDocument = globalThis.document;
   globalThis.window = { addEventListener() {}, removeEventListener() {} };
   globalThis.document = { documentElement: { dataset: {} }, getElementById: () => null };
@@ -57,7 +59,8 @@ async function mountApp(storage, scheme = 'mv-light') {
     const fixture = resolveFixture('one').fixture;
     const layout = createWallLayout(SCOPE, [...fixture.capsules]);
     const view = mount(App, { fixture: { ...fixture, scheme }, layout, scope: SCOPE, storage,
-      runtime: createFixtureRuntime(fixture).mount.runtime });
+      runtime: createFixtureRuntime(fixture).mount.runtime,
+      nestedHost: { getNestedDepth: () => displayOnly ? 1 : 0, getSelfCapsuleId: () => null } });
     await captured.ready; await tick();
     return { ...captured, view, layout, close() { view.close(); globalThis.window = oldWindow; globalThis.document = oldDocument; } };
   } catch (error) { globalThis.window = oldWindow; globalThis.document = oldDocument; throw error; }
@@ -190,10 +193,10 @@ function luminance(hex) {
   return c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722;
 }
 function contrast(a, b) { const values = [luminance(a), luminance(b)].sort((x, y) => y - x); return (values[0] + 0.05) / (values[1] + 0.05); }
-test('status overlay preserves wall geometry and AA contrast in both schemes; negative control rejects low contrast', () => {
-  const rule = appSource.match(/\.mv-layout-unavailable \{([^}]+)\}/)[1];
-  assert.match(rule, /position:absolute/);
-  assert.match(rule, /z-index:5/);
+test('reserved notice preserves AA contrast in both schemes; negative control rejects low contrast', () => {
+  const rule = declarationsFor(parse(appSource).descriptor.styles.map(s => s.content).join('\n'), '.mv-layout-unavailable');
+  assert.match(rule, /grid-area:1 \/ 1/);
+  assert.doesNotMatch(rule, /position:absolute|z-index/);
   assert.match(rule, /color:var\(--cuk-semantic-text-primary\)/);
   assert.match(rule, /background:var\(--cuk-semantic-surface-canvas\)/);
   const theme = readFileSync(new URL('../.kit/capsule-ui-kit/src/design/theme.css', import.meta.url), 'utf8');
@@ -240,5 +243,23 @@ test('layout alert hides on unrelated screens and returns with the wall', async 
       byId(app.view.root, 'shell-settings').props.onClick(); await tick();
       assert.ok(byId(app.view.root, 'mv-layout-unavailable'));
     }
+  } finally { app.close(); }
+});
+
+
+for (const displayOnly of [false, true]) test(`notice grid mode renders correctly: displayOnly=${displayOnly}`, async () => {
+  const app = await mountApp({ readRaw: async () => null, writeAtomic: async () => {} }, 'mv-light', displayOnly);
+  try {
+    const body = nodes(app.view.root).find(n => n.props?.class === 'mv-shell-body');
+    assert.ok(body);
+    const shell = body.parent;
+    assert.equal(shell.props.class.includes('mv-shell--nested'), displayOnly);
+    assert.equal(Boolean(byId(app.view.root, 'mv-layout-notice')), !displayOnly);
+    assert.equal(nodes(body).some(n => n.props?.class === 'mv-nested-wall'), displayOnly);
+    const styles = parse(appSource).descriptor.styles.map(s => s.content).join('\n');
+    assert.match(declarationsFor(styles, displayOnly ? '.mv-shell--nested > .mv-shell-body' : '.mv-shell-body'),
+      displayOnly ? /grid-row:1(?:;|$)/ : /grid-row:3(?:;|$)/);
+    assert.match(declarationsFor(styles, displayOnly ? '.mv-shell--nested' : '.mv-shell'),
+      displayOnly ? /grid-template-rows:minmax\(0,1fr\)/ : /grid-template-rows:var\(--cuk-component-app-shell-topbar-height\) auto minmax\(0,1fr\)/);
   } finally { app.close(); }
 });
