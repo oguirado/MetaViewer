@@ -18,6 +18,21 @@ const TABS_URL = new URL('../.kit/capsule-ui-kit/src/terminal/TerminalSessionTab
 /** @type {Record<string, any>} */
 const tokens = JSON.parse(readFileSync(MV_TOKENS_URL, 'utf8'));
 const cssText = readFileSync(MV_CSS_URL, 'utf8');
+const kitTokens = JSON.parse(readFileSync(new URL('../.kit/capsule-ui-kit/src/design/tokens.json', import.meta.url), 'utf8'));
+
+/** Pin the specific selector, rather than accepting another rule's text color. */
+function assertKitTextRule(source, selector, token, background) {
+  const rule = source.split(selector + '{')[1]?.split('}')[0]
+    ?? source.split(selector + ' {')[1]?.split('}')[0];
+  assert.ok(rule, selector);
+  assert.ok(rule.includes('color: var(--cuk-semantic-text-' + token + ')'), selector);
+  assert.ok(!rule.includes('--cuk-semantic-text-disabled'), 'legacy disabled text rejected');
+  for (const mode of MODES) {
+    const foreground = resolveColor(kitTokens, 'semantic.text.' + token, mode);
+    const surface = resolveColor(kitTokens, 'semantic.surface.' + background, mode);
+    assert.ok(contrast(foreground, surface) >= MIN_RATIO, selector + '/' + mode);
+  }
+}
 
 const MIN_RATIO = 4.5;
 const MODES = ['light.normal', 'dark.normal'];
@@ -138,7 +153,10 @@ describe('mvui2 MV-3/MV-4 kit ownership', () => {
     const topbar = readFileSync(TOPBAR_URL, 'utf8');
     assert.ok(topbar.includes('data-semantic-anchor="shell/navigation/command-open"'));
     assert.ok(topbar.includes('{{ searchPlaceholder }}'));
-    assert.ok(topbar.includes('color: var(--cuk-semantic-text-disabled)'));
+    assertKitTextRule(topbar, '.s1-topbar .s1-topbar-search', 'muted', 'canvas');
+    assert.throws(() => assertKitTextRule(
+      topbar.replace('color: var(--cuk-semantic-text-muted)', 'color: var(--cuk-semantic-text-disabled)'),
+      '.s1-topbar .s1-topbar-search', 'muted', 'canvas'));
     assert.ok(topbar.includes('background: var(--cuk-semantic-surface-canvas)'));
     assert.ok(!topbar.includes('--mv-'), 'kit TopBar references no MetaViewer token');
   });
@@ -147,7 +165,11 @@ describe('mvui2 MV-3/MV-4 kit ownership', () => {
     const tabs = readFileSync(TABS_URL, 'utf8');
     assert.ok(tabs.includes('No terminal sessions.'));
     assert.ok(tabs.includes('cui-terminal-tabs__empty'));
-    assert.ok(tabs.includes('color: var(--cuk-semantic-text-disabled)'));
+    assertKitTextRule(tabs, '.cui-terminal-tabs__empty', 'primary', 'sunken');
+    assert.throws(() => assertKitTextRule(
+      tabs.replace(/(\.cui-terminal-tabs__empty\s*\{[^}]*?)color: var\(--cuk-semantic-text-primary\)/,
+        '$1color: var(--cuk-semantic-text-disabled)'),
+      '.cui-terminal-tabs__empty', 'primary', 'sunken'));
     assert.ok(tabs.includes('background-color: var(--cuk-semantic-surface-sunken)'));
     assert.ok(!tabs.includes('--mv-'), 'kit tabs reference no MetaViewer token');
   });

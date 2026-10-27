@@ -83,7 +83,14 @@ for (const colorScheme of ['light', 'dark']) {
         assert.equal(panel.props['data-attachment-state'], rows[i].attachmentState);
         assert.ok(nodes(tile).some(n => n.props?.role === 'tab' && n.props['aria-label'].includes(rows[i].title)));
       }
-      assert.equal(nodes(tiles[2]).find(n => n.props?.['data-permanent-host']).style.display, 'none');
+      // Kit hides via CSP-safe classes; the permanent surface host stays mounted.
+      for (const [i, tile] of tiles.entries()) {
+        const body = nodes(tile).find(n => n.props?.['data-permanent-host']);
+        assert.ok(body, rows[i].id);
+        assert.equal(String(body.props.class).split(/\s+/).includes('cuk-csp-hidden'), i === 2);
+        assert.equal(body.props.style, undefined, 'no inline styles');
+        assert.ok(nodes(body).some(n => n.props?.['data-permanent-surface-host']));
+      }
       const controls = nodes(mounted.root).filter(n => n.props?.['data-semantic-anchor']);
       uniqueAnchors(controls);
       for (const row of rows) {

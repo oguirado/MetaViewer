@@ -70,7 +70,9 @@ function renderedElements(html) {
     }
     const origin = raw.match(/ data-mvui-origin="([^"]+)"/)?.[1] ?? stack.at(-1)?.origin ?? 'AUSENTE';
     const tag = raw.replace(/ data-mvui-origin="[^"]+"/g, '');
-    const element = { name, origin, tag };
+    const parentAnchor = stack.at(-1)?.semanticAnchor;
+    const semanticAnchor = attribute(tag, 'data-semantic-anchor') ?? parentAnchor;
+    const element = { name, origin, tag, parentAnchor, semanticAnchor };
     elements.push(element);
     if (!/^(?:area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)$/.test(name) && !/\/>$/.test(raw)) stack.push(element);
   }
@@ -125,15 +127,35 @@ function knownControl({ origin, tag }) {
   } else return false;
   try { assertControls(repaired); return true; } catch { return false; }
 }
+// Embedded SaasSurfaceView delegates its slot anchor to AiMultiSlot.
+// Require that actual ancestor; an unanchored standalone region still fails.
+function assertRenderedControl(element) {
+  const { origin, tag, parentAnchor } = element;
+  if (origin === kitSource('saas/SaasSurfaceView')
+    && attribute(tag, 'data-semantic-anchor') === undefined
+    && attribute(tag, 'role') === 'region') {
+    const capsuleId = attribute(tag, 'id')?.match(/^cuk-saas-surface-(cap-[0-9]+)-multislot-main$/)?.[1];
+    assert.ok(capsuleId, 'known embedded surface identity');
+    assert.equal(attribute(tag, 'class'), 'saas-surface saas-surface-live');
+    assert.equal(attribute(tag, 'role'), 'region');
+    assert.equal(attribute(tag, 'tabindex'), '0');
+    assert.match(attribute(tag, 'aria-label') ?? '', /^Live surface for .+/);
+    assert.equal(parentAnchor, `capsule/${capsuleId}/slot`, 'embedded surface has its owning slot anchor');
+    assertControls(tag.replace(/>$/, ` data-semantic-anchor="${parentAnchor}">`));
+    return;
+  }
+  assertControls(tag);
+}
 function assertKnown(offenders, predicate) {
   assert.deepEqual(offenders.filter(element => !predicate(element)), [], 'NEW external offenders');
 }
 async function attributedChecks(t, html, kind) {
   const elements = renderedElements(html);
   assert.equal(elements.some(element => element.origin === 'AUSENTE'), false, 'all rendered elements have a source owner');
-  const offenders = elements.filter(({ tag }) => {
+  const offenders = elements.filter(element => {
+    const { tag } = element;
     if (kind === 'CSP') return /\sstyle\s*=/.test(tag);
-    try { assertControls(tag); return false; } catch { return true; }
+    try { assertRenderedControl(element); return false; } catch { return true; }
   });
   const owned = offenders.filter(({ origin }) => origin.startsWith('src/'));
   await t.test(`${kind}: MetaViewer-owned`, () => assert.deepEqual(owned, []));
@@ -141,10 +163,10 @@ async function attributedChecks(t, html, kind) {
     const ids = elements.map(({ tag }) => tag.match(/\sid="([^"]+)"/)?.[1]).filter(Boolean);
     await t.test('duplicate DOM ids remain hard', () => assert.deepEqual(ids.filter((id, i) => ids.indexOf(id) !== i), []));
   }
-  for (const [group, todo] of [['kit', 'capsule-ui-kit 0.2.1 CSP audit']]) {
+  for (const group of ['kit']) {
     const external = offenders.filter(({ origin }) => origin.startsWith('.kit/'));
     await t.test(`${kind}: ${group} known-offender subset`, () => assertKnown(external, kind === 'CSP' ? knownStyle : knownControl));
-    await t.test(`${kind}: ${group}`, { todo: external.length ? todo : undefined }, subtest => {
+    await t.test(`${kind}: ${group}`, subtest => {
       subtest.diagnostic(JSON.stringify(external));
       assert.deepEqual(external, []);
     });
@@ -206,6 +228,15 @@ test('authorized kit exceptions reject new selectors, values, origins and identi
     tag: controls[0][1].replace(/ data-semantic-anchor="[^"]+"/, '') }], knownControl));
 });
 
+test('embedded surface requires the real owning slot anchor', () => {
+  const region = '<div id="cuk-saas-surface-cap-01-multislot-main" class="saas-surface saas-surface-live" role="region" aria-label="Live surface for Demo" tabindex="0">';
+  const element = { origin: kitSource('saas/SaasSurfaceView'), tag: region, parentAnchor: 'capsule/cap-01/slot' };
+  assertRenderedControl(element);
+  assert.throws(() => assertRenderedControl({ ...element, parentAnchor: undefined }));
+  assert.throws(() => assertRenderedControl({ ...element, parentAnchor: 'capsule/cap-02/slot' }));
+  assert.throws(() => assertRenderedControl({ ...element, origin: 'src/App.vue' }));
+});
+
 test('every fixture renders its real screen and stable controls without live core', { timeout: 60000 }, async t => {
   globalThis.__mvuiXterm = require('@xterm/xterm');
   globalThis.__mvuiFit = require('@xterm/addon-fit');
@@ -219,20 +250,30 @@ test('every fixture renders its real screen and stable controls without live cor
     },
   }] });
   const oldDocument = globalThis.document, oldWindow = globalThis.window;
-  globalThis.document = { documentElement: { dataset: {} }, getElementById: () => null };
+  globalThis.document = {
+    documentElement: { dataset: {} }, getElementById: () => null,
+    querySelector: selector => selector === 'meta[name$="-style-nonce"]'
+      ? { getAttribute: name => name === 'content' ? 'mvui-ssr-test-nonce' : null } : null,
+  };
   globalThis.window = { addEventListener() {}, removeEventListener() {} };
   try {
     const { default: App } = await server.ssrLoadModule('/src/App.vue');
+    const { installKitTheme, isKitThemeInstalled, setKitScheme } = await server.ssrLoadModule('capsule-ui-kit/theme');
     for (const key of FIXTURE_KEYS) await t.test(key, async fixtureTest => {
       const resolved = resolveFixture(key);
       assert.equal(resolved.ok, true);
       const { fixture } = resolved;
       const result = createFixtureRuntime(fixture);
       assert.equal(result.ok, true);
-      const html = await renderToString(createSSRApp(App, {
+      const app = createSSRApp(App, {
         ...result.mount, layout: createWallLayout(SCOPE, [...fixture.capsules]), scope: SCOPE,
         storage: { readRaw: async () => null, writeAtomic: async () => {} },
-      }));
+      });
+      // Match production boot: real OpenVue plugin and kit preset, before render.
+      installKitTheme(app);
+      assert.equal(isKitThemeInstalled(app), true);
+      setKitScheme(fixture.scheme);
+      const html = await renderToString(app);
       await fixtureTest.test(`${key}: screen content`, () => {
         const visibleText = html.replace(/<[^>]*>/g, ' ');
         assert.equal(/Panel unavailable|Missing capsule|cannot start|ERR_|placeholder text|Core not connected/.test(visibleText), false, visibleText.slice(-2500));

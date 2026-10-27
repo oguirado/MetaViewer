@@ -360,7 +360,7 @@ class GateTests(unittest.TestCase):
         package = self.fixture / 'ui/.kit/capsule-ui-kit'
         package.mkdir(parents=True)
         (package / 'package.json').write_text(json.dumps(
-            {'name': 'capsule-ui-kit', 'version': '0.2.0'}))
+            {'name': 'capsule-ui-kit', 'version': '0.2.1'}))
         (package / 'index.js').write_text('export const value = 1;\n')
 
         def digest(root):
@@ -382,12 +382,12 @@ class GateTests(unittest.TestCase):
 
         content_hash = digest(package)
         (package / 'KIT_SOURCE.json').write_text(json.dumps(
-            {'schema': 'capsule-ui-kit-source/v1', 'version': '0.2.0',
+            {'schema': 'capsule-ui-kit-source/v1', 'version': '0.2.1',
              'contentHash': content_hash, 'algorithm': 'sha256-length-framed-tree',
              'direction': 'vendor'}))
         (self.fixture / 'ui/kit.lock.json').write_text(json.dumps(
             {'repo': 'https://example.invalid/kit.git', 'commit': '0' * 40,
-             'version': '0.2.0', 'contentHash': content_hash}))
+             'version': '0.2.1', 'contentHash': content_hash}))
         environment = {key: value for key, value in os.environ.items()
                        if key not in ('MV_KIT_CHECKOUT', 'CAPSULE_UI_KIT_REPO')}
 

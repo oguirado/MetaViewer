@@ -23,11 +23,17 @@ function stubRegistry() {
   };
 }
 
-test('MV-1 repro: a null facade makes the kit model surface JS exception text', async () => {
+test('MV-1: a null facade produces a typed capabilities refusal', async () => {
   const model = createSideTerminalModel({ facade: null, createRegistry: stubRegistry });
   await model.initialize();
   const snap = model.snapshot();
-  assert.match(snap.error, /reading 'capabilities'/);
+  const assertTypedRefusal = error => {
+    assert.equal(error, 'Terminal capabilities unavailable');
+    assert.doesNotMatch(error, /Cannot read properties|TypeError|reading ['"]capabilities/);
+  };
+  assertTypedRefusal(snap.error);
+  assert.throws(() => assertTypedRefusal("Cannot read properties of null (reading 'capabilities')"));
+  assert.equal(snap.errorCode, 'TERMINAL_CAPABILITIES_UNAVAILABLE');
   assert.equal(snap.ready, false);
   model.dispose();
 });

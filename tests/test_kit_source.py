@@ -42,12 +42,12 @@ class KitTests(unittest.TestCase):
         self.pkg = self.repo / 'packages/capsule-ui-kit'
         self.pkg.mkdir(parents=True)
         (self.pkg / 'package.json').write_text(json.dumps({
-            'name': 'capsule-ui-kit', 'version': '0.2.0',
+            'name': 'capsule-ui-kit', 'version': '0.2.1',
             'exports': {'.': './index.js'}}))
         (self.pkg / 'index.js').write_text('export const value = 1;\n')
         (self.pkg / 'é.txt').write_text('byte framing')
         self.hash = digest(self.pkg)
-        self.record = {'schema': 'capsule-ui-kit-source/v1', 'version': '0.2.0',
+        self.record = {'schema': 'capsule-ui-kit-source/v1', 'version': '0.2.1',
                        'contentHash': self.hash, 'algorithm': 'sha256-length-framed-tree',
                        'direction': 'export'}
         (self.pkg / 'KIT_SOURCE.json').write_text(json.dumps(self.record))
@@ -71,7 +71,7 @@ class KitTests(unittest.TestCase):
                                   '[remote "origin"]\nurl = https://example.invalid/kit.git\n')
         self.pin = self.root / 'kit.lock.json'
         self.pin.write_text(json.dumps({'repo': 'https://example.invalid/kit.git',
-                                       'commit': commit, 'version': '0.2.0',
+                                       'commit': commit, 'version': '0.2.1',
                                        'contentHash': self.hash}))
         self.dest = self.root / 'destination' / 'capsule-ui-kit'
 
@@ -210,10 +210,10 @@ catch(error) { console.error('ERROR: ' + error.message); process.exitCode = 1; }
     def test_pinned_lock(self):
         pin = json.loads((ROOT / 'ui/kit.lock.json').read_text())
         self.assertEqual(set(pin), {'repo', 'commit', 'version', 'contentHash'})
-        self.assertEqual(pin['commit'], '5c17cb84cdb73a83c4dbe081f20ff1511bcec7f2')
-        self.assertEqual(pin['version'], '0.2.0')
+        self.assertEqual(pin['commit'], 'bf31bc201987206d16dbd88d93102f9d5ce026f9')
+        self.assertEqual(pin['version'], '0.2.1')
         self.assertEqual(pin['contentHash'],
-                         '260ef4303e74ab0decd05f5a41fb13610c67e61db04ffc8e9b88eec581a9277c')
+                         '1bee78c76a0a2a41d085beed918ca6ca791beaf53b952d4a9367dad660fd6dc2')
         self.assertIn('ui/.kit/', (ROOT / '.gitignore').read_text().splitlines())
 
 
