@@ -11,7 +11,31 @@ import { createPackage } from '@electron/asar';
 import { buildFuseConfig, ELECTRON_PIN as MAIN_ELECTRON_PIN } from '../electron/main.js';
 import { createAdapterLauncher } from '../electron/coreLauncher.js';
 import * as packaging from './package.js';
-import { SMOKE_DIAGNOSTIC_TAIL_CHARS, packageArchitecture, verifyBinary, applyFuses, assertSmokeOutput, bundlePackage, createSmokeDiagnosticError, formatSmokeDiagnostics, runSmokeCommand, sealRendererAssets, verifyInstall, verifyPackagedSecurity, verifySmokeAdapterReceipt, writeFakeSmokeAdapter, writeFdSync, writeManifest } from './package.js';
+import {
+  LOCKED_ELECTRON_NPM_FILES,
+  LOCKED_ELECTRON_PACKAGE_INTEGRITY,
+  SMOKE_DIAGNOSTIC_TAIL_CHARS,
+  computeElectronDistTreeDigest,
+  defaultElectronZipCandidates,
+  packageArchitecture,
+  verifyBinary,
+   verifyElectronDist,
+  verifyElectronLockfileBinding,
+  verifyElectronZip,
+  applyFuses,
+  assertSmokeOutput,
+  bundlePackage,
+  createSmokeDiagnosticError,
+  formatSmokeDiagnostics,
+  runSmokeCommand,
+  sealRendererAssets,
+  verifyInstall,
+  verifyPackagedSecurity,
+  verifySmokeAdapterReceipt,
+  writeFakeSmokeAdapter,
+  writeFdSync,
+  writeManifest,
+} from './package.js';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -846,4 +870,285 @@ test('W3-CI-JS-ASAR ci.yml js job primes locked ui npm dependencies before runni
   const mutatedCiText = ciText.replace(jsBlock, mutatedJsBlock);
   assert.notEqual(mutatedCiText, ciText);
   assert.equal(checkJsOrder(mutatedCiText), false, 'regression order check must reject unprimed tests/ci execution');
+});
+
+test('W3-ADOPT-J7-R2 verifyElectronZip and verifyElectronDist bind zip and lockfile-installed dist and print expected/actual identity on PKG_ELECTRON_CHECKSUM', async () => {
+  const createHash = (await import('node:crypto')).createHash;
+  const dir = await fs.mkdtemp(join(tmpdir(), 'mv-j7r2-bind-'));
+  try {
+    for (const [arch, machine] of /** @type {const} */ ([['arm64', 183], ['x64', 62]])) {
+      const archDir = join(dir, arch);
+      const distDir = join(archDir, 'node_modules/electron/dist');
+      const zipDir = join(archDir, 'zips');
+      const xdgCache = join(archDir, 'xdg-cache');
+      await fs.mkdir(distDir, { recursive: true });
+      await fs.mkdir(zipDir, { recursive: true });
+
+      const elf = Buffer.alloc(64);
+      elf.write('\x7fELF');
+      elf[4] = 2;
+      elf[5] = 1;
+      elf.writeUInt16LE(machine, 18);
+      await fs.writeFile(join(distDir, 'electron'), elf, { mode: 0o755 });
+      await fs.writeFile(join(distDir, 'version'), `${MAIN_ELECTRON_PIN}\n`, { mode: 0o644 });
+      await fs.writeFile(join(distDir, 'resources.pak'), `pristine-pak-${arch}`, { mode: 0o644 });
+
+      const { archive } = packageArchitecture(arch);
+      const zipPath = join(zipDir, archive);
+      const zipRun = spawnSync('zip', ['-q', '-r', '-X', zipPath, '.'], { cwd: distDir });
+      assert.equal(zipRun.status, 0, zipRun.stderr?.toString() || 'zip failed');
+      const zipBytes = await fs.readFile(zipPath);
+      const expectedZipSha = createHash('sha256').update(zipBytes).digest('hex');
+      const { treeSha256: expectedTreeSha } = await computeElectronDistTreeDigest(distDir);
+
+      // Copy locked npm wrapper files into archDir/node_modules/electron and package-lock.json into archDir.
+      const uiRoot = fileURLToPath(new URL('../', import.meta.url));
+      await fs.copyFile(join(uiRoot, 'package-lock.json'), join(archDir, 'package-lock.json'));
+      const wrapperDir = join(archDir, 'node_modules/electron');
+      for (const fileName of Object.keys(LOCKED_ELECTRON_NPM_FILES)) {
+        await fs.copyFile(join(uiRoot, 'node_modules/electron', fileName), join(wrapperDir, fileName));
+      }
+
+      const customChecksumsPath = join(archDir, 'custom-checksums.json');
+      await fs.writeFile(
+        customChecksumsPath,
+        JSON.stringify({
+          [archive]: expectedZipSha,
+          'electron.d.ts': LOCKED_ELECTRON_NPM_FILES['electron.d.ts'],
+        }),
+      );
+
+      // 1. Source A: Zip directory binding (MV_ELECTRON_ZIP_DIR / verifyElectronZip).
+      const zipVerified = await verifyElectronZip(zipDir, arch, { checksumsPath: customChecksumsPath });
+      assert.equal(zipVerified.archive, archive);
+      assert.equal(zipVerified.archiveSha256, expectedZipSha);
+
+      // Negative control (tampered zip in zipDir): fails with PKG_ELECTRON_CHECKSUM and prints expected & actual SHA-256.
+      const tamperedZipBytes = Buffer.from(zipBytes);
+      tamperedZipBytes[tamperedZipBytes.length - 1] ^= 0xff;
+      const tamperedZipSha = createHash('sha256').update(tamperedZipBytes).digest('hex');
+      await fs.writeFile(zipPath, tamperedZipBytes);
+      await assert.rejects(
+        verifyElectronZip(zipDir, arch, { checksumsPath: customChecksumsPath }),
+        (err) => {
+          assert.equal(err.code, 'PKG_ELECTRON_CHECKSUM');
+          assert.equal(err.expected, expectedZipSha);
+          assert.equal(err.actual, tamperedZipSha);
+          assert.match(err.message, /^PKG_ELECTRON_CHECKSUM:/);
+          assert.equal(err.message.includes(`expected=${expectedZipSha}`), true);
+          assert.equal(err.message.includes(`actual=${tamperedZipSha}`), true);
+          return true;
+        },
+      );
+      await fs.writeFile(zipPath, zipBytes);
+
+      // 2. Source B: Unpacked dist installed by lockfile, verified via @electron/get release URL cache (hosted x64 & arm64 path).
+      const releaseUrl = `https://github.com/electron/electron/releases/download/v${MAIN_ELECTRON_PIN}`;
+      const urlHash = createHash('sha256').update(releaseUrl).digest('hex');
+      const cachedZipDir = join(xdgCache, 'electron', urlHash);
+      await fs.mkdir(cachedZipDir, { recursive: true });
+      const cachedZipPath = join(cachedZipDir, archive);
+      await fs.copyFile(zipPath, cachedZipPath);
+
+      const candidates = defaultElectronZipCandidates(archive, { XDG_CACHE_HOME: xdgCache });
+      assert.equal(candidates[0], cachedZipPath);
+
+      const distVerified = await verifyElectronDist(distDir, arch, {
+        checksumsPath: customChecksumsPath,
+        lockfilePath: join(archDir, 'package-lock.json'),
+        ignorePinnedTrees: true,
+        env: { XDG_CACHE_HOME: xdgCache },
+      });
+      assert.equal(distVerified.archiveSha256, expectedZipSha);
+      assert.equal(distVerified.treeSha256, expectedTreeSha);
+
+      // Negative control (tampered dist file): fails with PKG_ELECTRON_CHECKSUM and prints expected & actual tree/file digests.
+      await fs.writeFile(join(distDir, 'resources.pak'), `tampered-pak-${arch}`, { mode: 0o644 });
+      const { treeSha256: tamperedTreeSha } = await computeElectronDistTreeDigest(distDir);
+      assert.notEqual(tamperedTreeSha, expectedTreeSha);
+      await assert.rejects(
+        verifyElectronDist(distDir, arch, {
+          checksumsPath: customChecksumsPath,
+          lockfilePath: join(archDir, 'package-lock.json'),
+          ignorePinnedTrees: true,
+          env: { XDG_CACHE_HOME: xdgCache },
+        }),
+        (err) => {
+          assert.equal(err.code, 'PKG_ELECTRON_CHECKSUM');
+          assert.equal(err.expected, expectedTreeSha);
+          assert.equal(err.actual, tamperedTreeSha);
+          assert.match(err.message, /^PKG_ELECTRON_CHECKSUM:/);
+          assert.equal(err.message.includes('file=resources.pak'), true);
+          assert.equal(err.message.includes(`expected=${expectedTreeSha}`), true);
+          assert.equal(err.message.includes(`actual=${tamperedTreeSha}`), true);
+          return true;
+        },
+      );
+      await fs.writeFile(join(distDir, 'resources.pak'), `pristine-pak-${arch}`, { mode: 0o644 });
+
+      // Negative control (tampered cached zip for unpacked dist): fails with PKG_ELECTRON_CHECKSUM and prints expected & actual zip SHA-256.
+      await fs.writeFile(cachedZipPath, tamperedZipBytes);
+      await assert.rejects(
+        verifyElectronDist(distDir, arch, {
+          checksumsPath: customChecksumsPath,
+          lockfilePath: join(archDir, 'package-lock.json'),
+          zipCandidates: [cachedZipPath],
+        }),
+        (err) => {
+          assert.equal(err.code, 'PKG_ELECTRON_CHECKSUM');
+          assert.equal(err.expected, expectedZipSha);
+          assert.equal(err.actual, tamperedZipSha);
+          assert.match(err.message, /^PKG_ELECTRON_CHECKSUM:/);
+          assert.equal(err.message.includes(`expected=${expectedZipSha}`), true);
+          assert.equal(err.message.includes(`actual=${tamperedZipSha}`), true);
+          return true;
+        },
+      );
+      await fs.writeFile(cachedZipPath, zipBytes);
+
+      // Negative control (tampered lockfile integrity): fails with PKG_ELECTRON_CHECKSUM and prints expected & actual integrity.
+      const tamperedLockPath = join(archDir, 'tampered-package-lock.json');
+      const lockObj = JSON.parse(await fs.readFile(join(archDir, 'package-lock.json'), 'utf8'));
+      lockObj.packages['node_modules/electron'].integrity = 'sha512-tampered';
+      await fs.writeFile(tamperedLockPath, JSON.stringify(lockObj));
+      await assert.rejects(
+        verifyElectronLockfileBinding(distDir, null, { lockfilePath: tamperedLockPath }),
+        (err) => {
+          assert.equal(err.code, 'PKG_ELECTRON_CHECKSUM');
+          assert.equal(err.expected, LOCKED_ELECTRON_PACKAGE_INTEGRITY);
+          assert.equal(err.actual, 'sha512-tampered');
+          assert.equal(err.message.includes(`expected=${LOCKED_ELECTRON_PACKAGE_INTEGRITY}`), true);
+          assert.equal(err.message.includes('actual=sha512-tampered'), true);
+          return true;
+        },
+      );
+    }
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('W3-ADOPT-J7-R2 reproduce hosted case locally with a dist from a clean npm ci --offline in a temp copy', async () => {
+  const { dirname } = await import('node:path');
+  const { createHash } = await import('node:crypto');
+  const uiRoot = fileURLToPath(new URL('../', import.meta.url));
+  const tempRoot = await fs.mkdtemp(join(tmpdir(), 'mv-j7r2-npmci-'));
+  try {
+    const tempUi = join(tempRoot, 'ui');
+    await fs.mkdir(tempUi, { recursive: true });
+    await fs.copyFile(join(uiRoot, 'package.json'), join(tempUi, 'package.json'));
+    await fs.copyFile(join(uiRoot, 'package-lock.json'), join(tempUi, 'package-lock.json'));
+
+    const npmCandidates = [join(dirname(process.execPath), 'npm'), 'npm'];
+    let npmBin = 'npm';
+    for (const candidate of npmCandidates) {
+      try {
+        await fs.access(candidate);
+        npmBin = candidate;
+        break;
+      } catch {}
+    }
+
+    const ciRun = spawnSync(
+      npmBin,
+      ['--prefix', tempUi, 'ci', '--offline', '--ignore-scripts', '--no-audit', '--no-fund'],
+      {
+        encoding: 'utf8',
+        env: { ...process.env, ELECTRON_SKIP_BINARY_DOWNLOAD: '1' },
+        timeout: 60000,
+      },
+    );
+    assert.equal(ciRun.status, 0, `npm ci --offline failed: ${ciRun.stderr || ciRun.stdout}`);
+
+    const { archive } = packageArchitecture(process.arch);
+    let existingCachedZip = null;
+    for (const candidate of defaultElectronZipCandidates(archive)) {
+      const st = await fs.stat(candidate).catch(() => null);
+      if (st?.isFile()) {
+        existingCachedZip = candidate;
+        break;
+      }
+    }
+
+    const tempDist = join(tempUi, 'node_modules/electron/dist');
+    if (existingCachedZip) {
+      // Exact hosted workflow step: run node_modules/electron/install.js offline against @electron/get's local cache.
+      const installRun = spawnSync(process.execPath, [join(tempUi, 'node_modules/electron/install.js')], {
+        cwd: tempUi,
+        encoding: 'utf8',
+        env: { ...process.env, ELECTRON_OVERRIDE_DIST_PATH: '' },
+        timeout: 60000,
+      });
+      assert.equal(installRun.status, 0, `electron/install.js failed: ${installRun.stderr || installRun.stdout}`);
+    } else {
+      const fallbackDist = process.env.ELECTRON_OVERRIDE_DIST_PATH || join(uiRoot, 'node_modules/electron/dist');
+      await fs.cp(fallbackDist, tempDist, { recursive: true });
+    }
+
+    // 1. Default verification (uses pinned tree + lockfile wrapper check + cached zip check).
+    const verifiedPinned = await verifyElectronDist(tempDist, process.arch, {
+      lockfilePath: join(tempUi, 'package-lock.json'),
+      requireLockfileWrapper: true,
+    });
+    assert.match(verifiedPinned.archiveSha256, /^[0-9a-f]{64}$/);
+    assert.match(verifiedPinned.treeSha256, /^[0-9a-f]{64}$/);
+
+    // 2. Hosted runner reproduction (ignorePinnedTrees: true forces the hosted x64 path that unpacks and compares the @electron/get cached zip).
+    if (existingCachedZip) {
+      const verifiedHostedPath = await verifyElectronDist(tempDist, process.arch, {
+        lockfilePath: join(tempUi, 'package-lock.json'),
+        requireLockfileWrapper: true,
+        ignorePinnedTrees: true,
+      });
+      assert.equal(verifiedHostedPath.archiveSha256, verifiedPinned.archiveSha256);
+      assert.equal(verifiedHostedPath.treeSha256, verifiedPinned.treeSha256);
+    }
+
+    // 3. Negative control on the clean npm ci --offline dist: tampering a file in dist fails with PKG_ELECTRON_CHECKSUM and prints expected/actual identity.
+    const pakPath = join(tempDist, 'resources.pak');
+    const origPak = await fs.readFile(pakPath);
+    try {
+      await fs.appendFile(pakPath, 'tampered');
+      const { treeSha256: actualTamperedTree } = await computeElectronDistTreeDigest(tempDist);
+      await assert.rejects(
+        verifyElectronDist(tempDist, process.arch, {
+          lockfilePath: join(tempUi, 'package-lock.json'),
+          requireLockfileWrapper: true,
+        }),
+        (err) => {
+          assert.equal(err.code, 'PKG_ELECTRON_CHECKSUM');
+          assert.equal(err.expected, verifiedPinned.treeSha256);
+          assert.equal(err.actual, actualTamperedTree);
+          assert.equal(err.message.includes(`expected=${verifiedPinned.treeSha256}`), true);
+          assert.equal(err.message.includes(`actual=${actualTamperedTree}`), true);
+          return true;
+        },
+      );
+    } finally {
+      await fs.writeFile(pakPath, origPak);
+    }
+
+    // 4. Negative control on a zip in tempRoot: tampered zip fails verifyElectronZip with PKG_ELECTRON_CHECKSUM and prints expected/actual identity.
+    const fakeZipDir = join(tempRoot, 'zip-dir');
+    await fs.mkdir(fakeZipDir, { recursive: true });
+    const fakeZipPath = join(fakeZipDir, archive);
+    const badBytes = Buffer.from('not-a-valid-electron-release-zip');
+    const badSha = createHash('sha256').update(badBytes).digest('hex');
+    await fs.writeFile(fakeZipPath, badBytes);
+    await assert.rejects(
+      verifyElectronZip(fakeZipDir, process.arch, {
+        checksumsPath: join(tempUi, 'node_modules/electron/checksums.json'),
+      }),
+      (err) => {
+        assert.equal(err.code, 'PKG_ELECTRON_CHECKSUM');
+        assert.equal(err.expected, verifiedPinned.archiveSha256);
+        assert.equal(err.actual, badSha);
+        assert.equal(err.message.includes(`expected=${verifiedPinned.archiveSha256}`), true);
+        assert.equal(err.message.includes(`actual=${badSha}`), true);
+        return true;
+      },
+    );
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
 });

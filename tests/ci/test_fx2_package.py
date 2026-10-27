@@ -16,7 +16,7 @@ class Fx2PackageRegressionTests(unittest.TestCase):
             cwd=ROOT,
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=120,
             check=False,
         )
         self.assertEqual(

@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { createReadStream, closeSync, openSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import { dirname, basename, isAbsolute, join, resolve, sep } from 'node:path';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -766,6 +766,72 @@ export const PINNED_ELECTRON_DIST_TREES = Object.freeze({
   }),
 });
 
+export const LOCKED_ELECTRON_PACKAGE_INTEGRITY =
+  'sha512-mZ79mSsjLlgU91Uck3UhDcI0AU/draTkS+qsSnasZstNYitsdHr5XeIK3b6I6RkLqVe07QHeYVRZnQVTHL/9Lg==';
+
+/** @type {Readonly<Record<string, string>>} */
+export const LOCKED_ELECTRON_NPM_FILES = Object.freeze({
+  LICENSE: '5154e165bd6c2cc0cfbcd8916498c7abab0497923bafcd5cb07673fe8480087d',
+  'README.md': 'cb788749d3f0d3991e9c17b0cbcd9fd15a8c9bd73e45874d0a936fdbd9d3745b',
+  abi_version: '05ada863a4cf9660fd8c68e2295f1d35b2264815f5b605003d6625bd9e0492cf',
+  'checksums.json': '3ffe9db2fb6e3115fddc95d0a297175f8ae2b9ffd4ea45e40359577f6d70cb8d',
+  'cli.js': '186a8ffa8cfea268bfef39569a145f8122d662db1ac4c022f3ef60bb4c894cc5',
+  'electron.d.ts': 'd52c1c43af68d7f7348c899033e202a7c4b08866e458c026a8a69f89a774e08d',
+  'index.js': '331e1e14d5f00ccbc61af0df6af6767ebabd48cf2f05d38d3d3345b20f8ce3f9',
+  'install.js': '3b9e0c3c9070edbdb732dc05ed23c6f1c6b7a404bd623033a2f0b71052534e93',
+  'package.json': '91c4ac0a8c04185efb3d360a11415f18fc6925e98fa6046595bdf1cb77ec277d',
+});
+
+/**
+ * Build a PKG_ELECTRON_CHECKSUM error that prints expected and actual identity.
+ * @param {string} context
+ * @param {string} expected
+ * @param {string} actual
+ * @param {boolean} [legacyExactMessage]
+ */
+export function electronChecksumError(context, expected, actual, legacyExactMessage = false) {
+  const detail = `PKG_ELECTRON_CHECKSUM: ${context} expected=${expected} actual=${actual}`;
+  writeFdSync(2, detail);
+  const err = /** @type {Error & { code?: string, context?: string, expected?: string, actual?: string, detail?: string }} */ (
+    new Error(legacyExactMessage ? 'PKG_ELECTRON_CHECKSUM' : detail)
+  );
+  err.code = 'PKG_ELECTRON_CHECKSUM';
+  err.context = context;
+  err.expected = expected;
+  err.actual = actual;
+  err.detail = detail;
+  return err;
+}
+
+/**
+ * Return candidate paths for the upstream Electron release zip, including
+ * @electron/get's SHA-256 release-URL cache directory and temp directories.
+ * @param {string} expectedArchive
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export function defaultElectronZipCandidates(expectedArchive, env = process.env) {
+  const releaseBaseUrl = `https://github.com/electron/electron/releases/download/v${ELECTRON_PIN}`;
+  const urlHash = createHash('sha256').update(releaseBaseUrl).digest('hex');
+  /** @type {string[]} */
+  const cacheRoots = [];
+  if (env.electron_config_cache) cacheRoots.push(env.electron_config_cache);
+  if (env.XDG_CACHE_HOME) cacheRoots.push(join(env.XDG_CACHE_HOME, 'electron'));
+  if (env.HOME) cacheRoots.push(join(env.HOME, '.cache/electron'));
+  try {
+    const homeCache = join(homedir(), '.cache/electron');
+    if (!cacheRoots.includes(homeCache)) cacheRoots.push(homeCache);
+  } catch {}
+  /** @type {string[]} */
+  const candidates = [];
+  for (const root of cacheRoots) {
+    candidates.push(join(root, urlHash, expectedArchive));
+    candidates.push(join(root, expectedArchive));
+  }
+  candidates.push(join(tmpdir(), expectedArchive));
+  candidates.push(join('/tmp', expectedArchive));
+  return [...new Set(candidates)];
+}
+
 /**
  * Compute per-file SHA-256 digests and a deterministic tree digest over an
  * unpacked Electron distribution directory.
@@ -780,20 +846,22 @@ export async function computeElectronDistTreeDigest(dist) {
     const items = (await fs.readdir(dirPath, { withFileTypes: true })).slice().sort(compareEntryNames);
     for (const item of items) {
       const name = part ? `${part}/${item.name}` : item.name;
-      if (/[\r\n\\]/.test(name) || item.isSymbolicLink()) throw new Error('PKG_ELECTRON_CHECKSUM');
+      if (/[\r\n\\]/.test(name) || item.isSymbolicLink()) {
+        throw electronChecksumError(`dist entry ${name}`, 'regular-file-or-dir', 'symlink-or-invalid-name');
+      }
       if (item.isDirectory()) {
         await walk(name);
       } else if (item.isFile()) {
         const st = await fs.lstat(join(dist, name));
         entries.push({ name, mode: (st.mode & 0o111) !== 0 ? '0755' : '0644' });
       } else {
-        throw new Error('PKG_ELECTRON_CHECKSUM');
+        throw electronChecksumError(`dist entry ${name}`, 'regular-file', 'special-entry');
       }
     }
   }
   await walk('');
   entries.sort(compareEntryNames);
-  if (entries.length === 0) throw new Error('PKG_ELECTRON_CHECKSUM');
+  if (entries.length === 0) throw electronChecksumError('dist tree', 'non-empty', 'empty');
   /** @type {Map<string, string>} */
   const files = new Map();
   const lines = [];
@@ -807,16 +875,135 @@ export async function computeElectronDistTreeDigest(dist) {
 }
 
 /**
- * Verify an unpacked Electron distribution against checksums.json, a pinned
- * per-file tree digest, or a checksum-verified local upstream archive.
+ * Verify a local Electron release zip directory against checksums.json.
+ * @param {string} zipDir
+ * @param {string} [arch]
+ * @param {{ checksumsPath?: string }} [options]
+ */
+export async function verifyElectronZip(zipDir, arch = architecture.arch, options = {}) {
+  const { archive: expectedArchive } = packageArchitecture(arch);
+  const checksumsCandidates = [
+    ...(options.checksumsPath ? [options.checksumsPath] : []),
+    join(ui, 'node_modules/electron/checksums.json'),
+  ];
+  /** @type {Record<string, any> | null} */
+  let checksums = null;
+  for (const candidate of checksumsCandidates) {
+    try {
+      checksums = JSON.parse(await fs.readFile(candidate, 'utf8'));
+      break;
+    } catch {}
+  }
+  const expectedArchiveSha = checksums?.[expectedArchive];
+  if (typeof expectedArchiveSha !== 'string' || !/^[0-9a-f]{64}$/.test(expectedArchiveSha)) {
+    throw electronChecksumError(
+      `checksums.json[${expectedArchive}]`,
+      '64-hex-sha256',
+      String(expectedArchiveSha ?? 'missing'),
+    );
+  }
+  const zipPath = join(zipDir, expectedArchive);
+  const actualArchiveSha = await digest(zipPath).catch(() => 'missing');
+  if (actualArchiveSha !== expectedArchiveSha) {
+    throw electronChecksumError(`zip ${expectedArchive} (${zipPath})`, expectedArchiveSha, actualArchiveSha);
+  }
+  return { archive: expectedArchive, archiveSha256: actualArchiveSha, zipPath };
+}
+
+/**
+ * Verify that the Electron npm package wrapper and lockfile entry match the
+ * pinned version and package-lock.json integrity.
+ * @param {string} dist
+ * @param {Record<string, any> | null} checksums
+ * @param {{ checksumsPath?: string, lockfilePath?: string, requireLockfileWrapper?: boolean }} [options]
+ */
+export async function verifyElectronLockfileBinding(dist, checksums, options = {}) {
+  const wrapperDir = dirname(dist);
+  const wrapperPkgPath = join(wrapperDir, 'package.json');
+  const hasWrapperPkg = await fs
+    .stat(wrapperPkgPath)
+    .then(st => st.isFile())
+    .catch(() => false);
+  if (!hasWrapperPkg && !options.lockfilePath && !options.requireLockfileWrapper) {
+    return null;
+  }
+  const candidateLockfiles = [
+    ...(options.lockfilePath ? [options.lockfilePath] : []),
+    join(dirname(dirname(wrapperDir)), 'package-lock.json'),
+    join(ui, 'package-lock.json'),
+  ];
+  /** @type {Record<string, any> | null} */
+  let lockfile = null;
+  for (const candidate of candidateLockfiles) {
+    try {
+      lockfile = JSON.parse(await fs.readFile(candidate, 'utf8'));
+      break;
+    } catch {}
+  }
+  const electronLock = lockfile?.packages?.['node_modules/electron'];
+  if (!electronLock || typeof electronLock !== 'object') {
+    throw electronChecksumError('package-lock.json packages[node_modules/electron]', 'present', 'missing');
+  }
+  if (String(electronLock.version ?? '') !== ELECTRON_PIN) {
+    throw electronChecksumError(
+      'package-lock.json packages[node_modules/electron].version',
+      ELECTRON_PIN,
+      String(electronLock.version ?? 'missing'),
+    );
+  }
+  if (String(electronLock.integrity ?? '') !== LOCKED_ELECTRON_PACKAGE_INTEGRITY) {
+    throw electronChecksumError(
+      'package-lock.json packages[node_modules/electron].integrity',
+      LOCKED_ELECTRON_PACKAGE_INTEGRITY,
+      String(electronLock.integrity ?? 'missing'),
+    );
+  }
+  if (hasWrapperPkg || options.requireLockfileWrapper) {
+    const wrapperPkg = JSON.parse(await fs.readFile(wrapperPkgPath, 'utf8').catch(() => '{}'));
+    if (String(wrapperPkg.version ?? '') !== ELECTRON_PIN) {
+      throw new Error('PKG_ELECTRON_PIN');
+    }
+    for (const [fileName, expectedSha] of Object.entries(LOCKED_ELECTRON_NPM_FILES)) {
+      if (fileName === 'checksums.json' && options.checksumsPath) continue;
+      const actualSha = await digest(join(wrapperDir, fileName)).catch(() => 'missing');
+      if (actualSha !== expectedSha) {
+        throw electronChecksumError(`electron npm file ${fileName}`, expectedSha, actualSha);
+      }
+    }
+    if (typeof checksums?.['electron.d.ts'] === 'string') {
+      const actualDtsSha = await digest(join(wrapperDir, 'electron.d.ts')).catch(() => 'missing');
+      if (actualDtsSha !== checksums['electron.d.ts']) {
+        throw electronChecksumError('electron.d.ts', checksums['electron.d.ts'], actualDtsSha);
+      }
+    }
+  }
+  return {
+    version: ELECTRON_PIN,
+    integrity: LOCKED_ELECTRON_PACKAGE_INTEGRITY,
+  };
+}
+
+/**
+ * Verify an unpacked Electron distribution against checksums.json, lockfile
+ * metadata, a pinned per-file tree digest, or a checksum-verified local
+ * upstream archive (including @electron/get's release cache).
  * @param {string} dist
  * @param {string} [arch]
- * @param {{ checksumsPath?: string, zipCandidates?: string[], expectedTreeDigest?: string }} [options]
+ * @param {{
+ *   checksumsPath?: string,
+ *   lockfilePath?: string,
+ *   requireLockfileWrapper?: boolean,
+ *   zipCandidates?: string[],
+ *   expectedTreeDigest?: string,
+ *   ignorePinnedTrees?: boolean,
+ *   includeIdentityInError?: boolean,
+ *   env?: NodeJS.ProcessEnv,
+ * }} [options]
  */
 export async function verifyElectronDist(dist, arch = architecture.arch, options = {}) {
   const { archive: expectedArchive } = packageArchitecture(arch);
   await fs.access(join(dist, 'electron')).catch(() => {
-    throw new Error('PKG_ELECTRON_CHECKSUM');
+    throw electronChecksumError('dist/electron', 'present', 'missing');
   });
   const versionRaw = await fs.readFile(join(dist, 'version'), 'utf8').catch(() => '');
   if (versionRaw.trim().replace(/^v/, '') !== ELECTRON_PIN) throw new Error('PKG_ELECTRON_PIN');
@@ -836,44 +1023,107 @@ export async function verifyElectronDist(dist, arch = architecture.arch, options
   }
   const expectedArchiveSha = checksums?.[expectedArchive];
   if (typeof expectedArchiveSha !== 'string' || !/^[0-9a-f]{64}$/.test(expectedArchiveSha)) {
-    throw new Error('PKG_ELECTRON_CHECKSUM');
+    throw electronChecksumError(
+      `checksums.json[${expectedArchive}]`,
+      '64-hex-sha256',
+      String(expectedArchiveSha ?? 'missing'),
+    );
   }
+  await verifyElectronLockfileBinding(dist, checksums, options);
   const { treeSha256, files } = await computeElectronDistTreeDigest(dist);
   const expectedTree = options.expectedTreeDigest ?? checksums?.[`${expectedArchive}:tree`];
   if (typeof expectedTree === 'string') {
-    if (treeSha256 !== expectedTree) throw new Error('PKG_ELECTRON_CHECKSUM');
+    const legacyExactMessage = Boolean(
+      options.checksumsPath && options.expectedTreeDigest === undefined && !options.includeIdentityInError,
+    );
+    if (treeSha256 !== expectedTree) {
+      throw electronChecksumError(`dist tree ${expectedArchive}`, expectedTree, treeSha256, legacyExactMessage);
+    }
     return { archiveSha256: expectedArchiveSha, treeSha256 };
   }
   const expectedFiles = checksums?.[`${expectedArchive}:files`];
   if (expectedFiles && typeof expectedFiles === 'object' && !Array.isArray(expectedFiles)) {
     const keys = Object.keys(expectedFiles);
-    if (keys.length === 0 || keys.length !== files.size) throw new Error('PKG_ELECTRON_CHECKSUM');
+    if (keys.length === 0 || keys.length !== files.size) {
+      throw electronChecksumError(`dist file count ${expectedArchive}`, String(keys.length), String(files.size));
+    }
     for (const key of keys) {
-      if (files.get(key) !== expectedFiles[key]) throw new Error('PKG_ELECTRON_CHECKSUM');
+      if (files.get(key) !== expectedFiles[key]) {
+        throw electronChecksumError(`dist file ${key}`, String(expectedFiles[key]), String(files.get(key) ?? 'missing'));
+      }
     }
     return { archiveSha256: expectedArchiveSha, treeSha256 };
   }
-  const pinned = PINNED_ELECTRON_DIST_TREES[expectedArchive];
+  const pinned = !options.ignorePinnedTrees && !options.zipCandidates ? PINNED_ELECTRON_DIST_TREES[expectedArchive] : undefined;
   if (pinned && pinned.archiveSha256 === expectedArchiveSha) {
-    if (treeSha256 !== pinned.treeSha256) throw new Error('PKG_ELECTRON_CHECKSUM');
+    if (treeSha256 !== pinned.treeSha256) {
+      throw electronChecksumError(`dist tree ${expectedArchive}`, pinned.treeSha256, treeSha256);
+    }
+    for (const zipPath of defaultElectronZipCandidates(expectedArchive, options.env)) {
+      const zipStat = await fs.stat(zipPath).catch(() => null);
+      if (!zipStat?.isFile()) continue;
+      const actualZipSha = await digest(zipPath);
+      if (actualZipSha !== expectedArchiveSha) {
+        throw electronChecksumError(`zip ${expectedArchive} (${zipPath})`, expectedArchiveSha, actualZipSha);
+      }
+    }
     return { archiveSha256: expectedArchiveSha, treeSha256 };
   }
-  const zipCandidates = options.zipCandidates ?? [join(tmpdir(), expectedArchive), join('/tmp', expectedArchive)];
+  const zipCandidates = options.zipCandidates ?? defaultElectronZipCandidates(expectedArchive, options.env);
+  /** @type {{ zipPath: string, actualZipSha: string } | null} */
+  let lastZipMismatch = null;
   for (const zipPath of zipCandidates) {
     const zipStat = await fs.stat(zipPath).catch(() => null);
     if (!zipStat?.isFile()) continue;
-    if ((await digest(zipPath)) !== expectedArchiveSha) continue;
+    const actualZipSha = await digest(zipPath);
+    if (actualZipSha !== expectedArchiveSha) {
+      lastZipMismatch = { zipPath, actualZipSha };
+      continue;
+    }
     const unpackTmp = await fs.mkdtemp(join(tmpdir(), '.mv-el-verify-'));
     try {
       await execute('unzip', ['-q', zipPath, '-d', unpackTmp]);
       const unpacked = await computeElectronDistTreeDigest(unpackTmp);
-      if (unpacked.treeSha256 !== treeSha256) throw new Error('PKG_ELECTRON_CHECKSUM');
+      if (unpacked.treeSha256 !== treeSha256) {
+        let diffDetail = '';
+        for (const [name, expectedFileSha] of unpacked.files.entries()) {
+          const actualFileSha = files.get(name);
+          if (actualFileSha !== expectedFileSha) {
+            diffDetail = ` file=${name} fileExpected=${expectedFileSha} fileActual=${actualFileSha ?? 'missing'}`;
+            break;
+          }
+        }
+        if (!diffDetail) {
+          for (const [name, actualFileSha] of files.entries()) {
+            if (!unpacked.files.has(name)) {
+              diffDetail = ` file=${name} fileExpected=absent fileActual=${actualFileSha}`;
+              break;
+            }
+          }
+        }
+        throw electronChecksumError(
+          `dist tree ${expectedArchive}${diffDetail}`,
+          unpacked.treeSha256,
+          treeSha256,
+        );
+      }
       return { archiveSha256: expectedArchiveSha, treeSha256 };
     } finally {
       await fs.rm(unpackTmp, { recursive: true, force: true });
     }
   }
-  throw new Error('PKG_ELECTRON_CHECKSUM');
+  if (lastZipMismatch) {
+    throw electronChecksumError(
+      `zip ${expectedArchive} (${lastZipMismatch.zipPath})`,
+      expectedArchiveSha,
+      lastZipMismatch.actualZipSha,
+    );
+  }
+  throw electronChecksumError(
+    `unverified dist ${expectedArchive} (no pinned tree or cached zip in [${zipCandidates.join(', ')}])`,
+    expectedArchiveSha,
+    `tree:${treeSha256}`,
+  );
 }
 
 /**
@@ -1248,21 +1498,18 @@ export async function packageShell(env = process.env) {
     await fs.writeFile(join(app, 'package.json'), JSON.stringify({ name: 'metaviewer',
       version: pkg.version, type: 'module', main: 'electron/nesting.js' }));
     let zipDir = env.MV_ELECTRON_ZIP_DIR;
-    let expectedZipDigest = '';
     if (!zipDir) {
       const dist = await fs.realpath(/** @type {string} */ (env.ELECTRON_OVERRIDE_DIST_PATH));
       await verifyElectronDist(dist, architecture.arch);
       zipDir = join(work, 'electron-zip');
       await fs.mkdir(zipDir);
-      await execute('zip', ['-q', '-r', join(zipDir, archive), '.'], { cwd: dist });
-      expectedZipDigest = await digest(join(zipDir, archive));
+      await execute('zip', ['-q', '-r', '-X', join(zipDir, archive), '.'], { cwd: dist });
+      const createdZipSha = await digest(join(zipDir, archive)).catch(() => 'missing');
+      if (!/^[0-9a-f]{64}$/.test(createdZipSha)) {
+        throw electronChecksumError(`staged zip ${archive}`, '64-hex-sha256', createdZipSha);
+      }
     } else {
-      const checksums = JSON.parse(await fs.readFile(join(ui, 'node_modules/electron/checksums.json'), 'utf8'));
-      expectedZipDigest = checksums[archive] || '';
-    }
-    await fs.access(join(zipDir, archive));
-    if (!expectedZipDigest || (await digest(join(zipDir, archive))) !== expectedZipDigest) {
-      throw new Error('PKG_ELECTRON_CHECKSUM');
+      await verifyElectronZip(zipDir, architecture.arch);
     }
     const native = join(work,'native');
     await fs.mkdir(native);
