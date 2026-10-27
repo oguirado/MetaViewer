@@ -99,3 +99,31 @@ func NewHandler(manager *capsule.Manager, publisher *frames.Publisher) (ipc.Hand
 		return append(events, ready), err
 	}, nil
 }
+
+func listSnapshots(events []json.RawMessage) ([]json.RawMessage, error) {
+	out := make([]json.RawMessage, 0, len(events))
+	for _, raw := range events {
+		var snapshot struct {
+			Schema string          `json:"schema"`
+			Event  string          `json:"event"`
+			Data   json.RawMessage `json:"data"`
+		}
+		if err := json.Unmarshal(raw, &snapshot); err != nil {
+			return nil, err
+		}
+		if snapshot.Schema == "surface_event/v0.2" && snapshot.Event == "error" {
+			out = append(out, raw)
+			continue
+		}
+		if snapshot.Schema != "surface_event/v0.2" || snapshot.Event != "created" || len(snapshot.Data) == 0 {
+			return nil, errors.New("invalid list snapshot")
+		}
+		snapshot.Event = "state_changed"
+		encoded, err := json.Marshal(snapshot)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, encoded)
+	}
+	return out, nil
+}

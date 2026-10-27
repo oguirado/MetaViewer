@@ -216,6 +216,43 @@ async fn created(daemon: &mut Peer, ui: &mut Peer) {
     ui.receive().await;
 }
 #[test]
+fn expired_publication_does_not_retire_daemon_or_admit_pixels() {
+    support::run(async {
+        let (_temp, server, task, mut daemon, _agent, mut ui) = setup().await;
+        created(&mut daemon, &mut ui).await;
+        let expired = SharedFrame::new();
+        let missing = expired.value(1);
+        std::fs::remove_file(&expired.0).unwrap();
+        // Both daemon publication forms can be queued beyond the lease window.
+        daemon.send(missing.clone()).await;
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"frame_ready",
+                "data":{"frame_ref":missing}}))
+            .await;
+        daemon_barrier(&mut daemon).await;
+        assert!(server
+            .lock()
+            .unwrap()
+            .authority
+            .state()
+            .surfaces
+            .values()
+            .all(|surface| surface.frame.is_none()));
+        let fresh = SharedFrame::new();
+        daemon.send(fresh.value(2)).await;
+        let received = serde_json::to_value(ui.receive().await.body).unwrap();
+        assert_eq!(received, fresh.value(2));
+        daemon_barrier(&mut daemon).await;
+        // A present publication with a false digest must still fail closed.
+        let mut bad = fresh.value(3);
+        bad["sha256"] = "0".repeat(64).into();
+        let frame: crate::wire::payload::FrameRef = serde_json::from_value(bad).unwrap();
+        assert!(server.lock().unwrap().witness(&frame).is_err());
+        task.abort();
+        let _ = task.await;
+    });
+}
+#[test]
 fn cancelled_dispatched_wait_returns_unavailable_promptly() {
     support::run(async {
         let (_temp, server, task, mut daemon, mut agent, mut ui) = setup().await;

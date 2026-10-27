@@ -370,7 +370,7 @@ func binaryOracle(t *testing.T, live bool, negative string) {
 	request("list", map[string]any{})
 	for {
 		_ = json.Unmarshal(read(), &event)
-		if event.Event == "created" {
+		if event.Event == "state_changed" && event.Data.Surface.SurfaceID == id {
 			break
 		}
 		if event.Event != "frame_ready" {
@@ -382,7 +382,7 @@ func binaryOracle(t *testing.T, live bool, negative string) {
 	time.Sleep(250 * time.Millisecond)
 	request("list", map[string]any{})
 	_ = json.Unmarshal(read(), &event)
-	if event.Event != "created" {
+	if event.Event != "state_changed" || event.Data.Surface.SurfaceID != id {
 		t.Fatalf("frame delivered after unsubscribe barrier: %+v", event)
 	}
 	request("frame_subscribe", map[string]string{"surface_id": id})

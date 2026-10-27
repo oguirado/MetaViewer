@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import signal
 import stat
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -74,6 +75,74 @@ class LiveStackTests(unittest.TestCase):
         tick.assert_not_called()
         with self.assertRaisesRegex(RuntimeError, "process exited"):
             stack.monitor(peer, [Mock(poll=lambda: 1)], 100, lambda: False, tick)
+
+    def test_watchdog_keeps_idle_agent_alive_at_bounded_intervals(self):
+        peer = Mock(_sock=object(), _rx=b"")
+        heartbeat = Mock()
+        # Before, at, and after the first heartbeat, then the next interval.
+        with patch.object(stack.time, "monotonic", side_effect=[
+                100, 100, 100, 110, 110, 110, 111, 111, 120, 120, 120, 121]), \
+                patch.object(stack.select, "select", return_value=([], [], [])):
+            stack.monitor(peer, [], 21, lambda: False, lambda: None, heartbeat)
+        self.assertEqual(heartbeat.call_count, 2)
+        peer.recv.assert_not_called()
+
+    def test_default_host_bindings_heartbeat_and_disposal(self):
+        # Real socket/hello with a manually advanced interval: no live stack or
+        # wall-clock wait. Tool lookup remains portable under non-ASCII clones.
+        script = r'''
+import assert from 'node:assert/strict';
+import {createServer} from 'node:net';
+import {once} from 'node:events';
+import {mkdtemp,mkdir,writeFile,chmod,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {pathToFileURL} from 'node:url';
+const {createMainBindings}=await import(pathToFileURL(process.argv[1]));
+const root=await mkdtemp(join(tmpdir(),'mv-idle-tést-'));
+const reg=component=>({endpoint:{component,instance:component+'-test'},hello:{
+  schema:'hello/v0.2',contract_version:'v0.2',component,component_version:'0.2.0',
+  component_commit:'a'.repeat(40),dependencies:[]}});
+const config={session_id:'idle-test',core:reg('core'),peers:[reg('ui')]};
+let peer,callback,interval,unref=false,cleared=false,bindings,seq=0;
+const token={unref(){unref=true;}};
+const originalSet=globalThis.setInterval,originalClear=globalThis.clearInterval;
+globalThis.setInterval=(fn,ms)=>{callback=fn;interval=ms;return token;};
+globalThis.clearInterval=value=>{if(value===token)cleared=true;};
+const received=[];
+const server=createServer(socket=>{peer=socket;let buffer='';socket.on('data',data=>{
+  buffer+=data;let n;while((n=buffer.indexOf('\n'))>=0){
+    const env=JSON.parse(buffer.slice(0,n));buffer=buffer.slice(n+1);received.push(env);
+    if(env.body.schema==='hello/v0.2')socket.write(JSON.stringify({
+      schema:'envelope/v0.2',from:config.core.endpoint,to:config.peers[0].endpoint,
+      session_id:config.session_id,seq:++seq,nonce:'reply-'+seq,msg_id:'reply-'+seq,
+      body:config.core.hello})+'\n');
+  }
+});});
+try {
+  await mkdir(join(root,'metaviewer'),{mode:0o700});
+  const configPath=join(root,'config.json'),sock=join(root,'metaviewer/core.sock');
+  await writeFile(configPath,JSON.stringify(config),{mode:0o600});
+  server.listen(sock);await once(server,'listening');await chmod(sock,0o600);
+  bindings=await createMainBindings({env:{MV_CORE_CONFIG:configPath,XDG_RUNTIME_DIR:root},
+    createMessageChannel:()=>{throw Error('idle must not create channels');}});
+  assert.equal(interval,10000);assert.equal(unref,true);
+  assert.equal(received.length,1); // no request before the scheduled interval
+  const data=once(peer,'data');callback();await data;
+  assert.deepEqual(received[1].body,{schema:'surface_request/v0.2',op:'list',params:{}});
+  assert.equal(received[1].seq,2);
+  await bindings.core.dispose();assert.equal(cleared,true);
+  assert.equal((await bindings.core.getStatus()).availability,'unavailable');
+} finally {
+  await bindings?.core.dispose();peer?.destroy();
+  await new Promise(resolve=>server.close(resolve));await rm(root,{recursive:true,force:true});
+  globalThis.setInterval=originalSet;globalThis.clearInterval=originalClear;
+}
+'''
+        result = subprocess.run([stack.shutil.which("node"), "--input-type=module", "-e", script,
+                                 str(stack.ROOT / "ui/electron/hostBindings.js")],
+                                capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_watchdog_drains_buffered_messages_and_refuses_native_errors(self):
         peer = Mock(_sock=object(), _rx=b"buffered\n")

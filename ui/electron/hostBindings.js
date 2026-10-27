@@ -79,6 +79,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
     /** @type {Set<string>} */ const delivering = new Set();
     /** @type {Map<string,{body:any,resolve:(value:any)=>void,reject:(error:Error)=>void,timer:ReturnType<typeof setTimeout>}>} */ const pending = new Map();
     let live = false, disposed = false, seq = 0, received = 0;
+    /** @type {ReturnType<typeof setInterval> | undefined} */ let keepalive;
     /** @type {(value?:any)=>void} */ let ready;
     /** @type {(error:Error)=>void} */ let rejectReady;
     const handshake = new Promise((resolve,reject) => {ready=resolve;rejectReady=reject;});
@@ -86,6 +87,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
     void handshake.catch(() => {});
     const shutdown = () => {
       if (disposed) return; disposed = true; live = false; clearTimeout(helloTimer);
+      clearInterval(keepalive);
       rejectReady(fail()); socket?.destroy();
       for (const item of pending.values()) {clearTimeout(item.timer);item.reject(fail());} pending.clear();
       for (const channel of channels.values()) {channel.port1.close();channel.port2.close();}
@@ -208,6 +210,13 @@ export async function createMainBindings({env = process.env, createMessageChanne
     await handshake;
     const after = await lstat(socketPath);
     if (after.ino !== socketInfo.ino || after.dev !== socketInfo.dev || after.mode !== socketInfo.mode || after.uid !== socketInfo.uid) {shutdown();throw fail();}
+    // [TARGET, unit decision] The frozen transport closes receive-idle peers
+    // after 30 s. An admitted list round trip keeps UI/core/daemon live even
+    // when no user input or frame subscription is active. Never reconnect.
+    keepalive = setInterval(() => {
+      try {send({schema:'surface_request/v0.2',op:'list',params:{}});} catch {shutdown();}
+    }, 10000);
+    keepalive.unref();
     // Binding epoch is local to this single, never-reconnected host connection.
     const getStatus = () => ({availability:live ? 'live' : 'unavailable',pid:null,authority_epoch:live ? 1 : null,reason:live ? null : 'CORE_SEAMS_ABSENT'});
     return {core:{start:async()=>getStatus(),getStatus,dispose:async()=>shutdown(),

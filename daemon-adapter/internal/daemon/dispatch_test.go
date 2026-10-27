@@ -26,6 +26,32 @@ import (
 )
 
 // Test-only authority; no claim of production durable replay or schema admission.
+func TestListSnapshotsAreUpdatesNotCreationCommits(t *testing.T) {
+	raw := json.RawMessage(`{"schema":"surface_event/v0.2","event":"created","data":{"surface":{"surface_id":"s1"}}}`)
+	for range 2 {
+		out, err := listSnapshots([]json.RawMessage{raw})
+		if err != nil || len(out) != 1 {
+			t.Fatalf("list snapshot: %s %v", out, err)
+		}
+		var event struct {
+			Event string
+			Data  json.RawMessage
+		}
+		if err := json.Unmarshal(out[0], &event); err != nil || event.Event != "state_changed" || string(event.Data) != `{"surface":{"surface_id":"s1"}}` {
+			t.Fatalf("list replayed creation or changed data: %s %v", out[0], err)
+		}
+	}
+	failure := json.RawMessage(`{"schema":"surface_event/v0.2","event":"error","data":{"detail":"failed"}}`)
+	if out, err := listSnapshots([]json.RawMessage{failure}); err != nil || len(out) != 1 || string(out[0]) != string(failure) {
+		t.Fatalf("list error lost: %s %v", out, err)
+	}
+	for _, invalid := range []json.RawMessage{json.RawMessage(`{`), json.RawMessage(`{"schema":"unknown","event":"created","data":{}}`)} {
+		if _, err := listSnapshots([]json.RawMessage{invalid}); err == nil {
+			t.Fatal("invalid snapshot accepted")
+		}
+	}
+}
+
 type lifecyclePolicy struct {
 	mu   sync.Mutex
 	seen map[string]bool

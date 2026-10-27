@@ -130,6 +130,12 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 			work.Lock()
 		}
 		replies, err := handler(ctx, in)
+		// [TARGET, unit decision] Normalize enumeration at the common transport
+		// seam: both runtime handlers return created snapshots for list, while
+		// core admission correctly refuses duplicate creation commits.
+		if err == nil && op.Op == "list" {
+			replies, err = listSnapshots(replies)
+		}
 		if err != nil {
 			if locked {
 				work.Unlock()

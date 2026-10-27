@@ -17,6 +17,9 @@
 //! frames. Lifecycle callers observe daemon events for their connection lifetime
 //! (the wire has no reply correlation); frame unsubscribe overrides that default.
 //! Raw input and control requests retain their existing proposal/UI-intent gates.
+//! [TARGET, unit decision] An expired RAM publication is not admissible evidence.
+//! Drop that frame without retiring the authenticated daemon: its bounded lease
+//! window can advance while an earlier journal transaction is being persisted.
 //! [TARGET, unit decision] Replay evidence remains session-wide: reconnects must
 //! use fresh nonces and increasing sequences within each authenticated connection. EOF drains bounded queued replies;
 //! a terminal writer retires its endpoint after flushing its diagnostic.
@@ -372,7 +375,17 @@ impl Server {
         Ok(self.authority.retain_witness(&bytes)?)
     }
     fn frame(&mut self, frame: &FrameRef, boundary: Witness) -> Result<bool> {
-        let witness = self.witness(frame)?;
+        let witness = match self.witness(frame) {
+            Ok(witness) => witness,
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                return Ok(false);
+            }
+            Err(error) => return Err(error),
+        };
         let out = self.authority.apply_with_witnesses(
             Input::Frame {
                 surface_id: frame.surface_id.clone(),

@@ -274,14 +274,20 @@ def free_display(sockets=Path("/tmp/.X11-unix"), locks=Path("/tmp")):
     raise RuntimeError("no free high X display")
 
 
-def monitor(peer, children, seconds, should_stop, tick):
+def monitor(peer, children, seconds, should_stop, tick, keepalive=None):
     """Monotonic TTL and stop requests converge on the same cleanup path."""
     deadline = time.monotonic() + seconds
+    next_keepalive = deadline - seconds + 10
     while not should_stop() and time.monotonic() < deadline:
         exited = [(index, p.poll()) for index, p in enumerate(children) if p.poll() is not None]
         if exited:
             raise RuntimeError("stack process exited: " + repr(exited))
         tick()
+        # [TARGET, unit decision] list is the admitted request/reply heartbeat;
+        # keep the agent and daemon below the frozen 30 s receive-idle limit.
+        if keepalive is not None and time.monotonic() >= next_keepalive:
+            keepalive()
+            next_keepalive = time.monotonic() + 10
         # CoreClient buffers complete frames; drain those before waiting again.
         readable, _, _ = select.select([peer._sock], [], [], 0.2)
         if readable or b"\n" in peer._rx:
@@ -393,7 +399,9 @@ def supervise(root, seconds, lock_fd):
         state["status"] = "ready"
         remember_tree(state, root)
         # Drain fan-out continuously so the core never retires a full agent queue.
-        monitor(peer, children, seconds, lambda: stop, lambda: remember_tree(state, root))
+        monitor(peer, children, seconds, lambda: stop, lambda: remember_tree(state, root),
+                lambda: live.send(peer, regs["agent"], config,
+                                  {"schema": "surface_request/v0.2", "op": "list", "params": {}}))
     except Exception as exc:
         logs = "\n".join(path.name + ": " + path.read_text(errors="replace")[-2000:]
                          for path in sorted(work.glob("*.log")))
