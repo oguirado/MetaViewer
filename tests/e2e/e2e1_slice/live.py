@@ -24,7 +24,11 @@ ROOT = Path(__file__).resolve().parents[3]
 CAPSULE_ID_RE = re.compile(r"^srf-id-[a-z0-9][a-z0-9-]{0,39}$")
 sys.path.insert(0, str(ROOT / "agents"))
 from metaviewer_agents.client import CoreClient  # noqa: E402
-from metaviewer_agents.envelope import make_envelope  # noqa: E402
+from metaviewer_agents.envelope import (  # noqa: E402
+    EnvelopeError,
+    make_envelope,
+    validate_envelope,
+)
 
 
 class UIWire:
@@ -173,7 +177,60 @@ def registration(component, commit, suffix):
                       "component_commit": commit, "dependencies": []}}
 
 
+UI_INBOUND_SCHEMAS = frozenset({"surface_event/v0.2"})
+AGENT_INBOUND_SCHEMAS = frozenset({
+    "surface_event/v0.2",
+    "mv_tool_result/v0.2",
+    "action_verdict/v0.2",
+    "action_receipt/v0.2",
+})
+
+
+def _lane_state(peer):
+    state = getattr(peer, "_mv_lane_state", None)
+    if state is None:
+        state = {
+            "inbound_seq": 0,
+            "seen_msg_ids": set(),
+            "seen_nonces": set(),
+            "active_requests": set(),
+            "retired_requests": set(),
+            "active_proposals": set(),
+            "settled_proposals": set(),
+            "refused_proposals": set(),
+            "seen_verdicts": set(),
+            "last_verdict_core_seq": 0,
+            "endpoint": None,
+            "core_endpoint": None,
+            "session_id": None,
+        }
+        try:
+            setattr(peer, "_mv_lane_state", state)
+        except AttributeError:
+            pass
+    return state
+
+
 def send(peer, reg, config, body):
+    state = _lane_state(peer)
+    state["endpoint"] = reg["endpoint"]
+    state["core_endpoint"] = config["core"]["endpoint"]
+    state["session_id"] = config["session_id"]
+    if isinstance(body, dict):
+        if body.get("schema") == "mv_tool_call/v0.2":
+            req_id = body.get("request_id")
+            if req_id in state["retired_requests"] or req_id in state["active_requests"]:
+                raise RuntimeError(f"duplicate tool request_id: {req_id}")
+            state["active_requests"].add(req_id)
+        elif body.get("schema") == "action_proposal/v0.2":
+            prop_id = body.get("proposal_id")
+            if (
+                prop_id in state["settled_proposals"]
+                or prop_id in state["refused_proposals"]
+                or prop_id in state["active_proposals"]
+            ):
+                raise RuntimeError(f"duplicate proposal_id: {prop_id}")
+            state["active_proposals"].add(prop_id)
     if isinstance(peer, UIWire) and body.get("schema") == "ui_intent/v0.2":
         assert set(body) == {"schema", "request_id", "op", "params"}
         assert body["op"] in ("take_control", "release_control")
@@ -220,9 +277,79 @@ def replay_probe(report, archive, replay, scratch):
                                "scope": "real-process durable journal"}
 
 
-def receive(peer, predicate, report, reject_errors=True):
+def receive(peer, predicate, report, reject_errors=True, schemas=None):
+    state = _lane_state(peer)
+    allowed_schemas = (
+        UI_INBOUND_SCHEMAS
+        if schemas is None and isinstance(peer, UIWire)
+        else AGENT_INBOUND_SCHEMAS
+        if schemas is None
+        else frozenset(schemas)
+    )
     for _ in range(100):
-        body = peer.recv()["body"]
+        env = peer.recv()
+        try:
+            validate_envelope(env)
+        except EnvelopeError as exc:
+            raise RuntimeError(f"malformed inbound envelope: {exc}") from exc
+        if env.get("schema") != "envelope/v0.2":
+            raise RuntimeError(f"unexpected envelope schema: {env.get('schema')}")
+        if state["core_endpoint"] is not None and env.get("from") != state["core_endpoint"]:
+            raise RuntimeError("inbound envelope sender mismatch")
+        if state["endpoint"] is not None and env.get("to") != state["endpoint"]:
+            raise RuntimeError("inbound envelope recipient mismatch")
+        if state["session_id"] is not None and env.get("session_id") != state["session_id"]:
+            raise RuntimeError("inbound envelope session mismatch")
+        seq = env["seq"]
+        if seq <= state["inbound_seq"]:
+            raise RuntimeError(f"non-monotonic inbound envelope seq: {seq} <= {state['inbound_seq']}")
+        if env["msg_id"] in state["seen_msg_ids"] or env["nonce"] in state["seen_nonces"]:
+            raise RuntimeError("duplicate inbound envelope msg_id or nonce")
+        body = env["body"]
+        body_schema = body.get("schema")
+        if body_schema not in allowed_schemas:
+            raise RuntimeError(f"unexpected inbound body schema: {body_schema}")
+        if body_schema == "mv_tool_result/v0.2":
+            req_id = body.get("request_id")
+            if req_id in state["retired_requests"]:
+                raise RuntimeError(f"duplicate or stale tool result for retired request_id: {req_id}")
+            if state["active_requests"] and req_id not in state["active_requests"]:
+                raise RuntimeError(f"uncorrelated tool result request_id: {req_id}")
+            state["retired_requests"].add(req_id)
+            state["active_requests"].discard(req_id)
+        elif body_schema == "action_verdict/v0.2":
+            prop_id = body.get("proposal_id")
+            decision = body.get("decision")
+            core_seq = body.get("core_seq", 0)
+            if (
+                core_seq <= state["last_verdict_core_seq"]
+                or prop_id in state["refused_proposals"]
+                or prop_id in state["settled_proposals"]
+                or (prop_id, decision) in state["seen_verdicts"]
+            ):
+                raise RuntimeError(f"reordered or duplicate verdict for proposal_id: {prop_id}")
+            if state["active_proposals"] and prop_id not in state["active_proposals"]:
+                raise RuntimeError(f"uncorrelated verdict proposal_id: {prop_id}")
+            state["last_verdict_core_seq"] = core_seq
+            state["seen_verdicts"].add((prop_id, decision))
+            if decision == "refused":
+                state["refused_proposals"].add(prop_id)
+                state["active_proposals"].discard(prop_id)
+        elif body_schema == "action_receipt/v0.2":
+            prop_id = body.get("proposal_id")
+            if prop_id in state["settled_proposals"]:
+                raise RuntimeError(f"duplicate receipt for settled proposal_id: {prop_id}")
+            if (
+                state["active_proposals"]
+                and prop_id not in state["active_proposals"]
+                and prop_id not in state["refused_proposals"]
+            ):
+                raise RuntimeError(f"uncorrelated receipt proposal_id: {prop_id}")
+            state["settled_proposals"].add(prop_id)
+            state["active_proposals"].discard(prop_id)
+        state["inbound_seq"] = seq
+        state["seen_msg_ids"].add(env["msg_id"])
+        state["seen_nonces"].add(env["nonce"])
         report.setdefault("wire_evidence", []).append(body)
         if reject_errors and body.get("event") == "error":
             raise RuntimeError("daemon surface error: " + json.dumps(body, sort_keys=True))
@@ -250,6 +377,224 @@ def proposal(surface_id, frame, proposal_id):
             "action": {"type": "key", "keys": ["Escape"]},
             "expectation": {"type": "text_present", "text": "ready"},
             "budget": {"max_ms": 10000, "max_retries": 0}}
+
+
+def release_stale_probe(
+    report,
+    agent,
+    reg,
+    config,
+    surface_id,
+    pre_release_frame,
+    archive,
+    proposal_id="live-release-stale",
+    native_actions_path=None,
+):
+    before_domain = domain(snapshot(archive))
+    before_native = (
+        Path(native_actions_path).read_bytes()
+        if native_actions_path is not None and Path(native_actions_path).exists()
+        else None
+    )
+    send(agent, reg, config, proposal(surface_id, pre_release_frame, proposal_id))
+    stale = receive(
+        agent,
+        lambda b: b.get("proposal_id") == proposal_id,
+        report,
+        schemas=("action_verdict/v0.2",),
+    )
+    assert (
+        stale.get("decision") == "refused" and stale.get("reason_code") == "STALE_FRAME"
+    ), f"pre-refresh frame after release was not refused with STALE_FRAME: {stale}"
+    after_domain = domain(snapshot(archive))
+    assert before_domain == after_domain, "post-release stale refusal mutated domain state"
+    core_seq = stale["core_seq"]
+    event_path = archive / "events" / f"{core_seq}.json"
+    assert event_path.is_file(), f"missing journal event for stale core_seq {core_seq}"
+    event_doc = json.loads(event_path.read_text())
+    outcome = event_doc.get("outcome", {})
+    assert outcome.get("reason") == "STALE_FRAME", f"unexpected stale outcome reason: {outcome}"
+    assert outcome.get("dispatch") is False, "stale proposal outcome must not dispatch"
+    records = [
+        json.loads(line)
+        for line in (archive / "journal.jsonl").read_text().splitlines()[1:]
+        if line.strip()
+    ]
+    matching = [r for r in records if r.get("core_seq") == core_seq]
+    assert len(matching) == 1 and matching[0].get("kind") == "refused", (
+        f"stale proposal journal record must be refused: {matching}"
+    )
+    if before_native is not None:
+        assert Path(native_actions_path).read_bytes() == before_native, (
+            "stale proposal dispatched native actions"
+        )
+    report.setdefault("assertions", {})["release_stale_before_refresh"] = "PASS"
+    report["release_stale_evidence"] = {
+        "verdict": stale,
+        "domain_sha256": digest(after_domain),
+    }
+    return stale
+
+
+def verify_expiry_recovery(
+    report,
+    agent,
+    reg,
+    config,
+    surface_id,
+    expired_path,
+    expired_gen,
+    expired_sha256,
+    recovered_frame,
+    archive,
+    epoch_before,
+    proposal_id="live-expired-frame",
+):
+    expired_path = Path(expired_path)
+    assert not expired_path.exists(), f"expired publication still present: {expired_path}"
+    for body in report.get("wire_evidence", ()):
+        if body.get("event") == "frame_ready":
+            ref = body.get("data", {}).get("frame_ref", {})
+            assert ref.get("ramws_path") != str(expired_path), (
+                "expired publication ramws_path reached UI/agent wire evidence"
+            )
+            assert ref.get("generation") != expired_gen, (
+                "expired publication generation reached UI/agent wire evidence"
+            )
+    admitted_shas = set()
+    for event_file in sorted((archive / "events").glob("*.json"), key=lambda p: int(p.stem)):
+        doc = json.loads(event_file.read_text())
+        surf = doc.get("state", {}).get("surfaces", {}).get(surface_id, {})
+        frame = surf.get("frame")
+        if isinstance(frame, dict):
+            assert frame.get("generation") != expired_gen, (
+                f"expired generation {expired_gen} committed in authority state"
+            )
+            if isinstance(frame.get("sha256"), str):
+                admitted_shas.add(frame["sha256"])
+    if expired_sha256 and expired_sha256 not in admitted_shas:
+        assert not (archive / "artifacts" / expired_sha256).exists(), (
+            "expired publication pixels were retained as an authority witness"
+        )
+    send(
+        agent,
+        reg,
+        config,
+        proposal(
+            surface_id,
+            {"generation": expired_gen, "sha256": expired_sha256 or ("0" * 64)},
+            proposal_id,
+        ),
+    )
+    refused = receive(
+        agent,
+        lambda b: b.get("proposal_id") == proposal_id,
+        report,
+        schemas=("action_verdict/v0.2",),
+    )
+    assert (
+        refused.get("decision") == "refused"
+        and refused.get("reason_code") == "STALE_FRAME"
+    ), f"expired publication proposal was not refused with STALE_FRAME: {refused}"
+    current_state = snapshot(archive)
+    assert current_state["epoch"] == epoch_before, "expired publication retired daemon epoch"
+    assert recovered_frame["generation"] > expired_gen, (
+        "recovered frame generation did not advance past expired publication"
+    )
+    ui_pixels = Path(recovered_frame["ramws_path"]).read_bytes()
+    assert hashlib.sha256(ui_pixels).hexdigest() == recovered_frame["sha256"], (
+        "recovered frame digest mismatch"
+    )
+    retained = (archive / "artifacts" / recovered_frame["sha256"]).read_bytes()
+    assert retained == ui_pixels, "recovered frame retained witness mismatch"
+    report.setdefault("assertions", {})["expired_publication_recovery"] = "PASS"
+    report["expiry_recovery"] = {
+        "status": "PASS",
+        "expired_generation": expired_gen,
+        "expired_ramws_path": str(expired_path),
+        "recovered_generation": recovered_frame["generation"],
+        "epoch": current_state["epoch"],
+        "refusal": refused,
+    }
+    return recovered_frame
+
+
+def expiry_recovery_probe(report, ui, agent, regs, config, surface_id, baseline_frame, archive, processes):
+    pub_dir = Path(baseline_frame["ramws_path"]).parent
+    baseline_gen = baseline_frame["generation"]
+    epoch_before = snapshot(archive)["epoch"]
+    initial_rgb = set(pub_dir.glob("*.rgb"))
+    discovered = []
+    discovered_shas = {}
+    processes[0].send_signal(signal.SIGSTOP)
+    report["commands"].append({"argv": ["signal", "SIGSTOP", "owned-core-expiry"], "rc": 0})
+    try:
+        deadline = time.monotonic() + 10
+        expired_path = None
+        while time.monotonic() < deadline:
+            if processes[1].poll() is not None:
+                raise RuntimeError("adapter exited during expiry probe")
+            current_rgb = set(pub_dir.glob("*.rgb"))
+            for path in sorted(current_rgb - initial_rgb):
+                if path not in discovered:
+                    discovered.append(path)
+                    try:
+                        discovered_shas[path] = hashlib.sha256(path.read_bytes()).hexdigest()
+                    except OSError:
+                        pass
+            unlinked = [p for p in discovered if p not in current_rgb]
+            if unlinked and (current_rgb - initial_rgb):
+                expired_path = unlinked[0]
+                break
+            time.sleep(0.005)
+        if expired_path is None:
+            raise RuntimeError("timed out waiting for adapter lease rotation to expire a publication")
+        processes[1].send_signal(signal.SIGSTOP)
+        report["commands"].append({"argv": ["signal", "SIGSTOP", "owned-adapter"], "rc": 0})
+    finally:
+        processes[0].send_signal(signal.SIGCONT)
+        report["commands"].append({"argv": ["signal", "SIGCONT", "owned-core-expiry"], "rc": 0})
+    expired_gen = baseline_gen + 1
+    expired_sha = discovered_shas.get(expired_path, baseline_frame["sha256"])
+    wait_for(
+        lambda: snapshot(archive)["surfaces"][surface_id]["frame"]["generation"] > expired_gen,
+        [processes[0]],
+        "post-expiry fresh frame commit",
+    )
+    send(
+        agent,
+        regs["agent"],
+        config,
+        {
+            "schema": "mv_tool_call/v0.2",
+            "request_id": "observe-refresh",
+            "op": "observe",
+            "args": {"surface_id": surface_id},
+        },
+    )
+    current = receive(agent, lambda b: b.get("request_id") == "observe-refresh", report)
+    assert current.get("status") == "ok", "post-release observe refused: " + str(current)
+    recovered = current["observation"]["frame_ref"]
+    ui_recovered = receive(
+        ui,
+        lambda b: b.get("event") == "frame_ready"
+        and b["data"]["frame_ref"]["generation"] == recovered["generation"],
+        report,
+    )["data"]["frame_ref"]
+    assert ui_recovered == recovered, "post-expiry UI/agent fresh frame mismatch"
+    return verify_expiry_recovery(
+        report,
+        agent,
+        regs["agent"],
+        config,
+        surface_id,
+        expired_path,
+        expired_gen,
+        expired_sha,
+        recovered,
+        archive,
+        epoch_before,
+    )
 
 
 def verify_probe(report, agent, reg, config, action, frame, receipt, archive, scratch):
@@ -296,7 +641,8 @@ def main():
     report = {"status": "BLOCKED", "mode": "live", "commands": [], "assertions": {
         "capsule_frame_ui_fanout": "BLOCKED", "observe_propose_dispatch_receipt": "BLOCKED",
         "receipt_binding_negative_control": "BLOCKED",
-        "stale_no_state_change": "BLOCKED", "human_cancel_release_refresh": "BLOCKED",
+        "stale_no_state_change": "BLOCKED", "release_stale_before_refresh": "BLOCKED",
+        "expired_publication_recovery": "BLOCKED", "human_cancel_release_refresh": "BLOCKED",
         "action_journal_replay_corruption": "BLOCKED", "electron_tile": "PENDING"}}
     processes, peers, owned = [], [], set()
     profile = os.environ["MV_SRF_LIVE_PROFILE"]
@@ -347,7 +693,12 @@ def main():
                 if role == "agent":
                     peer.connect()
                 send(peer, regs[role], config, regs[role]["hello"])
-                assert peer.recv()["body"] == regs["core"]["hello"], "core pin mismatch"
+                hello_reply = peer.recv()
+                assert hello_reply["body"] == regs["core"]["hello"], "core pin mismatch"
+                lane = _lane_state(peer)
+                lane["inbound_seq"] = hello_reply["seq"]
+                lane["seen_msg_ids"].add(hello_reply["msg_id"])
+                lane["seen_nonces"].add(hello_reply["nonce"])
             ui, agent = peers
             create = {"schema": "surface_request/v0.2", "op": "create", "params": {
                 "kind": "browser", "geometry": {"w": 1280, "h": 900}, "profile_id": profile}}
@@ -427,6 +778,7 @@ def main():
             receive(ui, lambda b: b.get("event") == "state_changed"
                     and b["data"]["surface"]["control"] == "agent", report)
             report["assertions"]["human_refusal_release"] = "PASS"
+            release_stale_probe(report, agent, regs["agent"], config, surface_id, advanced, archive)
             send(agent, regs["agent"], config, {"schema": "surface_request/v0.2", "op": "frame_subscribe",
                                                "params": {"surface_id": surface_id}})
             # The production path must supply the fresh frame after release.
@@ -437,16 +789,13 @@ def main():
                     raise RuntimeError(json.dumps(refresh, sort_keys=True))
                 fresh = receive(agent, lambda b: b.get("event") == "frame_ready", report)["data"]["frame_ref"]
                 assert fresh == refresh["data"]["frame_ref"], "refresh fan-out mismatch"
-                # [TARGET, unit decision] The subscription keeps publishing.
-                # Hold our adapter and observe the core's current generation;
-                # queued fan-out is evidence, not a promise it is still current.
-                processes[1].send_signal(signal.SIGSTOP)
-                report["commands"].append({"argv": ["signal", "SIGSTOP", "owned-adapter"], "rc": 0})
-                send(agent, regs["agent"], config, {"schema": "mv_tool_call/v0.2",
-                    "request_id": "observe-refresh", "op": "observe", "args": {"surface_id": surface_id}})
-                current = receive(agent, lambda b: b.get("request_id") == "observe-refresh", report)
-                assert current.get("status") == "ok", "post-release observe refused: " + str(current)
-                fresh = current["observation"]["frame_ref"]
+                # [TARGET, unit decision] Expire one subscribed publication past
+                # the 2-generation lease window while core is held, then verify
+                # core drops the expired publication, keeps the daemon, and
+                # delivers the fresh frame on the same session.
+                fresh = expiry_recovery_probe(
+                    report, ui, agent, regs, config, surface_id, fresh, archive, processes
+                )
                 send(agent, regs["agent"], config, proposal(surface_id, fresh, "live-readmitted"))
                 admitted = receive(agent, lambda b: b.get("proposal_id") == "live-readmitted", report)
                 assert admitted.get("decision") == "admitted", "fresh post-release action refused: " + str(admitted)

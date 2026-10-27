@@ -377,6 +377,103 @@ try {
         send.assert_called_once_with(state["supervisor"], signal.SIGTERM)
         self.assertIn("state=absent", out.getvalue())
 
+    def test_t8_r2_015_expiry_recovery_probe_rotates_and_restores_processes(self):
+        pub_dir = self.root / "mv-frames-1" / "surface-live"
+        pub_dir.mkdir(parents=True)
+        archive = self.root / "archive"
+        (archive / "events").mkdir(parents=True)
+        (archive / "artifacts").mkdir(parents=True)
+        g1 = pub_dir / "1.rgb"
+        g2 = pub_dir / "2.rgb"
+        g3 = pub_dir / "3.rgb"
+        g1_bytes = b"\x11" * 12
+        g2_bytes = b"\x22" * 12
+        g3_bytes = b"\x33" * 12
+        g1.write_bytes(g1_bytes)
+        g2_sha = stack.live.hashlib.sha256(g2_bytes).hexdigest()
+        g3_sha = stack.live.hashlib.sha256(g3_bytes).hexdigest()
+        (archive / "artifacts" / g3_sha).write_bytes(g3_bytes)
+        baseline = {
+            "schema": "frame_ref/v0.2",
+            "surface_id": "surface-live",
+            "generation": 1,
+            "ramws_path": str(g1),
+            "sha256": stack.live.hashlib.sha256(g1_bytes).hexdigest(),
+            "width": 2,
+            "height": 2,
+            "stride": 6,
+            "pixel_format": "RGB24",
+            "ts_ns": 100,
+        }
+        fresh = {
+            "schema": "frame_ref/v0.2",
+            "surface_id": "surface-live",
+            "generation": 3,
+            "ramws_path": str(g3),
+            "sha256": g3_sha,
+            "width": 2,
+            "height": 2,
+            "stride": 6,
+            "pixel_format": "RGB24",
+            "ts_ns": 300,
+        }
+        (archive / "events" / "1.json").write_text(json.dumps({
+            "state": {"epoch": 1, "surfaces": {"surface-live": {"frame": fresh}}},
+        }))
+        signals = []
+        polls = []
+
+        def adapter_poll():
+            polls.append(len(polls))
+            if len(polls) == 1:
+                g2.write_bytes(g2_bytes)
+            elif len(polls) == 2:
+                g3.write_bytes(g3_bytes)
+                g2.unlink()
+            return None
+
+        core = Mock(send_signal=lambda sig: signals.append(("core", sig)), poll=lambda: None)
+        adapter = Mock(send_signal=lambda sig: signals.append(("adapter", sig)), poll=adapter_poll)
+        report = {"commands": [], "wire_evidence": [], "assertions": {}}
+        regs = {"agent": {"endpoint": {"component": "agent", "instance": "a1"}},
+                "ui": {"endpoint": {"component": "ui", "instance": "u1"}}}
+        config = {"session_id": "sess-1", "core": {"endpoint": {"component": "core", "instance": "c1"}}}
+        sent = []
+        replies = [
+            {"schema": "mv_tool_result/v0.2", "request_id": "observe-refresh",
+             "status": "ok", "observation": {"frame_ref": fresh}},
+            {"schema": "surface_event/v0.2", "event": "frame_ready", "data": {"frame_ref": fresh}},
+            {"schema": "action_verdict/v0.2", "proposal_id": "live-expired-frame",
+             "decision": "refused", "reason_code": "STALE_FRAME",
+             "reason_detail": "expired frame", "core_seq": 9, "verdict_at_ns": 900},
+        ]
+        with patch.object(stack.live, "snapshot", return_value={
+                "epoch": 1, "surfaces": {"surface-live": {"frame": fresh}}}), \
+                patch.object(stack.live, "send", side_effect=lambda p, r, c, b: sent.append(b)), \
+                patch.object(stack.live, "receive", side_effect=replies):
+            recovered = stack.live.expiry_recovery_probe(
+                report, Mock(), Mock(), regs, config,
+                "surface-live", baseline, archive, [core, adapter],
+            )
+        self.assertEqual(recovered["generation"], 3)
+        self.assertEqual(report["assertions"]["expired_publication_recovery"], "PASS")
+        self.assertEqual(report["expiry_recovery"]["expired_generation"], 2)
+        self.assertNotEqual(g2_sha, g3_sha)
+        self.assertIn(("core", signal.SIGCONT), signals)
+
+        # Negative control: rotation timeout still resumes core via SIGCONT.
+        signals.clear()
+        with patch.object(stack.live, "snapshot", return_value={
+                "epoch": 1, "surfaces": {"surface-live": {"frame": baseline}}}), \
+                patch.object(stack.live.time, "monotonic", side_effect=[0.0, 1.0, 11.0]), \
+                patch.object(stack.live.time, "sleep"):
+            with self.assertRaisesRegex(RuntimeError, "timed out waiting for adapter lease rotation"):
+                stack.live.expiry_recovery_probe(
+                    report, Mock(), Mock(), regs, config,
+                    "surface-live", baseline, archive, [core, adapter],
+                )
+        self.assertIn(("core", signal.SIGCONT), signals)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -35,9 +35,20 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { spawn } = require('node:child_process');
-const { existsSync, readFileSync } = require('node:fs');
+const { execFileSync, spawn } = require('node:child_process');
+const { createHash } = require('node:crypto');
+const {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} = require('node:fs');
+const { createServer } = require('node:net');
 const { join } = require('node:path');
+const { crc32, deflateSync } = require('node:zlib');
 
 const {
   E2EError,
@@ -403,6 +414,12 @@ describe('ac03 lifecycle contract (Layer 1)', () => {
       { surface_id: 'ac03-surf-x', op: 'lost', code: null },
     ];
     rejectsWith(() => checkLifecycleTrace(afterDestroyed), ['E2E_STATE']);
+    const duplicateLost = [
+      { surface_id: 'ac03-surf-x', op: 'created', code: null },
+      { surface_id: 'ac03-surf-x', op: 'lost', code: null },
+      { surface_id: 'ac03-surf-x', op: 'lost', code: null },
+    ];
+    rejectsWith(() => checkLifecycleTrace(duplicateLost), ['E2E_STATE']);
   });
 
   it('negative control: malformed trace rows are refused', () => {
@@ -711,21 +728,442 @@ describe('ac03 live lifecycle journey (Layer 2)', () => {
   });
 
   it('external death is delivered through the PID guard (AC-03)', async () => {
-    // Detached so the child leads its own group; same-group kills refuse.
-    // The adapter observes this death and reports the surface lost (above).
-    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000);'], {
-      stdio: 'ignore',
-      detached: true,
-    });
-    assert.ok(typeof child.pid === 'number');
-    const pid = assertPid(child.pid);
-    const exited = new Promise((done) => child.on('exit', () => done(true)));
-    await terminate(pid, { waitMs: 2000 });
-    const deadline = Date.now() + 5000;
-    let done = false;
-    while (!done && Date.now() < deadline) {
-      done = await Promise.race([exited, new Promise((wake) => setTimeout(() => wake(false), 100))]);
+    const root = findRepoRoot(__dirname);
+    const scratch = makeScratch('mv0-ac03-pid-guard');
+    const shmBase = process.env.MV_SHM_DIR || '/dev/shm';
+    const ramRoot = mkdtempSync(join(shmBase, 'mv-ac03-'));
+    chmodSync(ramRoot, 0o700);
+    let server = null;
+    let conn = null;
+    let adapter = null;
+    const spawnedPids = [];
+    try {
+      const adapterBin = process.env.MV_E2E_ADAPTER_BIN || join(scratch, 'mv-daemon-adapter');
+      if (!process.env.MV_E2E_ADAPTER_BIN) {
+        try {
+          execFileSync(
+            process.env.GO || 'go',
+            ['build', '-o', adapterBin, './cmd/mv-daemon-adapter'],
+            {
+              cwd: join(root, 'daemon-adapter'),
+              env: { ...process.env, GOPROXY: 'off', GOSUMDB: 'off', GOTOOLCHAIN: 'local' },
+              stdio: 'pipe',
+              timeout: 60000,
+            },
+          );
+        } catch (error) {
+          throw new E2EError('E2E_PREREQ', `failed to build mv-daemon-adapter: ${error.message}`);
+        }
+      }
+
+      const rgb24 = Buffer.from([255, 0, 0, 0, 255, 0]);
+      const digestHex = createHash('sha256').update(rgb24).digest('hex');
+      const pngChunk = (type, data) => {
+        const len = Buffer.alloc(4);
+        len.writeUInt32BE(data.length, 0);
+        const typeBuf = Buffer.from(type, 'ascii');
+        const crc = Buffer.alloc(4);
+        crc.writeUInt32BE(crc32(Buffer.concat([typeBuf, data])) >>> 0, 0);
+        return Buffer.concat([len, typeBuf, data, crc]);
+      };
+      const ihdr = Buffer.alloc(13);
+      ihdr.writeUInt32BE(2, 0);
+      ihdr.writeUInt32BE(1, 4);
+      ihdr[8] = 8;
+      ihdr[9] = 2;
+      const idat = deflateSync(Buffer.from([0, 255, 0, 0, 0, 255, 0]));
+      const pngBytes = Buffer.concat([
+        Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+        pngChunk('IHDR', ihdr),
+        pngChunk('IDAT', idat),
+        pngChunk('IEND', Buffer.alloc(0)),
+      ]);
+      for (const profile of ['kill-target', 'destroyed-target']) {
+        const frameDir = join(ramRoot, `run-${profile}`, 'frames', 'w1');
+        mkdirSync(frameDir, { recursive: true, mode: 0o700 });
+        chmodSync(join(ramRoot, `run-${profile}`), 0o700);
+        chmodSync(join(ramRoot, `run-${profile}`, 'frames'), 0o700);
+        chmodSync(frameDir, 0o700);
+        const frameFile = join(frameDir, 'f.png');
+        writeFileSync(frameFile, pngBytes, { mode: 0o600 });
+        chmodSync(frameFile, 0o600);
+      }
+
+      const binDir = join(scratch, 'bin');
+      const stateDir = join(scratch, 'state');
+      const runtimeDir = join(scratch, 'runtime');
+      const socketDir = join(runtimeDir, 'metaviewer');
+      mkdirSync(binDir, { recursive: true, mode: 0o700 });
+      mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+      mkdirSync(socketDir, { recursive: true, mode: 0o700 });
+      chmodSync(binDir, 0o700);
+      chmodSync(stateDir, 0o700);
+      chmodSync(runtimeDir, 0o700);
+      chmodSync(socketDir, 0o700);
+
+      const spawnCapsuleProcess = () => {
+        const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000);'], {
+          stdio: 'ignore',
+          detached: true,
+        });
+        assert.ok(typeof child.pid === 'number');
+        const pid = assertPid(child.pid);
+        spawnedPids.push(pid);
+        return { child, pid };
+      };
+      const killProc = spawnCapsuleProcess();
+      const destroyedProc = spawnCapsuleProcess();
+      writeFileSync(
+        join(stateDir, 'pids.json'),
+        JSON.stringify({
+          'kill-target': killProc.pid,
+          'destroyed-target': destroyedProc.pid,
+        }),
+        { mode: 0o600 },
+      );
+
+      const cliScript = `#!/usr/bin/env python3
+import json, os, sys, time
+
+op = sys.argv[1]
+args = sys.argv[2:]
+def flag(name):
+    idx = args.index(name)
+    return args[idx + 1]
+
+state_dir = flag("--state-dir")
+
+def pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+if op == "start":
+    identity = flag("--identity")
+    container = f"srf-id-{identity}"
+    run_id = f"run-{identity}"
+    with open(os.path.join(state_dir, "pids.json"), "r", encoding="utf-8") as fh:
+        pids = json.load(fh)
+    pid = int(pids[identity])
+    if not pid_alive(pid):
+        sys.exit(3)
+    with open(os.path.join(state_dir, f"{container}.json"), "w", encoding="utf-8") as fh:
+        json.dump({"pid": pid, "identity": identity, "run_id": run_id}, fh)
+    print(json.dumps({
+        "container": container,
+        "run_id": run_id,
+        "windows": [{"id": "w1", "x": 0, "y": 0, "w": 2, "h": 1, "title": "fake", "url": ""}],
+    }))
+elif op == "frame":
+    container = flag("--container")
+    meta_path = os.path.join(state_dir, f"{container}.json")
+    if not os.path.exists(meta_path):
+        sys.exit(4)
+    with open(meta_path, "r", encoding="utf-8") as fh:
+        meta = json.load(fh)
+    if not pid_alive(int(meta["pid"])):
+        sys.exit(4)
+    now = time.monotonic_ns()
+    print(json.dumps({
+        "path": os.path.join(${JSON.stringify(ramRoot)}, meta["run_id"], "frames", "w1", "f.png"),
+        "seq": now,
+        "sha256_rgb24": ${JSON.stringify(digestHex)},
+        "width": 2,
+        "height": 1,
+        "capture_mono_ns": now,
+        "generation": container,
+        "window": {"id": "w1", "x": 0, "y": 0, "w": 2, "h": 1, "title": "fake", "url": ""},
+    }))
+elif op == "input":
+    container = flag("--container")
+    with open(os.path.join(state_dir, "input.log"), "a", encoding="utf-8") as fh:
+        fh.write(container + "\\n")
+    print(json.dumps({
+        "surface_id": "w1",
+        "kind": "key",
+        "input_mono_ns": time.monotonic_ns(),
+        "focus_verified": True,
+        "result": "ok",
+    }))
+elif op == "stop":
+    container = flag("--container")
+    print(json.dumps({"stopped": container, "removed_verified": True}))
+else:
+    sys.exit(2)
+`;
+      const cliPath = join(binDir, 'srf-identity-surface');
+      writeFileSync(cliPath, cliScript, { mode: 0o700 });
+      chmodSync(cliPath, 0o700);
+
+      const socketPath = join(socketDir, 'core.sock');
+      const inbox = [];
+      let waiter = null;
+      let rxBuf = '';
+      const pushEnvelope = (env) => {
+        if (waiter) {
+          const resolve = waiter;
+          waiter = null;
+          resolve(env);
+        } else {
+          inbox.push(env);
+        }
+      };
+      const nextEnvelope = (label = 'envelope', timeoutMs = 5000) => {
+        if (inbox.length > 0) return Promise.resolve(inbox.shift());
+        return new Promise((resolve, reject) => {
+          const timer = setTimeout(() => {
+            waiter = null;
+            reject(new E2EError('E2E_TIMEOUT', `timed out waiting for ${label} (seq=${daemonSeq}, stderr=${adapterStderr})`));
+          }, timeoutMs);
+          waiter = (env) => {
+            clearTimeout(timer);
+            resolve(env);
+          };
+        });
+      };
+
+      let adapterStderr = '';
+      const connected = new Promise((resolve, reject) => {
+        server = createServer((socket) => {
+          conn = socket;
+          socket.setEncoding('utf8');
+          socket.on('error', () => {});
+          socket.on('data', (chunk) => {
+            rxBuf += chunk;
+            let idx = rxBuf.indexOf('\n');
+            while (idx !== -1) {
+              const line = rxBuf.slice(0, idx);
+              rxBuf = rxBuf.slice(idx + 1);
+              if (line.length > 0) pushEnvelope(JSON.parse(line));
+              idx = rxBuf.indexOf('\n');
+            }
+          });
+          resolve(socket);
+        });
+        server.on('error', reject);
+      });
+      await new Promise((resolve) => server.listen(socketPath, resolve));
+      chmodSync(socketPath, 0o600);
+
+      const profiles = JSON.stringify({
+        'kill-target': {
+          Kind: 'browser',
+          NativeKind: 'browser',
+          RAMRoot: ramRoot,
+          Display: ':100',
+          Width: 2,
+          Height: 1,
+        },
+        'destroyed-target': {
+          Kind: 'browser',
+          NativeKind: 'browser',
+          RAMRoot: ramRoot,
+          Display: ':100',
+          Width: 2,
+          Height: 1,
+        },
+      });
+      const commit = 'f8f9294fc70a423164d63f2cf6e5de65ec6f6516';
+      adapter = spawn(adapterBin, [], {
+        cwd: root,
+        env: {
+          ...process.env,
+          MV_SESSION_ID: 'ac03-pid-session',
+          MV_CORE_INSTANCE: 'core-ac03',
+          MV_DAEMON_INSTANCE: 'daemon-ac03',
+          MV_SRF_BIN_DIR: binDir,
+          MV_SRF_STATE_DIR: stateDir,
+          MV_SRF_PROFILES: profiles,
+          MV_SRF_LIVE_RAM_ROOT: ramRoot,
+          MV_SRF_LIVE_PROFILE: 'kill-target',
+          SRF_IDENTITY_STORE_ROOT: ramRoot,
+          SRF_PROXY_REGISTRY: join(ramRoot, 'proxies.json'),
+          XDG_RUNTIME_DIR: runtimeDir,
+          MV_CONTRACT_DIR: join(root, 'contracts', 'v0.2'),
+          MV_COMPONENT_COMMIT: commit,
+          MV_LIVENESS_INTERVAL: '25ms',
+          MV_LIVENESS_MISSES: '2',
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      adapter.stderr.setEncoding('utf8');
+      adapter.stderr.on('data', (chunk) => {
+        adapterStderr += chunk;
+      });
+      adapter.stdout.setEncoding('utf8');
+      adapter.stdout.on('data', (chunk) => {
+        adapterStderr += chunk;
+      });
+
+      await connected;
+      let coreSeq = 0;
+      let daemonSeq = 0;
+      const sendCore = (body) => {
+        coreSeq += 1;
+        const env = {
+          schema: 'envelope/v0.2',
+          msg_id: `core-${coreSeq}`,
+          ts_ns: 0,
+          from: { component: 'core', instance: 'core-ac03' },
+          to: { component: 'daemon', instance: 'daemon-ac03' },
+          session_id: 'ac03-pid-session',
+          seq: coreSeq,
+          nonce: `core-${coreSeq}`,
+          body,
+        };
+        conn.write(`${JSON.stringify(env)}\n`);
+      };
+      const readDaemon = async (label = 'envelope', timeoutMs = 5000) => {
+        const env = await nextEnvelope(label, timeoutMs);
+        daemonSeq += 1;
+        assert.equal(env.schema, 'envelope/v0.2');
+        assert.equal(env.seq, daemonSeq);
+        assert.equal(env.from.component, 'daemon');
+        assert.equal(env.to.component, 'core');
+        return env.body;
+      };
+      const sendRequest = (op, params) => {
+        sendCore({ schema: 'surface_request/v0.2', op, params });
+      };
+
+      const daemonHello = await readDaemon();
+      assert.equal(daemonHello.schema, 'hello/v0.2');
+      assert.equal(daemonHello.component, 'daemon');
+      sendCore({
+        schema: 'hello/v0.2',
+        contract_version: 'v0.2',
+        component: 'core',
+        component_version: '0.1.1',
+        component_commit: commit,
+        dependencies: [],
+      });
+
+      const trace = [];
+      sendRequest('create', { kind: 'browser', profile_id: 'kill-target', geometry: { w: 2, h: 1 } });
+      const createdKill = await readDaemon();
+      assert.equal(createdKill.event, 'created');
+      const idKill = createdKill.data.surface.surface_id;
+      trace.push({ surface_id: idKill, op: 'created', code: null });
+      const initialFrameKill = await readDaemon();
+      assert.equal(initialFrameKill.event, 'frame_ready');
+
+      sendRequest('create', { kind: 'browser', profile_id: 'destroyed-target', geometry: { w: 2, h: 1 } });
+      const createdDestroyed = await readDaemon();
+      assert.equal(createdDestroyed.event, 'created');
+      const idDestroyed = createdDestroyed.data.surface.surface_id;
+      trace.push({ surface_id: idDestroyed, op: 'created', code: null });
+      const initialFrameDestroyed = await readDaemon();
+      assert.equal(initialFrameDestroyed.event, 'frame_ready');
+
+      const killMeta = JSON.parse(readFileSync(join(stateDir, 'srf-id-kill-target.json'), 'utf8'));
+      const destroyedMeta = JSON.parse(readFileSync(join(stateDir, 'srf-id-destroyed-target.json'), 'utf8'));
+      const pidKill = assertPid(killMeta.pid);
+      const pidDestroyed = assertPid(destroyedMeta.pid);
+      spawnedPids.push(pidKill, pidDestroyed);
+
+      sendRequest('destroy', { surface_id: idDestroyed });
+      const destroyedEvent = await readDaemon();
+      assert.equal(destroyedEvent.event, 'state_changed');
+      assert.equal(destroyedEvent.data.surface.surface_id, idDestroyed);
+      assert.equal(destroyedEvent.data.surface.state, 'destroyed');
+      trace.push({ surface_id: idDestroyed, op: 'destroyed', code: null });
+
+      // Negative control: kill the already-destroyed surface's external process first,
+      // then kill the active surface's external process through the harness PID guard.
+      const killExited = new Promise((done) => killProc.child.on('exit', () => done(true)));
+      const destroyedExited = new Promise((done) => destroyedProc.child.on('exit', () => done(true)));
+      await terminate(pidDestroyed, { waitMs: 2000 });
+      await terminate(pidKill, { waitMs: 2000 });
+      assert.equal(await destroyedExited, true);
+      assert.equal(await killExited, true);
+
+      const lostEvents = [];
+      const destroyedLostEvents = [];
+      const firstAfterKill = await readDaemon('lost-event', 5000);
+      assert.equal(firstAfterKill.schema, SURFACE_EVENT_SCHEMA);
+      assert.equal(firstAfterKill.event, 'state_changed');
+      assert.equal(firstAfterKill.data.surface.surface_id, idKill);
+      assert.equal(firstAfterKill.data.surface.state, 'lost');
+      lostEvents.push(firstAfterKill.data.surface.surface_id);
+      trace.push({ surface_id: idKill, op: 'lost', code: null });
+
+      // Wait 6 liveness intervals (150ms) so any duplicate lost on idKill or
+      // spurious lost on the already-destroyed idDestroyed would be emitted.
+      await new Promise((wake) => setTimeout(wake, 150));
+
+      sendRequest('input', {
+        surface_id: idKill,
+        proposal_id: 'ac03-lost-input',
+        action: { type: 'key', keys: ['Escape'] },
+      });
+      sendRequest('frame_subscribe', { surface_id: idKill });
+      sendRequest('frame_subscribe', { surface_id: idDestroyed });
+
+      let postLossInputRefused = false;
+      let postLossCaptureRefused = false;
+      let destroyedCaptureRefused = false;
+      for (let i = 0; i < 3; i += 1) {
+        const msg = await readDaemon('post-loss-reply', 5000);
+        if (msg.schema === SURFACE_EVENT_SCHEMA && msg.event === 'state_changed' && msg.data.surface.state === 'lost') {
+          if (msg.data.surface.surface_id === idDestroyed) {
+            destroyedLostEvents.push(msg.data.surface.surface_id);
+          } else {
+            lostEvents.push(msg.data.surface.surface_id);
+          }
+          trace.push({ surface_id: msg.data.surface.surface_id, op: 'lost', code: null });
+        } else if (msg.schema === 'action_receipt/v0.2') {
+          assert.equal(msg.proposal_id, 'ac03-lost-input');
+          assert.equal(msg.verified, false);
+          assert.ok(typeof msg.error === 'string' && msg.error.startsWith('input failed:'));
+          postLossInputRefused = true;
+        } else if (msg.schema === SURFACE_EVENT_SCHEMA && msg.event === 'error') {
+          const checked = checkSurfaceEventError(msg);
+          trace.push({ surface_id: checked.data.surface_id, op: 'error', code: checked.data.code });
+          if (checked.data.surface_id === idKill) postLossCaptureRefused = true;
+          if (checked.data.surface_id === idDestroyed) destroyedCaptureRefused = true;
+        } else {
+          assert.fail(`unexpected daemon message after loss: ${JSON.stringify(msg)}`);
+        }
+      }
+      for (const queued of inbox) {
+        const body = queued.body;
+        if (body && body.schema === SURFACE_EVENT_SCHEMA && body.event === 'state_changed' && body.data.surface.state === 'lost') {
+          if (body.data.surface.surface_id === idDestroyed) {
+            destroyedLostEvents.push(body.data.surface.surface_id);
+          } else {
+            lostEvents.push(body.data.surface.surface_id);
+          }
+        }
+      }
+
+      assert.equal(existsSync(join(stateDir, 'input.log')), false, 'lost surface input must not reach native CLI');
+      assert.equal(lostEvents.length, 1, 'adapter must emit exactly one lost event for externally killed active capsule');
+      assert.equal(destroyedLostEvents.length, 0, 'already-destroyed capsule must not emit lost');
+      assert.equal(postLossInputRefused, true, 'input on lost surface must be refused');
+      assert.equal(postLossCaptureRefused, true, 'capture on lost surface must be refused');
+      assert.equal(destroyedCaptureRefused, true, 'capture on destroyed surface must be refused');
+      const summary = checkLifecycleTrace(trace);
+      assert.equal(summary.created, 2);
+      assert.equal(summary.destroyed, 1);
+      assert.equal(summary.lost, 1);
+      assert.equal(summary.errors, 2);
+      assert.deepEqual(summary.live, []);
+    } finally {
+      if (conn) conn.destroy();
+      if (server) server.close();
+      if (adapter && adapter.exitCode === null) {
+        adapter.kill('SIGKILL');
+        await new Promise((wake) => adapter.once('exit', wake));
+      }
+      for (const pid of spawnedPids) {
+        try {
+          process.kill(-pid, 'SIGKILL');
+        } catch {}
+      }
+      rmSync(ramRoot, { recursive: true, force: true });
+      removeScratch(scratch);
     }
-    assert.ok(done, 'externally killed child must exit after terminate');
   });
 });
