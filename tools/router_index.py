@@ -208,6 +208,362 @@ def _derive_ids(paths, corpus):
     return assigned
 
 
+_GENERIC_STEMS = frozenset({"mod", "lib", "main", "__init__", "index"})
+_SINGULAR_MAP = {
+    "workflows": "workflow",
+    "frames": "frame",
+    "subscriptions": "subscription",
+    "capsules": "capsule",
+    "contracts": "contract",
+    "schemas": "schema",
+    "standards": "standard",
+    "tools": "tool",
+    "agents": "agent",
+    "docs": "doc",
+}
+_STOPWORDS = frozenset({
+    "the", "and", "for", "with", "from", "that", "this", "into", "over", "under",
+    "when", "where", "which", "while", "must", "only", "every", "each", "file",
+    "files", "routed", "repository", "src", "internal", "pkg", "cmd", "lib", "mod",
+    "true", "false", "none", "null", "self", "super", "crate", "pub", "use", "let",
+    "mut", "const", "static", "return", "async", "await", "def", "class", "function",
+    "export", "import", "var", "type", "struct", "enum", "trait", "impl", "func",
+    "package", "interface", "string", "int", "bool", "usize", "u64", "u32", "u8",
+    "i64", "i32", "f64", "str", "vec", "option", "result", "err", "new", "default",
+})
+_TEST_TOKENS = frozenset({
+    "test", "tests", "testing", "e2e", "spec", "specs",
+    "fixture", "fixtures", "testdata", "mock", "mocks", "stub", "stubs",
+})
+_TEST_CODE_TOKEN_RE = re.compile(r"(?:t|ac|u|w)\d+[a-z0-9]*")
+_SYM_PATTERNS = {
+    "py": (
+        re.compile(r"^\s*(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", re.M),
+        re.compile(r"^\s*class\s+([A-Za-z_][A-Za-z0-9_]*)\b", re.M),
+    ),
+    "rs": (
+        re.compile(
+            r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:const\s+)?(?:unsafe\s+)?"
+            r"fn\s+([A-Za-z_][A-Za-z0-9_]*)\b",
+            re.M,
+        ),
+        re.compile(
+            r"^\s*(?:pub(?:\([^)]*\))?\s+)?"
+            r"(?:struct|enum|trait|type)\s+([A-Za-z_][A-Za-z0-9_]*)\b",
+            re.M,
+        ),
+    ),
+    "go": (
+        re.compile(
+            r"^\s*func\s+(?:\([^)]*\)\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*\(",
+            re.M,
+        ),
+        re.compile(r"^\s*type\s+([A-Za-z_][A-Za-z0-9_]*)\b", re.M),
+    ),
+    "js": (
+        re.compile(
+            r"^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?"
+            r"function\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\(",
+            re.M,
+        ),
+        re.compile(
+            r"^\s*(?:export\s+)?(?:default\s+)?class\s+([A-Za-z_$][A-Za-z0-9_$]*)\b",
+            re.M,
+        ),
+        re.compile(
+            r"^\s*export\s+(?:const|let|var|type|interface)\s+"
+            r"([A-Za-z_$][A-Za-z0-9_$]*)\b",
+            re.M,
+        ),
+    ),
+}
+for _ext in ("mjs", "cjs", "ts", "tsx", "jsx"):
+    _SYM_PATTERNS[_ext] = _SYM_PATTERNS["js"]
+
+
+def _ident_tokens(text):
+    out = []
+    for raw_tok in re.findall(r"[A-Za-z0-9]+", text):
+        parts = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", raw_tok).lower().split()
+        for tok in parts:
+            if len(tok) >= 2 and tok not in _STOPWORDS and tok not in out:
+                out.append(tok)
+        low = raw_tok.lower()
+        if len(low) >= 2 and low not in _STOPWORDS and low not in out:
+            out.append(low)
+    return out
+
+
+def _is_test_token(tok):
+    low = tok.lower()
+    return low in _TEST_TOKENS or _TEST_CODE_TOKEN_RE.fullmatch(low) is not None
+
+
+def _is_test_path(rel):
+    parts = rel.lower().split("/")
+    base = parts[-1]
+    for seg in parts[:-1]:
+        if seg in ("test", "tests", "__tests__", "testdata", "fixtures", "examples", "e2e"):
+            return True
+    if ".invalid." in base:
+        return True
+    if base.startswith(("test_", "tests.")):
+        return True
+    if base.endswith(("_test.go", "_test.py", "_tests.py", "_test.rs", "_tests.rs")):
+        return True
+    if base.endswith((
+        ".test.js", ".test.mjs", ".test.cjs", ".test.ts",
+        ".spec.js", ".spec.mjs", ".spec.cjs", ".spec.ts",
+    )):
+        return True
+    return False
+
+
+def _extract_symbols_and_docs(rel, suffix, raw):
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return [], []
+    ext = suffix.lower()
+    scan_text = text
+    if ext == "rs":
+        cfg_test = re.search(r"#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]", text)
+        if cfg_test is not None:
+            scan_text = text[:cfg_test.start()]
+    syms = []
+    for pat in _SYM_PATTERNS.get(ext, ()):
+        for match in pat.finditer(scan_text):
+            name = match.group(1)
+            if name in ("main", "new", "default", "fmt", "drop", "from", "into", "init"):
+                continue
+            if len(name) < 3 or (name.startswith("_") and not name.startswith("__")):
+                continue
+            if name not in syms:
+                syms.append(name)
+    doc_lines = []
+    lines = scan_text.splitlines()[:80]
+    if ext in ("md", "markdown", "txt"):
+        for line in lines[:40]:
+            s = line.strip()
+            if s.startswith("#") or (len(doc_lines) < 4 and s and not s.startswith("```")):
+                doc_lines.append(s)
+    elif ext == "py":
+        in_doc = False
+        for line in lines[:35]:
+            s = line.strip()
+            if not in_doc and (s.startswith('"""') or s.startswith("'''")):
+                doc_lines.append(s.strip("\"'"))
+                if s.count('"""') == 1 and s.count("'''") == 0:
+                    in_doc = True
+                elif s.count("'''") == 1 and s.count('"""') == 0:
+                    in_doc = True
+            elif in_doc:
+                doc_lines.append(s.strip("\"'"))
+                if '"""' in s or "'''" in s:
+                    break
+            elif s.startswith("#") and not s.startswith("#!"):
+                doc_lines.append(s.lstrip("# "))
+    elif ext in ("rs", "go", "js", "mjs", "cjs", "ts"):
+        for line in lines[:40]:
+            s = line.strip()
+            if s.startswith(("!", "//", "/*", "*")):
+                doc_lines.append(s.lstrip("!/ *"))
+            elif s and not s.startswith(("#", "package ", "import ", "use ", "mod ")):
+                break
+    elif ext in ("yml", "yaml", "sh", "toml"):
+        for line in lines[:25]:
+            s = line.strip()
+            if s.startswith("#") and not s.startswith("#!"):
+                doc_lines.append(s.lstrip("# "))
+            elif ext in ("yml", "yaml") and s.startswith("name:"):
+                doc_lines.append(s[5:].strip())
+    elif ext == "json" and rel.endswith(".schema.json"):
+        try:
+            obj = json.loads(text)
+            if isinstance(obj, dict):
+                for key in ("title", "description", "$id"):
+                    val = obj.get(key)
+                    if isinstance(val, str):
+                        doc_lines.append(val)
+        except ValueError:
+            pass
+    doc_tokens = _ident_tokens(" ".join(doc_lines))
+    return syms, doc_tokens
+
+
+def _build_search(rel, name, stem, trigger, suffix, raw):
+    is_test = _is_test_path(rel)
+    parts = [p for p in rel.split("/") if p]
+    dir_parts = parts[:-1]
+    if is_test:
+        test_trigs = []
+        test_kws = ["test"]
+        neg_terms = []
+        for tok in _ident_tokens(rel):
+            if _is_test_token(tok):
+                if tok not in test_trigs and len(test_trigs) < 12:
+                    test_trigs.append(tok[:64])
+                if tok not in test_kws and len(test_kws) < 24:
+                    test_kws.append(tok[:64])
+            elif tok not in neg_terms:
+                neg_terms.append(tok[:64])
+        if not test_trigs:
+            test_trigs.append("test")
+        if suffix and suffix not in test_kws and len(test_kws) < 24:
+            test_kws.append(suffix[:64])
+        search = {"triggers": test_trigs[:12], "keywords": test_kws[:24]}
+        if neg_terms:
+            phrase = " ".join(neg_terms)[:200]
+            if phrase:
+                search["exclusions"] = [phrase] * 12
+        return search
+
+    triggers = []
+    keywords = []
+    problem_names = []
+    tasks = []
+    questions = []
+
+    def add_trig(val):
+        val = val.strip()[:64]
+        if val and val not in triggers and len(triggers) < 12:
+            triggers.append(val)
+
+    def add_kw(val):
+        val = val.strip()[:64]
+        if val and val not in keywords and len(keywords) < 24:
+            keywords.append(val)
+
+    def add_prob(val):
+        val = val.strip()[:64]
+        if val and val not in problem_names and len(problem_names) < 5:
+            problem_names.append(val)
+
+    def add_task(val):
+        val = val.strip()[:200]
+        if val and val not in tasks and len(tasks) < 8:
+            tasks.append(val)
+
+    def add_q(val):
+        val = val.strip()[:200]
+        if val and val not in questions and len(questions) < 12:
+            questions.append(val)
+
+    is_mod_entry = stem.lower() in _GENERIC_STEMS
+    if not is_mod_entry:
+        add_trig(trigger)
+        if name != trigger:
+            add_trig(name)
+        for tok in _ident_tokens(stem):
+            add_trig(tok)
+            add_kw(tok)
+            add_prob(tok)
+    for seg in reversed(dir_parts):
+        for tok in _ident_tokens(seg):
+            add_trig(tok)
+            add_kw(tok)
+            add_prob(tok)
+            sing = _SINGULAR_MAP.get(tok)
+            if sing:
+                add_trig(sing)
+                add_kw(sing)
+                add_prob(sing)
+    if is_mod_entry:
+        add_trig(trigger)
+
+    if suffix:
+        add_kw(suffix)
+        if suffix == "md":
+            add_kw("guide")
+            add_kw("documentation")
+        elif suffix in ("yml", "yaml"):
+            add_kw("workflow")
+            add_kw("ci")
+    else:
+        add_kw("file")
+
+    if rel.endswith(".schema.json"):
+        base_schema = name[:-len(".schema.json")]
+        add_trig(base_schema)
+        add_trig(base_schema + " schema")
+        add_prob(base_schema + " schema")
+        add_kw("schema")
+
+    syms, doc_toks = _extract_symbols_and_docs(rel, suffix, raw)
+    is_submod_entry = stem.lower() in ("mod", "__init__", "index")
+    is_overview_doc = stem.lower() in ("readme", "lib", "main")
+    if is_submod_entry:
+        for sym in syms:
+            for stok in _ident_tokens(sym):
+                add_trig(stok)
+                add_kw(stok)
+                add_prob(stok)
+        for dtok in doc_toks[:64]:
+            add_trig(dtok)
+            add_kw(dtok)
+            add_prob(dtok)
+    elif not is_overview_doc and suffix.lower() in ("md", "markdown", "yml", "yaml", "json"):
+        for dtok in doc_toks[:8]:
+            add_trig(dtok)
+            add_kw(dtok)
+            add_prob(dtok)
+    for sym in syms:
+        add_trig(sym)
+        add_kw(sym)
+        add_prob(sym)
+        for stok in _ident_tokens(sym):
+            add_kw(stok)
+    for dtok in doc_toks[:24]:
+        add_kw(dtok)
+        if not is_overview_doc:
+            add_prob(dtok)
+
+    concept_words = []
+    for seg in dir_parts:
+        for tok in _ident_tokens(seg):
+            if tok not in concept_words:
+                concept_words.append(tok)
+            sing = _SINGULAR_MAP.get(tok)
+            if sing and sing not in concept_words:
+                concept_words.append(sing)
+    if not is_mod_entry:
+        for tok in _ident_tokens(stem):
+            if tok not in concept_words:
+                concept_words.append(tok)
+    if not is_overview_doc:
+        for sym in syms[:12]:
+            for stok in _ident_tokens(sym):
+                if stok not in concept_words:
+                    concept_words.append(stok)
+        for dtok in doc_toks[:64]:
+            if dtok not in concept_words:
+                concept_words.append(dtok)
+    if concept_words:
+        phrase = " ".join(concept_words[:24])
+        add_task(phrase)
+        add_q(phrase)
+    if syms:
+        for chunk_start in range(0, min(len(syms), 64), 8):
+            chunk = syms[chunk_start:chunk_start + 8]
+            sym_phrase = " ".join(chunk)
+            add_task(sym_phrase)
+            add_q(sym_phrase)
+
+    if not triggers:
+        triggers.append(trigger)
+    if not keywords:
+        keywords.append(suffix or "file")
+
+    search = {"triggers": triggers[:12], "keywords": keywords[:24]}
+    if problem_names:
+        search["problem_names"] = problem_names[:5]
+    if tasks:
+        search["tasks"] = tasks[:8]
+    if questions:
+        search["questions"] = questions[:12]
+    return search
+
+
 def compile_material(root, paths, *, corpus, ids, schema, validate):
     """Compile validated canonical nodes plus the in-memory lookup."""
     if CORPUS_PATTERN.fullmatch(corpus) is None:
@@ -229,7 +585,8 @@ def compile_material(root, paths, *, corpus, ids, schema, validate):
         width = len(corpus.encode("utf-8")) + 1 + len(ident.encode("utf-8"))
         if width > MAX_COMPOSITE:
             raise RouterError("Router error: id width overflow for %s" % rel)
-        digest = hashlib.sha256(_safe_read(root, rel)).hexdigest()
+        raw = _safe_read(root, rel)
+        digest = hashlib.sha256(raw).hexdigest()
         name = rel.rsplit("/", 1)[-1]
         if not 1 <= len(name) <= 240:
             raise RouterError("Router error: bad title length for %s" % rel)
@@ -241,6 +598,7 @@ def compile_material(root, paths, *, corpus, ids, schema, validate):
         if not trigger:
             raise RouterError("Router error: empty trigger for %s" % rel)
         suffix = name.rsplit(".", 1)[1] if "." in name else ""
+        search = _build_search(rel, name, stem, trigger, suffix, raw)
         node = {
             "schema": SCHEMA_NAME,
             "id": ident,
@@ -249,7 +607,7 @@ def compile_material(root, paths, *, corpus, ids, schema, validate):
             "title": name,
             "purpose": purpose,
             "anchors": [{"a": "file", "role": "section"}],
-            "search": {"triggers": [trigger], "keywords": [suffix or "file"]},
+            "search": search,
             "status": "active",
             "source_sha256": digest,
         }

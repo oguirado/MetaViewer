@@ -895,6 +895,88 @@ class RouterIndexTests(unittest.TestCase):
         twice = self._run_cli(root, "--check", "--check", extra_env=env)
         self.assertEqual(twice.returncode, 0, twice.stderr)
 
+    def test_product_source_ranked_above_tests_and_symbol_extraction(self):
+        files = {
+            "core/src/admission/mod.rs": (
+                "//! Capsule admission control and lifecycle state machine.\n"
+                "pub struct AdmissionGate {}\n"
+                "pub fn evaluate_admission_control() {}\n"
+                "#[cfg(test)]\n"
+                "mod tests {\n"
+                "    fn helper_only_in_cfg_test() {}\n"
+                "}\n"
+            ),
+            "daemon-adapter/internal/capsule/liveness_test.go": (
+                "package capsule\nfunc TestAdmissionControlGo() {}\n"
+            ),
+            "ui/test/admission_control.test.js": (
+                "export function testAdmissionControlUi() {}\n"
+            ),
+            "tests/e2e/ac04_control.test.js": (
+                "// e2e control test\n"
+            ),
+        }
+        for idx in range(10):
+            files["tests/test_admission_control_%02d.py" % idx] = (
+                '"""Admission control test %02d."""\n'
+                "def test_admission_control_%02d():\n"
+                "    pass\n" % (idx, idx)
+            )
+        root, _env = self._tree(files)
+        mod = self._load_mod(root)
+        schema = json.loads(
+            (root / "router/kit/standards/schemas/ctx.node.v2.schema.json").read_text()
+        )
+        validate = self._load_validate(root)
+        sources = sorted(
+            p for p in (root / "bin" / "manifest.bin").read_bytes().decode("utf-8").split("\0")
+            if p and not mod._is_generated(p)
+        )
+        ids = mod._derive_ids(sources, "metaviewer")
+        material = mod.compile_material(
+            root, sources, corpus="metaviewer", ids=ids, schema=schema, validate=validate
+        )
+        rows_by_path = {}
+        for line in material.nodes_jsonl.decode("utf-8").splitlines():
+            if line.strip():
+                row = json.loads(line)
+                rel = row["purpose"][len("Routed repository file "):]
+                rows_by_path[rel] = row
+
+        # Symbol extraction: tools/router_index.py symbols are indexed; cfg(test) symbols are not.
+        router_search = rows_by_path["tools/router_index.py"]["search"]
+        router_terms = " ".join(
+            router_search.get("triggers", [])
+            + router_search.get("keywords", [])
+            + router_search.get("tasks", [])
+            + router_search.get("questions", [])
+        )
+        self.assertIn("check_mount_freshness", router_terms)
+        self.assertIn("compile_material", router_terms)
+
+        adm_search = rows_by_path["core/src/admission/mod.rs"]["search"]
+        adm_terms = " ".join(
+            adm_search.get("triggers", [])
+            + adm_search.get("keywords", [])
+            + adm_search.get("tasks", [])
+            + adm_search.get("questions", [])
+        )
+        self.assertIn("admission", adm_terms)
+        self.assertIn("control", adm_terms)
+        self.assertIn("evaluate_admission_control", adm_terms)
+        self.assertNotIn("helper_only_in_cfg_test", adm_terms)
+
+        # Test paths are demoted and carry exclusions for non-test path concepts.
+        for test_rel in (
+            "tests/test_admission_control_00.py",
+            "daemon-adapter/internal/capsule/liveness_test.go",
+            "ui/test/admission_control.test.js",
+        ):
+            self.assertTrue(mod._is_test_path(test_rel), test_rel)
+            t_search = rows_by_path[test_rel]["search"]
+            self.assertNotIn("admission", t_search["triggers"])
+            self.assertTrue(t_search.get("exclusions"), test_rel)
+
 
 if __name__ == "__main__":
     unittest.main()
