@@ -30,8 +30,6 @@ import subprocess
 import tempfile
 import unittest
 
-import yaml
-
 
 ROOT = Path(__file__).resolve().parents[2]
 CI_YML = ROOT / ".github" / "workflows" / "ci.yml"
@@ -193,9 +191,215 @@ def validate_receipt_artifact(receipt: dict, expected_gate_id: str, expected_pla
     return errors
 
 
+def _unquote_yaml_scalar(value: str) -> str:
+    val = value.strip()
+    if not val.startswith(('"', "'")):
+        val = re.sub(r"\s+#.*$", "", val).strip()
+    if len(val) >= 2 and val[0] == val[-1] and val[0] in ('"', "'"):
+        return val[1:-1]
+    return val
+
+
+def _load_workflow_doc(ci_text: str) -> dict:
+    """Parse the jobs hierarchy of ci.yml using only the Python standard library."""
+    lines = ci_text.splitlines()
+    try:
+        jobs_start = next(i for i, line in enumerate(lines) if line.strip() == "jobs:" and not line.startswith(" "))
+    except StopIteration:
+        return {}
+    jobs: dict[str, dict] = {}
+    i = jobs_start + 1
+    n = len(lines)
+    while i < n:
+        line = lines[i]
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            i += 1
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if indent == 0:
+            break
+        m_job = re.match(r"^  ([\w-]+):\s*$", line)
+        if not m_job:
+            i += 1
+            continue
+        job_id = m_job.group(1)
+        job: dict = {}
+        jobs[job_id] = job
+        i += 1
+        while i < n:
+            jline = lines[i]
+            jstrip = jline.strip()
+            if not jstrip or jstrip.startswith("#"):
+                i += 1
+                continue
+            jindent = len(jline) - len(jline.lstrip(" "))
+            if jindent <= 2:
+                break
+            if jindent == 4 and ":" in jstrip:
+                key, rest = jstrip.split(":", 1)
+                key = key.strip()
+                rest = rest.strip()
+                if key in ("runs-on", "if"):
+                    job[key] = _unquote_yaml_scalar(rest)
+                    i += 1
+                elif key == "needs" and rest.startswith("[") and rest.endswith("]"):
+                    job["needs"] = [
+                        _unquote_yaml_scalar(item)
+                        for item in rest[1:-1].split(",")
+                        if item.strip()
+                    ]
+                    i += 1
+                elif key == "outputs" and not rest:
+                    outputs: dict[str, str] = {}
+                    job["outputs"] = outputs
+                    i += 1
+                    while i < n:
+                        oline = lines[i]
+                        ostrip = oline.strip()
+                        if not ostrip or ostrip.startswith("#"):
+                            i += 1
+                            continue
+                        oindent = len(oline) - len(oline.lstrip(" "))
+                        if oindent <= 4:
+                            break
+                        if oindent == 6 and ":" in ostrip:
+                            okey, oval = ostrip.split(":", 1)
+                            outputs[okey.strip()] = _unquote_yaml_scalar(oval)
+                        i += 1
+                elif key == "strategy" and not rest:
+                    strategy: dict = {}
+                    job["strategy"] = strategy
+                    i += 1
+                    while i < n:
+                        sline = lines[i]
+                        sstrip = sline.strip()
+                        if not sstrip or sstrip.startswith("#"):
+                            i += 1
+                            continue
+                        sindent = len(sline) - len(sline.lstrip(" "))
+                        if sindent <= 4:
+                            break
+                        if sindent == 6 and sstrip.startswith("fail-fast:"):
+                            ff_val = _unquote_yaml_scalar(sstrip.split(":", 1)[1])
+                            strategy["fail-fast"] = True if ff_val == "true" else False if ff_val == "false" else ff_val
+                            i += 1
+                        elif sindent == 6 and sstrip == "matrix:":
+                            matrix: dict = {}
+                            strategy["matrix"] = matrix
+                            i += 1
+                        elif sindent == 8 and sstrip == "include:":
+                            include: list[dict[str, str]] = []
+                            strategy.setdefault("matrix", {})["include"] = include
+                            i += 1
+                            while i < n:
+                                mline = lines[i]
+                                mstrip = mline.strip()
+                                if not mstrip or mstrip.startswith("#"):
+                                    i += 1
+                                    continue
+                                mindent = len(mline) - len(mline.lstrip(" "))
+                                if mindent <= 8:
+                                    break
+                                if mindent == 10 and mstrip.startswith("- "):
+                                    item: dict[str, str] = {}
+                                    include.append(item)
+                                    first_kv = mstrip[2:].strip()
+                                    if ":" in first_kv:
+                                        mk, mv = first_kv.split(":", 1)
+                                        item[mk.strip()] = _unquote_yaml_scalar(mv)
+                                    i += 1
+                                elif mindent == 12 and ":" in mstrip and include:
+                                    mk, mv = mstrip.split(":", 1)
+                                    include[-1][mk.strip()] = _unquote_yaml_scalar(mv)
+                                    i += 1
+                                else:
+                                    i += 1
+                        else:
+                            i += 1
+                elif key == "steps" and not rest:
+                    steps: list[dict] = []
+                    job["steps"] = steps
+                    i += 1
+                    while i < n:
+                        stline = lines[i]
+                        ststrip = stline.strip()
+                        if not ststrip or ststrip.startswith("#"):
+                            i += 1
+                            continue
+                        stindent = len(stline) - len(stline.lstrip(" "))
+                        if stindent <= 4:
+                            break
+                        if stindent == 6 and ststrip.startswith("- "):
+                            step: dict = {}
+                            steps.append(step)
+                            first_kv = ststrip[2:].strip()
+                            if ":" in first_kv:
+                                sk, sv = first_kv.split(":", 1)
+                                step[sk.strip()] = _unquote_yaml_scalar(sv)
+                            i += 1
+                            while i < n:
+                                fline = lines[i]
+                                fstrip = fline.strip()
+                                if not fstrip or fstrip.startswith("#"):
+                                    i += 1
+                                    continue
+                                findent = len(fline) - len(fline.lstrip(" "))
+                                if findent <= 6:
+                                    break
+                                if findent == 8 and ":" in fstrip:
+                                    fk, fv = fstrip.split(":", 1)
+                                    fk = fk.strip()
+                                    fv = fv.strip()
+                                    if fk == "run" and fv == "|":
+                                        i += 1
+                                        run_lines: list[str] = []
+                                        while i < n:
+                                            rline = lines[i]
+                                            if not rline.strip():
+                                                run_lines.append("")
+                                                i += 1
+                                                continue
+                                            rindent = len(rline) - len(rline.lstrip(" "))
+                                            if rindent < 10:
+                                                break
+                                            run_lines.append(rline[10:])
+                                            i += 1
+                                        step["run"] = "\n".join(run_lines) + "\n"
+                                    elif fk == "env" and not fv:
+                                        env_map: dict[str, str] = {}
+                                        step["env"] = env_map
+                                        i += 1
+                                        while i < n:
+                                            eline = lines[i]
+                                            estrip = eline.strip()
+                                            if not estrip or estrip.startswith("#"):
+                                                i += 1
+                                                continue
+                                            eindent = len(eline) - len(eline.lstrip(" "))
+                                            if eindent <= 8:
+                                                break
+                                            if eindent == 10 and ":" in estrip:
+                                                ek, ev = estrip.split(":", 1)
+                                                env_map[ek.strip()] = _unquote_yaml_scalar(ev)
+                                            i += 1
+                                    else:
+                                        step[fk] = _unquote_yaml_scalar(fv)
+                                        i += 1
+                                else:
+                                    i += 1
+                        else:
+                            i += 1
+                else:
+                    i += 1
+            else:
+                i += 1
+    return {"jobs": jobs}
+
+
 def validate_ci_counts_and_js_sharding(ci_text: str) -> None:
     """Assert E2E-U16: per-gate counts as CI artifacts exactly-once and js leg sharded."""
-    doc = yaml.safe_load(ci_text)
+    doc = _load_workflow_doc(ci_text)
     if not isinstance(doc, dict) or "jobs" not in doc:
         raise AssertionError("ci.yml missing top-level jobs mapping")
     jobs = doc["jobs"]
@@ -300,7 +504,7 @@ def validate_red_blocks_main(ci_text: str, laws_text: str) -> None:
         raise AssertionError("ci.yml header missing optional build-only non-required declaration")
 
     # 3. Verify ci-required job structure in ci.yml.
-    doc = yaml.safe_load(ci_text)
+    doc = _load_workflow_doc(ci_text)
     jobs = doc.get("jobs") or {}
     if "ci-required" not in jobs:
         raise AssertionError("ci.yml missing ci-required job")
@@ -344,6 +548,10 @@ def validate_red_blocks_main(ci_text: str, laws_text: str) -> None:
         raise AssertionError(
             f"Aggregate required results check calls mismatch: expected {EXPECTED_REQUIRED_JOBS}, got {checked_names}"
         )
+    if "FAIL required receipts: none collected" not in agg_run:
+        raise AssertionError("Aggregate required results must fail closed when no receipt is collected")
+    if "FAIL required receipt missing:" not in agg_run:
+        raise AssertionError("Aggregate required results must fail closed when a required receipt is missing")
     if "exit $fail" not in agg_run:
         raise AssertionError("Aggregate required results must terminate with `exit $fail`")
 
@@ -358,7 +566,7 @@ class CiCountsAndRedBlocksMainTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.ci_text = CI_YML.read_text(encoding="utf-8")
         cls.laws_text = LAWS_MD.read_text(encoding="utf-8")
-        cls.ci_doc = yaml.safe_load(cls.ci_text)
+        cls.ci_doc = _load_workflow_doc(cls.ci_text)
 
     def _run_finish_gate_sandbox(
         self,
@@ -606,15 +814,105 @@ class CiCountsAndRedBlocksMainTests(unittest.TestCase):
         ]
         self.assertEqual(len(agg_steps), 1)
         raw_script = agg_steps[0]["run"]
+        wf_sha = hashlib.sha256(self.ci_text.encode("utf-8")).hexdigest()
 
-        def run_aggregator(results: dict[str, str], distribution_status: str = "success") -> tuple[int, str, str]:
+        def make_receipt(
+            gate_id: str,
+            *,
+            outcome: str = "PASS",
+            rc: int | None = 0,
+            platform: str = "x64",
+            accepted: bool = True,
+            count_source: str = "parsed:unittest",
+            passed: int | None = 5,
+            failed: int | None = 0,
+            skipped: int | None = 0,
+        ) -> dict:
+            return {
+                "schema": "gate_receipt/v1",
+                "gate_id": gate_id,
+                "leg": gate_id,
+                "profile": "W0",
+                "owner": "W0-CI-MATRIX",
+                "issuer": f"CI/{gate_id}/1 [VM]",
+                "scope": {
+                    "unit": "W0-CI-MATRIX",
+                    "platform": platform,
+                    "feature": gate_id,
+                    "artifact": f"{gate_id}.receipt.json",
+                },
+                "argv": ["python3", "-m", "unittest"],
+                "cwd": "/workspace",
+                "rc": rc,
+                "outcome": outcome,
+                "reason": f"{gate_id} {outcome}",
+                "identities": {
+                    "gate_revision": "a" * 40,
+                    "instrument_sha256": "b" * 64,
+                    "sanitized_log_sha256": "c" * 64,
+                    "configuration_sha256": wf_sha,
+                    "log_sha256": "e" * 64,
+                    "fixture_sha256": ["b" * 64],
+                },
+                "product_identity": None,
+                "assertions": [
+                    {
+                        "id": "exit-status",
+                        "expected": "rc 0",
+                        "observed": "unexecuted" if rc is None else f"rc {rc}",
+                        "accepted": accepted,
+                    }
+                ],
+                "counts": {
+                    "passed": passed,
+                    "failed": failed,
+                    "skipped": skipped,
+                    "source": count_source,
+                },
+            }
+
+        def run_aggregator(
+            results: dict[str, str],
+            distribution_status: str = "success",
+            *,
+            platform: str = "x64",
+            receipts: dict[str, dict] | None = None,
+            package_receipt: str | None = None,
+            required_receipts: str | None = "budgets",
+            receipts_dir_override: str | None = None,
+        ) -> tuple[int, str, str]:
             rendered = raw_script.replace("${{ job.status }}", distribution_status)
             for job in EXPECTED_REQUIRED_JOBS:
                 rendered = rendered.replace(f"${{{{ needs.{job}.result }}}}", results[job])
             with tempfile.TemporaryDirectory(prefix="mv-ci-req-") as tmp:
-                summary = Path(tmp) / "summary.md"
+                td = Path(tmp)
+                summary = td / "summary.md"
                 summary.write_text("", encoding="utf-8")
-                env = dict(os.environ, GITHUB_STEP_SUMMARY=str(summary))
+                runner_temp = td / "runner_temp"
+                evdir = runner_temp / "metaviewer-ci" / "ci-required" / platform
+                evdir.mkdir(parents=True, exist_ok=True)
+                planted = {"budgets": make_receipt("budgets", platform=platform)} if receipts is None else receipts
+                for r_name, r_obj in planted.items():
+                    fname = r_name if r_name.endswith(".receipt.json") else f"{r_name}.receipt.json"
+                    (evdir / fname).write_text(json.dumps(r_obj), encoding="utf-8")
+                env = dict(os.environ)
+                env.pop("MV_REQUIRED_RECEIPTS_DIR", None)
+                env.pop("MV_REQUIRED_RECEIPTS", None)
+                env.pop("PACKAGE_RECEIPT", None)
+                env.update(
+                    {
+                        "GITHUB_STEP_SUMMARY": str(summary),
+                        "PLATFORM": platform,
+                        "RUNNER_TEMP": str(runner_temp),
+                        "GIT_CONFIG_GLOBAL": "/dev/null",
+                    }
+                )
+                if package_receipt is not None:
+                    env["PACKAGE_RECEIPT"] = package_receipt
+                if required_receipts is not None:
+                    env["MV_REQUIRED_RECEIPTS"] = required_receipts
+                if receipts_dir_override is not None:
+                    env["MV_REQUIRED_RECEIPTS_DIR"] = receipts_dir_override
                 proc = subprocess.run(
                     ["bash", "-e", "-u", "-o", "pipefail", "-c", rendered],
                     capture_output=True,
@@ -625,9 +923,128 @@ class CiCountsAndRedBlocksMainTests(unittest.TestCase):
                 return proc.returncode, proc.stdout + proc.stderr, summary.read_text(encoding="utf-8")
 
         all_green = {job: "success" for job in EXPECTED_REQUIRED_JOBS}
-        rc, out, summary = run_aggregator(all_green, "success")
-        self.assertEqual(rc, 0, out)
-        self.assertIn("outcome PASS: every required job succeeded", summary)
+        for platform in ("x64", "arm64"):
+            rc, out, summary = run_aggregator(all_green, "success", platform=platform)
+            self.assertEqual(rc, 0, out)
+            self.assertIn("PASS required receipt budgets.receipt.json", out)
+            self.assertIn("outcome PASS: every required job succeeded", summary)
+
+        # Receipt aggregate probes across both required legs (x64, arm64):
+        # 1. All required PASS (passes):
+        req_set = ("budgets", "package", "rust", "js")
+        req_csv = ",".join(req_set)
+        for platform in ("x64", "arm64"):
+            full_receipts = {
+                "budgets": make_receipt("budgets", platform=platform),
+                "rust": make_receipt("rust", platform=platform),
+                "js": make_receipt("js", platform=platform),
+            }
+            pkg_rec = json.dumps(make_receipt("package", platform=platform))
+            ok_rc, ok_out, ok_sum = run_aggregator(
+                all_green,
+                "success",
+                platform=platform,
+                receipts=full_receipts,
+                package_receipt=pkg_rec,
+                required_receipts=req_csv,
+            )
+            self.assertEqual(ok_rc, 0, ok_out)
+            self.assertIn("outcome PASS: every required job succeeded", ok_sum)
+
+            # 2. Empty set (fails):
+            empty_rc, empty_out, empty_sum = run_aggregator(
+                all_green,
+                "success",
+                platform=platform,
+                receipts={},
+                package_receipt="",
+                required_receipts=req_csv,
+            )
+            self.assertNotEqual(empty_rc, 0)
+            self.assertIn("FAIL required receipts: none collected", empty_out)
+            self.assertIn("outcome FAIL: a required job failed", empty_sum)
+
+            # Nonexistent MV_REQUIRED_RECEIPTS_DIR also fails closed:
+            bad_dir_rc, bad_dir_out, _ = run_aggregator(
+                all_green,
+                "success",
+                platform=platform,
+                receipts={},
+                package_receipt="",
+                required_receipts=req_csv,
+                receipts_dir_override="/nonexistent-mv-receipts-dir",
+            )
+            self.assertNotEqual(bad_dir_rc, 0)
+            self.assertIn("FAIL required receipts dir: /nonexistent-mv-receipts-dir", bad_dir_out)
+
+            # 3. One missing (fails and prints which):
+            for missing_id in req_set:
+                partial_receipts = {
+                    k: v for k, v in full_receipts.items() if k != missing_id
+                }
+                partial_pkg = "" if missing_id == "package" else pkg_rec
+                miss_rc, miss_out, miss_sum = run_aggregator(
+                    all_green,
+                    "success",
+                    platform=platform,
+                    receipts=partial_receipts,
+                    package_receipt=partial_pkg,
+                    required_receipts=req_csv,
+                )
+                self.assertNotEqual(miss_rc, 0, f"missing required receipt {missing_id} must fail")
+                self.assertIn(f"FAIL required receipt missing: {missing_id}", miss_out)
+                self.assertIn("outcome FAIL: a required job failed", miss_sum)
+
+            # 4. One FAIL or BLOCKED (fails and prints which):
+            fail_receipts = dict(
+                full_receipts,
+                rust=make_receipt(
+                    "rust",
+                    outcome="FAIL",
+                    rc=1,
+                    platform=platform,
+                    accepted=False,
+                    passed=4,
+                    failed=1,
+                ),
+            )
+            f_rc, f_out, f_sum = run_aggregator(
+                all_green,
+                "success",
+                platform=platform,
+                receipts=fail_receipts,
+                package_receipt=pkg_rec,
+                required_receipts=req_csv,
+            )
+            self.assertNotEqual(f_rc, 0)
+            self.assertIn("FAIL required receipt rust.receipt.json: ['non-PASS outcome: FAIL']", f_out)
+            self.assertIn("outcome FAIL: a required job failed", f_sum)
+
+            blocked_receipts = dict(
+                full_receipts,
+                js=make_receipt(
+                    "js",
+                    outcome="BLOCKED",
+                    rc=None,
+                    platform=platform,
+                    accepted=False,
+                    count_source="unexecuted",
+                    passed=None,
+                    failed=None,
+                    skipped=None,
+                ),
+            )
+            b_rc, b_out, b_sum = run_aggregator(
+                all_green,
+                "success",
+                platform=platform,
+                receipts=blocked_receipts,
+                package_receipt=pkg_rec,
+                required_receipts=req_csv,
+            )
+            self.assertNotEqual(b_rc, 0)
+            self.assertIn("FAIL required receipt js.receipt.json: ['non-PASS outcome: BLOCKED']", b_out)
+            self.assertIn("outcome FAIL: a required job failed", b_sum)
 
         # Negative probe across every required job: any red/cancelled/skipped required job blocks ci-required.
         for failing_job in EXPECTED_REQUIRED_JOBS:
@@ -654,6 +1071,8 @@ class CiCountsAndRedBlocksMainTests(unittest.TestCase):
             git_env = {
                 "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
                 "HOME": str(tmp),
+                "GIT_CONFIG_GLOBAL": "/dev/null",
+                "GIT_CONFIG_NOSYSTEM": "1",
                 "GIT_AUTHOR_NAME": "Maintainer",
                 "GIT_AUTHOR_EMAIL": "maintainer@example.invalid",
                 "GIT_COMMITTER_NAME": "Maintainer",

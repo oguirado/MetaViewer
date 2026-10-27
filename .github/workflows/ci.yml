@@ -2698,6 +2698,7 @@ jobs:
         env:
           PLATFORM: ${{ matrix.platform }}
           PACKAGE_RECEIPT: ${{ matrix.platform == 'x64' && needs.package.outputs.receipt_x64 || needs.package.outputs.receipt_arm64 }}
+          MV_REQUIRED_RECEIPTS: budgets
         run: |
           fail=0
           check_distribution="${{ job.status }}"
@@ -2720,16 +2721,24 @@ jobs:
           check e2e "${{ needs.e2e.result }}"
           check novac "${{ needs.novac.result }}"
           check package "${{ needs.package.result }}"
-          if [ -n "${PACKAGE_RECEIPT:-}" ] || [ -n "${MV_REQUIRED_RECEIPTS_DIR:-}" ] || [ -n "${RUNNER_TEMP:-}" ]; then
-            python3 - <<'PYEOF' || fail=1
+          python3 - <<'PYEOF' || fail=1
           import json, os, pathlib, re, sys
           HEX = re.compile(r'^[0-9a-f]{64}$')
           SHA = re.compile(r'^[0-9a-f]{40}$')
           FORBIDDEN = {'timestamp', 'started_at', 'finished_at', 'duration_ms', 'pid', 'ppid', 'hostname', 'runner_name', 'temp_dir'}
-          def check_receipt(r):
+          def norm_id(s):
+              s = str(s).strip()
+              if s.endswith('.receipt.json'):
+                  return s[:-13]
+              if s.endswith('.json'):
+                  return s[:-5]
+              return s
+          def check_receipt(r, name=''):
               if not isinstance(r, dict): return ['not an object']
               if FORBIDDEN & set(r): return ['forbidden volatile keys']
               if r.get('schema') != 'gate_receipt/v1': return ['bad schema']
+              if name.endswith('.receipt.json') and norm_id(r.get('gate_id', '')) != norm_id(name):
+                  return ['mismatched gate_id: ' + str(r.get('gate_id'))]
               if r.get('outcome') not in ('PASS', 'FAIL', 'TIMEOUT', 'BLOCKED'): return ['bad outcome']
               ident = r.get('identities')
               if not isinstance(ident, dict): return ['bad identities']
@@ -2739,7 +2748,7 @@ jobs:
               counts = r.get('counts')
               if not isinstance(counts, dict): return ['bad counts']
               src = counts.get('source', '')
-              if str(src).startswith('parsed:') and (type(counts.get('passed')) is not int or counts.get('passed', 0) <= 0):
+              if r.get('outcome') == 'PASS' and str(src).startswith('parsed:') and (type(counts.get('passed')) is not int or counts.get('passed', 0) <= 0):
                   return ['parsed count must have passed > 0']
               if r.get('outcome') == 'PASS' and r.get('rc') != 0: return ['PASS requires rc 0']
               if r.get('outcome') != 'PASS': return ['non-PASS outcome: ' + str(r.get('outcome'))]
@@ -2755,9 +2764,15 @@ jobs:
               except Exception as exc:
                   print(f'FAIL required receipt package: {exc}')
                   sys.exit(1)
-          for base in [os.environ.get('MV_REQUIRED_RECEIPTS_DIR', '').strip(),
-                       os.path.join(os.environ['RUNNER_TEMP'], 'metaviewer-ci', 'ci-required', os.environ.get('PLATFORM', 'x64'))
-                       if os.environ.get('RUNNER_TEMP') else '']:
+          req_dir = os.environ.get('MV_REQUIRED_RECEIPTS_DIR', '').strip()
+          if req_dir and not os.path.isdir(req_dir):
+              print(f'FAIL required receipts dir: {req_dir}')
+              sys.exit(1)
+          runner_dir = (
+              os.path.join(os.environ['RUNNER_TEMP'], 'metaviewer-ci', 'ci-required', os.environ.get('PLATFORM', 'x64'))
+              if os.environ.get('RUNNER_TEMP') else ''
+          )
+          for base in ([req_dir] if req_dir else [runner_dir]):
               if base and os.path.isdir(base):
                   for p in sorted(pathlib.Path(base).rglob('*.receipt.json')):
                       try:
@@ -2765,16 +2780,39 @@ jobs:
                       except Exception as exc:
                           print(f'FAIL required receipt {p.name}: {exc}')
                           sys.exit(1)
+          if not receipts:
+              print('FAIL required receipts: none collected')
+              sys.exit(1)
+          req_env = os.environ.get('MV_REQUIRED_RECEIPTS')
+          if req_env is not None:
+              required_ids = [norm_id(x) for x in re.split(r'[\s,]+', req_env.strip()) if x.strip()]
+              if not required_ids:
+                  print('FAIL required receipts: empty MV_REQUIRED_RECEIPTS')
+                  sys.exit(1)
+          elif not req_dir:
+              required_ids = ['budgets']
+          else:
+              required_ids = []
           errs = []
+          seen_ids = set()
           for name, rec in receipts:
-              e = check_receipt(rec)
+              if name == 'package':
+                  seen_ids.add('package')
+              if isinstance(rec, dict) and isinstance(rec.get('gate_id'), str) and rec.get('gate_id'):
+                  seen_ids.add(norm_id(rec['gate_id']))
+              e = check_receipt(rec, name)
               if e:
                   print(f'FAIL required receipt {name}: {e}')
                   errs.extend(e)
+              else:
+                  print(f'PASS required receipt {name}')
+          for req_id in required_ids:
+              if req_id not in seen_ids:
+                  print(f'FAIL required receipt missing: {req_id}')
+                  errs.append(f'missing:{req_id}')
           if errs:
               sys.exit(1)
           PYEOF
-          fi
           {
             echo "## ci-required [VM] rc $fail"
             if [ $fail -eq 0 ]; then echo "outcome PASS: every required job succeeded"; else echo "outcome FAIL: a required job failed"; fi

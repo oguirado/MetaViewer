@@ -176,7 +176,20 @@ class TestT7R2CReceiptIdentity(unittest.TestCase):
             tampered_zero_passed = valid_receipt()
             tampered_zero_passed["counts"]["passed"] = 0
 
-            for idx, bad_receipt in enumerate((tampered_outcome, tampered_schema, tampered_zero_passed)):
+            tampered_blocked = valid_receipt()
+            tampered_blocked["outcome"] = "BLOCKED"
+            tampered_blocked["rc"] = None
+            tampered_blocked["assertions"][0]["accepted"] = False
+            tampered_blocked["counts"] = {
+                "passed": None,
+                "failed": None,
+                "skipped": None,
+                "source": "unexecuted",
+            }
+
+            for idx, bad_receipt in enumerate(
+                (tampered_outcome, tampered_schema, tampered_zero_passed, tampered_blocked)
+            ):
                 with self.subTest(case=idx):
                     summary.write_text("", encoding="utf-8")
                     (receipts_dir / "unit.receipt.json").write_text(json.dumps(bad_receipt), encoding="utf-8")
@@ -196,6 +209,46 @@ class TestT7R2CReceiptIdentity(unittest.TestCase):
                     )
                     self.assertNotEqual(res_bad.returncode, 0)
                     self.assertIn("outcome FAIL: a required job failed", summary.read_text(encoding="utf-8"))
+
+            # Empty receipt set fails closed:
+            empty_dir = pathlib.Path(tmp) / "empty"
+            empty_dir.mkdir()
+            summary.write_text("", encoding="utf-8")
+            res_empty = subprocess.run(
+                ["bash", "-e", "-u", "-o", "pipefail", "-c", rendered],
+                cwd=ROOT,
+                env=dict(
+                    os.environ,
+                    GITHUB_STEP_SUMMARY=str(summary),
+                    PACKAGE_RECEIPT="",
+                    MV_REQUIRED_RECEIPTS_DIR=str(empty_dir),
+                ),
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            self.assertNotEqual(res_empty.returncode, 0)
+            self.assertIn("FAIL required receipts: none collected", res_empty.stdout + res_empty.stderr)
+
+            # Missing required receipt in MV_REQUIRED_RECEIPTS fails closed and prints which:
+            (receipts_dir / "unit.receipt.json").write_text(json.dumps(good), encoding="utf-8")
+            summary.write_text("", encoding="utf-8")
+            res_missing = subprocess.run(
+                ["bash", "-e", "-u", "-o", "pipefail", "-c", rendered],
+                cwd=ROOT,
+                env=dict(
+                    os.environ,
+                    GITHUB_STEP_SUMMARY=str(summary),
+                    PACKAGE_RECEIPT=json.dumps(good),
+                    MV_REQUIRED_RECEIPTS_DIR=str(receipts_dir),
+                    MV_REQUIRED_RECEIPTS="unit,rust",
+                ),
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            self.assertNotEqual(res_missing.returncode, 0)
+            self.assertIn("FAIL required receipt missing: rust", res_missing.stdout + res_missing.stderr)
 
     def test_arg_ci_6_laws_range_failure_writes_blocked_receipt_and_continues(self):
         """Regression test for ARG-ci-6: laws_range.py failure writes BLOCKED receipt and continues to remaining gates."""
