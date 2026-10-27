@@ -138,7 +138,7 @@ class RoundOneContracts(unittest.TestCase):
             environment = dict(os.environ)
             environment.setdefault('CARGO_TARGET_DIR', str(directory / 'target'))
             result = subprocess.run(
-                [cargo, 'run', '--offline', '--quiet', '--manifest-path', str(directory / 'Cargo.toml')],
+                [cargo, 'run', '--offline', '--ignore-rust-version', '--quiet', '--manifest-path', str(directory / 'Cargo.toml')],
                 input=''.join(json.dumps(value) + '\n' for _, value, _ in cases),
                 text=True, capture_output=True, env=environment, timeout=180)
             self.assertEqual(result.returncode, 0, result.stderr)

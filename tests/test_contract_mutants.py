@@ -368,6 +368,53 @@ class ContractMutantTests(unittest.TestCase):
                                     with self.assertRaises(ValidationError):
                                         validator.validate(mutant, schema)
 
+    def test_boundary_mutants_and_named_oracles(self):
+        """SW-0244 / SW-0064 named boundary mutants (exact-at vs 1-over) must be killed by validator."""
+        validator = Validator(ROOT / "contracts/v0.2")
+
+        # 1. maxProperties boundary mutant
+        schema_props = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
+            "maxProperties": 1
+        }
+        validator.validate({"a": 1}, schema_props)  # exact-at passes
+        with self.assertRaises(ValidationError):
+            validator.validate({"a": 1, "b": 2}, schema_props)  # 1-over fails
+
+        # 2. maxItems boundary mutant
+        schema_items = {
+            "type": "array",
+            "items": {"type": "integer"},
+            "maxItems": 2
+        }
+        validator.validate([1, 2], schema_items)  # exact-at passes
+        with self.assertRaises(ValidationError):
+            validator.validate([1, 2, 3], schema_items)  # 1-over fails
+
+        # 3. maxLength boundary mutant
+        schema_len = {
+            "type": "string",
+            "maxLength": 3
+        }
+        validator.validate("abc", schema_len)  # exact-at passes
+        with self.assertRaises(ValidationError):
+            validator.validate("abcd", schema_len)  # 1-over fails
+
+        # 4. minimum/maximum boundary mutant
+        schema_num = {
+            "type": "integer",
+            "minimum": 10,
+            "maximum": 20
+        }
+        validator.validate(10, schema_num)
+        validator.validate(20, schema_num)
+        with self.assertRaises(ValidationError):
+            validator.validate(9, schema_num)
+        with self.assertRaises(ValidationError):
+            validator.validate(21, schema_num)
+
 
 if __name__ == "__main__":
     unittest.main()
