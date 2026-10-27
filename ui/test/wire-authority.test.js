@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
 import {EventEmitter} from 'node:events';
-import {installAuthorityWire,WIRE_CHANNELS,createSettingsStore,deliverAuthorityFrame,createSideTerminalAdapter,nestedIdentity} from '../electron/authorityWire.js';
+import {installAuthorityWire,WIRE_CHANNELS,INTENT_OPS,createSettingsStore,deliverAuthorityFrame,createSideTerminalAdapter,nestedIdentity} from '../electron/authorityWire.js';
 import {createPreloadFacade,installPreload} from '../electron/preload.js';
 
 const surface={schema:'surface/v0.2',surface_id:'s1',kind:'browser',display:':1',geometry:{w:1,h:1},state:'active',visibility:'unfolded',control:'human',profile_id:'test'};
@@ -15,7 +15,7 @@ const verdict={schema:'action_verdict/v0.2',proposal_id:'p',decision:'admitted',
 const settings=JSON.stringify({scheme:'mv-light',density:'compact'});
 const spec={command:'luna',args:['--safe'],cols:80,rows:24};
 const calls={loadSettings:[],saveSettings:[settings],recordingDestination:[],nestedDepth:[],selfCapsuleId:[],
-  propose:['{"proposal_id":"p"}'],intent:['{"op":"take_control"}'],subscribeFrames:[],unsubscribeFrames:[],
+  propose:['{"proposal_id":"p"}'],intent:[JSON.stringify({schema:'ui_intent/v0.2',request_id:'r1',op:'take_control',params:{surface_id:'s1'}})],subscribeFrames:[],unsubscribeFrames:[],
   terminalEnabled:[true],terminalOpen:[spec]};
 async function fixture(t,env={}) {
   const root=await mkdtemp(join(tmpdir(),'wire-'));
@@ -240,10 +240,28 @@ test('intent allow-list still refuses other schema operations',async t=>{
 test('control intents retain their existing forwarding behavior',async t=>{
   const f=await fixture(t);
   for(const op of ['take_control','release_control']) {
-    const json=JSON.stringify({op});assert.equal(await f.call('intent',json),true);
+    const intent={schema:'ui_intent/v0.2',request_id:op,op,params:{surface_id:'s1'}};
+    const json=JSON.stringify(intent);assert.equal(await f.call('intent',json),true);
     assert.deepEqual(f.coreCalls.at(-1),{op:'intent',json});
   }
 });
+
+for(const op of ['take_control','release_control']) {
+  const intent={schema:'ui_intent/v0.2',request_id:'r1',op,params:{surface_id:'surface-1'}};
+  test(`${op}: bare op and malformed closed intent are refused with zero core calls`,async t=>{
+    const f=await fixture(t);
+    const bad=[{op},{...intent,extra:true},{...intent,schema:'ui_intent/v0.1'},
+      ...Object.keys(intent).map(key=>{const v={...intent};delete v[key];return v;}),
+      ...[null,[],{},{surface_id:'s',extra:true},{slot_id:'s'},
+        ...['','a'.repeat(129),'-surf','has space','é','a\n',1,null].map(surface_id=>({surface_id}))].map(params=>({...intent,params})),
+      ...['','bad id',1,null].map(request_id=>({...intent,request_id}))];
+    for(const value of bad) await assert.rejects(f.call('intent',JSON.stringify(value)),/INTENT/);
+    assert.deepEqual(f.coreCalls,[]);
+    const json=JSON.stringify(intent);
+    assert.equal(await f.call('intent',json),true);
+    assert.deepEqual(f.coreCalls,[{op:'intent',json}]);
+  });
+}
 
 for (const [op,params] of [
   ['hide',{slot_id:'cuk-ai-slot-s1'}], ['show',{slot_id:'s1'}],

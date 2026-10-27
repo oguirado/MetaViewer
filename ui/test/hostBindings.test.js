@@ -8,13 +8,13 @@ import { mkdtemp, mkdir, chmod, writeFile, rm, readFile } from 'node:fs/promises
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { createMainBindings } from '../electron/hostBindings.js';
+import { createMainBindings, INTENT_OPS as HOST_INTENT_OPS } from '../electron/hostBindings.js';
 import { loadMainBindings, bootProductionMain, ELECTRON_PIN, CHANNELS } from '../electron/main.js';
-import { deliverAuthorityFrame, WIRE_CHANNELS } from '../electron/authorityWire.js';
+import { deliverAuthorityFrame, WIRE_CHANNELS, INTENT_OPS as WIRE_INTENT_OPS, validateIntentBody } from '../electron/authorityWire.js';
 
 const surface = {schema:'surface/v0.2',surface_id:'s1',kind:'browser',display:':1',geometry:{w:1,h:1},state:'active',visibility:'unfolded',control:'agent',profile_id:'test'};
 const registration = component => ({endpoint:{component,instance:component+'-test'},hello:{schema:'hello/v0.2',contract_version:'v0.2',component,component_version:'0.1.1',component_commit:'a'.repeat(40),dependencies:[]}});
-async function fixture(t, {badHello=false,refuseIntent=false}={}) {
+async function fixture(t, {badHello=false,refuseIntent=false,layoutRefusalCode=null}={}) {
   const root=await mkdtemp(join(tmpdir(),'mv-host-'));
   const ram=await mkdtemp('/dev/shm/mv-host-');
   const config={session_id:'host-test',core:registration('core'),peers:[registration('ui')]};
@@ -28,9 +28,14 @@ async function fixture(t, {badHello=false,refuseIntent=false}={}) {
     buffer+=data;let offset;while((offset=buffer.indexOf('\n'))>=0){const env=JSON.parse(buffer.slice(0,offset));buffer=buffer.slice(offset+1);requests.push(env);
       if(env.body.schema==='hello/v0.2')send({...config.core.hello,...(badHello?{component_commit:'b'.repeat(40)}:{})});
       else if(env.body.schema==='surface_request/v0.2') { /* subscription has no reply */ }
-      else if(env.body.schema==='ui_intent/v0.2')send(refuseIntent
-        ? {schema:'action_verdict/v0.2',proposal_id:env.body.request_id,decision:'refused',reason_code:'POLICY',core_seq:1}
-        : {schema:'surface_event/v0.2',event:'state_changed',data:{surface:{...surface,control:env.body.op==='take_control'?'human':'agent',visibility:env.body.op==='fold'?'folded':'unfolded'}}});
+      else if(env.body.schema==='ui_intent/v0.2') {
+        const extended=['move','tab','float','hide','show'].includes(env.body.op);
+        if(refuseIntent) {
+          send({schema:'action_verdict/v0.2',proposal_id:env.body.request_id,decision:'refused',reason_code:'POLICY',core_seq:1});
+          if(extended && layoutRefusalCode) send({schema:'surface_event/v0.2',event:'error',data:{surface_id:env.body.params.slot_id,code:layoutRefusalCode,detail:env.body.request_id}});
+        } else if(extended) send(env.body);
+        else send({schema:'surface_event/v0.2',event:'state_changed',data:{surface:{...surface,control:env.body.op==='take_control'?'human':'agent',visibility:env.body.op==='fold'?'folded':'unfolded'}}});
+      }
       else send({schema:'action_verdict/v0.2',proposal_id:env.body.proposal_id,decision:'refused',reason_code:'POLICY',core_seq:1});
     }
   });});
@@ -181,3 +186,54 @@ for (const closeDuringStat of [true, false]) {
     assert.equal(socketStats, 2);
   });
 }
+
+test('authorityWire and hostBindings share the exact frozen intent operation table', () => {
+  assert.equal(HOST_INTENT_OPS, WIRE_INTENT_OPS);
+  assert.ok(Object.isFrozen(WIRE_INTENT_OPS));
+  assert.deepEqual(Object.keys(WIRE_INTENT_OPS).sort(), ['float', 'fold', 'hide', 'move', 'release_control', 'show', 'tab', 'take_control', 'unfold']);
+});
+
+test('hostBindings forwards every layout op with exact body and rejects bare/malformed ops before reaching core', async t => {
+  const f = await fixture(t);
+  const bindings = await createMainBindings({ ...f });
+  t.after(() => bindings.core.dispose());
+  const before = f.requests.length;
+  for (const op of Object.keys(WIRE_INTENT_OPS)) {
+    for (const bad of [{ op }, { schema: 'ui_intent/v0.2', request_id: 'r', op }, { schema: 'ui_intent/v0.2', request_id: 'r', op, params: {} }]) {
+      await assert.rejects(bindings.core.request({ op: 'intent', json: JSON.stringify(bad) }), /CORE_SEAMS_ABSENT/);
+    }
+  }
+  assert.equal(f.requests.length, before);
+  const layoutCases = [
+    ['hide', { slot_id: 'cuk-ai-slot-s1' }],
+    ['show', { slot_id: 's1' }],
+    ['move', { slot_id: 's1', group_id: 'group-2', index: 0 }],
+    ['tab', { slot_id: 's1', group_id: 'group-2', index: 255 }],
+    ['float', { slot_id: 's1', x_px: 0, y_px: 16383, width_px: 16384, height_px: 1 }],
+  ];
+  for (const [op, params] of layoutCases) {
+    const body = { schema: 'ui_intent/v0.2', request_id: `req-${op}`, op, params };
+    validateIntentBody(body);
+    assert.equal(await bindings.core.request({ op: 'intent', json: JSON.stringify(body) }), true);
+    assert.deepEqual(f.requests.at(-1).body, body);
+  }
+});
+
+test('core layout refusals propagate as typed errors across hostBindings', async t => {
+  for (const code of ['LAYOUT_UNKNOWN_SLOT', 'LAYOUT_ILLEGAL_TRANSITION', 'LAYOUT_INPUT_MODE_READ']) {
+    const f = await fixture(t, { refuseIntent: true, layoutRefusalCode: code });
+    const bindings = await createMainBindings({ ...f });
+    t.after(() => bindings.core.dispose());
+    for (const [op, params] of [
+      ['hide', { slot_id: 'cuk-ai-slot-s1' }],
+      ['show', { slot_id: 's1' }],
+      ['move', { slot_id: 's1', group_id: 'g1', index: 0 }],
+      ['tab', { slot_id: 's1', group_id: 'g1', index: 1 }],
+      ['float', { slot_id: 's1', x_px: 10, y_px: 20, width_px: 300, height_px: 200 }],
+    ]) {
+      const body = { schema: 'ui_intent/v0.2', request_id: `refuse-${code}-${op}`, op, params };
+      await assert.rejects(bindings.core.request({ op: 'intent', json: JSON.stringify(body) }), new RegExp(`^Error: ${code}$`));
+      assert.deepEqual(f.requests.at(-1).body, body);
+    }
+  }
+});

@@ -9,7 +9,8 @@
  * Bounds [TARGET, unit decision]: 1 MiB wire/config, 64 surfaces/pending calls,
  * 64 MiB frame, 4096 pixels per axis, 3 s request/hello deadline.
  */
-import { recordingDestination } from './authorityWire.js';
+import { INTENT_OPS, recordingDestination, validateIntentBody } from './authorityWire.js';
+export { INTENT_OPS };
 import { assertCaptureCall, assertCaptureReply, validCaptureState } from './captureBridge.js';
 import { createConnection } from 'node:net';
 import { open, lstat } from 'node:fs/promises';
@@ -201,19 +202,34 @@ export async function createMainBindings({env = process.env, createMessageChanne
         surfaces.set(state.surface_id,Object.freeze({...state}));
         subscribeSurface(state);
       }
+      const layoutError = body.schema === 'surface_event/v0.2' && body.event === 'error'
+        && ['LAYOUT_UNKNOWN_SLOT','LAYOUT_ILLEGAL_TRANSITION','LAYOUT_INPUT_MODE_READ'].includes(body.data?.code)
+        ? body.data : null;
+      if (layoutError && (Object.keys(body).sort().join(',') !== 'data,event,schema'
+          || Object.keys(layoutError).sort().join(',') !== 'code,detail,surface_id'
+          || !id(layoutError.surface_id) || !id(layoutError.detail))) throw fail();
       for (const [key,item] of pending) {
         let result;
+        if (layoutError && item.body.schema === 'ui_intent/v0.2' && layoutError.detail === key && layoutError.surface_id === item.body.params?.slot_id) {
+          clearTimeout(item.timer);pending.delete(key);item.reject(new Error(layoutError.code));continue;
+        }
         if (body.schema === 'action_verdict/v0.2' && body.proposal_id === key) {
           if (item.body.schema === 'action_proposal/v0.2') result = body;
-          else {clearTimeout(item.timer);pending.delete(key);item.reject(new Error('INTENT_REFUSED'));continue;}
+          else if (['take_control','release_control','fold','unfold'].includes(item.body.op)) {
+            clearTimeout(item.timer);pending.delete(key);item.reject(new Error('INTENT_REFUSED'));continue;
+          } else continue;
         }
         const state = body.schema === 'surface_event/v0.2' && body.event === 'state_changed' ? body.data?.surface : null;
         const request = item.body;
-        if (request.schema === 'ui_intent/v0.2' && state?.surface_id === (request.params.surface_id || request.params.slot_id)) {
+        if (request.schema === 'ui_intent/v0.2' && ['take_control','release_control','fold','unfold'].includes(request.op)
+            && state?.surface_id === (request.params.surface_id || request.params.slot_id)) {
           const satisfied = request.op === 'take_control' ? state.control === 'human'
             : request.op === 'release_control' ? state.control === 'agent'
             : state.visibility === (request.op === 'fold' ? 'folded' : 'unfolded');
           if (satisfied) result = true;
+        } else if (request.schema === 'ui_intent/v0.2' && !['take_control','release_control','fold','unfold'].includes(request.op)
+            && isDeepStrictEqual(body, request)) {
+          result = true;
         }
         if (result !== undefined) {clearTimeout(item.timer);pending.delete(key);item.resolve(result);}
       }
@@ -290,9 +306,10 @@ export async function createMainBindings({env = process.env, createMessageChanne
         if (!live || disposed || !['intent','propose'].includes(message?.op) || typeof message.json !== 'string'
             || Buffer.byteLength(message.json) > 256 * 1024 || pending.size >= MAX_ITEMS) throw fail();
         const body = JSON.parse(message.json);
-        if (body?.schema !== (message.op === 'intent' ? 'ui_intent/v0.2' : 'action_proposal/v0.2')) throw fail();
+        if (message.op === 'intent') validateIntentBody(body, fail);
+        else if (body?.schema !== 'action_proposal/v0.2') throw fail();
         const key = message.op === 'intent' ? body.request_id : body.proposal_id;
-        if (!id(key) || pending.has(key) || (message.op === 'intent' && (!['take_control','release_control','fold','unfold'].includes(body.op) || !body.params))) throw fail();
+        if (!id(key) || pending.has(key)) throw fail();
         return new Promise((resolve,reject) => {
           const timer = setTimeout(() => {pending.delete(key);reject(new Error('CORE_TIMEOUT'));shutdown();},DEADLINE);
           pending.set(key,{body,resolve,reject,timer});

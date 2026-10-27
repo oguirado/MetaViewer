@@ -26,6 +26,34 @@ export const WIRE_CHANNELS = Object.freeze({
   terminalOpen:'metaviewer:side-terminal.open', terminalEnabled:'metaviewer:side-terminal.enabled',
 });
 export const WIRE_MAX_BYTES = 256 * 1024;
+export const INTENT_OPS = Object.freeze({
+  take_control: 'surface_id', release_control: 'surface_id',
+  fold: 'slot_id', unfold: 'slot_id', hide: 'slot_id', show: 'slot_id',
+  move: 'group_id,index,slot_id', tab: 'group_id,index,slot_id',
+  float: 'height_px,slot_id,width_px,x_px,y_px',
+});
+/** @param {any} body @param {()=>Error} [error] */
+export function validateIntentBody(body, error = () => new Error('INTENT')) {
+  const validId = (/** @type {unknown} */ value) => typeof value === 'string'
+    && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}(?![\s\S])/.test(value);
+  const keys = body && typeof body.op === 'string' && Object.hasOwn(INTENT_OPS, body.op)
+    ? INTENT_OPS[/** @type {keyof typeof INTENT_OPS} */ (body.op)] : null;
+  const idKey = keys === 'surface_id' ? 'surface_id' : 'slot_id';
+  if (!keys || Object.keys(body).sort().join(',') !== 'op,params,request_id,schema'
+      || body.schema !== 'ui_intent/v0.2' || !validId(body.request_id)
+      || !body.params || Array.isArray(body.params) || typeof body.params !== 'object'
+      || Object.keys(body.params).sort().join(',') !== keys || !validId(body.params[idKey])) throw error();
+  const p = body.params;
+  if (keys === 'group_id,index,slot_id' && (!validId(p.group_id)
+      || !Number.isInteger(p.index) || p.index < 0 || p.index > 255)) throw error();
+  if (body.op === 'float') {
+    for (const key of ['height_px', 'width_px', 'x_px', 'y_px']) {
+      const size = key === 'height_px' || key === 'width_px';
+      if (!Number.isInteger(p[key]) || p[key] < (size ? 1 : 0) || p[key] > (size ? 16384 : 16383)) throw error();
+    }
+  }
+  return body;
+}
 /** @param {unknown} value @returns {any} */
 export function jsonObject(value) {
   if (typeof value !== 'string' || Buffer.byteLength(value,'utf8') > WIRE_MAX_BYTES) throw new Error('PAYLOAD');
@@ -175,27 +203,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
       jsonObject(json); return verdictReply(await core.request({op:'propose',json}));
     },
     intent: async (/** @type {string} */json) => {
-      const body=jsonObject(json);
-      if (!['take_control','release_control','fold','unfold','move','tab','float','hide','show'].includes(body.op)) throw new Error('INTENT');
-      if (!['take_control','release_control'].includes(body.op)) {
-        const validId=(/** @type {unknown} */value)=>typeof value==='string'
-          && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}(?![\s\S])/.test(value);
-        const keys = body.op==='move' || body.op==='tab' ? 'group_id,index,slot_id'
-          : body.op==='float' ? 'height_px,slot_id,width_px,x_px,y_px' : 'slot_id';
-        if (Object.keys(body).sort().join(',')!=='op,params,request_id,schema'
-            || body.schema!=='ui_intent/v0.2' || !validId(body.request_id)
-            || !body.params || Array.isArray(body.params) || typeof body.params!=='object'
-            || Object.keys(body.params).sort().join(',')!==keys || !validId(body.params.slot_id)) throw new Error('INTENT');
-        const p=body.params;
-        if (keys==='group_id,index,slot_id' && (!validId(p.group_id)
-            || !Number.isInteger(p.index) || p.index<0 || p.index>255)) throw new Error('INTENT');
-        if (body.op==='float') {
-          for (const key of ['height_px','width_px','x_px','y_px']) {
-            const size=key==='height_px' || key==='width_px';
-            if (!Number.isInteger(p[key]) || p[key]<(size?1:0) || p[key]>(size?16384:16383)) throw new Error('INTENT');
-          }
-        }
-      }
+      validateIntentBody(jsonObject(json));
       if (await core.request({op:'intent',json}) !== true) throw new Error('OUTCOME'); return true;
     },
     subscribeFrames: async () => { subscribed=true; return true; },
