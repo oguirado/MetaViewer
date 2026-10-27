@@ -357,7 +357,9 @@ function checkRamwsPath(value) {
   if (typeof value !== 'string') {
     return refusal(FRAME_REASONS.INVALID_PATH, 'bad-path');
   }
-  if ([...value].length > 65536) {
+  // One code point occupies at most two UTF-16 units; preserve the schema's
+  // Unicode boundary while bounding allocation before spreading untrusted text.
+  if (value.length > 2 * 65536 || [...value].length > 65536) {
     return refusal(FRAME_REASONS.INVALID_PATH, 'path-too-long');
   }
   if (!value.startsWith(SHM_PREFIX) || value.length === SHM_PREFIX.length) {
@@ -389,7 +391,8 @@ function admitFrameRef(frameRef) {
   if (raw.schema !== FRAME_REF_SCHEMA) {
     return { ok: false, outcome: refusal(FRAME_REASONS.INVALID_CONTRACT, 'bad-schema') };
   }
-  if (typeof raw.surface_id !== 'string' || raw.surface_id.length < 1 || [...raw.surface_id].length > 128) {
+  if (typeof raw.surface_id !== 'string' || raw.surface_id.length < 1
+    || raw.surface_id.length > 512 || [...raw.surface_id].length > 128) {
     return { ok: false, outcome: refusal(FRAME_REASONS.INVALID_CONTRACT, 'bad-surface-id') };
   }
   if (!isPositiveInt(raw.generation)) {
@@ -449,7 +452,8 @@ function assertReaderOptions(value) {
   if (typeof binding.principal !== 'string' || binding.principal.length === 0) {
     throw new FrameReaderError(FRAME_REASONS.INVALID_BINDING, 'binding.principal must be a non-empty string');
   }
-  if (typeof binding.surfaceId !== 'string' || binding.surfaceId.length === 0 || [...binding.surfaceId].length > 128) {
+  if (typeof binding.surfaceId !== 'string' || binding.surfaceId.length === 0
+    || binding.surfaceId.length > 512 || [...binding.surfaceId].length > 128) {
     throw new FrameReaderError(FRAME_REASONS.INVALID_BINDING, 'binding.surfaceId must be a 1..128 character string');
   }
   if (!isPositiveInt(binding.epoch) || !isPositiveInt(binding.surfaceGeneration)) {
