@@ -164,9 +164,8 @@ class MvctlCoreTests(unittest.TestCase):
         dispatched = self.receive()
         self.assertEqual(dispatched["op"], "input")
         self.assertEqual(dispatched["params"]["proposal_id"], proposal["proposal_id"])
-        # Match daemon-adapter/internal/daemon/environment.go receipt emission: native
-        # focus/timestamp proof is consumed by capsule.Manager, then omitted
-        # from the wire receipt. This is a product gap, not successful verification.
+        # Negative control: when native_evidence is omitted from the receipt,
+        # the core refuses verification with VERIFICATION_FAILED.
         after_frame = dict(self.frame, generation=3, tick=self.frame["tick"] + 1,
                            ts_ns=self.frame["ts_ns"] + 1)
         self.send({"schema": "surface_event/v0.2", "event": "frame_ready",
@@ -204,6 +203,142 @@ class MvctlCoreTests(unittest.TestCase):
                 except (ValueError, AttributeError):
                     pass  # Frame bytes are also content-addressed witnesses.
         self.assertIn(receipt, witnessed)
+
+    def test_cli_rerun_with_native_evidence_verifies_and_rejects_bad_evidence(self):
+        # First run: evidence-free receipt fails with VERIFICATION_FAILED (negative control).
+        first_path, first_proposal = self.proposal_file(self.frame["generation"])
+        self.assertEqual(self.cli("propose", "--json-arg", str(first_path)).returncode, 0)
+        self.assertEqual(self.receive()["params"]["proposal_id"], first_proposal["proposal_id"])
+        frame_g3 = dict(self.frame, generation=3, tick=self.frame["tick"] + 1,
+                        ts_ns=self.frame["ts_ns"] + 1)
+        self.send({"schema": "surface_event/v0.2", "event": "frame_ready",
+                   "data": {"frame_ref": frame_g3}})
+        self.send({"schema": "action_receipt/v0.2",
+                   "proposal_id": first_proposal["proposal_id"],
+                   "executed_at_ns": frame_g3["ts_ns"],
+                   "after_frame": frame_g3, "verified": False,
+                   "verification": {"method": "pixel", "detail": "unverified"},
+                   "error": ""})
+        self.barrier()
+        exp_path = self.directory / "expectation-rerun.json"
+        exp_path.write_text(json.dumps(first_proposal["expectation"]))
+        unverified = self.cli("wait-verify", "--proposal-id", first_proposal["proposal_id"],
+                              "--json-arg", str(exp_path))
+        self.assertEqual(unverified.returncode, 1, unverified.stderr)
+        self.assertEqual(json.loads(unverified.stdout)["code"], "VERIFICATION_FAILED")
+
+        # Rerun over the same CLI session with real frame RGB witnesses and native_evidence.
+        before_ram = tempfile.NamedTemporaryFile(prefix="mvctl-before-", dir="/dev/shm")
+        self.addCleanup(before_ram.close)
+        before_bytes = bytes([255, 0, 0, 0, 255, 0])
+        before_ram.write(before_bytes)
+        before_ram.flush()
+        before_frame = dict(self.frame, generation=4, tick=10, ts_ns=3000000,
+                            width=2, height=1, ramws_path=before_ram.name,
+                            sha256=hashlib.sha256(before_bytes).hexdigest())
+        self.send({"schema": "surface_event/v0.2", "event": "frame_ready",
+                   "data": {"frame_ref": before_frame}})
+        self.barrier()
+
+        observed = self.cli("observe", "--surface-id", "surface-demo")
+        self.assertEqual(observed.returncode, 0, observed.stderr)
+        self.assertEqual(json.loads(observed.stdout)["frame_ref"], before_frame)
+
+        rerun_proposal = self.fixture("action_proposal")
+        rerun_proposal.update(
+            proposal_id="proposal-rerun-verified",
+            based_on_frame={"sha256": before_frame["sha256"], "generation": before_frame["generation"]},
+            action={"type": "click", "x": 0, "y": 0, "button": "left"},
+            expectation={"type": "changed_region", "bbox": {"x": 0, "y": 0, "w": 1, "h": 1}},
+        )
+        rerun_path = self.directory / "proposal-rerun.json"
+        rerun_path.write_text(json.dumps(rerun_proposal))
+        exp_path.write_text(json.dumps(rerun_proposal["expectation"]))
+
+        admitted = self.cli("propose", "--json-arg", str(rerun_path))
+        self.assertEqual(admitted.returncode, 0, admitted.stderr)
+        self.assertEqual(json.loads(admitted.stdout)["decision"], "admitted")
+        dispatched = self.receive()
+        self.assertEqual(dispatched["op"], "input")
+        self.assertEqual(dispatched["params"]["proposal_id"], "proposal-rerun-verified")
+
+        after_ram = tempfile.NamedTemporaryFile(prefix="mvctl-after-", dir="/dev/shm")
+        self.addCleanup(after_ram.close)
+        after_bytes = bytes([0, 0, 255, 0, 255, 0])
+        after_ram.write(after_bytes)
+        after_ram.flush()
+        after_frame = dict(before_frame, generation=5, tick=11, ts_ns=3000010,
+                           ramws_path=after_ram.name,
+                           sha256=hashlib.sha256(after_bytes).hexdigest())
+        self.send({"schema": "surface_event/v0.2", "event": "frame_ready",
+                   "data": {"frame_ref": after_frame}})
+        verified_receipt = {
+            "schema": "action_receipt/v0.2",
+            "proposal_id": "proposal-rerun-verified",
+            "executed_at_ns": 3000008,
+            "after_frame": after_frame,
+            "verified": False,
+            "verification": {
+                "method": "pixel",
+                "detail": "post-input capture only; expectation verification belongs to core",
+            },
+            "error": "",
+            "native_evidence": {
+                "surface_id": "surface-demo",
+                "native_surface_id": "native-surface-demo",
+                "kind": "click",
+                "input_mono_ns": 5000005,
+                "input_ts_ns": 3000005,
+                "focus_verified": True,
+                "result": "ok",
+            },
+        }
+        self.send(verified_receipt)
+        self.barrier()
+
+        waited = self.cli("wait-verify", "--proposal-id", "proposal-rerun-verified",
+                          "--json-arg", str(exp_path))
+        self.assertEqual(waited.returncode, 0, waited.stderr)
+        self.assertEqual(waited.stderr, "")
+        verified = json.loads(waited.stdout)
+        self.assertTrue(verified["verified"])
+        self.assertEqual(verified["proposal_id"], "proposal-rerun-verified")
+        self.assertEqual(verified["after_frame"], after_frame)
+        self.assertEqual(verified["verification"],
+                         {"method": "pixel", "detail": "frame-bound witness matched"})
+
+        # Negative control: present but unfocused native_evidence is rejected.
+        bad_proposal = dict(
+            rerun_proposal,
+            proposal_id="proposal-rerun-unfocused",
+            based_on_frame={"sha256": after_frame["sha256"], "generation": after_frame["generation"]},
+        )
+        rerun_path.write_text(json.dumps(bad_proposal))
+        self.assertEqual(self.cli("propose", "--json-arg", str(rerun_path)).returncode, 0)
+        self.assertEqual(self.receive()["params"]["proposal_id"], "proposal-rerun-unfocused")
+        frame_g6 = dict(before_frame, generation=6, tick=12, ts_ns=3000020)
+        self.send({"schema": "surface_event/v0.2", "event": "frame_ready",
+                   "data": {"frame_ref": frame_g6}})
+        bad_receipt = dict(
+            verified_receipt,
+            proposal_id="proposal-rerun-unfocused",
+            executed_at_ns=3000018,
+            after_frame=frame_g6,
+            native_evidence=dict(
+                verified_receipt["native_evidence"],
+                input_mono_ns=5000015,
+                input_ts_ns=3000015,
+                focus_verified=False,
+            ),
+        )
+        self.send(bad_receipt)
+        self.barrier()
+        failed = self.cli("wait-verify", "--proposal-id", "proposal-rerun-unfocused",
+                          "--json-arg", str(exp_path))
+        self.assertEqual(failed.returncode, 1, failed.stderr)
+        self.assertEqual(json.loads(failed.stdout)["code"], "VERIFICATION_FAILED")
+        self.assertEqual(json.loads(failed.stdout)["detail"],
+                         "Missing, stale or unmatched native/frame evidence")
 
     def test_stale_generation_refused_without_daemon_input(self):
         path, _ = self.proposal_file(generation=1)

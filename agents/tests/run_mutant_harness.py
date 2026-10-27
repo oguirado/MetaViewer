@@ -237,6 +237,7 @@ def main():
     dead = [r for r in results if r[2] == "dead oracle"]
     if dead:
         print(f"\nWARNING: Found {len(dead)} dead oracles!")
+        sys.exit(1)
     else:
         print("\nSUCCESS: All mutants turned the suite red (contrast_rc > 0). Oracle is 100% conforming.")
 
