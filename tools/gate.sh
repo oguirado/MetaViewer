@@ -4,7 +4,7 @@
 set -u
 
 usage() {
-    printf '%s\n' 'Usage: tools/gate.sh [--leg skeleton|laws|contracts|unit|manifests|js|rust|ui | --self-test]' >&2
+    printf '%s\n' 'Usage: tools/gate.sh [--leg skeleton|laws|contracts|unit|manifests|js|rust|go|ui|ui-smoke | --self-test]' >&2
     exit 2
 }
 selector=skeleton
@@ -14,7 +14,7 @@ case $# in
     2) [[ $1 == --leg ]] || usage; selector=$2 ;;
     *) usage ;;
 esac
-case $selector in skeleton|laws|contracts|unit|manifests|js|rust|ui|self-test) ;; *) usage ;; esac
+case $selector in skeleton|laws|contracts|unit|manifests|js|rust|go|ui|ui-smoke|self-test) ;; *) usage ;; esac
 [[ $selector != self-test || ${1:-} == --self-test ]] || usage
 root=$(cd -- "${BASH_SOURCE[0]%/*}/.." && pwd -P) || exit 2
 if ! command -v python3 >/dev/null; then
@@ -41,7 +41,7 @@ import unittest
 ROOT = Path(sys.argv[1])
 SELECTOR = sys.argv[2]
 BASE_LEAVES = ('manifests', 'laws', 'contracts', 'unit')
-LEAVES = (*BASE_LEAVES, 'js', 'rust', 'ui')
+LEAVES = (*BASE_LEAVES, 'js', 'rust', 'go', 'ui', 'ui-smoke')
 FILES = ('Cargo.toml', 'core/Cargo.toml', 'daemon-adapter/go.mod',
          'agents/pyproject.toml', 'ui/package.json', '.gitignore')
 ORIGINAL_IGNORE = ('__pycache__/', '*.py[cod]', '.venv/', 'venv/',
@@ -429,6 +429,94 @@ class GateTests(unittest.TestCase):
         environment.pop('ELECTRON_OVERRIDE_DIST_PATH', None)
         return environment
 
+    def test_go_leg_negative_controls(self):
+        self.write('daemon-adapter/gate_test.go',
+                   'package adapter\nimport ("testing"; "net"; "path/filepath"; "os")\n'
+                   'func TestCoreHelloPinMismatchRefused(t *testing.T) {\n'
+                   ' t.Run("request-before-hello", func(t *testing.T) {\n'
+                   '  t.TempDir(); t.TempDir(); root := t.TempDir()\n'
+                   '  dir := filepath.Join(root, "metaviewer")\n'
+                   '  if err := os.Mkdir(dir, 0700); err != nil { t.Fatal(err) }\n'
+                   '  listener, err := net.Listen("unix", filepath.Join(dir, "core.sock"))\n'
+                   '  if err != nil { t.Fatal(err) }; listener.Close()\n'
+                   ' })\n}\n')
+        environment = dict(os.environ)
+        self.assertIn('PASS go', self.call('--leg', 'go', env=environment))
+        self.write('daemon-adapter/gate_test.go',
+                   'package adapter\nimport "testing"\n'
+                   'func TestGate(t *testing.T) { t.Fatal("planted Go failure") }\n')
+        output = self.call('--leg', 'go', expected=1, env=environment)
+        self.assertIn('planted Go failure', output)
+        self.assertIn('FAIL go', output)
+        self.assertIn('FAIL aggregate', output)
+        self.write('daemon-adapter/gate_test.go',
+                   'package adapter\nimport "fmt"\n'
+                   'func bad() { fmt.Printf("%d", "wrong") }\n')
+        output = self.call('--leg', 'go', expected=1, env=environment)
+        self.assertIn("'vet'", output)
+        self.assertIn('FAIL aggregate', output)
+        environment['GO'] = str(self.fixture / 'absent-go')
+        output = self.call('--leg', 'go', expected=1, env=environment)
+        self.assertIn('missing tool: go', output)
+        self.assertIn('FAIL go', output)
+        self.assertIn('FAIL aggregate', output)
+        # An absent PATH tool also fails when no override is supplied.
+        environment.pop('GO')
+        self.smoke_runner_path(environment)
+        self.assertIn('FAIL go', self.call('--leg', 'go', expected=1, env=environment))
+
+    def smoke_runner_path(self, environment):
+        directory = Path(self.temp.name) / 'runner-bin'
+        directory.mkdir(exist_ok=True)
+        for name in ('bash', 'python3', 'timeout', 'mktemp'):
+            target = directory / name
+            if not target.exists():
+                target.symlink_to(shutil.which(name))
+        environment['PATH'] = str(directory)
+        return directory
+
+    def prepare_smoke_fixture(self, environment):
+        self.write('ui/test/smoke.mjs', 'console.log("METAVIEWER_SMOKE_OK");\n')
+        self.write('ui/test/smoke-main.mjs', 'console.log("METAVIEWER_MAIN_SMOKE_OK");\n')
+        self.write('electron-dist/electron', '#!/bin/sh\nexit 0\n')
+        (self.fixture / 'electron-dist/electron').chmod(0o700)
+        environment['ELECTRON_OVERRIDE_DIST_PATH'] = str(self.fixture / 'electron-dist')
+        environment['NODE'] = shutil.which('node')
+        directory = self.smoke_runner_path(environment)
+        self.write('fake-xvfb', '#!/bin/sh\nexit 0\n')
+        (self.fixture / 'fake-xvfb').chmod(0o700)
+        (directory / 'xvfb-run').symlink_to(self.fixture / 'fake-xvfb')
+
+    def test_ui_smoke_negative_controls(self):
+        environment = dict(os.environ)
+        self.prepare_smoke_fixture(environment)
+        self.assertIn('PASS ui-smoke', self.call('--leg', 'ui-smoke', env=environment))
+        self.write('ui/test/smoke-main.mjs', 'throw Error("planted main failure");\n')
+        output = self.call('--leg', 'ui-smoke', expected=1, env=environment)
+        self.assertIn('planted main failure', output)
+        self.assertIn('FAIL aggregate', output)
+        self.write('ui/test/smoke-main.mjs', '')
+        self.assertIn('marker=False', self.call('--leg', 'ui-smoke', expected=1, env=environment))
+        self.write('ui/test/smoke-main.mjs', 'console.log("METAVIEWER_MAIN_SMOKE_OK");\n')
+        (Path(environment['PATH']) / 'xvfb-run').unlink()
+        output = self.call('--leg', 'ui-smoke', expected=2, env=environment)
+        self.assertIn('BLOCKED ui-smoke', output)
+        self.assertIn('missing xvfb-run', output)
+        self.assertIn('FAIL aggregate', output)
+        (Path(environment['PATH']) / 'xvfb-run').symlink_to(self.fixture / 'fake-xvfb')
+        environment.pop('ELECTRON_OVERRIDE_DIST_PATH')
+        output = self.call('--leg', 'ui-smoke', expected=2, env=environment)
+        self.assertIn('no executable local Electron', output)
+        self.assertIn('BLOCKED ui-smoke', output)
+        self.assertIn('FAIL aggregate', output)
+        self.write('ui/node_modules/electron/path.txt', 'electron\n')
+        self.write('ui/node_modules/electron/dist/electron', '#!/bin/sh\nexit 0\n')
+        binary = self.fixture / 'ui/node_modules/electron/dist/electron'
+        binary.chmod(0o700)
+        self.assertIn('PASS ui-smoke', self.call('--leg', 'ui-smoke', env=environment))
+        binary.chmod(0o600)
+        self.assertIn('BLOCKED ui-smoke', self.call('--leg', 'ui-smoke', expected=2, env=environment))
+
     def test_rust_leg_negative_controls(self):
         environment = self.prepare_build_fixture()
         self.assertIn('PASS rust', self.call('--leg', 'rust', env=environment))
@@ -488,8 +576,14 @@ class GateTests(unittest.TestCase):
                           'if "-p" in sys.argv: print(24)\n')
         binary.chmod(0o700)
         environment = dict(os.environ, **{key: str(binary) for key in
-                           ('RUSTUP', 'CARGO', 'NODE', 'NPM', 'VUE_TSC', 'VITE')})
-        environment.pop('ELECTRON_OVERRIDE_DIST_PATH', None)
+                           ('RUSTUP', 'CARGO', 'GO', 'NODE', 'NPM', 'VUE_TSC', 'VITE')})
+        original_path = environment['PATH']
+        self.prepare_smoke_fixture(environment)
+        environment['PATH'] += os.pathsep + original_path
+        environment['NODE'] = str(binary)
+        binary.write_text(binary.read_text() +
+                          'if any("smoke" in arg for arg in sys.argv):\n'
+                          ' print("METAVIEWER_MAIN_SMOKE_OK" if any("smoke-main" in arg for arg in sys.argv) else "METAVIEWER_SMOKE_OK")\n')
         self.write('tools/sync_kit.mjs', '')
         self.write('ui/kit.lock.json', '{}')
         environment['MV_KIT_CHECKOUT'] = str(self.fixture)
@@ -862,6 +956,11 @@ def build_leg(leg, root, environment):
             'XDG_CACHE_HOME', str(Path.home() / '.cache'))) / 'electron'))
         child.update(ELECTRON_SKIP_BINARY_DOWNLOAD='1', npm_config_offline='true',
                      npm_config_audit='false', npm_config_fund='false')
+        installed = electron_dist(root, environment)
+        if installed is not None and not environment.get('ELECTRON_OVERRIDE_DIST_PATH'):
+            preserved = Path(environment['TMPDIR']) / 'electron-dist'
+            shutil.copytree(installed, preserved)
+            environment['ELECTRON_OVERRIDE_DIST_PATH'] = str(preserved)
         commands = [[tools['npm'], 'ci', '--offline'],
                     [tools['node'], '--test', *[str(p.relative_to(directory)) for p in tests]]]
     for command in commands:
@@ -881,14 +980,80 @@ def build_leg(leg, root, environment):
             if rc:
                 print(f'ui: child rc={rc}: {name}', file=sys.stderr)
                 return 1
-        if environment.get('ELECTRON_OVERRIDE_DIST_PATH'):
-            if shutil.which('xvfb-run', path=environment.get('PATH')) is None:
-                print('ui: missing tool: xvfb-run', file=sys.stderr)
-                return 2
-            rc = bounded([tools['node'], 'test/smoke.mjs'], directory, child)
+    return 0
+
+
+# [TARGET, unit decision] Go is mandatory; production smoke is independently
+# reported and requires an executable local Electron plus the Xvfb harness used
+# by both shipped smoke scripts. A zero exit without the main marker is a failure.
+def go_leg(root, environment):
+    go = shutil.which(environment.get('GO', 'go'), path=environment.get('PATH'))
+    if go is None:
+        print('go: missing tool: go', file=sys.stderr)
+        return 1
+    child = dict(environment, GOPROXY='off', GOSUMDB='off', GOTOOLCHAIN='local')
+    # Go appends test/subtest names to TMPDIR; keep Unix socket paths short.
+    with tempfile.TemporaryDirectory(prefix='g-', dir='/tmp') as temporary:
+        child['TMPDIR'] = temporary
+        for arguments in (['vet', './...'], ['test', '-race', '-count=1', './...']):
+            rc = bounded([go, *arguments], root / 'daemon-adapter', child)
             if rc:
-                print(f'ui: smoke child rc={rc}', file=sys.stderr)
+                print(f'go: child rc={rc}: {arguments!r}', file=sys.stderr)
                 return 1
+    return 0
+
+
+def electron_dist(root, environment):
+    override = environment.get('ELECTRON_OVERRIDE_DIST_PATH')
+    if override:
+        return Path(override)
+    package = root / 'ui/node_modules/electron'
+    marker = package / 'path.txt'
+    if marker.is_file():
+        binary = package / 'dist' / marker.read_text().strip()
+        if binary.is_file() and os.access(binary, os.X_OK):
+            return binary.parent
+    return None
+
+
+def ui_smoke_leg(root, environment):
+    node = shutil.which(environment.get('NODE', 'node'), path=environment.get('PATH'))
+    dist = electron_dist(root, environment)
+    if node is None:
+        print('ui-smoke: missing tool: node', file=sys.stderr)
+        return 2
+    if dist is None or not (dist / 'electron').is_file() or not os.access(dist / 'electron', os.X_OK):
+        print('ui-smoke: no executable local Electron; set ELECTRON_OVERRIDE_DIST_PATH '
+              'or install its local binary', file=sys.stderr)
+        return 2
+    if shutil.which('xvfb-run', path=environment.get('PATH')) is None:
+        print('ui-smoke: no display harness: missing xvfb-run', file=sys.stderr)
+        return 2
+    child = dict(environment, ELECTRON_OVERRIDE_DIST_PATH=str(dist.resolve()))
+    child.pop('ELECTRON_RUN_AS_NODE', None)
+    for script, marker in (('smoke.mjs', 'METAVIEWER_SMOKE_OK'),
+                           ('smoke-main.mjs', 'METAVIEWER_MAIN_SMOKE_OK')):
+        # Spool output to disk so diagnostics and marker checks remain bounded.
+        with tempfile.TemporaryFile(mode='w+') as output:
+            process = subprocess.Popen([node, 'test/' + script], cwd=root / 'ui',
+                                       env=child, stdout=output, stderr=subprocess.STDOUT,
+                                       start_new_session=True)
+            try:
+                rc = process.wait(timeout=90)
+            except subprocess.TimeoutExpired:
+                stop_process_tree(process)
+                rc = 124
+            finally:
+                if process.poll() is None:
+                    stop_process_tree(process)
+            output.seek(0)
+            witnessed = False
+            for line in output:
+                witnessed |= line.strip() == marker
+                print(line[-4000:], end='', flush=True)
+        if rc or not witnessed:
+            print(f'ui-smoke: {script}: child rc={rc}, marker={witnessed}', file=sys.stderr)
+            return 1
     return 0
 
 
@@ -900,6 +1065,8 @@ def leaf(leg, root, environment):
         'unit': ('tests',),
         'js': ('tools/sync_kit.mjs', 'ui/kit.lock.json'),
         'rust': ('Cargo.toml', 'core/Cargo.toml'),
+        'go': ('daemon-adapter/go.mod',),
+        'ui-smoke': ('ui/test/smoke.mjs', 'ui/test/smoke-main.mjs'),
         'ui': ('ui/package.json', 'ui/package-lock.json', 'ui/tsconfig.json'),
     }
     for name in targets[leg]:
@@ -908,6 +1075,10 @@ def leaf(leg, root, environment):
         if not (path.is_dir() if directory else path.is_file()):
             print(f'missing target: {name}', file=sys.stderr)
             return 2
+    if leg == 'go':
+        return go_leg(root, environment)
+    if leg == 'ui-smoke':
+        return ui_smoke_leg(root, environment)
     if leg in ('rust', 'ui'):
         return build_leg(leg, root, environment)
     if leg == 'manifests':
