@@ -111,3 +111,11 @@ entropy, appended-token and PEM runtime controls remain mandatory.
 The runner's constant policy also scans current full repository history in
 the integration suite. Deleted-secret and side-ref controls continue to
 prove that history remains unrestricted.
+The adversarial suite in `test_t7_secrets_adversarial.py` retains the held
+cases and assertions, and builds every credential-shaped value at runtime
+from a character-code prefix and a fresh random suffix. Neither fragment
+contains a scannable credential in source; assembled values and scanner
+reports are written only inside automatically cleaned temporary directories,
+including the isolated stash repository. The split-token case additionally
+requires the real scanner to detect the reassembled credential, and the stash
+case requires history rejection without printing the generated credential.
