@@ -1,17 +1,17 @@
 {
  "schema": "metaviewer.meta_ai_usage/v1",
  "totals": {
-  "lanes": 183,
-  "ok": 183,
-  "input_tokens": 40324399,
-  "cache_read_tokens": 845851935,
-  "output_tokens": 8430822,
-  "thinking_tokens": 4450495,
+  "lanes": 187,
+  "ok": 187,
+  "input_tokens": 41691015,
+  "cache_read_tokens": 863540554,
+  "output_tokens": 8629281,
+  "thinking_tokens": 4555118,
   "cache_hit_pct": 95.4,
-  "usd": 7.4103,
-  "usd_per_lane": 0.0405,
-  "steps": 9302,
-  "lane_hours": 23.4
+  "usd": 7.622,
+  "usd_per_lane": 0.0408,
+  "steps": 9535,
+  "lane_hours": 24.1
  },
  "peak_concurrent_lanes": 32,
  "rooms": {
@@ -160,6 +160,11 @@
    "why": "Generate self-contained, paper-grounded testing prompts (verbatim excerpts from the software papers and OmniCodex) for the external web testers Jules and ChatGPT, one pair per code area, to test the current integration branch.",
    "orchestrator": "conductor"
   },
+  "mv0pr": {
+   "stage": "review",
+   "why": "Adversarial pre-integration review of the eight Sol units finished tonight (journal lock, frame_ref v0.2, agent loop, recording, human input, serve and adapter P0 fixes, budget gate), so defects are caught before they land.",
+   "orchestrator": "conductor"
+  },
   "mv0w1rv": {
    "stage": "review",
    "why": "Adversarial review of every W0 surface in parallel; findings were adjudicated by a judge and became the binding fix list.",
@@ -168,6 +173,11 @@
   "mv0w2pk1": {
    "stage": "context",
    "why": "Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested).",
+   "orchestrator": "conductor"
+  },
+  "mv0dc2": {
+   "stage": "docs",
+   "why": "Adversarial fact-check of the documentation drafts against the integration head, so the public README, user guide, testing report and architecture contain only verified claims (AC-15).",
    "orchestrator": "conductor"
   },
   "mv0dc": {
@@ -4104,6 +4114,90 @@
    "thinking_tokens": 17523,
    "cache_hit_pct": 94.8,
    "usd": 0.028245
+  },
+  {
+   "room": "mv0dc2",
+   "lane": "README",
+   "title": "Fact-check README.md",
+   "stage": "docs",
+   "model": "muse-spark-1.3",
+   "orchestrator": "conductor",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-26T23:54:59.054000+00:00",
+   "duration_s": 351.9,
+   "end_utc": "2026-10-27T00:00:50.904000+00:00",
+   "phase": "build",
+   "steps": 33,
+   "input_tokens": 200785,
+   "cache_read_tokens": 1418317,
+   "output_tokens": 29945,
+   "thinking_tokens": 15208,
+   "cache_hit_pct": 87.6,
+   "usd": 0.028904
+  },
+  {
+   "room": "mv0dc2",
+   "lane": "USER_GUIDE",
+   "title": "Fact-check USER_GUIDE.md",
+   "stage": "docs",
+   "model": "muse-spark-1.3",
+   "orchestrator": "conductor",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-26T23:55:04.013000+00:00",
+   "duration_s": 687.0,
+   "end_utc": "2026-10-27T00:06:31.001000+00:00",
+   "phase": "build",
+   "steps": 76,
+   "input_tokens": 373126,
+   "cache_read_tokens": 6962858,
+   "output_tokens": 64707,
+   "thinking_tokens": 39236,
+   "cache_hit_pct": 94.9,
+   "usd": 0.06418
+  },
+  {
+   "room": "mv0dc2",
+   "lane": "TESTING",
+   "title": "Fact-check TESTING.md",
+   "stage": "docs",
+   "model": "muse-spark-1.3",
+   "orchestrator": "conductor",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-26T23:55:09.025000+00:00",
+   "duration_s": 628.8,
+   "end_utc": "2026-10-27T00:05:37.808000+00:00",
+   "phase": "build",
+   "steps": 42,
+   "input_tokens": 328933,
+   "cache_read_tokens": 2631735,
+   "output_tokens": 53536,
+   "thinking_tokens": 30248,
+   "cache_hit_pct": 88.9,
+   "usd": 0.048864
+  },
+  {
+   "room": "mv0dc2",
+   "lane": "ARCH",
+   "title": "Fact-check ARCHITECTURE.md",
+   "stage": "docs",
+   "model": "muse-spark-1.3",
+   "orchestrator": "conductor",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-26T23:55:14.008000+00:00",
+   "duration_s": 567.3,
+   "end_utc": "2026-10-27T00:04:41.320000+00:00",
+   "phase": "build",
+   "steps": 82,
+   "input_tokens": 463772,
+   "cache_read_tokens": 6675709,
+   "output_tokens": 50271,
+   "thinking_tokens": 19931,
+   "cache_hit_pct": 93.5,
+   "usd": 0.069783
   }
  ]
 }

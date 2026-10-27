@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 183 | 55 | 128 |
-| Lanes finished OK | 183 | 55 | 128 |
-| Agent steps | 9,302 | 2,705 | 6,597 |
-| Lane-hours of agent work | 23.4 | 5.2 | 18.2 |
-| Fresh input tokens | 40,324,399 | 11,482,034 | 28,842,365 |
-| Cache-read input tokens | 845,851,935 | 226,255,212 | 619,596,723 |
-| Prompt cache hit % | 95.4 | 95.2 | 95.6 |
-| Output tokens | 8,430,822 | 2,135,708 | 6,295,114 |
-| Thinking tokens | 4,450,495 | 1,050,039 | 3,400,456 |
-| Cost (USD) | 7.4103 | 2.0279 | 5.3824 |
-| Cost per lane (USD) | 0.0405 | 0.0369 | 0.0421 |
+| Lanes launched | 187 | 55 | 132 |
+| Lanes finished OK | 187 | 55 | 132 |
+| Agent steps | 9,535 | 2,705 | 6,830 |
+| Lane-hours of agent work | 24.1 | 5.2 | 18.8 |
+| Fresh input tokens | 41,691,015 | 11,482,034 | 30,208,981 |
+| Cache-read input tokens | 863,540,554 | 226,255,212 | 637,285,342 |
+| Prompt cache hit % | 95.4 | 95.2 | 95.5 |
+| Output tokens | 8,629,281 | 2,135,708 | 6,493,573 |
+| Thinking tokens | 4,555,118 | 1,050,039 | 3,505,079 |
+| Cost (USD) | 7.622 | 2.0279 | 5.5942 |
+| Cost per lane (USD) | 0.0408 | 0.0369 | 0.0424 |
 
-Rooms: 38. Peak concurrent lanes [MEASURED from lane start/end]: 32.
+Rooms: 39. Peak concurrent lanes [MEASURED from lane start/end]: 32.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -42,7 +42,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | context | 42 | 95.9 | 1.9093 |
 | demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
-| docs | 7 | 93.8 | 0.1642 |
+| docs | 11 | 93.3 | 0.3759 |
 | fix | 2 | 97.4 | 0.1115 |
 | kit | 3 | 96.5 | 0.1997 |
 | ops | 4 | 88.1 | 0.0468 |
@@ -96,6 +96,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0r2 | conductor | Oct 27 00:28 | testing | 8 | 93.7 | 0.217 | Write the external testing round-2 prompts (Jules test-writing and ChatGPT adversarial review per topic) targeting the code changed since round 1 and regression checks of every round-1 fix. |
 | mv0w3pk | conductor | Oct 27 00:34 | context | 4 | 94.0 | 0.151 | Draft the context packs of the W3 product-finishing units (packaging, CI matrix, memory budgets, install docs) so their Sol writers start from verified file:line context. |
 | mv0nv | conductor | Oct 27 00:38 | review | 4 | 95.5 | 0.1275 | Verify the 30 findings of the Gemini Argon cross-review of the night's integrated code (60f9239..492d6d0) against the current head and turn confirmed ones into disjoint Sol fix units. |
+| mv0dc2 | conductor | Oct 27 00:54 | docs | 4 | 92.8 | 0.2117 | Adversarial fact-check of the documentation drafts against the integration head, so the public README, user guide, testing report and architecture contain only verified claims (AC-15). |
 
 ## Every lane
 
@@ -284,6 +285,10 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0nv | N_ADAPTER | Verify Argon night findings n_adapter | Oct 27 00:38 | yes | 47 | 95.1 | 0.028921 |
 | mv0nv | N_UISRC | Verify Argon night findings n_uisrc | Oct 27 00:38 | yes | 52 | 95.5 | 0.034291 |
 | mv0nv | N_E2E | Verify Argon night findings n_e2e | Oct 27 00:38 | yes | 47 | 94.8 | 0.028245 |
+| mv0dc2 | README | Fact-check README.md | Oct 27 00:54 | yes | 33 | 87.6 | 0.028904 |
+| mv0dc2 | USER_GUIDE | Fact-check USER_GUIDE.md | Oct 27 00:55 | yes | 76 | 94.9 | 0.06418 |
+| mv0dc2 | TESTING | Fact-check TESTING.md | Oct 27 00:55 | yes | 42 | 88.9 | 0.048864 |
+| mv0dc2 | ARCH | Fact-check ARCHITECTURE.md | Oct 27 00:55 | yes | 82 | 93.5 | 0.069783 |
 
 ## Method
 
