@@ -678,13 +678,15 @@ export function createCaptureState(port) {
    * CAPTURE_ROWS_CAP. Unfiltered runs replace every row; a surface
    * filter merges fresh rows for that surface ahead of the kept rows
    * for the other surfaces, so per-surface callers never drop rows
-   * they did not ask about. When no fresh row names the filter
+   * they did not ask about. Kept rows merge ahead of any
+   * unseen-surface fill, so seeding never evicts stored rows at cap
+   * (MVUI24 lane R, RV9-05). When no fresh row names the filter
    * surface, fresh rows for unseen surfaces (no stored row names that
-   * surface) are kept too, so a filtered refresh that meets only
-   * other-surface rows never wipes to empty (MVUI19 lane C, EVUI-07);
-   * otherwise the run stays narrow and stored surfaces keep their
-   * stored rows. The scan stops once the cap is full, so a hostile
-   * oversized reply costs O(cap) added space.
+   * surface) fill only remaining capacity, so a filtered refresh that
+   * meets only other-surface rows never wipes to empty (MVUI19 lane C,
+   * EVUI-07); otherwise the run stays narrow and stored surfaces keep
+   * their stored rows. The scan stops once the cap is full, so a
+   * hostile oversized reply costs O(cap) added space.
    * @param {ReadonlyArray<CaptureRow>} incoming Validated host rows.
    * @param {string|undefined} filter Surface filter, else all rows.
    */
@@ -714,7 +716,20 @@ export function createCaptureState(port) {
       for (const row of incoming) {
         if (isRecord(row) && row.surface_id === filter && !push(row)) break;
       }
-      if (next.length === 0 && next.length < CAPTURE_ROWS_CAP) {
+      // MVUI24 lane R (RV9-05): kept rows for the unfiltered surfaces
+      // merge BEFORE unseen-surface seeding, so a filtered refresh with
+      // no filter match never evicts stored rows at cap. Seeding only
+      // fills remaining capacity when no fresh row named the filter
+      // (MVUI19 lane C, EVUI-07 empty-seed kept); matched runs stay
+      // narrow and stored surfaces keep their stored rows.
+      const matchedFilter = next.length > 0;
+      if (next.length < CAPTURE_ROWS_CAP) {
+        for (const row of rows) {
+          if (!isRecord(row) || row.surface_id === filter) continue;
+          if (!push(row)) break;
+        }
+      }
+      if (!matchedFilter && next.length < CAPTURE_ROWS_CAP) {
         /** @type {Set<string>} */
         const storedSurfaces = new Set();
         for (const row of rows) {
@@ -723,12 +738,6 @@ export function createCaptureState(port) {
         for (const row of incoming) {
           if (!isRecord(row) || row.surface_id === filter) continue;
           if (!isId(row.surface_id) || storedSurfaces.has(row.surface_id)) continue;
-          if (!push(row)) break;
-        }
-      }
-      if (next.length < CAPTURE_ROWS_CAP) {
-        for (const row of rows) {
-          if (!isRecord(row) || row.surface_id === filter) continue;
           if (!push(row)) break;
         }
       }

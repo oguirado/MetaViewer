@@ -14,6 +14,7 @@ import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import {
   formatFrameStrip,
   normalizeSurfaceState,
+  shouldEvictSchedulerEntry,
   surfaceCanvasAccessibleName,
   surfaceCanvasAnchor,
   surfaceCanvasDomId,
@@ -32,10 +33,10 @@ const props = defineProps({
 
 const emit = defineEmits(['canvas-ready', 'canvas-released']);
 
-/** @type {{ attachCanvas: (args: any) => { ok: boolean, token?: symbol }, detachCanvas: (id: string, token: symbol | null) => void, getInstrumentation: (surfaceId: unknown) => any } | null} */
+/** @type {{ attachCanvas: (args: any) => { ok: boolean, token?: symbol }, detachCanvas: (id: string, token: symbol | null) => void, getInstrumentation: (surfaceId: unknown) => any, evictSurface: (surfaceId: unknown) => unknown } | null} */
 const scheduler = /** @type {any} */ (inject('tileScheduler', null));
 /** Live-only frame-port router provided by the entry; null keeps the legacy path. */
-const framePortRouter = /** @type {{ bindSurface?: (binding: any) => boolean, unbindSurface?: (surfaceId: unknown, bindToken?: unknown, options?: { keepStream?: boolean }) => void } | null} */ (inject('framePortRouter', null));
+const framePortRouter = /** @type {{ bindSurface?: (binding: any) => boolean, unbindSurface?: (surfaceId: unknown, bindToken?: unknown, options?: { keepStream?: boolean }) => void, getSurfaceStatus?: (surfaceId?: string) => unknown } | null} */ (inject('framePortRouter', null));
 /** @type {symbol | null} */
 let canvasToken = null;
 /**
@@ -241,6 +242,44 @@ function unbindFramePort(surfaceId, keepStream = false) {
   } catch { /* Unbind never breaks teardown. */ }
 }
 
+/**
+ * NEW-02: delay of the deferred post-unmount evict re-check. Past the
+ * router keepStream grace (500 ms default), so a permanently unmounted
+ * surface has retired by the time the check fires, while a same-flush
+ * remount rebinds far earlier and keeps its entry.
+ */
+const SURFACE_EVICT_DELAY_MS = 1200;
+
+/**
+ * NEW-02: evict a scheduler entry only once its surface fully retired (the
+ * router reports no stream) and no canvas is attached. Live, grace-held,
+ * and canvas-attached entries always survive; without a router (legacy
+ * fixtures) this is a no-op. Best-effort: never breaks teardown.
+ * @param {unknown} surfaceId
+ */
+function maybeEvictSurface(surfaceId) {
+  if (scheduler === null || framePortRouter === null) return;
+  if (typeof framePortRouter.getSurfaceStatus !== 'function') return;
+  let status = null;
+  try {
+    status = framePortRouter.getSurfaceStatus(/** @type {string} */ (surfaceId));
+  } catch {
+    return;
+  }
+  if (status !== null) return;
+  let info = null;
+  try {
+    info = scheduler.getInstrumentation(surfaceId);
+  } catch {
+    return;
+  }
+  if (info === null || typeof info !== 'object') return;
+  if (!shouldEvictSchedulerEntry({ streamRetired: true, canvasAttached: info.canvasAttached === true })) return;
+  try {
+    scheduler.evictSurface(surfaceId);
+  } catch { /* Eviction never breaks teardown. */ }
+}
+
 onMounted(attachCanvas);
 onMounted(bindFramePort);
 
@@ -267,6 +306,10 @@ watch(() => [props.surfaceId, props.generation, props.epoch], (_current, previou
   canvasToken = null;
   attachCanvas();
   if (surfaceChanged) {
+    // NEW-02: the old surface unbound without keepStream above, so a last
+    // binding retired it synchronously and its entry can go now; a surface
+    // that other tiles still bind stays live and is kept.
+    maybeEvictSurface(String(previous[0]));
     bindFramePort();
   }
 });
@@ -276,6 +319,16 @@ onBeforeUnmount(() => {
   if (scheduler !== null) {
     scheduler.detachCanvas(props.surfaceId, canvasToken);
     canvasToken = null;
+  }
+  // NEW-02: the keepStream unbind above retires the stream only past its
+  // grace, so check now (an already-retired stream evicts immediately) and
+  // once more past the grace; a rebound stream skips both checks.
+  maybeEvictSurface(props.surfaceId);
+  const evictTimer = /** @type {any} */ (setTimeout(() => {
+    maybeEvictSurface(props.surfaceId);
+  }, SURFACE_EVICT_DELAY_MS));
+  if (evictTimer !== null && typeof evictTimer === 'object' && typeof evictTimer.unref === 'function') {
+    try { evictTimer.unref(); } catch { /* A test loop never holds teardown. */ }
   }
   emit('canvas-released', { surfaceId: props.surfaceId });
 });

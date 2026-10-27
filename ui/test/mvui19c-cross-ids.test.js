@@ -151,6 +151,8 @@ describe('mvui19c cross-section id uniqueness', () => {
         'const used = new Set(counts.keys());',
       );
       out = out.replace('} else if (claimed.has(sourceId)) {', '} else if (false) {');
+      out = out.replace('const exportEntry = exportStatus.get(statusKey);', 'const exportEntry = exportStatus.get(id);');
+      out = out.replace('id: statusKey,', 'id,');
       assert.notEqual(out, source, 'mutant reverts the cross-section fix');
       return out;
     });

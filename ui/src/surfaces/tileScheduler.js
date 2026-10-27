@@ -246,19 +246,52 @@ export function normalizeSurfaceState(state) {
 }
 
 /**
- * @param {string} surfaceId
- * @returns {string} Stable canvas host DOM id.
+ * Closed grammar for a surface-id segment embedded in DOM ids and QA
+ * anchors: alnum lead, alnum/`._:-` rest, at most 64 chars. It mirrors the
+ * terminal anchor grammar so a hostile host id cannot inject whitespace,
+ * slashes, or over-long segments into the `capsule/{id}/slot` family.
+ * @type {RegExp}
  */
-export function surfaceCanvasDomId(surfaceId) {
-  return `mv-surface-canvas-${surfaceId}`;
+export const SURFACE_ID_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
+
+/**
+ * Derives the DOM/QA-anchor segment for a host surface id (MVUI24 lane S).
+ * Ids that already fit the segment grammar pass through byte-identical, so
+ * every existing valid id and anchor is unchanged; anything else maps to a
+ * deterministic lead-plus-rest-plus-fnv1a32 segment that always validates.
+ * Scheduler calls keep the raw id; only the DOM id/anchor use the segment.
+ * @param {unknown} surfaceId Host surface id.
+ * @returns {string} Grammar-valid segment, at most 61 chars.
+ */
+export function surfaceIdSegment(surfaceId) {
+  if (typeof surfaceId === 'string' && SURFACE_ID_SEGMENT_RE.test(surfaceId)) return surfaceId;
+  const text = typeof surfaceId === 'string' ? surfaceId : '';
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  const suffix = (hash >>> 0).toString(16).padStart(8, '0');
+  const lead = /^[A-Za-z0-9]/.test(text) ? text[0] : 's';
+  const rest = text.slice(1, 52).replace(/[^A-Za-z0-9._:-]/g, '-');
+  return `${lead}${rest}-${suffix}`;
 }
 
 /**
  * @param {string} surfaceId
- * @returns {string} Semantic anchor in the `capsule/{id}/slot` family.
+ * @returns {string} Stable canvas host DOM id (segment-derived, no raw id).
+ */
+export function surfaceCanvasDomId(surfaceId) {
+  return `mv-surface-canvas-${surfaceIdSegment(surfaceId)}`;
+}
+
+/**
+ * @param {string} surfaceId
+ * @returns {string} Semantic anchor in the `capsule/{id}/slot` family
+ * (segment-derived, always three segments).
  */
 export function surfaceCanvasAnchor(surfaceId) {
-  return `capsule/${surfaceId}/slot`;
+  return `capsule/${surfaceIdSegment(surfaceId)}/slot`;
 }
 
 /**
@@ -357,6 +390,21 @@ function drawRgb24ToCanvas(canvas, bytes, width, height) {
   }
   ctx.putImageData(image, 0, 0);
   return { ok: true };
+}
+
+/**
+ * Eviction policy for retired scheduler entries (MVUI24 lane S, NEW-02): an
+ * entry may go only when its frame stream fully retired AND no canvas is
+ * attached. A live or grace-held stream always keeps the entry, so the
+ * keepStream remount gap and the retained-frame/late-attach path never lose
+ * theirs; an attached canvas keeps it too, so a bound tile in a port-close
+ * race never loses its paint.
+ * @param {{ streamRetired?: unknown, canvasAttached?: unknown }} [input={}]
+ * @returns {boolean}
+ */
+export function shouldEvictSchedulerEntry(input = {}) {
+  if (input === null || typeof input !== 'object') return false;
+  return input.streamRetired === true && input.canvasAttached !== true;
 }
 
 /**
@@ -1193,6 +1241,41 @@ export function createTileScheduler(options) {
   }
 
   /**
+   * Evicts a surface without tombstoning: display holdings release, warm
+   * resources reclaim with disposers, canvas detaches, capture lease ends,
+   * lastPaint/pendingPaint drop, and the entry leaves the registry. Unlike
+   * destroySurface the id stays re-registerable, so a reopened capsule (a
+   * new router stream) registers fresh. Call only for fully retired,
+   * canvas-less surfaces (see shouldEvictSchedulerEntry); evicting under a
+   * live stream would strand its registered flag with no entry to paint on.
+   * @param {unknown} surfaceId
+   */
+  function evictSurface(surfaceId) {
+    const entry = surfaces.get(/** @type {string} */ (surfaceId));
+    if (!entry) {
+      return { ok: false, reason: missingSurfaceReason(surfaceId) };
+    }
+    drainDisplayHoldings(entry, RELEASE_CAUSES.SURFACE_DESTROYED);
+    trimWarmResources(entry, 0);
+    entry.canvas = null;
+    entry.canvasToken = null;
+    entry.lastDetachedCanvas = null;
+    entry.lastPaint = null;
+    entry.pendingPaint = null;
+    entry.destroyed = true;
+    entry.captureLeaseActive = false;
+    surfaces.delete(entry.surfaceId);
+    if (entry.lastRetiredHandle) retiredByHandle.delete(entry.lastRetiredHandle);
+    const index = surfaceOrder.indexOf(entry.surfaceId);
+    if (index >= 0) {
+      surfaceOrder.splice(index, 1);
+      if (index < fairCursor) fairCursor -= 1;
+    }
+    notifyPresentation();
+    return { ok: true, evicted: true, disposerFaults: entry.metrics.disposerFaults };
+  }
+
+  /**
    * Returns frozen per-surface instrumentation, or null when unknown.
    * @param {unknown} surfaceId
    */
@@ -1440,6 +1523,7 @@ export function createTileScheduler(options) {
     onContextLost,
     onContextRestored,
     destroySurface,
+    evictSurface,
     getInstrumentation,
     subscribePresentation,
     attachCanvas,

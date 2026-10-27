@@ -372,16 +372,23 @@ const displayShots = computed(() => {
       unavailableReason: props.unavailableReason,
     });
     const held = props.disabled && !gate.disabled;
-    // The display id above is unique across both sections, so the bare
-    // id keys this section's export status without sharing (MVUI19C R).
-    const exportEntry = exportStatus.get(id);
+    // MVUI24 lane R (NEW-03): the display id above is reactive (it flips
+    // when recordings claim or release the source text), so the entry id
+    // below doubles as the export-status key on the stable source
+    // identity. Display ids still own every DOM id, anchor and key.
+    const statusKey = `shot:${sourceId}`;
+    const exportEntry = exportStatus.get(statusKey);
     const rowExportState = normalizeMvExportState(exportEntry?.state);
     const rowExportBusy = mvRowExportBusy(rowExportState);
     return {
       source,
       validId,
       key: id,
-      id,
+      // MVUI24 lane R (NEW-03): entry id is the stable export-status key;
+      // the visible cell below shows the true source id instead (RV9-04),
+      // with invalid rows keeping the disambiguated display placeholder.
+      id: statusKey,
+      cellText: validId ? sourceId : id,
       rowDomId: mvManifestRowDomId(id),
       rowAnchor: mvManifestRowAnchor(id),
       exportDomId: mvExportDomId(id),
@@ -711,8 +718,8 @@ function onExport(entry) {
           class="mv4-row"
           :data-semantic-anchor="entry.rowAnchor"
         >
-          <td class="mv4-mono" :title="entry.id">
-            {{ entry.id }}
+          <td class="mv4-mono" :title="entry.cellText">
+            {{ entry.cellText }}
           </td>
           <td>
             <span class="mv4-chip" :title="'Type ' + entry.kindText">{{ entry.kindText }}</span>

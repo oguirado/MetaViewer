@@ -649,8 +649,10 @@ body { font-family:var(--cuk-semantic-typography-font-family-sans, system-ui, sa
 .mv-shell-rail { width:var(--cuk-semantic-size-rail-collapsed-width); flex:none; position:relative; }
 .mv-shell main { position:relative; flex:1; min-height:0; min-width:0; }
 /* MVUI19 lane A (L3-3): the settled outcome toast is transient and never
-   intercepts pointer events on interactive rows beneath it. */
-#shell-wall #mv-host-outcome { pointer-events:none; }
+   intercepts pointer events on interactive rows beneath it. MVUI22 lane T:
+   hoist the toast to the kit overlay layer so wall/multislot overlays (all
+   below the overlay token) can never cover it; the corner placement stays. */
+#shell-wall #mv-host-outcome { pointer-events:none; z-index:var(--cuk-semantic-z-index-overlay); }
 /* Both paragraphs share one flow-sized cell; the reserve never enters the accessibility tree. */
 .mv-layout-notice { grid-row:2; display:grid; min-width:0; }
 .mv-layout-notice-reserve, .mv-layout-unavailable { grid-area:1 / 1; margin:0; padding:var(--cuk-semantic-spacing-sm); color:var(--cuk-semantic-text-primary); background:var(--cuk-semantic-surface-canvas); border:var(--cuk-semantic-border-width) solid var(--cuk-semantic-border-default); font-size:var(--cuk-semantic-typography-font-size-sm); }
