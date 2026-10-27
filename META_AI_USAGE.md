@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 353 | 55 | 298 |
-| Lanes finished OK | 353 | 55 | 298 |
-| Agent steps | 19,351 | 2,705 | 16,646 |
-| Lane-hours of agent work | 50.1 | 5.2 | 44.9 |
-| Fresh input tokens | 78,654,445 | 11,482,034 | 67,172,411 |
-| Cache-read input tokens | 1,827,915,188 | 226,255,212 | 1,601,659,976 |
+| Lanes launched | 355 | 55 | 300 |
+| Lanes finished OK | 355 | 55 | 300 |
+| Agent steps | 19,533 | 2,705 | 16,828 |
+| Lane-hours of agent work | 50.7 | 5.2 | 45.4 |
+| Fresh input tokens | 79,225,820 | 11,482,034 | 67,743,786 |
+| Cache-read input tokens | 1,848,461,382 | 226,255,212 | 1,622,206,170 |
 | Prompt cache hit % | 95.9 | 95.2 | 96.0 |
-| Output tokens | 17,155,594 | 2,135,708 | 15,019,886 |
-| Thinking tokens | 9,124,780 | 1,050,039 | 8,074,741 |
-| Cost (USD) | 14.9524 | 2.0279 | 12.9245 |
-| Cost per lane (USD) | 0.0424 | 0.0369 | 0.0434 |
+| Output tokens | 17,307,370 | 2,135,708 | 15,171,662 |
+| Thinking tokens | 9,223,657 | 1,050,039 | 8,173,618 |
+| Cost (USD) | 15.081 | 2.0279 | 13.0531 |
+| Cost per lane (USD) | 0.0425 | 0.0369 | 0.0435 |
 
-Rooms: 93. Peak concurrent lanes [MEASURED from lane start/end]: 24.
+Rooms: 94. Peak concurrent lanes [MEASURED from lane start/end]: 24.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -43,7 +43,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
 | docs | 15 | 94.8 | 0.5371 |
-| fix | 31 | 96.8 | 1.7701 |
+| fix | 33 | 96.9 | 1.8987 |
 | kit | 3 | 96.5 | 0.1997 |
 | ops | 4 | 88.1 | 0.0468 |
 | plan | 12 | 92.6 | 0.3072 |
@@ -153,6 +153,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui23c | UI orchestrator | Oct 27 21:43 | fix | 1 | 96.5 | 0.047 | L8-1 follow-up: when the unbound hold window expires, ack HIDDEN and keep the frame so a late canvas still paints it (the host never resends a static frame). |
 | mvui23d | UI orchestrator | Oct 27 21:58 | fix | 1 | 95.5 | 0.0702 | L8-1 co-cause from a verified review: reactive canvas width/height wipe the first painted frame; plus stream leak on unmount and stale retained frame on blanking. |
 | mvui23e | UI orchestrator | Oct 27 22:16 | fix | 1 | 96.4 | 0.0485 | Align seven older frame tests with the corrected canvas sizing contract (the reactive canvas dimensions they pinned wiped the first frame, L8-1). |
+| mvui24 | UI orchestrator | Oct 27 22:37 | fix | 2 | 97.3 | 0.1286 | Complete MV-UI13 with the remaining verified RV9 renderer items: capture refresh evicting rows, scheduler raw ids in DOM ids and never-destroyed entries, screenshot row ids/labels. |
 
 ## Every lane
 
@@ -511,6 +512,8 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui23c | H | hold expiry keeps bytes | Oct 27 21:43 | yes | 65 | 96.5 | 0.04701 |
 | mvui23d | C | canvas dimensions + unmount + blanking | Oct 27 21:58 | yes | 75 | 95.5 | 0.070191 |
 | mvui23e | T | mvui18 tests vs new sizing contract | Oct 27 22:16 | yes | 63 | 96.4 | 0.048504 |
+| mvui24 | R | capture refresh + shot rows | Oct 27 22:37 | yes | 95 | 97.2 | 0.067596 |
+| mvui24 | S | scheduler DOM ids + entry lifecycle | Oct 27 22:37 | yes | 87 | 97.4 | 0.060989 |
 
 ## Method
 
