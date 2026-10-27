@@ -120,7 +120,10 @@ func RuntimeFromEnv() (Runtime, error) {
 		if pubs[profile.RAMRoot] != nil {
 			continue
 		}
-		p, e := frames.NewPublisher(frames.PublishConfig{RAMRoot: profile.RAMRoot, MaxFrameBytes: 64 << 20, MaxPixels: 64 << 20, MaxSurfaces: 16})
+		// [TARGET, unit decision] Retain each published frame >= 4 s (>= 2 s floor),
+		// bounded by 128 MiB per surface (~38 full 1280x900 RGB24 frames), 512 MiB
+		// global across surfaces, and at most 64 generations per surface.
+		p, e := frames.NewPublisher(frames.PublishConfig{RAMRoot: profile.RAMRoot, MaxFrameBytes: 64 << 20, MaxPixels: 64 << 20, MaxSurfaces: 16, MaxRetained: 64, MinRetention: 4 * time.Second, MaxSurfaceBytes: 128 << 20, MaxTotalBytes: 512 << 20})
 		if e != nil {
 			_ = recorder.Close()
 			viewMgr.Close()
@@ -629,7 +632,7 @@ func (s *helloState) accept(ctx context.Context, profiles map[string]capsule.Pro
 	}
 	var pending []*frames.Subscriptions
 	for root, pub := range pubs {
-		sub, err := newSubscriptions(session.ctx, frames.SubscriptionConfig{MaxSubscriptions: 16, PollInterval: 100 * time.Millisecond, CaptureTimeout: 90 * time.Second, ShutdownTimeout: 5 * time.Second, CaptureLock: session.work}, fresh, pub, session.emit)
+		sub, err := newSubscriptions(session.ctx, frames.SubscriptionConfig{MaxSubscriptions: 16, PollInterval: 100 * time.Millisecond, CaptureTimeout: 90 * time.Second, ShutdownTimeout: 5 * time.Second, CaptureLock: session.work, DeduplicateUnchanged: true, InitialUnchangedPolls: 2}, fresh, pub, session.emit)
 		if err != nil {
 			for _, staged := range pending {
 				_ = staged.Close(context.Background())

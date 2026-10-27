@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"metaviewer/daemon-adapter/internal/capsule"
 )
@@ -297,4 +298,218 @@ func TestLiveBudgetRetentionRingAndNegativeControl(t *testing.T) {
 			t.Fatalf("expected retained frame %d within byte cap to exist: %v", i+1, err)
 		}
 	}
+}
+
+func TestTimeBasedRetentionGlobalCapAndDeduplication(t *testing.T) {
+	root, b, f := ramFixture(t)
+	now := time.Unix(1_700_000_000, 0)
+	winPub, err := NewPublisher(PublishConfig{
+		RAMRoot:         root,
+		MaxFrameBytes:   64 << 20,
+		MaxPixels:       64 << 20,
+		MaxSurfaces:     4,
+		MaxRetained:     64,
+		MinRetention:    3 * time.Second,
+		MaxSurfaceBytes: 128 << 20,
+		MaxTotalBytes:   512 << 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	winPub.now = func() time.Time { return now }
+	t.Cleanup(func() { _ = winPub.Close() })
+
+	// Publish 25 generations at 100 ms intervals (t = 0.0 s .. 2.4 s, all within 3 s window).
+	// Even past generation 16, all 25 publications must survive inside MinRetention.
+	var winPaths []string
+	for seq := uint64(1); seq <= 25; seq++ {
+		f.Seq = seq
+		r, pubErr := winPub.Publish("a", b, f)
+		if pubErr != nil {
+			t.Fatal(pubErr)
+		}
+		winPaths = append(winPaths, r.RAMWSPath)
+		now = now.Add(100 * time.Millisecond)
+	}
+	for i, pth := range winPaths {
+		if _, statErr := os.Stat(pth); statErr != nil {
+			t.Fatalf("expected generation %d to survive inside 3s retention window: %v", i+1, statErr)
+		}
+	}
+
+	// Negative control: once time advances past MinRetention (t = 3.5 s, so generations
+	// published at t <= 0.5 s are >= 3.0 s old), publishing generation 26 reclaims them.
+	now = time.Unix(1_700_000_000, 0).Add(3500 * time.Millisecond)
+	f.Seq = 26
+	if _, pubErr := winPub.Publish("a", b, f); pubErr != nil {
+		t.Fatal(pubErr)
+	}
+	for i := 0; i <= 5; i++ {
+		if _, statErr := os.Stat(winPaths[i]); !os.IsNotExist(statErr) {
+			t.Fatalf("negative control failed: expected expired generation %d to be unlinked past MinRetention", i+1)
+		}
+	}
+	for i := 6; i < len(winPaths); i++ {
+		if _, statErr := os.Stat(winPaths[i]); statErr != nil {
+			t.Fatalf("expected non-expired generation %d to remain openable: %v", i+1, statErr)
+		}
+	}
+
+	// Global byte cap across multiple surfaces: each 2x1 RGB24 frame is 6 bytes.
+	// Set MaxSurfaceBytes = 24 (4 frames per surface) and MaxTotalBytes = 30 (5 frames total across surfaces)
+	// with a 10 s MinRetention so byte caps override time retention.
+	globalNow := time.Unix(1_700_000_000, 0)
+	globalPub, err := NewPublisher(PublishConfig{
+		RAMRoot:         root,
+		MaxFrameBytes:   64 << 20,
+		MaxPixels:       64 << 20,
+		MaxSurfaces:     4,
+		MaxRetained:     64,
+		MinRetention:    10 * time.Second,
+		MaxSurfaceBytes: 24,
+		MaxTotalBytes:   30,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	globalPub.now = func() time.Time { return globalNow }
+	t.Cleanup(func() { _ = globalPub.Close() })
+
+	bB := b
+	bB.Surface.SurfaceID = "b"
+	fA := f
+	fB := f
+	var pathsA, pathsB []string
+	for seq := uint64(1); seq <= 3; seq++ {
+		fA.Seq = seq
+		rA, errA := globalPub.Publish("a", b, fA)
+		if errA != nil {
+			t.Fatal(errA)
+		}
+		pathsA = append(pathsA, rA.RAMWSPath)
+		globalNow = globalNow.Add(50 * time.Millisecond)
+
+		fB.Seq = seq
+		rB, errB := globalPub.Publish("b", bB, fB)
+		if errB != nil {
+			t.Fatal(errB)
+		}
+		pathsB = append(pathsB, rB.RAMWSPath)
+		globalNow = globalNow.Add(50 * time.Millisecond)
+	}
+	// Total frames published = 6 (36 bytes > MaxTotalBytes=30), so the globally oldest frame (pathsA[0]) must be evicted.
+	if _, statErr := os.Stat(pathsA[0]); !os.IsNotExist(statErr) {
+		t.Fatal("expected global byte cap to evict oldest generation on surface a")
+	}
+	for i := 1; i < len(pathsA); i++ {
+		if _, statErr := os.Stat(pathsA[i]); statErr != nil {
+			t.Fatalf("expected retained generation a[%d] to exist: %v", i, statErr)
+		}
+	}
+	for i := 0; i < len(pathsB); i++ {
+		if _, statErr := os.Stat(pathsB[i]); statErr != nil {
+			t.Fatalf("expected retained generation b[%d] to exist: %v", i, statErr)
+		}
+	}
+
+	// Unchanged-hash deduplication + negative control when content hash changes.
+	dedupPub, err := NewPublisher(PublishConfig{
+		RAMRoot:       root,
+		MaxFrameBytes: 64 << 20,
+		MaxPixels:     64 << 20,
+		MaxSurfaces:   4,
+		Deduplicate:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = dedupPub.Close() })
+
+	fDedup := f
+	fDedup.Seq = 1
+	ref1, changed1, err := dedupPub.PublishIfChanged("a", b, fDedup)
+	if err != nil || !changed1 || ref1.Generation != 1 {
+		t.Fatalf("expected initial frame to publish generation 1: changed=%v ref=%+v err=%v", changed1, ref1, err)
+	}
+	for seq := uint64(2); seq <= 5; seq++ {
+		fDedup.Seq = seq
+		refSame, changed, errSame := dedupPub.PublishIfChanged("a", b, fDedup)
+		if errSame != nil || changed || refSame.Generation != ref1.Generation || refSame.RAMWSPath != ref1.RAMWSPath {
+			t.Fatalf("expected unchanged frame at seq %d to deduplicate: changed=%v ref=%+v err=%v", seq, changed, refSame, errSame)
+		}
+	}
+	// Negative control: mutate pixel content and digest; PublishIfChanged must publish a new generation.
+	altPath := filepath.Join(b.FramesRoot, "alt.png")
+	altFile, err := os.OpenFile(altPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	altImg := image.NewRGBA(image.Rect(0, 0, 2, 1))
+	altImg.SetRGBA(0, 0, color.RGBA{R: 9, G: 8, B: 7, A: 255})
+	altImg.SetRGBA(1, 0, color.RGBA{R: 6, G: 5, B: 4, A: 255})
+	if err := png.Encode(altFile, altImg); err != nil {
+		t.Fatal(err)
+	}
+	if err := altFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	altSum := sha256.Sum256([]byte{9, 8, 7, 6, 5, 4})
+	fDedup.Seq = 6
+	fDedup.Path = altPath
+	fDedup.SHA256RGB24 = fmt.Sprintf("%x", altSum[:])
+	ref2, changed2, err := dedupPub.PublishIfChanged("a", b, fDedup)
+	if err != nil || !changed2 || ref2.Generation != 2 || ref2.RAMWSPath == ref1.RAMWSPath {
+		t.Fatalf("negative control failed: expected changed digest to publish generation 2: changed=%v ref=%+v err=%v", changed2, ref2, err)
+	}
+
+	// Real 1280x900 RGB24 (3,456,000 bytes) publisher latency measurement.
+	const w, h = 1280, 900
+	hdPath := filepath.Join(b.FramesRoot, "hd.png")
+	hdFile, err := os.OpenFile(hdPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hdImg := image.NewRGBA(image.Rect(0, 0, w, h))
+	hdRaw := make([]byte, w*h*3)
+	for i := 0; i < w*h; i++ {
+		r, g, bl := byte(i), byte(i>>8), byte(i>>16)
+		off4 := i * 4
+		hdImg.Pix[off4], hdImg.Pix[off4+1], hdImg.Pix[off4+2], hdImg.Pix[off4+3] = r, g, bl, 0xff
+		off3 := i * 3
+		hdRaw[off3], hdRaw[off3+1], hdRaw[off3+2] = r, g, bl
+	}
+	if err := png.Encode(hdFile, hdImg); err != nil {
+		t.Fatal(err)
+	}
+	if err := hdFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	hdBinding := b
+	hdBinding.Surface.SurfaceID = "hd"
+	hdBinding.Surface.Geometry = capsule.Geometry{W: w, H: h}
+	hdFrame := capsule.NativeFrame{
+		Path:        hdPath,
+		Generation:  hdBinding.Container,
+		Seq:         1,
+		Width:       w,
+		Height:      h,
+		SHA256RGB24: fmt.Sprintf("%x", sha256.Sum256(hdRaw)),
+		Window:      &capsule.Window{ID: "w1", W: w, H: h},
+		TSNS:        100,
+		CaptureUS:   1000,
+	}
+	t0 := time.Now()
+	hdRef, hdChanged, err := dedupPub.PublishIfChanged("hd", hdBinding, hdFrame)
+	pubDur := time.Since(t0)
+	if err != nil || !hdChanged || hdRef.Width != w || hdRef.Height != h {
+		t.Fatalf("1280x900 publish failed: %v", err)
+	}
+	hdFrame.Seq = 2
+	t1 := time.Now()
+	_, hdChanged2, err := dedupPub.PublishIfChanged("hd", hdBinding, hdFrame)
+	dedupDur := time.Since(t1)
+	if err != nil || hdChanged2 {
+		t.Fatalf("1280x900 deduplicated publish failed: changed=%v err=%v", hdChanged2, err)
+	}
+	t.Logf("MEASURED_PUBLISHER_1280x900 raw_bytes=%d publish_ms=%.2f dedup_ms=%.3f", len(hdRaw), float64(pubDur.Microseconds())/1000.0, float64(dedupDur.Microseconds())/1000.0)
 }

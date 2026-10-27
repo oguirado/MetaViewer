@@ -172,6 +172,19 @@ records `(sha256, generation, width, height)` per surface, and the Electron
 reader binds each lease to its surface generation. End-to-end frame lease
 lifetimes across crash recovery remain an open question.
 
+Because the core verifies and fsyncs each `3,456,000`-byte (`1280x900` RGB24)
+frame witness and journal record before fanning `frame_ready` out to the UI
+(`678.84 ms` mean, `692.71 ms` max per frame, during which a `100 ms` poll loop
+advances `~6.8` generations [MEASURED: `cargo test --manifest-path core/Cargo.toml frame_ready_latency_and_concurrent_generations_on_3_45mb_frames`]),
+the publisher retains each `/dev/shm` generation for at least `4 s` (`>= 2 s`
+floor [TARGET, unit decision]), bounded by `128 MiB` per surface (`~38`
+full-resolution frames [TARGET, unit decision]), `512 MiB` globally across
+surfaces, and at most `64` generations per surface (`daemon-adapter/internal/frames/publisher.go`),
+while active subscriptions suppress duplicate publications and `frame_ready`
+emissions after the initial `2` confirmation polls whenever `sha256_rgb24` and
+geometry are unchanged (`daemon-adapter/internal/frames/subscriptions.go`)
+[TARGET, unit decision].
+
 Holdings pixels are not keyed by state. A pixel change alone cannot prove a
 Holdings state transition. The v0.2 contracts carry `ground_truth.source=holdings_lane`
 with a `state_sha256` witness and tick (`observation`), and the

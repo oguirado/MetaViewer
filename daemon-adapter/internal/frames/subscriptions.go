@@ -29,12 +29,22 @@ type SubscriptionConfig struct {
 	// CaptureLock serializes capture/publication with synchronous runtime capture.
 	CaptureLock                                   *sync.Mutex
 	PollInterval, CaptureTimeout, ShutdownTimeout time.Duration
+	DeduplicateUnchanged                          bool
+	InitialUnchangedPolls                         int
 }
 type task struct {
 	cancel    context.CancelFunc
 	done      chan struct{}
 	err       error
 	cancelled bool
+	emitted   uint64
+}
+
+func (s *Subscriptions) initialUnchangedPolls() uint64 {
+	if s.cfg.InitialUnchangedPolls > 0 {
+		return uint64(s.cfg.InitialUnchangedPolls)
+	}
+	return 2
 }
 
 type pollTimer interface {
@@ -172,12 +182,17 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 			return
 		}
 		var msg json.RawMessage
+		changed := true
 		if e == nil {
 			var ref Ref
 			s.mu.Lock()
 			cancelled := t.cancelled || s.closed || ctx.Err() != nil
 			if !cancelled {
-				ref, e = s.publisher.Publish(id, binding, native)
+				if (s.cfg.DeduplicateUnchanged || s.publisher.cfg.Deduplicate) && t.emitted >= s.initialUnchangedPolls() {
+					ref, changed, e = s.publisher.PublishIfChanged(id, binding, native)
+				} else {
+					ref, _, e = s.publisher.publish(id, binding, native, false)
+				}
 			}
 			s.mu.Unlock()
 			if cancelled {
@@ -186,7 +201,7 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 				}
 				return
 			}
-			if e == nil {
+			if e == nil && changed {
 				msg, _ = json.Marshal(struct {
 					Schema string `json:"schema"`
 					Event  string `json:"event"`
@@ -210,31 +225,38 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 				return
 			}
 		}
-		delivery, stop := context.WithTimeout(ctx, s.cfg.CaptureTimeout)
-		deliveryErr := s.emit(delivery, msg)
-		if deliveryErr == nil {
-			deliveryErr = delivery.Err()
-		}
-		stop()
-		if locked {
-			s.cfg.CaptureLock.Unlock()
-		}
-		if deliveryErr != nil {
-			t.err = errors.Join(e, deliveryErr)
-			// A failed frame delivery gets one bounded failure notification.
-			// Do not retry a failure notification or emit after cancellation.
-			if !failed && ctx.Err() == nil {
-				if failure, eventErr := captureFailure(id); eventErr == nil {
-					notice, stop := context.WithTimeout(ctx, s.cfg.CaptureTimeout)
-					_ = s.emit(notice, failure)
-					stop()
-				}
+		if !failed && !changed {
+			if locked {
+				s.cfg.CaptureLock.Unlock()
 			}
-			return
-		}
-		if failed {
-			t.err = e
-			return
+		} else {
+			delivery, stop := context.WithTimeout(ctx, s.cfg.CaptureTimeout)
+			deliveryErr := s.emit(delivery, msg)
+			if deliveryErr == nil {
+				deliveryErr = delivery.Err()
+			}
+			stop()
+			if locked {
+				s.cfg.CaptureLock.Unlock()
+			}
+			if deliveryErr != nil {
+				t.err = errors.Join(e, deliveryErr)
+				// A failed frame delivery gets one bounded failure notification.
+				// Do not retry a failure notification or emit after cancellation.
+				if !failed && ctx.Err() == nil {
+					if failure, eventErr := captureFailure(id); eventErr == nil {
+						notice, stop := context.WithTimeout(ctx, s.cfg.CaptureTimeout)
+						_ = s.emit(notice, failure)
+						stop()
+					}
+				}
+				return
+			}
+			if failed {
+				t.err = e
+				return
+			}
+			t.emitted++
 		}
 		next = next.Add(s.cfg.PollInterval)
 		now := s.clock.Now()

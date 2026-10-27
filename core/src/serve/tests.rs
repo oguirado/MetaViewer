@@ -82,3 +82,202 @@ fn saturation_has_a_reserved_typed_signal_and_disconnect_is_distinct() {
     drop(server);
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn frame_ready_latency_and_concurrent_generations_on_3_45mb_frames() {
+    use std::os::unix::fs::PermissionsExt;
+    let uid = effective_uid().unwrap();
+    let root = std::env::temp_dir().join(format!("mv-frame-lat-test-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir(&root).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let shm_root = Path::new("/dev/shm").join(format!("mv-frame-lat-shm-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&shm_root);
+    fs::create_dir(&shm_root).unwrap();
+    fs::set_permissions(&shm_root, fs::Permissions::from_mode(0o700)).unwrap();
+    let pub_dir = shm_root.join("frames-bench");
+    fs::create_dir(&pub_dir).unwrap();
+    fs::set_permissions(&pub_dir, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let config = Config {
+        session_id: "frame-lat-session".into(),
+        core: registration("core"),
+        peers: vec![
+            registration("agent"),
+            registration("daemon"),
+            registration("ui"),
+        ],
+    };
+    let mut server = Server::open(config.clone(), &root, uid).unwrap();
+    let daemon_ep = registration("daemon").endpoint;
+    let ui_ep = registration("ui").endpoint;
+    let agent_ep = registration("agent").endpoint;
+
+    let (ui_tx, ui_rx) = mpsc::sync_channel(64);
+    server.connections.insert(
+        ui_ep.clone(),
+        Connection {
+            id: 1,
+            epoch: 1,
+            queue: ui_tx,
+            terminal: Arc::new(Mutex::new(None)),
+        },
+    );
+    let (daemon_tx, _daemon_rx) = mpsc::sync_channel(64);
+    server.connections.insert(
+        daemon_ep.clone(),
+        Connection {
+            id: 2,
+            epoch: 1,
+            queue: daemon_tx,
+            terminal: Arc::new(Mutex::new(None)),
+        },
+    );
+
+    server.authority.apply(Input::Connect).unwrap();
+    let seed_witness = server.authority.retain_witness(b"seed").unwrap();
+    server
+        .authority
+        .apply_with_witnesses(
+            Input::Surface {
+                id: "srf-lat".into(),
+                surface: Surface {
+                    display: ":99".into(),
+                    owner: agent_ep,
+                    agent_controlled: false,
+                    live: true,
+                    frame: None,
+                    refresh_after: None,
+                    allowed_verbs: Vec::new(),
+                },
+            },
+            vec![seed_witness],
+        )
+        .unwrap();
+    server.subscriptions.insert((ui_ep, "srf-lat".into()));
+
+    let daemon_reg = config
+        .peers
+        .iter()
+        .find(|p| p.endpoint == daemon_ep)
+        .unwrap()
+        .clone();
+    let ready_daemon = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let policy = HandshakePolicy::new(
+                uid,
+                daemon_reg.endpoint.clone(),
+                config.core.endpoint.clone(),
+                config.session_id.clone(),
+                daemon_reg.hello.clone(),
+            )
+            .unwrap();
+            let hello = decode_envelope(
+                &json!({
+                    "schema": "envelope/v0.2",
+                    "msg_id": "hello-daemon",
+                    "ts_ns": 0,
+                    "from": daemon_reg.endpoint,
+                    "to": config.core.endpoint,
+                    "session_id": config.session_id,
+                    "seq": 1,
+                    "nonce": "hello-daemon",
+                    "body": daemon_reg.hello,
+                })
+                .to_string(),
+            )
+            .unwrap();
+            let (mut a, mut b) = UnixStream::pair().unwrap();
+            let writer = tokio::spawn(async move { write_frame(&mut a, &hello).await.unwrap() });
+            let peer = handshake_at(
+                &mut b,
+                &policy,
+                &WireLimits::default(),
+                tokio::time::Instant::now(),
+            )
+            .await
+            .unwrap();
+            writer.await.unwrap();
+            peer
+        });
+
+    let width: u32 = 1280;
+    let height: u32 = 900;
+    let frame_bytes = (width as usize) * (height as usize) * 3;
+    assert_eq!(frame_bytes, 3_456_000);
+
+    let generations = 8u64;
+    let mut per_frame_ms = Vec::with_capacity(generations as usize);
+    let batch_start = Instant::now();
+
+    for gen in 1..=generations {
+        let mut raw = vec![(gen as u8).wrapping_mul(17); frame_bytes];
+        raw[0] = gen as u8;
+        let sha = sha256_hex(&raw);
+        let frame_path = pub_dir.join(format!("gen-{gen}.rgb"));
+        let t0 = Instant::now();
+        fs::write(&frame_path, &raw).unwrap();
+        fs::set_permissions(&frame_path, fs::Permissions::from_mode(0o600)).unwrap();
+
+        let env = decode_envelope(
+            &json!({
+                "schema": "envelope/v0.2",
+                "msg_id": format!("frame-{gen}"),
+                "ts_ns": gen * 100_000_000,
+                "from": daemon_ep,
+                "to": config.core.endpoint,
+                "session_id": config.session_id,
+                "seq": gen + 1,
+                "nonce": format!("frame-{gen}"),
+                "body": {
+                    "schema": "surface_event/v0.2",
+                    "event": "frame_ready",
+                    "data": {
+                        "frame_ref": {
+                            "schema": "frame_ref/v0.2",
+                            "surface_id": "srf-lat",
+                            "generation": gen,
+                            "tick": gen,
+                            "ts_ns": gen * 100_000_000,
+                            "width": width,
+                            "height": height,
+                            "format": "rgb24",
+                            "ramws_path": frame_path.to_str().unwrap(),
+                            "sha256": sha,
+                            "capture_us": 1000
+                        }
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        server
+            .route_at(gen * 100_000_000, &ready_daemon, 1, env)
+            .unwrap();
+        let forwarded = ui_rx.try_recv().expect("frame_ready must forward to UI");
+        let elapsed_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        per_frame_ms.push(elapsed_ms);
+        let value = serde_json::to_value(&forwarded.body).unwrap();
+        assert_eq!(value["event"], "frame_ready");
+        assert_eq!(value["data"]["frame_ref"]["generation"], gen);
+    }
+
+    let batch_ms = batch_start.elapsed().as_secs_f64() * 1000.0;
+    let max_ms = per_frame_ms.iter().copied().fold(0.0_f64, f64::max);
+    let mean_ms = per_frame_ms.iter().sum::<f64>() / (generations as f64);
+    let gens_during_batch_at_100ms = batch_ms / 100.0;
+    eprintln!(
+        "MEASURED_CORE_FRAME_PATH frames={} bytes={} mean_ms={:.2} max_ms={:.2} batch_ms={:.2} poll_100ms_gens_during_batch={:.2}",
+        generations, frame_bytes, mean_ms, max_ms, batch_ms, gens_during_batch_at_100ms
+    );
+
+    drop(server);
+    let _ = fs::remove_dir_all(&shm_root);
+    let _ = fs::remove_dir_all(&root);
+}

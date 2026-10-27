@@ -2,8 +2,15 @@ package frames
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"image"
+	"image/color"
+	"image/png"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -244,5 +251,117 @@ func TestSubscriptionDeliveryFailure(t *testing.T) {
 	}
 	if s.TerminalError("a") != nil {
 		t.Fatal("healthy subscription retained a terminal failure")
+	}
+}
+
+func TestSubscriptionDeduplicatesUnchangedDigestAndPublishesOnMutation(t *testing.T) {
+	root, b, f := ramFixture(t)
+	p, err := NewPublisher(PublishConfig{RAMRoot: root, MaxFrameBytes: 64 << 20, MaxPixels: 64, MaxSurfaces: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	source := &captureSource{b: b, f: f}
+	events := make(chan json.RawMessage, 16)
+	subs, err := NewSubscriptions(context.Background(), SubscriptionConfig{
+		MaxSubscriptions:      1,
+		PollInterval:          2 * time.Millisecond,
+		CaptureTimeout:        time.Second,
+		ShutdownTimeout:       time.Second,
+		DeduplicateUnchanged:  true,
+		InitialUnchangedPolls: 2,
+	}, source, p, func(ctx context.Context, msg json.RawMessage) error {
+		select {
+		case events <- msg:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = subs.Close(context.Background()) })
+
+	if err := subs.Subscribe(context.Background(), "a"); err != nil {
+		t.Fatal(err)
+	}
+	// Initial 2 confirmation polls must be delivered.
+	for i := 1; i <= 2; i++ {
+		select {
+		case msg := <-events:
+			var ev struct {
+				Event string `json:"event"`
+				Data  struct {
+					FrameRef Ref `json:"frame_ref"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(msg, &ev); err != nil || ev.Event != "frame_ready" || ev.Data.FrameRef.Generation != uint64(i) {
+				t.Fatalf("unexpected initial event %d: %+v err=%v", i, ev, err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("stalled waiting for initial subscription frames")
+		}
+	}
+
+	// Wait until at least 6 capture polls have occurred with identical SHA256RGB24.
+	deadline := time.After(time.Second)
+	for {
+		source.mu.Lock()
+		calls := source.calls
+		source.mu.Unlock()
+		if calls >= 6 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("source did not advance to 6 polls")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	// No extra frame_ready events may be emitted while content hash is unchanged.
+	select {
+	case msg := <-events:
+		t.Fatalf("expected unchanged frames after initial confirmation to be suppressed, got %s", msg)
+	default:
+	}
+
+	// Negative control: mutate pixel content and SHA256RGB24; the next poll must emit generation 3.
+	changedPath := filepath.Join(b.FramesRoot, "changed.png")
+	cf, err := os.OpenFile(changedPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img := image.NewRGBA(image.Rect(0, 0, 2, 1))
+	img.SetRGBA(0, 0, color.RGBA{R: 11, G: 22, B: 33, A: 255})
+	img.SetRGBA(1, 0, color.RGBA{R: 44, G: 55, B: 66, A: 255})
+	if err := png.Encode(cf, img); err != nil {
+		t.Fatal(err)
+	}
+	if err := cf.Close(); err != nil {
+		t.Fatal(err)
+	}
+	changedSum := sha256.Sum256([]byte{11, 22, 33, 44, 55, 66})
+	changedHex := fmt.Sprintf("%x", changedSum[:])
+
+	source.mu.Lock()
+	source.f.Path = changedPath
+	source.f.SHA256RGB24 = changedHex
+	source.mu.Unlock()
+
+	select {
+	case msg := <-events:
+		var ev struct {
+			Event string `json:"event"`
+			Data  struct {
+				FrameRef Ref `json:"frame_ref"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(msg, &ev); err != nil || ev.Event != "frame_ready" || ev.Data.FrameRef.Generation != 3 || ev.Data.FrameRef.SHA256 != changedHex {
+			t.Fatalf("expected changed digest to emit generation 3 with new SHA256, got %+v err=%v", ev, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stalled waiting for mutated frame delivery")
 	}
 }
