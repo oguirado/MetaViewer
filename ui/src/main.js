@@ -240,6 +240,22 @@ async function bootstrap() {
   const replayMount = /** @type {{ authorityPort?: import('./core/hostAdapters.js').AuthorityPort, terminalBrokerPort?: import('./core/hostAdapters.js').TerminalPort }|null} */ (/** @type {unknown} */ (isLiveReplay ? fixtureMount : null));
   const replayPort = replayMount?.authorityPort ?? null;
   const replayTerminalPort = replayMount?.terminalBrokerPort ?? null;
+  // MVUI14 lane F: live-only frame-port router. Dynamic import: the entry
+  // keeps its closed static stub-map surface (mount-wiring pin), so the
+  // router module loads lazily and any failure degrades to null (tiles stay
+  // Connecting, never a boot refusal). Installed before the authority
+  // runtime subscribes, so no brokered port notice can arrive first.
+  /** @type {{ dispose?: () => void }|null} */
+  let framePortRouter = null;
+  if (!fixture) {
+    try {
+      const routerModule = await import('./frames/framePortRouter.js');
+      const installRouter = routerModule.default;
+      if (typeof installRouter === 'function') {
+        framePortRouter = installRouter({ target: window }) ?? null;
+      }
+    } catch { framePortRouter = null; }
+  }
   const authorityHost = replayPort ? createAuthorityAdapter(replayPort) : (fixture ? null : createAuthorityAdapter(host?.authority));
   const terminalBroker = fixture ? (replayTerminalPort ? createTerminalBroker(replayTerminalPort) : null) : createTerminalBroker(host?.sideTerminal);
   const liveRuntime = fixture ? null : createAuthorityRuntime(host?.authority);
@@ -267,13 +283,14 @@ async function bootstrap() {
   const replayRuntime = /** @type {{ dispose?: () => void }|null} */ (/** @type {unknown} */ (isLiveReplay ? fixtureMount?.runtime ?? null : null));
   let disposeQa = () => {};
   let tornDown = false;
-  const teardown = () => { tornDown = true; disposeQa(); captureState?.dispose?.(); liveRuntime?.dispose(); replayRuntime?.dispose?.(); window.removeEventListener?.('pagehide', teardown); };
-  if (captureState || liveRuntime || replayRuntime || (!fixture && typeof host?.qa?.reportAnchors === 'function')) window.addEventListener?.('pagehide', teardown, { once: true });
+  const teardown = () => { tornDown = true; disposeQa(); framePortRouter?.dispose?.(); captureState?.dispose?.(); liveRuntime?.dispose(); replayRuntime?.dispose?.(); window.removeEventListener?.('pagehide', teardown); };
+  if (framePortRouter || captureState || liveRuntime || replayRuntime || (!fixture && typeof host?.qa?.reportAnchors === 'function')) window.addEventListener?.('pagehide', teardown, { once: true });
   try {
     Object.assign(document.documentElement.dataset, THEME_DATASET);
     const application = createApp(App, { layout, storage, scope: SCOPE, fixture, nestedHost, exportDestination, settingsHost, preferences, authorityHost, terminalBroker, captureState, captureAvailable,
       runtime: /** @type {InstanceType<typeof App>['$props']['runtime']} */ (/** @type {unknown} */ (fixtureMount?.runtime ?? liveRuntime)),
       terminal: fixtureMount?.terminal ?? null });
+    if (framePortRouter) application.provide?.('framePortRouter', framePortRouter);
     installKitTheme(application);
     // Kit declaration predates its shipped MetaViewer schemes.
     /** @type {(scheme:string)=>void} */ (setKitScheme)(fixture?.scheme ?? 'mv-light');

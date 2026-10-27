@@ -32,6 +32,8 @@ const emit = defineEmits(['canvas-ready', 'canvas-released']);
 
 /** @type {{ attachCanvas: (args: any) => { ok: boolean, token?: symbol }, detachCanvas: (id: string, token: symbol | null) => void } | null} */
 const scheduler = /** @type {any} */ (inject('tileScheduler', null));
+/** Live-only frame-port router provided by the entry; null keeps the legacy path. */
+const framePortRouter = /** @type {{ bindSurface?: (binding: any) => boolean, unbindSurface?: (surfaceId: unknown) => void } | null} */ (inject('framePortRouter', null));
 /** @type {symbol | null} */
 let canvasToken = null;
 
@@ -91,16 +93,55 @@ function attachCanvas() {
   emit('canvas-released', { surfaceId: props.surfaceId });
 }
 
+/**
+ * Bind this tile to the frame-port router so validated deliveries paint
+ * through the injected scheduler. The router notifies when it registers
+ * the surface, retrying the canvas attach that fails while the surface is
+ * still unregistered. Without a router (fixtures, legacy) this is a no-op.
+ */
+function bindFramePort() {
+  if (framePortRouter === null || scheduler === null) return;
+  if (typeof framePortRouter.bindSurface !== 'function') return;
+  try {
+    framePortRouter.bindSurface({
+      surfaceId: props.surfaceId,
+      scheduler,
+      onRegistered: (/** @type {{ surfaceId: string }} */ notice) => {
+        if (notice.surfaceId === props.surfaceId && canvasToken === null) attachCanvas();
+      },
+    });
+  } catch { /* Binding failures keep the legacy path. */ }
+}
+
+/** @param {unknown} surfaceId */
+function unbindFramePort(surfaceId) {
+  if (framePortRouter === null || typeof framePortRouter.unbindSurface !== 'function') return;
+  try {
+    framePortRouter.unbindSurface(surfaceId);
+  } catch { /* Unbind never breaks teardown. */ }
+}
+
 onMounted(attachCanvas);
+onMounted(bindFramePort);
 
 watch(() => [props.surfaceId, props.generation, props.epoch], (_current, previous) => {
+  // Only a surface change rebinds the router: generation/epoch-only updates
+  // refresh the canvas attach while the live binding (and its port) stands.
+  const surfaceChanged = props.surfaceId !== previous[0];
+  if (surfaceChanged) {
+    unbindFramePort(previous[0]);
+  }
   if (scheduler === null) return;
   scheduler.detachCanvas(String(previous[0]), canvasToken);
   canvasToken = null;
   attachCanvas();
+  if (surfaceChanged) {
+    bindFramePort();
+  }
 });
 
 onBeforeUnmount(() => {
+  unbindFramePort(props.surfaceId);
   if (scheduler !== null) {
     scheduler.detachCanvas(props.surfaceId, canvasToken);
     canvasToken = null;

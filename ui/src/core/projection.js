@@ -36,6 +36,8 @@ import { createPublicProjectionCoordinator } from '../../.kit/capsule-ui-kit/src
  *   control: 'agent' | 'human' | 'shared',
  *   controlOwner?: 'agent' | 'human' | 'none',
  *   title?: string,
+ *   display?: string,
+ *   profile_id?: string,
  *   aiSessionActivity?: KitActivity,
  *   attachmentState?: KitAttachment,
  *   dispatchOutcome?: KitOutcome,
@@ -467,6 +469,12 @@ export function selectWallSurface(snapshot, capsuleId) {
   }
   if (found.title !== undefined && typeof found.title !== 'string') {
     return malformedRow('row title must be a string');
+  }
+  if (found.display !== undefined && typeof found.display !== 'string') {
+    return malformedRow('row display must be a string');
+  }
+  if (found.profile_id !== undefined && typeof found.profile_id !== 'string') {
+    return malformedRow('row profile_id must be a string');
   }
   const activity = found.aiSessionActivity;
   if (activity !== undefined && (typeof activity !== 'string' || !KIT_ACTIVITIES.includes(activity))) {

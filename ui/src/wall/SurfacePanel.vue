@@ -279,7 +279,7 @@ export function roundControlBox(box) {
 import { computed, onBeforeUnmount, provide, shallowRef, watch } from 'vue';
 import CapsulePanel from 'capsule-ui-kit/CapsulePanel';
 import TileCaptureChrome from './TileCaptureChrome.vue';
-import { deriveTileState, controlVerbForRow, frameFreshnessText, presentedFrameHandle, TILE_ERROR_DISPLAY_STATUS } from './tileStates.js';
+import { deriveTileState, controlVerbForRow, frameFreshnessText, isAgentActingRow, presentedFrameHandle, TILE_ERROR_DISPLAY_STATUS } from './tileStates.js';
 import './wall.css';
 
 const props = defineProps({
@@ -390,8 +390,14 @@ watch([() => props.capsuleId, () => props.projectionView, row],
 // treatment class and the control verb all read this decision, props in only.
 const tile = computed(() => {
   const snapshotValue = snapshot.value;
-  const decision = deriveTileState(snapshotValue, row.value, lastRow.value);
-  const labels = new Map([['folded', 'Folded'], ['human-control', 'Human control'], ['agent-acting', 'Agent acting']]);
+  const current = row.value;
+  const decision = deriveTileState(snapshotValue, current, lastRow.value);
+  // Agent chip honesty: motion is claimed only with acting evidence on the
+  // row (busy session, in-flight proposal, or exclusive agent ownership with
+  // no finer live signal); otherwise the chip reads 'Agent ready'. Tile
+  // state, chip role, anchors and treatment stay untouched.
+  const labels = new Map([['folded', 'Folded'], ['human-control', 'Human control'],
+    ['agent-acting', isAgentActingRow(current) ? 'Agent acting' : 'Agent ready']]);
   return decision.status === 'Live'
     ? { ...decision, status: labels.get(decision.tile) ?? decision.status }
     : decision;

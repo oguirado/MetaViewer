@@ -110,7 +110,7 @@ test('authority notices drive real kit owner, pressed state and schema-valid tak
       assert.ok(buttons.length > 0);
       for (const button of buttons) {
         assert.equal(button.props['aria-pressed'], String(owner === 'human'));
-        assert.equal(button.props['aria-label'], `${owner === 'human' ? 'Release' : 'Take'} control of Desktop`);
+        assert.equal(button.props['aria-label'], `${owner === 'human' ? 'Release' : 'Take'} control of default`);
         assert.equal(button.props.disabled, false);
       }
       const count = h.sent.length;

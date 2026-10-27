@@ -6,7 +6,7 @@
  */
 
 /** @typedef {{ code: string, message: string }} TileAdmissionError */
-/** @typedef {{ id: string, surfaceId: string, backendLifecycle: string, generation: number, visibility: string, control: string, controlOwner?: string, aiSessionActivity?: string, attachmentState?: string, refusal?: TileAdmissionError|null }} TileSurfaceRow */
+/** @typedef {{ id: string, surfaceId: string, backendLifecycle: string, generation: number, visibility: string, control: string, controlOwner?: string, aiSessionActivity?: string, dispatchOutcome?: string, attachmentState?: string, refusal?: TileAdmissionError|null }} TileSurfaceRow */
 /** @typedef {{ schema: string, epoch: number, revision: number, query: string, projection: { rows: readonly TileSurfaceRow[] } }} TileProjectionEnvelope */
 /** @typedef {{ status: string, stale: boolean, envelope: TileProjectionEnvelope|null, error: TileAdmissionError|null }} TileProjectionSnapshot */
 /** @typedef {Readonly<{ tile: string, status: string, controlVerb: string, keepsCapturing: boolean }>} TileDecision */
@@ -37,6 +37,14 @@ export const CONNECTING_ATTACHMENTS = Object.freeze(['attaching', 'restoring']);
  * is blocked on the operator or done, so a shared tile stays plain live.
  */
 export const AGENT_ACTING_ACTIVITIES = Object.freeze(['busy']);
+
+/**
+ * Proposal outcomes that mean the agent has an action in flight on the tile.
+ * Settled or terminal outcomes (`none`, `completed-unverified`, `verified`,
+ * `refused`, `uncertain`, `cancelled`) are explicitly not acting: the run is
+ * over or never started, so the chip must not claim motion.
+ */
+export const AGENT_ACTING_OUTCOMES = Object.freeze(['admitting', 'accepted', 'executing']);
 
 /** Verbs the wall may request on the control axis. */
 export const CONTROL_VERBS = Object.freeze(['take_control', 'release_control']);
@@ -83,6 +91,36 @@ export function controlAxisTile(row) {
     return 'agent-acting';
   }
   return 'live';
+}
+
+/**
+ * Acting evidence for the agent chip. The tile state stays on the control
+ * axis (an agent-owned tile is `agent-acting` whatever the agent does), but
+ * the chip copy claims motion only with evidence: a busy AI session, an
+ * in-flight proposal outcome, or — when the row projects neither signal —
+ * exclusive agent ownership derived from what the live host provides. The
+ * authority feed carries no activity or dispatch fields, so a live row with
+ * no finer signal and the agent holding the surface reads acting; any
+ * present-but-quiet signal (ready session, settled proposal) reads ready.
+ * @param {TileSurfaceRow|null} row
+ * @returns {boolean}
+ */
+export function isAgentActingRow(row) {
+  if (row === null || typeof row !== 'object') return false;
+  if (typeof row.aiSessionActivity === 'string'
+    && AGENT_ACTING_ACTIVITIES.includes(row.aiSessionActivity)) {
+    return true;
+  }
+  if (typeof row.dispatchOutcome === 'string'
+    && AGENT_ACTING_OUTCOMES.includes(row.dispatchOutcome)) {
+    return true;
+  }
+  if (row.aiSessionActivity === undefined && row.dispatchOutcome === undefined) {
+    const owner = row.controlOwner;
+    const control = owner === 'human' || owner === 'agent' ? owner : row.control;
+    return control === 'agent';
+  }
+  return false;
 }
 
 /**

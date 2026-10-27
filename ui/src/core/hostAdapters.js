@@ -79,17 +79,22 @@ export function createAuthorityRuntime(port) {
     decode(raw) {
       const value = /** @type {any} */ (raw), f = value?.frame_ref, s = value?.surface;
       const invalid = () => ({ ok: /** @type {false} */ (false), error: { code: 'ERR_FRAME_NOTICE', message: 'Surface update unavailable.' } });
+      const surfaceKeys = s !== null && typeof s === 'object' ? Object.keys(s).sort().join(',') : '';
+      const fullSurfaceKeys = 'control,display,geometry,kind,profile_id,schema,state,surface_id,visibility';
+      // Hosts that predate profile_id omit the key; the title then falls back
+      // to the surface id. Every other surface key stays mandatory.
+      const legacySurfaceKeys = 'control,display,geometry,kind,schema,state,surface_id,visibility';
       if (!value || Object.keys(value).sort().join(',') !== 'frame_ref,surface'
         || f?.schema !== 'frame_ref/v0.2' || s?.schema !== 'surface/v0.2'
         || Object.keys(f).sort().join(',') !== 'capture_us,format,generation,height,schema,sha256,surface_id,tick,ts_ns,width'
-        || Object.keys(s).sort().join(',') !== 'control,display,geometry,kind,profile_id,schema,state,surface_id,visibility'
+        || (surfaceKeys !== fullSurfaceKeys && surfaceKeys !== legacySurfaceKeys)
         || f.format !== 'rgb24' || typeof f.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(f.sha256)
         || !['generation', 'width', 'height'].every(key => Number.isSafeInteger(f[key]) && f[key] > 0)
         || !['tick', 'ts_ns', 'capture_us'].every(key => Number.isSafeInteger(f[key]) && f[key] >= 0)
         || !['desktop_capsule', 'browser', 'game_capsule', 'vm'].includes(s.kind)
         || !s.geometry || Object.keys(s.geometry).sort().join(',') !== 'h,w'
         || !Number.isSafeInteger(s.geometry.w) || s.geometry.w < 1 || !Number.isSafeInteger(s.geometry.h) || s.geometry.h < 1
-        || typeof s.profile_id !== 'string' || !s.profile_id.length || s.profile_id.length > 128
+        || (s.profile_id !== undefined && (typeof s.profile_id !== 'string' || s.profile_id.length > 128))
         || typeof s.surface_id !== 'string' || !s.surface_id.length || s.surface_id.length > 128
         || f.surface_id !== s.surface_id || !Number.isSafeInteger(f.generation) || f.generation < 1
         || !['active','standby','ceded','destroyed','lost'].includes(s.state)
@@ -105,8 +110,15 @@ export function createAuthorityRuntime(port) {
         return { ok: true, value: { schema: SCHEMA, epoch: 1, revision: ++revision, query: QUERY,
           mode: 'snapshot', projection: { rows: Object.freeze([...rows.values()]) } } };
       }
+      // Titles name the profile (the human-meaningful surface name); the raw
+      // display locator (X11-style ':100') stays as secondary metadata. When
+      // the host sends no profile, the surface id is the stable fallback and
+      // the row keeps an empty profile_id instead of inventing one.
+      const profileId = typeof s.profile_id === 'string' ? s.profile_id : '';
       rows.set(s.surface_id, Object.freeze({ id: s.surface_id, surfaceId: s.surface_id,
-        title: s.display, generation: f.generation, backendLifecycle: s.state,
+        title: profileId.length > 0 ? profileId : s.surface_id,
+        display: s.display, profile_id: profileId,
+        generation: f.generation, backendLifecycle: s.state,
         visibility: s.visibility, control: s.control,
         // surface/v0.2 has no exclusive owner for shared control and no lease.
         // The kit's control button consumes this axis; focus leases stay absent.

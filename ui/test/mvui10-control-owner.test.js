@@ -97,7 +97,7 @@ async function harness(dropMapping = false) {
 
 function assertButton(h, verb) {
   const button = h.button();
-  assert.equal(button.props['aria-label'], `${verb === 'release_control' ? 'Release' : 'Take'} control of Desktop`);
+  assert.equal(button.props['aria-label'], `${verb === 'release_control' ? 'Release' : 'Take'} control of default`);
   assert.equal(button.props['aria-pressed'], String(verb === 'release_control'));
 }
 async function click(h, verb) {

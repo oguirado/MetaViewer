@@ -235,7 +235,9 @@ export function tileBadgeVariant(input) {
 /**
  * Reads one surface entry from a capture store. Accepts `bySurface` as a
  * Map or a plain object; anything else (missing store, missing surface,
- * malformed entry) yields null instead of throwing.
+ * malformed entry) yields null instead of throwing. The plain-object read
+ * is a direct property get so a reactive store tracks the key and an entry
+ * added after mount re-renders the chrome; inherited members still refuse.
  * @param {unknown} captureState Capture store or null when unbound.
  * @param {unknown} surfaceId Host-issued surface id.
  * @returns {Record<string, unknown> | null}
@@ -250,9 +252,14 @@ export function readSurfaceEntry(captureState, surfaceId) {
     candidate = bySurface.get(surfaceId) ?? null;
   } else if (bySurface !== null && typeof bySurface === 'object' && !Array.isArray(bySurface)) {
     const record = /** @type {Record<string, unknown>} */ (bySurface);
-    candidate = Object.prototype.hasOwnProperty.call(record, surfaceId)
-      ? record[surfaceId]
-      : null;
+    // Tracked read first: on the reactive({}) store a direct property get
+    // subscribes this key, so an entry added after mount re-renders. A lone
+    // hasOwnProperty guard never subscribes (it resolves through
+    // getOwnPropertyDescriptor, which the proxy does not track) and left the
+    // badge frozen on its mount-time readout. The own-property check stays
+    // so inherited members (`__proto__`, `toString`, ...) still refuse.
+    const value = record[surfaceId];
+    candidate = Object.prototype.hasOwnProperty.call(record, surfaceId) ? value ?? null : null;
   }
   if (candidate === null || typeof candidate !== 'object' || Array.isArray(candidate)) return null;
   return /** @type {Record<string, unknown>} */ (candidate);
