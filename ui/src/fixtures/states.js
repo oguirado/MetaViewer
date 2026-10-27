@@ -51,6 +51,7 @@ export const FIXTURE_KEYS = Object.freeze([
   'recording',
   'settings-dark',
   'nested',
+  'creative',
 ]);
 
 /**
@@ -308,6 +309,22 @@ export const FIXTURES = deepFreeze({
     expectedAnchors: [
       ...chromeAnchors(),
       { anchor: 'settings/density', role: 'generic' },
+    ],
+  },
+  creative: {
+    key: 'creative', screen: 'creative', scheme: 'mv-light', density: 'compact',
+    epoch: 1, revision: 11,
+    capsules: [capsule('cap-01', { title: 'Creative workspace' })],
+    ui: { creativeFrames: [{
+      frame_id: 'frame-1', prompt: 'A study in light',
+      data_url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAUAAAAC0CAIAAABqhmJGAAAENElEQVR42u3T52lcARSE0e3Nhfi3wb25DuW4WVmr4CDXYBUgdN8ziNFlD3wVzHAmf59Xkpo2MYEEsCSAJQEsASwJYEkAS3oD8MvzSlLTJi9PK0lNewW8lNQ0gCWAJQEsCWAJYEmfH/Cfp6WkpgEstQb8uJTUNICl3oAXkpoGsASwJIAljQP8+3EhqWkASwBLygB+WEhqGsASwJJCgOeSmgaw1Bnwr4e5pKYBLAEsCWBJIwFv5pKaBrAEsCSAJY0D/HMzk9Q0gCWAJW0n4OWP73q/4Dtfvn7T+wGMKMAA/zfg+1k2PmvAuXf4rAFH+QAMMMAAAwwwwBHAz/ezbHyWBd/hsyzLB2CAAe4NeJqNzwGAY+/wOQBwkg/AAAMMMMAAAwywAAZ4JOC7aTY+a8C5d/isAUf5AAwwwJ0BP91Ns/FZFnyHz7IsH4ABBhhggAEGGGABDPBYwOfZ+BwAOPYOnwMAJ/kADDDAAAMMMMAZwLfn2fisAefe4bMGHOUzebw9z8ZnWfAdPsuyfAAGGGCAAQYYYIAFMMAAAwwwwAADDHAHwGfZ+BwAOPYOnwMAJ/kADDDAnQE/3Jxl47Ms+A6fZVk+AAMMMMAAAwwwwAIYYIABBhhggAEGGGCAAQYYYIABBvgtwJub02x8lgXf4bMsy2eyuT7NxmcNOPcOnzXgKB+AAQYYYIABBhhgAQwwwAADDDDAAAMMMMAAA/yBgO+vT7PxWRZ8h8+yLB+AAQa4NeCrk2x81oBz7/BZA47yARhggAEGGGCAARbAAAMMMMAAAwwwwJ8f8N3VSTY+y4Lv8FmW5QMwwAADDDDAAGcAX55k47MGnHuHzxpwlM8r4ONsfA4AHHuHzwGAk3wABhhggAEGGGCABTDA4wDfXh5n47Ms+A6fZVk+AAMMMMAAAwwwwAIY4JGAL46z8VkDzr3DZw04ygdggAHuDfgoG58DAMfe4XMA4CQfgAEGuDPgm4ujbHyWBd/hsyzLB2CAAQYYYIABBlgAAwwwwABvD+D1UTY+a8C5d/isAUf5AAwwwAADDDDAEcDX68NsfJYF3+GzLMsHYIABBhhggAEGWAADDDDAAAMMMMAANwC8OszGZw049w6fNeAoH4ABBrgz4KvVYTY+y4Lv8FmW5QMwwAD3BnyQjc8BgGPv8DkAcJIPwAADDDDAAAMMsAAGGGCAAd4ewMuDbHzWgHPv8FkDjvKZXC4PsvFZFnyHz7IsH4ABBhhggAEGGGABDPBYwPuSmgawBLAkgCWNA3yx2JfUNIAlgCUBLAlgCWBJHQDvSWoawFJnwOvFnqSmTdbzPUlNA1gCWBLAkgCWAJYEsKQPBLya70pqGsBSa8CzXUlNA1gCWBLAkgCWAJb0+QEvZ7uSmgaw1BvwjqSmTZbTHUlNA1gCWBLAkgCWtgbwYrojqWkASwBLAljSqP4Bp11+FkL5eK8AAAAASUVORK5CYII=',
+      sha256: 'ed37539f25b222c3261e05dd88121048149993d0851cb4799e776fe09f150af4', width: 320, height: 180,
+    }] },
+    expectedAnchors: [
+      { anchor: 'creative/open', role: 'button' },
+      { anchor: 'capsule/cap-01/creative/close', role: 'button' },
+      { anchor: 'capsule/cap-01/creative/frame/frame-1/select', role: 'button' },
+      { anchor: 'capsule/cap-01/creative/regenerate', role: 'button' },
     ],
   },
   nested: {

@@ -3,6 +3,7 @@
  * Canvas status reads successful presentation witnesses; bytes stay external.
  */
 import { computed, defineComponent, h, markRaw, onBeforeUnmount, onMounted, provide, ref, shallowRef, watch } from 'vue';
+import CreativeCapsule from './creative/CreativeCapsule.vue';
 import HostOutcome from './core/HostOutcome.vue';
 import DockWorkspace from 'capsule-ui-kit/DockWorkspace';
 import { ShellWorkspace, TopBar, Sidebar, StatusBar } from '../.kit/capsule-ui-kit/src/index-shell.js';
@@ -69,6 +70,8 @@ const nestedMode = resolveNestedMode(props.nestedHost ?? (props.fixture?.key ===
 const launcherOpen = ref(props.fixture?.ui.launcherOpen === true);
 const railOpen = ref(false);
 const settingsOpen = ref(props.fixture?.screen === 'settings');
+const creativeOpen = ref(props.fixture?.key === 'creative');
+const creativeFrames = computed(() => /** @type {unknown[]} */ (props.fixture?.ui.creativeFrames ?? []));
 const terminalOpen = ref(props.fixture?.key === 'side-terminal-open');
 const multislotOpen = ref(['multislot', 'recording'].includes(props.fixture?.key ?? ''));
 const selectedCapsuleId = ref(props.fixture?.capsules[0]?.id ?? '');
@@ -84,6 +87,13 @@ const emit = defineEmits(['submit-intent', 'create-capsule']);
 function dispatch(intent) {
   if (nestedMode.displayOnly) return;
   const record = /** @type {{schema?:string,op?:string,type?:string,capsuleId?:string}} */ (intent);
+  // Creative service operations have no authoritative wire schema. Never propose them.
+  if (record?.type?.startsWith('creative/')) {
+    emit('submit-intent', intent);
+    hostOutcome.value = { code: 'CREATIVE_SERVICE_UNAVAILABLE', message: 'Creative service unavailable.', tone: 'refusal' };
+    if (record.type === 'creative/close') creativeOpen.value = false;
+    return;
+  }
   const op = record?.op ?? (['take_control', 'release_control', 'fold', 'unfold'].includes(record?.type ?? '') ? record.type : null);
   const request = record?.op || !op ? intent : { op, surfaceId: record.capsuleId };
   const submitIntent = props.authorityHost?.intent, propose = props.authorityHost?.propose;
@@ -148,19 +158,28 @@ async function submitHost(action) {
 function selectCapsule(payload) {
   if (typeof payload?.capsuleId === 'string' && rows.value.some(row => row.id === payload.capsuleId)) selectedCapsuleId.value = payload.capsuleId;
 }
+function toggleCreative() {
+  creativeOpen.value = !creativeOpen.value;
+  settingsOpen.value = false;
+  multislotOpen.value = false;
+  terminalOpen.value = false;
+}
 function openMultislot() {
+  creativeOpen.value = false;
   if (!selectedSurface.value) return;
   settingsOpen.value = false;
   terminalOpen.value = false;
   multislotOpen.value = true;
 }
 function toggleSettings() {
+  creativeOpen.value = false;
   const next = !settingsOpen.value;
   multislotOpen.value = false;
   terminalOpen.value = false;
   settingsOpen.value = next;
 }
 function toggleTerminal() {
+  creativeOpen.value = false;
   const next = !terminalOpen.value;
   multislotOpen.value = false;
   settingsOpen.value = false;
@@ -205,7 +224,7 @@ watch(() => rows.value.map(row => /** @type {[string, string]} */ ([row.id, row.
       ? [[id, foldOverrides.value[id]]] : []));
 });
 // Readiness belongs to the branch actually rendered, including display-only walls.
-const wallView = computed(() => nestedMode.displayOnly ? 'nested' : rows.value.length ? 'workspace' : 'empty');
+const wallView = computed(() => nestedMode.displayOnly ? 'nested' : creativeOpen.value ? 'creative' : rows.value.length ? 'workspace' : 'empty');
 let firstFrame = 0;
 function cancelFirstFrame() { if (firstFrame) window.cancelAnimationFrame(firstFrame); firstFrame = 0; }
 watch(wallView, () => { settled.value = false; revealed.clear(); cancelFirstFrame(); }, { flush: 'sync' });
@@ -254,13 +273,14 @@ const chromeWorkspace = markRaw(defineComponent({
     <TopBar v-if="!nestedMode.displayOnly" product="MetaViewer" new-label="Add capsule" search-placeholder="Find a capsule…" :nav-expanded="railOpen"
       :palette-items="catalog" @toggle-nav="railOpen = !railOpen" @new-capsule="launcherOpen = true" @open="openCapsule">
       <template #actions>
+        <UiButton id="shell-creative" data-semantic-anchor="creative/open" label="Storyboard" :aria-expanded="creativeOpen" :disabled="!selectedSurface" @click="toggleCreative" />
         <UiButton id="shell-settings" data-semantic-anchor="settings/open" label="Settings" :aria-expanded="settingsOpen" @click="toggleSettings" />
         <UiButton id="shell-multislot" data-semantic-anchor="capsule/open-multislot" label="Open in multislot" :aria-expanded="multislotOpen" :disabled="!selectedSurface" @click="openMultislot" />
         <UiButton id="shell-terminal" data-semantic-anchor="terminal/toggle" label="Terminal" :aria-expanded="terminalOpen" @click="toggleTerminal" />
       </template>
     </TopBar>
     <div class="mv-shell-body">
-      <div v-if="!nestedMode.displayOnly" class="mv-shell-rail"><Sidebar :groups="groups" :collapsed="!railOpen" :overlay="true" workspace-label="MetaViewer" @open="openCapsule" /></div>
+      <div v-if="!nestedMode.displayOnly && !creativeOpen" class="mv-shell-rail"><Sidebar :groups="groups" :collapsed="!railOpen" :overlay="true" workspace-label="MetaViewer" @open="openCapsule" /></div>
       <main id="shell-wall" aria-label="MetaViewer capsule wall">
         <HostOutcome :row="hostOutcome" />
         <section v-if="nestedMode.displayOnly" class="mv-nested-wall" aria-label="Nested capsule wall">
@@ -268,7 +288,7 @@ const chromeWorkspace = markRaw(defineComponent({
             <SurfaceCanvas :surface-id="surface.id" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :state="surface.attachmentState === 'live' ? 'live' : 'connecting'" />
           </article>
         </section>
-        <WallWorkspace v-else :key="wallView" :hidden="!rows.length" ref="wall" :workspace-component="chromeWorkspace" :scope="props.scope" :default-profile="props.layout" :storage="props.storage"
+        <WallWorkspace v-else-if="!creativeOpen" :key="wallView" :hidden="!rows.length" ref="wall" :workspace-component="chromeWorkspace" :scope="props.scope" :default-profile="props.layout" :storage="props.storage"
           owner-window-id="main-wall" :projection-view="feed" :intent-builders="props.runtime?.intentBuilders ?? intentBuilders"
           :control-registry="props.runtime?.controlRegistry ?? controlRegistry" :scheduler="props.runtime?.scheduler ?? scheduler" :tile-scheduler="props.runtime?.tileScheduler ?? tileScheduler"
           :color-scheme="scheme === 'mv-dark' ? 'dark' : 'light'" density="compact" @ready="revealRows" @wall-settled="onWorkspaceSettled" @activate-surface="selectCapsule" @submit-intent="dispatch">
@@ -276,7 +296,10 @@ const chromeWorkspace = markRaw(defineComponent({
             <SurfaceCanvas v-if="surface && (!multislotOpen || capsuleId !== selectedSurface?.id)" :surface-id="capsuleId" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :state="surface.attachmentState === 'live' ? 'live' : 'connecting'" />
           </template>
         </WallWorkspace>
-        <EmptyWallView v-if="!rows.length && !nestedMode.displayOnly" @add-capsule="launcherOpen = true" />
+        <EmptyWallView v-if="!rows.length && !nestedMode.displayOnly && !creativeOpen" @add-capsule="launcherOpen = true" />
+        <section v-if="creativeOpen && selectedSurface && !nestedMode.displayOnly" class="mv-creative-screen" aria-label="Creative capsule">
+          <CreativeCapsule :capsule-id="selectedSurface.id" :frames="creativeFrames" title="Storyboard" @submit-intent="dispatch" />
+        </section>
         <section v-if="multislotOpen && selectedSurface && !nestedMode.displayOnly" class="mv-multislot-screen" aria-label="Capsule multislot">
           <UiButton id="multislot-back" data-semantic-anchor="multislot/back" label="Back to wall" @click="multislotOpen = false" />
           <MultislotHost :capsule-id="selectedSurface.id" :capsule-label="selectedSurface.title" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" :folded="selectedFolded" v-model:input-mode="inputMode" @submit-intent="dispatchMultislot">
@@ -295,10 +318,10 @@ const chromeWorkspace = markRaw(defineComponent({
       <template #shortcuts><span class="mv-shell-caption">{{ rows.length ? `${rows.length} capsules` : 'Ready when you are' }}</span></template>
     </StatusBar>
     <div class="mv-terminal" :hidden="!terminalOpen || nestedMode.displayOnly || multislotOpen">
-      <SideTerminalOverlay v-if="!nestedMode.displayOnly && !multislotOpen" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" v-model:open="terminalOpen" :storage="preferences" :top-offset="terminalTop" :bottom-offset="terminalBottom" />
+      <SideTerminalOverlay v-if="!nestedMode.displayOnly && !multislotOpen && !creativeOpen" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" v-model:open="terminalOpen" :storage="preferences" :top-offset="terminalTop" :bottom-offset="terminalBottom" />
     </div>
     <CatalogLauncher v-if="!nestedMode.displayOnly" v-model:visible="launcherOpen" @create="onCreateCapsule" />
-    <AgentLaneHost :screen="nestedMode.displayOnly ? 'nested' : settingsOpen ? 'settings' : multislotOpen ? 'multislot' : 'wall'" :fixture-key="props.fixture?.key ?? ''" />
+    <AgentLaneHost :screen="nestedMode.displayOnly ? 'nested' : creativeOpen ? 'creative' : settingsOpen ? 'settings' : multislotOpen ? 'multislot' : 'wall'" :fixture-key="props.fixture?.key ?? ''" />
   </div>
 </template>
 <style>
@@ -333,7 +356,7 @@ body { font-family:var(--cuk-semantic-typography-font-family-sans, system-ui, sa
 </style>
 
 <style>
-.mv-multislot-screen, .mv-settings-screen { position:absolute; inset:0; z-index:2; overflow:auto; padding:var(--cuk-semantic-spacing-md); background:var(--cuk-semantic-surface-canvas); }
+.mv-creative-screen, .mv-multislot-screen, .mv-settings-screen { position:absolute; inset:0; z-index:2; overflow:auto; padding:var(--cuk-semantic-spacing-md); background:var(--cuk-semantic-surface-canvas); }
 .mv-shell--nested { grid-template-rows:minmax(0,1fr); }
 .mv-nested-wall { display:grid; height:100%; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); }
 .mv-nested-wall article { min-width:0; min-height:0; }

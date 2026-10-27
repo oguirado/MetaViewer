@@ -16,7 +16,7 @@ function assertDeepFrozen(value) {
   }
 }
 
-test('the key set is exactly the ten room states in order', () => {
+test('the key set is exactly the room states in order', () => {
   assert.deepEqual(listFixtureKeys(), [
     'empty',
     'one',
@@ -28,6 +28,7 @@ test('the key set is exactly the ten room states in order', () => {
     'recording',
     'settings-dark',
     'nested',
+    'creative',
   ]);
   assert.deepEqual(FIXTURE_KEYS, listFixtureKeys());
   assert.deepEqual(Object.keys(FIXTURES).sort(), [...FIXTURE_KEYS].sort());
@@ -48,7 +49,7 @@ test('every fixture is frozen pure data with a closed shape', () => {
       'ui',
     ]);
     assert.equal(fixture.key, key);
-    assert.ok(['wall', 'multislot', 'settings', 'nested'].includes(fixture.screen), key);
+    assert.ok(['wall', 'multislot', 'settings', 'nested', 'creative'].includes(fixture.screen), key);
     assert.ok(['mv-light', 'mv-dark'].includes(fixture.scheme), key);
     assert.equal(fixture.density, 'compact', key);
     assertDeepFrozen(fixture);
