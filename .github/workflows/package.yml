@@ -11,6 +11,8 @@ defaults:
     shell: bash
 jobs:
   linux-package:
+    # [TARGET, unit decision] Fork PRs have no admitted private kit access.
+    if: github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork
     strategy:
       fail-fast: false
       matrix:
@@ -21,17 +23,22 @@ jobs:
             platform: arm64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 25
+    # [TARGET, unit decision] Keep x64 inert until its packaging interface is admitted.
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        if: matrix.platform == 'arm64'
         with:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        if: matrix.platform == 'arm64'
         with:
           node-version: "24"
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        if: matrix.platform == 'arm64'
         with:
           python-version: "3.12"
       - name: Read locked kit identity
+        if: matrix.platform == 'arm64'
         id: kit
         run: |
           python3 - <<'PYEOF'
@@ -45,10 +52,12 @@ jobs:
               print('commit=' + lock['commit'], file=output)
           PYEOF
       - name: Require kit access
+        if: matrix.platform == 'arm64'
         env:
           KIT_REPO_TOKEN: ${{ secrets.KIT_REPO_TOKEN }}
         run: test -n "$KIT_REPO_TOKEN"
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        if: matrix.platform == 'arm64'
         with:
           repository: ${{ steps.kit.outputs.repository }}
           ref: ${{ steps.kit.outputs.commit }}
@@ -56,21 +65,24 @@ jobs:
           path: kit-checkout
           persist-credentials: false
       - name: Canonicalize checkout origin for lock verification
+        if: matrix.platform == 'arm64'
         run: |
           origin="$(git -C kit-checkout remote get-url origin)"
           git -C kit-checkout remote set-url origin "${origin%.git}.git"
       - name: Prime locked dependencies
+        if: matrix.platform == 'arm64'
         working-directory: ui
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Prepare verified Electron and offline namespace
+        if: matrix.platform == 'arm64'
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           bash .github/workflows/offline.sh npm --prefix ui ci --offline --ignore-scripts --no-audit --no-fund
           node .github/workflows/install_electron.cjs
       - name: Execute gate and publish receipt
-        if: always()
+        if: always() && matrix.platform == 'arm64'
         env:
           JOB_ID: linux-package
           PLATFORM: ${{ matrix.platform }}
@@ -89,7 +101,7 @@ jobs:
             python3 - "$1" "$2" <<'PYEOF'
           import re, sys
           text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
-          for prefix in ('gh' + 'p_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
+          for prefix in ('gh' + 'p_', 'gh' + 's_', 'gh' + 'o_', 'gh' + 'u_', 'gh' + 'r_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
               text = re.sub(re.escape(prefix).replace('_', '(?:_|%5[fF])') + r'(?:[A-Za-z0-9_\-]|%[0-9a-fA-F]{2}){4,}', '[REDACTED]', text, flags=re.I)
           text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
           open(sys.argv[2], 'w').write(text)
