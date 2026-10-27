@@ -1,14 +1,15 @@
 'use strict';
-// W2-FRAME-LIVE-DIAG: production-path frame delivery diagnostics (MV_FRAME_DIAG=1)
-// and end-to-end journey booting the shipped ui/electron/main.js + preload.cjs +
-// hostBindings.js against a fixture core publishing live RGB24 frames in /dev/shm.
+// W2-FRAME-LIVE-DIAG & W3-E2E25-MULTISLOT: production-path frame delivery
+// diagnostics (MV_FRAME_DIAG=1) and end-to-end journey booting the shipped
+// ui/electron/main.js + preload.cjs + hostBindings.js + renderer framePortRouter
+// against a fixture core publishing live RGB24 frames in /dev/shm, including
+// the wall -> multislot -> wall round trip.
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { spawn, execFileSync } = require('node:child_process');
+const { spawn } = require('node:child_process');
 const { createHash, randomUUID } = require('node:crypto');
 const { once } = require('node:events');
-const { accessSync, constants } = require('node:fs');
 const {
   chmod,
   lstat,
@@ -18,7 +19,7 @@ const {
   rm,
   writeFile,
 } = require('node:fs/promises');
-const { createServer } = require('node:net');
+const { createConnection, createServer } = require('node:net');
 const { tmpdir } = require('node:os');
 const { join, resolve } = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -28,21 +29,7 @@ const ROOT = resolve(__dirname, '../..');
 const UI_ROOT = join(ROOT, 'ui');
 
 function ensureShippedUiBuild() {
-  const indexHtml = join(UI_ROOT, 'dist/renderer/index.html');
-  const preloadCjs = join(UI_ROOT, 'dist/preload/preload.cjs');
-  try {
-    accessSync(indexHtml, constants.R_OK);
-    accessSync(preloadCjs, constants.R_OK);
-    return;
-  } catch {
-    const viteBin = join(UI_ROOT, 'node_modules/vite/bin/vite.js');
-    execFileSync(process.execPath, [viteBin, 'build'], {
-      cwd: UI_ROOT,
-      env: process.env,
-      stdio: 'pipe',
-      timeout: 120000,
-    });
-  }
+  return harness.ensureFreshUiDist({ root: ROOT, uiRoot: UI_ROOT });
 }
 
 function makeRgbFrame(width, height, r, g, b) {
@@ -53,10 +40,227 @@ function makeRgbFrame(width, height, r, g, b) {
     buf[i + 2] = b;
   }
   const sha256 = createHash('sha256').update(buf).digest('hex');
-  return { buf, sha256 };
+  return { buf, sha256, rgba: [r, g, b, 255] };
 }
 
-async function runProductionFrameJourney({ diagEnabled = true } = {}) {
+/**
+ * Bounded polling helper with typed E2EError failure messages.
+ * @template T
+ * @param {() => Promise<T | null | false>} checkFn Returns truthy value when satisfied.
+ * @param {{
+ *   timeoutMs: number,
+ *   intervalMs?: number,
+ *   code: string,
+ *   describe: () => string,
+ *   checkChild?: () => void,
+ * }} options
+ * @returns {Promise<T>}
+ */
+async function waitForBounded(checkFn, options) {
+  const intervalMs = options.intervalMs ?? 50;
+  const deadline = Date.now() + options.timeoutMs;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    if (typeof options.checkChild === 'function') {
+      options.checkChild();
+    }
+    try {
+      const value = await checkFn();
+      if (value) return value;
+    } catch (err) {
+      lastError = err;
+    }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    await new Promise((r) => setTimeout(r, Math.min(intervalMs, remaining)));
+  }
+  const suffix = lastError ? ` (lastError=${lastError.message || String(lastError)})` : '';
+  throw new harness.E2EError(options.code, `${options.describe()}${suffix}`);
+}
+
+/**
+ * Serialized Electron probe entry that delegates to ui/electron/main.js
+ * mainDirectEntry() while exposing a local Unix control socket for bounded
+ * DOM/canvas inspection and QA-anchor clicks on the production BrowserWindow.
+ * @param {{ uiRoot: string, mainUrl: string, ctlSock: string }} config
+ */
+async function e2e25ProductionProbe(config) {
+  const electron = require('electron');
+  const { createServer: createNetServer } = require('node:net');
+
+  process.argv[1] = config.uiRoot;
+  electron.app.getAppPath = () => config.uiRoot;
+
+  let mainWindow = null;
+  electron.app.on('browser-window-created', (_event, win) => {
+    mainWindow = win;
+  });
+
+  const ctlServer = createNetServer((conn) => {
+    let buf = '';
+    conn.on('error', () => {});
+    conn.on('data', (chunk) => {
+      buf += chunk.toString('utf8');
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        void (async () => {
+          try {
+            const cmd = JSON.parse(line);
+            if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) {
+              conn.write(`${JSON.stringify({ ok: false, error: 'WINDOW_NOT_READY' })}\n`);
+              return;
+            }
+            const wc = mainWindow.webContents;
+            if (cmd.op === 'sampleSlot') {
+              const selectorJson = JSON.stringify(String(cmd.selector));
+              const result = await wc.executeJavaScript(
+                `(() => {
+                  const slot = document.querySelector(${selectorJson});
+                  const multislotScreen = document.querySelector('.mv-multislot-screen');
+                  const openBtn = document.querySelector('[data-semantic-anchor="capsule/open-multislot"]');
+                  const backBtn = document.querySelector('[data-semantic-anchor="multislot/back"]');
+                  if (!slot) {
+                    return {
+                      slotExists: false,
+                      multislotScreenExists: Boolean(multislotScreen),
+                      openMultislotDisabled: openBtn ? Boolean(openBtn.disabled) : true,
+                      backButtonExists: Boolean(backBtn),
+                    };
+                  }
+                  const canvas = slot.querySelector('canvas.mv-surface__canvas');
+                  let rgba = null;
+                  let uniform = false;
+                  let nonBlack = false;
+                  let width = 0;
+                  let height = 0;
+                  let canvasHidden = true;
+                  if (canvas) {
+                    width = canvas.width;
+                    height = canvas.height;
+                    canvasHidden = Boolean(canvas.hidden);
+                    if (width > 0 && height > 0) {
+                      const ctx = canvas.getContext('2d');
+                      if (ctx) {
+                        const data = ctx.getImageData(0, 0, width, height).data;
+                        rgba = [data[0], data[1], data[2], data[3]];
+                        nonBlack = data[3] === 255 && (data[0] > 0 || data[1] > 0 || data[2] > 0);
+                        uniform = true;
+                        for (let i = 0; i < data.length; i += 4) {
+                          if (
+                            data[i] !== rgba[0] ||
+                            data[i + 1] !== rgba[1] ||
+                            data[i + 2] !== rgba[2] ||
+                            data[i + 3] !== rgba[3]
+                          ) {
+                            uniform = false;
+                            break;
+                          }
+                        }
+                      }
+                    }
+                  }
+                  return {
+                    slotExists: true,
+                    dataState: slot.getAttribute('data-state'),
+                    frameHandle: slot.getAttribute('data-frame-handle'),
+                    frameDigest: slot.getAttribute('data-frame-digest'),
+                    canvasExists: Boolean(canvas),
+                    canvasHidden,
+                    width,
+                    height,
+                    rgba,
+                    uniform,
+                    nonBlack,
+                    multislotScreenExists: Boolean(multislotScreen),
+                    openMultislotDisabled: openBtn ? Boolean(openBtn.disabled) : true,
+                    backButtonExists: Boolean(backBtn),
+                  };
+                })()`,
+                true,
+              );
+              conn.write(`${JSON.stringify({ ok: true, result })}\n`);
+            } else if (cmd.op === 'clickAnchor') {
+              const selectorJson = JSON.stringify(String(cmd.selector));
+              const result = await wc.executeJavaScript(
+                `(() => {
+                  const el = document.querySelector(${selectorJson});
+                  if (!el) return { clicked: false, reason: 'ELEMENT_NOT_FOUND' };
+                  if (el.disabled) return { clicked: false, reason: 'ELEMENT_DISABLED' };
+                  el.click();
+                  return { clicked: true };
+                })()`,
+                true,
+              );
+              conn.write(`${JSON.stringify({ ok: true, result })}\n`);
+            } else {
+              conn.write(`${JSON.stringify({ ok: false, error: 'UNKNOWN_OP' })}\n`);
+            }
+          } catch (err) {
+            conn.write(`${JSON.stringify({ ok: false, error: String(err && err.message ? err.message : err) })}\n`);
+          }
+        })();
+      }
+    });
+  });
+  ctlServer.listen(config.ctlSock);
+  ctlServer.unref();
+
+  await import(config.mainUrl);
+}
+
+/**
+ * Send one JSON command to the probe control socket inside the bounded timeout.
+ * @param {string} ctlSock
+ * @param {Record<string, unknown>} payload
+ * @param {number} [timeoutMs]
+ * @returns {Promise<any>}
+ */
+function callProbeControl(ctlSock, payload, timeoutMs = 4000) {
+  return new Promise((resolveCall, rejectCall) => {
+    const client = createConnection(ctlSock);
+    let buffer = '';
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      client.destroy();
+      rejectCall(new harness.E2EError('E2E_PROBE_CTL_TIMEOUT', `probe control socket timed out on ${String(payload.op)}`));
+    }, timeoutMs);
+    client.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      rejectCall(err);
+    });
+    client.on('connect', () => {
+      client.write(`${JSON.stringify(payload)}\n`);
+    });
+    client.on('data', (chunk) => {
+      buffer += chunk.toString('utf8');
+      const nl = buffer.indexOf('\n');
+      if (nl >= 0 && !settled) {
+        settled = true;
+        clearTimeout(timer);
+        const line = buffer.slice(0, nl);
+        client.end();
+        try {
+          const parsed = JSON.parse(line);
+          if (!parsed.ok) {
+            rejectCall(new harness.E2EError('E2E_PROBE_CTL', String(parsed.error || 'probe command failed')));
+            return;
+          }
+          resolveCall(parsed.result);
+        } catch (err) {
+          rejectCall(err);
+        }
+      }
+    });
+  });
+}
+
+async function runProductionFrameJourney({ diagEnabled = true, multislotRoundTrip = false } = {}) {
   harness.requireNativeTool('xvfb-run');
   ensureShippedUiBuild();
   const electron = harness.electronBinary(ROOT);
@@ -96,9 +300,13 @@ async function runProductionFrameJourney({ diagEnabled = true } = {}) {
     const width = 4;
     const height = 4;
     const frames = [
-      makeRgbFrame(width, height, 0x12, 0x34, 0x56),
-      makeRgbFrame(width, height, 0x22, 0x88, 0xcc),
-      makeRgbFrame(width, height, 0xee, 0x44, 0x11),
+      makeRgbFrame(width, height, 0x12, 0x34, 0x56), // gen 1: wall initial
+      makeRgbFrame(width, height, 0x22, 0x88, 0xcc), // gen 2: wall initial
+      makeRgbFrame(width, height, 0xee, 0x44, 0x11), // gen 3: wall initial
+      makeRgbFrame(width, height, 0x33, 0xbb, 0x66), // gen 4: multislot live 1
+      makeRgbFrame(width, height, 0xd4, 0xaa, 0x22), // gen 5: multislot live 2
+      makeRgbFrame(width, height, 0x8a, 0x2b, 0xe2), // gen 6: wall after return 1
+      makeRgbFrame(width, height, 0x19, 0xc3, 0x7d), // gen 7: wall after return 2 (changing pixels)
     ];
     const framePaths = [];
     for (let i = 0; i < frames.length; i += 1) {
@@ -143,6 +351,8 @@ async function runProductionFrameJourney({ diagEnabled = true } = {}) {
 
     const timers = new Set();
     let subscribed = false;
+    let initialFramesSent = 0;
+    let publishFrameReady = null;
 
     server = createServer((socket) => {
       sockets.add(socket);
@@ -188,6 +398,7 @@ async function runProductionFrameJourney({ diagEnabled = true } = {}) {
           },
         });
       };
+      publishFrameReady = sendFrameReady;
 
       socket.on('data', (chunk) => {
         buffer += chunk.toString('utf8');
@@ -213,21 +424,17 @@ async function runProductionFrameJourney({ diagEnabled = true } = {}) {
             !subscribed
           ) {
             subscribed = true;
-            const t1 = setTimeout(() => {
-              timers.delete(t1);
-              sendFrameReady(1);
-            }, 150);
-            const t2 = setTimeout(() => {
-              timers.delete(t2);
-              sendFrameReady(2);
-            }, 550);
-            const t3 = setTimeout(() => {
-              timers.delete(t3);
-              sendFrameReady(3);
-            }, 950);
-            timers.add(t1);
-            timers.add(t2);
-            timers.add(t3);
+            const scheduleInitial = (gen, delayMs) => {
+              const timer = setTimeout(() => {
+                timers.delete(timer);
+                sendFrameReady(gen);
+                initialFramesSent = gen;
+              }, delayMs);
+              timers.add(timer);
+            };
+            scheduleInitial(1, 300);
+            scheduleInitial(2, 650);
+            scheduleInitial(3, 1000);
           }
         }
       });
@@ -237,6 +444,19 @@ async function runProductionFrameJourney({ diagEnabled = true } = {}) {
     server.listen(sockPath);
     await once(server, 'listening');
     await chmod(sockPath, 0o600);
+
+    const ctlSock = join(root, 'probe-ctl.sock');
+    const probePath = join(root, 'e2e25-probe.cjs');
+    const probeConfig = {
+      uiRoot: UI_ROOT,
+      mainUrl: pathToFileURL(join(UI_ROOT, 'electron/main.js')).href,
+      ctlSock,
+    };
+    await writeFile(
+      probePath,
+      `'use strict';\n(${e2e25ProductionProbe.toString()})(${JSON.stringify(probeConfig)});\n`,
+      { mode: 0o600 },
+    );
 
     const env = {
       ...process.env,
@@ -256,9 +476,10 @@ async function runProductionFrameJourney({ diagEnabled = true } = {}) {
       delete env.MV_FRAME_DIAG;
     }
 
+    const launchTarget = multislotRoundTrip ? probePath : UI_ROOT;
     child = spawn(
       'xvfb-run',
-      ['-a', electron, UI_ROOT, `--user-data-dir=${profileDir}`],
+      ['-a', electron, launchTarget, `--user-data-dir=${profileDir}`],
       { env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] },
     );
 
@@ -273,37 +494,348 @@ async function runProductionFrameJourney({ diagEnabled = true } = {}) {
     child.stdout.on('data', onChunk);
     child.stderr.on('data', onChunk);
 
-    const diagPath = join(diagDir, 'frame-diag.json');
-    const deadline = Date.now() + 18000;
-    let diag = null;
-    while (Date.now() < deadline) {
+    const checkChildAlive = () => {
       if (child.exitCode !== null) {
-        throw new Error(`Electron exited early (rc=${child.exitCode}):\n${output}`);
+        throw new harness.E2EError(
+          'E2E_EARLY_EXIT',
+          `Electron exited early (rc=${child.exitCode}):\n${output}`,
+        );
       }
-      if (diagEnabled) {
-        try {
-          const raw = await readFile(diagPath, 'utf8');
-          const parsed = JSON.parse(raw);
+    };
+
+    const diagPath = join(diagDir, 'frame-diag.json');
+    const readDiagOrNull = async () => {
+      try {
+        return JSON.parse(await readFile(diagPath, 'utf8'));
+      } catch {
+        return null;
+      }
+    };
+
+    let diag = null;
+    let lastObservedDiag = null;
+    if (diagEnabled) {
+      diag = await waitForBounded(
+        async () => {
+          const parsed = await readDiagOrNull();
+          if (parsed) lastObservedDiag = parsed;
           if (
             parsed?.main?.deliveriesPosted >= 3 &&
             parsed?.main?.acksReceived >= 3 &&
             parsed?.preload?.framesReceived >= 3 &&
-            parsed?.preload?.domSurfaceState !== null
+            parsed?.preload?.domSurfaceState === 'live'
           ) {
-            diag = parsed;
-            // Allow the trailing 250ms preload DOM diagnostic timer to settle.
-            await new Promise((r) => setTimeout(r, 350));
-            diag = JSON.parse(await readFile(diagPath, 'utf8'));
-            break;
+            return parsed;
           }
-        } catch {
-          // Wait for next atomic write.
-        }
-      } else if (mainReady && subscribed) {
-        await new Promise((r) => setTimeout(r, 600));
-        break;
+          return null;
+        },
+        {
+          timeoutMs: 18000,
+          intervalMs: 60,
+          code: 'E2E_DIAG_TIMEOUT',
+          checkChild: checkChildAlive,
+          describe: () =>
+            `Timed out waiting for initial wall live state in frame-diag.json (lastDiag=${JSON.stringify(lastObservedDiag)})\n${output}`,
+        },
+      );
+    } else {
+      await waitForBounded(
+        async () => mainReady && subscribed && initialFramesSent >= 3,
+        {
+          timeoutMs: 18000,
+          intervalMs: 60,
+          code: 'E2E_MAIN_READY_TIMEOUT',
+          checkChild: checkChildAlive,
+          describe: () =>
+            `Timed out waiting for mainReady=${mainReady}, subscribed=${subscribed}, initialFramesSent=${initialFramesSent}\n${output}`,
+        },
+      );
+    }
+
+    let roundTripEvidence = null;
+    if (multislotRoundTrip) {
+      const wallSlotSelector = `[data-capsule-id="${surfaceId}"] [data-anchor="capsule/${surfaceId}/slot"]`;
+      const multislotSlotSelector = `.mv-multislot-screen [data-anchor="capsule/${surfaceId}/slot"]`;
+      const openMultislotAnchor = '[data-semantic-anchor="capsule/open-multislot"]';
+      const backToWallAnchor = '[data-semantic-anchor="multislot/back"]';
+
+      let lastSample = null;
+      const wallInitial = await waitForBounded(
+        async () => {
+          const currentDiag = await readDiagOrNull();
+          if (currentDiag) lastObservedDiag = currentDiag;
+          const sample = await callProbeControl(ctlSock, { op: 'sampleSlot', selector: wallSlotSelector });
+          lastSample = sample;
+          if (
+            currentDiag?.main?.deliveriesPosted >= 3 &&
+            currentDiag?.main?.acksReceived >= 3 &&
+            currentDiag?.main?.lastAck?.frameGeneration === 3 &&
+            currentDiag?.main?.lastAck?.outcome === 'PRESENTED' &&
+            sample?.slotExists === true &&
+            sample.dataState === 'live' &&
+            sample.canvasExists === true &&
+            sample.canvasHidden === false &&
+            sample.nonBlack === true &&
+            sample.uniform === true &&
+            Array.isArray(sample.rgba) &&
+            sample.rgba.every((v, idx) => v === frames[2].rgba[idx]) &&
+            sample.openMultislotDisabled === false
+          ) {
+            return { diag: currentDiag, sample };
+          }
+          return null;
+        },
+        {
+          timeoutMs: 10000,
+          intervalMs: 50,
+          code: 'E2E_WALL_INITIAL_PIXELS',
+          checkChild: checkChildAlive,
+          describe: () =>
+            `Initial wall canvas did not paint generation 3 pixels ${JSON.stringify(frames[2].rgba)}: lastSample=${JSON.stringify(lastSample)}, lastDiag=${JSON.stringify(lastObservedDiag?.main)}`,
+        },
+      );
+      const wallInitialSample = wallInitial.sample;
+      const basePresented = wallInitial.diag.main.acksByOutcome.PRESENTED;
+      const baseRefused = wallInitial.diag.main.acksByOutcome.REFUSED;
+
+      // Step 1: Open the live surface in the multislot using existing QA semantic anchor.
+      const openClick = await callProbeControl(ctlSock, { op: 'clickAnchor', selector: openMultislotAnchor });
+      if (!openClick?.clicked) {
+        throw new harness.E2EError(
+          'E2E_MULTISLOT_OPEN_CLICK',
+          `Failed to click ${openMultislotAnchor}: ${JSON.stringify(openClick)}`,
+        );
       }
-      await new Promise((r) => setTimeout(r, 80));
+
+      // Wait for the multislot surface slot to mount and repaint the retained non-black frame.
+      const multislotMountedSample = await waitForBounded(
+        async () => {
+          const sample = await callProbeControl(ctlSock, { op: 'sampleSlot', selector: multislotSlotSelector });
+          lastSample = sample;
+          if (
+            sample?.multislotScreenExists === true &&
+            sample.slotExists === true &&
+            sample.dataState === 'live' &&
+            sample.canvasExists === true &&
+            sample.canvasHidden === false &&
+            sample.nonBlack === true &&
+            sample.uniform === true &&
+            sample.backButtonExists === true
+          ) {
+            return sample;
+          }
+          return null;
+        },
+        {
+          timeoutMs: 10000,
+          intervalMs: 50,
+          code: 'E2E_MULTISLOT_MOUNT',
+          checkChild: checkChildAlive,
+          describe: () =>
+            `Multislot canvas did not mount in live non-black state: lastSample=${JSON.stringify(lastSample)}`,
+        },
+      );
+
+      // Step 2: Deliver frames 4 and 5 while in multislot and wait for PRESENTED acks + non-black multislot pixels.
+      publishFrameReady(4);
+      const multislotGen4 = await waitForBounded(
+        async () => {
+          const currentDiag = await readDiagOrNull();
+          if (currentDiag) lastObservedDiag = currentDiag;
+          const sample = await callProbeControl(ctlSock, { op: 'sampleSlot', selector: multislotSlotSelector });
+          lastSample = sample;
+          if (
+            currentDiag?.main?.deliveriesPosted >= 4 &&
+            currentDiag?.main?.acksReceived >= 4 &&
+            currentDiag?.main?.acksByOutcome?.PRESENTED === basePresented + 1 &&
+            currentDiag?.main?.acksByOutcome?.REFUSED === baseRefused &&
+            currentDiag?.main?.lastAck?.frameGeneration === 4 &&
+            currentDiag?.main?.lastAck?.outcome === 'PRESENTED' &&
+            sample?.slotExists === true &&
+            sample.dataState === 'live' &&
+            sample.canvasHidden === false &&
+            sample.nonBlack === true &&
+            sample.uniform === true &&
+            Array.isArray(sample.rgba) &&
+            sample.rgba.every((v, idx) => v === frames[3].rgba[idx])
+          ) {
+            return { diag: currentDiag, sample };
+          }
+          return null;
+        },
+        {
+          timeoutMs: 10000,
+          intervalMs: 50,
+          code: 'E2E_MULTISLOT_PRESENT_GEN4',
+          checkChild: checkChildAlive,
+          describe: () =>
+            `Multislot failed to PRESENT generation 4 (${JSON.stringify(frames[3].rgba)}): lastSample=${JSON.stringify(lastSample)}, lastAck=${JSON.stringify(lastObservedDiag?.main?.lastAck)}, acksByOutcome=${JSON.stringify(lastObservedDiag?.main?.acksByOutcome)}`,
+        },
+      );
+
+      publishFrameReady(5);
+      const multislotGen5 = await waitForBounded(
+        async () => {
+          const currentDiag = await readDiagOrNull();
+          if (currentDiag) lastObservedDiag = currentDiag;
+          const sample = await callProbeControl(ctlSock, { op: 'sampleSlot', selector: multislotSlotSelector });
+          lastSample = sample;
+          if (
+            currentDiag?.main?.deliveriesPosted >= 5 &&
+            currentDiag?.main?.acksReceived >= 5 &&
+            currentDiag?.main?.acksByOutcome?.PRESENTED === basePresented + 2 &&
+            currentDiag?.main?.acksByOutcome?.REFUSED === baseRefused &&
+            currentDiag?.main?.lastAck?.frameGeneration === 5 &&
+            currentDiag?.main?.lastAck?.outcome === 'PRESENTED' &&
+            sample?.slotExists === true &&
+            sample.dataState === 'live' &&
+            sample.canvasHidden === false &&
+            sample.nonBlack === true &&
+            sample.uniform === true &&
+            Array.isArray(sample.rgba) &&
+            sample.rgba.every((v, idx) => v === frames[4].rgba[idx])
+          ) {
+            return { diag: currentDiag, sample };
+          }
+          return null;
+        },
+        {
+          timeoutMs: 10000,
+          intervalMs: 50,
+          code: 'E2E_MULTISLOT_PRESENT_GEN5',
+          checkChild: checkChildAlive,
+          describe: () =>
+            `Multislot failed to PRESENT generation 5 (${JSON.stringify(frames[4].rgba)}): lastSample=${JSON.stringify(lastSample)}, lastAck=${JSON.stringify(lastObservedDiag?.main?.lastAck)}, acksByOutcome=${JSON.stringify(lastObservedDiag?.main?.acksByOutcome)}`,
+        },
+      );
+
+      // Step 3: Return to the wall using existing QA semantic anchor.
+      const backClick = await callProbeControl(ctlSock, { op: 'clickAnchor', selector: backToWallAnchor });
+      if (!backClick?.clicked) {
+        throw new harness.E2EError(
+          'E2E_MULTISLOT_BACK_CLICK',
+          `Failed to click ${backToWallAnchor}: ${JSON.stringify(backClick)}`,
+        );
+      }
+
+      // Verify the wall tile remounts immediately in live state with retained non-black pixels from gen 5.
+      const wallReturnedRetained = await waitForBounded(
+        async () => {
+          const sample = await callProbeControl(ctlSock, { op: 'sampleSlot', selector: wallSlotSelector });
+          lastSample = sample;
+          if (
+            sample?.multislotScreenExists === false &&
+            sample.slotExists === true &&
+            sample.dataState === 'live' &&
+            sample.canvasExists === true &&
+            sample.canvasHidden === false &&
+            sample.nonBlack === true &&
+            sample.uniform === true &&
+            Array.isArray(sample.rgba) &&
+            sample.rgba.every((v, idx) => v === frames[4].rgba[idx])
+          ) {
+            return sample;
+          }
+          return null;
+        },
+        {
+          timeoutMs: 10000,
+          intervalMs: 50,
+          code: 'E2E_WALL_RETURN_RETAINED',
+          checkChild: checkChildAlive,
+          describe: () =>
+            `Wall tile did not restore retained non-black frame after returning from multislot: lastSample=${JSON.stringify(lastSample)}`,
+        },
+      );
+
+      // Step 4: Deliver frames 6 and 7 after returning to the wall and verify new PRESENTED acks
+      // and non-black, changing pixels on the wall canvas within a bounded time.
+      publishFrameReady(6);
+      const wallReturnGen6 = await waitForBounded(
+        async () => {
+          const currentDiag = await readDiagOrNull();
+          if (currentDiag) lastObservedDiag = currentDiag;
+          const sample = await callProbeControl(ctlSock, { op: 'sampleSlot', selector: wallSlotSelector });
+          lastSample = sample;
+          if (
+            currentDiag?.main?.deliveriesPosted >= 6 &&
+            currentDiag?.main?.acksReceived >= 6 &&
+            currentDiag?.main?.acksByOutcome?.PRESENTED === basePresented + 3 &&
+            currentDiag?.main?.acksByOutcome?.REFUSED === baseRefused &&
+            currentDiag?.main?.lastAck?.frameGeneration === 6 &&
+            currentDiag?.main?.lastAck?.outcome === 'PRESENTED' &&
+            sample?.multislotScreenExists === false &&
+            sample.slotExists === true &&
+            sample.dataState === 'live' &&
+            sample.canvasHidden === false &&
+            sample.nonBlack === true &&
+            sample.uniform === true &&
+            Array.isArray(sample.rgba) &&
+            sample.rgba.every((v, idx) => v === frames[5].rgba[idx])
+          ) {
+            return { diag: currentDiag, sample };
+          }
+          return null;
+        },
+        {
+          timeoutMs: 10000,
+          intervalMs: 50,
+          code: 'E2E_WALL_RETURN_PRESENT_GEN6',
+          checkChild: checkChildAlive,
+          describe: () =>
+            `Wall tile failed to PRESENT generation 6 (${JSON.stringify(frames[5].rgba)}) after returning from multislot: lastSample=${JSON.stringify(lastSample)}, lastAck=${JSON.stringify(lastObservedDiag?.main?.lastAck)}, acksByOutcome=${JSON.stringify(lastObservedDiag?.main?.acksByOutcome)}`,
+        },
+      );
+
+      publishFrameReady(7);
+      const wallReturnGen7 = await waitForBounded(
+        async () => {
+          const currentDiag = await readDiagOrNull();
+          if (currentDiag) lastObservedDiag = currentDiag;
+          const sample = await callProbeControl(ctlSock, { op: 'sampleSlot', selector: wallSlotSelector });
+          lastSample = sample;
+          if (
+            currentDiag?.main?.deliveriesPosted >= 7 &&
+            currentDiag?.main?.acksReceived >= 7 &&
+            currentDiag?.main?.acksByOutcome?.PRESENTED === basePresented + 4 &&
+            currentDiag?.main?.acksByOutcome?.REFUSED === baseRefused &&
+            currentDiag?.main?.lastAck?.frameGeneration === 7 &&
+            currentDiag?.main?.lastAck?.outcome === 'PRESENTED' &&
+            sample?.multislotScreenExists === false &&
+            sample.slotExists === true &&
+            sample.dataState === 'live' &&
+            sample.canvasHidden === false &&
+            sample.nonBlack === true &&
+            sample.uniform === true &&
+            Array.isArray(sample.rgba) &&
+            sample.rgba.every((v, idx) => v === frames[6].rgba[idx])
+          ) {
+            return { diag: currentDiag, sample };
+          }
+          return null;
+        },
+        {
+          timeoutMs: 10000,
+          intervalMs: 50,
+          code: 'E2E_WALL_RETURN_PRESENT_GEN7',
+          checkChild: checkChildAlive,
+          describe: () =>
+            `Wall tile failed to PRESENT changing generation 7 (${JSON.stringify(frames[6].rgba)}) after returning from multislot: lastSample=${JSON.stringify(lastSample)}, lastAck=${JSON.stringify(lastObservedDiag?.main?.lastAck)}, acksByOutcome=${JSON.stringify(lastObservedDiag?.main?.acksByOutcome)}`,
+        },
+      );
+
+      diag = wallReturnGen7.diag;
+      roundTripEvidence = {
+        basePresented,
+        baseRefused,
+        wallInitialRgba: wallInitialSample.rgba,
+        multislotMountedRgba: multislotMountedSample.rgba,
+        multislotGen4Rgba: multislotGen4.sample.rgba,
+        multislotGen5Rgba: multislotGen5.sample.rgba,
+        wallReturnedRetainedRgba: wallReturnedRetained.rgba,
+        wallReturnGen6Rgba: wallReturnGen6.sample.rgba,
+        wallReturnGen7Rgba: wallReturnGen7.sample.rgba,
+      };
     }
 
     for (const t of timers) clearTimeout(t);
@@ -326,6 +858,7 @@ async function runProductionFrameJourney({ diagEnabled = true } = {}) {
       diag,
       diagMode: diagStat ? diagStat.mode & 0o777 : null,
       surfaceId,
+      roundTripEvidence,
     };
   } finally {
     stopChild();
@@ -445,32 +978,50 @@ test('W2-FRAME-LIVE-DIAG: production main + preload + hostBindings records main 
   assert.equal(diag.preload.lastSurfaceGeneration, 3);
 });
 
-test(
-  'W2-FRAME-LIVE-DIAG: production renderer keeps tile in live state and PRESENTs frames across generations >= 2',
-  {
-    todo:
-      process.env.MV_E2E_STRICT_RENDERER === '1'
-        ? false
-        : 'Blocked in ui/src renderer: hostAdapters.js:121 + App.vue:446,557 + SurfaceCanvas.vue:47,85,127 conflate frame_ref.generation (frameGeneration) with surfaceGeneration (1), detaching the canvas on generation >= 2 and keeping resolvedState in connecting',
-  },
-  async () => {
-    const { diag } = await runProductionFrameJourney({ diagEnabled: true });
-    assert.equal(diag.main.deliveriesPosted, 3);
-    assert.equal(
-      diag.preload.domSurfaceState,
-      'live',
-      `expected tile data-state="live", got "${diag.preload.domSurfaceState}" (waiting="${diag.preload.domWaitingText}", acksByOutcome=${JSON.stringify(diag.main.acksByOutcome)})`,
-    );
-    assert.equal(diag.preload.domWaitingText, null);
-    assert.equal(
-      diag.main.acksByOutcome.REFUSED,
-      0,
-      `renderer refused frames after generation >= 2 detached canvas: ${JSON.stringify(diag.main.acksByOutcome)}`,
-    );
-    assert.equal(
-      diag.main.acksByOutcome.PRESENTED,
-      3,
-      `expected all 3 delivered frames PRESENTED, got ${JSON.stringify(diag.main.acksByOutcome)}`,
-    );
-  },
-);
+test('W2-FRAME-LIVE-DIAG: production renderer keeps tile in live state and PRESENTs frames across generations >= 2', async () => {
+  const { diag } = await runProductionFrameJourney({ diagEnabled: true });
+  assert.equal(diag.main.deliveriesPosted, 3);
+  assert.equal(
+    diag.preload.domSurfaceState,
+    'live',
+    `expected tile data-state="live", got "${diag.preload.domSurfaceState}" (waiting="${diag.preload.domWaitingText}", acksByOutcome=${JSON.stringify(diag.main.acksByOutcome)})`,
+  );
+  assert.equal(diag.preload.domWaitingText, null);
+  assert.equal(
+    diag.main.acksByOutcome.REFUSED,
+    0,
+    `renderer refused frames after generation >= 2 detached canvas: ${JSON.stringify(diag.main.acksByOutcome)}`,
+  );
+  assert.equal(
+    diag.main.acksByOutcome.PRESENTED,
+    3,
+    `expected all 3 delivered frames PRESENTED, got ${JSON.stringify(diag.main.acksByOutcome)}`,
+  );
+});
+
+test('W3-E2E25-MULTISLOT: production frames journey proves the multislot round trip (wall -> multislot -> wall)', async () => {
+  const { diag, roundTripEvidence } = await runProductionFrameJourney({
+    diagEnabled: true,
+    multislotRoundTrip: true,
+  });
+  assert.ok(roundTripEvidence !== null, 'expected roundTripEvidence from multislot round trip');
+  assert.deepEqual(roundTripEvidence.wallInitialRgba, [0xee, 0x44, 0x11, 255]);
+  assert.deepEqual(roundTripEvidence.multislotGen4Rgba, [0x33, 0xbb, 0x66, 255]);
+  assert.deepEqual(roundTripEvidence.multislotGen5Rgba, [0xd4, 0xaa, 0x22, 255]);
+  assert.deepEqual(roundTripEvidence.wallReturnedRetainedRgba, [0xd4, 0xaa, 0x22, 255]);
+  assert.deepEqual(roundTripEvidence.wallReturnGen6Rgba, [0x8a, 0x2b, 0xe2, 255]);
+  assert.deepEqual(roundTripEvidence.wallReturnGen7Rgba, [0x19, 0xc3, 0x7d, 255]);
+  assert.notDeepEqual(
+    roundTripEvidence.wallReturnGen6Rgba,
+    roundTripEvidence.wallReturnGen7Rgba,
+    'expected changing non-black pixels on the wall canvas after returning from multislot',
+  );
+  assert.equal(diag.main.deliveriesPosted, 7);
+  assert.equal(diag.main.acksReceived, 7);
+  assert.ok(roundTripEvidence.basePresented >= 2, 'expected initial wall frames PRESENTED');
+  assert.equal(diag.main.acksByOutcome.PRESENTED, roundTripEvidence.basePresented + 4);
+  assert.equal(diag.main.acksByOutcome.REFUSED, roundTripEvidence.baseRefused);
+  assert.equal(diag.main.revocationsTotal, 0);
+  assert.equal(diag.preload.framesReceived, 7);
+});
+
