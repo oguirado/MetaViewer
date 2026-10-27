@@ -99,3 +99,14 @@ test('checksum, architecture and dist overrides cannot bypass admission', (t) =>
     }
   }
 });
+
+
+test('D-Bus stdout noise is ignored but only an exact pinned version line passes', (t) => {
+  const { ui } = fixture(t);
+  const noise = '[2957:ERROR:dbus/bus.cc:406] Failed to connect to the bus\n';
+  install(ui, () => noise + 'v44.9.2\r\n');
+  for (const output of [noise, noise + 'prefix v44.9.2\n', 'v44.9.20\n',
+    'v44.9.1\nv44.9.2\n', 'v44.9.2\nv44.9.2\n']) {
+    assert.throws(() => install(ui, () => output), /installed Electron version differs/);
+  }
+});

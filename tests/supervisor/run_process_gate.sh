@@ -31,8 +31,21 @@ fi
 
 cd -- "$root"
 # Build outside sudo so shared build artifacts retain the caller's ownership.
-build_output=$("$cargo_bin" test --offline --manifest-path tests/supervisor/Cargo.toml \
-    --test supervisor_process --no-run --message-format=json)
+if build_output=$("$cargo_bin" test --offline --manifest-path tests/supervisor/Cargo.toml \
+    --test supervisor_process --no-run --message-format=json); then
+    :
+else
+    build_rc=$?
+    # Cargo JSON keeps compiler diagnostics off stderr; render them on failure.
+    printf '%s\n' "$build_output" | "$python_bin" -I -S -B -c '
+import json, sys
+for line in sys.stdin:
+    item = json.loads(line)
+    if item.get("reason") == "compiler-message":
+        sys.stderr.write(item["message"].get("rendered") or item["message"]["message"])
+'
+    exit "$build_rc"
+fi
 process_bin=$(printf '%s\n' "$build_output" | "$python_bin" -I -S -B -c '
 import json, sys
 artifacts = [json.loads(line) for line in sys.stdin]

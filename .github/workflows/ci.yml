@@ -433,6 +433,16 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # checkout v4.2.2
         with:
           fetch-depth: 0
+      - name: Download pinned gitleaks v8.18.4 (checksum verified)
+        run: |
+          set -euo pipefail
+          umask 077
+          curl -sSfL --retry 3 --retry-all-errors --max-time 120 -o "$RUNNER_TEMP/gitleaks.tgz" https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz
+          echo "ba6dbb656933921c775ee5a2d1c13a91046e7952e9d919f9bac4cec61d628e7d  $RUNNER_TEMP/gitleaks.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/gitleaks.tgz" -C "$RUNNER_TEMP" gitleaks
+          chmod 700 "$RUNNER_TEMP/gitleaks"
+          rm -f "$RUNNER_TEMP/gitleaks.tgz"
+          echo "GITLEAKS_BIN=$RUNNER_TEMP/gitleaks" >> "$GITHUB_ENV"
       # [TARGET, unit decision] Reuse the corpus pin from volume.yml; select
       # the module toolchain before priming caches outside the offline namespace.
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # setup-go v5
@@ -1617,7 +1627,15 @@ jobs:
           cargo fetch --locked
       - name: Install E2E dependencies
         working-directory: ui
-        run: bash "$GITHUB_WORKSPACE/.github/workflows/offline.sh" npm ci --offline --no-audit --no-fund
+        run: |
+          set -euo pipefail
+          bash "$GITHUB_WORKSPACE/.github/workflows/offline.sh" npm ci --offline --ignore-scripts --no-audit --no-fund
+          # [TARGET, unit decision] Explicit scripts bypass npm's automatic
+          # lifecycle allowScripts policy only for the locked node-pty package.
+          node -e "require('node:assert/strict').equal(require('./node_modules/node-pty/package.json').version, '1.1.0')"
+          bash "$GITHUB_WORKSPACE/.github/workflows/offline.sh" npm --prefix node_modules/node-pty run install
+          bash "$GITHUB_WORKSPACE/.github/workflows/offline.sh" npm --prefix node_modules/node-pty run postinstall
+          bash "$GITHUB_WORKSPACE/.github/workflows/offline.sh" node -e "require('node-pty')"
       # [TARGET, unit decision] Ubuntu's AppArmor restriction blocks the
       # downloaded Electron binary's user namespace sandbox. Its bundled
       # chrome-sandbox is not a root-owned setuid installation. Permit user
@@ -1724,6 +1742,11 @@ jobs:
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
             tail -n 40 "$sane"
+            # The tail may contain only TODO traces. Preserve actual failing
+            # test diagnostics from the sanitized log for the next hosted run.
+            if [ "$rc" != 0 ]; then
+              grep -n -A 20 -E '^[[:space:]]*✖|^not ok' "$sane" | head -n 160 || true
+            fi
           }
           blocked() {
             local gate="$1" reason="$2" fixture="$3"
