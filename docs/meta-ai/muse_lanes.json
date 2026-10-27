@@ -140,6 +140,11 @@
    "why": "L8-1 follow-up: when the unbound hold window expires, ack HIDDEN and keep the frame so a late canvas still paints it (the host never resends a static frame).",
    "orchestrator": "UI orchestrator"
   },
+  "mvui23d": {
+   "stage": "fix",
+   "why": "L8-1 co-cause from a verified review: reactive canvas width/height wipe the first painted frame; plus stream leak on unmount and stale retained frame on blanking.",
+   "orchestrator": "UI orchestrator"
+  },
   "mvui22": {
    "stage": "fix",
    "why": "Live round 7 findings: the 4 s outcome toast is invisible on take/release although the activity is recorded; the Activity strip steals tile height (frame rescale); plus the MV-UI12 judge notes on the frame path.",
