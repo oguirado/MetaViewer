@@ -5,10 +5,12 @@ package daemon
 // creation, synchronously and with transport backpressure; continuous capture
 // remains the responsibility of the existing subscription service.
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"metaviewer/daemon-adapter/internal/capsule"
@@ -47,6 +49,9 @@ func NewHandler(manager *capsule.Manager, publisher *frames.Publisher) (ipc.Hand
 			return nil, err
 		}
 		events, err := manager.Handle(ctx, request)
+		if err == nil && strings.TrimSpace(request.Op) == "list" {
+			return listSnapshots(events)
+		}
 		if err != nil || request.Op != "create" {
 			return events, err
 		}
@@ -115,7 +120,15 @@ func listSnapshots(events []json.RawMessage) ([]json.RawMessage, error) {
 			out = append(out, raw)
 			continue
 		}
-		if snapshot.Schema != "surface_event/v0.2" || snapshot.Event != "created" || len(snapshot.Data) == 0 {
+		if snapshot.Schema != "surface_event/v0.2" || snapshot.Event != "created" {
+			return nil, errors.New("invalid list snapshot")
+		}
+		var data struct {
+			Surface capsule.Surface `json:"surface"`
+		}
+		decoder := json.NewDecoder(bytes.NewReader(snapshot.Data))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&data); err != nil || data.Surface.SurfaceID == "" {
 			return nil, errors.New("invalid list snapshot")
 		}
 		snapshot.Event = "state_changed"

@@ -285,6 +285,9 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 				frameMu.Unlock()
 			}
 		}
+		if strings.TrimSpace(q.Op) == "list" {
+			return listSnapshots(events)
+		}
 		if q.Op != "input" {
 			return events, nil
 		}
