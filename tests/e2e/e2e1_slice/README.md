@@ -102,6 +102,19 @@ resume before teardown. A corrupted copy in private archive directories must fai
 The first measured failure stops scenario execution; cleanup always runs.
 The LIVE aggregate requires every assertion and cleanup to pass.
 
+[TARGET, unit decision] The admitted positive action uses F6 and a full-frame
+`changed_region` expectation: the native input must produce a visible browser
+focus change, and the real core `wait_verify` verdict must contain
+`status: verified` and `receipt.verified: true`, with matching focus, input time,
+proposal and frame witnesses. Delivery alone does not pass this assertion.
+The frozen `wait_verify` call accepts only proposal ID and timeout, so the
+negative comparison uses a test-only Rust helper calling the public core
+`verify_receipt` on the same live receipt and retained pixel artifacts. Its
+unmodified baseline must verify; changing the comparison proposal's surface
+or generation must return `verified: false`. These are verifier binding
+controls, not extra wire arguments or synthetic daemon receipts. The runner
+compiles the helper offline in a disposable tree and removes it on exit.
+
 The headless relay loads the unchanged product preload and renderer authority
 adapter, transfers the real frame through the authority MessagePort, and draws
 it with the product frame tile scheduler. The canvas RGB digest must equal the

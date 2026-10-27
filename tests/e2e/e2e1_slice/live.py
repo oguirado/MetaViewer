@@ -182,6 +182,31 @@ def proposal(surface_id, frame, proposal_id):
             "budget": {"max_ms": 10000, "max_retries": 0}}
 
 
+def verify_probe(report, agent, reg, config, action, frame, receipt, archive, scratch):
+    send(agent, reg, config, {"schema": "mv_tool_call/v0.2", "request_id": "verify-live",
+                             "op": "wait_verify", "args": {
+                                 "proposal_id": action["proposal_id"], "timeout_ms": 10000}})
+    verdict = receive(agent, lambda b: b.get("request_id") == "verify-live", report)
+    report["verify_verdict"] = verdict
+    assert verdict.get("status") == "verified" and verdict.get("receipt", {}).get("verified") is True, (
+        "positive wait_verify failed: " + json.dumps(verdict, sort_keys=True))
+    assert verdict["receipt"]["proposal_id"] == receipt["proposal_id"], "verification correlation mismatch"
+    assert verdict["focus_verified"] is True, "verification lacks focus proof"
+    assert verdict["input_mono_ns"] == receipt["native_evidence"]["input_mono_ns"], "input witness mismatch"
+    assert verdict["frame_sha256"] == receipt["after_frame"]["sha256"], "verified frame mismatch"
+    report["assertions"]["observe_propose_dispatch_receipt"] = "PASS"
+    # [TARGET, unit decision] The frozen wait call has no surface/generation
+    # override. Apply the public core verifier to this SAME real receipt and
+    # retained bytes; only its comparison context is changed. No fake daemon.
+    fixture = scratch / "verify-context.json"
+    fixture.write_text(json.dumps({"proposal": action, "before": frame, "receipt": receipt}))
+    result = run(report, [os.environ["MV_E2E_VERIFY_BIN"], fixture, archive / "artifacts"])
+    assert result.returncode == 0, "receipt binding negative control failed: " + result.stderr
+    report["verify_negative_control"] = json.loads(result.stdout)
+    assert report["verify_negative_control"]["status"] == "PASS", "negative verifier did not pass"
+    report["assertions"]["receipt_binding_negative_control"] = "PASS"
+
+
 def electron_probe(report, scratch, frame, surface):
     binary = os.environ.get("MV_E2E_ELECTRON_BIN")
     if not binary or not shutil.which("xvfb-run"):
@@ -200,6 +225,7 @@ def electron_probe(report, scratch, frame, surface):
 def main():
     report = {"status": "BLOCKED", "mode": "live", "commands": [], "assertions": {
         "capsule_frame_ui_fanout": "BLOCKED", "observe_propose_dispatch_receipt": "BLOCKED",
+        "receipt_binding_negative_control": "BLOCKED",
         "stale_no_state_change": "BLOCKED", "human_cancel_release_refresh": "BLOCKED",
         "action_journal_replay_corruption": "BLOCKED", "electron_tile": "PENDING"}}
     processes, peers, owned = [], [], set()
@@ -278,15 +304,21 @@ def main():
                                ("mv_tool_result/v0.2", "action_verdict/v0.2"), report)
             report["observe_response"] = observed
             assert observed.get("schema") == "mv_tool_result/v0.2" and observed.get("status") == "ok", "observe refused: " + str(observed)
-            send(agent, regs["agent"], config, proposal(surface_id, frame, "live-action-1"))
+            # [TARGET, unit decision] F6 changes browser focus visibly. Verify
+            # retained pixels, rather than requesting unavailable OCR evidence.
+            action = proposal(surface_id, frame, "live-action-1")
+            action["action"] = {"type": "key", "keys": ["F6"]}
+            action["expectation"] = {"type": "changed_region", "bbox": {
+                "x": 0, "y": 0, "w": frame["width"], "h": frame["height"]}}
+            send(agent, regs["agent"], config, action)
             verdict = receive(agent, lambda b: b.get("proposal_id") == "live-action-1", report)
             assert verdict.get("decision") == "admitted", "fresh action refused: " + str(verdict)
             receipt = receive(agent, lambda b: b.get("schema") == "action_receipt/v0.2"
                               and b.get("proposal_id") == "live-action-1", report)
             report["action_receipt"] = receipt
             report["assertions"]["propose_dispatch_receipt"] = "PASS"
-            report["assertions"]["observe_propose_dispatch_receipt"] = (
-                "PASS" if not report.get("production_blockers") else "FAIL: observe unavailable; action receipt PASS")
+            report["assertions"]["observe_propose_dispatch_receipt"] = "FAIL"
+            verify_probe(report, agent, regs["agent"], config, action, frame, receipt, archive, scratch)
             advanced = receive(ui, lambda b: b.get("event") == "frame_ready"
                                and b["data"]["frame_ref"]["generation"] > frame["generation"], report)["data"]["frame_ref"]
             before_state = domain(snapshot(archive))
