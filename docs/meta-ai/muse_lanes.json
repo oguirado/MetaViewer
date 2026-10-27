@@ -1,17 +1,17 @@
 {
  "schema": "metaviewer.meta_ai_usage/v1",
  "totals": {
-  "lanes": 322,
-  "ok": 322,
-  "input_tokens": 70309562,
-  "cache_read_tokens": 1577456809,
-  "output_tokens": 15055795,
-  "thinking_tokens": 7901305,
+  "lanes": 323,
+  "ok": 323,
+  "input_tokens": 70436898,
+  "cache_read_tokens": 1580939767,
+  "output_tokens": 15089719,
+  "thinking_tokens": 7920643,
   "cache_hit_pct": 95.7,
-  "usd": 13.197,
-  "usd_per_lane": 0.041,
-  "steps": 17037,
-  "lane_hours": 43.3
+  "usd": 13.2235,
+  "usd_per_lane": 0.0409,
+  "steps": 17084,
+  "lane_hours": 43.6
  },
  "peak_concurrent_lanes": 24,
  "rooms": {
@@ -167,7 +167,7 @@
   },
   "mvui18": {
    "stage": "fix",
-   "why": "Fix the live frame scale jitter seen in the second real-app round (witness/canvas swap at different scales) and mirror the kit view subscribe snapshot.",
+   "why": "BLOCKER: live frames never paint on the real app (canvas attach identity mismatch between frame router and SurfaceCanvas); plus frame scale jitter and kit view subscribe mirroring.",
    "orchestrator": "UI orchestrator"
   },
   "mv0w1term": {
@@ -7218,6 +7218,27 @@
    "thinking_tokens": 31745,
    "cache_hit_pct": 96.5,
    "usd": 0.048876
+  },
+  {
+   "room": "mvui18",
+   "lane": "J",
+   "title": "live frames paint (L3-1) + jitter + subscribe mirror",
+   "stage": "fix",
+   "model": "muse-spark-1.3",
+   "orchestrator": "UI orchestrator",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-27T17:23:15.097000+00:00",
+   "duration_s": 957.3,
+   "end_utc": "2026-10-27T17:39:12.415000+00:00",
+   "phase": "build",
+   "steps": 47,
+   "input_tokens": 127336,
+   "cache_read_tokens": 3482958,
+   "output_tokens": 33924,
+   "thinking_tokens": 19338,
+   "cache_hit_pct": 96.5,
+   "usd": 0.026484
   }
  ]
 }
