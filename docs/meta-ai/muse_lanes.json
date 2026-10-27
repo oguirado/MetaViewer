@@ -250,6 +250,11 @@
    "why": "Adversarial fact-check of the documentation drafts against the integration head, so the public README, user guide, testing report and architecture contain only verified claims (AC-15).",
    "orchestrator": "conductor"
   },
+  "mvvd2": {
+   "stage": "submission",
+   "why": "Turn the measured day-2 evidence (live G-W1 with verified receipts, live G-AI with vision-engine and wender-agent, 25 fps wall, per-tile capture) into the demo video script, the shot list, a fact-checked TESTING.md and README update, all claims traceable to evidence.",
+   "orchestrator": "conductor"
+  },
   "mv0dc": {
    "stage": "docs",
    "why": "Draft the product documentation (README quickstart, user guide, testing report, architecture refresh) verified against the integration head, for acceptance criterion AC-15.",
