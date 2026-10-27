@@ -491,11 +491,12 @@ export function createBytePlane(options) {
       if (!B64_PATTERN.test(frame.b64)) {
         fail(ledger, context, 'bad-base64', `seq ${frame.seq} is not strict base64`, onFault);
       }
-      const bytes = new Uint8Array(Buffer.from(frame.b64, 'base64'));
-      if (bytes.length > limits.maxFrameBytes) {
+      const byteLength = Buffer.byteLength(frame.b64, 'base64');
+      if (byteLength > limits.maxFrameBytes) {
         fail(ledger, context, 'frame-too-large',
-          `seq ${frame.seq} carries ${bytes.length} bytes`, onFault);
+          `seq ${frame.seq} carries ${byteLength} bytes`, onFault);
       }
+      const bytes = new Uint8Array(Buffer.from(frame.b64, 'base64'));
       const sent = ledger.sent + bytes.length;
       if (ledger.frames.size >= limits.maxPendingFrames) {
         fail(ledger, context, 'frames-overflow',

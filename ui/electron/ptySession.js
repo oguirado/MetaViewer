@@ -23,8 +23,16 @@ export function createPtySession({session,spec,spawn,send}) {
   let seq=0,sent=0,acked=0,ackSeq=0,inputSeq=0,closed=false,paused=false;
   /** @type {Map<number,number>} */
   const boundaries = new Map();
-  function close() { if (!closed) { closed=true; pty.kill(); boundaries.clear(); } }
-  pty.onData(data => {
+  /** @type {Array<{dispose?:()=>void}|null|undefined>} */
+  const disposables = [];
+  function disposeListeners() {
+    while (disposables.length > 0) {
+      const disposable = disposables.shift();
+      try { if (disposable && typeof disposable.dispose === 'function') disposable.dispose(); } catch {}
+    }
+  }
+  function close() { if (!closed) { closed=true; disposeListeners(); pty.kill(); boundaries.clear(); } }
+  disposables.push(pty.onData(data => {
     if (closed) return;
     const bytes=typeof data==='string'?new Uint8Array(Buffer.from(data)):new Uint8Array(data);
     if(bytes.length>65536 || sent-acked+bytes.length>524288 || boundaries.size>=256) {
@@ -32,8 +40,8 @@ export function createPtySession({session,spec,spawn,send}) {
     }
     sent+=bytes.length; boundaries.set(++seq,sent); send({session,seq,bytes});
     if(!paused && sent-acked>=131072) {paused=true;pty.pause();}
-  });
-  pty.onExit(event=>{closed=true;boundaries.clear();send({session,exitCode:event.exitCode});});
+  }));
+  disposables.push(pty.onExit(event=>{closed=true;disposeListeners();boundaries.clear();send({session,exitCode:event.exitCode});}));
   /** @param {unknown} message */
   function receive(message) {
     if(closed || !message || typeof message!=='object') throw new Error('CLOSED_OR_INVALID');

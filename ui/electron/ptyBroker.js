@@ -19,6 +19,7 @@ import { validateKillTarget } from './coreLauncher.js';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { StringDecoder } from 'node:string_decoder';
 import { fileURLToPath } from 'node:url';
 
 /**
@@ -578,10 +579,11 @@ export function createStdioLink({ input, output, parentPort = null, maxLineBytes
       deliver({ version: TERMINAL_WIRE_VERSION, ev: 'error', id: null, code: info.code });
     },
   });
+  const decoder = new StringDecoder('utf8');
   /** @param {unknown} chunk */
   const feed = (chunk) => {
     if (typeof chunk !== 'string' && !Buffer.isBuffer(chunk)) return;
-    framer.push(typeof chunk === 'string' ? chunk : chunk.toString('utf8'));
+    framer.push(typeof chunk === 'string' ? chunk : decoder.write(chunk));
   };
   /** @type {{ on: Function }} */ (input).on('data', feed);
   if (parentPort !== null) {
@@ -690,10 +692,11 @@ export function spawnTerminalBroker({ entry, cwd, env, runtime }) {
       deliver({ version: TERMINAL_WIRE_VERSION, ev: 'error', id: null, code: info.code });
     },
   });
+  const decoder = new StringDecoder('utf8');
   /** @param {unknown} chunk */
   const feed = (chunk) => {
     if (typeof chunk !== 'string' && !Buffer.isBuffer(chunk)) return;
-    framer.push(typeof chunk === 'string' ? chunk : chunk.toString('utf8'));
+    framer.push(typeof chunk === 'string' ? chunk : decoder.write(chunk));
   };
   let send = null;
   let pid = undefined;
@@ -1006,6 +1009,7 @@ function assertSpawnProfile(profile) {
  * @property {number} sent Cumulative output bytes.
  * @property {number} acked Cumulative consumed bytes.
  * @property {number} ackedSeq Consumed output seq watermark.
+ * @property {Map<number, number>} boundaries Output seq to cumulative sent bytes.
  * @property {boolean} paused PTY paused for backpressure.
  * @property {boolean} exited Exit already emitted.
  * @property {ReturnType<typeof setTimeout>} deadline Lifetime timer.
@@ -1135,6 +1139,7 @@ export function runBroker({
     session.exited = true;
     sessions.delete(id);
     clearTimeout(session.deadline);
+    session.boundaries.clear();
     addTombstone(id);
     for (const disposable of session.disposables) {
       try {
@@ -1195,6 +1200,7 @@ export function runBroker({
       await closeSession(id, -1, null);
       return;
     }
+    session.boundaries.set(session.seq, session.sent);
     if (capped) {
       emit({ ev: 'data', id, seq: session.seq, b64: bytes.toString('base64') });
       await closeSession(id, 0, 'SESSION_CAP');
@@ -1371,6 +1377,7 @@ export function runBroker({
       sent: 0,
       acked: 0,
       ackedSeq: 0,
+      boundaries: new Map(),
       paused: false,
       exited: false,
       deadline: setTimeout(expireSession, caps.lifetimeMs, id),
@@ -1423,11 +1430,11 @@ export function runBroker({
       sendError(id, 'WRITE_SHAPE');
       return;
     }
-    const bytes = Buffer.from(raw, 'base64');
-    if (bytes.length > caps.maxWriteBytes) {
+    if (Buffer.byteLength(raw, 'base64') > caps.maxWriteBytes) {
       sendError(id, 'WRITE_TOO_LARGE');
       return;
     }
+    const bytes = Buffer.from(raw, 'base64');
     let text = '';
     try {
       text = decoder.decode(bytes);
@@ -1507,12 +1514,19 @@ export function runBroker({
     }
     const ackSeq = /** @type {number} */ (seq);
     const ackBytes = /** @type {number} */ (bytes);
-    if (ackSeq > session.seq || ackSeq < session.ackedSeq || ackBytes > session.sent || ackBytes < session.acked) {
+    if (
+      ackSeq <= session.ackedSeq ||
+      ackSeq > session.seq ||
+      session.boundaries.get(ackSeq) !== ackBytes
+    ) {
       sendError(id, 'ACK_REFUSED');
       return;
     }
     session.ackedSeq = ackSeq;
     session.acked = ackBytes;
+    for (const key of session.boundaries.keys()) {
+      if (key <= ackSeq) session.boundaries.delete(key);
+    }
     if (session.paused && session.sent - session.acked < caps.lowWaterBytes) {
       session.paused = false;
       try {
@@ -2094,6 +2108,9 @@ export function registerTerminalIpc({
       if (!entry) {
         return outcome(false, { reason: closed.has(session) ? 'SESSION_CLOSED' : 'UNKNOWN_SESSION' });
       }
+      if (!forward({ op: 'ack', id: session, ack_seq: seq, ack_bytes: bytes })) {
+        return outcome(false, { reason: 'TRANSPORT_FAILED' });
+      }
       try {
         ledger.acknowledge(outputContext(entry.session, entry.epoch, entry.attachGen), {
           seq: /** @type {number} */ (seq),
@@ -2101,9 +2118,6 @@ export function registerTerminalIpc({
         });
       } catch {
         return outcome(false, { reason: 'ACK_REFUSED' });
-      }
-      if (!forward({ op: 'ack', id: session, ack_seq: seq, ack_bytes: bytes })) {
-        return outcome(false, { reason: 'TRANSPORT_FAILED' });
       }
       return outcome(true, { session });
     },
