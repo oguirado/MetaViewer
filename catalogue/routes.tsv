@@ -1261,6 +1261,7 @@ mvui2te-57eb4f49ae5c	ui/test/mvui2-terminal-empty.test.js
 mvui2te-03800adc3c8b	ui/test/mvui2-terminal-mount.mjs
 mvui2wa-1a7e2ac77b6f	ui/test/mvui2-wall-judge.test.js
 mvui2wa-d1e02b360aa1	ui/test/mvui2-wall-tabs.test.js
+mvui20m-d1ca0a8a915e	ui/test/mvui20-multislot-roundtrip.test.js
 mvui3co-58b252aa0364	ui/test/mvui3-control-owner-wall.test.js
 mvui3cr-400b1a21a53e	ui/test/mvui3-creative-harness.js
 mvui3cr-3b8cf3406706	ui/test/mvui3-creative-integration.test.js
