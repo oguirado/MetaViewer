@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 320 | 55 | 265 |
-| Lanes finished OK | 320 | 55 | 265 |
-| Agent steps | 16,865 | 2,705 | 14,160 |
-| Lane-hours of agent work | 42.8 | 5.2 | 37.5 |
-| Fresh input tokens | 69,660,052 | 11,482,034 | 58,178,018 |
-| Cache-read input tokens | 1,554,649,714 | 226,255,212 | 1,328,394,502 |
+| Lanes launched | 322 | 55 | 267 |
+| Lanes finished OK | 322 | 55 | 267 |
+| Agent steps | 17,037 | 2,705 | 14,332 |
+| Lane-hours of agent work | 43.3 | 5.2 | 38.1 |
+| Fresh input tokens | 70,309,562 | 11,482,034 | 58,827,528 |
+| Cache-read input tokens | 1,577,456,809 | 226,255,212 | 1,351,201,597 |
 | Prompt cache hit % | 95.7 | 95.2 | 95.8 |
-| Output tokens | 14,882,801 | 2,135,708 | 12,747,093 |
-| Thinking tokens | 7,786,259 | 1,050,039 | 6,736,220 |
-| Cost (USD) | 13.0519 | 2.0279 | 11.024 |
-| Cost per lane (USD) | 0.0408 | 0.0369 | 0.0416 |
+| Output tokens | 15,055,795 | 2,135,708 | 12,920,087 |
+| Thinking tokens | 7,901,305 | 1,050,039 | 6,851,266 |
+| Cost (USD) | 13.197 | 2.0279 | 11.1692 |
+| Cost per lane (USD) | 0.041 | 0.0369 | 0.0418 |
 
-Rooms: 75. Peak concurrent lanes [MEASURED from lane start/end]: 24.
+Rooms: 76. Peak concurrent lanes [MEASURED from lane start/end]: 24.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -43,7 +43,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
 | docs | 15 | 94.8 | 0.5371 |
-| fix | 10 | 96.7 | 0.5178 |
+| fix | 12 | 96.8 | 0.663 |
 | kit | 3 | 96.5 | 0.1997 |
 | ops | 4 | 88.1 | 0.0468 |
 | plan | 12 | 92.6 | 0.3072 |
@@ -134,7 +134,8 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvac17 | conductor | Oct 27 15:59 | testing | 1 | 94.1 | 0.023 | Map AC-17 (nested demo) on the integration head and specify the smallest Argon units that make it pass live, with its negative control. |
 | mvui17 | UI orchestrator | Oct 27 16:30 | fix | 3 | 96.2 | 0.1455 | Fix renderer findings from the second real-app vision round: QA anchor grammar (kit anchors with '/' were rejected), wall tile Fold with no visible effect, Activity count stuck. |
 | mvui16b | UI orchestrator | Oct 27 16:46 | fix | 2 | 96.4 | 0.127 | Finish MV-UI8 (one type error) and fix real-app round 2 renderer findings: Float enabled in agent/READ mode, status bar contrast, recordings list never refreshed from the host. |
-| mvui16d | UI orchestrator | Oct 27 17:04 | fix | 1 | 96.6 | 0.0437 | Fix the judge notes on the MV-UI8 drop (stale echo replay, float geometry not applied by the kit, recordings refresh coalescing) and real-app L2-1 (local multislot toggles reaching the host). |
+| mvui16d | UI orchestrator | Oct 27 17:04 | fix | 2 | 97.3 | 0.14 | Fix the judge notes on the MV-UI8 drop (stale echo replay, float geometry not applied by the kit, recordings refresh coalescing) and real-app L2-1 (local multislot toggles reaching the host). |
+| mvui16e | UI orchestrator | Oct 27 17:30 | fix | 1 | 96.5 | 0.0489 | Reconcile four failures after rebasing the MV-UI8/MV-UI9 drop: respect the wall no-fromJSON contract, repair a stale negative control, align one host test assertion that pinned the recordings defect. |
 
 ## Every lane
 
@@ -459,7 +460,9 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui17 | A | Activity count | Oct 27 16:31 | yes | 47 | 95.1 | 0.025678 |
 | mvui16b | T | type error, Float gating, status bar contrast | Oct 27 16:46 | yes | 82 | 97.5 | 0.057206 |
 | mvui16b | R | recordings list refresh | Oct 27 16:46 | yes | 72 | 95.2 | 0.069815 |
+| mvui16d | P | placement echo, float geometry, L2-1 | Oct 27 17:04 | yes | 102 | 97.5 | 0.096288 |
 | mvui16d | R | recordings refresh coalescing | Oct 27 17:04 | yes | 61 | 96.6 | 0.043733 |
+| mvui16e | E | post-rebase reconciliation | Oct 27 17:30 | yes | 70 | 96.5 | 0.048876 |
 
 ## Method
 
