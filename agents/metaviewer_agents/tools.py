@@ -48,6 +48,7 @@ _RAMWS_PATTERN = re.compile(r"/dev/shm/[^\x00]+")
 _MAX_SAFE_INT = 9007199254740991
 _LIST_LIMIT_MAX = 256
 _WAIT_TIMEOUT_MAX_MS = 60000
+_MAX_VISION_SUMMARY = 4096
 
 _REFUSAL_CODES = frozenset({
     "STALE_FRAME",
@@ -400,7 +401,7 @@ def _check_vision(vision: object) -> None:
     body = _check_exact(
         vision, frozenset({"summary", "changed_regions", "elements"}),
         "vision")
-    _check_str(body["summary"], min_length=0, max_length=4096,
+    _check_str(body["summary"], min_length=0, max_length=_MAX_VISION_SUMMARY,
                pattern=None, what="vision summary")
     regions = _check_array(body["changed_regions"], min_items=0,
                            max_items=256, what="changed_regions")

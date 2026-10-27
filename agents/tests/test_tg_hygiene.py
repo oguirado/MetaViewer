@@ -59,7 +59,8 @@ def process_audit(source, filename):
         if name.startswith("os.") and name.split(".")[-1].startswith(
                 ("kill", "fork", "exec", "spawn", "posix_spawn", "system", "popen")):
             violations.append("os process control")
-        if not name.startswith("subprocess."):
+        if not name.startswith("subprocess.") and not (
+                filename == VCORE and name == "_run_bounded"):
             continue
         if name in {"subprocess.TimeoutExpired", "subprocess.CalledProcessError"}:
             continue
@@ -72,6 +73,20 @@ def process_audit(source, filename):
                     function = parent
             parent = parents.get(parent)
         site = ".".join(reversed(scope))
+        if filename == VCORE and site == "_run_bounded":
+            allowed_vcore_calls = (
+                '''subprocess.run(command, cwd=cwd, env=env, capture_output=True,
+                    stdin=stdin, timeout=timeout, pass_fds=pass_fds)''',
+                '''subprocess.run(command, cwd=cwd, env=env, capture_output=True,
+                    stdin=stdin, timeout=timeout)''',
+                '''subprocess.Popen(command, cwd=cwd, env=env, stdin=stdin,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, pass_fds=pass_fds)''',
+                '''subprocess.CompletedProcess(command, proc.returncode,
+                    b"".join(stdout_chunks), b"".join(stderr_chunks))''',
+            )
+            if any(ast.dump(node) == ast.dump(ast.parse(expr).body[0].value)
+                   for expr in allowed_vcore_calls):
+                continue
         if filename == WENDER and site == "_run_bounded":
             expected_calls = {
                 "subprocess.Popen": '''subprocess.Popen(command, cwd=cwd, env=env,
@@ -104,12 +119,12 @@ def process_audit(source, filename):
             if len(environments) != 1 or ast.dump(environments[0]) != ast.dump(scrubbed):
                 violations.append("unscrubbed Git environment")
             continue
-        if filename != VCORE or name != "subprocess.run" or site not in SITES:
+        if filename != VCORE or name != "_run_bounded" or site not in SITES:
             violations.append("unapproved spawn")
             continue
         sites.append(site)
         keywords = {keyword.arg: keyword.value for keyword in node.keywords}
-        if None in keywords or not {"timeout", "env", "cwd", "stdin", "capture_output"} <= keywords.keys():
+        if None in keywords or not {"timeout", "env", "cwd", "stdin"} <= keywords.keys():
             violations.append("unbounded spawn")
         if ast.unparse(keywords.get("timeout", ast.Constant(None))) != "self.timeout":
             violations.append("missing adapter deadline")
@@ -210,7 +225,7 @@ class HygieneGapTests(unittest.TestCase):
             sites.update(found)
         self.assertEqual(sites, Counter({site: 1 for site in SITES | {"_git", "_run_bounded"}}))
         source = (PRODUCT / VCORE).read_text(encoding="utf-8")
-        for old, new in (("subprocess.run(", "subprocess.Popen("),
+        for old, new in (("result = _run_bounded(", "result = subprocess.Popen("),
                          ("timeout=self.timeout", "shell=True, timeout=self.timeout")):
             self.assertTrue(process_audit(source.replace(old, new), VCORE)[0])
         for bad in ("import os\nos.kill(123, 0)",

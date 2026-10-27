@@ -15,6 +15,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,15 @@ def _fail(code: str, message: str) -> None:
 
 def _reject_constant(value: str) -> None:
     raise ValueError("non-strict JSON constant")
+
+
+def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key")
+        result[key] = value
+    return result
 
 
 def _check_int(value: object, *, minimum: int, name: str) -> int:
@@ -97,10 +107,24 @@ def _check_frame_arg(value: object, *, name: str,
     if isinstance(value, Path):
         value = str(value)
     if isinstance(value, str) and value and _NUL not in value:
-        normal = os.path.normpath(value)
-        for prefix in _RAM_PREFIXES:
-            if normal.startswith(prefix) and len(normal) > len(prefix):
+        if value.startswith("/proc/self/fd/"):
+            tail = value[len("/proc/self/fd/"):]
+            if re.fullmatch(r"0|[1-9][0-9]*", tail) and str(Path(value)) == value:
                 return
+        elif value.startswith("/dev/shm/"):
+            path = Path(value)
+            if (
+                path.is_absolute()
+                and str(path) == value
+                and ".." not in path.parts
+                and path.is_relative_to("/dev/shm")
+                and path != Path("/dev/shm")
+            ):
+                try:
+                    if not path.is_symlink() and path.resolve(strict=True) == path:
+                        return
+                except (OSError, RuntimeError):
+                    pass
     _fail("bad_shape", name + " is not a bound frame or RAM path")
 
 
@@ -177,7 +201,11 @@ class MetaMusePerceptionAdapter(PerceptionAdapter):
         except UnicodeDecodeError:
             _fail("bad_shape", "muse response is not utf-8")
         try:
-            payload = json.loads(text, parse_constant=_reject_constant)
+            payload = json.loads(
+                text,
+                parse_constant=_reject_constant,
+                object_pairs_hook=_reject_duplicate_keys,
+            )
         except (ValueError, RecursionError):
             _fail("bad_shape", "muse response is not strict JSON")
         if not isinstance(payload, dict) or set(payload) != _RESPONSE_KEYS:

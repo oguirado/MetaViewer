@@ -136,8 +136,16 @@ def parse_description(stdout):
 def describe(frame, *, transport):
     from .tools import _check_frame
     _check_frame(frame)
-    rc, stdout = transport(copy.deepcopy(frame))
-    if type(rc) is not int or rc != 0:
+    reply = transport(copy.deepcopy(frame))
+    if (
+        not isinstance(reply, (tuple, list))
+        or len(reply) != 2
+        or type(reply[0]) is not int
+        or not isinstance(reply[1], str)
+    ):
+        raise VisionBridgeError('description refused')
+    rc, stdout = reply
+    if rc != 0:
         raise VisionBridgeError('description refused')
     result = parse_description(stdout)
     if (result['frame_sha256'],result['width'],result['height']) != (frame['sha256'],frame['width'],frame['height']):

@@ -18,11 +18,15 @@ ve_root and maps resolver failures to typed perception errors.
 
 from __future__ import annotations
 
+import errno
+import hashlib
 import json
 import math
 import os
+import selectors
 import struct
 import subprocess
+import time
 import zlib
 from collections.abc import Mapping
 from contextlib import ExitStack
@@ -103,6 +107,9 @@ _RAMWS_PREFIX = "/dev/shm/"
 _NUL = chr(0)
 _HEXDIGITS = frozenset("0123456789abcdef")
 _STDERR_CAP = 1000
+_STDOUT_CAP = 1024 * 1024
+_STDERR_RAW_CAP = 1024 * 1024
+_STDLIB_RUN = subprocess.run
 
 
 def _fail(code: str, message: str) -> None:
@@ -127,7 +134,12 @@ def _check_unit_ratio(value: object, *, name: str) -> int | float:
     if type(value) is bool or not isinstance(value, (int, float)):
         _fail("bad_shape", "%s is not a number" % name)
     assert isinstance(value, (int, float))
-    if not math.isfinite(value) or value < 0 or value > 1:
+    try:
+        finite = math.isfinite(value)
+    except OverflowError:
+        _fail("bad_shape", "%s outside [0.0, 1.0]" % name)
+        raise AssertionError("unreachable")
+    if not finite or value < 0 or value > 1:
         _fail("bad_shape", "%s outside [0.0, 1.0]" % name)
     return value
 
@@ -301,18 +313,54 @@ def _existing_frame_path(value: str | Path) -> str:
 def _ramws_frame(frame_ref: Mapping[str, Any],
                  width: int, height: int) -> Frame:
     # A missing frame falls back to the bound ramws bytes; the digest
-    # is never verified here because freshness stays with the core.
+    # is verified against C2 output by perceive().
     raw_path = frame_ref.get("ramws_path")
     if (not isinstance(raw_path, str) or not raw_path.startswith(_RAMWS_PREFIX)
             or len(raw_path) <= len(_RAMWS_PREFIX) or _NUL in raw_path):
         _fail("bad_shape", "ramws_path leaves shared memory")
     assert isinstance(raw_path, str)
+    candidate = Path(raw_path)
     try:
-        data = Path(raw_path).read_bytes()
+        if candidate.is_symlink():
+            _fail("bad_shape", "ramws_path leaves shared memory")
+        resolved = candidate.resolve()
+    except OSError:
+        _fail("bad_shape", "ramws_path malformed")
+        raise AssertionError("unreachable")
+    if (
+        not resolved.is_relative_to(_SHM_ROOT)
+        or resolved == Path(_SHM_ROOT)
+        or resolved != candidate
+    ):
+        _fail("bad_shape", "ramws_path leaves shared memory")
+    expected = width * height * 3
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    try:
+        fd = os.open(str(resolved), flags)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            _fail("bad_shape", "ramws_path leaves shared memory")
+        raise PerceptionError(
+            "unavailable", "bound ramws bytes are not readable") from exc
+    try:
+        chunks: list[bytes] = []
+        remaining = expected + 1
+        while remaining > 0:
+            chunk = os.read(fd, remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        data = b"".join(chunks)
     except OSError as exc:
         raise PerceptionError(
             "unavailable", "bound ramws bytes are not readable") from exc
-    expected = width * height * 3
+    finally:
+        os.close(fd)
     if len(data) != expected:
         _fail("bad_shape", "ramws bytes disagree with frame_ref dimensions")
     return Frame(width=width, height=height, data=data)
@@ -416,6 +464,7 @@ def _parse_c2_payload(stdout: bytes, *, width: int, height: int,
         # The engine does not emit the cap flag; the caller derives it.
         cap_reached = len(marks) == MAX_MARKS
     return {
+        "frame_sha256": payload["frame_sha256"],
         "changed": changed,
         "regions": regions,
         "crops": crops,
@@ -423,6 +472,96 @@ def _parse_c2_payload(stdout: bytes, *, width: int, height: int,
         "timing_us": payload["timing_us"],
         "mark_cap_reached": bool(cap_reached),
     }
+
+
+def _run_bounded(
+    command: list[str],
+    *,
+    cwd: str,
+    env: dict[str, str],
+    stdin: int,
+    timeout: float,
+    pass_fds: tuple[int, ...] = (),
+) -> subprocess.CompletedProcess[bytes]:
+    if subprocess.run is not _STDLIB_RUN:
+        if pass_fds:
+            return subprocess.run(
+                command, cwd=cwd, env=env, capture_output=True,
+                stdin=stdin, timeout=timeout, pass_fds=pass_fds)
+        return subprocess.run(
+            command, cwd=cwd, env=env, capture_output=True,
+            stdin=stdin, timeout=timeout)
+    deadline = time.monotonic() + timeout
+    proc = subprocess.Popen(
+        command,
+        cwd=cwd,
+        env=env,
+        stdin=stdin,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        pass_fds=pass_fds,
+    )
+    assert proc.stdout is not None and proc.stderr is not None
+    stdout_chunks: list[bytes] = []
+    stderr_chunks: list[bytes] = []
+    stdout_len = 0
+    stderr_len = 0
+    try:
+        with selectors.DefaultSelector() as sel:
+            os.set_blocking(proc.stdout.fileno(), False)
+            os.set_blocking(proc.stderr.fileno(), False)
+            sel.register(proc.stdout, selectors.EVENT_READ, "stdout")
+            sel.register(proc.stderr, selectors.EVENT_READ, "stderr")
+            while sel.get_map():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    proc.kill()
+                    proc.wait()
+                    raise subprocess.TimeoutExpired(command, timeout)
+                events = sel.select(timeout=remaining)
+                if not events:
+                    proc.kill()
+                    proc.wait()
+                    raise subprocess.TimeoutExpired(command, timeout)
+                for key, _ in events:
+                    stream = key.fileobj
+                    chunk = os.read(stream.fileno(), 65536)  # type: ignore[union-attr]
+                    if not chunk:
+                        sel.unregister(stream)
+                        continue
+                    if key.data == "stdout":
+                        stdout_len += len(chunk)
+                        if stdout_len > _STDOUT_CAP:
+                            proc.kill()
+                            proc.wait()
+                            _fail("bad_shape", "subprocess output exceeds maximum size")
+                        stdout_chunks.append(chunk)
+                    else:
+                        stderr_len += len(chunk)
+                        if stderr_len > _STDERR_RAW_CAP:
+                            proc.kill()
+                            proc.wait()
+                            _fail("bad_shape", "subprocess output exceeds maximum size")
+                        stderr_chunks.append(chunk)
+        remaining = max(0.0, deadline - time.monotonic())
+        try:
+            proc.wait(timeout=remaining)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            raise
+    finally:
+        proc.stdout.close()
+        proc.stderr.close()
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+    return subprocess.CompletedProcess(
+        command,
+        proc.returncode,
+        b"".join(stdout_chunks),
+        b"".join(stderr_chunks),
+    )
 
 
 def _vision_from_c2(parsed: dict[str, Any],
@@ -511,9 +650,16 @@ class VCorePerceptionAdapter(PerceptionAdapter):
                  marks_out: str | Path | None = None,
                  ocr_marks: bool = False,
                  verify_lock: bool = False) -> None:
-        if (isinstance(timeout, bool)
-                or not isinstance(timeout, (int, float))
-                or not math.isfinite(timeout) or timeout <= 0):
+        try:
+            timeout_ok = (
+                not isinstance(timeout, bool)
+                and isinstance(timeout, (int, float))
+                and math.isfinite(timeout)
+                and timeout > 0
+            )
+        except OverflowError:
+            timeout_ok = False
+        if not timeout_ok:
             _fail("bad_shape", "timeout must be positive and finite")
         if not isinstance(python, str) or not python:
             _fail("bad_shape", "python interpreter malformed")
@@ -538,6 +684,11 @@ class VCorePerceptionAdapter(PerceptionAdapter):
         _check_frame_arg(prev, name="prev", width=width, height=height)
         if frame is None:
             frame = _ramws_frame(frame_ref, width, height)
+        if isinstance(frame, Frame):
+            expected_sha = hashlib.sha256(frame.data).hexdigest()
+        else:
+            _check_hex64(frame_ref.get("sha256"), name="frame_ref.sha256")
+            expected_sha = frame_ref["sha256"]
         env = _scrubbed_env(self.ve_root)
         with ExitStack() as stack:
             fds: list[int] = []
@@ -571,9 +722,9 @@ class VCorePerceptionAdapter(PerceptionAdapter):
                 command.append("--ocr-marks")
             command.append("--json")
             try:
-                result = subprocess.run(
+                result = _run_bounded(
                     command, cwd=str(self.ve_root), env=env,
-                    capture_output=True, stdin=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL,
                     timeout=self.timeout, pass_fds=tuple(fds))
             except subprocess.TimeoutExpired as exc:
                 raise PerceptionError(
@@ -595,6 +746,8 @@ class VCorePerceptionAdapter(PerceptionAdapter):
             result.stdout, width=width, height=height,
             prev_given=prev is not None, marks_out=self.marks_out,
             ocr_requested=self.ocr_marks)
+        if parsed["frame_sha256"] != expected_sha:
+            _fail("identity_mismatch", "C2 digest disagrees with input frame")
         self.last_mark_cap_reached = parsed["mark_cap_reached"]
         self.last_timing_us = parsed["timing_us"]
         vision = _vision_from_c2(parsed, width, height)
@@ -619,10 +772,10 @@ class VCorePerceptionAdapter(PerceptionAdapter):
                 _fail("bad_shape", "vcore arg[%d] is not a string" % index)
         command = [self.python, "-m", "visioncore.cli", verb, *args]
         try:
-            result = subprocess.run(
+            result = _run_bounded(
                 command, cwd=str(self.ve_root),
                 env=_scrubbed_env(self.ve_root),
-                capture_output=True, stdin=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
                 timeout=self.timeout)
         except subprocess.TimeoutExpired as exc:
             raise PerceptionError(

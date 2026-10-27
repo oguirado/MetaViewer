@@ -7,6 +7,7 @@ control with a negative control that must fail for the stated reason;
 no test is skipped under any condition.
 """
 
+import hashlib
 import json
 import math
 import os
@@ -35,7 +36,7 @@ from metaviewer_agents.perception.base import (
 )
 from metaviewer_agents.perception.vcore import VCorePerceptionAdapter
 
-_SHA = "ab" * 32
+_SHA = hashlib.sha256(bytes([7]) * (64 * 48 * 3)).hexdigest()
 _CANARY = "VCORE-CANARY-7f3a91c2-never-inherit"
 
 
@@ -985,7 +986,7 @@ class C2MappingTests(_CodeMixin, unittest.TestCase):
         root = tempfile.mkdtemp(prefix="mv0vcore-ramws-", dir="/dev/shm")
         self.addCleanup(shutil.rmtree, root, True)
         candidate = os.path.join(root, "frame.rgb")
-        Path(candidate).write_bytes(bytes([3]) * (64 * 48 * 3))
+        Path(candidate).write_bytes(bytes([7]) * (64 * 48 * 3))
         adapter = _adapter(self)
         ref = _frame_ref(ramws_path=candidate)
         with mock.patch.object(subprocess, "run",

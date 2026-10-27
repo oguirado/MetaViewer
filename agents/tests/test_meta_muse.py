@@ -12,6 +12,7 @@ import contextlib
 import io
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -241,7 +242,14 @@ class MetaMusePerceptionTests(unittest.TestCase):
         base = _raw(_response(_vision(summary="")))
         pad = size - len(base)
         self.assertGreaterEqual(pad, 0)
-        return _raw(_response(_vision(summary="x" * pad)))
+        if pad <= 4096:
+            return _raw(_response(_vision(summary="x" * pad)))
+        with_el = _raw(_response(_vision(
+            summary="x" * 4096, elements=[_element(name="")])))
+        rem = size - len(with_el)
+        self.assertGreaterEqual(rem, 0)
+        return _raw(_response(_vision(
+            summary="x" * 4096, elements=[_element(name="x" * rem)])))
 
     def test_response_line_bound_enforced(self):
         exact = self._sized_response(256)
@@ -326,6 +334,7 @@ class MetaMusePerceptionTests(unittest.TestCase):
             _vision(extra=1),
             _vision(summary=None),
             _vision(summary=5),
+            _vision(summary="x" * 4097),
             _vision(summary="x" * 65537),
             _vision(changed_regions={}),
             _vision(changed_regions=[dict(full, x=True)]),
@@ -361,7 +370,7 @@ class MetaMusePerceptionTests(unittest.TestCase):
 
     def test_vision_caps_boundary_accepted(self):
         vision = _vision(
-            summary="s" * 65536,
+            summary="s" * 4096,
             changed_regions=[{"x": 0, "y": 0, "w": 800, "h": 600}],
             elements=[
                 _element(role="r" * 128, name="n" * 65536,
@@ -408,22 +417,30 @@ class MetaMusePerceptionTests(unittest.TestCase):
 
     def test_ram_path_containment(self):
         adapter = self.make()
-        for good in ("/dev/shm/ramws/demo.rgb",
-                     "/proc/self/fd/3",
-                     Path("/dev/shm/vqa-cu/marks.json")):
-            with self.subTest(path=str(good)):
-                self.assertEqual(adapter.perceive(_frame_ref(), good),
-                                 _vision())
-                self.assertEqual(
-                    adapter.perceive(_frame_ref(), prev=good), _vision())
-        for bad in ("", "/tmp/x.rgb", "relative/x.rgb", "/home/u/x.rgb",
-                    "/dev/shm", "/dev/shm/../etc/x", "/dev/shm/a\x00b",
-                    "/proc/self/fd", ".", "/"):
-            with self.subTest(path=repr(bad)):
-                self.assertCode("bad_shape", adapter.perceive,
-                                _frame_ref(), bad)
-                self.assertCode("bad_shape", adapter.perceive,
-                                _frame_ref(), prev=bad)
+        with tempfile.TemporaryDirectory(dir="/dev/shm") as shm_dir:
+            shm_root = Path(shm_dir)
+            demo_rgb = shm_root / "demo.rgb"
+            demo_rgb.write_bytes(b"\x00" * 16)
+            marks_json = shm_root / "marks.json"
+            marks_json.write_text("{}", encoding="utf-8")
+            symlink_rgb = shm_root / "symlink.rgb"
+            symlink_rgb.symlink_to(demo_rgb)
+            for good in (str(demo_rgb), "/proc/self/fd/3", marks_json):
+                with self.subTest(path=str(good)):
+                    self.assertEqual(adapter.perceive(_frame_ref(), good),
+                                     _vision())
+                    self.assertEqual(
+                        adapter.perceive(_frame_ref(), prev=good), _vision())
+            for bad in ("", "/tmp/x.rgb", "relative/x.rgb", "/home/u/x.rgb",
+                        "/dev/shm", "/dev/shm/../etc/x", "/dev/shm/a\x00b",
+                        "/dev/shm/nonexistent-ramws-demo.rgb",
+                        str(symlink_rgb), "/proc/self/fd",
+                        "/proc/self/fd/not-a-number", ".", "/"):
+                with self.subTest(path=repr(bad)):
+                    self.assertCode("bad_shape", adapter.perceive,
+                                    _frame_ref(), bad)
+                    self.assertCode("bad_shape", adapter.perceive,
+                                    _frame_ref(), prev=bad)
 
     def test_returned_vision_isolated_from_transport_payload(self):
         payload = _response()

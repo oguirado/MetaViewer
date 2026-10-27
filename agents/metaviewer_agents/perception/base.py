@@ -32,8 +32,8 @@ __all__ = [
     "available_perception_adapters",
 ]
 
-# v0.2 wire caps on the vision sub-object (observation.schema.json).
-_MAX_SUMMARY = 65536
+# v0.2 wire caps on the vision sub-object (aligned with mv_tool_result.schema.json / tools.py).
+_MAX_SUMMARY = 4096
 _MAX_REGIONS = 4096
 _MAX_ELEMENTS = 4096
 _MAX_NAME = 65536

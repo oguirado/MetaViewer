@@ -43,7 +43,7 @@ rows = zlib.decompress(image)
 assert len(rows) == 52
 assert all(rows[i * 13] == 0 for i in range(4))
 assert b''.join(rows[i * 13 + 1:(i + 1) * 13] for i in range(4)) == bytes(range(48))
-print(json.dumps(dict(schema='ve.cu_describe/v1', frame_sha256=hashlib.sha256(png).hexdigest(),
+print(json.dumps(dict(schema='ve.cu_describe/v1', frame_sha256=hashlib.sha256(bytes(range(48))).hexdigest(),
     width=4, height=4, changed=None, changed_regions=[], timing_us=7,
     crops=[dict(x=1, y=1, w=2, h=2, reason='salient')])))
 '''

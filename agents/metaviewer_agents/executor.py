@@ -47,7 +47,7 @@ class AdmittedExecutor:
         stable = lambda row: {k: v for k, v in row.items() if k != 'value'}
         if len(matches) != 1 or stable(matches[0]) != stable(target):
             raise ValueError('target custody')
-        if re.search(r'^(?:Stop|Detener)\b', target.get('name', ''), re.I):
+        if re.search(r'^\s*(?:Stop|Detener)\b', target.get('name', ''), re.I):
             raise SurfaceRefused('generation_control', 'click')
         box = target.get('box')
         if (not isinstance(box, list) or len(box) != 4
