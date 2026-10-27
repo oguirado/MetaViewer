@@ -1,4 +1,6 @@
 # MetaViewer unified CI (W0-CI-MATRIX).
+# [TARGET, unit decision] Product identity requires aggregator-local bytes;
+# producer log digests are labeled sanitized_log_sha256 and prove no product.
 #
 # Branch protection (set by the maintainer in the hosting UI; comments do not
 # configure it): require the `ci-required` status plus the separately owned
@@ -117,8 +119,9 @@ jobs:
               'argv': json.loads(e['ARGV_JSON']), 'cwd': e['GCWD'] or e['CWD'],
               'rc': rc, 'outcome': e['OUTCOME'], 'reason': e['REASON'],
               'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
-                             'artifact_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
+                             'sanitized_log_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
                              'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
+              'product_identity': None,
               'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
                               'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
                               'accepted': e['OUTCOME'] == 'PASS'}],
@@ -265,7 +268,7 @@ jobs:
           check("f3-neg-quoted", not bare and '"$BEFORE"' in laws_block)
           # F4: receipt schema validation and required-set aggregation.
           RKEYS = {"schema", "gate_id", "leg", "profile", "owner", "issuer", "scope", "argv", "cwd",
-                   "rc", "outcome", "reason", "identities", "assertions", "counts"}
+                   "rc", "outcome", "reason", "identities", "product_identity", "assertions", "counts"}
           OUTCOMES = {"PASS", "FAIL", "BLOCKED", "UNKNOWN", "NOT_APPLICABLE"}
           def receipt_errors(r, reg):
               errs = []
@@ -289,12 +292,12 @@ jobs:
               if set(r["scope"]) != {"unit", "platform", "feature", "artifact"} or any(not isinstance(v, str) or not v for v in r["scope"].values()):
                   errs.append("scope")
               ids = r["identities"]
-              if set(ids) != {"gate_revision", "instrument_sha256", "artifact_sha256", "configuration_sha256",
+              if set(ids) != {"gate_revision", "instrument_sha256", "sanitized_log_sha256", "configuration_sha256",
                               "log_sha256", "fixture_sha256"}:
                   errs.append("identities-keys")
                   return errs
               hexok = lambda v: isinstance(v, str) and re.fullmatch(r"[0-9a-f]{64}", v) is not None
-              for k in ("instrument_sha256", "artifact_sha256", "configuration_sha256", "log_sha256"):
+              for k in ("instrument_sha256", "sanitized_log_sha256", "configuration_sha256", "log_sha256"):
                   if not hexok(ids[k]):
                       errs.append("identities-" + k)
               if not isinstance(ids["fixture_sha256"], list) or not ids["fixture_sha256"] or any(not hexok(v) for v in ids["fixture_sha256"]):
@@ -320,15 +323,16 @@ jobs:
                      "owner": "W0-CI-MATRIX", "issuer": "CI/g/1 [VM]", "argv": ["true"], "cwd": "/tmp",
                      "rc": 0, "outcome": "PASS", "reason": "ok",
                      "scope": {"unit": "u", "platform": "x64", "feature": "g", "artifact": "g.receipt.json"},
-                     "identities": {"gate_revision": "r", "instrument_sha256": "a" * 64, "artifact_sha256": "b" * 64,
+                     "identities": {"gate_revision": "r", "instrument_sha256": "a" * 64, "sanitized_log_sha256": "b" * 64,
                                     "configuration_sha256": "c" * 64, "log_sha256": "d" * 64, "fixture_sha256": ["a" * 64]},
+                     "product_identity": None,
                      "assertions": [{"id": "exit-status", "expected": "rc 0", "observed": "rc 0", "accepted": True}],
                      "counts": {"passed": 1, "failed": 0, "skipped": 0, "source": "parsed:true"}}
-          reg = {"instrument_sha256": "a" * 64, "artifact_sha256": "b" * 64, "configuration_sha256": "c" * 64,
+          reg = {"instrument_sha256": "a" * 64, "sanitized_log_sha256": "b" * 64, "configuration_sha256": "c" * 64,
                  "log_sha256": "d" * 64}
           check("f4-genuine", receipt_errors(genuine, reg) == [], repr(receipt_errors(genuine, reg)[:3]))
           tampered = json.loads(json.dumps(genuine))
-          tampered["identities"]["artifact_sha256"] = "0" * 64
+          tampered["identities"]["sanitized_log_sha256"] = "0" * 64
           check("f4-neg-tamper", receipt_errors(tampered, reg) != [])
           missing = json.loads(json.dumps(genuine))
           del missing["reason"]
@@ -343,7 +347,13 @@ jobs:
           blocked.update({"rc": None, "outcome": "BLOCKED", "reason": "no runner"})
           blocked["assertions"] = [{"id": "exit-status", "expected": "rc 0", "observed": "unexecuted", "accepted": False}]
           check("f4-blocked", receipt_errors(blocked, reg) == [])
-          def aggregate(required, receipts, results):
+          # [TARGET, unit decision] Share the byte verifier with ci-required.
+          import importlib.util
+          spec = importlib.util.spec_from_file_location("package_identity", "tests/ci/test_package_identity.py")
+          product_module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(product_module)
+          distribution_errors = product_module.distribution_errors
+          def aggregate(required, receipts, results, product_root=None, revision=None):
               seen = [r["gate_id"] for r in receipts]
               if sorted(seen) != sorted(required):
                   return (False, "identity-set")
@@ -352,6 +362,8 @@ jobs:
                       return (False, "job-" + r["gate_id"])
                   if r["outcome"] not in required[r["gate_id"]]:
                       return (False, "outcome-" + r["gate_id"])
+                  if r["gate_id"] == "package" and distribution_errors(r, product_root, revision):
+                      return (False, "product-package")
               return (True, "ok")
           req = {"rust": {"PASS"}, "novac": {"PASS", "NOT_APPLICABLE"}}
           rpass = json.loads(json.dumps(genuine))
@@ -366,6 +378,9 @@ jobs:
           rna2 = json.loads(json.dumps(rna))
           rna2["gate_id"] = "rust"
           check("f4-neg-agg-na", not aggregate(req, [rna2, rna], {"rust": "success", "novac": "success"})[0])
+          product_tests = subprocess.run(["python3", "-m", "unittest", "discover", "-s", "tests/ci",
+              "-p", "test_package_identity.py", "-v"], capture_output=True, text=True)
+          check("f4-product-identity", product_tests.returncode == 0, product_tests.stdout + product_tests.stderr)
           # F5: runner label to architecture mapping.
           ARCH = {"ubuntu-24.04": "x86_64", "ubuntu-24.04-arm": "aarch64"}
           check("f5-arch", ARCH["ubuntu-24.04"] == "x86_64" and ARCH["ubuntu-24.04-arm"] == "aarch64")
@@ -507,8 +522,9 @@ jobs:
               'argv': json.loads(e['ARGV_JSON']), 'cwd': e['GCWD'] or e['CWD'],
               'rc': rc, 'outcome': e['OUTCOME'], 'reason': e['REASON'],
               'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
-                             'artifact_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
+                             'sanitized_log_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
                              'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
+              'product_identity': None,
               'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
                               'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
                               'accepted': e['OUTCOME'] == 'PASS'}],
@@ -648,8 +664,9 @@ jobs:
               'argv': json.loads(e['ARGV_JSON']), 'cwd': e['GCWD'] or e['CWD'],
               'rc': rc, 'outcome': e['OUTCOME'], 'reason': e['REASON'],
               'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
-                             'artifact_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
+                             'sanitized_log_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
                              'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
+              'product_identity': None,
               'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
                               'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
                               'accepted': e['OUTCOME'] == 'PASS'}],
@@ -788,8 +805,9 @@ jobs:
               'argv': json.loads(e['ARGV_JSON']), 'cwd': e['GCWD'] or e['CWD'],
               'rc': rc, 'outcome': e['OUTCOME'], 'reason': e['REASON'],
               'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
-                             'artifact_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
+                             'sanitized_log_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
                              'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
+              'product_identity': None,
               'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
                               'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
                               'accepted': e['OUTCOME'] == 'PASS'}],
@@ -959,8 +977,9 @@ jobs:
               'argv': json.loads(e['ARGV_JSON']), 'cwd': e['GCWD'] or e['CWD'],
               'rc': rc, 'outcome': e['OUTCOME'], 'reason': e['REASON'],
               'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
-                             'artifact_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
+                             'sanitized_log_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
                              'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
+              'product_identity': None,
               'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
                               'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
                               'accepted': e['OUTCOME'] == 'PASS'}],
@@ -1108,8 +1127,9 @@ jobs:
               'argv': json.loads(e['ARGV_JSON']), 'cwd': e['GCWD'] or e['CWD'],
               'rc': rc, 'outcome': e['OUTCOME'], 'reason': e['REASON'],
               'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
-                             'artifact_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
+                             'sanitized_log_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
                              'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
+              'product_identity': None,
               'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
                               'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
                               'accepted': e['OUTCOME'] == 'PASS'}],
@@ -1307,8 +1327,9 @@ jobs:
               'argv': json.loads(e['ARGV_JSON']), 'cwd': e['GCWD'] or e['CWD'],
               'rc': rc, 'outcome': e['OUTCOME'], 'reason': e['REASON'],
               'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
-                             'artifact_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
+                             'sanitized_log_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
                              'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
+              'product_identity': None,
               'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
                               'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
                               'accepted': e['OUTCOME'] == 'PASS'}],
@@ -1589,8 +1610,9 @@ jobs:
               'argv': json.loads(e['ARGV_JSON']), 'cwd': e['GCWD'] or e['CWD'],
               'rc': rc, 'outcome': e['OUTCOME'], 'reason': e['REASON'],
               'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
-                             'artifact_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
+                             'sanitized_log_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
                              'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
+              'product_identity': None,
               'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
                               'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
                               'accepted': e['OUTCOME'] == 'PASS'}],
@@ -1713,8 +1735,9 @@ jobs:
               'argv': json.loads(e['ARGV_JSON']), 'cwd': e['GCWD'] or e['CWD'],
               'rc': rc, 'outcome': e['OUTCOME'], 'reason': e['REASON'],
               'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
-                             'artifact_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
+                             'sanitized_log_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
                              'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
+              'product_identity': None,
               'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
                               'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
                               'accepted': e['OUTCOME'] == 'PASS'}],
@@ -1741,6 +1764,8 @@ jobs:
           finish_gate novac UNEXEC NOT_APPLICABLE "G-NOVAC required from W1, interface ABSENT in W0" "$LOG" .github/workflows/ci.yml "unexecuted" 0 -- novac-pending || exit 2
           exit 0
   package:
+    outputs:
+      receipt: ${{ steps.package-evidence.outputs.receipt }}
     strategy:
       fail-fast: false
       matrix:
@@ -1759,6 +1784,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Report package applicability
+        id: package-evidence
         env:
           JOB_ID: package
           PLATFORM: ${{ matrix.platform }}
@@ -1821,8 +1847,9 @@ jobs:
               'argv': json.loads(e['ARGV_JSON']), 'cwd': e['GCWD'] or e['CWD'],
               'rc': rc, 'outcome': e['OUTCOME'], 'reason': e['REASON'],
               'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
-                             'artifact_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
+                             'sanitized_log_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
                              'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
+              'product_identity': None,
               'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
                               'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
                               'accepted': e['OUTCOME'] == 'PASS'}],
@@ -1830,6 +1857,8 @@ jobs:
           out = os.path.join(e['EVDIR'], e['GATE'] + '.receipt.json')
           with open(out, 'w') as f:
               json.dump(receipt, f, indent=2)
+          with open(e['GITHUB_OUTPUT'], 'a') as output:
+              output.write('receipt=' + json.dumps(receipt, separators=(',', ':')) + '\n')
           print('receipt: ' + out)
           PYEOF
             {
@@ -1845,9 +1874,9 @@ jobs:
             tail -n 40 "$sane"
           }
           LOG="$EVDIR/package.log"
-          printf 'Packager argv is ABSENT in W0; the package job is a non-blocking scaffold until W3.\n' > "$LOG"
-          finish_gate package UNEXEC NOT_APPLICABLE "packager argv ABSENT in W0, blocking from W3" "$LOG" .github/workflows/ci.yml "unexecuted" 0 -- package-pending || exit 2
-          exit 0
+          printf 'Independent package product evidence is ABSENT; distribution is blocked.\n' > "$LOG"
+          finish_gate package UNEXEC NOT_APPLICABLE "independent product evidence ABSENT; distribution requires verified bytes" "$LOG" .github/workflows/ci.yml "unexecuted" 0 -- package-pending || exit 2
+          exit 1
   build-macos:
     # Manual runs only while the repository is private (hosted minutes are billed x10 on macOS, x2 on Windows);
     # remove this condition when the repository goes public, before submission.
@@ -1926,8 +1955,9 @@ jobs:
               'argv': json.loads(e['ARGV_JSON']), 'cwd': e['GCWD'] or e['CWD'],
               'rc': rc, 'outcome': e['OUTCOME'], 'reason': e['REASON'],
               'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
-                             'artifact_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
+                             'sanitized_log_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
                              'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
+              'product_identity': None,
               'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
                               'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
                               'accepted': e['OUTCOME'] == 'PASS'}],
@@ -2031,8 +2061,9 @@ jobs:
               'argv': json.loads(e['ARGV_JSON']), 'cwd': e['GCWD'] or e['CWD'],
               'rc': rc, 'outcome': e['OUTCOME'], 'reason': e['REASON'],
               'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
-                             'artifact_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
+                             'sanitized_log_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
                              'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
+              'product_identity': None,
               'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
                               'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
                               'accepted': e['OUTCOME'] == 'PASS'}],
@@ -2064,6 +2095,15 @@ jobs:
     needs: [ci-policy, laws-contracts, router, rust, go, python, js, e2e, novac, package]
     if: always()
     steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # checkout v4.2.2
+      - name: Verify independent package product
+        env:
+          PACKAGE_RECEIPT: ${{ needs.package.outputs.receipt }}
+          PRODUCT_ROOT: ${{ runner.temp }}/metaviewer-products
+        run: |
+          # [TARGET, unit decision] No admitted artifact transport exists yet.
+          # Missing runner-local bytes or a producer-only assertion must fail.
+          python3 tests/ci/test_package_identity.py --distribution
       - name: Aggregate required results
         run: |
           fail=0
