@@ -1,4 +1,5 @@
 """[TARGET, unit decision] Exercise router exceptions with the pinned scanner."""
+import base64
 import json
 import os
 from pathlib import Path
@@ -54,7 +55,17 @@ class GitleaksConfigTests(unittest.TestCase):
         self.assertTrue(config["extend"]["useDefault"])
         self.assertNotIn("allowlist", config)
         self.assertEqual([rule["id"] for rule in config["rules"]],
-                         ["square-access-token"])
+                         ["facebook-page-access-token",
+                          "facebook-page-access-token-generated-digest-files",
+                          "square-access-token",
+                          "square-access-token-generated-digest-files"])
+        for rule in config["rules"]:
+            if "path" in rule:
+                self.assertEqual(rule["secretGroup"], 1)
+                self.assertEqual(rule["allowlist"], {
+                    "regexTarget": "secret", "regexes": ["^[0-9a-f]{64}$"]})
+            else:
+                self.assertEqual(list(rule["allowlist"]), ["paths"])
         workflow = (ROOT / ".github/workflows/secrets.yml").read_text()
         self.assertIn('--config "$GITHUB_WORKSPACE/.gitleaks.toml"', workflow)
         self.assertIn("gate.py controls --gitleaks", workflow)
@@ -68,8 +79,7 @@ class GitleaksConfigTests(unittest.TestCase):
             source.mkdir()
             defaults = Path(scratch) / "defaults.toml"
             defaults.write_text("[extend]\nuseDefault = true\n")
-            paths = ("catalogue/router/manifest.json", "catalogue/router/digest/0.jsonl",
-                     "catalogue/router/post/ab.json", "router/index/SHA256SUMS")
+            paths = ("catalogue/router/manifest.json", "router/index/SHA256SUMS")
             for relative in paths:
                 self.plant(source, relative, json.dumps({"sha256": digest}) + "\n"
                            if relative.endswith((".json", ".jsonl"))
@@ -82,11 +92,40 @@ class GitleaksConfigTests(unittest.TestCase):
             shutil.copyfile(CONFIG, source / ".gitleaks.toml")
             self.assertEqual(self.scan(source), (0, []))
 
+    def test_generated_files_still_detect_every_credential_kind(self):
+        body = base64.b64encode(secrets.token_bytes(96)).decode("ascii")
+        pem = ("-----BEGIN RS" + "A PRIVATE KEY-----\n"
+               + "\n".join(body[i:i + 64] for i in range(0, len(body), 64))
+               + "\n-----END RS" + "A PRIVATE KEY-----\n")
+        shapes = (
+            ("square-access-token-generated-digest-files",
+             "sq0" + "atp-" + secrets.token_hex(22)),
+            ("square-access-token-generated-digest-files",
+             "EA" + "AA" + "G" + secrets.token_hex(20)),
+            ("facebook-page-access-token-generated-digest-files",
+             "EA" + "AC" + "G" + secrets.token_hex(20)),
+            ("github-pat", "gh" + "p_" + secrets.token_hex(18)),
+            ("private-key", pem),
+        )
+        for rule, value in shapes:
+            with self.subTest(rule=rule), tempfile.TemporaryDirectory() as scratch:
+                source = Path(scratch) / "Música"
+                source.mkdir()
+                paths = ("catalogue/router/manifest.json", "router/index/SHA256SUMS")
+                for relative in paths:
+                    self.plant(source, relative, value + "\n")
+                rc, findings = self.scan(source, CONFIG)
+                self.assertEqual(rc, 1)
+                self.assertEqual(len(findings), len(paths))
+                self.assertEqual({f["RuleID"] for f in findings}, {rule})
+                self.assertEqual({f["File"] for f in findings}, set(paths))
+
     def test_real_tokens_and_path_boundaries_still_detected(self):
         square = "sq0" + "atp-" + secrets.token_hex(22)
         github = "gh" + "p_" + secrets.token_hex(18)
         paths = ("src/payment.py", "notes/token.txt", "catalogue/router-other/token.txt",
-                 "src/catalogue/router/token.json", "router/index/SHA256SUMS.bak")
+                 "src/catalogue/router/token.json", "router/index/SHA256SUMS.bak",
+                 "catalogue/router/digest/0.jsonl", "catalogue/router/post/ab.json")
         with tempfile.TemporaryDirectory() as scratch:
             source = Path(scratch)
             for relative in paths:

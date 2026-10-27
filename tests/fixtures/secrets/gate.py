@@ -30,7 +30,52 @@ GITLEAKS_URL = (
     "https://github.com/gitleaks/gitleaks/releases/download/"
     "v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz"
 )
-CONFIG_TEXT = "[extend]\nuseDefault = true\n"
+# [TARGET, unit decision] Constant policy, independent of repository config.
+# Companion rules implement path AND secret scoping on pinned gitleaks v8.18.4.
+CONFIG_TEXT = r"""# [TARGET, unit decision] Preserve default detection outside two digest files.
+# v8.18.4 allowlist paths and regexes use OR. Companion rules restore detection
+# in those files and exempt only an exact lowercase SHA-256 secret there.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "facebook-page-access-token"
+description = "Discovered a Facebook Page Access Token, posing a risk of unauthorized access to Facebook accounts and personal data exposure."
+regex = '''(?i)\b(EAA[MC][a-z0-9]{20,})(?:['|\"|\n|\r|\s|\x60|;]|$)'''
+keywords = ["eaam", "eaac"]
+[rules.allowlist]
+paths = ['''^(catalogue/router/manifest\.json|router/index/SHA256SUMS)$''']
+
+[[rules]]
+id = "facebook-page-access-token-generated-digest-files"
+description = "Discovered a Facebook Page Access Token, posing a risk of unauthorized access to Facebook accounts and personal data exposure."
+regex = '''(?i)\b(EAA[MC][a-z0-9]{20,})(?:['|\"|\n|\r|\s|\x60|;]|$)'''
+keywords = ["eaam", "eaac"]
+secretGroup = 1
+path = '''^(catalogue/router/manifest\.json|router/index/SHA256SUMS)$'''
+[rules.allowlist]
+regexTarget = "secret"
+regexes = ['''^[0-9a-f]{64}$''']
+
+[[rules]]
+id = "square-access-token"
+description = "Detected a Square Access Token, risking unauthorized payment processing and financial transaction exposure."
+regex = '''(?i)\b((EAAA|sq0atp-)[0-9A-Za-z\-_]{22,60})(?:['|\"|\n|\r|\s|\x60|;]|$)'''
+keywords = ["sq0atp-", "eaaa"]
+[rules.allowlist]
+paths = ['''^(catalogue/router/manifest\.json|router/index/SHA256SUMS)$''']
+
+[[rules]]
+id = "square-access-token-generated-digest-files"
+description = "Detected a Square Access Token, risking unauthorized payment processing and financial transaction exposure."
+regex = '''(?i)\b((EAAA|sq0atp-)[0-9A-Za-z\-_]{22,60})(?:['|\"|\n|\r|\s|\x60|;]|$)'''
+keywords = ["sq0atp-", "eaaa"]
+secretGroup = 1
+path = '''^(catalogue/router/manifest\.json|router/index/SHA256SUMS)$'''
+[rules.allowlist]
+regexTarget = "secret"
+regexes = ['''^[0-9a-f]{64}$''']
+"""
 CONTROL_IDS = ("github", "entropy", "appended", "pem")
 SCAN_TIMEOUT = 120
 GIT_TIMEOUT = 60
@@ -52,7 +97,7 @@ class GateFailure(Exception):
 
 
 def write_default_config(destination: Path) -> None:
-    """Write the default-rules-only scanner config (constant bytes)."""
+    """Write all default rules plus narrow digest exceptions (constant bytes)."""
     try:
         destination.write_text(CONFIG_TEXT, encoding="ascii")
     except OSError as exc:

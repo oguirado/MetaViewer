@@ -20,6 +20,7 @@ import string
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -801,6 +802,20 @@ class GateUnitTests(unittest.TestCase):
             self.assertEqual(cfg.read_bytes(),
                              gate.CONFIG_TEXT.encode("ascii"))
 
+    def test_constant_policy_matches_root_without_loading_it(self):
+        self.assertEqual((REPO_ROOT / ".gitleaks.toml").read_bytes(),
+                         gate.CONFIG_TEXT.encode("ascii"))
+        config = tomllib.loads(gate.CONFIG_TEXT)
+        self.assertTrue(config["extend"]["useDefault"])
+        self.assertNotIn("allowlist", config)
+        self.assertEqual(len(config["rules"]), 4)
+        for rule in config["rules"]:
+            if "path" in rule:
+                self.assertEqual(rule["allowlist"], {
+                    "regexTarget": "secret", "regexes": ["^[0-9a-f]{64}$"]})
+            else:
+                self.assertEqual(list(rule["allowlist"]), ["paths"])
+
     def _hook_bin(self, tmp, stub=None, with_python=True, with_git=True):
         bindir = tmp / "bin"
         bindir.mkdir(parents=True, exist_ok=True)
@@ -836,9 +851,24 @@ class GateUnitTests(unittest.TestCase):
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, timeout=120, env=env)
 
+    def _assert_safe_hook_mode(self, path):
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+        self.assertTrue(mode & stat.S_IXUSR, "hook must be owner-executable")
+        self.assertEqual(mode & stat.S_IWOTH, 0, "hook must not be world-writable")
+
+    def test_hook_mode_negative_controls(self):
+        hook = _scratch(self) / "pre-push"
+        hook.write_text("#!/bin/sh\n")
+        for mode in (0o755, 0o775):
+            hook.chmod(mode)
+            self._assert_safe_hook_mode(hook)
+        for mode in (0o777, 0o664):
+            hook.chmod(mode)
+            with self.assertRaises(AssertionError):
+                self._assert_safe_hook_mode(hook)
+
     def test_hook_is_executable_posix(self):
-        mode = stat.S_IMODE(os.stat(HOOK).st_mode)
-        self.assertEqual(mode, 0o755)
+        self._assert_safe_hook_mode(HOOK)
         proc = subprocess.run(
             ["sh", "-n", str(HOOK)], stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
@@ -930,6 +960,82 @@ class GateIntegrationTests(unittest.TestCase):
 
     def _runtime_token_line(self):
         return ('token = "' + _token_prefix() + _token_suffix(36) + '"\n')
+
+    def _scan_plants(self, payloads, defaults=False):
+        tmp = _scratch(self)
+        source = tmp / "Música"
+        source.mkdir()
+        for name, body in payloads:
+            target = source / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(body, encoding="utf-8")
+        config, report = tmp / "config.toml", tmp / "report.json"
+        config.write_text("[extend]\nuseDefault = true\n" if defaults
+                          else gate.CONFIG_TEXT, encoding="ascii")
+        proc = subprocess.run(
+            [str(self.gitleaks), "detect", "--no-git", "--source", ".",
+             "--config", str(config), "--redact", "--no-banner",
+             "--report-format", "json", "--report-path", str(report)],
+            cwd=source, capture_output=True, timeout=120)
+        self.assertIn(proc.returncode, (0, 1), "scanner failed")
+        findings = json.loads(report.read_text(encoding="utf-8"))
+        self.assertEqual(proc.returncode, 1 if findings else 0)
+        return findings
+
+    def test_digest_confusable_default_rules(self):
+        # Measured hex-compatible keyword prefilters in pinned default rules:
+        # acca, eaaa, eaac. Include unconditioned random digests as a control.
+        values = [secrets.token_hex(32) for _ in range(2048)]
+        for prefix in ("ac" + "ca", "ea" + "aa", "ea" + "ac"):
+            values.extend(prefix + secrets.token_hex(30) for _ in range(64))
+        body = "\n".join(json.dumps({"sha256": value}) for value in values)
+        findings = self._scan_plants([("digests.json", body)], defaults=True)
+        self.assertEqual({f["RuleID"] for f in findings},
+                         {"square-access-token", "facebook-page-access-token"})
+
+    def test_digest_exceptions_are_exact_and_path_scoped(self):
+        paths = ("router/index/SHA256SUMS", "catalogue/router/manifest.json")
+        for prefix in ("ea" + "aa", "ea" + "ac"):
+            digest = prefix + secrets.token_hex(30)
+            payloads = [(name, json.dumps({"sha256": digest}) + "\n"
+                         if name.endswith(".json") else digest + "  generated.json\n")
+                        for name in paths]
+            baseline = self._scan_plants(payloads, defaults=True)
+            self.assertEqual(len(baseline), len(paths))
+            self.assertEqual(self._scan_plants(payloads), [])
+            outside = ("src/checksums.txt", "router/index/SHA256SUMS.bak",
+                       "catalogue/router/post/ab.json", "catalogue/router/manifestXjson",
+                       "src/catalogue/router/manifest.json")
+            findings = self._scan_plants([(name, digest + "\n") for name in outside])
+            self.assertEqual(len(findings), len(outside))
+            # Uppercase and wrong lengths must not pass the lowercase digest gate.
+            for value in (digest.upper(), digest[:-1], digest[:-2]):
+                findings = self._scan_plants([(name, value + "\n") for name in paths])
+                self.assertEqual(len(findings), len(paths))
+
+    def test_generated_files_still_detect_credentials(self):
+        shapes = (
+            ("square-access-token-generated-digest-files",
+             "sq0" + "atp-" + _token_suffix(32)),
+            ("square-access-token-generated-digest-files",
+             "EA" + "AA" + "G" + _token_suffix(31)),
+            ("facebook-page-access-token-generated-digest-files",
+             "EA" + "AC" + "G" + _token_suffix(59)),
+            ("github-pat", gate._github_shaped_token()),
+            ("private-key", gate._pem_block()),
+        )
+        for rule, value in shapes:
+            with self.subTest(rule=rule):
+                paths = ("router/index/SHA256SUMS", "catalogue/router/manifest.json")
+                # Raw PEM lines keep the scanner's multiline key syntax intact.
+                findings = self._scan_plants([(name, value + "\n") for name in paths])
+                self.assertEqual(len(findings), len(paths))
+                self.assertEqual({f["RuleID"] for f in findings}, {rule})
+
+    def test_current_repository_full_history(self):
+        tmp = _scratch(self)
+        text = _stdout_of(gate.run_history, self.gitleaks, REPO_ROOT, tmp)
+        self.assertIn("history: clean", text)
 
     def test_tool_version_pinned(self):
         proc = subprocess.run(

@@ -44,7 +44,7 @@ so its own source scans clean (proven by the committed-source test).
 
 The entropy plant avoids random hex stopword collisions (`dead`, `feed`) in
 the default generic-key rule. Its assignment is assembled only in scratch;
-the scanner still uses the pinned tool’s default rules without overrides.
+the scanner retains every pinned default rule with the scoped exceptions below.
 
 ## Hook
 
@@ -67,4 +67,47 @@ scanner is missing or reports findings.
   matched bytes, paths, or raw reports. Reports are never uploaded as
   CI artifacts.
 
-[TARGET, unit decision] The root `.gitleaks.toml` extends the default rules and adds only a `square-access-token` per-rule path allowlist for the generated `catalogue/router/**` mount (including `manifest.json`) and exactly `router/index/SHA256SUMS`; the builder declares that entire mount generated. Gitleaks v8.18.4 [MEASURED] supports this per-rule exception, so no global path exclusion or speculative exceptions for other rules are needed. A hex digest beginning with the case-insensitive Square marker can match that rule; genuine Square tokens on these generated paths are consequently exempt, while other rules remain active there. `tests/test_gitleaks_config.py` builds digest collisions and credential controls only at runtime, proves default discovery with `detect` in this worktree, and tests source paths and near-miss paths. The workflow explicitly selects the root config for history and retains the existing default-only runtime controls, because `gate.py gate` and the current pre-push hook explicitly select a temporary default-only config and therefore override root discovery; adapting that runner/hook is outside this unit's surface.
+## Generated digest exception
+
+[TARGET, unit decision] `gate.py` writes a constant config, byte-identical to
+root `.gitleaks.toml`, for history and controls. It never reads repository
+configuration to choose its policy. Every default rule remains active; history
+selection, private reports, and fail-closed checks are unchanged.
+
+Gitleaks v8.18.4 [MEASURED] combines rule allowlist `paths` and `regexes`
+with OR; setting `condition = "AND"` does not change this behavior. A single
+allowlist containing both would hide real tokens on the allowed paths.
+Instead, for each affected default rule, the config preserves its original
+expression and keyword prefilter verbatim and uses complementary coverage:
+
+- The original rule excludes exactly `router/index/SHA256SUMS` and
+  `catalogue/router/manifest.json`.
+- A companion rule uses the same expression and keywords, runs only on
+  those exact paths, selects capture group `secretGroup = 1` (the token without
+  its delimiter), and allowlists only `regexTarget = "secret"` matching
+  `^[0-9a-f]{64}$`. Its id has the suffix `-generated-digest-files`.
+
+This implements path AND secret scoping using the pinned scanner's supported
+rule semantics. There is no global exclusion. Other router files, suffix
+variants and source paths retain the original detection. A digest-shaped
+value is indistinguishable from a credential with exactly those bytes; only
+that requested shape is exempt. A nonhex Square token, GitHub token or PEM
+key on either generated path still rejects the scan. Paths are repository
+relative in history; fixture scans use `--source .` from their source directory.
+
+The affected rules are `square-access-token` and `facebook-page-access-token`
+[MEASURED]. Measurement used the default config embedded in the installed
+pinned binary: 173 default rules [MEASURED], with hex-only keyword prefilters
+`acca`, `eaaa`, and `eaac` [MEASURED]. Scanning 10,768 runtime-generated
+lowercase digests per file [MEASURED], including each compatible prefilter
+at varied offsets, in raw checksum and JSON fields found only those affected
+rules. This is empirical coverage of bare digest fields, not a claim that
+hex values assigned to arbitrary service-specific credential names are safe.
+The integration suite repeats a bounded random/prefix experiment and tests
+both digest acceptance and real-token rejection on each exact path, plus
+uppercase/length and nearby-path negative controls. The existing GitHub,
+entropy, appended-token and PEM runtime controls remain mandatory.
+
+The runner's constant policy also scans current full repository history in
+the integration suite. Deleted-secret and side-ref controls continue to
+prove that history remains unrestricted.
