@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 305 | 55 | 250 |
-| Lanes finished OK | 305 | 55 | 250 |
-| Agent steps | 15,852 | 2,705 | 13,147 |
-| Lane-hours of agent work | 40.0 | 5.2 | 34.7 |
-| Fresh input tokens | 66,075,065 | 11,482,034 | 54,593,031 |
-| Cache-read input tokens | 1,454,608,516 | 226,255,212 | 1,228,353,304 |
-| Prompt cache hit % | 95.7 | 95.2 | 95.7 |
-| Output tokens | 14,095,307 | 2,135,708 | 11,959,599 |
-| Thinking tokens | 7,327,988 | 1,050,039 | 6,277,949 |
-| Cost (USD) | 12.3358 | 2.0279 | 10.3079 |
-| Cost per lane (USD) | 0.0404 | 0.0369 | 0.0412 |
+| Lanes launched | 306 | 55 | 251 |
+| Lanes finished OK | 306 | 55 | 251 |
+| Agent steps | 15,934 | 2,705 | 13,229 |
+| Lane-hours of agent work | 40.2 | 5.2 | 35.0 |
+| Fresh input tokens | 66,344,581 | 11,482,034 | 54,862,547 |
+| Cache-read input tokens | 1,463,695,587 | 226,255,212 | 1,237,440,375 |
+| Prompt cache hit % | 95.7 | 95.2 | 95.8 |
+| Output tokens | 14,160,358 | 2,135,708 | 12,024,650 |
+| Thinking tokens | 7,366,142 | 1,050,039 | 6,316,103 |
+| Cost (USD) | 12.3939 | 2.0279 | 10.3661 |
+| Cost per lane (USD) | 0.0405 | 0.0369 | 0.0413 |
 
-Rooms: 67. Peak concurrent lanes [MEASURED from lane start/end]: 24.
+Rooms: 68. Peak concurrent lanes [MEASURED from lane start/end]: 24.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -53,7 +53,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | submission | 4 | 94.9 | 0.0995 |
 | test | 12 | 95.6 | 0.5657 |
 | testing | 64 | 95.9 | 2.6123 |
-| ui | 15 | 96.6 | 1.1614 |
+| ui | 16 | 96.6 | 1.2195 |
 | vision | 8 | 97.2 | 0.537 |
 
 ## By room (why and what for)
@@ -127,6 +127,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvr2vj | conductor | Oct 27 12:08 | testing | 3 | 95.4 | 0.0758 | Verify the Jules round-2 test branches T4 (updated), T6 and T7 on the current head with Meta Muse Spark before adopting any test or opening any fix unit. |
 | mv0tg4 | conductor | Oct 27 12:11 | testing | 6 | 95.1 | 0.1967 | Refresh the AC test-gap map on the integration head after the day-2 morning (about 50 integrations, round-2 fixes in flight) and audit the repository router, so Argon test and router units start from verified specs. |
 | mvr2vj8 | conductor | Oct 27 12:23 | testing | 1 | 95.8 | 0.0279 | Verify the Jules round-2 test branches T4 (updated), T6 and T7 on the current head with Meta Muse Spark before adopting any test or opening any fix unit. |
+| mvui14 | UI orchestrator | Oct 27 13:32 | ui | 1 | 97.1 | 0.0581 | Move live frame painting from the interim preload painter into the renderer (frame_port/v1 + frame_ack/v0.2 after the real paint), and fix three renderer defects measured live by the orchestrator: capture chrome not reacting, tile title ':100', 'Agent acting' without an agent. |
 
 ## Every lane
 
@@ -437,6 +438,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0tg4 | E2E | Gap map E2E | Oct 27 12:11 | yes | 57 | 95.6 | 0.041027 |
 | mv0tg4 | ROUTER | Router audit | Oct 27 12:11 | yes | 36 | 93.1 | 0.022537 |
 | mvr2vj8 | J8 | Verify round-2 J8 | Oct 27 12:23 | yes | 60 | 95.8 | 0.027931 |
+| mvui14 | W | Capture chrome reactivity, tile title, agent chip | Oct 27 13:32 | yes | 82 | 97.1 | 0.058136 |
 
 ## Method
 
