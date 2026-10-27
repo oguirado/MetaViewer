@@ -1097,6 +1097,7 @@ liveReplay.js	ui/src/fixtures/liveReplay.js
 resolveState.js	ui/src/fixtures/resolveState.js
 states.js	ui/src/fixtures/states.js
 tileChrome.js	ui/src/fixtures/tileChrome.js
+framePortRouter.js	ui/src/frames/framePortRouter.js
 kit.d.ts	ui/src/kit.d.ts
 src-main.js	ui/src/main.js
 MultislotHost.vue	ui/src/multislot/MultislotHost.vue
@@ -1207,6 +1208,13 @@ mvui12w-42b5199a8e9e	ui/test/mvui12-wall-intents.test.js
 mvui12w-772fd07851fb	ui/test/mvui12-wall-renderer.cjs
 mvui12w-3dc8700e9834	ui/test/mvui12-wall-state.test.js
 mvui13q-f266067a436c	ui/test/mvui13-qa-anchors.test.js
+mvui14f-70c6921deaac	ui/test/mvui14-frames-entry.test.js
+mvui14f-df1b4fecb78e	ui/test/mvui14-frames-judge.test.js
+mvui14f-ce8f2b8de64a	ui/test/mvui14-frames-router.test.js
+mvui14f-3587decca2e5	ui/test/mvui14-frames-streamid.test.js
+mvui14w-197ee190118b	ui/test/mvui14-wall-agent.test.js
+mvui14w-21bd427d2a4a	ui/test/mvui14-wall-capture.test.js
+mvui14w-fab8ab498304	ui/test/mvui14-wall-title.test.js
 mvui2co-ac677845cb36	ui/test/mvui2-contrast-tokens.test.js
 mvui2ho-83c44de816a4	ui/test/mvui2-hooks-frame.test.js
 mvui2ho-c784211240fa	ui/test/mvui2-hooks-scheme.test.js
