@@ -38,7 +38,18 @@ MAX_STATE_ERROR_CHARS = 4096
 ALLOWED_STATE_KEYS = (
     "schema", "status", "supervisor", "pids", "capsules", "published",
     "work", "display", "xauthority", "surface_id", "expires", "error",
+    "display_mode", "record_path", "recorder",
 )
+RECORDER_STOP_TIMEOUT_S = 10.0
+
+
+class StackError(RuntimeError):
+    """[TARGET, unit decision] Typed preflight and recorder error for stack.py."""
+
+    def __init__(self, code, message):
+        self.code = code
+        self.detail = message
+        super().__init__(f"{code}: {message}")
 
 
 def ttl_seconds(value):
@@ -54,7 +65,10 @@ def ttl_seconds(value):
 def parser():
     result = argparse.ArgumentParser(description=__doc__)
     commands = result.add_subparsers(dest="command", required=True)
-    commands.add_parser("start").add_argument("--ttl", type=ttl_seconds, default="45m")
+    start_cmd = commands.add_parser("start")
+    start_cmd.add_argument("--ttl", type=ttl_seconds, default="45m")
+    start_cmd.add_argument("--display", choices=("private", "visible"), default="private")
+    start_cmd.add_argument("--record", default=None, metavar="PATH.mp4")
     commands.add_parser("stop")
     return result
 
@@ -94,6 +108,12 @@ def bounded_state(value):
         )[:MAX_STATE_CAPSULES]
     if "published" in result:
         result["published"] = sorted(set(str(p) for p in result["published"]))[:MAX_STATE_PUBLISHED]
+    if "recorder" in result:
+        rec = result["recorder"]
+        if isinstance(rec, dict):
+            result["recorder"] = {"pid": rec.get("pid"), "identity": rec.get("identity")}
+        else:
+            result.pop("recorder", None)
     if isinstance(result.get("error"), str) and len(result["error"]) > MAX_STATE_ERROR_CHARS:
         result["error"] = result["error"][-MAX_STATE_ERROR_CHARS:]
     return result
@@ -182,9 +202,125 @@ def inventory():
     return set(checked(["docker", "ps", "-a", "--format", "{{.Names}}"]).splitlines())
 
 
-def preflight(root):
+def _which(tool, env=None, which_fn=None):
+    if which_fn is not None:
+        return which_fn(tool)
+    if env is not None and "PATH" in env:
+        return shutil.which(tool, path=env["PATH"])
+    return shutil.which(tool)
+
+
+def validate_display(display_mode, env=None, which_fn=None, checked_fn=None):
+    env = os.environ if env is None else env
+    checked_fn = checked if checked_fn is None else checked_fn
+    if display_mode not in ("private", "visible"):
+        raise StackError("DISPLAY_MODE_INVALID", f"unsupported display mode: {display_mode!r}")
+    if display_mode == "visible":
+        display = env.get("DISPLAY", "").strip()
+        if not display:
+            raise StackError("DISPLAY_UNSET", "DISPLAY AUSENTE for --display visible")
+        if not _which("xdpyinfo", env=env, which_fn=which_fn):
+            raise StackError("DISPLAY_UNREACHABLE", "tool AUSENTE: xdpyinfo")
+        probe_env = dict(env, DISPLAY=display)
+        xauth = env.get("XAUTHORITY", "").strip()
+        if xauth:
+            probe_env["XAUTHORITY"] = xauth
+        try:
+            checked_fn(["xdpyinfo"], env=probe_env)
+        except Exception as exc:
+            raise StackError(
+                "DISPLAY_UNREACHABLE",
+                f"DISPLAY {display} unreachable via xdpyinfo: {exc}",
+            ) from exc
+        return {"display": display, "xauthority": xauth}
+    return None
+
+
+def validate_record_path(record_path, repo_root=None, env=None, which_fn=None):
+    if record_path is None:
+        return None
+    repo = Path(ROOT if repo_root is None else repo_root).resolve(strict=False)
+    raw = str(record_path).strip()
+    if not raw or not raw.endswith(".mp4"):
+        raise StackError("RECORD_PATH_INVALID", f"record path must end with .mp4: {record_path!r}")
+    expanded = Path(raw).expanduser()
+    resolved = expanded.resolve(strict=False)
+    if resolved == repo or repo in resolved.parents:
+        raise StackError("RECORD_PATH_IN_REPO", f"record path inside repository refused: {resolved}")
+    if expanded.exists() or expanded.is_symlink() or resolved.exists() or resolved.is_symlink():
+        raise StackError("RECORD_PATH_EXISTS", f"record path already exists: {resolved}")
+    if not resolved.parent.is_dir():
+        raise StackError("RECORD_PATH_INVALID", f"record parent directory AUSENTE: {resolved.parent}")
+    if not _which("ffmpeg", env=env, which_fn=which_fn):
+        raise StackError("FFMPEG_MISSING", "tool AUSENTE: ffmpeg")
+    return resolved
+
+
+def parse_display_dimensions(xdpyinfo_output):
+    match = re.search(r"\bdimensions:\s+([1-9][0-9]*x[1-9][0-9]*)\s+pixels\b", str(xdpyinfo_output))
+    if not match:
+        raise StackError("DISPLAY_SIZE_UNAVAILABLE", "could not parse dimensions from xdpyinfo")
+    return match.group(1)
+
+
+def ffmpeg_record_argv(display, size, output_path, ffmpeg_bin="ffmpeg"):
+    if not str(display).strip():
+        raise StackError("DISPLAY_UNSET", "display required for ffmpeg x11grab")
+    if not re.fullmatch(r"[1-9][0-9]*x[1-9][0-9]*", str(size)):
+        raise StackError("DISPLAY_SIZE_UNAVAILABLE", f"invalid display size: {size!r}")
+    return [
+        str(ffmpeg_bin),
+        "-f", "x11grab",
+        "-video_size", str(size),
+        "-framerate", "30",
+        "-i", str(display),
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-pix_fmt", "yuv420p",
+        str(output_path),
+    ]
+
+
+def start_recorder(state, work, env, checked_fn=None, popen_fn=None, identity_fn=None):
+    checked_fn = checked if checked_fn is None else checked_fn
+    popen_fn = subprocess.Popen if popen_fn is None else popen_fn
+    identity_fn = identity if identity_fn is None else identity_fn
+    size = parse_display_dimensions(checked_fn(["xdpyinfo"], env=env))
+    ffmpeg_bin = _which("ffmpeg", env=env) or "ffmpeg"
+    argv = ffmpeg_record_argv(state["display"], size, state["record_path"], ffmpeg_bin=ffmpeg_bin)
+    with open(Path(work) / "ffmpeg.log", "w") as log:
+        proc = popen_fn([str(x) for x in argv], cwd=ROOT, env=env,
+                        stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                        start_new_session=True)
+    record = {"pid": proc.pid, "identity": identity_fn(proc.pid)}
+    state["recorder"] = record
+    state.setdefault("pids", []).append(record)
+    return proc
+
+
+def stop_recorder(state, signal_fn=None, alive_fn=None, monotonic_fn=None,
+                  sleep_fn=None, timeout=RECORDER_STOP_TIMEOUT_S):
+    signal_fn = signal_record if signal_fn is None else signal_fn
+    alive_fn = alive if alive_fn is None else alive_fn
+    monotonic_fn = time.monotonic if monotonic_fn is None else monotonic_fn
+    sleep_fn = time.sleep if sleep_fn is None else sleep_fn
+    recorder = state.get("recorder")
+    if not isinstance(recorder, dict) or recorder.get("pid") is None:
+        return False
+    if not alive_fn(recorder):
+        return False
+    signal_fn(recorder, signal.SIGINT)
+    deadline = monotonic_fn() + timeout
+    while alive_fn(recorder) and monotonic_fn() < deadline:
+        sleep_fn(0.05)
+    return True
+
+
+def preflight(root, display_mode="private", record_path=None):
     if (root / "state.json").exists() or gw1_active():
         raise RuntimeError("another live stack or G-W1 run is active; refusing")
+    validate_record_path(record_path)
+    validate_display(display_mode)
     missing = [key for key in REQUIRED if not os.environ.get(key)]
     if missing:
         raise RuntimeError("live env AUSENTE: " + ", ".join(missing))
@@ -195,7 +331,9 @@ def preflight(root):
             path = Path(os.environ[key])
             if not path.is_absolute() or not path.exists():
                 raise RuntimeError("live path AUSENTE: " + key)
-    for tool in ("docker", "Xvfb", "xauth", "xdpyinfo", "xwininfo"):
+    required_tools = ("docker", "xdpyinfo", "xwininfo") if display_mode == "visible" else (
+        "docker", "Xvfb", "xauth", "xdpyinfo", "xwininfo")
+    for tool in required_tools:
         if not shutil.which(tool):
             raise RuntimeError("tool AUSENTE: " + tool)
     if os.environ.get("MV_CORE_BOOTSTRAP") is not None:
@@ -278,7 +416,15 @@ def remember_tree(state, root):
     save_state(root, state)
 
 
-def cleanup(state, root):
+def cleanup(state, root, *, signal_fn=None, alive_fn=None, monotonic_fn=None, sleep_fn=None):
+    signal_fn = signal_record if signal_fn is None else signal_fn
+    alive_fn = alive if alive_fn is None else alive_fn
+    monotonic_fn = time.monotonic if monotonic_fn is None else monotonic_fn
+    sleep_fn = time.sleep if sleep_fn is None else sleep_fn
+    stop_recorder(state, signal_fn=signal_fn, alive_fn=alive_fn,
+                  monotonic_fn=monotonic_fn, sleep_fn=sleep_fn)
+    recorder = state.get("recorder")
+    recorder_key = (recorder.get("pid"), recorder.get("identity")) if isinstance(recorder, dict) else None
     # Stop native capsule only with ownership bound to this run's create receipt.
     owned = set(state.get("capsules", ()))
     owned |= live.profile_containers("mv-live-1")
@@ -291,11 +437,13 @@ def cleanup(state, root):
                  "--container", name, "--state-dir", os.environ["MV_SRF_STATE_DIR"]])
     for sig in (signal.SIGTERM, signal.SIGKILL):
         for row in reversed(state["pids"]):
-            signal_record(row, sig)
-        deadline = time.monotonic() + 5
-        while any(alive(r) for r in state["pids"]) and time.monotonic() < deadline:
-            time.sleep(0.05)
-    if any(alive(r) for r in state["pids"]):
+            if recorder_key is not None and (row.get("pid"), row.get("identity")) == recorder_key and not alive_fn(row):
+                continue
+            signal_fn(row, sig)
+        deadline = monotonic_fn() + 5
+        while any(alive_fn(r) for r in state["pids"]) and monotonic_fn() < deadline:
+            sleep_fn(0.05)
+    if any(alive_fn(r) for r in state["pids"]):
         raise RuntimeError("process cleanup failed")
     active = inventory()
     if (owned & active) or live.profile_containers("mv-live-1"):
@@ -310,7 +458,12 @@ def cleanup(state, root):
         raise RuntimeError("unsafe work directory")
     shutil.rmtree(work)
     display = state.get("display")
-    if work.exists() or (display and Path("/tmp/.X11-unix", "X" + display[1:]).exists()):
+    private_socket_present = (
+        display
+        and state.get("display_mode", "private") != "visible"
+        and Path("/tmp/.X11-unix", "X" + display[1:]).exists()
+    )
+    if work.exists() or private_socket_present:
         raise RuntimeError("socket/work cleanup failed")
     (root / "state.json").unlink()
     receipt = {"pids": state["pids"], "capsules": sorted(owned),
@@ -366,6 +519,7 @@ def supervise(root, seconds, lock_fd):
     state = load_state(root)
     work = Path(state["work"])
     children = []
+    recorder_children = []
     peer = None
     error = None
 
@@ -411,28 +565,39 @@ def supervise(root, seconds, lock_fd):
         spawn([bins["adapter"]], env)
         archive = work / "state/metaviewer/sessions" / config["session_id"]
         wait(lambda: (archive / "events/1.json").exists(), "adapter handshake")
-        auth = work / "Xauthority"
-        auth.touch(mode=0o600)
-        # Never let -displayfd allocate the operator's low display numbers.
-        # If a competing server wins the lock, fail closed before any client starts.
-        state["display"] = free_display()
-        cookie = secrets.token_hex(16)
-        checked(["xauth", "-f", auth, "add", state["display"], ".", cookie])
-        save_state(root, state)
-        with open(work / "xvfb.log", "w") as log:
-            proc = subprocess.Popen(["Xvfb", state["display"], "-screen", "0",
-                                     "1600x1000x24", "-auth", str(auth), "-nolisten", "tcp"],
-                                    stdout=log, stderr=log, start_new_session=True)
-        children.append(proc)
-        state["pids"].append({"pid": proc.pid, "identity": identity(proc.pid)})
-        save_state(root, state)
-        wait(lambda: Path("/tmp/.X11-unix", "X" + state["display"][1:]).exists(), "Xvfb display")
-        state["xauthority"] = str(auth)
-        checked(["xauth", "-f", auth, "add", state["display"], ".", cookie])
-        auth.chmod(0o600)
-        env.update(DISPLAY=state["display"], XAUTHORITY=str(auth))
-        save_state(root, state)
-        checked(["xdpyinfo"], env=env)
+        if state.get("display_mode", "private") == "visible":
+            visible = validate_display("visible", env=os.environ)
+            state["display"] = visible["display"]
+            state["xauthority"] = visible["xauthority"]
+            env["DISPLAY"] = state["display"]
+            if state["xauthority"]:
+                env["XAUTHORITY"] = state["xauthority"]
+            else:
+                env.pop("XAUTHORITY", None)
+            save_state(root, state)
+        else:
+            auth = work / "Xauthority"
+            auth.touch(mode=0o600)
+            # Never let -displayfd allocate the operator's low display numbers.
+            # If a competing server wins the lock, fail closed before any client starts.
+            state["display"] = free_display()
+            cookie = secrets.token_hex(16)
+            checked(["xauth", "-f", auth, "add", state["display"], ".", cookie])
+            save_state(root, state)
+            with open(work / "xvfb.log", "w") as log:
+                proc = subprocess.Popen(["Xvfb", state["display"], "-screen", "0",
+                                         "1600x1000x24", "-auth", str(auth), "-nolisten", "tcp"],
+                                        stdout=log, stderr=log, start_new_session=True)
+            children.append(proc)
+            state["pids"].append({"pid": proc.pid, "identity": identity(proc.pid)})
+            save_state(root, state)
+            wait(lambda: Path("/tmp/.X11-unix", "X" + state["display"][1:]).exists(), "Xvfb display")
+            state["xauthority"] = str(auth)
+            checked(["xauth", "-f", auth, "add", state["display"], ".", cookie])
+            auth.chmod(0o600)
+            env.update(DISPLAY=state["display"], XAUTHORITY=str(auth))
+            save_state(root, state)
+            checked(["xdpyinfo"], env=env)
         spawn([os.environ["MV_E2E_ELECTRON_BIN"], ROOT / "ui",
                "--user-data-dir=" + str(work / "electron-profile"), "--ozone-platform=x11"],
               electron_environment(env))
@@ -453,6 +618,10 @@ def supervise(root, seconds, lock_fd):
         save_state(root, state)
         frame = live.receive(peer, lambda b: b.get("event") == "frame_ready", report)["data"]["frame_ref"]
         state["published"] = [str(Path(frame["ramws_path"]).parent)]
+        if state.get("record_path"):
+            rec_proc = start_recorder(state, work, env)
+            recorder_children.append(rec_proc)
+            save_state(root, state)
         state["expires"] = time.time() + seconds
         state["status"] = "ready"
         remember_tree(state, root)
@@ -469,6 +638,7 @@ def supervise(root, seconds, lock_fd):
         save_state(root, state)
         print(error, file=sys.stderr, flush=True)
     finally:
+        stop_recorder(state)
         state["capsules"] = sorted(set(state.get("capsules", ())) | live.profile_containers("mv-live-1"))
         save_state(root, state)
         if peer:
@@ -488,24 +658,28 @@ def supervise(root, seconds, lock_fd):
             state.update(status="cleanup_failed", error=str(exc))
             save_state(root, state)
             print("cleanup failed: " + str(exc), file=sys.stderr, flush=True)
-        for proc in children:
+        for proc in [*children, *recorder_children]:
             if proc.poll() is not None:
                 proc.wait()
         os.close(lock_fd)
     return 1 if error or (root / "state.json").exists() else 0
 
 
-def start(root, seconds):
+def start(root, seconds, display_mode="private", record_path=None):
     fd = os.open(root / "lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise RuntimeError("another live stack is active; refusing") from exc
-        preflight(root)
+        resolved_record = validate_record_path(record_path)
+        validate_display(display_mode)
+        preflight(root, display_mode=display_mode, record_path=record_path)
         work = Path(tempfile.mkdtemp(prefix="run-", dir=root))
         state = {"schema": "metaviewer.live-stack/v1", "status": "starting", "pids": [],
-                 "work": str(work), "capsules": [], "published": []}
+                 "work": str(work), "capsules": [], "published": [], "display_mode": display_mode}
+        if resolved_record is not None:
+            state["record_path"] = str(resolved_record)
         save_state(root, state)
         with open(root / "supervisor.log", "w") as log:
             proc = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "_supervise",
@@ -529,7 +703,11 @@ def start(root, seconds):
         os.close(fd)
 
 
-def stop_stack(root):
+def stop_stack(root, *, signal_fn=None, alive_fn=None, monotonic_fn=None, sleep_fn=None):
+    signal_fn = signal_record if signal_fn is None else signal_fn
+    alive_fn = alive if alive_fn is None else alive_fn
+    monotonic_fn = time.monotonic if monotonic_fn is None else monotonic_fn
+    sleep_fn = time.sleep if sleep_fn is None else sleep_fn
     if not (root / "state.json").exists():
         print("LIVE_STACK_STOPPED already_absent=true")
         return
@@ -537,12 +715,14 @@ def stop_stack(root):
     supervisor = state.get("supervisor", {})
     if identity(supervisor.get("pid")) is None or identity(supervisor.get("pid")) != supervisor.get("identity"):
         raise RuntimeError("supervisor absent; private recovery state retained for review")
-    signal_record(supervisor, signal.SIGTERM)
-    deadline = time.monotonic() + 90
-    while (root / "state.json").exists() and time.monotonic() < deadline:
+    stop_recorder(state, signal_fn=signal_fn, alive_fn=alive_fn,
+                  monotonic_fn=monotonic_fn, sleep_fn=sleep_fn)
+    signal_fn(supervisor, signal.SIGTERM)
+    deadline = monotonic_fn() + 90
+    while (root / "state.json").exists() and monotonic_fn() < deadline:
         if identity(supervisor["pid"]) != supervisor["identity"]:
             raise RuntimeError("cleanup failed: " + repr(load_state(root)))
-        time.sleep(0.1)
+        sleep_fn(0.1)
     if (root / "state.json").exists():
         raise RuntimeError("cleanup deadline exceeded; receipt retained")
     print("LIVE_STACK_STOPPED processes=absent capsule=absent sockets=absent ram=absent state=absent")
@@ -555,7 +735,7 @@ def main():
             return supervise(root, int(sys.argv[2]), int(sys.argv[3]))
         args = parser().parse_args()
         if args.command == "start":
-            start(root, args.ttl)
+            start(root, args.ttl, display_mode=args.display, record_path=args.record)
         else:
             stop_stack(root)
         return 0

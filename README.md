@@ -147,6 +147,7 @@ git config core.hooksPath .githooks
 | `scripts/bootstrap.sh` | Deterministic Linux packaging bootstrap |
 | [docs/INSTALL.md](docs/INSTALL.md) | Linux (`arm64` and `x64`) installation, packaging, and troubleshooting guide |
 | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | Operator guide for the wall, control handoff, multislot, recording, `mvctl`, and replay |
+| [docs/DEMO_RUNBOOK.md](docs/DEMO_RUNBOOK.md) | Live demo launch, screen recording, stop and known issues |
 | [docs/TESTING.md](docs/TESTING.md) | Gate legs, live gates, E2E journeys, CI job table, hosted-like checks, and mutation proofs |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Authority, IPC, capture, and replay design |
 | [docs/UI_ARCHITECTURE.md](docs/UI_ARCHITECTURE.md) | Shared capsule visual architecture |
