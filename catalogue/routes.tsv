@@ -799,6 +799,7 @@ deps.lock	deps.lock
 ARCHITECTURE.md	docs/ARCHITECTURE.md
 COMMIT_LAWS.md	docs/COMMIT_LAWS.md
 DEMOREC-37656a7d648c	docs/DEMO_RECURSIVE_SCRIPT.md
+DEMO_RUNBOOK.md	docs/DEMO_RUNBOOK.md
 HOLDING-41388780e954	docs/HOLDINGS_LESSONS_UI_ORCHESTRATOR.md
 INSTALL.md	docs/INSTALL.md
 PREEXISTING.md	docs/PREEXISTING.md
@@ -946,6 +947,7 @@ relay-renderer.mjs	tests/e2e/e2e1_slice/relay-renderer.mjs
 relay.html	tests/e2e/e2e1_slice/relay.html
 scenario.rs	tests/e2e/e2e1_slice/scenario.rs
 stack.py	tests/e2e/e2e1_slice/stack.py
+test_stack_demo.py	tests/e2e/e2e1_slice/test_stack_demo.py
 verify-receipt.rs	tests/e2e/e2e1_slice/verify-receipt.rs
 e2e1_wall.test.js	tests/e2e/e2e1_wall.test.js
 e2e20he-a783de262cdd	tests/e2e/e2e20_headless_discipline.test.js
