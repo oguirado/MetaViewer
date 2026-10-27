@@ -4,7 +4,7 @@
 const harness = require('./harness.js');
 const { after } = require('node:test');
 const { execFileSync } = require('node:child_process');
-const { accessSync, constants } = require('node:fs');
+const { accessSync, constants, writeFileSync } = require('node:fs');
 const { join } = require('node:path');
 let stage;
 let previousBuild;
@@ -38,4 +38,25 @@ function electronBinary(root) {
   accessSync(binary, constants.X_OK);
   return binary;
 }
-module.exports = { ...harness, prepareWall, electronBinary };
+// [TARGET, unit decision] Count distinct delivered DOM frame identities, never
+// timers or generation deltas. A static fixture therefore measures zero fps.
+async function telemetryProbe(config) {
+  const { app } = require('electron');
+  app.setPath('userData', config.profile);
+  process.env.MV_E2E_MANIFEST = config.manifestPath;
+  process.env.MV_E2E_TELEMETRY = JSON.stringify({
+    reportPath: config.reportPath, soakMs: config.soakMs,
+  });
+  setTimeout(() => app.exit(2), config.soakMs * 2 + 30000).unref();
+  await import(config.mainUrl);
+}
+function writeProbeFile(dir, config) {
+  if (config.soakMs === undefined) return harness.writeProbeFile(dir, config);
+  if (!Number.isSafeInteger(config.soakMs) || config.soakMs <= 0) {
+    throw new harness.E2EError('E2E_ARGS', 'soakMs must be a positive safe integer');
+  }
+  const path = join(dir, 'probe.cjs');
+  writeFileSync(path, `(${telemetryProbe.toString()})(${JSON.stringify(config)});\n`);
+  return path;
+}
+module.exports = { ...harness, prepareWall, electronBinary, writeProbeFile };

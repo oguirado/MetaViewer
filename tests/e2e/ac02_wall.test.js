@@ -14,8 +14,7 @@
  *    assertions independent of any live run.
  * 2. The live wall journey: boots the product under xvfb with a scratch
  *    profile, observes the wall through stable ids, and refuses
- *    cross-capsule frame routing. Extended fps/fold telemetry fails
- *    closed with a typed E2E_* error until the product exposes it; the
+ *    cross-capsule frame routing. Extended fps/fold telemetry counts observed frame identities; the
  *    live tests never skip.
  *
  * CI entry (tests/e2e/run.py): exec `node --test` over this journey with
@@ -103,7 +102,8 @@ function needPositiveInt(value, label) {
 
 /**
  * Validate one AC-02 tile sample. The fps floor applies to visible
- * tiles only; folded tiles prove liveness by rising generation.
+ * tiles and the preceding visible window of folded tiles; folded capture
+ * also requires rising generation while hidden.
  * @param {unknown} tile Candidate row.
  * @param {number} minFps Fps floor for visible tiles.
  * @returns {Ac02TileSample} The validated row.
@@ -133,7 +133,7 @@ function checkAc02TileSample(tile, minFps) {
     throw new E2EError('E2E_REPORT', 'ac02 tile fps must be a finite number >= 0');
   }
   for (const field of ['genBefore', 'genAfter']) {
-    if (typeof row[field] !== 'number' || !Number.isInteger(row[field]) || row[field] < 0) {
+    if (typeof row[field] !== 'number' || !Number.isSafeInteger(row[field]) || row[field] < 0) {
       throw new E2EError('E2E_REPORT', `ac02 tile ${field} must be an integer >= 0`);
     }
   }
@@ -146,7 +146,7 @@ function checkAc02TileSample(tile, minFps) {
     genBefore: row.genBefore,
     genAfter: row.genAfter,
   });
-  if (sample.visible && sample.fps < minFps) {
+  if ((sample.visible || sample.hidden) && sample.fps < minFps) {
     throw new E2EError('E2E_FPS', `tile ${sample.capsuleId} renders ${sample.fps} fps, need ${minFps}`);
   }
   if (sample.visible && (sample.hidden || sample.frameId === null)) {
@@ -225,7 +225,7 @@ function validateAc02Report(value, options = {}) {
 
 /**
  * Fps over a sample window. Pure so Layer 1 pins the arithmetic the
- * live probe will use once product telemetry lands.
+ * live probe uses for observed frame identities.
  * @param {unknown} frames Frames counted in the window.
  * @param {unknown} windowMs Window length in ms.
  * @param {number} minFps Fps floor.
@@ -272,7 +272,7 @@ function validAc02Report(options = {}) {
       { capsuleId: 'wall-e2e-a', visible: true, hidden: false, frameId: 'frame-wall-e2e-a-gen9', fps: 12, genBefore: 7, genAfter: 9 },
       { capsuleId: 'wall-e2e-b', visible: true, hidden: false, frameId: 'frame-wall-e2e-b-gen9', fps: 15, genBefore: 7, genAfter: 9 },
       { capsuleId: 'wall-e2e-c', visible: true, hidden: false, frameId: 'frame-wall-e2e-c-gen9', fps: 30, genBefore: 7, genAfter: 9 },
-      { capsuleId: 'wall-e2e-d', visible: false, hidden: true, frameId: 'frame-wall-e2e-d-gen11', fps: 0, genBefore: 7, genAfter: 11 },
+      { capsuleId: 'wall-e2e-d', visible: false, hidden: true, frameId: 'frame-wall-e2e-d-gen11', fps: 12, genBefore: 7, genAfter: 11 },
     ],
     errors: [],
     soakMs,
@@ -297,7 +297,7 @@ function rejectsWith(thunk, codes) {
  * Owns its scratch directory; the caller supplies none.
  * @returns {{ outcome: object, summary: object, diagnostic: string }} Live observation.
  */
-function liveWallRun() {
+function liveWallRun(soakMs, { stalledTile } = {}) {
   require('./ac-harness.cjs').prepareWall();
   requireXvfb();
   const root = findRepoRoot(__dirname);
@@ -313,12 +313,22 @@ function liveWallRun() {
       mainUrl,
       manifestPath,
       reportPath,
+      ...(soakMs === undefined ? {} : { soakMs }),
     });
-    const outcome = runUnderXvfb({
-      electron,
-      appDir: join(scratch, 'probe.cjs'),
-      diagnosticsPath: join(scratch, 'electron-process.json'),
-    });
+    const previousStalled = process.env.MV_E2E_STALLED_TILE;
+    let outcome;
+    try {
+      if (stalledTile !== undefined) process.env.MV_E2E_STALLED_TILE = stalledTile;
+      outcome = runUnderXvfb({
+        electron,
+        ...(soakMs === undefined ? {} : { timeoutMs: soakMs * 2 + 40000 }),
+        appDir: join(scratch, 'probe.cjs'),
+        diagnosticsPath: join(scratch, 'electron-process.json'),
+      });
+    } finally {
+      if (previousStalled === undefined) delete process.env.MV_E2E_STALLED_TILE;
+      else process.env.MV_E2E_STALLED_TILE = previousStalled;
+    }
     const diagnostic = JSON.stringify({
       ...outcome,
       stdout: outcome.stdout.slice(-2000),
@@ -327,11 +337,22 @@ function liveWallRun() {
     console.log(`E2E_PROCESS: ${diagnostic}`);
     let summary;
     try {
-      summary = readProbeReport(reportPath, {
-        frameOwners: new Map(
-          FOUR_FAKES.map(({ capsuleId }) => [`frame-${capsuleId}-gen7`, capsuleId]),
-        ),
-      });
+      if (soakMs !== undefined) {
+        const report = JSON.parse(readFileSync(reportPath, 'utf8'));
+        console.log(`AC02_TELEMETRY: ${JSON.stringify(report)}`);
+        summary = validateAc02Report(report);
+      } else {
+        // The fixture publisher owns a disjoint frame namespace per manifest
+        // capsule. Bind every observed generation to all publisher namespaces,
+        // independent of the tile on which it was observed.
+        const report = JSON.parse(readFileSync(reportPath, 'utf8'));
+        const generations = report.tiles.map(tile => /-gen(\d+)$/.exec(tile.frameId ?? '')?.[1])
+          .filter(value => value !== undefined);
+        summary = readProbeReport(reportPath, {
+          frameOwners: new Map(FOUR_FAKES.flatMap(({ capsuleId }) =>
+            generations.map(generation => [`frame-${capsuleId}-gen${generation}`, capsuleId]))),
+        });
+      }
     } catch (error) {
       if (!(error instanceof E2EError)) throw error;
       throw new E2EError(error.code, `${error.message} | report: ${(existsSync(reportPath) ? readFileSync(reportPath, 'utf8').slice(0, 3000) : 'absent')} | process: ${diagnostic}`);
@@ -431,6 +452,29 @@ describe('ac02 wall harness contract', () => {
     const mutant = validAc02Report();
     mutant.tiles[0].fps = 9.5;
     rejectsWith(() => validateAc02Report(mutant), ['E2E_FPS']);
+  });
+
+  it('negative control: missing, non-finite and negative telemetry is refused', () => {
+    for (const field of ['fps', 'genBefore', 'genAfter']) {
+      for (const value of [undefined, NaN, Infinity, -1, '7']) {
+        const report = validAc02Report();
+        if (value === undefined) delete report.tiles[0][field];
+        else report.tiles[0][field] = value;
+        rejectsWith(() => validateAc02Report(report), ['E2E_REPORT']);
+      }
+    }
+    for (const value of [undefined, null, 0, 'false']) {
+      const report = validAc02Report();
+      if (value === undefined) delete report.tiles[0].hidden;
+      else report.tiles[0].hidden = value;
+      rejectsWith(() => validateAc02Report(report), ['E2E_REPORT']);
+    }
+  });
+
+  it('negative control: folded tile below the measured fps floor is refused', () => {
+    const report = validAc02Report();
+    report.tiles[3].fps = 0;
+    rejectsWith(() => validateAc02Report(report), ['E2E_FPS']);
   });
 
   it('negative control: folded tile with stalled generation is refused', () => {
@@ -535,17 +579,19 @@ describe('ac02 live wall journey', () => {
       'GAP-AC02-CADENCE: capture and delivery time are added to the polling interval');
     const configured = soakOverrideMs();
     console.log(`AC02_SOAK: target=${AC02_SOAK_TARGET_MS} configured=${configured === null ? 'short-run' : configured}`);
-    const { outcome, summary, diagnostic } = liveWallRun();
+    const { outcome, summary, diagnostic } = liveWallRun(configured ?? 2000);
     assert.equal(outcome.timedOut, false, diagnostic);
-    assert.equal(outcome.status, 0, `report errors: ${summary.errors.join(' | ').slice(0, 2000)} | process: ${diagnostic}`);
-    assert.equal(summary.visible, 4);
-    // The wall probe report carries no fps/hidden/generation telemetry
-    // yet, so a soak verdict would be vacuous; fail closed instead of
-    // claiming a soak pass from the base report. A long sampling wait
-    // here would burn CI without telemetry to sample.
-    throw new E2EError(
-      'E2E_PREREQ',
-      `ac02 extended telemetry absent from wall probe report (fps, hidden, generation); wall rendered ${summary.visible}/4 live tiles`,
-    );
+    assert.equal(outcome.status, 0, `report errors: ${summary.errors.join(' | ')} | process: ${diagnostic}`);
+    assert.equal(summary.live, FOUR_FAKES.length);
+    assert.ok(summary.folded >= 1, 'a real folded tile must keep capturing');
+    for (const tile of summary.tiles) {
+      assert.ok(tile.fps >= AC02_MIN_TILE_FPS, `${tile.capsuleId}: ${tile.fps} fps`);
+      assert.ok(tile.genAfter > tile.genBefore, `${tile.capsuleId}: generation stalled`);
+    }
+    assert.deepEqual(summary.errors, []);
   });
+  it('negative control: a stalled fixture tile fails the measured fps gate', () => {
+    rejectsWith(() => liveWallRun(1000, { stalledTile: FOUR_FAKES[0].capsuleId }), ['E2E_FPS']);
+  });
+
 });

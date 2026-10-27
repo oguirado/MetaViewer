@@ -10,7 +10,7 @@ import 'capsule-ui-kit/theme.css';
 import { createDefaultLayoutProfile } from 'capsule-ui-kit/layout';
 import { installKitTheme } from 'capsule-ui-kit/theme';
 
-const { capsules, crossRoute } = window.e2eFixture;
+const { capsules, crossRoute, stalledTile } = window.e2eFixture;
 const rows = reactive(capsules.map(({ capsuleId }) => ({ id: capsuleId, surfaceId: capsuleId,
   backendLifecycle: 'active', generation: 7, visibility: 'unfolded', control: 'agent' })));
 const listeners = new Set();
@@ -30,16 +30,48 @@ const scope = { product: 'metaviewer', profileId: 'e2e', workspaceId: 'wall' };
 const intentBuilders = createWallIntentBuilders({
   encodeUiIntent: (input) => input, encodeControl: buildAuthorityIntent,
 });
-function acceptControl(intent) {
-  const row = rows.find((item) => item.id === intent.params.surface_id);
-  if (!row || !['take_control', 'release_control'].includes(intent.op)) {
-    throw new Error('Unsupported fixture intent');
-  }
-  row.control = intent.op === 'take_control' ? 'human' : 'agent';
-  if (intent.op === 'release_control') row.generation += 1;
+function publishProjection() {
   snapshot = { ...snapshot, envelope: { ...snapshot.envelope,
     revision: (snapshot.envelope.revision ?? 0) + 1, projection: { rows: rows.map(row => ({ ...row })) } } };
   for (const listener of listeners) listener(snapshot);
+}
+function acceptControl(intent) {
+  const refuse = () => {
+    const error = new TypeError('Malformed or unsupported fixture intent');
+    error.code = 'E2E_FIXTURE_INTENT';
+    throw error;
+  };
+  if (!intent || typeof intent !== 'object' || Array.isArray(intent)) return refuse();
+  const visibility = intent.op === 'fold' || intent.op === 'unfold';
+  const control = intent.op === 'take_control' || intent.op === 'release_control';
+  if (!visibility && !control) return refuse();
+  const keys = visibility ? ['op', 'surfaceId'] : ['schema', 'request_id', 'op', 'params'];
+  if (Object.keys(intent).length !== keys.length || keys.some(key => !Object.hasOwn(intent, key))) return refuse();
+  if (control && (intent.schema !== 'ui_intent/v0.2' || typeof intent.request_id !== 'string'
+      || intent.request_id.length === 0 || !intent.params || typeof intent.params !== 'object'
+      || Array.isArray(intent.params) || Object.keys(intent.params).length !== 1
+      || !Object.hasOwn(intent.params, 'surface_id'))) return refuse();
+  const surfaceId = visibility ? intent.surfaceId : intent.params.surface_id;
+  const row = rows.find(item => item.id === surfaceId);
+  if (!row) return refuse();
+  if (visibility) row.visibility = intent.op === 'fold' ? 'folded' : 'unfolded';
+  else row.control = intent.op === 'take_control' ? 'human' : 'agent';
+  publishProjection();
+}
+
+// [TARGET, unit decision] Deliver at fixed deadlines, skipping missed slots
+// rather than adding render work to each interval or replaying a catch-up burst.
+// Capture is independent of visibility and authority; only the explicit mutant
+// stalls a tile. Each actual delivery advances its frame identity exactly once.
+const framePeriodMs = 40;
+let nextFrameAt = performance.now() + framePeriodMs;
+let deliveryTimer;
+function deliverFrames() {
+  for (const row of rows) if (row.id !== stalledTile) row.generation += 1;
+  publishProjection();
+  const now = performance.now();
+  do { nextFrameAt += framePeriodMs; } while (nextFrameAt <= now);
+  deliveryTimer = setTimeout(deliverFrames, Math.max(0, nextFrameAt - now));
 }
 
 const app = createApp({ setup() {
@@ -65,3 +97,6 @@ app.mount('#metaviewer-app');
 document.documentElement.style.height = '100%';
 document.body.style.cssText = 'margin:0;height:100vh';
 document.querySelector('#metaviewer-app').style.height = '100%';
+
+deliveryTimer = setTimeout(deliverFrames, Math.max(0, nextFrameAt - performance.now()));
+window.addEventListener('pagehide', () => clearTimeout(deliveryTimer), { once: true });
