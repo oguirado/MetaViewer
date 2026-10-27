@@ -239,7 +239,7 @@ func (m *Manager) export(base Event, r *recording) (result Event, exportErr erro
 			var removeErr error
 			var pathStat syscall.Stat_t
 			fdInfo, fErr := destination.Stat()
-			lErr := syscall.Fstatat(int(parent.Fd()), baseName, &pathStat, 0x100)
+			lErr := lstatAt(int(parent.Fd()), baseName, &pathStat)
 			if fErr == nil && lErr == nil {
 				if fdStat, ok := fdInfo.Sys().(*syscall.Stat_t); ok && fdStat.Dev == pathStat.Dev && fdStat.Ino == pathStat.Ino {
 					removeErr = syscall.Unlinkat(int(parent.Fd()), baseName)
@@ -293,4 +293,19 @@ func (w *countWriter) Write(data []byte) (int, error) {
 	n, e := w.writer.Write(data)
 	w.count += uint64(n)
 	return n, e
+}
+
+// lstatAt stats name relative to dirfd without following a final symlink.
+// O_PATH (0x200000 on Linux across architectures) with O_NOFOLLOW opens a
+// path descriptor even if the entry is a symlink or unreadable, and Fstat on
+// that descriptor inspects the entry itself cleanly on both arm64 and amd64.
+func lstatAt(dirfd int, name string, st *syscall.Stat_t) error {
+	const oPath = 0x200000
+	fd, err := syscall.Openat(dirfd, name, oPath|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	err = syscall.Fstat(fd, st)
+	closeErr := syscall.Close(fd)
+	return errors.Join(err, closeErr)
 }

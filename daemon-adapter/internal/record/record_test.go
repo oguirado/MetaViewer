@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -847,5 +848,65 @@ func TestExportFailureWithRenamedAncestorUnlinksPartialFile(t *testing.T) {
 	renamedDest := filepath.Join(renamed, "capture.tar")
 	if _, err := os.Stat(renamedDest); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("failed export leaked partial file across ancestor rename: %v", err)
+	}
+}
+
+func TestLstatAtDoesNotFollowSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, []byte("payload"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	dangling := filepath.Join(dir, "dangling")
+	if err := os.Symlink(filepath.Join(dir, "absent"), dangling); err != nil {
+		t.Fatal(err)
+	}
+	dirFile, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = dirFile.Close() }()
+
+	targetInfo, err := os.Lstat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	linkInfo, err := os.Lstat(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	danglingInfo, err := os.Lstat(dangling)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var gotTarget, gotLink, gotDangling syscall.Stat_t
+	if err := lstatAt(int(dirFile.Fd()), "target", &gotTarget); err != nil {
+		t.Fatal(err)
+	}
+	if err := lstatAt(int(dirFile.Fd()), "link", &gotLink); err != nil {
+		t.Fatal(err)
+	}
+	if err := lstatAt(int(dirFile.Fd()), "dangling", &gotDangling); err != nil {
+		t.Fatal(err)
+	}
+	wantTarget := targetInfo.Sys().(*syscall.Stat_t)
+	wantLink := linkInfo.Sys().(*syscall.Stat_t)
+	wantDangling := danglingInfo.Sys().(*syscall.Stat_t)
+	if gotTarget.Ino != wantTarget.Ino || gotTarget.Dev != wantTarget.Dev {
+		t.Fatalf("target stat mismatch: got ino=%d want=%d", gotTarget.Ino, wantTarget.Ino)
+	}
+	if gotLink.Ino != wantLink.Ino || gotLink.Ino == wantTarget.Ino || gotLink.Mode&syscall.S_IFMT != syscall.S_IFLNK {
+		t.Fatalf("symlink followed or wrong mode: got ino=%d mode=%o want ino=%d", gotLink.Ino, gotLink.Mode, wantLink.Ino)
+	}
+	if gotDangling.Ino != wantDangling.Ino || gotDangling.Mode&syscall.S_IFMT != syscall.S_IFLNK {
+		t.Fatalf("dangling symlink stat mismatch: got ino=%d mode=%o want ino=%d", gotDangling.Ino, gotDangling.Mode, wantDangling.Ino)
+	}
+	if err := lstatAt(int(dirFile.Fd()), "missing", &gotTarget); !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ENOENT) {
+		t.Fatalf("missing entry error = %v, want ENOENT", err)
 	}
 }
