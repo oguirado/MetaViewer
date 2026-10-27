@@ -433,6 +433,21 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # checkout v4.2.2
         with:
           fetch-depth: 0
+      # [TARGET, unit decision] Reuse the corpus pin from volume.yml; select
+      # the module toolchain before priming caches outside the offline namespace.
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # setup-go v5
+        with:
+          go-version-file: daemon-adapter/go.mod
+          cache: false
+      - name: Prime Go module and build caches
+        working-directory: daemon-adapter
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          set -euo pipefail
+          go mod download
+          go build ./...
+          go test -race -run '^$' ./...
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
         with:
           python-version: "3.12"
@@ -441,6 +456,8 @@ jobs:
           node-version: "24"
       # [TARGET, unit decision] These tests compile Rust drivers and validate
       # frozen offline resolution; provision their toolchain/cache explicitly.
+      - name: Prepare pinned Rust formatter
+        run: rustup toolchain install 1.92.0 --profile minimal --component rustfmt
       - name: Prepare Rust for offline checks
         run: |
           set -euo pipefail
@@ -450,8 +467,15 @@ jobs:
       - name: Prime npm cache for frozen manifest checks
         working-directory: ui
         run: npm ci --ignore-scripts --no-audit --no-fund
-      # The native integration test deliberately disables automatic toolchain
-      # downloads. Put the module-selected Go binary on PATH before it runs.
+      - name: Prepare Rust lint component
+        run: rustup component add clippy --toolchain 1.97.0
+      - name: Require build network namespace
+        run: |
+          set -euo pipefail
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bash .github/workflows/offline.sh true
+      # Keep the explicit selected-binary check as well as setup-go: a broken
+      # module selection must never publish a fallback toolchain to later steps.
       - name: Select adapter Go toolchain
         run: |
           set -euo pipefail
@@ -732,6 +756,21 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # checkout v4.2.2
         with:
           fetch-depth: 0
+      # [TARGET, unit decision] Reuse the corpus pin from volume.yml; select
+      # the module toolchain before priming caches outside the offline namespace.
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # setup-go v5
+        with:
+          go-version-file: daemon-adapter/go.mod
+          cache: false
+      - name: Prime Go module and build caches
+        working-directory: daemon-adapter
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          set -euo pipefail
+          go mod download
+          go build ./...
+          go test -race -run '^$' ./...
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
         with:
           python-version: "3.12"
@@ -906,17 +945,24 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # checkout v4.2.2
         with:
           fetch-depth: 0
+      # [TARGET, unit decision] Reuse the corpus pin from volume.yml; select
+      # the module toolchain before priming caches outside the offline namespace.
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # setup-go v5
+        with:
+          go-version-file: daemon-adapter/go.mod
+          cache: false
+      - name: Prime Go module and build caches
+        working-directory: daemon-adapter
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          set -euo pipefail
+          go mod download
+          go build ./...
+          go test -race -run '^$' ./...
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
         with:
           python-version: "3.12"
-      - name: Prepare pinned Go toolchain
-        run: |
-          set -euo pipefail
-          version="$(awk '$1 == "go" {print $2}' daemon-adapter/go.mod)"
-          test -n "$version"
-          toolchain_root="$(GOTOOLCHAIN="go${version}" go env GOROOT)"
-          echo "${toolchain_root}/bin" >> "$GITHUB_PATH"
-          (cd daemon-adapter && GOTOOLCHAIN="go${version}" go mod download)
       - name: Require build network namespace
         run: |
           set -euo pipefail
@@ -1491,6 +1537,21 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # checkout v4.2.2
         with:
           fetch-depth: 0
+      # [TARGET, unit decision] Reuse the corpus pin from volume.yml; select
+      # the module toolchain before priming caches outside the offline namespace.
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # setup-go v5
+        with:
+          go-version-file: daemon-adapter/go.mod
+          cache: false
+      - name: Prime Go module and build caches
+        working-directory: daemon-adapter
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          set -euo pipefail
+          go mod download
+          go build ./...
+          go test -race -run '^$' ./...
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
         with:
           python-version: "3.12"
