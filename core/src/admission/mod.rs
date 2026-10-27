@@ -8,6 +8,9 @@
 //! Each proposal is dispatched at most once, below its retry ceiling; retries
 //! require a new frame-bound admission. Receipt here settles execution only,
 //! and never claims that an outcome was verified.
+//! [TARGET, unit decision] Destroyed IDs are terminal tombstones. Metadata updates
+//! preserve admitted verbs; DispatchFailed releases only provably unqueued work,
+//! without refunding its admitted-attempt budget.
 use crate::wire::payload::{ActionProposal, ActionProposalAction, ActionProposalExpectation};
 use crate::{decode_envelope, Command, Component, Endpoint, Envelope, Refusal};
 use serde::{Deserialize, Serialize};
@@ -126,6 +129,10 @@ pub enum Input {
         proposal_id: String,
         now_ns: u64,
     },
+    DispatchFailed {
+        proposal_id: String,
+        epoch: u64,
+    },
     Receipt {
         proposal_id: String,
         epoch: u64,
@@ -163,6 +170,8 @@ pub struct CoreState {
     pub leases: BTreeMap<String, String>,
     pub pending: BTreeMap<String, Pending>,
     pub draining: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    destroyed: BTreeSet<String>,
     seen: BTreeSet<String>,
     messages: BTreeSet<String>,
     lane_nonces: BTreeMap<String, BTreeSet<String>>,
@@ -190,6 +199,7 @@ impl CoreState {
             leases: BTreeMap::new(),
             pending: BTreeMap::new(),
             draining: BTreeMap::new(),
+            destroyed: BTreeSet::new(),
             seen: BTreeSet::new(),
             messages: BTreeSet::new(),
             lane_nonces: BTreeMap::new(),
@@ -205,7 +215,10 @@ impl CoreState {
         .map_err(|_| AdmissionError::InvalidInput)
     }
     pub fn domain_snapshot(&self) -> Result<Vec<u8>, AdmissionError> {
-        crate::journal::canonical_bytes(&serde_json::json!({"surfaces":self.surfaces,"leases":self.leases,"pending":self.pending,"draining":self.draining,"budget":self.remaining_budget,"epoch":self.epoch})).map_err(|_|AdmissionError::InvalidInput)
+        crate::journal::canonical_bytes(&serde_json::json!({"surfaces":self.surfaces,"leases":self.leases,"pending":self.pending,"draining":self.draining,"destroyed":self.destroyed,"budget":self.remaining_budget,"epoch":self.epoch})).map_err(|_|AdmissionError::InvalidInput)
+    }
+    pub fn is_destroyed(&self, id: &str) -> bool {
+        self.destroyed.contains(id)
     }
     /// Pure deterministic reduction. Persistence callers publish only after fsync.
     pub fn apply(&mut self, input: &Input) -> Result<Outcome, AdmissionError> {
@@ -234,7 +247,10 @@ impl CoreState {
                 if !matches!(
                     value["op"].as_str(),
                     Some("create" | "destroy" | "list" | "frame_subscribe" | "frame_unsubscribe")
-                ) {
+                ) || value["params"]["surface_id"]
+                    .as_str()
+                    .is_some_and(|id| self.is_destroyed(id))
+                {
                     out.reason = Some(Refusal::Policy);
                 } else if self.remaining_budget == 0 {
                     out.reason = Some(Refusal::BudgetExceeded);
@@ -244,6 +260,14 @@ impl CoreState {
             }
             Input::SurfaceNotice => {}
             Input::Refuse { reason } => out.reason = Some(*reason),
+            Input::Lifecycle { surface_id, .. }
+            | Input::Frame { surface_id, .. }
+            | Input::TakeControl { surface_id }
+            | Input::ReleaseControl { surface_id }
+                if self.is_destroyed(surface_id) =>
+            {
+                out.reason = Some(Refusal::Policy);
+            }
             Input::Lifecycle { surface_id, update } => match update {
                 LifecycleUpdate::Created(surface) => {
                     if surface_id.is_empty()
@@ -266,10 +290,12 @@ impl CoreState {
                                 old.display = surface.display.clone();
                                 old.live = surface.live;
                                 old.agent_controlled &= surface.agent_controlled;
-                                old.allowed_verbs = surface.allowed_verbs.clone();
+                                // Wire metadata carries no capability grant.
                             }
-                            LifecycleUpdate::Lost | LifecycleUpdate::Destroyed => {
+                            LifecycleUpdate::Lost => old.live = false,
+                            LifecycleUpdate::Destroyed => {
                                 old.live = false;
+                                self.destroyed.insert(surface_id.clone());
                             }
                             LifecycleUpdate::Created(_) => unreachable!(),
                         }
@@ -406,6 +432,18 @@ impl CoreState {
                     }
                 }
             },
+            Input::DispatchFailed { proposal_id, epoch } => {
+                if *epoch != self.epoch
+                    || self
+                        .pending
+                        .get(proposal_id)
+                        .is_none_or(|p| p.unknown || p.request.epoch != *epoch)
+                {
+                    out.reason = Some(Refusal::Policy);
+                } else {
+                    self.remove_pending(proposal_id);
+                }
+            }
             Input::Receipt { proposal_id, epoch } => {
                 if self.pending.get(proposal_id).is_none_or(|p| {
                     *epoch != self.epoch || p.request.epoch != *epoch || !p.dispatched || p.unknown

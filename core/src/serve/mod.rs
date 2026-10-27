@@ -13,6 +13,9 @@
 //! frames. Lifecycle callers observe daemon events for their connection lifetime
 //! (the wire has no reply correlation); frame unsubscribe overrides that default.
 //! Raw input and control requests retain their existing proposal/UI-intent gates.
+//! [TARGET, unit decision] Replay evidence remains session-wide: reconnects must
+//! use fresh increasing sequences and nonces. EOF drains bounded queued replies;
+//! a terminal writer retires its endpoint after flushing its diagnostic.
 mod tools;
 
 use crate::admission::{
@@ -25,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, Read};
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -126,6 +129,7 @@ pub struct Server {
 impl Server {
     pub fn open(config: Config, state_dir: &Path, uid: u32) -> Result<Self> {
         config.validate(uid)?;
+        frame_directory_flags()?;
         // Let Journal validate path components and session identity before use.
         let initial = CoreState::session(&config.session_id)?;
         if config.session_id == "."
@@ -140,7 +144,15 @@ impl Server {
         let root = state_dir.join("sessions").join(&config.session_id);
         let path = root.join("journal.jsonl");
         let authority = if path.exists() {
-            Authority::recover(&path, &root)?
+            match Authority::recover(&path, &root) {
+                Ok(authority) => authority,
+                Err(crate::journal::JournalError::Corrupt)
+                    if legacy_destroy_archive(&path, &root) =>
+                {
+                    return Err(invalid("UPGRADE-REQUIRED: pre-tombstone journal contains destroyed surfaces; stop peers, archive the complete session directory unchanged, and start a new session_id; do not replay this archive as current state"));
+                }
+                Err(error) => return Err(error.into()),
+            }
         } else {
             Authority::create(state_dir, initial)?
         };
@@ -196,6 +208,15 @@ impl Server {
     pub fn snapshot(&self) -> Result<Vec<u8>> {
         Ok(self.authority.state().snapshot()?)
     }
+    fn retire(&mut self, peer: &Endpoint, id: u64) {
+        if self.connections.get(peer).is_some_and(|c| c.id == id) {
+            self.connections.remove(peer);
+            self.tool_state.remove_peer(peer);
+            self.observers.remove(peer);
+            self.subscriptions.retain(|(p, _)| p != peer);
+            self.unsubscribed.retain(|(p, _)| p != peer);
+        }
+    }
     fn now(&self) -> Result<u64> {
         Ok(u64::try_from(self.origin.elapsed().as_nanos())?)
     }
@@ -219,7 +240,7 @@ impl Server {
         let c = self
             .connections
             .get(to)
-            .ok_or_else(|| invalid("recipient disconnected"))?;
+            .ok_or_else(|| -> Error { SendFailure::Disconnected(to.clone()).into() })?;
         match c.queue.try_send(env) {
             Ok(()) => {}
             Err(mpsc::TrySendError::Full(mut env)) => {
@@ -275,26 +296,58 @@ impl Server {
     fn witness(&mut self, frame: &FrameRef) -> Result<Witness> {
         let path = Path::new(&frame.ramws_path);
         if !path.starts_with("/dev/shm")
+            || path == Path::new("/dev/shm")
             || path
                 .components()
                 .any(|c| matches!(c, std::path::Component::ParentDir))
         {
             return Err(invalid("frame outside shared memory"));
         }
-        let mut prefix = PathBuf::new();
-        for part in path.components() {
-            prefix.push(part.as_os_str());
-            if fs::symlink_metadata(&prefix)?.file_type().is_symlink() {
-                return Err(invalid("symlink frame path"));
-            }
+        // Pin every directory with O_NOFOLLOW|O_DIRECTORY. /proc/self/fd is
+        // Linux's safe Rust equivalent of openat(dirfd, child): each child is
+        // resolved from the live directory descriptor, never a mutable prefix.
+        use std::os::fd::AsRawFd;
+        let open_dir = |path: &Path| -> Result<fs::File> {
+            Ok(fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(frame_directory_flags()?)
+                .open(path)?)
+        };
+        let mut directory = open_dir(Path::new("/"))?;
+        for part in ["dev", "shm"] {
+            directory = open_dir(
+                &PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd())).join(part),
+            )?;
         }
-        // Linux O_NOFOLLOW | O_NONBLOCK; avoid blocking on an attacker-owned FIFO.
+        let relative = path.strip_prefix("/dev/shm")?;
+        let mut parts = relative.components().peekable();
+        while let Some(part) = parts.next() {
+            let std::path::Component::Normal(name) = part else {
+                return Err(invalid("invalid frame path component"));
+            };
+            if parts.peek().is_none() {
+                break;
+            }
+            directory = open_dir(
+                &PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd())).join(name),
+            )?;
+        }
+        let name = relative
+            .file_name()
+            .ok_or_else(|| invalid("missing frame filename"))?;
+        let anchored = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd())).join(name);
+        let before = fs::symlink_metadata(&anchored)?;
         let file = fs::OpenOptions::new()
             .read(true)
-            .custom_flags(0x20000 | 0x800)
-            .open(path)?;
+            .custom_flags(frame_open_flags()?)
+            .open(&anchored)?;
         let meta = file.metadata()?;
-        if !meta.is_file() || meta.len() == 0 || meta.len() > 64 * 1024 * 1024 {
+        if !meta.is_file()
+            || before.dev() != meta.dev()
+            || before.ino() != meta.ino()
+            || meta.len() == 0
+            || meta.len() > 64 * 1024 * 1024
+        {
             return Err(invalid("invalid frame witness"));
         }
         let mut bytes = Vec::new();
@@ -304,7 +357,7 @@ impl Server {
         }
         Ok(self.authority.retain_witness(&bytes)?)
     }
-    fn frame(&mut self, frame: &FrameRef, boundary: Witness) -> Result<()> {
+    fn frame(&mut self, frame: &FrameRef, boundary: Witness) -> Result<bool> {
         let witness = self.witness(frame)?;
         let out = self.authority.apply_with_witnesses(
             Input::Frame {
@@ -322,7 +375,7 @@ impl Server {
             self.tool_state
                 .retain(&Command::FrameRef(Box::new(frame.clone())));
         }
-        Ok(())
+        Ok(out.reason.is_none())
     }
     fn route(&mut self, peer: &ReadyPeer, epoch: u64, env: Envelope) -> Result<()> {
         peer.check_sender(&env)?;
@@ -356,7 +409,10 @@ impl Server {
                 }
                 let sid = value["params"]["surface_id"].as_str();
                 if matches!(op, "destroy" | "frame_subscribe" | "frame_unsubscribe")
-                    && !sid.is_some_and(|id| self.authority.state().surfaces.contains_key(id))
+                    && !sid.is_some_and(|id| {
+                        self.authority.state().surfaces.contains_key(id)
+                            && !self.authority.state().is_destroyed(id)
+                    })
                 {
                     return self.unsupported(&env, boundary);
                 }
@@ -401,23 +457,10 @@ impl Server {
                         Some(self.lifecycle(&e.data.surface, false, boundary)?)
                     }
                     SurfaceEvent::Case2(e) => {
-                        self.frame(&e.data.frame_ref, boundary)?;
+                        if !self.frame(&e.data.frame_ref, boundary)? {
+                            return Ok(());
+                        }
                         None
-                    }
-                    SurfaceEvent::Case4(e)
-                        if self
-                            .authority
-                            .state()
-                            .surfaces
-                            .contains_key(&e.data.surface_id) =>
-                    {
-                        Some(self.authority.apply_with_witnesses(
-                            Input::Lifecycle {
-                                surface_id: e.data.surface_id.clone(),
-                                update: LifecycleUpdate::Lost,
-                            },
-                            vec![boundary],
-                        )?)
                     }
                     SurfaceEvent::Case3(_) | SurfaceEvent::Case4(_) => Some(
                         self.authority
@@ -437,7 +480,9 @@ impl Server {
                 if epoch != self.authority.state().epoch {
                     return Err(invalid("old executor"));
                 }
-                self.frame(frame, boundary)?;
+                if !self.frame(frame, boundary)? {
+                    return Ok(());
+                }
                 self.fanout(env.body.clone());
             }
             (Component::Agent, Command::ActionProposal(proposal)) => {
@@ -468,6 +513,17 @@ impl Server {
                 {
                     return self.unsupported(&env, boundary);
                 }
+                let daemon = self
+                    .config
+                    .peers
+                    .iter()
+                    .find(|p| p.endpoint.component == Component::Daemon)
+                    .ok_or_else(|| invalid("no daemon"))?
+                    .endpoint
+                    .clone();
+                if !self.connections.contains_key(&daemon) {
+                    return self.unsupported(&env, boundary);
+                }
                 let out = self.authority.apply_with_witnesses(input, vec![boundary])?;
                 if let Some(reason) = out.reason {
                     return self.refuse(
@@ -478,14 +534,6 @@ impl Server {
                     );
                 }
                 self.notify_cancellations(&out.cancelled, out.core_seq)?;
-                let daemon = self
-                    .config
-                    .peers
-                    .iter()
-                    .find(|p| p.endpoint.component == Component::Daemon)
-                    .ok_or_else(|| invalid("no daemon"))?
-                    .endpoint
-                    .clone();
                 let mut params = serde_json::json!({"surface_id":value["params"]["surface_id"]});
                 if take {
                     params["owner"] = "human".into();
@@ -525,7 +573,11 @@ impl Server {
                     .endpoint
                     .clone();
                 self.tool_state.retain(&env.body);
-                self.send(&agent, env.body.clone())?;
+                if let Err(error) = self.send(&agent, env.body.clone()) {
+                    if error.downcast_ref::<SendFailure>().is_none() {
+                        return Err(error);
+                    }
+                }
                 self.poll_tool_waiters()?;
             }
             _ => return self.unsupported(&env, boundary),
@@ -572,7 +624,15 @@ impl Server {
         }
         let verdict = self.authority.admit(request, witnesses)?;
         let admitted = serde_json::to_value(&verdict)?["decision"] == "admitted";
-        self.proposal_verdict(env, tool, verdict)?;
+        if let Err(error) = self.proposal_verdict(env, tool, verdict) {
+            if admitted && error.downcast_ref::<SendFailure>().is_some() {
+                self.authority.apply(Input::DispatchFailed {
+                    proposal_id: proposal.proposal_id.clone(),
+                    epoch: self.authority.state().epoch,
+                })?;
+            }
+            return Err(error);
+        }
         if admitted {
             let out = self.authority.apply(Input::Dispatch {
                 proposal_id: proposal.proposal_id.clone(),
@@ -582,7 +642,22 @@ impl Server {
                 let body = serde_json::from_value(
                     serde_json::json!({"schema":"surface_request/v0.2","op":"input","params":{"surface_id":proposal.surface_id,"proposal_id":proposal.proposal_id,"action":proposal.action}}),
                 )?;
-                self.send(&daemon, Command::SurfaceRequest(Box::new(body)))?;
+                if let Err(error) = self.send(&daemon, Command::SurfaceRequest(Box::new(body))) {
+                    if error.downcast_ref::<SendFailure>().is_none() {
+                        return Err(error);
+                    }
+                    let failed = self.authority.apply(Input::DispatchFailed {
+                        proposal_id: proposal.proposal_id.clone(),
+                        epoch: self.authority.state().epoch,
+                    })?;
+                    self.proposal_dispatch_refusal(
+                        env,
+                        tool,
+                        &proposal.proposal_id,
+                        Refusal::Policy,
+                        failed.core_seq,
+                    )?;
+                }
             } else {
                 self.proposal_dispatch_refusal(
                     env,
@@ -671,6 +746,86 @@ impl Server {
     }
 }
 
+// [TARGET, unit decision] Pre-tombstone archives cannot be replayed under the
+// terminal-ID reducer. Preserve them unchanged and require a fresh session.
+// This diagnostic runs only after strict recovery refused; it never admits data.
+fn legacy_destroy_archive(path: &Path, root: &Path) -> bool {
+    use std::io::BufRead;
+    let inspect = || -> Option<bool> {
+        let file = fs::File::open(path).ok()?;
+        if file.metadata().ok()?.len() > 64 * 1024 * 1024 {
+            return None;
+        }
+        let mut lines = io::BufReader::new(file).lines();
+        let header: serde_json::Value = serde_json::from_str(&lines.next()?.ok()?).ok()?;
+        if header["schema"] != "metaviewer.journal/v1" {
+            return None;
+        }
+        for (index, line) in lines.take(100_000).enumerate() {
+            let record: serde_json::Value = serde_json::from_str(&line.ok()?).ok()?;
+            if record["core_seq"].as_u64()? != index as u64 + 1 {
+                return None;
+            }
+            let file =
+                fs::File::open(root.join("events").join(format!("{}.json", index + 1))).ok()?;
+            let mut bytes = Vec::new();
+            file.take(MAX_FRAME_BYTES as u64 + 1)
+                .read_to_end(&mut bytes)
+                .ok()?;
+            if bytes.len() > MAX_FRAME_BYTES {
+                return None;
+            }
+            let event: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+            if event["input"]["event"] == "Lifecycle"
+                && event["input"]["update"]["kind"] == "Destroyed"
+                && event["state"].get("destroyed").is_none()
+            {
+                return Some(true);
+            }
+        }
+        Some(false)
+    };
+    inspect() == Some(true)
+}
+
+// Linux O_DIRECTORY differs between ARM and x86 just like O_NOFOLLOW.
+fn frame_directory_flags() -> Result<i32> {
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    {
+        Ok(frame_open_flags()? | 0x4000)
+    }
+    #[cfg(all(target_os = "linux", any(target_arch = "x86", target_arch = "x86_64")))]
+    {
+        Ok(frame_open_flags()? | 0x10000)
+    }
+    #[cfg(not(all(
+        target_os = "linux",
+        any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64")
+    )))]
+    {
+        Err(invalid("unsupported frame open ABI"))
+    }
+}
+
+// Linux UAPI O_NOFOLLOW | O_NONBLOCK, limited to explicitly supported ABIs.
+fn frame_open_flags() -> Result<i32> {
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    {
+        Ok(0x8000 | 0x800)
+    }
+    #[cfg(all(target_os = "linux", any(target_arch = "x86", target_arch = "x86_64")))]
+    {
+        Ok(0x20000 | 0x800)
+    }
+    #[cfg(not(all(
+        target_os = "linux",
+        any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64")
+    )))]
+    {
+        Err(invalid("unsupported frame open ABI"))
+    }
+}
+
 /// Bind first; startup failures cannot expose a half-created session server.
 pub async fn bind(path: &Path, uid: u32) -> Result<UnixListener> {
     Ok(bind_owner_only(path, uid, Duration::from_millis(100)).await?)
@@ -726,6 +881,18 @@ async fn connection(
     let (tx, rx) = mpsc::sync_channel(MAX_SEND_QUEUE);
     let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let terminal = Arc::new(Mutex::new(None));
+    let cleanup_deadline = tokio::time::Instant::now() + Duration::from_millis(100);
+    loop {
+        let occupied = server
+            .lock()
+            .map_err(|_| invalid("poisoned authority"))?
+            .connections
+            .contains_key(ready.endpoint());
+        if !occupied || tokio::time::Instant::now() >= cleanup_deadline {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
     let (id, epoch) = {
         let mut s = server.lock().map_err(|_| invalid("poisoned authority"))?;
         if s.connections.contains_key(ready.endpoint()) {
@@ -761,11 +928,16 @@ async fn connection(
     };
     let (mut reader, mut writer) = stream.into_split();
     let writer_closed = closed.clone();
-    let writer_task = tokio::spawn(async move {
+    let writer_server = server.clone();
+    let writer_endpoint = ready.endpoint().clone();
+    let mut writer_task = tokio::spawn(async move {
         while !writer_closed.load(std::sync::atomic::Ordering::Acquire) {
             let notification = terminal.lock().ok().and_then(|mut slot| slot.take());
             if let Some(env) = notification {
                 let _ = write_frame(&mut writer, &env).await;
+                if let Ok(mut s) = writer_server.lock() {
+                    s.retire(&writer_endpoint, id);
+                }
                 break;
             }
             match rx.try_recv() {
@@ -818,29 +990,34 @@ async fn connection(
             if let Err(error) = s.route(&ready, epoch, env) {
                 // The recipient's reserved slot reports saturation. Keep the
                 // originating peer alive long enough to receive that signal.
-                if !matches!(
-                    error.downcast_ref::<SendFailure>(),
-                    Some(SendFailure::QueueOverflow(_))
-                ) {
+                if !error
+                    .downcast_ref::<SendFailure>()
+                    .is_some_and(|failure| match failure {
+                        SendFailure::QueueOverflow(_) => true,
+                        SendFailure::Disconnected(to) => to != ready.endpoint(),
+                    })
+                {
                     return Err(error);
                 }
             }
         }
     }
     .await;
-    closed.store(true, std::sync::atomic::Ordering::Release);
-    writer_task.abort();
-    let mut s = server.lock().map_err(|_| invalid("poisoned authority"))?;
-    if s.connections
-        .get(ready.endpoint())
-        .is_some_and(|c| c.id == id)
     {
-        s.connections.remove(ready.endpoint());
-        s.tool_state.remove_peer(ready.endpoint());
-        s.observers.remove(ready.endpoint());
-        s.subscriptions.retain(|(peer, _)| peer != ready.endpoint());
-        s.unsubscribed.retain(|(peer, _)| peer != ready.endpoint());
+        let mut s = server.lock().map_err(|_| invalid("poisoned authority"))?;
+        s.retire(ready.endpoint(), id);
     }
+    // Removing the sender closes the bounded queue. A half-close still receives
+    // its queued verdicts; a stalled reader cannot retain the writer forever.
+    if result.is_err()
+        || tokio::time::timeout(Duration::from_secs(1), &mut writer_task)
+            .await
+            .is_err()
+    {
+        writer_task.abort();
+        let _ = writer_task.await;
+    }
+    closed.store(true, std::sync::atomic::Ordering::Release);
     result
 }
 
@@ -859,3 +1036,706 @@ pub fn state_dir() -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod nv_regressions {
+    use super::*;
+    use serde_json::{json, Value};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    struct Fixture {
+        server: Server,
+        root: PathBuf,
+    }
+    impl Fixture {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "mv-nv-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir(&root).unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+            let reg = |c: &str| -> Registration {
+                serde_json::from_value(json!({"endpoint":{"component":c,"instance":format!("{c}-nv")},"hello":{"schema":"hello/v0.2","contract_version":"v0.2","component":c,"component_version":"0.2.0","component_commit":"0123456789abcdef0123456789abcdef01234567","dependencies":[]}})).unwrap()
+            };
+            let config = Config {
+                session_id: "nv-session".into(),
+                core: reg("core"),
+                peers: vec![reg("daemon"), reg("agent"), reg("ui")],
+            };
+            let server = Server::open(config, &root, effective_uid().unwrap()).unwrap();
+            Self { server, root }
+        }
+        fn endpoint(&self, c: Component) -> Endpoint {
+            self.server
+                .config
+                .peers
+                .iter()
+                .find(|r| r.endpoint.component == c)
+                .unwrap()
+                .endpoint
+                .clone()
+        }
+        fn attach(&mut self, c: Component, capacity: usize) -> mpsc::Receiver<Envelope> {
+            let (queue, rx) = mpsc::sync_channel(capacity);
+            self.server.connections.insert(
+                self.endpoint(c),
+                Connection {
+                    id: 1,
+                    epoch: 1,
+                    queue,
+                    terminal: Arc::new(Mutex::new(None)),
+                },
+            );
+            rx
+        }
+        fn seed(&mut self) {
+            self.server.authority.apply(Input::Connect).unwrap();
+            let witness = self.server.authority.retain_witness(b"pixels").unwrap();
+            self.server
+                .authority
+                .apply_with_witnesses(
+                    Input::Surface {
+                        id: "surface-demo".into(),
+                        surface: Surface {
+                            display: "display-nv".into(),
+                            owner: self.endpoint(Component::Agent),
+                            agent_controlled: true,
+                            live: true,
+                            frame: Some(Frame {
+                                sha256: sha256_hex(b"pixels"),
+                                generation: 1,
+                                width: 1280,
+                                height: 720,
+                            }),
+                            refresh_after: None,
+                            allowed_verbs: vec!["mouse".into()],
+                        },
+                    },
+                    vec![witness],
+                )
+                .unwrap();
+        }
+        fn envelope(&self, c: Component, n: u64, body: Value) -> Envelope {
+            decode_envelope(&json!({"schema":"envelope/v0.2","msg_id":format!("nv-{c:?}-{n}"),"ts_ns":0,"from":self.endpoint(c),"to":self.server.config.core.endpoint,"session_id":"nv-session","seq":n,"nonce":format!("nv-{c:?}-{n}"),"body":body}).to_string()).unwrap()
+        }
+        async fn route(&mut self, c: Component, n: u64, body: Value) -> Result<()> {
+            let reg = self
+                .server
+                .config
+                .peers
+                .iter()
+                .find(|r| r.endpoint.component == c)
+                .unwrap();
+            let policy = HandshakePolicy::new(
+                effective_uid().unwrap(),
+                reg.endpoint.clone(),
+                self.server.config.core.endpoint.clone(),
+                "nv-session".into(),
+                reg.hello.clone(),
+            )
+            .unwrap();
+            let hello = self.envelope(c, 1, serde_json::to_value(&reg.hello).unwrap());
+            let (mut a, mut b) = UnixStream::pair().unwrap();
+            let task = tokio::spawn(async move { write_frame(&mut a, &hello).await.unwrap() });
+            let peer = handshake_at(
+                &mut b,
+                &policy,
+                &WireLimits::default(),
+                tokio::time::Instant::now(),
+            )
+            .await
+            .unwrap();
+            task.await.unwrap();
+            let env = self.envelope(c, n, body);
+            self.server.route(&peer, 1, env)
+        }
+        fn proposal(&self) -> Value {
+            let mut p: Value = serde_json::from_str(include_str!(
+                "../../../contracts/examples/v0.2/action_proposal.valid.json"
+            ))
+            .unwrap();
+            p["proposal_id"] = "nv-proposal".into();
+            p["based_on_frame"]["sha256"] = sha256_hex(b"pixels").into();
+            p["based_on_frame"]["generation"] = 1.into();
+            p
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.root).unwrap();
+        }
+    }
+    fn run(future: impl std::future::Future<Output = ()>) {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(future);
+    }
+
+    #[test]
+    fn nv_a1_nested_frames_and_no_symlinks() {
+        let mut f = Fixture::new();
+        let root = PathBuf::from(format!(
+            "/dev/shm/mv-nv-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&root).unwrap();
+        let direct = root.with_extension("frame");
+        fs::write(&direct, b"pixels").unwrap();
+        let nested = root.join("frame");
+        fs::write(&nested, b"pixels").unwrap();
+        let link = root.with_extension("link");
+        std::os::unix::fs::symlink(&direct, &link).unwrap();
+        let mut frame: FrameRef = serde_json::from_str(include_str!(
+            "../../../contracts/examples/v0.2/frame_ref.valid.json"
+        ))
+        .unwrap();
+        frame.sha256 = sha256_hex(b"pixels");
+        frame.ramws_path = direct.to_str().unwrap().into();
+        assert!(f.server.witness(&frame).is_ok());
+        frame.ramws_path = link.to_str().unwrap().into();
+        let symlink_refused = f.server.witness(&frame).is_err();
+        // Exercise the actual open flags independently of the pre-open lstat:
+        // a replacement symlink must be rejected by the kernel on this ABI.
+        assert!(fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(frame_open_flags().unwrap())
+            .open(&link)
+            .is_err());
+        frame.ramws_path = nested.to_str().unwrap().into();
+        let nested_admitted = f.server.witness(&frame).is_ok();
+        fs::remove_file(link).unwrap();
+        fs::remove_file(direct).unwrap();
+        fs::remove_dir_all(root).unwrap();
+        assert!(symlink_refused);
+        assert!(nested_admitted, "canonical nested adapter paths must work");
+    }
+    #[test]
+    fn nv_r2_contract_adapter_layout_and_component_guards() {
+        let mut f = Fixture::new();
+        let root = PathBuf::from(format!(
+            "/dev/shm/mv-nv-layout-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let adapter = root.join("frames-ABC123");
+        fs::create_dir_all(&adapter).unwrap();
+        let frame_path = adapter.join("f.rgb");
+        fs::write(&frame_path, b"pixels").unwrap();
+        let alias = root.with_extension("alias");
+        std::os::unix::fs::symlink(&root, &alias).unwrap();
+        let inner_alias = root.join("alias");
+        std::os::unix::fs::symlink(&adapter, &inner_alias).unwrap();
+        let final_alias = adapter.join("alias.rgb");
+        std::os::unix::fs::symlink(&frame_path, &final_alias).unwrap();
+        let mut frame: FrameRef = serde_json::from_str(include_str!(
+            "../../../contracts/examples/v0.2/frame_ref.valid.json"
+        ))
+        .unwrap();
+        frame.sha256 = sha256_hex(b"pixels");
+        // Use the contract path verbatim, creating exclusively and never replacing data.
+        let contract_path = PathBuf::from(&frame.ramws_path);
+        let contract_dir = contract_path.parent().unwrap();
+        let own_contract_dir = match fs::create_dir(contract_dir) {
+            Ok(()) => true,
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => false,
+            Err(e) => panic!("contract fixture directory: {e}"),
+        };
+        let mut contract_file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&contract_path)
+            .unwrap();
+        use std::io::Write;
+        contract_file.write_all(b"pixels").unwrap();
+        let contract_admitted = f.server.witness(&frame).is_ok();
+        frame.ramws_path = frame_path.to_str().unwrap().into();
+        let adapter_admitted = f.server.witness(&frame).is_ok();
+        let outside = f.root.join("outside.rgb");
+        fs::write(&outside, b"pixels").unwrap();
+        let bad_paths = [
+            alias.join("frames-ABC123/f.rgb"),
+            inner_alias.join("f.rgb"),
+            final_alias,
+            adapter.join("../frames-ABC123/f.rgb"),
+            outside,
+        ];
+        let refused: Vec<_> = bad_paths
+            .iter()
+            .map(|path| {
+                frame.ramws_path = path.to_str().unwrap().into();
+                f.server.witness(&frame).is_err()
+            })
+            .collect();
+        frame.ramws_path = frame_path.to_str().unwrap().into();
+        frame.sha256 = "0".repeat(64);
+        let bad_digest_refused = f.server.witness(&frame).is_err();
+        fs::remove_file(alias).unwrap();
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_file(&contract_path).unwrap();
+        if own_contract_dir {
+            fs::remove_dir(contract_dir).unwrap();
+        }
+        assert!(contract_admitted, "contract example path must be admitted");
+        assert!(
+            adapter_admitted,
+            "published adapter frame path must be admitted"
+        );
+        assert!(
+            refused.into_iter().all(|r| r),
+            "symlink at any component, traversal and outside paths must fail closed"
+        );
+        assert!(bad_digest_refused);
+    }
+    #[test]
+    fn nv_r2_legacy_destroy_archive_requires_explicit_upgrade() {
+        let mut f = Fixture::new();
+        f.seed();
+        f.server
+            .authority
+            .apply(Input::Lifecycle {
+                surface_id: "surface-demo".into(),
+                update: LifecycleUpdate::Destroyed,
+            })
+            .unwrap();
+        let witness = f.server.authority.retain_witness(b"pixels").unwrap();
+        f.server
+            .authority
+            .apply_with_witnesses(
+                Input::Frame {
+                    surface_id: "surface-demo".into(),
+                    frame: Frame {
+                        sha256: sha256_hex(b"pixels"),
+                        generation: 2,
+                        width: 800,
+                        height: 600,
+                    },
+                },
+                vec![witness],
+            )
+            .unwrap();
+        let config = f.server.config.clone();
+        let root = f.server.root.clone();
+        let path = root.join("journal.jsonl");
+        // Negative control: current tombstone journals recover, including refusals.
+        let fresh = crate::journal::scan(&path, &root).unwrap();
+        assert!(fresh.state.is_destroyed("surface-demo"));
+        assert!(
+            !legacy_destroy_archive(&path, &root),
+            "current archives must not be classified as legacy"
+        );
+        let old = std::mem::replace(
+            &mut f.server.authority,
+            Authority::create(
+                &f.root.join("unused"),
+                CoreState::session("unused").unwrap(),
+            )
+            .unwrap(),
+        );
+        drop(old);
+        let mut records: Vec<Value> = fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|s| serde_json::from_str(s).unwrap())
+            .collect();
+        let mut tail = "0".repeat(64);
+        let mut archive = tail.clone();
+        for n in 1..records.len() {
+            let event_path = root.join("events").join(format!("{n}.json"));
+            let mut event: Value = serde_json::from_slice(&fs::read(&event_path).unwrap()).unwrap();
+            event["state"].as_object_mut().unwrap().remove("destroyed");
+            if n == records.len() - 1 {
+                // Old reduce admitted a frame after destroy, retaining non-live state.
+                event["outcome"]["reason"] = Value::Null;
+                records[n]["kind"] = records[n - 1]["kind"].clone();
+                event["state"]["surfaces"]["surface-demo"]["frame"] =
+                    event["input"]["frame"].clone();
+                event["state"]["surfaces"]["surface-demo"]["refresh_after"] = Value::Null;
+            }
+            records[n]["prev_sha256"] = tail.clone().into();
+            event["record"] = records[n].clone();
+            event["envelope"]["body"] = records[n].clone();
+            let bytes = crate::journal::canonical_bytes(&event).unwrap();
+            let mut preimage = archive.as_bytes().to_vec();
+            preimage.extend_from_slice(&bytes);
+            archive = sha256_hex(&preimage);
+            fs::write(event_path, bytes).unwrap();
+            tail = sha256_hex(&crate::journal::canonical_bytes(&records[n]).unwrap());
+        }
+        let mut journal = Vec::new();
+        for record in records {
+            journal.extend(crate::journal::canonical_bytes(&record).unwrap());
+            journal.push(b'\n');
+        }
+        fs::write(&path, journal).unwrap();
+        let checkpoint_path = root.join("checkpoint.json");
+        let mut checkpoint: Value =
+            serde_json::from_slice(&fs::read(&checkpoint_path).unwrap()).unwrap();
+        checkpoint["tail"] = tail.into();
+        checkpoint["archive"] = archive.into();
+        fs::write(
+            checkpoint_path,
+            crate::journal::canonical_bytes(&checkpoint).unwrap(),
+        )
+        .unwrap();
+        let error = Server::open(config, &f.root, effective_uid().unwrap())
+            .err()
+            .expect("legacy destroy cannot silently migrate");
+        assert!(
+            error.to_string().contains("UPGRADE-REQUIRED"),
+            "unexpected recovery error: {error}"
+        );
+        assert!(error.to_string().contains("archive"));
+    }
+    #[test]
+    fn nv_r2_destroyed_frames_never_fanout() {
+        run(async {
+            let mut f = Fixture::new();
+            f.seed();
+            let ui = f.attach(Component::Ui, 8);
+            let _daemon = f.attach(Component::Daemon, 8);
+            let path = PathBuf::from(format!(
+                "/dev/shm/mv-nv-frame-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::write(&path, b"pixels").unwrap();
+            let mut frame: Value = serde_json::from_str(include_str!(
+                "../../../contracts/examples/v0.2/frame_ref.valid.json"
+            ))
+            .unwrap();
+            frame["ramws_path"] = path.to_str().unwrap().into();
+            frame["sha256"] = sha256_hex(b"pixels").into();
+            // Negative control: a committed live frame is published.
+            f.route(Component::Daemon, 2, frame.clone()).await.unwrap();
+            assert!(ui.try_recv().is_ok());
+            f.server
+                .authority
+                .apply(Input::Lifecycle {
+                    surface_id: "surface-demo".into(),
+                    update: LifecycleUpdate::Destroyed,
+                })
+                .unwrap();
+            let before = f.server.authority.state().domain_snapshot().unwrap();
+            f.route(Component::Daemon, 3, frame.clone()).await.unwrap();
+            assert!(
+                ui.try_recv().is_err(),
+                "refused FrameRef must not be published"
+            );
+            f.route(Component::Daemon, 4, json!({"schema":"surface_event/v0.2","event":"frame_ready","data":{"frame_ref":frame}})).await.unwrap();
+            assert!(
+                ui.try_recv().is_err(),
+                "refused frame_ready must not be published"
+            );
+            assert_eq!(
+                before,
+                f.server.authority.state().domain_snapshot().unwrap()
+            );
+            fs::remove_file(path).unwrap();
+        });
+    }
+    #[test]
+    fn nv_r2_terminal_write_retains_connection_until_flushed() {
+        run(async {
+            let f = Fixture::new();
+            let socket = f.root.join("runtime/blocked.sock");
+            let uid = effective_uid().unwrap();
+            let listener = bind(&socket, uid).await.unwrap();
+            let server = Arc::new(Mutex::new(
+                Server::open(f.server.config.clone(), &f.root.join("blocked-state"), uid).unwrap(),
+            ));
+            let task = tokio::spawn(serve(listener, server.clone(), uid));
+            let mut stream = UnixStream::connect(&socket).await.unwrap();
+            let hello = f.envelope(
+                Component::Ui,
+                1,
+                serde_json::to_value(&f.server.config.peers[2].hello).unwrap(),
+            );
+            write_frame(&mut stream, &hello).await.unwrap();
+            read_frame(&mut stream).await.unwrap().unwrap();
+            let ui = f.endpoint(Component::Ui);
+            let terminal = {
+                let mut s = server.lock().unwrap();
+                let body = Command::Hello(Box::new(s.config.core.hello.clone()));
+                for _ in 0..=MAX_SEND_QUEUE {
+                    let _ = s.send(&ui, body.clone());
+                }
+                let terminal = s.connections[&ui].terminal.clone();
+                // Force write_frame to await socket capacity before it can finish.
+                let mut slot = terminal.lock().unwrap();
+                if let Command::SurfaceEvent(event) = &mut slot.as_mut().unwrap().body {
+                    if let SurfaceEvent::Case4(e) = event.as_mut() {
+                        e.data.detail = "\u{1}".repeat(65_000);
+                    }
+                }
+                drop(slot);
+                terminal
+            };
+            tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    if terminal.lock().unwrap().is_none() {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(2)).await;
+                }
+            })
+            .await
+            .unwrap();
+            assert!(
+                server.lock().unwrap().connections.contains_key(&ui),
+                "endpoint retired before terminal write completed"
+            );
+            // A pipelined request must not abort that in-flight terminal write.
+            let request = f.envelope(Component::Ui, 2, json!({"schema":"ui_intent/v0.2","request_id":"pipeline","op":"fold","params":{"slot_id":"slot"}}));
+            write_frame(&mut stream, &request).await.unwrap();
+            // Escaped control characters provide a valid, large wire diagnostic.
+            // Keep reading bounded while forcing deterministic socket backpressure.
+            use tokio::io::AsyncBufReadExt;
+            let mut reader = tokio::io::BufReader::new(stream);
+            let mut bytes = Vec::new();
+            tokio::time::timeout(Duration::from_secs(3), reader.read_until(b'\n', &mut bytes))
+                .await
+                .unwrap()
+                .unwrap();
+            let value: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(value["body"]["data"]["code"], "QUEUE_OVERFLOW");
+            task.abort();
+        });
+    }
+    #[test]
+    fn nv_a2_missing_daemon_preserves_control() {
+        run(async {
+            let mut f = Fixture::new();
+            f.seed();
+            let ui = f.attach(Component::Ui, 8);
+            f.route(Component::Ui,2,json!({"schema":"ui_intent/v0.2","request_id":"take-nv","op":"take_control","params":{"surface_id":"surface-demo"}})).await.unwrap();
+            assert!(f.server.authority.state().surfaces["surface-demo"].agent_controlled);
+            let reply = serde_json::to_value(ui.try_recv().unwrap().body).unwrap();
+            assert_eq!(reply["reason_code"], "POLICY");
+            f.route(Component::Ui,3,json!({"schema":"ui_intent/v0.2","request_id":"still-live","op":"fold","params":{"slot_id":"slot"}})).await.unwrap();
+            assert!(ui.try_recv().is_ok());
+        });
+    }
+    #[test]
+    fn nv_a3_receipt_without_agent_is_durable() {
+        run(async {
+            let mut f = Fixture::new();
+            f.seed();
+            let daemon = f.attach(Component::Daemon, 8);
+            let agent = f.attach(Component::Agent, 8);
+            f.route(Component::Agent, 2, f.proposal()).await.unwrap();
+            agent.try_recv().unwrap();
+            daemon.try_recv().unwrap();
+            f.server.connections.remove(&f.endpoint(Component::Agent));
+            drop(agent);
+            let mut receipt: Value = serde_json::from_str(include_str!(
+                "../../../contracts/examples/v0.2/action_receipt.valid.json"
+            ))
+            .unwrap();
+            receipt["proposal_id"] = "nv-proposal".into();
+            f.route(Component::Daemon, 2, receipt).await.unwrap();
+            assert!(f.server.authority.state().pending.is_empty());
+            assert!(f.server.authority.state().leases.is_empty());
+            let records =
+                crate::journal::scan(&f.server.root.join("journal.jsonl"), &f.server.root).unwrap();
+            assert_eq!(&records.state, f.server.authority.state());
+        });
+    }
+    #[test]
+    fn nv_a4_failed_forward_releases_lease() {
+        run(async {
+            let mut f = Fixture::new();
+            f.seed();
+            let _daemon = f.attach(Component::Daemon, 1);
+            let _agent = f.attach(Component::Agent, 8);
+            let daemon = f.endpoint(Component::Daemon);
+            let hello = f.server.config.core.hello.clone();
+            f.server
+                .send(&daemon, Command::Hello(Box::new(hello)))
+                .unwrap();
+            let _result = f.route(Component::Agent, 2, f.proposal()).await;
+            assert!(
+                f.server.authority.state().pending.is_empty(),
+                "unsent work cannot remain dispatched"
+            );
+            assert!(f.server.authority.state().leases.is_empty());
+            let records =
+                crate::journal::scan(&f.server.root.join("journal.jsonl"), &f.server.root).unwrap();
+            assert_eq!(&records.state, f.server.authority.state());
+        });
+    }
+    #[test]
+    fn nv_a4b_failed_verdict_releases_lease() {
+        run(async {
+            let mut f = Fixture::new();
+            f.seed();
+            let daemon = f.attach(Component::Daemon, 8);
+            let _agent = f.attach(Component::Agent, 1);
+            let agent = f.endpoint(Component::Agent);
+            let hello = f.server.config.core.hello.clone();
+            f.server
+                .send(&agent, Command::Hello(Box::new(hello)))
+                .unwrap();
+            let error = f
+                .route(Component::Agent, 2, f.proposal())
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(error.downcast_ref::<SendFailure>(), Some(SendFailure::QueueOverflow(to)) if to == &agent)
+            );
+            assert!(f.server.authority.state().pending.is_empty());
+            assert!(f.server.authority.state().leases.is_empty());
+            assert!(
+                daemon.try_recv().is_err(),
+                "failed verdict must prevent dispatch"
+            );
+            assert!(f.server.connections[&agent]
+                .terminal
+                .lock()
+                .unwrap()
+                .is_some());
+            let records =
+                crate::journal::scan(&f.server.root.join("journal.jsonl"), &f.server.root).unwrap();
+            assert_eq!(&records.state, f.server.authority.state());
+        });
+    }
+    #[test]
+    fn nv_a6_error_observes_but_lost_cancels() {
+        run(async {
+            let mut f = Fixture::new();
+            f.seed();
+            let _daemon = f.attach(Component::Daemon, 8);
+            let _agent = f.attach(Component::Agent, 8);
+            f.route(Component::Agent, 2, f.proposal()).await.unwrap();
+            f.route(Component::Daemon,2,json!({"schema":"surface_event/v0.2","event":"error","data":{"surface_id":"surface-demo","code":"CLI_FAILED","detail":"failed"}})).await.unwrap();
+            assert!(f.server.authority.state().surfaces["surface-demo"].live);
+            assert!(f
+                .server
+                .authority
+                .state()
+                .pending
+                .contains_key("nv-proposal"));
+            let mut surface: Value = serde_json::from_str(include_str!(
+                "../../../contracts/examples/v0.2/surface.valid.json"
+            ))
+            .unwrap();
+            surface["state"] = "lost".into();
+            f.route(Component::Daemon,3,json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":surface}})).await.unwrap();
+            assert!(!f.server.authority.state().surfaces["surface-demo"].live);
+            assert!(f.server.authority.state().pending.is_empty());
+            assert!(f
+                .server
+                .authority
+                .state()
+                .draining
+                .contains_key("nv-proposal"));
+        });
+    }
+    #[test]
+    fn nv_a5_overflow_reconnect_fresh_sequence() {
+        run(async {
+            let f = Fixture::new();
+            let socket = f.root.join("runtime/core.sock");
+            let uid = effective_uid().unwrap();
+            let listener = bind(&socket, uid).await.unwrap();
+            let server = Arc::new(Mutex::new(
+                Server::open(f.server.config.clone(), &f.root.join("socket-state"), uid).unwrap(),
+            ));
+            let task = tokio::spawn(serve(listener, server.clone(), uid));
+            let mut first = UnixStream::connect(&socket).await.unwrap();
+            let hello = f.envelope(
+                Component::Ui,
+                1,
+                serde_json::to_value(&f.server.config.peers[2].hello).unwrap(),
+            );
+            write_frame(&mut first, &hello).await.unwrap();
+            read_frame(&mut first).await.unwrap().unwrap();
+            {
+                let mut s = server.lock().unwrap();
+                let ui = f.endpoint(Component::Ui);
+                let body = Command::Hello(Box::new(s.config.core.hello.clone()));
+                for _ in 0..=MAX_SEND_QUEUE {
+                    let _ = s.send(&ui, body.clone());
+                }
+            }
+            let terminal = tokio::time::timeout(Duration::from_secs(3), read_frame(&mut first))
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                serde_json::to_value(terminal.body).unwrap()["data"]["code"],
+                "QUEUE_OVERFLOW"
+            );
+            let mut second = UnixStream::connect(&socket).await.unwrap();
+            let mut hello2 = hello;
+            hello2.seq = 2;
+            hello2.nonce = "fresh-hello".into();
+            hello2.msg_id = "fresh-hello".into();
+            write_frame(&mut second, &hello2).await.unwrap();
+            assert!(matches!(
+                tokio::time::timeout(Duration::from_secs(3), read_frame(&mut second))
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap()
+                    .body,
+                Command::Hello(_)
+            ));
+            drop(second);
+            let mut third = UnixStream::connect(&socket).await.unwrap();
+            hello2.seq = 3;
+            hello2.nonce = "third-hello".into();
+            hello2.msg_id = "third-hello".into();
+            write_frame(&mut third, &hello2).await.unwrap();
+            assert!(matches!(
+                tokio::time::timeout(Duration::from_secs(3), read_frame(&mut third))
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap()
+                    .body,
+                Command::Hello(_)
+            ));
+            task.abort();
+        });
+    }
+    #[test]
+    fn nv_a5_eof_flushes_reply() {
+        run(async {
+            use tokio::io::AsyncWriteExt;
+            let f = Fixture::new();
+            let socket = f.root.join("runtime/eof.sock");
+            let uid = effective_uid().unwrap();
+            let listener = bind(&socket, uid).await.unwrap();
+            let server = Arc::new(Mutex::new(
+                Server::open(f.server.config.clone(), &f.root.join("eof-state"), uid).unwrap(),
+            ));
+            let task = tokio::spawn(serve(listener, server, uid));
+            let mut stream = UnixStream::connect(&socket).await.unwrap();
+            let hello = f.envelope(
+                Component::Ui,
+                1,
+                serde_json::to_value(&f.server.config.peers[2].hello).unwrap(),
+            );
+            write_frame(&mut stream, &hello).await.unwrap();
+            read_frame(&mut stream).await.unwrap().unwrap();
+            let request=f.envelope(Component::Ui,2,json!({"schema":"ui_intent/v0.2","request_id":"eof-request","op":"fold","params":{"slot_id":"slot"}}));
+            write_frame(&mut stream, &request).await.unwrap();
+            stream.shutdown().await.unwrap();
+            let reply = tokio::time::timeout(Duration::from_secs(3), read_frame(&mut stream))
+                .await
+                .unwrap()
+                .unwrap()
+                .expect("EOF must drain queued verdicts");
+            assert!(matches!(reply.body, Command::ActionVerdict(_)));
+            task.abort();
+        });
+    }
+}
