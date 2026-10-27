@@ -1245,6 +1245,10 @@ mvui16d-2691cbbcbfb1	ui/test/mvui16d-rec-coalesce.test.js
 mvui17a-abcbd58a5ee4	ui/test/mvui17-activity-count.test.js
 mvui17q-a0340fc87ae3	ui/test/mvui17-qa-grammar.test.js
 mvui17w-898fd3dd7a0f	ui/test/mvui17-wall-fold.test.js
+mvui18f-82f74cd4d855	ui/test/mvui18-frame-jitter.test.js
+mvui18j-086d2287f7a1	ui/test/mvui18-judge-notes.test.js
+mvui18l-4313691554b0	ui/test/mvui18-live-frames.test.js
+mvui18s-42d371dd3f10	ui/test/mvui18-subscribe-mirror.test.js
 mvui2co-ac677845cb36	ui/test/mvui2-contrast-tokens.test.js
 mvui2ho-83c44de816a4	ui/test/mvui2-hooks-frame.test.js
 mvui2ho-c784211240fa	ui/test/mvui2-hooks-scheme.test.js
