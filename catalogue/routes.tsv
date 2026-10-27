@@ -953,6 +953,7 @@ e2e21la-7c5bc18c1353	tests/e2e/e2e21_launcher.test.js
 e2e22co-065988a8c349	tests/e2e/e2e22_correlation_trace.test.js
 e2e23un-1d4e421a06ba	tests/e2e/e2e23_unknown_vs_destroyed.test.js
 e2e24ro-1aa3fa8b643d	tests/e2e/e2e24_routing_ownership.test.js
+e2e25pr-dd2ec19b4571	tests/e2e/e2e25_production_frames.test.js
 e2e2_scenario.test.js	tests/e2e/e2e2_scenario.test.js
 e2e3_refusals.test.js	tests/e2e/e2e3_refusals.test.js
 e2e4_seams.test.js	tests/e2e/e2e4_seams.test.js
@@ -1072,6 +1073,7 @@ authorityWire.js	ui/electron/authorityWire.js
 bytePlane.js	ui/electron/bytePlane.js
 captureBridge.js	ui/electron/captureBridge.js
 coreLauncher.js	ui/electron/coreLauncher.js
+frameDiag.js	ui/electron/frameDiag.js
 framePort.js	ui/electron/framePort.js
 frameReader.js	ui/electron/frameReader.js
 hostBindings.js	ui/electron/hostBindings.js
