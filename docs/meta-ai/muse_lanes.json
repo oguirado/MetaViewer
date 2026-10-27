@@ -1,17 +1,17 @@
 {
  "schema": "metaviewer.meta_ai_usage/v1",
  "totals": {
-  "lanes": 346,
-  "ok": 346,
-  "input_tokens": 76777321,
-  "cache_read_tokens": 1773148032,
-  "output_tokens": 16662528,
-  "thinking_tokens": 8797456,
-  "cache_hit_pct": 95.8,
-  "usd": 14.5565,
-  "usd_per_lane": 0.0421,
-  "steps": 18829,
-  "lane_hours": 48.3
+  "lanes": 348,
+  "ok": 348,
+  "input_tokens": 77342237,
+  "cache_read_tokens": 1792972878,
+  "output_tokens": 16823162,
+  "thinking_tokens": 8910732,
+  "cache_hit_pct": 95.9,
+  "usd": 14.6848,
+  "usd_per_lane": 0.0422,
+  "steps": 19009,
+  "lane_hours": 48.9
  },
  "peak_concurrent_lanes": 24,
  "rooms": {
@@ -130,9 +130,19 @@
    "why": "Add wall tile states with take/release control and a kit-wide CSP audit to the shared kit (kit 0.2.1) for the MetaViewer wall and its strict CSP.",
    "orchestrator": "UI orchestrator"
   },
+  "mvui23": {
+   "stage": "fix",
+   "why": "TOP PRIORITY: on the real app the wall tile stays black from READY until a multislot round trip (startup race between frame-port notice/deliveries and the first canvas binding).",
+   "orchestrator": "UI orchestrator"
+  },
   "mvui22": {
    "stage": "fix",
    "why": "Live round 7 findings: the 4 s outcome toast is invisible on take/release although the activity is recorded; the Activity strip steals tile height (frame rescale); plus the MV-UI12 judge notes on the frame path.",
+   "orchestrator": "UI orchestrator"
+  },
+  "mvui22b": {
+   "stage": "fix",
+   "why": "Finish MV-UI13 lane T with known causes: outcome toast stacked below kit overlay layers; Activity strip stealing tile height.",
    "orchestrator": "UI orchestrator"
   },
   "mvui9": {
@@ -7777,6 +7787,48 @@
    "thinking_tokens": 23312,
    "cache_hit_pct": 95.8,
    "usd": 0.032847
+  },
+  {
+   "room": "mvui22",
+   "lane": "T",
+   "title": "toast visibility + strip height",
+   "stage": "fix",
+   "model": "muse-spark-1.3",
+   "orchestrator": "UI orchestrator",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-27T20:06:03.727000+00:00",
+   "duration_s": 1206.6,
+   "end_utc": "2026-10-27T20:26:10.350000+00:00",
+   "phase": "build",
+   "steps": 96,
+   "input_tokens": 304369,
+   "cache_read_tokens": 10609165,
+   "output_tokens": 89418,
+   "thinking_tokens": 66849,
+   "cache_hit_pct": 97.2,
+   "usd": 0.069539
+  },
+  {
+   "room": "mvui22",
+   "lane": "F",
+   "title": "MV-UI12 judge notes",
+   "stage": "fix",
+   "model": "muse-spark-1.3",
+   "orchestrator": "UI orchestrator",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-27T20:06:23.707000+00:00",
+   "duration_s": 915.9,
+   "end_utc": "2026-10-27T20:21:39.572000+00:00",
+   "phase": "build",
+   "steps": 84,
+   "input_tokens": 260547,
+   "cache_read_tokens": 9215681,
+   "output_tokens": 71216,
+   "thinking_tokens": 46427,
+   "cache_hit_pct": 97.3,
+   "usd": 0.058729
   }
  ]
 }

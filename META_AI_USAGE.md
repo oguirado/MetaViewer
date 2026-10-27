@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 346 | 55 | 291 |
-| Lanes finished OK | 346 | 55 | 291 |
-| Agent steps | 18,829 | 2,705 | 16,124 |
-| Lane-hours of agent work | 48.3 | 5.2 | 43.0 |
-| Fresh input tokens | 76,777,321 | 11,482,034 | 65,295,287 |
-| Cache-read input tokens | 1,773,148,032 | 226,255,212 | 1,546,892,820 |
-| Prompt cache hit % | 95.8 | 95.2 | 95.9 |
-| Output tokens | 16,662,528 | 2,135,708 | 14,526,820 |
-| Thinking tokens | 8,797,456 | 1,050,039 | 7,747,417 |
-| Cost (USD) | 14.5565 | 2.0279 | 12.5287 |
-| Cost per lane (USD) | 0.0421 | 0.0369 | 0.0431 |
+| Lanes launched | 348 | 55 | 293 |
+| Lanes finished OK | 348 | 55 | 293 |
+| Agent steps | 19,009 | 2,705 | 16,304 |
+| Lane-hours of agent work | 48.9 | 5.2 | 43.6 |
+| Fresh input tokens | 77,342,237 | 11,482,034 | 65,860,203 |
+| Cache-read input tokens | 1,792,972,878 | 226,255,212 | 1,566,717,666 |
+| Prompt cache hit % | 95.9 | 95.2 | 96.0 |
+| Output tokens | 16,823,162 | 2,135,708 | 14,687,454 |
+| Thinking tokens | 8,910,732 | 1,050,039 | 7,860,693 |
+| Cost (USD) | 14.6848 | 2.0279 | 12.6569 |
+| Cost per lane (USD) | 0.0422 | 0.0369 | 0.0432 |
 
-Rooms: 87. Peak concurrent lanes [MEASURED from lane start/end]: 24.
+Rooms: 88. Peak concurrent lanes [MEASURED from lane start/end]: 24.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -43,7 +43,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
 | docs | 15 | 94.8 | 0.5371 |
-| fix | 24 | 96.9 | 1.3743 |
+| fix | 26 | 96.9 | 1.5025 |
 | kit | 3 | 96.5 | 0.1997 |
 | ops | 4 | 88.1 | 0.0468 |
 | plan | 12 | 92.6 | 0.3072 |
@@ -147,6 +147,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui20b | UI orchestrator | Oct 27 20:05 | fix | 1 | 98.3 | 0.0746 | Live tile turns black after a multislot round trip (second canvas for the same surface replaces and then removes the binding); black placeholder before the first frame. |
 | mvui19c | UI orchestrator | Oct 27 20:15 | fix | 1 | 96.9 | 0.0563 | Fix a judge-found id/anchor collision between the recording panel's recordings and new screenshots sections before handover. |
 | mvui21 | UI orchestrator | Oct 27 20:54 | fix | 1 | 95.8 | 0.0328 | URGENT: frame tests bound async waits by setImmediate turns and flake on loaded hosts, reddening unrelated integration gates; bound them by wall-clock deadlines (test-only). |
+| mvui22 | UI orchestrator | Oct 27 21:06 | fix | 2 | 97.2 | 0.1283 | Live round 7 findings: the 4 s outcome toast is invisible on take/release although the activity is recorded; the Activity strip steals tile height (frame rescale); plus the MV-UI12 judge notes on the frame path. |
 
 ## Every lane
 
@@ -498,6 +499,8 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui20b | M | multi-canvas binding + placeholder | Oct 27 20:05 | yes | 100 | 98.3 | 0.074583 |
 | mvui19c | R | cross-section id uniqueness | Oct 27 20:15 | yes | 72 | 96.9 | 0.056318 |
 | mvui21 | W | wall-clock bounded waits | Oct 27 20:54 | yes | 55 | 95.8 | 0.032847 |
+| mvui22 | T | toast visibility + strip height | Oct 27 21:06 | yes | 96 | 97.2 | 0.069539 |
+| mvui22 | F | MV-UI12 judge notes | Oct 27 21:06 | yes | 84 | 97.3 | 0.058729 |
 
 ## Method
 
