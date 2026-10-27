@@ -5,6 +5,11 @@
 //! Screenshots use their supplied capture ID as the wire recording ID. Disk
 //! stop seals a bounded RAM capture; the adapter exports a PNG tar archive.
 //! Counts describe retained frames, including after ring eviction.
+//! [TARGET, unit decision] `release` is local metadata reclamation for terminal
+//! recordings, retaining session-lifetime ID tombstones. It emits no wire event
+//! (v0.2 has no release event) and leaves the journal chain unchanged. The adapter
+//! owns RAM files and must reclaim its copies separately; observed paths confer
+//! no filesystem deletion authority on this coordinator.
 use crate::journal::{canonical_bytes, sha256_hex};
 use crate::wire::payload::*;
 use serde_json::{json, Value};
@@ -19,6 +24,8 @@ pub enum Error {
     Journal,
     Overflow,
     Event,
+    UnknownRecording,
+    ActiveRecording,
 }
 
 /// The sink must durably append the entire entry or return an error.
@@ -47,6 +54,7 @@ pub struct Recording {
 pub struct Coordinator {
     surfaces: BTreeSet<String>,
     recordings: BTreeMap<String, Recording>,
+    released: BTreeSet<String>,
     limits: SettingsLimits,
     destination: Option<SettingsRecordingDestinationCase0>,
     seq: u64,
@@ -101,6 +109,7 @@ impl Coordinator {
         Ok(Self {
             surfaces,
             recordings: BTreeMap::new(),
+            released: BTreeSet::new(),
             limits: l.clone(),
             destination,
             seq: 0,
@@ -110,6 +119,18 @@ impl Coordinator {
 
     pub fn recording(&self, id: &str) -> Option<&Recording> {
         self.recordings.get(id)
+    }
+
+    /// Reclaim a sealed/exported capture's reservation and retained metadata.
+    /// Unknown (including already released) and active IDs leave state unchanged.
+    pub fn release(&mut self, id: &str) -> Result<(), Error> {
+        let recording = self.recordings.get(id).ok_or(Error::UnknownRecording)?;
+        if recording.phase == Phase::Recording {
+            return Err(Error::ActiveRecording);
+        }
+        self.released.insert(id.to_owned());
+        self.recordings.remove(id);
+        Ok(())
     }
 
     fn commit(
@@ -235,7 +256,7 @@ impl Coordinator {
             if reserved.checked_add(ring).ok_or(Error::Overflow)? > self.limits.memory_bytes {
                 reason = Some(("BUDGET_EXCEEDED", "recording exceeds session memory"));
             }
-            if self.recordings.contains_key(id) {
+            if self.recordings.contains_key(id) || self.released.contains(id) {
                 reason = Some(("POLICY", "recording identity was already used"));
             }
             if mode == "disk"

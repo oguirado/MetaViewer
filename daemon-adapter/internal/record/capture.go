@@ -191,7 +191,7 @@ func (m *Manager) capture(ctx context.Context, requestID, id string, r *recordin
 	return append(events, e), nil
 }
 
-func (m *Manager) export(base Event, r *recording) (Event, error) {
+func (m *Manager) export(base Event, r *recording) (result Event, exportErr error) {
 	d := m.cfg.Destination
 	if d == nil {
 		return Event{}, &Refusal{"POLICY", "host destination is not authorized"}
@@ -223,7 +223,19 @@ func (m *Manager) export(base Event, r *recording) (Event, error) {
 	if err != nil {
 		return Event{}, err
 	}
-	defer func() { _ = destination.Close() }()
+	// Only this successful O_EXCL create grants cleanup ownership. A failed
+	// export must free the exact destination so the active capture can retry.
+	complete := false
+	defer func() {
+		if !complete {
+			closeErr := destination.Close()
+			removeErr := os.Remove(d.Path)
+			if errors.Is(removeErr, os.ErrNotExist) {
+				removeErr = nil
+			}
+			exportErr = errors.Join(exportErr, closeErr, removeErr)
+		}
+	}()
 	digest := sha256.New()
 	counter := &countWriter{writer: io.MultiWriter(destination, digest)}
 	archive := tar.NewWriter(counter)
@@ -244,6 +256,7 @@ func (m *Manager) export(base Event, r *recording) (Event, error) {
 	if err = destination.Close(); err != nil {
 		return Event{}, err
 	}
+	complete = true
 	base.Event = "exported"
 	base.DestinationCapabilityID = d.CapabilityID
 	base.DestinationPath = d.Path

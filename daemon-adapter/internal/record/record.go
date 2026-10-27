@@ -4,6 +4,9 @@
 // disk destination is inferred. Disk stop exports a sealed tar of PNG frames.
 // Owned RAM copies pin recordings independently of the live-view lease trimmer.
 // Counts describe retained frames, including after ring eviction.
+// [TARGET, unit decision] Release is a local lifecycle API for sealed captures;
+// it deletes only owned RAM copies, reclaims budget, and retains ID tombstones.
+// There is no release operation/event in the current wire contract.
 package record
 
 import (
@@ -21,6 +24,11 @@ import (
 )
 
 const capBytes uint64 = 1 << 30
+
+var (
+	ErrUnknownRecording = errors.New("unknown recording")
+	ErrActiveRecording  = errors.New("recording is active")
+)
 
 var identity = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 
@@ -114,11 +122,12 @@ type recording struct {
 	lastNS          uint64
 }
 type Manager struct {
-	mu      sync.Mutex
-	cfg     Config
-	records map[string]*recording
-	root    string
-	closed  bool
+	mu       sync.Mutex
+	cfg      Config
+	records  map[string]*recording
+	released map[string]struct{}
+	root     string
+	closed   bool
 }
 
 func NewManager(c Config) (*Manager, error) {
@@ -146,7 +155,7 @@ func NewManager(c Config) (*Manager, error) {
 		surfaces[id] = s
 	}
 	c.Surfaces = surfaces
-	return &Manager{cfg: c, records: map[string]*recording{}}, nil
+	return &Manager{cfg: c, records: map[string]*recording{}, released: map[string]struct{}{}}, nil
 }
 func cleanAbsolute(p string) bool {
 	return filepath.IsAbs(p) && len(p) <= 4096 && filepath.Clean(p) == p && !strings.ContainsAny(p, "\x00\r\n")
@@ -228,7 +237,8 @@ func (m *Manager) Handle(ctx context.Context, raw []byte) ([]Event, error) {
 	if q.Op == "ram_stop" || q.Op == "disk_stop" {
 		return m.stop(e, q.Op)
 	}
-	if _, ok := m.records[id]; ok {
+	_, released := m.released[id]
+	if _, ok := m.records[id]; ok || released {
 		return refuse(e, "POLICY", "recording identity was already used")
 	}
 	mode, ring, fps := "ram", p.RingBytes, p.MaxFPS
@@ -319,6 +329,32 @@ func (m *Manager) stop(e Event, op string) ([]Event, error) {
 		events = append(events, *export)
 	}
 	return events, nil
+}
+
+// Release reclaims a sealed capture. Removal failures keep its reservation and
+// metadata for retry; already removed owned copies are harmless on that retry.
+// Producer frames and successful disk exports are never removed.
+func (m *Manager) Release(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return errors.New("recorder is closed")
+	}
+	r, ok := m.records[id]
+	if !ok {
+		return ErrUnknownRecording
+	}
+	if !r.sealed {
+		return ErrActiveRecording
+	}
+	for _, f := range r.frames {
+		if err := os.Remove(f.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	m.released[id] = struct{}{}
+	delete(m.records, id)
+	return nil
 }
 
 // Close releases only the private RAM workspace, never producer-owned frames.
