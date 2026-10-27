@@ -14,6 +14,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "agents"))
 
+from metaviewer_agents._contracts_v02 import FILES as _RAW_V02_FILES
 from metaviewer_agents.envelope import _V02_FILES
 
 
@@ -51,15 +52,35 @@ def normalized(node, root):
 
 
 class PythonContractMirrorTests(unittest.TestCase):
+    def test_raw_snapshot_contains_no_v01_consts(self):
+        def collect_v01_consts(node, path=""):
+            found = []
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    if key == "const" and isinstance(value, str) and value.endswith("/v0.1"):
+                        found.append(f"{path}:{value}")
+                    else:
+                        found.extend(collect_v01_consts(value, f"{path}/{key}"))
+            elif isinstance(node, list):
+                for idx, item in enumerate(node):
+                    found.extend(collect_v01_consts(item, f"{path}[{idx}]"))
+            return found
+
+        stale = collect_v01_consts(_RAW_V02_FILES)
+        self.assertEqual(stale, [], f"raw v0.2 snapshot still contains /v0.1 consts: {stale}")
+
     def test_every_canonical_schema_matches_python(self):
         paths = sorted((ROOT / "contracts/v0.2").glob("*.schema.json"))
         self.assertTrue(paths, "canonical contracts must exist")
+        self.assertEqual({path.name for path in paths}, set(_RAW_V02_FILES))
         self.assertEqual({path.name for path in paths}, set(_V02_FILES))
         for path in paths:
             with self.subTest(schema=path.name):
                 canonical = json.loads(path.read_text(encoding="utf-8"))
-                mirror = _V02_FILES[path.name]
-                self.assertEqual(normalized(canonical, canonical), normalized(mirror, mirror))
+                raw_mirror = _RAW_V02_FILES[path.name]
+                effective_mirror = _V02_FILES[path.name]
+                self.assertEqual(normalized(canonical, canonical), normalized(raw_mirror, raw_mirror))
+                self.assertEqual(normalized(canonical, canonical), normalized(effective_mirror, effective_mirror))
 
     def test_nested_optional_property_drift_is_detected_in_every_schema(self):
         for name, mirror in _V02_FILES.items():

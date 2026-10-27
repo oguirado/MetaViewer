@@ -213,7 +213,9 @@ class Validator:
                 for index, item in enumerate(value):
                     self.validate(item, schema['items'], root, f'{path}[{index}]', depth + 1)
         if isinstance(value, str):
-            if len(value) < schema.get('minLength', 0) or len(value) > schema.get('maxLength', float('inf')):
+            if (len(value) < schema.get('minLength', 0)
+                    or len(value) > schema.get('maxLength', float('inf'))
+                    or len(value.encode('utf-8', 'surrogatepass')) > 65536):
                 fail('string length outside bounds')
             if 'pattern' in schema:
                 pattern = schema['pattern']

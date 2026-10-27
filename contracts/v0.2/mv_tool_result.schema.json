@@ -85,7 +85,7 @@
           "type": "string",
           "minLength": 10,
           "maxLength": 4096,
-          "pattern": "^/dev/shm/[^\u0000]+$"
+          "pattern": "^/dev/shm/[^\u0000\r\n]+$"
         },
         "sha256": {
           "type": "string",

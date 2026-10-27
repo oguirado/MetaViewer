@@ -17,6 +17,7 @@ from __future__ import annotations
 import copy
 import math
 import os
+import re
 import socket
 import stat
 import struct
@@ -68,12 +69,16 @@ class CoreClient:
             raise ClientError("length", "byte cap is not a positive int")
         if type(max_reply_bytes) is not int or max_reply_bytes <= 0:
             raise ClientError("length", "byte cap is not a positive int")
-        if (isinstance(timeout_s, bool)
-                or not isinstance(timeout_s, (int, float))
-                or not math.isfinite(timeout_s) or timeout_s <= 0):
+        if isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float)):
+            raise ClientError("timeout", "timeout is not finite positive")
+        try:
+            timeout_f = float(timeout_s)
+        except OverflowError:
+            raise ClientError("timeout", "timeout is not finite positive") from None
+        if not math.isfinite(timeout_f) or timeout_f <= 0:
             raise ClientError("timeout", "timeout is not finite positive")
         self._socket_path = socket_path
-        self._timeout_s = float(timeout_s)
+        self._timeout_s = timeout_f
         self._max_line_bytes = max_line_bytes
         self._max_reply_bytes = max_reply_bytes
         self._next_seq = 1
@@ -392,7 +397,7 @@ class ToolClient:
                 raise ClientError("socket", "invalid sequence file")
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             raw = os.read(fd, 32)
-            if raw and (not raw.isdigit() or len(raw) > 16):
+            if raw and not re.fullmatch(rb"[1-9][0-9]{0,15}", raw):
                 raise ClientError("schema", "invalid sequence state")
             self.active._next_seq = int(raw) if raw else 1
             request = self._envelope(hello, secrets.token_hex(16))
@@ -416,9 +421,16 @@ class ToolClient:
         from .tools import ToolValidationError
         if not self._ready:
             raise ClientError("socket", "tool client requires hello")
-        if type(timeout_ms) is not int or timeout_ms <= 0:
+        if type(timeout_ms) is not int or not 1 <= timeout_ms <= 60000:
             raise ClientError("timeout", "invalid request timeout")
-        envelope = self._envelope(body, body["request_id"])
+        if (not isinstance(body, dict)
+                or not isinstance(body.get("request_id"), str)
+                or not body["request_id"]):
+            raise ClientError("bad_shape", "missing request_id")
+        try:
+            envelope = self._envelope(body, body["request_id"])
+        except EnvelopeError as exc:
+            raise _map_envelope_error(exc) from None
         previous = self.active._timeout_s
         deadline = time.monotonic() + min(previous, timeout_ms / 1000)
         try:

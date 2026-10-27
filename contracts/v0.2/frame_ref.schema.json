@@ -42,7 +42,7 @@
     },
     "ramws_path": {
       "type": "string",
-      "pattern": "^/dev/shm/[^\u0000]+$",
+      "pattern": "^/dev/shm/[^\u0000\r\n]+$",
       "maxLength": 65536
     },
     "sha256": {

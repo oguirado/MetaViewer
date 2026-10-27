@@ -45,7 +45,10 @@ _OUTER_KEYS = frozenset((
 ))
 _ENDPOINT_KEYS = frozenset(("component", "instance"))
 _MAX_STRING = 128
+_MAX_STRING_BYTES = 65536
 _MAX_DEPTH = 100
+_SESSION_ORIGIN_NS: int | None = None
+_LAST_CLOCK_FN: object = None
 # NUL spelled as code: the ramws pattern excludes it from shared paths.
 _NUL = chr(0)
 
@@ -564,8 +567,10 @@ def _audit(schema, seen=None):
             raise AssertionError("embedded length bound invalid")
     if "pattern" in schema:
         try:
-            _PATTERNS.setdefault(schema["pattern"],
-                                 re.compile(schema["pattern"]))
+            pattern = schema["pattern"]
+            if pattern.endswith("$") and not pattern.endswith(r"\$"):
+                pattern = pattern[:-1] + r"\Z"
+            _PATTERNS.setdefault(schema["pattern"], re.compile(pattern))
         except re.error:
             raise AssertionError("embedded pattern invalid") from None
     if "enum" in schema and (not isinstance(schema["enum"], list)
@@ -590,8 +595,6 @@ def _version_refs(value):
         for key, child in value.items():
             if key == "$ref":
                 value[key] = "v0.2/" + child
-            elif key == "const" and isinstance(child, str) and child.endswith("/v0.1"):
-                value[key] = child.removesuffix("/v0.1") + "/v0.2"
             else:
                 _version_refs(child)
     elif isinstance(value, list):
@@ -687,11 +690,15 @@ def _check(value, schema, depth):
                 _check(item, schema["items"], depth + 1)
     if isinstance(value, str):
         if (len(value) < schema.get("minLength", 0)
-                or len(value) > schema.get("maxLength", math.inf)):
+                or len(value) > schema.get("maxLength", math.inf)
+                or len(value.encode("utf-8")) > _MAX_STRING_BYTES):
             raise _Mismatch("length")
-        if "pattern" in schema and not _PATTERNS[schema["pattern"]].search(
-                value):
-            raise _Mismatch("pattern")
+        if "pattern" in schema:
+            pattern = schema["pattern"]
+            if (not _PATTERNS[pattern].search(value)
+                    or (pattern.startswith("^/")
+                        and any(c in value for c in "\r\n"))):
+                raise _Mismatch("pattern")
     if type(value) in (int, float):
         if type(value) is float and not math.isfinite(value):
             raise _Mismatch("non-finite")
@@ -724,8 +731,11 @@ def _check_json_values(value, depth=0):
         raise _Mismatch("unsafe integer")
     if type(value) is float and not math.isfinite(value):
         raise _Mismatch("non-finite")
-    if isinstance(value, str) and any(0xD800 <= ord(c) <= 0xDFFF for c in value):
-        raise _Mismatch("surrogate")
+    if isinstance(value, str):
+        if any(0xD800 <= ord(c) <= 0xDFFF for c in value):
+            raise _Mismatch("surrogate")
+        if len(value.encode("utf-8")) > _MAX_STRING_BYTES:
+            raise _Mismatch("string byte limit")
     if isinstance(value, dict):
         for key, child in value.items():
             _check_json_values(key, depth + 1)
@@ -795,7 +805,17 @@ def make_envelope(*, msg_id: str, from_component: str,
     if nonce is None:
         nonce = secrets.token_hex(16)
     if ts_ns is None:
-        ts_ns = time.monotonic_ns()
+        global _SESSION_ORIGIN_NS, _LAST_CLOCK_FN
+        now = time.monotonic_ns()
+        if (
+            _SESSION_ORIGIN_NS is None
+            or time.monotonic_ns is not _LAST_CLOCK_FN
+            or now < _SESSION_ORIGIN_NS
+            or now - _SESSION_ORIGIN_NS > _MAX_SAFE_INT
+        ):
+            _SESSION_ORIGIN_NS = now
+            _LAST_CLOCK_FN = time.monotonic_ns
+        ts_ns = now - _SESSION_ORIGIN_NS
     envelope = {
         "schema": (_LEGACY_SCHEMA if isinstance(body, dict) and str(body.get("schema", "")).endswith("/v0.1") else SCHEMA),
         "msg_id": msg_id,
