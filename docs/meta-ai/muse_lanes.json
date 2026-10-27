@@ -220,6 +220,11 @@
    "why": "Close the renderer halves of AC-06 (multislot placement routed to the new authoritative layout intents) and AC-07 (recording panel export routed to capture.export with typed refusals), assigned to us by the MetaViewer orchestrator after the core contracts landed.",
    "orchestrator": "UI orchestrator"
   },
+  "mvui24": {
+   "stage": "fix",
+   "why": "Complete MV-UI13 with the remaining verified RV9 renderer items: capture refresh evicting rows, scheduler raw ids in DOM ids and never-destroyed entries, screenshot row ids/labels.",
+   "orchestrator": "UI orchestrator"
+  },
   "mvui16e": {
    "stage": "fix",
    "why": "Reconcile four failures after rebasing the MV-UI8/MV-UI9 drop: respect the wall no-fromJSON contract, repair a stale negative control, align one host test assertion that pinned the recordings defect.",
