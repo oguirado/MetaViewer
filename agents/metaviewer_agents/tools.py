@@ -301,6 +301,8 @@ def _check_state_change(expectation: dict) -> None:
                pattern=_SHA_PATTERN, what="before digest")
     _check_int(expectation["min_tick"], minimum=0, what="min_tick")
     _check_int(expectation["max_tick"], minimum=0, what="max_tick")
+    if expectation["min_tick"] > expectation["max_tick"]:
+        _fail("inverted tick window")
 
 
 def _check_text_present(expectation: dict) -> None:
@@ -492,10 +494,11 @@ def _check_verdict_admitted(verdict: object) -> dict:
 
 
 def _check_receipt_verified(receipt: object) -> dict:
-    body = _check_exact(
+    body = _check_closed(
         receipt,
         frozenset({"schema", "proposal_id", "executed_at_ns", "after_frame",
                    "verified", "verification", "error"}),
+        frozenset({"native_evidence"}),
         "receipt")
     _check_const(body["schema"], _RECEIPT_SCHEMA, "receipt schema")
     _check_id(body["proposal_id"], "receipt proposal_id")
@@ -511,6 +514,26 @@ def _check_receipt_verified(receipt: object) -> dict:
     _check_str(verification["detail"], min_length=1, max_length=4096,
                pattern=None, what="verification detail")
     _check_const(body["error"], "", "receipt error")
+    if "native_evidence" in body:
+        evidence = _check_closed(
+            body["native_evidence"],
+            frozenset({"surface_id", "input_mono_ns", "input_ts_ns"}),
+            frozenset({"native_surface_id", "kind", "focus_verified", "result"}),
+            "native_evidence")
+        for key in ("surface_id", "native_surface_id"):
+            if key in evidence:
+                _check_str(evidence[key], min_length=1, max_length=128,
+                           pattern=None, what=key)
+        if evidence["surface_id"] != body["after_frame"]["surface_id"]:
+            _fail("uncorrelated native surface_id")
+        for key in ("input_mono_ns", "input_ts_ns"):
+            _check_int(evidence[key], minimum=0, maximum=_MAX_SAFE_INT, what=key)
+        if "kind" in evidence and evidence["kind"] not in ("click", "key", "text"):
+            _fail("invalid native kind")
+        if "focus_verified" in evidence and type(evidence["focus_verified"]) is not bool:
+            _fail("invalid native focus_verified")
+        if "result" in evidence:
+            _check_const(evidence["result"], "ok", "native result")
     return body
 
 
@@ -587,7 +610,7 @@ def _send(client: ToolClient, op: str, args: dict,
 
 
 def observe(surface_id: str, *, client: ToolClient,
-            timeout_ms: int) -> dict:
+            timeout_ms: int, perception_adapter=None) -> dict:
     """Return the validated observation for one surface.
 
     Raises ToolValidationError on any shape, version or correlation
@@ -609,6 +632,13 @@ def observe(surface_id: str, *, client: ToolClient,
         observation = _check_observation(body["observation"])
         if observation["frame_ref"]["surface_id"] != want_surface:
             _fail("uncorrelated surface_id")
+        observation = copy.deepcopy(observation)
+        if perception_adapter is not None:
+            # Adapter failures retain their typed codes; private code stays
+            # across the adapter's subprocess boundary.
+            observation["vision"] = perception_adapter.perceive(
+                copy.deepcopy(observation["frame_ref"]))
+            _check_observation(observation)
         return copy.deepcopy(observation)
     if status == "refused":
         _raise_refused(head)
