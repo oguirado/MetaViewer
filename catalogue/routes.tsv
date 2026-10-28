@@ -738,6 +738,7 @@ dispatc-9bef9af11cbf	daemon-adapter/internal/daemon/dispatch_compensation_test.g
 dispatch_list_test.go	daemon-adapter/internal/daemon/dispatch_list_test.go
 dispatch_test.go	daemon-adapter/internal/daemon/dispatch_test.go
 environment.go	daemon-adapter/internal/daemon/environment.go
+environment_test.go	daemon-adapter/internal/daemon/environment_test.go
 fx2_adapter_a_test.go	daemon-adapter/internal/daemon/fx2_adapter_a_test.go
 hello_atomic_test.go	daemon-adapter/internal/daemon/hello_atomic_test.go
 hello_pin_test.go	daemon-adapter/internal/daemon/hello_pin_test.go
@@ -796,7 +797,7 @@ capture.go	daemon-adapter/internal/record/capture.go
 record.go	daemon-adapter/internal/record/record.go
 record_test.go	daemon-adapter/internal/record/record_test.go
 release-a6f568fd66b9	daemon-adapter/internal/record/release_test.go
-environment_test.go	daemon-adapter/internal/view/environment_test.go
+environ-62320127da7b	daemon-adapter/internal/view/environment_test.go
 view-process.go	daemon-adapter/internal/view/process.go
 view-process_test.go	daemon-adapter/internal/view/process_test.go
 view.go	daemon-adapter/internal/view/view.go
