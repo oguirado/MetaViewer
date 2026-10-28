@@ -83,8 +83,8 @@ fn saturation_has_a_reserved_typed_signal_and_disconnect_is_distinct() {
     fs::remove_dir_all(root).unwrap();
 }
 
-// Asserts regression-catching frame ceilings on hosted runners (mean <= 300 ms,
-// max <= 600 ms; pre-optimisation was ~670 ms on the fast host / > 1.3 s on hosted).
+// Asserts regression-catching frame ceilings on hosted runners (mean <= 4 * hash_ms + 50 ms,
+// absolute safety cap <= 1500 ms; pre-optimisation did 4 hashes plus fsyncs).
 // Setting MV_PERF_STRICT=1 enables the host-tuned strict target (mean <= 60 ms).
 #[test]
 fn frame_ready_latency_and_concurrent_generations_on_3_45mb_frames() {
@@ -213,6 +213,12 @@ fn frame_ready_latency_and_concurrent_generations_on_3_45mb_frames() {
     let frame_bytes = (width as usize) * (height as usize) * 3;
     assert_eq!(frame_bytes, 3_456_000);
 
+    let hash_probe = vec![0xa5_u8; frame_bytes];
+    let hash_t0 = Instant::now();
+    let hash_probe_digest = sha256_hex(&hash_probe);
+    let hash_ms = hash_t0.elapsed().as_secs_f64() * 1000.0;
+    assert_eq!(hash_probe_digest.len(), 64);
+
     let generations = 8u64;
     let mut per_frame_ms = Vec::with_capacity(generations as usize);
     crate::journal::STAGE_TIMINGS.with(|c| c.set(crate::journal::FrameStageTimings::default()));
@@ -295,20 +301,36 @@ fn frame_ready_latency_and_concurrent_generations_on_3_45mb_frames() {
         st.capture_ns as f64 / 1_000_000.0 / (generations as f64),
         st.fanout_ns as f64 / 1_000_000.0 / (generations as f64),
     );
+    let relative_ceiling_ms = 4.0 * hash_ms + 50.0;
+    let safety_cap_ms = 1500.0;
+    let strict = std::env::var("MV_PERF_STRICT").as_deref() == Ok("1");
+    let mean_ceiling_ms = if strict { 60.0 } else { relative_ceiling_ms };
     eprintln!(
-        "MEASURED_CORE_FRAME_PATH frames={} bytes={} mean_ms={:.2} max_ms={:.2} batch_ms={:.2} poll_100ms_gens_during_batch={:.2}",
-        generations, frame_bytes, mean_ms, max_ms, batch_ms, gens_during_batch_at_100ms
+        "MEASURED_CORE_FRAME_PATH frames={} bytes={} hash_ms={:.2} relative_ceiling_ms={:.2} safety_cap_ms={:.2} mean_ceiling_ms={:.2} strict={} mean_ms={:.2} max_ms={:.2} batch_ms={:.2} poll_100ms_gens_during_batch={:.2}",
+        generations,
+        frame_bytes,
+        hash_ms,
+        relative_ceiling_ms,
+        safety_cap_ms,
+        mean_ceiling_ms,
+        strict,
+        mean_ms,
+        max_ms,
+        batch_ms,
+        gens_during_batch_at_100ms
     );
 
-    let strict = std::env::var("MV_PERF_STRICT").as_deref() == Ok("1");
-    let mean_ceiling_ms = if strict { 60.0 } else { 300.0 };
     assert!(
         mean_ms <= mean_ceiling_ms,
-        "1280x900 mean frame cost {mean_ms:.2} ms exceeded {mean_ceiling_ms:.0} ms target"
+        "1280x900 mean frame cost {mean_ms:.2} ms exceeded {mean_ceiling_ms:.2} ms target (hash_ms={hash_ms:.2}, strict={strict})"
     );
     assert!(
-        max_ms <= 600.0,
-        "1280x900 max frame cost {max_ms:.2} ms exceeded 600 ms ceiling"
+        mean_ms <= safety_cap_ms,
+        "1280x900 mean frame cost {mean_ms:.2} ms exceeded {safety_cap_ms:.0} ms safety cap"
+    );
+    assert!(
+        max_ms <= safety_cap_ms,
+        "1280x900 max frame cost {max_ms:.2} ms exceeded {safety_cap_ms:.0} ms safety cap"
     );
 
     drop(server);

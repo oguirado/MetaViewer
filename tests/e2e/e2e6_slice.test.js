@@ -76,13 +76,29 @@ function processBridge(binary, args, env, existingChild = null) {
     },
   };
 }
-function paint(scratch, frame) {
+function paint(scratch, frame, options = {}) {
   const bytes = [...fs.readFileSync(frame.ramws_path)];
   assert.equal(createHash('sha256').update(Buffer.from(bytes)).digest('hex'), frame.sha256);
+  let buildDir = process.env.MV_E2E_BUILD;
+  if (!buildDir || !fs.existsSync(join(buildDir, 'slice.html'))) {
+    buildDir = join(scratch, 'slice-build');
+    if (!fs.existsSync(join(buildDir, 'slice.html'))) {
+      execFileSync(process.execPath, [join(__dirname, 'build.mjs')],
+        { env: { ...process.env, MV_E2E_BUILD: buildDir }, stdio: 'pipe', timeout: 60000 });
+    }
+  }
   const path = join(scratch, 'paint.json');
   fs.writeFileSync(path, JSON.stringify({ frame, bytes }));
-  const output = execFileSync('xvfb-run', ['-a', electronBinary(ROOT), join(__dirname, 'slice-main.cjs')],
-    { env: { ...process.env, MV_SLICE_FRAME: path }, encoding: 'utf8', timeout: 25000 });
+  let output;
+  try {
+    output = execFileSync('xvfb-run', ['-a', electronBinary(ROOT), join(__dirname, 'slice-main.cjs')],
+      { env: { ...process.env, MV_E2E_BUILD: buildDir, MV_SLICE_FRAME: path }, encoding: 'utf8', timeout: 25000 });
+  } catch (error) {
+    const combined = `${error.stdout || ''}\n${error.stderr || ''}`.trim();
+    const sliceErr = combined.split('\n').filter((line) => line.includes('SLICE_ERROR:') || line.includes('E2E_RENDER:')).join(' | ');
+    if (combined && !options.quiet) process.stderr.write(`SLICE_MAIN_FAILURE:\n${combined}\n`);
+    throw new E2EError('E2E_RENDER', sliceErr || combined || String(error.message || error));
+  }
   const row = output.split('\n').find((line) => line.startsWith('SLICE_RENDER:'));
   assert.ok(row, 'renderer must return a real canvas witness');
   const result = JSON.parse(row.slice('SLICE_RENDER:'.length));
@@ -180,6 +196,8 @@ Path(sys.argv[1]).write_bytes(b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>I
     route(frame, id);
     assert.throws(() => route(frame, 'foreign-tile'), { code: 'E2E_ROUTING' });
     paint(scratch, frame);
+    assert.throws(() => paint(scratch, { ...frame, surface_id: '' }, { quiet: true }),
+      (err) => err && err.code === 'E2E_RENDER' && /SLICE_ERROR:.*E2E_ROUTING/.test(err.message));
     await authority.call({ op: 'surface', id, frame });
     let n = 0;
     async function act(basedOn) {
