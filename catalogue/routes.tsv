@@ -770,6 +770,7 @@ subscriptions_test.go	daemon-adapter/internal/daemon/subscriptions_test.go
 view_wire_test.go	daemon-adapter/internal/daemon/view_wire_test.go
 wire_binary_test.go	daemon-adapter/internal/daemon/wire_binary_test.go
 wire_live_test.go	daemon-adapter/internal/daemon/wire_live_test.go
+ac02_cadence_test.go	daemon-adapter/internal/frames/ac02_cadence_test.go
 cancelrace_test.go	daemon-adapter/internal/frames/cancelrace_test.go
 frames.go	daemon-adapter/internal/frames/frames.go
 lease_safety_test.go	daemon-adapter/internal/frames/lease_safety_test.go
