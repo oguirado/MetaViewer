@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 568 | 55 | 513 |
-| Lanes finished OK | 568 | 55 | 513 |
-| Agent steps | 28,796 | 2,705 | 26,091 |
-| Lane-hours of agent work | 74.5 | 5.2 | 69.3 |
-| Fresh input tokens | 118,682,959 | 11,482,034 | 107,200,925 |
-| Cache-read input tokens | 2,613,462,406 | 226,255,212 | 2,387,207,194 |
+| Lanes launched | 569 | 55 | 514 |
+| Lanes finished OK | 569 | 55 | 514 |
+| Agent steps | 28,882 | 2,705 | 26,177 |
+| Lane-hours of agent work | 74.8 | 5.2 | 69.6 |
+| Fresh input tokens | 118,982,540 | 11,482,034 | 107,500,506 |
+| Cache-read input tokens | 2,623,070,505 | 226,255,212 | 2,396,815,293 |
 | Prompt cache hit % | 95.7 | 95.2 | 95.7 |
-| Output tokens | 25,240,150 | 2,135,708 | 23,104,442 |
-| Thinking tokens | 13,933,794 | 1,050,039 | 12,883,755 |
-| Cost (USD) | 22.1432 | 2.0279 | 20.1154 |
-| Cost per lane (USD) | 0.039 | 0.0369 | 0.0392 |
+| Output tokens | 25,328,072 | 2,135,708 | 23,192,364 |
+| Thinking tokens | 13,990,890 | 1,050,039 | 12,940,851 |
+| Cost (USD) | 22.21 | 2.0279 | 20.1821 |
+| Cost per lane (USD) | 0.039 | 0.0369 | 0.0393 |
 
-Rooms: 122. Peak concurrent lanes [MEASURED from lane start/end]: 32.
+Rooms: 123. Peak concurrent lanes [MEASURED from lane start/end]: 32.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -43,7 +43,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
 | docs | 15 | 94.8 | 0.5371 |
-| fix | 56 | 96.9 | 3.0922 |
+| fix | 57 | 96.9 | 3.159 |
 | kit | 3 | 96.5 | 0.1997 |
 | ops | 4 | 88.1 | 0.0468 |
 | perf | 1 | 97.6 | 0.0694 |
@@ -183,6 +183,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-asm | metaviewer-0 | Oct 28 16:32 | build | 6 | 93.3 | 0.1681 | assembly context room (MetaViewer + OpenSuperficies + vision-engine + wender-agent) |
 | direct-ramctx | metaviewer-0 | Oct 28 18:55 | build | 10 | 89.2 | 0.1737 | RAM runaway study context lane |
 | mvui32 | UI orchestrator | Oct 28 21:33 | fix | 6 | 96.7 | 0.2899 | Round-3 external review found 10 confirmed renderer defects; plus the live run showed no rehash skip counters and a lost capsule never showing its badge; fix and verify before the product completion gate. |
+| mvui32f | UI orchestrator | Oct 28 21:54 | fix | 1 | 97.0 | 0.0668 | Judge notes on the frame router drop: a refused rehash report is not retried, and an older delivery can be admitted while a newer held delivery is still being verified; fix before the R3-FRAMES-1 drop ships. |
 
 ## Every lane
 
@@ -756,6 +757,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | rch | docs_arch | Oct 28 21:50 | yes | 50 | 95.9 | 0.026216 |
 | direct-direct | r_ctx | ui_peer_ctx | Oct 28 21:50 | yes | 41 | 93.6 | 0.029684 |
 | direct-direct | gs_e2e | holdings_e2e | Oct 28 21:50 | yes | 43 | 94.6 | 0.030273 |
+| mvui32f | F | router judge notes | Oct 28 21:54 | yes | 86 | 97.0 | 0.066759 |
 
 ## Method
 

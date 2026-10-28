@@ -1,17 +1,17 @@
 {
  "schema": "metaviewer.meta_ai_usage/v1",
  "totals": {
-  "lanes": 568,
-  "ok": 568,
-  "input_tokens": 118682959,
-  "cache_read_tokens": 2613462406,
-  "output_tokens": 25240150,
-  "thinking_tokens": 13933794,
+  "lanes": 569,
+  "ok": 569,
+  "input_tokens": 118982540,
+  "cache_read_tokens": 2623070505,
+  "output_tokens": 25328072,
+  "thinking_tokens": 13990890,
   "cache_hit_pct": 95.7,
-  "usd": 22.1432,
+  "usd": 22.21,
   "usd_per_lane": 0.039,
-  "steps": 28796,
-  "lane_hours": 74.5
+  "steps": 28882,
+  "lane_hours": 74.8
  },
  "peak_concurrent_lanes": 32,
  "rooms": {
@@ -113,6 +113,11 @@
   "mvui26b": {
    "stage": "fix",
    "why": "Live run of human input on the real app: clicking into the capsule scrolls the MetaViewer page, input mode stays WRITE after control release, and input refusals are invisible; fix the renderer side so live typing can pass.",
+   "orchestrator": "UI orchestrator"
+  },
+  "mvui32g": {
+   "stage": "fix",
+   "why": "A committed router test pinned the defect fixed by the judge notes (an older frame painted over a newer held one); align it to the fixed ordering so the router drop gates green.",
    "orchestrator": "UI orchestrator"
   },
   "mvui29c": {
@@ -12619,6 +12624,27 @@
    "thinking_tokens": 9124,
    "cache_hit_pct": 94.6,
    "usd": 0.030273
+  },
+  {
+   "room": "mvui32f",
+   "lane": "F",
+   "title": "router judge notes",
+   "stage": "fix",
+   "model": "muse-spark-1.3",
+   "orchestrator": "UI orchestrator",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-28T20:54:46.890000+00:00",
+   "duration_s": 1021.1,
+   "end_utc": "2026-10-28T21:11:47.962000+00:00",
+   "phase": "build",
+   "steps": 86,
+   "input_tokens": 299581,
+   "cache_read_tokens": 9608099,
+   "output_tokens": 87922,
+   "thinking_tokens": 57096,
+   "cache_hit_pct": 97.0,
+   "usd": 0.066759
   }
  ]
 }
