@@ -22,6 +22,8 @@ import {
   surfaceCanvasDomId,
   surfaceInputAccessibleName,
   surfaceInputFocusAnchor,
+  surfaceLostBadgeAccessibleName,
+  surfaceLostBadgeAnchor,
 } from './tileScheduler.js';
 
 const props = defineProps({
@@ -143,6 +145,12 @@ const resolvedState = computed(() => {
   }
   return normalized;
 });
+// MVUI30 lane L: a lost tile with a retained witness keeps its last
+// presented frame visible (frozen) with the Lost badge; a lost tile without
+// a frame falls through to the waiting placeholder Lost branch below.
+const showFrozen = computed(() => resolvedState.value === 'lost' && effectiveFrame.value.length > 0);
+// The witness strip follows resolved live/stale only (R2-16): a frozen tile
+// names its frame through the Lost badge and the panel Frame badge instead.
 const showWitness = computed(() => effectiveFrame.value.length > 0
   && (resolvedState.value === 'live' || resolvedState.value === 'stale'));
 
@@ -150,9 +158,11 @@ const showWitness = computed(() => effectiveFrame.value.length > 0
  * True while the canvas may take focus: gated in with a provided port that
  * is available. tabindex, aria exposure, the focus ring and the strip
  * READ-ONLY label all key off this; an unavailable port (host without
- * window.metaviewer.input) behaves exactly like no port.
+ * window.metaviewer.input) behaves exactly like no port. MVUI30 lane L: a
+ * lost tile is frozen and never takes focus, even when gated in.
  */
-const canvasFocusable = computed(() => props.inputEnabled === true && inputPort !== null && inputPort.available === true);
+const canvasFocusable = computed(() => props.inputEnabled === true && inputPort !== null && inputPort.available === true
+  && resolvedState.value !== 'lost');
 
 const strip = computed(() => formatFrameStrip({
   frame: effectiveFrame.value,
@@ -199,12 +209,20 @@ const inputAnchor = computed(() => surfaceInputFocusAnchor(props.surfaceId));
 /** Accessible name for the input canvas while gated in. */
 const inputName = computed(() => surfaceInputAccessibleName({ surfaceId: props.surfaceId }));
 
+/** MVUI30 lane L: DOM id AND data-semantic-anchor value for the Lost badge. */
+const lostBadgeAnchor = computed(() => surfaceLostBadgeAnchor(props.surfaceId));
+
+/** MVUI30 lane L: accessible name for the Lost badge. */
+const lostBadgeName = computed(() => surfaceLostBadgeAccessibleName());
+
 /**
  * @returns {boolean} True only when an input event may be captured and sent:
- * gated in, port provided and available, canvas focused.
+ * gated in, port provided and available, canvas focused, and never lost
+ * (MVUI30 lane L: frozen tiles queue nothing even when focused).
  */
 function inputGateOpen() {
-  return props.inputEnabled === true && inputPort !== null && inputPort.available === true && canvasFocused.value === true;
+  return props.inputEnabled === true && inputPort !== null && inputPort.available === true && canvasFocused.value === true
+    && resolvedState.value !== 'lost';
 }
 
 /** PointerEvent.button index to contract button name; other buttons ignored. */
@@ -317,6 +335,9 @@ function onCanvasPointerDown(event) {
   event.preventDefault();
   if (!(props.inputEnabled === true && inputPort !== null && inputPort.available === true)) return;
   focusCanvas();
+  // MVUI30 lane L: a frozen tile never arms a press (focusCanvas above is a
+  // no-op: a lost canvas carries no tabindex).
+  if (resolvedState.value === 'lost') return;
   activePress = {
     pointerId: event.pointerId,
     button: event.button,
@@ -388,6 +409,20 @@ watch(() => props.inputEnabled, (enabled) => {
   }
 });
 
+// MVUI30 lane L: the lost transition releases the scheduler binding, so no
+// later present can paint over the frozen frame; the canvas element keeps
+// its bitmap. Input state resets too: a frozen tile never captures.
+watch(resolvedState, (next) => {
+  if (next === 'lost') {
+    activePress = null;
+    blurCanvas();
+    if (scheduler !== null) {
+      scheduler.detachCanvas(props.surfaceId, canvasToken);
+      canvasToken = null;
+    }
+  }
+});
+
 /** @param {number | string} value */
 function bindingNumber(value) {
   if (value === '') return undefined;
@@ -407,6 +442,13 @@ function attachCanvas() {
       canvas: canvasRef.value });
     if (result?.ok === true) {
       canvasToken = result.token ?? null;
+      // MVUI30 lane L: a tile mounting already lost keeps the synchronous
+      // retained repaint above and immediately releases the binding, so no
+      // later present can paint over the frozen frame.
+      if (resolvedState.value === 'lost') {
+        scheduler.detachCanvas(props.surfaceId, canvasToken);
+        canvasToken = null;
+      }
       emit('canvas-ready', { surfaceId: props.surfaceId });
       return;
     }
@@ -580,11 +622,15 @@ onBeforeUnmount(() => {
     :data-state="resolvedState"
     :aria-label="accessibleName"
   >
-    <canvas ref="canvasRef" :hidden="resolvedState !== 'live' && resolvedState !== 'stale'" class="mv-surface__canvas" :id="props.inputEnabled ? inputAnchor : undefined" :data-semantic-anchor="props.inputEnabled ? inputAnchor : undefined" :tabindex="canvasFocusable ? 0 : undefined" :aria-hidden="canvasFocusable ? undefined : 'true'" :aria-label="props.inputEnabled ? inputName : undefined" @focus="onCanvasFocus" @blur="onCanvasBlur" @keydown="onCanvasKeyDown" @pointerdown="onCanvasPointerDown" @pointerup="onCanvasPointerUp" @pointercancel="onCanvasPointerCancel" @click="onCanvasClick" @wheel="onCanvasWheel" />
-    <div v-if="resolvedState !== 'live' && resolvedState !== 'stale'" class="mv-surface__waiting" role="status">
+    <canvas ref="canvasRef" :hidden="resolvedState !== 'live' && resolvedState !== 'stale' && !showFrozen" class="mv-surface__canvas" :id="props.inputEnabled && resolvedState !== 'lost' ? inputAnchor : undefined" :data-semantic-anchor="props.inputEnabled && resolvedState !== 'lost' ? inputAnchor : undefined" :tabindex="canvasFocusable ? 0 : undefined" :aria-hidden="canvasFocusable ? undefined : 'true'" :aria-label="props.inputEnabled && resolvedState !== 'lost' ? inputName : undefined" @focus="onCanvasFocus" @blur="onCanvasBlur" @keydown="onCanvasKeyDown" @pointerdown="onCanvasPointerDown" @pointerup="onCanvasPointerUp" @pointercancel="onCanvasPointerCancel" @click="onCanvasClick" @wheel="onCanvasWheel" />
+    <div v-if="showFrozen" :id="lostBadgeAnchor" class="mv-surface__lost" role="status" :data-semantic-anchor="lostBadgeAnchor" :aria-label="lostBadgeName">
+      <span class="mv-surface__lost-badge">Lost</span>
+      <span class="mv-surface__lost-note">Showing the last frame.</span>
+    </div>
+    <div v-if="resolvedState !== 'live' && resolvedState !== 'stale' && !showFrozen" class="mv-surface__waiting" role="status">
       <span class="mv-surface__connection-mark" aria-hidden="true">◌</span>
-      <strong>{{ resolvedState === 'connecting' ? 'Connecting to surface' : 'Waiting for surface' }}</strong>
-      <span>The surface will appear here when it is ready.</span>
+      <strong>{{ resolvedState === 'connecting' ? 'Connecting to surface' : resolvedState === 'lost' ? 'Lost' : 'Waiting for surface' }}</strong>
+      <span>{{ resolvedState === 'lost' ? 'No frames were presented for this surface.' : 'The surface will appear here when it is ready.' }}</span>
     </div>
     <p v-if="showWitness" class="mv-surface__state" aria-hidden="true">{{ resolvedState }}</p>
     <div v-if="showWitness" class="mv-surface__strip" role="group" :aria-label="stripName">
@@ -626,6 +672,24 @@ onBeforeUnmount(() => {
 .mv-surface__waiting { flex:1; min-height:200px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:var(--cuk-semantic-spacing-sm); padding:var(--cuk-semantic-spacing-lg); text-align:center; color:var(--cuk-semantic-text-muted); font-size:12px; }
 .mv-surface__waiting strong { color:var(--cuk-semantic-text-primary); font-size:14px; font-weight:500; }
 .mv-surface__connection-mark { font-size:32px; color:var(--cuk-semantic-accent-primary); }
+.mv-surface__lost {
+  display: flex;
+  align-items: center;
+  gap: var(--cuk-semantic-spacing-xs);
+  padding: var(--cuk-semantic-spacing-xs) var(--cuk-semantic-spacing-sm);
+  background: var(--mv-component-badge-background);
+  color: var(--mv-component-badge-text);
+  font-size: var(--cuk-semantic-typography-font-size-xs);
+  line-height: var(--cuk-semantic-typography-line-height-normal);
+}
+.mv-surface__lost-badge {
+  font-weight: 700;
+}
+.mv-surface__lost-note {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .mv-surface__state {
   margin: 0;
   padding: 2px 8px;

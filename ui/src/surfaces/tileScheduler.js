@@ -351,6 +351,48 @@ export function surfaceInputAccessibleName(input) {
 }
 
 /**
+ * MVUI30 lane L: DOM id AND `data-semantic-anchor` value for the Lost badge
+ * of a frozen tile, `tile-<segment>-lost-badge`. The segment is the same
+ * `surfaceIdSegment` derivation as every other DOM-safe id, so hostile host
+ * ids stay whitespace/slash-free here too.
+ * @param {string} surfaceId Host surface id.
+ * @returns {string} Lost-badge anchor value for the tile.
+ */
+export function surfaceLostBadgeAnchor(surfaceId) {
+  return `tile-${surfaceIdSegment(surfaceId)}-lost-badge`;
+}
+
+/**
+ * MVUI30 lane L: accessible name for the frozen-tile Lost badge.
+ * @returns {string} Stable accessible name for the Lost badge.
+ */
+export function surfaceLostBadgeAccessibleName() {
+  return 'Capsule lost: showing the last frame';
+}
+
+/**
+ * MVUI30 lane L: canvas state for one projection row. A `lost` backend
+ * lifecycle maps to the distinct `lost` canvas state (frozen last frame);
+ * every other lifecycle keeps the attachment mapping (`live` only while the
+ * binding is live, else `connecting`). Destroyed, detached and unknown rows
+ * never yield `lost`, so they can never render the frozen view. App.vue
+ * mirrors this truth table locally (its import surface is pinned for the
+ * stub harnesses, so the helper cannot be imported there); keep the two in
+ * sync.
+ * @param {unknown} row Projection surface row.
+ * @returns {string} `lost`, `live`, or `connecting`.
+ */
+export function canvasStateForRow(row) {
+  if (row !== null && typeof row === 'object'
+    && /** @type {{ backendLifecycle?: unknown }} */ (row).backendLifecycle === 'lost') {
+    return 'lost';
+  }
+  const attachment = row !== null && typeof row === 'object'
+    ? /** @type {{ attachmentState?: unknown }} */ (row).attachmentState : undefined;
+  return attachment === 'live' ? 'live' : 'connecting';
+}
+
+/**
  * Shortens a digest for the mono witness strip (head...tail).
  * @param {unknown} value
  * @param {number} [head=8]

@@ -485,13 +485,28 @@ const tile = computed(() => {
     ? { ...decision, status: labels.get(decision.tile) ?? decision.status }
     : decision;
 });
+// MVUI30 lane L: true while a lost tile still shows its frozen frame: the row
+// itself is lost (never destroyed, never departed) and the scheduler holds a
+// presented frame for this lifetime. The frozen tile keeps its canvas and
+// its frame identity; every other lost tile keeps the typed status row.
+const lostFrozenVisible = computed(() => {
+  void presentationRevision.value;
+  if (tile.value.tile !== 'lost') return false;
+  const current = row.value;
+  if (current === null || current.backendLifecycle !== 'lost') return false;
+  const presented = presentedFrameHandle(props.tileScheduler, props.capsuleId,
+    current.generation, snapshot.value?.envelope?.epoch);
+  return typeof presented === 'string' && presented.length > 0;
+});
 // Latest admitted frame identity on live-axis tiles only: connecting tiles
 // keep the placeholder with no frame claim, and lost/error tiles keep the
-// typed status row. Plain text (never a live region): it changes per frame.
+// typed status row — except a lost tile that still shows its frozen frame,
+// which keeps its identity. Plain text (never a live region): per-frame.
 const freshness = computed(() => {
   void presentationRevision.value;
   const state = tile.value.tile;
-  if (state === 'connecting' || state === 'lost' || state === 'error') return '';
+  if (state === 'connecting' || state === 'error') return '';
+  if (state === 'lost' && !lostFrozenVisible.value) return '';
   // The scheduler has the final say on presentation: an affirmative
   // nothing-presented witness hides the badge so it never shares the tile
   // with the waiting placeholder; unknowable presentation keeps the
@@ -616,7 +631,7 @@ function onActivateSurface() {
     <template #surface>
       <div :hidden="!surfaceHostVisible" class="mv-surface-host">
         <p :hidden="freshness === ''" class="mv-tile-freshness">{{ freshness }}</p>
-        <div :hidden="tile.tile === 'lost' || tile.tile === 'error'" class="mv-tile-capture-host">
+        <div :hidden="(tile.tile === 'lost' && !lostFrozenVisible) || tile.tile === 'error'" class="mv-tile-capture-host">
           <slot name="surface" :capsule-id="props.capsuleId" :surface="row" :drawable="drawable" />
         </div>
         <p :hidden="bodyStatus === ''" role="status" class="mv-tile-status">{{ bodyStatus }}</p>
