@@ -1,0 +1,290 @@
+{
+  "schema": "metaviewer.test.settings_parity/v1",
+  "contract_bounds": {
+    "min_fps": 1,
+    "max_fps": 120,
+    "ui_ceiling_fps": 60,
+    "wall_fps_presets": [3, 30, 60],
+    "defaults": {
+      "rust_capture_fps": 3,
+      "js_recording_fps": 3,
+      "js_wall_fps": 30,
+      "go_env_fps": 30,
+      "python_record_start_fps": 30
+    }
+  },
+  "d1_lenient_default": {
+    "valid_ram_start_fps_20": {
+      "schema": "record_request/v0.2",
+      "request_id": "req-d1-valid",
+      "op": "ram_start",
+      "params": {
+        "surface_id": "s1",
+        "recording_id": "rec-d1-valid",
+        "ring_bytes": 8388608,
+        "max_fps": 20
+      }
+    },
+    "invalid_requests": [
+      {
+        "id": "missing_max_fps",
+        "request": {
+          "schema": "record_request/v0.2",
+          "request_id": "req-d1-missing",
+          "op": "ram_start",
+          "params": {
+            "surface_id": "s1",
+            "recording_id": "rec-d1-missing",
+            "ring_bytes": 8388608
+          }
+        },
+        "capture_req": {
+          "schema": "capture_request/v1",
+          "request_id": "req-d1-missing",
+          "surface_id": "s1",
+          "mode": "ai"
+        }
+      },
+      {
+        "id": "float_max_fps",
+        "request": {
+          "schema": "record_request/v0.2",
+          "request_id": "req-d1-float",
+          "op": "ram_start",
+          "params": {
+            "surface_id": "s1",
+            "recording_id": "rec-d1-float",
+            "ring_bytes": 8388608,
+            "max_fps": 30.5
+          }
+        },
+        "capture_req": {
+          "schema": "capture_request/v1",
+          "request_id": "req-d1-float",
+          "surface_id": "s1",
+          "mode": "ai",
+          "max_fps": 30.5
+        }
+      },
+      {
+        "id": "string_max_fps",
+        "request": {
+          "schema": "record_request/v0.2",
+          "request_id": "req-d1-string",
+          "op": "ram_start",
+          "params": {
+            "surface_id": "s1",
+            "recording_id": "rec-d1-string",
+            "ring_bytes": 8388608,
+            "max_fps": "30"
+          }
+        },
+        "capture_req": {
+          "schema": "capture_request/v1",
+          "request_id": "req-d1-string",
+          "surface_id": "s1",
+          "mode": "ai",
+          "max_fps": "30"
+        }
+      },
+      {
+        "id": "null_max_fps",
+        "request": {
+          "schema": "record_request/v0.2",
+          "request_id": "req-d1-null",
+          "op": "ram_start",
+          "params": {
+            "surface_id": "s1",
+            "recording_id": "rec-d1-null",
+            "ring_bytes": 8388608,
+            "max_fps": null
+          }
+        },
+        "capture_req": {
+          "schema": "capture_request/v1",
+          "request_id": "req-d1-null",
+          "surface_id": "s1",
+          "mode": "ai",
+          "max_fps": null
+        }
+      },
+      {
+        "id": "bool_max_fps",
+        "request": {
+          "schema": "record_request/v0.2",
+          "request_id": "req-d1-bool",
+          "op": "ram_start",
+          "params": {
+            "surface_id": "s1",
+            "recording_id": "rec-d1-bool",
+            "ring_bytes": 8388608,
+            "max_fps": true
+          }
+        },
+        "capture_req": {
+          "schema": "capture_request/v1",
+          "request_id": "req-d1-bool",
+          "surface_id": "s1",
+          "mode": "ai",
+          "max_fps": true
+        }
+      }
+    ]
+  },
+  "d2_ceiling_sixty_vs_one_twenty": {
+    "accepted_1_to_60": [1, 3, 30, 60],
+    "contract_valid_61_to_120": [61, 90, 120],
+    "out_of_contract_fps": [0, -1, 121, 240]
+  },
+  "d3_float_lexeme": {
+    "record_request_ram_start_30_0_json": "{\"schema\":\"record_request/v0.2\",\"request_id\":\"req-d3-ram\",\"op\":\"ram_start\",\"params\":{\"surface_id\":\"s1\",\"recording_id\":\"rec-d3-ram\",\"ring_bytes\":8388608,\"max_fps\":30.0}}",
+    "record_request_disk_start_30_0_json": "{\"schema\":\"record_request/v0.2\",\"request_id\":\"req-d3-disk\",\"op\":\"disk_start\",\"params\":{\"surface_id\":\"s1\",\"recording_id\":\"rec-d3-disk\",\"destination_capability_id\":\"recording:configured\",\"destination_path\":\"/tmp/mv-export\",\"max_fps\":30.0}}",
+    "settings_v02_limits_30_0_json": "{\"schema\":\"settings/v0.2\",\"theme\":\"metaviewer-dark\",\"providers\":[],\"recording_destination\":null,\"limits\":{\"memory_bytes\":67108864,\"ring_bytes\":8388608,\"max_fps\":30.0}}",
+    "ui_prefs_recording_30_0_json": "{\"scheme\":\"mv-light\",\"density\":\"compact\",\"wallFps\":30,\"recordingFps\":30.0}",
+    "ui_prefs_wall_30_0_json": "{\"scheme\":\"mv-light\",\"density\":\"compact\",\"wallFps\":30.0,\"recordingFps\":3}"
+  },
+  "d4_unknown_keys": {
+    "record_request_unknown_top": {
+      "schema": "record_request/v0.2",
+      "request_id": "req-d4-top",
+      "op": "ram_start",
+      "params": {
+        "surface_id": "s1",
+        "recording_id": "rec-d4-top",
+        "ring_bytes": 8388608,
+        "max_fps": 30
+      },
+      "extra": 1
+    },
+    "record_request_unknown_param": {
+      "schema": "record_request/v0.2",
+      "request_id": "req-d4-param",
+      "op": "ram_start",
+      "params": {
+        "surface_id": "s1",
+        "recording_id": "rec-d4-param",
+        "ring_bytes": 8388608,
+        "max_fps": 30,
+        "extra": 1
+      }
+    },
+    "settings_v02_unknown_top": {
+      "schema": "settings/v0.2",
+      "theme": "metaviewer-dark",
+      "providers": [],
+      "recording_destination": null,
+      "limits": {
+        "memory_bytes": 67108864,
+        "ring_bytes": 8388608,
+        "max_fps": 30
+      },
+      "extra": 1
+    },
+    "settings_v02_unknown_limit": {
+      "schema": "settings/v0.2",
+      "theme": "metaviewer-dark",
+      "providers": [],
+      "recording_destination": null,
+      "limits": {
+        "memory_bytes": 67108864,
+        "ring_bytes": 8388608,
+        "max_fps": 30,
+        "extra": 1
+      }
+    },
+    "ui_prefs_unknown_key_json": "{\"scheme\":\"mv-dark\",\"density\":\"comfortable\",\"wallFps\":60,\"recordingFps\":12,\"extra\":1}",
+    "ui_prefs_with_contract_limits_json": "{\"scheme\":\"mv-dark\",\"density\":\"comfortable\",\"wallFps\":60,\"recordingFps\":12,\"limits\":{\"memory_bytes\":67108864,\"ring_bytes\":8388608,\"max_fps\":30}}"
+  },
+  "d5_settings_limits": {
+    "valid_settings_v02": [
+      {
+        "id": "fps_1",
+        "doc": {
+          "schema": "settings/v0.2",
+          "theme": "metaviewer-light",
+          "providers": [],
+          "recording_destination": null,
+          "limits": {
+            "memory_bytes": 67108864,
+            "ring_bytes": 8388608,
+            "max_fps": 1
+          }
+        }
+      },
+      {
+        "id": "fps_30",
+        "doc": {
+          "schema": "settings/v0.2",
+          "theme": "metaviewer-dark",
+          "providers": [],
+          "recording_destination": null,
+          "limits": {
+            "memory_bytes": 67108864,
+            "ring_bytes": 8388608,
+            "max_fps": 30
+          }
+        }
+      },
+      {
+        "id": "fps_120",
+        "doc": {
+          "schema": "settings/v0.2",
+          "theme": "metaviewer-dark",
+          "providers": [],
+          "recording_destination": {
+            "capability_id": "recording:configured",
+            "path": "/tmp/mv-export"
+          },
+          "limits": {
+            "memory_bytes": 67108864,
+            "ring_bytes": 8388608,
+            "max_fps": 120
+          }
+        }
+      }
+    ],
+    "invalid_settings_v02": [
+      {
+        "id": "fps_0",
+        "doc": {
+          "schema": "settings/v0.2",
+          "theme": "metaviewer-dark",
+          "providers": [],
+          "recording_destination": null,
+          "limits": {
+            "memory_bytes": 67108864,
+            "ring_bytes": 8388608,
+            "max_fps": 0
+          }
+        }
+      },
+      {
+        "id": "fps_121",
+        "doc": {
+          "schema": "settings/v0.2",
+          "theme": "metaviewer-dark",
+          "providers": [],
+          "recording_destination": null,
+          "limits": {
+            "memory_bytes": 67108864,
+            "ring_bytes": 8388608,
+            "max_fps": 121
+          }
+        }
+      },
+      {
+        "id": "missing_max_fps",
+        "doc": {
+          "schema": "settings/v0.2",
+          "theme": "metaviewer-dark",
+          "providers": [],
+          "recording_destination": null,
+          "limits": {
+            "memory_bytes": 67108864,
+            "ring_bytes": 8388608
+          }
+        }
+      }
+    ]
+  }
+}
