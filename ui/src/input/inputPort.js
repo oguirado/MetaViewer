@@ -11,6 +11,9 @@
  *
  * `send` is a single fire-and-await batch; `queue` buffers one event for the next
  * animation frame and reports its outcome through `onRefusal` (success is silent).
+ * When the facade exposes `onResult`, async input results join the same
+ * refusal emitter, deduped per (surface_id, seq) against replies (either
+ * order, at most one emission); ok results are silent.
  */
 
 /** Closed wire schema id. */
@@ -27,6 +30,20 @@ export const INPUT_REFUSALS = Object.freeze([
   'SCHEMA',
   'CORE_UNAVAILABLE',
 ]);
+
+/** Closed input-result code set: the host result event codes (the renderer-side INPUT_MODE_READ never arrives). */
+export const INPUT_RESULT_CODES = Object.freeze([
+  'NOT_IN_CONTROL',
+  'SURFACE_UNKNOWN',
+  'STALE_STREAM',
+  'LIMIT',
+  'NESTED_DISPLAY_ONLY',
+  'SCHEMA',
+  'CORE_UNAVAILABLE',
+]);
+
+/** Reply/event dedup memory: the last N (surface_id, seq) keys kept per port. */
+export const INPUT_RESULT_DEDUP_LIMIT = 256;
 
 /** Contract limits [TARGET] plus internal packing headroom. */
 export const INPUT_LIMITS = Object.freeze({
@@ -76,6 +93,14 @@ const textEncoder = new TextEncoder();
  */
 
 /**
+ * @typedef {Object} InputResult
+ * @property {string} surface_id
+ * @property {number} seq
+ * @property {boolean} ok
+ * @property {string|null} code - Null when ok, else an INPUT_RESULT_CODES code.
+ */
+
+/**
  * @typedef {Object} InputPortOptions
  * @property {() => number} [now] - ms clock (default Date.now).
  * @property {(cb: (time: number) => void) => unknown} [raf] - frame scheduler.
@@ -103,6 +128,14 @@ const textEncoder = new TextEncoder();
  */
 export function isInputRefusalCode(code) {
   return typeof code === 'string' && INPUT_REFUSALS.includes(code);
+}
+
+/**
+ * @param {unknown} code
+ * @returns {boolean} True only for a host result-event code (INPUT_MODE_READ excluded).
+ */
+export function isInputResultCode(code) {
+  return typeof code === 'string' && INPUT_RESULT_CODES.includes(code);
 }
 
 /**
@@ -325,6 +358,9 @@ function defaultCancelRaf(handle) {
 /**
  * Creates the renderer-side surface_input/v1 port.
  *
+ * When the facade exposes `onResult`, the port subscribes exactly once for
+ * async input results; facades without it behave exactly as before.
+ *
  * @param {unknown} facade `window.metaviewer?.input` or undefined.
  * @param {InputPortOptions} [options]
  * @returns {InputPort} Frozen port.
@@ -351,6 +387,8 @@ export function createInputPort(facade, options = {}) {
   const pendingBySurface = new Map();
   /** @type {Set<(refusal: InputRefusal) => void>} */
   const refusalListeners = new Set();
+  /** @type {Map<string, boolean>} Seen (surface_id, seq) refusal keys, oldest first. */
+  const seenResults = new Map();
   let disposed = false;
   let rafScheduled = false;
   /** @type {unknown} */
@@ -371,6 +409,81 @@ export function createInputPort(facade, options = {}) {
         // One bad listener never breaks the port or its siblings.
       }
     }
+  }
+
+  /**
+   * Marks one (surface_id, seq) refusal as emitted, evicting the oldest
+   * keys past the bound so the memory never grows without limit.
+   *
+   * @param {string} key
+   * @returns {void}
+   */
+  function markResultSeen(key) {
+    seenResults.set(key, true);
+    while (seenResults.size > INPUT_RESULT_DEDUP_LIMIT) {
+      const oldest = seenResults.keys().next().value;
+      if (oldest === undefined) return;
+      seenResults.delete(oldest);
+    }
+  }
+
+  /**
+   * Emits one refusal unless this (surface_id, seq) already emitted one,
+   * whether the first copy came from the reply or the result event.
+   *
+   * @param {string} surfaceId
+   * @param {number} seq
+   * @param {string} code
+   * @returns {void}
+   */
+  function emitResultRefusal(surfaceId, seq, code) {
+    const key = JSON.stringify([surfaceId, seq]);
+    if (seenResults.has(key)) return;
+    markResultSeen(key);
+    emitRefusal(surfaceId, code);
+  }
+
+  /**
+   * Async input-result handler: shape-checked, never throws. ok results
+   * are silent; refused results join the same per-(surface_id, seq) dedup
+   * as replies, so a refusal is emitted at most once in either order.
+   *
+   * @param {any} event
+   * @returns {void}
+   */
+  function handleResult(event) {
+    try {
+      if (disposed) return;
+      if (event === null || typeof event !== 'object' || Array.isArray(event)) return;
+      const surfaceId = event.surface_id;
+      const seq = event.seq;
+      const ok = event.ok;
+      if (!isValidSurfaceId(surfaceId)) return;
+      if (typeof seq !== 'number' || !Number.isSafeInteger(seq) || seq < 1) return;
+      if (ok === true) return;
+      if (ok !== false) return;
+      if (!isInputResultCode(event.code)) return;
+      emitResultRefusal(surfaceId, seq, event.code);
+    } catch {
+      // Malformed or hostile events never break the port.
+    }
+  }
+
+  /** @type {(() => void) | null} */
+  let stopResults = null;
+  try {
+    if (
+      facade !== null
+      && (typeof facade === 'object' || typeof facade === 'function')
+      && typeof /** @type {any} */ (facade).onResult === 'function'
+    ) {
+      // MVUI28 lane R: exactly one subscription, as a method call so
+      // receiver-style facades keep `this`; a throw means "no results".
+      const stop = /** @type {any} */ (facade).onResult(handleResult);
+      if (typeof stop === 'function') stopResults = /** @type {() => void} */ (stop);
+    }
+  } catch {
+    stopResults = null;
   }
 
   /**
@@ -473,15 +586,19 @@ export function createInputPort(facade, options = {}) {
       try {
         pending = sender(batch);
       } catch {
-        emitRefusal(surfaceId, 'CORE_UNAVAILABLE');
+        // MVUI28 lane R: the seq was consumed, so this refusal joins the
+        // per-(surface_id, seq) dedup like any other reply refusal.
+        emitResultRefusal(surfaceId, seq, 'CORE_UNAVAILABLE');
         continue;
       }
       Promise.resolve(pending).then(
         /** @param {any} reply @returns {void} */ (reply) => {
           const result = normalizeReply(reply);
-          if (!result.ok && typeof result.code === 'string') emitRefusal(surfaceId, result.code);
+          if (!result.ok && typeof result.code === 'string') {
+            emitResultRefusal(surfaceId, seq, result.code);
+          }
         },
-        () => { emitRefusal(surfaceId, 'CORE_UNAVAILABLE'); },
+        () => { emitResultRefusal(surfaceId, seq, 'CORE_UNAVAILABLE'); },
       );
     }
   }
@@ -621,6 +738,16 @@ export function createInputPort(facade, options = {}) {
     disposed = true;
     pendingBySurface.clear();
     refusalListeners.clear();
+    seenResults.clear();
+    const stop = stopResults;
+    stopResults = null;
+    if (stop !== null) {
+      try {
+        stop();
+      } catch {
+        // Teardown never throws.
+      }
+    }
     if (rafScheduled) {
       rafScheduled = false;
       try {

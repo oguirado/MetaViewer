@@ -7,6 +7,9 @@
  * typed refusals (SURFACE_UNKNOWN/STALE_STREAM from the bound streams plus any
  * closed code via `refuse`). Every received batch is recorded (deep copied) for
  * assertions. It never rejects and never returns off-contract replies.
+ * Behind `options.results` (default off) it also exposes `onResult` and
+ * emits one frozen result per settled send with a valid surface_id and seq,
+ * mirroring the reply outcome exactly like the host receipt.
  */
 
 import {
@@ -24,6 +27,17 @@ import {
  * @property {string | Record<string, string> | ((batch: any) => unknown)} [refuse] - Constant,
  * per-surface, or dynamic refusal (nullish accepts). Unknown codes throw at creation;
  * a dynamic refusal returning an unknown code resolves to SCHEMA.
+ * @property {boolean} [results] - When true, exposes `onResult` and emits one frozen
+ * result per settled send with a valid surface_id and seq. Default false, so the
+ * facade stays `{ send, batches, reset }`.
+ */
+
+/**
+ * @typedef {Object} InputDoubleResult
+ * @property {string} surface_id
+ * @property {number} seq
+ * @property {boolean} ok
+ * @property {string|null} code - Null when ok, else the reply refusal code.
  */
 
 /**
@@ -31,7 +45,26 @@ import {
  * @property {(batch: any) => Promise<import('./inputPort.js').InputSendResult>} send
  * @property {any[]} batches - Deep copies of received batches, in arrival order.
  * @property {() => void} reset - Clears batches and per-surface seq floors.
+ * @property {((cb: (result: InputDoubleResult) => void) => () => void)} [onResult] - Present
+ * only with `options.results`; subscribes to settled-send results.
  */
+
+/**
+ * Coded facade failure, mirroring the host preload ContractError shape
+ * (`name`, `code`, and a `${code}: ${message}` message).
+ */
+export class ContractError extends Error {
+  /**
+   * @param {string} code Diagnostic code.
+   * @param {string} message Human-readable detail.
+   */
+  constructor(code, message) {
+    super(`${code}: ${message}`);
+    this.name = 'ContractError';
+    /** Diagnostic code. @type {string} @readonly */
+    this.code = code;
+  }
+}
 
 /**
  * @param {string} code
@@ -76,6 +109,9 @@ export function createInputDouble(options = {}) {
   const batches = [];
   /** @type {Map<string, number>} */
   const lastSeq = new Map();
+  const emitResults = options.results === true;
+  /** @type {Set<(result: InputDoubleResult) => void>} */
+  const resultListeners = new Set();
 
   /**
    * @param {any} batch
@@ -118,11 +154,69 @@ export function createInputDouble(options = {}) {
   }
 
   /**
+   * Subscribes to settled-send results. Takes exactly one function argument;
+   * anything else throws ContractError ARGS, like the host facade.
+   *
+   * @param {(result: InputDoubleResult) => void} cb
+   * @returns {() => void} Idempotent unsubscribe.
+   */
+  function onResult(cb) {
+    if (arguments.length !== 1 || typeof cb !== 'function') {
+      throw new ContractError('ARGS', 'onResult takes exactly one function');
+    }
+    resultListeners.add(cb);
+    return () => { resultListeners.delete(cb); };
+  }
+
+  /**
+   * Delivers one frozen result per settled send with a valid surface_id
+   * and seq, mirroring the reply outcome. Listener throws never reach
+   * the sender; sends without a usable identity stay silent.
+   *
+   * @param {any} batch
+   * @param {import('./inputPort.js').InputSendResult} outcome
+   * @returns {void}
+   */
+  function emitResult(batch, outcome) {
+    if (!emitResults || resultListeners.size === 0) return;
+    if (batch === null || typeof batch !== 'object' || Array.isArray(batch)) return;
+    const surfaceId = batch.surface_id;
+    const seq = batch.seq;
+    if (typeof surfaceId !== 'string' || surfaceId.length < 1) return;
+    if (typeof seq !== 'number' || !Number.isSafeInteger(seq) || seq < 1) return;
+    const result = Object.freeze({
+      surface_id: surfaceId,
+      seq,
+      ok: outcome.ok,
+      code: outcome.ok ? null : (typeof outcome.code === 'string' ? outcome.code : 'SCHEMA'),
+    });
+    for (const cb of Array.from(resultListeners)) {
+      try {
+        cb(result);
+      } catch {
+        // One bad listener never breaks the sender or its siblings.
+      }
+    }
+  }
+
+  /**
    * @param {any} batch
    * @returns {Promise<import('./inputPort.js').InputSendResult>}
    */
   async function send(batch) {
     record(batch);
+    const outcome = decide(batch);
+    emitResult(batch, outcome);
+    return outcome;
+  }
+
+  /**
+   * Settles one batch exactly as before; `send` records and emits around it.
+   *
+   * @param {any} batch
+   * @returns {import('./inputPort.js').InputSendResult}
+   */
+  function decide(batch) {
     if (batch === null || typeof batch !== 'object' || Array.isArray(batch)) return refused('SCHEMA');
     if (batch.schema !== INPUT_SCHEMA) return refused('SCHEMA');
     const surfaceId = batch.surface_id;
@@ -163,5 +257,6 @@ export function createInputDouble(options = {}) {
     lastSeq.clear();
   }
 
+  if (emitResults) return Object.freeze({ send, onResult, batches, reset });
   return Object.freeze({ send, batches, reset });
 }
