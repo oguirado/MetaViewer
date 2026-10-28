@@ -1314,6 +1314,16 @@ mvui25b-6ba509a10821	ui/test/mvui25b-chord-grammar.test.js
 mvui25b-f4db7b44faf4	ui/test/mvui25b-sfc-imports.test.js
 mvui25d-49bb0a22b99b	ui/test/mvui25d-canvas-failclosed.test.js
 mvui25d-23640ad3aa51	ui/test/mvui25d-port-safeint.test.js
+mvui26f-f446d4933929	ui/test/mvui26-frames-attach.test.js
+mvui26f-fd3b02ade23d	ui/test/mvui26-frames-router.test.js
+mvui26i-2e78a1525dea	ui/test/mvui26-input-canvas.test.js
+mvui26i-919cc332a770	ui/test/mvui26-input-framemap.test.js
+mvui26i-42d36195fde2	ui/test/mvui26-input-panel.test.js
+mvui26i-ecd7520c9bf1	ui/test/mvui26-input-port.test.js
+mvui26b-55403dd72960	ui/test/mvui26b-canvas-scheduler.test.js
+mvui26b-cfd7ee1a9075	ui/test/mvui26b-canvas-scroll.test.js
+mvui26b-473d80980723	ui/test/mvui26b-mode-drop.test.js
+mvui26b-7a512cd17596	ui/test/mvui26b-mode-refusals.test.js
 mvui3co-58b252aa0364	ui/test/mvui3-control-owner-wall.test.js
 mvui3cr-400b1a21a53e	ui/test/mvui3-creative-harness.js
 mvui3cr-3b8cf3406706	ui/test/mvui3-creative-integration.test.js
