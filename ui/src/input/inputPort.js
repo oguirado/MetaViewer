@@ -11,6 +11,9 @@
  *
  * `send` is a single fire-and-await batch; `queue` buffers one event for the next
  * animation frame and reports its outcome through `onRefusal` (success is silent).
+ * `closeGate` advances one surface's gate epoch and drops its queued batches,
+ * so input buffered before a READ switch, blur, unmount, stream change or
+ * control loss is never sent nor replayed.
  * When the facade exposes `onResult`, async input results join the same
  * refusal emitter, deduped per (surface_id, seq) against replies (either
  * order, at most one emission); ok results are silent.
@@ -112,6 +115,7 @@ const textEncoder = new TextEncoder();
  * @property {boolean} available
  * @property {(surfaceId: unknown, streamId: unknown, events: unknown) => Promise<InputSendResult>} send
  * @property {(surfaceId: unknown, streamId: unknown, event: unknown) => void} queue
+ * @property {(surfaceId: unknown) => void} closeGate
  * @property {(cb: (refusal: InputRefusal) => void) => () => void} onRefusal
  * @property {() => void} dispose
  */
@@ -120,6 +124,7 @@ const textEncoder = new TextEncoder();
  * @typedef {Object} PendingItem
  * @property {number} streamId
  * @property {InputEvent} event
+ * @property {number} epoch - Gate epoch at queue time; flush sends only current-epoch items.
  */
 
 /**
@@ -385,6 +390,14 @@ export function createInputPort(facade, options = {}) {
   const stampsBySurface = new Map();
   /** @type {Map<string, PendingItem[]>} */
   const pendingBySurface = new Map();
+  /**
+   * MVUI32 lane I (R3-INPUT-1): per-surface gate epoch. Every queued item is
+   * tagged with the current epoch; `closeGate` advances it and purges the
+   * queue, and flush sends only items still on the current epoch. Missing
+   * entries read as epoch 0.
+   * @type {Map<string, number>}
+   */
+  const gateEpochBySurface = new Map();
   /** @type {Set<(refusal: InputRefusal) => void>} */
   const refusalListeners = new Set();
   /** @type {Map<string, boolean>} Seen (surface_id, seq) refusal keys, oldest first. */
@@ -557,9 +570,11 @@ export function createInputPort(facade, options = {}) {
    * @param {string} surfaceId
    * @param {number} streamId
    * @param {InputEvent[]} events
+   * @param {number} expectedEpoch - Gate epoch the run was queued under; a
+   * re-entrant gate closure mid-run drops the remaining batches silently.
    * @returns {void}
    */
-  function flushRun(surfaceId, streamId, events) {
+  function flushRun(surfaceId, streamId, events, expectedEpoch) {
     const sender = sendFn;
     if (sender === null) {
       emitRefusal(surfaceId, 'CORE_UNAVAILABLE');
@@ -567,6 +582,9 @@ export function createInputPort(facade, options = {}) {
     }
     const batches = packBatches(surfaceId, streamId, coalesceEvents(events));
     for (const batchEvents of batches) {
+      // MVUI32 lane I (R3-INPUT-1): dispatch-time epoch fence — never send
+      // a batch queued under a gate epoch that has since closed.
+      if ((gateEpochBySurface.get(surfaceId) ?? 0) !== expectedEpoch) return;
       const seq = (seqBySurface.get(surfaceId) ?? 0) + 1;
       /** @type {InputBatch} */
       const batch = {
@@ -605,15 +623,16 @@ export function createInputPort(facade, options = {}) {
 
   /**
    * @param {string} surfaceId
-   * @param {PendingItem[]} items
+   * @param {PendingItem[]} items - Already fenced to `expectedEpoch` by flush.
+   * @param {number} expectedEpoch
    * @returns {void}
    */
-  function flushSurface(surfaceId, items) {
+  function flushSurface(surfaceId, items, expectedEpoch) {
     let runStart = 0;
     for (let i = 1; i <= items.length; i += 1) {
       if (i === items.length || items[i].streamId !== items[runStart].streamId) {
         const run = items.slice(runStart, i).map((it) => it.event);
-        flushRun(surfaceId, items[runStart].streamId, run);
+        flushRun(surfaceId, items[runStart].streamId, run, expectedEpoch);
         runStart = i;
       }
     }
@@ -626,7 +645,13 @@ export function createInputPort(facade, options = {}) {
     if (disposed) return;
     for (const [surfaceId, list] of pendingBySurface) {
       if (list.length === 0) continue;
-      flushSurface(surfaceId, list.splice(0, list.length));
+      const items = list.splice(0, list.length);
+      // MVUI32 lane I (R3-INPUT-1): dispatch-time epoch fence — items queued
+      // before the latest gate closure are dropped, never sent nor replayed.
+      const expectedEpoch = gateEpochBySurface.get(surfaceId) ?? 0;
+      const fresh = items.filter((it) => it.epoch === expectedEpoch);
+      if (fresh.length === 0) continue;
+      flushSurface(surfaceId, fresh, expectedEpoch);
     }
   }
 
@@ -706,7 +731,11 @@ export function createInputPort(facade, options = {}) {
         emitRefusal(id, 'LIMIT');
         return;
       }
-      list.push({ streamId: /** @type {number} */ (streamId), event: cloneEvent(event) });
+      list.push({
+        streamId: /** @type {number} */ (streamId),
+        event: cloneEvent(event),
+        epoch: gateEpochBySurface.get(id) ?? 0,
+      });
     } catch {
       emitRefusal(typeof surfaceId === 'string' ? surfaceId : '', 'SCHEMA');
       return;
@@ -720,6 +749,31 @@ export function createInputPort(facade, options = {}) {
         rafHandle = null;
       }
     }
+  }
+
+  /**
+   * Closes the capture gate for one surface: advances its gate epoch and
+   * drops every queued batch, silently. Batches queued before the closure
+   * are never sent to `sendFn` nor replayed when the gate reopens; batches
+   * queued after it dispatch normally. Unknown, invalid or already-closed
+   * surfaces and a disposed port are silent no-ops; never throws.
+   *
+   * @param {unknown} surfaceId
+   * @returns {void}
+   */
+  function closeGate(surfaceId) {
+    if (disposed) return;
+    if (!isValidSurfaceId(surfaceId)) return;
+    const id = /** @type {string} */ (surfaceId);
+    const next = (gateEpochBySurface.get(id) ?? 0) + 1;
+    if (next > Number.MAX_SAFE_INTEGER) {
+      // Unreachable in practice; resetting keeps the fence exact (stale
+      // items carry MAX_SAFE_INTEGER, fresh items carry 0).
+      gateEpochBySurface.delete(id);
+    } else {
+      gateEpochBySurface.set(id, next);
+    }
+    pendingBySurface.delete(id);
   }
 
   /**
@@ -737,6 +791,7 @@ export function createInputPort(facade, options = {}) {
     if (disposed) return;
     disposed = true;
     pendingBySurface.clear();
+    gateEpochBySurface.clear();
     refusalListeners.clear();
     seenResults.clear();
     const stop = stopResults;
@@ -759,5 +814,5 @@ export function createInputPort(facade, options = {}) {
     rafHandle = null;
   }
 
-  return Object.freeze({ available, send, queue, onRefusal, dispose });
+  return Object.freeze({ available, send, queue, closeGate, onRefusal, dispose });
 }

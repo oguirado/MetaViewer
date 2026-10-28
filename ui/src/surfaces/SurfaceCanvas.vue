@@ -225,6 +225,23 @@ function inputGateOpen() {
     && resolvedState.value !== 'lost';
 }
 
+/**
+ * MVUI32 lane I (R3-INPUT-1): closes the input gate for one surface on the
+ * provided port, dropping input queued before the closure so it can never
+ * dispatch on a later frame nor replay when the gate reopens. Ports that
+ * predate the gate API (fixtures, stub doubles) are skipped silently, and
+ * closure never breaks the tile.
+ * @param {unknown} surfaceId
+ * @returns {void}
+ */
+function closeInputGate(surfaceId) {
+  const port = /** @type {any} */ (inputPort);
+  if (port === null || typeof port.closeGate !== 'function') return;
+  try {
+    port.closeGate(typeof surfaceId === 'string' ? surfaceId : props.surfaceId);
+  } catch { /* Gate closure never breaks the tile. */ }
+}
+
 /** PointerEvent.button index to contract button name; other buttons ignored. */
 const POINTER_BUTTONS = ['left', 'middle', 'right'];
 
@@ -261,6 +278,8 @@ function onCanvasFocus(_event) {
 function onCanvasBlur(_event) {
   canvasFocused.value = false;
   activePress = null;
+  // MVUI32 lane I (R3-INPUT-1): blur closes the gate — drop queued input.
+  closeInputGate(props.surfaceId);
 }
 
 /**
@@ -402,11 +421,19 @@ function onCanvasWheel(event) {
 
 // Losing the gate releases focus, so a stale focused canvas can never keep
 // capturing after a control handoff or a READ switch.
+// MVUI32 lane I (R3-INPUT-1): the gate closure also drops queued input.
 watch(() => props.inputEnabled, (enabled) => {
   if (enabled !== true) {
     activePress = null;
     blurCanvas();
+    closeInputGate(props.surfaceId);
   }
+});
+
+// MVUI32 lane I (R3-INPUT-1): a stream change closes the previous stream's
+// gate — input queued under the old stream is dropped, never dispatched.
+watch(() => props.streamId, (next, previous) => {
+  if (next !== previous) closeInputGate(props.surfaceId);
 });
 
 // MVUI30 lane L: the lost transition releases the scheduler binding, so no
@@ -416,6 +443,8 @@ watch(resolvedState, (next) => {
   if (next === 'lost') {
     activePress = null;
     blurCanvas();
+    // MVUI32 lane I (R3-INPUT-1): a frozen tile never captures — drop queued input.
+    closeInputGate(props.surfaceId);
     if (scheduler !== null) {
       scheduler.detachCanvas(props.surfaceId, canvasToken);
       canvasToken = null;
@@ -569,6 +598,9 @@ watch(() => [props.surfaceId, props.generation, props.epoch], (_current, previou
   // refresh the canvas attach while the live binding (and its port) stands.
   const surfaceChanged = props.surfaceId !== previous[0];
   if (surfaceChanged) {
+    // MVUI32 lane I (R3-INPUT-1): the old surface's gate closes with the
+    // tile — input queued for it is dropped, never dispatched.
+    closeInputGate(String(previous[0]));
     unbindFramePort(previous[0]);
     // L3-1: the pinned delivery identity belongs to the old surface; the
     // rebind below receives a fresh notice for the new one.
@@ -596,6 +628,8 @@ watch(() => [props.surfaceId, props.generation, props.epoch], (_current, previou
 });
 
 onBeforeUnmount(() => {
+  // MVUI32 lane I (R3-INPUT-1): unmount closes the gate — drop queued input.
+  closeInputGate(props.surfaceId);
   unbindFramePort(props.surfaceId, true);
   if (scheduler !== null) {
     scheduler.detachCanvas(props.surfaceId, canvasToken);
