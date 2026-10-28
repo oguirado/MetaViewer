@@ -9,12 +9,11 @@ Rust core as the single authority over lifecycle, admission, budgets, locks and
 durable session order. Electron renders state and submits intents. It never
 injects input.
 
-Release **0.1.1** [CITED: VERSION] carries the v0.2 contracts and the
+Release **0.1.2** [CITED: VERSION] carries the v0.2 contracts (`21` [MEASURED: `ls -1 contracts/v0.2/*.schema.json | wc -l`] schemas in `contracts/v0.2/` alongside `10` [MEASURED: `ls -1 contracts/v0.1/*.schema.json | wc -l`] closed v0.1 schemas) and the
 integration laws. Every process behavior below is implemented as described
 unless it is marked "planned for v0.2.0". Features I have not integrated end
-to end yet (AI loop on Holdings, recording, catalog, packaging) are marked
-that way and never described as done: recording, catalog and verification
-logic exists as offline seams, but the serving core does not call it yet.
+to end yet (for example the AI loop on Holdings, dynamic catalog expansion, and
+OS installers) are marked that way and never described as done.
 
 ```mermaid
 flowchart LR
@@ -107,8 +106,8 @@ Durable core state lives under `$XDG_STATE_HOME/metaviewer`, or
 I follow law L3 ([LAWS.md](../LAWS.md)): a schema and its positive/negative
 examples land before any producer or consumer, a breaking change opens a new
 contract directory, and old versions stay until no pin uses them.
-`contracts/v0.1/` is untouched; v0.2 is the integrated set (20 v0.2 schemas
-against 10 v0.1 [MEASURED: `ls contracts/v0.2/*.schema.json | wc -l`]).
+`contracts/v0.1/` is untouched; v0.2 is the integrated set (`21` [MEASURED: `ls -1 contracts/v0.2/*.schema.json | wc -l`] v0.2 schemas
+against `10` [MEASURED: `ls -1 contracts/v0.1/*.schema.json | wc -l`] v0.1 schemas, validated against `488` [MEASURED: `ls -1 contracts/examples/v0.2/*.json | wc -l`] v0.2 fixtures and `20` [MEASURED: `ls -1 contracts/examples/*.json | wc -l`] v0.1 fixtures).
 Draft **2020-12**
 is the schema dialect, every object sets `additionalProperties: false`, every
 message value carries a `<name>/v0.2` discriminator const, and `$ref` names a
@@ -122,22 +121,23 @@ JSON Schema implementation. The full rules are in
 | --- | --- | --- |
 | envelope | Any process ↔ core | Identity, session, ordered sender sequence, nonce, typed body |
 | surface | Embedded snapshot shape (inside events and tool views) | Authoritative surface data after validation; no bare-surface flow exists |
-| surface_request | UI/agent → core → adapter | Closed per-operation parameters (create, list, destroy, frame_subscribe, frame_unsubscribe, input, record_start, record_stop, take_control, release_control); the core currently admits create, list, destroy and subscribe/unsubscribe, and answers the rest with a journalled POLICY verdict |
+| surface_request | UI/agent → core → adapter | Closed per-operation parameters (create, list, destroy, frame_subscribe, frame_unsubscribe, input, record_start, record_stop, take_control, release_control); the core admits create, list, destroy, frame_subscribe, frame_unsubscribe, and UI-originated human `input` (`core/src/serve/mod.rs`), forwards `take_control` and `release_control` from `ui_intent`, and answers the rest with a journalled POLICY verdict |
+| surface_input | Renderer → Electron host | Batched human keyboard and pointer events (`click`, `key`, `type`, `scroll`) for an operator-controlled surface (`contracts/v0.2/surface_input.schema.json`) |
 | surface_event | Adapter → core → UI | created, state_changed, frame_ready, input_applied, error |
 | frame_ref | Adapter publisher → core → UI | Immutable rgb24 frame locator and integrity metadata |
-| observation | Agent adapter → core (planned for v0.2.0: core intake is a stub) | Frame, grounded visual elements and optional Holdings state witness; the core currently answers POLICY |
+| observation | Agent adapter → core (planned for v0.2.0: direct core intake is a stub) | Frame, grounded visual elements and optional Holdings state witness; direct envelope intake currently answers POLICY |
 | action_proposal | Agent → core → daemon (current executor) | Frame-bound action, next-observation predicate and bounded retries/time |
 | action_verdict | Core → agent | Admission/refusal and authoritative sequence; only refusals carry a reason |
-| action_receipt | Daemon → core → agent (forwarded unchanged; `verify_receipt` exists as an offline seam, serve wiring planned for v0.2.0) | Execution time, next frame, daemon-reported verification result/method and error text |
+| action_receipt | Daemon → core → agent (`recompute_daemon_receipt` verifies pixel/state outcomes in `core/src/serve/tools.rs`) | Execution time, next frame, verification result/method and error text |
 | session_record | Core → durable journal; also an envelope body in v0.2 | Ordered append-only event referencing a persisted envelope and prior-record digest |
 | hello | Every process ↔ core | Handshake: contract version, component name, pinned version and commit |
 | capsule_meta | Schema only (planned for v0.2.0: no producer yet) | Container, display, framebuffer path, lane socket, ready line from the capsule CLI, never guessed |
-| ui_intent | UI → core | Closed UI ops: fold, unfold, hide, show, pin, move, tab, float, layout save/load, take_control, release_control; the core currently admits fold, unfold, take_control and release_control, and answers the rest with a journalled POLICY verdict |
-| catalog_entry | Core → UI | New capsule kinds and allowed profiles (planned for v0.2.0: pure catalog authority implemented offline, no serve route arm yet) |
+| ui_intent | UI → core | Closed UI ops: fold, unfold, hide, show, pin, move, tab, float, layout save/load, take_control, release_control; the core admits the `7` [MEASURED] layout ops (`fold`, `unfold`, `hide`, `show`, `move`, `tab`, `float` in `core/src/serve/layout.rs`) plus `take_control` and `release_control` (`core/src/serve/mod.rs`, `core/src/admission/mod.rs`), and answers `pin` and `layout_save`/`layout_load` with a journalled POLICY verdict |
+| catalog_entry | Core → UI | New capsule kinds and allowed profiles (`core/src/catalog/mod.rs` enforces the closed catalog authority; dynamic catalog expansion route is planned for v0.2.0) |
 | terminal_session | UI broker implements; core side planned for v0.2.0 | Spawn spec by provider id with server-owned argv, resize, byte-plane messages, cumulative ACK, resync |
-| record_request | UI → core → adapter | RAM recording, disk recording (destination required), screenshot (planned for v0.2.0: offline record authority and adapter record Manager exist, no serve route arm yet) |
-| record_event | Adapter → core | Recording lifecycle and capture events (planned for v0.2.0) |
-| settings | UI-local store; core sync planned for v0.2.0 | Theme, providers, record destination, limits; no secrets |
+| record_request | UI → core (`core/src/serve/capture.rs`) | Per-surface RAM recording, screenshot, and write-ahead journaled deterministic PNG `.tar` export under `MV_RECORDING_DESTINATION` (`core/src/record/capture/export.rs`); adapter-side `record_start`/`record_stop` remains planned for v0.2.0 |
+| record_event | Core → UI (`core/src/serve/capture.rs`) | Recording lifecycle, screenshot, and export events |
+| settings | UI/Electron XDG store (`ui/src/settings/settingsModel.js`, `ui/src/settings/settingsHost.js`); core sync planned for v0.2.0 | Theme (`mv-light` / `mv-dark`), compact density; no secrets |
 | mv_tool_call | Registered agent peer → core | observe, list, propose, wait_verify for provider CLIs (`mvctl --v02` uses observe/propose/wait-verify as the agent peer; MCP use is planned) |
 | mv_tool_result | Core → mvctl/MCP | Terminal outcomes for tool calls |
 
@@ -159,10 +159,10 @@ retain their own schema discriminator.
 | Capsule kinds | `browser`, `desktop_capsule`, `vm`, `game_capsule` (`daemon-adapter/internal/capsule/manager.go`); profiles from `MV_SRF_PROFILES` or one live profile (`:100`, 1280x900 browser); max 16 surfaces | Refuse unadmitted profile, kind or geometry before spawning |
 | RAM capture | Publisher requires a `/dev/shm/` RAM root on tmpfs owned by the current uid, writes `0600` files with `O_NOFOLLOW`/`O_EXCL`, and verifies sha256 before publishing (`daemon-adapter/internal/frames/publisher.go`) | Publish complete immutable generations with dimensions, digest and capture duration; read only after publication |
 | Core frame witness | `/dev/shm` prefix, no `..`, per-component symlink walk, `O_NOFOLLOW`, regular file up to 64 MiB, digest match (`core/src/serve/mod.rs`) | A path-shaped string is not authorization; mismatches are refused, never journaled as frames |
-| Electron frame reader | `/dev/shm/` prefix, no `..`, generation ≥ 1, `^[0-9a-f]{64}$` digest, per-surface generation lease, null-digest fail-closed (`ui/electron/frameReader.js`) | Verify before handing bytes to tiles through the frame port; paths never cross IPC |
-| vision-engine | Pin `v0.2.0`, commit `9bbb49f220837388e1ab90c34ae0eedee27a66eb` [CITED: deps.lock] | Python package pin; runtime behavior TBD (not yet integrated) |
-| wender-agent | Pin `v0.3.0`, commit `7648b258d1d04953bacffe8627de5acd7c75d817` [CITED: deps.lock] | Python package pin; runtime behavior TBD (not yet integrated) |
-| OpenSuperficies | Pin `os-cu-w9-mv1`, commit `a9ac1ac8543872b428990ea23fa2629cd0a6d1d5` [CITED: deps.lock] | Go binary pin; runtime behavior TBD (not yet integrated) |
+| Electron frame reader | `/dev/shm/` prefix, no `..`, generation ≥ 1, `^[0-9a-f]{64}$` digest, per-surface generation lease, null-digest fail-closed (`ui/electron/frameReader.js`) | Verify before handing bytes to tiles through the frame port (`34/34` [MEASURED] live deliveries verified with `isTrusted=true` and `utilityVerified=true`); paths never cross IPC |
+| vision-engine | Pin `v0.2.0`, commit `9bbb49f220837388e1ab90c34ae0eedee27a66eb` [CITED: deps.lock] | Integrated via `VCorePerceptionAdapter.perceive` and `vadapt.cu_describe` (`agents/metaviewer_agents/perception/`, `tools/gate_g_ai.py`; verified live extracting `24` [MEASURED] vision marks and `24` [MEASURED] elements on `mv-live-1`) |
+| wender-agent | Pin `v0.3.0`, commit `7648b258d1d04953bacffe8627de5acd7c75d817` [CITED: deps.lock] | Integrated via `agents/metaviewer_agents/wender_bridge.py`, `AdmittedExecutor.check_target`, and `tools/gate_g_ai.py` (verified `8/8` [MEASURED] live on `mv-live-1` via `tests/e2e/e2e1_slice/demo_agent_drive.py`) |
+| OpenSuperficies | Pin `os-cu-w9-mv1`, commit `a9ac1ac8543872b428990ea23fa2629cd0a6d1d5` [CITED: deps.lock] | Integrated via `daemon-adapter/` invoking `srf-identity-surface` and `srf-holdings-capsule` under `MV_SRF_BIN_DIR` (verified live on `1` [MEASURED] `mv-live-1` browser capsule streaming `192` [MEASURED] `PRESENTED` frames at `2.71` fps [MEASURED] with `0` [MEASURED] refusals) |
 | Holdings lane | `lane_submit` verb plus `state_sha256` witness in v0.2 contracts; AI loop on Holdings planned for v0.2.0 | Bind lane to capsule, verify readiness and chain, use state digest plus tick windows |
 
 Capture generations increase when a framebuffer allocation or display is
@@ -172,10 +172,9 @@ records `(sha256, generation, width, height)` per surface, and the Electron
 reader binds each lease to its surface generation. End-to-end frame lease
 lifetimes across crash recovery remain an open question.
 
-Because the core verifies and fsyncs each `3,456,000`-byte (`1280x900` RGB24)
-frame witness and journal record before fanning `frame_ready` out to the UI
-(`678.84 ms` mean, `692.71 ms` max per frame, during which a `100 ms` poll loop
-advances `~6.8` generations [MEASURED: `cargo test --manifest-path core/Cargo.toml frame_ready_latency_and_concurrent_generations_on_3_45mb_frames`]),
+Because the core verifies and journals each `3,456,000`-byte (`1280x900` RGB24)
+frame witness before fanning `frame_ready` out to the UI
+(`52.74 ms` mean, `54.87 ms` max per frame with `40.51 ms` SHA-256 hash time in the harness test [MEASURED: `cargo test --manifest-path core/Cargo.toml frame_ready_latency_and_concurrent_generations_on_3_45mb_frames -- --nocapture`], and `52.11 ms` p50 / `58.67 ms` p95 with `40.65 ms` p50 hash time = `78`% [MEASURED] of core time on the live `mv-live-1` stack, where `1` [MEASURED] capsule streams at `2.71` fps [MEASURED] while core headroom is `~19` fps [TARGET]),
 the publisher retains each `/dev/shm` generation for at least `4 s` (`>= 2 s`
 floor [TARGET, unit decision]), bounded by `128 MiB` per surface (`~38`
 full-resolution frames [TARGET, unit decision]), `512 MiB` globally across
@@ -261,17 +260,7 @@ a stdio bridge that never opens sockets
 
 ## Fold, unfold, pin and take control
 
-Fold and unfold are admitted layout intents: the core journals them as
-notices and fans out the updated surface view (`layout_intent` in
-`core/src/serve/mod.rs`, addressed by `slot_id`, refused with `POLICY` unless
-the surface is live and has a tool view). Hide, show, pin, move, tab, float
-and layout save/load stay UI-local presentation: the wall builds
-`ui_intent/v0.2` bodies and tracks visibility
-(`folded`/`unfolded`/`pinned`) in its own projection
-(`ui/src/core/intents.js`, `ui/src/core/projection.js`), while the core
-answers those `ui_intent` bodies with a journalled `POLICY` verdict. Core
-admission of the remaining visibility intents is planned for v0.2.0. Capture
-and agent loops continue regardless of folding.
+`fold`, `unfold`, `hide`, `show`, `move`, `tab`, and `float` (`7` [MEASURED] operations) are admitted layout intents: the core validates placement transitions (`placement_change` in `core/src/serve/layout.rs:36-41`), journals them, and fans out the updated surface view (`layout_intent` in `core/src/serve/layout.rs`, addressed by `slot_id`, refusing illegal transitions such as folding or moving a hidden surface with `LAYOUT_ILLEGAL_TRANSITION` and refusing unknown surfaces with `POLICY`). `pin` and `layout_save`/`layout_load` stay UI-local presentation state (`ui/src/core/intents.js`, `ui/src/core/projection.js`), answered by the core with a journalled `POLICY` verdict (`core/src/serve/mod.rs:1148-1156`). Capture and agent loops continue regardless of folding.
 
 ```mermaid
 sequenceDiagram
@@ -279,11 +268,11 @@ sequenceDiagram
     participant C as Rust core
     participant D as Daemon adapter
     participant A as Agent
-    U->>U: hide/show/pin/move/tab/float (local projection)
-    U->>C: envelope(ui_intent hide/...)
+    U->>U: pin / layout save-load (local projection)
+    U->>C: envelope(ui_intent pin/...)
     C->>U: envelope(action_verdict refused POLICY)
-    U->>C: envelope(ui_intent fold/unfold slot_id)
-    C->>C: journal notice; fan out updated surface view
+    U->>C: envelope(ui_intent fold/unfold/hide/show/move/tab/float slot_id)
+    C->>C: validate placement_change; journal notice; fan out updated surface view
     C->>U: envelope(fanned-out surface event)
     Note over C,A: capture and agent loops continue while folded
     U->>C: envelope(ui_intent take_control)
@@ -300,8 +289,9 @@ sequenceDiagram
 ```
 
 Layout intents travel on the dedicated versioned contract `ui_intent/v0.2`
-(`contracts/v0.2/ui_intent.schema.json`); `fold`, `unfold`, `take_control`
-and `release_control` are admitted by the core today.
+(`contracts/v0.2/ui_intent.schema.json`); `fold`, `unfold`, `hide`, `show`,
+`move`, `tab`, `float`, `take_control`, and `release_control` are admitted by
+the core today (`core/src/serve/layout.rs:36-41`, `core/src/serve/mod.rs:1148-1204`).
 
 Control uses explicit operations. `Input::TakeControl` clears agent control,
 cancels every in-flight proposal for the surface with the typed takeover
@@ -460,26 +450,29 @@ macOS display control is outside this design.
 
 ## Testing and CI
 
-I gate every change with [tools/gate.sh](../tools/gate.sh): legs `skeleton`,
-`laws`, `contracts`, `unit`, `manifests`, `js`, `rust` and `ui`, plus
-`--self-test`. The contracts leg runs the schema checker over every version
-directory with valid/invalid fixture pairs per schema. The `unit` leg runs the
-Python suite in `tests/`; Rust (`fmt`, `clippy`, `test`) and Node (`npm ci`,
-`node --test`) run under the `rust` and `ui` legs, the kit sync under `js`,
-and the laws leg enforces the repository laws. CI runs its own jobs on pushes,
-pull requests and manual runs
-([.github/workflows/ci.yml](../.github/workflows/ci.yml)): `cargo test`,
-`go test -race` and the Node suites directly, with
-`secrets.yml` for secret scanning (pinned gitleaks plus the repository
-`.gitleaks.toml` and the fixtures gate) and the nightly `volume.yml` for
-volume reports. The `tests/e2e/e2e1_slice` live gate passed 8/8 assertions in
-two consecutive runs: capsule plus frame witness plus UI fan-out, Electron
-tile (canvas SHA equals frame SHA), observe → admit → dispatch → receipt,
-stale-frame refusal, takeover/readmission, replay equality plus corruption
-refusal, and container/process/socket/RAM cleanup [MEASURED: campaign
-evidence report w1/reports/G-W1.txt]. Exact suites, commands and measured
-counts live in `docs/TESTING.md`
-(TESTING lane's drop; TBD in this checkout, not yet implemented as a file). Assembly
+I gate every change with [tools/gate.sh](../tools/gate.sh): the default `skeleton`
+selector runs all `11` [MEASURED: `bash tools/gate.sh`] leaf legs (`manifests`,
+`laws`, `contracts`, `unit`, `agents`, `js`, `rust`, `go`, `ui`, `ui-smoke`,
+`perf`), plus the `30`-test [MEASURED: `bash tools/gate.sh --self-test`] harness
+`--self-test`. The `contracts` leg runs the schema checker over every version
+directory with valid/invalid fixture pairs per schema. The `unit` and `agents`
+legs run the Python suites in `tests/` and `agents/tests/`; Rust (`fmt`,
+`clippy`, `test`), Go (`vet`, `test -race`, and `GOARCH=amd64` cross-checks),
+and Node (`npm ci --offline`, `npm test`, `npm run check:types`, `npm run build`,
+and headless Electron `ui-smoke`) run under `rust`, `go`, `ui`, and `ui-smoke`;
+`js` verifies the staged `capsule-ui-kit` lock; `perf` enforces the core and
+renderer budget gates; and `laws` enforces the repository laws. CI runs `26`
+[MEASURED: `grep -E '^  [a-z0-9-]+:$' .github/workflows/*.yml | wc -l`] jobs
+across `5` [MEASURED: `ls -1 .github/workflows/*.yml | wc -l`] workflows on
+pushes, pull requests, and manual runs
+([.github/workflows/ci.yml](../.github/workflows/ci.yml), `secrets.yml`,
+`package.yml`, `build-other.yml`, `volume.yml`). On a live `mv-live-1` capsule,
+`node tests/e2e/e2e1_slice/index.js --live` exercises `11` [MEASURED: `grep -c 'assert' tests/e2e/e2e1_slice/live.py`]
+live assertions (`tests/e2e/e2e1_slice/live.py`), `python3 tools/gate_g_ai.py --surface mv-live-1`
+exercises `8` [MEASURED: `grep -c '"A[1-8]"' tools/gate_g_ai.py`] AI-loop assertions,
+and `python3 tests/e2e/e2e1_slice/demo_agent_drive.py` passes all `8/8` [MEASURED]
+narrated agent-drive checkpoints across repeated live runs ([DEMO_AGENT_SCRIPT.md](DEMO_AGENT_SCRIPT.md)).
+Exact suites, commands, and measured counts live in [TESTING.md](TESTING.md). Assembly
 negatives (stale-frame and cross-display controls, replay refusal, crash
 recovery, Holdings state/tick verification) ship with the suites that own
 them.
@@ -489,18 +482,19 @@ them.
 - Confirm the `lane_submit` adapter payload against the actual Holdings lane
   and capsule CLI contracts as the srf families evolve; preserve all native
   replay fields. The AI loop on Holdings is planned for v0.2.0.
-- Implement adapter-native `frame_subscribe`/`frame_unsubscribe` (currently a
-  typed unsupported refusal) and agree end-to-end frame buffer lease
-  lifetimes, capture generation rollover and retention of replay witnesses.
-- Admit the remaining visibility intents (hide/show/pin/move/tab/float,
-  layout save/load; fold/unfold are admitted) and intakes for observation,
-  capsule_meta, settings, terminal_session and record_request in the core;
-  specify list completion and request correlation; the wire has no reply
-  correlation today.
+- Agree end-to-end frame buffer lease lifetimes across crash recovery, capture
+  generation rollover, and retention of replay witnesses; sustain multi-capsule
+  streaming (`>= 4` [TARGET] capsules at `>= 10` [TARGET] fps for `10` min [TARGET];
+  live evidence today covers `1` [MEASURED] capsule at `2.71` fps [MEASURED]).
+- Decide whether `pin` and `layout_save`/`layout_load` should become core-admitted
+  `ui_intent` operations (today `fold`, `unfold`, `hide`, `show`, `move`, `tab`,
+  and `float` are core-admitted in `core/src/serve/layout.rs`, while `pin` stays
+  UI-local) and whether direct `observation`, `capsule_meta`, `settings`, and
+  `terminal_session` envelope intake should land in the core; specify list
+  completion and richer wire request correlation beyond `mv_tool_result.request_id`.
 - Specify profile provisioning for non-browser capsule kinds and finish
-  shared-control arbitration, including release behavior for pending actions.
-- Wire the offline `verify`, `record`, `catalog` and `control` seams into
-  serve: receipt verification and the `state_sha256` digest chain; prove
+  shared-control arbitration.
+- Complete the `state_sha256` live Holdings lane digest chain and prove
   transactional replay/crash boundaries and budget accounting with failure
   injection.
-- End-to-end recording, catalog and packaging are planned for v0.2.0.
+- Dynamic catalog expansion and OS-level desktop installers are planned for v0.2.0.

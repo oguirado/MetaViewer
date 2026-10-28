@@ -1,6 +1,6 @@
 # Agent-Drive Demo Script (`demo_agent_drive.py`)
 
-This document specifies the narrated `8`-checkpoint [MEASURED] agent-drive demo sequence implemented by `tests/e2e/e2e1_slice/demo_agent_drive.py` against the live MetaViewer stack (`tests/e2e/e2e1_slice/stack.py`).
+I use this document to specify the narrated `8`-checkpoint [MEASURED] agent-drive demo sequence implemented by `tests/e2e/e2e1_slice/demo_agent_drive.py` against the live MetaViewer stack (`tests/e2e/e2e1_slice/stack.py`). On the live `mv-live-1` browser capsule, the sequence passes `8/8` [MEASURED] checkpoints across repeated runs (including `24` [MEASURED] perceived vision marks and `24` [MEASURED] projected elements on the gate page, the `STALE_FRAME` refusal negative control, `custody_click` admitted on attempt `1` [MEASURED], verified receipt, and post-click frame, Wender state, and battery state SHA-256 transitions to `"Gate changed"`), with clean `LIVE_STACK_STOPPED` teardown (`processes=absent capsule=absent sockets=absent ram=absent state=absent`).
 
 ## 1. Design Invariants
 
@@ -33,7 +33,7 @@ export MV_WENDER_ROOT=<dir>/wender-agent
 
 ### Known Capsule Issue at Start
 
-- **Chromium `"Restore pages?"` bubble**: When the browser capsule starts or restarts after an unclean browser exit in the profile, Chromium's `"Restore pages?"` bubble may be visible at start in the top-right region of the viewport. This is a known capsule issue; the composed `ctrl+l` + `type` + `Return` navigation sequence and the custody click on the `"Advance gate"` button (`margin: 80px` [MEASURED]) operate without requiring bubble dismissal.
+- **Chromium `"Restore pages?"` bubble**: When the browser capsule starts or restarts after an unclean browser exit in the profile, Chromium's `"Restore pages?"` bubble may be visible at start in the top-right region of the viewport. The composed `ctrl+l` + `type` + `Return` navigation sequence and the custody click on the `"Advance gate"` button (`margin: 80px` [CITED: tests/e2e/e2e1_slice/demo_agent_drive.py]) are verified `8/8` [MEASURED] live; a run with the crash-restore bubble simultaneously visible on screen is not explicitly documented (`ABSENT — do not invent`).
 
 ## 3. Ordered Checkpoints and Transcript Schema
 

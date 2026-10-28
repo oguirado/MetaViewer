@@ -10,7 +10,7 @@ Before I run `stack.py start`, preflight verifies every prerequisite and fails c
   - `--display private` (default): `docker`, `Xvfb`, `xauth`, `xdpyinfo`, `xwininfo`.
   - `--display visible`: `docker`, `xdpyinfo`, `xwininfo` (uses my existing desktop `$DISPLAY` and `$XAUTHORITY`).
   - `--record <path.mp4>`: `ffmpeg` on `PATH` (checked before any process or container starts).
-  - Optional automation/probe helpers: `xdotool`, `python3` (`>=3.11` [CITED: agents/pyproject.toml]) with Pillow.
+  - Optional operator-side helpers (not used by repository code): `xdotool`, `python3` (`>=3.11` [CITED: agents/pyproject.toml]) with Pillow.
 - **Staged `capsule-ui-kit` and prebuilt shipped UI in `<clone>`**:
   - `<clone>/ui/.kit/capsule-ui-kit` is git-ignored (`ui/.kit/` in `.gitignore`) and absent on a fresh clone. Before running `npm ci --offline` or `npm run build` in `<clone>/ui`, I stage the pinned `capsule-ui-kit` package with `node tools/sync_kit.mjs <capsule-ui-kit-checkout>` (or by setting `MV_KIT_CHECKOUT` / `CAPSULE_UI_KIT_REPO`) and verify the materialized tree with `node tools/sync_kit.mjs --check` [CITED: tools/sync_kit.mjs].
   - `tools/sync_kit.mjs` requires the local `capsule-ui-kit` git checkout (either the repository root or `<checkout>/packages/capsule-ui-kit`) to match every pin in `ui/kit.lock.json`: `git remote get-url origin` must equal `https://github.com/oguirado/capsule-ui-kit.git` [CITED: ui/kit.lock.json], `git rev-parse HEAD` must equal `bf31bc201987206d16dbd88d93102f9d5ce026f9` [CITED: ui/kit.lock.json], `version` must equal `0.2.1` [CITED: ui/kit.lock.json], and the length-framed SHA-256 tree digest (`contentHash`) must equal `1bee78c76a0a2a41d085beed918ca6ca791beaf53b952d4a9367dad660fd6dc2` [CITED: ui/kit.lock.json].
@@ -27,7 +27,7 @@ Before I run `stack.py start`, preflight verifies every prerequisite and fails c
 
 ## 2. Environment Variables
 
-I export absolute paths using `$HOME`-relative, `<clone>`, or `/dev/shm` locations (never hard-coding personal host paths in tracked files). Because `stack.py` preflight rejects a missing `MV_SRF_LIVE_RAM_ROOT` or `MV_SRF_STATE_DIR` with `"live path AUSENTE"` [CITED: tests/e2e/e2e1_slice/stack.py], I run `mkdir -p` to create both directories first; both paths are per lane (one RAM root and one state dir per live lane). `MV_RECORDING_DESTINATION` also enables the **Export** control in the UI: without it, the **Export** control is disabled (`"No export destination advertised by the host"` [CITED: ui/src/recording/recordingModel.js]); with it, **Export** writes a `.tar` archive there, and the destination directory must exist (`mkdir -p`):
+I export absolute paths using `$HOME`-relative, `<clone>`, or `/dev/shm` locations (never hard-coding personal host paths in tracked files). Because `stack.py` preflight rejects a missing `MV_SRF_LIVE_RAM_ROOT` or `MV_SRF_STATE_DIR` with `"live path AUSENTE"` [CITED: tests/e2e/e2e1_slice/stack.py], I run `mkdir -p` to create both directories first; only one live stack runs per `$XDG_RUNTIME_DIR` (`$XDG_RUNTIME_DIR/metaviewer-live-stack/state.json` is a singleton that refuses concurrent runs [CITED: tests/e2e/e2e1_slice/stack.py]), and I use fresh RAM and state directories per sequential run. `MV_RECORDING_DESTINATION` also enables the **Export** control in the UI: without it, the **Export** control is disabled (`"No export destination advertised by the host"` [CITED: ui/src/recording/recordingModel.js]); with it, **Export** writes a `.tar` archive there, and the destination directory must exist (`mkdir -p`):
 
 ```bash
 export MV_E2E_LIVE=1
@@ -56,8 +56,8 @@ mkdir -p "$MV_SRF_LIVE_RAM_ROOT" "$MV_SRF_STATE_DIR" "$MV_RECORDING_DESTINATION"
 | `MV_E2E_ADAPTER_BIN` | Internal test-only `mv-daemon-adapter` binary override; leave unset for live/demo runs so `stack.py` never uses a stale binary |
 | `MV_SRF_BIN_DIR` | Directory containing `srf-identity-surface` |
 | `MV_SRF_LIVE_PROFILE` | Must be `mv-live-1` |
-| `MV_SRF_LIVE_RAM_ROOT` | Per-lane `/dev/shm` root where live capsule RGB frames are published in RAM (one RAM root per live lane; must be created first with `mkdir -p`, or preflight rejects it with `"live path AUSENTE"`) |
-| `MV_SRF_STATE_DIR` | Dedicated per-lane OpenSuperficies identity state directory in `/dev/shm` (one state dir per live lane; must be created first with `mkdir -p`, or preflight rejects it with `"live path AUSENTE"`) |
+| `MV_SRF_LIVE_RAM_ROOT` | `/dev/shm` root where live capsule RGB frames are published in RAM (use a fresh directory per sequential run; must be created first with `mkdir -p`, or preflight rejects it with `"live path AUSENTE"`) |
+| `MV_SRF_STATE_DIR` | Dedicated OpenSuperficies identity state directory in `/dev/shm` (use a fresh directory per sequential run; must be created first with `mkdir -p`, or preflight rejects it with `"live path AUSENTE"`) |
 | `SRF_IDENTITY_STORE_ROOT` | Provisioned OpenSuperficies identity store root (`$HOME/.local/share/opensuperficies/identities`) |
 | `SRF_PROXY_REGISTRY` | Provisioned OpenSuperficies proxy registry JSON (`$HOME/.local/state/opensuperficies/identity/registry/registry.json`) |
 | `MV_RECORDING_DESTINATION` | Existing destination directory outside `<clone>` (`mkdir -p`) for exported per-tile capture `.tar` archives; also enables the **Export** control in the UI (without it, **Export** is disabled with `"No export destination advertised by the host"` [CITED: ui/src/recording/recordingModel.js]) |
@@ -139,22 +139,22 @@ LIVE_STACK_READY display=:91 xauthority=/run/user/1000/metaviewer-live-stack/run
 Once `LIVE_STACK_READY` is printed, I drive the following walkthrough in the MetaViewer window (`1280x720` window [TARGET]):
 
 1. **Wall with live browser capsule tile**:
-   - I observe the `mv-live-1` browser capsule tile rendering live `rgb24` frames on the wall.
+   - I observe the single `mv-live-1` browser capsule tile rendering live `1280x900` `rgb24` frames on the wall (`2.71` fps [MEASURED] over `61.0` s [MEASURED], `192` [MEASURED] `PRESENTED` deliveries with `0` [MEASURED] `REFUSED` and `0` [MEASURED] `SUPERSEDED`, `34/34` [MEASURED] deliveries verified with `isTrusted=true` and `utilityVerified=true`; the Rust core processes each `3,456,000`-byte frame in `52.11` ms [MEASURED] p50 / `58.67` ms [MEASURED] p95, where SHA-256 hashing is `40.65` ms [MEASURED] p50 = `78`% [MEASURED] of core time, while the `2.71` fps [MEASURED] ceiling is upstream in capsule/adapter polling).
 2. **Per-tile record (`Record` / `Stop`)**:
    - I click the **Record** control in the browser tile header chrome to start a bounded in-RAM capture segment (`metaviewer.capture`), let several frame generations accumulate, and click **Stop** to seal the capture in RAM and the session journal.
 3. **Per-tile screenshot**:
    - I click the **Screenshot** control in the tile chrome to capture an immediate frame witness into the capture store and verify the updated capture badge.
 4. **Human ↔ agent control handoff**:
-   - There is one **Control** button per tile (accessible name `"Take control of <surface>"`); the tile badge flips between `"Agent acting"` and `"Human control"` (there are no separate Take/Release buttons).
-   - I click **Control** on the browser tile (`ui_intent/v0.2` takeover): the badge flips from `"Agent acting"` to `"Human control"`, and the Rust core immediately cancels any pending agent proposal with `SURFACE_NOT_AGENT_CONTROLLED` and transfers input authority to me [CITED: docs/ARCHITECTURE.md].
-   - I interact with the live browser surface directly, then click **Control** again to return control to the agent: the badge flips back to `"Agent acting"`, and the core holds agent admission closed until a fresh post-release frame generation arrives.
+   - There is one **Control** button per tile (live-verified on the wall; confirm the exact accessible name in the staged `ui/.kit` package); the tile badge flips between `"Agent acting"` and `"Human control"` (there are no separate Take/Release buttons).
+   - I click **Control** on the browser tile (`ui_intent/v0.2` takeover): a `"Request sent."` toast appears over the tile footer, the badge flips from `"Agent acting"` to `"Human control"` while the tile canvas height stays stable at `307` px [MEASURED] (Activity strip rows grow below the tile), and the Rust core immediately cancels any pending agent proposal with `SURFACE_NOT_AGENT_CONTROLLED` and transfers input authority to me [CITED: docs/ARCHITECTURE.md].
+   - I interact with the live browser surface directly (human typing bursts at `80` ms/key [MEASURED] and `20` ms/key [MEASURED] pass with `0` [MEASURED] lost characters and `0` [MEASURED] refusals), then click **Control** again to return control to the agent: the badge flips back to `"Agent acting"`, multislot returns to `READ` mode (where clicks on the wall tile or multislot cause zero scroll and emit `0` [MEASURED] `"op":"input"` journal entries), and the core holds agent admission closed until a fresh post-release frame generation arrives.
 5. **Fold and unfold**:
-   - I click **Fold** on the tile header: the tile body blanks and the label becomes **Unfold** while the tile keeps its height and the capsule continues running and publishing frames in the background; I then click **Unfold** to restore the live canvas.
+   - I click **Fold** on the tile header: the tile body blanks and the label becomes **Unfold** while the capsule continues running and publishing frames in the background (folded tile height behavior is unverified at this head); I then click **Unfold** to restore the live canvas.
 6. **Multislot layout**:
    - I click **Open in multislot** in the top bar to switch from the wall to the multislot view, and click **Back to wall** to return to the wall (`wall -> multislot -> wall`) [CITED: ui/src/App.vue].
 7. **Recording and Screenshots tables and disk export**:
    - There is no separate `"Recordings"` panel: the **Recording** and **Screenshots** tables are rendered at the bottom of the multislot view (scroll down), and **Export** is there (`MvRecordingPanel` [CITED: ui/src/App.vue]).
-   - I scroll to the bottom of the multislot view to review the sealed per-tile recordings and screenshots (frame counts and RAM footprint) and click **Export** to trigger write-ahead journaled export (`capture_request/v1`) as a deterministic PNG `.tar` under `MV_RECORDING_DESTINATION` (when `MV_RECORDING_DESTINATION` is set; without it, **Export** is disabled with `"No export destination advertised by the host"` [CITED: ui/src/recording/recordingModel.js]).
+   - I scroll to the bottom of the multislot view to review the sealed per-tile recordings and screenshots (phase, store, elapsed time, frame/dropped/duplicated counts, and TTL [CITED: ui/src/recording/MvRecordingPanel.vue]) and click **Export** to trigger the write-ahead journaled `capture_request/v1` export as a deterministic ustar `.tar` of RGB24 PNGs under `MV_RECORDING_DESTINATION` (`core/src/record/capture/export.rs`, `core/src/serve/capture.rs`; code-complete at this head, live `.tar` export run `ABSENT — do not invent`; without `MV_RECORDING_DESTINATION`, **Export** is disabled with `"No export destination advertised by the host"` [CITED: ui/src/recording/recordingModel.js]).
 
 ## 5. Whole-Screen Demo Recording (`--record <path.mp4>`)
 
@@ -201,17 +201,20 @@ LIVE_STACK_STOPPED processes=absent capsule=absent sockets=absent ram=absent sta
 - `systemctl --user is-active mv-demo.scope` reports `inactive`.
 - For `--display private`, `/tmp/.X11-unix/X<NN>` is absent.
 - `docker ps -a --format '{{.Names}}'` and `ls "$MV_SRF_LIVE_RAM_ROOT"` contain no leftover `srf-id-*` entries from the run.
-- When `--record /tmp/metaviewer-demo.mp4` was used, I run `ffprobe -v error -show_entries format=duration,size:stream=codec_name -of json /tmp/metaviewer-demo.mp4` as the finalization check (the file is `~48` bytes [MEASURED] until the recorder is stopped; after `stop`, `ffprobe` confirms the finalized `h264` stream, duration, and byte size).
+- When `--record /tmp/metaviewer-demo.mp4` was used, I run `ffprobe -v error -show_entries format=duration,size:stream=codec_name -of json /tmp/metaviewer-demo.mp4` as the finalization check (the file stays tiny and unfinalized until `stop` sends `SIGINT` to `ffmpeg` [CITED: tests/e2e/e2e1_slice/stack.py] — exact unfinalized byte size is unverified; after `stop`, `ffprobe` confirms the finalized `h264` stream, duration, and byte size).
 
-## 7. Known Issues
+## 7. Known Issues and Harness Limits
 
-- **Wall tile may stay black until the first multislot round trip (`L8-1`, under investigation)**:
-  - On initial startup, the wall tile may stay black until the first multislot round trip (**Open in multislot** followed by **Back to wall**).
-- **Tile rescales slightly when an Activity row appears (`L7-1`)**:
-  - The wall tile rescales slightly when an Activity row appears in the activity strip.
 - **Chromium `"Restore pages?"` prompt after stop (`L2-9`, capsule owner scope)**:
-  - Stopping the capsule container via `srf-identity-surface stop` terminates Chromium inside the container, so the persistent profile records an unclean exit and displays `"Restore pages?"` on subsequent launches (observed across live verification runs through `f256bc40` [MEASURED]).
+  - Stopping the capsule container via `srf-identity-surface stop` terminates Chromium inside the container, so the persistent profile records an unclean exit and displays `"Restore pages?"` on subsequent launches (observed across live verification runs including `live15` [MEASURED]; re-confirm at the current head).
   - This behavior lives inside the OpenSuperficies capsule runtime (out of scope for `stack.py`) and is tracked for the capsule owner (either closing Chromium gracefully before container stop or passing `--hide-crash-restore-bubble` / `--disable-session-crashed-bubble` in the capsule entrypoint). During a live demo, I dismiss the bubble or click takeover and close it once.
+- **Lost-capsule UI state is pre-empted by `stack.py` supervisor teardown**:
+  - When a running `srf-id-*` capsule container exits unexpectedly, the wall tile retains the last painted frame (`status: "live"`, no `"Connecting to surface"` placeholder), and within `~1.5` s [MEASURED] the `stack.py` supervisor logs `native surface error … code capture_failed` and runs `LIVE_STACK_CLEANUP`, stopping X, Electron, `metaviewer-core`, and `mv-daemon-adapter` before a `"Capsule lost"` badge can be observed under `stack.py`.
+- **Settings persistence across `stack.py stop` / `start` runs**:
+  - `stack.py` isolates `XDG_CONFIG_HOME=<work>/config` inside the per-run work directory (`tests/e2e/e2e1_slice/stack.py:1268`) and removes `<work>` on `stop`. Switching the theme to `mv-dark` in Settings applies live and writes `<run>/config/metaviewer/settings.json`, but a subsequent `stack.py start` creates a fresh `<work>/config` and boots in `mv-light` (density is a fixed `"Compact"` readout).
+- **Resolved earlier notes**:
+  - `L8-1` (wall tile black until first multislot round trip): resolved and holding (`PASS 3/3` [MEASURED] first paint directly from `LIVE_STACK_READY` without a multislot round trip).
+  - `L7-1` (tile rescale when an Activity row appears): not reproduced on current live runs (`307` px [MEASURED] tile canvas height remains constant before, during, and after control take/release while Activity rows append below the tile).
 
 ## 8. Troubleshooting (`tools/sync_kit.mjs` and `stack.py` Typed Errors)
 
@@ -300,8 +303,9 @@ export MV_WENDER_ROOT="<wender-agent-checkout>"
 
 ### Offline self-test (injected peer)
 
-To verify the ordered checkpoints, `STALE_FRAME` negative control, transient retry loop (`3` [MEASURED] max attempts), `MV_WENDER_PLANNER_CMD` subprocess path, transcript schema validator, `SCM_RIGHTS` `control.sock` handoff, and session state guards without live containers (`7` [MEASURED] unit tests in `test_demo_agent_drive.py` and `16` [MEASURED] unit tests in `test_stack_demo.py`):
+To verify the ordered checkpoints, `STALE_FRAME` negative control, transient retry loop (`3` [MEASURED] max attempts), `MV_WENDER_PLANNER_CMD` subprocess path, transcript schema validator, `SCM_RIGHTS` `control.sock` handoff, and session state guards without live containers, `python3 tests/e2e/e2e1_slice/demo_agent_drive.py --self-test` runs the `12` [MEASURED] unit tests in `tests/e2e/e2e1_slice/test_demo_agent_drive.py` [CITED: tests/e2e/e2e1_slice/demo_agent_drive.py], and `python3 -m unittest tests.e2e.e2e1_slice.test_stack_demo -v` runs the `16` [MEASURED] unit tests in `tests/e2e/e2e1_slice/test_stack_demo.py`:
 
 ```bash
 python3 tests/e2e/e2e1_slice/demo_agent_drive.py --self-test
+python3 -m unittest tests.e2e.e2e1_slice.test_stack_demo -v
 ```
