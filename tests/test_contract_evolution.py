@@ -92,6 +92,19 @@ def classify_field_diff(old_prop, new_prop):
         if "items" not in old_prop or classify_field_diff(old_prop["items"], new_prop["items"]):
             changes.append("items_narrowed")
 
+    if "$ref" in new_prop:
+        if "$ref" not in old_prop or new_prop["$ref"] != old_prop["$ref"]:
+            changes.append("ref_narrowed")
+
+    if "oneOf" in new_prop:
+        if "oneOf" not in old_prop or not new_prop["oneOf"]:
+            changes.append("oneOf_narrowed")
+        else:
+            for old_branch in old_prop["oneOf"]:
+                if all(bool(classify_field_diff(old_branch, new_branch)) for new_branch in new_prop["oneOf"]):
+                    changes.append("oneOf_narrowed")
+                    break
+
     return changes
 
 
@@ -162,6 +175,19 @@ def classify_response_field_diff(old_prop, new_prop):
         if "items" not in new_prop or classify_response_field_diff(old_prop["items"], new_prop["items"]):
             changes.append("items_widened")
 
+    if "$ref" in old_prop:
+        if "$ref" not in new_prop or new_prop["$ref"] != old_prop["$ref"]:
+            changes.append("ref_widened")
+
+    if "oneOf" in old_prop:
+        if "oneOf" not in new_prop or not old_prop["oneOf"]:
+            changes.append("oneOf_widened")
+        else:
+            for new_branch in new_prop["oneOf"]:
+                if all(bool(classify_response_field_diff(old_branch, new_branch)) for old_branch in old_prop["oneOf"]):
+                    changes.append("oneOf_widened")
+                    break
+
     return changes
 
 
@@ -205,6 +231,16 @@ def is_request_breaking(old_schema, new_schema):
             diffs = classify_field_diff(old_p, new_props[name])
             if diffs:
                 return True
+
+    if "oneOf" in new_schema:
+        if "oneOf" not in old_schema or not new_schema["oneOf"]:
+            return True
+        for old_branch in old_schema["oneOf"]:
+            if all(
+                is_request_breaking(old_branch, new_branch) or bool(classify_field_diff(old_branch, new_branch))
+                for new_branch in new_schema["oneOf"]
+            ):
+                return True
     return False
 
 
@@ -247,6 +283,16 @@ def is_response_breaking(old_schema, new_schema):
         if name in old_props:
             diffs = classify_response_field_diff(old_props[name], new_p)
             if diffs:
+                return True
+
+    if "oneOf" in old_schema:
+        if "oneOf" not in new_schema or not old_schema["oneOf"]:
+            return True
+        for new_branch in new_schema["oneOf"]:
+            if all(
+                is_response_breaking(old_branch, new_branch) or bool(classify_response_field_diff(old_branch, new_branch))
+                for old_branch in old_schema["oneOf"]
+            ):
                 return True
     return False
 
@@ -422,13 +468,22 @@ class ContractEvolutionTests(unittest.TestCase):
         orig_run = rmh._run_suite
         try:
             rmh.MUTANTS = [("M-dead: surviving mutant", lambda: (lambda: None))]
-            rmh._run_suite = lambda: 0
+            rmh._run_suite = lambda: (0, 0)
             with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as cm:
                 rmh.main()
             self.assertEqual(cm.exception.code, 1)
 
-            # Negative control: when the mutant is killed (fails > 0 after baseline 0), main returns normally.
-            calls = iter([0, 3])
+            # Runtime/import errors (result.errors > 0) are harness failures, never mutant kills.
+            for errored_counts in ((0, 1), (2, 1)):
+                calls = iter([(0, 0), errored_counts])
+                rmh.MUTANTS = [("M-error: runtime error mutant", lambda: (lambda: None))]
+                rmh._run_suite = lambda: next(calls)
+                with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as cm:
+                    rmh.main()
+                self.assertEqual(cm.exception.code, 1)
+
+            # Negative control: when the mutant is killed (fails > 0, errors == 0 after baseline (0, 0)), main returns normally.
+            calls = iter([(0, 0), (3, 0)])
             rmh.MUTANTS = [("M-killed: detected mutant", lambda: (lambda: None))]
             rmh._run_suite = lambda: next(calls)
             with redirect_stdout(io.StringIO()):
@@ -480,6 +535,24 @@ class ContractEvolutionTests(unittest.TestCase):
 
         # Adding 2 oneOf branches to ui_intent is backward-compatible for stored data/requests (den(v1) <= den(v2))
         self.assertFalse(is_request_breaking(ui_v1_synth, ui_v2))
+        self.assertFalse(is_response_breaking(ui_v2, ui_v1_synth))
+        self.assertTrue(is_request_breaking(ui_v2, ui_v1_synth))
+        self.assertTrue(is_response_breaking(ui_v1_synth, ui_v2))
+
+        # Reverse-pair branch removal negative control: deleting 'move' breaks requests and widens responses in reverse.
+        ui_without_move = copy.deepcopy(ui_v2)
+        ui_without_move["oneOf"] = [
+            b for b in ui_v2["oneOf"] if b.get("properties", {}).get("op", {}).get("const") != "move"
+        ]
+        self.assertEqual(len(ui_without_move["oneOf"]), len(ui_v2["oneOf"]) - 1)
+        self.assertTrue(is_request_breaking(ui_v2, ui_without_move))
+        self.assertTrue(is_response_breaking(ui_without_move, ui_v2))
+        self.assertFalse(is_request_breaking(ui_without_move, ui_v2))
+        self.assertFalse(is_response_breaking(ui_v2, ui_without_move))
+        self.assertIn("oneOf_narrowed", classify_field_diff(ui_v2, ui_without_move))
+        self.assertEqual(classify_field_diff(ui_without_move, ui_v2), [])
+        self.assertIn("oneOf_widened", classify_response_field_diff(ui_without_move, ui_v2))
+        self.assertEqual(classify_response_field_diff(ui_v2, ui_without_move), [])
 
         # Positive control: take_control validates under ui_v2, but fails under the 10-branch ui_v1_synth
         take_control_msg = {

@@ -107,6 +107,8 @@ class GateTests(unittest.TestCase):
                    "    def test_witness(self):\n"
                    "        with open('agents.calls', 'a') as f: f.write('asserted\\n')\n"
                    "        self.assertEqual(2 + 2, 4)\n")
+        self.write('agents/tests/run_mutant_harness.py',
+                   "with open('mutant.calls', 'a') as f: f.write('asserted\\n')\n")
 
     def write(self, name, content):
         path = self.fixture / name
@@ -304,6 +306,20 @@ class GateTests(unittest.TestCase):
     def test_agents_leg_failure_and_missing_directory(self):
         self.assertIn('PASS agents', self.call('--leg', 'agents'))
         self.assertEqual((self.fixture / 'agents.calls').read_text(), 'asserted\n')
+        self.assertEqual((self.fixture / 'mutant.calls').read_text(), 'asserted\n')
+        self.write('agents/tests/run_mutant_harness.py',
+                   'import sys\nprint("planted mutant harness failure", file=sys.stderr)\nsys.exit(1)\n')
+        output = self.call('--leg', 'agents', expected=1)
+        self.assertIn('planted mutant harness failure', output)
+        self.assertIn('FAIL agents\n', output)
+        self.assertIn('FAIL aggregate\n', output)
+        (self.fixture / 'agents/tests/run_mutant_harness.py').unlink()
+        output = self.call('--leg', 'agents', expected=1)
+        self.assertIn('missing target: agents/tests/run_mutant_harness.py', output)
+        self.assertIn('FAIL agents\n', output)
+        self.assertIn('FAIL aggregate\n', output)
+        self.write('agents/tests/run_mutant_harness.py',
+                   "with open('mutant.calls', 'a') as f: f.write('asserted\\n')\n")
         self.write('agents/tests/test_witness.py',
                    'import unittest\nclass T(unittest.TestCase):\n'
                    ' def test_failure(self): self.fail("planted agents failure")\n')
@@ -801,9 +817,11 @@ class GateTests(unittest.TestCase):
         self.assertEqual((self.fixture / 'unit.calls').read_text(), 'asserted\n')
         self.assertEqual((self.fixture / 'contract.calls').read_text(), 'called\n')
         self.assertEqual((self.fixture / 'agents.calls').read_text(), 'asserted\n')
+        self.assertEqual((self.fixture / 'mutant.calls').read_text(), 'asserted\n')
         self.assertTrue((self.fixture / 'perf.calls').is_file())
         agents_test = self.fixture / 'agents/tests/test_witness.py'
         original_agents_test = agents_test.read_text()
+        original_mutant_harness = (self.fixture / 'agents/tests/run_mutant_harness.py').read_text()
         agents_test.write_text('import unittest\nclass T(unittest.TestCase):\n'
                                ' def test_failure(self): self.fail("planted agents failure")\n')
         output = self.call(expected=1, env=environment)
@@ -819,6 +837,7 @@ class GateTests(unittest.TestCase):
         self.assertIn('FAIL aggregate\n', output)
         self.assertNotIn('PASS agents', output)
         self.write('agents/tests/test_witness.py', original_agents_test)
+        self.write('agents/tests/run_mutant_harness.py', original_mutant_harness)
         self.call('--leg', 'laws')
         scratch = (self.fixture / 'scratch.calls').read_text().splitlines()
         self.assertEqual(scratch[0], scratch[1])
@@ -1596,11 +1615,22 @@ def leaf(leg, root, environment):
         if not (root / 'agents/tests').is_dir():
             print('missing target: agents/tests', file=sys.stderr)
             return 1
-        rc = bounded(['python3', '-m', 'unittest', 'discover', '-s', 'agents/tests'],
-                     root, environment, seconds=300)
-        if rc:
-            print(f'{leg}: child rc={rc}', file=sys.stderr)
-        return 0 if rc == 0 else 124 if rc == 124 else 1
+        if not (root / 'agents/tests/run_mutant_harness.py').is_file():
+            print('missing target: agents/tests/run_mutant_harness.py', file=sys.stderr)
+            return 1
+        deadline = time.monotonic() + 300
+        for command in (
+            ['python3', '-m', 'unittest', 'discover', '-s', 'agents/tests'],
+            ['python3', 'agents/tests/run_mutant_harness.py'],
+        ):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return 124
+            rc = bounded(command, root, environment, seconds=remaining)
+            if rc:
+                print(f'{leg}: child rc={rc}', file=sys.stderr)
+                return 124 if rc == 124 else 1
+        return 0
     targets = {
         'manifests': ('VERSION', *FILES),
         'laws': ('VERSION', 'CHANGELOG.md', 'tools/check_laws.py'),

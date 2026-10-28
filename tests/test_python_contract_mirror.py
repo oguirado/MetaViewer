@@ -18,6 +18,46 @@ from metaviewer_agents._contracts_v02 import FILES as _RAW_V02_FILES
 from metaviewer_agents.envelope import _V02_FILES
 
 
+def _conjoin_normalized(base, sibling):
+    """Conjoin a resolved local $ref schema with normalized sibling constraints."""
+    if not isinstance(base, dict) or not isinstance(sibling, dict):
+        return sibling
+    merged = copy.deepcopy(base)
+    for key, value in sibling.items():
+        if key not in merged:
+            merged[key] = copy.deepcopy(value)
+        elif key in ("maximum", "maxLength", "maxItems", "maxProperties"):
+            merged[key] = min(merged[key], value)
+        elif key in ("minimum", "minLength", "minItems", "minProperties"):
+            merged[key] = max(merged[key], value)
+        elif key == "required":
+            merged[key] = sorted(
+                {json.dumps(item, sort_keys=True): item for item in (*merged[key], *value)}.values(),
+                key=lambda item: json.dumps(item, sort_keys=True),
+            )
+        elif key == "enum":
+            allowed = {json.dumps(item, sort_keys=True) for item in value}
+            merged[key] = sorted(
+                [item for item in merged[key] if json.dumps(item, sort_keys=True) in allowed],
+                key=lambda item: json.dumps(item, sort_keys=True),
+            )
+        elif key == "additionalProperties":
+            merged[key] = False if (merged[key] is False or value is False) else value
+        elif key == "properties":
+            props = copy.deepcopy(merged[key])
+            for prop_name, prop_schema in value.items():
+                if prop_name in props:
+                    props[prop_name] = _conjoin_normalized(props[prop_name], prop_schema)
+                else:
+                    props[prop_name] = copy.deepcopy(prop_schema)
+            merged[key] = props
+        elif key == "items" and isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = _conjoin_normalized(merged[key], value)
+        else:
+            merged[key] = copy.deepcopy(value)
+    return merged
+
+
 def normalized(node, root):
     """Inline local definitions and account for the decoder's global bounds."""
     if isinstance(node, list):
@@ -25,14 +65,17 @@ def normalized(node, root):
     if not isinstance(node, dict):
         return node
     ref = node.get("$ref", "")
+    local_target = None
     if ref.startswith("#/"):
         target = root
         for part in ref[2:].split("/"):
             target = target[part.replace("~1", "/").replace("~0", "~")]
-        return normalized(target, root)
+        local_target = normalized(target, root)
     result = {}
     for key, value in node.items():
         if key in ("$schema", "$id", "title", "description", "$defs"):
+            continue
+        if key == "$ref" and ref.startswith("#/"):
             continue
         # validate_envelope applies these bounds to every JSON integer.
         if (key == "maximum" and value == (1 << 53) - 1
@@ -48,6 +91,8 @@ def normalized(node, root):
     for key in ("oneOf", "required", "enum"):
         if key in result:
             result[key] = sorted(result[key], key=lambda value: json.dumps(value, sort_keys=True))
+    if local_target is not None:
+        return _conjoin_normalized(local_target, result) if result else local_target
     return result
 
 
@@ -127,6 +172,39 @@ class PythonContractMirrorTests(unittest.TestCase):
         self.assertEqual(len(inlined_frames), 2)
         for frame_block in inlined_frames:
             self.assertEqual(frame_block, canonical_frame)
+
+    def test_local_ref_sibling_constraint_drift_is_detected(self):
+        terminal_path = ROOT / "contracts/v0.2/terminal_session.schema.json"
+        canonical = json.loads(terminal_path.read_text(encoding="utf-8"))
+        mirror = _V02_FILES["terminal_session.schema.json"]
+        self.assertEqual(normalized(canonical, canonical), normalized(mirror, mirror))
+
+        # Mutate local $ref in nullable_id (where target #/$defs/id has maxLength 128)
+        # by adding a stricter sibling maxLength 127.
+        mutant = copy.deepcopy(canonical)
+        mutant["$defs"]["nullable_id"]["oneOf"][0]["maxLength"] = 127
+        norm_mutant = normalized(mutant, mutant)
+        self.assertNotEqual(norm_mutant, normalized(mirror, mirror))
+
+        # Neither target (128) nor sibling (128) may overwrite a stricter 127 bound.
+        stricter_sibling = {
+            "$defs": {"id": {"type": "string", "minLength": 1, "maxLength": 128}},
+            "type": "object",
+            "properties": {"sid": {"$ref": "#/$defs/id", "maxLength": 127}},
+        }
+        stricter_target = {
+            "$defs": {"id": {"type": "string", "minLength": 1, "maxLength": 127}},
+            "type": "object",
+            "properties": {"sid": {"$ref": "#/$defs/id", "maxLength": 128}},
+        }
+        self.assertEqual(
+            normalized(stricter_sibling, stricter_sibling)["properties"]["sid"]["maxLength"],
+            127,
+        )
+        self.assertEqual(
+            normalized(stricter_target, stricter_target)["properties"]["sid"]["maxLength"],
+            127,
+        )
 
 
 if __name__ == "__main__":

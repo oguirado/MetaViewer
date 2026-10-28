@@ -23,13 +23,20 @@ import metaviewer_agents.observe as observe_mod
 import metaviewer_agents.tools as tools_mod
 
 
-def _run_suite() -> int:
-    """Run all unit tests under agents/tests/ and return the number of failures/errors."""
+def _run_suite() -> tuple[int, int]:
+    """Run all unit tests under agents/tests/ and return (failures, errors)."""
     loader = unittest.TestLoader()
     suite = loader.discover(str(ROOT / "agents" / "tests"))
-    runner = unittest.TextTestRunner(stream=open(os.devnull, "w"), verbosity=0)
-    result = runner.run(suite)
-    return len(result.failures) + len(result.errors)
+    with open(os.devnull, "w", encoding="utf-8") as devnull:
+        runner = unittest.TextTestRunner(stream=devnull, verbosity=0)
+        result = runner.run(suite)
+    return len(result.failures), len(result.errors)
+
+
+def _unpack_suite_counts(outcome) -> tuple[int, int]:
+    if isinstance(outcome, tuple):
+        return int(outcome[0]), int(outcome[1])
+    return int(outcome), 0
 
 
 def _patch_all_modules(attr_name, new_val):
@@ -64,11 +71,14 @@ def _apply_mutant_1():
 
 def _apply_mutant_2():
     # Accept extra key in envelope.py
-    orig = envelope_mod._OUTER_KEYS
-    envelope_mod._OUTER_KEYS = frozenset(list(orig) + ["extra_key"])
-    def restore():
-        envelope_mod._OUTER_KEYS = orig
-    return restore
+    orig_validate = envelope_mod.validate_envelope
+    def bad_validate(value):
+        if isinstance(value, dict) and envelope_mod._OUTER_KEYS.issubset(value):
+            stripped = {k: value[k] for k in envelope_mod._OUTER_KEYS}
+            orig_validate(stripped)
+            return value
+        return orig_validate(value)
+    return _patch_all_modules("validate_envelope", bad_validate)
 
 
 def _apply_mutant_3():
@@ -76,7 +86,7 @@ def _apply_mutant_3():
     orig = mvctl_mod._refuse
     def bad_refuse(code):
         record = {"verdict": "refuse", "code": code, "error": code + "_echoed_input_details"}
-        print(record, file=sys.stderr)
+        print(mvctl_mod.json.dumps(record, separators=(",", ":"), allow_nan=False), file=sys.stderr)
     mvctl_mod._refuse = bad_refuse
     def restore():
         mvctl_mod._refuse = orig
@@ -160,7 +170,10 @@ def _apply_mutant_6():
         if value < minimum:
             observe_mod._fail("bad_shape", "%s below minimum" % name)
         return value
-    return _patch_all_modules("_check_int", bad_check_int)
+    observe_mod._check_int = bad_check_int
+    def restore():
+        observe_mod._check_int = orig
+    return restore
 
 
 def _apply_mutant_7():
@@ -188,15 +201,36 @@ def _apply_mutant_8():
             else:
                 try:
                     message = mcp_mod._decode_frame(raw.decode("utf-8"))
-                except Exception:
+                except (UnicodeError, ValueError, RecursionError):
                     response = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}}
                 else:
                     response = await server.handle(message)
             if response is not None:
-                output = mcp_mod.json.dumps(response, separators=(",", ":")).encode("utf-8")
+                try:
+                    output = mcp_mod.json.dumps(
+                        response, separators=(",", ":"), allow_nan=False
+                    ).encode("utf-8")
+                except (ValueError, TypeError, OverflowError, RecursionError):
+                    output = b""
+                if not output or len(output) + 1 > mcp_mod.MAX_FRAME_BYTES:
+                    ident = response.get("id") if isinstance(response, dict) else None
+                    if not mcp_mod._bounded_id(ident):
+                        ident = None
+                    output = mcp_mod.json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": ident,
+                            "error": {"code": -32603, "message": "Response too large"},
+                        },
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                if len(output) + 1 > mcp_mod.MAX_FRAME_BYTES:
+                    output = b'{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"Response too large"}}'
+                if len(output) + 1 > mcp_mod.MAX_FRAME_BYTES:
+                    return
                 writer.write(output + b"\n")
                 writer.flush()
-            # MUTANT: Omitted `if len(raw) > MAX_FRAME_BYTES: return` -> loop keeps serving!
+            # MUTANT: Omitted `if len(raw) > MAX_FRAME_BYTES or not raw.endswith(b"\n"): return` -> loop keeps serving!
     return _patch_all_modules("serve", bad_serve)
 
 
@@ -214,32 +248,46 @@ MUTANTS = [
 
 def main():
     print("=== SW-0065 Mutant Injection Matrix ===")
-    print(f"Ground truth baseline check...")
-    baseline_fails = _run_suite()
-    print(f"Ground truth test failures: {baseline_fails}")
-    if baseline_fails != 0:
+    if not MUTANTS:
+        print("ERROR: Mutant set is empty (M == 0)! Aborting.")
+        sys.exit(1)
+    print("Ground truth baseline check...")
+    baseline_fails, baseline_errors = _unpack_suite_counts(_run_suite())
+    print(f"Ground truth test failures: {baseline_fails}, errors: {baseline_errors}")
+    if baseline_fails != 0 or baseline_errors != 0:
         print("ERROR: Ground truth fails before mutation! Aborting.")
         sys.exit(1)
 
     results = []
     for name, applier in MUTANTS:
         restore = applier()
-        fails = _run_suite()
-        restore()
-        class_str = "conforming" if fails > 0 else "dead oracle"
-        results.append((name, fails, class_str))
+        try:
+            fails, errors = _unpack_suite_counts(_run_suite())
+        finally:
+            restore()
+        if errors > 0:
+            class_str = "harness error"
+        elif fails > 0:
+            class_str = "conforming"
+        else:
+            class_str = "dead oracle"
+        results.append((name, fails, errors, class_str))
 
-    print("\n| ID | Mutant Description | Fails (contrast_rc) | Class |")
-    print("|---|---|---|---|")
-    for idx, (name, fails, cls) in enumerate(results, 1):
-        print(f"| M{idx} | {name} | {fails} | {cls} |")
+    print("\n| ID | Mutant Description | Fails (contrast_rc) | Errors | Class |")
+    print("|---|---|---|---|---|")
+    for idx, (name, fails, errors, cls) in enumerate(results, 1):
+        print(f"| M{idx} | {name} | {fails} | {errors} | {cls} |")
 
-    dead = [r for r in results if r[2] == "dead oracle"]
-    if dead:
-        print(f"\nWARNING: Found {len(dead)} dead oracles!")
+    errored = [r for r in results if r[3] == "harness error"]
+    dead = [r for r in results if r[3] == "dead oracle"]
+    killed = [r for r in results if r[3] == "conforming" and r[1] > 0 and r[2] == 0]
+    if errored or dead or len(killed) != len(MUTANTS):
+        if errored:
+            print(f"\nERROR: Found {len(errored)} mutants with runtime/import errors!")
+        if dead:
+            print(f"\nWARNING: Found {len(dead)} dead oracles!")
         sys.exit(1)
-    else:
-        print("\nSUCCESS: All mutants turned the suite red (contrast_rc > 0). Oracle is 100% conforming.")
+    print("\nSUCCESS: All mutants turned the suite red (contrast_rc > 0, errors == 0). Oracle is 100% conforming.")
 
 
 if __name__ == "__main__":

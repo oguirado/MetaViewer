@@ -15,6 +15,7 @@ import warnings
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "agents" / "tests"))
 sys.path.insert(0, str(ROOT / "agents"))
 sys.path.insert(0, str(ROOT))
 import test_tools as fixture
@@ -63,16 +64,39 @@ class ContractGapTests(unittest.TestCase):
 
     def test_raw_contracts_and_examples_have_no_stale_version_pins(self):
         # Mutation: replace any v0.2 schema const in contracts/v0.2 with v0.1.
+        def collect_decoded_v01(node, prefix="$"):
+            hits = []
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    if isinstance(key, str) and "/v0.1" in key:
+                        hits.append(f"{prefix}.{key}")
+                    hits.extend(collect_decoded_v01(value, f"{prefix}.{key}"))
+            elif isinstance(node, list):
+                for idx, item in enumerate(node):
+                    hits.extend(collect_decoded_v01(item, f"{prefix}[{idx}]"))
+            elif isinstance(node, str) and "/v0.1" in node:
+                hits.append(f"{prefix}={node}")
+            return hits
+
         schemas = sorted((ROOT / "contracts/v0.2").glob("*.schema.json"))
         examples = sorted((ROOT / "contracts/examples/v0.2").glob("*.json"))
         self.assertTrue(schemas)
         self.assertTrue(examples)
         for path in schemas + examples:
             with self.subTest(path=path.name):
-                self.assertNotIn("/v0.1", path.read_text(encoding="utf-8"))
-        # Negative control: no normalization is allowed in this instrument.
+                raw = path.read_text(encoding="utf-8")
+                self.assertNotIn("/v0.1", raw)
+                self.assertEqual(collect_decoded_v01(json.loads(raw)), [])
+        # Negative controls: raw text and JSON-escaped (\u002f) stale pins are both caught.
         stale = json.dumps({"schema": "observation/v0.1"})
         self.assertIn("/v0.1", stale)
+        self.assertEqual(collect_decoded_v01(json.loads(stale)), ["$.schema=observation/v0.1"])
+        escaped_stale = '{"schema": "observation\\u002fv0.1"}'
+        self.assertNotIn("/v0.1", escaped_stale)
+        self.assertEqual(
+            collect_decoded_v01(json.loads(escaped_stale)),
+            ["$.schema=observation/v0.1"],
+        )
 
     def test_raw_source_oracle_accepts_examples_and_rejects_closed_mutants(self):
         # Mutation: validate_envelope returns value before validating body keys.
