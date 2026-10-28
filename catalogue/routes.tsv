@@ -1164,6 +1164,7 @@ inputWrite.js	ui/src/fixtures/inputWrite.js
 liveReplay.js	ui/src/fixtures/liveReplay.js
 resolveState.js	ui/src/fixtures/resolveState.js
 states.js	ui/src/fixtures/states.js
+terminalLive.js	ui/src/fixtures/terminalLive.js
 tileChrome.js	ui/src/fixtures/tileChrome.js
 framePortRouter.js	ui/src/frames/framePortRouter.js
 frameMap.js	ui/src/input/frameMap.js
@@ -1364,6 +1365,17 @@ mvui27s-de7f7adc38f2	ui/test/mvui27-shield-noscroll.test.js
 mvui28i-59667390d52d	ui/test/mvui28-input-activity.test.js
 mvui28i-8d374f22af4d	ui/test/mvui28-input-double-results.test.js
 mvui28i-2061431bf36e	ui/test/mvui28-input-results.test.js
+mvui29t-f98e58905453	ui/test/mvui29-terminal-copy.test.js
+mvui29t-518a9419efa7	ui/test/mvui29-terminal-fixture.test.js
+mvui29t-0d5885d53404	ui/test/mvui29-terminal-launch.test.js
+mvui29t-e99216323f86	ui/test/mvui29-terminal-session.test.js
+mvui29c-47decd6ec67c	ui/test/mvui29c-app-wiring.test.js
+mvui29c-afaf818a5567	ui/test/mvui29c-main-wiring.test.js
+mvui29d-92caa3abef42	ui/test/mvui29d-attach-close.test.js
+mvui29d-132c8b65a668	ui/test/mvui29d-attach-order.test.js
+mvui29d-4523fc869203	ui/test/mvui29d-close-routing.test.js
+mvui29d-08675e82a224	ui/test/mvui29d-fixture-broker.test.js
+mvui29d-b8e07ee7716d	ui/test/mvui29d-transport-swap.test.js
 mvui29s-27659e7ed5fa	ui/test/mvui29s-settings-boot.test.js
 mvui29s-33668a3484de	ui/test/mvui29s-settings-debounce.test.js
 mvui29s-ca1096a0f73a	ui/test/mvui29s-settings-persistence.test.js
