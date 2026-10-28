@@ -26,17 +26,22 @@ import (
 
 func writeTestPNG(t *testing.T, root string) (string, string) {
 	t.Helper()
+	return writeTestPNGNamed(t, root, "f.png", color.NRGBA{R: 255, A: 255})
+}
+
+func writeTestPNGNamed(t *testing.T, root, name string, firstPixel color.NRGBA) (string, string) {
+	t.Helper()
 	source := filepath.Join(root, "demo-run", "frames", "w1")
 	if err := os.MkdirAll(source, 0700); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(source, "f.png")
+	path := filepath.Join(source, name)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		t.Fatal(err)
 	}
 	img := image.NewNRGBA(image.Rect(0, 0, 2, 1))
-	img.Set(0, 0, color.NRGBA{R: 255, A: 255})
+	img.Set(0, 0, firstPixel)
 	img.Set(1, 0, color.NRGBA{G: 255, A: 255})
 	if err := png.Encode(f, img); err != nil {
 		_ = f.Close()
@@ -45,7 +50,7 @@ func writeTestPNG(t *testing.T, root string) (string, string) {
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}
-	sum := sha256.Sum256([]byte{255, 0, 0, 0, 255, 0})
+	sum := sha256.Sum256([]byte{firstPixel.R, firstPixel.G, firstPixel.B, 0, 255, 0})
 	return path, fmt.Sprintf("%x", sum)
 }
 
@@ -111,12 +116,20 @@ func TestT2R203ShutdownCleanupDestroysActiveSurfaces(t *testing.T) {
 }
 
 type r204Runner struct {
+	mu           sync.Mutex
 	pngPath, sha string
 	inputEntered chan struct{}
 	finishInput  chan struct{}
 	seq          atomic.Uint64
 	stopped      atomic.Bool
 	framesAfter  atomic.Int32
+}
+
+func (r *r204Runner) setFrame(pngPath, sha string) {
+	r.mu.Lock()
+	r.pngPath = pngPath
+	r.sha = sha
+	r.mu.Unlock()
 }
 
 func (r *r204Runner) Run(ctx context.Context, args []string, _ []byte) ([]byte, error) {
@@ -127,11 +140,14 @@ func (r *r204Runner) Run(ctx context.Context, args []string, _ []byte) ([]byte, 
 		if r.stopped.Load() {
 			r.framesAfter.Add(1)
 		}
+		r.mu.Lock()
+		pngPath, sha := r.pngPath, r.sha
+		r.mu.Unlock()
 		seq := r.seq.Add(1)
 		b, _ := json.Marshal(map[string]any{
-			"path":            r.pngPath,
+			"path":            pngPath,
 			"seq":             seq,
-			"sha256_rgb24":    r.sha,
+			"sha256_rgb24":    sha,
 			"width":           2,
 			"height":          1,
 			"capture_mono_ns": 200,
@@ -154,6 +170,35 @@ func (r *r204Runner) Run(ctx context.Context, args []string, _ []byte) ([]byte, 
 	return nil, context.Canceled
 }
 
+type r204SubscriptionSource struct {
+	frames.Source
+	emitted        <-chan json.RawMessage
+	polls          atomic.Uint64
+	poll2Entered   chan struct{}
+	releasePoll2   chan struct{}
+	poll2Cancelled chan struct{}
+	poll2NoEmit    chan struct{}
+	noEmitOnce     sync.Once
+}
+
+func (s *r204SubscriptionSource) Capture(ctx context.Context, id string) (capsule.Binding, capsule.NativeFrame, error) {
+	switch s.polls.Add(1) {
+	case 2:
+		close(s.poll2Entered)
+		select {
+		case <-s.releasePoll2:
+		case <-ctx.Done():
+			close(s.poll2Cancelled)
+			return capsule.Binding{}, capsule.NativeFrame{}, ctx.Err()
+		}
+	case 3:
+		if len(s.emitted) == 0 {
+			s.noEmitOnce.Do(func() { close(s.poll2NoEmit) })
+		}
+	}
+	return s.Source.Capture(ctx, id)
+}
+
 // T2-R2-04: refused destroy while input is pending must keep the subscription alive;
 // negative control: idle destroy still drains subscriptions before native stop.
 func TestT2R204DestroyRefusedWhilePendingKeepsSubscription(t *testing.T) {
@@ -163,6 +208,7 @@ func TestT2R204DestroyRefusedWhilePendingKeepsSubscription(t *testing.T) {
 	}
 	defer os.RemoveAll(root)
 	pngPath, sha := writeTestPNG(t, root)
+	pngPath2, sha2 := writeTestPNGNamed(t, root, "f2.png", color.NRGBA{B: 255, A: 255})
 	runner := &r204Runner{
 		pngPath:      pngPath,
 		sha:          sha,
@@ -185,6 +231,13 @@ func TestT2R204DestroyRefusedWhilePendingKeepsSubscription(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	emitted := make(chan json.RawMessage, 32)
+	subSource := &r204SubscriptionSource{
+		emitted:        emitted,
+		poll2Entered:   make(chan struct{}),
+		releasePoll2:   make(chan struct{}),
+		poll2Cancelled: make(chan struct{}),
+		poll2NoEmit:    make(chan struct{}),
+	}
 	sessionCtx := context.WithValue(ctx, streamKey{}, streamSession{
 		ctx:  ctx,
 		work: &sync.Mutex{},
@@ -210,7 +263,9 @@ func TestT2R204DestroyRefusedWhilePendingKeepsSubscription(t *testing.T) {
 		},
 		func(c context.Context, cfg frames.SubscriptionConfig, src frames.Source, p *frames.Publisher, emit frames.Emit) (*frames.Subscriptions, error) {
 			cfg.PollInterval = 15 * time.Millisecond
-			return frames.NewSubscriptions(c, cfg, src, p, emit)
+			cfg.Serial = true
+			subSource.Source = src
+			return frames.NewSubscriptions(c, cfg, subSource, p, emit)
 		},
 	)
 	if err != nil {
@@ -248,21 +303,17 @@ func TestT2R204DestroyRefusedWhilePendingKeepsSubscription(t *testing.T) {
 	if out := call("frame_subscribe", map[string]string{"surface_id": id}); len(out) != 0 {
 		t.Fatalf("subscribe: %s", out)
 	}
-	select {
-	case <-emitted:
-	case <-time.After(time.Second):
-		t.Fatal("initial subscribed frame not delivered")
+	initialMsg := <-emitted
+	if !strings.Contains(string(initialMsg), `"frame_ready"`) {
+		t.Fatalf("initial subscribed frame not delivered: %s", initialMsg)
 	}
+	<-subSource.poll2Entered
 
 	inputDone := make(chan []json.RawMessage, 1)
 	go func() {
 		inputDone <- call("input", map[string]any{"surface_id": id, "proposal_id": "p-1", "action": map[string]any{"type": "key", "keys": []string{"a"}}})
 	}()
-	select {
-	case <-runner.inputEntered:
-	case <-time.After(time.Second):
-		t.Fatal("input did not start")
-	}
+	<-runner.inputEntered
 
 	refused := call("destroy", map[string]string{"surface_id": id})
 	if len(refused) != 1 || json.Unmarshal(refused[0], &ev) != nil || ev.Event != "error" || !strings.Contains(ev.Data.Detail, "POLICY") {
@@ -270,27 +321,24 @@ func TestT2R204DestroyRefusedWhilePendingKeepsSubscription(t *testing.T) {
 	}
 
 	close(runner.finishInput)
-	select {
-	case out := <-inputDone:
-		if len(out) != 3 {
-			t.Fatalf("expected settled input events, got %s", out)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("input did not finish")
+	if out := <-inputDone; len(out) != 3 {
+		t.Fatalf("expected settled input events, got %s", out)
 	}
 
 	for len(emitted) > 0 {
 		<-emitted
 	}
-	waitDeadline := time.NewTimer(5 * time.Second)
-	defer waitDeadline.Stop()
+	runner.setFrame(pngPath2, sha2)
+	close(subSource.releasePoll2)
 	select {
 	case msg := <-emitted:
-		if !strings.Contains(string(msg), `"frame_ready"`) {
+		if !strings.Contains(string(msg), `"frame_ready"`) || !strings.Contains(string(msg), sha2) {
 			t.Fatalf("unexpected subscription message: %s", msg)
 		}
-	case <-waitDeadline.C:
+	case <-subSource.poll2Cancelled:
 		t.Fatal("subscription stopped delivering after refused destroy")
+	case <-subSource.poll2NoEmit:
+		t.Fatal("subscription poll after refused destroy did not emit frame_ready")
 	}
 
 	// Negative control: destroy with no pending input drains subscriptions before native stop.

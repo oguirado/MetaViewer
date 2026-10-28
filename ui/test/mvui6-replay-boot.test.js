@@ -29,6 +29,7 @@ async function bootEntry(search, { hook = null, host = null, buttons = null } = 
   const kitSchemes = [];
   const events = new Map();
   const timers = [];
+  let nowMs = 0;
   const fakeWindow = {
     location: { search },
     ...(host === null ? {} : { metaviewer: host }),
@@ -36,12 +37,35 @@ async function bootEntry(search, { hook = null, host = null, buttons = null } = 
     addEventListener: (name, fn) => events.set(name, fn),
     removeEventListener: (name) => events.delete(name),
   };
+  const fakeDocument = {
+    documentElement: { dataset: {} },
+    querySelector: () => mount,
+    getElementById: (id) => (buttons && typeof buttons === "object" ? buttons[id] ?? null : null),
+  };
   globalThis.window = fakeWindow;
-  globalThis.document = { documentElement: { dataset: {} }, querySelector: () => mount,
-    getElementById: (id) => (buttons && typeof buttons === "object" ? buttons[id] ?? null : null) };
-  globalThis.setTimeout = (fn, ms, ...rest) => {
-    timers.push({ ms });
-    return previousTimeout(fn, ms, ...rest);
+  globalThis.document = fakeDocument;
+  globalThis.setTimeout = (fn, ms = 0, ...rest) => {
+    const delay = Number(ms) || 0;
+    timers.push({ fn: () => fn(...rest), ms: delay, dueAt: nowMs + delay, fired: false });
+    return timers.length;
+  };
+  const advanceClock = (deltaMs) => {
+    nowMs += deltaMs;
+    const prevWin = globalThis.window;
+    const prevDoc = globalThis.document;
+    globalThis.window = fakeWindow;
+    globalThis.document = fakeDocument;
+    try {
+      for (const timer of timers) {
+        if (!timer.fired && timer.dueAt <= nowMs) {
+          timer.fired = true;
+          timer.fn();
+        }
+      }
+    } finally {
+      globalThis.window = prevWin;
+      globalThis.document = prevDoc;
+    }
   };
   globalThis.__mvuiRBoot = {
     vue: { createApp: (_App, props) => ({ mount: (selector) => { mounted = { props, selector }; } }) },
@@ -69,7 +93,7 @@ async function bootEntry(search, { hook = null, host = null, buttons = null } = 
     globalThis.setTimeout = previousTimeout;
     delete globalThis.__mvuiRBoot;
   }
-  return { mount, mounted, kitSchemes, events, fakeWindow, timers };
+  return { mount, mounted, kitSchemes, events, fakeWindow, timers, advanceClock };
 }
 
 test('named propose steps mount full frames and call the real dispatch', async () => {
@@ -121,32 +145,22 @@ test('terminal pending opens the side terminal and clicks the real launch button
   const calls = [];
   const hook = { openTerminal: () => calls.push('openTerminal') };
   const buttons = { 'mv-terminal-broker-launch-shell': { click: () => calls.push('clickLaunch') } };
-  const { mount, mounted, timers } = await bootEntry('?state=live-replay&step=terminal-pending', { hook, buttons });
+  const { mount, mounted, timers, advanceClock } = await bootEntry('?state=live-replay&step=terminal-pending', { hook, buttons });
   assert.equal(mount.textContent, '');
   assert.ok(mounted);
   assert.ok(mounted.props.terminalBroker, 'pending binds the fake broker');
   assert.equal(mounted.props.terminal, null, 'pending carries no binding');
   assert.deepEqual(calls, ['openTerminal'], 'terminal opens synchronously');
   assert.ok(timers.some((timer) => timer.ms === 50), 'launch click is scheduled after render');
-  const prevDoc = globalThis.document;
-  globalThis.document = { getElementById: (id) => buttons[id] ?? null };
-  try {
-    await new Promise((resolve) => setTimeout(resolve, 80));
-  } finally {
-    globalThis.document = prevDoc;
-  }
+  advanceClock(49);
+  assert.deepEqual(calls, ['openTerminal'], 'launch click waits for the 50ms timer');
+  advanceClock(1);
   assert.deepEqual(calls, ['openTerminal', 'clickLaunch']);
   const missing = [];
-  await bootEntry('?state=live-replay&step=terminal-pending', {
+  const missingBoot = await bootEntry('?state=live-replay&step=terminal-pending', {
     hook: { openTerminal: () => missing.push('open') }, buttons: {},
   });
-  const prevDoc2 = globalThis.document;
-  globalThis.document = { getElementById: () => null };
-  try {
-    await new Promise((resolve) => setTimeout(resolve, 80));
-  } finally {
-    globalThis.document = prevDoc2;
-  }
+  missingBoot.advanceClock(50);
   assert.deepEqual(missing, ['open'], 'missing button never breaks boot');
 });
 
