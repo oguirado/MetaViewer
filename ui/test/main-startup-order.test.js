@@ -480,3 +480,288 @@ test(
     }
   },
 );
+
+test(
+  'boot failure after wireBridge installation and shutdown dispose await wireBridge.dispose() in exact unwind order while positive boot keeps bridge alive',
+  { timeout: 60000 },
+  async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), 'mv-startup-wire-unwind-'));
+    try {
+      /**
+       * Build an instrumented boot fixture recording IPC registrations, captureBridge,
+       * wireBridge (including an active async frame reader stream), window, protocol,
+       * adapter, and core teardown order.
+       * @param {string} caseDir
+       * @param {{ failLoadUrl?: boolean }} [opts]
+       */
+      const makeWireUnwindFixture = async (caseDir, opts = {}) => {
+        const configHome = join(caseDir, 'config');
+        await mkdir(configHome, { recursive: true, mode: 0o700 });
+        await chmod(configHome, 0o700);
+        const base = await createStubBootFixture(caseDir, {
+          env: { XDG_CONFIG_HOME: configHome },
+          adapterStart: async () => ({
+            availability: /** @type {const} */ ('live'),
+            pid: 5252,
+            handshakeSeen: true,
+            code: 'ADAPTER_LIVE',
+            reason: null,
+            userMessage: null,
+          }),
+        });
+        const { handles, calls } = base;
+        /** @type {Map<string, (event: unknown, ...args: unknown[]) => Promise<unknown>>} */
+        const registeredHandlers = new Map();
+        handles.ipcMain = {
+          handle: (/** @type {string} */ channel, /** @type {(event: unknown, ...args: unknown[]) => Promise<unknown>} */ listener) => {
+            calls.push(`ipc.handle:${channel}`);
+            registeredHandlers.set(channel, listener);
+          },
+          removeHandler: (/** @type {string} */ channel) => {
+            calls.push(`ipc.remove:${channel}`);
+            registeredHandlers.delete(channel);
+          },
+        };
+        /** @type {Record<string, unknown>} */ (handles.core).subscribeCapture = () => {
+          calls.push('capture.subscribe');
+          return () => {
+            calls.push('capture.dispose');
+          };
+        };
+
+        /** @type {((entry: unknown) => Promise<void>) | null} */
+        let onFrameEntry = null;
+        /** @type {Record<string, unknown>} */ (handles).wire = {
+          frames: {
+            subscribe: (/** @type {(entry: unknown) => Promise<void>} */ cb) => {
+              calls.push('wire.frames.subscribe');
+              onFrameEntry = cb;
+              return () => {
+                calls.push('wire.frames.unsubscribe');
+              };
+            },
+          },
+          terminal: {
+            attach: async () => ({ port: {} }),
+            dispose: () => {
+              calls.push('wire.terminal.dispose');
+            },
+          },
+        };
+
+        const frame = {
+          url: `${PRIVILEGED_ORIGIN}/index.html`,
+          origin: PRIVILEGED_ORIGIN,
+          parent: null,
+          routingId: 10,
+          processId: 20,
+        };
+        /** @type {Record<string, unknown> | null} */
+        let capturedContents = null;
+        /** @type {unknown} */
+        let stageError = null;
+        const OrigWindow = handles.BrowserWindow;
+        handles.BrowserWindow = class InstrumentedWindow extends OrigWindow {
+          constructor() {
+            super();
+            capturedContents = /** @type {Record<string, unknown>} */ (this.webContents);
+            capturedContents.postMessage = () => {};
+            capturedContents.loadURL = async (/** @type {string} */ url) => {
+              calls.push(`loadURL:${url}`);
+              try {
+                await stageActiveWireStream();
+              } catch (err) {
+                stageError = err;
+                throw err;
+              }
+              if (opts.failLoadUrl) {
+                throw new Error('simulated loadURL failure after wireBridge install');
+              }
+            };
+          }
+        };
+
+        const stageActiveWireStream = async () => {
+          const subHandler = registeredHandlers.get('metaviewer:authority.subscribe');
+          assert.equal(typeof subHandler, 'function', 'metaviewer:authority.subscribe must be registered');
+          assert.notEqual(capturedContents, null);
+          const subRes = await /** @type {(event: unknown) => Promise<unknown>} */ (subHandler)({
+            sender: capturedContents,
+            senderFrame: /** @type {{mainFrame?: unknown}} */ (capturedContents).mainFrame,
+          });
+          assert.equal(subRes, true);
+          assert.equal(typeof onFrameEntry, 'function');
+          const binding = {
+            principal: 'utility',
+            epoch: 1,
+            surfaceId: 's1',
+            surfaceGeneration: 1,
+          };
+          void onFrameEntry({
+            frameRef: {
+              schema: 'frame_ref/v0.2',
+              surface_id: 's1',
+              generation: 1,
+              tick: 1,
+              ts_ns: 1,
+              width: 1,
+              height: 1,
+              format: 'rgb24',
+              ramws_path: '/dev/shm/mv-s1-1.rgb24',
+              sha256: 'a'.repeat(64),
+              capture_us: 1,
+            },
+            state: {
+              schema: 'surface/v0.2',
+              surface_id: 's1',
+              kind: 'browser',
+              display: ':99',
+              geometry: { w: 1280, h: 900 },
+              state: 'active',
+              visibility: 'unfolded',
+              control: 'agent',
+              profile_id: 'mv-live-1',
+            },
+            readerOptions: {
+              binding,
+              limits: {
+                maxFrameBytes: 4096,
+                maxWidth: 64,
+                maxHeight: 64,
+                readTimeoutMs: 500,
+                maxConcurrentReads: 2,
+              },
+              pixelEnvironment: { environmentId: 'env-1', zoom: 1, dpr: 1 },
+              acquirePublishedLease: () => {
+                calls.push('wire.stream.acquire');
+                return new Promise(() => {});
+              },
+              onReleaseLease: () => {},
+            },
+            portOptions: {
+              port: {
+                on: () => {},
+                removeListener: () => {},
+                postMessage: () => {},
+                close: () => {
+                  calls.push('wire.stream.port.close');
+                },
+              },
+              role: 'sender',
+              binding,
+              limits: {
+                maxFrameBytes: 4096,
+                ackTimeoutMs: 500,
+                maxSurfacesPerPort: 1,
+              },
+              onReleaseLease: () => {},
+              onRevoke: (/** @type {{reason: string}} */ notice) => {
+                calls.push(`wire.stream.revoke:${notice.reason}`);
+              },
+            },
+          });
+          for (let i = 0; i < 10 && !calls.includes('wire.stream.acquire'); i += 1) {
+            await Promise.resolve();
+          }
+          assert.equal(calls.includes('wire.stream.acquire'), true, 'stream read must be in-flight before unwind');
+        };
+
+        return {
+          handles,
+          calls,
+          registeredHandlers,
+          getContents: () => capturedContents,
+          getStageError: () => stageError,
+        };
+      };
+
+      const expectedUnwindSequence = [
+        `ipc.remove:${CHANNELS.save}`,
+        `ipc.remove:${CHANNELS.load}`,
+        'capture.dispose',
+        'ipc.remove:metaviewer:capture.unsubscribe',
+        'wire.frames.unsubscribe',
+        'wire.stream.port.close',
+        'wire.stream.revoke:SHUTDOWN',
+        'wire.terminal.dispose',
+        'ipc.remove:metaviewer:settings.load',
+        'ipc.remove:metaviewer:authority.propose',
+        'ipc.remove:metaviewer:side-terminal.copy',
+        'window.destroy',
+        'protocol.unhandle',
+        'adapter.dispose',
+        'core.dispose',
+      ];
+
+      /**
+       * @param {ReadonlyArray<string>} calls
+       * @param {string} label
+       */
+      const assertExactUnwindOrder = (calls, label) => {
+        for (const marker of expectedUnwindSequence) {
+          assert.notEqual(calls.indexOf(marker), -1, `${label}: missing unwind marker ${marker}`);
+        }
+        for (let i = 0; i < expectedUnwindSequence.length - 1; i += 1) {
+          const earlier = expectedUnwindSequence[i];
+          const later = expectedUnwindSequence[i + 1];
+          assert.ok(
+            calls.indexOf(earlier) < calls.indexOf(later),
+            `${label}: expected ${earlier} (${calls.indexOf(earlier)}) before ${later} (${calls.indexOf(later)})`,
+          );
+        }
+      };
+
+      // 1. Boot failure after wireBridge installation (loadURL rejects) unwinds and awaits wireBridge.dispose() in exact order.
+      const failDir = join(tempRoot, 'boot-fail-unwind');
+      await mkdir(failDir, { recursive: true });
+      const failFixture = await makeWireUnwindFixture(failDir, { failLoadUrl: true });
+      await assert.rejects(
+        () => bootProductionMain(failFixture.handles),
+        (err) => {
+          assert.equal(err instanceof MainError, true);
+          assert.equal(/** @type {MainError} */ (err).code, 'LOAD');
+          return true;
+        },
+      );
+      assert.equal(failFixture.getStageError(), null);
+      assertExactUnwindOrder(failFixture.calls, 'boot-failure-unwind');
+      assert.equal(failFixture.registeredHandlers.size, 0, 'all IPC handlers must be removed on boot unwind');
+
+      // 2. Positive boot control keeps wireBridge alive until shutdown, then awaits wireBridge.dispose() in exact unwind order.
+      const okDir = join(tempRoot, 'boot-ok-dispose');
+      await mkdir(okDir, { recursive: true });
+      const okFixture = await makeWireUnwindFixture(okDir, { failLoadUrl: false });
+      const boot = await bootProductionMain(okFixture.handles);
+      try {
+        assert.equal(okFixture.getStageError(), null);
+        assert.equal(okFixture.calls.includes('wire.frames.subscribe'), true);
+        assert.equal(okFixture.calls.includes('wire.stream.acquire'), true);
+        assert.equal(okFixture.calls.includes('wire.frames.unsubscribe'), false);
+        assert.equal(okFixture.calls.includes('wire.stream.revoke:SHUTDOWN'), false);
+        assert.equal(okFixture.calls.includes('wire.terminal.dispose'), false);
+        assert.equal(okFixture.calls.includes('capture.dispose'), false);
+        assert.equal(okFixture.calls.includes('window.destroy'), false);
+        assert.equal(okFixture.calls.includes('protocol.unhandle'), false);
+        assert.equal(okFixture.calls.includes('adapter.dispose'), false);
+        assert.equal(okFixture.calls.includes('core.dispose'), false);
+        assert.equal(okFixture.registeredHandlers.has('metaviewer:authority.propose'), true);
+        assert.equal(okFixture.registeredHandlers.has('metaviewer:nested.depth'), true);
+
+        const depthHandler = okFixture.registeredHandlers.get('metaviewer:nested.depth');
+        assert.equal(typeof depthHandler, 'function');
+        const contents = okFixture.getContents();
+        const depthReply = await /** @type {(event: unknown) => Promise<unknown>} */ (depthHandler)({
+          sender: contents,
+          senderFrame: /** @type {{mainFrame?: unknown} | null} */ (contents)?.mainFrame,
+        });
+        assert.equal(depthReply, null);
+      } finally {
+        await boot.dispose();
+      }
+      assertExactUnwindOrder(okFixture.calls, 'shutdown-dispose-unwind');
+      assert.equal(okFixture.registeredHandlers.size, 0, 'all IPC handlers must be removed on shutdown dispose');
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  },
+);

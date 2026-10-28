@@ -398,6 +398,83 @@ describe('W0-SHELL-MAIN privileged protocol and CSP', () => {
     }
   });
 
+  it('enforces the packaged ASAR asset digest seal with 403 refusal while serving identical non-packaged bytes with 200', { timeout: 10000 }, async () => {
+    const root = makeTempRoot('mv0main-asar-seal-');
+    const nonPackagedRoot = join(root, 'unpackaged', 'dist', 'renderer');
+    const packagedRoot = join(root, 'app.asar', 'dist', 'renderer');
+    const htmlBytes = '<!doctype html><html><head><title>sealed</title></head><body>ok</body></html>';
+    const jsBytes = 'console.log("sealed");\n';
+    const hadOwnElectron = Object.prototype.hasOwnProperty.call(process.versions, 'electron');
+    const prevDescriptor = Object.getOwnPropertyDescriptor(process.versions, 'electron');
+    try {
+      mkdirSync(nonPackagedRoot, { recursive: true });
+      mkdirSync(packagedRoot, { recursive: true });
+      writeFileSync(join(nonPackagedRoot, 'index.html'), htmlBytes);
+      writeFileSync(join(nonPackagedRoot, 'app.js'), jsBytes);
+      writeFileSync(join(packagedRoot, 'index.html'), htmlBytes);
+      writeFileSync(join(packagedRoot, 'app.js'), jsBytes);
+
+      Object.defineProperty(process.versions, 'electron', {
+        value: ELECTRON_PIN,
+        configurable: true,
+        enumerable: true,
+        writable: true,
+      });
+
+      const packagedHtml = await handleAppRequest(
+        packagedRoot,
+        { url: `${PRIVILEGED_ORIGIN}/index.html` },
+        { styleNonce: false },
+      );
+      assert.equal(packagedHtml.status, 403);
+      assert.equal(packagedHtml.headers.get('Content-Security-Policy'), CONTENT_SECURITY_POLICY);
+      assert.equal(await bodyText(packagedHtml), 'forbidden');
+
+      const packagedJs = await handleAppRequest(
+        packagedRoot,
+        { url: `${PRIVILEGED_ORIGIN}/app.js` },
+        { styleNonce: false },
+      );
+      assert.equal(packagedJs.status, 403);
+      assert.equal(packagedJs.headers.get('Content-Security-Policy'), CONTENT_SECURITY_POLICY);
+
+      // Negative control: identical bytes through non-packaged root return 200.
+      const unpackagedHtml = await handleAppRequest(
+        nonPackagedRoot,
+        { url: `${PRIVILEGED_ORIGIN}/index.html` },
+        { styleNonce: false },
+      );
+      assert.equal(unpackagedHtml.status, 200);
+      assert.equal(unpackagedHtml.headers.get('Content-Security-Policy'), CONTENT_SECURITY_POLICY);
+      assert.equal(await bodyText(unpackagedHtml), htmlBytes);
+
+      const unpackagedJs = await handleAppRequest(
+        nonPackagedRoot,
+        { url: `${PRIVILEGED_ORIGIN}/app.js` },
+        { styleNonce: false },
+      );
+      assert.equal(unpackagedJs.status, 200);
+      assert.equal(await bodyText(unpackagedJs), jsBytes);
+
+      // Negative control: without process.versions.electron, .asar/ root is not treated as packaged and returns 200.
+      delete /** @type {Record<string, unknown>} */ (process.versions).electron;
+      const unversionedAsarHtml = await handleAppRequest(
+        packagedRoot,
+        { url: `${PRIVILEGED_ORIGIN}/index.html` },
+        { styleNonce: false },
+      );
+      assert.equal(unversionedAsarHtml.status, 200);
+      assert.equal(await bodyText(unversionedAsarHtml), htmlBytes);
+    } finally {
+      if (hadOwnElectron && prevDescriptor !== undefined) {
+        Object.defineProperty(process.versions, 'electron', prevDescriptor);
+      } else {
+        delete /** @type {Record<string, unknown>} */ (process.versions).electron;
+      }
+      rmRoot(root);
+    }
+  });
+
   it('binds a fresh style nonce to HTML meta and CSP only', async () => {
     const { root, rendererRoot } = makeBundle();
     try {
