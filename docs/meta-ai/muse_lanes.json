@@ -1,17 +1,17 @@
 {
  "schema": "metaviewer.meta_ai_usage/v1",
  "totals": {
-  "lanes": 375,
-  "ok": 375,
-  "input_tokens": 84731302,
-  "cache_read_tokens": 2024802817,
-  "output_tokens": 18595241,
-  "thinking_tokens": 9987378,
+  "lanes": 377,
+  "ok": 377,
+  "input_tokens": 85201248,
+  "cache_read_tokens": 2041231460,
+  "output_tokens": 18731367,
+  "thinking_tokens": 10077909,
   "cache_hit_pct": 96.0,
-  "usd": 16.2418,
-  "usd_per_lane": 0.0433,
-  "steps": 21102,
-  "lane_hours": 55.1
+  "usd": 16.3489,
+  "usd_per_lane": 0.0434,
+  "steps": 21253,
+  "lane_hours": 55.5
  },
  "peak_concurrent_lanes": 24,
  "rooms": {
@@ -8511,6 +8511,48 @@
    "thinking_tokens": 30602,
    "cache_hit_pct": 97.5,
    "usd": 0.062371
+  },
+  {
+   "room": "mvui29sc",
+   "lane": "S",
+   "title": "settings judge fixes",
+   "stage": "fix",
+   "model": "muse-spark-1.3",
+   "orchestrator": "UI orchestrator",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-28T08:12:35.164000+00:00",
+   "duration_s": 704.3,
+   "end_utc": "2026-10-28T08:24:19.447000+00:00",
+   "phase": "build",
+   "steps": 77,
+   "input_tokens": 205621,
+   "cache_read_tokens": 7363739,
+   "output_tokens": 65614,
+   "thinking_tokens": 42346,
+   "cache_hit_pct": 97.3,
+   "usd": 0.048412
+  },
+  {
+   "room": "mvui29d",
+   "lane": "T",
+   "title": "terminal session lifecycle fixes",
+   "stage": "fix",
+   "model": "muse-spark-1.3",
+   "orchestrator": "UI orchestrator",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-28T08:13:17.852000+00:00",
+   "duration_s": 807.3,
+   "end_utc": "2026-10-28T08:26:45.140000+00:00",
+   "phase": "build",
+   "steps": 74,
+   "input_tokens": 264325,
+   "cache_read_tokens": 9064904,
+   "output_tokens": 70512,
+   "thinking_tokens": 48185,
+   "cache_hit_pct": 97.2,
+   "usd": 0.058665
   }
  ]
 }

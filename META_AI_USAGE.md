@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 375 | 55 | 320 |
-| Lanes finished OK | 375 | 55 | 320 |
-| Agent steps | 21,102 | 2,705 | 18,397 |
-| Lane-hours of agent work | 55.1 | 5.2 | 49.8 |
-| Fresh input tokens | 84,731,302 | 11,482,034 | 73,249,268 |
-| Cache-read input tokens | 2,024,802,817 | 226,255,212 | 1,798,547,605 |
+| Lanes launched | 377 | 55 | 322 |
+| Lanes finished OK | 377 | 55 | 322 |
+| Agent steps | 21,253 | 2,705 | 18,548 |
+| Lane-hours of agent work | 55.5 | 5.2 | 50.3 |
+| Fresh input tokens | 85,201,248 | 11,482,034 | 73,719,214 |
+| Cache-read input tokens | 2,041,231,460 | 226,255,212 | 1,814,976,248 |
 | Prompt cache hit % | 96.0 | 95.2 | 96.1 |
-| Output tokens | 18,595,241 | 2,135,708 | 16,459,533 |
-| Thinking tokens | 9,987,378 | 1,050,039 | 8,937,339 |
-| Cost (USD) | 16.2418 | 2.0279 | 14.2139 |
-| Cost per lane (USD) | 0.0433 | 0.0369 | 0.0444 |
+| Output tokens | 18,731,367 | 2,135,708 | 16,595,659 |
+| Thinking tokens | 10,077,909 | 1,050,039 | 9,027,870 |
+| Cost (USD) | 16.3489 | 2.0279 | 14.321 |
+| Cost per lane (USD) | 0.0434 | 0.0369 | 0.0445 |
 
-Rooms: 110. Peak concurrent lanes [MEASURED from lane start/end]: 24.
+Rooms: 112. Peak concurrent lanes [MEASURED from lane start/end]: 24.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -43,7 +43,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
 | docs | 15 | 94.8 | 0.5371 |
-| fix | 48 | 96.9 | 2.6952 |
+| fix | 50 | 96.9 | 2.8023 |
 | kit | 3 | 96.5 | 0.1997 |
 | ops | 4 | 88.1 | 0.0468 |
 | perf | 1 | 97.6 | 0.0694 |
@@ -171,6 +171,8 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui29b | UI orchestrator | Oct 28 08:36 | fix | 1 | 97.5 | 0.0868 | Finish AC-06 terminal sessions in the renderer: the first pass ran out of budget with type errors, no App/main wiring and a port not yet matching the host API the host owner fixed. |
 | mvui29sb | UI orchestrator | Oct 28 08:58 | fix | 1 | 95.8 | 0.0282 | Host owner ruling for AC-08: the host keeps a closed settings key set, so the renderer must drop unknown keys instead of round-tripping them. |
 | mvui29c | UI orchestrator | Oct 28 08:58 | fix | 1 | 97.5 | 0.0624 | Terminal sessions wiring (AC-06) broke 58 committed App tests; restore the App mounting contract and finish the terminal tests so the drop can ship. |
+| mvui29sc | UI orchestrator | Oct 28 09:12 | fix | 1 | 97.3 | 0.0484 | Judge rejected the settings drop: a quick revert inside the debounce window is lost, a replaced host can receive a stale save, and boot can paint a scheme the store then replaces; fix before AC-08 can ship. |
+| mvui29d | UI orchestrator | Oct 28 09:13 | fix | 1 | 97.2 | 0.0587 | Judge notes on the terminal drop are real session lifecycle defects (events before registration, stale transport, cross-transport close, leaked port on close during attach, fixture broker unwired); fix before AC-06 ships. |
 
 ## Every lane
 
@@ -551,6 +553,8 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui29b | T | finish terminal sessions path: types, fixed host API, App/main wiring | Oct 28 08:36 | yes | 98 | 97.5 | 0.086802 |
 | mvui29sb | S | settings drop unknown keys | Oct 28 08:58 | yes | 47 | 95.8 | 0.028168 |
 | mvui29c | T | green terminal wiring | Oct 28 08:58 | yes | 99 | 97.5 | 0.062371 |
+| mvui29sc | S | settings judge fixes | Oct 28 09:12 | yes | 77 | 97.3 | 0.048412 |
+| mvui29d | T | terminal session lifecycle fixes | Oct 28 09:13 | yes | 74 | 97.2 | 0.058665 |
 
 ## Method
 
