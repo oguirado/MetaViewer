@@ -300,7 +300,7 @@ async function bootstrap() {
     ? { readRaw: async () => null, writeAtomic: async (/** @type {string} */ _json) => {} }
     : createLayoutStorage(getLayoutFacade());
   const layout = fixture ? createWallLayout(SCOPE, [...fixture.capsules]) : createInitialLayout(SCOPE);
-  const host = fixture ? null : /** @type {{metaviewer?: Partial<import('./settings/settingsModel.js').HostSettingsPort> & {nestedDepth?:()=>Promise<0|1|null>,selfCapsuleId?:()=>Promise<string|null>,recordingDestination?:()=>Promise<string|null>,authority?:import('./core/hostAdapters.js').AuthorityPort,qa?:import('./qa/anchorCollector.js').QaFacade,sideTerminal?:import('./core/hostAdapters.js').TerminalPort,capture?:unknown,input?:unknown}}} */ (window).metaviewer;
+  const host = fixture ? null : /** @type {{metaviewer?: Partial<import('./settings/settingsModel.js').HostSettingsPort> & {nestedDepth?:()=>Promise<0|1|null>,selfCapsuleId?:()=>Promise<string|null>,recordingDestination?:()=>Promise<string|null>,authority?:import('./core/hostAdapters.js').AuthorityPort,qa?:import('./qa/anchorCollector.js').QaFacade,sideTerminal?:import('./core/hostAdapters.js').TerminalPort,capture?:unknown,input?:unknown,frames?:unknown}}} */ (window).metaviewer;
   let preferences = /** @type {Storage|null} */ (null);
   if (!fixture) { try { preferences = globalThis.localStorage; } catch { /* Storage may be unavailable. */ } }
   const settingsHost = createSettingsHost(host ?? null, preferences, fixture?.scheme ?? null);
@@ -324,6 +324,8 @@ async function bootstrap() {
   // runtime subscribes, so no brokered port notice can arrive first.
   /** @type {{ dispose?: () => void }|null} */
   let framePortRouter = null;
+  /** @type {{ dispose?: () => void }|null} MVUI32 lane F: throttled rehash reporter (live only). */
+  let rehashDiag = null;
   if (!fixture) {
     try {
       const routerModule = await import('./frames/framePortRouter.js');
@@ -331,7 +333,19 @@ async function bootstrap() {
       if (typeof installRouter === 'function') {
         framePortRouter = installRouter({ target: window }) ?? null;
       }
-    } catch { framePortRouter = null; }
+      // Reached through the existing router import (no new static entry
+      // import); the facade rides the pinned host read (host.frames), so the
+      // single live-read pin stays exact. Any failure degrades to null.
+      const installDiag = routerModule.createRehashDiagReporter;
+      if (framePortRouter && typeof installDiag === 'function') {
+        try {
+          rehashDiag = installDiag(
+            /** @type {any} */ (framePortRouter),
+            { getFacade: () => host?.frames },
+          ) ?? null;
+        } catch { rehashDiag = null; }
+      }
+    } catch { framePortRouter = null; rehashDiag = null; }
   }
   const authorityHost = replayPort ? createAuthorityAdapter(replayPort) : (fixture ? null : createAuthorityAdapter(host?.authority));
   // MVUI29d lane T: the terminal-live fixture exposes its broker double on
@@ -406,7 +420,7 @@ async function bootstrap() {
   const replayRuntime = /** @type {{ dispose?: () => void }|null} */ (/** @type {unknown} */ (isLiveReplay ? fixtureMount?.runtime ?? null : null));
   let disposeQa = () => {};
   let tornDown = false;
-  const teardown = () => { tornDown = true; disposeQa(); framePortRouter?.dispose?.(); captureState?.dispose?.(); inputPort?.dispose?.(); liveRuntime?.dispose(); replayRuntime?.dispose?.(); window.removeEventListener?.('pagehide', teardown); };
+  const teardown = () => { tornDown = true; disposeQa(); rehashDiag?.dispose?.(); framePortRouter?.dispose?.(); captureState?.dispose?.(); inputPort?.dispose?.(); liveRuntime?.dispose(); replayRuntime?.dispose?.(); window.removeEventListener?.('pagehide', teardown); };
   if (framePortRouter || captureState || liveRuntime || replayRuntime || inputPort || (!fixture && typeof host?.qa?.reportAnchors === 'function')) window.addEventListener?.('pagehide', teardown, { once: true });
   try {
     Object.assign(document.documentElement.dataset, THEME_DATASET);

@@ -161,14 +161,14 @@ test('RV10-01: expiring settles SUPERSEDED synchronously when newer delivery arr
   }
 });
 
-test('NEW-01: kept frame never supersedes queued work while validating', async () => {
-  // Reachable half of the NEW-01 ordering: an older delivery expires with a
-  // blocked digest, the tile binds, and two bound arrivals follow (both
-  // below the expired generation, so the floor still admits the retain).
-  // The kept older frame must drop while the queued work paints. A queued
-  // record NEWER than the kept one cannot coexist with a retain: any newer
-  // bound admit advances admittedFloor, and expiry then takes the
-  // SUPERSEDED branch instead of retaining.
+test('NEW-01: older bound arrivals refuse pre-hash while a held frame verifies', async () => {
+  // Fixed ordering (MVUI32F held-verifying fence): the held delivery at
+  // generation 886 expires with a blocked digest, the tile binds, and two
+  // bound arrivals follow, both below the held generation. Each
+  // at-or-below-held arrival refuses pre-hash (no digest, no paint); the
+  // held frame hides once its digest resolves, then paints as the retained
+  // frame. An older frame can never paint after the newer held one was
+  // accepted.
   const deferred = deferredDigest();
   const target = fakeTarget();
   const router = installFramePortRouter({ target, digestSha256: deferred.digest, pendingUnboundMs: 10 });
@@ -192,20 +192,28 @@ test('NEW-01: kept frame never supersedes queued work while validating', async (
       bytes: new Uint8Array(BYTES_B),
     }));
     await tick();
-    assert.deepEqual(port.acks, [], 'both bound arrivals await validation');
+    assert.deepEqual(
+      ackPairs(port),
+      [
+        ['mid-old', FRAME_OUTCOMES.REFUSED],
+        ['mid-new', FRAME_OUTCOMES.REFUSED],
+      ],
+      'both older-than-held arrivals refuse pre-hash without disturbing the live verification',
+    );
     deferred.release();
     await untilAcks(port, 3);
     assert.deepEqual(
       ackPairs(port),
       [
+        ['mid-old', FRAME_OUTCOMES.REFUSED],
+        ['mid-new', FRAME_OUTCOMES.REFUSED],
         ['held', FRAME_OUTCOMES.HIDDEN],
-        ['mid-old', FRAME_OUTCOMES.SUPERSEDED],
-        ['mid-new', FRAME_OUTCOMES.PRESENTED],
       ],
-      'the queued newest frame presents; the kept older frame never supersedes it',
+      'the held newer frame hides once verified; the refused older frames never paint',
     );
-    await until(() => canvas.paints.length === 1, 'the queued newest frame paints', 2000);
-    assert.deepEqual(canvas.paints[0].data, [BYTES_B[0], BYTES_B[1], BYTES_B[2], 255]);
+    await until(() => canvas.paints.length === 1, 'the held newer frame paints', 2000);
+    assert.deepEqual(canvas.paints[0].data, [BYTES_A[0], BYTES_A[1], BYTES_A[2], 255]);
+    assert.equal(scheduler.getInstrumentation('A').lastPresentedFrameGen, 886);
   } finally {
     router.dispose();
     scheduler.destroy();

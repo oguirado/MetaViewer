@@ -102,6 +102,257 @@ const DELIVERY_KEYS = ['schema', 'kind', 'correlation', 'principal', 'epoch',
  */
 export const FRAME_DELIVERY_MARKER_KEY = 'utilityVerified';
 
+/** Minimum milliseconds between host rehash reports (MVUI32). @type {number} */
+export const REHASH_DIAG_MIN_INTERVAL_MS = 1000;
+
+/**
+ * @typedef {object} RehashDiagSnapshot Cumulative rehash counters.
+ * @property {number} rehashSkipped Deliveries accepted without a re-hash.
+ * @property {number} rehashDone Deliveries digested in the renderer.
+ */
+
+/**
+ * @typedef {object} RehashDiagRouter Structural router handle.
+ * @property {() => RehashDiagSnapshot} getRehashDiag
+ * @property {(listener: (diag: RehashDiagSnapshot) => void) => () => void} onRehashDiag
+ */
+
+/**
+ * @typedef {object} RehashDiagReporter Frozen reporter handle.
+ * @property {() => void} dispose Flush once if dirty, then detach.
+ */
+
+/**
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+function isNonNegativeSafeInt(value) {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+/**
+ * Create a throttled `frames.reportDiag` reporter for one router install
+ * (MVUI32, inlined here so this module keeps zero imports and stays
+ * data-URL importable). Live boots pass `getFacade: () => host?.frames`
+ * (never a fresh window read); tests pass a double facade plus a fake clock
+ * and fake timers. Reports exactly one plain object
+ * `{ rehashSkipped, rehashDone }` only when a value changed, at most once
+ * per second, and once on dispose. A refused report (`false` return or
+ * throw) keeps the pending totals and retries on a trailing timer within
+ * the same throttle, without waiting for the next delivery; a missing
+ * facade stays silent with no timers. Totals never decrease. Returns null
+ * when the router cannot supply diagnostics.
+ * @param {RehashDiagRouter} router Installed frame-port router.
+ * @param {{ getFacade?: () => unknown, facade?: unknown, now?: () => number, setTimeout?: (fn: () => void, ms: number) => unknown, clearTimeout?: (id: unknown) => void }} [options]
+ * @returns {RehashDiagReporter|null}
+ */
+export function createRehashDiagReporter(router, options = {}) {
+  if (router === null || typeof router !== 'object') return null;
+  if (typeof router.getRehashDiag !== 'function' || typeof router.onRehashDiag !== 'function') return null;
+  const getFacade = typeof options.getFacade === 'function' ? options.getFacade : () => options.facade;
+  const now = typeof options.now === 'function' ? options.now : () => Date.now();
+  const schedule = typeof options.setTimeout === 'function' ? options.setTimeout : setTimeout;
+  const unschedule = typeof options.clearTimeout === 'function' ? options.clearTimeout : clearTimeout;
+
+  let lastSentSkipped = 0;
+  let lastSentDone = 0;
+  let hasSent = false;
+  let lastReportTime = -REHASH_DIAG_MIN_INTERVAL_MS;
+  let hasPending = false;
+  /** @type {any} */
+  let timer = null;
+  let disposed = false;
+
+  /**
+   * @returns {number}
+   */
+  function safeNow() {
+    try {
+      const value = now();
+      if (typeof value === 'number' && Number.isFinite(value)) return value;
+    } catch { /* A broken clock reads as zero. */ }
+    return 0;
+  }
+
+  /**
+   * @returns {RehashDiagSnapshot|null}
+   */
+  function readDiag() {
+    /** @type {any} */
+    let diag = null;
+    try {
+      diag = router.getRehashDiag();
+    } catch { return null; }
+    if (diag === null || typeof diag !== 'object') return null;
+    if (!isNonNegativeSafeInt(diag.rehashSkipped) || !isNonNegativeSafeInt(diag.rehashDone)) return null;
+    return { rehashSkipped: diag.rehashSkipped, rehashDone: diag.rehashDone };
+  }
+
+  /**
+   * @param {RehashDiagSnapshot} diag
+   * @returns {'sent'|'refused'|'missing'} `missing` when no facade or report
+   * function is available (silent, no timers); `refused` when the host
+   * returned `false` or threw (keeps pending, trailing retry).
+   */
+  function attemptReport(diag) {
+    /** @type {unknown} */
+    let facade = null;
+    try {
+      facade = getFacade();
+    } catch { return 'missing'; }
+    if (facade === null || typeof facade !== 'object') return 'missing';
+    const report = /** @type {{ reportDiag?: unknown }} */ (facade).reportDiag;
+    if (typeof report !== 'function') return 'missing';
+    if (!isNonNegativeSafeInt(diag.rehashSkipped) || !isNonNegativeSafeInt(diag.rehashDone)) return 'missing';
+    try {
+      const result = /** @type {(payload: RehashDiagSnapshot) => unknown} */ (report).call(
+        facade,
+        { rehashSkipped: diag.rehashSkipped, rehashDone: diag.rehashDone },
+      );
+      return result !== false ? 'sent' : 'refused';
+    } catch { return 'refused'; }
+  }
+
+  /**
+   * @returns {boolean} True when a facade with a report function is available.
+   */
+  function facadeAvailable() {
+    try {
+      const facade = getFacade();
+      return facade !== null && typeof facade === 'object'
+        && typeof /** @type {{ reportDiag?: unknown }} */ (facade).reportDiag === 'function';
+    } catch { return false; }
+  }
+
+  /**
+   * @param {RehashDiagSnapshot} diag
+   * @returns {boolean} True when either total is below the last sent totals.
+   */
+  function isDecrease(diag) {
+    return hasSent
+      && (diag.rehashSkipped < lastSentSkipped || diag.rehashDone < lastSentDone);
+  }
+
+  function clearTimer() {
+    if (timer !== null) {
+      try { unschedule(timer); } catch { /* A dead timer still clears. */ }
+      timer = null;
+    }
+  }
+
+  /**
+   * Schedule one trailing fire. A missing facade stays silent with no
+   * timers; at most one timer is ever armed.
+   * @param {number} delay
+   * @returns {void}
+   */
+  function scheduleTrailing(delay) {
+    if (disposed || timer !== null) return;
+    if (!facadeAvailable()) return;
+    try {
+      timer = schedule(fireTrailing, Math.max(0, delay));
+    } catch { timer = null; }
+  }
+
+  /**
+   * Schedule one retry after a refused report: a full throttle interval
+   * from the failed attempt, so attempts stay at most once per second.
+   * @returns {void}
+   */
+  function scheduleRetry() {
+    scheduleTrailing(REHASH_DIAG_MIN_INTERVAL_MS);
+  }
+
+  function fireTrailing() {
+    timer = null;
+    if (disposed || !hasPending) return;
+    const latest = readDiag();
+    if (!latest) return;
+    if (hasSent && latest.rehashSkipped === lastSentSkipped && latest.rehashDone === lastSentDone) {
+      hasPending = false;
+      return;
+    }
+    if (isDecrease(latest)) {
+      hasPending = false;
+      return;
+    }
+    const at = safeNow();
+    if (at - lastReportTime < REHASH_DIAG_MIN_INTERVAL_MS) {
+      const remaining = REHASH_DIAG_MIN_INTERVAL_MS - (at - lastReportTime);
+      scheduleTrailing(remaining);
+      return;
+    }
+    const status = attemptReport(latest);
+    if (status === 'sent') {
+      lastSentSkipped = latest.rehashSkipped;
+      lastSentDone = latest.rehashDone;
+      hasSent = true;
+      lastReportTime = at;
+      hasPending = false;
+    } else if (status === 'refused') {
+      scheduleRetry();
+    }
+  }
+
+  function onNotify() {
+    if (disposed) return;
+    const diag = readDiag();
+    if (!diag) return;
+    if (hasSent && diag.rehashSkipped === lastSentSkipped && diag.rehashDone === lastSentDone) {
+      hasPending = false;
+      return;
+    }
+    if (!hasSent && diag.rehashSkipped === 0 && diag.rehashDone === 0) {
+      hasPending = false;
+      return;
+    }
+    if (isDecrease(diag)) {
+      hasPending = false;
+      return;
+    }
+    hasPending = true;
+    const at = safeNow();
+    if (at - lastReportTime >= REHASH_DIAG_MIN_INTERVAL_MS) {
+      clearTimer();
+      const status = attemptReport(diag);
+      if (status === 'sent') {
+        lastSentSkipped = diag.rehashSkipped;
+        lastSentDone = diag.rehashDone;
+        hasSent = true;
+        lastReportTime = at;
+        hasPending = false;
+      } else if (status === 'refused') {
+        scheduleRetry();
+      }
+      return;
+    }
+    const delay = REHASH_DIAG_MIN_INTERVAL_MS - (at - lastReportTime);
+    scheduleTrailing(delay);
+  }
+
+  /** @type {() => void} */
+  let unsubscribe = () => {};
+  try {
+    unsubscribe = router.onRehashDiag(onNotify);
+    if (typeof unsubscribe !== 'function') unsubscribe = () => {};
+  } catch { unsubscribe = () => {}; }
+
+  function dispose() {
+    if (disposed) return;
+    disposed = true;
+    clearTimer();
+    try { unsubscribe(); } catch { /* Dispose never throws. */ }
+    const latest = readDiag();
+    if (!latest) return;
+    if (!hasSent && latest.rehashSkipped === 0 && latest.rehashDone === 0) return;
+    if (hasSent && latest.rehashSkipped === lastSentSkipped && latest.rehashDone === lastSentDone) return;
+    if (isDecrease(latest)) return;
+    attemptReport(latest);
+  }
+
+  return Object.freeze({ dispose });
+}
+
 /** Closed delivery key set with the utility-verified marker. @type {string} */
 const DELIVERY_KEYS_WITH_MARKER = ['schema', 'kind', 'correlation', 'principal', 'epoch',
   'surfaceId', 'surfaceGeneration', 'frameGeneration', 'leaseId', 'width',
@@ -169,6 +420,8 @@ export const PENDING_UNBOUND_MS = 2000;
  * @property {(surfaceId: unknown, bindToken?: unknown, options?: { keepStream?: boolean }) => void} unbindSurface
  * @property {(listener: (notice: { surfaceId: string, surfaceGeneration: number, epoch: number }) => void) => () => void} onSurfaceRegistered
  * @property {(surfaceId?: string) => unknown} getSurfaceStatus
+ * @property {() => Readonly<{ rehashSkipped: number, rehashDone: number }>} getRehashDiag
+ * @property {(listener: (diag: Readonly<{ rehashSkipped: number, rehashDone: number }>) => void) => () => void} onRehashDiag
  * @property {() => void} dispose
  */
 
@@ -280,7 +533,25 @@ export function installFramePortRouter(options) {
   const bindings = new Map();
   /** @type {Set<(notice: { surfaceId: string, surfaceGeneration: number, epoch: number }) => void>} */
   const registeredListeners = new Set();
+  /** @type {Map<string, number>} MVUI32 R3-06: per-surface stream high-water mark, persistent across retireStream. */
+  const streamHighWater = new Map();
+  /** @type {Set<(diag: Readonly<{ rehashSkipped: number, rehashDone: number }>) => void>} MVUI32 rehash listeners. */
+  const rehashListeners = new Set();
+  let rehashSkipped = 0;
+  let rehashDone = 0;
   let disposed = false;
+
+  /**
+   * Emit the frozen rehash snapshot to every listener. Observers never break
+   * the stream.
+   * @returns {void}
+   */
+  function emitRehashDiag() {
+    const diag = Object.freeze({ rehashSkipped, rehashDone });
+    for (const listener of [...rehashListeners]) {
+      try { listener(diag); } catch { /* Observers never break the stream. */ }
+    }
+  }
 
   /**
    * Best-effort close of transferred ports we refuse to adopt.
@@ -359,7 +630,9 @@ export function installFramePortRouter(options) {
   /**
    * Retire a stream: drop it from the map, detach and close its port, and
    * settle every queued record with the terminal outcome. An in-flight
-   * record settles when its validation completes (never painted).
+   * record settles when its validation completes (never painted). The
+   * per-surface stream high-water mark persists (R3-06): retired ids are
+   * never re-admitted.
    * @param {any} entry
    * @param {string} outcome Outcome for queued records.
    * @returns {void}
@@ -470,6 +743,12 @@ export function installFramePortRouter(options) {
    */
   async function verifyHeldDelivery(entry, held) {
     const markerVerified = isMarkerVerifiedDelivery(held);
+    if (markerVerified) {
+      rehashSkipped += 1;
+    } else {
+      rehashDone += 1;
+    }
+    emitRehashDiag();
     let digest = null;
     if (!markerVerified) {
       try {
@@ -483,10 +762,27 @@ export function installFramePortRouter(options) {
       settle(held, FRAME_OUTCOMES.SURFACE_DESTROYED);
       return;
     }
+    // R3-05: a record settled while its digest was in flight (SUPERSEDED by
+    // a newer arrival) is never retained or painted.
+    if (held.settled) return;
     const pendingGen = entry.pending?.raw?.frameGeneration ?? 0;
     if (pendingGen > held.raw.frameGeneration || entry.admittedFloor >= held.raw.frameGeneration) {
       // A newer delivery arrived (or drained) during verification: the
       // expired one was replaced before paint.
+      settle(held, FRAME_OUTCOMES.SUPERSEDED);
+      return;
+    }
+    // R3-05: a newer admitted/verified record anywhere on this stream fences
+    // the expired one out (dual-expiry ordering, bound newer work).
+    const heldGen = held.raw.frameGeneration;
+    const newerExpiring = entry.expiring !== null && entry.expiring !== undefined
+      && entry.expiring !== held && entry.expiring.raw.frameGeneration > heldGen;
+    const newerRetained = entry.retained !== null && entry.retained !== undefined
+      && entry.retained.raw.frameGeneration >= heldGen;
+    const newerBoundCurrent = entry.validating === true && entry.current !== null
+      && entry.current !== undefined && entry.current.raw.frameGeneration > heldGen;
+    const newerQueued = entry.queue.some((/** @type {any} */ queued) => queued.raw.frameGeneration > heldGen);
+    if (newerExpiring || newerRetained || newerBoundCurrent || newerQueued) {
       settle(held, FRAME_OUTCOMES.SUPERSEDED);
       return;
     }
@@ -600,8 +896,9 @@ export function installFramePortRouter(options) {
 
   /**
    * Validate a delivery against the stream binding and the packed-rgb24
-   * shape. Pure of scheduler state except the admitted floor, which advances
-   * only for accepted records.
+   * shape. R3-07: the verified floor advances only after digest success in
+   * validateAndPaint, so a failed digest never poisons it; an older arrival
+   * never supersedes a newer in-flight, queued, or held-verifying record.
    * @param {any} entry
    * @param {any} raw
    * @returns {{ ok: true } | { ok: false }} Refusals ack inside.
@@ -610,6 +907,21 @@ export function installFramePortRouter(options) {
     const refuse = () => { refuseArrival(entry, raw); return { ok: /** @type {const} */ (false) }; };
     if (!deliveryShapeOk(entry, raw)) return refuse();
     if (!hasBinding(entry.surfaceId)) return refuse();
+    const liveCurrentGen = entry.validating === true && entry.current !== null
+      && entry.current !== undefined ? (entry.current.raw.frameGeneration ?? 0) : 0;
+    let liveQueuedGen = 0;
+    for (const queued of entry.queue) {
+      const gen = queued.raw.frameGeneration ?? 0;
+      if (gen > liveQueuedGen) liveQueuedGen = gen;
+    }
+    // MVUI32F: a delivery at or below the held delivery under expiry
+    // verification (entry.expiring, async digest still running) refuses
+    // pre-hash like any other superseded arrival, so an older frame can
+    // never paint after a newer one was accepted.
+    const expiringGen = entry.expiring !== null && entry.expiring !== undefined
+      ? (entry.expiring.raw.frameGeneration ?? 0) : 0;
+    if (raw.frameGeneration <= liveCurrentGen || raw.frameGeneration <= liveQueuedGen
+      || raw.frameGeneration <= expiringGen) return refuse();
     // First accepted delivery pins the stream identity, before the async
     // digest: a racing second delivery cannot hijack the binding.
     if (!entry.pinned) {
@@ -618,7 +930,6 @@ export function installFramePortRouter(options) {
       entry.deliveryGeneration = raw.surfaceGeneration;
       entry.pinned = true;
     }
-    entry.admittedFloor = raw.frameGeneration;
     return { ok: /** @type {const} */ (true) };
   }
 
@@ -958,6 +1269,18 @@ export function installFramePortRouter(options) {
    */
   async function validateAndPaint(entry, record) {
     const markerVerified = isMarkerVerifiedDelivery(record);
+    // A kept frame replays through this path settled from birth: it was
+    // already counted and floored at expiry, so it neither counts nor floors
+    // again here.
+    const retainedReplay = record.settled === true;
+    if (!retainedReplay) {
+      if (markerVerified) {
+        rehashSkipped += 1;
+      } else {
+        rehashDone += 1;
+      }
+      emitRehashDiag();
+    }
     /** @type {string|null} */
     let digest = null;
     if (!markerVerified) {
@@ -978,6 +1301,27 @@ export function installFramePortRouter(options) {
     if (!markerVerified && (typeof digest !== 'string' || digest !== record.raw.sha256)) {
       settleAndMaybeClose(entry, record, FRAME_OUTCOMES.REFUSED);
       return;
+    }
+    // R3-07 verify-before-commit: re-check the floor after the async digest
+    // and commit only on success, so a failed digest never blocks later
+    // valid deliveries (including a retransmit of the same generation).
+    // NEW-01 pin: the bound commit floor is separate from the admitted
+    // floor (also advanced by held retains), so a hold resolving while
+    // bound work validates never kills that in-flight bound work.
+    if (!retainedReplay) {
+      const boundFloor = entry.boundFloor ?? 0;
+      if (record.raw.frameGeneration <= boundFloor) {
+        settle(record, FRAME_OUTCOMES.SUPERSEDED);
+        return;
+      }
+      for (const queued of entry.queue) {
+        if (queued.raw.frameGeneration > record.raw.frameGeneration) {
+          settle(record, FRAME_OUTCOMES.SUPERSEDED);
+          return;
+        }
+      }
+      entry.boundFloor = Math.max(boundFloor, record.raw.frameGeneration);
+      entry.admittedFloor = Math.max(entry.admittedFloor, record.raw.frameGeneration);
     }
     const ensured = ensureRegistered(entry, record.raw);
     if (ensured.ok !== true) {
@@ -1091,6 +1435,13 @@ export function installFramePortRouter(options) {
       return;
     }
     const data = /** @type {{ surface_id: string, surface_generation: number }} */ (event.data);
+    // R3-06: a notice at or below the retired high-water mark is refused
+    // before registration, hashing, or painting (a retired older stream
+    // never repaints).
+    if (data.surface_generation <= (streamHighWater.get(data.surface_id) ?? 0)) {
+      closePorts(ports);
+      return;
+    }
     const existing = streams.get(data.surface_id);
     if (!existing) {
       const entry = {
@@ -1118,6 +1469,7 @@ export function installFramePortRouter(options) {
         expiring: null,
       };
       streams.set(data.surface_id, entry);
+      streamHighWater.set(data.surface_id, data.surface_generation);
       attachPort(entry, port);
       return;
     }
@@ -1149,6 +1501,7 @@ export function installFramePortRouter(options) {
         expiring: null,
       };
       streams.set(data.surface_id, entry);
+      streamHighWater.set(data.surface_id, data.surface_generation);
       attachPort(entry, port);
       return;
     }
@@ -1293,8 +1646,29 @@ export function installFramePortRouter(options) {
   }
 
   /**
+   * Read-only frozen snapshot of the cumulative rehash counters. Readable
+   * after dispose; the reporter flushes through it.
+   * @returns {Readonly<{ rehashSkipped: number, rehashDone: number }>}
+   */
+  function getRehashDiag() {
+    return Object.freeze({ rehashSkipped, rehashDone });
+  }
+
+  /**
+   * Observe rehash counter changes. Listeners receive the frozen snapshot
+   * and never bytes.
+   * @param {(diag: Readonly<{ rehashSkipped: number, rehashDone: number }>) => void} listener
+   * @returns {() => void}
+   */
+  function onRehashDiag(listener) {
+    if (typeof listener === 'function') rehashListeners.add(listener);
+    return () => { rehashListeners.delete(listener); };
+  }
+
+  /**
    * Tear down the router: drop the window listener, close every port, settle
    * queued records as destroyed. In-flight records settle on completion.
+   * Counters stay readable; listeners and the stream map clear.
    * @returns {void}
    */
   function dispose() {
@@ -1306,6 +1680,8 @@ export function installFramePortRouter(options) {
     for (const entry of [...streams.values()]) retireStream(entry, FRAME_OUTCOMES.SURFACE_DESTROYED);
     bindings.clear();
     registeredListeners.clear();
+    rehashListeners.clear();
+    streamHighWater.clear();
   }
 
   target.addEventListener('message', onWindowMessage);
@@ -1315,6 +1691,8 @@ export function installFramePortRouter(options) {
     unbindSurface,
     onSurfaceRegistered,
     getSurfaceStatus,
+    getRehashDiag,
+    onRehashDiag,
     dispose,
   });
 }
