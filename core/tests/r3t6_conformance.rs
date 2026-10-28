@@ -1,7 +1,10 @@
 use metaviewer_core::decode_envelope;
 
 fn base_envelope() -> serde_json::Value {
-    serde_json::from_str(include_str!("../../contracts/examples/v0.2/envelope.valid.json")).unwrap()
+    serde_json::from_str(include_str!(
+        "../../contracts/examples/v0.2/envelope.valid.json"
+    ))
+    .unwrap()
 }
 
 #[test]
@@ -36,7 +39,10 @@ fn r3t6_nested_depth_and_surface_input_body_refusal() {
                 "nested_depth": depth
             }
         });
-        assert!(decode_envelope(&env.to_string()).is_err(), "depth {depth}");
+        assert!(
+            decode_envelope(&env.to_string()).is_err(),
+            "depth {depth}"
+        );
     }
 
     // 2. surface_input/v0.2 non-envelope batch is refused as envelope body
