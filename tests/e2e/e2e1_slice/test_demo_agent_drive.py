@@ -33,6 +33,7 @@ _canonical_sha256 = demo_agent_drive._canonical_sha256
 run_demo_agent_drive = demo_agent_drive.run_demo_agent_drive
 stack = demo_agent_drive.stack
 tools = demo_agent_drive.tools
+validate_partial_receipt = demo_agent_drive.validate_partial_receipt
 validate_transcript_and_receipt = demo_agent_drive.validate_transcript_and_receipt
 
 
@@ -46,21 +47,28 @@ class InjectedDemoPeer:
         transient_stale_on_nav_step1: int = 0,
         transient_stale_on_click: int = 0,
         accept_stale_negative_control: bool = False,
+        noop_focus_on_nav_step1: bool = False,
+        unverified_nav_steps: tuple[int, ...] = (),
+        unverified_nav_step_changes_frame: bool = False,
     ) -> None:
         self.surface_id = surface_id
         self.transient_stale_on_nav_step1 = transient_stale_on_nav_step1
         self.transient_stale_on_click = transient_stale_on_click
         self.accept_stale_negative_control = accept_stale_negative_control
+        self.noop_focus_on_nav_step1 = noop_focus_on_nav_step1
+        self.unverified_nav_steps = set(unverified_nav_steps)
+        self.unverified_nav_step_changes_frame = unverified_nav_step_changes_frame
         self.generation = 1
         self.calls: list[dict] = []
         self.proposals: dict[str, dict] = {}
+        self.report: dict = {"wire_evidence": []}
         self.frames: dict[int, dict] = {1: self._make_frame(1, b"initial-frame-gen-1")}
         self._nav1_attempts = 0
         self._click_attempts = 0
         self._clicked = False
 
-    def _make_frame(self, generation: int, seed: bytes) -> dict:
-        digest = hashlib.sha256(seed).hexdigest()
+    def _make_frame(self, generation: int, seed: bytes, *, digest: str | None = None) -> dict:
+        sha = hashlib.sha256(seed).hexdigest() if digest is None else digest
         return {
             "schema": "frame_ref/v0.2",
             "surface_id": self.surface_id,
@@ -71,16 +79,21 @@ class InjectedDemoPeer:
             "height": 900,
             "format": "rgb24",
             "ramws_path": f"/dev/shm/mv-demo-{self.surface_id}-{generation}.rgb",
-            "sha256": digest,
+            "sha256": sha,
             "capture_us": 100,
         }
 
     def current_frame(self) -> dict:
         return copy.deepcopy(self.frames[self.generation])
 
-    def advance_frame(self, tag: str) -> dict:
+    def advance_frame(self, tag: str, *, same_digest: bool = False) -> dict:
+        prev_digest = self.frames[self.generation]["sha256"]
         self.generation += 1
-        frame = self._make_frame(self.generation, f"frame-{self.generation}-{tag}".encode("utf-8"))
+        frame = self._make_frame(
+            self.generation,
+            f"frame-{self.generation}-{tag}".encode("utf-8"),
+            digest=prev_digest if same_digest else None,
+        )
         self.frames[self.generation] = frame
         return copy.deepcopy(frame)
 
@@ -153,12 +166,52 @@ class InjectedDemoPeer:
                     "detail": "Proposal pinned to stale frame generation or digest",
                 }
 
-            after = self.advance_frame(prop_id)
+            nav_step = None
+            for idx in (1, 2, 3):
+                if prop_id.startswith(f"demo-nav-{idx}-"):
+                    nav_step = idx
+                    break
+
+            is_noop_focus = nav_step == 1 and self.noop_focus_on_nav_step1
+            is_unverified_nav = nav_step in self.unverified_nav_steps
+            same_digest = is_noop_focus or (
+                is_unverified_nav and not self.unverified_nav_step_changes_frame
+            )
+            step_verified = not (is_noop_focus or is_unverified_nav)
+
+            after = self.advance_frame(prop_id, same_digest=same_digest)
             if prop_id.startswith("demo-click-"):
                 self._clicked = True
+            daemon_receipt = {
+                "schema": "action_receipt/v0.2",
+                "proposal_id": prop_id,
+                "executed_at_ns": int(after["ts_ns"]),
+                "after_frame": copy.deepcopy(after),
+                "verified": step_verified,
+                "verification": {
+                    "method": "pixel",
+                    "detail": "changed_region verified" if step_verified else "unchanged frame",
+                },
+                "error": "",
+                "native_evidence": {
+                    "surface_id": self.surface_id,
+                    "input_mono_ns": int(after["ts_ns"]) + 500,
+                    "input_ts_ns": int(after["ts_ns"]) + 500,
+                    "focus_verified": True,
+                    "kind": (
+                        "text"
+                        if proposal["action"]["type"] == "type"
+                        else proposal["action"]["type"]
+                    ),
+                    "result": "ok",
+                },
+            }
+            self.report["wire_evidence"].append(copy.deepcopy(daemon_receipt))
             self.proposals[prop_id] = {
                 "proposal": copy.deepcopy(proposal),
                 "after_frame": after,
+                "verified": step_verified,
+                "receipt": daemon_receipt,
             }
             return {
                 "schema": "mv_tool_result/v0.2",
@@ -177,26 +230,16 @@ class InjectedDemoPeer:
             prop_id = args["proposal_id"]
             stored = self.proposals[prop_id]
             after = stored["after_frame"]
-            receipt = {
-                "schema": "action_receipt/v0.2",
-                "proposal_id": prop_id,
-                "executed_at_ns": int(after["ts_ns"]),
-                "after_frame": copy.deepcopy(after),
-                "verified": True,
-                "verification": {
-                    "method": "pixel",
-                    "detail": "changed_region verified",
-                },
-                "error": "",
-                "native_evidence": {
-                    "surface_id": self.surface_id,
-                    "input_mono_ns": int(after["ts_ns"]) + 500,
-                    "input_ts_ns": int(after["ts_ns"]) + 500,
-                    "focus_verified": True,
-                    "kind": "click",
-                    "result": "ok",
-                },
-            }
+            if not stored.get("verified", True):
+                return {
+                    "schema": "mv_tool_result/v0.2",
+                    "request_id": req_id,
+                    "op": "wait_verify",
+                    "status": "error",
+                    "code": "VERIFICATION_FAILED",
+                    "detail": "Missing, stale or unmatched native/frame evidence",
+                }
+            receipt = copy.deepcopy(stored["receipt"])
             return {
                 "schema": "mv_tool_result/v0.2",
                 "request_id": req_id,
@@ -447,6 +490,145 @@ class DemoAgentDriveUnitTests(unittest.TestCase):
         bad_post[7]["post_frame_sha256"] = bad_post[7]["pre_frame_sha256"]
         with self.assertRaisesRegex(ValueError, "must differ"):
             validate_transcript_and_receipt(bad_post, receipt)
+
+    def test_noop_focus_step_recorded_as_noop_verified_false_and_sequence_passes(self) -> None:
+        peer = InjectedDemoPeer(noop_focus_on_nav_step1=True)
+        out = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            receipt_path = Path(tmp) / "noop-focus-receipt.json"
+            receipt = run_demo_agent_drive(
+                peer,
+                peer.surface_id,
+                read_fn=peer.make_reader(),
+                receipt_out=receipt_path,
+                out_stream=out,
+                env={},
+            )
+            saved = json.loads(receipt_path.read_text(encoding="utf-8"))
+
+        lines = [json.loads(line) for line in out.getvalue().strip().splitlines()]
+        self.assertEqual(len(lines), len(ORDERED_CHECKPOINTS))
+        self.assertEqual(receipt, saved)
+        validate_transcript_and_receipt(lines, receipt)
+
+        nav_cp = lines[2]
+        self.assertEqual(nav_cp["checkpoint"], "navigate")
+        self.assertIs(nav_cp["noop_verified"], False)
+        step1, step2, step3 = nav_cp["steps"]
+        self.assertEqual(step1["label"], "key:ctrl+l")
+        self.assertIs(step1["verified"], False)
+        self.assertIs(step1["noop_verified"], False)
+        self.assertEqual(step1["before_frame_sha256"], step1["after_frame_sha256"])
+        self.assertGreater(step1["after_generation"], lines[1]["generation"])
+        self.assertEqual(step2["label"], "type:data-url")
+        self.assertIs(step2["verified"], True)
+        self.assertEqual(step3["label"], "key:Return")
+        self.assertIs(step3["verified"], True)
+        self.assertNotEqual(nav_cp["pre_frame_sha256"], nav_cp["post_navigate_frame_sha256"])
+
+    def test_unverified_type_step_blocks_and_writes_partial_receipt_negative_control(self) -> None:
+        peer = InjectedDemoPeer(
+            noop_focus_on_nav_step1=True,
+            unverified_nav_steps=(2,),
+        )
+        out = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            receipt_path = Path(tmp) / "partial-receipt.json"
+            with self.assertRaises(tools.VerificationFailed) as ctx:
+                run_demo_agent_drive(
+                    peer,
+                    peer.surface_id,
+                    read_fn=peer.make_reader(),
+                    receipt_out=receipt_path,
+                    out_stream=out,
+                    env={},
+                )
+            self.assertTrue(receipt_path.is_file())
+            partial = json.loads(receipt_path.read_text(encoding="utf-8"))
+
+        lines = [json.loads(line) for line in out.getvalue().strip().splitlines()]
+        self.assertEqual(len(lines), 3)
+        self.assertEqual([item["checkpoint"] for item in lines], ["LIVE_STACK_READY", "observe", "navigate"])
+        validate_partial_receipt(lines, partial)
+        self.assertEqual(partial, getattr(ctx.exception, "partial_receipt"))
+        self.assertEqual(partial["status"], "BLOCKED")
+        self.assertIs(partial["partial"], True)
+        self.assertIs(partial["verified"], False)
+        self.assertEqual(partial["failed_step"], 3)
+        self.assertEqual(partial["failed_checkpoint"], "navigate")
+        self.assertEqual(partial["completed_checkpoints"], ["LIVE_STACK_READY", "observe"])
+
+        failed_cp = lines[2]
+        self.assertEqual(failed_cp["status"], "BLOCKED")
+        self.assertIs(failed_cp["verified"], False)
+        self.assertEqual(failed_cp["failed_step_index"], 2)
+        self.assertEqual(failed_cp["failed_step_label"], "type:data-url")
+        self.assertEqual(len(failed_cp["steps"]), 2)
+        self.assertIs(failed_cp["steps"][0]["noop_verified"], False)
+        self.assertIs(failed_cp["steps"][1]["verified"], False)
+        self.assertNotIn("noop_verified", failed_cp["steps"][1])
+        self.assertEqual(partial["verdict_id"], failed_cp["steps"][1]["verdict_id"])
+        self.assertEqual(partial["receipt_id"], failed_cp["steps"][1]["receipt_id"])
+        self.assertEqual(
+            partial["verdict_ids"],
+            [failed_cp["steps"][0]["verdict_id"], failed_cp["steps"][1]["verdict_id"]],
+        )
+        self.assertEqual(
+            partial["receipt_ids"],
+            [failed_cp["steps"][0]["receipt_id"], failed_cp["steps"][1]["receipt_id"]],
+        )
+
+        # Unverified focus step whose frame changed must also block (not a no-op).
+        changed_focus_peer = InjectedDemoPeer(
+            unverified_nav_steps=(1,),
+            unverified_nav_step_changes_frame=True,
+        )
+        changed_out = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp2:
+            changed_receipt_path = Path(tmp2) / "changed-focus-partial.json"
+            with self.assertRaises(tools.VerificationFailed):
+                run_demo_agent_drive(
+                    changed_focus_peer,
+                    changed_focus_peer.surface_id,
+                    read_fn=changed_focus_peer.make_reader(),
+                    receipt_out=changed_receipt_path,
+                    out_stream=changed_out,
+                    env={},
+                )
+            changed_partial = json.loads(changed_receipt_path.read_text(encoding="utf-8"))
+        changed_lines = [json.loads(line) for line in changed_out.getvalue().strip().splitlines()]
+        validate_partial_receipt(changed_lines, changed_partial)
+        self.assertEqual(changed_lines[2]["failed_step_index"], 1)
+        self.assertNotIn("noop_verified", changed_lines[2]["steps"][0])
+
+    def test_partial_receipt_written_on_later_checkpoint_block(self) -> None:
+        failing_peer = InjectedDemoPeer(transient_stale_on_click=stack.TICK_MAX_ATTEMPTS)
+        out = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            receipt_path = Path(tmp) / "click-blocked-receipt.json"
+            with self.assertRaises(tools.ToolRefusal):
+                run_demo_agent_drive(
+                    failing_peer,
+                    failing_peer.surface_id,
+                    read_fn=failing_peer.make_reader(),
+                    receipt_out=receipt_path,
+                    out_stream=out,
+                    env={},
+                    max_attempts=stack.TICK_MAX_ATTEMPTS,
+                )
+            partial = json.loads(receipt_path.read_text(encoding="utf-8"))
+
+        lines = [json.loads(line) for line in out.getvalue().strip().splitlines()]
+        self.assertEqual(len(lines), 6)
+        validate_partial_receipt(lines, partial)
+        self.assertEqual(partial["failed_checkpoint"], "custody_click")
+        self.assertEqual(
+            partial["completed_checkpoints"],
+            ["LIVE_STACK_READY", "observe", "navigate", "read", "stale_negative_control"],
+        )
+        self.assertTrue(str(partial["proposal_id"]).startswith("demo-click-"))
+        self.assertIsNone(partial["verdict_id"])
+        self.assertIsNone(partial["receipt_id"])
 
     def test_attached_session_rejects_unready_state_and_dead_supervisor(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

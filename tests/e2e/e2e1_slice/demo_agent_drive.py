@@ -9,7 +9,10 @@ explicitly requested) and executes the ordered checkpoints:
 1. ``LIVE_STACK_READY``
 2. ``observe``
 3. ``navigate`` (by composition: ``ctrl+l``, ``type`` data-URL, ``Return``;
-   the ``navigate`` wire verb is ABSENT by decision)
+   the ``navigate`` wire verb is ABSENT by decision; verified as a sequence so
+   an initial focus/selection ``ctrl+l`` step with ``verified: false`` and an
+   unchanged frame records ``noop_verified=false`` while ``type`` + ``Return``
+   produce verified receipts and a changed post frame)
 4. ``read`` (vision marks + element table printed in the checkpoint record)
 5. ``stale_negative_control`` (deliberately stale ``based_on_frame`` refused
    with ``STALE_FRAME``, run continues)
@@ -21,7 +24,14 @@ explicitly requested) and executes the ordered checkpoints:
    ``verified`` is ``True``)
 
 Emits one JSON transcript line per checkpoint to stdout and writes a structured
-receipt file when ``--receipt-out`` is given.
+receipt file when ``--receipt-out`` is given. On any block, prints the failing
+checkpoint line and writes a partial receipt containing completed checkpoints
+plus the failing checkpoint with its verdict/receipt IDs.
+
+[TARGET, unit decision] Navigation composition treats an unverified focus/select
+step (``key:ctrl+l``) whose post frame digest matches its pre frame digest as
+``noop_verified=false`` rather than a block; any other unverified step blocks
+and triggers partial receipt emission.
 """
 
 from __future__ import annotations
@@ -157,6 +167,79 @@ def refresh_latest_frame(
     return copy.deepcopy(latest)
 
 
+def _is_focus_selection_step(index: int, label: str, action: dict) -> bool:
+    """Return True for the initial focus/selection step of the navigation sequence."""
+    return (
+        index == 1
+        and label == "key:ctrl+l"
+        and isinstance(action, dict)
+        and action.get("type") == "key"
+        and action.get("keys") == ["ctrl", "l"]
+    )
+
+
+def _find_settled_receipt(
+    client: object,
+    proposal_id: str,
+    exc_receipt: dict | None = None,
+) -> dict | None:
+    """Locate a settled action_receipt/v0.2 for ``proposal_id`` from wire or peer state."""
+    if isinstance(exc_receipt, dict):
+        if (
+            exc_receipt.get("schema") == "action_receipt/v0.2"
+            and exc_receipt.get("proposal_id") == proposal_id
+        ):
+            return copy.deepcopy(exc_receipt)
+        nested = exc_receipt.get("receipt")
+        if isinstance(nested, dict) and nested.get("proposal_id") == proposal_id:
+            return copy.deepcopy(nested)
+    report = getattr(client, "report", None)
+    if isinstance(report, dict):
+        evidence = report.get("wire_evidence")
+        if isinstance(evidence, list):
+            for item in reversed(evidence):
+                if (
+                    isinstance(item, dict)
+                    and item.get("schema") == "action_receipt/v0.2"
+                    and item.get("proposal_id") == proposal_id
+                ):
+                    return copy.deepcopy(item)
+    proposals = getattr(client, "proposals", None)
+    if isinstance(proposals, dict) and isinstance(proposals.get(proposal_id), dict):
+        entry = proposals[proposal_id]
+        if isinstance(entry.get("receipt"), dict):
+            return copy.deepcopy(entry["receipt"])
+        if isinstance(entry.get("after_frame"), dict):
+            return {
+                "schema": "action_receipt/v0.2",
+                "proposal_id": proposal_id,
+                "verified": bool(entry.get("verified", False)),
+                "verification": copy.deepcopy(
+                    entry.get("verification", {"method": "pixel", "detail": "unchanged frame"})
+                ),
+                "after_frame": copy.deepcopy(entry["after_frame"]),
+            }
+    return None
+
+
+def _extract_receipt_id(
+    proposal_id: str,
+    settled_receipt: dict | None = None,
+    exc_receipt: dict | None = None,
+) -> str:
+    """Return the authoritative receipt identifier for a completed or failed wait_verify."""
+    if isinstance(settled_receipt, dict):
+        pid = settled_receipt.get("proposal_id")
+        if isinstance(pid, str) and pid:
+            return pid
+    if isinstance(exc_receipt, dict):
+        for key in ("proposal_id", "request_id"):
+            val = exc_receipt.get(key)
+            if isinstance(val, str) and val:
+                return val
+    return proposal_id
+
+
 def propose_with_stale_retry(
     surface_id: str,
     client: object,
@@ -200,6 +283,11 @@ def propose_with_stale_retry(
             }
         except tools.ToolRefusal as exc:
             if exc.reason_code != "STALE_FRAME" or attempt >= max_attempts:
+                exc.proposal_id = proposal_id
+                exc.pinned_frame = copy.deepcopy(pinned)
+                exc.attempts = attempt
+                exc.stale_retries = stale_retries
+                exc.meta = meta
                 raise
             stale_retries += 1
             pinned = refresh_latest_frame(
@@ -351,6 +439,17 @@ def validate_checkpoint_line(record: dict, expected_step: int | None = None) -> 
     if not isinstance(record.get("narration"), str) or not record["narration"].strip():
         raise ValueError("checkpoint narration must be a non-empty string")
 
+    if record.get("status") == "BLOCKED":
+        if record.get("verified") is not False:
+            raise ValueError("blocked checkpoint must record verified=False")
+        if not isinstance(record.get("error"), str) or not record["error"].strip():
+            raise ValueError("blocked checkpoint must record non-empty error")
+        if "verdict_id" not in record or "receipt_id" not in record:
+            raise ValueError("blocked checkpoint must carry verdict_id and receipt_id")
+        if not isinstance(record.get("verdict_ids"), list) or not isinstance(record.get("receipt_ids"), list):
+            raise ValueError("blocked checkpoint must carry verdict_ids and receipt_ids lists")
+        return
+
     if checkpoint == "LIVE_STACK_READY":
         if record.get("status") != "ready":
             raise ValueError("LIVE_STACK_READY status must be 'ready'")
@@ -367,8 +466,31 @@ def validate_checkpoint_line(record: dict, expected_step: int | None = None) -> 
         steps = record.get("steps")
         if not isinstance(steps, list) or len(steps) != 3:
             raise ValueError("navigate must record 3 composition steps")
-        if not all(isinstance(item, dict) and item.get("verified") is True for item in steps):
-            raise ValueError("every navigate composition step must be verified")
+        for idx, item in enumerate(steps):
+            if not isinstance(item, dict):
+                raise ValueError("navigate step must be a dict")
+            if item.get("verified") is True:
+                continue
+            if (
+                idx == 0
+                and item.get("label") == COMPOSITION_LABELS[0]
+                and item.get("verified") is False
+                and item.get("noop_verified") is False
+                and _is_sha256(item.get("before_frame_sha256"))
+                and item.get("before_frame_sha256") == item.get("after_frame_sha256")
+            ):
+                continue
+            raise ValueError("every non-noop navigate composition step must be verified")
+        post_changed = (
+            _is_sha256(record.get("pre_frame_sha256"))
+            and _is_sha256(record.get("post_navigate_frame_sha256"))
+            and record["pre_frame_sha256"] != record["post_navigate_frame_sha256"]
+        )
+        tail_verified = any(isinstance(item, dict) and item.get("verified") is True for item in steps[1:])
+        if not (tail_verified or post_changed):
+            raise ValueError(
+                "navigate sequence must produce a verified type/Return receipt or changed post frame"
+            )
     elif checkpoint == "read":
         marks = record.get("vision_marks")
         table = record.get("element_table")
@@ -424,6 +546,8 @@ def validate_transcript_and_receipt(transcript: list[dict], receipt: dict) -> No
     if not isinstance(transcript, list) or len(transcript) != len(ORDERED_CHECKPOINTS):
         raise ValueError(f"transcript must have {len(ORDERED_CHECKPOINTS)} checkpoints")
     for idx, item in enumerate(transcript, start=1):
+        if isinstance(item, dict) and item.get("status") == "BLOCKED":
+            raise ValueError(f"checkpoint {idx} is BLOCKED in a full transcript")
         validate_checkpoint_line(item, expected_step=idx)
 
     if not isinstance(receipt, dict) or receipt.get("schema") != RECEIPT_SCHEMA:
@@ -442,6 +566,41 @@ def validate_transcript_and_receipt(transcript: list[dict], receipt: dict) -> No
         or neg.get("continued") is not True
     ):
         raise ValueError("receipt negative_control must record STALE_FRAME and continued=True")
+
+
+def validate_partial_receipt(transcript: list[dict], receipt: dict) -> None:
+    """Validate a blocked partial transcript and partial receipt."""
+    if not isinstance(transcript, list) or not (1 <= len(transcript) <= len(ORDERED_CHECKPOINTS)):
+        raise ValueError("partial transcript must contain 1..8 checkpoints")
+    for idx, item in enumerate(transcript[:-1], start=1):
+        if isinstance(item, dict) and item.get("status") == "BLOCKED":
+            raise ValueError(f"completed checkpoint {idx} cannot have status='BLOCKED'")
+        validate_checkpoint_line(item, expected_step=idx)
+    failing = transcript[-1]
+    if not isinstance(failing, dict) or failing.get("status") != "BLOCKED":
+        raise ValueError("final checkpoint in partial transcript must have status='BLOCKED'")
+    validate_checkpoint_line(failing, expected_step=len(transcript))
+
+    if not isinstance(receipt, dict) or receipt.get("schema") != RECEIPT_SCHEMA:
+        raise ValueError(f"invalid partial receipt schema: {receipt.get('schema')!r}")
+    if receipt.get("status") != "BLOCKED" or receipt.get("partial") is not True:
+        raise ValueError("partial receipt must have status='BLOCKED' and partial=True")
+    if receipt.get("verified") is not False:
+        raise ValueError("partial receipt must have verified=False")
+    if receipt.get("failed_step") != len(transcript):
+        raise ValueError("partial receipt failed_step mismatch")
+    if receipt.get("failed_checkpoint") != failing.get("checkpoint"):
+        raise ValueError("partial receipt failed_checkpoint mismatch")
+    if receipt.get("completed_checkpoints") != [item["checkpoint"] for item in transcript[:-1]]:
+        raise ValueError("partial receipt completed_checkpoints mismatch")
+    if receipt.get("failing_checkpoint") != failing:
+        raise ValueError("partial receipt failing_checkpoint mismatch")
+    if receipt.get("checkpoints") != transcript:
+        raise ValueError("partial receipt checkpoints mismatch")
+    if "verdict_id" not in receipt or "receipt_id" not in receipt:
+        raise ValueError("partial receipt must include verdict_id and receipt_id")
+    if not isinstance(receipt.get("verdict_ids"), list) or not isinstance(receipt.get("receipt_ids"), list):
+        raise ValueError("partial receipt must include verdict_ids and receipt_ids lists")
 
 
 def run_demo_agent_drive(
@@ -472,6 +631,15 @@ def run_demo_agent_drive(
     started_by_runner = bool(meta.get("started_by_runner", False))
 
     transcript: list[dict] = []
+    block_ctx: dict = {}
+    initial_frame: dict | None = None
+    click_plan: dict | None = None
+
+    def _write_receipt_file(payload: dict) -> None:
+        if receipt_out is not None:
+            out_path = Path(receipt_out)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     def emit(checkpoint: str, payload: dict) -> dict:
         step = len(transcript) + 1
@@ -486,285 +654,607 @@ def run_demo_agent_drive(
         transcript.append(record)
         out_stream.write(json.dumps(record, sort_keys=True) + "\n")
         out_stream.flush()
+        block_ctx.clear()
         return record
 
-    # 1. LIVE_STACK_READY
-    emit(
-        "LIVE_STACK_READY",
-        {
-            "status": "ready",
-            "capsule": capsule,
-            "display": display,
-            "display_mode": display_mode,
-            "record_path": record_path,
-            "started_by_runner": started_by_runner,
-            "narration": (
-                f"Live stack ready on surface {surface_id} (capsule={capsule}, "
-                f"display_mode={display_mode}, record_path={record_path or 'none'})."
-            ),
-        },
-    )
-
-    # 2. observe
-    initial_obs = tools.observe(surface_id, client=client, timeout_ms=5000)
-    initial_frame = refresh_latest_frame(surface_id, client, initial_obs["frame_ref"], timeout_ms=5000)
-    emit(
-        "observe",
-        {
-            "frame_ref": copy.deepcopy(initial_frame),
-            "generation": int(initial_frame["generation"]),
-            "pre_frame_sha256": str(initial_frame["sha256"]),
-            "narration": (
-                f"Observed initial frame generation {initial_frame['generation']} "
-                f"({initial_frame['sha256'][:12]}...)."
-            ),
-        },
-    )
-
-    # 3. navigate (by composition: ctrl+l, type data-URL, Return)
-    current_frame = copy.deepcopy(initial_frame)
-    nav_steps: list[dict] = []
-    total_nav_retries = 0
-    for idx, (label, action) in enumerate(zip(COMPOSITION_LABELS, composition_actions(data_url)), start=1):
-        before_sha = str(current_frame["sha256"])
-        admitted = propose_with_stale_retry(
-            surface_id,
-            client,
-            current_frame,
-            lambda pinned, act=action: (act, None, {}),
-            step_prefix=f"demo-nav-{idx}",
-            max_attempts=max_attempts,
-            id_fn=id_fn,
-        )
-        proposal = admitted["proposal"]
-        receipt = tools.wait_verify(
-            proposal["proposal_id"],
-            proposal["expectation"],
-            15000,
-            client=client,
-        )
-        current_frame = copy.deepcopy(receipt["after_frame"])
-        total_nav_retries += int(admitted["stale_retries"])
-        nav_steps.append(
+    try:
+        # 1. LIVE_STACK_READY
+        emit(
+            "LIVE_STACK_READY",
             {
-                "index": idx,
-                "label": label,
-                "action": copy.deepcopy(action),
-                "proposal_id": proposal["proposal_id"],
-                "attempts": admitted["attempts"],
-                "stale_retries": admitted["stale_retries"],
-                "verified": bool(receipt["verified"]),
-                "before_frame_sha256": before_sha,
-                "after_frame_sha256": str(current_frame["sha256"]),
-                "after_generation": int(current_frame["generation"]),
+                "status": "ready",
+                "capsule": capsule,
+                "display": display,
+                "display_mode": display_mode,
+                "record_path": record_path,
+                "started_by_runner": started_by_runner,
+                "narration": (
+                    f"Live stack ready on surface {surface_id} (capsule={capsule}, "
+                    f"display_mode={display_mode}, record_path={record_path or 'none'})."
+                ),
+            },
+        )
+
+        # 2. observe
+        initial_obs = tools.observe(surface_id, client=client, timeout_ms=5000)
+        initial_frame = refresh_latest_frame(surface_id, client, initial_obs["frame_ref"], timeout_ms=5000)
+        emit(
+            "observe",
+            {
+                "frame_ref": copy.deepcopy(initial_frame),
+                "generation": int(initial_frame["generation"]),
+                "pre_frame_sha256": str(initial_frame["sha256"]),
+                "narration": (
+                    f"Observed initial frame generation {initial_frame['generation']} "
+                    f"({initial_frame['sha256'][:12]}...)."
+                ),
+            },
+        )
+
+        # 3. navigate (by composition: ctrl+l, type data-URL, Return)
+        current_frame = copy.deepcopy(initial_frame)
+        nav_steps: list[dict] = []
+        total_nav_retries = 0
+        block_ctx.update(
+            {
+                "verb_absent_by_decision": True,
+                "composition": list(COMPOSITION_LABELS),
+                "url": data_url,
+                "steps": nav_steps,
+                "pre_frame_sha256": str(initial_frame["sha256"]),
             }
         )
+        for idx, (label, action) in enumerate(
+            zip(COMPOSITION_LABELS, composition_actions(data_url)), start=1
+        ):
+            before_sha = str(current_frame["sha256"])
+            try:
+                admitted = propose_with_stale_retry(
+                    surface_id,
+                    client,
+                    current_frame,
+                    lambda pinned, act=action: (act, None, {}),
+                    step_prefix=f"demo-nav-{idx}",
+                    max_attempts=max_attempts,
+                    id_fn=id_fn,
+                )
+            except Exception as exc:
+                failed_prop_id = str(getattr(exc, "proposal_id", f"demo-nav-{idx}-a1"))
+                failed_retries = int(getattr(exc, "stale_retries", 0))
+                total_nav_retries += failed_retries
+                nav_steps.append(
+                    {
+                        "index": idx,
+                        "label": label,
+                        "action": copy.deepcopy(action),
+                        "proposal_id": failed_prop_id,
+                        "verdict_id": None,
+                        "receipt_id": None,
+                        "attempts": int(getattr(exc, "attempts", 1)),
+                        "stale_retries": failed_retries,
+                        "verified": False,
+                        "error": str(exc),
+                        "before_frame_sha256": before_sha,
+                        "after_frame_sha256": before_sha,
+                        "after_generation": int(current_frame["generation"]),
+                    }
+                )
+                block_ctx.update(
+                    {
+                        "failed_step_index": idx,
+                        "failed_step_label": label,
+                        "proposal_id": failed_prop_id,
+                        "verdict_id": None,
+                        "receipt_id": None,
+                        "verdict_ids": [s["verdict_id"] for s in nav_steps if s.get("verdict_id")],
+                        "receipt_ids": [s["receipt_id"] for s in nav_steps if s.get("receipt_id")],
+                        "stale_retries": total_nav_retries,
+                        "post_navigate_frame_sha256": before_sha,
+                        "frame_ref": copy.deepcopy(current_frame),
+                    }
+                )
+                raise
 
-    emit(
-        "navigate",
-        {
+            proposal = admitted["proposal"]
+            verdict = admitted["verdict"]
+            prop_id = str(proposal["proposal_id"])
+            verdict_id = str(verdict.get("proposal_id") or prop_id)
+            total_nav_retries += int(admitted["stale_retries"])
+
+            try:
+                receipt = tools.wait_verify(
+                    prop_id,
+                    proposal["expectation"],
+                    15000,
+                    client=client,
+                )
+                step_verified = bool(receipt.get("verified", True))
+                after_frame = copy.deepcopy(receipt["after_frame"])
+                receipt_id = str(receipt.get("proposal_id") or prop_id)
+                verification = copy.deepcopy(
+                    receipt.get(
+                        "verification",
+                        {"method": "pixel", "detail": "changed_region verified"},
+                    )
+                )
+                step_exc: Exception | None = (
+                    None if step_verified else tools.VerificationFailed(copy.deepcopy(receipt))
+                )
+            except tools.VerificationFailed as exc:
+                settled = _find_settled_receipt(
+                    client,
+                    prop_id,
+                    getattr(exc, "receipt", None),
+                )
+                step_verified = False
+                if isinstance(settled, dict) and isinstance(settled.get("after_frame"), dict):
+                    after_frame = copy.deepcopy(settled["after_frame"])
+                else:
+                    after_frame = refresh_latest_frame(
+                        surface_id,
+                        client,
+                        admitted["pinned_frame"],
+                        timeout_ms=5000,
+                    )
+                receipt_id = _extract_receipt_id(
+                    prop_id,
+                    settled,
+                    getattr(exc, "receipt", None),
+                )
+                verification = (
+                    copy.deepcopy(settled["verification"])
+                    if isinstance(settled, dict) and isinstance(settled.get("verification"), dict)
+                    else {"method": "pixel", "detail": "unchanged frame"}
+                )
+                step_exc = exc
+
+            after_sha = str(after_frame["sha256"])
+            after_gen = int(after_frame["generation"])
+
+            if step_verified:
+                current_frame = copy.deepcopy(after_frame)
+                nav_steps.append(
+                    {
+                        "index": idx,
+                        "label": label,
+                        "action": copy.deepcopy(action),
+                        "proposal_id": prop_id,
+                        "verdict_id": verdict_id,
+                        "receipt_id": receipt_id,
+                        "attempts": admitted["attempts"],
+                        "stale_retries": admitted["stale_retries"],
+                        "verified": True,
+                        "before_frame_sha256": before_sha,
+                        "after_frame_sha256": after_sha,
+                        "after_generation": after_gen,
+                    }
+                )
+            elif _is_focus_selection_step(idx, label, action) and after_sha == before_sha:
+                current_frame = copy.deepcopy(after_frame)
+                nav_steps.append(
+                    {
+                        "index": idx,
+                        "label": label,
+                        "action": copy.deepcopy(action),
+                        "proposal_id": prop_id,
+                        "verdict_id": verdict_id,
+                        "receipt_id": receipt_id,
+                        "attempts": admitted["attempts"],
+                        "stale_retries": admitted["stale_retries"],
+                        "verified": False,
+                        "noop_verified": False,
+                        "verification": verification,
+                        "before_frame_sha256": before_sha,
+                        "after_frame_sha256": after_sha,
+                        "after_generation": after_gen,
+                    }
+                )
+            else:
+                assert step_exc is not None
+                nav_steps.append(
+                    {
+                        "index": idx,
+                        "label": label,
+                        "action": copy.deepcopy(action),
+                        "proposal_id": prop_id,
+                        "verdict_id": verdict_id,
+                        "receipt_id": receipt_id,
+                        "attempts": admitted["attempts"],
+                        "stale_retries": admitted["stale_retries"],
+                        "verified": False,
+                        "verification": verification,
+                        "error": str(step_exc),
+                        "before_frame_sha256": before_sha,
+                        "after_frame_sha256": after_sha,
+                        "after_generation": after_gen,
+                    }
+                )
+                block_ctx.update(
+                    {
+                        "failed_step_index": idx,
+                        "failed_step_label": label,
+                        "proposal_id": prop_id,
+                        "verdict_id": verdict_id,
+                        "receipt_id": receipt_id,
+                        "verdict_ids": [s["verdict_id"] for s in nav_steps if s.get("verdict_id")],
+                        "receipt_ids": [s["receipt_id"] for s in nav_steps if s.get("receipt_id")],
+                        "stale_retries": total_nav_retries,
+                        "post_navigate_frame_sha256": after_sha,
+                        "frame_ref": copy.deepcopy(after_frame),
+                    }
+                )
+                raise step_exc
+
+        noop_focus = any(s.get("noop_verified") is False for s in nav_steps)
+        nav_payload = {
             "verb_absent_by_decision": True,
             "composition": list(COMPOSITION_LABELS),
             "url": data_url,
             "steps": nav_steps,
+            "verified": True,
+            "verdict_ids": [s["verdict_id"] for s in nav_steps if s.get("verdict_id")],
+            "receipt_ids": [s["receipt_id"] for s in nav_steps if s.get("receipt_id")],
             "stale_retries": total_nav_retries,
             "pre_frame_sha256": str(initial_frame["sha256"]),
             "post_navigate_frame_sha256": str(current_frame["sha256"]),
             "frame_ref": copy.deepcopy(current_frame),
             "narration": (
                 "Navigated to local data-URL fixture via 3-step composition "
-                "(ctrl+l, type data-URL, Return); navigate wire verb is ABSENT by decision."
+                "(ctrl+l, type data-URL, Return"
+                + ("; focus step recorded noop_verified=false on unchanged frame" if noop_focus else "")
+                + "); navigate wire verb is ABSENT by decision."
             ),
-        },
-    )
+        }
+        if noop_focus:
+            nav_payload["noop_verified"] = False
+        emit("navigate", nav_payload)
 
-    # 4. read (vision marks + element table printed in the checkpoint record)
-    current_frame = refresh_latest_frame(surface_id, client, current_frame, timeout_ms=5000)
-    pre_read = read_fn(current_frame, include_raw=True)
-    initial_plan = plan_custody_click(pre_read, current_frame, env=active_env)
-    emit(
-        "read",
-        {
-            "frame_ref": copy.deepcopy(current_frame),
-            "vision_marks": copy.deepcopy(pre_read["vision_marks"]),
-            "element_table": copy.deepcopy(pre_read["element_table"]),
-            "target_node_id": initial_plan["target_node_id"],
-            "pre_state_sha256": pre_read["state_sha256"],
-            "pre_battery_state_sha256": pre_read["battery_state_sha256"],
-            "narration": (
-                f"Read vision marks (count={pre_read['vision_marks']['count']}) and projected "
-                f"element table (elements={len(pre_read['element_table']['elements'])}); "
-                f"target node is {initial_plan['target_node_id']}."
-            ),
-        },
-    )
-
-    # 5. stale_negative_control (deliberately stale based_on_frame -> STALE_FRAME, then continue)
-    stale_generation = max(1, int(current_frame["generation"]) - 1)
-    stale_sha = (
-        str(initial_frame["sha256"])
-        if str(initial_frame["sha256"]) != str(current_frame["sha256"])
-        else "0" * 64
-    )
-    stale_proposal_id = f"demo-stale-neg-{id_fn()}"
-    stale_frame_pin = dict(current_frame, generation=stale_generation, sha256=stale_sha)
-    stale_proposal = build_proposal(
-        surface_id,
-        stale_frame_pin,
-        stale_proposal_id,
-        initial_plan["action"],
-        bbox=initial_plan["bbox"],
-    )
-    try:
-        tools.propose(stale_proposal, client=client, timeout_ms=10000)
-    except tools.ToolRefusal as exc:
-        if exc.reason_code != "STALE_FRAME":
-            raise RuntimeError(
-                f"negative control expected STALE_FRAME refusal, got {exc.reason_code!r}"
-            ) from exc
-        stale_reason = exc.reason_code
-    else:
-        raise RuntimeError("negative control failed: stale based_on_frame proposal was admitted")
-
-    emit(
-        "stale_negative_control",
-        {
-            "proposal_id": stale_proposal_id,
-            "based_on_frame": copy.deepcopy(stale_proposal["based_on_frame"]),
-            "current_frame": {
-                "generation": int(current_frame["generation"]),
-                "sha256": str(current_frame["sha256"]),
+        # 4. read (vision marks + element table printed in the checkpoint record)
+        current_frame = refresh_latest_frame(surface_id, client, current_frame, timeout_ms=5000)
+        pre_read = read_fn(current_frame, include_raw=True)
+        initial_plan = plan_custody_click(pre_read, current_frame, env=active_env)
+        emit(
+            "read",
+            {
+                "frame_ref": copy.deepcopy(current_frame),
+                "vision_marks": copy.deepcopy(pre_read["vision_marks"]),
+                "element_table": copy.deepcopy(pre_read["element_table"]),
+                "target_node_id": initial_plan["target_node_id"],
+                "pre_state_sha256": pre_read["state_sha256"],
+                "pre_battery_state_sha256": pre_read["battery_state_sha256"],
+                "narration": (
+                    f"Read vision marks (count={pre_read['vision_marks']['count']}) and projected "
+                    f"element table (elements={len(pre_read['element_table']['elements'])}); "
+                    f"target node is {initial_plan['target_node_id']}."
+                ),
             },
-            "decision": "refused",
-            "reason_code": stale_reason,
-            "continued": True,
-            "narration": (
-                f"Negative control: deliberately stale based_on_frame "
-                f"(gen={stale_generation}, sha256={stale_sha[:12]}...) refused with "
-                f"{stale_reason}; run continues."
+        )
+
+        # 5. stale_negative_control (deliberately stale based_on_frame -> STALE_FRAME, then continue)
+        stale_generation = max(1, int(current_frame["generation"]) - 1)
+        stale_sha = (
+            str(initial_frame["sha256"])
+            if str(initial_frame["sha256"]) != str(current_frame["sha256"])
+            else "0" * 64
+        )
+        stale_proposal_id = f"demo-stale-neg-{id_fn()}"
+        stale_frame_pin = dict(current_frame, generation=stale_generation, sha256=stale_sha)
+        stale_proposal = build_proposal(
+            surface_id,
+            stale_frame_pin,
+            stale_proposal_id,
+            initial_plan["action"],
+            bbox=initial_plan["bbox"],
+        )
+        block_ctx.update(
+            {
+                "proposal_id": stale_proposal_id,
+                "based_on_frame": copy.deepcopy(stale_proposal["based_on_frame"]),
+                "current_frame": {
+                    "generation": int(current_frame["generation"]),
+                    "sha256": str(current_frame["sha256"]),
+                },
+            }
+        )
+        try:
+            admitted_stale = tools.propose(stale_proposal, client=client, timeout_ms=10000)
+        except tools.ToolRefusal as exc:
+            if exc.reason_code != "STALE_FRAME":
+                raise RuntimeError(
+                    f"negative control expected STALE_FRAME refusal, got {exc.reason_code!r}"
+                ) from exc
+            stale_reason = exc.reason_code
+        else:
+            stale_vid = str(admitted_stale.get("proposal_id") or stale_proposal_id)
+            block_ctx.update(
+                {
+                    "verdict_id": stale_vid,
+                    "verdict_ids": [stale_vid],
+                }
+            )
+            raise RuntimeError("negative control failed: stale based_on_frame proposal was admitted")
+
+        emit(
+            "stale_negative_control",
+            {
+                "proposal_id": stale_proposal_id,
+                "based_on_frame": copy.deepcopy(stale_proposal["based_on_frame"]),
+                "current_frame": {
+                    "generation": int(current_frame["generation"]),
+                    "sha256": str(current_frame["sha256"]),
+                },
+                "decision": "refused",
+                "reason_code": stale_reason,
+                "continued": True,
+                "narration": (
+                    f"Negative control: deliberately stale based_on_frame "
+                    f"(gen={stale_generation}, sha256={stale_sha[:12]}...) refused with "
+                    f"{stale_reason}; run continues."
+                ),
+            },
+        )
+
+        # 6. custody_click (pin newest frame_ready and retry transient STALE_FRAME up to max_attempts)
+        active_read = pre_read
+
+        def _build_click_for_pinned(pinned_frame: dict):
+            nonlocal active_read
+            if (
+                int(pinned_frame["generation"]) != int(current_frame["generation"])
+                or str(pinned_frame["sha256"]) != str(current_frame["sha256"])
+            ):
+                active_read = read_fn(pinned_frame, include_raw=True)
+            plan = plan_custody_click(active_read, pinned_frame, env=active_env)
+            return plan["action"], plan["bbox"], plan
+
+        try:
+            click_admitted = propose_with_stale_retry(
+                surface_id,
+                client,
+                current_frame,
+                _build_click_for_pinned,
+                step_prefix="demo-click",
+                max_attempts=max_attempts,
+                id_fn=id_fn,
+            )
+        except Exception as exc:
+            block_ctx.update(
+                {
+                    "proposal_id": getattr(exc, "proposal_id", None),
+                    "verdict_id": None,
+                    "receipt_id": None,
+                    "attempts": int(getattr(exc, "attempts", 1)),
+                    "stale_retries": int(getattr(exc, "stale_retries", 0)),
+                }
+            )
+            raise
+
+        click_proposal = click_admitted["proposal"]
+        click_verdict = click_admitted["verdict"]
+        click_pinned_frame = click_admitted["pinned_frame"]
+        click_plan = click_admitted["meta"]
+        pre_click_frame_sha = str(click_pinned_frame["sha256"])
+        pre_state_sha = active_read["state_sha256"]
+        pre_battery_sha = active_read["battery_state_sha256"]
+        click_prop_id = str(click_proposal["proposal_id"])
+        click_verdict_id = str(click_verdict.get("proposal_id") or click_prop_id)
+
+        emit(
+            "custody_click",
+            {
+                "planner_id": click_plan["planner_id"],
+                "proposal_id": click_prop_id,
+                "verdict_id": click_verdict_id,
+                "target_node_id": click_plan["target_node_id"],
+                "action": copy.deepcopy(click_proposal["action"]),
+                "based_on_frame": copy.deepcopy(click_proposal["based_on_frame"]),
+                "decision": str(click_verdict.get("decision", "admitted")),
+                "attempts": click_admitted["attempts"],
+                "stale_retries": click_admitted["stale_retries"],
+                "pre_frame_sha256": pre_click_frame_sha,
+                "narration": (
+                    f"Submitted custody click via {click_plan['planner_id']} on "
+                    f"{click_plan['target_node_id']} at ({click_proposal['action']['x']}, "
+                    f"{click_proposal['action']['y']}) pinned to generation "
+                    f"{click_proposal['based_on_frame']['generation']}."
+                ),
+            },
+        )
+
+        # 7. wait_verify
+        block_ctx.update(
+            {
+                "proposal_id": click_prop_id,
+                "verdict_id": click_verdict_id,
+                "verdict_ids": [click_verdict_id],
+                "pre_frame_sha256": pre_click_frame_sha,
+            }
+        )
+        try:
+            click_receipt = tools.wait_verify(
+                click_prop_id,
+                click_proposal["expectation"],
+                15000,
+                client=client,
+            )
+        except tools.VerificationFailed as exc:
+            settled_click = _find_settled_receipt(
+                client,
+                click_prop_id,
+                getattr(exc, "receipt", None),
+            )
+            click_receipt_id = _extract_receipt_id(
+                click_prop_id,
+                settled_click,
+                getattr(exc, "receipt", None),
+            )
+            block_ctx.update(
+                {
+                    "receipt_id": click_receipt_id,
+                    "receipt_ids": [click_receipt_id],
+                }
+            )
+            raise
+
+        click_receipt_id = str(click_receipt.get("proposal_id") or click_prop_id)
+        after_frame = copy.deepcopy(click_receipt["after_frame"])
+        post_frame_sha = str(after_frame["sha256"])
+        block_ctx.update(
+            {
+                "receipt_id": click_receipt_id,
+                "receipt_ids": [click_receipt_id],
+                "post_frame_sha256": post_frame_sha,
+                "after_frame": after_frame,
+            }
+        )
+        native_ev = click_receipt.get("native_evidence", {})
+        focus_ok = bool(native_ev.get("focus_verified", True))
+        input_mono_ns = int(native_ev.get("input_mono_ns", click_receipt.get("executed_at_ns", 1)))
+        if not click_receipt.get("verified") or not focus_ok:
+            raise RuntimeError("wait_verify did not return a focus-verified receipt")
+        if input_mono_ns <= 0:
+            raise RuntimeError("wait_verify receipt missing positive input_mono_ns")
+        if post_frame_sha == pre_click_frame_sha:
+            raise RuntimeError("wait_verify after_frame sha256 did not change from pre-click frame")
+
+        emit(
+            "wait_verify",
+            {
+                "proposal_id": click_prop_id,
+                "verdict_id": click_verdict_id,
+                "receipt_id": click_receipt_id,
+                "verified": True,
+                "focus_verified": focus_ok,
+                "input_mono_ns": input_mono_ns,
+                "pre_frame_sha256": pre_click_frame_sha,
+                "post_frame_sha256": post_frame_sha,
+                "after_frame": after_frame,
+                "receipt": copy.deepcopy(click_receipt),
+                "narration": (
+                    f"Verified custody click receipt for {click_prop_id} "
+                    f"(verified=True, focus_verified=True, input_mono_ns={input_mono_ns})."
+                ),
+            },
+        )
+
+        # 8. post_state_change
+        block_ctx.update(
+            {
+                "proposal_id": click_prop_id,
+                "verdict_id": click_verdict_id,
+                "receipt_id": click_receipt_id,
+                "verdict_ids": [click_verdict_id],
+                "receipt_ids": [click_receipt_id],
+                "planner_id": click_plan["planner_id"],
+                "pre_frame_sha256": pre_click_frame_sha,
+                "pre_state_sha256": pre_state_sha,
+            }
+        )
+        settled_post_frame = refresh_latest_frame(surface_id, client, after_frame, timeout_ms=5000)
+        post_read = read_fn(settled_post_frame, include_raw=False)
+        post_state_sha = post_read["state_sha256"]
+        post_battery_sha = post_read["battery_state_sha256"]
+        block_ctx.update(
+            {
+                "post_frame_sha256": str(settled_post_frame["sha256"]),
+                "post_state_sha256": post_state_sha,
+            }
+        )
+        if post_state_sha == pre_state_sha or post_battery_sha == pre_battery_sha:
+            raise RuntimeError("post-click Wender state sha256 did not change")
+
+        emit(
+            "post_state_change",
+            {
+                "verified": True,
+                "planner_id": click_plan["planner_id"],
+                "negative_control_reason_code": "STALE_FRAME",
+                "initial_frame_sha256": str(initial_frame["sha256"]),
+                "pre_frame_sha256": pre_click_frame_sha,
+                "post_frame_sha256": str(settled_post_frame["sha256"]),
+                "frame_sha256_changed": pre_click_frame_sha != str(settled_post_frame["sha256"]),
+                "pre_state_sha256": pre_state_sha,
+                "post_state_sha256": post_state_sha,
+                "state_sha256_changed": pre_state_sha != post_state_sha,
+                "pre_battery_state_sha256": pre_battery_sha,
+                "post_battery_state_sha256": post_battery_sha,
+                "battery_state_sha256_changed": pre_battery_sha != post_battery_sha,
+                "narration": (
+                    f"Post-state verified: frame sha256 changed "
+                    f"({pre_click_frame_sha[:12]}... -> {settled_post_frame['sha256'][:12]}...) "
+                    f"and state sha256 changed ({pre_state_sha[:12]}... -> {post_state_sha[:12]}...)."
+                ),
+            },
+        )
+    except Exception as exc:
+        if len(transcript) < len(ORDERED_CHECKPOINTS):
+            failed_step = len(transcript) + 1
+            failed_cp = ORDERED_CHECKPOINTS[failed_step - 1]
+            verdict_id = block_ctx.get("verdict_id")
+            receipt_id = block_ctx.get("receipt_id")
+            verdict_ids = list(
+                block_ctx.get("verdict_ids")
+                if isinstance(block_ctx.get("verdict_ids"), list)
+                else ([verdict_id] if verdict_id else [])
+            )
+            receipt_ids = list(
+                block_ctx.get("receipt_ids")
+                if isinstance(block_ctx.get("receipt_ids"), list)
+                else ([receipt_id] if receipt_id else [])
+            )
+            failed_payload = {
+                **copy.deepcopy(block_ctx),
+                "status": "BLOCKED",
+                "verified": False,
+                "error": str(exc),
+                "proposal_id": block_ctx.get("proposal_id"),
+                "verdict_id": verdict_id,
+                "receipt_id": receipt_id,
+                "verdict_ids": verdict_ids,
+                "receipt_ids": receipt_ids,
+                "narration": (
+                    f"Blocked at checkpoint {failed_step} ({failed_cp}): {exc}"
+                ),
+            }
+            failing_record = emit(failed_cp, failed_payload)
+        else:
+            failing_record = transcript[-1]
+
+        partial_receipt = {
+            "schema": RECEIPT_SCHEMA,
+            "status": "BLOCKED",
+            "partial": True,
+            "verified": False,
+            "surface_id": surface_id,
+            "capsule": capsule,
+            "display": display,
+            "display_mode": display_mode,
+            "record_path": record_path,
+            "started_by_runner": started_by_runner,
+            "planner_id": click_plan["planner_id"] if isinstance(click_plan, dict) else None,
+            "initial_frame_sha256": (
+                str(initial_frame["sha256"]) if isinstance(initial_frame, dict) else None
             ),
-        },
-    )
-
-    # 6. custody_click (pin newest frame_ready and retry transient STALE_FRAME up to max_attempts)
-    active_read = pre_read
-
-    def _build_click_for_pinned(pinned_frame: dict):
-        nonlocal active_read
-        if (
-            int(pinned_frame["generation"]) != int(current_frame["generation"])
-            or str(pinned_frame["sha256"]) != str(current_frame["sha256"])
-        ):
-            active_read = read_fn(pinned_frame, include_raw=True)
-        plan = plan_custody_click(active_read, pinned_frame, env=active_env)
-        return plan["action"], plan["bbox"], plan
-
-    click_admitted = propose_with_stale_retry(
-        surface_id,
-        client,
-        current_frame,
-        _build_click_for_pinned,
-        step_prefix="demo-click",
-        max_attempts=max_attempts,
-        id_fn=id_fn,
-    )
-    click_proposal = click_admitted["proposal"]
-    click_verdict = click_admitted["verdict"]
-    click_pinned_frame = click_admitted["pinned_frame"]
-    click_plan = click_admitted["meta"]
-    pre_click_frame_sha = str(click_pinned_frame["sha256"])
-    pre_state_sha = active_read["state_sha256"]
-    pre_battery_sha = active_read["battery_state_sha256"]
-
-    emit(
-        "custody_click",
-        {
-            "planner_id": click_plan["planner_id"],
-            "proposal_id": click_proposal["proposal_id"],
-            "target_node_id": click_plan["target_node_id"],
-            "action": copy.deepcopy(click_proposal["action"]),
-            "based_on_frame": copy.deepcopy(click_proposal["based_on_frame"]),
-            "decision": str(click_verdict.get("decision", "admitted")),
-            "attempts": click_admitted["attempts"],
-            "stale_retries": click_admitted["stale_retries"],
-            "pre_frame_sha256": pre_click_frame_sha,
-            "narration": (
-                f"Submitted custody click via {click_plan['planner_id']} on "
-                f"{click_plan['target_node_id']} at ({click_proposal['action']['x']}, "
-                f"{click_proposal['action']['y']}) pinned to generation "
-                f"{click_proposal['based_on_frame']['generation']}."
-            ),
-        },
-    )
-
-    # 7. wait_verify
-    click_receipt = tools.wait_verify(
-        click_proposal["proposal_id"],
-        click_proposal["expectation"],
-        15000,
-        client=client,
-    )
-    after_frame = copy.deepcopy(click_receipt["after_frame"])
-    post_frame_sha = str(after_frame["sha256"])
-    native_ev = click_receipt.get("native_evidence", {})
-    focus_ok = bool(native_ev.get("focus_verified", True))
-    input_mono_ns = int(native_ev.get("input_mono_ns", click_receipt.get("executed_at_ns", 1)))
-    if not click_receipt.get("verified") or not focus_ok:
-        raise RuntimeError("wait_verify did not return a focus-verified receipt")
-    if input_mono_ns <= 0:
-        raise RuntimeError("wait_verify receipt missing positive input_mono_ns")
-    if post_frame_sha == pre_click_frame_sha:
-        raise RuntimeError("wait_verify after_frame sha256 did not change from pre-click frame")
-
-    emit(
-        "wait_verify",
-        {
-            "proposal_id": click_proposal["proposal_id"],
-            "verified": True,
-            "focus_verified": focus_ok,
-            "input_mono_ns": input_mono_ns,
-            "pre_frame_sha256": pre_click_frame_sha,
-            "post_frame_sha256": post_frame_sha,
-            "after_frame": after_frame,
-            "receipt": copy.deepcopy(click_receipt),
-            "narration": (
-                f"Verified custody click receipt for {click_proposal['proposal_id']} "
-                f"(verified=True, focus_verified=True, input_mono_ns={input_mono_ns})."
-            ),
-        },
-    )
-
-    # 8. post_state_change
-    settled_post_frame = refresh_latest_frame(surface_id, client, after_frame, timeout_ms=5000)
-    post_read = read_fn(settled_post_frame, include_raw=False)
-    post_state_sha = post_read["state_sha256"]
-    post_battery_sha = post_read["battery_state_sha256"]
-    if post_state_sha == pre_state_sha or post_battery_sha == pre_battery_sha:
-        raise RuntimeError("post-click Wender state sha256 did not change")
-
-    emit(
-        "post_state_change",
-        {
-            "verified": True,
-            "planner_id": click_plan["planner_id"],
-            "negative_control_reason_code": "STALE_FRAME",
-            "initial_frame_sha256": str(initial_frame["sha256"]),
-            "pre_frame_sha256": pre_click_frame_sha,
-            "post_frame_sha256": str(settled_post_frame["sha256"]),
-            "frame_sha256_changed": pre_click_frame_sha != str(settled_post_frame["sha256"]),
-            "pre_state_sha256": pre_state_sha,
-            "post_state_sha256": post_state_sha,
-            "state_sha256_changed": pre_state_sha != post_state_sha,
-            "pre_battery_state_sha256": pre_battery_sha,
-            "post_battery_state_sha256": post_battery_sha,
-            "battery_state_sha256_changed": pre_battery_sha != post_battery_sha,
-            "narration": (
-                f"Post-state verified: frame sha256 changed "
-                f"({pre_click_frame_sha[:12]}... -> {settled_post_frame['sha256'][:12]}...) "
-                f"and state sha256 changed ({pre_state_sha[:12]}... -> {post_state_sha[:12]}...)."
-            ),
-        },
-    )
+            "failed_step": failing_record["step"],
+            "failed_checkpoint": failing_record["checkpoint"],
+            "error": str(exc),
+            "proposal_id": failing_record.get("proposal_id"),
+            "verdict_id": failing_record.get("verdict_id"),
+            "receipt_id": failing_record.get("receipt_id"),
+            "verdict_ids": list(failing_record.get("verdict_ids", [])),
+            "receipt_ids": list(failing_record.get("receipt_ids", [])),
+            "completed_checkpoints": [item["checkpoint"] for item in transcript[:-1]],
+            "failing_checkpoint": copy.deepcopy(failing_record),
+            "checkpoints": copy.deepcopy(transcript),
+        }
+        validate_partial_receipt(transcript, partial_receipt)
+        _write_receipt_file(partial_receipt)
+        try:
+            exc.partial_receipt = partial_receipt
+            exc.failed_checkpoint = copy.deepcopy(failing_record)
+        except AttributeError:
+            pass
+        raise
 
     receipt = {
         "schema": RECEIPT_SCHEMA,
@@ -797,11 +1287,7 @@ def run_demo_agent_drive(
         "checkpoints": transcript,
     }
     validate_transcript_and_receipt(transcript, receipt)
-
-    if receipt_out is not None:
-        out_path = Path(receipt_out)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _write_receipt_file(receipt)
 
     return receipt
 
