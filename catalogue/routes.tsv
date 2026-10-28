@@ -698,6 +698,9 @@ nv_lifecycle.rs	core/tests/nv_lifecycle.rs
 nvsuper-df27d9370197	core/tests/nv_supervisor_start.rs
 record_release.rs	core/tests/record_release.rs
 replay_table.rs	core/tests/replay_table.rs
+rv11vf1-c97dd49bc702	core/tests/rv11v_f1_frame_bounds.rs
+rv11vf2-a9895a3be902	core/tests/rv11v_f2_scroll_policy.rs
+rv11v_f5_key_chord.rs	core/tests/rv11v_f5_key_chord.rs
 serve_flow.rs	core/tests/serve_flow.rs
 serve_reconnect.rs	core/tests/serve_reconnect.rs
 serve_v02_tags.rs	core/tests/serve_v02_tags.rs
