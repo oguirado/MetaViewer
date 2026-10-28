@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startDisplay } from '../electron/nesting.js';
 import { CHANNELS, ELECTRON_PIN, PRIVILEGED_ORIGIN, bootProductionMain } from '../electron/main.js';
+import { installPreload } from '../electron/preload.js';
 
 test('ARG-ui_shell-1 pre-ready policy runs during ESM evaluation before the next macrotask', async () => {
   const entry = new URL('../electron/nesting.js', import.meta.url).href;
@@ -342,5 +343,161 @@ test('R2-T4-013 startDisplay removes registered IPC handlers and window-all-clos
   } finally {
     console.log = log;
     await succeeded.cleanup();
+  }
+});
+
+test('R3-T4-006 startDisplay propagates --nested-depth=1 userAgent token so preload refuses locally with NESTED_DISPLAY_ONLY and zero IPC', async t => {
+  const descriptor = Object.getOwnPropertyDescriptor(process.versions, 'electron');
+  const prevNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  Object.defineProperty(process.versions, 'electron', { value: ELECTRON_PIN, configurable: true });
+  t.after(() => {
+    if (descriptor) Object.defineProperty(process.versions, 'electron', descriptor);
+    else delete process.versions.electron;
+    if (prevNavigator) Object.defineProperty(globalThis, 'navigator', prevNavigator);
+    else delete /** @type {any} */ (globalThis).navigator;
+  });
+
+  for (const initialUa of ['Mozilla/5.0 Chrome/134.0 Electron/44.9.2', '']) {
+    const base = await displayFixture();
+    const handlers = new Map();
+    let currentUa = initialUa;
+    let uaAtLoad = '';
+    const frame = { origin: PRIVILEGED_ORIGIN, url: `${PRIVILEGED_ORIGIN}/index.html`, detached: false };
+    /** @type {any} */
+    let contentsRef = null;
+
+    base.electron.ipcMain = {
+      handle(channel, fn) {
+        handlers.set(channel, fn);
+      },
+      removeHandler(channel) {
+        handlers.delete(channel);
+      },
+    };
+    const BaseWindow = base.electron.BrowserWindow;
+    base.electron.BrowserWindow = class extends BaseWindow {
+      constructor() {
+        super();
+        this.webContents.id = 1;
+        this.webContents.mainFrame = frame;
+        this.webContents.getUserAgent = () => currentUa;
+        this.webContents.setUserAgent = (/** @type {string} */ nextUa) => {
+          currentUa = nextUa;
+        };
+        contentsRef = this.webContents;
+      }
+      async loadURL() {
+        uaAtLoad = currentUa;
+      }
+    };
+
+    const log = console.log;
+    console.log = () => {};
+    try {
+      await startDisplay(base.electron);
+      assert.equal(
+        uaAtLoad.split(' ').includes('--nested-depth=1'),
+        true,
+        `expected --nested-depth=1 token in userAgent at loadURL, got ${JSON.stringify(uaAtLoad)}`,
+      );
+
+      Object.defineProperty(globalThis, 'navigator', {
+        value: { userAgent: uaAtLoad },
+        configurable: true,
+      });
+
+      /** @type {Array<{ channel: string, args: unknown[] }>} */
+      const ipcCalls = [];
+      const facade = installPreload({
+        contextBridge: { exposeInMainWorld: () => {} },
+        ipcRenderer: {
+          invoke: async (/** @type {string} */ channel, /** @type {unknown[]} */ ...args) => {
+            ipcCalls.push({ channel, args });
+            const handler = handlers.get(channel);
+            if (!handler) throw new Error(`missing handler for ${channel}`);
+            return handler({ sender: contentsRef, senderFrame: frame }, ...args);
+          },
+          on: () => {},
+          removeListener: () => {},
+        },
+      });
+
+      assert.equal('qa' in facade, false);
+      assert.deepEqual(
+        await facade.capture.screenshot({
+          schema: 'capture_request/v1',
+          request_id: 'req-shot-nested',
+          surface_id: 'srf-nested-1',
+        }),
+        { ok: false, code: 'NESTED_DISPLAY_ONLY', request_id: 'req-shot-nested' },
+      );
+      assert.deepEqual(
+        await facade.capture.recordStart({
+          schema: 'capture_request/v1',
+          request_id: 'req-start-nested',
+          surface_id: 'srf-nested-1',
+          mode: 'ai',
+        }),
+        { ok: false, code: 'NESTED_DISPLAY_ONLY', request_id: 'req-start-nested' },
+      );
+      assert.deepEqual(
+        await facade.capture.recordStop({
+          schema: 'capture_request/v1',
+          request_id: 'req-stop-nested',
+          recording_id: 'rec-nested-1',
+        }),
+        { ok: false, code: 'NESTED_DISPLAY_ONLY', request_id: 'req-stop-nested' },
+      );
+      assert.deepEqual(
+        await facade.capture.export({
+          schema: 'capture_request/v1',
+          request_id: 'req-export-nested',
+          capture_id: 'shot-nested-1',
+          destination: null,
+        }),
+        { ok: false, code: 'NESTED_DISPLAY_ONLY', request_id: 'req-export-nested' },
+      );
+      assert.deepEqual(
+        await facade.capture.list(),
+        { ok: false, code: 'NESTED_DISPLAY_ONLY', request_id: '' },
+      );
+      assert.deepEqual(
+        await facade.capture.subscribe(() => {}),
+        { ok: false, code: 'NESTED_DISPLAY_ONLY', request_id: '' },
+      );
+      assert.deepEqual(
+        await facade.input.send({
+          schema: 'surface_input/v1',
+          surface_id: 'srf-nested-1',
+          stream_id: 1,
+          seq: 1,
+          events: [{ kind: 'click', x: 10, y: 20, button: 'left' }],
+        }),
+        { ok: false, code: 'NESTED_DISPLAY_ONLY' },
+      );
+      assert.equal(ipcCalls.length, 0, 'nested preload must refuse locally with zero IPC calls');
+
+      // Negative control: read-only layout channels succeed while main deny handlers still refuse direct IPC.
+      assert.equal(await facade.nestedDepth(), 1);
+      assert.equal(await facade.load(), null);
+      assert.equal(ipcCalls.length, 2);
+      for (const denied of [
+        CHANNELS.save,
+        'metaviewer:settings.save',
+        'metaviewer:authority.propose',
+        'metaviewer:authority.intent',
+        'metaviewer:side-terminal.open',
+      ]) {
+        const denyHandler = handlers.get(denied);
+        assert.equal(typeof denyHandler, 'function', `expected deny handler for ${denied}`);
+        assert.throws(
+          () => denyHandler({ sender: contentsRef, senderFrame: frame }),
+          /DISPLAY_ONLY: layout persistence is disabled; privileged actions are disabled/,
+        );
+      }
+    } finally {
+      console.log = log;
+      await base.cleanup();
+    }
   }
 });

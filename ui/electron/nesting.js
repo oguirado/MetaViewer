@@ -126,6 +126,27 @@ export async function startDisplay(electron) {
       preloadPath: join(root, 'dist/preload/preload.cjs') }), title: 'MetaViewer', autoHideMenuBar: true });
     win.removeMenu();
     attachWindowPolicy(win, session.defaultSession);
+    // [TARGET, unit decision] Convey the admitted nested-depth token through
+    // the delivered nested window's userAgent before navigation so preload
+    // evaluates transport.nested === true and refuses privileged calls locally.
+    const contentsAny = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (win.webContents));
+    const currentUa = typeof contentsAny.getUserAgent === 'function'
+      ? /** @type {() => unknown} */ (contentsAny.getUserAgent).call(win.webContents)
+      : contentsAny.userAgent;
+    const baseUa = typeof currentUa === 'string' && currentUa.trim().length > 0
+      ? currentUa.trim()
+      : 'MetaViewer';
+    const nestedUa = baseUa.split(' ').includes('--nested-depth=1')
+      ? baseUa
+      : `${baseUa} --nested-depth=1`;
+    if (typeof contentsAny.setUserAgent === 'function') {
+      /** @type {(ua: string) => void} */ (contentsAny.setUserAgent).call(win.webContents, nestedUa);
+    }
+    try {
+      contentsAny.userAgent = nestedUa;
+    } catch {
+      /* native getter-only userAgent property */
+    }
     win.webContents.on('render-process-gone', () => app.exit(1));
     win.webContents.on('preload-error', (_event, _path, error) => {
       console.error(error.message);

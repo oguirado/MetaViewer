@@ -9,10 +9,18 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import {
+  lstat as lstatAsync,
+  open as openAsync,
+  realpath as realpathAsync,
+  rename as renameAsync,
+  unlink as unlinkAsync,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -841,6 +849,163 @@ describe('W2-QA-ANCHORS atomic 0600 file persistence, sender checks, and path sa
     } finally {
       cleanDir(runDir);
       harness.cleanup();
+    }
+  });
+
+  it('R3-T4-007 holds runDir descriptor and refuses parent directory symlink or inode swap before temp open and before rename', async () => {
+    const baseDir = makeRunDir('mv-qa-r3t4007-');
+    try {
+      // 1. Symlink swap of runDir between initial realpath validation and temp file open.
+      const runDirPreOpen = join(baseDir, 'run-pre-open');
+      const movedPreOpen = join(baseDir, 'run-pre-open-moved');
+      const outsidePreOpen = join(baseDir, 'outside-pre-open');
+      mkdirSync(runDirPreOpen, { mode: 0o700 });
+      chmodSync(runDirPreOpen, 0o700);
+      mkdirSync(outsidePreOpen, { mode: 0o700 });
+      chmodSync(outsidePreOpen, 0o700);
+
+      let swappedPreOpen = false;
+      let tempOpenAttemptsAfterSwap = 0;
+      let renameAttemptsPreOpen = 0;
+      await assert.rejects(
+        () =>
+          writeQaSnapshot(runDirPreOpen, validSnapshot(1), {
+            fs: {
+              lstat: async (path, ...rest) => {
+                try {
+                  return await lstatAsync(path, ...rest);
+                } finally {
+                  if (!swappedPreOpen && String(path) === join(runDirPreOpen, QA_ANCHORS_FILE)) {
+                    swappedPreOpen = true;
+                    renameSync(runDirPreOpen, movedPreOpen);
+                    symlinkSync(outsidePreOpen, runDirPreOpen);
+                  }
+                }
+              },
+              open: async (path, flags, mode) => {
+                if (swappedPreOpen) tempOpenAttemptsAfterSwap += 1;
+                return openAsync(path, flags, mode);
+              },
+              rename: async (oldPath, newPath) => {
+                renameAttemptsPreOpen += 1;
+                return renameAsync(oldPath, newPath);
+              },
+            },
+          }),
+        (err) => err instanceof MainError && err.code === 'QA_RUN_DIR',
+      );
+      assert.equal(swappedPreOpen, true);
+      assert.equal(tempOpenAttemptsAfterSwap, 0, 'must abort before opening temp file in swapped runDir');
+      assert.equal(renameAttemptsPreOpen, 0, 'must never call rename after pre-open parent swap');
+      assert.deepEqual(readdirSync(outsidePreOpen), [], 'outside target directory must remain untouched');
+
+      // 2. Symlink swap of runDir after temp file write/close and immediately before rename.
+      const runDirPreRename = join(baseDir, 'run-pre-rename');
+      const movedPreRename = join(baseDir, 'run-pre-rename-moved');
+      const outsidePreRename = join(baseDir, 'outside-pre-rename');
+      mkdirSync(runDirPreRename, { mode: 0o700 });
+      chmodSync(runDirPreRename, 0o700);
+      mkdirSync(outsidePreRename, { mode: 0o700 });
+      chmodSync(outsidePreRename, 0o700);
+
+      let swappedPreRename = false;
+      let renameAttemptsPreRename = 0;
+      await assert.rejects(
+        () =>
+          writeQaSnapshot(runDirPreRename, validSnapshot(2), {
+            fs: {
+              open: async (path, flags, mode) => {
+                const handle = await openAsync(path, flags, mode);
+                if (!String(path).endsWith('.tmp')) {
+                  return handle;
+                }
+                const origClose = handle.close.bind(handle);
+                handle.close = async () => {
+                  await origClose();
+                  if (!swappedPreRename) {
+                    swappedPreRename = true;
+                    renameSync(runDirPreRename, movedPreRename);
+                    symlinkSync(outsidePreRename, runDirPreRename);
+                  }
+                };
+                return handle;
+              },
+              rename: async (oldPath, newPath) => {
+                renameAttemptsPreRename += 1;
+                return renameAsync(oldPath, newPath);
+              },
+            },
+          }),
+        (err) => err instanceof MainError && err.code === 'QA_RUN_DIR',
+      );
+      assert.equal(swappedPreRename, true);
+      assert.equal(renameAttemptsPreRename, 0, 'must abort before rename when runDir is swapped during temp write');
+      assert.deepEqual(readdirSync(outsidePreRename), [], 'outside target directory must remain untouched');
+      assert.deepEqual(readdirSync(movedPreRename), [], 'temp file in original pinned directory must be unlinked');
+
+      // 3. Non-symlink inode replacement (swapping runDir with another 0700 directory) before rename.
+      const runDirInoSwap = join(baseDir, 'run-ino-swap');
+      const movedInoSwap = join(baseDir, 'run-ino-swap-moved');
+      const replacementDir = join(baseDir, 'replacement-0700');
+      mkdirSync(runDirInoSwap, { mode: 0o700 });
+      chmodSync(runDirInoSwap, 0o700);
+      mkdirSync(replacementDir, { mode: 0o700 });
+      chmodSync(replacementDir, 0o700);
+
+      let renameAttemptsInoSwap = 0;
+      await assert.rejects(
+        () =>
+          writeQaSnapshot(runDirInoSwap, validSnapshot(3), {
+            fs: {
+              open: async (path, flags, mode) => {
+                const handle = await openAsync(path, flags, mode);
+                if (!String(path).endsWith('.tmp')) {
+                  return handle;
+                }
+                const origClose = handle.close.bind(handle);
+                handle.close = async () => {
+                  await origClose();
+                  renameSync(runDirInoSwap, movedInoSwap);
+                  renameSync(replacementDir, runDirInoSwap);
+                };
+                return handle;
+              },
+              rename: async (oldPath, newPath) => {
+                renameAttemptsInoSwap += 1;
+                return renameAsync(oldPath, newPath);
+              },
+            },
+          }),
+        (err) => err instanceof MainError && err.code === 'QA_RUN_DIR',
+      );
+      assert.equal(renameAttemptsInoSwap, 0, 'must abort before rename when runDir inode changes');
+      assert.deepEqual(readdirSync(runDirInoSwap), [], 'replacement directory must remain untouched');
+
+      // 4. Negative control: unswapped 0700 directory with the injectable fs seam persists 0600 qa-anchors.json.
+      const runDirClean = join(baseDir, 'run-clean');
+      mkdirSync(runDirClean, { mode: 0o700 });
+      chmodSync(runDirClean, 0o700);
+      const snapClean = validSnapshot(4);
+      assert.equal(
+        await writeQaSnapshot(runDirClean, snapClean, {
+          fs: {
+            lstat: lstatAsync,
+            open: openAsync,
+            realpath: realpathAsync,
+            rename: renameAsync,
+            unlink: unlinkAsync,
+          },
+        }),
+        true,
+      );
+      const persistedPath = join(runDirClean, QA_ANCHORS_FILE);
+      const st = lstatSync(persistedPath);
+      assert.equal(st.isFile(), true);
+      assert.equal(st.isSymbolicLink(), false);
+      assert.equal(st.mode & 0o777, 0o600);
+      assert.deepEqual(JSON.parse(readFileSync(persistedPath, 'utf8')), snapClean);
+    } finally {
+      cleanDir(baseDir);
     }
   });
 });

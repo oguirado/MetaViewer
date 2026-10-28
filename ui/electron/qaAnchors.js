@@ -303,20 +303,40 @@ export function resolveQaConfig(options = {}) {
 }
 
 /**
+ * @typedef {object} QaFsSeam
+ * @property {typeof lstat} [lstat]
+ * @property {typeof open} [open]
+ * @property {typeof realpath} [realpath]
+ * @property {typeof rename} [rename]
+ * @property {typeof unlink} [unlink]
+ */
+
+/**
  * Verify directory and write the latest QA anchor snapshot atomically (0600,
  * temp + fsync + rename, O_NOFOLLOW) to qa-anchors.json inside runDir.
+ * Holds an O_RDONLY | O_DIRECTORY | O_NOFOLLOW descriptor for runDir across
+ * the entire operation and verifies (dev, ino) before temp open, before temp
+ * write, and before rename so a parent directory swap cannot redirect writes.
  * @param {string} runDir Verified private run directory.
  * @param {unknown} snapshot Snapshot payload to validate and persist.
+ * @param {{ fs?: QaFsSeam }} [options] Optional injectable filesystem seam for testing.
  * @returns {Promise<true>}
  */
-export async function writeQaSnapshot(runDir, snapshot) {
+export async function writeQaSnapshot(runDir, snapshot, options = {}) {
   const validated = validateQaSnapshot(snapshot);
   const encoded = JSON.stringify(validated);
   const uid = typeof process.getuid === 'function' ? process.getuid() : -1;
   assertOutsideSource(runDir);
+  const fsOps = {
+    lstat: options?.fs?.lstat ?? lstat,
+    open: options?.fs?.open ?? open,
+    realpath: options?.fs?.realpath ?? realpath,
+    rename: options?.fs?.rename ?? rename,
+    unlink: options?.fs?.unlink ?? unlink,
+  };
   let dirStat;
   try {
-    dirStat = await lstat(runDir);
+    dirStat = await fsOps.lstat(runDir);
   } catch {
     throw new MainError('QA_RUN_DIR', 'qa run dir is unavailable');
   }
@@ -328,62 +348,162 @@ export async function writeQaSnapshot(runDir, snapshot) {
   ) {
     throw new MainError('QA_RUN_DIR', 'qa run dir failed pre-write check');
   }
-  const canonicalDir = await realpath(runDir);
-  assertOutsideSource(canonicalDir);
-
-  const targetPath = join(runDir, QA_ANCHORS_FILE);
+  /** @type {Awaited<ReturnType<typeof open>>} */
+  let dirHandle;
   try {
-    const existing = await lstat(targetPath);
-    if (existing.isSymbolicLink() || !existing.isFile()) {
-      throw new MainError('QA_SYMLINK', 'qa-anchors.json must not be a symlink or non-regular file');
-    }
-  } catch (error) {
-    if (error instanceof MainError) {
-      throw error;
-    }
-    if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'ENOENT') {
-      throw new MainError('QA_WRITE', 'unable to inspect qa-anchors.json target');
-    }
-  }
-
-  const tempPath = join(runDir, `.qa-anchors-${process.pid}-${randomUUID()}.tmp`);
-  try {
-    const file = await open(
-      tempPath,
-      fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
-      0o600,
-    );
-    try {
-      await file.chmod(0o600);
-      await file.writeFile(encoded, 'utf8');
-      await file.sync();
-    } finally {
-      await file.close();
-    }
-    await rename(tempPath, targetPath);
-    const verifyStat = await lstat(targetPath);
-    if (verifyStat.isSymbolicLink() || !verifyStat.isFile() || (verifyStat.mode & 0o777) !== 0o600) {
-      throw new MainError('QA_WRITE', 'qa-anchors.json post-write verification failed');
-    }
-    const dirHandle = await open(
+    dirHandle = await fsOps.open(
       runDir,
       fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW,
     );
+  } catch {
+    throw new MainError('QA_RUN_DIR', 'qa run dir is unavailable');
+  }
+
+  try {
+    let pinnedStat;
     try {
-      await dirHandle.sync();
-    } finally {
-      await dirHandle.close();
+      pinnedStat = await dirHandle.stat();
+    } catch {
+      throw new MainError('QA_RUN_DIR', 'qa run dir is unavailable');
     }
-    return true;
+    if (
+      !pinnedStat.isDirectory() ||
+      (typeof pinnedStat.isSymbolicLink === 'function' && pinnedStat.isSymbolicLink()) ||
+      (uid >= 0 && pinnedStat.uid !== uid) ||
+      (pinnedStat.mode & 0o777) !== 0o700 ||
+      pinnedStat.dev !== dirStat.dev ||
+      pinnedStat.ino !== dirStat.ino ||
+      (typeof pinnedStat.nlink === 'number' && pinnedStat.nlink < 1)
+    ) {
+      throw new MainError('QA_RUN_DIR', 'qa run dir failed pre-write check');
+    }
+    const pinnedDev = pinnedStat.dev;
+    const pinnedIno = pinnedStat.ino;
+
+    let canonicalDir;
+    try {
+      canonicalDir = await fsOps.realpath(runDir);
+    } catch {
+      throw new MainError('QA_RUN_DIR', 'qa run dir is unavailable');
+    }
+    assertOutsideSource(canonicalDir);
+
+    const assertPinnedRunDir = async () => {
+      let currentStat;
+      let fdStat;
+      try {
+        currentStat = await fsOps.lstat(runDir);
+        fdStat = await dirHandle.stat();
+      } catch {
+        throw new MainError('QA_RUN_DIR', 'qa run dir failed identity check');
+      }
+      if (
+        !currentStat.isDirectory() ||
+        currentStat.isSymbolicLink() ||
+        (uid >= 0 && currentStat.uid !== uid) ||
+        (currentStat.mode & 0o777) !== 0o700 ||
+        currentStat.dev !== pinnedDev ||
+        currentStat.ino !== pinnedIno ||
+        !fdStat.isDirectory() ||
+        (typeof fdStat.isSymbolicLink === 'function' && fdStat.isSymbolicLink()) ||
+        (uid >= 0 && fdStat.uid !== uid) ||
+        (fdStat.mode & 0o777) !== 0o700 ||
+        fdStat.dev !== pinnedDev ||
+        fdStat.ino !== pinnedIno ||
+        (typeof fdStat.nlink === 'number' && fdStat.nlink < 1)
+      ) {
+        throw new MainError('QA_RUN_DIR', 'qa run dir identity changed during write');
+      }
+    };
+
+    const targetPath = join(runDir, QA_ANCHORS_FILE);
+    const assertTargetLeafSafe = async () => {
+      try {
+        const existing = await fsOps.lstat(targetPath);
+        if (existing.isSymbolicLink() || !existing.isFile() || existing.dev !== pinnedDev) {
+          throw new MainError('QA_SYMLINK', 'qa-anchors.json must not be a symlink or non-regular file');
+        }
+      } catch (error) {
+        if (error instanceof MainError) {
+          throw error;
+        }
+        if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'ENOENT') {
+          throw new MainError('QA_WRITE', 'unable to inspect qa-anchors.json target');
+        }
+      }
+    };
+
+    await assertTargetLeafSafe();
+    await assertPinnedRunDir();
+
+    const tempName = `.qa-anchors-${process.pid}-${randomUUID()}.tmp`;
+    const tempPath = join(runDir, tempName);
+    let tempCreated = false;
+    let runDirVerifiedBeforeCleanup = true;
+    try {
+      const file = await fsOps.open(
+        tempPath,
+        fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
+        0o600,
+      );
+      tempCreated = true;
+      try {
+        const tempStat = await file.stat();
+        if (!tempStat.isFile() || tempStat.dev !== pinnedDev) {
+          runDirVerifiedBeforeCleanup = false;
+          throw new MainError('QA_RUN_DIR', 'qa temp file device mismatch');
+        }
+        await assertPinnedRunDir();
+        await file.chmod(0o600);
+        await file.writeFile(encoded, 'utf8');
+        await file.sync();
+      } finally {
+        await file.close();
+      }
+      await assertPinnedRunDir();
+      await assertTargetLeafSafe();
+      await fsOps.rename(tempPath, targetPath);
+      await assertPinnedRunDir();
+      const verifyStat = await fsOps.lstat(targetPath);
+      if (
+        verifyStat.isSymbolicLink() ||
+        !verifyStat.isFile() ||
+        (verifyStat.mode & 0o777) !== 0o600 ||
+        verifyStat.dev !== pinnedDev
+      ) {
+        throw new MainError('QA_WRITE', 'qa-anchors.json post-write verification failed');
+      }
+      await dirHandle.sync();
+      return true;
+    } catch (error) {
+      try {
+        const st = await fsOps.lstat(runDir);
+        if (st.isSymbolicLink() || !st.isDirectory() || st.dev !== pinnedDev || st.ino !== pinnedIno) {
+          runDirVerifiedBeforeCleanup = false;
+        }
+      } catch {
+        runDirVerifiedBeforeCleanup = false;
+      }
+      throw error;
+    } finally {
+      if (tempCreated) {
+        if (typeof dirHandle?.fd === 'number') {
+          await fsOps.unlink(`/proc/self/fd/${dirHandle.fd}/${tempName}`).catch(() => {});
+        }
+        if (runDirVerifiedBeforeCleanup) {
+          await fsOps.unlink(tempPath).catch(() => {});
+        }
+      }
+    }
   } finally {
-    await unlink(tempPath).catch(() => {});
+    await dirHandle.close().catch(() => {});
   }
 }
 
 /**
  * Install the opt-in metaviewer:qa.anchors handler onto ipcMain when enabled.
  * Registers nothing in retail or nested launches.
- * @param {{ ipcMain: { handle: (channel: string, listener: (event: unknown, ...args: unknown[]) => Promise<unknown>) => unknown, removeHandler?: (channel: string) => unknown }, contents: unknown, env?: NodeJS.ProcessEnv, runtime?: { xdgRuntimeDir?: string, uid?: number }, runDir?: string, packaged?: boolean, nested?: boolean, argv?: ReadonlyArray<string> }} options
+ * @param {{ ipcMain: { handle: (channel: string, listener: (event: unknown, ...args: unknown[]) => Promise<unknown>) => unknown, removeHandler?: (channel: string) => unknown }, contents: unknown, env?: NodeJS.ProcessEnv, runtime?: { xdgRuntimeDir?: string, uid?: number }, runDir?: string, packaged?: boolean, nested?: boolean, argv?: ReadonlyArray<string>, fs?: QaFsSeam }} options
  * @returns {Readonly<{ enabled: boolean, runDir: string | null, dispose: () => Promise<void> }>}
  */
 export function installQaAnchors(options) {
@@ -403,6 +523,7 @@ export function installQaAnchors(options) {
     throw new MainError('IPC', 'ipcMain must provide handle');
   }
   const targetDir = config.runDir;
+  const fsSeam = options.fs;
   let disposed = false;
   /** @type {Promise<unknown>} */
   let writeChain = Promise.resolve();
@@ -445,7 +566,7 @@ export function installQaAnchors(options) {
         if (disposed) {
           throw new MainError('QA_DISPOSED', 'qa anchors bridge is disposed');
         }
-        return writeQaSnapshot(targetDir, entry.snapshot);
+        return writeQaSnapshot(targetDir, entry.snapshot, fsSeam ? { fs: fsSeam } : undefined);
       };
       const next = writeChain.then(runQueued, runQueued);
       entry.batch = next;
