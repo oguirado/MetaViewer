@@ -675,6 +675,7 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 	var q struct {
 		SurfaceID  string `json:"surface_id"`
 		ProposalID string `json:"proposal_id"`
+		Origin     string `json:"origin,omitempty"`
 		Action     struct {
 			Type   string   `json:"type"`
 			X      *int     `json:"x,omitempty"`
@@ -687,6 +688,13 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 	if e := cli.ParseLine(r.Params, m.cfg.MaxOutputBytes, &q); e != nil {
 		return nil, e
 	}
+	origin := q.Origin
+	if origin == "" {
+		origin = "agent"
+	}
+	if origin != "agent" && origin != "human" {
+		return nil, fault("input", "invalid input origin")
+	}
 	b, ok := m.bindings[q.SurfaceID]
 	if !ok || b.Surface.State != "active" || q.ProposalID == "" || len(q.ProposalID) > 128 {
 		return nil, fault("surface", "input identity required")
@@ -694,10 +702,14 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 	if m.destroying[q.SurfaceID] {
 		return nil, fault("POLICY", "surface is draining")
 	}
-	if b.Surface.Control != "agent" {
+	if origin == "human" {
+		if b.Surface.Control != "human" {
+			return nil, fault("SURFACE_NOT_HUMAN_CONTROLLED", "agent control blocks human input")
+		}
+	} else if b.Surface.Control != "agent" {
 		return nil, fault("SURFACE_NOT_AGENT_CONTROLLED", "human control blocks agent input")
 	}
-	if m.refresh[q.SurfaceID] || m.hasPending(q.SurfaceID) || m.used[q.ProposalID] || len(m.used) >= 100000 {
+	if (origin == "agent" && m.refresh[q.SurfaceID]) || m.hasPending(q.SurfaceID) || m.used[q.ProposalID] || len(m.used) >= 100000 {
 		return nil, fault("POLICY", "fresh frame and unused input permit required")
 	}
 	args := []string{"input", "--container", b.Container}
@@ -755,6 +767,12 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 	if !ok || b.Surface.State != "active" {
 		return nil, fault("surface", "surface lost during input")
 	}
+	if b.Surface.Control != origin {
+		if origin == "human" {
+			return nil, fault("SURFACE_NOT_HUMAN_CONTROLLED", "agent control blocks human input")
+		}
+		return nil, fault("SURFACE_NOT_AGENT_CONTROLLED", "human control blocks agent input")
+	}
 	if e != nil {
 		return nil, e
 	}
@@ -789,6 +807,12 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 		}
 		if pending.cancelled {
 			return nil, fault("SURFACE_NOT_AGENT_CONTROLLED", "input verification cancelled by takeover")
+		}
+		if m.bindings[q.SurfaceID].Surface.Control != origin {
+			if origin == "human" {
+				return nil, fault("SURFACE_NOT_HUMAN_CONTROLLED", "agent control blocks human input")
+			}
+			return nil, fault("SURFACE_NOT_AGENT_CONTROLLED", "human control blocks agent input")
 		}
 		if e != nil {
 			return nil, e

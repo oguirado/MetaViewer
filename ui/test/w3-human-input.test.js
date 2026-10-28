@@ -270,8 +270,9 @@ test('W3-HUMAN-INPUT-R2: metaviewer.input.send(batch) accepts click, key, type, 
   const f = await createFullStackFixture(t);
   assert.equal(SURFACE_INPUT_CHANNEL, 'metaviewer:authority.intent');
   assert.equal(typeof f.api.input?.send, 'function');
+  assert.equal(typeof f.api.input?.onResult, 'function');
   assert.equal(Object.keys(f.api).includes('input'), true);
-  assert.deepEqual(Object.keys(f.api.input), ['send']);
+  assert.deepEqual(Object.keys(f.api.input), ['send', 'onResult']);
   assert.equal(Object.isFrozen(f.api.input), true);
   assert.equal('input' in f.api.authority, false);
 
@@ -286,7 +287,7 @@ test('W3-HUMAN-INPUT-R2: metaviewer.input.send(batch) accepts click, key, type, 
       },
     });
     assert.equal(Object.keys(installed).includes('input'), true);
-    assert.deepEqual(Object.keys(installed.input), ['send']);
+    assert.deepEqual(Object.keys(installed.input), ['send', 'onResult']);
     assert.equal(Object.isFrozen(installed.input), true);
   }
 
@@ -329,6 +330,7 @@ test('W3-HUMAN-INPUT-R2: metaviewer.input.send(batch) accepts click, key, type, 
   );
   for (const env of inputEnvelopes) {
     assert.equal(env.params.surface_id, 's1');
+    assert.equal(env.params.origin, 'human');
     assert.match(env.params.proposal_id, /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
   }
 });
@@ -675,4 +677,72 @@ test('W3-HUMAN-INPUT-R2 limits, NESTED_DISPLAY_ONLY, CORE_UNAVAILABLE, and close
     }),
     { ok: false, code: 'CORE_UNAVAILABLE' },
   );
+});
+
+test('W3-HUMAN-ORIGIN-R3: metaviewer.input.onResult(cb) delivers frozen {surface_id, seq, ok, code} outcomes for applied and refused batches', async (t) => {
+  const f = await createFullStackFixture(t);
+
+  assert.throws(() => f.api.input.onResult(), { name: 'ContractError', code: 'ARGS' });
+  assert.throws(() => f.api.input.onResult('not-a-fn'), { name: 'ContractError', code: 'ARGS' });
+  assert.throws(() => f.api.input.onResult(() => {}, 'extra'), { name: 'ContractError', code: 'ARGS' });
+
+  const results = [];
+  const unsub = f.api.input.onResult((event) => {
+    assert.equal(Object.isFrozen(event), true);
+    results.push(event);
+  });
+
+  // 1. Refused under agent control -> { surface_id: 's1', seq: 1, ok: false, code: 'NOT_IN_CONTROL' }
+  const r1 = await f.api.input.send({
+    schema: 'surface_input/v1',
+    surface_id: 's1',
+    stream_id: 1,
+    seq: 1,
+    events: [{ kind: 'key', keys: ['a'] }],
+  });
+  assert.deepEqual(r1, { ok: false, code: 'NOT_IN_CONTROL' });
+  assert.deepEqual(results, [{ surface_id: 's1', seq: 1, ok: false, code: 'NOT_IN_CONTROL' }]);
+
+  // 2. Take control and apply batch -> { surface_id: 's1', seq: 2, ok: true, code: null }
+  await f.api.authority.intent(
+    JSON.stringify({
+      schema: 'ui_intent/v0.2',
+      request_id: 'req-take-onresult',
+      op: 'take_control',
+      params: { surface_id: 's1' },
+    }),
+  );
+  const r2 = await f.api.input.send({
+    schema: 'surface_input/v1',
+    surface_id: 's1',
+    stream_id: 1,
+    seq: 2,
+    events: [{ kind: 'type', text: 'hello' }],
+  });
+  assert.deepEqual(r2, { ok: true, accepted: 1 });
+  assert.deepEqual(results.at(-1), { surface_id: 's1', seq: 2, ok: true, code: null });
+
+  // 3. Adapter/core refusal verdict (SURFACE_NOT_HUMAN_CONTROLLED -> NOT_IN_CONTROL) flows to onResult.
+  f.setCoreRefuseNextInput('SURFACE_NOT_HUMAN_CONTROLLED');
+  const r3 = await f.api.input.send({
+    schema: 'surface_input/v1',
+    surface_id: 's1',
+    stream_id: 1,
+    seq: 3,
+    events: [{ kind: 'key', keys: ['Return'] }],
+  });
+  assert.deepEqual(r3, { ok: false, code: 'NOT_IN_CONTROL' });
+  assert.deepEqual(results.at(-1), { surface_id: 's1', seq: 3, ok: false, code: 'NOT_IN_CONTROL' });
+
+  // 4. Unsubscribe stops further delivery and is idempotent.
+  unsub();
+  unsub();
+  await f.api.input.send({
+    schema: 'surface_input/v1',
+    surface_id: 's1',
+    stream_id: 1,
+    seq: 4,
+    events: [{ kind: 'key', keys: ['Return'] }],
+  });
+  assert.equal(results.length, 3);
 });

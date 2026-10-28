@@ -220,6 +220,14 @@
               "minLength": 1,
               "maxLength": 128
             },
+            "origin": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "human"
+              ],
+              "maxLength": 65536
+            },
             "action": {
               "oneOf": [
                 {

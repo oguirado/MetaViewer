@@ -19,6 +19,7 @@
     "params": {
       "surface_id": "x",
       "proposal_id": "x",
+      "origin": "agent",
       "action": {
         "type": "click",
         "x": 0,

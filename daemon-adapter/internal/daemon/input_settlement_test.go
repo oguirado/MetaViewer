@@ -167,3 +167,82 @@ func TestInputFailuresSettleWithProposal(t *testing.T) {
 		})
 	}
 }
+
+func TestHumanOriginWireReceipts(t *testing.T) {
+	root, err := os.MkdirTemp("/dev/shm", "mv-human-origin-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(root)
+	source := filepath.Join(root, "demo-run/frames/w1")
+	if err = os.MkdirAll(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(source, "f.png")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img := image.NewNRGBA(image.Rect(0, 0, 2, 1))
+	img.Set(0, 0, color.NRGBA{A: 255})
+	img.Set(1, 0, color.NRGBA{A: 255})
+	if err = png.Encode(f, img); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	profiles := map[string]capsule.Profile{"demo": {Kind: "browser", NativeKind: "browser", RAMRoot: root, Display: ":100", Width: 2, Height: 1}}
+	runner := &settlementRunner{initialRunner: initialRunner{root: root}, mode: "ok", started: make(chan struct{}), finish: make(chan struct{})}
+	m, err := capsule.NewManager(capsule.Config{BinDir: t.TempDir(), Profiles: profiles, MaxSurfaces: 1, MaxOutputBytes: 8192, Timeout: time.Second, OriginNS: 100}, runner, func() uint64 { return 200 })
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := frames.NewPublisher(frames.PublishConfig{RAMRoot: root, MaxFrameBytes: 8192, MaxPixels: 2, MaxSurfaces: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pub.Close()
+	h := wireHandler(m, profiles, map[string]*frames.Publisher{root: pub}, 100)
+	call := func(op string, params any) []json.RawMessage {
+		t.Helper()
+		body, _ := json.Marshal(map[string]any{"schema": "surface_request/v0.2", "op": op, "params": params})
+		events, err := h(context.Background(), ipc.Envelope{Body: body})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return events
+	}
+	created := call("create", map[string]any{"kind": "browser", "profile_id": "demo", "geometry": map[string]int{"w": 2, "h": 1}})
+	var event struct {
+		Data struct{ Surface capsule.Surface }
+	}
+	if err = json.Unmarshal(created[0], &event); err != nil {
+		t.Fatal(err)
+	}
+	sid := event.Data.Surface.SurfaceID
+	action := map[string]any{"type": "key", "keys": []string{"a"}}
+
+	// 1. Human origin under agent control -> refused with SURFACE_NOT_HUMAN_CONTROLLED receipt.
+	refusedHuman := call("input", map[string]any{"surface_id": sid, "proposal_id": "hi-under-agent", "origin": "human", "action": action})
+	var receipt map[string]any
+	if len(refusedHuman) != 1 || json.Unmarshal(refusedHuman[0], &receipt) != nil || receipt["proposal_id"] != "hi-under-agent" || receipt["error"] != "input failed: SURFACE_NOT_HUMAN_CONTROLLED: agent control blocks human input" {
+		t.Fatalf("unexpected receipt for human origin under agent control: %s", refusedHuman)
+	}
+
+	// 2. Take control for human -> human origin applied (input_applied + frame_ready + action_receipt error=="").
+	call("take_control", map[string]any{"surface_id": sid, "owner": "human"})
+	appliedHuman := call("input", map[string]any{"surface_id": sid, "proposal_id": "hi-under-human", "origin": "human", "action": action})
+	if len(appliedHuman) != 3 {
+		t.Fatalf("expected 3 events for applied human input, got %s", appliedHuman)
+	}
+	receipt = nil
+	if json.Unmarshal(appliedHuman[2], &receipt) != nil || receipt["proposal_id"] != "hi-under-human" || receipt["error"] != "" {
+		t.Fatalf("unexpected receipt for applied human input: %s", appliedHuman[2])
+	}
+
+	// 3. Agent origin under human control -> refused with SURFACE_NOT_AGENT_CONTROLLED receipt.
+	refusedAgent := call("input", map[string]any{"surface_id": sid, "proposal_id": "ag-under-human", "origin": "agent", "action": action})
+	receipt = nil
+	if len(refusedAgent) != 1 || json.Unmarshal(refusedAgent[0], &receipt) != nil || receipt["proposal_id"] != "ag-under-human" || receipt["error"] != "input failed: SURFACE_NOT_AGENT_CONTROLLED: human control blocks agent input" {
+		t.Fatalf("unexpected receipt for agent origin under human control: %s", refusedAgent)
+	}
+}

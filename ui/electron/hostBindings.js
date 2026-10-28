@@ -395,18 +395,13 @@ export async function createMainBindings({env = process.env, createMessageChanne
             if (body.decision === 'admitted') result = true;
             else {
               const code = typeof body.reason_code === 'string' && body.reason_code.length ? body.reason_code : 'INPUT_REFUSED';
-              clearTimeout(item.timer);pending.delete(key);
+              clearTimeout(item.timer);pending.delete(key);lastIntentReplySeq = received;
               item.reject(Object.assign(new Error(code), { code, verdict: body }));
               continue;
             }
           } else if (['take_control','release_control','fold','unfold'].includes(item.body.op)) {
             clearTimeout(item.timer);pending.delete(key);item.reject(new Error('INTENT_REFUSED'));continue;
           } else continue;
-        }
-        if (item.body.schema === 'surface_request/v0.2' && item.body.op === 'input'
-            && body.schema === 'surface_event/v0.2' && body.event === 'input_applied'
-            && body.data?.proposal_id === key && body.data?.surface_id === item.body.params?.surface_id) {
-          result = true;
         }
         const state = body.schema === 'surface_event/v0.2' && body.event === 'state_changed' ? body.data?.surface : null;
         const request = item.body;
@@ -560,6 +555,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
               params: {
                 surface_id: batch.surface_id,
                 proposal_id: key,
+                origin: 'human',
                 action,
               },
             };

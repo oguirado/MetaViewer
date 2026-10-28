@@ -118,6 +118,7 @@ async function e2e27ProductionProbe(config) {
                     controlButtonExists: Boolean(controlBtn),
                     controlButtonDisabled: controlBtn ? Boolean(controlBtn.disabled) : true,
                     hasInputSend: typeof window.metaviewer?.input?.send === 'function',
+                    hasInputOnResult: typeof window.metaviewer?.input?.onResult === 'function',
                     hasAuthorityInput: typeof window.metaviewer?.authority?.input !== 'undefined',
                   };
                 })()`,
@@ -144,8 +145,20 @@ async function e2e27ProductionProbe(config) {
               const batchJson = JSON.stringify(cmd.batch);
               const result = await wc.executeJavaScript(
                 `(async () => {
+                  if (!Array.isArray(window.__e2e27InputResults)) {
+                    window.__e2e27InputResults = [];
+                    window.metaviewer.input.onResult((ev) => {
+                      window.__e2e27InputResults.push(ev);
+                    });
+                  }
                   return await window.metaviewer.input.send(${batchJson});
                 })()`,
+                true,
+              );
+              conn.write(`${JSON.stringify({ ok: true, result })}\n`);
+            } else if (cmd.op === 'readInputResults') {
+              const result = await wc.executeJavaScript(
+                `(() => Array.isArray(window.__e2e27InputResults) ? window.__e2e27InputResults.slice() : [])()`,
                 true,
               );
               conn.write(`${JSON.stringify({ ok: true, result })}\n`);
@@ -550,6 +563,7 @@ test('W3-HUMAN-INPUT-R2 (e2e27): window.metaviewer.input.send(batch) drives surf
           sample?.controlButtonExists === true &&
           sample?.controlButtonDisabled === false &&
           sample?.hasInputSend === true &&
+          sample?.hasInputOnResult === true &&
           sample?.hasAuthorityInput === false
         ) {
           boundStreamId = parsed?.preload?.lastSurfaceGeneration ?? 1;
@@ -681,7 +695,8 @@ test('W3-HUMAN-INPUT-R2 (e2e27): window.metaviewer.input.send(batch) drives surf
       assert.equal(r.schema, 'surface_request/v0.2');
       assert.equal(r.op, 'input');
       assert.deepEqual(Object.keys(r).sort(), ['op', 'params', 'schema']);
-      assert.deepEqual(Object.keys(r.params).sort(), ['action', 'proposal_id', 'surface_id']);
+      assert.deepEqual(Object.keys(r.params).sort(), ['action', 'origin', 'proposal_id', 'surface_id']);
+      assert.equal(r.params.origin, 'human');
       assert.equal(typeof r.params.proposal_id, 'string');
       assert.equal(r.params.proposal_id.length >= 1 && r.params.proposal_id.length <= 128, true);
     }
@@ -777,6 +792,20 @@ test('W3-HUMAN-INPUT-R2 (e2e27): window.metaviewer.input.send(batch) drives surf
     assert.deepEqual(postReleaseInput, { ok: false, code: 'NOT_IN_CONTROL' });
     assert.equal(receivedInputs.length, 6);
     assert.equal(receivedIntents.length, 2);
+
+    const onResultEvents = await callProbeControl(ctlSock, { op: 'readInputResults' });
+    assert.deepEqual(onResultEvents, [
+      { surface_id: surfaceId, seq: 1, ok: false, code: 'NOT_IN_CONTROL' },
+      { surface_id: 'unknown-surface', seq: 1, ok: false, code: 'SURFACE_UNKNOWN' },
+      { surface_id: surfaceId, seq: 1, ok: false, code: 'STALE_STREAM' },
+      { surface_id: surfaceId, seq: 1, ok: false, code: 'LIMIT' },
+      { surface_id: surfaceId, seq: 1, ok: false, code: 'SCHEMA' },
+      { surface_id: surfaceId, seq: 1, ok: true, code: null },
+      { surface_id: surfaceId, seq: 1, ok: false, code: 'SCHEMA' },
+      { surface_id: surfaceId, seq: 2, ok: false, code: 'SCHEMA' },
+      { surface_id: surfaceId, seq: 3, ok: true, code: null },
+      { surface_id: surfaceId, seq: 4, ok: false, code: 'NOT_IN_CONTROL' },
+    ]);
   } finally {
     if (frameInterval) clearInterval(frameInterval);
     stopChild();

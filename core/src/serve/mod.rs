@@ -853,11 +853,23 @@ impl Server {
                 return self.tool_call(peer, epoch, &env, call, boundary);
             }
             (Component::Ui | Component::Agent, Command::SurfaceRequest(request)) => {
-                if env.from.component == Component::Ui {
-                    if let crate::wire::payload::SurfaceRequest::Case5(input_req) = request.as_ref()
-                    {
+                if let crate::wire::payload::SurfaceRequest::Case5(input_req) = request.as_ref() {
+                    if env.from.component == Component::Ui {
                         return self.human_input_at(now_ns, &env, input_req, boundary);
                     }
+                    let out = self.authority.apply_with_witnesses(
+                        Input::Refuse {
+                            reason: Refusal::Policy,
+                        },
+                        vec![boundary],
+                    )?;
+                    return self.refuse_at(
+                        now_ns,
+                        &env.from,
+                        &input_req.params.proposal_id,
+                        Refusal::Policy,
+                        out.core_seq,
+                    );
                 }
                 let value = serde_json::to_value(request)?;
                 let op = value["op"].as_str().ok_or_else(|| invalid("missing op"))?;
@@ -1217,7 +1229,7 @@ impl Server {
             })?;
             if out.dispatch {
                 let body = serde_json::from_value(
-                    serde_json::json!({"schema":"surface_request/v0.2","op":"input","params":{"surface_id":proposal.surface_id,"proposal_id":proposal.proposal_id,"action":proposal.action}}),
+                    serde_json::json!({"schema":"surface_request/v0.2","op":"input","params":{"surface_id":proposal.surface_id,"proposal_id":proposal.proposal_id,"origin":"agent","action":proposal.action}}),
                 )?;
                 if let Err(error) =
                     self.send_at(now_ns, &daemon, Command::SurfaceRequest(Box::new(body)))
@@ -1398,7 +1410,12 @@ impl Server {
             .ok_or_else(|| invalid("no daemon"))?
             .endpoint
             .clone();
-        if !self.connections.contains_key(&daemon) || self.human_inputs.len() >= 100_000 {
+        if matches!(
+            input_req.params.origin,
+            crate::wire::Optional::Present(crate::wire::payload::SurfaceRequestInputOrigin::Agent)
+        ) || !self.connections.contains_key(&daemon)
+            || self.human_inputs.len() >= 100_000
+        {
             let out = self.authority.apply_with_witnesses(
                 Input::Refuse {
                     reason: Refusal::Policy,
@@ -1441,6 +1458,9 @@ impl Server {
                     params: crate::wire::payload::SurfaceRequestCase5Params {
                         surface_id: input_req.params.surface_id.clone(),
                         proposal_id: daemon_proposal_id.clone(),
+                        origin: crate::wire::Optional::Present(
+                            crate::wire::payload::SurfaceRequestInputOrigin::Human,
+                        ),
                         action: input_req.params.action.clone(),
                     },
                 }),
@@ -1470,13 +1490,7 @@ impl Server {
                 failed.core_seq,
             );
         }
-        let verdict = serde_json::from_value(serde_json::json!({
-            "schema": "action_verdict/v0.2",
-            "proposal_id": input_req.params.proposal_id,
-            "decision": "admitted",
-            "core_seq": out.core_seq,
-        }))?;
-        self.send_at(now_ns, &env.from, Command::ActionVerdict(Box::new(verdict)))
+        Ok(())
     }
     fn human_input_receipt_at(
         &mut self,
@@ -1511,9 +1525,25 @@ impl Server {
             }
             return Ok(());
         }
-        self.authority
+        let out = self
+            .authority
             .apply_with_witnesses(Input::SurfaceNotice, vec![boundary])?;
         self.tool_state.retain(&env.body);
+        if self.connections.contains_key(&human.ui) {
+            let verdict = serde_json::from_value(serde_json::json!({
+                "schema": "action_verdict/v0.2",
+                "proposal_id": human.ui_proposal_id,
+                "decision": "admitted",
+                "core_seq": out.core_seq,
+            }))?;
+            if let Err(error) =
+                self.send_at(now_ns, &human.ui, Command::ActionVerdict(Box::new(verdict)))
+            {
+                if error.downcast_ref::<SendFailure>().is_none() {
+                    return Err(error);
+                }
+            }
+        }
         Ok(())
     }
     fn unsupported_at(&mut self, now_ns: u64, env: &Envelope, boundary: Witness) -> Result<()> {

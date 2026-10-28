@@ -175,20 +175,21 @@ fn registration(component: &str, version: &str, commit: &str) -> Registration {
     .unwrap()
 }
 
-struct UiPeer {
+struct TestPeer {
     stream: UnixStream,
     from: Endpoint,
     to: Endpoint,
     session_id: String,
+    prefix: String,
     seq: u64,
 }
 
-impl UiPeer {
-    async fn connect(socket: &Path, session_id: &str) -> Self {
+impl TestPeer {
+    async fn connect(socket: &Path, session_id: &str, component: Component, name: &str) -> Self {
         let mut stream = UnixStream::connect(socket).await.unwrap();
         let from = Endpoint {
-            component: Component::Ui,
-            instance: "ui-1".into(),
+            component,
+            instance: format!("{name}-1"),
         };
         let to = Endpoint {
             component: Component::Core,
@@ -197,7 +198,7 @@ impl UiPeer {
         let hello: Hello = serde_json::from_value(json!({
             "schema": "hello/v0.2",
             "contract_version": "v0.2",
-            "component": "ui",
+            "component": name,
             "component_version": "0.1.0",
             "component_commit": DAEMON_COMMIT,
             "dependencies": []
@@ -223,13 +224,13 @@ impl UiPeer {
         let limits = WireLimits::default();
         let first = Envelope {
             schema: "envelope/v0.2".into(),
-            msg_id: "ui-hello".into(),
+            msg_id: format!("{name}-hello"),
             ts_ns: Clock::new(1),
             from: from.clone(),
             to: to.clone(),
             session_id: session_id.into(),
             seq: 1,
-            nonce: "ui-hello".into(),
+            nonce: format!("{name}-hello"),
             body: Command::Hello(Box::new(hello)),
         };
         write_frame(&mut stream, &first).await.unwrap();
@@ -241,6 +242,7 @@ impl UiPeer {
             from,
             to,
             session_id: session_id.into(),
+            prefix: name.into(),
             seq: 1,
         }
     }
@@ -249,13 +251,13 @@ impl UiPeer {
         self.seq += 1;
         let raw = json!({
             "schema": "envelope/v0.2",
-            "msg_id": format!("ui-{}", self.seq),
+            "msg_id": format!("{}-{}", self.prefix, self.seq),
             "ts_ns": self.seq * 1000,
             "from": self.from,
             "to": self.to,
             "session_id": self.session_id,
             "seq": self.seq,
-            "nonce": format!("ui-{}", self.seq),
+            "nonce": format!("{}-{}", self.prefix, self.seq),
             "body": body
         })
         .to_string();
@@ -325,7 +327,8 @@ fn real_core_and_real_daemon_adapter_accept_human_input_and_settle_outcomes() {
             &paths.shm_root,
             session_id,
         );
-        let mut ui = UiPeer::connect(&socket, session_id).await;
+        let mut ui = TestPeer::connect(&socket, session_id, Component::Ui, "ui").await;
+        let mut agent = TestPeer::connect(&socket, session_id, Component::Agent, "agent").await;
 
         // Wait for the real daemon adapter to complete its handshake with the real core.
         for _ in 0..200 {
@@ -357,8 +360,9 @@ fn real_core_and_real_daemon_adapter_accept_human_input_and_settle_outcomes() {
         .await;
 
         let mut surface_id = String::new();
-        let mut saw_frame = false;
-        while surface_id.is_empty() || !saw_frame {
+        let mut frame_sha = String::new();
+        let mut frame_gen = 0u64;
+        while surface_id.is_empty() || frame_sha.is_empty() {
             let body = ui.receive_json().await;
             if body["schema"] == "surface_event/v0.2" && body["event"] == "created" {
                 surface_id = body["data"]["surface"]["surface_id"]
@@ -366,11 +370,52 @@ fn real_core_and_real_daemon_adapter_accept_human_input_and_settle_outcomes() {
                     .unwrap()
                     .to_owned();
             } else if body["schema"] == "surface_event/v0.2" && body["event"] == "frame_ready" {
-                saw_frame = true;
+                frame_sha = body["data"]["frame_ref"]["sha256"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned();
+                frame_gen = body["data"]["frame_ref"]["generation"].as_u64().unwrap();
             } else {
                 panic!("unexpected message during surface create: {body}");
             }
         }
+
+        // 1b. Negative control: human origin under agent control is refused with LOCKED_BY_OTHER.
+        ui.send(json!({
+            "schema": "surface_request/v0.2",
+            "op": "input",
+            "params": {
+                "surface_id": surface_id,
+                "proposal_id": "hi-under-agent-ctrl",
+                "origin": "human",
+                "action": { "type": "key", "keys": ["Return"] }
+            }
+        }))
+        .await;
+        let refused_under_agent = ui.receive_json().await;
+        assert_eq!(refused_under_agent["schema"], "action_verdict/v0.2");
+        assert_eq!(refused_under_agent["proposal_id"], "hi-under-agent-ctrl");
+        assert_eq!(refused_under_agent["decision"], "refused");
+        assert_eq!(refused_under_agent["reason_code"], "LOCKED_BY_OTHER");
+
+        // 1c. Negative control: agent never may send surface_request input with origin "human".
+        agent
+            .send(json!({
+                "schema": "surface_request/v0.2",
+                "op": "input",
+                "params": {
+                    "surface_id": surface_id,
+                    "proposal_id": "ag-forged-human-origin",
+                    "origin": "human",
+                    "action": { "type": "key", "keys": ["Return"] }
+                }
+            }))
+            .await;
+        let ag_forged = agent.receive_json().await;
+        assert_eq!(ag_forged["schema"], "action_verdict/v0.2");
+        assert_eq!(ag_forged["proposal_id"], "ag-forged-human-origin");
+        assert_eq!(ag_forged["decision"], "refused");
+        assert_eq!(ag_forged["reason_code"], "POLICY");
 
         // 2. Take human control through the real core and real daemon adapter.
         ui.send(json!({
@@ -390,28 +435,53 @@ fn real_core_and_real_daemon_adapter_accept_human_input_and_settle_outcomes() {
             }
         }
 
-        // 3. Send click, key, type, and scroll human inputs from UI through real core to real adapter.
-        for (proposal_id, action, expected_refusal) in [
+        // 2b. Negative control: agent proposal under human control is refused with SURFACE_NOT_AGENT_CONTROLLED.
+        agent
+            .send(json!({
+                "schema": "action_proposal/v0.2",
+                "proposal_id": "ag-prop-under-human",
+                "surface_id": surface_id,
+                "based_on_frame": { "sha256": frame_sha, "generation": frame_gen },
+                "action": { "type": "key", "keys": ["Return"] },
+                "expectation": {
+                    "type": "changed_region",
+                    "bbox": { "x": 0, "y": 0, "w": 1, "h": 1 }
+                },
+                "budget": { "max_ms": 1000, "max_retries": 0 }
+            }))
+            .await;
+        let ag_refused = agent.receive_json().await;
+        assert_eq!(ag_refused["schema"], "action_verdict/v0.2");
+        assert_eq!(ag_refused["proposal_id"], "ag-prop-under-human");
+        assert_eq!(ag_refused["decision"], "refused");
+        assert_eq!(ag_refused["reason_code"], "SURFACE_NOT_AGENT_CONTROLLED");
+
+        // 2c. Negative control: UI setting origin "agent" is refused with POLICY.
+        ui.send(json!({
+            "schema": "surface_request/v0.2",
+            "op": "input",
+            "params": {
+                "surface_id": surface_id,
+                "proposal_id": "hi-forged-agent-origin",
+                "origin": "agent",
+                "action": { "type": "key", "keys": ["Return"] }
+            }
+        }))
+        .await;
+        let ui_forged = ui.receive_json().await;
+        assert_eq!(ui_forged["schema"], "action_verdict/v0.2");
+        assert_eq!(ui_forged["proposal_id"], "hi-forged-agent-origin");
+        assert_eq!(ui_forged["decision"], "refused");
+        assert_eq!(ui_forged["reason_code"], "POLICY");
+
+        // 3. Positive: click, key, and type human inputs from UI through real core to real adapter are applied!
+        for (proposal_id, action) in [
             (
                 "hi-real-click",
                 json!({ "type": "click", "x": 1, "y": 0, "button": "left" }),
-                "SURFACE_NOT_AGENT_CONTROLLED",
             ),
-            (
-                "hi-real-key",
-                json!({ "type": "key", "keys": ["Return"] }),
-                "SURFACE_NOT_AGENT_CONTROLLED",
-            ),
-            (
-                "hi-real-type",
-                json!({ "type": "type", "text": "a" }),
-                "SURFACE_NOT_AGENT_CONTROLLED",
-            ),
-            (
-                "hi-real-scroll",
-                json!({ "type": "scroll", "dx": 0, "dy": -120 }),
-                "POLICY",
-            ),
+            ("hi-real-key", json!({ "type": "key", "keys": ["Return"] })),
+            ("hi-real-type", json!({ "type": "type", "text": "a" })),
         ] {
             ui.send(json!({
                 "schema": "surface_request/v0.2",
@@ -419,37 +489,60 @@ fn real_core_and_real_daemon_adapter_accept_human_input_and_settle_outcomes() {
                 "params": {
                     "surface_id": surface_id,
                     "proposal_id": proposal_id,
+                    "origin": "human",
                     "action": action
                 }
             }))
             .await;
 
-            let mut saw_admitted = false;
-            let mut saw_adapter_outcome = false;
-            while !saw_admitted || !saw_adapter_outcome {
+            let mut saw_applied_event = false;
+            let mut saw_admitted_verdict = false;
+            while !saw_applied_event || !saw_admitted_verdict {
                 let body = ui.receive_json().await;
-                if body["schema"] == "action_verdict/v0.2" && body["proposal_id"] == proposal_id {
-                    if body["decision"] == "admitted" {
-                        saw_admitted = true;
-                    } else if body["decision"] == "refused" {
-                        assert_eq!(body["reason_code"], expected_refusal);
-                        saw_adapter_outcome = true;
-                    }
-                } else if body["schema"] == "surface_event/v0.2"
+                if body["schema"] == "surface_event/v0.2"
                     && body["event"] == "input_applied"
                     && body["data"]["proposal_id"] == proposal_id
                 {
-                    saw_adapter_outcome = true;
+                    saw_applied_event = true;
+                } else if body["schema"] == "action_verdict/v0.2"
+                    && body["proposal_id"] == proposal_id
+                {
+                    assert_eq!(
+                        body["decision"], "admitted",
+                        "expected human input {proposal_id} to be admitted after adapter receipt, got {body}"
+                    );
+                    saw_admitted_verdict = true;
                 }
             }
 
-            // The real daemon adapter must remain alive and never exit with rc 2.
             assert!(
                 adapter.try_wait().unwrap().is_none(),
                 "real mv-daemon-adapter exited prematurely during human input {proposal_id}"
             );
         }
 
+        // 4. Negative control: unsupported scroll action in adapter returns refused POLICY verdict to UI.
+        ui.send(json!({
+            "schema": "surface_request/v0.2",
+            "op": "input",
+            "params": {
+                "surface_id": surface_id,
+                "proposal_id": "hi-real-scroll",
+                "origin": "human",
+                "action": { "type": "scroll", "dx": 0, "dy": -120 }
+            }
+        }))
+        .await;
+        loop {
+            let body = ui.receive_json().await;
+            if body["schema"] == "action_verdict/v0.2" && body["proposal_id"] == "hi-real-scroll" {
+                assert_eq!(body["decision"], "refused");
+                assert_eq!(body["reason_code"], "POLICY");
+                break;
+            }
+        }
+
+        drop(agent);
         drop(ui);
         server_task.abort();
         let _ = server_task.await;
@@ -590,6 +683,34 @@ fn real_daemon_adapter_exits_rc_2_on_disallowed_core_body() {
             "frame_ready"
         );
 
+        // Negative control on adapter wire: origin "human" under agent control is refused with SURFACE_NOT_HUMAN_CONTROLLED.
+        send_core(
+            &mut stream,
+            json!({
+                "schema": "surface_request/v0.2",
+                "op": "input",
+                "params": {
+                    "surface_id": sid,
+                    "proposal_id": "human-under-agent-1",
+                    "origin": "human",
+                    "action": { "type": "key", "keys": ["Return"] }
+                }
+            }),
+        )
+        .await;
+        let refused_human_reply = timeout(Duration::from_secs(5), read_frame(&mut stream))
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let refused_human_body = serde_json::to_value(refused_human_reply.body).unwrap();
+        assert_eq!(refused_human_body["schema"], "action_receipt/v0.2");
+        assert_eq!(refused_human_body["proposal_id"], "human-under-agent-1");
+        assert_eq!(
+            refused_human_body["error"],
+            "input failed: SURFACE_NOT_HUMAN_CONTROLLED: agent control blocks human input"
+        );
+
         for (proposal_id, action) in [
             (
                 "core-minted-click-1",
@@ -609,6 +730,7 @@ fn real_daemon_adapter_exits_rc_2_on_disallowed_core_body() {
                     "params": {
                         "surface_id": sid,
                         "proposal_id": proposal_id,
+                        "origin": "agent",
                         "action": action
                     }
                 }),
@@ -632,6 +754,88 @@ fn real_daemon_adapter_exits_rc_2_on_disallowed_core_body() {
                     assert_eq!(body["error"], "");
                     got_receipt = true;
                 }
+            }
+        }
+
+        // Take human control on the real adapter wire: agent origin is refused, human origin is applied.
+        send_core(
+            &mut stream,
+            json!({
+                "schema": "surface_request/v0.2",
+                "op": "take_control",
+                "params": {
+                    "surface_id": sid,
+                    "owner": "human"
+                }
+            }),
+        )
+        .await;
+        let take_reply = timeout(Duration::from_secs(5), read_frame(&mut stream))
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let take_body = serde_json::to_value(take_reply.body).unwrap();
+        assert_eq!(take_body["event"], "state_changed");
+        assert_eq!(take_body["data"]["surface"]["control"], "human");
+
+        send_core(
+            &mut stream,
+            json!({
+                "schema": "surface_request/v0.2",
+                "op": "input",
+                "params": {
+                    "surface_id": sid,
+                    "proposal_id": "agent-under-human-1",
+                    "origin": "agent",
+                    "action": { "type": "key", "keys": ["Return"] }
+                }
+            }),
+        )
+        .await;
+        let refused_agent_reply = timeout(Duration::from_secs(5), read_frame(&mut stream))
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let refused_agent_body = serde_json::to_value(refused_agent_reply.body).unwrap();
+        assert_eq!(refused_agent_body["schema"], "action_receipt/v0.2");
+        assert_eq!(refused_agent_body["proposal_id"], "agent-under-human-1");
+        assert_eq!(
+            refused_agent_body["error"],
+            "input failed: SURFACE_NOT_AGENT_CONTROLLED: human control blocks agent input"
+        );
+
+        send_core(
+            &mut stream,
+            json!({
+                "schema": "surface_request/v0.2",
+                "op": "input",
+                "params": {
+                    "surface_id": sid,
+                    "proposal_id": "human-under-human-1",
+                    "origin": "human",
+                    "action": { "type": "key", "keys": ["Return"] }
+                }
+            }),
+        )
+        .await;
+        let mut got_human_applied = false;
+        let mut got_human_receipt = false;
+        while !got_human_applied || !got_human_receipt {
+            let reply = timeout(Duration::from_secs(5), read_frame(&mut stream))
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            let body = serde_json::to_value(reply.body).unwrap();
+            if body["schema"] == "surface_event/v0.2" && body["event"] == "input_applied" {
+                assert_eq!(body["data"]["proposal_id"], "human-under-human-1");
+                got_human_applied = true;
+            } else if body["schema"] == "action_receipt/v0.2" {
+                assert_eq!(body["proposal_id"], "human-under-human-1");
+                assert_eq!(body["error"], "");
+                got_human_receipt = true;
             }
         }
 

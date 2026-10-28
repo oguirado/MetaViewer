@@ -1,0 +1,15 @@
+{
+  "schema": "surface_request/v0.2",
+  "op": "input",
+  "params": {
+    "surface_id": "s-game",
+    "proposal_id": "p-bad-origin-1",
+    "origin": "robot",
+    "action": {
+      "type": "key",
+      "keys": [
+        "Return"
+      ]
+    }
+  }
+}

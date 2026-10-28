@@ -1,0 +1,13 @@
+{
+  "schema": "surface_request/v0.2",
+  "op": "input",
+  "params": {
+    "surface_id": "s-game",
+    "proposal_id": "p-human-1",
+    "origin": "human",
+    "action": {
+      "type": "type",
+      "text": "hello"
+    }
+  }
+}

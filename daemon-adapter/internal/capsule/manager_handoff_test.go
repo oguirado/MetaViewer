@@ -261,3 +261,54 @@ func TestTakeoverCancelsHoldingsVerification(t *testing.T) {
 		t.Fatalf("verification drain: %v", e)
 	}
 }
+
+func TestHumanOriginInputEnforcement(t *testing.T) {
+	r := &scriptRunner{output: []byte(startOK)}
+	m := testManager(t, r)
+	id := createID(t, m)
+	ctx := context.Background()
+	r.output = []byte(`{"surface_id":"w1","kind":"key","input_mono_ns":200,"focus_verified":true,"result":"ok"}`)
+
+	// Under agent control: human origin is refused with SURFACE_NOT_HUMAN_CONTROLLED.
+	_, e := m.Handle(ctx, req("input", `{"surface_id":"`+id+`","proposal_id":"h-under-agent","origin":"human","action":{"type":"key","keys":["a"]}}`))
+	requireFault(t, e, "SURFACE_NOT_HUMAN_CONTROLLED")
+
+	// Unknown origin is refused with input fault.
+	_, e = m.Handle(ctx, req("input", `{"surface_id":"`+id+`","proposal_id":"bad-origin","origin":"robot","action":{"type":"key","keys":["a"]}}`))
+	requireFault(t, e, "input")
+
+	// Under agent control: explicit origin="agent" succeeds.
+	out, e := m.Handle(ctx, req("input", `{"surface_id":"`+id+`","proposal_id":"a-under-agent","origin":"agent","action":{"type":"key","keys":["a"]}}`))
+	if e != nil || len(out) != 1 {
+		t.Fatalf("agent origin under agent control: %v", e)
+	}
+
+	// Take control for human.
+	if _, e = m.Handle(ctx, req("take_control", `{"surface_id":"`+id+`","owner":"human"}`)); e != nil {
+		t.Fatal(e)
+	}
+
+	// Under human control: omitted origin (default "agent") and explicit origin="agent" are refused with SURFACE_NOT_AGENT_CONTROLLED.
+	_, e = m.Handle(ctx, req("input", `{"surface_id":"`+id+`","proposal_id":"default-under-human","action":{"type":"key","keys":["a"]}}`))
+	requireFault(t, e, "SURFACE_NOT_AGENT_CONTROLLED")
+	_, e = m.Handle(ctx, req("input", `{"surface_id":"`+id+`","proposal_id":"a-under-human","origin":"agent","action":{"type":"key","keys":["a"]}}`))
+	requireFault(t, e, "SURFACE_NOT_AGENT_CONTROLLED")
+
+	// Under human control: origin="human" is applied and emits input_applied.
+	out, e = m.Handle(ctx, req("input", `{"surface_id":"`+id+`","proposal_id":"h-under-human-1","origin":"human","action":{"type":"key","keys":["Return"]}}`))
+	if e != nil || len(out) != 1 {
+		t.Fatalf("human origin under human control: %v", e)
+	}
+	r.output = []byte(`{"surface_id":"w1","kind":"text","input_mono_ns":200,"focus_verified":true,"result":"ok"}`)
+	out, e = m.Handle(ctx, req("input", `{"surface_id":"`+id+`","proposal_id":"h-under-human-2","origin":"human","action":{"type":"type","text":"hello"}}`))
+	if e != nil || len(out) != 1 {
+		t.Fatalf("human origin text under human control: %v", e)
+	}
+
+	// Release control back to agent: human origin is refused again, and works without refresh fence if human retakes control.
+	if _, e = m.Handle(ctx, req("release_control", `{"surface_id":"`+id+`"}`)); e != nil {
+		t.Fatal(e)
+	}
+	_, e = m.Handle(ctx, req("input", `{"surface_id":"`+id+`","proposal_id":"h-after-release","origin":"human","action":{"type":"key","keys":["a"]}}`))
+	requireFault(t, e, "SURFACE_NOT_HUMAN_CONTROLLED")
+}

@@ -25,7 +25,7 @@
  * @property {() => Promise<0|1|null>} nestedDepth
  * @property {() => Promise<string|null>} selfCapsuleId
  * @property {{propose:(json:string)=>Promise<any>,intent:(json:string)=>Promise<true>,subscribeFrames:(cb:(frame:any)=>void)=>(()=>void)}} authority
- * @property {{send:(batch:any)=>Promise<{ok:true,accepted:number}|{ok:false,code:string}>}} input
+ * @property {{send:(batch:any)=>Promise<{ok:true,accepted:number}|{ok:false,code:string}>,onResult:(cb:(result:{surface_id:string,seq:number,ok:boolean,code:string|null})=>void)=>(()=>void)}} input
  * @property {{screenshot:(req:any)=>Promise<any>,recordStart:(req:any)=>Promise<any>,recordStop:(req:any)=>Promise<any>,export:(req:any)=>Promise<any>,list:()=>Promise<any>,subscribe:(cb:(state:any)=>void)=>(()=>void)}} capture
  * @property {{open:(spec:any)=>Promise<{session:string}>,setEnabled:(value:boolean)=>Promise<true>}} sideTerminal
  * @property {{reportAnchors:(snapshot:any)=>Promise<true>}} [qa]
@@ -759,35 +759,82 @@ function wireFacade(transport) {
   /** @type {Map<string,number>} */ const inputLastSeq=new Map();
   /** @type {Map<string,number>} */ const inputInFlightSeq=new Map();
   /** @type {Map<string,number[]>} */ const inputRateWindow=new Map();
+  /** @type {Set<(result:any)=>void>} */ const inputResultListeners=new Set();
+  /** @param {string|null} sid @param {number|null} seq @param {{ok:boolean,code?:string}} out */
+  const emitInputResult=(sid,seq,out)=>{
+    if (sid===null || seq===null || !inputResultListeners.size) return;
+    const payload=Object.freeze({surface_id:sid,seq,ok:out.ok,code:out.ok?null:(out.code??'CORE_UNAVAILABLE')});
+    for (const notify of [...inputResultListeners]) {
+      try { notify(payload); } catch {}
+    }
+  };
   api.input=Object.freeze({
     /** @param {...unknown} args */
     send:async(...args)=>{
-      if (args.length!==1) return Object.freeze({ok:false,code:'SCHEMA'});
+      const raw=args.length===1 && args[0] && typeof args[0]==='object' && !Array.isArray(args[0]) ? /** @type {any} */(args[0]) : null;
+      const rawSid=raw && captureId(raw.surface_id) ? raw.surface_id : null;
+      const rawSeq=raw && Number.isSafeInteger(raw.seq) && raw.seq>=1 ? raw.seq : null;
+      if (args.length!==1) {
+        const out=Object.freeze({ok:false,code:'SCHEMA'});
+        emitInputResult(rawSid,rawSeq,out);
+        return out;
+      }
       const checked=validateSurfaceInputBatch(args[0]);
-      if (!checked.ok) return Object.freeze({ok:false,code:checked.code});
-      if (transport.nested) return Object.freeze({ok:false,code:'NESTED_DISPLAY_ONLY'});
+      if (!checked.ok) {
+        const out=Object.freeze({ok:false,code:checked.code});
+        emitInputResult(rawSid,rawSeq,out);
+        return out;
+      }
       const sid=checked.batch.surface_id;
+      const seq=checked.batch.seq;
+      if (transport.nested) {
+        const out=Object.freeze({ok:false,code:'NESTED_DISPLAY_ONLY'});
+        emitInputResult(sid,seq,out);
+        return out;
+      }
       const prevSeq=Math.max(inputLastSeq.get(sid)??0,inputInFlightSeq.get(sid)??0);
-      if (checked.batch.seq<=prevSeq) return Object.freeze({ok:false,code:'SCHEMA'});
+      if (seq<=prevSeq) {
+        const out=Object.freeze({ok:false,code:'SCHEMA'});
+        emitInputResult(sid,seq,out);
+        return out;
+      }
       const now=Date.now();
       const recent=(inputRateWindow.get(sid)??[]).filter(t=>now-t<1000);
       if (recent.length>=SURFACE_INPUT_MAX_BATCHES_PER_SEC) {
         inputRateWindow.set(sid,recent);
-        return Object.freeze({ok:false,code:'LIMIT'});
+        const out=Object.freeze({ok:false,code:'LIMIT'});
+        emitInputResult(sid,seq,out);
+        return out;
       }
       recent.push(now);
       inputRateWindow.set(sid,recent);
-      inputInFlightSeq.set(sid,checked.batch.seq);
+      inputInFlightSeq.set(sid,seq);
       try {
         const reply=await transport.invoke(SURFACE_INPUT_CHANNEL,Object.freeze([checked.batch]));
         const out=assertSurfaceInputReply(reply,checked.batch.events.length);
-        if (out.ok) inputLastSeq.set(sid,checked.batch.seq);
+        if (out.ok) inputLastSeq.set(sid,seq);
+        emitInputResult(sid,seq,out);
         return out;
       } catch {
-        return Object.freeze({ok:false,code:'CORE_UNAVAILABLE'});
+        const out=Object.freeze({ok:false,code:'CORE_UNAVAILABLE'});
+        emitInputResult(sid,seq,out);
+        return out;
       } finally {
         inputInFlightSeq.delete(sid);
       }
+    },
+    /** @param {...unknown} args */
+    onResult:(...args)=>{
+      if (args.length!==1 || typeof args[0]!=='function') throw new ContractError('ARGS','input result callback');
+      const cb=/** @type {(result:any)=>void} */(args[0]);
+      const listener=(/** @type {any} */value)=>cb(value);
+      inputResultListeners.add(listener);
+      let active=true;
+      return ()=>{
+        if (!active) return;
+        active=false;
+        inputResultListeners.delete(listener);
+      };
     },
   });
   api.authority=Object.freeze({

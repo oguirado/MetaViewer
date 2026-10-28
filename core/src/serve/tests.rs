@@ -614,14 +614,13 @@ fn ui_human_input_requires_human_control_and_forwards_when_admitted() {
                 }
             }),
         );
-        let verdict = serde_json::to_value(ui_rx.try_recv().unwrap().body).unwrap();
-        assert_eq!(verdict["decision"], "admitted");
-        assert_eq!(verdict["proposal_id"], id);
+        assert!(ui_rx.try_recv().is_err());
         let forwarded = serde_json::to_value(daemon_rx.try_recv().unwrap().body).unwrap();
         assert_eq!(forwarded["schema"], "surface_request/v0.2");
         assert_eq!(forwarded["op"], "input");
         assert_eq!(forwarded["params"]["surface_id"], "srf-1");
         assert_eq!(forwarded["params"]["proposal_id"], id);
+        assert_eq!(forwarded["params"]["origin"], "human");
         assert_eq!(forwarded["params"]["action"], action);
     }
 
@@ -665,6 +664,10 @@ fn ui_human_input_requires_human_control_and_forwards_when_admitted() {
             "error": ""
         }),
     );
+    let applied_verdict = serde_json::to_value(ui_rx.try_recv().unwrap().body).unwrap();
+    assert_eq!(applied_verdict["schema"], "action_verdict/v0.2");
+    assert_eq!(applied_verdict["decision"], "admitted");
+    assert_eq!(applied_verdict["proposal_id"], "hi-key-1");
     assert!(ui_rx.try_recv().is_err());
     assert!(daemon_rx.try_recv().is_err());
 
@@ -745,6 +748,25 @@ fn ui_human_input_requires_human_control_and_forwards_when_admitted() {
     let oob = serde_json::to_value(ui_rx.try_recv().unwrap().body).unwrap();
     assert_eq!(oob["decision"], "refused");
     assert_eq!(oob["reason_code"], "OUT_OF_BOUNDS");
+    assert!(daemon_rx.try_recv().is_err());
+
+    send_ui(
+        &mut server,
+        json!({
+            "schema": "surface_request/v0.2",
+            "op": "input",
+            "params": {
+                "surface_id": "srf-1",
+                "proposal_id": "hi-forged-agent-origin",
+                "origin": "agent",
+                "action": { "type": "key", "keys": ["a"] }
+            }
+        }),
+    );
+    let forged = serde_json::to_value(ui_rx.try_recv().unwrap().body).unwrap();
+    assert_eq!(forged["decision"], "refused");
+    assert_eq!(forged["proposal_id"], "hi-forged-agent-origin");
+    assert_eq!(forged["reason_code"], "POLICY");
     assert!(daemon_rx.try_recv().is_err());
 
     // 5. Release control -> subsequent human input is refused again.

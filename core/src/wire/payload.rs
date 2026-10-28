@@ -1582,10 +1582,22 @@ pub enum SurfaceRequestCase5Op {
     Value,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SurfaceRequestInputOrigin {
+    #[serde(rename = "agent")]
+    Agent,
+    #[serde(rename = "human")]
+    Human,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SurfaceRequestCase5Params {
     pub surface_id: String,
     pub proposal_id: String,
+    #[serde(
+        default = "Optional::missing",
+        skip_serializing_if = "Optional::is_missing"
+    )]
+    pub origin: Optional<SurfaceRequestInputOrigin>,
     pub action: ActionProposalAction,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
