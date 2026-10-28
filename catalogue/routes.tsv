@@ -56,6 +56,7 @@ test_deps_lock.py	agents/tests/test_deps_lock.py
 test_depth_32.py	agents/tests/test_depth_32.py
 test_envelope.py	agents/tests/test_envelope.py
 test_export.py	agents/tests/test_export.py
+test_frames_parity.py	agents/tests/test_frames_parity.py
 test_fuzz_envelope.py	agents/tests/test_fuzz_envelope.py
 test_fx2_agents_a.py	agents/tests/test_fx2_agents_a.py
 test_fx2_agents_b.py	agents/tests/test_fx2_agents_b.py
@@ -699,6 +700,7 @@ catalog_authority.rs	core/tests/catalog_authority.rs
 control_facade.rs	core/tests/control_facade.rs
 decode_envelope.rs	core/tests/decode_envelope.rs
 frame_timings.rs	core/tests/frame_timings.rs
+frames_parity.rs	core/tests/frames_parity.rs
 framing.rs	core/tests/framing.rs
 handshake.rs	core/tests/handshake.rs
 holdings_settle.rs	core/tests/holdings_settle.rs
@@ -829,6 +831,7 @@ conform-8ca4cdb6f485	daemon-adapter/internal/ipc/conformance_probe_test.go
 ipc-dispatch_test.go	daemon-adapter/internal/ipc/dispatch_test.go
 foreign_peer_test.go	daemon-adapter/internal/ipc/foreign_peer_test.go
 frame.go	daemon-adapter/internal/ipc/frame.go
+frames_parity_test.go	daemon-adapter/internal/ipc/frames_parity_test.go
 ipc_test.go	daemon-adapter/internal/ipc/ipc_test.go
 json.go	daemon-adapter/internal/ipc/json.go
 maxconn_test.go	daemon-adapter/internal/ipc/maxconn_test.go
@@ -1058,6 +1061,7 @@ test_live_stack.py	tests/e2e/test_live_stack.py
 testvol-fa0645094684	tests/e2e/test_volume_bootstrap.py
 volumeb-fd6fcd819519	tests/e2e/volume_bootstrap.test.js
 wall-fixture.mjs	tests/e2e/wall-fixture.mjs
+frames_parity.json	tests/fixtures/frames_parity.json
 golden_scenario.json	tests/fixtures/golden_scenario.json
 secrets-README.md	tests/fixtures/secrets/README.md
 gate.py	tests/fixtures/secrets/gate.py
@@ -1257,6 +1261,7 @@ frameRe-465cff07ceeb	ui/test/frameReader-lexical.test.js
 frameReader.test.js	ui/test/frameReader.test.js
 frameRe-ec3058eeff9f	ui/test/frameReaderOnePass.test.mjs
 frameTile.test.js	ui/test/frameTile.test.js
+framesParity.test.mjs	ui/test/framesParity.test.mjs
 hostset-f2d771cedde2	ui/test/host-settings-fps.test.js
 hostBindings.test.js	ui/test/hostBindings.test.js
 intents.test.js	ui/test/intents.test.js
