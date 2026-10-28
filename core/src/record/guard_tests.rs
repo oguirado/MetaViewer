@@ -294,3 +294,103 @@ fn arg_1_unreleased_screenshots_hold_named_reservations() {
         .unwrap();
     assert!(matches!(events[0], RecordEvent::Case0(_)));
 }
+
+fn host_frame(surface: &str, len: usize, pixel: u8) -> (FrameRef, Vec<u8>) {
+    let bytes = vec![pixel; len];
+    let mut value: Value = serde_json::from_str(include_str!(
+        "../../../contracts/examples/v0.2/frame_ref.valid.json"
+    ))
+    .unwrap();
+    value["surface_id"] = surface.into();
+    value["width"] = 1024.into();
+    value["height"] = 2048.into();
+    value["sha256"] = sha256_hex(&bytes).into();
+    (serde_json::from_value(value).unwrap(), bytes)
+}
+
+#[test]
+fn capture_total_cap_includes_latest_and_overlapping_rings_atomically() {
+    const MIB: usize = 1024 * 1024;
+    let mut host = capture::Host::default();
+    let surfaces: BTreeSet<String> = (0..6).map(|i| format!("surface-{i}")).collect();
+    for surface in &surfaces {
+        let (frame, bytes) = host_frame(surface, 6 * MIB, 1);
+        host.frame_verified(&frame, bytes, 0).unwrap();
+    }
+    assert_eq!(host.retained_bytes().unwrap(), (36 * MIB) as u64);
+    for i in 0..4 {
+        let (next, reply, events) = host
+            .prepare(
+                "recordStart",
+                &json!({"request_id":"q","surface_id":format!("surface-{i}")}),
+                surfaces.clone(),
+                0,
+            )
+            .unwrap();
+        assert_eq!(reply["ok"], true);
+        assert!(!events.is_empty());
+        host = next;
+        assert!(host.retained_bytes().unwrap() <= (64 * MIB) as u64);
+    }
+    assert_eq!(host.retained_bytes().unwrap(), (60 * MIB) as u64);
+    for method in ["recordStart", "screenshot"] {
+        let (next, reply, events) = host
+            .prepare(
+                method,
+                &json!({"request_id":"q","surface_id":"surface-4"}),
+                surfaces.clone(),
+                1,
+            )
+            .unwrap();
+        assert_eq!(reply["code"], "LIMIT");
+        assert!(events.is_empty());
+        assert_eq!(next, host);
+    }
+    // Replacement subtracts the previous latest and the evicted ring frame.
+    let (frame, bytes) = host_frame("surface-0", 8 * MIB, 2);
+    host.frame_verified(&frame, bytes, 1).unwrap();
+    assert_eq!(host.retained_bytes().unwrap(), (64 * MIB) as u64);
+    let before = host.clone();
+    for (surface, len) in [("surface-1", 8 * MIB), ("new-surface", MIB)] {
+        let (frame, bytes) = host_frame(surface, len, 3);
+        assert_eq!(host.frame_verified(&frame, bytes, 2), Err(Error::Overflow));
+        assert_eq!(host, before);
+    }
+    let (frame, bytes) = host_frame("surface-0", 8 * MIB, 4);
+    host.frame_verified(&frame, bytes, 3).unwrap();
+    assert_eq!(host.retained_bytes().unwrap(), (64 * MIB) as u64);
+}
+
+#[test]
+fn capture_single_surface_updates_preserve_fifo_eviction() {
+    const LEN: usize = 3 * 1024 * 1024;
+    let mut host = capture::Host::default();
+    let surfaces = BTreeSet::from(["s".to_owned()]);
+    let (frame, bytes) = host_frame("s", LEN, 1);
+    host.frame_verified(&frame, bytes, 0).unwrap();
+    let (mut host, reply, _) = host
+        .prepare(
+            "recordStart",
+            &json!({"request_id":"start","surface_id":"s"}),
+            surfaces.clone(),
+            0,
+        )
+        .unwrap();
+    assert_eq!(reply["ok"], true);
+    for pixel in [2, 3] {
+        let (frame, bytes) = host_frame("s", LEN, pixel);
+        host.frame_verified(&frame, bytes, pixel as u64).unwrap();
+    }
+    assert_eq!(host.retained_bytes().unwrap(), (3 * LEN) as u64);
+    let (_, stopped, _) = host
+        .prepare(
+            "recordStop",
+            &json!({"request_id":"stop","recording_id":reply["recording_id"]}),
+            surfaces,
+            4,
+        )
+        .unwrap();
+    let expected = [vec![2; LEN], vec![3; LEN]].concat();
+    assert_eq!(stopped["recording"]["frames"], 2);
+    assert_eq!(stopped["recording"]["sha256"], sha256_hex(&expected));
+}

@@ -6,7 +6,7 @@ use super::*;
 const RING: u64 = 8 * 1024 * 1024;
 const MEMORY: u64 = 64 * 1024 * 1024;
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Host {
     coordinator: Option<Coordinator>,
     rows: BTreeMap<String, Value>,
@@ -15,7 +15,7 @@ pub struct Host {
     serial: u64,
     pub(crate) exports_recovered: bool,
 }
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct CapturedFrame {
     frame: FrameRef,
     bytes: Vec<u8>,
@@ -76,32 +76,82 @@ impl Host {
         if bytes.is_empty() || bytes.len() as u64 > RING {
             return Err(Error::Event);
         }
-        let existing: usize = self
-            .latest
-            .iter()
-            .filter(|(id, _)| *id != &frame.surface_id)
-            .map(|(_, (_, bytes))| bytes.len())
-            .sum();
-        if existing + bytes.len() > MEMORY as usize {
-            return Err(Error::Overflow);
-        }
-        self.latest
-            .insert(frame.surface_id.clone(), (frame.clone(), bytes));
+        // Preflight every clone together before changing latest, rows or the journal.
         let ids: Vec<String> = self
             .rows
             .iter()
             .filter(|(_, r)| r["surface_id"] == frame.surface_id && r["phase"] == "recording")
             .map(|(id, _)| id.clone())
             .collect();
+        let old = self
+            .latest
+            .get(&frame.surface_id)
+            .map_or(0, |(_, b)| b.len());
+        let mut total = self
+            .retained_bytes()?
+            .checked_sub(old as u64)
+            .and_then(|n| n.checked_add(bytes.len() as u64))
+            .ok_or(Error::Overflow)?;
+        for id in &ids {
+            total = self.project_append(total, id, bytes.len())?;
+        }
+        if total > MEMORY {
+            return Err(Error::Overflow);
+        }
+        self.latest
+            .insert(frame.surface_id.clone(), (frame.clone(), bytes));
         let mut events = Events::default();
         for id in ids {
             self.append_frame(&id, now_ms, &mut events)?;
         }
         Ok(events.0)
     }
+    // Include sealed captures: their pixels remain resident until reclaimed.
+    pub(super) fn retained_bytes(&self) -> Result<u64, Error> {
+        self.latest
+            .values()
+            .map(|(_, bytes)| bytes.len())
+            .chain(self.pixels.values().flatten().map(|f| f.bytes.len()))
+            .try_fold(0_u64, |sum, len| sum.checked_add(len as u64))
+            .ok_or(Error::Overflow)
+    }
+
+    /// Project FIFO eviction without cloning pixels or mutating a ring.
+    fn project_append(&self, total: u64, id: &str, len: usize) -> Result<u64, Error> {
+        if len as u64 > RING {
+            return Err(Error::Overflow);
+        }
+        let mut ring_bytes = self
+            .pixels
+            .get(id)
+            .into_iter()
+            .flatten()
+            .try_fold(0_u64, |sum, f| sum.checked_add(f.bytes.len() as u64))
+            .ok_or(Error::Overflow)?;
+        let mut evicted = 0_u64;
+        for f in self.pixels.get(id).into_iter().flatten() {
+            if ring_bytes.checked_add(len as u64).ok_or(Error::Overflow)? <= RING {
+                break;
+            }
+            ring_bytes = ring_bytes
+                .checked_sub(f.bytes.len() as u64)
+                .ok_or(Error::Overflow)?;
+            evicted = evicted
+                .checked_add(f.bytes.len() as u64)
+                .ok_or(Error::Overflow)?;
+        }
+        total
+            .checked_sub(evicted)
+            .and_then(|n| n.checked_add(len as u64))
+            .ok_or(Error::Overflow)
+    }
+
     fn append_frame(&mut self, id: &str, now_ms: u64, events: &mut Events) -> Result<(), Error> {
         let surface = self.rows[id]["surface_id"].as_str().ok_or(Error::Event)?;
         let (frame, bytes) = self.latest.get(surface).ok_or(Error::Event)?;
+        if self.project_append(self.retained_bytes()?, id, bytes.len())? > MEMORY {
+            return Err(Error::Overflow);
+        }
         let event: RecordEvent = serde_json::from_value(json!({
             "schema":"record_event/v0.2","request_id":id,"surface_id":surface,"recording_id":id,
             "mono_ns":now_ms.saturating_mul(1_000_000),"event":"frame_captured","sha256":frame.sha256,
@@ -112,8 +162,19 @@ impl Host {
             .ok_or(Error::Configuration)?
             .observe(event, events)?;
         let ring = self.pixels.entry(id.to_owned()).or_default();
-        while ring.iter().map(|f| f.bytes.len()).sum::<usize>() + bytes.len() > RING as usize {
-            ring.pop_front();
+        let mut retained = ring
+            .iter()
+            .try_fold(0_u64, |sum, f| sum.checked_add(f.bytes.len() as u64))
+            .ok_or(Error::Overflow)?;
+        while retained
+            .checked_add(bytes.len() as u64)
+            .ok_or(Error::Overflow)?
+            > RING
+        {
+            let oldest = ring.pop_front().ok_or(Error::Event)?;
+            retained = retained
+                .checked_sub(oldest.bytes.len() as u64)
+                .ok_or(Error::Overflow)?;
         }
         ring.push_back(CapturedFrame {
             frame: frame.clone(),
@@ -187,6 +248,18 @@ impl Host {
                         .filter(|r| r["phase"] == "recording")
                         .count()
                         >= 8)
+            {
+                return Ok(refusal("LIMIT"));
+            }
+        }
+        if method != "recordStop" {
+            let len = self.latest.get(surface).ok_or(Error::Event)?.1.len();
+            // A fresh capture has an empty ring. Check before allocating an ID or events.
+            if self
+                .retained_bytes()?
+                .checked_add(len as u64)
+                .ok_or(Error::Overflow)?
+                > MEMORY
             {
                 return Ok(refusal("LIMIT"));
             }
