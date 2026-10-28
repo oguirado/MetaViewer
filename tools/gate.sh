@@ -1200,7 +1200,7 @@ COMPONENT_PINS = {
     'vision-engine': ('python_package', 'oguirado/vision-engine', 'v0.2.0',
                       '88803ee54585da96d33cf1df6c7bd2fcc76786c1'),
     'wender-agent': ('python_package', 'oguirado/wender-agent', 'v0.3.0',
-                     '7648b258d1d04953bacffe8627de5acd7c75d817'),
+                     '1fa2d36abb67ddf4fc79c09dcf23698f467fb7ab'),
     'opensuperficies': ('go_binary', 'oguirado/OpenSuperficies', 'os-cu-w9-mv1',
                        'a9ac1ac8543872b428990ea23fa2629cd0a6d1d5'),
 }

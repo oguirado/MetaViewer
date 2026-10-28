@@ -12,7 +12,7 @@
       "kind": "python_package",
       "repo": "oguirado/wender-agent",
       "version": "v0.3.0",
-      "commit": "7648b258d1d04953bacffe8627de5acd7c75d817"
+      "commit": "1fa2d36abb67ddf4fc79c09dcf23698f467fb7ab"
     },
     {
       "name": "opensuperficies",

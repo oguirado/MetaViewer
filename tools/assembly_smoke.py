@@ -296,13 +296,89 @@ def build_minimal_observation_envelope() -> dict[str, Any]:
     return env
 
 
-def validate_planner_proposal_output(raw_stdout: str) -> dict[str, Any]:
-    """Parse planner CLI stdout and verify it is one action_proposal/v0.2 accepted by MetaViewer."""
+_FORBIDDEN_ACTUATION_KEYS: frozenset[str] = frozenset(
+    {
+        "actuated",
+        "actuation",
+        "after_frame",
+        "cdp",
+        "decision",
+        "executed",
+        "executed_at_ns",
+        "focus_verified",
+        "input_mono_ns",
+        "input_ts_ns",
+        "native_evidence",
+        "receipt",
+        "verdict",
+        "verification",
+        "verified",
+    }
+)
+
+
+def _reject_actuation_fields(value: Any) -> None:
+    """Reject any actuation or execution-receipt field in planner CLI output."""
+    stack: list[Any] = [value]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, dict):
+            forbidden = sorted(_FORBIDDEN_ACTUATION_KEYS & set(current.keys()))
+            if forbidden:
+                raise ValueError(
+                    f"planner output contains forbidden actuation field(s): {forbidden}"
+                )
+            stack.extend(current.values())
+        elif isinstance(current, list):
+            stack.extend(current)
+
+
+def build_wender_planner_request() -> dict[str, Any]:
+    """Build the {observation, element_table, goal} request sent by MetaViewer's Wender provider."""
+    agents_root = str(REPO_ROOT / "agents")
+    if agents_root not in sys.path:
+        sys.path.insert(0, agents_root)
+    from metaviewer_agents.observe import _reject_non_canonical, validate_observation
+    from metaviewer_agents.perception.vcore import _BoundVision, project_element_table
+
+    obs_env = build_minimal_observation_envelope()
+    observation = obs_env["body"]
+    frame_ref = observation["frame_ref"]
+    validate_observation(
+        observation,
+        surface_id=frame_ref["surface_id"],
+        generation=frame_ref["generation"],
+        contract_version="v0.2",
+    )
+    element_table = project_element_table(
+        frame_ref,
+        _BoundVision(observation["vision"], frame_ref["sha256"]),
+    )
+    _reject_non_canonical(element_table, 0)
+    goal = "ok"
+    _reject_non_canonical(goal, 0)
+    return {
+        "observation": observation,
+        "element_table": element_table,
+        "goal": goal,
+    }
+
+
+def validate_planner_proposal_output(
+    raw_stdout: str,
+    *,
+    request: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Parse planner CLI stdout and verify it is a valid non-actuating plan or action_proposal/v0.2."""
     agents_root = str(REPO_ROOT / "agents")
     if agents_root not in sys.path:
         sys.path.insert(0, agents_root)
     from metaviewer_agents.envelope import make_envelope, validate_envelope
-    from metaviewer_agents.tools import _check_proposal
+    from metaviewer_agents.executor import AdmittedExecutor
+    from metaviewer_agents.observe import _reject_non_canonical
+    from metaviewer_agents.tools import _check_action, _check_expectation, _check_proposal
+    from metaviewer_agents.verify import build_proposal
+    from metaviewer_agents.wender_bridge import validate_state
 
     text = raw_stdout.strip()
     if not text:
@@ -316,6 +392,61 @@ def validate_planner_proposal_output(raw_stdout: str) -> dict[str, Any]:
         raise ValueError(f"wender.plan.cli stdout is not valid JSON: {exc}") from exc
     if not isinstance(payload, dict):
         raise ValueError("wender.plan.cli stdout must be a JSON object")
+
+    _reject_actuation_fields(payload)
+
+    if request is not None and set(payload) != {"action", "expectation", "state", "target_node"}:
+        raise ValueError("expected planner reply {action, expectation, state, target_node}")
+
+    if set(payload.keys()) == {"action", "expectation", "state", "target_node"}:
+        active_req = request if request is not None else build_wender_planner_request()
+        obs = (
+            active_req.get("observation")
+            if isinstance(active_req, dict) and "observation" in active_req
+            else build_wender_planner_request()["observation"]
+        )
+        frame = obs["frame_ref"]
+        state = payload["state"]
+        action = payload["action"]
+        expectation = payload["expectation"]
+        target = payload["target_node"]
+
+        validate_state(state)
+        if state.get("viewport") != {"w": frame["width"], "h": frame["height"]}:
+            raise ValueError("planner state viewport disagrees with observation frame")
+        _reject_non_canonical(target, 0)
+        _check_action(action)
+        _check_expectation(expectation)
+        if action.get("type") != "click":
+            raise ValueError("only custody-bound clicks supported from wender.plan.cli")
+        AdmittedExecutor.check_target(target, latest=state["nodes"], frame=frame)
+        if target.get("actionable") is not True or target.get("id") not in state["actionable"]:
+            raise ValueError("planner target_node is not actionable")
+        tx, ty, tw, th = target["box"]
+        if not (tx <= action["x"] < tx + tw and ty <= action["y"] < ty + th):
+            raise ValueError("planner click falls outside target_node box")
+        proposal = build_proposal(
+            frame,
+            proposal_id="prop-assembly-smoke-01",
+            action=action,
+            expectation=expectation,
+            max_ms=1000,
+            max_retries=0,
+        )
+        wrapped = make_envelope(
+            msg_id="msg-assembly-smoke-prop-01",
+            from_component="wender",
+            from_instance="wender-01",
+            to_component="core",
+            to_instance="core-01",
+            session_id="sess-assembly-smoke-01",
+            seq=1,
+            nonce="1" * 32,
+            ts_ns=2000,
+            body=proposal,
+        )
+        validate_envelope(wrapped)
+        return proposal
 
     if payload.get("schema") == "envelope/v0.2":
         validate_envelope(payload)
@@ -343,7 +474,7 @@ def validate_planner_proposal_output(raw_stdout: str) -> dict[str, Any]:
         return payload
 
     raise ValueError(
-        f"expected action_proposal/v0.2 or envelope/v0.2, got schema={payload.get('schema')!r}"
+        f"expected planner reply {{action, expectation, state, target_node}}, action_proposal/v0.2, or envelope/v0.2, got keys={sorted(payload.keys())!r}"
     )
 
 
@@ -487,13 +618,13 @@ def run_wender_planner_check(
     timeout_s: float,
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> tuple[bool, str]:
-    """Check or execute wender.plan.cli against a minimal observation/v0.2 envelope."""
+    """Execute wender.plan.cli with the provider's observation/table/goal request."""
     cli_file = tree_dir / "wender" / "plan" / "cli.py"
     cli_pkg_init = tree_dir / "wender" / "plan" / "cli" / "__init__.py"
     if not cli_file.is_file() and not cli_pkg_init.is_file():
         return True, "SKIP (planner not pinned yet)"
 
-    observation_env = build_minimal_observation_envelope()
+    planner_req = build_wender_planner_request()
 
     env = os.environ.copy()
     existing_pp = env.get("PYTHONPATH", "")
@@ -504,7 +635,7 @@ def run_wender_planner_check(
 
     proc = runner(
         [sys.executable, "-m", "wender.plan.cli"],
-        input=json.dumps(observation_env, separators=(",", ":")) + "\n",
+        input=json.dumps(planner_req, sort_keys=True, separators=(",", ":")) + "\n",
         capture_output=True,
         text=True,
         timeout=timeout_s,
@@ -517,7 +648,7 @@ def run_wender_planner_check(
         return False, f"wender.plan.cli failed ({msg})"
 
     try:
-        proposal = validate_planner_proposal_output(proc.stdout)
+        proposal = validate_planner_proposal_output(proc.stdout, request=planner_req)
     except Exception as exc:  # noqa: BLE001
         return False, f"invalid action_proposal/v0.2 from wender.plan.cli: {exc}"
 

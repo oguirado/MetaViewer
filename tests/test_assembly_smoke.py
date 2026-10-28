@@ -718,12 +718,19 @@ class WenderPlannerSmokeTest(unittest.TestCase):
             plan_dir = tree_dir / "wender" / "plan"
             plan_dir.mkdir(parents=True)
             (plan_dir / "cli.py").write_text("# stub\n", encoding="utf-8")
+            self._write_shape_enforcing_planner_cli(tree_dir)
+            reply = subprocess.run(
+                [sys.executable, "-m", "wender.plan.cli"],
+                input=json.dumps(assembly_smoke.build_wender_planner_request()),
+                capture_output=True, text=True, check=True, timeout=5.0,
+                env={**os.environ, "PYTHONPATH": str(tree_dir)},
+            ).stdout
 
             def fake_ok_runner(*_args, **_kwargs) -> subprocess.CompletedProcess[str]:
                 return subprocess.CompletedProcess(
                     args=["python3", "-m", "wender.plan.cli"],
                     returncode=0,
-                    stdout=json.dumps(valid_proposal) + "\n",
+                    stdout=reply,
                     stderr="",
                 )
 
@@ -798,6 +805,261 @@ class WenderPlannerSmokeTest(unittest.TestCase):
             ValueError, "envelope body must be action_proposal/v0.2"
         ):
             assembly_smoke.validate_planner_proposal_output(json.dumps(obs_env))
+
+    def _write_shape_enforcing_planner_cli(self, tree_dir: Path) -> Path:
+        for rel in ("wender", "wender/plan"):
+            pkg_dir = tree_dir / rel
+            pkg_dir.mkdir(parents=True, exist_ok=True)
+            (pkg_dir / "__init__.py").write_text("", encoding="utf-8")
+        cli_file = tree_dir / "wender" / "plan" / "cli.py"
+        cli_code = """from __future__ import annotations
+import hashlib
+import json
+import sys
+
+REQUEST_KEYS = frozenset({"observation", "element_table", "goal"})
+OBSERVATION_WRAPPER_KEYS = frozenset(
+    {"observation", "proposal_id", "tick_window", "max_ms", "max_retries"}
+)
+
+
+def _fail(detail: str) -> int:
+    print(f"bad_shape: {detail}", file=sys.stderr)
+    return 1
+
+
+def main() -> int:
+    raw = sys.stdin.read().strip()
+    if not raw:
+        return _fail("planner input is empty")
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return _fail("planner input is not valid JSON")
+    if not isinstance(parsed, dict) or not parsed:
+        return _fail("planner input must be a JSON object")
+    keys = set(parsed.keys())
+    if keys != REQUEST_KEYS:
+        if "schema" in parsed and "frame_ref" in parsed:
+            pass
+        elif "observation" in parsed and keys <= OBSERVATION_WRAPPER_KEYS:
+            pass
+        else:
+            return _fail(
+                "planner request must be an observation or {observation, element_table, goal}"
+            )
+        return _fail("stub expects {observation, element_table, goal}")
+
+    obs = parsed.get("observation")
+    table = parsed.get("element_table")
+    goal = parsed.get("goal")
+    if not isinstance(obs, dict) or obs.get("schema") != "observation/v0.2":
+        return _fail("observation schema must be observation/v0.2")
+    frame = obs.get("frame_ref")
+    if not isinstance(frame, dict) or frame.get("schema") != "frame_ref/v0.2":
+        return _fail("frame_ref schema must be frame_ref/v0.2")
+    if (
+        not isinstance(table, dict)
+        or table.get("schema") != "vqa.element-table/v1"
+        or table.get("frame_sha256") != frame.get("sha256")
+        or table.get("width") != frame.get("width")
+        or table.get("height") != frame.get("height")
+        or not isinstance(table.get("elements"), list)
+        or not table["elements"]
+    ):
+        return _fail("element_table invalid")
+    if not isinstance(goal, str) or not goal.strip():
+        return _fail("goal must be a non-empty string")
+
+    row = table["elements"][0]
+    box = row["bbox"]
+    bx, by, bw, bh = box["x"], box["y"], box["w"], box["h"]
+    node_id = hashlib.sha256(
+        f"{frame['sha256']}:0:{row['role']}:{row['name']}".encode("utf-8")
+    ).hexdigest()[:16]
+    node = {
+        "id": node_id,
+        "role": row["role"],
+        "name": row["name"],
+        "depth": 0,
+        "parent": None,
+        "ordinal": 0,
+        "states": {},
+        "actionable": True,
+        "box": [bx, by, bw, bh],
+    }
+    state = {
+        "schema": "wender.state/v1",
+        "source": {"kind": "vision", "url": None, "title": None},
+        "prune": {"name": "vqa.element-table", "version": 1},
+        "ax_sha256": "4" * 64,
+        "ax_stable_sha256": "9" * 64,
+        "viewport": {"w": frame["width"], "h": frame["height"]},
+        "nodes": [node],
+        "actionable": [node_id],
+        "counts": {"raw": 1, "nodes": 1, "actionable": 1},
+    }
+    reply = {
+        "action": {
+            "type": "click",
+            "x": bx + bw // 2,
+            "y": by + bh // 2,
+            "button": "left",
+        },
+        "expectation": {
+            "type": "changed_region",
+            "bbox": {"x": bx, "y": by, "w": bw, "h": bh},
+        },
+        "state": state,
+        "target_node": dict(node),
+    }
+    print(json.dumps(reply, sort_keys=True, separators=(",", ":")))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+"""
+        cli_file.write_text(cli_code, encoding="utf-8")
+        return cli_file
+
+    def test_request_builder_accepted_by_stub_and_old_envelope_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tree_dir = Path(tmp)
+            self._write_shape_enforcing_planner_cli(tree_dir)
+
+            req = assembly_smoke.build_wender_planner_request()
+            self.assertEqual(
+                set(req.keys()),
+                {"observation", "element_table", "goal"},
+            )
+            self.assertEqual(req["observation"]["schema"], "observation/v0.2")
+            self.assertEqual(
+                req["observation"]["frame_ref"]["schema"], "frame_ref/v0.2"
+            )
+            self.assertEqual(
+                req["element_table"]["schema"], "vqa.element-table/v1"
+            )
+            self.assertEqual(req["goal"], "ok")
+
+            ok, note = assembly_smoke.run_wender_planner_check(
+                tree_dir,
+                timeout_s=5.0,
+            )
+            self.assertTrue(ok, note)
+            self.assertEqual(
+                note,
+                "wender.plan.cli verified proposal_id=prop-assembly-smoke-01",
+            )
+
+            # Old bare observation envelope shape is refused by the stub CLI.
+            old_env = assembly_smoke.build_minimal_observation_envelope()
+            env = {**os.environ, "PYTHONPATH": str(tree_dir)}
+            proc_old = subprocess.run(
+                [sys.executable, "-m", "wender.plan.cli"],
+                input=json.dumps(old_env, separators=(",", ":")) + "\n",
+                capture_output=True,
+                text=True,
+                timeout=5.0,
+                env=env,
+                check=False,
+            )
+            self.assertNotEqual(proc_old.returncode, 0)
+            self.assertIn(
+                "bad_shape: planner request must be an observation or {observation, element_table, goal}",
+                proc_old.stderr,
+            )
+
+            # Named mutation: send the bare observation envelope -> test fails.
+            with mock.patch.object(
+                assembly_smoke,
+                "build_wender_planner_request",
+                side_effect=assembly_smoke.build_minimal_observation_envelope,
+            ):
+                mut_ok, mut_note = assembly_smoke.run_wender_planner_check(
+                    tree_dir,
+                    timeout_s=5.0,
+                )
+            with self.assertRaises(AssertionError):
+                self.assertTrue(mut_ok, mut_note)
+            self.assertFalse(mut_ok)
+            self.assertIn(
+                "bad_shape: planner request must be an observation or {observation, element_table, goal}",
+                mut_note,
+            )
+
+    def test_planner_reply_requires_plan_and_rejects_actuation_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tree_dir = Path(tmp)
+            self._write_shape_enforcing_planner_cli(tree_dir)
+            env = {**os.environ, "PYTHONPATH": str(tree_dir)}
+            req = assembly_smoke.build_wender_planner_request()
+            with self.assertRaisesRegex(ValueError, "expected planner reply"):
+                assembly_smoke.validate_planner_proposal_output(
+                    json.dumps(_valid_proposal_body()), request=req,
+                )
+            proc = subprocess.run(
+                [sys.executable, "-m", "wender.plan.cli"],
+                input=json.dumps(req, sort_keys=True, separators=(",", ":")) + "\n",
+                capture_output=True,
+                text=True,
+                timeout=5.0,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            valid_reply = json.loads(proc.stdout.strip())
+            parsed = assembly_smoke.validate_planner_proposal_output(
+                json.dumps(valid_reply),
+                request=req,
+            )
+            self.assertEqual(parsed["schema"], "action_proposal/v0.2")
+            self.assertEqual(parsed["action"]["type"], "click")
+
+            for missing_key in ("action", "expectation", "state", "target_node"):
+                with self.subTest(missing_key=missing_key):
+                    incomplete = copy.deepcopy(valid_reply)
+                    del incomplete[missing_key]
+                    with self.assertRaisesRegex(
+                        ValueError, "expected planner reply"
+                    ):
+                        assembly_smoke.validate_planner_proposal_output(
+                            json.dumps(incomplete),
+                            request=req,
+                        )
+
+            for actuation_key in (
+                "actuated",
+                "after_frame",
+                "executed",
+                "executed_at_ns",
+                "focus_verified",
+                "input_mono_ns",
+                "native_evidence",
+                "receipt",
+                "verdict",
+                "verified",
+            ):
+                with self.subTest(actuation_key=actuation_key):
+                    tainted = copy.deepcopy(valid_reply)
+                    tainted[actuation_key] = True
+                    with self.assertRaisesRegex(
+                        ValueError, "forbidden actuation field"
+                    ):
+                        assembly_smoke.validate_planner_proposal_output(
+                            json.dumps(tainted),
+                            request=req,
+                        )
+
+                    nested_tainted = copy.deepcopy(valid_reply)
+                    nested_tainted["action"][actuation_key] = True
+                    with self.assertRaisesRegex(
+                        ValueError, "forbidden actuation field"
+                    ):
+                        assembly_smoke.validate_planner_proposal_output(
+                            json.dumps(nested_tainted),
+                            request=req,
+                        )
 
 
 class OpenSuperficiesSmokeTest(unittest.TestCase):
