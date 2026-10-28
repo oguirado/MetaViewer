@@ -810,6 +810,7 @@ session.go	daemon-adapter/internal/ipc/session.go
 session_test.go	daemon-adapter/internal/ipc/session_test.go
 socket.go	daemon-adapter/internal/ipc/socket.go
 capture.go	daemon-adapter/internal/record/capture.go
+export_test.go	daemon-adapter/internal/record/export_test.go
 record.go	daemon-adapter/internal/record/record.go
 record_test.go	daemon-adapter/internal/record/record_test.go
 release-a6f568fd66b9	daemon-adapter/internal/record/release_test.go
