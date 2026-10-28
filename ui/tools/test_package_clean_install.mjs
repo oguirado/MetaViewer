@@ -1317,3 +1317,408 @@ if (shouldRunCleanNpmCiRepro) {
     await runHostedCleanNpmCiRepro(process.env);
   });
 }
+
+test(
+  'W2-AC01-PKGSTART cleanInstallSmoke runs real Go mv-daemon-adapter leg with /dev/shm MV_SRF_PROFILES, enforces negative control without MV_SRF_PROFILES, and removes /dev/shm dir in every exit path',
+  { timeout: 120000 },
+  async () => {
+    const listShmDirs = async () => {
+      const entries = await fs.readdir('/dev/shm').catch(() => []);
+      return new Set(entries.filter((name) => name.startsWith('mv-pkg-')));
+    };
+
+    const tempRoot = await fs.mkdtemp(join(tmpdir(), 'mv-w2-pkgstart-'));
+    const beforeShm = await listShmDirs();
+    try {
+      const arch = process.arch;
+      const { name: pkgName } = packageArchitecture(arch);
+      const root = join(tempRoot, pkgName);
+      const app = join(tempRoot, 'app');
+      const daemonAdapterSrc = fileURLToPath(new URL('../../daemon-adapter', import.meta.url));
+      const contractsSrc = fileURLToPath(new URL('../../contracts/v0.2', import.meta.url));
+      const electronSrc = fileURLToPath(new URL('../electron', import.meta.url));
+
+      await fs.mkdir(join(root, 'resources/bin'), { recursive: true });
+      await fs.cp(contractsSrc, join(root, 'resources/contracts/v0.2'), { recursive: true });
+      await fs.writeFile(join(root, 'INSTALL.md'), '# MetaViewer Test Install\n', { mode: 0o644 });
+
+      // 1. Build the real Go mv-daemon-adapter binary into resources/bin/mv-daemon-adapter.
+      const goBin = process.env.GO || 'go';
+      const goBuild = spawnSync(
+        goBin,
+        [
+          'build',
+          '-trimpath',
+          '-buildvcs=false',
+          '-ldflags=-buildid=',
+          '-o',
+          join(root, 'resources/bin/mv-daemon-adapter'),
+          './cmd/mv-daemon-adapter',
+        ],
+        {
+          cwd: daemonAdapterSrc,
+          env: { ...process.env, GOPROXY: 'off', GOSUMDB: 'off', GOTOOLCHAIN: 'local' },
+          encoding: 'utf8',
+          timeout: 60000,
+        },
+      );
+      assert.equal(goBuild.status, 0, `go build failed: ${goBuild.stderr || goBuild.error?.message || ''}`);
+
+      // 2. Compile small C ELF launchers for metaviewer (with fuse wire) and metaviewer-core.
+      const ccBin = process.env.CC || 'cc';
+      const metaviewerC = join(tempRoot, 'metaviewer.c');
+      const coreC = join(tempRoot, 'metaviewer-core.c');
+      await fs.writeFile(
+        metaviewerC,
+        [
+          '#include <limits.h>',
+          '#include <stdio.h>',
+          '#include <stdlib.h>',
+          '#include <string.h>',
+          '#include <unistd.h>',
+          '__attribute__((used)) static const unsigned char fuse_wire[] =',
+          '  "dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX\\x01\\x09" "101100011";',
+          'int main(int argc, char **argv) {',
+          '  if (fuse_wire[0] == 0) return 99;',
+          '  char self[PATH_MAX];',
+          '  ssize_t n = readlink("/proc/self/exe", self, sizeof(self) - 1);',
+          '  if (n <= 0) return 98;',
+          '  self[n] = \'\\0\';',
+          '  char *slash = strrchr(self, \'/\');',
+          '  if (!slash) return 97;',
+          '  *slash = \'\\0\';',
+          '  char script[PATH_MAX];',
+          '  snprintf(script, sizeof(script), "%s/resources/staged-app/electron/nesting.js", self);',
+          '  char **new_argv = calloc((size_t)argc + 2, sizeof(char *));',
+          '  if (!new_argv) return 96;',
+          `  new_argv[0] = ${JSON.stringify(process.execPath)};`,
+          '  new_argv[1] = script;',
+          '  for (int i = 1; i < argc; i++) new_argv[i + 1] = argv[i];',
+          '  new_argv[argc + 1] = NULL;',
+          `  execv(${JSON.stringify(process.execPath)}, new_argv);`,
+          '  return 95;',
+          '}',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      await fs.writeFile(
+        coreC,
+        [
+          '#include <limits.h>',
+          '#include <stdio.h>',
+          '#include <stdlib.h>',
+          '#include <string.h>',
+          '#include <unistd.h>',
+          'int main(void) {',
+          '  char self[PATH_MAX];',
+          '  ssize_t n = readlink("/proc/self/exe", self, sizeof(self) - 1);',
+          '  if (n <= 0) return 98;',
+          '  self[n] = \'\\0\';',
+          '  char *slash = strrchr(self, \'/\');',
+          '  if (!slash) return 97;',
+          '  *slash = \'\\0\';',
+          '  char script[PATH_MAX];',
+          '  snprintf(script, sizeof(script), "%s/../staged-app/fake-core.mjs", self);',
+          `  char *new_argv[] = { ${JSON.stringify(process.execPath)}, script, NULL };`,
+          `  execv(${JSON.stringify(process.execPath)}, new_argv);`,
+          '  return 95;',
+          '}',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const ccMain = spawnSync(ccBin, ['-O2', '-o', join(root, 'metaviewer'), metaviewerC], {
+        encoding: 'utf8',
+        timeout: 60000,
+      });
+      assert.equal(ccMain.status, 0, `cc metaviewer failed: ${ccMain.stderr || ''}`);
+      const ccCore = spawnSync(
+        ccBin,
+        ['-O2', '-o', join(root, 'resources/bin/metaviewer-core'), coreC],
+        { encoding: 'utf8', timeout: 60000 },
+      );
+      assert.equal(ccCore.status, 0, `cc metaviewer-core failed: ${ccCore.stderr || ''}`);
+      await applyFuses(join(root, 'metaviewer'), buildFuseConfig());
+
+      // 3. Stage app with the real ui/electron/main.js and ui/electron/coreLauncher.js.
+      for (const dir of ['electron', 'dist/renderer', 'dist/preload']) {
+        await fs.mkdir(join(app, dir), { recursive: true });
+      }
+      await fs.writeFile(join(app, 'dist/renderer/index.html'), '<!doctype html><title>MetaViewer</title>', 'utf8');
+      await fs.writeFile(join(app, 'dist/preload/preload.cjs'), '"use strict";\n', 'utf8');
+      await fs.copyFile(join(electronSrc, 'main.js'), join(app, 'electron/main.js'));
+      await fs.appendFile(join(app, 'electron/main.js'), '\nexport { mainDirectEntry };\n');
+      await fs.copyFile(join(electronSrc, 'coreLauncher.js'), join(app, 'electron/coreLauncher.js'));
+      await fs.writeFile(
+        join(app, 'electron/hostBindings.js'),
+        [
+          'export async function createMainBindings() {',
+          '  const coreStatus = { availability: "live", pid: process.pid, authority_epoch: 1, reason: null };',
+          '  return {',
+          '    core: {',
+          '      start: async () => coreStatus,',
+          '      request: async () => ({}),',
+          '      dispose: async () => {},',
+          '      getStatus: () => coreStatus,',
+          '    },',
+          '    wire: { frames: { subscribe: () => () => {} } },',
+          '  };',
+          '}',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      await fs.writeFile(
+        join(app, 'electron/authorityWire.js'),
+        'export function installAuthorityWire() { return { dispose: async () => {} }; }\n',
+        'utf8',
+      );
+      await fs.writeFile(
+        join(app, 'electron/captureBridge.js'),
+        'export function installCaptureBridge() { return { dispose: async () => {} }; }\n',
+        'utf8',
+      );
+      const commit = 'a'.repeat(40);
+      await fs.writeFile(
+        join(app, 'electron/package-pin.json'),
+        JSON.stringify({ version: '0.1.2', commit }),
+        'utf8',
+      );
+      await fs.writeFile(join(app, 'electron/nesting.js'), packaging.productionEntry, 'utf8');
+      await fs.writeFile(
+        join(app, 'package.json'),
+        JSON.stringify({ name: 'metaviewer', version: '0.1.2', type: 'module', main: 'electron/nesting.js' }),
+        'utf8',
+      );
+      await sealRendererAssets(app);
+      await createPackage(app, join(root, 'resources/app.asar'));
+
+      // 4. Populate resources/staged-app so the ELF wrappers run outside the repo with zero source access.
+      const stagedApp = join(root, 'resources/staged-app');
+      await fs.cp(app, stagedApp, { recursive: true });
+      const electronModDir = join(stagedApp, 'node_modules/electron');
+      await fs.mkdir(electronModDir, { recursive: true });
+      await fs.writeFile(
+        join(electronModDir, 'package.json'),
+        JSON.stringify({ name: 'electron', version: MAIN_ELECTRON_PIN, main: 'index.cjs' }),
+        'utf8',
+      );
+      await fs.writeFile(
+        join(electronModDir, 'index.cjs'),
+        [
+          '"use strict";',
+          'const { EventEmitter } = require("node:events");',
+          'const { resolve } = require("node:path");',
+          `Object.defineProperty(process.versions, "electron", { value: ${JSON.stringify(MAIN_ELECTRON_PIN)}, configurable: true });`,
+          'Object.defineProperty(process, "resourcesPath", { value: resolve(__dirname, "../../.."), configurable: true });',
+          'const emitter = new EventEmitter();',
+          'const app = {',
+          '  isPackaged: true,',
+          '  requestSingleInstanceLock: () => true,',
+          '  whenReady: async () => {},',
+          '  on: (ev, fn) => { emitter.on(ev, fn); },',
+          '  removeAllListeners: (ev) => { emitter.removeAllListeners(ev); },',
+          '  emit: (ev, ...args) => emitter.emit(ev, ...args),',
+          '  quit: () => { emitter.emit("will-quit", { preventDefault: () => {} }); },',
+          '  exit: (code) => { process.exit(code); },',
+          '  getAppPath: () => resolve(__dirname, "../.."),',
+          '  getPath: () => resolve(__dirname, "../../user-data"),',
+          '};',
+          'const protocol = {',
+          '  registerSchemesAsPrivileged: () => {},',
+          '  handle: () => {},',
+          '  unhandle: () => {},',
+          '};',
+          'const session = {',
+          '  defaultSession: {',
+          '    setPermissionRequestHandler: () => {},',
+          '    setPermissionCheckHandler: () => {},',
+          '  },',
+          '};',
+          'const ipcMain = {',
+          '  handle: () => {},',
+          '  removeHandler: () => {},',
+          '};',
+          'class BrowserWindow {',
+          '  constructor() {',
+          '    this.webContents = {',
+          '      id: 1,',
+          '      mainFrame: {',
+          '        url: "app://metaviewer/index.html",',
+          '        origin: "app://metaviewer",',
+          '        parent: null,',
+          '        routingId: 1,',
+          '        processId: 1,',
+          '      },',
+          '      isDestroyed: () => false,',
+          '      session: {',
+          '        setPermissionRequestHandler: () => {},',
+          '        setPermissionCheckHandler: () => {},',
+          '      },',
+          '      setWindowOpenHandler: () => {},',
+          '      on: () => {},',
+          '      setUserAgent: () => {},',
+          '      loadURL: async () => {},',
+          '      send: () => {},',
+          '    };',
+          '  }',
+          '  once(ev, fn) { if (ev === "ready-to-show" && typeof fn === "function") fn(); }',
+          '  show() {}',
+          '  destroy() {}',
+          '}',
+          'module.exports = { app, protocol, session, ipcMain, BrowserWindow };',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      await fs.writeFile(
+        join(stagedApp, 'fake-core.mjs'),
+        [
+          'import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";',
+          'import { createServer } from "node:net";',
+          'import { join } from "node:path";',
+          'const config = JSON.parse(readFileSync(process.env.MV_CORE_CONFIG, "utf8"));',
+          'const daemonPeer = config.peers.find((p) => p.endpoint.component === "daemon");',
+          'const sockPath = join(process.env.XDG_RUNTIME_DIR, "metaviewer/core.sock");',
+          'const eventsDir = join(process.env.XDG_STATE_HOME, "metaviewer", "sessions", config.session_id, "events");',
+          'const server = createServer((conn) => {',
+          '  let buf = "";',
+          '  conn.on("data", (chunk) => {',
+          '    buf += chunk.toString("utf8");',
+          '    if (!buf.includes("\\n")) return;',
+          '    const line = buf.split("\\n")[0];',
+          '    buf = "";',
+          '    const msg = JSON.parse(line);',
+          '    if (',
+          '      msg.from?.component !== "daemon" ||',
+          '      msg.body?.schema !== "hello/v0.2" ||',
+          '      msg.body?.component !== daemonPeer.hello.component ||',
+          '      msg.body?.component_version !== daemonPeer.hello.component_version ||',
+          '      msg.body?.component_commit !== daemonPeer.hello.component_commit ||',
+          '      msg.body?.contract_version !== daemonPeer.hello.contract_version',
+          '    ) {',
+          '      conn.destroy();',
+          '      return;',
+          '    }',
+          '    conn.write(JSON.stringify({',
+          '      schema: "envelope/v0.2",',
+          '      msg_id: "core-hello-1",',
+          '      ts_ns: 1,',
+          '      from: config.core.endpoint,',
+          '      to: msg.from,',
+          '      session_id: config.session_id,',
+          '      seq: 1,',
+          '      nonce: "core-nonce-1",',
+          '      body: config.core.hello,',
+          '    }) + "\\n", () => {',
+          '      mkdirSync(eventsDir, { recursive: true, mode: 0o700 });',
+          '      writeFileSync(join(eventsDir, "1.json"), JSON.stringify({ seq: 1, event: "Connect", component: "daemon" }) + "\\n", { mode: 0o600 });',
+          '    });',
+          '  });',
+          '});',
+          'server.listen(sockPath, () => {',
+          '  try { chmodSync(sockPath, 0o600); } catch {}',
+          '});',
+          'process.on("SIGTERM", () => { server.close(() => process.exit(0)); });',
+          'process.on("SIGINT", () => { server.close(() => process.exit(0)); });',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+
+      await packaging.normalizePackageModes(root);
+      await writeManifest(root, `${root}.sha256`);
+      const { artifact } = await bundlePackage(root, arch);
+
+      // 5. Run the full cleanInstallSmoke(artifact), exercising:
+      //    - fake-adapter smoke leg
+      //    - real Go mv-daemon-adapter smoke leg with /dev/shm/mv-pkg-* MV_SRF_PROFILES
+      //    - negative control without MV_SRF_PROFILES (fails with configuration error and no METAVIEWER_MAIN_SMOKE_OK)
+      //    - retail flag refusal leg
+      const smokeResult = await packaging.cleanInstallSmoke(artifact);
+      assert.deepEqual(smokeResult, {
+        marker: 'METAVIEWER_MAIN_SMOKE_OK',
+        source_access: false,
+        negative_controls: 'PASS',
+      });
+
+      const afterPassShm = await listShmDirs();
+      for (const name of afterPassShm) {
+        assert.equal(beforeShm.has(name), true, `leaked /dev/shm/${name} after passing cleanInstallSmoke`);
+      }
+
+      // 5b. Direct negative control against the real Go mv-daemon-adapter without MV_SRF_PROFILES:
+      //     fails with configuration: profile map or live profile/root required, ADAPTER_CRASHED,
+      //     and no METAVIEWER_MAIN_SMOKE_OK.
+      const negSrfBin = await fs.mkdtemp(join(tempRoot, 'direct-neg-srf-bin-'));
+      const negSrfState = await fs.mkdtemp(join(tempRoot, 'direct-neg-srf-state-'));
+      const negSrfIdentity = await fs.mkdtemp(join(tempRoot, 'direct-neg-srf-id-'));
+      for (const d of [negSrfBin, negSrfState, negSrfIdentity]) await fs.chmod(d, 0o700);
+      const directNoProfiles = spawnSync(
+        join(root, 'metaviewer'),
+        [`--user-data-dir=${join(tempRoot, 'direct-neg-profile')}`],
+        {
+          cwd: tempRoot,
+          env: {
+            PATH: process.env.PATH,
+            HOME: tempRoot,
+            LANG: 'C.UTF-8',
+            MV_PACKAGE_SMOKE: '1',
+            MV_SRF_BIN_DIR: negSrfBin,
+            MV_SRF_STATE_DIR: negSrfState,
+            SRF_IDENTITY_STORE_ROOT: negSrfIdentity,
+          },
+          encoding: 'utf8',
+          timeout: 60000,
+        },
+      );
+      assert.notEqual(directNoProfiles.status, 0);
+      assert.match(
+        `${directNoProfiles.stderr}\n${directNoProfiles.stdout}`,
+        /configuration:\s*profile map or live profile\/root required/,
+      );
+      assert.match(`${directNoProfiles.stderr}\n${directNoProfiles.stdout}`, /ADAPTER_CRASHED/);
+      assert.doesNotMatch(String(directNoProfiles.stdout ?? ''), /^METAVIEWER_MAIN_SMOKE_OK$/m);
+
+      // 6. Verify /dev/shm/mv-pkg-* cleanup on failure path as well:
+      //    Replace resources/bin/mv-daemon-adapter with a binary that exits 1 with stderr error,
+      //    re-bundle, and confirm cleanInstallSmoke rejects with PKG_ADAPTER_START_FAILED / ADAPTER_CRASHED
+      //    and still removes its /dev/shm/mv-pkg-* directory.
+      const failingAdapterC = join(tempRoot, 'failing-adapter.c');
+      await fs.writeFile(
+        failingAdapterC,
+        '#include <stdio.h>\nint main(void) { fprintf(stderr, "simulated adapter failure\\n"); return 2; }\n',
+        'utf8',
+      );
+      const ccFailAdapter = spawnSync(
+        ccBin,
+        ['-O2', '-o', join(root, 'resources/bin/mv-daemon-adapter'), failingAdapterC],
+        { encoding: 'utf8', timeout: 60000 },
+      );
+      assert.equal(ccFailAdapter.status, 0);
+      await fs.rm(`${root}.sha256`, { force: true });
+      await fs.rm(artifact, { force: true });
+      await packaging.normalizePackageModes(root);
+      await writeManifest(root, `${root}.sha256`);
+      const { artifact: failingArtifact } = await bundlePackage(root, arch);
+
+      await assert.rejects(
+        () => packaging.cleanInstallSmoke(failingArtifact),
+        (err) => {
+          assert.match(err.message, /^PKG_SMOKE_CHILD_FAILED:/);
+          assert.match(err.message, /ADAPTER_CRASHED|PKG_ADAPTER_START_FAILED/);
+          assert.doesNotMatch(String(err.stdout ?? ''), /^METAVIEWER_MAIN_SMOKE_OK$/m);
+          return true;
+        },
+      );
+
+      const afterFailShm = await listShmDirs();
+      for (const name of afterFailShm) {
+        assert.equal(beforeShm.has(name), true, `leaked /dev/shm/${name} after failing cleanInstallSmoke`);
+      }
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  },
+);

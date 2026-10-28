@@ -86,7 +86,7 @@ function compareEntryNames(a, b) {
 }
 
 /** @param {string} root */
-async function normalizePackageModes(root) {
+export async function normalizePackageModes(root) {
   /** @param {string} part */
   async function walk(part) {
     const dirPath = part ? join(root, part) : root;
@@ -429,7 +429,7 @@ export async function runPackagedBootWait({
 export const productionEntry = String.raw`
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { lstatSync, readdirSync, readFileSync, writeSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync, rmSync, writeSync } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -557,8 +557,10 @@ else if (process.argv.includes('--nested-depth=1')) {
     await fs.mkdir(dir, {recursive:true, mode:0o700});
     await fs.chmod(dir, 0o700);
   }
+  // [TARGET, unit decision] mv-daemon-adapter pins hello/v0.2 component_version
+  // to 0.1.1 in daemon/environment.go; core pins pin.version from VERSION.
   const registration = component => ({endpoint:{component,instance:component+'-'+randomUUID()},hello:{
-    schema:'hello/v0.2',contract_version:'v0.2',component,component_version:pin.version,
+    schema:'hello/v0.2',contract_version:'v0.2',component,component_version:component==='daemon'?'0.1.1':pin.version,
     component_commit:pin.commit,dependencies:[]}});
   const config = {session_id:'pkg-'+randomUUID(),core:registration('core'),
     peers:['daemon','agent','ui'].map(registration)};
@@ -619,6 +621,12 @@ else if (process.argv.includes('--nested-depth=1')) {
   process.on('exit', () => {
     if (validateKillTarget(core.pid, process.pid, process.pid)) {try {process.kill(core.pid,'SIGKILL');} catch {}}
   });
+  const rawExit = typeof app.exit === 'function' ? app.exit.bind(app) : code => process.exit(code);
+  app.exit = code => {
+    if (validateKillTarget(core.pid, process.pid, process.pid)) {try {process.kill(core.pid,'SIGKILL');} catch {}}
+    try {rmSync(runtime,{recursive:true,force:true});} catch {}
+    return rawExit(code);
+  };
   const bootBudgetMs = Number(process.env.MV_PKG_BOOT_BUDGET_MS) > 0 ? Number(process.env.MV_PKG_BOOT_BUDGET_MS) : 10000;
   const deadline = Date.now() + bootBudgetMs;
   try {
@@ -1415,12 +1423,78 @@ export async function cleanInstallSmoke(artifact) {
       await fs.rename(`${adapter}.real`,adapter);
     }
     await verifyInstall(installed);
+    // [TARGET, unit decision] Second cleanInstallSmoke leg keeps the real
+    // resources/bin/mv-daemon-adapter with a browser profile under a fresh
+    // 0700 /dev/shm/mv-pkg-* RAMRoot and fails closed when MV_SRF_PROFILES is omitted.
+    const shmRoot=await fs.mkdtemp('/dev/shm/mv-pkg-');
+    try {
+      await fs.chmod(shmRoot,0o700);
+      const realSrfBinDir=await fs.mkdtemp(join(clean,'real-srf-bin-'));
+      const realSrfStateDir=await fs.mkdtemp(join(clean,'real-srf-state-'));
+      const realSrfIdentityDir=await fs.mkdtemp(join(clean,'real-srf-identity-'));
+      for (const dir of [realSrfBinDir,realSrfStateDir,realSrfIdentityDir]) await fs.chmod(dir,0o700);
+      const srfProfiles=JSON.stringify({
+        'smoke-browser':{
+          Kind:'browser',
+          NativeKind:'browser',
+          RAMRoot:shmRoot,
+          Display:':100',
+          Width:1280,
+          Height:900,
+        },
+      });
+      const realTrace=join(clean,'real-files.trace');
+      const realEnv={
+        PATH:process.env.PATH,
+        HOME:clean,
+        LANG:'C.UTF-8',
+        MV_PACKAGE_SMOKE:'1',
+        MV_SRF_BIN_DIR:realSrfBinDir,
+        MV_SRF_STATE_DIR:realSrfStateDir,
+        SRF_IDENTITY_STORE_ROOT:realSrfIdentityDir,
+        MV_SRF_PROFILES:srfProfiles,
+      };
+      await runSmokeCommand(() => execute('xvfb-run',['-a','strace','-f','-e','trace=file','-o',realTrace,
+        join(installed,'metaviewer'),`--user-data-dir=${join(clean,'real-profile')}`],{cwd:clean,env:realEnv,timeout:60000,maxBuffer:1024*1024}));
+      const realAccesses=await fs.readFile(realTrace,'utf8');
+      if (realAccesses.includes(repo) || realAccesses.includes(await fs.realpath(repo))) throw new Error('PKG_SOURCE_ACCESS');
+
+      const negSrfStateDir=await fs.mkdtemp(join(clean,'neg-srf-state-'));
+      const negSrfIdentityDir=await fs.mkdtemp(join(clean,'neg-srf-identity-'));
+      for (const dir of [negSrfStateDir,negSrfIdentityDir]) await fs.chmod(dir,0o700);
+      const noProfilesEnv={
+        PATH:process.env.PATH,
+        HOME:clean,
+        LANG:'C.UTF-8',
+        MV_PACKAGE_SMOKE:'1',
+        MV_SRF_BIN_DIR:realSrfBinDir,
+        MV_SRF_STATE_DIR:negSrfStateDir,
+        SRF_IDENTITY_STORE_ROOT:negSrfIdentityDir,
+      };
+      let configRefused=false, configRefusalDetail='';
+      try {
+        await execute('xvfb-run',['-a',join(installed,'metaviewer'),
+          `--user-data-dir=${join(clean,'no-profiles-profile')}`],
+          {cwd:clean,env:noProfilesEnv,timeout:60000,maxBuffer:1024*1024});
+      } catch (error) {
+        const combined=String(error.stderr ?? '') + '\n' + String(error.stdout ?? '');
+        configRefusalDetail=JSON.stringify({code:error.code,signal:error.signal,stdout:error.stdout,stderr:error.stderr,message:error.message}).slice(-3000);
+        configRefused=
+          typeof error.code === 'number' &&
+          error.code !== 0 &&
+          !/^METAVIEWER_MAIN_SMOKE_OK$/m.test(String(error.stdout ?? '')) &&
+          /configuration:\s*profile map or live profile\/root required/.test(combined);
+      }
+      if (!configRefused) throw new Error(`PKG_ADAPTER_CONFIG_REFUSAL_MISSING: ${configRefusalDetail}`);
+    } finally {
+      await fs.rm(shmRoot,{recursive:true,force:true});
+    }
     const env={PATH:process.env.PATH,HOME:clean,LANG:'C.UTF-8',MV_PACKAGE_SMOKE:'1'};
     let refused=false, refusalDetail='';
     try {
       await execute('xvfb-run',['-a',join(installed,'metaviewer'),
         `--user-data-dir=${join(clean,'refusal-profile')}`,'--remote-debugging-port=9222'],
-        {cwd:clean,env,timeout:10000,maxBuffer:1024*1024});
+        {cwd:clean,env,timeout:60000,maxBuffer:1024*1024});
     } catch (error) {
       refusalDetail=JSON.stringify({code:error.code,signal:error.signal,stdout:error.stdout,stderr:error.stderr,message:error.message}).slice(-3000);
       refused=typeof error.code === 'number' && error.code !== 0 && /RETAIL_FLAG/.test(String(error.stderr) + String(error.stdout));

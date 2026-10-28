@@ -18,12 +18,17 @@
  * @module main
  */
 
+import { spawn as nodeSpawn } from 'node:child_process';
 import { constants as fsConstants, closeSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs';
 import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { createAdapterLauncher, findForbiddenEnv } from './coreLauncher.js';
+
+// [TARGET, unit decision] When MV_SRF_BIN_DIR is configured, supervised adapter
+// failure aborts boot fail-closed with a typed ADAPTER_* MainError before
+// window construction and unwinds core; when unset, core-only boot is kept.
 
 // [TARGET, unit decision] Packaging seals ASAR renderer bytes into the loaded
 // main module. A replaced archive cannot change the admitted asset contents.
@@ -2032,10 +2037,59 @@ export async function bootProductionMain(handles) {
       fail('CORE_UNAVAILABLE', 'core did not reach live');
     }
     if (adapter !== null) {
+      const envRec = /** @type {Record<string, unknown>} */ (typed.env);
+      const srfRequested =
+        typeof envRec.MV_SRF_BIN_DIR === 'string' && envRec.MV_SRF_BIN_DIR.length > 0;
+      /** @type {import('./coreLauncher.js').AdapterStatus | null} */
+      let adapterStatus = null;
+      /** @type {unknown} */
+      let adapterStartError = null;
       try {
-        await adapter.start();
-      } catch {
-        /* adapter failure transitions to degraded core-only state, never aborts core */
+        adapterStatus = await adapter.start();
+      } catch (error) {
+        adapterStartError = error;
+      }
+      if (adapterStatus === null || typeof adapterStatus !== 'object') {
+        try {
+          adapterStatus = adapter.getStatus();
+        } catch {
+          adapterStatus = null;
+        }
+      }
+      if (
+        srfRequested &&
+        (adapterStartError !== null ||
+          adapterStatus === null ||
+          adapterStatus.availability !== 'live' ||
+          adapterStatus.handshakeSeen === false)
+      ) {
+        const rawCode = typeof adapterStatus?.code === 'string' ? adapterStatus.code : '';
+        const errCode =
+          adapterStartError !== null &&
+          typeof adapterStartError === 'object' &&
+          typeof (/** @type {{code?: unknown}} */ (adapterStartError)).code === 'string'
+            ? /** @type {{code: string}} */ (adapterStartError).code
+            : '';
+        const adapterCode =
+          rawCode.startsWith('ADAPTER_') && rawCode !== 'ADAPTER_LIVE'
+            ? rawCode
+            : errCode.startsWith('ADAPTER_') && errCode !== 'ADAPTER_LIVE'
+              ? errCode
+              : rawCode === 'OPENSUPERFICIES_ABSENT'
+                ? 'ADAPTER_OPENSUPERFICIES_ABSENT'
+                : adapterStatus?.availability === 'unavailable'
+                  ? 'ADAPTER_UNAVAILABLE'
+                  : adapterStatus?.availability === 'degraded'
+                    ? 'ADAPTER_DEGRADED'
+                    : 'ADAPTER_START_FAILED';
+        const adapterDetail =
+          typeof adapterStatus?.reason === 'string' && adapterStatus.reason.length > 0
+            ? adapterStatus.reason
+            : adapterStartError instanceof Error && adapterStartError.message.length > 0
+              ? adapterStartError.message
+              : 'adapter did not reach live';
+        await unwind();
+        fail(adapterCode, adapterDetail);
       }
     }
   }
@@ -2270,10 +2324,84 @@ export async function loadMainBindings(env = process.env, options = {}) {
     if (options?.adapter) {
       bindings.adapter = options.adapter;
     } else if (typeof env.MV_ADAPTER_BIN === 'string' && env.MV_ADAPTER_BIN.length > 0 && typeof env.XDG_RUNTIME_DIR === 'string' && isAbsolute(env.XDG_RUNTIME_DIR)) {
+      const customSpawn = options?.adapterOptions?.spawn;
+      /**
+       * @param {string} command
+       * @param {ReadonlyArray<string>} args
+       * @param {import('node:child_process').SpawnOptions} spawnOpts
+       */
+      const defaultSpawn = (command, args, spawnOpts) => {
+        const child = nodeSpawn(command, args, spawnOpts);
+        let stderrEnded = child.stderr === null || child.stderr === undefined;
+        let stderrBuffer = '';
+        if (child.stderr) {
+          child.stderr.on('data', (chunk) => {
+            stderrBuffer += String(chunk);
+            const lines = stderrBuffer.split('\n');
+            stderrBuffer = lines.pop() ?? '';
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (trimmed.length > 0) {
+                try {
+                  console.error(trimmed);
+                } catch {
+                  /* diagnostics best-effort */
+                }
+              }
+            }
+          });
+          const flushTail = () => {
+            if (stderrEnded) return;
+            stderrEnded = true;
+            const trimmed = stderrBuffer.trim();
+            stderrBuffer = '';
+            if (trimmed.length > 0) {
+              try {
+                console.error(trimmed);
+              } catch {
+                /* diagnostics best-effort */
+              }
+            }
+          };
+          child.stderr.once('end', flushTail);
+          child.stderr.once('close', flushTail);
+        }
+        const origOn = child.on.bind(child);
+        child.on = /** @type {typeof child.on} */ ((event, listener) => {
+          if (event === 'exit' && child.stderr) {
+            return origOn('exit', (code, signal) => {
+              if (stderrEnded) {
+                listener(code, signal);
+                return;
+              }
+              let fired = false;
+              const fire = () => {
+                if (fired) return;
+                fired = true;
+                listener(code, signal);
+              };
+              const timer = setTimeout(fire, 100);
+              if (child.stderr) {
+                child.stderr.once('end', () => {
+                  clearTimeout(timer);
+                  fire();
+                });
+                child.stderr.once('close', () => {
+                  clearTimeout(timer);
+                  fire();
+                });
+              }
+            });
+          }
+          return origOn(event, listener);
+        });
+        return child;
+      };
       bindings.adapter = createAdapterLauncher({
         command: env.MV_ADAPTER_BIN,
         env,
         runtimeDir: env.XDG_RUNTIME_DIR,
+        spawn: typeof customSpawn === 'function' ? customSpawn : defaultSpawn,
         callbacks: {
           onStatus: (status) => {
             if (status.availability === 'degraded') {
