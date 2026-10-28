@@ -246,3 +246,178 @@ fn serve_forwards_human_control_owner() {
         let _ = task.await;
     });
 }
+
+#[test]
+fn serve_release_when_agent_controlled_commits_and_forwards_only_on_admission() {
+    use metaviewer_core::journal::scan;
+    use metaviewer_core::serve::{self, Config, Registration, Server};
+    use metaviewer_core::{decode_envelope, read_frame, write_frame};
+    use serde_json::{json, Value};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+    use tokio::net::UnixStream;
+
+    fn registration(component: &str) -> Registration {
+        serde_json::from_value(json!({"endpoint":{"component":component,"instance":component},"hello":{"schema":"hello/v0.2","contract_version":"v0.2","component":component,"component_version":"0.2.0","component_commit":"0123456789abcdef0123456789abcdef01234567","dependencies":[]}})).unwrap()
+    }
+    async fn send(socket: &mut UnixStream, component: &str, seq: u64, body: Value) {
+        let envelope = decode_envelope(&json!({"schema":"envelope/v0.2","msg_id":format!("{component}-{seq}"),"session_id":"control-release-agent","ts_ns":0,"from":{"component":component,"instance":component},"to":{"component":"core","instance":"core"},"nonce":format!("{component}-{seq}"),"seq":seq,"body":body}).to_string()).unwrap();
+        write_frame(socket, &envelope).await.unwrap();
+    }
+    async fn receive(socket: &mut UnixStream) -> Value {
+        let envelope = tokio::time::timeout(Duration::from_secs(3), read_frame(socket))
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        serde_json::to_value(envelope.body).unwrap()
+    }
+
+    support::run(async {
+        let root = support::Temp::new();
+        let socket = root.0.join("runtime/core.sock");
+        let state_dir = root.0.join("state");
+        let uid = support::uid();
+        let listener = serve::bind(&socket, uid).await.unwrap();
+        let server = Arc::new(Mutex::new(
+            Server::open(
+                Config {
+                    session_id: "control-release-agent".into(),
+                    core: registration("core"),
+                    peers: vec![
+                        registration("daemon"),
+                        registration("agent"),
+                        registration("ui"),
+                    ],
+                },
+                &state_dir,
+                uid,
+            )
+            .unwrap(),
+        ));
+        let task = tokio::spawn(serve::serve(listener, server.clone(), uid));
+
+        let mut daemon = UnixStream::connect(&socket).await.unwrap();
+        send(
+            &mut daemon,
+            "daemon",
+            1,
+            serde_json::to_value(registration("daemon").hello).unwrap(),
+        )
+        .await;
+        assert_eq!(receive(&mut daemon).await["schema"], "hello/v0.2");
+
+        let mut ui = UnixStream::connect(&socket).await.unwrap();
+        send(
+            &mut ui,
+            "ui",
+            1,
+            serde_json::to_value(registration("ui").hello).unwrap(),
+        )
+        .await;
+        assert_eq!(receive(&mut ui).await["schema"], "hello/v0.2");
+
+        let surface: Value = serde_json::from_str(include_str!(
+            "../../contracts/examples/v0.2/surface.valid.json"
+        ))
+        .unwrap();
+        assert_eq!(surface["control"], "agent");
+        send(
+            &mut daemon,
+            "daemon",
+            2,
+            json!({"schema":"surface_event/v0.2","event":"created","data":{"surface":surface}}),
+        )
+        .await;
+        assert_eq!(receive(&mut ui).await["event"], "created");
+
+        let before: Value =
+            serde_json::from_slice(&server.lock().unwrap().snapshot().unwrap()).unwrap();
+        let seq_before = before["core_seq"].as_u64().unwrap();
+        assert_eq!(
+            before["surfaces"]["surface-demo"]["agent_controlled"],
+            json!(true)
+        );
+        assert!(before["surfaces"]["surface-demo"]["refresh_after"].is_null());
+
+        // 1. Release on an already agent-controlled surface succeeds in production,
+        // advances the journal by 1, sets refresh_after, and forwards to daemon.
+        send(
+            &mut ui,
+            "ui",
+            2,
+            json!({
+                "schema": "ui_intent/v0.2",
+                "request_id": "release-when-agent",
+                "op": "release_control",
+                "params": {"surface_id": "surface-demo"}
+            }),
+        )
+        .await;
+        assert_eq!(
+            receive(&mut daemon).await,
+            json!({
+                "schema": "surface_request/v0.2",
+                "op": "release_control",
+                "params": {"surface_id": "surface-demo"}
+            })
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(40), read_frame(&mut ui))
+                .await
+                .is_err(),
+            "accepted release_control must not emit a refusal verdict to UI"
+        );
+
+        let after: Value =
+            serde_json::from_slice(&server.lock().unwrap().snapshot().unwrap()).unwrap();
+        assert_eq!(after["core_seq"].as_u64().unwrap(), seq_before + 1);
+        assert_eq!(
+            after["surfaces"]["surface-demo"]["agent_controlled"],
+            json!(true)
+        );
+        assert_eq!(
+            after["surfaces"]["surface-demo"]["refresh_after"],
+            json!(seq_before + 1)
+        );
+
+        // 2. Negative control: a refused release_control (unknown surface) journals POLICY,
+        // returns a refusal verdict to UI, and never forwards to daemon.
+        send(
+            &mut ui,
+            "ui",
+            3,
+            json!({
+                "schema": "ui_intent/v0.2",
+                "request_id": "release-unknown",
+                "op": "release_control",
+                "params": {"surface_id": "surface-missing"}
+            }),
+        )
+        .await;
+        let verdict = receive(&mut ui).await;
+        assert_eq!(verdict["schema"], "action_verdict/v0.2");
+        assert_eq!(verdict["proposal_id"], "release-unknown");
+        assert_eq!(verdict["decision"], "refused");
+        assert_eq!(verdict["reason_code"], "POLICY");
+        assert_eq!(verdict["core_seq"], json!(seq_before + 2));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(40), read_frame(&mut daemon))
+                .await
+                .is_err(),
+            "refused release_control must not forward to daemon"
+        );
+
+        let session_root = state_dir.join("sessions/control-release-agent");
+        let replayed = scan(&session_root.join("journal.jsonl"), &session_root).unwrap();
+        assert_eq!(replayed.state.core_seq, seq_before + 2);
+        assert_eq!(
+            replayed.state.snapshot().unwrap(),
+            server.lock().unwrap().snapshot().unwrap()
+        );
+
+        drop((daemon, ui));
+        task.abort();
+        let _ = task.await;
+    });
+}

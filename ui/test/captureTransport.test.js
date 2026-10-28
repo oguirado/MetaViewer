@@ -9,7 +9,7 @@ import { createMainBindings } from '../electron/hostBindings.js';
 import { installCaptureBridge } from '../electron/captureBridge.js';
 import { createPreloadFacade } from '../electron/preload.js';
 import { createCapturePort, createCaptureState } from '../src/capture/capturePort.js';
-import { captureRowsFor } from '../src/recording/recordingModel.js';
+import { captureRowsFor, captureShotsFor } from '../src/recording/recordingModel.js';
 
 const req={schema:'capture_request/v1',request_id:'renderer request',surface_id:'surface'};
 const hash='a'.repeat(64);
@@ -86,7 +86,7 @@ test('sealed recordings list roundtrips through hostBindings and preload with su
   await mkdir(join(root,'metaviewer'),{mode:0o700});
   await writeFile(join(root,'config.json'),JSON.stringify(config),{mode:0o600});
   /** @type {Map<string,any>} */ const rows=new Map();
-  let peer,seq=0,nowMs=0;const sockets=new Set();
+  let peer,seq=0,nowMs=0,filterRecordingsOnly=false;const sockets=new Set();
   const send=body=>peer.write(JSON.stringify({schema:'envelope/v0.2',msg_id:`r-${++seq}`,ts_ns:0,from:config.core.endpoint,to:config.peers[0].endpoint,session_id:config.session_id,seq,nonce:`n-${seq}`,body})+'\n');
   const metadata=(code,value)=>send({schema:'surface_event/v0.2',event:'error',data:{surface_id:'capture',code,detail:JSON.stringify(value)}});
   const server=createServer(socket=>{peer=socket;sockets.add(socket);socket.on('close',()=>sockets.delete(socket));let buffer='';socket.on('data',data=>{
@@ -94,7 +94,8 @@ test('sealed recordings list roundtrips through hostBindings and preload with su
       const env=JSON.parse(buffer.slice(0,offset));buffer=buffer.slice(offset+1);
       if(env.body.schema==='hello/v0.2') {send(config.core.hello);continue;}
       if(env.body.schema==='surface_request/v0.2' && env.body.op==='list' && env.msg_id.startsWith('capture-list:')) {
-        metadata('CAPTURE_REPLY',{request_id:env.msg_id,method:'list',reply:{ok:true,rows:[...rows.values()]}});
+        const listedRows=filterRecordingsOnly?[...rows.values()].filter(r=>r.kind==='recording'):[...rows.values()];
+        metadata('CAPTURE_REPLY',{request_id:env.msg_id,method:'list',reply:{ok:true,rows:listedRows}});
         continue;
       }
       if(env.body.schema==='record_request/v0.2' && env.body.op==='ram_start') {
@@ -107,6 +108,10 @@ test('sealed recordings list roundtrips through hostBindings and preload with su
         row.phase='sealed';row.sealed=true;row.frames=2;row.duration_ms=4000;
         metadata('CAPTURE_REPLY',{request_id:env.msg_id,method:'recordStop',reply:{ok:true,recording:{id,surface_id:row.surface_id,frames:2,duration_ms:4000,sealed:true,sha256:hash}}});
         metadata('CAPTURE_STATE',{type:'capture.state',recording_id:id,surface_id:row.surface_id,phase:'sealed',frames:2,elapsed_ms:4000});
+      } else if(env.body.schema==='record_request/v0.2' && env.body.op==='screenshot') {
+        const id=env.body.params.capture_id,surface_id=env.body.params.surface_id,created_ms=(nowMs+=10);
+        rows.set(id,{id,kind:'shot',surface_id,phase:'sealed',frames:1,duration_ms:0,sealed:true,created_ms});
+        metadata('CAPTURE_REPLY',{request_id:env.msg_id,method:'screenshot',reply:{ok:true,shot:{id,surface_id,width:1,height:1,sha256:hash,created_ms}}});
       }
     }
   });});
@@ -152,6 +157,38 @@ test('sealed recordings list roundtrips through hostBindings and preload with su
   const demoRows=captureRowsFor(state,'surface-demo');
   assert.equal(demoRows.length,2);
   assert.ok(demoRows.every(r=>r.capsuleId==='surface-demo' && r.phase==='sealed' && r.frames===2 && r.elapsedSeconds===4));
-  // Negative control 2: surface-other recording is not listed for surface-demo.
+  // Negative control 2: surface-other recording is not listed for surface-demo, and recordings-only run yields zero shots (no bleed).
   assert.equal(captureRowsFor(state,'surface-other').length,1);
+  assert.deepEqual(captureShotsFor(state,'surface-demo'),[]);
+  assert.deepEqual(captureShotsFor(state,'surface-other'),[]);
+
+  // R4: Seal 2 screenshots on surface-demo via the mocked core and verify list returns all 4 on surface-demo with kinds intact.
+  for(let i=0;i<2;i+=1) {
+    const shotRes=await state.screenshot('surface-demo');
+    assert.equal(shotRes.ok,true);
+    assert.equal(shotRes.shot.surface_id,'surface-demo');
+  }
+  const withShots=await state.refresh();
+  assert.equal(withShots.ok,true);
+  const demoAll=withShots.rows.filter(r=>r.surface_id==='surface-demo');
+  assert.equal(demoAll.length,4);
+  assert.equal(demoAll.filter(r=>r.kind==='recording').length,2);
+  assert.equal(demoAll.filter(r=>r.kind==='shot').length,2);
+
+  // captureRowsFor shows only recordings (2) and captureShotsFor shows only shots (2).
+  const recOnly=captureRowsFor(state,'surface-demo');
+  const shotOnly=captureShotsFor(state,'surface-demo');
+  assert.equal(recOnly.length,2);
+  assert.ok(recOnly.every(r=>r.capsuleId==='surface-demo' && r.phase==='sealed' && !('kind' in r)));
+  assert.equal(shotOnly.length,2);
+  assert.ok(shotOnly.every(r=>r.capsuleId==='surface-demo' && r.kind==='shot' && r.phase==='sealed'));
+  assert.deepEqual(captureShotsFor(state,'surface-other'),[]);
+
+  // Negative control 3: a mutant in core list that filters non-recording rows drops the shots and fails the 4-row / 2-shot checks.
+  filterRecordingsOnly=true;
+  const filteredList=await state.refresh();
+  assert.equal(filteredList.ok,true);
+  assert.equal(filteredList.rows.filter(r=>r.surface_id==='surface-demo').length,2);
+  assert.equal(captureShotsFor(state,'surface-demo').length,0);
+  filterRecordingsOnly=false;
 });

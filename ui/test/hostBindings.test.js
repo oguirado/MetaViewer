@@ -1058,3 +1058,187 @@ test('W2-HOST-L2 L2-1 and L2-8 regression: valid hide/show/control/fold intents 
     });
   }
 });
+
+test('R7 regression: tampered frame file yields DIGEST_MISMATCH with one release, mid-flight truncation yields SIZE_MISMATCH or IO_ERROR without moving the accepted floor, and valid bytes still verify', async t => {
+  const f = await fixture(t);
+  const bindings = await createMainBindings({ ...f });
+  t.after(() => bindings.core.dispose());
+
+  let nextEntryResolve = null;
+  bindings.wire.frames.subscribe(entry => {
+    nextEntryResolve?.(entry);
+  });
+  const nextEntry = () => new Promise(resolve => {
+    nextEntryResolve = resolve;
+  });
+
+  const streams = new Set();
+  const notices = [];
+  const contents = { postMessage: (...args) => notices.push(args) };
+  const readerRefusals = [];
+  const deliveries = [];
+  const frameDiag = {
+    recordReaderRefusal: info => readerRefusals.push(info),
+    recordDelivery: info => deliveries.push(info),
+  };
+  t.after(async () => {
+    for (const stream of [...streams]) {
+      await stream.reader.closeReader();
+      stream.port.revokeFramePort('SHUTDOWN');
+    }
+  });
+
+  const releaseCalls = [];
+  const dropNotifications = [];
+  let beforeReadHook = null;
+  const instrumentEntry = entry => {
+    const origAcquire = entry.readerOptions.acquirePublishedLease;
+    const origOnRelease = entry.readerOptions.onReleaseLease;
+    return {
+      ...entry,
+      readerOptions: {
+        ...entry.readerOptions,
+        onReleaseLease: notice => {
+          dropNotifications.push(notice);
+          origOnRelease(notice);
+        },
+        acquirePublishedLease: async req => {
+          const lease = await origAcquire(req);
+          const origRelease = lease.release;
+          const origRead = lease.readOwnedBytes;
+          let count = 0;
+          const record = { frameGeneration: lease.identity.frameGeneration, count: 0, reasons: [] };
+          releaseCalls.push(record);
+          return {
+            ...lease,
+            readOwnedBytes: async opts => {
+              if (beforeReadHook) {
+                const hook = beforeReadHook;
+                beforeReadHook = null;
+                await hook();
+              }
+              return origRead(opts);
+            },
+            release: async arg => {
+              count += 1;
+              record.count = count;
+              record.reasons.push(arg?.reason);
+              return origRelease(arg);
+            },
+          };
+        },
+      },
+    };
+  };
+
+  // Negative control (Goal 3): unmodified valid-bytes delivery (generation 1) verifies first in the same run.
+  const entry1Promise = nextEntry();
+  f.send({ schema: 'surface_event/v0.2', event: 'created', data: { surface } });
+  f.send({ schema: 'surface_event/v0.2', event: 'frame_ready', data: { frame_ref: f.frame } });
+  const entry1 = instrumentEntry(await entry1Promise);
+  assert.equal(await deliverAuthorityFrame(entry1, contents, streams, frameDiag), true);
+  assert.equal(deliveries.length, 1);
+  assert.equal(deliveries[0].frameGeneration, 1);
+  assert.equal(readerRefusals.length, 0);
+  assert.equal(releaseCalls.length, 1);
+  assert.equal(releaseCalls[0].count, 1);
+  assert.deepEqual(releaseCalls[0].reasons, ['SNAPSHOT_VERIFIED']);
+  assert.equal(dropNotifications.length, 0);
+
+  // ACK generation 1 so the sender port is ready for the next verified frame.
+  const firstMsg = f.messages[0];
+  f.channels[0].port1.emit('message', {
+    schema: 'frame_ack/v0.2',
+    kind: 'ack',
+    correlation: firstMsg.correlation,
+    principal: firstMsg.principal,
+    epoch: firstMsg.epoch,
+    surfaceId: firstMsg.surfaceId,
+    surfaceGeneration: firstMsg.surfaceGeneration,
+    frameGeneration: firstMsg.frameGeneration,
+    leaseId: firstMsg.leaseId,
+    outcome: 'PRESENTED',
+  });
+
+  // Goal 1: publish generation 2 whose RAM file bytes differ from the declared sha256 digest.
+  const tamperedBytes = Buffer.from([9, 8, 7]);
+  const declaredBytes = Buffer.from([4, 5, 6]);
+  const declaredSha = createHash('sha256').update(declaredBytes).digest('hex');
+  await writeFile(f.frame.ramws_path, tamperedBytes, { mode: 0o600 });
+  const entry2BadDigestPromise = nextEntry();
+  f.send({
+    schema: 'surface_event/v0.2',
+    event: 'frame_ready',
+    data: { frame_ref: { ...f.frame, generation: 2, tick: 2, ts_ns: 2, sha256: declaredSha } },
+  });
+  const entry2BadDigest = instrumentEntry(await entry2BadDigestPromise);
+  assert.equal(await deliverAuthorityFrame(entry2BadDigest, contents, streams, frameDiag), false);
+  assert.equal(readerRefusals.length, 1);
+  assert.equal(readerRefusals[0].reason, 'DIGEST_MISMATCH');
+  assert.equal(readerRefusals[0].frameGeneration, 2);
+  assert.equal(releaseCalls.length, 2);
+  assert.equal(releaseCalls[1].count, 1, 'tampered frame lease must be released exactly once');
+  assert.deepEqual(releaseCalls[1].reasons, ['DIGEST_MISMATCH']);
+  assert.equal(dropNotifications.length, 1);
+  assert.equal(dropNotifications[0].reason, 'DIGEST_MISMATCH');
+  assert.equal(dropNotifications[0].frameGeneration, 2);
+
+  // Goal 2a: truncate the RAM file before stat (1 byte instead of 3) -> SIZE_MISMATCH and one release.
+  await writeFile(f.frame.ramws_path, Buffer.from([4]), { mode: 0o600 });
+  const entry3TruncatedStatPromise = nextEntry();
+  f.send({
+    schema: 'surface_event/v0.2',
+    event: 'frame_ready',
+    data: { frame_ref: { ...f.frame, generation: 3, tick: 3, ts_ns: 3, sha256: declaredSha } },
+  });
+  const entry3TruncatedStat = instrumentEntry(await entry3TruncatedStatPromise);
+  assert.equal(await deliverAuthorityFrame(entry3TruncatedStat, contents, streams, frameDiag), false);
+  assert.equal(readerRefusals.length, 2);
+  assert.equal(readerRefusals[1].reason, 'SIZE_MISMATCH');
+  assert.equal(releaseCalls.length, 3);
+  assert.equal(releaseCalls[2].count, 1, 'size-mismatched lease must be released exactly once');
+  assert.deepEqual(releaseCalls[2].reasons, ['SIZE_MISMATCH']);
+  assert.equal(dropNotifications.length, 2);
+  assert.equal(dropNotifications[1].reason, 'SIZE_MISMATCH');
+
+  // Goal 2b: truncate the RAM file mid-flight (after acquirePublishedLease stat sees 3 bytes, before readOwnedBytes reads) -> IO_ERROR and one release.
+  await writeFile(f.frame.ramws_path, declaredBytes, { mode: 0o600 });
+  beforeReadHook = async () => {
+    await writeFile(f.frame.ramws_path, Buffer.from([4]), { mode: 0o600 });
+  };
+  const entry4MidFlightPromise = nextEntry();
+  f.send({
+    schema: 'surface_event/v0.2',
+    event: 'frame_ready',
+    data: { frame_ref: { ...f.frame, generation: 4, tick: 4, ts_ns: 4, sha256: declaredSha } },
+  });
+  const entry4MidFlight = instrumentEntry(await entry4MidFlightPromise);
+  assert.equal(await deliverAuthorityFrame(entry4MidFlight, contents, streams, frameDiag), false);
+  assert.equal(readerRefusals.length, 3);
+  assert.ok(
+    ['SIZE_MISMATCH', 'IO_ERROR'].includes(readerRefusals[2].reason),
+    `expected SIZE_MISMATCH or IO_ERROR on mid-flight truncation, got ${readerRefusals[2].reason}`,
+  );
+  assert.equal(releaseCalls.length, 4);
+  assert.equal(releaseCalls[3].count, 1, 'mid-flight truncated lease must be released exactly once');
+  assert.equal(dropNotifications.length, 3);
+  assert.equal(dropNotifications[2].reason, readerRefusals[2].reason);
+
+  // Floor unmoved proof: because generations 2, 3, and 4 were all refused without advancing lastAccepted (still 1),
+  // publishing generation 2 with valid bytes matching declaredSha verifies and delivers cleanly!
+  await writeFile(f.frame.ramws_path, declaredBytes, { mode: 0o600 });
+  const entry2ValidPromise = nextEntry();
+  f.send({
+    schema: 'surface_event/v0.2',
+    event: 'frame_ready',
+    data: { frame_ref: { ...f.frame, generation: 2, tick: 5, ts_ns: 5, sha256: declaredSha } },
+  });
+  const entry2Valid = instrumentEntry(await entry2ValidPromise);
+  assert.equal(await deliverAuthorityFrame(entry2Valid, contents, streams, frameDiag), true);
+  assert.equal(deliveries.length, 2);
+  assert.equal(deliveries[1].frameGeneration, 2);
+  assert.deepEqual(Array.from(f.messages.at(-1).bytes), [4, 5, 6]);
+  assert.equal(releaseCalls.length, 5);
+  assert.equal(releaseCalls[4].count, 1);
+  assert.deepEqual(releaseCalls[4].reasons, ['SNAPSHOT_VERIFIED']);
+});

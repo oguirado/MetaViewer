@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { FIXTURES } from '../src/fixtures/states.js';
 import { resolveFixture } from '../src/fixtures/resolveState.js';
-import { createFixtureRuntime } from '../src/fixtures/fixtureRuntime.js';
+import { createFixtureRuntime, TILE_CHROME_FIXTURE, TILE_CHROME_KEY } from '../src/fixtures/fixtureRuntime.js';
 
 const SLASH_ANCHOR = /^[a-z0-9]+(?:-[a-z0-9]+)*(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)+$/;
 const TILE_ANCHOR = /^tile-[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -455,13 +455,60 @@ test('empty wall mount keeps the stable wall/add-capsule contract', async () => 
   assert.ok(found.open.includes('id="empty-wall-add"'), 'empty wall keeps its stable id');
 });
 
-test('tile-chrome alias (when present) targets a known fixture key', () => {
-  const main = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
-  if (!main.includes('tile-chrome')) return;
-  const keys = [...main.matchAll(/['"]tile-chrome['"]\s*:\s*['"]([^'"]+)['"]/g)].map((m) => m[1]);
-  for (const key of keys) {
-    assert.ok(Object.hasOwn(FIXTURES, key), `tile-chrome alias targets a known fixture: ${key}`);
+/**
+ * Audit tile-chrome state routing in a main.js source string:
+ * - When one or more `'tile-chrome': '<key>'` alias literals exist, every target key must exist in `fixtures`.
+ * - When no alias literal exists, the source must wire the explicit `TILE_CHROME_KEY` / `TILE_CHROME_FIXTURE` fallback.
+ * @param {string} source
+ * @param {Record<string, unknown>} [fixtures]
+ */
+function assertTileChromeRouting(source, fixtures = FIXTURES) {
+  const keys = [...source.matchAll(/['"]tile-chrome['"]\s*:\s*['"]([^'"]+)['"]/g)].map((m) => m[1]);
+  if (keys.length > 0) {
+    for (const key of keys) {
+      assert.ok(Object.hasOwn(fixtures, key), `tile-chrome alias targets a known fixture: ${key}`);
+    }
+    return;
   }
+  assert.match(
+    source,
+    /\bTILE_CHROME_KEY\b/,
+    'missing tile-chrome alias literal requires explicit TILE_CHROME_KEY constant',
+  );
+  assert.match(
+    source,
+    /\bTILE_CHROME_FIXTURE\b/,
+    'missing tile-chrome alias literal requires explicit TILE_CHROME_FIXTURE fallback',
+  );
+  assert.match(
+    source,
+    /requestedStates\[0\]\s*===\s*TILE_CHROME_KEY/,
+    'main.js must match requestedStates[0] against TILE_CHROME_KEY',
+  );
+  assert.equal(TILE_CHROME_KEY, 'tile-chrome');
+  assert.equal(TILE_CHROME_FIXTURE?.key, TILE_CHROME_KEY);
+}
+
+test('tile-chrome alias (when present) targets a known fixture key or explicit TILE_CHROME_KEY fallback', () => {
+  const main = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
+  assertTileChromeRouting(main, FIXTURES);
+
+  // Positive control when an alias literal is present targeting a known fixture key.
+  const firstKnownKey = Object.keys(FIXTURES)[0];
+  assert.ok(firstKnownKey, 'FIXTURES has at least one known key');
+  assertTileChromeRouting(`const STATE_ALIASES = { 'tile-chrome': '${firstKnownKey}' };`, FIXTURES);
+
+  // Negative control 1 (Goal 3): a fixture source with an alias pointing at an unknown key fails.
+  assert.throws(
+    () => assertTileChromeRouting("const STATE_ALIASES = { 'tile-chrome': 'unknown-fixture-key' };", FIXTURES),
+    /tile-chrome alias targets a known fixture: unknown-fixture-key/,
+  );
+
+  // Negative control 2: a comment-only mention without alias literal or TILE_CHROME_KEY fallback fails (no vacuous pass).
+  assert.throws(
+    () => assertTileChromeRouting('// MVUI9 lane A: tile-chrome comment only', FIXTURES),
+    /missing tile-chrome alias literal requires explicit TILE_CHROME_KEY constant/,
+  );
 });
 
 test('negative controls: DOM contract and uniqueness checkers fail', () => {

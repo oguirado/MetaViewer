@@ -22,7 +22,6 @@ fn transition(
     let refusal = match authority.state().surfaces.get(id) {
         None => Some(Refusal::Policy),
         Some(s) if !s.live => Some(Refusal::SurfaceNotAgentControlled),
-        Some(s) if action == Action::Release && s.agent_controlled => Some(Refusal::Policy),
         _ => None,
     };
     authority.apply(match refusal {
@@ -171,17 +170,28 @@ fn takeover_cancels_and_release_requires_new_generation() {
 #[test]
 fn invalid_transitions_are_typed_and_journalled() {
     let mut f = Fixture::new();
-    for (id, action, reason) in [
-        ("unknown", Action::Take, Refusal::Policy),
-        ("surface", Action::Release, Refusal::Policy),
-    ] {
-        let before = f.authority.state().core_seq;
-        assert_eq!(
-            transition(&mut f.authority, id, action).unwrap().reason,
-            Some(reason)
-        );
-        assert_eq!(f.authority.state().core_seq, before + 1);
-    }
+    let before = f.authority.state().core_seq;
+    assert_eq!(
+        transition(&mut f.authority, "unknown", Action::Take)
+            .unwrap()
+            .reason,
+        Some(Refusal::Policy)
+    );
+    assert_eq!(f.authority.state().core_seq, before + 1);
+
+    // Production admission and serve allow release_control when already agent_controlled:
+    // it commits ReleaseControl, advances core_seq, and fences proposals behind refresh_after.
+    assert!(f.authority.state().surfaces["surface"].agent_controlled);
+    let before_release = f.authority.state().core_seq;
+    let out = transition(&mut f.authority, "surface", Action::Release).unwrap();
+    assert_eq!(out.reason, None);
+    assert_eq!(f.authority.state().core_seq, before_release + 1);
+    assert!(f.authority.state().surfaces["surface"].agent_controlled);
+    assert_eq!(
+        f.authority.state().surfaces["surface"].refresh_after,
+        Some(before_release + 1)
+    );
+
     transition(&mut f.authority, "surface", Action::Take).unwrap();
     assert!(transition(&mut f.authority, "surface", Action::Take)
         .unwrap()
