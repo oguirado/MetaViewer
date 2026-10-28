@@ -62,6 +62,15 @@ type PublishConfig struct {
 	Deduplicate     bool
 	Budget          *Budget
 }
+
+// StageDurations records the per-frame execution time of each pipeline stage.
+type StageDurations struct {
+	Capture time.Duration
+	Decode  time.Duration
+	Hash    time.Duration
+	Write   time.Duration
+	Total   time.Duration
+}
 type publication struct {
 	native    string
 	seq       uint64
@@ -300,17 +309,24 @@ func (p *Publisher) readSource(rootFd int, root, path string) ([]byte, error) {
 	return data, nil
 }
 func (p *Publisher) Publish(id string, b capsule.Binding, f capsule.NativeFrame) (Ref, error) {
-	ref, _, err := p.publish(id, b, f, false, nil)
+	ref, _, _, err := p.publish(id, b, f, false, nil)
 	return ref, err
 }
 
 func (p *Publisher) PublishForced(id string, b capsule.Binding, f capsule.NativeFrame) (Ref, error) {
-	ref, _, err := p.publish(id, b, f, false, nil)
+	ref, _, _, err := p.publish(id, b, f, false, nil)
 	return ref, err
 }
 
 func (p *Publisher) PublishIfChanged(id string, b capsule.Binding, f capsule.NativeFrame) (Ref, bool, error) {
-	return p.publish(id, b, f, true, nil)
+	ref, changed, _, err := p.publish(id, b, f, true, nil)
+	return ref, changed, err
+}
+
+// PublishWithTimings publishes a frame like PublishIfChanged (when deduplicate is true)
+// or Publish (when deduplicate is false) and returns the per-stage execution durations.
+func (p *Publisher) PublishWithTimings(id string, b capsule.Binding, f capsule.NativeFrame, deduplicate bool) (Ref, bool, StageDurations, error) {
+	return p.publish(id, b, f, deduplicate, nil)
 }
 
 var errSubscriptionCancelled = errors.New("subscription cancelled before publish commit")
@@ -340,36 +356,42 @@ func checkPNGDimensions(encoded []byte, width, height int) bool {
 	return w == width && h == height
 }
 
-func decodeAndVerifyPNG(encoded []byte, width, height int, expectedSHA string) ([]byte, string, error) {
+func decodeAndVerifyPNG(encoded []byte, width, height int, expectedSHA string) ([]byte, string, time.Duration, time.Duration, error) {
+	tDecode := time.Now()
 	if !checkPNGDimensions(encoded, width, height) {
-		return nil, "", frameError()
+		return nil, "", time.Since(tDecode), 0, frameError()
 	}
 	img, e := png.Decode(bytes.NewReader(encoded))
 	if e != nil || img.Bounds().Dx() != width || img.Bounds().Dy() != height {
-		return nil, "", frameError()
+		return nil, "", time.Since(tDecode), 0, frameError()
 	}
 	raw, ok := extractRGB24(img, width, height)
+	decodeDur := time.Since(tDecode)
 	if !ok {
-		return nil, "", frameError()
+		return nil, "", decodeDur, 0, frameError()
 	}
+	tHash := time.Now()
 	sum := sha256.Sum256(raw)
 	sha := hex.EncodeToString(sum[:])
+	hashDur := time.Since(tHash)
 	if sha != expectedSHA {
-		return nil, "", frameError()
+		return nil, "", decodeDur, hashDur, frameError()
 	}
-	return raw, sha, nil
+	return raw, sha, decodeDur, hashDur, nil
 }
 
-func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame, deduplicate bool, isCancelled func() bool) (Ref, bool, error) {
+func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame, deduplicate bool, isCancelled func() bool) (Ref, bool, StageDurations, error) {
+	tStart := time.Now()
+	var stages StageDurations
 	p.mu.Lock()
 	if isCancelled != nil && isCancelled() {
 		p.mu.Unlock()
-		return Ref{}, false, errSubscriptionCancelled
+		return Ref{}, false, stages, errSubscriptionCancelled
 	}
 	old, exists := p.surfaces[id]
 	if p.closed || p.output == nil || p.root == nil || p.next == ^uint64(0) || id == "" || id != b.Surface.SurfaceID || b.Container != f.Generation || f.Seq == 0 || len(f.SHA256RGB24) != 64 || (exists && (old.native != f.Generation || f.Seq <= old.seq)) || (!exists && len(p.surfaces) >= p.cfg.MaxSurfaces) || f.Width < 1 || f.Height < 1 || f.Width > b.Surface.Geometry.W || f.Height > b.Surface.Geometry.H || uint64(f.Width) > p.cfg.MaxPixels/uint64(f.Height) || uint64(f.Width)*uint64(f.Height) > uint64(p.cfg.MaxFrameBytes)/3 || (b.Window != "" && (f.Window == nil || f.Window.ID != b.Window || f.Window.W != f.Width || f.Window.H != f.Height)) {
 		p.mu.Unlock()
-		return Ref{}, false, frameError()
+		return Ref{}, false, stages, frameError()
 	}
 	var prevLast Ref
 	var hasPrev bool
@@ -382,32 +404,35 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 	rootFd, e := syscall.Dup(int(p.root.Fd()))
 	p.mu.Unlock()
 	if e != nil {
-		return Ref{}, false, e
+		return Ref{}, false, stages, e
 	}
 
 	encoded, e := p.readSource(rootFd, b.FramesRoot, f.Path)
 	if e != nil {
-		return Ref{}, false, e
+		return Ref{}, false, stages, e
+	}
+	if isCancelled != nil && isCancelled() {
+		return Ref{}, false, stages, errSubscriptionCancelled
 	}
 
 	var raw []byte
 	sha := f.SHA256RGB24
 	sameEncoded := hasPrev && len(prevEncoded) > 0 && bytes.Equal(encoded, prevEncoded) && prevLast.SHA256 == f.SHA256RGB24 && prevLast.Width == uint32(f.Width) && prevLast.Height == uint32(f.Height)
 	if !sameEncoded {
-		raw, sha, e = decodeAndVerifyPNG(encoded, f.Width, f.Height, f.SHA256RGB24)
+		raw, sha, stages.Decode, stages.Hash, e = decodeAndVerifyPNG(encoded, f.Width, f.Height, f.SHA256RGB24)
 		if e != nil {
-			return Ref{}, false, e
+			return Ref{}, false, stages, e
 		}
 	}
 
 	p.lockGroup()
 	defer p.unlockGroup()
 	if isCancelled != nil && isCancelled() {
-		return Ref{}, false, errSubscriptionCancelled
+		return Ref{}, false, stages, errSubscriptionCancelled
 	}
 	old, exists = p.surfaces[id]
 	if p.closed || p.output == nil || p.next == ^uint64(0) || (exists && (old.native != f.Generation || f.Seq <= old.seq)) || (!exists && len(p.surfaces) >= p.cfg.MaxSurfaces) {
-		return Ref{}, false, frameError()
+		return Ref{}, false, stages, frameError()
 	}
 	now := p.nowTime()
 	unchanged := exists && len(old.refs) > 0 && old.refs[len(old.refs)-1].SHA256 == sha && old.refs[len(old.refs)-1].Width == uint32(f.Width) && old.refs[len(old.refs)-1].Height == uint32(f.Height)
@@ -420,10 +445,14 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 		}
 		if err := p.evictExpiredFloor(&old, now); err != nil {
 			p.surfaces[id] = old
-			return Ref{}, false, err
+			return Ref{}, false, stages, err
 		}
 		p.surfaces[id] = old
-		return last, false, nil
+		stages.Total = time.Since(tStart)
+		if stages.Total > stages.Decode+stages.Hash {
+			stages.Write = stages.Total - stages.Decode - stages.Hash
+		}
+		return last, false, stages, nil
 	}
 
 	expectedBytes := int64(f.Width) * int64(f.Height) * 3
@@ -458,7 +487,7 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 		}
 	}
 	if retainedBytes(simRefs)+newBytes > maxBytes {
-		return Ref{}, false, frameError()
+		return Ref{}, false, stages, frameError()
 	}
 
 	peers := []*Publisher{p}
@@ -554,19 +583,19 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 		}
 	}
 	if otherBytes+retainedBytes(simRefs)+newBytes > maxTotal {
-		return Ref{}, false, frameError()
+		return Ref{}, false, stages, frameError()
 	}
 
 	random := make([]byte, 16)
 	if _, e = rand.Read(random); e != nil {
-		return Ref{}, false, e
+		return Ref{}, false, stages, e
 	}
 	name := hex.EncodeToString(random) + ".rgb"
 	path := filepath.Join(p.outputPath, name)
 	info, se := os.Stat(p.outputPath)
 	held, he := p.output.Stat()
 	if se != nil || he != nil || !os.SameFile(info, held) {
-		return Ref{}, false, frameError()
+		return Ref{}, false, stages, frameError()
 	}
 	linkedUnchanged := false
 	if unchanged {
@@ -579,34 +608,40 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 	}
 	if !linkedUnchanged {
 		if raw == nil {
-			raw, sha, e = decodeAndVerifyPNG(encoded, f.Width, f.Height, f.SHA256RGB24)
+			var dDur, hDur time.Duration
+			raw, sha, dDur, hDur, e = decodeAndVerifyPNG(encoded, f.Width, f.Height, f.SHA256RGB24)
+			stages.Decode += dDur
+			stages.Hash += hDur
 			if e != nil {
-				return Ref{}, false, e
+				return Ref{}, false, stages, e
 			}
 		}
 		tempName := name + ".tmp"
 		// Open relative to the held private directory, never through a mutable ancestor.
 		fd, e := syscall.Openat(int(p.output.Fd()), tempName, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0600)
 		if e != nil {
-			return Ref{}, false, e
+			return Ref{}, false, stages, e
 		}
 		out := os.NewFile(uintptr(fd), tempName)
 		written, we := out.Write(raw)
 		ce := out.Close()
 		if we != nil || ce != nil || written != len(raw) {
 			_ = syscall.Unlinkat(int(p.output.Fd()), tempName)
-			return Ref{}, false, frameError()
+			return Ref{}, false, stages, frameError()
 		}
 		if e = os.Link(filepath.Join(p.outputPath, tempName), path); e != nil {
 			_ = syscall.Unlinkat(int(p.output.Fd()), tempName)
-			return Ref{}, false, e
+			return Ref{}, false, stages, e
 		}
 		if e = syscall.Unlinkat(int(p.output.Fd()), tempName); e != nil {
 			_ = syscall.Unlinkat(int(p.output.Fd()), name)
-			return Ref{}, false, e
+			return Ref{}, false, stages, e
 		}
 	}
-
+	if isCancelled != nil && isCancelled() {
+		_ = syscall.Unlinkat(int(p.output.Fd()), name)
+		return Ref{}, false, stages, errSubscriptionCancelled
+	}
 	refs := old.refs
 	published := old.published
 	for _, ev := range evictions {
@@ -617,7 +652,7 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 				old.published = published
 				p.surfaces[id] = old
 			}
-			return Ref{}, false, fmt.Errorf("frame lease release: %w", e)
+			return Ref{}, false, stages, fmt.Errorf("frame lease release: %w", e)
 		}
 		if ev.pub == p && ev.surfaceID == id {
 			refs = refs[1:]
@@ -639,60 +674,92 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 	refs = append(refs, ref)
 	published = append(published, now)
 	p.surfaces[id] = publication{native: f.Generation, seq: f.Seq, refs: refs, published: published, encoded: encoded}
-	return ref, true, nil
+	stages.Total = time.Since(tStart)
+	if stages.Total > stages.Decode+stages.Hash {
+		stages.Write = stages.Total - stages.Decode - stages.Hash
+	}
+	return ref, true, stages, nil
 }
 
 func extractRGB24(img image.Image, width, height int) ([]byte, bool) {
-	raw := make([]byte, width*height*3)
-	n := 0
 	switch typed := img.(type) {
 	case *image.RGBA:
-		b := typed.Bounds()
-		for y := 0; y < height; y++ {
-			off := (y-b.Min.Y)*typed.Stride - b.Min.X*4
-			row := typed.Pix[off : off+width*4]
-			for i := 0; i < len(row); i += 4 {
-				if row[i+3] != 0xff {
-					return nil, false
-				}
-				raw[n] = row[i]
-				raw[n+1] = row[i+1]
-				raw[n+2] = row[i+2]
-				n += 3
-			}
-		}
-		return raw, true
+		return compactRGBA8ToRGB24(typed.Pix, typed.Stride, typed.Bounds(), width, height)
 	case *image.NRGBA:
-		b := typed.Bounds()
-		for y := 0; y < height; y++ {
-			off := (y-b.Min.Y)*typed.Stride - b.Min.X*4
-			row := typed.Pix[off : off+width*4]
-			for i := 0; i < len(row); i += 4 {
-				if row[i+3] != 0xff {
-					return nil, false
-				}
-				raw[n] = row[i]
-				raw[n+1] = row[i+1]
-				raw[n+2] = row[i+2]
-				n += 3
-			}
-		}
-		return raw, true
+		return compactRGBA8ToRGB24(typed.Pix, typed.Stride, typed.Bounds(), width, height)
 	default:
-		for y := 0; y < height; y++ {
-			for x := 0; x < width; x++ {
-				r, g, b, a := img.At(x, y).RGBA()
+		raw := make([]byte, width*height*3)
+		n := 0
+		b := img.Bounds()
+		for y := b.Min.Y; y < b.Min.Y+height; y++ {
+			for x := b.Min.X; x < b.Min.X+width; x++ {
+				r, g, bl, a := img.At(x, y).RGBA()
 				if a != 65535 {
 					return nil, false
 				}
 				raw[n] = byte(r >> 8)
 				raw[n+1] = byte(g >> 8)
-				raw[n+2] = byte(b >> 8)
+				raw[n+2] = byte(bl >> 8)
 				n += 3
 			}
 		}
 		return raw, true
 	}
+}
+
+func compactRGBA8ToRGB24(pix []byte, stride int, b image.Rectangle, width, height int) ([]byte, bool) {
+	rawLen := width * height * 3
+	rowBytes := width * 4
+	total4 := width * height * 4
+	if b.Min.X == 0 && b.Min.Y == 0 && stride == rowBytes && len(pix) >= total4 {
+		src := pix[:total4]
+		dst := pix[:rawLen]
+		n := 0
+		i := 0
+		for ; i+32 <= len(src); i += 32 {
+			w0 := binary.LittleEndian.Uint64(src[i:])
+			w1 := binary.LittleEndian.Uint64(src[i+8:])
+			w2 := binary.LittleEndian.Uint64(src[i+16:])
+			w3 := binary.LittleEndian.Uint64(src[i+24:])
+			if (w0 & w1 & w2 & w3 & 0xff000000ff000000) != 0xff000000ff000000 {
+				return nil, false
+			}
+			o0 := (w0 & 0x00ffffff) | ((w0 >> 8) & 0x00ffffff000000) | (w1 << 48)
+			o1 := ((w1 >> 16) & 0xff) | ((w1 >> 24) & 0x00ffffff00) | ((w2 & 0x00ffffff) << 32) | ((w2 >> 32) << 56)
+			o2 := ((w2 >> 40) & 0xffff) | ((w3 & 0x00ffffff) << 16) | ((w3 << 8) & 0xffffff0000000000)
+			binary.LittleEndian.PutUint64(dst[n:], o0)
+			binary.LittleEndian.PutUint64(dst[n+8:], o1)
+			binary.LittleEndian.PutUint64(dst[n+16:], o2)
+			n += 24
+		}
+		for ; i < len(src); i += 4 {
+			r, g, bl, a := src[i], src[i+1], src[i+2], src[i+3]
+			if a != 0xff {
+				return nil, false
+			}
+			dst[n] = r
+			dst[n+1] = g
+			dst[n+2] = bl
+			n += 3
+		}
+		return dst, true
+	}
+	raw := make([]byte, rawLen)
+	n := 0
+	for y := 0; y < height; y++ {
+		off := (y-b.Min.Y)*stride - b.Min.X*4
+		row := pix[off : off+rowBytes]
+		for i := 0; i < len(row); i += 4 {
+			if row[i+3] != 0xff {
+				return nil, false
+			}
+			raw[n] = row[i]
+			raw[n+1] = row[i+1]
+			raw[n+2] = row[i+2]
+			n += 3
+		}
+	}
+	return raw, true
 }
 
 // [TARGET, unit decision] Release is called by the owner only after capture

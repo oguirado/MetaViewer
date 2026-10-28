@@ -12,12 +12,19 @@ package frames
 // session lock so concurrent subscriptions hold cadence independently while
 // same-surface operations remain serialized; missed poll deadlines emit through
 // the diagnostics path alongside the atomic counter.
+// [TARGET, unit decision] Per-surface 2-stage pipeline overlaps capture N+1
+// with decode/publish/emit of frame N (at most one capture and one publish in
+// flight per surface via an unbuffered handoff channel), preserving strict FIFO
+// frame order, generation monotonicity, deduplication, and cancellation drain.
+// Per-stage durations (capture, decode, hash, write, total) emit rate-limited
+// p50/p95 summaries per surface every 5 s to Diagnostics without wire changes.
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,6 +37,22 @@ type Source interface {
 	Capture(context.Context, string) (capsule.Binding, capsule.NativeFrame, error)
 }
 type Emit func(context.Context, json.RawMessage) error
+
+// StageSummary holds p50 and p95 latencies across a window of processed frames.
+type StageSummary struct {
+	Samples    int
+	CaptureP50 time.Duration
+	CaptureP95 time.Duration
+	DecodeP50  time.Duration
+	DecodeP95  time.Duration
+	HashP50    time.Duration
+	HashP95    time.Duration
+	WriteP50   time.Duration
+	WriteP95   time.Duration
+	TotalP50   time.Duration
+	TotalP95   time.Duration
+}
+
 type SubscriptionConfig struct {
 	MaxSubscriptions int
 	// CaptureLock serializes capture/publication when a single shared lock is configured.
@@ -40,10 +63,17 @@ type SubscriptionConfig struct {
 	PollInterval, CaptureTimeout, ShutdownTimeout time.Duration
 	DeduplicateUnchanged                          bool
 	InitialUnchangedPolls                         int
-	// Diagnostics receives human-readable diagnostic lines when poll deadlines are skipped.
+	// Serial disables capture/publish overlap when true, running both stages sequentially per poll.
+	Serial bool
+	// Diagnostics receives human-readable diagnostic lines when poll deadlines are skipped
+	// and rate-limited per-stage latency summaries every DiagnosticsInterval (default 5 s).
 	Diagnostics io.Writer
+	// DiagnosticsInterval sets the rate-limit window for per-surface stage summary lines (default 5 s).
+	DiagnosticsInterval time.Duration
 	// OnSkippedPolls is an optional diagnostic hook invoked when a poll deadline is missed.
 	OnSkippedPolls func(surfaceID string, missed, total uint64)
+	// OnStageSummary is an optional diagnostic hook invoked when a rate-limited stage summary is emitted.
+	OnStageSummary func(surfaceID string, summary StageSummary)
 }
 type task struct {
 	cancel    context.CancelFunc
@@ -80,6 +110,14 @@ func (monotonicPollClock) NewTimer(d time.Duration) pollTimer {
 }
 func (t realPollTimer) Ticks() <-chan time.Time { return t.C }
 
+type surfaceStageStats struct {
+	windowStart time.Time
+	window      []StageDurations
+	all         []StageDurations
+	lastSummary StageSummary
+	summaries   uint64
+}
+
 type Subscriptions struct {
 	mu           sync.Mutex
 	diagMu       sync.Mutex
@@ -94,10 +132,142 @@ type Subscriptions struct {
 	confirmed    map[string]uint64
 	surfaceLocks map[string]*sync.Mutex
 	surfaceSkips map[string]uint64
+	stageStats   map[string]*surfaceStageStats
 	failedIDs    []string
 	closed       bool
 	clock        pollClock
 	skipped      atomic.Uint64
+}
+
+const (
+	defaultDiagnosticsInterval = 5 * time.Second
+	maxStageSamples            = 4096
+)
+
+func (s *Subscriptions) diagnosticsInterval() time.Duration {
+	if s.cfg.DiagnosticsInterval > 0 {
+		return s.cfg.DiagnosticsInterval
+	}
+	return defaultDiagnosticsInterval
+}
+
+func (s *Subscriptions) isRealClock() bool {
+	_, ok := s.clock.(monotonicPollClock)
+	return ok
+}
+
+func durationPercentile(vals []time.Duration, pct int) time.Duration {
+	if len(vals) == 0 {
+		return 0
+	}
+	cp := slices.Clone(vals)
+	slices.Sort(cp)
+	idx := (len(cp) - 1) * pct / 100
+	return cp[idx]
+}
+
+func summarizeStageDurations(samples []StageDurations) StageSummary {
+	n := len(samples)
+	if n == 0 {
+		return StageSummary{}
+	}
+	capVals := make([]time.Duration, n)
+	decVals := make([]time.Duration, n)
+	hashVals := make([]time.Duration, n)
+	writeVals := make([]time.Duration, n)
+	totVals := make([]time.Duration, n)
+	for i, d := range samples {
+		capVals[i] = d.Capture
+		decVals[i] = d.Decode
+		hashVals[i] = d.Hash
+		writeVals[i] = d.Write
+		totVals[i] = d.Total
+	}
+	return StageSummary{
+		Samples:    n,
+		CaptureP50: durationPercentile(capVals, 50),
+		CaptureP95: durationPercentile(capVals, 95),
+		DecodeP50:  durationPercentile(decVals, 50),
+		DecodeP95:  durationPercentile(decVals, 95),
+		HashP50:    durationPercentile(hashVals, 50),
+		HashP95:    durationPercentile(hashVals, 95),
+		WriteP50:   durationPercentile(writeVals, 50),
+		WriteP95:   durationPercentile(writeVals, 95),
+		TotalP50:   durationPercentile(totVals, 50),
+		TotalP95:   durationPercentile(totVals, 95),
+	}
+}
+
+func durationMS(d time.Duration) float64 {
+	return float64(d.Microseconds()) / 1000.0
+}
+
+// StageSummaryFor returns the p50/p95 stage durations observed for surface id.
+func (s *Subscriptions) StageSummaryFor(id string) StageSummary {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st := s.stageStats[id]
+	if st == nil {
+		return StageSummary{}
+	}
+	if len(st.all) > 0 {
+		return summarizeStageDurations(st.all)
+	}
+	return st.lastSummary
+}
+
+func (s *Subscriptions) recordStageDurations(id string, d StageDurations) {
+	now := s.clock.Now()
+	interval := s.diagnosticsInterval()
+	var emitSummary *StageSummary
+	s.mu.Lock()
+	if s.stageStats == nil {
+		s.stageStats = make(map[string]*surfaceStageStats)
+	}
+	st := s.stageStats[id]
+	if st == nil {
+		st = &surfaceStageStats{windowStart: now.Add(-d.Total)}
+		s.stageStats[id] = st
+	}
+	if st.windowStart.IsZero() {
+		st.windowStart = now.Add(-d.Total)
+	}
+	if len(st.window) < maxStageSamples {
+		st.window = append(st.window, d)
+	}
+	if len(st.all) < maxStageSamples {
+		st.all = append(st.all, d)
+	}
+	if !now.Before(st.windowStart.Add(interval)) && len(st.window) > 0 {
+		sum := summarizeStageDurations(st.window)
+		st.lastSummary = sum
+		st.summaries++
+		st.window = st.window[:0]
+		st.windowStart = now
+		emitSummary = &sum
+	}
+	s.mu.Unlock()
+
+	if emitSummary != nil {
+		if s.cfg.OnStageSummary != nil {
+			s.cfg.OnStageSummary(id, *emitSummary)
+		}
+		if s.cfg.Diagnostics != nil {
+			s.diagMu.Lock()
+			_, _ = fmt.Fprintf(
+				s.cfg.Diagnostics,
+				"adapter: surface %s stage_summary samples=%d capture_p50_ms=%.2f capture_p95_ms=%.2f decode_p50_ms=%.2f decode_p95_ms=%.2f hash_p50_ms=%.2f hash_p95_ms=%.2f write_p50_ms=%.2f write_p95_ms=%.2f total_p50_ms=%.2f total_p95_ms=%.2f\n",
+				id,
+				emitSummary.Samples,
+				durationMS(emitSummary.CaptureP50), durationMS(emitSummary.CaptureP95),
+				durationMS(emitSummary.DecodeP50), durationMS(emitSummary.DecodeP95),
+				durationMS(emitSummary.HashP50), durationMS(emitSummary.HashP95),
+				durationMS(emitSummary.WriteP50), durationMS(emitSummary.WriteP95),
+				durationMS(emitSummary.TotalP50), durationMS(emitSummary.TotalP95),
+			)
+			s.diagMu.Unlock()
+		}
+	}
 }
 
 // SkippedPolls returns missed cadence deadlines over this service's lifetime.
@@ -161,7 +331,7 @@ func NewSubscriptions(ctx context.Context, cfg SubscriptionConfig, source Source
 		return nil, e
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	s := &Subscriptions{ctx: ctx, cancel: cancel, cfg: cfg, source: source, publisher: publisher, emit: emit, tasks: make(map[string]*task), failures: make(map[string]*task), confirmed: make(map[string]uint64), surfaceLocks: make(map[string]*sync.Mutex), surfaceSkips: make(map[string]uint64), clock: monotonicPollClock{}}
+	s := &Subscriptions{ctx: ctx, cancel: cancel, cfg: cfg, source: source, publisher: publisher, emit: emit, tasks: make(map[string]*task), failures: make(map[string]*task), confirmed: make(map[string]uint64), surfaceLocks: make(map[string]*sync.Mutex), surfaceSkips: make(map[string]uint64), stageStats: make(map[string]*surfaceStageStats), clock: monotonicPollClock{}}
 	publisher.addReleaseHook(func(id string) {
 		s.mu.Lock()
 		delete(s.confirmed, id)
@@ -195,8 +365,32 @@ func (s *Subscriptions) Subscribe(ctx context.Context, id string) error {
 	go s.poll(run, id, t)
 	return nil
 }
+
+type capturedItem struct {
+	binding    capsule.Binding
+	native     capsule.NativeFrame
+	err        error
+	captureDur time.Duration
+	ack        chan struct{}
+}
+
 func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
+	// Unbuffered handoff enforces at most 1 capture and 1 publish in flight per surface:
+	// as soon as stage 2 accepts frame N from pipeCh, stage 1 is free to start capture N+1
+	// while stage 2 decodes, hashes, writes and emits frame N.
+	pipeCh := make(chan capturedItem)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer t.cancel()
+		s.publishLoop(ctx, id, t, pipeCh)
+	}()
+
 	defer func() {
+		close(pipeCh)
+		wg.Wait()
+		t.cancel()
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if s.tasks[id] == t {
@@ -211,7 +405,7 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 		}
 		close(t.done)
 	}()
-	defer t.cancel()
+
 	next := s.clock.Now()
 	timer := s.clock.NewTimer(0)
 	defer timer.Stop()
@@ -228,6 +422,7 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 		var binding capsule.Binding
 		var native capsule.NativeFrame
 		var e error
+		tCap := time.Now()
 		lock := s.SurfaceLock(id)
 		locked := false
 		if lock != nil {
@@ -251,15 +446,72 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 		if e == nil {
 			e = capture.Err()
 		}
+		captureDur := time.Since(tCap)
 		cancel()
-		if ctx.Err() != nil {
-			if locked {
-				lock.Unlock()
-			}
+		if locked {
+			lock.Unlock()
+		}
+		if t.cancelled.Load() || ctx.Err() != nil {
 			return
 		}
+		var ack chan struct{}
+		if s.cfg.Serial || !s.isRealClock() {
+			ack = make(chan struct{})
+		}
+		item := capturedItem{
+			binding:    binding,
+			native:     native,
+			err:        e,
+			captureDur: captureDur,
+			ack:        ack,
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case pipeCh <- item:
+		}
+		if e != nil {
+			return
+		}
+		if ack != nil {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ack:
+			}
+		}
+		next = next.Add(s.cfg.PollInterval)
+		now := s.clock.Now()
+		if !next.After(now) {
+			missed := now.Sub(next)/s.cfg.PollInterval + 1
+			s.recordSkippedPolls(id, uint64(missed))
+			// Advance from now by the remainder to avoid overflowing a
+			// duration when a long stall misses many intervals.
+			next = now.Add(s.cfg.PollInterval - now.Sub(next)%s.cfg.PollInterval)
+		}
+		timer.Reset(next.Sub(now))
+	}
+}
+
+func (s *Subscriptions) publishLoop(ctx context.Context, id string, t *task, pipeCh <-chan capturedItem) {
+	for {
+		var item capturedItem
+		var ok bool
+		select {
+		case <-ctx.Done():
+			return
+		case item, ok = <-pipeCh:
+			if !ok {
+				return
+			}
+		}
+		if t.cancelled.Load() || ctx.Err() != nil {
+			return
+		}
+		e := item.err
 		var msg json.RawMessage
 		changed := true
+		var stages StageDurations
 		if e == nil {
 			var ref Ref
 			s.mu.Lock()
@@ -267,7 +519,7 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 			dedup := (s.cfg.DeduplicateUnchanged || s.publisher.cfg.Deduplicate) && s.confirmed[id] >= s.initialUnchangedPolls() && t.emitted >= 1
 			s.mu.Unlock()
 			if !cancelled {
-				ref, changed, e = s.publisher.publish(id, binding, native, dedup, func() bool {
+				ref, changed, stages, e = s.publisher.publish(id, item.binding, item.native, dedup, func() bool {
 					return t.cancelled.Load() || ctx.Err() != nil || s.ctx.Err() != nil
 				})
 				if errors.Is(e, errSubscriptionCancelled) {
@@ -276,9 +528,6 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 				}
 			}
 			if cancelled || t.cancelled.Load() || ctx.Err() != nil {
-				if locked {
-					lock.Unlock()
-				}
 				return
 			}
 			if e == nil && changed {
@@ -298,28 +547,30 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 			var eventErr error
 			msg, eventErr = captureFailure(id, s.SkippedPolls())
 			if eventErr != nil {
-				if locked {
-					lock.Unlock()
-				}
 				t.err = eventErr
 				return
 			}
 		}
 		if !failed && !changed {
-			if locked {
-				lock.Unlock()
+			stages.Capture = item.captureDur
+			stages.Total = item.captureDur + stages.Total
+			s.recordStageDurations(id, stages)
+			if item.ack != nil {
+				close(item.ack)
 			}
 		} else {
+			tEmit := time.Now()
 			delivery, stop := context.WithTimeout(ctx, s.cfg.CaptureTimeout)
 			deliveryErr := s.emit(delivery, msg)
 			if deliveryErr == nil {
 				deliveryErr = delivery.Err()
 			}
 			stop()
-			if locked {
-				lock.Unlock()
-			}
+			emitDur := time.Since(tEmit)
 			if deliveryErr != nil {
+				if t.cancelled.Load() || ctx.Err() != nil {
+					return
+				}
 				t.err = errors.Join(e, deliveryErr)
 				// A failed frame delivery gets one bounded failure notification.
 				// Do not retry a failure notification or emit after cancellation.
@@ -340,17 +591,14 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 			s.mu.Lock()
 			s.confirmed[id]++
 			s.mu.Unlock()
+			stages.Capture = item.captureDur
+			stages.Write += emitDur
+			stages.Total = item.captureDur + stages.Total + emitDur
+			s.recordStageDurations(id, stages)
+			if item.ack != nil {
+				close(item.ack)
+			}
 		}
-		next = next.Add(s.cfg.PollInterval)
-		now := s.clock.Now()
-		if !next.After(now) {
-			missed := now.Sub(next)/s.cfg.PollInterval + 1
-			s.recordSkippedPolls(id, uint64(missed))
-			// Advance from now by the remainder to avoid overflowing a
-			// duration when a long stall misses many intervals.
-			next = now.Add(s.cfg.PollInterval - now.Sub(next)%s.cfg.PollInterval)
-		}
-		timer.Reset(next.Sub(now))
 	}
 }
 
