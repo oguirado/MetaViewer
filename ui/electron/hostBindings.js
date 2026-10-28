@@ -166,7 +166,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
     /** @type {Set<string>} */ const delivering = new Set();
     /** @type {Set<string>} */ const pendingDeliveries = new Set();
     /** @type {Map<string,{body:any,resolve:(value:any)=>void,reject:(error:Error)=>void,timer:ReturnType<typeof setTimeout>}>} */ const pending = new Map();
-    let live = false, disposed = false, seq = 0, received = 0;
+    let live = false, disposed = false, seq = 0, received = 0, lastIntentReplySeq = 1;
     /** @type {ReturnType<typeof setInterval> | undefined} */ let keepalive;
     /** @type {(value?:any)=>void} */ let ready;
     /** @type {(error:Error)=>void} */ let rejectReady;
@@ -206,7 +206,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
         },
         resolveLatestState() {
           const curState = surfaces.get(published.surface_id);
-          return curState ? {...curState} : {...state};
+          return curState ? {...curState} : null;
         },
         resolveLatestEntry() {
           const latest = latestFrames.get(published.surface_id);
@@ -422,7 +422,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
             && isDeepStrictEqual(body, request)) {
           result = true;
         }
-        if (result !== undefined) {clearTimeout(item.timer);pending.delete(key);item.resolve(result);}
+        if (result !== undefined) {clearTimeout(item.timer);pending.delete(key);lastIntentReplySeq = received;item.resolve(result);}
       }
       if (body.schema === 'frame_ref/v0.2') publish(body);
       else if (body.schema === 'surface_event/v0.2' && body.event === 'frame_ready') publish(body.data?.frame_ref);
@@ -568,8 +568,8 @@ export async function createMainBindings({env = process.env, createMessageChanne
                 const timer = setTimeout(() => {
                   pending.delete(key);
                   const healthyInputTimeout = !disposed && live && socket && !socket.destroyed && socket.writable
-                    && surfaces.size > 0 && timeoutAtSeq !== received;
-                  if (healthyInputTimeout) timeoutAtSeq = received;
+                    && surfaces.size > 0 && timeoutAtSeq !== lastIntentReplySeq;
+                  if (healthyInputTimeout) timeoutAtSeq = lastIntentReplySeq;
                   else shutdown();
                   reject(Object.assign(new Error('CORE_UNAVAILABLE'), { code: 'CORE_UNAVAILABLE' }));
                 }, DEADLINE);
@@ -597,17 +597,17 @@ export async function createMainBindings({env = process.env, createMessageChanne
         const key = message.op === 'intent' ? body.request_id : body.proposal_id;
         if (!id(key) || pending.has(key)) throw fail();
         // [TARGET, unit decision] One intent CORE_TIMEOUT on a healthy active
-        // session (socket writable, surfaces present, and core traffic advanced
+        // session (socket writable, surfaces present, and intent-reply progress
         // since any prior timeout) rejects that intent with CORE_TIMEOUT while
         // keeping the authority wire and frame streams alive; silent peers or
-        // repeated timeouts without core progress call shutdown().
+        // repeated timeouts without intent-reply progress call shutdown().
         return new Promise((resolve,reject) => {
           const timer = setTimeout(() => {
             pending.delete(key);
             const healthyIntentTimeout = message.op === 'intent'
               && !disposed && live && socket && !socket.destroyed && socket.writable
-              && surfaces.size > 0 && timeoutAtSeq !== received;
-            if (healthyIntentTimeout) timeoutAtSeq = received;
+              && surfaces.size > 0 && timeoutAtSeq !== lastIntentReplySeq;
+            if (healthyIntentTimeout) timeoutAtSeq = lastIntentReplySeq;
             else shutdown();
             reject(new Error('CORE_TIMEOUT'));
           },DEADLINE);

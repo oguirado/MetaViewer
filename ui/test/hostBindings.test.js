@@ -1242,3 +1242,184 @@ test('R7 regression: tampered frame file yields DIGEST_MISMATCH with one release
   assert.equal(releaseCalls[4].count, 1);
   assert.deepEqual(releaseCalls[4].reasons, ['SNAPSHOT_VERIFIED']);
 });
+
+test('RV10-04: consecutive intent timeouts separated only by frame traffic shut down', async t => {
+  const makeSilenceableServer = async () => {
+    const root = await mkdtemp(join(tmpdir(), 'mv-rv10-04-'));
+    const ram = await mkdtemp('/dev/shm/mv-rv10-04-');
+    const config = { session_id: 'host-test', core: registration('core'), peers: [registration('ui')] };
+    await mkdir(join(root, 'metaviewer'), { mode: 0o700 });
+    const configPath = join(root, 'config.json');
+    await writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
+    const bytes = Buffer.from([1, 2, 3]);
+    const path = join(ram, 'frame.rgb');
+    await writeFile(path, bytes, { mode: 0o600 });
+    const frame = {
+      schema: 'frame_ref/v0.2',
+      surface_id: 's1',
+      generation: 1,
+      tick: 1,
+      ts_ns: 1,
+      width: 1,
+      height: 1,
+      format: 'rgb24',
+      ramws_path: path,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+      capture_us: 1,
+    };
+    const sockets = new Set();
+    let peer = null;
+    let seq = 0;
+    let dropIntents = true;
+    const send = body =>
+      peer.write(
+        JSON.stringify({
+          schema: 'envelope/v0.2',
+          msg_id: 'reply-' + ++seq,
+          ts_ns: seq,
+          from: config.core.endpoint,
+          to: config.peers[0].endpoint,
+          session_id: config.session_id,
+          seq,
+          nonce: 'nonce-' + seq,
+          body,
+        }) + '\n',
+      );
+    const server = createServer(socket => {
+      peer = socket;
+      sockets.add(socket);
+      socket.on('close', () => sockets.delete(socket));
+      let buffer = '';
+      socket.on('data', data => {
+        buffer += data;
+        let offset;
+        while ((offset = buffer.indexOf('\n')) >= 0) {
+          const env = JSON.parse(buffer.slice(0, offset));
+          buffer = buffer.slice(offset + 1);
+          if (env.body.schema === 'hello/v0.2') {
+            send(config.core.hello);
+          } else if (env.body.schema === 'ui_intent/v0.2' && !dropIntents) {
+            send({
+              schema: 'surface_event/v0.2',
+              event: 'state_changed',
+              data: { surface: { ...surface, control: env.body.op === 'take_control' ? 'human' : 'agent' } },
+            });
+          }
+        }
+      });
+    });
+    server.listen(join(root, 'metaviewer/core.sock'));
+    await once(server, 'listening');
+    await chmod(join(root, 'metaviewer/core.sock'), 0o600);
+    t.after(async () => {
+      for (const s of sockets) s.destroy();
+      await new Promise(resolve => server.close(resolve));
+      await rm(root, { recursive: true, force: true });
+      await rm(ram, { recursive: true, force: true });
+    });
+    return {
+      env: { MV_CORE_CONFIG: configPath, XDG_RUNTIME_DIR: root },
+      frame,
+      send,
+      setDropIntents: v => {
+        dropIntents = v;
+      },
+      createMessageChannel: () => ({
+        port1: Object.assign(new EventEmitter(), { postMessage() {}, start() {}, close() {} }),
+        port2: { close() {} },
+      }),
+    };
+  };
+
+  await Promise.all([
+    (async () => {
+      const f = await makeSilenceableServer();
+      const bindings = await createMainBindings({ ...f });
+      t.after(() => bindings.core.dispose());
+
+      f.send({ schema: 'surface_event/v0.2', event: 'created', data: { surface } });
+      await new Promise(resolve => setTimeout(resolve, 20));
+
+      // 1st intent timeout on an active session is spared.
+      await assert.rejects(
+        bindings.core.request({
+          op: 'intent',
+          json: JSON.stringify({ schema: 'ui_intent/v0.2', request_id: 'rv10-04-t1', op: 'take_control', params: { surface_id: 's1' } }),
+        }),
+        /^Error: CORE_TIMEOUT$/,
+      );
+      assert.equal(bindings.core.getStatus().availability, 'live', 'first intent timeout must be spared');
+
+      // Intervening frame_ready advances global received counter, but does not advance intent-reply progress.
+      f.send({ schema: 'surface_event/v0.2', event: 'frame_ready', data: { frame_ref: f.frame } });
+      await new Promise(resolve => setTimeout(resolve, 20));
+
+      // 2nd consecutive intent timeout without a matched intent reply must shut down.
+      await assert.rejects(
+        bindings.core.request({
+          op: 'intent',
+          json: JSON.stringify({ schema: 'ui_intent/v0.2', request_id: 'rv10-04-t2', op: 'take_control', params: { surface_id: 's1' } }),
+        }),
+        /^Error: CORE_TIMEOUT$/,
+      );
+      assert.equal(
+        bindings.core.getStatus().availability,
+        'unavailable',
+        'second consecutive intent timeout separated only by frame_ready traffic must shut down',
+      );
+    })(),
+    (async () => {
+      // Recovery control: when a matched intent reply arrives after a spared timeout, a subsequent single timeout is spared again.
+      const fRecover = await makeSilenceableServer();
+      const bindingsRecover = await createMainBindings({ ...fRecover });
+      t.after(() => bindingsRecover.core.dispose());
+      let frameEntry = null;
+      bindingsRecover.wire.frames.subscribe(entry => {
+        if (!entry.stateOnly) frameEntry = entry;
+      });
+      fRecover.send({ schema: 'surface_event/v0.2', event: 'created', data: { surface } });
+      fRecover.send({ schema: 'surface_event/v0.2', event: 'frame_ready', data: { frame_ref: fRecover.frame } });
+      await new Promise(resolve => setTimeout(resolve, 20));
+      assert.ok(frameEntry);
+      assert.equal(frameEntry.resolveLatestState()?.state, 'active');
+
+      await assert.rejects(
+        bindingsRecover.core.request({
+          op: 'intent',
+          json: JSON.stringify({ schema: 'ui_intent/v0.2', request_id: 'rv10-04-r1', op: 'take_control', params: { surface_id: 's1' } }),
+        }),
+        /^Error: CORE_TIMEOUT$/,
+      );
+      assert.equal(bindingsRecover.core.getStatus().availability, 'live');
+
+      fRecover.setDropIntents(false);
+      assert.equal(
+        await bindingsRecover.core.request({
+          op: 'intent',
+          json: JSON.stringify({ schema: 'ui_intent/v0.2', request_id: 'rv10-04-ok', op: 'take_control', params: { surface_id: 's1' } }),
+        }),
+        true,
+      );
+
+      fRecover.setDropIntents(true);
+      await assert.rejects(
+        bindingsRecover.core.request({
+          op: 'intent',
+          json: JSON.stringify({ schema: 'ui_intent/v0.2', request_id: 'rv10-04-r2', op: 'release_control', params: { surface_id: 's1' } }),
+        }),
+        /^Error: CORE_TIMEOUT$/,
+      );
+      assert.equal(bindingsRecover.core.getStatus().availability, 'live', 'timeout after matched intent reply must be spared');
+
+      // RV10-01 hostBindings check: once surface is destroyed, frameEntry.resolveLatestState() returns null instead of stale active fallback.
+      fRecover.send({
+        schema: 'surface_event/v0.2',
+        event: 'state_changed',
+        data: { surface: { ...surface, state: 'destroyed' } },
+      });
+      await new Promise(resolve => setTimeout(resolve, 20));
+      assert.equal(frameEntry.resolveLatestState(), null, 'resolveLatestState must return null once surface is absent');
+    })(),
+  ]);
+});
+

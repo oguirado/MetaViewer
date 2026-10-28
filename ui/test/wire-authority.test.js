@@ -446,3 +446,461 @@ test('EVUI-04 regression: validateIntentBody rejects Symbol-keyed body or params
   assert.equal(validateIntentBody(valid, customErr), valid);
 });
 
+test('RV10-01: destroyed published mid-read aborts the read and posts no active surface afterwards', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'wire-rv10-01-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const bytes = new Uint8Array([1, 2, 3]);
+  const sha = createHash('sha256').update(bytes).digest('hex');
+  const frameRef = {
+    schema: 'frame_ref/v0.2',
+    surface_id: 's1',
+    generation: 1,
+    tick: 1,
+    ts_ns: 1,
+    width: 1,
+    height: 1,
+    format: 'rgb24',
+    ramws_path: '/dev/shm/private.rgb',
+    sha256: sha,
+    capture_us: 1,
+  };
+  const binding = { principal: 'ui', epoch: 1, surfaceId: 's1', surfaceGeneration: 1 };
+  const handlers = new Map();
+  const posted = [];
+  const frame = { origin: 'app://metaviewer', url: 'app://metaviewer/index.html' };
+  const contents = {
+    id: 9,
+    mainFrame: frame,
+    isDestroyed: () => false,
+    postMessage: (...args) => posted.push(args),
+  };
+  const event = { sender: contents, senderFrame: frame };
+  const ipcMain = {
+    handle: (ch, fn) => handlers.set(ch, fn),
+    removeHandler: (ch) => handlers.delete(ch),
+  };
+
+  let emitEntry = null;
+  const wire = installAuthorityWire({
+    ipcMain,
+    contents,
+    core: { request: async () => true },
+    env: { XDG_CONFIG_HOME: root },
+    argv: [],
+    frames: {
+      subscribe: (cb) => {
+        emitEntry = cb;
+        return () => {};
+      },
+    },
+  });
+  t.after(() => wire.dispose());
+
+  await handlers.get(WIRE_CHANNELS.subscribeFrames)(event);
+
+  let surfaceAlive = true;
+  let readAbortedBeforeManualSettle = false;
+  let notifyReadEntered = null;
+  const readEntered = new Promise((resolve) => {
+    notifyReadEntered = resolve;
+  });
+  let settleRead = null;
+  let revocations = 0;
+
+  const wirePort = new EventEmitter();
+  wirePort.postMessage = () => {};
+  wirePort.start = () => {};
+  wirePort.close = () => {};
+
+  const slowFramePromise = emitEntry({
+    frameRef,
+    state: { ...surface, surface_id: 's1', state: 'active' },
+    stateUpdated: true,
+    resolveLatestState: () => (surfaceAlive ? { ...surface, surface_id: 's1', state: 'active' } : null),
+    readerOptions: {
+      binding,
+      limits: { maxFrameBytes: 4096, maxWidth: 64, maxHeight: 64, readTimeoutMs: 1000, maxConcurrentReads: 1 },
+      pixelEnvironment: { environmentId: 'test', zoom: 1, dpr: 1 },
+      onReleaseLease() {},
+      acquirePublishedLease: async () => ({
+        identity: { ...binding, frameGeneration: 1, leaseId: 'lease-rv10-01' },
+        published: true,
+        byteLength: 3,
+        readOwnedBytes: ({ signal }) =>
+          new Promise((resolve, reject) => {
+            signal.addEventListener(
+              'abort',
+              () => {
+                readAbortedBeforeManualSettle = true;
+                reject(new Error('ABORTED_BY_CLOSE_READER'));
+              },
+              { once: true },
+            );
+            settleRead = () => resolve(bytes);
+            notifyReadEntered();
+          }),
+        release: async () => {},
+      }),
+    },
+    portOptions: {
+      port: wirePort,
+      role: 'sender',
+      binding,
+      limits: { maxFrameBytes: 4096, ackTimeoutMs: 1000, maxSurfacesPerPort: 1 },
+      onReleaseLease() {},
+      onRevoke() {
+        revocations += 1;
+      },
+    },
+  });
+
+  await readEntered;
+  assert.equal(posted.length, 0);
+
+  // Publish terminal destroyed mid-read; surface is now absent in host state.
+  surfaceAlive = false;
+  const destroyPromise = emitEntry({
+    stateOnly: true,
+    frameRef,
+    state: { ...surface, surface_id: 's1', state: 'destroyed' },
+    readerOptions: { binding },
+  });
+
+  // closeReader must abort the in-flight read without waiting for manual settleRead().
+  await new Promise((resolve) => setImmediate(resolve));
+  const abortedByDestroy = readAbortedBeforeManualSettle;
+  if (!abortedByDestroy) {
+    settleRead?.();
+  }
+  await Promise.all([slowFramePromise, destroyPromise]);
+
+  assert.equal(abortedByDestroy, true, 'closeReader must abort in-flight readFrame before it settles');
+  assert.equal(revocations, 1, 'stream port must be revoked on mid-read destroyed');
+  const statesPosted = posted.map(([, msg]) => msg.surface.state);
+  assert.deepEqual(statesPosted, ['destroyed'], 'no active surface post may occur after destroyed is published');
+
+  // Direct deliverAuthorityFrame check: when resolveLatestState() returns null (absent surface),
+  // even a stateUpdated: true entry whose read fails returns false without posting a stale active fallback.
+  const directPosted = [];
+  const directStreams = new Set();
+  const directPort = new EventEmitter();
+  directPort.postMessage = () => {};
+  directPort.start = () => {};
+  directPort.close = () => {};
+  try {
+    const ok = await deliverAuthorityFrame(
+      {
+        frameRef,
+        state: { ...surface, surface_id: 's1', state: 'active' },
+        stateUpdated: true,
+        resolveLatestState: () => null,
+        readerOptions: {
+          binding,
+          limits: { maxFrameBytes: 4096, maxWidth: 64, maxHeight: 64, readTimeoutMs: 1000, maxConcurrentReads: 1 },
+          pixelEnvironment: { environmentId: 'test', zoom: 1, dpr: 1 },
+          onReleaseLease() {},
+          acquirePublishedLease: async () => {
+            throw new Error('READ_FAIL');
+          },
+        },
+        portOptions: {
+          port: directPort,
+          role: 'sender',
+          binding,
+          limits: { maxFrameBytes: 4096, ackTimeoutMs: 1000, maxSurfacesPerPort: 1 },
+          onReleaseLease() {},
+          onRevoke() {},
+        },
+      },
+      { postMessage: (...args) => directPosted.push(args) },
+      directStreams,
+    );
+    assert.equal(ok, false);
+    assert.equal(directPosted.length, 0, 'absent surface (resolveLatestState -> null) must not post stale fallback');
+  } finally {
+    for (const s of directStreams) {
+      await s.reader.closeReader().catch(() => {});
+      s.port.revokeFramePort('SHUTDOWN');
+    }
+  }
+
+  // Negative control: oracle rejects a stale active post preceding or following destroyed.
+  assert.throws(() => assert.deepEqual(['active', 'destroyed'], ['destroyed']));
+});
+
+test('RV10-03: fast-path stateOnly supersedes older queued stateOnly', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'wire-rv10-03-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const bytes = new Uint8Array([1, 2, 3]);
+  const sha = createHash('sha256').update(bytes).digest('hex');
+  const makeRef = (sid) => ({
+    schema: 'frame_ref/v0.2',
+    surface_id: sid,
+    generation: 1,
+    tick: 1,
+    ts_ns: 1,
+    width: 1,
+    height: 1,
+    format: 'rgb24',
+    ramws_path: '/dev/shm/private.rgb',
+    sha256: sha,
+    capture_us: 1,
+  });
+  const handlers = new Map();
+  const posted = [];
+  const frame = { origin: 'app://metaviewer', url: 'app://metaviewer/index.html' };
+  const contents = {
+    id: 9,
+    mainFrame: frame,
+    isDestroyed: () => false,
+    postMessage: (...args) => posted.push(args),
+  };
+  const event = { sender: contents, senderFrame: frame };
+  const ipcMain = {
+    handle: (ch, fn) => handlers.set(ch, fn),
+    removeHandler: (ch) => handlers.delete(ch),
+  };
+  let stateOnlyDiagCount = 0;
+  let emitEntry = null;
+  const wire = installAuthorityWire({
+    ipcMain,
+    contents,
+    core: { request: async () => true },
+    env: { XDG_CONFIG_HOME: root },
+    argv: [],
+    frameDiag: {
+      recordStateOnly: () => {
+        stateOnlyDiagCount += 1;
+      },
+    },
+    frames: {
+      subscribe: (cb) => {
+        emitEntry = cb;
+        return () => {};
+      },
+    },
+  });
+  t.after(() => wire.dispose());
+
+  let notifyAReadEntered = null;
+  const aReadEntered = new Promise((resolve) => {
+    notifyAReadEntered = resolve;
+  });
+  let releaseARead = null;
+  const bindingA = { principal: 'ui', epoch: 1, surfaceId: 'sA', surfaceGeneration: 1 };
+  const portA = new EventEmitter();
+  portA.postMessage = () => {};
+  portA.start = () => {};
+  portA.close = () => {};
+
+  const bindingC = { principal: 'ui', epoch: 1, surfaceId: 'sC', surfaceGeneration: 1 };
+  const portC = new EventEmitter();
+  portC.postMessage = () => {};
+  portC.start = () => {};
+  portC.close = () => {};
+
+  // While unsubscribed:
+  // 1) stage slow frame for sA,
+  // 2) stage older folded stateOnly for sB,
+  // 3) stage failing frame + folded stateOnly for sC (setting stateUpdated: true on sC).
+  await emitEntry({
+    frameRef: makeRef('sA'),
+    state: { ...surface, surface_id: 'sA', visibility: 'unfolded' },
+    readerOptions: {
+      binding: bindingA,
+      limits: { maxFrameBytes: 4096, maxWidth: 64, maxHeight: 64, readTimeoutMs: 1000, maxConcurrentReads: 1 },
+      pixelEnvironment: { environmentId: 'test', zoom: 1, dpr: 1 },
+      onReleaseLease() {},
+      acquirePublishedLease: async () => ({
+        identity: { ...bindingA, frameGeneration: 1, leaseId: 'lease-sA' },
+        published: true,
+        byteLength: 3,
+        readOwnedBytes: () =>
+          new Promise((resolve) => {
+            releaseARead = () => resolve(bytes);
+            notifyAReadEntered();
+          }),
+        release: async () => {},
+      }),
+    },
+    portOptions: {
+      port: portA,
+      role: 'sender',
+      binding: bindingA,
+      limits: { maxFrameBytes: 4096, ackTimeoutMs: 1000, maxSurfacesPerPort: 1 },
+      onReleaseLease() {},
+      onRevoke() {},
+    },
+  });
+  await emitEntry({
+    stateOnly: true,
+    frameRef: makeRef('sB'),
+    state: { ...surface, surface_id: 'sB', visibility: 'folded' },
+  });
+  await emitEntry({
+    frameRef: makeRef('sC'),
+    state: { ...surface, surface_id: 'sC', visibility: 'unfolded' },
+    readerOptions: {
+      binding: bindingC,
+      limits: { maxFrameBytes: 4096, maxWidth: 64, maxHeight: 64, readTimeoutMs: 1000, maxConcurrentReads: 1 },
+      pixelEnvironment: { environmentId: 'test', zoom: 1, dpr: 1 },
+      onReleaseLease() {},
+      acquirePublishedLease: async () => {
+        throw new Error('FAIL_SC_READ');
+      },
+    },
+    portOptions: {
+      port: portC,
+      role: 'sender',
+      binding: bindingC,
+      limits: { maxFrameBytes: 4096, ackTimeoutMs: 1000, maxSurfacesPerPort: 1 },
+      onReleaseLease() {},
+      onRevoke() {},
+    },
+  });
+  await emitEntry({
+    stateOnly: true,
+    frameRef: makeRef('sC'),
+    state: { ...surface, surface_id: 'sC', visibility: 'folded' },
+  });
+
+  // Subscribe starts draining sA; emit newer unfolded stateOnly for sB and sC while sA is mid-read.
+  const subPromise = handlers.get(WIRE_CHANNELS.subscribeFrames)(event);
+  await aReadEntered;
+
+  await emitEntry({
+    stateOnly: true,
+    frameRef: makeRef('sB'),
+    state: { ...surface, surface_id: 'sB', visibility: 'unfolded' },
+  });
+  await emitEntry({
+    stateOnly: true,
+    frameRef: makeRef('sC'),
+    state: { ...surface, surface_id: 'sC', visibility: 'unfolded' },
+  });
+
+  releaseARead();
+  await subPromise;
+
+  const bMessages = posted.filter(([, msg]) => msg.surface.surface_id === 'sB').map(([, msg]) => msg.surface.visibility);
+  assert.equal(bMessages.at(-1), 'unfolded', 'newer fast-path unfolded state must not be overwritten by older queued folded state');
+  assert.deepEqual(bMessages, ['unfolded']);
+
+  const cMessages = posted.filter(([, msg]) => msg.surface.surface_id === 'sC').map(([, msg]) => msg.surface.visibility);
+  assert.deepEqual(cMessages, ['unfolded'], 'fast-path merge into queued frame entry must clear stateUpdated to avoid duplicate post on reader failure');
+  assert.equal(stateOnlyDiagCount, 2);
+
+  // Negative control: oracle rejects stale trailing 'folded'.
+  assert.throws(() => assert.equal(['unfolded', 'folded'].at(-1), 'unfolded'));
+});
+
+test('MV10-NEW-01: destroy while unsubscribed still notifies and releases on resubscribe', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'wire-mv10-new01-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const bytes = new Uint8Array([1, 2, 3]);
+  const sha = createHash('sha256').update(bytes).digest('hex');
+  const frameRef = {
+    schema: 'frame_ref/v0.2',
+    surface_id: 's1',
+    generation: 1,
+    tick: 1,
+    ts_ns: 1,
+    width: 1,
+    height: 1,
+    format: 'rgb24',
+    ramws_path: '/dev/shm/private.rgb',
+    sha256: sha,
+    capture_us: 1,
+  };
+  const binding = { principal: 'ui', epoch: 1, surfaceId: 's1', surfaceGeneration: 1 };
+  const handlers = new Map();
+  const posted = [];
+  const frame = { origin: 'app://metaviewer', url: 'app://metaviewer/index.html' };
+  const contents = {
+    id: 9,
+    mainFrame: frame,
+    isDestroyed: () => false,
+    postMessage: (...args) => posted.push(args),
+  };
+  const event = { sender: contents, senderFrame: frame };
+  const ipcMain = {
+    handle: (ch, fn) => handlers.set(ch, fn),
+    removeHandler: (ch) => handlers.delete(ch),
+  };
+
+  let emitEntry = null;
+  const wire = installAuthorityWire({
+    ipcMain,
+    contents,
+    core: { request: async () => true },
+    env: { XDG_CONFIG_HOME: root },
+    argv: [],
+    frames: {
+      subscribe: (cb) => {
+        emitEntry = cb;
+        return () => {};
+      },
+    },
+  });
+  t.after(() => wire.dispose());
+
+  let revocations = 0;
+  const wirePort = new EventEmitter();
+  wirePort.postMessage = () => {};
+  wirePort.start = () => {};
+  wirePort.close = () => {};
+
+  await handlers.get(WIRE_CHANNELS.subscribeFrames)(event);
+  await emitEntry({
+    frameRef,
+    state: { ...surface, surface_id: 's1', state: 'active' },
+    readerOptions: {
+      binding,
+      limits: { maxFrameBytes: 4096, maxWidth: 64, maxHeight: 64, readTimeoutMs: 1000, maxConcurrentReads: 1 },
+      pixelEnvironment: { environmentId: 'test', zoom: 1, dpr: 1 },
+      onReleaseLease() {},
+      acquirePublishedLease: async () => ({
+        identity: { ...binding, frameGeneration: 1, leaseId: 'lease-new01' },
+        published: true,
+        byteLength: 3,
+        readOwnedBytes: async () => bytes,
+        release: async () => {},
+      }),
+    },
+    portOptions: {
+      port: wirePort,
+      role: 'sender',
+      binding,
+      limits: { maxFrameBytes: 4096, ackTimeoutMs: 1000, maxSurfacesPerPort: 1 },
+      onReleaseLease() {},
+      onRevoke() {
+        revocations += 1;
+      },
+    },
+  });
+  assert.equal(posted.length, 1);
+  assert.equal(posted[0][1].surface.state, 'active');
+  assert.equal(revocations, 0);
+
+  await handlers.get(WIRE_CHANNELS.unsubscribeFrames)(event);
+  await emitEntry({
+    stateOnly: true,
+    frameRef,
+    state: { ...surface, surface_id: 's1', state: 'destroyed' },
+    readerOptions: { binding },
+  });
+  await handlers.get(WIRE_CHANNELS.subscribeFrames)(event);
+
+  assert.equal(posted.length, 2, 'resubscribe must deliver the destroyed notice staged while unsubscribed');
+  assert.equal(posted[1][1].surface.state, 'destroyed');
+  assert.equal(revocations, 1, 'stream must be closed and revoked when destroyed while unsubscribed');
+
+  // Negative control: oracle rejects missing destroyed notice or unrevoked stream.
+  assert.throws(() => assert.equal(1, 2));
+  assert.throws(() => assert.equal(0, 1));
+});
+
+

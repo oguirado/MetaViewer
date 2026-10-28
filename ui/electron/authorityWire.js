@@ -445,15 +445,11 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
   function stageEntry(entry) {
     const sid = entry?.frameRef?.surface_id;
     if (typeof sid !== 'string') return;
-    if (!subscribed && ['destroyed','lost'].includes(entry?.state?.state)) {
-      pendingEntries.delete(sid);
-      return;
-    }
     const prior = pendingEntries.get(sid);
     if (entry.stateOnly && prior && !prior.stateOnly && !['destroyed','lost'].includes(entry?.state?.state)) {
       pendingEntries.set(sid, {...prior, state: entry.state, stateUpdated: true});
     } else if (!entry.stateOnly && prior && (prior.stateOnly || prior.stateUpdated) && !['destroyed','lost'].includes(prior?.state?.state)) {
-      const freshState = typeof entry.resolveLatestState === 'function' ? entry.resolveLatestState() : prior.state;
+      const freshState = typeof entry.resolveLatestState === 'function' ? (entry.resolveLatestState() ?? prior.state) : prior.state;
       pendingEntries.set(sid, {...entry, state: freshState, stateUpdated: true});
     } else {
       pendingEntries.set(sid, entry);
@@ -486,13 +482,23 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
   }
   const stopFrames = frames ? frames.subscribe(async (/** @type {any} */entry) => {
     if (disposed) return;
-    if (subscribed && entry?.stateOnly && !['destroyed','lost'].includes(entry?.state?.state)) {
-      const sid = entry?.frameRef?.surface_id;
+    const sid = entry?.frameRef?.surface_id;
+    const isTerminal = ['destroyed','lost'].includes(entry?.state?.state);
+    if (subscribed && entry?.stateOnly && !isTerminal) {
       const prior = typeof sid === 'string' ? pendingEntries.get(sid) : undefined;
-      if (prior && !prior.stateOnly) {
-        pendingEntries.set(sid, {...prior, state: entry.state});
+      if (prior?.stateOnly) {
+        pendingEntries.delete(sid);
+      } else if (prior) {
+        pendingEntries.set(sid, {...prior, state: entry.state, stateUpdated: false});
       }
       await deliverAuthorityFrame(entry,contents,streams,frameDiag);
+      return;
+    }
+    if (subscribed && entry?.stateOnly && isTerminal && typeof sid === 'string') {
+      pendingEntries.delete(sid);
+      stageEntry(entry);
+      await closeSurfaceStreams(streams, sid);
+      await drainPendingEntries();
       return;
     }
     stageEntry(entry);
@@ -534,6 +540,15 @@ function projectSurfaceState(rawState, refSurfaceId) {
       || typeof state.profile_id!=='string' || !state.profile_id.length || state.profile_id.length>128) throw new Error('SURFACE_STATE');
   return state;
 }
+/** @param {Set<any>} streams @param {string} surfaceId */
+async function closeSurfaceStreams(streams, surfaceId) {
+  const deadList=[...streams].filter(item=>item.surfaceId===surfaceId || streamKeySurfaceId(item.key)===surfaceId);
+  for (const dead of deadList) {
+    streams.delete(dead);
+    try { await dead.reader.closeReader(); } catch {}
+    finally { dead.port.revokeFramePort('SHUTDOWN'); }
+  }
+}
 /** Trusted host frame capability entry: readerOptions/portOptions, state, frameRef.
  * @param {any} entry @param {any} contents @param {Set<any>} streams @param {any} [frameDiag] */
 export async function deliverAuthorityFrame(entry,contents,streams,frameDiag=null) {
@@ -544,12 +559,7 @@ export async function deliverAuthorityFrame(entry,contents,streams,frameDiag=nul
   let state=projectSurfaceState(entry.state, ref.surface_id);
   if (entry.stateOnly) {
     if (['destroyed','lost'].includes(state.state)) {
-      const deadList=[...streams].filter(item=>item.surfaceId===state.surface_id || streamKeySurfaceId(item.key)===state.surface_id);
-      for (const dead of deadList) {
-        streams.delete(dead);
-        try { await dead.reader.closeReader(); } catch {}
-        finally { dead.port.revokeFramePort('SHUTDOWN'); }
-      }
+      await closeSurfaceStreams(streams, state.surface_id);
     }
     contents.postMessage('metaviewer:authority.frames',{frame_ref:ref,surface:state},[]);
     frameDiag?.recordStateOnly?.({surfaceId:ref.surface_id});
@@ -579,10 +589,12 @@ export async function deliverAuthorityFrame(entry,contents,streams,frameDiag=nul
   const result=await stream.reader.readFrame(entry.frameRef);
   if (typeof entry.resolveLatestState === 'function') {
     const latestState = entry.resolveLatestState();
-    if (latestState && latestState.surface_id === ref.surface_id) {
+    if (!latestState) return false;
+    if (latestState.surface_id === ref.surface_id) {
       state=projectSurfaceState(latestState, ref.surface_id);
     }
   }
+  if (!streams.has(stream)) return false;
   if (!result.ok) {
     frameDiag?.recordReaderRefusal?.({
       surfaceId:ref.surface_id,
