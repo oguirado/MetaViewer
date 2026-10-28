@@ -1198,7 +1198,7 @@ def validate_npm_dependencies(table, pins):
 # no installs, lifecycle scripts, network access or repository writes are admitted.
 COMPONENT_PINS = {
     'vision-engine': ('python_package', 'oguirado/vision-engine', 'v0.2.0',
-                      '9bbb49f220837388e1ab90c34ae0eedee27a66eb'),
+                      '88803ee54585da96d33cf1df6c7bd2fcc76786c1'),
     'wender-agent': ('python_package', 'oguirado/wender-agent', 'v0.3.0',
                      '7648b258d1d04953bacffe8627de5acd7c75d817'),
     'opensuperficies': ('go_binary', 'oguirado/OpenSuperficies', 'os-cu-w9-mv1',

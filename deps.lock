@@ -5,7 +5,7 @@
       "kind": "python_package",
       "repo": "oguirado/vision-engine",
       "version": "v0.2.0",
-      "commit": "9bbb49f220837388e1ab90c34ae0eedee27a66eb"
+      "commit": "88803ee54585da96d33cf1df6c7bd2fcc76786c1"
     },
     {
       "name": "wender-agent",
