@@ -77,6 +77,7 @@ type Subscriptions struct {
 	emit      Emit
 	tasks     map[string]*task
 	failures  map[string]*task
+	confirmed map[string]uint64
 	failedIDs []string
 	closed    bool
 	clock     pollClock
@@ -95,7 +96,7 @@ func NewSubscriptions(ctx context.Context, cfg SubscriptionConfig, source Source
 		return nil, e
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	return &Subscriptions{ctx: ctx, cancel: cancel, cfg: cfg, source: source, publisher: publisher, emit: emit, tasks: make(map[string]*task), failures: make(map[string]*task), clock: monotonicPollClock{}}, nil
+	return &Subscriptions{ctx: ctx, cancel: cancel, cfg: cfg, source: source, publisher: publisher, emit: emit, tasks: make(map[string]*task), failures: make(map[string]*task), confirmed: make(map[string]uint64), clock: monotonicPollClock{}}, nil
 }
 func (s *Subscriptions) Subscribe(ctx context.Context, id string) error {
 	if e := ctx.Err(); e != nil {
@@ -113,6 +114,9 @@ func (s *Subscriptions) Subscribe(ctx context.Context, id string) error {
 		return errors.New("subscription capacity reached")
 	}
 	run, cancel := context.WithCancel(s.ctx)
+	if _, failed := s.failures[id]; failed {
+		delete(s.confirmed, id)
+	}
 	s.forgetFailure(id)
 	t := &task{cancel: cancel, done: make(chan struct{})}
 	s.tasks[id] = t
@@ -188,7 +192,7 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 			s.mu.Lock()
 			cancelled := t.cancelled || s.closed || ctx.Err() != nil
 			if !cancelled {
-				if (s.cfg.DeduplicateUnchanged || s.publisher.cfg.Deduplicate) && t.emitted >= s.initialUnchangedPolls() {
+				if (s.cfg.DeduplicateUnchanged || s.publisher.cfg.Deduplicate) && s.confirmed[id] >= s.initialUnchangedPolls() && t.emitted >= 1 {
 					ref, changed, e = s.publisher.PublishIfChanged(id, binding, native)
 				} else {
 					ref, _, e = s.publisher.publish(id, binding, native, false)
@@ -257,6 +261,9 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 				return
 			}
 			t.emitted++
+			s.mu.Lock()
+			s.confirmed[id]++
+			s.mu.Unlock()
 		}
 		next = next.Add(s.cfg.PollInterval)
 		now := s.clock.Now()

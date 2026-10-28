@@ -123,7 +123,7 @@ func RuntimeFromEnv() (Runtime, error) {
 		// [TARGET, unit decision] Retain each published frame >= 4 s (>= 2 s floor),
 		// bounded by 128 MiB per surface (~38 full 1280x900 RGB24 frames), 512 MiB
 		// global across surfaces, and at most 64 generations per surface.
-		p, e := frames.NewPublisher(frames.PublishConfig{RAMRoot: profile.RAMRoot, MaxFrameBytes: 64 << 20, MaxPixels: 64 << 20, MaxSurfaces: 16, MaxRetained: 64, MinRetention: 4 * time.Second, MaxSurfaceBytes: 128 << 20, MaxTotalBytes: 512 << 20})
+		p, e := frames.NewPublisher(frames.PublishConfig{RAMRoot: profile.RAMRoot, MaxFrameBytes: 64 << 20, MaxPixels: 64 << 20, MaxSurfaces: 16, MaxRetained: 64, MinRetention: 4 * time.Second, MaxSurfaceBytes: 128 << 20, MaxTotalBytes: 512 << 20, Deduplicate: true})
 		if e != nil {
 			_ = recorder.Close()
 			viewMgr.Close()
@@ -489,7 +489,7 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 		if evidence.SurfaceID != id || native.CaptureMonoNS < evidence.InputMonoNS {
 			return failure(configuration("post-input capture evidence refused"))
 		}
-		ref, err := pubs[profiles[binding.Surface.ProfileID].RAMRoot].Publish(id, binding, native)
+		ref, err := pubs[profiles[binding.Surface.ProfileID].RAMRoot].PublishForced(id, binding, native)
 		if err != nil {
 			return failure(err)
 		}

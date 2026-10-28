@@ -1033,6 +1033,72 @@ class StackDemoTests(unittest.TestCase):
             ],
         )
 
+    def test_binaries_rebuilds_stale_prebuilt_go_adapter_and_keeps_fresh_adapter(self):
+        work = self.root / "work-bins"
+        work.mkdir()
+        fake_src = self.root / "fake-daemon-adapter"
+        fake_src.mkdir()
+        src_file = fake_src / "main.go"
+        src_file.write_text("package main\n")
+
+        core_bin = self.root / "metaviewer-core"
+        core_bin.write_bytes(b"#!/bin/sh\nexit 0\n")
+        core_bin.chmod(0o700)
+
+        # 1. Prebuilt Go adapter missing deduplicating symbols is stale -> rebuilt into work/mv-daemon-adapter.
+        stale_sym_bin = self.root / "stale-sym-adapter"
+        stale_sym_bin.write_bytes(b"\xff Go buildinf:go1.26\x00")
+        stale_sym_bin.chmod(0o700)
+        self.assertTrue(stack.adapter_binary_stale(stale_sym_bin, source_root=fake_src))
+
+        build_calls = []
+
+        def fake_checked(cmd, **kwargs):
+            build_calls.append((cmd, kwargs))
+            out_bin = Path(cmd[cmd.index("-o") + 1])
+            out_bin.write_bytes(
+                b"\xff Go buildinf:go1.26\x00PublishIfChanged\x00DeduplicateUnchanged\x00PublishForced\x00"
+            )
+            out_bin.chmod(0o700)
+            return ""
+
+        resolved = stack.binaries(
+            work,
+            env={
+                "MV_E2E_CORE_BIN": str(core_bin),
+                "MV_E2E_ADAPTER_BIN": str(stale_sym_bin),
+                "GO": "custom-go",
+            },
+            checked_fn=fake_checked,
+            source_root=fake_src,
+        )
+        self.assertEqual(len(build_calls), 1)
+        self.assertEqual(build_calls[0][0][0], "custom-go")
+        self.assertEqual(resolved["adapter"], work / "mv-daemon-adapter")
+
+        # 2. Negative control: fresh Go adapter with symbols and mtime >= sources is used as-is.
+        fresh_bin = self.root / "fresh-adapter"
+        fresh_bin.write_bytes(
+            b"\xff Go buildinf:go1.26\x00PublishIfChanged\x00DeduplicateUnchanged\x00PublishForced\x00"
+        )
+        fresh_bin.chmod(0o700)
+        future_ns = src_file.stat().st_mtime_ns + 10_000_000_000
+        os.utime(fresh_bin, ns=(future_ns, future_ns))
+        self.assertFalse(stack.adapter_binary_stale(fresh_bin, source_root=fake_src))
+
+        build_calls.clear()
+        resolved_fresh = stack.binaries(
+            work,
+            env={
+                "MV_E2E_CORE_BIN": str(core_bin),
+                "MV_E2E_ADAPTER_BIN": str(fresh_bin),
+            },
+            checked_fn=fake_checked,
+            source_root=fake_src,
+        )
+        self.assertEqual(build_calls, [])
+        self.assertEqual(resolved_fresh["adapter"], fresh_bin.resolve(strict=True))
+
 
 if __name__ == "__main__":
     unittest.main()

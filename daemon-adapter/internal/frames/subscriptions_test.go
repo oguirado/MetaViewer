@@ -365,3 +365,196 @@ func TestSubscriptionDeduplicatesUnchangedDigestAndPublishesOnMutation(t *testin
 		t.Fatal("stalled waiting for mutated frame delivery")
 	}
 }
+
+type rewritingSource struct {
+	mu    sync.Mutex
+	b     capsule.Binding
+	f     capsule.NativeFrame
+	rgb   []byte
+	w, h  int
+	calls uint64
+}
+
+func (s *rewritingSource) Capture(_ context.Context, _ string) (capsule.Binding, capsule.NativeFrame, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	seq := s.calls
+	img := image.NewRGBA(image.Rect(0, 0, s.w, s.h))
+	for y := 0; y < s.h; y++ {
+		for x := 0; x < s.w; x++ {
+			off := (y*s.w + x) * 3
+			img.SetRGBA(x, y, color.RGBA{R: s.rgb[off], G: s.rgb[off+1], B: s.rgb[off+2], A: 255})
+		}
+	}
+	levels := []png.CompressionLevel{png.NoCompression, png.BestSpeed, png.DefaultCompression, png.BestCompression}
+	enc := png.Encoder{CompressionLevel: levels[seq%uint64(len(levels))]}
+	path := filepath.Join(s.b.FramesRoot, fmt.Sprintf("rewrite-%d.png", seq))
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return capsule.Binding{}, capsule.NativeFrame{}, err
+	}
+	if err := enc.Encode(file, img); err != nil {
+		_ = file.Close()
+		return capsule.Binding{}, capsule.NativeFrame{}, err
+	}
+	if err := file.Close(); err != nil {
+		return capsule.Binding{}, capsule.NativeFrame{}, err
+	}
+	mtime := time.Now().Add(time.Duration(seq) * time.Second)
+	if err := os.Chtimes(path, mtime, mtime); err != nil {
+		return capsule.Binding{}, capsule.NativeFrame{}, err
+	}
+	sum := sha256.Sum256(s.rgb)
+	f := s.f
+	f.Path = path
+	f.Seq = seq
+	f.Width = s.w
+	f.Height = s.h
+	f.SHA256RGB24 = fmt.Sprintf("%x", sum[:])
+	f.CaptureMonoNS = 1000 + seq
+	if f.Window != nil {
+		win := *f.Window
+		win.W = s.w
+		win.H = s.h
+		f.Window = &win
+	}
+	b := s.b
+	b.Surface.Geometry.W = s.w
+	b.Surface.Geometry.H = s.h
+	return b, f, nil
+}
+
+func TestSubscriptionDeduplicatesReencodedPNGWithNewMtimeAndSizeMutation(t *testing.T) {
+	root, b, f := ramFixture(t)
+	p, err := NewPublisher(PublishConfig{RAMRoot: root, MaxFrameBytes: 64 << 20, MaxPixels: 64, MaxSurfaces: 4, Deduplicate: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	src := &rewritingSource{
+		b:   b,
+		f:   f,
+		rgb: []byte{1, 2, 3, 4, 5, 6},
+		w:   2,
+		h:   1,
+	}
+	events := make(chan json.RawMessage, 16)
+	subs, err := NewSubscriptions(context.Background(), SubscriptionConfig{
+		MaxSubscriptions:      1,
+		PollInterval:          2 * time.Millisecond,
+		CaptureTimeout:        time.Second,
+		ShutdownTimeout:       time.Second,
+		DeduplicateUnchanged:  true,
+		InitialUnchangedPolls: 2,
+	}, src, p, func(ctx context.Context, msg json.RawMessage) error {
+		select {
+		case events <- msg:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = subs.Close(context.Background()) })
+
+	if err := subs.Subscribe(context.Background(), "a"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 2; i++ {
+		select {
+		case msg := <-events:
+			var ev struct {
+				Data struct {
+					FrameRef Ref `json:"frame_ref"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(msg, &ev); err != nil || ev.Data.FrameRef.Generation != uint64(i) {
+				t.Fatalf("initial confirmation %d: %+v err=%v", i, ev, err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("stalled waiting for initial confirmation")
+		}
+	}
+
+	deadline := time.After(time.Second)
+	for {
+		src.mu.Lock()
+		calls := src.calls
+		src.mu.Unlock()
+		if calls >= 8 {
+			break
+		}
+		select {
+		case msg := <-events:
+			t.Fatalf("unexpected frame_ready on re-encoded identical RGB24 poll: %s", msg)
+		case <-deadline:
+			t.Fatal("rewritingSource did not advance to 8 polls")
+		case <-time.After(time.Millisecond):
+		}
+	}
+
+	// Resubscribe after unsubscribe emits 1 confirmation frame (gen 3), then suppresses subsequent identical polls.
+	if err := subs.Unsubscribe(context.Background(), "a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := subs.Subscribe(context.Background(), "a"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case msg := <-events:
+		var ev struct {
+			Data struct {
+				FrameRef Ref `json:"frame_ref"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(msg, &ev); err != nil || ev.Data.FrameRef.Generation != 3 {
+			t.Fatalf("resubscribe confirmation: %+v err=%v", ev, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stalled waiting for resubscribe confirmation")
+	}
+
+	src.mu.Lock()
+	baseCalls := src.calls
+	src.mu.Unlock()
+	deadline = time.After(time.Second)
+	for {
+		src.mu.Lock()
+		calls := src.calls
+		src.mu.Unlock()
+		if calls >= baseCalls+5 {
+			break
+		}
+		select {
+		case msg := <-events:
+			t.Fatalf("unexpected duplicate frame_ready after resubscribe confirmation: %s", msg)
+		case <-deadline:
+			t.Fatal("rewritingSource did not advance after resubscribe")
+		case <-time.After(time.Millisecond):
+		}
+	}
+
+	// Negative control: changing geometry (1x2 with identical RGB24 byte stream) must emit generation 4.
+	src.mu.Lock()
+	src.w = 1
+	src.h = 2
+	src.mu.Unlock()
+
+	select {
+	case msg := <-events:
+		var ev struct {
+			Data struct {
+				FrameRef Ref `json:"frame_ref"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(msg, &ev); err != nil || ev.Data.FrameRef.Generation != 4 || ev.Data.FrameRef.Width != 1 || ev.Data.FrameRef.Height != 2 {
+			t.Fatalf("expected geometry change to emit generation 4 (1x2), got %+v err=%v", ev, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stalled waiting for geometry change frame_ready")
+	}
+}

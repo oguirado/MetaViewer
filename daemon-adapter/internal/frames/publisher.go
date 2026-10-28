@@ -238,6 +238,11 @@ func (p *Publisher) Publish(id string, b capsule.Binding, f capsule.NativeFrame)
 	return ref, err
 }
 
+func (p *Publisher) PublishForced(id string, b capsule.Binding, f capsule.NativeFrame) (Ref, error) {
+	ref, _, err := p.publish(id, b, f, false)
+	return ref, err
+}
+
 func (p *Publisher) PublishIfChanged(id string, b capsule.Binding, f capsule.NativeFrame) (Ref, bool, error) {
 	return p.publish(id, b, f, true)
 }

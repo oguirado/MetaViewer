@@ -369,23 +369,57 @@ def preflight(root, display_mode="private", record_path=None):
     return before
 
 
-def binaries(work):
+def adapter_binary_stale(binary, source_root=None):
+    """Return True when a supplied Go adapter binary predates deduplication or daemon-adapter sources."""
+    source_root = (ROOT / "daemon-adapter") if source_root is None else Path(source_root)
+    try:
+        stat = Path(binary).stat()
+        data = Path(binary).read_bytes()
+    except OSError:
+        return True
+    if b"\xff Go buildinf:" in data:
+        if (
+            b"PublishIfChanged" not in data
+            or b"DeduplicateUnchanged" not in data
+            or b"PublishForced" not in data
+        ):
+            return True
+        newest_src = max(
+            (p.stat().st_mtime_ns for p in source_root.rglob("*.go") if p.is_file()),
+            default=0,
+        )
+        if newest_src > stat.st_mtime_ns:
+            return True
+    return False
+
+
+def binaries(work, *, env=None, checked_fn=None, source_root=None):
+    env = os.environ if env is None else env
+    checked_fn = checked if checked_fn is None else checked_fn
+    source_root = (ROOT / "daemon-adapter") if source_root is None else Path(source_root)
     result = {}
     for role, key in (("core", "MV_E2E_CORE_BIN"), ("adapter", "MV_E2E_ADAPTER_BIN")):
-        supplied = os.environ.get(key)
+        supplied = env.get(key)
         if supplied:
             binary = Path(supplied).resolve(strict=True)
+            if role == "adapter" and adapter_binary_stale(binary, source_root=source_root):
+                binary = Path(work) / "mv-daemon-adapter"
+                checked_fn(
+                    [env.get("GO", "go"), "build", "-o", binary, "./cmd/mv-daemon-adapter"],
+                    cwd=source_root,
+                    env=dict(env, GOPROXY="off", GOSUMDB="off"),
+                )
         elif role == "core":
-            target = os.environ.get("CARGO_TARGET_DIR")
+            target = env.get("CARGO_TARGET_DIR")
             if not target or not Path(target).is_absolute():
                 raise RuntimeError("absolute per-worktree CARGO_TARGET_DIR required")
-            checked([os.environ.get("CARGO", "cargo"), "build", "--offline", "--manifest-path",
-                     ROOT / "core/Cargo.toml", "--bin", "metaviewer-core"], cwd=ROOT)
+            checked_fn([env.get("CARGO", "cargo"), "build", "--offline", "--manifest-path",
+                        ROOT / "core/Cargo.toml", "--bin", "metaviewer-core"], cwd=ROOT)
             binary = Path(target) / "debug/metaviewer-core"
         else:
-            binary = work / "mv-daemon-adapter"
-            checked([os.environ.get("GO", "go"), "build", "-o", binary, "./cmd/mv-daemon-adapter"],
-                    cwd=ROOT / "daemon-adapter", env=dict(os.environ, GOPROXY="off", GOSUMDB="off"))
+            binary = Path(work) / "mv-daemon-adapter"
+            checked_fn([env.get("GO", "go"), "build", "-o", binary, "./cmd/mv-daemon-adapter"],
+                       cwd=source_root, env=dict(env, GOPROXY="off", GOSUMDB="off"))
         if not binary.is_file() or not os.access(binary, os.X_OK):
             raise RuntimeError("executable AUSENTE: " + str(binary))
         result[role] = binary
