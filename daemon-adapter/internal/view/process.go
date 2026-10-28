@@ -70,7 +70,11 @@ func (r *ProcessRunner) Start(ctx context.Context, args []string) (*Process, err
 	cmd := exec.CommandContext(childCtx, filepath.Join(r.root, args[0]), argv...)
 	cmd.Env = append([]string(nil), r.env...)
 	cmd.Stderr = io.Discard
-	cmd.Cancel = func() error {
+	// [TARGET, unit decision] Own a dedicated process group for the foreground
+	// view helper so descendants that close inherited stdout/stderr are signaled
+	// and terminated before final reap. Never derive PIDs from stdout text.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	killGroup := func(sig syscall.Signal) error {
 		if cmd.Process == nil {
 			return os.ErrProcessDone
 		}
@@ -78,7 +82,14 @@ func (r *ProcessRunner) Start(ctx context.Context, args []string) (*Process, err
 		if pid <= 1 || pid == os.Getpid() || pid == syscall.Getpgrp() {
 			return fault("refused", "unsafe view process identity")
 		}
-		return cmd.Process.Signal(os.Interrupt)
+		err := syscall.Kill(-pid, sig)
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
+	}
+	cmd.Cancel = func() error {
+		return killGroup(syscall.SIGINT)
 	}
 	// The helper restores read-only mode on interrupt; allow that cleanup to finish.
 	cmd.WaitDelay = 15 * time.Second
@@ -90,7 +101,13 @@ func (r *ProcessRunner) Start(ctx context.Context, args []string) (*Process, err
 	}
 	done := make(chan error, 1)
 	reaped := make(chan struct{})
-	go func() { done <- cmd.Wait(); cancel(); close(reaped) }()
+	go func() {
+		waitErr := cmd.Wait()
+		_ = killGroup(syscall.SIGKILL)
+		done <- waitErr
+		cancel()
+		close(reaped)
+	}()
 	timer := time.NewTimer(30 * time.Second)
 	defer timer.Stop()
 	var line []byte

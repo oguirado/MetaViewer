@@ -81,12 +81,62 @@ func TestForegroundReadinessAndReap(t *testing.T) {
 	t.Fatal("view child was not reaped")
 }
 func TestMalformedForegroundIsClosed(t *testing.T) {
-	r := processFixture(t, `'not json'`)
+	interpreter, err := exec.LookPath("python3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	state := filepath.Join(root, "state")
+	if err := os.Mkdir(state, 0700); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(root, "malformed.lock")
+	script := "#!" + interpreter + "\n" + fmt.Sprintf(`import fcntl, os, signal, time
+pid = os.fork()
+if pid == 0:
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    os.close(0)
+    os.close(1)
+    os.close(2)
+    fd = os.open(%q, os.O_CREAT | os.O_RDWR, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    while True:
+        time.sleep(0.05)
+while not os.path.exists(%q):
+    time.sleep(0.01)
+print('not json', flush=True)
+try:
+    while True:
+        time.sleep(0.05)
+except KeyboardInterrupt:
+    pass
+`, lockPath, lockPath)
+	if err := os.WriteFile(filepath.Join(root, "srf-identity-surface"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	r, err := NewProcessRunner(root, []string{"PATH=" + os.Getenv("PATH"), "MV_SRF_STATE_DIR=" + state})
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if _, err := r.Start(ctx, []string{"srf-identity-surface", "login", "--container", "srf-id-demo"}); err == nil {
 		t.Fatal("malformed foreground accepted")
 	}
+	lockFile, err := os.OpenFile(lockPath, os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lockFile.Close() }()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err == nil {
+			_ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("malformed foreground descendant was not reaped")
 }
 func TestProcessRefusalsAndPasteStdin(t *testing.T) {
 	r := processFixture(t, `'not json'`)
@@ -266,4 +316,106 @@ func TestRemovedStateDirRefusedWithoutRecreation(t *testing.T) {
 		t.Fatalf("restored stateDir refused: %v", err)
 	}
 	child.Close()
+}
+
+func TestForegroundProcessGroupDescendantReapAndSentinel(t *testing.T) {
+	interpreter, err := exec.LookPath("python3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sentinel := exec.Command(interpreter, "-c", "import time\nwhile True: time.sleep(0.1)\n")
+	sentinel.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := sentinel.Start(); err != nil {
+		t.Fatal(err)
+	}
+	sentinelPID := sentinel.Process.Pid
+	t.Cleanup(func() {
+		_ = syscall.Kill(-sentinelPID, syscall.SIGKILL)
+		_ = sentinel.Wait()
+	})
+
+	for _, ignoreSIGINT := range []bool{false, true} {
+		name := "default_sigint"
+		if ignoreSIGINT {
+			name = "ignore_sigint"
+		}
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			state := filepath.Join(root, "state")
+			if err := os.Mkdir(state, 0700); err != nil {
+				t.Fatal(err)
+			}
+			lockPath := filepath.Join(root, "descendant.lock")
+			readyPath := filepath.Join(root, "descendant.ready")
+			sigSetup := ""
+			if ignoreSIGINT {
+				sigSetup = "signal.signal(signal.SIGINT, signal.SIG_IGN)\n"
+			}
+			script := "#!" + interpreter + "\n" + fmt.Sprintf(`import fcntl, json, os, signal, sys, time
+%spid = os.fork()
+if pid == 0:
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    os.close(0)
+    os.close(1)
+    os.close(2)
+    fd = os.open(%q, os.O_CREAT | os.O_RDWR, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    with open(%q, 'w') as rf:
+        rf.write('ready')
+    while True:
+        time.sleep(0.05)
+while not os.path.exists(%q):
+    time.sleep(0.01)
+print(json.dumps({'url':'http://127.0.0.1:1234/', 'native':'999999', 'socket':'/runtime/view.sock'}), flush=True)
+try:
+    while True:
+        time.sleep(0.05)
+except KeyboardInterrupt:
+    pass
+`, sigSetup, lockPath, readyPath, readyPath)
+			if err := os.WriteFile(filepath.Join(root, "srf-identity-surface"), []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			r, err := NewProcessRunner(root, []string{"PATH=" + os.Getenv("PATH"), "MV_SRF_STATE_DIR=" + state})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			child, err := r.Start(ctx, []string{"srf-identity-surface", "view", "--container", "srf-id-demo"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			lockFile, err := os.OpenFile(lockPath, os.O_RDWR, 0600)
+			if err != nil {
+				child.Close()
+				t.Fatal(err)
+			}
+			defer func() { _ = lockFile.Close() }()
+			if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err == nil {
+				_ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+				child.Close()
+				t.Fatal("descendant did not hold flock while view was active")
+			}
+
+			child.Close()
+
+			deadline := time.Now().Add(15 * time.Second)
+			reapedDescendant := false
+			for time.Now().Before(deadline) {
+				if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err == nil {
+					_ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+					reapedDescendant = true
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			if !reapedDescendant {
+				t.Fatal("descendant process outlived Process.Close()")
+			}
+			if err := syscall.Kill(sentinelPID, 0); err != nil {
+				t.Fatalf("unrelated sentinel process harmed: %v", err)
+			}
+		})
+	}
 }
