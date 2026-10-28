@@ -1,0 +1,708 @@
+{
+  "schema": "metaviewer.frames_parity/v1",
+  "contract_version": "v0.2",
+  "envelope_template": {
+    "schema": "envelope/v0.2",
+    "msg_id": "parity-msg-1",
+    "ts_ns": 1000000,
+    "from": {
+      "component": "agent",
+      "instance": "agent-parity"
+    },
+    "to": {
+      "component": "core",
+      "instance": "core-parity"
+    },
+    "session_id": "session-parity",
+    "seq": 1,
+    "nonce": "0123456789abcdef0123456789abcdef"
+  },
+  "surface_template": {
+    "schema": "surface/v0.2",
+    "surface_id": "surface-demo",
+    "kind": "game_capsule",
+    "display": ":101",
+    "geometry": {
+      "w": 800,
+      "h": 600
+    },
+    "state": "active",
+    "visibility": "unfolded",
+    "control": "agent",
+    "profile_id": "profile-demo"
+  },
+  "vectors": [
+    {
+      "id": "frame_ref_valid_baseline",
+      "family": "frame_ref",
+      "axis": "baseline",
+      "contract_verdict": "accept",
+      "findings": {},
+      "payload": {
+        "schema": "frame_ref/v0.2",
+        "surface_id": "surface-demo",
+        "generation": 1,
+        "tick": 7,
+        "ts_ns": 1000000,
+        "width": 800,
+        "height": 600,
+        "format": "rgb24",
+        "ramws_path": "/dev/shm/ramws/demo.rgb",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "capture_us": 120
+      }
+    },
+    {
+      "id": "frame_ref_valid_width_8192",
+      "family": "frame_ref",
+      "axis": "D2-width-bounds",
+      "contract_verdict": "accept",
+      "findings": {
+        "js_host_bindings": "FINDING D2"
+      },
+      "payload": {
+        "schema": "frame_ref/v0.2",
+        "surface_id": "surface-demo",
+        "generation": 2,
+        "tick": 8,
+        "ts_ns": 2000000,
+        "width": 8192,
+        "height": 600,
+        "format": "rgb24",
+        "ramws_path": "/dev/shm/ramws/demo.rgb",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "capture_us": 120
+      }
+    },
+    {
+      "id": "frame_ref_valid_max_16384",
+      "family": "frame_ref",
+      "axis": "D2-width-bounds",
+      "contract_verdict": "accept",
+      "findings": {
+        "js_host_bindings": "FINDING D2"
+      },
+      "payload": {
+        "schema": "frame_ref/v0.2",
+        "surface_id": "surface-demo",
+        "generation": 3,
+        "tick": 9,
+        "ts_ns": 3000000,
+        "width": 16384,
+        "height": 16384,
+        "format": "rgb24",
+        "ramws_path": "/dev/shm/ramws/demo.rgb",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "capture_us": 120
+      }
+    },
+    {
+      "id": "surface_event_valid_frame_ready",
+      "family": "surface_event",
+      "axis": "baseline",
+      "contract_verdict": "accept",
+      "findings": {},
+      "payload": {
+        "schema": "surface_event/v0.2",
+        "event": "frame_ready",
+        "data": {
+          "frame_ref": {
+            "schema": "frame_ref/v0.2",
+            "surface_id": "surface-demo",
+            "generation": 4,
+            "tick": 10,
+            "ts_ns": 4000000,
+            "width": 800,
+            "height": 600,
+            "format": "rgb24",
+            "ramws_path": "/dev/shm/ramws/demo.rgb",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "capture_us": 120
+          }
+        }
+      }
+    },
+    {
+      "id": "surface_event_valid_created",
+      "family": "surface_event",
+      "axis": "baseline",
+      "contract_verdict": "accept",
+      "findings": {},
+      "payload": {
+        "schema": "surface_event/v0.2",
+        "event": "created",
+        "data": {
+          "surface": {
+            "schema": "surface/v0.2",
+            "surface_id": "surface-demo",
+            "kind": "game_capsule",
+            "display": ":101",
+            "geometry": {
+              "w": 800,
+              "h": 600
+            },
+            "state": "active",
+            "visibility": "unfolded",
+            "control": "agent",
+            "profile_id": "profile-demo"
+          }
+        }
+      }
+    },
+    {
+      "id": "observation_valid_full",
+      "family": "observation",
+      "axis": "baseline",
+      "contract_verdict": "accept",
+      "findings": {
+        "js_observation": "FINDING D8"
+      },
+      "payload": {
+        "schema": "observation/v0.2",
+        "frame_ref": {
+          "schema": "frame_ref/v0.2",
+          "surface_id": "surface-demo",
+          "generation": 5,
+          "tick": 11,
+          "ts_ns": 5000000,
+          "width": 800,
+          "height": 600,
+          "format": "rgb24",
+          "ramws_path": "/dev/shm/ramws/demo.rgb",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "capture_us": 120
+        },
+        "vision": {
+          "summary": "Ready button visible",
+          "changed_regions": [
+            {
+              "x": 5,
+              "y": 5,
+              "w": 50,
+              "h": 40
+            }
+          ],
+          "elements": [
+            {
+              "bbox": {
+                "x": 10,
+                "y": 20,
+                "w": 80,
+                "h": 30
+              },
+              "role": "button",
+              "name": "Ready",
+              "confidence": 0.95
+            }
+          ]
+        },
+        "ground_truth": {
+          "source": "holdings_lane",
+          "state_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "tick": 11
+        }
+      }
+    },
+    {
+      "id": "observation_valid_minimal",
+      "family": "observation",
+      "axis": "D5-null-vs-absent",
+      "contract_verdict": "accept",
+      "findings": {
+        "js_observation": "FINDING D8"
+      },
+      "payload": {
+        "schema": "observation/v0.2",
+        "frame_ref": {
+          "schema": "frame_ref/v0.2",
+          "surface_id": "surface-demo",
+          "generation": 6,
+          "tick": 12,
+          "ts_ns": 6000000,
+          "width": 800,
+          "height": 600,
+          "format": "rgb24",
+          "ramws_path": "/dev/shm/ramws/demo.rgb",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "capture_us": 120
+        }
+      }
+    },
+    {
+      "id": "frame_ref_invalid_sha256_upper",
+      "family": "frame_ref",
+      "axis": "D1-sha256-case",
+      "contract_verdict": "refuse",
+      "findings": {
+        "js_host_bindings": "FINDING D1",
+        "go_publisher_sha": "FINDING D7"
+      },
+      "payload": {
+        "schema": "frame_ref/v0.2",
+        "surface_id": "surface-demo",
+        "generation": 7,
+        "tick": 13,
+        "ts_ns": 7000000,
+        "width": 800,
+        "height": 600,
+        "format": "rgb24",
+        "ramws_path": "/dev/shm/ramws/demo.rgb",
+        "sha256": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "capture_us": 120
+      }
+    },
+    {
+      "id": "frame_ref_invalid_sha256_nonhex64",
+      "family": "frame_ref",
+      "axis": "D1-sha256-case",
+      "contract_verdict": "refuse",
+      "findings": {
+        "js_host_bindings": "FINDING D1",
+        "go_publisher_sha": "FINDING D7"
+      },
+      "payload": {
+        "schema": "frame_ref/v0.2",
+        "surface_id": "surface-demo",
+        "generation": 8,
+        "tick": 14,
+        "ts_ns": 8000000,
+        "width": 800,
+        "height": 600,
+        "format": "rgb24",
+        "ramws_path": "/dev/shm/ramws/demo.rgb",
+        "sha256": "gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg",
+        "capture_us": 120
+      }
+    },
+    {
+      "id": "frame_ref_invalid_width_16385",
+      "family": "frame_ref",
+      "axis": "D2-width-bounds",
+      "contract_verdict": "refuse",
+      "findings": {
+        "js_reader": "FINDING D2",
+        "js_preload": "FINDING D2"
+      },
+      "payload": {
+        "schema": "frame_ref/v0.2",
+        "surface_id": "surface-demo",
+        "generation": 9,
+        "tick": 15,
+        "ts_ns": 9000000,
+        "width": 16385,
+        "height": 600,
+        "format": "rgb24",
+        "ramws_path": "/dev/shm/ramws/demo.rgb",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "capture_us": 120
+      }
+    },
+    {
+      "id": "frame_ref_invalid_height_16385",
+      "family": "frame_ref",
+      "axis": "D2-width-bounds",
+      "contract_verdict": "refuse",
+      "findings": {
+        "js_reader": "FINDING D2",
+        "js_preload": "FINDING D2"
+      },
+      "payload": {
+        "schema": "frame_ref/v0.2",
+        "surface_id": "surface-demo",
+        "generation": 10,
+        "tick": 16,
+        "ts_ns": 10000000,
+        "width": 800,
+        "height": 16385,
+        "format": "rgb24",
+        "ramws_path": "/dev/shm/ramws/demo.rgb",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "capture_us": 120
+      }
+    },
+    {
+      "id": "frame_ref_invalid_width_0",
+      "family": "frame_ref",
+      "axis": "D2-width-bounds",
+      "contract_verdict": "refuse",
+      "findings": {},
+      "payload": {
+        "schema": "frame_ref/v0.2",
+        "surface_id": "surface-demo",
+        "generation": 11,
+        "tick": 17,
+        "ts_ns": 11000000,
+        "width": 0,
+        "height": 600,
+        "format": "rgb24",
+        "ramws_path": "/dev/shm/ramws/demo.rgb",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "capture_us": 120
+      }
+    },
+    {
+      "id": "frame_ref_invalid_unknown_stride",
+      "family": "frame_ref",
+      "axis": "D3-unknown-key",
+      "contract_verdict": "refuse",
+      "findings": {
+        "js_host_bindings": "FINDING D3"
+      },
+      "payload": {
+        "schema": "frame_ref/v0.2",
+        "surface_id": "surface-demo",
+        "generation": 12,
+        "tick": 18,
+        "ts_ns": 12000000,
+        "width": 800,
+        "height": 600,
+        "stride": 2400,
+        "format": "rgb24",
+        "ramws_path": "/dev/shm/ramws/demo.rgb",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "capture_us": 120
+      }
+    },
+    {
+      "id": "surface_event_invalid_unknown_outer_key",
+      "family": "surface_event",
+      "axis": "D3-unknown-key",
+      "contract_verdict": "refuse",
+      "findings": {
+        "go_daemon_list_snapshots": "FINDING D3"
+      },
+      "payload": {
+        "schema": "surface_event/v0.2",
+        "event": "created",
+        "extra": "unexpected",
+        "data": {
+          "surface": {
+            "schema": "surface/v0.2",
+            "surface_id": "surface-demo",
+            "kind": "game_capsule",
+            "display": ":101",
+            "geometry": {
+              "w": 800,
+              "h": 600
+            },
+            "state": "active",
+            "visibility": "unfolded",
+            "control": "agent",
+            "profile_id": "profile-demo"
+          }
+        }
+      }
+    },
+    {
+      "id": "frame_ref_invalid_string_generation",
+      "family": "frame_ref",
+      "axis": "D4-generation-type",
+      "contract_verdict": "refuse",
+      "findings": {
+        "go_record_capture": "FINDING D4"
+      },
+      "payload": {
+        "schema": "frame_ref/v0.2",
+        "surface_id": "surface-demo",
+        "generation": "ctr-1",
+        "tick": 19,
+        "ts_ns": 13000000,
+        "width": 800,
+        "height": 600,
+        "format": "rgb24",
+        "ramws_path": "/dev/shm/ramws/demo.rgb",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "capture_us": 120
+      }
+    },
+    {
+      "id": "frame_ref_invalid_zero_generation",
+      "family": "frame_ref",
+      "axis": "D4-generation-type",
+      "contract_verdict": "refuse",
+      "findings": {},
+      "payload": {
+        "schema": "frame_ref/v0.2",
+        "surface_id": "surface-demo",
+        "generation": 0,
+        "tick": 20,
+        "ts_ns": 14000000,
+        "width": 800,
+        "height": 600,
+        "format": "rgb24",
+        "ramws_path": "/dev/shm/ramws/demo.rgb",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "capture_us": 120
+      }
+    },
+    {
+      "id": "frame_ref_invalid_null_tick",
+      "family": "frame_ref",
+      "axis": "D5-null-vs-absent",
+      "contract_verdict": "refuse",
+      "findings": {
+        "js_host_bindings": "FINDING D5"
+      },
+      "payload": {
+        "schema": "frame_ref/v0.2",
+        "surface_id": "surface-demo",
+        "generation": 13,
+        "tick": null,
+        "ts_ns": 15000000,
+        "width": 800,
+        "height": 600,
+        "format": "rgb24",
+        "ramws_path": "/dev/shm/ramws/demo.rgb",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "capture_us": 120
+      }
+    },
+    {
+      "id": "frame_ref_invalid_null_format",
+      "family": "frame_ref",
+      "axis": "D5-null-vs-absent",
+      "contract_verdict": "refuse",
+      "findings": {
+        "js_host_bindings": "FINDING D5"
+      },
+      "payload": {
+        "schema": "frame_ref/v0.2",
+        "surface_id": "surface-demo",
+        "generation": 14,
+        "tick": 21,
+        "ts_ns": 16000000,
+        "width": 800,
+        "height": 600,
+        "format": null,
+        "ramws_path": "/dev/shm/ramws/demo.rgb",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "capture_us": 120
+      }
+    },
+    {
+      "id": "frame_ref_invalid_null_sha256",
+      "family": "frame_ref",
+      "axis": "D5-null-vs-absent",
+      "contract_verdict": "refuse",
+      "findings": {
+        "js_host_bindings": "FINDING D5"
+      },
+      "payload": {
+        "schema": "frame_ref/v0.2",
+        "surface_id": "surface-demo",
+        "generation": 15,
+        "tick": 22,
+        "ts_ns": 17000000,
+        "width": 800,
+        "height": 600,
+        "format": "rgb24",
+        "ramws_path": "/dev/shm/ramws/demo.rgb",
+        "sha256": null,
+        "capture_us": 120
+      }
+    },
+    {
+      "id": "observation_invalid_null_vision",
+      "family": "observation",
+      "axis": "D5-null-vs-absent",
+      "contract_verdict": "refuse",
+      "findings": {
+        "js_observation": "FINDING D8"
+      },
+      "payload": {
+        "schema": "observation/v0.2",
+        "frame_ref": {
+          "schema": "frame_ref/v0.2",
+          "surface_id": "surface-demo",
+          "generation": 16,
+          "tick": 23,
+          "ts_ns": 18000000,
+          "width": 800,
+          "height": 600,
+          "format": "rgb24",
+          "ramws_path": "/dev/shm/ramws/demo.rgb",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "capture_us": 120
+        },
+        "vision": null
+      }
+    },
+    {
+      "id": "frame_ref_invalid_surface_id_pattern",
+      "family": "frame_ref",
+      "axis": "D6-surface-ramws-pattern",
+      "contract_verdict": "refuse",
+      "findings": {
+        "js_reader": "FINDING D6",
+        "js_preload": "FINDING D6"
+      },
+      "payload": {
+        "schema": "frame_ref/v0.2",
+        "surface_id": "-bad/surface id",
+        "generation": 17,
+        "tick": 24,
+        "ts_ns": 19000000,
+        "width": 800,
+        "height": 600,
+        "format": "rgb24",
+        "ramws_path": "/dev/shm/ramws/demo.rgb",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "capture_us": 120
+      }
+    },
+    {
+      "id": "frame_ref_invalid_ramws_overlong",
+      "family": "frame_ref",
+      "axis": "D6-surface-ramws-pattern",
+      "contract_verdict": "refuse",
+      "findings": {
+        "js_reader": "FINDING D6",
+        "js_host_bindings": "FINDING D6"
+      },
+      "payload": {
+        "schema": "frame_ref/v0.2",
+        "surface_id": "surface-demo",
+        "generation": 18,
+        "tick": 25,
+        "ts_ns": 20000000,
+        "width": 800,
+        "height": 600,
+        "format": "rgb24",
+        "ramws_path": "/dev/shm/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/cccccccccccccccccc",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "capture_us": 120
+      }
+    },
+    {
+      "id": "frame_ref_invalid_ramws_9_segments",
+      "family": "frame_ref",
+      "axis": "D6-surface-ramws-pattern",
+      "contract_verdict": "refuse",
+      "findings": {
+        "js_reader": "FINDING D6",
+        "js_host_bindings": "FINDING D6"
+      },
+      "payload": {
+        "schema": "frame_ref/v0.2",
+        "surface_id": "surface-demo",
+        "generation": 19,
+        "tick": 26,
+        "ts_ns": 21000000,
+        "width": 800,
+        "height": 600,
+        "format": "rgb24",
+        "ramws_path": "/dev/shm/s1/s2/s3/s4/s5/s6/s7/s8/s9",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "capture_us": 120
+      }
+    },
+    {
+      "id": "frame_ref_invalid_ramws_hidden_segment",
+      "family": "frame_ref",
+      "axis": "D6-surface-ramws-pattern",
+      "contract_verdict": "refuse",
+      "findings": {
+        "js_reader": "FINDING D6",
+        "js_host_bindings": "FINDING D6"
+      },
+      "payload": {
+        "schema": "frame_ref/v0.2",
+        "surface_id": "surface-demo",
+        "generation": 20,
+        "tick": 27,
+        "ts_ns": 22000000,
+        "width": 800,
+        "height": 600,
+        "format": "rgb24",
+        "ramws_path": "/dev/shm/.hidden/demo.rgb",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "capture_us": 120
+      }
+    },
+    {
+      "id": "observation_invalid_escape_changed_region",
+      "family": "observation",
+      "axis": "D8-vision-containment",
+      "contract_verdict": "refuse",
+      "findings": {
+        "rust_envelope": "FINDING D8",
+        "go_policy": "FINDING D8",
+        "py_envelope": "FINDING D8",
+        "js_observation": "FINDING D8"
+      },
+      "payload": {
+        "schema": "observation/v0.2",
+        "frame_ref": {
+          "schema": "frame_ref/v0.2",
+          "surface_id": "surface-demo",
+          "generation": 21,
+          "tick": 28,
+          "ts_ns": 23000000,
+          "width": 800,
+          "height": 600,
+          "format": "rgb24",
+          "ramws_path": "/dev/shm/ramws/demo.rgb",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "capture_us": 120
+        },
+        "vision": {
+          "summary": "Escaping changed_regions box",
+          "changed_regions": [
+            {
+              "x": 750,
+              "y": 20,
+              "w": 80,
+              "h": 30
+            }
+          ],
+          "elements": []
+        }
+      }
+    },
+    {
+      "id": "observation_invalid_escape_element_bbox",
+      "family": "observation",
+      "axis": "D8-vision-containment",
+      "contract_verdict": "refuse",
+      "findings": {
+        "rust_envelope": "FINDING D8",
+        "go_policy": "FINDING D8",
+        "py_envelope": "FINDING D8",
+        "js_observation": "FINDING D8"
+      },
+      "payload": {
+        "schema": "observation/v0.2",
+        "frame_ref": {
+          "schema": "frame_ref/v0.2",
+          "surface_id": "surface-demo",
+          "generation": 22,
+          "tick": 29,
+          "ts_ns": 24000000,
+          "width": 800,
+          "height": 600,
+          "format": "rgb24",
+          "ramws_path": "/dev/shm/ramws/demo.rgb",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "capture_us": 120
+        },
+        "vision": {
+          "summary": "Escaping element bbox",
+          "changed_regions": [],
+          "elements": [
+            {
+              "bbox": {
+                "x": 10,
+                "y": 580,
+                "w": 80,
+                "h": 30
+              },
+              "role": "button",
+              "name": "Offscreen",
+              "confidence": 0.9
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
