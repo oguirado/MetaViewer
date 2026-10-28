@@ -5,13 +5,16 @@ package ipc
 // messages must retain that binding; reconnect/session migration is not implicit.
 // [TARGET, unit decision] Control operations preempt in-flight data while barrier
 // gates ensure data queued after take_control/release_control waits for completion;
-// lanes drain before session cancellation on clean EOF while validation/route/schema/auth
-// failures cancel the session first, and sessionErr is checked on every read-loop exit.
+// bounded FIFO data staging decouples socket reading from saturated dataCh so control
+// frames are never head-of-line blocked behind dataCh; lanes drain before session
+// cancellation on clean EOF while abnormal read/framing/validation/route/schema/auth
+// failures cancel the session before worker join, and sessionErr is checked on exit.
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 )
@@ -78,6 +81,8 @@ func Connect(ctx context.Context, cfg Config, policy Policy, registration Envelo
 		wait <-chan struct{}
 		done chan struct{}
 	}
+	const maxDataBacklog = 256
+	dataIn := make(chan queuedEnvelope)
 	dataCh := make(chan queuedEnvelope, 64)
 	ctrlCh := make(chan queuedEnvelope, 64)
 	var errOnce sync.Once
@@ -106,7 +111,44 @@ func Connect(ctx context.Context, cfg Config, policy Policy, registration Envelo
 		}
 	}
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		defer close(dataCh)
+		var pending []queuedEnvelope
+		inCh := dataIn
+		for inCh != nil || len(pending) > 0 {
+			if ctx.Err() != nil {
+				return
+			}
+			var outCh chan<- queuedEnvelope
+			var next queuedEnvelope
+			if len(pending) > 0 {
+				outCh = dataCh
+				next = pending[0]
+			}
+			curIn := inCh
+			if len(pending) >= maxDataBacklog {
+				curIn = nil
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case item, ok := <-curIn:
+				if !ok {
+					inCh = nil
+					continue
+				}
+				pending = append(pending, item)
+			case outCh <- next:
+				pending[0] = queuedEnvelope{}
+				pending = pending[1:]
+				if len(pending) == 0 {
+					pending = nil
+				}
+			}
+		}
+	}()
 	go func() {
 		defer wg.Done()
 		for item := range dataCh {
@@ -135,7 +177,7 @@ func Connect(ctx context.Context, cfg Config, policy Policy, registration Envelo
 		}
 	}()
 	stopWorkers := sync.OnceFunc(func() {
-		close(dataCh)
+		close(dataIn)
 		close(ctrlCh)
 		wg.Wait()
 		cancelSession()
@@ -143,6 +185,9 @@ func Connect(ctx context.Context, cfg Config, policy Policy, registration Envelo
 	defer stopWorkers()
 	exitLoop := func(loopErr error) error {
 		visited := ctx.Err() != nil
+		if loopErr != nil && !visited && !errors.Is(loopErr, io.EOF) {
+			fail(loopErr)
+		}
 		stopWorkers()
 		if sessionErr != nil {
 			return sessionErr
@@ -157,6 +202,9 @@ func Connect(ctx context.Context, cfg Config, policy Policy, registration Envelo
 	for {
 		raw, err := framer.Read(ctx)
 		if err != nil {
+			if ctx.Err() == nil && !errors.Is(err, io.EOF) {
+				fail(err)
+			}
 			return exitLoop(err)
 		}
 		in, err := policy.ValidateEnvelope(raw)
@@ -196,7 +244,7 @@ func Connect(ctx context.Context, cfg Config, policy Policy, registration Envelo
 		}
 		var op struct{ Op string }
 		_ = json.Unmarshal(in.Body, &op)
-		target := dataCh
+		target := dataIn
 		item := queuedEnvelope{in: in, wait: ctrlGate}
 		if op.Op == "take_control" || op.Op == "release_control" {
 			done := make(chan struct{})

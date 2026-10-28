@@ -69,6 +69,9 @@ func (f *Framer) Read(ctx context.Context) ([]byte, error) {
 			continue
 		}
 		if err != nil {
+			if errors.Is(err, io.EOF) && len(line) > 0 {
+				return nil, io.ErrUnexpectedEOF
+			}
 			return nil, err
 		}
 		break
