@@ -1,0 +1,470 @@
+"""Offline unit tests for demo_agent_drive.py with an injected peer."""
+
+from __future__ import annotations
+
+import copy
+import hashlib
+import importlib.util
+import io
+import json
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+SPEC = importlib.util.spec_from_file_location(
+    "demo_agent_drive", Path(__file__).with_name("demo_agent_drive.py")
+)
+assert SPEC is not None and SPEC.loader is not None
+demo_agent_drive = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(demo_agent_drive)
+
+ROOT = demo_agent_drive.ROOT
+LOCAL_PLANNER_ID = demo_agent_drive.LOCAL_PLANNER_ID
+SUBPROCESS_PLANNER_ID = demo_agent_drive.SUBPROCESS_PLANNER_ID
+ORDERED_CHECKPOINTS = demo_agent_drive.ORDERED_CHECKPOINTS
+AttachedLiveStackSession = demo_agent_drive.AttachedLiveStackSession
+WenderSubprocessAdapter = demo_agent_drive.WenderSubprocessAdapter
+_canonical_sha256 = demo_agent_drive._canonical_sha256
+run_demo_agent_drive = demo_agent_drive.run_demo_agent_drive
+stack = demo_agent_drive.stack
+tools = demo_agent_drive.tools
+validate_transcript_and_receipt = demo_agent_drive.validate_transcript_and_receipt
+
+
+class InjectedDemoPeer:
+    """Deterministic injected ToolClient peer for unit testing demo_agent_drive."""
+
+    def __init__(
+        self,
+        *,
+        surface_id: str = "surface-demo-1",
+        transient_stale_on_nav_step1: int = 0,
+        transient_stale_on_click: int = 0,
+        accept_stale_negative_control: bool = False,
+    ) -> None:
+        self.surface_id = surface_id
+        self.transient_stale_on_nav_step1 = transient_stale_on_nav_step1
+        self.transient_stale_on_click = transient_stale_on_click
+        self.accept_stale_negative_control = accept_stale_negative_control
+        self.generation = 1
+        self.calls: list[dict] = []
+        self.proposals: dict[str, dict] = {}
+        self.frames: dict[int, dict] = {1: self._make_frame(1, b"initial-frame-gen-1")}
+        self._nav1_attempts = 0
+        self._click_attempts = 0
+        self._clicked = False
+
+    def _make_frame(self, generation: int, seed: bytes) -> dict:
+        digest = hashlib.sha256(seed).hexdigest()
+        return {
+            "schema": "frame_ref/v0.2",
+            "surface_id": self.surface_id,
+            "generation": generation,
+            "tick": generation,
+            "ts_ns": generation * 1_000_000,
+            "width": 1280,
+            "height": 900,
+            "format": "rgb24",
+            "ramws_path": f"/dev/shm/mv-demo-{self.surface_id}-{generation}.rgb",
+            "sha256": digest,
+            "capture_us": 100,
+        }
+
+    def current_frame(self) -> dict:
+        return copy.deepcopy(self.frames[self.generation])
+
+    def advance_frame(self, tag: str) -> dict:
+        self.generation += 1
+        frame = self._make_frame(self.generation, f"frame-{self.generation}-{tag}".encode("utf-8"))
+        self.frames[self.generation] = frame
+        return copy.deepcopy(frame)
+
+    def settle_latest_frame(self, current_frame: dict) -> dict:
+        return self.current_frame()
+
+    def request(self, call: dict, result_schema: str, *, timeout_ms: int) -> dict:
+        assert result_schema == "mv_tool_result/v0.2"
+        assert timeout_ms >= 1
+        self.calls.append(copy.deepcopy(call))
+        req_id = call["request_id"]
+        op = call["op"]
+        args = call["args"]
+
+        if op == "observe":
+            return {
+                "schema": "mv_tool_result/v0.2",
+                "request_id": req_id,
+                "op": "observe",
+                "status": "ok",
+                "observation": {
+                    "schema": "observation/v0.2",
+                    "frame_ref": self.current_frame(),
+                },
+            }
+
+        if op == "propose":
+            proposal = args["proposal"]
+            prop_id = proposal["proposal_id"]
+            based = proposal["based_on_frame"]
+            current = self.current_frame()
+
+            if prop_id.startswith("demo-nav-1-"):
+                self._nav1_attempts += 1
+                if self._nav1_attempts <= self.transient_stale_on_nav_step1:
+                    self.advance_frame(f"bg-tick-nav-{self._nav1_attempts}")
+                    return {
+                        "schema": "mv_tool_result/v0.2",
+                        "request_id": req_id,
+                        "op": "propose",
+                        "status": "refused",
+                        "reason_code": "STALE_FRAME",
+                        "detail": "Live frame advanced before nav step 1 admission",
+                    }
+
+            if prop_id.startswith("demo-click-"):
+                self._click_attempts += 1
+                if self._click_attempts <= self.transient_stale_on_click:
+                    self.advance_frame(f"bg-tick-click-{self._click_attempts}")
+                    return {
+                        "schema": "mv_tool_result/v0.2",
+                        "request_id": req_id,
+                        "op": "propose",
+                        "status": "refused",
+                        "reason_code": "STALE_FRAME",
+                        "detail": "Live frame advanced before click admission",
+                    }
+
+            is_stale = (
+                int(based["generation"]) != int(current["generation"])
+                or str(based["sha256"]) != str(current["sha256"])
+            )
+            if is_stale and not self.accept_stale_negative_control:
+                return {
+                    "schema": "mv_tool_result/v0.2",
+                    "request_id": req_id,
+                    "op": "propose",
+                    "status": "refused",
+                    "reason_code": "STALE_FRAME",
+                    "detail": "Proposal pinned to stale frame generation or digest",
+                }
+
+            after = self.advance_frame(prop_id)
+            if prop_id.startswith("demo-click-"):
+                self._clicked = True
+            self.proposals[prop_id] = {
+                "proposal": copy.deepcopy(proposal),
+                "after_frame": after,
+            }
+            return {
+                "schema": "mv_tool_result/v0.2",
+                "request_id": req_id,
+                "op": "propose",
+                "status": "admitted",
+                "verdict": {
+                    "schema": "action_verdict/v0.2",
+                    "proposal_id": prop_id,
+                    "decision": "admitted",
+                    "core_seq": len(self.calls),
+                },
+            }
+
+        if op == "wait_verify":
+            prop_id = args["proposal_id"]
+            stored = self.proposals[prop_id]
+            after = stored["after_frame"]
+            receipt = {
+                "schema": "action_receipt/v0.2",
+                "proposal_id": prop_id,
+                "executed_at_ns": int(after["ts_ns"]),
+                "after_frame": copy.deepcopy(after),
+                "verified": True,
+                "verification": {
+                    "method": "pixel",
+                    "detail": "changed_region verified",
+                },
+                "error": "",
+                "native_evidence": {
+                    "surface_id": self.surface_id,
+                    "input_mono_ns": int(after["ts_ns"]) + 500,
+                    "input_ts_ns": int(after["ts_ns"]) + 500,
+                    "focus_verified": True,
+                    "kind": "click",
+                    "result": "ok",
+                },
+            }
+            return {
+                "schema": "mv_tool_result/v0.2",
+                "request_id": req_id,
+                "op": "wait_verify",
+                "status": "verified",
+                "receipt": receipt,
+                "focus_verified": True,
+                "input_mono_ns": int(after["ts_ns"]) + 500,
+                "frame_sha256": str(after["sha256"]),
+            }
+
+        raise AssertionError(f"unsupported tool op: {op!r}")
+
+    def make_reader(self):
+        """Return a deterministic reader producing vision marks, element table, and state."""
+
+        def read_fn(frame: dict, *, include_raw: bool = True) -> dict:
+            label = "Gate changed" if self._clicked else "Advance gate"
+            title = "G-AI Changed" if self._clicked else "G-AI Ready"
+            bbox = {"x": 80, "y": 80, "w": 260, "h": 64}
+            mark = {
+                "mark_id": 1,
+                "node_id": "n1",
+                "role": "button",
+                "label": label,
+                "bbox": dict(bbox),
+            }
+            element = {
+                "node_id": "n1",
+                "mark_id": 1,
+                "role": "button",
+                "label": label,
+                "bbox": dict(bbox),
+                "actionable": True,
+                "confidence": 0.99,
+            }
+            table = {
+                "schema": "vqa.element-table/v1",
+                "frame_sha256": str(frame["sha256"]),
+                "width": int(frame["width"]),
+                "height": int(frame["height"]),
+                "elements": [element],
+            }
+            vision = {
+                "summary": f"Page {title} with button {label}",
+                "changed_regions": [dict(bbox)],
+                "elements": [
+                    {
+                        "bbox": dict(bbox),
+                        "role": "button",
+                        "name": label,
+                        "confidence": 0.99,
+                    }
+                ],
+            }
+            target_node = {
+                "id": "n1",
+                "node_id": "0",
+                "role": "button",
+                "name": label,
+                "box": [80, 80, 260, 64],
+                "states": {},
+            }
+            wender_state = {
+                "schema": "wender.state/v1",
+                "title": title,
+                "frame_sha256": str(frame["sha256"]),
+                "actionable": ["n1"],
+                "nodes": [target_node],
+            }
+            state_sha = _canonical_sha256(wender_state)
+            battery_sha = _canonical_sha256({"battery": title, "state_sha": state_sha})
+            return {
+                "vision": vision,
+                "raw": {"marks": [mark], "elements": [element]} if include_raw else vision,
+                "vision_marks": {
+                    "count": 1,
+                    "marks": [mark],
+                    "marks_sha256": _canonical_sha256([mark]),
+                },
+                "element_table": table,
+                "wender_state": wender_state,
+                "state_sha256": state_sha,
+                "battery_state_sha256": battery_sha,
+                "roots": {"wender-agent": ROOT},
+            }
+
+        return read_fn
+
+
+class DemoAgentDriveUnitTests(unittest.TestCase):
+    """Offline unit tests for demo_agent_drive with an injected peer."""
+
+    def test_ordered_checkpoints_stale_negative_control_and_receipt_schema(self) -> None:
+        peer = InjectedDemoPeer()
+        out = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            receipt_path = Path(tmp) / "demo-receipt.json"
+            receipt = run_demo_agent_drive(
+                peer,
+                peer.surface_id,
+                stack_meta={
+                    "capsule": "srf-id-unit01",
+                    "display": ":99",
+                    "display_mode": "private",
+                    "record_path": "/tmp/demo.mp4",
+                    "started_by_runner": False,
+                },
+                read_fn=peer.make_reader(),
+                receipt_out=receipt_path,
+                out_stream=out,
+                env={},
+            )
+            saved = json.loads(receipt_path.read_text(encoding="utf-8"))
+
+        lines = [json.loads(line) for line in out.getvalue().strip().splitlines()]
+        self.assertEqual(len(lines), len(ORDERED_CHECKPOINTS))
+        self.assertEqual(tuple(item["checkpoint"] for item in lines), ORDERED_CHECKPOINTS)
+        self.assertEqual(receipt, saved)
+        validate_transcript_and_receipt(lines, receipt)
+
+        # Verify read checkpoint printed vision marks and element table
+        read_cp = lines[3]
+        self.assertEqual(read_cp["checkpoint"], "read")
+        self.assertEqual(read_cp["vision_marks"]["count"], 1)
+        self.assertEqual(read_cp["element_table"]["schema"], "vqa.element-table/v1")
+        self.assertEqual(read_cp["element_table"]["elements"][0]["label"], "Advance gate")
+
+        # Verify negative control recorded STALE_FRAME and run continued
+        neg_cp = lines[4]
+        self.assertEqual(neg_cp["checkpoint"], "stale_negative_control")
+        self.assertEqual(neg_cp["decision"], "refused")
+        self.assertEqual(neg_cp["reason_code"], "STALE_FRAME")
+        self.assertTrue(neg_cp["continued"])
+
+        # Verify default planner is local custody click and post-state hashes changed
+        click_cp = lines[5]
+        self.assertEqual(click_cp["planner_id"], LOCAL_PLANNER_ID)
+        verify_cp = lines[6]
+        self.assertTrue(verify_cp["verified"])
+        self.assertNotEqual(verify_cp["pre_frame_sha256"], verify_cp["post_frame_sha256"])
+        post_cp = lines[7]
+        self.assertTrue(post_cp["verified"])
+        self.assertTrue(post_cp["frame_sha256_changed"])
+        self.assertTrue(post_cp["state_sha256_changed"])
+        self.assertNotEqual(post_cp["pre_frame_sha256"], post_cp["post_frame_sha256"])
+        self.assertNotEqual(post_cp["pre_state_sha256"], post_cp["post_state_sha256"])
+
+    def test_transient_live_stale_frame_retries_up_to_tick_max_attempts(self) -> None:
+        peer = InjectedDemoPeer(
+            transient_stale_on_nav_step1=2,
+            transient_stale_on_click=2,
+        )
+        out = io.StringIO()
+        receipt = run_demo_agent_drive(
+            peer,
+            peer.surface_id,
+            read_fn=peer.make_reader(),
+            out_stream=out,
+            env={},
+            max_attempts=stack.TICK_MAX_ATTEMPTS,
+        )
+        lines = [json.loads(line) for line in out.getvalue().strip().splitlines()]
+        nav_cp = lines[2]
+        self.assertEqual(nav_cp["steps"][0]["attempts"], 3)
+        self.assertEqual(nav_cp["steps"][0]["stale_retries"], 2)
+        click_cp = lines[5]
+        self.assertEqual(click_cp["attempts"], 3)
+        self.assertEqual(click_cp["stale_retries"], 2)
+        self.assertTrue(receipt["verified"])
+
+        # Exceeding TICK_MAX_ATTEMPTS fails closed with ToolRefusal(STALE_FRAME)
+        failing_peer = InjectedDemoPeer(transient_stale_on_click=stack.TICK_MAX_ATTEMPTS)
+        with self.assertRaises(tools.ToolRefusal) as ctx:
+            run_demo_agent_drive(
+                failing_peer,
+                failing_peer.surface_id,
+                read_fn=failing_peer.make_reader(),
+                out_stream=io.StringIO(),
+                env={},
+                max_attempts=stack.TICK_MAX_ATTEMPTS,
+            )
+        self.assertEqual(ctx.exception.reason_code, "STALE_FRAME")
+
+    def test_negative_control_fails_closed_when_stale_frame_not_refused(self) -> None:
+        peer = InjectedDemoPeer(accept_stale_negative_control=True)
+        with self.assertRaisesRegex(RuntimeError, "negative control failed"):
+            run_demo_agent_drive(
+                peer,
+                peer.surface_id,
+                read_fn=peer.make_reader(),
+                out_stream=io.StringIO(),
+                env={},
+            )
+
+    def test_honors_mv_wender_planner_cmd_when_configured(self) -> None:
+        peer = InjectedDemoPeer()
+        out = io.StringIO()
+        reader = peer.make_reader()
+
+        def fake_plan_step(observation, table, goal):
+            bundle = reader(observation["frame_ref"], include_raw=False)
+            state = bundle["wender_state"]
+            target = state["nodes"][0]
+            action = {"type": "click", "x": 210, "y": 112, "button": "left"}
+            expectation = {
+                "type": "changed_region",
+                "bbox": {"x": 80, "y": 80, "w": 260, "h": 64},
+            }
+            return action, expectation, state, target
+
+        with patch.object(WenderSubprocessAdapter, "plan_step", side_effect=fake_plan_step) as plan_mock:
+            receipt = run_demo_agent_drive(
+                peer,
+                peer.surface_id,
+                read_fn=reader,
+                out_stream=out,
+                env={"MV_WENDER_PLANNER_CMD": json.dumps([sys.executable, "-c", "pass"])},
+            )
+        self.assertGreaterEqual(plan_mock.call_count, 1)
+        self.assertEqual(receipt["planner_id"], SUBPROCESS_PLANNER_ID)
+        lines = [json.loads(line) for line in out.getvalue().strip().splitlines()]
+        self.assertEqual(lines[5]["planner_id"], SUBPROCESS_PLANNER_ID)
+
+    def test_transcript_validator_rejects_corrupted_checkpoints(self) -> None:
+        peer = InjectedDemoPeer()
+        out = io.StringIO()
+        receipt = run_demo_agent_drive(
+            peer,
+            peer.surface_id,
+            read_fn=peer.make_reader(),
+            out_stream=out,
+            env={},
+        )
+        lines = [json.loads(line) for line in out.getvalue().strip().splitlines()]
+
+        bad_order = copy.deepcopy(lines)
+        bad_order[2], bad_order[3] = bad_order[3], bad_order[2]
+        with self.assertRaisesRegex(ValueError, "checkpoint step"):
+            validate_transcript_and_receipt(bad_order, receipt)
+
+        bad_neg = copy.deepcopy(lines)
+        bad_neg[4]["reason_code"] = "OTHER"
+        with self.assertRaisesRegex(ValueError, "STALE_FRAME"):
+            validate_transcript_and_receipt(bad_neg, receipt)
+
+        bad_post = copy.deepcopy(lines)
+        bad_post[7]["post_frame_sha256"] = bad_post[7]["pre_frame_sha256"]
+        with self.assertRaisesRegex(ValueError, "must differ"):
+            validate_transcript_and_receipt(bad_post, receipt)
+
+    def test_attached_session_rejects_unready_state_and_dead_supervisor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "live-stack"
+            root.mkdir(mode=0o700)
+            with self.assertRaisesRegex(RuntimeError, "not ready"):
+                AttachedLiveStackSession(root)
+            stack.save_state(
+                root,
+                {
+                    "schema": "metaviewer.live-stack/v1",
+                    "status": "ready",
+                    "work": str(root / "work"),
+                    "surface_id": "surface-1",
+                    "capsules": ["srf-id-cap1"],
+                    "supervisor": {"pid": 99999999, "identity": "dead"},
+                },
+            )
+            with self.assertRaisesRegex(RuntimeError, "supervisor is not alive"):
+                AttachedLiveStackSession(root)
+
+
+if __name__ == "__main__":
+    unittest.main()

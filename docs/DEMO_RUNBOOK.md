@@ -255,3 +255,53 @@ When a preflight, display, recording, or cleanup check fails, `stack.py` exits w
 | `profile already allocated; refusing` | A container or lease for `mv-live-1` already exists | Stop the existing capsule or wait for the active session to release `mv-live-1` |
 | `shipped UI build AUSENTE: <path>` | `ui/dist/renderer/index.html` or `ui/dist/preload/preload.cjs` is missing | Stage the kit and build the UI inside a capped scope (`systemd-run --user --scope -p MemoryMax=8G -p MemoryHigh=6G -p MemorySwapMax=0 -- bash -c 'node tools/sync_kit.mjs <dir> && node tools/sync_kit.mjs --check && cd ui && npm ci --offline && npm run build'`) before launching the live stack |
 | `supervisor absent; private recovery state retained for review` | `stop` found `state.json` whose supervisor PID is no longer alive | Inspect `$XDG_RUNTIME_DIR/metaviewer-live-stack/supervisor.log` and `state.json`, verify no capsule or RAM allocation remains, then remove stale `state.json` |
+
+## 9. Agent-Drive Demo Runner (`demo_agent_drive.py`)
+
+`tests/e2e/e2e1_slice/demo_agent_drive.py` drives the narrated `8`-checkpoint [MEASURED] agent loop against an already-running `stack.py` session (`LIVE_STACK_READY` in `$XDG_RUNTIME_DIR/metaviewer-live-stack/state.json`), working alongside `--display private|visible` and `--record <mp4>` without starting or stopping the stack itself unless `--start-stack` is explicitly supplied. See `docs/DEMO_AGENT_SCRIPT.md` for the full checkpoint transcript schema and narration script.
+
+### Prerequisites for perception and Wender state
+
+In addition to the live stack environment in Section 2, export the locked sibling checkouts required by `resolve_locked_component` (`deps.lock`):
+
+```bash
+export VQA_VE_ROOT="<vision-engine-checkout>"
+export MV_WENDER_ROOT="<wender-agent-checkout>"
+# Optional: override local:custody_click/v1 with an external Wender subprocess planner
+# export MV_WENDER_PLANNER_CMD='["python3", "-m", "wender.planner_cli"]'
+```
+
+### Running alongside an active `stack.py` session
+
+1. Start the live stack (private or visible display, with optional `.mp4` recording outside `<clone>`):
+
+   ```bash
+   rm -f /tmp/metaviewer-agent-demo.mp4 /tmp/metaviewer-agent-receipt.json
+   systemd-run --user --scope --unit=mv-demo \
+     -p MemoryMax=8G -p MemoryHigh=6G -p MemorySwapMax=0 -- \
+     python3 tests/e2e/e2e1_slice/stack.py start --ttl 10m --display private --record /tmp/metaviewer-agent-demo.mp4
+   ```
+
+2. Run `demo_agent_drive.py` against the ready stack:
+
+   ```bash
+   python3 tests/e2e/e2e1_slice/demo_agent_drive.py --receipt-out /tmp/metaviewer-agent-receipt.json
+   ```
+
+   - The runner emits `8` [MEASURED] JSON transcript lines (`schema: "metaviewer.demo-agent-checkpoint/v1"`) to `stdout` in strict order:
+     `LIVE_STACK_READY` (`1` [MEASURED]) -> `observe` (`2` [MEASURED]) -> `navigate` (`3` [MEASURED], composed via `3` [MEASURED] actions: `ctrl+l`, `type` local `data:text/html,...`, `Return`; `navigate` wire verb is `ABSENT — do not invent` by decision) -> `read` (`4` [MEASURED], printing `vision_marks` and `vqa.element-table/v1`) -> `stale_negative_control` (`5` [MEASURED], deliberately stale `based_on_frame` refused with `STALE_FRAME`, run continues) -> `custody_click` (`6` [MEASURED], `local:custody_click/v1` default or `configured:MV_WENDER_PLANNER_CMD`) -> `wait_verify` (`7` [MEASURED], `verified: true`, `focus_verified: true`) -> `post_state_change` (`8` [MEASURED], `pre_frame_sha256 != post_frame_sha256` and `pre_state_sha256 != post_state_sha256`).
+   - Transient live `STALE_FRAME` refusals during `navigate` and `custody_click` settle the newest `frame_ready` and retry up to `TICK_MAX_ATTEMPTS = 3` [CITED: tests/e2e/e2e1_slice/stack.py] attempts with a fresh `proposal_id` and refreshed frame pin.
+
+3. Stop the stack and finalize the recording:
+
+   ```bash
+   python3 tests/e2e/e2e1_slice/stack.py stop
+   ```
+
+### Offline self-test (injected peer)
+
+To verify the ordered checkpoints, `STALE_FRAME` negative control, transient retry loop (`3` [MEASURED] max attempts), `MV_WENDER_PLANNER_CMD` subprocess path, transcript schema validator, and session state guards without live containers (`6` [MEASURED] unit tests):
+
+```bash
+python3 tests/e2e/e2e1_slice/demo_agent_drive.py --self-test
+```

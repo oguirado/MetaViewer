@@ -1025,8 +1025,13 @@ with patch('subprocess.check_output', side_effect=history_output):
 '''
 
 
-UNIT_CODE = '''import sys, unittest
+# [TARGET, unit decision] Discover offline unit suites in tests/e2e/e2e1_slice
+# (which is not a Python package under tests/) alongside top-level tests/.
+UNIT_CODE = '''import os, sys, unittest
 suite = unittest.defaultTestLoader.discover(start_dir="tests")
+if os.path.isdir("tests/e2e/e2e1_slice"):
+    suite.addTests(unittest.defaultTestLoader.discover(
+        start_dir="tests/e2e/e2e1_slice", top_level_dir="tests/e2e/e2e1_slice"))
 if suite.countTestCases() == 0:
     print("empty test selection; refusing silent pass", file=sys.stderr)
     sys.exit(2)
