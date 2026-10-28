@@ -690,6 +690,23 @@ impl Authority {
     ) -> Result<crate::journal::Witness, crate::journal::JournalError> {
         self.journal.retain_witness(bytes)
     }
+    pub fn retain_verified_witness(
+        &mut self,
+        sha256: &str,
+        bytes: &[u8],
+    ) -> Result<crate::journal::Witness, crate::journal::JournalError> {
+        self.journal.retain_verified_witness(sha256, bytes)
+    }
+    pub fn retain_frame_witness(
+        &mut self,
+        sha256: &str,
+        bytes: &[u8],
+    ) -> Result<crate::journal::Witness, crate::journal::JournalError> {
+        self.journal.retain_frame_witness(sha256, bytes)
+    }
+    pub fn flush_sync(&mut self) -> Result<(), crate::journal::JournalError> {
+        self.journal.flush_sync()
+    }
     pub fn admit(
         &mut self,
         request: AdmissionRequest,

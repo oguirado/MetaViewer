@@ -379,7 +379,11 @@ impl Server {
     fn witness(&mut self, frame: &FrameRef) -> Result<Witness> {
         self.witness_pixels(frame).map(|(witness, _)| witness)
     }
-    fn witness_pixels(&mut self, frame: &FrameRef) -> Result<(Witness, Vec<u8>)> {
+    fn read_shm_pixels(frame: &FrameRef) -> Result<Vec<u8>> {
+        #[cfg(test)]
+        let t_read = Instant::now();
+        #[cfg(test)]
+        let h_before = crate::journal::STAGE_TIMINGS.with(|c| c.get().hash_ns);
         let path = Path::new(&frame.ramws_path);
         if !path.starts_with("/dev/shm")
             || path == Path::new("/dev/shm")
@@ -436,24 +440,74 @@ impl Server {
         {
             return Err(invalid("invalid frame witness"));
         }
-        let mut bytes = Vec::new();
-        file.take(64 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
-        if bytes.len() as u64 != meta.len() || sha256_hex(&bytes) != frame.sha256 {
+        let expected_len = meta.len() as usize;
+        let mut bytes = vec![0u8; expected_len];
+        let mut hasher = crate::journal::StreamingSha256::new();
+        let mut pos = 0usize;
+        while pos < expected_len {
+            let end = (pos + 65536).min(expected_len);
+            let n = (&file).read(&mut bytes[pos..end])?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&bytes[pos..pos + n]);
+            pos += n;
+        }
+        let mut extra = [0u8; 1];
+        let trailing = (&file).read(&mut extra)?;
+        let digest = hasher.finalize_hex();
+        #[cfg(test)]
+        crate::journal::STAGE_TIMINGS.with(|cell| {
+            let mut s = cell.get();
+            let h_delta = s.hash_ns.saturating_sub(h_before);
+            s.shm_read_ns += t_read.elapsed().as_nanos().saturating_sub(h_delta);
+            cell.set(s);
+        });
+        if pos != expected_len || trailing != 0 || digest != frame.sha256 {
             return Err(invalid("frame digest mismatch"));
         }
-        Ok((self.authority.retain_witness(&bytes)?, bytes))
+        Ok(bytes)
     }
-    fn frame(&mut self, now_ns: u64, frame: &FrameRef, boundary: Witness) -> Result<bool> {
-        let (witness, pixels) = match self.witness_pixels(frame) {
-            Ok(witness) => witness,
-            Err(error)
-                if error
-                    .downcast_ref::<std::io::Error>()
-                    .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
-            {
-                return Ok(false);
-            }
-            Err(error) => return Err(error),
+    fn witness_pixels(&mut self, frame: &FrameRef) -> Result<(Witness, Vec<u8>)> {
+        let bytes = Self::read_shm_pixels(frame)?;
+        Ok((
+            self.authority.retain_frame_witness(&frame.sha256, &bytes)?,
+            bytes,
+        ))
+    }
+    fn frame(
+        &mut self,
+        now_ns: u64,
+        frame: &FrameRef,
+        boundary: Witness,
+        pre_pixels: Option<Result<Vec<u8>>>,
+    ) -> Result<bool> {
+        let (witness, pixels) = match pre_pixels {
+            Some(res) => match res {
+                Ok(bytes) => (
+                    self.authority.retain_frame_witness(&frame.sha256, &bytes)?,
+                    bytes,
+                ),
+                Err(error)
+                    if error
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
+                {
+                    return Ok(false);
+                }
+                Err(error) => return Err(error),
+            },
+            None => match self.witness_pixels(frame) {
+                Ok(witness) => witness,
+                Err(error)
+                    if error
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
+                {
+                    return Ok(false);
+                }
+                Err(error) => return Err(error),
+            },
         };
         let out = self.authority.apply_with_witnesses(
             Input::Frame {
@@ -468,7 +522,18 @@ impl Server {
             vec![boundary, witness],
         )?;
         if out.reason.is_none() {
+            #[cfg(test)]
+            let t_cap = Instant::now();
+            #[cfg(test)]
+            let h_before = crate::journal::STAGE_TIMINGS.with(|c| c.get().hash_ns);
             self.capture_frame_at(now_ns, frame, pixels)?;
+            #[cfg(test)]
+            crate::journal::STAGE_TIMINGS.with(|cell| {
+                let mut s = cell.get();
+                let h_delta = s.hash_ns.saturating_sub(h_before);
+                s.capture_ns += t_cap.elapsed().as_nanos().saturating_sub(h_delta);
+                cell.set(s);
+            });
             self.tool_state
                 .retain(&Command::FrameRef(Box::new(frame.clone())));
         }
@@ -541,6 +606,16 @@ impl Server {
         epoch: u64,
         env: Envelope,
     ) -> Result<()> {
+        Self::route_peer_envelope_with_pixels(server, ready, id, epoch, env, None)
+    }
+    fn route_peer_envelope_with_pixels(
+        server: &Arc<Mutex<Server>>,
+        ready: &ReadyPeer,
+        id: u64,
+        epoch: u64,
+        env: Envelope,
+        pre_pixels: Option<Result<Vec<u8>>>,
+    ) -> Result<()> {
         let mut s = server.lock().map_err(|_| invalid("poisoned authority"))?;
         let c = s
             .connections
@@ -549,7 +624,7 @@ impl Server {
         if c.id != id || c.epoch != epoch {
             return Err(invalid("connection superseded"));
         }
-        if let Err(error) = s.route(ready, epoch, env) {
+        if let Err(error) = s.route_with_pixels(ready, epoch, env, pre_pixels) {
             // The recipient's reserved slot reports saturation. Keep the
             // originating peer alive long enough to receive that signal.
             if !error
@@ -564,7 +639,7 @@ impl Server {
         }
         Ok(())
     }
-    fn route_daemon_batch(
+    async fn route_daemon_batch(
         server: &Arc<Mutex<Server>>,
         ready: &ReadyPeer,
         id: u64,
@@ -606,24 +681,65 @@ impl Server {
                         continue;
                     }
                 }
+                let frame_clone = frame_i.clone();
+                let pre_pixels =
+                    if frame_clone.width.saturating_mul(frame_clone.height) >= 512 * 512 {
+                        tokio::task::spawn_blocking(move || Server::read_shm_pixels(&frame_clone))
+                            .await
+                            .map_err(|_| invalid("frame witness worker panicked"))?
+                    } else {
+                        Server::read_shm_pixels(&frame_clone)
+                    };
+                Self::route_peer_envelope_with_pixels(
+                    server,
+                    ready,
+                    id,
+                    epoch,
+                    env.clone(),
+                    Some(pre_pixels),
+                )?;
+                continue;
             }
             Self::route_peer_envelope(server, ready, id, epoch, env.clone())?;
         }
         Ok(had_frame)
     }
+    #[cfg(test)]
     fn route(&mut self, peer: &ReadyPeer, epoch: u64, env: Envelope) -> Result<()> {
+        self.route_with_pixels(peer, epoch, env, None)
+    }
+    fn route_with_pixels(
+        &mut self,
+        peer: &ReadyPeer,
+        epoch: u64,
+        env: Envelope,
+        pre_pixels: Option<Result<Vec<u8>>>,
+    ) -> Result<()> {
         peer.check_sender(&env)?;
         let now_ns = self.now()?;
         self.route_now_ns = Some(now_ns);
-        let result = self.route_at(now_ns, peer, epoch, env);
+        let result = self.route_at_with_pixels(now_ns, peer, epoch, env, pre_pixels);
         self.route_now_ns = None;
         result
     }
+    #[cfg(test)]
     fn route_at(&mut self, now_ns: u64, peer: &ReadyPeer, epoch: u64, env: Envelope) -> Result<()> {
+        self.route_at_with_pixels(now_ns, peer, epoch, env, None)
+    }
+    fn route_at_with_pixels(
+        &mut self,
+        now_ns: u64,
+        peer: &ReadyPeer,
+        epoch: u64,
+        env: Envelope,
+        pre_pixels: Option<Result<Vec<u8>>>,
+    ) -> Result<()> {
         self.replay
             .record(&env.session_id, &env.from, &env.nonce, env.seq)?;
         let raw = serde_json::to_string(&env)?;
-        let boundary = self.authority.retain_witness(raw.as_bytes())?;
+        let boundary = self
+            .authority
+            .retain_frame_witness(&sha256_hex(raw.as_bytes()), raw.as_bytes())?;
         match (&env.from.component, &env.body) {
             (Component::Ui, Command::RecordRequest(request)) => {
                 return self.capture_wire(now_ns, &env, request, boundary);
@@ -707,7 +823,7 @@ impl Server {
                         Some(self.lifecycle(&e.data.surface, false, boundary)?)
                     }
                     SurfaceEvent::Case2(e) => {
-                        if !self.frame(now_ns, &e.data.frame_ref, boundary)? {
+                        if !self.frame(now_ns, &e.data.frame_ref, boundary, pre_pixels)? {
                             return Ok(());
                         }
                         None
@@ -729,6 +845,8 @@ impl Server {
                     }
                     self.notify_cancellations_at(now_ns, &out.cancelled, out.core_seq)?;
                 }
+                #[cfg(test)]
+                let t_fan = Instant::now();
                 self.tool_state.retain(&env.body);
                 self.tool_state.prune(self.authority.state());
                 self.poll_tool_waiters_at(now_ns)?;
@@ -740,12 +858,18 @@ impl Server {
                     _ => env.body.clone(),
                 };
                 self.fanout_at(now_ns, body);
+                #[cfg(test)]
+                crate::journal::STAGE_TIMINGS.with(|cell| {
+                    let mut s = cell.get();
+                    s.fanout_ns += t_fan.elapsed().as_nanos();
+                    cell.set(s);
+                });
             }
             (Component::Daemon, Command::FrameRef(frame)) => {
                 if epoch != self.authority.state().epoch {
                     return Err(invalid("old executor"));
                 }
-                if !self.frame(now_ns, frame, boundary)? {
+                if !self.frame(now_ns, frame, boundary, pre_pixels)? {
                     return Ok(());
                 }
                 self.fanout_at(now_ns, env.body.clone());
@@ -1383,7 +1507,8 @@ async fn connection(
                         id,
                         epoch,
                         std::mem::take(&mut batch),
-                    )?;
+                    )
+                    .await?;
                     if had_frame {
                         tokio::time::sleep(Duration::from_millis(1)).await;
                     }
@@ -1412,7 +1537,8 @@ async fn connection(
                         id,
                         epoch,
                         std::mem::take(&mut batch),
-                    )?;
+                    )
+                    .await?;
                 }
                 return Ok(());
             };
@@ -1425,7 +1551,8 @@ async fn connection(
                         id,
                         epoch,
                         std::mem::take(&mut batch),
-                    )?;
+                    )
+                    .await?;
                     if had_frame {
                         tokio::time::sleep(Duration::from_millis(1)).await;
                     }

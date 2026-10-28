@@ -88,6 +88,9 @@ impl Server {
         )
     }
     fn capture_publish_states(&mut self, now_ns: u64, events: &[Value]) -> Result<()> {
+        if events.is_empty() {
+            return Ok(());
+        }
         let (_, reply, _) = self
             .capture
             .prepare("list", &Value::Null, Default::default(), now_ns / 1_000_000)
@@ -145,9 +148,15 @@ impl Server {
         pixels: Vec<u8>,
     ) -> Result<()> {
         self.capture_recover_exports()?;
+        if !self.capture.has_active_recording(&frame.surface_id) {
+            let _ = self
+                .capture
+                .frame_verified(frame, pixels, now_ns / 1_000_000);
+            return Ok(());
+        }
         let mut next = self.capture.clone();
         // Oversized/unavailable frames do not disable normal authority rendering.
-        let Ok(events) = next.frame(frame, pixels, now_ns / 1_000_000) else {
+        let Ok(events) = next.frame_verified(frame, pixels, now_ns / 1_000_000) else {
             return Ok(());
         };
         if !events.is_empty() {

@@ -139,3 +139,108 @@ fn stale_next_cleanup_preserves_current_and_promotion_requires_proof() {
     assert!(Journal::recover(&f.path, &f.root).is_err());
     assert!(!f.root.join("checkpoint.json").exists());
 }
+
+#[test]
+fn mv_replay_verifies_recorded_pre_change_and_post_change_frame_journals() {
+    use metaviewer_core::admission::{Frame, Surface};
+    use metaviewer_core::journal::sha256_hex;
+    use metaviewer_core::{Component, Endpoint};
+
+    let f = Fixture::new();
+    let mut state = CoreState::session("session-1").unwrap();
+    let mut j = Journal::create(&f.dir, &state).unwrap();
+    let out1 = state.apply(&Input::Connect).unwrap();
+    j.append(&Input::Connect, &out1, &state, vec![]).unwrap();
+
+    let surface_id = "srf-replay".to_string();
+    let surface_witness = j.retain_witness(b"surface-seed").unwrap();
+    let surface_input = Input::Surface {
+        id: surface_id.clone(),
+        surface: Surface {
+            display: ":42".into(),
+            owner: Endpoint {
+                component: Component::Agent,
+                instance: "agent-1".into(),
+            },
+            agent_controlled: true,
+            live: true,
+            frame: None,
+            refresh_after: None,
+            allowed_verbs: vec![],
+        },
+    };
+    let out2 = state.apply(&surface_input).unwrap();
+    j.append(&surface_input, &out2, &state, vec![surface_witness])
+        .unwrap();
+
+    // 1. Pre-change style frame record (retained with immediate fsync via retain_witness).
+    let raw_pre = b"pre-change-frame-pixels-v1";
+    let sha_pre = sha256_hex(raw_pre);
+    let wit_pre = j.retain_witness(raw_pre).unwrap();
+    let frame_pre = Input::Frame {
+        surface_id: surface_id.clone(),
+        frame: Frame {
+            sha256: sha_pre,
+            generation: 1,
+            width: 1280,
+            height: 900,
+        },
+    };
+    let out3 = state.apply(&frame_pre).unwrap();
+    j.append(&frame_pre, &out3, &state, vec![wit_pre]).unwrap();
+    drop(j);
+
+    let out_pre = std::process::Command::new(env!("CARGO_BIN_EXE_mv-replay"))
+        .arg("--journal")
+        .arg(&f.path)
+        .arg("--witness-root")
+        .arg(&f.root)
+        .arg("--verify-only")
+        .output()
+        .unwrap();
+    assert_eq!(out_pre.status.code(), Some(0));
+
+    // 2. Recover and append post-change frame records using retain_frame_witness + group-commit.
+    let (mut j, mut state) = Journal::recover(&f.path, &f.root).unwrap();
+    let raw_post = vec![0x7b_u8; 64 * 1024];
+    let sha_post = sha256_hex(&raw_post);
+    let wit_post = j.retain_frame_witness(&sha_post, &raw_post).unwrap();
+    let frame_post = Input::Frame {
+        surface_id,
+        frame: Frame {
+            sha256: sha_post.clone(),
+            generation: 2,
+            width: 1280,
+            height: 900,
+        },
+    };
+    let out4 = state.apply(&frame_post).unwrap();
+    j.append(&frame_post, &out4, &state, vec![wit_post])
+        .unwrap();
+    drop(j);
+
+    let out_post = std::process::Command::new(env!("CARGO_BIN_EXE_mv-replay"))
+        .arg("--journal")
+        .arg(&f.path)
+        .arg("--witness-root")
+        .arg(&f.root)
+        .arg("--verify-only")
+        .output()
+        .unwrap();
+    assert_eq!(out_post.status.code(), Some(0));
+
+    // Negative control: corrupting a frame witness byte causes mv-replay to fail closed with rc=4 (Witness).
+    let artifact_path = f.root.join("artifacts").join(&sha_post);
+    let mut corrupted = fs::read(&artifact_path).unwrap();
+    corrupted[0] ^= 0xff;
+    fs::write(&artifact_path, &corrupted).unwrap();
+    let out_bad = std::process::Command::new(env!("CARGO_BIN_EXE_mv-replay"))
+        .arg("--journal")
+        .arg(&f.path)
+        .arg("--witness-root")
+        .arg(&f.root)
+        .arg("--verify-only")
+        .output()
+        .unwrap();
+    assert_eq!(out_bad.status.code(), Some(4));
+}

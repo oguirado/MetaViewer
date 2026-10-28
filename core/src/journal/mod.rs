@@ -22,7 +22,46 @@ use std::path::{Component, Path, PathBuf};
 /// Verification against a separately protected, externally supplied journal head.
 pub mod anchor;
 mod sha256;
-pub use sha256::sha256_hex;
+pub use sha256::{sha256_hex, StreamingSha256};
+
+// [TARGET, unit decision] Group-commit window for frame witness/record fsyncs.
+// Non-frame transitions and Journal drop flush synchronously before proceeding.
+const FRAME_SYNC_WINDOW: std::time::Duration = std::time::Duration::from_millis(50);
+const FRAME_SYNC_MAX_BATCH: u64 = 8;
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FrameStageTimings {
+    pub test_prep_ns: u128,
+    pub shm_read_ns: u128,
+    pub hash_ns: u128,
+    pub hash_calls_3mb: u64,
+    pub witness_copy_ns: u128,
+    pub witness_verify_read_ns: u128,
+    pub journal_write_ns: u128,
+    pub fsync_ns: u128,
+    pub fsync_calls: u64,
+    pub capture_ns: u128,
+    pub fanout_ns: u128,
+}
+
+#[cfg(test)]
+std::thread_local! {
+    pub static STAGE_TIMINGS: std::cell::Cell<FrameStageTimings> = const { std::cell::Cell::new(FrameStageTimings {
+        test_prep_ns: 0,
+        shm_read_ns: 0,
+        hash_ns: 0,
+        hash_calls_3mb: 0,
+        witness_copy_ns: 0,
+        witness_verify_read_ns: 0,
+        journal_write_ns: 0,
+        fsync_ns: 0,
+        fsync_calls: 0,
+        capture_ns: 0,
+        fanout_ns: 0,
+    }) };
+}
+
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_RECORDS: u64 = 100_000;
 const MAX_LINE: usize = crate::MAX_FRAME_BYTES;
@@ -99,6 +138,23 @@ pub struct Replay {
     archive_bytes: u64,
     checkpoint: Checkpoint,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct VerifiedArtifact {
+    byte_len: u64,
+    dev: u64,
+    ino: u64,
+    mtime_nsec: i64,
+    ctime_nsec: i64,
+}
+struct SyncBatch {
+    files: Vec<File>,
+    journal_file: File,
+    root: PathBuf,
+}
+enum SyncCmd {
+    Flush(SyncBatch),
+    Barrier(std::sync::mpsc::SyncSender<Result<(), JournalError>>),
+}
 pub struct Journal {
     root: PathBuf,
     file: WriterFile,
@@ -111,6 +167,18 @@ pub struct Journal {
     poisoned: bool,
     // Last durably committed reduction boundary; supplied transitions are untrusted.
     state: CoreState,
+    verified_witnesses: std::collections::BTreeMap<String, VerifiedArtifact>,
+    dirty_files: Vec<File>,
+    unsynced_frames: u64,
+    last_sync: std::time::Instant,
+    sync_tx: Option<std::sync::mpsc::Sender<SyncCmd>>,
+}
+impl Drop for Journal {
+    fn drop(&mut self) {
+        if !self.poisoned {
+            let _ = self.flush_sync();
+        }
+    }
 }
 // [TARGET, unit decision] Release the writer's lock explicitly, including on
 // error paths. Closing alone leaves flock held by a concurrent fork's inherited
@@ -189,8 +257,11 @@ fn confined(path: &Path) -> Result<(), JournalError> {
     }
     Ok(())
 }
-fn private_directory(path: &Path) -> Result<(), JournalError> {
-    confined(path)?;
+fn current_uid() -> Result<u32, JournalError> {
+    static UID: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    if let Some(&uid) = UID.get() {
+        return Ok(uid);
+    }
     // Linux host effective uid, without unsafe FFI or process-wide state changes.
     let status = fs::read_to_string("/proc/self/status").map_err(|_| JournalError::Io)?;
     let uid: u32 = status
@@ -200,7 +271,12 @@ fn private_directory(path: &Path) -> Result<(), JournalError> {
         .ok_or(JournalError::Invalid)?
         .parse()
         .map_err(|_| JournalError::Invalid)?;
-    private_directory_for_uid(path, uid)
+    let _ = UID.set(uid);
+    Ok(uid)
+}
+fn private_directory(path: &Path) -> Result<(), JournalError> {
+    confined(path)?;
+    private_directory_for_uid(path, current_uid()?)
 }
 fn private_directory_for_uid(path: &Path, uid: u32) -> Result<(), JournalError> {
     confined(path)?;
@@ -273,12 +349,24 @@ fn parse<T: for<'de> Deserialize<'de> + Serialize>(bytes: &[u8]) -> Result<T, Jo
     Ok(v)
 }
 fn sync_dir(path: &Path) -> Result<(), JournalError> {
-    File::open(path)
+    #[cfg(test)]
+    let t0 = std::time::Instant::now();
+    let res = File::open(path)
         .and_then(|f| f.sync_all())
-        .map_err(|_| JournalError::Io)
+        .map_err(|_| JournalError::Io);
+    #[cfg(test)]
+    STAGE_TIMINGS.with(|cell| {
+        let mut s = cell.get();
+        s.fsync_ns += t0.elapsed().as_nanos();
+        s.fsync_calls += 1;
+        cell.set(s);
+    });
+    res
 }
-fn publish(path: &Path, bytes: &[u8]) -> Result<(), JournalError> {
+fn publish_unsynced(path: &Path, bytes: &[u8]) -> Result<File, JournalError> {
     let parent = path.parent().ok_or(JournalError::Invalid)?;
+    #[cfg(test)]
+    let t_write = std::time::Instant::now();
     private_directory(parent)?;
     let mut f = OpenOptions::new()
         .write(true)
@@ -286,14 +374,38 @@ fn publish(path: &Path, bytes: &[u8]) -> Result<(), JournalError> {
         .mode(0o600)
         .open(path)
         .map_err(|_| JournalError::Io)?;
-    f.write_all(bytes)
-        .and_then(|_| f.sync_all())
-        .map_err(|_| JournalError::Io)?;
+    f.write_all(bytes).map_err(|_| JournalError::Io)?;
+    #[cfg(test)]
+    STAGE_TIMINGS.with(|cell| {
+        let mut s = cell.get();
+        if parent.file_name().is_some_and(|n| n == "artifacts") {
+            s.witness_copy_ns += t_write.elapsed().as_nanos();
+        } else {
+            s.journal_write_ns += t_write.elapsed().as_nanos();
+        }
+        cell.set(s);
+    });
+    Ok(f)
+}
+fn publish(path: &Path, bytes: &[u8]) -> Result<(), JournalError> {
+    let parent = path.parent().ok_or(JournalError::Invalid)?;
+    let f = publish_unsynced(path, bytes)?;
+    #[cfg(test)]
+    let t_sync = std::time::Instant::now();
+    f.sync_all().map_err(|_| JournalError::Io)?;
+    #[cfg(test)]
+    STAGE_TIMINGS.with(|cell| {
+        let mut s = cell.get();
+        s.fsync_ns += t_sync.elapsed().as_nanos();
+        s.fsync_calls += 1;
+        cell.set(s);
+    });
     sync_dir(parent)
 }
-fn checkpoint(root: &Path, c: &Checkpoint) -> Result<(), JournalError> {
+fn checkpoint_unsynced(root: &Path, c: &Checkpoint) -> Result<File, JournalError> {
     let tmp = root.join("checkpoint.next");
-    // Only called by a new journal or the exclusive, replay-verified writer.
+    #[cfg(test)]
+    let t_prep = std::time::Instant::now();
     private_directory(root)?;
     match fs::symlink_metadata(&tmp) {
         Ok(meta) if meta.is_file() => fs::remove_file(&tmp).map_err(|_| JournalError::Io)?,
@@ -301,9 +413,67 @@ fn checkpoint(root: &Path, c: &Checkpoint) -> Result<(), JournalError> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(_) => return Err(JournalError::Io),
     }
-    publish(&tmp, &json(c)?)?;
+    let c_bytes = json(c)?;
+    #[cfg(test)]
+    STAGE_TIMINGS.with(|cell| {
+        let mut s = cell.get();
+        s.journal_write_ns += t_prep.elapsed().as_nanos();
+        cell.set(s);
+    });
+    let f = publish_unsynced(&tmp, &c_bytes)?;
+    #[cfg(test)]
+    let t_ren = std::time::Instant::now();
     fs::rename(tmp, root.join("checkpoint.json")).map_err(|_| JournalError::Io)?;
+    #[cfg(test)]
+    STAGE_TIMINGS.with(|cell| {
+        let mut s = cell.get();
+        s.journal_write_ns += t_ren.elapsed().as_nanos();
+        cell.set(s);
+    });
+    Ok(f)
+}
+fn checkpoint(root: &Path, c: &Checkpoint) -> Result<(), JournalError> {
+    let tmp = root.join("checkpoint.next");
+    // Only called by a new journal or the exclusive, replay-verified writer.
+    #[cfg(test)]
+    let t_prep = std::time::Instant::now();
+    private_directory(root)?;
+    match fs::symlink_metadata(&tmp) {
+        Ok(meta) if meta.is_file() => fs::remove_file(&tmp).map_err(|_| JournalError::Io)?,
+        Ok(_) => return Err(JournalError::Invalid),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(JournalError::Io),
+    }
+    let c_bytes = json(c)?;
+    #[cfg(test)]
+    STAGE_TIMINGS.with(|cell| {
+        let mut s = cell.get();
+        s.journal_write_ns += t_prep.elapsed().as_nanos();
+        cell.set(s);
+    });
+    publish(&tmp, &c_bytes)?;
+    #[cfg(test)]
+    let t_ren = std::time::Instant::now();
+    fs::rename(tmp, root.join("checkpoint.json")).map_err(|_| JournalError::Io)?;
+    #[cfg(test)]
+    STAGE_TIMINGS.with(|cell| {
+        let mut s = cell.get();
+        s.journal_write_ns += t_ren.elapsed().as_nanos();
+        cell.set(s);
+    });
     sync_dir(root)
+}
+fn execute_sync_batch(batch: SyncBatch) -> Result<(), JournalError> {
+    for f in batch.files {
+        f.sync_all().map_err(|_| JournalError::Io)?;
+    }
+    sync_dir(&batch.root.join("artifacts"))?;
+    sync_dir(&batch.root.join("events"))?;
+    batch
+        .journal_file
+        .sync_all()
+        .map_err(|_| JournalError::Io)?;
+    sync_dir(&batch.root)
 }
 fn event_kind(input: &Input, out: &Outcome) -> SessionRecordKind {
     if out.reason.is_some() {
@@ -355,8 +525,16 @@ fn verify_witness(root: &Path, w: &Witness) -> Result<(), JournalError> {
     if !hex(&w.sha256) || w.byte_len == 0 || w.byte_len > MAX_BYTES {
         return Err(JournalError::Witness);
     }
+    #[cfg(test)]
+    let t_read = std::time::Instant::now();
     let bytes = read_file(&root.join("artifacts").join(&w.sha256), MAX_BYTES)
         .map_err(|_| JournalError::Witness)?;
+    #[cfg(test)]
+    STAGE_TIMINGS.with(|cell| {
+        let mut s = cell.get();
+        s.witness_verify_read_ns += t_read.elapsed().as_nanos();
+        cell.set(s);
+    });
     if bytes.len() as u64 != w.byte_len || sha256_hex(&bytes) != w.sha256 {
         return Err(JournalError::Witness);
     }
@@ -434,6 +612,11 @@ impl Journal {
             archive_bytes: genesis.len() as u64,
             poisoned: false,
             state: state.clone(),
+            verified_witnesses: std::collections::BTreeMap::new(),
+            dirty_files: Vec::new(),
+            unsynced_frames: 0,
+            last_sync: std::time::Instant::now(),
+            sync_tx: None,
         };
         checkpoint(&journal.root, &journal.closure())?;
         sync_dir(&sessions)?;
@@ -491,9 +674,127 @@ impl Journal {
                 archive_bytes: replay.archive_bytes,
                 poisoned: false,
                 state: replay.state.clone(),
+                verified_witnesses: std::collections::BTreeMap::new(),
+                dirty_files: Vec::new(),
+                unsynced_frames: 0,
+                last_sync: std::time::Instant::now(),
+                sync_tx: None,
             },
             replay.state,
         ))
+    }
+    fn record_verified_artifact(
+        &mut self,
+        sha256: &str,
+        path: &Path,
+        byte_len: u64,
+    ) -> Result<(), JournalError> {
+        let meta = fs::symlink_metadata(path).map_err(|_| JournalError::Io)?;
+        if !meta.is_file() || meta.len() != byte_len {
+            return Err(JournalError::Witness);
+        }
+        self.verified_witnesses.insert(
+            sha256.to_owned(),
+            VerifiedArtifact {
+                byte_len,
+                dev: meta.dev(),
+                ino: meta.ino(),
+                mtime_nsec: meta.mtime_nsec(),
+                ctime_nsec: meta.ctime_nsec(),
+            },
+        );
+        Ok(())
+    }
+    fn is_verified_artifact(&self, path: &Path, w: &Witness) -> bool {
+        if !hex(&w.sha256) || w.byte_len == 0 || w.byte_len > MAX_BYTES {
+            return false;
+        }
+        let Some(&recorded) = self.verified_witnesses.get(&w.sha256) else {
+            return false;
+        };
+        if recorded.byte_len != w.byte_len {
+            return false;
+        }
+        let Ok(meta) = fs::symlink_metadata(path) else {
+            return false;
+        };
+        meta.is_file()
+            && meta.len() == w.byte_len
+            && meta.dev() == recorded.dev
+            && meta.ino() == recorded.ino
+            && meta.mtime_nsec() == recorded.mtime_nsec
+            && meta.ctime_nsec() == recorded.ctime_nsec
+    }
+    fn ensure_sync_worker(&mut self) -> &std::sync::mpsc::Sender<SyncCmd> {
+        self.sync_tx.get_or_insert_with(|| {
+            let (tx, rx) = std::sync::mpsc::channel::<SyncCmd>();
+            std::thread::spawn(move || {
+                let mut sticky_err: Option<JournalError> = None;
+                while let Ok(cmd) = rx.recv() {
+                    match cmd {
+                        SyncCmd::Flush(batch) => {
+                            if sticky_err.is_none() {
+                                if let Err(e) = execute_sync_batch(batch) {
+                                    sticky_err = Some(e);
+                                }
+                            }
+                        }
+                        SyncCmd::Barrier(reply) => {
+                            let res = sticky_err.clone().map_or(Ok(()), Err);
+                            let _ = reply.send(res);
+                        }
+                    }
+                }
+            });
+            tx
+        })
+    }
+    fn dispatch_frame_sync_batch(&mut self) -> Result<(), JournalError> {
+        if self.dirty_files.is_empty() && self.unsynced_frames == 0 {
+            return Ok(());
+        }
+        let batch = SyncBatch {
+            files: std::mem::take(&mut self.dirty_files),
+            journal_file: self.file.try_clone().map_err(|_| JournalError::Io)?,
+            root: self.root.clone(),
+        };
+        self.unsynced_frames = 0;
+        self.last_sync = std::time::Instant::now();
+        self.ensure_sync_worker()
+            .send(SyncCmd::Flush(batch))
+            .map_err(|_| JournalError::Io)
+    }
+    pub fn flush_sync(&mut self) -> Result<(), JournalError> {
+        if !self.dirty_files.is_empty() || self.unsynced_frames > 0 {
+            if self.sync_tx.is_some() {
+                self.dispatch_frame_sync_batch()?;
+            } else {
+                #[cfg(test)]
+                let t_sync = std::time::Instant::now();
+                let batch = SyncBatch {
+                    files: std::mem::take(&mut self.dirty_files),
+                    journal_file: self.file.try_clone().map_err(|_| JournalError::Io)?,
+                    root: self.root.clone(),
+                };
+                self.unsynced_frames = 0;
+                self.last_sync = std::time::Instant::now();
+                execute_sync_batch(batch)?;
+                #[cfg(test)]
+                STAGE_TIMINGS.with(|cell| {
+                    let mut s = cell.get();
+                    s.fsync_ns += t_sync.elapsed().as_nanos();
+                    s.fsync_calls += 1;
+                    cell.set(s);
+                });
+            }
+        }
+        if let Some(tx) = &self.sync_tx {
+            let (b_tx, b_rx) = std::sync::mpsc::sync_channel(1);
+            tx.send(SyncCmd::Barrier(b_tx))
+                .map_err(|_| JournalError::Io)?;
+            b_rx.recv().map_err(|_| JournalError::Io)??;
+        }
+        Ok(())
     }
     pub fn retain_witness(&mut self, bytes: &[u8]) -> Result<Witness, JournalError> {
         if self.poisoned {
@@ -502,15 +803,52 @@ impl Journal {
         if bytes.is_empty() || bytes.len() as u64 > MAX_BYTES {
             return Err(JournalError::Witness);
         }
+        let digest = sha256_hex(bytes);
+        self.retain_witness_inner(&digest, bytes, true)
+    }
+    pub fn retain_verified_witness(
+        &mut self,
+        sha256: &str,
+        bytes: &[u8],
+    ) -> Result<Witness, JournalError> {
+        self.retain_witness_inner(sha256, bytes, true)
+    }
+    pub fn retain_frame_witness(
+        &mut self,
+        sha256: &str,
+        bytes: &[u8],
+    ) -> Result<Witness, JournalError> {
+        self.retain_witness_inner(sha256, bytes, false)
+    }
+    fn retain_witness_inner(
+        &mut self,
+        sha256: &str,
+        bytes: &[u8],
+        sync_now: bool,
+    ) -> Result<Witness, JournalError> {
+        if self.poisoned {
+            return Err(JournalError::Poisoned);
+        }
+        if !hex(sha256) || bytes.is_empty() || bytes.len() as u64 > MAX_BYTES {
+            return Err(JournalError::Witness);
+        }
         let w = Witness {
-            sha256: sha256_hex(bytes),
+            sha256: sha256.to_owned(),
             byte_len: bytes.len() as u64,
         };
         let path = self.root.join("artifacts").join(&w.sha256);
         if path.exists() {
-            verify_witness(&self.root, &w)?;
-        } else {
+            if !self.is_verified_artifact(&path, &w) {
+                verify_witness(&self.root, &w)?;
+                self.record_verified_artifact(&w.sha256, &path, w.byte_len)?;
+            }
+        } else if sync_now {
             publish(&path, bytes)?;
+            self.record_verified_artifact(&w.sha256, &path, w.byte_len)?;
+        } else {
+            let f = publish_unsynced(&path, bytes)?;
+            self.dirty_files.push(f);
+            self.record_verified_artifact(&w.sha256, &path, w.byte_len)?;
         }
         Ok(w)
     }
@@ -577,7 +915,11 @@ impl Journal {
             return Err(JournalError::Policy);
         }
         for w in &witnesses {
-            verify_witness(&self.root, w)?;
+            let path = self.root.join("artifacts").join(&w.sha256);
+            if !self.is_verified_artifact(&path, w) {
+                verify_witness(&self.root, w)?;
+                self.record_verified_artifact(&w.sha256, &path, w.byte_len)?;
+            }
         }
         if required_witness(input, outcome)
             .is_some_and(|hash| !witnesses.iter().any(|w| w.sha256 == hash))
@@ -586,20 +928,101 @@ impl Journal {
         }
         // From the first durable mutation, errors poison the handle until recovery.
         self.poisoned = true;
-        publish(
-            &self.root.join("events").join(format!("{next}.json")),
-            &event,
-        )?;
-        self.file
-            .write_all(&raw)
-            .and_then(|_| self.file.write_all(b"\n"))
-            .and_then(|_| self.file.sync_all())
-            .map_err(|_| JournalError::Io)?;
-        self.count = next;
-        self.bytes += raw.len() as u64 + 1;
-        self.tail = sha256_hex(&raw);
-        self.archive = archive_next(&self.archive, &event);
-        checkpoint(&self.root, &self.closure())?;
+        let is_frame = matches!(input, Input::Frame { .. });
+        if !is_frame {
+            if let Some(tx) = &self.sync_tx {
+                let (b_tx, b_rx) = std::sync::mpsc::sync_channel(1);
+                tx.send(SyncCmd::Barrier(b_tx))
+                    .map_err(|_| JournalError::Io)?;
+                b_rx.recv().map_err(|_| JournalError::Io)??;
+            }
+            let event_file = publish_unsynced(
+                &self.root.join("events").join(format!("{next}.json")),
+                &event,
+            )?;
+            #[cfg(test)]
+            let t_jw = std::time::Instant::now();
+            self.file
+                .write_all(&raw)
+                .and_then(|_| self.file.write_all(b"\n"))
+                .map_err(|_| JournalError::Io)?;
+            #[cfg(test)]
+            STAGE_TIMINGS.with(|cell| {
+                let mut s = cell.get();
+                s.journal_write_ns += t_jw.elapsed().as_nanos();
+                cell.set(s);
+            });
+            self.count = next;
+            self.bytes += raw.len() as u64 + 1;
+            self.tail = sha256_hex(&raw);
+            self.archive = archive_next(&self.archive, &event);
+            let tmp = self.root.join("checkpoint.next");
+            private_directory(&self.root)?;
+            match fs::symlink_metadata(&tmp) {
+                Ok(meta) if meta.is_file() => {
+                    fs::remove_file(&tmp).map_err(|_| JournalError::Io)?
+                }
+                Ok(_) => return Err(JournalError::Invalid),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return Err(JournalError::Io),
+            }
+            let c_bytes = json(&self.closure())?;
+            let cp_file = publish_unsynced(&tmp, &c_bytes)?;
+            #[cfg(test)]
+            let t_js = std::time::Instant::now();
+            let had_dirty = !self.dirty_files.is_empty();
+            for f in self.dirty_files.drain(..) {
+                f.sync_all().map_err(|_| JournalError::Io)?;
+            }
+            self.unsynced_frames = 0;
+            event_file.sync_all().map_err(|_| JournalError::Io)?;
+            self.file.sync_all().map_err(|_| JournalError::Io)?;
+            cp_file.sync_all().map_err(|_| JournalError::Io)?;
+            if had_dirty {
+                sync_dir(&self.root.join("artifacts"))?;
+            }
+            sync_dir(&self.root.join("events"))?;
+            fs::rename(&tmp, self.root.join("checkpoint.json")).map_err(|_| JournalError::Io)?;
+            sync_dir(&self.root)?;
+            #[cfg(test)]
+            STAGE_TIMINGS.with(|cell| {
+                let mut s = cell.get();
+                s.fsync_ns += t_js.elapsed().as_nanos();
+                s.fsync_calls += 1;
+                cell.set(s);
+            });
+            self.last_sync = std::time::Instant::now();
+        } else {
+            let event_file = publish_unsynced(
+                &self.root.join("events").join(format!("{next}.json")),
+                &event,
+            )?;
+            self.dirty_files.push(event_file);
+            #[cfg(test)]
+            let t_jw = std::time::Instant::now();
+            self.file
+                .write_all(&raw)
+                .and_then(|_| self.file.write_all(b"\n"))
+                .map_err(|_| JournalError::Io)?;
+            #[cfg(test)]
+            STAGE_TIMINGS.with(|cell| {
+                let mut s = cell.get();
+                s.journal_write_ns += t_jw.elapsed().as_nanos();
+                cell.set(s);
+            });
+            self.count = next;
+            self.bytes += raw.len() as u64 + 1;
+            self.tail = sha256_hex(&raw);
+            self.archive = archive_next(&self.archive, &event);
+            let cp_file = checkpoint_unsynced(&self.root, &self.closure())?;
+            self.dirty_files.push(cp_file);
+            self.unsynced_frames += 1;
+            if self.last_sync.elapsed() >= FRAME_SYNC_WINDOW
+                || self.unsynced_frames >= FRAME_SYNC_MAX_BATCH
+            {
+                self.dispatch_frame_sync_batch()?;
+            }
+        }
         self.archive_bytes = archive_bytes;
         self.state = reduced;
         self.poisoned = false;

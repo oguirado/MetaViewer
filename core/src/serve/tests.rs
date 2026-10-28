@@ -212,6 +212,7 @@ fn frame_ready_latency_and_concurrent_generations_on_3_45mb_frames() {
 
     let generations = 8u64;
     let mut per_frame_ms = Vec::with_capacity(generations as usize);
+    crate::journal::STAGE_TIMINGS.with(|c| c.set(crate::journal::FrameStageTimings::default()));
     let batch_start = Instant::now();
 
     for gen in 1..=generations {
@@ -256,6 +257,11 @@ fn frame_ready_latency_and_concurrent_generations_on_3_45mb_frames() {
             .to_string(),
         )
         .unwrap();
+        crate::journal::STAGE_TIMINGS.with(|c| {
+            let mut s = c.get();
+            s.test_prep_ns += t0.elapsed().as_nanos();
+            c.set(s);
+        });
 
         server
             .route_at(gen * 100_000_000, &ready_daemon, 1, env)
@@ -272,12 +278,43 @@ fn frame_ready_latency_and_concurrent_generations_on_3_45mb_frames() {
     let max_ms = per_frame_ms.iter().copied().fold(0.0_f64, f64::max);
     let mean_ms = per_frame_ms.iter().sum::<f64>() / (generations as f64);
     let gens_during_batch_at_100ms = batch_ms / 100.0;
+    let st = crate::journal::STAGE_TIMINGS.with(|c| c.get());
+    eprintln!(
+        "STAGE_BREAKDOWN_PER_FRAME test_prep_ms={:.2} shm_read_ms={:.2} witness_verify_read_ms={:.2} total_hash_ms={:.2} witness_copy_ms={:.2} journal_write_ms={:.2} fsync_ms={:.2} fsync_calls_per_frame={:.1} capture_ms={:.2} fanout_ms={:.2}",
+        st.test_prep_ns as f64 / 1_000_000.0 / (generations as f64),
+        st.shm_read_ns as f64 / 1_000_000.0 / (generations as f64),
+        st.witness_verify_read_ns as f64 / 1_000_000.0 / (generations as f64),
+        st.hash_ns as f64 / 1_000_000.0 / (generations as f64),
+        st.witness_copy_ns as f64 / 1_000_000.0 / (generations as f64),
+        st.journal_write_ns as f64 / 1_000_000.0 / (generations as f64),
+        st.fsync_ns as f64 / 1_000_000.0 / (generations as f64),
+        st.fsync_calls as f64 / (generations as f64),
+        st.capture_ns as f64 / 1_000_000.0 / (generations as f64),
+        st.fanout_ns as f64 / 1_000_000.0 / (generations as f64),
+    );
     eprintln!(
         "MEASURED_CORE_FRAME_PATH frames={} bytes={} mean_ms={:.2} max_ms={:.2} batch_ms={:.2} poll_100ms_gens_during_batch={:.2}",
         generations, frame_bytes, mean_ms, max_ms, batch_ms, gens_during_batch_at_100ms
     );
 
+    assert!(
+        mean_ms <= 60.0,
+        "1280x900 mean frame cost {mean_ms:.2} ms exceeded 60 ms target"
+    );
+
     drop(server);
+    let session_root = root.join("sessions/frame-lat-session");
+    let verified =
+        crate::journal::scan(&session_root.join("journal.jsonl"), &session_root).unwrap();
+    assert_eq!(verified.boundaries.len(), (2 + generations) as usize);
+    assert_eq!(
+        verified.state.surfaces["srf-lat"]
+            .frame
+            .as_ref()
+            .unwrap()
+            .generation,
+        generations
+    );
     let _ = fs::remove_dir_all(&shm_root);
     let _ = fs::remove_dir_all(&root);
 }

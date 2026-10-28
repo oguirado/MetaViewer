@@ -60,6 +60,22 @@ impl Host {
         if bytes.is_empty() || bytes.len() as u64 > RING || sha256_hex(&bytes) != frame.sha256 {
             return Err(Error::Event);
         }
+        self.frame_verified(frame, bytes, now_ms)
+    }
+    pub(crate) fn has_active_recording(&self, surface_id: &str) -> bool {
+        self.rows
+            .values()
+            .any(|r| r["surface_id"] == surface_id && r["phase"] == "recording")
+    }
+    pub(crate) fn frame_verified(
+        &mut self,
+        frame: &FrameRef,
+        bytes: Vec<u8>,
+        now_ms: u64,
+    ) -> Result<Vec<Value>, Error> {
+        if bytes.is_empty() || bytes.len() as u64 > RING {
+            return Err(Error::Event);
+        }
         let existing: usize = self
             .latest
             .iter()

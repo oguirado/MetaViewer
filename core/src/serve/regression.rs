@@ -798,7 +798,7 @@ fn stale_daemon_state_changed_does_not_clobber_release_control() {
 #[test]
 fn w3_control_intent_under_daemon_frame_burst_coalesces_and_preserves_checks() {
     support::run(async {
-        let (_temp, server, task, mut daemon, _agent, mut ui) = setup().await;
+        let (temp, server, task, mut daemon, _agent, mut ui) = setup().await;
         created(&mut daemon, &mut ui).await;
 
         let shared = SharedFrame::new();
@@ -826,7 +826,7 @@ fn w3_control_intent_under_daemon_frame_burst_coalesces_and_preserves_checks() {
         let mut human = surface();
         human["control"] = "human".into();
         daemon
-            .send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":human}}))
+            .send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":human.clone()}}))
             .await;
         for gen in 17..=24_u64 {
             let f = shared.value(gen);
@@ -861,9 +861,101 @@ fn w3_control_intent_under_daemon_frame_burst_coalesces_and_preserves_checks() {
         assert!(saw_human && saw_agent);
         assert_eq!(latest_gen, 24);
 
+        // Stream 1280x900 RGB24 (3.456 MB) frames and verify control intents are answered <= 100 ms.
+        let large_bytes = vec![0x5a_u8; 1280 * 900 * 3];
+        let large_sha = sha256_hex(&large_bytes);
+        let large_path = std::path::PathBuf::from(format!(
+            "/dev/shm/mv-wire-{}-large-1280x900.rgb",
+            std::process::id()
+        ));
+        std::fs::write(&large_path, &large_bytes).unwrap();
+        let make_large_frame = |generation: u64| -> Value {
+            let mut v = shared.value(generation);
+            v["width"] = 1280.into();
+            v["height"] = 900.into();
+            v["format"] = "rgb24".into();
+            v["ramws_path"] = large_path.to_str().unwrap().into();
+            v["sha256"] = large_sha.clone().into();
+            v
+        };
+
+        for gen in 25..=28_u64 {
+            let f = make_large_frame(gen);
+            daemon
+                .send(json!({"schema":"surface_event/v0.2","event":"frame_ready","data":{"frame_ref":f}}))
+                .await;
+        }
+        let take_t0 = std::time::Instant::now();
+        ui.send(control("take_control")).await;
+        let forwarded_take_large = serde_json::to_value(daemon.receive().await.body).unwrap();
+        let take_latency_ms = take_t0.elapsed().as_secs_f64() * 1000.0;
+        assert_eq!(forwarded_take_large["op"], "take_control");
+        assert!(
+            take_latency_ms <= 100.0,
+            "take_control under 3.456 MB frame stream took {take_latency_ms:.2} ms (> 100 ms target)"
+        );
+
+        let mut saw_gen_28 = false;
+        while !saw_gen_28 {
+            let body = serde_json::to_value(ui.receive().await.body).unwrap();
+            if body["event"] == "frame_ready" {
+                latest_gen = body["data"]["frame_ref"]["generation"].as_u64().unwrap();
+                if latest_gen == 28 {
+                    saw_gen_28 = true;
+                }
+            }
+        }
+
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":human}}))
+            .await;
+        let mut saw_human_large = false;
+        while !saw_human_large {
+            let body = serde_json::to_value(ui.receive().await.body).unwrap();
+            if body["event"] == "state_changed" && body["data"]["surface"]["control"] == "human" {
+                saw_human_large = true;
+            }
+        }
+
+        for gen in 29..=32_u64 {
+            let f = make_large_frame(gen);
+            daemon
+                .send(json!({"schema":"surface_event/v0.2","event":"frame_ready","data":{"frame_ref":f}}))
+                .await;
+        }
+        let release_t0 = std::time::Instant::now();
+        ui.send(control("release_control")).await;
+        let forwarded_release_large = serde_json::to_value(daemon.receive().await.body).unwrap();
+        let release_latency_ms = release_t0.elapsed().as_secs_f64() * 1000.0;
+        eprintln!("MEASURED_CONTROL_UNDER_STREAM take_ms={take_latency_ms:.2} release_ms={release_latency_ms:.2}");
+        assert_eq!(forwarded_release_large["op"], "release_control");
+        assert!(
+            release_latency_ms <= 100.0,
+            "release_control under 3.456 MB frame stream took {release_latency_ms:.2} ms (> 100 ms target)"
+        );
+
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":surface()}}))
+            .await;
+
+        let mut saw_agent_large = false;
+        while !saw_agent_large || latest_gen < 32 {
+            let body = serde_json::to_value(ui.receive().await.body).unwrap();
+            if body["event"] == "frame_ready" {
+                latest_gen = body["data"]["frame_ref"]["generation"].as_u64().unwrap();
+            } else if body["event"] == "state_changed"
+                && body["data"]["surface"]["control"] == "agent"
+            {
+                saw_agent_large = true;
+            }
+        }
+        let _ = std::fs::remove_file(&large_path);
+        assert!(saw_human_large && saw_agent_large);
+        assert_eq!(latest_gen, 32);
+
         // Negative control: a generation regression inside a burst is never masked by coalescing.
         let f_bad = shared.value(20);
-        let f_newer = shared.value(25);
+        let f_newer = shared.value(33);
         daemon
             .send(json!({"schema":"surface_event/v0.2","event":"frame_ready","data":{"frame_ref":f_bad}}))
             .await;
@@ -879,5 +971,16 @@ fn w3_control_intent_under_daemon_frame_burst_coalesces_and_preserves_checks() {
         );
 
         close_server(server, task, daemon, _agent, ui).await;
+        let session_root = temp.0.join("state/sessions/serve-session");
+        let verified =
+            crate::journal::scan(&session_root.join("journal.jsonl"), &session_root).unwrap();
+        assert_eq!(
+            verified.state.surfaces["surface-demo"]
+                .frame
+                .as_ref()
+                .unwrap()
+                .generation,
+            32
+        );
     });
 }
