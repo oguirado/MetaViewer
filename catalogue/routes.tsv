@@ -55,6 +55,7 @@ test_fuzz_envelope.py	agents/tests/test_fuzz_envelope.py
 test_fx2_agents_a.py	agents/tests/test_fx2_agents_a.py
 test_fx2_agents_b.py	agents/tests/test_fx2_agents_b.py
 test_hello.py	agents/tests/test_hello.py
+test_holdings_loop.py	agents/tests/test_holdings_loop.py
 test_loop_trials.py	agents/tests/test_loop_trials.py
 testmcp-793d126b3914	agents/tests/test_mcp_conformance.py
 test_mcp_server.py	agents/tests/test_mcp_server.py
