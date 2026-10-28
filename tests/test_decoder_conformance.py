@@ -129,6 +129,45 @@ def _run_go_probe(raw_lines: list[str], envelope_schema_override: str | None = N
         return [line.strip() == "true" for line in answers]
 
 
+def _run_go_schema_probe(schema_cases: list[tuple[dict, dict]]) -> list[bool]:
+    go = shutil.which(os.environ.get("GO", "go"))
+    if go is None:
+        raise RuntimeError("go must be supplied by PATH or GO")
+    with tempfile.TemporaryDirectory(prefix="conformance-go-sch-", dir="/tmp") as temp:
+        temp_root = Path(temp)
+        in_path = temp_root / "in.jsonl"
+        out_path = temp_root / "out.txt"
+        in_path.write_text(
+            "".join(
+                json.dumps([val, sch], separators=(",", ":")) + "\n"
+                for val, sch in schema_cases
+            )
+        )
+        environment = dict(
+            os.environ,
+            GOPROXY="off",
+            GOSUMDB="off",
+            GOTOOLCHAIN="local",
+            TMPDIR=str(temp_root),
+            MV_SCHEMA_VALID_IN=str(in_path),
+            MV_SCHEMA_VALID_OUT=str(out_path),
+        )
+        result = subprocess.run(
+            [go, "test", "./internal/ipc", "-run", "^TestSchemaNodeAcceptProbe$", "-count=1"],
+            cwd=ROOT / "daemon-adapter",
+            text=True,
+            capture_output=True,
+            env=environment,
+            timeout=120,
+        )
+        if result.returncode != 0:
+            raise RuntimeError("Go schema probe failed: " + result.stdout + result.stderr)
+        answers = out_path.read_text().splitlines()
+        if len(answers) != len(schema_cases):
+            raise RuntimeError(f"Go schema probe line count mismatch: {len(answers)} != {len(schema_cases)}")
+        return [line.strip() == "true" for line in answers]
+
+
 def _run_python_decoder(raw_line: str) -> bool:
     try:
         value = json.loads(
@@ -425,16 +464,61 @@ class DecoderConformanceTests(unittest.TestCase):
         env_gen2 = {**cls.base_envelope, "body": {**frame_valid, "generation": 2}}
         env_bad_sha = {**cls.base_envelope, "body": frame_bad_sha}
 
+        synth_max_props_10 = copy.deepcopy(cls.envelope_schema)
+        synth_max_props_10["properties"]["body"] = {
+            "oneOf": [
+                {
+                    "$ref": "frame_ref.schema.json",
+                    "maxProperties": 10,
+                }
+            ]
+        }
+        synth_max_props_12 = copy.deepcopy(cls.envelope_schema)
+        synth_max_props_12["properties"]["body"] = {
+            "oneOf": [
+                {
+                    "$ref": "frame_ref.schema.json",
+                    "maxProperties": 12,
+                }
+            ]
+        }
+
         cls.r1_084_cases = [
             ("r1-084-pos-both-match", env_gen1, synth_good_const, True),
             ("r1-084-neg-ref-ok-const-mismatch", env_gen2, synth_good_const, False),
             ("r1-084-neg-const-ok-ref-mismatch", env_bad_sha, synth_bad_const, False),
+            ("t6-r3-007-neg-ref-max-properties-10", env_gen1, synth_max_props_10, False),
+            ("t6-r3-007-pos-ref-max-properties-12", env_gen1, synth_max_props_12, True),
         ]
 
-        rs_verdicts, rs_r1_084 = _run_rust_probe(
+        cls.open_props_cases = [
+            (
+                "d3-open-props-extra-key-admitted",
+                {"a": 1, "zzz": 1},
+                {"properties": {"a": {"type": "integer"}}},
+                True,
+            ),
+            (
+                "d3-open-props-declared-key-type-mismatch-refused",
+                {"a": "bad", "zzz": 1},
+                {"properties": {"a": {"type": "integer"}}},
+                False,
+            ),
+            (
+                "d3-closed-props-extra-key-refused",
+                {"a": 1, "zzz": 1},
+                {"properties": {"a": {"type": "integer"}}, "additionalProperties": False},
+                False,
+            ),
+        ]
+
+        rs_verdicts, rs_schema_all = _run_rust_probe(
             all_raw,
-            [(val, sch) for _, val, sch, _ in cls.r1_084_cases],
+            [(val, sch) for _, val, sch, _ in cls.r1_084_cases]
+            + [(val, sch) for _, val, sch, _ in cls.open_props_cases],
         )
+        rs_r1_084 = rs_schema_all[: len(cls.r1_084_cases)]
+        rs_open_props = rs_schema_all[len(cls.r1_084_cases) :]
         go_verdicts = _run_go_probe(all_raw)
         go_r1_084_good = _run_go_probe(
             [
@@ -447,7 +531,16 @@ class DecoderConformanceTests(unittest.TestCase):
             [json.dumps(env_bad_sha, separators=(",", ":"))],
             envelope_schema_override=json.dumps(synth_bad_const),
         )
-        go_r1_084 = go_r1_084_good + go_r1_084_bad
+        go_t6_007_10 = _run_go_probe(
+            [json.dumps(env_gen1, separators=(",", ":"))],
+            envelope_schema_override=json.dumps(synth_max_props_10),
+        )
+        go_t6_007_12 = _run_go_probe(
+            [json.dumps(env_gen1, separators=(",", ":"))],
+            envelope_schema_override=json.dumps(synth_max_props_12),
+        )
+        go_r1_084 = go_r1_084_good + go_r1_084_bad + go_t6_007_10 + go_t6_007_12
+        go_open_props = _run_go_schema_probe([(val, sch) for _, val, sch, _ in cls.open_props_cases])
         py_verdicts = [_run_python_decoder(raw) for raw in all_raw]
         chk_verdicts = [
             _run_checker_decoder(cls.validator, cls.envelope_schema, raw) for raw in all_raw
@@ -468,9 +561,35 @@ class DecoderConformanceTests(unittest.TestCase):
             }
             for i, (_, val, sch, _) in enumerate(cls.r1_084_cases)
         ]
+        cls.open_props_verdicts = [
+            {
+                "rust": rs_open_props[i],
+                "go": go_open_props[i],
+                "python": _run_python_schema_check(val, sch),
+                "checker": _run_checker_decoder(
+                    cls.validator, sch, json.dumps(val, separators=(",", ":"))
+                ),
+            }
+            for i, (_, val, sch, _) in enumerate(cls.open_props_cases)
+        ]
 
     def test_all_v02_example_fixtures_unanimous_across_four_decoders(self):
-        self.assertGreaterEqual(len(self.fixture_cases), 475)
+        import hashlib
+
+        names_all = [name for name, _, _ in self.fixture_cases]
+        names_488 = [n for n in names_all if n != "surface_input.invalid.chord_overflow.json"]
+        self.assertEqual(len(names_488), 488)
+        self.assertIn(len(names_all), (488, 489))
+        self.assertIn("surface_request.invalid.origin_unknown.json", names_488)
+        self.assertEqual(
+            hashlib.sha256("\n".join(names_488).encode("utf-8")).hexdigest(),
+            "0152797c88a120d4870524f0b8cbed6eeae16a2e0a0089a895968987a89d3e8a",
+        )
+        if len(names_all) == 489:
+            self.assertEqual(
+                hashlib.sha256("\n".join(names_all).encode("utf-8")).hexdigest(),
+                "ca0ef707054090c6576c47ca7838b5a43da82767ec7e4da195787d7c9589d9c0",
+            )
         for idx, (name, _, expected) in enumerate(self.fixture_cases):
             self.assertTrue(
                 ".valid." in name or ".invalid." in name,
@@ -517,6 +636,14 @@ class DecoderConformanceTests(unittest.TestCase):
             with self.subTest(case=name):
                 self.assertEqual(
                     self.r1_084_verdicts[idx],
+                    {"rust": expected, "go": expected, "python": expected, "checker": expected},
+                )
+
+    def test_properties_without_additional_properties_false_four_way_conformance(self):
+        for idx, (name, _, _, expected) in enumerate(self.open_props_cases):
+            with self.subTest(case=name):
+                self.assertEqual(
+                    self.open_props_verdicts[idx],
                     {"rust": expected, "go": expected, "python": expected, "checker": expected},
                 )
 

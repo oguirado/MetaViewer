@@ -453,6 +453,7 @@ fn body_known_family_version_mismatch_is_unknown_version() {
         "unknown_family/v0.2",
         "unknown_family/v9.9",
         "envelope/v9.9",
+        "action_proposal",
     ] {
         let mut bad = base.clone();
         bad["body"]["schema"] = unknown_family.into();
@@ -462,4 +463,50 @@ fn body_known_family_version_mismatch_is_unknown_version() {
             "{unknown_family}"
         );
     }
+
+    let frame_ref: serde_json::Value = serde_json::from_str(include_str!(
+        "../../contracts/examples/v0.2/frame_ref.valid.json"
+    ))
+    .unwrap();
+    let mut frame_12 = frame_ref.clone();
+    frame_12["extra_tag"] = "twelfth".into();
+    let schema_10 = serde_json::json!({
+        "$defs": {
+            "frame_ref_12": {
+                "type": "object",
+                "properties": {
+                    "schema": { "const": "frame_ref/v0.2" },
+                    "surface_id": { "type": "string" },
+                    "generation": { "type": "integer" },
+                    "tick": { "type": "integer" },
+                    "ts_ns": { "type": "integer" },
+                    "width": { "type": "integer" },
+                    "height": { "type": "integer" },
+                    "format": { "const": "rgb24" },
+                    "ramws_path": { "type": "string" },
+                    "sha256": { "type": "string" },
+                    "capture_us": { "type": "integer" },
+                    "extra_tag": { "type": "string" }
+                },
+                "required": [
+                    "schema", "surface_id", "generation", "tick", "ts_ns",
+                    "width", "height", "format", "ramws_path", "sha256", "capture_us"
+                ],
+                "additionalProperties": false,
+                "maxProperties": 256
+            }
+        },
+        "$ref": "#/$defs/frame_ref_12",
+        "maxProperties": 10
+    });
+    let mut schema_12 = schema_10.clone();
+    schema_12["maxProperties"] = 12.into();
+    assert!(!metaviewer_core::valid(&frame_12, &schema_10, &schema_10));
+    assert!(metaviewer_core::valid(&frame_12, &schema_12, &schema_12));
+    let typeless_obj_constraint = serde_json::json!({ "maxProperties": 1 });
+    assert!(metaviewer_core::valid(
+        &serde_json::json!("non-object"),
+        &typeless_obj_constraint,
+        &typeless_obj_constraint
+    ));
 }

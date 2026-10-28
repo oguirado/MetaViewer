@@ -24,8 +24,11 @@
 //! surface_request/v0.2 op="input" command bound to its validated proposal_id
 //! (or a core-minted human-input-<core_seq> id if absent) and tracked across
 //! recovery so daemon action_receipt/v0.2 and error outcomes settle against the
-//! originating UI peer as typed action_verdict/v0.2 outcomes and never emit
-//! action_verdict/v0.2 back to the daemon.
+//! originating UI peer as typed action_verdict/v0.2 outcomes without emitting a
+//! human-input verdict back to the daemon. Recoverable daemon policy refusals
+//! (such as an in-flight frame_ref/v0.2 or surface_event/v0.2 on a destroyed
+//! surface) emit a refused POLICY action_verdict/v0.2 that the daemon stream
+//! consumes after sequence/nonce reservation without terminating the session.
 //! [TARGET, unit decision] An expired RAM publication is not admissible evidence.
 //! Drop that frame without retiring the authenticated daemon: its bounded lease
 //! window can advance while an earlier journal transaction is being persisted.
@@ -1213,13 +1216,17 @@ impl Server {
                 let settled_seq = out.as_ref().map(|o| o.core_seq);
                 if let Some(out) = out {
                     if let Some(reason) = out.reason {
-                        return self.refuse_at(
-                            now_ns,
-                            &env.from,
-                            &env.msg_id,
-                            reason,
-                            out.core_seq,
-                        );
+                        if let Err(error) =
+                            self.refuse_at(now_ns, &env.from, &env.msg_id, reason, out.core_seq)
+                        {
+                            if !matches!(
+                                error.downcast_ref::<SendFailure>(),
+                                Some(SendFailure::QueueOverflow(_))
+                            ) {
+                                return Err(error);
+                            }
+                        }
+                        return Ok(());
                     }
                     self.notify_cancellations_at(now_ns, &out.cancelled, out.core_seq)?;
                 }
@@ -1295,7 +1302,17 @@ impl Server {
                     return Ok(());
                 };
                 if let Some(reason) = out.reason {
-                    return self.refuse_at(now_ns, &env.from, &env.msg_id, reason, out.core_seq);
+                    if let Err(error) =
+                        self.refuse_at(now_ns, &env.from, &env.msg_id, reason, out.core_seq)
+                    {
+                        if !matches!(
+                            error.downcast_ref::<SendFailure>(),
+                            Some(SendFailure::QueueOverflow(_))
+                        ) {
+                            return Err(error);
+                        }
+                    }
+                    return Ok(());
                 }
                 self.fanout_at(now_ns, env.body.clone());
             }
@@ -4912,6 +4929,105 @@ mod nv_regressions {
                 msg.contains("Corrupt(empty)"),
                 "expected Corrupt(empty), got: {msg}"
             );
+        });
+    }
+
+    #[test]
+    fn daemon_refusal_propagates_disconnected_and_swallows_queue_overflow() {
+        use std::os::unix::fs::PermissionsExt;
+        run(async {
+            let mut f = Fixture::new();
+            f.seed();
+            f.server
+                .authority
+                .apply(Input::Lifecycle {
+                    surface_id: "surface-demo".into(),
+                    update: LifecycleUpdate::Destroyed,
+                })
+                .unwrap();
+
+            let shm_dir = PathBuf::from(format!(
+                "/dev/shm/mv-d1-disc-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir(&shm_dir).unwrap();
+            fs::set_permissions(&shm_dir, fs::Permissions::from_mode(0o700)).unwrap();
+            let shm_file = shm_dir.join("f.rgb");
+            let pixels = vec![10u8; 1280 * 720 * 3];
+            fs::write(&shm_file, &pixels).unwrap();
+            fs::set_permissions(&shm_file, fs::Permissions::from_mode(0o600)).unwrap();
+
+            let frame_body = serde_json::json!({
+                "schema": "frame_ref/v0.2",
+                "surface_id": "surface-demo",
+                "generation": 2,
+                "tick": 2,
+                "ts_ns": 2000,
+                "width": 1280,
+                "height": 720,
+                "format": "rgb24",
+                "ramws_path": shm_file.to_str().unwrap(),
+                "sha256": sha256_hex(&pixels),
+                "capture_us": 50
+            });
+            let event_body = serde_json::json!({
+                "schema": "surface_event/v0.2",
+                "event": "state_changed",
+                "data": {
+                    "surface": {
+                        "schema": "surface/v0.2",
+                        "surface_id": "surface-demo",
+                        "kind": "game_capsule",
+                        "display": "display-nv",
+                        "geometry": { "w": 1280, "h": 720 },
+                        "state": "destroyed",
+                        "visibility": "unfolded",
+                        "control": "agent",
+                        "profile_id": "profile-demo"
+                    }
+                }
+            });
+
+            let daemon_ep = f.endpoint(Component::Daemon);
+            let daemon_rx = f.attach(Component::Daemon, 1);
+            // Fill the 1-slot queue so the next refusal hits QueueOverflow(daemon), which is swallowed.
+            f.server
+                .send(
+                    &daemon_ep,
+                    Command::Hello(Box::new(f.server.config.core.hello.clone())),
+                )
+                .unwrap();
+            assert!(f
+                .route(Component::Daemon, 2, frame_body.clone())
+                .await
+                .is_ok());
+            assert!(f
+                .route(Component::Daemon, 3, event_body.clone())
+                .await
+                .is_ok());
+
+            // Drop the receiver so the next refusal hits SendFailure::Disconnected(daemon), which must propagate.
+            drop(daemon_rx);
+            let err_frame = f
+                .route(Component::Daemon, 4, frame_body)
+                .await
+                .expect_err("expected Disconnected on FrameRef refusal with dropped daemon rx");
+            assert!(matches!(
+                err_frame.downcast_ref::<SendFailure>(),
+                Some(SendFailure::Disconnected(ep)) if ep == &daemon_ep
+            ));
+
+            let err_event = f
+                .route(Component::Daemon, 5, event_body)
+                .await
+                .expect_err("expected Disconnected on SurfaceEvent refusal with dropped daemon rx");
+            assert!(matches!(
+                err_event.downcast_ref::<SendFailure>(),
+                Some(SendFailure::Disconnected(ep)) if ep == &daemon_ep
+            ));
+
+            let _ = fs::remove_dir_all(&shm_dir);
         });
     }
 }

@@ -43,8 +43,13 @@ type Budget struct {
 	publishers []*Publisher
 }
 
+const (
+	minRGB24FrameBytes      = 3
+	minRetainedSurfaceBytes = 2 * minRGB24FrameBytes
+)
+
 func NewBudget(maxTotalBytes int64) (*Budget, error) {
-	if maxTotalBytes < 1 || maxTotalBytes > maxAllowedTotalBytes {
+	if maxTotalBytes < minRetainedSurfaceBytes || maxTotalBytes > maxAllowedTotalBytes {
 		return nil, frameError()
 	}
 	return &Budget{maxBytes: maxTotalBytes}, nil
@@ -205,11 +210,11 @@ func (p *Publisher) otherSurfacesBytes(excludeID string) int64 {
 	return total
 }
 func NewPublisher(cfg PublishConfig) (*Publisher, error) {
-	if cfg.MaxFrameBytes < 1 || cfg.MaxFrameBytes > 64<<20 || cfg.MaxPixels < 1 || cfg.MaxPixels > 64<<20 || cfg.MaxSurfaces < 1 || cfg.MaxRetained < 0 || cfg.MaxRetained == 1 || cfg.MaxRetained > 64 || cfg.MinRetention < 0 || cfg.MinRetention > maxAllowedRetention || cfg.MaxSurfaceBytes < 0 || cfg.MaxSurfaceBytes > maxAllowedSurfaceBytes || cfg.MaxTotalBytes < 0 || cfg.MaxTotalBytes > maxAllowedTotalBytes || (cfg.Budget != nil && (cfg.Budget.maxBytes < 1 || cfg.Budget.maxBytes > maxAllowedTotalBytes)) || (cfg.MaxSurfaceBytes > 0 && cfg.MaxTotalBytes > 0 && cfg.MaxSurfaceBytes > cfg.MaxTotalBytes) || filepath.Clean(cfg.RAMRoot) != cfg.RAMRoot || !strings.HasPrefix(cfg.RAMRoot, "/dev/shm/") {
+	if cfg.MaxFrameBytes < minRGB24FrameBytes || cfg.MaxFrameBytes > 64<<20 || cfg.MaxPixels < 1 || cfg.MaxPixels > 64<<20 || cfg.MaxSurfaces < 1 || cfg.MaxRetained < 0 || cfg.MaxRetained == 1 || cfg.MaxRetained > 64 || cfg.MinRetention < 0 || cfg.MinRetention > maxAllowedRetention || cfg.MaxSurfaceBytes < 0 || (cfg.MaxSurfaceBytes > 0 && cfg.MaxSurfaceBytes < minRetainedSurfaceBytes) || cfg.MaxSurfaceBytes > maxAllowedSurfaceBytes || cfg.MaxTotalBytes < 0 || (cfg.MaxTotalBytes > 0 && cfg.MaxTotalBytes < minRetainedSurfaceBytes) || cfg.MaxTotalBytes > maxAllowedTotalBytes || (cfg.Budget != nil && (cfg.Budget.maxBytes < minRetainedSurfaceBytes || cfg.Budget.maxBytes > maxAllowedTotalBytes)) || (cfg.MaxSurfaceBytes > 0 && cfg.MaxTotalBytes > 0 && cfg.MaxSurfaceBytes > cfg.MaxTotalBytes) || filepath.Clean(cfg.RAMRoot) != cfg.RAMRoot || !strings.HasPrefix(cfg.RAMRoot, "/dev/shm/") {
 		return nil, frameError()
 	}
 	p := &Publisher{cfg: cfg, surfaces: make(map[string]publication), now: time.Now}
-	if p.maxRetainedBytes() > p.maxTotalRetainedBytes() {
+	if p.maxRetainedBytes() < minRetainedSurfaceBytes || p.maxTotalRetainedBytes() < minRetainedSurfaceBytes || p.maxRetainedBytes() > p.maxTotalRetainedBytes() || (cfg.Budget != nil && p.maxRetainedBytes() > cfg.Budget.maxBytes) {
 		return nil, frameError()
 	}
 	root, e := openRAMRoot(cfg.RAMRoot, false)

@@ -444,78 +444,91 @@ pub fn valid(v: &Value, s: &Value, root: &Value) -> bool {
             return false;
         }
     }
-    match s["type"].as_str() {
-        Some("object") => {
-            let Some(obj) = v.as_object() else {
-                return false;
-            };
-            let Some(props) = s["properties"].as_object() else {
-                return false;
-            };
-            if s["required"].as_array().is_some_and(|r| {
-                r.iter()
-                    .any(|k| !obj.contains_key(k.as_str().unwrap_or("")))
-            }) {
-                return false;
-            }
-            if s["maxProperties"]
-                .as_u64()
-                .is_some_and(|m| obj.len() as u64 > m)
-            {
-                return false;
-            }
-            obj.iter().all(|(k, value)| {
-                props
-                    .get(k)
-                    .is_some_and(|schema| valid(value, schema, root))
+    if let Some(kind) = s["type"].as_str() {
+        let type_ok = match kind {
+            "object" => v.is_object() && s["properties"].is_object(),
+            "array" => v.is_array(),
+            "string" => v.is_string(),
+            "integer" => v.is_number() && (v.as_u64().is_some() || v.as_i64().is_some()),
+            "number" => v.is_number(),
+            "boolean" => v.is_boolean(),
+            "null" => v.is_null(),
+            _ => false,
+        };
+        if !type_ok {
+            return false;
+        }
+    }
+    if let Some(obj) = v.as_object() {
+        if s["required"].as_array().is_some_and(|r| {
+            r.iter()
+                .any(|k| !obj.contains_key(k.as_str().unwrap_or("")))
+        }) {
+            return false;
+        }
+        if s["maxProperties"]
+            .as_u64()
+            .is_some_and(|m| obj.len() as u64 > m)
+        {
+            return false;
+        }
+        if s.get("additionalProperties")
+            .is_some_and(|ap| ap != &Value::Bool(false))
+        {
+            return false;
+        }
+        let closed = s["additionalProperties"] == Value::Bool(false);
+        let props = match s.get("properties") {
+            Some(Value::Object(p)) => Some(p),
+            Some(_) => return false,
+            None => None,
+        };
+        if !obj
+            .iter()
+            .all(|(k, value)| match props.and_then(|p| p.get(k)) {
+                Some(schema) => valid(value, schema, root),
+                None => !closed,
             })
+        {
+            return false;
         }
-        Some("array") => {
-            let Some(a) = v.as_array() else {
-                return false;
-            };
-            !s["minItems"].as_u64().is_some_and(|n| (a.len() as u64) < n)
-                && !s["maxItems"].as_u64().is_some_and(|n| a.len() as u64 > n)
-                && a.iter().all(|v| valid(v, &s["items"], root))
+    }
+    if let Some(a) = v.as_array() {
+        if s["minItems"].as_u64().is_some_and(|n| (a.len() as u64) < n)
+            || s["maxItems"].as_u64().is_some_and(|n| a.len() as u64 > n)
+            || (s.get("items").is_some() && !a.iter().all(|v| valid(v, &s["items"], root)))
+        {
+            return false;
         }
-        Some("string") => {
-            let Some(text) = v.as_str() else {
-                return false;
-            };
-            let count = text.chars().count() as u64;
-            !s["minLength"].as_u64().is_some_and(|n| count < n)
-                && !s["maxLength"].as_u64().is_some_and(|n| count > n)
-                && s["pattern"].as_str().is_none_or(|p| pattern_ok(text, p))
+    }
+    if let Some(text) = v.as_str() {
+        let count = text.chars().count() as u64;
+        if s["minLength"].as_u64().is_some_and(|n| count < n)
+            || s["maxLength"].as_u64().is_some_and(|n| count > n)
+            || !s["pattern"].as_str().is_none_or(|p| pattern_ok(text, p))
+        {
+            return false;
         }
-        Some("integer" | "number") => {
-            if !v.is_number()
-                || (s["type"] == "integer" && v.as_u64().is_none() && v.as_i64().is_none())
-            {
-                return false;
-            }
-            // Schema bounds are exact safe integers; compare integer rails before
-            // floating point so large wire integers never round across a bound.
-            for (key, minimum) in [("minimum", true), ("maximum", false)] {
-                if let Some(bound) = s.get(key).and_then(Value::as_i64) {
-                    let order = if let Some(n) = v.as_i64() {
-                        Some(n.cmp(&bound))
-                    } else if let Some(n) = v.as_u64() {
-                        Some(i128::from(n).cmp(&i128::from(bound)))
-                    } else {
-                        v.as_f64().and_then(|n| n.partial_cmp(&(bound as f64)))
-                    };
-                    if order.is_none_or(|o| if minimum { o.is_lt() } else { o.is_gt() }) {
-                        return false;
-                    }
+    }
+    if v.is_number() {
+        // Schema bounds are exact safe integers; compare integer rails before
+        // floating point so large wire integers never round across a bound.
+        for (key, minimum) in [("minimum", true), ("maximum", false)] {
+            if let Some(bound) = s.get(key).and_then(Value::as_i64) {
+                let order = if let Some(n) = v.as_i64() {
+                    Some(n.cmp(&bound))
+                } else if let Some(n) = v.as_u64() {
+                    Some(i128::from(n).cmp(&i128::from(bound)))
+                } else {
+                    v.as_f64().and_then(|n| n.partial_cmp(&(bound as f64)))
+                };
+                if order.is_none_or(|o| if minimum { o.is_lt() } else { o.is_gt() }) {
+                    return false;
                 }
             }
-            true
         }
-        Some("boolean") => v.is_boolean(),
-        Some("null") => v.is_null(),
-        None => true,
-        _ => false,
     }
+    true
 }
 
 /// Presence differs from JSON null; an optional non-nullable field must still

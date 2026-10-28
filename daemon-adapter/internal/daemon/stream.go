@@ -17,6 +17,7 @@ import (
 	"io"
 	"metaviewer/daemon-adapter/internal/ipc"
 	"net"
+	"os"
 	"sync"
 )
 
@@ -257,7 +258,13 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 			fail(err)
 			return exitLoop(err)
 		}
-		var body struct{ Schema, Component string }
+		var body struct {
+			Schema     string `json:"schema"`
+			Component  string `json:"component"`
+			ProposalID string `json:"proposal_id"`
+			Decision   string `json:"decision"`
+			ReasonCode string `json:"reason_code"`
+		}
 		if err = json.Unmarshal(in.Body, &body); err != nil {
 			fail(err)
 			return exitLoop(err)
@@ -268,7 +275,8 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 			return exitLoop(err)
 		}
 		isHello := first && body.Schema == "hello/v0.2" && body.Component == "core"
-		if !isHello && body.Schema != "surface_request/v0.2" && body.Schema != "record_request/v0.2" {
+		isPolicyRefusal := body.Schema == "action_verdict/v0.2" && body.Decision == "refused" && body.ReasonCode == "POLICY"
+		if !isHello && !isPolicyRefusal && body.Schema != "surface_request/v0.2" && body.Schema != "record_request/v0.2" {
 			err = errors.New("core surface request required")
 			fail(err)
 			return exitLoop(err)
@@ -284,6 +292,10 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 			return exitLoop(err)
 		}
 		first = false
+		if isPolicyRefusal {
+			fmt.Fprintf(os.Stderr, "daemon: consumed policy refusal proposal_id=%.128s\n", body.ProposalID)
+			continue
+		}
 		if isHello {
 			continue
 		}

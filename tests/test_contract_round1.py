@@ -137,7 +137,7 @@ class RoundOneContracts(unittest.TestCase):
             ('r1-088-body-v0.1', {**base, 'body': {**proposal, 'schema': 'action_proposal/v0.1'}},
              'CLASSIFY:UnknownVersion', 'unknown_version'),
             ('r1-088-unknown-family', {**base, 'body': {**proposal, 'schema': 'unknown_family/v0.2'}},
-             'CLASSIFY:Malformed', 'unknown_version'),
+             'CLASSIFY:Malformed', 'bad_shape'),
         ]
         import sys
         sys.path.insert(0, str(ROOT / 'agents'))

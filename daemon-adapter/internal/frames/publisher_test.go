@@ -642,6 +642,76 @@ func TestNewPublisherRejectsDefaultSurfaceOverTotal(t *testing.T) {
 		t.Fatalf("expected NewPublisher with MaxTotalBytes=128MiB to succeed: %v", err)
 	}
 	_ = good.Close()
+
+	// Impossible cap configs (< 3 bytes for a 1x1 RGB24 frame, < 6 bytes for 2 minimal generations, or shared Budget smaller than MaxSurfaceBytes) must be refused.
+	for _, badBudgetBytes := range []int64{0, 2, 3, 5} {
+		if _, err := NewBudget(badBudgetBytes); err == nil {
+			t.Fatalf("expected NewBudget(%d) (< 6B 2-generation minimum) to be refused", badBudgetBytes)
+		}
+	}
+	smallBudget, err := NewBudget(12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, badCfg := range []PublishConfig{
+		{RAMRoot: root, MaxFrameBytes: 2, MaxPixels: 64, MaxSurfaces: 4},
+		{RAMRoot: root, MaxFrameBytes: 4096, MaxPixels: 64, MaxSurfaces: 4, MaxSurfaceBytes: 2, MaxTotalBytes: 24},
+		{RAMRoot: root, MaxFrameBytes: 4096, MaxPixels: 64, MaxSurfaces: 4, MaxSurfaceBytes: 3, MaxTotalBytes: 24},
+		{RAMRoot: root, MaxFrameBytes: 4096, MaxPixels: 64, MaxSurfaces: 4, MaxSurfaceBytes: 5, MaxTotalBytes: 24},
+		{RAMRoot: root, MaxFrameBytes: 4096, MaxPixels: 64, MaxSurfaces: 4, MaxSurfaceBytes: 6, MaxTotalBytes: 3},
+		{RAMRoot: root, MaxFrameBytes: 4096, MaxPixels: 64, MaxSurfaces: 4, MaxSurfaceBytes: 6, MaxTotalBytes: 5},
+		{RAMRoot: root, MaxFrameBytes: 4096, MaxPixels: 64, MaxSurfaces: 4, MaxSurfaceBytes: 24, MaxTotalBytes: 24, Budget: smallBudget},
+	} {
+		if badPub, err := NewPublisher(badCfg); err == nil {
+			_ = badPub.Close()
+			t.Fatalf("expected impossible PublishConfig %+v to be refused", badCfg)
+		}
+	}
+	// Positive control: MaxSurfaceBytes: 6, MaxTotalBytes: 6 (exactly 2 minimal 1x1 RGB24 generations) is accepted and advances across 3 distinct 1x1 frames.
+	minPub, err := NewPublisher(PublishConfig{
+		RAMRoot:         root,
+		MaxFrameBytes:   4096,
+		MaxPixels:       1,
+		MaxSurfaces:     1,
+		MaxRetained:     2,
+		MaxSurfaceBytes: 6,
+		MaxTotalBytes:   6,
+	})
+	if err != nil {
+		t.Fatalf("expected 6B (2 minimal generations) PublishConfig to succeed: %v", err)
+	}
+	defer minPub.Close()
+	source1x1 := filepath.Join(root, "source")
+	b1x1 := capsule.Binding{Surface: capsule.Surface{SurfaceID: "s1x1", Geometry: capsule.Geometry{W: 1, H: 1}}, Container: "srf-id-demo", FramesRoot: source1x1, Window: "w1"}
+	for seq := uint64(1); seq <= 3; seq++ {
+		rgb := []byte{byte(seq * 10), 20, 30}
+		img := image.NewRGBA(image.Rect(0, 0, 1, 1))
+		img.Set(0, 0, color.RGBA{R: rgb[0], G: rgb[1], B: rgb[2], A: 255})
+		p1x1 := filepath.Join(source1x1, fmt.Sprintf("min1x1-%d.png", seq))
+		outF, cErr := os.OpenFile(p1x1, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		if cErr != nil {
+			t.Fatal(cErr)
+		}
+		if eErr := png.Encode(outF, img); eErr != nil {
+			_ = outF.Close()
+			t.Fatal(eErr)
+		}
+		_ = outF.Close()
+		nf1x1 := capsule.NativeFrame{
+			Path:        p1x1,
+			Seq:         seq,
+			Generation:  b1x1.Container,
+			Width:       1,
+			Height:      1,
+			SHA256RGB24: fmt.Sprintf("%x", sha256.Sum256(rgb)),
+			Window:      &capsule.Window{ID: "w1", W: 1, H: 1},
+			TSNS:        seq * 100,
+			CaptureUS:   10,
+		}
+		if _, pErr := minPub.Publish("s1x1", b1x1, nf1x1); pErr != nil {
+			t.Fatalf("expected 1x1 frame seq %d to publish under 6B cap: %v", seq, pErr)
+		}
+	}
 }
 
 func TestDedupPollEvictsExpiredBurst(t *testing.T) {
@@ -878,6 +948,13 @@ func TestHardCapAtomicRefusalAndSurfaceCapBoundaries(t *testing.T) {
 				MaxSurfaceBytes: surfCap,
 				MaxTotalBytes:   30,
 			})
+			if surfCap < minRetainedSurfaceBytes {
+				if sErr == nil {
+					_ = sp.Close()
+					t.Fatalf("surfaceCap=%d: expected NewPublisher to refuse cap below %dB (2 minimal generations)", surfCap, minRetainedSurfaceBytes)
+				}
+				return
+			}
 			if sErr != nil {
 				t.Fatal(sErr)
 			}
@@ -886,12 +963,6 @@ func TestHardCapAtomicRefusalAndSurfaceCapBoundaries(t *testing.T) {
 			f1 := f
 			f1.Seq = 1
 			r1, err1 := sp.Publish("a", b, f1)
-			if surfCap < 6 {
-				if err1 == nil {
-					t.Fatalf("surfaceCap=%d: expected 1st 6B frame to be refused", surfCap)
-				}
-				return
-			}
 			if err1 != nil {
 				t.Fatalf("surfaceCap=%d: expected 1st 6B frame to succeed: %v", surfCap, err1)
 			}

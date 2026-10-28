@@ -88,7 +88,7 @@ class CodecRegressions(unittest.TestCase):
                         oracle.validate({**base_env, 'body': body}, envelope_schema)
                     with self.assertRaises(e.EnvelopeError) as caught:
                         fixtures._wrap(body)
-                    self.assertEqual(caught.exception.code, 'unknown_version')
+                    self.assertEqual(caught.exception.code, 'bad_shape')
                     continue
                 env = body if body['schema'] == 'envelope/v0.2' else fixtures._wrap(body)
                 oracle.validate(env, envelope_schema)

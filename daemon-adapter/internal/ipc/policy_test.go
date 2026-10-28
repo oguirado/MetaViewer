@@ -48,9 +48,11 @@ func TestFrozenCeilings(t *testing.T) {
 }
 
 const (
-	minContractFixtureCount = 475
-	minContractEntryCount   = 476
-	minContractSchemaCount  = 20
+	minContractFixtureCount  = 488
+	minContractEntryCount    = 489
+	minContractSchemaCount   = 21
+	pinnedFixtureSet488SHA   = "0152797c88a120d4870524f0b8cbed6eeae16a2e0a0089a895968987a89d3e8a"
+	pinnedFixtureSet489SHA   = "ca0ef707054090c6576c47ca7838b5a43da82767ec7e4da195787d7c9589d9c0"
 )
 
 func verifyContractFixtureCorpus(examplesDir, schemasDir string) ([]string, error) {
@@ -66,8 +68,33 @@ func verifyContractFixtureCorpus(examplesDir, schemasDir string) ([]string, erro
 	if err != nil {
 		return nil, err
 	}
-	if len(entries) < minContractEntryCount || len(files) < minContractFixtureCount || len(schemas) < minContractSchemaCount {
-		return nil, fmt.Errorf("fixture corpus shrunk: entries=%d files=%d schemas=%d", len(entries), len(files), len(schemas))
+	if len(entries) < minContractEntryCount || (len(files) != minContractFixtureCount && len(files) != minContractFixtureCount+1) || len(schemas) < minContractSchemaCount {
+		return nil, fmt.Errorf("fixture corpus count mismatch: entries=%d files=%d schemas=%d", len(entries), len(files), len(schemas))
+	}
+	var namesAll, names488 []string
+	hasOriginUnknown := false
+	for _, f := range files {
+		base := filepath.Base(f)
+		namesAll = append(namesAll, base)
+		if base != "surface_input.invalid.chord_overflow.json" {
+			names488 = append(names488, base)
+		}
+		if base == "surface_request.invalid.origin_unknown.json" {
+			hasOriginUnknown = true
+		}
+	}
+	if !hasOriginUnknown || len(names488) != minContractFixtureCount {
+		return nil, fmt.Errorf("missing required fixture identity (hasOriginUnknown=%v len488=%d)", hasOriginUnknown, len(names488))
+	}
+	sum488 := sha256.Sum256([]byte(strings.Join(names488, "\n")))
+	if hex.EncodeToString(sum488[:]) != pinnedFixtureSet488SHA {
+		return nil, fmt.Errorf("fixture identity set 488 sha256 mismatch: got %x want %s", sum488, pinnedFixtureSet488SHA)
+	}
+	if len(namesAll) == minContractFixtureCount+1 {
+		sum489 := sha256.Sum256([]byte(strings.Join(namesAll, "\n")))
+		if hex.EncodeToString(sum489[:]) != pinnedFixtureSet489SHA {
+			return nil, fmt.Errorf("fixture identity set 489 sha256 mismatch: got %x want %s", sum489, pinnedFixtureSet489SHA)
+		}
 	}
 	for _, s := range schemas {
 		prefix := strings.TrimSuffix(filepath.Base(s), ".schema.json")
@@ -117,9 +144,15 @@ func TestProductionEnvelopePolicy(t *testing.T) {
 	if err = json.Unmarshal(rawEnvSchema, &envSchema); err != nil {
 		t.Fatal(err)
 	}
+	if len(envSchema.Properties.Body.OneOf) == 0 {
+		t.Fatal("empty envelope body oneOf")
+	}
 	envelopeBodies := map[string]bool{"envelope": true}
 	for _, b := range envSchema.Properties.Body.OneOf {
-		envelopeBodies[strings.TrimSuffix(b.Ref, ".schema.json")] = true
+		if b.Ref == "" {
+			t.Fatal("empty envelope body $ref")
+		}
+		envelopeBodies[strings.TrimSuffix(filepath.Base(b.Ref), ".schema.json")] = true
 	}
 	files, err := verifyContractFixtureCorpus("../../../contracts/examples/v0.2", "../../../contracts/v0.2")
 	if err != nil {
@@ -393,12 +426,190 @@ func TestT6Open03FixtureCountAndSchemaCoverage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("production fixture corpus failed check: %v", err)
 	}
-	if len(files) < minContractFixtureCount {
-		t.Fatalf("fixture count=%d, want >= %d", len(files), minContractFixtureCount)
+	if len(files) != minContractFixtureCount && len(files) != minContractFixtureCount+1 {
+		t.Fatalf("fixture count=%d, want %d (+1 chord_overflow)", len(files), minContractFixtureCount)
 	}
 	// Negative control: empty or incomplete directory is refused.
 	if _, err := verifyContractFixtureCorpus(t.TempDir(), "../../../contracts/v0.2"); err == nil {
 		t.Fatal("empty fixture directory accepted")
+	}
+}
+
+func TestTypelessRefSiblingMaxProperties(t *testing.T) {
+	rawEnv, err := os.ReadFile("../../../contracts/examples/v0.2/envelope.valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawFrame, err := os.ReadFile("../../../contracts/examples/v0.2/frame_ref.valid.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envObj map[string]any
+	if err := json.Unmarshal(rawEnv, &envObj); err != nil {
+		t.Fatal(err)
+	}
+	var frameObj map[string]any
+	if err := json.Unmarshal(rawFrame, &frameObj); err != nil {
+		t.Fatal(err)
+	}
+	frameObj12 := map[string]any{}
+	for k, v := range frameObj {
+		frameObj12[k] = v
+	}
+	frameObj12["extra_tag"] = "twelfth"
+
+	makeCustomPolicy := func(maxProps int) *SchemaPolicy {
+		t.Helper()
+		rawEnvSchema, err := os.ReadFile("../../../contracts/v0.2/envelope.schema.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var envSchema map[string]any
+		d := json.NewDecoder(strings.NewReader(string(rawEnvSchema)))
+		d.UseNumber()
+		if err := d.Decode(&envSchema); err != nil {
+			t.Fatal(err)
+		}
+		props := envSchema["properties"].(map[string]any)
+		props["body"] = map[string]any{
+			"oneOf": []any{
+				map[string]any{
+					"$ref":          "frame_ref_12.schema.json",
+					"maxProperties": json.Number(fmt.Sprint(maxProps)),
+				},
+			},
+		}
+		envSchemaBytes, err := json.Marshal(envSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var frameSchema map[string]any
+		rawFrameSchema, err := os.ReadFile("../../../contracts/v0.2/frame_ref.schema.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		df := json.NewDecoder(strings.NewReader(string(rawFrameSchema)))
+		df.UseNumber()
+		if err := df.Decode(&frameSchema); err != nil {
+			t.Fatal(err)
+		}
+		fProps := frameSchema["properties"].(map[string]any)
+		fProps["extra_tag"] = map[string]any{"type": "string", "minLength": json.Number("1"), "maxLength": json.Number("32")}
+		frameSchemaBytes, err := json.Marshal(frameSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		memFS := fstest.MapFS{
+			"envelope.schema.json":     &fstest.MapFile{Data: envSchemaBytes},
+			"frame_ref_12.schema.json": &fstest.MapFile{Data: frameSchemaBytes},
+		}
+		pol, err := NewPolicy(ceilingConfig(), memFS, &dummyPolicy{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pol
+	}
+
+	envObj["body"] = frameObj12
+	wire12, err := json.Marshal(envObj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := makeCustomPolicy(10).ValidateEnvelope(wire12); err == nil {
+		t.Fatal("expected 12-key frame_ref to be refused under typeless $ref maxProperties: 10")
+	}
+	if _, err := makeCustomPolicy(12).ValidateEnvelope(wire12); err != nil {
+		t.Fatalf("negative control failed: expected 12-key frame_ref to be accepted under typeless $ref maxProperties: 12: %v", err)
+	}
+	// Non-object value under typeless node with maxProperties must not fail object-only check.
+	nonObjNode := &schemaNode{limits: map[string]int{"maxProperties": 1}}
+	if !nonObjNode.accept("plain-string") {
+		t.Fatal("expected typeless schemaNode with maxProperties to accept non-object string value")
+	}
+}
+
+func compileTestSchemaNode(s map[string]any) (*schemaNode, error) {
+	n := &schemaNode{props: map[string]*schemaNode{}, limits: map[string]int{}}
+	for k, v := range s {
+		switch k {
+		case "type":
+			n.kind, _ = v.(string)
+		case "additionalProperties":
+			b, ok := v.(bool)
+			if !ok || b {
+				return nil, errors.New("open additionalProperties")
+			}
+			n.closed = true
+		case "required":
+			for _, x := range v.([]any) {
+				n.required = append(n.required, x.(string))
+			}
+		case "properties":
+			for name, x := range v.(map[string]any) {
+				child, err := compileTestSchemaNode(x.(map[string]any))
+				if err != nil {
+					return nil, err
+				}
+				n.props[name] = child
+			}
+		case "minimum", "maximum", "minLength", "maxLength", "minItems", "maxItems", "maxProperties":
+			i, err := v.(json.Number).Int64()
+			if err != nil {
+				return nil, err
+			}
+			n.limits[k] = int(i)
+		}
+	}
+	return n, nil
+}
+
+func TestSchemaNodeAcceptProbe(t *testing.T) {
+	evalPair := func(rawLine string) bool {
+		t.Helper()
+		d := json.NewDecoder(strings.NewReader(rawLine))
+		d.UseNumber()
+		var pair []any
+		if err := d.Decode(&pair); err != nil || len(pair) != 2 {
+			t.Fatalf("invalid schema probe pair %q: %v", rawLine, err)
+		}
+		schMap, ok := pair[1].(map[string]any)
+		if !ok {
+			return false
+		}
+		node, err := compileTestSchemaNode(schMap)
+		if err != nil {
+			return false
+		}
+		return node.accept(pair[0])
+	}
+	if !evalPair(`[{"a":1,"zzz":1},{"properties":{"a":{"type":"integer"}}}]`) {
+		t.Fatal("expected open properties schema to admit extra key zzz")
+	}
+	if evalPair(`[{"a":"bad","zzz":1},{"properties":{"a":{"type":"integer"}}}]`) {
+		t.Fatal("expected open properties schema to refuse invalid declared property a")
+	}
+	if evalPair(`[{"a":1,"zzz":1},{"properties":{"a":{"type":"integer"}},"additionalProperties":false}]`) {
+		t.Fatal("expected closed properties schema to refuse extra key zzz")
+	}
+	inPath := os.Getenv("MV_SCHEMA_VALID_IN")
+	if inPath == "" {
+		return
+	}
+	raw, err := os.ReadFile(inPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		if line == "" {
+			continue
+		}
+		fmt.Fprintln(&out, evalPair(line))
+	}
+	if outPath := os.Getenv("MV_SCHEMA_VALID_OUT"); outPath != "" {
+		if err := os.WriteFile(outPath, []byte(out.String()), 0600); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

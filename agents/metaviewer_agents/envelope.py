@@ -610,6 +610,12 @@ for _name, _schema in _V02_FILES.items():
     if _name != "envelope.schema.json":
         _BODIES[_name.removesuffix(".schema.json") + "/v0.2"] = _schema
 
+_KNOWN_BODY_FAMILIES = frozenset(
+    _name.removesuffix(".schema.json")
+    for _name in _V02_FILES
+    if _name != "envelope.schema.json"
+)
+
 for _schema in _BODIES.values():
     _audit(_schema)
 del _schema
@@ -806,9 +812,25 @@ def validate_envelope(value: object) -> dict:
     discriminator = body.get("schema")
     if not isinstance(discriminator, str) or not discriminator:
         raise EnvelopeError("bad_shape", "body discriminator malformed")
-    target = _BODIES.get(discriminator)
-    if target is None or discriminator.rsplit("/", 1)[-1] != schema.rsplit("/", 1)[-1]:
-        raise EnvelopeError("unknown_version", "unknown body version")
+    if schema == _LEGACY_SCHEMA:
+        target = _BODIES.get(discriminator)
+        if target is None or discriminator.rsplit("/", 1)[-1] != "v0.1":
+            raise EnvelopeError("unknown_version", "unknown body version")
+    else:
+        if "/" not in discriminator:
+            raise EnvelopeError("bad_shape", "body discriminator malformed")
+        body_family, body_version = discriminator.split("/", 1)
+        if not body_version or body_family not in _KNOWN_BODY_FAMILIES:
+            raise EnvelopeError("bad_shape", "body discriminator malformed")
+        if body_version != "v0.2":
+            raise EnvelopeError("unknown_version", "unknown body version")
+        if (discriminator == "hello/v0.2"
+                and isinstance(body.get("contract_version"), str)
+                and body.get("contract_version") != "v0.2"):
+            raise EnvelopeError("unknown_version", "unknown body version")
+        target = _BODIES.get(discriminator)
+        if target is None:
+            raise EnvelopeError("bad_shape", "body discriminator malformed")
     try:
         _check(body, target, 0)
     except (_Mismatch, RecursionError):

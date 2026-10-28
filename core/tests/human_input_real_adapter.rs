@@ -973,16 +973,65 @@ fn real_daemon_adapter_exits_rc_2_on_disallowed_core_body() {
             }
         }
 
-        // Negative control: sending a non-surface_request body (such as action_verdict/v0.2)
-        // from core to the real daemon adapter causes it to exit with rc 2.
+        // Recoverable policy refusal: a refused POLICY action_verdict/v0.2 (such as an
+        // in-flight frame_ref/v0.2 on a destroyed surface, or an untracked proposal_id with
+        // core_seq 0) must be consumed by the shared daemon stream after sequence/nonce
+        // reservation, emit a bounded stderr diagnostic line with proposal_id, and leave
+        // subsequent surface_request/v0.2 commands working.
+        send_core(
+            &mut stream,
+            json!({
+                "schema": "action_verdict/v0.2",
+                "proposal_id": "destroyed-surface-frame-1",
+                "decision": "refused",
+                "reason_code": "POLICY",
+                "core_seq": 99
+            }),
+        )
+        .await;
+
+        send_core(
+            &mut stream,
+            json!({
+                "schema": "surface_request/v0.2",
+                "op": "input",
+                "params": {
+                    "surface_id": sid,
+                    "proposal_id": "human-after-policy-refusal-1",
+                    "origin": "human",
+                    "action": { "type": "key", "keys": ["Return"] }
+                }
+            }),
+        )
+        .await;
+        let mut got_after_refusal_applied = false;
+        let mut got_after_refusal_receipt = false;
+        while !got_after_refusal_applied || !got_after_refusal_receipt {
+            let reply = timeout(Duration::from_secs(5), read_frame(&mut stream))
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            let body = serde_json::to_value(reply.body).unwrap();
+            if body["schema"] == "surface_event/v0.2" && body["event"] == "input_applied" {
+                assert_eq!(body["data"]["proposal_id"], "human-after-policy-refusal-1");
+                got_after_refusal_applied = true;
+            } else if body["schema"] == "action_receipt/v0.2" {
+                assert_eq!(body["proposal_id"], "human-after-policy-refusal-1");
+                assert_eq!(body["error"], "");
+                got_after_refusal_receipt = true;
+            }
+        }
+
+        // Negative control 1: sending an admitted action_verdict/v0.2 from core to the
+        // real daemon adapter causes it to exit with rc 2.
         send_core(
             &mut stream,
             json!({
                 "schema": "action_verdict/v0.2",
                 "proposal_id": "hi-old-untracked",
-                "decision": "refused",
-                "reason_code": "POLICY",
-                "core_seq": 99
+                "decision": "admitted",
+                "core_seq": 100
             }),
         )
         .await;
@@ -994,13 +1043,110 @@ fn real_daemon_adapter_exits_rc_2_on_disallowed_core_body() {
         assert_eq!(
             output.status.code(),
             Some(2),
-            "expected real mv-daemon-adapter to exit with rc 2 on disallowed body, stderr: {}",
+            "expected real mv-daemon-adapter to exit with rc 2 on admitted verdict, stderr: {}",
             String::from_utf8_lossy(&output.stderr)
         );
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
+            stderr.contains("proposal_id=destroyed-surface-frame-1"),
+            "expected consumed POLICY refusal diagnostic with proposal_id in stderr, got: {stderr}"
+        );
+        assert!(
             stderr.contains("core surface request required"),
             "expected 'core surface request required' in stderr, got: {stderr}"
+        );
+        drop(stream);
+
+        // Negative control 2: sending a refused non-POLICY action_verdict/v0.2 (e.g. STALE_FRAME)
+        // from core to the real daemon adapter also causes it to exit with rc 2.
+        let session_id_2 = "neg-hi-session-stale";
+        let adapter_2 = spawn_real_daemon_adapter(
+            &adapter_bin,
+            &runtime_dir,
+            &bin_dir,
+            &srf_state,
+            &paths.shm_root,
+            session_id_2,
+        );
+        let (mut stream_2, _) = timeout(Duration::from_secs(10), listener.accept())
+            .await
+            .expect("accept adapter 2")
+            .expect("unix accept 2");
+        let daemon_hello_2 = timeout(Duration::from_secs(5), read_frame(&mut stream_2))
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&daemon_hello_2.body).unwrap()["schema"],
+            "hello/v0.2"
+        );
+        let core_hello_2 = decode_envelope(
+            &json!({
+                "schema": "envelope/v0.2",
+                "msg_id": "core-hello-2",
+                "ts_ns": 1,
+                "from": { "component": "core", "instance": "core-1" },
+                "to": { "component": "daemon", "instance": "daemon-1" },
+                "session_id": session_id_2,
+                "seq": 1,
+                "nonce": "core-hello-2",
+                "body": {
+                    "schema": "hello/v0.2",
+                    "contract_version": "v0.2",
+                    "component": "core",
+                    "component_version": "0.1.2",
+                    "component_commit": DAEMON_COMMIT,
+                    "dependencies": []
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        write_frame(&mut stream_2, &core_hello_2).await.unwrap();
+
+        let stale_verdict = decode_envelope(
+            &json!({
+                "schema": "envelope/v0.2",
+                "msg_id": "core-stale-verdict",
+                "ts_ns": 2000,
+                "from": { "component": "core", "instance": "core-1" },
+                "to": { "component": "daemon", "instance": "daemon-1" },
+                "session_id": session_id_2,
+                "seq": 2,
+                "nonce": "core-stale-verdict",
+                "body": {
+                    "schema": "action_verdict/v0.2",
+                    "proposal_id": "stale-frame-refusal-1",
+                    "decision": "refused",
+                    "reason_code": "STALE_FRAME",
+                    "core_seq": 101
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        write_frame(&mut stream_2, &stale_verdict).await.unwrap();
+        let _ = timeout(Duration::from_secs(1), read_frame(&mut stream_2)).await;
+        drop(stream_2);
+
+        let output_2 = tokio::task::spawn_blocking(move || adapter_2.wait_with_output())
+            .await
+            .unwrap()
+            .unwrap();
+        let stderr_2 = String::from_utf8_lossy(&output_2.stderr);
+        assert_eq!(
+            output_2.status.code(),
+            Some(2),
+            "expected real mv-daemon-adapter to exit with rc 2 on refused STALE_FRAME verdict, stderr: {stderr_2}"
+        );
+        assert!(
+            stderr_2.contains("core surface request required"),
+            "expected 'core surface request required' in stderr_2, got: {stderr_2}"
+        );
+        assert!(
+            !stderr_2.contains("proposal_id=stale-frame-refusal-1"),
+            "non-POLICY refusal must not be consumed as POLICY refusal, got: {stderr_2}"
         );
     });
 }

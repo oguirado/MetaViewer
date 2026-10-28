@@ -341,58 +341,20 @@ func (n *schemaNode) accept(v any) bool {
 	}
 	switch n.kind {
 	case "":
-		return true
 	case "object":
-		obj, ok := v.(map[string]any)
-		if !ok || !bounded(len(obj), "", "maxProperties") {
+		if _, ok := v.(map[string]any); !ok {
 			return false
-		}
-		for _, key := range n.required {
-			if _, ok := obj[key]; !ok {
-				return false
-			}
-		}
-		for key, x := range obj {
-			child, ok := n.props[key]
-			if !ok {
-				if n.closed {
-					return false
-				}
-			} else if !child.accept(x) {
-				return false
-			}
 		}
 	case "array":
-		a, ok := v.([]any)
-		if !ok || !bounded(len(a), "minItems", "maxItems") {
+		if _, ok := v.([]any); !ok {
 			return false
 		}
-		for _, x := range a {
-			if n.items != nil && !n.items.accept(x) {
-				return false
-			}
-		}
 	case "string":
-		s, ok := v.(string)
-		if !ok || !bounded(utf8.RuneCountInString(s), "minLength", "maxLength") || (n.ramwsPath && !validRAMWSPath(s)) || (n.pattern != nil && !n.pattern.MatchString(s)) {
+		if _, ok := v.(string); !ok {
 			return false
 		}
 	case "integer", "number":
-		num, ok := v.(json.Number)
-		if !ok {
-			return false
-		}
-		r, ok := new(big.Rat).SetString(string(num))
-		if !ok {
-			return false
-		}
-		if n.kind == "integer" && (!integerLexeme.MatchString(string(num)) || !r.IsInt() || r.Cmp(big.NewRat(9007199254740991, 1)) > 0 || r.Cmp(big.NewRat(-9007199254740991, 1)) < 0) {
-			return false
-		}
-		if a, ok := n.limits["minimum"]; ok && r.Cmp(big.NewRat(int64(a), 1)) < 0 {
-			return false
-		}
-		if b, ok := n.limits["maximum"]; ok && r.Cmp(big.NewRat(int64(b), 1)) > 0 {
+		if _, ok := v.(json.Number); !ok {
 			return false
 		}
 	case "boolean":
@@ -405,6 +367,54 @@ func (n *schemaNode) accept(v any) bool {
 		}
 	default:
 		return false
+	}
+	switch val := v.(type) {
+	case map[string]any:
+		if !bounded(len(val), "", "maxProperties") {
+			return false
+		}
+		for _, key := range n.required {
+			if _, ok := val[key]; !ok {
+				return false
+			}
+		}
+		for key, x := range val {
+			child, ok := n.props[key]
+			if !ok {
+				if n.closed {
+					return false
+				}
+			} else if !child.accept(x) {
+				return false
+			}
+		}
+	case []any:
+		if !bounded(len(val), "minItems", "maxItems") {
+			return false
+		}
+		for _, x := range val {
+			if n.items != nil && !n.items.accept(x) {
+				return false
+			}
+		}
+	case string:
+		if !bounded(utf8.RuneCountInString(val), "minLength", "maxLength") || (n.ramwsPath && !validRAMWSPath(val)) || (n.pattern != nil && !n.pattern.MatchString(val)) {
+			return false
+		}
+	case json.Number:
+		r, ok := new(big.Rat).SetString(string(val))
+		if !ok {
+			return false
+		}
+		if n.kind == "integer" && (!integerLexeme.MatchString(string(val)) || !r.IsInt() || r.Cmp(big.NewRat(9007199254740991, 1)) > 0 || r.Cmp(big.NewRat(-9007199254740991, 1)) < 0) {
+			return false
+		}
+		if a, ok := n.limits["minimum"]; ok && r.Cmp(big.NewRat(int64(a), 1)) < 0 {
+			return false
+		}
+		if b, ok := n.limits["maximum"]; ok && r.Cmp(big.NewRat(int64(b), 1)) > 0 {
+			return false
+		}
 	}
 	return true
 }
