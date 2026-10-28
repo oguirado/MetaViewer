@@ -39,6 +39,8 @@ function collectProcessTreePids(rootPid) {
   const tree = new Set([rootPid]);
   try {
     const entries = readdirSync('/proc');
+    /** @type {Array<{ pid: number, ppid: number, pgrp: number, sid: number }>} */
+    const procs = [];
     for (const entry of entries) {
       if (!/^[0-9]+$/.test(entry)) continue;
       const pid = Number(entry);
@@ -51,11 +53,19 @@ function collectProcessTreePids(rootPid) {
         const ppid = Number(fields[1]);
         const pgrp = Number(fields[2]);
         const sid = Number(fields[3]);
-        if (ppid === rootPid || pgrp === rootPid || sid === rootPid || tree.has(ppid)) {
-          tree.add(pid);
-        }
+        procs.push({ pid, ppid, pgrp, sid });
       } catch {
         // Process exited during scan.
+      }
+    }
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const { pid, ppid, pgrp, sid } of procs) {
+        if (!tree.has(pid) && (ppid === rootPid || pgrp === rootPid || sid === rootPid || tree.has(ppid))) {
+          tree.add(pid);
+          changed = true;
+        }
       }
     }
   } catch {

@@ -1,11 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { MessageChannel } from 'node:worker_threads';
+import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { userInfo } from 'node:os';
 import { createTerminalHost } from '../electron/terminalHost.js';
+import { createPtySession } from '../electron/ptySession.js';
+import { MAX_COLS, MAX_ROWS, MIN_COLS, MIN_ROWS, runBroker } from '../electron/ptyBroker.js';
 import { installAuthorityWire, SIDE_TERMINAL_CHANNELS, WIRE_CHANNELS } from '../electron/authorityWire.js';
 import { createPreloadFacade, installPreload } from '../electron/preload.js';
 import { PRIVILEGED_ORIGIN } from '../electron/main.js';
@@ -467,4 +471,345 @@ test('G8: real node-pty shell open + attach + write "echo ok" + read + close rou
     }
   }
   assert.equal(alive, false, `Expected PTY pid ${shellPid} to be reaped after close`);
+});
+
+function isPidAlive(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 1) return false;
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const rparen = stat.lastIndexOf(')');
+    if (rparen >= 0) {
+      const state = stat.slice(rparen + 2).trim().split(/\s+/)[0];
+      if (state === 'Z') return false;
+    }
+  } catch (err) {
+    if (err?.code === 'ENOENT' || err?.code === 'ESRCH') return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err?.code !== 'ESRCH';
+  }
+}
+
+async function waitForCondition(predicate, timeoutMs = 4000, intervalMs = 25) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return predicate();
+}
+
+test('R3-ELECTRON-3 (tg6_electron#3): transitive 3-level process-tree reaping without node-pty and live sibling negative control', async (t) => {
+  const trackedPids = new Set();
+  const track = (pid) => {
+    if (Number.isSafeInteger(pid) && pid > 1 && pid !== process.pid) {
+      trackedPids.add(pid);
+    }
+  };
+  t.after(() => {
+    for (const pid of trackedPids) {
+      try {
+        process.kill(-pid, 'SIGKILL');
+      } catch {}
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {}
+    }
+  });
+
+  // Spawn a live sibling process outside the target session tree (negative control).
+  const sibling = spawn('/bin/sh', ['-c', 'exec sleep 60'], {
+    detached: true,
+    stdio: 'ignore',
+  });
+  sibling.unref();
+  track(sibling.pid);
+  assert.equal(
+    await waitForCondition(() => isPidAlive(sibling.pid), 4000),
+    true,
+    'sibling negative-control process must be alive before session open',
+  );
+
+  /** @type {{ leaderPid: number | null, childPid: number | null, grandchildPid: number | null }} */
+  const treePids = { leaderPid: null, childPid: null, grandchildPid: null };
+  let treeReadyResolve;
+  const treeReady = new Promise((r) => {
+    treeReadyResolve = r;
+  });
+
+  const childPtyAdapter = {
+    spawn() {
+      const dataListeners = [];
+      const exitListeners = [];
+      // Leader runs in its own session/pgrp; child and grandchild each detach into
+      // fresh sessions via node detached spawn so pgrp/sid !== leaderPid and ppid !== leaderPid for grandchild.
+      const treeScript = `
+        const { spawn } = require('node:child_process');
+        const child = spawn(process.execPath, [
+          '-e',
+          "const { spawn } = require('node:child_process'); const gc = spawn('/bin/sh', ['-c', 'exec sleep 60'], { detached: true, stdio: 'ignore' }); console.log('GC:' + gc.pid); setInterval(() => {}, 1000);"
+        ], { detached: true, stdio: ['ignore', 'pipe', 'ignore'] });
+        child.stdout.on('data', (chunk) => {
+          const m = String(chunk).match(/GC:(\\d+)/);
+          if (m) {
+            child.stdout.destroy();
+            console.log(JSON.stringify({ leader: process.pid, child: child.pid, grandchild: Number(m[1]) }));
+          }
+        });
+        setInterval(() => {}, 1000);
+      `;
+      const leader = spawn(process.execPath, ['-e', treeScript], {
+        detached: true,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      leader.unref();
+      track(leader.pid);
+      treePids.leaderPid = leader.pid;
+
+      let stdoutBuf = '';
+      leader.stdout.on('data', (chunk) => {
+        stdoutBuf += chunk.toString('utf8');
+        const lines = stdoutBuf.split('\n');
+        stdoutBuf = lines.pop() ?? '';
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('{')) continue;
+          try {
+            const parsed = JSON.parse(trimmed);
+            if (Number.isSafeInteger(parsed.child) && Number.isSafeInteger(parsed.grandchild)) {
+              treePids.childPid = parsed.child;
+              treePids.grandchildPid = parsed.grandchild;
+              track(parsed.child);
+              track(parsed.grandchild);
+              leader.stdout.destroy();
+              treeReadyResolve();
+            }
+          } catch {}
+        }
+        for (const fn of dataListeners) fn(chunk);
+      });
+
+      leader.on('exit', (code) => {
+        for (const fn of exitListeners) fn({ exitCode: code ?? 0 });
+      });
+
+      return {
+        pid: leader.pid,
+        onData(fn) {
+          dataListeners.push(fn);
+          return { dispose() {} };
+        },
+        onExit(fn) {
+          exitListeners.push(fn);
+          return { dispose() {} };
+        },
+        write() {},
+        resize() {},
+        kill(signal) {
+          // Deliberately no-op here so terminalHost's reapOwnedPid is the sole reaper of the tree.
+          void signal;
+        },
+        pause() {},
+        resume() {},
+      };
+    },
+  };
+
+  const h = await createWireHarness(t, { pty: childPtyAdapter });
+  await h.exposed.sideTerminal.setEnabled(true);
+  const { session } = await h.exposed.sideTerminal.open({ command: 'shell', cols: 80, rows: 24 });
+
+  await new Promise((r, reject) => {
+    const timer = setTimeout(() => reject(new Error('Timed out waiting for 3-level process tree spawn')), 4000);
+    treeReady.then(() => {
+      clearTimeout(timer);
+      r();
+    }, (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+  });
+
+  const { leaderPid, childPid, grandchildPid } = treePids;
+  assert.ok(Number.isSafeInteger(leaderPid) && leaderPid > 1);
+  assert.ok(Number.isSafeInteger(childPid) && childPid > 1);
+  assert.ok(Number.isSafeInteger(grandchildPid) && grandchildPid > 1);
+  assert.notEqual(leaderPid, childPid);
+  assert.notEqual(childPid, grandchildPid);
+  assert.notEqual(leaderPid, sibling.pid);
+
+  // Verify all 3 tree processes and the sibling are alive before close.
+  assert.equal(isPidAlive(leaderPid), true, 'leader must be alive before close');
+  assert.equal(isPidAlive(childPid), true, 'child must be alive before close');
+  assert.equal(isPidAlive(grandchildPid), true, 'grandchild must be alive before close');
+  assert.equal(isPidAlive(sibling.pid), true, 'sibling must be alive before close');
+
+  // Verify grandchild has ppid === childPid and pgrp !== leaderPid && sid !== leaderPid
+  // so only transitive `tree.has(ppid)` discovery can reap it.
+  if (existsSync(`/proc/${grandchildPid}/stat`)) {
+    const stat = readFileSync(`/proc/${grandchildPid}/stat`, 'utf8');
+    const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
+    assert.equal(Number(fields[1]), childPid, 'grandchild ppid must be childPid');
+    assert.notEqual(Number(fields[2]), leaderPid, 'grandchild pgrp must not be leaderPid');
+    assert.notEqual(Number(fields[3]), leaderPid, 'grandchild sid must not be leaderPid');
+  }
+
+  assert.equal(await h.exposed.sideTerminal.close({ session }), true);
+
+  const allReaped = await waitForCondition(
+    () => !isPidAlive(leaderPid) && !isPidAlive(childPid) && !isPidAlive(grandchildPid),
+    4000,
+  );
+  assert.equal(allReaped, true, `Expected leader (${leaderPid}), child (${childPid}), and grandchild (${grandchildPid}) to be reaped`);
+  assert.equal(isPidAlive(leaderPid), false, 'leader must be reaped after close');
+  assert.equal(isPidAlive(childPid), false, 'child must be reaped after close');
+  assert.equal(isPidAlive(grandchildPid), false, 'grandchild must be reaped after close');
+
+  // Negative control: unrelated sibling process outside the tree remains alive after close.
+  assert.equal(isPidAlive(sibling.pid), true, 'sibling outside the session tree must remain alive after close');
+});
+
+test('R3-ELECTRON-3 (tg6_electron#6): ptyBroker and ptySession resize bounds align at 500x300 and ptySession enforces exact boundary controls and refusals', async () => {
+  // 1. Verify ptyBroker constants are aligned with ptySession and terminalHost (500x300).
+  assert.equal(MIN_COLS, 2);
+  assert.equal(MAX_COLS, 500);
+  assert.equal(MIN_ROWS, 2);
+  assert.equal(MAX_ROWS, 300);
+
+  // 2. Drive valid boundary resizes (control) and out-of-range resizes (refusal) directly through createPtySession.
+  const spec = {
+    file: '/bin/sh',
+    args: [],
+    cwd: '/tmp',
+    env: { PATH: '/usr/bin:/bin', TERM: 'xterm-256color' },
+  };
+  const resized = [];
+  const ptySession = createPtySession({
+    session: 'resize-bound-session',
+    spec,
+    spawn() {
+      return {
+        onData() {
+          return { dispose() {} };
+        },
+        onExit() {
+          return { dispose() {} };
+        },
+        write() {},
+        resize(cols, rows) {
+          resized.push([cols, rows]);
+        },
+        pause() {},
+        resume() {},
+        kill() {},
+      };
+    },
+    send() {},
+  });
+
+  // Valid boundary controls: minimum (1x1 and 2x2) and maximum (500x300).
+  ptySession.receive({ session: 'resize-bound-session', cols: 1, rows: 1 });
+  ptySession.receive({ session: 'resize-bound-session', cols: MIN_COLS, rows: MIN_ROWS });
+  ptySession.receive({ session: 'resize-bound-session', cols: MAX_COLS, rows: MAX_ROWS });
+  assert.deepEqual(resized, [
+    [1, 1],
+    [2, 2],
+    [500, 300],
+  ]);
+
+  // Out-of-range refusals directly on ptySession (including 501, 301, 1000, 5000, 3000, 0, negative, non-int).
+  for (const [cols, rows] of [
+    [501, 24],
+    [80, 301],
+    [501, 301],
+    [1000, 1000],
+    [5000, 300],
+    [500, 3000],
+    [0, 24],
+    [80, 0],
+    [-1, 24],
+    [80, -1],
+    [80.5, 24],
+    [80, 24.5],
+  ]) {
+    assert.throws(
+      () => ptySession.receive({ session: 'resize-bound-session', cols, rows }),
+      /INVALID_MESSAGE/,
+      `Expected ptySession.receive to reject cols=${cols}, rows=${rows} with INVALID_MESSAGE`,
+    );
+  }
+  assert.equal(resized.length, 3, 'refused resizes must not reach underlying pty.resize');
+  ptySession.close();
+
+  // 3. Verify runBroker aligns with ptySession: admits 500x300 and refuses 501/301 with DIMS_RANGE.
+  let brokerReceive;
+  const brokerEvents = [];
+  const brokerResizes = [];
+  const profile = {
+    command: 'shell',
+    executable: '/bin/sh',
+    argv: [],
+    cwd: '/tmp',
+    loginShell: '/bin/sh',
+    env: { PATH: '/usr/bin:/bin', TERM: 'xterm-256color' },
+  };
+  const broker = runBroker({
+    profiles: new Map([['shell', profile]]),
+    processes: { record() {}, async reapOwned() {} },
+    transport: {
+      send: (msg) => brokerEvents.push(msg),
+      onMessage(fn) {
+        brokerReceive = fn;
+        return () => {};
+      },
+    },
+    pty: {
+      spawn() {
+        return {
+          pid: 43210,
+          onData() {
+            return { dispose() {} };
+          },
+          onExit() {
+            return { dispose() {} };
+          },
+          write() {},
+          resize(cols, rows) {
+            brokerResizes.push([cols, rows]);
+          },
+          kill() {},
+          pause() {},
+          resume() {},
+        };
+      },
+    },
+  });
+  try {
+    brokerReceive({ version: 1, generation: 1, op: 'open', id: 'b-sess', provider: 'shell', command: 'shell', cols: 500, rows: 300 });
+    await new Promise((r) => setImmediate(r));
+    assert.equal(brokerEvents.at(-1)?.ev, 'open');
+
+    brokerReceive({ version: 1, generation: 1, op: 'resize', id: 'b-sess', cols: 500, rows: 300 });
+    await new Promise((r) => setImmediate(r));
+    assert.deepEqual(brokerResizes, [[500, 300]]);
+
+    for (const [cols, rows] of [
+      [501, 300],
+      [500, 301],
+      [1000, 1000],
+    ]) {
+      const before = brokerEvents.length;
+      brokerReceive({ version: 1, generation: 1, op: 'resize', id: 'b-sess', cols, rows });
+      await new Promise((r) => setImmediate(r));
+      assert.equal(brokerEvents.length, before + 1);
+      assert.equal(brokerEvents.at(-1)?.ev, 'error');
+      assert.equal(brokerEvents.at(-1)?.code, 'DIMS_RANGE');
+    }
+    assert.equal(brokerResizes.length, 1);
+  } finally {
+    await broker.dispose();
+  }
 });
