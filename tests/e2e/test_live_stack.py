@@ -508,6 +508,351 @@ try {
                 )
         self.assertIn(("core", signal.SIGCONT), signals)
 
+    def test_binaries_builds_core_release_by_default_and_debug_by_flag_or_env(self):
+        work = self.root / "work-core-profile"
+        work.mkdir()
+        target_dir = self.root / "cargo-target"
+        adapter_bin = self.root / "prebuilt-adapter"
+        adapter_bin.write_bytes(b"#!/bin/sh\nexit 0\n")
+        adapter_bin.chmod(0o700)
+        commit = "b" * 40
+        stack.live.write_binary_provenance(adapter_bin, "adapter", commit=commit, repo_root=stack.ROOT)
+
+        calls = []
+
+        def fake_checked(cmd, **kwargs):
+            calls.append([str(x) for x in cmd])
+            profile = "release" if "--release" in cmd else "debug"
+            out = target_dir / profile / "metaviewer-core"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b"#!/bin/sh\nexit 0\n")
+            out.chmod(0o700)
+            return ""
+
+        base_env = {
+            "CARGO": "custom-cargo",
+            "CARGO_TARGET_DIR": str(target_dir),
+            "MV_E2E_ADAPTER_BIN": str(adapter_bin),
+        }
+
+        # 1. Default builds --release and resolves target/release/metaviewer-core with provenance.
+        resolved_release = stack.binaries(
+            work,
+            env=base_env,
+            checked_fn=fake_checked,
+            expected_commit=commit,
+        )
+        self.assertEqual(len(calls), 1)
+        self.assertIn("--release", calls[0])
+        self.assertEqual(resolved_release["core"], target_dir / "release/metaviewer-core")
+        self.assertTrue(stack.binary_provenance_path(resolved_release["core"]).is_file())
+
+        # 2. Explicit debug flag builds debug and resolves target/debug/metaviewer-core.
+        calls.clear()
+        parsed_debug = stack.parser().parse_args(["start", "--debug"])
+        self.assertTrue(parsed_debug.debug)
+        resolved_debug = stack.binaries(
+            work,
+            env=base_env,
+            checked_fn=fake_checked,
+            expected_commit=commit,
+            debug=parsed_debug.debug,
+        )
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn("--release", calls[0])
+        self.assertEqual(resolved_debug["core"], target_dir / "debug/metaviewer-core")
+        self.assertTrue(stack.binary_provenance_path(resolved_debug["core"]).is_file())
+
+        # 3. Environment variable MV_LIVE_DEBUG_CORE=1 also selects debug.
+        calls.clear()
+        resolved_env_debug = stack.binaries(
+            work,
+            env=dict(base_env, MV_LIVE_DEBUG_CORE="1"),
+            checked_fn=fake_checked,
+            expected_commit=commit,
+        )
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn("--release", calls[0])
+        self.assertEqual(resolved_env_debug["core"], target_dir / "debug/metaviewer-core")
+
+        # Negative control: missing or relative CARGO_TARGET_DIR is refused.
+        with self.assertRaisesRegex(RuntimeError, "absolute per-worktree CARGO_TARGET_DIR required"):
+            stack.binaries(
+                work,
+                env={"MV_E2E_ADAPTER_BIN": str(adapter_bin), "CARGO_TARGET_DIR": "relative/target"},
+                checked_fn=fake_checked,
+                expected_commit=commit,
+            )
+
+    def test_persistent_config_dir_survives_stop_and_reset_config_removes_it(self):
+        cfg = stack.ensure_config_dir(self.root, env={})
+        self.assertEqual(cfg, self.root / "config")
+        self.assertEqual(stat.S_IMODE(cfg.lstat().st_mode), 0o700)
+        settings_dir = cfg / "metaviewer"
+        settings_dir.mkdir(mode=0o700)
+        settings_file = settings_dir / "settings.json"
+        settings_file.write_text('{"theme":"dark"}', encoding="utf-8")
+
+        state = self.state()
+        state["config_dir"] = str(cfg)
+        ram = self.root / "ram-cfg"
+        ram.mkdir()
+        stack.save_state(self.root, state)
+
+        with patch.dict(os.environ, dict(self.environment(), MV_SRF_LIVE_RAM_ROOT=str(ram)), clear=True), \
+                patch.object(stack, "inventory", return_value=set()), \
+                patch.object(stack.live, "profile_containers", return_value=set()), \
+                redirect_stdout(io.StringIO()):
+            stack.cleanup(state, self.root)
+
+        # Work dir and state.json are removed by stop/cleanup, but config dir and settings survive.
+        self.assertFalse(Path(state["work"]).exists())
+        self.assertFalse((self.root / "state.json").exists())
+        self.assertTrue(cfg.is_dir())
+        self.assertEqual(settings_file.read_text(encoding="utf-8"), '{"theme":"dark"}')
+
+        # Explicit MV_LIVE_CONFIG_DIR is also honored when private and outside ~/.config and repo.
+        explicit_cfg = self.root / "custom-config"
+        ensured_explicit = stack.ensure_config_dir(
+            self.root,
+            env={"MV_LIVE_CONFIG_DIR": str(explicit_cfg)},
+        )
+        self.assertEqual(ensured_explicit, explicit_cfg)
+        self.assertEqual(stat.S_IMODE(explicit_cfg.lstat().st_mode), 0o700)
+
+        # reset-config removes the config dir explicitly and is idempotent thereafter.
+        self.assertEqual(stack.parser().parse_args(["reset-config"]).command, "reset-config")
+        with redirect_stdout(io.StringIO()) as out1:
+            res1 = stack.reset_config(self.root, env={})
+        self.assertTrue(res1["removed"])
+        self.assertFalse(cfg.exists())
+        self.assertIn("LIVE_STACK_CONFIG_RESET", out1.getvalue())
+        self.assertIn("removed=true", out1.getvalue())
+
+        with redirect_stdout(io.StringIO()) as out2:
+            res2 = stack.reset_config(self.root, env={})
+        self.assertFalse(res2["removed"])
+        self.assertIn("already_absent=true", out2.getvalue())
+
+        # Negative controls: user's real ~/.config (and subdirectories) and repo paths are refused.
+        real_cfg = Path.home() / ".config"
+        for forbidden in (real_cfg, real_cfg / "metaviewer", Path.home(), stack.ROOT / "ui"):
+            with self.assertRaises(stack.StackError):
+                stack.ensure_config_dir(
+                    self.root,
+                    env={"MV_LIVE_CONFIG_DIR": str(forbidden)},
+                )
+            with self.assertRaises(stack.StackError):
+                stack.reset_config(
+                    self.root,
+                    env={"MV_LIVE_CONFIG_DIR": str(forbidden)},
+                )
+
+    def test_loss_tolerant_mode_keeps_stack_running_while_default_triggers_cleanup(self):
+        capture_failed_event = {
+            "schema": "surface_event/v0.2",
+            "event": "error",
+            "data": {
+                "surface_id": "surf-live-1",
+                "code": "capture_failed",
+                "detail": "capture, publication or delivery refused (skipped_polls=3)",
+            },
+        }
+        lost_state_event = {
+            "schema": "surface_event/v0.2",
+            "event": "state_changed",
+            "data": {
+                "surface": {
+                    "schema": "surface/v0.2",
+                    "surface_id": "surf-live-1",
+                    "kind": "browser",
+                    "display": ":91",
+                    "geometry": {"w": 1280, "h": 900},
+                    "state": "lost",
+                    "visibility": "unfolded",
+                    "control": "agent",
+                    "profile_id": "mv-live-1",
+                }
+            },
+        }
+
+        def run_supervised_loss_scenario(*, tolerate_loss, env_override=None):
+            root = self.root / ("sup-tol" if tolerate_loss else "sup-fail")
+            root.mkdir(mode=0o700, exist_ok=True)
+            work = root / "run-loss"
+            work.mkdir(mode=0o700, exist_ok=True)
+            state = {
+                "schema": "metaviewer.live-stack/v1",
+                "status": "starting",
+                "work": str(work),
+                "pids": [],
+                "capsules": ["srf-id-owned01"],
+                "published": [],
+                "display_mode": "visible",
+                "surface_id": "surf-live-1",
+            }
+            if tolerate_loss:
+                state["tolerate_capsule_loss"] = True
+            stack.save_state(root, state)
+
+            events_queue = [
+                {"body": capture_failed_event},
+                {"body": lost_state_event},
+            ]
+            cleanup_Triggered_while_running = []
+            stop_requested = [False]
+            ticks = [0]
+            sig_handlers = {}
+
+            def capture_signal(sig, handler):
+                sig_handlers[sig] = handler
+
+            class FakePeer:
+                def __init__(self):
+                    self._sock = object()
+                    self._rx = b"line\n"
+
+                def connect(self):
+                    pass
+
+                def recv(self):
+                    if events_queue:
+                        item = events_queue.pop(0)
+                        if not events_queue:
+                            self._rx = b""
+                        return item
+                    return {"body": {"schema": "surface_event/v0.2", "event": "frame_ready"}}
+
+                def close(self):
+                    self._sock = None
+
+            fake_peer = FakePeer()
+            ui_proc = Mock(pid=2001, poll=lambda: None, wait=lambda: 0)
+            core_proc = Mock(pid=2002, poll=lambda: None, wait=lambda: 0)
+            adapter_proc = Mock(pid=2003, poll=lambda: None, wait=lambda: 0)
+            spawn_procs = [core_proc, adapter_proc, ui_proc]
+
+            def fake_popen(argv, **kwargs):
+                proc = spawn_procs.pop(0)
+                child_env = kwargs.get("env") or {}
+                if proc is core_proc:
+                    sock_file = Path(child_env["XDG_RUNTIME_DIR"]) / "metaviewer/core.sock"
+                    sock_file.parent.mkdir(parents=True, exist_ok=True)
+                    sock_file.touch()
+                elif proc is adapter_proc:
+                    ev_file = (
+                        Path(child_env["XDG_STATE_HOME"])
+                        / "metaviewer/sessions"
+                        / child_env["MV_SESSION_ID"]
+                        / "events/1.json"
+                    )
+                    ev_file.parent.mkdir(parents=True, exist_ok=True)
+                    ev_file.write_text("{}", encoding="utf-8")
+                return proc
+
+            def fake_remember_tree(st, rt):
+                ticks[0] += 1
+                # After both loss events have been processed in monitor(), stop the stack cleanly.
+                if not events_queue and ticks[0] >= 3:
+                    stop_requested[0] = True
+                    sig_handlers[signal.SIGTERM](signal.SIGTERM, None)
+
+            def fake_cleanup(st, rt, **_kwargs):
+                cleanup_Triggered_while_running.append(
+                    {
+                        "stop_requested": stop_requested[0],
+                        "status_at_cleanup": st.get("status"),
+                        "remaining_events": len(events_queue),
+                    }
+                )
+                (rt / "state.json").unlink(missing_ok=True)
+                return {"processes_absent": True}
+
+            lock_r, lock_w = os.pipe()
+            os.close(lock_w)
+            env = dict(self.environment(), **(env_override or {}))
+            out_buf = io.StringIO()
+            err_buf = io.StringIO()
+            with patch.dict(os.environ, env, clear=True), \
+                    patch.object(stack.signal, "signal", side_effect=capture_signal), \
+                    patch.object(stack, "checked", return_value='"MetaViewer"' + "\n" + "a" * 40), \
+                    patch.object(stack, "binaries", return_value={"core": Path("/bin/true"), "adapter": Path("/bin/true")}), \
+                    patch.object(stack, "validate_display", return_value={"display": ":0", "xauthority": ""}), \
+                    patch.object(stack.subprocess, "Popen", side_effect=fake_popen), \
+                    patch.object(stack, "identity", return_value="birth"), \
+                    patch.object(stack.live, "CoreClient", return_value=fake_peer), \
+                    patch.object(stack, "open_control_socket", return_value=None), \
+                    patch.object(
+                        stack,
+                        "bootstrap_agent_surface",
+                        side_effect=lambda _p, _r, _c, st, rt, _s, **_kw: (
+                            st.update(status="ready"),
+                            stack.save_state(rt, st),
+                        ),
+                    ), \
+                    patch.object(stack, "remember_tree", side_effect=fake_remember_tree), \
+                    patch.object(stack.live, "send"), \
+                    patch.object(stack.live, "receive", return_value={"event": "state_changed", "data": {"surface": {"state": "destroyed"}}}), \
+                    patch.object(stack.live, "profile_containers", return_value=set()), \
+                    patch.object(stack, "cleanup", side_effect=fake_cleanup), \
+                    patch.object(stack.select, "select", side_effect=lambda r, w, x, t: (r if events_queue else [], [], [])), \
+                    redirect_stdout(out_buf), \
+                    patch.object(stack.sys, "stderr", err_buf):
+                rc = stack.supervise(root, 60, lock_r)
+            return rc, cleanup_Triggered_while_running, out_buf.getvalue(), err_buf.getvalue()
+
+        # 1. With --tolerate-capsule-loss, capture_failed and lost log LIVE_CAPSULE_LOST
+        # and do NOT trigger early cleanup before stop/TTL.
+        rc_tol, cleanups_tol, stdout_tol, stderr_tol = run_supervised_loss_scenario(tolerate_loss=True)
+        self.assertEqual(rc_tol, 0, stderr_tol)
+        self.assertEqual(len(cleanups_tol), 1)
+        self.assertTrue(cleanups_tol[0]["stop_requested"])
+        self.assertEqual(cleanups_tol[0]["status_at_cleanup"], "ready")
+        self.assertEqual(cleanups_tol[0]["remaining_events"], 0)
+        self.assertIn("LIVE_CAPSULE_LOST reason=capture_failed surface_id=surf-live-1", stdout_tol)
+        self.assertIn("LIVE_CAPSULE_LOST reason=lost surface_id=surf-live-1", stdout_tol)
+
+        # 2. Without --tolerate-capsule-loss (default fail-closed), fake capsule loss
+        # immediately aborts monitor() and triggers cleanup before stop is requested.
+        rc_fail, cleanups_fail, stdout_fail, stderr_fail = run_supervised_loss_scenario(tolerate_loss=False)
+        self.assertEqual(rc_fail, 1)
+        self.assertEqual(len(cleanups_fail), 1)
+        self.assertFalse(cleanups_fail[0]["stop_requested"])
+        self.assertEqual(cleanups_fail[0]["status_at_cleanup"], "failed")
+        self.assertNotIn("LIVE_CAPSULE_LOST", stdout_fail)
+        self.assertIn("native surface error", stderr_fail)
+
+        # 3. Also verify lost state_changed event alone fails closed in monitor() without the flag,
+        # and is tolerated when MV_LIVE_TOLERATE_LOSS=1 is set in env.
+        peer_lost = Mock(_sock=object(), _rx=b"lost\n")
+        peer_lost.recv.return_value = {"body": lost_state_event}
+        with patch.object(stack.select, "select", return_value=([], [], [])), \
+                self.assertRaisesRegex(RuntimeError, "native surface lost"):
+            stack.monitor(peer_lost, [], 100, lambda: False, lambda: None)
+
+        logged_env = []
+        calls_env = [0]
+
+        def recv_once():
+            calls_env[0] += 1
+            peer_lost._rx = b""
+            return {"body": lost_state_event}
+
+        peer_lost._rx = b"lost\n"
+        peer_lost.recv.side_effect = recv_once
+        with patch.object(stack.select, "select", return_value=([], [], [])):
+            stack.monitor(
+                peer_lost,
+                [],
+                100,
+                lambda: calls_env[0] >= 1,
+                lambda: None,
+                env={"MV_LIVE_TOLERATE_LOSS": "1"},
+                log_fn=logged_env.append,
+            )
+        self.assertEqual(len(logged_env), 1)
+        self.assertIn("LIVE_CAPSULE_LOST reason=lost surface_id=surf-live-1", logged_env[0])
+
 
 if __name__ == "__main__":
     unittest.main()

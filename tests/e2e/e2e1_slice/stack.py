@@ -13,6 +13,12 @@ control socket at <state_root>/control.sock; on a single SO_PEERCRED-verified
 same-UID handoff-agent request it sends its connected agent core socket fd via
 SCM_RIGHTS, closes its own copy, records agent_handoff in state.json, and
 refuses any second handoff.
+[TARGET, unit decision] Core builds with --release by default (--debug or
+MV_LIVE_DEBUG_CORE=1 opts into debug). XDG_CONFIG_HOME points to a persistent
+0700 directory at <state_root>/config (or MV_LIVE_CONFIG_DIR), never ~/.config,
+surviving stop and removed only by reset-config. With --tolerate-capsule-loss
+or MV_LIVE_TOLERATE_LOSS=1, capture_failed and lost capsule events log
+LIVE_CAPSULE_LOST while keeping UI and core running until stop or TTL.
 """
 
 import argparse
@@ -52,6 +58,7 @@ ALLOWED_STATE_KEYS = (
     "schema", "status", "supervisor", "pids", "capsules", "published",
     "work", "display", "xauthority", "surface_id", "expires", "error",
     "display_mode", "record_path", "recorder", "agent_tick_page", "agent_handoff",
+    "core_debug", "tolerate_capsule_loss", "config_dir",
 )
 CONTROL_SOCKET_NAME = "control.sock"
 HANDOFF_OP = "handoff-agent"
@@ -100,8 +107,33 @@ def parser():
     start_cmd.add_argument("--display", choices=("private", "visible"), default="private")
     start_cmd.add_argument("--record", default=None, metavar="PATH.mp4")
     start_cmd.add_argument("--agent-tick-page", action="store_true", default=False)
+    start_cmd.add_argument("--debug", "--debug-core", dest="debug", action="store_true", default=False)
+    start_cmd.add_argument("--tolerate-capsule-loss", action="store_true", default=False)
     commands.add_parser("stop")
+    commands.add_parser("reset-config")
     return result
+
+
+def core_debug_requested(debug=False, env=None):
+    if bool(debug):
+        return True
+    env = os.environ if env is None else env
+    for key in ("MV_LIVE_DEBUG_CORE", "MV_LIVE_CORE_DEBUG", "MV_E2E_CORE_DEBUG"):
+        val = str(env.get(key, "")).strip().lower()
+        if val in ("1", "true", "yes", "debug"):
+            return True
+    for key in ("MV_LIVE_CORE_PROFILE", "MV_E2E_CORE_PROFILE"):
+        val = str(env.get(key, "")).strip().lower()
+        if val == "debug":
+            return True
+    return False
+
+
+def tolerate_loss_enabled(flag=False, env=None):
+    if bool(flag):
+        return True
+    env = os.environ if env is None else env
+    return str(env.get("MV_LIVE_TOLERATE_LOSS", "")).strip().lower() in ("1", "true", "yes")
 
 
 def private_dir(path):
@@ -118,6 +150,87 @@ def state_root():
     root = private_dir(Path(runtime)) / "metaviewer-live-stack"
     root.mkdir(mode=0o700, exist_ok=True)
     return private_dir(root)
+
+
+def _real_user_config_dirs(env=None):
+    env = os.environ if env is None else env
+    homes = set()
+    try:
+        homes.add(Path.home())
+    except Exception:
+        pass
+    raw_home = str(env.get("HOME", "")).strip()
+    if raw_home:
+        homes.add(Path(raw_home).expanduser())
+    configs = set()
+    for home in homes:
+        configs.add(home / ".config")
+        configs.add(home.resolve(strict=False) / ".config")
+    return homes, configs
+
+
+def resolve_config_dir(root=None, *, env=None, repo_root=None):
+    env = os.environ if env is None else env
+    repo = Path(ROOT if repo_root is None else repo_root).resolve(strict=False)
+    explicit = env.get("MV_LIVE_CONFIG_DIR")
+    if explicit is not None:
+        raw = str(explicit).strip()
+        if not raw:
+            raise StackError("CONFIG_DIR_INVALID", "MV_LIVE_CONFIG_DIR must not be blank")
+        candidate = Path(raw).expanduser()
+        if not candidate.is_absolute():
+            raise StackError("CONFIG_DIR_INVALID", f"MV_LIVE_CONFIG_DIR must be absolute: {raw!r}")
+    else:
+        base_root = state_root() if root is None else private_dir(Path(root))
+        candidate = Path(base_root) / "config"
+    if candidate.is_symlink():
+        raise StackError("CONFIG_DIR_UNSAFE", f"symlink config dir refused: {candidate}")
+    resolved = candidate.resolve(strict=False)
+    homes, user_configs = _real_user_config_dirs(env)
+    for home in homes:
+        home_resolved = home.resolve(strict=False)
+        if candidate in (home, home_resolved) or resolved == home_resolved:
+            raise StackError("CONFIG_DIR_UNSAFE", f"refusing user home as live config dir: {candidate}")
+    for cfg in user_configs:
+        cfg_resolved = cfg.resolve(strict=False)
+        if (
+            candidate == cfg
+            or resolved == cfg_resolved
+            or cfg in candidate.parents
+            or cfg_resolved in resolved.parents
+        ):
+            raise StackError("CONFIG_DIR_UNSAFE", f"refusing user ~/.config for live stack: {candidate}")
+    if (explicit is not None or Path(base_root).resolve(strict=False) != repo) and (
+        resolved == repo or repo in resolved.parents
+    ):
+        raise StackError("CONFIG_DIR_IN_REPO", f"config dir inside repository refused: {resolved}")
+    return candidate
+
+
+def ensure_config_dir(root=None, *, env=None, repo_root=None):
+    path = resolve_config_dir(root, env=env, repo_root=repo_root)
+    if path.is_symlink():
+        raise StackError("CONFIG_DIR_UNSAFE", f"symlink config dir refused: {path}")
+    if not path.exists():
+        if not path.parent.exists():
+            raise StackError("CONFIG_DIR_INVALID", f"config parent directory AUSENTE: {path.parent}")
+        path.mkdir(mode=0o700, exist_ok=True)
+    return private_dir(path)
+
+
+def reset_config(root=None, *, env=None, repo_root=None):
+    path = resolve_config_dir(root, env=env, repo_root=repo_root)
+    if path.is_symlink():
+        raise StackError("CONFIG_DIR_UNSAFE", f"symlink config dir refused: {path}")
+    if not path.exists():
+        print(f"LIVE_STACK_CONFIG_RESET path={path} already_absent=true", flush=True)
+        return {"path": str(path), "removed": False, "config_absent": True}
+    private_dir(path)
+    shutil.rmtree(path)
+    if path.exists() or path.is_symlink():
+        raise RuntimeError(f"config reset failed: {path}")
+    print(f"LIVE_STACK_CONFIG_RESET path={path} removed=true", flush=True)
+    return {"path": str(path), "removed": True, "config_absent": True}
 
 
 def bounded_state(value):
@@ -147,6 +260,12 @@ def bounded_state(value):
             result.pop("recorder", None)
     if "agent_tick_page" in result:
         result["agent_tick_page"] = bool(result["agent_tick_page"])
+    if "core_debug" in result:
+        result["core_debug"] = bool(result["core_debug"])
+    if "tolerate_capsule_loss" in result:
+        result["tolerate_capsule_loss"] = bool(result["tolerate_capsule_loss"])
+    if "config_dir" in result:
+        result["config_dir"] = str(result["config_dir"])
     if "agent_handoff" in result:
         handoff = result["agent_handoff"]
         if isinstance(handoff, dict):
@@ -733,6 +852,7 @@ def preflight(root, display_mode="private", record_path=None):
         raise RuntimeError("another live stack or G-W1 run is active; refusing")
     validate_record_path(record_path)
     validate_display(display_mode)
+    resolve_config_dir(root, env=os.environ)
     missing = [key for key in REQUIRED if not os.environ.get(key)]
     if missing:
         raise RuntimeError("live env AUSENTE: " + ", ".join(missing))
@@ -805,6 +925,7 @@ def binaries(
     source_root=None,
     expected_commit=None,
     require_provenance=None,
+    debug=False,
 ):
     env = os.environ if env is None else env
     checked_fn = checked if checked_fn is None else checked_fn
@@ -854,9 +975,14 @@ def binaries(
             target = env.get("CARGO_TARGET_DIR")
             if not target or not Path(target).is_absolute():
                 raise RuntimeError("absolute per-worktree CARGO_TARGET_DIR required")
-            checked_fn([env.get("CARGO", "cargo"), "build", "--offline", "--manifest-path",
-                        ROOT / "core/Cargo.toml", "--bin", "metaviewer-core"], cwd=ROOT)
-            binary = Path(target) / "debug/metaviewer-core"
+            use_debug = core_debug_requested(debug=debug, env=env)
+            cargo_cmd = [env.get("CARGO", "cargo"), "build", "--offline"]
+            if not use_debug:
+                cargo_cmd.append("--release")
+            cargo_cmd.extend(["--manifest-path", ROOT / "core/Cargo.toml", "--bin", "metaviewer-core"])
+            checked_fn(cargo_cmd, cwd=ROOT)
+            profile_dir = "debug" if use_debug else "release"
+            binary = Path(target) / f"{profile_dir}/metaviewer-core"
             if binary.is_file():
                 live.write_binary_provenance(binary, "core", commit=commit, repo_root=ROOT)
         else:
@@ -992,6 +1118,35 @@ def free_display(sockets=Path("/tmp/.X11-unix"), locks=Path("/tmp")):
     raise RuntimeError("no free high X display")
 
 
+def classify_capsule_loss(body, surface_id=None):
+    if not isinstance(body, dict):
+        return None
+    event = body.get("event")
+    data = body.get("data") if isinstance(body.get("data"), dict) else {}
+    if event == "error":
+        code = data.get("code") or body.get("code")
+        ev_sid = data.get("surface_id") or body.get("surface_id")
+        if code == "capture_failed" and (surface_id is None or ev_sid in (None, surface_id)):
+            return {
+                "reason": "capture_failed",
+                "surface_id": ev_sid or surface_id or "unknown",
+                "detail": data.get("detail") or body.get("detail") or "capture_failed",
+            }
+        return None
+    surface = data.get("surface") if isinstance(data.get("surface"), dict) else {}
+    surf_state = surface.get("state") or data.get("state") or body.get("state")
+    ev_sid = surface.get("surface_id") or data.get("surface_id") or body.get("surface_id")
+    if (event == "lost" or (event == "state_changed" and surf_state == "lost")) and (
+        surface_id is None or ev_sid in (None, surface_id)
+    ):
+        return {
+            "reason": "lost",
+            "surface_id": ev_sid or surface_id or "unknown",
+            "detail": data.get("detail") or body.get("detail") or "state_changed:lost",
+        }
+    return None
+
+
 def monitor(
     peer,
     children,
@@ -1005,6 +1160,9 @@ def monitor(
     state=None,
     root=None,
     handle_control_fn=None,
+    tolerate_capsule_loss=None,
+    log_fn=None,
+    env=None,
 ):
     """Monotonic TTL and stop requests converge on the same cleanup path."""
     deadline = time.monotonic() + seconds
@@ -1012,6 +1170,14 @@ def monitor(
     if peer_holder is None:
         peer_holder = {"peer": peer}
     handler = handle_control_connection if handle_control_fn is None else handle_control_fn
+    log_fn = (lambda line: print(line, flush=True)) if log_fn is None else log_fn
+    if tolerate_capsule_loss is None:
+        tolerate_loss = tolerate_loss_enabled(
+            bool(state.get("tolerate_capsule_loss")) if isinstance(state, dict) else False,
+            env=env,
+        )
+    else:
+        tolerate_loss = tolerate_loss_enabled(bool(tolerate_capsule_loss), env=env)
     while not should_stop() and time.monotonic() < deadline:
         exited = [(index, p.poll()) for index, p in enumerate(children) if p.poll() is not None]
         if exited:
@@ -1046,7 +1212,21 @@ def monitor(
             or b"\n" in getattr(active_peer, "_rx", b"")
         ):
             body = active_peer.recv()["body"]
-            if body.get("event") == "error":
+            loss = classify_capsule_loss(
+                body,
+                surface_id=state.get("surface_id") if isinstance(state, dict) else None,
+            )
+            if loss is not None:
+                if tolerate_loss:
+                    log_fn(
+                        f"LIVE_CAPSULE_LOST reason={loss['reason']} "
+                        f"surface_id={loss['surface_id']} detail={loss['detail']}"
+                    )
+                elif body.get("event") == "error":
+                    raise RuntimeError("native surface error: " + repr(body))
+                else:
+                    raise RuntimeError("native surface lost: " + repr(body))
+            elif body.get("event") == "error":
                 raise RuntimeError("native surface error: " + repr(body))
 
 
@@ -1387,7 +1567,7 @@ def supervise(root, seconds, lock_fd):
         state["supervisor"] = {"pid": os.getpid(), "identity": identity(os.getpid())}
         save_state(root, state)
         commit = checked(["git", "rev-parse", "HEAD"], cwd=ROOT)
-        bins = binaries(work, expected_commit=commit)
+        bins = binaries(work, expected_commit=commit, debug=bool(state.get("core_debug")))
         regs = {c: live.registration(c, commit, uuid.uuid4().hex) for c in ("core", "ui", "agent", "daemon")}
         config = {"session_id": "stack-" + uuid.uuid4().hex, "core": regs["core"],
                   "peers": [regs[c] for c in ("ui", "agent", "daemon")]}
@@ -1395,8 +1575,11 @@ def supervise(root, seconds, lock_fd):
         config_file.write_text(json.dumps(config))
         runtime = work / "runtime"
         runtime.mkdir(mode=0o700)
+        cfg_dir = ensure_config_dir(root, env=os.environ)
+        state["config_dir"] = str(cfg_dir)
+        save_state(root, state)
         env = dict(os.environ, MV_CORE_CONFIG=str(config_file), XDG_RUNTIME_DIR=str(runtime),
-                   XDG_STATE_HOME=str(work / "state"), XDG_CONFIG_HOME=str(work / "config"),
+                   XDG_STATE_HOME=str(work / "state"), XDG_CONFIG_HOME=str(cfg_dir),
                    MV_SESSION_ID=config["session_id"], MV_CORE_INSTANCE=regs["core"]["endpoint"]["instance"],
                    MV_DAEMON_INSTANCE=regs["daemon"]["endpoint"]["instance"], MV_COMPONENT_COMMIT=commit,
                    MV_SRF_PROFILES="", MV_CONTRACT_DIR=str(ROOT / "contracts/v0.2"), MV_QA_RUN_DIR=str(work))
@@ -1479,6 +1662,10 @@ def supervise(root, seconds, lock_fd):
             peer_holder=peer_holder,
             state=state,
             root=root,
+            tolerate_capsule_loss=tolerate_loss_enabled(
+                bool(state.get("tolerate_capsule_loss")),
+                env=os.environ,
+            ),
         )
     except Exception as exc:
         logs = "\n".join(path.name + ": " + path.read_text(errors="replace")[-2000:]
@@ -1518,7 +1705,16 @@ def supervise(root, seconds, lock_fd):
     return 1 if error or (root / "state.json").exists() else 0
 
 
-def start(root, seconds, display_mode="private", record_path=None, agent_tick_page=False):
+def start(
+    root,
+    seconds,
+    display_mode="private",
+    record_path=None,
+    agent_tick_page=False,
+    *,
+    debug=False,
+    tolerate_capsule_loss=False,
+):
     fd = os.open(root / "lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
         try:
@@ -1528,13 +1724,19 @@ def start(root, seconds, display_mode="private", record_path=None, agent_tick_pa
         resolved_record = validate_record_path(record_path)
         validate_display(display_mode)
         preflight(root, display_mode=display_mode, record_path=record_path)
+        cfg_dir = ensure_config_dir(root, env=os.environ)
         work = Path(tempfile.mkdtemp(prefix="run-", dir=root))
         state = {"schema": "metaviewer.live-stack/v1", "status": "starting", "pids": [],
-                 "work": str(work), "capsules": [], "published": [], "display_mode": display_mode}
+                 "work": str(work), "capsules": [], "published": [], "display_mode": display_mode,
+                 "config_dir": str(cfg_dir)}
         if resolved_record is not None:
             state["record_path"] = str(resolved_record)
         if agent_tick_page:
             state["agent_tick_page"] = True
+        if core_debug_requested(debug=debug, env=os.environ):
+            state["core_debug"] = True
+        if tolerate_loss_enabled(flag=tolerate_capsule_loss, env=os.environ):
+            state["tolerate_capsule_loss"] = True
         save_state(root, state)
         with open(root / "supervisor.log", "w") as log:
             proc = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "_supervise",
@@ -1589,13 +1791,25 @@ def stop_stack(root, *, signal_fn=None, alive_fn=None, monotonic_fn=None, sleep_
 
 def main():
     try:
-        root = state_root()
         if len(sys.argv) == 4 and sys.argv[1] == "_supervise":
+            root = state_root()
             return supervise(root, int(sys.argv[2]), int(sys.argv[3]))
         args = parser().parse_args()
+        if args.command == "reset-config":
+            root = state_root() if not os.environ.get("MV_LIVE_CONFIG_DIR") else None
+            reset_config(root)
+            return 0
+        root = state_root()
         if args.command == "start":
-            start(root, args.ttl, display_mode=args.display, record_path=args.record,
-                  agent_tick_page=args.agent_tick_page)
+            start(
+                root,
+                args.ttl,
+                display_mode=args.display,
+                record_path=args.record,
+                agent_tick_page=args.agent_tick_page,
+                debug=args.debug,
+                tolerate_capsule_loss=args.tolerate_capsule_loss,
+            )
         else:
             stop_stack(root)
         return 0

@@ -92,14 +92,32 @@ class StackDemoTests(unittest.TestCase):
         self.assertEqual(default_args.display, "private")
         self.assertIsNone(default_args.record)
         self.assertFalse(default_args.agent_tick_page)
+        self.assertFalse(default_args.debug)
+        self.assertFalse(default_args.tolerate_capsule_loss)
 
         visible_args = stack.parser().parse_args(
-            ["start", "--ttl", "10m", "--display", "visible", "--record", "/tmp/demo.mp4", "--agent-tick-page"]
+            [
+                "start",
+                "--ttl",
+                "10m",
+                "--display",
+                "visible",
+                "--record",
+                "/tmp/demo.mp4",
+                "--agent-tick-page",
+                "--debug",
+                "--tolerate-capsule-loss",
+            ]
         )
         self.assertEqual(visible_args.ttl, 600)
         self.assertEqual(visible_args.display, "visible")
         self.assertEqual(visible_args.record, "/tmp/demo.mp4")
         self.assertTrue(visible_args.agent_tick_page)
+        self.assertTrue(visible_args.debug)
+        self.assertTrue(visible_args.tolerate_capsule_loss)
+
+        reset_args = stack.parser().parse_args(["reset-config"])
+        self.assertEqual(reset_args.command, "reset-config")
 
         private_args = stack.parser().parse_args(["start", "--display", "private"])
         self.assertEqual(private_args.display, "private")
@@ -1277,6 +1295,90 @@ class StackDemoTests(unittest.TestCase):
             self.assertEqual(core_server_sock.recv(16), b"")
         finally:
             core_server_sock.close()
+
+    def test_release_default_config_reset_and_loss_tolerant_controls(self):
+        # 1. Release vs debug core binary selection.
+        work = self.root / "work-rel-dbg"
+        work.mkdir()
+        target_dir = self.root / "cargo-target"
+        adapter_bin = self.root / "adapter-bin"
+        adapter_bin.write_bytes(b"#!/bin/sh\nexit 0\n")
+        adapter_bin.chmod(0o700)
+        commit = "c" * 40
+        stack.live.write_binary_provenance(adapter_bin, "adapter", commit=commit, repo_root=stack.ROOT)
+        cargo_invocations = []
+
+        def fake_cargo(cmd, **_kwargs):
+            cargo_invocations.append([str(x) for x in cmd])
+            prof = "release" if "--release" in cmd else "debug"
+            out = target_dir / prof / "metaviewer-core"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b"#!/bin/sh\nexit 0\n")
+            out.chmod(0o700)
+            return ""
+
+        env = {"CARGO": "cargo", "CARGO_TARGET_DIR": str(target_dir), "MV_E2E_ADAPTER_BIN": str(adapter_bin)}
+        rel = stack.binaries(work, env=env, checked_fn=fake_cargo, expected_commit=commit)
+        self.assertEqual(rel["core"], target_dir / "release/metaviewer-core")
+        self.assertIn("--release", cargo_invocations[-1])
+
+        dbg = stack.binaries(work, env=env, checked_fn=fake_cargo, expected_commit=commit, debug=True)
+        self.assertEqual(dbg["core"], target_dir / "debug/metaviewer-core")
+        self.assertNotIn("--release", cargo_invocations[-1])
+
+        # 2. Persistent config dir survives cleanup/stop and is removed by reset-config.
+        cfg = stack.ensure_config_dir(self.root, env={})
+        marker = cfg / "metaviewer/settings.json"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text('{"persisted":true}', encoding="utf-8")
+        st = self.base_state()
+        ram = self.root / "ram-rel"
+        ram.mkdir()
+        stack.save_state(self.root, st)
+        with patch.dict(os.environ, dict(self.live_env(), MV_SRF_LIVE_RAM_ROOT=str(ram)), clear=True), \
+                patch.object(stack, "inventory", return_value=set()), \
+                patch.object(stack.live, "profile_containers", return_value=set()), \
+                redirect_stdout(io.StringIO()):
+            stack.cleanup(st, self.root)
+        self.assertTrue(marker.is_file())
+        with redirect_stdout(io.StringIO()):
+            stack.reset_config(self.root, env={})
+        self.assertFalse(cfg.exists())
+
+        # 3. Capsule loss tolerance vs fail-closed default.
+        loss_body = {
+            "schema": "surface_event/v0.2",
+            "event": "error",
+            "data": {"surface_id": "s-1", "code": "capture_failed", "detail": "capsule gone"},
+        }
+        peer = Mock(_sock=object(), _rx=b"1\n")
+        peer.recv.return_value = {"body": loss_body}
+        with patch.object(stack.select, "select", return_value=([], [], [])), \
+                self.assertRaisesRegex(RuntimeError, "native surface error"):
+            stack.monitor(peer, [], 10, lambda: False, lambda: None, tolerate_capsule_loss=False)
+
+        logged = []
+        seen = [0]
+
+        def drain_once():
+            seen[0] += 1
+            peer._rx = b""
+            return {"body": loss_body}
+
+        peer._rx = b"1\n"
+        peer.recv.side_effect = drain_once
+        with patch.object(stack.select, "select", return_value=([], [], [])):
+            stack.monitor(
+                peer,
+                [],
+                10,
+                lambda: seen[0] >= 1,
+                lambda: None,
+                tolerate_capsule_loss=True,
+                log_fn=logged.append,
+            )
+        self.assertEqual(len(logged), 1)
+        self.assertTrue(logged[0].startswith("LIVE_CAPSULE_LOST "))
 
 
 if __name__ == "__main__":
