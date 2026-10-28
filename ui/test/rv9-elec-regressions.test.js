@@ -796,3 +796,39 @@ test('RV9-07 non-defect lock: resolveFrameDiagConfig disables only on --nested-d
   assert.equal(resolveFrameDiagConfig({ argv: ['--nested-depth=1'], env: { MV_FRAME_DIAG: '1' } }).enabled, false);
   assert.throws(() => resolveFrameDiagConfig({ env: { MV_FRAME_DIAG: '1' }, packaged: true }), { code: 'RETAIL_ENV' });
 });
+
+test('R3-ELECTRON-5: writeFrameDiagSnapshot refuses symlinked parent runDir resolving inside repository root and writes no file at target', async (t) => {
+  const allowedParent = await mkdtemp(join(tmpdir(), 'mv-r3-framediag-'));
+  await chmod(allowedParent, 0o700);
+  const insideCanonicalDir = join(allowedParent, 'canonical-run');
+  await mkdir(insideCanonicalDir, { mode: 0o700 });
+
+  const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
+  const symlinkParent = join(allowedParent, 'alias-parent');
+  await symlink(repoRoot, symlinkParent);
+  const escapedRunDir = join(symlinkParent, '.tmp-r3-framediag-escape');
+  await mkdir(escapedRunDir, { mode: 0o700 });
+
+  t.after(async () => {
+    await rm(join(repoRoot, '.tmp-r3-framediag-escape'), { recursive: true, force: true });
+    await rm(allowedParent, { recursive: true, force: true });
+  });
+
+  // Positive control: canonical inside-root directory succeeds.
+  const ok = await writeFrameDiagSnapshot(insideCanonicalDir, { schema: 'frame_diag/v1', seq: 1 });
+  assert.equal(ok, true);
+  const written = JSON.parse(await readFile(join(insideCanonicalDir, FRAME_DIAG_FILE), 'utf8'));
+  assert.equal(written.seq, 1);
+
+  // Negative control: symlinked parent runDir resolving into repository root is refused after realpath(runDir).
+  await assert.rejects(
+    () => writeFrameDiagSnapshot(escapedRunDir, { schema: 'frame_diag/v1', seq: 2 }),
+    (/** @type {any} */ err) => {
+      assert.ok(err instanceof MainError, `expected MainError, got ${err}`);
+      assert.equal(err.code, 'FRAME_DIAG_RUN_DIR');
+      return true;
+    },
+  );
+  await assert.rejects(lstat(join(repoRoot, '.tmp-r3-framediag-escape', FRAME_DIAG_FILE)), { code: 'ENOENT' });
+});
+

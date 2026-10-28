@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
 import {
   CHANNELS,
   ContractError,
@@ -476,6 +477,89 @@ describe('native entry qualification', () => {
     assert.equal(/** @type {Record<string, unknown>} */ (globalThis).metaviewer, undefined);
   });
 
+  it('CommonJS entry executes require("electron") and exposes frozen metaviewer facade; guard negative control', async () => {
+    const rawSource = readFileSync(PRELOAD_PATH, 'utf8');
+    const cjsExecutableSource = rawSource.replace(/^export\s+(const|class|function)\s+/gm, '$1 ');
+
+    /** @type {Array<FakeExposure>} */
+    const exposures = [];
+    /** @type {Array<FakeCall>} */
+    const nativeCalls = [];
+    const contextBridge = {
+      /**
+       * @param {unknown} name Exposure name.
+       * @param {unknown} api Exposed facade.
+       */
+      exposeInMainWorld(name, api) {
+        exposures.push({ name, api, receiver: this });
+      },
+    };
+    const ipcRenderer = {
+      /**
+       * @param {unknown} channel Channel.
+       * @param {...unknown} args Args.
+       */
+      invoke(channel, ...args) {
+        nativeCalls.push({ channel, args, receiver: this });
+        return Promise.resolve(channel === 'metaviewer:layout.load' ? '{"cjs":1}' : true);
+      },
+    };
+    /** @type {Array<string>} */
+    const requiredSpecs = [];
+    const cjsRequire = (/** @type {string} */ spec) => {
+      requiredSpecs.push(spec);
+      if (spec === 'electron') {
+        return { contextBridge, ipcRenderer };
+      }
+      throw new Error(`unexpected require: ${spec}`);
+    };
+
+    const cjsContext = vm.createContext({
+      module: { exports: {} },
+      exports: {},
+      require: cjsRequire,
+      URL,
+    });
+    vm.runInContext(cjsExecutableSource, cjsContext, { filename: PRELOAD_PATH });
+
+    assert.deepEqual(requiredSpecs, ['electron']);
+    assert.equal(exposures.length, 1);
+    const exposed = exposures[0];
+    assert.ok(exposed);
+    assert.equal(exposed.name, 'metaviewer');
+    assert.equal(Object.isFrozen(exposed.api), true);
+    const api = /** @type {Record<string, unknown>} */ (exposed.api);
+    assert.equal(typeof api.load, 'function');
+    assert.equal(typeof api.save, 'function');
+    assert.equal(await /** @type {() => Promise<unknown>} */ (api.load)(), '{"cjs":1}');
+    assert.equal(await /** @type {(s: string) => Promise<unknown>} */ (api.save)('{"cjs":1}'), true);
+    assert.equal(nativeCalls.length, 2);
+
+    // Negative control: when the CJS guard is not satisfied (require is not a function or module is undefined), metaviewer is not exposed.
+    /** @type {Array<FakeExposure>} */
+    const guardedExposures = [];
+    const noRequireContext = vm.createContext({
+      module: { exports: {} },
+      exports: {},
+      require: undefined,
+      URL,
+    });
+    vm.runInContext(cjsExecutableSource, noRequireContext, { filename: PRELOAD_PATH });
+    assert.equal(guardedExposures.length, 0);
+
+    const noModuleContext = vm.createContext({
+      module: undefined,
+      exports: {},
+      require: () => {
+        guardedExposures.push({ name: 'unexpected', api: null, receiver: null });
+        return { contextBridge, ipcRenderer };
+      },
+      URL,
+    });
+    vm.runInContext(cjsExecutableSource, noModuleContext, { filename: PRELOAD_PATH });
+    assert.equal(guardedExposures.length, 0);
+  });
+
   it('source hygiene: guarded entry, single exposure, no host handles', () => {
     const source = readFileSync(PRELOAD_PATH, 'utf8');
     assert.ok(source.includes("require('electron')"));
@@ -510,14 +594,21 @@ describe('main parity', () => {
     const source = readFileSync(PRELOAD_PATH, 'utf8');
     assert.equal(source.includes('./main'), false);
     assert.equal(source.includes('../main'), false);
-    if (existsSync(MAIN_PATH)) {
-      const main = readFileSync(MAIN_PATH, 'utf8');
-      assert.ok(main.includes('metaviewer:layout.load'));
-      assert.ok(main.includes('metaviewer:layout.save'));
-      assert.ok(main.includes('262144') || main.includes('256 * 1024'));
-    } else {
-      assert.ok(true, 'main.js absent pre-merge; parity enforced via inline fixture');
-    }
+    assert.equal(existsSync(MAIN_PATH), true, 'main.js must exist in the merged tree');
+    const main = readFileSync(MAIN_PATH, 'utf8');
+    const preloadLayoutLiterals = Array.from(
+      new Set(source.match(/['"]metaviewer:layout\.[A-Za-z0-9_.-]+['"]/g) ?? []),
+    )
+      .map((s) => s.slice(1, -1))
+      .sort();
+    const mainLayoutLiterals = Array.from(
+      new Set(main.match(/['"]metaviewer:layout\.[A-Za-z0-9_.-]+['"]/g) ?? []),
+    )
+      .map((s) => s.slice(1, -1))
+      .sort();
+    assert.deepEqual(preloadLayoutLiterals, ['metaviewer:layout.load', 'metaviewer:layout.save']);
+    assert.deepEqual(preloadLayoutLiterals, mainLayoutLiterals);
+    assert.ok(main.includes('262144') || main.includes('256 * 1024'));
   });
 });
 

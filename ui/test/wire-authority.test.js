@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,rm,stat,readFile,readdir,writeFile,chmod,symlink} from 'node:fs/promises';
+import fsPromises,{mkdtemp,mkdir,rm,stat,readFile,readdir,writeFile,chmod,symlink} from 'node:fs/promises';
+import {syncBuiltinESMExports} from 'node:module';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -1039,5 +1040,69 @@ test('R3-T4-002: refused unknown sids leave 0 rate-window keys and dispose clear
   assert.equal(binding.inputInFlightSeq.size, 0);
 });
 
+test('R3-ELECTRON-5: settings save invokes file.sync() before rename and aborts on sync rejection without corrupting committed file', async t => {
+  const f = await fixture(t);
+  const dir = join(f.root, 'metaviewer');
+  const committedPath = join(dir, 'settings.json');
+  const darkSettings = JSON.stringify({ scheme: 'mv-dark', density: 'compact' });
 
+  // Positive control: clean save commits and rotates inode.
+  await f.call('saveSettings', settings);
+  const firstStat = await stat(committedPath);
+  assert.equal(firstStat.mode & 0o777, 0o600);
+  assert.equal(await readFile(committedPath, 'utf8'), settings);
+
+  const originalOpen = fsPromises.open;
+  const originalRename = fsPromises.rename;
+  const events = [];
+  let rejectFileSync = false;
+
+  t.after(() => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  });
+
+  t.mock.method(fsPromises, 'open', async (targetPath, flags, mode) => {
+    const handle = await originalOpen(targetPath, flags, mode);
+    const name = String(targetPath);
+    if (name.includes('.settings-') && name.endsWith('.tmp')) {
+      const origSync = handle.sync.bind(handle);
+      handle.sync = async () => {
+        events.push('file.sync');
+        if (rejectFileSync) {
+          const err = /** @type {NodeJS.ErrnoException} */ (new Error('EIO: simulated fsync failure'));
+          err.code = 'EIO';
+          throw err;
+        }
+        return origSync();
+      };
+    }
+    return handle;
+  });
+  t.mock.method(fsPromises, 'rename', async (oldPath, newPath) => {
+    if (String(newPath) === committedPath) {
+      events.push('rename');
+    }
+    return originalRename(oldPath, newPath);
+  });
+  syncBuiltinESMExports();
+
+  // Verify file.sync() is invoked before rename/acknowledge and inode rotates.
+  const ack = await f.call('saveSettings', darkSettings);
+  assert.equal(ack, true);
+  assert.deepEqual(events, ['file.sync', 'rename']);
+  const secondStat = await stat(committedPath);
+  assert.notEqual(secondStat.ino, firstStat.ino);
+  assert.equal(await readFile(committedPath, 'utf8'), darkSettings);
+
+  // Fault injection: file.sync() rejection aborts save before rename without corrupting committed file.
+  events.length = 0;
+  rejectFileSync = true;
+  await assert.rejects(f.call('saveSettings', settings), /EIO/);
+  assert.deepEqual(events, ['file.sync']);
+  const afterFailStat = await stat(committedPath);
+  assert.equal(afterFailStat.ino, secondStat.ino);
+  assert.equal(await readFile(committedPath, 'utf8'), darkSettings);
+  assert.deepEqual(await readdir(dir), ['settings.json']);
+});
 
