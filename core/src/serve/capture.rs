@@ -157,37 +157,11 @@ impl Server {
         let mut next = self.capture.clone();
         // Oversized/unavailable frames do not disable normal authority rendering.
         let Ok(events) = next.frame_verified(frame, pixels, now_ns / 1_000_000) else {
-            let (_, reply, _) = self
-                .capture
-                .prepare("list", &Value::Null, Default::default(), now_ns / 1_000_000)
-                .map_err(|_| invalid("capture states"))?;
-            let dropped: Vec<Value> = reply["rows"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter(|r| {
-                    r["kind"] == "recording"
-                        && r["phase"] == "recording"
-                        && r["surface_id"] == frame.surface_id
-                })
-                .map(|r| {
-                    json!({
-                        "events": [{
-                            "schema": "record_event/v0.2",
-                            "request_id": r["id"],
-                            "surface_id": frame.surface_id,
-                            "recording_id": r["id"],
-                            "mono_ns": now_ns,
-                            "event": "dropped",
-                            "dropped_frames": 1,
-                            "policy": "ram_ring_oldest"
-                        }]
-                    })
-                })
-                .collect();
+            let dropped = next.drop_frame(&frame.surface_id, now_ns);
             if !dropped.is_empty() {
                 self.capture_journal(vec![], &json!({"capture_frame":dropped}))?;
             }
+            self.capture = next;
             return Ok(());
         };
         if !events.is_empty() {
@@ -1017,6 +991,16 @@ mod tests {
             "../../../contracts/examples/v0.2/frame_ref.valid.json"
         ))
         .unwrap();
+        // Negative control: oversize frame with no active recording journals nothing.
+        let seq_idle = server.authority.state().core_seq;
+        let idle_oversize = vec![0x41_u8; 9 * 1024 * 1024];
+        raw["sha256"] = sha256_hex(&idle_oversize).into();
+        let idle_over_frame: FrameRef = serde_json::from_value(raw.clone()).unwrap();
+        server
+            .capture_frame(&idle_over_frame, idle_oversize)
+            .unwrap();
+        assert_eq!(server.authority.state().core_seq, seq_idle);
+
         raw["sha256"] = sha256_hex(b"seed-pixels").into();
         let seed_frame: FrameRef = serde_json::from_value(raw.clone()).unwrap();
         server
@@ -1054,9 +1038,144 @@ mod tests {
             serde_json::from_slice(&fs::read(session.join("artifacts").join(witness_sha)).unwrap())
                 .unwrap();
         let drop_ev = &witness["capture_frame"][0]["events"][0];
+        assert_eq!(drop_ev["schema"], "record_event/v0.2");
+        assert_eq!(drop_ev["request_id"], rec_id);
+        assert_eq!(drop_ev["surface_id"], "surface-demo");
         assert_eq!(drop_ev["recording_id"], rec_id);
         assert_eq!(drop_ev["event"], "dropped");
         assert_eq!(drop_ev["dropped_frames"], 1);
         assert_eq!(drop_ev["policy"], "ram_ring_oldest");
+
+        let stop_reply = server
+            .capture_request(
+                &ui,
+                "recordStop",
+                json!({"schema":"capture_request/v1","request_id":"stop-over","recording_id":rec_id}),
+            )
+            .unwrap();
+        assert_eq!(stop_reply["ok"], true);
+        assert_eq!(stop_reply["recording"]["dropped_frames"], 1);
+    }
+
+    #[test]
+    fn export_transaction_id_is_monotonic_and_equals_pre_export_core_seq_plus_one() {
+        let temp = Temp::new();
+        let root = temp.0.clone();
+        let reg = |component: &str| -> Registration {
+            serde_json::from_value(json!({"endpoint":{"component":component,"instance":format!("{component}-txmono")},"hello":{"schema":"hello/v0.2","contract_version":"v0.2","component":component,"component_version":"0.2.0","component_commit":"0123456789abcdef0123456789abcdef01234567","dependencies":[]}})).unwrap()
+        };
+        let config = Config {
+            session_id: "txmono-session".into(),
+            core: reg("core"),
+            peers: vec![reg("agent"), reg("daemon"), reg("ui")],
+        };
+        let mut server = Server::open(config.clone(), &root, effective_uid().unwrap()).unwrap();
+        let surfaces = BTreeSet::from(["surface-demo".to_owned()]);
+        let make_shot = |server: &mut Server, pixel: u8, req_id: &str| -> String {
+            let mut frame: Value = serde_json::from_str(include_str!(
+                "../../../contracts/examples/v0.2/frame_ref.valid.json"
+            ))
+            .unwrap();
+            frame["width"] = 1.into();
+            frame["height"] = 1.into();
+            frame["sha256"] = sha256_hex(&[pixel, 0, 0]).into();
+            server
+                .capture
+                .frame(
+                    &serde_json::from_value(frame).unwrap(),
+                    vec![pixel, 0, 0],
+                    0,
+                )
+                .unwrap();
+            let (next, shot, _) = server
+                .capture
+                .prepare(
+                    "screenshot",
+                    &json!({"request_id":req_id,"surface_id":"surface-demo"}),
+                    surfaces.clone(),
+                    0,
+                )
+                .unwrap();
+            server.capture = next;
+            shot["shot"]["id"].as_str().unwrap().to_owned()
+        };
+        let shot1 = make_shot(&mut server, 10, "shot-1");
+        let shot2 = make_shot(&mut server, 20, "shot-2");
+        let destination = root.join("exports");
+        fs::create_dir(&destination).unwrap();
+        let session = root.join("sessions/txmono-session");
+
+        let read_witness = |seq: u64| -> Value {
+            let event: Value = serde_json::from_slice(
+                &fs::read(session.join("events").join(format!("{seq}.json"))).unwrap(),
+            )
+            .unwrap();
+            let sha = event["witnesses"][0]["sha256"].as_str().unwrap();
+            serde_json::from_slice(&fs::read(session.join("artifacts").join(sha)).unwrap()).unwrap()
+        };
+
+        // First live export: transaction must equal pre_export_core_seq + 1.
+        let pre_seq_1 = server.authority.state().core_seq;
+        let req1 = json!({"schema":"capture_request/v1","request_id":"exp-1","capture_id":shot1,"destination":"recording:configured"});
+        let reply1 = server
+            .capture_export_to(req1, Some(&destination), vec![])
+            .unwrap();
+        assert_eq!(reply1["ok"], true);
+        let start_witness_1 = read_witness(pre_seq_1 + 1);
+        let done_witness_1 = read_witness(pre_seq_1 + 2);
+        let tx1 = start_witness_1["export_transaction"].as_u64().unwrap();
+        assert_eq!(tx1, pre_seq_1 + 1);
+        assert_eq!(done_witness_1["export_transaction"].as_u64().unwrap(), tx1);
+
+        // Negative control: failed live export (missing destination) followed by recovery and second live export.
+        let pre_fail_seq = server.authority.state().core_seq;
+        let req_fail = json!({"schema":"capture_request/v1","request_id":"exp-fail","capture_id":shot2,"destination":"recording:configured"});
+        let reply_fail = server
+            .capture_export_to(req_fail.clone(), Some(&root.join("missing")), vec![])
+            .unwrap();
+        assert_eq!(reply_fail["code"], "DESTINATION_UNAVAILABLE");
+        let fail_start = read_witness(pre_fail_seq + 1);
+        let tx_fail = fail_start["export_transaction"].as_u64().unwrap();
+        assert_eq!(tx_fail, pre_fail_seq + 1);
+        assert!(tx_fail > tx1);
+
+        // Simulate crash after export-started before export completion, then restart and recover, then run another live export.
+        let pre_crash_seq = server.authority.state().core_seq;
+        let plan2 = server.capture.export_plan(&shot2).unwrap();
+        let tx_crash = pre_crash_seq + 1;
+        server
+            .capture_journal(
+                vec![],
+                &json!({"method":"export-started","export_transaction":tx_crash,
+                    "request":req_fail,"host_destination":destination,"receipt":plan2.receipt}),
+            )
+            .unwrap();
+        let temp_file = destination.join(format!(
+            ".mv-export-{}-{}.tar-{tx_crash}",
+            plan2.receipt["id"].as_str().unwrap(),
+            plan2.receipt["sha256"].as_str().unwrap()
+        ));
+        fs::write(&temp_file, b"partial").unwrap();
+        drop(server);
+
+        let mut recovered = Server::open(config, &root, effective_uid().unwrap()).unwrap();
+        let shot3 = make_shot(&mut recovered, 30, "shot-3");
+        let pre_recover_seq = recovered.authority.state().core_seq;
+        let req2 = json!({"schema":"capture_request/v1","request_id":"exp-2","capture_id":shot3,"destination":"recording:configured"});
+        let reply2 = recovered
+            .capture_export_to(req2, Some(&destination), vec![])
+            .unwrap();
+        assert_eq!(reply2["ok"], true);
+        assert!(!temp_file.exists());
+        // Recovery journaled at pre_recover_seq + 1; new export-started journaled at pre_recover_seq + 2.
+        let rec_witness = read_witness(pre_recover_seq + 1);
+        assert_eq!(rec_witness["recovered"], true);
+        assert_eq!(rec_witness["export_transaction"], tx_crash);
+        let start_witness_2 = read_witness(pre_recover_seq + 2);
+        let done_witness_2 = read_witness(pre_recover_seq + 3);
+        let tx2 = start_witness_2["export_transaction"].as_u64().unwrap();
+        assert_eq!(tx2, pre_recover_seq + 2);
+        assert_eq!(done_witness_2["export_transaction"].as_u64().unwrap(), tx2);
+        assert!(tx1 < tx_fail && tx_fail < tx_crash && tx_crash < tx2);
     }
 }

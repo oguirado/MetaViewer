@@ -231,4 +231,57 @@ mod tests {
         writer.submit(Row::default());
         writer.close();
     }
+    #[test]
+    fn queue_saturation_permanently_disables_sender_and_live_submit_rotates_at_4_mib() {
+        let (sender, receiver) = mpsc::sync_channel::<Row>(256);
+        let mut writer = Writer {
+            sender: Some(sender),
+            worker: None,
+        };
+        for i in 0..256 {
+            writer.submit(Row {
+                generation: i,
+                ..Row::default()
+            });
+            assert!(writer.sender.is_some());
+        }
+        // 257th submission hits Full(_) and permanently sets self.sender = None.
+        writer.submit(Row {
+            generation: 256,
+            ..Row::default()
+        });
+        assert!(writer.sender.is_none());
+
+        // Negative control: pop one item after saturation so the channel has capacity again,
+        // then submit another row and prove it is not sent because self.sender stayed None.
+        assert_eq!(receiver.try_recv().unwrap().generation, 0);
+        writer.submit(Row {
+            generation: 999,
+            ..Row::default()
+        });
+        let remaining: Vec<u64> = receiver.try_iter().map(|r| r.generation).collect();
+        assert_eq!(remaining.len(), 255);
+        assert_eq!(*remaining.last().unwrap(), 255);
+        assert!(!remaining.contains(&999));
+
+        // Exercise live Writer::submit across the 4 MiB rotation boundary.
+        let temp = Temp::new();
+        let path = temp.0.join("live_timings.jsonl");
+        let mut live = Writer::start(path.clone());
+        let pad = "s".repeat(MAX_BYTES / 2);
+        for gen in [1_u64, 2, 3] {
+            live.submit(Row {
+                surface_id: pad.clone(),
+                generation: gen,
+                ..Row::default()
+            });
+        }
+        live.close();
+        let meta = std::fs::metadata(&path).unwrap();
+        assert!(meta.len() <= MAX_BYTES as u64);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text.lines().count(), 1);
+        let row: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(row["generation"], 3);
+    }
 }

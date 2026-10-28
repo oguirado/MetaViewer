@@ -12,6 +12,7 @@ pub struct Host {
     rows: BTreeMap<String, Value>,
     pixels: BTreeMap<String, VecDeque<CapturedFrame>>,
     latest: BTreeMap<String, (FrameRef, Vec<u8>)>,
+    dropped_frames: BTreeMap<String, u64>,
     serial: u64,
     pub(crate) exports_recovered: bool,
 }
@@ -105,6 +106,36 @@ impl Host {
             self.append_frame(&id, now_ms, &mut events)?;
         }
         Ok(events.0)
+    }
+    pub(crate) fn drop_frame(&mut self, surface_id: &str, now_ns: u64) -> Vec<Value> {
+        let ids: Vec<String> = self
+            .rows
+            .iter()
+            .filter(|(_, r)| {
+                r["kind"] == "recording"
+                    && r["phase"] == "recording"
+                    && r["surface_id"] == surface_id
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        ids.into_iter()
+            .map(|id| {
+                let count = self.dropped_frames.entry(id.clone()).or_default();
+                *count = count.saturating_add(1);
+                json!({
+                    "events": [{
+                        "schema": "record_event/v0.2",
+                        "request_id": id,
+                        "surface_id": surface_id,
+                        "recording_id": id,
+                        "mono_ns": now_ns,
+                        "event": "dropped",
+                        "dropped_frames": 1,
+                        "policy": "ram_ring_oldest"
+                    }]
+                })
+            })
+            .collect()
     }
     // Include sealed captures: their pixels remain resident until reclaimed.
     pub(super) fn retained_bytes(&self) -> Result<u64, Error> {
@@ -311,12 +342,14 @@ impl Host {
             row["sealed"] = true.into();
             row["duration_ms"] =
                 json!(now_ms.saturating_sub(row["created_ms"].as_u64().ok_or(Error::Event)?));
+            let dropped = next.dropped_frames.get(&id).copied().unwrap_or(0);
             let bytes: Vec<u8> = next.pixels[&id]
                 .iter()
                 .flat_map(|f| f.bytes.iter().copied())
                 .collect();
-            json!({"ok":true,"recording":{"id":id,"surface_id":surface,"frames":row["frames"],"duration_ms":row["duration_ms"],"sealed":true,"sha256":sha256_hex(&bytes)}})
+            json!({"ok":true,"recording":{"id":id,"surface_id":surface,"frames":row["frames"],"dropped_frames":dropped,"duration_ms":row["duration_ms"],"sealed":true,"sha256":sha256_hex(&bytes)}})
         } else {
+            next.dropped_frames.insert(id.clone(), 0);
             next.rows.insert(id.clone(),json!({"id":id,"kind":if method=="screenshot"{"shot"}else{"recording"},"surface_id":surface,"phase":"recording","frames":0,"duration_ms":0,"sealed":false,"created_ms":now_ms}));
             next.append_frame(&id, now_ms, &mut events)?;
             if method == "screenshot" {
@@ -446,6 +479,52 @@ mod tests {
             host.frame(&frame("surface-8"), b"wrong".to_vec(), 0),
             Err(Error::Event)
         );
+    }
+    #[test]
+    fn latest_frame_replacement_respects_exact_64_mib_cap_and_refuses_off_by_one() {
+        const MIB: usize = 1024 * 1024;
+        let mut host = Host::default();
+        let surfaces: BTreeSet<String> = (0..5).map(|i| format!("surface-{i}")).collect();
+        for i in 0..4 {
+            let id = format!("surface-{i}");
+            let bytes = vec![i as u8 + 1; 7 * MIB];
+            host.frame_verified(&frame(&id), bytes, 0).unwrap();
+            let (next, reply, _) = host
+                .prepare("recordStart", &request(&id), surfaces.clone(), 0)
+                .unwrap();
+            assert_eq!(reply["ok"], true);
+            host = next;
+        }
+        // 4 surfaces * (7 MiB latest + 7 MiB ring) = 56 MiB retained.
+        assert_eq!(host.retained_bytes().unwrap(), (56 * MIB) as u64);
+        let s4_initial = vec![5_u8; 4 * MIB];
+        host.frame_verified(&frame("surface-4"), s4_initial, 1)
+            .unwrap();
+        assert_eq!(host.retained_bytes().unwrap(), (60 * MIB) as u64);
+
+        // Replace latest on surface-4 with 6 MiB -> total = 62 MiB.
+        let s4_six = vec![7_u8; 6 * MIB];
+        host.frame_verified(&frame("surface-4"), s4_six, 2).unwrap();
+        assert_eq!(host.retained_bytes().unwrap(), (62 * MIB) as u64);
+
+        // Replace latest on surface-0 (which has an active 7 MiB ring) with 8 MiB ->
+        // old latest (7 MiB) replaced by 8 MiB (+1 MiB), old ring (7 MiB) evicted and replaced by 8 MiB (+1 MiB),
+        // bringing total retained bytes to 62 MiB + 2 MiB == 64 MiB == MEMORY.
+        let s0_exact = vec![8_u8; 8 * MIB];
+        host.frame_verified(&frame("surface-0"), s0_exact, 3)
+            .unwrap();
+        assert_eq!(host.retained_bytes().unwrap(), MEMORY);
+
+        // Negative control: replace latest on surface-4 (currently 6 MiB) with 6 MiB + 1 byte ->
+        // total == MEMORY + 1, which must be refused with Error::Overflow and leave state unchanged.
+        let before = host.clone();
+        let s4_over = vec![9_u8; 6 * MIB + 1];
+        assert_eq!(
+            host.frame_verified(&frame("surface-4"), s4_over, 4),
+            Err(Error::Overflow)
+        );
+        assert_eq!(host, before);
+        assert_eq!(host.retained_bytes().unwrap(), MEMORY);
     }
 }
 
