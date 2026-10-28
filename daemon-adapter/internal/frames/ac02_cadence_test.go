@@ -65,6 +65,98 @@ func generatePNGFixtureInTempDir(t *testing.T, width, height int, seed byte) (fi
 	return fixturePath, pngBytes, shaHex
 }
 
+type ac02FakeClock struct {
+	mu     sync.Mutex
+	now    time.Time
+	timers []*ac02FakeTimer
+	resets chan time.Duration
+}
+
+type ac02FakeTimer struct {
+	clock    *ac02FakeClock
+	ticks    chan time.Time
+	deadline time.Time
+	active   bool
+}
+
+func newAC02FakeClock() *ac02FakeClock {
+	return &ac02FakeClock{
+		now:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		resets: make(chan time.Duration, 64),
+	}
+}
+
+func (c *ac02FakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *ac02FakeClock) NewTimer(d time.Duration) pollTimer {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	tm := &ac02FakeTimer{
+		clock:    c,
+		ticks:    make(chan time.Time, 1),
+		deadline: c.now.Add(d),
+		active:   true,
+	}
+	c.timers = append(c.timers, tm)
+	c.fireLocked()
+	return tm
+}
+
+func (c *ac02FakeClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+	c.fireLocked()
+}
+
+func (c *ac02FakeClock) fireLocked() {
+	for _, tm := range c.timers {
+		if tm.active && !tm.deadline.After(c.now) {
+			tm.active = false
+			select {
+			case tm.ticks <- c.now:
+			default:
+			}
+		}
+	}
+}
+
+func (tm *ac02FakeTimer) Ticks() <-chan time.Time { return tm.ticks }
+
+func (tm *ac02FakeTimer) Reset(d time.Duration) bool {
+	c := tm.clock
+	c.mu.Lock()
+	was := tm.active
+	tm.active = true
+	tm.deadline = c.now.Add(d)
+	c.fireLocked()
+	c.mu.Unlock()
+	select {
+	case c.resets <- d:
+	default:
+	}
+	return was
+}
+
+func (tm *ac02FakeTimer) Stop() bool {
+	c := tm.clock
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	was := tm.active
+	tm.active = false
+	return was
+}
+
+type ac02CaptureTicket struct {
+	id      string
+	at      time.Time
+	release chan struct{}
+}
+
 type ac02StubSurface struct {
 	mu      sync.Mutex
 	binding capsule.Binding
@@ -73,8 +165,10 @@ type ac02StubSurface struct {
 }
 
 type ac02StubSource struct {
+	clock    *ac02FakeClock
 	cost     time.Duration
 	surfaces map[string]*ac02StubSurface
+	entered  chan ac02CaptureTicket
 }
 
 func (s *ac02StubSource) Capture(ctx context.Context, id string) (capsule.Binding, capsule.NativeFrame, error) {
@@ -82,14 +176,21 @@ func (s *ac02StubSource) Capture(ctx context.Context, id string) (capsule.Bindin
 	if !ok {
 		return capsule.Binding{}, capsule.NativeFrame{}, fmt.Errorf("unknown surface %s", id)
 	}
-	if s.cost > 0 {
-		timer := time.NewTimer(s.cost)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return capsule.Binding{}, capsule.NativeFrame{}, ctx.Err()
-		case <-timer.C:
-		}
+	rel := make(chan struct{})
+	ticket := ac02CaptureTicket{
+		id:      id,
+		at:      s.clock.Now(),
+		release: rel,
+	}
+	select {
+	case <-ctx.Done():
+		return capsule.Binding{}, capsule.NativeFrame{}, ctx.Err()
+	case s.entered <- ticket:
+	}
+	select {
+	case <-ctx.Done():
+		return capsule.Binding{}, capsule.NativeFrame{}, ctx.Err()
+	case <-rel:
 	}
 	seq := surf.polls.Add(1)
 	surf.mu.Lock()
@@ -102,6 +203,27 @@ func (s *ac02StubSource) Capture(ctx context.Context, id string) (capsule.Bindin
 	return surf.binding, f, nil
 }
 
+func ac02Receive[T any](t *testing.T, ch <-chan T, what string) T {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+		var zero T
+		return zero
+	}
+}
+
+// TestAC02FourSurfaceCadenceAndDiagnostics drives 4 concurrent surfaces at a
+// 100 ms poll interval with a 20 ms capture cost using the injectable pollClock.
+// Mutations killed:
+//  1. Scheduling the next poll deadline from the end of capture (now + PollInterval)
+//     instead of the previous deadline (next + PollInterval): would reset timers to
+//     100 ms instead of 80 ms, drift poll start times by +20 ms per poll (1100 ms vs
+//     920 ms over 10 polls), and fail to record SkippedPolls > 0 on overrun.
+//  2. Serializing captures across surfaces with a shared lock instead of per-surface
+//     SurfaceLock: all 4 surfaces would not enter Capture concurrently on each tick.
 func TestAC02FourSurfaceCadenceAndDiagnostics(t *testing.T) {
 	root := ac02RAMRoot(t)
 	pub, err := NewPublisher(PublishConfig{
@@ -120,10 +242,18 @@ func TestAC02FourSurfaceCadenceAndDiagnostics(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = pub.Close() })
 
+	const (
+		pollInterval = 100 * time.Millisecond
+		captureCost  = 20 * time.Millisecond
+		pollsPerSurf = 10
+	)
 	surfaceIDs := []string{"srf-a", "srf-b", "srf-c", "srf-d"}
+	clock := newAC02FakeClock()
 	stub := &ac02StubSource{
-		cost:     20 * time.Millisecond,
+		clock:    clock,
+		cost:     captureCost,
 		surfaces: make(map[string]*ac02StubSurface, len(surfaceIDs)),
+		entered:  make(chan ac02CaptureTicket, len(surfaceIDs)*2),
 	}
 
 	for i, id := range surfaceIDs {
@@ -186,7 +316,7 @@ func TestAC02FourSurfaceCadenceAndDiagnostics(t *testing.T) {
 
 	subs, err := NewSubscriptions(ctx, SubscriptionConfig{
 		MaxSubscriptions:      16,
-		PollInterval:          100 * time.Millisecond,
+		PollInterval:          pollInterval,
 		CaptureTimeout:        2 * time.Second,
 		ShutdownTimeout:       2 * time.Second,
 		DeduplicateUnchanged:  true,
@@ -209,7 +339,7 @@ func TestAC02FourSurfaceCadenceAndDiagnostics(t *testing.T) {
 		refsBySurface[ev.Data.FrameRef.SurfaceID] = append(refsBySurface[ev.Data.FrameRef.SurfaceID], ev.Data.FrameRef)
 		done := true
 		for _, sid := range surfaceIDs {
-			if len(refsBySurface[sid]) < 10 {
+			if len(refsBySurface[sid]) < pollsPerSurf {
 				done = false
 				break
 			}
@@ -223,12 +353,54 @@ func TestAC02FourSurfaceCadenceAndDiagnostics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	subs.clock = clock
 	defer func() { _ = subs.Close(context.Background()) }()
 
-	start := time.Now()
+	start := clock.Now()
 	for _, id := range surfaceIDs {
 		if err := subs.Subscribe(ctx, id); err != nil {
 			t.Fatalf("Subscribe(%s): %v", id, err)
+		}
+	}
+
+	const expectedWait = pollInterval - captureCost // 80 ms
+	for pollIdx := 0; pollIdx < pollsPerSurf; pollIdx++ {
+		wantStart := time.Duration(pollIdx) * pollInterval
+		tickets := make([]ac02CaptureTicket, 0, len(surfaceIDs))
+		seenInRound := make(map[string]bool, len(surfaceIDs))
+		for range surfaceIDs {
+			tk := ac02Receive(t, stub.entered, fmt.Sprintf("poll %d capture entry", pollIdx))
+			if seenInRound[tk.id] {
+				t.Fatalf("poll %d: duplicate capture entry for %s before round release", pollIdx, tk.id)
+			}
+			seenInRound[tk.id] = true
+			if got := tk.at.Sub(start); got != wantStart {
+				t.Fatalf("poll %d surface %s capture start = %v, want %v (next deadline must anchor to previous deadline, not capture end)", pollIdx, tk.id, got, wantStart)
+			}
+			tickets = append(tickets, tk)
+		}
+
+		// All 4 surfaces are concurrently inside Capture; advance virtual time by the 20 ms capture cost.
+		clock.advance(captureCost)
+		for _, tk := range tickets {
+			close(tk.release)
+		}
+
+		for range surfaceIDs {
+			wait := ac02Receive(t, clock.resets, fmt.Sprintf("poll %d timer reset", pollIdx))
+			if wait != expectedWait {
+				t.Fatalf("poll %d timer reset = %v, want %v (scheduling from end of capture instead of previous deadline)", pollIdx, wait, expectedWait)
+			}
+		}
+
+		if pollIdx < pollsPerSurf-1 {
+			clock.advance(expectedWait - time.Nanosecond)
+			select {
+			case tk := <-stub.entered:
+				t.Fatalf("poll %d: surface %s started capture before deadline", pollIdx, tk.id)
+			default:
+			}
+			clock.advance(time.Nanosecond)
 		}
 	}
 
@@ -237,7 +409,7 @@ func TestAC02FourSurfaceCadenceAndDiagnostics(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatalf("timed out waiting for 4 surfaces x 10 polls; skipped=%d", subs.SkippedPolls())
 	}
-	elapsed := time.Since(start)
+	elapsed := clock.Now().Sub(start)
 
 	for _, id := range surfaceIDs {
 		if err := subs.Unsubscribe(ctx, id); err != nil {
@@ -253,10 +425,10 @@ func TestAC02FourSurfaceCadenceAndDiagnostics(t *testing.T) {
 			t.Fatalf("expected SkippedPollsFor(%s) == 0, got %d", id, s)
 		}
 	}
-	// 10 polls at 100 ms interval (first poll at t=0, 10th at t=900 ms) + 20 ms stub cost ~ 920 ms.
-	// Allow generous hosted margin up to 2.5 s.
-	if elapsed > 2500*time.Millisecond {
-		t.Fatalf("4x10 polls took %v, exceeding generous 2.5s cadence ceiling", elapsed)
+	// 10 polls at 100 ms interval (first poll at t=0, 10th at t=900 ms) + 20 ms stub cost = 920 ms exact on fake clock.
+	const wantElapsed = (pollsPerSurf-1)*pollInterval + captureCost
+	if elapsed != wantElapsed {
+		t.Fatalf("4x10 polls virtual elapsed = %v, want exact %v", elapsed, wantElapsed)
 	}
 
 	// Verify no two surfaces share a frame file path.
@@ -264,8 +436,8 @@ func TestAC02FourSurfaceCadenceAndDiagnostics(t *testing.T) {
 	refsMu.Lock()
 	for _, id := range surfaceIDs {
 		refs := refsBySurface[id]
-		if len(refs) < 10 {
-			t.Fatalf("surface %s emitted %d frames, want >= 10", id, len(refs))
+		if len(refs) < pollsPerSurf {
+			t.Fatalf("surface %s emitted %d frames, want >= %d", id, len(refs), pollsPerSurf)
 		}
 		for _, r := range refs {
 			if owner, exists := seenPaths[r.RAMWSPath]; exists && owner != id {
@@ -276,10 +448,14 @@ func TestAC02FourSurfaceCadenceAndDiagnostics(t *testing.T) {
 	}
 	refsMu.Unlock()
 
-	// Verify SkippedPolls diagnostics emission when a surface overruns its poll interval.
+	// Negative control: when stub capture cost (75 ms) exceeds PollInterval (25 ms),
+	// SkippedPolls and Diagnostics MUST report missed deadlines (> 0).
+	slowClock := newAC02FakeClock()
 	slowStub := &ac02StubSource{
+		clock:    slowClock,
 		cost:     75 * time.Millisecond,
 		surfaces: stub.surfaces,
+		entered:  make(chan ac02CaptureTicket, 4),
 	}
 	var skipDiag bytes.Buffer
 	var hookMissed, hookTotal atomic.Uint64
@@ -300,9 +476,16 @@ func TestAC02FourSurfaceCadenceAndDiagnostics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	slowSubs.clock = slowClock
 	defer func() { _ = slowSubs.Close(context.Background()) }()
 	if err := slowSubs.Subscribe(ctx, "srf-a"); err != nil {
 		t.Fatal(err)
+	}
+	slowTicket := ac02Receive(t, slowStub.entered, "slow surface capture entry")
+	slowClock.advance(slowStub.cost)
+	close(slowTicket.release)
+	if wait := ac02Receive(t, slowClock.resets, "slow surface timer reset"); wait != 25*time.Millisecond {
+		t.Fatalf("expected slow surface next wait = 25ms after 75ms overrun on 25ms interval, got %v", wait)
 	}
 	select {
 	case <-slowDone:
@@ -310,14 +493,14 @@ func TestAC02FourSurfaceCadenceAndDiagnostics(t *testing.T) {
 		t.Fatal("timed out waiting for skipped poll diagnostic emission")
 	}
 	_ = slowSubs.Unsubscribe(ctx, "srf-a")
-	if slowSubs.SkippedPolls() == 0 || slowSubs.SkippedPollsFor("srf-a") == 0 {
-		t.Fatalf("expected non-zero SkippedPolls, got total=%d surface=%d", slowSubs.SkippedPolls(), slowSubs.SkippedPollsFor("srf-a"))
+	if slowSubs.SkippedPolls() != 3 || slowSubs.SkippedPollsFor("srf-a") != 3 {
+		t.Fatalf("expected SkippedPolls == 3 (75ms cost on 25ms interval), got total=%d surface=%d", slowSubs.SkippedPolls(), slowSubs.SkippedPollsFor("srf-a"))
 	}
-	if hookMissed.Load() == 0 || hookTotal.Load() == 0 {
-		t.Fatalf("expected OnSkippedPolls hook invocation, got missed=%d total=%d", hookMissed.Load(), hookTotal.Load())
+	if hookMissed.Load() != 3 || hookTotal.Load() != 3 {
+		t.Fatalf("expected OnSkippedPolls hook invocation with missed=3 total=3, got missed=%d total=%d", hookMissed.Load(), hookTotal.Load())
 	}
-	if !strings.Contains(skipDiag.String(), "adapter: surface srf-a skipped_polls=") {
-		t.Fatalf("expected Diagnostics output to contain skipped_polls line, got %q", skipDiag.String())
+	if !strings.Contains(skipDiag.String(), "adapter: surface srf-a skipped_polls=3 total_skipped_polls=3") {
+		t.Fatalf("expected Diagnostics output to contain skipped_polls=3 line, got %q", skipDiag.String())
 	}
 }
 
