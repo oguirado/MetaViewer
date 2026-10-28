@@ -64,7 +64,22 @@ test('default bootstrap connects, pins hello, delivers real bytes and routes int
       assert.equal(await bindings.core.request({op:'intent',json:JSON.stringify({schema:'ui_intent/v0.2',request_id:op,op,params})}),true);
       assert.equal(f.requests.at(-1).body.op,op);
     }
-    const verdict=await bindings.core.request({op:'propose',json:JSON.stringify({schema:'action_proposal/v0.2',proposal_id:'p'})});
+    const validProposal = {
+      schema: 'action_proposal/v0.2',
+      proposal_id: 'p',
+      surface_id: 's1',
+      based_on_frame: { generation: 1, sha256: 'a'.repeat(64) },
+      action: { type: 'click', x: 1, y: 1, button: 'left' },
+      expectation: { type: 'state_sha256_change' },
+      budget: { max_ms: 1000, max_retries: 0 },
+    };
+    const reqCountBeforeBad = f.requests.length;
+    await assert.rejects(
+      bindings.core.request({ op: 'propose', json: JSON.stringify({ schema: 'action_proposal/v0.2', proposal_id: 'p' }) }),
+      /CORE_SEAMS_ABSENT/,
+    );
+    assert.equal(f.requests.length, reqCountBeforeBad);
+    const verdict=await bindings.core.request({op:'propose',json:JSON.stringify(validProposal)});
     assert.equal(verdict.reason_code,'POLICY');assert.equal(f.requests.at(-1).body.proposal_id,'p');
   } finally {for(const stream of streams){await stream.reader.closeReader();stream.port.revokeFramePort('SHUTDOWN');}}
 });
@@ -1003,7 +1018,7 @@ test('W2-HOST-L2 L2-1 and L2-8 regression: valid hide/show/control/fold intents 
   for (const localPayload of localMultislotRequests) {
     await assert.rejects(
       api.authority.propose(JSON.stringify(localPayload)),
-      /CORE_SEAMS_ABSENT/,
+      /PROPOSAL/,
     );
     await assert.rejects(
       api.authority.intent(JSON.stringify(localPayload)),
@@ -1304,6 +1319,23 @@ test('RV10-04: consecutive intent timeouts separated only by frame traffic shut 
               event: 'state_changed',
               data: { surface: { ...surface, control: env.body.op === 'take_control' ? 'human' : 'agent' } },
             });
+          } else if (env.body.schema === 'action_proposal/v0.2') {
+            send({
+              schema: 'action_verdict/v0.2',
+              proposal_id: env.body.proposal_id,
+              decision: 'refused',
+              reason_code: 'POLICY',
+              core_seq: 1,
+            });
+          } else if (env.body.schema === 'surface_request/v0.2' && env.body.op === 'input') {
+            const refuseInput = env.body.params?.surface_id === 's-refuse';
+            send({
+              schema: 'action_verdict/v0.2',
+              proposal_id: env.body.params?.proposal_id,
+              decision: refuseInput ? 'refused' : 'admitted',
+              ...(refuseInput ? { reason_code: 'SURFACE_NOT_HUMAN_CONTROLLED' } : {}),
+              core_seq: 2,
+            });
           }
         }
       });
@@ -1337,7 +1369,7 @@ test('RV10-04: consecutive intent timeouts separated only by frame traffic shut 
       const bindings = await createMainBindings({ ...f });
       t.after(() => bindings.core.dispose());
 
-      f.send({ schema: 'surface_event/v0.2', event: 'created', data: { surface } });
+      f.send({ schema: 'surface_event/v0.2', event: 'created', data: { surface: { ...surface, control: 'human' } } });
       await new Promise(resolve => setTimeout(resolve, 20));
 
       // 1st intent timeout on an active session is spared.
@@ -1350,8 +1382,44 @@ test('RV10-04: consecutive intent timeouts separated only by frame traffic shut 
       );
       assert.equal(bindings.core.getStatus().availability, 'live', 'first intent timeout must be spared');
 
-      // Intervening frame_ready advances global received counter, but does not advance intent-reply progress.
+      // Intervening frame_ready, action_proposal verdicts, and surface_input admissions/refusals
+      // advance global received counter, but must NOT advance intent-reply progress (R3-T4-005).
       f.send({ schema: 'surface_event/v0.2', event: 'frame_ready', data: { frame_ref: f.frame } });
+      const propReply = await bindings.core.request({
+        op: 'propose',
+        json: JSON.stringify({
+          schema: 'action_proposal/v0.2',
+          proposal_id: 'r3-005-prop',
+          surface_id: 's1',
+          based_on_frame: { generation: 1, sha256: 'a'.repeat(64) },
+          action: { type: 'click', x: 1, y: 1, button: 'left' },
+          expectation: { type: 'state_sha256_change' },
+          budget: { max_ms: 500, max_retries: 0 },
+        }),
+      });
+      assert.equal(propReply.decision, 'refused');
+      const admitInput = await bindings.core.request({
+        op: 'input',
+        batch: {
+          schema: 'surface_input/v1',
+          surface_id: 's1',
+          stream_id: 1,
+          seq: 1,
+          events: [{ kind: 'key', keys: ['a'] }],
+        },
+      });
+      assert.deepEqual(admitInput, { ok: true, accepted: 1 });
+      const refuseInput = await bindings.core.request({
+        op: 'input',
+        batch: {
+          schema: 'surface_input/v1',
+          surface_id: 's-refuse',
+          stream_id: 1,
+          seq: 1,
+          events: [{ kind: 'key', keys: ['a'] }],
+        },
+      });
+      assert.equal(refuseInput.ok, false);
       await new Promise(resolve => setTimeout(resolve, 20));
 
       // 2nd consecutive intent timeout without a matched intent reply must shut down.

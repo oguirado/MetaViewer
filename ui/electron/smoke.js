@@ -60,11 +60,22 @@ try {
   }
   const wireReady=await win.webContents.executeJavaScript(`(async()=> {
     const api=window.metaviewer;
+    const proposal=JSON.stringify({
+      schema:'action_proposal/v0.2',
+      proposal_id:'smoke',
+      surface_id:'surface-demo',
+      based_on_frame:{sha256:'0'.repeat(64),generation:1},
+      action:{type:'click',x:20,y:30,button:'left'},
+      expectation:{type:'state_sha256_change'},
+      budget:{max_ms:1000,max_retries:1},
+    });
+    const refused=await api.authority.propose('{}').then(()=>false,err=>/PROPOSAL/.test(String(err)));
     return typeof api.authority?.subscribeFrames==='function'
       && typeof api.sideTerminal?.open==='function' && typeof api.sideTerminal?.setEnabled==='function'
       && await api.loadSettings()===null && await api.recordingDestination()===null
       && await api.nestedDepth()===null && await api.selfCapsuleId()===null
-      && (await api.authority.propose('{}')).proposal_id==='smoke';
+      && refused
+      && (await api.authority.propose(proposal)).proposal_id==='smoke';
   })()`);
   if(!wireReady) throw new Error('Domain preload facade did not cross contextBridge');
   console.log('METAVIEWER_SMOKE_OK');

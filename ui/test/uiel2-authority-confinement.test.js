@@ -221,7 +221,15 @@ test('U04 negative control: notice carrying ramws_path is dropped before reachin
 // Mutation: remove `'SURFACE_NOT_AGENT_CONTROLLED'` from the allowed `reason_code` list in `verdictReply` (ui/electron/authorityWire.js) or `wireFacade` (ui/electron/preload.js).
 test('U05 SURFACE_NOT_AGENT_CONTROLLED verdict propagates end-to-end through installAuthorityWire propose and preload facade', async t => {
   const f = await wireFixture(t);
-  const proposal = JSON.stringify({ schema: 'action_proposal/v0.2', proposal_id: 'p1' });
+  const proposal = JSON.stringify({
+    schema: 'action_proposal/v0.2',
+    proposal_id: 'p1',
+    surface_id: 's1',
+    based_on_frame: { generation: 1, sha256: 'a'.repeat(64) },
+    action: { type: 'click', x: 1, y: 1, button: 'left' },
+    expectation: { type: 'state_sha256_change' },
+    budget: { max_ms: 1000, max_retries: 0 },
+  });
   const outcome = await f.api.authority.propose(proposal);
   assert.deepEqual(outcome, {
     schema: 'action_verdict/v0.2',
@@ -237,6 +245,15 @@ test('U05 SURFACE_NOT_AGENT_CONTROLLED verdict propagates end-to-end through ins
 // Mutation: remove the `reason_code` allowlist check in `verdictReply` (ui/electron/authorityWire.js) and `wireFacade` (ui/electron/preload.js).
 test('U05 negative control: unknown refusal reason_code is rejected with OUTCOME at both authority wire and preload boundaries', async t => {
   const f = await wireFixture(t);
+  const validProp = JSON.stringify({
+    schema: 'action_proposal/v0.2',
+    proposal_id: 'p1',
+    surface_id: 's1',
+    based_on_frame: { generation: 1, sha256: 'a'.repeat(64) },
+    action: { type: 'click', x: 1, y: 1, button: 'left' },
+    expectation: { type: 'state_sha256_change' },
+    budget: { max_ms: 1000, max_retries: 0 },
+  });
   const badVerdict = {
     schema: 'action_verdict/v0.2',
     proposal_id: 'p1',
@@ -246,13 +263,13 @@ test('U05 negative control: unknown refusal reason_code is rejected with OUTCOME
   };
   assert.throws(() => verdictReply(badVerdict), /OUTCOME/);
   f.setCoreReply(badVerdict);
-  await assert.rejects(f.api.authority.propose('{"proposal_id":"p1"}'), /OUTCOME/);
+  await assert.rejects(f.api.authority.propose(validProp), /OUTCOME/);
 
   const directPreload = createPreloadFacade({
     transport: { invoke: async () => badVerdict, subscribe: () => () => {} },
     bridge: { exposeInMainWorld() {} },
   });
-  await assert.rejects(directPreload.authority.propose('{"proposal_id":"p1"}'), /OUTCOME/);
+  await assert.rejects(directPreload.authority.propose(validProp), /OUTCOME/);
 });
 
 // Mutation: omit `await unlink(temp)` in `createSettingsStore.save` finally block in ui/electron/authorityWire.js.

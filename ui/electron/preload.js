@@ -391,20 +391,27 @@ function captureFacade(transport, captureCallbacks = new Set(), seededCaptureSur
       if(args.length!==1 || typeof args[0]!=='function' || (!transport.nested && !transport.subscribe)) throw new ContractError('ARGS','capture callback');
       // Preserve the callable unsubscribe API; awaiting it yields the local refusal.
       if(transport.nested) return Object.assign(()=>{}, {then:(/** @type {any} */resolve)=>Promise.resolve({ok:false,code:'NESTED_DISPLAY_ONLY',request_id:''}).then(resolve)});
+      if(subscriptions.size>=64) throw new ContractError('LIMIT','capture subscription cap');
       const cb=/** @type {(value:any)=>void} */(args[0]);
       const token=Symbol();
-      captureCallbacks.add(cb);
+      let revoked=false;
+      const deliver=(/** @type {any} */frozen)=>{
+        if(revoked || !subscriptions.has(token)) return;
+        cb(frozen);
+      };
       const revoke=transport.subscribe?.('metaviewer:capture.state',value=>{
-        if(validCaptureState(value)) cb(Object.freeze({...value}));
+        if(revoked || !subscriptions.has(token)) return;
+        if(validCaptureState(value)) deliver(Object.freeze({...value}));
       });
-      subscriptions.set(token,()=>{captureCallbacks.delete(cb);revoke?.();});
+      subscriptions.set(token,()=>{revoked=true;captureCallbacks.delete(deliver);revoke?.();});
+      captureCallbacks.add(deliver);
       if (typeof document!=='undefined' && typeof document?.getElementById==='function' && document.getElementById('metaviewer-app')!==null) {
         for (const sid of seededCaptureSurfaces) {
-          try { cb(Object.freeze({type:'capture.state',recording_id:'idle',surface_id:sid,phase:'idle',frames:0,elapsed_ms:0})); } catch {}
+          try { deliver(Object.freeze({type:'capture.state',recording_id:'idle',surface_id:sid,phase:'idle',frames:0,elapsed_ms:0})); } catch {}
         }
       }
       void call('subscribe',[]).catch(()=>{subscriptions.get(token)?.();subscriptions.delete(token);});
-      return ()=>{const stop=subscriptions.get(token);if(!stop)return;stop();subscriptions.delete(token);
+      return ()=>{const stop=subscriptions.get(token);if(!stop)return;subscriptions.delete(token);stop();
         if(!subscriptions.size)void call('unsubscribe',[]).catch(()=>{});};
     },
   });
@@ -555,10 +562,12 @@ function validateSurfaceInputBatch(raw) {
           || Reflect.ownKeys(ev.keys).length !== ev.keys.length + 1) {
         return { ok: false, code: 'SCHEMA' };
       }
+      const maxTokenLen = ev.keys.length === 1 ? 32 : ev.keys.length === 2 ? 15 : ev.keys.length <= 4 ? 7 : 3;
       const keys = [];
       for (let j = 0; j < ev.keys.length; j += 1) {
         const kDesc = Object.getOwnPropertyDescriptor(ev.keys, j);
-        if (!kDesc || !('value' in kDesc) || typeof kDesc.value !== 'string' || !HUMAN_KEY_TOKEN_RE.test(kDesc.value)) {
+        if (!kDesc || !('value' in kDesc) || typeof kDesc.value !== 'string'
+            || kDesc.value.length > maxTokenLen || !HUMAN_KEY_TOKEN_RE.test(kDesc.value)) {
           return { ok: false, code: 'SCHEMA' };
         }
         keys.push(kDesc.value);
@@ -574,7 +583,7 @@ function validateSurfaceInputBatch(raw) {
           || ev.text.includes('\0') || !isWellFormedName(ev.text)) {
         return { ok: false, code: 'SCHEMA' };
       }
-      if (ev.text.length > 1024) hasOverlongTypeText = true;
+      if (Array.from(ev.text).length > 1024) hasOverlongTypeText = true;
       events.push(Object.freeze({ kind: 'type', text: ev.text }));
     } else if (ev.kind === 'scroll') {
       if (!captureKeys(ev, 'dx,dy,kind,x,y')
@@ -832,7 +841,7 @@ function wireFacade(transport) {
   const mergeTypeEvents=(baseEvents,nextEvents)=>{
     const merged=baseEvents.map(ev=>({kind:'type',text:ev.text}));
     for (const ev of nextEvents) {
-      if (merged.length>0 && merged[merged.length-1].text.length+ev.text.length<=SURFACE_INPUT_MAX_TEXT) {
+      if (merged.length>0 && Array.from(merged[merged.length-1].text).length+Array.from(ev.text).length<=SURFACE_INPUT_MAX_TEXT) {
         merged[merged.length-1].text+=ev.text;
       } else {
         merged.push({kind:'type',text:ev.text});
@@ -890,6 +899,18 @@ function wireFacade(transport) {
             if (nextMerged.length>SURFACE_INPUT_MAX_EVENTS) {
               break;
             }
+            if (batchGroup.length>0) {
+              const candWireBytes=utf8Bytes(JSON.stringify({
+                schema:candidate.batch.schema,
+                surface_id:sid,
+                stream_id:candidate.batch.stream_id,
+                seq:candidate.batch.seq,
+                events:nextMerged,
+              }));
+              if (candWireBytes>SURFACE_INPUT_MAX_BYTES) {
+                break;
+              }
+            }
             qState.queue.shift();
             batchGroup.push(candidate);
             wireEvents=nextMerged;
@@ -928,7 +949,7 @@ function wireFacade(transport) {
             item.resolve(itemOut);
           }
         } else {
-          if (out.code==='SURFACE_UNKNOWN' && qState.lastSeq===0 && qState.queue.length===0) {
+          if (qState.lastSeq===0 && qState.queue.length===0) {
             surfaceInputQueues.delete(sid);
           }
           const failOut=Object.freeze({ok:false,code:out.code});
@@ -940,6 +961,9 @@ function wireFacade(transport) {
       }
     } finally {
       qState.draining=false;
+      if (qState.lastSeq===0 && qState.queue.length===0 && qState.inFlightMaxSeq===0) {
+        surfaceInputQueues.delete(sid);
+      }
     }
   };
   api.input=Object.freeze({
@@ -1019,9 +1043,12 @@ function wireFacade(transport) {
     onResult:(...args)=>{
       if (args.length!==1 || typeof args[0]!=='function') throw new ContractError('ARGS','input result callback');
       const cb=/** @type {(result:any)=>void} */(args[0]);
-      const listener=(/** @type {any} */value)=>cb(value);
-      inputResultListeners.add(listener);
       let active=true;
+      const listener=(/** @type {any} */value)=>{
+        if (!active || !inputResultListeners.has(listener)) return;
+        cb(value);
+      };
+      inputResultListeners.add(listener);
       return ()=>{
         if (!active) return;
         active=false;
@@ -1038,9 +1065,13 @@ function wireFacade(transport) {
     subscribeFrames:(...args)=> {
       if (args.length!==1 || typeof args[0]!=='function' || !transport.subscribe) throw new ContractError('ARGS','frame callback');
       const cb=/** @type {(frame:any)=>void} */(args[0]);
+      let active=true;
       // Give each subscription its own identity, including repeated callbacks.
-      const listener=(/** @type {any} */value)=>cb(value);
-      listeners.add(listener);let active=true;
+      const listener=(/** @type {any} */value)=>{
+        if (!active || !listeners.has(listener)) return;
+        cb(value);
+      };
+      listeners.add(listener);
       if(listeners.size===1) {
         const generation=++subscriptionGeneration;
         revokeFrames=transport.subscribe('metaviewer:authority.frames',(value,ports)=> {

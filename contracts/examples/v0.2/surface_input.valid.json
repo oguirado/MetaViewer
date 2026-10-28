@@ -27,6 +27,18 @@
       "keys": ["Control_L", "l"]
     },
     {
+      "kind": "key",
+      "keys": ["Return"]
+    },
+    {
+      "kind": "key",
+      "keys": ["ctrl", "shift", "l"]
+    },
+    {
+      "kind": "key",
+      "keys": ["a", "b", "c", "d", "e"]
+    },
+    {
       "kind": "type",
       "text": "https://metaviewer.local"
     },

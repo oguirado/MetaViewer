@@ -14,8 +14,17 @@ const notice={surface,frame_ref:{schema:'frame_ref/v0.2',surface_id:'s1',generat
 const verdict={schema:'action_verdict/v0.2',proposal_id:'p',decision:'admitted',core_seq:1};
 const settings=JSON.stringify({scheme:'mv-light',density:'compact'});
 const spec={command:'luna',args:['--safe'],cols:80,rows:24};
+const validProposal=JSON.stringify({
+  schema:'action_proposal/v0.2',
+  proposal_id:'p',
+  surface_id:'s1',
+  based_on_frame:{generation:1,sha256:'a'.repeat(64)},
+  action:{type:'click',x:10,y:20,button:'left'},
+  expectation:{type:'state_sha256_change'},
+  budget:{max_ms:1000,max_retries:0},
+});
 const calls={loadSettings:[],saveSettings:[settings],recordingDestination:[],nestedDepth:[],selfCapsuleId:[],
-  propose:['{"proposal_id":"p"}'],intent:[JSON.stringify({schema:'ui_intent/v0.2',request_id:'r1',op:'take_control',params:{surface_id:'s1'}})],subscribeFrames:[],unsubscribeFrames:[],
+  propose:[validProposal],intent:[JSON.stringify({schema:'ui_intent/v0.2',request_id:'r1',op:'take_control',params:{surface_id:'s1'}})],subscribeFrames:[],unsubscribeFrames:[],
   terminalEnabled:[true],terminalOpen:[spec]};
 async function fixture(t,env={}) {
   const root=await mkdtemp(join(tmpdir(),'wire-'));
@@ -137,7 +146,7 @@ test('terminal refuses arbitrary commands, argv changes, disabled state, malform
   await f.call('terminalOpen',spec);
   assert.deepEqual(f.terminalCalls,[{command:'provider',provider:'luna',cols:80,rows:24}]);
   f.terminalReply({session:'s1',path:'/oops'});await assert.rejects(f.call('terminalOpen',spec),/OUTCOME/);
-  f.coreReply({decision:'admitted'});await assert.rejects(f.call('propose','{}'),/OUTCOME/);
+  f.coreReply({decision:'admitted'});await assert.rejects(f.call('propose',validProposal),/OUTCOME/);
   await assert.rejects(f.call('intent','{"op":"execute_shell"}'),/INTENT/);
 });
 test('PTY adapter uses existing owner-envelope facade and checks broker refusal',async()=>{
@@ -902,5 +911,133 @@ test('MV10-NEW-01: destroy while unsubscribed still notifies and releases on res
   assert.throws(() => assert.equal(1, 2));
   assert.throws(() => assert.equal(0, 1));
 });
+
+test('R3-T4-012 (T19): main propose validates full 7-key action_proposal/v0.2 contract pre-send', async t => {
+  const f = await fixture(t);
+  const base = JSON.parse(validProposal);
+  for (const requiredKey of ['schema', 'proposal_id', 'surface_id', 'based_on_frame', 'action', 'expectation', 'budget']) {
+    const copy = { ...base };
+    delete copy[requiredKey];
+    await assert.rejects(f.call('propose', JSON.stringify(copy)), /PROPOSAL/);
+  }
+  await assert.rejects(f.call('propose', '{"proposal_id":"p"}'), /PROPOSAL/);
+  await assert.rejects(f.call('propose', '{"schema":"action_proposal/v0.2","proposal_id":"p"}'), /PROPOSAL/);
+  await assert.rejects(f.call('propose', JSON.stringify({ ...base, extra: 1 })), /PROPOSAL/);
+  await assert.rejects(f.call('propose', JSON.stringify({ ...base, action: { type: 'click', x: -1, y: 0, button: 'left' } })), /PROPOSAL/);
+  await assert.rejects(f.call('propose', JSON.stringify({ ...base, expectation: { type: 'unknown' } })), /PROPOSAL/);
+  await assert.rejects(f.call('propose', JSON.stringify({ ...base, budget: { max_ms: 0, max_retries: 0 } })), /PROPOSAL/);
+  assert.equal(f.coreCalls.length, 0);
+  const res = await f.call('propose', validProposal);
+  assert.deepEqual(res, verdict);
+  assert.equal(f.coreCalls.length, 1);
+});
+
+test('R3-T4-011 (T20): installAuthorityWire unwinds all 11 ipcMain handlers when frames.subscribe throws', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'wire-r3-011-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const handlers = new Map();
+  const frame = { origin: 'app://metaviewer', url: 'app://metaviewer/index.html' };
+  const contents = { id: 9, mainFrame: frame, isDestroyed: () => false, postMessage() {} };
+  const ipcMain = {
+    handle: (channel, fn) => {
+      if (handlers.has(channel)) throw new Error(`DUPLICATE:${channel}`);
+      handlers.set(channel, fn);
+    },
+    removeHandler: (channel) => handlers.delete(channel),
+  };
+  let shouldThrow = true;
+  const frames = {
+    subscribe: () => {
+      if (shouldThrow) throw new Error('FRAME_SOURCE');
+      return () => {};
+    },
+  };
+  const stubTerminal = { setEnabled: async () => true, open: async () => ({ session: 's1' }) };
+  assert.throws(() => installAuthorityWire({
+    ipcMain,
+    contents,
+    env: { XDG_CONFIG_HOME: root, MV_SELF_CAPSULE_ID: 'capsule-1' },
+    argv: ['--nested-depth=0'],
+    core: { request: async () => verdict },
+    profiles: new Map(),
+    terminal: stubTerminal,
+    frames,
+  }), /FRAME_SOURCE/);
+  assert.equal(handlers.size, 0, 'all registered handlers must be removed when frames.subscribe throws');
+
+  shouldThrow = false;
+  const binding = installAuthorityWire({
+    ipcMain,
+    contents,
+    env: { XDG_CONFIG_HOME: root, MV_SELF_CAPSULE_ID: 'capsule-1' },
+    argv: ['--nested-depth=0'],
+    core: { request: async () => verdict },
+    profiles: new Map(),
+    terminal: stubTerminal,
+    frames,
+  });
+  assert.equal(handlers.size, Object.keys(WIRE_CHANNELS).length);
+  await binding.dispose();
+  assert.equal(handlers.size, 0);
+});
+
+test('R3-T4-002: refused unknown sids leave 0 rate-window keys and dispose clears all surface maps', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'wire-r3-002-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const handlers = new Map();
+  const frame = { origin: 'app://metaviewer', url: 'app://metaviewer/index.html' };
+  const contents = { id: 9, mainFrame: frame, isDestroyed: () => false, postMessage() {} };
+  const event = { sender: contents, senderFrame: frame };
+  const ipcMain = { handle: (ch, fn) => handlers.set(ch, fn), removeHandler: (ch) => handlers.delete(ch) };
+  let admitKnown = false;
+  const binding = installAuthorityWire({
+    ipcMain,
+    contents,
+    env: { XDG_CONFIG_HOME: root, MV_SELF_CAPSULE_ID: 'capsule-1' },
+    argv: ['--nested-depth=0'],
+    core: {
+      request: async (req) => {
+        if (req.op === 'input' && admitKnown && req.batch.surface_id === 's-known') {
+          return { ok: true, accepted: req.batch.events.length };
+        }
+        return { ok: false, code: 'SURFACE_UNKNOWN' };
+      },
+    },
+    profiles: new Map(),
+    terminal: null,
+  });
+  const invokeInput = (sid, seq = 1) => handlers.get(WIRE_CHANNELS.intent)(event, {
+    schema: 'surface_input/v1',
+    surface_id: sid,
+    stream_id: 1,
+    seq,
+    events: [{ kind: 'key', keys: ['a'] }],
+  });
+  for (let i = 0; i < 65; i += 1) {
+    const out = await invokeInput(`unknown-65-${i}`);
+    assert.deepEqual(out, { ok: false, code: 'SURFACE_UNKNOWN' });
+  }
+  assert.equal(binding.inputRateWindow.size, 0);
+  assert.equal(binding.inputLastSeq.size, 0);
+
+  for (let i = 0; i < 10000; i += 1) {
+    const out = await invokeInput(`unknown-10k-${i}`);
+    assert.equal(out.ok, false);
+  }
+  assert.equal(binding.inputRateWindow.size, 0);
+  assert.equal(binding.inputLastSeq.size, 0);
+
+  admitKnown = true;
+  const okOut = await invokeInput('s-known', 1);
+  assert.deepEqual(okOut, { ok: true, accepted: 1 });
+  assert.equal(binding.inputRateWindow.has('s-known'), true);
+  assert.equal(binding.inputLastSeq.get('s-known'), 1);
+
+  await binding.dispose();
+  assert.equal(binding.inputRateWindow.size, 0);
+  assert.equal(binding.inputLastSeq.size, 0);
+  assert.equal(binding.inputInFlightSeq.size, 0);
+});
+
 
 

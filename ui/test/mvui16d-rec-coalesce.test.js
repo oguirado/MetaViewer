@@ -341,6 +341,81 @@ describe('store swap relists an empty listable store (note 3)', () => {
   });
 });
 
+test('R3-T4-004: preload input coalescer budgets by serialized JSON byte length so two 14598-byte newline batches flush separately without LIMIT', async () => {
+  const { createPreloadFacade } = await import('../electron/preload.js');
+  const { validateSurfaceInputBatch } = await import('../electron/authorityWire.js');
+  /** @type {any[]} */
+  const wireBatches = [];
+  /** @type {Array<() => void>} */
+  const gates = [];
+  const api = createPreloadFacade({
+    transport: {
+      invoke: async (channel, args) => {
+        assert.equal(channel, 'metaviewer:authority.intent');
+        const batch = args[0];
+        const checked = validateSurfaceInputBatch(batch);
+        wireBatches.push({ batch, checked });
+        if (gates.length > 0) {
+          const wait = gates.shift();
+          if (wait) await wait();
+        }
+        if (!checked.ok) return { ok: false, code: checked.code };
+        return { ok: true, accepted: checked.batch.events.length };
+      },
+      subscribe: () => () => {},
+    },
+    bridge: { exposeInMainWorld() {} },
+  });
+
+  // Construct two valid newline-heavy batches whose serialized JSON size is exactly 14598 bytes each,
+  // while raw unescaped text bytes are ~7254 bytes each (7254 + 7254 = 14508 > 14336 or with 7100 newlines = 14200 <= 14336).
+  // Specifically, 7 newline events of 1024 '\n' chars + 1 event of 84 '\n' chars + 'aa' = 7252 '\n' + 2 'a' = 7254 raw bytes <= 7254,
+  // so two batches have raw text bytes 7160 + 7160 = 14320 <= 14336, yet each serialized JSON batch is 14598 bytes!
+  const makeNewlineEvents = (seq) => {
+    const evs = Array.from({ length: 7 }, () => ({ kind: 'type', text: '\n'.repeat(1024) }));
+    const b = {
+      schema: 'surface_input/v1',
+      surface_id: 's1',
+      stream_id: 1,
+      seq,
+      events: evs,
+    };
+    const jsonBytes = Buffer.byteLength(JSON.stringify(b), 'utf8');
+    assert.equal(jsonBytes, 14598, `expected 14598 JSON bytes, got ${jsonBytes}`);
+    const rawBytes = evs.reduce((acc, e) => acc + Buffer.byteLength(e.text, 'utf8'), 0);
+    assert.equal(rawBytes * 2, 14336, 'two 7x1024 newline batches total 14336 raw bytes (<= 14336)');
+    return b;
+  };
+
+  let releaseFirst;
+  const firstGate = new Promise((r) => { releaseFirst = r; });
+  gates.push(() => firstGate);
+
+  const p1 = api.input.send({
+    schema: 'surface_input/v1',
+    surface_id: 's1',
+    stream_id: 1,
+    seq: 1,
+    events: [{ kind: 'key', keys: ['a'] }],
+  });
+  await new Promise((r) => setImmediate(r));
+  const b2 = makeNewlineEvents(2);
+  const b3 = makeNewlineEvents(3);
+  const p2 = api.input.send(b2);
+  const p3 = api.input.send(b3);
+  releaseFirst();
+
+  const [r1, r2, r3] = await Promise.all([p1, p2, p3]);
+  assert.deepEqual(r1, { ok: true, accepted: 1 });
+  assert.deepEqual(r2, { ok: true, accepted: b2.events.length });
+  assert.deepEqual(r3, { ok: true, accepted: b3.events.length });
+  assert.equal(wireBatches.length, 3, 'two 14598-byte JSON batches must flush as two separate wire calls, not merge into 29116 bytes');
+  for (const w of wireBatches) {
+    assert.equal(w.checked.ok, true);
+    assert.ok(Buffer.byteLength(JSON.stringify(w.batch), 'utf8') <= 16384);
+  }
+});
+
 test('mvui16d memory ceiling and file budget', () => {
   const rss = process.memoryUsage().rss;
   if (process.env.MVUI16_MEASURE) console.log(`mvui16d-rec-coalesce rss MiB: ${Math.round(rss / 1048576)}`);

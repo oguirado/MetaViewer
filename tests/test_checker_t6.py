@@ -444,6 +444,44 @@ class CheckerT6Tests(unittest.TestCase):
                 with self.subTest(decoder="rust", case=name):
                     self.assertEqual(answer, str(expected).lower())
 
+    def test_t6_r3_008_surface_input_chord_and_unicode_scalar_alignment(self) -> None:
+        schema = self.validator.load("surface_input.schema.json")
+
+        def make_batch(events: list) -> dict:
+            return {
+                "schema": "surface_input/v0.2",
+                "surface_id": "cap-browser",
+                "stream_id": 1,
+                "seq": 1,
+                "events": events,
+            }
+
+        admitted_batches = [
+            ("non-bmp-513-scalars", make_batch([{"kind": "type", "text": "\U0001f600" * 513}])),
+            ("non-bmp-1024-scalars", make_batch([{"kind": "type", "text": "\U0001f600" * 1024}])),
+            ("chord-2-control-l", make_batch([{"kind": "key", "keys": ["Control_L", "l"]}])),
+            ("chord-3-ctrl-shift-l", make_batch([{"kind": "key", "keys": ["ctrl", "shift", "l"]}])),
+            ("chord-8-single-a", make_batch([{"kind": "key", "keys": ["a"] * 8}])),
+        ]
+        refused_batches = [
+            ("chord-8x-aaaa-39-chars", make_batch([{"kind": "key", "keys": ["aaaa"] * 8}])),
+            ("chord-9-items", make_batch([{"kind": "key", "keys": ["a"] * 9}])),
+            ("chord-malformed-token", make_batch([{"kind": "key", "keys": ["bad key!"]}])),
+            ("type-1025-ascii-scalars", make_batch([{"kind": "type", "text": "a" * 1025}])),
+            ("type-1025-non-bmp-scalars", make_batch([{"kind": "type", "text": "\U0001f600" * 1025}])),
+            ("type-nul-char", make_batch([{"kind": "type", "text": "a\x00b"}])),
+            ("events-33-batch", make_batch([{"kind": "key", "keys": ["a"]} for _ in range(33)])),
+        ]
+
+        for name, batch in admitted_batches:
+            with self.subTest(verdict="admit", case=name):
+                self.validator.validate(batch, schema)
+
+        for name, batch in refused_batches:
+            with self.subTest(verdict="refuse", case=name):
+                with self.assertRaises(ValidationError):
+                    self.validator.validate(batch, schema)
+
 
 if __name__ == "__main__":
     unittest.main()

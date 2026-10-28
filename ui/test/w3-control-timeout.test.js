@@ -162,6 +162,22 @@ async function createControlFrameFixture(t, { shouldDropIntent = () => false } =
               data: { surface: currentSurface },
             });
           }
+        } else if (env.body.schema === 'action_proposal/v0.2') {
+          send({
+            schema: 'action_verdict/v0.2',
+            proposal_id: env.body.proposal_id,
+            decision: 'refused',
+            reason_code: 'POLICY',
+            core_seq: 1,
+          });
+        } else if (env.body.schema === 'surface_request/v0.2' && env.body.op === 'input') {
+          send({
+            schema: 'action_verdict/v0.2',
+            proposal_id: env.body.params?.proposal_id,
+            decision: 'refused',
+            reason_code: 'SURFACE_NOT_HUMAN_CONTROLLED',
+            core_seq: 2,
+          });
         }
       }
     });
@@ -685,3 +701,85 @@ test('W3-CONTROL-TIMEOUT resilience: a single CORE_TIMEOUT does not dispose a he
     'request after disconnect',
   );
 });
+
+test('R3-T4-005: unrelated proposal and surface_input replies do not reset intent progress across consecutive intent timeouts', async t => {
+  const f = await createControlFrameFixture(t, {
+    shouldDropIntent: () => true,
+  });
+  const bindings = await withTimeout(createMainBindings({ ...f }), 'createMainBindings r3-005');
+  f.registerCleanup(() => bindings.core.dispose());
+
+  f.send({ schema: 'surface_event/v0.2', event: 'created', data: { surface: baseSurface } });
+  const frame1 = await f.writeFrame(1, 0x10);
+  f.send({ schema: 'surface_event/v0.2', event: 'frame_ready', data: { frame_ref: frame1 } });
+  await new Promise(resolve => setTimeout(resolve, 20));
+
+  await withTimeout(
+    assert.rejects(
+      bindings.core.request({
+        op: 'intent',
+        json: JSON.stringify({
+          schema: 'ui_intent/v0.2',
+          request_id: 'r3-005-intent-1',
+          op: 'take_control',
+          params: { surface_id: 's1' },
+        }),
+      }),
+      /^Error: CORE_TIMEOUT$/,
+    ),
+    'first intent timeout spared',
+    10000,
+  );
+  assert.equal(bindings.core.getStatus().availability, 'live');
+
+  const verdict = await withTimeout(
+    bindings.core.request({
+      op: 'propose',
+      json: JSON.stringify({
+        schema: 'action_proposal/v0.2',
+        proposal_id: 'r3-005-prop-1',
+        surface_id: 's1',
+        based_on_frame: { generation: 1, sha256: 'a'.repeat(64) },
+        action: { type: 'click', x: 1, y: 1, button: 'left' },
+        expectation: { type: 'state_sha256_change' },
+        budget: { max_ms: 500, max_retries: 0 },
+      }),
+    }),
+    'propose between intent timeouts',
+  );
+  assert.equal(verdict.decision, 'refused');
+
+  const inputOut = await withTimeout(
+    bindings.core.request({
+      op: 'input',
+      batch: {
+        schema: 'surface_input/v1',
+        surface_id: 's1',
+        stream_id: 1,
+        seq: 1,
+        events: [{ kind: 'key', keys: ['a'] }],
+      },
+    }),
+    'input refusal between intent timeouts',
+  );
+  assert.equal(inputOut.ok, false);
+
+  await withTimeout(
+    assert.rejects(
+      bindings.core.request({
+        op: 'intent',
+        json: JSON.stringify({
+          schema: 'ui_intent/v0.2',
+          request_id: 'r3-005-intent-2',
+          op: 'take_control',
+          params: { surface_id: 's1' },
+        }),
+      }),
+      /^Error: CORE_TIMEOUT$/,
+    ),
+    'second consecutive intent timeout shuts down',
+    10000,
+  );
+  assert.equal(bindings.core.getStatus().availability, 'unavailable');
+});
+

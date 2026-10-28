@@ -14,7 +14,7 @@
  * without paths or bytes; record per-(surface, seq) applied-prefix progress floor
  * so retried partially-applied input batches skip already-applied prefix primitives.
  */
-import { INTENT_OPS, mapSurfaceInputRefusal, recordingDestination, validateIntentBody, validateSurfaceInputBatch } from './authorityWire.js';
+import { INTENT_OPS, mapSurfaceInputRefusal, recordingDestination, validateIntentBody, validateProposalBody, validateSurfaceInputBatch } from './authorityWire.js';
 export { INTENT_OPS };
 import { createTerminalHost } from './terminalHost.js';
 import { assertCaptureCall, assertCaptureReply, validCaptureState } from './captureBridge.js';
@@ -452,7 +452,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
             if (body.decision === 'admitted') result = true;
             else {
               const code = typeof body.reason_code === 'string' && body.reason_code.length ? body.reason_code : 'INPUT_REFUSED';
-              clearTimeout(item.timer);pending.delete(key);lastIntentReplySeq = received;
+              clearTimeout(item.timer);pending.delete(key);
               item.reject(Object.assign(new Error(code), { code, verdict: body }));
               continue;
             }
@@ -474,7 +474,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
             && isDeepStrictEqual(body, request)) {
           result = true;
         }
-        if (result !== undefined) {clearTimeout(item.timer);pending.delete(key);lastIntentReplySeq = received;item.resolve(result);}
+        if (result !== undefined) {clearTimeout(item.timer);pending.delete(key);if (request.schema === 'ui_intent/v0.2') lastIntentReplySeq = received;item.resolve(result);}
       }
       if (body.schema === 'frame_ref/v0.2') publish(body);
       else if (body.schema === 'surface_event/v0.2' && body.event === 'frame_ready') publish(body.data?.frame_ref);
@@ -835,7 +835,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
             || Buffer.byteLength(message.json) > 256 * 1024 || nonInputPendingCount() >= MAX_ITEMS) throw fail();
         const body = JSON.parse(message.json);
         if (message.op === 'intent') validateIntentBody(body, fail);
-        else if (body?.schema !== 'action_proposal/v0.2') throw fail();
+        else validateProposalBody(body, fail);
         const key = message.op === 'intent' ? body.request_id : body.proposal_id;
         if (!id(key) || pending.has(key)) throw fail();
         // [TARGET, unit decision] One intent CORE_TIMEOUT on a healthy active

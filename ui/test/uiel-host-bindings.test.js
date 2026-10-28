@@ -78,7 +78,18 @@ async function published(f, bindings) {
   f.send({ schema: 'surface_event/v0.2', event: 'frame_ready', data: { frame_ref: f.frame } });
   return next;
 }
-const proposal = id => ({ op: 'propose', json: JSON.stringify({ schema: 'action_proposal/v0.2', proposal_id: id }) });
+const proposal = id => ({
+  op: 'propose',
+  json: JSON.stringify({
+    schema: 'action_proposal/v0.2',
+    proposal_id: id,
+    surface_id: 's1',
+    based_on_frame: { generation: 1, sha256: 'a'.repeat(64) },
+    action: { type: 'click', x: 1, y: 1, button: 'left' },
+    expectation: { type: 'state_sha256_change' },
+    budget: { max_ms: 1000, max_retries: 0 },
+  }),
+});
 
 // Mutation: remove (info.mode & 0o022) or info.size > MAX_FRAME in acquirePublishedLease.
 test('HB1 valid owner frame leases read and release; writable or oversized publications refuse', { timeout: 5000 }, async t => {

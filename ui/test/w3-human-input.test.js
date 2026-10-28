@@ -1036,3 +1036,135 @@ test('W3-INPUT-BURST Goal 2 & Goal 4: 200 typed chars at 10 ms intervals coalesc
     }),
   );
 });
+
+test('T6-R3-008: preload and main authorityWire count Unicode scalar values for type.text and align multi-token chord bounds with surface_input.schema.json', async (t) => {
+  const f = await createFullStackFixture(t);
+  await f.api.authority.intent(
+    JSON.stringify({
+      schema: 'ui_intent/v0.2',
+      request_id: 'req-take-t6-008',
+      op: 'take_control',
+      params: { surface_id: 's1' },
+    }),
+  );
+
+  // 1. 513-codepoint and 1024-codepoint non-BMP strings (1026 and 2048 UTF-16 code units) are admitted.
+  const emoji513 = '😀'.repeat(513);
+  assert.equal(emoji513.length, 1026);
+  assert.equal(Array.from(emoji513).length, 513);
+  assert.equal(
+    validateSurfaceInputBatch({
+      schema: 'surface_input/v1',
+      surface_id: 's1',
+      stream_id: 1,
+      seq: 1,
+      events: [{ kind: 'type', text: emoji513 }],
+    }).ok,
+    true,
+  );
+  const res513 = await f.api.input.send({
+    schema: 'surface_input/v1',
+    surface_id: 's1',
+    stream_id: 1,
+    seq: 1,
+    events: [{ kind: 'type', text: emoji513 }],
+  });
+  assert.deepEqual(res513, { ok: true, accepted: 1 });
+
+  const emoji1024 = '😀'.repeat(1024);
+  assert.equal(emoji1024.length, 2048);
+  assert.equal(Array.from(emoji1024).length, 1024);
+  const res1024 = await f.api.input.send({
+    schema: 'surface_input/v1',
+    surface_id: 's1',
+    stream_id: 1,
+    seq: 2,
+    events: [{ kind: 'type', text: emoji1024 }],
+  });
+  assert.deepEqual(res1024, { ok: true, accepted: 1 });
+
+  // 2. 1025-scalar text (both non-BMP and ASCII) is refused as SCHEMA.
+  const emoji1025 = '😀'.repeat(1025);
+  assert.deepEqual(
+    validateSurfaceInputBatch({
+      schema: 'surface_input/v1',
+      surface_id: 's1',
+      stream_id: 1,
+      seq: 3,
+      events: [{ kind: 'type', text: emoji1025 }],
+    }),
+    { ok: false, code: 'SCHEMA' },
+  );
+  assert.deepEqual(
+    await f.api.input.send({
+      schema: 'surface_input/v1',
+      surface_id: 's1',
+      stream_id: 1,
+      seq: 3,
+      events: [{ kind: 'type', text: emoji1025 }],
+    }),
+    { ok: false, code: 'SCHEMA' },
+  );
+
+  // 3. Lone surrogates and NULs are refused as SCHEMA.
+  for (const badText of ['\uD800', '\uDC00', 'a\uD800b', 'a\0b']) {
+    assert.deepEqual(
+      validateSurfaceInputBatch({
+        schema: 'surface_input/v1',
+        surface_id: 's1',
+        stream_id: 1,
+        seq: 3,
+        events: [{ kind: 'type', text: badText }],
+      }),
+      { ok: false, code: 'SCHEMA' },
+    );
+    assert.deepEqual(
+      await f.api.input.send({
+        schema: 'surface_input/v1',
+        surface_id: 's1',
+        stream_id: 1,
+        seq: 3,
+        events: [{ kind: 'type', text: badText }],
+      }),
+      { ok: false, code: 'SCHEMA' },
+    );
+  }
+
+  // 4. Multi-token chord alignment: 8 x "aaaa" (joined 39 chars) is refused as SCHEMA; 8 x "a" (joined 15 chars) is admitted.
+  const chord8x4 = Array(8).fill('aaaa');
+  assert.equal(chord8x4.join('+').length, 39);
+  assert.deepEqual(
+    validateSurfaceInputBatch({
+      schema: 'surface_input/v1',
+      surface_id: 's1',
+      stream_id: 1,
+      seq: 3,
+      events: [{ kind: 'key', keys: chord8x4 }],
+    }),
+    { ok: false, code: 'SCHEMA' },
+  );
+  assert.deepEqual(
+    await f.api.input.send({
+      schema: 'surface_input/v1',
+      surface_id: 's1',
+      stream_id: 1,
+      seq: 3,
+      events: [{ kind: 'key', keys: chord8x4 }],
+    }),
+    { ok: false, code: 'SCHEMA' },
+  );
+
+  const chord8x1 = Array(8).fill('a');
+  assert.equal(chord8x1.join('+').length, 15);
+  assert.deepEqual(
+    await f.api.input.send({
+      schema: 'surface_input/v1',
+      surface_id: 's1',
+      stream_id: 1,
+      seq: 3,
+      events: [{ kind: 'key', keys: chord8x1 }],
+    }),
+    { ok: true, accepted: 1 },
+  );
+});
+

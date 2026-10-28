@@ -68,6 +68,84 @@ export function validateIntentBody(body, error = () => new Error('INTENT')) {
   }
   return body;
 }
+/** @param {any} body @param {()=>Error} [error] */
+export function validateProposalBody(body, error = () => new Error('PROPOSAL')) {
+  const validStr = (/** @type {unknown} */ v, /** @type {number} */ min, /** @type {number} */ max) => {
+    if (typeof v !== 'string' || !isWellFormedString(v) || Buffer.byteLength(v, 'utf8') > 65536) return false;
+    const len = Array.from(v).length;
+    return len >= min && len <= max;
+  };
+  const validIdStr = (/** @type {unknown} */ v) => validStr(v, 1, 128) && !/[\0\r\n]/.test(/** @type {string} */ (v));
+  const validSafeInt = (/** @type {unknown} */ v, min = -Number.MAX_SAFE_INTEGER, max = Number.MAX_SAFE_INTEGER) =>
+    typeof v === 'number' && Number.isSafeInteger(v) && v >= min && v <= max;
+  if (!exactDataKeys(body, 'action,based_on_frame,budget,expectation,proposal_id,schema,surface_id')
+      || body.schema !== 'action_proposal/v0.2'
+      || !validIdStr(body.proposal_id)
+      || !validIdStr(body.surface_id)
+      || !exactDataKeys(body.based_on_frame, 'generation,sha256')
+      || !validSafeInt(body.based_on_frame.generation, 0)
+      || typeof body.based_on_frame.sha256 !== 'string'
+      || !/^[0-9a-f]{64}(?![\s\S])/.test(body.based_on_frame.sha256)
+      || !exactDataKeys(body.budget, 'max_ms,max_retries')
+      || !validSafeInt(body.budget.max_ms, 1, 3600000)
+      || !validSafeInt(body.budget.max_retries, 0, 16)) {
+    throw error();
+  }
+  const act = body.action;
+  if (!act || typeof act !== 'object' || Array.isArray(act)) throw error();
+  if (act.type === 'click') {
+    if (!exactDataKeys(act, 'button,type,x,y')
+        || !validSafeInt(act.x, 0)
+        || !validSafeInt(act.y, 0)
+        || !['left', 'middle', 'right'].includes(act.button)) throw error();
+  } else if (act.type === 'key') {
+    if (!exactDataKeys(act, 'keys,type')
+        || !Array.isArray(act.keys) || Object.getPrototypeOf(act.keys) !== Array.prototype
+        || act.keys.length < 1 || act.keys.length > 4096
+        || Reflect.ownKeys(act.keys).length !== act.keys.length + 1) throw error();
+    for (let i = 0; i < act.keys.length; i += 1) {
+      const d = Object.getOwnPropertyDescriptor(act.keys, i);
+      if (!d || !('value' in d) || !validStr(d.value, 1, 65536)) throw error();
+    }
+  } else if (act.type === 'type') {
+    if (!exactDataKeys(act, 'text,type') || !validStr(act.text, 1, 65536)) throw error();
+  } else if (act.type === 'scroll') {
+    if (!exactDataKeys(act, 'dx,dy,type') || !validSafeInt(act.dx) || !validSafeInt(act.dy)) throw error();
+  } else if (act.type === 'wait') {
+    if (!exactDataKeys(act, 'ms,type') || !validSafeInt(act.ms, 1, 3600000)) throw error();
+  } else if (act.type === 'lane_submit') {
+    if (!exactDataKeys(act, 'payload,type,verb')
+        || !validStr(act.verb, 1, 128)
+        || !exactDataKeys(act.payload, 'nonce,text')
+        || !validStr(act.payload.nonce, 1, 128)
+        || !validStr(act.payload.text, 1, 4096)) throw error();
+  } else {
+    throw error();
+  }
+  const exp = body.expectation;
+  if (!exp || typeof exp !== 'object' || Array.isArray(exp)) throw error();
+  if (exp.type === 'changed_region') {
+    if (!exactDataKeys(exp, 'min_changed_px,roi,type')
+        || !validSafeInt(exp.min_changed_px, 1)
+        || !exactDataKeys(exp.roi, 'h,w,x,y')
+        || !validSafeInt(exp.roi.x, 0)
+        || !validSafeInt(exp.roi.y, 0)
+        || !validSafeInt(exp.roi.w, 1)
+        || !validSafeInt(exp.roi.h, 1)) throw error();
+  } else if (exp.type === 'element_state') {
+    if (!exactDataKeys(exp, 'name,role,state,type')
+        || !validStr(exp.role, 1, 128)
+        || !validStr(exp.name, 0, 4096)
+        || !['focused', 'enabled', 'checked', 'present'].includes(exp.state)) throw error();
+  } else if (exp.type === 'state_sha256_change') {
+    if (!exactDataKeys(exp, 'type')) throw error();
+  } else if (exp.type === 'text_present') {
+    if (!exactDataKeys(exp, 'text,type') || !validStr(exp.text, 1, 4096)) throw error();
+  } else {
+    throw error();
+  }
+  return body;
+}
 const HUMAN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}(?![\s\S])/;
 const HUMAN_KEY_TOKEN_RE = /^[A-Za-z0-9_+]{1,32}(?![\s\S])/;
 export const SURFACE_INPUT_CODES = Object.freeze([
@@ -175,10 +253,12 @@ export function validateSurfaceInputBatch(raw) {
           || Reflect.ownKeys(ev.keys).length !== ev.keys.length + 1) {
         return { ok: false, code: 'SCHEMA' };
       }
+      const maxTokenLen = ev.keys.length === 1 ? 32 : ev.keys.length === 2 ? 15 : ev.keys.length <= 4 ? 7 : 3;
       const keys = [];
       for (let j = 0; j < ev.keys.length; j += 1) {
         const kDesc = Object.getOwnPropertyDescriptor(ev.keys, j);
-        if (!kDesc || !('value' in kDesc) || typeof kDesc.value !== 'string' || !HUMAN_KEY_TOKEN_RE.test(kDesc.value)) {
+        if (!kDesc || !('value' in kDesc) || typeof kDesc.value !== 'string'
+            || kDesc.value.length > maxTokenLen || !HUMAN_KEY_TOKEN_RE.test(kDesc.value)) {
           return { ok: false, code: 'SCHEMA' };
         }
         keys.push(kDesc.value);
@@ -194,7 +274,7 @@ export function validateSurfaceInputBatch(raw) {
           || ev.text.includes('\0') || !isWellFormedString(ev.text)) {
         return { ok: false, code: 'SCHEMA' };
       }
-      if (ev.text.length > 1024) hasOverlongTypeText = true;
+      if (Array.from(ev.text).length > 1024) hasOverlongTypeText = true;
       events.push(Object.freeze({ kind: 'type', text: ev.text }));
     } else if (ev.kind === 'scroll') {
       if (!exactDataKeys(ev, 'dx,dy,kind,x,y')
@@ -388,6 +468,14 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
   /** @type {Map<string,number>} */ const inputPartialSeq = new Map();
   /** @type {Map<string,number>} */ const inputPartialApplied = new Map();
   /** @type {Map<string,number[]>} */ const inputRateWindow = new Map();
+  /** @type {Set<string>} */ const knownSurfaces = new Set();
+  const markKnownSurface = (/** @type {string} */ sid) => {
+    if (!knownSurfaces.has(sid) && knownSurfaces.size >= SURFACE_INPUT_MAX_SURFACES) {
+      const oldest = knownSurfaces.values().next().value;
+      if (oldest !== undefined) knownSurfaces.delete(oldest);
+    }
+    knownSurfaces.add(sid);
+  };
   const handlers = {
     loadSettings: async () => store.load(),
     saveSettings: async (/** @type {string} */json) => store.save(json),
@@ -395,7 +483,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     nestedDepth: async () => identity.depth,
     selfCapsuleId: async () => identity.self,
     propose: async (/** @type {string} */json) => {
-      jsonObject(json); return verdictReply(await core.request({op:'propose',json}));
+      validateProposalBody(jsonObject(json)); return verdictReply(await core.request({op:'propose',json}));
     },
     intent: async (/** @type {unknown} */arg) => {
       if (typeof arg !== 'string') return handleSurfaceInput(arg);
@@ -541,6 +629,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
       const reply = await core.request({ op: 'input', batch: coreBatch });
       if (exactDataKeys(reply, 'accepted,ok') && reply.ok === true
           && Number.isSafeInteger(reply.accepted) && reply.accepted >= 1 && reply.accepted <= coreBatch.events.length) {
+        markKnownSurface(sid);
         inputPartialSeq.delete(sid);
         inputPartialApplied.delete(sid);
         setBoundedSurfaceEntry(inputLastSeq, sid, batch.seq, inputLastSeq, inputInFlightSeq);
@@ -560,10 +649,19 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
           }
         }
         const mapped = mapSurfaceInputRefusal(reply.code);
-        if (mapped === 'SURFACE_UNKNOWN' && !hadRateEntry && !inputLastSeq.has(sid) && !inputPartialSeq.has(sid)) {
+        if (mapped === 'SURFACE_UNKNOWN') {
+          knownSurfaces.delete(sid);
+        }
+        if ((mapped === 'SURFACE_UNKNOWN' && !hadRateEntry && !inputLastSeq.has(sid) && !inputPartialSeq.has(sid))
+            || (!knownSurfaces.has(sid) && !inputLastSeq.has(sid) && !inputPartialSeq.has(sid))) {
           inputRateWindow.delete(sid);
+          inputLastSeq.delete(sid);
         }
         return Object.freeze({ ok: false, code: mapped });
+      }
+      if (!knownSurfaces.has(sid) && !inputLastSeq.has(sid) && !inputPartialSeq.has(sid)) {
+        inputRateWindow.delete(sid);
+        inputLastSeq.delete(sid);
       }
       return Object.freeze({ ok: false, code: 'CORE_UNAVAILABLE' });
     } catch (error) {
@@ -579,8 +677,13 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
       }
       const errCode = /** @type {any} */ (error)?.code ?? /** @type {any} */ (error)?.message;
       const mapped = mapSurfaceInputRefusal(errCode);
-      if (mapped === 'SURFACE_UNKNOWN' && !hadRateEntry && !inputLastSeq.has(sid) && !inputPartialSeq.has(sid)) {
+      if (mapped === 'SURFACE_UNKNOWN') {
+        knownSurfaces.delete(sid);
+      }
+      if ((mapped === 'SURFACE_UNKNOWN' && !hadRateEntry && !inputLastSeq.has(sid) && !inputPartialSeq.has(sid))
+          || (!knownSurfaces.has(sid) && !inputLastSeq.has(sid) && !inputPartialSeq.has(sid))) {
         inputRateWindow.delete(sid);
+        inputLastSeq.delete(sid);
       }
       return Object.freeze({ ok: false, code: mapped });
     } finally {
@@ -658,43 +761,58 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     drainPromise = run;
     return run;
   }
-  const stopFrames = frames ? frames.subscribe(async (/** @type {any} */entry) => {
-    if (disposed) return;
-    const sid = entry?.frameRef?.surface_id;
-    const isTerminal = ['destroyed','lost'].includes(entry?.state?.state);
-    if (subscribed && entry?.stateOnly && !isTerminal) {
-      const prior = typeof sid === 'string' ? pendingEntries.get(sid) : undefined;
-      if (prior?.stateOnly) {
-        pendingEntries.delete(sid);
-      } else if (prior) {
-        pendingEntries.set(sid, {...prior, state: entry.state, stateUpdated: false});
-      }
-      await deliverAuthorityFrame(entry,contents,streams,frameDiag);
-      return;
+  let stopFrames = () => {};
+  try {
+    if (frames) {
+      stopFrames = frames.subscribe(async (/** @type {any} */entry) => {
+        if (disposed) return;
+        const sid = entry?.frameRef?.surface_id;
+        const isTerminal = ['destroyed','lost'].includes(entry?.state?.state);
+        if (!isTerminal && typeof sid === 'string' && sid.length > 0) {
+          markKnownSurface(sid);
+        }
+        if (subscribed && entry?.stateOnly && !isTerminal) {
+          const prior = typeof sid === 'string' ? pendingEntries.get(sid) : undefined;
+          if (prior?.stateOnly) {
+            pendingEntries.delete(sid);
+          } else if (prior) {
+            pendingEntries.set(sid, {...prior, state: entry.state, stateUpdated: false});
+          }
+          await deliverAuthorityFrame(entry,contents,streams,frameDiag);
+          return;
+        }
+        if (subscribed && entry?.stateOnly && isTerminal && typeof sid === 'string') {
+          knownSurfaces.delete(sid);
+          inputLastSeq.delete(sid);
+          inputInFlightSeq.delete(sid);
+          inputPartialSeq.delete(sid);
+          inputPartialApplied.delete(sid);
+          inputRateWindow.delete(sid);
+          pendingEntries.delete(sid);
+          stageEntry(entry);
+          await closeSurfaceStreams(streams, sid);
+          await drainPendingEntries();
+          return;
+        }
+        if (isTerminal && typeof sid === 'string') {
+          knownSurfaces.delete(sid);
+          inputLastSeq.delete(sid);
+          inputInFlightSeq.delete(sid);
+          inputPartialSeq.delete(sid);
+          inputPartialApplied.delete(sid);
+          inputRateWindow.delete(sid);
+        }
+        stageEntry(entry);
+        if (!subscribed) return;
+        await drainPendingEntries();
+      });
     }
-    if (subscribed && entry?.stateOnly && isTerminal && typeof sid === 'string') {
-      inputLastSeq.delete(sid);
-      inputInFlightSeq.delete(sid);
-      inputPartialSeq.delete(sid);
-      inputPartialApplied.delete(sid);
-      inputRateWindow.delete(sid);
-      pendingEntries.delete(sid);
-      stageEntry(entry);
-      await closeSurfaceStreams(streams, sid);
-      await drainPendingEntries();
-      return;
-    }
-    if (isTerminal && typeof sid === 'string') {
-      inputLastSeq.delete(sid);
-      inputInFlightSeq.delete(sid);
-      inputPartialSeq.delete(sid);
-      inputPartialApplied.delete(sid);
-      inputRateWindow.delete(sid);
-    }
-    stageEntry(entry);
-    if (!subscribed) return;
-    await drainPendingEntries();
-  }) : () => {};
+  } catch (e) {
+    disposed = true;
+    subscribed = false;
+    for (const channel of channels) ipcMain.removeHandler?.(channel);
+    throw e;
+  }
   return {
     inputRateWindow,
     inputLastSeq,
@@ -702,6 +820,12 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     inputPartialSeq,
     inputPartialApplied,
     async dispose() { disposed=true; subscribed=false; stopFrames();
+      knownSurfaces.clear();
+      inputRateWindow.clear();
+      inputLastSeq.clear();
+      inputInFlightSeq.clear();
+      inputPartialSeq.clear();
+      inputPartialApplied.clear();
       pendingEntries.clear();
       for(const stream of [...streams]) {
         try { await stream.reader.closeReader(); } catch {}

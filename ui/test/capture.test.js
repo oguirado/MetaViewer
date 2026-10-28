@@ -107,3 +107,84 @@ test('native preload consumes the admitted nested signal and refuses without nat
     assert.deepEqual(await unsubscribe,{ok:false,code:'NESTED_DISPLAY_ONLY',request_id:''});
   } finally {if(previous)Object.defineProperty(globalThis,'navigator',previous);else delete globalThis.navigator;}
 });
+
+test('R3-T4-003: preload capture.subscribe enforces a 64-subscription cap and frees slots on unsubscribe', () => {
+  const listeners = new Set();
+  let nativeRegistrations = 0;
+  const api = facade(
+    async () => ({ ok: true }),
+    (_ch, fn) => {
+      nativeRegistrations += 1;
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    },
+    false,
+  );
+  const unsubs = [];
+  const counts = Array.from({ length: 64 }, () => 0);
+  for (let i = 0; i < 64; i += 1) {
+    unsubs.push(api.subscribe(() => { counts[i] += 1; }));
+  }
+  assert.equal(nativeRegistrations, 64);
+  assert.equal(listeners.size, 64);
+
+  let extraCalled = false;
+  assert.throws(
+    () => api.subscribe(() => { extraCalled = true; }),
+    (err) => err instanceof ContractError && err.code === 'LIMIT',
+  );
+  assert.equal(nativeRegistrations, 64, '65th subscription must be refused before allocating a native listener');
+  assert.equal(listeners.size, 64);
+
+  const sampleState = { type: 'capture.state', recording_id: 'rec-1', surface_id: 's1', phase: 'recording', frames: 1, elapsed_ms: 10 };
+  for (const fn of [...listeners]) fn(sampleState);
+  assert.equal(extraCalled, false);
+  assert.ok(counts.every((c) => c === 1), 'all 64 active subscriptions must remain functional');
+
+  unsubs[0]();
+  assert.equal(listeners.size, 63);
+  let replacementCount = 0;
+  const unsub64 = api.subscribe(() => { replacementCount += 1; });
+  assert.equal(listeners.size, 64);
+  for (const fn of [...listeners]) fn(sampleState);
+  assert.equal(replacementCount, 1);
+  assert.equal(counts[0], 1, 'unsubscribed slot must not receive subsequent events');
+
+  unsub64();
+  for (let i = 1; i < 64; i += 1) unsubs[i]();
+  assert.equal(listeners.size, 0);
+});
+
+test('R3-T4-013 (T04): revoking subscriber B inside subscriber A during dispatch prevents B from firing', () => {
+  const listeners = new Set();
+  const retainedReceivers = [];
+  const api = facade(
+    async () => ({ ok: true }),
+    (_ch, fn) => {
+      retainedReceivers.push(fn);
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    },
+    false,
+  );
+  const events = [];
+  let unsubB = () => {};
+  const unsubA = api.subscribe(() => {
+    events.push('A');
+    unsubB();
+  });
+  unsubB = api.subscribe(() => {
+    events.push('B');
+  });
+  const sampleState = { type: 'capture.state', recording_id: 'rec-1', surface_id: 's1', phase: 'recording', frames: 1, elapsed_ms: 10 };
+  // Dispatch over a pre-taken snapshot of receivers (simulating ipcRenderer.emit snapshot iteration).
+  const snapshot = [...listeners];
+  for (const fn of snapshot) fn(sampleState);
+  assert.deepEqual(events, ['A'], 'B must not fire when revoked by A during snapshot dispatch');
+
+  // Even if a caller retained B's raw receiver closure, calling it post-revoke is a no-op.
+  retainedReceivers[1](sampleState);
+  assert.deepEqual(events, ['A']);
+  unsubA();
+});
+
