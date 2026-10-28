@@ -15,6 +15,17 @@ import { installPreload } from '../electron/preload.js';
 
 const surface = {schema:'surface/v0.2',surface_id:'s1',kind:'browser',display:':1',geometry:{w:1,h:1},state:'active',visibility:'unfolded',control:'agent',profile_id:'test'};
 const registration = component => ({endpoint:{component,instance:component+'-test'},hello:{schema:'hello/v0.2',contract_version:'v0.2',component,component_version:'0.1.1',component_commit:'a'.repeat(40),dependencies:[]}});
+async function waitForCondition(predicate, description = 'condition', timeoutMs = 5000) {
+  const start = Date.now();
+  while (true) {
+    const value = await predicate();
+    if (value) return value;
+    if (Date.now() - start >= timeoutMs) {
+      assert.fail(`Timed out after ${timeoutMs}ms waiting for ${description}`);
+    }
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+}
 async function fixture(t, {badHello=false,refuseIntent=false,layoutRefusalCode=null}={}) {
   const root=await mkdtemp(join(tmpdir(),'mv-host-'));
   const ram=await mkdtemp('/dev/shm/mv-host-');
@@ -258,6 +269,13 @@ test('W2-REALAPP regression: sustained multi-frame delivery, pre-subscribe repla
   const f = await fixture(t), handlers = new Map();
   const bindings = await loadMainBindings(f.env, { createMessageChannel: f.createMessageChannel });
   t.after(() => bindings.core.dispose());
+  const origSubscribe = bindings.wire.frames.subscribe;
+  let stagedEntries = 0;
+  bindings.wire.frames.subscribe = listener =>
+    origSubscribe(async entry => {
+      await listener(entry);
+      stagedEntries += 1;
+    });
   const shell = join(f.root, 'shell');
   await mkdir(join(shell, 'dist/renderer'), { recursive: true });
   await mkdir(join(shell, 'dist/preload'), { recursive: true });
@@ -301,7 +319,7 @@ test('W2-REALAPP regression: sustained multi-frame delivery, pre-subscribe repla
   // 1. L1 pre-subscribe race: frame_ready (generation 1) arrives BEFORE renderer calls subscribeFrames.
   f.send({ schema: 'surface_event/v0.2', event: 'created', data: { surface } });
   f.send({ schema: 'surface_event/v0.2', event: 'frame_ready', data: { frame_ref: f.frame } });
-  await new Promise(resolve => setTimeout(resolve, 20));
+  await waitForCondition(() => stagedEntries >= 1, 'pre-subscribe generation-1 frame staged in authorityWire');
   assert.equal(notices.length, 0);
 
   // Subscribing replays the pending generation-1 frame and announces port2.
@@ -761,7 +779,10 @@ test('R2-T4-006 regression: destroyed and lost surfaces release map slots, chann
   await finalDone;
 
   f.send({ schema: 'surface_event/v0.2', event: 'created', data: { surface: { ...surface, surface_id: 's-cycle-1', state: 'active' } } });
-  await new Promise(resolve => setTimeout(resolve, 20));
+  await waitForCondition(
+    () => f.requests.filter(r => r.body.schema === 'surface_request/v0.2' && r.body.op === 'frame_subscribe').length === 66,
+    'recreated s-cycle-1 frame_subscribe request',
+  );
   const subCountAfter = f.requests.filter(r => r.body.schema === 'surface_request/v0.2' && r.body.op === 'frame_subscribe').length;
   assert.equal(subCountAfter, 66, 'recreated surface must be subscribed again after prior destroy/lost');
   assert.equal(bindings.core.getStatus().availability, 'live');
@@ -773,7 +794,7 @@ test('R2-T4-006 regression: destroyed and lost surfaces release map slots, chann
   for (let i = 1; i <= 65; i += 1) {
     fCap.send({ schema: 'surface_event/v0.2', event: 'created', data: { surface: { ...surface, surface_id: `s-active-${i}`, state: 'active' } } });
   }
-  await new Promise(resolve => setTimeout(resolve, 30));
+  await waitForCondition(() => capBindings.core.getStatus().availability === 'unavailable', '65th active surface shutdown');
   assert.equal(capBindings.core.getStatus().availability, 'unavailable');
 });
 
@@ -846,7 +867,7 @@ test('R2-T4-023 regression: receive validates exact envelope keys and ts_ns boun
     session_id: fGood.config.session_id, seq: 2, nonce: 'nonce-2',
     body: { schema: 'surface_event/v0.2', event: 'created', data: { surface } },
   });
-  await new Promise(resolve => setTimeout(resolve, 25));
+  await waitForCondition(() => bindings.core.getStatus().availability === 'unavailable', 'post-hello missing ts_ns shutdown');
   assert.equal(bindings.core.getStatus().availability, 'unavailable');
 });
 
@@ -1283,6 +1304,7 @@ test('RV10-04: consecutive intent timeouts separated only by frame traffic shut 
       capture_us: 1,
     };
     const sockets = new Set();
+    const requests = [];
     let peer = null;
     let seq = 0;
     let dropIntents = true;
@@ -1311,6 +1333,7 @@ test('RV10-04: consecutive intent timeouts separated only by frame traffic shut 
         while ((offset = buffer.indexOf('\n')) >= 0) {
           const env = JSON.parse(buffer.slice(0, offset));
           buffer = buffer.slice(offset + 1);
+          requests.push(env);
           if (env.body.schema === 'hello/v0.2') {
             send(config.core.hello);
           } else if (env.body.schema === 'ui_intent/v0.2' && !dropIntents) {
@@ -1352,6 +1375,7 @@ test('RV10-04: consecutive intent timeouts separated only by frame traffic shut 
     return {
       env: { MV_CORE_CONFIG: configPath, XDG_RUNTIME_DIR: root },
       frame,
+      requests,
       send,
       setDropIntents: v => {
         dropIntents = v;
@@ -1368,9 +1392,16 @@ test('RV10-04: consecutive intent timeouts separated only by frame traffic shut 
       const f = await makeSilenceableServer();
       const bindings = await createMainBindings({ ...f });
       t.after(() => bindings.core.dispose());
+      let shutdownBranchFrameEntry = null;
+      bindings.wire.frames.subscribe(entry => {
+        if (!entry.stateOnly) shutdownBranchFrameEntry = entry;
+      });
 
       f.send({ schema: 'surface_event/v0.2', event: 'created', data: { surface: { ...surface, control: 'human' } } });
-      await new Promise(resolve => setTimeout(resolve, 20));
+      await waitForCondition(
+        () => f.requests.some(r => r.body.schema === 'surface_request/v0.2' && r.body.op === 'frame_subscribe' && r.body.params?.surface_id === 's1'),
+        'shutdown branch initial created event and frame_subscribe',
+      );
 
       // 1st intent timeout on an active session is spared.
       await assert.rejects(
@@ -1420,7 +1451,11 @@ test('RV10-04: consecutive intent timeouts separated only by frame traffic shut 
         },
       });
       assert.equal(refuseInput.ok, false);
-      await new Promise(resolve => setTimeout(resolve, 20));
+      await waitForCondition(
+        () => shutdownBranchFrameEntry !== null,
+        'shutdown branch intervening frame_ready entry',
+      );
+      assert.ok(shutdownBranchFrameEntry);
 
       // 2nd consecutive intent timeout without a matched intent reply must shut down.
       await assert.rejects(
@@ -1442,12 +1477,14 @@ test('RV10-04: consecutive intent timeouts separated only by frame traffic shut 
       const bindingsRecover = await createMainBindings({ ...fRecover });
       t.after(() => bindingsRecover.core.dispose());
       let frameEntry = null;
+      let destroyedStateEntry = null;
       bindingsRecover.wire.frames.subscribe(entry => {
         if (!entry.stateOnly) frameEntry = entry;
+        else if (entry.state?.state === 'destroyed') destroyedStateEntry = entry;
       });
       fRecover.send({ schema: 'surface_event/v0.2', event: 'created', data: { surface } });
       fRecover.send({ schema: 'surface_event/v0.2', event: 'frame_ready', data: { frame_ref: fRecover.frame } });
-      await new Promise(resolve => setTimeout(resolve, 20));
+      await waitForCondition(() => frameEntry !== null, 'recovery control initial frame_ready entry');
       assert.ok(frameEntry);
       assert.equal(frameEntry.resolveLatestState()?.state, 'active');
 
@@ -1485,7 +1522,10 @@ test('RV10-04: consecutive intent timeouts separated only by frame traffic shut 
         event: 'state_changed',
         data: { surface: { ...surface, state: 'destroyed' } },
       });
-      await new Promise(resolve => setTimeout(resolve, 20));
+      await waitForCondition(
+        () => destroyedStateEntry !== null && frameEntry.resolveLatestState() === null,
+        'recovery control destroyed state_changed propagation',
+      );
       assert.equal(frameEntry.resolveLatestState(), null, 'resolveLatestState must return null once surface is absent');
     })(),
   ]);
