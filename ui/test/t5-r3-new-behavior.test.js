@@ -22,7 +22,7 @@ test('1. Fixed-cadence consumer clock wrap handling', () => {
   }
 });
 
-// 2. Telemetry oracle seam (FPS & gaps)
+// 2. Telemetry oracle gap calculation and deduplication
 test('2. Telemetry oracle gap calculation and deduplication', () => {
   const calculateGaps = (timestamps) => {
     if (timestamps.length < 2) return { p50: 0, p95: 0, p99: 0 };
@@ -105,7 +105,7 @@ test('6. Verdict rendering and destroyed tombstone refusal', () => {
   assert.equal(isAdmitted('surf-destroyed'), false);
 });
 
-// 7. Wire boundary units (G4/G5/G8)
+// 7. Wire boundary kind dropping with zero side effects
 test('7. Wire boundary kind dropping with zero side effects', () => {
   const processWireMessage = (msg) => {
     if (!msg || typeof msg !== 'object' || !['propose', 'intent'].includes(msg.kind)) {
