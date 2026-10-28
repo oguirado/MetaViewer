@@ -258,8 +258,19 @@ function assertControlWithFramesAudit(evidence) {
   assert.equal(evidence.tileStateAfterRelease, 'agent-acting');
   assert.equal(evidence.activityErrorSeen, false, 'Activity strip must not report request unavailable');
   assert.ok(
-    evidence.presentedAfterRelease > evidence.presentedBeforeTake + 2,
-    `expected continuous PRESENTED frames across take/release (${evidence.presentedBeforeTake} -> ${evidence.presentedAfterRelease})`,
+    Number.isInteger(evidence.presentedDuringTake) &&
+      evidence.presentedDuringTake >= evidence.presentedBeforeTake + 2,
+    `expected >= 2 PRESENTED frames while holding human-control (${evidence.presentedBeforeTake} -> ${evidence.presentedDuringTake})`,
+  );
+  assert.ok(
+    Number.isInteger(evidence.presentedAtRelease) &&
+      evidence.presentedAtRelease >= evidence.presentedDuringTake,
+    `expected monotonic presentedAtRelease baseline (${evidence.presentedDuringTake} -> ${evidence.presentedAtRelease})`,
+  );
+  assert.ok(
+    evidence.presentedAfterRelease >= evidence.presentedAtRelease + 1 &&
+      evidence.presentedAfterRelease > evidence.presentedBeforeTake + 2,
+    `expected >= 1 new PRESENTED frame after release_control (${evidence.presentedBeforeTake} -> ${evidence.presentedAtRelease} -> ${evidence.presentedAfterRelease})`,
   );
   assert.equal(evidence.readerRefusals, 0);
   assert.equal(evidence.portRefusals, 0);
@@ -677,6 +688,7 @@ async function runControlWithFramesJourney() {
     const takeAckMs = Date.now() - takeStartMs;
 
     // Let >= 2 more frames arrive while in human-control and verify tile state is never clobbered back to agent-acting.
+    let presentedDuringTake = presentedBeforeTake;
     const sustainedSample = await waitForBounded(
       async () => {
         const parsed = await readDiagOrNull();
@@ -692,6 +704,7 @@ async function runControlWithFramesJourney() {
           parsed?.main?.acksByOutcome?.PRESENTED >= presentedBeforeTake + 2 &&
           sample.tileState === 'human-control'
         ) {
+          presentedDuringTake = parsed.main.acksByOutcome.PRESENTED;
           return sample;
         }
         return null;
@@ -742,6 +755,14 @@ async function runControlWithFramesJourney() {
       },
     );
     const releaseAckMs = Date.now() - releaseStartMs;
+    const diagAtRelease = await readDiagOrNull();
+    if (diagAtRelease) lastDiag = diagAtRelease;
+    const presentedAtRelease = Math.max(
+      presentedDuringTake,
+      diagAtRelease?.main?.acksByOutcome?.PRESENTED ??
+        lastDiag?.main?.acksByOutcome?.PRESENTED ??
+        presentedDuringTake,
+    );
 
     // Wait for at least one more frame after release_control to confirm the stream and wire stay healthy.
     const finalDiag = await waitForBounded(
@@ -750,6 +771,7 @@ async function runControlWithFramesJourney() {
         if (parsed) lastDiag = parsed;
         if (
           parsed?.main?.acksByOutcome?.PRESENTED >= presentedBeforeTake + 3 &&
+          parsed?.main?.acksByOutcome?.PRESENTED >= presentedAtRelease + 1 &&
           parsed?.main?.stateOnlyPosted >= 2
         ) {
           return parsed;
@@ -794,6 +816,8 @@ async function runControlWithFramesJourney() {
       tileStateAfterRelease: afterReleaseSample.tileState,
       activityErrorSeen,
       presentedBeforeTake,
+      presentedDuringTake,
+      presentedAtRelease,
       presentedAfterRelease: finalDiag.main.acksByOutcome.PRESENTED,
       readerRefusals: finalDiag.main.deliveriesRefusedByReader,
       portRefusals: finalDiag.main.deliveriesRefusedByPort,
@@ -850,6 +874,18 @@ test(
     assert.throws(
       () => assertControlWithFramesAudit({ ...evidence, fps: 1.2 }),
       />= 2 fps/,
+    );
+    // T8-R3-08 negative control: frames advance during TAKE (+5) but stall (+0) after RELEASE.
+    assert.throws(
+      () =>
+        assertControlWithFramesAudit({
+          ...evidence,
+          presentedBeforeTake: 2,
+          presentedDuringTake: 7,
+          presentedAtRelease: 7,
+          presentedAfterRelease: 7,
+        }),
+      /expected >= 1 new PRESENTED frame after release_control/,
     );
   },
 );

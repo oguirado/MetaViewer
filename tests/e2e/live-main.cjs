@@ -21,6 +21,7 @@ app.whenReady().then(async () => {
         crossRoute: process.env.MV_E2E_CROSS_ROUTE === '1',
         advancingFrames: process.env.MV_E2E_ADVANCING_FRAMES === '1',
         stalledTile: process.env.MV_E2E_STALLED_TILE ?? null,
+        unpaintedTile: process.env.MV_E2E_UNPAINTED_TILE ?? null,
       })] } });
   if (process.env.MV_E2E_TELEMETRY) installTelemetry(win, JSON.parse(process.env.MV_E2E_TELEMETRY));
   await win.loadFile(join(buildDir, 'index.html'));
@@ -37,12 +38,24 @@ function installTelemetry(win, config) {
     const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
     const sample = () => win.webContents.executeJavaScript(`(${() =>
       Array.from(document.querySelectorAll('[data-capsule-id]')).map(node => {
-        const frameId = node.querySelector('[data-frame-tag]')?.getAttribute('data-frame-tag') ?? null;
-        const match = /-gen(\d+)$/.exec(frameId ?? '');
         const body = node.querySelector('[data-frame-tag]');
+        const frameId = body?.getAttribute('data-frame-tag') ?? null;
+        const match = /-gen(\d+)$/.exec(frameId ?? '');
+        let painted = false;
+        let pixelSig = null;
+        if (body && body.tagName === 'CANVAS' && body.width > 0 && body.height > 0) {
+          const ctx = body.getContext('2d');
+          if (ctx) {
+            const d = ctx.getImageData(0, 0, 1, 1).data;
+            if (d[3] === 255 && (d[0] > 0 || d[1] > 0 || d[2] > 0)) {
+              painted = true;
+              pixelSig = `${d[0]},${d[1]},${d[2]},${d[3]}`;
+            }
+          }
+        }
         return { capsuleId: node.getAttribute('data-capsule-id'), frameId,
           visible: !!body?.checkVisibility(), hidden: body ? !body.checkVisibility() : null,
-          generation: match ? Number(match[1]) : null };
+          generation: match ? Number(match[1]) : null, painted, pixelSig };
       })})()`);
     let report = { schema: 'e2e-ac02-wall-report/v1', phase: 'wall',
       tiles: [], errors, soakMs: config.soakMs };
@@ -59,9 +72,20 @@ function installTelemetry(win, config) {
           || wanted.some(({ capsuleId }) => !initial.some(row => row.capsuleId === capsuleId))) {
         throw new Error('E2E_PREREQ: telemetry requires all manifest tiles with visible frames');
       }
-      const counters = new Map(initial.map(row => [row.capsuleId,
-        { first: row.generation, last: row.generation, tag: row.frameId, frames: 0 }]));
-      const observe = rows => {
+      const start = performance.now();
+      const counters = new Map(initial.map(row => [row.capsuleId, {
+        first: row.generation,
+        last: row.generation,
+        lastPaintedGen: row.painted ? row.generation : null,
+        tag: row.frameId,
+        pixelSig: row.pixelSig,
+        frames: 0,
+        paintCount: 0,
+        lastPresentAt: start,
+        lastObservedAt: start,
+        maxGapMs: 0,
+      }]));
+      const observe = (rows, now, recordPresentations = true) => {
         if (rows.length !== counters.size || new Set(rows.map(row => row.capsuleId)).size !== counters.size) {
           throw new Error('E2E_ROUTING: telemetry tile set changed');
         }
@@ -71,24 +95,49 @@ function installTelemetry(win, config) {
               || !row.frameId.startsWith('frame-' + row.capsuleId + '-gen')) {
             throw new Error('E2E_ROUTING: foreign or regressed frame on ' + row.capsuleId);
           }
-          if (row.frameId !== counter.tag) counter.frames++;
+          if (now < counter.lastObservedAt) {
+            throw new Error('E2E_CLOCK: non-monotone presentation sample timestamp');
+          }
+          counter.lastObservedAt = now;
+          if (
+            recordPresentations &&
+            row.visible &&
+            !row.hidden &&
+            row.frameId !== counter.tag &&
+            row.generation > counter.last &&
+            row.painted === true &&
+            row.pixelSig !== null &&
+            row.pixelSig !== counter.pixelSig &&
+            (counter.lastPaintedGen === null || row.generation > counter.lastPaintedGen)
+          ) {
+            const gap = now - counter.lastPresentAt;
+            if (gap > counter.maxGapMs) counter.maxGapMs = gap;
+            counter.lastPresentAt = now;
+            counter.frames += 1;
+            counter.paintCount += 1;
+            counter.lastPaintedGen = row.generation;
+            counter.pixelSig = row.pixelSig;
+          }
           counter.last = row.generation;
           counter.tag = row.frameId;
         }
       };
-      const start = performance.now();
       let rows;
       do {
         await pause(10);
         rows = await sample();
-        observe(rows);
+        observe(rows, performance.now(), true);
       } while (performance.now() - start < config.soakMs);
-      const elapsed = performance.now() - start;
+      const end = performance.now();
+      const elapsed = end - start;
       report.soakMs = Math.round(elapsed);
       report.tiles = rows.map(row => {
         const counter = counters.get(row.capsuleId);
+        const tailGap = Math.max(0, end - counter.lastPresentAt);
+        const maxGapMs = Math.round(Math.max(counter.maxGapMs, tailGap));
         return { capsuleId: row.capsuleId, visible: row.visible, hidden: row.hidden,
           frameId: row.frameId, fps: counter.frames * 1000 / elapsed,
+          maxGapMs, paintCount: counter.paintCount,
           genBefore: counter.first, genAfter: counter.last };
       });
       // Capture the visible window before invoking the real kit fold control.
@@ -108,7 +157,7 @@ function installTelemetry(win, config) {
       do {
         await pause(10);
         rows = await sample();
-        observe(rows);
+        observe(rows, performance.now(), false);
         if (!rows.find(row => row.capsuleId === foldedId)?.hidden) {
           throw new Error('E2E_FOLD: tile became visible during folded sampling');
         }

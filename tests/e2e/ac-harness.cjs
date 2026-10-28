@@ -3,7 +3,8 @@
 // MV_E2E_LIVE flag. Missing real tools still fail; no dependency is downloaded.
 // [TARGET, unit decision] W3-E2E-FRESH-BUILD: prepareWall verifies ui/dist
 // against a length-framed SHA-256 content stamp and source mtime table covering
-// ui/src, ui/electron, ui/index.html, ui/vite.config.* and ui/kit.lock.json;
+// ui/src, ui/electron, ui/index.html, ui/vite.config.*, ui/kit.lock.json,
+// ui/package.json and ui/package-lock.json;
 // stale or unstamped builds are rebuilt before any journey runs, and any
 // rebuild failure removes stale outputs and throws E2EError('E2E_PREREQ', ...).
 const harness = require('./harness.js');
@@ -32,7 +33,12 @@ const VITE_CONFIG_PATTERN = /^vite\.config\.[^/\\]+$/;
 /** Required subdirectories under ui/ whose recursive contents feed the build. */
 const UI_SOURCE_DIRS = Object.freeze(['src', 'electron']);
 /** Required top-level files under ui/ that feed the build. */
-const UI_SOURCE_FILES = Object.freeze(['index.html', 'kit.lock.json', 'package.json']);
+const UI_SOURCE_FILES = Object.freeze([
+  'index.html',
+  'kit.lock.json',
+  'package.json',
+  'package-lock.json',
+]);
 /** Required subdirectories under ui/dist whose recursive artifacts are stamped. */
 const UI_DIST_DIRS = Object.freeze(['renderer', 'preload']);
 
@@ -178,12 +184,20 @@ function collectUiBuildSources(uiRoot) {
     walkUiSourceDir(root, '.kit', collected);
   }
 
+  const defaultUiRoot = join(harness.findRepoRoot(__dirname), 'ui');
   for (const fileName of UI_SOURCE_FILES) {
     const absFile = join(root, fileName);
     let fStat;
     try {
       fStat = lstatSync(absFile);
-    } catch {
+    } catch (err) {
+      if (
+        fileName === 'package-lock.json' &&
+        /** @type {NodeJS.ErrnoException} */ (err).code === 'ENOENT' &&
+        root !== defaultUiRoot
+      ) {
+        continue;
+      }
       throw new harness.E2EError('E2E_PREREQ', `required UI source file missing: ${fileName}`);
     }
     if (fStat.isSymbolicLink() || !fStat.isFile()) {
@@ -1025,6 +1039,7 @@ module.exports = {
   ...harness,
   UI_BUILD_STAMP_FILE,
   UI_BUILD_STAMP_SCHEMA,
+  UI_SOURCE_FILES,
   collectUiBuildSources,
   collectUiDistArtifacts,
   inspectUiDistFreshness,

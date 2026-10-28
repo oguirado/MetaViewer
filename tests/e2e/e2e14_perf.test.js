@@ -36,6 +36,26 @@ function resolvePerfWallBudget(env = process.env, arch = process.arch) {
   return PERF_WALL_ENV_BUDGETS.local;
 }
 
+function calibrateTileTrace(started, ended, targetFps) {
+  const durationMs = ended - started;
+  const count = Math.max(1, Math.round((durationMs * targetFps) / 1000));
+  const stepMs = durationMs / count;
+  const times = Array.from({ length: count }, (_, i) => started + (i + 0.5) * stepMs);
+  return { times, count, stepMs };
+}
+
+function scaleReportWindow(baseReport, durationMs, firstTileFps = 12, otherTilesFps = 12) {
+  const scaled = structuredClone(baseReport);
+  scaled.ended = scaled.started + durationMs;
+  for (let idx = 0; idx < scaled.visible.length; idx += 1) {
+    const fps = idx === 0 ? firstTileFps : otherTilesFps;
+    const { times, count } = calibrateTileTrace(scaled.started, scaled.ended, fps);
+    scaled.visible[idx].times = times;
+    scaled.visible[idx].info.presentCount = count;
+  }
+  return scaled;
+}
+
 function validate(report, budget = resolvePerfWallBudget()) {
   assert.equal(report.schema, 'metaviewer.perf-wall/v1');
   assert.equal(report.capture, 'synthetic-rgb24');
@@ -99,17 +119,40 @@ test('wall canvas soak measures cadence and folded capture; a producer stall fai
     const stalled = run('stall', { seconds: 3, stallMs: 2200 });
     assert.throws(() => validate(stalled, PERF_WALL_ENV_BUDGETS.local), /E2E_FPS|E2E_STALL/);
     assert.throws(() => validate(stalled, PERF_WALL_ENV_BUDGETS.hosted_arm64), /E2E_FPS|E2E_STALL/);
-    // Local budget never loosens: a synthetic 8.5 fps tile passes hosted_arm64 but fails local.
+    // Local budget never loosens: a synthetic 8.5 fps tile scaled to duration_ms passes hosted_arm64 but fails local.
     const eightHalfFps = structuredClone(clean);
-    const stepMs = (eightHalfFps.ended - eightHalfFps.started) / 26;
-    eightHalfFps.visible[0].times = Array.from({ length: 26 }, (_, i) => eightHalfFps.started + (i + 0.5) * stepMs);
-    eightHalfFps.visible[0].info.presentCount = 26;
+    const calibrated85 = calibrateTileTrace(eightHalfFps.started, eightHalfFps.ended, 8.5);
+    eightHalfFps.visible[0].times = calibrated85.times;
+    eightHalfFps.visible[0].info.presentCount = calibrated85.count;
     assert.doesNotThrow(() => validate(eightHalfFps, PERF_WALL_ENV_BUDGETS.hosted_arm64));
     assert.throws(() => validate(eightHalfFps, PERF_WALL_ENV_BUDGETS.local), /E2E_FPS: perf-a/);
-    // Exercise the silence bound independently of average throughput.
+    // T8-R3-09: Verify duration-scaled soak calibration across 3 s, 10 s, and 600 s virtual windows.
+    for (const soakSecs of [3, 10, 600]) {
+      const windowMs = soakSecs * 1000;
+      const nominalWindow = scaleReportWindow(clean, windowMs, 12, 12);
+      assert.doesNotThrow(() => validate(nominalWindow, PERF_WALL_ENV_BUDGETS.local));
+      assert.doesNotThrow(() => validate(nominalWindow, PERF_WALL_ENV_BUDGETS.hosted_arm64));
+
+      const splitWindow = scaleReportWindow(clean, windowMs, 8.5, 12);
+      assert.doesNotThrow(() => validate(splitWindow, PERF_WALL_ENV_BUDGETS.hosted_arm64));
+      assert.throws(() => validate(splitWindow, PERF_WALL_ENV_BUDGETS.local), /E2E_FPS: perf-a/);
+
+      const lowHostedWindow = scaleReportWindow(clean, windowMs, 7.5, 12);
+      assert.throws(() => validate(lowHostedWindow, PERF_WALL_ENV_BUDGETS.hosted_arm64), /E2E_FPS: perf-a/);
+      assert.throws(() => validate(lowHostedWindow, PERF_WALL_ENV_BUDGETS.local), /E2E_FPS: perf-a/);
+    }
+    // Exercise the silence bound independently of average throughput (including a 4000 ms gap at >= 10 fps).
     const gap = structuredClone(clean);
     gap.visible[0].times = gap.visible[0].times.map(() => gap.started);
     assert.throws(() => validate(gap), /E2E_STALL/);
+    const gap10s = scaleReportWindow(clean, 10000, 25, 12);
+    gap10s.visible[0].times = gap10s.visible[0].times.filter(
+      t => t - gap10s.started <= 2000 || t - gap10s.started >= 6000,
+    );
+    gap10s.visible[0].info.presentCount = gap10s.visible[0].times.length;
+    assert.ok((gap10s.visible[0].times.length * 1000) / 10000 >= 10);
+    assert.throws(() => validate(gap10s, PERF_WALL_ENV_BUDGETS.local), /E2E_STALL: perf-a/);
+    assert.throws(() => validate(gap10s, PERF_WALL_ENV_BUDGETS.hosted_arm64), /E2E_STALL: perf-a/);
     const folded = structuredClone(clean);
     folded.folded.after.lastCaptureGeneration = folded.folded.before.lastCaptureGeneration;
     assert.throws(() => validate(folded), /E2E_FOLD/);

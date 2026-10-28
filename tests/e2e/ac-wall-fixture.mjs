@@ -10,7 +10,21 @@ import 'capsule-ui-kit/theme.css';
 import { createDefaultLayoutProfile } from 'capsule-ui-kit/layout';
 import { installKitTheme } from 'capsule-ui-kit/theme';
 
-const { capsules, crossRoute, stalledTile, advancingFrames } = window.e2eFixture;
+const { capsules, crossRoute, stalledTile, advancingFrames, unpaintedTile } = window.e2eFixture;
+const canvases = new Map();
+function paintTileCanvas(capsuleId, generation) {
+  if (capsuleId === unpaintedTile) return;
+  const canvas = canvases.get(capsuleId);
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const idx = capsules.findIndex(c => c.capsuleId === capsuleId);
+  const r = ((idx + 1) * 53 + generation * 29) % 200 + 30;
+  const g = ((idx + 1) * 97 + generation * 43) % 200 + 30;
+  const b = ((idx + 1) * 137 + generation * 61) % 200 + 30;
+  ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+}
 const rows = reactive(capsules.map(({ capsuleId }) => ({ id: capsuleId, surfaceId: capsuleId,
   backendLifecycle: 'active', generation: 7, visibility: 'unfolded', control: 'agent', controlOwner: 'agent' })));
 const listeners = new Set();
@@ -68,7 +82,10 @@ function acceptControl(intent) {
     row.control = intent.op === 'take_control' ? 'human' : 'agent';
     // Match production: the kit reads controlOwner; the wall reads control.
     row.controlOwner = row.control;
-    if (intent.op === 'release_control') row.generation += 1;
+    if (intent.op === 'release_control') {
+      row.generation += 1;
+      if (row.visibility !== 'folded') paintTileCanvas(row.id, row.generation);
+    }
     console.log('AC04_TRACE ' + JSON.stringify({ phase: 'ack', op: intent.op, ok: true }));
   }
   publishProjection(control);
@@ -82,7 +99,12 @@ const framePeriodMs = 40;
 let nextFrameAt = performance.now() + framePeriodMs;
 let deliveryTimer;
 function deliverFrames() {
-  for (const row of rows) if (row.id !== stalledTile) row.generation += 1;
+  for (const row of rows) {
+    if (row.id !== stalledTile) {
+      row.generation += 1;
+      if (row.visibility !== 'folded') paintTileCanvas(row.id, row.generation);
+    }
+  }
   publishProjection();
   const now = performance.now();
   do { nextFrameAt += framePeriodMs; } while (nextFrameAt <= now);
@@ -105,6 +127,18 @@ const app = createApp({ setup() {
   }, { surface: ({ capsuleId }) => h('canvas', {
     'data-frame-tag': `frame-${crossRoute ? capsules[0].capsuleId : capsuleId}-gen${rows.find(row => row.id === capsuleId).generation}`,
     width: 160, height: 120,
+    ref(canvas) {
+      if (!canvas) {
+        canvases.delete(capsuleId);
+        return;
+      }
+      const prev = canvases.get(capsuleId);
+      canvases.set(capsuleId, canvas);
+      if (prev !== canvas) {
+        const row = rows.find(item => item.id === capsuleId);
+        if (row && row.visibility !== 'folded') paintTileCanvas(capsuleId, row.generation);
+      }
+    },
   }) });
 } });
 installKitTheme(app);

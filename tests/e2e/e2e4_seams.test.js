@@ -35,6 +35,83 @@ function runSeamsTestScript(scratch, source) {
 }
 
 
+/**
+ * Deterministic semantic oracle for same-lane proposal ordering on a single
+ * surface with one display injection lease and monotone per-sender seq.
+ * The first proposal in arrival order acquires the display lease ("ADMITTED");
+ * subsequent proposals on the same surface while the lease is held are refused
+ * ("DisplayLeaseHeld") regardless of whether their envelope seq is higher or
+ * lower, because decode() validates the envelope and apply_with_witnesses()
+ * evaluates admission against the active surface lease.
+ * @param {ReadonlyArray<number>} order Arrival order of proposal sequence numbers.
+ * @returns {{
+ *   order: number[],
+ *   admittedIds: string[],
+ *   refusedIds: string[],
+ *   events: Array<{ seq: number, proposalId: string, verdict: string }>,
+ *   verdictMultiset: Record<string, number>,
+ * }}
+ */
+function computeExpectedOrderOracle(order) {
+  assert.ok(Array.isArray(order) && order.length > 0, 'order must be a non-empty array');
+  let maxSeq = 0;
+  let leaseHolder = null;
+  const admittedIds = [];
+  const refusedIds = [];
+  const events = [];
+  /** @type {Record<string, number>} */
+  const verdictMultiset = {};
+  for (const seq of order) {
+    const proposalId = `proposal-${seq}`;
+    let verdict;
+    if (seq <= maxSeq) {
+      verdict = 'Policy';
+      refusedIds.push(proposalId);
+    } else {
+      maxSeq = seq;
+      if (leaseHolder === null) {
+        leaseHolder = proposalId;
+        verdict = 'ADMITTED';
+        admittedIds.push(proposalId);
+      } else {
+        verdict = 'LockedByOther';
+        refusedIds.push(proposalId);
+      }
+    }
+    events.push({ seq, proposalId, verdict });
+    verdictMultiset[verdict] = (verdictMultiset[verdict] ?? 0) + 1;
+  }
+  return { order: [...order], admittedIds, refusedIds, events, verdictMultiset };
+}
+
+/**
+ * Verify an observed Rust batch trace against the deterministic semantic
+ * ordering oracle and its replay digests.
+ * @param {{
+ *   order: number[],
+ *   digest: string,
+ *   replayDigest: string,
+ *   journalReplayDigest: string,
+ *   admittedIds: string[],
+ *   events: Array<{ seq: number, proposalId: string, verdict: string }>,
+ * }} run Observed batch trace.
+ * @param {ReturnType<typeof computeExpectedOrderOracle>} oracle Expected semantics.
+ */
+function assertMatchesOrderOracle(run, oracle) {
+  assert.ok(/^[0-9a-f]{64}$/.test(run.digest), `invalid state digest: ${run.digest}`);
+  assert.equal(run.digest, run.replayDigest, 'deterministic replay of identical order must produce identical state digest');
+  assert.equal(run.digest, run.journalReplayDigest, 'journal replay must reconstruct identical state digest');
+  assert.deepEqual(run.order, oracle.order, 'observed order must match expected order');
+  assert.deepEqual(run.admittedIds, oracle.admittedIds, 'admitted proposal IDs must match semantic oracle');
+  assert.deepEqual(run.events, oracle.events, 'per-event admission/refusal sequence must match semantic oracle');
+  /** @type {Record<string, number>} */
+  const observedMultiset = {};
+  for (const ev of run.events) {
+    observedMultiset[ev.verdict] = (observedMultiset[ev.verdict] ?? 0) + 1;
+  }
+  assert.deepEqual(observedMultiset, oracle.verdictMultiset, 'verdict multiset must match semantic oracle');
+}
+
 describe('Obligation 5: Arrival-order determinism (SW-0224 ordering drift, SW-0183 replay)', () => {
   it('delivers same multiset of inputs in different arrival orders and asserts deterministic state and verdict multiset', () => {
     const scratch = makeScratch('mv-seams-order');
@@ -42,12 +119,11 @@ describe('Obligation 5: Arrival-order determinism (SW-0224 ordering drift, SW-01
       const rustScript = `
         use metaviewer_core::admission::*;
         use metaviewer_core::journal::*;
-        use metaviewer_core::Refusal;
         use std::fs;
         use std::os::unix::fs::DirBuilderExt;
         use std::path::PathBuf;
 
-        fn run_batch(order: Vec<u64>, root_path: PathBuf) -> (String, Vec<Option<Refusal>>) {
+        fn run_batch(order: Vec<u64>, click_x: i64, root_path: PathBuf) -> serde_json::Value {
             fs::DirBuilder::new().mode(0o700).recursive(true).create(&root_path).unwrap();
             let initial = CoreState::session("session-1").unwrap();
             let mut authority = Authority::create(&root_path, initial).unwrap();
@@ -74,9 +150,11 @@ describe('Obligation 5: Arrival-order determinism (SW-0224 ordering drift, SW-01
 
             authority.apply_with_witnesses(Input::Surface { id: "s1".into(), surface }, vec![w1.clone()]).unwrap();
 
-            let mut verdicts = Vec::new();
+            let mut events = Vec::new();
+            let mut admitted_ids = Vec::new();
 
-            for seq in order {
+            for seq in &order {
+                let proposal_id = format!("proposal-{seq}");
                 let req_json = serde_json::json!({
                     "schema": "envelope/v0.2",
                     "msg_id": format!("prop-{seq}"),
@@ -84,14 +162,14 @@ describe('Obligation 5: Arrival-order determinism (SW-0224 ordering drift, SW-01
                     "from": {"component": "agent", "instance": "agent-1"},
                     "to": {"component": "core", "instance": "authority"},
                     "session_id": "session-1",
-                    "seq": seq,
+                    "seq": *seq,
                     "nonce": format!("nonce-{seq}"),
                     "body": {
                         "schema": "action_proposal/v0.2",
-                        "proposal_id": format!("proposal-{seq}"),
+                        "proposal_id": proposal_id,
                         "surface_id": "s1",
                         "based_on_frame": {"sha256": w1.sha256, "generation": 1},
-                        "action": {"type": "click", "x": 10, "y": 10, "button": "left"},
+                        "action": {"type": "click", "x": click_x, "y": 10, "button": "left"},
                         "expectation": {"type": "text_present", "text": "ok"},
                         "budget": {"max_ms": 100, "max_retries": 0}
                     }
@@ -104,37 +182,94 @@ describe('Obligation 5: Arrival-order determinism (SW-0224 ordering drift, SW-01
                 ).unwrap();
 
                 let out = authority.apply_with_witnesses(Input::Propose(req), vec![w1.clone()]).unwrap();
-                verdicts.push(out.reason);
+                let verdict = match &out.reason {
+                    None => {
+                        admitted_ids.push(format!("proposal-{seq}"));
+                        "ADMITTED".to_string()
+                    }
+                    Some(r) => format!("{:?}", r),
+                };
+                events.push(serde_json::json!({
+                    "seq": *seq,
+                    "proposalId": format!("proposal-{seq}"),
+                    "verdict": verdict,
+                }));
             }
 
             let digest = sha256_hex(&authority.state().snapshot().unwrap());
-            (digest, verdicts)
+            drop(authority);
+            let session_root = root_path.join("sessions/session-1");
+            let reopened = Authority::recover(&session_root.join("journal.jsonl"), &session_root).unwrap();
+            let journal_replay_digest = sha256_hex(&reopened.state().snapshot().unwrap());
+
+            serde_json::json!({
+                "order": order,
+                "digest": digest,
+                "journalReplayDigest": journal_replay_digest,
+                "admittedIds": admitted_ids,
+                "events": events,
+            })
         }
 
         fn main() {
             let args: Vec<String> = std::env::args().collect();
             let root = PathBuf::from(&args[1]);
 
-            let (d1, v1) = run_batch(vec![1, 2, 3], root.join("run1"));
-            let (d2, v2) = run_batch(vec![3, 2, 1], root.join("run2"));
+            let r1 = run_batch(vec![1, 2, 3], 10, root.join("run1"));
+            let r1_replay = run_batch(vec![1, 2, 3], 10, root.join("run1_replay"));
+            let r2 = run_batch(vec![3, 2, 1], 10, root.join("run2"));
+            let r2_replay = run_batch(vec![3, 2, 1], 10, root.join("run2_replay"));
+            let r1_mutated = run_batch(vec![1, 2, 3], 99, root.join("run1_mutated"));
 
-            println!("RUN1_DIGEST:{}", d1);
-            println!("RUN2_DIGEST:{}", d2);
-
-            let admitted1 = v1.iter().filter(|r| r.is_none()).count();
-            let admitted2 = v2.iter().filter(|r| r.is_none()).count();
-            println!("ADMITTED1:{}", admitted1);
-            println!("ADMITTED2:{}", admitted2);
+            println!("{}", serde_json::to_string(&serde_json::json!({
+                "run1": r1,
+                "run1Replay": r1_replay,
+                "run2": r2,
+                "run2Replay": r2_replay,
+                "run1Mutated": r1_mutated,
+            })).unwrap());
         }
       `;
       const lines = runSeamsTestScript(scratch, rustScript);
-      const digest1 = lines[0].split(':')[1];
-      const digest2 = lines[1].split(':')[1];
-      assert.ok(/^[0-9a-f]{64}$/.test(digest1));
-      assert.ok(/^[0-9a-f]{64}$/.test(digest2));
-      // Same multiset of admitted proposals
-      assert.equal(lines[2], 'ADMITTED1:1');
-      assert.equal(lines[3], 'ADMITTED2:1');
+      const payload = JSON.parse(lines[0]);
+      const run1 = { ...payload.run1, replayDigest: payload.run1Replay.digest };
+      const run2 = { ...payload.run2, replayDigest: payload.run2Replay.digest };
+
+      const oracle123 = computeExpectedOrderOracle([1, 2, 3]);
+      const oracle321 = computeExpectedOrderOracle([3, 2, 1]);
+
+      assertMatchesOrderOracle(run1, oracle123);
+      assertMatchesOrderOracle(run2, oracle321);
+
+      // Exact per-order verdict multiset, winner & state digest per order.
+      assert.deepEqual(oracle123.verdictMultiset, { ADMITTED: 1, LockedByOther: 2 });
+      assert.deepEqual(oracle321.verdictMultiset, { ADMITTED: 1, Policy: 2 });
+      assert.deepEqual(run1.admittedIds, ['proposal-1']);
+      assert.deepEqual(run2.admittedIds, ['proposal-3']);
+      assert.notEqual(run1.digest, run2.digest, 'same-lane ordering is order-sensitive; distinct orders must not collapse state digests');
+
+      // T8-R3-14 negative controls: payload mutation or event/order tampering must fail the semantic ordering oracle.
+      assert.notEqual(
+        payload.run1Mutated.digest,
+        run1.digest,
+        'mutating an admitted proposal payload must change the authoritative state digest',
+      );
+      assert.throws(
+        () => assertMatchesOrderOracle({ ...run1, replayDigest: payload.run1Mutated.digest }, oracle123),
+        /deterministic replay of identical order must produce identical state digest/,
+      );
+      assert.throws(
+        () => assertMatchesOrderOracle(run2, oracle123),
+        /observed order must match expected order|admitted proposal IDs must match semantic oracle/,
+      );
+      const mutatedEventRun = {
+        ...run1,
+        events: run1.events.map((ev, idx) => (idx === 1 ? { ...ev, verdict: 'ADMITTED' } : ev)),
+      };
+      assert.throws(
+        () => assertMatchesOrderOracle(mutatedEventRun, oracle123),
+        /per-event admission\/refusal sequence must match semantic oracle/,
+      );
     } finally {
       removeScratch(scratch);
     }
