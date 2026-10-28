@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>ASM Web Acceptance — Flow Step 1</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 640px;
+    height: 360px;
+    overflow: hidden;
+    background: #0f172a;
+    color: #e2e8f0;
+    font: 14px/20px monospace;
+  }
+  #stage {
+    position: relative;
+    width: 640px;
+    height: 360px;
+    padding: 24px;
+  }
+  #flow-heading {
+    position: absolute;
+    left: 24px;
+    top: 24px;
+    width: 592px;
+    height: 28px;
+    font-weight: 700;
+  }
+  #flow-step-marker {
+    position: absolute;
+    left: 24px;
+    top: 68px;
+    width: 480px;
+    height: 36px;
+    padding: 6px 10px;
+    background: #1e293b;
+    border: 2px solid #64748b;
+  }
+  #next-btn {
+    position: absolute;
+    left: 24px;
+    top: 132px;
+    width: 240px;
+    height: 44px;
+    display: inline-block;
+    padding: 10px 16px;
+    background: #0284c7;
+    color: #ffffff;
+    border: 2px solid #7dd3fc;
+    text-decoration: none;
+    font: 700 14px/20px monospace;
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<main id="stage" data-page-id="flow_a" data-flow-step="1" data-viewport="640x360">
+  <h1 id="flow-heading">Two-Page Navigation — Step 1 of 2</h1>
+  <p id="flow-step-marker" data-role="status" data-bbox="24,68,480,36">FLOW_STAGE_A_READY</p>
+  <a
+    id="next-btn"
+    href="flow_b.html"
+    tabindex="1"
+    role="button"
+    aria-label="Continue to Step 2"
+    data-role="button"
+    data-target-page="flow_b.html"
+    data-bbox="24,132,240,44"
+  >Continue to Step 2</a>
+</main>
+<script>
+  (function () {
+    var next = document.getElementById('next-btn');
+    next.setAttribute('data-nav-ready', 'true');
+  })();
+</script>
+</body>
+</html>

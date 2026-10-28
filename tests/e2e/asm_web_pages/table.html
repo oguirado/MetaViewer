@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+<title>ASM Web Acceptance — Table</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 640px;
+    height: 360px;
+    overflow: hidden;
+    background: #0f172a;
+    color: #e2e8f0;
+    font: 14px/20px monospace;
+  }
+  #stage {
+    position: relative;
+    width: 640px;
+    height: 360px;
+    padding: 24px;
+  }
+  #table-heading {
+    position: absolute;
+    left: 24px;
+    top: 20px;
+    width: 592px;
+    height: 24px;
+    font-weight: 700;
+  }
+  #metrics-table {
+    position: absolute;
+    left: 24px;
+    top: 60px;
+    width: 576px;
+    border-collapse: collapse;
+    table-layout: fixed;
+    background: #1e293b;
+  }
+  #metrics-table th,
+  #metrics-table td {
+    width: 192px;
+    height: 44px;
+    padding: 10px 12px;
+    border: 2px solid #475569;
+    text-align: left;
+  }
+  #metrics-table th {
+    background: #0f172a;
+    color: #93c5fd;
+    font-weight: 700;
+  }
+</style>
+</head>
+<body>
+<main id="stage" data-page-id="table" data-viewport="640x360">
+  <h1 id="table-heading">Capsule Telemetry Ledger</h1>
+  <table id="metrics-table" aria-label="Capsule Telemetry Ledger" data-bbox="24,60,576,176">
+    <thead>
+      <tr id="row-header">
+        <th id="col-service" scope="col" data-col="0" data-bbox="24,60,192,44">service</th>
+        <th id="col-region" scope="col" data-col="1" data-bbox="216,60,192,44">region</th>
+        <th id="col-latency" scope="col" data-col="2" data-bbox="408,60,192,44">latency_ms</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr id="row-0" data-row="0">
+        <td id="cell-r0-c0" data-row="0" data-col="0" data-role="cell" data-bbox="24,104,192,44">auth-gateway</td>
+        <td id="cell-r0-c1" data-row="0" data-col="1" data-role="cell" data-bbox="216,104,192,44">eu-central</td>
+        <td id="cell-r0-c2" data-row="0" data-col="2" data-role="cell" data-bbox="408,104,192,44">14</td>
+      </tr>
+      <tr id="row-1" data-row="1">
+        <td id="cell-r1-c0" data-row="1" data-col="0" data-role="cell" data-bbox="24,148,192,44">ledger-core</td>
+        <td id="cell-r1-c1" data-row="1" data-col="1" data-role="cell" data-bbox="216,148,192,44">us-east</td>
+        <td id="cell-r1-c2" data-row="1" data-col="2" data-role="cell" data-bbox="408,148,192,44">27</td>
+      </tr>
+      <tr id="row-2" data-row="2">
+        <td id="cell-r2-c0" data-row="2" data-col="0" data-role="cell" data-bbox="24,192,192,44">stream-index</td>
+        <td id="cell-r2-c1" data-row="2" data-col="1" data-role="cell" data-bbox="216,192,192,44">ap-north</td>
+        <td id="cell-r2-c2" data-row="2" data-col="2" data-role="cell" data-bbox="408,192,192,44">41</td>
+      </tr>
+    </tbody>
+  </table>
+</main>
+</body>
+</html>
