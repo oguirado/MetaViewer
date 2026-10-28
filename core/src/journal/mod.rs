@@ -18,6 +18,10 @@
 //! JournalError::Poisoned; uncommitted retains and verified-witness cache entries
 //! are bounded (MAX_UNCOMMITTED_ARTIFACTS = 32, MAX_DIRTY_FILES = 32,
 //! MAX_VERIFIED_WITNESS_CACHE = 256).
+//! [TARGET, unit decision] Journal close/shutdown and Drop flush any pending
+//! group-commit batch, close the worker channel, and join the background sync
+//! worker (bounded wait SYNC_WORKER_JOIN_TIMEOUT = 5 s, logging errors) so no
+//! file is written or renamed after close/drop returns.
 use crate::admission::{CoreState, Input, Outcome};
 use crate::wire::payload::{SessionRecord, SessionRecordKind, SessionRecordSchema};
 use serde::{Deserialize, Serialize};
@@ -36,6 +40,7 @@ pub use sha256::{sha256_hex, StreamingSha256};
 // Non-frame transitions and Journal drop flush synchronously before proceeding.
 const FRAME_SYNC_WINDOW: std::time::Duration = std::time::Duration::from_millis(50);
 const FRAME_SYNC_MAX_BATCH: u64 = 8;
+const SYNC_WORKER_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const MAX_UNCOMMITTED_ARTIFACTS: usize = 32;
 const MAX_DIRTY_FILES: usize = 32;
 const MAX_VERIFIED_WITNESS_CACHE: usize = 256;
@@ -268,11 +273,18 @@ struct SyncBatch {
     files: Vec<File>,
     journal_file: File,
     checkpoint_file: Option<File>,
+    checkpoint_count: u64,
+    checkpoint_lock: std::sync::Arc<std::sync::Mutex<u64>>,
     root: PathBuf,
 }
 enum SyncCmd {
     Flush(SyncBatch),
     Barrier(std::sync::mpsc::SyncSender<Result<(), JournalError>>),
+}
+struct SyncWorker {
+    tx: std::sync::mpsc::Sender<SyncCmd>,
+    done_rx: std::sync::mpsc::Receiver<Result<(), JournalError>>,
+    handle: std::thread::JoinHandle<()>,
 }
 pub struct Journal {
     root: PathBuf,
@@ -292,15 +304,25 @@ pub struct Journal {
     uncommitted_artifacts: std::collections::VecDeque<String>,
     dirty_files: Vec<File>,
     pending_checkpoint: Option<File>,
+    checkpoint_lock: std::sync::Arc<std::sync::Mutex<u64>>,
     unsynced_frames: u64,
     last_sync: std::time::Instant,
     sync_failed: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    sync_tx: Option<std::sync::mpsc::Sender<SyncCmd>>,
+    sync_worker: Option<SyncWorker>,
 }
 impl Drop for Journal {
     fn drop(&mut self) {
         if !self.poisoned {
-            let _ = self.flush_sync();
+            if let Err(err) = self.close() {
+                eprintln!("journal drop close failed: {err}");
+            }
+        } else {
+            self.dirty_files.clear();
+            self.pending_checkpoint = None;
+            self.unsynced_frames = 0;
+            if let Err(err) = self.join_sync_worker() {
+                eprintln!("journal drop worker join failed: {err}");
+            }
         }
     }
 }
@@ -590,11 +612,20 @@ fn execute_sync_batch(batch: SyncBatch) -> Result<(), JournalError> {
         .map_err(|_| JournalError::Io)?;
     if let Some(cp_file) = batch.checkpoint_file {
         cp_file.sync_all().map_err(|_| JournalError::Io)?;
-        fs::rename(
-            batch.root.join("checkpoint.next"),
-            batch.root.join("checkpoint.json"),
-        )
-        .map_err(|_| JournalError::Io)?;
+        let staged = batch.checkpoint_lock.lock().map_err(|_| JournalError::Io)?;
+        if *staged == batch.checkpoint_count {
+            fs::rename(
+                batch.root.join("checkpoint.next"),
+                batch.root.join("checkpoint.json"),
+            )
+            .map_err(|_| JournalError::Io)?;
+        } else {
+            let meta = fs::symlink_metadata(batch.root.join("checkpoint.json"))
+                .map_err(|_| JournalError::Io)?;
+            if !meta.is_file() {
+                return Err(JournalError::Io);
+            }
+        }
     }
     sync_dir(&batch.root)
 }
@@ -741,10 +772,11 @@ impl Journal {
             uncommitted_artifacts: std::collections::VecDeque::new(),
             dirty_files: Vec::new(),
             pending_checkpoint: None,
+            checkpoint_lock: std::sync::Arc::new(std::sync::Mutex::new(0)),
             unsynced_frames: 0,
             last_sync: std::time::Instant::now(),
             sync_failed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            sync_tx: None,
+            sync_worker: None,
         };
         checkpoint(&journal.root, &journal.closure())?;
         sync_dir(&sessions)?;
@@ -808,10 +840,11 @@ impl Journal {
                 uncommitted_artifacts: std::collections::VecDeque::new(),
                 dirty_files: Vec::new(),
                 pending_checkpoint: None,
+                checkpoint_lock: std::sync::Arc::new(std::sync::Mutex::new(c.count)),
                 unsynced_frames: 0,
                 last_sync: std::time::Instant::now(),
                 sync_failed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                sync_tx: None,
+                sync_worker: None,
             },
             replay.state,
         ))
@@ -868,31 +901,78 @@ impl Journal {
             && meta.mtime_nsec() == recorded.mtime_nsec
             && meta.ctime_nsec() == recorded.ctime_nsec
     }
-    fn ensure_sync_worker(&mut self) -> &std::sync::mpsc::Sender<SyncCmd> {
-        let sync_failed = self.sync_failed.clone();
-        self.sync_tx.get_or_insert_with(|| {
+    fn ensure_sync_worker(&mut self) -> Result<&std::sync::mpsc::Sender<SyncCmd>, JournalError> {
+        if self.sync_worker.is_none() {
+            let sync_failed = self.sync_failed.clone();
             let (tx, rx) = std::sync::mpsc::channel::<SyncCmd>();
-            std::thread::spawn(move || {
-                let mut sticky_err: Option<JournalError> = None;
-                while let Ok(cmd) = rx.recv() {
-                    match cmd {
-                        SyncCmd::Flush(batch) => {
-                            if sticky_err.is_none() {
-                                if let Err(e) = execute_sync_batch(batch) {
-                                    sync_failed.store(true, std::sync::atomic::Ordering::Release);
-                                    sticky_err = Some(e);
+            let (done_tx, done_rx) = std::sync::mpsc::sync_channel::<Result<(), JournalError>>(1);
+            let handle = std::thread::Builder::new()
+                .name("mv-journal-sync".into())
+                .spawn(move || {
+                    let mut sticky_err: Option<JournalError> = None;
+                    while let Ok(cmd) = rx.recv() {
+                        match cmd {
+                            SyncCmd::Flush(batch) => {
+                                if sticky_err.is_none() {
+                                    if let Err(e) = execute_sync_batch(batch) {
+                                        sync_failed
+                                            .store(true, std::sync::atomic::Ordering::Release);
+                                        sticky_err = Some(e);
+                                    }
                                 }
                             }
-                        }
-                        SyncCmd::Barrier(reply) => {
-                            let res = sticky_err.clone().map_or(Ok(()), Err);
-                            let _ = reply.send(res);
+                            SyncCmd::Barrier(reply) => {
+                                let res = sticky_err.clone().map_or(Ok(()), Err);
+                                let _ = reply.send(res);
+                            }
                         }
                     }
-                }
+                    let _ = done_tx.send(sticky_err.map_or(Ok(()), Err));
+                })
+                .map_err(|_| JournalError::Io)?;
+            self.sync_worker = Some(SyncWorker {
+                tx,
+                done_rx,
+                handle,
             });
-            tx
-        })
+        }
+        self.sync_worker
+            .as_ref()
+            .map(|w| &w.tx)
+            .ok_or(JournalError::Io)
+    }
+    fn join_sync_worker(&mut self) -> Result<(), JournalError> {
+        let Some(worker) = self.sync_worker.take() else {
+            return Ok(());
+        };
+        let SyncWorker {
+            tx,
+            done_rx,
+            handle,
+        } = worker;
+        drop(tx);
+        let worker_res = match done_rx.recv_timeout(SYNC_WORKER_JOIN_TIMEOUT) {
+            Ok(res) => res,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(JournalError::Io),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                self.poisoned = true;
+                eprintln!(
+                    "journal sync worker join timed out after {:?}",
+                    SYNC_WORKER_JOIN_TIMEOUT
+                );
+                return Err(JournalError::Io);
+            }
+        };
+        if handle.join().is_err() {
+            self.poisoned = true;
+            eprintln!("journal sync worker thread panicked");
+            return Err(JournalError::Io);
+        }
+        if let Err(ref err) = worker_res {
+            self.poisoned = true;
+            eprintln!("journal background sync failed: {err}");
+        }
+        worker_res
     }
     fn dispatch_frame_sync_batch(&mut self) -> Result<(), JournalError> {
         if self.dirty_files.is_empty()
@@ -905,17 +985,23 @@ impl Journal {
             files: std::mem::take(&mut self.dirty_files),
             journal_file: self.file.try_clone().map_err(|_| JournalError::Io)?,
             checkpoint_file: self.pending_checkpoint.take(),
+            checkpoint_count: self.count,
+            checkpoint_lock: self.checkpoint_lock.clone(),
             root: self.root.clone(),
         };
         self.unsynced_frames = 0;
         self.last_sync = std::time::Instant::now();
-        self.ensure_sync_worker()
+        self.ensure_sync_worker()?
             .send(SyncCmd::Flush(batch))
             .map_err(|_| JournalError::Io)
     }
     pub fn flush_sync(&mut self) -> Result<(), JournalError> {
         if self.poisoned || self.sync_failed.load(std::sync::atomic::Ordering::Acquire) {
             self.poisoned = true;
+            self.dirty_files.clear();
+            self.pending_checkpoint = None;
+            self.unsynced_frames = 0;
+            let _ = self.join_sync_worker();
             return Err(JournalError::Poisoned);
         }
         self.poisoned = true;
@@ -923,8 +1009,11 @@ impl Journal {
             || self.pending_checkpoint.is_some()
             || self.unsynced_frames > 0
         {
-            if self.sync_tx.is_some() {
-                self.dispatch_frame_sync_batch()?;
+            if self.sync_worker.is_some() {
+                if let Err(err) = self.dispatch_frame_sync_batch() {
+                    let _ = self.join_sync_worker();
+                    return Err(err);
+                }
             } else {
                 #[cfg(test)]
                 let t_sync = std::time::Instant::now();
@@ -932,6 +1021,8 @@ impl Journal {
                     files: std::mem::take(&mut self.dirty_files),
                     journal_file: self.file.try_clone().map_err(|_| JournalError::Io)?,
                     checkpoint_file: self.pending_checkpoint.take(),
+                    checkpoint_count: self.count,
+                    checkpoint_lock: self.checkpoint_lock.clone(),
                     root: self.root.clone(),
                 };
                 self.unsynced_frames = 0;
@@ -946,14 +1037,19 @@ impl Journal {
                 });
             }
         }
-        if let Some(tx) = &self.sync_tx {
-            let (b_tx, b_rx) = std::sync::mpsc::sync_channel(1);
-            tx.send(SyncCmd::Barrier(b_tx))
-                .map_err(|_| JournalError::Io)?;
-            b_rx.recv().map_err(|_| JournalError::Io)??;
-        }
+        self.join_sync_worker()?;
         self.poisoned = false;
         Ok(())
+    }
+    pub fn close(&mut self) -> Result<(), JournalError> {
+        let res = self.flush_sync();
+        if let Err(ref err) = res {
+            eprintln!("journal close failed: {err}");
+        }
+        res
+    }
+    pub fn shutdown(&mut self) -> Result<(), JournalError> {
+        self.close()
     }
     pub fn retain_witness(&mut self, bytes: &[u8]) -> Result<Witness, JournalError> {
         if self.poisoned || self.sync_failed.load(std::sync::atomic::Ordering::Acquire) {
@@ -1133,11 +1229,14 @@ impl Journal {
         self.poisoned = true;
         let is_frame = matches!(input, Input::Frame { .. });
         if !is_frame {
-            if let Some(tx) = &self.sync_tx {
+            if let Some(worker) = &self.sync_worker {
                 let (b_tx, b_rx) = std::sync::mpsc::sync_channel(1);
-                tx.send(SyncCmd::Barrier(b_tx))
+                worker
+                    .tx
+                    .send(SyncCmd::Barrier(b_tx))
                     .map_err(|_| JournalError::Io)?;
-                b_rx.recv().map_err(|_| JournalError::Io)??;
+                b_rx.recv_timeout(SYNC_WORKER_JOIN_TIMEOUT)
+                    .map_err(|_| JournalError::Io)??;
             }
             let event_file = publish_unsynced(
                 &self.root.join("events").join(format!("{next}.json")),
@@ -1160,6 +1259,8 @@ impl Journal {
             self.tail = sha256_hex(&raw);
             self.archive = archive_next(&self.archive, &event);
             self.pending_checkpoint = None;
+            let mut staged = self.checkpoint_lock.lock().map_err(|_| JournalError::Io)?;
+            *staged = next;
             let tmp = self.root.join("checkpoint.next");
             private_directory(&self.root)?;
             match fs::symlink_metadata(&tmp) {
@@ -1187,6 +1288,7 @@ impl Journal {
             }
             sync_dir(&self.root.join("events"))?;
             fs::rename(&tmp, self.root.join("checkpoint.json")).map_err(|_| JournalError::Io)?;
+            drop(staged);
             sync_dir(&self.root)?;
             #[cfg(test)]
             STAGE_TIMINGS.with(|cell| {
@@ -1218,7 +1320,11 @@ impl Journal {
             self.bytes += raw.len() as u64 + 1;
             self.tail = sha256_hex(&raw);
             self.archive = archive_next(&self.archive, &event);
-            let cp_file = checkpoint_unsynced(&self.root, &self.closure())?;
+            let cp_file = {
+                let mut staged = self.checkpoint_lock.lock().map_err(|_| JournalError::Io)?;
+                *staged = next;
+                checkpoint_unsynced(&self.root, &self.closure())?
+            };
             self.pending_checkpoint = Some(cp_file);
             self.unsynced_frames += 1;
             if self.last_sync.elapsed() >= FRAME_SYNC_WINDOW
@@ -1464,6 +1570,209 @@ mod directory_tests {
             journal.verified_witnesses.len()
         );
         drop(journal);
+        fs::remove_dir_all(root).unwrap();
+    }
+    fn snapshot_tree(session: &Path) -> Vec<(String, u64, u64, i64)> {
+        let mut entries = Vec::new();
+        for rel in ["", "events", "artifacts"] {
+            let dir = if rel.is_empty() {
+                session.to_path_buf()
+            } else {
+                session.join(rel)
+            };
+            let mut dir_entries: Vec<_> = fs::read_dir(&dir)
+                .unwrap()
+                .map(|e| e.unwrap().path())
+                .collect();
+            dir_entries.sort();
+            for p in dir_entries {
+                let m = fs::symlink_metadata(&p).unwrap();
+                if m.is_file() {
+                    let name = p
+                        .strip_prefix(session)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned();
+                    entries.push((name, m.len(), m.ino(), m.mtime_nsec()));
+                }
+            }
+        }
+        entries
+    }
+    #[test]
+    fn drop_and_close_flush_and_join_leaving_directory_quiescent() {
+        use crate::admission::{Frame, Surface};
+        use crate::{Component, Endpoint};
+
+        let root = std::env::temp_dir().join(format!("mv-journal-jdrop-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+
+        let seed_surface = |state: &mut CoreState, journal: &mut Journal| {
+            let out = state.apply(&Input::Connect).unwrap();
+            journal
+                .append(&Input::Connect, &out, state, vec![])
+                .unwrap();
+            let sw = journal.retain_witness(b"surface-seed").unwrap();
+            let s_in = Input::Surface {
+                id: "surface-1".into(),
+                surface: Surface {
+                    display: ":1".into(),
+                    owner: Endpoint {
+                        component: Component::Agent,
+                        instance: "agent-1".into(),
+                    },
+                    agent_controlled: true,
+                    live: true,
+                    frame: None,
+                    refresh_after: None,
+                    allowed_verbs: vec![],
+                },
+            };
+            let out_s = state.apply(&s_in).unwrap();
+            journal.append(&s_in, &out_s, state, vec![sw]).unwrap();
+        };
+
+        // 1. Positive control (Drop): active background worker + pending group commit.
+        let mut state = CoreState::session("session-drop").unwrap();
+        let mut journal = Journal::create(&root, &state).unwrap();
+        let session = root.join("sessions/session-drop");
+        seed_surface(&mut state, &mut journal);
+        for gen in 1..=9u64 {
+            let bytes = format!("drop-frame-{gen}").into_bytes();
+            let sha = sha256_hex(&bytes);
+            let w = journal.retain_frame_witness(&sha, &bytes).unwrap();
+            let f_in = Input::Frame {
+                surface_id: "surface-1".into(),
+                frame: Frame {
+                    sha256: sha,
+                    generation: gen,
+                    width: 64,
+                    height: 64,
+                },
+            };
+            let out = state.apply(&f_in).unwrap();
+            journal.append(&f_in, &out, &state, vec![w]).unwrap();
+        }
+        // Generation 1..=8 dispatched a background sync batch; generation 9 is a pending group commit.
+        assert!(
+            journal.sync_worker.is_some(),
+            "background worker must be active"
+        );
+        assert!(
+            journal.pending_checkpoint.is_some() && journal.unsynced_frames == 1,
+            "generation 9 must remain pending before drop"
+        );
+        assert!(session.join("checkpoint.next").exists());
+
+        drop(journal);
+
+        // Immediately after drop returns, checkpoint.next must be promoted and directory quiescent.
+        assert!(
+            !session.join("checkpoint.next").exists(),
+            "checkpoint.next must not exist after Journal::drop returns"
+        );
+        let snap_immediately = snapshot_tree(&session);
+        let cp: Checkpoint =
+            serde_json::from_slice(&fs::read(session.join("checkpoint.json")).unwrap()).unwrap();
+        assert_eq!(cp.count, 11);
+        let replayed = scan(&session.join("journal.jsonl"), &session).unwrap();
+        assert_eq!(replayed.state, state);
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        assert_eq!(
+            snapshot_tree(&session),
+            snap_immediately,
+            "directory must be quiescent right after drop"
+        );
+
+        // 2. Positive control (explicit close/shutdown): flushes, joins, and makes Drop a no-op.
+        let mut state_close = CoreState::session("session-close").unwrap();
+        let mut journal_close = Journal::create(&root, &state_close).unwrap();
+        let session_close = root.join("sessions/session-close");
+        seed_surface(&mut state_close, &mut journal_close);
+        for gen in 1..=9u64 {
+            let bytes = format!("close-frame-{gen}").into_bytes();
+            let sha = sha256_hex(&bytes);
+            let w = journal_close.retain_frame_witness(&sha, &bytes).unwrap();
+            let f_in = Input::Frame {
+                surface_id: "surface-1".into(),
+                frame: Frame {
+                    sha256: sha,
+                    generation: gen,
+                    width: 64,
+                    height: 64,
+                },
+            };
+            let out = state_close.apply(&f_in).unwrap();
+            journal_close
+                .append(&f_in, &out, &state_close, vec![w])
+                .unwrap();
+        }
+        assert!(journal_close.sync_worker.is_some());
+        assert!(journal_close.pending_checkpoint.is_some());
+        journal_close.close().unwrap();
+        assert!(journal_close.sync_worker.is_none());
+        assert!(!session_close.join("checkpoint.next").exists());
+        let snap_after_close = snapshot_tree(&session_close);
+        drop(journal_close);
+        assert_eq!(snapshot_tree(&session_close), snap_after_close);
+
+        // 3. Negative control (without joining the background worker): directory is still
+        // being mutated after an unjoined teardown returns.
+        let mut state_neg = CoreState::session("session-unjoined").unwrap();
+        let mut journal_neg = Journal::create(&root, &state_neg).unwrap();
+        let session_neg = root.join("sessions/session-unjoined");
+        seed_surface(&mut state_neg, &mut journal_neg);
+        let bytes = b"unjoined-frame-1";
+        let sha = sha256_hex(bytes);
+        let w = journal_neg.retain_frame_witness(&sha, bytes).unwrap();
+        let f_in = Input::Frame {
+            surface_id: "surface-1".into(),
+            frame: Frame {
+                sha256: sha,
+                generation: 1,
+                width: 64,
+                height: 64,
+            },
+        };
+        let out = state_neg.apply(&f_in).unwrap();
+        journal_neg
+            .append(&f_in, &out, &state_neg, vec![w])
+            .unwrap();
+        let batch = SyncBatch {
+            files: std::mem::take(&mut journal_neg.dirty_files),
+            journal_file: journal_neg.file.try_clone().unwrap(),
+            checkpoint_file: journal_neg.pending_checkpoint.take(),
+            checkpoint_count: journal_neg.count,
+            checkpoint_lock: journal_neg.checkpoint_lock.clone(),
+            root: journal_neg.root.clone(),
+        };
+        journal_neg.unsynced_frames = 0;
+        let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+        let unjoined_handle = std::thread::spawn(move || {
+            entered_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            execute_sync_batch(batch).unwrap();
+        });
+        entered_rx.recv().unwrap();
+        // Drop journal_neg without joining the detached worker; checkpoint.next is still present
+        // and the worker mutates the directory after drop returns.
+        drop(journal_neg);
+        let snap_before_worker_finishes = snapshot_tree(&session_neg);
+        assert!(
+            session_neg.join("checkpoint.next").exists(),
+            "negative control: without join, checkpoint.next is still unpromoted after drop"
+        );
+        release_tx.send(()).unwrap();
+        unjoined_handle.join().unwrap();
+        let snap_after_worker_finishes = snapshot_tree(&session_neg);
+        assert_ne!(
+            snap_before_worker_finishes, snap_after_worker_finishes,
+            "negative control: unjoined worker mutates session directory after drop"
+        );
+        assert!(!session_neg.join("checkpoint.next").exists());
+
         fs::remove_dir_all(root).unwrap();
     }
 }

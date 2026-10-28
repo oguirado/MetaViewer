@@ -38,6 +38,8 @@
 //! MAX_WIRE_INTEGER ns (~104.25 days). Reaching the ceiling logs and fails closed
 //! with ClockCeilingError without mutating authority state; the session must be restarted.
 //! Idle waiter poll ticks sample the session clock once before dequeuing ready waiters.
+//! [TARGET, unit decision] Server shutdown/Drop and serve() teardown flush the
+//! authority journal and join its background sync worker before returning.
 mod capture;
 mod layout;
 mod tools;
@@ -339,6 +341,16 @@ impl Server {
     }
     pub fn snapshot(&self) -> Result<Vec<u8>> {
         Ok(self.authority.state().snapshot()?)
+    }
+    pub fn shutdown(&mut self) -> Result<()> {
+        self.connections.clear();
+        self.observers.clear();
+        self.subscriptions.clear();
+        self.unsubscribed.clear();
+        Ok(self.authority.flush_sync()?)
+    }
+    pub fn close(&mut self) -> Result<()> {
+        self.shutdown()
     }
     fn retire(&mut self, peer: &Endpoint, id: u64) {
         if self.connections.get(peer).is_some_and(|c| c.id == id) {
@@ -1575,6 +1587,13 @@ impl Server {
         self.send_at(now_ns, peer, Command::ActionVerdict(Box::new(body)))
     }
 }
+impl Drop for Server {
+    fn drop(&mut self) {
+        if let Err(err) = self.shutdown() {
+            eprintln!("core server drop shutdown failed: {err}");
+        }
+    }
+}
 
 // [TARGET, unit decision] Pre-tombstone archives cannot be replayed under the
 // terminal-ID reducer. Preserve them unchanged and require a fresh session.
@@ -1660,8 +1679,23 @@ fn frame_open_flags() -> Result<i32> {
 pub async fn bind(path: &Path, uid: u32) -> Result<UnixListener> {
     Ok(bind_owner_only(path, uid, Duration::from_millis(100)).await?)
 }
+struct ServeGuard {
+    server: Arc<Mutex<Server>>,
+}
+impl Drop for ServeGuard {
+    fn drop(&mut self) {
+        if let Ok(mut s) = self.server.lock() {
+            if let Err(err) = s.authority.flush_sync() {
+                eprintln!("core serve teardown flush failed: {err}");
+            }
+        }
+    }
+}
 /// Runs until cancelled by its owner. All tasks use bounded per-peer queues.
 pub async fn serve(listener: UnixListener, server: Arc<Mutex<Server>>, uid: u32) -> Result<()> {
+    let _guard = ServeGuard {
+        server: server.clone(),
+    };
     loop {
         let (stream, _) = listener.accept().await?;
         let accepted = tokio::time::Instant::now();
@@ -2087,6 +2121,7 @@ mod nv_regressions {
     }
     impl Drop for Fixture {
         fn drop(&mut self) {
+            let _ = self.server.shutdown();
             fs::remove_dir_all(&self.root).unwrap();
         }
     }
@@ -2418,7 +2453,10 @@ mod nv_regressions {
                 .unwrap();
             let value: Value = serde_json::from_slice(&bytes).unwrap();
             assert_eq!(value["body"]["data"]["code"], "QUEUE_OVERFLOW");
+            drop(reader);
             task.abort();
+            let _ = task.await;
+            drop(server);
         });
     }
     #[test]
@@ -2616,7 +2654,10 @@ mod nv_regressions {
                     .body,
                 Command::Hello(_)
             ));
+            drop((first, third));
             task.abort();
+            let _ = task.await;
+            drop(server);
         });
     }
     #[test]
@@ -2648,7 +2689,9 @@ mod nv_regressions {
                 .unwrap()
                 .expect("EOF must drain queued verdicts");
             assert!(matches!(reply.body, Command::ActionVerdict(_)));
+            drop(stream);
             task.abort();
+            let _ = task.await;
         });
     }
     #[test]
@@ -2892,6 +2935,56 @@ mod nv_regressions {
                 serde_json::to_value(&second.body).unwrap()["request_id"],
                 "nv-Agent-4"
             );
+        });
+    }
+    #[test]
+    fn nv_w3_server_shutdown_and_fixture_drop_flush_pending_frame_batches() {
+        run(async {
+            let mut f = Fixture::new();
+            f.seed();
+            let _ui = f.attach(Component::Ui, 32);
+            let _daemon = f.attach(Component::Daemon, 32);
+            let shm = ShmFixture::new();
+            for gen in 2..=10u64 {
+                let bytes = format!("w3-frame-pixels-{gen}").into_bytes();
+                let frame_path = shm.0.join(format!("f-{gen}.rgb"));
+                fs::write(&frame_path, &bytes).unwrap();
+                let mut frame: Value = serde_json::from_str(include_str!(
+                    "../../../contracts/examples/v0.2/frame_ref.valid.json"
+                ))
+                .unwrap();
+                frame["generation"] = gen.into();
+                frame["ramws_path"] = frame_path.to_str().unwrap().into();
+                frame["sha256"] = sha256_hex(&bytes).into();
+                f.route(Component::Daemon, gen, frame).await.unwrap();
+            }
+            let session_root = f.server.root.clone();
+            assert!(
+                session_root.join("checkpoint.next").exists(),
+                "9th frame must leave a pending checkpoint.next before shutdown"
+            );
+            f.server.shutdown().unwrap();
+            assert!(
+                !session_root.join("checkpoint.next").exists(),
+                "Server::shutdown must flush and promote checkpoint.next before returning"
+            );
+            let replayed =
+                crate::journal::scan(&session_root.join("journal.jsonl"), &session_root).unwrap();
+            assert_eq!(&replayed.state, f.server.authority.state());
+
+            // Also verify Fixture::drop directly when a new frame batch is in flight/pending.
+            let bytes = b"w3-frame-pixels-11";
+            let frame_path = shm.0.join("f-11.rgb");
+            fs::write(&frame_path, bytes).unwrap();
+            let mut frame: Value = serde_json::from_str(include_str!(
+                "../../../contracts/examples/v0.2/frame_ref.valid.json"
+            ))
+            .unwrap();
+            frame["generation"] = 11.into();
+            frame["ramws_path"] = frame_path.to_str().unwrap().into();
+            frame["sha256"] = sha256_hex(bytes).into();
+            f.route(Component::Daemon, 11, frame).await.unwrap();
+            assert!(session_root.join("checkpoint.next").exists());
         });
     }
 }

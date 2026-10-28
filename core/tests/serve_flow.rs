@@ -313,7 +313,10 @@ fn lifecycle_requests_forward_and_replies_are_durable() {
             }
         }
         assert_eq!(requests, 7);
+        drop((daemon, agent, ui));
         task.abort();
+        let _ = task.await;
+        drop(server);
     });
 }
 #[test]
@@ -630,7 +633,10 @@ fn rejects_foreign_uid_unknown_registration_pin_and_oversized_frame() {
                 ["core_seq"],
             0
         );
+        drop(malformed);
         task.abort();
+        let _ = task.await;
+        drop(server);
     });
 }
 #[test]
@@ -889,7 +895,9 @@ fn agent_tools_observe_propose_and_wait_for_receipt() {
             tool_result(&mut agent, "wait_verify", "error").await["code"],
             "VERIFICATION_FAILED"
         );
+        drop(agent);
         task.abort();
+        let _ = task.await;
     });
 }
 #[test]
@@ -947,6 +955,9 @@ fn unknown_tool_operation_is_refused_by_closed_decoding() {
                 .is_none()
         );
         assert_eq!(server.lock().unwrap().snapshot().unwrap(), snapshot);
+        drop(agent);
         task.abort();
+        let _ = task.await;
+        drop(server);
     });
 }

@@ -248,8 +248,7 @@ fn expired_publication_does_not_retire_daemon_or_admit_pixels() {
         bad["sha256"] = "0".repeat(64).into();
         let frame: crate::wire::payload::FrameRef = serde_json::from_value(bad).unwrap();
         assert!(server.lock().unwrap().witness(&frame).is_err());
-        task.abort();
-        let _ = task.await;
+        close_server(server, task, daemon, _agent, ui).await;
     });
 }
 #[test]
@@ -307,7 +306,7 @@ fn cancelled_dispatched_wait_returns_unavailable_promptly() {
             tool_result(&mut agent, "wait_verify", "error").await["code"],
             "NOT_FOUND"
         );
-        task.abort();
+        close_server(server, task, daemon, agent, ui).await;
     });
 }
 #[test]
@@ -390,7 +389,7 @@ fn list_lookahead_needs_no_metadata_but_returned_entries_do() {
             tool_result(&mut agent, "list", "error").await["code"],
             "UNAVAILABLE"
         );
-        task.abort();
+        close_server(server, task, daemon, agent, ui).await;
     });
 }
 #[test]
@@ -1172,8 +1171,10 @@ fn rv10_05_gapless_frame_burst_polls_expired_tool_waiters_at_batch_flush() {
             resolved.is_ok(),
             "expired tool waiter must be polled when a 32-frame daemon batch flushes"
         );
+        drop(daemon);
         task.abort();
         let _ = task.await;
+        drop(server);
     });
 }
 

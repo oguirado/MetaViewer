@@ -18,7 +18,7 @@ impl Drop for Root {
     }
 }
 
-fn fixture() -> (Authority, Root, Frame, Witness) {
+fn fixture() -> (Root, Authority, Frame, Witness) {
     let root = Root(std::env::temp_dir().join(format!(
         "control-facade-{}-{}",
         std::process::id(),
@@ -61,7 +61,7 @@ fn fixture() -> (Authority, Root, Frame, Witness) {
         vec![witness.clone()],
     )
     .unwrap();
-    (authority, root, frame, witness)
+    (root, authority, frame, witness)
 }
 
 fn assert_recovered(authority: Authority, root: &Root) {
@@ -74,7 +74,7 @@ fn assert_recovered(authority: Authority, root: &Root) {
 
 #[test]
 fn every_frame_validation_rejection_is_a_durable_refusal() {
-    let (mut authority, root, frame, witness) = fixture();
+    let (root, mut authority, frame, witness) = fixture();
     let mut candidates = Vec::new();
     for sha256 in ["zz".into(), "A".repeat(64), "a".repeat(63), "g".repeat(64)] {
         candidates.push(Frame {
@@ -134,7 +134,7 @@ fn every_frame_validation_rejection_is_a_durable_refusal() {
 
 #[test]
 fn non_witness_publication_rejection_is_journalled() {
-    let (mut authority, root, frame, witness) = fixture();
+    let (root, mut authority, frame, witness) = fixture();
     let before = authority.state().clone();
     // Exceed the archive's 64 MiB [CITED: journal::MAX_BYTES] event cap before
     // witness verification, while leaving capacity for a small refusal record.
