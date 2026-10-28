@@ -433,6 +433,12 @@ export function createSettingsStore(env) {
       try {
         const file = await open(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,0o600);
         try { await file.writeFile(json,'utf8'); await file.sync(); } finally { await file.close(); }
+        try {
+          const st = await lstat(path);
+          if (st.isSymbolicLink() || !st.isFile()) throw new Error('SETTINGS_FILE');
+        } catch (e) {
+          if (/** @type {NodeJS.ErrnoException} */ (e).code !== 'ENOENT') throw e;
+        }
         await rename(temp,path);
         const directory = await open(dir,constants.O_RDONLY);
         try { await directory.sync(); } finally { await directory.close(); }

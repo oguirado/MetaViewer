@@ -758,7 +758,7 @@ describe('W0-SHELL-MAIN retail launch and fuses', () => {
       assert.deepEqual(validateRetailLaunch(['exe'], { [name]: '1' }), { ok: false, code: 'RETAIL_ENV' }, name);
     }
     assert.deepEqual(validateRetailLaunch(['exe'], { LANG: 'C.UTF-8', PATH: '/usr/bin' }), { ok: true, nested: false });
-    assert.deepEqual(validateRetailLaunch(['exe'], { ELECTRON_DISABLE_SANDBOX: 42 }), { ok: true, nested: false });
+    assert.deepEqual(validateRetailLaunch(['exe'], { ELECTRON_DISABLE_SANDBOX: 42 }), { ok: false, code: 'RETAIL_ENV' });
   });
 
   it('builds the exact frozen fuse config', () => {

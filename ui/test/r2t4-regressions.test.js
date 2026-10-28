@@ -714,20 +714,33 @@ describe('Electron security regressions and contract locks', () => {
     }
   });
 
-  it('findForbiddenEnv skips non-string values and flags string forbidden vars', () => {
+  it('findForbiddenEnv flags forbidden env vars regardless of value type and ignores allowed vars', () => {
     // @ts-ignore
-    const skipped = findForbiddenEnv({ FORBIDDEN_VAR: 12345, LD_PRELOAD: 99 });
-    assert.deepEqual(skipped, []);
-    const flagged = findForbiddenEnv({ LD_PRELOAD: '/tmp/inject.so' });
+    const nonString = findForbiddenEnv({
+      PATH: '/usr/bin',
+      MV_OK: 12345,
+      LD_PRELOAD: 99,
+      NODE_OPTIONS: null,
+      ELECTRON_RUN_AS_NODE: undefined,
+      PYTHONPATH: { bad: true },
+    });
+    assert.deepEqual(nonString, [
+      'LD_PRELOAD',
+      'NODE_OPTIONS',
+      'ELECTRON_RUN_AS_NODE',
+      'PYTHONPATH',
+    ]);
+    assert.equal(Object.isFrozen(nonString), true);
+    const flagged = findForbiddenEnv({ LD_PRELOAD: '/tmp/inject.so', PATH: '/usr/bin' });
     assert.deepEqual(flagged, ['LD_PRELOAD']);
   });
 
-  it('observeSender admits identity-matched contents without isDestroyed and refuses destroyed contents', () => {
+  it('observeSender refuses missing, non-function, throwing, or non-false isDestroyed and admits live contents', () => {
     const frame = { origin: PRIVILEGED_ORIGIN, url: `${PRIVILEGED_ORIGIN}/index.html` };
     const contents = { id: 1, mainFrame: frame };
     const event = { sender: contents, senderFrame: frame };
     const verdict = observeSender(event, contents, PRIVILEGED_ORIGIN);
-    assert.equal(verdict.verdict, 'admit');
+    assert.deepEqual(verdict, { verdict: 'refuse', code: 'SENDER' });
 
     const deadContents = { id: 1, mainFrame: frame, isDestroyed: () => true };
     const deadVerdict = observeSender(
@@ -736,6 +749,14 @@ describe('Electron security regressions and contract locks', () => {
       PRIVILEGED_ORIGIN,
     );
     assert.deepEqual(deadVerdict, { verdict: 'refuse', code: 'SENDER' });
+
+    const liveContents = { id: 1, mainFrame: frame, isDestroyed: () => false };
+    const liveVerdict = observeSender(
+      { sender: liveContents, senderFrame: frame },
+      liveContents,
+      PRIVILEGED_ORIGIN,
+    );
+    assert.equal(liveVerdict.verdict, 'admit');
   });
 
   it('ELECTRON_PIN is single-sourced from main.js into package.js and fails on drift', () => {
@@ -756,7 +777,7 @@ describe('Electron security regressions and contract locks', () => {
     });
   });
 
-  it('createSettingsStore.save over a planted symlink at settings.json leaves the target untouched and replaces the link with 0600 file', async () => {
+  it('createSettingsStore.save over a planted symlink at settings.json refuses and leaves the target untouched', async () => {
     const root = makeTempRoot('mv-settings-symlink-');
     try {
       const store = createSettingsStore({ XDG_CONFIG_HOME: root, HOME: root });
@@ -770,14 +791,10 @@ describe('Electron security regressions and contract locks', () => {
       assert.equal(lstatSync(settingsPath).isSymbolicLink(), true);
 
       const payload = JSON.stringify({ scheme: 'mv-light', density: 'compact' });
-      const saved = await store.save(payload);
-      assert.equal(saved, true);
+      await assert.rejects(() => store.save(payload), /SETTINGS_FILE/);
       assert.equal(readFileSync(victimPath, 'utf8'), 'VICTIM_ORIGINAL_BYTES');
       const st = lstatSync(settingsPath);
-      assert.equal(st.isSymbolicLink(), false);
-      assert.equal(st.isFile(), true);
-      assert.equal(st.mode & 0o777, 0o600);
-      assert.equal(readFileSync(settingsPath, 'utf8'), payload);
+      assert.equal(st.isSymbolicLink(), true);
     } finally {
       rmRoot(root);
     }

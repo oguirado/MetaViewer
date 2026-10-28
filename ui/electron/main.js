@@ -544,17 +544,19 @@ export function observeSender(event, expectedContents, privilegedOrigin) {
       return refuse('SENDER');
     }
     const srec = /** @type {Record<string, unknown>} */ (sender);
-    if (typeof srec.isDestroyed === 'function') {
-      /** @type {unknown} */
-      let dead = false;
-      try {
-        dead = /** @type {() => unknown} */ (srec.isDestroyed).call(sender) === true;
-      } catch {
-        return refuse('SENDER');
-      }
-      if (dead === true) {
-        return refuse('SENDER');
-      }
+    const isDestroyed = srec.isDestroyed;
+    if (typeof isDestroyed !== 'function') {
+      return refuse('SENDER');
+    }
+    /** @type {unknown} */
+    let destroyed;
+    try {
+      destroyed = /** @type {() => unknown} */ (isDestroyed).call(sender);
+    } catch {
+      return refuse('SENDER');
+    }
+    if (destroyed !== false) {
+      return refuse('SENDER');
     }
     const id = srec.id;
     if (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1) {

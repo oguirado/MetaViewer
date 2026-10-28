@@ -14,7 +14,7 @@ const reply = {ok:true,export:{id:'capture-1',bytes:2048,sha256:'a'.repeat(64)}}
 function fixture(core,env={}) {
   const handlers=new Map();
   const frame={url:'app://metaviewer/index.html',origin:'app://metaviewer'};
-  const contents={id:1,mainFrame:frame,getURL:()=>frame.url};
+  const contents={id:1,mainFrame:frame,getURL:()=>frame.url,isDestroyed:()=>false};
   const event={sender:contents,senderFrame:frame};
   const bridge=installCaptureBridge({ipcMain:{handle:(c,h)=>handlers.set(c,h),removeHandler:c=>handlers.delete(c)},contents,core,env});
   const api=createPreloadFacade({transport:{invoke:(channel,args)=>handlers.get(channel)(event,...args)},bridge:{exposeInMainWorld(){}}}).capture;

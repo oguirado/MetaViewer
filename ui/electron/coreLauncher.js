@@ -147,8 +147,8 @@ export function isForbiddenEnvName(name) {
 }
 
 /**
- * List the forbidden names present (with string values) in an alleged
- * environment object. Total: malformed inputs yield an empty list.
+ * List the forbidden names present in an alleged environment object,
+ * regardless of value type. Total: malformed inputs yield an empty list.
  * @param {unknown} env Alleged environment record.
  * @returns {ReadonlyArray<string>} Frozen present forbidden names.
  */
@@ -159,10 +159,13 @@ export function findForbiddenEnv(env) {
   const record = /** @type {Record<string, unknown>} */ (env);
   /** @type {Array<string>} */
   const found = [];
-  for (const key of Object.keys(record)) {
-    if (typeof record[key] !== 'string') {
-      continue;
-    }
+  let keys;
+  try {
+    keys = Object.keys(record);
+  } catch {
+    return Object.freeze([]);
+  }
+  for (const key of keys) {
     if (isForbiddenEnvName(key)) {
       found.push(key);
     }

@@ -50,7 +50,7 @@ test('subscription drops malformed and capability bearing events and unsubscribe
 // Sender fixture matches the authenticated top frame observation used by main.
 function host(nested=false,core={request:async({method})=>replies[method]}) {
   const handlers=new Map();const frame={url:'app://metaviewer/index.html',origin:'app://metaviewer'};
-  const contents={id:1,mainFrame:frame,getURL:()=>frame.url};
+  const contents={id:1,mainFrame:frame,getURL:()=>frame.url,isDestroyed:()=>false};
   const event={sender:contents,senderFrame:frame};
   const bridge=installCaptureBridge({ipcMain:{handle:(c,h)=>handlers.set(c,h),removeHandler:c=>handlers.delete(c)},contents,core,nested});
   return {handlers,event,bridge};

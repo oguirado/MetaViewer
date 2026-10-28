@@ -184,7 +184,7 @@ test('sealed recordings list roundtrips through hostBindings and preload with su
   const bindings=await createMainBindings({env:{MV_CORE_CONFIG:join(root,'config.json'),XDG_RUNTIME_DIR:root},createMessageChannel:()=>{throw Error('no frames');}});
   t.after(()=>bindings.core.dispose());
   const handlers=new Map(),listeners=new Set(),frame={url:'app://metaviewer/index.html',origin:'app://metaviewer'};
-  const contents={id:1,mainFrame:frame,getURL:()=>frame.url,send:(channel,value)=>{if(channel==='metaviewer:capture.state')for(const cb of listeners)cb(value);}};
+  const contents={id:1,mainFrame:frame,getURL:()=>frame.url,isDestroyed:()=>false,send:(channel,value)=>{if(channel==='metaviewer:capture.state')for(const cb of listeners)cb(value);}};
   const event={sender:contents,senderFrame:frame};
   const bridge=installCaptureBridge({ipcMain:{handle:(c,h)=>handlers.set(c,h),removeHandler:c=>handlers.delete(c)},contents,core:bindings.core});
   t.after(()=>bridge.dispose());
