@@ -518,6 +518,108 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(out_buf.getvalue(), "")
         self.assertTrue(err_buf.getvalue().startswith("bad_shape: "))
 
+    def test_invoke_planner_cmd_default_wender_and_lock_verification(self) -> None:
+        holdings_obs = {
+            "schema": "observation/v0.2",
+            "frame_ref": _frame_ref(),
+            "ground_truth": {
+                "source": "holdings_lane",
+                "state_sha256": "c" * 64,
+                "tick": 10,
+            },
+        }
+        expected_proposal = planner.plan_holdings(holdings_obs, proposal_id="p-lock-1")
+
+        with tempfile.TemporaryDirectory(prefix="planner-lock-") as tmp_dir:
+            repo = Path(tmp_dir).resolve()
+            pkg = repo / "wender" / "plan"
+            pkg.mkdir(parents=True)
+            (repo / "wender" / "__init__.py").write_text("", encoding="utf-8")
+            (pkg / "__init__.py").write_text("", encoding="utf-8")
+            (pkg / "cli.py").write_text(
+                "import sys\nsys.stdout.write("
+                + repr(canonical_json(expected_proposal))
+                + ")\n",
+                encoding="utf-8",
+            )
+            git_env = {
+                "PATH": os.environ.get("PATH", os.defpath),
+                "HOME": os.devnull,
+                "LANG": "C",
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_AUTHOR_NAME": "Test",
+                "GIT_AUTHOR_EMAIL": "test@example.invalid",
+                "GIT_COMMITTER_NAME": "Test",
+                "GIT_COMMITTER_EMAIL": "test@example.invalid",
+            }
+            for args in (
+                ["init", "-q"],
+                ["add", "."],
+                ["commit", "-q", "-m", "init"],
+            ):
+                subprocess.run(["git", "-C", str(repo), *args], env=git_env, check=True)
+            head = subprocess.run(
+                ["git", "-C", str(repo), "rev-parse", "HEAD"],
+                env=git_env,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+
+            with tempfile.TemporaryDirectory(prefix="planner-lockfile-") as lock_dir:
+                good_lock = Path(lock_dir) / "good.lock"
+                good_lock.write_text(
+                    json.dumps(
+                        {
+                            "components": [
+                                {"name": "vision-engine", "commit": "a" * 40},
+                                {"name": "wender-agent", "commit": head},
+                            ]
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                bad_lock = Path(lock_dir) / "bad.lock"
+                bad_lock.write_text(
+                    json.dumps(
+                        {
+                            "components": [
+                                {"name": "vision-engine", "commit": "a" * 40},
+                                {"name": "wender-agent", "commit": "f" * 40},
+                            ]
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+                with patch.dict(
+                    os.environ, {"MV_WENDER_ROOT": str(repo)}, clear=False
+                ):
+                    os.environ.pop("MV_WENDER_PLANNER_CMD", None)
+                    result = planner.invoke_planner_cmd(
+                        holdings_obs,
+                        proposal_id="p-lock-1",
+                        lock_path=good_lock,
+                    )
+                    self.assertEqual(result, expected_proposal)
+
+                    with self.assertRaises(PlannerError) as ctx:
+                        planner.invoke_planner_cmd(
+                            holdings_obs,
+                            proposal_id="p-lock-1",
+                            lock_path=bad_lock,
+                        )
+                    self.assertEqual(ctx.exception.code, "commit_mismatch")
+
+                    (pkg / "untracked.py").write_text("x = 1\n", encoding="utf-8")
+                    with self.assertRaises(PlannerError) as ctx:
+                        planner.invoke_planner_cmd(
+                            holdings_obs,
+                            proposal_id="p-lock-1",
+                            lock_path=good_lock,
+                        )
+                    self.assertEqual(ctx.exception.code, "dirty_tree")
+
 
 if __name__ == "__main__":
     unittest.main()

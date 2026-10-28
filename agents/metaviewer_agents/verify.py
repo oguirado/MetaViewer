@@ -1,20 +1,27 @@
 """Bounded agent workflow; success is exclusively the core's receipt.
 
-[TARGET, unit decision] MV_WENDER_PLANNER_CMD is a JSON argv array, never
-shell text. Configured Wender requires a goal and pinned MV_WENDER_ROOT;
-otherwise the injected local planner is used. Return the verified receipt
-for the caller to record; typed exceptions are terminal outcomes, no retries.
-Injected perception adapters own their subprocess timeout; the loop checks
-its total deadline after each synchronous step before admitting more work.
+[TARGET, unit decision] Wender is the default planner provider via
+``DEFAULT_WENDER_PLANNER_CMD = (sys.executable, "-m", "wender.plan.cli")``
+with precedence: ``MV_WENDER_PLANNER_CMD`` JSON argv environment override ->
+``DEFAULT_WENDER_PLANNER_CMD``. Configured Wender requires a goal, perception
+vision evidence, and pinned ``MV_WENDER_ROOT`` verified by
+``resolve_locked_component("wender-agent")`` before spawn; it never silently
+falls back to the local ``planner`` callable. Return the verified receipt for
+the caller to record; typed exceptions are terminal outcomes, no retries.
 """
 import copy
-import json
 import math
 import os
+from pathlib import Path
 import time
 
 from . import tools
 from .observe import ObservationError
+
+
+def get_configured_planner_cmd():
+    """Return the raw MV_WENDER_PLANNER_CMD environment override if set."""
+    return os.environ.get('MV_WENDER_PLANNER_CMD')
 
 
 def build_proposal(frame, *, proposal_id, action, expectation, max_ms, max_retries=0):
@@ -29,10 +36,13 @@ def build_proposal(frame, *, proposal_id, action, expectation, max_ms, max_retri
 
 
 def run_loop(*, client, surface_id, proposal_id, planner=None, timeout_ms,
-             perception_adapter=None, goal=None):
+             perception_adapter=None, goal=None, provider=None,
+             wender_root=None, lock_path=None, model_backend=None):
     """Observe, plan, submit once, then await the core; never replay an action."""
     if type(timeout_ms) is not int or not 1 <= timeout_ms <= 60000:
         raise ValueError('invalid timeout')
+    if provider is not None and provider not in ('wender', 'local'):
+        raise ObservationError('bad_shape', 'provider must be wender or local')
     deadline = time.monotonic() + timeout_ms / 1000
 
     def remaining():
@@ -50,25 +60,50 @@ def run_loop(*, client, surface_id, proposal_id, planner=None, timeout_ms,
     if observed_surface_id != surface_id:
         tools._fail('uncorrelated surface_id')
     remaining()
-    configured = os.environ.get('MV_WENDER_PLANNER_CMD')
-    if configured is not None:
-        # Lazy import avoids the bridge/tools/executor import cycle.
+    # Lazy import avoids the bridge/tools/executor import cycle.
+    from .wender_bridge import (
+        WenderSubprocessAdapter,
+        coerce_model_backend,
+        has_configured_wender_root,
+        resolve_planner_command,
+    )
+
+    configured = get_configured_planner_cmd()
+    use_wender = (
+        provider == 'wender'
+        or configured is not None
+        or (
+            provider is None
+            and (planner is None or has_configured_wender_root(wender_root))
+        )
+    )
+    if use_wender:
         from .perception.deps_lock import resolve_locked_component
         from .perception.vcore import project_element_table
-        from .wender_bridge import WenderSubprocessAdapter
 
-        try:
-            command = json.loads(configured)
-        except (ValueError, RecursionError) as exc:
-            raise ObservationError('bad_shape', 'planner command must be JSON argv') from exc
-        if (not isinstance(command, list) or not command
-                or any(not isinstance(arg, str) or not arg or '\x00' in arg for arg in command)):
-            raise ObservationError('bad_shape', 'planner command must be nonempty JSON argv')
+        backend = coerce_model_backend(model_backend)
+        command = resolve_planner_command(configured_env=configured, use_env=False)
         if 'vision' not in observation:
             raise ObservationError('unavailable', 'Wender requires perception evidence')
-        root = resolve_locked_component('wender-agent')
-        bridge = WenderSubprocessAdapter(command=command, wender_root=root,
-                                         timeout=remaining() / 1000)
+        if lock_path is None:
+            root = resolve_locked_component('wender-agent')
+        else:
+            root = resolve_locked_component('wender-agent', lock_path=lock_path)
+        if wender_root is not None:
+            try:
+                expected_root = Path(wender_root).resolve()
+            except (OSError, ValueError, RuntimeError) as exc:
+                raise ObservationError('unavailable', 'Wender checkout is not a directory') from exc
+            if expected_root != Path(root).resolve():
+                raise ObservationError('commit_mismatch', 'verified checkout differs from wender_root')
+        bridge = WenderSubprocessAdapter(
+            command=command,
+            wender_root=root,
+            timeout=remaining() / 1000,
+            verify_lock=True,
+            lock_path=lock_path,
+            model_backend=backend,
+        )
         action, expectation, _, _ = bridge.plan_step(
             copy.deepcopy(observation),
             project_element_table(observation['frame_ref'], observation['vision']), goal)

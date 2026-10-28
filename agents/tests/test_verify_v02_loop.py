@@ -18,6 +18,11 @@ from metaviewer_agents.perception.base import PerceptionError
 from metaviewer_agents.perception.deps_lock import DependencyLockError
 from metaviewer_agents.perception.vcore import VCorePerceptionAdapter
 from metaviewer_agents.verify import build_proposal, run_loop
+from metaviewer_agents.wender_bridge import (
+    DEFAULT_WENDER_PLANNER_CMD,
+    WenderModelBackend,
+    resolve_planner_command,
+)
 
 
 def plan_reply():
@@ -124,6 +129,12 @@ class V02LoopTests(unittest.TestCase):
             'assert pathlib.Path(p).read_bytes().startswith(bytes.fromhex("89504e47"))\n'
             'print(' + repr(json.dumps(c2)) + ')\n')
         self.cli = self.root / 'planner.py'
+        wender_pkg = self.root / 'wender'
+        wender_plan_pkg = wender_pkg / 'plan'
+        wender_plan_pkg.mkdir(parents=True)
+        (wender_pkg / '__init__.py').write_text('')
+        (wender_plan_pkg / '__init__.py').write_text('')
+        self.default_cli = wender_plan_pkg / 'cli.py'
         self.write_planner()
         self.environment = patch.dict(os.environ, dict(
             MV_WENDER_ROOT=str(self.root), VQA_VE_ROOT=str(self.root),
@@ -133,12 +144,15 @@ class V02LoopTests(unittest.TestCase):
         self.adapter = VCorePerceptionAdapter(python=sys.executable, verify_lock=True)
 
     def write_planner(self, *, raw=None, prelude=''):
-        self.cli.write_text(
+        script = (
             'import json, sys\nr = json.load(sys.stdin)\n'
             'assert r["goal"] == "Continue"\n'
             'assert r["observation"]["vision"]["elements"]\n'
             'assert r["element_table"]["elements"][0]["score_ppm"] == 500000\n'
-            + prelude + '\nprint(' + repr(json.dumps(plan_reply()) if raw is None else raw) + ')\n')
+            + prelude + '\nprint(' + repr(json.dumps(plan_reply()) if raw is None else raw) + ')\n'
+        )
+        self.cli.write_text(script)
+        self.default_cli.write_text(script)
 
     def run_loop(self, **kwargs):
         options = dict(client=self.core, surface_id='fixture', proposal_id='p1',
@@ -202,6 +216,7 @@ class V02LoopTests(unittest.TestCase):
 
     def test_local_planner_receives_enrichment_and_exhaustion_stops_proposal(self):
         del os.environ['MV_WENDER_PLANNER_CMD']
+        os.environ.pop('MV_WENDER_ROOT', None)
         def local(observation):
             self.assertIn('vision', observation)
             observation['frame_ref']['generation'] = 999
@@ -217,6 +232,66 @@ class V02LoopTests(unittest.TestCase):
         self.assertNotIn('propose', self.core.ops)
         with self.assertRaises(ObservationError):
             self.run_loop(planner=lambda o: None)
+
+    def test_default_wires_wender(self):
+        del os.environ['MV_WENDER_PLANNER_CMD']
+        self.assertEqual(
+            DEFAULT_WENDER_PLANNER_CMD,
+            (sys.executable, '-m', 'wender.plan.cli'),
+        )
+        self.assertEqual(
+            resolve_planner_command(),
+            (sys.executable, '-m', 'wender.plan.cli'),
+        )
+        self.cli.write_text('raise AssertionError("override CLI must not run when unset")\n')
+        receipt = self.run_loop(
+            planner=lambda o: self.fail('local planner must not run when wender is default'),
+            model_backend=WenderModelBackend('muse_cli'),
+        )
+        self.assertTrue(receipt['verified'])
+        self.assertEqual(self.core.ops, ['observe', 'propose', 'wait_verify'])
+        # Precedence check: env override beats default, explicit command arg beats env override.
+        os.environ['MV_WENDER_PLANNER_CMD'] = json.dumps([sys.executable, str(self.cli)])
+        self.assertEqual(
+            resolve_planner_command(),
+            (sys.executable, str(self.cli)),
+        )
+        self.assertEqual(
+            resolve_planner_command([sys.executable, '-m', 'custom.cli']),
+            (sys.executable, '-m', 'custom.cli'),
+        )
+
+    def test_pin_mismatch_blocks(self):
+        del os.environ['MV_WENDER_PLANNER_CMD']
+        self.provenance['wender-agent'].write_text(
+            json.dumps(dict(vcs_info=dict(vcs='git', commit_id='f' * 40)))
+        )
+        with self.assertRaises(DependencyLockError) as caught:
+            self.run_loop(planner=lambda o: self.fail('must not fall back on pin mismatch'))
+        self.assertEqual(caught.exception.code, 'commit_mismatch')
+        self.assertNotIn('propose', self.core.ops)
+
+    def test_no_silent_fallback(self):
+        del os.environ['MV_WENDER_PLANNER_CMD']
+        fallback_calls = []
+
+        def fallback(observation):
+            fallback_calls.append(observation)
+            return plan_reply()['action'], plan_reply()['expectation']
+
+        self.write_planner(prelude='sys.exit(3)')
+        with self.assertRaises(ObservationError) as caught:
+            self.run_loop(planner=fallback)
+        self.assertEqual(caught.exception.code, 'subprocess_failed')
+        self.assertEqual(fallback_calls, [])
+        self.assertNotIn('propose', self.core.ops)
+
+        self.write_planner(raw='{"broken": true}')
+        with self.assertRaises(ObservationError) as caught:
+            self.run_loop(planner=fallback)
+        self.assertEqual(caught.exception.code, 'bad_shape')
+        self.assertEqual(fallback_calls, [])
+        self.assertNotIn('propose', self.core.ops)
 
     def test_command_is_explicit_argv_and_missing_vision_refused(self):
         for command in ('echo unsafe | sh', '"shell text"', '[]', '[1]', 'null', '[""]'):

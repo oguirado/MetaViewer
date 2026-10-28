@@ -10,9 +10,16 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from metaviewer_agents.executor import SurfaceError, SurfaceRefused
 from metaviewer_agents.observe import ObservationError, compute_battery_state_sha256
-from metaviewer_agents.wender_bridge import WenderSubprocessAdapter, validate_state
+from metaviewer_agents.wender_bridge import (
+    DEFAULT_WENDER_PLANNER_CMD,
+    WenderModelBackend,
+    WenderSubprocessAdapter,
+    resolve_planner_command,
+    validate_state,
+)
 
 
 def observation():
@@ -207,9 +214,23 @@ class WenderBridgeTests(unittest.TestCase):
                 adapter.plan_step(obs, table(), goal)
 
     def test_configuration_controls(self):
+        lock = json.loads((Path(__file__).resolve().parents[2] / "deps.lock").read_text(encoding="utf-8"))
+        wender_commit = next(
+            c["commit"] for c in lock["components"] if c["name"] == "wender-agent"
+        )
+        dist_info = self.root / "wender_agent-0.0.dist-info"
+        dist_info.mkdir(exist_ok=True)
+        (dist_info / "direct_url.json").write_text(
+            json.dumps({"vcs_info": {"vcs": "git", "commit_id": wender_commit}}),
+            encoding="utf-8",
+        )
         with patch.dict(os.environ, {"MV_WENDER_ROOT": str(self.root)}):
             adapter = WenderSubprocessAdapter(command=[sys.executable])
             self.assertEqual(adapter.wender_root, self.root)
+            self.assertTrue(adapter.verify_lock)
+            default_adapter = WenderSubprocessAdapter()
+            self.assertEqual(default_adapter.command, DEFAULT_WENDER_PLANNER_CMD)
+            self.assertTrue(default_adapter.verify_lock)
         with patch.dict(os.environ, {}, clear=True):
             with self.assertRaises(ObservationError):
                 WenderSubprocessAdapter(command=[sys.executable])
@@ -221,6 +242,144 @@ class WenderBridgeTests(unittest.TestCase):
                 WenderSubprocessAdapter(wender_root=self.root, command=[sys.executable], timeout=timeout)
         with self.assertRaises(ObservationError):
             WenderSubprocessAdapter(wender_root=self.root / "absent", command=[sys.executable])
+
+    def test_default_command_precedence_and_git_lock_controls(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(
+                resolve_planner_command(),
+                (sys.executable, "-m", "wender.plan.cli"),
+            )
+        with patch.dict(
+            os.environ,
+            {"MV_WENDER_PLANNER_CMD": json.dumps([sys.executable, "-m", "override.cli"])},
+        ):
+            self.assertEqual(
+                resolve_planner_command(),
+                (sys.executable, "-m", "override.cli"),
+            )
+            self.assertEqual(
+                resolve_planner_command([sys.executable, "-m", "explicit.cli"]),
+                (sys.executable, "-m", "explicit.cli"),
+            )
+
+        with tempfile.TemporaryDirectory(prefix="wender-git-") as git_tmp:
+            repo = Path(git_tmp).resolve()
+            pkg = repo / "wender" / "plan"
+            pkg.mkdir(parents=True)
+            (repo / "wender" / "__init__.py").write_text("", encoding="utf-8")
+            (pkg / "__init__.py").write_text("", encoding="utf-8")
+            (pkg / "cli.py").write_text(
+                "import sys\nsys.stdout.write(" + repr(json.dumps(reply())) + ")\n",
+                encoding="utf-8",
+            )
+            git_env = {
+                "PATH": os.environ.get("PATH", os.defpath),
+                "HOME": os.devnull,
+                "LANG": "C",
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_AUTHOR_NAME": "Test",
+                "GIT_AUTHOR_EMAIL": "test@example.invalid",
+                "GIT_COMMITTER_NAME": "Test",
+                "GIT_COMMITTER_EMAIL": "test@example.invalid",
+            }
+            for args in (
+                ["init", "-q"],
+                ["add", "."],
+                ["commit", "-q", "-m", "init"],
+            ):
+                subprocess.run(["git", "-C", str(repo), *args], env=git_env, check=True)
+            head = subprocess.run(
+                ["git", "-C", str(repo), "rev-parse", "HEAD"],
+                env=git_env,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+
+            lock_file = Path(self.temp.name) / "custom-deps.lock"
+            lock_data = {
+                "components": [
+                    {"name": "vision-engine", "commit": "a" * 40},
+                    {"name": "wender-agent", "commit": head},
+                ]
+            }
+            lock_file.write_text(json.dumps(lock_data), encoding="utf-8")
+
+            with patch.dict(os.environ, {"MV_WENDER_ROOT": str(repo)}, clear=False):
+                os.environ.pop("MV_WENDER_PLANNER_CMD", None)
+                adapter = WenderSubprocessAdapter(lock_path=lock_file)
+                self.assertEqual(adapter.command, (sys.executable, "-m", "wender.plan.cli"))
+                action, expectation, _, _ = self.run_plan(adapter)
+                self.assertEqual(action, reply()["action"])
+                self.assertEqual(expectation, reply()["expectation"])
+
+                # Pin mismatch blocks before spawn
+                bad_lock = Path(self.temp.name) / "bad-deps.lock"
+                bad_lock.write_text(
+                    json.dumps(
+                        {
+                            "components": [
+                                {"name": "vision-engine", "commit": "a" * 40},
+                                {"name": "wender-agent", "commit": "0" * 40},
+                            ]
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                with self.assertRaises(ObservationError) as caught:
+                    WenderSubprocessAdapter(lock_path=bad_lock)
+                self.assertEqual(caught.exception.code, "commit_mismatch")
+
+                # Dirty tree blocks before spawn
+                (pkg / "untracked_payload.py").write_text("x = 1\n", encoding="utf-8")
+                with self.assertRaises(ObservationError) as caught:
+                    WenderSubprocessAdapter(lock_path=lock_file)
+                self.assertEqual(caught.exception.code, "dirty_tree")
+
+    def test_model_backend_runtime_credential_and_redaction_controls(self):
+        muse = WenderModelBackend("muse_cli")
+        self.assertEqual(muse.provider, "muse_cli")
+        self.assertEqual(muse.kind, "muse_cli")
+        self.assertFalse(muse.has_credential)
+        self.assertEqual(muse.redact()["credential"], None)
+
+        seen_calls = []
+
+        def fake_transport(req, *, provider, endpoint, credential):
+            seen_calls.append((req, provider, endpoint, bytes(credential)))
+            return {"status": "ok", "action": "click"}
+
+        secret = b"rt-baseten-token-do-not-leak"
+        baseten = WenderModelBackend(
+            "baseten",
+            credential=secret,
+            endpoint="https://model.example.invalid/v1/predict",
+            transport=fake_transport,
+            require_credential=True,
+        )
+        self.assertTrue(baseten.has_credential)
+        self.assertNotIn("rt-baseten-token-do-not-leak", repr(baseten))
+        self.assertNotIn("rt-baseten-token-do-not-leak", str(baseten))
+        self.assertEqual(baseten.redact()["credential"], "<redacted>")
+        resp = baseten.invoke({"goal": "Continue"})
+        self.assertEqual(resp, {"status": "ok", "action": "click"})
+        self.assertEqual(len(seen_calls), 1)
+        self.assertEqual(seen_calls[0][3], secret)
+
+        baseten.clear_credential()
+        self.assertFalse(baseten.has_credential)
+        with self.assertRaises(ObservationError) as caught:
+            baseten.invoke({"goal": "Continue"})
+        self.assertEqual(caught.exception.code, "unavailable")
+
+        for bad_cred in (".env", "auth.json", "secret.key", Path("auth.json"), b"", b"   ", b"a\x00b"):
+            with self.subTest(bad_cred=bad_cred), self.assertRaises(ObservationError) as caught:
+                WenderModelBackend("baseten", credential=bad_cred)
+            self.assertEqual(caught.exception.code, "bad_shape")
+
+        with self.assertRaises(ObservationError) as caught:
+            WenderModelBackend("unsupported_provider")
+        self.assertEqual(caught.exception.code, "bad_shape")
 
     def test_timeout_kills_and_reaps_planner_child(self):
         # Mutation: skip process.kill() or process.wait() in _run_bounded finally.

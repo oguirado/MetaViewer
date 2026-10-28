@@ -22,6 +22,8 @@ import re
 import stat
 import subprocess
 
+from ..observe import ObservationError
+
 __all__ = ["DependencyLockError", "resolve_locked_component"]
 
 _ROOT_VARIABLES = {
@@ -57,13 +59,13 @@ _PAYLOAD_SUFFIXES = frozenset((
 ))
 
 
-class DependencyLockError(RuntimeError):
+class DependencyLockError(ObservationError, RuntimeError):
     """A dependency could not be proven to match its lock."""
 
     def __init__(self, code: str, message: str):
         self.code = code
         self.message = message
-        super().__init__(message)
+        super().__init__(code, message)
 
 
 def _unique_object(pairs):

@@ -24,6 +24,7 @@ import copy
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import re
 import sys
@@ -37,18 +38,30 @@ from metaviewer_agents.observe import (  # noqa: E402
     _reject_non_canonical,
     validate_observation,
 )
+from metaviewer_agents.perception.deps_lock import (  # noqa: E402
+    DependencyLockError,
+    resolve_locked_component,
+)
 from metaviewer_agents.tools import (  # noqa: E402
     ToolValidationError,
     _check_action,
     _check_expectation,
     _check_proposal,
 )
-from metaviewer_agents.wender_bridge import _run_bounded, validate_state  # noqa: E402
+from metaviewer_agents.wender_bridge import (  # noqa: E402
+    DEFAULT_WENDER_PLANNER_CMD,
+    _run_bounded,
+    coerce_model_backend,
+    has_configured_wender_root,
+    resolve_planner_command,
+    validate_state,
+)
 
 __all__ = [
     "DEFAULT_HOLDINGS_MAX_MS",
     "DEFAULT_HOLDINGS_PROPOSAL_ID",
     "DEFAULT_TICK_WINDOW",
+    "DEFAULT_WENDER_PLANNER_CMD",
     "EXIT_CODES",
     "PlannerError",
     "canonical_json",
@@ -90,6 +103,10 @@ EXIT_CODES: dict[str, int] = {
     "generation_control": 6,
     "alignment": 7,
     "policy": 8,
+    "commit_mismatch": 9,
+    "dirty_tree": 10,
+    "bad_lockfile": 11,
+    "unavailable": 12,
 }
 
 
@@ -752,39 +769,103 @@ def _read_stdin_request(stream) -> tuple[str, dict]:
 def invoke_planner_cmd(
     observation: dict,
     *,
-    command: list[str] | tuple[str, ...],
+    command: list[str] | tuple[str, ...] | None = None,
     proposal_id: str = DEFAULT_HOLDINGS_PROPOSAL_ID,
     max_ms: int = DEFAULT_HOLDINGS_MAX_MS,
     max_retries: int = 0,
     timeout_s: float = 10.0,
+    wender_root: str | Path | None = None,
+    lock_path: str | Path | None = None,
+    verify_lock: bool = True,
+    model_backend=None,
 ) -> dict:
     """Invoke an external planner command over stdin/stdout using wender_bridge._run_bounded."""
-    parsed_cmd = list(command) if isinstance(command, (list, tuple)) else None
-    if (
-        not isinstance(parsed_cmd, list)
-        or not parsed_cmd
-        or any(
-            not isinstance(arg, str)
-            or not arg
-            or "\x00" in arg
-            or _SURROGATE_RE.search(arg)
-            for arg in parsed_cmd
-        )
-    ):
-        _fail("bad_shape", "planner command must be a non-empty JSON argv list")
+    if type(verify_lock) is not bool:
+        _fail("bad_shape", "verify_lock must be a boolean")
+    if lock_path is not None and not isinstance(lock_path, (str, Path)):
+        _fail("bad_shape", "lock_path must be a path")
+    try:
+        coerce_model_backend(model_backend)
+    except ObservationError as exc:
+        _fail(exc.code, str(exc))
+
+    if command is not None:
+        parsed_cmd = list(command) if isinstance(command, (list, tuple)) else None
+        if (
+            not isinstance(parsed_cmd, list)
+            or not parsed_cmd
+            or any(
+                not isinstance(arg, str)
+                or not arg
+                or "\x00" in arg
+                or _SURROGATE_RE.search(arg)
+                for arg in parsed_cmd
+            )
+        ):
+            _fail("bad_shape", "planner command must be a non-empty JSON argv list")
+    else:
+        try:
+            parsed_cmd = list(resolve_planner_command(None))
+        except ObservationError as exc:
+            _fail(exc.code, str(exc))
+
+    uses_in_tree_planner = (
+        command is not None
+        and wender_root is None
+        and not has_configured_wender_root()
+        and "metaviewer_agents.planner" in parsed_cmd
+    )
+    agents_root = str(Path(__file__).resolve().parents[1])
+    exec_root = agents_root
+    if verify_lock and not uses_in_tree_planner:
+        try:
+            if lock_path is None:
+                locked = resolve_locked_component("wender-agent")
+            else:
+                locked = resolve_locked_component("wender-agent", lock_path=lock_path)
+        except DependencyLockError as exc:
+            raise PlannerError(exc.code, str(exc)) from exc
+        if not isinstance(locked, (str, Path)):
+            _fail("unavailable", "dependency resolver returned no checkout")
+        try:
+            locked_root = Path(locked).resolve()
+            if not locked_root.is_dir():
+                _fail("unavailable", "verified checkout is not a directory")
+        except (OSError, ValueError, RuntimeError) as exc:
+            raise PlannerError("unavailable", "verified checkout is not a directory") from exc
+        if wender_root is not None:
+            try:
+                explicit_root = Path(wender_root).resolve()
+            except (OSError, ValueError, RuntimeError) as exc:
+                raise PlannerError("unavailable", "Wender checkout is not a directory") from exc
+            if locked_root != explicit_root:
+                _fail("commit_mismatch", "verified checkout differs from wender_root")
+        exec_root = str(locked_root)
+    elif wender_root is not None:
+        try:
+            explicit_root = Path(wender_root).resolve()
+            if not explicit_root.is_dir():
+                _fail("unavailable", "Wender checkout is not a directory")
+        except (OSError, ValueError, RuntimeError) as exc:
+            raise PlannerError("unavailable", "Wender checkout is not a directory") from exc
+        exec_root = str(explicit_root)
 
     frame, _ = _validate_holdings_observation(observation)
     payload_bytes = canonical_json(observation).encode("utf-8")
-    agents_root = str(Path(__file__).resolve().parents[1])
+    pythonpath = (
+        f"{exec_root}{os.pathsep}{agents_root}"
+        if exec_root != agents_root
+        else agents_root
+    )
     env: dict[str, str] = {
-        "PYTHONPATH": agents_root,
+        "PYTHONPATH": pythonpath,
         "PYTHONDONTWRITEBYTECODE": "1",
     }
 
     try:
         completed = _run_bounded(
             parsed_cmd,
-            cwd=agents_root,
+            cwd=exec_root,
             env=env,
             request=payload_bytes,
             timeout=timeout_s,

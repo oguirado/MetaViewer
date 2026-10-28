@@ -1,15 +1,18 @@
 """Wender planning over an explicit, pipe-only subprocess boundary.
 
-[TARGET, unit decision] The pinned package has no planner CLI entry point.
-The host must supply ``command`` (an argv sequence, never a shell string).
-It reads {observation, element_table, goal} and writes exactly
-{action, expectation, state, target_node} as UTF-8 JSON. Only click plans
+[TARGET, unit decision] Default planner CLI entry point is
+``(sys.executable, "-m", "wender.plan.cli")`` with precedence: explicit
+``command`` argument -> ``MV_WENDER_PLANNER_CMD`` JSON argv environment
+override -> ``DEFAULT_WENDER_PLANNER_CMD``. It reads
+``{observation, element_table, goal}`` and writes
+``{action, expectation, state, target_node}`` as UTF-8 JSON. Only click plans
 are admitted here; their coordinates must fall inside the custody-checked
 actionable target. This adapter does not dispatch or confer admission.
-State fields follow the pinned wender.state/v1 wire schema; no private
-implementation is imported or embedded. Optional verify_lock checks checkout
-pinning before planning. Depth-tree consistency remains deferred for planner
-compatibility; the adapter has no consumer for that invariant.
+State fields follow the pinned ``wender.state/v1`` wire schema; no private
+implementation is imported or embedded. Lock verification checks
+``resolve_locked_component("wender-agent")`` before planning. Optional
+``WenderModelBackend`` hooks local Muse Spark CLI (``"muse_cli"``) or demo
+``"baseten"`` via in-memory runtime credential buffers only (never disk or env).
 """
 
 from __future__ import annotations
@@ -20,6 +23,7 @@ import os
 from pathlib import Path
 import re
 import selectors
+import sys
 import time
 import subprocess
 
@@ -31,8 +35,234 @@ from .observe import (
 )
 from .tools import ToolValidationError, _check_action, _check_expectation
 
+__all__ = [
+    "ALLOWED_MODEL_BACKENDS",
+    "DEFAULT_WENDER_PLANNER_CMD",
+    "WenderModelBackend",
+    "WenderSubprocessAdapter",
+    "coerce_model_backend",
+    "has_configured_wender_root",
+    "resolve_planner_command",
+    "validate_state",
+]
 
 _MAX_TIMEOUT = 86400.0
+DEFAULT_WENDER_PLANNER_CMD: tuple[str, ...] = (
+    sys.executable,
+    "-m",
+    "wender.plan.cli",
+)
+ALLOWED_MODEL_BACKENDS: frozenset[str] = frozenset((
+    "muse_cli",
+    "muse_spark",
+    "baseten",
+))
+
+
+def _is_valid_argv_token(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and "\x00" not in value
+        and not any(0xD800 <= ord(c) <= 0xDFFF for c in value)
+    )
+
+
+def has_configured_wender_root(wender_root: str | Path | None = None) -> bool:
+    """Return True when an explicit wender_root or MV_WENDER_ROOT is configured."""
+    raw = wender_root if wender_root is not None else os.environ.get("MV_WENDER_ROOT")
+    return isinstance(raw, (str, Path)) and bool(str(raw).strip())
+
+
+def resolve_planner_command(
+    command: list[str] | tuple[str, ...] | None = None,
+    *,
+    configured_env: str | None = None,
+    use_env: bool = True,
+) -> tuple[str, ...]:
+    """Resolve the planner argv with precedence: explicit command -> env -> default."""
+    if command is not None:
+        if (
+            not isinstance(command, (list, tuple))
+            or not command
+            or any(not _is_valid_argv_token(arg) for arg in command)
+        ):
+            raise ObservationError("bad_shape", "command must be a nonempty argv sequence")
+        return tuple(command)
+
+    raw_env = configured_env
+    if raw_env is None and use_env:
+        from .verify import get_configured_planner_cmd
+
+        raw_env = get_configured_planner_cmd()
+
+    if raw_env is not None:
+        try:
+            parsed = json.loads(raw_env)
+        except (ValueError, TypeError, RecursionError) as exc:
+            raise ObservationError("bad_shape", "planner command must be JSON argv") from exc
+        if (
+            not isinstance(parsed, list)
+            or not parsed
+            or any(not _is_valid_argv_token(arg) for arg in parsed)
+        ):
+            raise ObservationError("bad_shape", "planner command must be nonempty JSON argv")
+        return tuple(parsed)
+
+    default_cmd = DEFAULT_WENDER_PLANNER_CMD
+    if (
+        not isinstance(default_cmd, (list, tuple))
+        or not default_cmd
+        or any(not _is_valid_argv_token(arg) for arg in default_cmd)
+    ):
+        raise ObservationError("bad_shape", "command must be a nonempty argv sequence")
+    return tuple(default_cmd)
+
+
+class WenderModelBackend:
+    """Runtime-only model backend hook for local Muse Spark CLI or Baseten demo.
+
+    [TARGET, unit decision] Credentials are accepted exclusively as in-memory
+    ``bytes`` or ``bytearray`` buffers. Strings, Paths, filenames (e.g. ``.env``,
+    ``auth.json``, ``*.key``), and environment lookups are rejected. Credentials
+    are never serialized to ``repr``, ``str``, logs, errors, or subprocess env.
+    """
+
+    def __init__(
+        self,
+        provider: str = "muse_cli",
+        *,
+        credential: bytes | bytearray | None = None,
+        endpoint: str | None = None,
+        command: list[str] | tuple[str, ...] | None = None,
+        transport=None,
+        require_credential: bool = False,
+    ) -> None:
+        if not isinstance(provider, str) or provider not in ALLOWED_MODEL_BACKENDS:
+            raise ObservationError(
+                "bad_shape",
+                "model backend provider must be 'muse_cli', 'muse_spark', or 'baseten'",
+            )
+        self.provider: str = provider
+        self.kind: str = "baseten" if provider == "baseten" else "muse_cli"
+
+        if endpoint is not None:
+            if not _is_valid_argv_token(endpoint) or not endpoint.strip():
+                raise ObservationError("bad_shape", "model backend endpoint must be a valid string")
+        self.endpoint: str | None = endpoint
+
+        if command is not None:
+            if (
+                not isinstance(command, (list, tuple))
+                or not command
+                or any(not _is_valid_argv_token(arg) for arg in command)
+            ):
+                raise ObservationError("bad_shape", "model backend command must be nonempty argv")
+            self.command: tuple[str, ...] | None = tuple(command)
+        else:
+            self.command = None
+
+        if transport is not None and not callable(transport):
+            raise ObservationError("bad_shape", "model backend transport must be callable")
+        self._transport = transport
+
+        self._credential_buf = bytearray()
+        if credential is not None:
+            if isinstance(credential, (str, Path, os.PathLike)) or not isinstance(
+                credential, (bytes, bytearray)
+            ):
+                raise ObservationError(
+                    "bad_shape",
+                    "credential must be an in-memory bytes buffer, never a string, path, or key file",
+                )
+            raw_bytes = bytes(credential)
+            if not raw_bytes or b"\x00" in raw_bytes or not raw_bytes.strip():
+                raise ObservationError(
+                    "bad_shape",
+                    "credential buffer must be non-empty and NUL-free",
+                )
+            self._credential_buf = bytearray(raw_bytes)
+        elif require_credential:
+            raise ObservationError(
+                "unavailable",
+                "model backend requires an in-memory credential buffer",
+            )
+
+    @property
+    def has_credential(self) -> bool:
+        return bool(self._credential_buf)
+
+    def credential_handle(self) -> memoryview:
+        if not self._credential_buf:
+            raise ObservationError("unavailable", "model backend credential is not loaded")
+        return memoryview(self._credential_buf).toreadonly()
+
+    def clear_credential(self) -> None:
+        for index in range(len(self._credential_buf)):
+            self._credential_buf[index] = 0
+        self._credential_buf.clear()
+
+    def redact(self) -> dict[str, object]:
+        return {
+            "provider": self.provider,
+            "kind": self.kind,
+            "endpoint": self.endpoint,
+            "has_credential": self.has_credential,
+            "credential": "<redacted>" if self.has_credential else None,
+        }
+
+    to_metadata = redact
+
+    def invoke(self, request: dict[str, object]) -> dict[str, object]:
+        _reject_non_canonical(request, 0)
+        if not isinstance(request, dict):
+            raise ObservationError("bad_shape", "model backend request must be a JSON object")
+        if self.kind == "baseten" and not self.has_credential:
+            raise ObservationError(
+                "unavailable",
+                "baseten model backend requires an in-memory credential buffer",
+            )
+        if self._transport is None:
+            raise ObservationError("unavailable", "model backend transport is not configured")
+        cred_view = self.credential_handle() if self.has_credential else None
+        response = self._transport(
+            request,
+            provider=self.provider,
+            endpoint=self.endpoint,
+            credential=cred_view,
+        )
+        _reject_non_canonical(response, 0)
+        if not isinstance(response, dict):
+            raise ObservationError("bad_shape", "model backend response must be a JSON object")
+        return response
+
+    def __repr__(self) -> str:
+        cred_state = "<redacted>" if self.has_credential else "None"
+        return (
+            f"WenderModelBackend(provider={self.provider!r}, "
+            f"endpoint={self.endpoint!r}, credential={cred_state})"
+        )
+
+    __str__ = __repr__
+
+
+def coerce_model_backend(
+    model_backend: WenderModelBackend | dict[str, object] | str | None,
+) -> WenderModelBackend | None:
+    if model_backend is None:
+        return None
+    if isinstance(model_backend, WenderModelBackend):
+        return model_backend
+    if isinstance(model_backend, str):
+        return WenderModelBackend(model_backend)
+    if isinstance(model_backend, dict):
+        allowed = {"provider", "credential", "endpoint", "command", "transport", "require_credential"}
+        if not set(model_backend) <= allowed:
+            raise ObservationError("bad_shape", "model_backend dict contains unsupported keys")
+        kwargs = dict(model_backend)
+        provider = kwargs.pop("provider", "muse_cli")
+        return WenderModelBackend(provider, **kwargs)
+    raise ObservationError("bad_shape", "model_backend must be WenderModelBackend, dict, str, or None")
 
 
 def _require(condition, message):
@@ -186,7 +416,16 @@ class WenderSubprocessAdapter:
     only after every response and custody check succeeds.
     """
 
-    def __init__(self, *, command, wender_root=None, timeout=10, verify_lock=False):
+    def __init__(
+        self,
+        *,
+        command=None,
+        wender_root=None,
+        timeout=10,
+        verify_lock=None,
+        lock_path=None,
+        model_backend=None,
+    ):
         raw = wender_root if wender_root is not None else os.environ.get("MV_WENDER_ROOT")
         if not isinstance(raw, (str, Path)) or not str(raw):
             raise ObservationError("unavailable", "MV_WENDER_ROOT or wender_root required")
@@ -196,11 +435,21 @@ class WenderSubprocessAdapter:
                 raise ObservationError("unavailable", "Wender checkout is not a directory")
         except (OSError, ValueError, RuntimeError) as exc:
             raise ObservationError("unavailable", "Wender checkout is not a directory") from exc
+        if verify_lock is None:
+            verify_lock = wender_root is None or command is None
         _require(type(verify_lock) is bool, "verify_lock must be a boolean")
+        if lock_path is not None and not isinstance(lock_path, (str, Path)):
+            raise ObservationError("bad_shape", "lock_path must be a path")
+        self.lock_path = Path(lock_path) if lock_path is not None else None
+        self.verify_lock = verify_lock
+        self.model_backend = coerce_model_backend(model_backend)
         if verify_lock:
             from .perception.deps_lock import resolve_locked_component
             try:
-                locked = resolve_locked_component("wender-agent")
+                if self.lock_path is None:
+                    locked = resolve_locked_component("wender-agent")
+                else:
+                    locked = resolve_locked_component("wender-agent", lock_path=self.lock_path)
             except DependencyLockError as exc:
                 raise ObservationError(exc.code, str(exc)) from exc
             if not isinstance(locked, (str, Path)):
@@ -213,13 +462,8 @@ class WenderSubprocessAdapter:
                 raise ObservationError("unavailable", "verified checkout is not a directory") from exc
             if locked_root != self.wender_root:
                 raise ObservationError("commit_mismatch", "verified checkout differs from wender_root")
-        if (not isinstance(command, (list, tuple)) or not command
-                or any(not isinstance(arg, str) or not arg or "\x00" in arg
-                       or any(0xD800 <= ord(c) <= 0xDFFF for c in arg)
-                       for arg in command)):
-            raise ObservationError("bad_shape", "command must be a nonempty argv sequence")
+        self.command = resolve_planner_command(command)
         self.timeout = _validate_timeout(timeout)
-        self.command = tuple(command)
         self.battery_state_sha256 = None
 
     def plan_step(self, observation, element_table, goal):
