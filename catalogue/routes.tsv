@@ -93,6 +93,7 @@ test_tg_record.py	agents/tests/test_tg_record.py
 test_tg_vision.py	agents/tests/test_tg_vision.py
 test_tools.py	agents/tests/test_tools.py
 test_vcore.py	agents/tests/test_vcore.py
+test_vcore_serve.py	agents/tests/test_vcore_serve.py
 testvco-9ce1ffeaa20f	agents/tests/test_vcore_v02_element_table.py
 testver-43e66b9c8501	agents/tests/test_verify_v02_loop.py
 testvis-383820f1bf91	agents/tests/test_vision_ram_path.py
