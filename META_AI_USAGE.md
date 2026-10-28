@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 574 | 55 | 519 |
-| Lanes finished OK | 574 | 55 | 519 |
-| Agent steps | 29,170 | 2,705 | 26,465 |
-| Lane-hours of agent work | 75.6 | 5.2 | 70.4 |
-| Fresh input tokens | 119,992,921 | 11,482,034 | 108,510,887 |
-| Cache-read input tokens | 2,650,684,669 | 226,255,212 | 2,424,429,457 |
+| Lanes launched | 575 | 55 | 520 |
+| Lanes finished OK | 575 | 55 | 520 |
+| Agent steps | 29,211 | 2,705 | 26,506 |
+| Lane-hours of agent work | 75.8 | 5.2 | 70.5 |
+| Fresh input tokens | 120,127,578 | 11,482,034 | 108,645,544 |
+| Cache-read input tokens | 2,653,039,427 | 226,255,212 | 2,426,784,215 |
 | Prompt cache hit % | 95.7 | 95.2 | 95.7 |
-| Output tokens | 25,560,114 | 2,135,708 | 23,424,406 |
-| Thinking tokens | 14,120,760 | 1,050,039 | 13,070,721 |
-| Cost (USD) | 22.4127 | 2.0279 | 20.3848 |
+| Output tokens | 25,596,759 | 2,135,708 | 23,461,051 |
+| Thinking tokens | 14,143,002 | 1,050,039 | 13,092,963 |
+| Cost (USD) | 22.4382 | 2.0279 | 20.4103 |
 | Cost per lane (USD) | 0.039 | 0.0369 | 0.0393 |
 
-Rooms: 126. Peak concurrent lanes [MEASURED from lane start/end]: 32.
+Rooms: 127. Peak concurrent lanes [MEASURED from lane start/end]: 32.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -43,7 +43,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
 | docs | 15 | 94.8 | 0.5371 |
-| fix | 59 | 96.9 | 3.2249 |
+| fix | 60 | 96.8 | 3.2504 |
 | kit | 3 | 96.5 | 0.1997 |
 | ops | 4 | 88.1 | 0.0468 |
 | perf | 1 | 97.6 | 0.0694 |
@@ -187,6 +187,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui33 | UI orchestrator | Oct 28 21:56 | ui | 1 | 97.7 | 0.0874 | Operator ruling: separate Live wall fps (3/30/60) and Recording fps (1..60) settings plus a real density control, persisted with the host's new closed settings key set, showing the actual wall fps the capture source reaches. |
 | mvui32g | UI orchestrator | Oct 28 22:12 | fix | 1 | 95.1 | 0.0244 | A committed router test pinned the defect fixed by the judge notes (an older frame painted over a newer held one); align it to the fixed ordering so the router drop gates green. |
 | mvui33b | UI orchestrator | Oct 28 22:22 | fix | 1 | 96.4 | 0.0415 | Judge notes on the settings fps drop: the actual wall fps readout freezes when frames stop, the meter clock is not monotonic and the recording fps input accepts partial numbers; fix before the drop ships with the host settings unit. |
+| mvui33c | UI orchestrator | Oct 28 22:35 | fix | 1 | 94.6 | 0.0255 | Judge of the settings fps fix found that clearing the recording fps field saves 1 and that the readout decay can leave a stale rate at the window edge; fix before the drop ships with the host settings unit. |
 
 ## Every lane
 
@@ -766,6 +767,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui33b | S | settings fps judge notes | Oct 28 22:22 | yes | 63 | 96.4 | 0.041473 |
 | direct-adv | hasha | advhasha | Oct 28 22:28 | yes | 43 | 93.8 | 0.026589 |
 | direct-adv | hashb | advhashb | Oct 28 22:28 | yes | 32 | 92.0 | 0.022803 |
+| mvui33c | S | empty input revert, decay boundary | Oct 28 22:35 | yes | 41 | 94.6 | 0.025504 |
 
 ## Method
 
