@@ -1342,6 +1342,13 @@ mvui27s-de7f7adc38f2	ui/test/mvui27-shield-noscroll.test.js
 mvui28i-59667390d52d	ui/test/mvui28-input-activity.test.js
 mvui28i-8d374f22af4d	ui/test/mvui28-input-double-results.test.js
 mvui28i-2061431bf36e	ui/test/mvui28-input-results.test.js
+mvui29s-27659e7ed5fa	ui/test/mvui29s-settings-boot.test.js
+mvui29s-33668a3484de	ui/test/mvui29s-settings-debounce.test.js
+mvui29s-ca1096a0f73a	ui/test/mvui29s-settings-persistence.test.js
+mvui29s-f10491c41bfc	ui/test/mvui29s-settings-refusal.test.js
+mvui29s-54f148bf6b32	ui/test/mvui29sc-burst-revert.test.js
+mvui29s-d4cd7eb5dc83	ui/test/mvui29sc-host-replace.test.js
+mvui29s-bcd07d007ed3	ui/test/mvui29sc-per-field.test.js
 mvui3co-58b252aa0364	ui/test/mvui3-control-owner-wall.test.js
 mvui3cr-400b1a21a53e	ui/test/mvui3-creative-harness.js
 mvui3cr-3b8cf3406706	ui/test/mvui3-creative-integration.test.js
