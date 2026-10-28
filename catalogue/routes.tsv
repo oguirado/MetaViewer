@@ -74,6 +74,7 @@ testnat-bd9857859b1f	agents/tests/test_native_receipts.py
 test_nesting.py	agents/tests/test_nesting.py
 test_observe.py	agents/tests/test_observe.py
 test_observe_cli.py	agents/tests/test_observe_cli.py
+test_oneof_poly.py	agents/tests/test_oneof_poly.py
 test_planner.py	agents/tests/test_planner.py
 test_r3_codec.py	agents/tests/test_r3_codec.py
 test_r3_deps_lock.py	agents/tests/test_r3_deps_lock.py
@@ -703,6 +704,7 @@ journal_upgrade.rs	core/tests/journal_upgrade.rs
 layout_routing.rs	core/tests/layout_routing.rs
 nv_lifecycle.rs	core/tests/nv_lifecycle.rs
 nvsuper-df27d9370197	core/tests/nv_supervisor_start.rs
+oneof_poly.rs	core/tests/oneof_poly.rs
 r3t6_conformance.rs	core/tests/r3t6_conformance.rs
 record_release.rs	core/tests/record_release.rs
 replay_table.rs	core/tests/replay_table.rs
@@ -776,6 +778,7 @@ nestedi-f72c7f52a5e1	daemon-adapter/internal/daemon/nested_isolation_test.go
 nv_authority_test.go	daemon-adapter/internal/daemon/nv_authority_test.go
 nvenvir-8ce129bf69f1	daemon-adapter/internal/daemon/nv_environment_test.go
 nv_handoff_test.go	daemon-adapter/internal/daemon/nv_handoff_test.go
+policyr-8ee96f8b1ec8	daemon-adapter/internal/daemon/policy_refusal_poly_test.go
 receipt-86c2be55964c	daemon-adapter/internal/daemon/receipt_evidence_test.go
 record_wire_test.go	daemon-adapter/internal/daemon/record_wire_test.go
 revision_test.go	daemon-adapter/internal/daemon/revision_test.go
@@ -818,6 +821,7 @@ ipc_test.go	daemon-adapter/internal/ipc/ipc_test.go
 json.go	daemon-adapter/internal/ipc/json.go
 maxconn_test.go	daemon-adapter/internal/ipc/maxconn_test.go
 message.go	daemon-adapter/internal/ipc/message.go
+oneof_poly_test.go	daemon-adapter/internal/ipc/oneof_poly_test.go
 peercred.go	daemon-adapter/internal/ipc/peercred.go
 policy.go	daemon-adapter/internal/ipc/policy.go
 policy_test.go	daemon-adapter/internal/ipc/policy_test.go
