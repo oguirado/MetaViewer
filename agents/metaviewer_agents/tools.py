@@ -101,9 +101,24 @@ class ToolClient(Protocol):
 class ToolValidationError(ValueError):
     """Local shape, version or correlation failure; nothing was admitted."""
 
-    def __init__(self, detail: str) -> None:
+    def __init__(self, detail: str, *, code: str | None = None) -> None:
         super().__init__(detail)
         self.detail = detail
+        self.code = code
+
+
+class ToolOperationalError(ToolValidationError):
+    """Core returned an operational error frame (PROTOCOL, UNAVAILABLE, NOT_FOUND)."""
+
+    def __init__(self, code: str, detail: str = "",
+                 result: dict | None = None) -> None:
+        super().__init__("core error %s" % code, code=code)
+        self.error_code = code
+        self.error_detail = detail
+        self.result = copy.deepcopy(result) if result is not None else None
+
+
+ToolCoreError = ToolOperationalError
 
 
 class ToolRefusal(Exception):
@@ -509,7 +524,8 @@ def _check_verdict_admitted(verdict: object) -> dict:
     return body
 
 
-def _check_receipt_verified(receipt: object) -> dict:
+def _check_receipt_verified(receipt: object, *,
+                            surface_id: str | None = None) -> dict:
     body = _check_closed(
         receipt,
         frozenset({"schema", "proposal_id", "executed_at_ns", "after_frame",
@@ -521,6 +537,10 @@ def _check_receipt_verified(receipt: object) -> dict:
     _check_int(body["executed_at_ns"], minimum=0, maximum=_MAX_SAFE_INT,
                what="executed_at_ns")
     _check_frame(body["after_frame"])
+    if surface_id is not None:
+        want_surface = _check_id(surface_id, "surface_id")
+        if body["after_frame"]["surface_id"] != want_surface:
+            _fail("uncorrelated surface_id")
     _check_const(body["verified"], True, "receipt verified")
     verification = _check_exact(body["verification"],
                                 frozenset({"method", "detail"}),
@@ -595,7 +615,7 @@ def _raise_error(result: dict) -> None:
                pattern=None, what="error detail")
     if code == "VERIFICATION_FAILED":
         raise VerificationFailed(copy.deepcopy(body))
-    _fail("core error %s" % code)
+    raise ToolOperationalError(code, body["detail"], body)
 
 
 def _check_timeout(value: object, what: str) -> int:
@@ -733,7 +753,8 @@ def propose(proposal: dict, *, client: ToolClient,
 
 
 def wait_verify(proposal_id: str, expectation: dict, timeout_ms: int,
-                *, client: ToolClient) -> dict:
+                *, client: ToolClient,
+                surface_id: str | None = None) -> dict:
     """Block until the core reports a verified receipt or a deadline.
 
     The frozen call carries no expectation slot, so the expectation is
@@ -745,6 +766,10 @@ def wait_verify(proposal_id: str, expectation: dict, timeout_ms: int,
     """
     active = _checked_client(client)
     want_proposal = _check_id(proposal_id, "proposal_id")
+    want_surface = (
+        _check_id(surface_id, "surface_id")
+        if surface_id is not None else None
+    )
     _check_expectation(expectation)
     budget = _check_int(timeout_ms, minimum=1,
                         maximum=_WAIT_TIMEOUT_MAX_MS, what="timeout_ms")
@@ -771,7 +796,8 @@ def wait_verify(proposal_id: str, expectation: dict, timeout_ms: int,
                                  "receipt", "focus_verified",
                                  "input_mono_ns", "frame_sha256"}),
                 "verified result")
-            receipt = _check_receipt_verified(body["receipt"])
+            receipt = _check_receipt_verified(
+                body["receipt"], surface_id=want_surface)
             if receipt["proposal_id"] != want_proposal:
                 _fail("uncorrelated proposal_id")
             _check_const(body["focus_verified"], True, "focus_verified")
@@ -779,6 +805,8 @@ def wait_verify(proposal_id: str, expectation: dict, timeout_ms: int,
                        maximum=_MAX_SAFE_INT, what="input_mono_ns")
             _check_str(body["frame_sha256"], min_length=64, max_length=64,
                        pattern=_SHA_PATTERN, what="frame_sha256")
+            if body["frame_sha256"] != receipt["after_frame"]["sha256"]:
+                _fail("uncorrelated frame_sha256")
             return copy.deepcopy(receipt)
         if status == "timeout":
             body = _check_exact(
@@ -1059,8 +1087,12 @@ def record_stop(surface_id: str, recording_id: str, *, mode: str = "ram",
     else:
         _fail("invalid record mode")
         raise AssertionError("unreachable")
+    deadline = time.monotonic() + budget / 1000
     params = {"surface_id": surface_id, "recording_id": recording_id}
     for _ in range(_MAX_RECORD_STREAM_EVENTS):
+        remaining_ms = math.ceil((deadline - time.monotonic()) * 1000)
+        if remaining_ms <= 0:
+            raise TimeoutError("record_stop budget exhausted")
         call = {
             "schema": _RECORD_REQUEST_SCHEMA,
             "request_id": _new_request_id(),
@@ -1069,7 +1101,7 @@ def record_stop(surface_id: str, recording_id: str, *, mode: str = "ram",
         }
         _check_record_request(call, expected_op=op)
         reply = active.request(copy.deepcopy(call), _RECORD_EVENT_SCHEMA,
-                               timeout_ms=budget)
+                               timeout_ms=remaining_ms)
         checked = _check_record_event(
             reply, request_id=call["request_id"],
             surface_id=surface_id, recording_id=recording_id)

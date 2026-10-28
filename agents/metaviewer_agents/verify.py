@@ -43,6 +43,12 @@ def run_loop(*, client, surface_id, proposal_id, planner=None, timeout_ms,
 
     observation = tools.observe(surface_id, client=client, timeout_ms=remaining(),
                                 perception_adapter=perception_adapter)
+    frame_ref = observation.get('frame_ref') if isinstance(observation, dict) else None
+    observed_surface_id = (
+        frame_ref.get('surface_id') if isinstance(frame_ref, dict) else None
+    )
+    if observed_surface_id != surface_id:
+        tools._fail('uncorrelated surface_id')
     remaining()
     configured = os.environ.get('MV_WENDER_PLANNER_CMD')
     if configured is not None:
@@ -76,6 +82,25 @@ def run_loop(*, client, surface_id, proposal_id, planner=None, timeout_ms,
     proposal = build_proposal(observation['frame_ref'], proposal_id=proposal_id,
                               action=action, expectation=expectation, max_ms=remaining())
     tools.propose(proposal, client=client, timeout_ms=remaining())
-    receipt = tools.wait_verify(proposal_id, expectation, remaining(), client=client)
+    try:
+        receipt = tools.wait_verify(
+            proposal_id, expectation, remaining(),
+            client=client, surface_id=observed_surface_id)
+    except TypeError:
+        receipt = tools.wait_verify(
+            proposal_id, expectation, remaining(), client=client)
+    if not isinstance(receipt, dict):
+        tools._fail('invalid receipt')
+    if 'proposal_id' in receipt and receipt['proposal_id'] != proposal_id:
+        tools._fail('uncorrelated proposal_id')
+    if 'surface_id' in receipt and receipt['surface_id'] != observed_surface_id:
+        tools._fail('uncorrelated surface_id')
+    if 'after_frame' in receipt:
+        after_frame = receipt['after_frame']
+        if (not isinstance(after_frame, dict)
+                or after_frame.get('surface_id') != observed_surface_id):
+            tools._fail('uncorrelated surface_id')
+        if 'schema' in receipt:
+            tools._check_receipt_verified(receipt, surface_id=observed_surface_id)
     remaining()
     return receipt

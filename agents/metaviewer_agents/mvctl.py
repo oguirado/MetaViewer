@@ -195,7 +195,11 @@ def _client_refusal(error, phase):
         return "version"
     if code in ("schema", "bad_shape"):
         return "schema_error"
-    if code == "length":
+    if code == "UNAVAILABLE":
+        return "transport_unavailable"
+    if code == "NOT_FOUND":
+        return "endpoint_error"
+    if code in ("length", "PROTOCOL"):
         return "transport_error"
     if isinstance(error, (AttributeError, TypeError)):
         return "transport_unavailable"
@@ -494,11 +498,17 @@ def _run_v02(argv):
                 and peer.get("endpoint") == {"component": "agent", "instance": args.agent_instance}
             )
             core_reg = config["core"]
+            local_hello = local["hello"]
+            core_hello = core_reg["hello"] if isinstance(core_reg, dict) else None
             if (not isinstance(core_reg, dict)
+                    or not isinstance(local_hello, dict)
+                    or not isinstance(core_hello, dict)
                     or config["session_id"] != args.session_id
+                    or local_hello.get("component") != "agent"
+                    or core_hello.get("component") != "core"
                     or core_reg.get("endpoint") != {"component": "core", "instance": args.core_instance}):
                 raise ValueError("registration mismatch")
-            dependency_pins = local["hello"]["dependencies"]
+            dependency_pins = local_hello["dependencies"]
             if not isinstance(dependency_pins, list):
                 raise TypeError("invalid dependencies")
         except (ValueError, OSError, UnicodeError, RecursionError, KeyError, TypeError, StopIteration):
@@ -549,7 +559,7 @@ def _run_v02(argv):
     except tools.VerificationFailed as err:
         print(json.dumps(err.receipt, separators=(",", ":")), file=sys.stdout)
         return 1
-    except (ClientError, EnvelopeError) as err:
+    except (ClientError, EnvelopeError, tools.ToolOperationalError) as err:
         _refuse("unknown_version" if err.code == "unknown_version"
                 else _client_refusal(err, "call"))
         return 2

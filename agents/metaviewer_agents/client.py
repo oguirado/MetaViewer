@@ -32,6 +32,8 @@ from .envelope import (
 
 __all__ = ["ClientError", "CoreClient", "ToolClient"]
 
+_MAX_TIMEOUT_S = 10_000_000.0
+
 
 class ClientError(Exception):
     """Closed client failure carrying a fixed machine-readable code."""
@@ -75,7 +77,8 @@ class CoreClient:
             timeout_f = float(timeout_s)
         except OverflowError:
             raise ClientError("timeout", "timeout is not finite positive") from None
-        if not math.isfinite(timeout_f) or timeout_f <= 0:
+        if (not math.isfinite(timeout_f) or timeout_f <= 0
+                or timeout_f > _MAX_TIMEOUT_S):
             raise ClientError("timeout", "timeout is not finite positive")
         self._socket_path = socket_path
         self._timeout_s = timeout_f
@@ -203,6 +206,9 @@ class CoreClient:
         if (not isinstance(path, str) or chr(0) in path
                 or not os.path.isabs(path)):
             raise ClientError("socket", "invalid socket path")
+        if (not math.isfinite(self._timeout_s) or self._timeout_s <= 0
+                or self._timeout_s > _MAX_TIMEOUT_S):
+            raise ClientError("timeout", "timeout is not finite positive")
         self._check_endpoint(path)
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
@@ -212,6 +218,10 @@ class CoreClient:
         except ClientError:
             _silent_close(sock)
             raise
+        except (OverflowError, ValueError):
+            _silent_close(sock)
+            raise ClientError("timeout",
+                              "timeout is not finite positive") from None
         except (socket.timeout, TimeoutError):
             _silent_close(sock)
             raise ClientError("timeout",
@@ -338,6 +348,7 @@ _RECORD_OP_EVENTS = {
     "disk_start": frozenset({"started", "refused"}),
     "ram_stop": frozenset({"frame_captured", "dropped", "stopped", "refused"}),
     "disk_stop": frozenset({"exported", "stopped", "refused"}),
+    "screenshot": frozenset({"started", "frame_captured", "exported", "stopped", "refused"}),
 }
 
 
@@ -376,13 +387,47 @@ class ToolClient:
                              seq=self.active.next_seq, body=body)
 
     def _reserve(self):
-        # Reserve before send: uncertain transport outcomes must not reuse seq.
-        os.lseek(self._sequence_fd, 0, os.SEEK_SET)
+        # Reserve before send via atomic temp-write + fsync + replace so a
+        # partial or zero-byte write can never regress or truncate sequence_path.
+        import fcntl
+        seq_path = os.fspath(self.sequence_path)
+        tmp_path = seq_path + ".tmp"
         data = str(self.active.next_seq + 1).encode("ascii")
-        if os.write(self._sequence_fd, data) != len(data):
-            raise ClientError("socket", "sequence reservation failed")
-        os.ftruncate(self._sequence_fd, len(data))
-        os.fsync(self._sequence_fd)
+        tmp_fd = None
+        try:
+            tmp_fd = os.open(
+                tmp_path,
+                os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW,
+                0o600,
+            )
+            info = os.fstat(tmp_fd)
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                    or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1):
+                raise ClientError("socket", "invalid sequence file")
+            if os.write(tmp_fd, data) != len(data):
+                raise ClientError("socket", "sequence reservation failed")
+            os.fsync(tmp_fd)
+            fcntl.flock(tmp_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            os.replace(tmp_path, seq_path)
+        except BaseException as exc:
+            if tmp_fd is not None:
+                try:
+                    os.close(tmp_fd)
+                except OSError:
+                    pass
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+            if isinstance(exc, ClientError):
+                raise
+            raise ClientError("socket", "sequence reservation failed") from None
+        old_fd, self._sequence_fd = self._sequence_fd, tmp_fd
+        if old_fd is not None:
+            try:
+                os.close(old_fd)
+            except OSError:
+                pass
 
     def __enter__(self):
         import fcntl
@@ -464,18 +509,30 @@ class ToolClient:
                         del self._receipts[next(iter(self._receipts))]
                     continue
                 if expect == "record_event/v0.2":
+                    params = (body.get("params")
+                              if isinstance(body.get("params"), dict) else {})
+                    want_surface = params.get("surface_id")
+                    want_recording = params.get("recording_id",
+                                                params.get("capture_id"))
                     allowed = _RECORD_OP_EVENTS.get(body.get("op"), frozenset())
                     correlated = (
-                        result.get("schema") == expect
+                        result.get("schema") == "record_event/v0.2"
                         and result.get("request_id") == body["request_id"]
+                        and isinstance(want_surface, str)
+                        and result.get("surface_id") == want_surface
+                        and isinstance(want_recording, str)
+                        and result.get("recording_id") == want_recording
                         and result.get("event") in allowed
                     )
-                else:
+                elif expect == "mv_tool_result/v0.2":
                     correlated = (
-                        result.get("schema") == expect
+                        result.get("schema") == "mv_tool_result/v0.2"
+                        and isinstance(body.get("op"), str)
                         and result.get("request_id") == body["request_id"]
                         and result.get("op") == body.get("op")
                     )
+                else:
+                    correlated = False
                 if not correlated:
                     raise ToolValidationError("uncorrelated tool result")
                 return result

@@ -18,10 +18,12 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
-ROOT = Path(__file__).resolve().parents[1]
+TESTS_DIR = Path(__file__).resolve().parent
+ROOT = TESTS_DIR.parents[0]
 REPO_ROOT = ROOT.parent
+sys.path.insert(0, str(TESTS_DIR))
 sys.path.insert(0, str(ROOT))
 
 import test_mvctl_v02 as cli_fixture
@@ -299,11 +301,14 @@ class RecordVerbTests(unittest.TestCase):
             self.assertEqual(len(calls), 4)
 
         # Negative controls: reject stopped for ram_start, started for ram_stop,
-        # mismatched request_id, or mismatched schema in ToolClient.request.
+        # mismatched request_id, mismatched surface_id, mismatched recording_id,
+        # or mismatched schema in ToolClient.request.
         bad_replies = [
             ("ram_start", lambda call: _event(call, "stopped", mono_ns=15, frame_count=0, byte_count=0)),
             ("ram_stop", lambda call: _event(call, "started", mono_ns=16, mode="ram")),
             ("ram_start", lambda call: dict(_event(call, "started", mono_ns=17, mode="ram"), request_id="req-other")),
+            ("ram_start", lambda call: dict(_event(call, "started", mono_ns=18, mode="ram"), surface_id="surf-other")),
+            ("ram_start", lambda call: dict(_event(call, "started", mono_ns=19, mode="ram"), recording_id="rec-other")),
             ("ram_start", lambda call: {
                 "schema": "mv_tool_result/v0.2",
                 "request_id": call["request_id"],
@@ -339,6 +344,116 @@ class RecordVerbTests(unittest.TestCase):
                                 tools.record_stop(
                                     "surf-1", "rec-1", mode="ram",
                                     client=client, timeout_ms=1000)
+
+    def test_cli_command_op_mismatch_preflight_matrix(self) -> None:
+        # T3R3-12: Full 2x4 + 2 screenshot command/op matrix killing the
+        # mvctl.py:471-475 preflight guard mutant before opening ToolClient.
+        payloads = {
+            "ram_start": {
+                "schema": "record_request/v0.2",
+                "request_id": "req-m-ram-start",
+                "op": "ram_start",
+                "params": {
+                    "surface_id": "surf-1",
+                    "recording_id": "rec-1",
+                    "ring_bytes": 4096,
+                    "max_fps": 30,
+                },
+            },
+            "disk_start": {
+                "schema": "record_request/v0.2",
+                "request_id": "req-m-disk-start",
+                "op": "disk_start",
+                "params": {
+                    "surface_id": "surf-1",
+                    "recording_id": "rec-1",
+                    "destination_capability_id": "dest-1",
+                    "destination_path": "/exports/rec-1",
+                    "max_fps": 30,
+                },
+            },
+            "ram_stop": {
+                "schema": "record_request/v0.2",
+                "request_id": "req-m-ram-stop",
+                "op": "ram_stop",
+                "params": {
+                    "surface_id": "surf-1",
+                    "recording_id": "rec-1",
+                },
+            },
+            "disk_stop": {
+                "schema": "record_request/v0.2",
+                "request_id": "req-m-disk-stop",
+                "op": "disk_stop",
+                "params": {
+                    "surface_id": "surf-1",
+                    "recording_id": "rec-1",
+                },
+            },
+            "screenshot": {
+                "schema": "record_request/v0.2",
+                "request_id": "req-m-shot",
+                "op": "screenshot",
+                "params": {
+                    "surface_id": "surf-1",
+                    "capture_id": "cap-1",
+                },
+            },
+        }
+        mismatched = [
+            ("record-start", "ram_stop"),
+            ("record-start", "disk_stop"),
+            ("record-stop", "ram_start"),
+            ("record-stop", "disk_start"),
+            ("record-start", "screenshot"),
+            ("record-stop", "screenshot"),
+        ]
+        matched = [
+            ("record-start", "ram_start",
+             lambda call: _event(call, "started", mono_ns=10, mode="ram")),
+            ("record-start", "disk_start",
+             lambda call: _event(call, "started", mono_ns=11, mode="disk")),
+            ("record-stop", "ram_stop",
+             lambda call: _event(call, "stopped", mono_ns=12, frame_count=1, byte_count=64)),
+            ("record-stop", "disk_stop",
+             lambda call: _event(call, "stopped", mono_ns=13, frame_count=1, byte_count=64)),
+        ]
+        with tempfile.TemporaryDirectory(prefix="mv-rec-matrix-") as tmp:
+            root = Path(tmp)
+            trusted = root / "trusted.json"
+            trusted.write_text(json.dumps(cli_fixture.config()), encoding="utf-8")
+            req_path = root / "req.json"
+            with patch.dict(os.environ, {"MV_CORE_CONFIG": str(trusted)}):
+                for cmd, op in mismatched:
+                    with self.subTest(command=cmd, op=op, matched=False):
+                        req_path.write_text(json.dumps(payloads[op]), encoding="utf-8")
+                        with patch("metaviewer_agents.client.ToolClient") as transport:
+                            out, err = io.StringIO(), io.StringIO()
+                            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                                rc = mvctl.run(
+                                    self._cli_argv(cmd, root / "core.sock", req_path))
+                            self.assertEqual((rc, out.getvalue()), (2, ""))
+                            self.assertEqual(
+                                json.loads(err.getvalue()),
+                                {"verdict": "refuse", "code": "schema_error",
+                                 "error": "schema validation failed"},
+                            )
+                            transport.assert_not_called()
+
+                for cmd, op, reply_fn in matched:
+                    with self.subTest(command=cmd, op=op, matched=True):
+                        req_path.write_text(json.dumps(payloads[op]), encoding="utf-8")
+                        fake_client = tool_fixture._FakeClient([reply_fn])
+                        cm = MagicMock()
+                        cm.__enter__.return_value = fake_client
+                        cm.__exit__.return_value = False
+                        with patch("metaviewer_agents.client.ToolClient", return_value=cm) as transport:
+                            out, err = io.StringIO(), io.StringIO()
+                            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                                rc = mvctl.run(
+                                    self._cli_argv(cmd, root / "core.sock", req_path))
+                            self.assertEqual((rc, err.getvalue()), (0, ""))
+                            self.assertEqual(transport.call_count, 1)
 
     def test_disk_without_destination_refused_zero_bytes(self) -> None:
         # Mutation: remove destination_path / destination_capability_id check
