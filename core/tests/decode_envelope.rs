@@ -44,6 +44,57 @@ fn refusal_vocabulary_is_frozen() {
     assert!(serde_json::from_str::<Refusal>("\"UNKNOWN\"").is_err());
 }
 
+const NON_ENVELOPE_SCHEMA_PREFIXES: &[&str] = &["surface_input"];
+
+#[derive(Debug, PartialEq, Eq)]
+enum ExampleDisposition {
+    SkippedNonEnvelope,
+    EnvelopeChecked { valid: bool },
+    BodyChecked { prefix: String, valid: bool },
+}
+
+fn check_frozen_example(
+    name: &str,
+    raw: &[u8],
+    base: &serde_json::Value,
+    envelope_bodies: &std::collections::BTreeSet<String>,
+) -> Result<ExampleDisposition, String> {
+    let valid = name.ends_with(".json") && name.contains(".valid.");
+    let invalid = name.ends_with(".json") && name.contains(".invalid.");
+    if !valid && !invalid {
+        return Err(format!("unrecognized fixture filename {name}"));
+    }
+    let prefix = name.split('.').next().unwrap_or("");
+    if NON_ENVELOPE_SCHEMA_PREFIXES.contains(&prefix) {
+        return Ok(ExampleDisposition::SkippedNonEnvelope);
+    }
+    if prefix != "envelope" && !envelope_bodies.contains(prefix) {
+        return Err(format!(
+            "unrecognized schema prefix {prefix:?} in fixture {name}"
+        ));
+    }
+    let value: serde_json::Value =
+        serde_json::from_slice(raw).map_err(|err| format!("{name}: {err}"))?;
+    let mut env = base.clone();
+    if name.starts_with("envelope.") {
+        env = value;
+    } else {
+        env["body"] = value;
+    }
+    let result = decode_envelope(&serde_json::to_string(&env).unwrap());
+    if result.is_ok() != valid {
+        return Err(format!("{name}: expected valid={valid}, got {result:?}"));
+    }
+    if prefix == "envelope" {
+        Ok(ExampleDisposition::EnvelopeChecked { valid })
+    } else {
+        Ok(ExampleDisposition::BodyChecked {
+            prefix: prefix.to_string(),
+            valid,
+        })
+    }
+}
+
 #[test]
 fn all_frozen_body_examples_and_negative_controls() {
     let base: serde_json::Value = serde_json::from_str(&fixture()).unwrap();
@@ -63,31 +114,55 @@ fn all_frozen_body_examples_and_negative_controls() {
                 .to_string()
         })
         .collect();
+    assert_eq!(envelope_bodies.len(), 19);
     let directory =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../contracts/examples/v0.2");
+    let mut valid_body_prefixes = std::collections::BTreeSet::new();
+    let mut invalid_body_prefixes = std::collections::BTreeSet::new();
+    let mut skipped_non_envelope = 0usize;
     for entry in std::fs::read_dir(directory).unwrap() {
         let path = entry.unwrap().path();
         let name = path.file_name().unwrap().to_str().unwrap();
-        let valid = name.ends_with(".valid.json");
-        let invalid = name.ends_with(".invalid.schema.json");
-        if !valid && !invalid {
+        if name == "README.md" {
             continue;
         }
-        let prefix = name.split('.').next().unwrap_or("");
-        let is_envelope_member = prefix == "envelope" || envelope_bodies.contains(prefix);
-        let value: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        let mut env = base.clone();
-        if name.starts_with("envelope.") {
-            env = value;
-        } else {
-            env["body"] = value;
+        let raw = std::fs::read(&path).unwrap();
+        match check_frozen_example(name, &raw, &base, &envelope_bodies)
+            .unwrap_or_else(|err| panic!("{err}"))
+        {
+            ExampleDisposition::SkippedNonEnvelope => {
+                skipped_non_envelope += 1;
+            }
+            ExampleDisposition::EnvelopeChecked { .. } => {}
+            ExampleDisposition::BodyChecked { prefix, valid } => {
+                if valid {
+                    valid_body_prefixes.insert(prefix);
+                } else {
+                    invalid_body_prefixes.insert(prefix);
+                }
+            }
         }
-        let result = decode_envelope(&serde_json::to_string(&env).unwrap());
-        assert_eq!(
-            result.is_ok(),
-            valid && is_envelope_member,
-            "{name}: {result:?}"
+    }
+    assert_eq!(valid_body_prefixes, envelope_bodies);
+    assert_eq!(invalid_body_prefixes, envelope_bodies);
+    assert!(skipped_non_envelope >= 1);
+
+    // Fail-closed negative controls: any unrecognized schema prefix is rejected
+    // rather than silently converted into an is_err decode assertion.
+    for unknown_name in [
+        "unrecognized_schema.valid.json",
+        "unrecognized_schema.invalid.schema.json",
+    ] {
+        let err = check_frozen_example(
+            unknown_name,
+            br#"{"schema":"unrecognized_schema/v0.2"}"#,
+            &base,
+            &envelope_bodies,
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("unrecognized schema prefix"),
+            "unexpected error for {unknown_name}: {err}"
         );
     }
 }

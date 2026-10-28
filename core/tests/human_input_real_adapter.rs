@@ -59,62 +59,55 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
+fn compile_real_daemon_adapter(out_dir: &Path) -> Vec<u8> {
+    fs::create_dir_all(out_dir).unwrap();
+    fs::set_permissions(out_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let build_dir = out_dir.join(format!(".daemon-adapter-build-{id}"));
+    let _ = fs::remove_dir_all(&build_dir);
+    fs::create_dir_all(&build_dir).unwrap();
+    fs::set_permissions(&build_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    let tmp = build_dir.join("mv-daemon-adapter");
+    let go = std::env::var_os("GO").unwrap_or_else(|| "go".into());
+    let output = ProcessCommand::new(go)
+        .current_dir(repo_root().join("daemon-adapter"))
+        .args(["build", "-o"])
+        .arg(&tmp)
+        .arg("./cmd/mv-daemon-adapter")
+        .output()
+        .expect("invoke go build for mv-daemon-adapter");
+    assert!(
+        output.status.success(),
+        "go build mv-daemon-adapter failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let data = fs::read(&tmp).expect("read built mv-daemon-adapter");
+    let _ = fs::remove_dir_all(&build_dir);
+    data
+}
+
 fn build_real_daemon_adapter(out_dir: &Path) -> PathBuf {
     static ADAPTER_BYTES: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
-    let bytes = ADAPTER_BYTES.get_or_init(|| {
-        let tmp =
-            std::env::temp_dir().join(format!("mv-daemon-adapter-build-{}", std::process::id()));
-        let go = std::env::var_os("GO").unwrap_or_else(|| "go".into());
-        let output = ProcessCommand::new(go)
-            .current_dir(repo_root().join("daemon-adapter"))
-            .args(["build", "-o"])
-            .arg(&tmp)
-            .arg("./cmd/mv-daemon-adapter")
-            .output()
-            .expect("invoke go build for mv-daemon-adapter");
-        assert!(
-            output.status.success(),
-            "go build mv-daemon-adapter failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let data = fs::read(&tmp).expect("read built mv-daemon-adapter");
-        let _ = fs::remove_file(&tmp);
-        data
-    });
+    fs::create_dir_all(out_dir).unwrap();
+    fs::set_permissions(out_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    let bytes = ADAPTER_BYTES.get_or_init(|| compile_real_daemon_adapter(out_dir));
     let binary = out_dir.join("mv-daemon-adapter");
     fs::write(&binary, bytes).expect("write mv-daemon-adapter");
     fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
     binary
 }
 
-fn write_fake_srf_cli(bin_dir: &Path, shm_root: &Path) {
-    let frames_dir = shm_root.join("demo-run/frames/w1");
-    fs::create_dir_all(&frames_dir).unwrap();
-    fs::set_permissions(&frames_dir, fs::Permissions::from_mode(0o700)).unwrap();
-    let png_path = frames_dir.join("f.png");
-    let gen = ProcessCommand::new("python3")
-        .arg("-c")
-        .arg(
-            "import struct, sys, zlib; \
-chunk = lambda tag, data: struct.pack('>I', len(data)) + tag + data + struct.pack('>I', zlib.crc32(tag + data) & 0xffffffff); \
-raw = b'\\x00\\xff\\x00\\x00\\x00\\xff\\x00'; \
-png = b'\\x89PNG\\r\\n\\x1a\\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', 2, 1, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b''); \
-open(sys.argv[1], 'wb').write(png)",
-        )
-        .arg(&png_path)
-        .status()
-        .expect("generate test png with python3");
-    assert!(gen.success());
-    fs::set_permissions(&png_path, fs::Permissions::from_mode(0o600)).unwrap();
-    let rgb_sha = metaviewer_core::journal::sha256_hex(&[255, 0, 0, 0, 255, 0]);
-    static FAKE_SRF_BYTES: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
-    let helper_bytes = FAKE_SRF_BYTES.get_or_init(|| {
-        let tmp_dir = std::env::temp_dir().join(format!("mv-fake-srf-build-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&tmp_dir);
-        fs::create_dir_all(&tmp_dir).unwrap();
-        let src_path = tmp_dir.join("main.go");
-        let bin_path = tmp_dir.join("srf-helper");
-        let go_src = r#"package main
+fn compile_fake_srf_helper(bin_dir: &Path) -> Vec<u8> {
+    fs::create_dir_all(bin_dir).unwrap();
+    fs::set_permissions(bin_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let tmp_dir = bin_dir.join(format!(".fake-srf-build-{id}"));
+    let _ = fs::remove_dir_all(&tmp_dir);
+    fs::create_dir_all(&tmp_dir).unwrap();
+    fs::set_permissions(&tmp_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    let src_path = tmp_dir.join("main.go");
+    let bin_path = tmp_dir.join("srf-helper");
+    let go_src = r#"package main
 import (
 	"encoding/json"
 	"fmt"
@@ -179,20 +172,50 @@ func main() {
 	}
 }
 "#;
-        fs::write(&src_path, go_src).unwrap();
-        let go = std::env::var_os("GO").unwrap_or_else(|| "go".into());
-        let out = ProcessCommand::new(go)
-            .current_dir(&tmp_dir)
-            .args(["build", "-o"])
-            .arg(&bin_path)
-            .arg(&src_path)
-            .output()
-            .expect("build fake srf helper");
-        assert!(out.status.success(), "go build fake srf failed: {}", String::from_utf8_lossy(&out.stderr));
-        let data = fs::read(&bin_path).unwrap();
-        let _ = fs::remove_dir_all(&tmp_dir);
-        data
-    });
+    fs::write(&src_path, go_src).unwrap();
+    fs::set_permissions(&src_path, fs::Permissions::from_mode(0o600)).unwrap();
+    let go = std::env::var_os("GO").unwrap_or_else(|| "go".into());
+    let out = ProcessCommand::new(go)
+        .current_dir(&tmp_dir)
+        .args(["build", "-o"])
+        .arg(&bin_path)
+        .arg(&src_path)
+        .output()
+        .expect("build fake srf helper");
+    assert!(
+        out.status.success(),
+        "go build fake srf failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let data = fs::read(&bin_path).unwrap();
+    let _ = fs::remove_dir_all(&tmp_dir);
+    data
+}
+
+fn write_fake_srf_cli(bin_dir: &Path, shm_root: &Path) {
+    fs::create_dir_all(bin_dir).unwrap();
+    fs::set_permissions(bin_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    let frames_dir = shm_root.join("demo-run/frames/w1");
+    fs::create_dir_all(&frames_dir).unwrap();
+    fs::set_permissions(&frames_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    let png_path = frames_dir.join("f.png");
+    let gen = ProcessCommand::new("python3")
+        .arg("-c")
+        .arg(
+            "import struct, sys, zlib; \
+chunk = lambda tag, data: struct.pack('>I', len(data)) + tag + data + struct.pack('>I', zlib.crc32(tag + data) & 0xffffffff); \
+raw = b'\\x00\\xff\\x00\\x00\\x00\\xff\\x00'; \
+png = b'\\x89PNG\\r\\n\\x1a\\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', 2, 1, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b''); \
+open(sys.argv[1], 'wb').write(png)",
+        )
+        .arg(&png_path)
+        .status()
+        .expect("generate test png with python3");
+    assert!(gen.success());
+    fs::set_permissions(&png_path, fs::Permissions::from_mode(0o600)).unwrap();
+    let rgb_sha = metaviewer_core::journal::sha256_hex(&[255, 0, 0, 0, 255, 0]);
+    static FAKE_SRF_BYTES: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    let helper_bytes = FAKE_SRF_BYTES.get_or_init(|| compile_fake_srf_helper(bin_dir));
     let helper_path = shm_root.join("srf-helper-bin");
     fs::write(&helper_path, helper_bytes).unwrap();
     fs::set_permissions(&helper_path, fs::Permissions::from_mode(0o700)).unwrap();
@@ -1285,4 +1308,91 @@ await host.core.dispose();
         let _ = adapter.kill();
         let _ = adapter.wait();
     });
+}
+
+struct LegacyTmpTrapGuard(Vec<PathBuf>);
+
+impl Drop for LegacyTmpTrapGuard {
+    fn drop(&mut self) {
+        for root in &self.0 {
+            if let Ok(meta) = fs::symlink_metadata(root) {
+                if meta.is_dir() {
+                    let _ = fs::set_permissions(root, fs::Permissions::from_mode(0o700));
+                    if let Ok(entries) = fs::read_dir(root) {
+                        for entry in entries.flatten() {
+                            let _ = fs::set_permissions(
+                                entry.path(),
+                                fs::Permissions::from_mode(0o700),
+                            );
+                        }
+                    }
+                    let _ = fs::remove_dir_all(root);
+                } else {
+                    let _ = fs::set_permissions(root, fs::Permissions::from_mode(0o600));
+                    let _ = fs::remove_file(root);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn pre_existing_predictable_tmp_pid_paths_do_not_break_or_hijack_builds() {
+    let pid = std::process::id();
+    let legacy_adapter_tmp = std::env::temp_dir().join(format!("mv-daemon-adapter-build-{pid}"));
+    let legacy_srf_tmp = std::env::temp_dir().join(format!("mv-fake-srf-build-{pid}"));
+    let _guard = LegacyTmpTrapGuard(vec![legacy_adapter_tmp.clone(), legacy_srf_tmp.clone()]);
+
+    for root in [&legacy_adapter_tmp, &legacy_srf_tmp] {
+        if let Ok(meta) = fs::symlink_metadata(root) {
+            if meta.is_dir() {
+                let _ = fs::set_permissions(root, fs::Permissions::from_mode(0o700));
+                let _ = fs::remove_dir_all(root);
+            } else {
+                let _ = fs::remove_file(root);
+            }
+        }
+    }
+
+    fs::create_dir_all(&legacy_adapter_tmp).unwrap();
+    let adapter_trap_file = legacy_adapter_tmp.join("hijack");
+    fs::write(&adapter_trap_file, b"HIJACKED_ADAPTER").unwrap();
+    fs::set_permissions(&adapter_trap_file, fs::Permissions::from_mode(0o400)).unwrap();
+    fs::set_permissions(&legacy_adapter_tmp, fs::Permissions::from_mode(0o500)).unwrap();
+
+    fs::create_dir_all(legacy_srf_tmp.join("main.go")).unwrap();
+    let srf_trap_file = legacy_srf_tmp.join("srf-helper");
+    fs::write(&srf_trap_file, b"HIJACKED_SRF").unwrap();
+    fs::set_permissions(&srf_trap_file, fs::Permissions::from_mode(0o400)).unwrap();
+    fs::set_permissions(&legacy_srf_tmp, fs::Permissions::from_mode(0o500)).unwrap();
+
+    let paths = TempPaths::new("notmp");
+    let out_dir = paths.temp_root.join("isolated-bin");
+    let adapter_bytes = compile_real_daemon_adapter(&out_dir);
+    let srf_bytes = compile_fake_srf_helper(&out_dir);
+
+    assert_eq!(
+        fs::metadata(&out_dir).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert!(adapter_bytes.starts_with(b"\x7fELF"));
+    assert_ne!(adapter_bytes.as_slice(), b"HIJACKED_ADAPTER");
+    assert!(srf_bytes.starts_with(b"\x7fELF"));
+    assert_ne!(srf_bytes.as_slice(), b"HIJACKED_SRF");
+
+    write_fake_srf_cli(&out_dir, &paths.shm_root);
+    let adapter_bin = build_real_daemon_adapter(&out_dir);
+    assert_eq!(
+        fs::metadata(&adapter_bin).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs::metadata(paths.shm_root.join("srf-helper-bin"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+    assert_eq!(fs::read(&srf_trap_file).unwrap(), b"HIJACKED_SRF");
 }
