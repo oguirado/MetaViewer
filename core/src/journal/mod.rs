@@ -25,6 +25,18 @@
 //! group-commit batch, close the worker channel, and join the background sync
 //! worker (bounded wait SYNC_WORKER_JOIN_TIMEOUT = 5 s, logging errors) so no
 //! file is written or renamed after close/drop returns.
+//! [TARGET, unit decision] Unchanged-frame fast path in journal verify: when a
+//! frame's advertised digest equals the last committed digest for the same
+//! surface in the same session root and epoch with strictly advancing generation
+//! and matching width, height, and byte length, verification compares the
+//! anchored bytes against the in-memory verified witness bytes (memcmp of the
+//! full buffer) and reuses the witness without recomputing SHA-256, falling
+//! back to full streaming SHA-256 verification on any length, geometry,
+//! generation, epoch, surface, root, mode, ownership, or byte difference. Disk
+//! bytes are never inserted into the witness cache or marked verified without
+//! computing SHA-256; surface changes, Lost/Destroyed, restart, or epoch changes
+//! evict the cache entry, and per-surface witness memory is bounded by
+//! MAX_SURFACE_WITNESS_BYTES (64 MiB; 16 surfaces at 1280x900 RGB24 = 55,296,000 B).
 use crate::admission::{CoreState, Input, Outcome};
 use crate::wire::payload::{SessionRecord, SessionRecordKind, SessionRecordSchema};
 use serde::{Deserialize, Serialize};
@@ -48,6 +60,12 @@ const SYNC_WORKER_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_
 const MAX_UNCOMMITTED_ARTIFACTS: usize = 32;
 const MAX_DIRTY_FILES: usize = 32;
 const MAX_VERIFIED_WITNESS_CACHE: usize = 256;
+const MAX_SURFACE_WITNESS_ROOTS: usize = 64;
+const MAX_SURFACE_WITNESSES_PER_ROOT: usize = 32;
+/// [TARGET, unit decision] Per-session byte cap on committed surface witnesses (64 MiB).
+/// 16 surfaces at 1280x900 RGB24 (3,456,000 B each) occupy at most 55,296,000 B (~52.73 MiB).
+pub const MAX_SURFACE_WITNESS_BYTES: usize = 64 * 1024 * 1024;
+const MAX_RETAINED_WITNESS_BYTES: usize = 64 * 1024 * 1024;
 
 #[cfg(test)]
 static HOOKS_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -501,6 +519,8 @@ pub struct FrameStageTimings {
     pub shm_read_ns: u128,
     pub hash_ns: u128,
     pub hash_calls_3mb: u64,
+    pub skipped_hash_ns: u128,
+    pub skipped_hash_frames: u64,
     pub witness_copy_ns: u128,
     pub witness_verify_read_ns: u128,
     pub journal_write_ns: u128,
@@ -517,6 +537,8 @@ std::thread_local! {
         shm_read_ns: 0,
         hash_ns: 0,
         hash_calls_3mb: 0,
+        skipped_hash_ns: 0,
+        skipped_hash_frames: 0,
         witness_copy_ns: 0,
         witness_verify_read_ns: 0,
         journal_write_ns: 0,
@@ -699,6 +721,105 @@ pub struct Witness {
     pub sha256: String,
     pub byte_len: u64,
 }
+#[derive(Clone, Debug)]
+struct SurfaceWitnessEntry {
+    sha256: String,
+    epoch: u64,
+    generation: u64,
+    width: u64,
+    height: u64,
+    byte_len: usize,
+    uid: u32,
+    mode: u32,
+    bytes: std::sync::Arc<[u8]>,
+}
+type SurfaceWitnessMap = std::collections::BTreeMap<String, SurfaceWitnessEntry>;
+type RootWitnessTable = std::collections::BTreeMap<PathBuf, SurfaceWitnessMap>;
+
+fn committed_surface_witnesses() -> &'static std::sync::Mutex<RootWitnessTable> {
+    static REGISTRY: std::sync::OnceLock<std::sync::Mutex<RootWitnessTable>> =
+        std::sync::OnceLock::new();
+    REGISTRY.get_or_init(|| std::sync::Mutex::new(std::collections::BTreeMap::new()))
+}
+
+fn publish_committed_surface_witnesses(root: &Path, map: &SurfaceWitnessMap) {
+    let mut reg = committed_surface_witnesses()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if map.is_empty() {
+        reg.remove(root);
+        return;
+    }
+    if !reg.contains_key(root) && reg.len() >= MAX_SURFACE_WITNESS_ROOTS {
+        if let Some(oldest) = reg.keys().next().cloned() {
+            reg.remove(&oldest);
+        }
+    }
+    reg.insert(root.to_path_buf(), map.clone());
+}
+
+fn remove_committed_surface_witnesses(root: &Path) {
+    let mut reg = committed_surface_witnesses()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    reg.remove(root);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lookup_committed_surface_witness(
+    root: &Path,
+    surface_id: &str,
+    epoch: u64,
+    generation: u64,
+    width: u64,
+    height: u64,
+    expected_sha256: &str,
+    expected_len: usize,
+) -> Option<std::sync::Arc<[u8]>> {
+    if surface_id.is_empty()
+        || width == 0
+        || height == 0
+        || expected_len == 0
+        || (expected_len as u64) > MAX_BYTES
+        || !hex(expected_sha256)
+    {
+        return None;
+    }
+    let uid = current_uid().ok()?;
+    let reg = committed_surface_witnesses()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let surfaces = reg.get(root)?;
+    let entry = surfaces.get(surface_id)?;
+    if entry.sha256 == expected_sha256
+        && entry.epoch == epoch
+        && entry.generation > 0
+        && generation > entry.generation
+        && entry.width == width
+        && entry.height == height
+        && entry.byte_len == expected_len
+        && entry.bytes.len() == expected_len
+        && entry.uid == uid
+        && (entry.mode & 0o077) == 0
+    {
+        Some(entry.bytes.clone())
+    } else {
+        None
+    }
+}
+
+struct PoisonWitnessGuard {
+    root: PathBuf,
+    disarmed: bool,
+}
+impl Drop for PoisonWitnessGuard {
+    fn drop(&mut self) {
+        if !self.disarmed {
+            remove_committed_surface_witnesses(&self.root);
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct VerifiedPixels {
     bytes: Vec<u8>,
@@ -706,6 +827,8 @@ pub struct VerifiedPixels {
     pub(crate) read_started: Option<std::time::Instant>,
     pub(crate) shm_read_ns: u128,
     pub(crate) hash_ns: u128,
+    pub(crate) skipped_hash_ns: u128,
+    pub(crate) hash_skipped: bool,
 }
 std::thread_local! {
     static VERIFIED_PIXEL_GRANT: std::cell::Cell<Option<(usize, usize, [u8; 64])>> = const {
@@ -734,6 +857,8 @@ impl VerifiedPixels {
             read_started: None,
             shm_read_ns: 0,
             hash_ns: 0,
+            skipped_hash_ns: 0,
+            hash_skipped: false,
         }
     }
     pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, JournalError> {
@@ -754,7 +879,39 @@ impl VerifiedPixels {
         Ok(Self::new(bytes, sha256.to_owned()))
     }
     pub(crate) fn read_verified(
+        reader: impl Read,
+        expected_len: usize,
+        expected_sha256: &str,
+    ) -> std::io::Result<Self> {
+        Self::read_verified_inner(reader, None, expected_len, expected_sha256)
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn read_verified_for_surface(
+        root: &Path,
+        surface_id: &str,
+        epoch: u64,
+        generation: u64,
+        width: u64,
+        height: u64,
+        reader: impl Read,
+        expected_len: usize,
+        expected_sha256: &str,
+    ) -> std::io::Result<Self> {
+        let candidate = lookup_committed_surface_witness(
+            root,
+            surface_id,
+            epoch,
+            generation,
+            width,
+            height,
+            expected_sha256,
+            expected_len,
+        );
+        Self::read_verified_inner(reader, candidate, expected_len, expected_sha256)
+    }
+    fn read_verified_inner(
         mut reader: impl Read,
+        candidate: Option<std::sync::Arc<[u8]>>,
         expected_len: usize,
         expected_sha256: &str,
     ) -> std::io::Result<Self> {
@@ -765,6 +922,66 @@ impl VerifiedPixels {
             ));
         }
         let started = std::time::Instant::now();
+        if let Some(cached_bytes) = candidate {
+            let mut bytes = vec![0u8; expected_len];
+            let mut pos = 0usize;
+            while pos < expected_len {
+                let end = (pos + 65536).min(expected_len);
+                let n = reader.read(&mut bytes[pos..end])?;
+                if n == 0 {
+                    break;
+                }
+                pos += n;
+            }
+            let mut extra = [0u8; 1];
+            let trailing = reader.read(&mut extra)?;
+            if pos != expected_len || trailing != 0 || bytes.len() != cached_bytes.len() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "frame digest mismatch",
+                ));
+            }
+            let cmp_started = std::time::Instant::now();
+            let unchanged = bytes.as_slice() == cached_bytes.as_ref();
+            let cmp_ns = cmp_started.elapsed().as_nanos();
+            if unchanged {
+                #[cfg(test)]
+                STAGE_TIMINGS.with(|cell| {
+                    let mut s = cell.get();
+                    s.skipped_hash_ns += cmp_ns;
+                    s.skipped_hash_frames += 1;
+                    cell.set(s);
+                });
+                let mut verified = Self::new(bytes, expected_sha256.to_owned());
+                verified.read_started = Some(started);
+                verified.hash_ns = 0;
+                verified.skipped_hash_ns = cmp_ns;
+                verified.hash_skipped = true;
+                verified.shm_read_ns = started.elapsed().as_nanos().saturating_sub(cmp_ns);
+                return Ok(verified);
+            }
+            let hash_started = std::time::Instant::now();
+            let mut hasher = StreamingSha256::new();
+            for chunk in bytes.chunks(65536) {
+                hasher.update(chunk);
+            }
+            let digest = hasher.finalize_hex();
+            let hash_ns = hash_started.elapsed().as_nanos();
+            if digest != expected_sha256 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "frame digest mismatch",
+                ));
+            }
+            let mut verified = Self::new(bytes, digest);
+            verified.read_started = Some(started);
+            verified.hash_ns = hash_ns;
+            verified.shm_read_ns = started
+                .elapsed()
+                .as_nanos()
+                .saturating_sub(hash_ns.saturating_add(cmp_ns));
+            return Ok(verified);
+        }
         let mut hash_ns = 0;
         let mut bytes = vec![0u8; expected_len];
         let mut hasher = StreamingSha256::new();
@@ -805,6 +1022,18 @@ impl VerifiedPixels {
     }
     pub fn into_bytes(self) -> Vec<u8> {
         self.bytes
+    }
+    pub fn hash_skipped(&self) -> bool {
+        self.hash_skipped
+    }
+    pub fn skipped_hash_ns(&self) -> u128 {
+        self.skipped_hash_ns
+    }
+    pub fn hash_ns(&self) -> u128 {
+        self.hash_ns
+    }
+    pub fn shm_read_ns(&self) -> u128 {
+        self.shm_read_ns
     }
     pub fn retain_in_authority(
         &self,
@@ -857,6 +1086,8 @@ struct VerifiedArtifact {
     byte_len: u64,
     dev: u64,
     ino: u64,
+    uid: u32,
+    mode: u32,
     mtime_nsec: i64,
     ctime_nsec: i64,
 }
@@ -911,6 +1142,12 @@ pub struct Journal {
     state: CoreState,
     verified_witnesses: std::collections::BTreeMap<String, VerifiedArtifact>,
     verified_witness_order: std::collections::VecDeque<String>,
+    last_surface_witnesses: SurfaceWitnessMap,
+    surface_witness_order: std::collections::VecDeque<String>,
+    surface_witness_total_bytes: usize,
+    retained_witness_bytes: std::collections::BTreeMap<String, (std::sync::Arc<[u8]>, u32, u32)>,
+    retained_witness_order: std::collections::VecDeque<String>,
+    retained_witness_total_bytes: usize,
     committed_witnesses: BTreeSet<String>,
     unsynced_witnesses: BTreeSet<String>,
     uncommitted_artifacts: std::collections::VecDeque<String>,
@@ -930,6 +1167,13 @@ pub struct Journal {
 }
 impl Drop for Journal {
     fn drop(&mut self) {
+        remove_committed_surface_witnesses(&self.root);
+        self.last_surface_witnesses.clear();
+        self.surface_witness_order.clear();
+        self.surface_witness_total_bytes = 0;
+        self.retained_witness_bytes.clear();
+        self.retained_witness_order.clear();
+        self.retained_witness_total_bytes = 0;
         if !self.poisoned {
             if let Err(err) = self.close() {
                 eprintln!("journal drop close failed: {err}");
@@ -1470,6 +1714,12 @@ impl Journal {
             state: state.clone(),
             verified_witnesses: std::collections::BTreeMap::new(),
             verified_witness_order: std::collections::VecDeque::new(),
+            last_surface_witnesses: std::collections::BTreeMap::new(),
+            surface_witness_order: std::collections::VecDeque::new(),
+            surface_witness_total_bytes: 0,
+            retained_witness_bytes: std::collections::BTreeMap::new(),
+            retained_witness_order: std::collections::VecDeque::new(),
+            retained_witness_total_bytes: 0,
             committed_witnesses: BTreeSet::new(),
             unsynced_witnesses: BTreeSet::new(),
             uncommitted_artifacts: std::collections::VecDeque::new(),
@@ -1487,6 +1737,7 @@ impl Journal {
             sync_failed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             sync_worker: None,
         };
+        remove_committed_surface_witnesses(&journal.root);
         checkpoint(&journal.root, &journal.closure())?;
         sync_dir(&sessions)?;
         Ok(journal)
@@ -1545,39 +1796,47 @@ impl Journal {
             checkpoint(root, &c)?;
         }
         let now = std::time::Instant::now();
-        Ok((
-            Self {
-                root: root.into(),
-                file: std::sync::Arc::new(file),
-                count: c.count,
-                bytes,
-                tail: c.tail,
-                archive: c.archive,
-                genesis: c.genesis,
-                archive_bytes: replay.archive_bytes,
-                poisoned: false,
-                state: replay.state.clone(),
-                verified_witnesses: std::collections::BTreeMap::new(),
-                verified_witness_order: std::collections::VecDeque::new(),
-                committed_witnesses: replay.committed_witnesses,
-                unsynced_witnesses: BTreeSet::new(),
-                uncommitted_artifacts: std::collections::VecDeque::new(),
-                dirty_files: Vec::new(),
-                staged_dirty_len: 0,
-                staged_checkpoint_count: 0,
-                pending_checkpoint: None,
-                checkpoint_lock: std::sync::Arc::new(std::sync::Mutex::new(c.count)),
-                unsynced_frames: 0,
-                first_unsynced_at: None,
-                last_sync: now,
-                last_dispatch: now,
-                completed_sync_count: c.count,
-                completed_sync_batches: 0,
-                sync_failed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                sync_worker: None,
-            },
-            replay.state,
-        ))
+        // Restart / recovery evicts any prior in-memory surface witness cache for this
+        // root and never inserts disk artifact bytes into `last_surface_witnesses` or
+        // `verified_witnesses` without computing SHA-256 over them on a live frame.
+        remove_committed_surface_witnesses(root);
+        let journal = Self {
+            root: root.into(),
+            file: std::sync::Arc::new(file),
+            count: c.count,
+            bytes,
+            tail: c.tail,
+            archive: c.archive,
+            genesis: c.genesis,
+            archive_bytes: replay.archive_bytes,
+            poisoned: false,
+            state: replay.state.clone(),
+            verified_witnesses: std::collections::BTreeMap::new(),
+            verified_witness_order: std::collections::VecDeque::new(),
+            last_surface_witnesses: std::collections::BTreeMap::new(),
+            surface_witness_order: std::collections::VecDeque::new(),
+            surface_witness_total_bytes: 0,
+            retained_witness_bytes: std::collections::BTreeMap::new(),
+            retained_witness_order: std::collections::VecDeque::new(),
+            retained_witness_total_bytes: 0,
+            committed_witnesses: replay.committed_witnesses,
+            unsynced_witnesses: BTreeSet::new(),
+            uncommitted_artifacts: std::collections::VecDeque::new(),
+            dirty_files: Vec::new(),
+            staged_dirty_len: 0,
+            staged_checkpoint_count: 0,
+            pending_checkpoint: None,
+            checkpoint_lock: std::sync::Arc::new(std::sync::Mutex::new(c.count)),
+            unsynced_frames: 0,
+            first_unsynced_at: None,
+            last_sync: now,
+            last_dispatch: now,
+            completed_sync_count: c.count,
+            completed_sync_batches: 0,
+            sync_failed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            sync_worker: None,
+        };
+        Ok((journal, replay.state))
     }
     fn record_verified_artifact(
         &mut self,
@@ -1605,6 +1864,8 @@ impl Journal {
                 byte_len,
                 dev: meta.dev(),
                 ino: meta.ino(),
+                uid: meta.uid(),
+                mode: meta.mode() & 0o7777,
                 mtime_nsec: meta.mtime_nsec(),
                 ctime_nsec: meta.ctime_nsec(),
             },
@@ -1621,6 +1882,9 @@ impl Journal {
         if recorded.byte_len != w.byte_len {
             return false;
         }
+        let Ok(uid) = current_uid() else {
+            return false;
+        };
         let Ok(meta) = fs::symlink_metadata(path) else {
             return false;
         };
@@ -1628,8 +1892,432 @@ impl Journal {
             && meta.len() == w.byte_len
             && meta.dev() == recorded.dev
             && meta.ino() == recorded.ino
+            && meta.uid() == recorded.uid
+            && meta.uid() == uid
+            && (meta.mode() & 0o7777) == recorded.mode
+            && (meta.mode() & 0o077) == 0
             && meta.mtime_nsec() == recorded.mtime_nsec
             && meta.ctime_nsec() == recorded.ctime_nsec
+    }
+    fn cache_retained_witness_bytes(&mut self, sha256: &str, bytes: &[u8], uid: u32, mode: u32) {
+        if bytes.is_empty() || bytes.len() > MAX_RETAINED_WITNESS_BYTES || (mode & 0o077) != 0 {
+            return;
+        }
+        if let Some((prev, _, _)) = self.retained_witness_bytes.remove(sha256) {
+            self.retained_witness_total_bytes =
+                self.retained_witness_total_bytes.saturating_sub(prev.len());
+            self.retained_witness_order.retain(|k| k != sha256);
+        }
+        while (self.retained_witness_bytes.len() >= MAX_UNCOMMITTED_ARTIFACTS
+            || self
+                .retained_witness_total_bytes
+                .saturating_add(bytes.len())
+                > MAX_RETAINED_WITNESS_BYTES)
+            && !self.retained_witness_order.is_empty()
+        {
+            let Some(oldest) = self.retained_witness_order.pop_front() else {
+                break;
+            };
+            if let Some((evicted, _, _)) = self.retained_witness_bytes.remove(&oldest) {
+                self.retained_witness_total_bytes = self
+                    .retained_witness_total_bytes
+                    .saturating_sub(evicted.len());
+            }
+        }
+        let shared = self
+            .last_surface_witnesses
+            .values()
+            .find(|e| e.sha256 == sha256 && e.bytes.len() == bytes.len())
+            .map(|e| e.bytes.clone())
+            .unwrap_or_else(|| std::sync::Arc::<[u8]>::from(bytes));
+        self.retained_witness_total_bytes = self
+            .retained_witness_total_bytes
+            .saturating_add(shared.len());
+        self.retained_witness_order.push_back(sha256.to_owned());
+        self.retained_witness_bytes
+            .insert(sha256.to_owned(), (shared, uid, mode & 0o7777));
+    }
+    fn evict_retained_witness_bytes(&mut self, sha256: &str) {
+        self.retained_witness_order.retain(|k| k != sha256);
+        if let Some((evicted, _, _)) = self.retained_witness_bytes.remove(sha256) {
+            self.retained_witness_total_bytes = self
+                .retained_witness_total_bytes
+                .saturating_sub(evicted.len());
+        }
+    }
+    fn clear_surface_witness_cache(&mut self) {
+        self.last_surface_witnesses.clear();
+        self.surface_witness_order.clear();
+        self.surface_witness_total_bytes = 0;
+        remove_committed_surface_witnesses(&self.root);
+    }
+    fn evict_surface_witness_entry(&mut self, surface_id: &str) {
+        self.surface_witness_order.retain(|k| k != surface_id);
+        if let Some(evicted) = self.last_surface_witnesses.remove(surface_id) {
+            self.surface_witness_total_bytes = self
+                .surface_witness_total_bytes
+                .saturating_sub(evicted.bytes.len());
+        }
+    }
+    fn update_committed_surface_witnesses_after_append(
+        &mut self,
+        input: &Input,
+        outcome: &Outcome,
+    ) {
+        if self.poisoned || self.sync_failed.load(std::sync::atomic::Ordering::Acquire) {
+            self.clear_surface_witness_cache();
+            return;
+        }
+        let Ok(uid) = current_uid() else {
+            self.clear_surface_witness_cache();
+            return;
+        };
+        if matches!(input, Input::Connect) && outcome.reason.is_none() {
+            self.clear_surface_witness_cache();
+            return;
+        }
+        match input {
+            Input::Lifecycle { surface_id, .. }
+            | Input::Surface { id: surface_id, .. }
+            | Input::TakeControl { surface_id }
+            | Input::ReleaseControl { surface_id } => {
+                self.evict_surface_witness_entry(surface_id);
+            }
+            _ => {}
+        }
+        let current_epoch = self.state.epoch;
+        let stale_surfaces: Vec<String> = self
+            .last_surface_witnesses
+            .iter()
+            .filter_map(|(sid, entry)| {
+                let Some(surface) = self.state.surfaces.get(sid) else {
+                    return Some(sid.clone());
+                };
+                if !surface.live
+                    || self.state.is_destroyed(sid)
+                    || surface.refresh_after.is_some()
+                    || entry.epoch != current_epoch
+                    || entry.uid != uid
+                    || (entry.mode & 0o077) != 0
+                    || entry.byte_len != entry.bytes.len()
+                    || entry.byte_len == 0
+                {
+                    return Some(sid.clone());
+                }
+                let Some(ref committed_frame) = surface.frame else {
+                    return Some(sid.clone());
+                };
+                if committed_frame.sha256 != entry.sha256
+                    || committed_frame.generation != entry.generation
+                    || committed_frame.width != entry.width
+                    || committed_frame.height != entry.height
+                {
+                    if matches!(
+                        input,
+                        Input::Frame {
+                            surface_id,
+                            ..
+                        } if surface_id == sid && outcome.reason.is_none()
+                    ) {
+                        return None;
+                    }
+                    return Some(sid.clone());
+                }
+                None
+            })
+            .collect();
+        for sid in stale_surfaces {
+            self.evict_surface_witness_entry(&sid);
+        }
+        if outcome.reason.is_none() {
+            if let Input::Frame { surface_id, frame } = input {
+                if frame.generation > 0 && frame.width > 0 && frame.height > 0 && hex(&frame.sha256)
+                {
+                    let verified_in_memory = if let Some((bytes, r_uid, r_mode)) =
+                        self.retained_witness_bytes.get(&frame.sha256)
+                    {
+                        if *r_uid == uid
+                            && (*r_mode & 0o077) == 0
+                            && !bytes.is_empty()
+                            && bytes.len() <= MAX_SURFACE_WITNESS_BYTES
+                        {
+                            Some((bytes.clone(), *r_uid, *r_mode, true))
+                        } else {
+                            None
+                        }
+                    } else if let Some(existing) = self.last_surface_witnesses.get(surface_id) {
+                        if existing.sha256 == frame.sha256
+                            && existing.epoch == current_epoch
+                            && existing.uid == uid
+                            && (existing.mode & 0o077) == 0
+                            && existing.byte_len == existing.bytes.len()
+                            && existing.byte_len > 0
+                            && existing.byte_len <= MAX_SURFACE_WITNESS_BYTES
+                        {
+                            Some((existing.bytes.clone(), existing.uid, existing.mode, false))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    self.evict_surface_witness_entry(surface_id);
+                    if let Some((arc_bytes, entry_uid, entry_mode, from_retained)) =
+                        verified_in_memory
+                    {
+                        if from_retained {
+                            self.evict_retained_witness_bytes(&frame.sha256);
+                        }
+                        while (self.last_surface_witnesses.len() >= MAX_SURFACE_WITNESSES_PER_ROOT
+                            || self
+                                .surface_witness_total_bytes
+                                .saturating_add(arc_bytes.len())
+                                > MAX_SURFACE_WITNESS_BYTES)
+                            && !self.surface_witness_order.is_empty()
+                        {
+                            let Some(oldest) = self.surface_witness_order.pop_front() else {
+                                break;
+                            };
+                            self.evict_surface_witness_entry(&oldest);
+                        }
+                        if self.last_surface_witnesses.len() < MAX_SURFACE_WITNESSES_PER_ROOT
+                            && self
+                                .surface_witness_total_bytes
+                                .saturating_add(arc_bytes.len())
+                                <= MAX_SURFACE_WITNESS_BYTES
+                        {
+                            let byte_len = arc_bytes.len();
+                            self.surface_witness_total_bytes =
+                                self.surface_witness_total_bytes.saturating_add(byte_len);
+                            self.surface_witness_order.push_back(surface_id.clone());
+                            self.last_surface_witnesses.insert(
+                                surface_id.clone(),
+                                SurfaceWitnessEntry {
+                                    sha256: frame.sha256.clone(),
+                                    epoch: current_epoch,
+                                    generation: frame.generation,
+                                    width: frame.width,
+                                    height: frame.height,
+                                    byte_len,
+                                    uid: entry_uid,
+                                    mode: entry_mode,
+                                    bytes: arc_bytes,
+                                },
+                            );
+                        }
+                    }
+                } else {
+                    self.evict_surface_witness_entry(surface_id);
+                }
+            }
+        }
+        publish_committed_surface_witnesses(&self.root, &self.last_surface_witnesses);
+    }
+    /// Returns true if `surface_id` currently holds a committed witness for `sha256`.
+    pub fn has_committed_surface_witness(&self, surface_id: &str, sha256: &str) -> bool {
+        if self.poisoned || self.sync_failed.load(std::sync::atomic::Ordering::Acquire) {
+            return false;
+        }
+        self.last_surface_witnesses
+            .get(surface_id)
+            .is_some_and(|e| e.sha256 == sha256 && e.epoch == self.state.epoch)
+    }
+    /// Returns the total byte footprint of in-memory committed surface witnesses for this journal.
+    pub fn committed_surface_witness_bytes(&self) -> usize {
+        if self.poisoned || self.sync_failed.load(std::sync::atomic::Ordering::Acquire) {
+            return 0;
+        }
+        self.surface_witness_total_bytes
+    }
+    /// Returns the number of surfaces currently holding an in-memory committed witness for this journal.
+    pub fn committed_surface_witness_count(&self) -> usize {
+        if self.poisoned || self.sync_failed.load(std::sync::atomic::Ordering::Acquire) {
+            return 0;
+        }
+        self.last_surface_witnesses.len()
+    }
+    /// Verifies an anchored frame file against the surface's last committed
+    /// witness when the advertised digest and committed geometry match, comparing
+    /// full payload bytes (`memcmp`) and falling back to full streaming SHA-256
+    /// verification on any length, geometry, generation, epoch, mode, ownership,
+    /// or byte difference.
+    pub fn verify_surface_frame(
+        &self,
+        surface_id: &str,
+        generation: u64,
+        file: &File,
+        expected_len: usize,
+        expected_sha256: &str,
+    ) -> Result<VerifiedPixels, JournalError> {
+        let (width, height) = self
+            .state
+            .surfaces
+            .get(surface_id)
+            .and_then(|s| s.frame.as_ref())
+            .map(|f| (f.width, f.height))
+            .unwrap_or((0, 0));
+        self.verify_surface_frame_with_geometry(
+            surface_id,
+            generation,
+            width,
+            height,
+            file,
+            expected_len,
+            expected_sha256,
+        )
+    }
+    /// Verifies an anchored frame file against the surface's last committed
+    /// witness with explicit `(width, height)` geometry check.
+    #[allow(clippy::too_many_arguments)]
+    pub fn verify_surface_frame_with_geometry(
+        &self,
+        surface_id: &str,
+        generation: u64,
+        width: u64,
+        height: u64,
+        file: &File,
+        expected_len: usize,
+        expected_sha256: &str,
+    ) -> Result<VerifiedPixels, JournalError> {
+        if self.poisoned || self.sync_failed.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(JournalError::Poisoned);
+        }
+        if expected_len == 0 || (expected_len as u64) > MAX_BYTES || !hex(expected_sha256) {
+            return Err(JournalError::Witness);
+        }
+        let meta = file.metadata().map_err(|_| JournalError::Io)?;
+        if !meta.is_file() || meta.len() != expected_len as u64 {
+            return Err(JournalError::Witness);
+        }
+        let uid = current_uid()?;
+        let file_uid = meta.uid();
+        let file_mode = meta.mode() & 0o7777;
+        let candidate = self
+            .state
+            .surfaces
+            .get(surface_id)
+            .zip(self.last_surface_witnesses.get(surface_id))
+            .and_then(|(surface, entry)| {
+                let prev_frame = surface.frame.as_ref()?;
+                if surface.live
+                    && !self.state.is_destroyed(surface_id)
+                    && surface.refresh_after.is_none()
+                    && entry.epoch == self.state.epoch
+                    && prev_frame.sha256 == expected_sha256
+                    && entry.sha256 == expected_sha256
+                    && generation > prev_frame.generation
+                    && entry.generation == prev_frame.generation
+                    && entry.generation > 0
+                    && width > 0
+                    && height > 0
+                    && prev_frame.width == width
+                    && prev_frame.height == height
+                    && entry.width == width
+                    && entry.height == height
+                    && entry.byte_len == expected_len
+                    && entry.bytes.len() == expected_len
+                    && file_uid == uid
+                    && entry.uid == file_uid
+                    && (file_mode & 0o077) == 0
+                    && (entry.mode & 0o077) == 0
+                {
+                    Some(entry.bytes.clone())
+                } else {
+                    None
+                }
+            });
+        let mut reader = file.try_clone().map_err(|_| JournalError::Io)?;
+        use std::io::{Seek, SeekFrom};
+        reader
+            .seek(SeekFrom::Start(0))
+            .map_err(|_| JournalError::Io)?;
+        let started = std::time::Instant::now();
+        if let Some(cached_bytes) = candidate {
+            let mut bytes = vec![0u8; expected_len];
+            let mut pos = 0usize;
+            while pos < expected_len {
+                let end = (pos + 65536).min(expected_len);
+                let n = reader
+                    .read(&mut bytes[pos..end])
+                    .map_err(|_| JournalError::Io)?;
+                if n == 0 {
+                    break;
+                }
+                pos += n;
+            }
+            let mut extra = [0u8; 1];
+            let trailing = reader.read(&mut extra).map_err(|_| JournalError::Io)?;
+            if pos != expected_len || trailing != 0 {
+                return Err(JournalError::Witness);
+            }
+            let cmp_started = std::time::Instant::now();
+            let unchanged = bytes.as_slice() == cached_bytes.as_ref();
+            let cmp_ns = cmp_started.elapsed().as_nanos();
+            if unchanged {
+                #[cfg(test)]
+                STAGE_TIMINGS.with(|cell| {
+                    let mut s = cell.get();
+                    s.skipped_hash_ns += cmp_ns;
+                    s.skipped_hash_frames += 1;
+                    cell.set(s);
+                });
+                let mut verified = VerifiedPixels::new(bytes, expected_sha256.to_owned());
+                verified.read_started = Some(started);
+                verified.hash_ns = 0;
+                verified.skipped_hash_ns = cmp_ns;
+                verified.hash_skipped = true;
+                verified.shm_read_ns = started.elapsed().as_nanos().saturating_sub(cmp_ns);
+                return Ok(verified);
+            }
+            let hash_started = std::time::Instant::now();
+            let mut hasher = StreamingSha256::new();
+            for chunk in bytes.chunks(65536) {
+                hasher.update(chunk);
+            }
+            let digest = hasher.finalize_hex();
+            let hash_ns = hash_started.elapsed().as_nanos();
+            if digest != expected_sha256 {
+                return Err(JournalError::Witness);
+            }
+            let mut verified = VerifiedPixels::new(bytes, digest);
+            verified.read_started = Some(started);
+            verified.hash_ns = hash_ns;
+            verified.shm_read_ns = started.elapsed().as_nanos().saturating_sub(hash_ns);
+            return Ok(verified);
+        }
+        let mut hash_ns = 0u128;
+        let mut bytes = vec![0u8; expected_len];
+        let mut hasher = StreamingSha256::new();
+        let mut pos = 0usize;
+        while pos < expected_len {
+            let end = (pos + 65536).min(expected_len);
+            let n = reader
+                .read(&mut bytes[pos..end])
+                .map_err(|_| JournalError::Io)?;
+            if n == 0 {
+                break;
+            }
+            let hash_started = std::time::Instant::now();
+            hasher.update(&bytes[pos..pos + n]);
+            hash_ns += hash_started.elapsed().as_nanos();
+            pos += n;
+        }
+        let mut extra = [0u8; 1];
+        let trailing = reader.read(&mut extra).map_err(|_| JournalError::Io)?;
+        let hash_started = std::time::Instant::now();
+        let digest = hasher.finalize_hex();
+        hash_ns += hash_started.elapsed().as_nanos();
+        if pos != expected_len || trailing != 0 || digest != expected_sha256 {
+            return Err(JournalError::Witness);
+        }
+        if file_uid != uid || (file_mode & 0o077) != 0 {
+            return Err(JournalError::Invalid);
+        }
+        let mut verified = VerifiedPixels::new(bytes, digest);
+        verified.read_started = Some(started);
+        verified.hash_ns = hash_ns;
+        verified.shm_read_ns = started.elapsed().as_nanos().saturating_sub(hash_ns);
+        Ok(verified)
     }
     pub fn completed_sync_count(&self) -> u64 {
         if let Some(ref worker) = self.sync_worker {
@@ -1785,6 +2473,7 @@ impl Journal {
                                 };
                                 if !already_err {
                                     let cp_count = batch.checkpoint_count;
+                                    let err_root = batch.root.clone();
                                     match execute_sync_batch(batch) {
                                         Ok(()) => {
                                             let mut st = worker_shared
@@ -1801,6 +2490,7 @@ impl Journal {
                                         Err(e) => {
                                             sync_failed
                                                 .store(true, std::sync::atomic::Ordering::Release);
+                                            remove_committed_surface_witnesses(&err_root);
                                             let mut st = worker_shared
                                                 .state
                                                 .lock()
@@ -2043,6 +2733,7 @@ impl Journal {
         self.reconcile_worker_progress();
         if self.poisoned || self.sync_failed.load(std::sync::atomic::Ordering::Acquire) {
             self.poisoned = true;
+            self.clear_surface_witness_cache();
             self.dirty_files.clear();
             self.staged_dirty_len = 0;
             self.staged_checkpoint_count = 0;
@@ -2054,6 +2745,10 @@ impl Journal {
             return Err(JournalError::Poisoned);
         }
         self.poisoned = true;
+        let mut poison_guard = PoisonWitnessGuard {
+            root: self.root.clone(),
+            disarmed: false,
+        };
         if !self.dirty_files.is_empty()
             || self.pending_checkpoint.is_some()
             || self.unsynced_frames > 0
@@ -2132,6 +2827,7 @@ impl Journal {
         }
         self.reconcile_worker_progress();
         self.poisoned = false;
+        poison_guard.disarmed = true;
         Ok(())
     }
     pub fn close(&mut self) -> Result<(), JournalError> {
@@ -2148,6 +2844,7 @@ impl Journal {
         self.reconcile_worker_progress();
         if self.poisoned || self.sync_failed.load(std::sync::atomic::Ordering::Acquire) {
             self.poisoned = true;
+            self.clear_surface_witness_cache();
             return Err(JournalError::Poisoned);
         }
         if bytes.is_empty() || bytes.len() as u64 > MAX_BYTES {
@@ -2155,6 +2852,11 @@ impl Journal {
         }
         let digest = sha256_hex(bytes);
         self.retain_witness_inner(&digest, bytes, true, true)
+            .inspect_err(|_| {
+                if self.poisoned {
+                    self.clear_surface_witness_cache();
+                }
+            })
     }
     pub fn retain_verified_pixels(
         &mut self,
@@ -2163,9 +2865,15 @@ impl Journal {
         self.reconcile_worker_progress();
         if self.poisoned || self.sync_failed.load(std::sync::atomic::Ordering::Acquire) {
             self.poisoned = true;
+            self.clear_surface_witness_cache();
             return Err(JournalError::Poisoned);
         }
         self.retain_witness_inner(&pixels.sha256, &pixels.bytes, false, true)
+            .inspect_err(|_| {
+                if self.poisoned {
+                    self.clear_surface_witness_cache();
+                }
+            })
     }
     pub fn retain_verified_witness(
         &mut self,
@@ -2175,6 +2883,7 @@ impl Journal {
         self.reconcile_worker_progress();
         if self.poisoned || self.sync_failed.load(std::sync::atomic::Ordering::Acquire) {
             self.poisoned = true;
+            self.clear_surface_witness_cache();
             return Err(JournalError::Poisoned);
         }
         let verified = take_verified_grant(sha256, bytes);
@@ -2186,6 +2895,11 @@ impl Journal {
             return Err(JournalError::Witness);
         }
         self.retain_witness_inner(sha256, bytes, true, true)
+            .inspect_err(|_| {
+                if self.poisoned {
+                    self.clear_surface_witness_cache();
+                }
+            })
     }
     pub fn retain_frame_witness(
         &mut self,
@@ -2195,6 +2909,7 @@ impl Journal {
         self.reconcile_worker_progress();
         if self.poisoned || self.sync_failed.load(std::sync::atomic::Ordering::Acquire) {
             self.poisoned = true;
+            self.clear_surface_witness_cache();
             return Err(JournalError::Poisoned);
         }
         let verified = take_verified_grant(sha256, bytes);
@@ -2206,6 +2921,11 @@ impl Journal {
             return Err(JournalError::Witness);
         }
         self.retain_witness_inner(sha256, bytes, false, true)
+            .inspect_err(|_| {
+                if self.poisoned {
+                    self.clear_surface_witness_cache();
+                }
+            })
     }
     fn retain_witness_inner(
         &mut self,
@@ -2217,10 +2937,15 @@ impl Journal {
         self.reconcile_worker_progress();
         if self.poisoned || self.sync_failed.load(std::sync::atomic::Ordering::Acquire) {
             self.poisoned = true;
+            self.clear_surface_witness_cache();
             return Err(JournalError::Poisoned);
         }
         // Latch poisoned on any error inside retain_witness_inner (R3-T1-09).
         self.poisoned = true;
+        let mut poison_guard = PoisonWitnessGuard {
+            root: self.root.clone(),
+            disarmed: false,
+        };
         if !hex(sha256)
             || bytes.is_empty()
             || bytes.len() as u64 > MAX_BYTES
@@ -2283,6 +3008,7 @@ impl Journal {
                 if !self.committed_witnesses.contains(&evicted) {
                     self.verified_witnesses.remove(&evicted);
                     self.verified_witness_order.retain(|k| k != &evicted);
+                    self.evict_retained_witness_bytes(&evicted);
                     self.unsynced_witnesses.remove(&evicted);
                     let evicted_rel = format!("artifacts/{evicted}");
                     self.dirty_files.retain(|(_, r)| r != &evicted_rel);
@@ -2324,7 +3050,14 @@ impl Journal {
                 self.uncommitted_artifacts.push_back(w.sha256.clone());
             }
         }
+        if let Ok(uid) = current_uid() {
+            let mode = fs::symlink_metadata(&path)
+                .map(|m| m.mode() & 0o7777)
+                .unwrap_or(0o600);
+            self.cache_retained_witness_bytes(&w.sha256, bytes, uid, mode);
+        }
         self.poisoned = false;
+        poison_guard.disarmed = true;
         Ok(w)
     }
     pub fn append(
@@ -2337,6 +3070,7 @@ impl Journal {
         self.reconcile_worker_progress();
         if self.poisoned || self.sync_failed.load(std::sync::atomic::Ordering::Acquire) {
             self.poisoned = true;
+            self.clear_surface_witness_cache();
             return Err(JournalError::Poisoned);
         }
         if self.count >= MAX_RECORDS {
@@ -2416,6 +3150,10 @@ impl Journal {
         }
         // From the first durable mutation, errors poison the handle until recovery.
         self.poisoned = true;
+        let mut poison_guard = PoisonWitnessGuard {
+            root: self.root.clone(),
+            disarmed: false,
+        };
         let is_frame = matches!(input, Input::Frame { .. });
         if !is_frame {
             if let Some(worker) = &self.sync_worker {
@@ -2599,6 +3337,8 @@ impl Journal {
         self.archive_bytes = archive_bytes;
         self.state = reduced;
         self.poisoned = false;
+        poison_guard.disarmed = true;
+        self.update_committed_surface_witnesses_after_append(input, outcome);
         Ok(())
     }
 }
@@ -5046,5 +5786,1207 @@ mod directory_tests {
         clear_root_hooks(&session_to);
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(root_to).unwrap();
+    }
+
+    fn make_surface_input(id: &str) -> Input {
+        use crate::admission::Surface;
+        use crate::{Component, Endpoint};
+        Input::Surface {
+            id: id.into(),
+            surface: Surface {
+                display: ":42".into(),
+                owner: Endpoint {
+                    component: Component::Agent,
+                    instance: "agent-1".into(),
+                },
+                agent_controlled: true,
+                live: true,
+                frame: None,
+                refresh_after: None,
+                allowed_verbs: vec![],
+            },
+        }
+    }
+
+    #[test]
+    fn unchanged_frame_fast_path_preserves_digest_grant_poison_and_linkage() {
+        use crate::admission::Frame;
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("mv-journal-fastpath-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        let session_dir = root.join("sessions/session-fast");
+
+        let mut authority =
+            crate::admission::Authority::create(&root, CoreState::session("session-fast").unwrap())
+                .unwrap();
+        let o1 = authority.apply(Input::Connect).unwrap();
+        assert_eq!(o1.reason, None);
+        let epoch = authority.state().epoch;
+        let s_in = make_surface_input("srf-fast");
+        let sw = authority.retain_witness(b"srf-fast-init").unwrap();
+        let o2 = authority.apply_with_witnesses(s_in, vec![sw]).unwrap();
+        assert_eq!(o2.reason, None);
+
+        let payload_a = vec![0x42_u8; 65536 + 1024];
+        let sha_a = sha256_hex(&payload_a);
+        let shm_path = root.join("frame-a.shm");
+        {
+            let mut f = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&shm_path)
+                .unwrap();
+            f.write_all(&payload_a).unwrap();
+            f.sync_all().unwrap();
+        }
+        let shm_file = File::open(&shm_path).unwrap();
+
+        // First frame for srf-fast has no prior committed witness: must run full SHA-256.
+        let v1 = VerifiedPixels::read_verified_for_surface(
+            &session_dir,
+            "srf-fast",
+            epoch,
+            1,
+            1280,
+            900,
+            &shm_file,
+            payload_a.len(),
+            &sha_a,
+        )
+        .unwrap();
+        assert!(!v1.hash_skipped(), "first frame must not skip SHA-256");
+        assert!(v1.hash_ns() > 0, "first frame must record hash_ns > 0");
+        assert_eq!(v1.skipped_hash_ns(), 0);
+        assert_eq!(v1.sha256(), sha_a);
+        let fw1 = v1.retain_in_authority(&mut authority).unwrap();
+        let o3 = authority
+            .apply_with_witnesses(
+                Input::Frame {
+                    surface_id: "srf-fast".into(),
+                    frame: Frame {
+                        sha256: sha_a.clone(),
+                        generation: 1,
+                        width: 1280,
+                        height: 900,
+                    },
+                },
+                vec![fw1],
+            )
+            .unwrap();
+        assert_eq!(o3.reason, None);
+
+        // Unscoped read_verified never uses the fast path.
+        let mut shm_unscoped = File::open(&shm_path).unwrap();
+        let v_unscoped =
+            VerifiedPixels::read_verified(&mut shm_unscoped, payload_a.len(), &sha_a).unwrap();
+        assert!(
+            !v_unscoped.hash_skipped(),
+            "unscoped read_verified must always run full streaming SHA-256"
+        );
+
+        // Second frame with identical root, surface_id, epoch, advancing generation, geometry,
+        // advertised digest, and identical bytes reuses witness via full-buffer memcmp.
+        STAGE_TIMINGS.with(|c| c.set(FrameStageTimings::default()));
+        let mut shm_reopen = File::open(&shm_path).unwrap();
+        let t_read_start = std::time::Instant::now();
+        let v2 = VerifiedPixels::read_verified_for_surface(
+            &session_dir,
+            "srf-fast",
+            epoch,
+            2,
+            1280,
+            900,
+            &mut shm_reopen,
+            payload_a.len(),
+            &sha_a,
+        )
+        .unwrap();
+        let total_read_elapsed = t_read_start.elapsed().as_nanos();
+        assert!(
+            v2.hash_skipped(),
+            "unchanged frame must skip SHA-256 after full-buffer memcmp"
+        );
+        assert_eq!(v2.hash_ns(), 0, "unchanged frame must have hash_ns == 0");
+        assert!(
+            v2.skipped_hash_ns() > 0,
+            "unchanged frame must record memcmp duration in skipped_hash_ns"
+        );
+        assert!(
+            v2.shm_read_ns() + v2.skipped_hash_ns() <= total_read_elapsed,
+            "shm_read_ns ({}) and skipped_hash_ns ({}) must be disjoint within total read ({})",
+            v2.shm_read_ns(),
+            v2.skipped_hash_ns(),
+            total_read_elapsed
+        );
+        assert_eq!(v2.sha256(), sha_a);
+        let st = STAGE_TIMINGS.with(|c| c.get());
+        assert_eq!(st.skipped_hash_frames, 1);
+        assert!(st.skipped_hash_ns > 0);
+
+        let fw2 = v2.retain_in_authority(&mut authority).unwrap();
+        let o4 = authority
+            .apply_with_witnesses(
+                Input::Frame {
+                    surface_id: "srf-fast".into(),
+                    frame: Frame {
+                        sha256: sha_a.clone(),
+                        generation: 2,
+                        width: 1280,
+                        height: 900,
+                    },
+                },
+                vec![fw2],
+            )
+            .unwrap();
+        assert_eq!(o4.reason, None);
+        drop(authority);
+
+        // Restart / recovery evicts the surface witness cache and never loads disk bytes
+        // into the verified witness cache without computing SHA-256 over them.
+        let (mut j, mut state) =
+            Journal::recover(&session_dir.join("journal.jsonl"), &session_dir).unwrap();
+        assert!(
+            !j.has_committed_surface_witness("srf-fast", &sha_a),
+            "journal recovery must start with an empty surface witness cache"
+        );
+        assert_eq!(j.committed_surface_witness_bytes(), 0);
+        let vf_after_recover = j
+            .verify_surface_frame("srf-fast", 3, &shm_file, payload_a.len(), &sha_a)
+            .unwrap();
+        assert!(
+            !vf_after_recover.hash_skipped(),
+            "first frame after journal recovery must compute full SHA-256"
+        );
+        assert!(vf_after_recover.hash_ns() > 0);
+
+        // Commit generation 3 live so the in-memory witness cache is populated from verified bytes.
+        let fw3 = j.retain_verified_pixels(&vf_after_recover).unwrap();
+        let f3_in = Input::Frame {
+            surface_id: "srf-fast".into(),
+            frame: Frame {
+                sha256: sha_a.clone(),
+                generation: 3,
+                width: 1280,
+                height: 900,
+            },
+        };
+        let out_f3 = state.apply(&f3_in).unwrap();
+        j.append(&f3_in, &out_f3, &state, vec![fw3]).unwrap();
+        assert!(j.has_committed_surface_witness("srf-fast", &sha_a));
+        assert_eq!(j.committed_surface_witness_bytes(), payload_a.len());
+
+        let t_vf_start = std::time::Instant::now();
+        let vf_fast = j
+            .verify_surface_frame("srf-fast", 4, &shm_file, payload_a.len(), &sha_a)
+            .unwrap();
+        let vf_elapsed = t_vf_start.elapsed().as_nanos();
+        assert!(vf_fast.hash_skipped());
+        assert_eq!(vf_fast.hash_ns(), 0);
+        assert!(vf_fast.skipped_hash_ns() > 0);
+        assert!(
+            vf_fast.shm_read_ns() + vf_fast.skipped_hash_ns() <= vf_elapsed,
+            "verify_surface_frame shm_read_ns and skipped_hash_ns must be disjoint"
+        );
+        assert_eq!(vf_fast.sha256(), sha_a);
+
+        // Non-advancing generation (generation <= committed generation 3) must fall back to full verify.
+        let vf_stale_gen = j
+            .verify_surface_frame("srf-fast", 3, &shm_file, payload_a.len(), &sha_a)
+            .unwrap();
+        assert!(
+            !vf_stale_gen.hash_skipped(),
+            "non-advancing generation must fall back to full streaming SHA-256"
+        );
+        assert!(vf_stale_gen.hash_ns() > 0);
+
+        // Geometry mismatch (different width or height) must fall back to full streaming SHA-256.
+        let vf_geom_mismatch = j
+            .verify_surface_frame_with_geometry(
+                "srf-fast",
+                4,
+                640,
+                1800,
+                &shm_file,
+                payload_a.len(),
+                &sha_a,
+            )
+            .unwrap();
+        assert!(
+            !vf_geom_mismatch.hash_skipped(),
+            "geometry change must fall back to full streaming SHA-256"
+        );
+        assert!(vf_geom_mismatch.hash_ns() > 0);
+
+        // Permissive file mode (0o644) must be rejected after falling back.
+        let bad_mode_path = root.join("frame-bad-mode.shm");
+        fs::copy(&shm_path, &bad_mode_path).unwrap();
+        fs::set_permissions(&bad_mode_path, fs::Permissions::from_mode(0o644)).unwrap();
+        let bad_mode_file = File::open(&bad_mode_path).unwrap();
+        assert_eq!(
+            j.verify_surface_frame("srf-fast", 4, &bad_mode_file, payload_a.len(), &sha_a)
+                .unwrap_err(),
+            JournalError::Invalid
+        );
+
+        // Poison latch clears committed surface witnesses so fast path is disabled when poisoned.
+        fail_next_witness_sync(&session_dir);
+        let new_bytes = b"poison-trigger-witness-bytes";
+        assert_eq!(j.retain_witness(new_bytes), Err(JournalError::Io));
+        assert!(j.poisoned);
+        assert_eq!(j.committed_surface_witness_bytes(), 0);
+        assert_eq!(
+            j.verify_surface_frame("srf-fast", 4, &shm_file, payload_a.len(), &sha_a)
+                .unwrap_err(),
+            JournalError::Poisoned
+        );
+        let mut shm_after_poison = File::open(&shm_path).unwrap();
+        let v_after_poison = VerifiedPixels::read_verified_for_surface(
+            &session_dir,
+            "srf-fast",
+            state.epoch,
+            4,
+            1280,
+            900,
+            &mut shm_after_poison,
+            payload_a.len(),
+            &sha_a,
+        )
+        .unwrap();
+        assert!(
+            !v_after_poison.hash_skipped(),
+            "poisoned journal must evict its surface witnesses from the fast-path registry"
+        );
+        drop(j);
+        clear_root_hooks(&session_dir);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unchanged_frame_mb_spoof_same_digest_changed_byte_forces_full_hash_and_refuses() {
+        use crate::admission::Frame;
+        let root = std::env::temp_dir().join(format!("mv-journal-mb-spoof-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+
+        let mut state = CoreState::session("session-mb").unwrap();
+        let mut j = Journal::create(&root, &state).unwrap();
+        let session_dir = root.join("sessions/session-mb");
+
+        let out1 = state.apply(&Input::Connect).unwrap();
+        j.append(&Input::Connect, &out1, &state, vec![]).unwrap();
+
+        let s_in = make_surface_input("srf-mb");
+        let sw = j.retain_witness(b"srf-mb-surface").unwrap();
+        let out2 = state.apply(&s_in).unwrap();
+        j.append(&s_in, &out2, &state, vec![sw]).unwrap();
+
+        let payload_a = vec![0x7e_u8; 131_072];
+        let sha_a = sha256_hex(&payload_a);
+        let fw1 = j.retain_frame_witness(&sha_a, &payload_a).unwrap();
+        let f1_in = Input::Frame {
+            surface_id: "srf-mb".into(),
+            frame: Frame {
+                sha256: sha_a.clone(),
+                generation: 1,
+                width: 512,
+                height: 256,
+            },
+        };
+        let out3 = state.apply(&f1_in).unwrap();
+        j.append(&f1_in, &out3, &state, vec![fw1]).unwrap();
+        j.flush_sync().unwrap();
+
+        let count_before = j.count;
+        let lines_before = fs::read_to_string(session_dir.join("journal.jsonl"))
+            .unwrap()
+            .lines()
+            .count();
+
+        // M-B SPOOF-SAME-DIGEST: test middle byte, first byte (index 0), and last byte (len - 1).
+        for flip_idx in [payload_a.len() / 2, 0, payload_a.len() - 1] {
+            let mut spoofed = payload_a.clone();
+            spoofed[flip_idx] ^= 0x01;
+            let spoof_path = root.join(format!("spoof-{flip_idx}.shm"));
+            {
+                let mut f = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .open(&spoof_path)
+                    .unwrap();
+                f.write_all(&spoofed).unwrap();
+                f.sync_all().unwrap();
+            }
+            let spoof_file = File::open(&spoof_path).unwrap();
+
+            let read_err = VerifiedPixels::read_verified_for_surface(
+                &session_dir,
+                "srf-mb",
+                state.epoch,
+                2,
+                512,
+                256,
+                &spoof_file,
+                spoofed.len(),
+                &sha_a,
+            )
+            .unwrap_err();
+            assert_eq!(
+                read_err.kind(),
+                std::io::ErrorKind::InvalidData,
+                "spoofed byte at index {flip_idx} must fail read_verified_for_surface"
+            );
+            assert_eq!(
+                j.verify_surface_frame("srf-mb", 2, &spoof_file, spoofed.len(), &sha_a)
+                    .unwrap_err(),
+                JournalError::Witness,
+                "spoofed byte at index {flip_idx} must fail verify_surface_frame"
+            );
+            assert_eq!(
+                j.retain_frame_witness(&sha_a, &spoofed),
+                Err(JournalError::Witness)
+            );
+            assert_eq!(
+                j.retain_verified_witness(&sha_a, &spoofed),
+                Err(JournalError::Witness)
+            );
+        }
+
+        // Length-mismatch attacks against a primed witness cache:
+        // (a) Truncated by 1 byte (`len - 1`) advertising original `sha_a`.
+        // (b) Extended by 1 byte (`len + 1`) advertising original `sha_a`.
+        let trunc_bytes = &payload_a[..payload_a.len() - 1];
+        let trunc_path = root.join("spoof-trunc.shm");
+        {
+            let mut f = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&trunc_path)
+                .unwrap();
+            f.write_all(trunc_bytes).unwrap();
+            f.sync_all().unwrap();
+        }
+        let trunc_file = File::open(&trunc_path).unwrap();
+        assert_eq!(
+            VerifiedPixels::read_verified_for_surface(
+                &session_dir,
+                "srf-mb",
+                state.epoch,
+                2,
+                512,
+                256,
+                &trunc_file,
+                payload_a.len(),
+                &sha_a,
+            )
+            .unwrap_err()
+            .kind(),
+            std::io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            VerifiedPixels::read_verified_for_surface(
+                &session_dir,
+                "srf-mb",
+                state.epoch,
+                2,
+                512,
+                256,
+                &trunc_file,
+                trunc_bytes.len(),
+                &sha_a,
+            )
+            .unwrap_err()
+            .kind(),
+            std::io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            j.verify_surface_frame("srf-mb", 2, &trunc_file, payload_a.len(), &sha_a)
+                .unwrap_err(),
+            JournalError::Witness
+        );
+        assert_eq!(
+            j.verify_surface_frame("srf-mb", 2, &trunc_file, trunc_bytes.len(), &sha_a)
+                .unwrap_err(),
+            JournalError::Witness
+        );
+
+        let mut ext_bytes = payload_a.clone();
+        ext_bytes.push(0x7e);
+        let ext_path = root.join("spoof-ext.shm");
+        {
+            let mut f = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&ext_path)
+                .unwrap();
+            f.write_all(&ext_bytes).unwrap();
+            f.sync_all().unwrap();
+        }
+        let ext_file = File::open(&ext_path).unwrap();
+        assert_eq!(
+            VerifiedPixels::read_verified_for_surface(
+                &session_dir,
+                "srf-mb",
+                state.epoch,
+                2,
+                512,
+                256,
+                &ext_file,
+                payload_a.len(),
+                &sha_a,
+            )
+            .unwrap_err()
+            .kind(),
+            std::io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            VerifiedPixels::read_verified_for_surface(
+                &session_dir,
+                "srf-mb",
+                state.epoch,
+                2,
+                512,
+                256,
+                &ext_file,
+                ext_bytes.len(),
+                &sha_a,
+            )
+            .unwrap_err()
+            .kind(),
+            std::io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            j.verify_surface_frame("srf-mb", 2, &ext_file, payload_a.len(), &sha_a)
+                .unwrap_err(),
+            JournalError::Witness
+        );
+        assert_eq!(
+            j.verify_surface_frame("srf-mb", 2, &ext_file, ext_bytes.len(), &sha_a)
+                .unwrap_err(),
+            JournalError::Witness
+        );
+
+        // No journal record may be appended on any spoofed or length-mismatched frame.
+        assert_eq!(j.count, count_before);
+        let lines_after = fs::read_to_string(session_dir.join("journal.jsonl"))
+            .unwrap()
+            .lines()
+            .count();
+        assert_eq!(lines_after, lines_before);
+
+        // When the changed last byte is advertised with its true digest, full SHA-256 runs and succeeds.
+        let last_idx = payload_a.len() - 1;
+        let spoof_last_file = File::open(root.join(format!("spoof-{last_idx}.shm"))).unwrap();
+        let mut spoof_last = payload_a.clone();
+        spoof_last[last_idx] ^= 0x01;
+        let sha_b = sha256_hex(&spoof_last);
+        let verified_b = j
+            .verify_surface_frame("srf-mb", 2, &spoof_last_file, spoof_last.len(), &sha_b)
+            .unwrap();
+        assert!(
+            !verified_b.hash_skipped(),
+            "changed payload byte must force full streaming SHA-256"
+        );
+        assert!(verified_b.hash_ns() > 0);
+        assert_eq!(verified_b.sha256(), sha_b);
+
+        drop(j);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unchanged_frame_scope_isolation_and_eviction_on_surface_lifecycle_and_epoch() {
+        use crate::admission::{Frame, LifecycleUpdate};
+        let root_a =
+            std::env::temp_dir().join(format!("mv-journal-scope-a-{}", std::process::id()));
+        let root_b =
+            std::env::temp_dir().join(format!("mv-journal-scope-b-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root_a);
+        let _ = fs::remove_dir_all(&root_b);
+        fs::DirBuilder::new().mode(0o700).create(&root_a).unwrap();
+        fs::DirBuilder::new().mode(0o700).create(&root_b).unwrap();
+
+        let mut state_a = CoreState::session("session-scope").unwrap();
+        let mut j_a = Journal::create(&root_a, &state_a).unwrap();
+        let session_a = root_a.join("sessions/session-scope");
+        let out_c = state_a.apply(&Input::Connect).unwrap();
+        j_a.append(&Input::Connect, &out_c, &state_a, vec![])
+            .unwrap();
+
+        for sid in ["srf-a", "srf-b"] {
+            let s_in = make_surface_input(sid);
+            let sw = j_a.retain_witness(sid.as_bytes()).unwrap();
+            let out_s = state_a.apply(&s_in).unwrap();
+            j_a.append(&s_in, &out_s, &state_a, vec![sw]).unwrap();
+        }
+
+        let payload = vec![0x5a_u8; 32_768];
+        let sha = sha256_hex(&payload);
+        let fw1 = j_a.retain_frame_witness(&sha, &payload).unwrap();
+        let f1_in = Input::Frame {
+            surface_id: "srf-a".into(),
+            frame: Frame {
+                sha256: sha.clone(),
+                generation: 1,
+                width: 256,
+                height: 128,
+            },
+        };
+        let out_f1 = state_a.apply(&f1_in).unwrap();
+        j_a.append(&f1_in, &out_f1, &state_a, vec![fw1]).unwrap();
+        assert!(j_a.has_committed_surface_witness("srf-a", &sha));
+        assert!(!j_a.has_committed_surface_witness("srf-b", &sha));
+
+        // Same surface, same root, same epoch, advancing generation -> fast path hit.
+        let v_same = VerifiedPixels::read_verified_for_surface(
+            &session_a,
+            "srf-a",
+            state_a.epoch,
+            2,
+            256,
+            128,
+            &payload[..],
+            payload.len(),
+            &sha,
+        )
+        .unwrap();
+        assert!(v_same.hash_skipped());
+
+        // Different surface (`srf-b`) in the same session must NOT reuse `srf-a`'s witness.
+        let v_other_surface = VerifiedPixels::read_verified_for_surface(
+            &session_a,
+            "srf-b",
+            state_a.epoch,
+            1,
+            256,
+            128,
+            &payload[..],
+            payload.len(),
+            &sha,
+        )
+        .unwrap();
+        assert!(
+            !v_other_surface.hash_skipped(),
+            "fast path must never reuse a witness across different surfaces"
+        );
+
+        // Different root (`session_b`) with identical surface_id and epoch must NOT reuse `session_a`.
+        let session_b = root_b.join("sessions/session-scope");
+        let v_other_root = VerifiedPixels::read_verified_for_surface(
+            &session_b,
+            "srf-a",
+            state_a.epoch,
+            2,
+            256,
+            128,
+            &payload[..],
+            payload.len(),
+            &sha,
+        )
+        .unwrap();
+        assert!(
+            !v_other_root.hash_skipped(),
+            "fast path must never reuse a witness across different session roots"
+        );
+
+        // Wrong epoch in read_verified_for_surface must NOT reuse the cached witness.
+        let v_wrong_epoch = VerifiedPixels::read_verified_for_surface(
+            &session_a,
+            "srf-a",
+            state_a.epoch + 1,
+            2,
+            256,
+            128,
+            &payload[..],
+            payload.len(),
+            &sha,
+        )
+        .unwrap();
+        assert!(
+            !v_wrong_epoch.hash_skipped(),
+            "fast path must reject a mismatched epoch"
+        );
+
+        // Surface change (`LifecycleUpdate::Updated`) evicts the surface witness cache entry.
+        let mut updated_surface = state_a.surfaces["srf-a"].clone();
+        updated_surface.display = ":99".into();
+        updated_surface.frame = None;
+        let upd_in = Input::Lifecycle {
+            surface_id: "srf-a".into(),
+            update: LifecycleUpdate::Updated(updated_surface),
+        };
+        let out_upd = state_a.apply(&upd_in).unwrap();
+        j_a.append(&upd_in, &out_upd, &state_a, vec![]).unwrap();
+        assert!(
+            !j_a.has_committed_surface_witness("srf-a", &sha),
+            "LifecycleUpdate::Updated must evict the surface witness entry"
+        );
+        let v_after_upd = VerifiedPixels::read_verified_for_surface(
+            &session_a,
+            "srf-a",
+            state_a.epoch,
+            2,
+            256,
+            128,
+            &payload[..],
+            payload.len(),
+            &sha,
+        )
+        .unwrap();
+        assert!(!v_after_upd.hash_skipped());
+
+        // Re-prime `srf-a` at generation 2, then verify `TakeControl` and `ReleaseControl` evict.
+        let fw2 = j_a.retain_verified_pixels(&v_after_upd).unwrap();
+        let f2_in = Input::Frame {
+            surface_id: "srf-a".into(),
+            frame: Frame {
+                sha256: sha.clone(),
+                generation: 2,
+                width: 256,
+                height: 128,
+            },
+        };
+        let out_f2 = state_a.apply(&f2_in).unwrap();
+        j_a.append(&f2_in, &out_f2, &state_a, vec![fw2]).unwrap();
+        assert!(j_a.has_committed_surface_witness("srf-a", &sha));
+
+        let tc_in = Input::TakeControl {
+            surface_id: "srf-a".into(),
+        };
+        let out_tc = state_a.apply(&tc_in).unwrap();
+        j_a.append(&tc_in, &out_tc, &state_a, vec![]).unwrap();
+        assert!(
+            !j_a.has_committed_surface_witness("srf-a", &sha),
+            "TakeControl must evict the surface witness entry"
+        );
+
+        let rc_in = Input::ReleaseControl {
+            surface_id: "srf-a".into(),
+        };
+        let out_rc = state_a.apply(&rc_in).unwrap();
+        j_a.append(&rc_in, &out_rc, &state_a, vec![]).unwrap();
+
+        // Re-prime `srf-a` at generation 3, then verify `LifecycleUpdate::Lost` evicts.
+        let fw3 = j_a.retain_frame_witness(&sha, &payload).unwrap();
+        let f3_in = Input::Frame {
+            surface_id: "srf-a".into(),
+            frame: Frame {
+                sha256: sha.clone(),
+                generation: 3,
+                width: 256,
+                height: 128,
+            },
+        };
+        let out_f3 = state_a.apply(&f3_in).unwrap();
+        j_a.append(&f3_in, &out_f3, &state_a, vec![fw3]).unwrap();
+        assert!(j_a.has_committed_surface_witness("srf-a", &sha));
+
+        let lost_in = Input::Lifecycle {
+            surface_id: "srf-a".into(),
+            update: LifecycleUpdate::Lost,
+        };
+        let out_lost = state_a.apply(&lost_in).unwrap();
+        j_a.append(&lost_in, &out_lost, &state_a, vec![]).unwrap();
+        assert!(
+            !j_a.has_committed_surface_witness("srf-a", &sha),
+            "LifecycleUpdate::Lost must evict the surface witness entry"
+        );
+        let v_after_lost = VerifiedPixels::read_verified_for_surface(
+            &session_a,
+            "srf-a",
+            state_a.epoch,
+            4,
+            256,
+            128,
+            &payload[..],
+            payload.len(),
+            &sha,
+        )
+        .unwrap();
+        assert!(!v_after_lost.hash_skipped());
+
+        // Prime `srf-b` at generation 1, then verify `LifecycleUpdate::Destroyed` evicts.
+        let fwb1 = j_a.retain_frame_witness(&sha, &payload).unwrap();
+        let fb1_in = Input::Frame {
+            surface_id: "srf-b".into(),
+            frame: Frame {
+                sha256: sha.clone(),
+                generation: 1,
+                width: 256,
+                height: 128,
+            },
+        };
+        let out_fb1 = state_a.apply(&fb1_in).unwrap();
+        j_a.append(&fb1_in, &out_fb1, &state_a, vec![fwb1]).unwrap();
+        assert!(j_a.has_committed_surface_witness("srf-b", &sha));
+
+        let destroy_in = Input::Lifecycle {
+            surface_id: "srf-b".into(),
+            update: LifecycleUpdate::Destroyed,
+        };
+        let out_destroy = state_a.apply(&destroy_in).unwrap();
+        j_a.append(&destroy_in, &out_destroy, &state_a, vec![])
+            .unwrap();
+        assert!(
+            !j_a.has_committed_surface_witness("srf-b", &sha),
+            "LifecycleUpdate::Destroyed must evict the surface witness entry"
+        );
+        let v_after_destroy = VerifiedPixels::read_verified_for_surface(
+            &session_a,
+            "srf-b",
+            state_a.epoch,
+            2,
+            256,
+            128,
+            &payload[..],
+            payload.len(),
+            &sha,
+        )
+        .unwrap();
+        assert!(!v_after_destroy.hash_skipped());
+
+        // Re-create `srf-c`, prime it, then verify `Input::Connect` (epoch change) evicts all entries.
+        let sc_in = make_surface_input("srf-c");
+        let swc = j_a.retain_witness(b"srf-c").unwrap();
+        let out_sc = state_a.apply(&sc_in).unwrap();
+        j_a.append(&sc_in, &out_sc, &state_a, vec![swc]).unwrap();
+        let fwc1 = j_a.retain_frame_witness(&sha, &payload).unwrap();
+        let fc1_in = Input::Frame {
+            surface_id: "srf-c".into(),
+            frame: Frame {
+                sha256: sha.clone(),
+                generation: 1,
+                width: 256,
+                height: 128,
+            },
+        };
+        let out_fc1 = state_a.apply(&fc1_in).unwrap();
+        j_a.append(&fc1_in, &out_fc1, &state_a, vec![fwc1]).unwrap();
+        assert!(j_a.has_committed_surface_witness("srf-c", &sha));
+
+        let out_c2 = state_a.apply(&Input::Connect).unwrap();
+        j_a.append(&Input::Connect, &out_c2, &state_a, vec![])
+            .unwrap();
+        assert!(
+            !j_a.has_committed_surface_witness("srf-c", &sha),
+            "Input::Connect (epoch change) must evict all surface witness entries"
+        );
+        assert_eq!(j_a.committed_surface_witness_bytes(), 0);
+
+        // Disk artifact tamper check: if `artifacts/<sha>` is corrupted on disk before recover,
+        // `Journal::recover` refuses with `JournalError::Witness` during `scan` and never blesses
+        // unhashed disk bytes.
+        j_a.close().unwrap();
+        drop(j_a);
+        let artifact_path = session_a.join("artifacts").join(&sha);
+        let mut tampered_disk = payload.clone();
+        tampered_disk[0] ^= 0xff;
+        fs::write(&artifact_path, &tampered_disk).unwrap();
+        assert_eq!(
+            Journal::recover(&session_a.join("journal.jsonl"), &session_a)
+                .err()
+                .unwrap(),
+            JournalError::Witness
+        );
+
+        fs::remove_dir_all(root_a).unwrap();
+        fs::remove_dir_all(root_b).unwrap();
+    }
+
+    #[test]
+    fn per_surface_witness_cache_is_bounded_by_64_mib_and_evicts_oldest() {
+        use crate::admission::Frame;
+        let root = std::env::temp_dir().join(format!("mv-journal-membound-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+
+        let mut state = CoreState::session("session-membound").unwrap();
+        let mut j = Journal::create(&root, &state).unwrap();
+        let out_c = state.apply(&Input::Connect).unwrap();
+        j.append(&Input::Connect, &out_c, &state, vec![]).unwrap();
+
+        // 16 surfaces at 1280x900 RGB24 = 16 * 3,456,000 B = 55,296,000 B (52.734375 MiB),
+        // which fits within MAX_SURFACE_WITNESS_BYTES (64 MiB = 67,108,864 B).
+        // Attempting to populate 22 surfaces of 3,456,000 B each (76,032,000 B > 64 MiB)
+        // must evict the oldest surfaces so total cached bytes never exceed 64 MiB (max 19 surfaces = 65,664,000 B).
+        let frame_len = 1280 * 900 * 3;
+        assert_eq!(frame_len, 3_456_000);
+        assert_eq!(16 * frame_len, 55_296_000);
+        assert!(16 * frame_len <= MAX_SURFACE_WITNESS_BYTES);
+
+        for idx in 0..22_u8 {
+            let sid = format!("srf-mem-{idx:02}");
+            let s_in = make_surface_input(&sid);
+            let sw = j.retain_witness(sid.as_bytes()).unwrap();
+            let out_s = state.apply(&s_in).unwrap();
+            j.append(&s_in, &out_s, &state, vec![sw]).unwrap();
+
+            let mut bytes = vec![0u8; frame_len];
+            bytes[0] = idx;
+            bytes[frame_len - 1] = idx ^ 0xa5;
+            let sha = sha256_hex(&bytes);
+            let fw = j.retain_frame_witness(&sha, &bytes).unwrap();
+            let f_in = Input::Frame {
+                surface_id: sid.clone(),
+                frame: Frame {
+                    sha256: sha.clone(),
+                    generation: 1,
+                    width: 1280,
+                    height: 900,
+                },
+            };
+            let out_f = state.apply(&f_in).unwrap();
+            j.append(&f_in, &out_f, &state, vec![fw]).unwrap();
+
+            if idx == 15 {
+                // At 16 surfaces (1280x900 RGB24), worst-case footprint is exactly 55,296,000 B.
+                assert_eq!(j.committed_surface_witness_count(), 16);
+                assert_eq!(j.committed_surface_witness_bytes(), 55_296_000);
+            }
+            assert!(
+                j.committed_surface_witness_bytes() <= MAX_SURFACE_WITNESS_BYTES,
+                "per-surface witness cache ({}) must never exceed MAX_SURFACE_WITNESS_BYTES ({})",
+                j.committed_surface_witness_bytes(),
+                MAX_SURFACE_WITNESS_BYTES
+            );
+        }
+
+        // 67,108,864 / 3,456,000 = 19 surfaces (65,664,000 B); oldest 3 surfaces (00..=02) evicted.
+        assert_eq!(j.committed_surface_witness_count(), 19);
+        assert_eq!(j.committed_surface_witness_bytes(), 19 * frame_len);
+        for evicted_idx in 0..3_u8 {
+            let sid = format!("srf-mem-{evicted_idx:02}");
+            let sha = state.surfaces[&sid].frame.as_ref().unwrap().sha256.clone();
+            assert!(
+                !j.has_committed_surface_witness(&sid, &sha),
+                "oldest surface {sid} must be evicted when 64 MiB byte cap is reached"
+            );
+        }
+        for retained_idx in 3..22_u8 {
+            let sid = format!("srf-mem-{retained_idx:02}");
+            let sha = state.surfaces[&sid].frame.as_ref().unwrap().sha256.clone();
+            assert!(
+                j.has_committed_surface_witness(&sid, &sha),
+                "recent surface {sid} must remain cached within the 64 MiB byte cap"
+            );
+        }
+
+        j.close().unwrap();
+        drop(j);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unchanged_frame_replay_produces_identical_records_and_state() {
+        use crate::admission::Frame;
+        let root_fast =
+            std::env::temp_dir().join(format!("mv-journal-replay-fast-{}", std::process::id()));
+        let root_ref =
+            std::env::temp_dir().join(format!("mv-journal-replay-ref-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root_fast);
+        let _ = fs::remove_dir_all(&root_ref);
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&root_fast)
+            .unwrap();
+        fs::DirBuilder::new().mode(0o700).create(&root_ref).unwrap();
+
+        let run_session = |root: &Path, allow_fast_path: bool| {
+            let mut state = CoreState::session("session-replay").unwrap();
+            let mut j = Journal::create(root, &state).unwrap();
+            let out_c = state.apply(&Input::Connect).unwrap();
+            j.append(&Input::Connect, &out_c, &state, vec![]).unwrap();
+
+            let capsules = ["srf-cap-1", "srf-cap-2", "srf-cap-3", "srf-cap-4"];
+            for cap in capsules {
+                let s_in = make_surface_input(cap);
+                let sw = j.retain_witness(cap.as_bytes()).unwrap();
+                let out_s = state.apply(&s_in).unwrap();
+                j.append(&s_in, &out_s, &state, vec![sw]).unwrap();
+            }
+
+            for gen in 1..=6_u64 {
+                for (idx, cap) in capsules.iter().enumerate() {
+                    // Generations 1..=3 use static bytes per capsule; generation 4 changes; 5..=6 static again.
+                    let payload_tag = if gen <= 3 { 1_u8 } else { 2_u8 };
+                    let bytes = vec![((idx as u8) << 4) | payload_tag; 32_768];
+                    let sha = sha256_hex(&bytes);
+                    if !allow_fast_path {
+                        j.clear_surface_witness_cache();
+                    }
+                    let verified = VerifiedPixels::read_verified_for_surface(
+                        &j.root,
+                        cap,
+                        state.epoch,
+                        gen,
+                        128,
+                        64,
+                        &bytes[..],
+                        bytes.len(),
+                        &sha,
+                    )
+                    .unwrap();
+                    if allow_fast_path && (gen == 2 || gen == 3 || gen == 5 || gen == 6) {
+                        assert!(
+                            verified.hash_skipped(),
+                            "expected fast path on static frame gen={gen} cap={cap}"
+                        );
+                    } else {
+                        assert!(
+                            !verified.hash_skipped(),
+                            "expected full hash on changed/initial frame gen={gen} cap={cap}"
+                        );
+                    }
+                    let fw = j.retain_verified_pixels(&verified).unwrap();
+                    let f_in = Input::Frame {
+                        surface_id: (*cap).into(),
+                        frame: Frame {
+                            sha256: sha,
+                            generation: gen,
+                            width: 128,
+                            height: 64,
+                        },
+                    };
+                    let out_f = state.apply(&f_in).unwrap();
+                    j.append(&f_in, &out_f, &state, vec![fw]).unwrap();
+                }
+            }
+            j.close().unwrap();
+        };
+
+        run_session(&root_fast, true);
+        run_session(&root_ref, false);
+
+        let session_fast = root_fast.join("sessions/session-replay");
+        let session_ref = root_ref.join("sessions/session-replay");
+        assert_eq!(
+            fs::read(session_fast.join("journal.jsonl")).unwrap(),
+            fs::read(session_ref.join("journal.jsonl")).unwrap(),
+            "journal.jsonl record sequence and parent linkage must be bit-identical"
+        );
+        assert_eq!(
+            fs::read(session_fast.join("checkpoint.json")).unwrap(),
+            fs::read(session_ref.join("checkpoint.json")).unwrap(),
+            "checkpoint.json must be bit-identical"
+        );
+        let replay_fast = scan(&session_fast.join("journal.jsonl"), &session_fast).unwrap();
+        let replay_ref = scan(&session_ref.join("journal.jsonl"), &session_ref).unwrap();
+        assert_eq!(replay_fast.state, replay_ref.state);
+        assert_eq!(replay_fast.boundaries, replay_ref.boundaries);
+        assert_eq!(replay_fast.checkpoint.count, replay_ref.checkpoint.count);
+        assert_eq!(replay_fast.checkpoint.tail, replay_ref.checkpoint.tail);
+        assert_eq!(
+            replay_fast.checkpoint.archive,
+            replay_ref.checkpoint.archive
+        );
+        assert_eq!(
+            replay_fast.checkpoint.genesis,
+            replay_ref.checkpoint.genesis
+        );
+
+        fs::remove_dir_all(root_fast).unwrap();
+        fs::remove_dir_all(root_ref).unwrap();
+    }
+
+    #[test]
+    fn bench_1280x900_frame_verify_changed_vs_unchanged() {
+        use crate::admission::Frame;
+        // Opt-in benchmark: prints numbers without timing assertions inside unit tests.
+        let run_bench = std::env::var_os("MV_RUN_HASH_BENCH").is_some()
+            || std::env::args().any(|a| a.contains("bench_1280x900_frame_verify"));
+        if !run_bench {
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("mv-journal-bench-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+
+        let mut state = CoreState::session("session-bench").unwrap();
+        let mut j = Journal::create(&root, &state).unwrap();
+        let session_dir = root.join("sessions/session-bench");
+        let out_c = state.apply(&Input::Connect).unwrap();
+        j.append(&Input::Connect, &out_c, &state, vec![]).unwrap();
+
+        for sid in ["srf-bench-changed", "srf-bench-unchanged"] {
+            let s_in = make_surface_input(sid);
+            let sw = j.retain_witness(sid.as_bytes()).unwrap();
+            let out_s = state.apply(&s_in).unwrap();
+            j.append(&s_in, &out_s, &state, vec![sw]).unwrap();
+        }
+
+        let frame_len = 1280 * 900 * 3;
+        // Non-uniform synthetic RGB24 payload (position-dependent gradient + channel mix).
+        let mut base_bytes = vec![0u8; frame_len];
+        for (i, b) in base_bytes.iter_mut().enumerate() {
+            *b = ((i.wrapping_mul(131) ^ (i >> 7).wrapping_mul(17)) & 0xff) as u8;
+        }
+        let base_sha = sha256_hex(&base_bytes);
+        let shm_path = root.join("bench-1280x900.shm");
+        {
+            let mut f = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&shm_path)
+                .unwrap();
+            f.write_all(&base_bytes).unwrap();
+            f.sync_all().unwrap();
+        }
+
+        // Commit generation 1 on `srf-bench-unchanged` (`srf-bench-changed` stays uncached).
+        let fw1 = j.retain_frame_witness(&base_sha, &base_bytes).unwrap();
+        let f1_in = Input::Frame {
+            surface_id: "srf-bench-unchanged".into(),
+            frame: Frame {
+                sha256: base_sha.clone(),
+                generation: 1,
+                width: 1280,
+                height: 900,
+            },
+        };
+        let out_f1 = state.apply(&f1_in).unwrap();
+        j.append(&f1_in, &out_f1, &state, vec![fw1]).unwrap();
+
+        // Warmup both paths so file cache and instruction paths are warm before sampling.
+        for _ in 0..3 {
+            let mut f_c = File::open(&shm_path).unwrap();
+            let vc = VerifiedPixels::read_verified_for_surface(
+                &session_dir,
+                "srf-bench-changed",
+                state.epoch,
+                1,
+                1280,
+                900,
+                &mut f_c,
+                frame_len,
+                &base_sha,
+            )
+            .unwrap();
+            assert!(!vc.hash_skipped());
+            let mut f_u = File::open(&shm_path).unwrap();
+            let vu = VerifiedPixels::read_verified_for_surface(
+                &session_dir,
+                "srf-bench-unchanged",
+                state.epoch,
+                2,
+                1280,
+                900,
+                &mut f_u,
+                frame_len,
+                &base_sha,
+            )
+            .unwrap();
+            assert!(vu.hash_skipped());
+        }
+
+        let samples = 21usize;
+        let mut changed_total_ns = Vec::with_capacity(samples);
+        let mut changed_hash_ns = Vec::with_capacity(samples);
+        let mut unchanged_total_ns = Vec::with_capacity(samples);
+        let mut unchanged_memcmp_ns = Vec::with_capacity(samples);
+        for i in 0..samples {
+            if i % 2 == 0 {
+                let mut f_c = File::open(&shm_path).unwrap();
+                let t0 = std::time::Instant::now();
+                let vc = VerifiedPixels::read_verified_for_surface(
+                    &session_dir,
+                    "srf-bench-changed",
+                    state.epoch,
+                    1,
+                    1280,
+                    900,
+                    &mut f_c,
+                    frame_len,
+                    &base_sha,
+                )
+                .unwrap();
+                changed_total_ns.push(t0.elapsed().as_nanos());
+                changed_hash_ns.push(vc.hash_ns());
+                assert!(!vc.hash_skipped());
+
+                let mut f_u = File::open(&shm_path).unwrap();
+                let t1 = std::time::Instant::now();
+                let vu = VerifiedPixels::read_verified_for_surface(
+                    &session_dir,
+                    "srf-bench-unchanged",
+                    state.epoch,
+                    2,
+                    1280,
+                    900,
+                    &mut f_u,
+                    frame_len,
+                    &base_sha,
+                )
+                .unwrap();
+                unchanged_total_ns.push(t1.elapsed().as_nanos());
+                unchanged_memcmp_ns.push(vu.skipped_hash_ns());
+                assert!(vu.hash_skipped());
+            } else {
+                let mut f_u = File::open(&shm_path).unwrap();
+                let t1 = std::time::Instant::now();
+                let vu = VerifiedPixels::read_verified_for_surface(
+                    &session_dir,
+                    "srf-bench-unchanged",
+                    state.epoch,
+                    2,
+                    1280,
+                    900,
+                    &mut f_u,
+                    frame_len,
+                    &base_sha,
+                )
+                .unwrap();
+                unchanged_total_ns.push(t1.elapsed().as_nanos());
+                unchanged_memcmp_ns.push(vu.skipped_hash_ns());
+                assert!(vu.hash_skipped());
+
+                let mut f_c = File::open(&shm_path).unwrap();
+                let t0 = std::time::Instant::now();
+                let vc = VerifiedPixels::read_verified_for_surface(
+                    &session_dir,
+                    "srf-bench-changed",
+                    state.epoch,
+                    1,
+                    1280,
+                    900,
+                    &mut f_c,
+                    frame_len,
+                    &base_sha,
+                )
+                .unwrap();
+                changed_total_ns.push(t0.elapsed().as_nanos());
+                changed_hash_ns.push(vc.hash_ns());
+                assert!(!vc.hash_skipped());
+            }
+        }
+
+        changed_total_ns.sort_unstable();
+        changed_hash_ns.sort_unstable();
+        unchanged_total_ns.sort_unstable();
+        unchanged_memcmp_ns.sort_unstable();
+        let p50 = samples / 2;
+        let p95 = (samples * 95) / 100;
+        eprintln!(
+            "BENCH_1280x900_VERIFY samples={samples} changed_total_p50_ms={:.3} changed_total_p95_ms={:.3} changed_hash_p50_ms={:.3} unchanged_total_p50_ms={:.3} unchanged_total_p95_ms={:.3} unchanged_memcmp_p50_ms={:.3}",
+            (changed_total_ns[p50] as f64) / 1_000_000.0,
+            (changed_total_ns[p95] as f64) / 1_000_000.0,
+            (changed_hash_ns[p50] as f64) / 1_000_000.0,
+            (unchanged_total_ns[p50] as f64) / 1_000_000.0,
+            (unchanged_total_ns[p95] as f64) / 1_000_000.0,
+            (unchanged_memcmp_ns[p50] as f64) / 1_000_000.0,
+        );
+
+        j.close().unwrap();
+        drop(j);
+        fs::remove_dir_all(root).unwrap();
     }
 }

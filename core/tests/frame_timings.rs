@@ -163,6 +163,8 @@ fn accepted_full_size_frames_have_disjoint_stages_and_refusals_have_no_row() {
                 "byte_len",
                 "shm_read_ns",
                 "hash_ns",
+                "skipped_hash_ns",
+                "hash_skipped",
                 "witness_journal_ns",
                 "capture_ns",
                 "fanout_ns",
@@ -183,9 +185,19 @@ fn accepted_full_size_frames_have_disjoint_stages_and_refusals_have_no_row() {
                 assert_eq!(row["width"], 1280);
                 assert_eq!(row["height"], 900);
                 assert_eq!(row["byte_len"], bytes.len() as u64);
+                if index == 0 {
+                    assert_eq!(row["hash_skipped"], false, "{row}");
+                    assert_eq!(row["skipped_hash_ns"].as_u64().unwrap(), 0, "{row}");
+                    assert!(row["hash_ns"].as_u64().unwrap() > 0, "{row}");
+                } else {
+                    assert_eq!(row["hash_skipped"], true, "{row}");
+                    assert!(row["skipped_hash_ns"].as_u64().unwrap() > 0, "{row}");
+                    assert_eq!(row["hash_ns"].as_u64().unwrap(), 0, "{row}");
+                }
                 let sum: u64 = [
                     "shm_read_ns",
                     "hash_ns",
+                    "skipped_hash_ns",
                     "witness_journal_ns",
                     "capture_ns",
                     "fanout_ns",

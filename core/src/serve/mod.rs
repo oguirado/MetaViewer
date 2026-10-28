@@ -682,18 +682,41 @@ impl Server {
         let anchored = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd())).join(name);
         Ok((directory, anchored))
     }
+    #[allow(dead_code)]
     fn read_shm_pixels(frame: &FrameRef) -> Result<VerifiedPixels> {
-        Self::read_shm_pixels_under(Path::new("/dev/shm"), frame)
+        Self::read_shm_pixels_under_session(Path::new("/dev/shm"), None, frame)
     }
+    fn read_shm_pixels_in_session(
+        session_root: &Path,
+        epoch: u64,
+        frame: &FrameRef,
+    ) -> Result<VerifiedPixels> {
+        Self::read_shm_pixels_under_session(
+            Path::new("/dev/shm"),
+            Some((session_root, epoch)),
+            frame,
+        )
+    }
+    #[allow(dead_code)]
     pub(crate) fn read_shm_pixels_under(
         shm_root: &Path,
+        frame: &FrameRef,
+    ) -> Result<VerifiedPixels> {
+        Self::read_shm_pixels_under_session(shm_root, None, frame)
+    }
+    pub(crate) fn read_shm_pixels_under_session(
+        shm_root: &Path,
+        session: Option<(&Path, u64)>,
         frame: &FrameRef,
     ) -> Result<VerifiedPixels> {
         let started = Instant::now();
         #[cfg(test)]
         let t_read = Instant::now();
         #[cfg(test)]
-        let h_before = crate::journal::STAGE_TIMINGS.with(|c| c.get().hash_ns);
+        let (h_before, sh_before) = crate::journal::STAGE_TIMINGS.with(|c| {
+            let st = c.get();
+            (st.hash_ns, st.skipped_hash_ns)
+        });
         let uid = effective_uid()?;
         let expected_bytes = crate::verify::byte_len(frame)
             .filter(|&len| len > 0 && len <= 64 * 1024 * 1024)
@@ -724,12 +747,30 @@ impl Server {
             return Err(invalid("invalid frame witness"));
         }
         let expected_len = expected_bytes as usize;
-        let res = VerifiedPixels::read_verified(&file, expected_len, &frame.sha256);
+        let res = match session {
+            Some((session_root, epoch)) => VerifiedPixels::read_verified_for_surface(
+                session_root,
+                &frame.surface_id,
+                epoch,
+                frame.generation,
+                frame.width,
+                frame.height,
+                &file,
+                expected_len,
+                &frame.sha256,
+            ),
+            None => VerifiedPixels::read_verified(&file, expected_len, &frame.sha256),
+        };
         #[cfg(test)]
         crate::journal::STAGE_TIMINGS.with(|cell| {
             let mut s = cell.get();
             let h_delta = s.hash_ns.saturating_sub(h_before);
-            s.shm_read_ns += t_read.elapsed().as_nanos().saturating_sub(h_delta);
+            let sh_delta = s.skipped_hash_ns.saturating_sub(sh_before);
+            s.shm_read_ns += t_read
+                .elapsed()
+                .as_nanos()
+                .saturating_sub(h_delta)
+                .saturating_sub(sh_delta);
             cell.set(s);
         });
         let mut verified = res?;
@@ -747,12 +788,14 @@ impl Server {
         verified.shm_read_ns = started
             .elapsed()
             .as_nanos()
-            .saturating_sub(verified.hash_ns);
+            .saturating_sub(verified.hash_ns)
+            .saturating_sub(verified.skipped_hash_ns);
         Ok(verified)
     }
     #[cfg(test)]
     fn witness_pixels(&mut self, frame: &FrameRef) -> Result<(Witness, Vec<u8>)> {
-        let verified = Self::read_shm_pixels(frame)?;
+        let verified =
+            Self::read_shm_pixels_in_session(&self.root, self.authority.state().epoch, frame)?;
         let witness = verified.retain_in_authority(&mut self.authority)?;
         Ok((witness, verified.into_bytes()))
     }
@@ -798,7 +841,11 @@ impl Server {
         boundary: Witness,
         pre_pixels: Option<Result<VerifiedPixels>>,
     ) -> Result<Option<crate::admission::Outcome>> {
-        let pixels_result = pre_pixels.unwrap_or_else(|| Self::read_shm_pixels(frame));
+        let session_root = self.root.clone();
+        let session_epoch = self.authority.state().epoch;
+        let pixels_result = pre_pixels.unwrap_or_else(|| {
+            Self::read_shm_pixels_in_session(&session_root, session_epoch, frame)
+        });
         let witness_started = Instant::now();
         let verified = match pixels_result {
             Ok(verified) => verified,
@@ -1018,16 +1065,25 @@ impl Server {
                 }
                 if let Some((j, frame_j)) = superseding {
                     if pre_verified[j].is_none() {
+                        let session_root = server
+                            .lock()
+                            .map_err(|_| invalid("poisoned authority"))?
+                            .root
+                            .clone();
                         let cand_clone = frame_j.clone();
                         let res = if cand_clone.width.saturating_mul(cand_clone.height) >= 512 * 512
                         {
                             tokio::task::spawn_blocking(move || {
-                                Server::read_shm_pixels(&cand_clone)
+                                Server::read_shm_pixels_in_session(
+                                    &session_root,
+                                    epoch,
+                                    &cand_clone,
+                                )
                             })
                             .await
                             .map_err(|_| invalid("frame witness worker panicked"))?
                         } else {
-                            Server::read_shm_pixels(&cand_clone)
+                            Server::read_shm_pixels_in_session(&session_root, epoch, &cand_clone)
                         };
                         pre_verified[j] = Some(res);
                     }
@@ -1051,15 +1107,24 @@ impl Server {
                 let pre_pixels = match pre_verified[i].take() {
                     Some(res) => res,
                     None => {
+                        let session_root = server
+                            .lock()
+                            .map_err(|_| invalid("poisoned authority"))?
+                            .root
+                            .clone();
                         let frame_clone = frame_i.clone();
                         if frame_clone.width.saturating_mul(frame_clone.height) >= 512 * 512 {
                             tokio::task::spawn_blocking(move || {
-                                Server::read_shm_pixels(&frame_clone)
+                                Server::read_shm_pixels_in_session(
+                                    &session_root,
+                                    epoch,
+                                    &frame_clone,
+                                )
                             })
                             .await
                             .map_err(|_| invalid("frame witness worker panicked"))?
                         } else {
-                            Server::read_shm_pixels(&frame_clone)
+                            Server::read_shm_pixels_in_session(&session_root, epoch, &frame_clone)
                         }
                     }
                 };
