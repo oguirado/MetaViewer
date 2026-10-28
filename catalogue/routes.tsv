@@ -1397,6 +1397,8 @@ mvui30l-6a1adc9c9513	ui/test/mvui30-lost-panel.test.js
 mvui31c-ed383bf27d1e	ui/test/mvui31-convert-reuse.test.js
 mvui31m-de6c1f5eacb3	ui/test/mvui31-marker-skip.test.js
 mvui32a-f66ab8279aac	ui/test/mvui32-a-layout-echo.test.js
+mvui32i-c0796b1dcbc7	ui/test/mvui32-i-canvas.test.js
+mvui32-i-port.test.js	ui/test/mvui32-i-port.test.js
 mvui4wa-768ad3f201a7	ui/test/mvui4-wall-states.test.js
 mvui5ac-09d04069a3a2	ui/test/mvui5-activity-app.test.js
 mvui5ac-97fc5e0a129e	ui/test/mvui5-activity-model.test.js
