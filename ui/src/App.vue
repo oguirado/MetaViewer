@@ -176,6 +176,28 @@ function dispatch(intent) {
 /** Committed placement echoes, keyed by surface; transport acceptance is never optimistic. */
 const placements = ref(/** @type {Record<string, {hidden:boolean, floating:boolean, groupId?:string, index?:number, x?:number, y?:number, width?:number, height?:number, lastDockGroupId?:string, lastDockIndex?:number}>} */ ({}));
 const placementPending = ref(/** @type {Record<string, boolean>} */ ({}));
+/** MVUI32 lane A (R3-APP-1): per-surface lifetime epochs for the post-await
+ * layout-echo fence. Bumped whenever an admitted row id departs (destroy or
+ * replace), so an echo tells a same-lifetime frame advance (epoch unchanged)
+ * from a destroyed or replaced lifetime (epoch changed or row absent). Plain
+ * non-reactive Map with a fixed cap; eviction only ever fails a fence
+ * closed, so a commit is retained and never misapplied. Surface ids are
+ * never revived (scheduler tombstones), so an epoch only ever ends once. */
+/** @type {Map<string, number>} */
+const surfaceLifetimeEpochs = new Map();
+const SURFACE_LIFETIME_EPOCH_LIMIT = 64;
+/** @param {string} capsuleId @returns {number} */
+function surfaceLifetimeEpochOf(capsuleId) {
+  return surfaceLifetimeEpochs.get(capsuleId) ?? 0;
+}
+/** @param {string} capsuleId */
+function bumpSurfaceLifetimeEpoch(capsuleId) {
+  if (surfaceLifetimeEpochs.size >= SURFACE_LIFETIME_EPOCH_LIMIT && !surfaceLifetimeEpochs.has(capsuleId)) {
+    const oldest = surfaceLifetimeEpochs.keys().next().value;
+    if (oldest !== undefined) surfaceLifetimeEpochs.delete(oldest);
+  }
+  surfaceLifetimeEpochs.set(capsuleId, surfaceLifetimeEpochOf(capsuleId) + 1);
+}
 /** Failed layout echoes awaiting wall readiness (MVUI16 lane P, ARG-pmui-4):
  * one entry per capsule, retried once on wall @ready, then dropped. Plain
  * non-reactive Map with a fixed cap so pre-ready commits cannot grow it. */
@@ -244,6 +266,10 @@ async function dispatchMultislot(intent, capsuleId) {
       hostOutcome.value = { code:'HOST_REQUEST_REFUSED', message:'', tone:'refusal' }; recordActivity({ code: 'HOST_REQUEST_REFUSED' }); return;
     }
     placementPending.value = { ...placementPending.value, [capsuleId]:true };
+    // MVUI32 lane A (R3-APP-1): capture the surface lifetime epoch before the
+    // authority await. Content frames may advance (g10 -> g11) on the same
+    // lifetime while awaiting; only a destroyed or replaced surface ends it.
+    const lifetimeEpoch = surfaceLifetimeEpochOf(capsuleId);
     try {
       const result = await submitHost(async () => {
         const reply = /** @type {unknown} */ (await submitIntent(intent));
@@ -251,8 +277,11 @@ async function dispatchMultislot(intent, capsuleId) {
         throw new Error('Host acknowledgement unavailable');
       });
       // This port resolves true only after the core echoes the journaled intent.
-      // Refusals, missing acknowledgments and unmounted hosts retain the layout.
-      if (result !== true || !hostActive || !rows.value.some(row => row.id === capsuleId && row.generation === surface.generation)) return;
+      // Refusals, missing acknowledgments, unmounted hosts, and echoes for a
+      // destroyed or replaced surface lifetime retain the layout. Same-lifetime
+      // frame advances no longer drop the commit (R3-APP-1).
+      if (result !== true || !hostActive || surfaceLifetimeEpochOf(capsuleId) !== lifetimeEpoch
+        || !rows.value.some(row => row.id === capsuleId)) return;
       const p = body.params;
       const next = { ...previous };
       if (body.op === 'hide' || body.op === 'show') next.hidden = body.op === 'hide';
@@ -626,6 +655,17 @@ watch(() => rows.value.map(row => /** @type {[string, string]} */ ([row.id, row.
     prior.get(id) === visibility && Object.hasOwn(foldOverrides.value, id)
       ? [[id, foldOverrides.value[id]]] : []));
 });
+// MVUI32 lane A (R3-APP-1): every departed admitted id ends its surface
+// lifetime epoch, including a destroy-then-recreate under the same id (which
+// id presence alone cannot see). Frame advances keep the id set, so the
+// epoch — and only the epoch — distinguishes the two cases for the fence.
+watch(() => rows.value.map(row => row.id),
+  (next, previous = /** @type {string[]} */ ([])) => {
+    const alive = new Set(next);
+    for (const id of previous) {
+      if (!alive.has(id)) bumpSurfaceLifetimeEpoch(id);
+    }
+  });
 // MVUI26B lane M: the shared input mode is only meaningful while the
 // selected surface is human-controlled. When an authoritative feed update
 // arrives with control anywhere but human (or the selected surface gone),
