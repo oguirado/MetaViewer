@@ -1339,6 +1339,68 @@ class CiCountsAndRedBlocksMainTests(unittest.TestCase):
         self.assertEqual(doc["jobs"]["a"]["steps"][1]["run"], "echo two\n")
         self.assertEqual(doc["jobs"]["c"]["needs"], ["a", "b"])
 
+    def test_t7r3_010_and_015_perf_wall_nan_and_tile_distinctness_rejected(self) -> None:
+        """T7R3-010 / T7R3-015: e2e and ci-required PERF_WALL validators reject NaN/Inf/bool FPS, duplicate tile IDs, and null pixels."""
+        e2e_steps = [s for s in self.ci_doc["jobs"]["e2e"]["steps"] if s.get("name") == "Run E2E gate under xvfb"]
+        self.assertEqual(len(e2e_steps), 1)
+        run_text = e2e_steps[0]["run"]
+        py_block = re.search(
+            r"BUDGET_LOG=\"\$LOG\" MEASURED_OUT=[^\n]+\npython3 - <<'PYEOF'[^\n]*\n(.*?)\nPYEOF",
+            run_text,
+            re.S,
+        )
+        self.assertIsNotNone(py_block)
+        script = py_block.group(1)
+
+        with tempfile.TemporaryDirectory(prefix="mv-perf-wall-nan-") as tmp:
+            td = Path(tmp)
+            log_file = td / "budget.log"
+            measured_out = td / "measured.json"
+            budgets_obj = json.loads((ROOT / "tests" / "perf" / "budgets.json").read_text(encoding="utf-8"))
+            rss_payload = {row["id"]: 1000000 for row in budgets_obj["budgets"] if row["gating"]}
+            rss_line = "RSS_CAPS [MEASURED]: " + json.dumps(rss_payload)
+
+            def run_budget_py(perf_line: str) -> tuple[int, dict]:
+                log_file.write_text(f"{rss_line}\n{perf_line}\n", encoding="utf-8")
+                env = dict(os.environ, BUDGET_LOG=str(log_file), MEASURED_OUT=str(measured_out))
+                proc = subprocess.run(
+                    ["python3", "-c", script],
+                    cwd=str(ROOT),
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+                return proc.returncode, json.loads(measured_out.read_text(encoding="utf-8"))
+
+            # Positive control: 4 distinct tiles with finite FPS >= 10.0 pass.
+            ok_rc, ok_meas = run_budget_py(
+                'PERF_WALL [MEASURED]: [{"id":"t1","fps":12.0},{"id":"t2","fps":12.5},{"id":"t3","fps":11.0},{"id":"t4","fps":14.0}]'
+            )
+            self.assertEqual(ok_rc, 0)
+            self.assertEqual(ok_meas["failures"], [])
+
+            # Negative 1: NaN FPS rejected.
+            nan_rc, nan_meas = run_budget_py(
+                'PERF_WALL [MEASURED]: [{"id":"t1","fps":NaN},{"id":"t2","fps":12.5},{"id":"t3","fps":11.0},{"id":"t4","fps":14.0}]'
+            )
+            self.assertNotEqual(nan_rc, 0)
+            self.assertIn("perf_wall_fps:t1", nan_meas["failures"])
+
+            # Negative 2: duplicate tile IDs rejected.
+            dup_rc, dup_meas = run_budget_py(
+                'PERF_WALL [MEASURED]: [{"id":"t1","fps":12.0},{"id":"t1","fps":12.5},{"id":"t3","fps":11.0},{"id":"t4","fps":14.0}]'
+            )
+            self.assertNotEqual(dup_rc, 0)
+            self.assertIn("perf_wall_tile_distinctness", dup_meas["failures"])
+
+            # Negative 3: null pixel == expectedPixel rejected.
+            pix_rc, pix_meas = run_budget_py(
+                'PERF_WALL [MEASURED]: [{"id":"t1","fps":12.0,"pixel":null,"expectedPixel":null},{"id":"t2","fps":12.5},{"id":"t3","fps":11.0},{"id":"t4","fps":14.0}]'
+            )
+            self.assertNotEqual(pix_rc, 0)
+            self.assertIn("perf_wall_pixel:t1", pix_meas["failures"])
+
 
 if __name__ == "__main__":
     unittest.main()

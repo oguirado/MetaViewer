@@ -155,7 +155,12 @@ class TestT7R2CReceiptIdentity(unittest.TestCase):
             receipts_dir = pathlib.Path(tmp) / "receipts"
             receipts_dir.mkdir()
             good = valid_receipt()
-            good_pkg = dict(good, gate_id="package", leg="package")
+            good_pkg = dict(
+                good,
+                gate_id="package",
+                leg="package",
+                scope=dict(good["scope"], feature="package", artifact="package.receipt.json"),
+            )
             (receipts_dir / "unit.receipt.json").write_text(json.dumps(good), encoding="utf-8")
 
             # Negative control: valid PASS receipts in PACKAGE_RECEIPT and MV_REQUIRED_RECEIPTS_DIR pass.
@@ -185,8 +190,32 @@ class TestT7R2CReceiptIdentity(unittest.TestCase):
             tampered_schema = valid_receipt()
             tampered_schema["rc"] = 1  # outcome == PASS with rc == 1
 
+            tampered_bool_rc = valid_receipt()
+            tampered_bool_rc["rc"] = False  # R1-092: False == 0 in Python unless type(rc) is int
+
             tampered_zero_passed = valid_receipt()
             tampered_zero_passed["counts"]["passed"] = 0
+
+            tampered_all_skipped = valid_receipt()
+            tampered_all_skipped["counts"] = {"passed": 0, "failed": 0, "skipped": 1, "source": "parsed:unittest"}
+
+            tampered_failed_nonzero = valid_receipt()
+            tampered_failed_nonzero["counts"] = {"passed": 5, "failed": 1, "skipped": 0, "source": "parsed:unittest"}
+
+            tampered_missing_assert_fields = valid_receipt()
+            tampered_missing_assert_fields["assertions"] = [{"accepted": True}]
+
+            tampered_empty_assert_id = valid_receipt()
+            tampered_empty_assert_id["assertions"] = [{"id": "  ", "expected": "rc 0", "observed": "rc 0", "accepted": True}]
+
+            tampered_cfg_sha = valid_receipt()
+            tampered_cfg_sha["identities"]["configuration_sha256"] = "f" * 64  # R1-098
+
+            tampered_rev = valid_receipt()
+            tampered_rev["identities"]["gate_revision"] = "b" * 40  # R1-098 cross-receipt revision mismatch
+
+            tampered_platform = valid_receipt()
+            tampered_platform["scope"]["platform"] = "arm64"  # R1-098 platform mismatch against x64
 
             tampered_blocked = valid_receipt()
             tampered_blocked["outcome"] = "BLOCKED"
@@ -200,7 +229,20 @@ class TestT7R2CReceiptIdentity(unittest.TestCase):
             }
 
             for idx, bad_receipt in enumerate(
-                (tampered_outcome, tampered_schema, tampered_zero_passed, tampered_blocked)
+                (
+                    tampered_outcome,
+                    tampered_schema,
+                    tampered_bool_rc,
+                    tampered_zero_passed,
+                    tampered_all_skipped,
+                    tampered_failed_nonzero,
+                    tampered_missing_assert_fields,
+                    tampered_empty_assert_id,
+                    tampered_cfg_sha,
+                    tampered_rev,
+                    tampered_platform,
+                    tampered_blocked,
+                )
             ):
                 with self.subTest(case=idx):
                     summary.write_text("", encoding="utf-8")
@@ -357,6 +399,26 @@ class TestT7R2CReceiptIdentity(unittest.TestCase):
         self.assertEqual(extracted, "echo ok\n")
         self.assertNotIn("FOO", extracted)
         self.assertNotIn("unnamed", extracted)
+
+    def test_r1_093_and_r1_099_workflow_wiring_and_yaml_parser_provenance(self):
+        """R1-093 / R1-099: ci-required requires budgets,package and setup-python precedes Resolve runner YAML parser."""
+        ci_text = CI_YML.read_text(encoding="utf-8")
+        self.assertIn("MV_REQUIRED_RECEIPTS: budgets,package", ci_text)
+        self.assertIn("MV_EXPECTED_GATE_REVISION: ${{ github.sha }}", ci_text)
+        for job_name in ("ci-policy", "laws-contracts", "js"):
+            job_sec = re.split(r"\n  [a-z][\w-]*:\n", ci_text.split(f"  {job_name}:\n", 1)[1], 1)[0]
+            setup_py_idx = job_sec.find("uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065")
+            resolve_idx = job_sec.find("- name: Resolve runner YAML parser")
+            self.assertNotEqual(setup_py_idx, -1, f"{job_name} missing setup-python")
+            self.assertNotEqual(resolve_idx, -1, f"{job_name} missing Resolve runner YAML parser")
+            self.assertLess(
+                setup_py_idx,
+                resolve_idx,
+                f"{job_name} must run pinned setup-python before Resolve runner YAML parser (R1-099)",
+            )
+            step_run = _extract_step_run(ci_text, job_name, "Resolve runner YAML parser")
+            self.assertIn("-I -c", step_run)
+            self.assertIn("pythonLocation", step_run)
 
 
 if __name__ == "__main__":

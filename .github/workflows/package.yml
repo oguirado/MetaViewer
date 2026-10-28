@@ -109,7 +109,8 @@ jobs:
           import re, sys
           text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
           for prefix in ('gh' + 'p_', 'gh' + 's_', 'gh' + 'o_', 'gh' + 'u_', 'gh' + 'r_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
-              text = re.sub(re.escape(prefix).replace('_', '(?:_|%5[fF])') + r'(?:[A-Za-z0-9_\-]|%[0-9a-fA-F]{2}){4,}', '[REDACTED]', text, flags=re.I)
+              p_pat = r'(?:\\?\r?\n)?'.join(r'(?:%s|%%(?:25)*(?:%02x|%02x))' % (re.escape(c), ord(c.lower()), ord(c.upper())) for c in prefix)
+              text = re.sub(p_pat + r'(?:[A-Za-z0-9_\-]|%(?:25)*[0-9a-fA-F]{2}|\\\r?\n){4,}', '[REDACTED]', text, flags=re.I)
           text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
           open(sys.argv[2], 'w').write(text)
           PYEOF

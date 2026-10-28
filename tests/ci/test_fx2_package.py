@@ -1,6 +1,7 @@
 """[TARGET, unit decision] Execute FX2-PACKAGE regression suite under tests/ci unit leg."""
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -15,24 +16,21 @@ SUITE = ROOT / 'ui/tools/test_package_clean_install.mjs'
 
 
 def find_node() -> str:
-    env_node = os.environ.get('NODE')
-    if env_node and shutil.which(env_node):
-        return shutil.which(env_node) or env_node
-    node = shutil.which('node')
-    if node:
-        res = subprocess.run(
-            [node, '-p', "process.versions.node.split('.')[0]"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if res.returncode == 0 and res.stdout.strip().isdigit() and int(res.stdout.strip()) >= 24:
-            return node
+    candidates = [shutil.which(os.environ.get('NODE', '')),
+                  shutil.which('node')]
     nvm_base = Path.home() / '.nvm/versions/node'
-    if nvm_base.is_dir():
-        for cand in sorted(nvm_base.glob('v24*/bin/node'), reverse=True):
-            if cand.is_file():
-                return str(cand)
+    candidates.extend(str(path) for path in sorted(nvm_base.glob('v*/bin/node'), reverse=True))
+    for node in dict.fromkeys(candidates):
+        if not node:
+            continue
+        try:
+            res = subprocess.run([node, '--version'], capture_output=True,
+                                 text=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        version = re.fullmatch(r'v([0-9]+)\.[0-9]+\.[0-9]+', res.stdout.strip())
+        if res.returncode == 0 and version and int(version[1]) >= 24:
+            return node
     raise RuntimeError('node >= 24 required, none found')
 
 
@@ -165,7 +163,7 @@ class Fx2PackageRegressionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='mv-node20-') as tmp:
             td = Path(tmp)
             stub_node = td / 'node'
-            stub_node.write_text('#!/bin/sh\necho 20\n', encoding='utf-8')
+            stub_node.write_text('#!/bin/sh\necho v20.11.0\n', encoding='utf-8')
             stub_node.chmod(0o755)
             empty_home = td / 'home'
             empty_home.mkdir()
@@ -177,6 +175,29 @@ class Fx2PackageRegressionTests(unittest.TestCase):
                 os.environ.pop('NODE', None)
                 with self.assertRaisesRegex(RuntimeError, 'node >= 24 required'):
                     find_node()
+
+    def test_find_node_checks_override_and_nvm_binary_versions(self):
+        with tempfile.TemporaryDirectory(prefix='mv-node-candidates-') as tmp:
+            home = Path(tmp) / 'Música'
+            nvm = home / '.nvm/versions/node/v24.0.0/bin/node'
+            nvm.parent.mkdir(parents=True)
+            override = home / 'override'
+            def stub(path, version):
+                path.write_text('#!/bin/sh\necho ' + version + '\n', encoding='utf-8')
+                path.chmod(0o755)
+            stub(override, 'v20.11.0')
+            stub(nvm, 'v20.11.0')
+            with unittest.mock.patch.dict(os.environ, {'NODE': str(override), 'PATH': '',
+                                                       'HOME': str(home)}):
+                with self.assertRaisesRegex(RuntimeError, 'node >= 24 required'):
+                    find_node()
+                stub(override, 'v24.14.0')
+                self.assertEqual(find_node(), str(override))
+                stub(override, 'v20.11.0')
+                stub(nvm, 'v24.14.0')
+                self.assertEqual(find_node(), str(nvm))
+                os.environ.pop('NODE')
+                self.assertEqual(find_node(), str(nvm))
 
 
 if __name__ == '__main__':

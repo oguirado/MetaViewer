@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[3]
 GITLEAKS_BIN = os.environ.get("GITLEAKS_BIN") or shutil.which("gitleaks")
@@ -138,12 +139,25 @@ class AdversarialSecretsTests(unittest.TestCase):
             gate.summarize_findings(int_rule_report)
         self.assertIn("report RuleID wrong type", str(cm2.exception))
 
+    def test_unborn_and_corrupt_history_rejected_before_scanning(self):
+        repo = self.tmp_dir / 'unborn'
+        subprocess.run(['git', '-c', 'init.defaultBranch=master', 'init', str(repo)],
+                       check=True, capture_output=True)
+        for corrupt in (False, True):
+            with self.subTest(corrupt=corrupt):
+                if corrupt:
+                    (repo / '.git/HEAD').write_text('invalid head\n')
+                with patch.object(gate, '_run_scanner') as scanner:
+                    with self.assertRaises(gate.GateFailure):
+                        gate._require_history_ready(repo)
+                    scanner.assert_not_called()
+
     def test_real_scanner_nested_repo_and_stash_rejects(self):
         """O3: Real gitleaks scanner detects secrets in stashes and side branches."""
         repo_dir = self.tmp_dir / "test_repo"
         repo_dir.mkdir()
 
-        subprocess.run(["git", "-C", str(repo_dir), "init"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["git", "-c", "init.defaultBranch=master", "-C", str(repo_dir), "init"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         # [TARGET, unit decision] Import an isolated stash history directly;
         # the execution contract forbids invoking git commit even in fixtures.
         self.assertIsNotNone(GITLEAKS_BIN, "E2E_PREREQ: real gitleaks required")
@@ -157,16 +171,22 @@ class AdversarialSecretsTests(unittest.TestCase):
         subprocess.run(["git", "-C", str(repo_dir), "fast-import", "--quiet"],
                        input=stream, check=True, capture_output=True)
 
-        scratch = self.tmp_dir / "scratch"
-        scratch.mkdir()
+        subprocess.run(["git", "-C", str(repo_dir), "symbolic-ref", "HEAD", "refs/heads/main"],
+                       check=True, capture_output=True)
+        gate._require_history_ready(repo_dir)
+        # Main is clean; the only credential is in refs/stash.
+        self.assertEqual(subprocess.check_output(
+            ["git", "-C", str(repo_dir), "show", "HEAD:README.md"]), clean)
 
-        # Scanner should detect secret or gate should reject
+        # Require scanner evidence, not merely a failing exit status.
         captured = io.StringIO()
         old_stdout, old_stderr = sys.stdout, sys.stderr
         try:
             sys.stdout = captured
             sys.stderr = captured
-            rc = gate.main(["gate.py", "history", "--gitleaks", GITLEAKS_BIN, "--repo", str(repo_dir)])
+            with patch.object(gate, '_run_scanner', wraps=gate._run_scanner) as scanner:
+                rc = gate.main(["gate.py", "history", "--gitleaks", GITLEAKS_BIN, "--repo", str(repo_dir)])
+            scanner.assert_called_once()
         finally:
             sys.stdout, sys.stderr = old_stdout, old_stderr
 
@@ -174,6 +194,9 @@ class AdversarialSecretsTests(unittest.TestCase):
         # Ensure secret bytes never printed to stdout/stderr
         self.assertNotIn(secret_token, out)
         self.assertEqual(rc, 1, "stash secret must reject")
+        self.assertIn('history: rejected', out)
+        self.assertIn('github-pat', out)
+        self.assertNotIn('git probe rejected', out)
 
 
 if __name__ == "__main__":

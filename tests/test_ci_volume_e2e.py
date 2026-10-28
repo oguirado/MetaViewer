@@ -457,7 +457,7 @@ def probe_volume_e2e_workflow(
 
     return {
         "verdict": "PASS",
-        "reason": "20 e2e repetitions green; 300 e2e repetitions green; 10-minute live wall soak green",
+        "reason": "20 e2e repetitions green; 300 e2e repetitions green; 3s synthetic wall soak green",
         "legs": leg_results,
     }
 
@@ -624,8 +624,11 @@ class VolumeE2EWorkflow(unittest.TestCase):
                 self.assertEqual(qual["scope"]["platform"], platform)
 
                 self.assertEqual(soak["outcome"], "PASS")
-                self.assertEqual(soak["reason"], "10-minute live wall soak green")
-                self.assertEqual(soak["counts"]["source"], "volume:soak-600s")
+                self.assertEqual(soak["reason"], "3s synthetic wall soak green")
+                self.assertEqual(soak["counts"]["source"], "volume:soak-3s")
+                self.assertIn("tests/e2e/perf-main.cjs", soak["argv"])
+                self.assertNotIn("tests/e2e/e2e14_perf.test.js", soak["argv"])
+                self.assertEqual(soak["product_identity"]["evidence_mode"], "synthetic")
                 self.assertEqual(soak["scope"]["platform"], platform)
 
                 smoke_calls = [idx for idx, s_done, q_done in leg["calls"] if s_done == 0 and q_done == 0]
@@ -663,6 +666,159 @@ class VolumeE2EWorkflow(unittest.TestCase):
             self.assertEqual(leg["receipts"]["volume-e2e"]["outcome"], "FAIL")
             self.assertNotIn("volume-e2e-qualification", leg["receipts"])
             self.assertEqual(len(leg["calls"]), 20)
+
+    def test_t8_r3_10_cross_route_mutant_classifier_rejects_prereq_and_gate_failures(self) -> None:
+        """T8-R3-10: tests/e2e/run.py classifier distinguishes live E2E_ROUTING failure from passing subtest titles and E2E_PREREQ/E2E_GATE."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("e2e_run", ROOT / "tests" / "e2e" / "run.py")
+        assert spec and spec.loader
+        e2e_run = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(e2e_run)
+        classify = e2e_run.is_cross_route_mutant_killed
+
+        # Positive control: live wall journey fails with E2E_ROUTING.
+        genuine_stdout = (
+            "✔ e2e1 wall harness contract (10ms)\n"
+            "▶ e2e1 live wall journey\n"
+            "  ✖ wall renders four tiles without cross-routing (AC-02) (5ms)\n"
+            "✖ e2e1 live wall journey (5ms)\n"
+            "✔ malformed publisher ledger refuses with E2E_ROUTING (0.1ms)\n"
+            "✖ failing tests:\n"
+            "✖ wall renders four tiles without cross-routing (AC-02) (5ms)\n"
+            "  Error [E2EError]: E2E_ROUTING: cross-routed frame detected\n"
+            "    code: 'E2E_ROUTING'\n"
+        )
+        self.assertTrue(classify(1, genuine_stdout, ""))
+
+        # Negative 1: returncode 0 (mutant survived).
+        self.assertFalse(classify(0, genuine_stdout, ""))
+
+        # Negative 2: E2E_GATE failure alongside passing "malformed publisher ledger refuses with E2E_ROUTING" subtest.
+        gate_fail_stdout = (
+            "▶ e2e1 live wall journey\n"
+            "  ✖ wall renders four tiles without cross-routing (AC-02) (0.2ms)\n"
+            "✖ e2e1 live wall journey (0.3ms)\n"
+            "✔ malformed publisher ledger refuses with E2E_ROUTING (0.1ms)\n"
+            "✖ failing tests:\n"
+            "✖ wall renders four tiles without cross-routing (AC-02) (0.2ms)\n"
+            "  Error [E2EError]: E2E_GATE: live journey needs MV_E2E_LIVE=1 under the G-E2E gate\n"
+            "    code: 'E2E_GATE'\n"
+        )
+        self.assertFalse(classify(1, gate_fail_stdout, ""))
+
+        # Negative 3: E2E_PREREQ failure alongside passing "malformed publisher ledger refuses with E2E_ROUTING" subtest.
+        prereq_fail_stdout = gate_fail_stdout.replace("E2E_GATE", "E2E_PREREQ")
+        self.assertFalse(classify(1, prereq_fail_stdout, ""))
+
+        # Negative 4: Unrelated crash where only the passing subtest mentions E2E_ROUTING.
+        unrelated_crash = (
+            "✔ malformed publisher ledger refuses with E2E_ROUTING (0.1ms)\n"
+            "✖ wall renders four tiles without cross-routing (AC-02) (1ms)\n"
+            "✖ failing tests:\n"
+            "✖ wall renders four tiles without cross-routing (AC-02) (1ms)\n"
+            "  TypeError: Cannot read properties of undefined\n"
+        )
+        self.assertFalse(classify(1, unrelated_crash, ""))
+
+    def test_t8_r3_11_and_t7r3_010_soak_validator_rejects_nan_inf_bool_and_null_pixels(self) -> None:
+        """T8-R3-11 / T7R3-010: volume-wall-soak validator rejects NaN, Inf, booleans, and null pixels."""
+        step_script = _step_script(
+            self.workflow_text,
+            "volume-e2e",
+            "Run E2E repeat x20 then qualification x300",
+        )
+        prefix_end = step_script.index('HARNESS="tests/e2e/run.py"')
+        soak_start = step_script.index('LOG="$EVDIR/volume-wall-soak.log"')
+        soak_only_script = step_script[:prefix_end] + "\n" + step_script[soak_start:]
+
+        def run_soak_raw(report_json_text: str) -> tuple[int, dict]:
+            with tempfile.TemporaryDirectory(prefix="mv-soak-nan-") as td:
+                tmp = Path(td)
+                ws = tmp / "ws"
+                (ws / ".github" / "workflows").mkdir(parents=True, exist_ok=True)
+                (ws / "tests" / "e2e").mkdir(parents=True, exist_ok=True)
+                (ws / ".github" / "workflows" / "volume.yml").write_text(self.workflow_text, encoding="utf-8")
+                (ws / "tests" / "e2e" / "e2e14_perf.test.js").write_text("// stub\n", encoding="utf-8")
+                fixture_p = tmp / "soak.json"
+                fixture_p.write_text(report_json_text, encoding="utf-8")
+                summary_p = tmp / "summary.md"
+                summary_p.write_text("", encoding="utf-8")
+                env = dict(
+                    os.environ,
+                    RUNNER_TEMP=str(tmp),
+                    GITHUB_WORKSPACE=str(ws),
+                    GITHUB_RUN_ID="777",
+                    GITHUB_SHA="a" * 40,
+                    GITHUB_STEP_SUMMARY=str(summary_p),
+                    JOB_ID="volume-e2e",
+                    PLATFORM="x64",
+                    MV_SOAK_SECS="3",
+                    MV_SOAK_REPORT_FIXTURE=str(fixture_p),
+                )
+                proc = subprocess.run(
+                    ["bash", "-c", soak_only_script],
+                    cwd=str(ws),
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                )
+                rec_p = tmp / "metaviewer-ci" / "volume-e2e" / "x64" / "volume-wall-soak.receipt.json"
+                self.assertTrue(rec_p.is_file(), proc.stdout + proc.stderr)
+                return proc.returncode, json.loads(rec_p.read_text(encoding="utf-8"))
+
+        base_report = make_soak_report()
+        ok_rc, ok_rec = run_soak_raw(json.dumps(base_report))
+        self.assertEqual(ok_rc, 0)
+        self.assertEqual(ok_rec["outcome"], "PASS")
+
+        # 1. NaN timestamp in tile times must FAIL.
+        nan_time_report = json.loads(json.dumps(base_report))
+        nan_time_report["visible"][0]["times"][2] = float("nan")
+        rc1, rec1 = run_soak_raw(json.dumps(nan_time_report, allow_nan=True))
+        self.assertNotEqual(rc1, 0)
+        self.assertEqual(rec1["outcome"], "FAIL")
+
+        # 2. NaN started window must FAIL.
+        nan_start_report = json.loads(json.dumps(base_report))
+        nan_start_report["started"] = float("nan")
+        rc2, rec2 = run_soak_raw(json.dumps(nan_start_report, allow_nan=True))
+        self.assertNotEqual(rc2, 0)
+        self.assertEqual(rec2["outcome"], "FAIL")
+
+        # 3. Boolean timestamp in tile times must FAIL.
+        bool_time_report = json.loads(json.dumps(base_report))
+        bool_time_report["visible"][0]["times"][0] = True
+        rc3, rec3 = run_soak_raw(json.dumps(bool_time_report))
+        self.assertNotEqual(rc3, 0)
+        self.assertEqual(rec3["outcome"], "FAIL")
+
+        # 4. Null pixel and expectedPixel (None == None) must FAIL.
+        null_pixel_report = json.loads(json.dumps(base_report))
+        null_pixel_report["visible"][0]["pixel"] = None
+        null_pixel_report["visible"][0]["expectedPixel"] = None
+        rc4, rec4 = run_soak_raw(json.dumps(null_pixel_report))
+        self.assertNotEqual(rc4, 0)
+        self.assertEqual(rec4["outcome"], "FAIL")
+
+    def test_t8_r3_12_volume_e2e_preflight_budget_validation(self) -> None:
+        """T8-R3-12: volume-e2e aligns per-attempt timeout >= 600s and blocks infeasible repetition budgets."""
+        self.assertIn('ATTEMPT_TIMEOUT_SECS="${MV_VOLUME_ATTEMPT_TIMEOUT_SECS:-1200}"', self.workflow_text)
+        infeasible_wf = self.workflow_text.replace(
+            'PER_ATTEMPT_BUDGET_SECS="${MV_VOLUME_PER_ATTEMPT_BUDGET_SECS:-30}"',
+            'PER_ATTEMPT_BUDGET_SECS="120"',
+            1,
+        )
+        res = probe_volume_job_step(
+            infeasible_wf,
+            "volume-e2e",
+            "Run E2E repeat x20 then qualification x300",
+            "x64",
+        )
+        self.assertEqual(res["rc"], 2)
+        self.assertEqual(res["receipts"]["volume-e2e"]["outcome"], "BLOCKED")
+        self.assertIn("budget exceeds job timeout", res["receipts"]["volume-e2e"]["reason"])
+        self.assertEqual(res["calls"], [])
 
 
 if __name__ == "__main__":

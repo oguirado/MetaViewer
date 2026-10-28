@@ -5,6 +5,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import tempfile
 import unittest
 import unittest.mock
 
@@ -159,6 +160,35 @@ jobs:
 """
         errs = _pin_errors(adversarial, ROOT)
         self.assertTrue(any("missing local action metadata" in e for e in errs), errs)
+
+    def test_local_action_metadata_and_recursive_pins(self):
+        with tempfile.TemporaryDirectory(prefix='mv-pins-') as tmp:
+            root = pathlib.Path(tmp) / 'Música'
+            outer, inner = root / 'outer', root / 'inner'
+            outer.mkdir(parents=True)
+            inner.mkdir()
+            workflow = 'steps:\n  - uses: ./outer\n'
+            (outer / 'action.yml').write_text(
+                'runs:\n  using: composite\n  steps:\n    - uses: ./inner\n')
+            metadata = inner / 'action.yaml'
+            pinned = 'actions/checkout@' + 'a' * 40
+            for ref, expected in ((pinned, None), ('actions/checkout@v4', 'unpinned action'),
+                                  ('./outer', 'local action cycle'),
+                                  ('./inner', 'local action cycle')):
+                with self.subTest(ref=ref):
+                    metadata.write_text('runs:\n  using: composite\n  steps:\n    - uses: ' + ref + '\n')
+                    errors = _pin_errors(workflow, root)
+                    if expected:
+                        self.assertTrue(any(expected in error for error in errors), errors)
+                    else:
+                        self.assertEqual(errors, [])
+            metadata.write_text('runs: {using: node24, main: index.js}\n')
+            sibling = inner / 'action.yml'
+            sibling.write_text('runs: {using: node24, main: index.js}\n')
+            self.assertTrue(any('ambiguous' in error for error in _pin_errors(workflow, root)))
+            sibling.unlink()
+            metadata.write_text('runs: [broken')
+            self.assertTrue(any('invalid local action' in error for error in _pin_errors(workflow, root)))
 
     def test_o1_workflow_permissions_least_privilege(self):
         for wf in self.workflows:

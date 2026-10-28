@@ -90,6 +90,32 @@ class TestT7R2CSanitizerSecrets(unittest.TestCase):
         leaked = run_sanitize_shell(drifted_block, b"Authorization: Bearer ghs_SecretTokenValue1234\n")
         self.assertIn(b"ghs_SecretTokenValue1234", leaked)
 
+    def test_t7r3_005_double_encoded_hex_encoded_and_split_tokens_redacted_across_all_workflows(self):
+        """Regression test for T7R3-005: all 18 sanitize() blocks redact double-encoded, hex-encoded, and split tokens."""
+        expected_counts = {"ci.yml": 13, "volume.yml": 3, "package.yml": 1, "build-other.yml": 1}
+        unique_blocks = set()
+        for wf, exp_count in expected_counts.items():
+            blocks = extract_sanitize_blocks(wf)
+            self.assertEqual(len(blocks), exp_count, wf)
+            unique_blocks.update(blocks)
+            for idx, block in enumerate(blocks):
+                for raw_token in (
+                    b"ghs%255FSecretTokenValue1234",
+                    b"g%68s_SecretTokenValue1234",
+                    b"g%2568s%255FSecretTokenValue1234",
+                    b"gh\ns_SecretTokenValue1234",
+                    b"github_\npat_SecretTokenValue1234",
+                    b"ghs_Secret\\\nTokenValue1234",
+                ):
+                    payload = b"header: " + raw_token + b"\nplain line 42\n"
+                    out = run_sanitize_shell(block, payload)
+                    self.assertEqual(
+                        out,
+                        b"header: [REDACTED]\nplain line 42\n",
+                        f"{wf} block {idx} failed to redact {raw_token!r}",
+                    )
+        self.assertEqual(len(unique_blocks), 1, "All 18 sanitize() blocks across 4 workflows must be identical")
+
 
 if __name__ == "__main__":
     unittest.main()

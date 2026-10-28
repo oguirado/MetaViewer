@@ -57,7 +57,8 @@ jobs:
           import re, sys
           text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
           for prefix in ('gh' + 'p_', 'gh' + 's_', 'gh' + 'o_', 'gh' + 'u_', 'gh' + 'r_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
-              text = re.sub(re.escape(prefix).replace('_', '(?:_|%5[fF])') + r'(?:[A-Za-z0-9_\-]|%[0-9a-fA-F]{2}){4,}', '[REDACTED]', text, flags=re.I)
+              p_pat = r'(?:\\?\r?\n)?'.join(r'(?:%s|%%(?:25)*(?:%02x|%02x))' % (re.escape(c), ord(c.lower()), ord(c.upper())) for c in prefix)
+              text = re.sub(p_pat + r'(?:[A-Za-z0-9_\-]|%(?:25)*[0-9a-fA-F]{2}|\\\r?\n){4,}', '[REDACTED]', text, flags=re.I)
           text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
           open(sys.argv[2], 'w').write(text)
           PYEOF
@@ -102,16 +103,21 @@ jobs:
                          'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
                          'accepted': e['OUTCOME'] == 'PASS'}]
           if isinstance(measured, dict) and isinstance(measured.get('tiles'), list):
+              import math
               for tile in measured['tiles']:
                   tid = str(tile.get('id', 'tile'))
-                  frames = int(tile.get('frames', 0))
-                  stalls = int(tile.get('stalls', 0))
-                  fps = float(tile.get('fps', 0.0))
+                  raw_frames = tile.get('frames', 0)
+                  raw_stalls = tile.get('stalls', 0)
+                  raw_fps = tile.get('fps', 0.0)
+                  frames = raw_frames if type(raw_frames) is int and raw_frames >= 0 else 0
+                  stalls = raw_stalls if type(raw_stalls) is int and raw_stalls >= 0 else 1
+                  fps_ok = not isinstance(raw_fps, bool) and isinstance(raw_fps, (int, float)) and math.isfinite(float(raw_fps))
+                  fps = float(raw_fps) if fps_ok else 0.0
                   assertions.append({
                       'id': 'soak-tile-' + tid,
                       'expected': 'fps>=10.0 and stalls==0',
-                      'observed': 'frames=%d fps=%.2f stalls=%d [MEASURED]' % (frames, fps, stalls),
-                      'accepted': bool(fps >= 10.0 and stalls == 0 and e['OUTCOME'] == 'PASS'),
+                      'observed': 'frames=%d fps=%s stalls=%d [MEASURED]' % (frames, ('%.2f' % fps) if fps_ok else 'non-finite', stalls),
+                      'accepted': bool(fps_ok and fps >= 10.0 and stalls == 0 and e['OUTCOME'] == 'PASS'),
                   })
           receipt = {
               'schema': 'gate_receipt/v1', 'gate_id': e['GATE'], 'leg': e['GATE'], 'profile': 'W0',
@@ -192,7 +198,8 @@ jobs:
           import re, sys
           text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
           for prefix in ('gh' + 'p_', 'gh' + 's_', 'gh' + 'o_', 'gh' + 'u_', 'gh' + 'r_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
-              text = re.sub(re.escape(prefix).replace('_', '(?:_|%5[fF])') + r'(?:[A-Za-z0-9_\-]|%[0-9a-fA-F]{2}){4,}', '[REDACTED]', text, flags=re.I)
+              p_pat = r'(?:\\?\r?\n)?'.join(r'(?:%s|%%(?:25)*(?:%02x|%02x))' % (re.escape(c), ord(c.lower()), ord(c.upper())) for c in prefix)
+              text = re.sub(p_pat + r'(?:[A-Za-z0-9_\-]|%(?:25)*[0-9a-fA-F]{2}|\\\r?\n){4,}', '[REDACTED]', text, flags=re.I)
           text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
           open(sys.argv[2], 'w').write(text)
           PYEOF
@@ -237,16 +244,21 @@ jobs:
                          'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
                          'accepted': e['OUTCOME'] == 'PASS'}]
           if isinstance(measured, dict) and isinstance(measured.get('tiles'), list):
+              import math
               for tile in measured['tiles']:
                   tid = str(tile.get('id', 'tile'))
-                  frames = int(tile.get('frames', 0))
-                  stalls = int(tile.get('stalls', 0))
-                  fps = float(tile.get('fps', 0.0))
+                  raw_frames = tile.get('frames', 0)
+                  raw_stalls = tile.get('stalls', 0)
+                  raw_fps = tile.get('fps', 0.0)
+                  frames = raw_frames if type(raw_frames) is int and raw_frames >= 0 else 0
+                  stalls = raw_stalls if type(raw_stalls) is int and raw_stalls >= 0 else 1
+                  fps_ok = not isinstance(raw_fps, bool) and isinstance(raw_fps, (int, float)) and math.isfinite(float(raw_fps))
+                  fps = float(raw_fps) if fps_ok else 0.0
                   assertions.append({
                       'id': 'soak-tile-' + tid,
                       'expected': 'fps>=10.0 and stalls==0',
-                      'observed': 'frames=%d fps=%.2f stalls=%d [MEASURED]' % (frames, fps, stalls),
-                      'accepted': bool(fps >= 10.0 and stalls == 0 and e['OUTCOME'] == 'PASS'),
+                      'observed': 'frames=%d fps=%s stalls=%d [MEASURED]' % (frames, ('%.2f' % fps) if fps_ok else 'non-finite', stalls),
+                      'accepted': bool(fps_ok and fps >= 10.0 and stalls == 0 and e['OUTCOME'] == 'PASS'),
                   })
           receipt = {
               'schema': 'gate_receipt/v1', 'gate_id': e['GATE'], 'leg': e['GATE'], 'profile': 'W0',
@@ -427,7 +439,8 @@ jobs:
           import re, sys
           text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
           for prefix in ('gh' + 'p_', 'gh' + 's_', 'gh' + 'o_', 'gh' + 'u_', 'gh' + 'r_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
-              text = re.sub(re.escape(prefix).replace('_', '(?:_|%5[fF])') + r'(?:[A-Za-z0-9_\-]|%[0-9a-fA-F]{2}){4,}', '[REDACTED]', text, flags=re.I)
+              p_pat = r'(?:\\?\r?\n)?'.join(r'(?:%s|%%(?:25)*(?:%02x|%02x))' % (re.escape(c), ord(c.lower()), ord(c.upper())) for c in prefix)
+              text = re.sub(p_pat + r'(?:[A-Za-z0-9_\-]|%(?:25)*[0-9a-fA-F]{2}|\\\r?\n){4,}', '[REDACTED]', text, flags=re.I)
           text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
           open(sys.argv[2], 'w').write(text)
           PYEOF
@@ -472,16 +485,21 @@ jobs:
                          'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
                          'accepted': e['OUTCOME'] == 'PASS'}]
           if isinstance(measured, dict) and isinstance(measured.get('tiles'), list):
+              import math
               for tile in measured['tiles']:
                   tid = str(tile.get('id', 'tile'))
-                  frames = int(tile.get('frames', 0))
-                  stalls = int(tile.get('stalls', 0))
-                  fps = float(tile.get('fps', 0.0))
+                  raw_frames = tile.get('frames', 0)
+                  raw_stalls = tile.get('stalls', 0)
+                  raw_fps = tile.get('fps', 0.0)
+                  frames = raw_frames if type(raw_frames) is int and raw_frames >= 0 else 0
+                  stalls = raw_stalls if type(raw_stalls) is int and raw_stalls >= 0 else 1
+                  fps_ok = not isinstance(raw_fps, bool) and isinstance(raw_fps, (int, float)) and math.isfinite(float(raw_fps))
+                  fps = float(raw_fps) if fps_ok else 0.0
                   assertions.append({
                       'id': 'soak-tile-' + tid,
                       'expected': 'fps>=10.0 and stalls==0',
-                      'observed': 'frames=%d fps=%.2f stalls=%d [MEASURED]' % (frames, fps, stalls),
-                      'accepted': bool(fps >= 10.0 and stalls == 0 and e['OUTCOME'] == 'PASS'),
+                      'observed': 'frames=%d fps=%s stalls=%d [MEASURED]' % (frames, ('%.2f' % fps) if fps_ok else 'non-finite', stalls),
+                      'accepted': bool(fps_ok and fps >= 10.0 and stalls == 0 and e['OUTCOME'] == 'PASS'),
                   })
           receipt = {
               'schema': 'gate_receipt/v1', 'gate_id': e['GATE'], 'leg': e['GATE'], 'profile': 'W0',
@@ -530,14 +548,35 @@ jobs:
             blocked volume-e2e "xvfb-run not installed on runner" tests/e2e/run.py -- xvfb-run -a -s "-screen 0 1280x900x24" python3 tests/e2e/run.py
             exit 2
           fi
+          JOB_TIMEOUT_SECS="${MV_VOLUME_JOB_TIMEOUT_SECS:-10800}"
+          ATTEMPT_TIMEOUT_SECS="${MV_VOLUME_ATTEMPT_TIMEOUT_SECS:-1200}"
+          PER_ATTEMPT_BUDGET_SECS="${MV_VOLUME_PER_ATTEMPT_BUDGET_SECS:-30}"
+          SHARD_COUNT="${MV_VOLUME_SHARD_COUNT:-1}"
+          SMOKE_REPS="${MV_VOLUME_SMOKE_REPS:-20}"
+          QUAL_REPS="${MV_VOLUME_QUAL_REPS:-300}"
+          SOAK_BUDGET_SECS="${MV_SOAK_SECS:-600}"
+          if ! python3 - "$JOB_TIMEOUT_SECS" "$ATTEMPT_TIMEOUT_SECS" "$PER_ATTEMPT_BUDGET_SECS" "$SHARD_COUNT" "$SMOKE_REPS" "$QUAL_REPS" "$SOAK_BUDGET_SECS" <<'PYEOF'
+          import math, sys
+          job_timeout, attempt_timeout, attempt_cost, shards, smoke_reps, qual_reps, soak_secs = [int(x) for x in sys.argv[1:8]]
+          if shards < 1 or smoke_reps < 1 or qual_reps < 1 or attempt_timeout < 600 or attempt_cost < 1:
+              sys.exit(1)
+          reps_per_shard = math.ceil((smoke_reps + qual_reps) / shards)
+          required_secs = reps_per_shard * attempt_cost + soak_secs + 60
+          if attempt_timeout > job_timeout or required_secs > job_timeout:
+              sys.exit(1)
+          PYEOF
+          then
+            blocked volume-e2e "volume-e2e budget exceeds job timeout" .github/workflows/volume.yml -- xvfb-run -a -s "-screen 0 1280x900x24" python3 tests/e2e/run.py
+            exit 2
+          fi
           LOG="$EVDIR/volume-e2e.log"
           : > "$LOG"
           rc=0
           iters=0
           iter_fail=0
-          for i in $(seq 1 20); do
+          for i in $(seq 1 "$SMOKE_REPS"); do
             iters=$((iters + 1))
-            timeout 120 xvfb-run -a -s "-screen 0 1280x900x24" python3 tests/e2e/run.py >>"$LOG" 2>&1; r=$?
+            timeout "$ATTEMPT_TIMEOUT_SECS" xvfb-run -a -s "-screen 0 1280x900x24" python3 tests/e2e/run.py >>"$LOG" 2>&1; r=$?
             echo "iteration $i rc $r" >>"$LOG"
             if [ $r -ne 0 ]; then
               iter_fail=$((iter_fail + 1))
@@ -553,9 +592,9 @@ jobs:
           rc=0
           iters=0
           iter_fail=0
-          for i in $(seq 1 300); do
+          for i in $(seq 1 "$QUAL_REPS"); do
             iters=$((iters + 1))
-            timeout 120 xvfb-run -a -s "-screen 0 1280x900x24" python3 tests/e2e/run.py >>"$LOG" 2>&1; r=$?
+            timeout "$ATTEMPT_TIMEOUT_SECS" xvfb-run -a -s "-screen 0 1280x900x24" python3 tests/e2e/run.py >>"$LOG" 2>&1; r=$?
             echo "iteration $i rc $r" >>"$LOG"
             if [ $r -ne 0 ]; then
               iter_fail=$((iter_fail + 1))
@@ -570,11 +609,12 @@ jobs:
           : > "$LOG"
           rc=0
           SOAK_SECS="${MV_SOAK_SECS:-600}"
+          SOAK_BUILD="$EVDIR/soak-build"
           SOAK_REPORT="$EVDIR/volume-wall-soak-report.json"
+          ELECTRON_BIN="electron"
           if [ -n "${MV_SOAK_REPORT_FIXTURE:-}" ]; then
             cp "$MV_SOAK_REPORT_FIXTURE" "$SOAK_REPORT" >>"$LOG" 2>&1 || rc=1
           else
-            SOAK_BUILD="$EVDIR/soak-build"
             (
               set -e
               node tools/sync_kit.mjs "${MV_KIT_CHECKOUT:-${CAPSULE_UI_KIT_REPO:-}}"
@@ -582,10 +622,13 @@ jobs:
               ELECTRON_BIN="$(node -e 'console.log(require("./tests/e2e/ac-harness.cjs").electronBinary(process.cwd()))')"
               timeout 660 xvfb-run -a -s "-screen 0 1280x900x24" "$ELECTRON_BIN" tests/e2e/perf-main.cjs "$SOAK_BUILD" "$SOAK_REPORT" "{\"seconds\":${SOAK_SECS}}"
             ) >>"$LOG" 2>&1 || rc=1
+            ELECTRON_BIN="$(node -e 'console.log(require("./tests/e2e/ac-harness.cjs").electronBinary(process.cwd()))' 2>/dev/null || echo electron)"
           fi
           SOAK_REPORT="$SOAK_REPORT" SOAK_SECS="$SOAK_SECS" MEASURED_OUT="$EVDIR/volume-wall-soak.measured.json" \
           python3 - <<'PYEOF' >>"$LOG" 2>&1 || rc=1
-          import json, os, sys
+          import json, math, os, sys
+          def is_finite_num(v):
+              return not isinstance(v, bool) and isinstance(v, (int, float)) and math.isfinite(float(v))
           report_path = os.environ["SOAK_REPORT"]
           soak_secs = int(os.environ["SOAK_SECS"])
           if soak_secs < 3 or soak_secs > 600:
@@ -599,14 +642,27 @@ jobs:
               print("FAIL volume-wall-soak: invalid report schema")
               sys.exit(1)
           visible = report.get("visible")
-          if not isinstance(visible, list) or len(visible) < 4 or len({t.get("id") for t in visible if isinstance(t, dict)}) != len(visible):
+          if (not isinstance(visible, list) or len(visible) < 4
+                  or any(not isinstance(t, dict) or not isinstance(t.get("id"), str) or not t.get("id").strip() for t in visible)
+                  or len({t.get("id") for t in visible}) != len(visible)):
               print("FAIL volume-wall-soak: expected >= 4 distinct visible tiles")
               sys.exit(1)
-          started = float(report.get("started", 0))
-          ended = float(report.get("ended", 0))
-          duration_ms = ended - started
-          min_duration_ms = max(2900.0, soak_secs * 1000.0 - 100.0)
+          raw_started = report.get("started")
+          raw_ended = report.get("ended")
           failures = []
+          if not is_finite_num(raw_started) or not is_finite_num(raw_ended):
+              started = 0.0
+              ended = 0.0
+              duration_ms = 0.0
+              failures.append("non_finite_window")
+          else:
+              started = float(raw_started)
+              ended = float(raw_ended)
+              duration_ms = ended - started
+              if not math.isfinite(duration_ms):
+                  duration_ms = 0.0
+                  failures.append("non_finite_duration")
+          min_duration_ms = max(2900.0, soak_secs * 1000.0 - 100.0)
           if duration_ms < min_duration_ms:
               failures.append("duration_ms=%.1f<%.1f" % (duration_ms, min_duration_ms))
           tiles_summary = []
@@ -614,17 +670,46 @@ jobs:
           total_stalls = 0
           for tile in visible:
               tid = str(tile.get("id", ""))
-              times = [float(t) for t in (tile.get("times") or [])]
-              frames = len(times)
-              fps = (frames * 1000.0 / duration_ms) if duration_ms > 0 else 0.0
-              seq = [started, *times, ended]
-              gaps = [seq[i] - seq[i - 1] for i in range(1, len(seq))]
-              stalls = sum(1 for g in gaps if g < 0 or g > 2000.0)
-              max_gap_ms = max(gaps) if gaps else 0.0
-              present_count = (tile.get("info") or {}).get("presentCount")
-              last_gen = (tile.get("info") or {}).get("lastCaptureGeneration", 0)
-              pixel_ok = tile.get("pixel") == tile.get("expectedPixel")
-              tile_stalled = stalls > 0 or fps < 10.0 or present_count != frames or last_gen <= 0 or not pixel_ok
+              raw_times = tile.get("times")
+              times_valid = isinstance(raw_times, list) and len(raw_times) > 0 and all(is_finite_num(t) for t in raw_times)
+              times = [float(t) for t in raw_times] if times_valid else []
+              frames = len(times) if times_valid else 0
+              raw_fps = (frames * 1000.0 / duration_ms) if (times_valid and duration_ms > 0) else 0.0
+              fps = raw_fps if math.isfinite(raw_fps) else 0.0
+              if times_valid and is_finite_num(raw_started) and is_finite_num(raw_ended):
+                  seq = [started, *times, ended]
+                  gaps = [seq[i] - seq[i - 1] for i in range(1, len(seq))]
+                  gaps_valid = all(math.isfinite(g) for g in gaps)
+              else:
+                  gaps = []
+                  gaps_valid = False
+              stalls = sum(1 for g in gaps if not math.isfinite(g) or g < 0 or g > 2000.0) if gaps_valid else 1
+              max_gap_ms = max((g for g in gaps if math.isfinite(g)), default=0.0) if gaps_valid else 0.0
+              info = tile.get("info") if isinstance(tile.get("info"), dict) else {}
+              present_count = info.get("presentCount")
+              raw_last_gen = info.get("lastCaptureGeneration", 0)
+              last_gen = raw_last_gen if type(raw_last_gen) is int else 0
+              pix = tile.get("pixel")
+              exp_pix = tile.get("expectedPixel")
+              pixel_ok = (
+                  pix is not None
+                  and exp_pix is not None
+                  and isinstance(pix, list)
+                  and isinstance(exp_pix, list)
+                  and len(pix) >= 3
+                  and pix == exp_pix
+              )
+              tile_stalled = (
+                  not times_valid
+                  or not gaps_valid
+                  or stalls > 0
+                  or not math.isfinite(fps)
+                  or fps < 10.0
+                  or type(present_count) is not int
+                  or present_count != frames
+                  or last_gen <= 0
+                  or not pixel_ok
+              )
               if tile_stalled:
                   stalled_tiles.append(tid)
                   if stalls == 0:
@@ -638,21 +723,29 @@ jobs:
                   "stalls": stalls,
                   "max_gap_ms": round(max_gap_ms, 3),
               })
-          folded = report.get("folded") or {}
-          f_before = folded.get("before") or {}
-          f_after = folded.get("after") or {}
+          folded = report.get("folded") if isinstance(report.get("folded"), dict) else {}
+          f_before = folded.get("before") if isinstance(folded.get("before"), dict) else {}
+          f_after = folded.get("after") if isinstance(folded.get("after"), dict) else {}
+          b_gen = f_before.get("lastCaptureGeneration")
+          a_gen = f_after.get("lastCaptureGeneration")
+          b_draws = f_before.get("drawSubmissions")
+          a_draws = f_after.get("drawSubmissions")
           folded_ok = (
               folded.get("hidden") is True
               and f_after.get("folded") is True
               and f_after.get("captureLeaseActive") is True
-              and int(f_after.get("lastCaptureGeneration", 0)) > int(f_before.get("lastCaptureGeneration", 0))
-              and f_after.get("drawSubmissions") == f_before.get("drawSubmissions")
+              and type(b_gen) is int and type(a_gen) is int and a_gen > b_gen
+              and type(b_draws) is int and type(a_draws) is int and a_draws == b_draws
           )
           if not folded_ok:
               failures.append("folded_capture_stall")
+          evidence_mode = "synthetic" if report.get("capture") == "synthetic-rgb24" else "live"
           measured = {
               "schema": "metaviewer.perf-wall.soak-summary/v1",
               "soak_seconds": soak_secs,
+              "evidence_mode": evidence_mode,
+              "capture": report.get("capture"),
+              "producer": "tests/e2e/perf-main.cjs",
               "duration_ms": round(duration_ms, 3),
               "frames_per_tile": {t["id"]: t["frames"] for t in tiles_summary},
               "stalls_per_tile": {t["id"]: t["stalls"] for t in tiles_summary},
@@ -670,6 +763,11 @@ jobs:
               sys.exit(1)
           print("PASS volume-wall-soak: %d tiles, 0 stalls" % len(tiles_summary))
           PYEOF
-          if [ $rc -eq 0 ]; then oc=PASS; rsn="10-minute live wall soak green"; else oc=FAIL; rsn="10-minute live wall soak failed"; fi
-          finish_gate volume-wall-soak "$rc" "$oc" "$rsn" "$LOG" tests/e2e/e2e14_perf.test.js "volume:soak-600s" 0 -- timeout 660 xvfb-run -a -s "-screen 0 1280x900x24" node --test tests/e2e/e2e14_perf.test.js
+          if [ "$SOAK_SECS" -eq 600 ] && [ "${MV_SOAK_EVIDENCE_MODE:-synthetic}" = "live" ]; then
+            soak_desc="10-minute live wall soak"
+          else
+            soak_desc="${SOAK_SECS}s ${MV_SOAK_EVIDENCE_MODE:-synthetic} wall soak"
+          fi
+          if [ $rc -eq 0 ]; then oc=PASS; rsn="${soak_desc} green"; else oc=FAIL; rsn="${soak_desc} failed"; fi
+          finish_gate volume-wall-soak "$rc" "$oc" "$rsn" "$LOG" tests/e2e/e2e14_perf.test.js "volume:soak-${SOAK_SECS}s" 0 -- timeout 660 xvfb-run -a -s "-screen 0 1280x900x24" "${ELECTRON_BIN:-electron}" tests/e2e/perf-main.cjs "$SOAK_BUILD" "$SOAK_REPORT" "{\"seconds\":${SOAK_SECS}}"
           exit $rc

@@ -43,21 +43,21 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # checkout v4.2.2
         with:
           fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
+        with:
+          python-version: "3.12.3"
       - name: Resolve runner YAML parser
         run: |
           set -euo pipefail
           yaml_python=""
-          while IFS= read -r candidate; do
-            if "$candidate" -c 'import yaml' 2>/dev/null; then
+          for candidate in "${pythonLocation:+$pythonLocation/bin/python3}" "$(command -v python3 || true)" /usr/bin/python3; do
+            if [ -n "$candidate" ] && [ -x "$candidate" ] && "$candidate" -I -c 'import os, pathlib, sys, yaml; st = os.stat(sys.executable); assert sys.version_info >= (3, 10) and pathlib.Path(yaml.__file__).is_file() and st.st_uid in (0, os.getuid())' 2>/dev/null; then
               yaml_python="$candidate"
               break
             fi
-          done < <(type -aP python3)
+          done
           test -n "$yaml_python" || { echo 'PyYAML runner prerequisite absent' >&2; exit 2; }
           echo "MV_YAML_PYTHON=$yaml_python" >> "$GITHUB_ENV"
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
-        with:
-          python-version: "3.12.3"
       - name: Run policy fixtures
         env:
           JOB_ID: ci-policy
@@ -74,7 +74,8 @@ jobs:
           import re, sys
           text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
           for prefix in ('gh' + 'p_', 'gh' + 's_', 'gh' + 'o_', 'gh' + 'u_', 'gh' + 'r_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
-              text = re.sub(re.escape(prefix).replace('_', '(?:_|%5[fF])') + r'(?:[A-Za-z0-9_\-]|%[0-9a-fA-F]{2}){4,}', '[REDACTED]', text, flags=re.I)
+              p_pat = r'(?:\\?\r?\n)?'.join(r'(?:%s|%%(?:25)*(?:%02x|%02x))' % (re.escape(c), ord(c.lower()), ord(c.upper())) for c in prefix)
+              text = re.sub(p_pat + r'(?:[A-Za-z0-9_\-]|%(?:25)*[0-9a-fA-F]{2}|\\\r?\n){4,}', '[REDACTED]', text, flags=re.I)
           text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
           open(sys.argv[2], 'w').write(text)
           PYEOF
@@ -326,7 +327,9 @@ jobs:
                   errs.append("assertions-empty")
               else:
                   for a in r["assertions"]:
-                      if not isinstance(a, dict) or set(a) != {"id", "expected", "observed", "accepted"} or type(a["accepted"]) is not bool:
+                      if (not isinstance(a, dict) or set(a) != {"id", "expected", "observed", "accepted"}
+                              or type(a["accepted"]) is not bool
+                              or any(not isinstance(a.get(k), str) or not a.get(k).strip() for k in ("id", "expected", "observed"))):
                           errs.append("assertion-shape")
                       elif r["outcome"] == "PASS" and not a["accepted"]:
                           errs.append("assertion-unaccepted")
@@ -341,7 +344,7 @@ jobs:
                   if any(v is None for v in vals) and not all(v is None for v in vals):
                       errs.append("counts-inconsistent")
                   elif all(type(v) is int and v >= 0 for v in vals):
-                      if r["outcome"] == "PASS" and (c["failed"] != 0 or sum(vals) <= 0):
+                      if r["outcome"] == "PASS" and (c["failed"] != 0 or c["passed"] <= 0):
                           errs.append("counts-failed-pass")
                   elif c["source"].startswith("parsed:") and r["outcome"] == "PASS":
                       errs.append("counts-unparsed-pass")
@@ -376,15 +379,24 @@ jobs:
           nullpass = json.loads(json.dumps(genuine))
           nullpass["rc"] = None
           check("f4-neg-null-pass", receipt_errors(nullpass, reg) != [])
+          boolrc = json.loads(json.dumps(genuine))
+          boolrc["rc"] = False
+          check("f4-neg-bool-rc", receipt_errors(boolrc, reg) != [])
           rc7pass = json.loads(json.dumps(genuine))
           rc7pass["rc"] = 7
           check("f4-neg-rc-pass", receipt_errors(rc7pass, reg) != [])
           unacc = json.loads(json.dumps(genuine))
           unacc["assertions"][0]["accepted"] = False
           check("f4-neg-unaccepted", receipt_errors(unacc, reg) != [])
+          empty_assert = json.loads(json.dumps(genuine))
+          empty_assert["assertions"][0]["id"] = ""
+          check("f4-neg-empty-assert", receipt_errors(empty_assert, reg) != [])
           failcnt = json.loads(json.dumps(genuine))
           failcnt["counts"]["failed"] = 1
           check("f4-neg-failed-count", receipt_errors(failcnt, reg) != [])
+          allskipped = json.loads(json.dumps(genuine))
+          allskipped["counts"] = {"passed": 0, "failed": 0, "skipped": 1, "source": "parsed:true"}
+          check("f4-neg-all-skipped", receipt_errors(allskipped, reg) != [])
           negcnt = json.loads(json.dumps(genuine))
           negcnt["counts"]["passed"] = -1
           check("f4-neg-neg-count", receipt_errors(negcnt, reg) != [])
@@ -450,7 +462,8 @@ jobs:
           # F6: sanitizer redacts synthetic credentials and sentinels, keeps hashes on clean bytes.
           def redact(text):
               for prefix in ("gh" + "p_", "gh" + "s_", "gh" + "o_", "gh" + "u_", "gh" + "r_", "github_" + "pat_", "AK" + "IA", "xox" + "b-", "MV0-SYNTHETIC-SENTINEL-"):
-                  text = re.sub(re.escape(prefix).replace("_", "(?:_|%5[fF])") + r"(?:[A-Za-z0-9_\-]|%[0-9a-fA-F]{2}){4,}", "[REDACTED]", text, flags=re.I)
+                  p_pat = r"(?:\\?\r?\n)?".join(r"(?:%s|%%(?:25)*(?:%02x|%02x))" % (re.escape(c), ord(c.lower()), ord(c.upper())) for c in prefix)
+                  text = re.sub(p_pat + r"(?:[A-Za-z0-9_\-]|%(?:25)*[0-9a-fA-F]{2}|\\\r?\n){4,}", "[REDACTED]", text, flags=re.I)
               return text.replace("__MV0_PRIVATE_SOURCE_SENTINEL__", "[REDACTED]")
           synth = "key=" + "gh" + "p_" + "9" * 36 + " tail"
           check("f6-redact", all("[REDACTED]" in redact("key=" + pfx + "9" * 36 + " tail") and "9" * 36 not in redact("key=" + pfx + "9" * 36 + " tail")
@@ -514,21 +527,21 @@ jobs:
           export GOPROXY=off GOSUMDB=off GOFLAGS=-mod=readonly
           go build ./...
           go test -race -run '^$' ./...
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
+        with:
+          python-version: "3.12.3"
       - name: Resolve runner YAML parser
         run: |
           set -euo pipefail
           yaml_python=""
-          while IFS= read -r candidate; do
-            if "$candidate" -c 'import yaml' 2>/dev/null; then
+          for candidate in "${pythonLocation:+$pythonLocation/bin/python3}" "$(command -v python3 || true)" /usr/bin/python3; do
+            if [ -n "$candidate" ] && [ -x "$candidate" ] && "$candidate" -I -c 'import os, pathlib, sys, yaml; st = os.stat(sys.executable); assert sys.version_info >= (3, 10) and pathlib.Path(yaml.__file__).is_file() and st.st_uid in (0, os.getuid())' 2>/dev/null; then
               yaml_python="$candidate"
               break
             fi
-          done < <(type -aP python3)
+          done
           test -n "$yaml_python" || { echo 'PyYAML runner prerequisite absent' >&2; exit 2; }
           echo "MV_YAML_PYTHON=$yaml_python" >> "$GITHUB_ENV"
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
-        with:
-          python-version: "3.12.3"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # setup-node v4.4.0
         with:
           node-version: "24.14.0"
@@ -584,7 +597,8 @@ jobs:
           import re, sys
           text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
           for prefix in ('gh' + 'p_', 'gh' + 's_', 'gh' + 'o_', 'gh' + 'u_', 'gh' + 'r_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
-              text = re.sub(re.escape(prefix).replace('_', '(?:_|%5[fF])') + r'(?:[A-Za-z0-9_\-]|%[0-9a-fA-F]{2}){4,}', '[REDACTED]', text, flags=re.I)
+              p_pat = r'(?:\\?\r?\n)?'.join(r'(?:%s|%%(?:25)*(?:%02x|%02x))' % (re.escape(c), ord(c.lower()), ord(c.upper())) for c in prefix)
+              text = re.sub(p_pat + r'(?:[A-Za-z0-9_\-]|%(?:25)*[0-9a-fA-F]{2}|\\\r?\n){4,}', '[REDACTED]', text, flags=re.I)
           text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
           open(sys.argv[2], 'w').write(text)
           PYEOF
@@ -730,7 +744,8 @@ jobs:
           import re, sys
           text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
           for prefix in ('gh' + 'p_', 'gh' + 's_', 'gh' + 'o_', 'gh' + 'u_', 'gh' + 'r_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
-              text = re.sub(re.escape(prefix).replace('_', '(?:_|%5[fF])') + r'(?:[A-Za-z0-9_\-]|%[0-9a-fA-F]{2}){4,}', '[REDACTED]', text, flags=re.I)
+              p_pat = r'(?:\\?\r?\n)?'.join(r'(?:%s|%%(?:25)*(?:%02x|%02x))' % (re.escape(c), ord(c.lower()), ord(c.upper())) for c in prefix)
+              text = re.sub(p_pat + r'(?:[A-Za-z0-9_\-]|%(?:25)*[0-9a-fA-F]{2}|\\\r?\n){4,}', '[REDACTED]', text, flags=re.I)
           text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
           open(sys.argv[2], 'w').write(text)
           PYEOF
@@ -894,7 +909,8 @@ jobs:
           import re, sys
           text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
           for prefix in ('gh' + 'p_', 'gh' + 's_', 'gh' + 'o_', 'gh' + 'u_', 'gh' + 'r_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
-              text = re.sub(re.escape(prefix).replace('_', '(?:_|%5[fF])') + r'(?:[A-Za-z0-9_\-]|%[0-9a-fA-F]{2}){4,}', '[REDACTED]', text, flags=re.I)
+              p_pat = r'(?:\\?\r?\n)?'.join(r'(?:%s|%%(?:25)*(?:%02x|%02x))' % (re.escape(c), ord(c.lower()), ord(c.upper())) for c in prefix)
+              text = re.sub(p_pat + r'(?:[A-Za-z0-9_\-]|%(?:25)*[0-9a-fA-F]{2}|\\\r?\n){4,}', '[REDACTED]', text, flags=re.I)
           text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
           open(sys.argv[2], 'w').write(text)
           PYEOF
@@ -1058,6 +1074,7 @@ jobs:
           GOSUMDB: "off"
           GOTOOLCHAIN: local
           GOFLAGS: -mod=readonly
+          MV_E2E_REAL_XVFB: "1"
           JOB_ID: go
           PLATFORM: ${{ matrix.platform }}
           EXPECT_ARCH: ${{ matrix.arch }}
@@ -1074,7 +1091,8 @@ jobs:
           import re, sys
           text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
           for prefix in ('gh' + 'p_', 'gh' + 's_', 'gh' + 'o_', 'gh' + 'u_', 'gh' + 'r_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
-              text = re.sub(re.escape(prefix).replace('_', '(?:_|%5[fF])') + r'(?:[A-Za-z0-9_\-]|%[0-9a-fA-F]{2}){4,}', '[REDACTED]', text, flags=re.I)
+              p_pat = r'(?:\\?\r?\n)?'.join(r'(?:%s|%%(?:25)*(?:%02x|%02x))' % (re.escape(c), ord(c.lower()), ord(c.upper())) for c in prefix)
+              text = re.sub(p_pat + r'(?:[A-Za-z0-9_\-]|%(?:25)*[0-9a-fA-F]{2}|\\\r?\n){4,}', '[REDACTED]', text, flags=re.I)
           text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
           open(sys.argv[2], 'w').write(text)
           PYEOF
@@ -1225,7 +1243,8 @@ jobs:
           import re, sys
           text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
           for prefix in ('gh' + 'p_', 'gh' + 's_', 'gh' + 'o_', 'gh' + 'u_', 'gh' + 'r_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
-              text = re.sub(re.escape(prefix).replace('_', '(?:_|%5[fF])') + r'(?:[A-Za-z0-9_\-]|%[0-9a-fA-F]{2}){4,}', '[REDACTED]', text, flags=re.I)
+              p_pat = r'(?:\\?\r?\n)?'.join(r'(?:%s|%%(?:25)*(?:%02x|%02x))' % (re.escape(c), ord(c.lower()), ord(c.upper())) for c in prefix)
+              text = re.sub(p_pat + r'(?:[A-Za-z0-9_\-]|%(?:25)*[0-9a-fA-F]{2}|\\\r?\n){4,}', '[REDACTED]', text, flags=re.I)
           text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
           open(sys.argv[2], 'w').write(text)
           PYEOF
@@ -1343,21 +1362,21 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # setup-node v4.4.0
         with:
           node-version: "24.14.0"
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
+        with:
+          python-version: "3.12.3"
       - name: Resolve runner YAML parser
         run: |
           set -euo pipefail
           yaml_python=""
-          while IFS= read -r candidate; do
-            if "$candidate" -c 'import yaml' 2>/dev/null; then
+          for candidate in "${pythonLocation:+$pythonLocation/bin/python3}" "$(command -v python3 || true)" /usr/bin/python3; do
+            if [ -n "$candidate" ] && [ -x "$candidate" ] && "$candidate" -I -c 'import os, pathlib, sys, yaml; st = os.stat(sys.executable); assert sys.version_info >= (3, 10) and pathlib.Path(yaml.__file__).is_file() and st.st_uid in (0, os.getuid())' 2>/dev/null; then
               yaml_python="$candidate"
               break
             fi
-          done < <(type -aP python3)
+          done
           test -n "$yaml_python" || { echo 'PyYAML runner prerequisite absent' >&2; exit 2; }
           echo "MV_YAML_PYTHON=$yaml_python" >> "$GITHUB_ENV"
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # setup-python v5.6.0
-        with:
-          python-version: "3.12.3"
       - name: Prepare pinned Rust formatter
         run: |
           set -euo pipefail
@@ -1444,7 +1463,8 @@ jobs:
           import re, sys
           text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
           for prefix in ('gh' + 'p_', 'gh' + 's_', 'gh' + 'o_', 'gh' + 'u_', 'gh' + 'r_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
-              text = re.sub(re.escape(prefix).replace('_', '(?:_|%5[fF])') + r'(?:[A-Za-z0-9_\-]|%[0-9a-fA-F]{2}){4,}', '[REDACTED]', text, flags=re.I)
+              p_pat = r'(?:\\?\r?\n)?'.join(r'(?:%s|%%(?:25)*(?:%02x|%02x))' % (re.escape(c), ord(c.lower()), ord(c.upper())) for c in prefix)
+              text = re.sub(p_pat + r'(?:[A-Za-z0-9_\-]|%(?:25)*[0-9a-fA-F]{2}|\\\r?\n){4,}', '[REDACTED]', text, flags=re.I)
           text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
           open(sys.argv[2], 'w').write(text)
           PYEOF
@@ -1759,7 +1779,8 @@ jobs:
           import re, sys
           text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
           for prefix in ('gh' + 'p_', 'gh' + 's_', 'gh' + 'o_', 'gh' + 'u_', 'gh' + 'r_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
-              text = re.sub(re.escape(prefix).replace('_', '(?:_|%5[fF])') + r'(?:[A-Za-z0-9_\-]|%[0-9a-fA-F]{2}){4,}', '[REDACTED]', text, flags=re.I)
+              p_pat = r'(?:\\?\r?\n)?'.join(r'(?:%s|%%(?:25)*(?:%02x|%02x))' % (re.escape(c), ord(c.lower()), ord(c.upper())) for c in prefix)
+              text = re.sub(p_pat + r'(?:[A-Za-z0-9_\-]|%(?:25)*[0-9a-fA-F]{2}|\\\r?\n){4,}', '[REDACTED]', text, flags=re.I)
           text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
           open(sys.argv[2], 'w').write(text)
           PYEOF
@@ -1876,7 +1897,7 @@ jobs:
           offline timeout 1200 xvfb-run -a -s "-screen 0 1280x900x24" python3 tests/e2e/run.py >"$LOG" 2>&1; r=$?
           BUDGET_LOG="$LOG" MEASURED_OUT="$EVDIR/e2e-xvfb.measured.json" \
           python3 - <<'PYEOF' >>"$LOG" 2>&1 || r=1
-          import json, os, pathlib, re, sys
+          import json, math, os, pathlib, re, sys
           import tools.budget_gate as bg
           budgets = bg.load_budgets(pathlib.Path("tests/perf/budgets.json"))
           frozen_caps = {row["id"]: row["bound"] for row in budgets["budgets"] if row["gating"]}
@@ -1903,10 +1924,21 @@ jobs:
               if not isinstance(perf_wall, list) or len(perf_wall) < 4:
                   failures.append("perf_wall_tile_count")
               else:
+                  tile_ids = [t.get("id") for t in perf_wall if isinstance(t, dict) and isinstance(t.get("id"), str) and t.get("id").strip()]
+                  if len(tile_ids) != len(perf_wall) or len(set(tile_ids)) != len(perf_wall):
+                      failures.append("perf_wall_tile_distinctness")
                   for tile in perf_wall:
+                      tid = tile.get("id") if isinstance(tile, dict) else "unknown"
                       fps = tile.get("fps") if isinstance(tile, dict) else None
-                      if not isinstance(fps, (int, float)) or fps < 10.0:
-                          failures.append(f"perf_wall_fps:{tile.get('id') if isinstance(tile, dict) else 'unknown'}")
+                      if isinstance(fps, bool) or not isinstance(fps, (int, float)) or not math.isfinite(float(fps)) or float(fps) < 10.0:
+                          failures.append(f"perf_wall_fps:{tid}")
+                      if isinstance(tile, dict) and ("pixel" in tile or "expectedPixel" in tile):
+                          if tile.get("pixel") is None or tile.get("expectedPixel") is None or tile.get("pixel") != tile.get("expectedPixel"):
+                              failures.append(f"perf_wall_pixel:{tid}")
+                      if isinstance(tile, dict) and "maxGapMs" in tile:
+                          mg = tile.get("maxGapMs")
+                          if isinstance(mg, bool) or not isinstance(mg, (int, float)) or not math.isfinite(float(mg)) or float(mg) < 0 or float(mg) > 2000.0:
+                              failures.append(f"perf_wall_gap:{tid}")
           measured = {
               "schema": "metaviewer.perf.budget-gate-receipt/v1",
               "frozen_budgets_bytes": frozen_caps,
@@ -1951,7 +1983,8 @@ jobs:
           import re, sys
           text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
           for prefix in ('gh' + 'p_', 'gh' + 's_', 'gh' + 'o_', 'gh' + 'u_', 'gh' + 'r_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
-              text = re.sub(re.escape(prefix).replace('_', '(?:_|%5[fF])') + r'(?:[A-Za-z0-9_\-]|%[0-9a-fA-F]{2}){4,}', '[REDACTED]', text, flags=re.I)
+              p_pat = r'(?:\\?\r?\n)?'.join(r'(?:%s|%%(?:25)*(?:%02x|%02x))' % (re.escape(c), ord(c.lower()), ord(c.upper())) for c in prefix)
+              text = re.sub(p_pat + r'(?:[A-Za-z0-9_\-]|%(?:25)*[0-9a-fA-F]{2}|\\\r?\n){4,}', '[REDACTED]', text, flags=re.I)
           text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
           open(sys.argv[2], 'w').write(text)
           PYEOF
@@ -2093,6 +2126,16 @@ jobs:
         with:
           go-version-file: daemon-adapter/go.mod
           cache: false
+      - name: Prime Go module and build caches
+        working-directory: daemon-adapter
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          set -euo pipefail
+          go mod download
+          export GOPROXY=off GOSUMDB=off GOFLAGS=-mod=readonly
+          go build ./...
+          go test -race -run '^$' ./...
       - name: Prime native toolchains
         run: |
           set -euo pipefail
@@ -2126,7 +2169,8 @@ jobs:
           import re, sys
           text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
           for prefix in ('gh' + 'p_', 'gh' + 's_', 'gh' + 'o_', 'gh' + 'u_', 'gh' + 'r_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
-              text = re.sub(re.escape(prefix).replace('_', '(?:_|%5[fF])') + r'(?:[A-Za-z0-9_\-]|%[0-9a-fA-F]{2}){4,}', '[REDACTED]', text, flags=re.I)
+              p_pat = r'(?:\\?\r?\n)?'.join(r'(?:%s|%%(?:25)*(?:%02x|%02x))' % (re.escape(c), ord(c.lower()), ord(c.upper())) for c in prefix)
+              text = re.sub(p_pat + r'(?:[A-Za-z0-9_\-]|%(?:25)*[0-9a-fA-F]{2}|\\\r?\n){4,}', '[REDACTED]', text, flags=re.I)
           text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
           open(sys.argv[2], 'w').write(text)
           PYEOF
@@ -2244,7 +2288,8 @@ jobs:
           import re, sys
           text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
           for prefix in ('gh' + 'p_', 'gh' + 's_', 'gh' + 'o_', 'gh' + 'u_', 'gh' + 'r_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
-              text = re.sub(re.escape(prefix).replace('_', '(?:_|%5[fF])') + r'(?:[A-Za-z0-9_\-]|%[0-9a-fA-F]{2}){4,}', '[REDACTED]', text, flags=re.I)
+              p_pat = r'(?:\\?\r?\n)?'.join(r'(?:%s|%%(?:25)*(?:%02x|%02x))' % (re.escape(c), ord(c.lower()), ord(c.upper())) for c in prefix)
+              text = re.sub(p_pat + r'(?:[A-Za-z0-9_\-]|%(?:25)*[0-9a-fA-F]{2}|\\\r?\n){4,}', '[REDACTED]', text, flags=re.I)
           text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
           open(sys.argv[2], 'w').write(text)
           PYEOF
@@ -2349,7 +2394,8 @@ jobs:
           import re, sys
           text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
           for prefix in ('gh' + 'p_', 'gh' + 's_', 'gh' + 'o_', 'gh' + 'u_', 'gh' + 'r_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
-              text = re.sub(re.escape(prefix).replace('_', '(?:_|%5[fF])') + r'(?:[A-Za-z0-9_\-]|%[0-9a-fA-F]{2}){4,}', '[REDACTED]', text, flags=re.I)
+              p_pat = r'(?:\\?\r?\n)?'.join(r'(?:%s|%%(?:25)*(?:%02x|%02x))' % (re.escape(c), ord(c.lower()), ord(c.upper())) for c in prefix)
+              text = re.sub(p_pat + r'(?:[A-Za-z0-9_\-]|%(?:25)*[0-9a-fA-F]{2}|\\\r?\n){4,}', '[REDACTED]', text, flags=re.I)
           text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
           open(sys.argv[2], 'w').write(text)
           PYEOF
@@ -2547,7 +2593,8 @@ jobs:
           import re, sys
           text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
           for prefix in ('gh' + 'p_', 'gh' + 's_', 'gh' + 'o_', 'gh' + 'u_', 'gh' + 'r_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
-              text = re.sub(re.escape(prefix).replace('_', '(?:_|%5[fF])') + r'(?:[A-Za-z0-9_\-]|%[0-9a-fA-F]{2}){4,}', '[REDACTED]', text, flags=re.I)
+              p_pat = r'(?:\\?\r?\n)?'.join(r'(?:%s|%%(?:25)*(?:%02x|%02x))' % (re.escape(c), ord(c.lower()), ord(c.upper())) for c in prefix)
+              text = re.sub(p_pat + r'(?:[A-Za-z0-9_\-]|%(?:25)*[0-9a-fA-F]{2}|\\\r?\n){4,}', '[REDACTED]', text, flags=re.I)
           text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
           open(sys.argv[2], 'w').write(text)
           PYEOF
@@ -2645,7 +2692,7 @@ jobs:
           fi
           BUDGET_LOG="$LOG" MEASURED_OUT="$EVDIR/budgets.measured.json" \
           python3 - <<'PYEOF' >>"$LOG" 2>&1 || r=1
-          import json, os, pathlib, re, sys
+          import json, math, os, pathlib, re, sys
           import tools.budget_gate as bg
           budgets = bg.load_budgets(pathlib.Path("tests/perf/budgets.json"))
           frozen_caps = {row["id"]: row["bound"] for row in budgets["budgets"] if row["gating"]}
@@ -2672,10 +2719,21 @@ jobs:
               if not isinstance(perf_wall, list) or len(perf_wall) < 4:
                   failures.append("perf_wall_tile_count")
               else:
+                  tile_ids = [t.get("id") for t in perf_wall if isinstance(t, dict) and isinstance(t.get("id"), str) and t.get("id").strip()]
+                  if len(tile_ids) != len(perf_wall) or len(set(tile_ids)) != len(perf_wall):
+                      failures.append("perf_wall_tile_distinctness")
                   for tile in perf_wall:
+                      tid = tile.get("id") if isinstance(tile, dict) else "unknown"
                       fps = tile.get("fps") if isinstance(tile, dict) else None
-                      if not isinstance(fps, (int, float)) or fps < 10.0:
-                          failures.append(f"perf_wall_fps:{tile.get('id') if isinstance(tile, dict) else 'unknown'}")
+                      if isinstance(fps, bool) or not isinstance(fps, (int, float)) or not math.isfinite(float(fps)) or float(fps) < 10.0:
+                          failures.append(f"perf_wall_fps:{tid}")
+                      if isinstance(tile, dict) and ("pixel" in tile or "expectedPixel" in tile):
+                          if tile.get("pixel") is None or tile.get("expectedPixel") is None or tile.get("pixel") != tile.get("expectedPixel"):
+                              failures.append(f"perf_wall_pixel:{tid}")
+                      if isinstance(tile, dict) and "maxGapMs" in tile:
+                          mg = tile.get("maxGapMs")
+                          if isinstance(mg, bool) or not isinstance(mg, (int, float)) or not math.isfinite(float(mg)) or float(mg) < 0 or float(mg) > 2000.0:
+                              failures.append(f"perf_wall_gap:{tid}")
           measured = {
               "schema": "metaviewer.perf.budget-gate-receipt/v1",
               "frozen_budgets_bytes": frozen_caps,
@@ -2700,7 +2758,8 @@ jobs:
           PLATFORM: ${{ matrix.platform }}
           # Per-arch package outputs: needs.package.outputs.receipt_x64 / needs.package.outputs.receipt_arm64
           PACKAGE_RECEIPT: ${{ needs.package.outputs[format('receipt_{0}', matrix.platform)] }}
-          MV_REQUIRED_RECEIPTS: budgets
+          MV_REQUIRED_RECEIPTS: budgets,package
+          MV_EXPECTED_GATE_REVISION: ${{ github.sha }}
         run: |
           fail=0
           check_distribution="${{ job.status }}"
@@ -2724,10 +2783,16 @@ jobs:
           check novac "${{ needs.novac.result }}"
           check package "${{ needs.package.result }}"
           python3 - <<'PYEOF' || fail=1
-          import json, os, pathlib, re, sys
+          import hashlib, json, os, pathlib, re, sys
           HEX = re.compile(r'^[0-9a-f]{64}$')
           SHA = re.compile(r'^[0-9a-f]{40}$')
           FORBIDDEN = {'timestamp', 'started_at', 'finished_at', 'duration_ms', 'pid', 'ppid', 'hostname', 'runner_name', 'temp_dir'}
+          wf_path = pathlib.Path(os.environ.get('GITHUB_WORKSPACE', '.')) / '.github' / 'workflows' / 'ci.yml'
+          if not wf_path.is_file():
+              wf_path = pathlib.Path('.github/workflows/ci.yml')
+          expected_wf_sha = hashlib.sha256(wf_path.read_bytes()).hexdigest() if wf_path.is_file() else ''
+          expected_platform = os.environ.get('PLATFORM', 'x64').strip() or 'x64'
+          expected_rev = os.environ.get('MV_EXPECTED_GATE_REVISION', '').strip()
           def norm_id(s):
               s = str(s).strip()
               if s.endswith('.receipt.json'):
@@ -2744,24 +2809,63 @@ jobs:
                   return ['missing gate_id']
               if (name == 'package' or name.endswith('.receipt.json')) and norm_id(gid) != norm_id(name):
                   return ['mismatched gate_id: ' + str(gid)]
-              if r.get('outcome') not in ('PASS', 'FAIL', 'TIMEOUT', 'BLOCKED'): return ['bad outcome']
+              if r.get('leg') != gid:
+                  return ['mismatched leg: ' + str(r.get('leg'))]
+              scope = r.get('scope')
+              if (not isinstance(scope, dict)
+                      or set(scope) != {'unit', 'platform', 'feature', 'artifact'}
+                      or any(not isinstance(v, str) or not v.strip() for v in scope.values())):
+                  return ['bad scope']
+              if expected_platform and scope.get('platform') != expected_platform:
+                  return ['mismatched platform: ' + str(scope.get('platform'))]
+              if scope.get('feature') != gid or scope.get('artifact') != f'{gid}.receipt.json':
+                  return ['mismatched scope feature/artifact']
+              if r.get('outcome') not in ('PASS', 'FAIL', 'TIMEOUT', 'BLOCKED', 'UNKNOWN', 'NOT_APPLICABLE'):
+                  return ['bad outcome']
               ident = r.get('identities')
               if not isinstance(ident, dict): return ['bad identities']
               if not SHA.match(str(ident.get('gate_revision', ''))): return ['bad gate_revision']
-              for k in ('instrument_sha256', 'sanitized_log_sha256', 'configuration_sha256'):
+              if expected_rev and ident.get('gate_revision') != expected_rev:
+                  return ['mismatched gate_revision']
+              for k in ('instrument_sha256', 'sanitized_log_sha256', 'configuration_sha256', 'log_sha256'):
                   if not HEX.match(str(ident.get(k, ''))): return ['bad ' + k]
-              counts = r.get('counts')
-              if not isinstance(counts, dict): return ['bad counts']
-              src = counts.get('source', '')
-              if r.get('outcome') == 'PASS' and str(src).startswith('parsed:') and (type(counts.get('passed')) is not int or counts.get('passed', 0) <= 0):
-                  return ['parsed count must have passed > 0']
-              if r.get('outcome') == 'PASS' and r.get('rc') != 0: return ['PASS requires rc 0']
+              if expected_wf_sha and ident.get('configuration_sha256') != expected_wf_sha:
+                  return ['mismatched configuration_sha256']
+              fix_shas = ident.get('fixture_sha256')
+              if not isinstance(fix_shas, list) or not fix_shas or any(not HEX.match(str(x)) for x in fix_shas):
+                  return ['bad fixture_sha256']
               if r.get('outcome') != 'PASS': return ['non-PASS outcome: ' + str(r.get('outcome'))]
+              if type(r.get('rc')) is not int or r.get('rc') != 0: return ['PASS requires rc 0']
+              counts = r.get('counts')
+              if not isinstance(counts, dict) or set(counts) != {'passed', 'failed', 'skipped', 'source'}:
+                  return ['bad counts']
+              src = counts.get('source', '')
+              if not isinstance(src, str) or not src.strip():
+                  return ['bad counts source']
+              vals = [counts.get(k) for k in ('passed', 'failed', 'skipped')]
+              if any(v is not None and (type(v) is not int or v < 0) for v in vals):
+                  return ['bad count values']
+              if any(v is None for v in vals) and not all(v is None for v in vals):
+                  return ['inconsistent counts']
+              if all(type(v) is int for v in vals):
+                  if counts['failed'] != 0:
+                      return ['failed count > 0 on PASS']
+                  if counts['passed'] <= 0:
+                      return ['parsed count must have passed > 0']
+              elif str(src).startswith('parsed:'):
+                  return ['parsed count must have passed > 0']
               assertions = r.get('assertions')
-              if not isinstance(assertions, list) or not assertions or not all(isinstance(a, dict) and a.get('accepted') is True for a in assertions):
+              if (not isinstance(assertions, list) or not assertions
+                      or not all(isinstance(a, dict)
+                                 and set(a) == {'id', 'expected', 'observed', 'accepted'}
+                                 and type(a.get('accepted')) is bool
+                                 and a.get('accepted') is True
+                                 and all(isinstance(a.get(k), str) and a.get(k).strip() for k in ('id', 'expected', 'observed'))
+                                 for a in assertions)):
                   return ['unaccepted assertions']
               return []
           receipts = []
+          has_pkg_env = 'PACKAGE_RECEIPT' in os.environ
           pkg_raw = os.environ.get('PACKAGE_RECEIPT', '').strip()
           if pkg_raw:
               try:
@@ -2795,11 +2899,12 @@ jobs:
                   print('FAIL required receipts: empty MV_REQUIRED_RECEIPTS')
                   sys.exit(1)
           elif not req_dir:
-              required_ids = ['budgets']
+              required_ids = ['budgets', 'package'] if has_pkg_env else ['budgets']
           else:
-              required_ids = []
+              required_ids = ['package'] if has_pkg_env else []
           errs = []
           seen_ids = set()
+          seen_revs = set()
           for name, rec in receipts:
               e = check_receipt(rec, name)
               if e:
@@ -2807,7 +2912,11 @@ jobs:
                   errs.extend(e)
               else:
                   seen_ids.add(norm_id(name if name else rec['gate_id']))
+                  seen_revs.add(rec['identities']['gate_revision'])
                   print(f'PASS required receipt {name}')
+          if len(seen_revs) > 1:
+              print('FAIL required receipts: inconsistent gate_revision across receipts')
+              errs.append('inconsistent-gate_revision')
           for req_id in required_ids:
               if req_id not in seen_ids:
                   print(f'FAIL required receipt missing: {req_id}')
