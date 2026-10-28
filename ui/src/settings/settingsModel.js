@@ -7,6 +7,12 @@
  * keys and unknown values; every failure maps to a typed refusal with a
  * fixed literal reason so host error text never reaches the screen.
  *
+ * The store ignores unknown keys on load: the host's closed key set is the
+ * fail-closed contract, so saves carry only scheme and density. Missing or
+ * invalid values fall back to defaults per value, so a valid scheme survives
+ * an invalid density and vice versa. Saves are leading-edge debounced so
+ * bursts collapse to an immediate write plus one last-wins trailing write.
+ *
  * @module settings/settingsModel
  */
 
@@ -27,6 +33,14 @@ export const MV_PRIMARY_SCHEME = 'mv-light';
  * @type {string}
  */
 export const MV_DENSITY = 'compact';
+
+/**
+ * Save burst window in milliseconds. The first change in an idle panel saves
+ * immediately; further changes within the window collapse to a single trailing
+ * save carrying the last value, so bursts cannot storm the host.
+ * @type {number}
+ */
+export const MV_SETTINGS_SAVE_WINDOW_MS = 150;
 
 /**
  * @typedef {object} MvSettings
@@ -139,6 +153,42 @@ export function decodeMvSettings(raw) {
 }
 
 /**
+ * Stored-text decode shared by the store and the entry boot parser: unknown
+ * keys are ignored (the closed host key set is fail-closed), then each known
+ * value falls back to its default independently, so a valid scheme survives
+ * an invalid density and vice versa. Missing keys take defaults; malformed
+ * text and non-objects refuse with the same codes.
+ * @param {unknown} raw
+ * @returns {{ ok: true, settings: Readonly<MvSettings> } | { ok: false, error: { code: string, message: string } }}
+ */
+export function decodeStoredSettings(raw) {
+  let candidate = raw;
+  if (typeof candidate === 'string') {
+    try {
+      candidate = JSON.parse(candidate);
+    } catch {
+      return {
+        ok: false,
+        error: { code: 'ERR_SETTINGS_MALFORMED', message: 'Settings text is not JSON' },
+      };
+    }
+  }
+  if (!isPlainObject(candidate)) {
+    return {
+      ok: false,
+      error: { code: 'ERR_SETTINGS_MALFORMED', message: 'Settings must be an object' },
+    };
+  }
+  const scheme = isMvScheme(candidate.scheme)
+    ? /** @type {string} */ (candidate.scheme)
+    : MV_PRIMARY_SCHEME;
+  const density = candidate.density === MV_DENSITY
+    ? /** @type {string} */ (candidate.density)
+    : MV_DENSITY;
+  return { ok: true, settings: Object.freeze({ scheme, density }) };
+}
+
+/**
  * Strict-encode settings to canonical JSON (fixed key order). Throws the
  * coded decode error when the value is not valid settings.
  * @param {unknown} settings
@@ -153,9 +203,83 @@ export function encodeMvSettings(settings) {
 }
 
 /**
+ * Stored-text failures (malformed text, unknown key, scheme or density) that
+ * fall back to defaults silently; transport and host failures stay loud as
+ * typed refusals.
+ * @param {unknown} error
+ * @returns {boolean}
+ */
+export function isMvSettingsDecodeFailure(error) {
+  const code =
+    typeof error === 'object' && error !== null && typeof /** @type {{ code?: unknown }} */ (error).code === 'string'
+      ? /** @type {{ code: string }} */ (/** @type {unknown} */ (error)).code
+      : '';
+  return (
+    code === 'ERR_SETTINGS_MALFORMED' ||
+    code === 'ERR_SETTINGS_UNKNOWN_KEY' ||
+    code === 'ERR_SETTINGS_UNKNOWN_SCHEME' ||
+    code === 'ERR_SETTINGS_UNKNOWN_DENSITY'
+  );
+}
+
+/**
+ * Leading-edge debounce for settings saves. The first call runs `fn`
+ * synchronously; calls within `delayMs` collapse to a single trailing call
+ * with the last argument when the window ends. `cancel` drops a pending
+ * trailing call (used on unmount and host replacement); `pending` reports
+ * one and `pendingValue` returns the queued trailing value, if any, so a
+ * revert to the applied value can overwrite the queue instead of dropping.
+ * @param {(scheme: string) => void} fn
+ * @param {number} delayMs
+ * @returns {((scheme: string) => void) & { cancel: () => void, pending: () => boolean, pendingValue: () => string|null }}
+ */
+export function createDebouncedRunner(fn, delayMs) {
+  /** @type {ReturnType<typeof setTimeout>|null} */
+  let timer = null;
+  let windowOpen = false;
+  /** @type {string|null} */
+  let trailing = null;
+  /**
+   * @param {string} scheme
+   */
+  const schedule = (scheme) => {
+    if (!windowOpen) {
+      windowOpen = true;
+      trailing = null;
+      timer = setTimeout(onWindowEnd, Math.max(0, delayMs));
+      fn(scheme);
+      return;
+    }
+    trailing = scheme;
+  };
+  const onWindowEnd = () => {
+    timer = null;
+    windowOpen = false;
+    if (trailing !== null) {
+      const last = trailing;
+      trailing = null;
+      schedule(last);
+    }
+  };
+  const cancel = () => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    windowOpen = false;
+    trailing = null;
+  };
+  const pending = () => trailing !== null;
+  const pendingValue = () => trailing;
+  return Object.assign(schedule, { cancel, pending, pendingValue });
+}
+
+/**
  * Creates a settings store over an injected host port. The host shape is
  * validated eagerly so a missing method fails at wiring time, never at
- * save time.
+ * save time. Unknown keys seen on load are ignored, missing or invalid
+ * values fall back to defaults per value; every save carries only scheme
+ * and density.
  * @param {HostSettingsPort} host Injected host settings interface.
  * @returns {Readonly<{ load: () => Promise<Readonly<MvSettings>>, save: (settings: unknown) => Promise<true> }>}
  */
@@ -170,17 +294,20 @@ export function createHostSettingsStore(host) {
   }
   return Object.freeze({
     /**
-     * Load settings; absent storage resolves defaults. Malformed storage
-     * throws its coded error so the caller can show the typed refusal.
+     * Load settings; absent storage resolves defaults. Missing or invalid
+     * known values resolve per-field defaults; malformed storage throws its
+     * coded error so the caller can fall back.
      * @returns {Promise<Readonly<MvSettings>>}
      */
     async load() {
       const raw = await host.loadSettings();
-      if (raw === null) return defaultMvSettings();
+      if (raw === null) {
+        return defaultMvSettings();
+      }
       if (typeof raw !== 'string') {
         throw settingsError('ERR_SETTINGS_MALFORMED', 'Stored settings must be text or null');
       }
-      const decoded = decodeMvSettings(raw);
+      const decoded = decodeStoredSettings(raw);
       if (decoded.ok === false) {
         throw settingsError(decoded.error.code, decoded.error.message);
       }

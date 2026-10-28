@@ -104,6 +104,71 @@ function createInitialLayout(scope) {
 }
 
 /**
+ * MVUI29S: read stored settings once before first paint. Only a missing
+ * handler binding retries (mirroring the layout read); any other failure
+ * settles as failed with defaults so boot never refuses on settings.
+ * @param {{ loadSettings: () => Promise<string|null> }} settingsHost
+ * @returns {Promise<Readonly<{ text: string|null, failed: boolean }>>}
+ */
+async function readBootSettings(settingsHost) {
+  for (let attempt = 0; attempt < READ_ATTEMPTS; attempt += 1) {
+    try {
+      return Object.freeze({ text: await settingsHost.loadSettings(), failed: false });
+    } catch (error) {
+      if (!String(error).includes(HANDLER_NOT_INSTALLED)) {
+        return Object.freeze({ text: null, failed: true });
+      }
+      await new Promise((resolve) => setTimeout(resolve, READ_RETRY_MS));
+    }
+  }
+  return Object.freeze({ text: null, failed: true });
+}
+
+/**
+ * MVUI29SC: boot-scheme parse through the store decode shared via the
+ * settings-host factory static, so boot paints exactly the scheme the store
+ * will load (per-field defaults); malformed or absent storage paints the
+ * primary scheme silently here.
+ * @param {string|null} text Settled boot read.
+ * @returns {string} mv-light or mv-dark.
+ */
+function bootSchemeFromText(text) {
+  if (typeof text !== 'string') return 'mv-light';
+  const decoded = createSettingsHost.decodeStoredSettings(text);
+  if (decoded.ok === false) return 'mv-light';
+  return decoded.settings.scheme;
+}
+
+/**
+ * MVUI29S: memoized boot host. The panel reuses the single boot read instead
+ * of hitting the host again; every acknowledged save refreshes the cache so
+ * load-after-save round-trips. A failed boot read rethrows a fixed-typed
+ * error on load so the panel can show its typed refusal.
+ * @param {import('./settings/settingsModel.js').HostSettingsPort} settingsHost
+ * @param {Readonly<{ text: string|null, failed: boolean }>} outcome
+ * @returns {import('./settings/settingsModel.js').HostSettingsPort}
+ */
+function createBootSettingsHost(settingsHost, outcome) {
+  /** @type {string|null} */
+  let cached = outcome.text;
+  let failed = outcome.failed;
+  return {
+    loadSettings: async () => {
+      if (failed) throw Object.assign(new Error('ERR_SETTINGS_HOST'), { code: 'ERR_SETTINGS_HOST' });
+      return cached;
+    },
+    saveSettings: async (/** @type {string} */ json) => {
+      const ack = await settingsHost.saveSettings(json);
+      if (ack === true) {
+        cached = json;
+        failed = false;
+      }
+      return ack;
+    },
+  };
+}
+
+/**
  * Fixture-only replay bench driver (lane R, mvui6): named `?step=<name>`
  * outcomes drive the REAL App dispatch paths through the fixture-only hook
  * installed by lane V (`window.__metaviewerBench` when a fixture key is
@@ -239,6 +304,12 @@ async function bootstrap() {
   let preferences = /** @type {Storage|null} */ (null);
   if (!fixture) { try { preferences = globalThis.localStorage; } catch { /* Storage may be unavailable. */ } }
   const settingsHost = createSettingsHost(host ?? null, preferences, fixture?.scheme ?? null);
+  // MVUI29S: a single settings read before first paint; the panel reuses the
+  // settled value through the memoized host, so a stored scheme paints first
+  // with no flash of the default. Failures keep bootable defaults.
+  const bootOutcome = await readBootSettings(settingsHost);
+  const bootScheme = bootSchemeFromText(bootOutcome.text);
+  const bootSettingsHost = createBootSettingsHost(settingsHost, bootOutcome);
   const depth = fixture ? (fixture.key === 'nested' ? 1 : 0) : (typeof host?.nestedDepth === 'function' ? await host.nestedDepth() : null);
   const selfId = fixture ? null : (typeof host?.selfCapsuleId === 'function' ? await host.selfCapsuleId() : null);
   const exportDestination = fixture ? '' : (typeof host?.recordingDestination === 'function' ? await host.recordingDestination() : null) ?? '';
@@ -304,14 +375,14 @@ async function bootstrap() {
   if (framePortRouter || captureState || liveRuntime || replayRuntime || inputPort || (!fixture && typeof host?.qa?.reportAnchors === 'function')) window.addEventListener?.('pagehide', teardown, { once: true });
   try {
     Object.assign(document.documentElement.dataset, THEME_DATASET);
-    const application = createApp(App, { layout, storage, scope: SCOPE, fixture, nestedHost, exportDestination, settingsHost, preferences, authorityHost, terminalBroker, captureState, captureAvailable,
+    const application = createApp(App, { layout, storage, scope: SCOPE, fixture, nestedHost, exportDestination, settingsHost: bootSettingsHost, initialScheme: bootScheme, preferences, authorityHost, terminalBroker, captureState, captureAvailable,
       runtime: /** @type {InstanceType<typeof App>['$props']['runtime']} */ (/** @type {unknown} */ (fixtureMount?.runtime ?? liveRuntime)),
       terminal: fixtureMount?.terminal ?? null });
     if (framePortRouter) application.provide?.('framePortRouter', framePortRouter);
     application.provide?.('inputPort', inputPort);
     installKitTheme(application);
     // Kit declaration predates its shipped MetaViewer schemes.
-    /** @type {(scheme:string)=>void} */ (setKitScheme)(fixture?.scheme ?? 'mv-light');
+    /** @type {(scheme:string)=>void} */ (setKitScheme)(bootScheme);
     application.onUnmount?.(teardown);
     application.mount(MOUNT_SELECTOR);
     if (!fixture && depth !== 1 && typeof host?.qa?.reportAnchors === 'function') {

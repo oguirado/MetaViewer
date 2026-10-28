@@ -38,6 +38,7 @@ const props = defineProps({
   // renders its controls disabled with the fixed unavailable reason.
   captureAvailable: { type: Boolean, default: false },
   settingsHost: { type: /** @type {import('vue').PropType<import('./settings/settingsModel.js').HostSettingsPort|null>} */ (Object), default: null },
+  initialScheme: { type: /** @type {import('vue').PropType<string|null>} */ (String), default: null },
   preferences: { type: /** @type {import('vue').PropType<Storage|null>} */ (Object), default: null },
   exportDestination: { type: String, default: '' },
   fixture: { type: /** @type {import('vue').PropType<import('./fixtures/states.js').FixtureState|null>} */ (Object), default: null },
@@ -99,7 +100,10 @@ onBeforeUnmount(() => tileScheduler.destroy());
  * Launcher reveals admitted rows only; no fabricated core creation API. */
 provide('capsuleChromeStyle', 'openvue');
 const preferences = props.preferences;
-const scheme = ref(props.fixture?.scheme === 'mv-dark' ? 'mv-dark' : 'mv-light');
+// MVUI29S: the entry resolves the stored scheme before mount so first paint
+// already carries it; direct mounts keep the fixture-or-light default.
+const bootScheme = props.initialScheme ?? props.fixture?.scheme ?? 'mv-light';
+const scheme = ref(bootScheme === 'mv-dark' ? 'mv-dark' : 'mv-light');
 const applyScheme = /** @type {(scheme:string)=>void} */ (setKitScheme);
 applyScheme(scheme.value);
 document.documentElement.dataset.themeDensity = 'compact';

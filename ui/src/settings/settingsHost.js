@@ -1,5 +1,5 @@
 import { SETTINGS_STORAGE_KEYS, readStoredSetting, writeStoredSetting } from '../../.kit/capsule-ui-kit/src/shell/SettingsModel.js';
-import { decodeMvSettings, encodeMvSettings } from './settingsModel.js';
+import { decodeMvSettings, decodeStoredSettings, encodeMvSettings } from './settingsModel.js';
 
 /**
  * Interim compatibility adapter: use each preload method when present.
@@ -12,7 +12,7 @@ import { decodeMvSettings, encodeMvSettings } from './settingsModel.js';
  * @param {Storage|null} storage
  * @param {string|null} [fixtureScheme]
  * @returns {import('./settingsModel.js').HostSettingsPort} */
-export function createSettingsHost(host, storage, fixtureScheme = null) {
+function createSettingsHostImpl(host, storage, fixtureScheme = null) {
   if (fixtureScheme !== null) {
     let text = encodeMvSettings({ scheme: fixtureScheme, density: 'compact' });
     return { loadSettings: async () => text, saveSettings: async json => { text = json; return true; } };
@@ -39,3 +39,10 @@ export function createSettingsHost(host, storage, fixtureScheme = null) {
       },
   };
 }
+
+/**
+ * Settings host factory. The store decode rides as a static so the entry
+ * boot parser shares the exact same decode without growing the pinned
+ * static import surface.
+ */
+export const createSettingsHost = Object.assign(createSettingsHostImpl, { decodeStoredSettings });

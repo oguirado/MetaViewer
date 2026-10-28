@@ -7,8 +7,11 @@ import {
   MV_SCHEMES,
   MV_SETTINGS_ANCHORS,
   MV_SETTINGS_IDS,
+  MV_SETTINGS_SAVE_WINDOW_MS,
+  createDebouncedRunner,
   createHostSettingsStore,
   defaultMvSettings,
+  isMvSettingsDecodeFailure,
   mvSchemeOptionAnchor,
   mvSchemeOptionDomId,
   settingsRefusalFor,
@@ -17,8 +20,11 @@ import {
 /**
  * MetaViewer settings panel (AC-08): mv-light (primary) / mv-dark scheme
  * with live switch, compact density readout, persisted through the
- * injected host settings interface. Failures render as a typed refusal
- * row; the panel never crashes and never leaks host error text.
+ * injected host settings interface. Failed saves render as a typed refusal
+ * row and keep the UI state; malformed stored text falls back to defaults
+ * silently. Changes save leading-edge debounced: the first change in an
+ * idle panel persists immediately, bursts collapse to one last-wins write.
+ * The panel never crashes and never leaks host error text.
  */
 
 const props = defineProps({
@@ -95,16 +101,32 @@ async function loadHost() {
       scheme.value = fallback.scheme;
       density.value = fallback.density;
       emit('scheme-change', fallback.scheme);
+      if (!isMvSettingsDecodeFailure(error)) refusal.value = settingsRefusalFor(error);
+    } else {
+      refusal.value = settingsRefusalFor(error);
     }
-    refusal.value = settingsRefusalFor(error);
   } finally {
     if (current === generation) ready.value = true;
   }
 }
 
+/**
+ * Leading-edge debounced persistence: the first change saves immediately,
+ * bursts within the window collapse to one trailing save with the last
+ * scheme. Trailing continuations re-check every guard, so a replaced host
+ * or an in-flight save still drops them safely.
+ */
+const persistRunner = createDebouncedRunner((next) => { void persistScheme(next); }, MV_SETTINGS_SAVE_WINDOW_MS);
+
 onMounted(() => { void loadHost(); });
-watch(() => props.settingsHost, () => { void loadHost(); }, { flush: 'sync' });
-onBeforeUnmount(() => { generation++; });
+watch(
+  () => props.settingsHost,
+  () => {
+    persistRunner.cancel();
+    void loadHost();
+  },
+  { flush: 'sync' },
+);
 
 /**
  * Persist before changing the live theme. Only one save per host may run;
@@ -112,7 +134,7 @@ onBeforeUnmount(() => { generation++; });
  * restoration clears the verified selection and gates changes until a host reload.
  * @param {string} next Requested scheme.
  */
-async function selectScheme(next) {
+async function persistScheme(next) {
   const active = store.value;
   if (!ready.value || !liveVerified.value || saving.value || next === scheme.value || active === null) return;
   const current = generation;
@@ -142,6 +164,25 @@ async function selectScheme(next) {
     if (current === generation) saving.value = false;
   }
 }
+
+/**
+ * Schedule persistence for a requested scheme. The last requested value
+ * always wins: a revert to the applied scheme while a different trailing
+ * value is queued overwrites the queue instead of dropping. Only a request
+ * equal to both the persisted and the pending value is a no-op. Changes
+ * while a save runs, before the live theme verifies, or past a host
+ * replacement are dropped.
+ * @param {string} next Requested scheme.
+ */
+function selectScheme(next) {
+  const active = store.value;
+  if (!ready.value || !liveVerified.value || saving.value || active === null) return;
+  const pending = persistRunner.pendingValue();
+  if (next === scheme.value && (pending === null || pending === next)) return;
+  persistRunner(next);
+}
+
+onBeforeUnmount(() => { generation += 1; persistRunner.cancel(); });
 </script>
 
 <template>
