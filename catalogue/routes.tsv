@@ -1414,6 +1414,7 @@ t4packa-ef0b0f72d037	ui/test/t4-packaged-security.test.js
 t5elecp-255635a73bb2	ui/test/t5-elec-pty-regression.test.js
 t5frame-876b9d009df2	ui/test/t5-frame-port-regression.test.js
 t5frame-5e2ca93fda52	ui/test/t5-frame-reader-regression.test.js
+terminal-host.test.js	ui/test/terminal-host.test.js
 termina-e0e91adcec21	ui/test/terminalClient.test.js
 tileScheduler.test.js	ui/test/tileScheduler.test.js
 uielfra-c6a2b4801769	ui/test/uiel-frame-fold.test.js
