@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 359 | 55 | 304 |
-| Lanes finished OK | 359 | 55 | 304 |
-| Agent steps | 19,840 | 2,705 | 17,135 |
-| Lane-hours of agent work | 51.5 | 5.2 | 46.3 |
-| Fresh input tokens | 80,175,856 | 11,482,034 | 68,693,822 |
-| Cache-read input tokens | 1,879,797,870 | 226,255,212 | 1,653,542,658 |
+| Lanes launched | 361 | 55 | 306 |
+| Lanes finished OK | 361 | 55 | 306 |
+| Agent steps | 19,932 | 2,705 | 17,227 |
+| Lane-hours of agent work | 51.8 | 5.2 | 46.5 |
+| Fresh input tokens | 80,478,973 | 11,482,034 | 68,996,939 |
+| Cache-read input tokens | 1,886,041,444 | 226,255,212 | 1,659,786,232 |
 | Prompt cache hit % | 95.9 | 95.2 | 96.0 |
-| Output tokens | 17,548,549 | 2,135,708 | 15,412,841 |
-| Thinking tokens | 9,363,791 | 1,050,039 | 8,313,752 |
-| Cost (USD) | 15.2869 | 2.0279 | 13.259 |
-| Cost per lane (USD) | 0.0426 | 0.0369 | 0.0436 |
+| Output tokens | 17,614,110 | 2,135,708 | 15,478,402 |
+| Thinking tokens | 9,404,869 | 1,050,039 | 8,354,830 |
+| Cost (USD) | 15.3428 | 2.0279 | 13.3149 |
+| Cost per lane (USD) | 0.0425 | 0.0369 | 0.0435 |
 
-Rooms: 97. Peak concurrent lanes [MEASURED from lane start/end]: 24.
+Rooms: 98. Peak concurrent lanes [MEASURED from lane start/end]: 24.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -43,7 +43,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
 | docs | 15 | 94.8 | 0.5371 |
-| fix | 35 | 96.9 | 1.9848 |
+| fix | 37 | 96.8 | 2.0407 |
 | kit | 3 | 96.5 | 0.1997 |
 | ops | 4 | 88.1 | 0.0468 |
 | plan | 12 | 92.6 | 0.3072 |
@@ -157,6 +157,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui25 | UI orchestrator | Oct 28 01:08 | ui | 2 | 97.2 | 0.1198 | Live finding: human typing and clicks never reach the capsule in WRITE mode with human control; build the renderer side of surface_input/v1 (input port, focusable canvas capture, mounting) and fix the READ-ONLY strip label. |
 | mvui25b | UI orchestrator | Oct 28 01:26 | fix | 1 | 97.3 | 0.0563 | Fix pass for the human-input renderer drop: lane C's canvas capture broke 37 existing tests (new SFC imports unmapped in harnesses, unguarded blur) and vue-tsc; make the full gate green without weakening tests. |
 | mvui25c | UI orchestrator | Oct 28 01:39 | fix | 1 | 95.6 | 0.0297 | Human-input renderer drop: key chords with punctuation or non-ASCII characters violate the host adapter key grammar; map them to X keysym names or drop them. |
+| mvui25d | UI orchestrator | Oct 28 01:50 | fix | 2 | 95.4 | 0.0559 | Argon notes on the human-input renderer drop: an unavailable input port made the canvas focusable and swallow keys; fail closed, fix the strip oracle, harden mapper load failure and integer checks. |
 
 ## Every lane
 
@@ -521,6 +522,8 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui25 | A | mounting and gating in App | Oct 28 01:09 | yes | 100 | 97.6 | 0.066224 |
 | mvui25b | C | canvas capture gate fix | Oct 28 01:26 | yes | 97 | 97.3 | 0.056333 |
 | mvui25c | P | keyMap chord grammar | Oct 28 01:39 | yes | 53 | 95.6 | 0.029741 |
+| mvui25d | C | unavailable port fails closed | Oct 28 01:50 | yes | 52 | 95.7 | 0.034515 |
+| mvui25d | P | safe integer checks | Oct 28 01:51 | yes | 40 | 94.8 | 0.021396 |
 
 ## Method
 

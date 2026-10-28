@@ -1,17 +1,17 @@
 {
  "schema": "metaviewer.meta_ai_usage/v1",
  "totals": {
-  "lanes": 359,
-  "ok": 359,
-  "input_tokens": 80175856,
-  "cache_read_tokens": 1879797870,
-  "output_tokens": 17548549,
-  "thinking_tokens": 9363791,
+  "lanes": 361,
+  "ok": 361,
+  "input_tokens": 80478973,
+  "cache_read_tokens": 1886041444,
+  "output_tokens": 17614110,
+  "thinking_tokens": 9404869,
   "cache_hit_pct": 95.9,
-  "usd": 15.2869,
-  "usd_per_lane": 0.0426,
-  "steps": 19840,
-  "lane_hours": 51.5
+  "usd": 15.3428,
+  "usd_per_lane": 0.0425,
+  "steps": 19932,
+  "lane_hours": 51.8
  },
  "peak_concurrent_lanes": 24,
  "rooms": {
@@ -8100,6 +8100,48 @@
    "thinking_tokens": 22696,
    "cache_hit_pct": 95.6,
    "usd": 0.029741
+  },
+  {
+   "room": "mvui25d",
+   "lane": "C",
+   "title": "unavailable port fails closed",
+   "stage": "fix",
+   "model": "muse-spark-1.3",
+   "orchestrator": "UI orchestrator",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-28T00:50:52.257000+00:00",
+   "duration_s": 590.6,
+   "end_utc": "2026-10-28T01:00:42.902000+00:00",
+   "phase": "build",
+   "steps": 52,
+   "input_tokens": 176149,
+   "cache_read_tokens": 3941921,
+   "output_tokens": 45083,
+   "thinking_tokens": 30464,
+   "cache_hit_pct": 95.7,
+   "usd": 0.034515
+  },
+  {
+   "room": "mvui25d",
+   "lane": "P",
+   "title": "safe integer checks",
+   "stage": "fix",
+   "model": "muse-spark-1.3",
+   "orchestrator": "UI orchestrator",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-28T00:51:12.252000+00:00",
+   "duration_s": 296.1,
+   "end_utc": "2026-10-28T00:56:08.379000+00:00",
+   "phase": "build",
+   "steps": 40,
+   "input_tokens": 126968,
+   "cache_read_tokens": 2301653,
+   "output_tokens": 20478,
+   "thinking_tokens": 10614,
+   "cache_hit_pct": 94.8,
+   "usd": 0.021396
   }
  ]
 }
