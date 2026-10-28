@@ -1424,6 +1424,11 @@ qa-anchors.test.js	ui/test/qa-anchors.test.js
 r2t4new-a5225175abe1	ui/test/r2t4-new-surface.test.js
 r2t4reg-c43c6f37375b	ui/test/r2t4-regressions.test.js
 r3-electron-1.test.js	ui/test/r3-electron-1.test.js
+r3-refresh.test.js	ui/test/r3-refresh.test.js
+r3t4new-abd5a83eee59	ui/test/r3t4-new-surface.test.js
+r3t4reg-2bf6b1d454e0	ui/test/r3t4-regressions.test.js
+r3t4sti-e4ad61eabbd1	ui/test/r3t4-still-open.test.js
+r4-refresh.test.js	ui/test/r4-refresh.test.js
 rv9elec-3b07d2eb24f6	ui/test/rv9-elec-regressions.test.js
 security.test.js	ui/test/security.test.js
 shellFixture.html	ui/test/shellFixture.html
