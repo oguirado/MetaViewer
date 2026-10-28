@@ -799,6 +799,7 @@ cli_malformed.txt	daemon-adapter/testdata/cli_malformed.txt
 deps.lock	deps.lock
 ARCHITECTURE.md	docs/ARCHITECTURE.md
 COMMIT_LAWS.md	docs/COMMIT_LAWS.md
+DEMO_AGENT_SCRIPT.md	docs/DEMO_AGENT_SCRIPT.md
 DEMOREC-37656a7d648c	docs/DEMO_RECURSIVE_SCRIPT.md
 DEMO_RUNBOOK.md	docs/DEMO_RUNBOOK.md
 HOLDING-41388780e954	docs/HOLDINGS_LESSONS_UI_ORCHESTRATOR.md
@@ -940,6 +941,7 @@ e2e18_budgets.test.js	tests/e2e/e2e18_budgets.test.js
 e2e19_nested.test.js	tests/e2e/e2e19_nested.test.js
 e2e1_slice.test.js	tests/e2e/e2e1_slice.test.js
 e2e1_slice-README.md	tests/e2e/e2e1_slice/README.md
+demo_agent_drive.py	tests/e2e/e2e1_slice/demo_agent_drive.py
 electron-relay.mjs	tests/e2e/e2e1_slice/electron-relay.mjs
 g_ai_stack.py	tests/e2e/e2e1_slice/g_ai_stack.py
 index.js	tests/e2e/e2e1_slice/index.js
@@ -948,6 +950,7 @@ relay-renderer.mjs	tests/e2e/e2e1_slice/relay-renderer.mjs
 relay.html	tests/e2e/e2e1_slice/relay.html
 scenario.rs	tests/e2e/e2e1_slice/scenario.rs
 stack.py	tests/e2e/e2e1_slice/stack.py
+testdem-9e6566157486	tests/e2e/e2e1_slice/test_demo_agent_drive.py
 test_stack_demo.py	tests/e2e/e2e1_slice/test_stack_demo.py
 verify-receipt.rs	tests/e2e/e2e1_slice/verify-receipt.rs
 e2e1_wall.test.js	tests/e2e/e2e1_wall.test.js
