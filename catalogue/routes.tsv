@@ -1347,6 +1347,8 @@ mvui3cr-3b8cf3406706	ui/test/mvui3-creative-integration.test.js
 mvui3cr-583d7ef7447b	ui/test/mvui3-creative-render.test.js
 mvui3fr-5a3b4fd24023	ui/test/mvui3-frameref-renderer.test.js
 mvui3re-8a9d63193762	ui/test/mvui3-renderer.test.js
+mvui30l-644bb86e109e	ui/test/mvui30-lost-frozen.test.js
+mvui30l-6a1adc9c9513	ui/test/mvui30-lost-panel.test.js
 mvui31c-ed383bf27d1e	ui/test/mvui31-convert-reuse.test.js
 mvui31m-de6c1f5eacb3	ui/test/mvui31-marker-skip.test.js
 mvui4wa-768ad3f201a7	ui/test/mvui4-wall-states.test.js
