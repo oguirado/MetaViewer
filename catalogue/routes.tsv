@@ -725,6 +725,7 @@ serve_flow.rs	core/tests/serve_flow.rs
 serve_reconnect.rs	core/tests/serve_reconnect.rs
 serve_v02_tags.rs	core/tests/serve_v02_tags.rs
 settings_parity.rs	core/tests/settings_parity.rs
+sha256_parity.rs	core/tests/sha256_parity.rs
 socket_bind.rs	core/tests/socket_bind.rs
 socket_hostile.rs	core/tests/socket_hostile.rs
 startup_pin.rs	core/tests/startup_pin.rs
