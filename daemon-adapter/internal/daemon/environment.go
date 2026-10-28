@@ -18,6 +18,11 @@ package daemon
 // lastFrames, input_applied is retained and paired with a verified=false error
 // action_receipt/v0.2 carrying a diagnostic frame_ref. No new capture is
 // required to release a dispatched lease, including after takeover.
+// [TARGET, unit decision] When an agent-origin Holdings input returns a
+// validated GroundTruth on InputEvidence, wireHandler binds it to the
+// post-input frame_ref and emits observation/v0.2 ({schema, frame_ref,
+// ground_truth}) before action_receipt/v0.2 while keeping verified=false and
+// action_receipt.native_evidence closed under contracts/v0.2.
 import (
 	"context"
 	"encoding/json"
@@ -698,6 +703,8 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 		if reqOrigin == "human" {
 			// [TARGET, unit decision] Human-origin input settles immediately after
 			// native input execution without waiting for post-input pixel capture.
+			wireEvidence := evidence
+			wireEvidence.GroundTruth = nil
 			frameMu.Lock()
 			latestFrame := lastFrames[id]
 			frameMu.Unlock()
@@ -728,7 +735,7 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 					"proposal_id":     proposal,
 					"executed_at_ns":  completed - origin,
 					"after_frame":     diagFrame,
-					"native_evidence": evidence,
+					"native_evidence": wireEvidence,
 					"verified":        false,
 					"verification":    map[string]string{"method": "pixel", "detail": "input failed; no wire-published frame baseline available; no post-input proof"},
 					"error":           errMsg,
@@ -739,7 +746,7 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 				events = append(events, receipt)
 				return events, nil
 			}
-			receipt, err := json.Marshal(map[string]any{"schema": "action_receipt/v0.2", "proposal_id": proposal, "executed_at_ns": completed - origin, "after_frame": latestFrame, "native_evidence": evidence, "verified": false, "verification": map[string]string{"method": "pixel", "detail": "human-origin input; post-input pixel capture skipped"}, "error": ""})
+			receipt, err := json.Marshal(map[string]any{"schema": "action_receipt/v0.2", "proposal_id": proposal, "executed_at_ns": completed - origin, "after_frame": latestFrame, "native_evidence": wireEvidence, "verified": false, "verification": map[string]string{"method": "pixel", "detail": "human-origin input; post-input pixel capture skipped"}, "error": ""})
 			if err != nil {
 				return failure(err)
 			}
@@ -762,13 +769,42 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 		if err != nil {
 			return failure(err)
 		}
+		canObserve := capsule.ValidateGroundTruth(evidence.GroundTruth) == nil &&
+			ctx.Err() == nil &&
+			ref.SurfaceID == id &&
+			ref.Generation > 0 &&
+			ref.Width >= 1 &&
+			ref.Height >= 1 &&
+			ref.RAMWSPath != ""
+		if canObserve {
+			if current, bErr := m.SubscriptionBinding(id); bErr != nil ||
+				current.Container != binding.Container ||
+				current.RunID != binding.RunID ||
+				current.Surface.Control != "agent" {
+				canObserve = false
+			}
+		}
+		if canObserve {
+			if info, statErr := os.Stat(ref.RAMWSPath); statErr != nil || !info.Mode().IsRegular() || uint64(info.Size()) != uint64(ref.Width)*uint64(ref.Height)*3 {
+				canObserve = false
+			}
+		}
 		rawRef, _ := json.Marshal(ref)
 		frameMu.Lock()
+		if owned[id] == nil {
+			canObserve = false
+		}
 		lastFrames[id] = rawRef
 		frameMu.Unlock()
 		ready, _ := json.Marshal(map[string]any{"schema": "surface_event/v0.2", "event": "frame_ready", "data": map[string]any{"frame_ref": ref}})
 		events = append(events, ready)
-		receipt, _ := json.Marshal(map[string]any{"schema": "action_receipt/v0.2", "proposal_id": proposal, "executed_at_ns": completed - origin, "after_frame": ref, "native_evidence": evidence, "verified": false, "verification": map[string]string{"method": "pixel", "detail": "post-input capture only; expectation verification belongs to core"}, "error": ""})
+		if canObserve {
+			obs, _ := json.Marshal(map[string]any{"schema": "observation/v0.2", "frame_ref": ref, "ground_truth": evidence.GroundTruth})
+			events = append(events, obs)
+		}
+		wireEvidence := evidence
+		wireEvidence.GroundTruth = nil
+		receipt, _ := json.Marshal(map[string]any{"schema": "action_receipt/v0.2", "proposal_id": proposal, "executed_at_ns": completed - origin, "after_frame": ref, "native_evidence": wireEvidence, "verified": false, "verification": map[string]string{"method": "pixel", "detail": "post-input capture only; expectation verification belongs to core"}, "error": ""})
 		events = append(events, receipt)
 		return events, nil
 	}

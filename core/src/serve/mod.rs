@@ -258,6 +258,30 @@ impl Server {
             let event: serde_json::Value = serde_json::from_slice(&fs::read(
                 root.join("events").join(format!("{seq}.json")),
             )?)?;
+            if let Some(cancelled) = event["outcome"]["cancelled"].as_array() {
+                for pid in cancelled.iter().filter_map(|v| v.as_str()) {
+                    tool_state.evict_proposal(pid);
+                }
+            }
+            if event["input"]["event"] == "TakeControl" && event["outcome"]["reason"].is_null() {
+                if let Some(sid) = event["input"]["surface_id"].as_str() {
+                    tool_state.clear_surface_ground_truth(sid);
+                }
+            } else if event["input"]["event"] == "HumanInput"
+                && event["outcome"]["reason"].is_null()
+            {
+                if let Some(sid) = event["input"]["request"]["params"]["surface_id"].as_str() {
+                    tool_state.clear_surface_ground_truth(sid);
+                }
+            } else if (event["input"]["event"] == "DispatchFailed"
+                && event["outcome"]["reason"].is_null())
+                || (event["input"]["event"] == "Dispatch"
+                    && event["outcome"]["dispatch"].as_bool() == Some(false))
+            {
+                if let Some(pid) = event["input"]["proposal_id"].as_str() {
+                    tool_state.evict_proposal(pid);
+                }
+            }
             let witnesses: Vec<Witness> = serde_json::from_value(event["witnesses"].clone())?;
             for witness in witnesses.into_iter().take(1) {
                 if witness.byte_len > MAX_FRAME_BYTES as u64 {
@@ -1377,6 +1401,17 @@ impl Server {
                 }
                 self.fanout_at(now_ns, env.body.clone());
             }
+            (Component::Daemon, Command::Observation(obs)) => {
+                if epoch != self.authority.state().epoch {
+                    return Err(invalid("old executor"));
+                }
+                if !self.accept_daemon_observation(obs) {
+                    return self.unsupported_at(now_ns, &env, boundary);
+                }
+                self.authority
+                    .apply_with_witnesses(Input::SurfaceNotice, vec![boundary])?;
+                self.tool_state.retain(&env.body);
+            }
             (Component::Agent, Command::ActionProposal(proposal)) => {
                 self.admit_proposal_at(now_ns, peer, &env, proposal, boundary, None)?;
             }
@@ -1432,6 +1467,11 @@ impl Server {
                         reason,
                         out.core_seq,
                     );
+                }
+                if take {
+                    if let Some(sid) = value["params"]["surface_id"].as_str() {
+                        self.tool_state.clear_surface_ground_truth(sid);
+                    }
                 }
                 self.notify_cancellations_at(now_ns, &out.cancelled, out.core_seq)?;
                 if !take {
@@ -1593,6 +1633,7 @@ impl Server {
                     proposal_id: proposal.proposal_id.clone(),
                     epoch: self.authority.state().epoch,
                 })?;
+                self.tool_state.evict_proposal(&proposal.proposal_id);
             }
             return Err(error);
         }
@@ -1616,6 +1657,7 @@ impl Server {
                         proposal_id: proposal.proposal_id.clone(),
                         epoch: self.authority.state().epoch,
                     })?;
+                    self.tool_state.evict_proposal(&proposal.proposal_id);
                     self.proposal_dispatch_refusal(
                         env,
                         tool,
@@ -1625,6 +1667,7 @@ impl Server {
                     )?;
                 }
             } else {
+                self.tool_state.evict_proposal(&proposal.proposal_id);
                 self.proposal_dispatch_refusal(
                     env,
                     tool,
@@ -1642,6 +1685,9 @@ impl Server {
         self.notify_cancellations_at(now_ns, ids, seq)
     }
     fn notify_cancellations_at(&mut self, now_ns: u64, ids: &[String], seq: u64) -> Result<()> {
+        for id in ids {
+            self.tool_state.evict_proposal(id);
+        }
         let agent = self.agent()?;
         if self.connections.contains_key(&agent) {
             for id in ids {
@@ -1824,6 +1870,8 @@ impl Server {
                 out.core_seq,
             );
         }
+        self.tool_state
+            .clear_surface_ground_truth(&input_req.params.surface_id);
         let daemon_proposal_id = if input_req.params.proposal_id.is_empty() {
             format!("human-input-{}", out.core_seq)
         } else {

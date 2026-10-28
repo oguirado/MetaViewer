@@ -17,6 +17,11 @@ package capsule
 // [TARGET, unit decision] HandleInputWithEvidence returns request-local native
 // evidence only after all input checks pass. Holdings never acquires synthetic
 // focus proof; its independent verifier does not supply native focus fields.
+// [TARGET, unit decision] After an agent-origin Holdings input passes
+// VerifyHoldingsInput, Manager.input invokes observe --container <c> under the
+// configured timeout/output caps and attaches a strictly validated GroundTruth
+// to InputEvidence. Human-origin input never calls observe or attaches
+// GroundTruth; observe failures/refusals/malformed replies omit GroundTruth.
 import (
 	"bytes"
 	"context"
@@ -104,13 +109,14 @@ type NativeFrame struct {
 // InputEvidence keeps the native clock and window identity alongside the public
 // surface binding and the hello-relative timestamp. No evidence is cached/reused.
 type InputEvidence struct {
-	SurfaceID       string `json:"surface_id"`
-	NativeSurfaceID string `json:"native_surface_id,omitempty"`
-	Kind            string `json:"kind,omitempty"`
-	InputMonoNS     uint64 `json:"input_mono_ns"`
-	InputTSNS       uint64 `json:"input_ts_ns"`
-	FocusVerified   *bool  `json:"focus_verified,omitempty"`
-	Result          string `json:"result,omitempty"`
+	SurfaceID       string       `json:"surface_id"`
+	NativeSurfaceID string       `json:"native_surface_id,omitempty"`
+	Kind            string       `json:"kind,omitempty"`
+	InputMonoNS     uint64       `json:"input_mono_ns"`
+	InputTSNS       uint64       `json:"input_ts_ns"`
+	FocusVerified   *bool        `json:"focus_verified,omitempty"`
+	Result          string       `json:"result,omitempty"`
+	GroundTruth     *GroundTruth `json:"ground_truth,omitempty"`
 }
 type Manager struct {
 	mu          sync.Mutex
@@ -874,6 +880,7 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 	if receipt.InputMonoNS == nil || *receipt.InputMonoNS < m.cfg.OriginNS || *receipt.InputMonoNS > 9007199254740991 || *receipt.InputMonoNS < before || *receipt.InputMonoNS > after || after < before || (b.Window != "" && (receipt.SurfaceID != b.Window || receipt.Kind != nativeAction || receipt.FocusVerified == nil || !*receipt.FocusVerified || receipt.Result != "ok")) {
 		return nil, fault("input", "unverified input receipt")
 	}
+	var groundTruth *GroundTruth
 	if b.NativeKind == "holdings" {
 		// The component documents only input_mono_ns. Never interpret extra fields
 		// as proof of identity or action: the verifier owns independent correlation.
@@ -902,6 +909,30 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 		if e := run.Err(); e != nil {
 			return nil, e
 		}
+		if origin == "agent" && evidence != nil {
+			profile := m.cfg.Profiles[b.Surface.ProfileID]
+			container := b.Container
+			m.mu.Unlock()
+			obsOut, obsErr := m.execute(run, profile, []string{"observe", "--container", container}, nil)
+			m.mu.Lock()
+			if m.bindings[q.SurfaceID].Surface.State != "active" || m.destroying[q.SurfaceID] {
+				return nil, fault("surface", "surface lost during input verification")
+			}
+			if pending.cancelled {
+				return nil, fault("SURFACE_NOT_AGENT_CONTROLLED", "input verification cancelled by takeover")
+			}
+			if m.bindings[q.SurfaceID].Surface.Control != origin {
+				return nil, fault("SURFACE_NOT_AGENT_CONTROLLED", "human control blocks agent input")
+			}
+			if e := run.Err(); e != nil {
+				return nil, e
+			}
+			if obsErr == nil {
+				if gt, parseErr := ParseHoldingsObserve(obsOut, m.cfg.MaxOutputBytes); parseErr == nil {
+					groundTruth = gt
+				}
+			}
+		}
 	}
 	if m.bindings[q.SurfaceID].Surface.State != "active" {
 		return nil, fault("surface", "surface lost during input verification")
@@ -912,6 +943,7 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 			Kind: receipt.Kind, InputMonoNS: *receipt.InputMonoNS,
 			InputTSNS:     *receipt.InputMonoNS - m.cfg.OriginNS,
 			FocusVerified: receipt.FocusVerified, Result: receipt.Result,
+			GroundTruth: groundTruth,
 		}
 	}
 	return []json.RawMessage{event(version, "input_applied", struct {

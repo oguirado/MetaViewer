@@ -8,6 +8,12 @@
 //! and layout overrides are pruned against authority on lifecycle/recovery.
 //! [TARGET, unit decision] Native focus and timing gate core-owned pixel
 //! expectation verification. Missing semantic capture witnesses fail closed.
+//! [TARGET, unit decision] Daemon observation/v0.2 envelopes with ground_truth
+//! source holdings_lane are accepted only for the committed frame of a live
+//! surface with a dispatched agent-origin proposal, joined to that frame and
+//! proposal waiter, and exposed by observe; Case2 (state_sha256_change) invokes
+//! verify_receipt and fails closed when witness checks fail or canonical state
+//! JSON bytes are absent from capsule output.
 use super::*;
 use crate::wire::payload::{ActionVerdict, MvToolCall};
 use serde_json::{json, Value};
@@ -15,10 +21,36 @@ use std::collections::VecDeque;
 
 // [TARGET, unit decision] Retain the latest 128 receipts by arrival, including replay.
 const RECEIPT_CAP: usize = 128;
+// [TARGET, unit decision] Bound unsettled proposal witness joins in arrival order.
+const PROPOSAL_WITNESS_CAP: usize = 128;
+// [TARGET, unit decision] Bound per-surface frame witness history for based_on_frame joins.
+const FRAME_WITNESS_CAP: usize = 16;
 // [TARGET, unit decision] Bound tool-view tombstones in arrival order; authority
 // owns permanent non-revival on the wire, and eviction never drops a prefixed
 // tombstone whose stripped surface ID is still live in `surfaces`.
 const DESTROYED_CAP: usize = 128;
+
+type ProposalWitness = (Option<Value>, Option<(Value, Value)>);
+
+fn is_dispatched_current_epoch_agent_pending(
+    state: &CoreState,
+    pid: &str,
+    surface_id: Option<&str>,
+) -> bool {
+    let Some(pending) = state.pending.get(pid) else {
+        return false;
+    };
+    let Ok(val) = serde_json::to_value(pending) else {
+        return false;
+    };
+    val["dispatched"].as_bool() == Some(true)
+        && val["unknown"].as_bool() == Some(false)
+        && val["request"]["epoch"].as_u64() == Some(state.epoch)
+        && val["request"]["envelope"]["from"]["component"].as_str() == Some("agent")
+        && surface_id.is_none_or(|sid| {
+            val["request"]["envelope"]["body"]["surface_id"].as_str() == Some(sid)
+        })
+}
 
 #[derive(Default)]
 pub(super) struct ToolState {
@@ -26,6 +58,9 @@ pub(super) struct ToolState {
     destroyed: BTreeSet<String>,
     destroyed_order: VecDeque<String>,
     frames: BTreeMap<String, Value>,
+    ground_truths: BTreeMap<String, VecDeque<(u64, String, Value)>>,
+    proposal_witnesses: BTreeMap<String, ProposalWitness>,
+    proposal_witness_order: VecDeque<String>,
     receipts: BTreeMap<String, Value>,
     pub(super) verification_contexts: BTreeMap<String, (Value, Value)>,
     waiters: Vec<Waiter>,
@@ -53,6 +88,7 @@ impl ToolState {
                         if matches!(surface["state"].as_str(), Some("destroyed" | "lost")) {
                             self.surfaces.remove(id);
                             self.frames.remove(id);
+                            self.clear_surface_ground_truth(id);
                             self.layout.remove(id);
                             self.placements.remove(id);
                             if surface["state"].as_str() == Some("destroyed") {
@@ -75,6 +111,50 @@ impl ToolState {
                 _ => {}
             },
             Command::FrameRef(_) => self.retain_frame(&value),
+            Command::Observation(obs) => {
+                if obs.vision.is_missing() {
+                    if let crate::wire::Optional::Present(gt) = &obs.ground_truth {
+                        if gt.source == crate::wire::payload::ObservationGroundTruthSource::Value {
+                            let sid = &obs.frame_ref.surface_id;
+                            if let (Ok(frame_val), Ok(gt_val)) = (
+                                serde_json::to_value(&obs.frame_ref),
+                                serde_json::to_value(gt),
+                            ) {
+                                if self.frames.get(sid) == Some(&frame_val) {
+                                    let ring = self.ground_truths.entry(sid.clone()).or_default();
+                                    ring.retain(|(gen, sha, _)| {
+                                        !(*gen == obs.frame_ref.generation
+                                            && *sha == obs.frame_ref.sha256)
+                                    });
+                                    ring.push_back((
+                                        obs.frame_ref.generation,
+                                        obs.frame_ref.sha256.clone(),
+                                        gt_val.clone(),
+                                    ));
+                                    while ring.len() > FRAME_WITNESS_CAP {
+                                        ring.pop_front();
+                                    }
+                                    let active_ids: Vec<String> = self
+                                        .verification_contexts
+                                        .iter()
+                                        .filter(|(pid, (action, _))| {
+                                            !self.receipts.contains_key(*pid)
+                                                && action["surface_id"].as_str()
+                                                    == Some(sid.as_str())
+                                        })
+                                        .map(|(pid, _)| pid.clone())
+                                        .collect();
+                                    for pid in active_ids {
+                                        if let Some(entry) = self.proposal_witnesses.get_mut(&pid) {
+                                            entry.1 = Some((frame_val.clone(), gt_val.clone()));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             Command::ActionProposal(proposal) => self.retain_proposal(proposal),
             Command::MvToolCall(call) => {
                 if let MvToolCall::Case2(call) = call.as_ref() {
@@ -90,10 +170,17 @@ impl ToolState {
                     if let Some(old) = self.receipt_order.pop_front() {
                         self.receipts.remove(&old);
                         self.verification_contexts.remove(&old);
+                        self.proposal_witnesses.remove(&old);
+                        self.proposal_witness_order.retain(|pid| pid != &old);
                     }
                 }
             }
             Command::UiIntent(_) => {
+                if value["op"].as_str() == Some("take_control") {
+                    if let Some(sid) = value["params"]["surface_id"].as_str() {
+                        self.clear_surface_ground_truth(sid);
+                    }
+                }
                 if let (Some(id), Some(op)) =
                     (value["params"]["slot_id"].as_str(), value["op"].as_str())
                 {
@@ -117,11 +204,90 @@ impl ToolState {
             _ => {}
         }
     }
+    pub(super) fn ground_truth_for_frame(
+        &self,
+        surface_id: &str,
+        generation: u64,
+        sha256: &str,
+    ) -> Option<&Value> {
+        self.ground_truths
+            .get(surface_id)?
+            .iter()
+            .find_map(|(gen, sha, gt)| (*gen == generation && sha == sha256).then_some(gt))
+    }
+    pub(super) fn evict_proposal(&mut self, proposal_id: &str) {
+        if !self.receipts.contains_key(proposal_id) {
+            self.verification_contexts.remove(proposal_id);
+            self.proposal_witnesses.remove(proposal_id);
+            self.proposal_witness_order.retain(|id| id != proposal_id);
+        }
+    }
+    pub(super) fn clear_surface_ground_truth(&mut self, surface_id: &str) {
+        self.ground_truths.remove(surface_id);
+        let stale_ids: Vec<String> = self
+            .verification_contexts
+            .iter()
+            .filter(|(pid, (action, _))| {
+                !self.receipts.contains_key(*pid)
+                    && action["surface_id"].as_str() == Some(surface_id)
+            })
+            .map(|(pid, _)| pid.clone())
+            .collect();
+        for pid in stale_ids {
+            self.evict_proposal(&pid);
+        }
+    }
     pub(super) fn retain_proposal(&mut self, proposal: &crate::wire::payload::ActionProposal) {
-        if let Some(frame) = self.frames.get(&proposal.surface_id) {
+        if let Some(frame) = self.frames.get(&proposal.surface_id).cloned() {
             if let Ok(value) = serde_json::to_value(proposal) {
+                let stale_ids: Vec<String> = self
+                    .verification_contexts
+                    .iter()
+                    .filter(|(pid, (action, _))| {
+                        *pid != &proposal.proposal_id
+                            && !self.receipts.contains_key(*pid)
+                            && action["surface_id"].as_str() == Some(proposal.surface_id.as_str())
+                    })
+                    .map(|(pid, _)| pid.clone())
+                    .collect();
+                for pid in stale_ids {
+                    self.evict_proposal(&pid);
+                }
+                let before_gt = self
+                    .ground_truth_for_frame(
+                        &proposal.surface_id,
+                        proposal.based_on_frame.generation,
+                        &proposal.based_on_frame.sha256,
+                    )
+                    .cloned();
                 self.verification_contexts
-                    .insert(proposal.proposal_id.clone(), (value, frame.clone()));
+                    .insert(proposal.proposal_id.clone(), (value, frame));
+                self.proposal_witnesses
+                    .insert(proposal.proposal_id.clone(), (before_gt, None));
+                self.proposal_witness_order
+                    .retain(|old| old != &proposal.proposal_id);
+                self.proposal_witness_order
+                    .push_back(proposal.proposal_id.clone());
+                while self.proposal_witnesses.len() > PROPOSAL_WITNESS_CAP {
+                    let Some(pos) = self
+                        .proposal_witness_order
+                        .iter()
+                        .position(|cand| !self.receipts.contains_key(cand))
+                        .or(if self.proposal_witness_order.is_empty() {
+                            None
+                        } else {
+                            Some(0)
+                        })
+                    else {
+                        break;
+                    };
+                    if let Some(old) = self.proposal_witness_order.remove(pos) {
+                        self.proposal_witnesses.remove(&old);
+                        if !self.receipts.contains_key(&old) {
+                            self.verification_contexts.remove(&old);
+                        }
+                    }
+                }
             }
         }
     }
@@ -132,7 +298,79 @@ impl ToolState {
     ) -> Option<Value> {
         let (action, before) = self.verification_contexts.get(&receipt.proposal_id)?;
         let receipt_val = serde_json::to_value(receipt).ok()?;
-        verified_native_fields(action, before, &receipt_val, &root.join("artifacts"))
+        let witness = self.proposal_witnesses.get(&receipt.proposal_id);
+        verified_native_fields_with_witness(
+            action,
+            before,
+            &receipt_val,
+            witness,
+            &root.join("artifacts"),
+        )
+    }
+    fn case2_witness_detail(
+        &self,
+        proposal_id: &str,
+        receipt: &crate::wire::payload::ActionReceipt,
+    ) -> Option<String> {
+        use crate::wire::payload::{
+            ActionProposal, ActionProposalExpectation, FrameRef, ObservationGroundTruth,
+        };
+        let (action, _) = self.verification_contexts.get(proposal_id)?;
+        let p: ActionProposal = serde_json::from_value(action.clone()).ok()?;
+        let ActionProposalExpectation::Case2(want) = &p.expectation else {
+            return None;
+        };
+        let Some((before_gt_val, Some((witness_frame_val, after_gt_val)))) =
+            self.proposal_witnesses.get(proposal_id)
+        else {
+            return Some("missing holdings_lane ground_truth witness".into());
+        };
+        let Ok(witness_frame) = serde_json::from_value::<FrameRef>(witness_frame_val.clone())
+        else {
+            return Some("witness bound to foreign frame or surface".into());
+        };
+        let Ok(after_gt) = serde_json::from_value::<ObservationGroundTruth>(after_gt_val.clone())
+        else {
+            return Some("missing holdings_lane ground_truth witness".into());
+        };
+        if witness_frame.surface_id != p.surface_id
+            || receipt.after_frame.surface_id != p.surface_id
+            || witness_frame != receipt.after_frame
+            || receipt.after_frame.generation <= p.based_on_frame.generation
+        {
+            return Some("witness bound to foreign frame or surface".into());
+        }
+        let before_gt = before_gt_val
+            .as_ref()
+            .and_then(|v| serde_json::from_value::<ObservationGroundTruth>(v.clone()).ok());
+        if let Some(bgt) = &before_gt {
+            if bgt.state_sha256 != want.before {
+                return Some(
+                    "before ground_truth state_sha256 does not match expectation.before".into(),
+                );
+            }
+        }
+        if after_gt.state_sha256 == want.before {
+            return Some("state_sha256 unchanged from before digest".into());
+        }
+        if want.min_tick > want.max_tick
+            || !(want.min_tick..=want.max_tick).contains(&after_gt.tick)
+            || before_gt
+                .as_ref()
+                .is_some_and(|bgt| after_gt.tick <= bgt.tick)
+        {
+            return Some("witness tick outside expectation window".into());
+        }
+        Some(
+            "holdings_lane witness joined; canonical state JSON bytes absent from capsule output"
+                .into(),
+        )
+    }
+    fn case2_wait_detail(&self, proposal_id: &str) -> Option<String> {
+        let receipt_val = self.receipts.get(proposal_id)?;
+        let receipt: crate::wire::payload::ActionReceipt =
+            serde_json::from_value(receipt_val.clone()).ok()?;
+        self.case2_witness_detail(proposal_id, &receipt)
     }
     pub(super) fn recompute_daemon_receipt(
         &self,
@@ -156,11 +394,13 @@ impl ToolState {
                 ActionProposalExpectation::Case2(_) => ActionReceiptVerificationMethod::StateSha256,
             })
             .unwrap_or_else(|| receipt.verification.method.clone());
+        let case2_detail = self.case2_witness_detail(&receipt.proposal_id, receipt);
         if !receipt.verified {
-            if recomputed.verification.method != method {
+            if recomputed.verification.method != method || case2_detail.is_some() {
                 recomputed.verification = ActionReceiptVerification {
                     method,
-                    detail: "missing, invalid or unmatched witness".into(),
+                    detail: case2_detail
+                        .unwrap_or_else(|| "missing, invalid or unmatched witness".into()),
                 };
             }
             return recomputed;
@@ -186,7 +426,8 @@ impl ToolState {
         } else {
             recomputed.verification = ActionReceiptVerification {
                 method,
-                detail: "missing, invalid or unmatched witness".into(),
+                detail: case2_detail
+                    .unwrap_or_else(|| "missing, invalid or unmatched witness".into()),
             };
         }
         recomputed
@@ -269,8 +510,19 @@ impl ToolState {
         let live = |id: &String| state.surfaces.get(id).is_some_and(|s| s.live);
         self.surfaces.retain(|id, _| live(id));
         self.frames.retain(|id, _| live(id));
+        self.ground_truths.retain(|id, _| live(id));
         self.layout.retain(|id, _| live(id));
         self.placements.retain(|id, _| live(id));
+        self.verification_contexts.retain(|id, _| {
+            is_dispatched_current_epoch_agent_pending(state, id, None)
+                || self.receipts.contains_key(id)
+        });
+        self.proposal_witnesses.retain(|id, _| {
+            is_dispatched_current_epoch_agent_pending(state, id, None)
+                || self.receipts.contains_key(id)
+        });
+        self.proposal_witness_order
+            .retain(|id| self.proposal_witnesses.contains_key(id));
         for id in dead {
             self.record_destroyed(&id);
         }
@@ -288,6 +540,58 @@ impl ToolState {
     }
 }
 impl Server {
+    pub(super) fn accept_daemon_observation(
+        &self,
+        obs: &crate::wire::payload::Observation,
+    ) -> bool {
+        if !obs.vision.is_missing() {
+            return false;
+        }
+        let crate::wire::Optional::Present(gt) = &obs.ground_truth else {
+            return false;
+        };
+        if gt.source != crate::wire::payload::ObservationGroundTruthSource::Value {
+            return false;
+        }
+        let sid = &obs.frame_ref.surface_id;
+        let state = self.authority.state();
+        if state.is_destroyed(sid) {
+            return false;
+        }
+        let Some(surface) = state.surfaces.get(sid) else {
+            return false;
+        };
+        if !surface.live || !surface.agent_controlled {
+            return false;
+        }
+        let Some(current) = &surface.frame else {
+            return false;
+        };
+        if current.sha256 != obs.frame_ref.sha256
+            || current.generation != obs.frame_ref.generation
+            || current.width != obs.frame_ref.width
+            || current.height != obs.frame_ref.height
+        {
+            return false;
+        }
+        let Ok(frame_val) = serde_json::to_value(&obs.frame_ref) else {
+            return false;
+        };
+        if self.tool_state.frames.get(sid) != Some(&frame_val) {
+            return false;
+        }
+        if self.human_inputs.values().any(|h| h.surface_id == *sid) {
+            return false;
+        }
+        self.tool_state
+            .verification_contexts
+            .iter()
+            .any(|(pid, (action, _))| {
+                !self.tool_state.receipts.contains_key(pid)
+                    && action["surface_id"].as_str() == Some(sid.as_str())
+                    && is_dispatched_current_epoch_agent_pending(state, pid, Some(sid.as_str()))
+            })
+    }
     fn tool_result(&mut self, peer: &Endpoint, id: &str, op: &str, fields: Value) -> Result<()> {
         let mut value = json!({"schema":"mv_tool_result/v0.2","request_id":id,"op":op});
         value
@@ -351,12 +655,25 @@ impl Server {
                 }) else {
                     return self.tool_error(env, "observe", "UNAVAILABLE", "No current frame");
                 };
+                let mut observation = json!({"schema":"observation/v0.2","frame_ref":frame});
+                if surface.agent_controlled
+                    && !self.human_inputs.values().any(|h| h.surface_id == *sid)
+                {
+                    if let Some(current) = &surface.frame {
+                        if let Some(gt) = self.tool_state.ground_truth_for_frame(
+                            sid,
+                            current.generation,
+                            &current.sha256,
+                        ) {
+                            observation["ground_truth"] = gt.clone();
+                        }
+                    }
+                }
                 self.tool_result(
                     &env.from,
                     &env.msg_id,
                     "observe",
-                    json!({"status":"ok",
-                    "observation":{"schema":"observation/v0.2","frame_ref":frame}}),
+                    json!({"status":"ok","observation":observation}),
                 )
             }
             MvToolCall::Case1(call) => {
@@ -460,27 +777,38 @@ impl Server {
         });
         for (peer, request, proposal) in ready {
             let fields = if self.tool_state.receipts.contains_key(&proposal) {
+                let witness = self.tool_state.proposal_witnesses.get(&proposal);
                 self.tool_state
                     .verification_contexts
                     .get(&proposal)
                     .and_then(|(action, before)| {
-                        verified_native_fields(
+                        verified_native_fields_with_witness(
                             action,
                             before,
                             &self.tool_state.receipts[&proposal],
+                            witness,
                             &self.root.join("artifacts"),
                         )
                     })
                     .unwrap_or_else(|| {
-                        json!({"status":"error","code":"VERIFICATION_FAILED",
-                        "detail": if self.tool_state.receipts[&proposal].get("native_evidence").is_none() {
-                            "Receipt settled execution; focus proof and input_mono_ns are absent"
-                        } else {
-                            "Missing, stale or unmatched native/frame evidence"
-                        }})
+                        let detail = self
+                            .tool_state
+                            .case2_wait_detail(&proposal)
+                            .unwrap_or_else(|| {
+                                if self.tool_state.receipts[&proposal]
+                                    .get("native_evidence")
+                                    .is_none()
+                                {
+                                    "Receipt settled execution; focus proof and input_mono_ns are absent"
+                                        .into()
+                                } else {
+                                    "Missing, stale or unmatched native/frame evidence".into()
+                                }
+                            });
+                        json!({"status":"error","code":"VERIFICATION_FAILED","detail":detail})
                     })
             } else if !self.authority.state().pending.contains_key(&proposal) {
-                self.tool_state.verification_contexts.remove(&proposal);
+                self.tool_state.evict_proposal(&proposal);
                 json!({"status":"error","code":"UNAVAILABLE","detail":"Proposal cancelled"})
             } else {
                 json!({"status":"timeout","proposal_id":proposal,"verified":false})
@@ -502,10 +830,7 @@ impl Server {
     ) -> Result<()> {
         if serde_json::to_value(&verdict)?["decision"] == "admitted" {
             if let Command::ActionProposal(proposal) = &env.body {
-                self.tool_state.verification_contexts.retain(|id, _| {
-                    self.authority.state().pending.contains_key(id)
-                        || self.tool_state.receipts.contains_key(id)
-                });
+                self.tool_state.prune(self.authority.state());
                 self.tool_state.retain_proposal(proposal);
             }
         }
@@ -575,18 +900,85 @@ mod tools_state_regression;
 
 // [TARGET, unit decision] This helper is reached only for authority-settled
 // receipts. Read hash-addressed core artifacts, never executor-provided paths.
+#[cfg(test)]
 fn verified_native_fields(
     proposal: &Value,
     before: &Value,
     receipt: &Value,
     artifacts: &std::path::Path,
 ) -> Option<Value> {
+    verified_native_fields_with_witness(proposal, before, receipt, None, artifacts)
+}
+
+fn verified_native_fields_with_witness(
+    proposal: &Value,
+    before: &Value,
+    receipt: &Value,
+    witness: Option<&ProposalWitness>,
+    artifacts: &std::path::Path,
+) -> Option<Value> {
     use crate::verify::{verify_receipt, Evidence, MAX_RGB_BYTES};
-    use crate::wire::payload::{ActionProposal, ActionReceipt, Observation};
+    use crate::wire::payload::{
+        ActionProposal, ActionProposalExpectation, ActionReceipt, FrameRef, Observation,
+    };
     use crate::wire::Optional;
     use std::io::Read;
     let p: ActionProposal = serde_json::from_value(proposal.clone()).ok()?;
     let r: ActionReceipt = serde_json::from_value(receipt.clone()).ok()?;
+    let read = |hash: &str| -> Option<Vec<u8>> {
+        // Strict decoding already validates the digest; guard direct test callers too.
+        if hash.len() != 64 || !hash.bytes().all(|c| c.is_ascii_hexdigit()) {
+            return None;
+        }
+        let file = std::fs::File::open(artifacts.join(hash)).ok()?;
+        if file.metadata().ok()?.len() > MAX_RGB_BYTES {
+            return None;
+        }
+        let mut bytes = Vec::new();
+        file.take(MAX_RGB_BYTES + 1).read_to_end(&mut bytes).ok()?;
+        Some(bytes)
+    };
+    if let ActionProposalExpectation::Case2(want) = &p.expectation {
+        let (before_gt, Some((witness_frame_val, after_gt))) = witness? else {
+            return None;
+        };
+        let witness_frame: FrameRef = serde_json::from_value(witness_frame_val.clone()).ok()?;
+        if witness_frame.surface_id != p.surface_id
+            || r.after_frame.surface_id != p.surface_id
+            || witness_frame != r.after_frame
+            || r.after_frame.generation <= p.based_on_frame.generation
+        {
+            return None;
+        }
+        let mut b_obj = json!({"schema":"observation/v0.2", "frame_ref":before.clone()});
+        if let Some(bgt) = before_gt {
+            b_obj["ground_truth"] = bgt.clone();
+        }
+        let mut a_obj = json!({"schema":"observation/v0.2", "frame_ref":serde_json::to_value(&r.after_frame).ok()?});
+        a_obj["ground_truth"] = after_gt.clone();
+        let b: Observation = serde_json::from_value(b_obj).ok()?;
+        let a: Observation = serde_json::from_value(a_obj).ok()?;
+        let before_rgb = read(&b.frame_ref.sha256);
+        let after_rgb = read(&a.frame_ref.sha256);
+        let verified = verify_receipt(
+            &p,
+            &b,
+            &a,
+            &r,
+            &Evidence {
+                before_rgb: before_rgb.as_deref(),
+                after_rgb: after_rgb.as_deref(),
+                semantic_frame_sha256: Some(&a.frame_ref.sha256),
+                previous_state_sha256: Some(&want.before),
+                before_state: None,
+                after_state: None,
+                ..Evidence::default()
+            },
+        );
+        if !verified.verified {
+            return None;
+        }
+    }
     let Optional::Present(native) = &r.native_evidence else {
         return None;
     };
@@ -613,19 +1005,6 @@ fn verified_native_fields(
     };
     let b = observation(before.clone())?;
     let a = observation(serde_json::to_value(&r.after_frame).ok()?)?;
-    let read = |hash: &str| -> Option<Vec<u8>> {
-        // Strict decoding already validates the digest; guard direct test callers too.
-        if hash.len() != 64 || !hash.bytes().all(|c| c.is_ascii_hexdigit()) {
-            return None;
-        }
-        let file = std::fs::File::open(artifacts.join(hash)).ok()?;
-        if file.metadata().ok()?.len() > MAX_RGB_BYTES {
-            return None;
-        }
-        let mut bytes = Vec::new();
-        file.take(MAX_RGB_BYTES + 1).read_to_end(&mut bytes).ok()?;
-        Some(bytes)
-    };
     let before_rgb = read(&b.frame_ref.sha256)?;
     let after_rgb = read(&a.frame_ref.sha256)?;
     let verified = verify_receipt(
@@ -654,3 +1033,657 @@ fn verified_native_fields(
 #[cfg(test)]
 #[path = "receipt_evidence_tests.rs"]
 mod receipt_evidence_tests;
+
+#[cfg(test)]
+mod holdings_witness_unit_tests {
+    use super::*;
+
+    fn test_frame(surface_id: &str, generation: u64, sha_byte: char) -> Value {
+        let mut frame: Value = serde_json::from_str(include_str!(
+            "../../../contracts/examples/v0.2/frame_ref.valid.json"
+        ))
+        .unwrap();
+        let bytes = vec![sha_byte as u8; 100 * 60 * 3];
+        frame["surface_id"] = surface_id.into();
+        frame["generation"] = generation.into();
+        frame["sha256"] = crate::journal::sha256_hex(&bytes).into();
+        frame["width"] = 100.into();
+        frame["height"] = 60.into();
+        frame
+    }
+
+    fn test_proposal(
+        proposal_id: &str,
+        surface_id: &str,
+        based_gen: u64,
+        based_sha: &str,
+        before_state_sha: &str,
+    ) -> crate::wire::payload::ActionProposal {
+        serde_json::from_value(json!({
+            "schema": "action_proposal/v0.2",
+            "proposal_id": proposal_id,
+            "surface_id": surface_id,
+            "based_on_frame": {
+                "generation": based_gen,
+                "sha256": based_sha
+            },
+            "action": {
+                "type": "click",
+                "x": 10,
+                "y": 10,
+                "button": "left"
+            },
+            "expectation": {
+                "type": "state_sha256_change",
+                "before": before_state_sha,
+                "min_tick": 1,
+                "max_tick": 20
+            },
+            "budget": {
+                "max_ms": 500,
+                "max_retries": 0
+            }
+        }))
+        .unwrap()
+    }
+
+    fn test_observation(frame: &Value, state_sha: &str, tick: u64) -> Command {
+        Command::Observation(Box::new(
+            serde_json::from_value(json!({
+                "schema": "observation/v0.2",
+                "frame_ref": frame,
+                "ground_truth": {
+                    "source": "holdings_lane",
+                    "state_sha256": state_sha,
+                    "tick": tick
+                }
+            }))
+            .unwrap(),
+        ))
+    }
+
+    #[test]
+    fn before_gt_binds_to_based_on_frame_not_current_frame() {
+        let mut state = ToolState::default();
+        let sid = "surface-holdings";
+        let mut surf: Value = serde_json::from_str(include_str!(
+            "../../../contracts/examples/v0.2/surface.valid.json"
+        ))
+        .unwrap();
+        surf["surface_id"] = sid.into();
+        state.retain(&Command::SurfaceEvent(Box::new(
+            serde_json::from_value(json!({
+                "schema": "surface_event/v0.2",
+                "event": "created",
+                "data": {"surface": surf}
+            }))
+            .unwrap(),
+        )));
+
+        let f1 = test_frame(sid, 1, 'a');
+        let f2 = test_frame(sid, 2, 'b');
+        let d1 = "11".repeat(32);
+        let d2 = "22".repeat(32);
+
+        state.retain(&Command::FrameRef(Box::new(
+            serde_json::from_value(f1.clone()).unwrap(),
+        )));
+        state.retain(&test_observation(&f1, &d1, 2));
+
+        state.retain(&Command::FrameRef(Box::new(
+            serde_json::from_value(f2.clone()).unwrap(),
+        )));
+        state.retain(&test_observation(&f2, &d2, 5));
+
+        let p = test_proposal(
+            "prop-based-on-f1",
+            sid,
+            1,
+            f1["sha256"].as_str().unwrap(),
+            &d1,
+        );
+        state.retain_proposal(&p);
+
+        let stored_before = state
+            .proposal_witnesses
+            .get("prop-based-on-f1")
+            .and_then(|(b, _)| b.clone())
+            .expect("expected before_gt bound to frame1");
+        assert_eq!(stored_before["state_sha256"], json!(d1));
+        assert_eq!(stored_before["tick"], json!(2));
+    }
+
+    #[test]
+    fn unsettled_proposal_witnesses_bounded_by_standalone_cap() {
+        let mut state = ToolState::default();
+        for i in 0..300 {
+            let sid = format!("surface-cap-{i}");
+            let mut surf: Value = serde_json::from_str(include_str!(
+                "../../../contracts/examples/v0.2/surface.valid.json"
+            ))
+            .unwrap();
+            surf["surface_id"] = sid.clone().into();
+            state.retain(&Command::SurfaceEvent(Box::new(
+                serde_json::from_value(json!({
+                    "schema": "surface_event/v0.2",
+                    "event": "created",
+                    "data": {"surface": surf}
+                }))
+                .unwrap(),
+            )));
+            let f = test_frame(&sid, 1, 'a');
+            state.retain(&Command::FrameRef(Box::new(
+                serde_json::from_value(f.clone()).unwrap(),
+            )));
+            let p = test_proposal(
+                &format!("prop-cap-{i}"),
+                &sid,
+                1,
+                f["sha256"].as_str().unwrap(),
+                &"11".repeat(32),
+            );
+            state.retain_proposal(&p);
+        }
+        assert!(
+            state.proposal_witnesses.len() <= 128,
+            "proposal_witnesses grew unbounded: {}",
+            state.proposal_witnesses.len()
+        );
+    }
+
+    #[test]
+    fn recovery_restores_only_unsettled_proposal_witnesses_no_superset() {
+        use std::os::unix::fs::DirBuilderExt;
+        let dir = std::env::temp_dir().join(format!("mv-tools-rec-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&dir)
+            .unwrap();
+        let uid = std::os::unix::fs::MetadataExt::uid(&std::fs::metadata(&dir).unwrap());
+        let reg = |c: &str| -> Registration {
+            serde_json::from_value(json!({
+                "endpoint": {"component": c, "instance": format!("{c}-test")},
+                "hello": {
+                    "schema": "hello/v0.2",
+                    "contract_version": "v0.2",
+                    "component": c,
+                    "component_version": "0.2.0",
+                    "component_commit": "0123456789abcdef0123456789abcdef01234567",
+                    "dependencies": []
+                }
+            }))
+            .unwrap()
+        };
+        let cfg = Config {
+            session_id: "rec-witness-session".into(),
+            core: reg("core"),
+            peers: vec![reg("daemon"), reg("agent"), reg("ui")],
+        };
+        let mut server = Server::open(cfg.clone(), &dir, uid).unwrap();
+        server.authority.apply(Input::Connect).unwrap();
+
+        let sid = "surface-holdings";
+        let mut surf: Value = serde_json::from_str(include_str!(
+            "../../../contracts/examples/v0.2/surface.valid.json"
+        ))
+        .unwrap();
+        surf["surface_id"] = sid.into();
+        surf["kind"] = "game_capsule".into();
+        surf["control"] = "agent".into();
+        let created_env = decode_envelope(
+            &json!({
+                "schema": "envelope/v0.2",
+                "msg_id": "m-create",
+                "ts_ns": 0,
+                "from": {"component": "daemon", "instance": "daemon-test"},
+                "to": {"component": "core", "instance": "core-test"},
+                "session_id": "rec-witness-session",
+                "seq": 1,
+                "nonce": "n-create",
+                "body": {
+                    "schema": "surface_event/v0.2",
+                    "event": "created",
+                    "data": {"surface": surf}
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let w_create = server
+            .authority
+            .retain_witness(serde_json::to_string(&created_env).unwrap().as_bytes())
+            .unwrap();
+        server
+            .authority
+            .apply_with_witnesses(
+                Input::Lifecycle {
+                    surface_id: sid.into(),
+                    update: LifecycleUpdate::Created(crate::admission::Surface {
+                        display: ":99".into(),
+                        owner: Endpoint {
+                            component: Component::Agent,
+                            instance: "agent-test".into(),
+                        },
+                        agent_controlled: true,
+                        live: true,
+                        frame: None,
+                        refresh_after: None,
+                        allowed_verbs: Vec::new(),
+                    }),
+                },
+                vec![w_create],
+            )
+            .unwrap();
+        server.tool_state.retain(&created_env.body);
+
+        let f1 = test_frame(sid, 1, 'a');
+        let f1_env = decode_envelope(
+            &json!({
+                "schema": "envelope/v0.2",
+                "msg_id": "m-f1",
+                "ts_ns": 0,
+                "from": {"component": "daemon", "instance": "daemon-test"},
+                "to": {"component": "core", "instance": "core-test"},
+                "session_id": "rec-witness-session",
+                "seq": 2,
+                "nonce": "n-f1",
+                "body": f1
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let w_f1 = server
+            .authority
+            .retain_witness(serde_json::to_string(&f1_env).unwrap().as_bytes())
+            .unwrap();
+        let w_f1_rgb = server
+            .authority
+            .retain_witness(&vec![b'a'; 100 * 60 * 3])
+            .unwrap();
+        server
+            .authority
+            .apply_with_witnesses(
+                Input::Frame {
+                    surface_id: sid.into(),
+                    frame: crate::admission::Frame {
+                        sha256: f1["sha256"].as_str().unwrap().into(),
+                        generation: 1,
+                        width: 100,
+                        height: 60,
+                    },
+                },
+                vec![w_f1, w_f1_rgb.clone()],
+            )
+            .unwrap();
+        server.tool_state.retain(&f1_env.body);
+
+        // Admit P1, then cancel it via TakeControl (no receipt, no waiter).
+        let p1 = test_proposal(
+            "P1",
+            sid,
+            1,
+            f1["sha256"].as_str().unwrap(),
+            &"11".repeat(32),
+        );
+        let p1_env = decode_envelope(
+            &json!({
+                "schema": "envelope/v0.2",
+                "msg_id": "m-p1",
+                "ts_ns": 0,
+                "from": {"component": "agent", "instance": "agent-test"},
+                "to": {"component": "core", "instance": "core-test"},
+                "session_id": "rec-witness-session",
+                "seq": 1,
+                "nonce": "n-p1",
+                "body": p1
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let p1_raw = serde_json::to_string(&p1_env).unwrap();
+        let w_p1 = server.authority.retain_witness(p1_raw.as_bytes()).unwrap();
+        let req1 = AdmissionRequest::decode(
+            &p1_raw,
+            &p1_env.from,
+            "rec-witness-session",
+            server.authority.state().epoch,
+            10,
+        )
+        .unwrap();
+        let v1 = server
+            .authority
+            .admit(req1, vec![w_p1, w_f1_rgb.clone()])
+            .unwrap();
+        server.tool_state.retain_proposal(&p1);
+        server
+            .authority
+            .apply(Input::Dispatch {
+                proposal_id: "P1".into(),
+                now_ns: 10,
+            })
+            .unwrap();
+        assert_eq!(serde_json::to_value(&v1).unwrap()["decision"], "admitted");
+
+        // TakeControl cancels P1; Drain settles draining so ReleaseControl can proceed.
+        server
+            .authority
+            .apply(Input::TakeControl {
+                surface_id: sid.into(),
+            })
+            .unwrap();
+        server
+            .authority
+            .apply(Input::Drain {
+                proposal_id: "P1".into(),
+                epoch: server.authority.state().epoch,
+            })
+            .unwrap();
+        server
+            .authority
+            .apply(Input::ReleaseControl {
+                surface_id: sid.into(),
+            })
+            .unwrap();
+
+        let f2 = test_frame(sid, 2, 'b');
+        let f2_env = decode_envelope(
+            &json!({
+                "schema": "envelope/v0.2",
+                "msg_id": "m-f2",
+                "ts_ns": 0,
+                "from": {"component": "daemon", "instance": "daemon-test"},
+                "to": {"component": "core", "instance": "core-test"},
+                "session_id": "rec-witness-session",
+                "seq": 3,
+                "nonce": "n-f2",
+                "body": f2
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let w_f2 = server
+            .authority
+            .retain_witness(serde_json::to_string(&f2_env).unwrap().as_bytes())
+            .unwrap();
+        let w_f2_rgb = server
+            .authority
+            .retain_witness(&vec![b'b'; 100 * 60 * 3])
+            .unwrap();
+        server
+            .authority
+            .apply_with_witnesses(
+                Input::Frame {
+                    surface_id: sid.into(),
+                    frame: crate::admission::Frame {
+                        sha256: f2["sha256"].as_str().unwrap().into(),
+                        generation: 2,
+                        width: 100,
+                        height: 60,
+                    },
+                },
+                vec![w_f2, w_f2_rgb.clone()],
+            )
+            .unwrap();
+        server.tool_state.retain(&f2_env.body);
+
+        // Admit P2 (live prunes P1), dispatch P2, then send Observation on f2.
+        let p2 = test_proposal(
+            "P2",
+            sid,
+            2,
+            f2["sha256"].as_str().unwrap(),
+            &"11".repeat(32),
+        );
+        let p2_env = decode_envelope(
+            &json!({
+                "schema": "envelope/v0.2",
+                "msg_id": "m-p2",
+                "ts_ns": 0,
+                "from": {"component": "agent", "instance": "agent-test"},
+                "to": {"component": "core", "instance": "core-test"},
+                "session_id": "rec-witness-session",
+                "seq": 2,
+                "nonce": "n-p2",
+                "body": p2
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let p2_raw = serde_json::to_string(&p2_env).unwrap();
+        let w_p2 = server.authority.retain_witness(p2_raw.as_bytes()).unwrap();
+        let req2 = AdmissionRequest::decode(
+            &p2_raw,
+            &p2_env.from,
+            "rec-witness-session",
+            server.authority.state().epoch,
+            20,
+        )
+        .unwrap();
+        server
+            .authority
+            .admit(req2, vec![w_p2, w_f2_rgb.clone()])
+            .unwrap();
+        server.tool_state.verification_contexts.retain(|id, _| {
+            server.authority.state().pending.contains_key(id)
+                || server.tool_state.receipts.contains_key(id)
+        });
+        server.tool_state.proposal_witnesses.retain(|id, _| {
+            server.authority.state().pending.contains_key(id)
+                || server.tool_state.receipts.contains_key(id)
+        });
+        server.tool_state.retain_proposal(&p2);
+        server
+            .authority
+            .apply(Input::Dispatch {
+                proposal_id: "P2".into(),
+                now_ns: 20,
+            })
+            .unwrap();
+
+        let obs_cmd = test_observation(&f2, &"33".repeat(32), 7);
+        let obs_env = decode_envelope(
+            &json!({
+                "schema": "envelope/v0.2",
+                "msg_id": "m-obs",
+                "ts_ns": 0,
+                "from": {"component": "daemon", "instance": "daemon-test"},
+                "to": {"component": "core", "instance": "core-test"},
+                "session_id": "rec-witness-session",
+                "seq": 4,
+                "nonce": "n-obs",
+                "body": obs_cmd
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let w_obs = server
+            .authority
+            .retain_witness(serde_json::to_string(&obs_env).unwrap().as_bytes())
+            .unwrap();
+        server
+            .authority
+            .apply_with_witnesses(Input::SurfaceNotice, vec![w_obs])
+            .unwrap();
+        server.tool_state.retain(&obs_env.body);
+        server.authority.flush_sync().unwrap();
+
+        let live_snapshot = server.tool_state.proposal_witnesses.clone();
+        drop(server);
+
+        let reopened = Server::open(cfg, &dir, uid).unwrap();
+        let recovered_snapshot = reopened.tool_state.proposal_witnesses.clone();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(
+            live_snapshot.keys().collect::<Vec<_>>(),
+            vec![&"P2".to_string()]
+        );
+        assert_eq!(recovered_snapshot, live_snapshot);
+    }
+
+    #[test]
+    fn intake_rejects_undispatched_and_unknown_pending_whitebox() {
+        use std::os::unix::fs::DirBuilderExt;
+        let dir = std::env::temp_dir().join(format!("mv-tools-undisp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&dir)
+            .unwrap();
+        let uid = std::os::unix::fs::MetadataExt::uid(&std::fs::metadata(&dir).unwrap());
+        let reg = |c: &str| -> Registration {
+            serde_json::from_value(json!({
+                "endpoint": {"component": c, "instance": format!("{c}-test")},
+                "hello": {
+                    "schema": "hello/v0.2",
+                    "contract_version": "v0.2",
+                    "component": c,
+                    "component_version": "0.2.0",
+                    "component_commit": "0123456789abcdef0123456789abcdef01234567",
+                    "dependencies": []
+                }
+            }))
+            .unwrap()
+        };
+        let cfg = Config {
+            session_id: "undisp-witness-session".into(),
+            core: reg("core"),
+            peers: vec![reg("daemon"), reg("agent"), reg("ui")],
+        };
+        let mut server = Server::open(cfg, &dir, uid).unwrap();
+        server.authority.apply(Input::Connect).unwrap();
+
+        let sid = "surface-holdings";
+        let mut surf: Value = serde_json::from_str(include_str!(
+            "../../../contracts/examples/v0.2/surface.valid.json"
+        ))
+        .unwrap();
+        surf["surface_id"] = sid.into();
+        surf["kind"] = "game_capsule".into();
+        surf["control"] = "agent".into();
+        server
+            .authority
+            .apply(Input::Lifecycle {
+                surface_id: sid.into(),
+                update: LifecycleUpdate::Created(crate::admission::Surface {
+                    display: ":99".into(),
+                    owner: Endpoint {
+                        component: Component::Agent,
+                        instance: "agent-test".into(),
+                    },
+                    agent_controlled: true,
+                    live: true,
+                    frame: None,
+                    refresh_after: None,
+                    allowed_verbs: Vec::new(),
+                }),
+            })
+            .unwrap();
+        server.tool_state.retain(&Command::SurfaceEvent(Box::new(
+            serde_json::from_value(json!({
+                "schema": "surface_event/v0.2",
+                "event": "created",
+                "data": {"surface": surf}
+            }))
+            .unwrap(),
+        )));
+
+        let f1 = test_frame(sid, 1, 'a');
+        let w_f1_rgb = server
+            .authority
+            .retain_witness(&vec![b'a'; 100 * 60 * 3])
+            .unwrap();
+        server
+            .authority
+            .apply_with_witnesses(
+                Input::Frame {
+                    surface_id: sid.into(),
+                    frame: crate::admission::Frame {
+                        sha256: f1["sha256"].as_str().unwrap().into(),
+                        generation: 1,
+                        width: 100,
+                        height: 60,
+                    },
+                },
+                vec![w_f1_rgb.clone()],
+            )
+            .unwrap();
+        server.tool_state.retain(&Command::FrameRef(Box::new(
+            serde_json::from_value(f1.clone()).unwrap(),
+        )));
+
+        let p1 = test_proposal(
+            "P-undisp",
+            sid,
+            1,
+            f1["sha256"].as_str().unwrap(),
+            &"11".repeat(32),
+        );
+        let p1_env = decode_envelope(
+            &json!({
+                "schema": "envelope/v0.2",
+                "msg_id": "m-p1",
+                "ts_ns": 0,
+                "from": {"component": "agent", "instance": "agent-test"},
+                "to": {"component": "core", "instance": "core-test"},
+                "session_id": "undisp-witness-session",
+                "seq": 1,
+                "nonce": "n-p1",
+                "body": p1
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let p1_raw = serde_json::to_string(&p1_env).unwrap();
+        let w_p1 = server.authority.retain_witness(p1_raw.as_bytes()).unwrap();
+        let req1 = AdmissionRequest::decode(
+            &p1_raw,
+            &p1_env.from,
+            "undisp-witness-session",
+            server.authority.state().epoch,
+            10,
+        )
+        .unwrap();
+        server
+            .authority
+            .admit(req1, vec![w_p1, w_f1_rgb.clone()])
+            .unwrap();
+        server.tool_state.retain_proposal(&p1);
+
+        let obs: crate::wire::payload::Observation = serde_json::from_value(json!({
+            "schema": "observation/v0.2",
+            "frame_ref": f1,
+            "ground_truth": {
+                "source": "holdings_lane",
+                "state_sha256": "22".repeat(32),
+                "tick": 3
+            }
+        }))
+        .unwrap();
+
+        // Undispatched proposal must NOT be accepted for daemon observation intake.
+        assert!(
+            !server.accept_daemon_observation(&obs),
+            "undispatched pending proposal accepted daemon observation"
+        );
+
+        // Once dispatched in the current epoch, it is accepted.
+        server
+            .authority
+            .apply(Input::Dispatch {
+                proposal_id: "P-undisp".into(),
+                now_ns: 10,
+            })
+            .unwrap();
+        assert!(server.accept_daemon_observation(&obs));
+
+        // Once Connect bumps epoch and marks pending unknown, it is rejected.
+        server.authority.apply(Input::Connect).unwrap();
+        assert!(!server.accept_daemon_observation(&obs));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
