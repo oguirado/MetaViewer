@@ -39,6 +39,8 @@ const props = defineProps({
   captureAvailable: { type: Boolean, default: false },
   settingsHost: { type: /** @type {import('vue').PropType<import('./settings/settingsModel.js').HostSettingsPort|null>} */ (Object), default: null },
   initialScheme: { type: /** @type {import('vue').PropType<string|null>} */ (String), default: null },
+  initialDensity: { type: /** @type {import('vue').PropType<string|null>} */ (String), default: null },
+  framesPort: { type: /** @type {import('vue').PropType<{ subscribeFrames?: (callback: (notice: unknown) => void) => unknown }|null>} */ (Object), default: null },
   preferences: { type: /** @type {import('vue').PropType<Storage|null>} */ (Object), default: null },
   exportDestination: { type: String, default: '' },
   fixture: { type: /** @type {import('vue').PropType<import('./fixtures/states.js').FixtureState|null>} */ (Object), default: null },
@@ -118,7 +120,14 @@ const bootScheme = props.initialScheme ?? props.fixture?.scheme ?? 'mv-light';
 const scheme = ref(bootScheme === 'mv-dark' ? 'mv-dark' : 'mv-light');
 const applyScheme = /** @type {(scheme:string)=>void} */ (setKitScheme);
 applyScheme(scheme.value);
-document.documentElement.dataset.themeDensity = 'compact';
+// MVUI33: the entry resolves the stored density before mount like the scheme;
+// direct mounts keep the fixture-or-compact default. The wall prop binds this
+// ref and the root density attribute follows it, so the settings panel only
+// persists the value and mirrors it through the density model.
+const bootDensity = props.initialDensity ?? props.fixture?.density ?? 'compact';
+const density = ref(bootDensity === 'comfortable' ? 'comfortable' : 'compact');
+document.documentElement.dataset.themeDensity = density.value;
+watch(density, (next) => { document.documentElement.dataset.themeDensity = next; });
 /** @param {string} next */
 function onScheme(next) { scheme.value = next === 'mv-dark' ? 'mv-dark' : 'mv-light'; }
 const nestedMode = resolveNestedMode(props.nestedHost ?? (props.fixture?.key === 'nested'
@@ -763,7 +772,7 @@ const chromeWorkspace = markRaw(defineComponent({
         <WallWorkspace v-else-if="!creativeOpen" :key="wallView" :hidden="!rows.length" ref="wall" :workspace-component="chromeWorkspace" :scope="props.scope" :default-profile="props.layout" :storage="workspaceStorage"
           owner-window-id="main-wall" :projection-view="feed" :capture-state="captureAvailable ? captureState : undefined" :display-only="nestedMode.displayOnly" :allow-lost-surface="admitLostRows" :intent-builders="props.runtime?.intentBuilders ?? intentBuilders"
           :control-registry="props.runtime?.controlRegistry ?? controlRegistry" :scheduler="props.runtime?.scheduler ?? scheduler" :tile-scheduler="props.runtime?.tileScheduler ?? tileScheduler"
-          :color-scheme="scheme === 'mv-dark' ? 'dark' : 'light'" density="compact" @ready="onWallReady" @wall-settled="onWorkspaceSettled" @activate-surface="selectCapsule" @submit-intent="dispatch">
+          :color-scheme="scheme === 'mv-dark' ? 'dark' : 'light'" :density="density" @ready="onWallReady" @wall-settled="onWorkspaceSettled" @activate-surface="selectCapsule" @submit-intent="dispatch">
           <template #surface="{ surface, capsuleId }">
             <SurfaceCanvas v-if="surface && (!multislotOpen || capsuleId !== selectedSurface?.id)" :surface-id="capsuleId" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :frame-width="surfaceWitness(surface).width" :frame-height="surfaceWitness(surface).height" :state="canvasStateFor(surface)" :input-enabled="inputEnabledFor(surface)" :stream-id="surfaceStreamId(surface)" />
           </template>
@@ -785,7 +794,7 @@ const chromeWorkspace = markRaw(defineComponent({
         </section>
         <section v-if="!nestedMode.displayOnly" :hidden="!settingsOpen" class="mv-settings-screen" aria-label="Settings">
           <UiButton id="settings-back" data-semantic-anchor="settings/back" label="Back to wall" @click="settingsOpen = false" />
-          <MvSettingsPanel :settings-host="props.settingsHost ?? {}" @scheme-change="onScheme" />
+          <MvSettingsPanel :settings-host="props.settingsHost ?? {}" v-model:density="density" :frames-port="props.framesPort ?? null" @scheme-change="onScheme" />
         </section>
       </main>
     </div>

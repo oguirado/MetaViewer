@@ -122,10 +122,15 @@ test('D3-SETANC: dangling symlink in settings ancestors rejects with SETTINGS_DI
 
 test('D3-SETSHAPE: settings store accepts exact closed shape and rejects unknown keys or bad values', async () => {
   const valid = validateSettings(JSON.stringify({ scheme: 'mv-light', density: 'compact' }));
-  assert.deepEqual(valid, { scheme: 'mv-light', density: 'compact' });
+  assert.deepEqual(valid, { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 });
 
   const partial = validateSettings(JSON.stringify({ scheme: 'mv-dark' }));
-  assert.deepEqual(partial, { scheme: 'mv-dark', density: 'compact' });
+  assert.deepEqual(partial, { scheme: 'mv-dark', density: 'compact', wallFps: 30, recordingFps: 3 });
+
+  const explicit = validateSettings(
+    JSON.stringify({ scheme: 'mv-dark', density: 'comfortable', wallFps: 60, recordingFps: 10 }),
+  );
+  assert.deepEqual(explicit, { scheme: 'mv-dark', density: 'comfortable', wallFps: 60, recordingFps: 10 });
 
   assert.throws(
     () => validateSettings(JSON.stringify({ scheme: 'mv-light', density: 'compact', extraKey: true })),
@@ -134,6 +139,10 @@ test('D3-SETSHAPE: settings store accepts exact closed shape and rejects unknown
 
   assert.throws(() => validateSettings(JSON.stringify({ scheme: 'invalid-scheme' })), /SETTINGS_SCHEME/);
   assert.throws(() => validateSettings(JSON.stringify({ density: 'spacious' })), /SETTINGS_DENSITY/);
+  assert.throws(() => validateSettings(JSON.stringify({ wallFps: 45 })), /SETTINGS_WALL_FPS/);
+  assert.throws(() => validateSettings(JSON.stringify({ recordingFps: 0 })), /SETTINGS_RECORDING_FPS/);
+  assert.throws(() => validateSettings(JSON.stringify({ recordingFps: 61 })), /SETTINGS_RECORDING_FPS/);
+  assert.throws(() => validateSettings(JSON.stringify({ recordingFps: 2.5 })), /SETTINGS_RECORDING_FPS/);
   assert.throws(() => validateSettings('["scheme", "mv-light"]'), /PAYLOAD/);
 });
 

@@ -53,7 +53,7 @@ const text = node => [node.text ?? '', ...(node.children ?? []).map(text)].join(
 const byId = (mounted, id) => nodes(mounted.root).find(node => node.props?.id === id);
 const flush = async () => { for (let i = 0; i < 8; i++) { await Promise.resolve(); await vue.nextTick(); } };
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
-const settings = scheme => JSON.stringify({ scheme, density: 'compact' });
+const settings = scheme => JSON.stringify({ scheme, density: 'compact', wallFps: 30, recordingFps: 3 });
 
 // Each component runs its real setup, render, watchers, event handlers and lifecycle.
 test('mounted recording maps raw errors and refusals to fixed text in all user-facing attributes', async () => {

@@ -13,7 +13,7 @@ import { createFixtureRuntime } from '../src/fixtures/fixtureRuntime.js';
 import { createWallLayout, migrateWallLayout } from '../src/wall/layout.js';
 
 const main = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
-const settings = scheme => JSON.stringify({ scheme, density: 'compact' });
+const settings = scheme => JSON.stringify({ scheme, density: 'compact', wallFps: 30, recordingFps: 3 });
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 let serial = 0;
 

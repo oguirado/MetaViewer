@@ -7,6 +7,9 @@
  * existing port revocation/ACK deadlines and the main window's teardown.
  * [TARGET, unit decision] Bound per-surface input rate/sequence maps to
  * MAX_ITEMS = 64 and evict unknown/unadmitted surface IDs on SURFACE_UNKNOWN refusal.
+ * [TARGET, unit decision] Closed settings schema {scheme, density, wallFps, recordingFps}
+ * with defaults (mv-light, compact, 30, 3); settings.save emits {wallFps} cadence
+ * requests and updates default recordingFps.
  */
 import { open, mkdir, rename, unlink, lstat, realpath } from 'node:fs/promises';
 import { constants, realpathSync, statSync } from 'node:fs';
@@ -327,18 +330,47 @@ export function verdictReply(value) {
       || (refused && !['STALE_FRAME','SURFACE_NOT_AGENT_CONTROLLED','LOCKED_BY_OTHER','BUDGET_EXCEEDED','OUT_OF_BOUNDS','POLICY'].includes(value.reason_code))) throw new Error('OUTCOME');
   return value;
 }
+export const DEFAULT_SETTINGS = Object.freeze({
+  scheme: 'mv-light',
+  density: 'compact',
+  wallFps: 30,
+  recordingFps: 3,
+});
+const SETTINGS_KEY_SET = new Set(['scheme', 'density', 'wallFps', 'recordingFps']);
+const SETTINGS_WALL_FPS_SET = new Set([3, 30, 60]);
+
 /** Renderer preferences use the exact closed settingsModel.js shape.
  * Missing keys default only as decodeMvSettings does. Invalid input never
  * replaces disk; corrupt storage returns the renderer's defaults signal.
  * @param {string} text */
 export function validateSettings(text) {
-  const value=jsonObject(text);
-  if(Object.keys(value).some(key=>!['scheme','density'].includes(key))) throw new Error('SETTINGS_UNKNOWN_KEY');
-  const scheme=value.scheme===undefined?'mv-light':value.scheme;
-  const density=value.density===undefined?'compact':value.density;
-  if(!['mv-light','mv-dark'].includes(scheme)) throw new Error('SETTINGS_SCHEME');
-  if(density!=='compact') throw new Error('SETTINGS_DENSITY');
-  return {scheme,density};
+  const value = jsonObject(text);
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) throw new MainError('PAYLOAD', 'PAYLOAD');
+  if (Object.getOwnPropertySymbols(value).length !== 0) throw new MainError('SETTINGS_UNKNOWN_KEY', 'SETTINGS_UNKNOWN_KEY');
+  for (const key of Object.keys(value)) {
+    const desc = Object.getOwnPropertyDescriptor(value, key);
+    if (!desc || !('value' in desc) || !SETTINGS_KEY_SET.has(key)) {
+      throw new MainError('SETTINGS_UNKNOWN_KEY', 'SETTINGS_UNKNOWN_KEY');
+    }
+  }
+  const scheme = value.scheme === undefined ? DEFAULT_SETTINGS.scheme : value.scheme;
+  const density = value.density === undefined ? DEFAULT_SETTINGS.density : value.density;
+  const wallFps = value.wallFps === undefined ? DEFAULT_SETTINGS.wallFps : value.wallFps;
+  const recordingFps = value.recordingFps === undefined ? DEFAULT_SETTINGS.recordingFps : value.recordingFps;
+  if (typeof scheme !== 'string' || !['mv-light', 'mv-dark'].includes(scheme)) {
+    throw new MainError('SETTINGS_SCHEME', 'SETTINGS_SCHEME');
+  }
+  if (typeof density !== 'string' || !['compact', 'comfortable'].includes(density)) {
+    throw new MainError('SETTINGS_DENSITY', 'SETTINGS_DENSITY');
+  }
+  if (typeof wallFps !== 'number' || !Number.isSafeInteger(wallFps) || !SETTINGS_WALL_FPS_SET.has(wallFps)) {
+    throw new MainError('SETTINGS_WALL_FPS', 'SETTINGS_WALL_FPS');
+  }
+  if (typeof recordingFps !== 'number' || !Number.isSafeInteger(recordingFps) || recordingFps < 1 || recordingFps > 60) {
+    throw new MainError('SETTINGS_RECORDING_FPS', 'SETTINGS_RECORDING_FPS');
+  }
+  return { scheme, density, wallFps, recordingFps };
 }
 const sourceRoot=fileURLToPath(new URL('../..',import.meta.url));
 /** @param {string} candidate */
@@ -469,6 +501,10 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
   }
   if (!ownedProfiles.has('shell')) ownedProfiles.set('shell', { args: [] });
   let subscribed = false, enabled = false, disposed = false;
+  /** @type {number} */
+  let requestedWallFps = DEFAULT_SETTINGS.wallFps;
+  /** @type {number} */
+  let currentRecordingFps = DEFAULT_SETTINGS.recordingFps;
   /** @type {Map<string,number>} */ const inputLastSeq = new Map();
   /** @type {Map<string,number>} */ const inputInFlightSeq = new Map();
   /** @type {Map<string,number>} */ const inputPartialSeq = new Map();
@@ -483,8 +519,30 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     knownSurfaces.add(sid);
   };
   const handlers = {
-    loadSettings: async () => store.load(),
-    saveSettings: async (/** @type {string} */json) => store.save(json),
+    loadSettings: async () => {
+      const loaded = await store.load();
+      if (typeof loaded === 'string') {
+        const parsed = validateSettings(loaded);
+        requestedWallFps = parsed.wallFps;
+        currentRecordingFps = parsed.recordingFps;
+        core?.setRecordingFps?.(parsed.recordingFps);
+      }
+      return loaded;
+    },
+    saveSettings: async (/** @type {string} */json) => {
+      const parsed = validateSettings(json);
+      const saved = await store.save(json);
+      requestedWallFps = parsed.wallFps;
+      currentRecordingFps = parsed.recordingFps;
+      const cadence = Object.freeze({ wallFps: parsed.wallFps });
+      frames?.requestCadence?.(cadence);
+      frames?.setCadence?.(cadence);
+      core?.requestCadence?.(cadence);
+      core?.setCadence?.(cadence);
+      core?.setRecordingFps?.(parsed.recordingFps);
+      frameDiag?.recordCadence?.(cadence);
+      return saved;
+    },
     recordingDestination: async () => destinationToken,
     nestedDepth: async () => identity.depth,
     selfCapsuleId: async () => identity.self,
@@ -819,13 +877,28 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     for (const channel of channels) ipcMain.removeHandler?.(channel);
     throw e;
   }
+  let stopCadence = () => {};
+  if (frames && typeof frames.onCadence === 'function') {
+    stopCadence = frames.onCadence((/** @type {any} */ cadence) => {
+      if (!disposed && cadence && Number.isSafeInteger(cadence.wallFps)) {
+        requestedWallFps = cadence.wallFps;
+        frameDiag?.recordCadence?.(cadence);
+      }
+    });
+  }
   return {
+    get requestedWallFps() {
+      return requestedWallFps;
+    },
+    get recordingFps() {
+      return currentRecordingFps;
+    },
     inputRateWindow,
     inputLastSeq,
     inputInFlightSeq,
     inputPartialSeq,
     inputPartialApplied,
-    async dispose() { disposed=true; subscribed=false; stopFrames();
+    async dispose() { disposed=true; subscribed=false; stopFrames(); stopCadence();
       knownSurfaces.clear();
       inputRateWindow.clear();
       inputLastSeq.clear();

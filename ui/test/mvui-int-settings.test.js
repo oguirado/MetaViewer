@@ -20,7 +20,12 @@ test('settings adapter shares the established kit preference key when preload me
   const data = new Map([[SETTINGS_STORAGE_KEYS.scheme, 'mv-dark']]);
   const storage = { getItem: key => data.get(key) ?? null, setItem: (key, value) => data.set(key, value) };
   const adapter = createSettingsHost(null, storage);
-  assert.deepEqual(JSON.parse(await adapter.loadSettings()), { scheme: 'mv-dark', density: 'compact' });
+  assert.deepEqual(JSON.parse(await adapter.loadSettings()), {
+    scheme: 'mv-dark',
+    density: 'compact',
+    wallFps: 30,
+    recordingFps: 3,
+  });
   await adapter.saveSettings('{"scheme":"mv-light","density":"compact"}');
   assert.equal(data.get(SETTINGS_STORAGE_KEYS.scheme), 'mv-light');
   await assert.rejects(adapter.saveSettings('{"scheme":"invented"}'));

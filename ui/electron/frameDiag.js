@@ -7,6 +7,10 @@
  * reports notices forwarded over an internal channel without adding any
  * window.metaviewer facade method. Snapshots are written atomically (0600) to
  * frame-diag.json in the verified private run directory.
+ * [TARGET, unit decision] frame_diag_preload/v1 admits optional non-negative
+ * safe-integer counters rehashSkipped and rehashDone (absent = 0);
+ * metaviewer:frames.reportDiag enforces monotonic per-session max and observeSender,
+ * and snapshots expose requestedWallFps.
  */
 import { constants as fsConstants } from 'node:fs';
 import { lstat, open, realpath, rename, unlink } from 'node:fs/promises';
@@ -17,6 +21,7 @@ import { MainError, observeSender, PRIVILEGED_ORIGIN } from './main.js';
 import { validateQaRunDir } from './qaAnchors.js';
 
 export const FRAME_DIAG_CHANNEL = 'metaviewer:frame.diag';
+export const FRAME_REPORT_DIAG_CHANNEL = 'metaviewer:frames.reportDiag';
 export const FRAME_DIAG_SCHEMA = 'frame_diag/v1';
 export const FRAME_DIAG_PRELOAD_SCHEMA = 'frame_diag_preload/v1';
 export const FRAME_DIAG_FILE = 'frame-diag.json';
@@ -104,6 +109,24 @@ function isNonNegativeSafeInt(value) {
 }
 
 /**
+ * Validate a renderer rehash diagnostic report ({rehashSkipped, rehashDone}).
+ * @param {unknown} payload Alleged rehash diagnostic report.
+ * @returns {Readonly<{ rehashSkipped: number, rehashDone: number }>}
+ */
+export function validateFrameRehashDiag(payload) {
+  if (!hasClosedDataKeys(payload, 'rehashDone,rehashSkipped')) {
+    throw new MainError('FRAME_DIAG_PAYLOAD', 'frames.reportDiag requires plain object {rehashSkipped, rehashDone}');
+  }
+  if (!isNonNegativeSafeInt(payload.rehashSkipped) || !isNonNegativeSafeInt(payload.rehashDone)) {
+    throw new MainError('FRAME_DIAG_PAYLOAD', 'rehash diag counters must be non-negative safe integers');
+  }
+  return Object.freeze({
+    rehashSkipped: payload.rehashSkipped,
+    rehashDone: payload.rehashDone,
+  });
+}
+
+/**
  * Validate and normalize a closed frame_diag_preload/v1 counter report.
  * @param {unknown} payload Alleged preload diagnostic report.
  * @returns {Readonly<{
@@ -114,6 +137,8 @@ function isNonNegativeSafeInt(value) {
  *   noticesForwarded: number,
  *   legacyNoticesForwarded: number,
  *   portsClosed: number,
+ *   rehashSkipped: number,
+ *   rehashDone: number,
  *   inWallApp: boolean | null,
  *   origin: string,
  *   lastSurfaceId: string | null,
@@ -125,87 +150,108 @@ function isNonNegativeSafeInt(value) {
  * }>}
  */
 export function validateFrameDiagPreload(payload) {
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new MainError('FRAME_DIAG_PAYLOAD', 'preload diag must have closed keys');
+  }
+  const proto = Object.getPrototypeOf(payload);
+  if (proto !== Object.prototype && proto !== null) {
+    throw new MainError('FRAME_DIAG_PAYLOAD', 'preload diag must have closed keys');
+  }
+  const ownKeys = Object.keys(payload);
+  if (
+    Reflect.ownKeys(payload).length !== ownKeys.length ||
+    !Object.values(Object.getOwnPropertyDescriptors(payload)).every((desc) => 'value' in desc)
+  ) {
+    throw new MainError('FRAME_DIAG_PAYLOAD', 'preload diag must have closed keys');
+  }
+  const baseKeys = ownKeys
+    .filter((key) => key !== 'rehashSkipped' && key !== 'rehashDone')
+    .sort()
+    .join(',');
   const expectedKeys =
     'domStripText,domSurfaceState,domWaitingText,framesReceived,inWallApp,invalidNotices,lastFrameGeneration,lastSurfaceGeneration,lastSurfaceId,legacyNoticesForwarded,noticesForwarded,origin,portsClosed,portsReceived,schema';
   const prevKeys =
     'domStripText,domSurfaceState,domWaitingText,framesReceived,inWallApp,invalidNotices,lastSurfaceGeneration,lastSurfaceId,legacyNoticesForwarded,noticesForwarded,origin,portsClosed,portsReceived,schema';
   const legacyKeys =
     'framesReceived,inWallApp,invalidNotices,lastSurfaceGeneration,lastSurfaceId,legacyNoticesForwarded,noticesForwarded,origin,portsClosed,portsReceived,schema';
-  if (
-    !hasClosedDataKeys(payload, expectedKeys) &&
-    !hasClosedDataKeys(payload, prevKeys) &&
-    !hasClosedDataKeys(payload, legacyKeys)
-  ) {
+  if (baseKeys !== expectedKeys && baseKeys !== prevKeys && baseKeys !== legacyKeys) {
     throw new MainError('FRAME_DIAG_PAYLOAD', 'preload diag must have closed keys');
   }
-  if (payload.schema !== FRAME_DIAG_PRELOAD_SCHEMA) {
+  const rec = /** @type {Record<string, unknown>} */ (payload);
+  if (rec.schema !== FRAME_DIAG_PRELOAD_SCHEMA) {
     throw new MainError('FRAME_DIAG_PAYLOAD', 'preload diag schema must be frame_diag_preload/v1');
   }
+  const rehashSkipped = rec.rehashSkipped === undefined ? 0 : rec.rehashSkipped;
+  const rehashDone = rec.rehashDone === undefined ? 0 : rec.rehashDone;
   if (
-    !isNonNegativeSafeInt(payload.framesReceived) ||
-    !isNonNegativeSafeInt(payload.invalidNotices) ||
-    !isNonNegativeSafeInt(payload.portsReceived) ||
-    !isNonNegativeSafeInt(payload.noticesForwarded) ||
-    !isNonNegativeSafeInt(payload.legacyNoticesForwarded) ||
-    !isNonNegativeSafeInt(payload.portsClosed)
+    !isNonNegativeSafeInt(rec.framesReceived) ||
+    !isNonNegativeSafeInt(rec.invalidNotices) ||
+    !isNonNegativeSafeInt(rec.portsReceived) ||
+    !isNonNegativeSafeInt(rec.noticesForwarded) ||
+    !isNonNegativeSafeInt(rec.legacyNoticesForwarded) ||
+    !isNonNegativeSafeInt(rec.portsClosed) ||
+    !isNonNegativeSafeInt(rehashSkipped) ||
+    !isNonNegativeSafeInt(rehashDone)
   ) {
     throw new MainError('FRAME_DIAG_PAYLOAD', 'preload diag counters must be non-negative safe integers');
   }
-  if (payload.inWallApp !== null && typeof payload.inWallApp !== 'boolean') {
+  if (rec.inWallApp !== null && typeof rec.inWallApp !== 'boolean') {
     throw new MainError('FRAME_DIAG_PAYLOAD', 'preload diag inWallApp must be boolean or null');
   }
   if (
-    typeof payload.origin !== 'string' ||
-    payload.origin.length > 256 ||
-    payload.origin.includes('\0')
+    typeof rec.origin !== 'string' ||
+    rec.origin.length > 256 ||
+    rec.origin.includes('\0')
   ) {
     throw new MainError('FRAME_DIAG_PAYLOAD', 'preload diag origin must be a bounded string');
   }
   if (
-    payload.lastSurfaceId !== null &&
-    (typeof payload.lastSurfaceId !== 'string' || !SURFACE_ID_RE.test(payload.lastSurfaceId))
+    rec.lastSurfaceId !== null &&
+    (typeof rec.lastSurfaceId !== 'string' || !SURFACE_ID_RE.test(rec.lastSurfaceId))
   ) {
     throw new MainError('FRAME_DIAG_PAYLOAD', 'preload diag lastSurfaceId is invalid');
   }
   if (
-    payload.lastSurfaceGeneration !== null &&
-    (typeof payload.lastSurfaceGeneration !== 'number' ||
-      !Number.isSafeInteger(payload.lastSurfaceGeneration) ||
-      payload.lastSurfaceGeneration < 1)
+    rec.lastSurfaceGeneration !== null &&
+    (typeof rec.lastSurfaceGeneration !== 'number' ||
+      !Number.isSafeInteger(rec.lastSurfaceGeneration) ||
+      rec.lastSurfaceGeneration < 1)
   ) {
     throw new MainError('FRAME_DIAG_PAYLOAD', 'preload diag lastSurfaceGeneration is invalid');
   }
   if (
-    payload.lastFrameGeneration !== undefined &&
-    payload.lastFrameGeneration !== null &&
-    (typeof payload.lastFrameGeneration !== 'number' ||
-      !Number.isSafeInteger(payload.lastFrameGeneration) ||
-      payload.lastFrameGeneration < 1)
+    rec.lastFrameGeneration !== undefined &&
+    rec.lastFrameGeneration !== null &&
+    (typeof rec.lastFrameGeneration !== 'number' ||
+      !Number.isSafeInteger(rec.lastFrameGeneration) ||
+      rec.lastFrameGeneration < 1)
   ) {
     throw new MainError('FRAME_DIAG_PAYLOAD', 'preload diag lastFrameGeneration is invalid');
   }
   for (const domField of ['domSurfaceState', 'domWaitingText', 'domStripText']) {
-    const val = payload[domField];
+    const val = rec[domField];
     if (val !== undefined && val !== null && (typeof val !== 'string' || val.length > 512 || val.includes('\0'))) {
       throw new MainError('FRAME_DIAG_PAYLOAD', `preload diag ${domField} is invalid`);
     }
   }
   return Object.freeze({
     schema: /** @type {'frame_diag_preload/v1'} */ (FRAME_DIAG_PRELOAD_SCHEMA),
-    framesReceived: payload.framesReceived,
-    invalidNotices: payload.invalidNotices,
-    portsReceived: payload.portsReceived,
-    noticesForwarded: payload.noticesForwarded,
-    legacyNoticesForwarded: payload.legacyNoticesForwarded,
-    portsClosed: payload.portsClosed,
-    inWallApp: payload.inWallApp,
-    origin: payload.origin,
-    lastSurfaceId: payload.lastSurfaceId,
-    lastSurfaceGeneration: payload.lastSurfaceGeneration,
-    lastFrameGeneration: typeof payload.lastFrameGeneration === 'number' ? payload.lastFrameGeneration : null,
-    domSurfaceState: typeof payload.domSurfaceState === 'string' ? payload.domSurfaceState : null,
-    domWaitingText: typeof payload.domWaitingText === 'string' ? payload.domWaitingText : null,
-    domStripText: typeof payload.domStripText === 'string' ? payload.domStripText : null,
+    framesReceived: rec.framesReceived,
+    invalidNotices: rec.invalidNotices,
+    portsReceived: rec.portsReceived,
+    noticesForwarded: rec.noticesForwarded,
+    legacyNoticesForwarded: rec.legacyNoticesForwarded,
+    portsClosed: rec.portsClosed,
+    rehashSkipped,
+    rehashDone,
+    inWallApp: rec.inWallApp,
+    origin: rec.origin,
+    lastSurfaceId: rec.lastSurfaceId,
+    lastSurfaceGeneration: rec.lastSurfaceGeneration,
+    lastFrameGeneration: typeof rec.lastFrameGeneration === 'number' ? rec.lastFrameGeneration : null,
+    domSurfaceState: typeof rec.domSurfaceState === 'string' ? rec.domSurfaceState : null,
+    domWaitingText: typeof rec.domWaitingText === 'string' ? rec.domWaitingText : null,
+    domStripText: typeof rec.domStripText === 'string' ? rec.domStripText : null,
   });
 }
 
@@ -337,6 +383,10 @@ export async function writeFrameDiagSnapshot(runDir, snapshot) {
  * @returns {Readonly<{
  *   enabled: boolean,
  *   runDir: string | null,
+ *   requestedWallFps: number,
+ *   recordCadence: (cadence: { wallFps: number }) => void,
+ *   recordRehashDiag: (payload: unknown, sessionKey?: unknown) => Readonly<{ rehashSkipped: number, rehashDone: number }>,
+ *   handleReportDiag: (event: unknown, ...args: unknown[]) => Promise<true>,
  *   recordDelivery: (info: { surfaceId: string, surfaceGeneration: number, frameGeneration: number, epoch: number, announced?: boolean }) => void,
  *   recordReaderRefusal: (info?: { surfaceId?: string, frameGeneration?: number, reason?: string, detail?: string, cause?: string }) => void,
  *   recordPortRefusal: (info?: { surfaceId?: string, frameGeneration?: number, reason?: string }) => void,
@@ -353,28 +403,141 @@ export function installFrameDiag(options = {}) {
     throw new MainError('FRAME_DIAG_OPTIONS', 'options must be an object');
   }
   const config = resolveFrameDiagConfig(options);
+  const { ipcMain, contents } = options;
+  const packaged =
+    Boolean(options.packaged) ||
+    fileURLToPath(import.meta.url).includes('.asar/') ||
+    fileURLToPath(import.meta.url).includes('.asar\\');
+  const nested =
+    Boolean(options.nested) ||
+    (Array.isArray(options.argv) && options.argv.includes('--nested-depth=1'));
+
+  let disposed = false;
+  let requestedWallFps = 30;
+  /** @type {WeakMap<object, Readonly<{ rehashSkipped: number, rehashDone: number }>>} */
+  const sessionRehashMax = new WeakMap();
+  /** @type {Readonly<{ rehashSkipped: number, rehashDone: number }>} */
+  let defaultSessionRehashMax = Object.freeze({ rehashSkipped: 0, rehashDone: 0 });
+
+  /**
+   * @param {unknown} sessionKey
+   * @returns {Readonly<{ rehashSkipped: number, rehashDone: number }>}
+   */
+  function getSessionMax(sessionKey) {
+    if (sessionKey !== null && (typeof sessionKey === 'object' || typeof sessionKey === 'function')) {
+      return sessionRehashMax.get(sessionKey) ?? defaultSessionRehashMax;
+    }
+    return defaultSessionRehashMax;
+  }
+
+  /**
+   * @param {unknown} sessionKey
+   * @param {Readonly<{ rehashSkipped: number, rehashDone: number }>} next
+   */
+  function setSessionMax(sessionKey, next) {
+    if (sessionKey !== null && (typeof sessionKey === 'object' || typeof sessionKey === 'function')) {
+      sessionRehashMax.set(sessionKey, next);
+    }
+    defaultSessionRehashMax = next;
+  }
+
+  /**
+   * @param {unknown} payload
+   * @param {unknown} [sessionKey]
+   * @returns {Readonly<{ rehashSkipped: number, rehashDone: number }>}
+   */
+  function applyRehashDiag(payload, sessionKey = contents) {
+    const validated = validateFrameRehashDiag(payload);
+    const prev = getSessionMax(sessionKey);
+    if (validated.rehashSkipped < prev.rehashSkipped || validated.rehashDone < prev.rehashDone) {
+      throw new MainError('FRAME_DIAG_DECREASE', 'rehash diag counters must not decrease');
+    }
+    const next = Object.freeze({
+      rehashSkipped: Math.max(prev.rehashSkipped, validated.rehashSkipped),
+      rehashDone: Math.max(prev.rehashDone, validated.rehashDone),
+    });
+    setSessionMax(sessionKey, next);
+    return next;
+  }
+
   if (!config.enabled || config.runDir === null) {
-    const emptySnapshot = Object.freeze({ enabled: false });
+    let reportRegistered = false;
+    /**
+     * @param {unknown} event
+     * @param {...unknown} args
+     * @returns {Promise<true>}
+     */
+    const handleReportDiagDisabled = async (event, ...args) => {
+      if (disposed) {
+        throw new MainError('FRAME_DIAG_DISPOSED', 'frame diag bridge is disposed');
+      }
+      const verdict = observeSender(event, contents, PRIVILEGED_ORIGIN);
+      if (verdict.verdict !== 'admit') {
+        throw new MainError(verdict.code, 'sender refused');
+      }
+      if (args.length !== 1) {
+        throw new MainError('FRAME_DIAG_ARGS', 'frames.reportDiag requires exactly one argument');
+      }
+      const senderKey =
+        event !== null && typeof event === 'object' && 'sender' in event && event.sender
+          ? event.sender
+          : contents;
+      applyRehashDiag(args[0], senderKey);
+      return true;
+    };
+    if (!packaged && !nested && ipcMain && typeof ipcMain === 'object' && typeof ipcMain.handle === 'function') {
+      ipcMain.handle(FRAME_REPORT_DIAG_CHANNEL, handleReportDiagDisabled);
+      reportRegistered = true;
+    }
     return Object.freeze({
       enabled: false,
       runDir: null,
+      get requestedWallFps() {
+        return requestedWallFps;
+      },
+      recordCadence(cadence) {
+        if (disposed || !cadence || typeof cadence !== 'object') return;
+        if (typeof cadence.wallFps === 'number' && Number.isSafeInteger(cadence.wallFps) && [3, 30, 60].includes(cadence.wallFps)) {
+          requestedWallFps = cadence.wallFps;
+        }
+      },
+      recordRehashDiag(payload, sessionKey = contents) {
+        return applyRehashDiag(payload, sessionKey);
+      },
+      handleReportDiag: handleReportDiagDisabled,
       recordDelivery: () => {},
       recordReaderRefusal: () => {},
       recordPortRefusal: () => {},
       recordStateOnly: () => {},
       recordAck: () => {},
       recordRevocation: () => {},
-      getSnapshot: () => emptySnapshot,
+      getSnapshot: () =>
+        Object.freeze({
+          enabled: false,
+          requestedWallFps,
+          main: Object.freeze({ requestedWallFps }),
+          preload: Object.freeze({
+            schema: FRAME_DIAG_PRELOAD_SCHEMA,
+            rehashSkipped: defaultSessionRehashMax.rehashSkipped,
+            rehashDone: defaultSessionRehashMax.rehashDone,
+          }),
+        }),
       flush: async () => {},
-      dispose: async () => {},
+      async dispose() {
+        if (disposed) return;
+        disposed = true;
+        if (reportRegistered && ipcMain && typeof ipcMain.removeHandler === 'function') {
+          try {
+            ipcMain.removeHandler(FRAME_REPORT_DIAG_CHANNEL);
+          } catch {}
+        }
+      },
     });
   }
-  const { ipcMain, contents } = options;
   if (ipcMain === null || ipcMain === undefined || typeof ipcMain !== 'object' || typeof ipcMain.handle !== 'function') {
     throw new MainError('IPC', 'ipcMain must provide handle');
   }
   const targetDir = config.runDir;
-  let disposed = false;
   let seq = 0;
   let deliveriesPosted = 0;
   let deliveriesRefusedByReader = 0;
@@ -414,6 +577,8 @@ export function installFrameDiag(options = {}) {
    *   noticesForwarded: number,
    *   legacyNoticesForwarded: number,
    *   portsClosed: number,
+   *   rehashSkipped: number,
+   *   rehashDone: number,
    *   inWallApp: boolean | null,
    *   origin: string,
    *   lastSurfaceId: string | null,
@@ -431,6 +596,8 @@ export function installFrameDiag(options = {}) {
     noticesForwarded: 0,
     legacyNoticesForwarded: 0,
     portsClosed: 0,
+    rehashSkipped: 0,
+    rehashDone: 0,
     inWallApp: null,
     origin: '',
     lastSurfaceId: null,
@@ -450,7 +617,9 @@ export function installFrameDiag(options = {}) {
     return Object.freeze({
       schema: FRAME_DIAG_SCHEMA,
       seq,
+      requestedWallFps,
       main: Object.freeze({
+        requestedWallFps,
         deliveriesPosted,
         deliveriesRefusedByReader,
         deliveriesRefusedByPort,
@@ -509,6 +678,38 @@ export function installFrameDiag(options = {}) {
   // Write initial baseline snapshot immediately upon installation.
   void scheduleWrite();
 
+  /**
+   * @param {unknown} event Invoke event.
+   * @param {...unknown} args Positional payload vector.
+   * @returns {Promise<true>}
+   */
+  async function handleReportDiag(event, ...args) {
+    if (disposed) {
+      throw new MainError('FRAME_DIAG_DISPOSED', 'frame diag bridge is disposed');
+    }
+    const verdict = observeSender(event, contents, PRIVILEGED_ORIGIN);
+    if (verdict.verdict !== 'admit') {
+      throw new MainError(verdict.code, 'sender refused');
+    }
+    if (args.length !== 1) {
+      throw new MainError('FRAME_DIAG_ARGS', 'frames.reportDiag requires exactly one argument');
+    }
+    const senderKey =
+      event !== null && typeof event === 'object' && 'sender' in event && event.sender
+        ? event.sender
+        : contents;
+    const next = applyRehashDiag(args[0], senderKey);
+    preloadState = Object.freeze({
+      ...preloadState,
+      rehashSkipped: next.rehashSkipped,
+      rehashDone: next.rehashDone,
+    });
+    await scheduleWrite();
+    return true;
+  }
+
+  ipcMain.handle(FRAME_REPORT_DIAG_CHANNEL, handleReportDiag);
+
   ipcMain.handle(
     FRAME_DIAG_CHANNEL,
     /**
@@ -527,7 +728,31 @@ export function installFrameDiag(options = {}) {
       if (args.length !== 1) {
         throw new MainError('FRAME_DIAG_ARGS', 'frame.diag requires exactly one snapshot argument');
       }
-      preloadState = validateFrameDiagPreload(args[0]);
+      const candidate = args[0];
+      if (hasClosedDataKeys(candidate, 'rehashDone,rehashSkipped')) {
+        return handleReportDiag(event, candidate);
+      }
+      const validated = validateFrameDiagPreload(candidate);
+      const senderKey =
+        event !== null && typeof event === 'object' && 'sender' in event && event.sender
+          ? event.sender
+          : contents;
+      const prev = getSessionMax(senderKey);
+      const rawRec = /** @type {Record<string, unknown>} */ (candidate);
+      if (
+        (rawRec.rehashSkipped !== undefined && validated.rehashSkipped < prev.rehashSkipped) ||
+        (rawRec.rehashDone !== undefined && validated.rehashDone < prev.rehashDone)
+      ) {
+        throw new MainError('FRAME_DIAG_DECREASE', 'rehash diag counters must not decrease');
+      }
+      const mergedSkipped = Math.max(prev.rehashSkipped, validated.rehashSkipped);
+      const mergedDone = Math.max(prev.rehashDone, validated.rehashDone);
+      setSessionMax(senderKey, Object.freeze({ rehashSkipped: mergedSkipped, rehashDone: mergedDone }));
+      preloadState = Object.freeze({
+        ...validated,
+        rehashSkipped: mergedSkipped,
+        rehashDone: mergedDone,
+      });
       await scheduleWrite();
       return true;
     },
@@ -536,6 +761,32 @@ export function installFrameDiag(options = {}) {
   return Object.freeze({
     enabled: true,
     runDir: targetDir,
+    get requestedWallFps() {
+      return requestedWallFps;
+    },
+    recordCadence(cadence) {
+      if (disposed || !cadence || typeof cadence !== 'object') {
+        return;
+      }
+      if (typeof cadence.wallFps === 'number' && Number.isSafeInteger(cadence.wallFps) && [3, 30, 60].includes(cadence.wallFps)) {
+        requestedWallFps = cadence.wallFps;
+        void scheduleWrite();
+      }
+    },
+    recordRehashDiag(payload, sessionKey = contents) {
+      if (disposed) {
+        throw new MainError('FRAME_DIAG_DISPOSED', 'frame diag bridge is disposed');
+      }
+      const next = applyRehashDiag(payload, sessionKey);
+      preloadState = Object.freeze({
+        ...preloadState,
+        rehashSkipped: next.rehashSkipped,
+        rehashDone: next.rehashDone,
+      });
+      void scheduleWrite();
+      return next;
+    },
+    handleReportDiag,
     recordDelivery(info) {
       if (disposed || !info || typeof info !== 'object') {
         return;
@@ -677,6 +928,7 @@ export function installFrameDiag(options = {}) {
       try {
         if (typeof ipcMain.removeHandler === 'function') {
           ipcMain.removeHandler(FRAME_DIAG_CHANNEL);
+          ipcMain.removeHandler(FRAME_REPORT_DIAG_CHANNEL);
         }
       } catch {
         /* teardown best-effort */

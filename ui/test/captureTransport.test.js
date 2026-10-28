@@ -6,6 +6,7 @@ import { mkdtemp, mkdir, writeFile, chmod, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMainBindings } from '../electron/hostBindings.js';
+import { createSettingsStore } from '../electron/authorityWire.js';
 import { installCaptureBridge } from '../electron/captureBridge.js';
 import { createPreloadFacade } from '../electron/preload.js';
 import { createCapturePort, createCaptureState } from '../src/capture/capturePort.js';
@@ -46,7 +47,7 @@ async function fixture(t, configured=true) {
   });});
   server.listen(join(root,'metaviewer/core.sock'));await once(server,'listening');await chmod(join(root,'metaviewer/core.sock'),0o600);
   t.after(async()=>{for(const s of sockets)s.destroy();await new Promise(resolve=>server.close(resolve));await rm(root,{recursive:true,force:true});});
-  const bindings=await createMainBindings({env:{MV_CORE_CONFIG:join(root,'config.json'),XDG_RUNTIME_DIR:root,MV_RECORDING_DESTINATION:configured?root:undefined},createMessageChannel:()=>{throw Error('no frames');}});
+  const bindings=await createMainBindings({env:{MV_CORE_CONFIG:join(root,'config.json'),XDG_RUNTIME_DIR:root,XDG_CONFIG_HOME:join(root,'config-home'),MV_RECORDING_DESTINATION:configured?root:undefined},createMessageChannel:()=>{throw Error('no frames');}});
   t.after(()=>bindings.core.dispose());
   return {root,core:bindings.core,requests,journal,metadata,refuse:code=>{refusal=code;},malform:()=>{malformed=true;}};
 }
@@ -58,17 +59,29 @@ test('production capture transport routes every operation and closed state subsc
   }
   assert.deepEqual(f.requests.slice(1).map(e=>e.body.op),['ram_start','screenshot','ram_stop','disk_start','list']);
   assert.match(f.requests[1].body.params.recording_id,/^[0-9a-f-]{36}$/i);
-  assert.deepEqual(f.requests[1].body.params,{surface_id:'surface',recording_id:f.requests[1].body.params.recording_id,ring_bytes:8388608,max_fps:30});
+  assert.deepEqual(f.requests[1].body.params,{surface_id:'surface',recording_id:f.requests[1].body.params.recording_id,ring_bytes:8388608,max_fps:3});
   assert.match(f.requests[2].body.params.capture_id,/^[0-9a-f-]{36}$/i);
   assert.deepEqual(f.requests[2].body.params,{surface_id:'surface',capture_id:f.requests[2].body.params.capture_id});
   assert.deepEqual(f.requests[3].body.params,{surface_id:'surface',recording_id:'record'});
-  assert.deepEqual(f.requests.at(-2).body.params,{surface_id:'surface',recording_id:'record',destination_capability_id:'recording:configured',destination_path:f.root,max_fps:30});
+  assert.deepEqual(f.requests.at(-2).body.params,{surface_id:'surface',recording_id:'record',destination_capability_id:'recording:configured',destination_path:f.root,max_fps:3});
   assert.deepEqual(f.journal.map(r=>({op:r.op,surface_id:r.surface_id,code:r.code})),[
     {op:'ram_start',surface_id:'surface',code:'OK'},
     {op:'screenshot',surface_id:'surface',code:'OK'},
     {op:'ram_stop',surface_id:'surface',code:'OK'},
     {op:'disk_start',surface_id:'surface',code:'OK'},
   ]);
+  assert.deepEqual(await f.core.request({op:'capture',method:'recordStart',request:{...req,mode:'ai',max_fps:30}}),replies.recordStart);
+  assert.equal(f.requests.at(-1).body.params.max_fps,30);
+  assert.deepEqual(await f.core.request({op:'capture',method:'export',request:{schema:req.schema,request_id:req.request_id,capture_id:'record',destination:'recording:configured',max_fps:30}}),replies.export);
+  assert.equal(f.requests.at(-1).body.params.max_fps,30);
+  const store=createSettingsStore({XDG_CONFIG_HOME:join(f.root,'config-home')});
+  await store.save(JSON.stringify({scheme:'mv-light',density:'compact',wallFps:30,recordingFps:10}));
+  assert.deepEqual(await f.core.request({op:'capture',method:'recordStart',request:{...req,mode:'ai'}}),replies.recordStart);
+  assert.equal(f.requests.at(-1).body.params.max_fps,10);
+  assert.deepEqual(await f.core.request({op:'capture',method:'export',request:{schema:req.schema,request_id:req.request_id,capture_id:'record',destination:'recording:configured'}}),replies.export);
+  assert.equal(f.requests.at(-1).body.params.max_fps,10);
+  assert.deepEqual(await f.core.request({op:'capture',method:'recordStart',request:{...req,mode:'ai',max_fps:30}}),replies.recordStart);
+  assert.equal(f.requests.at(-1).body.params.max_fps,30);
   const count=f.requests.length;
   assert.deepEqual(await f.core.request({op:'capture',method:'export',request:{schema:req.schema,request_id:req.request_id,capture_id:'record',destination:null}}),{ok:false,code:'DESTINATION_UNSET',request_id:req.request_id});
   assert.equal(f.requests.length,count);
@@ -92,7 +105,7 @@ test('production capture refusals retain original renderer correlation and pin f
 
   f.refuse('CAPTURE_UNKNOWN');
   assert.deepEqual(await f.core.request({op:'capture',method:'export',request:{schema:req.schema,request_id:req.request_id,capture_id:'absent-export',destination:'recording:configured'}}),{ok:false,code:'CAPTURE_UNKNOWN',request_id:req.request_id});
-  assert.deepEqual(f.requests.at(-1).body.params,{surface_id:'capture',recording_id:'absent-export',destination_capability_id:'recording:configured',destination_path:f.root,max_fps:30});
+  assert.deepEqual(f.requests.at(-1).body.params,{surface_id:'capture',recording_id:'absent-export',destination_capability_id:'recording:configured',destination_path:f.root,max_fps:3});
   assert.equal(f.journal.at(-1).surface_id,'capture');
   assert.notEqual(f.journal.at(-1).surface_id,'');
   assert.equal(f.journal.at(-1).kind,'capture_refused');
@@ -104,7 +117,7 @@ test('production capture refusals retain original renderer correlation and pin f
   assert.deepEqual(await f.core.request({op:'capture',method:'recordStart',request:{...req,mode:'ai'}}),replies.recordStart);
   const startParams=f.requests.at(-1).body.params;
   assert.match(startParams.recording_id,/^[0-9a-f-]{36}$/i);
-  assert.deepEqual(startParams,{surface_id:'surface',recording_id:startParams.recording_id,ring_bytes:8388608,max_fps:30});
+  assert.deepEqual(startParams,{surface_id:'surface',recording_id:startParams.recording_id,ring_bytes:8388608,max_fps:3});
   assert.equal(f.journal.at(-1).surface_id,'surface');
 
   assert.deepEqual(await f.core.request({op:'capture',method:'screenshot',request:req}),replies.screenshot);
@@ -120,11 +133,11 @@ test('production capture refusals retain original renderer correlation and pin f
 
   f.refuse('NOT_SEALED');
   assert.deepEqual(await f.core.request({op:'capture',method:'export',request:{schema:req.schema,request_id:req.request_id,capture_id:'record',destination:'recording:configured'}}),{ok:false,code:'NOT_SEALED',request_id:req.request_id});
-  assert.deepEqual(f.requests.at(-1).body.params,{surface_id:'surface',recording_id:'record',destination_capability_id:'recording:configured',destination_path:f.root,max_fps:30});
+  assert.deepEqual(f.requests.at(-1).body.params,{surface_id:'surface',recording_id:'record',destination_capability_id:'recording:configured',destination_path:f.root,max_fps:3});
   assert.equal(f.journal.at(-1).surface_id,'surface');
 
   assert.deepEqual(await f.core.request({op:'capture',method:'export',request:{schema:req.schema,request_id:req.request_id,capture_id:'shot',destination:'recording:configured'}}),{ok:false,code:'NOT_SEALED',request_id:req.request_id});
-  assert.deepEqual(f.requests.at(-1).body.params,{surface_id:'surface',recording_id:'shot',destination_capability_id:'recording:configured',destination_path:f.root,max_fps:30});
+  assert.deepEqual(f.requests.at(-1).body.params,{surface_id:'surface',recording_id:'shot',destination_capability_id:'recording:configured',destination_path:f.root,max_fps:3});
   assert.equal(f.journal.at(-1).surface_id,'surface');
 });
 test('production capture rejects capability-bearing replies and malformed state',async t=>{

@@ -13,8 +13,10 @@
  * a newer pending generation; classify acquire failures with closed cause tokens
  * without paths or bytes; record per-(surface, seq) applied-prefix progress floor
  * so retried partially-applied input batches skip already-applied prefix primitives.
+ * [TARGET, unit decision] Store and expose requestedWallFps on host bindings and
+ * default capture recording max_fps to recordingFps (default 3) unless overridden per request.
  */
-import { INTENT_OPS, mapSurfaceInputRefusal, recordingDestination, validateIntentBody, validateProposalBody, validateSurfaceInputBatch } from './authorityWire.js';
+import { createSettingsStore, DEFAULT_SETTINGS, INTENT_OPS, mapSurfaceInputRefusal, recordingDestination, validateIntentBody, validateProposalBody, validateSettings, validateSurfaceInputBatch } from './authorityWire.js';
 export { INTENT_OPS };
 import { createTerminalHost } from './terminalHost.js';
 import { assertCaptureCall, assertCaptureReply, validCaptureState } from './captureBridge.js';
@@ -186,6 +188,50 @@ export async function createMainBindings({env = process.env, createMessageChanne
       return count;
     };
     let live = false, disposed = false, seq = 0, received = 0, lastIntentReplySeq = 1;
+    /** @type {number} */
+    let requestedWallFps = DEFAULT_SETTINGS.wallFps;
+    /** @type {number} */
+    let recordingFps = DEFAULT_SETTINGS.recordingFps;
+    /** @type {number | null} */
+    let explicitRecordingFps = null;
+    /** @type {ReturnType<typeof createSettingsStore> | null} */
+    let settingsStore = null;
+    if (typeof env.XDG_CONFIG_HOME === 'string' && env.XDG_CONFIG_HOME.length > 0) {
+      try {
+        settingsStore = createSettingsStore(env);
+        const initialSettings = await settingsStore.load().catch(() => null);
+        if (typeof initialSettings === 'string') {
+          const parsed = validateSettings(initialSettings);
+          requestedWallFps = parsed.wallFps;
+          recordingFps = parsed.recordingFps;
+        }
+      } catch {
+        settingsStore = null;
+      }
+    }
+    /** @type {Set<(cadence: { wallFps: number }) => void>} */
+    const cadenceListeners = new Set();
+    /** @param {{ wallFps?: unknown, recordingFps?: unknown }} cadence */
+    const applyCadence = (cadence) => {
+      if (!cadence || typeof cadence !== 'object') throw new Error('SETTINGS_WALL_FPS');
+      if (cadence.wallFps !== undefined) {
+        if (typeof cadence.wallFps !== 'number' || !Number.isSafeInteger(cadence.wallFps) || ![3, 30, 60].includes(cadence.wallFps)) {
+          throw new Error('SETTINGS_WALL_FPS');
+        }
+        requestedWallFps = cadence.wallFps;
+        const notice = Object.freeze({ wallFps: requestedWallFps });
+        for (const notify of [...cadenceListeners]) {
+          try { notify(notice); } catch {}
+        }
+      }
+      if (cadence.recordingFps !== undefined) {
+        if (typeof cadence.recordingFps !== 'number' || !Number.isSafeInteger(cadence.recordingFps) || cadence.recordingFps < 1 || cadence.recordingFps > 60) {
+          throw new Error('SETTINGS_RECORDING_FPS');
+        }
+        recordingFps = cadence.recordingFps;
+        explicitRecordingFps = cadence.recordingFps;
+      }
+    };
     /** @type {ReturnType<typeof setInterval> | undefined} */ let keepalive;
     /** @type {(value?:any)=>void} */ let ready;
     /** @type {(error:Error)=>void} */ let rejectReady;
@@ -204,7 +250,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
       }
       surfaceInputQueues.clear();
       for (const channel of channels.values()) {channel.port1.close();channel.port2.close();}
-      channels.clear();surfaces.clear();latestFrames.clear();streamIds.clear();subscriptions.clear();delivering.clear();pendingDeliveries.clear();failedFrameGenerations.clear();listeners.clear();captureListeners.clear();
+      channels.clear();surfaces.clear();latestFrames.clear();streamIds.clear();subscriptions.clear();delivering.clear();pendingDeliveries.clear();failedFrameGenerations.clear();listeners.clear();captureListeners.clear();cadenceListeners.clear();
     };
     /** @type {Set<(state:any)=>void>} */ const captureListeners = new Set();
     const helloTimer = setTimeout(shutdown, DEADLINE);
@@ -745,24 +791,82 @@ export async function createMainBindings({env = process.env, createMessageChanne
           partialApplied: qState.partialApplied,
         });
       },
+      get requestedWallFps() {
+        return requestedWallFps;
+      },
+      get recordingFps() {
+        return recordingFps;
+      },
+      /** @param {{ wallFps: number, recordingFps?: number }} cadence */
+      requestCadence(cadence) {
+        applyCadence(cadence);
+      },
+      /** @param {{ wallFps: number, recordingFps?: number }} cadence */
+      setCadence(cadence) {
+        applyCadence(cadence);
+      },
+      /** @param {number} fps */
+      setRecordingFps(fps) {
+        if (typeof fps !== 'number' || !Number.isSafeInteger(fps) || fps < 1 || fps > 60) {
+          throw new Error('SETTINGS_RECORDING_FPS');
+        }
+        recordingFps = fps;
+        explicitRecordingFps = fps;
+      },
       start:async()=>getStatus(),getStatus,dispose:async()=>shutdown(),
       /** @param {any} message */
       async request(message) {
+        if (message?.op === 'cadence') {
+          applyCadence(message);
+          return true;
+        }
         if (message?.op === 'capture') {
           if (!live || disposed || nonInputPendingCount() >= MAX_ITEMS
               || Object.keys(message).sort().join(',') !== 'method,op,request'
               || !['screenshot','recordStart','recordStop','export','list'].includes(message.method)) throw fail();
-          assertCaptureCall(message.method,message.request === undefined ? [] : [message.request]);
+          const rawReq = message.request;
+          /** @type {number | null} */
+          let overrideMaxFps = null;
+          let callReq = rawReq;
+          if ((message.method === 'recordStart' || message.method === 'export')
+              && rawReq !== null && typeof rawReq === 'object' && !Array.isArray(rawReq)) {
+            const hasMaxFps = Object.hasOwn(rawReq, 'max_fps');
+            const hasCamelMaxFps = Object.hasOwn(rawReq, 'maxFps');
+            if (hasMaxFps && hasCamelMaxFps) throw fail();
+            if (hasMaxFps || hasCamelMaxFps) {
+              const desc = Object.getOwnPropertyDescriptor(rawReq, hasMaxFps ? 'max_fps' : 'maxFps');
+              if (!desc || !('value' in desc)) throw fail();
+              const candidateFps = desc.value;
+              if (typeof candidateFps !== 'number' || !Number.isSafeInteger(candidateFps) || candidateFps < 1 || candidateFps > 60) {
+                throw fail();
+              }
+              overrideMaxFps = candidateFps;
+              const { max_fps: _m1, maxFps: _m2, ...rest } = rawReq;
+              callReq = rest;
+            }
+          }
+          assertCaptureCall(message.method,callReq === undefined ? [] : [callReq]);
           if (message.method === 'export' && (destination === null || message.request.destination === null)) {
             return {ok:false,code:'DESTINATION_UNSET',request_id:message.request.request_id};
           }
+          if (overrideMaxFps === null && (message.method === 'recordStart' || message.method === 'export') && settingsStore !== null && explicitRecordingFps === null) {
+            try {
+              const stored = await settingsStore.load();
+              if (typeof stored === 'string') {
+                const parsed = validateSettings(stored);
+                recordingFps = parsed.recordingFps;
+                requestedWallFps = parsed.wallFps;
+              }
+            } catch {}
+          }
+          const effectiveMaxFps = overrideMaxFps ?? recordingFps;
           const key = message.method === 'list' ? `capture-list:${randomUUID()}` : randomUUID();
           const request = message.request;
           const captureId = randomUUID();
           // Stop identity is host-owned; the core resolves unknown IDs and journals refusals.
           const surfaceId = ['recordStop','export'].includes(message.method) ? (captureSurfaces.get(request.recording_id ?? request.capture_id) ?? 'capture') : request?.surface_id;
-          const params = message.method === 'export' ? {surface_id:surfaceId,recording_id:request.capture_id,destination_capability_id:'recording:configured',destination_path:destination,max_fps:30}
-            : message.method === 'recordStart' ? {surface_id:surfaceId,recording_id:captureId,ring_bytes:8388608,max_fps:30}
+          const params = message.method === 'export' ? {surface_id:surfaceId,recording_id:request.capture_id,destination_capability_id:'recording:configured',destination_path:destination,max_fps:effectiveMaxFps}
+            : message.method === 'recordStart' ? {surface_id:surfaceId,recording_id:captureId,ring_bytes:8388608,max_fps:effectiveMaxFps}
             : message.method === 'recordStop' ? {surface_id:surfaceId,recording_id:request.recording_id}
             : {surface_id:surfaceId,capture_id:captureId};
           const body = message.method === 'list' ? {schema:'surface_request/v0.2',op:'list',params:{}}
@@ -857,6 +961,23 @@ export async function createMainBindings({env = process.env, createMessageChanne
           try {send(body);} catch {shutdown();}
         });
       }},wire:{terminal,profiles:terminal.profiles,frames:{
+      get requestedWallFps() {
+        return requestedWallFps;
+      },
+      /** @param {{ wallFps: number, recordingFps?: number }} cadence */
+      requestCadence(cadence) {
+        applyCadence(cadence);
+      },
+      /** @param {{ wallFps: number, recordingFps?: number }} cadence */
+      setCadence(cadence) {
+        applyCadence(cadence);
+      },
+      /** @param {(cadence: { wallFps: number }) => void} listener */
+      onCadence(listener) {
+        if (typeof listener !== 'function') throw fail();
+        cadenceListeners.add(listener);
+        return () => cadenceListeners.delete(listener);
+      },
       /** @param {(entry:any)=>any} listener */
       subscribe(listener) {
         if (disposed || listeners.size) throw fail();listeners.add(listener);

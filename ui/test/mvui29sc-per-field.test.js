@@ -19,24 +19,24 @@ import {
 } from '../src/settings/settingsModel.js';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-const settings = scheme => JSON.stringify({ scheme, density: 'compact' });
+const settings = scheme => JSON.stringify({ scheme, density: 'compact', wallFps: 30, recordingFps: 3 });
 
 test('stored decode falls back per field and ignores unknown keys', () => {
   assert.deepEqual(decodeStoredSettings('{"scheme":"mv-dark","density":7}'), {
     ok: true,
-    settings: { scheme: 'mv-dark', density: 'compact' },
+    settings: { scheme: 'mv-dark', density: 'compact', wallFps: 30, recordingFps: 3 },
   });
   assert.deepEqual(decodeStoredSettings('{"scheme":"invented","density":"compact"}'), {
     ok: true,
-    settings: { scheme: 'mv-light', density: 'compact' },
+    settings: { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 },
   });
   assert.deepEqual(decodeStoredSettings('{"scheme":"mv-dark","future":1}'), {
     ok: true,
-    settings: { scheme: 'mv-dark', density: 'compact' },
+    settings: { scheme: 'mv-dark', density: 'compact', wallFps: 30, recordingFps: 3 },
   });
   assert.deepEqual(decodeStoredSettings({}), {
     ok: true,
-    settings: { scheme: 'mv-light', density: 'compact' },
+    settings: { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 },
   });
   const malformed = decodeStoredSettings('{nope');
   assert.equal(malformed.ok, false);
@@ -48,9 +48,9 @@ test('stored decode falls back per field and ignores unknown keys', () => {
 
 test('store load keeps a valid scheme paired with an invalid density', async () => {
   const store = createHostSettingsStore(createMemorySettingsHost('{"scheme":"mv-dark","density":7}'));
-  assert.deepEqual({ ...(await store.load()) }, { scheme: 'mv-dark', density: 'compact' });
+  assert.deepEqual({ ...(await store.load()) }, { scheme: 'mv-dark', density: 'compact', wallFps: 30, recordingFps: 3 });
   const flipped = createHostSettingsStore(createMemorySettingsHost('{"scheme":"invented","density":"compact"}'));
-  assert.deepEqual({ ...(await flipped.load()) }, { scheme: 'mv-light', density: 'compact' });
+  assert.deepEqual({ ...(await flipped.load()) }, { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 });
 });
 
 test('the entry shares the exact store decode object', () => {

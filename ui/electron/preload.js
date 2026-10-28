@@ -4,6 +4,8 @@
  * entry; retain accessor rejection for injected installPreload dependencies.
  * [TARGET, unit decision] Bound per-surface input queues to 64 entries and
  * evict unknown/unadmitted surface IDs on SURFACE_UNKNOWN refusal.
+ * [TARGET, unit decision] Expose metaviewer.frames.reportDiag({rehashSkipped, rehashDone})
+ * with closed two-integer validation and optional rehash counters on frame_diag_preload/v1.
  *
  * A closed two-method facade over injected transport/bridge handles for the
  * starter layout only: the renderer receives narrow load/save domain methods
@@ -29,6 +31,7 @@
  * @property {{propose:(json:string)=>Promise<any>,intent:(json:string)=>Promise<true>,subscribeFrames:(cb:(frame:any)=>void)=>(()=>void)}} authority
  * @property {{send:(batch:any)=>Promise<{ok:true,accepted:number}|{ok:false,code:string}>,onResult:(cb:(result:{surface_id:string,seq:number,ok:boolean,code:string|null})=>void)=>(()=>void)}} input
  * @property {{screenshot:(req:any)=>Promise<any>,recordStart:(req:any)=>Promise<any>,recordStop:(req:any)=>Promise<any>,export:(req:any)=>Promise<any>,list:()=>Promise<any>,subscribe:(cb:(state:any)=>void)=>(()=>void)}} capture
+ * @property {{reportDiag:(diag:{rehashSkipped:number,rehashDone:number})=>Promise<true>}} frames
  * @property {{open:(spec:any)=>Promise<{session:string}>,setEnabled:(value:boolean)=>Promise<true>}} sideTerminal
  * @property {{reportAnchors:(snapshot:any)=>Promise<true>}} [qa]
  * @property {() => Promise<string|null>} load Read the stored layout text,
@@ -329,11 +332,14 @@ function assertCaptureCall(method,args) {
   if (!args.length) return;
   const v=/** @type {any} */(args[0]);
   const keys=method==='export'?'capture_id,destination,request_id,schema':method==='recordStop'?'recording_id,request_id,schema':method==='recordStart'?'mode,request_id,schema,surface_id':'request_id,schema,surface_id';
-  if (!captureKeys(v,keys) || v.schema!=='capture_request/v1'
+  const keysWithFps=method==='export'?'capture_id,destination,max_fps,request_id,schema':method==='recordStart'?'max_fps,mode,request_id,schema,surface_id':null;
+  const hasFps=keysWithFps!==null && captureKeys(v,keysWithFps);
+  if ((!captureKeys(v,keys) && !hasFps) || v.schema!=='capture_request/v1'
     || typeof v.request_id!=='string' || !/^[\x20-\x7e]{1,64}$/.test(v.request_id)
     || !captureId(method==='export'?v.capture_id:method==='recordStop'?v.recording_id:v.surface_id)
     || (method==='export' && v.destination!==null && v.destination!=='recording:configured')
-    || (method==='recordStart' && v.mode!=='ai')) throw new ContractError('PAYLOAD','capture request');
+    || (method==='recordStart' && v.mode!=='ai')
+    || (hasFps && (!Number.isSafeInteger(v.max_fps) || v.max_fps<1 || v.max_fps>60))) throw new ContractError('PAYLOAD','capture request');
 }
 /** @param {string} method @param {any} v @param {string} [requestId] */
 function assertCaptureReply(method,v,requestId='') {
@@ -420,6 +426,7 @@ function captureFacade(transport, captureCallbacks = new Set(), seededCaptureSur
 // [TARGET, unit decision] Closed domain channels; all values are rechecked in main.
 const QA_ANCHORS_CHANNEL = 'metaviewer:qa.anchors';
 const FRAME_DIAG_CHANNEL = 'metaviewer:frame.diag';
+const FRAME_REPORT_DIAG_CHANNEL = 'metaviewer:frames.reportDiag';
 const SURFACE_INPUT_CHANNEL = 'metaviewer:authority.intent';
 const QA_ANCHOR_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
 const QA_ANCHOR_RE = /^(?=.{1,200}$)[A-Za-z0-9][A-Za-z0-9._:-]{0,63}(?:\/[A-Za-z0-9][A-Za-z0-9._:-]{0,63}){0,5}$/;
@@ -485,16 +492,36 @@ function assertQaSnapshot(args) {
   return normalized;
 }
 /** @param {readonly unknown[]} args */
+function assertFrameReportDiag(args) {
+  if (!Array.isArray(args) || args.length !== 1) throw new ContractError('ARGS','frames.reportDiag arity');
+  const v = /** @type {any} */(args[0]);
+  if (!captureKeys(v, 'rehashDone,rehashSkipped')
+    || (Object.getPrototypeOf(v) !== Object.prototype && Object.getPrototypeOf(v) !== null)
+    || !captureNumber(v.rehashSkipped)
+    || !captureNumber(v.rehashDone)) {
+    throw new ContractError('PAYLOAD','frames.reportDiag payload shape');
+  }
+  return Object.freeze({ rehashSkipped: v.rehashSkipped, rehashDone: v.rehashDone });
+}
+/** @param {readonly unknown[]} args */
 function assertFrameDiagPreload(args) {
   if (!Array.isArray(args) || args.length !== 1) throw new ContractError('ARGS','frame.diag arity');
   const v = /** @type {any} */(args[0]);
+  if (v === null || typeof v !== 'object' || Array.isArray(v)
+    || (Object.getPrototypeOf(v) !== Object.prototype && Object.getPrototypeOf(v) !== null)
+    || Reflect.ownKeys(v).length !== Object.keys(v).length
+    || !Object.values(Object.getOwnPropertyDescriptors(v)).every(d => 'value' in d)) {
+    throw new ContractError('PAYLOAD','frame.diag payload shape');
+  }
+  const baseKeys = Object.keys(v).filter(k => k !== 'rehashSkipped' && k !== 'rehashDone').sort().join(',');
   const keys = 'domStripText,domSurfaceState,domWaitingText,framesReceived,inWallApp,invalidNotices,lastFrameGeneration,lastSurfaceGeneration,lastSurfaceId,legacyNoticesForwarded,noticesForwarded,origin,portsClosed,portsReceived,schema';
   const prevKeys = 'domStripText,domSurfaceState,domWaitingText,framesReceived,inWallApp,invalidNotices,lastSurfaceGeneration,lastSurfaceId,legacyNoticesForwarded,noticesForwarded,origin,portsClosed,portsReceived,schema';
   const legacyKeys = 'framesReceived,inWallApp,invalidNotices,lastSurfaceGeneration,lastSurfaceId,legacyNoticesForwarded,noticesForwarded,origin,portsClosed,portsReceived,schema';
-  if ((!captureKeys(v, keys) && !captureKeys(v, prevKeys) && !captureKeys(v, legacyKeys))
-    || (Object.getPrototypeOf(v) !== Object.prototype && Object.getPrototypeOf(v) !== null)
+  if ((baseKeys !== keys && baseKeys !== prevKeys && baseKeys !== legacyKeys)
     || v.schema !== 'frame_diag_preload/v1'
     || !['framesReceived','invalidNotices','portsReceived','noticesForwarded','legacyNoticesForwarded','portsClosed'].every(k => captureNumber(v[k]))
+    || (v.rehashSkipped !== undefined && !captureNumber(v.rehashSkipped))
+    || (v.rehashDone !== undefined && !captureNumber(v.rehashDone))
     || (v.inWallApp !== null && typeof v.inWallApp !== 'boolean')
     || typeof v.origin !== 'string' || v.origin.length > 256 || v.origin.includes('\0')
     || (v.lastSurfaceId !== null && !captureId(v.lastSurfaceId))
@@ -639,6 +666,7 @@ const WIRE_NAMES = Object.freeze({loadSettings:'settings.load',saveSettings:'set
 function wireCall(channel,args) {
   if(channel===QA_ANCHORS_CHANNEL) return {channel,args:Object.freeze([assertQaSnapshot(args)])};
   if(channel===FRAME_DIAG_CHANNEL) return {channel,args:Object.freeze([assertFrameDiagPreload(args)])};
+  if(channel===FRAME_REPORT_DIAG_CHANNEL) return {channel,args:Object.freeze([assertFrameReportDiag(args)])};
   const captureName=Object.entries(CAPTURE_CHANNELS).find(([,suffix])=>channel===`metaviewer:${suffix}`)?.[0];
   if(captureName){assertCaptureCall(captureName,args);return {channel,args:Object.freeze([...args])};}
   const name=Object.entries(WIRE_NAMES).find(([,suffix]) => channel === `metaviewer:${suffix}`)?.[0];
@@ -783,6 +811,7 @@ function wireFacade(transport) {
   /** @type {null|(()=>void)} */ let revokeFrames=null;
   let subscriptionGeneration=0;
   let diagFramesReceived=0,diagInvalidNotices=0,diagPortsReceived=0,diagNoticesForwarded=0,diagLegacyNoticesForwarded=0,diagPortsClosed=0;
+  let diagRehashSkipped=0,diagRehashDone=0;
   /** @type {boolean|null} */ let diagInWallApp=null;
   let diagOrigin='';
   /** @type {string|null} */ let diagLastSurfaceId=null;
@@ -804,6 +833,8 @@ function wireFacade(transport) {
         noticesForwarded:diagNoticesForwarded,
         legacyNoticesForwarded:diagLegacyNoticesForwarded,
         portsClosed:diagPortsClosed,
+        rehashSkipped:diagRehashSkipped,
+        rehashDone:diagRehashDone,
         inWallApp:diagInWallApp,
         origin:diagOrigin,
         lastSurfaceId:diagLastSurfaceId,
@@ -1147,6 +1178,19 @@ function wireFacade(transport) {
         }
       };
 
+    },
+  });
+  api.frames=Object.freeze({
+    /** @param {...unknown} args */
+    reportDiag:async(...args)=>{
+      const admitted=wireCall(FRAME_REPORT_DIAG_CHANNEL,args);
+      const report=/** @type {{rehashSkipped:number,rehashDone:number}} */(admitted.args[0]);
+      const reply=await transport.invoke(admitted.channel,admitted.args);
+      assertSaveReply(reply);
+      diagRehashSkipped=Math.max(diagRehashSkipped,report.rehashSkipped);
+      diagRehashDone=Math.max(diagRehashDone,report.rehashDone);
+      scheduleFrameDiag();
+      return true;
     },
   });
   api.sideTerminal=Object.freeze({

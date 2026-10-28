@@ -1,5 +1,13 @@
 import { SETTINGS_STORAGE_KEYS, readStoredSetting, writeStoredSetting } from '../../.kit/capsule-ui-kit/src/shell/SettingsModel.js';
-import { decodeMvSettings, decodeStoredSettings, encodeMvSettings } from './settingsModel.js';
+import {
+  MV_DEFAULT_RECORDING_FPS,
+  MV_DEFAULT_WALL_FPS,
+  MV_DENSITY,
+  decodeMvSettings,
+  decodeStoredSettings,
+  encodeMvSettings,
+  isMvDensity,
+} from './settingsModel.js';
 
 /**
  * Interim compatibility adapter: use each preload method when present.
@@ -8,13 +16,24 @@ import { decodeMvSettings, decodeStoredSettings, encodeMvSettings } from './sett
  * methods. A host rejection never triggers fallback.
  * Fixture settings always remain in memory. Legacy kit light/dark preferences
  * are normalized to the MetaViewer scheme vocabulary on read.
+ *
+ * The fallback persists the scheme preference only (one storage write; the
+ * host feature-detection contract pins exactly one key) and reads the
+ * kit density preference when present. Both directions run through the
+ * closed four-key definition, so saves validate every field and loads fall
+ * back per field; the live host path persists the full object.
  * @param {Partial<import('./settingsModel.js').HostSettingsPort>|null} host
  * @param {Storage|null} storage
  * @param {string|null} [fixtureScheme]
  * @returns {import('./settingsModel.js').HostSettingsPort} */
 function createSettingsHostImpl(host, storage, fixtureScheme = null) {
   if (fixtureScheme !== null) {
-    let text = encodeMvSettings({ scheme: fixtureScheme, density: 'compact' });
+    let text = encodeMvSettings({
+      scheme: fixtureScheme,
+      density: MV_DENSITY,
+      wallFps: MV_DEFAULT_WALL_FPS,
+      recordingFps: MV_DEFAULT_RECORDING_FPS,
+    });
     return { loadSettings: async () => text, saveSettings: async json => { text = json; return true; } };
   }
   const load = typeof host?.loadSettings === 'function' ? host.loadSettings.bind(host) : null;
@@ -25,7 +44,14 @@ function createSettingsHostImpl(host, storage, fixtureScheme = null) {
       : async () => {
         const stored = readStoredSetting(storage, SETTINGS_STORAGE_KEYS.scheme, 'mv-light');
         const scheme = stored === 'dark' ? 'mv-dark' : stored === 'light' ? 'mv-light' : stored;
-        return encodeMvSettings({ scheme, density: 'compact' });
+        const storedDensity = readStoredSetting(storage, SETTINGS_STORAGE_KEYS.density, MV_DENSITY);
+        const density = isMvDensity(storedDensity) ? storedDensity : MV_DENSITY;
+        return encodeMvSettings({
+          scheme,
+          density,
+          wallFps: MV_DEFAULT_WALL_FPS,
+          recordingFps: MV_DEFAULT_RECORDING_FPS,
+        });
       },
     saveSettings: save !== null
       ? json => save(json)

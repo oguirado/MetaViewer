@@ -4,7 +4,7 @@ import {mkdtemp, rm, stat, readFile, writeFile, readdir, chmod, symlink} from 'n
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {createSettingsStore, WIRE_MAX_BYTES} from '../ui/electron/authorityWire.js';
+import {createSettingsStore, validateSettings, WIRE_MAX_BYTES} from '../ui/electron/authorityWire.js';
 import {encodeMvSettings, decodeMvSettings} from '../ui/src/settings/settingsModel.js';
 import {createPreloadFacade} from '../ui/electron/preload.js';
 
@@ -99,24 +99,113 @@ test('preload settings facade reaches the validated host store',async t=>{
     if(channel==='metaviewer:settings.save') return store.save(args[0]);
     throw new Error('unexpected channel');
   }},bridge:{exposeInMainWorld(){}}});
-  const payload=encodeMvSettings({scheme:'mv-dark',density:'compact'});
+  const payload=encodeMvSettings({scheme:'mv-dark',density:'compact',wallFps:30,recordingFps:3});
   await api.saveSettings(payload);
   assert.equal(await api.loadSettings(),payload);
-  assert.deepEqual(decodeMvSettings(await store.load()),{ok:true,settings:{scheme:'mv-dark',density:'compact'}});
+  const loaded=await store.load();
+  assert.deepEqual(decodeMvSettings(loaded),{
+    ok:true,
+    settings:{scheme:'mv-dark',density:'compact',wallFps:30,recordingFps:3},
+  });
+  assert.deepEqual(validateSettings(loaded),{
+    scheme:'mv-dark',density:'compact',wallFps:30,recordingFps:3,
+  });
   await assert.rejects(api.saveSettings('{"theme":"next"}'),/SETTINGS_UNKNOWN_KEY/);
   assert.deepEqual(calls,['metaviewer:settings.save','metaviewer:settings.load','metaviewer:settings.save']);
 });
 
 test('missing keys default exactly as renderer decode; explicit invalid values refuse',async t=>{
   const {store}=await fixture(t);
-  for(const value of [{},{scheme:'mv-dark'},{density:'compact'}]) {
-    const text=JSON.stringify(value);
+  // Full 4-key parity across schemes, densities, wallFps presets, and recordingFps bounds.
+  // Fails if either side drops a key, mutates a value, or diverges in decoded shape.
+  for(const full of [
+    {scheme:'mv-light',density:'compact',wallFps:30,recordingFps:3},
+    {scheme:'mv-dark',density:'comfortable',wallFps:3,recordingFps:1},
+    {scheme:'mv-dark',density:'compact',wallFps:60,recordingFps:60},
+    {scheme:'mv-light',density:'comfortable',wallFps:60,recordingFps:15},
+  ]) {
+    const text=encodeMvSettings(full);
     await store.save(text);
-    assert.deepEqual(decodeMvSettings(await store.load()),decodeMvSettings(text));
+    const loaded=await store.load();
+    assert.equal(loaded,text);
+    const rendererDecoded=decodeMvSettings(loaded);
+    const hostDecoded=validateSettings(loaded);
+    assert.deepEqual(rendererDecoded,{ok:true,settings:full});
+    assert.deepEqual(hostDecoded,full);
+    assert.deepEqual(rendererDecoded.settings,hostDecoded);
   }
-  for(const value of [{scheme:'next'},{scheme:null},{density:null},{density:'regular'}]) {
+  // Missing keys and legacy 2-key {scheme, density} objects default identically on both sides:
+  // scheme -> 'mv-light', density -> 'compact', wallFps -> 30, recordingFps -> 3.
+  // Fails on any mutation of per-field defaults on host or renderer.
+  for(const [partial,expected] of [
+    [{},{scheme:'mv-light',density:'compact',wallFps:30,recordingFps:3}],
+    [{density:'comfortable',wallFps:60,recordingFps:12},{scheme:'mv-light',density:'comfortable',wallFps:60,recordingFps:12}],
+    [{scheme:'mv-dark',wallFps:60,recordingFps:12},{scheme:'mv-dark',density:'compact',wallFps:60,recordingFps:12}],
+    [{scheme:'mv-dark',density:'comfortable',recordingFps:12},{scheme:'mv-dark',density:'comfortable',wallFps:30,recordingFps:12}],
+    [{scheme:'mv-dark',density:'comfortable',wallFps:3},{scheme:'mv-dark',density:'comfortable',wallFps:3,recordingFps:3}],
+    [{scheme:'mv-dark'},{scheme:'mv-dark',density:'compact',wallFps:30,recordingFps:3}],
+    [{density:'compact'},{scheme:'mv-light',density:'compact',wallFps:30,recordingFps:3}],
+    [{density:'comfortable'},{scheme:'mv-light',density:'comfortable',wallFps:30,recordingFps:3}],
+    [{wallFps:3},{scheme:'mv-light',density:'compact',wallFps:3,recordingFps:3}],
+    [{recordingFps:24},{scheme:'mv-light',density:'compact',wallFps:30,recordingFps:24}],
+    [{scheme:'mv-dark',density:'compact'},{scheme:'mv-dark',density:'compact',wallFps:30,recordingFps:3}],
+    [{scheme:'mv-light',density:'comfortable'},{scheme:'mv-light',density:'comfortable',wallFps:30,recordingFps:3}],
+  ]) {
+    const text=JSON.stringify(partial);
+    await store.save(text);
+    const loaded=await store.load();
+    const rendererDecoded=decodeMvSettings(loaded);
+    const hostDecoded=validateSettings(loaded);
+    assert.deepEqual(rendererDecoded,decodeMvSettings(text));
+    assert.deepEqual(rendererDecoded,{ok:true,settings:expected});
+    assert.deepEqual(hostDecoded,expected);
+  }
+  // Unknown keys refuse with SETTINGS_UNKNOWN_KEY on the host and ERR_SETTINGS_UNKNOWN_KEY on the renderer.
+  // Fails if either side ignores or admits an unknown property on save/decode.
+  for(const value of [
+    {unknown:true},
+    {theme:'next'},
+    {scheme:'mv-light',density:'compact',wallFps:30,recordingFps:3,extra:1},
+    {max_fps:30},
+  ]) {
     const text=JSON.stringify(value);
-    assert.equal(decodeMvSettings(text).ok,false);
-    await assert.rejects(store.save(text),/SETTINGS_SCHEME|SETTINGS_DENSITY/);
+    const rendererDecoded=decodeMvSettings(text);
+    assert.equal(rendererDecoded.ok,false);
+    assert.equal(rendererDecoded.error.code,'ERR_SETTINGS_UNKNOWN_KEY');
+    assert.throws(()=>validateSettings(text),{code:'SETTINGS_UNKNOWN_KEY'});
+    await assert.rejects(store.save(text),{code:'SETTINGS_UNKNOWN_KEY'});
+  }
+  // Invalid scheme or density refuses on both sides.
+  for(const [value,hostCode,rendererCode] of [
+    [{scheme:'next'},'SETTINGS_SCHEME','ERR_SETTINGS_UNKNOWN_SCHEME'],
+    [{scheme:null},'SETTINGS_SCHEME','ERR_SETTINGS_UNKNOWN_SCHEME'],
+    [{density:null},'SETTINGS_DENSITY','ERR_SETTINGS_UNKNOWN_DENSITY'],
+    [{density:'regular'},'SETTINGS_DENSITY','ERR_SETTINGS_UNKNOWN_DENSITY'],
+  ]) {
+    const text=JSON.stringify(value);
+    const rendererDecoded=decodeMvSettings(text);
+    assert.equal(rendererDecoded.ok,false);
+    assert.equal(rendererDecoded.error.code,rendererCode);
+    assert.throws(()=>validateSettings(text),{code:hostCode});
+    await assert.rejects(store.save(text),{code:hostCode});
+  }
+  // wallFps outside {3, 30, 60} refuses on both sides (fails if e.g. host accepts wallFps 45).
+  for(const badWallFps of [0,1,2,4,15,29,31,45,61,120,-30,30.5,'30',null,true,{},[]]) {
+    const text=JSON.stringify({scheme:'mv-light',density:'compact',wallFps:badWallFps,recordingFps:3});
+    const rendererDecoded=decodeMvSettings(text);
+    assert.equal(rendererDecoded.ok,false);
+    assert.equal(rendererDecoded.error.code,'ERR_SETTINGS_UNKNOWN_WALL_FPS');
+    assert.throws(()=>validateSettings(text),{code:'SETTINGS_WALL_FPS'});
+    await assert.rejects(store.save(text),{code:'SETTINGS_WALL_FPS'});
+  }
+  // recordingFps outside integer 1..60 (including 0, 61, 2.5, "3") refuses on both sides
+  // (fails if e.g. host or renderer accepts float 2.5, string "3", 0, or 61).
+  for(const badRecordingFps of [0,61,2.5,'3',-1,100,null,true,{},[]]) {
+    const text=JSON.stringify({scheme:'mv-light',density:'compact',wallFps:30,recordingFps:badRecordingFps});
+    const rendererDecoded=decodeMvSettings(text);
+    assert.equal(rendererDecoded.ok,false);
+    assert.equal(rendererDecoded.error.code,'ERR_SETTINGS_UNKNOWN_RECORDING_FPS');
+    assert.throws(()=>validateSettings(text),{code:'SETTINGS_RECORDING_FPS'});
+    await assert.rejects(store.save(text),{code:'SETTINGS_RECORDING_FPS'});
   }
 });

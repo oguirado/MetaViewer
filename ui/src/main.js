@@ -140,6 +140,20 @@ function bootSchemeFromText(text) {
 }
 
 /**
+ * MVUI33: boot-density parse through the same shared store decode, so boot
+ * paints exactly the density the store will load (per-field defaults);
+ * malformed or absent storage paints compact silently here.
+ * @param {string|null} text Settled boot read.
+ * @returns {string} compact or comfortable.
+ */
+function bootDensityFromText(text) {
+  if (typeof text !== 'string') return 'compact';
+  const decoded = createSettingsHost.decodeStoredSettings(text);
+  if (decoded.ok === false) return 'compact';
+  return decoded.settings.density;
+}
+
+/**
  * MVUI29S: memoized boot host. The panel reuses the single boot read instead
  * of hitting the host again; every acknowledged save refreshes the cache so
  * load-after-save round-trips. A failed boot read rethrows a fixed-typed
@@ -309,6 +323,7 @@ async function bootstrap() {
   // with no flash of the default. Failures keep bootable defaults.
   const bootOutcome = await readBootSettings(settingsHost);
   const bootScheme = bootSchemeFromText(bootOutcome.text);
+  const bootDensity = bootDensityFromText(bootOutcome.text);
   const bootSettingsHost = createBootSettingsHost(settingsHost, bootOutcome);
   const depth = fixture ? (fixture.key === 'nested' ? 1 : 0) : (typeof host?.nestedDepth === 'function' ? await host.nestedDepth() : null);
   const selfId = fixture ? null : (typeof host?.selfCapsuleId === 'function' ? await host.selfCapsuleId() : null);
@@ -424,7 +439,8 @@ async function bootstrap() {
   if (framePortRouter || captureState || liveRuntime || replayRuntime || inputPort || (!fixture && typeof host?.qa?.reportAnchors === 'function')) window.addEventListener?.('pagehide', teardown, { once: true });
   try {
     Object.assign(document.documentElement.dataset, THEME_DATASET);
-    const application = createApp(App, { layout, storage, scope: SCOPE, fixture, nestedHost, exportDestination, settingsHost: bootSettingsHost, initialScheme: bootScheme, preferences, authorityHost, terminalBroker, captureState, captureAvailable,
+    document.documentElement.dataset.themeDensity = bootDensity;
+    const application = createApp(App, { layout, storage, scope: SCOPE, fixture, nestedHost, exportDestination, settingsHost: bootSettingsHost, initialScheme: bootScheme, initialDensity: bootDensity, framesPort: fixture ? null : (host?.authority ?? null), preferences, authorityHost, terminalBroker, captureState, captureAvailable,
       terminalSessionPort, hostProviders: terminalProviders, brokerCommands: terminalCommands, clipboard: terminalClipboard,
       runtime: /** @type {InstanceType<typeof App>['$props']['runtime']} */ (/** @type {unknown} */ (fixtureMount?.runtime ?? liveRuntime)),
       terminal: fixtureMount?.terminal ?? null });

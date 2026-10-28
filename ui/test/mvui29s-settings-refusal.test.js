@@ -51,7 +51,7 @@ const text = node => [node.text ?? '', ...(node.children ?? []).map(text)].join(
 const byId = (mounted, id) => nodes(mounted.root).find(node => node.props?.id === id);
 const radio = (mounted, value) => nodes(mounted.root).find(node => node.props?.value === value);
 const flush = async () => { for (let i = 0; i < 8; i++) { await Promise.resolve(); await vue.nextTick(); } };
-const settings = scheme => JSON.stringify({ scheme, density: 'compact' });
+const settings = scheme => JSON.stringify({ scheme, density: 'compact', wallFps: 30, recordingFps: 3 });
 
 test('a refused save shows a short typed refusal and keeps the UI state', async () => {
   const applied = [], emitted = [];

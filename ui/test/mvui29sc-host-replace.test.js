@@ -52,7 +52,7 @@ function mount(Component, input) {
 const nodes = node => [node, ...(node.children ?? []).flatMap(nodes)];
 const radio = (mounted, value) => nodes(mounted.root).find(node => node.props?.value === value);
 const flush = async () => { for (let i = 0; i < 8; i++) { await Promise.resolve(); await vue.nextTick(); } };
-const settings = scheme => JSON.stringify({ scheme, density: 'compact' });
+const settings = scheme => JSON.stringify({ scheme, density: 'compact', wallFps: 30, recordingFps: 3 });
 
 test('replacing the host drops the previous trailing save before the new load', async () => {
   const savesA = [], savesB = [];
