@@ -327,3 +327,287 @@ fn frame_ready_latency_and_concurrent_generations_on_3_45mb_frames() {
     let _ = fs::remove_dir_all(&shm_root);
     let _ = fs::remove_dir_all(&root);
 }
+
+#[test]
+fn ui_human_input_requires_human_control_and_forwards_when_admitted() {
+    use std::os::unix::fs::PermissionsExt;
+    let uid = effective_uid().unwrap();
+    let root = std::env::temp_dir().join(format!("mv-human-input-test-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir(&root).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let config = Config {
+        session_id: "human-input-session".into(),
+        core: registration("core"),
+        peers: vec![
+            registration("agent"),
+            registration("daemon"),
+            registration("ui"),
+        ],
+    };
+    let mut server = Server::open(config.clone(), &root, uid).unwrap();
+    let daemon_ep = registration("daemon").endpoint;
+    let ui_ep = registration("ui").endpoint;
+    let agent_ep = registration("agent").endpoint;
+
+    let (ui_tx, ui_rx) = mpsc::sync_channel(64);
+    server.connections.insert(
+        ui_ep.clone(),
+        Connection {
+            id: 1,
+            epoch: 1,
+            queue: ui_tx,
+            terminal: Arc::new(Mutex::new(None)),
+        },
+    );
+    let (daemon_tx, daemon_rx) = mpsc::sync_channel(64);
+    server.connections.insert(
+        daemon_ep,
+        Connection {
+            id: 2,
+            epoch: 1,
+            queue: daemon_tx,
+            terminal: Arc::new(Mutex::new(None)),
+        },
+    );
+
+    server.authority.apply(Input::Connect).unwrap();
+    let seed_witness = server
+        .authority
+        .retain_witness(b"seed-human-input")
+        .unwrap();
+    server
+        .authority
+        .apply_with_witnesses(
+            Input::Surface {
+                id: "srf-1".into(),
+                surface: Surface {
+                    display: ":99".into(),
+                    owner: agent_ep,
+                    agent_controlled: true,
+                    live: true,
+                    frame: Some(Frame {
+                        sha256: sha256_hex(b"seed-human-input"),
+                        generation: 1,
+                        width: 1280,
+                        height: 720,
+                    }),
+                    refresh_after: None,
+                    allowed_verbs: Vec::new(),
+                },
+            },
+            vec![seed_witness],
+        )
+        .unwrap();
+
+    let ui_reg = config
+        .peers
+        .iter()
+        .find(|p| p.endpoint == ui_ep)
+        .unwrap()
+        .clone();
+    let ready_ui = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let policy = HandshakePolicy::new(
+                uid,
+                ui_reg.endpoint.clone(),
+                config.core.endpoint.clone(),
+                config.session_id.clone(),
+                ui_reg.hello.clone(),
+            )
+            .unwrap();
+            let hello = decode_envelope(
+                &json!({
+                    "schema": "envelope/v0.2",
+                    "msg_id": "hello-ui",
+                    "ts_ns": 0,
+                    "from": ui_reg.endpoint,
+                    "to": config.core.endpoint,
+                    "session_id": config.session_id,
+                    "seq": 1,
+                    "nonce": "hello-ui",
+                    "body": ui_reg.hello,
+                })
+                .to_string(),
+            )
+            .unwrap();
+            let (mut a, mut b) = UnixStream::pair().unwrap();
+            let writer = tokio::spawn(async move { write_frame(&mut a, &hello).await.unwrap() });
+            let peer = handshake_at(
+                &mut b,
+                &policy,
+                &WireLimits::default(),
+                tokio::time::Instant::now(),
+            )
+            .await
+            .unwrap();
+            writer.await.unwrap();
+            peer
+        });
+
+    let mut seq = 1u64;
+    let mut send_ui = |server: &mut Server, body: serde_json::Value| {
+        seq += 1;
+        let env = decode_envelope(
+            &json!({
+                "schema": "envelope/v0.2",
+                "msg_id": format!("ui-msg-{seq}"),
+                "ts_ns": seq * 1000,
+                "from": ui_ep,
+                "to": config.core.endpoint,
+                "session_id": config.session_id,
+                "seq": seq,
+                "nonce": format!("ui-nonce-{seq}"),
+                "body": body,
+            })
+            .to_string(),
+        )
+        .unwrap();
+        server.route_at(seq * 1000, &ready_ui, 1, env).unwrap();
+    };
+
+    // 1. Negative control: while surface is agent-controlled, UI input is refused with LOCKED_BY_OTHER.
+    send_ui(
+        &mut server,
+        json!({
+            "schema": "surface_request/v0.2",
+            "op": "input",
+            "params": {
+                "surface_id": "srf-1",
+                "proposal_id": "hi-agent-owned",
+                "action": { "type": "key", "keys": ["a"] }
+            }
+        }),
+    );
+    let refused = serde_json::to_value(ui_rx.try_recv().unwrap().body).unwrap();
+    assert_eq!(refused["decision"], "refused");
+    assert_eq!(refused["proposal_id"], "hi-agent-owned");
+    assert_eq!(refused["reason_code"], "LOCKED_BY_OTHER");
+    assert!(daemon_rx.try_recv().is_err());
+
+    // 2. Take control for human principal.
+    send_ui(
+        &mut server,
+        json!({
+            "schema": "ui_intent/v0.2",
+            "request_id": "take-1",
+            "op": "take_control",
+            "params": { "surface_id": "srf-1" }
+        }),
+    );
+    let take_forwarded = serde_json::to_value(daemon_rx.try_recv().unwrap().body).unwrap();
+    assert_eq!(take_forwarded["op"], "take_control");
+
+    // 3. Positive: key, type, scroll, and in-bounds click are admitted and forwarded to daemon.
+    for (id, action) in [
+        ("hi-key-1", json!({ "type": "key", "keys": ["Return"] })),
+        ("hi-type-1", json!({ "type": "type", "text": "hello" })),
+        (
+            "hi-click-1",
+            json!({ "type": "click", "x": 120, "y": 80, "button": "left" }),
+        ),
+        (
+            "hi-scroll-1",
+            json!({ "type": "scroll", "dx": 0, "dy": -120 }),
+        ),
+    ] {
+        send_ui(
+            &mut server,
+            json!({
+                "schema": "surface_request/v0.2",
+                "op": "input",
+                "params": {
+                    "surface_id": "srf-1",
+                    "proposal_id": id,
+                    "action": action
+                }
+            }),
+        );
+        let verdict = serde_json::to_value(ui_rx.try_recv().unwrap().body).unwrap();
+        assert_eq!(verdict["decision"], "admitted");
+        assert_eq!(verdict["proposal_id"], id);
+        let forwarded = serde_json::to_value(daemon_rx.try_recv().unwrap().body).unwrap();
+        assert_eq!(forwarded["op"], "input");
+        assert_eq!(forwarded["params"]["proposal_id"], id);
+        assert_eq!(forwarded["params"]["action"], action);
+    }
+
+    // 4. Negative controls: duplicate proposal_id, out-of-bounds click, and disallowed scroll/wait.
+    send_ui(
+        &mut server,
+        json!({
+            "schema": "surface_request/v0.2",
+            "op": "input",
+            "params": {
+                "surface_id": "srf-1",
+                "proposal_id": "hi-key-1",
+                "action": { "type": "key", "keys": ["a"] }
+            }
+        }),
+    );
+    let dup = serde_json::to_value(ui_rx.try_recv().unwrap().body).unwrap();
+    assert_eq!(dup["decision"], "refused");
+    assert_eq!(dup["reason_code"], "POLICY");
+    assert!(daemon_rx.try_recv().is_err());
+
+    send_ui(
+        &mut server,
+        json!({
+            "schema": "surface_request/v0.2",
+            "op": "input",
+            "params": {
+                "surface_id": "srf-1",
+                "proposal_id": "hi-oob",
+                "action": { "type": "click", "x": 1280, "y": 720, "button": "left" }
+            }
+        }),
+    );
+    let oob = serde_json::to_value(ui_rx.try_recv().unwrap().body).unwrap();
+    assert_eq!(oob["decision"], "refused");
+    assert_eq!(oob["reason_code"], "OUT_OF_BOUNDS");
+    assert!(daemon_rx.try_recv().is_err());
+
+    // 5. Release control -> subsequent human input is refused again.
+    send_ui(
+        &mut server,
+        json!({
+            "schema": "ui_intent/v0.2",
+            "request_id": "release-1",
+            "op": "release_control",
+            "params": { "surface_id": "srf-1" }
+        }),
+    );
+    let release_forwarded = serde_json::to_value(daemon_rx.try_recv().unwrap().body).unwrap();
+    assert_eq!(release_forwarded["op"], "release_control");
+
+    send_ui(
+        &mut server,
+        json!({
+            "schema": "surface_request/v0.2",
+            "op": "input",
+            "params": {
+                "surface_id": "srf-1",
+                "proposal_id": "hi-after-release",
+                "action": { "type": "key", "keys": ["b"] }
+            }
+        }),
+    );
+    let after_release = serde_json::to_value(ui_rx.try_recv().unwrap().body).unwrap();
+    assert_eq!(after_release["decision"], "refused");
+    assert_eq!(after_release["reason_code"], "LOCKED_BY_OTHER");
+    assert!(daemon_rx.try_recv().is_err());
+
+    // Verify journal replay reproduces identical snapshot.
+    let snapshot = server.snapshot().unwrap();
+    let session_root = root.join("sessions/human-input-session");
+    let replayed =
+        crate::journal::scan(&session_root.join("journal.jsonl"), &session_root).unwrap();
+    assert_eq!(replayed.state.snapshot().unwrap(), snapshot);
+
+    drop(server);
+    let _ = fs::remove_dir_all(&root);
+}

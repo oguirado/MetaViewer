@@ -47,6 +47,22 @@ fn refusal_vocabulary_is_frozen() {
 #[test]
 fn all_frozen_body_examples_and_negative_controls() {
     let base: serde_json::Value = serde_json::from_str(&fixture()).unwrap();
+    let envelope_schema: serde_json::Value =
+        serde_json::from_str(include_str!("../../contracts/v0.2/envelope.schema.json")).unwrap();
+    let envelope_bodies: std::collections::BTreeSet<String> = envelope_schema
+        .pointer("/properties/body/oneOf")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|branch| {
+            branch["$ref"]
+                .as_str()
+                .unwrap()
+                .trim_end_matches(".schema.json")
+                .to_string()
+        })
+        .collect();
     let directory =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../contracts/examples/v0.2");
     for entry in std::fs::read_dir(directory).unwrap() {
@@ -57,6 +73,8 @@ fn all_frozen_body_examples_and_negative_controls() {
         if !valid && !invalid {
             continue;
         }
+        let prefix = name.split('.').next().unwrap_or("");
+        let is_envelope_member = prefix == "envelope" || envelope_bodies.contains(prefix);
         let value: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         let mut env = base.clone();
@@ -66,7 +84,11 @@ fn all_frozen_body_examples_and_negative_controls() {
             env["body"] = value;
         }
         let result = decode_envelope(&serde_json::to_string(&env).unwrap());
-        assert_eq!(result.is_ok(), valid, "{name}: {result:?}");
+        assert_eq!(
+            result.is_ok(),
+            valid && is_envelope_member,
+            "{name}: {result:?}"
+        );
     }
 }
 

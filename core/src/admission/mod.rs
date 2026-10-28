@@ -15,6 +15,9 @@
 //! without refunding its admitted-attempt budget.
 //! [TARGET, unit decision] Metadata updates can restore liveness; only explicit
 //! Lost/Destroyed transitions revoke it. Control cession still cancels work.
+//! [TARGET, unit decision] HumanInput admits UI surface_request/v0.2 op="input"
+//! (click/key/type) only when the surface is live, not agent_controlled, free of
+//! lease/draining conflicts, within frame bounds, and with remaining budget.
 use crate::wire::payload::{ActionProposal, ActionProposalAction, ActionProposalExpectation};
 use crate::{decode_envelope, Command, Component, Endpoint, Envelope, Refusal};
 use serde::{Deserialize, Serialize};
@@ -151,6 +154,9 @@ pub enum Input {
         proposal_id: String,
         epoch: u64,
     },
+    HumanInput {
+        request: crate::wire::payload::SurfaceRequestCase5,
+    },
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -260,6 +266,78 @@ impl CoreState {
                     out.reason = Some(Refusal::BudgetExceeded);
                 } else {
                     self.remaining_budget -= 1;
+                }
+            }
+            Input::HumanInput { request } => {
+                let p = &request.params;
+                if let ActionProposalAction::Case3(a) = &p.action {
+                    if i32::try_from(a.dx).is_err() || i32::try_from(a.dy).is_err() {
+                        out.reason = Some(Refusal::OutOfBounds);
+                        self.core_seq = next;
+                        return Ok(out);
+                    }
+                }
+                if self.is_destroyed(&p.surface_id)
+                    || self.epoch == 0
+                    || self.seen.contains(&p.proposal_id)
+                    || self.pending.contains_key(&p.proposal_id)
+                    || self.draining.contains_key(&p.proposal_id)
+                {
+                    out.reason = Some(Refusal::Policy);
+                } else if let Some(s) = self.surfaces.get(&p.surface_id) {
+                    let conflict = self.draining.values().any(|sid| sid == &p.surface_id)
+                        || self.leases.iter().any(|(sid, _)| {
+                            sid == &p.surface_id
+                                || self
+                                    .surfaces
+                                    .get(sid)
+                                    .is_some_and(|other| other.display == s.display)
+                        });
+                    if !s.live {
+                        out.reason = Some(Refusal::Policy);
+                    } else if s.agent_controlled || conflict {
+                        out.reason = Some(Refusal::LockedByOther);
+                    } else if matches!(
+                        p.action,
+                        ActionProposalAction::Case4(_) | ActionProposalAction::Case5(_)
+                    ) {
+                        out.reason = Some(Refusal::Policy);
+                    } else if let ActionProposalAction::Case1(a) = &p.action {
+                        if a.keys.join("+").len() > 32 {
+                            out.reason = Some(Refusal::Policy);
+                        } else if self.remaining_budget == 0 {
+                            out.reason = Some(Refusal::BudgetExceeded);
+                        }
+                    } else if let ActionProposalAction::Case2(a) = &p.action {
+                        if a.text.is_empty() || a.text.len() > 16384 || a.text.contains('\0') {
+                            out.reason = Some(Refusal::Policy);
+                        } else if self.remaining_budget == 0 {
+                            out.reason = Some(Refusal::BudgetExceeded);
+                        }
+                    } else if let ActionProposalAction::Case0(a) = &p.action {
+                        if s.frame
+                            .as_ref()
+                            .is_some_and(|f| a.x >= f.width || a.y >= f.height)
+                        {
+                            out.reason = Some(Refusal::OutOfBounds);
+                        } else if self.remaining_budget == 0 {
+                            out.reason = Some(Refusal::BudgetExceeded);
+                        }
+                    } else if matches!(p.action, ActionProposalAction::Case3(_))
+                        && self.remaining_budget == 0
+                    {
+                        out.reason = Some(Refusal::BudgetExceeded);
+                    }
+                    if out.reason.is_none() {
+                        self.remaining_budget = self
+                            .remaining_budget
+                            .checked_sub(1)
+                            .ok_or(AdmissionError::Overflow)?;
+                        self.seen.insert(p.proposal_id.clone());
+                        out.dispatch = true;
+                    }
+                } else {
+                    out.reason = Some(Refusal::Policy);
                 }
             }
             Input::SurfaceNotice => {}

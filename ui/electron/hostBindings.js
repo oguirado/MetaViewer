@@ -12,7 +12,7 @@
  * to the latest published frame_ref so main always reads the newest generation;
  * classify acquire failures with closed cause tokens without paths or bytes.
  */
-import { INTENT_OPS, recordingDestination, validateIntentBody } from './authorityWire.js';
+import { INTENT_OPS, mapSurfaceInputRefusal, recordingDestination, validateIntentBody, validateSurfaceInputBatch } from './authorityWire.js';
 export { INTENT_OPS };
 import { assertCaptureCall, assertCaptureReply, validCaptureState } from './captureBridge.js';
 import { createConnection } from 'node:net';
@@ -160,6 +160,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
     /** @type {Set<(entry:any)=>any>} */ const listeners = new Set();
     /** @type {Map<string,any>} */ const surfaces = new Map();
     /** @type {Map<string,any>} */ const latestFrames = new Map();
+    /** @type {Map<string,number>} */ const streamIds = new Map();
     /** @type {Map<string,any>} */ const channels = new Map();
     /** @type {Set<string>} */ const subscriptions = new Set();
     /** @type {Set<string>} */ const delivering = new Set();
@@ -178,7 +179,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
       rejectReady(fail()); socket?.destroy();
       for (const item of pending.values()) {clearTimeout(item.timer);item.reject(fail());} pending.clear();
       for (const channel of channels.values()) {channel.port1.close();channel.port2.close();}
-      channels.clear();surfaces.clear();latestFrames.clear();subscriptions.clear();delivering.clear();pendingDeliveries.clear();listeners.clear();captureListeners.clear();
+      channels.clear();surfaces.clear();latestFrames.clear();streamIds.clear();subscriptions.clear();delivering.clear();pendingDeliveries.clear();listeners.clear();captureListeners.clear();
     };
     /** @type {Set<(state:any)=>void>} */ const captureListeners = new Set();
     const helloTimer = setTimeout(shutdown, DEADLINE);
@@ -199,6 +200,10 @@ export async function createMainBindings({env = process.env, createMessageChanne
       }
       const binding = Object.freeze({principal:'ui',epoch:1,surfaceId:published.surface_id,surfaceGeneration:1});
       return {frameRef:published,state:{...state},rendererPorts:[channel.port2],
+        /** @param {number} gen */
+        onStreamAnnounced(gen) {
+          if (Number.isSafeInteger(gen) && gen >= 1) streamIds.set(published.surface_id, gen);
+        },
         resolveLatestState() {
           const curState = surfaces.get(published.surface_id);
           return curState ? {...curState} : {...state};
@@ -255,7 +260,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
                 },release};
             } catch(error) {await file.close();throw error;}
           }},
-        portOptions:{port:channel.port1,role:'sender',binding,limits:{maxFrameBytes:MAX_FRAME,ackTimeoutMs:10000,maxSurfacesPerPort:1},onReleaseLease(){},onRevoke(){if(channels.get(published.surface_id)===channel)channels.delete(published.surface_id);}}};
+        portOptions:{port:channel.port1,role:'sender',binding,limits:{maxFrameBytes:MAX_FRAME,ackTimeoutMs:10000,maxSurfacesPerPort:1},onReleaseLease(){},onRevoke(){if(channels.get(published.surface_id)===channel){channels.delete(published.surface_id);streamIds.delete(published.surface_id);}}}};
     }
     /** @param {string} surfaceId */
     async function drainSurface(surfaceId) {
@@ -284,6 +289,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
           || frame.width < 1 || frame.height < 1 || frame.width > 4096 || frame.height > 4096) throw fail();
       const published = Object.freeze({...frame});
       latestFrames.set(frame.surface_id, published);
+      if (!streamIds.has(frame.surface_id)) streamIds.set(frame.surface_id, frame.generation);
       if (listeners.size === 0) return;
       if (!channels.has(frame.surface_id)) {
         if (channels.size >= MAX_ITEMS) throw fail();
@@ -355,6 +361,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
           if (body.event === 'state_changed') publishState(state);
           surfaces.delete(state.surface_id);
           latestFrames.delete(state.surface_id);
+          streamIds.delete(state.surface_id);
           subscriptions.delete(state.surface_id);
           delivering.delete(state.surface_id);
           pendingDeliveries.delete(state.surface_id);
@@ -384,9 +391,22 @@ export async function createMainBindings({env = process.env, createMessageChanne
         }
         if (body.schema === 'action_verdict/v0.2' && body.proposal_id === key) {
           if (item.body.schema === 'action_proposal/v0.2') result = body;
-          else if (['take_control','release_control','fold','unfold'].includes(item.body.op)) {
+          else if (item.body.schema === 'surface_request/v0.2' && item.body.op === 'input') {
+            if (body.decision === 'admitted') result = true;
+            else {
+              const code = typeof body.reason_code === 'string' && body.reason_code.length ? body.reason_code : 'INPUT_REFUSED';
+              clearTimeout(item.timer);pending.delete(key);
+              item.reject(Object.assign(new Error(code), { code, verdict: body }));
+              continue;
+            }
+          } else if (['take_control','release_control','fold','unfold'].includes(item.body.op)) {
             clearTimeout(item.timer);pending.delete(key);item.reject(new Error('INTENT_REFUSED'));continue;
           } else continue;
+        }
+        if (item.body.schema === 'surface_request/v0.2' && item.body.op === 'input'
+            && body.schema === 'surface_event/v0.2' && body.event === 'input_applied'
+            && body.data?.proposal_id === key && body.data?.surface_id === item.body.params?.surface_id) {
+          result = true;
         }
         const state = body.schema === 'surface_event/v0.2' && body.event === 'state_changed' ? body.data?.surface : null;
         const request = item.body;
@@ -483,6 +503,91 @@ export async function createMainBindings({env = process.env, createMessageChanne
             },reject,timer});
             try {send(body,key);} catch {shutdown();}
           });
+        }
+        if (message?.op === 'input') {
+          if (!live || disposed || !socket || socket.destroyed || !socket.writable) {
+            return Object.freeze({ ok: false, code: 'CORE_UNAVAILABLE' });
+          }
+          const checked = validateSurfaceInputBatch(message.batch ?? message.request ?? message.json);
+          if (!checked.ok) return Object.freeze({ ok: false, code: checked.code });
+          const batch = checked.batch;
+          const state = surfaces.get(batch.surface_id);
+          if (!state || ['destroyed', 'lost'].includes(state.state)) {
+            return Object.freeze({ ok: false, code: 'SURFACE_UNKNOWN' });
+          }
+          const expectedStreamId = streamIds.get(batch.surface_id) ?? 1;
+          if (batch.stream_id !== expectedStreamId) {
+            return Object.freeze({ ok: false, code: 'STALE_STREAM' });
+          }
+          if (state.state !== 'active' || state.control !== 'human') {
+            return Object.freeze({ ok: false, code: 'NOT_IN_CONTROL' });
+          }
+          const frame = latestFrames.get(batch.surface_id);
+          const width = frame?.width ?? state.geometry?.w ?? null;
+          const height = frame?.height ?? state.geometry?.h ?? null;
+          const actions = [];
+          for (const ev of batch.events) {
+            if (ev.kind === 'click') {
+              if ((width !== null && ev.x >= width) || (height !== null && ev.y >= height)) {
+                return Object.freeze({ ok: false, code: 'SCHEMA' });
+              }
+              actions.push({ type: 'click', x: ev.x, y: ev.y, button: ev.button });
+            } else if (ev.kind === 'key') {
+              actions.push({ type: 'key', keys: [...ev.keys] });
+            } else if (ev.kind === 'type') {
+              actions.push({ type: 'type', text: ev.text });
+            } else if (ev.kind === 'scroll') {
+              actions.push({ type: 'scroll', dx: ev.dx, dy: ev.dy });
+            } else {
+              return Object.freeze({ ok: false, code: 'SCHEMA' });
+            }
+          }
+          if (pending.size + actions.length > MAX_ITEMS) {
+            return Object.freeze({ ok: false, code: 'LIMIT' });
+          }
+          let accepted = 0;
+          for (const action of actions) {
+            if (!live || disposed || !socket || socket.destroyed || !socket.writable) {
+              return Object.freeze({ ok: false, code: 'CORE_UNAVAILABLE' });
+            }
+            const key = randomUUID();
+            if (!id(key) || pending.has(key)) {
+              return Object.freeze({ ok: false, code: 'CORE_UNAVAILABLE' });
+            }
+            const body = {
+              schema: 'surface_request/v0.2',
+              op: 'input',
+              params: {
+                surface_id: batch.surface_id,
+                proposal_id: key,
+                action,
+              },
+            };
+            try {
+              await new Promise((resolve, reject) => {
+                const timer = setTimeout(() => {
+                  pending.delete(key);
+                  const healthyInputTimeout = !disposed && live && socket && !socket.destroyed && socket.writable
+                    && surfaces.size > 0 && timeoutAtSeq !== received;
+                  if (healthyInputTimeout) timeoutAtSeq = received;
+                  else shutdown();
+                  reject(Object.assign(new Error('CORE_UNAVAILABLE'), { code: 'CORE_UNAVAILABLE' }));
+                }, DEADLINE);
+                pending.set(key, { body, resolve, reject, timer });
+                try { send(body, key); } catch (err) {
+                  clearTimeout(timer);
+                  pending.delete(key);
+                  shutdown();
+                  reject(err);
+                }
+              });
+              accepted += 1;
+            } catch (error) {
+              const errCode = /** @type {any} */ (error)?.code ?? /** @type {any} */ (error)?.message;
+              return Object.freeze({ ok: false, code: mapSurfaceInputRefusal(errCode) });
+            }
+          }
+          return Object.freeze({ ok: true, accepted });
         }
         if (!live || disposed || !['intent','propose'].includes(message?.op) || typeof message.json !== 'string'
             || Buffer.byteLength(message.json) > 256 * 1024 || pending.size >= MAX_ITEMS) throw fail();

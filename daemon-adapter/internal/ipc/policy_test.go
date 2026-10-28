@@ -101,6 +101,26 @@ func TestProductionEnvelopePolicy(t *testing.T) {
 	if err = json.Unmarshal(raw, &envelope); err != nil {
 		t.Fatal(err)
 	}
+	rawEnvSchema, err := os.ReadFile("../../../contracts/v0.2/envelope.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envSchema struct {
+		Properties struct {
+			Body struct {
+				OneOf []struct {
+					Ref string `json:"$ref"`
+				} `json:"oneOf"`
+			} `json:"body"`
+		} `json:"properties"`
+	}
+	if err = json.Unmarshal(rawEnvSchema, &envSchema); err != nil {
+		t.Fatal(err)
+	}
+	envelopeBodies := map[string]bool{"envelope": true}
+	for _, b := range envSchema.Properties.Body.OneOf {
+		envelopeBodies[strings.TrimSuffix(b.Ref, ".schema.json")] = true
+	}
 	files, err := verifyContractFixtureCorpus("../../../contracts/examples/v0.2", "../../../contracts/v0.2")
 	if err != nil {
 		t.Fatal(err)
@@ -123,11 +143,13 @@ func TestProductionEnvelopePolicy(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			prefix, _, _ := strings.Cut(filepath.Base(file), ".")
+			isEnvelopeMember := envelopeBodies[prefix]
 			_, err = p.ValidateEnvelope(wire)
-			if strings.Contains(file, ".valid.") && err != nil {
+			if strings.Contains(file, ".valid.") && isEnvelopeMember && err != nil {
 				t.Fatal(err)
 			}
-			if strings.Contains(file, ".invalid.") && err == nil {
+			if (strings.Contains(file, ".invalid.") || !isEnvelopeMember) && err == nil {
 				t.Fatal("invalid body admitted")
 			}
 		})

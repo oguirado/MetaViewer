@@ -194,9 +194,9 @@ class CheckerT6Tests(unittest.TestCase):
                 with self.assertRaises(ValidationError):
                     self.validator.audit(loose_schema)
 
-        # Negative control: all 20 v0.2 schemas pass audit.
+        # Negative control: all 21 v0.2 schemas pass audit.
         v02_schemas = sorted((ROOT / "contracts" / "v0.2").glob("*.schema.json"))
-        self.assertEqual(len(v02_schemas), 20)
+        self.assertEqual(len(v02_schemas), 21)
         for path in v02_schemas:
             with self.subTest(schema=path.name):
                 self.validator.audit(self.validator.load(path.name))

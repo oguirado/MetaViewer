@@ -134,6 +134,10 @@ When a capsule is under agent control (`control_owner === "agent"`):
 - **Fold / Unfold (`AC-03`):** folding collapses the tile presentation and drains in-flight frames with `FOLD_DRAIN` while the capsule container keeps running; unfolding resumes live frame presentation on a new epoch.
 - **Local `read` / `write` and hide / show toggles:** switching a surface between `read` and `write` input modes or hiding/showing a tile updates local renderer state without mutating or resetting the capsule's authority state in `metaviewer-core`.
 
+### Human input in WRITE mode (`surface_input/v1`)
+
+While I hold human control on an active surface (`control === "human"`), set the tile input mode to `WRITE`, and focus the `<canvas>`, the renderer forwards keyboard and pointer batches through `window.metaviewer.input.send(batch)` (`contracts/v0.2/surface_input.schema.json`). Each batch carries `surface_id`, the bound stream's `stream_id`, a strictly increasing `seq` (`>= 1` `[TARGET]`), and `1..32` `[TARGET]` events from the closed set (`click`, `key` with `1..8` `[TARGET]` keysym tokens, `type` up to `1024` `[TARGET]` characters, and `scroll` with `dx`, `dy`, `x`, `y`), capped at `60` `[TARGET]` batches/s per surface and `16` `[TARGET]` KiB per batch. Pressing `Escape` releases canvas focus locally without forwarding the key, and the host maps admitted events to `surface_request/v0.2` (`op: "input"`) or returns a typed refusal (`NOT_IN_CONTROL`, `SURFACE_UNKNOWN`, `STALE_STREAM`, `LIMIT`, `NESTED_DISPLAY_ONLY`, `SCHEMA`, `CORE_UNAVAILABLE`).
+
 ---
 
 ## 6. Stale-frame and refusal indicators

@@ -1077,6 +1077,7 @@ test('W2-FRAME-LIVE-DIAG: MV_FRAME_DIAG is off by default, adds no window.metavi
     assert.deepEqual(Object.keys(api).sort(), [
       'authority',
       'capture',
+      'input',
       'load',
       'loadSettings',
       'nestedDepth',

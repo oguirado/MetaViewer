@@ -72,9 +72,12 @@ class PythonContractMirrorTests(unittest.TestCase):
     def test_every_canonical_schema_matches_python(self):
         paths = sorted((ROOT / "contracts/v0.2").glob("*.schema.json"))
         self.assertTrue(paths, "canonical contracts must exist")
-        self.assertEqual({path.name for path in paths}, set(_RAW_V02_FILES))
-        self.assertEqual({path.name for path in paths}, set(_V02_FILES))
-        for path in paths:
+        ipc_only = {"surface_input.schema.json"}
+        envelope_paths = [path for path in paths if path.name not in ipc_only]
+        self.assertEqual({path.name for path in paths}, set(_RAW_V02_FILES) | ipc_only)
+        self.assertEqual({path.name for path in envelope_paths}, set(_RAW_V02_FILES))
+        self.assertEqual({path.name for path in envelope_paths}, set(_V02_FILES))
+        for path in envelope_paths:
             with self.subTest(schema=path.name):
                 canonical = json.loads(path.read_text(encoding="utf-8"))
                 raw_mirror = _RAW_V02_FILES[path.name]

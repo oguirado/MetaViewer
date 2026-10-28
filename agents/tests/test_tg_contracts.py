@@ -77,19 +77,40 @@ class ContractGapTests(unittest.TestCase):
     def test_raw_source_oracle_accepts_examples_and_rejects_closed_mutants(self):
         # Mutation: validate_envelope returns value before validating body keys.
         oracle = Validator(ROOT / "contracts/v0.2")
+        envelope_schema = oracle.load("envelope.schema.json")
+        envelope_bodies = {
+            branch["$ref"].removesuffix(".schema.json")
+            for branch in envelope_schema["properties"]["body"]["oneOf"]
+        }
         examples = sorted((ROOT / "contracts/examples/v0.2").glob("*.valid*.json"))
         self.assertTrue(examples)
         for path in examples:
             with self.subTest(path=path.name):
                 body = json.loads(path.read_text(encoding="utf-8"))
+                prefix = path.name.split(".", 1)[0]
+                if prefix not in envelope_bodies and prefix != "envelope":
+                    schema = oracle.load(f"{prefix}.schema.json")
+                    oracle.validate(body, schema)
+                    bad_body = copy.deepcopy(body)
+                    bad_body["tg_unknown_property"] = True
+                    with self.assertRaises(ValidationError):
+                        oracle.validate(bad_body, schema)
+                    base_env = json.loads(
+                        (ROOT / "contracts/examples/v0.2/envelope.valid.json").read_text(encoding="utf-8")
+                    )
+                    with self.assertRaises(ValidationError):
+                        oracle.validate({**base_env, "body": body}, envelope_schema)
+                    with self.assertRaises(envelope.EnvelopeError):
+                        wrap(body)
+                    continue
                 env = wrap(body)
-                oracle.validate(env, oracle.load("envelope.schema.json"))
+                oracle.validate(env, envelope_schema)
                 wire = envelope.dumps_envelope(env, max_bytes=1048576)
                 self.assertEqual(envelope.loads_envelope(wire, max_bytes=1048576), env)
                 bad = copy.deepcopy(env)
                 bad["body"]["tg_unknown_property"] = True
                 with self.assertRaises(ValidationError):
-                    oracle.validate(bad, oracle.load("envelope.schema.json"))
+                    oracle.validate(bad, envelope_schema)
                 with self.assertRaises(envelope.EnvelopeError) as caught:
                     envelope.validate_envelope(bad)
                 self.assertEqual(caught.exception.code, "bad_shape")

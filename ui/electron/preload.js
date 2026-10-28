@@ -25,6 +25,7 @@
  * @property {() => Promise<0|1|null>} nestedDepth
  * @property {() => Promise<string|null>} selfCapsuleId
  * @property {{propose:(json:string)=>Promise<any>,intent:(json:string)=>Promise<true>,subscribeFrames:(cb:(frame:any)=>void)=>(()=>void)}} authority
+ * @property {{send:(batch:any)=>Promise<{ok:true,accepted:number}|{ok:false,code:string}>}} input
  * @property {{screenshot:(req:any)=>Promise<any>,recordStart:(req:any)=>Promise<any>,recordStop:(req:any)=>Promise<any>,export:(req:any)=>Promise<any>,list:()=>Promise<any>,subscribe:(cb:(state:any)=>void)=>(()=>void)}} capture
  * @property {{open:(spec:any)=>Promise<{session:string}>,setEnabled:(value:boolean)=>Promise<true>}} sideTerminal
  * @property {{reportAnchors:(snapshot:any)=>Promise<true>}} [qa]
@@ -410,6 +411,7 @@ function captureFacade(transport, captureCallbacks = new Set(), seededCaptureSur
 // [TARGET, unit decision] Closed domain channels; all values are rechecked in main.
 const QA_ANCHORS_CHANNEL = 'metaviewer:qa.anchors';
 const FRAME_DIAG_CHANNEL = 'metaviewer:frame.diag';
+const SURFACE_INPUT_CHANNEL = 'metaviewer:authority.intent';
 const QA_ANCHOR_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
 const QA_ANCHOR_RE = /^(?=.{1,200}$)[A-Za-z0-9][A-Za-z0-9._:-]{0,63}(?:\/[A-Za-z0-9][A-Za-z0-9._:-]{0,63}){0,5}$/;
 const QA_ROLE_RE = /^[a-z][a-z0-9_-]{0,63}$/;
@@ -494,6 +496,124 @@ function assertFrameDiagPreload(args) {
   }
   return Object.freeze({ ...v });
 }
+const HUMAN_KEY_TOKEN_RE = /^[A-Za-z0-9_+]{1,32}$/;
+const INPUT_REFUSAL_CODES = new Set([
+  'NOT_IN_CONTROL',
+  'SURFACE_UNKNOWN',
+  'STALE_STREAM',
+  'LIMIT',
+  'NESTED_DISPLAY_ONLY',
+  'SCHEMA',
+  'CORE_UNAVAILABLE',
+]);
+const SURFACE_INPUT_MAX_EVENTS = 32;
+const SURFACE_INPUT_MAX_BYTES = 16 * 1024;
+const SURFACE_INPUT_MAX_BATCHES_PER_SEC = 60;
+/** @param {unknown} raw @returns {{ok:true,batch:any}|{ok:false,code:'SCHEMA'|'LIMIT'}} */
+function validateSurfaceInputBatch(raw) {
+  if (!captureKeys(raw, 'events,schema,seq,stream_id,surface_id')
+      || (Object.getPrototypeOf(raw) !== Object.prototype && Object.getPrototypeOf(raw) !== null)) {
+    return { ok: false, code: 'SCHEMA' };
+  }
+  const rec = /** @type {Record<string, any>} */ (raw);
+  if ((rec.schema !== 'surface_input/v1' && rec.schema !== 'surface_input/v0.2')
+      || !captureId(rec.surface_id)
+      || !Number.isSafeInteger(rec.stream_id) || rec.stream_id < 0
+      || !Number.isSafeInteger(rec.seq) || rec.seq < 1
+      || !Array.isArray(rec.events) || Object.getPrototypeOf(rec.events) !== Array.prototype
+      || rec.events.length < 1 || Reflect.ownKeys(rec.events).length !== rec.events.length + 1) {
+    return { ok: false, code: 'SCHEMA' };
+  }
+  const inspectCount = Math.min(rec.events.length, 256);
+  const events = [];
+  let hasOverlongTypeText = false;
+  for (let i = 0; i < inspectCount; i += 1) {
+    const desc = Object.getOwnPropertyDescriptor(rec.events, i);
+    if (!desc || !('value' in desc)) return { ok: false, code: 'SCHEMA' };
+    const ev = desc.value;
+    if (!ev || typeof ev !== 'object' || Array.isArray(ev)
+        || (Object.getPrototypeOf(ev) !== Object.prototype && Object.getPrototypeOf(ev) !== null)) {
+      return { ok: false, code: 'SCHEMA' };
+    }
+    if (ev.kind === 'click') {
+      if (!captureKeys(ev, 'button,kind,x,y')
+          || !Number.isSafeInteger(ev.x) || ev.x < 0 || ev.x > 65535
+          || !Number.isSafeInteger(ev.y) || ev.y < 0 || ev.y > 65535
+          || !['left', 'middle', 'right'].includes(ev.button)) {
+        return { ok: false, code: 'SCHEMA' };
+      }
+      events.push(Object.freeze({ kind: 'click', x: ev.x, y: ev.y, button: ev.button }));
+    } else if (ev.kind === 'key') {
+      if (!captureKeys(ev, 'keys,kind')
+          || !Array.isArray(ev.keys) || Object.getPrototypeOf(ev.keys) !== Array.prototype
+          || ev.keys.length < 1 || ev.keys.length > 8
+          || Reflect.ownKeys(ev.keys).length !== ev.keys.length + 1) {
+        return { ok: false, code: 'SCHEMA' };
+      }
+      const keys = [];
+      for (let j = 0; j < ev.keys.length; j += 1) {
+        const kDesc = Object.getOwnPropertyDescriptor(ev.keys, j);
+        if (!kDesc || !('value' in kDesc) || typeof kDesc.value !== 'string' || !HUMAN_KEY_TOKEN_RE.test(kDesc.value)) {
+          return { ok: false, code: 'SCHEMA' };
+        }
+        keys.push(kDesc.value);
+      }
+      const chord = keys.join('+');
+      if (chord.length < 1 || chord.length > 32 || !HUMAN_KEY_TOKEN_RE.test(chord)) {
+        return { ok: false, code: 'SCHEMA' };
+      }
+      events.push(Object.freeze({ kind: 'key', keys: Object.freeze(keys) }));
+    } else if (ev.kind === 'type') {
+      if (!captureKeys(ev, 'kind,text')
+          || typeof ev.text !== 'string' || ev.text.length < 1
+          || ev.text.includes('\0') || !isWellFormedName(ev.text)) {
+        return { ok: false, code: 'SCHEMA' };
+      }
+      if (ev.text.length > 1024) hasOverlongTypeText = true;
+      events.push(Object.freeze({ kind: 'type', text: ev.text }));
+    } else if (ev.kind === 'scroll') {
+      if (!captureKeys(ev, 'dx,dy,kind,x,y')
+          || !Number.isSafeInteger(ev.dx) || ev.dx < -2147483648 || ev.dx > 2147483647
+          || !Number.isSafeInteger(ev.dy) || ev.dy < -2147483648 || ev.dy > 2147483647
+          || !Number.isSafeInteger(ev.x) || ev.x < 0 || ev.x > 65535
+          || !Number.isSafeInteger(ev.y) || ev.y < 0 || ev.y > 65535) {
+        return { ok: false, code: 'SCHEMA' };
+      }
+      events.push(Object.freeze({ kind: 'scroll', dx: ev.dx, dy: ev.dy, x: ev.x, y: ev.y }));
+    } else {
+      return { ok: false, code: 'SCHEMA' };
+    }
+  }
+  if (rec.events.length > SURFACE_INPUT_MAX_EVENTS) {
+    return { ok: false, code: 'LIMIT' };
+  }
+  const batch = Object.freeze({
+    schema: rec.schema,
+    surface_id: rec.surface_id,
+    stream_id: rec.stream_id,
+    seq: rec.seq,
+    events: Object.freeze(events),
+  });
+  const encoded = JSON.stringify(batch);
+  if (encoded === undefined || utf8Bytes(encoded) > SURFACE_INPUT_MAX_BYTES) {
+    return { ok: false, code: 'LIMIT' };
+  }
+  if (hasOverlongTypeText) {
+    return { ok: false, code: 'SCHEMA' };
+  }
+  return { ok: true, batch };
+}
+/** @param {any} reply @param {number} maxAccepted */
+function assertSurfaceInputReply(reply, maxAccepted) {
+  if (captureKeys(reply, 'accepted,ok') && reply.ok === true
+      && Number.isSafeInteger(reply.accepted) && reply.accepted >= 1 && reply.accepted <= maxAccepted) {
+    return Object.freeze({ ok: true, accepted: reply.accepted });
+  }
+  if (captureKeys(reply, 'code,ok') && reply.ok === false && INPUT_REFUSAL_CODES.has(reply.code)) {
+    return Object.freeze({ ok: false, code: reply.code });
+  }
+  throw new ContractError('OUTCOME', 'surface input reply');
+}
 const WIRE_NAMES = Object.freeze({loadSettings:'settings.load',saveSettings:'settings.save',
   recordingDestination:'recording.destination',nestedDepth:'nested.depth',selfCapsuleId:'nested.self',
   propose:'authority.propose',intent:'authority.intent',subscribeFrames:'authority.subscribe',
@@ -508,6 +628,11 @@ function wireCall(channel,args) {
   if (!name) throw new ContractError('CHANNEL','unknown domain channel');
   const arity=['saveSettings','propose','intent','terminalOpen','terminalEnabled'].includes(name) ? 1 : 0;
   if (!Array.isArray(args) || args.length !== arity) throw new ContractError('ARGS','wrong arity');
+  if (name==='intent' && args[0] !== null && typeof args[0] === 'object') {
+    const checked = validateSurfaceInputBatch(args[0]);
+    if (!checked.ok) throw new ContractError('PAYLOAD', checked.code);
+    return {channel,args:Object.freeze([checked.batch])};
+  }
   if (arity) {
     const encoded=JSON.stringify(args[0]);
     if (encoded === undefined || utf8Bytes(typeof args[0] === 'string' ? args[0] : encoded)>IPC_BOUNDS.maxLayoutBytes) throw new ContractError('PAYLOAD','byte cap');
@@ -554,6 +679,7 @@ function validFrameNotice(value) {
 function wireFacade(transport) {
   /** @param {keyof typeof WIRE_NAMES} name @param {unknown[]} args */
   const call=async(name,args) => {
+    if (name==='intent' && args.length===1 && typeof args[0]!=='string') throw new ContractError('PAYLOAD','expected JSON text');
     const admitted=wireCall(`metaviewer:${WIRE_NAMES[name]}`,args);
     const reply=await transport.invoke(admitted.channel,admitted.args);
     if (['saveSettings','intent','subscribeFrames','unsubscribeFrames','terminalEnabled'].includes(name)) return assertSaveReply(reply);
@@ -630,6 +756,40 @@ function wireFacade(transport) {
       diagTimer=globalThis.setTimeout(()=>{diagTimer=null;reportFrameDiag();},250);
     }
   };
+  /** @type {Map<string,number>} */ const inputLastSeq=new Map();
+  /** @type {Map<string,number>} */ const inputInFlightSeq=new Map();
+  /** @type {Map<string,number[]>} */ const inputRateWindow=new Map();
+  api.input=Object.freeze({
+    /** @param {...unknown} args */
+    send:async(...args)=>{
+      if (args.length!==1) return Object.freeze({ok:false,code:'SCHEMA'});
+      const checked=validateSurfaceInputBatch(args[0]);
+      if (!checked.ok) return Object.freeze({ok:false,code:checked.code});
+      if (transport.nested) return Object.freeze({ok:false,code:'NESTED_DISPLAY_ONLY'});
+      const sid=checked.batch.surface_id;
+      const prevSeq=Math.max(inputLastSeq.get(sid)??0,inputInFlightSeq.get(sid)??0);
+      if (checked.batch.seq<=prevSeq) return Object.freeze({ok:false,code:'SCHEMA'});
+      const now=Date.now();
+      const recent=(inputRateWindow.get(sid)??[]).filter(t=>now-t<1000);
+      if (recent.length>=SURFACE_INPUT_MAX_BATCHES_PER_SEC) {
+        inputRateWindow.set(sid,recent);
+        return Object.freeze({ok:false,code:'LIMIT'});
+      }
+      recent.push(now);
+      inputRateWindow.set(sid,recent);
+      inputInFlightSeq.set(sid,checked.batch.seq);
+      try {
+        const reply=await transport.invoke(SURFACE_INPUT_CHANNEL,Object.freeze([checked.batch]));
+        const out=assertSurfaceInputReply(reply,checked.batch.events.length);
+        if (out.ok) inputLastSeq.set(sid,checked.batch.seq);
+        return out;
+      } catch {
+        return Object.freeze({ok:false,code:'CORE_UNAVAILABLE'});
+      } finally {
+        inputInFlightSeq.delete(sid);
+      }
+    },
+  });
   api.authority=Object.freeze({
     /** @param {...unknown} args */
     propose:(...args)=>call('propose',args),

@@ -108,14 +108,20 @@ class RoundOneContracts(unittest.TestCase):
         cargo = shutil.which(os.environ.get('CARGO', 'cargo'))
         self.assertIsNotNone(cargo, 'cargo must be supplied by PATH or CARGO')
         base = json.loads((ROOT / 'contracts/examples/v0.2/envelope.valid.json').read_text())
+        envelope_schema = json.loads((ROOT / 'contracts/v0.2/envelope.schema.json').read_text())
+        envelope_bodies = {
+            branch['$ref'].removesuffix('.schema.json')
+            for branch in envelope_schema['properties']['body']['oneOf']
+        }
         cases = []
         examples = ROOT / 'contracts/examples/v0.2'
         for path in sorted((ROOT / 'contracts/v0.2').glob('*.schema.json')):
             name = path.name.removesuffix('.schema.json')
+            is_envelope_member = name == 'envelope' or name in envelope_bodies
             for fixture in positive_examples(examples, name):
                 value = json.loads(fixture.read_text())
                 envelope = value if name == 'envelope' else {**base, 'body': value}
-                cases.append((fixture.name, envelope, True))
+                cases.append((fixture.name, envelope, is_envelope_member))
         for seq, expected in ((SAFE, True), (SAFE + 1, False)):
             cases.append((f'seq={seq}', {**base, 'seq': seq}, expected))
         frame = json.loads((examples / 'frame_ref.valid.json').read_text())

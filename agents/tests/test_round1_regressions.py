@@ -64,14 +64,34 @@ class CodecRegressions(unittest.TestCase):
             self.assertEqual(caught.exception.code, 'unknown_version')
 
     def test_v02_contract_examples_and_closed_negative_controls(self):
-        from tools.check_contracts import Validator
+        from tools.check_contracts import Validator, ValidationError
         root = Path(__file__).resolve().parents[2]
         oracle = _target_oracle()
+        envelope_schema = oracle.load('envelope.schema.json')
+        envelope_bodies = {
+            branch['$ref'].removesuffix('.schema.json')
+            for branch in envelope_schema['properties']['body']['oneOf']
+        }
+        base_env = json.loads((root / 'contracts' / 'examples' / 'v0.2' / 'envelope.valid.json').read_text())
         for path in sorted((root / 'contracts' / 'examples' / 'v0.2').glob('*.valid.json')):
             body = _v02_pins(json.loads(path.read_text()))
+            prefix = path.name.split('.', 1)[0]
             with self.subTest(path=path.name):
+                if prefix not in envelope_bodies and prefix != 'envelope':
+                    schema = oracle.load(f'{prefix}.schema.json')
+                    oracle.validate(body, schema)
+                    bad_body = copy.deepcopy(body)
+                    bad_body['unknown_property'] = True
+                    with self.assertRaises(ValidationError):
+                        oracle.validate(bad_body, schema)
+                    with self.assertRaises(ValidationError):
+                        oracle.validate({**base_env, 'body': body}, envelope_schema)
+                    with self.assertRaises(e.EnvelopeError) as caught:
+                        fixtures._wrap(body)
+                    self.assertEqual(caught.exception.code, 'unknown_version')
+                    continue
                 env = body if body['schema'] == 'envelope/v0.2' else fixtures._wrap(body)
-                oracle.validate(env, oracle.load('envelope.schema.json'))
+                oracle.validate(env, envelope_schema)
                 self.assertEqual(e.loads_envelope(e.dumps_envelope(env, max_bytes=M), max_bytes=M), env)
                 bad = copy.deepcopy(env)
                 bad['body']['unknown_property'] = True

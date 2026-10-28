@@ -480,7 +480,7 @@ fn event_kind(input: &Input, out: &Outcome) -> SessionRecordKind {
         return SessionRecordKind::Refused;
     }
     match input {
-        Input::Propose(_) => SessionRecordKind::Admitted,
+        Input::Propose(_) | Input::HumanInput { .. } => SessionRecordKind::Admitted,
         Input::Dispatch { .. } | Input::Receipt { .. } => SessionRecordKind::Executed,
         _ => SessionRecordKind::SurfaceChanged,
     }

@@ -18,7 +18,8 @@
 //! [TARGET, unit decision] UI and agent may create/destroy/list and subscribe to
 //! frames. Lifecycle callers observe daemon events for their connection lifetime
 //! (the wire has no reply correlation); frame unsubscribe overrides that default.
-//! Raw input and control requests retain their existing proposal/UI-intent gates.
+//! UI may submit surface_request/v0.2 op="input" when the surface is under human
+//! control (!agent_controlled); agent raw input remains refused with POLICY.
 //! [TARGET, unit decision] An expired RAM publication is not admissible evidence.
 //! Drop that frame without retiring the authenticated daemon: its bounded lease
 //! window can advance while an earlier journal transaction is being persisted.
@@ -748,6 +749,12 @@ impl Server {
                 return self.tool_call(peer, epoch, &env, call, boundary);
             }
             (Component::Ui | Component::Agent, Command::SurfaceRequest(request)) => {
+                if env.from.component == Component::Ui {
+                    if let crate::wire::payload::SurfaceRequest::Case5(input_req) = request.as_ref()
+                    {
+                        return self.human_input_at(now_ns, &env, input_req, boundary);
+                    }
+                }
                 let value = serde_json::to_value(request)?;
                 let op = value["op"].as_str().ok_or_else(|| invalid("missing op"))?;
                 if !matches!(
@@ -1234,6 +1241,60 @@ impl Server {
     fn unsupported(&mut self, env: &Envelope, boundary: Witness) -> Result<()> {
         let now_ns = self.route_now_ns.map_or_else(|| self.now(), Ok)?;
         self.unsupported_at(now_ns, env, boundary)
+    }
+    fn human_input_at(
+        &mut self,
+        now_ns: u64,
+        env: &Envelope,
+        input_req: &crate::wire::payload::SurfaceRequestCase5,
+        boundary: Witness,
+    ) -> Result<()> {
+        let daemon = self
+            .config
+            .peers
+            .iter()
+            .find(|p| p.endpoint.component == Component::Daemon)
+            .ok_or_else(|| invalid("no daemon"))?
+            .endpoint
+            .clone();
+        if !self.connections.contains_key(&daemon) {
+            let out = self.authority.apply_with_witnesses(
+                Input::Refuse {
+                    reason: Refusal::Policy,
+                },
+                vec![boundary],
+            )?;
+            return self.refuse_at(
+                now_ns,
+                &env.from,
+                &input_req.params.proposal_id,
+                Refusal::Policy,
+                out.core_seq,
+            );
+        }
+        let out = self.authority.apply_with_witnesses(
+            Input::HumanInput {
+                request: input_req.clone(),
+            },
+            vec![boundary],
+        )?;
+        if let Some(reason) = out.reason {
+            return self.refuse_at(
+                now_ns,
+                &env.from,
+                &input_req.params.proposal_id,
+                reason,
+                out.core_seq,
+            );
+        }
+        self.send_at(now_ns, &daemon, env.body.clone())?;
+        let verdict = serde_json::from_value(serde_json::json!({
+            "schema": "action_verdict/v0.2",
+            "proposal_id": input_req.params.proposal_id,
+            "decision": "admitted",
+            "core_seq": out.core_seq,
+        }))?;
+        self.send_at(now_ns, &env.from, Command::ActionVerdict(Box::new(verdict)))
     }
     fn unsupported_at(&mut self, now_ns: u64, env: &Envelope, boundary: Witness) -> Result<()> {
         let value = serde_json::to_value(&env.body)?;

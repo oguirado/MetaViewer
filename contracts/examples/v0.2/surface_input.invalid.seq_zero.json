@@ -1,0 +1,12 @@
+{
+  "schema": "surface_input/v0.2",
+  "surface_id": "cap-browser",
+  "stream_id": 1,
+  "seq": 0,
+  "events": [
+    {
+      "kind": "key",
+      "keys": ["Return"]
+    }
+  ]
+}

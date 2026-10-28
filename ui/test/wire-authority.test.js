@@ -165,8 +165,8 @@ test('native preload exposes new domain methods as enumerable own properties',()
   let exposed;
   const api=installPreload({contextBridge:{exposeInMainWorld:(_name,value)=>{exposed=value;}},ipcRenderer:{invoke:async()=>true,on(){},removeListener(){}}});
   assert.equal(api,exposed);
-  for(const name of ['authority','sideTerminal','loadSettings','saveSettings','recordingDestination','nestedDepth','selfCapsuleId']) assert.ok(Object.keys(exposed).includes(name));
-  assert.ok(Object.isFrozen(exposed.authority));assert.ok(Object.isFrozen(exposed.sideTerminal));
+  for(const name of ['authority','input','sideTerminal','loadSettings','saveSettings','recordingDestination','nestedDepth','selfCapsuleId']) assert.ok(Object.keys(exposed).includes(name));
+  assert.ok(Object.isFrozen(exposed.authority));assert.ok(Object.isFrozen(exposed.input));assert.ok(Object.isFrozen(exposed.sideTerminal));
 });
 test('verified frames use frameReader and framePort; digest tampering and replay never deliver',async()=>{
   const bytes=new Uint8Array([1,2,3]),messages=[],metadata=[],streams=new Set();

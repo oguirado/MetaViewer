@@ -180,6 +180,10 @@ class DecoderConformanceTests(unittest.TestCase):
         )
         cls.examples_dir = ROOT / "contracts/examples/v0.2"
         cls.fixture_paths = sorted(cls.examples_dir.glob("*.json"))
+        envelope_bodies = {
+            branch["$ref"].removesuffix(".schema.json")
+            for branch in cls.envelope_schema["properties"]["body"]["oneOf"]
+        }
 
         def wrap_obj(body_obj: dict) -> str:
             return json.dumps({**cls.base_envelope, "body": body_obj}, separators=(",", ":"))
@@ -187,11 +191,14 @@ class DecoderConformanceTests(unittest.TestCase):
         cls.fixture_cases = []
         for path in cls.fixture_paths:
             body = json.loads(path.read_text())
+            schema_prefix = path.name.split(".", 1)[0]
             if path.name.startswith("envelope."):
                 raw = json.dumps(body, separators=(",", ":"))
             else:
                 raw = wrap_obj(body)
-            expected = ".valid." in path.name
+            expected = ".valid." in path.name and (
+                schema_prefix == "envelope" or schema_prefix in envelope_bodies
+            )
             cls.fixture_cases.append((path.name, raw, expected))
 
         obs_valid = json.loads((cls.examples_dir / "observation.valid.json").read_text())

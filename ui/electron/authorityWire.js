@@ -21,10 +21,12 @@ export const WIRE_CHANNELS = Object.freeze({
   loadSettings:'metaviewer:settings.load', saveSettings:'metaviewer:settings.save',
   recordingDestination:'metaviewer:recording.destination', nestedDepth:'metaviewer:nested.depth',
   selfCapsuleId:'metaviewer:nested.self', propose:'metaviewer:authority.propose',
-  intent:'metaviewer:authority.intent', subscribeFrames:'metaviewer:authority.subscribe',
+  intent:'metaviewer:authority.intent',
+  subscribeFrames:'metaviewer:authority.subscribe',
   unsubscribeFrames:'metaviewer:authority.unsubscribe',
   terminalOpen:'metaviewer:side-terminal.open', terminalEnabled:'metaviewer:side-terminal.enabled',
 });
+export const SURFACE_INPUT_CHANNEL = WIRE_CHANNELS.intent;
 export const WIRE_MAX_BYTES = 256 * 1024;
 export const INTENT_OPS = Object.freeze({
   take_control: 'surface_id', release_control: 'surface_id',
@@ -55,6 +57,145 @@ export function validateIntentBody(body, error = () => new Error('INTENT')) {
     }
   }
   return body;
+}
+const HUMAN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}(?![\s\S])/;
+const HUMAN_KEY_TOKEN_RE = /^[A-Za-z0-9_+]{1,32}(?![\s\S])/;
+export const SURFACE_INPUT_CODES = Object.freeze([
+  'NOT_IN_CONTROL',
+  'SURFACE_UNKNOWN',
+  'STALE_STREAM',
+  'LIMIT',
+  'NESTED_DISPLAY_ONLY',
+  'SCHEMA',
+  'CORE_UNAVAILABLE',
+]);
+const SURFACE_INPUT_CODE_SET = new Set(SURFACE_INPUT_CODES);
+const SURFACE_INPUT_MAX_EVENTS = 32;
+const SURFACE_INPUT_MAX_BYTES = 16 * 1024;
+const SURFACE_INPUT_MAX_BATCHES_PER_SEC = 60;
+/** @param {string} text */
+function isWellFormedString(text) {
+  for (let i = 0; i < text.length; i += 1) {
+    const c = text.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const n = text.charCodeAt(i + 1);
+      if (n >= 0xdc00 && n <= 0xdfff) i += 1;
+      else return false;
+    } else if (c >= 0xdc00 && c <= 0xdfff) return false;
+  }
+  return true;
+}
+/** @param {any} v @param {string} keys */
+function exactDataKeys(v, keys) {
+  return v !== null && typeof v === 'object' && !Array.isArray(v)
+    && (Object.getPrototypeOf(v) === Object.prototype || Object.getPrototypeOf(v) === null)
+    && Reflect.ownKeys(v).length === keys.split(',').length
+    && Object.keys(v).sort().join(',') === keys
+    && Object.values(Object.getOwnPropertyDescriptors(v)).every(d => 'value' in d);
+}
+/** @param {unknown} code @returns {string} */
+export function mapSurfaceInputRefusal(code) {
+  if (typeof code === 'string' && SURFACE_INPUT_CODE_SET.has(code)) return code;
+  if (code === 'LOCKED_BY_OTHER' || code === 'SURFACE_NOT_HUMAN_CONTROLLED' || code === 'SURFACE_NOT_AGENT_CONTROLLED') {
+    return 'NOT_IN_CONTROL';
+  }
+  if (code === 'STALE_FRAME') return 'STALE_STREAM';
+  if (code === 'BUDGET_EXCEEDED') return 'LIMIT';
+  if (code === 'OUT_OF_BOUNDS' || code === 'POLICY' || code === 'PAYLOAD') return 'SCHEMA';
+  return 'CORE_UNAVAILABLE';
+}
+/** @param {unknown} raw @returns {{ok:true,batch:any}|{ok:false,code:'SCHEMA'|'LIMIT'}} */
+export function validateSurfaceInputBatch(raw) {
+  if (!exactDataKeys(raw, 'events,schema,seq,stream_id,surface_id')) {
+    return { ok: false, code: 'SCHEMA' };
+  }
+  const rec = /** @type {Record<string, any>} */ (raw);
+  if ((rec.schema !== 'surface_input/v1' && rec.schema !== 'surface_input/v0.2')
+      || typeof rec.surface_id !== 'string' || !HUMAN_ID_RE.test(rec.surface_id)
+      || !Number.isSafeInteger(rec.stream_id) || rec.stream_id < 0
+      || !Number.isSafeInteger(rec.seq) || rec.seq < 1
+      || !Array.isArray(rec.events) || Object.getPrototypeOf(rec.events) !== Array.prototype
+      || rec.events.length < 1 || Reflect.ownKeys(rec.events).length !== rec.events.length + 1) {
+    return { ok: false, code: 'SCHEMA' };
+  }
+  const inspectCount = Math.min(rec.events.length, 256);
+  const events = [];
+  let hasOverlongTypeText = false;
+  for (let i = 0; i < inspectCount; i += 1) {
+    const desc = Object.getOwnPropertyDescriptor(rec.events, i);
+    if (!desc || !('value' in desc)) return { ok: false, code: 'SCHEMA' };
+    const ev = desc.value;
+    if (!ev || typeof ev !== 'object' || Array.isArray(ev)
+        || (Object.getPrototypeOf(ev) !== Object.prototype && Object.getPrototypeOf(ev) !== null)) {
+      return { ok: false, code: 'SCHEMA' };
+    }
+    if (ev.kind === 'click') {
+      if (!exactDataKeys(ev, 'button,kind,x,y')
+          || !Number.isSafeInteger(ev.x) || ev.x < 0 || ev.x > 65535
+          || !Number.isSafeInteger(ev.y) || ev.y < 0 || ev.y > 65535
+          || !['left', 'middle', 'right'].includes(ev.button)) {
+        return { ok: false, code: 'SCHEMA' };
+      }
+      events.push(Object.freeze({ kind: 'click', x: ev.x, y: ev.y, button: ev.button }));
+    } else if (ev.kind === 'key') {
+      if (!exactDataKeys(ev, 'keys,kind')
+          || !Array.isArray(ev.keys) || Object.getPrototypeOf(ev.keys) !== Array.prototype
+          || ev.keys.length < 1 || ev.keys.length > 8
+          || Reflect.ownKeys(ev.keys).length !== ev.keys.length + 1) {
+        return { ok: false, code: 'SCHEMA' };
+      }
+      const keys = [];
+      for (let j = 0; j < ev.keys.length; j += 1) {
+        const kDesc = Object.getOwnPropertyDescriptor(ev.keys, j);
+        if (!kDesc || !('value' in kDesc) || typeof kDesc.value !== 'string' || !HUMAN_KEY_TOKEN_RE.test(kDesc.value)) {
+          return { ok: false, code: 'SCHEMA' };
+        }
+        keys.push(kDesc.value);
+      }
+      const chord = keys.join('+');
+      if (chord.length < 1 || chord.length > 32 || !HUMAN_KEY_TOKEN_RE.test(chord)) {
+        return { ok: false, code: 'SCHEMA' };
+      }
+      events.push(Object.freeze({ kind: 'key', keys: Object.freeze(keys) }));
+    } else if (ev.kind === 'type') {
+      if (!exactDataKeys(ev, 'kind,text')
+          || typeof ev.text !== 'string' || ev.text.length < 1
+          || ev.text.includes('\0') || !isWellFormedString(ev.text)) {
+        return { ok: false, code: 'SCHEMA' };
+      }
+      if (ev.text.length > 1024) hasOverlongTypeText = true;
+      events.push(Object.freeze({ kind: 'type', text: ev.text }));
+    } else if (ev.kind === 'scroll') {
+      if (!exactDataKeys(ev, 'dx,dy,kind,x,y')
+          || !Number.isSafeInteger(ev.dx) || ev.dx < -2147483648 || ev.dx > 2147483647
+          || !Number.isSafeInteger(ev.dy) || ev.dy < -2147483648 || ev.dy > 2147483647
+          || !Number.isSafeInteger(ev.x) || ev.x < 0 || ev.x > 65535
+          || !Number.isSafeInteger(ev.y) || ev.y < 0 || ev.y > 65535) {
+        return { ok: false, code: 'SCHEMA' };
+      }
+      events.push(Object.freeze({ kind: 'scroll', dx: ev.dx, dy: ev.dy, x: ev.x, y: ev.y }));
+    } else {
+      return { ok: false, code: 'SCHEMA' };
+    }
+  }
+  if (rec.events.length > SURFACE_INPUT_MAX_EVENTS) {
+    return { ok: false, code: 'LIMIT' };
+  }
+  const batch = Object.freeze({
+    schema: rec.schema,
+    surface_id: rec.surface_id,
+    stream_id: rec.stream_id,
+    seq: rec.seq,
+    events: Object.freeze(events),
+  });
+  const encoded = JSON.stringify(batch);
+  if (encoded === undefined || Buffer.byteLength(encoded, 'utf8') > SURFACE_INPUT_MAX_BYTES) {
+    return { ok: false, code: 'LIMIT' };
+  }
+  if (hasOverlongTypeText) {
+    return { ok: false, code: 'SCHEMA' };
+  }
+  return { ok: true, batch };
 }
 /** @param {unknown} value @returns {any} */
 export function jsonObject(value) {
@@ -207,6 +348,9 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
   const channels = /** @type {string[]} */([]);
   const ownedProfiles = new Map([...profiles].map(([id,profile])=>[id,{args:[...validateProviderArgv([id,...profile.args])].slice(1)}]));
   let subscribed = false, enabled = false, disposed = false;
+  /** @type {Map<string,number>} */ const inputLastSeq = new Map();
+  /** @type {Map<string,number>} */ const inputInFlightSeq = new Map();
+  /** @type {Map<string,number[]>} */ const inputRateWindow = new Map();
   const handlers = {
     loadSettings: async () => store.load(),
     saveSettings: async (/** @type {string} */json) => store.save(json),
@@ -216,9 +360,10 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     propose: async (/** @type {string} */json) => {
       jsonObject(json); return verdictReply(await core.request({op:'propose',json}));
     },
-    intent: async (/** @type {string} */json) => {
-      validateIntentBody(jsonObject(json));
-      if (await core.request({op:'intent',json}) !== true) throw new Error('OUTCOME'); return true;
+    intent: async (/** @type {unknown} */arg) => {
+      if (typeof arg !== 'string') return handleSurfaceInput(arg);
+      validateIntentBody(jsonObject(arg));
+      if (await core.request({op:'intent',json:arg}) !== true) throw new Error('OUTCOME'); return true;
     },
     subscribeFrames: async () => {
       subscribed=true;
@@ -244,6 +389,41 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
           || !/^[A-Za-z0-9._-]{1,128}$/.test(result.session)) throw new Error('OUTCOME');
       return {session:result.session};
     },
+  };
+  const handleSurfaceInput = async (/** @type {unknown} */raw) => {
+    if (identity.depth === 1) return Object.freeze({ ok: false, code: 'NESTED_DISPLAY_ONLY' });
+    const checked = validateSurfaceInputBatch(raw);
+    if (!checked.ok) return Object.freeze({ ok: false, code: checked.code });
+    const batch = checked.batch;
+    const sid = batch.surface_id;
+    const prevSeq = Math.max(inputLastSeq.get(sid) ?? 0, inputInFlightSeq.get(sid) ?? 0);
+    if (batch.seq <= prevSeq) return Object.freeze({ ok: false, code: 'SCHEMA' });
+    const now = Date.now();
+    const recent = (inputRateWindow.get(sid) ?? []).filter(t => now - t < 1000);
+    if (recent.length >= SURFACE_INPUT_MAX_BATCHES_PER_SEC) {
+      inputRateWindow.set(sid, recent);
+      return Object.freeze({ ok: false, code: 'LIMIT' });
+    }
+    recent.push(now);
+    inputRateWindow.set(sid, recent);
+    inputInFlightSeq.set(sid, batch.seq);
+    try {
+      const reply = await core.request({ op: 'input', batch });
+      if (exactDataKeys(reply, 'accepted,ok') && reply.ok === true
+          && Number.isSafeInteger(reply.accepted) && reply.accepted >= 1 && reply.accepted <= batch.events.length) {
+        inputLastSeq.set(sid, batch.seq);
+        return Object.freeze({ ok: true, accepted: reply.accepted });
+      }
+      if (exactDataKeys(reply, 'code,ok') && reply.ok === false) {
+        return Object.freeze({ ok: false, code: mapSurfaceInputRefusal(reply.code) });
+      }
+      return Object.freeze({ ok: false, code: 'CORE_UNAVAILABLE' });
+    } catch (error) {
+      const errCode = /** @type {any} */ (error)?.code ?? /** @type {any} */ (error)?.message;
+      return Object.freeze({ ok: false, code: mapSurfaceInputRefusal(errCode) });
+    } finally {
+      inputInFlightSeq.delete(sid);
+    }
   };
   try {
     for (const [name,fn] of Object.entries(handlers)) {
@@ -430,6 +610,9 @@ export async function deliverAuthorityFrame(entry,contents,streams,frameDiag=nul
   try {
     contents.postMessage('metaviewer:authority.frames',{frame_ref:ref,surface:state},stream.announced ? [] : (entry.rendererPorts || []));
     stream.announced=true;
+    if (!wasAnnounced && Boolean(entry.rendererPorts?.length)) {
+      entry.onStreamAnnounced?.(ref.generation);
+    }
     frameDiag?.recordDelivery?.({
       surfaceId:binding.surfaceId,
       surfaceGeneration:binding.surfaceGeneration,

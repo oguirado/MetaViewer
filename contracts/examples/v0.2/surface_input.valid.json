@@ -1,0 +1,41 @@
+{
+  "schema": "surface_input/v0.2",
+  "surface_id": "cap-browser",
+  "stream_id": 1,
+  "seq": 1,
+  "events": [
+    {
+      "kind": "click",
+      "x": 120,
+      "y": 48,
+      "button": "left"
+    },
+    {
+      "kind": "click",
+      "x": 124,
+      "y": 52,
+      "button": "middle"
+    },
+    {
+      "kind": "click",
+      "x": 128,
+      "y": 56,
+      "button": "right"
+    },
+    {
+      "kind": "key",
+      "keys": ["Control_L", "l"]
+    },
+    {
+      "kind": "type",
+      "text": "https://metaviewer.local"
+    },
+    {
+      "kind": "scroll",
+      "dx": 0,
+      "dy": -120,
+      "x": 320,
+      "y": 240
+    }
+  ]
+}
