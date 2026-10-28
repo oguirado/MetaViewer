@@ -1,17 +1,17 @@
 {
  "schema": "metaviewer.meta_ai_usage/v1",
  "totals": {
-  "lanes": 373,
-  "ok": 373,
-  "input_tokens": 84305162,
-  "cache_read_tokens": 2010298436,
-  "output_tokens": 18500662,
-  "thinking_tokens": 9935510,
+  "lanes": 374,
+  "ok": 374,
+  "input_tokens": 84449291,
+  "cache_read_tokens": 2013610913,
+  "output_tokens": 18536311,
+  "thinking_tokens": 9956776,
   "cache_hit_pct": 96.0,
-  "usd": 16.1512,
+  "usd": 16.1794,
   "usd_per_lane": 0.0433,
-  "steps": 20956,
-  "lane_hours": 54.8
+  "steps": 21003,
+  "lane_hours": 54.9
  },
  "peak_concurrent_lanes": 24,
  "rooms": {
@@ -308,6 +308,11 @@
   "mvui26": {
    "stage": "fix",
    "why": "RV10 cross-review of ui/src (verified against code) found an attach paint that ignores draw failure and skips presentation notify (HIGH), an unbound input facade send, and several LOW input/frame edge cases; fix them with regression tests before live input checks.",
+   "orchestrator": "UI orchestrator"
+  },
+  "mvui29sc": {
+   "stage": "fix",
+   "why": "Judge rejected the settings drop: a quick revert inside the debounce window is lost, a replaced host can receive a stale save, and boot can paint a scheme the store then replaces; fix before AC-08 can ship.",
    "orchestrator": "UI orchestrator"
   },
   "mvui16e": {
@@ -8459,6 +8464,27 @@
    "thinking_tokens": 57082,
    "cache_hit_pct": 97.5,
    "usd": 0.086802
+  },
+  {
+   "room": "mvui29sb",
+   "lane": "S",
+   "title": "settings drop unknown keys",
+   "stage": "fix",
+   "model": "muse-spark-1.3",
+   "orchestrator": "UI orchestrator",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-28T07:58:40.878000+00:00",
+   "duration_s": 450.4,
+   "end_utc": "2026-10-28T08:06:11.309000+00:00",
+   "phase": "build",
+   "steps": 47,
+   "input_tokens": 144129,
+   "cache_read_tokens": 3312477,
+   "output_tokens": 35649,
+   "thinking_tokens": 21266,
+   "cache_hit_pct": 95.8,
+   "usd": 0.028168
   }
  ]
 }

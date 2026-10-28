@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 373 | 55 | 318 |
-| Lanes finished OK | 373 | 55 | 318 |
-| Agent steps | 20,956 | 2,705 | 18,251 |
-| Lane-hours of agent work | 54.8 | 5.2 | 49.5 |
-| Fresh input tokens | 84,305,162 | 11,482,034 | 72,823,128 |
-| Cache-read input tokens | 2,010,298,436 | 226,255,212 | 1,784,043,224 |
+| Lanes launched | 374 | 55 | 319 |
+| Lanes finished OK | 374 | 55 | 319 |
+| Agent steps | 21,003 | 2,705 | 18,298 |
+| Lane-hours of agent work | 54.9 | 5.2 | 49.6 |
+| Fresh input tokens | 84,449,291 | 11,482,034 | 72,967,257 |
+| Cache-read input tokens | 2,013,610,913 | 226,255,212 | 1,787,355,701 |
 | Prompt cache hit % | 96.0 | 95.2 | 96.1 |
-| Output tokens | 18,500,662 | 2,135,708 | 16,364,954 |
-| Thinking tokens | 9,935,510 | 1,050,039 | 8,885,471 |
-| Cost (USD) | 16.1512 | 2.0279 | 14.1234 |
+| Output tokens | 18,536,311 | 2,135,708 | 16,400,603 |
+| Thinking tokens | 9,956,776 | 1,050,039 | 8,906,737 |
+| Cost (USD) | 16.1794 | 2.0279 | 14.1515 |
 | Cost per lane (USD) | 0.0433 | 0.0369 | 0.0444 |
 
-Rooms: 108. Peak concurrent lanes [MEASURED from lane start/end]: 24.
+Rooms: 109. Peak concurrent lanes [MEASURED from lane start/end]: 24.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -43,7 +43,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
 | docs | 15 | 94.8 | 0.5371 |
-| fix | 46 | 96.9 | 2.6047 |
+| fix | 47 | 96.8 | 2.6329 |
 | kit | 3 | 96.5 | 0.1997 |
 | ops | 4 | 88.1 | 0.0468 |
 | perf | 1 | 97.6 | 0.0694 |
@@ -169,6 +169,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui30 | UI orchestrator | Oct 28 08:17 | fix | 1 | 97.3 | 0.0829 | AC-03: a lost capsule shows 'Connecting to surface' forever because App erases the backend lost signal; show the last frame frozen with a Lost badge so the operator sees what was lost. |
 | mvui31 | UI orchestrator | Oct 28 08:19 | perf | 1 | 97.6 | 0.0694 | AC-02 needs 4 capsules at >= 10 fps at live size; the renderer present path (per-frame RGBA conversion, ImageData allocation, wrong cost accounting, redundant re-hash) is the largest cost. |
 | mvui29b | UI orchestrator | Oct 28 08:36 | fix | 1 | 97.5 | 0.0868 | Finish AC-06 terminal sessions in the renderer: the first pass ran out of budget with type errors, no App/main wiring and a port not yet matching the host API the host owner fixed. |
+| mvui29sb | UI orchestrator | Oct 28 08:58 | fix | 1 | 95.8 | 0.0282 | Host owner ruling for AC-08: the host keeps a closed settings key set, so the renderer must drop unknown keys instead of round-tripping them. |
 
 ## Every lane
 
@@ -547,6 +548,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui30 | L | lost state: frozen last frame with Lost badge | Oct 28 08:17 | yes | 96 | 97.3 | 0.082854 |
 | mvui31 | P | fast present path at 1280x900 | Oct 28 08:19 | yes | 99 | 97.6 | 0.069391 |
 | mvui29b | T | finish terminal sessions path: types, fixed host API, App/main wiring | Oct 28 08:36 | yes | 98 | 97.5 | 0.086802 |
+| mvui29sb | S | settings drop unknown keys | Oct 28 08:58 | yes | 47 | 95.8 | 0.028168 |
 
 ## Method
 
