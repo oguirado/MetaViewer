@@ -127,9 +127,12 @@ impl Server {
         let mut witnesses = boundary;
         witnesses.push(witness);
         let input = if data["reply"]["ok"] == false {
-            Input::Refuse {
-                reason: Refusal::Policy,
-            }
+            let reason = if data["reply"]["code"] == "BUDGET_EXCEEDED" {
+                Refusal::BudgetExceeded
+            } else {
+                Refusal::Policy
+            };
+            Input::Refuse { reason }
         } else {
             Input::SurfaceNotice
         };
@@ -311,6 +314,27 @@ impl Server {
         // sealed capture. It never starts a disk recorder. Host binding supplies
         // the configured capability/path; the core independently checks its grant.
         if raw["op"] == "disk_start" {
+            let Some(fps) = raw["params"]["max_fps"]
+                .as_u64()
+                .filter(|&fps| (1..=120).contains(&fps))
+            else {
+                return self.unsupported_at(now_ns, env, boundary);
+            };
+            if fps > crate::record::capture::MAX_FPS {
+                let out = self.authority.apply_with_witnesses(
+                    Input::Refuse {
+                        reason: Refusal::BudgetExceeded,
+                    },
+                    vec![boundary],
+                )?;
+                return self.refuse_at(
+                    now_ns,
+                    &env.from,
+                    raw["request_id"].as_str().unwrap_or(&env.msg_id),
+                    Refusal::BudgetExceeded,
+                    out.core_seq,
+                );
+            }
             let destination = std::env::var_os("MV_RECORDING_DESTINATION")
                 .filter(|p| !p.is_empty())
                 .map(PathBuf::from);
@@ -341,10 +365,17 @@ impl Server {
             req["surface_id"] = raw["params"]["surface_id"].clone();
         }
         if method == "recordStart" {
-            if raw["params"]["ring_bytes"] != 8 * 1024 * 1024 || raw["params"]["max_fps"] != 30 {
+            let Some(fps) = raw["params"]["max_fps"]
+                .as_u64()
+                .filter(|&fps| (1..=120).contains(&fps))
+            else {
+                return self.unsupported_at(now_ns, env, boundary);
+            };
+            if raw["params"]["ring_bytes"] != 8 * 1024 * 1024 {
                 return self.unsupported_at(now_ns, env, boundary);
             }
             req["mode"] = "ai".into();
+            req["max_fps"] = fps.into();
             req["_host_id"] = raw["params"]["recording_id"].clone();
         }
         if method == "screenshot" {
@@ -856,7 +887,9 @@ mod tests {
             raw["surface_id"] = surface_id.into();
             raw["sha256"] = sha256_hex(b"pixels").into();
             let frame: FrameRef = serde_json::from_value(raw).unwrap();
-            server.capture_frame(&frame, b"pixels".to_vec()).unwrap();
+            server
+                .capture_frame_at(40_000_000, &frame, b"pixels".to_vec())
+                .unwrap();
             let _ = rx.try_iter().count();
 
             let stop_id = format!("stop-{rec_id}");
@@ -881,7 +914,7 @@ mod tests {
                 .retain_witness(serde_json::to_string(&stop_env).unwrap().as_bytes())
                 .unwrap();
             server
-                .capture_wire(0, &stop_env, &stop_req, boundary)
+                .capture_wire(80_000_000, &stop_env, &stop_req, boundary)
                 .unwrap();
             let stop_detail = drain_reply(&rx, &stop_id);
             assert_eq!(stop_detail["method"], "recordStop");
@@ -1177,5 +1210,143 @@ mod tests {
         assert_eq!(tx2, pre_recover_seq + 2);
         assert_eq!(done_witness_2["export_transaction"].as_u64().unwrap(), tx2);
         assert!(tx1 < tx_fail && tx_fail < tx_crash && tx_crash < tx2);
+    }
+
+    #[test]
+    fn rec_3_accepted() {
+        let temp = Temp::new();
+        let root = temp.0.clone();
+        let reg = |component: &str| -> Registration {
+            serde_json::from_value(json!({"endpoint":{"component":component,"instance":format!("{component}-rec3")},"hello":{"schema":"hello/v0.2","contract_version":"v0.2","component":component,"component_version":"0.2.0","component_commit":"0123456789abcdef0123456789abcdef01234567","dependencies":[]}})).unwrap()
+        };
+        let config = Config {
+            session_id: "rec3-session".into(),
+            core: reg("core"),
+            peers: vec![reg("agent"), reg("daemon"), reg("ui")],
+        };
+        let ui = reg("ui").endpoint;
+        let mut server = Server::open(config, &root, effective_uid().unwrap()).unwrap();
+        server
+            .authority
+            .apply(Input::Surface {
+                id: "surface-demo".into(),
+                surface: Surface {
+                    display: "rec3-display".into(),
+                    owner: reg("agent").endpoint,
+                    agent_controlled: true,
+                    live: true,
+                    frame: None,
+                    refresh_after: None,
+                    allowed_verbs: vec![],
+                },
+            })
+            .unwrap();
+        let mut raw: Value = serde_json::from_str(include_str!(
+            "../../../contracts/examples/v0.2/frame_ref.valid.json"
+        ))
+        .unwrap();
+        raw["width"] = 1.into();
+        raw["height"] = 1.into();
+        raw["sha256"] = sha256_hex(&[1, 2, 3]).into();
+        let frame: FrameRef = serde_json::from_value(raw).unwrap();
+        server.capture_frame_at(0, &frame, vec![1, 2, 3]).unwrap();
+        let (queue, rx) = mpsc::sync_channel(64);
+        server.connections.insert(
+            ui.clone(),
+            Connection {
+                id: 1,
+                epoch: 1,
+                queue,
+                terminal: Arc::new(Mutex::new(None)),
+            },
+        );
+        let mut seq = 0_u64;
+        let mut dispatch = |server: &mut Server, now_ns: u64, req: RecordRequest| -> Vec<Value> {
+            seq += 1;
+            let req_val = serde_json::to_value(&req).unwrap();
+            let req_id = req_val["request_id"].as_str().unwrap().to_owned();
+            let env = Envelope {
+                schema: "envelope/v0.2".into(),
+                msg_id: req_id.clone(),
+                ts_ns: Clock::new(now_ns),
+                from: ui.clone(),
+                to: server.config.core.endpoint.clone(),
+                session_id: "rec3-session".into(),
+                seq,
+                nonce: req_id,
+                body: Command::RecordRequest(Box::new(req.clone())),
+            };
+            let boundary = server
+                .authority
+                .retain_witness(serde_json::to_string(&env).unwrap().as_bytes())
+                .unwrap();
+            server.capture_wire(now_ns, &env, &req, boundary).unwrap();
+            rx.try_iter()
+                .map(|e| serde_json::to_value(e.body).unwrap())
+                .collect()
+        };
+
+        // Negative control: wrong ring_bytes is refused with POLICY.
+        let bad_ring: RecordRequest = serde_json::from_value(json!({
+            "schema":"record_request/v0.2","request_id":"bad-ring","op":"ram_start",
+            "params":{"surface_id":"surface-demo","recording_id":"rec-bad-ring","ring_bytes":4096,"max_fps":3}
+        }))
+        .unwrap();
+        let bad_msgs = dispatch(&mut server, 0, bad_ring);
+        assert!(bad_msgs.iter().any(|m| m["schema"] == "action_verdict/v0.2"
+            && m["decision"] == "refused"
+            && m["reason_code"] == "POLICY"));
+
+        // Accept ram_start with default 3 fps and 60 fps, then disk_start with 3 fps.
+        for (fps, rec_id, t_ns) in [
+            (3_u64, "rec-fps-3", 0_u64),
+            (60, "rec-fps-60", 1_000_000_000),
+        ] {
+            let start_req: RecordRequest = serde_json::from_value(json!({
+                "schema":"record_request/v0.2","request_id":format!("start-{fps}"),"op":"ram_start",
+                "params":{"surface_id":"surface-demo","recording_id":rec_id,"ring_bytes":8_388_608,"max_fps":fps}
+            }))
+            .unwrap();
+            let start_msgs = dispatch(&mut server, t_ns, start_req);
+            let carrier = start_msgs
+                .iter()
+                .find(|v| v["data"]["code"] == "CAPTURE_REPLY")
+                .expect("expected CAPTURE_REPLY for accepted ram_start");
+            let detail: Value =
+                serde_json::from_str(carrier["data"]["detail"].as_str().unwrap()).unwrap();
+            assert_eq!(detail["reply"], json!({"ok":true,"recording_id":rec_id}));
+            assert!(start_msgs
+                .iter()
+                .any(|v| v["schema"] == "record_event/v0.2" && v["event"] == "started"));
+
+            let stop_req: RecordRequest = serde_json::from_value(json!({
+                "schema":"record_request/v0.2","request_id":format!("stop-{fps}"),"op":"ram_stop",
+                "params":{"surface_id":"surface-demo","recording_id":rec_id}
+            }))
+            .unwrap();
+            let stop_msgs = dispatch(&mut server, t_ns + 500_000_000, stop_req);
+            let stop_carrier = stop_msgs
+                .iter()
+                .find(|v| v["data"]["code"] == "CAPTURE_REPLY")
+                .unwrap();
+            let stop_detail: Value =
+                serde_json::from_str(stop_carrier["data"]["detail"].as_str().unwrap()).unwrap();
+            assert_eq!(stop_detail["reply"]["ok"], true);
+        }
+
+        // disk_start with max_fps = 3 is accepted by the wire gate (returns DESTINATION_UNSET when env unset, not unsupported POLICY verdict).
+        let disk_req: RecordRequest = serde_json::from_value(json!({
+            "schema":"record_request/v0.2","request_id":"disk-3","op":"disk_start",
+            "params":{"surface_id":"surface-demo","recording_id":"rec-fps-3","destination_capability_id":"recording:configured","destination_path":"/tmp","max_fps":3}
+        }))
+        .unwrap();
+        let disk_msgs = dispatch(&mut server, 2_000_000_000, disk_req);
+        let disk_carrier = disk_msgs
+            .iter()
+            .find(|v| v["data"]["code"] == "CAPTURE_REPLY")
+            .expect("disk_start at 3 fps must reach export handler");
+        let disk_detail: Value =
+            serde_json::from_str(disk_carrier["data"]["detail"].as_str().unwrap()).unwrap();
+        assert_eq!(disk_detail["method"], "export");
     }
 }

@@ -1,10 +1,13 @@
 //! [TARGET, unit decision] RAM host capture policy: at most 64 retained captures,
-//! 8 active recordings, 8 MiB per ring, 64 MiB total retained pixel bytes.
+//! 8 active recordings, 8 MiB per ring, 64 MiB total retained pixel bytes,
+//! max_fps ceiling 60 (default 3 fps) with period decimation in append_frame.
 //! The serve owner journals a prepared transition before replacing this state.
 use super::*;
 
 const RING: u64 = 8 * 1024 * 1024;
 const MEMORY: u64 = 64 * 1024 * 1024;
+pub const MAX_FPS: u64 = 60;
+pub const DEFAULT_FPS: u64 = 3;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Host {
@@ -13,6 +16,8 @@ pub struct Host {
     pixels: BTreeMap<String, VecDeque<CapturedFrame>>,
     latest: BTreeMap<String, (FrameRef, Vec<u8>)>,
     dropped_frames: BTreeMap<String, u64>,
+    max_fps: BTreeMap<String, u64>,
+    last_frame_ms: BTreeMap<String, u64>,
     serial: u64,
     pub(crate) exports_recovered: bool,
 }
@@ -40,7 +45,7 @@ impl Host {
         if self.coordinator.is_none() {
             let settings: Settings = serde_json::from_value(json!({
                 "schema":"settings/v0.2","theme":"metaviewer-dark","providers":[],
-                "recording_destination":null,"limits":{"memory_bytes":MEMORY,"ring_bytes":RING,"max_fps":30}
+                "recording_destination":null,"limits":{"memory_bytes":MEMORY,"ring_bytes":RING,"max_fps":MAX_FPS}
             })).map_err(|_| Error::Configuration)?;
             self.coordinator = Some(Coordinator::new(&settings, surfaces.clone())?);
         }
@@ -94,7 +99,9 @@ impl Host {
             .and_then(|n| n.checked_add(bytes.len() as u64))
             .ok_or(Error::Overflow)?;
         for id in &ids {
-            total = self.project_append(total, id, bytes.len())?;
+            if !self.decimated(id, now_ms) {
+                total = self.project_append(total, id, bytes.len())?;
+            }
         }
         if total > MEMORY {
             return Err(Error::Overflow);
@@ -177,7 +184,19 @@ impl Host {
             .ok_or(Error::Overflow)
     }
 
+    fn decimated(&self, id: &str, now_ms: u64) -> bool {
+        self.max_fps
+            .get(id)
+            .zip(self.last_frame_ms.get(id))
+            .is_some_and(|(&fps, &last_ms)| now_ms.saturating_sub(last_ms) < 1000 / fps)
+    }
+
     fn append_frame(&mut self, id: &str, now_ms: u64, events: &mut Events) -> Result<(), Error> {
+        if self.decimated(id, now_ms) {
+            let count = self.dropped_frames.entry(id.to_owned()).or_default();
+            *count = count.saturating_add(1);
+            return Ok(());
+        }
         let surface = self.rows[id]["surface_id"].as_str().ok_or(Error::Event)?;
         let (frame, bytes) = self.latest.get(surface).ok_or(Error::Event)?;
         if self.project_append(self.retained_bytes()?, id, bytes.len())? > MEMORY {
@@ -211,6 +230,7 @@ impl Host {
             frame: frame.clone(),
             bytes: bytes.clone(),
         });
+        self.last_frame_ms.insert(id.to_owned(), now_ms);
         let row = self.rows.get_mut(id).ok_or(Error::Event)?;
         row["frames"] = json!(ring.len());
         row["duration_ms"] =
@@ -319,8 +339,9 @@ impl Host {
             params["recording_id"] = id.clone().into();
         }
         if method == "recordStart" {
+            let fps = req["max_fps"].as_u64().unwrap_or(DEFAULT_FPS);
             params["ring_bytes"] = RING.into();
-            params["max_fps"] = 30.into();
+            params["max_fps"] = fps.into();
         }
         // Wire coordinator IDs are host generated; renderer correlation stays in the boundary witness.
         let request: RecordRequest = serde_json::from_value(
@@ -333,8 +354,19 @@ impl Host {
             .as_mut()
             .ok_or(Error::Configuration)?
             .handle(&request, now_ms.saturating_mul(1_000_000), &mut events)?;
-        if result.iter().any(|e| matches!(e, RecordEvent::Case5(_))) {
-            return Ok(refusal("LIMIT"));
+        if let Some(refused) = result.iter().find_map(|e| match e {
+            RecordEvent::Case5(r) => Some(r),
+            _ => None,
+        }) {
+            let code = match refused.reason_code {
+                RecordEventRefusal::BUDGETEXCEEDED => "BUDGET_EXCEEDED",
+                _ => "POLICY",
+            };
+            return Ok((
+                next,
+                json!({"ok":false,"code":code,"request_id":request_id}),
+                events.0,
+            ));
         }
         let reply = if method == "recordStop" {
             let row = next.rows.get_mut(&id).ok_or(Error::Event)?;
@@ -350,6 +382,11 @@ impl Host {
             json!({"ok":true,"recording":{"id":id,"surface_id":surface,"frames":row["frames"],"dropped_frames":dropped,"duration_ms":row["duration_ms"],"sealed":true,"sha256":sha256_hex(&bytes)}})
         } else {
             next.dropped_frames.insert(id.clone(), 0);
+            if method == "recordStart" {
+                if let Some(fps) = req["max_fps"].as_u64() {
+                    next.max_fps.insert(id.clone(), fps);
+                }
+            }
             next.rows.insert(id.clone(),json!({"id":id,"kind":if method=="screenshot"{"shot"}else{"recording"},"surface_id":surface,"phase":"recording","frames":0,"duration_ms":0,"sealed":false,"created_ms":now_ms}));
             next.append_frame(&id, now_ms, &mut events)?;
             if method == "screenshot" {
@@ -525,6 +562,109 @@ mod tests {
         );
         assert_eq!(host, before);
         assert_eq!(host.retained_bytes().unwrap(), MEMORY);
+    }
+
+    #[test]
+    fn rec_61_refused_budget() {
+        let mut host = Host::default();
+        let surfaces = BTreeSet::from(["surface-demo".to_owned()]);
+        host.frame(&frame("surface-demo"), b"pixels".to_vec(), 0)
+            .unwrap();
+        // Negative control: 60 fps is within the raised Host ceiling and succeeds.
+        let (ok_host, ok_reply, ok_events) = host
+            .prepare(
+                "recordStart",
+                &json!({"schema":"capture_request/v1","request_id":"req-60","surface_id":"surface-demo","mode":"ai","max_fps":60}),
+                surfaces.clone(),
+                0,
+            )
+            .unwrap();
+        assert_eq!(ok_reply["ok"], true);
+        assert!(!ok_events.is_empty());
+        assert_eq!(ok_events[0]["events"][0]["event"], "started");
+        drop(ok_host);
+
+        // 61 fps exceeds Host limits.max_fps (60) and must be refused with BUDGET_EXCEEDED.
+        let (refused_host, reply, events) = host
+            .prepare(
+                "recordStart",
+                &json!({"schema":"capture_request/v1","request_id":"req-61","surface_id":"surface-demo","mode":"ai","max_fps":61}),
+                surfaces,
+                0,
+            )
+            .unwrap();
+        assert_eq!(reply["ok"], false);
+        assert_eq!(reply["code"], "BUDGET_EXCEEDED");
+        assert_eq!(events[0]["events"][0]["event"], "refused");
+        assert_eq!(events[0]["events"][0]["reason_code"], "BUDGET_EXCEEDED");
+        assert!(refused_host.rows.is_empty());
+    }
+
+    #[test]
+    fn rec_decimates_to_period() {
+        let mut host = Host::default();
+        let surfaces = BTreeSet::from(["surface-demo".to_owned()]);
+        let frame_with = |byte: u8| -> (FrameRef, Vec<u8>) {
+            let bytes = vec![byte; 3];
+            let mut value: Value = serde_json::from_str(include_str!(
+                "../../../contracts/examples/v0.2/frame_ref.valid.json"
+            ))
+            .unwrap();
+            value["surface_id"] = "surface-demo".into();
+            value["sha256"] = sha256_hex(&bytes).into();
+            (serde_json::from_value(value).unwrap(), bytes)
+        };
+        let (f0, b0) = frame_with(1);
+        host.frame(&f0, b0, 0).unwrap();
+        // Start at 3 fps (period = 1000 / 3 = 333 ms); initial frame at t=0 is kept.
+        let (mut host, start_reply, _) = host
+            .prepare(
+                "recordStart",
+                &json!({"schema":"capture_request/v1","request_id":"req-dec","surface_id":"surface-demo","mode":"ai","max_fps":3}),
+                surfaces.clone(),
+                0,
+            )
+            .unwrap();
+        assert_eq!(start_reply["ok"], true);
+        let rec_id = start_reply["recording_id"].as_str().unwrap().to_owned();
+
+        // Over-rate frames at 100 ms and 332 ms (< 333 ms since t=0) must be dropped.
+        for (t, byte) in [(100_u64, 2_u8), (332, 3)] {
+            let (f, b) = frame_with(byte);
+            let ev = host.frame(&f, b, t).unwrap();
+            assert!(ev.is_empty(), "frame at {t} ms must be decimated");
+        }
+        // Frame at 333 ms (>= 333 ms since t=0) must be kept.
+        let (f3, b3) = frame_with(4);
+        let ev3 = host.frame(&f3, b3, 333).unwrap();
+        assert_eq!(ev3.len(), 1, "frame at 333 ms must be kept");
+
+        // Frame at 500 ms (167 ms since last kept at 333 ms) must be dropped.
+        let (f4, b4) = frame_with(5);
+        let ev4 = host.frame(&f4, b4, 500).unwrap();
+        assert!(ev4.is_empty(), "frame at 500 ms must be decimated");
+
+        // Frame at 666 ms (333 ms since last kept at 333 ms) must be kept.
+        let (f5, b5) = frame_with(6);
+        let ev5 = host.frame(&f5, b5, 666).unwrap();
+        assert_eq!(ev5.len(), 1, "frame at 666 ms must be kept");
+
+        let (_, stop_reply, _) = host
+            .prepare(
+                "recordStop",
+                &json!({"request_id":"stop-dec","recording_id":rec_id}),
+                surfaces,
+                700,
+            )
+            .unwrap();
+        assert_eq!(stop_reply["ok"], true);
+        assert_eq!(stop_reply["recording"]["frames"], 3);
+        assert_eq!(stop_reply["recording"]["dropped_frames"], 3);
+        let expected_bytes = [vec![1_u8; 3], vec![4_u8; 3], vec![6_u8; 3]].concat();
+        assert_eq!(
+            stop_reply["recording"]["sha256"],
+            sha256_hex(&expected_bytes)
+        );
     }
 }
 
