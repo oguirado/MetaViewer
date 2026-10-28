@@ -149,21 +149,39 @@ export function installQaAnchorReporter({ window, document, facade, scheduler })
   let seq = 0;
   let lastReport = -Infinity;
   let lastRows = '';
+  // Injected-clock time of the first settle in the current unreported burst,
+  // or null when idle. Pins the maximum-wait deadline; see settle/report.
+  /** @type {number|null} */
+  let firstPendingAt = null;
   /** @type {number|undefined} */
   let timer;
   const settle = () => {
     if (disposed) return;
     if (timer !== undefined) clock.clearTimeout(timer);
-    timer = clock.setTimeout(report, Math.max(250, lastReport + 500 - clock.now()));
+    const now = clock.now();
+    // Pin the deadline to the FIRST settle of the burst: later settles may
+    // reschedule the timer but must never move the deadline, else continuous
+    // churn postpones reporting indefinitely.
+    if (firstPendingAt === null) firstPendingAt = now;
+    const spacing = Math.max(250, lastReport + 500 - now);
+    const ceiling = Math.max(0, firstPendingAt + 1000 - now);
+    timer = clock.setTimeout(report, Math.min(spacing, ceiling));
   };
   const report = () => {
     timer = undefined;
     if (disposed) return;
+    // The ceiling may fire before minimum spacing elapsed when the clock
+    // jumps; defer to the spacing bound without dropping the pending burst.
+    if (clock.now() < lastReport + 500) {
+      timer = clock.setTimeout(report, lastReport + 500 - clock.now());
+      return;
+    }
     const snapshot = collectQaAnchors(document, window, seq + 1);
     const rows = JSON.stringify(snapshot.rows);
-    if (rows === lastRows) return;
+    if (rows === lastRows) { firstPendingAt = null; return; }
     lastRows = rows;
     lastReport = clock.now();
+    firstPendingAt = null;
     seq += 1;
     // QA transport errors must not disturb the renderer or leave a rejected promise.
     try { Promise.resolve(facade.reportAnchors(snapshot)).catch(() => {}); } catch { /* Host may be closing. */ }
@@ -181,6 +199,7 @@ export function installQaAnchorReporter({ window, document, facade, scheduler })
   return () => {
     if (disposed) return;
     disposed = true;
+    firstPendingAt = null;
     if (timer !== undefined) clock.clearTimeout(timer);
     mutations.disconnect();
     resize?.disconnect();
