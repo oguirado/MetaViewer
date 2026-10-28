@@ -510,6 +510,12 @@ surface-0f1dcf3c11bc	contracts/examples/v0.2/surface_event.valid.variant-012.jso
 surface-7baa97b9be92	contracts/examples/v0.2/surface_event.valid.variant-013.json
 surface-0949e492dbd9	contracts/examples/v0.2/surface_event.valid.variant-014.json
 surface-6f1cd4e92e76	contracts/examples/v0.2/surface_event.valid.variant-015.json
+surface-cce8fc947a47	contracts/examples/v0.2/surface_input.invalid.bad_chord.json
+surface-df6267c3939b	contracts/examples/v0.2/surface_input.invalid.empty_events.json
+surface-0fcdc08f8d06	contracts/examples/v0.2/surface_input.invalid.extra_field.json
+surface-f1b7b1d309f1	contracts/examples/v0.2/surface_input.invalid.seq_zero.json
+surface-762dff154671	contracts/examples/v0.2/surface_input.invalid.unknown_kind.json
+surface-ceb924ff564a	contracts/examples/v0.2/surface_input.valid.json
 surface-4f027f509f4f	contracts/examples/v0.2/surface_request.invalid.dropped_required.json
 surface-dfca270c5ba5	contracts/examples/v0.2/surface_request.invalid.nested_depth_2.json
 surface-210d0919f5fb	contracts/examples/v0.2/surface_request.invalid.nested_depth_negative.json
@@ -612,6 +618,7 @@ session-3f2b82697292	contracts/v0.2/session_record.schema.json
 settings.schema.json	contracts/v0.2/settings.schema.json
 surface-b216ed5f7c64	contracts/v0.2/surface.schema.json
 surface-40dd9d5d29b9	contracts/v0.2/surface_event.schema.json
+surface-61831a5672f9	contracts/v0.2/surface_input.schema.json
 surface-c0c127a65733	contracts/v0.2/surface_request.schema.json
 termina-67ae74419fc5	contracts/v0.2/terminal_session.schema.json
 ui_intent.schema.json	contracts/v0.2/ui_intent.schema.json
@@ -961,6 +968,7 @@ e2e23un-1d4e421a06ba	tests/e2e/e2e23_unknown_vs_destroyed.test.js
 e2e24ro-1aa3fa8b643d	tests/e2e/e2e24_routing_ownership.test.js
 e2e25pr-dd2ec19b4571	tests/e2e/e2e25_production_frames.test.js
 e2e26co-d464321269f1	tests/e2e/e2e26_control_with_frames.test.js
+e2e27hu-4784699a17ae	tests/e2e/e2e27_human_input.test.js
 e2e2_scenario.test.js	tests/e2e/e2e2_scenario.test.js
 e2e3_refusals.test.js	tests/e2e/e2e3_refusals.test.js
 e2e4_seams.test.js	tests/e2e/e2e4_seams.test.js
@@ -1388,6 +1396,7 @@ uielsmo-2d86eec1e39f	ui/test/uiel-smoke-rss.test.js
 uiel2au-1c86966804a4	ui/test/uiel2-authority-confinement.test.js
 w3contr-ee4ed320402b	ui/test/w3-control-timeout.test.js
 w3frame-6611301ee8f6	ui/test/w3-frame-acquire.test.js
+w3human-ae6e9f701b17	ui/test/w3-human-input.test.js
 wall.test.js	ui/test/wall.test.js
 wireaut-1b048c3b3100	ui/test/wire-authority.test.js
 wirepre-95bfb7c6fbc5	ui/test/wire-preload-origin.test.js
