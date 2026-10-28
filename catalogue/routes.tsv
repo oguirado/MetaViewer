@@ -699,6 +699,7 @@ admission_matrix.rs	core/tests/admission_matrix.rs
 ailoop_verify.rs	core/tests/ailoop_verify.rs
 catalog_authority.rs	core/tests/catalog_authority.rs
 control_facade.rs	core/tests/control_facade.rs
+corehash_mut.rs	core/tests/corehash_mut.rs
 decode_envelope.rs	core/tests/decode_envelope.rs
 frame_timings.rs	core/tests/frame_timings.rs
 frames_parity.rs	core/tests/frames_parity.rs
