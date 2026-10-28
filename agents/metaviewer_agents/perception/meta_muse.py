@@ -13,9 +13,11 @@ the core.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import re
+import stat
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -76,8 +78,7 @@ def _check_int(value: object, *, minimum: int, name: str) -> int:
 
 
 def _frame_dims(frame_ref: object) -> tuple[int, int]:
-    # The adapter binds only schema generation and dimensions; the
-    # full trusted binding stays with the core observation check.
+    # Validate shape before acquiring and binding RGB24 pixels below.
     if not isinstance(frame_ref, Mapping):
         _fail("bad_shape", "frame_ref is not an object")
     assert isinstance(frame_ref, Mapping)
@@ -95,8 +96,7 @@ def _frame_dims(frame_ref: object) -> tuple[int, int]:
 
 def _check_frame_arg(value: object, *, name: str,
                      width: int, height: int) -> None:
-    # The adapter never opens frame paths itself; the containment
-    # check just keeps non-RAM inputs from reaching the transport.
+    # Containment is checked before opening and binding current-frame bytes.
     if value is None:
         return
     if isinstance(value, Frame):
@@ -175,8 +175,35 @@ class MetaMusePerceptionAdapter(PerceptionAdapter):
         width, height = _frame_dims(frame_ref)
         _check_frame_arg(frame, name="frame", width=width, height=height)
         _check_frame_arg(prev, name="prev", width=width, height=height)
+        from .vcore import _BoundVision, _check_hex64, _ramws_frame
+        _check_hex64(frame_ref.get("sha256"), name="frame_ref.sha256")
         if self._credential is None:
             _fail("unavailable", "muse credential not configured")
+        if isinstance(frame, Frame):
+            bound_frame = frame
+        elif isinstance(frame, (str, Path)) and str(frame).startswith("/proc/self/fd/"):
+            # Duplicate the owned descriptor; pread preserves the caller's cursor.
+            fd = None
+            try:
+                fd = os.dup(int(str(frame).rsplit("/", 1)[1]))
+                info = os.fstat(fd)
+                expected = width * height * 3
+                if not stat.S_ISREG(info.st_mode) or info.st_size != expected:
+                    _fail("bad_shape", "frame descriptor is not a regular RGB24 file")
+                bound_frame = Frame(width, height, os.pread(fd, expected + 1, 0))
+            except (OSError, ValueError) as error:
+                raise PerceptionError("bad_shape", "frame descriptor unreadable") from error
+            finally:
+                if fd is not None:
+                    os.close(fd)
+        elif frame is None:
+            bound_frame = _ramws_frame(frame_ref, width, height)
+        else:
+            # [TARGET, unit decision] Muse paths carry raw RGB24, like ramws_path.
+            bound_frame = _ramws_frame({"ramws_path": str(frame)}, width, height)
+        Frame.__post_init__(bound_frame)
+        if hashlib.sha256(bound_frame.data).hexdigest() != frame_ref["sha256"]:
+            _fail("identity_mismatch", "pixels disagree with frame_ref")
         request = {
             "schema": _REQUEST_SCHEMA,
             "frame_ref": copy.deepcopy(dict(frame_ref)),
@@ -220,4 +247,4 @@ class MetaMusePerceptionAdapter(PerceptionAdapter):
         # observation check, re-raised as PerceptionError by base.
         check_vision(vision, width=width, height=height)
         assert isinstance(vision, dict)
-        return copy.deepcopy(vision)
+        return _BoundVision(copy.deepcopy(vision), frame_ref["sha256"])

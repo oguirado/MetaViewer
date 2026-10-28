@@ -26,6 +26,7 @@ from metaviewer_agents.planner import (  # noqa: E402
     plan,
     recheck_plan,
 )
+from metaviewer_agents.perception.vcore import _BoundVision  # noqa: E402
 from metaviewer_agents.verify import run_loop  # noqa: E402
 from metaviewer_agents.wender_bridge import WenderSubprocessAdapter  # noqa: E402
 
@@ -52,18 +53,21 @@ def _observation(*, frame: dict | None = None) -> dict:
     return {
         "schema": "observation/v0.2",
         "frame_ref": active_frame,
-        "vision": {
-            "summary": "fixture vision",
-            "changed_regions": [{"x": 10, "y": 20, "w": 40, "h": 20}],
-            "elements": [
-                {
-                    "bbox": {"x": 10, "y": 20, "w": 40, "h": 20},
-                    "role": "button",
-                    "name": "Continue",
-                    "confidence": 0.9,
-                }
-            ],
-        },
+        "vision": _BoundVision(
+            {
+                "summary": "fixture vision",
+                "changed_regions": [{"x": 10, "y": 20, "w": 40, "h": 20}],
+                "elements": [
+                    {
+                        "bbox": {"x": 10, "y": 20, "w": 40, "h": 20},
+                        "role": "button",
+                        "name": "Continue",
+                        "confidence": 0.9,
+                    }
+                ],
+            },
+            active_frame["sha256"],
+        ),
     }
 
 

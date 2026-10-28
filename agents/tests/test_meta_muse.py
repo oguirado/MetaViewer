@@ -9,6 +9,7 @@ value, never a real credential.
 """
 
 import contextlib
+import hashlib
 import io
 import json
 import sys
@@ -35,7 +36,9 @@ SECRET = "muse-secret-canary-98765"
 CREDENTIAL = SECRET.encode("utf-8")
 RESPONSE_SCHEMA = "muse.vision/v1"
 REQUEST_SCHEMA = "muse.vision.request/v1"
-_SHA = "ab" * 32
+_PIXELS = b"\x00" * (800 * 600 * 3)
+_SHA = hashlib.sha256(_PIXELS).hexdigest()
+_DEFAULT_RAMWS_PATH = "/dev/shm/ramws/demo.rgb"
 
 
 def _frame_ref(**overrides):
@@ -48,7 +51,7 @@ def _frame_ref(**overrides):
         "width": 800,
         "height": 600,
         "format": "rgb24",
-        "ramws_path": "/dev/shm/ramws/demo.rgb",
+        "ramws_path": _DEFAULT_RAMWS_PATH,
         "sha256": _SHA,
         "capture_us": 120,
     }
@@ -106,6 +109,15 @@ class _Recorder:
 
 
 class MetaMusePerceptionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        global _DEFAULT_RAMWS_PATH
+        cls._shm = tempfile.TemporaryDirectory(prefix="mv-muse-", dir="/dev/shm")
+        cls.addClassCleanup(cls._shm.cleanup)
+        demo_path = Path(cls._shm.name) / "demo.rgb"
+        demo_path.write_bytes(_PIXELS)
+        _DEFAULT_RAMWS_PATH = str(demo_path)
+
     def assertCode(self, code, call, *args, **kwargs):
         with self.assertRaises(PerceptionError) as caught:
             call(*args, **kwargs)
@@ -420,17 +432,19 @@ class MetaMusePerceptionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir="/dev/shm") as shm_dir:
             shm_root = Path(shm_dir)
             demo_rgb = shm_root / "demo.rgb"
-            demo_rgb.write_bytes(b"\x00" * 16)
+            demo_rgb.write_bytes(_PIXELS)
             marks_json = shm_root / "marks.json"
-            marks_json.write_text("{}", encoding="utf-8")
+            marks_json.write_bytes(_PIXELS)
             symlink_rgb = shm_root / "symlink.rgb"
             symlink_rgb.symlink_to(demo_rgb)
-            for good in (str(demo_rgb), "/proc/self/fd/3", marks_json):
-                with self.subTest(path=str(good)):
-                    self.assertEqual(adapter.perceive(_frame_ref(), good),
-                                     _vision())
-                    self.assertEqual(
-                        adapter.perceive(_frame_ref(), prev=good), _vision())
+            with demo_rgb.open("rb") as fd_handle:
+                fd_path = "/proc/self/fd/%d" % fd_handle.fileno()
+                for good in (str(demo_rgb), fd_path, marks_json):
+                    with self.subTest(path=str(good)):
+                        self.assertEqual(adapter.perceive(_frame_ref(), good),
+                                         _vision())
+                        self.assertEqual(
+                            adapter.perceive(_frame_ref(), prev=good), _vision())
             for bad in ("", "/tmp/x.rgb", "relative/x.rgb", "/home/u/x.rgb",
                         "/dev/shm", "/dev/shm/../etc/x", "/dev/shm/a\x00b",
                         "/dev/shm/nonexistent-ramws-demo.rgb",

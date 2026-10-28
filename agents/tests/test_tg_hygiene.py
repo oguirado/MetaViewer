@@ -1,6 +1,7 @@
 """U3-AG-05: process/credential pins and real timeout reaping on both paths."""
 import ast
 from collections import Counter
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -126,7 +127,24 @@ def process_audit(source, filename):
         keywords = {keyword.arg: keyword.value for keyword in node.keywords}
         if None in keywords or not {"timeout", "env", "cwd", "stdin"} <= keywords.keys():
             violations.append("unbounded spawn")
-        if ast.unparse(keywords.get("timeout", ast.Constant(None))) != "self.timeout":
+        timeout_expr = ast.unparse(keywords.get("timeout", ast.Constant(None)))
+        has_shared_deadline = (
+            site == "VCorePerceptionAdapter.perceive"
+            and timeout_expr == "timeout"
+            and any(
+                isinstance(child, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == "deadline" for t in child.targets)
+                and ast.unparse(child.value) == "time.monotonic() + self.timeout"
+                for child in ast.walk(function)
+            )
+            and any(
+                isinstance(child, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == "timeout" for t in child.targets)
+                and ast.unparse(child.value) == "_remaining_timeout(deadline)"
+                for child in ast.walk(function)
+            )
+        )
+        if timeout_expr != "self.timeout" and not has_shared_deadline:
             violations.append("missing adapter deadline")
         if not node.args or not isinstance(node.args[0], ast.Name):
             violations.append("argv is not an explicit local list")
@@ -337,7 +355,10 @@ else:
                             if method == "run_vcore":
                                 adapter.run_vcore("selftest")
                             else:
-                                adapter.perceive({"width": 4, "height": 4}, Frame(4, 4, bytes(48)))
+                                adapter.perceive(
+                                    {"width": 4, "height": 4, "sha256": hashlib.sha256(bytes(48)).hexdigest()},
+                                    Frame(4, 4, bytes(48)),
+                                )
                     self.assertEqual(caught.exception.code, "timeout")
                     self.assertEqual(len(children), 1)
                     child = children[0]

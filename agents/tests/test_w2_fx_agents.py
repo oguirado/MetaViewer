@@ -11,7 +11,9 @@ from tests.test_wender_bridge import observation, reply
 from metaviewer_agents.observe import ObservationError, compute_battery_state_sha256
 from metaviewer_agents.perception.base import PerceptionError
 from metaviewer_agents.perception.deps_lock import DependencyLockError
-from metaviewer_agents.perception.vcore import VCorePerceptionAdapter, project_element_table
+from metaviewer_agents.perception.vcore import (
+    VCorePerceptionAdapter, _BoundVision, project_element_table,
+)
 from metaviewer_agents.wender_bridge import WenderSubprocessAdapter, validate_state
 
 
@@ -22,10 +24,11 @@ class Day2Regressions(unittest.TestCase):
 
     def test_element_rows_closed_before_spawn(self):
         adapter = self.adapter()
-        projected = project_element_table(observation()['frame_ref'], {
+        projected = project_element_table(observation()['frame_ref'], _BoundVision({
             'summary': '', 'changed_regions': [], 'elements': [{
                 'bbox': {'x': 0, 'y': 0, 'w': 100, 'h': 80},
-                'role': 'button', 'name': 'Continue', 'confidence': 1}]})
+                'role': 'button', 'name': 'Continue', 'confidence': 1}]},
+            observation()['frame_ref']['sha256']))
         original = copy.deepcopy(projected)
         adapter.plan_step(observation(), projected, 'Continue')
         self.assertEqual(projected, original)
@@ -132,10 +135,11 @@ class Day2Regressions(unittest.TestCase):
                    "import sys,json; sys.stderr.write('x'*65536); sys.stderr.flush(); "
                    "json.load(sys.stdin); sys.stdout.write(" + repr(raw) + ")"]
         adapter = WenderSubprocessAdapter(command=command, wender_root=self.root, timeout=2)
-        projected = project_element_table(observation()['frame_ref'], {
+        projected = project_element_table(observation()['frame_ref'], _BoundVision({
             'summary': '', 'changed_regions': [], 'elements': [{
                 'bbox': {'x': 0, 'y': 0, 'w': 1, 'h': 1},
-                'role': 'button', 'name': 'Continue', 'confidence': 1}]})
+                'role': 'button', 'name': 'Continue', 'confidence': 1}]},
+            observation()['frame_ref']['sha256']))
         adapter.plan_step(observation(), projected, 'x' * 131072)
 
     def test_wender_lock_verification_independent_control(self):

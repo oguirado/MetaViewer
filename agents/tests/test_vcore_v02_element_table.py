@@ -15,7 +15,7 @@ from metaviewer_agents.observe import (
 )
 from metaviewer_agents.perception.base import Frame, PerceptionError
 from metaviewer_agents.perception.vcore import (
-    VCorePerceptionAdapter, VQA_SCHEMAS, project_element_table,
+    VCorePerceptionAdapter, VQA_SCHEMAS, _BoundVision, project_element_table,
 )
 
 
@@ -113,8 +113,9 @@ class V02ElementTableTests(unittest.TestCase):
             bad = c2()
             bad['marks'][0][key] = value
             self.assert_code('bad_shape', PerceptionError, project_element_table, frame_ref(), bad)
-        vision = dict(summary='', changed_regions=[], elements=[
-            dict(bbox=dict(x=0, y=0, w=1, h=1), role='button', name='', confidence=0)])
+        vision = _BoundVision(dict(summary='', changed_regions=[], elements=[
+            dict(bbox=dict(x=0, y=0, w=1, h=1), role='button', name='', confidence=0)]),
+            frame_ref()['sha256'])
         for score, ppm in ((0, 0), (1, 1000000), (0.0000015, 2)):
             vision['elements'][0]['confidence'] = score
             self.assertEqual(ppm, project_element_table(frame_ref(), vision)['elements'][0]['score_ppm'])

@@ -229,13 +229,22 @@ class DependencyLockTests(unittest.TestCase):
                 "root = pathlib.Path(sys.argv[sys.argv.index('-C') + 1])\n"
                 "if 'rev-parse' in sys.argv:\n"
                 "    print((root / 'fake-head').read_text())\n"
+                "elif 'ls-files' in sys.argv:\n"
+                "    print((root / 'fake-ls-files').read_text(), end='')\n"
+                "elif 'ls-tree' in sys.argv:\n"
+                "    print((root / 'fake-ls-tree').read_text(), end='')\n"
                 "elif 'status' in sys.argv:\n"
                 "    print((root / 'fake-status').read_text())\n"
                 "else:\n"
                 "    sys.exit(22)\n"
             )
             tool.chmod(0o700)
+            blob = self.run_git("hash-object", "tracked.txt")
             (self.repo / "fake-head").write_text(self.commit)
+            (self.repo / "fake-ls-files").write_text("H tracked.txt\0")
+            (self.repo / "fake-ls-tree").write_text(
+                f"100644 blob {blob}\ttracked.txt\0"
+            )
             status = self.repo / "fake-status"
             status.write_text("")
             with mock.patch.dict(os.environ, {"PATH": temporary, "MV_SECRET": "canary",

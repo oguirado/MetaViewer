@@ -24,6 +24,7 @@ import json
 import math
 import os
 import selectors
+import stat
 import struct
 import subprocess
 import time
@@ -245,7 +246,7 @@ def _ram_marks_path(value: object) -> Path:
         raise AssertionError("unreachable")
     try:
         destination = Path(candidate).resolve()
-    except OSError:
+    except (OSError, ValueError):
         _fail("bad_shape", "marks path malformed")
         raise AssertionError("unreachable")
     if not destination.is_relative_to(_MARKS_ROOT):
@@ -302,7 +303,7 @@ def _existing_frame_path(value: str | Path) -> str:
             return direct
     try:
         resolved = Path(value).resolve()
-    except OSError:
+    except (OSError, ValueError):
         _fail("bad_shape", "frame path malformed")
         raise AssertionError("unreachable")
     if not resolved.is_relative_to(_SHM_ROOT):
@@ -311,9 +312,9 @@ def _existing_frame_path(value: str | Path) -> str:
 
 
 def _ramws_frame(frame_ref: Mapping[str, Any],
-                 width: int, height: int) -> Frame:
-    # A missing frame falls back to the bound ramws bytes; the digest
-    # is verified against C2 output by perceive().
+                 width: int, height: int, *, deadline: float | None = None) -> Frame:
+    # A missing frame loads regular RAM bytes; perceive() binds their digest
+    # to frame_ref before launching C2.
     raw_path = frame_ref.get("ramws_path")
     if (not isinstance(raw_path, str) or not raw_path.startswith(_RAMWS_PREFIX)
             or len(raw_path) <= len(_RAMWS_PREFIX) or _NUL in raw_path):
@@ -335,7 +336,7 @@ def _ramws_frame(frame_ref: Mapping[str, Any],
         _fail("bad_shape", "ramws_path leaves shared memory")
     expected = width * height * 3
     flags = (
-        os.O_RDONLY
+        os.O_RDONLY | os.O_NONBLOCK
         | getattr(os, "O_NOFOLLOW", 0)
         | getattr(os, "O_CLOEXEC", 0)
     )
@@ -347,9 +348,14 @@ def _ramws_frame(frame_ref: Mapping[str, Any],
         raise PerceptionError(
             "unavailable", "bound ramws bytes are not readable") from exc
     try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size != expected:
+            _fail("bad_shape", "ramws descriptor is not a regular RGB24 file")
         chunks: list[bytes] = []
         remaining = expected + 1
         while remaining > 0:
+            if deadline is not None and time.monotonic() >= deadline:
+                _fail("timeout", "RAM acquisition timed out")
             chunk = os.read(fd, remaining)
             if not chunk:
                 break
@@ -369,7 +375,7 @@ def _ramws_frame(frame_ref: Mapping[str, Any],
 def _parse_json_object(stdout: bytes, *, what: str) -> dict[str, Any]:
     try:
         payload = json.loads(stdout)
-    except (ValueError, TypeError) as exc:
+    except (ValueError, TypeError, RecursionError) as exc:
         raise PerceptionError(
             "bad_shape", "%s response is not JSON" % what) from exc
     if not isinstance(payload, dict):
@@ -423,7 +429,7 @@ def _parse_c2_payload(stdout: bytes, *, width: int, height: int,
         name = "C2 crops[%d]" % index
         _check_box(crop, width=width, height=height, name=name)
         assert isinstance(crop, dict)
-        if crop.get("reason") not in _CROP_REASONS:
+        if not isinstance(crop.get("reason"), str) or crop["reason"] not in _CROP_REASONS:
             _fail("bad_shape", name + " reason unknown")
     marks: list[dict[str, Any]] = []
     marks_png: str | None = None
@@ -446,7 +452,7 @@ def _parse_c2_payload(stdout: bytes, *, width: int, height: int,
             if candidate.get("id") != position:
                 _fail("bad_shape", "%s id is not sequential" % name)
             _check_box(candidate, width=width, height=height, name=name)
-            if candidate.get("kind") not in _MARK_KINDS:
+            if not isinstance(candidate.get("kind"), str) or candidate["kind"] not in _MARK_KINDS:
                 _fail("bad_shape", name + " kind unknown")
             _check_unit_ratio(candidate.get("score"), name=name + ".score")
             ocr_text = candidate.get("ocr_text")
@@ -474,6 +480,30 @@ def _parse_c2_payload(stdout: bytes, *, width: int, height: int,
     }
 
 
+# [TARGET, unit decision] Closed vision JSON retains provenance only in-process.
+class _BoundVision(dict):
+    def __init__(self, vision: dict[str, Any], frame_sha256: str):
+        super().__init__(vision)
+        self.frame_sha256 = frame_sha256
+
+
+def _validate_timeout(timeout: float) -> None:
+    try:
+        valid = (not isinstance(timeout, bool) and isinstance(timeout, (int, float))
+                 and math.isfinite(timeout) and 0 < timeout <= 60)
+    except OverflowError:
+        valid = False
+    if not valid:
+        _fail("bad_shape", "timeout must be positive and at most 60 seconds")
+
+
+def _remaining_timeout(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        _fail("timeout", "perception deadline exhausted")
+    return remaining
+
+
 def _run_bounded(
     command: list[str],
     *,
@@ -483,6 +513,9 @@ def _run_bounded(
     timeout: float,
     pass_fds: tuple[int, ...] = (),
 ) -> subprocess.CompletedProcess[bytes]:
+    _validate_timeout(timeout)
+    if any(not isinstance(arg, str) or _NUL in arg for arg in command):
+        _fail("bad_shape", "subprocess argv malformed")
     if subprocess.run is not _STDLIB_RUN:
         if pass_fds:
             return subprocess.run(
@@ -605,7 +638,7 @@ def project_element_table(frame_ref: Mapping[str, Any],
     """Project validated vision or a raw C2 response into integer-only evidence.
 
     Raw C2 evidence must carry the same RGB24 digest as the caller's frame_ref.
-    Normalized vision relies on the caller's existing frame binding.
+    Normalized vision must retain the adapter's in-process pixel binding.
     """
     width, height = _bound_dims(frame_ref)
     _check_hex64(frame_ref.get("sha256"), name="frame_ref.sha256")
@@ -621,6 +654,9 @@ def project_element_table(frame_ref: Mapping[str, Any],
             _fail("identity_mismatch", "C2 digest disagrees with frame_ref")
         vision = _vision_from_c2(parsed, width, height)
     check_vision(vision, width=width, height=height)
+    if "schema" not in vision_or_c2 and (
+            not isinstance(vision, _BoundVision) or vision.frame_sha256 != frame_ref["sha256"]):
+        _fail("identity_mismatch", "normalized vision has no matching frame binding")
     return {
         "schema": "vqa.element-table/v1",
         "frame_sha256": frame_ref["sha256"],
@@ -650,18 +686,8 @@ class VCorePerceptionAdapter(PerceptionAdapter):
                  marks_out: str | Path | None = None,
                  ocr_marks: bool = False,
                  verify_lock: bool = False) -> None:
-        try:
-            timeout_ok = (
-                not isinstance(timeout, bool)
-                and isinstance(timeout, (int, float))
-                and math.isfinite(timeout)
-                and timeout > 0
-            )
-        except OverflowError:
-            timeout_ok = False
-        if not timeout_ok:
-            _fail("bad_shape", "timeout must be positive and finite")
-        if not isinstance(python, str) or not python:
+        _validate_timeout(timeout)
+        if not isinstance(python, str) or not python or _NUL in python:
             _fail("bad_shape", "python interpreter malformed")
         if type(ocr_marks) is not bool:
             _fail("bad_shape", "ocr_marks must be a boolean")
@@ -679,13 +705,18 @@ class VCorePerceptionAdapter(PerceptionAdapter):
     def perceive(self, frame_ref: Mapping[str, Any],
                  frame: Frame | str | Path | None = None, *,
                  prev: Frame | str | Path | None = None) -> dict[str, Any]:
+        _validate_timeout(self.timeout)
+        deadline = time.monotonic() + self.timeout
         width, height = _bound_dims(frame_ref)
+        _check_hex64(frame_ref.get("sha256"), name="frame_ref.sha256")
         _check_frame_arg(frame, name="frame", width=width, height=height)
         _check_frame_arg(prev, name="prev", width=width, height=height)
         if frame is None:
-            frame = _ramws_frame(frame_ref, width, height)
+            frame = _ramws_frame(frame_ref, width, height, deadline=deadline)
         if isinstance(frame, Frame):
             expected_sha = hashlib.sha256(frame.data).hexdigest()
+            if expected_sha != frame_ref["sha256"]:
+                _fail("identity_mismatch", "pixels disagree with frame_ref")
         else:
             _check_hex64(frame_ref.get("sha256"), name="frame_ref.sha256")
             expected_sha = frame_ref["sha256"]
@@ -721,11 +752,12 @@ class VCorePerceptionAdapter(PerceptionAdapter):
             if self.ocr_marks:
                 command.append("--ocr-marks")
             command.append("--json")
+            timeout = _remaining_timeout(deadline)
             try:
                 result = _run_bounded(
                     command, cwd=str(self.ve_root), env=env,
                     stdin=subprocess.DEVNULL,
-                    timeout=self.timeout, pass_fds=tuple(fds))
+                    timeout=timeout, pass_fds=tuple(fds))
             except subprocess.TimeoutExpired as exc:
                 raise PerceptionError(
                     "timeout", "C2 subprocess timed out") from exc
@@ -752,7 +784,7 @@ class VCorePerceptionAdapter(PerceptionAdapter):
         self.last_timing_us = parsed["timing_us"]
         vision = _vision_from_c2(parsed, width, height)
         check_vision(vision, width=width, height=height)
-        return vision
+        return _BoundVision(vision, frame_ref["sha256"])
 
     def run_vcore(self, verb: str,
                   args: tuple[str, ...] | list[str] = ()) -> dict[str, Any]:
@@ -762,13 +794,13 @@ class VCorePerceptionAdapter(PerceptionAdapter):
         stale frame, 5 is unavailable, and 6 exhausts the budget; the
         engine never uses exit 1, so it is refused as malformed.
         """
-        if verb not in VCORE_VERBS:
+        if not isinstance(verb, str) or verb not in VCORE_VERBS:
             _fail("bad_shape", "unknown vcore verb %r" % (verb,))
         if not isinstance(args, (tuple, list)):
             _fail("bad_shape", "vcore args must be a sequence")
         assert isinstance(args, (tuple, list))
         for index, item in enumerate(args):
-            if not isinstance(item, str):
+            if not isinstance(item, str) or _NUL in item:
                 _fail("bad_shape", "vcore arg[%d] is not a string" % index)
         command = [self.python, "-m", "visioncore.cli", verb, *args]
         try:

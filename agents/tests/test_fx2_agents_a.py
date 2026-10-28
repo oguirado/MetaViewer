@@ -57,6 +57,15 @@ def _c2_payload(frame_sha256: str, width: int = 4, height: int = 4) -> dict:
 
 
 class FX2AgentsARegressionTests(unittest.TestCase):
+    def _muse_ref(self):
+        temporary = tempfile.TemporaryDirectory(dir="/dev/shm")
+        self.addCleanup(temporary.cleanup)
+        path = Path(temporary.name) / "frame.rgb"
+        data = b"x" * (8 * 8 * 3)
+        path.write_bytes(data)
+        return _vcore_frame_ref(hashlib.sha256(data).hexdigest(), width=8, height=8,
+                                ramws_path=str(path))
+
     def test_ag2_01_perceive_binds_c2_digest(self) -> None:
         with tempfile.TemporaryDirectory() as ve_dir:
             adapter = VCorePerceptionAdapter(ve_dir, python=sys.executable)
@@ -101,6 +110,16 @@ class FX2AgentsARegressionTests(unittest.TestCase):
             with mock.patch.object(subprocess, "run", return_value=ok_path_completed):
                 out_path = adapter.perceive(path_ref, "/dev/shm/mv0-fx2-path.png")
                 self.assertIn("summary", out_path)
+
+    def test_r3_inline_mismatch_never_spawns(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            adapter = VCorePerceptionAdapter(root, python=sys.executable)
+            ref = _vcore_frame_ref(hashlib.sha256(b"AAA").hexdigest(), 1, 1)
+            with mock.patch.object(subprocess, "Popen") as spawn:
+                with self.assertRaises(PerceptionError) as caught:
+                    adapter.perceive(ref, Frame(1, 1, b"BBB"))
+                self.assertEqual(caught.exception.code, "identity_mismatch")
+                spawn.assert_not_called()
 
     def test_ag2_02_ramws_frame_refuses_symlink_escape(self) -> None:
         with tempfile.TemporaryDirectory() as outside_dir, \
@@ -200,6 +219,7 @@ class FX2AgentsARegressionTests(unittest.TestCase):
         AdmittedExecutor.check_target(ok_target, latest=[ok_target], frame=frame)
 
     def test_ag2_07_vision_summary_cap_aligned_across_layers(self) -> None:
+        bound_ref = self._muse_ref()
         # 4097-char summary refused at check_vision / perceive with bad_shape
         over_vision = {"summary": "s" * 4097, "changed_regions": [], "elements": []}
         with self.assertRaises(PerceptionError) as ctx:
@@ -213,7 +233,7 @@ class FX2AgentsARegressionTests(unittest.TestCase):
             credential=b"secret",
         )
         with self.assertRaises(PerceptionError) as ctx:
-            muse_over.perceive(_vcore_frame_ref("ab" * 32, width=8, height=8))
+            muse_over.perceive(bound_ref)
         self.assertEqual(ctx.exception.code, "bad_shape")
 
         # Negative control: 4096-char summary passes perceive and tools.observe() end-to-end
@@ -234,7 +254,7 @@ class FX2AgentsARegressionTests(unittest.TestCase):
                     "status": "ok",
                     "observation": {
                         "schema": "observation/v0.2",
-                        "frame_ref": _vcore_frame_ref("ab" * 32, width=8, height=8),
+                        "frame_ref": bound_ref,
                     },
                 }
 
@@ -254,7 +274,7 @@ class FX2AgentsARegressionTests(unittest.TestCase):
             }).encode("utf-8")
 
         adapter = MetaMusePerceptionAdapter(transport=transport, credential=b"secret")
-        ref = _vcore_frame_ref("ab" * 32, width=8, height=8)
+        ref = self._muse_ref()
 
         with tempfile.TemporaryDirectory() as outside_dir, \
                 tempfile.TemporaryDirectory(dir="/dev/shm") as shm_dir:
@@ -288,10 +308,11 @@ class FX2AgentsARegressionTests(unittest.TestCase):
                     self.assertEqual(ctx.exception.code, "bad_shape")
             self.assertEqual(calls, [])
 
-            # Negative control: real shm file and valid /proc/self/fd/0 pass
+            # Negative control: matching regular RGB24 files and owned fds pass
             out1 = adapter.perceive(ref, str(real_shm), prev=real_shm)
             self.assertEqual(out1["summary"], "ok")
-            out2 = adapter.perceive(ref, "/proc/self/fd/0")
+            with real_shm.open("rb") as stream:
+                out2 = adapter.perceive(ref, "/proc/self/fd/" + str(stream.fileno()))
             self.assertEqual(out2["summary"], "ok")
             self.assertEqual(len(calls), 2)
 
@@ -326,7 +347,7 @@ class FX2AgentsARegressionTests(unittest.TestCase):
             transport=lambda req, cred: dup_line,
             credential=b"secret",
         )
-        ref = _vcore_frame_ref("ab" * 32, width=8, height=8)
+        ref = self._muse_ref()
         with self.assertRaises(PerceptionError) as ctx:
             adapter.perceive(ref)
         self.assertEqual(ctx.exception.code, "bad_shape")

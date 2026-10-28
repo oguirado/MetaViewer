@@ -10,6 +10,8 @@ Ambiguous metadata and malformed provenance fail closed as unavailable.
 from __future__ import annotations
 
 import json
+import hashlib
+import stat
 import os
 from pathlib import Path
 import re
@@ -114,6 +116,31 @@ def _wheel_commit(root: Path, name: str) -> str:
         raise DependencyLockError("unavailable", "cannot verify wheel provenance") from error
 
 
+def _verify_tree(root: Path, commit: str, name: str) -> None:
+    """Hash tracked bytes directly, independent of index stat-cache hints."""
+    for entry in _git(root, "ls-tree", "-r", "-z", commit).split("\0"):
+        if not entry:
+            continue
+        try:
+            metadata, relative = entry.split("\t", 1)
+            mode, kind, expected = metadata.split()
+            path = root / relative
+            info = path.lstat()
+            if mode == "120000" and stat.S_ISLNK(info.st_mode):
+                data = os.fsencode(os.readlink(path))
+            elif mode in ("100644", "100755") and stat.S_ISREG(info.st_mode):
+                if bool(info.st_mode & 0o111) != (mode == "100755"):
+                    raise ValueError("tracked mode changed")
+                data = path.read_bytes()
+            else:
+                raise ValueError("unsupported or changed tracked type")
+            digest = hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
+            if kind != "blob" or digest != expected:
+                raise ValueError("tracked bytes changed")
+        except (OSError, ValueError) as error:
+            raise DependencyLockError("dirty_tree", f"{name} differs from pinned tree") from error
+
+
 def resolve_locked_component(name: str, *, lock_path: str | Path | None = None) -> Path:
     """Resolve an environment-selected component and prove its pinned revision.
 
@@ -134,6 +161,11 @@ def resolve_locked_component(name: str, *, lock_path: str | Path | None = None) 
         actual = _git(root, "rev-parse", "--verify", "HEAD")
         if actual != expected:
             raise DependencyLockError("commit_mismatch", f"{name} at {actual}, expected {expected}")
+        flags = _git(root, "ls-files", "-v", "-z")
+        if any(entry and (entry[0].islower() or entry[0] == "S")
+               for entry in flags.split("\0")):
+            raise DependencyLockError("dirty_tree", f"{name} has suppressed index entries")
+        _verify_tree(root, expected, name)
         if _git(root, "status", "--porcelain", "--untracked-files=no"):
             raise DependencyLockError("dirty_tree", f"{name} has tracked modifications")
     else:
