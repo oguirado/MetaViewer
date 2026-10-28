@@ -317,17 +317,32 @@ test('R3-T4-010 / R1-097 (T26) concurrent publishBundle rollback preserves winne
     await writeFile(join(stagedB, 'metaviewer'), 'loser-B-binary', { mode: 0o755 });
     await writeFile(join(stagedB, 'INSTALL.md'), 'loser-B-readme\n', { mode: 0o644 });
 
-    // Deterministic barrier: let A publish completely right before B's directory rename fails
+    // Deterministic barrier: let A publish completely, then verify B is refused with typed EEXIST
     const pubA = await publishStagedPackage(stagedA, workA, finalDir);
     assert.equal(pubA, undefined);
+    await assert.rejects(
+      () => publishStagedPackage(stagedB, workB, finalDir),
+      (err) => {
+        assert.equal(err.code, 'EEXIST');
+        assert.match(err.message, /Package destination already exists/);
+        return true;
+      },
+    );
+    assert.equal(await readFile(join(finalDir, 'INSTALL.md'), 'utf8'), 'winner-A-readme\n');
+    const shaA = spawnSync('sha256sum', ['-c', `${finalDir}.sha256`], {
+      cwd: finalDir,
+      encoding: 'utf8',
+    });
+    assert.equal(shaA.status, 0, shaA.stderr || shaA.stdout);
 
-    // If B had already entered the rename phase and clobbered finalManifest before failing on finalDir:
+    // Interleaving 1 (rendezvous barrier): both A and B pass pre-checks and reach rename;
+    // loser B2 renames finalManifest first, then winner W renames finalManifest and finalDir,
+    // then loser B2 fails on finalDir.
     const stagedB2 = join(workB, 'staged-2');
     await mkdir(stagedB2, { recursive: true });
     await writeFile(join(stagedB2, 'metaviewer'), 'loser-B2-binary', { mode: 0o755 });
     await writeFile(join(stagedB2, 'INSTALL.md'), 'loser-B2-readme\n', { mode: 0o644 });
 
-    // Also test interleaving where A and B both pass initial readdir check via barrier
     const outRace = join(root, 'out-race');
     await mkdir(outRace, { recursive: true });
     const raceFinal = join(outRace, 'MetaViewer-linux-arm64');
@@ -337,6 +352,10 @@ test('R3-T4-010 / R1-097 (T26) concurrent publishBundle rollback preserves winne
     await writeFile(join(stagedW, 'metaviewer'), 'winner-W-binary', { mode: 0o755 });
     await writeFile(join(stagedW, 'INSTALL.md'), 'winner-W-readme\n', { mode: 0o644 });
 
+    let markWinnerReady;
+    const winnerReadyForRename = new Promise((resolve) => {
+      markWinnerReady = resolve;
+    });
     let releaseLoserDirRename;
     const loserCanTryDirRename = new Promise((resolve) => {
       releaseLoserDirRename = resolve;
@@ -348,7 +367,10 @@ test('R3-T4-010 / R1-097 (T26) concurrent publishBundle rollback preserves winne
 
     const winnerPromise = publishStagedPackage(stagedW, workW, raceFinal, {
       rename: async (src, dst) => {
-        await loserWroteManifest;
+        if (dst === `${raceFinal}.sha256`) {
+          markWinnerReady();
+          await loserWroteManifest;
+        }
         const res = await import('node:fs/promises').then((m) => m.rename(src, dst));
         if (dst === raceFinal) {
           releaseLoserDirRename();
@@ -360,6 +382,7 @@ test('R3-T4-010 / R1-097 (T26) concurrent publishBundle rollback preserves winne
     const loserPromise = publishStagedPackage(stagedB2, workB, raceFinal, {
       rename: async (src, dst) => {
         if (dst === `${raceFinal}.sha256`) {
+          await winnerReadyForRename;
           const res = await import('node:fs/promises').then((m) => m.rename(src, dst));
           releaseWinner();
           return res;
@@ -376,11 +399,138 @@ test('R3-T4-010 / R1-097 (T26) concurrent publishBundle rollback preserves winne
 
     // Winner's directory AND winner's manifest must both survive intact and pass sha256sum -c!
     assert.equal(await readFile(join(raceFinal, 'INSTALL.md'), 'utf8'), 'winner-W-readme\n');
+    await assert.rejects(access(join(outRace, '.pkg-commit-MetaViewer-linux-arm64')), { code: 'ENOENT' });
     const shaRace = spawnSync('sha256sum', ['-c', `${raceFinal}.sha256`], {
       cwd: raceFinal,
       encoding: 'utf8',
     });
     assert.equal(shaRace.status, 0, shaRace.stderr || shaRace.stdout);
+
+    // Interleaving 2 (loser's manifest lands on disk BEFORE winner runs its existence pre-check):
+    const outPre = join(root, 'out-precheck');
+    await mkdir(outPre, { recursive: true });
+    const preFinal = join(outPre, 'MetaViewer-linux-arm64');
+    const workW2 = join(root, 'work-w2');
+    const stagedW2 = join(workW2, 'staged');
+    await mkdir(stagedW2, { recursive: true });
+    await writeFile(join(stagedW2, 'metaviewer'), 'winner-W2-binary', { mode: 0o755 });
+    await writeFile(join(stagedW2, 'INSTALL.md'), 'winner-W2-readme\n', { mode: 0o644 });
+    const workL2 = join(root, 'work-l2');
+    const stagedL2 = join(workL2, 'staged');
+    await mkdir(stagedL2, { recursive: true });
+    await writeFile(join(stagedL2, 'metaviewer'), 'loser-L2-binary', { mode: 0o755 });
+    await writeFile(join(stagedL2, 'INSTALL.md'), 'loser-L2-readme\n', { mode: 0o644 });
+
+    let notifyLoserManifestLanded;
+    const loserManifestLanded = new Promise((resolve) => {
+      notifyLoserManifestLanded = resolve;
+    });
+    let releaseLoser2DirRename;
+    const loser2CanTryDirRename = new Promise((resolve) => {
+      releaseLoser2DirRename = resolve;
+    });
+
+    const loser2Promise = publishStagedPackage(stagedL2, workL2, preFinal, {
+      rename: async (src, dst) => {
+        if (dst === `${preFinal}.sha256`) {
+          const res = await import('node:fs/promises').then((m) => m.rename(src, dst));
+          notifyLoserManifestLanded();
+          return res;
+        }
+        await loser2CanTryDirRename;
+        return import('node:fs/promises').then((m) => m.rename(src, dst));
+      },
+    });
+
+    await loserManifestLanded;
+    const winner2Promise = publishStagedPackage(stagedW2, workW2, preFinal, {
+      rename: async (src, dst) => {
+        const res = await import('node:fs/promises').then((m) => m.rename(src, dst));
+        if (dst === preFinal) {
+          releaseLoser2DirRename();
+        }
+        return res;
+      },
+    });
+
+    await Promise.all([
+      winner2Promise,
+      assert.rejects(loser2Promise, /ENOTEMPTY|EEXIST|already exists/),
+    ]);
+    assert.equal(await readFile(join(preFinal, 'INSTALL.md'), 'utf8'), 'winner-W2-readme\n');
+    await assert.rejects(access(join(outPre, '.pkg-commit-MetaViewer-linux-arm64')), { code: 'ENOENT' });
+    const shaPre = spawnSync('sha256sum', ['-c', `${preFinal}.sha256`], {
+      cwd: preFinal,
+      encoding: 'utf8',
+    });
+    assert.equal(shaPre.status, 0, shaPre.stderr || shaPre.stdout);
+
+    // Interleaving 3 (winner renames manifest first, loser clobbers manifest, winner renames dir and repairs manifest):
+    const outClobber = join(root, 'out-clobber');
+    await mkdir(outClobber, { recursive: true });
+    const clobberFinal = join(outClobber, 'MetaViewer-linux-arm64');
+    const workW3 = join(root, 'work-w3');
+    const stagedW3 = join(workW3, 'staged');
+    await mkdir(stagedW3, { recursive: true });
+    await writeFile(join(stagedW3, 'metaviewer'), 'winner-W3-binary', { mode: 0o755 });
+    await writeFile(join(stagedW3, 'INSTALL.md'), 'winner-W3-readme\n', { mode: 0o644 });
+    const workL3 = join(root, 'work-l3');
+    const stagedL3 = join(workL3, 'staged');
+    await mkdir(stagedL3, { recursive: true });
+    await writeFile(join(stagedL3, 'metaviewer'), 'loser-L3-binary', { mode: 0o755 });
+    await writeFile(join(stagedL3, 'INSTALL.md'), 'loser-L3-readme\n', { mode: 0o644 });
+
+    let notifyWinner3WroteManifest;
+    const winner3WroteManifest = new Promise((resolve) => {
+      notifyWinner3WroteManifest = resolve;
+    });
+    let notifyLoser3ClobberedManifest;
+    const loser3ClobberedManifest = new Promise((resolve) => {
+      notifyLoser3ClobberedManifest = resolve;
+    });
+    let releaseLoser3DirRename;
+    const loser3CanTryDirRename = new Promise((resolve) => {
+      releaseLoser3DirRename = resolve;
+    });
+
+    const winner3Promise = publishStagedPackage(stagedW3, workW3, clobberFinal, {
+      rename: async (src, dst) => {
+        if (dst === `${clobberFinal}.sha256`) {
+          const res = await import('node:fs/promises').then((m) => m.rename(src, dst));
+          notifyWinner3WroteManifest();
+          return res;
+        }
+        await loser3ClobberedManifest;
+        const res = await import('node:fs/promises').then((m) => m.rename(src, dst));
+        releaseLoser3DirRename();
+        return res;
+      },
+    });
+
+    const loser3Promise = publishStagedPackage(stagedL3, workL3, clobberFinal, {
+      rename: async (src, dst) => {
+        if (dst === `${clobberFinal}.sha256`) {
+          await winner3WroteManifest;
+          const res = await import('node:fs/promises').then((m) => m.rename(src, dst));
+          notifyLoser3ClobberedManifest();
+          return res;
+        }
+        await loser3CanTryDirRename;
+        return import('node:fs/promises').then((m) => m.rename(src, dst));
+      },
+    });
+
+    await Promise.all([
+      winner3Promise,
+      assert.rejects(loser3Promise, /ENOTEMPTY|EEXIST|already exists/),
+    ]);
+    assert.equal(await readFile(join(clobberFinal, 'INSTALL.md'), 'utf8'), 'winner-W3-readme\n');
+    await assert.rejects(access(join(outClobber, '.pkg-commit-MetaViewer-linux-arm64')), { code: 'ENOENT' });
+    const shaClobber = spawnSync('sha256sum', ['-c', `${clobberFinal}.sha256`], {
+      cwd: clobberFinal,
+      encoding: 'utf8',
+    });
+    assert.equal(shaClobber.status, 0, shaClobber.stderr || shaClobber.stdout);
 
     // Single-writer fsyncDir failure rolls back owned directory and manifest
     const outFsync = join(root, 'out-fsync');

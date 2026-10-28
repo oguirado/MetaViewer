@@ -1466,6 +1466,15 @@ export async function verifyElectronDist(dist, arch = architecture.arch, options
   );
 }
 
+/** @type {Map<string, number>} */
+const activePublishCommits = new Map();
+
+function destinationExistsError() {
+  const err = /** @type {Error & { code?: string }} */ (new Error('Package destination already exists'));
+  err.code = 'EEXIST';
+  return err;
+}
+
 /**
  * Stage package directory and manifest together under workDir and publish with
  * ownership-tracked rollback, parent directory fsync inside the rollback guard,
@@ -1492,11 +1501,14 @@ export async function publishStagedPackage(stagedDir, workDir, finalDir, options
   const archName = basename(finalDir);
   const finalManifest = `${finalDir}.sha256`;
   const commitMarker = join(outputDir, `.pkg-commit-${archName}`);
+  const isCommitInFlight = () => (activePublishCommits.get(commitMarker) ?? 0) > 0;
 
   // Recover half-published state left by an interrupted prior publish before
-  // checking whether a complete destination already exists.
+  // checking whether a complete destination already exists. Never treat a live
+  // in-flight concurrent commit as a crash state.
   const initialEntries = new Set(await fs.readdir(outputDir));
   if (
+    !isCommitInFlight() &&
     initialEntries.has(`.pkg-commit-${archName}`) &&
     initialEntries.has(archName) !== initialEntries.has(`${archName}.sha256`)
   ) {
@@ -1510,13 +1522,16 @@ export async function publishStagedPackage(stagedDir, workDir, finalDir, options
   }
 
   const prior = await fs.readdir(outputDir);
-  if (prior.includes(archName) || prior.includes(`${archName}.sha256`)) {
-    throw new Error('Package destination already exists');
+  const priorInFlight = isCommitInFlight() || prior.includes(`.pkg-commit-${archName}`);
+  if (prior.includes(archName) || (!priorInFlight && prior.includes(`${archName}.sha256`))) {
+    throw destinationExistsError();
   }
   const bundleStage = join(workDir, 'publish-stage');
   await fs.mkdir(bundleStage, { recursive: true });
   const stagedTargetDir = join(bundleStage, archName);
   const stagedManifest = join(bundleStage, `${archName}.sha256`);
+  await fs.rm(stagedTargetDir, { recursive: true, force: true }).catch(() => {});
+  await fs.rm(stagedManifest, { force: true }).catch(() => {});
   await fs.rename(stagedDir, stagedTargetDir);
   await writeManifest(stagedTargetDir, stagedManifest);
   const manifestFd = await fs.open(stagedManifest, 'r');
@@ -1526,7 +1541,7 @@ export async function publishStagedPackage(stagedDir, workDir, finalDir, options
     await manifestFd.close();
   }
 
-  const stagedManifestStat = await fs.lstat(stagedManifest);
+  let stagedManifestStat = await fs.lstat(stagedManifest);
   const stagedDirStat = await fs.lstat(stagedTargetDir);
   const matchesInode = async (targetPath, expectedStat) => {
     const st = await fs.lstat(targetPath).catch(() => null);
@@ -1537,13 +1552,26 @@ export async function publishStagedPackage(stagedDir, workDir, finalDir, options
       .lstat(targetPath)
       .then(() => true)
       .catch(() => false);
+  const repairManifestFromDir = async (sourceDir, targetManifest) => {
+    const tmpManifest = join(bundleStage, `${archName}.sha256.repair-${randomUUID()}`);
+    await writeManifest(sourceDir, tmpManifest);
+    const fd = await fs.open(tmpManifest, 'r');
+    try {
+      await fd.sync();
+    } finally {
+      await fd.close();
+    }
+    await fs.rename(tmpManifest, targetManifest);
+    return fs.lstat(targetManifest);
+  };
 
   let ownsManifest = false;
   let ownsDir = false;
   let ownsMarker = false;
+  activePublishCommits.set(commitMarker, (activePublishCommits.get(commitMarker) ?? 0) + 1);
   try {
-    if ((await pathExists(finalDir)) || (await pathExists(finalManifest))) {
-      throw new Error('Package destination already exists');
+    if (await pathExists(finalDir)) {
+      throw destinationExistsError();
     }
     await fs
       .writeFile(commitMarker, `${process.pid}\n`, { flag: 'wx', mode: 0o600 })
@@ -1555,13 +1583,15 @@ export async function publishStagedPackage(stagedDir, workDir, finalDir, options
     ownsManifest = await matchesInode(finalManifest, stagedManifestStat);
     await renameFn(stagedTargetDir, finalDir);
     ownsDir = await matchesInode(finalDir, stagedDirStat);
-    if (ownsDir && !(await matchesInode(finalManifest, stagedManifestStat))) {
-      await writeManifest(finalDir, finalManifest);
+    if (!ownsDir) {
+      throw destinationExistsError();
     }
-    if (ownsMarker) {
-      await fs.rm(commitMarker, { force: true }).catch(() => {});
-      ownsMarker = false;
+    if (!(await matchesInode(finalManifest, stagedManifestStat))) {
+      stagedManifestStat = await repairManifestFromDir(finalDir, finalManifest);
+      ownsManifest = true;
     }
+    await fs.rm(commitMarker, { force: true }).catch(() => {});
+    ownsMarker = false;
     await fsyncDirFn(outputDir);
   } catch (error) {
     if (ownsDir && (await matchesInode(finalDir, stagedDirStat))) {
@@ -1573,7 +1603,7 @@ export async function publishStagedPackage(stagedDir, workDir, finalDir, options
       // manifest, and repair it from the winning finalDir if our first rename
       // clobbered finalManifest before our directory rename lost the race.
       if (ownsManifest && (await matchesInode(finalManifest, stagedManifestStat))) {
-        await writeManifest(finalDir, finalManifest).catch(() => {});
+        await repairManifestFromDir(finalDir, finalManifest).catch(() => {});
       }
     } else if (ownsManifest && (await matchesInode(finalManifest, stagedManifestStat))) {
       await fs.rm(finalManifest, { force: true }).catch(() => {});
@@ -1582,6 +1612,13 @@ export async function publishStagedPackage(stagedDir, workDir, finalDir, options
       await fs.rm(commitMarker, { force: true }).catch(() => {});
     }
     throw error;
+  } finally {
+    const remaining = (activePublishCommits.get(commitMarker) ?? 1) - 1;
+    if (remaining <= 0) {
+      activePublishCommits.delete(commitMarker);
+    } else {
+      activePublishCommits.set(commitMarker, remaining);
+    }
   }
 }
 
