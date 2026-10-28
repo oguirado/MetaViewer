@@ -114,7 +114,9 @@ message value carries a `<name>/v0.2` discriminator const, and `$ref` names a
 sibling schema file, optionally with a `#/$defs/...` fragment (no
 cross-directory references). The checker (`tools/check_contracts.py`) implements
 only this documented subset and rejects unknown keywords; it is not a general
-JSON Schema implementation. The full rules are in
+JSON Schema implementation. In the runtime wire decoder (`core/src/wire/mod.rs`),
+typeless `$ref` siblings are evaluated as conjuncts and an object branch is closed
+only when `additionalProperties: false` is set. The full rules are in
 [contracts/v0.2/README.md](../contracts/v0.2/README.md).
 
 | Contract | Producer → consumer | Meaning |
@@ -135,8 +137,8 @@ JSON Schema implementation. The full rules are in
 | ui_intent | UI → core | Closed UI ops: fold, unfold, hide, show, pin, move, tab, float, layout save/load, take_control, release_control; the core admits the `7` [MEASURED] layout ops (`fold`, `unfold`, `hide`, `show`, `move`, `tab`, `float` in `core/src/serve/layout.rs`) plus `take_control` and `release_control` (`core/src/serve/mod.rs`, `core/src/admission/mod.rs`), and answers `pin` and `layout_save`/`layout_load` with a journalled POLICY verdict |
 | catalog_entry | Core → UI | New capsule kinds and allowed profiles (`core/src/catalog/mod.rs` enforces the closed catalog authority; dynamic catalog expansion route is planned for v0.2.0) |
 | terminal_session | UI broker implements; core side planned for v0.2.0 | Spawn spec by provider id with server-owned argv, resize, byte-plane messages, cumulative ACK, resync |
-| record_request | UI → core (`core/src/serve/capture.rs`) | Per-surface RAM recording, screenshot, and write-ahead journaled deterministic PNG `.tar` export under `MV_RECORDING_DESTINATION` (`core/src/record/capture/export.rs`); adapter-side `record_start`/`record_stop` remains planned for v0.2.0 |
-| record_event | Core → UI (`core/src/serve/capture.rs`) | Recording lifecycle, screenshot, and export events |
+| record_request | UI → core (`core/src/serve/capture.rs`) | Per-surface RAM recording, screenshot, and write-ahead journaled deterministic PNG `.tar` export under `MV_RECORDING_DESTINATION` (`core/src/record/capture/export.rs`); recordings default to `3` [CITED] fps, accept `max_fps` `1..120` [CITED] with values above `60` [CITED] refused as `BUDGET_EXCEEDED`, keep one frame per `1000/fps` [CITED] ms, and journal `dropped_frames` (`core/src/record/capture.rs`, `contracts/v0.2/record_request.schema.json`, `contracts/v0.2/record_event.schema.json`); adapter-side `record_start`/`record_stop` remains planned for v0.2.0 |
+| record_event | Core → UI (`core/src/serve/capture.rs`) | Recording lifecycle, screenshot, export, and `dropped` (`dropped_frames`) events |
 | settings | UI/Electron XDG store (`ui/src/settings/settingsModel.js`, `ui/src/settings/settingsHost.js`); core sync planned for v0.2.0 | Theme (`mv-light` / `mv-dark`), compact density; no secrets |
 | mv_tool_call | Registered agent peer → core | observe, list, propose, wait_verify for provider CLIs (`mvctl --v02` uses observe/propose/wait-verify as the agent peer; MCP use is planned) |
 | mv_tool_result | Core → mvctl/MCP | Terminal outcomes for tool calls |
@@ -161,9 +163,9 @@ retain their own schema discriminator.
 | Core frame witness | `/dev/shm` prefix, no `..`, per-component symlink walk, `O_NOFOLLOW`, regular file up to 64 MiB, digest match (`core/src/serve/mod.rs`) | A path-shaped string is not authorization; mismatches are refused, never journaled as frames |
 | Electron frame reader | `/dev/shm/` prefix, no `..`, generation ≥ 1, `^[0-9a-f]{64}$` digest, per-surface generation lease, null-digest fail-closed (`ui/electron/frameReader.js`) | Verify before handing bytes to tiles through the frame port (`34/34` [MEASURED] live deliveries verified with `isTrusted=true` and `utilityVerified=true`); paths never cross IPC |
 | vision-engine | Pin `v0.2.0`, commit `9bbb49f220837388e1ab90c34ae0eedee27a66eb` [CITED: deps.lock] | Integrated via `VCorePerceptionAdapter.perceive` and `vadapt.cu_describe` (`agents/metaviewer_agents/perception/`, `tools/gate_g_ai.py`; verified live extracting `24` [MEASURED] vision marks and `24` [MEASURED] elements on `mv-live-1`) |
-| wender-agent | Pin `v0.3.0`, commit `7648b258d1d04953bacffe8627de5acd7c75d817` [CITED: deps.lock] | Integrated via `agents/metaviewer_agents/wender_bridge.py`, `AdmittedExecutor.check_target`, and `tools/gate_g_ai.py` (verified `8/8` [MEASURED] live on `mv-live-1` via `tests/e2e/e2e1_slice/demo_agent_drive.py`) |
+| wender-agent | Pin `v0.3.0`, commit `7648b258d1d04953bacffe8627de5acd7c75d817` [CITED: deps.lock] | Integrated via `agents/metaviewer_agents/wender_bridge.py`, `AdmittedExecutor.check_target`, and `tools/gate_g_ai.py` (verified `8/8` [MEASURED] live on `mv-live-1` via `tests/e2e/e2e1_slice/demo_agent_drive.py`); the agent loop (`agents/metaviewer_agents/verify.py`, `agents/metaviewer_agents/planner.py`) can use `wender-agent` as planner via `MV_WENDER_PLANNER_CMD`, resolving the checkout through `deps.lock` (`resolve_locked_component("wender-agent")`) and refusing `commit_mismatch` before spawn |
 | OpenSuperficies | Pin `os-cu-w9-mv1`, commit `a9ac1ac8543872b428990ea23fa2629cd0a6d1d5` [CITED: deps.lock] | Integrated via `daemon-adapter/` invoking `srf-identity-surface` and `srf-holdings-capsule` under `MV_SRF_BIN_DIR` (verified live on `1` [MEASURED] `mv-live-1` browser capsule streaming `192` [MEASURED] `PRESENTED` frames at `2.71` fps [MEASURED] with `0` [MEASURED] refusals) |
-| Holdings lane | `lane_submit` verb plus `state_sha256` witness in v0.2 contracts; AI loop on Holdings planned for v0.2.0 | Bind lane to capsule, verify readiness and chain, use state digest plus tick windows |
+| Holdings lane | `lane_submit` verb plus `state_sha256` witness in v0.2 contracts; strict hex/tick `GroundTruth` parse (`daemon-adapter/internal/capsule/capsule.go`), core `holdings_lane` witness join (`core/src/serve/tools.rs`), and `input` + `state_sha256_change` planner (`agents/metaviewer_agents/planner.py`) | Bind lane to capsule, admit `holdings_lane` ground truth for the dispatched unsettled proposal, join the witness, and recompute receipts through `verify_receipt` (`core/src/serve/tools.rs`); digest-only capsule output still settles unverified with reason |
 
 Capture generations increase when a framebuffer allocation or display is
 replaced. A digest alone cannot identify freshness across generations. The
@@ -176,27 +178,39 @@ Because the core verifies and journals each `3,456,000`-byte (`1280x900` RGB24)
 frame witness before fanning `frame_ready` out to the UI
 (`52.74 ms` mean, `54.87 ms` max per frame with `40.51 ms` SHA-256 hash time in the harness test [MEASURED: `cargo test --manifest-path core/Cargo.toml frame_ready_latency_and_concurrent_generations_on_3_45mb_frames -- --nocapture`], and `52.11 ms` p50 / `58.67 ms` p95 with `40.65 ms` p50 hash time = `78`% [MEASURED] of core time on the live `mv-live-1` stack, where `1` [MEASURED] capsule streams at `2.71` fps [MEASURED] while core headroom is `~19` fps [TARGET]),
 the publisher retains each `/dev/shm` generation for at least `4 s` (`>= 2 s`
-floor [TARGET, unit decision]), bounded by `128 MiB` per surface (`~38`
-full-resolution frames [TARGET, unit decision]), `512 MiB` globally across
-surfaces, and at most `64` generations per surface (`daemon-adapter/internal/frames/publisher.go`),
+floor [TARGET, unit decision]), bounded by `128` [CITED] MiB per surface (`~38`
+full-resolution frames [TARGET, unit decision]), `512` [CITED] MiB globally across
+surfaces, and at most `64` [CITED] generations per surface (`daemon-adapter/internal/frames/publisher.go`),
 while active subscriptions suppress duplicate publications and `frame_ready`
 emissions after the initial `2` confirmation polls whenever `sha256_rgb24` and
 geometry are unchanged (`daemon-adapter/internal/frames/subscriptions.go`)
-[TARGET, unit decision].
+[TARGET, unit decision]. The adapter runs a per-surface two-stage pipeline that
+captures the next frame while decoding, hashing, and publishing the current frame
+via `PublishWithTimings` with a single-pass stdlib PNG decoder to RGB24
+(`daemon-adapter/internal/frames/publisher.go`), refuses byte or generation caps
+below two minimal generations, emits per-surface stage latency summaries every
+`5` [CITED] s (`daemon-adapter/internal/frames/subscriptions.go`), and in the
+daemon stream loop consumes reserved `POLICY` verdicts with a diagnostic stderr
+line without exiting (`daemon-adapter/internal/daemon/stream.go`).
 
 Holdings pixels are not keyed by state. A pixel change alone cannot prove a
 Holdings state transition. The v0.2 contracts carry `ground_truth.source=holdings_lane`
 with a `state_sha256` witness and tick (`observation`), and the
 `state_sha256_change` predicate carries `before`, `min_tick` and `max_tick`.
-The core currently checks only that `min_tick ≤ max_tick` plus the per-lane
-nonce/sequence binding (`core/src/admission/mod.rs`); validating the digest
-chain against live lane state is planned for v0.2.0. Nonce and
-sequence in the lane payload are also subject to native replay refusal. Core
-verification of receipts is planned for v0.2.0: `core/src/verify/mod.rs`
-implements `verify_receipt` as an offline seam, but serve does not call it
-yet, so the core currently forwards daemon receipts unchanged, and only
-`mv_tool` waiters receive `VERIFICATION_FAILED` for unverified outcomes —
-never a silent promotion to success.
+At admission, the core checks `min_tick ≤ max_tick` plus the per-lane
+nonce/sequence binding (`core/src/admission/mod.rs`), while the Holdings planner
+(`agents/metaviewer_agents/planner.py`) emits `input` proposals with
+`state_sha256_change` (never `lane_submit`). Nonce and
+sequence in the lane payload are also subject to native replay refusal. In the
+serving path, the core admits adapter `holdings_lane` ground truth for the
+dispatched unsettled proposal, joins the witness (`core/src/serve/tools.rs`),
+and recomputes daemon receipts on both live and replay paths (`core/src/serve/mod.rs`)
+through `recompute_daemon_receipt` and `verify_daemon_receipt` calling
+`verify_receipt` (`core/src/verify/mod.rs`, `core/src/serve/tools.rs`);
+digest-only capsule output without canonical state JSON bytes still settles
+unverified with an explicit reason, and `mv_tool` waiters receive
+`VERIFICATION_FAILED` for unverified outcomes — never a silent promotion to
+success.
 
 The adapter manager currently answers `frame_subscribe`, `frame_unsubscribe`,
 `record_start` and `record_stop` with a typed unsupported refusal; continuous
@@ -227,23 +241,27 @@ sequenceDiagram
         D->>C: envelope(surface_event.frame_ready)
         C->>A: envelope(frame_ref)
         D->>C: envelope(action_receipt)
-        C->>C: match receipt to dispatch epoch; outcome verification planned
-        C->>A: envelope(action_receipt unchanged)
+        C->>C: match receipt to dispatch epoch and recompute via verify_receipt
+        C->>A: envelope(action_receipt recomputed)
         C->>C: append session_record and persisted envelopes
     end
 ```
 
 Agent `observation` intake is planned for v0.2.0: the core currently answers
-observations with a journalled `POLICY` verdict, so the loop above runs on
-proposals bound to fanned-out frames.
+agent observations with a journalled `POLICY` verdict, while accepting daemon
+`observation/v0.2` envelopes carrying `ground_truth` (`source == "holdings_lane"`)
+for the committed frame of a live surface with a dispatched unsettled agent
+proposal (`core/src/serve/mod.rs`, `core/src/serve/tools.rs`).
 
 Execution facts arrive as `action_receipt/v0.2` from the daemon; the core
-matches each receipt to its dispatch epoch (`Input::Receipt` vs `Input::Drain`)
-and forwards it to the registered agent unchanged. The daemon reports
-`verified: false` until core verification exists. The verification module
-(`core/src/verify/mod.rs`, owned by W2-AILOOP) implements `verify_receipt`
-and `read_published_frame` as an offline seam not yet wired into serve, so
-outcome verification and the AI loop on Holdings are planned for v0.2.0. Retries
+matches each receipt to its dispatch epoch (`Input::Receipt` vs `Input::Drain`),
+recomputes non-drain receipts on both live and replay paths (`core/src/serve/mod.rs`)
+through `recompute_daemon_receipt` and `verify_daemon_receipt` calling
+`verify_receipt` (`core/src/verify/mod.rs`, `core/src/serve/tools.rs`), and
+forwards the recomputed receipt to the registered agent. For Holdings
+(`state_sha256_change`), the core joins the `holdings_lane` witness to the
+proposal waiter (`core/src/serve/tools.rs`), while digest-only capsule output
+without canonical state JSON bytes settles unverified with an explicit reason. Retries
 consume budget (one unit per proposal) and require fresh admission against the
 current frame; a failed recheck consumes the old permit. A proposal must belong to
 the same surface and generation it is based on; visual predicates use window coordinates,
@@ -338,9 +356,17 @@ before spawning. `create` publishes one initial frame synchronously with
 transport backpressure; if initial capture fails, the adapter runs a bounded
 compensating destroy and reports the committed identity
 (`daemon-adapter/internal/daemon/dispatch.go`). Failed readiness produces
-`surface_event.error`; no agent action is admitted. Unexpected disappearance
-yields `lost` rather than a fabricated clean destroy. A terminal surface
-cannot be revived under its old identifier.
+`surface_event.error`; no agent action is admitted. A surface becomes `lost`
+rather than a fabricated clean destroy only after `2` [CITED] consecutive
+proven-absence faults (`unavailable` or `refused` in
+`daemon-adapter/internal/frames/subscriptions.go`,
+`daemon-adapter/internal/capsule/liveness.go`, and `MarkLost` in
+`daemon-adapter/internal/capsule/manager.go`); a single transient
+`capture_failed` or unknown fault (deadline, `cli_failed`, malformed output,
+or setup/usage error) never marks loss. When `lost` is confirmed, the core
+forwards `state_changed(lost)` to the UI and settles in-flight human inputs as
+`POLICY` (`core/src/serve/mod.rs`). A terminal surface cannot be revived under
+its old identifier.
 
 ## Core authority and replay
 
@@ -357,11 +383,11 @@ disconnection.
 | Admission check | Refusal reason |
 | --- | --- |
 | Digest/generation absent, stale or no longer current | STALE_FRAME |
-| Human ownership, terminal/lost lifecycle, disallowed shared ownership | SURFACE_NOT_AGENT_CONTROLLED |
+| Human ownership, terminal/lost lifecycle on agent proposals, disallowed shared ownership | SURFACE_NOT_AGENT_CONTROLLED |
 | Another owner holds the display/window injection lease | LOCKED_BY_OTHER |
 | Proposal deadline, retries, session budget exhausted | BUDGET_EXCEEDED |
 | Coordinates or expected bounding boxes exceed the current window | OUT_OF_BOUNDS |
-| Unsupported action, unauthorized sender, replay, invalid tick interval, lane replay refusal or other policy failure | POLICY |
+| Late human input, `take_control`/`release_control`, or `record_request` on a `lost` surface (`core/src/serve/mod.rs`, `core/src/serve/regression.rs`), unsupported action, unauthorized sender, replay, invalid tick interval, lane replay refusal or other policy failure | POLICY |
 
 Schema validation is necessary but cannot prove these stateful conditions. I
 acquire the display/window lock and reserve budget atomically at admission and
@@ -441,8 +467,10 @@ a narrow preload facade over fixed channel literals, so main and preload
 cannot drift silently; frame paths never cross IPC. Settings persist through
 an atomic `0700`/`0600` store outside the repository, side terminals run in a
 main-only utility process from a validated spawn spec (`terminalHost.js`
-launches `ptyUtility.js`), side-terminal commands are host-owned provider
-argv, and `--no-sandbox` exists only as a test escape.
+launches `ptyUtility.js`) with PTY sizes capped at `500x300` [CITED]
+(`MAX_COLS = 500`, `MAX_ROWS = 300` in `ui/electron/ptyBroker.js`) and fixpoint
+descendant reaping in `ui/electron/terminalHost.js`, side-terminal commands are
+host-owned provider argv, and `--no-sandbox` exists only as a test escape.
 
 Linux is the first target. WSL2 follows after validating display,
 shared-memory and socket behavior [TARGET]; macOS requires a Linux VM. Native
