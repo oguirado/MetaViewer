@@ -750,6 +750,7 @@ manager.go	daemon-adapter/internal/capsule/manager.go
 manager_a2_test.go	daemon-adapter/internal/capsule/manager_a2_test.go
 manager-26328fbfd05f	daemon-adapter/internal/capsule/manager_handoff_test.go
 manager_race_test.go	daemon-adapter/internal/capsule/manager_race_test.go
+mut_capsule_test.go	daemon-adapter/internal/capsule/mut_capsule_test.go
 mut_lost_test.go	daemon-adapter/internal/capsule/mut_lost_test.go
 native_test.go	daemon-adapter/internal/capsule/native_test.go
 nv_adapter_test.go	daemon-adapter/internal/capsule/nv_adapter_test.go
@@ -803,6 +804,7 @@ frames.go	daemon-adapter/internal/frames/frames.go
 lease_safety_test.go	daemon-adapter/internal/frames/lease_safety_test.go
 live_test.go	daemon-adapter/internal/frames/live_test.go
 multisurface_test.go	daemon-adapter/internal/frames/multisurface_test.go
+mut_frames_test.go	daemon-adapter/internal/frames/mut_frames_test.go
 mutlost-6ca700362f9b	daemon-adapter/internal/frames/mut_lost_test.go
 pacing_test.go	daemon-adapter/internal/frames/pacing_test.go
 pipeline_test.go	daemon-adapter/internal/frames/pipeline_test.go
