@@ -84,6 +84,7 @@ test_r3_rpc.py	agents/tests/test_r3_rpc.py
 test_record.py	agents/tests/test_record.py
 testres-d06e75457090	agents/tests/test_resource_bounds.py
 testrou-1e6213ca9682	agents/tests/test_round1_regressions.py
+testset-f61b79de8e01	agents/tests/test_settings_parity.py
 test_tg_cli.py	agents/tests/test_tg_cli.py
 test_tg_contracts.py	agents/tests/test_tg_contracts.py
 testtgd-42af8c6a31e8	agents/tests/test_tg_determinism.py
@@ -720,6 +721,7 @@ rv11v_f5_key_chord.rs	core/tests/rv11v_f5_key_chord.rs
 serve_flow.rs	core/tests/serve_flow.rs
 serve_reconnect.rs	core/tests/serve_reconnect.rs
 serve_v02_tags.rs	core/tests/serve_v02_tags.rs
+settings_parity.rs	core/tests/settings_parity.rs
 socket_bind.rs	core/tests/socket_bind.rs
 socket_hostile.rs	core/tests/socket_hostile.rs
 startup_pin.rs	core/tests/startup_pin.rs
@@ -843,6 +845,7 @@ export_test.go	daemon-adapter/internal/record/export_test.go
 record.go	daemon-adapter/internal/record/record.go
 record_test.go	daemon-adapter/internal/record/record_test.go
 release-a6f568fd66b9	daemon-adapter/internal/record/release_test.go
+setting-003db8e816e1	daemon-adapter/internal/record/settings_parity_test.go
 environ-62320127da7b	daemon-adapter/internal/view/environment_test.go
 view-process.go	daemon-adapter/internal/view/process.go
 view-process_test.go	daemon-adapter/internal/view/process_test.go
@@ -1060,6 +1063,7 @@ secrets-README.md	tests/fixtures/secrets/README.md
 gate.py	tests/fixtures/secrets/gate.py
 test_gate.py	tests/fixtures/secrets/test_gate.py
 testt7s-c9ae673cb577	tests/fixtures/secrets/test_t7_secrets_adversarial.py
+settings_parity.json	tests/fixtures/settings_parity.json
 init-6ec5224a3ecf	tests/integration/__init__.py
 adapter-4b3b01576ec1	tests/integration/adapter_contract_test.go
 fake_capsule.py	tests/integration/fake_capsule.py
@@ -1500,6 +1504,7 @@ r3t4sti-e4ad61eabbd1	ui/test/r3t4-still-open.test.js
 r4-refresh.test.js	ui/test/r4-refresh.test.js
 rv9elec-3b07d2eb24f6	ui/test/rv9-elec-regressions.test.js
 security.test.js	ui/test/security.test.js
+settingsMut.test.mjs	ui/test/settingsMut.test.mjs
 shellFixture.html	ui/test/shellFixture.html
 shellFixture.js	ui/test/shellFixture.js
 shellLayout.test.js	ui/test/shellLayout.test.js
