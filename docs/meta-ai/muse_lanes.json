@@ -200,6 +200,11 @@
    "why": "Live tile turns black after a multislot round trip (second canvas for the same surface replaces and then removes the binding); black placeholder before the first frame.",
    "orchestrator": "UI orchestrator"
   },
+  "mvui32": {
+   "stage": "fix",
+   "why": "Round-3 external review of the renderer found 10 confirmed defects (lost layout commits, frame router poisoning, input sent after READ, stale repaint, starved QA reporting); fix them with negative controls before the product completion gate.",
+   "orchestrator": "UI orchestrator"
+  },
   "mvui25c": {
    "stage": "fix",
    "why": "Human-input renderer drop: key chords with punctuation or non-ASCII characters violate the host adapter key grammar; map them to X keysym names or drop them.",
