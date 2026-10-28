@@ -974,6 +974,12 @@ ac05_ai.test.js	tests/e2e/ac05_ai.test.js
 ac06mul-4dadd8d01577	tests/e2e/ac06_multislot.test.js
 ac07ram-e57b96199e4e	tests/e2e/ac07_ram_first.test.js
 ai-provider.py	tests/e2e/ai-provider.py
+asm_web_fakes.cjs	tests/e2e/asm_web_fakes.cjs
+asmwebh-3a1146a20598	tests/e2e/asm_web_hosted.test.js
+flow_a.html	tests/e2e/asm_web_pages/flow_a.html
+flow_b.html	tests/e2e/asm_web_pages/flow_b.html
+form.html	tests/e2e/asm_web_pages/form.html
+table.html	tests/e2e/asm_web_pages/table.html
 build.mjs	tests/e2e/build.mjs
 core-driver.js	tests/e2e/core-driver.js
 e2e10st-5523850bb7fc	tests/e2e/e2e10_stale_settlement.test.js
