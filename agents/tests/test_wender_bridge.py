@@ -216,7 +216,7 @@ class WenderBridgeTests(unittest.TestCase):
         for command in ("shell command", [], [""]):
             with self.assertRaises(ValueError):
                 WenderSubprocessAdapter(wender_root=self.root, command=command)
-        for timeout in (True, 0, -1, float("inf"), float("nan")):
+        for timeout in (True, 0, -1, float("inf"), float("nan"), 10**400, -(10**400), 1e20):
             with self.assertRaises(ValueError):
                 WenderSubprocessAdapter(wender_root=self.root, command=[sys.executable], timeout=timeout)
         with self.assertRaises(ObservationError):

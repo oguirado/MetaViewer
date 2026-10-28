@@ -1,8 +1,15 @@
-"""Agent-side observation/v0.1 construction and validation.
+"""Agent-side observation/v0.2 and legacy v0.1 construction and validation.
 
-Builds and runtime-validates ``observation/v0.1`` payloads against the
-frozen v0.1 contract: exactly one bound ``frame_ref/v0.1`` plus optional
-closed ``vision`` and ``ground_truth`` objects. Every value is checked
+[TARGET, unit decision] Default contract_version is bumped to v0.2 in both
+validate_observation and build_observation while preserving explicit v0.1
+compatibility; legacy perception-only build_observation calls that omit
+contract_version on a frame_ref/v0.1 + vision pair retain v0.1 compatibility.
+Validation runs before deep-copying inputs so hostile nesting or scalar/UTF-8
+violations fail closed with ObservationError before any copy or recursion.
+
+Builds and runtime-validates ``observation/v0.2`` (and explicit ``v0.1``)
+payloads against the frozen contract: exactly one bound ``frame_ref`` plus
+optional closed ``vision`` and ``ground_truth`` objects. Every value is checked
 explicitly (exact key sets, strict integer/boolean separation, finite
 confidence, frame bounds); anything else is refused with
 :data:`ObservationError`. Metadata checks cannot prove frame bytes,
@@ -42,11 +49,18 @@ _MAX_DIMENSION = 16384
 _NUL = chr(0)
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 _SURFACE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]*")
-_MAX_DEPTH = 100
+_MAX_DEPTH = 32
 _MAX_SURFACE_ID = 128
 _MAX_ROLE = 128
 _MAX_SAFE_INT = (1 << 53) - 1
 _MAX_SUMMARY = 65536
+
+
+class _DefaultVersion(str):
+    """Sentinel str subtype distinguishing omitted default from explicit 'v0.2'."""
+
+
+_DEFAULT_CONTRACT_VERSION: str = _DefaultVersion("v0.2")
 
 _FRAME_KEYS = frozenset((
     "schema", "surface_id", "generation", "tick", "ts_ns", "width",
@@ -221,46 +235,53 @@ def _check_trusted(surface_id: object, generation: object) -> None:
 
 
 def validate_observation(observation: object, *, surface_id: str,
-                         generation: int, contract_version: str = "v0.1") -> None:
+                         generation: int,
+                         contract_version: str = _DEFAULT_CONTRACT_VERSION) -> None:
     """Runtime-validate an observation against its trusted binding.
 
-    The payload must be a closed ``observation/v0.1`` object whose
-    ``frame_ref`` carries exactly the trusted ``surface_id`` and
+    The payload must be a closed ``observation/v0.2`` (or explicit ``v0.1``)
+    object whose ``frame_ref`` carries exactly the trusted ``surface_id`` and
     ``generation``. Raises :data:`ObservationError` on any deviation.
     """
-    _check_trusted(surface_id, generation)
-    if not isinstance(observation, dict):
-        _fail("bad_shape", "observation is not an object")
-    assert isinstance(observation, dict)
-    keys = set(observation)
-    if not _OBSERVATION_REQUIRED <= keys <= _OBSERVATION_KEYS:
-        _fail("bad_shape", "observation keys are not exact")
-    schema = observation["schema"]
-    if not isinstance(schema, str) or not schema:
-        _fail("bad_shape", "observation schema malformed")
-    if contract_version not in ("v0.1", "v0.2") or schema != "observation/" + contract_version:
-        _fail("unknown_version", "unknown observation version")
-    frame = _check_frame_ref(observation["frame_ref"], version=contract_version)
-    if (frame["surface_id"] != surface_id
-            or frame["generation"] != generation):
-        _fail("identity_mismatch", "frame_ref breaks trusted binding")
-    if "vision" in observation:
-        _check_vision(observation["vision"], width=frame["width"],
-                      height=frame["height"])
-    if "ground_truth" in observation:
-        _check_ground_truth(observation["ground_truth"])
+    try:
+        _check_trusted(surface_id, generation)
+        if not isinstance(observation, dict):
+            _fail("bad_shape", "observation is not an object")
+        assert isinstance(observation, dict)
+        keys = set(observation)
+        if not _OBSERVATION_REQUIRED <= keys <= _OBSERVATION_KEYS:
+            _fail("bad_shape", "observation keys are not exact")
+        schema = observation["schema"]
+        if not isinstance(schema, str) or not schema:
+            _fail("bad_shape", "observation schema malformed")
+        if (not isinstance(contract_version, str)
+                or contract_version not in ("v0.1", "v0.2")
+                or schema != "observation/" + contract_version):
+            _fail("unknown_version", "unknown observation version")
+        frame = _check_frame_ref(observation["frame_ref"], version=contract_version)
+        if (frame["surface_id"] != surface_id
+                or frame["generation"] != generation):
+            _fail("identity_mismatch", "frame_ref breaks trusted binding")
+        if "vision" in observation:
+            _check_vision(observation["vision"], width=frame["width"],
+                          height=frame["height"])
+        if "ground_truth" in observation:
+            _check_ground_truth(observation["ground_truth"])
+    except RecursionError:
+        _fail("bad_shape", "observation nesting exceeds limit")
 
 
 def build_observation(frame_ref: dict, *, surface_id: str,
                       generation: int, vision: dict | None = None,
                       ground_truth: dict | None = None,
-                      contract_version: str = "v0.1") -> dict:
+                      contract_version: str = _DEFAULT_CONTRACT_VERSION) -> dict:
     """Build an isolated observation from trusted parts.
 
     Emits only ``schema``/``frame_ref`` plus the optionals actually
-    given. Inputs are deep-copied, so later caller mutation cannot
-    corrupt the returned payload; the result is validated before it
-    is returned. Raises :data:`ObservationError` on any deviation.
+    given. Validation runs before inputs are deep-copied so hostile
+    nesting or scalar violations fail closed without recursion overflow,
+    and the returned payload remains isolated from later caller mutation.
+    Raises :data:`ObservationError` on any deviation.
     """
     if not isinstance(frame_ref, dict):
         _fail("bad_shape", "frame_ref is not an object")
@@ -268,44 +289,76 @@ def build_observation(frame_ref: dict, *, surface_id: str,
         _fail("bad_shape", "vision is not an object")
     if ground_truth is not None and not isinstance(ground_truth, dict):
         _fail("bad_shape", "ground_truth is not an object")
-    observation: dict = {
-        "schema": f"observation/{contract_version}",
-        "frame_ref": copy.deepcopy(frame_ref),
+    if not isinstance(contract_version, str) or contract_version not in ("v0.1", "v0.2"):
+        _fail("unknown_version", "unknown observation version")
+    effective_version = str(contract_version)
+    if (type(contract_version) is _DefaultVersion
+            and frame_ref.get("schema") == "frame_ref/v0.1"
+            and vision is not None
+            and ground_truth is None):
+        effective_version = "v0.1"
+    candidate: dict = {
+        "schema": f"observation/{effective_version}",
+        "frame_ref": frame_ref,
     }
     if vision is not None:
-        observation["vision"] = copy.deepcopy(vision)
+        candidate["vision"] = vision
     if ground_truth is not None:
-        observation["ground_truth"] = copy.deepcopy(ground_truth)
-    validate_observation(observation, surface_id=surface_id,
-                         generation=generation, contract_version=contract_version)
+        candidate["ground_truth"] = ground_truth
+    validate_observation(candidate, surface_id=surface_id,
+                         generation=generation,
+                         contract_version=effective_version)
+    try:
+        observation: dict = {
+            "schema": candidate["schema"],
+            "frame_ref": copy.deepcopy(frame_ref),
+        }
+        if vision is not None:
+            observation["vision"] = copy.deepcopy(vision)
+        if ground_truth is not None:
+            observation["ground_truth"] = copy.deepcopy(ground_truth)
+    except RecursionError:
+        _fail("bad_shape", "observation nesting exceeds limit")
     return observation
 
 
 def _reject_non_canonical(value: object, depth: int) -> None:
-    if depth > _MAX_DEPTH:
-        _fail("bad_shape", "state nesting exceeds limit")
-    if value is None or type(value) in (bool, int, str):
-        return
-    if isinstance(value, float):
-        _fail("bad_shape", "state carries a float")
-    if isinstance(value, dict):
-        for key, item in value.items():
-            if type(key) is not str:
-                _fail("bad_shape", "state key is not a string")
-            _reject_non_canonical(item, depth + 1)
-        return
-    if isinstance(value, list):
-        for item in value:
-            _reject_non_canonical(item, depth + 1)
-        return
-    _fail("bad_shape", "state carries a non-JSON value")
+    stack: list[tuple[object, int]] = [(value, depth)]
+    while stack:
+        current, cur_depth = stack.pop()
+        if cur_depth > _MAX_DEPTH:
+            _fail("bad_shape", "state nesting exceeds limit")
+        if current is None or type(current) in (bool, int):
+            continue
+        if type(current) is str:
+            if any(0xD800 <= ord(c) <= 0xDFFF for c in current):
+                _fail("bad_shape", "state string contains a surrogate")
+            continue
+        if isinstance(current, float):
+            _fail("bad_shape", "state carries a float")
+        if isinstance(current, dict):
+            for key, item in current.items():
+                if type(key) is not str:
+                    _fail("bad_shape", "state key is not a string")
+                if any(0xD800 <= ord(c) <= 0xDFFF for c in key):
+                    _fail("bad_shape", "state key contains a surrogate")
+                stack.append((item, cur_depth + 1))
+            continue
+        if isinstance(current, list):
+            for item in current:
+                stack.append((item, cur_depth + 1))
+            continue
+        _fail("bad_shape", "state carries a non-JSON value")
 
 
 def _canonical_bytes(value: object) -> bytes:
     _reject_non_canonical(value, 0)
     text = json.dumps(value, sort_keys=True, separators=(",", ":"),
                       ensure_ascii=False)
-    return text.encode("utf-8")
+    try:
+        return text.encode("utf-8")
+    except UnicodeEncodeError:
+        _fail("bad_shape", "state string contains a surrogate")
 
 
 def compute_battery_state_sha256(state: dict) -> str:

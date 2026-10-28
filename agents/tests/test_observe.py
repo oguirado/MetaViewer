@@ -30,7 +30,7 @@ _STATE_SHA = "cd" * 32
 
 def _frame(**overrides):
     frame = {
-        "schema": "frame_ref/v0.1",
+        "schema": "frame_ref/v0.2",
         "surface_id": "surface-demo",
         "generation": 1,
         "tick": 7,
@@ -79,7 +79,7 @@ def _truth(**overrides):
 
 def _observation(**overrides):
     observation = {
-        "schema": "observation/v0.1",
+        "schema": "observation/v0.2",
         "frame_ref": _frame(),
         "vision": _vision(),
         "ground_truth": _truth(),
@@ -100,7 +100,7 @@ class ObservationValidationTests(unittest.TestCase):
 
     def test_minimal_frame_only_observation_validates(self):
         validate_observation(
-            {"schema": "observation/v0.1", "frame_ref": _frame()},
+            {"schema": "observation/v0.2", "frame_ref": _frame()},
             surface_id="surface-demo", generation=1)
 
     def test_vision_without_ground_truth_validates(self):
@@ -466,7 +466,7 @@ class BuildObservationTests(unittest.TestCase):
         self.assertEqual(
             build_observation(_frame(), surface_id="surface-demo",
                               generation=1),
-            {"schema": "observation/v0.1", "frame_ref": _frame()})
+            {"schema": "observation/v0.2", "frame_ref": _frame()})
 
     def test_builds_full_observation(self):
         self.assertEqual(
@@ -474,6 +474,35 @@ class BuildObservationTests(unittest.TestCase):
                               generation=1, vision=_vision(),
                               ground_truth=_truth()),
             _observation())
+
+    def test_explicit_v01_compatibility_and_cross_version_refusal(self):
+        frame_v01 = _frame(schema="frame_ref/v0.1")
+        obs_v01 = _observation(schema="observation/v0.1", frame_ref=frame_v01)
+        built_v01 = build_observation(
+            frame_v01, surface_id="surface-demo", generation=1,
+            vision=_vision(), ground_truth=_truth(), contract_version="v0.1")
+        self.assertEqual(built_v01, obs_v01)
+        validate_observation(obs_v01, surface_id="surface-demo", generation=1,
+                             contract_version="v0.1")
+        for args, kwargs in (
+            ((obs_v01,), {"surface_id": "surface-demo", "generation": 1}),
+            ((_observation(),), {"surface_id": "surface-demo", "generation": 1, "contract_version": "v0.1"}),
+            ((_observation(),), {"surface_id": "surface-demo", "generation": 1, "contract_version": "v0.3"}),
+        ):
+            with self.subTest(call="validate", kwargs=kwargs):
+                with self.assertRaises(ObservationError) as caught:
+                    validate_observation(*args, **kwargs)
+                self.assertEqual(caught.exception.code, "unknown_version")
+        for frame_arg, kwargs in (
+            (frame_v01, {"surface_id": "surface-demo", "generation": 1}),
+            (frame_v01, {"surface_id": "surface-demo", "generation": 1, "contract_version": "v0.2"}),
+            (_frame(), {"surface_id": "surface-demo", "generation": 1, "contract_version": "v0.1"}),
+            (_frame(), {"surface_id": "surface-demo", "generation": 1, "contract_version": "v0.3"}),
+        ):
+            with self.subTest(call="build", schema=frame_arg["schema"], kwargs=kwargs):
+                with self.assertRaises(ObservationError) as caught:
+                    build_observation(frame_arg, **kwargs)
+                self.assertEqual(caught.exception.code, "unknown_version")
 
     def test_build_isolated_from_later_caller_mutation(self):
         frame = _frame()

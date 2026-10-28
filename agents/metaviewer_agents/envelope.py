@@ -47,6 +47,7 @@ _ENDPOINT_KEYS = frozenset(("component", "instance"))
 _MAX_STRING = 128
 _MAX_STRING_BYTES = 65536
 _MAX_DEPTH = 100
+_MAX_CONTAINER_DEPTH = 32
 _SESSION_ORIGIN_NS: int | None = None
 _LAST_CLOCK_FN: object = None
 # NUL spelled as code: the ramws pattern excludes it from shared paths.
@@ -739,24 +740,35 @@ def _valid_name(value):
 def _check_json_values(value, depth=0):
     # [TARGET, unit decision] Both versions use exact safe JSON integers and
     # Unicode scalar strings; validate without converting integers to float.
-    if depth > _MAX_DEPTH:
-        raise _Mismatch("nesting limit")
-    if type(value) is int and not -_MAX_SAFE_INT <= value <= _MAX_SAFE_INT:
-        raise _Mismatch("unsafe integer")
-    if type(value) is float and not math.isfinite(value):
-        raise _Mismatch("non-finite")
-    if isinstance(value, str):
-        if any(0xD800 <= ord(c) <= 0xDFFF for c in value):
-            raise _Mismatch("surrogate")
-        if len(value.encode("utf-8")) > _MAX_STRING_BYTES:
-            raise _Mismatch("string byte limit")
-    if isinstance(value, dict):
-        for key, child in value.items():
-            _check_json_values(key, depth + 1)
-            _check_json_values(child, depth + 1)
-    elif isinstance(value, list):
-        for child in value:
-            _check_json_values(child, depth + 1)
+    # Iterative container-depth traversal (capped at 32) avoids RecursionError
+    # on hostile deeply-nested inputs before any deepcopy or schema walk.
+    stack = [(value, depth + (1 if isinstance(value, (dict, list)) else 0))]
+    while stack:
+        current, cur_depth = stack.pop()
+        if cur_depth > _MAX_CONTAINER_DEPTH:
+            raise _Mismatch("nesting limit")
+        if type(current) is int and not -_MAX_SAFE_INT <= current <= _MAX_SAFE_INT:
+            raise _Mismatch("unsafe integer")
+        if type(current) is float and not math.isfinite(current):
+            raise _Mismatch("non-finite")
+        if isinstance(current, str):
+            if any(0xD800 <= ord(c) <= 0xDFFF for c in current):
+                raise _Mismatch("surrogate")
+            if len(current.encode("utf-8")) > _MAX_STRING_BYTES:
+                raise _Mismatch("string byte limit")
+        if isinstance(current, dict):
+            for key, child in current.items():
+                stack.append(
+                    (key, cur_depth + (1 if isinstance(key, (dict, list)) else 0))
+                )
+                stack.append(
+                    (child, cur_depth + (1 if isinstance(child, (dict, list)) else 0))
+                )
+        elif isinstance(current, list):
+            for child in current:
+                stack.append(
+                    (child, cur_depth + (1 if isinstance(child, (dict, list)) else 0))
+                )
 
 
 def validate_envelope(value: object) -> dict:
@@ -770,7 +782,7 @@ def validate_envelope(value: object) -> dict:
         raise EnvelopeError("bad_shape", "envelope keys are not exact")
     try:
         _check_json_values(value)
-    except _Mismatch:
+    except (_Mismatch, RecursionError):
         raise EnvelopeError("bad_shape", "envelope contains invalid JSON values") from None
     schema = value["schema"]
     if not isinstance(schema, str) or not schema:
@@ -799,7 +811,7 @@ def validate_envelope(value: object) -> dict:
         raise EnvelopeError("unknown_version", "unknown body version")
     try:
         _check(body, target, 0)
-    except _Mismatch:
+    except (_Mismatch, RecursionError):
         raise EnvelopeError("bad_shape", "body violates contract") from None
     return value
 
@@ -813,8 +825,9 @@ def make_envelope(*, msg_id: str, from_component: str,
 
     The nonce defaults to 32 lowercase hex characters and the timestamp to
     the monotonic session clock; supplied values pass through validation
-    unchanged. The body is deep-copied so later caller mutation cannot
-    corrupt the returned frame.
+    unchanged. Validation runs before deep-copying ``body`` so hostile
+    nesting or scalar violations fail closed without recursion overflow,
+    and the returned frame remains isolated from later caller mutation.
     """
     if nonce is None:
         nonce = secrets.token_hex(16)
@@ -836,9 +849,14 @@ def make_envelope(*, msg_id: str, from_component: str,
         "session_id": session_id,
         "seq": seq,
         "nonce": nonce,
-        "body": copy.deepcopy(body),
+        "body": body,
     }
-    return validate_envelope(envelope)
+    validate_envelope(envelope)
+    try:
+        envelope["body"] = copy.deepcopy(body)
+    except RecursionError:
+        raise EnvelopeError("bad_shape", "envelope contains invalid JSON values") from None
+    return envelope
 
 
 def _check_cap(max_bytes: int) -> None:

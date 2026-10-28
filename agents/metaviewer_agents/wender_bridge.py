@@ -32,9 +32,24 @@ from .observe import (
 from .tools import ToolValidationError, _check_action, _check_expectation
 
 
+_MAX_TIMEOUT = 86400.0
+
+
 def _require(condition, message):
     if not condition:
         raise ObservationError("bad_shape", message)
+
+
+def _validate_timeout(timeout):
+    if type(timeout) not in (int, float):
+        raise ObservationError("bad_shape", "timeout must be positive and finite")
+    try:
+        timeout_f = float(timeout)
+    except OverflowError as exc:
+        raise ObservationError("bad_shape", "timeout must be positive and finite") from exc
+    if not math.isfinite(timeout_f) or timeout_f <= 0 or timeout_f > _MAX_TIMEOUT:
+        raise ObservationError("bad_shape", "timeout must be positive and finite")
+    return timeout_f
 
 
 def _hex(value, length):
@@ -114,6 +129,7 @@ def _unique_object(pairs):
 
 def _run_bounded(command, *, cwd, env, request, timeout):
     """Drain both outputs while feeding stdin, with fixed byte ceilings."""
+    timeout = _validate_timeout(timeout)
     deadline = time.monotonic() + timeout
     with subprocess.Popen(command, cwd=cwd, env=env, stdin=subprocess.PIPE,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
@@ -198,16 +214,17 @@ class WenderSubprocessAdapter:
             if locked_root != self.wender_root:
                 raise ObservationError("commit_mismatch", "verified checkout differs from wender_root")
         if (not isinstance(command, (list, tuple)) or not command
-                or any(not isinstance(arg, str) or not arg or "\x00" in arg for arg in command)):
-            raise ValueError("command must be a nonempty argv sequence")
-        if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
-            raise ValueError("timeout must be positive and finite")
+                or any(not isinstance(arg, str) or not arg or "\x00" in arg
+                       or any(0xD800 <= ord(c) <= 0xDFFF for c in arg)
+                       for arg in command)):
+            raise ObservationError("bad_shape", "command must be a nonempty argv sequence")
+        self.timeout = _validate_timeout(timeout)
         self.command = tuple(command)
-        self.timeout = timeout
         self.battery_state_sha256 = None
 
     def plan_step(self, observation, element_table, goal):
         self.battery_state_sha256 = None
+        timeout = _validate_timeout(self.timeout)
         _require(isinstance(observation, dict) and isinstance(observation.get("frame_ref"), dict),
                  "observation frame missing")
         frame = observation["frame_ref"]
@@ -236,9 +253,13 @@ class WenderSubprocessAdapter:
                      and type(row["score_ppm"]) is int
                      and 0 <= row["score_ppm"] <= 1_000_000, "element fields invalid")
         _require(isinstance(goal, str) and bool(goal.strip()), "goal required")
-        request = json.dumps(dict(observation=observation, element_table=element_table, goal=goal),
-                             sort_keys=True, separators=(",", ":"), ensure_ascii=False,
-                             allow_nan=False).encode("utf-8")
+        _reject_non_canonical(goal, 0)
+        try:
+            request = json.dumps(dict(observation=observation, element_table=element_table, goal=goal),
+                                 sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+                                 allow_nan=False).encode("utf-8")
+        except (UnicodeEncodeError, ValueError, TypeError) as exc:
+            raise ObservationError("bad_shape", "planner request is not valid UTF-8 JSON") from exc
         env = {}
         for key in ("PATH", "LANG"):
             value = os.environ.get(key)
@@ -247,7 +268,7 @@ class WenderSubprocessAdapter:
         env.update(PYTHONPATH=str(self.wender_root), PYTHONDONTWRITEBYTECODE="1")
         try:
             result = _run_bounded(self.command, cwd=self.wender_root, env=env,
-                                  request=request, timeout=self.timeout)
+                                  request=request, timeout=timeout)
         except subprocess.TimeoutExpired as exc:
             raise ObservationError("timeout", "Wender planner timed out") from exc
         except OSError as exc:
