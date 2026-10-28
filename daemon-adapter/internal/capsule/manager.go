@@ -381,6 +381,9 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 	if p.Kind == "desktop_capsule" && (p.NativeKind != "program" || !admittedProgram(p.Program, p.NestedDepth) || (p.NestedDepth == 1 && (p.Width != 1280 || p.Height != 720))) {
 		return nil, fault("profile", "unadmitted profile, kind or geometry")
 	}
+	// Lost bindings retain their profile and capacity: native state may be orphaned.
+	// Only destroy with a verified stop receipt releases both; keep the old ID
+	// as a tombstone and generate a fresh ID for the replacement.
 	active := len(m.quarantined)
 	for _, b := range m.bindings {
 		if b.Surface.State != "destroyed" {

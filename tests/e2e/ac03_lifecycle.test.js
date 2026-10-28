@@ -270,7 +270,7 @@ function checkLifecycleTrace(value) {
       if (state.has(id)) throw new E2EError('E2E_REVIVE', `surface id revived: ${id}`);
       state.set(id, 'live');
       created += 1;
-    } else if (state.get(id) !== 'live') {
+    } else if (state.get(id) !== 'live' && !(op === 'destroyed' && state.get(id) === 'lost')) {
       throw new E2EError('E2E_STATE', `surface ${id} is not live for ${op}`);
     } else if (op === 'destroyed') {
       state.set(id, 'destroyed');
@@ -397,7 +397,7 @@ describe('ac03 lifecycle contract (Layer 1)', () => {
     rejectsWith(() => checkLifecycleTrace(doubled), ['E2E_REVIVE']);
   });
 
-  it('negative control: transitions on non-live surfaces are refused', () => {
+  it('lost surfaces allow destroy once; unknown and terminal transitions are refused', () => {
     rejectsWith(() => checkLifecycleTrace(
       [{ surface_id: 'ac03-surf-ghost', op: 'destroyed', code: null }]), ['E2E_STATE']);
     rejectsWith(() => checkLifecycleTrace(
@@ -407,7 +407,10 @@ describe('ac03 lifecycle contract (Layer 1)', () => {
       { surface_id: 'ac03-surf-x', op: 'lost', code: null },
       { surface_id: 'ac03-surf-x', op: 'destroyed', code: null },
     ];
-    rejectsWith(() => checkLifecycleTrace(afterLost), ['E2E_STATE']);
+    assert.deepEqual(checkLifecycleTrace(afterLost), { created: 1, destroyed: 1, lost: 1, errors: 0, live: [] });
+    rejectsWith(() => checkLifecycleTrace([...afterLost,
+      { surface_id: 'ac03-surf-x', op: 'destroyed', code: null },
+    ]), ['E2E_STATE']);
     const afterDestroyed = [
       { surface_id: 'ac03-surf-x', op: 'created', code: null },
       { surface_id: 'ac03-surf-x', op: 'destroyed', code: null },
@@ -1144,9 +1147,43 @@ else:
       assert.equal(postLossInputRefused, true, 'input on lost surface must be refused');
       assert.equal(postLossCaptureRefused, true, 'capture on lost surface must be refused');
       assert.equal(destroyedCaptureRefused, true, 'capture on destroyed surface must be refused');
+      // A lost profile remains reserved until destroy proves native removal.
+      sendRequest('create', { kind: 'browser', profile_id: 'kill-target', geometry: { w: 2, h: 1 } });
+      const reserved = checkSurfaceEventError(await readDaemon('lost-profile-refused', 5000));
+      assert.equal(reserved.data.code, 'adapter');
+      assert.match(reserved.data.detail, /profile already bound/);
+
+      sendRequest('destroy', { surface_id: idKill });
+      const destroyedLost = await readDaemon('destroy-lost', 5000);
+      assert.equal(destroyedLost.event, 'state_changed');
+      assert.equal(destroyedLost.data.surface.surface_id, idKill);
+      assert.equal(destroyedLost.data.surface.state, 'destroyed');
+      trace.push({ surface_id: idKill, op: 'destroyed', code: null });
+
+      const replacementProc = spawnCapsuleProcess();
+      writeFileSync(join(stateDir, 'pids.json'), JSON.stringify({
+        'kill-target': replacementProc.pid,
+        'destroyed-target': destroyedProc.pid,
+      }), { mode: 0o600 });
+      sendRequest('create', { kind: 'browser', profile_id: 'kill-target', geometry: { w: 2, h: 1 } });
+      const replacement = await readDaemon('replacement-created', 5000);
+      assert.equal(replacement.event, 'created');
+      const replacementID = replacement.data.surface.surface_id;
+      assert.notEqual(replacementID, idKill);
+      assert.notEqual(replacementID, idDestroyed);
+      assert.equal(replacement.data.surface.profile_id, 'kill-target');
+      trace.push({ surface_id: replacementID, op: 'created', code: null });
+      assert.equal((await readDaemon('replacement-frame', 5000)).event, 'frame_ready');
+      sendRequest('destroy', { surface_id: replacementID });
+      const replacementDestroyed = await readDaemon('replacement-destroyed', 5000);
+      assert.equal(replacementDestroyed.event, 'state_changed');
+      assert.equal(replacementDestroyed.data.surface.surface_id, replacementID);
+      assert.equal(replacementDestroyed.data.surface.state, 'destroyed');
+      trace.push({ surface_id: replacementID, op: 'destroyed', code: null });
+
       const summary = checkLifecycleTrace(trace);
-      assert.equal(summary.created, 2);
-      assert.equal(summary.destroyed, 1);
+      assert.equal(summary.created, 3);
+      assert.equal(summary.destroyed, 3);
       assert.equal(summary.lost, 1);
       assert.equal(summary.errors, 2);
       assert.deepEqual(summary.live, []);
