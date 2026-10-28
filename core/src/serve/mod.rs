@@ -2939,12 +2939,42 @@ mod nv_regressions {
     }
     #[test]
     fn nv_w3_server_shutdown_and_fixture_drop_flush_pending_frame_batches() {
+        fn snapshot_session_tree(session: &Path) -> Vec<(String, u64, u64, i64)> {
+            let mut entries = Vec::new();
+            for rel in ["", "events", "artifacts"] {
+                let dir = if rel.is_empty() {
+                    session.to_path_buf()
+                } else {
+                    session.join(rel)
+                };
+                let mut paths: Vec<_> = fs::read_dir(&dir)
+                    .unwrap()
+                    .map(|e| e.unwrap().path())
+                    .collect();
+                paths.sort();
+                for p in paths {
+                    let m = fs::symlink_metadata(&p).unwrap();
+                    if m.is_file() {
+                        let name = p
+                            .strip_prefix(session)
+                            .unwrap()
+                            .to_string_lossy()
+                            .into_owned();
+                        entries.push((name, m.len(), m.ino(), m.mtime_nsec()));
+                    }
+                }
+            }
+            entries
+        }
+
         run(async {
             let mut f = Fixture::new();
             f.seed();
             let _ui = f.attach(Component::Ui, 32);
             let _daemon = f.attach(Component::Daemon, 32);
             let shm = ShmFixture::new();
+            let session_root = f.server.root.clone();
+            crate::journal::hold_sync_worker_for_test(&session_root);
             for gen in 2..=10u64 {
                 let bytes = format!("w3-frame-pixels-{gen}").into_bytes();
                 let frame_path = shm.0.join(format!("f-{gen}.rgb"));
@@ -2957,34 +2987,72 @@ mod nv_regressions {
                 frame["ramws_path"] = frame_path.to_str().unwrap().into();
                 frame["sha256"] = sha256_hex(&bytes).into();
                 f.route(Component::Daemon, gen, frame).await.unwrap();
+                if gen == 9 {
+                    std::thread::sleep(Duration::from_millis(55));
+                }
             }
-            let session_root = f.server.root.clone();
+            std::thread::sleep(Duration::from_millis(55));
+            // Negative control: clearing peer state without journal flush leaves the
+            // in-flight worker batch (gen 2..=9) and pending 9th frame (gen 10) unpromoted.
+            f.server.connections.clear();
             assert!(
                 session_root.join("checkpoint.next").exists(),
                 "9th frame must leave a pending checkpoint.next before shutdown"
             );
+            let cp_before: Value =
+                serde_json::from_slice(&fs::read(session_root.join("checkpoint.json")).unwrap())
+                    .unwrap();
+            assert_eq!(
+                cp_before["count"], 2,
+                "negative control: without shutdown flush, checkpoint.json stays at seed count"
+            );
+
             f.server.shutdown().unwrap();
             assert!(
                 !session_root.join("checkpoint.next").exists(),
                 "Server::shutdown must flush and promote checkpoint.next before returning"
             );
+            let snap_immediately = snapshot_session_tree(&session_root);
+            let cp_after: Value =
+                serde_json::from_slice(&fs::read(session_root.join("checkpoint.json")).unwrap())
+                    .unwrap();
+            assert_eq!(cp_after["count"], 11);
             let replayed =
                 crate::journal::scan(&session_root.join("journal.jsonl"), &session_root).unwrap();
             assert_eq!(&replayed.state, f.server.authority.state());
+            std::thread::sleep(Duration::from_millis(20));
+            assert_eq!(
+                snapshot_session_tree(&session_root),
+                snap_immediately,
+                "session directory must be quiescent after Server::shutdown returns"
+            );
 
             // Also verify Fixture::drop directly when a new frame batch is in flight/pending.
-            let bytes = b"w3-frame-pixels-11";
-            let frame_path = shm.0.join("f-11.rgb");
-            fs::write(&frame_path, bytes).unwrap();
-            let mut frame: Value = serde_json::from_str(include_str!(
-                "../../../contracts/examples/v0.2/frame_ref.valid.json"
-            ))
-            .unwrap();
-            frame["generation"] = 11.into();
-            frame["ramws_path"] = frame_path.to_str().unwrap().into();
-            frame["sha256"] = sha256_hex(bytes).into();
-            f.route(Component::Daemon, 11, frame).await.unwrap();
+            let _ui = f.attach(Component::Ui, 32);
+            let _daemon = f.attach(Component::Daemon, 32);
+            crate::journal::hold_sync_worker_for_test(&session_root);
+            for gen in 11..=19u64 {
+                let bytes = format!("w3-frame-pixels-{gen}").into_bytes();
+                let frame_path = shm.0.join(format!("f-{gen}.rgb"));
+                fs::write(&frame_path, &bytes).unwrap();
+                let mut frame: Value = serde_json::from_str(include_str!(
+                    "../../../contracts/examples/v0.2/frame_ref.valid.json"
+                ))
+                .unwrap();
+                frame["generation"] = gen.into();
+                frame["ramws_path"] = frame_path.to_str().unwrap().into();
+                frame["sha256"] = sha256_hex(&bytes).into();
+                f.route(Component::Daemon, gen, frame).await.unwrap();
+                if gen == 18 {
+                    std::thread::sleep(Duration::from_millis(55));
+                }
+            }
+            std::thread::sleep(Duration::from_millis(55));
             assert!(session_root.join("checkpoint.next").exists());
+            let cp_before_drop: Value =
+                serde_json::from_slice(&fs::read(session_root.join("checkpoint.json")).unwrap())
+                    .unwrap();
+            assert_eq!(cp_before_drop["count"], 11);
         });
     }
 }

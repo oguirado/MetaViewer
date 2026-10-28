@@ -78,6 +78,74 @@ std::thread_local! {
     }) };
 }
 
+#[cfg(test)]
+struct TestSyncHold {
+    held: std::sync::Mutex<bool>,
+    cv: std::sync::Condvar,
+}
+
+#[cfg(test)]
+fn test_sync_holds(
+) -> &'static std::sync::Mutex<std::collections::BTreeMap<PathBuf, std::sync::Arc<TestSyncHold>>> {
+    static HOLDS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::BTreeMap<PathBuf, std::sync::Arc<TestSyncHold>>>,
+    > = std::sync::OnceLock::new();
+    HOLDS.get_or_init(|| std::sync::Mutex::new(std::collections::BTreeMap::new()))
+}
+
+#[cfg(test)]
+pub(crate) fn hold_sync_worker_for_test(root: &Path) {
+    let mut holds = test_sync_holds().lock().unwrap_or_else(|e| e.into_inner());
+    let hold = holds
+        .entry(root.to_path_buf())
+        .or_insert_with(|| {
+            std::sync::Arc::new(TestSyncHold {
+                held: std::sync::Mutex::new(true),
+                cv: std::sync::Condvar::new(),
+            })
+        })
+        .clone();
+    *hold.held.lock().unwrap_or_else(|e| e.into_inner()) = true;
+}
+
+#[cfg(test)]
+fn is_test_sync_held(root: &Path) -> bool {
+    let hold = test_sync_holds()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(root)
+        .cloned();
+    hold.is_some_and(|h| *h.held.lock().unwrap_or_else(|e| e.into_inner()))
+}
+
+#[cfg(test)]
+fn wait_while_test_sync_held(root: &Path) {
+    let hold = test_sync_holds()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(root)
+        .cloned();
+    if let Some(hold) = hold {
+        let mut held = hold.held.lock().unwrap_or_else(|e| e.into_inner());
+        while *held {
+            held = hold.cv.wait(held).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn release_test_sync_hold(root: &Path) {
+    let hold = test_sync_holds()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(root);
+    if let Some(hold) = hold {
+        let mut held = hold.held.lock().unwrap_or_else(|e| e.into_inner());
+        *held = false;
+        hold.cv.notify_all();
+    }
+}
+
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_RECORDS: u64 = 100_000;
 const MAX_LINE: usize = crate::MAX_FRAME_BYTES;
@@ -913,6 +981,8 @@ impl Journal {
                     while let Ok(cmd) = rx.recv() {
                         match cmd {
                             SyncCmd::Flush(batch) => {
+                                #[cfg(test)]
+                                wait_while_test_sync_held(&batch.root);
                                 if sticky_err.is_none() {
                                     if let Err(e) = execute_sync_batch(batch) {
                                         sync_failed
@@ -942,6 +1012,8 @@ impl Journal {
             .ok_or(JournalError::Io)
     }
     fn join_sync_worker(&mut self) -> Result<(), JournalError> {
+        #[cfg(test)]
+        release_test_sync_hold(&self.root);
         let Some(worker) = self.sync_worker.take() else {
             return Ok(());
         };
@@ -996,6 +1068,8 @@ impl Journal {
             .map_err(|_| JournalError::Io)
     }
     pub fn flush_sync(&mut self) -> Result<(), JournalError> {
+        #[cfg(test)]
+        release_test_sync_hold(&self.root);
         if self.poisoned || self.sync_failed.load(std::sync::atomic::Ordering::Acquire) {
             self.poisoned = true;
             self.dirty_files.clear();
@@ -1229,6 +1303,8 @@ impl Journal {
         self.poisoned = true;
         let is_frame = matches!(input, Input::Frame { .. });
         if !is_frame {
+            #[cfg(test)]
+            release_test_sync_hold(&self.root);
             if let Some(worker) = &self.sync_worker {
                 let (b_tx, b_rx) = std::sync::mpsc::sync_channel(1);
                 worker
@@ -1327,9 +1403,12 @@ impl Journal {
             };
             self.pending_checkpoint = Some(cp_file);
             self.unsynced_frames += 1;
-            if self.last_sync.elapsed() >= FRAME_SYNC_WINDOW
-                || self.unsynced_frames >= FRAME_SYNC_MAX_BATCH
-            {
+            #[cfg(test)]
+            let window_elapsed =
+                !is_test_sync_held(&self.root) && self.last_sync.elapsed() >= FRAME_SYNC_WINDOW;
+            #[cfg(not(test))]
+            let window_elapsed = self.last_sync.elapsed() >= FRAME_SYNC_WINDOW;
+            if window_elapsed || self.unsynced_frames >= FRAME_SYNC_MAX_BATCH {
                 self.dispatch_frame_sync_batch()?;
             }
         }
@@ -1638,6 +1717,7 @@ mod directory_tests {
         let mut journal = Journal::create(&root, &state).unwrap();
         let session = root.join("sessions/session-drop");
         seed_surface(&mut state, &mut journal);
+        hold_sync_worker_for_test(&session);
         for gen in 1..=9u64 {
             let bytes = format!("drop-frame-{gen}").into_bytes();
             let sha = sha256_hex(&bytes);
@@ -1664,6 +1744,9 @@ mod directory_tests {
             "generation 9 must remain pending before drop"
         );
         assert!(session.join("checkpoint.next").exists());
+        let cp_before_drop: Checkpoint =
+            serde_json::from_slice(&fs::read(session.join("checkpoint.json")).unwrap()).unwrap();
+        assert_eq!(cp_before_drop.count, 2);
 
         drop(journal);
 
@@ -1690,6 +1773,7 @@ mod directory_tests {
         let mut journal_close = Journal::create(&root, &state_close).unwrap();
         let session_close = root.join("sessions/session-close");
         seed_surface(&mut state_close, &mut journal_close);
+        hold_sync_worker_for_test(&session_close);
         for gen in 1..=9u64 {
             let bytes = format!("close-frame-{gen}").into_bytes();
             let sha = sha256_hex(&bytes);
@@ -1709,10 +1793,22 @@ mod directory_tests {
                 .unwrap();
         }
         assert!(journal_close.sync_worker.is_some());
-        assert!(journal_close.pending_checkpoint.is_some());
+        assert!(
+            journal_close.pending_checkpoint.is_some() && journal_close.unsynced_frames == 1,
+            "generation 9 must remain pending before close"
+        );
+        assert!(session_close.join("checkpoint.next").exists());
+        let cp_before_close: Checkpoint =
+            serde_json::from_slice(&fs::read(session_close.join("checkpoint.json")).unwrap())
+                .unwrap();
+        assert_eq!(cp_before_close.count, 2);
         journal_close.close().unwrap();
         assert!(journal_close.sync_worker.is_none());
         assert!(!session_close.join("checkpoint.next").exists());
+        let cp_after_close: Checkpoint =
+            serde_json::from_slice(&fs::read(session_close.join("checkpoint.json")).unwrap())
+                .unwrap();
+        assert_eq!(cp_after_close.count, 11);
         let snap_after_close = snapshot_tree(&session_close);
         drop(journal_close);
         assert_eq!(snapshot_tree(&session_close), snap_after_close);
@@ -1723,6 +1819,7 @@ mod directory_tests {
         let mut journal_neg = Journal::create(&root, &state_neg).unwrap();
         let session_neg = root.join("sessions/session-unjoined");
         seed_surface(&mut state_neg, &mut journal_neg);
+        hold_sync_worker_for_test(&session_neg);
         let bytes = b"unjoined-frame-1";
         let sha = sha256_hex(bytes);
         let w = journal_neg.retain_frame_witness(&sha, bytes).unwrap();
