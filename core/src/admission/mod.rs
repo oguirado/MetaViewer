@@ -16,8 +16,8 @@
 //! [TARGET, unit decision] Metadata updates can restore liveness; only explicit
 //! Lost/Destroyed transitions revoke it. Control cession still cancels work.
 //! [TARGET, unit decision] HumanInput admits UI surface_request/v0.2 op="input"
-//! (click/key/type) only when the surface is live, not agent_controlled, free of
-//! lease/draining conflicts, within frame bounds, and with remaining budget.
+//! (click/key/type/scroll) only when the surface is live, not agent_controlled,
+//! free of lease/draining conflicts, within frame/delta bounds, and with budget.
 use crate::wire::payload::{ActionProposal, ActionProposalAction, ActionProposalExpectation};
 use crate::{decode_envelope, Command, Component, Endpoint, Envelope, Refusal};
 use serde::{Deserialize, Serialize};
@@ -304,7 +304,10 @@ impl CoreState {
                     ) {
                         out.reason = Some(Refusal::Policy);
                     } else if let ActionProposalAction::Case1(a) = &p.action {
-                        if a.keys.join("+").len() > 32 {
+                        if a.keys.is_empty()
+                            || a.keys.iter().any(|k| k.is_empty() || k.contains('\0'))
+                            || a.keys.join("+").len() > 32
+                        {
                             out.reason = Some(Refusal::Policy);
                         } else if self.remaining_budget == 0 {
                             out.reason = Some(Refusal::BudgetExceeded);
@@ -324,10 +327,12 @@ impl CoreState {
                         } else if self.remaining_budget == 0 {
                             out.reason = Some(Refusal::BudgetExceeded);
                         }
-                    } else if matches!(p.action, ActionProposalAction::Case3(_))
-                        && self.remaining_budget == 0
-                    {
-                        out.reason = Some(Refusal::BudgetExceeded);
+                    } else if matches!(p.action, ActionProposalAction::Case3(_)) {
+                        if s.frame.is_none() {
+                            out.reason = Some(Refusal::OutOfBounds);
+                        } else if self.remaining_budget == 0 {
+                            out.reason = Some(Refusal::BudgetExceeded);
+                        }
                     }
                     if out.reason.is_none() {
                         self.remaining_budget = self
