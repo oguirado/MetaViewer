@@ -558,3 +558,149 @@ func TestSubscriptionDeduplicatesReencodedPNGWithNewMtimeAndSizeMutation(t *test
 		t.Fatal("stalled waiting for geometry change frame_ready")
 	}
 }
+
+type gatedCaptureSource struct {
+	mu    sync.Mutex
+	b     capsule.Binding
+	f     capsule.NativeFrame
+	err   error
+	calls int
+}
+
+func (s *gatedCaptureSource) Capture(_ context.Context, _ string) (capsule.Binding, capsule.NativeFrame, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	if s.err != nil {
+		return capsule.Binding{}, capsule.NativeFrame{}, s.err
+	}
+	s.f.Seq++
+	return s.b, s.f, nil
+}
+
+func TestResubscribeAfterUnsubscribeReconfirms(t *testing.T) {
+	root, b, f := ramFixture(t)
+	p, err := NewPublisher(PublishConfig{RAMRoot: root, MaxFrameBytes: 64 << 20, MaxPixels: 64, MaxSurfaces: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	src := &gatedCaptureSource{b: b, f: f}
+	if _, badErr := NewSubscriptions(context.Background(), SubscriptionConfig{
+		MaxSubscriptions:      1,
+		PollInterval:          2 * time.Millisecond,
+		CaptureTimeout:        time.Second,
+		ShutdownTimeout:       time.Second,
+		DeduplicateUnchanged:  true,
+		InitialUnchangedPolls: -1,
+	}, src, p, func(context.Context, json.RawMessage) error { return nil }); badErr == nil {
+		t.Fatal("expected NewSubscriptions to reject negative InitialUnchangedPolls")
+	}
+
+	events := make(chan json.RawMessage, 16)
+	subs, err := NewSubscriptions(context.Background(), SubscriptionConfig{
+		MaxSubscriptions:      1,
+		PollInterval:          2 * time.Millisecond,
+		CaptureTimeout:        time.Second,
+		ShutdownTimeout:       time.Second,
+		DeduplicateUnchanged:  true,
+		InitialUnchangedPolls: 2,
+	}, src, p, func(ctx context.Context, msg json.RawMessage) error {
+		select {
+		case events <- msg:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = subs.Close(context.Background()) })
+
+	// Configure source to fail on the 3rd poll after 2 initial confirmations.
+	if err := subs.Subscribe(context.Background(), "a"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 2; i++ {
+		select {
+		case msg := <-events:
+			var ev struct {
+				Event string `json:"event"`
+			}
+			if err := json.Unmarshal(msg, &ev); err != nil || ev.Event != "frame_ready" {
+				t.Fatalf("expected initial confirmation %d frame_ready, got %s (%v)", i, msg, err)
+			}
+			if i == 2 {
+				src.mu.Lock()
+				src.err = errors.New("poll 3 failed")
+				src.mu.Unlock()
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("stalled waiting for initial confirmation %d", i)
+		}
+	}
+
+	select {
+	case msg := <-events:
+		var ev struct {
+			Event string `json:"event"`
+		}
+		if err := json.Unmarshal(msg, &ev); err != nil || ev.Event != "error" {
+			t.Fatalf("expected error event on failed 3rd poll, got %s (%v)", msg, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stalled waiting for failure event on 3rd poll")
+	}
+
+	// Wait for the failed task to finish recording its failure before calling Unsubscribe.
+	deadline := time.After(time.Second)
+	for {
+		if subs.TerminalError("a") != nil {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("failed poll did not record terminal error")
+		case <-time.After(time.Millisecond):
+		}
+	}
+
+	if err := subs.Unsubscribe(context.Background(), "a"); err != nil {
+		t.Fatal(err)
+	}
+	src.mu.Lock()
+	src.err = nil
+	src.mu.Unlock()
+
+	if err := subs.Subscribe(context.Background(), "a"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 2; i++ {
+		select {
+		case msg := <-events:
+			var ev struct {
+				Event string `json:"event"`
+			}
+			if err := json.Unmarshal(msg, &ev); err != nil || ev.Event != "frame_ready" {
+				t.Fatalf("expected reconfirmation %d frame_ready after failed+unsubscribed resubscribe, got %s (%v)", i, msg, err)
+			}
+		case <-time.After(200 * time.Millisecond):
+			t.Fatalf("expected 2 frame_ready confirmations after unsubscribe of failed task; stalled at confirmation %d", i)
+		}
+	}
+
+	if err := subs.Unsubscribe(context.Background(), "a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Release("a"); err != nil {
+		t.Fatal(err)
+	}
+	subs.mu.Lock()
+	_, leakedConfirmed := subs.confirmed["a"]
+	subs.mu.Unlock()
+	if leakedConfirmed {
+		t.Fatal("expected Publisher.Release to delete confirmed entry for released surface")
+	}
+}

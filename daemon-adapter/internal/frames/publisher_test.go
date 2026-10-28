@@ -513,3 +513,258 @@ func TestTimeBasedRetentionGlobalCapAndDeduplication(t *testing.T) {
 	}
 	t.Logf("MEASURED_PUBLISHER_1280x900 raw_bytes=%d publish_ms=%.2f dedup_ms=%.3f", len(hdRaw), float64(pubDur.Microseconds())/1000.0, float64(dedupDur.Microseconds())/1000.0)
 }
+
+func TestGlobalCapPreservesTwoPassiveGenerations(t *testing.T) {
+	root, b, f := ramFixture(t)
+	now := time.Unix(1_700_000_000, 0)
+	p, err := NewPublisher(PublishConfig{
+		RAMRoot:         root,
+		MaxFrameBytes:   64 << 20,
+		MaxPixels:       64 << 20,
+		MaxSurfaces:     4,
+		MaxRetained:     64,
+		MinRetention:    10 * time.Second,
+		MaxSurfaceBytes: 24,
+		MaxTotalBytes:   24,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.now = func() time.Time { return now }
+	t.Cleanup(func() { _ = p.Close() })
+
+	var pathsA []string
+	for seq := uint64(1); seq <= 2; seq++ {
+		f.Seq = seq
+		r, pubErr := p.Publish("a", b, f)
+		if pubErr != nil {
+			t.Fatal(pubErr)
+		}
+		pathsA = append(pathsA, r.RAMWSPath)
+		now = now.Add(50 * time.Millisecond)
+	}
+
+	bB := b
+	bB.Surface.SurfaceID = "b"
+	fB := f
+	var pathsB []string
+	for seq := uint64(1); seq <= 3; seq++ {
+		fB.Seq = seq
+		r, pubErr := p.Publish("b", bB, fB)
+		if pubErr != nil {
+			t.Fatal(pubErr)
+		}
+		pathsB = append(pathsB, r.RAMWSPath)
+		now = now.Add(50 * time.Millisecond)
+	}
+
+	for i, pth := range pathsA {
+		if _, statErr := os.Stat(pth); statErr != nil {
+			t.Fatalf("expected passive surface a generation %d to preserve >=2 floor under global eviction: %v", i+1, statErr)
+		}
+	}
+	// Negative control: surface b published 3 frames under the 24-byte cap, so its 1st frame must be evicted while its latest 2 survive.
+	if _, statErr := os.Stat(pathsB[0]); !os.IsNotExist(statErr) {
+		t.Fatal("negative control failed: expected oldest generation on surface b (with 3 frames) to be evicted")
+	}
+	for i := 1; i < len(pathsB); i++ {
+		if _, statErr := os.Stat(pathsB[i]); statErr != nil {
+			t.Fatalf("expected active surface b generation %d to remain: %v", i+1, statErr)
+		}
+	}
+}
+
+func TestPublishWithDeduplicateReturnsFreshRef(t *testing.T) {
+	root, b, f := ramFixture(t)
+	p, err := NewPublisher(PublishConfig{
+		RAMRoot:       root,
+		MaxFrameBytes: 64 << 20,
+		MaxPixels:     64,
+		MaxSurfaces:   4,
+		Deduplicate:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	f1 := f
+	f1.Seq = 1
+	f1.TSNS = 100
+	ref1, err := p.Publish("a", b, f1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f2 := f
+	f2.Seq = 2
+	f2.TSNS = 200
+	ref2, err := p.Publish("a", b, f2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref2.Tick != 2 || ref2.TsNS != 200 || ref2.Generation != 2 || ref2.RAMWSPath == ref1.RAMWSPath {
+		t.Fatalf("expected Publish to return fresh Ref metadata (Tick=2 TsNS=200 Generation=2), got %+v", ref2)
+	}
+	// Negative control: PublishIfChanged on the same unchanged pixels must still deduplicate.
+	f3 := f
+	f3.Seq = 3
+	f3.TSNS = 300
+	ref3, changed, err := p.PublishIfChanged("a", b, f3)
+	if err != nil || changed || ref3.Generation != ref2.Generation {
+		t.Fatalf("negative control failed: expected PublishIfChanged to deduplicate unchanged pixels: changed=%v ref=%+v err=%v", changed, ref3, err)
+	}
+}
+
+func TestNewPublisherRejectsDefaultSurfaceOverTotal(t *testing.T) {
+	root, _, _ := ramFixture(t)
+	if bad, err := NewPublisher(PublishConfig{
+		RAMRoot:         root,
+		MaxFrameBytes:   64 << 20,
+		MaxPixels:       64,
+		MaxSurfaces:     4,
+		MaxSurfaceBytes: 0,
+		MaxTotalBytes:   32 << 20,
+	}); err == nil {
+		_ = bad.Close()
+		t.Fatal("expected NewPublisher to reject default 128 MiB MaxSurfaceBytes exceeding 32 MiB MaxTotalBytes")
+	}
+	// Negative control: MaxTotalBytes >= effective 128 MiB MaxSurfaceBytes must succeed.
+	good, err := NewPublisher(PublishConfig{
+		RAMRoot:         root,
+		MaxFrameBytes:   64 << 20,
+		MaxPixels:       64,
+		MaxSurfaces:     4,
+		MaxSurfaceBytes: 0,
+		MaxTotalBytes:   128 << 20,
+	})
+	if err != nil {
+		t.Fatalf("expected NewPublisher with MaxTotalBytes=128MiB to succeed: %v", err)
+	}
+	_ = good.Close()
+}
+
+func TestDedupPollEvictsExpiredBurst(t *testing.T) {
+	root, b, f := ramFixture(t)
+	start := time.Unix(1_700_000_000, 0)
+	now := start
+	p, err := NewPublisher(PublishConfig{
+		RAMRoot:       root,
+		MaxFrameBytes: 64 << 20,
+		MaxPixels:     64,
+		MaxSurfaces:   4,
+		MinRetention:  3 * time.Second,
+		Deduplicate:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.now = func() time.Time { return now }
+	t.Cleanup(func() { _ = p.Close() })
+
+	var winPaths []string
+	for seq := uint64(1); seq <= 25; seq++ {
+		f.Seq = seq
+		r, pubErr := p.PublishForced("a", b, f)
+		if pubErr != nil {
+			t.Fatal(pubErr)
+		}
+		winPaths = append(winPaths, r.RAMWSPath)
+		now = now.Add(100 * time.Millisecond)
+	}
+	for i, pth := range winPaths {
+		if _, statErr := os.Stat(pth); statErr != nil {
+			t.Fatalf("precondition failed: expected burst generation %d to exist before expiry: %v", i+1, statErr)
+		}
+	}
+
+	now = start.Add(10 * time.Second)
+	f.Seq = 26
+	ref, changed, err := p.PublishIfChanged("a", b, f)
+	if err != nil || changed || ref.Generation != 25 {
+		t.Fatalf("expected deduplicated poll at seq 26: changed=%v ref=%+v err=%v", changed, ref, err)
+	}
+	for i := 0; i <= 22; i++ {
+		if _, statErr := os.Stat(winPaths[i]); !os.IsNotExist(statErr) {
+			t.Fatalf("expected expired burst generation %d to be unlinked on deduplicated poll", i+1)
+		}
+	}
+	for i := 23; i <= 24; i++ {
+		if _, statErr := os.Stat(winPaths[i]); statErr != nil {
+			t.Fatalf("expected floor generation %d to remain openable: %v", i+1, statErr)
+		}
+	}
+}
+
+func TestLiveBudgetDefaults(t *testing.T) {
+	root, b, f := ramFixture(t)
+	p, err := NewPublisher(PublishConfig{
+		RAMRoot:       root,
+		MaxFrameBytes: 64 << 20,
+		MaxPixels:     64,
+		MaxSurfaces:   4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	if got := p.maxRetained(); got != 64 {
+		t.Fatalf("expected live default maxRetained()=64, got %d", got)
+	}
+	if got := p.minRetention(); got != 4*time.Second {
+		t.Fatalf("expected live default minRetention()=4s, got %v", got)
+	}
+	if got := p.maxRetainedBytes(); got != 128<<20 {
+		t.Fatalf("expected live default maxRetainedBytes()=128MiB, got %d", got)
+	}
+
+	var livePaths []string
+	for seq := uint64(1); seq <= 17; seq++ {
+		f.Seq = seq
+		r, pubErr := p.Publish("a", b, f)
+		if pubErr != nil {
+			t.Fatal(pubErr)
+		}
+		livePaths = append(livePaths, r.RAMWSPath)
+	}
+	if _, statErr := os.Stat(livePaths[0]); statErr != nil {
+		t.Fatalf("expected 64MiB live default ring to retain generation 1 at generation 17: %v", statErr)
+	}
+
+	// Negative control: 16 MiB budget falls into the non-live tier (maxRetained=16, minRetention=0, maxRetainedBytes=64MiB).
+	midPub, err := NewPublisher(PublishConfig{
+		RAMRoot:       root,
+		MaxFrameBytes: 16 << 20,
+		MaxPixels:     64,
+		MaxSurfaces:   4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = midPub.Close() })
+	if midPub.maxRetained() != 16 || midPub.minRetention() != 0 || midPub.maxRetainedBytes() != 64<<20 {
+		t.Fatalf("negative control failed: unexpected 16MiB tier defaults (%d, %v, %d)", midPub.maxRetained(), midPub.minRetention(), midPub.maxRetainedBytes())
+	}
+}
+
+func TestMinRetentionDefaultIndependentOfMaxRetained(t *testing.T) {
+	root, _, _ := ramFixture(t)
+	p, err := NewPublisher(PublishConfig{
+		RAMRoot:       root,
+		MaxFrameBytes: 64 << 20,
+		MaxPixels:     64,
+		MaxSurfaces:   4,
+		MaxRetained:   32,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	if got := p.minRetention(); got != 4*time.Second {
+		t.Fatalf("expected minRetention()=4s when MaxFrameBytes=64MiB and MaxRetained=32, got %v", got)
+	}
+	if got := p.maxRetained(); got != 32 {
+		t.Fatalf("expected explicit MaxRetained=32 to be honored, got %d", got)
+	}
+}

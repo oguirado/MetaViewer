@@ -9,8 +9,9 @@ package frames
 // (512 MiB global cap across surfaces), and at most MaxRetained generations (64 for
 // live budgets, 16 for >= 1 MiB fixtures, 2 for small fixtures < 1 MiB), never fewer
 // than 2 generations. When deduplication is enabled (PublishIfChanged or Deduplicate),
-// unchanged RGB24 content hashes refresh retention without writing duplicate .rgb
-// files or evicting older generations.
+// unchanged RGB24 content hashes refresh the latest generation's retention without
+// writing duplicate .rgb files, while reclaiming burst generations past MinRetention
+// down to the 2-generation floor.
 // Only adapter-created raw files are reclaimed; native PNGs remain producer-owned.
 // [TARGET, unit decision] The configured producer root may be group-writable
 // (OpenSuperficies uses 0775); world writes are refused. Output stays 0700
@@ -61,8 +62,15 @@ type Publisher struct {
 	outputPath   string
 	next         uint64
 	surfaces     map[string]publication
+	onRelease    []func(string)
 	closed       bool
 	now          func() time.Time
+}
+
+func (p *Publisher) addReleaseHook(fn func(string)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.onRelease = append(p.onRelease, fn)
 }
 
 const (
@@ -86,7 +94,7 @@ func (p *Publisher) minRetention() time.Duration {
 	if p.cfg.MinRetention > 0 {
 		return p.cfg.MinRetention
 	}
-	if p.cfg.MaxFrameBytes >= 32<<20 && p.cfg.MaxRetained == 0 {
+	if p.cfg.MaxFrameBytes >= 32<<20 {
 		return defaultLiveMinRetention
 	}
 	return 0
@@ -143,6 +151,10 @@ func NewPublisher(cfg PublishConfig) (*Publisher, error) {
 	if cfg.MaxFrameBytes < 1 || cfg.MaxFrameBytes > 64<<20 || cfg.MaxPixels < 1 || cfg.MaxPixels > 64<<20 || cfg.MaxSurfaces < 1 || cfg.MaxRetained < 0 || cfg.MaxRetained == 1 || cfg.MaxRetained > 64 || cfg.MinRetention < 0 || cfg.MinRetention > maxAllowedRetention || cfg.MaxSurfaceBytes < 0 || cfg.MaxSurfaceBytes > maxAllowedSurfaceBytes || cfg.MaxTotalBytes < 0 || cfg.MaxTotalBytes > maxAllowedTotalBytes || (cfg.MaxSurfaceBytes > 0 && cfg.MaxTotalBytes > 0 && cfg.MaxSurfaceBytes > cfg.MaxTotalBytes) || filepath.Clean(cfg.RAMRoot) != cfg.RAMRoot || !strings.HasPrefix(cfg.RAMRoot, "/dev/shm/") {
 		return nil, frameError()
 	}
+	p := &Publisher{cfg: cfg, surfaces: make(map[string]publication), now: time.Now}
+	if p.maxRetainedBytes() > p.maxTotalRetainedBytes() {
+		return nil, frameError()
+	}
 	root, e := openRAMRoot(cfg.RAMRoot, false)
 	if e != nil {
 		return nil, e
@@ -158,7 +170,10 @@ func NewPublisher(cfg PublishConfig) (*Publisher, error) {
 		_ = os.Remove(path)
 		return nil, e
 	}
-	return &Publisher{cfg: cfg, root: root, output: output, outputPath: path, surfaces: make(map[string]publication), now: time.Now}, nil
+	p.root = root
+	p.output = output
+	p.outputPath = path
+	return p, nil
 }
 func openRAMRoot(path string, private bool) (*os.File, error) {
 	fd, e := syscall.Open("/", syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
@@ -234,7 +249,7 @@ func (p *Publisher) readSource(root, path string) ([]byte, error) {
 	return data, nil
 }
 func (p *Publisher) Publish(id string, b capsule.Binding, f capsule.NativeFrame) (Ref, error) {
-	ref, _, err := p.publish(id, b, f, p.cfg.Deduplicate)
+	ref, _, err := p.publish(id, b, f, false)
 	return ref, err
 }
 
@@ -245,6 +260,22 @@ func (p *Publisher) PublishForced(id string, b capsule.Binding, f capsule.Native
 
 func (p *Publisher) PublishIfChanged(id string, b capsule.Binding, f capsule.NativeFrame) (Ref, bool, error) {
 	return p.publish(id, b, f, true)
+}
+
+func (p *Publisher) evictExpiredFloor(old *publication, now time.Time) error {
+	minWin := p.minRetention()
+	if minWin <= 0 {
+		return nil
+	}
+	for len(old.refs) > 2 && len(old.published) > 0 && !now.Before(old.published[0].Add(minWin)) {
+		expired := old.refs[0]
+		if e := syscall.Unlinkat(int(p.output.Fd()), filepath.Base(expired.RAMWSPath)); e != nil && !errors.Is(e, syscall.ENOENT) {
+			return fmt.Errorf("frame lease release: %w", e)
+		}
+		old.refs = old.refs[1:]
+		old.published = old.published[1:]
+	}
+	return nil
 }
 
 func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame, deduplicate bool) (Ref, bool, error) {
@@ -266,6 +297,10 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 			old.seq = f.Seq
 			if len(old.published) == len(old.refs) {
 				old.published[len(old.published)-1] = now
+			}
+			if err := p.evictExpiredFloor(&old, now); err != nil {
+				p.surfaces[id] = old
+				return Ref{}, false, err
 			}
 			p.surfaces[id] = old
 			return last, false, nil
@@ -296,6 +331,10 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 			old.hasEncodedSum = true
 			if len(old.published) == len(old.refs) {
 				old.published[len(old.published)-1] = now
+			}
+			if err := p.evictExpiredFloor(&old, now); err != nil {
+				p.surfaces[id] = old
+				return Ref{}, false, err
 			}
 			p.surfaces[id] = old
 			return last, false, nil
@@ -370,7 +409,7 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 			}
 		}
 		for sid, s := range p.surfaces {
-			if sid == id || len(s.refs) < 2 {
+			if sid == id || len(s.refs) <= 2 {
 				continue
 			}
 			var t time.Time
@@ -487,14 +526,15 @@ func extractRGB24(img image.Image, width, height int) ([]byte, bool) {
 // release followed by Close never attempts to reclaim the same lease twice.
 func (p *Publisher) Release(id string) error {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	s, ok := p.surfaces[id]
 	if p.closed || p.output == nil || !ok {
+		p.mu.Unlock()
 		return frameError()
 	}
 	for len(s.refs) > 0 {
 		r := s.refs[0]
 		if e := syscall.Unlinkat(int(p.output.Fd()), filepath.Base(r.RAMWSPath)); e != nil && !errors.Is(e, syscall.ENOENT) {
+			p.mu.Unlock()
 			return e
 		}
 		s.refs = s.refs[1:]
@@ -504,6 +544,11 @@ func (p *Publisher) Release(id string) error {
 		p.surfaces[id] = s
 	}
 	delete(p.surfaces, id)
+	hooks := append(make([]func(string), 0, len(p.onRelease)), p.onRelease...)
+	p.mu.Unlock()
+	for _, fn := range hooks {
+		fn(id)
+	}
 	return nil
 }
 func (p *Publisher) Close() error {

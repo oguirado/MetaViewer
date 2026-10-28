@@ -89,14 +89,21 @@ type Subscriptions struct {
 func (s *Subscriptions) SkippedPolls() uint64 { return s.skipped.Load() }
 
 func NewSubscriptions(ctx context.Context, cfg SubscriptionConfig, source Source, publisher *Publisher, emit Emit) (*Subscriptions, error) {
-	if ctx == nil || cfg.MaxSubscriptions < 1 || cfg.PollInterval <= 0 || cfg.CaptureTimeout <= 0 || cfg.ShutdownTimeout <= 0 || source == nil || publisher == nil || emit == nil {
+	if ctx == nil || cfg.MaxSubscriptions < 1 || cfg.PollInterval <= 0 || cfg.CaptureTimeout <= 0 || cfg.ShutdownTimeout <= 0 || cfg.InitialUnchangedPolls < 0 || source == nil || publisher == nil || emit == nil {
 		return nil, errors.New("complete bounded subscription dependencies required")
 	}
 	if e := ctx.Err(); e != nil {
 		return nil, e
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	return &Subscriptions{ctx: ctx, cancel: cancel, cfg: cfg, source: source, publisher: publisher, emit: emit, tasks: make(map[string]*task), failures: make(map[string]*task), confirmed: make(map[string]uint64), clock: monotonicPollClock{}}, nil
+	s := &Subscriptions{ctx: ctx, cancel: cancel, cfg: cfg, source: source, publisher: publisher, emit: emit, tasks: make(map[string]*task), failures: make(map[string]*task), confirmed: make(map[string]uint64), clock: monotonicPollClock{}}
+	publisher.addReleaseHook(func(id string) {
+		s.mu.Lock()
+		delete(s.confirmed, id)
+		s.forgetFailure(id)
+		s.mu.Unlock()
+	})
+	return s, nil
 }
 func (s *Subscriptions) Subscribe(ctx context.Context, id string) error {
 	if e := ctx.Err(); e != nil {
@@ -321,6 +328,9 @@ func (s *Subscriptions) Unsubscribe(ctx context.Context, id string) error {
 
 // forgetFailure requires s.mu.
 func (s *Subscriptions) forgetFailure(id string) {
+	if _, ok := s.failures[id]; ok {
+		delete(s.confirmed, id)
+	}
 	delete(s.failures, id)
 	for i, failedID := range s.failedIDs {
 		if failedID == id {
@@ -343,6 +353,7 @@ func (s *Subscriptions) Close(ctx context.Context) error {
 	s.mu.Lock()
 	s.closed = true
 	s.cancel()
+	clear(s.confirmed)
 	ids := make([]string, 0, len(s.tasks))
 	for id, t := range s.tasks {
 		t.cancelled = true
