@@ -1079,7 +1079,9 @@ testfre-5de30d9d9550	tests/test_fresh_divergences.py
 test_gate_deps.py	tests/test_gate_deps.py
 testgat-83c5e1ef7679	tests/test_gate_deps_pin_integrity.py
 testgat-3b33fe08e1e5	tests/test_gate_g_ai_harness.py
+test_gate_perf_leg.py	tests/test_gate_perf_leg.py
 testgat-9ef7362f7a22	tests/test_gate_target_isolation.py
+testgat-00ce04a7a024	tests/test_gate_ui_smoke_leg.py
 testgit-a33a0afaaea0	tests/test_gitleaks_config.py
 test_hygiene.py	tests/test_hygiene.py
 test_install_docs.py	tests/test_install_docs.py
@@ -1089,6 +1091,7 @@ testlay-30db08e8ee29	tests/test_layout_intents.py
 test_live_teardown.py	tests/test_live_teardown.py
 test_novac_matrix.py	tests/test_novac_matrix.py
 testnvo-3cc17c3863ab	tests/test_nv_offline_uid.py
+testpac-f8254faf9cfe	tests/test_package_receipt_binding.py
 testpyt-2879eeaf233d	tests/test_python_contract_mirror.py
 test_router_docs.py	tests/test_router_docs.py
 test_router_index.py	tests/test_router_index.py

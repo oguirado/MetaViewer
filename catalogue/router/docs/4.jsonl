@@ -247,10 +247,10 @@
 {"an":[["file","section"]],"aq":[],"fam":1270,"i":1270,"id":"test_fx2_package.py","oa":"file","st":1}
 {"an":[["file","section"]],"aq":[],"fam":1271,"i":1271,"id":"test_gate.py","oa":"file","st":1}
 {"an":[["file","section"]],"aq":[],"fam":1272,"i":1272,"id":"test_gate_deps.py","oa":"file","st":1}
-{"an":[["file","section"]],"aq":[],"fam":1273,"i":1273,"id":"test_hello.py","oa":"file","st":1}
-{"an":[["file","section"]],"aq":[],"fam":1274,"i":1274,"id":"test_hosted_fixes.py","oa":"file","st":1}
-{"an":[["file","section"]],"aq":[],"fam":1275,"i":1275,"id":"test_hygiene.py","oa":"file","st":1}
-{"an":[["file","section"]],"aq":[],"fam":1276,"i":1276,"id":"test_install_docs.py","oa":"file","st":1}
-{"an":[["file","section"]],"aq":[],"fam":1277,"i":1277,"id":"test_kill_guard.py","oa":"file","st":1}
-{"an":[["file","section"]],"aq":[],"fam":1278,"i":1278,"id":"test_kit_source.py","oa":"file","st":1}
-{"an":[["file","section"]],"aq":[],"fam":1279,"i":1279,"id":"test_kit_stage.py","oa":"file","st":1}
+{"an":[["file","section"]],"aq":[],"fam":1273,"i":1273,"id":"test_gate_perf_leg.py","oa":"file","st":1}
+{"an":[["file","section"]],"aq":[],"fam":1274,"i":1274,"id":"test_hello.py","oa":"file","st":1}
+{"an":[["file","section"]],"aq":[],"fam":1275,"i":1275,"id":"test_hosted_fixes.py","oa":"file","st":1}
+{"an":[["file","section"]],"aq":[],"fam":1276,"i":1276,"id":"test_hygiene.py","oa":"file","st":1}
+{"an":[["file","section"]],"aq":[],"fam":1277,"i":1277,"id":"test_install_docs.py","oa":"file","st":1}
+{"an":[["file","section"]],"aq":[],"fam":1278,"i":1278,"id":"test_kill_guard.py","oa":"file","st":1}
+{"an":[["file","section"]],"aq":[],"fam":1279,"i":1279,"id":"test_kit_source.py","oa":"file","st":1}
