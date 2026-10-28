@@ -13,6 +13,7 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -20,6 +21,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   CHANNELS,
   CONTENT_SECURITY_POLICY,
@@ -47,7 +49,10 @@ import {
   validateRetailLaunch,
 } from '../electron/main.js';
 import {
+  ALLOWED_ADAPTER_ENV,
+  CoreLauncherError,
   createCoreLauncher,
+  scrubAdapterEnv,
   scrubChildEnv,
   validateKillTarget,
 } from '../electron/coreLauncher.js';
@@ -1477,6 +1482,77 @@ describe('W0-SHELL-MAIN child environment scrub', () => {
     }
     const scrubbed = scrubChildEnv({ PATH: '/usr/bin', XDG_RUNTIME_DIR: '/tmp/spoof' }, RUNTIME);
     assert.equal(scrubbed.XDG_RUNTIME_DIR, RUNTIME);
+  });
+});
+
+describe('W2-AC07-RECGRANT recording environment', () => {
+  it('forwards the canonical destination and capability to the adapter', () => {
+    const root = makeTempRoot('mv-recgrant-');
+    try {
+      const destination = join(root, 'destination');
+      const alias = join(root, 'alias');
+      mkdirSync(destination);
+      symlinkSync(destination, alias);
+      const env = { PATH: root, MV_RECORDING_DESTINATION: alias, MV_RECORDING_CAPABILITY_ID: 'cap-grant' };
+      const adapter = scrubAdapterEnv(env, root);
+      assert.equal(adapter.MV_RECORDING_DESTINATION, realpathSync(destination));
+      assert.equal(adapter.MV_RECORDING_CAPABILITY_ID, 'cap-grant');
+      assert.equal(adapter.XDG_RUNTIME_DIR, root);
+      assert.equal(scrubChildEnv(env, root).MV_RECORDING_DESTINATION, adapter.MV_RECORDING_DESTINATION);
+      assert.ok(Object.isFrozen(adapter));
+      for (const key of Object.keys(adapter)) {
+        assert.ok(ALLOWED_ADAPTER_ENV.includes(key), `unexpected env key ${key}`);
+      }
+    } finally {
+      rmRoot(root);
+    }
+  });
+
+  it('omits unset and empty grants and drops malformed capability values', () => {
+    const root = makeTempRoot('mv-recgrant-');
+    try {
+      for (const grants of [{}, { MV_RECORDING_DESTINATION: '', MV_RECORDING_CAPABILITY_ID: '' }]) {
+        const adapter = scrubAdapterEnv({ PATH: root, ...grants }, root);
+        assert.equal(Object.hasOwn(adapter, 'MV_RECORDING_DESTINATION'), false);
+        assert.equal(Object.hasOwn(adapter, 'MV_RECORDING_CAPABILITY_ID'), false);
+      }
+      for (const value of [null, 42, 'bad\0id', 'x'.repeat(4097)]) {
+        const adapter = scrubAdapterEnv({ PATH: root, MV_RECORDING_CAPABILITY_ID: value }, root);
+        assert.equal(Object.hasOwn(adapter, 'MV_RECORDING_CAPABILITY_ID'), false);
+      }
+      const destinationOnly = scrubAdapterEnv({ PATH: root, MV_RECORDING_DESTINATION: root }, root);
+      assert.equal(destinationOnly.MV_RECORDING_DESTINATION, realpathSync(root));
+      assert.equal(Object.hasOwn(destinationOnly, 'MV_RECORDING_CAPABILITY_ID'), false);
+      const capabilityOnly = scrubAdapterEnv({ PATH: root, MV_RECORDING_CAPABILITY_ID: 'cap-grant' }, root);
+      assert.equal(capabilityOnly.MV_RECORDING_CAPABILITY_ID, 'cap-grant');
+      assert.equal(Object.hasOwn(capabilityOnly, 'MV_RECORDING_DESTINATION'), false);
+    } finally {
+      rmRoot(root);
+    }
+  });
+
+  it('types missing and non-directory destinations and rejects canonical source paths', () => {
+    const root = makeTempRoot('mv-recgrant-');
+    try {
+      const file = join(root, 'file');
+      writeFileSync(file, 'not a directory');
+      const sourceAlias = join(root, 'source');
+      symlinkSync(fileURLToPath(new URL('../..', import.meta.url)), sourceAlias);
+      for (const scrub of [scrubChildEnv, scrubAdapterEnv]) {
+        for (const [destination, code] of [
+          [join(root, 'missing'), 'SETTINGS_DESTINATION'],
+          [file, 'SETTINGS_DESTINATION'],
+          [sourceAlias, 'SETTINGS_IN_REPO'],
+        ]) {
+          assert.throws(
+            () => scrub({ PATH: root, MV_RECORDING_DESTINATION: destination }, root),
+            (error) => error instanceof CoreLauncherError && error.code === code,
+          );
+        }
+      }
+    } finally {
+      rmRoot(root);
+    }
   });
 });
 

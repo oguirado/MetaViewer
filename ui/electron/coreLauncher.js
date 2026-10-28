@@ -5,7 +5,8 @@
  * W0-SHELL-MAIN Rust core launcher: single-flight native child supervisor.
  *
  * [TARGET, unit decision] Pass the validated host recording destination grant
- * separately from the generic environment allowlist.
+ * separately from the generic environment allowlist, including the adapter's
+ * bounded, nonempty recording capability ID when supplied.
  * Main supervises; Rust owns state. This module spawns the pinned core
  * binary at most once per instance (never respawns), scrubs the child
  * environment to an allowlist, bounds every stdio and queue byte, and
@@ -104,6 +105,8 @@ export const ALLOWED_ADAPTER_ENV = Object.freeze([
   'MV_SRF_PROFILES',
   'MV_SRF_LIVE_PROFILE',
   'MV_SRF_LIVE_RAM_ROOT',
+  'MV_RECORDING_DESTINATION',
+  'MV_RECORDING_CAPABILITY_ID',
 ]);
 
 /**
@@ -257,7 +260,15 @@ export function scrubChildEnv(rawEnv, runtimeDir) {
         || destination.length > CORE_MAX_PATH_CHARS || /[\0\r\n]/.test(destination)) {
       fail('SETTINGS_DESTINATION', 'recording destination must be a bounded absolute path');
     }
-    const canonical = realpathSync(resolve(destination));
+    let canonical;
+    try {
+      canonical = realpathSync(resolve(destination));
+      if (!statSync(canonical).isDirectory()) {
+        fail('SETTINGS_DESTINATION', 'recording destination must be an existing directory');
+      }
+    } catch {
+      fail('SETTINGS_DESTINATION', 'recording destination must be an existing directory');
+    }
     const rel = relative(fileURLToPath(new URL('../..', import.meta.url)), canonical);
     if (rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))) {
       fail('SETTINGS_IN_REPO', 'recording destination must be outside the source tree');
@@ -272,7 +283,8 @@ export function scrubChildEnv(rawEnv, runtimeDir) {
  * Build the frozen adapter child environment: starts from the scrubbed
  * core environment and retains only the dev-stack / OpenSuperficies
  * allowlist (`ALLOWED_ADAPTER_ENV`), with `XDG_RUNTIME_DIR` pinned to
- * the validated runtime directory. Throws only CoreLauncherError.
+ * the validated runtime directory. Recording grants are forwarded separately;
+ * an unset or empty grant stays absent. Throws only CoreLauncherError.
  * @param {unknown} rawEnv Alleged parent environment record.
  * @param {unknown} runtimeDir Alleged validated runtime directory.
  * @returns {Readonly<Record<string, string>>} Frozen adapter child environment.
@@ -282,6 +294,10 @@ export function scrubAdapterEnv(rawEnv, runtimeDir) {
   const parent = /** @type {Record<string, unknown>} */ (rawEnv);
   const out = /** @type {Record<string, string>} */ ({});
   for (const name of ALLOWED_ADAPTER_ENV) {
+    // Recording grants use the validated, nonempty path below, never raw values.
+    if (name === 'MV_RECORDING_DESTINATION' || name === 'MV_RECORDING_CAPABILITY_ID') {
+      continue;
+    }
     if (Object.hasOwn(base, name)) {
       out[name] = base[name];
       continue;
@@ -294,6 +310,13 @@ export function scrubAdapterEnv(rawEnv, runtimeDir) {
       continue;
     }
     out[name] = /** @type {string} */ (raw);
+  }
+  if (Object.hasOwn(base, 'MV_RECORDING_DESTINATION')) {
+    out.MV_RECORDING_DESTINATION = base.MV_RECORDING_DESTINATION;
+  }
+  const capabilityId = parent.MV_RECORDING_CAPABILITY_ID;
+  if (isKeepableValue(capabilityId) && capabilityId !== '') {
+    out.MV_RECORDING_CAPABILITY_ID = /** @type {string} */ (capabilityId);
   }
   out.XDG_RUNTIME_DIR = /** @type {string} */ (runtimeDir);
   return Object.freeze(out);
