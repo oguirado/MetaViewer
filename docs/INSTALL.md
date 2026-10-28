@@ -1,12 +1,12 @@
 # Installing and Building MetaViewer on Linux (`arm64` and `x64`)
 
-I build and test MetaViewer on Linux as a wall of live, isolated application surfaces governed by a Rust admission and journaling core [CITED: `docs/ARCHITECTURE.md`]. This guide covers platform and toolchain requirements, installing and verifying the deterministic Linux release tarball, building from source and running the offline gate, resolving optional pinned external components, the RAM-first capture policy and XDG storage layout, uninstallation, and troubleshooting with exact gate and package error codes.
+I build and test MetaViewer on Linux as a desktop shell for isolated application surfaces governed by a Rust admission and journaling core (multi-capsule wall `[TARGET]`, verified in E2E harnesses; live acceptance `live21` runs `1` capsule at `2.71` fps `[CITED]` with `52.11` ms p50 core processing per `1280x900` frame `[CITED]`) [CITED: `docs/ARCHITECTURE.md`]. This guide covers platform and toolchain requirements, installing and verifying the deterministic Linux release tarball, building from source and running the offline gate, resolving optional pinned external components, the RAM-first capture policy and XDG storage layout, uninstallation, and troubleshooting with exact gate and package error codes.
 
 ## 1. Platform and Requirements
 
 MetaViewer is Linux-first: **`linux-arm64` (`aarch64`) is the primary target** and **`linux-x64` (`x86_64`) is supported** [CITED: `ui/tools/package.js`, `.github/workflows/ci.yml`, `.github/workflows/package.yml`].
 
-macOS and Windows are **not supported**. In `ui/tools/package.js`, `packageArchitecture()` rejects any architecture other than `arm64` and `x64` with `PKG_ARCH_UNSUPPORTED` (checking ELF machine `183` for `arm64` and `62` for `x64`) [CITED: `ui/tools/package.js`]. In `.github/workflows/ci.yml`, the `build-macos` and `build-windows` jobs only emit `NOT_APPLICABLE` receipts and are never required branch-protection statuses [CITED: `.github/workflows/ci.yml`].
+macOS and Windows are **not supported**. In `ui/tools/package.js`, `packageArchitecture()` rejects any architecture other than `arm64` and `x64` with `PKG_ARCH_UNSUPPORTED` (checking ELF machine `183` for `arm64` and `62` for `x64`) [CITED: `ui/tools/package.js`]. In `.github/workflows/ci.yml`, the `build-macos` and `build-windows` jobs are non-blocking (`continue-on-error: true`), excluded from `ci-required.needs`, and emit `NOT_APPLICABLE` gate receipts [CITED: `.github/workflows/ci.yml`].
 
 ### Required Toolchains and Pins
 
@@ -40,7 +40,7 @@ Each release archive contains:
 - `MetaViewer-linux-<arch>/resources/bin/metaviewer-core` — the release-mode Rust authority core binary [CITED: `ui/tools/package.js`].
 - `MetaViewer-linux-<arch>/resources/bin/mv-daemon-adapter` — the stripped Go daemon adapter binary [CITED: `ui/tools/package.js`].
 - `MetaViewer-linux-<arch>/resources/app.asar` — the sealed ASAR bundle (`PACKAGED_ASSET_DIGESTS` embedded into `electron/main.js`, `electron/nesting.js` production entry, and `electron/package-pin.json`) [CITED: `ui/tools/package.js`].
-- `MetaViewer-linux-<arch>/resources/contracts/v0.2` — the 20 versioned v0.2 JSON wire schemas [CITED: `ui/tools/package.js`, `README.md`].
+- `MetaViewer-linux-<arch>/resources/contracts/v0.2` — the `21` `[MEASURED: ls -1 contracts/v0.2/*.schema.json | wc -l]` versioned v0.2 JSON wire schemas [CITED: `ui/tools/package.js`].
 - `MetaViewer-linux-<arch>/resources/deps.lock` and `MetaViewer-linux-<arch>/resources/kit.lock.json` — the external component and UI kit lockfiles [CITED: `ui/tools/package.js`].
 - `MetaViewer-linux-<arch>/INSTALL.md` — the bundled launch and manifest verification note [CITED: `ui/tools/package.js`].
 - `MetaViewer-linux-<arch>.sha256` — the SHA-256 manifest covering every regular file in `MetaViewer-linux-<arch>/` [CITED: `ui/tools/package.js`].
@@ -138,7 +138,7 @@ bash scripts/bootstrap.sh
 
 ### Run the Offline Gate (`tools/gate.sh`)
 
-`tools/gate.sh` executes all 10 local verification legs (`manifests`, `laws`, `contracts`, `unit`, `agents`, `js`, `rust`, `go`, `ui`, `ui-smoke`) inside a private `0700` environment (`TMPDIR`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `XDG_DATA_HOME`, `XDG_RUNTIME_DIR`) [CITED: `tools/gate.sh`, `docs/TESTING.md`]:
+`tools/gate.sh` executes all `11` `[MEASURED: bash tools/gate.sh]` local verification legs (`manifests`, `laws`, `contracts`, `unit`, `agents`, `js`, `rust`, `go`, `ui`, `ui-smoke`, `perf`) inside a private `0700` environment (`TMPDIR`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `XDG_DATA_HOME`, `XDG_RUNTIME_DIR`; setting `MV_GATE_PERF_LIVE=1` additionally enables the live Electron RSS probe in the `perf` leg) [CITED: `tools/gate.sh`, `docs/TESTING.md`]:
 
 ```bash
 export CAPSULE_UI_KIT_REPO=/path/to/capsule-ui-kit

@@ -1,6 +1,6 @@
 # MetaViewer User Guide
 
-I built MetaViewer as a Linux desktop wall of live, isolated application capsules where I watch an agent work and take control myself at any time. Every action is admitted by the Rust core (`metaviewer-core`) and journaled; the Electron renderer paints live RGBA frames over a dedicated `MessagePort` (`frame_port/v1`) with per-frame `frame_ack/v0.2` acknowledgments and submits typed intents without injecting raw input directly.
+I built MetaViewer as a Linux desktop workspace where a multi-capsule wall is my design target `[TARGET]` and the current live End-to-End slice (`live21`) is verified with `1` `[MEASURED]` live isolated application capsule at `2.71` fps `[MEASURED]` (`34` `[MEASURED]` frames over `12.528` s `[MEASURED]`, `1` `[MEASURED]` `create_surface` call), while `metaviewer-core` spends `52.11` ms p50 `[MEASURED]` (`54.02` ms p95 `[MEASURED]`) per `1280x900` (`3,456,000` B `[MEASURED]`) `rgb24` frame. Every action is admitted by the Rust core (`metaviewer-core`) and journaled; the Electron renderer paints live `rgb24` frames (`frame_delivery/v0.2`) over a dedicated `MessagePort` (`frame_port/v1`) with per-frame `frame_ack/v0.2` acknowledgments and submits typed intents without injecting raw input directly.
 
 This guide covers version `0.1.2` `[MEASURED: cat VERSION]` (locked `capsule-ui-kit` `0.2.1` `[MEASURED: python3 -c 'import json; print(json.load(open("ui/kit.lock.json"))["version"])']`): installing and launching the app, the window layout, opening capsules (including nested `metaviewer-nested` capsules at `nested_depth: 1`), watching the agent, taking control, status and refusal indicators, replaying a session journal (`mv-replay`), `mvctl` basics, the multislot and recording panel, diagnostics, and troubleshooting. For full host setup and offline packaging, see [INSTALL.md](INSTALL.md); for verification suites and CI jobs, see [TESTING.md](TESTING.md).
 
@@ -8,18 +8,18 @@ This guide covers version `0.1.2` `[MEASURED: cat VERSION]` (locked `capsule-ui-
 
 ## 1. Install and launch
 
-I develop, package, and test on Linux (`x86_64` and `aarch64`). You can either build and run each component from this checkout or build a self-contained Linux tarball (`dist/metaviewer-linux-<x64|arm64>.tar.gz`) with `bash tools/package_linux.sh <x64|arm64>`.
+I develop, package, and test on Linux (`x86_64` and `aarch64`). You can either build and run each component from this checkout or build a self-contained Linux tarball (`$MV_PKG_OUT/MetaViewer-linux-<x64|arm64>.tar` and `.sha256`) with `bash scripts/bootstrap.sh` (or `node ui/tools/package.js --arch <x64|arm64>` after building the binaries).
 
 ### Prerequisites
 
 | Tool | Pinned / required version | Measured on current host | Where I pin it |
 | :--- | :--- | :--- | :--- |
-| Rust | `1.92.0` (`rust-version = "1.92"`) | `cargo 1.92.0` `[MEASURED: cargo --version]` | `Cargo.toml`, `rust-toolchain.toml` |
-| Go | `1.22.5` (`go 1.22.0`) | `go1.22.5` `[MEASURED: go version]` | `daemon-adapter/go.mod` |
-| Node.js | `>= 24` | `v24.14.0` `[MEASURED: node --version]` | `ui/package.json` (`engines.node`) |
+| Rust | `1.97.0` (`rust-version = "1.97"` in `Cargo.toml`; `rustup run 1.92.0 cargo fmt --all --check` in `tools/gate.sh`) | `cargo 1.97.0` `[MEASURED: cargo --version]` | `Cargo.toml`, `deps.lock` |
+| Go | `1.26.0` (`go 1.26.0`) | `go1.26.4` `[MEASURED: go version]` | `daemon-adapter/go.mod`, `deps.lock` |
+| Node.js | `>= 24` (`24.14.0` in `deps.lock`) | `v24.14.0` `[MEASURED: node --version]` | `ui/package.json` (`engines.node`), `deps.lock` |
 | npm | bundled with Node 24 | `11.9.0` `[MEASURED: npm --version]` | `ui/package-lock.json` |
-| Python | `>= 3.11` (stdlib-only) | `Python 3.12.3` `[MEASURED: python3 --version]` | `agents/pyproject.toml` (`0` third-party dependencies) |
-| Electron | `44.9.2` | `44.9.2` `[MEASURED: python3 -c 'import json; print(json.load(open("ui/package.json"))["devDependencies"]["electron"])']` | `ui/package.json`, `ui/electron/main.js` (`ELECTRON_PIN`) |
+| Python | `>= 3.11` (stdlib-only) | `Python 3.12.3` `[MEASURED: python3 --version]` | `agents/pyproject.toml` (`0` `[MEASURED]` third-party dependencies) |
+| Electron | `44.9.2` | `44.9.2` `[MEASURED: python3 -c 'import json; print(json.load(open("ui/package.json"))["dependencies"]["electron"])']` | `ui/package.json` (`dependencies.electron`), `ui/electron/main.js` (`ELECTRON_PIN`) |
 | Capsule UI kit | `0.2.1` | `0.2.1` `[MEASURED: python3 -c 'import json; print(json.load(open("ui/kit.lock.json"))["version"])']` | `ui/kit.lock.json` |
 
 ### Build from source
@@ -27,7 +27,7 @@ I develop, package, and test on Linux (`x86_64` and `aarch64`). You can either b
 ```sh
 # 1. Stage the exact pinned capsule-ui-kit checkout, then install, test, type-check, and build ui/dist:
 node tools/sync_kit.mjs "$CAPSULE_UI_KIT_REPO"
-(cd ui && npm ci --offline && npm test && npm run check:types && npm run build)
+(cd ui && npm ci --offline && npm test && npm run check && npm run build)
 
 # 2. Build the Rust authority core and replay tool:
 cargo build --offline
@@ -36,7 +36,7 @@ cargo build --offline
 (cd daemon-adapter && go build -o mv-daemon-adapter ./cmd/mv-daemon-adapter)
 ```
 
-I run the full `10`-leg `[MEASURED: bash tools/gate.sh]` verification gate with `bash tools/gate.sh` and its `25`-test `[MEASURED: bash tools/gate.sh --self-test]` harness check with `bash tools/gate.sh --self-test` (see [TESTING.md](TESTING.md)).
+I run the full `11`-leg `[MEASURED: bash tools/gate.sh]` verification gate (`manifests`, `laws`, `contracts`, `unit`, `agents`, `js`, `rust`, `go`, `ui`, `ui-smoke`, `perf`) with `bash tools/gate.sh` and its `30`-test `[MEASURED: bash tools/gate.sh --self-test]` harness check with `bash tools/gate.sh --self-test` (see [TESTING.md](TESTING.md)).
 
 ### Launch the stack
 
@@ -69,7 +69,7 @@ I run the full `10`-leg `[MEASURED: bash tools/gate.sh]` verification gate with 
    (cd ui && npx electron .)
    ```
 
-   By default, `ui/electron/main.js` loads the built-in production host bindings in `ui/electron/hostBindings.js` (`createProductionHostBindings`), which wire the core bridge, live `frame_port/v1` pipeline, and `.mvrec` recording manager automatically. Setting `MV_CORE_BOOTSTRAP` to an external bootstrap module is optional and used only when overriding the default bindings in custom harnesses.
+   By default, `ui/electron/main.js` loads the built-in production host bindings in `ui/electron/hostBindings.js` (`createProductionHostBindings`), which wire the core bridge, live `frame_port/v1` pipeline, and in-RAM capture bridge (`ui/electron/captureBridge.js`) automatically. Setting `MV_CORE_BOOTSTRAP` to an external bootstrap module is optional and used only when overriding the default bindings in custom harnesses.
 
    To run the headless smoke check under `xvfb-run`:
 
@@ -84,11 +84,11 @@ I run the full `10`-leg `[MEASURED: bash tools/gate.sh]` verification gate with 
 
 The window is a kit shell with a top bar, a navigation rail, the capsule wall, a side terminal, an activity strip, and a status bar:
 
-- **Top bar:** shows `MetaViewer`, `4` `[MEASURED: grep -c 'data-create-profile=' ui/src/App.vue]` quick-create profile actions (`New GUI`, `New terminal`, `New web`, `New nested MV`), an `Add capsule` catalog button, a `Find a capsule…` search field, `Terminal` and `Settings` buttons, a `Storyboard` button, and an `Open in multislot` button.
+- **Top bar:** renders `MvTopbar` (`ui/src/App.vue`) with `MetaViewer`, an `Add capsule` button (`@new-capsule="launcherOpen = true"`), a `Find a capsule…` search field, and `4` `[MEASURED]` top-bar actions (`Storyboard`, `Settings`, `Open in multislot`, and `Terminal` in `topbarActions` at `ui/src/App.vue`).
 - **Rail:** a collapsible overlay sidebar with one `Workspace` group (`Add capsule` plus one entry per connected surface).
-- **Wall:** a dockview tile workspace with one panel per capsule (`240x200` minimum tile size in `ui/src/wall/WallWorkspace.vue`), supporting tabs, splits, and floating panels.
+- **Wall:** a dockview tile workspace with one panel per capsule (`240x200` `[TARGET]` minimum tile size in `ui/src/wall/WallWorkspace.vue`), supporting tabs, splits, and floating panels.
 - **Side terminal:** a right-side resizable `xterm.js` overlay toggled with `Terminal`.
-- **Activity strip:** above the status bar, lists the latest `8` `[MEASURED: grep -c 'slice(-8)' ui/src/App.vue]` outcome entries (`activityEntries.slice(-8)`) alongside the total live event count (`showing 8 of N`) in closed human sentences; raw reason codes never appear as visible text.
+- **Activity strip:** above the status bar, lists up to `8` `[MEASURED: grep -c 'ACTIVITY_LIMIT = 8' ui/src/App.vue]` recent outcome entries (`ACTIVITY_LIMIT = 8` in `ui/src/App.vue` and `MV_ACTIVITY_LIMIT = 8` in `ui/src/activity/activityModel.js`) alongside the total live event count (`showing 8 of N`) in closed human sentences; raw reason codes never appear as visible text.
 - **Status bar:** shows the current view crumb (`Main wall`), `Core connected` / `Core not connected`, and the active capsule count.
 - **Settings:** switches the window between `Light` (`mv-light`, default) and `Dark` themes live.
 
@@ -96,19 +96,19 @@ The window is a kit shell with a top bar, a navigation rail, the capsule wall, a
 
 ## 3. Opening a capsule surface and nested depth (`AC-17`)
 
-I can launch a capsule either from the top-bar quick-create buttons (`gui-default`, `terminal`, `browser`, `metaviewer-nested`) or from the `Add capsule` dialog (`identity-browser`, `program`, `holdings-app`, `desktop`).
+I launch a capsule from the `Add capsule` button in the top bar or workspace rail, which opens `CatalogLauncher.vue` with `4` `[MEASURED: grep -c "kind:" ui/src/catalog/catalogModel.js]` catalog kinds (`identity-browser`, `program`, `holdings-app`, `desktop` in `ui/src/catalog/catalogModel.js`), or through a `surface_request/v0.2` (`action: "create"`) request.
 
-Each tile header displays the capsule's `profile_id` as its title alongside its `capsule_id`, lifecycle state, and control badge.
+Each tile header displays the capsule's human label alongside its lifecycle state and control badge (`SurfacePanel.vue`).
 
 ### Nested MetaViewer capsules (`nested_depth`)
 
-Opening **New nested MV** (`profile_id: "metaviewer-nested"`) sends `surface_request/v0.2` (`action: "create"`) with `nested_depth: 1` from an outer wall running at `nested_depth: 0` (`2` `[MEASURED: grep -c 'nested_depth' contracts/v0.2/surface_request.schema.json]` schema occurrences in `contracts/v0.2/surface_request.schema.json`, `minimum: 0`, `maximum: 1`). Any attempt to spawn a capsule at `nested_depth >= 2` is deterministically refused by the contract validator and core (`nested_depth_exceeded`).
+Spawning a nested MetaViewer capsule (`program: "metaviewer-nested"`) sends `surface_request/v0.2` (`action: "create"`) with `nested_depth: 1` from an outer wall running at `nested_depth: 0` (`1` `[MEASURED: grep -c 'nested_depth' contracts/v0.2/surface_request.schema.json]` property definition in `contracts/v0.2/surface_request.schema.json`, `minimum: 0` `[TARGET]`, `maximum: 1` `[TARGET]`). Any attempt to spawn a capsule at `nested_depth >= 2` is deterministically refused by the contract validator and core (`nested_depth_exceeded` / `NESTED_DEPTH`).
 
 ---
 
 ## 4. Live frame painting (`frame_port/v1`) and watching an agent act
 
-For canvas capsules, the Electron main process opens a `MessageChannelMain` pair (`ui/electron/main.js`) and transfers one port to the renderer (`mv:frame-port`, `schema_version: "frame_port/v1"`). Each live frame arrives with `capsule_id`, `surface_id`, `epoch`, `seq`, `width`, `height`, `stride`, `pixel_format: "RGBA8888"`, and raw pixel bytes (`ArrayBuffer`), is painted via `putImageData` onto `<canvas>` inside `SurfaceCanvas.vue`, and returns a `frame_ack/v0.2` message carrying one of `7` `[MEASURED: python3 -c 'import json; s=json.load(open("contracts/v0.2/frame_ack.schema.json")); print(len(s["properties"]["outcome"]["enum"]))']` terminal outcomes:
+For canvas capsules, the Electron preload bridge transfers a `MessagePort` to the renderer via `window.postMessage` (`type: "metaviewer:frame-port"`, `schema: "frame_port/v1"`, `surface_id`, `surface_generation` in `ui/src/frames/framePortRouter.js`). Each live frame arrives on the port as a `frame_delivery/v0.2` message with `surface_id`, `surface_generation`, `frame_id`, `seq`, `width`, `height`, `format: "rgb24"`, `byteLength`, `sha256`, `pixelSpec`, and packed `rgb24` `bytes` (plus `utilityVerified: true` when pre-verified by the utility process on a trusted port event; in `live21`, `34` of `34` `[MEASURED]` deliveries arrived with `isTrusted=true` and `utilityVerified=true`, so renderer SHA-256 fallback ran `0` `[MEASURED]` times). The bound tile scheduler (`ui/src/surfaces/tileScheduler.js`) converts and paints the frame via `putImageData` onto `<canvas>` inside `ui/src/surfaces/SurfaceCanvas.vue` and posts a `frame_ack/v0.2` message on the port carrying one of `7` `[MEASURED]` terminal outcomes defined in `FRAME_OUTCOMES` (`ui/src/frames/framePortRouter.js`):
 
 - `PRESENTED` — painted to the renderer `<canvas>` and witnessed.
 - `SUPERSEDED` — dropped because a newer `seq` arrived before presentation.
@@ -116,13 +116,13 @@ For canvas capsules, the Electron main process opens a `MessageChannelMain` pair
 - `HIDDEN` — acknowledged without painting while the surface is locally hidden.
 - `CONTEXT_LOST` — canvas 2D context unavailable or lost.
 - `SURFACE_DESTROYED` — surface removed before presentation completed.
-- `REFUSED` — malformed frame envelope or mismatched epoch/dimensions refused.
+- `REFUSED` — malformed frame envelope or mismatched generation/dimensions/digest refused.
 
 ### Agent status badge (`Agent acting` vs `Agent ready`)
 
-When a capsule is under agent control (`control_owner === "agent"`):
+When a capsule is under agent control (`control === "agent-acting"` in `ui/src/wall/SurfacePanel.vue`):
 
-- The tile badge displays **"Agent acting"** while an agent proposal/intent is actively executing (`agentActing` or `control_session_state === "ACTIVE"`).
+- The tile badge displays **"Agent acting"** while an agent action is actively executing (`isAgentActingRow(current)` is true: `agentActing === true` or `control_session_state === "ACTIVE"`).
 - The tile badge displays **"Agent ready"** when the surface is agent-controlled and idle between actions.
 
 ---
@@ -131,12 +131,12 @@ When a capsule is under agent control (`control_owner === "agent"`):
 
 - **Take control (`take_control`):** clicking **Take over** sends `ui_intent/v0.2` `take_control` (or `control_request/v0.1` `takeover`) to the core, which immediately closes agent admission for that surface, drains or cancels any in-flight agent proposal (`SURFACE_NOT_AGENT_CONTROLLED` / `human_active`), and switches the tile to `human-control`.
 - **Release control (`release_control`):** hands ownership back so agent observation and proposals can resume on a fresh frame generation.
-- **Fold / Unfold (`AC-03`):** folding collapses the tile presentation and drains in-flight frames with `FOLD_DRAIN` while the capsule container keeps running; unfolding resumes live frame presentation on a new epoch.
+- **Fold / Unfold (`AC-03`):** folding collapses the tile presentation and drains in-flight frames with `FOLD_DRAIN` while the capsule container keeps running; unfolding resumes live frame presentation on a new generation.
 - **Local `read` / `write` and hide / show toggles:** switching a surface between `read` and `write` input modes or hiding/showing a tile updates local renderer state without mutating or resetting the capsule's authority state in `metaviewer-core`.
 
-### Human input in WRITE mode (`surface_input/v1`)
+### Human input in WRITE mode (`surface_input/v0.2`)
 
-While I hold human control on an active surface (`control === "human"`), set the tile input mode to `WRITE`, and focus the `<canvas>`, the renderer forwards keyboard and pointer batches through `window.metaviewer.input.send(batch)` (`contracts/v0.2/surface_input.schema.json`). Each batch carries `surface_id`, the bound stream's `stream_id`, a strictly increasing `seq` (`>= 1` `[TARGET]`), and `1..32` `[TARGET]` events from the closed set (`click`, `key` with `1..8` `[TARGET]` keysym tokens, `type` up to `1024` `[TARGET]` characters, and `scroll` with `dx`, `dy`, `x`, `y`), capped at `60` `[TARGET]` batches/s per surface and `16` `[TARGET]` KiB per batch. Pressing `Escape` releases canvas focus locally without forwarding the key, and the host maps admitted events to `surface_request/v0.2` (`op: "input"`) or returns a typed refusal (`NOT_IN_CONTROL`, `SURFACE_UNKNOWN`, `STALE_STREAM`, `LIMIT`, `NESTED_DISPLAY_ONLY`, `SCHEMA`, `CORE_UNAVAILABLE`).
+While I hold human control on an active surface (`control === "human"`), set the tile input mode to `WRITE`, and focus the `<canvas>`, the renderer forwards keyboard and pointer batches through `window.metaviewer.input.send(batch)`. The contract schema is `surface_input/v0.2` (`contracts/v0.2/surface_input.schema.json`), while the renderer input port (`ui/src/input/inputPort.js`) emits `schema: "surface_input/v1"` and the Electron preload/main boundary (`ui/electron/preload.js`, `ui/electron/authorityWire.js`) accepts both `"surface_input/v0.2"` and `"surface_input/v1"`. Each batch carries `surface_id`, the bound stream's `stream_id`, a strictly increasing `seq` (`>= 1` `[TARGET]`), and `1..32` `[TARGET]` events from the closed set (`click`, `key` with `1..8` `[TARGET]` keysym tokens, `type` up to `1024` `[TARGET]` characters, and `scroll` with `dx`, `dy`, `x`, `y`), capped in `INPUT_LIMITS` (`ui/src/input/inputPort.js`) at `60` `[TARGET]` batches/s per surface and `16` `[TARGET]` KiB (`16384` B `[TARGET]`) per batch. Pressing `Escape` releases canvas focus locally without forwarding the key, and the host maps admitted events to `surface_request/v0.2` (`op: "input"`) or returns a typed refusal (`NOT_IN_CONTROL`, `SURFACE_UNKNOWN`, `STALE_STREAM`, `LIMIT`, `NESTED_DISPLAY_ONLY`, `SCHEMA`, `CORE_UNAVAILABLE`).
 
 ---
 
@@ -155,7 +155,7 @@ The core appends every admitted record to a hash-chained journal at `<state-dir>
   --witness-root <witness-root>
 ```
 
-Pass `--verify-only` to check the hash chain without printing the state hash, or `--anchor` to replay from a pinned anchor file. Exit codes: `0` on verified replay, `2` on invalid or corrupt input, `3` on duplicate record, `4` on witness mismatch.
+Pass `--verify-only` to check the hash chain without printing the state hash, or `--anchor` to replay from a pinned anchor file. Exit codes: `0` `[TARGET]` on verified replay, `2` `[TARGET]` on invalid or corrupt input, `3` `[TARGET]` on duplicate record, `4` `[TARGET]` on witness mismatch.
 
 ---
 
@@ -175,13 +175,13 @@ Refusals print one JSON record to `stderr` (`{"verdict":"refuse","code":"…","e
 
 ---
 
-## 9. Multislot screen, RAM-first recording, and recording list coalescing
+## 9. Multislot screen and RAM-first recording (`MvRecordingPanel.vue`)
 
 I open the multislot screen with **Open in multislot** and return with **Back to wall**. Multislot input defaults to `read` (keystrokes are not forwarded) and switches to `write` when I explicitly toggle it.
 
-Capture is RAM-first (`AC-07`): while idle, zero bytes are written to disk. Clicking **Screenshot** or **Save clip** flushes a PNG or sealed `.mvrec` recording on demand, and selecting a sealed `.mvrec` opens it in read-only replay (`SurfaceReplay.vue`).
+Capture is RAM-first (`AC-07`, `ui/src/recording/MvRecordingPanel.vue`, `ui/electron/captureBridge.js`, `core/src/record/capture/export.rs`): while `idle`, zero bytes are written to disk. `MvRecordingPanel.vue` drives the per-capsule in-RAM capture state machine (`idle` -> `starting` -> `recording` -> `stopping` -> `sealed`, bounded at `16` MiB `[TARGET]` and `4096` `[TARGET]` frames in RAM) and in-RAM PNG screenshots (**Take screenshot**). Exporting to disk (**Save recording**, which writes a `ustar` archive of PNG frames to `MV_RECORDING_DESTINATION`) is only enabled after a recording reaches `sealed` and `MV_RECORDING_DESTINATION` is configured; live surfaces render through `ui/src/surfaces/SurfaceCanvas.vue`.
 
-The recordings panel queries `listRecordings` on initial mount, after a capture or recording reaches `sealed`, `stopped`, or `screenshot`, and when switching the focused capsule. Concurrent refresh triggers are coalesced in `ui/src/App.vue` (`recordingsRefreshInFlight` / `recordingsRefreshPending`) so rapid events never cause overlapping IPC list calls.
+`MvRecordingPanel.vue` queries `captureState.refresh(capsuleId)` (`ui/src/capture/capturePort.js` and `ui/src/recording/recordingModel.js`, backed by `window.metaviewer.capture.status(capsuleId)`) on initial mount, whenever the selected `capsuleId` or `captureState` store changes, and after each capture action (`start`, `stop`, `screenshot`, `exportRecording`, `discard`).
 
 The top-bar **Storyboard** button opens the Storyboard screen, where creative service operations are not wired yet and report `Creative service unavailable.`
 
@@ -194,8 +194,9 @@ The top-bar **Storyboard** button opens the Storyboard screen, where creative se
 | Variable | Default | Effect |
 | :--- | :--- | :--- |
 | `MV_CORE_BOOTSTRAP` | unset (loads `ui/electron/hostBindings.js`) | Optional path to a custom bootstrap module exporting `createMainBindings`. |
-| `MV_FRAME_DIAG` | `0` (off) | When `1` in non-packaged runs, emits `[MV_FRAME_DIAG]` lines on `stderr` for `frame_port/v1` and `frame_ack/v0.2` outcomes. |
-| `MV_QA_ANCHORS` | `0` (off) | When `1` in non-packaged runs, enables `data-qa-*` DOM anchors (`contracts/v0.2/qa_anchors.schema.json`). Refused when `app.isPackaged` is true. |
+| `MV_FRAME_DIAG` | `0` (off) | When `1` in non-packaged, non-nested runs (`ui/electron/frameDiag.js`), writes bounded `frame_diag/v1` snapshots atomically (`0600`) to `frame-diag.json` in `MV_FRAME_DIAG_DIR` (or `MV_QA_RUN_DIR` / `MV_E2E_RUN_DIR` / `XDG_RUNTIME_DIR`). Refused with `RETAIL_ENV` when `app.isPackaged` is true. |
+| `MV_E2E_LIVE` | `0` (off) | When `1` in non-packaged, non-nested runs (`ui/electron/qaAnchors.js`), writes `qa_anchors/v1` DOM geometry snapshots (`0600`) to `qa-anchors.json` in `MV_QA_RUN_DIR` / `MV_E2E_RUN_DIR` / `XDG_RUNTIME_DIR`. Refused with `RETAIL_ENV` when `app.isPackaged` is true. |
+| `MV_RECORDING_DESTINATION` | unset | Optional directory path enabling disk export of `sealed` recordings from `MvRecordingPanel.vue`. |
 | `ELECTRON_OVERRIDE_DIST_PATH` | unset | Path to a local unpacked Electron `44.9.2` distribution for offline smoke and E2E runs. |
 | `CAPSULE_UI_KIT_REPO` | unset | Path to the local `capsule-ui-kit` `0.2.1` `[MEASURED: python3 -c 'import json; print(json.load(open("ui/kit.lock.json"))["version"])']` checkout. |
 
