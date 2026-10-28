@@ -111,6 +111,7 @@ import { createHash } from 'node:crypto';
  * @property {number} byteLength Verified payload length.
  * @property {PixelSpec} pixelSpec Frozen declared layout.
  * @property {Uint8Array} bytes Owned private snapshot, never shared memory.
+ * @property {true} utilityVerified Snapshot digest matched the declared digest.
  */
 
 /**
@@ -809,6 +810,7 @@ export function createFrameReader(options) {
         byteLength: expected,
         pixelSpec,
         bytes: snapshot,
+        utilityVerified: true,
       }));
       dropped = true;
       await lease.release({ reason: SOURCE_RETIRED_REASON });

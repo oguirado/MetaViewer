@@ -120,6 +120,7 @@ export const FRAME_ACK_SCHEMA = 'frame_ack/v0.2';
  * @property {number} byteLength Must equal bytes.byteLength and width*height*3.
  * @property {Record<string, unknown>} pixelSpec Reader-owned layout witness.
  * @property {Uint8Array} bytes Owned packed rgb24 bytes.
+ * @property {boolean} [utilityVerified] Reader's digest-verification marker.
  */
 
 /**
@@ -264,6 +265,7 @@ export const FRAME_ACK_SCHEMA = 'frame_ack/v0.2';
 
 /**
  * @typedef {object} HeldFrame Validated frame plus its wire correlation.
+ * @property {boolean} [utilityVerified] Carried unchanged from the sender's frame.
  * @property {string} principal
  * @property {number} epoch
  * @property {string} surfaceId
@@ -722,6 +724,7 @@ export function createFramePort(options) {
         sha256: record.sha256,
         pixelSpec: { ...record.pixelSpec },
         bytes: record.bytes,
+        ...(record.utilityVerified === true ? { utilityVerified: true } : {}),
       });
       sent += 1;
       if (!revoked && inFlight === record && inFlight.frameGeneration === record.frameGeneration) {
@@ -1117,6 +1120,7 @@ export function createFramePort(options) {
       pixelSpec: { ...raw.pixelSpec },
       bytes: raw.bytes,
       correlation: `${binding.surfaceId}#${raw.frameGeneration}#${raw.leaseId}`,
+      utilityVerified: raw.utilityVerified,
     };
     if (inFlight === null) {
       inFlight = record;
