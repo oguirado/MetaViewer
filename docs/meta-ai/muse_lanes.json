@@ -95,6 +95,11 @@
    "why": "Polish the MetaViewer wall for live data after the live G-W1 gate passed: a live-replay fixture through the real authority runtime, live tile states, multislot real terminal sessions and a receipt/verdict activity strip.",
    "orchestrator": "UI orchestrator"
   },
+  "mvui25": {
+   "stage": "ui",
+   "why": "Live finding: human typing and clicks never reach the capsule in WRITE mode with human control; build the renderer side of surface_input/v1 (input port, focusable canvas capture, mounting) and fix the READ-ONLY strip label.",
+   "orchestrator": "UI orchestrator"
+  },
   "mvui14c": {
    "stage": "fix",
    "why": "Fix the judge's blocking notes on MV-UI7: SurfaceCanvas retired the live frame port on every generation update, and CONTEXT_LOST did not close the stream.",
