@@ -519,12 +519,15 @@ surface-ceb924ff564a	contracts/examples/v0.2/surface_input.valid.json
 surface-4f027f509f4f	contracts/examples/v0.2/surface_request.invalid.dropped_required.json
 surface-dfca270c5ba5	contracts/examples/v0.2/surface_request.invalid.nested_depth_2.json
 surface-210d0919f5fb	contracts/examples/v0.2/surface_request.invalid.nested_depth_negative.json
+surface-c3b82be6af5d	contracts/examples/v0.2/surface_request.invalid.origin_unknown.json
 surface-569990f8778a	contracts/examples/v0.2/surface_request.invalid.schema.json
 surface-4dc75d7c59d6	contracts/examples/v0.2/surface_request.invalid.type_swap.json
 surface-95da43197272	contracts/examples/v0.2/surface_request.invalid.unknown_prop.json
 surface-a8522f97486b	contracts/examples/v0.2/surface_request.valid.json
 surface-fd9b5ac9ff93	contracts/examples/v0.2/surface_request.valid.nested_depth_0.json
 surface-351db44c1df4	contracts/examples/v0.2/surface_request.valid.nested_depth_1.json
+surface-b9945d94765f	contracts/examples/v0.2/surface_request.valid.origin_agent.json
+surface-3ab8fb075f51	contracts/examples/v0.2/surface_request.valid.origin_human.json
 surface-a1d371bf756d	contracts/examples/v0.2/surface_request.valid.variant-001.json
 surface-5fc07a822f6e	contracts/examples/v0.2/surface_request.valid.variant-002.json
 surface-0203c15b00a2	contracts/examples/v0.2/surface_request.valid.variant-003.json
