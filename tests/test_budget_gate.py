@@ -126,12 +126,16 @@ class BudgetTests(unittest.TestCase):
             out = gate.probe(__file__, self.budget, [], read_proc=injected_reader)
             out_default = gate.probe(__file__, self.budget, [])
         self.assertEqual(out['orphans'], [])
+        self.assertEqual(out['orphan_grace_ms'], 0)
         self.assertEqual(out_default['orphans'], [])
+        self.assertEqual(out_default['orphan_grace_ms'], 0)
         self.assertTrue(gate.evaluate(out, self.budget)['ok'])
 
         def live_and_error_reader(path):
             if path == Path('/proc/4101/stat'):
                 return '4101 (helper) S 1 4101 4101 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 111 0 0'
+            if path == Path('/proc/4101/cmdline'):
+                return 'electron\x00--type=zygote\x00'
             if path == Path('/proc/4102/stat'):
                 raise ProcessLookupError(3, 'No such process')
             if path == Path('/proc/4103/stat'):
@@ -142,8 +146,16 @@ class BudgetTests(unittest.TestCase):
                 patch.object(Path, 'exists', autospec=True, side_effect=fake_exists), \
                 patch.object(Path, 'read_text', autospec=True, side_effect=lambda p, *a, **kw:
                              live_and_error_reader(p) if str(p).startswith('/proc/') else p.read_bytes().decode()):
-            out_live = gate.probe(__file__, self.budget, [], read_proc=live_and_error_reader)
-        self.assertEqual(out_live['orphans'], [4101])
+            out_live = gate.probe(__file__, self.budget, [], read_proc=live_and_error_reader,
+                                  sleep=lambda _: None)
+        self.assertEqual(out_live['orphan_grace_ms'], 5000)
+        self.assertEqual(out_live['orphans'], [{
+            'pid': 4101,
+            'starttime': '111',
+            'state': 'S',
+            'role': 'helper',
+            'cmd': 'electron --type=zygote',
+        }])
         self.assertFalse(gate.evaluate(out_live, self.budget)['ok'])
 
         def permission_error_reader(path):
@@ -152,7 +164,108 @@ class BudgetTests(unittest.TestCase):
         with patch.object(gate, 'cleanup_api', return_value={'bounded': fake_bounded}), \
                 patch.object(Path, 'exists', autospec=True, side_effect=fake_exists):
             with self.assertRaises(PermissionError):
-                gate.probe(__file__, self.budget, [], read_proc=permission_error_reader)
+                gate.probe(__file__, self.budget, [], read_proc=permission_error_reader,
+                           sleep=lambda _: None)
+
+    def test_probe_orphan_grace_waits_for_exiting_helpers_and_fails_survivors(self):
+        receipt_data = copy.deepcopy(self.clean)
+        receipt_data['identities'] = [
+            {'pid': 10066, 'starttime': '660'},
+            {'pid': 10069, 'starttime': '690'},
+            {'pid': 10070, 'starttime': '700'},
+            {'pid': 10072, 'starttime': '720'},
+        ]
+        receipt_data['samples'][0]['processes'] = [
+            {'pid': 10066, 'parent': 1, 'starttime': '660', 'state': 'S', 'role': 'main', 'rss_bytes': 150000000},
+            {'pid': 10070, 'parent': 10066, 'starttime': '700', 'state': 'S', 'role': 'helper', 'rss_bytes': 10000000},
+            {'pid': 10072, 'parent': 10066, 'starttime': '720', 'state': 'S', 'role': 'helper', 'rss_bytes': 10000000},
+        ]
+
+        def fake_bounded(argv, cwd, env, seconds=180):
+            Path(env['MV_RSS_OUTPUT']).write_text(json.dumps(receipt_data))
+            return 0
+
+        # Positive control: helpers 10069, 10070, 10072 exit or become zombies within the grace.
+        polls = {'count': 0}
+        sleeps = []
+
+        def fake_sleep(seconds):
+            sleeps.append(round(seconds, 3))
+            polls['count'] += 1
+
+        def exiting_helpers_reader(path):
+            tick = polls['count']
+            if path == Path('/proc/10066/stat'):
+                raise FileNotFoundError(2, 'No such file or directory')
+            if path == Path('/proc/10069/stat'):
+                if tick < 2:
+                    return '10069 (electron) S 10066 10066 10066 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 690 0 0'
+                raise ProcessLookupError(3, 'No such process')
+            if path == Path('/proc/10070/stat'):
+                if tick < 3:
+                    return '10070 (electron) S 10066 10066 10066 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 700 0 0'
+                return '10070 (electron) Z 10066 10066 10066 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 700 0 0'
+            if path == Path('/proc/10072/stat'):
+                if tick < 1:
+                    return '10072 (electron) S 10066 10066 10066 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 720 0 0'
+                # Recycled PID with new starttime is not the recorded identity.
+                return '10072 (other) R 1 10072 10072 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 999 0 0'
+            raise AssertionError(f'unexpected proc read: {path}')
+
+        with patch.object(gate, 'cleanup_api', return_value={'bounded': fake_bounded}):
+            out_pass = gate.probe(__file__, self.budget, [], read_proc=exiting_helpers_reader,
+                                  sleep=fake_sleep)
+        self.assertEqual(out_pass['orphans'], [])
+        self.assertEqual(out_pass['orphan_grace_ms'], 300)
+        self.assertEqual(sleeps, [0.1, 0.1, 0.1])
+        self.assertTrue(gate.evaluate(out_pass, self.budget)['ok'])
+
+        # Negative control: a process that stays alive past the full 5 s grace fails.
+        polls['count'] = 0
+        sleeps.clear()
+
+        def surviving_helper_reader(path):
+            tick = polls['count']
+            if path == Path('/proc/10066/stat'):
+                raise FileNotFoundError(2, 'No such file or directory')
+            if path == Path('/proc/10069/stat'):
+                return '10069 (electron) S 1 10066 10066 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 690 0 0'
+            if path == Path('/proc/10069/cmdline'):
+                return 'electron\x00--type=utility\x00--utility-sub-type=network.mojom.NetworkService\x00'
+            if path == Path('/proc/10070/stat'):
+                if tick < 2:
+                    return '10070 (electron) S 10066 10066 10066 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 700 0 0'
+                raise FileNotFoundError(2, 'No such file or directory')
+            if path == Path('/proc/10072/stat'):
+                return '10072 (electron) S 1 10066 10066 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 720 0 0'
+            if path == Path('/proc/10072/cmdline'):
+                return 'electron\x00--type=zygote\x00'
+            raise AssertionError(f'unexpected proc read: {path}')
+
+        with patch.object(gate, 'cleanup_api', return_value={'bounded': fake_bounded}):
+            out_fail = gate.probe(__file__, self.budget, [], read_proc=surviving_helper_reader,
+                                  sleep=fake_sleep)
+        self.assertEqual(out_fail['orphan_grace_ms'], 5000)
+        self.assertEqual(len(sleeps), 50)
+        self.assertEqual(out_fail['orphans'], [
+            {
+                'pid': 10069,
+                'starttime': '690',
+                'state': 'S',
+                'role': 'utility',
+                'cmd': 'electron --type=utility --utility-sub-type=network.mojom.NetworkService',
+            },
+            {
+                'pid': 10072,
+                'starttime': '720',
+                'state': 'S',
+                'role': 'helper',
+                'cmd': 'electron --type=zygote',
+            },
+        ])
+        verdict = gate.evaluate(out_fail, self.budget)
+        self.assertFalse(verdict['ok'])
+        self.assertEqual(verdict['failures'], ['orphan evidence'])
 
     def test_rss_probe_snapshot_ignores_esrch_and_enoent_during_sample(self):
         script = """

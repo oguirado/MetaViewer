@@ -124,9 +124,34 @@ def cleanup_api():
     return namespace
 
 
-def probe(electron, budgets, excludes, read_proc=lambda path: path.read_text()):
+ORPHAN_GRACE_MS = 5000  # [TARGET, unit decision] Bounded post-exit grace for helper teardown.
+ORPHAN_POLL_MS = 100
+
+
+def classify_orphan_role(pid, starttime, cmd, comm, sample_roles, main_pid, identity_role=None):
+    if type(identity_role) is str and identity_role:
+        return identity_role
+    recorded = sample_roles.get((pid, starttime)) or sample_roles.get((pid, None))
+    if recorded:
+        return recorded
+    if main_pid is not None and pid == main_pid:
+        return 'main'
+    words = cmd.replace('\x00', ' ').split()
+    if '--type=renderer' in words or any(word.startswith('--type=renderer') for word in words):
+        return 'renderer'
+    if '--type=utility' in words or any(word.startswith('--type=utility') for word in words):
+        return 'utility'
+    if comm in ('main', 'renderer', 'utility', 'helper'):
+        return comm
+    return 'helper'
+
+
+def probe(electron, budgets, excludes, read_proc=lambda path: path.read_text(),
+          sleep=None, grace_ms=ORPHAN_GRACE_MS, poll_ms=ORPHAN_POLL_MS):
     require(Path(electron).is_file(), 'Electron binary absent')
     require(all(integer(pid, 2) for pid in excludes), 'invalid capsule root')
+    require(integer(grace_ms, 0) and integer(poll_ms, 1), 'invalid orphan grace')
+    wait = time.sleep if sleep is None else sleep
     api = cleanup_api()
     with tempfile.TemporaryDirectory(prefix='mv-rss-') as directory:
         output = Path(directory) / 'receipt.json'
@@ -138,17 +163,55 @@ def probe(electron, budgets, excludes, read_proc=lambda path: path.read_text()):
         rc = api['bounded'](argv, ROOT, env, seconds=180)
         require(rc == 0, 'probe child rc=' + str(rc))
         receipt = read_json(output)
-        # Zombies hold no RSS and cannot execute; every live recorded identity fails.
-        orphans = []
-        for identity in receipt['identities']:
-            path = Path('/proc', str(identity['pid']), 'stat')
-            if path.exists():
+        sample_roles = {}
+        main_pid = None
+        for sample in receipt.get('samples', []):
+            for proc in sample.get('processes', []) if type(sample) is dict else []:
+                pid = proc.get('pid')
+                starttime = proc.get('starttime')
+                role = proc.get('role')
+                if type(pid) is int and type(role) is str and role:
+                    sample_roles[(pid, starttime)] = role
+                    sample_roles.setdefault((pid, None), role)
+                    if role == 'main' and main_pid is None:
+                        main_pid = pid
+        # Zombies hold no RSS and cannot execute; wait a bounded grace for helpers
+        # tearing down right after the main child exits before declaring orphans.
+        elapsed_ms = 0
+        pending = list(receipt['identities'])
+        live = []
+        while True:
+            live = []
+            for identity in pending:
+                path = Path('/proc', str(identity['pid']), 'stat')
                 try:
-                    fields = read_proc(path).rsplit(')', 1)[1].split()
+                    raw_stat = read_proc(path)
                 except (FileNotFoundError, ProcessLookupError):
                     continue
+                comm = raw_stat.split('(', 1)[1].rsplit(')', 1)[0] if '(' in raw_stat and ')' in raw_stat else ''
+                fields = raw_stat.rsplit(')', 1)[1].split()
                 if fields[19] == identity['starttime'] and fields[0] != 'Z':
-                    orphans.append(identity['pid'])
+                    live.append((identity, fields[0], comm))
+            if not live or elapsed_ms >= grace_ms:
+                break
+            step_ms = min(poll_ms, grace_ms - elapsed_ms)
+            wait(step_ms / 1000.0)
+            elapsed_ms += step_ms
+            pending = [identity for identity, _, _ in live]
+        orphans = []
+        for identity, state, comm in live:
+            pid = identity['pid']
+            starttime = identity['starttime']
+            try:
+                raw_cmd = read_proc(Path('/proc', str(pid), 'cmdline'))
+            except (FileNotFoundError, ProcessLookupError):
+                raw_cmd = ''
+            cmd = raw_cmd.replace('\x00', ' ').strip() or identity.get('cmd') or comm
+            role = classify_orphan_role(pid, starttime, cmd, comm, sample_roles,
+                                        main_pid, identity.get('role'))
+            orphans.append({'pid': pid, 'starttime': starttime, 'state': state,
+                            'role': role, 'cmd': cmd})
+        receipt['orphan_grace_ms'] = elapsed_ms
         receipt['orphans'] = orphans
         receipt['argv'] = argv
         receipt['sandbox_environment'] = env.get('ELECTRON_DISABLE_SANDBOX')
