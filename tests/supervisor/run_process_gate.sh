@@ -31,7 +31,7 @@ fi
 
 cd -- "$root"
 # Build outside sudo so shared build artifacts retain the caller's ownership.
-if build_output=$("$cargo_bin" test --offline --manifest-path tests/supervisor/Cargo.toml \
+if build_output=$("$cargo_bin" test --offline --locked --manifest-path tests/supervisor/Cargo.toml \
     --test supervisor_process --no-run --message-format=json); then
     :
 else

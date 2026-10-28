@@ -203,9 +203,10 @@ class PackageIdentityTests(unittest.TestCase):
 
     def test_manifest_inventory_and_extra_members_rejected(self):
         import sys
+        default_manifest = self.manifest.decode('utf-8')
         modeless = ''.join(
             re.sub(r'^([0-9a-f]{64}) [0-7]{4}  ', r'\1  ', line) + '\n'
-            for line in self.manifest.decode('utf-8').splitlines()
+            for line in default_manifest.splitlines()
         ).encode('utf-8')
         self.write_product(manifest_override=modeless)
         evidence = dict(self.evidence,
@@ -214,6 +215,29 @@ class PackageIdentityTests(unittest.TestCase):
         self.receipt['product_identity'] = evidence
         (self.root / 'product-evidence.json').write_text(json.dumps(evidence))
         self.assertTrue(self.aggregate(self.receipt))
+        sha256sum_manifest = ''.join(
+            re.sub(
+                r'^([0-9a-f]{64}) ([0-7]{4})  ',
+                lambda m: f"{m.group(1)} {'*' if m.group(2) == '0755' else ' '}",
+                line,
+            ) + '\n'
+            for line in default_manifest.splitlines()
+        ).encode('utf-8')
+        self.write_product(manifest_override=sha256sum_manifest)
+        evidence = dict(self.evidence,
+            artifact_sha256=hashlib.sha256(self.product.read_bytes()).hexdigest(),
+            manifest_sha256=hashlib.sha256(self.manifest).hexdigest())
+        self.receipt['product_identity'] = evidence
+        (self.root / 'product-evidence.json').write_text(json.dumps(evidence))
+        self.assertTrue(self.aggregate(self.receipt))
+        tampered_star = sha256sum_manifest.decode('utf-8').replace('  INSTALL.md\n', ' *INSTALL.md\n', 1).encode('utf-8')
+        self.write_product(manifest_override=tampered_star)
+        evidence = dict(self.evidence,
+            artifact_sha256=hashlib.sha256(self.product.read_bytes()).hexdigest(),
+            manifest_sha256=hashlib.sha256(self.manifest).hexdigest())
+        self.receipt['product_identity'] = evidence
+        (self.root / 'product-evidence.json').write_text(json.dumps(evidence))
+        self.assertEqual(distribution_errors(self.receipt, self.root, 'revision', 'arm64'), ['manifest member mode mismatch'])
         self.write_product()
         default_manifest = self.manifest.decode('utf-8')
         tampered_mode = default_manifest.replace(' 0755  metaviewer\n', ' 0644  metaviewer\n', 1).encode('utf-8')
@@ -428,10 +452,10 @@ def distribution_errors(receipt, product_root, revision, expected_arch=None):
             expected_hashes = {}
             expected_modes = {}
             for line in manifest_text.splitlines():
-                m = re.fullmatch(r'([0-9a-f]{64})(?: ([0-7]{4}))?  ([^\r\n\\]+)', line)
+                m = re.fullmatch(r'([0-9a-f]{64})(?: ([0-7]{4})  | ([ *]))([^\r\n\\]+)', line)
                 if not m:
                     return ['invalid manifest inventory line']
-                digest_hex, mode_oct, rel_path = m.group(1), m.group(2), m.group(3)
+                digest_hex, mode_oct, mode_flag, rel_path = m.group(1), m.group(2), m.group(3), m.group(4)
                 if rel_path.startswith('/') or any(p in ('', '.', '..') for p in rel_path.split('/')):
                     return ['invalid manifest member path']
                 full_name = rel_path if rel_path.startswith(prefix) else prefix + rel_path
@@ -442,6 +466,8 @@ def distribution_errors(receipt, product_root, revision, expected_arch=None):
                 expected_hashes[full_name] = digest_hex
                 if mode_oct is not None:
                     expected_modes[full_name] = int(mode_oct, 8)
+                elif mode_flag == '*':
+                    expected_modes[full_name] = 0o755
             if set(actual_files) != set(expected_hashes):
                 diff = sorted(set(actual_files) ^ set(expected_hashes))
                 return [f'archive member inventory mismatch: {diff}']

@@ -1,13 +1,14 @@
 // @ts-check
 // [TARGET, unit decision] Deterministic Linux bundle with an owned real-core session.
 // Local archives are mandatory; packager never reaches its download branch.
-import { createHash } from 'node:crypto';
-import { createReadStream, closeSync, openSync, statSync, unlinkSync, writeSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { createReadStream, closeSync, openSync, rmSync, statSync, unlinkSync, writeSync } from 'node:fs';
+import { once } from 'node:events';
 import * as fs from 'node:fs/promises';
-import { dirname, basename, isAbsolute, join, resolve, sep } from 'node:path';
+import { dirname, basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { execFile } from 'node:child_process';
+import { execFile, spawn as defaultSpawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { buildFuseConfig, ELECTRON_PIN, FUSE_TABLE } from '../electron/main.js';
 import { extractFile, listPackage, statFile, uncache } from '@electron/asar';
@@ -129,13 +130,12 @@ export async function writeManifest(root, destination) {
   }
   await walk('');
   files.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-  const includeExplicitModes = files.some(file => file.mode !== DEFAULT_UMASK_FILE_MODE);
   const lines = [];
   for (const file of files) {
     const hash = createHash('sha256');
     for await (const bytes of createReadStream(join(root, file.name))) hash.update(bytes);
-    const modeField = includeExplicitModes ? ` ${file.mode.toString(8).padStart(4, '0')}` : '';
-    lines.push(`${hash.digest('hex')}${modeField}  ${file.name}\n`);
+    const marker = file.mode === 0o755 ? ' *' : '  ';
+    lines.push(`${hash.digest('hex')}${marker}${file.name}\n`);
   }
   await fs.writeFile(destination, lines.join(''), { flag: 'wx' });
 }
@@ -423,6 +423,249 @@ export async function runPackagedBootWait({
   }
 }
 
+/**
+ * Resolve the persistent XDG_CONFIG_HOME for packaged launches so user settings
+ * survive across launches and ephemeral runtime directory cleanup, falling back
+ * to join(runtimeDir, 'config') only when no valid caller path outside runtimeDir
+ * and appRootDir is available.
+ * @param {NodeJS.ProcessEnv} env
+ * @param {string} runtimeDir
+ * @param {string} [appRootDir]
+ */
+export function resolvePackagedConfigHome(env, runtimeDir, appRootDir = '') {
+  const runtimeResolved = resolve(runtimeDir);
+  const appRootResolved = appRootDir ? resolve(appRootDir) : '';
+  const candidates = [
+    env?.XDG_CONFIG_HOME,
+    typeof env?.HOME === 'string' && env.HOME.length > 0 ? join(env.HOME, '.config') : '',
+  ];
+  for (const raw of candidates) {
+    if (typeof raw !== 'string' || raw.length === 0 || /[\0\r\n]/.test(raw) || !isAbsolute(raw)) continue;
+    const resolved = resolve(raw);
+    if (resolved === runtimeResolved || resolved.startsWith(`${runtimeResolved}${sep}`)) continue;
+    if (appRootResolved && (resolved === appRootResolved || resolved.startsWith(`${appRootResolved}${sep}`))) continue;
+    return resolved;
+  }
+  return join(runtimeResolved, 'config');
+}
+
+/**
+ * Create a testable packaged boot and teardown lifecycle with injectable clock,
+ * signal sender, child spawner, and environment scrubber (`R3-T4-008` / `T20`,
+ * `R3-T4-009` / `T21`).
+ * @param {{
+ *   env?: NodeJS.ProcessEnv,
+ *   tmpRoot?: string,
+ *   appRoot?: string,
+ *   resourcesPath?: string,
+ *   pin?: { version: string, commit: string },
+ *   scrubChildEnv?: (env: NodeJS.ProcessEnv, runtimeDir: string) => NodeJS.ProcessEnv,
+ *   validateKillTarget?: (targetPid: unknown, selfPid: number, leaderPid?: number) => boolean,
+ *   spawn?: typeof defaultSpawn,
+ *   kill?: (pid: number, signal?: string | number) => unknown,
+ *   setTimeout?: typeof globalThis.setTimeout,
+ *   clearTimeout?: typeof globalThis.clearTimeout,
+ *   killGraceMs?: number,
+ *   app?: { on?: (event: string, listener: (...args: any[]) => void) => void, removeAllListeners?: (event?: string) => void, exit?: (code?: number) => void },
+ *   processObj?: { pid: number, on?: (event: string, listener: (...args: any[]) => void) => void, exit?: (code?: number) => void },
+ * }} [options]
+ */
+export async function createPackagedBootLifecycle(options = {}) {
+  const env = options.env ?? process.env;
+  const tmpRoot = options.tmpRoot ?? tmpdir();
+  const appRootDir = options.appRoot ?? '';
+  const resourcesPath = options.resourcesPath ?? (appRootDir ? dirname(appRootDir) : tmpRoot);
+  const pin = options.pin ?? { version: '0.1.0', commit: '0'.repeat(40) };
+  const scrubFn = options.scrubChildEnv ?? ((rawEnv) => ({ ...rawEnv }));
+  const validateKillFn =
+    options.validateKillTarget ??
+    ((targetPid, selfPid, leaderPid = selfPid) =>
+      typeof targetPid === 'number' &&
+      Number.isInteger(targetPid) &&
+      targetPid > 1 &&
+      targetPid !== selfPid &&
+      targetPid !== leaderPid);
+  const spawnFn = options.spawn ?? defaultSpawn;
+  const killFn = options.kill ?? ((pid, sig) => process.kill(pid, sig));
+  const setTimer = options.setTimeout ?? globalThis.setTimeout;
+  const clearTimer = options.clearTimeout ?? globalThis.clearTimeout;
+  const killGraceMs = options.killGraceMs ?? 1500;
+  const proc = options.processObj ?? process;
+  const appObj = options.app ?? {
+    on: () => {},
+    removeAllListeners: () => {},
+    exit: (code = 0) => proc.exit?.(code),
+  };
+
+  /** @type {string | null} */
+  let runtime = null;
+  /** @type {any} */
+  let core = null;
+  /** @type {any} */
+  let boot = null;
+  let stopping = false;
+  /** @type {Promise<void> | null} */
+  let stopPromise = null;
+
+  const cleanupRuntimeSync = () => {
+    if (!runtime) return;
+    try {
+      rmSync(runtime, { recursive: true, force: true });
+    } catch {}
+  };
+  const cleanupRuntimeAsync = async () => {
+    if (!runtime) return;
+    await fs.rm(runtime, { recursive: true, force: true }).catch(() => {});
+  };
+  const isLiveCore = (child) =>
+    Boolean(
+      child &&
+        child === core &&
+        child.exitCode === null &&
+        child.signalCode === null &&
+        validateKillFn(child.pid, proc.pid, proc.pid),
+    );
+
+  const stop = () => {
+    if (stopPromise !== null) return stopPromise;
+    stopping = true;
+    stopPromise = (async () => {
+      try {
+        appObj.removeAllListeners?.('window-all-closed');
+        appObj.on?.('window-all-closed', () => {});
+      } catch {}
+      try {
+        await boot?.dispose?.();
+      } catch {}
+      if (isLiveCore(core)) {
+        const exited = once(core, 'exit');
+        try {
+          killFn(core.pid, 'SIGTERM');
+        } catch {}
+        const killer = setTimer(() => {
+          if (isLiveCore(core)) {
+            try {
+              killFn(core.pid, 'SIGKILL');
+            } catch {}
+          }
+        }, killGraceMs);
+        await exited;
+        clearTimer(killer);
+      }
+      await cleanupRuntimeAsync();
+    })();
+    return stopPromise;
+  };
+
+  try {
+    runtime = await fs.mkdtemp(join(tmpRoot, 'mv-pkg-'));
+    await fs.chmod(runtime, 0o700);
+    await fs.mkdir(join(runtime, 'metaviewer'), { mode: 0o700 });
+    const stateHome = join(runtime, 'state');
+    const configHome = resolvePackagedConfigHome(env, runtime, appRootDir);
+    const srfStateDir = env.MV_SRF_STATE_DIR || join(runtime, 'srf-state');
+    const srfIdentityRoot = env.SRF_IDENTITY_STORE_ROOT || join(runtime, 'srf-identity');
+    for (const dir of [stateHome, configHome, srfStateDir, srfIdentityRoot]) {
+      await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+      await fs.chmod(dir, 0o700);
+    }
+    const registration = (component) => ({
+      endpoint: { component, instance: `${component}-${randomUUID()}` },
+      hello: {
+        schema: 'hello/v0.2',
+        contract_version: 'v0.2',
+        component,
+        component_version: component === 'daemon' ? '0.1.1' : pin.version,
+        component_commit: pin.commit,
+        dependencies: [],
+      },
+    });
+    const config = {
+      session_id: `pkg-${randomUUID()}`,
+      core: registration('core'),
+      peers: ['daemon', 'agent', 'ui'].map(registration),
+    };
+    const configPath = join(runtime, 'config.json');
+    await fs.writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
+    const daemonPeer = config.peers.find((p) => p.endpoint.component === 'daemon');
+    env.XDG_RUNTIME_DIR = runtime;
+    env.MV_CORE_CONFIG = configPath;
+    env.XDG_STATE_HOME = stateHome;
+    env.XDG_CONFIG_HOME = configHome;
+    env.MV_SESSION_ID = config.session_id;
+    env.MV_CORE_INSTANCE = config.core.endpoint.instance;
+    env.MV_DAEMON_INSTANCE = daemonPeer.endpoint.instance;
+    env.MV_COMPONENT_COMMIT = pin.commit;
+    env.MV_CONTRACT_DIR = join(resourcesPath, 'contracts/v0.2');
+    env.MV_SRF_STATE_DIR = srfStateDir;
+    env.SRF_IDENTITY_STORE_ROOT = srfIdentityRoot;
+    env.SRF_PROXY_REGISTRY = env.SRF_PROXY_REGISTRY || join(runtime, 'srf-proxy-registry.json');
+    env.MV_ADAPTER_BIN = join(resourcesPath, 'bin/mv-daemon-adapter');
+    delete env.MV_CORE_BOOTSTRAP;
+    const coreEnv = {
+      ...scrubFn(env, runtime),
+      XDG_STATE_HOME: stateHome,
+      MV_CORE_CONFIG: configPath,
+    };
+    core = spawnFn(join(resourcesPath, 'bin/metaviewer-core'), [], {
+      env: coreEnv,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      shell: false,
+    });
+    appObj.on?.('will-quit', (event) => {
+      if (stopping || env.MV_PACKAGE_SMOKE === '1') {
+        try {
+          event?.preventDefault?.();
+        } catch {}
+      }
+      if (!stopping) {
+        if (isLiveCore(core)) {
+          try {
+            killFn(core.pid, 'SIGTERM');
+          } catch {}
+        }
+        cleanupRuntimeSync();
+      }
+    });
+    proc.on?.('exit', () => {
+      if (isLiveCore(core)) {
+        try {
+          killFn(core.pid, 'SIGKILL');
+        } catch {}
+      }
+      cleanupRuntimeSync();
+    });
+    const rawExit = typeof appObj.exit === 'function' ? appObj.exit.bind(appObj) : (code) => proc.exit?.(code);
+    appObj.exit = (code) => {
+      if (isLiveCore(core)) {
+        try {
+          killFn(core.pid, 'SIGKILL');
+        } catch {}
+      }
+      cleanupRuntimeSync();
+      return rawExit(code);
+    };
+    return {
+      runtime,
+      configHome,
+      stateHome,
+      configPath,
+      core,
+      stop,
+      isLiveCore: () => isLiveCore(core),
+      setBoot: (resolved) => {
+        boot = resolved;
+      },
+    };
+  } catch (error) {
+    try {
+      await stop();
+    } catch {}
+    cleanupRuntimeSync();
+    throw error;
+  }
+}
+
 // [TARGET, unit decision] The delivered entry owns a fresh real-core session and
 // supervises the bundled adapter next to core when OpenSuperficies (MV_SRF_BIN_DIR)
 // is configured, degrading cleanly to core-only when absent.
@@ -431,7 +674,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { lstatSync, readdirSync, readFileSync, rmSync, writeSync } from 'node:fs';
 import * as fs from 'node:fs/promises';
-import { join, dirname } from 'node:path';
+import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
@@ -460,6 +703,22 @@ function writeFdSync(fd, value) {
 function formatErrorLine(error) {
   if (error instanceof Error) return error.stack || error.message || String(error);
   return typeof error === 'string' ? error : format(error);
+}
+function resolvePackagedConfigHome(env, runtimeDir, appRootDir) {
+  const runtimeResolved = resolve(runtimeDir);
+  const appRootResolved = appRootDir ? resolve(appRootDir) : '';
+  const candidates = [
+    env?.XDG_CONFIG_HOME,
+    typeof env?.HOME === 'string' && env.HOME.length > 0 ? join(env.HOME, '.config') : '',
+  ];
+  for (const raw of candidates) {
+    if (typeof raw !== 'string' || raw.length === 0 || /[\0\r\n]/.test(raw) || !isAbsolute(raw)) continue;
+    const resolved = resolve(raw);
+    if (resolved === runtimeResolved || resolved.startsWith(runtimeResolved + sep)) continue;
+    if (appRootResolved && (resolved === appRootResolved || resolved.startsWith(appRootResolved + sep))) continue;
+    return resolved;
+  }
+  return join(runtimeResolved, 'config');
 }
 console.error = (...args) => {
   writeFdSync(2, format(...args));
@@ -545,51 +804,23 @@ else if (process.argv.includes('--nested-depth=1')) {
     try { mainModule.registerPrivilegedScheme(protocol); } catch {}
   }
   const resourcesPath = process.resourcesPath || dirname(appRoot);
-  const pin = JSON.parse(await fs.readFile(join(root, 'package-pin.json'), 'utf8'));
-  const runtime = await fs.mkdtemp(join(tmpdir(), 'mv-pkg-'));
-  await fs.chmod(runtime, 0o700);
-  await fs.mkdir(join(runtime, 'metaviewer'), {mode:0o700});
-  const stateHome = join(runtime, 'state');
-  const configHome = join(runtime, 'config');
-  const srfStateDir = process.env.MV_SRF_STATE_DIR || join(runtime, 'srf-state');
-  const srfIdentityRoot = process.env.SRF_IDENTITY_STORE_ROOT || join(runtime, 'srf-identity');
-  for (const dir of [stateHome, configHome, srfStateDir, srfIdentityRoot]) {
-    await fs.mkdir(dir, {recursive:true, mode:0o700});
-    await fs.chmod(dir, 0o700);
-  }
-  // [TARGET, unit decision] mv-daemon-adapter pins hello/v0.2 component_version
-  // to 0.1.1 in daemon/environment.go; core pins pin.version from VERSION.
-  const registration = component => ({endpoint:{component,instance:component+'-'+randomUUID()},hello:{
-    schema:'hello/v0.2',contract_version:'v0.2',component,component_version:component==='daemon'?'0.1.1':pin.version,
-    component_commit:pin.commit,dependencies:[]}});
-  const config = {session_id:'pkg-'+randomUUID(),core:registration('core'),
-    peers:['daemon','agent','ui'].map(registration)};
-  const configPath = join(runtime, 'config.json');
-  await fs.writeFile(configPath, JSON.stringify(config), {mode:0o600});
-  const daemonPeer = config.peers.find(p => p.endpoint.component === 'daemon');
-  process.env.XDG_RUNTIME_DIR = runtime;
-  process.env.MV_CORE_CONFIG = configPath;
-  process.env.XDG_STATE_HOME = stateHome;
-  process.env.XDG_CONFIG_HOME = configHome;
-  process.env.MV_SESSION_ID = config.session_id;
-  process.env.MV_CORE_INSTANCE = config.core.endpoint.instance;
-  process.env.MV_DAEMON_INSTANCE = daemonPeer.endpoint.instance;
-  process.env.MV_COMPONENT_COMMIT = pin.commit;
-  process.env.MV_CONTRACT_DIR = join(resourcesPath, 'contracts/v0.2');
-  process.env.MV_SRF_STATE_DIR = srfStateDir;
-  process.env.SRF_IDENTITY_STORE_ROOT = srfIdentityRoot;
-  process.env.SRF_PROXY_REGISTRY = process.env.SRF_PROXY_REGISTRY || join(runtime, 'srf-proxy-registry.json');
-  process.env.MV_ADAPTER_BIN = join(resourcesPath, 'bin/mv-daemon-adapter');
-  delete process.env.MV_CORE_BOOTSTRAP;
-  const coreEnv = {...scrubChildEnv(process.env, runtime), XDG_STATE_HOME:stateHome, MV_CORE_CONFIG:configPath};
-  const core = spawn(join(resourcesPath,'bin/metaviewer-core'), [], {env:coreEnv,stdio:['pipe','pipe','pipe'],shell:false});
-  let failure;
-  core.on('error', error => {failure=error;});
-  core.stdout.on('data', () => {});
-  core.stderr.on('data', bytes => writeFdSync(2, bytes.toString('utf8')));
+  let runtime = null;
+  let core = null;
   let boot = null;
   let stopping = false;
   let stopPromise = null;
+  const cleanupRuntimeSync = () => {
+    if (!runtime) return;
+    try { rmSync(runtime, { recursive: true, force: true }); } catch {}
+  };
+  const isLiveCore = child =>
+    Boolean(
+      child &&
+      child === core &&
+      child.exitCode === null &&
+      child.signalCode === null &&
+      validateKillTarget(child.pid, process.pid, process.pid)
+    );
   const stop = () => {
     if (stopPromise !== null) return stopPromise;
     stopping = true;
@@ -599,37 +830,83 @@ else if (process.argv.includes('--nested-depth=1')) {
         app.on?.('window-all-closed', () => {});
       } catch {}
       try { await boot?.dispose?.(); } catch {}
-      if (validateKillTarget(core.pid, process.pid, process.pid) && core.exitCode === null && core.signalCode === null) {
+      if (isLiveCore(core)) {
         const exited = once(core,'exit');
         try {process.kill(core.pid,'SIGTERM');} catch {}
         const killer = setTimeout(() => {
-          if (validateKillTarget(core.pid, process.pid, process.pid) && core.exitCode === null && core.signalCode === null) {
+          if (isLiveCore(core)) {
             try {process.kill(core.pid,'SIGKILL');} catch {}
           }
         }, 1500);
         await exited;
         clearTimeout(killer);
       }
-      await fs.rm(runtime,{recursive:true,force:true});
+      if (runtime) await fs.rm(runtime,{recursive:true,force:true}).catch(() => {});
     })();
     return stopPromise;
   };
-  app.on('will-quit', event => {
-    if (stopping || process.env.MV_PACKAGE_SMOKE === '1') {try {event?.preventDefault?.();} catch {}}
-    if (!stopping && validateKillTarget(core.pid, process.pid, process.pid)) {try {process.kill(core.pid,'SIGTERM');} catch {}}
-  });
-  process.on('exit', () => {
-    if (validateKillTarget(core.pid, process.pid, process.pid)) {try {process.kill(core.pid,'SIGKILL');} catch {}}
-  });
   const rawExit = typeof app.exit === 'function' ? app.exit.bind(app) : code => process.exit(code);
   app.exit = code => {
-    if (validateKillTarget(core.pid, process.pid, process.pid)) {try {process.kill(core.pid,'SIGKILL');} catch {}}
-    try {rmSync(runtime,{recursive:true,force:true});} catch {}
+    if (isLiveCore(core)) {try {process.kill(core.pid,'SIGKILL');} catch {}}
+    cleanupRuntimeSync();
     return rawExit(code);
   };
-  const bootBudgetMs = Number(process.env.MV_PKG_BOOT_BUDGET_MS) > 0 ? Number(process.env.MV_PKG_BOOT_BUDGET_MS) : 10000;
-  const deadline = Date.now() + bootBudgetMs;
+  app.on('will-quit', event => {
+    if (stopping || process.env.MV_PACKAGE_SMOKE === '1') {try {event?.preventDefault?.();} catch {}}
+    if (!stopping) {
+      if (isLiveCore(core)) {try {process.kill(core.pid,'SIGTERM');} catch {}}
+      cleanupRuntimeSync();
+    }
+  });
+  process.on('exit', () => {
+    if (isLiveCore(core)) {try {process.kill(core.pid,'SIGKILL');} catch {}}
+    cleanupRuntimeSync();
+  });
   try {
+    const pin = JSON.parse(await fs.readFile(join(root, 'package-pin.json'), 'utf8'));
+    runtime = await fs.mkdtemp(join(tmpdir(), 'mv-pkg-'));
+    await fs.chmod(runtime, 0o700);
+    await fs.mkdir(join(runtime, 'metaviewer'), {mode:0o700});
+    const stateHome = join(runtime, 'state');
+    const configHome = resolvePackagedConfigHome(process.env, runtime, appRoot);
+    const srfStateDir = process.env.MV_SRF_STATE_DIR || join(runtime, 'srf-state');
+    const srfIdentityRoot = process.env.SRF_IDENTITY_STORE_ROOT || join(runtime, 'srf-identity');
+    for (const dir of [stateHome, configHome, srfStateDir, srfIdentityRoot]) {
+      await fs.mkdir(dir, {recursive:true, mode:0o700});
+      await fs.chmod(dir, 0o700);
+    }
+    // [TARGET, unit decision] mv-daemon-adapter pins hello/v0.2 component_version
+    // to 0.1.1 in daemon/environment.go; core pins pin.version from VERSION.
+    const registration = component => ({endpoint:{component,instance:component+'-'+randomUUID()},hello:{
+      schema:'hello/v0.2',contract_version:'v0.2',component,component_version:component==='daemon'?'0.1.1':pin.version,
+      component_commit:pin.commit,dependencies:[]}});
+    const config = {session_id:'pkg-'+randomUUID(),core:registration('core'),
+      peers:['daemon','agent','ui'].map(registration)};
+    const configPath = join(runtime, 'config.json');
+    await fs.writeFile(configPath, JSON.stringify(config), {mode:0o600});
+    const daemonPeer = config.peers.find(p => p.endpoint.component === 'daemon');
+    process.env.XDG_RUNTIME_DIR = runtime;
+    process.env.MV_CORE_CONFIG = configPath;
+    process.env.XDG_STATE_HOME = stateHome;
+    process.env.XDG_CONFIG_HOME = configHome;
+    process.env.MV_SESSION_ID = config.session_id;
+    process.env.MV_CORE_INSTANCE = config.core.endpoint.instance;
+    process.env.MV_DAEMON_INSTANCE = daemonPeer.endpoint.instance;
+    process.env.MV_COMPONENT_COMMIT = pin.commit;
+    process.env.MV_CONTRACT_DIR = join(resourcesPath, 'contracts/v0.2');
+    process.env.MV_SRF_STATE_DIR = srfStateDir;
+    process.env.SRF_IDENTITY_STORE_ROOT = srfIdentityRoot;
+    process.env.SRF_PROXY_REGISTRY = process.env.SRF_PROXY_REGISTRY || join(runtime, 'srf-proxy-registry.json');
+    process.env.MV_ADAPTER_BIN = join(resourcesPath, 'bin/mv-daemon-adapter');
+    delete process.env.MV_CORE_BOOTSTRAP;
+    const coreEnv = {...scrubChildEnv(process.env, runtime), XDG_STATE_HOME:stateHome, MV_CORE_CONFIG:configPath};
+    core = spawn(join(resourcesPath,'bin/metaviewer-core'), [], {env:coreEnv,stdio:['pipe','pipe','pipe'],shell:false});
+    let failure;
+    core.on('error', error => {failure=error;});
+    core.stdout.on('data', () => {});
+    core.stderr.on('data', bytes => writeFdSync(2, bytes.toString('utf8')));
+    const bootBudgetMs = Number(process.env.MV_PKG_BOOT_BUDGET_MS) > 0 ? Number(process.env.MV_PKG_BOOT_BUDGET_MS) : 10000;
+    const deadline = Date.now() + bootBudgetMs;
     for (;;) {
       if (failure || core.exitCode !== null || Date.now() > deadline) throw new Error('PKG_CORE_START_FAILED');
       try {await fs.access(join(runtime,'metaviewer/core.sock'));break;} catch {}
@@ -680,7 +957,7 @@ else if (process.argv.includes('--nested-depth=1')) {
       if (bootTimer !== undefined) clearTimeout(bootTimer);
     });
     void entry.catch(async error => {writeFdSync(2, formatErrorLine(error));try {await stop();} catch {}app.exit(1);});
-  } catch(error) {writeFdSync(2, formatErrorLine(error));try {await stop();} catch {}app.exit(1);}
+  } catch(error) {writeFdSync(2, formatErrorLine(error));try {await stop();} catch {}cleanupRuntimeSync();app.exit(1);}
 }
 `;
 
@@ -719,11 +996,15 @@ export async function verifyInstall(root, arch = architecture.arch) {
   /** @type {Map<string, { digest: string, mode: number }>} */
   const expected = new Map();
   for (const line of manifest.trimEnd().split('\n')) {
-    const match = /^([0-9a-f]{64})(?: ([0-7]{4}))?  (.+)$/.exec(line);
-    if (!match || match[3].split('/').some(part => !part || part === '.' || part === '..') || /[\\\r\n]/.test(match[3]) || expected.has(match[3]))
+    const match = /^([0-9a-f]{64})(?: ([0-7]{4})  | ([ *]))(.+)$/.exec(line);
+    if (!match || match[4].split('/').some(part => !part || part === '.' || part === '..') || /[\\\r\n]/.test(match[4]) || expected.has(match[4]))
       throw new Error('PKG_MANIFEST_INVALID');
-    const mode = match[2] !== undefined ? Number.parseInt(match[2], 8) : DEFAULT_UMASK_FILE_MODE;
-    expected.set(match[3], { digest: match[1], mode });
+    const mode = match[2] !== undefined
+      ? Number.parseInt(match[2], 8)
+      : match[3] === '*'
+        ? 0o755
+        : DEFAULT_UMASK_FILE_MODE;
+    expected.set(match[4], { digest: match[1], mode });
   }
   let count=0;
   async function walk(part) {
@@ -740,7 +1021,12 @@ export async function verifyInstall(root, arch = architecture.arch) {
       try {await file.read(prefix,0,4,0);} finally {await file.close();}
       rejectFont(name,prefix);
       const record = expected.get(name);
-      if (!record || record.digest !== await digest(fullPath) || record.mode !== (st.mode & 0o777)) {
+      const actualMode = st.mode & 0o777;
+      const modeMatches =
+        record !== undefined &&
+        (actualMode === record.mode ||
+          (record.mode === DEFAULT_UMASK_FILE_MODE && actualMode === 0o644));
+      if (!record || record.digest !== await digest(fullPath) || !modeMatches) {
         throw new Error(`PKG_MANIFEST_MISMATCH: ${name}`);
       }
       count++;
@@ -765,6 +1051,14 @@ export async function bundlePackage(root, arch = architecture.arch) {
     '--format=gnu','--mode=u+rwX,go+rX,go-w','-cf',artifact,'-C',dirname(root),basename(root),`${basename(root)}.sha256`]);
   return {artifact,artifact_sha256:await digest(artifact),size_bytes:(await fs.stat(artifact)).size};
 }
+
+/** @type {Readonly<Record<string, string>>} */
+export const LOCKED_ELECTRON_ARCHIVE_DIGESTS = Object.freeze({
+  [`electron-v${ELECTRON_PIN}-linux-arm64.zip`]:
+    'f113a7f1f04ddb09f2e9b7bf4785f45eb1cb310dd9f2183e01f44c0a7b8df77d',
+  [`electron-v${ELECTRON_PIN}-linux-x64.zip`]:
+    '85e2fc5eff5ca5aa5fbcccebeabbfda9ebbf3d15e51fc9e6e5ff8b7bc2bd33c0',
+});
 
 /** @type {Readonly<Record<string, { archiveSha256: string, treeSha256: string }>>} */
 export const PINNED_ELECTRON_DIST_TREES = Object.freeze({
@@ -902,7 +1196,7 @@ export async function verifyElectronZip(zipDir, arch = architecture.arch, option
       break;
     } catch {}
   }
-  const expectedArchiveSha = checksums?.[expectedArchive];
+  const expectedArchiveSha = checksums?.[expectedArchive] ?? LOCKED_ELECTRON_ARCHIVE_DIGESTS[expectedArchive];
   if (typeof expectedArchiveSha !== 'string' || !/^[0-9a-f]{64}$/.test(expectedArchiveSha)) {
     throw electronChecksumError(
       `checksums.json[${expectedArchive}]`,
@@ -922,10 +1216,10 @@ export async function verifyElectronZip(zipDir, arch = architecture.arch, option
  * Verify that the Electron npm package wrapper and lockfile entry match the
  * pinned version and package-lock.json integrity.
  * @param {string} dist
- * @param {Record<string, any> | null} checksums
+ * @param {Record<string, any> | null} [checksums]
  * @param {{ checksumsPath?: string, lockfilePath?: string, requireLockfileWrapper?: boolean }} [options]
  */
-export async function verifyElectronLockfileBinding(dist, checksums, options = {}) {
+export async function verifyElectronLockfileBinding(dist, checksums = null, options = {}) {
   const wrapperDir = dirname(dist);
   const wrapperPkgPath = join(wrapperDir, 'package.json');
   const hasWrapperPkg = await fs
@@ -966,6 +1260,7 @@ export async function verifyElectronLockfileBinding(dist, checksums, options = {
       String(electronLock.integrity ?? 'missing'),
     );
   }
+  let wrapperVerified = false;
   if (hasWrapperPkg || options.requireLockfileWrapper) {
     const wrapperPkg = JSON.parse(await fs.readFile(wrapperPkgPath, 'utf8').catch(() => '{}'));
     if (String(wrapperPkg.version ?? '') !== ELECTRON_PIN) {
@@ -984,17 +1279,20 @@ export async function verifyElectronLockfileBinding(dist, checksums, options = {
         throw electronChecksumError('electron.d.ts', checksums['electron.d.ts'], actualDtsSha);
       }
     }
+    wrapperVerified = true;
   }
   return {
     version: ELECTRON_PIN,
     integrity: LOCKED_ELECTRON_PACKAGE_INTEGRITY,
+    wrapperVerified,
   };
 }
 
 /**
- * Verify an unpacked Electron distribution against checksums.json, lockfile
- * metadata, a pinned per-file tree digest, or a checksum-verified local
- * upstream archive (including @electron/get's release cache).
+ * Verify an unpacked Electron distribution against a verified lockfile wrapper
+ * or PINNED_ELECTRON_DIST_TREES. Unanchored sibling checksums.json files next
+ * to or inside a raw override dist are never trusted to supply archiveSha256,
+ * :tree, or :files digests (`R3-T4-001`, `R1-096`).
  * @param {string} dist
  * @param {string} [arch]
  * @param {{
@@ -1016,20 +1314,36 @@ export async function verifyElectronDist(dist, arch = architecture.arch, options
   const versionRaw = await fs.readFile(join(dist, 'version'), 'utf8').catch(() => '');
   if (versionRaw.trim().replace(/^v/, '') !== ELECTRON_PIN) throw new Error('PKG_ELECTRON_PIN');
   await verifyBinary(join(dist, 'electron'), arch);
-  const checksumsCandidates = [
-    ...(options.checksumsPath ? [options.checksumsPath] : []),
-    join(dirname(dist), 'checksums.json'),
-    join(ui, 'node_modules/electron/checksums.json'),
-  ];
+
+  // Verify lockfile & npm wrapper BEFORE reading any sibling checksums.json so
+  // an unanchored external dist can never self-authenticate via adjacent files.
+  const lockfileBinding = await verifyElectronLockfileBinding(dist, null, options);
+  const hasExplicitChecksumsPath = typeof options.checksumsPath === 'string' && options.checksumsPath.length > 0;
+
   /** @type {Record<string, any> | null} */
   let checksums = null;
-  for (const candidate of checksumsCandidates) {
+  if (hasExplicitChecksumsPath) {
     try {
-      checksums = JSON.parse(await fs.readFile(candidate, 'utf8'));
-      break;
+      checksums = JSON.parse(await fs.readFile(/** @type {string} */ (options.checksumsPath), 'utf8'));
     } catch {}
+  } else {
+    const trustedChecksumsCandidates = [
+      ...(lockfileBinding?.wrapperVerified ? [join(dirname(dist), 'checksums.json')] : []),
+      join(ui, 'node_modules/electron/checksums.json'),
+    ];
+    for (const candidate of trustedChecksumsCandidates) {
+      try {
+        const candidateSha = await digest(candidate).catch(() => 'missing');
+        if (candidateSha !== LOCKED_ELECTRON_NPM_FILES['checksums.json']) continue;
+        checksums = JSON.parse(await fs.readFile(candidate, 'utf8'));
+        break;
+      } catch {}
+    }
   }
-  const expectedArchiveSha = checksums?.[expectedArchive];
+
+  const expectedArchiveSha = hasExplicitChecksumsPath
+    ? checksums?.[expectedArchive]
+    : (checksums?.[expectedArchive] ?? LOCKED_ELECTRON_ARCHIVE_DIGESTS[expectedArchive]);
   if (typeof expectedArchiveSha !== 'string' || !/^[0-9a-f]{64}$/.test(expectedArchiveSha)) {
     throw electronChecksumError(
       `checksums.json[${expectedArchive}]`,
@@ -1037,19 +1351,28 @@ export async function verifyElectronDist(dist, arch = architecture.arch, options
       String(expectedArchiveSha ?? 'missing'),
     );
   }
-  await verifyElectronLockfileBinding(dist, checksums, options);
+  if (lockfileBinding?.wrapperVerified && checksums) {
+    if (typeof checksums?.['electron.d.ts'] === 'string') {
+      const actualDtsSha = await digest(join(dirname(dist), 'electron.d.ts')).catch(() => 'missing');
+      if (actualDtsSha !== checksums['electron.d.ts']) {
+        throw electronChecksumError('electron.d.ts', checksums['electron.d.ts'], actualDtsSha);
+      }
+    }
+  }
+
   const { treeSha256, files } = await computeElectronDistTreeDigest(dist);
-  const expectedTree = options.expectedTreeDigest ?? checksums?.[`${expectedArchive}:tree`];
+  const expectedTree =
+    options.expectedTreeDigest ?? (hasExplicitChecksumsPath ? checksums?.[`${expectedArchive}:tree`] : undefined);
   if (typeof expectedTree === 'string') {
     const legacyExactMessage = Boolean(
-      options.checksumsPath && options.expectedTreeDigest === undefined && !options.includeIdentityInError,
+      hasExplicitChecksumsPath && options.expectedTreeDigest === undefined && !options.includeIdentityInError,
     );
     if (treeSha256 !== expectedTree) {
       throw electronChecksumError(`dist tree ${expectedArchive}`, expectedTree, treeSha256, legacyExactMessage);
     }
     return { archiveSha256: expectedArchiveSha, treeSha256 };
   }
-  const expectedFiles = checksums?.[`${expectedArchive}:files`];
+  const expectedFiles = hasExplicitChecksumsPath ? checksums?.[`${expectedArchive}:files`] : undefined;
   if (expectedFiles && typeof expectedFiles === 'object' && !Array.isArray(expectedFiles)) {
     const keys = Object.keys(expectedFiles);
     if (keys.length === 0 || keys.length !== files.size) {
@@ -1076,6 +1399,15 @@ export async function verifyElectronDist(dist, arch = architecture.arch, options
       }
     }
     return { archiveSha256: expectedArchiveSha, treeSha256 };
+  }
+  // A raw external dist without a verified lockfile wrapper and without explicit
+  // test overrides must match PINNED_ELECTRON_DIST_TREES; fail closed otherwise.
+  if (!lockfileBinding?.wrapperVerified && !hasExplicitChecksumsPath && !options.zipCandidates) {
+    throw electronChecksumError(
+      `unanchored dist ${expectedArchive} (missing verified lockfile wrapper and pinned tree)`,
+      expectedArchiveSha,
+      `tree:${treeSha256}`,
+    );
   }
   const zipCandidates = options.zipCandidates ?? defaultElectronZipCandidates(expectedArchive, options.env);
   /** @type {{ zipPath: string, actualZipSha: string } | null} */
@@ -1136,17 +1468,47 @@ export async function verifyElectronDist(dist, arch = architecture.arch, options
 
 /**
  * Stage package directory and manifest together under workDir and publish with
- * manifest-first fsync + single directory rename, rolling back on any fault so
- * a partial final directory without its manifest is never visible.
+ * ownership-tracked rollback, parent directory fsync inside the rollback guard,
+ * and half-published crash recovery so a concurrent loser never deletes a
+ * winner's published tree or manifest (`R3-T4-010`, `R1-097`, `T26`).
  * @param {string} stagedDir
  * @param {string} workDir
  * @param {string} finalDir
- * @param {{ rename?: typeof fs.rename }} [options]
+ * @param {{ rename?: typeof fs.rename, fsyncDir?: (dirPath: string) => Promise<void> }} [options]
  */
 export async function publishStagedPackage(stagedDir, workDir, finalDir, options = {}) {
   const renameFn = options.rename ?? fs.rename;
+  const fsyncDirFn =
+    options.fsyncDir ??
+    (async (dirPath) => {
+      const outFd = await fs.open(dirPath, 'r');
+      try {
+        await outFd.sync();
+      } finally {
+        await outFd.close();
+      }
+    });
   const outputDir = dirname(finalDir);
   const archName = basename(finalDir);
+  const finalManifest = `${finalDir}.sha256`;
+  const commitMarker = join(outputDir, `.pkg-commit-${archName}`);
+
+  // Recover half-published state left by an interrupted prior publish before
+  // checking whether a complete destination already exists.
+  const initialEntries = new Set(await fs.readdir(outputDir));
+  if (
+    initialEntries.has(`.pkg-commit-${archName}`) &&
+    initialEntries.has(archName) !== initialEntries.has(`${archName}.sha256`)
+  ) {
+    if (initialEntries.has(archName)) {
+      await fs.rm(finalDir, { recursive: true, force: true }).catch(() => {});
+    }
+    if (initialEntries.has(`${archName}.sha256`)) {
+      await fs.rm(finalManifest, { force: true }).catch(() => {});
+    }
+    await fs.rm(commitMarker, { force: true }).catch(() => {});
+  }
+
   const prior = await fs.readdir(outputDir);
   if (prior.includes(archName) || prior.includes(`${archName}.sha256`)) {
     throw new Error('Package destination already exists');
@@ -1163,22 +1525,67 @@ export async function publishStagedPackage(stagedDir, workDir, finalDir, options
   } finally {
     await manifestFd.close();
   }
-  const finalManifest = `${finalDir}.sha256`;
+
+  const stagedManifestStat = await fs.lstat(stagedManifest);
+  const stagedDirStat = await fs.lstat(stagedTargetDir);
+  const matchesInode = async (targetPath, expectedStat) => {
+    const st = await fs.lstat(targetPath).catch(() => null);
+    return Boolean(st && st.dev === expectedStat.dev && st.ino === expectedStat.ino);
+  };
+  const pathExists = async (targetPath) =>
+    fs
+      .lstat(targetPath)
+      .then(() => true)
+      .catch(() => false);
+
+  let ownsManifest = false;
+  let ownsDir = false;
+  let ownsMarker = false;
   try {
+    if ((await pathExists(finalDir)) || (await pathExists(finalManifest))) {
+      throw new Error('Package destination already exists');
+    }
+    await fs
+      .writeFile(commitMarker, `${process.pid}\n`, { flag: 'wx', mode: 0o600 })
+      .then(() => {
+        ownsMarker = true;
+      })
+      .catch(() => {});
     await renameFn(stagedManifest, finalManifest);
+    ownsManifest = await matchesInode(finalManifest, stagedManifestStat);
     await renameFn(stagedTargetDir, finalDir);
+    ownsDir = await matchesInode(finalDir, stagedDirStat);
+    if (ownsDir && !(await matchesInode(finalManifest, stagedManifestStat))) {
+      await writeManifest(finalDir, finalManifest);
+    }
+    if (ownsMarker) {
+      await fs.rm(commitMarker, { force: true }).catch(() => {});
+      ownsMarker = false;
+    }
+    await fsyncDirFn(outputDir);
   } catch (error) {
-    await fs.rm(finalDir, { recursive: true, force: true }).catch(() => {});
-    await fs.rm(finalManifest, { force: true }).catch(() => {});
+    if (ownsDir && (await matchesInode(finalDir, stagedDirStat))) {
+      await fs.rm(finalDir, { recursive: true, force: true }).catch(() => {});
+    }
+    const foreignDirExists = !ownsDir && (await pathExists(finalDir));
+    if (foreignDirExists) {
+      // Another publisher concurrently won finalDir: never delete the winner's
+      // manifest, and repair it from the winning finalDir if our first rename
+      // clobbered finalManifest before our directory rename lost the race.
+      if (ownsManifest && (await matchesInode(finalManifest, stagedManifestStat))) {
+        await writeManifest(finalDir, finalManifest).catch(() => {});
+      }
+    } else if (ownsManifest && (await matchesInode(finalManifest, stagedManifestStat))) {
+      await fs.rm(finalManifest, { force: true }).catch(() => {});
+    }
+    if (ownsMarker) {
+      await fs.rm(commitMarker, { force: true }).catch(() => {});
+    }
     throw error;
   }
-  const outFd = await fs.open(outputDir, 'r');
-  try {
-    await outFd.sync();
-  } finally {
-    await outFd.close();
-  }
 }
+
+export const publishBundle = publishStagedPackage;
 
 /**
  * Format bounded process diagnostics carrying exit code, signal, and the last
@@ -1590,7 +1997,7 @@ export async function packageShell(env = process.env) {
     const cargo = env.CARGO || 'cargo';
     const target = env.CARGO_TARGET_DIR;
     if (!target || !isAbsolute(target)) throw new Error('PKG_CARGO_TARGET_REQUIRED');
-    await execute(cargo,['build','--offline','--release','--bin','metaviewer-core'],{cwd:repo,env,maxBuffer:1024*1024});
+    await execute(cargo,['build','--offline','--locked','--release','--bin','metaviewer-core'],{cwd:repo,env,maxBuffer:1024*1024});
     await fs.copyFile(join(target,'release/metaviewer-core'),join(native,'metaviewer-core'));
     await execute(env.GO || 'go',['build','-trimpath','-buildvcs=false','-ldflags=-buildid=',
       '-o',join(native,'mv-daemon-adapter'),'./cmd/mv-daemon-adapter'],

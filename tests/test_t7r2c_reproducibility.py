@@ -47,49 +47,65 @@ class TestT7R2CReproducibility(unittest.TestCase):
     def test_o8_r1_104_real_write_manifest_deterministic_and_exec_bit_sensitive(self):
         """Regression test for R1-104: real writeManifest from ui/tools/package.js is byte-deterministic and records mode drift."""
         node = find_node()
-        script = f"""
+        with tempfile.TemporaryDirectory(prefix="t7r2c-r1104-") as base:
+            script = f"""
 import * as fs from 'node:fs/promises';
 import {{ join }} from 'node:path';
-import {{ tmpdir }} from 'node:os';
 import {{ writeManifest }} from {json.dumps(package_js_url()) if 'json' in globals() else repr(package_js_url())};
 
-const base = await fs.mkdtemp(join(tmpdir(), 't7r2c-r1104-'));
-try {{
-  const d1 = join(base, 'd1');
-  const d1b = join(base, 'd1b');
-  const d2 = join(base, 'd2');
-  await fs.mkdir(join(d1, 'sub'), {{ recursive: true }});
-  await fs.mkdir(join(d1b, 'sub'), {{ recursive: true }});
-  await fs.mkdir(join(d2, 'sub'), {{ recursive: true }});
-  for (const dir of [d1, d1b, d2]) {{
-    await fs.writeFile(join(dir, 'a.txt'), 'alpha\\n');
-    await fs.chmod(join(dir, 'a.txt'), 0o644);
-    await fs.writeFile(join(dir, 'sub/run.sh'), '#!/bin/sh\\nexit 0\\n');
-  }}
-  await fs.chmod(join(d1, 'sub/run.sh'), 0o644);
-  await fs.chmod(join(d1b, 'sub/run.sh'), 0o644);
-  await fs.chmod(join(d2, 'sub/run.sh'), 0o755);
-
-  const m1 = join(base, 'm1.sha256');
-  const m1b = join(base, 'm1b.sha256');
-  const m2 = join(base, 'm2.sha256');
-  await writeManifest(d1, m1);
-  await writeManifest(d1b, m1b);
-  await writeManifest(d2, m2);
-  const t1 = await fs.readFile(m1, 'utf8');
-  const t1b = await fs.readFile(m1b, 'utf8');
-  const t2 = await fs.readFile(m2, 'utf8');
-  if (t1 !== t1b) process.exit(10);
-  if (t1 === t2) process.exit(11);
-  if (!t2.includes(' 0755  sub/run.sh')) process.exit(12);
-  console.log('EXEC_BIT_SENSITIVE');
-}} finally {{
-  await fs.rm(base, {{ recursive: true, force: true }});
+const base = {repr(base)};
+const d1 = join(base, 'd1');
+const d1b = join(base, 'd1b');
+const d2 = join(base, 'd2');
+await fs.mkdir(join(d1, 'sub'), {{ recursive: true }});
+await fs.mkdir(join(d1b, 'sub'), {{ recursive: true }});
+await fs.mkdir(join(d2, 'sub'), {{ recursive: true }});
+for (const dir of [d1, d1b, d2]) {{
+  await fs.writeFile(join(dir, 'a.txt'), 'alpha\\n');
+  await fs.chmod(join(dir, 'a.txt'), 0o644);
+  await fs.writeFile(join(dir, 'sub/run.sh'), '#!/bin/sh\\nexit 0\\n');
 }}
+await fs.chmod(join(d1, 'sub/run.sh'), 0o644);
+await fs.chmod(join(d1b, 'sub/run.sh'), 0o644);
+await fs.chmod(join(d2, 'sub/run.sh'), 0o755);
+
+const m1 = join(base, 'm1.sha256');
+const m1b = join(base, 'm1b.sha256');
+const m2 = join(base, 'm2.sha256');
+await writeManifest(d1, m1);
+await writeManifest(d1b, m1b);
+await writeManifest(d2, m2);
+const t1 = await fs.readFile(m1, 'utf8');
+const t1b = await fs.readFile(m1b, 'utf8');
+const t2 = await fs.readFile(m2, 'utf8');
+if (t1 !== t1b) process.exit(10);
+if (t1 === t2) process.exit(11);
+if (!t1.includes('  sub/run.sh\\n') || t1.includes(' *sub/run.sh\\n')) process.exit(12);
+if (!t2.includes(' *sub/run.sh\\n') || t2.includes('  sub/run.sh\\n')) process.exit(13);
+console.log('EXEC_BIT_SENSITIVE');
 """
-        res = subprocess.run([node, "--input-type=module", "-e", script], cwd=ROOT, capture_output=True, text=True, timeout=15)
-        self.assertEqual(res.returncode, 0, res.stderr + res.stdout)
-        self.assertIn("EXEC_BIT_SENSITIVE", res.stdout)
+            res = subprocess.run(
+                [node, "--input-type=module", "-e", script],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            self.assertEqual(res.returncode, 0, res.stderr + res.stdout)
+            self.assertIn("EXEC_BIT_SENSITIVE", res.stdout)
+            sha256sum = shutil.which("sha256sum")
+            if not sha256sum:
+                print("SKIP sha256sum -c: sha256sum not on PATH")
+            else:
+                for tree_name, manifest_name in (("d1", "m1.sha256"), ("d2", "m2.sha256")):
+                    chk = subprocess.run(
+                        [sha256sum, "-c", str(pathlib.Path(base) / manifest_name)],
+                        cwd=pathlib.Path(base) / tree_name,
+                        capture_output=True,
+                        text=True,
+                        timeout=15,
+                    )
+                    self.assertEqual(chk.returncode, 0, chk.stderr + chk.stdout)
 
     def test_r1_096_verify_electron_dist_rejects_tampered_file_and_admits_pristine(self):
         """Regression test for R1-096: verifyElectronDist binds local unpacked Electron dist to checksums.json."""

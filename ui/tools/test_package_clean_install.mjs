@@ -320,11 +320,20 @@ test('R2-T4-002 extended seal covers executed JS and boot self-check refuses tam
   });
 });
 
-test('R2-T4-021 writeManifest records mode bits and verifyInstall rejects mode-only drift while admitting identical tree', async () => {
+test('R2-T4-021 / T7R3-008 writeManifest emits stock sha256sum -c grammar (* for 0755, space for 0644) and verifyInstall rejects mode-only drift', async () => {
   await fixture(async (root) => {
     await verifyInstall(root, 'arm64');
     const manifestBefore = await fs.readFile(`${root}.sha256`, 'utf8');
-    assert.match(manifestBefore, /^[0-9a-f]{64} 0755  metaviewer$/m);
+    assert.match(manifestBefore, /^[0-9a-f]{64} \*metaviewer$/m);
+    assert.match(manifestBefore, /^[0-9a-f]{64} \*resources\/bin\/metaviewer-core$/m);
+    assert.match(manifestBefore, /^[0-9a-f]{64} \*resources\/bin\/mv-daemon-adapter$/m);
+    assert.match(manifestBefore, /^[0-9a-f]{64}  resources\/app\.asar$/m);
+
+    const shaCheck = spawnSync('sha256sum', ['-c', `${root}.sha256`], {
+      cwd: root,
+      encoding: 'utf8',
+    });
+    assert.equal(shaCheck.status, 0, shaCheck.stderr || shaCheck.stdout);
 
     const adapter = join(root, 'resources/bin/mv-daemon-adapter');
     await fs.chmod(adapter, 0o700);

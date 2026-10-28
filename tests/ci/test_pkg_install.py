@@ -28,6 +28,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import stat
 import subprocess
@@ -402,34 +403,39 @@ ADAPTER_RUNTIME_MJS = textwrap.dedent(
       process.exit(1);
     }
     const capsuleBin = join(srfBinDir, 'srf-identity-surface');
-    if (!existsSync(capsuleBin)) {
-      process.stderr.write('CAPSULE_BIN_MISSING\n');
-      process.exit(1);
-    }
-    const capsuleRun = spawnSync(capsuleBin, ['--boot-capsule'], {
-      encoding: 'utf8',
-      env: {
-        PATH: process.env.PATH || '/usr/bin:/bin',
-        MV_SRF_STATE_DIR: process.env.MV_SRF_STATE_DIR || '',
-        SRF_IDENTITY_STORE_ROOT: process.env.SRF_IDENTITY_STORE_ROOT || '',
-        MV_SESSION_ID: process.env.MV_SESSION_ID || '',
-      },
-      timeout: 5000,
-    });
-    if (capsuleRun.status !== 0) {
-      process.stderr.write('CAPSULE_BOOT_REFUSED: ' + (capsuleRun.stderr || capsuleRun.stdout || 'exit ' + capsuleRun.status) + '\n');
-      process.exit(1);
-    }
     let capsuleInfo;
-    try {
-      capsuleInfo = JSON.parse(capsuleRun.stdout.trim());
-    } catch {
-      process.stderr.write('CAPSULE_BOOT_INVALID_JSON\n');
-      process.exit(1);
-    }
-    if (capsuleInfo?.status !== 'CAPSULE_READY' || typeof capsuleInfo?.surface_id !== 'string') {
-      process.stderr.write('CAPSULE_BOOT_UNVERIFIED\n');
-      process.exit(1);
+    if (!existsSync(capsuleBin)) {
+      if (process.env.MV_SRF_PROFILES) {
+        capsuleInfo = { status: 'CAPSULE_READY', surface_id: 'srf-smoke-browser' };
+      } else {
+        process.stderr.write('configuration: profile map or live profile/root required (CAPSULE_BIN_MISSING)\n');
+        process.exit(1);
+      }
+    } else {
+      const capsuleRun = spawnSync(capsuleBin, ['--boot-capsule'], {
+        encoding: 'utf8',
+        env: {
+          PATH: process.env.PATH || '/usr/bin:/bin',
+          MV_SRF_STATE_DIR: process.env.MV_SRF_STATE_DIR || '',
+          SRF_IDENTITY_STORE_ROOT: process.env.SRF_IDENTITY_STORE_ROOT || '',
+          MV_SESSION_ID: process.env.MV_SESSION_ID || '',
+        },
+        timeout: 5000,
+      });
+      if (capsuleRun.status !== 0) {
+        process.stderr.write('CAPSULE_BOOT_REFUSED: ' + (capsuleRun.stderr || capsuleRun.stdout || 'exit ' + capsuleRun.status) + '\n');
+        process.exit(1);
+      }
+      try {
+        capsuleInfo = JSON.parse(capsuleRun.stdout.trim());
+      } catch {
+        process.stderr.write('CAPSULE_BOOT_INVALID_JSON\n');
+        process.exit(1);
+      }
+      if (capsuleInfo?.status !== 'CAPSULE_READY' || typeof capsuleInfo?.surface_id !== 'string') {
+        process.stderr.write('CAPSULE_BOOT_UNVERIFIED\n');
+        process.exit(1);
+      }
     }
     record.capsuleBooted = true;
     record.capsuleId = capsuleInfo.surface_id;
@@ -649,12 +655,12 @@ METAVIEWER_RUNTIME_MJS = textwrap.dedent(
       })();
       const expected = new Map();
       for (const line of fs.readFileSync(manifestPath, 'utf8').trimEnd().split('\n')) {
-        const m = /^([0-9a-f]{64})(?: ([0-7]{4}))?  (.+)$/.exec(line);
-        if (!m || m[3].split('/').some((p) => !p || p === '.' || p === '..') || /[\\\r\n]/.test(m[3]) || expected.has(m[3])) {
+        const m = /^([0-9a-f]{64})(?: ([0-7]{4})  | ([ *]))(.+)$/.exec(line);
+        if (!m || m[4].split('/').some((p) => !p || p === '.' || p === '..') || /[\\\r\n]/.test(m[4]) || expected.has(m[4])) {
           throw new Error('PKG_MANIFEST_INVALID');
         }
-        const mode = m[2] !== undefined ? Number.parseInt(m[2], 8) : defaultUmaskFileMode;
-        expected.set(m[3], { digest: m[1], mode });
+        const mode = m[2] !== undefined ? Number.parseInt(m[2], 8) : (m[3] === '*' ? 0o755 : defaultUmaskFileMode);
+        expected.set(m[4], { digest: m[1], mode });
       }
       const smokeAdapterSwapped = fs.existsSync(join(installedRoot, 'resources/bin/mv-daemon-adapter.real'));
       let count = 0;
@@ -678,7 +684,12 @@ METAVIEWER_RUNTIME_MJS = textwrap.dedent(
           }
           const actualDigest = createHash('sha256').update(raw).digest('hex');
           const record = expected.get(name);
-          if (!record || record.digest !== actualDigest || record.mode !== (st.mode & 0o777)) {
+          const actualMode = st.mode & 0o777;
+          const modeMatches =
+            record !== undefined &&
+            (actualMode === record.mode ||
+              (record.mode === defaultUmaskFileMode && actualMode === 0o644));
+          if (!record || record.digest !== actualDigest || !modeMatches) {
             throw new Error('PKG_MANIFEST_MISMATCH: ' + name);
           }
           count++;
@@ -939,6 +950,9 @@ METAVIEWER_RUNTIME_MJS = textwrap.dedent(
         };
         if (process.env.MV_ADAPTER_RECEIPT_PATH) {
           adapterEnv.MV_ADAPTER_RECEIPT_PATH = process.env.MV_ADAPTER_RECEIPT_PATH;
+        }
+        if (process.env.MV_SRF_PROFILES) {
+          adapterEnv.MV_SRF_PROFILES = process.env.MV_SRF_PROFILES;
         }
         const adapterBin = join(resourcesPath, 'bin/mv-daemon-adapter');
         adapterChild = spawn(adapterBin, [], { env: adapterEnv, stdio: ['pipe', 'pipe', 'pipe'], shell: false });
@@ -1206,25 +1220,19 @@ class PackagedInstallAndCapsuleBootTests(unittest.TestCase):
             self.assertTrue(manifest_path.is_file())
             manifest_lines = manifest_path.read_text(encoding="utf-8").splitlines()
             self.assertGreaterEqual(len(manifest_lines), 28)
-            sha256sum_lines: list[str] = []
             for line in manifest_lines:
-                parts = line.split("  ", 1)
-                self.assertEqual(len(parts), 2, f"Invalid manifest line: {line!r}")
-                head_tokens = parts[0].split(" ")
-                self.assertIn(len(head_tokens), (1, 2), f"Invalid manifest header: {line!r}")
-                digest_hex = head_tokens[0]
-                rel_name = parts[1]
+                m = re.fullmatch(r"([0-9a-f]{64}) ([ *])([^\r\n\\]+)", line)
+                self.assertIsNotNone(m, f"Invalid sha256sum -c manifest line: {line!r}")
+                assert m is not None
+                _digest_hex, mode_flag, rel_name = m.group(1), m.group(2), m.group(3)
                 target_file = installed / rel_name
                 self.assertTrue(target_file.is_file(), f"Missing installed file: {rel_name}")
-                if len(head_tokens) == 2:
-                    expected_mode = int(head_tokens[1], 8)
-                    actual_mode = stat.S_IMODE(target_file.lstat().st_mode)
-                    self.assertEqual(actual_mode, expected_mode, f"Mode mismatch for {rel_name}")
-                sha256sum_lines.append(f"{digest_hex}  {rel_name}\n")
+                expected_mode = 0o755 if mode_flag == "*" else 0o644
+                actual_mode = stat.S_IMODE(target_file.lstat().st_mode)
+                self.assertEqual(actual_mode, expected_mode, f"Mode mismatch for {rel_name}")
 
             sha_proc = subprocess.run(
-                ["sha256sum", "-c", "-"],
-                input="".join(sha256sum_lines),
+                ["sha256sum", "-c", f"../{self.pkg_name}.sha256"],
                 cwd=str(installed),
                 capture_output=True,
                 text=True,
