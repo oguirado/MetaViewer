@@ -309,4 +309,97 @@ func TestT2R205CancelBeforePublishDoesNotCommit(t *testing.T) {
 			t.Fatalf("published frame removed on unsubscribe: %v", err)
 		}
 	})
+
+	t.Run("fenced_publisher_mu_cancel_preserves_generations_and_files", func(t *testing.T) {
+		root, b, f := ramFixture(t)
+		p := publisher(t, root)
+		f.Seq = 1
+		r1, err := p.Publish("a", b, f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.Seq = 2
+		r2, err := p.Publish("a", b, f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f3 := f
+		f3.Seq = 3
+		captured := make(chan struct{})
+		var once sync.Once
+		src := &funcCaptureSource{fn: func(ctx context.Context, id string) (capsule.Binding, capsule.NativeFrame, error) {
+			once.Do(func() {
+				p.mu.Lock()
+				close(captured)
+			})
+			return b, f3, nil
+		}}
+		events := make(chan json.RawMessage, 4)
+		subs, err := NewSubscriptions(context.Background(), SubscriptionConfig{
+			MaxSubscriptions: 1,
+			PollInterval:     time.Hour,
+			CaptureTimeout:   5 * time.Second,
+			ShutdownTimeout:  5 * time.Second,
+		}, src, p, func(ctx context.Context, msg json.RawMessage) error {
+			events <- msg
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = subs.Close(context.Background()) })
+		if err := subs.Subscribe(context.Background(), "a"); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-captured:
+		case <-time.After(5 * time.Second):
+			t.Fatal("capture did not start")
+		}
+		unsubDone := make(chan error, 1)
+		go func() {
+			unsubDone <- subs.Unsubscribe(context.Background(), "a")
+		}()
+		// Wait until Unsubscribe has marked the task cancelled while p.mu is still held.
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			subs.mu.Lock()
+			tk := subs.tasks["a"]
+			cancelled := tk == nil || tk.cancelled.Load()
+			subs.mu.Unlock()
+			if cancelled || time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		p.mu.Unlock()
+		if err := <-unsubDone; err != nil {
+			t.Fatalf("Unsubscribe failed: %v", err)
+		}
+		if len(events) != 0 {
+			t.Fatalf("cancelled poll emitted event: %d", len(events))
+		}
+		p.mu.Lock()
+		nextGen := p.next
+		refs := append([]Ref(nil), p.surfaces["a"].refs...)
+		p.mu.Unlock()
+		if nextGen != 2 {
+			t.Fatalf("fenced cancel committed generation: got %d, want 2", nextGen)
+		}
+		if len(refs) != 2 || refs[0].RAMWSPath != r1.RAMWSPath || refs[1].RAMWSPath != r2.RAMWSPath {
+			t.Fatalf("retained refs mutated by fenced cancel: %+v", refs)
+		}
+		entries, err := os.ReadDir(p.outputPath)
+		if err != nil || len(entries) != 2 {
+			t.Fatalf("expected 2 shm files after fenced cancel, got %d (%v)", len(entries), err)
+		}
+	})
+}
+
+type funcCaptureSource struct {
+	fn func(context.Context, string) (capsule.Binding, capsule.NativeFrame, error)
+}
+
+func (s *funcCaptureSource) Capture(ctx context.Context, id string) (capsule.Binding, capsule.NativeFrame, error) {
+	return s.fn(ctx, id)
 }

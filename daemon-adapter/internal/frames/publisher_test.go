@@ -8,6 +8,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -766,5 +767,368 @@ func TestMinRetentionDefaultIndependentOfMaxRetained(t *testing.T) {
 	}
 	if got := p.maxRetained(); got != 32 {
 		t.Fatalf("expected explicit MaxRetained=32 to be honored, got %d", got)
+	}
+}
+
+func TestHardCapAtomicRefusalAndSurfaceCapBoundaries(t *testing.T) {
+	root, b, f := ramFixture(t)
+	now := time.Unix(1_700_000_000, 0)
+
+	// Part B Goal 4 / T2-R3: MaxTotalBytes=24, MaxSurfaceBytes=24 with 6-byte 2x1 RGB frames.
+	// Publish a1, a2, b1, b2 (24 bytes), then publish c1: assert refusal on c1,
+	// total retained bytes <= 24, a1, a2, b1, b2 intact, and positive acceptance on b3 evicting b1.
+	p, err := NewPublisher(PublishConfig{
+		RAMRoot:         root,
+		MaxFrameBytes:   64 << 20,
+		MaxPixels:       64 << 20,
+		MaxSurfaces:     4,
+		MaxRetained:     64,
+		MinRetention:    10 * time.Second,
+		MaxSurfaceBytes: 24,
+		MaxTotalBytes:   24,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.now = func() time.Time { return now }
+	t.Cleanup(func() { _ = p.Close() })
+
+	bB := b
+	bB.Surface.SurfaceID = "b"
+	bC := b
+	bC.Surface.SurfaceID = "c"
+
+	var refsA, refsB []Ref
+	for seq := uint64(1); seq <= 2; seq++ {
+		fA := f
+		fA.Seq = seq
+		rA, errA := p.Publish("a", b, fA)
+		if errA != nil {
+			t.Fatal(errA)
+		}
+		refsA = append(refsA, rA)
+		now = now.Add(50 * time.Millisecond)
+
+		fB := f
+		fB.Seq = seq
+		rB, errB := p.Publish("b", bB, fB)
+		if errB != nil {
+			t.Fatal(errB)
+		}
+		refsB = append(refsB, rB)
+		now = now.Add(50 * time.Millisecond)
+	}
+
+	fC := f
+	fC.Seq = 1
+	if _, errC := p.Publish("c", bC, fC); errC == nil {
+		t.Fatal("expected publish c1 to be refused when passive floors exhaust 24B global cap")
+	}
+	if _, existsC := p.surfaces["c"]; existsC {
+		t.Fatal("refused c1 mutated p.surfaces")
+	}
+	if p.next != 4 {
+		t.Fatalf("refused c1 advanced generation counter: got %d, want 4", p.next)
+	}
+	totalBytes := p.otherSurfacesBytes("")
+	if totalBytes != 24 {
+		t.Fatalf("expected total retained bytes=24, got %d", totalBytes)
+	}
+	for i, r := range append(append([]Ref(nil), refsA...), refsB...) {
+		raw, rErr := os.ReadFile(r.RAMWSPath)
+		if rErr != nil || string(raw) != string([]byte{255, 0, 0, 0, 255, 0}) {
+			t.Fatalf("expected existing frame %d to remain intact: err=%v", i, rErr)
+		}
+	}
+	entries, err := os.ReadDir(p.outputPath)
+	if err != nil || len(entries) != 4 {
+		t.Fatalf("expected exactly 4 shm files after c1 refusal, got %d (%v)", len(entries), err)
+	}
+
+	// Positive control: a 3rd generation on b (b3) can evict b1 while keeping total at 24B.
+	fB3 := f
+	fB3.Seq = 3
+	rB3, errB3 := p.Publish("b", bB, fB3)
+	if errB3 != nil || rB3.Generation != 5 {
+		t.Fatalf("expected b3 to succeed by evicting b1: ref=%+v err=%v", rB3, errB3)
+	}
+	if _, statErr := os.Stat(refsB[0].RAMWSPath); !os.IsNotExist(statErr) {
+		t.Fatalf("expected b1 to be evicted by b3: %v", statErr)
+	}
+	if _, statErr := os.Stat(refsB[1].RAMWSPath); statErr != nil {
+		t.Fatalf("expected b2 to remain after b3: %v", statErr)
+	}
+	if _, statErr := os.Stat(rB3.RAMWSPath); statErr != nil {
+		t.Fatalf("expected b3 to exist: %v", statErr)
+	}
+	if got := p.otherSurfacesBytes(""); got != 24 {
+		t.Fatalf("expected total retained bytes=24 after b3, got %d", got)
+	}
+
+	// Test per-surface byte caps 5, 6, 11, 12 with 6-byte frames and MaxTotalBytes=30.
+	for _, surfCap := range []int64{5, 6, 11, 12} {
+		t.Run(fmt.Sprintf("surface_cap_%d", surfCap), func(t *testing.T) {
+			sp, sErr := NewPublisher(PublishConfig{
+				RAMRoot:         root,
+				MaxFrameBytes:   64 << 20,
+				MaxPixels:       64 << 20,
+				MaxSurfaces:     4,
+				MaxRetained:     64,
+				MinRetention:    10 * time.Second,
+				MaxSurfaceBytes: surfCap,
+				MaxTotalBytes:   30,
+			})
+			if sErr != nil {
+				t.Fatal(sErr)
+			}
+			t.Cleanup(func() { _ = sp.Close() })
+
+			f1 := f
+			f1.Seq = 1
+			r1, err1 := sp.Publish("a", b, f1)
+			if surfCap < 6 {
+				if err1 == nil {
+					t.Fatalf("surfaceCap=%d: expected 1st 6B frame to be refused", surfCap)
+				}
+				return
+			}
+			if err1 != nil {
+				t.Fatalf("surfaceCap=%d: expected 1st 6B frame to succeed: %v", surfCap, err1)
+			}
+
+			f2 := f
+			f2.Seq = 2
+			r2, err2 := sp.Publish("a", b, f2)
+			if surfCap < 12 {
+				if err2 == nil {
+					t.Fatalf("surfaceCap=%d: expected 2nd 6B frame to be refused by 2-ref floor", surfCap)
+				}
+				if _, statErr := os.Stat(r1.RAMWSPath); statErr != nil {
+					t.Fatalf("surfaceCap=%d: 1st frame lost on 2nd frame refusal: %v", surfCap, statErr)
+				}
+				return
+			}
+			if err2 != nil {
+				t.Fatalf("surfaceCap=%d: expected 2nd 6B frame to succeed: %v", surfCap, err2)
+			}
+
+			f3 := f
+			f3.Seq = 3
+			r3, err3 := sp.Publish("a", b, f3)
+			if err3 != nil {
+				t.Fatalf("surfaceCap=%d: expected 3rd 6B frame to evict 1st and succeed: %v", surfCap, err3)
+			}
+			if _, statErr := os.Stat(r1.RAMWSPath); !os.IsNotExist(statErr) {
+				t.Fatalf("surfaceCap=%d: expected 1st frame to be evicted by 3rd: %v", surfCap, statErr)
+			}
+			if _, statErr := os.Stat(r2.RAMWSPath); statErr != nil {
+				t.Fatalf("surfaceCap=%d: expected 2nd frame to survive: %v", surfCap, statErr)
+			}
+			if _, statErr := os.Stat(r3.RAMWSPath); statErr != nil {
+				t.Fatalf("surfaceCap=%d: expected 3rd frame to survive: %v", surfCap, statErr)
+			}
+		})
+	}
+}
+
+func TestCrossRootSharedBudgetEnforcement(t *testing.T) {
+	// T2-R4: Multiple Publisher instances across distinct RAM roots share a single Budget.
+	budget, err := NewBudget(24)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_700_000_000, 0)
+	var pubs []*Publisher
+	var bindings []capsule.Binding
+	var nframes []capsule.NativeFrame
+	for i := 0; i < 3; i++ {
+		root, b, f := ramFixture(t)
+		b.Surface.SurfaceID = fmt.Sprintf("s%d", i)
+		p, pErr := NewPublisher(PublishConfig{
+			RAMRoot:         root,
+			MaxFrameBytes:   64 << 20,
+			MaxPixels:       64 << 20,
+			MaxSurfaces:     4,
+			MaxRetained:     64,
+			MinRetention:    10 * time.Second,
+			MaxSurfaceBytes: 24,
+			MaxTotalBytes:   24,
+			Budget:          budget,
+		})
+		if pErr != nil {
+			t.Fatal(pErr)
+		}
+		p.now = func() time.Time { return now }
+		t.Cleanup(func() { _ = p.Close() })
+		pubs = append(pubs, p)
+		bindings = append(bindings, b)
+		nframes = append(nframes, f)
+	}
+
+	// Publish 2 frames (12B) on root 0 and 2 frames (12B) on root 1 -> 24B total across roots.
+	for i := 0; i < 2; i++ {
+		for seq := uint64(1); seq <= 2; seq++ {
+			nf := nframes[i]
+			nf.Seq = seq
+			if _, err := pubs[i].Publish(bindings[i].Surface.SurfaceID, bindings[i], nf); err != nil {
+				t.Fatalf("root %d seq %d failed: %v", i, seq, err)
+			}
+			now = now.Add(50 * time.Millisecond)
+		}
+	}
+
+	// Root 2 tries to publish its 1st frame (6B -> 30B > 24B shared budget); must be refused because roots 0 and 1 are at their 2-frame passive floor.
+	nf2 := nframes[2]
+	nf2.Seq = 1
+	if _, err := pubs[2].Publish(bindings[2].Surface.SurfaceID, bindings[2], nf2); err == nil {
+		t.Fatal("expected root 2 publish to be refused when cross-root shared budget (24B) is full")
+	}
+
+	// Root 0 publishes a 3rd frame (evicts its own 1st frame, keeping cross-root total at 24B).
+	nf0 := nframes[0]
+	nf0.Seq = 3
+	if _, err := pubs[0].Publish(bindings[0].Surface.SurfaceID, bindings[0], nf0); err != nil {
+		t.Fatalf("expected root 0 3rd frame to evict its 1st frame within shared budget: %v", err)
+	}
+
+	// Release root 1's surface (frees 12B); now root 2 can publish 2 frames (12B).
+	if err := pubs[1].Release(bindings[1].Surface.SurfaceID); err != nil {
+		t.Fatal(err)
+	}
+	for seq := uint64(1); seq <= 2; seq++ {
+		nf := nframes[2]
+		nf.Seq = seq
+		if _, err := pubs[2].Publish(bindings[2].Surface.SurfaceID, bindings[2], nf); err != nil {
+			t.Fatalf("expected root 2 seq %d to succeed after root 1 release: %v", seq, err)
+		}
+	}
+}
+
+func TestSharedBudgetConcurrentPublishAndOtherSurfacesBytesRace(t *testing.T) {
+	budget, err := NewBudget(1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pubs []*Publisher
+	var bindings []capsule.Binding
+	var nframes []capsule.NativeFrame
+	for i := 0; i < 3; i++ {
+		root, b, f := ramFixture(t)
+		b.Surface.SurfaceID = fmt.Sprintf("race-s%d", i)
+		p, pErr := NewPublisher(PublishConfig{
+			RAMRoot:         root,
+			MaxFrameBytes:   64 << 20,
+			MaxPixels:       64 << 20,
+			MaxSurfaces:     4,
+			MaxRetained:     8,
+			MinRetention:    0,
+			MaxSurfaceBytes: 64,
+			MaxTotalBytes:   128,
+			Budget:          budget,
+		})
+		if pErr != nil {
+			t.Fatal(pErr)
+		}
+		t.Cleanup(func() { _ = p.Close() })
+		pubs = append(pubs, p)
+		bindings = append(bindings, b)
+		nframes = append(nframes, f)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < len(pubs); i++ {
+		idx := i
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for seq := uint64(1); seq <= 40; seq++ {
+				nf := nframes[idx]
+				nf.Seq = seq
+				if _, err := pubs[idx].Publish(bindings[idx].Surface.SurfaceID, bindings[idx], nf); err != nil {
+					t.Errorf("concurrent publish on %d seq %d failed: %v", idx, seq, err)
+					return
+				}
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 40; j++ {
+				if got := pubs[idx].otherSurfacesBytes(""); got < 0 || got > 128 {
+					t.Errorf("otherSurfacesBytes out of bounds: %d", got)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func TestPublishEvictionToleratesMissingVictimFiles(t *testing.T) {
+	budget, err := NewBudget(24)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_700_000_000, 0)
+	var pubs []*Publisher
+	var bindings []capsule.Binding
+	var nframes []capsule.NativeFrame
+	for i := 0; i < 2; i++ {
+		root, b, f := ramFixture(t)
+		b.Surface.SurfaceID = fmt.Sprintf("ev-s%d", i)
+		p, pErr := NewPublisher(PublishConfig{
+			RAMRoot:         root,
+			MaxFrameBytes:   64 << 20,
+			MaxPixels:       64 << 20,
+			MaxSurfaces:     4,
+			MaxRetained:     4,
+			MinRetention:    10 * time.Second,
+			MaxSurfaceBytes: 24,
+			MaxTotalBytes:   24,
+			Budget:          budget,
+		})
+		if pErr != nil {
+			t.Fatal(pErr)
+		}
+		p.now = func() time.Time { return now }
+		t.Cleanup(func() { _ = p.Close() })
+		pubs = append(pubs, p)
+		bindings = append(bindings, b)
+		nframes = append(nframes, f)
+	}
+
+	// Publish 3 frames (18B) on pub 0, then remove the oldest victim file out of band.
+	var refs0 []Ref
+	for seq := uint64(1); seq <= 3; seq++ {
+		nf := nframes[0]
+		nf.Seq = seq
+		r, err := pubs[0].Publish(bindings[0].Surface.SurfaceID, bindings[0], nf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		refs0 = append(refs0, r)
+		now = now.Add(10 * time.Millisecond)
+	}
+	if err := os.Remove(refs0[0].RAMWSPath); err != nil {
+		t.Fatal(err)
+	}
+
+	// Cross-publisher publish on pub 1 (2 frames -> needs to evict refs0[0] on pub 0 to stay <= 24B) must tolerate ENOENT on refs0[0].
+	for seq := uint64(1); seq <= 2; seq++ {
+		nf := nframes[1]
+		nf.Seq = seq
+		if _, err := pubs[1].Publish(bindings[1].Surface.SurfaceID, bindings[1], nf); err != nil {
+			t.Fatalf("cross-publisher eviction failed on missing victim (seq %d): %v", seq, err)
+		}
+		now = now.Add(10 * time.Millisecond)
+	}
+
+	// Also remove the next oldest victim on pub 0 out of band and publish on pub 0 itself (local eviction).
+	if err := os.Remove(refs0[1].RAMWSPath); err != nil {
+		t.Fatal(err)
+	}
+	nf0 := nframes[0]
+	nf0.Seq = 4
+	if _, err := pubs[0].Publish(bindings[0].Surface.SurfaceID, bindings[0], nf0); err != nil {
+		t.Fatalf("local eviction failed on missing victim: %v", err)
 	}
 }

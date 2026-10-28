@@ -910,3 +910,37 @@ func TestLstatAtDoesNotFollowSymlinks(t *testing.T) {
 		t.Fatalf("missing entry error = %v, want ENOENT", err)
 	}
 }
+
+func TestTimestampCeilingPreCommitRefusal(t *testing.T) {
+	_, reply, size := fixture(t)
+	// capture_mono_ns = 9007199254741092 with OriginNS = 100 yields mono = 9007199254740992 (> 2^53 - 1).
+	oversized := update(t, reply, map[string]any{
+		"seq":             uint64(1),
+		"generation":      uint64(1),
+		"capture_mono_ns": uint64(9007199254741092),
+	})
+	runner := &fakeRunner{reply: oversized}
+	m := manager(t, runner, size, nil)
+	ctx := context.Background()
+	if _, err := m.Handle(ctx, start(size)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Poll(ctx, "poll-oversized", "r"); err == nil {
+		t.Fatal("expected oversized capture_mono_ns above 2^53-1 to be refused")
+	}
+	rec := m.records["r"]
+	if rec.captured || rec.lastNS != 0 || rec.generation != 0 || rec.size != 0 || len(rec.frames) != 0 || m.root != "" {
+		t.Fatalf("oversized timestamp mutated recording state before refusal: %+v root=%q", rec, m.root)
+	}
+
+	// Negative control: subsequent frame with an ordinary valid timestamp is accepted and not rejected as stale.
+	runner.reply = update(t, reply, map[string]any{
+		"seq":             uint64(2),
+		"generation":      uint64(2),
+		"capture_mono_ns": uint64(1_000_000_100),
+	})
+	events, err := m.Poll(ctx, "poll-valid", "r")
+	if err != nil || len(events) != 1 || events[0].Event != "frame_captured" || events[0].MonoNS != 1_000_000_000 {
+		t.Fatalf("subsequent valid frame failed after oversized timestamp refusal: %+v %v", events, err)
+	}
+}

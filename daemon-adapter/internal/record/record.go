@@ -116,21 +116,29 @@ type frame struct {
 	bytes, generation uint64
 }
 type recording struct {
-	surface, mode   string
-	ring, fps, size uint64
-	frames          []frame
-	sealed          bool
-	generation      uint64
-	captured        bool
-	lastNS          uint64
+	surface, mode    string
+	ring, fps, size  uint64
+	frames           []frame
+	sealed           bool
+	abortedByDestroy bool
+	generation       uint64
+	captured         bool
+	lastNS           uint64
 }
 type Manager struct {
-	mu       sync.Mutex
-	cfg      Config
-	records  map[string]*recording
-	released map[string]struct{}
-	root     string
-	closed   bool
+	mu           sync.Mutex
+	cfg          Config
+	records      map[string]*recording
+	released     map[string]struct{}
+	root         string
+	closed       bool
+	grantPin     *os.File
+	grantDev     uint64
+	grantIno     uint64
+	grantIsDir   bool
+	hasGrantPin  bool
+	onClose      []func()
+	onUnregister []func(string)
 }
 
 func NewManager(c Config) (*Manager, error) {
@@ -143,22 +151,54 @@ func NewManager(c Config) (*Manager, error) {
 	if !cleanAbsolute(c.BinDir) {
 		return nil, errors.New("CLI binary directory required")
 	}
+	var grantPin *os.File
+	var grantDev, grantIno uint64
+	var grantIsDir, hasGrantPin bool
 	if c.Destination != nil {
 		if !identity.MatchString(c.Destination.CapabilityID) || !cleanAbsolute(c.Destination.Path) {
 			return nil, errors.New("invalid destination")
 		}
 		copy := *c.Destination
 		c.Destination = &copy
+		if pin, st, err := openNoLinksDir(c.Destination.Path); err == nil {
+			grantPin = pin
+			grantDev = st.Dev
+			grantIno = st.Ino
+			grantIsDir = true
+			hasGrantPin = true
+		} else if strings.HasSuffix(c.Destination.Path, ".tar") {
+			if pin, st, err := openNoLinksDir(filepath.Dir(c.Destination.Path)); err == nil {
+				grantPin = pin
+				grantDev = st.Dev
+				grantIno = st.Ino
+				grantIsDir = false
+				hasGrantPin = true
+			}
+		} else {
+			grantIsDir = true
+		}
 	}
 	surfaces := make(map[string]Surface, len(c.Surfaces))
 	for id, s := range c.Surfaces {
 		if !identity.MatchString(id) || (s.Family != "srf-identity-surface" && s.Family != "srf-holdings-capsule") || !identity.MatchString(s.Container) || (s.Family == "srf-identity-surface" && !regexp.MustCompile(`^w[0-9]+$`).MatchString(s.Window)) || !under("/dev/shm", s.FramesRoot) {
+			if grantPin != nil {
+				_ = grantPin.Close()
+			}
 			return nil, errors.New("invalid surface binding")
 		}
 		surfaces[id] = s
 	}
 	c.Surfaces = surfaces
-	return &Manager{cfg: c, records: map[string]*recording{}, released: map[string]struct{}{}}, nil
+	return &Manager{
+		cfg:         c,
+		records:     map[string]*recording{},
+		released:    map[string]struct{}{},
+		grantPin:    grantPin,
+		grantDev:    grantDev,
+		grantIno:    grantIno,
+		grantIsDir:  grantIsDir,
+		hasGrantPin: hasGrantPin,
+	}, nil
 }
 
 // NewFromEnvironment constructs the RAM-first recording authority from the
@@ -220,10 +260,107 @@ func (m *Manager) RegisterSurface(id string, s Surface) error {
 	return nil
 }
 
-func (m *Manager) UnregisterSurface(id string) {
+func (m *Manager) UnregisterSurface(id string) error {
+	m.mu.Lock()
+	delete(m.cfg.Surfaces, id)
+	var firstErr error
+	for _, r := range m.records {
+		if r.surface == id {
+			if !r.sealed {
+				r.sealed = true
+				r.abortedByDestroy = true
+			}
+			var kept []frame
+			var keptSize uint64
+			for _, f := range r.frames {
+				if err := os.Remove(f.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+					if firstErr == nil {
+						firstErr = err
+					}
+					kept = append(kept, f)
+					keptSize += f.bytes
+				}
+			}
+			r.frames = kept
+			r.size = keptSize
+			if len(kept) == 0 {
+				r.ring = 0
+			}
+		}
+	}
+	hooks := append(([]func(string))(nil), m.onUnregister...)
+	m.mu.Unlock()
+	for _, h := range hooks {
+		h(id)
+	}
+	return firstErr
+}
+
+// Abort removes an active recording whose initial capture poll failed before
+// its start could be completed, reclaiming its ring reservation and any copies.
+func (m *Manager) Abort(id string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.cfg.Surfaces, id)
+	r, ok := m.records[id]
+	if !ok {
+		return
+	}
+	for _, f := range r.frames {
+		_ = os.Remove(f.path)
+	}
+	delete(m.records, id)
+}
+
+func (m *Manager) AddCloseHook(fn func()) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		fn()
+		return
+	}
+	m.onClose = append(m.onClose, fn)
+}
+
+func (m *Manager) AddUnregisterHook(fn func(string)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return
+	}
+	m.onUnregister = append(m.onUnregister, fn)
+}
+
+func (m *Manager) PollInterval(id string) (time.Duration, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return 0, false
+	}
+	r, ok := m.records[id]
+	if !ok || r.sealed || r.fps == 0 || (r.mode != "ram" && r.mode != "disk") {
+		return 0, false
+	}
+	interval := time.Second / time.Duration(r.fps)
+	if interval <= 0 {
+		interval = time.Nanosecond
+	}
+	return interval, true
+}
+
+func (m *Manager) CanStop(surfaceID, recordingID, op string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return false
+	}
+	if _, ok := m.cfg.Surfaces[surfaceID]; !ok {
+		return false
+	}
+	r, ok := m.records[recordingID]
+	if !ok || r.sealed || r.surface != surfaceID || (op == "disk_stop") != (r.mode == "disk") {
+		return false
+	}
+	return true
 }
 
 func (m *Manager) DefaultRingBytes() uint64 {
@@ -248,8 +385,23 @@ func under(root, path string) bool {
 	return err == nil && rel != "." && rel != ".." && len(rel) > 0 && rel[0] != '.' && !filepath.IsAbs(rel)
 }
 func ptr(v uint64) *uint64 { return &v }
-func (m *Manager) base(q request, p params, id string) Event {
-	return Event{Schema: "record_event/v0.2", RequestID: q.RequestID, SurfaceID: p.SurfaceID, RecordingID: id, MonoNS: m.cfg.Clock()}
+func (m *Manager) base(q request, p params, id string) (Event, bool) {
+	mono := m.cfg.Clock()
+	withinCeiling := mono <= maxWireMonoNS
+	if !withinCeiling {
+		mono = maxWireMonoNS
+	}
+	return Event{Schema: "record_event/v0.2", RequestID: q.RequestID, SurfaceID: p.SurfaceID, RecordingID: id, MonoNS: mono}, withinCeiling
+}
+func (m *Manager) checkDestination(p params) (string, string, bool) {
+	d := m.cfg.Destination
+	if d == nil {
+		return "POLICY", "DESTINATION_UNSET: recording destination is not configured", false
+	}
+	if p.Capability != d.CapabilityID || p.Path != d.Path || !cleanAbsolute(p.Path) {
+		return "POLICY", "DESTINATION_UNSET: host destination is not authorized", false
+	}
+	return "", "", true
 }
 func refuse(e Event, code, detail string) ([]Event, error) {
 	e.Event = "refused"
@@ -317,7 +469,10 @@ func (m *Manager) Handle(ctx context.Context, raw []byte) ([]Event, error) {
 	if !identity.MatchString(id) || !identity.MatchString(p.SurfaceID) {
 		return nil, errors.New("supplied identities required")
 	}
-	e := m.base(q, p, id)
+	e, withinCeiling := m.base(q, p, id)
+	if !withinCeiling {
+		return refuse(e, "POLICY", "monotonic clock exceeded wire ceiling")
+	}
 	if _, ok := m.cfg.Surfaces[p.SurfaceID]; !ok {
 		return refuse(e, "POLICY", "surface is not admitted")
 	}
@@ -325,6 +480,23 @@ func (m *Manager) Handle(ctx context.Context, raw []byte) ([]Event, error) {
 		return m.stop(e, q.Op)
 	}
 	_, released := m.released[id]
+	if existing, ok := m.records[id]; ok && !released && q.Op == "disk_start" && existing.sealed && !existing.abortedByDestroy && existing.surface == p.SurfaceID && (existing.mode == "ram" || existing.mode == "screenshot") {
+		if p.MaxFPS == 0 || p.MaxFPS > 120 {
+			return refuse(e, "POLICY", "invalid recording bounds")
+		}
+		if code, detail, ok := m.checkDestination(p); !ok {
+			return refuse(e, code, detail)
+		}
+		out, err := m.export(e, existing)
+		if err != nil {
+			var refusal *Refusal
+			if errors.As(err, &refusal) {
+				return refuse(e, refusal.ReasonCode, refusal.Detail)
+			}
+			return refuse(e, "POLICY", "DESTINATION_UNAVAILABLE: "+safeErrDetail(err, "recording export failed"))
+		}
+		return []Event{out}, nil
+	}
 	if _, ok := m.records[id]; ok || released {
 		return refuse(e, "POLICY", "recording identity was already used")
 	}
@@ -335,9 +507,8 @@ func (m *Manager) Handle(ctx context.Context, raw []byte) ([]Event, error) {
 		fps = 1
 	}
 	if q.Op == "disk_start" {
-		d := m.cfg.Destination
-		if d == nil || p.Capability != d.CapabilityID || p.Path != d.Path || !cleanAbsolute(p.Path) {
-			return refuse(e, "POLICY", "host destination is not authorized")
+		if code, detail, ok := m.checkDestination(p); !ok {
+			return refuse(e, code, detail)
 		}
 		mode = "disk"
 		ring = m.cfg.RingBytes
@@ -368,7 +539,7 @@ func (m *Manager) Handle(ctx context.Context, raw []byte) ([]Event, error) {
 		}
 		r.sealed = true
 		m.records[id] = r
-		end := m.base(q, p, id)
+		end, _ := m.base(q, p, id)
 		end.Event = "stopped"
 		end.FrameCount = ptr(uint64(len(r.frames)))
 		end.ByteCount = ptr(r.size)
@@ -403,7 +574,11 @@ func (m *Manager) stop(e Event, op string) ([]Event, error) {
 	if r.mode == "disk" {
 		out, err := m.export(e, r)
 		if err != nil {
-			return nil, err
+			var refusal *Refusal
+			if errors.As(err, &refusal) {
+				return refuse(e, refusal.ReasonCode, refusal.Detail)
+			}
+			return refuse(e, "POLICY", "DESTINATION_UNAVAILABLE: "+safeErrDetail(err, "recording export failed"))
 		}
 		export = &out
 	}
@@ -447,12 +622,17 @@ func (m *Manager) Release(id string) error {
 // Close releases only the private RAM workspace, never producer-owned frames.
 func (m *Manager) Close() error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	var removeErr error
 	if m.root != "" {
 		if err := os.RemoveAll(m.root); err != nil {
-			return err
+			removeErr = err
+		} else {
+			m.root = ""
 		}
-		m.root = ""
+	}
+	if m.grantPin != nil {
+		_ = m.grantPin.Close()
+		m.grantPin = nil
 	}
 	m.closed = true
 	for _, r := range m.records {
@@ -460,7 +640,14 @@ func (m *Manager) Close() error {
 		r.frames = nil
 		r.size = 0
 	}
-	return nil
+	hooks := append(([]func())(nil), m.onClose...)
+	m.onClose = nil
+	m.onUnregister = nil
+	m.mu.Unlock()
+	for _, h := range hooks {
+		h()
+	}
+	return removeErr
 }
 
 // openNoLinks traverses pinned directory descriptors; symlink races fail closed.
@@ -471,6 +658,39 @@ func openNoLinks(path string, flags int, mode uint32) (*os.File, error) {
 	}
 	return file, err
 }
+
+func openNoLinksDir(path string) (*os.File, syscall.Stat_t, error) {
+	var st syscall.Stat_t
+	if !cleanAbsolute(path) {
+		return nil, st, errors.New("invalid directory path")
+	}
+	dir, err := os.Open("/")
+	if err != nil {
+		return nil, st, err
+	}
+	if path != "/" {
+		parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
+		for _, part := range parts {
+			fd, e := syscall.Openat(int(dir.Fd()), part, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+			if e != nil {
+				_ = dir.Close()
+				return nil, st, e
+			}
+			_ = dir.Close()
+			dir = os.NewFile(uintptr(fd), part)
+		}
+	}
+	if err := syscall.Fstat(int(dir.Fd()), &st); err != nil {
+		_ = dir.Close()
+		return nil, st, err
+	}
+	if st.Mode&syscall.S_IFMT != syscall.S_IFDIR || st.Nlink == 0 {
+		_ = dir.Close()
+		return nil, st, errors.New("destination directory is unavailable")
+	}
+	return dir, st, nil
+}
+
 func openNoLinksParent(path string, flags int, mode uint32) (*os.File, *os.File, string, error) {
 	if !cleanAbsolute(path) || path == "/" {
 		return nil, nil, "", errors.New("invalid file path")

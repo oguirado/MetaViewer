@@ -14,8 +14,11 @@ import (
 	"metaviewer/daemon-adapter/internal/cli"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 )
+
+const maxWireMonoNS uint64 = (1 << 53) - 1
 
 type frameReply struct {
 	Path       string          `json:"path"`
@@ -74,7 +77,7 @@ func (m *Manager) capture(ctx context.Context, requestID, id string, r *recordin
 	if err = cli.ParseLine(out, 1<<20, &f); err != nil {
 		return nil, err
 	}
-	if f.Seq == nil || *f.Seq == 0 || f.Width == nil || f.Height == nil || *f.Width == 0 || *f.Height == 0 || f.MonoNS == nil || *f.MonoNS < 0 || uint64(*f.MonoNS) < m.cfg.OriginNS {
+	if f.Seq == nil || *f.Seq == 0 || f.Width == nil || f.Height == nil || *f.Width == 0 || *f.Height == 0 || f.MonoNS == nil || *f.MonoNS < 0 || uint64(*f.MonoNS) < m.cfg.OriginNS || uint64(*f.MonoNS) > maxWireMonoNS {
 		return nil, errors.New("invalid frame metadata")
 	}
 	if err := validateWindow(f, s); err != nil {
@@ -93,6 +96,9 @@ func (m *Manager) capture(ctx context.Context, requestID, id string, r *recordin
 		}
 	}
 	mono := uint64(*f.MonoNS) - m.cfg.OriginNS
+	if mono > maxWireMonoNS {
+		return nil, errors.New("invalid frame metadata")
+	}
 	if r.captured && (generation <= r.generation || mono < r.lastNS || mono-r.lastNS < 1_000_000_000/r.fps) {
 		return nil, errors.New("stale or over-rate frame")
 	}
@@ -199,17 +205,194 @@ func (m *Manager) capture(ctx context.Context, requestID, id string, r *recordin
 	return append(events, e), nil
 }
 
+func destRefusal(kind, detail string) *Refusal {
+	return &Refusal{ReasonCode: "POLICY", Detail: kind + ": " + detail}
+}
+
+func safeErrDetail(err error, fallback string) string {
+	if err == nil {
+		return fallback
+	}
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) && pathErr.Err != nil {
+		err = pathErr.Err
+	}
+	var linkErr *os.LinkError
+	if errors.As(err, &linkErr) && linkErr.Err != nil {
+		err = linkErr.Err
+	}
+	var sysErr *os.SyscallError
+	if errors.As(err, &sysErr) && sysErr.Err != nil {
+		err = sysErr.Err
+	}
+	msg := strings.TrimSpace(err.Error())
+	if msg == "" || strings.Contains(msg, "/") {
+		return fallback
+	}
+	return msg
+}
+
 func (m *Manager) export(base Event, r *recording) (result Event, exportErr error) {
 	d := m.cfg.Destination
 	if d == nil {
-		return Event{}, &Refusal{"POLICY", "host destination is not authorized"}
+		return Event{}, destRefusal("DESTINATION_UNSET", "recording destination is not configured")
+	}
+	if !strings.HasSuffix(d.Path, ".tar") || m.grantIsDir {
+		return m.exportDir(base, r)
+	}
+	return m.exportFile(base, r)
+}
+
+func (m *Manager) exportDir(base Event, r *recording) (result Event, exportErr error) {
+	d := m.cfg.Destination
+	if d == nil {
+		return Event{}, destRefusal("DESTINATION_UNSET", "recording destination is not configured")
+	}
+	provisionalPath := filepath.Join(d.Path, fmt.Sprintf("%s-%s.tar", base.RecordingID, strings.Repeat("0", 64)))
+	if !cleanAbsolute(d.Path) || !cleanAbsolute(provisionalPath) {
+		return Event{}, destRefusal("DESTINATION_UNAVAILABLE", "export destination path exceeds contract bound")
+	}
+	size := uint64(1024)
+	for _, f := range r.frames {
+		block := ((f.bytes+511)/512)*512 + 512
+		if block > capBytes-size {
+			return Event{}, destRefusal("DESTINATION_UNAVAILABLE", "export exceeds contract byte bound")
+		}
+		size += block
+	}
+	files := make([]*os.File, 0, len(r.frames))
+	defer func() {
+		for _, f := range files {
+			_ = f.Close()
+		}
+	}()
+	for _, f := range r.frames {
+		file, err := ramFile(f.path)
+		if err != nil {
+			return Event{}, destRefusal("DESTINATION_UNAVAILABLE", safeErrDetail(err, "captured frame is unavailable"))
+		}
+		files = append(files, file)
+	}
+	preDigest := sha256.New()
+	preArchive := tar.NewWriter(preDigest)
+	for i, f := range r.frames {
+		if err := preArchive.WriteHeader(&tar.Header{Name: fmt.Sprintf("frame-%06d.png", i+1), Mode: 0600, Size: int64(f.bytes)}); err != nil {
+			return Event{}, destRefusal("DESTINATION_UNAVAILABLE", safeErrDetail(err, "archive header failed"))
+		}
+		if _, err := io.CopyN(preArchive, files[i], int64(f.bytes)); err != nil {
+			return Event{}, destRefusal("DESTINATION_UNAVAILABLE", safeErrDetail(err, "archive payload failed"))
+		}
+		if _, err := files[i].Seek(0, io.SeekStart); err != nil {
+			return Event{}, destRefusal("DESTINATION_UNAVAILABLE", safeErrDetail(err, "frame seek failed"))
+		}
+	}
+	if err := preArchive.Close(); err != nil {
+		return Event{}, destRefusal("DESTINATION_UNAVAILABLE", safeErrDetail(err, "archive close failed"))
+	}
+	shaHex := hex.EncodeToString(preDigest.Sum(nil))
+	baseName := fmt.Sprintf("%s-%s.tar", base.RecordingID, shaHex)
+	dstPath := filepath.Join(d.Path, baseName)
+	if !cleanAbsolute(dstPath) {
+		return Event{}, destRefusal("DESTINATION_UNAVAILABLE", "export destination path exceeds contract bound")
+	}
+
+	parent, dirStat, err := openNoLinksDir(d.Path)
+	if err != nil {
+		return Event{}, destRefusal("DESTINATION_UNAVAILABLE", safeErrDetail(err, "destination directory is unavailable"))
+	}
+	if m.hasGrantPin && (dirStat.Dev != m.grantDev || dirStat.Ino != m.grantIno) {
+		_ = parent.Close()
+		return Event{}, destRefusal("DESTINATION_UNAVAILABLE", "destination grant was replaced")
+	}
+	fd, err := syscall.Openat(int(parent.Fd()), baseName, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL|syscall.O_NOFOLLOW|syscall.O_CLOEXEC|syscall.O_NONBLOCK, 0600)
+	if err != nil {
+		_ = parent.Close()
+		if errors.Is(err, os.ErrExist) || errors.Is(err, syscall.EEXIST) {
+			return Event{}, destRefusal("DESTINATION_EXISTS", "recording destination already exists")
+		}
+		return Event{}, destRefusal("DESTINATION_UNAVAILABLE", safeErrDetail(err, "destination cannot be opened"))
+	}
+	destination := os.NewFile(uintptr(fd), dstPath)
+	complete := false
+	defer func() {
+		if !complete {
+			var removeErr error
+			var pathStat syscall.Stat_t
+			fdInfo, fErr := destination.Stat()
+			lErr := lstatAt(int(parent.Fd()), baseName, &pathStat)
+			if fErr == nil && lErr == nil {
+				if fdStat, ok := fdInfo.Sys().(*syscall.Stat_t); ok && fdStat.Dev == pathStat.Dev && fdStat.Ino == pathStat.Ino {
+					removeErr = syscall.Unlinkat(int(parent.Fd()), baseName)
+					if errors.Is(removeErr, os.ErrNotExist) || errors.Is(removeErr, syscall.ENOENT) {
+						removeErr = nil
+					}
+				}
+			} else if errors.Is(lErr, os.ErrNotExist) || errors.Is(lErr, syscall.ENOENT) {
+				lErr = nil
+			}
+			closeErr := destination.Close()
+			exportErr = errors.Join(exportErr, fErr, lErr, closeErr, removeErr)
+			if exportErr != nil {
+				var refusal *Refusal
+				if !errors.As(exportErr, &refusal) {
+					exportErr = destRefusal("DESTINATION_UNAVAILABLE", safeErrDetail(exportErr, "destination export failed"))
+				}
+			}
+		}
+		_ = parent.Close()
+	}()
+	digest := sha256.New()
+	counter := &countWriter{writer: io.MultiWriter(destination, digest)}
+	archive := tar.NewWriter(counter)
+	for i, f := range r.frames {
+		if err = archive.WriteHeader(&tar.Header{Name: fmt.Sprintf("frame-%06d.png", i+1), Mode: 0600, Size: int64(f.bytes)}); err != nil {
+			return Event{}, err
+		}
+		if _, err = io.CopyN(archive, files[i], int64(f.bytes)); err != nil {
+			return Event{}, err
+		}
+	}
+	if err = archive.Close(); err != nil {
+		return Event{}, err
+	}
+	if err = destination.Sync(); err != nil {
+		return Event{}, err
+	}
+	var pathStat syscall.Stat_t
+	fdInfo, fErr := destination.Stat()
+	lErr := lstatAt(int(parent.Fd()), baseName, &pathStat)
+	if fErr != nil || lErr != nil {
+		return Event{}, errors.Join(fErr, lErr)
+	}
+	if fdStat, ok := fdInfo.Sys().(*syscall.Stat_t); !ok || fdStat.Dev != pathStat.Dev || fdStat.Ino != pathStat.Ino {
+		return Event{}, errors.New("destination file was replaced during export")
+	}
+	if hex.EncodeToString(digest.Sum(nil)) != shaHex {
+		return Event{}, errors.New("export digest mismatch")
+	}
+	if err = destination.Close(); err != nil {
+		return Event{}, err
+	}
+	complete = true
+	base.Event = "exported"
+	base.DestinationCapabilityID = d.CapabilityID
+	base.DestinationPath = dstPath
+	base.SHA256 = shaHex
+	base.ByteCount = ptr(counter.count)
+	return base, nil
+}
+
+func (m *Manager) exportFile(base Event, r *recording) (result Event, exportErr error) {
+	d := m.cfg.Destination
+	if d == nil {
+		return Event{}, destRefusal("DESTINATION_UNSET", "recording destination is not configured")
 	}
 	// Bound archive overhead as well as payload before the first disk write.
 	size := uint64(1024)
 	for _, f := range r.frames {
 		block := ((f.bytes+511)/512)*512 + 512
 		if block > capBytes-size {
-			return Event{}, errors.New("export exceeds contract byte bound")
+			return Event{}, destRefusal("DESTINATION_UNAVAILABLE", "export exceeds contract byte bound")
 		}
 		size += block
 	}
@@ -223,14 +406,31 @@ func (m *Manager) export(base Event, r *recording) (result Event, exportErr erro
 	for _, f := range r.frames {
 		file, err := ramFile(f.path)
 		if err != nil {
-			return Event{}, err
+			return Event{}, destRefusal("DESTINATION_UNAVAILABLE", safeErrDetail(err, "captured frame is unavailable"))
 		}
 		files = append(files, file)
 	}
-	parent, destination, baseName, err := openNoLinksParent(d.Path, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL, 0600)
-	if err != nil {
-		return Event{}, err
+	if !cleanAbsolute(d.Path) || d.Path == "/" {
+		return Event{}, destRefusal("DESTINATION_UNAVAILABLE", "invalid file path")
 	}
+	parent, dirStat, err := openNoLinksDir(filepath.Dir(d.Path))
+	if err != nil {
+		return Event{}, destRefusal("DESTINATION_UNAVAILABLE", safeErrDetail(err, "destination directory is unavailable"))
+	}
+	if m.hasGrantPin && (dirStat.Dev != m.grantDev || dirStat.Ino != m.grantIno) {
+		_ = parent.Close()
+		return Event{}, destRefusal("DESTINATION_UNAVAILABLE", "destination grant was replaced")
+	}
+	baseName := filepath.Base(d.Path)
+	fd, err := syscall.Openat(int(parent.Fd()), baseName, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL|syscall.O_NOFOLLOW|syscall.O_CLOEXEC|syscall.O_NONBLOCK, 0600)
+	if err != nil {
+		_ = parent.Close()
+		if errors.Is(err, os.ErrExist) || errors.Is(err, syscall.EEXIST) {
+			return Event{}, destRefusal("DESTINATION_EXISTS", "recording destination already exists")
+		}
+		return Event{}, destRefusal("DESTINATION_UNAVAILABLE", safeErrDetail(err, "destination cannot be opened"))
+	}
+	destination := os.NewFile(uintptr(fd), d.Path)
 	// Only this successful O_EXCL create grants cleanup ownership. A failed
 	// export must free the exact destination so the active capture can retry.
 	complete := false
@@ -252,6 +452,12 @@ func (m *Manager) export(base Event, r *recording) (result Event, exportErr erro
 			}
 			closeErr := destination.Close()
 			exportErr = errors.Join(exportErr, fErr, lErr, closeErr, removeErr)
+			if exportErr != nil {
+				var refusal *Refusal
+				if !errors.As(exportErr, &refusal) {
+					exportErr = destRefusal("DESTINATION_UNAVAILABLE", safeErrDetail(exportErr, "destination export failed"))
+				}
+			}
 		}
 		_ = parent.Close()
 	}()
@@ -271,6 +477,15 @@ func (m *Manager) export(base Event, r *recording) (result Event, exportErr erro
 	}
 	if err = destination.Sync(); err != nil {
 		return Event{}, err
+	}
+	var pathStat syscall.Stat_t
+	fdInfo, fErr := destination.Stat()
+	lErr := lstatAt(int(parent.Fd()), baseName, &pathStat)
+	if fErr != nil || lErr != nil {
+		return Event{}, errors.Join(fErr, lErr)
+	}
+	if fdStat, ok := fdInfo.Sys().(*syscall.Stat_t); !ok || fdStat.Dev != pathStat.Dev || fdStat.Ino != pathStat.Ino {
+		return Event{}, errors.New("destination file was replaced during export")
 	}
 	if err = destination.Close(); err != nil {
 		return Event{}, err

@@ -109,7 +109,14 @@ func RuntimeFromEnv() (Runtime, error) {
 		viewMgr.Close()
 		return zero, err
 	}
-	// One publisher per allocation supports disjoint profile RAM roots.
+	sharedBudget, err := frames.NewBudget(512 << 20)
+	if err != nil {
+		_ = recorder.Close()
+		viewMgr.Close()
+		return zero, configuration(fmt.Sprintf("frame budget: %v", err))
+	}
+	// One publisher per allocation supports disjoint profile RAM roots while
+	// enforcing a single 512 MiB global frame budget across all roots.
 	pubs := map[string]*frames.Publisher{}
 	closePubs := func() {
 		for _, p := range pubs {
@@ -122,8 +129,8 @@ func RuntimeFromEnv() (Runtime, error) {
 		}
 		// [TARGET, unit decision] Retain each published frame >= 4 s (>= 2 s floor),
 		// bounded by 128 MiB per surface (~38 full 1280x900 RGB24 frames), 512 MiB
-		// global across surfaces, and at most 64 generations per surface.
-		p, e := frames.NewPublisher(frames.PublishConfig{RAMRoot: profile.RAMRoot, MaxFrameBytes: 64 << 20, MaxPixels: 64 << 20, MaxSurfaces: 16, MaxRetained: 64, MinRetention: 4 * time.Second, MaxSurfaceBytes: 128 << 20, MaxTotalBytes: 512 << 20, Deduplicate: false})
+		// global across all profile RAM roots, and at most 64 generations per surface.
+		p, e := frames.NewPublisher(frames.PublishConfig{RAMRoot: profile.RAMRoot, MaxFrameBytes: 64 << 20, MaxPixels: 64 << 20, MaxSurfaces: 16, MaxRetained: 64, MinRetention: 4 * time.Second, MaxSurfaceBytes: 128 << 20, MaxTotalBytes: 512 << 20, Budget: sharedBudget, Deduplicate: false})
 		if e != nil {
 			_ = recorder.Close()
 			viewMgr.Close()
@@ -200,10 +207,185 @@ func RuntimeFromEnv() (Runtime, error) {
 	}, Client: true, Streaming: true, Registration: probe, Close: cleanup}, nil
 }
 
+type recordTicker struct {
+	C    <-chan time.Time
+	Done func()
+	Stop func()
+}
+
+type recordTickerKey struct{}
+
+type recordTask struct {
+	surfaceID string
+	cancel    context.CancelFunc
+	done      chan struct{}
+}
+
+type recordScheduler struct {
+	mu       sync.Mutex
+	recorder *record.Manager
+	tasks    map[string]*recordTask
+}
+
+func (s *recordScheduler) start(ctx context.Context, surfaceID, recordingID, requestID string, interval time.Duration) {
+	if s == nil || s.recorder == nil || interval <= 0 {
+		return
+	}
+	session, hasSession := ctx.Value(streamKey{}).(streamSession)
+	baseCtx := context.Background()
+	if hasSession && session.ctx != nil {
+		baseCtx = session.ctx
+	}
+	var makeTicker func(string, time.Duration) recordTicker
+	if fn, ok := ctx.Value(recordTickerKey{}).(func(string, time.Duration) recordTicker); ok && fn != nil {
+		makeTicker = fn
+	} else {
+		makeTicker = func(_ string, d time.Duration) recordTicker {
+			t := time.NewTicker(d)
+			return recordTicker{C: t.C, Stop: t.Stop}
+		}
+	}
+	s.mu.Lock()
+	if existing, ok := s.tasks[recordingID]; ok {
+		select {
+		case <-existing.done:
+			delete(s.tasks, recordingID)
+		default:
+			s.mu.Unlock()
+			return
+		}
+	}
+	taskCtx, cancel := context.WithCancel(baseCtx)
+	done := make(chan struct{})
+	ticker := makeTicker(recordingID, interval)
+	s.tasks[recordingID] = &recordTask{surfaceID: surfaceID, cancel: cancel, done: done}
+	s.mu.Unlock()
+	go func() {
+		defer close(done)
+		if ticker.Stop != nil {
+			defer ticker.Stop()
+		}
+		for {
+			select {
+			case <-taskCtx.Done():
+				return
+			case <-ticker.C:
+				if taskCtx.Err() != nil {
+					return
+				}
+				var lock *sync.Mutex
+				if hasSession {
+					lock = session.surfaceLock(surfaceID)
+				}
+				if lock != nil {
+					acquired := false
+					for !acquired {
+						if lock.TryLock() {
+							acquired = true
+							break
+						}
+						select {
+						case <-taskCtx.Done():
+							return
+						case <-time.After(time.Millisecond):
+						}
+					}
+				}
+				polled, pollErr := s.recorder.Poll(taskCtx, requestID, recordingID)
+				if pollErr == nil && hasSession && session.emit != nil {
+					for _, ev := range polled {
+						if taskCtx.Err() != nil {
+							break
+						}
+						if rawEv, mErr := json.Marshal(ev); mErr == nil {
+							_ = session.emit(taskCtx, rawEv)
+						}
+					}
+				}
+				if lock != nil {
+					lock.Unlock()
+				}
+				if ticker.Done != nil {
+					ticker.Done()
+				}
+				var refusal *record.Refusal
+				if errors.As(pollErr, &refusal) || (pollErr != nil && strings.Contains(pollErr.Error(), "recorder is closed")) {
+					return
+				}
+			}
+		}
+	}()
+}
+
+func (s *recordScheduler) stopRecording(recordingID string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	task, ok := s.tasks[recordingID]
+	if ok {
+		delete(s.tasks, recordingID)
+	}
+	s.mu.Unlock()
+	if ok {
+		task.cancel()
+		<-task.done
+	}
+}
+
+func (s *recordScheduler) stopSurface(surfaceID string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	var toStop []*recordTask
+	for id, task := range s.tasks {
+		if task.surfaceID == surfaceID {
+			toStop = append(toStop, task)
+			delete(s.tasks, id)
+		}
+	}
+	s.mu.Unlock()
+	for _, task := range toStop {
+		task.cancel()
+		<-task.done
+	}
+}
+
+func (s *recordScheduler) stopAll() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	toStop := make([]*recordTask, 0, len(s.tasks))
+	for id, task := range s.tasks {
+		toStop = append(toStop, task)
+		delete(s.tasks, id)
+	}
+	s.mu.Unlock()
+	for _, task := range toStop {
+		task.cancel()
+		<-task.done
+	}
+}
+
 func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs map[string]*frames.Publisher, origin uint64, recorders ...*record.Manager) ipc.Handler {
 	var recorder *record.Manager
 	if len(recorders) > 0 {
 		recorder = recorders[0]
+	}
+	var sched *recordScheduler
+	if recorder != nil {
+		sched = &recordScheduler{
+			recorder: recorder,
+			tasks:    map[string]*recordTask{},
+		}
+		recorder.AddUnregisterHook(func(surfaceID string) {
+			sched.stopSurface(surfaceID)
+		})
+		recorder.AddCloseHook(func() {
+			sched.stopAll()
+		})
 	}
 	owned := map[string]*frames.Publisher{}
 	pendingRelease := map[string][]json.RawMessage{}
@@ -229,13 +411,25 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 		})
 	}
 	dispatchRecord := func(ctx context.Context, e ipc.Envelope, q capsule.Request, raw []byte, op string) ([]json.RawMessage, error) {
-		var p struct {
-			SurfaceID string `json:"surface_id"`
+		var reqMeta struct {
+			RequestID string `json:"request_id"`
+			Params    struct {
+				SurfaceID   string `json:"surface_id"`
+				RecordingID string `json:"recording_id"`
+			} `json:"params"`
 		}
-		_ = json.Unmarshal(q.Params, &p)
-		syncSurface(p.SurfaceID)
+		_ = json.Unmarshal(raw, &reqMeta)
+		syncSurface(reqMeta.Params.SurfaceID)
+		if (op == "ram_stop" || op == "disk_stop") && recorder.CanStop(reqMeta.Params.SurfaceID, reqMeta.Params.RecordingID, op) {
+			sched.stopRecording(reqMeta.Params.RecordingID)
+		}
 		evs, err := recorder.Handle(ctx, raw)
 		if err != nil {
+			if op == "disk_stop" {
+				if interval, ok := recorder.PollInterval(reqMeta.Params.RecordingID); ok {
+					sched.start(ctx, reqMeta.Params.SurfaceID, reqMeta.Params.RecordingID, reqMeta.RequestID, interval)
+				}
+			}
 			var refusal *record.Refusal
 			if errors.As(err, &refusal) && len(evs) > 0 {
 				out := make([]json.RawMessage, 0, len(evs))
@@ -253,9 +447,13 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 		if (op == "ram_start" || op == "disk_start") && len(evs) > 0 && evs[0].Event == "started" {
 			polled, pollErr := recorder.Poll(ctx, evs[0].RequestID, evs[0].RecordingID)
 			if pollErr != nil {
+				recorder.Abort(evs[0].RecordingID)
 				return wireFailure(e, q, pollErr)
 			}
 			evs = append(evs, polled...)
+			if interval, ok := recorder.PollInterval(evs[0].RecordingID); ok {
+				sched.start(ctx, evs[0].SurfaceID, evs[0].RecordingID, evs[0].RequestID, interval)
+			}
 		}
 		out := make([]json.RawMessage, 0, len(evs))
 		for _, ev := range evs {
@@ -448,7 +646,12 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 			}
 			_ = json.Unmarshal(q.Params, &params)
 			if recorder != nil {
-				recorder.UnregisterSurface(params.SurfaceID)
+				if err := recorder.UnregisterSurface(params.SurfaceID); err != nil {
+					frameMu.Lock()
+					pendingRelease[params.SurfaceID] = events
+					frameMu.Unlock()
+					return failure(err)
+				}
 			}
 			frameMu.Lock()
 			p := owned[params.SurfaceID]

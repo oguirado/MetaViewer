@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"metaviewer/daemon-adapter/internal/capsule"
+	"metaviewer/daemon-adapter/internal/frames"
 	"metaviewer/daemon-adapter/internal/ipc"
 	"metaviewer/daemon-adapter/internal/record"
 )
@@ -322,10 +323,10 @@ func TestRecordWireRuntimeBoundaryAndConfiguredBackend(t *testing.T) {
 		t.Fatalf("wired screenshot events: %+v %+v %+v", shotEv0, shotEv1, shotEv2)
 	}
 
-	// Positive wired path 4: disk_start + disk_stop with MV_RECORDING_DESTINATION grant through RuntimeFromEnv().
-	authTar := filepath.Join(t.TempDir(), "authorized.tar")
+	// Positive wired path 4: disk_start + disk_stop and sealed-RAM export with MV_RECORDING_DESTINATION directory grant through RuntimeFromEnv().
+	authDir := t.TempDir()
 	t.Setenv("MV_SRF_STATE_DIR", filepath.Join(t.TempDir(), "state-disk"))
-	t.Setenv("MV_RECORDING_DESTINATION", authTar)
+	t.Setenv("MV_RECORDING_DESTINATION", authDir)
 	t.Setenv("MV_RECORDING_CAPABILITY_ID", "cap-grant")
 	rDisk, err := RuntimeFromEnv()
 	if err != nil {
@@ -357,7 +358,7 @@ func TestRecordWireRuntimeBoundaryAndConfiguredBackend(t *testing.T) {
 			"surface_id":                diskSurfaceID,
 			"recording_id":              "rec-disk",
 			"destination_capability_id": "cap-grant",
-			"destination_path":          authTar,
+			"destination_path":          authDir,
 			"max_fps":                   10,
 		},
 	})
@@ -381,15 +382,584 @@ func TestRecordWireRuntimeBoundaryAndConfiguredBackend(t *testing.T) {
 	var diskStopEv, diskExportEv record.Event
 	_ = json.Unmarshal(diskStopOut[0], &diskStopEv)
 	_ = json.Unmarshal(diskStopOut[1], &diskExportEv)
-	if diskStopEv.Event != "stopped" || diskExportEv.Event != "exported" || diskExportEv.DestinationPath != authTar {
-		t.Fatalf("wired disk_stop events: %+v %+v", diskStopEv, diskExportEv)
+	wantDiskTar := filepath.Join(authDir, fmt.Sprintf("rec-disk-%s.tar", diskExportEv.SHA256))
+	if diskStopEv.Event != "stopped" || diskExportEv.Event != "exported" || diskExportEv.DestinationPath != wantDiskTar {
+		t.Fatalf("wired disk_stop events: %+v %+v (want %s)", diskStopEv, diskExportEv, wantDiskTar)
 	}
-	tarBytes, err := os.ReadFile(authTar)
+	tarBytes, err := os.ReadFile(wantDiskTar)
 	if err != nil {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(tarBytes)
 	if diskExportEv.ByteCount == nil || *diskExportEv.ByteCount != uint64(len(tarBytes)) || diskExportEv.SHA256 != hex.EncodeToString(sum[:]) {
 		t.Fatalf("exported tar digest/size mismatch: %+v", diskExportEv)
+	}
+
+	// Sealed-RAM export over wire: ram_start -> ram_stop -> disk_start naming sealed RAM recording ID.
+	sealedRAMStart, _ := json.Marshal(map[string]any{
+		"schema":     "record_request/v0.2",
+		"request_id": "req-sealed-ram-start",
+		"op":         "ram_start",
+		"params": map[string]any{
+			"surface_id":   diskSurfaceID,
+			"recording_id": "rec-sealed-ram",
+			"ring_bytes":   8192,
+			"max_fps":      10,
+		},
+	})
+	if out, err := rDisk.Handler(ctx, ipc.Envelope{MsgID: "req-sealed-ram-start", Body: sealedRAMStart}); err != nil || len(out) != 2 {
+		t.Fatalf("sealed RAM start: %s %v", out, err)
+	}
+	sealedRAMStop, _ := json.Marshal(map[string]any{
+		"schema":     "record_request/v0.2",
+		"request_id": "req-sealed-ram-stop",
+		"op":         "ram_stop",
+		"params": map[string]any{
+			"surface_id":   diskSurfaceID,
+			"recording_id": "rec-sealed-ram",
+		},
+	})
+	if out, err := rDisk.Handler(ctx, ipc.Envelope{MsgID: "req-sealed-ram-stop", Body: sealedRAMStop}); err != nil || len(out) != 1 {
+		t.Fatalf("sealed RAM stop: %s %v", out, err)
+	}
+	sealedExportReq, _ := json.Marshal(map[string]any{
+		"schema":     "record_request/v0.2",
+		"request_id": "req-sealed-ram-export",
+		"op":         "disk_start",
+		"params": map[string]any{
+			"surface_id":                diskSurfaceID,
+			"recording_id":              "rec-sealed-ram",
+			"destination_capability_id": "cap-grant",
+			"destination_path":          authDir,
+			"max_fps":                   10,
+		},
+	})
+	sealedExportOut, err := rDisk.Handler(ctx, ipc.Envelope{MsgID: "req-sealed-ram-export", Body: sealedExportReq})
+	if err != nil || len(sealedExportOut) != 1 {
+		t.Fatalf("wired sealed-RAM export: %s %v", sealedExportOut, err)
+	}
+	var sealedExportEv record.Event
+	if err := json.Unmarshal(sealedExportOut[0], &sealedExportEv); err != nil || sealedExportEv.Event != "exported" {
+		t.Fatalf("wired sealed-RAM export event: %+v %v", sealedExportEv, err)
+	}
+	wantSealedTar := filepath.Join(authDir, fmt.Sprintf("rec-sealed-ram-%s.tar", sealedExportEv.SHA256))
+	if sealedExportEv.DestinationPath != wantSealedTar {
+		t.Fatalf("wired sealed-RAM export path = %q, want %q", sealedExportEv.DestinationPath, wantSealedTar)
+	}
+	// Second export of the same sealed RAM recording over wire refuses with POLICY and DESTINATION_EXISTS prefix.
+	dupExportOut, err := rDisk.Handler(ctx, ipc.Envelope{MsgID: "req-sealed-ram-dup", Body: sealedExportReq})
+	if err != nil || len(dupExportOut) != 1 {
+		t.Fatalf("wired duplicate sealed-RAM export: %s %v", dupExportOut, err)
+	}
+	var dupExportEv record.Event
+	if err := json.Unmarshal(dupExportOut[0], &dupExportEv); err != nil || dupExportEv.Schema != "record_event/v0.2" || dupExportEv.Event != "refused" || dupExportEv.ReasonCode != "POLICY" || !strings.HasPrefix(dupExportEv.Detail, "DESTINATION_EXISTS: ") || strings.Contains(dupExportEv.Detail, "/") {
+		t.Fatalf("expected POLICY refusal with DESTINATION_EXISTS prefix on duplicate export, got %+v %v", dupExportEv, err)
+	}
+	var dupMap map[string]any
+	if err := json.Unmarshal(dupExportOut[0], &dupMap); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateBody(dupMap); err != nil {
+		t.Fatalf("duplicate export refusal failed contract envelope validation: %v", err)
+	}
+}
+
+type recordWireTestRunner struct {
+	mu          sync.Mutex
+	root        string
+	pngBytes    []byte
+	sha         string
+	seq         uint64
+	nowNS       uint64
+	runByCtr    map[string]string
+	surfCounter uint64
+	failFrame   bool
+}
+
+func (r *recordWireTestRunner) clock() uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.nowNS
+}
+
+func (r *recordWireTestRunner) Run(_ context.Context, a []string, _ []byte) ([]byte, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	switch a[1] {
+	case "start":
+		r.surfCounter++
+		r.nowNS += 1_000_000
+		ctr := fmt.Sprintf("srf-id-%d", r.surfCounter)
+		runID := fmt.Sprintf("run-%d", r.surfCounter)
+		if r.runByCtr == nil {
+			r.runByCtr = map[string]string{}
+		}
+		r.runByCtr[ctr] = runID
+		frameDir := filepath.Join(r.root, runID, "frames", "w1")
+		if err := os.MkdirAll(frameDir, 0700); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(filepath.Join(frameDir, "frame.png"), r.pngBytes, 0600); err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]any{
+			"container": ctr,
+			"run_id":    runID,
+			"windows":   []map[string]any{{"id": "w1", "x": 0, "y": 0, "w": 2, "h": 1}},
+		})
+	case "stop":
+		r.nowNS += 1_000_000
+		return json.Marshal(map[string]any{"stopped": a[3], "removed_verified": true})
+	case "frame":
+		if r.failFrame {
+			return nil, fmt.Errorf("injected frame failure")
+		}
+		r.seq++
+		r.nowNS += 1_000_000_000
+		seq := r.seq
+		ctr := a[3]
+		runID := r.runByCtr[ctr]
+		pngPath := filepath.Join(r.root, runID, "frames", "w1", "frame.png")
+		return json.Marshal(capsule.NativeFrame{
+			Path:          pngPath,
+			Seq:           seq,
+			SHA256RGB24:   r.sha,
+			Width:         2,
+			Height:        1,
+			CaptureMonoNS: r.nowNS,
+			Generation:    ctr,
+			Window:        &capsule.Window{ID: "w1", W: 2, H: 1},
+		})
+	}
+	return nil, fmt.Errorf("unexpected op %v", a)
+}
+
+func TestRecordWirePeriodicPollLifecycleAndSurfaceDestroy(t *testing.T) {
+	root, err := os.MkdirTemp("/dev/shm", "mv-record-wire-sched-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+
+	pngPath, sha := writeTestPNG(t, root)
+	pngBytes, err := os.ReadFile(pngPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frameSize := uint64(len(pngBytes))
+
+	runner := &recordWireTestRunner{root: root, pngBytes: pngBytes, sha: sha, nowNS: 10_000}
+	profiles := map[string]capsule.Profile{
+		"demo":  {Kind: "browser", NativeKind: "browser", RAMRoot: root, Display: ":100", Width: 2, Height: 1},
+		"demo2": {Kind: "browser", NativeKind: "browser", RAMRoot: root, Display: ":101", Width: 2, Height: 1},
+	}
+	binDir := t.TempDir()
+	capMgr, err := capsule.NewManager(capsule.Config{
+		BinDir:         binDir,
+		Profiles:       profiles,
+		MaxSurfaces:    4,
+		MaxOutputBytes: 8192,
+		Timeout:        5 * time.Second,
+		OriginNS:       100,
+	}, runner, runner.clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := frames.NewPublisher(frames.PublishConfig{
+		RAMRoot:         root,
+		MaxFrameBytes:   4096,
+		MaxPixels:       16,
+		MaxSurfaces:     4,
+		MaxRetained:     8,
+		MinRetention:    2 * time.Second,
+		MaxSurfaceBytes: 8192,
+		MaxTotalBytes:   32768,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pub.Close() })
+
+	// Configure recorder with MemoryBytes = 2*ringBytes so at most one surface recording fits at a time.
+	ringBytes := frameSize * 2
+	recMgr, err := record.NewManager(record.Config{
+		Runner:      runner,
+		Clock:       func() uint64 { return 500 },
+		OriginNS:    100,
+		BinDir:      binDir,
+		MemoryBytes: ringBytes,
+		RingBytes:   ringBytes,
+		MaxFPS:      30,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = recMgr.Close() })
+
+	h := wireHandler(capMgr, profiles, map[string]*frames.Publisher{root: pub}, 100, recMgr)
+
+	type tickerControl struct {
+		ch      chan time.Time
+		ack     chan struct{}
+		stopped chan struct{}
+		once    sync.Once
+	}
+	var tickerMu sync.Mutex
+	tickers := map[string]*tickerControl{}
+
+	emittedCh := make(chan record.Event, 16)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	ctx = context.WithValue(ctx, streamKey{}, streamSession{
+		ctx:   ctx,
+		work:  &sync.Mutex{},
+		locks: &surfaceLocks{},
+		emit: func(_ context.Context, raw json.RawMessage) error {
+			var ev record.Event
+			if json.Unmarshal(raw, &ev) == nil && ev.Schema == "record_event/v0.2" {
+				emittedCh <- ev
+			}
+			return nil
+		},
+	})
+	ctx = context.WithValue(ctx, recordTickerKey{}, func(recID string, _ time.Duration) recordTicker {
+		ctrl := &tickerControl{
+			ch:      make(chan time.Time),
+			ack:     make(chan struct{}, 1),
+			stopped: make(chan struct{}),
+		}
+		tickerMu.Lock()
+		tickers[recID] = ctrl
+		tickerMu.Unlock()
+		return recordTicker{
+			C: ctrl.ch,
+			Done: func() {
+				ctrl.ack <- struct{}{}
+			},
+			Stop: func() {
+				ctrl.once.Do(func() { close(ctrl.stopped) })
+			},
+		}
+	})
+
+	createSurface := func(profileID string) string {
+		out, cErr := h(ctx, ipc.Envelope{Body: json.RawMessage(`{"schema":"surface_request/v0.2","op":"create","params":{"kind":"browser","profile_id":"` + profileID + `","geometry":{"w":2,"h":1}}}`)})
+		if cErr != nil || len(out) != 2 {
+			t.Fatalf("create surface: %s %v", out, cErr)
+		}
+		var created struct {
+			Data struct {
+				Surface capsule.Surface `json:"surface"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(out[0], &created); err != nil || created.Data.Surface.SurfaceID == "" {
+			t.Fatalf("unmarshal created: %s %v", out[0], err)
+		}
+		return created.Data.Surface.SurfaceID
+	}
+
+	s1 := createSurface("demo")
+	s2 := createSurface("demo2")
+
+	// 1. Start wired recording on s1 and drive 2 scheduled Poll ticks deterministically.
+	startReq, _ := json.Marshal(map[string]any{
+		"schema":     "record_request/v0.2",
+		"request_id": "req-sched-1",
+		"op":         "ram_start",
+		"params": map[string]any{
+			"surface_id":   s1,
+			"recording_id": "rec-sched-1",
+			"ring_bytes":   ringBytes,
+			"max_fps":      10,
+		},
+	})
+	startOut, err := h(ctx, ipc.Envelope{MsgID: "req-sched-1", Body: startReq})
+	if err != nil || len(startOut) != 2 {
+		t.Fatalf("ram_start: %s %v", startOut, err)
+	}
+
+	tickerMu.Lock()
+	ctrl1 := tickers["rec-sched-1"]
+	tickerMu.Unlock()
+	if ctrl1 == nil {
+		t.Fatal("periodic ticker was not registered for rec-sched-1")
+	}
+
+	for tick := 1; tick <= 2; tick++ {
+		select {
+		case ctrl1.ch <- time.Now():
+		case <-ctx.Done():
+			t.Fatal("timed out sending tick")
+		}
+		select {
+		case <-ctrl1.ack:
+		case <-ctx.Done():
+			t.Fatal("timed out waiting for scheduled Poll completion")
+		}
+	}
+
+	// Verify 2 additional frames (plus 1 ring drop when the 3rd frame enters the 2-frame ring) were emitted on the stream.
+	var streamCaptured int
+	var streamDropped int
+	for len(emittedCh) > 0 {
+		ev := <-emittedCh
+		switch ev.Event {
+		case "frame_captured":
+			streamCaptured++
+		case "dropped":
+			streamDropped++
+		}
+	}
+	if streamCaptured != 2 || streamDropped != 1 {
+		t.Fatalf("expected 2 scheduled frame_captured and 1 dropped event on stream, got captured=%d dropped=%d", streamCaptured, streamDropped)
+	}
+
+	stopReq, _ := json.Marshal(map[string]any{
+		"schema":     "record_request/v0.2",
+		"request_id": "req-sched-stop",
+		"op":         "ram_stop",
+		"params": map[string]any{
+			"surface_id":   s1,
+			"recording_id": "rec-sched-1",
+		},
+	})
+	stopOut, err := h(ctx, ipc.Envelope{MsgID: "req-sched-stop", Body: stopReq})
+	if err != nil || len(stopOut) != 1 {
+		t.Fatalf("ram_stop: %s %v", stopOut, err)
+	}
+	var stoppedEv record.Event
+	if err := json.Unmarshal(stopOut[0], &stoppedEv); err != nil || stoppedEv.Event != "stopped" || stoppedEv.FrameCount == nil || *stoppedEv.FrameCount != 2 {
+		t.Fatalf("expected stopped FrameCount=2 (retained in 2-frame ring after 3 captures), got %+v %v", stoppedEv, err)
+	}
+	select {
+	case <-ctrl1.stopped:
+	case <-ctx.Done():
+		t.Fatal("periodic ticker was not stopped on ram_stop")
+	}
+	if err := recMgr.Release("rec-sched-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Start active recording on s1 (occupying the entire ringBytes session budget), then destroy s1 over the wire.
+	startDestroyReq, _ := json.Marshal(map[string]any{
+		"schema":     "record_request/v0.2",
+		"request_id": "req-destroy-rec",
+		"op":         "ram_start",
+		"params": map[string]any{
+			"surface_id":   s1,
+			"recording_id": "rec-on-destroyed",
+			"ring_bytes":   ringBytes,
+			"max_fps":      10,
+		},
+	})
+	if out, err := h(ctx, ipc.Envelope{MsgID: "req-destroy-rec", Body: startDestroyReq}); err != nil || len(out) != 2 {
+		t.Fatalf("ram_start before destroy: %s %v", out, err)
+	}
+	tickerMu.Lock()
+	ctrlDestroy := tickers["rec-on-destroyed"]
+	tickerMu.Unlock()
+
+	destroyReq, _ := json.Marshal(map[string]any{
+		"schema": "surface_request/v0.2",
+		"op":     "destroy",
+		"params": map[string]any{"surface_id": s1},
+	})
+	if out, err := h(ctx, ipc.Envelope{MsgID: "msg-destroy-s1", Body: destroyReq}); err != nil || len(out) != 1 {
+		t.Fatalf("destroy s1: %s %v", out, err)
+	}
+	select {
+	case <-ctrlDestroy.stopped:
+	case <-ctx.Done():
+		t.Fatal("periodic ticker was not stopped on surface destroy")
+	}
+
+	// Starting a new recording on s2 requiring the full ringBytes budget now succeeds without BUDGET_EXCEEDED.
+	startS2Req, _ := json.Marshal(map[string]any{
+		"schema":     "record_request/v0.2",
+		"request_id": "req-s2-after-destroy",
+		"op":         "ram_start",
+		"params": map[string]any{
+			"surface_id":   s2,
+			"recording_id": "rec-s2-after",
+			"ring_bytes":   ringBytes,
+			"max_fps":      10,
+		},
+	})
+	s2Out, err := h(ctx, ipc.Envelope{MsgID: "req-s2-after-destroy", Body: startS2Req})
+	if err != nil || len(s2Out) != 2 {
+		t.Fatalf("new recording on s2 after s1 destroy failed: %s %v", s2Out, err)
+	}
+}
+
+func TestRecordSchedulerConcurrentStartIdempotentAndFailedInitialPollReleasesReservation(t *testing.T) {
+	root, err := os.MkdirTemp("/dev/shm", "mv-record-wire-idem-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+
+	pngPath, sha := writeTestPNG(t, root)
+	pngBytes, err := os.ReadFile(pngPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frameSize := uint64(len(pngBytes))
+	ringBytes := frameSize * 2
+
+	runner := &recordWireTestRunner{root: root, pngBytes: pngBytes, sha: sha, nowNS: 10_000}
+	profiles := map[string]capsule.Profile{
+		"demo": {Kind: "browser", NativeKind: "browser", RAMRoot: root, Display: ":100", Width: 2, Height: 1},
+	}
+	binDir := t.TempDir()
+	capMgr, err := capsule.NewManager(capsule.Config{
+		BinDir:         binDir,
+		Profiles:       profiles,
+		MaxSurfaces:    4,
+		MaxOutputBytes: 8192,
+		Timeout:        5 * time.Second,
+		OriginNS:       100,
+	}, runner, runner.clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := frames.NewPublisher(frames.PublishConfig{
+		RAMRoot:         root,
+		MaxFrameBytes:   4096,
+		MaxPixels:       16,
+		MaxSurfaces:     4,
+		MaxRetained:     8,
+		MinRetention:    2 * time.Second,
+		MaxSurfaceBytes: 8192,
+		MaxTotalBytes:   32768,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pub.Close() })
+
+	// MemoryBytes fits only 1 recording of ringBytes at a time.
+	recMgr, err := record.NewManager(record.Config{
+		Runner:      runner,
+		Clock:       func() uint64 { return 500 },
+		OriginNS:    100,
+		BinDir:      binDir,
+		MemoryBytes: ringBytes,
+		RingBytes:   ringBytes,
+		MaxFPS:      30,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = recMgr.Close() })
+
+	// 1. Concurrent sched.start for the same recording ID must be idempotent:
+	// ticker registrations equal map entries (1), and stopping leaves no orphaned task.
+	sched := &recordScheduler{
+		recorder: recMgr,
+		tasks:    map[string]*recordTask{},
+	}
+	var tickerMu sync.Mutex
+	var tickerCount int
+	schedCtx := context.WithValue(context.Background(), recordTickerKey{}, func(_ string, _ time.Duration) recordTicker {
+		tickerMu.Lock()
+		tickerCount++
+		tickerMu.Unlock()
+		return recordTicker{
+			C:    make(chan time.Time),
+			Stop: func() {},
+		}
+	})
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sched.start(schedCtx, "s-idem", "rec-idem", "req-idem", 10*time.Millisecond)
+		}()
+	}
+	wg.Wait()
+	sched.mu.Lock()
+	taskEntries := len(sched.tasks)
+	sched.mu.Unlock()
+	tickerMu.Lock()
+	gotTickers := tickerCount
+	tickerMu.Unlock()
+	if gotTickers != 1 || taskEntries != 1 {
+		t.Fatalf("concurrent sched.start not idempotent: tickerCount=%d taskEntries=%d (want 1, 1)", gotTickers, taskEntries)
+	}
+	sched.stopRecording("rec-idem")
+	sched.mu.Lock()
+	afterStopEntries := len(sched.tasks)
+	sched.mu.Unlock()
+	if afterStopEntries != 0 {
+		t.Fatalf("expected 0 tasks after stopRecording, got %d", afterStopEntries)
+	}
+
+	// 2. Failed initial Poll during ram_start must release the recording reservation
+	// so repeated failed ram_start calls do not exhaust the session memory budget.
+	h := wireHandler(capMgr, profiles, map[string]*frames.Publisher{root: pub}, 100, recMgr)
+	ctx := context.Background()
+	createOut, err := h(ctx, ipc.Envelope{Body: json.RawMessage(`{"schema":"surface_request/v0.2","op":"create","params":{"kind":"browser","profile_id":"demo","geometry":{"w":2,"h":1}}}`)})
+	if err != nil || len(createOut) != 2 {
+		t.Fatalf("create surface: %s %v", createOut, err)
+	}
+	var created struct {
+		Data struct {
+			Surface capsule.Surface `json:"surface"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(createOut[0], &created); err != nil {
+		t.Fatal(err)
+	}
+	sID := created.Data.Surface.SurfaceID
+
+	runner.mu.Lock()
+	runner.failFrame = true
+	runner.mu.Unlock()
+
+	for i := 0; i < 5; i++ {
+		failReq, _ := json.Marshal(map[string]any{
+			"schema":     "record_request/v0.2",
+			"request_id": fmt.Sprintf("req-fail-%d", i),
+			"op":         "ram_start",
+			"params": map[string]any{
+				"surface_id":   sID,
+				"recording_id": fmt.Sprintf("rec-fail-%d", i),
+				"ring_bytes":   ringBytes,
+				"max_fps":      10,
+			},
+		})
+		failOut, fErr := h(ctx, ipc.Envelope{MsgID: fmt.Sprintf("req-fail-%d", i), Body: failReq})
+		if fErr != nil || len(failOut) != 1 {
+			t.Fatalf("failed initial Poll iteration %d: %s %v", i, failOut, fErr)
+		}
+		var errEv capsule.ErrorEvent
+		if err := json.Unmarshal(failOut[0], &errEv); err != nil || errEv.Event != "error" {
+			t.Fatalf("expected error event on failed initial Poll, got %s (%v)", failOut[0], err)
+		}
+	}
+
+	runner.mu.Lock()
+	runner.failFrame = false
+	runner.mu.Unlock()
+
+	healthyReq, _ := json.Marshal(map[string]any{
+		"schema":     "record_request/v0.2",
+		"request_id": "req-healthy",
+		"op":         "ram_start",
+		"params": map[string]any{
+			"surface_id":   sID,
+			"recording_id": "rec-healthy",
+			"ring_bytes":   ringBytes,
+			"max_fps":      10,
+		},
+	})
+	healthyOut, err := h(ctx, ipc.Envelope{MsgID: "req-healthy", Body: healthyReq})
+	if err != nil || len(healthyOut) != 2 {
+		t.Fatalf("healthy ram_start after failed initial Polls failed: %s %v", healthyOut, err)
+	}
+	var healthyStarted record.Event
+	if err := json.Unmarshal(healthyOut[0], &healthyStarted); err != nil || healthyStarted.Event != "started" {
+		t.Fatalf("expected started event on healthy ram_start, got %+v (%v)", healthyStarted, err)
 	}
 }

@@ -268,7 +268,7 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 			s.mu.Unlock()
 			if !cancelled {
 				ref, changed, e = s.publisher.publish(id, binding, native, dedup, func() bool {
-					return t.cancelled.Load() || ctx.Err() != nil
+					return t.cancelled.Load() || ctx.Err() != nil || s.ctx.Err() != nil
 				})
 				if errors.Is(e, errSubscriptionCancelled) {
 					cancelled = true

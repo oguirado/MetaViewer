@@ -37,6 +37,19 @@ import (
 	"metaviewer/daemon-adapter/internal/capsule"
 )
 
+type Budget struct {
+	mu         sync.Mutex
+	maxBytes   int64
+	publishers []*Publisher
+}
+
+func NewBudget(maxTotalBytes int64) (*Budget, error) {
+	if maxTotalBytes < 1 || maxTotalBytes > maxAllowedTotalBytes {
+		return nil, frameError()
+	}
+	return &Budget{maxBytes: maxTotalBytes}, nil
+}
+
 type PublishConfig struct {
 	RAMRoot         string
 	MaxFrameBytes   int64
@@ -47,6 +60,7 @@ type PublishConfig struct {
 	MaxSurfaceBytes int64
 	MaxTotalBytes   int64
 	Deduplicate     bool
+	Budget          *Budget
 }
 type publication struct {
 	native    string
@@ -125,10 +139,28 @@ func (p *Publisher) maxRetainedBytes() int64 {
 	return limit
 }
 func (p *Publisher) maxTotalRetainedBytes() int64 {
+	limit := defaultRetainedTotal
 	if p.cfg.MaxTotalBytes > 0 {
-		return p.cfg.MaxTotalBytes
+		limit = p.cfg.MaxTotalBytes
+	} else if p.cfg.Budget != nil && p.cfg.Budget.maxBytes > 0 {
+		limit = p.cfg.Budget.maxBytes
 	}
-	return defaultRetainedTotal
+	if p.cfg.Budget != nil && p.cfg.Budget.maxBytes > 0 && p.cfg.Budget.maxBytes < limit {
+		limit = p.cfg.Budget.maxBytes
+	}
+	return limit
+}
+func (p *Publisher) lockGroup() {
+	if p.cfg.Budget != nil {
+		p.cfg.Budget.mu.Lock()
+	}
+	p.mu.Lock()
+}
+func (p *Publisher) unlockGroup() {
+	p.mu.Unlock()
+	if p.cfg.Budget != nil {
+		p.cfg.Budget.mu.Unlock()
+	}
 }
 func retainedBytes(refs []Ref) int64 {
 	var total int64
@@ -138,6 +170,8 @@ func retainedBytes(refs []Ref) int64 {
 	return total
 }
 func (p *Publisher) otherSurfacesBytes(excludeID string) int64 {
+	p.lockGroup()
+	defer p.unlockGroup()
 	var total int64
 	for sid, s := range p.surfaces {
 		if sid == excludeID {
@@ -145,10 +179,24 @@ func (p *Publisher) otherSurfacesBytes(excludeID string) int64 {
 		}
 		total += retainedBytes(s.refs)
 	}
+	if p.cfg.Budget != nil {
+		for _, peer := range p.cfg.Budget.publishers {
+			if peer == p {
+				continue
+			}
+			peer.mu.Lock()
+			if !peer.closed {
+				for _, s := range peer.surfaces {
+					total += retainedBytes(s.refs)
+				}
+			}
+			peer.mu.Unlock()
+		}
+	}
 	return total
 }
 func NewPublisher(cfg PublishConfig) (*Publisher, error) {
-	if cfg.MaxFrameBytes < 1 || cfg.MaxFrameBytes > 64<<20 || cfg.MaxPixels < 1 || cfg.MaxPixels > 64<<20 || cfg.MaxSurfaces < 1 || cfg.MaxRetained < 0 || cfg.MaxRetained == 1 || cfg.MaxRetained > 64 || cfg.MinRetention < 0 || cfg.MinRetention > maxAllowedRetention || cfg.MaxSurfaceBytes < 0 || cfg.MaxSurfaceBytes > maxAllowedSurfaceBytes || cfg.MaxTotalBytes < 0 || cfg.MaxTotalBytes > maxAllowedTotalBytes || (cfg.MaxSurfaceBytes > 0 && cfg.MaxTotalBytes > 0 && cfg.MaxSurfaceBytes > cfg.MaxTotalBytes) || filepath.Clean(cfg.RAMRoot) != cfg.RAMRoot || !strings.HasPrefix(cfg.RAMRoot, "/dev/shm/") {
+	if cfg.MaxFrameBytes < 1 || cfg.MaxFrameBytes > 64<<20 || cfg.MaxPixels < 1 || cfg.MaxPixels > 64<<20 || cfg.MaxSurfaces < 1 || cfg.MaxRetained < 0 || cfg.MaxRetained == 1 || cfg.MaxRetained > 64 || cfg.MinRetention < 0 || cfg.MinRetention > maxAllowedRetention || cfg.MaxSurfaceBytes < 0 || cfg.MaxSurfaceBytes > maxAllowedSurfaceBytes || cfg.MaxTotalBytes < 0 || cfg.MaxTotalBytes > maxAllowedTotalBytes || (cfg.Budget != nil && (cfg.Budget.maxBytes < 1 || cfg.Budget.maxBytes > maxAllowedTotalBytes)) || (cfg.MaxSurfaceBytes > 0 && cfg.MaxTotalBytes > 0 && cfg.MaxSurfaceBytes > cfg.MaxTotalBytes) || filepath.Clean(cfg.RAMRoot) != cfg.RAMRoot || !strings.HasPrefix(cfg.RAMRoot, "/dev/shm/") {
 		return nil, frameError()
 	}
 	p := &Publisher{cfg: cfg, surfaces: make(map[string]publication), now: time.Now}
@@ -173,6 +221,11 @@ func NewPublisher(cfg PublishConfig) (*Publisher, error) {
 	p.root = root
 	p.output = output
 	p.outputPath = path
+	if cfg.Budget != nil {
+		cfg.Budget.mu.Lock()
+		cfg.Budget.publishers = append(cfg.Budget.publishers, p)
+		cfg.Budget.mu.Unlock()
+	}
 	return p, nil
 }
 func openRAMRoot(path string, private bool) (*os.File, error) {
@@ -309,6 +362,10 @@ func decodeAndVerifyPNG(encoded []byte, width, height int, expectedSHA string) (
 
 func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame, deduplicate bool, isCancelled func() bool) (Ref, bool, error) {
 	p.mu.Lock()
+	if isCancelled != nil && isCancelled() {
+		p.mu.Unlock()
+		return Ref{}, false, errSubscriptionCancelled
+	}
 	old, exists := p.surfaces[id]
 	if p.closed || p.output == nil || p.root == nil || p.next == ^uint64(0) || id == "" || id != b.Surface.SurfaceID || b.Container != f.Generation || f.Seq == 0 || len(f.SHA256RGB24) != 64 || (exists && (old.native != f.Generation || f.Seq <= old.seq)) || (!exists && len(p.surfaces) >= p.cfg.MaxSurfaces) || f.Width < 1 || f.Height < 1 || f.Width > b.Surface.Geometry.W || f.Height > b.Surface.Geometry.H || uint64(f.Width) > p.cfg.MaxPixels/uint64(f.Height) || uint64(f.Width)*uint64(f.Height) > uint64(p.cfg.MaxFrameBytes)/3 || (b.Window != "" && (f.Window == nil || f.Window.ID != b.Window || f.Window.W != f.Width || f.Window.H != f.Height)) {
 		p.mu.Unlock()
@@ -343,8 +400,8 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 		}
 	}
 
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.lockGroup()
+	defer p.unlockGroup()
 	if isCancelled != nil && isCancelled() {
 		return Ref{}, false, errSubscriptionCancelled
 	}
@@ -369,6 +426,137 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 		return last, false, nil
 	}
 
+	expectedBytes := int64(f.Width) * int64(f.Height) * 3
+	maxSlots := p.maxRetained()
+	maxBytes := p.maxRetainedBytes()
+	maxTotal := p.maxTotalRetainedBytes()
+	minWin := p.minRetention()
+	newBytes := expectedBytes
+
+	type surfaceKey struct {
+		pub *Publisher
+		id  string
+	}
+	type surfaceSim struct {
+		refs      []Ref
+		published []time.Time
+	}
+	type plannedEviction struct {
+		pub       *Publisher
+		surfaceID string
+		ref       Ref
+	}
+
+	simRefs := append([]Ref(nil), old.refs...)
+	simPublished := append([]time.Time(nil), old.published...)
+	var evictions []plannedEviction
+	for len(simRefs) >= maxSlots || (len(simRefs) >= 2 && (retainedBytes(simRefs)+newBytes > maxBytes || (minWin > 0 && len(simPublished) > 0 && !now.Before(simPublished[0].Add(minWin))))) {
+		evictions = append(evictions, plannedEviction{pub: p, surfaceID: id, ref: simRefs[0]})
+		simRefs = simRefs[1:]
+		if len(simPublished) > 0 {
+			simPublished = simPublished[1:]
+		}
+	}
+	if retainedBytes(simRefs)+newBytes > maxBytes {
+		return Ref{}, false, frameError()
+	}
+
+	peers := []*Publisher{p}
+	if p.cfg.Budget != nil {
+		peers = make([]*Publisher, 0, len(p.cfg.Budget.publishers))
+		for _, peer := range p.cfg.Budget.publishers {
+			if peer != p {
+				peer.mu.Lock()
+			}
+			if !peer.closed && peer.output != nil {
+				peers = append(peers, peer)
+			} else if peer != p {
+				peer.mu.Unlock()
+			}
+		}
+	}
+	peersLocked := true
+	unlockPeers := func() {
+		if !peersLocked {
+			return
+		}
+		peersLocked = false
+		for _, peer := range peers {
+			if peer != p {
+				peer.mu.Unlock()
+			}
+		}
+	}
+	defer unlockPeers()
+
+	simOthers := make(map[surfaceKey]*surfaceSim)
+	var otherKeys []surfaceKey
+	var otherBytes int64
+	for _, peer := range peers {
+		for sid, s := range peer.surfaces {
+			if peer == p && sid == id {
+				continue
+			}
+			otherBytes += retainedBytes(s.refs)
+			k := surfaceKey{pub: peer, id: sid}
+			simOthers[k] = &surfaceSim{
+				refs:      append([]Ref(nil), s.refs...),
+				published: append([]time.Time(nil), s.published...),
+			}
+			otherKeys = append(otherKeys, k)
+		}
+	}
+
+	for otherBytes+retainedBytes(simRefs)+newBytes > maxTotal {
+		var victimKey surfaceKey
+		var victimTime time.Time
+		hasVictim := false
+		if len(simRefs) >= 2 {
+			victimKey = surfaceKey{pub: p, id: id}
+			if len(simPublished) > 0 {
+				victimTime = simPublished[0]
+			}
+			hasVictim = true
+		}
+		for _, k := range otherKeys {
+			sim := simOthers[k]
+			if len(sim.refs) <= 2 {
+				continue
+			}
+			var t time.Time
+			if len(sim.published) > 0 {
+				t = sim.published[0]
+			}
+			if !hasVictim || t.Before(victimTime) || (t.Equal(victimTime) && (k.id < victimKey.id || (k.id == victimKey.id && k.pub.outputPath < victimKey.pub.outputPath))) {
+				victimKey = k
+				victimTime = t
+				hasVictim = true
+			}
+		}
+		if !hasVictim {
+			break
+		}
+		if victimKey.pub == p && victimKey.id == id {
+			evictions = append(evictions, plannedEviction{pub: p, surfaceID: id, ref: simRefs[0]})
+			simRefs = simRefs[1:]
+			if len(simPublished) > 0 {
+				simPublished = simPublished[1:]
+			}
+		} else {
+			sim := simOthers[victimKey]
+			expired := sim.refs[0]
+			evictions = append(evictions, plannedEviction{pub: victimKey.pub, surfaceID: victimKey.id, ref: expired})
+			otherBytes -= int64(expired.Width) * int64(expired.Height) * 3
+			sim.refs = sim.refs[1:]
+			if len(sim.published) > 0 {
+				sim.published = sim.published[1:]
+			}
+		}
+	}
+	if otherBytes+retainedBytes(simRefs)+newBytes > maxTotal {
+		return Ref{}, false, frameError()
+	}
+
 	random := make([]byte, 16)
 	if _, e = rand.Read(random); e != nil {
 		return Ref{}, false, e
@@ -380,7 +568,6 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 	if se != nil || he != nil || !os.SameFile(info, held) {
 		return Ref{}, false, frameError()
 	}
-	expectedBytes := int64(f.Width) * int64(f.Height) * 3
 	linkedUnchanged := false
 	if unchanged {
 		lastPath := old.refs[len(old.refs)-1].RAMWSPath
@@ -419,16 +606,11 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 			return Ref{}, false, e
 		}
 	}
+
 	refs := old.refs
 	published := old.published
-	maxSlots := p.maxRetained()
-	maxBytes := p.maxRetainedBytes()
-	maxTotal := p.maxTotalRetainedBytes()
-	minWin := p.minRetention()
-	newBytes := expectedBytes
-	for len(refs) >= maxSlots || (len(refs) >= 2 && (retainedBytes(refs)+newBytes > maxBytes || (minWin > 0 && len(published) > 0 && !now.Before(published[0].Add(minWin))))) {
-		expired := refs[0]
-		if e = syscall.Unlinkat(int(p.output.Fd()), filepath.Base(expired.RAMWSPath)); e != nil {
+	for _, ev := range evictions {
+		if e = syscall.Unlinkat(int(ev.pub.output.Fd()), filepath.Base(ev.ref.RAMWSPath)); e != nil && !errors.Is(e, syscall.ENOENT) {
 			_ = syscall.Unlinkat(int(p.output.Fd()), name)
 			if exists {
 				old.refs = refs
@@ -437,70 +619,21 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 			}
 			return Ref{}, false, fmt.Errorf("frame lease release: %w", e)
 		}
-		refs = refs[1:]
-		if len(published) > 0 {
-			published = published[1:]
-		}
-	}
-	for p.otherSurfacesBytes(id)+retainedBytes(refs)+newBytes > maxTotal {
-		victimID := ""
-		var victimTime time.Time
-		if len(refs) >= 2 {
-			victimID = id
-			if len(published) > 0 {
-				victimTime = published[0]
-			}
-		}
-		for sid, s := range p.surfaces {
-			if sid == id || len(s.refs) <= 2 {
-				continue
-			}
-			var t time.Time
-			if len(s.published) > 0 {
-				t = s.published[0]
-			}
-			if victimID == "" || t.Before(victimTime) || (t.Equal(victimTime) && sid < victimID) {
-				victimID = sid
-				victimTime = t
-			}
-		}
-		if victimID == "" {
-			break
-		}
-		if victimID == id {
-			expired := refs[0]
-			if e = syscall.Unlinkat(int(p.output.Fd()), filepath.Base(expired.RAMWSPath)); e != nil {
-				_ = syscall.Unlinkat(int(p.output.Fd()), name)
-				if exists {
-					old.refs = refs
-					old.published = published
-					p.surfaces[id] = old
-				}
-				return Ref{}, false, fmt.Errorf("frame lease release: %w", e)
-			}
+		if ev.pub == p && ev.surfaceID == id {
 			refs = refs[1:]
 			if len(published) > 0 {
 				published = published[1:]
 			}
 		} else {
-			vs := p.surfaces[victimID]
-			expired := vs.refs[0]
-			if e = syscall.Unlinkat(int(p.output.Fd()), filepath.Base(expired.RAMWSPath)); e != nil {
-				_ = syscall.Unlinkat(int(p.output.Fd()), name)
-				if exists {
-					old.refs = refs
-					old.published = published
-					p.surfaces[id] = old
-				}
-				return Ref{}, false, fmt.Errorf("frame lease release: %w", e)
-			}
+			vs := ev.pub.surfaces[ev.surfaceID]
 			vs.refs = vs.refs[1:]
 			if len(vs.published) > 0 {
 				vs.published = vs.published[1:]
 			}
-			p.surfaces[victimID] = vs
+			ev.pub.surfaces[ev.surfaceID] = vs
 		}
 	}
+
 	p.next++
 	ref := Ref{Schema: "frame_ref/v0.2", SurfaceID: id, Generation: p.next, Tick: f.Seq, TsNS: f.TSNS, Width: uint32(f.Width), Height: uint32(f.Height), Format: "rgb24", RAMWSPath: path, SHA256: sha, CaptureUS: f.CaptureUS}
 	refs = append(refs, ref)
@@ -568,16 +701,16 @@ func extractRGB24(img image.Image, width, height int) ([]byte, bool) {
 // [TARGET, unit decision] Record each successful unlink immediately so a partial
 // release followed by Close never attempts to reclaim the same lease twice.
 func (p *Publisher) Release(id string) error {
-	p.mu.Lock()
+	p.lockGroup()
 	s, ok := p.surfaces[id]
 	if p.closed || p.output == nil || !ok {
-		p.mu.Unlock()
+		p.unlockGroup()
 		return frameError()
 	}
 	for len(s.refs) > 0 {
 		r := s.refs[0]
 		if e := syscall.Unlinkat(int(p.output.Fd()), filepath.Base(r.RAMWSPath)); e != nil && !errors.Is(e, syscall.ENOENT) {
-			p.mu.Unlock()
+			p.unlockGroup()
 			return e
 		}
 		s.refs = s.refs[1:]
@@ -588,15 +721,15 @@ func (p *Publisher) Release(id string) error {
 	}
 	delete(p.surfaces, id)
 	hooks := append(make([]func(string), 0, len(p.onRelease)), p.onRelease...)
-	p.mu.Unlock()
+	p.unlockGroup()
 	for _, fn := range hooks {
 		fn(id)
 	}
 	return nil
 }
 func (p *Publisher) Close() error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.lockGroup()
+	defer p.unlockGroup()
 	if p.closed {
 		return nil
 	}
@@ -638,5 +771,13 @@ func (p *Publisher) Close() error {
 		return errors.Join(closeErrs...)
 	}
 	p.closed = true
+	if p.cfg.Budget != nil {
+		for i, peer := range p.cfg.Budget.publishers {
+			if peer == p {
+				p.cfg.Budget.publishers = append(p.cfg.Budget.publishers[:i], p.cfg.Budget.publishers[i+1:]...)
+				break
+			}
+		}
+	}
 	return errors.Join(closeErrs...)
 }

@@ -200,3 +200,141 @@ func TestExportFailureDoesNotRemoveExistingDestination(t *testing.T) {
 		t.Fatalf("existing destination changed: %q %v", got, err)
 	}
 }
+
+func TestUnregisterSurfaceReclaimsActiveRecordingAndPreservesActiveRefusal(t *testing.T) {
+	source, reply, size := fixture(t)
+	runner := &fakeRunner{reply: reply}
+	framesRoot := filepath.Dir(source)
+	m, err := NewManager(Config{
+		Runner:   runner,
+		Clock:    func() uint64 { return 10 },
+		OriginNS: 100,
+		BinDir:   t.TempDir(),
+		Surfaces: map[string]Surface{
+			"s1": {Family: "srf-identity-surface", Container: "capsule", Window: "w1", FramesRoot: framesRoot},
+			"s2": {Family: "srf-identity-surface", Container: "capsule", Window: "w1", FramesRoot: framesRoot},
+		},
+		MemoryBytes: size * 2,
+		RingBytes:   size,
+		MaxFPS:      30,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+	ctx := context.Background()
+
+	// Start active recordings on both s1 and s2, filling the 2*size session memory budget.
+	if _, err := m.Handle(ctx, payload("ram_start", map[string]any{"surface_id": "s1", "recording_id": "rec-s1", "ring_bytes": size, "max_fps": 20})); err != nil {
+		t.Fatal(err)
+	}
+	ev1, err := m.Poll(ctx, "poll-s1", "rec-s1")
+	if err != nil || len(ev1) != 1 {
+		t.Fatalf("poll s1: %+v %v", ev1, err)
+	}
+	ownedS1 := ev1[0].RAMPath
+
+	runner.reply = update(t, reply, map[string]any{"seq": 2, "generation": 2, "capture_mono_ns": 2_000_000_100})
+	if _, err := m.Handle(ctx, payload("ram_start", map[string]any{"surface_id": "s2", "recording_id": "rec-s2", "ring_bytes": size, "max_fps": 20})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Poll(ctx, "poll-s2", "rec-s2"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Budget is now full; starting a second recording on s2 is refused with BUDGET_EXCEEDED.
+	overEvents, err := m.Handle(ctx, payload("ram_start", map[string]any{"surface_id": "s2", "recording_id": "rec-over", "ring_bytes": size, "max_fps": 20}))
+	requireRefused(t, overEvents, err)
+	if overEvents[0].ReasonCode != "BUDGET_EXCEEDED" {
+		t.Fatalf("expected BUDGET_EXCEEDED before surface destroy, got %+v", overEvents)
+	}
+
+	// Negative control: Release on genuinely active recording on admitted surface s2 still returns ErrActiveRecording.
+	if err := releaseCapture(t, m, "rec-s2"); !errors.Is(err, ErrActiveRecording) {
+		t.Fatalf("Release on active recording on admitted surface = %v, want ErrActiveRecording", err)
+	}
+
+	// Destroy surface s1 via UnregisterSurface; active recording rec-s1 is sealed/cleaned up and Release succeeds.
+	if err := m.UnregisterSurface("s1"); err != nil {
+		t.Fatalf("UnregisterSurface s1 failed: %v", err)
+	}
+	if err := releaseCapture(t, m, "rec-s1"); err != nil {
+		t.Fatalf("Release after UnregisterSurface failed: %v", err)
+	}
+	if _, err := os.Stat(ownedS1); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("owned RAM frame on destroyed surface was not removed: %v", err)
+	}
+
+	// Starting a new recording on s2 that requires the freed memory reservation now succeeds.
+	started, err := m.Handle(ctx, payload("ram_start", map[string]any{"surface_id": "s2", "recording_id": "rec-s2-after", "ring_bytes": size, "max_fps": 20}))
+	if err != nil || len(started) != 1 || started[0].Event != "started" {
+		t.Fatalf("new recording after UnregisterSurface + Release failed: %+v %v", started, err)
+	}
+}
+
+func TestUnregisterSurfaceReportsRemoveErrorAccountsReservationAndRetries(t *testing.T) {
+	source, reply, size := fixture(t)
+	runner := &fakeRunner{reply: reply}
+	framesRoot := filepath.Dir(source)
+	m, err := NewManager(Config{
+		Runner:   runner,
+		Clock:    func() uint64 { return 10 },
+		OriginNS: 100,
+		BinDir:   t.TempDir(),
+		Surfaces: map[string]Surface{
+			"s1": {Family: "srf-identity-surface", Container: "capsule", Window: "w1", FramesRoot: framesRoot},
+			"s2": {Family: "srf-identity-surface", Container: "capsule", Window: "w1", FramesRoot: framesRoot},
+		},
+		MemoryBytes: size,
+		RingBytes:   size,
+		MaxFPS:      30,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+	ctx := context.Background()
+
+	if _, err := m.Handle(ctx, payload("ram_start", map[string]any{"surface_id": "s1", "recording_id": "rec-s1", "ring_bytes": size, "max_fps": 20})); err != nil {
+		t.Fatal(err)
+	}
+	ev, err := m.Poll(ctx, "poll-s1", "rec-s1")
+	if err != nil || len(ev) != 1 {
+		t.Fatalf("poll s1: %+v %v", ev, err)
+	}
+	ownedPath := ev[0].RAMPath
+
+	// Drop write permission on the manager root so os.Remove fails during UnregisterSurface.
+	if err := os.Chmod(m.root, 0500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(m.root, 0700) })
+
+	if err := m.UnregisterSurface("s1"); err == nil {
+		t.Fatal("expected UnregisterSurface to return Remove error when root is non-writable")
+	}
+	if _, err := os.Stat(ownedPath); err != nil {
+		t.Fatalf("expected owned copy to still exist after failed unlink: %v", err)
+	}
+	// While the owned copy remains on disk, its reservation is still accounted.
+	overEvents, overErr := m.Handle(ctx, payload("ram_start", map[string]any{"surface_id": "s2", "recording_id": "rec-s2-blocked", "ring_bytes": size, "max_fps": 20}))
+	requireRefused(t, overEvents, overErr)
+	if overEvents[0].ReasonCode != "BUDGET_EXCEEDED" {
+		t.Fatalf("expected BUDGET_EXCEEDED while failed unlink retains reservation, got %+v", overEvents)
+	}
+
+	// Restore write permission and retry UnregisterSurface: copy is unlinked and reservation freed.
+	if err := os.Chmod(m.root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.UnregisterSurface("s1"); err != nil {
+		t.Fatalf("retry UnregisterSurface failed: %v", err)
+	}
+	if _, err := os.Stat(ownedPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected owned copy to be unlinked on retry, got %v", err)
+	}
+	started, err := m.Handle(ctx, payload("ram_start", map[string]any{"surface_id": "s2", "recording_id": "rec-s2-ok", "ring_bytes": size, "max_fps": 20}))
+	if err != nil || len(started) != 1 || started[0].Event != "started" {
+		t.Fatalf("expected new recording to succeed after retry freed reservation: %+v %v", started, err)
+	}
+}
