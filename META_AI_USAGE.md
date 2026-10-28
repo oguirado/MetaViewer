@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 368 | 55 | 313 |
-| Lanes finished OK | 368 | 55 | 313 |
-| Agent steps | 20,483 | 2,705 | 17,778 |
-| Lane-hours of agent work | 53.3 | 5.2 | 48.0 |
-| Fresh input tokens | 82,413,507 | 11,482,034 | 70,931,473 |
-| Cache-read input tokens | 1,944,027,606 | 226,255,212 | 1,717,772,394 |
-| Prompt cache hit % | 95.9 | 95.2 | 96.0 |
-| Output tokens | 18,038,649 | 2,135,708 | 15,902,941 |
-| Thinking tokens | 9,662,577 | 1,050,039 | 8,612,538 |
-| Cost (USD) | 15.7371 | 2.0279 | 13.7093 |
-| Cost per lane (USD) | 0.0428 | 0.0369 | 0.0438 |
+| Lanes launched | 372 | 55 | 317 |
+| Lanes finished OK | 372 | 55 | 317 |
+| Agent steps | 20,858 | 2,705 | 18,153 |
+| Lane-hours of agent work | 54.5 | 5.2 | 49.2 |
+| Fresh input tokens | 83,926,429 | 11,482,034 | 72,444,395 |
+| Cache-read input tokens | 1,995,497,444 | 226,255,212 | 1,769,242,232 |
+| Prompt cache hit % | 96.0 | 95.2 | 96.1 |
+| Output tokens | 18,404,029 | 2,135,708 | 16,268,321 |
+| Thinking tokens | 9,878,428 | 1,050,039 | 8,828,389 |
+| Cost (USD) | 16.0644 | 2.0279 | 14.0366 |
+| Cost per lane (USD) | 0.0432 | 0.0369 | 0.0443 |
 
-Rooms: 103. Peak concurrent lanes [MEASURED from lane start/end]: 24.
+Rooms: 107. Peak concurrent lanes [MEASURED from lane start/end]: 24.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -43,9 +43,10 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
 | docs | 15 | 94.8 | 0.5371 |
-| fix | 44 | 96.8 | 2.435 |
+| fix | 45 | 96.8 | 2.5179 |
 | kit | 3 | 96.5 | 0.1997 |
 | ops | 4 | 88.1 | 0.0468 |
+| perf | 1 | 97.6 | 0.0694 |
 | plan | 12 | 92.6 | 0.3072 |
 | release | 5 | 93.2 | 0.0945 |
 | research | 14 | 94.6 | 0.5673 |
@@ -53,7 +54,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | submission | 4 | 94.9 | 0.0995 |
 | test | 12 | 95.6 | 0.5657 |
 | testing | 73 | 96.1 | 3.1874 |
-| ui | 19 | 96.7 | 1.429 |
+| ui | 21 | 96.7 | 1.6041 |
 | vision | 8 | 97.2 | 0.537 |
 
 ## By room (why and what for)
@@ -163,6 +164,10 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui26c | UI orchestrator | Oct 28 04:02 | fix | 1 | 94.1 | 0.0213 | Making the tile scheduler load synchronously (hosted e2e race) broke four data-URL mutant test harnesses; relink them so the combined input drop gates green with oracles unchanged. |
 | mvui27 | UI orchestrator | Oct 28 04:40 | fix | 1 | 97.0 | 0.0599 | Live run: in READ mode a click on the capsule picture in the multislot still scrolls the MetaViewer page out of view; find the cause and stop tile canvas clicks from scrolling the page in every mode. |
 | mvui28 | UI orchestrator | Oct 28 05:29 | fix | 1 | 96.3 | 0.0408 | Human input refusals now arrive asynchronously from the adapter through a new host input result event; show them in Activity exactly once per batch so the operator sees why typing did not reach the capsule. |
+| mvui29 | UI orchestrator | Oct 28 08:15 | ui | 1 | 97.3 | 0.091 | AC-06 is PARTIAL: no real terminal session, provider menu or Copy capsule ID was ever seen working on the real app; complete the renderer path and list host gaps so the host lands its part together. |
+| mvui29s | UI orchestrator | Oct 28 08:16 | ui | 1 | 96.2 | 0.0841 | AC-08 is PARTIAL: settings persistence across a restart was never shown live; complete load-at-boot and save-on-change in the renderer and list host gaps for the on-disk side. |
+| mvui30 | UI orchestrator | Oct 28 08:17 | fix | 1 | 97.3 | 0.0829 | AC-03: a lost capsule shows 'Connecting to surface' forever because App erases the backend lost signal; show the last frame frozen with a Lost badge so the operator sees what was lost. |
+| mvui31 | UI orchestrator | Oct 28 08:19 | perf | 1 | 97.6 | 0.0694 | AC-02 needs 4 capsules at >= 10 fps at live size; the renderer present path (per-frame RGBA conversion, ImageData allocation, wrong cost accounting, redundant re-hash) is the largest cost. |
 
 ## Every lane
 
@@ -536,6 +541,10 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui26c | H | relink data-URL harnesses | Oct 28 04:02 | yes | 37 | 94.1 | 0.021259 |
 | mvui27 | S | no page scroll from tile canvas clicks in any mode | Oct 28 04:40 | yes | 89 | 97.0 | 0.059937 |
 | mvui28 | R | input results into refusals, deduped | Oct 28 05:29 | yes | 63 | 96.3 | 0.040822 |
+| mvui29 | T | terminal sessions live: provider menu, real session, Copy capsule ID | Oct 28 08:15 | yes | 100 | 97.3 | 0.090997 |
+| mvui29s | S | settings load at boot and save on change, restart-safe | Oct 28 08:16 | yes | 80 | 96.2 | 0.084067 |
+| mvui30 | L | lost state: frozen last frame with Lost badge | Oct 28 08:17 | yes | 96 | 97.3 | 0.082854 |
+| mvui31 | P | fast present path at 1280x900 | Oct 28 08:19 | yes | 99 | 97.6 | 0.069391 |
 
 ## Method
 

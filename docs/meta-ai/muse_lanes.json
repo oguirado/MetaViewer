@@ -1,17 +1,17 @@
 {
  "schema": "metaviewer.meta_ai_usage/v1",
  "totals": {
-  "lanes": 368,
-  "ok": 368,
-  "input_tokens": 82413507,
-  "cache_read_tokens": 1944027606,
-  "output_tokens": 18038649,
-  "thinking_tokens": 9662577,
-  "cache_hit_pct": 95.9,
-  "usd": 15.7371,
-  "usd_per_lane": 0.0428,
-  "steps": 20483,
-  "lane_hours": 53.3
+  "lanes": 372,
+  "ok": 372,
+  "input_tokens": 83926429,
+  "cache_read_tokens": 1995497444,
+  "output_tokens": 18404029,
+  "thinking_tokens": 9878428,
+  "cache_hit_pct": 96.0,
+  "usd": 16.0644,
+  "usd_per_lane": 0.0432,
+  "steps": 20858,
+  "lane_hours": 54.5
  },
  "peak_concurrent_lanes": 24,
  "rooms": {
@@ -78,6 +78,11 @@
   "mvui21": {
    "stage": "fix",
    "why": "URGENT: frame tests bound async waits by setImmediate turns and flake on loaded hosts, reddening unrelated integration gates; bound them by wall-clock deadlines (test-only).",
+   "orchestrator": "UI orchestrator"
+  },
+  "mvui29b": {
+   "stage": "fix",
+   "why": "Finish AC-06 terminal sessions in the renderer: the first pass ran out of budget with type errors, no App/main wiring and a port not yet matching the host API the host owner fixed.",
    "orchestrator": "UI orchestrator"
   },
   "mvui14": {
@@ -213,6 +218,11 @@
   "mvui29": {
    "stage": "ui",
    "why": "AC-06 is PARTIAL: no real terminal session, provider menu or Copy capsule ID was ever seen working on the real app; complete the renderer path and list host gaps so the host lands its part together.",
+   "orchestrator": "UI orchestrator"
+  },
+  "mvui29sb": {
+   "stage": "fix",
+   "why": "Host owner ruling for AC-08: the host keeps a closed settings key set, so the renderer must drop unknown keys instead of round-tripping them.",
    "orchestrator": "UI orchestrator"
   },
   "mvui25d": {
@@ -8334,6 +8344,90 @@
    "thinking_tokens": 31127,
    "cache_hit_pct": 96.3,
    "usd": 0.040822
+  },
+  {
+   "room": "mvui29",
+   "lane": "T",
+   "title": "terminal sessions live: provider menu, real session, Copy capsule ID",
+   "stage": "ui",
+   "model": "muse-spark-1.3",
+   "orchestrator": "UI orchestrator",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-28T07:15:57.077000+00:00",
+   "duration_s": 1160.0,
+   "end_utc": "2026-10-28T07:35:17.108000+00:00",
+   "phase": "build",
+   "steps": 100,
+   "input_tokens": 412247,
+   "cache_read_tokens": 14963507,
+   "output_tokens": 99227,
+   "thinking_tokens": 56631,
+   "cache_hit_pct": 97.3,
+   "usd": 0.090997
+  },
+  {
+   "room": "mvui29s",
+   "lane": "S",
+   "title": "settings load at boot and save on change, restart-safe",
+   "stage": "ui",
+   "model": "muse-spark-1.3",
+   "orchestrator": "UI orchestrator",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-28T07:16:26.860000+00:00",
+   "duration_s": 1034.7,
+   "end_utc": "2026-10-28T07:33:41.572000+00:00",
+   "phase": "build",
+   "steps": 80,
+   "input_tokens": 437435,
+   "cache_read_tokens": 11226877,
+   "output_tokens": 89347,
+   "thinking_tokens": 55861,
+   "cache_hit_pct": 96.2,
+   "usd": 0.084067
+  },
+  {
+   "room": "mvui30",
+   "lane": "L",
+   "title": "lost state: frozen last frame with Lost badge",
+   "stage": "fix",
+   "model": "muse-spark-1.3",
+   "orchestrator": "UI orchestrator",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-28T07:17:32.189000+00:00",
+   "duration_s": 1114.8,
+   "end_utc": "2026-10-28T07:36:07.007000+00:00",
+   "phase": "build",
+   "steps": 96,
+   "input_tokens": 370568,
+   "cache_read_tokens": 13492877,
+   "output_tokens": 94055,
+   "thinking_tokens": 58911,
+   "cache_hit_pct": 97.3,
+   "usd": 0.082854
+  },
+  {
+   "room": "mvui31",
+   "lane": "P",
+   "title": "fast present path at 1280x900",
+   "stage": "perf",
+   "model": "muse-spark-1.3",
+   "orchestrator": "UI orchestrator",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-28T07:19:15.179000+00:00",
+   "duration_s": 985.2,
+   "end_utc": "2026-10-28T07:35:40.362000+00:00",
+   "phase": "build",
+   "steps": 99,
+   "input_tokens": 292672,
+   "cache_read_tokens": 11786577,
+   "output_tokens": 82751,
+   "thinking_tokens": 44448,
+   "cache_hit_pct": 97.6,
+   "usd": 0.069391
   }
  ]
 }
