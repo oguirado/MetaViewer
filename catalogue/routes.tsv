@@ -1399,6 +1399,7 @@ mvui31m-de6c1f5eacb3	ui/test/mvui31-marker-skip.test.js
 mvui32a-f66ab8279aac	ui/test/mvui32-a-layout-echo.test.js
 mvui32i-c0796b1dcbc7	ui/test/mvui32-i-canvas.test.js
 mvui32-i-port.test.js	ui/test/mvui32-i-port.test.js
+mvui32l-2c21bc24d12c	ui/test/mvui32-l-lost-e2e.test.js
 mvui32q-17824ab4e66d	ui/test/mvui32-q-maxwait.test.js
 mvui32s-c1d201da6a36	ui/test/mvui32-s-attach-eligibility.test.js
 mvui4wa-768ad3f201a7	ui/test/mvui4-wall-states.test.js
