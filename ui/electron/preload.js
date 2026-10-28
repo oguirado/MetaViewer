@@ -2,6 +2,8 @@
  * MetaViewer bootstrap preload facade (sandbox-loadable).
  * [TARGET, unit decision] Snapshot trusted native lazy exports at the CJS
  * entry; retain accessor rejection for injected installPreload dependencies.
+ * [TARGET, unit decision] Bound per-surface input queues to 64 entries and
+ * evict unknown/unadmitted surface IDs on SURFACE_UNKNOWN refusal.
  *
  * A closed two-method facade over injected transport/bridge handles for the
  * starter layout only: the renderer receives narrow load/save domain methods
@@ -511,6 +513,7 @@ const SURFACE_INPUT_MAX_BYTES = 16 * 1024;
 const SURFACE_INPUT_MAX_TEXT = 1024;
 const SURFACE_INPUT_MAX_QUEUE_EVENTS = 256;
 const SURFACE_INPUT_TYPE_COALESCE_MS = 20;
+const SURFACE_INPUT_MAX_SURFACES = 64;
 /** @param {unknown} raw @returns {{ok:true,batch:any}|{ok:false,code:'SCHEMA'|'LIMIT'}} */
 function validateSurfaceInputBatch(raw) {
   if (!captureKeys(raw, 'events,schema,seq,stream_id,surface_id')
@@ -925,6 +928,9 @@ function wireFacade(transport) {
             item.resolve(itemOut);
           }
         } else {
+          if (out.code==='SURFACE_UNKNOWN' && qState.lastSeq===0 && qState.queue.length===0) {
+            surfaceInputQueues.delete(sid);
+          }
           const failOut=Object.freeze({ok:false,code:out.code});
           for (const item of batchGroup) {
             emitInputResult(sid,item.batch.seq,failOut);
@@ -962,6 +968,29 @@ function wireFacade(transport) {
       }
       let qState=surfaceInputQueues.get(sid);
       if (!qState) {
+        if (surfaceInputQueues.size>=SURFACE_INPUT_MAX_SURFACES) {
+          let evicted=false;
+          for (const [k,v] of surfaceInputQueues) {
+            if (!v.draining && v.queue.length===0 && v.inFlightMaxSeq===0 && v.lastSeq===0) {
+              surfaceInputQueues.delete(k);
+              evicted=true;
+              break;
+            }
+          }
+          if (!evicted) {
+            for (const [k,v] of surfaceInputQueues) {
+              if (!v.draining && v.queue.length===0 && v.inFlightMaxSeq===0) {
+                surfaceInputQueues.delete(k);
+                evicted=true;
+                break;
+              }
+            }
+          }
+          if (!evicted) {
+            const oldest=surfaceInputQueues.keys().next().value;
+            if (oldest!==undefined) surfaceInputQueues.delete(oldest);
+          }
+        }
         qState={lastSeq:0,inFlightMaxSeq:0,draining:false,lastIpcAt:0,ipcStamps:[],queue:[]};
         surfaceInputQueues.set(sid,qState);
       }
@@ -1036,7 +1065,14 @@ function wireFacade(transport) {
           diagLastSurfaceId=captureId(sid) ? sid : null;
           diagLastFrameGeneration=value.frame_ref.generation;
           if (ports?.length) diagPortsReceived+=1;
-          if (inWallApp && !seededCaptureSurfaces.has(sid) && captureId(sid)) {
+          if (['destroyed','lost'].includes(value.surface.state)) {
+            surfaceInputQueues.delete(sid);
+            seededCaptureSurfaces.delete(sid);
+          } else if (inWallApp && !seededCaptureSurfaces.has(sid) && captureId(sid)) {
+            if (seededCaptureSurfaces.size>=SURFACE_INPUT_MAX_SURFACES) {
+              const oldest=seededCaptureSurfaces.values().next().value;
+              if (oldest!==undefined) seededCaptureSurfaces.delete(oldest);
+            }
             seededCaptureSurfaces.add(sid);
             const initCapture=Object.freeze({type:'capture.state',recording_id:'idle',surface_id:sid,phase:'idle',frames:0,elapsed_ms:0});
             for (const notifyCapture of [...captureCallbacks]) {

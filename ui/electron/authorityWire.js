@@ -5,6 +5,8 @@
  * Side-terminal commands are host-owned profile IDs and exact argv matches.
  * Frame stream cap = 64 [TARGET, unit decision]; stream lifetimes follow the
  * existing port revocation/ACK deadlines and the main window's teardown.
+ * [TARGET, unit decision] Bound per-surface input rate/sequence maps to
+ * MAX_ITEMS = 64 and evict unknown/unadmitted surface IDs on SURFACE_UNKNOWN refusal.
  */
 import { open, mkdir, rename, unlink, lstat, realpath } from 'node:fs/promises';
 import { constants, realpathSync, statSync } from 'node:fs';
@@ -81,6 +83,27 @@ const SURFACE_INPUT_CODE_SET = new Set(SURFACE_INPUT_CODES);
 const SURFACE_INPUT_MAX_EVENTS = 32;
 const SURFACE_INPUT_MAX_BYTES = 16 * 1024;
 const SURFACE_INPUT_MAX_BATCHES_PER_SEC = 60;
+const SURFACE_INPUT_MAX_SURFACES = 64;
+/** @template V @param {Map<string,V>} map @param {string} key @param {V} value @param {Map<string,number>} [admitted] @param {Map<string,number>} [inFlight] */
+function setBoundedSurfaceEntry(map, key, value, admitted, inFlight) {
+  if (!map.has(key) && map.size >= SURFACE_INPUT_MAX_SURFACES) {
+    let evicted = false;
+    if (admitted || inFlight) {
+      for (const k of map.keys()) {
+        if (!admitted?.has(k) && !inFlight?.has(k)) {
+          map.delete(k);
+          evicted = true;
+          break;
+        }
+      }
+    }
+    if (!evicted) {
+      const oldest = map.keys().next().value;
+      if (oldest !== undefined) map.delete(oldest);
+    }
+  }
+  map.set(key, value);
+}
 /** @param {string} text */
 function isWellFormedString(text) {
   for (let i = 0; i < text.length; i += 1) {
@@ -347,7 +370,7 @@ export function nestedIdentity(argv,env) {
   return {depth:flags.length ? Number(flags[0].slice(-1)) : null,self};
 }
 /** @param {any} options */
-export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv=process.argv.slice(1),terminal=null,profiles=new Map(),frames=null,frameDiag=null}) {
+export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv=process.argv.slice(1),terminal=null,profiles=new Map(),frames=null,frameDiag=null,now:clock=Date.now}) {
   if (terminal?.request && terminal?.subscribe) terminal=createSideTerminalAdapter(terminal);
   const store = createSettingsStore(env);
   const destination = recordingDestination(env);
@@ -362,6 +385,8 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
   let subscribed = false, enabled = false, disposed = false;
   /** @type {Map<string,number>} */ const inputLastSeq = new Map();
   /** @type {Map<string,number>} */ const inputInFlightSeq = new Map();
+  /** @type {Map<string,number>} */ const inputPartialSeq = new Map();
+  /** @type {Map<string,number>} */ const inputPartialApplied = new Map();
   /** @type {Map<string,number[]>} */ const inputRateWindow = new Map();
   const handlers = {
     loadSettings: async () => store.load(),
@@ -464,31 +489,100 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     if (!checked.ok) return Object.freeze({ ok: false, code: checked.code });
     const batch = checked.batch;
     const sid = batch.surface_id;
-    const prevSeq = Math.max(inputLastSeq.get(sid) ?? 0, inputInFlightSeq.get(sid) ?? 0);
-    if (batch.seq <= prevSeq) return Object.freeze({ ok: false, code: 'SCHEMA' });
-    const now = Date.now();
-    const recent = (inputRateWindow.get(sid) ?? []).filter(t => now - t < 1000);
+    const lastSeq = inputLastSeq.get(sid) ?? 0;
+    const inFlight = inputInFlightSeq.get(sid) ?? 0;
+    const pSeq = inputPartialSeq.get(sid) ?? 0;
+    const pApplied = inputPartialApplied.get(sid) ?? 0;
+    const prevSeq = Math.max(lastSeq, inFlight);
+    const isRetryPartial = pSeq > 0 && pApplied > 0 && batch.seq === pSeq && inFlight === 0;
+    if (batch.seq <= prevSeq || (pSeq > 0 && batch.seq < pSeq) || (isRetryPartial && batch.events.length <= pApplied)) {
+      return Object.freeze({ ok: false, code: 'SCHEMA' });
+    }
+    const now = typeof clock === 'function' ? clock() : Date.now();
+    const priorRate = inputRateWindow.get(sid);
+    const recent = (priorRate ?? []).filter(t => now - t < 1000);
     if (recent.length >= SURFACE_INPUT_MAX_BATCHES_PER_SEC) {
-      inputRateWindow.set(sid, recent);
+      setBoundedSurfaceEntry(inputRateWindow, sid, recent, inputLastSeq, inputInFlightSeq);
       return Object.freeze({ ok: false, code: 'LIMIT' });
     }
+    const hadRateEntry = priorRate !== undefined && recent.length > 0;
     recent.push(now);
-    inputRateWindow.set(sid, recent);
-    inputInFlightSeq.set(sid, batch.seq);
-    try {
-      const reply = await core.request({ op: 'input', batch });
-      if (exactDataKeys(reply, 'accepted,ok') && reply.ok === true
-          && Number.isSafeInteger(reply.accepted) && reply.accepted >= 1 && reply.accepted <= batch.events.length) {
-        inputLastSeq.set(sid, batch.seq);
-        return Object.freeze({ ok: true, accepted: reply.accepted });
+    if (pSeq > 0 && batch.seq > pSeq) {
+      setBoundedSurfaceEntry(inputLastSeq, sid, Math.max(lastSeq, pSeq), inputLastSeq, inputInFlightSeq);
+      inputPartialSeq.delete(sid);
+      inputPartialApplied.delete(sid);
+    }
+    setBoundedSurfaceEntry(inputRateWindow, sid, recent, inputLastSeq, inputInFlightSeq);
+    setBoundedSurfaceEntry(inputInFlightSeq, sid, batch.seq, inputLastSeq, inputInFlightSeq);
+    const coreTracksProgress = typeof core?.getInputProgress === 'function';
+    const baseApplied = isRetryPartial && !coreTracksProgress ? pApplied : 0;
+    const coreBatch = baseApplied > 0
+      ? Object.freeze({ ...batch, events: Object.freeze(batch.events.slice(baseApplied)) })
+      : batch;
+    const syncCoreProgress = () => {
+      if (!coreTracksProgress) return false;
+      const prog = core.getInputProgress(sid);
+      if (prog && Number.isSafeInteger(prog.partialSeq) && prog.partialSeq > 0
+          && Number.isSafeInteger(prog.partialApplied) && prog.partialApplied > 0) {
+        setBoundedSurfaceEntry(inputPartialSeq, sid, prog.partialSeq, inputLastSeq, inputInFlightSeq);
+        setBoundedSurfaceEntry(inputPartialApplied, sid, prog.partialApplied, inputLastSeq, inputInFlightSeq);
+        if (Number.isSafeInteger(prog.lastSeq) && prog.lastSeq > 0) {
+          setBoundedSurfaceEntry(inputLastSeq, sid, prog.lastSeq, inputLastSeq, inputInFlightSeq);
+        }
+        return true;
       }
-      if (exactDataKeys(reply, 'code,ok') && reply.ok === false) {
-        return Object.freeze({ ok: false, code: mapSurfaceInputRefusal(reply.code) });
+      if (prog) {
+        inputPartialSeq.delete(sid);
+        inputPartialApplied.delete(sid);
+      }
+      return false;
+    };
+    try {
+      const reply = await core.request({ op: 'input', batch: coreBatch });
+      if (exactDataKeys(reply, 'accepted,ok') && reply.ok === true
+          && Number.isSafeInteger(reply.accepted) && reply.accepted >= 1 && reply.accepted <= coreBatch.events.length) {
+        inputPartialSeq.delete(sid);
+        inputPartialApplied.delete(sid);
+        setBoundedSurfaceEntry(inputLastSeq, sid, batch.seq, inputLastSeq, inputInFlightSeq);
+        const totalAccepted = baseApplied > 0 && reply.accepted === coreBatch.events.length
+          ? batch.events.length
+          : reply.accepted;
+        return Object.freeze({ ok: true, accepted: totalAccepted });
+      }
+      if ((exactDataKeys(reply, 'code,ok') || exactDataKeys(reply, 'applied,code,ok')) && reply.ok === false) {
+        const synced = syncCoreProgress();
+        if (!synced && Number.isSafeInteger(reply.applied) && reply.applied > 0
+            && baseApplied + reply.applied < batch.events.length) {
+          setBoundedSurfaceEntry(inputPartialSeq, sid, batch.seq, inputLastSeq, inputInFlightSeq);
+          setBoundedSurfaceEntry(inputPartialApplied, sid, baseApplied + reply.applied, inputLastSeq, inputInFlightSeq);
+          if (batch.seq > 1) {
+            setBoundedSurfaceEntry(inputLastSeq, sid, Math.max(inputLastSeq.get(sid) ?? 0, batch.seq - 1), inputLastSeq, inputInFlightSeq);
+          }
+        }
+        const mapped = mapSurfaceInputRefusal(reply.code);
+        if (mapped === 'SURFACE_UNKNOWN' && !hadRateEntry && !inputLastSeq.has(sid) && !inputPartialSeq.has(sid)) {
+          inputRateWindow.delete(sid);
+        }
+        return Object.freeze({ ok: false, code: mapped });
       }
       return Object.freeze({ ok: false, code: 'CORE_UNAVAILABLE' });
     } catch (error) {
+      const synced = syncCoreProgress();
+      const errApplied = /** @type {any} */ (error)?.applied;
+      if (!synced && Number.isSafeInteger(errApplied) && errApplied > 0
+          && baseApplied + errApplied < batch.events.length) {
+        setBoundedSurfaceEntry(inputPartialSeq, sid, batch.seq, inputLastSeq, inputInFlightSeq);
+        setBoundedSurfaceEntry(inputPartialApplied, sid, baseApplied + errApplied, inputLastSeq, inputInFlightSeq);
+        if (batch.seq > 1) {
+          setBoundedSurfaceEntry(inputLastSeq, sid, Math.max(inputLastSeq.get(sid) ?? 0, batch.seq - 1), inputLastSeq, inputInFlightSeq);
+        }
+      }
       const errCode = /** @type {any} */ (error)?.code ?? /** @type {any} */ (error)?.message;
-      return Object.freeze({ ok: false, code: mapSurfaceInputRefusal(errCode) });
+      const mapped = mapSurfaceInputRefusal(errCode);
+      if (mapped === 'SURFACE_UNKNOWN' && !hadRateEntry && !inputLastSeq.has(sid) && !inputPartialSeq.has(sid)) {
+        inputRateWindow.delete(sid);
+      }
+      return Object.freeze({ ok: false, code: mapped });
     } finally {
       inputInFlightSeq.delete(sid);
     }
@@ -530,6 +624,11 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     } else if (!entry.stateOnly && prior && (prior.stateOnly || prior.stateUpdated) && !['destroyed','lost'].includes(prior?.state?.state)) {
       const freshState = typeof entry.resolveLatestState === 'function' ? (entry.resolveLatestState() ?? prior.state) : prior.state;
       pendingEntries.set(sid, {...entry, state: freshState, stateUpdated: true});
+    } else if (!entry.stateOnly && prior && !prior.stateOnly
+        && Number.isSafeInteger(prior.frameRef?.generation)
+        && Number.isSafeInteger(entry.frameRef?.generation)
+        && entry.frameRef.generation < prior.frameRef.generation) {
+      return;
     } else {
       pendingEntries.set(sid, entry);
     }
@@ -574,24 +673,43 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
       return;
     }
     if (subscribed && entry?.stateOnly && isTerminal && typeof sid === 'string') {
+      inputLastSeq.delete(sid);
+      inputInFlightSeq.delete(sid);
+      inputPartialSeq.delete(sid);
+      inputPartialApplied.delete(sid);
+      inputRateWindow.delete(sid);
       pendingEntries.delete(sid);
       stageEntry(entry);
       await closeSurfaceStreams(streams, sid);
       await drainPendingEntries();
       return;
     }
+    if (isTerminal && typeof sid === 'string') {
+      inputLastSeq.delete(sid);
+      inputInFlightSeq.delete(sid);
+      inputPartialSeq.delete(sid);
+      inputPartialApplied.delete(sid);
+      inputRateWindow.delete(sid);
+    }
     stageEntry(entry);
     if (!subscribed) return;
     await drainPendingEntries();
   }) : () => {};
-  return {async dispose() { disposed=true; subscribed=false; stopFrames();
-    pendingEntries.clear();
-    for(const stream of [...streams]) {
-      try { await stream.reader.closeReader(); } catch {}
-      finally { stream.port.revokeFramePort('SHUTDOWN'); }
-    }
-    streams.clear();terminal?.dispose?.();for(const channel of channels) ipcMain.removeHandler?.(channel);
-  }};
+  return {
+    inputRateWindow,
+    inputLastSeq,
+    inputInFlightSeq,
+    inputPartialSeq,
+    inputPartialApplied,
+    async dispose() { disposed=true; subscribed=false; stopFrames();
+      pendingEntries.clear();
+      for(const stream of [...streams]) {
+        try { await stream.reader.closeReader(); } catch {}
+        finally { stream.port.revokeFramePort('SHUTDOWN'); }
+      }
+      streams.clear();terminal?.dispose?.();for(const channel of channels) ipcMain.removeHandler?.(channel);
+    },
+  };
 }
 /** @param {unknown} key @returns {string | null} */
 function streamKeySurfaceId(key) {

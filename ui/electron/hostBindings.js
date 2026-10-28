@@ -9,8 +9,10 @@
  * Bounds [TARGET, unit decision]: 1 MiB wire/config, 64 surfaces/pending calls,
  * 64 MiB frame, 4096 pixels per axis, 3 s request/hello deadline.
  * [TARGET, unit decision] Coalesce in-flight frame_ready deliveries per surface
- * to the latest published frame_ref so main always reads the newest generation;
- * classify acquire failures with closed cause tokens without paths or bytes.
+ * to the max published generation so older out-of-order arrivals never overwrite
+ * a newer pending generation; classify acquire failures with closed cause tokens
+ * without paths or bytes; record per-(surface, seq) applied-prefix progress floor
+ * so retried partially-applied input batches skip already-applied prefix primitives.
  */
 import { INTENT_OPS, mapSurfaceInputRefusal, recordingDestination, validateIntentBody, validateSurfaceInputBatch } from './authorityWire.js';
 export { INTENT_OPS };
@@ -173,8 +175,9 @@ export async function createMainBindings({env = process.env, createMessageChanne
     /** @type {Set<string>} */ const subscriptions = new Set();
     /** @type {Set<string>} */ const delivering = new Set();
     /** @type {Set<string>} */ const pendingDeliveries = new Set();
+    /** @type {Map<string,number>} */ const failedFrameGenerations = new Map();
     /** @type {Map<string,{body:any,resolve:(value:any)=>void,reject:(error:Error)=>void,timer:ReturnType<typeof setTimeout>}>} */ const pending = new Map();
-    /** @type {Map<string,{lastSeq:number,inFlightSeq:number,draining:boolean,queue:Array<{batch:any,events:any[],resolve:(value:any)=>void}>}>} */ const surfaceInputQueues = new Map();
+    /** @type {Map<string,{lastSeq:number,inFlightSeq:number,partialSeq:number,partialApplied:number,draining:boolean,queue:Array<{batch:any,events:any[],applied:number,resolve:(value:any)=>void}>}>} */ const surfaceInputQueues = new Map();
     const nonInputPendingCount = () => {
       let count = 0;
       for (const item of pending.values()) {
@@ -201,7 +204,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
       }
       surfaceInputQueues.clear();
       for (const channel of channels.values()) {channel.port1.close();channel.port2.close();}
-      channels.clear();surfaces.clear();latestFrames.clear();streamIds.clear();subscriptions.clear();delivering.clear();pendingDeliveries.clear();listeners.clear();captureListeners.clear();
+      channels.clear();surfaces.clear();latestFrames.clear();streamIds.clear();subscriptions.clear();delivering.clear();pendingDeliveries.clear();failedFrameGenerations.clear();listeners.clear();captureListeners.clear();
     };
     /** @type {Set<(state:any)=>void>} */ const captureListeners = new Set();
     const helloTimer = setTimeout(shutdown, DEADLINE);
@@ -257,7 +260,13 @@ export async function createMainBindings({env = process.env, createMessageChanne
               }
               throw acquireFail('FRAME_BINDING', 'FRAME_BINDING');
             }
-            const file = await openPinned(published.ramws_path);
+            let file;
+            try {
+              file = await openPinned(published.ramws_path);
+            } catch (error) {
+              failedFrameGenerations.set(published.surface_id, published.generation);
+              throw error;
+            }
             try {
               let info;
               try { info = await file.stat(); } catch { throw acquireFail('STAT_IO'); }
@@ -270,17 +279,38 @@ export async function createMainBindings({env = process.env, createMessageChanne
               return {identity:{...binding,frameGeneration:published.generation,leaseId:randomUUID()},published:true,byteLength:info.size,
                 /** @param {{maxBytes:number,signal:AbortSignal}} read */
                 async readOwnedBytes({maxBytes,signal}) {
-                  if (released || signal.aborted || request.signal.aborted || info.size > maxBytes) throw fail();
+                  if (released || signal.aborted || request.signal.aborted || info.size > maxBytes) {
+                    failedFrameGenerations.set(published.surface_id, published.generation);
+                    throw fail();
+                  }
                   const bytes = Buffer.alloc(info.size + 1);let offset = 0;
                   while (offset < bytes.length) {
-                    if (signal.aborted || request.signal.aborted) throw fail();
+                    if (signal.aborted || request.signal.aborted) {
+                      failedFrameGenerations.set(published.surface_id, published.generation);
+                      throw fail();
+                    }
                     const {bytesRead} = await file.read(bytes,offset,bytes.length-offset,offset);
                     if (!bytesRead) break;offset += bytesRead;
                   }
-                  if (offset !== info.size) throw fail();
+                  if (offset !== info.size) {
+                    failedFrameGenerations.set(published.surface_id, published.generation);
+                    throw fail();
+                  }
                   return new Uint8Array(bytes.subarray(0,offset));
-                },release};
-            } catch(error) {await file.close();throw error;}
+                },
+                /** @param {{reason?:string}} [req] */
+                async release(req) {
+                  if (req?.reason && req.reason !== 'SNAPSHOT_VERIFIED') {
+                    failedFrameGenerations.set(published.surface_id, published.generation);
+                  } else if (failedFrameGenerations.get(published.surface_id) === published.generation) {
+                    failedFrameGenerations.delete(published.surface_id);
+                  }
+                  await release();
+                }};
+            } catch(error) {
+              failedFrameGenerations.set(published.surface_id, published.generation);
+              await file.close();throw error;
+            }
           }},
         portOptions:{port:channel.port1,role:'sender',binding,limits:{maxFrameBytes:MAX_FRAME,ackTimeoutMs:10000,maxSurfacesPerPort:1},onReleaseLease(){},onRevoke(){if(channels.get(published.surface_id)===channel){channels.delete(published.surface_id);streamIds.delete(published.surface_id);}}}};
     }
@@ -309,6 +339,9 @@ export async function createMainBindings({env = process.env, createMessageChanne
           || typeof frame.ramws_path !== 'string' || !frame.ramws_path.startsWith('/dev/shm/')
           || !Number.isSafeInteger(frame.width) || !Number.isSafeInteger(frame.height)
           || frame.width < 1 || frame.height < 1 || frame.width > 4096 || frame.height > 4096) throw fail();
+      const prior = latestFrames.get(frame.surface_id);
+      if (prior && frame.generation < prior.generation && failedFrameGenerations.get(frame.surface_id) !== prior.generation) return;
+      failedFrameGenerations.delete(frame.surface_id);
       const published = Object.freeze({...frame});
       latestFrames.set(frame.surface_id, published);
       if (!streamIds.has(frame.surface_id)) streamIds.set(frame.surface_id, frame.generation);
@@ -382,11 +415,13 @@ export async function createMainBindings({env = process.env, createMessageChanne
         if (['destroyed','lost'].includes(state.state)) {
           if (body.event === 'state_changed') publishState(state);
           surfaces.delete(state.surface_id);
+          surfaceInputQueues.delete(state.surface_id);
           latestFrames.delete(state.surface_id);
           streamIds.delete(state.surface_id);
           subscriptions.delete(state.surface_id);
           delivering.delete(state.surface_id);
           pendingDeliveries.delete(state.surface_id);
+          failedFrameGenerations.delete(state.surface_id);
           const channel = channels.get(state.surface_id);
           if (channel) {
             channels.delete(state.surface_id);
@@ -571,13 +606,18 @@ export async function createMainBindings({env = process.env, createMessageChanne
           const head = qState.queue[0];
           const admissibilityErr = checkSurfaceInputAdmissibility(surfaceId, head.batch.stream_id, head.events);
           if (admissibilityErr !== null) {
+            if (head.applied > 0) {
+              qState.partialSeq = head.batch.seq;
+              qState.partialApplied = head.applied;
+              qState.lastSeq = Math.max(qState.lastSeq, head.batch.seq - 1);
+            }
             qState.queue.shift();
             head.resolve(Object.freeze({ ok: false, code: admissibilityErr }));
             continue;
           }
           const firstEv = head.events[0];
           if (firstEv.kind === 'type') {
-            /** @type {Array<{item: {batch:any,events:any[],resolve:(value:any)=>void}, count: number}>} */
+            /** @type {Array<{item: {batch:any,events:any[],applied:number,resolve:(value:any)=>void}, count: number}>} */
             const consumed = [];
             let coalescedText = '';
             let coalescedBytes = 0;
@@ -615,11 +655,19 @@ export async function createMainBindings({env = process.env, createMessageChanne
               qState.inFlightSeq = 0;
               for (const { item, count } of consumed) {
                 item.events.splice(0, count);
+                item.applied += count;
                 if (item.events.length === 0) {
                   const idx = qState.queue.indexOf(item);
                   if (idx !== -1) qState.queue.splice(idx, 1);
                   qState.lastSeq = Math.max(qState.lastSeq, item.batch.seq);
+                  if (qState.partialSeq <= item.batch.seq) {
+                    qState.partialSeq = 0;
+                    qState.partialApplied = 0;
+                  }
                   item.resolve(Object.freeze({ ok: true, accepted: item.batch.events.length }));
+                } else {
+                  qState.partialSeq = item.batch.seq;
+                  qState.partialApplied = item.applied;
                 }
               }
             } catch (error) {
@@ -627,6 +675,11 @@ export async function createMainBindings({env = process.env, createMessageChanne
               const errCode = /** @type {any} */ (error)?.code ?? /** @type {any} */ (error)?.message;
               const mapped = mapSurfaceInputRefusal(errCode);
               for (const { item } of consumed) {
+                if (item.applied > 0) {
+                  qState.partialSeq = item.batch.seq;
+                  qState.partialApplied = item.applied;
+                  qState.lastSeq = Math.max(qState.lastSeq, item.batch.seq - 1);
+                }
                 const idx = qState.queue.indexOf(item);
                 if (idx !== -1) qState.queue.splice(idx, 1);
                 item.resolve(Object.freeze({ ok: false, code: mapped }));
@@ -643,14 +696,27 @@ export async function createMainBindings({env = process.env, createMessageChanne
               await sendInputActionToCore(surfaceId, action);
               qState.inFlightSeq = 0;
               head.events.shift();
+              head.applied += 1;
               if (head.events.length === 0) {
                 const idx = qState.queue.indexOf(head);
                 if (idx !== -1) qState.queue.splice(idx, 1);
                 qState.lastSeq = Math.max(qState.lastSeq, head.batch.seq);
+                if (qState.partialSeq <= head.batch.seq) {
+                  qState.partialSeq = 0;
+                  qState.partialApplied = 0;
+                }
                 head.resolve(Object.freeze({ ok: true, accepted: head.batch.events.length }));
+              } else {
+                qState.partialSeq = head.batch.seq;
+                qState.partialApplied = head.applied;
               }
             } catch (error) {
               qState.inFlightSeq = 0;
+              if (head.applied > 0) {
+                qState.partialSeq = head.batch.seq;
+                qState.partialApplied = head.applied;
+                qState.lastSeq = Math.max(qState.lastSeq, head.batch.seq - 1);
+              }
               const errCode = /** @type {any} */ (error)?.code ?? /** @type {any} */ (error)?.message;
               const mapped = mapSurfaceInputRefusal(errCode);
               const idx = qState.queue.indexOf(head);
@@ -668,7 +734,18 @@ export async function createMainBindings({env = process.env, createMessageChanne
       subscribeCapture(cb) {
         if(disposed || typeof cb !== 'function' || captureListeners.size >= MAX_ITEMS) throw fail();
         captureListeners.add(cb);return ()=>captureListeners.delete(cb);
-      },start:async()=>getStatus(),getStatus,dispose:async()=>shutdown(),
+      },
+      /** @param {string} surfaceId */
+      getInputProgress(surfaceId) {
+        const qState = surfaceInputQueues.get(surfaceId);
+        if (!qState) return null;
+        return Object.freeze({
+          lastSeq: qState.lastSeq,
+          partialSeq: qState.partialSeq,
+          partialApplied: qState.partialApplied,
+        });
+      },
+      start:async()=>getStatus(),getStatus,dispose:async()=>shutdown(),
       /** @param {any} message */
       async request(message) {
         if (message?.op === 'capture') {
@@ -708,32 +785,45 @@ export async function createMainBindings({env = process.env, createMessageChanne
           if (!checked.ok) return Object.freeze({ ok: false, code: checked.code });
           const batch = checked.batch;
           const sid = batch.surface_id;
-          const admissibilityErr = checkSurfaceInputAdmissibility(sid, batch.stream_id, batch.events);
+          let qState = surfaceInputQueues.get(sid);
+          const highestQueuedSeq = qState && qState.queue.length > 0 ? qState.queue[qState.queue.length - 1].batch.seq : 0;
+          const prevSeq = qState ? Math.max(qState.lastSeq, qState.inFlightSeq, highestQueuedSeq) : 0;
+          const resumeOffset = qState && batch.seq === qState.partialSeq && qState.partialApplied > 0
+            && qState.inFlightSeq === 0 && highestQueuedSeq === 0 ? qState.partialApplied : 0;
+          if (batch.seq <= prevSeq || (qState && qState.partialSeq > 0 && batch.seq < qState.partialSeq)
+              || (resumeOffset > 0 && batch.events.length <= resumeOffset)) {
+            return Object.freeze({ ok: false, code: 'SCHEMA' });
+          }
+          const pendingEvents = resumeOffset > 0 ? batch.events.slice(resumeOffset) : batch.events;
+          const admissibilityErr = checkSurfaceInputAdmissibility(sid, batch.stream_id, pendingEvents);
           if (admissibilityErr !== null) {
             return Object.freeze({ ok: false, code: admissibilityErr });
           }
-          let qState = surfaceInputQueues.get(sid);
           if (!qState) {
-            qState = { lastSeq: 0, inFlightSeq: 0, draining: false, queue: [] };
+            if (surfaceInputQueues.size >= MAX_ITEMS) {
+              const oldest = surfaceInputQueues.keys().next().value;
+              if (oldest !== undefined) surfaceInputQueues.delete(oldest);
+            }
+            qState = { lastSeq: 0, inFlightSeq: 0, partialSeq: 0, partialApplied: 0, draining: false, queue: [] };
             surfaceInputQueues.set(sid, qState);
-          }
-          const highestQueuedSeq = qState.queue.length > 0 ? qState.queue[qState.queue.length - 1].batch.seq : 0;
-          const prevSeq = Math.max(qState.lastSeq, qState.inFlightSeq, highestQueuedSeq);
-          if (batch.seq <= prevSeq) {
-            return Object.freeze({ ok: false, code: 'SCHEMA' });
+          } else if (qState.partialSeq > 0 && batch.seq > qState.partialSeq) {
+            qState.lastSeq = Math.max(qState.lastSeq, qState.partialSeq);
+            qState.partialSeq = 0;
+            qState.partialApplied = 0;
           }
           let queuedEvents = 0;
           for (const item of qState.queue) queuedEvents += item.events.length;
-          if (queuedEvents + batch.events.length > MAX_SURFACE_INPUT_QUEUE_EVENTS) {
+          if (queuedEvents + pendingEvents.length > MAX_SURFACE_INPUT_QUEUE_EVENTS) {
             return Object.freeze({ ok: false, code: 'LIMIT' });
           }
           return new Promise((resolve) => {
             /** @type {Array<Record<string, unknown>>} */
             const clonedEvents = [];
-            for (const ev of batch.events) clonedEvents.push({ ...ev });
+            for (const ev of pendingEvents) clonedEvents.push({ ...ev });
             qState.queue.push({
               batch,
               events: clonedEvents,
+              applied: resumeOffset,
               resolve,
             });
             if (!qState.draining) {
