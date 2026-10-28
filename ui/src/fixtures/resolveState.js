@@ -6,6 +6,25 @@
  */
 
 import { FIXTURE_KEYS, FIXTURES } from './states.js';
+import { TERMINAL_LIVE_FIXTURE, TERMINAL_LIVE_KEY } from './terminalLive.js';
+
+/**
+ * Alias states outside the canonical key set (MVUI29 lane T). Aliases
+ * resolve through this table only; `FIXTURE_KEYS`, `FIXTURES` and
+ * `isFixtureKey` stay exactly canonical.
+ * @type {Readonly<Record<string, import('./states.js').FixtureState>>}
+ */
+const FIXTURE_ALIASES = Object.freeze({
+  [TERMINAL_LIVE_KEY]: TERMINAL_LIVE_FIXTURE,
+});
+
+/**
+ * @param {unknown} value
+ * @returns {boolean} True for an alias state key.
+ */
+export function isAliasFixtureKey(value) {
+  return typeof value === 'string' && Object.hasOwn(FIXTURE_ALIASES, value);
+}
 
 /**
  * @typedef {Object} FixtureRefusal
@@ -61,6 +80,7 @@ export function parseStateQuery(search) {
     };
   }
   if (!isFixtureKey(key)) {
+    if (isAliasFixtureKey(key)) return { ok: true, key };
     return {
       ok: false,
       error: Object.freeze({ code: 'ERR_UNKNOWN_FIXTURE_STATE', message: `Unknown state ${key}` }),
@@ -76,6 +96,9 @@ export function parseStateQuery(search) {
  */
 export function resolveFixture(key) {
   if (!isFixtureKey(key)) {
+    if (isAliasFixtureKey(key)) {
+      return { ok: true, fixture: FIXTURE_ALIASES[/** @type {string} */ (key)] };
+    }
     return {
       ok: false,
       error: Object.freeze({

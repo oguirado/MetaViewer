@@ -45,6 +45,18 @@ const props = defineProps({
   nestedHost: { type: /** @type {import('vue').PropType<import('./nested/nested.js').NestedHost|null>} */ (Object), default: null },
   runtime: { type: /** @type {import('vue').PropType<WallRuntime|null>} */ (Object), default: null },
   terminal: { type: /** @type {import('vue').PropType<{session:string,port:MessagePort}|null>} */ (Object), default: null },
+  // MVUI29b lane T: fixed-API terminal session source for the multislot
+  // (a prebuilt port on real boots, the fixture double on terminal-live
+  // boots). Null keeps the binding-only path.
+  terminalSessionPort: { type: Object, default: null },
+  // MVUI29b lane T: direct host provider entries and advertised broker
+  // commands for the multislot menu. Empty lists keep the transport
+  // listing and the broker-derived commands.
+  hostProviders: { type: /** @type {import('vue').PropType<unknown[]>} */ (Array), default: () => [] },
+  brokerCommands: { type: /** @type {import('vue').PropType<string[]>} */ (Array), default: () => [] },
+  // MVUI29b lane T: injected clipboard for Copy-capsule-ID. Null falls
+  // back to the session-port copyText, then the ambient clipboard.
+  clipboard: { type: /** @type {import('vue').PropType<{ writeText: (text: string) => Promise<void> } | null>} */ (Object), default: null },
   layout: { type: /** @type {import('vue').PropType<LayoutProfile>} */ (Object), required: true },
   scope: { type: /** @type {import('vue').PropType<LayoutScope>} */ (Object), required: true },
   storage: { type: /** @type {import('vue').PropType<LayoutStorage>} */ (Object), required: true },
@@ -117,7 +129,12 @@ const settingsOpen = ref(props.fixture?.screen === 'settings');
 const creativeOpen = ref(props.fixture?.key === 'creative');
 const creativeFrames = computed(() => /** @type {unknown[]} */ (props.fixture?.ui.creativeFrames ?? []));
 const terminalOpen = ref(props.fixture?.key === 'side-terminal-open');
-const multislotOpen = ref(['multislot', 'recording'].includes(props.fixture?.key ?? ''));
+// MVUI29c lane T: the multislot auto-open keeps its fixture-key rule
+// (multislot/recording) and additionally opens for the screen that
+// renders it: the terminal-live alias declares screen 'multislot' under
+// another key and must open. Additive only, so every committed harness
+// mounting with a key and no screen sees exactly the previous children.
+const multislotOpen = ref(['multislot', 'recording'].includes(props.fixture?.key ?? '') || props.fixture?.screen === 'multislot');
 const selectedCapsuleId = ref(props.fixture?.capsules[0]?.id ?? '');
 // MVUI25 lane A: the wall shares this app-level input mode with the
 // multislot (v-model below); the input-write fixture starts in WRITE.
@@ -717,7 +734,7 @@ const chromeWorkspace = markRaw(defineComponent({
         </section>
         <section v-if="multislotOpen && selectedSurface && !nestedMode.displayOnly" class="mv-multislot-screen" aria-label="Capsule multislot">
           <UiButton id="multislot-back" data-semantic-anchor="multislot/back" label="Back to wall" @click="multislotOpen = false" />
-          <MultislotHost :capsule-id="selectedSurface.id" :capsule-label="selectedSurface.title" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" :folded="selectedFolded" :hidden="selectedPlacement.hidden" :floating="selectedPlacement.floating"
+          <MultislotHost :capsule-id="selectedSurface.id" :capsule-label="selectedSurface.title" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" :terminal-session-port="props.terminalSessionPort" :host-providers="props.hostProviders" :broker-commands="props.brokerCommands" :clipboard="props.clipboard" :folded="selectedFolded" :hidden="selectedPlacement.hidden" :floating="selectedPlacement.floating"
             :float-x="selectedPlacement.x" :float-y="selectedPlacement.y" :float-width="selectedPlacement.width" :float-height="selectedPlacement.height"
             :group-id="selectedPlacement.groupId" :placement-index="selectedPlacement.index"
             :last-dock-group-id="selectedPlacement.lastDockGroupId" :last-dock-index="selectedPlacement.lastDockIndex"

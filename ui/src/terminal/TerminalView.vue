@@ -11,11 +11,11 @@ const props = defineProps({
   port: { type: /** @type {import('vue').PropType<MessagePort|null>} */ (Object), default: null },
 });
 const host = ref(/** @type {HTMLElement|null} */ (null));
-const status = ref('Terminal service unavailable');
+const status = ref('');
 let dispose = () => {};
 function bindTerminal() {
   dispose();
-  status.value = 'Terminal service unavailable';
+  status.value = '';
   if (!props.port || !host.value || !props.session) return;
   const port = toRaw(props.port);
   const session = props.session;
@@ -40,7 +40,7 @@ onBeforeUnmount(() => dispose());
 </script>
 <template>
   <section class="mv-terminal" aria-label="Session terminal">
-    <p role="status">{{ status }}</p>
+    <p v-if="status" role="status">{{ status }}</p>
     <div ref="host" class="mv-terminal-host" />
   </section>
 </template>

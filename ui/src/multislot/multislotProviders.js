@@ -15,7 +15,9 @@
 import {
   CUSTOM_MAX_ARG_BYTES,
   CUSTOM_MAX_ARGV,
+  MAX_PROVIDERS,
   PROVIDER_COMMAND,
+  PROVIDER_ID_RE,
   SHELL_COMMAND,
   SYSTEM_SHELL_ENTRY,
   normalizeProviders,
@@ -90,6 +92,92 @@ export function toKitMenuProviders(hostEntries) {
         hint: entry.hint,
         argv: entry.argv,
         command: entry.command,
+      }),
+    );
+  }
+  return Object.freeze(menu);
+}
+
+/**
+ * Maps a fixed-API provider listing onto kit menu entries. Listing rows
+ * are reference-only (`{id,label,hint}`, no argv): each admitted row maps
+ * with an empty argv vector (the renderer never invents argv) and the
+ * provider command, so launches resolve the id host-side with empty args.
+ * The fixed system shell row comes first. Rows with an explicit negative
+ * capability (`available: false`) are excluded: the kit menu gates by
+ * command only and cannot disable single rows, so unavailable providers
+ * stay out of the menu instead of launching into a certain refusal.
+ * Strict: malformed rows, duplicates, reserved ids and malformed
+ * capabilities throw instead of rendering a partial menu.
+ *
+ * @param {unknown} listingEntries Candidate listing rows.
+ * @param {unknown} listingCapabilities Candidate host-reported availability.
+ * @returns {ReadonlyArray<Readonly<{ id: string, label: string, hint: string, argv: readonly string[], command: string | undefined }>>}
+ * Frozen kit menu entries.
+ */
+export function toKitMenuProvidersFromListing(listingEntries, listingCapabilities) {
+  if (!Array.isArray(listingEntries)) throw new TypeError('listing entries must be an array');
+  if (!Array.isArray(listingCapabilities)) throw new TypeError('listing capabilities must be an array');
+  if (listingEntries.length > MAX_PROVIDERS) {
+    throw new RangeError(`at most ${MAX_PROVIDERS} listing entries`);
+  }
+  /** @type {Map<string, boolean>} */
+  const available = new Map();
+  for (const raw of listingCapabilities) {
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new TypeError('listing capability must be an object');
+    }
+    const capability = /** @type {Record<string, unknown>} */ (raw);
+    if (typeof capability.id !== 'string' || capability.id.length === 0) {
+      throw new TypeError('listing capability id must be a non-empty string');
+    }
+    if (typeof capability.available !== 'boolean') {
+      throw new TypeError('listing capability available must be a boolean');
+    }
+    if (typeof capability.reason !== 'string') {
+      throw new TypeError('listing capability reason must be a string');
+    }
+    available.set(capability.id, capability.available);
+  }
+  const seen = new Set();
+  /** @type {Array<Readonly<{ id: string, label: string, hint: string, argv: readonly string[], command: string | undefined }>>} */
+  const menu = [
+    Object.freeze({
+      id: SYSTEM_SHELL_ENTRY.id,
+      label: SYSTEM_SHELL_ENTRY.label,
+      hint: SYSTEM_SHELL_ENTRY.hint,
+      argv: SYSTEM_SHELL_ENTRY.argv,
+      command: SHELL_COMMAND,
+    }),
+  ];
+  for (const raw of listingEntries) {
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new TypeError('listing entry must be an object');
+    }
+    const record = /** @type {Record<string, unknown>} */ (raw);
+    for (const key of Object.keys(record)) {
+      if (key !== 'id' && key !== 'label' && key !== 'hint') {
+        throw new TypeError(`unexpected listing key: ${key}`);
+      }
+    }
+    if (typeof record.id !== 'string') throw new TypeError('listing id must be a string');
+    const id = record.id.trim();
+    if (!PROVIDER_ID_RE.test(id)) throw new TypeError('listing id is malformed');
+    if (id === SHELL_COMMAND || id === PROVIDER_COMMAND) throw new RangeError('listing id is reserved');
+    if (seen.has(id)) throw new RangeError('duplicate listing id');
+    seen.add(id);
+    if (typeof record.label !== 'string') throw new TypeError('listing label must be a string');
+    const label = record.label.trim();
+    if (label.length === 0) throw new TypeError('listing label must be non-empty');
+    if (typeof record.hint !== 'string') throw new TypeError('listing hint must be a string');
+    if (available.get(id) === false) continue;
+    menu.push(
+      Object.freeze({
+        id,
+        label,
+        hint: record.hint,
+        argv: Object.freeze([]),
+        command: PROVIDER_COMMAND,
       }),
     );
   }

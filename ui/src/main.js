@@ -4,7 +4,7 @@ import App from './App.vue';
 import { createAuthorityAdapter, createAuthorityRuntime, createTerminalBroker, requireAck } from './core/hostAdapters.js';
 import { createSettingsHost } from './settings/settingsHost.js';
 import { parseStateQuery, resolveFixture } from './fixtures/resolveState.js';
-import { createFixtureRuntime, createLiveReplayMount, LIVE_REPLAY_FIXTURE, TILE_CHROME_FIXTURE, TILE_CHROME_KEY, fixtureCaptureSeed, createCapturePort, createCaptureState, createCaptureDouble, INPUT_WRITE_FIXTURE, INPUT_WRITE_KEY, createInputPort, createInputDouble } from './fixtures/fixtureRuntime.js';
+import { createFixtureRuntime, createLiveReplayMount, LIVE_REPLAY_FIXTURE, TILE_CHROME_FIXTURE, TILE_CHROME_KEY, fixtureCaptureSeed, createCapturePort, createCaptureState, createCaptureDouble, INPUT_WRITE_FIXTURE, INPUT_WRITE_KEY, createInputPort, createInputDouble, createSessionTransport, TERMINAL_LIVE_COMMANDS, TERMINAL_LIVE_PROVIDERS } from './fixtures/fixtureRuntime.js';
 import 'capsule-ui-kit/theme.css';
 import './design/metaviewer.css';
 import { createWallLayout, migrateWallLayout } from './wall/layout.js';
@@ -334,7 +334,18 @@ async function bootstrap() {
     } catch { framePortRouter = null; }
   }
   const authorityHost = replayPort ? createAuthorityAdapter(replayPort) : (fixture ? null : createAuthorityAdapter(host?.authority));
-  const terminalBroker = fixture ? (replayTerminalPort ? createTerminalBroker(replayTerminalPort) : null) : createTerminalBroker(host?.sideTerminal);
+  // MVUI29d lane T: the terminal-live fixture exposes its broker double on
+  // the mount; wire it as the terminal broker so broker launches work on a
+  // real ?state=terminal-live boot. Live boots and the live-replay broker
+  // port are unchanged; other fixtures have no broker port and stay null.
+  const fixtureBrokerPort = fixture && !replayTerminalPort
+    ? /** @type {import('./core/hostAdapters.js').TerminalPort|null} */ (
+      /** @type {{ terminalLive?: { brokerPort?: unknown } }|null} */ (/** @type {unknown} */ (fixtureMount))?.terminalLive?.brokerPort ?? null
+    )
+    : null;
+  const terminalBroker = fixture
+    ? (replayTerminalPort ? createTerminalBroker(replayTerminalPort) : (fixtureBrokerPort ? createTerminalBroker(fixtureBrokerPort) : null))
+    : createTerminalBroker(host?.sideTerminal);
   const liveRuntime = fixture ? null : createAuthorityRuntime(host?.authority);
   // MVUI9 lane A: capture port plus reactive store. The port always
   // comes from createCapturePort; its facade is the in-memory double on
@@ -368,6 +379,30 @@ async function bootstrap() {
   const inputPort = typeof createInputPort === 'function' && (fixture ? inputDouble !== null : true)
     ? createInputPort(/** @type {any} */ (fixture ? inputDouble : host?.input))
     : null;
+  // MVUI29b lane T: terminal session port for the multislot. The source
+  // is the fixture double on terminal-live boots and host.sideTerminal
+  // on live boots (never a fresh window read, so the boot tests' single
+  // live-read pin stays exact). The factory arrives through the
+  // fixtureRuntime re-export; unknown names (stub harness) keep the raw
+  // source and the multislot builds the port itself, while a malformed
+  // source degrades to null and the slot keeps its binding-only path.
+  const terminalLive = /** @type {{ terminalLive?: { transport?: unknown, clipboard?: unknown } }|null|undefined} */ (
+    /** @type {unknown} */ (fixtureMount))?.terminalLive ?? null;
+  const terminalSource = terminalLive?.transport ?? (!fixture ? host?.sideTerminal ?? null : null);
+  let terminalSessionPort = terminalSource ?? null;
+  if (terminalSessionPort && typeof createSessionTransport === 'function') {
+    try {
+      terminalSessionPort = createSessionTransport(terminalSessionPort);
+    } catch {
+      terminalSessionPort = null;
+    }
+  }
+  const terminalProviders = terminalLive && typeof TERMINAL_LIVE_PROVIDERS !== 'undefined'
+    ? [...TERMINAL_LIVE_PROVIDERS] : [];
+  const terminalCommands = terminalLive && typeof TERMINAL_LIVE_COMMANDS !== 'undefined'
+    ? [...TERMINAL_LIVE_COMMANDS] : [];
+  const terminalClipboard = /** @type {{ writeText: (text: string) => Promise<void> }|null} */ (
+    terminalLive?.clipboard ?? null);
   const replayRuntime = /** @type {{ dispose?: () => void }|null} */ (/** @type {unknown} */ (isLiveReplay ? fixtureMount?.runtime ?? null : null));
   let disposeQa = () => {};
   let tornDown = false;
@@ -376,6 +411,7 @@ async function bootstrap() {
   try {
     Object.assign(document.documentElement.dataset, THEME_DATASET);
     const application = createApp(App, { layout, storage, scope: SCOPE, fixture, nestedHost, exportDestination, settingsHost: bootSettingsHost, initialScheme: bootScheme, preferences, authorityHost, terminalBroker, captureState, captureAvailable,
+      terminalSessionPort, hostProviders: terminalProviders, brokerCommands: terminalCommands, clipboard: terminalClipboard,
       runtime: /** @type {InstanceType<typeof App>['$props']['runtime']} */ (/** @type {unknown} */ (fixtureMount?.runtime ?? liveRuntime)),
       terminal: fixtureMount?.terminal ?? null });
     if (framePortRouter) application.provide?.('framePortRouter', framePortRouter);

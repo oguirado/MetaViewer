@@ -27,6 +27,8 @@ import BrokerLaunchControls from '../terminal/BrokerLaunchControls.vue';
 import {
   createSideTerminalFacade,
   createSideTerminalBrokerFacade,
+  createSessionTransport,
+  createPortSessionFacade,
   normalizeTerminalOutcome,
   terminalLifecycleRefs,
   toPaneSession,
@@ -52,9 +54,10 @@ import {
   LAUNCH_REFUSALS,
   PROVIDER_DATA_REFUSAL,
   toKitMenuProviders,
+  toKitMenuProvidersFromListing,
   validateLaunchRequest,
 } from './multislotProviders.js';
-import { createCopyCapsuleId } from './multislotCopy.js';
+import { createCopyCapsuleId, copyAvailable, isCopyTextAllowed } from './multislotCopy.js';
 import './multislot.css';
 
 /** @typedef {import('vue').PropType<{ session: string, port: MessagePort } | null>} TerminalBindingProp */
@@ -89,6 +92,10 @@ const props = defineProps({
   attachSide: { type: String, default: 'bottom' },
   surfaceState: { type: String, default: 'live' },
   clipboard: { type: /** @type {ClipboardProp} */ (Object), default: null },
+  // MVUI29b lane T: injected fixed-API session transport source (or a
+  // prebuilt port from main.js). Null on hosts without the methods; the
+  // slot then keeps the binding-only path exactly. Test doubles land here.
+  terminalSessionPort: { type: Object, default: null },
 });
 
 const emit = defineEmits([
@@ -179,6 +186,51 @@ const launchFacade = computed(() => createSideTerminalBrokerFacade(props.termina
 const commandsRef = computed(() => [...new Set([...props.brokerCommands, ...capabilityCommands.value, ...(launchFacade.value?.canOpen && launchFacade.value.state.enabled ? ['shell', 'provider'] : [])])]);
 /** @type {import('vue').Ref<Array<{ id: string, label: string, hint: string, argv: readonly string[], command: string | undefined }>>} */
 const kitProviders = ref([...toKitMenuProviders([])]);
+// MVUI29b lane T: fixed-API session transport. main.js builds the port on
+// real boots; tests and legacy boots pass the raw source, which is built
+// here. A prebuilt port carries available === true. The typeof guard keeps
+// legacy stub harnesses, which map the facade module to a fixed name set,
+// on the binding-only path. Malformed injections fail closed to null
+// (typed refusals at the call sites), never a half-bound slot.
+const sessionTransport = computed(() => {
+  if (props.terminalSessionPort === null || props.terminalSessionPort === undefined) return null;
+  const raw = toRaw(props.terminalSessionPort);
+  if (raw !== null && typeof raw === 'object'
+      && /** @type {{available?:unknown}} */ (raw).available === true) {
+    return /** @type {ReturnType<typeof createSessionTransport>} */ (raw);
+  }
+  if (typeof createSessionTransport !== 'function') return null;
+  try {
+    return createSessionTransport(raw);
+  } catch {
+    return null;
+  }
+});
+const transportCopyText = computed(() => {
+  const transport = sessionTransport.value;
+  if (!transport || transport.canCopy !== true || typeof transport.copyText !== 'function') return undefined;
+  const copy = transport.copyText;
+  return (/** @type {string} */ text) => Promise.resolve().then(() => copy({ text }));
+});
+const copyAvailableRef = computed(() => {
+  if (typeof copyAvailable !== 'function') return true;
+  return copyAvailable({ clipboard: props.clipboard, copyText: transportCopyText.value });
+});
+// MVUI29c lane T: the host admits only copytext-grammar text, so the
+// control also disables when the slot's capsule id is off-grammar (the
+// copy action checks the same predicate before calling). The typeof
+// guard keeps partial stub harnesses on the path-only rule.
+const copyIdAllowedRef = computed(() => (
+  typeof isCopyTextAllowed !== 'function' || isCopyTextAllowed(props.capsuleId)
+));
+const copyReasonRef = computed(() => {
+  if (!copyAvailableRef.value) return 'Copy unavailable: no clipboard path.';
+  if (!copyIdAllowedRef.value) return 'Copy unavailable: this capsule id cannot be copied.';
+  return '';
+});
+/** Transport-fetched provider listing when no direct host data is present.
+ * @type {import('vue').Ref<{entries:unknown[],capabilities:unknown[]}|null>} */
+const fetchedListing = ref(null);
 const menuIds = computed(() => [...kitProviders.value.map((entry) => entry.id), CUSTOM_LAUNCH_ENTRY_ID]);
 const refusalId = computed(() => `mv-multislot-${props.capsuleId}-refusal`);
 const refusalAnchor = computed(() => `capsule/${props.capsuleId}/launch-refusal`);
@@ -186,8 +238,23 @@ const refusalDismissId = computed(() => `mv-multislot-${props.capsuleId}-refusal
 const refusalDismissAnchor = computed(() => `capsule/${props.capsuleId}/launch-refusal-dismiss`);
 
 function refreshProviders() {
+  const direct = props.hostProviders;
+  if (Array.isArray(direct) && direct.length > 0) {
+    try {
+      kitProviders.value = [...toKitMenuProviders(direct)];
+    } catch {
+      kitProviders.value = [...toKitMenuProviders([])];
+      refusal.value = { code: PROVIDER_DATA_REFUSAL, message: 'Provider list unavailable.' };
+    }
+    return;
+  }
+  const listing = fetchedListing.value;
+  if (!listing || typeof toKitMenuProvidersFromListing !== 'function') {
+    kitProviders.value = [...toKitMenuProviders([])];
+    return;
+  }
   try {
-    kitProviders.value = [...toKitMenuProviders(props.hostProviders)];
+    kitProviders.value = [...toKitMenuProvidersFromListing(listing.entries, listing.capabilities)];
   } catch {
     kitProviders.value = [...toKitMenuProviders([])];
     refusal.value = { code: PROVIDER_DATA_REFUSAL, message: 'Provider list unavailable.' };
@@ -195,6 +262,39 @@ function refreshProviders() {
 }
 refreshProviders();
 watch(() => props.hostProviders, refreshProviders);
+// MVUI29b lane T: without direct host data, list providers through the
+// fixed-API transport when it offers one. Listings carry reference-only
+// rows (no argv); malformed listings project the same shell-only menu and
+// typed refusal as malformed host data.
+let providerGeneration = 0;
+async function fetchTransportProviders() {
+  const generation = ++providerGeneration;
+  const transport = sessionTransport.value;
+  if (!transport || transport.canListProviders !== true || typeof transport.listProviders !== 'function') return;
+  if (Array.isArray(props.hostProviders) && props.hostProviders.length > 0) return;
+  try {
+    const listed = await transport.listProviders();
+    if (unmounted || generation !== providerGeneration) return;
+    fetchedListing.value = {
+      entries: Array.isArray(listed?.entries) ? [...listed.entries] : [],
+      capabilities: Array.isArray(listed?.capabilities) ? [...listed.capabilities] : [],
+    };
+    refreshProviders();
+  } catch {
+    if (unmounted || generation !== providerGeneration) return;
+    fetchedListing.value = null;
+    kitProviders.value = [...toKitMenuProviders([])];
+    refusal.value = { code: PROVIDER_DATA_REFUSAL, message: 'Provider list unavailable.' };
+  }
+}
+onMounted(fetchTransportProviders);
+// MVUI29d lane T: a replaced session transport orphans the lazy pump and
+// its sessions, so the lazy stack resets before providers re-fetch (a
+// later launch then binds the new transport, never the cached one).
+watch(sessionTransport, () => {
+  resetLazyTransport();
+  fetchTransportProviders();
+});
 watch(() => props.hidden, (value) => { hiddenRef.value = value; });
 watch(() => props.folded, (value) => { foldedRef.value = value; });
 watch(() => props.floating, (value) => { floatingRef.value = value; });
@@ -209,6 +309,16 @@ watch(() => props.capsuleId, () => { placementRefusal.value = null; placementGro
 let facade = null;
 /** @type {ReturnType<typeof createMultislotPump> | null} */
 let pump = null;
+// MVUI29b lane T: broker-opened sessions without a binding run on a second
+// pump over the fixed-API transport, sharing the registry and the visible
+// session list. Input routes per session id below; unknown ids fall back to
+// the binding facade, preserving the legacy single-facade behaviour exactly.
+/** @type {ReturnType<typeof createMultislotPump> | null} */
+let lazyPump = null;
+/** @type {ReturnType<typeof createPortSessionFacade> | null} */
+let lazyFacade = null;
+/** @type {Map<string, { write: (input: { session: string, bytes: number[] }) => unknown }>} */
+const writerTargets = new Map();
 /** @type {Set<ReturnType<typeof createSideTerminalFacade>>} */
 const pendingFacades = new Set();
 let bindingGeneration = 0;
@@ -217,9 +327,74 @@ let unmounted = false;
 
 const gatedWriter = createGatedTerminalWriter({
   // The facade reference swaps on rebind; resolve it per write.
-  facade: { write: (/** @type {{ session: string, bytes: number[] }} */ input) => facade?.write(input) },
+  facade: { write: (/** @type {{ session: string, bytes: number[] }} */ input) => (writerTargets.get(input?.session) ?? facade)?.write(input) },
   getInputMode: () => props.inputMode,
 });
+
+/** Creates the transport-backed pump on first broker open without a binding. */
+function ensureLazyPump() {
+  if (lazyPump) return lazyPump;
+  const transport = sessionTransport.value;
+  if (!transport || transport.canAttach !== true || typeof createPortSessionFacade !== 'function') return null;
+  let gateway = null;
+  try {
+    gateway = createPortSessionFacade({ transport });
+  } catch {
+    return null;
+  }
+  let created = null;
+  try {
+    created = markRaw(createMultislotPump({
+      facade: gateway, registry, capsuleId: props.capsuleId,
+      getInputMode: () => props.inputMode, onEvent: onPumpEvent,
+    }));
+  } catch {
+    try {
+      gateway.dispose();
+    } catch {
+      // Gateway teardown is best-effort; the null pump is authoritative.
+    }
+    return null;
+  }
+  lazyFacade = markRaw(gateway);
+  lazyPump = markRaw(created);
+  return lazyPump;
+}
+
+/**
+ * Drops the transport-backed stack when the session transport is replaced
+ * (or removed). The pump dispose closes the orphaned session ports through
+ * the old facade; the visible list then sheds exactly the sessions the old
+ * transport owned (tracked in writerTargets), while binding sessions stay.
+ */
+function resetLazyTransport() {
+  try {
+    lazyPump?.dispose();
+  } catch {
+    // Teardown is best-effort; the empty lazy stack is authoritative.
+  }
+  lazyPump = null;
+  try {
+    lazyFacade?.dispose();
+  } catch {
+    // Teardown is best-effort; the empty lazy stack is authoritative.
+  }
+  lazyFacade = null;
+  // A launch in flight on the old transport always fails its freshness
+  // check below, which returns without clearing; release it here instead.
+  launchingRef.value = false;
+  if (writerTargets.size === 0) return;
+  const owned = new Set(writerTargets.keys());
+  writerTargets.clear();
+  sessions.value = sessions.value.filter((item) => !owned.has(item.sessionId));
+  if (selectedSessionId.value && owned.has(selectedSessionId.value)) {
+    selectedSessionId.value = sessions.value[0]?.sessionId ?? '';
+  }
+  if (sessionNotice.value && owned.has(sessionNotice.value.sessionId)) {
+    sessionNotice.value = null;
+  }
+  if (sessions.value.length === 0) attachmentState.value = 'disconnected';
+}
 
 const registry = markRaw(
   createStreamRegistry({
@@ -241,6 +416,7 @@ function onPumpEvent(event) {
   const outcome = event.type === 'failed' ? 'failed' : 'exited';
   sessionNotice.value = normalizeTerminalOutcome({ type: outcome, sessionId: event.sessionId });
   sessions.value = sessions.value.filter((item) => item.sessionId !== event.sessionId);
+  writerTargets.delete(event.sessionId);
   if (selectedSessionId.value === event.sessionId) selectedSessionId.value = sessions.value[0]?.sessionId ?? '';
   attachmentState.value = sessions.value.length ? 'live' : 'disconnected';
   activityState.value = sessions.value.length ? 'unknown' : outcome;
@@ -256,6 +432,19 @@ function unbind() {
     // Teardown is best-effort; the empty session list is authoritative.
   }
   pump = null;
+  try {
+    lazyPump?.dispose();
+  } catch {
+    // Teardown is best-effort; the empty session list is authoritative.
+  }
+  lazyPump = null;
+  try {
+    lazyFacade?.dispose();
+  } catch {
+    // Teardown is best-effort; the empty session list is authoritative.
+  }
+  lazyFacade = null;
+  writerTargets.clear();
   try {
     if (facade && !pendingFacades.has(facade)) facade.dispose();
   } catch {
@@ -324,7 +513,14 @@ function bind() {
  * @param {any} item
  */
 function registerSession(active, item) {
-  const id = active.attachSession(item);
+  showSession(active.attachSession(item), item);
+}
+
+/** Projects an attached session id into the visible slot list.
+ * @param {string} id
+ * @param {any} item
+ */
+function showSession(id, item) {
   sessions.value = [...sessions.value, { ...toPaneSession(id, item) }];
   if (!selectedSessionId.value) selectedSessionId.value = id;
   attachmentState.value = 'live';
@@ -342,6 +538,7 @@ watch(
   () => {
     try {
       pump?.syncLease();
+      lazyPump?.syncLease();
     } catch {
       // The kit prop projection below still gates the next keystroke.
     }
@@ -358,7 +555,7 @@ onBeforeUnmount(() => {
 
 async function runCopy() {
   copyState.value = 'copying';
-  const action = createCopyCapsuleId({ clipboard: props.clipboard });
+  const action = createCopyCapsuleId({ clipboard: props.clipboard, copyText: transportCopyText.value });
   const outcome = await action.copy(props.capsuleId);
   copyState.value = outcome.state;
 }
@@ -461,6 +658,18 @@ async function onLaunchRequest(payload) {
     emit('launch-refused', validated.refusal);
     return;
   }
+  // Fixed host API: open carries command 'shell' or a provider id with an
+  // empty args vector (the preload spec keeps the field); argv and env
+  // never cross. Custom commits cannot be expressed and refuse as typed
+  // rows instead of reaching the host.
+  const openCommand = validated.launch.entryId === 'shell' ? 'shell'
+    : validated.launch.entryId === CUSTOM_LAUNCH_ENTRY_ID ? null : validated.launch.entryId;
+  if (openCommand === null) {
+    const outcome = { code: LAUNCH_REFUSALS.ARGV_REJECTED, message: 'Launch arguments rejected.' };
+    refusal.value = outcome;
+    emit('launch-refused', outcome);
+    return;
+  }
   const broker = launchFacade.value?.canOpen ? launchFacade.value : facade;
   const opener = launchFacade.value?.canOpen ? launchFacade.value.open : (
     facade && typeof /** @type {{ open?: unknown }} */ (/** @type {unknown} */ (facade)).open === 'function'
@@ -468,16 +677,21 @@ async function onLaunchRequest(payload) {
           /** @type {{ open: unknown }} */ (/** @type {unknown} */ (facade)).open
         )
       : null);
-  if (!opener || !pump) {
+  // Transport-backed opens attach to the lazy pump: the binding port only
+  // carries its own session. Without a transport the legacy pump owns the
+  // opened session exactly as before.
+  const routed = sessionTransport.value ? ensureLazyPump() : pump;
+  if (!opener || !routed) {
     const outcome = { code: LAUNCH_REFUSALS.NO_BROKER, message: 'Launch unavailable.' };
     refusal.value = outcome;
     emit('launch-refused', outcome);
     return;
   }
   const generation = bindingGeneration;
-  const active = pump;
+  const active = routed;
   const ownerGeneration = brokerGeneration;
-  const current = () => generation === bindingGeneration && ownerGeneration === brokerGeneration && !unmounted && active === pump;
+  const current = () => generation === bindingGeneration && ownerGeneration === brokerGeneration && !unmounted
+    && (active === pump || active === lazyPump);
   /** @type {unknown} */
   let openedSession;
   // Keep cleanup on the originating broker, even after replacement or rebind.
@@ -492,7 +706,7 @@ async function onLaunchRequest(payload) {
 
   launchingRef.value = true;
   try {
-    const opened = /** @type {{ session?: unknown }} */ (await opener.call(broker, { command: validated.launch.command, args: validated.launch.args, cols: 80, rows: 24 }));
+    const opened = /** @type {{ session?: unknown }} */ (await opener.call(broker, { command: openCommand, args: [], cols: 80, rows: 24 }));
     openedSession = opened?.session;
     if (!current()) {
       await closeOpenedSession();
@@ -501,7 +715,49 @@ async function onLaunchRequest(payload) {
     if (!openedSession) throw new Error('Missing terminal attachment');
     const item = typeof openedSession === 'string'
       ? { session: openedSession, command: validated.launch.command } : openedSession;
-    registerSession(active, item);
+    const openedId = /** @type {{ session?: unknown }} */ (item)?.session;
+    if (active === lazyPump && lazyFacade && typeof openedId === 'string') {
+      // Transport-backed sessions register with the pump before the port
+      // binds, so microtask-immediate port frames reach a registered
+      // session instead of being dropped; the visible list updates only
+      // once the port is bound. A refused attach closes the broker
+      // session through the existing cleanup below and projects the
+      // typed refusal.
+      active.attachSession(/** @type {any} */ (item));
+      try {
+        await lazyFacade.attach({ session: openedId });
+      } catch (error) {
+        // The failure exit (if any) already released the pre-registered
+        // pump session; drop its notice so the launch refusal below
+        // stays the single outcome.
+        if (sessionNotice.value?.sessionId === openedId) sessionNotice.value = null;
+        throw error;
+      }
+      if (!current()) {
+        // Rebind, broker swap or unmount won during the port bind: the
+        // fresh session belongs to a stale pump, so release it there and
+        // drop the broker session instead of projecting it.
+        try {
+          active.closeSession(openedId);
+        } catch {
+          // Removal from the broker below is authoritative.
+        }
+        await closeOpenedSession();
+        return;
+      }
+      if (!active.sessionIds().includes(openedId)) {
+        // A port exit that landed during the bind already released the
+        // pre-registered session; keep its projected notice instead of
+        // showing a session with no pump behind it.
+        openedSession = undefined;
+        refusal.value = null;
+        return;
+      }
+      writerTargets.set(openedId, lazyFacade);
+      showSession(openedId, item);
+    } else {
+      registerSession(active, item);
+    }
     openedSession = undefined;
     refusal.value = null;
   } catch {
@@ -530,11 +786,16 @@ function onSelectSession(payload) {
  */
 function onCloseSession(payload) {
   if (typeof payload?.sessionId === 'string' && payload.sessionId.length > 0) {
+    // Route the close to the owning pump only: transport-backed sessions
+    // are tracked in writerTargets, binding sessions live on the binding
+    // pump. The other transport never sees the close.
+    const owner = writerTargets.has(payload.sessionId) ? lazyPump : pump;
     try {
-      pump?.closeSession(payload.sessionId);
+      owner?.closeSession(payload.sessionId);
     } catch {
       // Removal from the visible list below is authoritative.
     }
+    writerTargets.delete(payload.sessionId);
     sessions.value = sessions.value.filter((item) => item.sessionId !== payload.sessionId);
     if (selectedSessionId.value === payload.sessionId) {
       const remaining = sessions.value.map((item) => item.sessionId);
@@ -621,6 +882,8 @@ function onSlotPointerGuard(event) {
           :capsule-label="capsuleLabel"
           :input-mode="mode"
           :copy-state="copyState"
+          :copy-disabled="!copyAvailableRef || !copyIdAllowedRef"
+          :copy-reason="copyReasonRef"
           :surface-visible="surfaceVisibleRef"
           :terminal-visible="terminalVisibleRef"
           :folded="foldedRef"

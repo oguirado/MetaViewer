@@ -7,6 +7,11 @@
  */
 
 import { resolveFixture } from './resolveState.js';
+import {
+  TERMINAL_LIVE_KEY,
+  TERMINAL_LIVE_SESSION,
+  createTerminalLiveHarness,
+} from './terminalLive.js';
 
 // Lane R re-export: the bench-only live-replay mount travels through this
 // already-imported module so `main.js` keeps its closed stub-map import
@@ -44,6 +49,18 @@ export { INPUT_WRITE_FIXTURE, INPUT_WRITE_KEY } from './inputWrite.js';
 export { createInputPort } from '../input/inputPort.js';
 export { createInputDouble } from '../input/inputDouble.js';
 
+// MVUI29b lane T re-export: the fixed-API session-port factory and the
+// terminal-live menu data travel through this already-imported module so
+// `main.js` keeps its closed stub-map import surface (the boot harness
+// rewrites static imports with a fixed map; unknown names arrive as
+// undefined and the entry guards them with typeof, degrading the terminal
+// session port to the raw source or null).
+export { createSessionTransport } from '../terminal/sideTerminalFacade.js';
+export {
+  TERMINAL_LIVE_COMMANDS,
+  TERMINAL_LIVE_PROVIDERS,
+} from './terminalLive.js';
+
 /**
  * @typedef {Object} FixtureProjectionSnapshot
  * @property {string} status
@@ -79,7 +96,12 @@ export { createInputDouble } from '../input/inputDouble.js';
  * @property {import('./states.js').FixtureState} fixture
  * @property {FixtureRuntime} runtime
  * @property {FixtureIntentCall[]} calls - Harness-owned recorded intents.
- * @property {null} terminal - Always null: ports are host-owned.
+ * @property {null|{ session: string, port: unknown }} terminal - Always null:
+ * ports are host-owned, except the terminal-live alias mount which carries
+ * its fixture-only live binding (see `terminalLive`).
+ * @property {{ harness: import('./terminalLive.js').TerminalLiveHarness, brokerPort: unknown, transport: unknown, clipboard: unknown }|undefined} [terminalLive]
+ * Terminal-live alias extras: fixture-only doubles driving the real
+ * renderer modules. Absent on every canonical mount.
  */
 
 /**
@@ -171,5 +193,23 @@ export function createFixtureRuntime(keyOrFixture) {
     scheduler: {},
     tileScheduler: createStubTileScheduler(),
   };
+  if (fixture.key === TERMINAL_LIVE_KEY) {
+    const harness = createTerminalLiveHarness();
+    return {
+      ok: true,
+      mount: {
+        fixture,
+        runtime,
+        calls,
+        terminal: { session: TERMINAL_LIVE_SESSION, port: harness.sessionPort },
+        terminalLive: {
+          harness,
+          brokerPort: harness.brokerPort,
+          transport: harness.transport,
+          clipboard: harness.clipboard,
+        },
+      },
+    };
+  }
   return { ok: true, mount: { fixture, runtime, calls, terminal: null } };
 }
