@@ -781,7 +781,6 @@ export function createFrameReader(options) {
         await dropAdmitted(FRAME_REASONS.INVALID_CONTRACT);
         return refusal(FRAME_REASONS.INVALID_CONTRACT, 'png-signature-in-rgb24-payload');
       }
-      const snapshot = new Uint8Array(received);
       const pixelSpec = /** @type {PixelSpec} */ (Object.freeze({
         ...C_PIXEL_RGB24_SPEC,
         width: ref.width,
@@ -791,11 +790,15 @@ export function createFrameReader(options) {
         zoom,
         dpr,
       }));
-      const digest = createHash('sha256').update(snapshot).digest('hex');
+      // No TOCTOU: received.buffer is an unshared ArrayBuffer (SharedArrayBuffer refused above)
+      // and digesting plus the owned copy run synchronously before any await or callback,
+      // so no caller or thread can mutate received between hashing and copying into snapshot.
+      const digest = createHash('sha256').update(received).digest('hex');
       if (digest !== ref.sha256) {
         await dropAdmitted(FRAME_REASONS.DIGEST_MISMATCH);
         return refusal(FRAME_REASONS.DIGEST_MISMATCH);
       }
+      const snapshot = new Uint8Array(received);
       const frame = /** @type {VerifiedFrame} */ (Object.freeze({
         principal,
         epoch,
