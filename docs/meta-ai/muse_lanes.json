@@ -1,17 +1,17 @@
 {
  "schema": "metaviewer.meta_ai_usage/v1",
  "totals": {
-  "lanes": 367,
-  "ok": 367,
-  "input_tokens": 82217474,
-  "cache_read_tokens": 1938861530,
-  "output_tokens": 17984216,
-  "thinking_tokens": 9631450,
+  "lanes": 368,
+  "ok": 368,
+  "input_tokens": 82413507,
+  "cache_read_tokens": 1944027606,
+  "output_tokens": 18038649,
+  "thinking_tokens": 9662577,
   "cache_hit_pct": 95.9,
-  "usd": 15.6963,
+  "usd": 15.7371,
   "usd_per_lane": 0.0428,
-  "steps": 20420,
-  "lane_hours": 53.1
+  "steps": 20483,
+  "lane_hours": 53.3
  },
  "peak_concurrent_lanes": 24,
  "rooms": {
@@ -8293,6 +8293,27 @@
    "thinking_tokens": 50364,
    "cache_hit_pct": 97.0,
    "usd": 0.059937
+  },
+  {
+   "room": "mvui28",
+   "lane": "R",
+   "title": "input results into refusals, deduped",
+   "stage": "fix",
+   "model": "muse-spark-1.3",
+   "orchestrator": "UI orchestrator",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-28T04:29:51.547000+00:00",
+   "duration_s": 626.0,
+   "end_utc": "2026-10-28T04:40:17.528000+00:00",
+   "phase": "build",
+   "steps": 63,
+   "input_tokens": 196033,
+   "cache_read_tokens": 5166076,
+   "output_tokens": 54433,
+   "thinking_tokens": 31127,
+   "cache_hit_pct": 96.3,
+   "usd": 0.040822
   }
  ]
 }
