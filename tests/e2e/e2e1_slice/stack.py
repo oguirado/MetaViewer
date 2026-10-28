@@ -8,9 +8,15 @@ retains it and refuses another start. No debug endpoint or host-binding override
 seen for the surface (never the previous settlement after_frame) after a bounded
 <= 500 ms frame quiesce wait, and retries STALE_FRAME up to 3 attempts with a
 fresh frame pin and fresh proposal_id while keeping READY fail-open.
+[TARGET, unit decision] The supervisor exposes an owner-only (0600) AF_UNIX
+control socket at <state_root>/control.sock; on a single SO_PEERCRED-verified
+same-UID handoff-agent request it sends its connected agent core socket fd via
+SCM_RIGHTS, closes its own copy, records agent_handoff in state.json, and
+refuses any second handoff.
 """
 
 import argparse
+import array
 import fcntl
 import json
 import os
@@ -20,11 +26,14 @@ import secrets
 import select
 import shutil
 import signal
+import socket
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
 import time
+from urllib.parse import quote
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -42,16 +51,20 @@ MAX_STATE_ERROR_CHARS = 4096
 ALLOWED_STATE_KEYS = (
     "schema", "status", "supervisor", "pids", "capsules", "published",
     "work", "display", "xauthority", "surface_id", "expires", "error",
-    "display_mode", "record_path", "recorder", "agent_tick_page",
+    "display_mode", "record_path", "recorder", "agent_tick_page", "agent_handoff",
 )
+CONTROL_SOCKET_NAME = "control.sock"
+HANDOFF_OP = "handoff-agent"
+MAX_CONTROL_BYTES = 4096
 RECORDER_STOP_TIMEOUT_S = 10.0
-TICK_URL = (
-    'data:text/html,<body style="margin:0;background:#123">'
+TICK_HTML = (
+    '<body style="margin:0;background:#123">'
     '<h1 id=c style="font-size:140px;color:#ff0;margin:40px"></h1>'
     '<div id=b style="height:200px;background:#f0f"></div>'
     '<script>setInterval(function(){c.textContent=new Date().toISOString().slice(11,22);'
     'b.style.width=(Date.now()/10%1200)+"px"},100)</script>'
 )
+TICK_URL = "data:text/html," + quote(TICK_HTML)
 TICK_ACTIONS = (
     {"type": "key", "keys": ["ctrl", "l"]},
     {"type": "type", "text": TICK_URL},
@@ -136,9 +149,316 @@ def bounded_state(value):
             result.pop("recorder", None)
     if "agent_tick_page" in result:
         result["agent_tick_page"] = bool(result["agent_tick_page"])
+    if "agent_handoff" in result:
+        handoff = result["agent_handoff"]
+        if isinstance(handoff, dict):
+            result["agent_handoff"] = {
+                "pid": handoff.get("pid"),
+                "uid": handoff.get("uid"),
+                "next_seq": handoff.get("next_seq"),
+                "inbound_seq": handoff.get("inbound_seq"),
+            }
+        else:
+            result.pop("agent_handoff", None)
     if isinstance(result.get("error"), str) and len(result["error"]) > MAX_STATE_ERROR_CHARS:
         result["error"] = result["error"][-MAX_STATE_ERROR_CHARS:]
     return result
+
+
+def control_socket_path(root):
+    return Path(root) / CONTROL_SOCKET_NAME
+
+
+def verify_control_socket(root, *, expected_uid=None):
+    expected_uid = os.getuid() if expected_uid is None else int(expected_uid)
+    path = control_socket_path(root)
+    try:
+        info = path.lstat()
+    except OSError as exc:
+        raise StackError("CONTROL_SOCKET_MISSING", f"control socket AUSENTE: {path}") from exc
+    if (
+        not stat.S_ISSOCK(info.st_mode)
+        or info.st_uid != expected_uid
+        or stat.S_IMODE(info.st_mode) != 0o600
+    ):
+        raise StackError(
+            "CONTROL_SOCKET_UNSAFE",
+            f"private owner-only 0600 control socket required: {path}",
+        )
+    return path
+
+
+def open_control_socket(root, *, backlog=4):
+    root_path = private_dir(Path(root))
+    path = control_socket_path(root_path)
+    try:
+        if path.is_symlink() or path.exists():
+            path.unlink()
+    except FileNotFoundError:
+        pass
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    old_umask = os.umask(0o177)
+    try:
+        sock.bind(str(path))
+        os.chmod(path, 0o600)
+        verify_control_socket(root_path)
+        sock.listen(backlog)
+        return sock
+    except Exception:
+        sock.close()
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+    finally:
+        os.umask(old_umask)
+
+
+def close_control_socket(sock, root=None):
+    if sock is not None:
+        try:
+            sock.close()
+        except OSError:
+            pass
+    if root is not None:
+        try:
+            control_socket_path(root).unlink()
+        except FileNotFoundError:
+            pass
+
+
+def verify_peer_cred(conn, *, expected_uid=None, peercred_fn=None):
+    expected_uid = os.getuid() if expected_uid is None else int(expected_uid)
+    if peercred_fn is not None:
+        pid, uid, gid = peercred_fn(conn)
+    else:
+        raw = conn.getsockopt(
+            socket.SOL_SOCKET,
+            socket.SO_PEERCRED,
+            struct.calcsize("3i"),
+        )
+        pid, uid, gid = struct.unpack("3i", raw)
+    if int(uid) != expected_uid:
+        raise StackError(
+            "PEER_CRED_REFUSED",
+            f"peer uid {uid} does not match owner uid {expected_uid}",
+        )
+    return {"pid": int(pid), "uid": int(uid), "gid": int(gid)}
+
+
+def _recv_control_line(conn, timeout_s=2.0):
+    conn.settimeout(timeout_s)
+    buf = bytearray()
+    while b"\n" not in buf:
+        if len(buf) >= MAX_CONTROL_BYTES:
+            raise StackError("CONTROL_PROTOCOL_ERROR", "control message exceeds limit")
+        chunk = conn.recv(min(1024, MAX_CONTROL_BYTES - len(buf)))
+        if not chunk:
+            break
+        buf.extend(chunk)
+    line = bytes(buf).split(b"\n", 1)[0].strip()
+    if not line:
+        raise StackError("CONTROL_PROTOCOL_ERROR", "empty control message")
+    try:
+        payload = json.loads(line.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise StackError("CONTROL_PROTOCOL_ERROR", f"invalid control JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise StackError("CONTROL_PROTOCOL_ERROR", "control payload must be a JSON object")
+    return payload
+
+
+def _send_control_reply(conn, payload, fds=()):
+    raw = (json.dumps(payload, sort_keys=True) + "\n").encode("utf-8")
+    if fds:
+        cmsg = [(
+            socket.SOL_SOCKET,
+            socket.SCM_RIGHTS,
+            array.array("i", [int(fd) for fd in fds]).tobytes(),
+        )]
+        conn.sendmsg([raw], cmsg)
+    else:
+        conn.sendall(raw)
+
+
+def handle_control_connection(
+    conn,
+    peer_holder,
+    state,
+    root=None,
+    *,
+    expected_uid=None,
+    peercred_fn=None,
+    save_state_fn=None,
+):
+    """[TARGET, unit decision] Serve one SO_PEERCRED-checked control request."""
+    try:
+        try:
+            cred = verify_peer_cred(conn, expected_uid=expected_uid, peercred_fn=peercred_fn)
+        except StackError as exc:
+            _send_control_reply(conn, {"ok": False, "code": exc.code, "error": exc.detail})
+            return False
+        try:
+            request = _recv_control_line(conn)
+        except (OSError, StackError) as exc:
+            code = exc.code if isinstance(exc, StackError) else "CONTROL_IO_ERROR"
+            detail = exc.detail if isinstance(exc, StackError) else str(exc)
+            _send_control_reply(conn, {"ok": False, "code": code, "error": detail})
+            return False
+        if request.get("op") != HANDOFF_OP:
+            _send_control_reply(
+                conn,
+                {
+                    "ok": False,
+                    "code": "UNKNOWN_OP",
+                    "error": f"unsupported control op: {request.get('op')!r}",
+                },
+            )
+            return False
+        peer = peer_holder.get("peer") if isinstance(peer_holder, dict) else None
+        peer_sock = getattr(peer, "_sock", None) if peer is not None else None
+        if state.get("agent_handoff") is not None or peer is None or peer_sock is None:
+            _send_control_reply(
+                conn,
+                {
+                    "ok": False,
+                    "code": "ALREADY_HANDED_OFF",
+                    "error": "agent session already handed off",
+                },
+            )
+            return False
+        fd = peer_sock.fileno()
+        next_seq = int(getattr(peer, "next_seq", getattr(peer, "_next_seq", 1)))
+        inbound_seq = int(live._lane_state(peer).get("inbound_seq", 0))
+        rx_bytes = bytes(getattr(peer, "_rx", b""))
+        handoff_record = {
+            "pid": cred["pid"],
+            "uid": cred["uid"],
+            "next_seq": next_seq,
+            "inbound_seq": inbound_seq,
+        }
+        state["agent_handoff"] = handoff_record
+        if save_state_fn is not None:
+            save_state_fn(root, state)
+        elif root is not None:
+            save_state(root, state)
+        _send_control_reply(
+            conn,
+            {
+                "ok": True,
+                "op": HANDOFF_OP,
+                "next_seq": next_seq,
+                "inbound_seq": inbound_seq,
+                "rx_hex": rx_bytes.hex(),
+                "handoff": handoff_record,
+            },
+            fds=(fd,),
+        )
+        peer.close()
+        peer_holder["peer"] = None
+        return True
+    finally:
+        try:
+            conn.close()
+        except OSError:
+            pass
+
+
+def request_agent_handoff(
+    root=None,
+    *,
+    sock=None,
+    timeout_s=5.0,
+    expected_uid=None,
+    peercred_fn=None,
+):
+    """[TARGET, unit decision] Request SCM_RIGHTS agent fd handoff from the supervisor."""
+    owns_sock = sock is None
+    client = sock
+    if owns_sock:
+        if root is None:
+            raise StackError("CONTROL_SOCKET_MISSING", "state root required for handoff")
+        path = verify_control_socket(root, expected_uid=expected_uid)
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    received_fds = array.array("i")
+    try:
+        client.settimeout(timeout_s)
+        if owns_sock:
+            client.connect(str(path))
+        verify_peer_cred(client, expected_uid=expected_uid, peercred_fn=peercred_fn)
+        try:
+            client.sendall((json.dumps({"op": HANDOFF_OP}) + "\n").encode("utf-8"))
+        except BrokenPipeError:
+            pass
+        buf = bytearray()
+        cmsg_space = socket.CMSG_SPACE(struct.calcsize("i") * 4)
+        while b"\n" not in buf:
+            if len(buf) >= MAX_CONTROL_BYTES:
+                raise StackError("CONTROL_PROTOCOL_ERROR", "control reply exceeds limit")
+            chunk, ancdata, _flags, _addr = client.recvmsg(
+                min(1024, MAX_CONTROL_BYTES - len(buf)),
+                cmsg_space,
+            )
+            for cmsg_level, cmsg_type, cmsg_data in ancdata:
+                if cmsg_level == socket.SOL_SOCKET and cmsg_type == socket.SCM_RIGHTS:
+                    usable = len(cmsg_data) - (len(cmsg_data) % received_fds.itemsize)
+                    if usable > 0:
+                        received_fds.frombytes(cmsg_data[:usable])
+            if not chunk:
+                break
+            buf.extend(chunk)
+        line = bytes(buf).split(b"\n", 1)[0].strip()
+        if not line:
+            raise StackError("CONTROL_PROTOCOL_ERROR", "empty control reply from supervisor")
+        try:
+            reply = json.loads(line.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise StackError("CONTROL_PROTOCOL_ERROR", f"invalid control reply JSON: {exc}") from exc
+        if not isinstance(reply, dict):
+            raise StackError("CONTROL_PROTOCOL_ERROR", "control reply must be a JSON object")
+        if not reply.get("ok"):
+            for fd in received_fds:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+            raise StackError(
+                str(reply.get("code") or "HANDOFF_REFUSED"),
+                str(reply.get("error") or "agent handoff refused"),
+            )
+        if len(received_fds) != 1:
+            for fd in received_fds:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+            raise StackError(
+                "CONTROL_PROTOCOL_ERROR",
+                f"expected 1 SCM_RIGHTS fd, received {len(received_fds)}",
+            )
+        fd = int(received_fds[0])
+        del received_fds[:]
+        return {
+            "fd": fd,
+            "next_seq": int(reply.get("next_seq", 1)),
+            "inbound_seq": int(reply.get("inbound_seq", 0)),
+            "rx_hex": str(reply.get("rx_hex", "")),
+            "handoff": reply.get("handoff"),
+        }
+    except Exception:
+        for fd in received_fds:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        raise
+    finally:
+        if owns_sock and client is not None:
+            try:
+                client.close()
+            except OSError:
+                pass
 
 
 def save_state(root, value):
@@ -519,7 +839,8 @@ def cleanup(state, root, *, signal_fn=None, alive_fn=None, monotonic_fn=None, sl
         and state.get("display_mode", "private") != "visible"
         and Path("/tmp/.X11-unix", "X" + display[1:]).exists()
     )
-    if work.exists() or private_socket_present:
+    close_control_socket(None, root)
+    if work.exists() or private_socket_present or control_socket_path(root).exists():
         raise RuntimeError("socket/work cleanup failed")
     (root / "state.json").unlink()
     receipt = {"pids": state["pids"], "capsules": sorted(owned),
@@ -540,24 +861,60 @@ def free_display(sockets=Path("/tmp/.X11-unix"), locks=Path("/tmp")):
     raise RuntimeError("no free high X display")
 
 
-def monitor(peer, children, seconds, should_stop, tick, keepalive=None):
+def monitor(
+    peer,
+    children,
+    seconds,
+    should_stop,
+    tick,
+    keepalive=None,
+    *,
+    control_sock=None,
+    peer_holder=None,
+    state=None,
+    root=None,
+    handle_control_fn=None,
+):
     """Monotonic TTL and stop requests converge on the same cleanup path."""
     deadline = time.monotonic() + seconds
     next_keepalive = deadline - seconds + 10
+    if peer_holder is None:
+        peer_holder = {"peer": peer}
+    handler = handle_control_connection if handle_control_fn is None else handle_control_fn
     while not should_stop() and time.monotonic() < deadline:
         exited = [(index, p.poll()) for index, p in enumerate(children) if p.poll() is not None]
         if exited:
             raise RuntimeError("stack process exited: " + repr(exited))
         tick()
+        active_peer = peer_holder.get("peer")
         # [TARGET, unit decision] list is the admitted request/reply heartbeat;
-        # keep the agent and daemon below the frozen 30 s receive-idle limit.
-        if keepalive is not None and time.monotonic() >= next_keepalive:
+        # keep the agent and daemon below the frozen 30 s receive-idle limit
+        # until the agent connection is handed off via SCM_RIGHTS.
+        if active_peer is not None and keepalive is not None and time.monotonic() >= next_keepalive:
             keepalive()
             next_keepalive = time.monotonic() + 10
+        wait_fds = []
+        if control_sock is not None:
+            wait_fds.append(control_sock)
+        peer_sock = getattr(active_peer, "_sock", None) if active_peer is not None else None
+        if peer_sock is not None:
+            wait_fds.append(peer_sock)
+        if wait_fds:
+            readable, _, _ = select.select(wait_fds, [], [], 0.2)
+        else:
+            readable = []
+            time.sleep(0.2)
+        if control_sock is not None and control_sock in readable:
+            conn, _ = control_sock.accept()
+            handler(conn, peer_holder, state if state is not None else {}, root)
+            active_peer = peer_holder.get("peer")
+            peer_sock = getattr(active_peer, "_sock", None) if active_peer is not None else None
         # CoreClient buffers complete frames; drain those before waiting again.
-        readable, _, _ = select.select([peer._sock], [], [], 0.2)
-        if readable or b"\n" in peer._rx:
-            body = peer.recv()["body"]
+        if active_peer is not None and (
+            (peer_sock is not None and peer_sock in readable)
+            or b"\n" in getattr(active_peer, "_rx", b"")
+        ):
+            body = active_peer.recv()["body"]
             if body.get("event") == "error":
                 raise RuntimeError("native surface error: " + repr(body))
 
@@ -584,6 +941,79 @@ def tick_proposal(surface_id, frame, proposal_id, action):
         },
         "budget": {"max_ms": 10000, "max_retries": 0},
     }
+
+
+def settle_latest_frame(
+    peer,
+    surface_id,
+    frame,
+    report=None,
+    *,
+    receive_fn=None,
+    select_fn=None,
+    monotonic_fn=None,
+    settle_max_s=TICK_SETTLE_MAX_S,
+    quiesce_s=TICK_QUIESCE_S,
+    known_stale_key=None,
+):
+    """[TARGET, unit decision] Drain pending surface events and return the newest frame_ref."""
+    receive_fn = live.receive if receive_fn is None else receive_fn
+    select_fn = select.select if select_fn is None else select_fn
+    monotonic_fn = time.monotonic if monotonic_fn is None else monotonic_fn
+    report = {} if report is None else report
+    current_frame = [dict(frame)]
+
+    def observe_frame(body):
+        if (
+            isinstance(body, dict)
+            and body.get("schema") == "surface_event/v0.2"
+            and body.get("event") == "frame_ready"
+        ):
+            frame_ref = body.get("data", {}).get("frame_ref")
+            if (
+                isinstance(frame_ref, dict)
+                and frame_ref.get("surface_id") in (None, surface_id)
+                and isinstance(frame_ref.get("generation"), int)
+                and not isinstance(frame_ref.get("generation"), bool)
+                and isinstance(frame_ref.get("sha256"), str)
+                and int(frame_ref["generation"]) >= int(current_frame[0]["generation"])
+            ):
+                current_frame[0] = dict(frame_ref)
+                return True
+        return False
+
+    deadline = monotonic_fn() + max(0.0, float(settle_max_s))
+    while True:
+        if isinstance(getattr(peer, "_rx", None), (bytes, bytearray)) and b"\n" in peer._rx:
+            body = receive_fn(peer, lambda _b: True, report, reject_errors=False)
+            observe_frame(body)
+            continue
+        if (
+            isinstance(getattr(peer, "rx_queue", None), list)
+            and peer.rx_queue
+            and peer.rx_queue[0].get("body", {}).get("schema") == "surface_event/v0.2"
+        ):
+            body = receive_fn(peer, lambda _b: True, report, reject_errors=False)
+            observe_frame(body)
+            continue
+        sock = getattr(peer, "_sock", None)
+        if sock is None:
+            break
+        remaining = deadline - monotonic_fn()
+        if remaining <= 0:
+            break
+        current_key = (int(current_frame[0]["generation"]), current_frame[0]["sha256"])
+        wait_s = (
+            remaining
+            if known_stale_key is not None and current_key == known_stale_key
+            else min(float(quiesce_s), remaining)
+        )
+        readable, _, _ = select_fn([sock], [], [], max(0.0, wait_s))
+        if not readable and b"\n" not in getattr(peer, "_rx", b""):
+            break
+        body = receive_fn(peer, lambda _b: True, report, reject_errors=False)
+        observe_frame(body)
+    return dict(current_frame[0])
 
 
 def drive_agent_tick_page(
@@ -638,37 +1068,18 @@ def drive_agent_tick_page(
         return False
 
     def settle_frames(known_stale_key=None):
-        deadline = monotonic_fn() + max(0.0, float(settle_max_s))
-        while True:
-            if isinstance(getattr(peer, "_rx", None), (bytes, bytearray)) and b"\n" in peer._rx:
-                body = receive_fn(peer, lambda _b: True, report, reject_errors=False)
-                observe_frame(body)
-                continue
-            if (
-                isinstance(getattr(peer, "rx_queue", None), list)
-                and peer.rx_queue
-                and peer.rx_queue[0].get("body", {}).get("schema") == "surface_event/v0.2"
-            ):
-                body = receive_fn(peer, lambda _b: True, report, reject_errors=False)
-                observe_frame(body)
-                continue
-            sock = getattr(peer, "_sock", None)
-            if sock is None:
-                break
-            remaining = deadline - monotonic_fn()
-            if remaining <= 0:
-                break
-            current_key = (int(current_frame[0]["generation"]), current_frame[0]["sha256"])
-            wait_s = (
-                remaining
-                if known_stale_key is not None and current_key == known_stale_key
-                else min(float(quiesce_s), remaining)
-            )
-            readable, _, _ = select_fn([sock], [], [], max(0.0, wait_s))
-            if not readable and b"\n" not in getattr(peer, "_rx", b""):
-                break
-            body = receive_fn(peer, lambda _b: True, report, reject_errors=False)
-            observe_frame(body)
+        current_frame[0] = settle_latest_frame(
+            peer,
+            surface_id,
+            current_frame[0],
+            report,
+            receive_fn=receive_fn,
+            select_fn=select_fn,
+            monotonic_fn=monotonic_fn,
+            settle_max_s=settle_max_s,
+            quiesce_s=quiesce_s,
+            known_stale_key=known_stale_key,
+        )
 
     for step, action in enumerate(TICK_ACTIONS, start=1):
         stale_key = None
@@ -818,7 +1229,8 @@ def supervise(root, seconds, lock_fd):
     work = Path(state["work"])
     children = []
     recorder_children = []
-    peer = None
+    peer_holder = {"peer": None}
+    control_sock = None
     error = None
 
     def spawn(argv, env):
@@ -902,6 +1314,8 @@ def supervise(root, seconds, lock_fd):
         wait(lambda: '"MetaViewer"' in checked(["xwininfo", "-root", "-tree"], env=env), "shipped UI window")
         peer = live.CoreClient(str(socket_path), timeout_s=20, max_line_bytes=1 << 20, max_reply_bytes=1 << 20)
         peer.connect()
+        peer_holder["peer"] = peer
+        control_sock = open_control_socket(root)
         bootstrap_agent_surface(
             peer,
             regs,
@@ -914,9 +1328,27 @@ def supervise(root, seconds, lock_fd):
             recorder_children=recorder_children,
         )
         # Drain fan-out continuously so the core never retires a full agent queue.
-        monitor(peer, children, seconds, lambda: stop, lambda: remember_tree(state, root),
-                lambda: live.send(peer, regs["agent"], config,
-                                  {"schema": "surface_request/v0.2", "op": "list", "params": {}}))
+        monitor(
+            peer,
+            children,
+            seconds,
+            lambda: stop,
+            lambda: remember_tree(state, root),
+            lambda: (
+                live.send(
+                    peer_holder["peer"],
+                    regs["agent"],
+                    config,
+                    {"schema": "surface_request/v0.2", "op": "list", "params": {}},
+                )
+                if peer_holder.get("peer") is not None
+                else None
+            ),
+            control_sock=control_sock,
+            peer_holder=peer_holder,
+            state=state,
+            root=root,
+        )
     except Exception as exc:
         logs = "\n".join(path.name + ": " + path.read_text(errors="replace")[-2000:]
                          for path in sorted(work.glob("*.log")))
@@ -926,19 +1358,21 @@ def supervise(root, seconds, lock_fd):
         save_state(root, state)
         print(error, file=sys.stderr, flush=True)
     finally:
+        close_control_socket(control_sock, root)
         stop_recorder(state)
         state["capsules"] = sorted(set(state.get("capsules", ())) | live.profile_containers("mv-live-1"))
         save_state(root, state)
-        if peer:
+        active_peer = peer_holder.get("peer")
+        if active_peer:
             if state.get("surface_id"):
                 try:
-                    live.send(peer, regs["agent"], config, {"schema": "surface_request/v0.2", "op": "destroy",
+                    live.send(active_peer, regs["agent"], config, {"schema": "surface_request/v0.2", "op": "destroy",
                               "params": {"surface_id": state["surface_id"]}})
-                    live.receive(peer, lambda b: b.get("event") == "state_changed"
+                    live.receive(active_peer, lambda b: b.get("event") == "state_changed"
                                  and b["data"]["surface"]["state"] == "destroyed", {})
                 except Exception as exc:
                     print("native destroy fallback: " + str(exc), file=sys.stderr, flush=True)
-            peer.close()
+            active_peer.close()
         try:
             remember_tree(state, root)
             cleanup(state, root)

@@ -6,7 +6,7 @@ This document specifies the narrated `8`-checkpoint [MEASURED] agent-drive demo 
 
 - **No wire, contract, core, or UI modifications**: The runner operates exclusively over the frozen `v0.2` [CITED: contracts/v0.2] agent tool verbs (`observe`, `propose`, `wait_verify` in `agents/metaviewer_agents/tools.py`).
 - **`navigate` wire verb is `ABSENT — do not invent` by decision**: Local page navigation is composed out of `3` [MEASURED] standard input proposals (`key` `["ctrl", "l"]`, `type` `data:text/html,...`, `key` `["Return"]`).
-- **Works alongside `stack.py`**: By default (`--start-stack` unset), the runner attaches to an already-ready `stack.py` session (`LIVE_STACK_READY` in `$XDG_RUNTIME_DIR/metaviewer-live-stack/state.json`), preserving `--display private|visible` and `--record <mp4>` supervision until `stack.py stop` is invoked.
+- **Works alongside `stack.py` via `SCM_RIGHTS` agent handoff**: By default (`--start-stack` unset), the runner attaches to an already-ready `stack.py` session (`LIVE_STACK_READY` in `$XDG_RUNTIME_DIR/metaviewer-live-stack/state.json`), preserving `--display private|visible` and `--record <mp4>` supervision until `stack.py stop` is invoked. The supervisor exposes an owner-only (`0600` [CITED: tests/e2e/e2e1_slice/stack.py]) UNIX control socket at `$XDG_RUNTIME_DIR/metaviewer-live-stack/control.sock`; on a single `handoff-agent` request from the same UID (`SO_PEERCRED` check), it transfers its open agent `core.sock` file descriptor via `SCM_RIGHTS`, closes its own descriptor copy, records `agent_handoff` in `state.json`, and refuses any second handoff (`ALREADY_HANDED_OFF`). The runner continues the existing agent session with uninterrupted `seq` continuity (without `pidfd_getfd` or `ptrace`) and closes the descriptor on exit so the agent session ends cleanly.
 - **Live frame update resilience**: Because live capsule frames advance continuously, any proposal during `navigate` or `custody_click` that receives `STALE_FRAME` settles the newest `frame_ready` / `observe` frame and retries with a fresh `proposal_id` up to `TICK_MAX_ATTEMPTS = 3` [CITED: tests/e2e/e2e1_slice/stack.py] attempts (`0.5` s [CITED: tests/e2e/e2e1_slice/stack.py] settle cap, `0.15` s [CITED: tests/e2e/e2e1_slice/stack.py] quiesce window).
 - **Mandatory `STALE_FRAME` negative control**: Before dispatching the admitted custody click, the runner deliberately submits a proposal pinned to a stale `based_on_frame`, asserts that `metaviewer-core` refuses it with `reason_code: "STALE_FRAME"`, records the refusal in checkpoint `5` [MEASURED], and continues execution.
 
@@ -79,6 +79,6 @@ python3 tests/e2e/e2e1_slice/demo_agent_drive.py --receipt-out /tmp/metaviewer-a
 # Start and stop stack.py automatically for a self-contained run:
 python3 tests/e2e/e2e1_slice/demo_agent_drive.py --start-stack --display private --record /tmp/demo.mp4 --receipt-out /tmp/receipt.json
 
-# Run the offline unit test suite (6 [MEASURED] tests with an injected peer):
+# Run the offline unit test suite (7 [MEASURED] tests with an injected peer):
 python3 -m unittest tests/e2e/e2e1_slice/test_demo_agent_drive.py -v
 ```

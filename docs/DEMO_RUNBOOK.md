@@ -16,8 +16,8 @@ Before I run `stack.py start`, preflight verifies every prerequisite and fails c
   - `tools/sync_kit.mjs` requires the local `capsule-ui-kit` git checkout (either the repository root or `<checkout>/packages/capsule-ui-kit`) to match every pin in `ui/kit.lock.json`: `git remote get-url origin` must equal `https://github.com/oguirado/capsule-ui-kit.git` [CITED: ui/kit.lock.json], `git rev-parse HEAD` must equal `bf31bc201987206d16dbd88d93102f9d5ce026f9` [CITED: ui/kit.lock.json], `version` must equal `0.2.1` [CITED: ui/kit.lock.json], and the length-framed SHA-256 tree digest (`contentHash`) must equal `1bee78c76a0a2a41d085beed918ca6ca791beaf53b952d4a9367dad660fd6dc2` [CITED: ui/kit.lock.json].
   - `<clone>/ui/dist/renderer/index.html` and `<clone>/ui/dist/preload/preload.cjs` must exist on disk (produced by `npm ci --offline` followed by `npm run build` inside `<clone>/ui`).
 - **Authority core and adapter binaries**:
-  - Rust toolchain (`1.97` [CITED: Cargo.toml]) for `metaviewer-core` unless `MV_E2E_CORE_BIN` points to an existing executable. When building, `stack.py` runs `cargo build --offline --manifest-path core/Cargo.toml --bin metaviewer-core` using an absolute per-worktree `CARGO_TARGET_DIR`.
-  - Go toolchain (`1.26.0` [CITED: daemon-adapter/go.mod]) for `mv-daemon-adapter` unless `MV_E2E_ADAPTER_BIN` points to an existing executable. When building, `stack.py` runs `go build -o <work>/mv-daemon-adapter ./cmd/mv-daemon-adapter` with `GOPROXY=off` and `GOSUMDB=off`.
+  - Rust toolchain (`1.97` [CITED: Cargo.toml]) for `metaviewer-core`: `stack.py` runs `cargo build --offline --manifest-path core/Cargo.toml --bin metaviewer-core` using an absolute per-worktree `CARGO_TARGET_DIR`. Do not set `MV_E2E_CORE_BIN` for live or demo runs because prebuilt overrides risk stale binaries.
+  - Go toolchain (`1.26.0` [CITED: daemon-adapter/go.mod]) for `mv-daemon-adapter`: `stack.py` runs `go build -o <work>/mv-daemon-adapter ./cmd/mv-daemon-adapter` with `GOPROXY=off` and `GOSUMDB=off`. Do not set `MV_E2E_ADAPTER_BIN` for live or demo runs because prebuilt overrides risk stale binaries.
 - **OpenSuperficies runtime and `mv-live-1` identity**:
   - `MV_SRF_BIN_DIR` contains executable `srf-identity-surface`.
   - `SRF_IDENTITY_STORE_ROOT` and `SRF_PROXY_REGISTRY` point to the provisioned identity store and registry for `mv-live-1`. I never read `identity.env`, tokens, cookies, or private keys.
@@ -51,9 +51,9 @@ mkdir -p "$MV_SRF_LIVE_RAM_ROOT" "$MV_SRF_STATE_DIR" "$MV_RECORDING_DESTINATION"
 | `MV_E2E_LIVE` | Must be `1`; enables live stack admission and writes `qa-anchors.json` into the run directory |
 | `ELECTRON_OVERRIDE_DIST_PATH` | `<directory holding electron 44.9.2>` [CITED: ui/package.json], used to derive `MV_E2E_ELECTRON_BIN` (and honored by `tools/gate.sh`) |
 | `MV_E2E_ELECTRON_BIN` | Absolute path to the local Electron `44.9.2` binary (`$ELECTRON_OVERRIDE_DIST_PATH/electron`), read directly by `stack.py` [CITED: tests/e2e/e2e1_slice/stack.py, ui/package.json] |
-| `CARGO_TARGET_DIR` | Absolute per-worktree Cargo build directory (required when `MV_E2E_CORE_BIN` is unset) |
-| `MV_E2E_CORE_BIN` | Optional prebuilt `metaviewer-core` binary path |
-| `MV_E2E_ADAPTER_BIN` | Optional prebuilt `mv-daemon-adapter` binary path |
+| `CARGO_TARGET_DIR` | Absolute per-worktree Cargo build directory used by `stack.py` to build `metaviewer-core` |
+| `MV_E2E_CORE_BIN` | Internal test-only `metaviewer-core` binary override; leave unset for live/demo runs so `stack.py` never uses a stale binary |
+| `MV_E2E_ADAPTER_BIN` | Internal test-only `mv-daemon-adapter` binary override; leave unset for live/demo runs so `stack.py` never uses a stale binary |
 | `MV_SRF_BIN_DIR` | Directory containing `srf-identity-surface` |
 | `MV_SRF_LIVE_PROFILE` | Must be `mv-live-1` |
 | `MV_SRF_LIVE_RAM_ROOT` | Per-lane `/dev/shm` root where live capsule RGB frames are published in RAM (one RAM root per live lane; must be created first with `mkdir -p`, or preflight rejects it with `"live path AUSENTE"`) |
@@ -114,7 +114,7 @@ systemd-run --user --scope --unit mv-demo -p MemoryMax=8G -p MemoryHigh=6G -p Me
   python3 tests/e2e/e2e1_slice/stack.py start --ttl 45m
 ```
 
-- `--agent-tick-page` (default off): opt-in agent-driven ticking `data:text/html` page after the first `frame_ready` (`LIVE_STACK_TICK step=N outcome=...`, fail-open); for test/QA only, not for the demo recording [CITED: tests/e2e/e2e1_slice/stack.py].
+- `--agent-tick-page` (default off): opt-in agent-driven ticking `data:text/html` page (`TICK_URL`, percent-encoded with `urllib.parse.quote` so `#` color literals are never truncated as URL fragments) after the first `frame_ready` (`LIVE_STACK_TICK step=N outcome=...`, fail-open); for test/QA only, not for the demo recording [CITED: tests/e2e/e2e1_slice/stack.py].
 
 ### Startup sequence and readiness receipt
 
@@ -125,10 +125,10 @@ systemd-run --user --scope --unit mv-demo -p MemoryMax=8G -p MemoryHigh=6G -p Me
 3. Starts `metaviewer-core` and waits for `core.sock`; starts `mv-daemon-adapter` and waits for the initial handshake event (`events/1.json`).
 4. In `private` mode, allocates a free high display (`:91+` [TARGET]), writes an owner-only `0600` [TARGET] `Xauthority` cookie, and boots `Xvfb :NN -screen 0 1600x1000x24 -auth <run>/Xauthority -nolisten tcp`. In `visible` mode, binds the caller's `$DISPLAY` and `$XAUTHORITY` and verifies reachability with `xdpyinfo`.
 5. Launches the shipped Electron entry (`$MV_E2E_ELECTRON_BIN <clone>/ui --user-data-dir=<run>/electron-profile --ozone-platform=x11`) with loader injection variables (`LD_*`, `NODE_*`, `ELECTRON_*`, `PYTHON*`) stripped, and waits until `"MetaViewer"` appears in `xwininfo -root -tree`.
-6. Connects as the agent peer, completes `hello/v0.2`, and sends `surface_request/v0.2` `create` (`{kind: "browser", geometry: {w: 1280, h: 900}, profile_id: "mv-live-1"}` [TARGET]), verifying ownership of the single `srf-id-<hash>` capsule container.
+6. Connects as the agent peer, opens the owner-only `0600` [CITED: tests/e2e/e2e1_slice/stack.py] control socket at `$XDG_RUNTIME_DIR/metaviewer-live-stack/control.sock`, completes `hello/v0.2`, and sends `surface_request/v0.2` `create` (`{kind: "browser", geometry: {w: 1280, h: 900}, profile_id: "mv-live-1"}` [TARGET]), verifying ownership of the single `srf-id-<hash>` capsule container.
 7. Waits for the first `frame_ready` event (frames published under `$MV_SRF_LIVE_RAM_ROOT/srf-id-<hash>/frames/w1/`).
 8. If `--record <path.mp4>` was passed, starts `ffmpeg -f x11grab` against the stack display and records its birth-verified PID in `state.json`.
-9. Prints the readiness line and continues draining agent fan-out with a `10` s [TARGET] `list` heartbeat until `--ttl` expires or `stack.py stop` is invoked:
+9. Prints the readiness line and continues draining agent fan-out with a `10` s [TARGET] `list` heartbeat (until a same-UID `handoff-agent` request on `control.sock` transfers the agent connection fd via `SCM_RIGHTS` or `--ttl` expires / `stack.py stop` is invoked):
 
 ```text
 LIVE_STACK_READY display=:91 xauthority=/run/user/1000/metaviewer-live-stack/run-xxxx/Xauthority capsule=srf-id-xxxxxxxx
@@ -258,7 +258,7 @@ When a preflight, display, recording, or cleanup check fails, `stack.py` exits w
 
 ## 9. Agent-Drive Demo Runner (`demo_agent_drive.py`)
 
-`tests/e2e/e2e1_slice/demo_agent_drive.py` drives the narrated `8`-checkpoint [MEASURED] agent loop against an already-running `stack.py` session (`LIVE_STACK_READY` in `$XDG_RUNTIME_DIR/metaviewer-live-stack/state.json`), working alongside `--display private|visible` and `--record <mp4>` without starting or stopping the stack itself unless `--start-stack` is explicitly supplied. See `docs/DEMO_AGENT_SCRIPT.md` for the full checkpoint transcript schema and narration script.
+`tests/e2e/e2e1_slice/demo_agent_drive.py` drives the narrated `8`-checkpoint [MEASURED] agent loop against an already-running `stack.py` session (`LIVE_STACK_READY` in `$XDG_RUNTIME_DIR/metaviewer-live-stack/state.json`), working alongside `--display private|visible` and `--record <mp4>` without starting or stopping the stack itself unless `--start-stack` is explicitly supplied. On attach, the runner connects to the supervisor's owner-only `0600` [CITED: tests/e2e/e2e1_slice/stack.py] `$XDG_RUNTIME_DIR/metaviewer-live-stack/control.sock`, passes the `SO_PEERCRED` same-UID check, sends `{"op": "handoff-agent"}`, receives the open agent `core.sock` file descriptor via `SCM_RIGHTS` (with `agent_handoff` recorded in `state.json` and any second handoff refused with `ALREADY_HANDED_OFF`), continues the existing agent session with uninterrupted `seq` continuity, and closes the descriptor cleanly on exit. See `docs/DEMO_AGENT_SCRIPT.md` for the full checkpoint transcript schema and narration script.
 
 ### Prerequisites for perception and Wender state
 
@@ -300,7 +300,7 @@ export MV_WENDER_ROOT="<wender-agent-checkout>"
 
 ### Offline self-test (injected peer)
 
-To verify the ordered checkpoints, `STALE_FRAME` negative control, transient retry loop (`3` [MEASURED] max attempts), `MV_WENDER_PLANNER_CMD` subprocess path, transcript schema validator, and session state guards without live containers (`6` [MEASURED] unit tests):
+To verify the ordered checkpoints, `STALE_FRAME` negative control, transient retry loop (`3` [MEASURED] max attempts), `MV_WENDER_PLANNER_CMD` subprocess path, transcript schema validator, `SCM_RIGHTS` `control.sock` handoff, and session state guards without live containers (`7` [MEASURED] unit tests in `test_demo_agent_drive.py` and `16` [MEASURED] unit tests in `test_stack_demo.py`):
 
 ```bash
 python3 tests/e2e/e2e1_slice/demo_agent_drive.py --self-test

@@ -8,9 +8,13 @@ import os
 from pathlib import Path
 import shutil
 import signal
+import socket
+import stat
 import tempfile
+import threading
 import unittest
 from unittest.mock import Mock, patch
+from urllib.parse import unquote, urlsplit
 
 SPEC = importlib.util.spec_from_file_location(
     "live_stack_demo", Path(__file__).with_name("stack.py")
@@ -1098,6 +1102,181 @@ class StackDemoTests(unittest.TestCase):
         )
         self.assertEqual(build_calls, [])
         self.assertEqual(resolved_fresh["adapter"], fresh_bin.resolve(strict=True))
+
+    def test_tick_url_percent_encoded_and_decodes_to_full_html(self):
+        self.assertIsInstance(stack.TICK_URL, str)
+        self.assertTrue(stack.TICK_URL.startswith("data:text/html,"))
+        self.assertNotIn("#", stack.TICK_URL)
+        parsed = urlsplit(stack.TICK_URL)
+        self.assertEqual(parsed.fragment, "")
+        payload = stack.TICK_URL[len("data:text/html,") :]
+        decoded = unquote(payload)
+        self.assertEqual(decoded, stack.TICK_HTML)
+        self.assertIn("background:#123", decoded)
+        self.assertIn("color:#ff0", decoded)
+        self.assertIn("background:#f0f", decoded)
+        self.assertIn("setInterval", decoded)
+
+        # Negative control: unencoded '#' turns everything from '#123' onward into a URL fragment.
+        broken_url = "data:text/html," + stack.TICK_HTML
+        broken_parsed = urlsplit(broken_url)
+        self.assertTrue(broken_parsed.fragment.startswith("123"))
+        self.assertNotIn("setInterval", broken_parsed.path)
+
+    def test_control_socket_permissions_and_unsafe_negative_controls(self):
+        sock = stack.open_control_socket(self.root)
+        try:
+            ctrl_path = stack.verify_control_socket(self.root)
+            info = ctrl_path.lstat()
+            self.assertTrue(stat.S_ISSOCK(info.st_mode))
+            self.assertEqual(stat.S_IMODE(info.st_mode), 0o600)
+            self.assertEqual(info.st_uid, os.getuid())
+
+            # Negative control 1: group/world permissions are refused.
+            os.chmod(ctrl_path, 0o660)
+            with self.assertRaises(stack.StackError) as mode_ctx:
+                stack.verify_control_socket(self.root)
+            self.assertEqual(mode_ctx.exception.code, "CONTROL_SOCKET_UNSAFE")
+
+            # Negative control 2: wrong owner UID is refused.
+            os.chmod(ctrl_path, 0o600)
+            with self.assertRaises(stack.StackError) as uid_ctx:
+                stack.verify_control_socket(self.root, expected_uid=os.getuid() + 1)
+            self.assertEqual(uid_ctx.exception.code, "CONTROL_SOCKET_UNSAFE")
+        finally:
+            stack.close_control_socket(sock, self.root)
+
+        # Negative control 3: missing control socket is refused.
+        with self.assertRaises(stack.StackError) as missing_ctx:
+            stack.verify_control_socket(self.root)
+        self.assertEqual(missing_ctx.exception.code, "CONTROL_SOCKET_MISSING")
+
+        # Negative control 4: regular file at control.sock path is refused.
+        fake_path = stack.control_socket_path(self.root)
+        fake_path.write_text("not-a-socket")
+        fake_path.chmod(0o600)
+        with self.assertRaises(stack.StackError) as reg_ctx:
+            stack.verify_control_socket(self.root)
+        self.assertEqual(reg_ctx.exception.code, "CONTROL_SOCKET_UNSAFE")
+        fake_path.unlink()
+
+    def test_control_socket_peercred_refuses_foreign_uid(self):
+        client_sock, server_sock = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            # Same-UID SO_PEERCRED succeeds on a real AF_UNIX socketpair.
+            cred = stack.verify_peer_cred(server_sock)
+            self.assertEqual(cred["uid"], os.getuid())
+            self.assertEqual(cred["pid"], os.getpid())
+        finally:
+            client_sock.close()
+            server_sock.close()
+
+        # Negative control: foreign UID is refused by handle_control_connection and request_agent_handoff.
+        c_sock, s_sock = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        core_a, core_b = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            fake_peer = Mock()
+            fake_peer._sock = core_a
+            fake_peer.next_seq = 5
+            fake_peer._rx = bytearray()
+            peer_holder = {"peer": fake_peer}
+            state = self.base_state()
+
+            t = threading.Thread(
+                target=stack.handle_control_connection,
+                args=(s_sock, peer_holder, state, self.root),
+                kwargs={"peercred_fn": lambda _conn: (9999, os.getuid() + 1000, os.getgid())},
+            )
+            t.start()
+            with self.assertRaises(stack.StackError) as ctx:
+                stack.request_agent_handoff(sock=c_sock)
+            t.join(timeout=2.0)
+            self.assertEqual(ctx.exception.code, "PEER_CRED_REFUSED")
+            self.assertIs(peer_holder["peer"], fake_peer)
+            self.assertNotIn("agent_handoff", state)
+            fake_peer.close.assert_not_called()
+        finally:
+            c_sock.close()
+            core_a.close()
+            core_b.close()
+
+    def test_scm_rights_agent_handoff_socketpair_and_second_handoff_refused(self):
+        core_agent_sock, core_server_sock = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sup_peer = stack.live.CoreClient(
+                str(self.root / "core.sock"),
+                timeout_s=20,
+                max_line_bytes=1 << 20,
+                max_reply_bytes=1 << 20,
+            )
+            sup_peer._sock = core_agent_sock
+            sup_peer._next_seq = 7
+            sup_peer._rx = bytearray(b'{"buffered":true}\n')
+            sup_peer._hello_complete = True
+            stack.live._lane_state(sup_peer)["inbound_seq"] = 11
+
+            peer_holder = {"peer": sup_peer}
+            state = self.base_state()
+            stack.save_state(self.root, state)
+
+            # 1. First handoff over AF_UNIX socketpair passes the open fd via SCM_RIGHTS.
+            c1, s1 = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                t1 = threading.Thread(
+                    target=stack.handle_control_connection,
+                    args=(s1, peer_holder, state, self.root),
+                )
+                t1.start()
+                handoff = stack.request_agent_handoff(sock=c1)
+                t1.join(timeout=2.0)
+            finally:
+                c1.close()
+
+            self.assertEqual(handoff["next_seq"], 7)
+            self.assertEqual(handoff["inbound_seq"], 11)
+            self.assertEqual(bytes.fromhex(handoff["rx_hex"]), b'{"buffered":true}\n')
+            self.assertIsNone(peer_holder["peer"])
+            self.assertIsNone(sup_peer._sock)
+
+            persisted = stack.load_state(self.root)
+            self.assertEqual(
+                persisted["agent_handoff"],
+                {
+                    "pid": os.getpid(),
+                    "uid": os.getuid(),
+                    "next_seq": 7,
+                    "inbound_seq": 11,
+                },
+            )
+
+            # Verify the passed fd is the live connected endpoint to core_server_sock.
+            runner_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM, fileno=handoff["fd"])
+            try:
+                runner_sock.sendall(b"ping-from-runner\n")
+                self.assertEqual(core_server_sock.recv(64), b"ping-from-runner\n")
+
+                # 2. Negative control: a second handoff request is refused with ALREADY_HANDED_OFF.
+                c2, s2 = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+                try:
+                    t2 = threading.Thread(
+                        target=stack.handle_control_connection,
+                        args=(s2, peer_holder, state, self.root),
+                    )
+                    t2.start()
+                    with self.assertRaises(stack.StackError) as second_ctx:
+                        stack.request_agent_handoff(sock=c2)
+                    t2.join(timeout=2.0)
+                    self.assertEqual(second_ctx.exception.code, "ALREADY_HANDED_OFF")
+                finally:
+                    c2.close()
+            finally:
+                runner_sock.close()
+
+            # Because the supervisor closed its fd copy on handoff, closing runner_sock reaches EOF on core.
+            core_server_sock.settimeout(1.0)
+            self.assertEqual(core_server_sock.recv(16), b"")
+        finally:
+            core_server_sock.close()
 
 
 if __name__ == "__main__":

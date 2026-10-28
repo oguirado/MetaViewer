@@ -32,12 +32,11 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import select
-import signal
 import socket
 import subprocess
 import sys
 import time
+import unittest
 from urllib.parse import quote
 import uuid
 
@@ -807,116 +806,58 @@ def run_demo_agent_drive(
     return receipt
 
 
-def _find_supervisor_core_socket_fd(sup_pid: int, socket_path: Path) -> int | None:
-    """Locate the supervisor's open AF_UNIX stream fd connected to ``socket_path``."""
-    target = os.path.realpath(socket_path)
-    inodes: set[str] = set()
+def _attach_peer_from_handoff(
+    socket_path: Path,
+    handoff: dict,
+    regs: dict,
+    config: dict,
+    *,
+    timeout_s: float = 20.0,
+) -> live.CoreClient:
+    """[TARGET, unit decision] Adopt an SCM_RIGHTS agent core socket fd with seq continuity."""
+    fd = int(handoff["fd"])
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM, fileno=fd)
     try:
-        unix_lines = Path("/proc/net/unix").read_text(errors="replace").splitlines()
-    except OSError:
-        return None
-    for line in unix_lines[1:]:
-        parts = line.split()
-        if len(parts) >= 8 and os.path.realpath(parts[7]) == target:
-            inodes.add(parts[6])
-    fd_dir = Path(f"/proc/{sup_pid}/fd")
-    if not fd_dir.is_dir():
-        return None
-    pidfd_open = getattr(os, "pidfd_open", None)
-    if not callable(pidfd_open):
-        return None
-    try:
-        pidfd = pidfd_open(sup_pid, 0)
-    except OSError:
-        return None
-    try:
-        for entry in sorted(fd_dir.iterdir(), key=lambda p: int(p.name) if p.name.isdigit() else 999999):
-            if not entry.name.isdigit():
-                continue
-            try:
-                link = os.readlink(entry)
-            except OSError:
-                continue
-            if not link.startswith("socket:["):
-                continue
-            fd_num = int(entry.name)
-            try:
-                dup_fd = _pidfd_getfd(pidfd, fd_num)
-            except OSError:
-                continue
-            sock = socket.socket(fileno=dup_fd)
-            try:
-                peer_name = sock.getpeername()
-                if isinstance(peer_name, bytes):
-                    peer_name = peer_name.decode("utf-8", errors="replace")
-                if isinstance(peer_name, str) and peer_name and os.path.realpath(peer_name) == target:
-                    return fd_num
-                ino = link[len("socket:[") : -1]
-                if ino in inodes:
-                    return fd_num
-            except OSError:
-                pass
-            finally:
-                sock.close()
-    finally:
-        os.close(pidfd)
-    return None
-
-
-def _pidfd_getfd(pidfd: int, target_fd: int) -> int:
-    """Duplicate ``target_fd`` from ``pidfd`` using the Linux pidfd_getfd syscall."""
-    fn = getattr(os, "pidfd_getfd", None)
-    if callable(fn):
-        return fn(pidfd, target_fd, 0)
-    import ctypes
-
-    libc = ctypes.CDLL("libc.so.6", use_errno=True)
-    machine = os.uname().machine
-    nr = 438 if machine in ("aarch64", "x86_64") else 438
-    res = libc.syscall(nr, int(pidfd), int(target_fd), 0)
-    if res < 0:
-        err = ctypes.get_errno()
-        raise OSError(err, os.strerror(err))
-    return int(res)
-
-
-def _last_agent_seq_in_journal(archive: Path, agent_endpoint: dict) -> int:
-    journal = archive / "journal.jsonl"
-    if not journal.is_file():
-        return 1
-    last_seq = 1
-    for line in journal.read_text(errors="replace").splitlines()[1:]:
+        sock.settimeout(timeout_s)
+        candidate = live.CoreClient(
+            str(socket_path),
+            timeout_s=timeout_s,
+            max_line_bytes=1 << 20,
+            max_reply_bytes=1 << 20,
+        )
+        candidate._sock = sock
+        candidate._next_seq = max(1, int(handoff.get("next_seq", 1)))
+        rx_hex = str(handoff.get("rx_hex", ""))
+        candidate._rx = bytearray(bytes.fromhex(rx_hex)) if rx_hex else bytearray()
+        candidate._hello_complete = True
+        candidate._pinned = (
+            str(regs["agent"]["endpoint"]["component"]),
+            str(regs["agent"]["endpoint"]["instance"]),
+            str(regs["core"]["endpoint"]["component"]),
+            str(regs["core"]["endpoint"]["instance"]),
+            str(config["session_id"]),
+        )
+        lane = live._lane_state(candidate)
+        lane["inbound_seq"] = max(0, int(handoff.get("inbound_seq", 0)))
+        return candidate
+    except Exception:
         try:
-            row = json.loads(line)
-        except ValueError:
-            continue
-        witness_id = row.get("core_seq")
-        if not isinstance(witness_id, int):
-            continue
-        ev_file = archive / "events" / f"{witness_id}.json"
-        if not ev_file.is_file():
-            continue
-        try:
-            ev = json.loads(ev_file.read_text(errors="replace"))
-        except ValueError:
-            continue
-        for w_sha in ev.get("witnesses", ()):
-            art = archive / "artifacts" / str(w_sha)
-            if not art.is_file():
-                continue
-            try:
-                env = json.loads(art.read_text(errors="replace"))
-            except ValueError:
-                continue
-            if env.get("from") == agent_endpoint and isinstance(env.get("seq"), int):
-                last_seq = max(last_seq, int(env["seq"]))
-    return last_seq
+            sock.close()
+        except OSError:
+            pass
+        raise
 
 
 class AttachedLiveStackSession:
     """ToolClient adapter bound to an already-running stack.py supervisor."""
 
-    def __init__(self, root: Path, *, started_by_runner: bool = False) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        started_by_runner: bool = False,
+        handoff_fn=None,
+    ) -> None:
         self.root = root
         self.started_by_runner = started_by_runner
         if not (root / "state.json").exists():
@@ -939,70 +880,22 @@ class AttachedLiveStackSession:
         self.archive = self.work / "state/metaviewer/sessions" / self.config["session_id"]
         self.report: dict = {"commands": [], "wire_evidence": []}
         self.peer: live.CoreClient | None = None
-        self._sup_paused = False
+        self.handoff_info: dict | None = None
+        self._handoff_fn = stack.request_agent_handoff if handoff_fn is None else handoff_fn
 
     def __enter__(self) -> "AttachedLiveStackSession":
-        sup_pid = int(self.supervisor["pid"])
-        target_fd = _find_supervisor_core_socket_fd(sup_pid, self.socket_path)
-        stack.signal_record(self.supervisor, signal.SIGSTOP)
-        self._sup_paused = True
         try:
-            if target_fd is not None:
-                pidfd = os.pidfd_open(sup_pid, 0)
-                try:
-                    dup_fd = _pidfd_getfd(pidfd, target_fd)
-                finally:
-                    os.close(pidfd)
-                sup_sock = socket.socket(fileno=dup_fd)
-                try:
-                    readable, _, _ = select.select([sup_sock], [], [], 0.0)
-                    if not readable:
-                        next_seq = _last_agent_seq_in_journal(
-                            self.archive, self.regs["agent"]["endpoint"]
-                        ) + 1
-                        env = live.make_envelope(
-                            msg_id=f"handoff-list-{uuid.uuid4().hex[:8]}",
-                            from_component="agent",
-                            from_instance=self.regs["agent"]["endpoint"]["instance"],
-                            to_component="core",
-                            to_instance=self.config["core"]["endpoint"]["instance"],
-                            session_id=self.config["session_id"],
-                            seq=next_seq,
-                            body={"schema": "surface_request/v0.2", "op": "list", "params": {}},
-                            ts_ns=0,
-                        )
-                        sup_sock.sendall(
-                            json.dumps(env, separators=(",", ":")).encode("utf-8") + b"\n"
-                        )
-                        select.select([sup_sock], [], [], 0.2)
-                    sup_sock.shutdown(socket.SHUT_WR)
-                finally:
-                    sup_sock.close()
-
-            deadline = time.monotonic() + 2.0
-            last_err: Exception | None = None
-            while time.monotonic() < deadline:
-                candidate = live.CoreClient(
-                    str(self.socket_path),
-                    timeout_s=20,
-                    max_line_bytes=1 << 20,
-                    max_reply_bytes=1 << 20,
-                )
-                try:
-                    candidate.connect()
-                    live.send(candidate, self.regs["agent"], self.config, self.regs["agent"]["hello"])
-                    reply = candidate.recv()["body"]
-                    if reply != self.regs["core"]["hello"]:
-                        raise RuntimeError("core hello pin mismatch on reconnect")
-                    self.peer = candidate
-                    break
-                except Exception as exc:
-                    last_err = exc
-                    candidate.close()
-                    time.sleep(0.02)
-            if self.peer is None:
-                raise RuntimeError(f"failed to attach agent session to core.sock: {last_err}")
-
+            try:
+                handoff = self._handoff_fn(self.root)
+            except Exception as exc:
+                raise RuntimeError(f"failed to attach agent session to core.sock: {exc}") from exc
+            self.peer = _attach_peer_from_handoff(
+                self.socket_path,
+                handoff,
+                self.regs,
+                self.config,
+            )
+            self.handoff_info = handoff
             live.send(
                 self.peer,
                 self.regs["agent"],
@@ -1018,12 +911,6 @@ class AttachedLiveStackSession:
             if self.peer is not None:
                 self.peer.close()
                 self.peer = None
-            if self._sup_paused:
-                try:
-                    stack.signal_record(self.supervisor, signal.SIGCONT)
-                except (OSError, RuntimeError):
-                    pass
-                self._sup_paused = False
             raise
 
     def settle_latest_frame(self, current_frame: dict) -> dict:
@@ -1073,116 +960,22 @@ class AttachedLiveStackSession:
             "started_by_runner": self.started_by_runner,
         }
 
-    def _spawn_keeper(self) -> None:
-        """Keep the agent lane drained and wake supervisor when SIGTERM/TTL arrives."""
-        if self.peer is None or self.peer._sock is None:
-            return
-        sup_json = json.dumps(self.supervisor)
-        sock_fd = self.peer._sock.fileno()
-        expires = float(self.state.get("expires", time.time() + 2700))
-        agent_reg = json.dumps(self.regs["agent"])
-        core_cfg = json.dumps(self.config)
-        next_seq = int(self.peer._next_seq)
-        slice_dir = str(Path(__file__).resolve().parent)
-        keeper_code = (
-            "import json, os, select, signal, socket, sys, time, uuid\n"
-            "sys.path.insert(0, sys.argv[7])\n"
-            "import stack\n"
-            "sup = json.loads(sys.argv[1])\n"
-            "sup_pid = int(sup['pid'])\n"
-            "sock = socket.socket(fileno=int(sys.argv[2]))\n"
-            "expires = float(sys.argv[3])\n"
-            "agent_reg = json.loads(sys.argv[4])\n"
-            "cfg = json.loads(sys.argv[5])\n"
-            "seq = int(sys.argv[6])\n"
-            "term_mask = (1 << (signal.SIGTERM - 1)) | (1 << (signal.SIGINT - 1))\n"
-            "next_ka = time.monotonic() + 10.0\n"
-            "try:\n"
-            "    while time.time() < expires:\n"
-            "        st_path = f'/proc/{sup_pid}/status'\n"
-            "        if not os.path.exists(st_path):\n"
-            "            break\n"
-            "        pending = 0\n"
-            "        for line in open(st_path, errors='replace'):\n"
-            "            if line.startswith(('SigPnd:', 'ShdPnd:')):\n"
-            "                pending |= int(line.split()[1], 16)\n"
-            "        if pending & term_mask:\n"
-            "            break\n"
-            "        if time.monotonic() >= next_ka:\n"
-            "            env = {\n"
-            "                'schema': 'envelope/v0.2',\n"
-            "                'msg_id': f'keeper-{seq}',\n"
-            "                'ts_ns': 0,\n"
-            "                'from': agent_reg['endpoint'],\n"
-            "                'to': cfg['core']['endpoint'],\n"
-            "                'session_id': cfg['session_id'],\n"
-            "                'seq': seq,\n"
-            "                'nonce': uuid.uuid4().hex,\n"
-            "                'body': {'schema': 'surface_request/v0.2', 'op': 'list', 'params': {}},\n"
-            "            }\n"
-            "            sock.sendall(json.dumps(env, separators=(',', ':')).encode() + b'\\n')\n"
-            "            seq += 1\n"
-            "            next_ka = time.monotonic() + 10.0\n"
-            "        r, _, _ = select.select([sock], [], [], 0.05)\n"
-            "        if r:\n"
-            "            if not sock.recv(65536):\n"
-            "                break\n"
-            "    else:\n"
-            "        stack.signal_record(sup, signal.SIGTERM)\n"
-            "finally:\n"
-            "    try:\n"
-            "        sock.close()\n"
-            "    except OSError:\n"
-            "        pass\n"
-            "    try:\n"
-            "        stack.signal_record(sup, signal.SIGCONT)\n"
-            "    except (OSError, RuntimeError):\n"
-            "        pass\n"
-        )
-        subprocess.Popen(
-            [
-                sys.executable,
-                "-c",
-                keeper_code,
-                sup_json,
-                str(sock_fd),
-                str(expires),
-                agent_reg,
-                core_cfg,
-                str(next_seq),
-                slice_dir,
-            ],
-            pass_fds=(sock_fd,),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-
     def __exit__(self, exc_type, exc, tb) -> None:
+        if self.peer is not None:
+            self.peer.close()
+            self.peer = None
         if self.started_by_runner:
-            if self.peer is not None:
-                self.peer.close()
-                self.peer = None
-            if self._sup_paused:
-                try:
-                    stack.signal_record(self.supervisor, signal.SIGTERM)
-                    stack.signal_record(self.supervisor, signal.SIGCONT)
-                except (OSError, RuntimeError):
-                    pass
-                self._sup_paused = False
             stack.stop_stack(self.root)
-        else:
-            if self._sup_paused:
-                self._spawn_keeper()
-                self._sup_paused = False
-            if self.peer is not None:
-                self.peer.close()
-                self.peer = None
 
 
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument(
+        "--self-test",
+        action="store_true",
+        default=False,
+        help="Run the deterministic unit test suite and exit",
+    )
     p.add_argument(
         "--receipt-out",
         default=None,
@@ -1230,6 +1023,13 @@ def parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
+    if args.self_test:
+        suite = unittest.defaultTestLoader.discover(
+            str(Path(__file__).resolve().parent),
+            pattern="test_demo_agent_drive.py",
+        )
+        result = unittest.TextTestRunner(verbosity=2).run(suite)
+        return 0 if result.wasSuccessful() else 1
 
     try:
         if args.session == "g-ai":

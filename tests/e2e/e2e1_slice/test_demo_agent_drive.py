@@ -7,9 +7,12 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
+import socket
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -464,6 +467,108 @@ class DemoAgentDriveUnitTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(RuntimeError, "supervisor is not alive"):
                 AttachedLiveStackSession(root)
+
+    def test_attached_session_scm_rights_handoff_seq_continuity_and_second_attach_refused(self) -> None:
+        # Verify pidfd_getfd helpers were removed from demo_agent_drive.
+        self.assertFalse(hasattr(demo_agent_drive, "_find_supervisor_core_socket_fd"))
+        self.assertFalse(hasattr(demo_agent_drive, "_pidfd_getfd"))
+
+        with tempfile.TemporaryDirectory(dir="/tmp") as tmp:
+            os.chmod(tmp, 0o700)
+            root = Path(tmp) / "metaviewer-live-stack"
+            root.mkdir(mode=0o700)
+            work = root / "run-1"
+            work.mkdir(mode=0o700)
+            (work / "runtime/metaviewer").mkdir(parents=True, mode=0o700)
+
+            commit = "a" * 40
+            regs = {
+                c: stack.live.registration(c, commit, f"{c}-inst-1")
+                for c in ("core", "ui", "agent", "daemon")
+            }
+            config = {
+                "session_id": "stack-test-session",
+                "core": regs["core"],
+                "peers": [regs[c] for c in ("ui", "agent", "daemon")],
+            }
+            (work / "core-config.json").write_text(json.dumps(config), encoding="utf-8")
+
+            state = {
+                "schema": "metaviewer.live-stack/v1",
+                "status": "ready",
+                "work": str(work),
+                "surface_id": "surface-live-1",
+                "capsules": ["srf-id-12345678"],
+                "supervisor": {
+                    "pid": os.getpid(),
+                    "identity": stack.identity(os.getpid()),
+                },
+            }
+            stack.save_state(root, state)
+
+            core_agent_sock, core_server_sock = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+            control_sock = stack.open_control_socket(root)
+            try:
+                sup_peer = stack.live.CoreClient(
+                    str(work / "runtime/metaviewer/core.sock"),
+                    timeout_s=20,
+                    max_line_bytes=1 << 20,
+                    max_reply_bytes=1 << 20,
+                )
+                sup_peer._sock = core_agent_sock
+                sup_peer._next_seq = 6
+                sup_peer._hello_complete = True
+                stack.live._lane_state(sup_peer)["inbound_seq"] = 9
+                peer_holder = {"peer": sup_peer}
+
+                def serve_requests(count: int) -> None:
+                    for _ in range(count):
+                        conn, _ = control_sock.accept()
+                        stack.handle_control_connection(conn, peer_holder, state, root)
+
+                server_thread = threading.Thread(target=serve_requests, args=(2,))
+                server_thread.start()
+
+                with AttachedLiveStackSession(root, started_by_runner=False) as session:
+                    # Supervisor relinquished its fd and recorded handoff in state.json.
+                    self.assertIsNone(peer_holder["peer"])
+                    self.assertIsNone(sup_peer._sock)
+                    persisted = stack.load_state(root)
+                    self.assertEqual(persisted["agent_handoff"]["next_seq"], 6)
+                    self.assertEqual(persisted["agent_handoff"]["inbound_seq"], 9)
+
+                    # Read the frame_subscribe envelope sent on __enter__ from core_server_sock:
+                    # sequence continues at seq=6 without any second hello/v0.2.
+                    core_server_sock.settimeout(2.0)
+                    raw_line = b""
+                    while b"\n" not in raw_line:
+                        raw_line += core_server_sock.recv(4096)
+                    env = json.loads(raw_line.split(b"\n", 1)[0].decode("utf-8"))
+                    self.assertEqual(env["schema"], "envelope/v0.2")
+                    self.assertEqual(env["from"], regs["agent"]["endpoint"])
+                    self.assertEqual(env["seq"], 6)
+                    self.assertEqual(
+                        env["body"],
+                        {
+                            "schema": "surface_request/v0.2",
+                            "op": "frame_subscribe",
+                            "params": {"surface_id": "surface-live-1"},
+                        },
+                    )
+                    self.assertEqual(session.peer.next_seq, 7)
+
+                    # Negative control: second attach is refused with ALREADY_HANDED_OFF.
+                    with self.assertRaisesRegex(RuntimeError, "ALREADY_HANDED_OFF"):
+                        with AttachedLiveStackSession(root, started_by_runner=False):
+                            pass
+
+                server_thread.join(timeout=2.0)
+
+                # On runner exit, session closes its peer fd and core_server_sock sees clean EOF.
+                self.assertEqual(core_server_sock.recv(16), b"")
+            finally:
+                stack.close_control_socket(control_sock, root)
+                core_server_sock.close()
 
 
 if __name__ == "__main__":
