@@ -19,17 +19,17 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 589 | 55 | 534 |
-| Lanes finished OK | 589 | 55 | 534 |
-| Agent steps | 29,670 | 2,705 | 26,965 |
-| Lane-hours of agent work | 76.9 | 5.2 | 71.6 |
-| Fresh input tokens | 122,119,145 | 11,482,034 | 110,637,111 |
-| Cache-read input tokens | 2,681,523,707 | 226,255,212 | 2,455,268,495 |
+| Lanes launched | 598 | 55 | 543 |
+| Lanes finished OK | 598 | 55 | 543 |
+| Agent steps | 29,984 | 2,705 | 27,279 |
+| Lane-hours of agent work | 77.7 | 5.2 | 72.5 |
+| Fresh input tokens | 123,635,423 | 11,482,034 | 112,153,389 |
+| Cache-read input tokens | 2,705,425,338 | 226,255,212 | 2,479,170,126 |
 | Prompt cache hit % | 95.6 | 95.2 | 95.7 |
-| Output tokens | 25,939,896 | 2,135,708 | 23,804,188 |
-| Thinking tokens | 14,356,278 | 1,050,039 | 13,306,239 |
-| Cost (USD) | 22.7629 | 2.0279 | 20.7351 |
-| Cost per lane (USD) | 0.0386 | 0.0369 | 0.0388 |
+| Output tokens | 26,205,180 | 2,135,708 | 24,069,472 |
+| Thinking tokens | 14,529,511 | 1,050,039 | 13,479,472 |
+| Cost (USD) | 23.0154 | 2.0279 | 20.9876 |
+| Cost per lane (USD) | 0.0385 | 0.0369 | 0.0387 |
 
 Rooms: 127. Peak concurrent lanes [MEASURED from lane start/end]: 32.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
@@ -38,7 +38,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 249 | 94.6 | 7.8691 |
+| build | 258 | 94.6 | 8.1216 |
 | context | 42 | 95.9 | 1.9093 |
 | demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
@@ -82,7 +82,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 94 | 94.5 | 3.1171 | direct Muse job |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 103 | 94.4 | 3.3695 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -777,11 +777,20 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | om | fps_room | Oct 28 23:22 | yes | 44 | 95.4 | 0.023415 |
 | direct-direct | ore | mut_vcore | Oct 28 23:22 | yes | 23 | 90.2 | 0.020448 |
 | direct-direct | ore | sec_vcore | Oct 28 23:22 | yes | 23 | 90.2 | 0.020448 |
+| direct-direct | hunt | flake_hunt | Oct 28 23:22 | yes | 56 | 96.1 | 0.037389 |
 | direct-direct | settings | parity_settings | Oct 28 23:22 | yes | 42 | 93.7 | 0.03284 |
 | direct-direct | ext_ve | ext_ve | Oct 28 23:22 | yes | 44 | 94.4 | 0.029734 |
 | direct-direct | heck | docs_check | Oct 28 23:22 | yes | 34 | 93.8 | 0.021331 |
 | direct-direct | ttings | mut_settings | Oct 28 23:22 | yes | 23 | 90.5 | 0.018145 |
 | direct-direct | ttings | sec_settings | Oct 28 23:22 | yes | 23 | 90.5 | 0.018145 |
+| direct-direct | rehash | mut_corehash | Oct 28 23:25 | yes | 30 | 91.3 | 0.023847 |
+| direct-direct | apter | mut_adapter | Oct 28 23:28 | yes | 34 | 92.5 | 0.025225 |
+| direct-direct | rminal | sec_terminal | Oct 28 23:28 | yes | 19 | 86.6 | 0.021647 |
+| direct-direct | v2 | video_v2 | Oct 28 23:28 | yes | 10 | 77.2 | 0.011432 |
+| direct-direct | host | mut_uihost | Oct 28 23:28 | yes | 67 | 96.4 | 0.047576 |
+| direct-direct | plan | live24_plan | Oct 28 23:28 | yes | 48 | 95.5 | 0.033146 |
+| direct-direct | le | ac_table | Oct 28 23:28 | yes | 22 | 89.7 | 0.0233 |
+| direct-direct | nder | sec_wender | Oct 28 23:28 | yes | 28 | 91.7 | 0.028925 |
 
 ## Method
 
