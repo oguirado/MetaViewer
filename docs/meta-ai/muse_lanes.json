@@ -207,7 +207,7 @@
   },
   "mvui32": {
    "stage": "fix",
-   "why": "Round-3 external review of the renderer found 10 confirmed defects (lost layout commits, frame router poisoning, input sent after READ, stale repaint, starved QA reporting); fix them with negative controls before the product completion gate.",
+   "why": "Round-3 external review found 10 confirmed renderer defects; plus the live run showed no rehash skip counters and a lost capsule never showing its badge; fix and verify before the product completion gate.",
    "orchestrator": "UI orchestrator"
   },
   "mvui25c": {
