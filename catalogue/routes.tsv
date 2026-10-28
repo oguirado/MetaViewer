@@ -671,6 +671,7 @@ handshake.rs	core/tests/handshake.rs
 humanin-088290955b09	core/tests/human_input_control.rs
 input_settlement.rs	core/tests/input_settlement.rs
 journal_upgrade.rs	core/tests/journal_upgrade.rs
+layout_routing.rs	core/tests/layout_routing.rs
 nv_lifecycle.rs	core/tests/nv_lifecycle.rs
 nvsuper-df27d9370197	core/tests/nv_supervisor_start.rs
 record_release.rs	core/tests/record_release.rs
