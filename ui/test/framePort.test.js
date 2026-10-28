@@ -670,6 +670,103 @@ describe('sender timeout and revocation', () => {
     assert.equal(sinks.releases[0].reason, 'ENDPOINT_RESTART');
     assert.equal(sinks.revokes.length, 1);
   });
+
+  it('revokes a stalled handoff using production default clock and timers', async () => {
+    const port = makeFakePort();
+    const sinks = makeSinks();
+    const beforeMs = Date.now();
+    const endpoint = createFramePort({
+      port,
+      role: 'sender',
+      binding: makeBinding(),
+      limits: makeLimits({ ackTimeoutMs: 25 }),
+      onReleaseLease: sinks.onReleaseLease,
+      onRevoke: sinks.onRevoke,
+    });
+    try {
+      const posted = endpoint.postFrame(makeFrame({ frameGeneration: 1, leaseId: 'lease-1' }));
+      assert.equal(posted.ok, true);
+      assert.equal(posted.sent, true);
+
+      const deadline = Date.now() + 1500;
+      while (!endpoint.getInstrumentation().revoked && Date.now() < deadline) {
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      const afterMs = Date.now();
+
+      const info = endpoint.getInstrumentation();
+      assert.equal(info.revoked, true);
+      assert.equal(info.revokeReason, 'TIMEOUT');
+      assert.equal(info.timeouts, 1);
+      assert.equal(info.inFlightGeneration, null);
+      assert.equal(info.pendingGeneration, null);
+      assert.ok(info.createdAtMs >= beforeMs && info.createdAtMs <= afterMs);
+      assert.ok(
+        typeof info.revokedAtMs === 'number' &&
+          info.revokedAtMs >= info.createdAtMs &&
+          info.revokedAtMs <= afterMs,
+      );
+      assert.equal(port.closes, 1);
+      assert.deepEqual(
+        sinks.releases.map((release) => [release.frameGeneration, release.reason]),
+        [[1, 'TIMEOUT']],
+      );
+      assert.deepEqual(sinks.revokes, [{ binding: makeBinding(), reason: 'TIMEOUT' }]);
+
+      const latePost = endpoint.postFrame(makeFrame({ frameGeneration: 2, leaseId: 'lease-2' }));
+      assert.equal(latePost.ok, false);
+      assert.equal(latePost.reason, FRAME_REASONS.PORT_REVOKED);
+    } finally {
+      endpoint.revokeFramePort();
+    }
+  });
+
+  it('negative control: completing handoff within window disarms production default timer and keeps port live', async () => {
+    const port = makeFakePort();
+    const sinks = makeSinks();
+    const endpoint = createFramePort({
+      port,
+      role: 'sender',
+      binding: makeBinding(),
+      limits: makeLimits({ ackTimeoutMs: 25 }),
+      onReleaseLease: sinks.onReleaseLease,
+      onRevoke: sinks.onRevoke,
+    });
+    try {
+      const first = endpoint.postFrame(makeFrame({ frameGeneration: 1, leaseId: 'lease-1' }));
+      assert.equal(first.ok, true);
+      assert.deepEqual(endpoint.acceptAck(makeAck()), { ok: true, acked: 1, promoted: null });
+
+      await new Promise((resolve) => setTimeout(resolve, 60));
+
+      const mid = endpoint.getInstrumentation();
+      assert.equal(mid.revoked, false);
+      assert.equal(mid.revokeReason, null);
+      assert.equal(mid.revokedAtMs, null);
+      assert.equal(mid.timeouts, 0);
+      assert.equal(mid.acked, 1);
+      assert.equal(sinks.revokes.length, 0);
+
+      const second = endpoint.postFrame(makeFrame({ frameGeneration: 2, leaseId: 'lease-2' }));
+      assert.equal(second.ok, true);
+      assert.equal(second.sent, true);
+      assert.deepEqual(
+        endpoint.acceptAck(
+          makeAck({
+            frameGeneration: 2,
+            leaseId: 'lease-2',
+            correlation: 'capsule-A#2#lease-2',
+          }),
+        ),
+        { ok: true, acked: 2, promoted: null },
+      );
+      assert.equal(endpoint.getInstrumentation().revoked, false);
+      assert.equal(endpoint.getInstrumentation().acked, 2);
+    } finally {
+      endpoint.revokeFramePort();
+    }
+  });
 });
 
 describe('receiver: validate, consume newest, ACK after consume', () => {
