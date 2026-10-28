@@ -95,6 +95,7 @@ test_tools.py	agents/tests/test_tools.py
 test_vcore.py	agents/tests/test_vcore.py
 test_vcore_serve.py	agents/tests/test_vcore_serve.py
 testvco-9ce1ffeaa20f	agents/tests/test_vcore_v02_element_table.py
+test_verify_budget.py	agents/tests/test_verify_budget.py
 testver-43e66b9c8501	agents/tests/test_verify_v02_loop.py
 testvis-383820f1bf91	agents/tests/test_vision_ram_path.py
 test_w2_fx_agents.py	agents/tests/test_w2_fx_agents.py
