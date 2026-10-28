@@ -55,23 +55,34 @@ func (m *Manager) monitorLiveness(ctx context.Context, ticks <-chan time.Time, e
 				return err
 			}
 			id := b.Surface.SurfaceID
-			// Serialize native start/stop with probe dispatch. Input releases mu during
-			// execution, so confirmed loss can cancel it without waiting for its reply.
+			// Snapshot active binding identity under mu, then run the native probe
+			// outside mu so manager operations are not blocked across LivenessTimeout.
 			m.mu.Lock()
-			current := m.bindings[id]
-			if current.Surface.State != "active" || m.destroying[id] {
+			current, ok := m.bindings[id]
+			if !ok || current.Surface.State != "active" || m.destroying[id] || current.Container != b.Container || current.RunID != b.RunID {
 				delete(misses, id)
 				m.mu.Unlock()
 				continue
 			}
-			args := []string{"frame", "--container", b.Container}
-			if b.Window != "" {
-				args = append(args, "--window", b.Window)
+			profile := m.cfg.Profiles[current.Surface.ProfileID]
+			args := []string{"frame", "--container", current.Container}
+			if current.Window != "" {
+				args = append(args, "--window", current.Window)
 			}
+			m.mu.Unlock()
+
 			probeCtx, cancel := context.WithTimeout(ctx, m.cfg.LivenessTimeout)
-			_, err := m.execute(probeCtx, m.cfg.Profiles[b.Surface.ProfileID], args, nil)
+			_, err := m.execute(probeCtx, profile, args, nil)
 			probeErr := probeCtx.Err()
 			cancel()
+
+			m.mu.Lock()
+			after, ok := m.bindings[id]
+			if !ok || after.Surface.State != "active" || m.destroying[id] || after.Container != current.Container || after.RunID != current.RunID {
+				delete(misses, id)
+				m.mu.Unlock()
+				continue
+			}
 			var f *cli.Fault
 			if errors.As(err, &f) && f.Code == "unavailable" && probeErr == nil && ctx.Err() == nil {
 				misses[id]++

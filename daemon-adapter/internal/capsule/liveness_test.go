@@ -197,3 +197,63 @@ func TestLivenessStopsAfterDestroy(t *testing.T) {
 		t.Fatalf("destroyed capsule probed/reported: %d/%d", probes, reports)
 	}
 }
+
+func TestLivenessProbeDropsLockAndSkipsDestroyedInFlight(t *testing.T) {
+	m := testManager(t, &scriptRunner{output: []byte(startOK)})
+	id := createID(t, m)
+	m.cfg.LivenessMisses = 1
+	probeStarted := make(chan struct{})
+	releaseProbe := make(chan struct{})
+	reports := 0
+	m.runner = a2Runner(func(_ context.Context, args []string, _ []byte) ([]byte, error) {
+		if args[1] == "stop" {
+			return []byte(`{"stopped":"srf-id-demo","removed_verified":true}`), nil
+		}
+		close(probeStarted)
+		<-releaseProbe
+		return nil, cli.ExitFault("srf-identity-surface", 4, "")
+	})
+	ticks := make(chan time.Time)
+	done := make(chan error, 1)
+	go func() {
+		done <- m.monitorLiveness(context.Background(), ticks, func(context.Context, json.RawMessage) error {
+			reports++
+			return nil
+		})
+	}()
+	ticks <- time.Time{}
+	awaitSignal(t, probeStarted)
+
+	// While the liveness probe is blocked in m.execute, manager operations that
+	// require m.mu (take_control, list, destroy) must complete without waiting.
+	opDone := make(chan error, 1)
+	go func() {
+		if _, err := m.Handle(context.Background(), req("take_control", `{"surface_id":"`+id+`","owner":"human"}`)); err != nil {
+			opDone <- err
+			return
+		}
+		if _, err := m.Handle(context.Background(), req("list", `{}`)); err != nil {
+			opDone <- err
+			return
+		}
+		_, err := m.Handle(context.Background(), req("destroy", `{"surface_id":"`+id+`"}`))
+		opDone <- err
+	}()
+	select {
+	case err := <-opDone:
+		if err != nil {
+			t.Fatalf("concurrent manager ops during blocked liveness probe failed: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("manager operations blocked on in-flight liveness probe")
+	}
+
+	close(releaseProbe)
+	close(ticks)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if reports != 0 || m.bindings[id].Surface.State != "destroyed" {
+		t.Fatalf("in-flight probe double-transitioned destroyed surface: reports=%d state=%s", reports, m.bindings[id].Surface.State)
+	}
+}

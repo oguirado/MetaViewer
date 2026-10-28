@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 const createDemo = `{"kind":"browser","profile_id":"demo","geometry":{"w":2,"h":1}}`
@@ -144,4 +145,64 @@ func TestConfigurationFaultAloneDoesNotProveNoSpawn(t *testing.T) {
 	if len(r.calls) != 1 {
 		t.Fatal("unproven pre-spawn error retried")
 	}
+}
+
+func TestPreSpawnMissingAndNonExecutableBinaryRetry(t *testing.T) {
+	binDir, stateDir := t.TempDir(), t.TempDir()
+	if e := os.Chmod(stateDir, 0700); e != nil {
+		t.Fatal(e)
+	}
+	r, e := NewProcessRunner(binDir, []string{"PATH=/usr/bin:/bin", "MV_SRF_STATE_DIR=" + stateDir}, 8192, time.Second)
+	if e != nil {
+		t.Fatal(e)
+	}
+	m := testManager(t, &scriptRunner{})
+	m.runner = r
+	m.cfg.BinDir = binDir
+
+	// 1. Missing binary (ENOENT before fork/exec) clears quarantine.
+	_, e = m.Handle(context.Background(), req("create", createDemo))
+	requireFault(t, e, "execution")
+	if m.quarantined["demo"] {
+		t.Fatal("missing binary latched profile quarantine")
+	}
+
+	// 2. Non-executable binary (EACCES before fork/exec) also clears quarantine.
+	binPath := filepath.Join(binDir, "srf-identity-surface")
+	script := "#!/bin/sh\necho '" + startOK + "'\n"
+	if e = os.WriteFile(binPath, []byte(script), 0600); e != nil {
+		t.Fatal(e)
+	}
+	_, e = m.Handle(context.Background(), req("create", createDemo))
+	requireFault(t, e, "execution")
+	if m.quarantined["demo"] {
+		t.Fatal("non-executable binary latched profile quarantine")
+	}
+
+	// 3. Repairing permissions allows the retry to succeed once.
+	if e = os.Chmod(binPath, 0700); e != nil {
+		t.Fatal(e)
+	}
+	id := createID(t, m)
+	if m.bindings[id].Surface.State != "active" || m.quarantined["demo"] {
+		t.Fatalf("repaired binary create failed: %+v", m.bindings[id])
+	}
+
+	// 4. Negative control: a post-start child failure (process spawned and exited non-zero)
+	// must NOT be classified as preSpawnRefusal and must keep the profile quarantined.
+	m.cfg.Profiles["crash"] = m.cfg.Profiles["demo"]
+	crashScript := "#!/bin/sh\nexit 1\n"
+	if e = os.WriteFile(binPath, []byte(crashScript), 0700); e != nil {
+		t.Fatal(e)
+	}
+	_, e = m.Handle(context.Background(), req("create", `{"kind":"browser","profile_id":"crash","geometry":{"w":2,"h":1}}`))
+	requireFault(t, e, "invalid_exit")
+	if !m.quarantined["crash"] {
+		t.Fatal("post-start crash cleared quarantine")
+	}
+	if e = os.WriteFile(binPath, []byte(script), 0700); e != nil {
+		t.Fatal(e)
+	}
+	_, e = m.Handle(context.Background(), req("create", `{"kind":"browser","profile_id":"crash","geometry":{"w":2,"h":1}}`))
+	requireFault(t, e, "uncertain")
 }

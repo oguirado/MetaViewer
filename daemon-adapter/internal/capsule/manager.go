@@ -86,6 +86,7 @@ type Window struct {
 type Binding struct {
 	Surface                                                   Surface
 	Container, RunID, Window, FramesRoot, NativeKind, Program string
+	ConfirmedAbsent                                           bool
 }
 type NativeFrame struct {
 	Path            string          `json:"path"`
@@ -330,6 +331,9 @@ func (m *Manager) view(ctx context.Context, r Request, version string) ([]json.R
 	if b.NativeKind == "holdings" {
 		return nil, fault("usage", "invalid identity capsule")
 	}
+	if r.Op != "view-stop" && m.views[b.Container] {
+		return nil, fault("refused", "view unavailable or already registered")
+	}
 	m.mu.Unlock()
 	var err error
 	if r.Op == "view-stop" {
@@ -341,15 +345,28 @@ func (m *Manager) view(ctx context.Context, r Request, version string) ([]json.R
 	if err != nil {
 		return nil, err
 	}
+	current, ok := m.bindings[b.Surface.SurfaceID]
 	if r.Op == "view-stop" {
 		delete(m.views, b.Container)
-	} else {
-		m.views[b.Container] = true
+		if !ok || current.Surface.State != "active" || m.destroying[b.Surface.SurfaceID] || current.Container != b.Container || current.RunID != b.RunID {
+			return nil, fault("surface", "active surface required")
+		}
+		return []json.RawMessage{surfaceEvent(version, "state_changed", current.Surface)}, nil
 	}
-	if current, ok := m.bindings[b.Surface.SurfaceID]; ok {
-		b = current
+	if !ok || current.Surface.State != "active" || m.destroying[b.Surface.SurfaceID] || current.Container != b.Container || current.RunID != b.RunID {
+		delete(m.views, b.Container)
+		m.mu.Unlock()
+		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), m.cfg.Timeout)
+		_ = m.cfg.View.Stop(stopCtx, b.Container)
+		cancel()
+		m.mu.Lock()
+		return nil, fault("surface", "active surface required")
 	}
-	return []json.RawMessage{surfaceEvent(version, "state_changed", b.Surface)}, nil
+	if m.views[b.Container] {
+		return nil, fault("refused", "view unavailable or already registered")
+	}
+	m.views[b.Container] = true
+	return []json.RawMessage{surfaceEvent(version, "state_changed", current.Surface)}, nil
 }
 func (m *Manager) create(ctx context.Context, r Request, version string) (events []json.RawMessage, err error) {
 	var q struct {
@@ -560,6 +577,7 @@ func (m *Manager) destroy(ctx context.Context, r Request, version string) ([]jso
 	if e := m.stopNative(ctx, b); e != nil {
 		return nil, e
 	}
+	delete(m.quarantined, b.Surface.ProfileID)
 	b.Surface.State = "destroyed"
 	m.bindings[q.SurfaceID] = b
 	delete(m.inputEpochs, q.SurfaceID)
@@ -571,6 +589,19 @@ func (m *Manager) destroy(ctx context.Context, r Request, version string) ([]jso
 func (m *Manager) stopNative(ctx context.Context, b Binding) error {
 	out, e := m.execute(ctx, m.cfg.Profiles[b.Surface.ProfileID], []string{"stop", "--container", b.Container}, nil)
 	if e != nil {
+		var f *cli.Fault
+		if b.ConfirmedAbsent && errors.As(e, &f) && f.Code == "unavailable" {
+			if b.NativeKind == "holdings" {
+				if m.cfg.VerifyHoldingsRemoval == nil {
+					return fault("uncertain", "independent Holdings removal proof required")
+				}
+				m.mu.Unlock()
+				ve := m.cfg.VerifyHoldingsRemoval(ctx, b)
+				m.mu.Lock()
+				return ve
+			}
+			return nil
+		}
 		return e
 	}
 	var stopped struct {
@@ -657,6 +688,10 @@ func (m *Manager) MarkLost(id string, confirmedAbsent bool) (json.RawMessage, er
 func (m *Manager) markLostLocked(id string, confirmedAbsent bool) (json.RawMessage, error) {
 	b, ok := m.bindings[id]
 	if confirmedAbsent && ok && b.Surface.State == "lost" {
+		if !b.ConfirmedAbsent {
+			b.ConfirmedAbsent = true
+			m.bindings[id] = b
+		}
 		return nil, nil
 	}
 	if !confirmedAbsent || !ok || b.Surface.State != "active" || m.destroying[id] {
@@ -671,6 +706,7 @@ func (m *Manager) markLostLocked(id string, confirmedAbsent bool) (json.RawMessa
 		}
 	}
 	b.Surface.State = "lost"
+	b.ConfirmedAbsent = true
 	m.bindings[id] = b
 	return surfaceEvent("v0.2", "state_changed", b.Surface), nil
 }

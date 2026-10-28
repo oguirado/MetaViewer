@@ -286,3 +286,97 @@ func TestRV8DestroyCleansPerSurfaceEpochAndRefreshMaps(t *testing.T) {
 		t.Fatalf("replay protection m.used modified: len(used)=%d, want 1000", len(pos.used))
 	}
 }
+
+type gatedViewBackend struct {
+	openStarted chan struct{}
+	releaseOpen chan struct{}
+	stopCalled  chan string
+	opens       int
+	stops       int
+}
+
+func (g *gatedViewBackend) Open(_ context.Context, container string, _ bool) error {
+	g.opens++
+	if g.openStarted != nil {
+		close(g.openStarted)
+	}
+	if g.releaseOpen != nil {
+		<-g.releaseOpen
+	}
+	_ = container
+	return nil
+}
+
+func (g *gatedViewBackend) Stop(_ context.Context, container string) error {
+	g.stops++
+	if g.stopCalled != nil {
+		g.stopCalled <- container
+	}
+	return nil
+}
+
+func TestLateViewOpenRechecksSurfaceState(t *testing.T) {
+	for _, transition := range []string{"active", "destroy", "mark-lost"} {
+		t.Run(transition, func(t *testing.T) {
+			r := &scriptRunner{output: []byte(startOK)}
+			m := testManager(t, r)
+			vb := &gatedViewBackend{
+				stopCalled: make(chan string, 2),
+			}
+			if transition != "active" {
+				vb.openStarted = make(chan struct{})
+				vb.releaseOpen = make(chan struct{})
+			}
+			m.cfg.View = vb
+			id := createID(t, m)
+
+			if transition == "active" {
+				out, err := m.Handle(context.Background(), req("view", `{"surface_id":"`+id+`"}`))
+				if err != nil || len(out) != 1 {
+					t.Fatalf("active view open failed: %s %v", out, err)
+				}
+				if !m.views["srf-id-demo"] || vb.opens != 1 || vb.stops != 0 {
+					t.Fatalf("active view not registered: views=%v opens=%d stops=%d", m.views, vb.opens, vb.stops)
+				}
+				return
+			}
+
+			viewDone := make(chan struct {
+				out []json.RawMessage
+				err error
+			}, 1)
+			go func() {
+				out, err := m.Handle(context.Background(), req("view", `{"surface_id":"`+id+`"}`))
+				viewDone <- struct {
+					out []json.RawMessage
+					err error
+				}{out, err}
+			}()
+			awaitSignal(t, vb.openStarted)
+
+			if transition == "destroy" {
+				r.output = []byte(`{"stopped":"srf-id-demo","removed_verified":true}`)
+				if _, err := m.Handle(context.Background(), req("destroy", `{"surface_id":"`+id+`"}`)); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if _, err := m.MarkLost(id, true); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			close(vb.releaseOpen)
+			res := <-viewDone
+			requireFault(t, res.err, "surface")
+			if len(res.out) != 0 {
+				t.Fatalf("late view emitted success event: %s", res.out)
+			}
+			if m.views["srf-id-demo"] {
+				t.Fatal("late view registered in m.views after terminal transition")
+			}
+			if vb.stops != 1 {
+				t.Fatalf("expected late view to be stopped once, got %d", vb.stops)
+			}
+		})
+	}
+}

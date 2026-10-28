@@ -127,7 +127,16 @@ func (r *ProcessRunner) Run(ctx context.Context, argv []string, stdin []byte) ([
 	cmd.Stdout = out
 	cmd.Stderr = io.Discard
 	cmd.WaitDelay = time.Second
-	if e := cmd.Run(); e != nil {
+	if e := cmd.Start(); e != nil {
+		if ctx.Err() != nil {
+			return nil, fault("uncertain", "native command deadline or cancellation")
+		}
+		if cmd.Process == nil {
+			return nil, &preSpawnRefusal{fault("execution", "native executable failed before start")}
+		}
+		return nil, fault("uncertain", "native command failed without a verified result")
+	}
+	if e := cmd.Wait(); e != nil {
 		if ctx.Err() != nil {
 			return nil, fault("uncertain", "native command deadline or cancellation")
 		}

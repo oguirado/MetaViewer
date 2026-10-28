@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+
+	"metaviewer/daemon-adapter/internal/cli"
 )
 
 const lostSlotCreate = `{"kind":"browser","profile_id":"demo","geometry":{"w":2,"h":1}}`
@@ -105,5 +107,48 @@ func TestLostSlotConcurrentCreates(t *testing.T) {
 	}
 	if successes != 1 || len(r.calls) != 3 {
 		t.Fatalf("successes=%d native calls=%v", successes, r.calls)
+	}
+}
+
+func TestConfirmedAbsentDestroyRecoversWhenStopReportsUnavailable(t *testing.T) {
+	r := &scriptRunner{output: []byte(startOK)}
+	m := testManager(t, r)
+	m.cfg.MaxSurfaces = 1
+	id := createID(t, m)
+	if _, err := m.MarkLost(id, true); err != nil {
+		t.Fatal(err)
+	}
+	// Negative control: uncertain stop failure during destroy keeps the surface in lost
+	// and retains the capacity/profile slot.
+	r.output = nil
+	r.err = &cli.Fault{Code: "uncertain", Detail: "stop timed out"}
+	if _, err := m.Handle(context.Background(), req("destroy", `{"surface_id":"`+id+`"}`)); err == nil {
+		t.Fatal("uncertain stop accepted during destroy")
+	} else {
+		requireFault(t, err, "uncertain")
+	}
+	if m.bindings[id].Surface.State != "lost" {
+		t.Fatalf("expected lost state after uncertain stop, got %s", m.bindings[id].Surface.State)
+	}
+	if _, err := m.Handle(context.Background(), req("create", lostSlotCreate)); err == nil {
+		t.Fatal("profile reused after uncertain stop")
+	}
+
+	// Confirmed-absent recovery: when native absence was independently confirmed via
+	// MarkLost(id, true) and stop returns unavailable (container already gone), destroy
+	// completes and frees the slot and profile.
+	r.err = cli.ExitFault("srf-identity-surface", 4, "")
+	out, err := m.Handle(context.Background(), req("destroy", `{"surface_id":"`+id+`"}`))
+	if err != nil || len(out) != 1 {
+		t.Fatalf("confirmed-absent destroy with unavailable stop failed: %s %v", out, err)
+	}
+	if m.bindings[id].Surface.State != "destroyed" {
+		t.Fatalf("expected destroyed state, got %s", m.bindings[id].Surface.State)
+	}
+	r.err = nil
+	r.output = []byte(startOK)
+	replacement := createID(t, m)
+	if replacement == id || m.bindings[replacement].Surface.State != "active" {
+		t.Fatalf("replacement create failed after confirmed-absent recovery: %s", replacement)
 	}
 }

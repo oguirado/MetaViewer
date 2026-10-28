@@ -389,6 +389,94 @@ func TestProgramInnerLive(t *testing.T) {
 		return
 	}
 	runProgramInnerFixtureMode(t)
+	if os.Getenv("MV_E2E_REAL_XVFB") != "1" {
+		t.Run("isolated_path_without_host_xvfb", func(t *testing.T) {
+			pyPath, err := exec.LookPath("python3")
+			if err != nil {
+				t.Fatalf("python3 required: %v", err)
+			}
+			isolatedBin := t.TempDir()
+			if err := os.Symlink(pyPath, filepath.Join(isolatedBin, "python3")); err != nil {
+				t.Fatalf("symlink python3: %v", err)
+			}
+			installFakeXvfbShims(t, isolatedBin)
+			t.Setenv("PATH", isolatedBin)
+			resolvedXvfbRun, err := exec.LookPath("xvfb-run")
+			if err != nil || filepath.Dir(resolvedXvfbRun) != isolatedBin {
+				t.Fatalf("expected isolated fake xvfb-run, got %q (%v)", resolvedXvfbRun, err)
+			}
+			resolvedXvfb, err := exec.LookPath("Xvfb")
+			if err != nil || filepath.Dir(resolvedXvfb) != isolatedBin {
+				t.Fatalf("expected isolated fake Xvfb, got %q (%v)", resolvedXvfb, err)
+			}
+			runProgramInnerFixtureMode(t)
+		})
+	}
+}
+
+func installFakeXvfbShims(t *testing.T, dir string) {
+	t.Helper()
+	fakeXvfbScript := `#!/usr/bin/env python3
+import re
+import sys
+
+args = sys.argv[1:]
+if not args or not re.match(r"^:[0-9]+(\.[0-9]+)?$", args[0]):
+    sys.stderr.write("Xvfb: invalid or missing display argument\n")
+    sys.exit(1)
+sys.exit(0)
+`
+	fakeXvfbRunScript := `#!/usr/bin/env python3
+import os
+import shutil
+import subprocess
+import sys
+
+args = sys.argv[1:]
+display = os.environ.get("MV_FAKE_XVFB_DISPLAY", ":99")
+cmd = []
+i = 0
+while i < len(args):
+    a = args[i]
+    if a in ("-a", "--auto-servernum"):
+        i += 1
+    elif a in ("-n", "--server-num") and i + 1 < len(args):
+        display = f":{args[i + 1]}"
+        i += 2
+    elif a.startswith("--server-num="):
+        display = f":{a.split('=', 1)[1]}"
+        i += 1
+    elif a in ("-s", "--server-args", "-f", "--auth-file", "-e", "--error-file") and i + 1 < len(args):
+        i += 2
+    elif a.startswith(("--server-args=", "--auth-file=", "--error-file=")):
+        i += 1
+    elif a == "--":
+        cmd = args[i + 1:]
+        break
+    else:
+        cmd = args[i:]
+        break
+
+if not cmd:
+    sys.stderr.write("xvfb-run: missing command\n")
+    sys.exit(2)
+
+xvfb_bin = shutil.which("Xvfb")
+if not xvfb_bin:
+    sys.stderr.write("xvfb-run: Xvfb not found on PATH\n")
+    sys.exit(1)
+
+subprocess.run([xvfb_bin, display], check=True, timeout=5)
+child_env = dict(os.environ, DISPLAY=display)
+res = subprocess.run(cmd, env=child_env)
+sys.exit(res.returncode)
+`
+	if err := os.WriteFile(filepath.Join(dir, "Xvfb"), []byte(fakeXvfbScript), 0o700); err != nil {
+		t.Fatalf("write fake Xvfb: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "xvfb-run"), []byte(fakeXvfbRunScript), 0o700); err != nil {
+		t.Fatalf("write fake xvfb-run: %v", err)
+	}
 }
 
 func runProgramInnerLiveMode(t *testing.T) {
@@ -426,11 +514,28 @@ func runProgramInnerLiveMode(t *testing.T) {
 }
 
 func runProgramInnerFixtureMode(t *testing.T) {
-	if _, err := exec.LookPath("xvfb-run"); err != nil {
-		t.Fatalf("xvfb-run required for fixture Xvfb verification: %v", err)
-	}
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Fatalf("python3 required for e2e1_slice/live.py verification: %v", err)
+	}
+	if os.Getenv("MV_E2E_REAL_XVFB") == "1" {
+		if _, err := exec.LookPath("xvfb-run"); err != nil {
+			t.Fatalf("xvfb-run required for real Xvfb mode: %v", err)
+		}
+		if _, err := exec.LookPath("Xvfb"); err != nil {
+			t.Fatalf("Xvfb required for real Xvfb mode: %v", err)
+		}
+	} else {
+		shimDir := filepath.Join(t.TempDir(), "xvfb-shim")
+		if err := os.MkdirAll(shimDir, 0o700); err != nil {
+			t.Fatalf("mkdir xvfb-shim: %v", err)
+		}
+		installFakeXvfbShims(t, shimDir)
+		curPath := os.Getenv("PATH")
+		if curPath != "" {
+			t.Setenv("PATH", shimDir+string(os.PathListSeparator)+curPath)
+		} else {
+			t.Setenv("PATH", shimDir)
+		}
 	}
 
 	repoRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
@@ -463,11 +568,17 @@ func runProgramInnerFixtureMode(t *testing.T) {
 	stubInnerScript := `#!/usr/bin/env python3
 import json
 import os
+import re
 import sys
+
+display = os.environ.get("DISPLAY", "")
+if not re.match(r"^:[0-9]+(\.[0-9]+)?$", display):
+    sys.stderr.write(f"invalid or missing DISPLAY: {display!r}\n")
+    sys.exit(1)
 
 payload = {
     "argv": sys.argv[1:],
-    "display": os.environ.get("DISPLAY", ""),
+    "display": display,
     "env": {
         "MV_NESTED_DEPTH": os.environ.get("MV_NESTED_DEPTH", ""),
         "MV_PROFILE_ID": os.environ.get("MV_PROFILE_ID", ""),
@@ -572,6 +683,8 @@ if op == "start":
         MV_PROGRAM=program,
         MV_INNER_WITNESS_FILE=witness_file,
     )
+    if cfg.get("bad_display"):
+        child_env["MV_FAKE_XVFB_DISPLAY"] = "invalid-display"
     subprocess.run(
         [
             "xvfb-run",
@@ -757,8 +870,44 @@ print(json.dumps({"profile": prof, "request": req, "envelope": env}, separators=
 		t.Fatalf("NewRuntime: %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+
+	// Negative control 0: invalid display / Xvfb startup failure fails closed without admitting a surface.
+	if os.Getenv("MV_E2E_REAL_XVFB") != "1" {
+		m.cfg.Profiles["inner-bad-display"] = m.cfg.Profiles["inner-host-1"]
+		badFakeCfg, err := json.Marshal(struct {
+			RAMRoot     string `json:"ram_root"`
+			StubInner   string `json:"stub_inner"`
+			WitnessFile string `json:"witness_file"`
+			BadDisplay  bool   `json:"bad_display"`
+		}{
+			RAMRoot:     ramRoot,
+			StubInner:   stubInnerPath,
+			WitnessFile: witnessFile,
+			BadDisplay:  true,
+		})
+		if err != nil {
+			t.Fatalf("marshal badFakeCfg: %v", err)
+		}
+		if err := os.WriteFile(fakeConfigPath, badFakeCfg, 0o600); err != nil {
+			t.Fatalf("write badFakeCfg: %v", err)
+		}
+		if _, err := m.Handle(ctx, req(
+			"create",
+			`{"kind":"desktop_capsule","profile_id":"inner-bad-display","geometry":{"w":1280,"h":720},"nested_depth":1}`,
+		)); err == nil {
+			t.Fatal("expected create with invalid Xvfb display to fail closed")
+		}
+		if _, statErr := os.Stat(witnessFile); !os.IsNotExist(statErr) {
+			t.Fatalf("invalid Xvfb display wrote witness file: %v", statErr)
+		}
+		delete(m.cfg.Profiles, "inner-bad-display")
+		delete(m.quarantined, "inner-bad-display")
+		if err := os.WriteFile(fakeConfigPath, fakeCfgBytes, 0o600); err != nil {
+			t.Fatalf("restore fakeConfigPath: %v", err)
+		}
+	}
 
 	// Negative control 1: nested_depth:2 refuses with a typed fault before any container exists.
 	_, err = m.Handle(ctx, req(
