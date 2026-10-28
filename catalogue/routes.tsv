@@ -1445,6 +1445,8 @@ mvui33b-58bc830a5ccd	ui/test/mvui33b-mono-clock.test.js
 mvui33b-b17f0385b51a	ui/test/mvui33b-recfps-parse.test.js
 mvui33c-c4624f1acb7c	ui/test/mvui33c-decay-edge.test.js
 mvui33c-6394fb65f473	ui/test/mvui33c-recfps-empty.test.js
+mvui34p-fcbd0945dabd	ui/test/mvui34-paced-paint.test.js
+mvui34r-9f130ede8673	ui/test/mvui34-retained-identity.test.js
 mvui4wa-768ad3f201a7	ui/test/mvui4-wall-states.test.js
 mvui5ac-09d04069a3a2	ui/test/mvui5-activity-app.test.js
 mvui5ac-97fc5e0a129e	ui/test/mvui5-activity-model.test.js
