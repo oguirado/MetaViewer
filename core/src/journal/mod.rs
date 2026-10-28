@@ -199,6 +199,9 @@ pub struct Witness {
 pub struct VerifiedPixels {
     bytes: Vec<u8>,
     sha256: String,
+    pub(crate) read_started: Option<std::time::Instant>,
+    pub(crate) shm_read_ns: u128,
+    pub(crate) hash_ns: u128,
 }
 std::thread_local! {
     static VERIFIED_PIXEL_GRANT: std::cell::Cell<Option<(usize, usize, [u8; 64])>> = const {
@@ -221,7 +224,13 @@ fn take_verified_grant(sha256: &str, bytes: &[u8]) -> bool {
 }
 impl VerifiedPixels {
     fn new(bytes: Vec<u8>, sha256: String) -> Self {
-        Self { bytes, sha256 }
+        Self {
+            bytes,
+            sha256,
+            read_started: None,
+            shm_read_ns: 0,
+            hash_ns: 0,
+        }
     }
     pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, JournalError> {
         if bytes.is_empty() || bytes.len() as u64 > MAX_BYTES {
@@ -251,6 +260,8 @@ impl VerifiedPixels {
                 "frame digest mismatch",
             ));
         }
+        let started = std::time::Instant::now();
+        let mut hash_ns = 0;
         let mut bytes = vec![0u8; expected_len];
         let mut hasher = StreamingSha256::new();
         let mut pos = 0usize;
@@ -260,19 +271,27 @@ impl VerifiedPixels {
             if n == 0 {
                 break;
             }
+            let hash_started = std::time::Instant::now();
             hasher.update(&bytes[pos..pos + n]);
+            hash_ns += hash_started.elapsed().as_nanos();
             pos += n;
         }
         let mut extra = [0u8; 1];
         let trailing = reader.read(&mut extra)?;
+        let hash_started = std::time::Instant::now();
         let digest = hasher.finalize_hex();
+        hash_ns += hash_started.elapsed().as_nanos();
         if pos != expected_len || trailing != 0 || digest != expected_sha256 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "frame digest mismatch",
             ));
         }
-        Ok(Self::new(bytes, digest))
+        let mut verified = Self::new(bytes, digest);
+        verified.read_started = Some(started);
+        verified.hash_ns = hash_ns;
+        verified.shm_read_ns = started.elapsed().as_nanos().saturating_sub(hash_ns);
+        Ok(verified)
     }
     pub fn sha256(&self) -> &str {
         &self.sha256

@@ -42,6 +42,7 @@
 //! authority journal and join its background sync worker before returning.
 mod capture;
 mod layout;
+mod timings;
 mod tools;
 
 use crate::admission::{
@@ -200,6 +201,8 @@ pub struct Server {
     human_inputs: BTreeMap<String, HumanInputPending>,
     tool_state: tools::ToolState,
     capture: crate::record::capture::Host,
+    frame_timings: timings::Writer,
+    frame_clock: Option<timings::Clock>,
 }
 impl Server {
     pub fn open(config: Config, state_dir: &Path, uid: u32) -> Result<Self> {
@@ -317,7 +320,10 @@ impl Server {
             replay.record_reconnect(&env.session_id, &env.from, &env.nonce, env.seq)?;
         }
         let capture = crate::record::capture::Host::with_serial(authority.state().core_seq);
+        let frame_timings = timings::Writer::start(root.join("artifacts/frame_timings.jsonl"));
         Ok(Self {
+            frame_timings,
+            frame_clock: None,
             config,
             authority,
             root,
@@ -343,6 +349,7 @@ impl Server {
         Ok(self.authority.state().snapshot()?)
     }
     pub fn shutdown(&mut self) -> Result<()> {
+        self.frame_timings.close();
         self.connections.clear();
         self.observers.clear();
         self.subscriptions.clear();
@@ -436,6 +443,7 @@ impl Server {
         Ok(())
     }
     fn fanout_at(&mut self, now_ns: u64, body: Command) {
+        let started = Instant::now();
         let frame_surface = match &body {
             Command::FrameRef(frame) => Some(frame.surface_id.as_str()),
             Command::SurfaceEvent(event) => match event.as_ref() {
@@ -463,6 +471,9 @@ impl Server {
         for peer in peers {
             let _ = self.send_at(now_ns, &peer, body.clone());
         }
+        if let Some(clock) = &mut self.frame_clock {
+            clock.row.fanout_ns += started.elapsed().as_nanos();
+        }
     }
     #[cfg(test)]
     fn witness(&mut self, frame: &FrameRef) -> Result<Witness> {
@@ -472,6 +483,7 @@ impl Server {
         Self::read_shm_pixels_under(Path::new("/dev/shm"), frame)
     }
     fn read_shm_pixels_under(shm_root: &Path, frame: &FrameRef) -> Result<VerifiedPixels> {
+        let started = Instant::now();
         #[cfg(test)]
         let t_read = Instant::now();
         #[cfg(test)]
@@ -546,8 +558,15 @@ impl Server {
             s.shm_read_ns += t_read.elapsed().as_nanos().saturating_sub(h_delta);
             cell.set(s);
         });
-        Ok(res?)
+        let mut verified = res?;
+        verified.read_started = Some(started);
+        verified.shm_read_ns = started
+            .elapsed()
+            .as_nanos()
+            .saturating_sub(verified.hash_ns);
+        Ok(verified)
     }
+    #[cfg(test)]
     fn witness_pixels(&mut self, frame: &FrameRef) -> Result<(Witness, Vec<u8>)> {
         let verified = Self::read_shm_pixels(frame)?;
         let witness = verified.retain_in_authority(&mut self.authority)?;
@@ -589,38 +608,29 @@ impl Server {
         boundary: Witness,
         pre_pixels: Option<Result<VerifiedPixels>>,
     ) -> Result<Option<crate::admission::Outcome>> {
-        let (witness, pixels) = match pre_pixels {
-            Some(res) => match res {
-                Ok(verified) => {
-                    if verified.sha256() != frame.sha256 {
-                        return Err(invalid("frame digest mismatch"));
-                    }
-                    let witness = verified.retain_in_authority(&mut self.authority)?;
-                    (witness, verified.into_bytes())
-                }
-                Err(error)
-                    if error
-                        .downcast_ref::<std::io::Error>()
-                        .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
-                {
-                    self.precheck_frame_on_not_found(frame)?;
-                    return Ok(None);
-                }
-                Err(error) => return Err(error),
-            },
-            None => match self.witness_pixels(frame) {
-                Ok(witness) => witness,
-                Err(error)
-                    if error
-                        .downcast_ref::<std::io::Error>()
-                        .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
-                {
-                    self.precheck_frame_on_not_found(frame)?;
-                    return Ok(None);
-                }
-                Err(error) => return Err(error),
-            },
+        let pixels_result = pre_pixels.unwrap_or_else(|| Self::read_shm_pixels(frame));
+        let witness_started = Instant::now();
+        let verified = match pixels_result {
+            Ok(verified) => verified,
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                self.precheck_frame_on_not_found(frame)?;
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
         };
+        if verified.sha256() != frame.sha256 {
+            return Err(invalid("frame digest mismatch"));
+        }
+        if let Some(clock) = &mut self.frame_clock {
+            clock.read(&verified);
+            clock.row.byte_len = verified.bytes().len() as u64;
+        }
+        let witness = verified.retain_in_authority(&mut self.authority)?;
+        let pixels = verified.into_bytes();
         let out = self.authority.apply_with_witnesses(
             Input::Frame {
                 surface_id: frame.surface_id.clone(),
@@ -633,12 +643,21 @@ impl Server {
             },
             vec![boundary, witness],
         )?;
+        if let Some(clock) = &mut self.frame_clock {
+            clock.row.witness_journal_ns += witness_started.elapsed().as_nanos();
+            clock.accepted = out.reason.is_none();
+        }
         if out.reason.is_none() {
+            let capture_started = Instant::now();
             #[cfg(test)]
             let t_cap = Instant::now();
             #[cfg(test)]
             let h_before = crate::journal::STAGE_TIMINGS.with(|c| c.get().hash_ns);
-            self.capture_frame_at(now_ns, frame, pixels)?;
+            let capture_result = self.capture_frame_at(now_ns, frame, pixels);
+            if let Some(clock) = &mut self.frame_clock {
+                clock.row.capture_ns += capture_started.elapsed().as_nanos();
+            }
+            capture_result?;
             #[cfg(test)]
             crate::journal::STAGE_TIMINGS.with(|cell| {
                 let mut s = cell.get();
@@ -852,11 +871,39 @@ impl Server {
         env: Envelope,
         pre_pixels: Option<Result<VerifiedPixels>>,
     ) -> Result<()> {
+        self.frame_clock = if env.from.component == Component::Daemon {
+            Self::daemon_frame_ref(&env.body).map(timings::Clock::new)
+        } else {
+            None
+        };
+        if let (Some(clock), Some(Ok(pixels))) = (&mut self.frame_clock, &pre_pixels) {
+            clock.read(pixels);
+        }
+        let result = self.route_at_inner(now_ns, peer, epoch, env, pre_pixels);
+        if let Some(clock) = self.frame_clock.take() {
+            if clock.accepted {
+                self.frame_timings.submit(clock.finish());
+            }
+        }
+        result
+    }
+    fn route_at_inner(
+        &mut self,
+        now_ns: u64,
+        peer: &ReadyPeer,
+        epoch: u64,
+        env: Envelope,
+        pre_pixels: Option<Result<VerifiedPixels>>,
+    ) -> Result<()> {
+        let boundary_started = Instant::now();
         self.replay
             .record(&env.session_id, &env.from, &env.nonce, env.seq)?;
         let raw = serde_json::to_string(&env)?;
         let boundary = VerifiedPixels::from_bytes(raw.into_bytes())?
             .retain_in_authority(&mut self.authority)?;
+        if let Some(clock) = &mut self.frame_clock {
+            clock.row.witness_journal_ns += boundary_started.elapsed().as_nanos();
+        }
         match (&env.from.component, &env.body) {
             (Component::Ui, Command::RecordRequest(request)) => {
                 return self.capture_wire(now_ns, &env, request, boundary);
