@@ -485,21 +485,32 @@ def _run_v02(argv):
             return 2
         try:
             config = _read_request(args.config, args.max_line_bytes)
-        except (ValueError, OSError):
+            peers = config["peers"]
+            if not isinstance(peers, list):
+                raise TypeError("invalid peers")
+            local = next(
+                peer for peer in peers
+                if isinstance(peer, dict)
+                and peer.get("endpoint") == {"component": "agent", "instance": args.agent_instance}
+            )
+            core_reg = config["core"]
+            if (not isinstance(core_reg, dict)
+                    or config["session_id"] != args.session_id
+                    or core_reg.get("endpoint") != {"component": "core", "instance": args.core_instance}):
+                raise ValueError("registration mismatch")
+            dependency_pins = local["hello"]["dependencies"]
+            if not isinstance(dependency_pins, list):
+                raise TypeError("invalid dependencies")
+        except (ValueError, OSError, UnicodeError, RecursionError, KeyError, TypeError, StopIteration):
             _refuse("usage_error")
             return 2
-        local = next(peer for peer in config["peers"]
-                     if peer["endpoint"] == {"component": "agent", "instance": args.agent_instance})
-        if (config["session_id"] != args.session_id
-                or config["core"]["endpoint"] != {"component": "core", "instance": args.core_instance}):
-            raise ValueError("registration mismatch")
         import hashlib
-        scope = json.dumps([args.session_id, local["endpoint"], config["core"]["endpoint"]],
+        scope = json.dumps([args.session_id, local["endpoint"], core_reg["endpoint"]],
                            sort_keys=True).encode()
         sequence_path = os.path.join(os.path.dirname(endpoint),
                                      ".mvctl-" + hashlib.sha256(scope).hexdigest() + ".seq")
         with ToolClient(endpoint, session_id=args.session_id, local=local,
-                        core=config["core"], dependency_pins=local["hello"]["dependencies"],
+                        core=core_reg, dependency_pins=dependency_pins,
                         sequence_path=sequence_path, timeout_s=args.timeout_ms / 1000,
                         max_line_bytes=args.max_line_bytes,
                         max_reply_bytes=args.max_reply_bytes) as client:

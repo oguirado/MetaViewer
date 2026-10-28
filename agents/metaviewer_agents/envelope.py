@@ -821,15 +821,12 @@ def make_envelope(*, msg_id: str, from_component: str,
     if ts_ns is None:
         global _SESSION_ORIGIN_NS, _LAST_CLOCK_FN
         now = time.monotonic_ns()
-        if (
-            _SESSION_ORIGIN_NS is None
-            or time.monotonic_ns is not _LAST_CLOCK_FN
-            or now < _SESSION_ORIGIN_NS
-            or now - _SESSION_ORIGIN_NS > _MAX_SAFE_INT
-        ):
+        if _SESSION_ORIGIN_NS is None or time.monotonic_ns is not _LAST_CLOCK_FN:
             _SESSION_ORIGIN_NS = now
             _LAST_CLOCK_FN = time.monotonic_ns
         ts_ns = now - _SESSION_ORIGIN_NS
+        if ts_ns < 0 or ts_ns > _MAX_SAFE_INT:
+            raise EnvelopeError("bad_shape", "session clock ceiling exceeded")
     envelope = {
         "schema": (_LEGACY_SCHEMA if isinstance(body, dict) and str(body.get("schema", "")).endswith("/v0.1") else SCHEMA),
         "msg_id": msg_id,

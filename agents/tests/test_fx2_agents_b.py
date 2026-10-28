@@ -413,7 +413,18 @@ class Fx2AgentsBTests(unittest.TestCase):
 
     def test_t6r2_008_make_envelope_session_relative_clock_past_safe_int(self):
         base = 1 << 53
-        with mock.patch("metaviewer_agents.envelope.time.monotonic_ns", side_effect=[base, base + 125]):
+        max_safe = (1 << 53) - 1
+        with mock.patch(
+            "metaviewer_agents.envelope.time.monotonic_ns",
+            side_effect=[
+                base,
+                base + 125,
+                base + max_safe,
+                base + max_safe + 1,
+                base + max_safe + 2,
+                base - 1,
+            ],
+        ):
             first = make_envelope(
                 msg_id="m1",
                 from_component="agent",
@@ -434,8 +445,38 @@ class Fx2AgentsBTests(unittest.TestCase):
                 seq=2,
                 body=_proposal_v02(),
             )
-        self.assertEqual(first["ts_ns"], 0)
-        self.assertEqual(second["ts_ns"], 125)
+            ceiling = make_envelope(
+                msg_id="m3",
+                from_component="agent",
+                from_instance="agent-1",
+                to_component="core",
+                to_instance="core-1",
+                session_id="sess-1",
+                seq=3,
+                body=_proposal_v02(),
+            )
+            self.assertEqual(first["ts_ns"], 0)
+            self.assertEqual(second["ts_ns"], 125)
+            self.assertEqual(ceiling["ts_ns"], max_safe)
+            # Inbound ts_ns == 2^53 - 1 remains valid and decodable in validate_envelope.
+            self.assertIs(validate_envelope(ceiling), ceiling)
+
+            # Elapsed monotonic clock past 2^53 - 1 fails closed without resetting
+            # _SESSION_ORIGIN_NS or emitting ts_ns=0 (T6-R3-003).
+            for seq_no in (4, 5, 6):
+                with self.assertRaises(EnvelopeError) as ctx:
+                    make_envelope(
+                        msg_id=f"m{seq_no}",
+                        from_component="agent",
+                        from_instance="agent-1",
+                        to_component="core",
+                        to_instance="core-1",
+                        session_id="sess-1",
+                        seq=seq_no,
+                        body=_proposal_v02(),
+                    )
+                self.assertEqual(ctx.exception.code, "bad_shape")
+                self.assertEqual(envelope._SESSION_ORIGIN_NS, base)
 
         # Negative control: explicit huge ts_ns still refused.
         with self.assertRaises(EnvelopeError) as ctx:

@@ -45,6 +45,8 @@ _SURFACE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]*")
 _MAX_DEPTH = 100
 _MAX_SURFACE_ID = 128
 _MAX_ROLE = 128
+_MAX_SAFE_INT = (1 << 53) - 1
+_MAX_SUMMARY = 65536
 
 _FRAME_KEYS = frozenset((
     "schema", "surface_id", "generation", "tick", "ts_ns", "width",
@@ -76,13 +78,31 @@ def _fail(code: str, message: str) -> None:
     raise ObservationError(code, message)
 
 
-def _check_int(value: object, *, minimum: int, name: str) -> int:
+def _check_int(value: object, *, minimum: int,
+               maximum: int = _MAX_SAFE_INT, name: str) -> int:
     # type() is exact: bool must never pass as an integer.
     if type(value) is not int:
         _fail("bad_shape", "%s is not an integer" % name)
     assert isinstance(value, int)
     if value < minimum:
         _fail("bad_shape", "%s below minimum" % name)
+    if value > maximum:
+        _fail("bad_shape", "%s exceeds maximum" % name)
+    return value
+
+
+def _check_scalar_str(value: object, *, min_len: int = 0,
+                      max_len: int = _MAX_SUMMARY, name: str) -> str:
+    if not isinstance(value, str):
+        _fail("bad_shape", "%s is not a string" % name)
+    if not (min_len <= len(value) <= max_len):
+        _fail("bad_shape", "%s length out of bounds" % name)
+    try:
+        raw = value.encode("utf-8")
+    except UnicodeEncodeError:
+        _fail("bad_shape", "%s contains a surrogate" % name)
+    if len(raw) > _MAX_SUMMARY:
+        _fail("bad_shape", "%s UTF-8 bytes exceed maximum" % name)
     return value
 
 
@@ -156,8 +176,8 @@ def _check_vision(vision: object, *, width: int, height: int) -> None:
             or set(vision) != _VISION_REQUIRED):
         _fail("bad_shape", "vision keys are not exact")
     assert isinstance(vision, dict)
-    if not isinstance(vision["summary"], str):
-        _fail("bad_shape", "vision summary is not a string")
+    _check_scalar_str(vision["summary"], min_len=0, max_len=_MAX_SUMMARY,
+                      name="vision summary")
     regions = vision["changed_regions"]
     if not isinstance(regions, list):
         _fail("bad_shape", "changed_regions is not an array")
@@ -174,11 +194,10 @@ def _check_vision(vision: object, *, width: int, height: int) -> None:
             _fail("bad_shape", "%s keys are not exact" % name)
         _check_box(element["bbox"], width=width, height=height,
                    name=name + ".bbox")
-        role = element["role"]
-        if not isinstance(role, str) or not 1 <= len(role) <= _MAX_ROLE:
-            _fail("bad_shape", name + " role malformed")
-        if not isinstance(element["name"], str):
-            _fail("bad_shape", name + " name is not a string")
+        _check_scalar_str(element["role"], min_len=1, max_len=_MAX_ROLE,
+                          name=name + " role")
+        _check_scalar_str(element["name"], min_len=0, max_len=_MAX_SUMMARY,
+                          name=name + " name")
         _check_confidence(element["confidence"])
 
 

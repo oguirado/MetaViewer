@@ -280,28 +280,71 @@ class ObservationValidationTests(unittest.TestCase):
                                 generation=1)
 
     def test_frame_integer_slots_reject_bool_float_and_range(self):
+        max_safe = (1 << 53) - 1
         cases = [("generation", 0), ("generation", True),
-                 ("generation", 1.0), ("tick", -1), ("tick", False),
-                 ("ts_ns", -1), ("width", 0), ("height", 0),
-                 ("width", 800.0), ("capture_us", -1)]
+                 ("generation", 1.0), ("generation", max_safe + 1),
+                 ("tick", -1), ("tick", False), ("tick", max_safe + 1),
+                 ("ts_ns", -1), ("ts_ns", max_safe + 1),
+                 ("width", 0), ("height", 0),
+                 ("width", 800.0), ("capture_us", -1),
+                 ("capture_us", max_safe + 1)]
         for key, value in cases:
             with self.subTest(key=key, value=value):
                 observation = _observation()
                 observation["frame_ref"][key] = value
                 self.assertCode("bad_shape", validate_observation,
                                 observation, surface_id="surface-demo",
-                                generation=1)
+                                generation=(value if key == "generation" and type(value) is int and value >= 1 else 1))
+
+        # Positive control: 2^53 - 1 ceiling accepted for integer counters/timestamps.
+        at_ceiling = _observation(
+            schema="observation/v0.2",
+            frame_ref=_frame(
+                schema="frame_ref/v0.2",
+                generation=max_safe,
+                tick=max_safe,
+                ts_ns=max_safe,
+                capture_us=max_safe,
+            ),
+            ground_truth=_truth(tick=max_safe),
+        )
+        validate_observation(
+            at_ceiling,
+            surface_id="surface-demo",
+            generation=max_safe,
+            contract_version="v0.2",
+        )
+        bad_truth = copy.deepcopy(at_ceiling)
+        bad_truth["ground_truth"]["tick"] = max_safe + 1
+        self.assertCode(
+            "bad_shape",
+            validate_observation,
+            bad_truth,
+            surface_id="surface-demo",
+            generation=max_safe,
+            contract_version="v0.2",
+        )
 
     def test_vision_requires_closed_shape(self):
         for vision in ({"summary": "s", "changed_regions": []},
                        _vision(extra=True), "vision", None, [],
-                       _vision(summary=7)):
+                       _vision(summary=7),
+                       _vision(summary="a" * 65537),
+                       _vision(summary="é" * 32769),
+                       _vision(summary="bad\ud800surrogate"),
+                       _vision(elements=[_element(name="a" * 65537)]),
+                       _vision(elements=[_element(name="bad\udfffsurrogate")]),
+                       _vision(elements=[_element(role="bad\ud800role")])):
             with self.subTest(vision=vision):
                 observation = _observation()
                 observation["vision"] = vision
                 self.assertCode("bad_shape", validate_observation,
                                 observation, surface_id="surface-demo",
                                 generation=1)
+        # Positive control: 65536-byte summary and valid astral codepoint accepted.
+        for good_summary in ("a" * 65536, "Ready \U0001f600"):
+            observation = _observation(vision=_vision(summary=good_summary))
+            validate_observation(observation, surface_id="surface-demo", generation=1)
 
     def test_null_and_nullable_bboxes_refused(self):
         for bbox in (None, "box", {"x": 1, "y": 2},

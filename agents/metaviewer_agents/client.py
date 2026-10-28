@@ -333,6 +333,14 @@ class CoreClient:
         self.close()
 
 
+_RECORD_OP_EVENTS = {
+    "ram_start": frozenset({"started", "refused"}),
+    "disk_start": frozenset({"started", "refused"}),
+    "ram_stop": frozenset({"frame_captured", "dropped", "stopped", "refused"}),
+    "disk_stop": frozenset({"exported", "stopped", "refused"}),
+}
+
+
 class ToolClient:
     """Production tool mailbox, usable by tools and the MCP bridge.
 
@@ -455,9 +463,20 @@ class ToolClient:
                     if len(self._receipts) > 128:
                         del self._receipts[next(iter(self._receipts))]
                     continue
-                if (result.get("schema") != expect
-                        or result.get("request_id") != body["request_id"]
-                        or result.get("op") != body["op"]):
+                if expect == "record_event/v0.2":
+                    allowed = _RECORD_OP_EVENTS.get(body.get("op"), frozenset())
+                    correlated = (
+                        result.get("schema") == expect
+                        and result.get("request_id") == body["request_id"]
+                        and result.get("event") in allowed
+                    )
+                else:
+                    correlated = (
+                        result.get("schema") == expect
+                        and result.get("request_id") == body["request_id"]
+                        and result.get("op") == body.get("op")
+                    )
+                if not correlated:
                     raise ToolValidationError("uncorrelated tool result")
                 return result
         except BaseException:

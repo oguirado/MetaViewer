@@ -160,7 +160,22 @@ class CliGapTests(unittest.TestCase):
             root = Path(directory)
             invalid = root / "CONFIG-CANARY.json"
             invalid.write_text("CONFIG-CONTENT-CANARY", encoding="utf-8")
-            for path in (invalid, root / "CONFIG-PATH-CANARY", root):
+            empty_obj = root / "EMPTY-CANARY.json"
+            empty_obj.write_text("{}", encoding="utf-8")
+            no_agent_peer = root / "NO-PEER-CANARY.json"
+            no_agent_peer.write_text(json.dumps({
+                "session_id": "sess-1",
+                "core": fixture.registration("core"),
+                "peers": [fixture.registration("daemon")],
+                "canary": "CANARY-SECRET",
+            }), encoding="utf-8")
+            bad_core = root / "BAD-CORE-CANARY.json"
+            bad_core.write_text(json.dumps({
+                "session_id": "sess-1",
+                "core": {"canary": "CANARY-CORE"},
+                "peers": [fixture.registration("agent")],
+            }), encoding="utf-8")
+            for path in (invalid, empty_obj, no_agent_peer, bad_core, root / "CONFIG-PATH-CANARY", root):
                 with self.subTest(path=path.name), patch.dict(
                         os.environ, {"MV_CORE_CONFIG": str(path)}), patch(
                         "metaviewer_agents.client.ToolClient") as transport:

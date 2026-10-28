@@ -231,6 +231,115 @@ class RecordVerbTests(unittest.TestCase):
                 client=refused_client, timeout_ms=1000)
         self.assertEqual(caught.exception.reason_code, "POLICY")
 
+    def test_real_tool_client_record_correlation_and_refusal(self) -> None:
+        # Exercise production ToolClient.request correlation over a real socket
+        # without mocking ToolClient (T6-R3-001).
+        replies = [
+            [lambda call: _event(call, "started", mono_ns=10, mode="ram")],
+            [lambda call: _event(call, "stopped", mono_ns=12, frame_count=1, byte_count=96)],
+            [lambda call: _event(call, "refused", mono_ns=13, reason_code="POLICY", detail="denied")],
+            [lambda call: _event(call, "refused", mono_ns=14, reason_code="LOCKED_BY_OTHER", detail="busy")],
+        ]
+        with cli_fixture.MvctlV02Tests().core(replies) as (sock, calls):
+            root = sock.parent
+            trusted = root / "trusted.json"
+            trusted.write_text(json.dumps(cli_fixture.config()), encoding="utf-8")
+            start_file = root / "start.json"
+            stop_file = root / "stop.json"
+            start_file.write_text(json.dumps({
+                "schema": "record_request/v0.2",
+                "request_id": "req-start",
+                "op": "ram_start",
+                "params": {
+                    "surface_id": "surf-1",
+                    "recording_id": "rec-1",
+                    "ring_bytes": 4096,
+                    "max_fps": 30,
+                },
+            }), encoding="utf-8")
+            stop_file.write_text(json.dumps({
+                "schema": "record_request/v0.2",
+                "request_id": "req-stop",
+                "op": "ram_stop",
+                "params": {
+                    "surface_id": "surf-1",
+                    "recording_id": "rec-1",
+                },
+            }), encoding="utf-8")
+            with patch.dict(os.environ, {"MV_CORE_CONFIG": str(trusted)}):
+                out1, err1 = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(out1), contextlib.redirect_stderr(err1):
+                    rc1 = mvctl.run(self._cli_argv("record-start", sock, start_file))
+                self.assertEqual((rc1, err1.getvalue()), (0, ""))
+                self.assertEqual(json.loads(out1.getvalue())["event"], "started")
+
+                out2, err2 = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(out2), contextlib.redirect_stderr(err2):
+                    rc2 = mvctl.run(self._cli_argv("record-stop", sock, stop_file))
+                self.assertEqual((rc2, err2.getvalue()), (0, ""))
+                self.assertEqual(json.loads(out2.getvalue())["event"], "stopped")
+
+                out3, err3 = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(out3), contextlib.redirect_stderr(err3):
+                    rc3 = mvctl.run(self._cli_argv("record-start", sock, start_file))
+                self.assertEqual((rc3, err3.getvalue()), (1, ""))
+                self.assertEqual(
+                    json.loads(out3.getvalue()),
+                    {"verdict": "refuse", "reason_code": "POLICY"},
+                )
+
+                out4, err4 = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(out4), contextlib.redirect_stderr(err4):
+                    rc4 = mvctl.run(self._cli_argv("record-stop", sock, stop_file))
+                self.assertEqual((rc4, err4.getvalue()), (1, ""))
+                self.assertEqual(
+                    json.loads(out4.getvalue()),
+                    {"verdict": "refuse", "reason_code": "LOCKED_BY_OTHER"},
+                )
+            self.assertEqual(len(calls), 4)
+
+        # Negative controls: reject stopped for ram_start, started for ram_stop,
+        # mismatched request_id, or mismatched schema in ToolClient.request.
+        bad_replies = [
+            ("ram_start", lambda call: _event(call, "stopped", mono_ns=15, frame_count=0, byte_count=0)),
+            ("ram_stop", lambda call: _event(call, "started", mono_ns=16, mode="ram")),
+            ("ram_start", lambda call: dict(_event(call, "started", mono_ns=17, mode="ram"), request_id="req-other")),
+            ("ram_start", lambda call: {
+                "schema": "mv_tool_result/v0.2",
+                "request_id": call["request_id"],
+                "op": "list",
+                "status": "ok",
+                "surfaces": [],
+                "next_cursor": None,
+            }),
+        ]
+        for idx, (op, builder) in enumerate(bad_replies):
+            with self.subTest(bad_correlation=idx):
+                with cli_fixture.MvctlV02Tests().core([[builder]]) as (sock, _):
+                    cfg = cli_fixture.config()
+                    from metaviewer_agents.client import ToolClient
+                    client = ToolClient(
+                        str(sock),
+                        session_id="sess-1",
+                        local=cfg["peers"][0],
+                        core=cfg["core"],
+                        dependency_pins=[],
+                        sequence_path=str(sock.parent / f"bad-{idx}.seq"),
+                        timeout_s=2.0,
+                        max_line_bytes=65536,
+                        max_reply_bytes=65536,
+                    )
+                    with client:
+                        with self.assertRaises(tools.ToolValidationError):
+                            if op == "ram_start":
+                                tools.record_start(
+                                    "surf-1", "rec-1", mode="ram", ring_bytes=4096,
+                                    max_fps=30, client=client, timeout_ms=1000)
+                            else:
+                                tools.record_stop(
+                                    "surf-1", "rec-1", mode="ram",
+                                    client=client, timeout_ms=1000)
+
     def test_disk_without_destination_refused_zero_bytes(self) -> None:
         # Mutation: remove destination_path / destination_capability_id check
         # in tools.record_start or mvctl._run_v02 preflight.

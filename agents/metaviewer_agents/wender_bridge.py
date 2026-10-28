@@ -29,7 +29,7 @@ from .observe import (
     ObservationError, _reject_non_canonical, compute_battery_state_sha256,
     validate_observation,
 )
-from .tools import _check_action, _check_expectation
+from .tools import ToolValidationError, _check_action, _check_expectation
 
 
 def _require(condition, message):
@@ -265,8 +265,11 @@ class WenderSubprocessAdapter:
             "state", "action", "expectation", "target_node"))
         digest = validate_state(state)
         _reject_non_canonical(target, 0)
-        _check_action(action)
-        _check_expectation(expectation)
+        try:
+            _check_action(action)
+            _check_expectation(expectation)
+        except ToolValidationError as exc:
+            raise ObservationError("bad_shape", str(exc)) from exc
         _require(action["type"] == "click", "only custody-bound clicks supported")
         AdmittedExecutor.check_target(target, latest=state["nodes"], frame=frame)
         _require(target.get("actionable") is True and target["id"] in state["actionable"],

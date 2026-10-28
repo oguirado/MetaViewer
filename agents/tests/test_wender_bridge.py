@@ -186,9 +186,12 @@ class WenderBridgeTests(unittest.TestCase):
         for raw in ("not json", "[]", "{}", '{"state":{},"state":{}}',
                     json.dumps(dict(reply(), extra=True)),
                     json.dumps(dict(reply(), action=dict(type="wait", ms=1))),
+                    json.dumps(dict(reply(), action=dict(type="invented"))),
+                    json.dumps(dict(reply(), action=dict(type="click", x=-1, y=30, button="left"))),
                     json.dumps(dict(reply(), expectation={"type": "invented"}))):
-            with self.subTest(raw=raw), self.assertRaises(ValueError):
+            with self.subTest(raw=raw), self.assertRaises(ObservationError) as caught:
                 self.run_plan(self.adapter(raw=raw))
+            self.assertEqual(caught.exception.code, "bad_shape")
 
     def test_input_controls_reject_before_spawn(self):
         adapter = self.adapter()
