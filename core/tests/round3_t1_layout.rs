@@ -40,7 +40,7 @@ fn test_layout_transition_matrix_and_refusal_atomicity() {
         };
 
         let server = Server::open(config, &journal_dir, uid).unwrap();
-        assert!(server.snapshot().unwrap().len() > 0);
+        assert!(!server.snapshot().unwrap().is_empty());
     });
 }
 

@@ -41,7 +41,7 @@ fn test_native_evidence_verification_and_context_binding() {
         };
 
         let server = Server::open(config, &journal_dir, uid).unwrap();
-        assert!(server.snapshot().unwrap().len() > 0);
+        assert!(!server.snapshot().unwrap().is_empty());
     });
 }
 

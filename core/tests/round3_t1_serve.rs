@@ -41,7 +41,7 @@ fn test_serve_expiry_recovery_and_hosted_ownership() {
         };
 
         let server = Server::open(config, &journal_dir, uid).unwrap();
-        assert!(server.snapshot().unwrap().len() > 0);
+        assert!(!server.snapshot().unwrap().is_empty());
     });
 }
 

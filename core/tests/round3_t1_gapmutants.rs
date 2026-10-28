@@ -42,7 +42,7 @@ fn test_gap_mutants_cross_surface_and_fanout_isolation() {
         };
 
         let server = Server::open(config, &journal_dir, uid).unwrap();
-        assert!(server.snapshot().unwrap().len() > 0);
+        assert!(!server.snapshot().unwrap().is_empty());
     });
 }
 

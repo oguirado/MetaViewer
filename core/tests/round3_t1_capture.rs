@@ -40,7 +40,7 @@ fn test_capture_ram_caps_and_one_recording_per_surface() {
         };
 
         let server = Server::open(config, &journal_dir, uid).unwrap();
-        assert!(server.snapshot().unwrap().len() > 0);
+        assert!(!server.snapshot().unwrap().is_empty());
     });
 }
 

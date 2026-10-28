@@ -687,13 +687,6 @@ nv_lifecycle.rs	core/tests/nv_lifecycle.rs
 nvsuper-df27d9370197	core/tests/nv_supervisor_start.rs
 record_release.rs	core/tests/record_release.rs
 replay_table.rs	core/tests/replay_table.rs
-round3_t1_bounds.rs	core/tests/round3_t1_bounds.rs
-round3_t1_capture.rs	core/tests/round3_t1_capture.rs
-round3t-565265c87210	core/tests/round3_t1_gapmutants.rs
-round3_t1_layout.rs	core/tests/round3_t1_layout.rs
-round3_t1_pins.rs	core/tests/round3_t1_pins.rs
-round3_t1_serve.rs	core/tests/round3_t1_serve.rs
-round3_t1_verify.rs	core/tests/round3_t1_verify.rs
 serve_flow.rs	core/tests/serve_flow.rs
 serve_reconnect.rs	core/tests/serve_reconnect.rs
 serve_v02_tags.rs	core/tests/serve_v02_tags.rs
@@ -840,7 +833,6 @@ REPORTU-f0598c20baeb	docs/research/REPORT_UIARCH_SOL_PASS2.md
 queries.byobu.v1.json	docs/research/queries.byobu.v1.json
 queries.v1.json	docs/research/queries.v1.json
 llms.txt	llms.txt
-round3-T1.md	reports/jules/round3-T1.md
 DEVIATIONS.md	router/kit/DEVIATIONS.md
 bootstr-2d9d88d48c6a	router/kit/bootstrap_receipt.json
 bootstrap_ui.md	router/kit/docs/bootstrap_ui.md
