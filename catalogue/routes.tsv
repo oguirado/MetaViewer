@@ -71,6 +71,7 @@ test_observe_cli.py	agents/tests/test_observe_cli.py
 test_planner.py	agents/tests/test_planner.py
 test_r3_deps_lock.py	agents/tests/test_r3_deps_lock.py
 test_r3_perception.py	agents/tests/test_r3_perception.py
+test_r3_rpc.py	agents/tests/test_r3_rpc.py
 test_record.py	agents/tests/test_record.py
 testres-d06e75457090	agents/tests/test_resource_bounds.py
 testrou-1e6213ca9682	agents/tests/test_round1_regressions.py
