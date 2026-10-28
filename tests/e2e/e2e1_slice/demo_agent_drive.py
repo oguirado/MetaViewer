@@ -11,8 +11,10 @@ explicitly requested) and executes the ordered checkpoints:
 3. ``navigate`` (by composition: ``ctrl+l``, ``type`` data-URL, ``Return``;
    the ``navigate`` wire verb is ABSENT by decision; verified as a sequence so
    an initial focus/selection ``ctrl+l`` step with ``verified: false`` and an
-   unchanged frame records ``noop_verified=false`` while ``type`` + ``Return``
-   produce verified receipts and a changed post frame)
+   unchanged frame records ``noop_verified=false``, and an unverified ``type``
+   or ``Return`` receipt whose post-input capture raced capsule painting waits
+   up to ``POST_FRAME_CHANGE_MAX_S`` polling newest ``frame_ready`` for a
+   changed frame digest and records ``verification.method="post_frame_change"``)
 4. ``read`` (vision marks + element table printed in the checkpoint record)
 5. ``stale_negative_control`` (deliberately stale ``based_on_frame`` refused
    with ``STALE_FRAME``, run continues)
@@ -30,8 +32,12 @@ plus the failing checkpoint with its verdict/receipt IDs.
 
 [TARGET, unit decision] Navigation composition treats an unverified focus/select
 step (``key:ctrl+l``) whose post frame digest matches its pre frame digest as
-``noop_verified=false`` rather than a block; any other unverified step blocks
-and triggers partial receipt emission.
+``noop_verified=false`` rather than a block; for an unverified ``type`` or
+``Return`` step, the runner polls newest ``frame_ready`` / ``observe`` up to
+``POST_FRAME_CHANGE_MAX_S`` (3.0 s) for a frame whose ``sha256`` differs from
+the pre-step frame and accepts that as ``verification.method="post_frame_change"``;
+any other unverified step (or a ``type`` / ``Return`` step whose frame digest
+does not change within the bound) blocks and triggers partial receipt emission.
 """
 
 from __future__ import annotations
@@ -93,6 +99,9 @@ DEMO_HTML = (
 DEMO_DATA_URL = "data:text/html," + quote(DEMO_HTML)
 
 COMPOSITION_LABELS = ("key:ctrl+l", "type:data-url", "key:Return")
+POST_FRAME_CHANGE_MAX_S = 3.0
+POST_FRAME_CHANGE_POLL_S = 0.05
+POST_FRAME_CHANGE_METHOD = "post_frame_change"
 
 
 def composition_actions(data_url: str = DEMO_DATA_URL) -> tuple[dict, ...]:
@@ -147,6 +156,38 @@ def build_proposal(
     )
 
 
+def _newest_wire_frame(
+    surface_id: str,
+    client: object,
+    current_frame: dict,
+) -> dict:
+    """Return the newest frame_ready for ``surface_id`` recorded in ``client.report``."""
+    latest = current_frame
+    report = getattr(client, "report", None)
+    if not isinstance(report, dict):
+        return latest
+    evidence = report.get("wire_evidence")
+    if not isinstance(evidence, list):
+        return latest
+    for item in evidence:
+        if (
+            isinstance(item, dict)
+            and item.get("schema") == "surface_event/v0.2"
+            and item.get("event") == "frame_ready"
+        ):
+            frame_ref = item.get("data", {}).get("frame_ref")
+            if (
+                isinstance(frame_ref, dict)
+                and frame_ref.get("surface_id") in (None, surface_id)
+                and isinstance(frame_ref.get("generation"), int)
+                and not isinstance(frame_ref.get("generation"), bool)
+                and _is_sha256(frame_ref.get("sha256"))
+                and int(frame_ref["generation"]) >= int(latest.get("generation", 0))
+            ):
+                latest = frame_ref
+    return latest
+
+
 def refresh_latest_frame(
     surface_id: str,
     client: object,
@@ -155,7 +196,7 @@ def refresh_latest_frame(
     timeout_ms: int = 5000,
 ) -> dict:
     """Pin the newest frame_ready from the client lane or via tools.observe."""
-    latest = current_frame
+    latest = _newest_wire_frame(surface_id, client, current_frame)
     settle = getattr(client, "settle_latest_frame", None)
     if callable(settle):
         settled = settle(latest)
@@ -164,6 +205,7 @@ def refresh_latest_frame(
     observed = tools.observe(surface_id, client=client, timeout_ms=timeout_ms)["frame_ref"]
     if int(observed["generation"]) >= int(latest["generation"]):
         latest = observed
+    latest = _newest_wire_frame(surface_id, client, latest)
     return copy.deepcopy(latest)
 
 
@@ -176,6 +218,54 @@ def _is_focus_selection_step(index: int, label: str, action: dict) -> bool:
         and action.get("type") == "key"
         and action.get("keys") == ["ctrl", "l"]
     )
+
+
+def _is_post_frame_change_step(index: int, label: str, action: dict) -> bool:
+    """Return True for navigate type/Return steps eligible for post_frame_change verification."""
+    if not isinstance(action, dict) or _is_focus_selection_step(index, label, action):
+        return False
+    action_type = action.get("type")
+    if action_type == "type":
+        return True
+    if action_type == "key" and action.get("keys") == ["Return"]:
+        return True
+    return False
+
+
+def wait_for_post_frame_change(
+    surface_id: str,
+    client: object,
+    before_sha: str,
+    initial_after_frame: dict,
+    *,
+    max_wait_s: float = POST_FRAME_CHANGE_MAX_S,
+    poll_interval_s: float = POST_FRAME_CHANGE_POLL_S,
+    observe_timeout_ms: int = 5000,
+    monotonic_fn=None,
+    sleep_fn=None,
+) -> tuple[bool, dict, int]:
+    """Poll newest frame_ready up to ``max_wait_s`` for a frame sha differing from ``before_sha``."""
+    monotonic_fn = time.monotonic if monotonic_fn is None else monotonic_fn
+    sleep_fn = time.sleep if sleep_fn is None else sleep_fn
+    latest = copy.deepcopy(initial_after_frame)
+    deadline = monotonic_fn() + max(0.0, float(max_wait_s))
+    polls = 0
+    while True:
+        latest = refresh_latest_frame(
+            surface_id,
+            client,
+            latest,
+            timeout_ms=observe_timeout_ms,
+        )
+        polls += 1
+        if _is_sha256(latest.get("sha256")) and str(latest["sha256"]) != before_sha:
+            return True, latest, polls
+        remaining = deadline - monotonic_fn()
+        if remaining <= 0:
+            return False, latest, polls
+        sleep_s = min(max(0.0, float(poll_interval_s)), remaining)
+        if sleep_s > 0:
+            sleep_fn(sleep_s)
 
 
 def _find_settled_receipt(
@@ -470,6 +560,18 @@ def validate_checkpoint_line(record: dict, expected_step: int | None = None) -> 
             if not isinstance(item, dict):
                 raise ValueError("navigate step must be a dict")
             if item.get("verified") is True:
+                ver = item.get("verification")
+                if isinstance(ver, dict) and ver.get("method") == POST_FRAME_CHANGE_METHOD:
+                    if idx not in (1, 2):
+                        raise ValueError("post_frame_change is only valid on type/Return steps")
+                    if (
+                        not _is_sha256(item.get("before_frame_sha256"))
+                        or not _is_sha256(item.get("after_frame_sha256"))
+                        or item["before_frame_sha256"] == item["after_frame_sha256"]
+                    ):
+                        raise ValueError(
+                            "post_frame_change navigate step must have differing before/after frame sha256"
+                        )
                 continue
             if (
                 idx == 0
@@ -615,6 +717,10 @@ def run_demo_agent_drive(
     max_attempts: int = stack.TICK_MAX_ATTEMPTS,
     data_url: str = DEMO_DATA_URL,
     id_fn=None,
+    post_frame_change_max_s: float = POST_FRAME_CHANGE_MAX_S,
+    post_frame_change_poll_s: float = POST_FRAME_CHANGE_POLL_S,
+    monotonic_fn=None,
+    sleep_fn=None,
 ) -> dict:
     """Execute the narrated agent-drive demo checkpoints against ``client``."""
     out_stream = sys.stdout if out_stream is None else out_stream
@@ -759,6 +865,7 @@ def run_demo_agent_drive(
             verdict = admitted["verdict"]
             prop_id = str(proposal["proposal_id"])
             verdict_id = str(verdict.get("proposal_id") or prop_id)
+            before_sha = str(admitted["pinned_frame"]["sha256"])
             total_nav_retries += int(admitted["stale_retries"])
 
             try:
@@ -808,6 +915,29 @@ def run_demo_agent_drive(
                 )
                 step_exc = exc
 
+            if not step_verified and _is_post_frame_change_step(idx, label, action):
+                changed, polled_frame, poll_count = wait_for_post_frame_change(
+                    surface_id,
+                    client,
+                    before_sha,
+                    after_frame,
+                    max_wait_s=post_frame_change_max_s,
+                    poll_interval_s=post_frame_change_poll_s,
+                    monotonic_fn=monotonic_fn,
+                    sleep_fn=sleep_fn,
+                )
+                after_frame = polled_frame
+                if changed:
+                    step_verified = True
+                    step_exc = None
+                    verification = {
+                        "method": POST_FRAME_CHANGE_METHOD,
+                        "detail": (
+                            f"post-step frame sha256 changed from pre-step frame "
+                            f"after {poll_count} poll(s) (generation={after_frame['generation']})"
+                        ),
+                    }
+
             after_sha = str(after_frame["sha256"])
             after_gen = int(after_frame["generation"])
 
@@ -824,6 +954,7 @@ def run_demo_agent_drive(
                         "attempts": admitted["attempts"],
                         "stale_retries": admitted["stale_retries"],
                         "verified": True,
+                        "verification": verification,
                         "before_frame_sha256": before_sha,
                         "after_frame_sha256": after_sha,
                         "after_generation": after_gen,
@@ -886,6 +1017,12 @@ def run_demo_agent_drive(
                 raise step_exc
 
         noop_focus = any(s.get("noop_verified") is False for s in nav_steps)
+        post_frame_verified = [
+            s["label"]
+            for s in nav_steps
+            if isinstance(s.get("verification"), dict)
+            and s["verification"].get("method") == POST_FRAME_CHANGE_METHOD
+        ]
         nav_payload = {
             "verb_absent_by_decision": True,
             "composition": list(COMPOSITION_LABELS),
@@ -902,6 +1039,11 @@ def run_demo_agent_drive(
                 "Navigated to local data-URL fixture via 3-step composition "
                 "(ctrl+l, type data-URL, Return"
                 + ("; focus step recorded noop_verified=false on unchanged frame" if noop_focus else "")
+                + (
+                    f"; {', '.join(post_frame_verified)} verified via {POST_FRAME_CHANGE_METHOD}"
+                    if post_frame_verified
+                    else ""
+                )
                 + "); navigate wire verb is ABSENT by decision."
             ),
         }

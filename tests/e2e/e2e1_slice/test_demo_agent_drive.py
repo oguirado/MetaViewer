@@ -27,6 +27,9 @@ ROOT = demo_agent_drive.ROOT
 LOCAL_PLANNER_ID = demo_agent_drive.LOCAL_PLANNER_ID
 SUBPROCESS_PLANNER_ID = demo_agent_drive.SUBPROCESS_PLANNER_ID
 ORDERED_CHECKPOINTS = demo_agent_drive.ORDERED_CHECKPOINTS
+POST_FRAME_CHANGE_MAX_S = demo_agent_drive.POST_FRAME_CHANGE_MAX_S
+POST_FRAME_CHANGE_POLL_S = demo_agent_drive.POST_FRAME_CHANGE_POLL_S
+POST_FRAME_CHANGE_METHOD = demo_agent_drive.POST_FRAME_CHANGE_METHOD
 AttachedLiveStackSession = demo_agent_drive.AttachedLiveStackSession
 WenderSubprocessAdapter = demo_agent_drive.WenderSubprocessAdapter
 _canonical_sha256 = demo_agent_drive._canonical_sha256
@@ -50,6 +53,7 @@ class InjectedDemoPeer:
         noop_focus_on_nav_step1: bool = False,
         unverified_nav_steps: tuple[int, ...] = (),
         unverified_nav_step_changes_frame: bool = False,
+        late_frame_change_polls_by_nav_step: dict[int, int] | None = None,
     ) -> None:
         self.surface_id = surface_id
         self.transient_stale_on_nav_step1 = transient_stale_on_nav_step1
@@ -58,6 +62,9 @@ class InjectedDemoPeer:
         self.noop_focus_on_nav_step1 = noop_focus_on_nav_step1
         self.unverified_nav_steps = set(unverified_nav_steps)
         self.unverified_nav_step_changes_frame = unverified_nav_step_changes_frame
+        self.late_frame_change_polls_by_nav_step = dict(
+            late_frame_change_polls_by_nav_step or {}
+        )
         self.generation = 1
         self.calls: list[dict] = []
         self.proposals: dict[str, dict] = {}
@@ -66,6 +73,8 @@ class InjectedDemoPeer:
         self._nav1_attempts = 0
         self._click_attempts = 0
         self._clicked = False
+        self._pending_late_frame_change: dict | None = None
+        self.late_frame_poll_counts: dict[int, int] = {}
 
     def _make_frame(self, generation: int, seed: bytes, *, digest: str | None = None) -> dict:
         sha = hashlib.sha256(seed).hexdigest() if digest is None else digest
@@ -109,6 +118,38 @@ class InjectedDemoPeer:
         args = call["args"]
 
         if op == "observe":
+            if self._pending_late_frame_change is not None:
+                pending = self._pending_late_frame_change
+                step_idx = int(pending["nav_step"])
+                self.late_frame_poll_counts[step_idx] = (
+                    self.late_frame_poll_counts.get(step_idx, 0) + 1
+                )
+                pending["polls_remaining"] -= 1
+                if pending["polls_remaining"] <= 0:
+                    self._pending_late_frame_change = None
+                    late_frame = self.advance_frame(
+                        f"{pending['prop_id']}-late-paint",
+                        same_digest=False,
+                    )
+                    self.report["wire_evidence"].append(
+                        {
+                            "schema": "surface_event/v0.2",
+                            "event": "frame_ready",
+                            "data": {"frame_ref": copy.deepcopy(late_frame)},
+                        }
+                    )
+                else:
+                    unchanged_frame = self.advance_frame(
+                        f"{pending['prop_id']}-unchanged-poll-{pending['polls_remaining']}",
+                        same_digest=True,
+                    )
+                    self.report["wire_evidence"].append(
+                        {
+                            "schema": "surface_event/v0.2",
+                            "event": "frame_ready",
+                            "data": {"frame_ref": copy.deepcopy(unchanged_frame)},
+                        }
+                    )
             return {
                 "schema": "mv_tool_result/v0.2",
                 "request_id": req_id,
@@ -173,13 +214,26 @@ class InjectedDemoPeer:
                     break
 
             is_noop_focus = nav_step == 1 and self.noop_focus_on_nav_step1
-            is_unverified_nav = nav_step in self.unverified_nav_steps
-            same_digest = is_noop_focus or (
-                is_unverified_nav and not self.unverified_nav_step_changes_frame
+            has_late_frame_change = nav_step in self.late_frame_change_polls_by_nav_step
+            is_unverified_nav = (
+                nav_step in self.unverified_nav_steps or has_late_frame_change
+            )
+            same_digest = (
+                is_noop_focus
+                or has_late_frame_change
+                or (is_unverified_nav and not self.unverified_nav_step_changes_frame)
             )
             step_verified = not (is_noop_focus or is_unverified_nav)
 
             after = self.advance_frame(prop_id, same_digest=same_digest)
+            if has_late_frame_change:
+                self._pending_late_frame_change = {
+                    "nav_step": int(nav_step),
+                    "prop_id": prop_id,
+                    "polls_remaining": int(self.late_frame_change_polls_by_nav_step[int(nav_step)]),
+                }
+            else:
+                self._pending_late_frame_change = None
             if prop_id.startswith("demo-click-"):
                 self._clicked = True
             daemon_receipt = {
@@ -526,7 +580,82 @@ class DemoAgentDriveUnitTests(unittest.TestCase):
         self.assertIs(step3["verified"], True)
         self.assertNotEqual(nav_cp["pre_frame_sha256"], nav_cp["post_navigate_frame_sha256"])
 
+    def test_late_frame_change_accepted_within_bound_for_type_and_return_steps(self) -> None:
+        clock = [100.0]
+        sleeps: list[float] = []
+
+        def fake_monotonic() -> float:
+            return clock[0]
+
+        def fake_sleep(seconds: float) -> None:
+            sleeps.append(seconds)
+            clock[0] += seconds
+
+        peer = InjectedDemoPeer(
+            noop_focus_on_nav_step1=True,
+            unverified_nav_steps=(2, 3),
+            late_frame_change_polls_by_nav_step={2: 3, 3: 2},
+        )
+        out = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            receipt_path = Path(tmp) / "late-frame-change-receipt.json"
+            receipt = run_demo_agent_drive(
+                peer,
+                peer.surface_id,
+                read_fn=peer.make_reader(),
+                receipt_out=receipt_path,
+                out_stream=out,
+                env={},
+                monotonic_fn=fake_monotonic,
+                sleep_fn=fake_sleep,
+            )
+            saved = json.loads(receipt_path.read_text(encoding="utf-8"))
+
+        lines = [json.loads(line) for line in out.getvalue().strip().splitlines()]
+        self.assertEqual(len(lines), len(ORDERED_CHECKPOINTS))
+        self.assertEqual(receipt, saved)
+        validate_transcript_and_receipt(lines, receipt)
+
+        nav_cp = lines[2]
+        self.assertEqual(nav_cp["checkpoint"], "navigate")
+        self.assertIs(nav_cp["verified"], True)
+        self.assertIs(nav_cp["noop_verified"], False)
+        step1, step2, step3 = nav_cp["steps"]
+
+        self.assertEqual(step1["label"], "key:ctrl+l")
+        self.assertIs(step1["verified"], False)
+        self.assertIs(step1["noop_verified"], False)
+        self.assertEqual(step1["before_frame_sha256"], step1["after_frame_sha256"])
+
+        self.assertEqual(step2["label"], "type:data-url")
+        self.assertIs(step2["verified"], True)
+        self.assertEqual(step2["verification"]["method"], POST_FRAME_CHANGE_METHOD)
+        self.assertNotEqual(step2["before_frame_sha256"], step2["after_frame_sha256"])
+        self.assertEqual(peer.late_frame_poll_counts[2], 3)
+
+        self.assertEqual(step3["label"], "key:Return")
+        self.assertIs(step3["verified"], True)
+        self.assertEqual(step3["verification"]["method"], POST_FRAME_CHANGE_METHOD)
+        self.assertEqual(step3["before_frame_sha256"], step2["after_frame_sha256"])
+        self.assertNotEqual(step3["before_frame_sha256"], step3["after_frame_sha256"])
+        self.assertEqual(peer.late_frame_poll_counts[3], 2)
+
+        self.assertEqual(nav_cp["post_navigate_frame_sha256"], step3["after_frame_sha256"])
+        self.assertNotEqual(nav_cp["pre_frame_sha256"], nav_cp["post_navigate_frame_sha256"])
+        self.assertEqual(len(sleeps), 3)
+        self.assertLess(sum(sleeps), POST_FRAME_CHANGE_MAX_S)
+
     def test_unverified_type_step_blocks_and_writes_partial_receipt_negative_control(self) -> None:
+        clock = [200.0]
+        sleeps: list[float] = []
+
+        def fake_monotonic() -> float:
+            return clock[0]
+
+        def fake_sleep(seconds: float) -> None:
+            sleeps.append(seconds)
+            clock[0] += seconds
+
         peer = InjectedDemoPeer(
             noop_focus_on_nav_step1=True,
             unverified_nav_steps=(2,),
@@ -542,10 +671,13 @@ class DemoAgentDriveUnitTests(unittest.TestCase):
                     receipt_out=receipt_path,
                     out_stream=out,
                     env={},
+                    monotonic_fn=fake_monotonic,
+                    sleep_fn=fake_sleep,
                 )
             self.assertTrue(receipt_path.is_file())
             partial = json.loads(receipt_path.read_text(encoding="utf-8"))
 
+        self.assertAlmostEqual(sum(sleeps), POST_FRAME_CHANGE_MAX_S, places=6)
         lines = [json.loads(line) for line in out.getvalue().strip().splitlines()]
         self.assertEqual(len(lines), 3)
         self.assertEqual([item["checkpoint"] for item in lines], ["LIVE_STACK_READY", "observe", "navigate"])
@@ -566,6 +698,11 @@ class DemoAgentDriveUnitTests(unittest.TestCase):
         self.assertEqual(len(failed_cp["steps"]), 2)
         self.assertIs(failed_cp["steps"][0]["noop_verified"], False)
         self.assertIs(failed_cp["steps"][1]["verified"], False)
+        self.assertEqual(failed_cp["steps"][1]["verification"]["method"], "pixel")
+        self.assertEqual(
+            failed_cp["steps"][1]["before_frame_sha256"],
+            failed_cp["steps"][1]["after_frame_sha256"],
+        )
         self.assertNotIn("noop_verified", failed_cp["steps"][1])
         self.assertEqual(partial["verdict_id"], failed_cp["steps"][1]["verdict_id"])
         self.assertEqual(partial["receipt_id"], failed_cp["steps"][1]["receipt_id"])
@@ -594,12 +731,92 @@ class DemoAgentDriveUnitTests(unittest.TestCase):
                     receipt_out=changed_receipt_path,
                     out_stream=changed_out,
                     env={},
+                    monotonic_fn=fake_monotonic,
+                    sleep_fn=fake_sleep,
                 )
             changed_partial = json.loads(changed_receipt_path.read_text(encoding="utf-8"))
         changed_lines = [json.loads(line) for line in changed_out.getvalue().strip().splitlines()]
         validate_partial_receipt(changed_lines, changed_partial)
         self.assertEqual(changed_lines[2]["failed_step_index"], 1)
         self.assertNotIn("noop_verified", changed_lines[2]["steps"][0])
+
+    def test_unverified_return_step_and_late_change_past_bound_block_negative_control(self) -> None:
+        clock = [300.0]
+        sleeps: list[float] = []
+
+        def fake_monotonic() -> float:
+            return clock[0]
+
+        def fake_sleep(seconds: float) -> None:
+            sleeps.append(seconds)
+            clock[0] += seconds
+
+        # Step 2 (type) recovers within bound; step 3 (Return) never changes sha -> BLOCKED.
+        peer_return_unchanged = InjectedDemoPeer(
+            noop_focus_on_nav_step1=True,
+            unverified_nav_steps=(2, 3),
+            late_frame_change_polls_by_nav_step={2: 2},
+        )
+        out = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            receipt_path = Path(tmp) / "return-blocked-partial.json"
+            with self.assertRaises(tools.VerificationFailed):
+                run_demo_agent_drive(
+                    peer_return_unchanged,
+                    peer_return_unchanged.surface_id,
+                    read_fn=peer_return_unchanged.make_reader(),
+                    receipt_out=receipt_path,
+                    out_stream=out,
+                    env={},
+                    monotonic_fn=fake_monotonic,
+                    sleep_fn=fake_sleep,
+                )
+            partial = json.loads(receipt_path.read_text(encoding="utf-8"))
+
+        lines = [json.loads(line) for line in out.getvalue().strip().splitlines()]
+        validate_partial_receipt(lines, partial)
+        failed_cp = lines[2]
+        self.assertEqual(failed_cp["failed_step_index"], 3)
+        self.assertEqual(failed_cp["failed_step_label"], "key:Return")
+        self.assertEqual(len(failed_cp["steps"]), 3)
+        self.assertIs(failed_cp["steps"][1]["verified"], True)
+        self.assertEqual(failed_cp["steps"][1]["verification"]["method"], POST_FRAME_CHANGE_METHOD)
+        self.assertIs(failed_cp["steps"][2]["verified"], False)
+        self.assertEqual(failed_cp["steps"][2]["verification"]["method"], "pixel")
+        self.assertEqual(
+            failed_cp["steps"][2]["before_frame_sha256"],
+            failed_cp["steps"][2]["after_frame_sha256"],
+        )
+
+        # Late frame change scheduled after the bound expires (poll 10 > 3 polls in 0.1 s bound) -> BLOCKED.
+        peer_past_bound = InjectedDemoPeer(
+            noop_focus_on_nav_step1=True,
+            unverified_nav_steps=(2,),
+            late_frame_change_polls_by_nav_step={2: 10},
+        )
+        past_out = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp2:
+            past_receipt_path = Path(tmp2) / "past-bound-partial.json"
+            with self.assertRaises(tools.VerificationFailed):
+                run_demo_agent_drive(
+                    peer_past_bound,
+                    peer_past_bound.surface_id,
+                    read_fn=peer_past_bound.make_reader(),
+                    receipt_out=past_receipt_path,
+                    out_stream=past_out,
+                    env={},
+                    post_frame_change_max_s=0.1,
+                    post_frame_change_poll_s=POST_FRAME_CHANGE_POLL_S,
+                    monotonic_fn=fake_monotonic,
+                    sleep_fn=fake_sleep,
+                )
+            past_partial = json.loads(past_receipt_path.read_text(encoding="utf-8"))
+
+        past_lines = [json.loads(line) for line in past_out.getvalue().strip().splitlines()]
+        validate_partial_receipt(past_lines, past_partial)
+        self.assertEqual(past_lines[2]["failed_step_index"], 2)
+        self.assertEqual(past_lines[2]["failed_step_label"], "type:data-url")
+        self.assertIs(past_lines[2]["steps"][1]["verified"], False)
 
     def test_partial_receipt_written_on_later_checkpoint_block(self) -> None:
         failing_peer = InjectedDemoPeer(transient_stale_on_click=stack.TICK_MAX_ATTEMPTS)
