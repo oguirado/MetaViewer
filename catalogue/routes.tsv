@@ -1,6 +1,7 @@
 id	path
 commit-msg	.githooks/commit-msg
 pre-push	.githooks/pre-push
+assembly.yml	.github/workflows/assembly.yml
 build-other.yml	.github/workflows/build-other.yml
 ci.yml	.github/workflows/ci.yml
 install_electron.cjs	.github/workflows/install_electron.cjs
@@ -1064,6 +1065,7 @@ check_mutations.py	tests/supervisor/check_mutations.py
 supervisor-process.rs	tests/supervisor/process.rs
 run_process_gate.sh	tests/supervisor/run_process_gate.sh
 test_mutations.py	tests/supervisor/test_mutations.py
+testass-670edc3dc170	tests/test_assembly_smoke.py
 test_budget_basis.py	tests/test_budget_basis.py
 test_budget_gate.py	tests/test_budget_gate.py
 testche-26b4e1734899	tests/test_check_contracts.py
@@ -1111,6 +1113,7 @@ testt7r-688a9d320512	tests/test_t7r2c_gate_admission.py
 testt7r-5a9023bea873	tests/test_t7r2c_reproducibility.py
 test_theme.py	tests/test_theme.py
 test_video_seal.py	tests/test_video_seal.py
+assembly_smoke.py	tools/assembly_smoke.py
 budget_gate.py	tools/budget_gate.py
 check_contracts.py	tools/check_contracts.py
 check_laws.py	tools/check_laws.py
