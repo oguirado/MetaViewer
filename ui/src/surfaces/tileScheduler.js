@@ -1,9 +1,10 @@
 /**
  * @fileoverview Fair newest-only tile scheduler for wall surfaces.
  *
- * Plain JavaScript with JSDoc; no authored TypeScript, no static product
- * imports. The lane-P input mappers are re-exported via dynamic import so
- * SurfaceCanvas keeps its closed SFC dependency map (vue + this module).
+ * Plain JavaScript with JSDoc; no authored TypeScript. The lane-P input
+ * mappers are re-exported via static import (MVUI26B lane S: synchronous
+ * module evaluation, no top-level await) so SurfaceCanvas keeps its closed
+ * SFC dependency map (vue + this module).
  * Non-reactive external registry: frame bytes, mailboxes, leases, canvases
  * and warm resources live here, never inside Vue reactivity proxies.
  *
@@ -21,27 +22,18 @@
 
 /**
  * MVUI25B lane C: lane-P keyboard mapper, re-exported so SurfaceCanvas.vue
- * keeps its closed SFC dependency map (vue plus this module). Loaded by
- * dynamic import — never a static relative import — because mutant harnesses
- * evaluate this file from a data: URL, where relative imports cannot resolve;
- * those contexts keep the null-returning stubs below, so input fails closed
- * (nothing queued) instead of throwing inside DOM listeners.
- * @type {(ev: import('../input/keyMap.js').MappedKeyInput) => import('../input/keyMap.js').KeyMapResult | null}
+ * keeps its closed SFC dependency map (vue plus this module). MVUI26B lane
+ * S: static import — module evaluation stays synchronous (no top-level
+ * await), so pages and e2e harnesses can call in right after load.
  */
-export let mapKeyboardEvent = () => null;
+import { mapKeyboardEvent } from '../input/keyMap.js';
 
 /**
  * MVUI25B lane C: lane-P client-to-frame mapper, re-exported (see above).
- * @type {(input: import('../input/frameMap.js').ClientToFrameInput) => import('../input/frameMap.js').FramePoint | null}
  */
-export let mapClientToFrame = () => null;
+import { mapClientToFrame } from '../input/frameMap.js';
 
-try {
-  ({ mapKeyboardEvent } = await import('../input/keyMap.js'));
-  ({ mapClientToFrame } = await import('../input/frameMap.js'));
-} catch {
-  /* Import failure keeps the null-returning stubs: input fails closed. */
-}
+export { mapClientToFrame, mapKeyboardEvent };
 
 /**
  * @typedef {Object} FrozenTileBudget
@@ -1424,9 +1416,15 @@ export function createTileScheduler(options) {
       // and becomes the retained frame plus the presented witness.
       const retained = entry.pendingPaint;
       entry.pendingPaint = null;
+      let painted = null;
       try {
-        drawRgb24ToCanvas(args.canvas, retained.bytes, retained.width, retained.height);
+        painted = drawRgb24ToCanvas(args.canvas, retained.bytes, retained.width, retained.height);
       } catch {
+        painted = null;
+      }
+      if (painted === null || painted === undefined || painted.ok !== true) {
+        // MVUI26 RV10-02: the draw reports failure by return, not throw. A
+        // failed draw keeps the frame pending and records no witness.
         entry.pendingPaint = retained;
         return { ok: true, surfaceId: entry.surfaceId, token: entry.canvasToken };
       }
@@ -1436,6 +1434,12 @@ export function createTileScheduler(options) {
       entry.lastPresentedDigest = retained.sha256;
       entry.lastPresentedWidth = retained.width;
       entry.lastPresentedHeight = retained.height;
+      // MVUI26 NEW-03: account the attach paint like the coordinated present
+      // path so instrumentation stays consistent with the witness.
+      entry.metrics.presentCount += 1;
+      entry.metrics.convertedBytesTotal += retained.width * retained.height * 4;
+      // MVUI26 RV10-02: subscribers learn of the new witness.
+      notifyPresentation();
     } else if (entry.lastPaint !== null && previous !== args.canvas && !sameElementReattach) {
       try {
         drawRgb24ToCanvas(args.canvas, entry.lastPaint.bytes, entry.lastPaint.width, entry.lastPaint.height);

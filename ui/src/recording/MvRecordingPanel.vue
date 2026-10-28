@@ -376,7 +376,9 @@ const displayShots = computed(() => {
     // when recordings claim or release the source text), so the entry id
     // below doubles as the export-status key on the stable source
     // identity. Display ids still own every DOM id, anchor and key.
-    const statusKey = `shot:${sourceId}`;
+    // MVUI26 lane I (input RV10-04): invalid rows key on the disambiguated
+    // display id, so two invalid rows never share one status entry.
+    const statusKey = validId ? `shot:${sourceId}` : `shot-invalid:${id}`;
     const exportEntry = exportStatus.get(statusKey);
     const rowExportState = normalizeMvExportState(exportEntry?.state);
     const rowExportBusy = mvRowExportBusy(rowExportState);

@@ -1,9 +1,10 @@
 // MVUI25D lane C: mapper-import failure fails closed — the tileScheduler stubs
 // return null (never throw), and the SurfaceCanvas handlers guard every mapper
 // call, so nothing is queued and no error escapes a DOM listener. The stub
-// half runs against a data: URL evaluation of the scheduler (relative mapper
-// imports cannot resolve there, exactly like the mutant harnesses); the
-// file-URL half pins the real mappers still work (positive control). Plain
+// half evaluates a copy of the scheduler with its static mapper imports
+// rewritten to null stubs (relative specifiers cannot resolve from a data:
+// URL, exactly like the mutant harnesses); the file-URL half pins the real
+// mappers still work (positive control). Plain
 // node:test; no async waits needed beyond the module import itself.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -18,10 +19,18 @@ const schedulerSource = readFileSync(
 const tileSource = readFileSync(
   new URL('../src/surfaces/SurfaceCanvas.vue', import.meta.url), 'utf8');
 
-// Separate module instance evaluated from a data: URL: the dynamic mapper
-// imports fail there, so the catch keeps the stubs.
+// Separate module instance evaluated from a data: URL: the static mapper
+// imports are rewritten to null stubs (relative specifiers cannot resolve
+// from a data: URL), pinning the fail-closed contract.
+const stubSource = schedulerSource
+  .replace(`import { mapKeyboardEvent } from '../input/keyMap.js';`,
+    'const mapKeyboardEvent = () => null;')
+  .replace(`import { mapClientToFrame } from '../input/frameMap.js';`,
+    'const mapClientToFrame = () => null;');
+assert.ok(!stubSource.includes('../input/keyMap.js'), 'keyMap import must be stubbed out');
+assert.ok(!stubSource.includes('../input/frameMap.js'), 'frameMap import must be stubbed out');
 const stubbed = await import(
-  `data:text/javascript;base64,${Buffer.from(schedulerSource).toString('base64')}#mvui25d-stubs`);
+  `data:text/javascript;base64,${Buffer.from(stubSource).toString('base64')}#mvui25d-stubs`);
 
 test('mvui25d failclosed: scheduler stubs return null instead of throwing', () => {
   assert.equal(typeof stubbed.mapKeyboardEvent, 'function');

@@ -137,7 +137,12 @@ test('W1 ALREADY_FIXED controls: historical presentation/resource defects fail t
     }],
   ]) {
     assert.ok(source.includes(before));
-    const mutant=await import(`data:text/javascript;base64,${Buffer.from(source.replace(before,after)).toString('base64')}`);
+    // MVUI26C lane H: relink the static mapper imports to absolute URLs;
+    // relative specifiers cannot resolve from a data: URL.
+    const relinked=source.replace(before,after)
+      .split(`'../input/keyMap.js'`).join(JSON.stringify(import.meta.resolve('../src/input/keyMap.js')))
+      .split(`'../input/frameMap.js'`).join(JSON.stringify(import.meta.resolve('../src/input/frameMap.js')));
+    const mutant=await import(`data:text/javascript;base64,${Buffer.from(relinked).toString('base64')}`);
     const engine=mutant.createTileScheduler({budget}); engine.registerSurface({...binding,state});
     try { assert.throws(()=>oracle(engine),assert.AssertionError); } finally {engine.destroy();}
   }

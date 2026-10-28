@@ -239,16 +239,23 @@ function onCanvasFocus(_event) {
 /** @param {FocusEvent} _event */
 function onCanvasBlur(_event) {
   canvasFocused.value = false;
+  activePress = null;
 }
 
 /**
- * Focuses the canvas only when the DOM method exists. Fake-DOM harnesses
- * may mount a canvas double without focus/blur; the typeof guard keeps
- * those mounts working while real browsers behave exactly as before.
+ * Focuses the canvas only when the DOM method exists, never scrolling the
+ * page (MVUI26B lane S: focus({ preventScroll: true }); the fallback keeps
+ * fake-DOM harnesses and legacy focus() implementations working).
+ * Focusing a tile must never move the MetaViewer page.
  */
 function focusCanvas() {
   const el = canvasRef.value;
-  if (el !== null && typeof el.focus === 'function') el.focus();
+  if (el === null || typeof el.focus !== 'function') return;
+  try {
+    el.focus({ preventScroll: true });
+  } catch {
+    el.focus();
+  }
 }
 
 /**
@@ -285,13 +292,51 @@ function onCanvasKeyDown(event) {
 }
 
 /**
- * Pointer capture: pointerdown takes focus; pointerup sends one click at
- * frame coordinates. No pointer-move forwarding, no preventDefault.
+ * MVUI26 lane I (frames RV10-04): the press armed by the latest gated
+ * pointerdown (identifier, button, in-frame flag), or null when no press
+ * is active. A pointerup queues a click only for a matching active press.
+ * @type {{ pointerId: unknown, button: unknown, inFrame: boolean } | null}
+ */
+let activePress = null;
+
+/**
+ * Pointer capture: pointerdown on a focusable canvas prevents the default
+ * action (so the page never scrolls), takes focus without scrolling, and
+ * arms the press; pointerup sends one click at frame coordinates only for
+ * a matching press started inside the frame. No pointer-move forwarding.
+ * A non-focusable canvas returns before any preventDefault or focus, so
+ * page scroll and clicks behave exactly as before.
+ * @param {PointerEvent} event
+ */
+function onCanvasPointerDown(event) {
+  if (!(props.inputEnabled === true && inputPort !== null && inputPort.available === true)) return;
+  event.preventDefault();
+  focusCanvas();
+  activePress = {
+    pointerId: event.pointerId,
+    button: event.button,
+    inFrame: clientToFramePoint(event) !== null,
+  };
+}
+
+/**
+ * A cancelled press never becomes a click.
  * @param {PointerEvent} _event
  */
-function onCanvasPointerDown(_event) {
+function onCanvasPointerCancel(_event) {
+  activePress = null;
+}
+
+/**
+ * Click capture (MVUI26B lane S): a click on a focusable canvas prevents
+ * the default action so the page never scrolls. Focus was already taken
+ * without scrolling by pointerdown; this handler queues nothing. A
+ * non-focusable canvas keeps today's click behaviour untouched.
+ * @param {PointerEvent} event
+ */
+function onCanvasClick(event) {
   if (!(props.inputEnabled === true && inputPort !== null && inputPort.available === true)) return;
-  focusCanvas();
+  event.preventDefault();
 }
 
 /**
@@ -299,6 +344,10 @@ function onCanvasPointerDown(_event) {
  */
 function onCanvasPointerUp(event) {
   if (!inputGateOpen()) return;
+  const press = activePress;
+  activePress = null;
+  if (press === null || press.inFrame !== true
+    || press.pointerId !== event.pointerId || press.button !== event.button) return;
   const button = event.button >= 0 && event.button < POINTER_BUTTONS.length
     ? POINTER_BUTTONS[event.button]
     : undefined;
@@ -309,25 +358,30 @@ function onCanvasPointerUp(event) {
 }
 
 /**
- * Wheel capture: prevented while gated and focused (the page must not
- * scroll); sent only for positions inside the frame with a nonzero delta.
+ * Wheel capture: sent only for positions inside the frame with a nonzero
+ * delta; page scroll is prevented only when an event is queued.
  * @param {WheelEvent} event
  */
 function onCanvasWheel(event) {
   if (!inputGateOpen()) return;
-  event.preventDefault();
   const point = clientToFramePoint(event);
   if (point === null) return;
   const dx = Math.round(event.deltaX);
   const dy = Math.round(event.deltaY);
   if (dx === 0 && dy === 0) return;
+  // MVUI26 lane I (frames NEW-02): prevent only on the queue path, so
+  // letterbox and zero-delta wheels keep page scroll.
+  event.preventDefault();
   inputPort?.queue(props.surfaceId, props.streamId, { kind: 'scroll', dx, dy, x: point.x, y: point.y });
 }
 
 // Losing the gate releases focus, so a stale focused canvas can never keep
 // capturing after a control handoff or a READ switch.
 watch(() => props.inputEnabled, (enabled) => {
-  if (enabled !== true) blurCanvas();
+  if (enabled !== true) {
+    activePress = null;
+    blurCanvas();
+  }
 });
 
 /** @param {number | string} value */
@@ -522,7 +576,7 @@ onBeforeUnmount(() => {
     :data-state="resolvedState"
     :aria-label="accessibleName"
   >
-    <canvas ref="canvasRef" :hidden="resolvedState !== 'live' && resolvedState !== 'stale'" class="mv-surface__canvas" :id="props.inputEnabled ? inputAnchor : undefined" :data-semantic-anchor="props.inputEnabled ? inputAnchor : undefined" :tabindex="canvasFocusable ? 0 : undefined" :aria-hidden="canvasFocusable ? undefined : 'true'" :aria-label="props.inputEnabled ? inputName : undefined" @focus="onCanvasFocus" @blur="onCanvasBlur" @keydown="onCanvasKeyDown" @pointerdown="onCanvasPointerDown" @pointerup="onCanvasPointerUp" @wheel="onCanvasWheel" />
+    <canvas ref="canvasRef" :hidden="resolvedState !== 'live' && resolvedState !== 'stale'" class="mv-surface__canvas" :id="props.inputEnabled ? inputAnchor : undefined" :data-semantic-anchor="props.inputEnabled ? inputAnchor : undefined" :tabindex="canvasFocusable ? 0 : undefined" :aria-hidden="canvasFocusable ? undefined : 'true'" :aria-label="props.inputEnabled ? inputName : undefined" @focus="onCanvasFocus" @blur="onCanvasBlur" @keydown="onCanvasKeyDown" @pointerdown="onCanvasPointerDown" @pointerup="onCanvasPointerUp" @pointercancel="onCanvasPointerCancel" @click="onCanvasClick" @wheel="onCanvasWheel" />
     <div v-if="resolvedState !== 'live' && resolvedState !== 'stale'" class="mv-surface__waiting" role="status">
       <span class="mv-surface__connection-mark" aria-hidden="true">◌</span>
       <strong>{{ resolvedState === 'connecting' ? 'Connecting to surface' : 'Waiting for surface' }}</strong>

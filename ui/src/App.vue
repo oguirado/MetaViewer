@@ -330,7 +330,7 @@ onBeforeUnmount(() => { hostActive = false; });
  * the activity strip. Bounded inline so stub harnesses never resolve the
  * model module; the bound mirrors MV_ACTIVITY_LIMIT in
  * activity/activityModel.js and the activity app test pins both literals. */
-const activityFeed = ref(/** @type {Array<{seq:number,code:string}>} */ ([]));
+const activityFeed = ref(/** @type {Array<{seq:number,code:string,count?:number}>} */ ([]));
 const ACTIVITY_LIMIT = 8;
 let activitySeq = 0;
 /** @param {unknown} outcome */
@@ -341,6 +341,46 @@ function recordActivity(outcome) {
   const code = typeof record?.code === 'string' ? record.code : '';
   activityFeed.value = [...activityFeed.value, Object.freeze({ seq: activitySeq, code })].slice(-ACTIVITY_LIMIT);
 }
+/**
+ * MVUI26B lane M: human-input port provided by the entry (`inputPort`); null
+ * in hosts without input (fixtures that predate the port, bare mounts).
+ * The shell subscribes exactly once for refusal rows; it never sends.
+ * @typedef {{ onRefusal: (cb: (refusal: { surfaceId: string, code: string }) => void) => unknown }} ShellInputPort
+ */
+const shellInputPort = /** @type {ShellInputPort | null} */ (inject('inputPort', null));
+/** Records one port refusal as a typed strip row. Consecutive repeats of
+ * the same code coalesce into the last row (the sequence stays, only the
+ * burst count grows), so a refusal burst is one row with a count instead
+ * of feed spam; any other code or activity starts a fresh row.
+ * @param {unknown} refusal */
+function recordInputRefusal(refusal) {
+  if (!hostActive) return;
+  const record = /** @type {{code?:unknown}} */ (refusal);
+  const code = typeof record?.code === 'string' ? record.code : '';
+  if (code.length === 0) return;
+  const feed = activityFeed.value;
+  const last = feed.length > 0 ? feed[feed.length - 1] : undefined;
+  if (last !== undefined && last.code === code && typeof last.count === 'number') {
+    activityFeed.value = [...feed.slice(0, -1), Object.freeze({ seq: last.seq, code, count: last.count + 1 })];
+    return;
+  }
+  activitySeq += 1;
+  activityFeed.value = [...feed, Object.freeze({ seq: activitySeq, code, count: 1 })].slice(-ACTIVITY_LIMIT);
+}
+let stopInputRefusals = /** @type {(() => void) | null} */ (null);
+try {
+  if (shellInputPort !== null && typeof shellInputPort.onRefusal === 'function') {
+    const stop = shellInputPort.onRefusal(recordInputRefusal);
+    if (typeof stop === 'function') stopInputRefusals = /** @type {() => void} */ (stop);
+  }
+} catch { /* A broken port never breaks the shell. */ }
+onBeforeUnmount(() => {
+  const stop = stopInputRefusals;
+  stopInputRefusals = null;
+  if (stop !== null) {
+    try { stop(); } catch { /* Teardown never throws. */ }
+  }
+});
 /** @param {()=>Promise<unknown>} action */
 async function submitHost(action) {
   try {
@@ -551,6 +591,22 @@ watch(() => rows.value.map(row => /** @type {[string, string]} */ ([row.id, row.
     prior.get(id) === visibility && Object.hasOwn(foldOverrides.value, id)
       ? [[id, foldOverrides.value[id]]] : []));
 });
+// MVUI26B lane M: the shared input mode is only meaningful while the
+// selected surface is human-controlled. When an authoritative feed update
+// arrives with control anywhere but human (or the selected surface gone),
+// WRITE drops back to READ, so the multislot toggle shows READ, every
+// canvas becomes non-focusable, and an already focused canvas blurs
+// through the SurfaceCanvas gate watcher. One-way: a later human update
+// never re-arms WRITE. The trigger is the feed snapshot — the same signal
+// every other wall update follows — so in-place row edits that no feed
+// delivery carries (stub-harness only) never drop the mode.
+watch(() => snapshot.value, () => {
+  const selected = selectedSurface.value;
+  const control = selected === null ? null : /** @type {{ control?: unknown }} */ (selected).control;
+  if (control !== 'human' && inputMode.value !== 'read') {
+    inputMode.value = 'read';
+  }
+}, { immediate: true });
 // Readiness belongs to the branch actually rendered, including display-only walls.
 const wallView = computed(() => nestedMode.displayOnly ? 'nested' : creativeOpen.value ? 'creative' : rows.value.length ? 'workspace' : 'empty');
 let firstFrame = 0;

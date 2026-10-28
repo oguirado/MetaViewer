@@ -36,8 +36,10 @@ export function mapClientToFrame(input) {
   const frameHeight = input.frameHeight;
   if (typeof clientX !== 'number' || !Number.isFinite(clientX)) return null;
   if (typeof clientY !== 'number' || !Number.isFinite(clientY)) return null;
-  if (typeof frameWidth !== 'number' || !Number.isInteger(frameWidth) || frameWidth <= 0) return null;
-  if (typeof frameHeight !== 'number' || !Number.isInteger(frameHeight) || frameHeight <= 0) return null;
+  // MVUI26 lane I (input RV10-07): safe integers, matching the downstream
+  // input-event contract (isNonNegativeInt / scroll validation).
+  if (typeof frameWidth !== 'number' || !Number.isSafeInteger(frameWidth) || frameWidth <= 0) return null;
+  if (typeof frameHeight !== 'number' || !Number.isSafeInteger(frameHeight) || frameHeight <= 0) return null;
   if (rect === null || typeof rect !== 'object') return null;
   /** @type {any} */
   const r = rect;

@@ -261,11 +261,18 @@ function coalesceEvents(events) {
       continue;
     }
     if (prev !== undefined && prev.kind === 'scroll' && ev.kind === 'scroll') {
-      prev.dx = (prev.dx ?? 0) + (ev.dx ?? 0);
-      prev.dy = (prev.dy ?? 0) + (ev.dy ?? 0);
-      prev.x = ev.x;
-      prev.y = ev.y;
-      continue;
+      // MVUI26 lane I (input RV10-02): an unsafe sum stays two events, so the
+      // batch never carries a SCHEMA-invalid delta. Position still merges to
+      // the latest (x, y): pinned by the committed scroll-merge test.
+      const dx = (prev.dx ?? 0) + (ev.dx ?? 0);
+      const dy = (prev.dy ?? 0) + (ev.dy ?? 0);
+      if (Number.isSafeInteger(dx) && Number.isSafeInteger(dy)) {
+        prev.dx = dx;
+        prev.dy = dy;
+        prev.x = ev.x;
+        prev.y = ev.y;
+        continue;
+      }
     }
     merged.push(cloneEvent(ev));
   }
@@ -273,8 +280,19 @@ function coalesceEvents(events) {
   const split = [];
   for (const ev of merged) {
     if (ev.kind === 'type' && typeof ev.text === 'string' && ev.text.length > INPUT_LIMITS.MAX_TYPE_CHARS) {
-      for (let i = 0; i < ev.text.length; i += INPUT_LIMITS.MAX_TYPE_CHARS) {
-        split.push({ kind: 'type', text: ev.text.slice(i, i + INPUT_LIMITS.MAX_TYPE_CHARS) });
+      // MVUI26 lane I (input RV10-03): never slice a surrogate pair across
+      // the 1024-unit boundary; back the end off by one unit instead.
+      for (let i = 0; i < ev.text.length;) {
+        let end = i + INPUT_LIMITS.MAX_TYPE_CHARS;
+        if (end < ev.text.length) {
+          const tail = ev.text.charCodeAt(end - 1);
+          const head = ev.text.charCodeAt(end);
+          if (tail >= 0xD800 && tail <= 0xDBFF && head >= 0xDC00 && head <= 0xDFFF) {
+            end -= 1;
+          }
+        }
+        split.push({ kind: 'type', text: ev.text.slice(i, end) });
+        i = end;
       }
     } else {
       split.push(ev);
@@ -316,7 +334,9 @@ export function createInputPort(facade, options = {}) {
   const sendFn = facade !== null
     && (typeof facade === 'object' || typeof facade === 'function')
     && typeof /** @type {any} */ (facade).send === 'function'
-    ? /** @type {any} */ (facade).send
+    // MVUI26 lane I (input RV10-01): keep the facade receiver; a bare send
+    // reference breaks method-style facades that read `this`.
+    ? (batch) => /** @type {any} */ (facade).send(batch)
     : null;
   const available = sendFn !== null;
   const now = options.now ?? Date.now;
@@ -512,13 +532,15 @@ export function createInputPort(facade, options = {}) {
         if (!isValidInputEvent(ev)) return refused('SCHEMA');
       }
       const seq = (seqBySurface.get(/** @type {string} */ (surfaceId)) ?? 0) + 1;
+      // MVUI26 lane I (input RV10-06): clone each event (queue parity), so a
+      // caller mutation across the send await never reaches the facade.
       /** @type {InputBatch} */
       const batch = {
         schema: INPUT_SCHEMA,
         surface_id: /** @type {string} */ (surfaceId),
         stream_id: /** @type {number} */ (streamId),
         seq,
-        events: events.slice(),
+        events: events.map(cloneEvent),
       };
       if (inputBatchByteLength(batch) > INPUT_LIMITS.MAX_PAYLOAD_BYTES) return refused('LIMIT');
       if (!takeRateSlot(batch.surface_id, now())) return refused('LIMIT');
@@ -546,25 +568,32 @@ export function createInputPort(facade, options = {}) {
    */
   function queue(surfaceId, streamId, event) {
     if (disposed) return;
-    if (!isValidSurfaceId(surfaceId) || !isValidStreamId(streamId) || !isValidInputEvent(event)) {
+    // MVUI26 lane I (MVVR10-NEW-01): hostile getters refuse as SCHEMA, never
+    // throw; the file contract promises queue never throws on input.
+    try {
+      if (!isValidSurfaceId(surfaceId) || !isValidStreamId(streamId) || !isValidInputEvent(event)) {
+        emitRefusal(typeof surfaceId === 'string' ? surfaceId : '', 'SCHEMA');
+        return;
+      }
+      if (sendFn === null) {
+        emitRefusal(/** @type {string} */ (surfaceId), 'CORE_UNAVAILABLE');
+        return;
+      }
+      const id = /** @type {string} */ (surfaceId);
+      let list = pendingBySurface.get(id);
+      if (list === undefined) {
+        list = [];
+        pendingBySurface.set(id, list);
+      }
+      if (list.length >= INPUT_LIMITS.MAX_PENDING_PER_SURFACE) {
+        emitRefusal(id, 'LIMIT');
+        return;
+      }
+      list.push({ streamId: /** @type {number} */ (streamId), event: cloneEvent(event) });
+    } catch {
       emitRefusal(typeof surfaceId === 'string' ? surfaceId : '', 'SCHEMA');
       return;
     }
-    if (sendFn === null) {
-      emitRefusal(/** @type {string} */ (surfaceId), 'CORE_UNAVAILABLE');
-      return;
-    }
-    const id = /** @type {string} */ (surfaceId);
-    let list = pendingBySurface.get(id);
-    if (list === undefined) {
-      list = [];
-      pendingBySurface.set(id, list);
-    }
-    if (list.length >= INPUT_LIMITS.MAX_PENDING_PER_SURFACE) {
-      emitRefusal(id, 'LIMIT');
-      return;
-    }
-    list.push({ streamId: /** @type {number} */ (streamId), event: cloneEvent(event) });
     if (!rafScheduled) {
       rafScheduled = true;
       try {

@@ -8,7 +8,9 @@
  * calls resolve to an action_verdict/v0.2 admission or refusal, and any
  * transport failure surfaces as a refused request. This module turns those
  * reported outcomes into closed, frozen strip entries. Visible text comes
- * only from the closed map below; raw reason codes never become text.
+ * only from the closed maps below; raw reason codes never become text,
+ * except that human-input refusal rows name their closed contract code
+ * (MVUI26B lane M) so the operator can see why input was refused.
  *
  * The human sentences mirror the closed literals in
  * `core/hostAdapters.js` (REASONS plus the two success messages), owned by
@@ -69,9 +71,31 @@ const ACTIVITY_ROWS = Object.freeze({
 const ACTIVITY_FALLBACK = Object.freeze({ type: 'request-refused', tone: 'refusal', text: 'This request is unavailable. Please try again.' });
 
 /**
+ * Closed human-input refusal copy (MVUI26B lane M): the surface_input/v1
+ * refusal codes with their short human reasons. Own copy, never imported
+ * from the input port, so the strip never trusts a message received as a
+ * prop — the same rule as ACTIVITY_ROWS. Refusal rows reuse the
+ * `request-refused` type and the `refusal` tone; their text names the
+ * closed code plus a burst count when the feed coalesced repeats.
+ * @type {Readonly<Record<string, string>>}
+ */
+const INPUT_REFUSAL_REASONS = Object.freeze({
+  NOT_IN_CONTROL: 'control released',
+  INPUT_MODE_READ: 'read-only mode',
+  SURFACE_UNKNOWN: 'surface unavailable',
+  STALE_STREAM: 'stream changed',
+  LIMIT: 'too many requests',
+  NESTED_DISPLAY_ONLY: 'display only',
+  SCHEMA: 'invalid input',
+  CORE_UNAVAILABLE: 'core unavailable',
+});
+
+/**
  * A reported authority outcome awaiting normalization (feed sequence plus
- * the reported outcome code).
- * @typedef {Readonly<{seq:number,code:string}>} ActivityFeedItem
+ * the reported outcome code). Human-input refusal rows carry an optional
+ * burst count (MVUI26B lane M): consecutive same-code refusals coalesce
+ * into one row, so the count is the only thing that grows.
+ * @typedef {Readonly<{seq:number,code:string,count?:number}>} ActivityFeedItem
  */
 
 /**
@@ -83,15 +107,30 @@ const ACTIVITY_FALLBACK = Object.freeze({ type: 'request-refused', tone: 'refusa
  * Normalize one reported authority outcome into a frozen strip entry.
  * Malformed input (missing sequence, non-object) returns null and is
  * never rendered; unknown codes render as the generic refusal.
+ * Human-input refusal codes (MVUI26B lane M) render as typed refusal rows
+ * that name the closed code, with a burst count suffix when the feed
+ * coalesced consecutive repeats (a malformed count reads as one). The
+ * count is ignored for every other code, so authority rows keep their
+ * exact historical shape.
  * @param {unknown} input Reported outcome plus its feed sequence number.
  * @returns {ActivityEntry|null}
  */
 export function normalizeActivityEntry(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
-  const record = /** @type {{seq?:unknown,code?:unknown}} */ (input);
+  const record = /** @type {{seq?:unknown,code?:unknown,count?:unknown}} */ (input);
   if (!Number.isSafeInteger(record.seq) || /** @type {number} */ (record.seq) < 1) return null;
   const seq = /** @type {number} */ (record.seq);
   const code = typeof record.code === 'string' ? record.code : '';
+  if (Object.hasOwn(INPUT_REFUSAL_REASONS, code)) {
+    const reason = INPUT_REFUSAL_REASONS[/** @type {keyof typeof INPUT_REFUSAL_REASONS} */ (code)];
+    const repeats = Number.isSafeInteger(record.count) && /** @type {number} */ (record.count) > 1
+      ? /** @type {number} */ (record.count)
+      : 1;
+    const text = repeats > 1
+      ? `Input refused: ${reason} (${code}) ×${repeats}.`
+      : `Input refused: ${reason} (${code}).`;
+    return Object.freeze({ seq, type: 'request-refused', tone: 'refusal', text });
+  }
   const row = Object.hasOwn(ACTIVITY_ROWS, code)
     ? ACTIVITY_ROWS[/** @type {keyof typeof ACTIVITY_ROWS} */ (code)]
     : ACTIVITY_FALLBACK;

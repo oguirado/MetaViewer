@@ -389,7 +389,7 @@ test('mvui25c pointer: pointerdown focuses, pointerup clicks at frame pixels', (
     const down = fakePointerEvent('pointerdown', { clientX: 110, clientY: 70 });
     canvas.props.onPointerdown(down);
     assert.equal(doc.activeElement, canvas, 'pointerdown takes focus');
-    assert.equal(down.defaultPrevented, false, 'pointerdown never prevents');
+    assert.equal(down.defaultPrevented, true, 'pointerdown prevents page scroll');
     assert.equal(queueCalls.length, 0, 'pointerdown sends nothing');
     const up = fakePointerEvent('pointerup', { button: 0, clientX: 110, clientY: 70 });
     canvas.props.onPointerup(up);
@@ -407,15 +407,23 @@ test('mvui25c pointer: middle/right map; unknown buttons and outside-frame ignor
   const tile = mounted({ inputPort: port }, canvas, { inputEnabled: true, streamId: 3 });
   try {
     canvas.focus();
-    canvas.props.onPointerup(fakePointerEvent('pointerup', { button: 1, clientX: 110, clientY: 70 }));
-    canvas.props.onPointerup(fakePointerEvent('pointerup', { button: 2, clientX: 110, clientY: 70 }));
+    // MVUI26 lane I: a click queues only for a pointerup matching an
+    // in-frame pointerdown; MVUI26B lane S: the down prevents page scroll.
+    const press = (button, clientX, clientY) => {
+      const down = fakePointerEvent('pointerdown', { button, clientX, clientY });
+      canvas.props.onPointerdown(down);
+      assert.equal(down.defaultPrevented, true, 'focusable pointerdown prevents page scroll');
+      canvas.props.onPointerup(fakePointerEvent('pointerup', { button, clientX, clientY }));
+    };
+    press(1, 110, 70);
+    press(2, 110, 70);
     assert.equal(queueCalls.length, 2);
     assert.equal(queueCalls[0].event.button, 'middle');
     assert.equal(queueCalls[1].event.button, 'right');
-    canvas.props.onPointerup(fakePointerEvent('pointerup', { button: 3, clientX: 110, clientY: 70 }));
-    canvas.props.onPointerup(fakePointerEvent('pointerup', { button: -1, clientX: 110, clientY: 70 }));
+    press(3, 110, 70);
+    press(-1, 110, 70);
     assert.equal(queueCalls.length, 2, 'unknown buttons are ignored');
-    canvas.props.onPointerup(fakePointerEvent('pointerup', { button: 0, clientX: 500, clientY: 500 }));
+    press(0, 500, 500);
     assert.equal(queueCalls.length, 2, 'clicks outside the frame are not sent');
   } finally {
     tile.app.unmount();
@@ -444,9 +452,17 @@ test('mvui25c letterbox: clicks map through contain bars via the paint-owned siz
     { inputEnabled: true, streamId: 3, frameWidth: 9999, frameHeight: 9999 });
   try {
     canvas.focus();
-    canvas.props.onPointerup(fakePointerEvent('pointerup', { button: 0, clientX: 100, clientY: 25 }));
+    // MVUI26 lane I: a click queues only for a pointerup matching an
+    // in-frame pointerdown; MVUI26B lane S: the down prevents page scroll.
+    const press = (clientX, clientY) => {
+      const down = fakePointerEvent('pointerdown', { button: 0, clientX, clientY });
+      canvas.props.onPointerdown(down);
+      assert.equal(down.defaultPrevented, true, 'focusable pointerdown prevents page scroll');
+      canvas.props.onPointerup(fakePointerEvent('pointerup', { button: 0, clientX, clientY }));
+    };
+    press(100, 25);
     assert.equal(queueCalls.length, 0, 'letterbox bar positions are not sent');
-    canvas.props.onPointerup(fakePointerEvent('pointerup', { button: 0, clientX: 100, clientY: 100 }));
+    press(100, 100);
     assert.equal(queueCalls.length, 1);
     assert.deepEqual(queueCalls[0].event, { kind: 'click', x: 200, y: 100, button: 'left' });
   } finally {
@@ -472,13 +488,13 @@ test('mvui25c wheel: scroll queues rounded deltas and prevents page scroll', () 
     const zero = fakeWheelEvent({ clientX: 110, clientY: 70, deltaX: 0.1, deltaY: -0.1 });
     canvas.props.onWheel(zero);
     assert.equal(queueCalls.length, 1, 'zero-rounded deltas send nothing');
-    assert.equal(zero.defaultPrevented, true, 'but the page still does not scroll');
+    assert.equal(zero.defaultPrevented, false, 'zero-rounded deltas keep page scroll');
   } finally {
     tile.app.unmount();
   }
 });
 
-test('mvui25c wheel: outside-frame prevents but does not send; unfocused untouched', () => {
+test('mvui25c wheel: outside-frame neither sends nor prevents; unfocused untouched', () => {
   const { canvas } = inputCanvasDouble(RECT_2X, PAINT_W, PAINT_H);
   const { port, queueCalls } = stubInputPort();
   const tile = mounted({ inputPort: port }, canvas, { inputEnabled: true, streamId: 3 });
@@ -490,7 +506,7 @@ test('mvui25c wheel: outside-frame prevents but does not send; unfocused untouch
     canvas.focus();
     const outside = fakeWheelEvent({ clientX: 500, clientY: 500, deltaY: -10 });
     canvas.props.onWheel(outside);
-    assert.equal(outside.defaultPrevented, true, 'focused wheel is prevented anywhere on canvas');
+    assert.equal(outside.defaultPrevented, false, 'outside-frame wheel keeps page scroll');
     assert.equal(queueCalls.length, 0, 'outside-frame wheel sends nothing');
   } finally {
     tile.app.unmount();
@@ -531,6 +547,10 @@ test('mvui25c stream: queue carries surface id and stream id verbatim', () => {
     assert.equal(canvas.props.id, 'tile-cap-07-input-focus');
     canvas.focus();
     canvas.props.onKeydown(fakeKeyEvent('a'));
+    // MVUI26 lane I: the click needs its matching in-frame pointerdown.
+    const down = fakePointerEvent('pointerdown', { button: 0, clientX: 110, clientY: 70 });
+    canvas.props.onPointerdown(down);
+    assert.equal(down.defaultPrevented, true, 'focusable pointerdown prevents page scroll');
     canvas.props.onPointerup(fakePointerEvent('pointerup', { button: 0, clientX: 110, clientY: 70 }));
     assert.equal(queueCalls.length, 2);
     for (const call of queueCalls) {

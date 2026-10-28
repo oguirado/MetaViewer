@@ -617,6 +617,13 @@ export function installFramePortRouter(options) {
       entry.pending = null;
       settle(replaced, FRAME_OUTCOMES.SUPERSEDED);
     }
+    if (entry.expiring !== null && entry.expiring !== undefined
+      && raw.frameGeneration > entry.expiring.raw.frameGeneration) {
+      // MVUI26 RV10-01: a newer arrival supersedes the delivery under expiry
+      // verification immediately; the later async completion no-ops on the
+      // settled guard.
+      settle(entry.expiring, FRAME_OUTCOMES.SUPERSEDED);
+    }
     entry.pending = { raw, port: entry.port, settled: false, superseded: false };
     armPendingTimer(entry);
     return { ok: /** @type {const} */ (true) };
@@ -677,11 +684,19 @@ export function installFramePortRouter(options) {
       entry.retained = kept;
       return;
     }
-    const record = { raw: kept.raw, port: entry.port, settled: true, superseded: false };
     if (entry.validating && entry.current) {
-      // A live record is already painting: the kept frame stays dropped.
-      record.superseded = true;
+      // MVUI26 NEW-01: a live record is already painting: the kept frame
+      // stays dropped and the queued work is left intact.
+      return;
     }
+    for (const queued of entry.queue) {
+      if (queued.raw.frameGeneration > kept.raw.frameGeneration) {
+        // MVUI26 NEW-01: a newer frame is already queued: the older kept
+        // frame drops instead of superseding it.
+        return;
+      }
+    }
+    const record = { raw: kept.raw, port: entry.port, settled: true, superseded: false };
     for (const queued of entry.queue.splice(0)) settle(queued, FRAME_OUTCOMES.SUPERSEDED);
     entry.queue.push(record);
     pump(entry);

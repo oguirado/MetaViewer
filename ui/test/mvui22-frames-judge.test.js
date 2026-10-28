@@ -368,7 +368,16 @@ async function mutantScheduler() {
     .replace(copyBefore, 'entry.lastPaint = { bytes: slot.bytes.slice(), width: slot.width, height: slot.height }; // mutant: per-present copy')
     .replace(guardBefore, 'if (entry.lastPaint !== null && previous !== args.canvas) { // mutant: always repaint');
   assert.notEqual(mutantSource, source, 'negative controls must change the source');
-  cachedMutantScheduler = await import(`data:text/javascript;base64,${Buffer.from(mutantSource).toString('base64')}`);
+  // MVUI26C lane H: a data: URL has no base for relative specifiers, so
+  // relink the two static mapper imports to absolute file URLs first.
+  const keyMapUrl = import.meta.resolve('../src/input/keyMap.js');
+  const frameMapUrl = import.meta.resolve('../src/input/frameMap.js');
+  const relinkedSource = mutantSource
+    .split(`'../input/keyMap.js'`).join(JSON.stringify(keyMapUrl))
+    .split(`'../input/frameMap.js'`).join(JSON.stringify(frameMapUrl));
+  assert.ok(relinkedSource.includes(keyMapUrl), 'keyMap specifier must relink to an absolute URL');
+  assert.ok(relinkedSource.includes(frameMapUrl), 'frameMap specifier must relink to an absolute URL');
+  cachedMutantScheduler = await import(`data:text/javascript;base64,${Buffer.from(relinkedSource).toString('base64')}`);
   return cachedMutantScheduler;
 }
 
