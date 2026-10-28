@@ -156,6 +156,43 @@ async function e2e27ProductionProbe(config) {
                 true,
               );
               conn.write(`${JSON.stringify({ ok: true, result })}\n`);
+            } else if (cmd.op === 'invokeInputBurst') {
+              const cfgJson = JSON.stringify({
+                surfaceId: cmd.surfaceId,
+                streamId: cmd.streamId,
+                startSeq: cmd.startSeq,
+                text: cmd.text,
+                intervalMs: cmd.intervalMs,
+              });
+              const result = await wc.executeJavaScript(
+                `(async () => {
+                  const cfg = ${cfgJson};
+                  if (!Array.isArray(window.__e2e27InputResults)) {
+                    window.__e2e27InputResults = [];
+                    window.metaviewer.input.onResult((ev) => {
+                      window.__e2e27InputResults.push(ev);
+                    });
+                  }
+                  const promises = [];
+                  for (let i = 0; i < cfg.text.length; i += 1) {
+                    promises.push(
+                      window.metaviewer.input.send({
+                        schema: 'surface_input/v1',
+                        surface_id: cfg.surfaceId,
+                        stream_id: cfg.streamId,
+                        seq: cfg.startSeq + i,
+                        events: [{ kind: 'type', text: cfg.text[i] }],
+                      }),
+                    );
+                    if (i + 1 < cfg.text.length && cfg.intervalMs > 0) {
+                      await new Promise((r) => setTimeout(r, cfg.intervalMs));
+                    }
+                  }
+                  return await Promise.all(promises);
+                })()`,
+                true,
+              );
+              conn.write(`${JSON.stringify({ ok: true, result })}\n`);
             } else if (cmd.op === 'readInputResults') {
               const result = await wc.executeJavaScript(
                 `(() => Array.isArray(window.__e2e27InputResults) ? window.__e2e27InputResults.slice() : [])()`,
@@ -755,6 +792,31 @@ test('W3-HUMAN-INPUT-R2 (e2e27): window.metaviewer.input.send(batch) drives surf
     );
     assert.equal(receivedInputs.length, 6);
 
+    // 5b. Burst test through shipped preload: 200 typed chars at 10 ms intervals arrive in order, complete, and the next intent succeeds.
+    const burstText = Array.from({ length: 200 }, (_, i) => String.fromCharCode(48 + (i % 74))).join('');
+    const burstOutcomes = await callProbeControl(
+      ctlSock,
+      {
+        op: 'invokeInputBurst',
+        surfaceId,
+        streamId: boundStreamId,
+        startSeq: 4,
+        text: burstText,
+        intervalMs: 10,
+      },
+      12000,
+    );
+    assert.equal(burstOutcomes.length, 200);
+    for (const out of burstOutcomes) {
+      assert.deepEqual(out, { ok: true, accepted: 1 });
+    }
+    const burstEnvelopes = receivedInputs.slice(6);
+    assert.ok(burstEnvelopes.length >= 1 && burstEnvelopes.length < 200);
+    assert.equal(
+      burstEnvelopes.map((r) => r.params.action.text).join(''),
+      burstText,
+    );
+
     // 6. Release control and verify subsequent input is refused with NOT_IN_CONTROL.
     const clickRelease = await callProbeControl(ctlSock, {
       op: 'clickControl',
@@ -779,18 +841,19 @@ test('W3-HUMAN-INPUT-R2 (e2e27): window.metaviewer.input.send(batch) drives surf
       },
     );
 
+    const inputsAfterBurstCount = receivedInputs.length;
     const postReleaseInput = await callProbeControl(ctlSock, {
       op: 'invokeInputSend',
       batch: {
         schema: 'surface_input/v1',
         surface_id: surfaceId,
         stream_id: boundStreamId,
-        seq: 4,
+        seq: 204,
         events: [{ kind: 'key', keys: ['a'] }],
       },
     });
     assert.deepEqual(postReleaseInput, { ok: false, code: 'NOT_IN_CONTROL' });
-    assert.equal(receivedInputs.length, 6);
+    assert.equal(receivedInputs.length, inputsAfterBurstCount);
     assert.equal(receivedIntents.length, 2);
 
     const onResultEvents = await callProbeControl(ctlSock, { op: 'readInputResults' });
@@ -804,7 +867,13 @@ test('W3-HUMAN-INPUT-R2 (e2e27): window.metaviewer.input.send(batch) drives surf
       { surface_id: surfaceId, seq: 1, ok: false, code: 'SCHEMA' },
       { surface_id: surfaceId, seq: 2, ok: false, code: 'SCHEMA' },
       { surface_id: surfaceId, seq: 3, ok: true, code: null },
-      { surface_id: surfaceId, seq: 4, ok: false, code: 'NOT_IN_CONTROL' },
+      ...Array.from({ length: 200 }, (_, i) => ({
+        surface_id: surfaceId,
+        seq: 4 + i,
+        ok: true,
+        code: null,
+      })),
+      { surface_id: surfaceId, seq: 204, ok: false, code: 'NOT_IN_CONTROL' },
     ]);
   } finally {
     if (frameInterval) clearInterval(frameInterval);

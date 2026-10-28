@@ -479,9 +479,32 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 		var params struct {
 			SurfaceID  string `json:"surface_id"`
 			ProposalID string `json:"proposal_id"`
+			Origin     string `json:"origin,omitempty"`
 		}
 		_ = json.Unmarshal(q.Params, &params)
-		id, proposal := params.SurfaceID, params.ProposalID
+		id, proposal, reqOrigin := params.SurfaceID, params.ProposalID, params.Origin
+		if reqOrigin == "" {
+			reqOrigin = "agent"
+		}
+		if reqOrigin == "human" {
+			// [TARGET, unit decision] Human-origin input settles immediately after
+			// native input execution without waiting for post-input pixel capture.
+			frameMu.Lock()
+			latestFrame := lastFrames[id]
+			frameMu.Unlock()
+			if len(latestFrame) == 0 {
+				latestFrame = before
+			}
+			if len(latestFrame) == 0 {
+				return failure(configuration("post-input frame baseline required"))
+			}
+			receipt, err := json.Marshal(map[string]any{"schema": "action_receipt/v0.2", "proposal_id": proposal, "executed_at_ns": completed - origin, "after_frame": latestFrame, "native_evidence": evidence, "verified": false, "verification": map[string]string{"method": "pixel", "detail": "human-origin input; post-input pixel capture skipped"}, "error": ""})
+			if err != nil {
+				return failure(err)
+			}
+			events = append(events, receipt)
+			return events, nil
+		}
 		binding, native, err := m.Capture(ctx, id)
 		if err != nil {
 			return failure(err)

@@ -795,30 +795,32 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 	if b.NativeKind == "holdings" {
 		// The component documents only input_mono_ns. Never interpret extra fields
 		// as proof of identity or action: the verifier owns independent correlation.
-		if receipt.Result != "" || receipt.SurfaceID != "" || receipt.Kind != "" || receipt.FocusVerified != nil || m.cfg.VerifyHoldingsInput == nil {
+		if receipt.Result != "" || receipt.SurfaceID != "" || receipt.Kind != "" || receipt.FocusVerified != nil || (origin != "human" && m.cfg.VerifyHoldingsInput == nil) {
 			return nil, fault("input", "independent Holdings input proof required")
 		}
-		action, _ := json.Marshal(q.Action)
-		m.mu.Unlock()
-		e := m.cfg.VerifyHoldingsInput(run, b, q.ProposalID, action, *receipt.InputMonoNS)
-		m.mu.Lock()
-		if m.bindings[q.SurfaceID].Surface.State != "active" {
-			return nil, fault("surface", "surface lost during input verification")
-		}
-		if pending.cancelled {
-			return nil, fault("SURFACE_NOT_AGENT_CONTROLLED", "input verification cancelled by takeover")
-		}
-		if m.bindings[q.SurfaceID].Surface.Control != origin {
-			if origin == "human" {
-				return nil, fault("SURFACE_NOT_HUMAN_CONTROLLED", "agent control blocks human input")
+		if origin != "human" {
+			action, _ := json.Marshal(q.Action)
+			m.mu.Unlock()
+			e := m.cfg.VerifyHoldingsInput(run, b, q.ProposalID, action, *receipt.InputMonoNS)
+			m.mu.Lock()
+			if m.bindings[q.SurfaceID].Surface.State != "active" {
+				return nil, fault("surface", "surface lost during input verification")
 			}
-			return nil, fault("SURFACE_NOT_AGENT_CONTROLLED", "human control blocks agent input")
-		}
-		if e != nil {
-			return nil, e
-		}
-		if e := run.Err(); e != nil {
-			return nil, e
+			if pending.cancelled {
+				return nil, fault("SURFACE_NOT_AGENT_CONTROLLED", "input verification cancelled by takeover")
+			}
+			if m.bindings[q.SurfaceID].Surface.Control != origin {
+				if origin == "human" {
+					return nil, fault("SURFACE_NOT_HUMAN_CONTROLLED", "agent control blocks human input")
+				}
+				return nil, fault("SURFACE_NOT_AGENT_CONTROLLED", "human control blocks agent input")
+			}
+			if e != nil {
+				return nil, e
+			}
+			if e := run.Err(); e != nil {
+				return nil, e
+			}
 		}
 	}
 	if m.bindings[q.SurfaceID].Surface.State != "active" {

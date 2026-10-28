@@ -228,15 +228,15 @@ func TestHumanOriginWireReceipts(t *testing.T) {
 		t.Fatalf("unexpected receipt for human origin under agent control: %s", refusedHuman)
 	}
 
-	// 2. Take control for human -> human origin applied (input_applied + frame_ready + action_receipt error=="").
+	// 2. Take control for human -> human origin applied without post-input pixel capture (input_applied + action_receipt error=="").
 	call("take_control", map[string]any{"surface_id": sid, "owner": "human"})
 	appliedHuman := call("input", map[string]any{"surface_id": sid, "proposal_id": "hi-under-human", "origin": "human", "action": action})
-	if len(appliedHuman) != 3 {
-		t.Fatalf("expected 3 events for applied human input, got %s", appliedHuman)
+	if len(appliedHuman) != 2 {
+		t.Fatalf("expected 2 events for applied human input (no post-input capture), got %s", appliedHuman)
 	}
 	receipt = nil
-	if json.Unmarshal(appliedHuman[2], &receipt) != nil || receipt["proposal_id"] != "hi-under-human" || receipt["error"] != "" {
-		t.Fatalf("unexpected receipt for applied human input: %s", appliedHuman[2])
+	if json.Unmarshal(appliedHuman[1], &receipt) != nil || receipt["proposal_id"] != "hi-under-human" || receipt["error"] != "" {
+		t.Fatalf("unexpected receipt for applied human input: %s", appliedHuman[1])
 	}
 
 	// 3. Agent origin under human control -> refused with SURFACE_NOT_AGENT_CONTROLLED receipt.
@@ -244,5 +244,15 @@ func TestHumanOriginWireReceipts(t *testing.T) {
 	receipt = nil
 	if len(refusedAgent) != 1 || json.Unmarshal(refusedAgent[0], &receipt) != nil || receipt["proposal_id"] != "ag-under-human" || receipt["error"] != "input failed: SURFACE_NOT_AGENT_CONTROLLED: human control blocks agent input" {
 		t.Fatalf("unexpected receipt for agent origin under human control: %s", refusedAgent)
+	}
+
+	// 4. Release control back to agent (with refresh capture) -> agent path keeps post-input pixel verification (3 events: input_applied + frame_ready + action_receipt).
+	call("release_control", map[string]any{"surface_id": sid})
+	if _, _, err := m.Capture(context.Background(), sid); err != nil {
+		t.Fatal(err)
+	}
+	appliedAgent := call("input", map[string]any{"surface_id": sid, "proposal_id": "ag-under-agent", "origin": "agent", "action": action})
+	if len(appliedAgent) != 3 {
+		t.Fatalf("expected 3 events for applied agent input, got %s", appliedAgent)
 	}
 }

@@ -24,6 +24,7 @@ import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 
 const MAX_WIRE = 1024 * 1024, MAX_FRAME = 64 * 1024 * 1024, MAX_ITEMS = 64, DEADLINE = 3000;
+const MAX_SURFACE_INPUT_QUEUE_EVENTS = 256, MAX_ADAPTER_TYPE_TEXT_BYTES = 16384;
 const fail = () => new Error('CORE_SEAMS_ABSENT');
 /** @param {string} cause @param {string} [msg] */
 function acquireFail(cause, msg = 'CORE_SEAMS_ABSENT') {
@@ -121,9 +122,9 @@ async function openPinned(path) {
 }
 
 /** Trusted options are host-only; no renderer pathname or capability is accepted.
- * @param {{env?:NodeJS.ProcessEnv,createMessageChannel?:()=>any,getPeerCredentials?:(socket:import('node:net').Socket)=>{pid:number,uid:number,gid:number,ino:number}}} [options]
+ * @param {{env?:NodeJS.ProcessEnv,createMessageChannel?:()=>any,getPeerCredentials?:(socket:import('node:net').Socket)=>{pid:number,uid:number,gid:number,ino:number},inputDeadlineMs?:number}} [options]
  * @returns {Promise<{core: any, wire: any}>} */
-export async function createMainBindings({env = process.env, createMessageChannel, getPeerCredentials = readPeerCredentials} = {}) {
+export async function createMainBindings({env = process.env, createMessageChannel, getPeerCredentials = readPeerCredentials, inputDeadlineMs = DEADLINE} = {}) {
   /** @type {import('node:net').Socket | undefined} */ let socket;
   try {
     if (!env.MV_CORE_CONFIG || !isAbsolute(env.MV_CORE_CONFIG) || !env.XDG_RUNTIME_DIR || !isAbsolute(env.XDG_RUNTIME_DIR)) throw fail();
@@ -166,6 +167,14 @@ export async function createMainBindings({env = process.env, createMessageChanne
     /** @type {Set<string>} */ const delivering = new Set();
     /** @type {Set<string>} */ const pendingDeliveries = new Set();
     /** @type {Map<string,{body:any,resolve:(value:any)=>void,reject:(error:Error)=>void,timer:ReturnType<typeof setTimeout>}>} */ const pending = new Map();
+    /** @type {Map<string,{lastSeq:number,inFlightSeq:number,draining:boolean,queue:Array<{batch:any,events:any[],resolve:(value:any)=>void}>}>} */ const surfaceInputQueues = new Map();
+    const nonInputPendingCount = () => {
+      let count = 0;
+      for (const item of pending.values()) {
+        if (!(item.body?.schema === 'surface_request/v0.2' && item.body?.op === 'input')) count += 1;
+      }
+      return count;
+    };
     let live = false, disposed = false, seq = 0, received = 0, lastIntentReplySeq = 1;
     /** @type {ReturnType<typeof setInterval> | undefined} */ let keepalive;
     /** @type {(value?:any)=>void} */ let ready;
@@ -178,6 +187,11 @@ export async function createMainBindings({env = process.env, createMessageChanne
       if (disposed) return; disposed = true; live = false;
       rejectReady(fail()); socket?.destroy();
       for (const item of pending.values()) {clearTimeout(item.timer);item.reject(fail());} pending.clear();
+      for (const qState of surfaceInputQueues.values()) {
+        const queued = qState.queue.splice(0, qState.queue.length);
+        for (const item of queued) item.resolve(Object.freeze({ ok: false, code: 'CORE_UNAVAILABLE' }));
+      }
+      surfaceInputQueues.clear();
       for (const channel of channels.values()) {channel.port1.close();channel.port2.close();}
       channels.clear();surfaces.clear();latestFrames.clear();streamIds.clear();subscriptions.clear();delivering.clear();pendingDeliveries.clear();listeners.clear();captureListeners.clear();
     };
@@ -462,6 +476,185 @@ export async function createMainBindings({env = process.env, createMessageChanne
     const getStatus = () => ({availability:live ? 'live' : 'unavailable',pid:null,authority_epoch:live ? 1 : null,reason:live ? null : 'CORE_SEAMS_ABSENT'});
     /** @type {Map<string,string>} */ const captureSurfaces = new Map();
     let timeoutAtSeq = 0;
+    /**
+     * @param {string} surfaceId
+     * @param {number} streamId
+     * @param {ReadonlyArray<any>} events
+     * @returns {string | null}
+     */
+    function checkSurfaceInputAdmissibility(surfaceId, streamId, events) {
+      if (!live || disposed || !socket || socket.destroyed || !socket.writable) {
+        return 'CORE_UNAVAILABLE';
+      }
+      const state = surfaces.get(surfaceId);
+      if (!state || ['destroyed', 'lost'].includes(state.state)) {
+        return 'SURFACE_UNKNOWN';
+      }
+      const expectedStreamId = streamIds.get(surfaceId) ?? 1;
+      if (streamId !== expectedStreamId) {
+        return 'STALE_STREAM';
+      }
+      if (state.state !== 'active' || state.control !== 'human') {
+        return 'NOT_IN_CONTROL';
+      }
+      const frame = latestFrames.get(surfaceId);
+      const width = frame?.width ?? state.geometry?.w ?? null;
+      const height = frame?.height ?? state.geometry?.h ?? null;
+      for (const ev of events) {
+        if (ev.kind === 'click') {
+          if ((width !== null && ev.x >= width) || (height !== null && ev.y >= height)) {
+            return 'SCHEMA';
+          }
+        } else if (ev.kind !== 'key' && ev.kind !== 'type' && ev.kind !== 'scroll') {
+          return 'SCHEMA';
+        }
+      }
+      return null;
+    }
+    /**
+     * @param {string} surfaceId
+     * @param {any} action
+     * @returns {Promise<void>}
+     */
+    function sendInputActionToCore(surfaceId, action) {
+      if (!live || disposed || !socket || socket.destroyed || !socket.writable) {
+        return Promise.reject(Object.assign(new Error('CORE_UNAVAILABLE'), { code: 'CORE_UNAVAILABLE' }));
+      }
+      const key = randomUUID();
+      if (!id(key) || pending.has(key)) {
+        return Promise.reject(Object.assign(new Error('CORE_UNAVAILABLE'), { code: 'CORE_UNAVAILABLE' }));
+      }
+      const body = {
+        schema: 'surface_request/v0.2',
+        op: 'input',
+        params: {
+          surface_id: surfaceId,
+          proposal_id: key,
+          origin: 'human',
+          action,
+        },
+      };
+      return new Promise((resolve, reject) => {
+        // [TARGET, unit decision] Never dispose the authority wire or frame
+        // channels on an input refusal or input timeout; report per batch only.
+        const timer = setTimeout(() => {
+          pending.delete(key);
+          reject(Object.assign(new Error('CORE_UNAVAILABLE'), { code: 'CORE_UNAVAILABLE' }));
+        }, inputDeadlineMs);
+        pending.set(key, { body, resolve, reject, timer });
+        try {
+          send(body, key);
+        } catch {
+          clearTimeout(timer);
+          pending.delete(key);
+          reject(Object.assign(new Error('CORE_UNAVAILABLE'), { code: 'CORE_UNAVAILABLE' }));
+        }
+      });
+    }
+    /** @param {string} surfaceId */
+    async function drainSurfaceInputQueue(surfaceId) {
+      const qState = surfaceInputQueues.get(surfaceId);
+      if (!qState || qState.draining) return;
+      qState.draining = true;
+      try {
+        while (qState.queue.length > 0) {
+          await Promise.resolve();
+          if (qState.queue.length === 0) break;
+          const head = qState.queue[0];
+          const admissibilityErr = checkSurfaceInputAdmissibility(surfaceId, head.batch.stream_id, head.events);
+          if (admissibilityErr !== null) {
+            qState.queue.shift();
+            head.resolve(Object.freeze({ ok: false, code: admissibilityErr }));
+            continue;
+          }
+          const firstEv = head.events[0];
+          if (firstEv.kind === 'type') {
+            /** @type {Array<{item: {batch:any,events:any[],resolve:(value:any)=>void}, count: number}>} */
+            const consumed = [];
+            let coalescedText = '';
+            let coalescedBytes = 0;
+            const streamId = head.batch.stream_id;
+            outer: for (let qi = 0; qi < qState.queue.length; qi += 1) {
+              const item = qState.queue[qi];
+              if (item.batch.stream_id !== streamId) break;
+              if (qi > 0 && checkSurfaceInputAdmissibility(surfaceId, item.batch.stream_id, item.events) !== null) {
+                break;
+              }
+              let itemCount = 0;
+              for (let ei = 0; ei < item.events.length; ei += 1) {
+                const ev = item.events[ei];
+                if (ev.kind !== 'type') {
+                  if (itemCount > 0) consumed.push({ item, count: itemCount });
+                  break outer;
+                }
+                const evBytes = Buffer.byteLength(ev.text, 'utf8');
+                if (coalescedText.length > 0 && (coalescedBytes + evBytes > MAX_ADAPTER_TYPE_TEXT_BYTES || coalescedText.length + ev.text.length > MAX_ADAPTER_TYPE_TEXT_BYTES)) {
+                  if (itemCount > 0) consumed.push({ item, count: itemCount });
+                  break outer;
+                }
+                coalescedText += ev.text;
+                coalescedBytes += evBytes;
+                itemCount += 1;
+              }
+              if (itemCount > 0) {
+                consumed.push({ item, count: itemCount });
+              }
+            }
+            const lastConsumed = consumed[consumed.length - 1];
+            qState.inFlightSeq = lastConsumed.item.batch.seq;
+            try {
+              await sendInputActionToCore(surfaceId, { type: 'type', text: coalescedText });
+              qState.inFlightSeq = 0;
+              for (const { item, count } of consumed) {
+                item.events.splice(0, count);
+                if (item.events.length === 0) {
+                  const idx = qState.queue.indexOf(item);
+                  if (idx !== -1) qState.queue.splice(idx, 1);
+                  qState.lastSeq = Math.max(qState.lastSeq, item.batch.seq);
+                  item.resolve(Object.freeze({ ok: true, accepted: item.batch.events.length }));
+                }
+              }
+            } catch (error) {
+              qState.inFlightSeq = 0;
+              const errCode = /** @type {any} */ (error)?.code ?? /** @type {any} */ (error)?.message;
+              const mapped = mapSurfaceInputRefusal(errCode);
+              for (const { item } of consumed) {
+                const idx = qState.queue.indexOf(item);
+                if (idx !== -1) qState.queue.splice(idx, 1);
+                item.resolve(Object.freeze({ ok: false, code: mapped }));
+              }
+            }
+          } else {
+            const action = firstEv.kind === 'click'
+              ? { type: 'click', x: firstEv.x, y: firstEv.y, button: firstEv.button }
+              : firstEv.kind === 'key'
+                ? { type: 'key', keys: [...firstEv.keys] }
+                : { type: 'scroll', dx: firstEv.dx, dy: firstEv.dy };
+            qState.inFlightSeq = head.batch.seq;
+            try {
+              await sendInputActionToCore(surfaceId, action);
+              qState.inFlightSeq = 0;
+              head.events.shift();
+              if (head.events.length === 0) {
+                const idx = qState.queue.indexOf(head);
+                if (idx !== -1) qState.queue.splice(idx, 1);
+                qState.lastSeq = Math.max(qState.lastSeq, head.batch.seq);
+                head.resolve(Object.freeze({ ok: true, accepted: head.batch.events.length }));
+              }
+            } catch (error) {
+              qState.inFlightSeq = 0;
+              const errCode = /** @type {any} */ (error)?.code ?? /** @type {any} */ (error)?.message;
+              const mapped = mapSurfaceInputRefusal(errCode);
+              const idx = qState.queue.indexOf(head);
+              if (idx !== -1) qState.queue.splice(idx, 1);
+              head.resolve(Object.freeze({ ok: false, code: mapped }));
+            }
+          }
+        }
+      } finally {
+        qState.draining = false;
+      }
+    }
     return {core:{
       /** @param {(state:any)=>void} cb */
       subscribeCapture(cb) {
@@ -471,7 +664,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
       /** @param {any} message */
       async request(message) {
         if (message?.op === 'capture') {
-          if (!live || disposed || pending.size >= MAX_ITEMS
+          if (!live || disposed || nonInputPendingCount() >= MAX_ITEMS
               || Object.keys(message).sort().join(',') !== 'method,op,request'
               || !['screenshot','recordStart','recordStop','export','list'].includes(message.method)) throw fail();
           assertCaptureCall(message.method,message.request === undefined ? [] : [message.request]);
@@ -506,87 +699,42 @@ export async function createMainBindings({env = process.env, createMessageChanne
           const checked = validateSurfaceInputBatch(message.batch ?? message.request ?? message.json);
           if (!checked.ok) return Object.freeze({ ok: false, code: checked.code });
           const batch = checked.batch;
-          const state = surfaces.get(batch.surface_id);
-          if (!state || ['destroyed', 'lost'].includes(state.state)) {
-            return Object.freeze({ ok: false, code: 'SURFACE_UNKNOWN' });
+          const sid = batch.surface_id;
+          const admissibilityErr = checkSurfaceInputAdmissibility(sid, batch.stream_id, batch.events);
+          if (admissibilityErr !== null) {
+            return Object.freeze({ ok: false, code: admissibilityErr });
           }
-          const expectedStreamId = streamIds.get(batch.surface_id) ?? 1;
-          if (batch.stream_id !== expectedStreamId) {
-            return Object.freeze({ ok: false, code: 'STALE_STREAM' });
+          let qState = surfaceInputQueues.get(sid);
+          if (!qState) {
+            qState = { lastSeq: 0, inFlightSeq: 0, draining: false, queue: [] };
+            surfaceInputQueues.set(sid, qState);
           }
-          if (state.state !== 'active' || state.control !== 'human') {
-            return Object.freeze({ ok: false, code: 'NOT_IN_CONTROL' });
+          const highestQueuedSeq = qState.queue.length > 0 ? qState.queue[qState.queue.length - 1].batch.seq : 0;
+          const prevSeq = Math.max(qState.lastSeq, qState.inFlightSeq, highestQueuedSeq);
+          if (batch.seq <= prevSeq) {
+            return Object.freeze({ ok: false, code: 'SCHEMA' });
           }
-          const frame = latestFrames.get(batch.surface_id);
-          const width = frame?.width ?? state.geometry?.w ?? null;
-          const height = frame?.height ?? state.geometry?.h ?? null;
-          const actions = [];
-          for (const ev of batch.events) {
-            if (ev.kind === 'click') {
-              if ((width !== null && ev.x >= width) || (height !== null && ev.y >= height)) {
-                return Object.freeze({ ok: false, code: 'SCHEMA' });
-              }
-              actions.push({ type: 'click', x: ev.x, y: ev.y, button: ev.button });
-            } else if (ev.kind === 'key') {
-              actions.push({ type: 'key', keys: [...ev.keys] });
-            } else if (ev.kind === 'type') {
-              actions.push({ type: 'type', text: ev.text });
-            } else if (ev.kind === 'scroll') {
-              actions.push({ type: 'scroll', dx: ev.dx, dy: ev.dy });
-            } else {
-              return Object.freeze({ ok: false, code: 'SCHEMA' });
-            }
-          }
-          if (pending.size + actions.length > MAX_ITEMS) {
+          let queuedEvents = 0;
+          for (const item of qState.queue) queuedEvents += item.events.length;
+          if (queuedEvents + batch.events.length > MAX_SURFACE_INPUT_QUEUE_EVENTS) {
             return Object.freeze({ ok: false, code: 'LIMIT' });
           }
-          let accepted = 0;
-          for (const action of actions) {
-            if (!live || disposed || !socket || socket.destroyed || !socket.writable) {
-              return Object.freeze({ ok: false, code: 'CORE_UNAVAILABLE' });
+          return new Promise((resolve) => {
+            /** @type {Array<Record<string, unknown>>} */
+            const clonedEvents = [];
+            for (const ev of batch.events) clonedEvents.push({ ...ev });
+            qState.queue.push({
+              batch,
+              events: clonedEvents,
+              resolve,
+            });
+            if (!qState.draining) {
+              void drainSurfaceInputQueue(sid);
             }
-            const key = randomUUID();
-            if (!id(key) || pending.has(key)) {
-              return Object.freeze({ ok: false, code: 'CORE_UNAVAILABLE' });
-            }
-            const body = {
-              schema: 'surface_request/v0.2',
-              op: 'input',
-              params: {
-                surface_id: batch.surface_id,
-                proposal_id: key,
-                origin: 'human',
-                action,
-              },
-            };
-            try {
-              await new Promise((resolve, reject) => {
-                const timer = setTimeout(() => {
-                  pending.delete(key);
-                  const healthyInputTimeout = !disposed && live && socket && !socket.destroyed && socket.writable
-                    && surfaces.size > 0 && timeoutAtSeq !== lastIntentReplySeq;
-                  if (healthyInputTimeout) timeoutAtSeq = lastIntentReplySeq;
-                  else shutdown();
-                  reject(Object.assign(new Error('CORE_UNAVAILABLE'), { code: 'CORE_UNAVAILABLE' }));
-                }, DEADLINE);
-                pending.set(key, { body, resolve, reject, timer });
-                try { send(body, key); } catch (err) {
-                  clearTimeout(timer);
-                  pending.delete(key);
-                  shutdown();
-                  reject(err);
-                }
-              });
-              accepted += 1;
-            } catch (error) {
-              const errCode = /** @type {any} */ (error)?.code ?? /** @type {any} */ (error)?.message;
-              return Object.freeze({ ok: false, code: mapSurfaceInputRefusal(errCode) });
-            }
-          }
-          return Object.freeze({ ok: true, accepted });
+          });
         }
         if (!live || disposed || !['intent','propose'].includes(message?.op) || typeof message.json !== 'string'
-            || Buffer.byteLength(message.json) > 256 * 1024 || pending.size >= MAX_ITEMS) throw fail();
+            || Buffer.byteLength(message.json) > 256 * 1024 || nonInputPendingCount() >= MAX_ITEMS) throw fail();
         const body = JSON.parse(message.json);
         if (message.op === 'intent') validateIntentBody(body, fail);
         else if (body?.schema !== 'action_proposal/v0.2') throw fail();

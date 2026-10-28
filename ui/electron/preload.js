@@ -508,7 +508,9 @@ const INPUT_REFUSAL_CODES = new Set([
 ]);
 const SURFACE_INPUT_MAX_EVENTS = 32;
 const SURFACE_INPUT_MAX_BYTES = 16 * 1024;
-const SURFACE_INPUT_MAX_BATCHES_PER_SEC = 60;
+const SURFACE_INPUT_MAX_TEXT = 1024;
+const SURFACE_INPUT_MAX_QUEUE_EVENTS = 256;
+const SURFACE_INPUT_TYPE_COALESCE_MS = 20;
 /** @param {unknown} raw @returns {{ok:true,batch:any}|{ok:false,code:'SCHEMA'|'LIMIT'}} */
 function validateSurfaceInputBatch(raw) {
   if (!captureKeys(raw, 'events,schema,seq,stream_id,surface_id')
@@ -756,9 +758,7 @@ function wireFacade(transport) {
       diagTimer=globalThis.setTimeout(()=>{diagTimer=null;reportFrameDiag();},250);
     }
   };
-  /** @type {Map<string,number>} */ const inputLastSeq=new Map();
-  /** @type {Map<string,number>} */ const inputInFlightSeq=new Map();
-  /** @type {Map<string,number[]>} */ const inputRateWindow=new Map();
+  /** @type {Map<string,{lastSeq:number,inFlightMaxSeq:number,draining:boolean,lastIpcAt:number,ipcStamps:number[],queue:Array<{batch:any,resolve:(value:any)=>void}>}>} */ const surfaceInputQueues=new Map();
   /** @type {Set<(result:any)=>void>} */ const inputResultListeners=new Set();
   /** @param {string|null} sid @param {number|null} seq @param {{ok:boolean,code?:string}} out */
   const emitInputResult=(sid,seq,out)=>{
@@ -766,6 +766,117 @@ function wireFacade(transport) {
     const payload=Object.freeze({surface_id:sid,seq,ok:out.ok,code:out.ok?null:(out.code??'CORE_UNAVAILABLE')});
     for (const notify of [...inputResultListeners]) {
       try { notify(payload); } catch {}
+    }
+  };
+  /** @param {ReadonlyArray<any>} baseEvents @param {ReadonlyArray<any>} nextEvents */
+  const mergeTypeEvents=(baseEvents,nextEvents)=>{
+    const merged=baseEvents.map(ev=>({kind:'type',text:ev.text}));
+    for (const ev of nextEvents) {
+      if (merged.length>0 && merged[merged.length-1].text.length+ev.text.length<=SURFACE_INPUT_MAX_TEXT) {
+        merged[merged.length-1].text+=ev.text;
+      } else {
+        merged.push({kind:'type',text:ev.text});
+      }
+    }
+    return merged;
+  };
+  /** @param {string} sid */
+  const drainSurfaceInputQueue=async(sid)=>{
+    const qState=surfaceInputQueues.get(sid);
+    if (!qState || qState.draining) return;
+    qState.draining=true;
+    try {
+      while (qState.queue.length>0) {
+        await Promise.resolve();
+        if (qState.queue.length===0) break;
+        const first=qState.queue[0];
+        const firstTypeOnly=first.batch.events.every((/** @type {any} */ev)=>ev.kind==='type');
+        if (firstTypeOnly && qState.lastIpcAt>0) {
+          const elapsed=Date.now()-qState.lastIpcAt;
+          if (elapsed<SURFACE_INPUT_TYPE_COALESCE_MS) {
+            await new Promise(r=>globalThis.setTimeout(r,SURFACE_INPUT_TYPE_COALESCE_MS-elapsed));
+          }
+          const now=Date.now();
+          qState.ipcStamps=qState.ipcStamps.filter(t=>now-t<1000);
+          if (qState.ipcStamps.length>=50) {
+            const waitMs=1005-(now-qState.ipcStamps[0]);
+            if (waitMs>0) await new Promise(r=>globalThis.setTimeout(r,waitMs));
+          }
+        }
+        if (qState.queue.length===0) break;
+        const head=qState.queue[0];
+        const headTypeOnly=head.batch.events.every((/** @type {any} */ev)=>ev.kind==='type');
+        /** @type {Array<{batch:any,resolve:(value:any)=>void}>} */
+        const batchGroup=[];
+        /** @type {Array<any>} */
+        let wireEvents=[];
+        let wireTextBytes=0;
+        if (!headTypeOnly) {
+          batchGroup.push(/** @type {any} */(qState.queue.shift()));
+          wireEvents=head.batch.events;
+        } else {
+          const streamId=head.batch.stream_id;
+          while (qState.queue.length>0) {
+            const candidate=qState.queue[0];
+            if (candidate.batch.stream_id!==streamId || !candidate.batch.events.every((/** @type {any} */ev)=>ev.kind==='type')) {
+              break;
+            }
+            const candText=candidate.batch.events.map((/** @type {any} */ev)=>ev.text).join('');
+            const candBytes=utf8Bytes(candText);
+            if (batchGroup.length>0 && wireTextBytes+candBytes>14336) {
+              break;
+            }
+            const nextMerged=mergeTypeEvents(wireEvents,candidate.batch.events);
+            if (nextMerged.length>SURFACE_INPUT_MAX_EVENTS) {
+              break;
+            }
+            qState.queue.shift();
+            batchGroup.push(candidate);
+            wireEvents=nextMerged;
+            wireTextBytes+=candBytes;
+          }
+        }
+        const lastItem=batchGroup[batchGroup.length-1];
+        const wireBatch=batchGroup.length===1 && !headTypeOnly
+          ? head.batch
+          : Object.freeze({
+              schema:lastItem.batch.schema,
+              surface_id:sid,
+              stream_id:lastItem.batch.stream_id,
+              seq:lastItem.batch.seq,
+              events:Object.freeze(wireEvents.map(ev=>Object.freeze({...ev}))),
+            });
+        qState.inFlightMaxSeq=wireBatch.seq;
+        const invokeAt=Date.now();
+        qState.lastIpcAt=invokeAt;
+        qState.ipcStamps=qState.ipcStamps.filter(t=>invokeAt-t<1000);
+        qState.ipcStamps.push(invokeAt);
+        let out;
+        try {
+          const reply=await transport.invoke(SURFACE_INPUT_CHANNEL,Object.freeze([wireBatch]));
+          out=assertSurfaceInputReply(reply,wireBatch.events.length);
+        } catch {
+          out=Object.freeze({ok:false,code:'CORE_UNAVAILABLE'});
+        } finally {
+          qState.inFlightMaxSeq=0;
+        }
+        if (out.ok) {
+          qState.lastSeq=Math.max(qState.lastSeq,wireBatch.seq);
+          for (const item of batchGroup) {
+            const itemOut=Object.freeze({ok:true,accepted:item.batch.events.length});
+            emitInputResult(sid,item.batch.seq,itemOut);
+            item.resolve(itemOut);
+          }
+        } else {
+          const failOut=Object.freeze({ok:false,code:out.code});
+          for (const item of batchGroup) {
+            emitInputResult(sid,item.batch.seq,failOut);
+            item.resolve(failOut);
+          }
+        }
+      }
+    } finally {
+      qState.draining=false;
     }
   };
   api.input=Object.freeze({
@@ -792,36 +903,31 @@ function wireFacade(transport) {
         emitInputResult(sid,seq,out);
         return out;
       }
-      const prevSeq=Math.max(inputLastSeq.get(sid)??0,inputInFlightSeq.get(sid)??0);
+      let qState=surfaceInputQueues.get(sid);
+      if (!qState) {
+        qState={lastSeq:0,inFlightMaxSeq:0,draining:false,lastIpcAt:0,ipcStamps:[],queue:[]};
+        surfaceInputQueues.set(sid,qState);
+      }
+      const highestQueuedSeq=qState.queue.length>0?qState.queue[qState.queue.length-1].batch.seq:0;
+      const prevSeq=Math.max(qState.lastSeq,qState.inFlightMaxSeq,highestQueuedSeq);
       if (seq<=prevSeq) {
         const out=Object.freeze({ok:false,code:'SCHEMA'});
         emitInputResult(sid,seq,out);
         return out;
       }
-      const now=Date.now();
-      const recent=(inputRateWindow.get(sid)??[]).filter(t=>now-t<1000);
-      if (recent.length>=SURFACE_INPUT_MAX_BATCHES_PER_SEC) {
-        inputRateWindow.set(sid,recent);
+      let queuedEvents=0;
+      for (const item of qState.queue) queuedEvents+=item.batch.events.length;
+      if (queuedEvents+checked.batch.events.length>SURFACE_INPUT_MAX_QUEUE_EVENTS) {
         const out=Object.freeze({ok:false,code:'LIMIT'});
         emitInputResult(sid,seq,out);
         return out;
       }
-      recent.push(now);
-      inputRateWindow.set(sid,recent);
-      inputInFlightSeq.set(sid,seq);
-      try {
-        const reply=await transport.invoke(SURFACE_INPUT_CHANNEL,Object.freeze([checked.batch]));
-        const out=assertSurfaceInputReply(reply,checked.batch.events.length);
-        if (out.ok) inputLastSeq.set(sid,seq);
-        emitInputResult(sid,seq,out);
-        return out;
-      } catch {
-        const out=Object.freeze({ok:false,code:'CORE_UNAVAILABLE'});
-        emitInputResult(sid,seq,out);
-        return out;
-      } finally {
-        inputInFlightSeq.delete(sid);
-      }
+      return new Promise((resolve)=>{
+        qState.queue.push({batch:checked.batch,resolve});
+        if (!qState.draining) {
+          void drainSurfaceInputQueue(sid);
+        }
+      });
     },
     /** @param {...unknown} args */
     onResult:(...args)=>{

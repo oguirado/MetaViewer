@@ -44,7 +44,7 @@ function makeSurface(surfaceId = 's1', control = 'agent', state = 'active', w = 
   };
 }
 
-async function createFullStackFixture(t, { nested = false } = {}) {
+async function createFullStackFixture(t, { nested = false, inputDeadlineMs = 3000, coreInputDelayMs = 0 } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'mv-w3-human-input-'));
   const configDir = join(root, 'config');
   await mkdir(join(root, 'metaviewer'), { mode: 0o700 });
@@ -64,11 +64,16 @@ async function createFullStackFixture(t, { nested = false } = {}) {
     ['s2', makeSurface('s2', 'agent', 'active', 320, 200)],
   ]);
   const sockets = new Set();
+  const inFlightInputsBySurface = new Map();
+  const maxInFlightInputsBySurface = new Map();
   let serverSeq = 0;
   let coreRefuseNextInput = null;
+  let coreRefuseAllInputs = null;
+  let coreDropAllInputs = false;
   let activeConn = null;
 
   const sendToHost = (conn, body) => {
+    if (conn.destroyed) return;
     serverSeq += 1;
     conn.write(
       `${JSON.stringify({
@@ -126,23 +131,38 @@ async function createFullStackFixture(t, { nested = false } = {}) {
           continue;
         }
         if (body.schema === 'surface_request/v0.2' && body.op === 'input') {
-          if (coreRefuseNextInput) {
-            const reasonCode = coreRefuseNextInput;
-            coreRefuseNextInput = null;
-            sendToHost(conn, {
-              schema: 'action_verdict/v0.2',
-              proposal_id: body.params.proposal_id,
-              decision: 'refused',
-              reason_code: reasonCode,
-              core_seq: serverSeq + 1,
-            });
+          if (coreDropAllInputs) continue;
+          const sid = body.params.surface_id;
+          const curInFlight = (inFlightInputsBySurface.get(sid) ?? 0) + 1;
+          inFlightInputsBySurface.set(sid, curInFlight);
+          if (curInFlight > (maxInFlightInputsBySurface.get(sid) ?? 0)) {
+            maxInFlightInputsBySurface.set(sid, curInFlight);
+          }
+          const respond = () => {
+            inFlightInputsBySurface.set(sid, Math.max(0, (inFlightInputsBySurface.get(sid) ?? 1) - 1));
+            const reasonCode = coreRefuseNextInput ?? coreRefuseAllInputs;
+            if (coreRefuseNextInput) coreRefuseNextInput = null;
+            if (reasonCode) {
+              sendToHost(conn, {
+                schema: 'action_verdict/v0.2',
+                proposal_id: body.params.proposal_id,
+                decision: 'refused',
+                reason_code: reasonCode,
+                core_seq: serverSeq + 1,
+              });
+            } else {
+              sendToHost(conn, {
+                schema: 'action_verdict/v0.2',
+                proposal_id: body.params.proposal_id,
+                decision: 'admitted',
+                core_seq: serverSeq + 1,
+              });
+            }
+          };
+          if (coreInputDelayMs > 0) {
+            setTimeout(respond, coreInputDelayMs);
           } else {
-            sendToHost(conn, {
-              schema: 'action_verdict/v0.2',
-              proposal_id: body.params.proposal_id,
-              decision: 'admitted',
-              core_seq: serverSeq + 1,
-            });
+            respond();
           }
         }
       }
@@ -164,7 +184,7 @@ async function createFullStackFixture(t, { nested = false } = {}) {
     const port2 = { close() {} };
     return { port1, port2 };
   };
-  const host = await createMainBindings({ env, createMessageChannel });
+  const host = await createMainBindings({ env, createMessageChannel, inputDeadlineMs });
   const handlers = new Map();
   const frame = { origin: 'app://metaviewer', url: 'app://metaviewer/index.html' };
   const contents = { id: 1, mainFrame: frame, isDestroyed: () => false, postMessage() {} };
@@ -218,6 +238,13 @@ async function createFullStackFixture(t, { nested = false } = {}) {
     setCoreRefuseNextInput(reasonCode) {
       coreRefuseNextInput = reasonCode;
     },
+    setCoreRefuseAllInputs(reasonCode) {
+      coreRefuseAllInputs = reasonCode;
+    },
+    setCoreDropAllInputs(drop) {
+      coreDropAllInputs = Boolean(drop);
+    },
+    maxInFlightInputsBySurface,
   };
 }
 
@@ -745,4 +772,267 @@ test('W3-HUMAN-ORIGIN-R3: metaviewer.input.onResult(cb) delivers frozen {surface
     events: [{ kind: 'key', keys: ['Return'] }],
   });
   assert.equal(results.length, 3);
+});
+
+test('W3-INPUT-BURST Goal 1: a burst of 50 batches (including input refusals and input timeouts) never disposes the authority wire/seams and the next intent succeeds', async (t) => {
+  const f = await createFullStackFixture(t, { inputDeadlineMs: 40 });
+  const results = [];
+  f.api.input.onResult((ev) => results.push(ev));
+
+  // 1. Burst of 50 batches refused before human takeover -> all 50 report NOT_IN_CONTROL per batch, wire stays live, next take_control intent succeeds.
+  const preControlBurst = await Promise.all(
+    Array.from({ length: 50 }, (_, i) =>
+      f.api.input.send({
+        schema: 'surface_input/v1',
+        surface_id: 's1',
+        stream_id: 1,
+        seq: i + 1,
+        events: [{ kind: 'type', text: 'x' }],
+      }),
+    ),
+  );
+  for (const out of preControlBurst) {
+    assert.deepEqual(out, { ok: false, code: 'NOT_IN_CONTROL' });
+  }
+  assert.equal(f.host.core.getStatus().availability, 'live');
+
+  await f.api.authority.intent(
+    JSON.stringify({
+      schema: 'ui_intent/v0.2',
+      request_id: 'req-take-after-50-refused',
+      op: 'take_control',
+      params: { surface_id: 's1' },
+    }),
+  );
+
+  // 2. Burst of 50 batches refused by core action_verdict -> all 50 report NOT_IN_CONTROL, wire stays live, next intent succeeds.
+  f.setCoreRefuseAllInputs('SURFACE_NOT_HUMAN_CONTROLLED');
+  const coreRefusedBurst = await Promise.all(
+    Array.from({ length: 50 }, (_, i) =>
+      f.api.input.send({
+        schema: 'surface_input/v1',
+        surface_id: 's1',
+        stream_id: 1,
+        seq: i + 1,
+        events: [{ kind: 'type', text: 'r' }],
+      }),
+    ),
+  );
+  f.setCoreRefuseAllInputs(null);
+  for (const out of coreRefusedBurst) {
+    assert.deepEqual(out, { ok: false, code: 'NOT_IN_CONTROL' });
+  }
+  assert.equal(f.host.core.getStatus().availability, 'live');
+
+  // 3. Burst of 50 batches that time out at the core deadline -> all 50 report CORE_UNAVAILABLE per batch, wire is NOT shut down, and the next control intent succeeds.
+  results.length = 0;
+  f.setCoreDropAllInputs(true);
+  const timeoutBurst = await Promise.all(
+    Array.from({ length: 50 }, (_, i) =>
+      f.api.input.send({
+        schema: 'surface_input/v1',
+        surface_id: 's1',
+        stream_id: 1,
+        seq: i + 1,
+        events: [{ kind: 'type', text: 't' }],
+      }),
+    ),
+  );
+  f.setCoreDropAllInputs(false);
+  for (const out of timeoutBurst) {
+    assert.deepEqual(out, { ok: false, code: 'CORE_UNAVAILABLE' });
+  }
+  assert.equal(results.length, 50);
+  assert.deepEqual(
+    results.map((r) => r.seq),
+    Array.from({ length: 50 }, (_, i) => i + 1),
+  );
+  for (const r of results) {
+    assert.equal(r.ok, false);
+    assert.equal(r.code, 'CORE_UNAVAILABLE');
+  }
+  assert.equal(f.host.core.getStatus().availability, 'live');
+
+  // Next intent after 50 timed-out input batches succeeds without CORE_SEAMS_ABSENT.
+  await f.api.authority.intent(
+    JSON.stringify({
+      schema: 'ui_intent/v0.2',
+      request_id: 'req-release-after-50-timeout',
+      op: 'release_control',
+      params: { surface_id: 's1' },
+    }),
+  );
+  await f.api.authority.intent(
+    JSON.stringify({
+      schema: 'ui_intent/v0.2',
+      request_id: 'req-retake-after-50-timeout',
+      op: 'take_control',
+      params: { surface_id: 's1' },
+    }),
+  );
+  const postRecoveryInput = await f.api.input.send({
+    schema: 'surface_input/v1',
+    surface_id: 's1',
+    stream_id: 1,
+    seq: 1,
+    events: [{ kind: 'type', text: 'recovered' }],
+  });
+  assert.deepEqual(postRecoveryInput, { ok: true, accepted: 1 });
+});
+
+test('W3-INPUT-BURST Goal 2 & Goal 4: 200 typed chars at 10 ms intervals coalesce in seq order with max 1 in-flight request per surface, nothing refused CORE_UNAVAILABLE, next intent succeeds, and negative controls', async (t) => {
+  const f = await createFullStackFixture(t, { coreInputDelayMs: 25 });
+  await f.api.authority.intent(
+    JSON.stringify({
+      schema: 'ui_intent/v0.2',
+      request_id: 'req-take-burst-200',
+      op: 'take_control',
+      params: { surface_id: 's1' },
+    }),
+  );
+  await f.api.authority.intent(
+    JSON.stringify({
+      schema: 'ui_intent/v0.2',
+      request_id: 'req-take-burst-200-s2',
+      op: 'take_control',
+      params: { surface_id: 's2' },
+    }),
+  );
+
+  const onResultEvents = [];
+  f.api.input.onResult((ev) => {
+    if (ev.surface_id === 's1') onResultEvents.push(ev);
+  });
+
+  const expectedText = Array.from({ length: 200 }, (_, i) => String.fromCharCode(48 + (i % 74))).join('');
+  const sendPromises = [];
+  for (let i = 0; i < 200; i += 1) {
+    sendPromises.push(
+      f.api.input.send({
+        schema: 'surface_input/v1',
+        surface_id: 's1',
+        stream_id: 1,
+        seq: i + 1,
+        events: [{ kind: 'type', text: expectedText[i] }],
+      }),
+    );
+    if (i < 199) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+  }
+  const outcomes = await Promise.all(sendPromises);
+  for (const out of outcomes) {
+    assert.deepEqual(out, { ok: true, accepted: 1 });
+  }
+  assert.equal(onResultEvents.length, 200);
+  assert.deepEqual(
+    onResultEvents.map((e) => e.seq),
+    Array.from({ length: 200 }, (_, i) => i + 1),
+  );
+  for (const ev of onResultEvents) {
+    assert.equal(ev.ok, true);
+    assert.equal(ev.code, null);
+  }
+
+  const s1InputEnvelopes = f.receivedFromHost
+    .map((env) => env.body)
+    .filter((b) => b.schema === 'surface_request/v0.2' && b.op === 'input' && b.params.surface_id === 's1');
+  assert.ok(
+    s1InputEnvelopes.length < 200,
+    `expected consecutive type events to coalesce (< 200 core requests), got ${s1InputEnvelopes.length}`,
+  );
+  const deliveredText = s1InputEnvelopes.map((b) => b.params.action.text).join('');
+  assert.equal(deliveredText, expectedText);
+  assert.equal(f.maxInFlightInputsBySurface.get('s1'), 1, 'at most 1 input request per surface may be in flight to core');
+
+  // Negative control 1: queue bound (256 events per surface) -> 257th queued event returns LIMIT while s1 is draining, without affecting s2.
+  const queueFillPromises = [];
+  // First batch (1 event) enters in-flight; next 8 batches of 32 events = 256 queued events fill the queue; 10th batch overflows 256 queued events -> LIMIT.
+  queueFillPromises.push(
+    f.api.input.send({
+      schema: 'surface_input/v1',
+      surface_id: 's1',
+      stream_id: 1,
+      seq: 201,
+      events: [{ kind: 'key', keys: ['a'] }],
+    }),
+  );
+  await Promise.resolve();
+  for (let b = 0; b < 8; b += 1) {
+    queueFillPromises.push(
+      f.api.input.send({
+        schema: 'surface_input/v1',
+        surface_id: 's1',
+        stream_id: 1,
+        seq: 202 + b,
+        events: Array.from({ length: 32 }, () => ({ kind: 'type', text: 'q' })),
+      }),
+    );
+  }
+  const overflowRes = await f.api.input.send({
+    schema: 'surface_input/v1',
+    surface_id: 's1',
+    stream_id: 1,
+    seq: 210,
+    events: [{ kind: 'type', text: 'overflow' }],
+  });
+  assert.deepEqual(overflowRes, { ok: false, code: 'LIMIT' });
+
+  // While s1 queue is full, s2 still accepts input independently.
+  const s2Ok = await f.api.input.send({
+    schema: 'surface_input/v1',
+    surface_id: 's2',
+    stream_id: 1,
+    seq: 1,
+    events: [{ kind: 'type', text: 'independent' }],
+  });
+  assert.deepEqual(s2Ok, { ok: true, accepted: 1 });
+
+  const queueFillOutcomes = await Promise.all(queueFillPromises);
+  assert.deepEqual(queueFillOutcomes[0], { ok: true, accepted: 1 });
+  for (let b = 1; b <= 8; b += 1) {
+    assert.deepEqual(queueFillOutcomes[b], { ok: true, accepted: 32 });
+  }
+
+  // Negative control 2: host queue coalescing respects the 16384-byte adapter limit and 256-event host queue cap.
+  const hostBigBatch1 = {
+    schema: 'surface_input/v1',
+    surface_id: 's2',
+    stream_id: 1,
+    seq: 2,
+    events: Array.from({ length: 10 }, () => ({ kind: 'type', text: 'A'.repeat(1000) })),
+  };
+  const hostBigBatch2 = {
+    schema: 'surface_input/v1',
+    surface_id: 's2',
+    stream_id: 1,
+    seq: 3,
+    events: Array.from({ length: 10 }, () => ({ kind: 'type', text: 'B'.repeat(1000) })),
+  };
+  const [hb1, hb2] = await Promise.all([
+    f.host.core.request({ op: 'input', batch: hostBigBatch1 }),
+    f.host.core.request({ op: 'input', batch: hostBigBatch2 }),
+  ]);
+  assert.deepEqual(hb1, { ok: true, accepted: 10 });
+  assert.deepEqual(hb2, { ok: true, accepted: 10 });
+  const s2InputEnvelopes = f.receivedFromHost
+    .map((env) => env.body)
+    .filter((b) => b.schema === 'surface_request/v0.2' && b.op === 'input' && b.params.surface_id === 's2');
+  for (const env of s2InputEnvelopes) {
+    assert.ok(Buffer.byteLength(env.params.action.text, 'utf8') <= 16384);
+  }
+  assert.equal(
+    s2InputEnvelopes.map((b) => b.params.action.text).join(''),
+    `independent${'A'.repeat(10000)}${'B'.repeat(10000)}`,
+  );
+
+  // Next control intent succeeds cleanly after all bursts.
+  await f.api.authority.intent(
+    JSON.stringify({
+      schema: 'ui_intent/v0.2',
+      request_id: 'req-release-burst-200',
+      op: 'release_control',
+      params: { surface_id: 's1' },
+    }),
+  );
 });
