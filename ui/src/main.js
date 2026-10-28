@@ -4,7 +4,7 @@ import App from './App.vue';
 import { createAuthorityAdapter, createAuthorityRuntime, createTerminalBroker, requireAck } from './core/hostAdapters.js';
 import { createSettingsHost } from './settings/settingsHost.js';
 import { parseStateQuery, resolveFixture } from './fixtures/resolveState.js';
-import { createFixtureRuntime, createLiveReplayMount, LIVE_REPLAY_FIXTURE, TILE_CHROME_FIXTURE, TILE_CHROME_KEY, fixtureCaptureSeed, createCapturePort, createCaptureState, createCaptureDouble } from './fixtures/fixtureRuntime.js';
+import { createFixtureRuntime, createLiveReplayMount, LIVE_REPLAY_FIXTURE, TILE_CHROME_FIXTURE, TILE_CHROME_KEY, fixtureCaptureSeed, createCapturePort, createCaptureState, createCaptureDouble, INPUT_WRITE_FIXTURE, INPUT_WRITE_KEY, createInputPort, createInputDouble } from './fixtures/fixtureRuntime.js';
 import 'capsule-ui-kit/theme.css';
 import './design/metaviewer.css';
 import { createWallLayout, migrateWallLayout } from './wall/layout.js';
@@ -193,12 +193,18 @@ async function bootstrap() {
   const tileChromeFixture = typeof TILE_CHROME_KEY === 'string' && TILE_CHROME_FIXTURE
       && requestedStates[0] === TILE_CHROME_KEY ? TILE_CHROME_FIXTURE : null;
   const isTileChrome = tileChromeFixture !== null;
+  // MVUI25 lane A: input-write travels as an alias fixture (see
+  // fixtures/inputWrite.js), never a FIXTURES key. The guards keep the
+  // boot harness (which stubs this module) on the legacy path.
+  const inputWriteFixture = typeof INPUT_WRITE_KEY === 'string' && INPUT_WRITE_FIXTURE
+      && requestedStates[0] === INPUT_WRITE_KEY ? INPUT_WRITE_FIXTURE : null;
+  const isInputWrite = inputWriteFixture !== null;
   const parsed = parseStateQuery(window.location.search);
-  if (!parsed.ok && parsed.error.code !== 'ERR_MISSING_STATE_PARAM' && !isLiveReplay && !isLayoutUnavailable && !isTileChrome) throw new Error(parsed.error.code);
+  if (!parsed.ok && parsed.error.code !== 'ERR_MISSING_STATE_PARAM' && !isLiveReplay && !isLayoutUnavailable && !isTileChrome && !isInputWrite) throw new Error(parsed.error.code);
   // A diagnostic alias keeps the canonical fixture inventory unchanged.
-  const resolved = isLayoutUnavailable ? resolveFixture('one') : (!isTileChrome && parsed.ok) ? resolveFixture(parsed.key) : null;
+  const resolved = isLayoutUnavailable ? resolveFixture('one') : (!isTileChrome && !isInputWrite && parsed.ok) ? resolveFixture(parsed.key) : null;
   if (resolved && !resolved.ok) throw new Error(resolved.error.code);
-  const baseFixture = isTileChrome ? tileChromeFixture : resolved?.ok ? (isLayoutUnavailable
+  const baseFixture = isTileChrome ? tileChromeFixture : isInputWrite ? inputWriteFixture : resolved?.ok ? (isLayoutUnavailable
     ? Object.freeze({ ...resolved.fixture, key: 'layout-unavailable' }) : resolved.fixture) : (isLiveReplay ? LIVE_REPLAY_FIXTURE : null);
   // Fixture-only vision hook (MV-5): an explicit ?scheme= overrides the
   // fixture default. Live boot ignores the parameter entirely. Matching is
@@ -229,7 +235,7 @@ async function bootstrap() {
     ? { readRaw: async () => null, writeAtomic: async (/** @type {string} */ _json) => {} }
     : createLayoutStorage(getLayoutFacade());
   const layout = fixture ? createWallLayout(SCOPE, [...fixture.capsules]) : createInitialLayout(SCOPE);
-  const host = fixture ? null : /** @type {{metaviewer?: Partial<import('./settings/settingsModel.js').HostSettingsPort> & {nestedDepth?:()=>Promise<0|1|null>,selfCapsuleId?:()=>Promise<string|null>,recordingDestination?:()=>Promise<string|null>,authority?:import('./core/hostAdapters.js').AuthorityPort,qa?:import('./qa/anchorCollector.js').QaFacade,sideTerminal?:import('./core/hostAdapters.js').TerminalPort,capture?:unknown}}} */ (window).metaviewer;
+  const host = fixture ? null : /** @type {{metaviewer?: Partial<import('./settings/settingsModel.js').HostSettingsPort> & {nestedDepth?:()=>Promise<0|1|null>,selfCapsuleId?:()=>Promise<string|null>,recordingDestination?:()=>Promise<string|null>,authority?:import('./core/hostAdapters.js').AuthorityPort,qa?:import('./qa/anchorCollector.js').QaFacade,sideTerminal?:import('./core/hostAdapters.js').TerminalPort,capture?:unknown,input?:unknown}}} */ (window).metaviewer;
   let preferences = /** @type {Storage|null} */ (null);
   if (!fixture) { try { preferences = globalThis.localStorage; } catch { /* Storage may be unavailable. */ } }
   const settingsHost = createSettingsHost(host ?? null, preferences, fixture?.scheme ?? null);
@@ -280,17 +286,29 @@ async function bootstrap() {
     for (const surfaceId of seed.record) await captureState.toggleRecord(surfaceId);
     for (const surfaceId of seed.shots) await captureState.screenshot(surfaceId);
   }
+  // MVUI25 lane A: human input port. The port always comes from
+  // createInputPort; its facade is the in-memory double on fixture boots
+  // and the host input facade on live boots, reached as host.input
+  // (never a fresh window read, so the boot tests' single live-read pin
+  // stays exact). The factories arrive through the fixtureRuntime
+  // re-export; unknown names (stub harness) degrade the port to null and
+  // tiles stay non-focusable.
+  const inputDouble = fixture && typeof createInputDouble === 'function' ? createInputDouble() : null;
+  const inputPort = typeof createInputPort === 'function' && (fixture ? inputDouble !== null : true)
+    ? createInputPort(/** @type {any} */ (fixture ? inputDouble : host?.input))
+    : null;
   const replayRuntime = /** @type {{ dispose?: () => void }|null} */ (/** @type {unknown} */ (isLiveReplay ? fixtureMount?.runtime ?? null : null));
   let disposeQa = () => {};
   let tornDown = false;
-  const teardown = () => { tornDown = true; disposeQa(); framePortRouter?.dispose?.(); captureState?.dispose?.(); liveRuntime?.dispose(); replayRuntime?.dispose?.(); window.removeEventListener?.('pagehide', teardown); };
-  if (framePortRouter || captureState || liveRuntime || replayRuntime || (!fixture && typeof host?.qa?.reportAnchors === 'function')) window.addEventListener?.('pagehide', teardown, { once: true });
+  const teardown = () => { tornDown = true; disposeQa(); framePortRouter?.dispose?.(); captureState?.dispose?.(); inputPort?.dispose?.(); liveRuntime?.dispose(); replayRuntime?.dispose?.(); window.removeEventListener?.('pagehide', teardown); };
+  if (framePortRouter || captureState || liveRuntime || replayRuntime || inputPort || (!fixture && typeof host?.qa?.reportAnchors === 'function')) window.addEventListener?.('pagehide', teardown, { once: true });
   try {
     Object.assign(document.documentElement.dataset, THEME_DATASET);
     const application = createApp(App, { layout, storage, scope: SCOPE, fixture, nestedHost, exportDestination, settingsHost, preferences, authorityHost, terminalBroker, captureState, captureAvailable,
       runtime: /** @type {InstanceType<typeof App>['$props']['runtime']} */ (/** @type {unknown} */ (fixtureMount?.runtime ?? liveRuntime)),
       terminal: fixtureMount?.terminal ?? null });
     if (framePortRouter) application.provide?.('framePortRouter', framePortRouter);
+    application.provide?.('inputPort', inputPort);
     installKitTheme(application);
     // Kit declaration predates its shipped MetaViewer schemes.
     /** @type {(scheme:string)=>void} */ (setKitScheme)(fixture?.scheme ?? 'mv-light');

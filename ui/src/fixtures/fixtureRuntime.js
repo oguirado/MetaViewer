@@ -35,6 +35,15 @@ export { TILE_CHROME_FIXTURE, TILE_CHROME_KEY, fixtureCaptureSeed } from './tile
 export { createCapturePort, createCaptureState } from '../capture/capturePort.js';
 export { createCaptureDouble } from '../capture/captureDouble.js';
 
+// MVUI25 lane A re-export: the input-write alias fixture and the human
+// input factories travel through this already-imported module so `main.js`
+// keeps its closed stub-map import surface (the boot harness rewrites
+// static imports with a fixed map; unknown names arrive as undefined and
+// the entry guards them with typeof, degrading the input port to null).
+export { INPUT_WRITE_FIXTURE, INPUT_WRITE_KEY } from './inputWrite.js';
+export { createInputPort } from '../input/inputPort.js';
+export { createInputDouble } from '../input/inputDouble.js';
+
 /**
  * @typedef {Object} FixtureProjectionSnapshot
  * @property {string} status

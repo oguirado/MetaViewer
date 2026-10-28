@@ -115,7 +115,11 @@ const creativeFrames = computed(() => /** @type {unknown[]} */ (props.fixture?.u
 const terminalOpen = ref(props.fixture?.key === 'side-terminal-open');
 const multislotOpen = ref(['multislot', 'recording'].includes(props.fixture?.key ?? ''));
 const selectedCapsuleId = ref(props.fixture?.capsules[0]?.id ?? '');
-const inputMode = ref('read');
+// MVUI25 lane A: the wall shares this app-level input mode with the
+// multislot (v-model below); the input-write fixture starts in WRITE.
+// The fixture declares ui.inputMode as READ/WRITE; App works in read/write.
+// No new import: the App import surface stays pinned for the stub harnesses.
+const inputMode = ref(String(props.fixture?.ui?.inputMode ?? '').toLowerCase() === 'write' ? 'write' : 'read');
 // App owns the controlled presentation until the authoritative row changes.
 const foldOverrides = ref(/** @type {Record<string, boolean>} */ ({}));
 const selectedFolded = computed(() => selectedSurface.value
@@ -463,6 +467,36 @@ const activeTileScheduler = /** @type {ReturnType<typeof createTileScheduler>} *
 provide('tileScheduler', activeTileScheduler);
 /** Live-only frame-port router provided by the entry; null on fixture/legacy boots. */
 const framePortRouter = /** @type {unknown} */ (inject('framePortRouter', null));
+/** MVUI25 lane A: per-surface input enablement (UX side; host re-checks).
+ * True only for human control plus WRITE; nested display-only never.
+ * @param {{id:string,control?:unknown}} surface */
+function inputEnabledFor(surface) {
+  if (nestedMode.displayOnly === true) return false;
+  if (surface === null || typeof surface !== 'object') return false;
+  return /** @type {{ control?: unknown }} */ (surface).control === 'human' && inputMode.value === 'write';
+}
+/** MVUI25 lane A: frame stream id for input batches (router wins, else projection).
+ * @param {{id:string,generation?:unknown}} surface */
+function surfaceStreamId(surface) {
+  try {
+    const router = /** @type {{ getSurfaceStatus?: unknown }} */ (framePortRouter);
+    const id = surface !== null && typeof surface === 'object'
+      ? /** @type {{ id?: unknown }} */ (surface).id : null;
+    if (router !== null && typeof router === 'object'
+        && typeof router.getSurfaceStatus === 'function' && typeof id === 'string') {
+      const status = /** @type {(surfaceId: string) => unknown} */ (router.getSurfaceStatus).call(framePortRouter, id);
+      const generation = status !== null && typeof status === 'object'
+        ? /** @type {{ surfaceGeneration?: unknown }} */ (status).surfaceGeneration : null;
+      if (Number.isSafeInteger(generation) && /** @type {number} */ (generation) > 0) {
+        return /** @type {number} */ (generation);
+      }
+    }
+  } catch { /* Router failures fall through to the projection id. */ }
+  const fallback = surface !== null && typeof surface === 'object'
+    ? Number(/** @type {{ generation?: unknown }} */ (surface).generation) : NaN;
+  if (Number.isSafeInteger(fallback) && fallback > 0) return fallback;
+  return 1;
+}
 const presentationRevision = ref(0);
 const stopPresentation = activeTileScheduler.subscribePresentation?.(() => { presentationRevision.value += 1; });
 onBeforeUnmount(() => stopPresentation?.());
@@ -592,7 +626,7 @@ const chromeWorkspace = markRaw(defineComponent({
         <HostOutcome :row="hostOutcome" />
         <section v-if="nestedMode.displayOnly" class="mv-nested-wall" aria-label="Nested capsule wall">
           <article v-for="surface in rows" :key="surface.id" :aria-label="surface.title || surface.id">
-            <SurfaceCanvas :surface-id="surface.id" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :frame-width="surfaceWitness(surface).width" :frame-height="surfaceWitness(surface).height" :state="surface.attachmentState === 'live' ? 'live' : 'connecting'" />
+            <SurfaceCanvas :surface-id="surface.id" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :frame-width="surfaceWitness(surface).width" :frame-height="surfaceWitness(surface).height" :state="surface.attachmentState === 'live' ? 'live' : 'connecting'" :input-enabled="inputEnabledFor(surface)" :stream-id="surfaceStreamId(surface)" />
           </article>
         </section>
         <WallWorkspace v-else-if="!creativeOpen" :key="wallView" :hidden="!rows.length" ref="wall" :workspace-component="chromeWorkspace" :scope="props.scope" :default-profile="props.layout" :storage="workspaceStorage"
@@ -600,7 +634,7 @@ const chromeWorkspace = markRaw(defineComponent({
           :control-registry="props.runtime?.controlRegistry ?? controlRegistry" :scheduler="props.runtime?.scheduler ?? scheduler" :tile-scheduler="props.runtime?.tileScheduler ?? tileScheduler"
           :color-scheme="scheme === 'mv-dark' ? 'dark' : 'light'" density="compact" @ready="onWallReady" @wall-settled="onWorkspaceSettled" @activate-surface="selectCapsule" @submit-intent="dispatch">
           <template #surface="{ surface, capsuleId }">
-            <SurfaceCanvas v-if="surface && (!multislotOpen || capsuleId !== selectedSurface?.id)" :surface-id="capsuleId" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :frame-width="surfaceWitness(surface).width" :frame-height="surfaceWitness(surface).height" :state="surface.attachmentState === 'live' ? 'live' : 'connecting'" />
+            <SurfaceCanvas v-if="surface && (!multislotOpen || capsuleId !== selectedSurface?.id)" :surface-id="capsuleId" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :frame-width="surfaceWitness(surface).width" :frame-height="surfaceWitness(surface).height" :state="surface.attachmentState === 'live' ? 'live' : 'connecting'" :input-enabled="inputEnabledFor(surface)" :stream-id="surfaceStreamId(surface)" />
           </template>
         </WallWorkspace>
         <EmptyWallView v-if="!rows.length && !nestedMode.displayOnly && !creativeOpen" @add-capsule="launcherOpen = true" />
@@ -614,7 +648,7 @@ const chromeWorkspace = markRaw(defineComponent({
             :group-id="selectedPlacement.groupId" :placement-index="selectedPlacement.index"
             :last-dock-group-id="selectedPlacement.lastDockGroupId" :last-dock-index="selectedPlacement.lastDockIndex"
             :layout-pending="placementPending[selectedSurface.id] === true" :agent-controlled="selectedSurface.control === 'agent'" v-model:input-mode="inputMode" @submit-intent="dispatchMultislot">
-            <template #surface><SurfaceCanvas :surface-id="selectedSurface.id" :generation="selectedSurface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(selectedSurface).frame" :digest="surfaceWitness(selectedSurface).digest" :frame-width="surfaceWitness(selectedSurface).width" :frame-height="surfaceWitness(selectedSurface).height" :state="selectedSurface.attachmentState === 'live' ? 'live' : 'connecting'" /></template>
+            <template #surface><SurfaceCanvas :surface-id="selectedSurface.id" :generation="selectedSurface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(selectedSurface).frame" :digest="surfaceWitness(selectedSurface).digest" :frame-width="surfaceWitness(selectedSurface).width" :frame-height="surfaceWitness(selectedSurface).height" :state="selectedSurface.attachmentState === 'live' ? 'live' : 'connecting'" :input-enabled="inputEnabledFor(selectedSurface)" :stream-id="surfaceStreamId(selectedSurface)" /></template>
             <template #record><MvRecordingPanel :capsule-id="selectedSurface.id" :export-destination="props.exportDestination" :phase="props.fixture?.key === 'recording' ? 'recording' : 'idle'" :capture-state="captureState" :capture-available="captureAvailable" @submit-intent="dispatch" /></template>
           </MultislotHost>
         </section>

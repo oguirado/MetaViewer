@@ -13,11 +13,15 @@
 import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import {
   formatFrameStrip,
+  mapClientToFrame,
+  mapKeyboardEvent,
   normalizeSurfaceState,
   shouldEvictSchedulerEntry,
   surfaceCanvasAccessibleName,
   surfaceCanvasAnchor,
   surfaceCanvasDomId,
+  surfaceInputAccessibleName,
+  surfaceInputFocusAnchor,
 } from './tileScheduler.js';
 
 const props = defineProps({
@@ -29,6 +33,13 @@ const props = defineProps({
   state: { type: String, default: 'empty' },
   frameWidth: { type: Number, default: 0 },
   frameHeight: { type: Number, default: 0 },
+  // MVUI25 lane C: true only while this surface is human-controlled AND the
+  // app input mode is WRITE (computed by App.vue). Gates the focusable
+  // canvas, the input capture handlers, and the strip READ-ONLY label.
+  inputEnabled: { type: Boolean, default: false },
+  // MVUI25 lane C: frame stream id the tile is bound to (the same value the
+  // frame router uses); forwarded verbatim on every queued input event.
+  streamId: { type: Number, default: 0 },
 });
 
 const emit = defineEmits(['canvas-ready', 'canvas-released']);
@@ -37,6 +48,13 @@ const emit = defineEmits(['canvas-ready', 'canvas-released']);
 const scheduler = /** @type {any} */ (inject('tileScheduler', null));
 /** Live-only frame-port router provided by the entry; null keeps the legacy path. */
 const framePortRouter = /** @type {{ bindSurface?: (binding: any) => boolean, unbindSurface?: (surfaceId: unknown, bindToken?: unknown, options?: { keepStream?: boolean }) => void, getSurfaceStatus?: (surfaceId?: string) => unknown } | null} */ (inject('framePortRouter', null));
+/**
+ * MVUI25 lane C: human-input port provided by the entry (`inputPort`); null
+ * in hosts without input (fixtures that predate the port, bare mounts).
+ * The component never touches `window.metaviewer` directly.
+ * @typedef {{ available: boolean, send: (surfaceId: string, streamId: number, events: object[]) => Promise<object>, queue: (surfaceId: string, streamId: number, event: object) => void, onRefusal: (cb: (refusal: object) => void) => () => void, dispose: () => void }} SurfaceInputPort
+ */
+const inputPort = /** @type {SurfaceInputPort | null} */ (inject('inputPort', null));
 /** @type {symbol | null} */
 let canvasToken = null;
 /**
@@ -128,10 +146,21 @@ const resolvedState = computed(() => {
 const showWitness = computed(() => effectiveFrame.value.length > 0
   && (resolvedState.value === 'live' || resolvedState.value === 'stale'));
 
+/**
+ * True while the canvas may take focus: gated in with a provided port that
+ * is available. tabindex, aria exposure, the focus ring and the strip
+ * READ-ONLY label all key off this; an unavailable port (host without
+ * window.metaviewer.input) behaves exactly like no port.
+ */
+const canvasFocusable = computed(() => props.inputEnabled === true && inputPort !== null && inputPort.available === true);
+
 const strip = computed(() => formatFrameStrip({
   frame: effectiveFrame.value,
   generation: props.generation,
   digest: effectiveDigest.value,
+  // MVUI25 lane C: gated-in tiles are WRITE-capable, so the strip must not
+  // claim READ-ONLY; every other state renders exactly as before.
+  readOnly: canvasFocusable.value ? false : undefined,
 }));
 
 const domId = computed(() => surfaceCanvasDomId(props.surfaceId));
@@ -147,6 +176,158 @@ const stripName = computed(() => {
   if (strip.value.digestText.length > 0) parts.push(`digest ${strip.value.digestText}`);
   if (strip.value.readOnlyText.length > 0) parts.push(strip.value.readOnlyText);
   return parts.length > 0 ? parts.join(', ') : 'Frame state unavailable';
+});
+
+// ---------------------------------------------------------------------------
+// MVUI25 lane C: human keyboard/pointer capture on the canvas.
+// UX-side gating only (the host re-checks): capture and send happen only
+// while the tile is gated in (human control + WRITE mode, via inputEnabled)
+// AND a provided port is available AND the canvas has focus. Every handler below
+// returns before any preventDefault or port call when the gate is closed,
+// so the page behaves exactly as before (no tabindex, aria-hidden canvas).
+// ---------------------------------------------------------------------------
+
+/** True while the canvas element holds DOM focus (tracked, never queried). */
+const canvasFocused = ref(false);
+
+/** DOM id AND data-semantic-anchor value for the input canvas. */
+const inputAnchor = computed(() => surfaceInputFocusAnchor(props.surfaceId));
+
+/** Accessible name for the input canvas while gated in. */
+const inputName = computed(() => surfaceInputAccessibleName({ surfaceId: props.surfaceId }));
+
+/**
+ * @returns {boolean} True only when an input event may be captured and sent:
+ * gated in, port provided and available, canvas focused.
+ */
+function inputGateOpen() {
+  return props.inputEnabled === true && inputPort !== null && inputPort.available === true && canvasFocused.value === true;
+}
+
+/** PointerEvent.button index to contract button name; other buttons ignored. */
+const POINTER_BUTTONS = ['left', 'middle', 'right'];
+
+/**
+ * Maps a client position onto frame pixels through the paint-owned canvas
+ * size (canvas.width/height, never the projection props) with letterboxing
+ * removed.
+ * @param {{ clientX: number, clientY: number }} point
+ * @returns {{ x: number, y: number } | null} Frame point, or null outside it.
+ */
+function clientToFramePoint(point) {
+  const canvas = canvasRef.value;
+  if (canvas === null) return null;
+  // MVUI25D lane C: fail closed when the mapper import failed (see above).
+  try {
+    return mapClientToFrame({
+      clientX: point.clientX,
+      clientY: point.clientY,
+      rect: canvas.getBoundingClientRect(),
+      frameWidth: canvas.width,
+      frameHeight: canvas.height,
+    });
+  } catch {
+    return null;
+  }
+}
+
+/** @param {FocusEvent} _event */
+function onCanvasFocus(_event) {
+  canvasFocused.value = true;
+}
+
+/** @param {FocusEvent} _event */
+function onCanvasBlur(_event) {
+  canvasFocused.value = false;
+}
+
+/**
+ * Focuses the canvas only when the DOM method exists. Fake-DOM harnesses
+ * may mount a canvas double without focus/blur; the typeof guard keeps
+ * those mounts working while real browsers behave exactly as before.
+ */
+function focusCanvas() {
+  const el = canvasRef.value;
+  if (el !== null && typeof el.focus === 'function') el.focus();
+}
+
+/**
+ * Blurs the canvas only when the DOM method exists (see focusCanvas).
+ */
+function blurCanvas() {
+  const el = canvasRef.value;
+  if (el !== null && typeof el.blur === 'function') el.blur();
+}
+
+/**
+ * Key capture: mapped keys are prevented and queued; unmapped keys
+ * (Dead/IME/unidentified) pass through untouched; Escape releases focus and
+ * is never forwarded.
+ * @param {KeyboardEvent} event
+ */
+function onCanvasKeyDown(event) {
+  if (!inputGateOpen()) return;
+  if (event.key === 'Escape') {
+    blurCanvas();
+    return;
+  }
+  // MVUI25D lane C: a failed mapper import must fail closed inside DOM
+  // listeners — never throw, never queue.
+  let mapped = null;
+  try {
+    mapped = mapKeyboardEvent(event);
+  } catch {
+    return;
+  }
+  if (mapped === null) return;
+  event.preventDefault();
+  inputPort?.queue(props.surfaceId, props.streamId, mapped);
+}
+
+/**
+ * Pointer capture: pointerdown takes focus; pointerup sends one click at
+ * frame coordinates. No pointer-move forwarding, no preventDefault.
+ * @param {PointerEvent} _event
+ */
+function onCanvasPointerDown(_event) {
+  if (!(props.inputEnabled === true && inputPort !== null && inputPort.available === true)) return;
+  focusCanvas();
+}
+
+/**
+ * @param {PointerEvent} event
+ */
+function onCanvasPointerUp(event) {
+  if (!inputGateOpen()) return;
+  const button = event.button >= 0 && event.button < POINTER_BUTTONS.length
+    ? POINTER_BUTTONS[event.button]
+    : undefined;
+  if (button === undefined) return;
+  const point = clientToFramePoint(event);
+  if (point === null) return;
+  inputPort?.queue(props.surfaceId, props.streamId, { kind: 'click', x: point.x, y: point.y, button });
+}
+
+/**
+ * Wheel capture: prevented while gated and focused (the page must not
+ * scroll); sent only for positions inside the frame with a nonzero delta.
+ * @param {WheelEvent} event
+ */
+function onCanvasWheel(event) {
+  if (!inputGateOpen()) return;
+  event.preventDefault();
+  const point = clientToFramePoint(event);
+  if (point === null) return;
+  const dx = Math.round(event.deltaX);
+  const dy = Math.round(event.deltaY);
+  if (dx === 0 && dy === 0) return;
+  inputPort?.queue(props.surfaceId, props.streamId, { kind: 'scroll', dx, dy, x: point.x, y: point.y });
+}
+
+// Losing the gate releases focus, so a stale focused canvas can never keep
+// capturing after a control handoff or a READ switch.
+watch(() => props.inputEnabled, (enabled) => {
+  if (enabled !== true) blurCanvas();
 });
 
 /** @param {number | string} value */
@@ -341,7 +522,7 @@ onBeforeUnmount(() => {
     :data-state="resolvedState"
     :aria-label="accessibleName"
   >
-    <canvas ref="canvasRef" :hidden="resolvedState !== 'live' && resolvedState !== 'stale'" class="mv-surface__canvas" aria-hidden="true" />
+    <canvas ref="canvasRef" :hidden="resolvedState !== 'live' && resolvedState !== 'stale'" class="mv-surface__canvas" :id="props.inputEnabled ? inputAnchor : undefined" :data-semantic-anchor="props.inputEnabled ? inputAnchor : undefined" :tabindex="canvasFocusable ? 0 : undefined" :aria-hidden="canvasFocusable ? undefined : 'true'" :aria-label="props.inputEnabled ? inputName : undefined" @focus="onCanvasFocus" @blur="onCanvasBlur" @keydown="onCanvasKeyDown" @pointerdown="onCanvasPointerDown" @pointerup="onCanvasPointerUp" @wheel="onCanvasWheel" />
     <div v-if="resolvedState !== 'live' && resolvedState !== 'stale'" class="mv-surface__waiting" role="status">
       <span class="mv-surface__connection-mark" aria-hidden="true">◌</span>
       <strong>{{ resolvedState === 'connecting' ? 'Connecting to surface' : 'Waiting for surface' }}</strong>
@@ -377,6 +558,12 @@ onBeforeUnmount(() => {
 }
 .mv-surface__canvas[hidden] {
   display: none;
+}
+.mv-surface__canvas:focus-visible {
+  outline-width: var(--cuk-semantic-focus-ring-width);
+  outline-style: var(--cuk-semantic-focus-ring-style);
+  outline-color: var(--cuk-semantic-focus-ring-color);
+  outline-offset: calc(var(--cuk-semantic-focus-ring-offset) * -1);
 }
 .mv-surface__waiting { flex:1; min-height:200px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:var(--cuk-semantic-spacing-sm); padding:var(--cuk-semantic-spacing-lg); text-align:center; color:var(--cuk-semantic-text-muted); font-size:12px; }
 .mv-surface__waiting strong { color:var(--cuk-semantic-text-primary); font-size:14px; font-weight:500; }

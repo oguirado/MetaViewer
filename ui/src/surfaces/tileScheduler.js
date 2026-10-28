@@ -1,7 +1,9 @@
 /**
  * @fileoverview Fair newest-only tile scheduler for wall surfaces.
  *
- * Plain JavaScript with JSDoc; no authored TypeScript, no product imports.
+ * Plain JavaScript with JSDoc; no authored TypeScript, no static product
+ * imports. The lane-P input mappers are re-exported via dynamic import so
+ * SurfaceCanvas keeps its closed SFC dependency map (vue + this module).
  * Non-reactive external registry: frame bytes, mailboxes, leases, canvases
  * and warm resources live here, never inside Vue reactivity proxies.
  *
@@ -16,6 +18,30 @@
  * and capture witnesses keep advancing. Reopen requests the newest
  * generation above every witness floor; hidden backlog never replays.
  */
+
+/**
+ * MVUI25B lane C: lane-P keyboard mapper, re-exported so SurfaceCanvas.vue
+ * keeps its closed SFC dependency map (vue plus this module). Loaded by
+ * dynamic import — never a static relative import — because mutant harnesses
+ * evaluate this file from a data: URL, where relative imports cannot resolve;
+ * those contexts keep the null-returning stubs below, so input fails closed
+ * (nothing queued) instead of throwing inside DOM listeners.
+ * @type {(ev: import('../input/keyMap.js').MappedKeyInput) => import('../input/keyMap.js').KeyMapResult | null}
+ */
+export let mapKeyboardEvent = () => null;
+
+/**
+ * MVUI25B lane C: lane-P client-to-frame mapper, re-exported (see above).
+ * @type {(input: import('../input/frameMap.js').ClientToFrameInput) => import('../input/frameMap.js').FramePoint | null}
+ */
+export let mapClientToFrame = () => null;
+
+try {
+  ({ mapKeyboardEvent } = await import('../input/keyMap.js'));
+  ({ mapClientToFrame } = await import('../input/frameMap.js'));
+} catch {
+  /* Import failure keeps the null-returning stubs: input fails closed. */
+}
 
 /**
  * @typedef {Object} FrozenTileBudget
@@ -304,6 +330,31 @@ export function surfaceCanvasAccessibleName(input) {
   if (state === 'connecting') return `Surface connecting for ${input.surfaceId}`;
   if (state === 'lost') return `Surface lost for ${input.surfaceId}`;
   return `No surface for ${input.surfaceId}`;
+}
+
+/**
+ * MVUI25 lane C: DOM id AND `data-semantic-anchor` value for the focusable
+ * input canvas of a tile, `tile-<segment>-input-focus`. The segment is the
+ * same `surfaceIdSegment` derivation as every other DOM-safe id, so hostile
+ * host ids stay whitespace/slash-free here too. Typical ids fit the QA
+ * single-segment grammar; adversarial 61-char segments still yield a unique
+ * DOM id (the anchor collector skips over-long values, like every other
+ * unbounded DOM id in this module).
+ * @param {string} surfaceId Host surface id.
+ * @returns {string} Input-focus anchor value for the canvas element.
+ */
+export function surfaceInputFocusAnchor(surfaceId) {
+  return `tile-${surfaceIdSegment(surfaceId)}-input-focus`;
+}
+
+/**
+ * MVUI25 lane C: accessible name for the focusable input canvas, exposed
+ * only while the tile is gated in (human control + WRITE mode).
+ * @param {{ surfaceId: string }} input
+ * @returns {string} Stable accessible name for the input canvas.
+ */
+export function surfaceInputAccessibleName(input) {
+  return `Capsule input for ${input.surfaceId}`;
 }
 
 /**
