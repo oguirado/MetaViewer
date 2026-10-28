@@ -179,6 +179,93 @@ class PlannerTests(unittest.TestCase):
             )
         )
 
+    def test_equal_score_tie_breaks_to_earliest_index_and_higher_score_wins(self) -> None:
+        obs = _observation()
+
+        # Two actionable rows with identical score_ppm and distinct bboxes: index 0 wins
+        two_way_tie_table = _element_table(
+            elements=[
+                {
+                    "bbox": {"x": 10, "y": 20, "w": 40, "h": 20},
+                    "role": "button",
+                    "name": "Continue",
+                    "score_ppm": 800_000,
+                },
+                {
+                    "bbox": {"x": 60, "y": 10, "w": 30, "h": 16},
+                    "role": "button",
+                    "name": "Continue",
+                    "score_ppm": 800_000,
+                },
+            ]
+        )
+        tie_result = plan(obs, two_way_tie_table, "Continue")
+        self.assertEqual(tie_result["target_node"]["ordinal"], 0)
+        self.assertEqual(tie_result["action"]["x"], 30)
+        self.assertEqual(tie_result["action"]["y"], 30)
+        self.assertEqual(
+            tie_result["expectation"]["bbox"],
+            {"x": 10, "y": 20, "w": 40, "h": 20},
+        )
+
+        # Three-element crop-fallback tie at score_ppm = 500_000: index 0 wins
+        crop_tie_table = _element_table(
+            elements=[
+                {
+                    "bbox": {"x": 4, "y": 6, "w": 20, "h": 10},
+                    "role": "crop",
+                    "name": "",
+                    "score_ppm": 500_000,
+                },
+                {
+                    "bbox": {"x": 30, "y": 20, "w": 24, "h": 12},
+                    "role": "crop",
+                    "name": "",
+                    "score_ppm": 500_000,
+                },
+                {
+                    "bbox": {"x": 70, "y": 40, "w": 30, "h": 20},
+                    "role": "crop",
+                    "name": "",
+                    "score_ppm": 500_000,
+                },
+            ]
+        )
+        crop_result = plan(obs, crop_tie_table, "Continue")
+        self.assertEqual(crop_result["target_node"]["ordinal"], 0)
+        self.assertEqual(crop_result["action"]["x"], 14)
+        self.assertEqual(crop_result["action"]["y"], 11)
+        self.assertEqual(
+            crop_result["expectation"]["bbox"],
+            {"x": 4, "y": 6, "w": 20, "h": 10},
+        )
+
+        # Negative control: index 1 has strictly higher score_ppm and wins
+        higher_idx1_table = _element_table(
+            elements=[
+                {
+                    "bbox": {"x": 10, "y": 20, "w": 40, "h": 20},
+                    "role": "button",
+                    "name": "Continue",
+                    "score_ppm": 800_000,
+                },
+                {
+                    "bbox": {"x": 60, "y": 10, "w": 30, "h": 16},
+                    "role": "button",
+                    "name": "Continue",
+                    "score_ppm": 800_001,
+                },
+            ]
+        )
+        higher_result = plan(obs, higher_idx1_table, "Continue")
+        self.assertEqual(higher_result["target_node"]["ordinal"], 1)
+        self.assertEqual(higher_result["action"]["x"], 75)
+        self.assertEqual(higher_result["action"]["y"], 18)
+        self.assertEqual(
+            higher_result["expectation"]["bbox"],
+            {"x": 60, "y": 10, "w": 30, "h": 16},
+        )
+
     def test_pipe_cli_roundtrip_and_mv_wender_planner_cmd_compatibility(self) -> None:
         obs = _observation()
         table = _element_table()

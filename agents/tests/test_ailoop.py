@@ -74,6 +74,35 @@ class AdapterTests(unittest.TestCase):
             with self.assertRaises(error):
                 ex.check_target(changed, latest=latest, frame=frame())
 
+    def test_target_custody_pins_name_and_allows_value_drift(self):
+        calls = []
+        ex = AdmittedExecutor(
+            transport=lambda p: (calls.append(p) or {'focus_verified': True, 'input_mono_ns': 7})
+        )
+        verdict = dict(schema='action_verdict/v0.2', proposal_id='p1',
+                       decision='admitted', core_seq=1)
+        observed = dict(
+            id='btn-1',
+            role='button',
+            name='Go',
+            box=[0, 0, 2, 2],
+            bbox={'x': 0, 'y': 0, 'w': 2, 'h': 2},
+            value='initial',
+        )
+        # Control: value changes while id, role, bbox, box, and name stay identical -> custody passes
+        latest_value_changed = [dict(observed, value='updated')]
+        ex.check_target(observed, latest=latest_value_changed, frame=frame())
+        ex.dispatch(proposal(), verdict)
+        self.assertEqual(len(calls), 1)
+
+        # Target name changes from "Go" to "Delete" while id, role, and bbox stay identical -> custody refuses before click
+        calls.clear()
+        latest_name_changed = [dict(observed, name='Delete')]
+        with self.assertRaisesRegex(ValueError, 'target custody'):
+            ex.check_target(observed, latest=latest_name_changed, frame=frame())
+            ex.dispatch(proposal(), verdict)
+        self.assertEqual(calls, [])
+
     def test_vision_golden_and_caps(self):
         self.assertEqual(parse_description(json.dumps(description()))['changed_regions'][0]['score_ppm'], 800000)
         for field, row, cap in [('changed_regions', description()['changed_regions'][0], 16),
