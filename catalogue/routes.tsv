@@ -1248,6 +1248,7 @@ frame-wait.mjs	ui/test/frame-wait.mjs
 framePort.test.js	ui/test/framePort.test.js
 frameRe-465cff07ceeb	ui/test/frameReader-lexical.test.js
 frameReader.test.js	ui/test/frameReader.test.js
+frameRe-ec3058eeff9f	ui/test/frameReaderOnePass.test.mjs
 frameTile.test.js	ui/test/frameTile.test.js
 hostset-f2d771cedde2	ui/test/host-settings-fps.test.js
 hostBindings.test.js	ui/test/hostBindings.test.js
