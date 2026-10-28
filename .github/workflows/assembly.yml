@@ -1,0 +1,140 @@
+name: assembly
+
+on:
+  push:
+    branches: [main, bridge/integration]
+  pull_request:
+    branches: [main, bridge/integration]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: assembly-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  pinned-assembly:
+    name: Pinned private assembly smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check ASSEMBLY_READ_TOKEN availability
+        id: token_check
+        env:
+          ASSEMBLY_READ_TOKEN: ${{ secrets.ASSEMBLY_READ_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ASSEMBLY_READ_TOKEN:-}" ]; then
+            if [ "${EVENT_NAME}" = "pull_request" ]; then
+              echo "::notice::ASSEMBLY_READ_TOKEN is empty on pull_request (fork); skipping pinned assembly smoke."
+              echo "skip=true" >> "${GITHUB_OUTPUT}"
+              exit 0
+            fi
+            echo "::error::ASSEMBLY_READ_TOKEN secret is required on ${EVENT_NAME} events."
+            exit 1
+          fi
+          echo "skip=false" >> "${GITHUB_OUTPUT}"
+
+      - name: Checkout MetaViewer
+        if: steps.token_check.outputs.skip != 'true'
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12.3
+        if: steps.token_check.outputs.skip != 'true'
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12.3"
+
+      - name: Set up Go toolchain
+        if: steps.token_check.outputs.skip != 'true'
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        with:
+          go-version-file: daemon-adapter/go.mod
+          cache: false
+
+      - name: Parse deps.lock pins (require 40-hex commits)
+        id: pins
+        if: steps.token_check.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          python3 tools/assembly_smoke.py \
+            --lock deps.lock \
+            --github-output "${GITHUB_OUTPUT}" \
+            --print-pins
+
+      - name: Checkout vision-engine at pinned commit
+        if: steps.token_check.outputs.skip != 'true'
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ steps.pins.outputs.vision_engine_repo }}
+          ref: ${{ steps.pins.outputs.vision_engine_commit }}
+          token: ${{ secrets.ASSEMBLY_READ_TOKEN }}
+          path: _deps/vision-engine
+          persist-credentials: false
+
+      - name: Checkout wender-agent at pinned commit
+        if: steps.token_check.outputs.skip != 'true'
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ steps.pins.outputs.wender_agent_repo }}
+          ref: ${{ steps.pins.outputs.wender_agent_commit }}
+          token: ${{ secrets.ASSEMBLY_READ_TOKEN }}
+          path: _deps/wender-agent
+          persist-credentials: false
+
+      - name: Checkout OpenSuperficies at pinned commit
+        if: steps.token_check.outputs.skip != 'true'
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ steps.pins.outputs.opensuperficies_repo }}
+          ref: ${{ steps.pins.outputs.opensuperficies_commit }}
+          token: ${{ secrets.ASSEMBLY_READ_TOKEN }}
+          path: _deps/OpenSuperficies
+          persist-credentials: false
+
+      - name: Verify checked-out HEAD commits match deps.lock pins
+        if: steps.token_check.outputs.skip != 'true'
+        env:
+          PIN_VISION_ENGINE: ${{ steps.pins.outputs.vision_engine_commit }}
+          PIN_WENDER_AGENT: ${{ steps.pins.outputs.wender_agent_commit }}
+          PIN_OPENSUPERFICIES: ${{ steps.pins.outputs.opensuperficies_commit }}
+        run: |
+          set -euo pipefail
+          verify_head() {
+            local name="$1"
+            local dir="$2"
+            local expected="$3"
+            local actual
+            actual="$(git -C "${dir}" rev-parse HEAD)"
+            echo "${name}: HEAD=${actual} (expected=${expected})"
+            if [ "${actual}" != "${expected}" ]; then
+              echo "::error::${name} HEAD ${actual} does not match pinned commit ${expected}"
+              exit 1
+            fi
+          }
+          verify_head "vision-engine" "_deps/vision-engine" "${PIN_VISION_ENGINE}"
+          verify_head "wender-agent" "_deps/wender-agent" "${PIN_WENDER_AGENT}"
+          verify_head "opensuperficies" "_deps/OpenSuperficies" "${PIN_OPENSUPERFICIES}"
+
+      - name: Install pinned numpy for vision-engine
+        if: steps.token_check.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          python3 -m pip install --no-cache-dir --only-binary=:all: numpy==2.4.2
+
+      - name: Run assembly smoke unit tests
+        if: steps.token_check.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p 'test_assembly_smoke.py' -v
+
+      - name: Run real assembly smokes against pinned checkouts
+        if: steps.token_check.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          python3 tools/assembly_smoke.py --deps-root ./_deps --strict-head --timeout 60
