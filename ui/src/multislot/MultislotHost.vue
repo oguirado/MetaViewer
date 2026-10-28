@@ -552,9 +552,34 @@ function onCloseSession(payload) {
 function passThrough(name) {
   return (payload) => emit(name, payload);
 }
+
+/**
+ * MVUI27 lane S: READ-veil press guard. In READ mode the kit covers the
+ * surface with its veil (`data-input-shield="read"`), so a press on the
+ * capsule picture lands on the veil, never on the canvas. A veiled press
+ * prevents the default action (native selection start, focus shift) so it
+ * can never scroll the page. Strictly scoped to the veil: presses on the
+ * terminal, buttons, inputs and every other control pass through untouched;
+ * nothing is focused, queued or stopped (journal events still bubble). Bound
+ * to pointerdown/mousedown only: those carry the focus/selection defaults,
+ * while a click default on the veil cannot scroll (and a @click binding
+ * would trip the interactive-control contract for this host).
+ * @param {Event} event
+ */
+function onSlotPointerGuard(event) {
+  const target = /** @type {Element | null} */ (event?.target ?? null);
+  if (target === null || typeof target.closest !== 'function') return;
+  let veiled = null;
+  try {
+    veiled = target.closest('[data-input-shield="read"]');
+  } catch {
+    return;
+  }
+  if (veiled !== null) event.preventDefault();
+}
 </script>
 <template>
-  <div ref="slotWrap" class="mv-multislot-host" :aria-busy="layoutPending" :data-layout-group="groupId" :data-layout-index="props.placementIndex">
+  <div ref="slotWrap" class="mv-multislot-host" :aria-busy="layoutPending" :data-layout-group="groupId" :data-layout-index="props.placementIndex" @pointerdown="onSlotPointerGuard" @mousedown="onSlotPointerGuard">
 
     <BrokerLaunchControls v-if="terminalBroker" :broker="terminalBroker" :show-menu="false" :anchor-prefix="`capsule/${capsuleId}`" :id-prefix="`mv-multislot-${capsuleId}-broker`" />
     <div :hidden="hiddenRef" class="mv-multislot-pair">

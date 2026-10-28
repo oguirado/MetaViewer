@@ -182,9 +182,12 @@ const stripName = computed(() => {
 // MVUI25 lane C: human keyboard/pointer capture on the canvas.
 // UX-side gating only (the host re-checks): capture and send happen only
 // while the tile is gated in (human control + WRITE mode, via inputEnabled)
-// AND a provided port is available AND the canvas has focus. Every handler below
-// returns before any preventDefault or port call when the gate is closed,
-// so the page behaves exactly as before (no tabindex, aria-hidden canvas).
+// AND a provided port is available AND the canvas has focus. Key, pointer-up
+// and wheel handlers return before any preventDefault or port call when the
+// gate is closed. MVUI27 lane S: pointerdown and click ALWAYS prevent the
+// default action — even on a non-focusable canvas — so a tile-canvas press
+// never scrolls the page in any mode; a non-focusable canvas still takes no
+// focus and queues nothing (no tabindex, aria-hidden canvas).
 // ---------------------------------------------------------------------------
 
 /** True while the canvas element holds DOM focus (tracked, never queried). */
@@ -300,17 +303,19 @@ function onCanvasKeyDown(event) {
 let activePress = null;
 
 /**
- * Pointer capture: pointerdown on a focusable canvas prevents the default
- * action (so the page never scrolls), takes focus without scrolling, and
- * arms the press; pointerup sends one click at frame coordinates only for
- * a matching press started inside the frame. No pointer-move forwarding.
- * A non-focusable canvas returns before any preventDefault or focus, so
- * page scroll and clicks behave exactly as before.
+ * Pointer capture: pointerdown on the canvas always prevents the default
+ * action (MVUI27 lane S: a tile-canvas press never scrolls the page in any
+ * mode — the mousedown default would otherwise shift focus to the focusable
+ * kit surface wrapper and scroll it into view). A focusable canvas then
+ * takes focus without scrolling and arms the press; pointerup sends one
+ * click at frame coordinates only for a matching press started inside the
+ * frame. No pointer-move forwarding. A non-focusable canvas never takes
+ * focus and never arms a press, so it queues nothing.
  * @param {PointerEvent} event
  */
 function onCanvasPointerDown(event) {
-  if (!(props.inputEnabled === true && inputPort !== null && inputPort.available === true)) return;
   event.preventDefault();
+  if (!(props.inputEnabled === true && inputPort !== null && inputPort.available === true)) return;
   focusCanvas();
   activePress = {
     pointerId: event.pointerId,
@@ -328,14 +333,13 @@ function onCanvasPointerCancel(_event) {
 }
 
 /**
- * Click capture (MVUI26B lane S): a click on a focusable canvas prevents
- * the default action so the page never scrolls. Focus was already taken
- * without scrolling by pointerdown; this handler queues nothing. A
- * non-focusable canvas keeps today's click behaviour untouched.
+ * Click capture (MVUI26B lane S, MVUI27 lane S): a click on the canvas
+ * always prevents the default action so the page never scrolls in any
+ * mode. Focus was already taken without scrolling by pointerdown on a
+ * focusable canvas; this handler queues nothing and never takes focus.
  * @param {PointerEvent} event
  */
 function onCanvasClick(event) {
-  if (!(props.inputEnabled === true && inputPort !== null && inputPort.available === true)) return;
   event.preventDefault();
 }
 

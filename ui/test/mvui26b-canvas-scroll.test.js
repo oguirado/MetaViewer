@@ -3,7 +3,8 @@
 // stub renderer with REAL focus semantics plus focus-option recording:
 // pointerdown/click on a focusable canvas prevent the default action and
 // focus with { preventScroll: true }; consumed keys prevent while focused;
-// a non-focusable canvas keeps today's behaviour untouched. Bounded fakes
+// a non-focusable canvas still prevents pointer/click scroll without
+// focusing or queueing (MVUI27 lane S: no page scroll in any mode). Bounded fakes
 // (one tile, single-digit events); async waits via frame-wait.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -208,7 +209,7 @@ test('mvui26b canvas scroll: pointerdown outside the frame still prevents but ne
   }
 });
 
-test('mvui26b canvas scroll negative: non-focusable canvas keeps page scroll and clicks', () => {
+test('mvui26b canvas scroll negative: non-focusable canvas never scrolls the page', () => {
   for (const [label, provides, props] of [
     ['disabled', null, { inputEnabled: false, streamId: 3 }],
     ['unavailable port', 'unavailable', { inputEnabled: true, streamId: 3 }],
@@ -223,12 +224,12 @@ test('mvui26b canvas scroll negative: non-focusable canvas keeps page scroll and
       assert.equal(canvas.props.tabindex, undefined, `${label}: no tabindex`);
       const down = fakePointerEvent('pointerdown', { button: 0, clientX: 110, clientY: 70 });
       canvas.props.onPointerdown(down);
-      assert.equal(down.defaultPrevented, false, `${label}: down keeps page scroll`);
+      assert.equal(down.defaultPrevented, true, `${label}: down never scrolls the page`);
       assert.equal(doc.activeElement, null, `${label}: down never focuses`);
       assert.equal(focusCalls.length, 0, `${label}: focus never called`);
       const click = fakePointerEvent('click', { button: 0, clientX: 110, clientY: 70 });
       canvas.props.onClick(click);
-      assert.equal(click.defaultPrevented, false, `${label}: click untouched`);
+      assert.equal(click.defaultPrevented, true, `${label}: click never scrolls the page`);
       assert.equal(stub.queueCalls.length, 0, `${label}: nothing queued`);
     } finally {
       tile.app.unmount();
