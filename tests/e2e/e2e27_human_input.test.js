@@ -423,6 +423,20 @@ test('W3-HUMAN-INPUT-R2 (e2e27): window.metaviewer.input.send(batch) drives surf
             receivedInputs.push(env.body);
             if (
               env.body.params?.surface_id === surfaceId &&
+              surfaceState.control === 'human' &&
+              env.body.params?.action?.type === 'click' &&
+              env.body.params?.action?.x === 3 &&
+              env.body.params?.action?.y === 3
+            ) {
+              sendCore({
+                schema: 'action_verdict/v0.2',
+                proposal_id: env.body.params.proposal_id,
+                decision: 'refused',
+                reason_code: 'OUT_OF_BOUNDS',
+                core_seq: seq + 1,
+              });
+            } else if (
+              env.body.params?.surface_id === surfaceId &&
               surfaceState.control === 'human'
             ) {
               sendCore({
@@ -663,6 +677,14 @@ test('W3-HUMAN-INPUT-R2 (e2e27): window.metaviewer.input.send(batch) drives surf
     });
     assert.deepEqual(batchRes, { ok: true, accepted: 4 });
     assert.equal(receivedInputs.length, 4);
+    for (const r of receivedInputs) {
+      assert.equal(r.schema, 'surface_request/v0.2');
+      assert.equal(r.op, 'input');
+      assert.deepEqual(Object.keys(r).sort(), ['op', 'params', 'schema']);
+      assert.deepEqual(Object.keys(r.params).sort(), ['action', 'proposal_id', 'surface_id']);
+      assert.equal(typeof r.params.proposal_id, 'string');
+      assert.equal(r.params.proposal_id.length >= 1 && r.params.proposal_id.length <= 128, true);
+    }
     assert.deepEqual(
       receivedInputs.map((r) => ({ surface_id: r.params.surface_id, action: r.params.action })),
       [
@@ -673,7 +695,8 @@ test('W3-HUMAN-INPUT-R2 (e2e27): window.metaviewer.input.send(batch) drives surf
       ],
     );
 
-    // 5. Monotonic seq check: replaying seq=1 is refused with SCHEMA; seq=2 succeeds.
+    // 5. Monotonic seq check and typed wire refusal outcome: replaying seq=1 is refused locally with SCHEMA;
+    // wire refusal (OUT_OF_BOUNDS on click (3,3)) reaches fixture core and maps to UI typed code SCHEMA; seq=3 succeeds.
     assert.deepEqual(
       await callProbeControl(ctlSock, {
         op: 'invokeInputSend',
@@ -687,6 +710,7 @@ test('W3-HUMAN-INPUT-R2 (e2e27): window.metaviewer.input.send(batch) drives surf
       }),
       { ok: false, code: 'SCHEMA' },
     );
+    assert.equal(receivedInputs.length, 4);
     assert.deepEqual(
       await callProbeControl(ctlSock, {
         op: 'invokeInputSend',
@@ -695,12 +719,26 @@ test('W3-HUMAN-INPUT-R2 (e2e27): window.metaviewer.input.send(batch) drives surf
           surface_id: surfaceId,
           stream_id: boundStreamId,
           seq: 2,
+          events: [{ kind: 'click', x: 3, y: 3, button: 'left' }],
+        },
+      }),
+      { ok: false, code: 'SCHEMA' },
+    );
+    assert.equal(receivedInputs.length, 5);
+    assert.deepEqual(
+      await callProbeControl(ctlSock, {
+        op: 'invokeInputSend',
+        batch: {
+          schema: 'surface_input/v1',
+          surface_id: surfaceId,
+          stream_id: boundStreamId,
+          seq: 3,
           events: [{ kind: 'key', keys: ['Return'] }],
         },
       }),
       { ok: true, accepted: 1 },
     );
-    assert.equal(receivedInputs.length, 5);
+    assert.equal(receivedInputs.length, 6);
 
     // 6. Release control and verify subsequent input is refused with NOT_IN_CONTROL.
     const clickRelease = await callProbeControl(ctlSock, {
@@ -732,12 +770,12 @@ test('W3-HUMAN-INPUT-R2 (e2e27): window.metaviewer.input.send(batch) drives surf
         schema: 'surface_input/v1',
         surface_id: surfaceId,
         stream_id: boundStreamId,
-        seq: 3,
+        seq: 4,
         events: [{ kind: 'key', keys: ['a'] }],
       },
     });
     assert.deepEqual(postReleaseInput, { ok: false, code: 'NOT_IN_CONTROL' });
-    assert.equal(receivedInputs.length, 5);
+    assert.equal(receivedInputs.length, 6);
     assert.equal(receivedIntents.length, 2);
   } finally {
     if (frameInterval) clearInterval(frameInterval);

@@ -20,6 +20,12 @@
 //! (the wire has no reply correlation); frame unsubscribe overrides that default.
 //! UI may submit surface_request/v0.2 op="input" when the surface is under human
 //! control (!agent_controlled); agent raw input remains refused with POLICY.
+//! [TARGET, unit decision] Admitted UI human input is translated into an explicit
+//! surface_request/v0.2 op="input" command bound to its validated proposal_id
+//! (or a core-minted human-input-<core_seq> id if absent) and tracked across
+//! recovery so daemon action_receipt/v0.2 and error outcomes settle against the
+//! originating UI peer as typed action_verdict/v0.2 outcomes and never emit
+//! action_verdict/v0.2 back to the daemon.
 //! [TARGET, unit decision] An expired RAM publication is not admissible evidence.
 //! Drop that frame without retiring the authenticated daemon: its bounded lease
 //! window can advance while an earlier journal transaction is being persisted.
@@ -147,6 +153,30 @@ struct Connection {
     queue: mpsc::SyncSender<Envelope>,
     terminal: Arc<Mutex<Option<Envelope>>>,
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct HumanInputPending {
+    seq: u64,
+    ui: Endpoint,
+    surface_id: String,
+    ui_proposal_id: String,
+}
+fn adapter_input_refusal(detail: &str) -> Refusal {
+    if detail.contains("SURFACE_NOT_HUMAN_CONTROLLED") || detail.contains("LOCKED_BY_OTHER") {
+        Refusal::LockedByOther
+    } else if detail.contains("SURFACE_NOT_AGENT_CONTROLLED")
+        || detail.contains("human control blocks agent input")
+    {
+        Refusal::SurfaceNotAgentControlled
+    } else if detail.contains("OUT_OF_BOUNDS") || detail.contains("invalid click") {
+        Refusal::OutOfBounds
+    } else if detail.contains("STALE_FRAME") {
+        Refusal::StaleFrame
+    } else if detail.contains("BUDGET_EXHAUSTED") || detail.contains("BUDGET_EXCEEDED") {
+        Refusal::BudgetExceeded
+    } else {
+        Refusal::Policy
+    }
+}
 /// One serialization point for all authority transitions and publication.
 pub struct Server {
     config: Config,
@@ -165,6 +195,7 @@ pub struct Server {
     observers: BTreeSet<Endpoint>,
     subscriptions: BTreeSet<(Endpoint, String)>,
     unsubscribed: BTreeSet<(Endpoint, String)>,
+    human_inputs: BTreeMap<String, HumanInputPending>,
     tool_state: tools::ToolState,
     capture: crate::record::capture::Host,
 }
@@ -206,6 +237,7 @@ impl Server {
         // Artifacts are validated by recovery before they are considered here.
         let mut envelopes = Vec::new();
         let mut seen = BTreeSet::new();
+        let mut human_inputs = BTreeMap::new();
         let mut tool_state = tools::ToolState::default();
         for seq in 1..=authority.state().core_seq {
             let event: serde_json::Value = serde_json::from_slice(&fs::read(
@@ -222,6 +254,47 @@ impl Server {
                         if env.session_id == config.session_id
                             && env.to.component == Component::Core
                         {
+                            if event["input"]["event"] == "HumanInput"
+                                && event["outcome"]["reason"].is_null()
+                            {
+                                if let (Some(pid), Some(sid)) = (
+                                    event["input"]["request"]["params"]["proposal_id"].as_str(),
+                                    event["input"]["request"]["params"]["surface_id"].as_str(),
+                                ) {
+                                    human_inputs.insert(
+                                        pid.to_owned(),
+                                        HumanInputPending {
+                                            seq,
+                                            ui: env.from.clone(),
+                                            surface_id: sid.to_owned(),
+                                            ui_proposal_id: pid.to_owned(),
+                                        },
+                                    );
+                                }
+                            } else if env.from.component == Component::Daemon {
+                                match &env.body {
+                                    Command::ActionReceipt(receipt) => {
+                                        human_inputs.remove(&receipt.proposal_id);
+                                    }
+                                    Command::SurfaceEvent(ev) => {
+                                        if let SurfaceEvent::Case4(e) = ev.as_ref() {
+                                            if e.data.detail.starts_with("input failed:") {
+                                                if let Some(pid) = human_inputs
+                                                    .iter()
+                                                    .filter(|(_, h)| {
+                                                        h.surface_id == e.data.surface_id
+                                                    })
+                                                    .min_by_key(|(_, h)| h.seq)
+                                                    .map(|(k, _)| k.clone())
+                                                {
+                                                    human_inputs.remove(&pid);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
                             if event["outcome"]["reason"].is_null() {
                                 tool_state.retain(&env.body);
                             }
@@ -259,6 +332,7 @@ impl Server {
             observers: BTreeSet::new(),
             subscriptions: BTreeSet::new(),
             unsubscribed: BTreeSet::new(),
+            human_inputs,
             tool_state,
             capture,
         })
@@ -872,6 +946,7 @@ impl Server {
                             .apply_with_witnesses(Input::SurfaceNotice, vec![boundary])?,
                     ),
                 };
+                let settled_seq = out.as_ref().map(|o| o.core_seq);
                 if let Some(out) = out {
                     if let Some(reason) = out.reason {
                         return self.refuse_at(
@@ -897,6 +972,34 @@ impl Server {
                     _ => env.body.clone(),
                 };
                 self.fanout_at(now_ns, body);
+                if let (SurfaceEvent::Case4(e), Some(seq)) = (event.as_ref(), settled_seq) {
+                    if e.data.detail.starts_with("input failed:") {
+                        if let Some(pid) = self
+                            .human_inputs
+                            .iter()
+                            .filter(|(_, h)| h.surface_id == e.data.surface_id)
+                            .min_by_key(|(_, h)| h.seq)
+                            .map(|(k, _)| k.clone())
+                        {
+                            if let Some(human) = self.human_inputs.remove(&pid) {
+                                let reason = adapter_input_refusal(&e.data.detail);
+                                if self.connections.contains_key(&human.ui) {
+                                    if let Err(error) = self.refuse_at(
+                                        now_ns,
+                                        &human.ui,
+                                        &human.ui_proposal_id,
+                                        reason,
+                                        seq,
+                                    ) {
+                                        if error.downcast_ref::<SendFailure>().is_none() {
+                                            return Err(error);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 #[cfg(test)]
                 crate::journal::STAGE_TIMINGS.with(|cell| {
                     let mut s = cell.get();
@@ -982,6 +1085,9 @@ impl Server {
                 self.send_at(now_ns, &daemon, Command::SurfaceRequest(Box::new(body)))?;
             }
             (Component::Daemon, Command::ActionReceipt(receipt)) => {
+                if let Some(human) = self.human_inputs.remove(&receipt.proposal_id) {
+                    return self.human_input_receipt_at(now_ns, &env, &human, receipt, boundary);
+                }
                 if !receipt.error.is_empty() && receipt.verified {
                     let out = self.authority.apply_with_witnesses(
                         Input::Refuse {
@@ -1292,7 +1398,7 @@ impl Server {
             .ok_or_else(|| invalid("no daemon"))?
             .endpoint
             .clone();
-        if !self.connections.contains_key(&daemon) {
+        if !self.connections.contains_key(&daemon) || self.human_inputs.len() >= 100_000 {
             let out = self.authority.apply_with_witnesses(
                 Input::Refuse {
                     reason: Refusal::Policy,
@@ -1322,7 +1428,48 @@ impl Server {
                 out.core_seq,
             );
         }
-        self.send_at(now_ns, &daemon, env.body.clone())?;
+        let daemon_proposal_id = if input_req.params.proposal_id.is_empty() {
+            format!("human-input-{}", out.core_seq)
+        } else {
+            input_req.params.proposal_id.clone()
+        };
+        let daemon_body =
+            Command::SurfaceRequest(Box::new(crate::wire::payload::SurfaceRequest::Case5(
+                Box::new(crate::wire::payload::SurfaceRequestCase5 {
+                    schema: crate::wire::payload::SurfaceRequestCase0Schema::Value,
+                    op: crate::wire::payload::SurfaceRequestCase5Op::Value,
+                    params: crate::wire::payload::SurfaceRequestCase5Params {
+                        surface_id: input_req.params.surface_id.clone(),
+                        proposal_id: daemon_proposal_id.clone(),
+                        action: input_req.params.action.clone(),
+                    },
+                }),
+            )));
+        self.human_inputs.insert(
+            daemon_proposal_id.clone(),
+            HumanInputPending {
+                seq: out.core_seq,
+                ui: env.from.clone(),
+                surface_id: input_req.params.surface_id.clone(),
+                ui_proposal_id: input_req.params.proposal_id.clone(),
+            },
+        );
+        if let Err(error) = self.send_at(now_ns, &daemon, daemon_body) {
+            self.human_inputs.remove(&daemon_proposal_id);
+            if error.downcast_ref::<SendFailure>().is_none() {
+                return Err(error);
+            }
+            let failed = self.authority.apply(Input::Refuse {
+                reason: Refusal::Policy,
+            })?;
+            return self.refuse_at(
+                now_ns,
+                &env.from,
+                &input_req.params.proposal_id,
+                Refusal::Policy,
+                failed.core_seq,
+            );
+        }
         let verdict = serde_json::from_value(serde_json::json!({
             "schema": "action_verdict/v0.2",
             "proposal_id": input_req.params.proposal_id,
@@ -1330,6 +1477,44 @@ impl Server {
             "core_seq": out.core_seq,
         }))?;
         self.send_at(now_ns, &env.from, Command::ActionVerdict(Box::new(verdict)))
+    }
+    fn human_input_receipt_at(
+        &mut self,
+        now_ns: u64,
+        env: &Envelope,
+        human: &HumanInputPending,
+        receipt: &crate::wire::payload::ActionReceipt,
+        boundary: Witness,
+    ) -> Result<()> {
+        if receipt.verified || !receipt.error.is_empty() {
+            let reason = if receipt.verified {
+                Refusal::Policy
+            } else {
+                adapter_input_refusal(&receipt.error)
+            };
+            let out = self
+                .authority
+                .apply_with_witnesses(Input::Refuse { reason }, vec![boundary])?;
+            self.tool_state.retain(&env.body);
+            if self.connections.contains_key(&human.ui) {
+                if let Err(error) = self.refuse_at(
+                    now_ns,
+                    &human.ui,
+                    &human.ui_proposal_id,
+                    reason,
+                    out.core_seq,
+                ) {
+                    if error.downcast_ref::<SendFailure>().is_none() {
+                        return Err(error);
+                    }
+                }
+            }
+            return Ok(());
+        }
+        self.authority
+            .apply_with_witnesses(Input::SurfaceNotice, vec![boundary])?;
+        self.tool_state.retain(&env.body);
+        Ok(())
     }
     fn unsupported_at(&mut self, now_ns: u64, env: &Envelope, boundary: Witness) -> Result<()> {
         let value = serde_json::to_value(&env.body)?;

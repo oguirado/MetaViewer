@@ -429,7 +429,14 @@ fn ui_human_input_requires_human_control_and_forwards_when_admitted() {
         .find(|p| p.endpoint == ui_ep)
         .unwrap()
         .clone();
-    let ready_ui = tokio::runtime::Builder::new_current_thread()
+    let daemon_ep = registration("daemon").endpoint;
+    let daemon_reg = config
+        .peers
+        .iter()
+        .find(|p| p.endpoint == daemon_ep)
+        .unwrap()
+        .clone();
+    let (ready_ui, ready_daemon) = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap()
@@ -468,10 +475,47 @@ fn ui_human_input_requires_human_control_and_forwards_when_admitted() {
             .await
             .unwrap();
             writer.await.unwrap();
-            peer
+
+            let d_policy = HandshakePolicy::new(
+                uid,
+                daemon_reg.endpoint.clone(),
+                config.core.endpoint.clone(),
+                config.session_id.clone(),
+                daemon_reg.hello.clone(),
+            )
+            .unwrap();
+            let d_hello = decode_envelope(
+                &json!({
+                    "schema": "envelope/v0.2",
+                    "msg_id": "hello-daemon",
+                    "ts_ns": 0,
+                    "from": daemon_reg.endpoint,
+                    "to": config.core.endpoint,
+                    "session_id": config.session_id,
+                    "seq": 1,
+                    "nonce": "hello-daemon",
+                    "body": daemon_reg.hello,
+                })
+                .to_string(),
+            )
+            .unwrap();
+            let (mut da, mut db) = UnixStream::pair().unwrap();
+            let d_writer =
+                tokio::spawn(async move { write_frame(&mut da, &d_hello).await.unwrap() });
+            let d_peer = handshake_at(
+                &mut db,
+                &d_policy,
+                &WireLimits::default(),
+                tokio::time::Instant::now(),
+            )
+            .await
+            .unwrap();
+            d_writer.await.unwrap();
+            (peer, d_peer)
         });
 
     let mut seq = 1u64;
+    let mut d_seq = 1u64;
     let mut send_ui = |server: &mut Server, body: serde_json::Value| {
         seq += 1;
         let env = decode_envelope(
@@ -490,6 +534,27 @@ fn ui_human_input_requires_human_control_and_forwards_when_admitted() {
         )
         .unwrap();
         server.route_at(seq * 1000, &ready_ui, 1, env).unwrap();
+    };
+    let mut send_daemon = |server: &mut Server, body: serde_json::Value| {
+        d_seq += 1;
+        let env = decode_envelope(
+            &json!({
+                "schema": "envelope/v0.2",
+                "msg_id": format!("daemon-msg-{d_seq}"),
+                "ts_ns": 100_000 + d_seq * 1000,
+                "from": daemon_ep,
+                "to": config.core.endpoint,
+                "session_id": config.session_id,
+                "seq": d_seq,
+                "nonce": format!("daemon-nonce-{d_seq}"),
+                "body": body,
+            })
+            .to_string(),
+        )
+        .unwrap();
+        server
+            .route_at(100_000 + d_seq * 1000, &ready_daemon, 1, env)
+            .unwrap();
     };
 
     // 1. Negative control: while surface is agent-controlled, UI input is refused with LOCKED_BY_OTHER.
@@ -553,10 +618,99 @@ fn ui_human_input_requires_human_control_and_forwards_when_admitted() {
         assert_eq!(verdict["decision"], "admitted");
         assert_eq!(verdict["proposal_id"], id);
         let forwarded = serde_json::to_value(daemon_rx.try_recv().unwrap().body).unwrap();
+        assert_eq!(forwarded["schema"], "surface_request/v0.2");
         assert_eq!(forwarded["op"], "input");
+        assert_eq!(forwarded["params"]["surface_id"], "srf-1");
         assert_eq!(forwarded["params"]["proposal_id"], id);
         assert_eq!(forwarded["params"]["action"], action);
     }
+
+    // 3b. Daemon outcomes for admitted human inputs settle against UI and never emit action_verdict to daemon.
+    let frame_ref = json!({
+        "schema": "frame_ref/v0.2",
+        "surface_id": "srf-1",
+        "generation": 1,
+        "tick": 1,
+        "ts_ns": 1000,
+        "width": 1280,
+        "height": 720,
+        "format": "rgb24",
+        "ramws_path": "/dev/shm/mv-hi-frame.rgb",
+        "sha256": sha256_hex(b"seed-human-input"),
+        "capture_us": 100
+    });
+    send_daemon(
+        &mut server,
+        json!({
+            "schema": "surface_event/v0.2",
+            "event": "input_applied",
+            "data": { "surface_id": "srf-1", "proposal_id": "hi-key-1" }
+        }),
+    );
+    let applied_ev = serde_json::to_value(ui_rx.try_recv().unwrap().body).unwrap();
+    assert_eq!(applied_ev["schema"], "surface_event/v0.2");
+    assert_eq!(applied_ev["event"], "input_applied");
+    assert_eq!(applied_ev["data"]["proposal_id"], "hi-key-1");
+    assert!(daemon_rx.try_recv().is_err());
+
+    send_daemon(
+        &mut server,
+        json!({
+            "schema": "action_receipt/v0.2",
+            "proposal_id": "hi-key-1",
+            "executed_at_ns": 2000,
+            "after_frame": frame_ref,
+            "verified": false,
+            "verification": { "method": "pixel", "detail": "applied" },
+            "error": ""
+        }),
+    );
+    assert!(ui_rx.try_recv().is_err());
+    assert!(daemon_rx.try_recv().is_err());
+
+    send_daemon(
+        &mut server,
+        json!({
+            "schema": "action_receipt/v0.2",
+            "proposal_id": "hi-type-1",
+            "executed_at_ns": 3000,
+            "after_frame": frame_ref,
+            "verified": false,
+            "verification": { "method": "pixel", "detail": "failed" },
+            "error": "input failed: SURFACE_NOT_AGENT_CONTROLLED: human control blocks agent input"
+        }),
+    );
+    let adapter_refusal = serde_json::to_value(ui_rx.try_recv().unwrap().body).unwrap();
+    assert_eq!(adapter_refusal["schema"], "action_verdict/v0.2");
+    assert_eq!(adapter_refusal["decision"], "refused");
+    assert_eq!(adapter_refusal["proposal_id"], "hi-type-1");
+    assert_eq!(
+        adapter_refusal["reason_code"],
+        "SURFACE_NOT_AGENT_CONTROLLED"
+    );
+    assert!(daemon_rx.try_recv().is_err());
+
+    send_daemon(
+        &mut server,
+        json!({
+            "schema": "surface_event/v0.2",
+            "event": "error",
+            "data": {
+                "surface_id": "srf-1",
+                "code": "unsupported",
+                "detail": "input failed: unsupported: input action"
+            }
+        }),
+    );
+    let err_ev = serde_json::to_value(ui_rx.try_recv().unwrap().body).unwrap();
+    assert_eq!(err_ev["schema"], "surface_event/v0.2");
+    assert_eq!(err_ev["event"], "error");
+    let err_verdict = serde_json::to_value(ui_rx.try_recv().unwrap().body).unwrap();
+    assert_eq!(err_verdict["schema"], "action_verdict/v0.2");
+    assert_eq!(err_verdict["decision"], "refused");
+    assert_eq!(err_verdict["proposal_id"], "hi-click-1");
+    assert_eq!(err_verdict["reason_code"], "POLICY");
+    assert!(daemon_rx.try_recv().is_err());
 
     // 4. Negative controls: duplicate proposal_id, out-of-bounds click, and disallowed scroll/wait.
     send_ui(
@@ -623,7 +777,7 @@ fn ui_human_input_requires_human_control_and_forwards_when_admitted() {
     assert_eq!(after_release["reason_code"], "LOCKED_BY_OTHER");
     assert!(daemon_rx.try_recv().is_err());
 
-    // Verify journal replay reproduces identical snapshot.
+    // Verify journal replay reproduces identical snapshot and recovers pending human_inputs.
     let snapshot = server.snapshot().unwrap();
     let session_root = root.join("sessions/human-input-session");
     let replayed =
@@ -631,5 +785,50 @@ fn ui_human_input_requires_human_control_and_forwards_when_admitted() {
     assert_eq!(replayed.state.snapshot().unwrap(), snapshot);
 
     drop(server);
+    let mut recovered = Server::open(config.clone(), &root, uid).unwrap();
+    assert!(recovered.human_inputs.contains_key("hi-scroll-1"));
+    assert!(!recovered.human_inputs.contains_key("hi-key-1"));
+    assert!(!recovered.human_inputs.contains_key("hi-type-1"));
+    assert!(!recovered.human_inputs.contains_key("hi-click-1"));
+    let (rec_ui_tx, rec_ui_rx) = mpsc::sync_channel(16);
+    recovered.connections.insert(
+        ui_ep,
+        Connection {
+            id: 3,
+            epoch: 1,
+            queue: rec_ui_tx,
+            terminal: Arc::new(Mutex::new(None)),
+        },
+    );
+    let (rec_daemon_tx, rec_daemon_rx) = mpsc::sync_channel(16);
+    recovered.connections.insert(
+        registration("daemon").endpoint,
+        Connection {
+            id: 4,
+            epoch: 1,
+            queue: rec_daemon_tx,
+            terminal: Arc::new(Mutex::new(None)),
+        },
+    );
+    send_daemon(
+        &mut recovered,
+        json!({
+            "schema": "action_receipt/v0.2",
+            "proposal_id": "hi-scroll-1",
+            "executed_at_ns": 4000,
+            "after_frame": frame_ref,
+            "verified": false,
+            "verification": { "method": "pixel", "detail": "unsupported" },
+            "error": "input failed: unsupported: input action"
+        }),
+    );
+    let rec_verdict = serde_json::to_value(rec_ui_rx.try_recv().unwrap().body).unwrap();
+    assert_eq!(rec_verdict["schema"], "action_verdict/v0.2");
+    assert_eq!(rec_verdict["decision"], "refused");
+    assert_eq!(rec_verdict["proposal_id"], "hi-scroll-1");
+    assert_eq!(rec_verdict["reason_code"], "POLICY");
+    assert!(rec_daemon_rx.try_recv().is_err());
+
+    drop(recovered);
     let _ = fs::remove_dir_all(&root);
 }
