@@ -420,14 +420,14 @@ fn truncated_and_oversized_journals_refuse() {
     let mut bytes = fs::read(&path).unwrap();
     bytes.pop();
     fs::write(&path, &bytes).unwrap();
-    assert!(scan(&path, root).is_err());
+    assert_eq!(scan(&path, root).unwrap_err(), JournalError::MissingLf);
     fs::OpenOptions::new()
         .write(true)
         .open(&path)
         .unwrap()
         .set_len(64 * 1024 * 1024 + 1)
         .unwrap();
-    assert!(scan(&path, root).is_err());
+    assert_eq!(scan(&path, root).unwrap_err(), JournalError::Oversize);
 }
 
 #[test]
@@ -439,12 +439,13 @@ fn uncommitted_artifact_and_missing_committed_event_stop_recovery() {
     let path = t.0.join("sessions/session-1/journal.jsonl");
     let root = path.parent().unwrap();
     fs::write(root.join("events/2.json"), b"uncommitted").unwrap();
-    assert!(matches!(
-        Authority::recover(&path, root),
-        Err(JournalError::Unsealed)
-    ));
-    fs::remove_file(root.join("events/2.json")).unwrap();
+    assert!(matches!(scan(&path, root), Err(JournalError::Unsealed)));
+    let rec = Authority::recover(&path, root).unwrap();
+    assert_eq!(rec.state().core_seq, 1);
+    drop(rec);
+    assert!(!root.join("events/2.json").exists());
     fs::remove_file(root.join("events/1.json")).unwrap();
+    assert!(Authority::recover(&path, root).is_err());
     assert!(scan(&path, root).is_err());
 }
 #[test]

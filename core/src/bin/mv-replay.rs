@@ -44,6 +44,12 @@ fn main() {
         std::process::exit(match e {
             JournalError::Duplicate => 3,
             JournalError::Witness => 4,
+            JournalError::Empty
+            | JournalError::Blank
+            | JournalError::Utf8Bom
+            | JournalError::MissingLf
+            | JournalError::Oversize
+            | JournalError::Corrupt => 2,
             _ => 2,
         });
     }

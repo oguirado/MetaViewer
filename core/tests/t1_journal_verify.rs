@@ -52,10 +52,6 @@ fn orphan_is_unsealed_in_scan_recover_and_cli() {
         scan(&f.path, &f.root),
         Err(JournalError::Unsealed)
     ));
-    assert!(matches!(
-        Journal::recover(&f.path, &f.root),
-        Err(JournalError::Unsealed)
-    ));
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_mv-replay"))
         .arg("--journal")
         .arg(&f.path)
@@ -66,6 +62,11 @@ fn orphan_is_unsealed_in_scan_recover_and_cli() {
         .unwrap();
     assert_eq!(out.status.code(), Some(2));
     assert!(out.stdout.is_empty());
+    let (recovered, state) = Journal::recover(&f.path, &f.root).unwrap();
+    assert_eq!(state.core_seq, 1);
+    drop(recovered);
+    assert!(!f.root.join("events/2.json").exists());
+    assert!(scan(&f.path, &f.root).is_ok());
 }
 #[test]
 fn invalid_transition_is_refused_before_write_without_poison() {
@@ -112,10 +113,11 @@ fn refused_recover_preserves_checkpoint_identity() {
     f.populated();
     let before = f.checkpoint();
     fs::write(f.root.join("events/2.json"), b"orphan").unwrap();
-    assert!(matches!(
-        Journal::recover(&f.path, &f.root),
-        Err(JournalError::Unsealed)
-    ));
+    let (recovered, _) = Journal::recover(&f.path, &f.root).unwrap();
+    drop(recovered);
+    assert_eq!(f.checkpoint(), before);
+    fs::remove_file(f.root.join("events/1.json")).unwrap();
+    assert!(Journal::recover(&f.path, &f.root).is_err());
     assert_eq!(f.checkpoint(), before);
 }
 #[test]
@@ -423,7 +425,23 @@ fn repeated_uncommitted_retains_do_not_hold_unbounded_fds() {
     let f = Fixture::new();
     let state = CoreState::session("session-1").unwrap();
     let mut j = Journal::create(&f.dir, &state).unwrap();
-    let fd_count = || fs::read_dir("/proc/self/fd").unwrap().count();
+    let canonical_dir = f.dir.canonicalize().ok();
+    let fd_count = || {
+        fs::read_dir("/proc/self/fd")
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                fs::read_link(e.path())
+                    .map(|target| {
+                        target.starts_with(&f.dir)
+                            || canonical_dir
+                                .as_ref()
+                                .is_some_and(|c| target.starts_with(c))
+                    })
+                    .unwrap_or(false)
+            })
+            .count()
+    };
     let before = fd_count();
     for i in 0..2048u32 {
         let bytes = format!("uncommitted-fd-payload-{i}").into_bytes();
@@ -432,8 +450,8 @@ fn repeated_uncommitted_retains_do_not_hold_unbounded_fds() {
     }
     let after = fd_count();
     assert!(
-        after.saturating_sub(before) < 64,
-        "uncommitted retains grew open fds by {} (>= 64)",
+        after < 64 && after.saturating_sub(before) < 64,
+        "uncommitted retains grew open fixture fds to {after} (delta {} >= 64)",
         after.saturating_sub(before)
     );
 }
@@ -466,4 +484,260 @@ fn flush_sync_on_poisoned_journal_returns_poisoned() {
     let out = state.apply(&Input::Connect).unwrap();
     assert!(j.append(&Input::Connect, &out, &state, vec![]).is_err());
     assert_eq!(j.flush_sync(), Err(JournalError::Poisoned));
+}
+
+#[test]
+fn idle_worker_timer_flushes_staged_frame_within_window_with_10x_margin() {
+    use metaviewer_core::admission::{Frame, Surface};
+    use metaviewer_core::journal::sha256_hex;
+    use metaviewer_core::{Component, Endpoint};
+    use std::time::{Duration, Instant};
+
+    let f = Fixture::new();
+    let mut state = CoreState::session("session-1").unwrap();
+    let mut j = Journal::create(&f.dir, &state).unwrap();
+    let out1 = state.apply(&Input::Connect).unwrap();
+    j.append(&Input::Connect, &out1, &state, vec![]).unwrap();
+    let sw = j.retain_witness(b"surface-idle-seed").unwrap();
+    let s_in = Input::Surface {
+        id: "srf-idle".into(),
+        surface: Surface {
+            display: ":42".into(),
+            owner: Endpoint {
+                component: Component::Agent,
+                instance: "agent-1".into(),
+            },
+            agent_controlled: true,
+            live: true,
+            frame: None,
+            refresh_after: None,
+            allowed_verbs: vec![],
+        },
+    };
+    let out2 = state.apply(&s_in).unwrap();
+    j.append(&s_in, &out2, &state, vec![sw]).unwrap();
+    assert_eq!(j.completed_sync_count(), 2);
+
+    // Append a single frame (< FRAME_SYNC_MAX_BATCH = 8) right after the non-frame sync.
+    let pixels = b"idle-frame-1-payload";
+    let sha = sha256_hex(pixels);
+    let fw = j.retain_frame_witness(&sha, pixels).unwrap();
+    let f_in = Input::Frame {
+        surface_id: "srf-idle".into(),
+        frame: Frame {
+            sha256: sha,
+            generation: 1,
+            width: 64,
+            height: 64,
+        },
+    };
+    let out3 = state.apply(&f_in).unwrap();
+    j.append(&f_in, &out3, &state, vec![fw]).unwrap();
+
+    // Immediately after append, checkpoint.json is still at count 2.
+    let cp_initial: serde_json::Value =
+        serde_json::from_slice(&fs::read(f.root.join("checkpoint.json")).unwrap()).unwrap();
+    assert_eq!(cp_initial["count"], 2);
+
+    // Wait with >= 10x margin (10 * 50ms = 500ms) without calling append or flush_sync.
+    let deadline = Instant::now() + Duration::from_millis(500);
+    loop {
+        if j.completed_sync_count() == 3 && !f.root.join("checkpoint.next").exists() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "idle worker timer did not flush trailing frame within 10x window (500ms)"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    let cp_after_idle: serde_json::Value =
+        serde_json::from_slice(&fs::read(f.root.join("checkpoint.json")).unwrap()).unwrap();
+    assert_eq!(cp_after_idle["count"], 3);
+    assert!(j.completed_sync_batches() >= 1);
+    assert_eq!(scan(&f.path, &f.root).unwrap().state, state);
+}
+
+#[test]
+fn witness_sync_failure_latches_poison_and_blocks_retry() {
+    use metaviewer_core::journal::sha256_hex;
+
+    let f = Fixture::new();
+    let mut state = CoreState::session("session-1").unwrap();
+    let mut j = Journal::create(&f.dir, &state).unwrap();
+
+    let payload = b"witness-sync-failure-bytes";
+    let sha = sha256_hex(payload);
+    let artifacts_dir = f.root.join("artifacts");
+    fs::remove_dir_all(&artifacts_dir).unwrap();
+    assert_eq!(j.retain_witness(payload), Err(JournalError::Io));
+
+    // Recreate artifacts directory and write the artifact file; retry must still fail closed with Poisoned.
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&artifacts_dir)
+        .unwrap();
+    fs::write(artifacts_dir.join(&sha), payload).unwrap();
+    assert_eq!(j.retain_witness(payload), Err(JournalError::Poisoned));
+    assert_eq!(
+        j.retain_verified_witness(&sha, payload),
+        Err(JournalError::Poisoned)
+    );
+    assert_eq!(
+        j.retain_frame_witness(&sha, payload),
+        Err(JournalError::Poisoned)
+    );
+    let out = state.apply(&Input::Connect).unwrap();
+    assert_eq!(
+        j.append(&Input::Connect, &out, &state, vec![]),
+        Err(JournalError::Poisoned)
+    );
+    assert_eq!(j.flush_sync(), Err(JournalError::Poisoned));
+}
+
+#[test]
+fn torn_or_uncommitted_tail_rolls_back_to_committed_prefix_on_recover() {
+    use metaviewer_core::admission::{Frame, Surface};
+    use metaviewer_core::journal::sha256_hex;
+    use metaviewer_core::{Component, Endpoint};
+
+    let f = Fixture::new();
+    let mut state = CoreState::session("session-1").unwrap();
+    let mut j = Journal::create(&f.dir, &state).unwrap();
+    let out1 = state.apply(&Input::Connect).unwrap();
+    j.append(&Input::Connect, &out1, &state, vec![]).unwrap();
+
+    let sw = j.retain_witness(b"surface-torn-tail").unwrap();
+    let s_in = Input::Surface {
+        id: "srf-rec".into(),
+        surface: Surface {
+            display: ":42".into(),
+            owner: Endpoint {
+                component: Component::Agent,
+                instance: "agent-1".into(),
+            },
+            agent_controlled: true,
+            live: true,
+            frame: None,
+            refresh_after: None,
+            allowed_verbs: vec![],
+        },
+    };
+    let out2 = state.apply(&s_in).unwrap();
+    j.append(&s_in, &out2, &state, vec![sw]).unwrap();
+    let committed_state = state.clone();
+    let committed_cp = fs::read(f.root.join("checkpoint.json")).unwrap();
+
+    let f_bytes = b"frame-torn-tail";
+    let f_sha = sha256_hex(f_bytes);
+    let fw = j.retain_frame_witness(&f_sha, f_bytes).unwrap();
+    let f_in = Input::Frame {
+        surface_id: "srf-rec".into(),
+        frame: Frame {
+            sha256: f_sha,
+            generation: 1,
+            width: 64,
+            height: 64,
+        },
+    };
+    let out3 = state.apply(&f_in).unwrap();
+    j.append(&f_in, &out3, &state, vec![fw]).unwrap();
+    drop(j);
+
+    // Simulate a crash where checkpoint.json remained at count=2, checkpoint.next was not
+    // promoted, and line 3 of journal.jsonl was torn (missing trailing LF + truncated JSON).
+    fs::write(f.root.join("checkpoint.json"), &committed_cp).unwrap();
+    let mut j_bytes = fs::read(&f.path).unwrap();
+    j_bytes.truncate(j_bytes.len() - 5);
+    fs::write(&f.path, &j_bytes).unwrap();
+    assert_eq!(scan(&f.path, &f.root).unwrap_err(), JournalError::MissingLf);
+    assert!(f.root.join("events/3.json").exists());
+
+    let (recovered, recovered_state) = Journal::recover(&f.path, &f.root).unwrap();
+    assert_eq!(recovered_state, committed_state);
+    drop(recovered);
+    assert!(!f.root.join("events/3.json").exists());
+    assert_eq!(scan(&f.path, &f.root).unwrap().state, committed_state);
+}
+
+#[test]
+fn framing_and_header_corruption_causes_are_distinguished_with_cli_exit_2() {
+    let f = Fixture::new();
+    f.populated();
+    let valid_bytes = fs::read(&f.path).unwrap();
+    let valid_text = String::from_utf8(valid_bytes.clone()).unwrap();
+    let (header_line, record_line) = valid_text.trim_end().split_once('\n').unwrap();
+
+    let run_cli = |journal_path: &PathBuf, root_path: &PathBuf| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_mv-replay"))
+            .arg("--journal")
+            .arg(journal_path)
+            .arg("--witness-root")
+            .arg(root_path)
+            .arg("--verify-only")
+            .output()
+            .unwrap()
+    };
+
+    // 1. Empty file
+    fs::write(&f.path, b"").unwrap();
+    assert_eq!(scan(&f.path, &f.root).unwrap_err(), JournalError::Empty);
+    assert_eq!(JournalError::Empty.corruption_cause(), Some("empty"));
+    let out = run_cli(&f.path, &f.root);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("Corrupt(empty)"));
+
+    // 2. Blank header and blank record line
+    fs::write(&f.path, b"   \t\r\n").unwrap();
+    assert_eq!(scan(&f.path, &f.root).unwrap_err(), JournalError::Blank);
+    fs::write(&f.path, format!("{header_line}\n   \n")).unwrap();
+    assert_eq!(scan(&f.path, &f.root).unwrap_err(), JournalError::Blank);
+    assert_eq!(JournalError::Blank.corruption_cause(), Some("blank"));
+    let out = run_cli(&f.path, &f.root);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("Corrupt(blank)"));
+
+    // 3. UTF-8 BOM on header and on record line
+    let mut bom_header = vec![0xef, 0xbb, 0xbf];
+    bom_header.extend_from_slice(&valid_bytes);
+    fs::write(&f.path, &bom_header).unwrap();
+    assert_eq!(scan(&f.path, &f.root).unwrap_err(), JournalError::Utf8Bom);
+    let mut bom_record = format!("{header_line}\n").into_bytes();
+    bom_record.extend_from_slice(&[0xef, 0xbb, 0xbf]);
+    bom_record.extend_from_slice(record_line.as_bytes());
+    bom_record.push(b'\n');
+    fs::write(&f.path, &bom_record).unwrap();
+    assert_eq!(scan(&f.path, &f.root).unwrap_err(), JournalError::Utf8Bom);
+    assert_eq!(JournalError::Utf8Bom.corruption_cause(), Some("utf8_bom"));
+    let out = run_cli(&f.path, &f.root);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("Corrupt(utf8_bom)"));
+
+    // 4. Torn / missing-LF on header and on record line
+    fs::write(&f.path, header_line.as_bytes()).unwrap();
+    assert_eq!(scan(&f.path, &f.root).unwrap_err(), JournalError::MissingLf);
+    fs::write(&f.path, format!("{header_line}\n{record_line}")).unwrap();
+    assert_eq!(scan(&f.path, &f.root).unwrap_err(), JournalError::MissingLf);
+    assert_eq!(
+        JournalError::MissingLf.corruption_cause(),
+        Some("missing_lf")
+    );
+    let out = run_cli(&f.path, &f.root);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("Corrupt(missing_lf)"));
+
+    // 5. Oversize line (> MAX_LINE = 1 MiB)
+    let mut oversize_line = vec![b'x'; 1024 * 1024 + 2];
+    oversize_line.push(b'\n');
+    fs::write(&f.path, &oversize_line).unwrap();
+    assert_eq!(scan(&f.path, &f.root).unwrap_err(), JournalError::Oversize);
+    assert_eq!(JournalError::Oversize.corruption_cause(), Some("oversize"));
+    let out = run_cli(&f.path, &f.root);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("Corrupt(oversize)"));
+
+    // Restore valid journal and verify normal round-trip negative control.
+    fs::write(&f.path, &valid_bytes).unwrap();
+    assert!(scan(&f.path, &f.root).is_ok());
 }

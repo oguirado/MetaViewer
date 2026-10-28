@@ -51,7 +51,7 @@ use crate::admission::{
 #[cfg(test)]
 use crate::journal::sha256_hex;
 use crate::journal::{VerifiedPixels, Witness};
-use crate::wire::payload::{FrameRef, Hello, SurfaceEvent};
+use crate::wire::payload::{FrameRef, Hello, SurfaceEvent, SurfaceState};
 use crate::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -162,6 +162,7 @@ struct HumanInputPending {
     ui: Endpoint,
     surface_id: String,
     ui_proposal_id: String,
+    case4_expired: bool,
 }
 fn adapter_input_refusal(detail: &str) -> Refusal {
     if detail.contains("SURFACE_NOT_HUMAN_CONTROLLED") || detail.contains("LOCKED_BY_OTHER") {
@@ -224,9 +225,15 @@ impl Server {
         let authority = if path.exists() {
             match Authority::recover(&path, &root) {
                 Ok(authority) => authority,
-                Err(crate::journal::JournalError::Corrupt)
-                    if legacy_destroy_archive(&path, &root) =>
-                {
+                Err(
+                    crate::journal::JournalError::Corrupt
+                    | crate::journal::JournalError::Empty
+                    | crate::journal::JournalError::Blank
+                    | crate::journal::JournalError::Utf8Bom
+                    | crate::journal::JournalError::MissingLf
+                    | crate::journal::JournalError::Oversize
+                    | crate::journal::JournalError::Unsealed,
+                ) if legacy_destroy_archive(&path, &root) => {
                     return Err(invalid("UPGRADE-REQUIRED: pre-tombstone journal contains destroyed surfaces; stop peers, archive the complete session directory unchanged, and start a new session_id; do not replay this archive as current state"));
                 }
                 Err(error) => return Err(error.into()),
@@ -262,32 +269,81 @@ impl Server {
                             if event["input"]["event"] == "HumanInput"
                                 && event["outcome"]["reason"].is_null()
                             {
-                                if let (Some(pid), Some(sid)) = (
+                                if let (Some(raw_pid), Some(sid)) = (
                                     event["input"]["request"]["params"]["proposal_id"].as_str(),
                                     event["input"]["request"]["params"]["surface_id"].as_str(),
                                 ) {
+                                    let pid = if raw_pid.is_empty() {
+                                        format!("human-input-{seq}")
+                                    } else {
+                                        raw_pid.to_owned()
+                                    };
                                     human_inputs.insert(
-                                        pid.to_owned(),
+                                        pid,
                                         HumanInputPending {
                                             seq,
                                             ui: env.from.clone(),
                                             surface_id: sid.to_owned(),
-                                            ui_proposal_id: pid.to_owned(),
+                                            ui_proposal_id: raw_pid.to_owned(),
+                                            case4_expired: false,
                                         },
                                     );
+                                }
+                            } else if event["input"]["event"] == "SurfaceRequest"
+                                && event["outcome"]["reason"].is_null()
+                                && event["input"]["request"]["op"] == "destroy"
+                            {
+                                if let Some(sid) =
+                                    event["input"]["request"]["params"]["surface_id"].as_str()
+                                {
+                                    human_inputs.retain(|_, h| h.surface_id != sid);
+                                }
+                            } else if event["input"]["event"] == "ReleaseControl"
+                                && event["outcome"]["reason"].is_null()
+                            {
+                                if let Some(sid) = event["input"]["surface_id"].as_str() {
+                                    for h in human_inputs.values_mut() {
+                                        if h.surface_id == sid {
+                                            h.case4_expired = true;
+                                        }
+                                    }
                                 }
                             } else if env.from.component == Component::Daemon {
                                 match &env.body {
                                     Command::ActionReceipt(receipt) => {
                                         human_inputs.remove(&receipt.proposal_id);
                                     }
-                                    Command::SurfaceEvent(ev) => {
-                                        if let SurfaceEvent::Case4(e) = ev.as_ref() {
-                                            if e.data.detail.starts_with("input failed:") {
+                                    Command::SurfaceEvent(ev)
+                                        if event["outcome"]["reason"].is_null() =>
+                                    {
+                                        match ev.as_ref() {
+                                            SurfaceEvent::Case1(e) => {
+                                                if matches!(
+                                                    e.data.surface.state,
+                                                    SurfaceState::Destroyed | SurfaceState::Lost
+                                                ) {
+                                                    human_inputs.retain(|_, h| {
+                                                        h.surface_id != e.data.surface.surface_id
+                                                    });
+                                                } else if e.data.surface.control
+                                                    != crate::wire::payload::SurfaceControl::Human
+                                                {
+                                                    for h in human_inputs.values_mut() {
+                                                        if h.surface_id == e.data.surface.surface_id
+                                                        {
+                                                            h.case4_expired = true;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            SurfaceEvent::Case4(e)
+                                                if e.data.detail.starts_with("input failed:") =>
+                                            {
                                                 if let Some(pid) = human_inputs
                                                     .iter()
                                                     .filter(|(_, h)| {
                                                         h.surface_id == e.data.surface_id
+                                                            && !h.case4_expired
                                                     })
                                                     .min_by_key(|(_, h)| h.seq)
                                                     .map(|(k, _)| k.clone())
@@ -295,6 +351,7 @@ impl Server {
                                                     human_inputs.remove(&pid);
                                                 }
                                             }
+                                            _ => {}
                                         }
                                     }
                                     _ => {}
@@ -315,6 +372,10 @@ impl Server {
                             if seen.insert((env.from.clone(), env.nonce.clone())) {
                                 envelopes.push(env);
                             }
+                        }
+                    } else if let Ok(meta) = serde_json::from_str::<serde_json::Value>(raw) {
+                        if let Some(pid) = meta["human_input_settled"].as_str() {
+                            human_inputs.remove(pid);
                         }
                     }
                 }
@@ -366,6 +427,18 @@ impl Server {
     pub fn close(&mut self) -> Result<()> {
         self.shutdown()
     }
+    fn settle_human_input_in_journal(&mut self, daemon_pid: &str) -> Result<u64> {
+        let witness_bytes =
+            serde_json::to_vec(&serde_json::json!({"human_input_settled": daemon_pid}))?;
+        let witness = self.authority.retain_witness(&witness_bytes)?;
+        let out = self.authority.apply_with_witnesses(
+            Input::Refuse {
+                reason: Refusal::Policy,
+            },
+            vec![witness],
+        )?;
+        Ok(out.core_seq)
+    }
     fn retire(&mut self, peer: &Endpoint, id: u64) {
         if self.connections.get(peer).is_some_and(|c| c.id == id) {
             self.connections.remove(peer);
@@ -373,6 +446,38 @@ impl Server {
             self.observers.remove(peer);
             self.subscriptions.retain(|(p, _)| p != peer);
             self.unsubscribed.retain(|(p, _)| p != peer);
+            if peer.component == Component::Daemon {
+                let mut pending: Vec<_> =
+                    std::mem::take(&mut self.human_inputs).into_iter().collect();
+                pending.sort_by_key(|(_, h)| h.seq);
+                let now_ns = self.now().unwrap_or(0);
+                for (daemon_pid, human) in pending {
+                    let Ok(core_seq) = self.settle_human_input_in_journal(&daemon_pid) else {
+                        continue;
+                    };
+                    if self.connections.contains_key(&human.ui) {
+                        let _ = self.refuse_at(
+                            now_ns,
+                            &human.ui,
+                            &human.ui_proposal_id,
+                            Refusal::Policy,
+                            core_seq,
+                        );
+                    }
+                }
+            } else {
+                let mut dropped: Vec<_> = self
+                    .human_inputs
+                    .iter()
+                    .filter(|(_, h)| &h.ui == peer)
+                    .map(|(k, h)| (k.clone(), h.seq))
+                    .collect();
+                self.human_inputs.retain(|_, h| &h.ui != peer);
+                dropped.sort_by_key(|(_, seq)| *seq);
+                for (daemon_pid, _) in dropped {
+                    let _ = self.settle_human_input_in_journal(&daemon_pid);
+                }
+            }
         }
     }
     fn now(&self) -> Result<u64> {
@@ -487,8 +592,8 @@ impl Server {
         self.witness_pixels(frame).map(|(witness, _)| witness)
     }
     fn open_anchored_shm_dir(shm_root: &Path, path: &Path) -> Result<(fs::File, PathBuf)> {
-        if !path.starts_with("/dev/shm")
-            || path == Path::new("/dev/shm")
+        if !path.starts_with(shm_root)
+            || path == shm_root
             || path
                 .components()
                 .any(|c| matches!(c, std::path::Component::ParentDir))
@@ -516,7 +621,7 @@ impl Server {
             )
             .map_err(|_| invalid("shared memory prefix unavailable"))?;
         }
-        let relative = path.strip_prefix("/dev/shm")?;
+        let relative = path.strip_prefix(shm_root)?;
         let mut parts = relative.components().peekable();
         while let Some(part) = parts.next() {
             let std::path::Component::Normal(name) = part else {
@@ -831,50 +936,84 @@ impl Server {
     ) -> Result<bool> {
         let mut had_frame = false;
         let len = batch.len();
+        let mut pre_verified: Vec<Option<Result<VerifiedPixels>>> =
+            (0..len).map(|_| None).collect();
         for (i, env) in batch.iter().enumerate() {
-            let mut superseding: Option<&FrameRef> = None;
+            let mut superseding: Option<(usize, &FrameRef)> = None;
             if let Some(frame_i) = Self::daemon_frame_ref(&env.body) {
                 had_frame = true;
-                for next in batch.iter().skip(i + 1).take(len - i - 1) {
+                let mut prev_gen = frame_i.generation;
+                for (j, next) in batch.iter().enumerate().skip(i + 1) {
                     let Some(frame_j) = Self::daemon_frame_ref(&next.body) else {
                         break;
                     };
                     if frame_j.surface_id == frame_i.surface_id {
-                        if frame_j.generation <= frame_i.generation {
+                        let meta_ok = {
+                            let s = server.lock().map_err(|_| invalid("poisoned authority"))?;
+                            let c = s
+                                .connections
+                                .get(ready.endpoint())
+                                .ok_or_else(|| invalid("connection retired"))?;
+                            if c.id != id || c.epoch != epoch {
+                                return Err(invalid("connection superseded"));
+                            }
+                            frame_j.generation > prev_gen && s.can_supersede_frame(epoch, frame_j)
+                        };
+                        if !meta_ok {
                             superseding = None;
                             break;
                         }
-                        if fs::symlink_metadata(&frame_j.ramws_path)
-                            .is_ok_and(|m| m.is_file() && m.len() > 0)
+                        prev_gen = frame_j.generation;
+                        superseding = Some((j, frame_j));
+                    }
+                }
+                if let Some((j, frame_j)) = superseding {
+                    if pre_verified[j].is_none() {
+                        let cand_clone = frame_j.clone();
+                        let res = if cand_clone.width.saturating_mul(cand_clone.height) >= 512 * 512
                         {
-                            superseding = Some(frame_j);
+                            tokio::task::spawn_blocking(move || {
+                                Server::read_shm_pixels(&cand_clone)
+                            })
+                            .await
+                            .map_err(|_| invalid("frame witness worker panicked"))?
+                        } else {
+                            Server::read_shm_pixels(&cand_clone)
+                        };
+                        pre_verified[j] = Some(res);
+                    }
+                    let cand_pixels_ok = pre_verified[j].as_ref().is_some_and(|r| r.is_ok());
+                    if cand_pixels_ok {
+                        let mut s = server.lock().map_err(|_| invalid("poisoned authority"))?;
+                        let c = s
+                            .connections
+                            .get(ready.endpoint())
+                            .ok_or_else(|| invalid("connection retired"))?;
+                        if c.id != id || c.epoch != epoch {
+                            return Err(invalid("connection superseded"));
+                        }
+                        if s.can_supersede_frame(epoch, frame_j)
+                            && s.skip_superseded_frame(ready, epoch, env, frame_i)?
+                        {
+                            continue;
                         }
                     }
                 }
-                if let Some(frame_j) = superseding {
-                    let mut s = server.lock().map_err(|_| invalid("poisoned authority"))?;
-                    let c = s
-                        .connections
-                        .get(ready.endpoint())
-                        .ok_or_else(|| invalid("connection retired"))?;
-                    if c.id != id || c.epoch != epoch {
-                        return Err(invalid("connection superseded"));
-                    }
-                    if s.can_supersede_frame(epoch, frame_j)
-                        && s.skip_superseded_frame(ready, epoch, env, frame_i)?
-                    {
-                        continue;
-                    }
-                }
-                let frame_clone = frame_i.clone();
-                let pre_pixels =
-                    if frame_clone.width.saturating_mul(frame_clone.height) >= 512 * 512 {
-                        tokio::task::spawn_blocking(move || Server::read_shm_pixels(&frame_clone))
+                let pre_pixels = match pre_verified[i].take() {
+                    Some(res) => res,
+                    None => {
+                        let frame_clone = frame_i.clone();
+                        if frame_clone.width.saturating_mul(frame_clone.height) >= 512 * 512 {
+                            tokio::task::spawn_blocking(move || {
+                                Server::read_shm_pixels(&frame_clone)
+                            })
                             .await
                             .map_err(|_| invalid("frame witness worker panicked"))?
-                    } else {
-                        Server::read_shm_pixels(&frame_clone)
-                    };
+                        } else {
+                            Server::read_shm_pixels(&frame_clone)
+                        }
+                    }
+                };
                 Self::route_peer_envelope_with_pixels(
                     server,
                     ready,
@@ -1035,6 +1174,12 @@ impl Server {
                             self.unsubscribed.insert(key);
                         }
                     }
+                    "destroy" => {
+                        if let Some(sid) = sid {
+                            self.human_inputs.retain(|_, h| h.surface_id != sid);
+                        }
+                        self.observers.insert(env.from.clone());
+                    }
                     _ => {
                         self.observers.insert(env.from.clone());
                     }
@@ -1078,6 +1223,22 @@ impl Server {
                     }
                     self.notify_cancellations_at(now_ns, &out.cancelled, out.core_seq)?;
                 }
+                if let SurfaceEvent::Case1(e) = event.as_ref() {
+                    if matches!(
+                        e.data.surface.state,
+                        SurfaceState::Destroyed | SurfaceState::Lost
+                    ) {
+                        self.human_inputs
+                            .retain(|_, h| h.surface_id != e.data.surface.surface_id);
+                    } else if e.data.surface.control != crate::wire::payload::SurfaceControl::Human
+                    {
+                        for h in self.human_inputs.values_mut() {
+                            if h.surface_id == e.data.surface.surface_id {
+                                h.case4_expired = true;
+                            }
+                        }
+                    }
+                }
                 #[cfg(test)]
                 let t_fan = Instant::now();
                 self.tool_state.retain(&env.body);
@@ -1096,7 +1257,7 @@ impl Server {
                         if let Some(pid) = self
                             .human_inputs
                             .iter()
-                            .filter(|(_, h)| h.surface_id == e.data.surface_id)
+                            .filter(|(_, h)| h.surface_id == e.data.surface_id && !h.case4_expired)
                             .min_by_key(|(_, h)| h.seq)
                             .map(|(k, _)| k.clone())
                         {
@@ -1194,6 +1355,15 @@ impl Server {
                     );
                 }
                 self.notify_cancellations_at(now_ns, &out.cancelled, out.core_seq)?;
+                if !take {
+                    if let Some(sid) = value["params"]["surface_id"].as_str() {
+                        for h in self.human_inputs.values_mut() {
+                            if h.surface_id == sid {
+                                h.case4_expired = true;
+                            }
+                        }
+                    }
+                }
                 let mut params = serde_json::json!({"surface_id":value["params"]["surface_id"]});
                 if take {
                     params["owner"] = "human".into();
@@ -1204,8 +1374,15 @@ impl Server {
                 self.send_at(now_ns, &daemon, Command::SurfaceRequest(Box::new(body)))?;
             }
             (Component::Daemon, Command::ActionReceipt(receipt)) => {
-                if let Some(human) = self.human_inputs.remove(&receipt.proposal_id) {
-                    return self.human_input_receipt_at(now_ns, &env, &human, receipt, boundary);
+                if let Some(human) = self.human_inputs.get(&receipt.proposal_id).cloned() {
+                    return self.human_input_receipt_at(
+                        now_ns,
+                        &env,
+                        &receipt.proposal_id,
+                        &human,
+                        receipt,
+                        boundary,
+                    );
                 }
                 if !receipt.error.is_empty() && receipt.verified {
                     let out = self.authority.apply_with_witnesses(
@@ -1581,37 +1758,36 @@ impl Server {
                     },
                 }),
             )));
-        self.human_inputs.insert(
-            daemon_proposal_id.clone(),
-            HumanInputPending {
-                seq: out.core_seq,
-                ui: env.from.clone(),
-                surface_id: input_req.params.surface_id.clone(),
-                ui_proposal_id: input_req.params.proposal_id.clone(),
-            },
-        );
         if let Err(error) = self.send_at(now_ns, &daemon, daemon_body) {
-            self.human_inputs.remove(&daemon_proposal_id);
             if error.downcast_ref::<SendFailure>().is_none() {
                 return Err(error);
             }
-            let failed = self.authority.apply(Input::Refuse {
-                reason: Refusal::Policy,
-            })?;
+            let failed_seq = self.settle_human_input_in_journal(&daemon_proposal_id)?;
             return self.refuse_at(
                 now_ns,
                 &env.from,
                 &input_req.params.proposal_id,
                 Refusal::Policy,
-                failed.core_seq,
+                failed_seq,
             );
         }
+        self.human_inputs.insert(
+            daemon_proposal_id,
+            HumanInputPending {
+                seq: out.core_seq,
+                ui: env.from.clone(),
+                surface_id: input_req.params.surface_id.clone(),
+                ui_proposal_id: input_req.params.proposal_id.clone(),
+                case4_expired: false,
+            },
+        );
         Ok(())
     }
     fn human_input_receipt_at(
         &mut self,
         now_ns: u64,
         env: &Envelope,
+        daemon_proposal_id: &str,
         human: &HumanInputPending,
         receipt: &crate::wire::payload::ActionReceipt,
         boundary: Witness,
@@ -1625,7 +1801,7 @@ impl Server {
             let out = self
                 .authority
                 .apply_with_witnesses(Input::Refuse { reason }, vec![boundary])?;
-            self.tool_state.retain(&env.body);
+            self.human_inputs.remove(daemon_proposal_id);
             if self.connections.contains_key(&human.ui) {
                 if let Err(error) = self.refuse_at(
                     now_ns,
@@ -1644,6 +1820,7 @@ impl Server {
         let out = self
             .authority
             .apply_with_witnesses(Input::SurfaceNotice, vec![boundary])?;
+        self.human_inputs.remove(daemon_proposal_id);
         self.tool_state.retain(&env.body);
         if self.connections.contains_key(&human.ui) {
             let verdict = serde_json::from_value(serde_json::json!({
@@ -1703,36 +1880,38 @@ impl Drop for Server {
 // terminal-ID reducer. Preserve them unchanged and require a fresh session.
 // This diagnostic runs only after strict recovery refused; it never admits data.
 fn legacy_destroy_archive(path: &Path, root: &Path) -> bool {
-    use std::io::BufRead;
-    let inspect = || -> Option<bool> {
-        let file = fs::File::open(path).ok()?;
-        if file.metadata().ok()?.len() > 64 * 1024 * 1024 {
+    let check_event_file = |seq: u64| -> Option<bool> {
+        let file = fs::File::open(root.join("events").join(format!("{seq}.json"))).ok()?;
+        let mut bytes = Vec::new();
+        file.take(MAX_FRAME_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .ok()?;
+        if bytes.len() > MAX_FRAME_BYTES {
             return None;
         }
-        let mut lines = io::BufReader::new(file).lines();
-        let header: serde_json::Value = serde_json::from_str(&lines.next()?.ok()?).ok()?;
-        if header["schema"] != "metaviewer.journal/v1" {
-            return None;
-        }
-        for (index, line) in lines.take(100_000).enumerate() {
-            let record: serde_json::Value = serde_json::from_str(&line.ok()?).ok()?;
-            if record["core_seq"].as_u64()? != index as u64 + 1 {
-                return None;
-            }
-            let file =
-                fs::File::open(root.join("events").join(format!("{}.json", index + 1))).ok()?;
-            let mut bytes = Vec::new();
-            file.take(MAX_FRAME_BYTES as u64 + 1)
-                .read_to_end(&mut bytes)
-                .ok()?;
-            if bytes.len() > MAX_FRAME_BYTES {
-                return None;
-            }
-            let event: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-            if event["input"]["event"] == "Lifecycle"
+        let event: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+        Some(
+            event["input"]["event"] == "Lifecycle"
                 && event["input"]["update"]["kind"] == "Destroyed"
-                && event["state"].get("destroyed").is_none()
-            {
+                && event["outcome"]["reason"].is_null()
+                && event["state"].get("destroyed").is_none(),
+        )
+    };
+    let inspect = || -> Option<bool> {
+        let meta = fs::metadata(path).ok()?;
+        if meta.len() > 64 * 1024 * 1024 {
+            return None;
+        }
+        let events_dir = root.join("events");
+        if !events_dir.is_dir() {
+            return Some(false);
+        }
+        for seq in 1..=100_000_u64 {
+            let event_path = events_dir.join(format!("{seq}.json"));
+            if !event_path.exists() {
+                break;
+            }
+            if check_event_file(seq) == Some(true) {
                 return Some(true);
             }
         }
@@ -3134,6 +3313,7 @@ mod nv_regressions {
                 "negative control: without shutdown flush, checkpoint.json stays at seed count"
             );
 
+            crate::journal::release_test_sync_hold(&session_root);
             f.server.shutdown().unwrap();
             assert!(
                 !session_root.join("checkpoint.next").exists(),
@@ -3154,7 +3334,7 @@ mod nv_regressions {
                 "session directory must be quiescent after Server::shutdown returns"
             );
 
-            // Also verify Fixture::drop directly when a new frame batch is in flight/pending.
+            // Also verify Server::drop directly when a new frame batch is in flight/pending.
             let _ui = f.attach(Component::Ui, 32);
             let _daemon = f.attach(Component::Daemon, 32);
             crate::journal::hold_sync_worker_for_test(&session_root);
@@ -3183,6 +3363,26 @@ mod nv_regressions {
                 serde_json::from_slice(&fs::read(session_root.join("checkpoint.json")).unwrap())
                     .unwrap();
             assert_eq!(cp_before_drop["count"], 11);
+
+            crate::journal::release_test_sync_hold(&session_root);
+            let mut dummy_cfg = f.server.config.clone();
+            dummy_cfg.session_id = "unused-drop".into();
+            let dummy_server = Server::open(
+                dummy_cfg,
+                &f.root.join("unused-drop"),
+                effective_uid().unwrap(),
+            )
+            .unwrap();
+            let dropped_server = std::mem::replace(&mut f.server, dummy_server);
+            drop(dropped_server);
+            assert!(
+                !session_root.join("checkpoint.next").exists(),
+                "Server::drop must flush and promote checkpoint.next before Fixture::drop removes session dir"
+            );
+            let cp_after_drop: Value =
+                serde_json::from_slice(&fs::read(session_root.join("checkpoint.json")).unwrap())
+                    .unwrap();
+            assert_eq!(cp_after_drop["count"], 20);
         });
     }
     #[test]
@@ -3395,6 +3595,1322 @@ mod nv_regressions {
                     .skip_superseded_frame(&peer, 1, &env3_ok, &frame3_ok)
                     .unwrap(),
                 "negative control: legitimate frame passes skip_superseded_frame"
+            );
+        });
+    }
+
+    fn prepare_legacy_destroy_fixture(f: &mut Fixture) -> (Config, PathBuf, PathBuf, Vec<u8>) {
+        f.seed();
+        f.server
+            .authority
+            .apply(Input::Lifecycle {
+                surface_id: "surface-demo".into(),
+                update: LifecycleUpdate::Destroyed,
+            })
+            .unwrap();
+        let witness = f.server.authority.retain_witness(b"pixels").unwrap();
+        f.server
+            .authority
+            .apply_with_witnesses(
+                Input::Frame {
+                    surface_id: "surface-demo".into(),
+                    frame: Frame {
+                        sha256: sha256_hex(b"pixels"),
+                        generation: 2,
+                        width: 800,
+                        height: 600,
+                    },
+                },
+                vec![witness],
+            )
+            .unwrap();
+        let config = f.server.config.clone();
+        let root = f.server.root.clone();
+        let path = root.join("journal.jsonl");
+        let old = std::mem::replace(
+            &mut f.server.authority,
+            Authority::create(
+                &f.root.join("unused"),
+                CoreState::session("unused").unwrap(),
+            )
+            .unwrap(),
+        );
+        drop(old);
+        let mut records: Vec<Value> = fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|s| serde_json::from_str(s).unwrap())
+            .collect();
+        let mut tail = "0".repeat(64);
+        let mut archive = tail.clone();
+        for n in 1..records.len() {
+            let event_path = root.join("events").join(format!("{n}.json"));
+            let mut event: Value = serde_json::from_slice(&fs::read(&event_path).unwrap()).unwrap();
+            event["state"].as_object_mut().unwrap().remove("destroyed");
+            if n == records.len() - 1 {
+                event["outcome"]["reason"] = Value::Null;
+                records[n]["kind"] = records[n - 1]["kind"].clone();
+                event["state"]["surfaces"]["surface-demo"]["frame"] =
+                    event["input"]["frame"].clone();
+                event["state"]["surfaces"]["surface-demo"]["refresh_after"] = Value::Null;
+            }
+            records[n]["prev_sha256"] = tail.clone().into();
+            event["record"] = records[n].clone();
+            event["envelope"]["body"] = records[n].clone();
+            let bytes = crate::journal::canonical_bytes(&event).unwrap();
+            let mut preimage = archive.as_bytes().to_vec();
+            preimage.extend_from_slice(&bytes);
+            archive = sha256_hex(&preimage);
+            fs::write(event_path, bytes).unwrap();
+            tail = sha256_hex(&crate::journal::canonical_bytes(&records[n]).unwrap());
+        }
+        let mut journal = Vec::new();
+        for record in records {
+            journal.extend(crate::journal::canonical_bytes(&record).unwrap());
+            journal.push(b'\n');
+        }
+        fs::write(&path, &journal).unwrap();
+        let checkpoint_path = root.join("checkpoint.json");
+        let mut checkpoint: Value =
+            serde_json::from_slice(&fs::read(&checkpoint_path).unwrap()).unwrap();
+        checkpoint["tail"] = tail.into();
+        checkpoint["archive"] = archive.into();
+        fs::write(
+            checkpoint_path,
+            crate::journal::canonical_bytes(&checkpoint).unwrap(),
+        )
+        .unwrap();
+        (config, root, path, journal)
+    }
+
+    #[test]
+    fn r4_legacy_destroy_corrupt_variant_reaches_upgrade_required_gate() {
+        let mut f = Fixture::new();
+        let (config, root, path, _journal) = prepare_legacy_destroy_fixture(&mut f);
+        assert_eq!(
+            Authority::recover(&path, &root).err(),
+            Some(crate::journal::JournalError::Corrupt)
+        );
+        let Err(err) = Server::open(config, &f.root, effective_uid().unwrap()) else {
+            panic!("expected UPGRADE-REQUIRED error");
+        };
+        assert!(err.to_string().contains("UPGRADE-REQUIRED"), "got: {err}");
+    }
+
+    #[test]
+    fn r4_legacy_destroy_empty_variant_reaches_upgrade_required_gate() {
+        let mut f = Fixture::new();
+        let (config, root, path, _journal) = prepare_legacy_destroy_fixture(&mut f);
+        fs::write(&path, b"").unwrap();
+        assert_eq!(
+            Authority::recover(&path, &root).err(),
+            Some(crate::journal::JournalError::Empty)
+        );
+        let Err(err) = Server::open(config, &f.root, effective_uid().unwrap()) else {
+            panic!("expected UPGRADE-REQUIRED error");
+        };
+        assert!(err.to_string().contains("UPGRADE-REQUIRED"), "got: {err}");
+    }
+
+    #[test]
+    fn r4_legacy_destroy_blank_variant_reaches_upgrade_required_gate() {
+        let mut f = Fixture::new();
+        let (config, root, path, journal) = prepare_legacy_destroy_fixture(&mut f);
+        let first_nl = journal.iter().position(|&b| b == b'\n').unwrap();
+        let mut blank_after_header = journal[..=first_nl].to_vec();
+        blank_after_header.push(b'\n');
+        fs::write(&path, &blank_after_header).unwrap();
+        assert_eq!(
+            Authority::recover(&path, &root).err(),
+            Some(crate::journal::JournalError::Blank)
+        );
+        let Err(err) = Server::open(config, &f.root, effective_uid().unwrap()) else {
+            panic!("expected UPGRADE-REQUIRED error");
+        };
+        assert!(err.to_string().contains("UPGRADE-REQUIRED"), "got: {err}");
+    }
+
+    #[test]
+    fn r4_legacy_destroy_utf8_bom_variant_reaches_upgrade_required_gate() {
+        let mut f = Fixture::new();
+        let (config, root, path, journal) = prepare_legacy_destroy_fixture(&mut f);
+        let mut with_bom = b"\xEF\xBB\xBF".to_vec();
+        with_bom.extend_from_slice(&journal);
+        fs::write(&path, &with_bom).unwrap();
+        assert_eq!(
+            Authority::recover(&path, &root).err(),
+            Some(crate::journal::JournalError::Utf8Bom)
+        );
+        let Err(err) = Server::open(config, &f.root, effective_uid().unwrap()) else {
+            panic!("expected UPGRADE-REQUIRED error");
+        };
+        assert!(err.to_string().contains("UPGRADE-REQUIRED"), "got: {err}");
+    }
+
+    #[test]
+    fn r4_legacy_destroy_missing_lf_variant_reaches_upgrade_required_gate() {
+        let mut f = Fixture::new();
+        let (config, root, path, journal) = prepare_legacy_destroy_fixture(&mut f);
+        let first_nl = journal.iter().position(|&b| b == b'\n').unwrap();
+        fs::write(&path, &journal[..first_nl]).unwrap();
+        assert_eq!(
+            Authority::recover(&path, &root).err(),
+            Some(crate::journal::JournalError::MissingLf)
+        );
+        let Err(err) = Server::open(config, &f.root, effective_uid().unwrap()) else {
+            panic!("expected UPGRADE-REQUIRED error");
+        };
+        assert!(err.to_string().contains("UPGRADE-REQUIRED"), "got: {err}");
+    }
+
+    #[test]
+    fn r4_legacy_destroy_oversize_variant_reaches_upgrade_required_gate() {
+        let mut f = Fixture::new();
+        let (config, root, path, _journal) = prepare_legacy_destroy_fixture(&mut f);
+        let mut oversize = vec![b'x'; MAX_FRAME_BYTES + 16];
+        oversize.push(b'\n');
+        fs::write(&path, &oversize).unwrap();
+        assert_eq!(
+            Authority::recover(&path, &root).err(),
+            Some(crate::journal::JournalError::Oversize)
+        );
+        let Err(err) = Server::open(config, &f.root, effective_uid().unwrap()) else {
+            panic!("expected UPGRADE-REQUIRED error");
+        };
+        assert!(err.to_string().contains("UPGRADE-REQUIRED"), "got: {err}");
+    }
+
+    #[test]
+    fn r4_legacy_destroy_unsealed_variant_reaches_upgrade_required_gate() {
+        let mut f = Fixture::new();
+        let (config, root, path, journal) = prepare_legacy_destroy_fixture(&mut f);
+        // Keep only the header + first 2 valid pre-destroy records in journal.jsonl while
+        // events/3.json (the pre-tombstone Destroyed sidecar) and checkpoint.json (count=4)
+        // remain on disk: scan replays 1..=2 cleanly and fails at the events/ directory check
+        // with Unsealed, and rollback fails because journal.jsonl has < 4 records.
+        let prefix: String = String::from_utf8(journal)
+            .unwrap()
+            .lines()
+            .take(3)
+            .map(|l| format!("{l}\n"))
+            .collect();
+        fs::write(&path, prefix.as_bytes()).unwrap();
+        assert_eq!(
+            Authority::recover(&path, &root).err(),
+            Some(crate::journal::JournalError::Unsealed)
+        );
+        let Err(err) = Server::open(config, &f.root, effective_uid().unwrap()) else {
+            panic!("expected UPGRADE-REQUIRED error");
+        };
+        assert!(err.to_string().contains("UPGRADE-REQUIRED"), "got: {err}");
+    }
+
+    #[test]
+    fn rv11_02_saturated_daemon_queue_refuses_human_input_before_commit() {
+        run(async {
+            let mut f = Fixture::new();
+            f.seed();
+            let ui = f.attach(Component::Ui, 16);
+            let daemon = f.attach(Component::Daemon, 1);
+            f.route(
+                Component::Ui,
+                2,
+                serde_json::json!({
+                    "schema": "ui_intent/v0.2",
+                    "request_id": "rv11-02-take",
+                    "op": "take_control",
+                    "params": { "surface_id": "surface-demo" }
+                }),
+            )
+            .await
+            .unwrap();
+            // Daemon capacity is 1 and now holds the forwarded take_control request (saturated).
+            f.route(
+                Component::Ui,
+                3,
+                serde_json::json!({
+                    "schema": "surface_request/v0.2",
+                    "op": "input",
+                    "params": {
+                        "surface_id": "surface-demo",
+                        "proposal_id": "hi-saturated-1",
+                        "origin": "human",
+                        "action": { "type": "key", "keys": ["Return"] }
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+
+            let verdict = serde_json::to_value(ui.try_recv().unwrap().body).unwrap();
+            assert_eq!(verdict["schema"], "action_verdict/v0.2");
+            assert_eq!(verdict["proposal_id"], "hi-saturated-1");
+            assert_eq!(verdict["decision"], "refused");
+            assert_eq!(verdict["reason_code"], "POLICY");
+            assert!(f.server.human_inputs.is_empty());
+
+            // Verify no HumanInput event was journalled and recovery does not resurrect hi-saturated-1.
+            let seq = f.server.authority.state().core_seq;
+            let last_ev: Value = serde_json::from_slice(
+                &fs::read(f.server.root.join(format!("events/{seq}.json"))).unwrap(),
+            )
+            .unwrap();
+            assert_ne!(
+                last_ev["input"]["event"], "HumanInput",
+                "saturated daemon queue must not commit a HumanInput event"
+            );
+
+            // Negative control: draining one slot from daemon queue admits the next human input.
+            let _ = daemon.try_recv().unwrap();
+            f.route(
+                Component::Ui,
+                4,
+                serde_json::json!({
+                    "schema": "surface_request/v0.2",
+                    "op": "input",
+                    "params": {
+                        "surface_id": "surface-demo",
+                        "proposal_id": "hi-free-slot-1",
+                        "origin": "human",
+                        "action": { "type": "key", "keys": ["Return"] }
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+            assert!(f.server.human_inputs.contains_key("hi-free-slot-1"));
+            let _ = daemon.try_recv().unwrap();
+
+            let cfg = f.server.config.clone();
+            let mut dummy_cfg = cfg.clone();
+            dummy_cfg.session_id = "unused-rv11-02".into();
+            let dummy =
+                Server::open(dummy_cfg, &f.root.join("unused"), effective_uid().unwrap()).unwrap();
+            let old = std::mem::replace(&mut f.server, dummy);
+            drop(old);
+            let recovered = Server::open(cfg, &f.root, effective_uid().unwrap()).unwrap();
+            assert!(!recovered.human_inputs.contains_key("hi-saturated-1"));
+            assert!(recovered.human_inputs.contains_key("hi-free-slot-1"));
+        });
+    }
+
+    #[test]
+    fn rv11_03_lookahead_verifies_superseding_pixels_and_breaks_on_invalid_intermediate() {
+        run(async {
+            use std::os::unix::fs::PermissionsExt;
+            let mut f = Fixture::new();
+            f.seed();
+            let shm = ShmFixture::new();
+
+            let p33 = shm.0.join("f33.rgb");
+            let p34_bad_sha = shm.0.join("f34-bad-sha.rgb");
+            let p34_oversize = shm.0.join("f34-oversize.rgb");
+            let p35_ok = shm.0.join("f35-ok.rgb");
+
+            let bytes33 = vec![0x11_u8; 300];
+            let bytes35 = vec![0x33_u8; 300];
+            fs::write(&p33, &bytes33).unwrap();
+            fs::write(&p34_bad_sha, vec![0xff_u8; 300]).unwrap();
+            fs::write(&p35_ok, &bytes35).unwrap();
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                let file = fs::OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .mode(0o600)
+                    .open(&p34_oversize)
+                    .unwrap();
+                file.set_len(65 * 1024 * 1024).unwrap();
+            }
+            for p in [&p33, &p34_bad_sha, &p35_ok] {
+                fs::set_permissions(p, fs::Permissions::from_mode(0o600)).unwrap();
+            }
+
+            let make_frame_ev = |gen: u64, path: &Path, sha: String| -> Value {
+                let mut frame: Value = serde_json::from_str(include_str!(
+                    "../../../contracts/examples/v0.2/frame_ref.valid.json"
+                ))
+                .unwrap();
+                frame["width"] = 10.into();
+                frame["height"] = 10.into();
+                frame["generation"] = gen.into();
+                frame["ramws_path"] = path.to_str().unwrap().into();
+                frame["sha256"] = sha.into();
+                serde_json::json!({
+                    "schema": "surface_event/v0.2",
+                    "event": "frame_ready",
+                    "data": { "frame_ref": frame }
+                })
+            };
+
+            let reg = f
+                .server
+                .config
+                .peers
+                .iter()
+                .find(|r| r.endpoint.component == Component::Daemon)
+                .unwrap()
+                .clone();
+            let policy = HandshakePolicy::new(
+                effective_uid().unwrap(),
+                reg.endpoint.clone(),
+                f.server.config.core.endpoint.clone(),
+                "nv-session".into(),
+                reg.hello.clone(),
+            )
+            .unwrap();
+            let hello = f.envelope(
+                Component::Daemon,
+                1,
+                serde_json::to_value(&reg.hello).unwrap(),
+            );
+            let (mut a, mut b) = UnixStream::pair().unwrap();
+            let task = tokio::spawn(async move { write_frame(&mut a, &hello).await.unwrap() });
+            let peer = handshake_at(
+                &mut b,
+                &policy,
+                &WireLimits::default(),
+                tokio::time::Instant::now(),
+            )
+            .await
+            .unwrap();
+            task.await.unwrap();
+
+            let _daemon = f.attach(Component::Daemon, 16);
+            let batch_a = vec![
+                f.envelope(
+                    Component::Daemon,
+                    2,
+                    make_frame_ev(33, &p33, sha256_hex(&bytes33)),
+                ),
+                f.envelope(
+                    Component::Daemon,
+                    3,
+                    make_frame_ev(34, &p34_bad_sha, sha256_hex(b"wrong-sha")),
+                ),
+            ];
+            let batch_b = vec![
+                f.envelope(
+                    Component::Daemon,
+                    4,
+                    make_frame_ev(35, &p35_ok, sha256_hex(&bytes35)),
+                ),
+                f.envelope(
+                    Component::Daemon,
+                    5,
+                    make_frame_ev(36, &p34_oversize, sha256_hex(&bytes35)),
+                ),
+                f.envelope(
+                    Component::Daemon,
+                    6,
+                    make_frame_ev(37, &p35_ok, sha256_hex(&bytes35)),
+                ),
+            ];
+            let batch_c = vec![
+                f.envelope(
+                    Component::Daemon,
+                    7,
+                    make_frame_ev(38, &p33, sha256_hex(&bytes33)),
+                ),
+                f.envelope(
+                    Component::Daemon,
+                    8,
+                    make_frame_ev(39, &p35_ok, sha256_hex(&bytes35)),
+                ),
+            ];
+            let mut dummy_cfg = f.server.config.clone();
+            dummy_cfg.session_id = "unused-rv11-03".into();
+            let dummy =
+                Server::open(dummy_cfg, &f.root.join("unused"), effective_uid().unwrap()).unwrap();
+            let srv = Arc::new(Mutex::new(std::mem::replace(&mut f.server, dummy)));
+
+            // (a) [f33 valid, f34 valid-metadata but mismatched sha]: f33 must commit before f34 fails.
+            assert!(Server::route_daemon_batch(&srv, &peer, 1, 1, batch_a)
+                .await
+                .is_err());
+            assert_eq!(
+                srv.lock().unwrap().authority.state().surfaces["surface-demo"]
+                    .frame
+                    .as_ref()
+                    .unwrap()
+                    .generation,
+                33,
+                "mismatched-sha successor f34 must not cause valid predecessor f33 to be skipped"
+            );
+
+            // (b) Trio [f35 valid, f36 65MiB oversize intermediate, f37 valid]: f35 must commit.
+            assert!(Server::route_daemon_batch(&srv, &peer, 1, 1, batch_b)
+                .await
+                .is_err());
+            assert_eq!(
+                srv.lock().unwrap().authority.state().surfaces["surface-demo"]
+                    .frame
+                    .as_ref()
+                    .unwrap()
+                    .generation,
+                35,
+                "oversize intermediate f36 must break lookahead so valid f35 commits"
+            );
+
+            // (c) Negative control: [f38 valid, f39 valid] coalesces to f39.
+            assert!(Server::route_daemon_batch(&srv, &peer, 1, 1, batch_c)
+                .await
+                .unwrap());
+            assert_eq!(
+                srv.lock().unwrap().authority.state().surfaces["surface-demo"]
+                    .frame
+                    .as_ref()
+                    .unwrap()
+                    .generation,
+                39
+            );
+            f.server = Arc::try_unwrap(srv).ok().unwrap().into_inner().unwrap();
+        });
+    }
+
+    #[test]
+    fn rv11_04_human_inputs_expire_on_retire_destroy_and_release_control() {
+        run(async {
+            let mut f = Fixture::new();
+            f.seed();
+            let ui = f.attach(Component::Ui, 16);
+            let daemon = f.attach(Component::Daemon, 16);
+            f.route(
+                Component::Ui,
+                2,
+                serde_json::json!({
+                    "schema": "ui_intent/v0.2",
+                    "request_id": "rv11-04-take-1",
+                    "op": "take_control",
+                    "params": { "surface_id": "surface-demo" }
+                }),
+            )
+            .await
+            .unwrap();
+            let _ = daemon.try_recv().unwrap();
+
+            // 1. Admit hi-1, then release_control + take_control, admit hi-2, emit Case4("input failed: ..."):
+            // failure must route to hi-2, not stale hi-1.
+            f.route(
+                Component::Ui,
+                3,
+                serde_json::json!({
+                    "schema": "surface_request/v0.2",
+                    "op": "input",
+                    "params": {
+                        "surface_id": "surface-demo",
+                        "proposal_id": "hi-1",
+                        "origin": "human",
+                        "action": { "type": "key", "keys": ["a"] }
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+            let _ = daemon.try_recv().unwrap();
+            assert!(f.server.human_inputs.contains_key("hi-1"));
+
+            f.route(
+                Component::Ui,
+                4,
+                serde_json::json!({
+                    "schema": "ui_intent/v0.2",
+                    "request_id": "rv11-04-release-1",
+                    "op": "release_control",
+                    "params": { "surface_id": "surface-demo" }
+                }),
+            )
+            .await
+            .unwrap();
+            let _ = daemon.try_recv().unwrap();
+            assert!(
+                f.server.human_inputs["hi-1"].case4_expired,
+                "release_control must mark pending human_inputs case4_expired while keeping the receipt fence"
+            );
+
+            f.route(
+                Component::Ui,
+                5,
+                serde_json::json!({
+                    "schema": "ui_intent/v0.2",
+                    "request_id": "rv11-04-take-2",
+                    "op": "take_control",
+                    "params": { "surface_id": "surface-demo" }
+                }),
+            )
+            .await
+            .unwrap();
+            let _ = daemon.try_recv().unwrap();
+
+            f.route(
+                Component::Ui,
+                6,
+                serde_json::json!({
+                    "schema": "surface_request/v0.2",
+                    "op": "input",
+                    "params": {
+                        "surface_id": "surface-demo",
+                        "proposal_id": "hi-2",
+                        "origin": "human",
+                        "action": { "type": "key", "keys": ["b"] }
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+            let _ = daemon.try_recv().unwrap();
+
+            f.route(
+                Component::Daemon,
+                2,
+                serde_json::json!({
+                    "schema": "surface_event/v0.2",
+                    "event": "error",
+                    "data": {
+                        "surface_id": "surface-demo",
+                        "code": "unsupported",
+                        "detail": "input failed: unsupported: input action"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+            let _ = ui.try_recv().unwrap(); // surface_event error fanout
+            let verdict = serde_json::to_value(ui.try_recv().unwrap().body).unwrap();
+            assert_eq!(verdict["schema"], "action_verdict/v0.2");
+            assert_eq!(verdict["proposal_id"], "hi-2");
+
+            let frame_ref: Value = serde_json::from_str(include_str!(
+                "../../../contracts/examples/v0.2/frame_ref.valid.json"
+            ))
+            .unwrap();
+            f.route(
+                Component::Daemon,
+                3,
+                serde_json::json!({
+                    "schema": "action_receipt/v0.2",
+                    "proposal_id": "hi-1",
+                    "executed_at_ns": 1500,
+                    "after_frame": frame_ref,
+                    "verified": false,
+                    "verification": { "method": "pixel", "detail": "ok" },
+                    "error": ""
+                }),
+            )
+            .await
+            .unwrap();
+            let hi1_verdict = serde_json::to_value(ui.try_recv().unwrap().body).unwrap();
+            assert_eq!(hi1_verdict["proposal_id"], "hi-1");
+            assert_eq!(hi1_verdict["decision"], "admitted");
+            assert!(f.server.human_inputs.is_empty());
+
+            // 2. Retire daemon settles pending human_inputs with Policy verdict; surface destroy clears pending.
+            f.route(
+                Component::Ui,
+                7,
+                serde_json::json!({
+                    "schema": "surface_request/v0.2",
+                    "op": "input",
+                    "params": {
+                        "surface_id": "surface-demo",
+                        "proposal_id": "hi-retire-1",
+                        "origin": "human",
+                        "action": { "type": "key", "keys": ["c"] }
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+            let _ = daemon.try_recv().unwrap();
+            let daemon_ep = f
+                .server
+                .config
+                .peers
+                .iter()
+                .find(|p| p.endpoint.component == Component::Daemon)
+                .unwrap()
+                .endpoint
+                .clone();
+            let daemon_conn_id = f.server.connections[&daemon_ep].id;
+            f.server.retire(&daemon_ep, daemon_conn_id);
+            assert!(f.server.human_inputs.is_empty());
+            let retire_verdict = serde_json::to_value(ui.try_recv().unwrap().body).unwrap();
+            assert_eq!(retire_verdict["proposal_id"], "hi-retire-1");
+            assert_eq!(retire_verdict["decision"], "refused");
+            assert_eq!(retire_verdict["reason_code"], "POLICY");
+
+            let _daemon = f.attach(Component::Daemon, 16);
+            f.route(
+                Component::Ui,
+                8,
+                serde_json::json!({
+                    "schema": "surface_request/v0.2",
+                    "op": "input",
+                    "params": {
+                        "surface_id": "surface-demo",
+                        "proposal_id": "hi-destroy-1",
+                        "origin": "human",
+                        "action": { "type": "key", "keys": ["d"] }
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+            f.route(
+                Component::Ui,
+                9,
+                serde_json::json!({
+                    "schema": "surface_request/v0.2",
+                    "op": "destroy",
+                    "params": { "surface_id": "surface-demo" }
+                }),
+            )
+            .await
+            .unwrap();
+            assert!(f.server.human_inputs.is_empty());
+            f.route(
+                Component::Daemon,
+                4,
+                serde_json::json!({
+                    "schema": "surface_event/v0.2",
+                    "event": "error",
+                    "data": {
+                        "surface_id": "surface-demo",
+                        "code": "unsupported",
+                        "detail": "input failed: post-destroy"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+            let _ = ui.try_recv().unwrap(); // surface_event error fanout
+            assert!(
+                ui.try_recv().is_err(),
+                "post-destroy Case4 failure must not emit a stale verdict"
+            );
+        });
+    }
+
+    #[test]
+    fn rv11_05_refused_human_input_receipt_does_not_retain_in_tool_state() {
+        run(async {
+            let mut f = Fixture::new();
+            f.seed();
+            let _ui = f.attach(Component::Ui, 16);
+            let _daemon = f.attach(Component::Daemon, 16);
+            f.route(
+                Component::Ui,
+                2,
+                serde_json::json!({
+                    "schema": "ui_intent/v0.2",
+                    "request_id": "rv11-05-take",
+                    "op": "take_control",
+                    "params": { "surface_id": "surface-demo" }
+                }),
+            )
+            .await
+            .unwrap();
+            f.route(
+                Component::Ui,
+                3,
+                serde_json::json!({
+                    "schema": "surface_request/v0.2",
+                    "op": "input",
+                    "params": {
+                        "surface_id": "surface-demo",
+                        "proposal_id": "hi-refused-rcpt",
+                        "origin": "human",
+                        "action": { "type": "key", "keys": ["a"] }
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+            f.route(
+                Component::Ui,
+                4,
+                serde_json::json!({
+                    "schema": "surface_request/v0.2",
+                    "op": "input",
+                    "params": {
+                        "surface_id": "surface-demo",
+                        "proposal_id": "hi-admitted-rcpt",
+                        "origin": "human",
+                        "action": { "type": "key", "keys": ["b"] }
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+
+            let frame_ref: Value = serde_json::from_str(include_str!(
+                "../../../contracts/examples/v0.2/frame_ref.valid.json"
+            ))
+            .unwrap();
+            f.route(
+                Component::Daemon,
+                2,
+                serde_json::json!({
+                    "schema": "action_receipt/v0.2",
+                    "proposal_id": "hi-refused-rcpt",
+                    "executed_at_ns": 1000,
+                    "after_frame": frame_ref,
+                    "verified": false,
+                    "verification": { "method": "pixel", "detail": "failed" },
+                    "error": "input failed: unsupported: input action"
+                }),
+            )
+            .await
+            .unwrap();
+            f.route(
+                Component::Daemon,
+                3,
+                serde_json::json!({
+                    "schema": "action_receipt/v0.2",
+                    "proposal_id": "hi-admitted-rcpt",
+                    "executed_at_ns": 2000,
+                    "after_frame": frame_ref,
+                    "verified": false,
+                    "verification": { "method": "pixel", "detail": "ok" },
+                    "error": ""
+                }),
+            )
+            .await
+            .unwrap();
+
+            let agent = f.attach(Component::Agent, 16);
+            f.route(
+                Component::Agent,
+                2,
+                serde_json::json!({
+                    "schema": "mv_tool_call/v0.2",
+                    "request_id": "req-wait-1",
+                    "op": "wait_verify",
+                    "args": { "proposal_id": "hi-refused-rcpt", "timeout_ms": 10 }
+                }),
+            )
+            .await
+            .unwrap();
+            let res_refused = serde_json::to_value(agent.try_recv().unwrap().body).unwrap();
+            assert_eq!(
+                res_refused["code"], "NOT_FOUND",
+                "refused human-input receipt must not be retained in live tool_state"
+            );
+
+            f.route(
+                Component::Agent,
+                3,
+                serde_json::json!({
+                    "schema": "mv_tool_call/v0.2",
+                    "request_id": "req-wait-2",
+                    "op": "wait_verify",
+                    "args": { "proposal_id": "hi-admitted-rcpt", "timeout_ms": 10 }
+                }),
+            )
+            .await
+            .unwrap();
+            let res_admitted = serde_json::to_value(agent.try_recv().unwrap().body).unwrap();
+            assert_eq!(
+                res_admitted["code"], "VERIFICATION_FAILED",
+                "negative control: admitted human-input receipt must still be retained in tool_state"
+            );
+
+            let cfg = f.server.config.clone();
+            let mut dummy_cfg = cfg.clone();
+            dummy_cfg.session_id = "unused-rv11-05".into();
+            let dummy =
+                Server::open(dummy_cfg, &f.root.join("unused"), effective_uid().unwrap()).unwrap();
+            let old = std::mem::replace(&mut f.server, dummy);
+            drop(old);
+            f.server = Server::open(cfg, &f.root, effective_uid().unwrap()).unwrap();
+            let agent_rec = f.attach(Component::Agent, 16);
+            f.route(
+                Component::Agent,
+                4,
+                serde_json::json!({
+                    "schema": "mv_tool_call/v0.2",
+                    "request_id": "req-wait-3",
+                    "op": "wait_verify",
+                    "args": { "proposal_id": "hi-refused-rcpt", "timeout_ms": 10 }
+                }),
+            )
+            .await
+            .unwrap();
+            let rec_refused = serde_json::to_value(agent_rec.try_recv().unwrap().body).unwrap();
+            assert_eq!(rec_refused["code"], "NOT_FOUND");
+            f.route(
+                Component::Agent,
+                5,
+                serde_json::json!({
+                    "schema": "mv_tool_call/v0.2",
+                    "request_id": "req-wait-4",
+                    "op": "wait_verify",
+                    "args": { "proposal_id": "hi-admitted-rcpt", "timeout_ms": 10 }
+                }),
+            )
+            .await
+            .unwrap();
+            let rec_admitted = serde_json::to_value(agent_rec.try_recv().unwrap().body).unwrap();
+            assert_eq!(rec_admitted["code"], "VERIFICATION_FAILED");
+        });
+    }
+
+    #[test]
+    fn rv11_07_read_shm_pixels_under_honours_custom_shm_root() {
+        use std::os::unix::fs::PermissionsExt;
+        let custom_root = std::env::temp_dir().join(format!(
+            "mv-rv11-07-shm-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&custom_root);
+        fs::create_dir_all(&custom_root).unwrap();
+        fs::set_permissions(&custom_root, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let pixels = b"RGB";
+        let leaf = custom_root.join("frame.rgb");
+        fs::write(&leaf, pixels).unwrap();
+        fs::set_permissions(&leaf, fs::Permissions::from_mode(0o600)).unwrap();
+
+        let mut frame: FrameRef = serde_json::from_str(include_str!(
+            "../../../contracts/examples/v0.2/frame_ref.valid.json"
+        ))
+        .unwrap();
+        frame.width = 1;
+        frame.height = 1;
+        frame.sha256 = sha256_hex(pixels);
+        frame.ramws_path = leaf.to_str().unwrap().into();
+
+        let verified = Server::read_shm_pixels_under(&custom_root, &frame).unwrap();
+        assert_eq!(verified.into_bytes(), pixels);
+
+        // Negative controls: shm_root itself and ParentDir traversal are rejected.
+        frame.ramws_path = custom_root.to_str().unwrap().into();
+        assert!(Server::read_shm_pixels_under(&custom_root, &frame).is_err());
+        frame.ramws_path = custom_root.join("../frame.rgb").to_str().unwrap().into();
+        assert!(Server::read_shm_pixels_under(&custom_root, &frame).is_err());
+
+        let _ = fs::remove_dir_all(&custom_root);
+    }
+
+    #[test]
+    fn r5_d1_release_control_preserves_receipt_fence_and_matches_crash_recovery() {
+        run(async {
+            let run_variant = |crash_after_release: bool| async move {
+                let mut f = Fixture::new();
+                f.seed();
+                let mut ui = f.attach(Component::Ui, 16);
+                let mut daemon = f.attach(Component::Daemon, 16);
+                let mut agent = f.attach(Component::Agent, 16);
+                f.route(
+                    Component::Ui,
+                    2,
+                    serde_json::json!({
+                        "schema": "ui_intent/v0.2",
+                        "request_id": "r5-d1-take",
+                        "op": "take_control",
+                        "params": { "surface_id": "surface-demo" }
+                    }),
+                )
+                .await
+                .unwrap();
+                let _ = daemon.try_recv().unwrap();
+
+                f.route(
+                    Component::Ui,
+                    3,
+                    serde_json::json!({
+                        "schema": "surface_request/v0.2",
+                        "op": "input",
+                        "params": {
+                            "surface_id": "surface-demo",
+                            "proposal_id": "hi-d1-1",
+                            "origin": "human",
+                            "action": { "type": "key", "keys": ["a"] }
+                        }
+                    }),
+                )
+                .await
+                .unwrap();
+                let _ = daemon.try_recv().unwrap();
+
+                f.route(
+                    Component::Ui,
+                    4,
+                    serde_json::json!({
+                        "schema": "ui_intent/v0.2",
+                        "request_id": "r5-d1-release",
+                        "op": "release_control",
+                        "params": { "surface_id": "surface-demo" }
+                    }),
+                )
+                .await
+                .unwrap();
+                let _ = daemon.try_recv().unwrap();
+
+                if crash_after_release {
+                    let cfg = f.server.config.clone();
+                    let mut dummy_cfg = cfg.clone();
+                    dummy_cfg.session_id = "unused-r5-d1".into();
+                    let dummy =
+                        Server::open(dummy_cfg, &f.root.join("unused"), effective_uid().unwrap())
+                            .unwrap();
+                    let old = std::mem::replace(&mut f.server, dummy);
+                    drop(old);
+                    f.server = Server::open(cfg, &f.root, effective_uid().unwrap()).unwrap();
+                    ui = f.attach(Component::Ui, 16);
+                    daemon = f.attach(Component::Daemon, 16);
+                    agent = f.attach(Component::Agent, 16);
+                }
+
+                let fence_mid = f.server.human_inputs.clone();
+                assert!(fence_mid.contains_key("hi-d1-1"));
+                assert!(fence_mid["hi-d1-1"].case4_expired);
+
+                let frame_ref: Value = serde_json::from_str(include_str!(
+                    "../../../contracts/examples/v0.2/frame_ref.valid.json"
+                ))
+                .unwrap();
+                f.route(
+                    Component::Daemon,
+                    2,
+                    serde_json::json!({
+                        "schema": "action_receipt/v0.2",
+                        "proposal_id": "hi-d1-1",
+                        "executed_at_ns": 2000,
+                        "after_frame": frame_ref,
+                        "verified": false,
+                        "verification": { "method": "pixel", "detail": "ok" },
+                        "error": ""
+                    }),
+                )
+                .await
+                .unwrap();
+                let verdict = serde_json::to_value(ui.try_recv().unwrap().body).unwrap();
+                assert_eq!(verdict["schema"], "action_verdict/v0.2");
+                assert_eq!(verdict["proposal_id"], "hi-d1-1");
+                assert_eq!(verdict["decision"], "admitted");
+                assert!(
+                    agent.try_recv().is_err(),
+                    "human input receipt after release_control must not misroute to agent"
+                );
+                assert!(f.server.human_inputs.is_empty());
+                let _ = daemon;
+                (
+                    fence_mid,
+                    verdict,
+                    f.server.human_inputs.clone(),
+                    f.server.snapshot().unwrap(),
+                )
+            };
+
+            let (live_mid, live_verdict, live_end, live_snap) = run_variant(false).await;
+            let (rec_mid, rec_verdict, rec_end, rec_snap) = run_variant(true).await;
+            assert_eq!(live_mid, rec_mid);
+            assert_eq!(live_verdict, rec_verdict);
+            assert_eq!(live_end, rec_end);
+            assert_eq!(live_snap, rec_snap);
+        });
+    }
+
+    #[test]
+    fn r5_d2_retire_settlement_is_journaled_and_never_resurrects_on_crash_recovery() {
+        run(async {
+            let mut f = Fixture::new();
+            f.seed();
+            let ui = f.attach(Component::Ui, 16);
+            let daemon = f.attach(Component::Daemon, 16);
+            f.route(
+                Component::Ui,
+                2,
+                serde_json::json!({
+                    "schema": "ui_intent/v0.2",
+                    "request_id": "r5-d2-take",
+                    "op": "take_control",
+                    "params": { "surface_id": "surface-demo" }
+                }),
+            )
+            .await
+            .unwrap();
+            let _ = daemon.try_recv().unwrap();
+
+            f.route(
+                Component::Ui,
+                3,
+                serde_json::json!({
+                    "schema": "surface_request/v0.2",
+                    "op": "input",
+                    "params": {
+                        "surface_id": "surface-demo",
+                        "proposal_id": "hi-d2-daemon-retire",
+                        "origin": "human",
+                        "action": { "type": "key", "keys": ["a"] }
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+            let _ = daemon.try_recv().unwrap();
+
+            let daemon_ep = f
+                .server
+                .config
+                .peers
+                .iter()
+                .find(|p| p.endpoint.component == Component::Daemon)
+                .unwrap()
+                .endpoint
+                .clone();
+            let daemon_conn_id = f.server.connections[&daemon_ep].id;
+            let seq_before_retire = f.server.authority.state().core_seq;
+            f.server.retire(&daemon_ep, daemon_conn_id);
+            let seq_after_retire = f.server.authority.state().core_seq;
+            assert_eq!(
+                seq_after_retire,
+                seq_before_retire + 1,
+                "daemon retire must journal the refusal settlement before emitting verdict"
+            );
+            let v1 = serde_json::to_value(ui.try_recv().unwrap().body).unwrap();
+            assert_eq!(v1["proposal_id"], "hi-d2-daemon-retire");
+            assert_eq!(v1["decision"], "refused");
+            assert_eq!(v1["reason_code"], "POLICY");
+            assert_eq!(v1["core_seq"], seq_after_retire);
+
+            // Crash + reopen after daemon retire: hi-d2-daemon-retire must not resurrect.
+            let cfg = f.server.config.clone();
+            let mut dummy_cfg = cfg.clone();
+            dummy_cfg.session_id = "unused-r5-d2-a".into();
+            let dummy = Server::open(
+                dummy_cfg,
+                &f.root.join("unused-a"),
+                effective_uid().unwrap(),
+            )
+            .unwrap();
+            let old = std::mem::replace(&mut f.server, dummy);
+            drop(old);
+            f.server = Server::open(cfg.clone(), &f.root, effective_uid().unwrap()).unwrap();
+            assert!(
+                f.server.human_inputs.is_empty(),
+                "recovered server must not resurrect human input settled by daemon retire"
+            );
+
+            let ui_rec = f.attach(Component::Ui, 16);
+            let _daemon_rec = f.attach(Component::Daemon, 16);
+            let daemon_conn_id_2 = f.server.connections[&daemon_ep].id;
+            f.server.retire(&daemon_ep, daemon_conn_id_2);
+            assert!(
+                ui_rec.try_recv().is_err(),
+                "second daemon retire after recovery must not emit a duplicate verdict"
+            );
+
+            // Also test UI-disconnect drop: admit hi-d2-ui-drop, retire UI, crash+reopen, verify no resurrection.
+            let _daemon_rec2 = f.attach(Component::Daemon, 16);
+            f.route(
+                Component::Ui,
+                4,
+                serde_json::json!({
+                    "schema": "surface_request/v0.2",
+                    "op": "input",
+                    "params": {
+                        "surface_id": "surface-demo",
+                        "proposal_id": "hi-d2-ui-drop",
+                        "origin": "human",
+                        "action": { "type": "key", "keys": ["b"] }
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+            assert!(f.server.human_inputs.contains_key("hi-d2-ui-drop"));
+            let ui_ep = f
+                .server
+                .config
+                .peers
+                .iter()
+                .find(|p| p.endpoint.component == Component::Ui)
+                .unwrap()
+                .endpoint
+                .clone();
+            let ui_conn_id = f.server.connections[&ui_ep].id;
+            f.server.retire(&ui_ep, ui_conn_id);
+            assert!(f.server.human_inputs.is_empty());
+
+            let mut dummy_cfg2 = cfg.clone();
+            dummy_cfg2.session_id = "unused-r5-d2-b".into();
+            let dummy2 = Server::open(
+                dummy_cfg2,
+                &f.root.join("unused-b"),
+                effective_uid().unwrap(),
+            )
+            .unwrap();
+            let old2 = std::mem::replace(&mut f.server, dummy2);
+            drop(old2);
+            f.server = Server::open(cfg, &f.root, effective_uid().unwrap()).unwrap();
+            assert!(
+                f.server.human_inputs.is_empty(),
+                "recovered server must not resurrect human input dropped on UI disconnect"
+            );
+            let ui_rec2 = f.attach(Component::Ui, 16);
+            let _daemon_rec3 = f.attach(Component::Daemon, 16);
+            let daemon_conn_id_3 = f.server.connections[&daemon_ep].id;
+            f.server.retire(&daemon_ep, daemon_conn_id_3);
+            assert!(ui_rec2.try_recv().is_err());
+        });
+    }
+
+    #[test]
+    fn r5_d3_commit_failure_on_admitted_human_input_forwards_nothing_to_daemon() {
+        run(async {
+            let mut f = Fixture::new();
+            f.seed();
+            let ui = f.attach(Component::Ui, 16);
+            let daemon = f.attach(Component::Daemon, 16);
+            f.route(
+                Component::Ui,
+                2,
+                serde_json::json!({
+                    "schema": "ui_intent/v0.2",
+                    "request_id": "r5-d3-take",
+                    "op": "take_control",
+                    "params": { "surface_id": "surface-demo" }
+                }),
+            )
+            .await
+            .unwrap();
+            let _ = daemon.try_recv().unwrap();
+
+            // Inject commit failure during the HumanInput append (after boundary witness retain).
+            let session_root = f.server.root.clone();
+            crate::journal::fail_next_after_journal_sync(&session_root);
+
+            let err = f
+                .route(
+                    Component::Ui,
+                    3,
+                    serde_json::json!({
+                        "schema": "surface_request/v0.2",
+                        "op": "input",
+                        "params": {
+                            "surface_id": "surface-demo",
+                            "proposal_id": "hi-d3-commit-fail",
+                            "origin": "human",
+                            "action": { "type": "key", "keys": ["a"] }
+                        }
+                    }),
+                )
+                .await;
+            assert!(
+                err.is_err(),
+                "commit failure during human_input_at must return Err"
+            );
+            assert!(
+                daemon.try_recv().is_err(),
+                "commit failure must forward nothing to daemon"
+            );
+            assert!(
+                ui.try_recv().is_err(),
+                "commit failure must not emit an uncommitted verdict"
+            );
+            assert!(f.server.human_inputs.is_empty());
+
+            // Subsequent attempt on the now-poisoned journal also forwards nothing.
+            let err2 = f
+                .route(
+                    Component::Ui,
+                    4,
+                    serde_json::json!({
+                        "schema": "surface_request/v0.2",
+                        "op": "input",
+                        "params": {
+                            "surface_id": "surface-demo",
+                            "proposal_id": "hi-d3-poisoned",
+                            "origin": "human",
+                            "action": { "type": "key", "keys": ["b"] }
+                        }
+                    }),
+                )
+                .await;
+            assert!(err2.is_err());
+            assert!(daemon.try_recv().is_err());
+            assert!(f.server.human_inputs.is_empty());
+        });
+    }
+
+    #[test]
+    fn r5_d4_refused_destroy_on_current_archive_does_not_misreport_upgrade_required() {
+        run(async {
+            let mut f = Fixture::new();
+            f.seed();
+            let _ui = f.attach(Component::Ui, 16);
+            let daemon = f.attach(Component::Daemon, 16);
+
+            // Daemon sends Case1 Destroyed for unknown surface "ghost" -> refused with Policy,
+            // state.destroyed remains empty (so "destroyed" key is absent in events/<seq>.json).
+            f.route(
+                Component::Daemon,
+                2,
+                serde_json::json!({
+                    "schema": "surface_event/v0.2",
+                    "event": "state_changed",
+                    "data": {
+                        "surface": {
+                            "schema": "surface/v0.2",
+                            "surface_id": "ghost",
+                            "kind": "game_capsule",
+                            "display": ":101",
+                            "geometry": { "w": 800, "h": 600 },
+                            "state": "destroyed",
+                            "visibility": "unfolded",
+                            "control": "agent",
+                            "profile_id": "profile-demo"
+                        }
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+            let refusal = serde_json::to_value(daemon.try_recv().unwrap().body).unwrap();
+            assert_eq!(refusal["decision"], "refused");
+            assert_eq!(refusal["reason_code"], "POLICY");
+
+            let seq = f.server.authority.state().core_seq;
+            let ev: Value = serde_json::from_slice(
+                &fs::read(f.server.root.join(format!("events/{seq}.json"))).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(ev["input"]["event"], "Lifecycle");
+            assert_eq!(ev["input"]["update"]["kind"], "Destroyed");
+            assert_eq!(ev["outcome"]["reason"], "POLICY");
+            assert!(ev["state"].get("destroyed").is_none());
+
+            let cfg = f.server.config.clone();
+            let session_root = f.server.root.clone();
+            let journal_path = session_root.join("journal.jsonl");
+            let mut dummy_cfg = cfg.clone();
+            dummy_cfg.session_id = "unused-r5-d4".into();
+            let dummy =
+                Server::open(dummy_cfg, &f.root.join("unused"), effective_uid().unwrap()).unwrap();
+            let old = std::mem::replace(&mut f.server, dummy);
+            drop(old);
+
+            // Truncate journal.jsonl to 0 bytes -> Empty error, must NOT misreport UPGRADE-REQUIRED.
+            fs::write(&journal_path, b"").unwrap();
+            assert_eq!(
+                Authority::recover(&journal_path, &session_root).err(),
+                Some(crate::journal::JournalError::Empty)
+            );
+            let Err(err) = Server::open(cfg, &f.root, effective_uid().unwrap()) else {
+                panic!("expected Empty error on truncated journal");
+            };
+            let msg = err.to_string();
+            assert!(
+                !msg.contains("UPGRADE-REQUIRED"),
+                "refused destroy on current archive must not report UPGRADE-REQUIRED, got: {msg}"
+            );
+            assert!(
+                msg.contains("Corrupt(empty)"),
+                "expected Corrupt(empty), got: {msg}"
             );
         });
     }
