@@ -157,6 +157,37 @@ impl Server {
         let mut next = self.capture.clone();
         // Oversized/unavailable frames do not disable normal authority rendering.
         let Ok(events) = next.frame_verified(frame, pixels, now_ns / 1_000_000) else {
+            let (_, reply, _) = self
+                .capture
+                .prepare("list", &Value::Null, Default::default(), now_ns / 1_000_000)
+                .map_err(|_| invalid("capture states"))?;
+            let dropped: Vec<Value> = reply["rows"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|r| {
+                    r["kind"] == "recording"
+                        && r["phase"] == "recording"
+                        && r["surface_id"] == frame.surface_id
+                })
+                .map(|r| {
+                    json!({
+                        "events": [{
+                            "schema": "record_event/v0.2",
+                            "request_id": r["id"],
+                            "surface_id": frame.surface_id,
+                            "recording_id": r["id"],
+                            "mono_ns": now_ns,
+                            "event": "dropped",
+                            "dropped_frames": 1,
+                            "policy": "ram_ring_oldest"
+                        }]
+                    })
+                })
+                .collect();
+            if !dropped.is_empty() {
+                self.capture_journal(vec![], &json!({"capture_frame":dropped}))?;
+            }
             return Ok(());
         };
         if !events.is_empty() {
@@ -951,5 +982,81 @@ mod tests {
             c.join().expect("first host_capture run must not collide");
             d.join().expect("second host_capture run must not collide");
         });
+    }
+
+    #[test]
+    fn new_01_oversize_frame_during_active_recording_journals_dropped_marker() {
+        let temp = Temp::new();
+        let root = temp.0.clone();
+        let reg = |component: &str| -> Registration {
+            serde_json::from_value(json!({"endpoint":{"component":component,"instance":format!("{component}-oversize")},"hello":{"schema":"hello/v0.2","contract_version":"v0.2","component":component,"component_version":"0.2.0","component_commit":"0123456789abcdef0123456789abcdef01234567","dependencies":[]}})).unwrap()
+        };
+        let config = Config {
+            session_id: "oversize-session".into(),
+            core: reg("core"),
+            peers: vec![reg("agent"), reg("daemon"), reg("ui")],
+        };
+        let ui = reg("ui").endpoint;
+        let mut server = Server::open(config, &root, effective_uid().unwrap()).unwrap();
+        server
+            .authority
+            .apply(Input::Surface {
+                id: "surface-demo".into(),
+                surface: Surface {
+                    display: "oversize-display".into(),
+                    owner: reg("agent").endpoint,
+                    agent_controlled: true,
+                    live: true,
+                    frame: None,
+                    refresh_after: None,
+                    allowed_verbs: vec![],
+                },
+            })
+            .unwrap();
+        let mut raw: Value = serde_json::from_str(include_str!(
+            "../../../contracts/examples/v0.2/frame_ref.valid.json"
+        ))
+        .unwrap();
+        raw["sha256"] = sha256_hex(b"seed-pixels").into();
+        let seed_frame: FrameRef = serde_json::from_value(raw.clone()).unwrap();
+        server
+            .capture_frame(&seed_frame, b"seed-pixels".to_vec())
+            .unwrap();
+        let start_reply = server
+            .capture_request(
+                &ui,
+                "recordStart",
+                json!({"schema":"capture_request/v1","request_id":"start-over","surface_id":"surface-demo","mode":"ai"}),
+            )
+            .unwrap();
+        assert_eq!(start_reply["ok"], true);
+        let rec_id = start_reply["recording_id"].as_str().unwrap().to_owned();
+
+        let seq_before = server.authority.state().core_seq;
+        let oversize = vec![0x42_u8; 9 * 1024 * 1024];
+        raw["generation"] = 2.into();
+        raw["sha256"] = sha256_hex(&oversize).into();
+        let over_frame: FrameRef = serde_json::from_value(raw).unwrap();
+        server.capture_frame(&over_frame, oversize).unwrap();
+
+        let seq_after = server.authority.state().core_seq;
+        assert!(
+            seq_after > seq_before,
+            "oversize frame during active recording must journal a dropped-frame marker"
+        );
+        let session = root.join("sessions/oversize-session");
+        let event: Value = serde_json::from_slice(
+            &fs::read(session.join("events").join(format!("{seq_after}.json"))).unwrap(),
+        )
+        .unwrap();
+        let witness_sha = event["witnesses"][0]["sha256"].as_str().unwrap();
+        let witness: Value =
+            serde_json::from_slice(&fs::read(session.join("artifacts").join(witness_sha)).unwrap())
+                .unwrap();
+        let drop_ev = &witness["capture_frame"][0]["events"][0];
+        assert_eq!(drop_ev["recording_id"], rec_id);
+        assert_eq!(drop_ev["event"], "dropped");
+        assert_eq!(drop_ev["dropped_frames"], 1);
+        assert_eq!(drop_ev["policy"], "ram_ring_oldest");
     }
 }

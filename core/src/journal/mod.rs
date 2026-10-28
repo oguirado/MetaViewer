@@ -10,6 +10,14 @@
 //! disk export. Raw pixel retention is never implied by a frame reference.
 //! [TARGET, unit decision] A recognized journal header from another core version
 //! requires an explicit fresh-session upgrade; it is never replayed or migrated.
+//! [TARGET, unit decision] Durability and witness bounds: retained witnesses verify
+//! caller-supplied digests before disk write or cache insertion; frame appends stage
+//! checkpoint.next and publish checkpoint.json only after the sync batch flushes
+//! artifacts, events, and journal.jsonl; any inline or background fsync error
+//! poisons the journal handle so the next commit or flush_sync fails closed with
+//! JournalError::Poisoned; uncommitted retains and verified-witness cache entries
+//! are bounded (MAX_UNCOMMITTED_ARTIFACTS = 32, MAX_DIRTY_FILES = 32,
+//! MAX_VERIFIED_WITNESS_CACHE = 256).
 use crate::admission::{CoreState, Input, Outcome};
 use crate::wire::payload::{SessionRecord, SessionRecordKind, SessionRecordSchema};
 use serde::{Deserialize, Serialize};
@@ -28,6 +36,9 @@ pub use sha256::{sha256_hex, StreamingSha256};
 // Non-frame transitions and Journal drop flush synchronously before proceeding.
 const FRAME_SYNC_WINDOW: std::time::Duration = std::time::Duration::from_millis(50);
 const FRAME_SYNC_MAX_BATCH: u64 = 8;
+const MAX_UNCOMMITTED_ARTIFACTS: usize = 32;
+const MAX_DIRTY_FILES: usize = 32;
+const MAX_VERIFIED_WITNESS_CACHE: usize = 256;
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -111,6 +122,112 @@ pub struct Witness {
     pub sha256: String,
     pub byte_len: u64,
 }
+#[derive(Debug)]
+pub struct VerifiedPixels {
+    bytes: Vec<u8>,
+    sha256: String,
+}
+std::thread_local! {
+    static VERIFIED_PIXEL_GRANT: std::cell::Cell<Option<(usize, usize, [u8; 64])>> = const {
+        std::cell::Cell::new(None)
+    };
+}
+struct VerifiedGrantGuard;
+impl Drop for VerifiedGrantGuard {
+    fn drop(&mut self) {
+        VERIFIED_PIXEL_GRANT.with(|c| c.set(None));
+    }
+}
+fn take_verified_grant(sha256: &str, bytes: &[u8]) -> bool {
+    VERIFIED_PIXEL_GRANT.with(|c| {
+        let Some((ptr, len, grant_sha)) = c.take() else {
+            return false;
+        };
+        ptr == bytes.as_ptr() as usize && len == bytes.len() && sha256.as_bytes() == grant_sha
+    })
+}
+impl VerifiedPixels {
+    fn new(bytes: Vec<u8>, sha256: String) -> Self {
+        Self { bytes, sha256 }
+    }
+    pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, JournalError> {
+        if bytes.is_empty() || bytes.len() as u64 > MAX_BYTES {
+            return Err(JournalError::Witness);
+        }
+        let sha256 = sha256_hex(&bytes);
+        Ok(Self::new(bytes, sha256))
+    }
+    pub fn verify(sha256: &str, bytes: Vec<u8>) -> Result<Self, JournalError> {
+        if !hex(sha256)
+            || bytes.is_empty()
+            || bytes.len() as u64 > MAX_BYTES
+            || sha256_hex(&bytes) != sha256
+        {
+            return Err(JournalError::Witness);
+        }
+        Ok(Self::new(bytes, sha256.to_owned()))
+    }
+    pub(crate) fn read_verified(
+        mut reader: impl Read,
+        expected_len: usize,
+        expected_sha256: &str,
+    ) -> std::io::Result<Self> {
+        if expected_len == 0 || (expected_len as u64) > MAX_BYTES || !hex(expected_sha256) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "frame digest mismatch",
+            ));
+        }
+        let mut bytes = vec![0u8; expected_len];
+        let mut hasher = StreamingSha256::new();
+        let mut pos = 0usize;
+        while pos < expected_len {
+            let end = (pos + 65536).min(expected_len);
+            let n = reader.read(&mut bytes[pos..end])?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&bytes[pos..pos + n]);
+            pos += n;
+        }
+        let mut extra = [0u8; 1];
+        let trailing = reader.read(&mut extra)?;
+        let digest = hasher.finalize_hex();
+        if pos != expected_len || trailing != 0 || digest != expected_sha256 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "frame digest mismatch",
+            ));
+        }
+        Ok(Self::new(bytes, digest))
+    }
+    pub fn sha256(&self) -> &str {
+        &self.sha256
+    }
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+    pub fn retain_in_authority(
+        &self,
+        authority: &mut crate::admission::Authority,
+    ) -> Result<Witness, JournalError> {
+        let Ok(grant_sha) = <[u8; 64]>::try_from(self.sha256.as_bytes()) else {
+            return Err(JournalError::Witness);
+        };
+        VERIFIED_PIXEL_GRANT.with(|c| {
+            c.set(Some((
+                self.bytes.as_ptr() as usize,
+                self.bytes.len(),
+                grant_sha,
+            )));
+        });
+        let _guard = VerifiedGrantGuard;
+        authority.retain_frame_witness(&self.sha256, &self.bytes)
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Event {
@@ -137,6 +254,7 @@ pub struct Replay {
     pub boundaries: Vec<Vec<u8>>,
     archive_bytes: u64,
     checkpoint: Checkpoint,
+    committed_witnesses: BTreeSet<String>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct VerifiedArtifact {
@@ -149,6 +267,7 @@ struct VerifiedArtifact {
 struct SyncBatch {
     files: Vec<File>,
     journal_file: File,
+    checkpoint_file: Option<File>,
     root: PathBuf,
 }
 enum SyncCmd {
@@ -168,9 +287,14 @@ pub struct Journal {
     // Last durably committed reduction boundary; supplied transitions are untrusted.
     state: CoreState,
     verified_witnesses: std::collections::BTreeMap<String, VerifiedArtifact>,
+    verified_witness_order: std::collections::VecDeque<String>,
+    committed_witnesses: BTreeSet<String>,
+    uncommitted_artifacts: std::collections::VecDeque<String>,
     dirty_files: Vec<File>,
+    pending_checkpoint: Option<File>,
     unsynced_frames: u64,
     last_sync: std::time::Instant,
+    sync_failed: std::sync::Arc<std::sync::atomic::AtomicBool>,
     sync_tx: Option<std::sync::mpsc::Sender<SyncCmd>>,
 }
 impl Drop for Journal {
@@ -421,15 +545,6 @@ fn checkpoint_unsynced(root: &Path, c: &Checkpoint) -> Result<File, JournalError
         cell.set(s);
     });
     let f = publish_unsynced(&tmp, &c_bytes)?;
-    #[cfg(test)]
-    let t_ren = std::time::Instant::now();
-    fs::rename(tmp, root.join("checkpoint.json")).map_err(|_| JournalError::Io)?;
-    #[cfg(test)]
-    STAGE_TIMINGS.with(|cell| {
-        let mut s = cell.get();
-        s.journal_write_ns += t_ren.elapsed().as_nanos();
-        cell.set(s);
-    });
     Ok(f)
 }
 fn checkpoint(root: &Path, c: &Checkpoint) -> Result<(), JournalError> {
@@ -473,6 +588,14 @@ fn execute_sync_batch(batch: SyncBatch) -> Result<(), JournalError> {
         .journal_file
         .sync_all()
         .map_err(|_| JournalError::Io)?;
+    if let Some(cp_file) = batch.checkpoint_file {
+        cp_file.sync_all().map_err(|_| JournalError::Io)?;
+        fs::rename(
+            batch.root.join("checkpoint.next"),
+            batch.root.join("checkpoint.json"),
+        )
+        .map_err(|_| JournalError::Io)?;
+    }
     sync_dir(&batch.root)
 }
 fn event_kind(input: &Input, out: &Outcome) -> SessionRecordKind {
@@ -613,9 +736,14 @@ impl Journal {
             poisoned: false,
             state: state.clone(),
             verified_witnesses: std::collections::BTreeMap::new(),
+            verified_witness_order: std::collections::VecDeque::new(),
+            committed_witnesses: BTreeSet::new(),
+            uncommitted_artifacts: std::collections::VecDeque::new(),
             dirty_files: Vec::new(),
+            pending_checkpoint: None,
             unsynced_frames: 0,
             last_sync: std::time::Instant::now(),
+            sync_failed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             sync_tx: None,
         };
         checkpoint(&journal.root, &journal.closure())?;
@@ -675,9 +803,14 @@ impl Journal {
                 poisoned: false,
                 state: replay.state.clone(),
                 verified_witnesses: std::collections::BTreeMap::new(),
+                verified_witness_order: std::collections::VecDeque::new(),
+                committed_witnesses: replay.committed_witnesses,
+                uncommitted_artifacts: std::collections::VecDeque::new(),
                 dirty_files: Vec::new(),
+                pending_checkpoint: None,
                 unsynced_frames: 0,
                 last_sync: std::time::Instant::now(),
+                sync_failed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 sync_tx: None,
             },
             replay.state,
@@ -693,6 +826,16 @@ impl Journal {
         if !meta.is_file() || meta.len() != byte_len {
             return Err(JournalError::Witness);
         }
+        self.verified_witness_order.retain(|k| k != sha256);
+        while !self.verified_witnesses.contains_key(sha256)
+            && self.verified_witnesses.len() >= MAX_VERIFIED_WITNESS_CACHE
+        {
+            let Some(oldest) = self.verified_witness_order.pop_front() else {
+                break;
+            };
+            self.verified_witnesses.remove(&oldest);
+        }
+        self.verified_witness_order.push_back(sha256.to_owned());
         self.verified_witnesses.insert(
             sha256.to_owned(),
             VerifiedArtifact {
@@ -726,6 +869,7 @@ impl Journal {
             && meta.ctime_nsec() == recorded.ctime_nsec
     }
     fn ensure_sync_worker(&mut self) -> &std::sync::mpsc::Sender<SyncCmd> {
+        let sync_failed = self.sync_failed.clone();
         self.sync_tx.get_or_insert_with(|| {
             let (tx, rx) = std::sync::mpsc::channel::<SyncCmd>();
             std::thread::spawn(move || {
@@ -735,6 +879,7 @@ impl Journal {
                         SyncCmd::Flush(batch) => {
                             if sticky_err.is_none() {
                                 if let Err(e) = execute_sync_batch(batch) {
+                                    sync_failed.store(true, std::sync::atomic::Ordering::Release);
                                     sticky_err = Some(e);
                                 }
                             }
@@ -750,12 +895,16 @@ impl Journal {
         })
     }
     fn dispatch_frame_sync_batch(&mut self) -> Result<(), JournalError> {
-        if self.dirty_files.is_empty() && self.unsynced_frames == 0 {
+        if self.dirty_files.is_empty()
+            && self.pending_checkpoint.is_none()
+            && self.unsynced_frames == 0
+        {
             return Ok(());
         }
         let batch = SyncBatch {
             files: std::mem::take(&mut self.dirty_files),
             journal_file: self.file.try_clone().map_err(|_| JournalError::Io)?,
+            checkpoint_file: self.pending_checkpoint.take(),
             root: self.root.clone(),
         };
         self.unsynced_frames = 0;
@@ -765,7 +914,15 @@ impl Journal {
             .map_err(|_| JournalError::Io)
     }
     pub fn flush_sync(&mut self) -> Result<(), JournalError> {
-        if !self.dirty_files.is_empty() || self.unsynced_frames > 0 {
+        if self.poisoned || self.sync_failed.load(std::sync::atomic::Ordering::Acquire) {
+            self.poisoned = true;
+            return Err(JournalError::Poisoned);
+        }
+        self.poisoned = true;
+        if !self.dirty_files.is_empty()
+            || self.pending_checkpoint.is_some()
+            || self.unsynced_frames > 0
+        {
             if self.sync_tx.is_some() {
                 self.dispatch_frame_sync_batch()?;
             } else {
@@ -774,6 +931,7 @@ impl Journal {
                 let batch = SyncBatch {
                     files: std::mem::take(&mut self.dirty_files),
                     journal_file: self.file.try_clone().map_err(|_| JournalError::Io)?,
+                    checkpoint_file: self.pending_checkpoint.take(),
                     root: self.root.clone(),
                 };
                 self.unsynced_frames = 0;
@@ -794,42 +952,58 @@ impl Journal {
                 .map_err(|_| JournalError::Io)?;
             b_rx.recv().map_err(|_| JournalError::Io)??;
         }
+        self.poisoned = false;
         Ok(())
     }
     pub fn retain_witness(&mut self, bytes: &[u8]) -> Result<Witness, JournalError> {
-        if self.poisoned {
+        if self.poisoned || self.sync_failed.load(std::sync::atomic::Ordering::Acquire) {
+            self.poisoned = true;
             return Err(JournalError::Poisoned);
         }
         if bytes.is_empty() || bytes.len() as u64 > MAX_BYTES {
             return Err(JournalError::Witness);
         }
         let digest = sha256_hex(bytes);
-        self.retain_witness_inner(&digest, bytes, true)
+        self.retain_witness_inner(&digest, bytes, true, true)
+    }
+    pub fn retain_verified_pixels(
+        &mut self,
+        pixels: &VerifiedPixels,
+    ) -> Result<Witness, JournalError> {
+        self.retain_witness_inner(&pixels.sha256, &pixels.bytes, false, true)
     }
     pub fn retain_verified_witness(
         &mut self,
         sha256: &str,
         bytes: &[u8],
     ) -> Result<Witness, JournalError> {
-        self.retain_witness_inner(sha256, bytes, true)
+        let verified = take_verified_grant(sha256, bytes);
+        self.retain_witness_inner(sha256, bytes, true, verified)
     }
     pub fn retain_frame_witness(
         &mut self,
         sha256: &str,
         bytes: &[u8],
     ) -> Result<Witness, JournalError> {
-        self.retain_witness_inner(sha256, bytes, false)
+        let verified = take_verified_grant(sha256, bytes);
+        self.retain_witness_inner(sha256, bytes, false, verified)
     }
     fn retain_witness_inner(
         &mut self,
         sha256: &str,
         bytes: &[u8],
         sync_now: bool,
+        digest_verified: bool,
     ) -> Result<Witness, JournalError> {
-        if self.poisoned {
+        if self.poisoned || self.sync_failed.load(std::sync::atomic::Ordering::Acquire) {
+            self.poisoned = true;
             return Err(JournalError::Poisoned);
         }
-        if !hex(sha256) || bytes.is_empty() || bytes.len() as u64 > MAX_BYTES {
+        if !hex(sha256)
+            || bytes.is_empty()
+            || bytes.len() as u64 > MAX_BYTES
+            || (!digest_verified && sha256_hex(bytes) != sha256)
+        {
             return Err(JournalError::Witness);
         }
         let w = Witness {
@@ -842,13 +1016,37 @@ impl Journal {
                 verify_witness(&self.root, &w)?;
                 self.record_verified_artifact(&w.sha256, &path, w.byte_len)?;
             }
-        } else if sync_now {
-            publish(&path, bytes)?;
-            self.record_verified_artifact(&w.sha256, &path, w.byte_len)?;
         } else {
-            let f = publish_unsynced(&path, bytes)?;
-            self.dirty_files.push(f);
-            self.record_verified_artifact(&w.sha256, &path, w.byte_len)?;
+            while self.uncommitted_artifacts.len() >= MAX_UNCOMMITTED_ARTIFACTS {
+                let Some(evicted) = self.uncommitted_artifacts.pop_front() else {
+                    break;
+                };
+                if !self.committed_witnesses.contains(&evicted) {
+                    self.verified_witnesses.remove(&evicted);
+                    self.verified_witness_order.retain(|k| k != &evicted);
+                    let _ = fs::remove_file(self.root.join("artifacts").join(&evicted));
+                }
+            }
+            if sync_now {
+                publish(&path, bytes)?;
+                self.record_verified_artifact(&w.sha256, &path, w.byte_len)?;
+            } else {
+                if self.dirty_files.len() >= MAX_DIRTY_FILES {
+                    if self.unsynced_frames > 0 {
+                        self.dispatch_frame_sync_batch()?;
+                    } else {
+                        self.dirty_files.remove(0);
+                    }
+                }
+                let f = publish_unsynced(&path, bytes)?;
+                self.dirty_files.push(f);
+                self.record_verified_artifact(&w.sha256, &path, w.byte_len)?;
+            }
+            if !self.committed_witnesses.contains(&w.sha256)
+                && !self.uncommitted_artifacts.iter().any(|s| s == &w.sha256)
+            {
+                self.uncommitted_artifacts.push_back(w.sha256.clone());
+            }
         }
         Ok(w)
     }
@@ -859,7 +1057,8 @@ impl Journal {
         state: &CoreState,
         witnesses: Vec<Witness>,
     ) -> Result<(), JournalError> {
-        if self.poisoned {
+        if self.poisoned || self.sync_failed.load(std::sync::atomic::Ordering::Acquire) {
+            self.poisoned = true;
             return Err(JournalError::Poisoned);
         }
         if self.count >= MAX_RECORDS {
@@ -926,6 +1125,10 @@ impl Journal {
         {
             return Err(JournalError::Witness);
         }
+        for w in &witnesses {
+            self.committed_witnesses.insert(w.sha256.clone());
+            self.uncommitted_artifacts.retain(|s| s != &w.sha256);
+        }
         // From the first durable mutation, errors poison the handle until recovery.
         self.poisoned = true;
         let is_frame = matches!(input, Input::Frame { .. });
@@ -956,6 +1159,7 @@ impl Journal {
             self.bytes += raw.len() as u64 + 1;
             self.tail = sha256_hex(&raw);
             self.archive = archive_next(&self.archive, &event);
+            self.pending_checkpoint = None;
             let tmp = self.root.join("checkpoint.next");
             private_directory(&self.root)?;
             match fs::symlink_metadata(&tmp) {
@@ -1015,7 +1219,7 @@ impl Journal {
             self.tail = sha256_hex(&raw);
             self.archive = archive_next(&self.archive, &event);
             let cp_file = checkpoint_unsynced(&self.root, &self.closure())?;
-            self.dirty_files.push(cp_file);
+            self.pending_checkpoint = Some(cp_file);
             self.unsynced_frames += 1;
             if self.last_sync.elapsed() >= FRAME_SYNC_WINDOW
                 || self.unsynced_frames >= FRAME_SYNC_MAX_BATCH
@@ -1079,6 +1283,7 @@ pub fn scan(path: &Path, root: &Path) -> Result<Replay, JournalError> {
     let mut archive = ZERO.to_owned();
     let mut count = 0u64;
     let mut ids = BTreeSet::new();
+    let mut committed_witnesses = BTreeSet::new();
     let mut boundaries = Vec::new();
     let mut archive_budget = genesis_bytes.len() as u64;
     while let Some(bytes) = line(&mut reader)? {
@@ -1119,6 +1324,7 @@ pub fn scan(path: &Path, root: &Path) -> Result<Replay, JournalError> {
         }
         for w in &event.witnesses {
             verify_witness(root, w)?;
+            committed_witnesses.insert(w.sha256.clone());
         }
         if required_witness(&event.input, &event.outcome)
             .is_some_and(|hash| !event.witnesses.iter().any(|w| w.sha256 == hash))
@@ -1169,6 +1375,7 @@ pub fn scan(path: &Path, root: &Path) -> Result<Replay, JournalError> {
         boundaries,
         archive_bytes: archive_budget,
         checkpoint,
+        committed_witnesses,
     })
 }
 /// Resolves the conductor's default state destination without creating it.
@@ -1234,5 +1441,29 @@ mod directory_tests {
             Err(JournalError::Invalid)
         );
         fs::remove_dir(root).unwrap();
+    }
+    #[test]
+    fn verified_witness_cache_is_bounded() {
+        let root = std::env::temp_dir().join(format!("mv-journal-cache-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        let state = CoreState::session("session-1").unwrap();
+        let mut journal = Journal::create(&root, &state).unwrap();
+        for i in 0..300u32 {
+            let bytes = format!("witness-cache-entry-{i}").into_bytes();
+            let sha = sha256_hex(&bytes);
+            let path = journal.root.join("artifacts").join(&sha);
+            fs::write(&path, &bytes).unwrap();
+            journal
+                .record_verified_artifact(&sha, &path, bytes.len() as u64)
+                .unwrap();
+        }
+        assert!(
+            journal.verified_witnesses.len() <= 256,
+            "verified_witnesses grew to {} (> 256)",
+            journal.verified_witnesses.len()
+        );
+        drop(journal);
+        fs::remove_dir_all(root).unwrap();
     }
 }

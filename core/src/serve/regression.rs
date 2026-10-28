@@ -988,3 +988,276 @@ fn w3_control_intent_under_daemon_frame_burst_coalesces_and_preserves_checks() {
         );
     });
 }
+
+#[test]
+fn rv10_01_invalid_lookahead_frame_does_not_skip_valid_predecessor() {
+    support::run(async {
+        let (_temp, server, task, mut daemon, _agent, mut ui) = setup().await;
+        created(&mut daemon, &mut ui).await;
+        let shared = SharedFrame::new();
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"frame_ready","data":{"frame_ref":shared.value(32)}}))
+            .await;
+        assert_eq!(
+            serde_json::to_value(ui.receive().await.body).unwrap()["data"]["frame_ref"]
+                ["generation"],
+            32
+        );
+
+        let f33 = shared.value(33);
+        let oversize_path = std::path::PathBuf::from(format!(
+            "/dev/shm/mv-rv10-01-oversize-{}.rgb",
+            std::process::id()
+        ));
+        {
+            let file = std::fs::File::create(&oversize_path).unwrap();
+            file.set_len(65 * 1024 * 1024).unwrap();
+        }
+        let mut f34_bad = shared.value(34);
+        f34_bad["ramws_path"] = oversize_path.to_str().unwrap().into();
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"frame_ready","data":{"frame_ref":f33}}))
+            .await;
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"frame_ready","data":{"frame_ref":f34_bad}}))
+            .await;
+        assert!(
+            read_frame(&mut daemon.socket)
+                .await
+                .unwrap_or(None)
+                .is_none(),
+            "invalid frame 34 must retire the daemon connection"
+        );
+        let _ = std::fs::remove_file(&oversize_path);
+        let committed_gen = server.lock().unwrap().authority.state().surfaces["surface-demo"]
+            .frame
+            .as_ref()
+            .unwrap()
+            .generation;
+        assert_eq!(
+            committed_gen, 33,
+            "valid frame 33 must not be skipped on bare existence of invalid frame 34"
+        );
+        close_server(server, task, daemon, _agent, ui).await;
+    });
+}
+
+#[test]
+fn rv10_02_missing_shm_on_regressed_or_unknown_surface_retires_daemon() {
+    support::run(async {
+        let (_temp, server, task, mut daemon, _agent, mut ui) = setup().await;
+        created(&mut daemon, &mut ui).await;
+        let shared = SharedFrame::new();
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"frame_ready","data":{"frame_ref":shared.value(32)}}))
+            .await;
+        assert_eq!(
+            serde_json::to_value(ui.receive().await.body).unwrap()["data"]["frame_ref"]
+                ["generation"],
+            32
+        );
+
+        let mut regressed = shared.value(20);
+        regressed["ramws_path"] = "/dev/shm/mv-nonexistent-rv10-02.rgb".into();
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"frame_ready","data":{"frame_ref":regressed}}))
+            .await;
+        let closed =
+            tokio::time::timeout(Duration::from_millis(300), read_frame(&mut daemon.socket))
+                .await
+                .expect("regressed generation with missing shm file must retire daemon promptly")
+                .unwrap_or(None)
+                .is_none();
+        assert!(
+            closed,
+            "regressed generation with missing shm file must still retire the daemon"
+        );
+        close_server(server, task, daemon, _agent, ui).await;
+    });
+}
+
+#[test]
+fn rv10_03_active_recording_disables_frame_coalescing() {
+    support::run(async {
+        let (_temp, server, task, mut daemon, _agent, mut ui) = setup().await;
+        created(&mut daemon, &mut ui).await;
+        let shared = SharedFrame::new();
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"frame_ready","data":{"frame_ref":shared.value(1)}}))
+            .await;
+        let _ = ui.receive().await;
+
+        let ui_ep = registration("ui").endpoint;
+        let start_reply = server
+            .lock()
+            .unwrap()
+            .capture_request(
+                &ui_ep,
+                "recordStart",
+                json!({"schema":"capture_request/v1","request_id":"rv10-03-start","surface_id":"surface-demo","mode":"ai"}),
+            )
+            .unwrap();
+        assert_eq!(start_reply["ok"], true);
+        let rec_id = start_reply["recording_id"].as_str().unwrap().to_owned();
+
+        for gen in 2..=5_u64 {
+            daemon
+                .send(json!({"schema":"surface_event/v0.2","event":"frame_ready","data":{"frame_ref":shared.value(gen)}}))
+                .await;
+        }
+        daemon_barrier(&mut daemon).await;
+
+        let stop_reply = server
+            .lock()
+            .unwrap()
+            .capture_request(
+                &ui_ep,
+                "recordStop",
+                json!({"schema":"capture_request/v1","request_id":"rv10-03-stop","recording_id":rec_id}),
+            )
+            .unwrap();
+        assert_eq!(stop_reply["ok"], true);
+        let recorded_frames = stop_reply["recording"]["frames"].as_u64().unwrap();
+        assert_eq!(
+            recorded_frames, 5,
+            "active recording must capture all 4 burst frames plus initial frame (got {recorded_frames})"
+        );
+        close_server(server, task, daemon, _agent, ui).await;
+    });
+}
+
+#[test]
+fn rv10_05_gapless_frame_burst_polls_expired_tool_waiters_at_batch_flush() {
+    support::run(async {
+        use tokio::io::AsyncWriteExt;
+        let (temp, server, task) = start_server().await;
+        let socket = temp.0.join("runtime/core.sock");
+        let mut daemon = Peer::connect(&socket, "daemon").await;
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"created","data":{"surface":surface()}}))
+            .await;
+        daemon_barrier(&mut daemon).await;
+
+        let agent_ep = registration("agent").endpoint;
+        let (agent_tx, agent_rx) = std::sync::mpsc::sync_channel(MAX_SEND_QUEUE);
+        {
+            let mut guard = server.lock().unwrap();
+            let epoch = guard.authority.state().epoch;
+            guard.connections.insert(
+                agent_ep.clone(),
+                serve::Connection {
+                    id: 99,
+                    epoch,
+                    queue: agent_tx,
+                    terminal: Arc::new(Mutex::new(None)),
+                },
+            );
+            guard.tool_state.waiters.push(super::Waiter {
+                peer: agent_ep,
+                request_id: "rv10-05-wait".into(),
+                proposal_id: "rv10-05-prop".into(),
+                deadline: std::time::Instant::now() - Duration::from_millis(10),
+            });
+        }
+
+        let shared = SharedFrame::new();
+        for gen in 1..=32_u64 {
+            daemon.send(shared.value(gen)).await;
+        }
+        daemon.socket.shutdown().await.unwrap();
+        let _ = read_frame(&mut daemon.socket).await;
+
+        let resolved = agent_rx.try_recv();
+        assert!(
+            resolved.is_ok(),
+            "expired tool waiter must be polled when a 32-frame daemon batch flushes"
+        );
+        task.abort();
+        let _ = task.await;
+    });
+}
+
+#[test]
+fn new_02_unavailable_shm_prefix_is_hard_error_while_missing_leaf_drops() {
+    let temp = support::Temp::new();
+    let mut server = Server::open(
+        config(),
+        &temp.0.join("state"),
+        serve::effective_uid().unwrap(),
+    )
+    .unwrap();
+    server
+        .authority
+        .apply(crate::admission::Input::Connect)
+        .unwrap();
+    let sw = server.authority.retain_witness(b"seed").unwrap();
+    server
+        .authority
+        .apply_with_witnesses(
+            crate::admission::Input::Surface {
+                id: "surface-demo".into(),
+                surface: crate::admission::Surface {
+                    display: ":1".into(),
+                    owner: registration("agent").endpoint,
+                    agent_controlled: true,
+                    live: true,
+                    frame: None,
+                    refresh_after: None,
+                    allowed_verbs: vec![],
+                },
+            },
+            vec![sw],
+        )
+        .unwrap();
+
+    let mut raw: Value = serde_json::from_str(include_str!(
+        "../../../contracts/examples/v0.2/frame_ref.valid.json"
+    ))
+    .unwrap();
+    raw["ramws_path"] = "/dev/shm/mv-missing-leaf-new02.rgb".into();
+    let frame: crate::wire::payload::FrameRef = serde_json::from_value(raw).unwrap();
+    let boundary = server.authority.retain_witness(b"boundary").unwrap();
+
+    let prefix_err =
+        Server::read_shm_pixels_under(std::path::Path::new("/dev/shm-unavailable-prefix"), &frame);
+    let prefix_outcome = server.frame(0, &frame, boundary.clone(), Some(prefix_err));
+    assert!(
+        prefix_outcome.is_err(),
+        "unavailable fixed shm prefix must fail closed with Err instead of silent drop"
+    );
+    let leaf_outcome = server.frame(0, &frame, boundary, None).unwrap();
+    assert_eq!(
+        leaf_outcome, None,
+        "missing leaf under valid /dev/shm prefix must keep silent-drop behavior"
+    );
+}
+
+#[test]
+fn new_03_refused_frame_on_destroyed_surface_notifies_daemon_with_policy() {
+    support::run(async {
+        let (_temp, server, task, mut daemon, _agent, mut ui) = setup().await;
+        created(&mut daemon, &mut ui).await;
+        let mut dead = surface();
+        dead["state"] = "destroyed".into();
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":dead}}))
+            .await;
+        let _ = ui.receive().await;
+
+        let shared = SharedFrame::new();
+        daemon.send(shared.value(1)).await;
+        let frame_msg_id = format!("daemon-test-{}", daemon.seq);
+        daemon
+            .send(tool_call("list", json!({"cursor":null,"limit":1})))
+            .await;
+        let first = serde_json::to_value(daemon.receive().await.body).unwrap();
+        assert_eq!(
+            first["proposal_id"], frame_msg_id,
+            "destroyed-surface frame refusal must notify daemon before subsequent barrier reply"
+        );
+        assert_eq!(first["decision"], "refused");
+        assert_eq!(first["reason_code"], "POLICY");
+        daemon.verdict("refused", Some("POLICY")).await;
+        close_server(server, task, daemon, _agent, ui).await;
+    });
+}

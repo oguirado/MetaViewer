@@ -39,7 +39,9 @@ mod tools;
 use crate::admission::{
     AdmissionRequest, Authority, CoreState, Frame, Input, LifecycleUpdate, Surface,
 };
-use crate::journal::{sha256_hex, Witness};
+#[cfg(test)]
+use crate::journal::sha256_hex;
+use crate::journal::{VerifiedPixels, Witness};
 use crate::wire::payload::{FrameRef, Hello, SurfaceEvent};
 use crate::*;
 use serde::{Deserialize, Serialize};
@@ -380,7 +382,10 @@ impl Server {
     fn witness(&mut self, frame: &FrameRef) -> Result<Witness> {
         self.witness_pixels(frame).map(|(witness, _)| witness)
     }
-    fn read_shm_pixels(frame: &FrameRef) -> Result<Vec<u8>> {
+    fn read_shm_pixels(frame: &FrameRef) -> Result<VerifiedPixels> {
+        Self::read_shm_pixels_under(Path::new("/dev/shm"), frame)
+    }
+    fn read_shm_pixels_under(shm_root: &Path, frame: &FrameRef) -> Result<VerifiedPixels> {
         #[cfg(test)]
         let t_read = Instant::now();
         #[cfg(test)]
@@ -404,11 +409,16 @@ impl Server {
                 .custom_flags(frame_directory_flags()?)
                 .open(path)?)
         };
-        let mut directory = open_dir(Path::new("/"))?;
-        for part in ["dev", "shm"] {
+        let mut directory =
+            open_dir(Path::new("/")).map_err(|_| invalid("shared memory prefix unavailable"))?;
+        for part in shm_root.components().filter_map(|c| match c {
+            std::path::Component::Normal(p) => Some(p),
+            _ => None,
+        }) {
             directory = open_dir(
                 &PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd())).join(part),
-            )?;
+            )
+            .map_err(|_| invalid("shared memory prefix unavailable"))?;
         }
         let relative = path.strip_prefix("/dev/shm")?;
         let mut parts = relative.components().peekable();
@@ -442,21 +452,7 @@ impl Server {
             return Err(invalid("invalid frame witness"));
         }
         let expected_len = meta.len() as usize;
-        let mut bytes = vec![0u8; expected_len];
-        let mut hasher = crate::journal::StreamingSha256::new();
-        let mut pos = 0usize;
-        while pos < expected_len {
-            let end = (pos + 65536).min(expected_len);
-            let n = (&file).read(&mut bytes[pos..end])?;
-            if n == 0 {
-                break;
-            }
-            hasher.update(&bytes[pos..pos + n]);
-            pos += n;
-        }
-        let mut extra = [0u8; 1];
-        let trailing = (&file).read(&mut extra)?;
-        let digest = hasher.finalize_hex();
+        let res = VerifiedPixels::read_verified(&file, expected_len, &frame.sha256);
         #[cfg(test)]
         crate::journal::STAGE_TIMINGS.with(|cell| {
             let mut s = cell.get();
@@ -464,37 +460,65 @@ impl Server {
             s.shm_read_ns += t_read.elapsed().as_nanos().saturating_sub(h_delta);
             cell.set(s);
         });
-        if pos != expected_len || trailing != 0 || digest != frame.sha256 {
-            return Err(invalid("frame digest mismatch"));
-        }
-        Ok(bytes)
+        Ok(res?)
     }
     fn witness_pixels(&mut self, frame: &FrameRef) -> Result<(Witness, Vec<u8>)> {
-        let bytes = Self::read_shm_pixels(frame)?;
-        Ok((
-            self.authority.retain_frame_witness(&frame.sha256, &bytes)?,
-            bytes,
-        ))
+        let verified = Self::read_shm_pixels(frame)?;
+        let witness = verified.retain_in_authority(&mut self.authority)?;
+        Ok((witness, verified.into_bytes()))
+    }
+    fn precheck_frame_on_not_found(&self, frame: &FrameRef) -> Result<()> {
+        if frame.generation < 1
+            || frame.width < 1
+            || frame.height < 1
+            || frame.sha256.len() != 64
+            || !frame
+                .sha256
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            return Err(invalid("invalid frame"));
+        }
+        if self.authority.state().is_destroyed(&frame.surface_id) {
+            return Ok(());
+        }
+        let s = self
+            .authority
+            .state()
+            .surfaces
+            .get(&frame.surface_id)
+            .ok_or_else(|| invalid("unknown surface"))?;
+        if s.frame
+            .as_ref()
+            .is_some_and(|f| frame.generation < f.generation)
+        {
+            return Err(invalid("generation regression"));
+        }
+        Ok(())
     }
     fn frame(
         &mut self,
         now_ns: u64,
         frame: &FrameRef,
         boundary: Witness,
-        pre_pixels: Option<Result<Vec<u8>>>,
-    ) -> Result<bool> {
+        pre_pixels: Option<Result<VerifiedPixels>>,
+    ) -> Result<Option<crate::admission::Outcome>> {
         let (witness, pixels) = match pre_pixels {
             Some(res) => match res {
-                Ok(bytes) => (
-                    self.authority.retain_frame_witness(&frame.sha256, &bytes)?,
-                    bytes,
-                ),
+                Ok(verified) => {
+                    if verified.sha256() != frame.sha256 {
+                        return Err(invalid("frame digest mismatch"));
+                    }
+                    let witness = verified.retain_in_authority(&mut self.authority)?;
+                    (witness, verified.into_bytes())
+                }
                 Err(error)
                     if error
                         .downcast_ref::<std::io::Error>()
                         .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
                 {
-                    return Ok(false);
+                    self.precheck_frame_on_not_found(frame)?;
+                    return Ok(None);
                 }
                 Err(error) => return Err(error),
             },
@@ -505,7 +529,8 @@ impl Server {
                         .downcast_ref::<std::io::Error>()
                         .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
                 {
-                    return Ok(false);
+                    self.precheck_frame_on_not_found(frame)?;
+                    return Ok(None);
                 }
                 Err(error) => return Err(error),
             },
@@ -538,7 +563,7 @@ impl Server {
             self.tool_state
                 .retain(&Command::FrameRef(Box::new(frame.clone())));
         }
-        Ok(out.reason.is_none())
+        Ok(Some(out))
     }
     fn daemon_frame_ref(body: &Command) -> Option<&FrameRef> {
         match body {
@@ -550,6 +575,8 @@ impl Server {
             _ => None,
         }
     }
+    // Uncommitted superseded frames skip pixel reads and SHA-256 verification by design:
+    // skipped bytes never enter state, journal, capture, or display.
     fn can_supersede_frame(&self, epoch: u64, frame: &FrameRef) -> bool {
         if epoch != self.authority.state().epoch
             || frame.generation < 1
@@ -560,6 +587,7 @@ impl Server {
                 .sha256
                 .bytes()
                 .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+            || self.capture.has_active_recording(&frame.surface_id)
         {
             return false;
         }
@@ -569,7 +597,8 @@ impl Server {
             || path
                 .components()
                 .any(|c| matches!(c, std::path::Component::ParentDir))
-            || !fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && m.len() > 0)
+            || !fs::symlink_metadata(path)
+                .is_ok_and(|m| m.is_file() && m.len() > 0 && m.len() <= 64 * 1024 * 1024)
         {
             return false;
         }
@@ -615,7 +644,7 @@ impl Server {
         id: u64,
         epoch: u64,
         env: Envelope,
-        pre_pixels: Option<Result<Vec<u8>>>,
+        pre_pixels: Option<Result<VerifiedPixels>>,
     ) -> Result<()> {
         let mut s = server.lock().map_err(|_| invalid("poisoned authority"))?;
         let c = s
@@ -650,7 +679,7 @@ impl Server {
         let mut had_frame = false;
         let len = batch.len();
         for (i, env) in batch.iter().enumerate() {
-            let mut superseded = false;
+            let mut superseding: Option<&FrameRef> = None;
             if let Some(frame_i) = Self::daemon_frame_ref(&env.body) {
                 had_frame = true;
                 for next in batch.iter().skip(i + 1).take(len - i - 1) {
@@ -659,17 +688,17 @@ impl Server {
                     };
                     if frame_j.surface_id == frame_i.surface_id {
                         if frame_j.generation <= frame_i.generation {
-                            superseded = false;
+                            superseding = None;
                             break;
                         }
                         if fs::symlink_metadata(&frame_j.ramws_path)
                             .is_ok_and(|m| m.is_file() && m.len() > 0)
                         {
-                            superseded = true;
+                            superseding = Some(frame_j);
                         }
                     }
                 }
-                if superseded {
+                if let Some(frame_j) = superseding {
                     let mut s = server.lock().map_err(|_| invalid("poisoned authority"))?;
                     let c = s
                         .connections
@@ -678,7 +707,9 @@ impl Server {
                     if c.id != id || c.epoch != epoch {
                         return Err(invalid("connection superseded"));
                     }
-                    if s.skip_superseded_frame(ready, epoch, env, frame_i)? {
+                    if s.can_supersede_frame(epoch, frame_j)
+                        && s.skip_superseded_frame(ready, epoch, env, frame_i)?
+                    {
                         continue;
                     }
                 }
@@ -714,7 +745,7 @@ impl Server {
         peer: &ReadyPeer,
         epoch: u64,
         env: Envelope,
-        pre_pixels: Option<Result<Vec<u8>>>,
+        pre_pixels: Option<Result<VerifiedPixels>>,
     ) -> Result<()> {
         peer.check_sender(&env)?;
         let now_ns = self.now()?;
@@ -733,14 +764,13 @@ impl Server {
         peer: &ReadyPeer,
         epoch: u64,
         env: Envelope,
-        pre_pixels: Option<Result<Vec<u8>>>,
+        pre_pixels: Option<Result<VerifiedPixels>>,
     ) -> Result<()> {
         self.replay
             .record(&env.session_id, &env.from, &env.nonce, env.seq)?;
         let raw = serde_json::to_string(&env)?;
-        let boundary = self
-            .authority
-            .retain_frame_witness(&sha256_hex(raw.as_bytes()), raw.as_bytes())?;
+        let boundary = VerifiedPixels::from_bytes(raw.into_bytes())?
+            .retain_in_authority(&mut self.authority)?;
         match (&env.from.component, &env.body) {
             (Component::Ui, Command::RecordRequest(request)) => {
                 return self.capture_wire(now_ns, &env, request, boundary);
@@ -830,10 +860,12 @@ impl Server {
                         Some(self.lifecycle(&e.data.surface, false, boundary)?)
                     }
                     SurfaceEvent::Case2(e) => {
-                        if !self.frame(now_ns, &e.data.frame_ref, boundary, pre_pixels)? {
+                        let Some(out) =
+                            self.frame(now_ns, &e.data.frame_ref, boundary, pre_pixels)?
+                        else {
                             return Ok(());
-                        }
-                        None
+                        };
+                        Some(out)
                     }
                     SurfaceEvent::Case3(_) | SurfaceEvent::Case4(_) => Some(
                         self.authority
@@ -876,8 +908,11 @@ impl Server {
                 if epoch != self.authority.state().epoch {
                     return Err(invalid("old executor"));
                 }
-                if !self.frame(now_ns, frame, boundary, pre_pixels)? {
+                let Some(out) = self.frame(now_ns, frame, boundary, pre_pixels)? else {
                     return Ok(());
+                };
+                if let Some(reason) = out.reason {
+                    return self.refuse_at(now_ns, &env.from, &env.msg_id, reason, out.core_seq);
                 }
                 self.fanout_at(now_ns, env.body.clone());
             }
@@ -1590,6 +1625,8 @@ async fn connection(
                     return Err(invalid("connection closed"));
                 }
             };
+            // Only graceful EOF drains buffered daemon batches; abort or read error
+            // drops any un-routed batch immediately by design (no delivery promise on abort).
             let Some(env) = env else {
                 if !batch.is_empty() {
                     Server::route_daemon_batch(
@@ -1614,6 +1651,10 @@ async fn connection(
                         std::mem::take(&mut batch),
                     )
                     .await?;
+                    server
+                        .lock()
+                        .map_err(|_| invalid("poisoned authority"))?
+                        .poll_tool_waiters_tick()?;
                     if had_frame {
                         tokio::time::sleep(Duration::from_millis(1)).await;
                     }
