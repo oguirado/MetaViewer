@@ -940,10 +940,17 @@ func (s *helloState) accept(ctx context.Context, profiles map[string]capsule.Pro
 			var ev struct {
 				Data struct {
 					SurfaceID string `json:"surface_id"`
+					Surface   struct {
+						SurfaceID string `json:"surface_id"`
+					} `json:"surface"`
 				} `json:"data"`
 			}
 			_ = json.Unmarshal(body, &ev)
-			lock := session.surfaceLock(ev.Data.SurfaceID)
+			id := ev.Data.Surface.SurfaceID
+			if id == "" {
+				id = ev.Data.SurfaceID
+			}
+			lock := session.surfaceLock(id)
 			if lock != nil {
 				lock.Lock()
 				defer lock.Unlock()

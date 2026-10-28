@@ -22,12 +22,12 @@ const DESTROYED_CAP: usize = 128;
 
 #[derive(Default)]
 pub(super) struct ToolState {
-    surfaces: BTreeMap<String, Value>,
+    pub(super) surfaces: BTreeMap<String, Value>,
     destroyed: BTreeSet<String>,
     destroyed_order: VecDeque<String>,
     frames: BTreeMap<String, Value>,
     receipts: BTreeMap<String, Value>,
-    verification_contexts: BTreeMap<String, (Value, Value)>,
+    pub(super) verification_contexts: BTreeMap<String, (Value, Value)>,
     waiters: Vec<Waiter>,
     receipt_order: VecDeque<String>,
     layout: BTreeMap<String, String>,
@@ -217,6 +217,9 @@ impl ToolState {
     pub(super) fn is_destroyed_surface(&self, id: &str) -> bool {
         self.destroyed.contains(id)
     }
+    pub(super) fn layout_visibility(&self, id: &str) -> Option<String> {
+        self.layout.get(id).cloned()
+    }
     pub(super) fn surface_event(&self, id: &str, state: &CoreState) -> Option<Command> {
         let mut surface = self.surfaces.get(id)?.clone();
         surface["control"] = if state.surfaces.get(id)?.agent_controlled {
@@ -227,6 +230,32 @@ impl ToolState {
         .into();
         let event = serde_json::from_value(json!({"schema":"surface_event/v0.2",
             "event":"state_changed","data":{"surface":surface}}))
+        .ok()?;
+        Some(Command::SurfaceEvent(Box::new(event)))
+    }
+    pub(super) fn terminal_surface_event(
+        surface: &crate::wire::payload::Surface,
+        state: &CoreState,
+        visibility_override: Option<&str>,
+    ) -> Option<Command> {
+        let mut surface_val = serde_json::to_value(surface).ok()?;
+        let id = surface.surface_id.as_str();
+        if let Some(auth) = state.surfaces.get(id) {
+            surface_val["control"] = if auth.agent_controlled {
+                "agent"
+            } else {
+                "human"
+            }
+            .into();
+        }
+        if let Some(visibility) = visibility_override {
+            surface_val["visibility"] = visibility.into();
+        }
+        let event = serde_json::from_value(json!({
+            "schema": "surface_event/v0.2",
+            "event": "state_changed",
+            "data": { "surface": surface_val }
+        }))
         .ok()?;
         Some(Command::SurfaceEvent(Box::new(event)))
     }

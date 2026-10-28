@@ -1542,3 +1542,224 @@ fn pre_existing_predictable_tmp_pid_paths_do_not_break_or_hijack_builds() {
     );
     assert_eq!(fs::read(&srf_trap_file).unwrap(), b"HIJACKED_SRF");
 }
+
+#[test]
+fn w3_fake_capsule_kill_reaches_ui_as_lost_and_journals() {
+    let paths = TempPaths::new("lost");
+    let bin_dir = paths.shm_root.join("bin");
+    let runtime_dir = paths.shm_root.join("runtime");
+    let core_state = paths.shm_root.join("core-state");
+    let srf_state = paths.shm_root.join("srf-state");
+    for d in [
+        &bin_dir,
+        &runtime_dir,
+        &runtime_dir.join("metaviewer"),
+        &core_state,
+        &srf_state,
+    ] {
+        fs::create_dir_all(d).unwrap();
+        fs::set_permissions(d, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    write_fake_srf_cli(&bin_dir, &paths.shm_root);
+    // Wrap srf-identity-surface so transient/kill states delegate directly to
+    // tests/integration/fake_capsule.py (--fault 6, simulating a stopped capsule).
+    let real_helper = paths.shm_root.join("srf-helper-bin");
+    let rgb_sha = metaviewer_core::journal::sha256_hex(&[255, 0, 0, 0, 255, 0]);
+    let fake_capsule_py = repo_root().join("tests/integration/fake_capsule.py");
+    let wrapper = format!(
+        r#"#!/bin/sh
+export MV_FAKE_RGB_SHA={sha:?}
+if [ "$1" = "frame" ] && [ -f "$SRF_IDENTITY_STORE_ROOT/transient_fault_once" ]; then
+    rm -f "$SRF_IDENTITY_STORE_ROOT/transient_fault_once"
+    exec python3 {fake_py:?} --fault 6 --family identity "$@"
+fi
+if [ "$1" = "frame" ] && [ -f "$SRF_IDENTITY_STORE_ROOT/capsule_killed" ]; then
+    exec python3 {fake_py:?} --fault 6 --family identity "$@"
+fi
+exec {helper:?} "$@"
+"#,
+        sha = rgb_sha,
+        fake_py = fake_capsule_py.to_str().unwrap(),
+        helper = real_helper.to_str().unwrap(),
+    );
+    let cli_path = bin_dir.join("srf-identity-surface");
+    fs::write(&cli_path, wrapper).unwrap();
+    fs::set_permissions(&cli_path, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let adapter_bin = build_real_daemon_adapter(&bin_dir);
+    let session_id = "real-lost-session";
+    let socket = runtime_dir.join("metaviewer/core.sock");
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        let uid = effective_uid().unwrap();
+        let listener = serve::bind(&socket, uid).await.unwrap();
+        let config = Config {
+            session_id: session_id.into(),
+            core: registration("core", "0.1.2", DAEMON_COMMIT),
+            peers: vec![
+                registration("daemon", "0.1.1", DAEMON_COMMIT),
+                registration("agent", "0.1.0", DAEMON_COMMIT),
+                registration("ui", "0.1.0", DAEMON_COMMIT),
+            ],
+        };
+        let server = Arc::new(Mutex::new(Server::open(config, &core_state, uid).unwrap()));
+        let srv = Arc::clone(&server);
+        let server_task = tokio::spawn(async move {
+            let _ = serve::serve(listener, srv, uid).await;
+        });
+
+        let mut adapter = spawn_real_daemon_adapter(
+            &adapter_bin,
+            &runtime_dir,
+            &bin_dir,
+            &srf_state,
+            &paths.shm_root,
+            session_id,
+        );
+        let mut ui = TestPeer::connect(&socket, session_id, Component::Ui, "ui").await;
+        let mut agent = TestPeer::connect(&socket, session_id, Component::Agent, "agent").await;
+
+        for _ in 0..200 {
+            let snap: Value =
+                serde_json::from_slice(&server.lock().unwrap().snapshot().unwrap()).unwrap();
+            if snap["epoch"].as_u64() == Some(1) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        ui.send(json!({
+            "schema": "surface_request/v0.2",
+            "op": "create",
+            "params": {
+                "kind": "browser",
+                "profile_id": "demo",
+                "geometry": { "w": 2, "h": 1 }
+            }
+        }))
+        .await;
+
+        let mut surface_id = String::new();
+        let mut frame_sha = String::new();
+        let mut frame_gen = 0u64;
+        while surface_id.is_empty() || frame_sha.is_empty() {
+            let body = ui.receive_json().await;
+            if body["schema"] == "surface_event/v0.2" && body["event"] == "created" {
+                surface_id = body["data"]["surface"]["surface_id"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned();
+            } else if body["schema"] == "surface_event/v0.2" && body["event"] == "frame_ready" {
+                frame_sha = body["data"]["frame_ref"]["sha256"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned();
+                frame_gen = body["data"]["frame_ref"]["generation"].as_u64().unwrap();
+            }
+        }
+
+        // Subscribe to continuous frames for the live surface.
+        ui.send(json!({
+            "schema": "surface_request/v0.2",
+            "op": "frame_subscribe",
+            "params": { "surface_id": surface_id }
+        }))
+        .await;
+
+        // Inject one transient fake_capsule.py fault; verify subscription does NOT mark lost.
+        fs::write(paths.shm_root.join("transient_fault_once"), b"1").unwrap();
+        while paths.shm_root.join("transient_fault_once").exists() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        let snap: Value =
+            serde_json::from_slice(&server.lock().unwrap().snapshot().unwrap()).unwrap();
+        assert_eq!(
+            snap["surfaces"][&surface_id]["live"].as_bool(),
+            Some(true),
+            "single transient capture failure must not mark the surface lost"
+        );
+
+        // Kill the capsule (simulating docker stop -> fake_capsule.py --fault 6 on every poll).
+        fs::write(paths.shm_root.join("capsule_killed"), b"1").unwrap();
+
+        let mut saw_ui_lost = false;
+        while !saw_ui_lost {
+            let body = ui.receive_json().await;
+            if body["schema"] == "surface_event/v0.2"
+                && body["event"] == "state_changed"
+                && body["data"]["surface"]["surface_id"] == surface_id
+                && body["data"]["surface"]["state"] == "lost"
+            {
+                saw_ui_lost = true;
+            } else if body["schema"] == "surface_event/v0.2"
+                && body["event"] == "error"
+                && body["data"]["code"] == "capture_failed"
+            {
+                panic!("received capture_failed before state_changed(lost): {body}");
+            }
+        }
+
+        let snap: Value =
+            serde_json::from_slice(&server.lock().unwrap().snapshot().unwrap()).unwrap();
+        assert_eq!(
+            snap["surfaces"][&surface_id]["live"].as_bool(),
+            Some(false),
+            "core authority must mark the killed capsule surface non-live"
+        );
+
+        // Subsequent agent proposal on the lost surface must be refused with frozen code.
+        let mut prop: Value = serde_json::from_str(include_str!(
+            "../../contracts/examples/v0.2/action_proposal.valid.json"
+        ))
+        .unwrap();
+        prop["proposal_id"] = "agent-after-kill".into();
+        prop["surface_id"] = surface_id.clone().into();
+        prop["based_on_frame"]["sha256"] = frame_sha.into();
+        prop["based_on_frame"]["generation"] = frame_gen.into();
+        agent.send(prop).await;
+        let agent_verdict = agent.receive_json().await;
+        assert_eq!(agent_verdict["schema"], "action_verdict/v0.2");
+        assert_eq!(agent_verdict["decision"], "refused");
+        assert_eq!(agent_verdict["reason_code"], "SURFACE_NOT_AGENT_CONTROLLED");
+
+        // Subsequent human input on the lost surface must be refused with POLICY.
+        ui.send(json!({
+            "schema": "surface_request/v0.2",
+            "op": "input",
+            "params": {
+                "surface_id": surface_id,
+                "proposal_id": "human-after-kill",
+                "origin": "human",
+                "action": { "type": "key", "keys": ["Return"] }
+            }
+        }))
+        .await;
+        loop {
+            let body = ui.receive_json().await;
+            if body["schema"] == "action_verdict/v0.2" && body["proposal_id"] == "human-after-kill"
+            {
+                assert_eq!(body["decision"], "refused");
+                assert_eq!(body["reason_code"], "POLICY");
+                break;
+            }
+        }
+
+        let session_root = core_state.join("sessions").join(session_id);
+        let verified =
+            metaviewer_core::journal::scan(&session_root.join("journal.jsonl"), &session_root)
+                .unwrap();
+        assert!(!verified.state.surfaces[&surface_id].live);
+
+        drop(ui);
+        drop(agent);
+        server_task.abort();
+        let _ = server_task.await;
+        let _ = adapter.kill();
+        let _ = adapter.wait();
+    });
+}

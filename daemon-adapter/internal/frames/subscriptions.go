@@ -36,6 +36,33 @@ import (
 type Source interface {
 	Capture(context.Context, string) (capsule.Binding, capsule.NativeFrame, error)
 }
+
+// LossMarker is an optional Source capability (implemented by *capsule.Manager)
+// that stages a confirmed capture loss, rolls back if emit is cancelled/fails,
+// and coordinates delivery before subsequent error events.
+type LossMarker interface {
+	BeginMarkLost(id string) (json.RawMessage, error)
+	CompleteLost(id string, delivered bool)
+	WaitLostDelivered(ctx context.Context, id string)
+}
+
+type lostDeliveryWaiter interface {
+	WaitLostDelivered(ctx context.Context, id string)
+}
+
+// [TARGET, unit decision] A single transient capture_failed must not mark a
+// surface lost or terminate the subscription; require 2 consecutive proven
+// absence faults (unavailable or refused) before confirming loss and emitting
+// state_changed{state:"lost"}.
+const confirmedLossCaptureFailures = 2
+
+func shouldMarkCaptureLost(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	return capsule.IsAbsenceFault(err)
+}
+
 type Emit func(context.Context, json.RawMessage) error
 
 // StageSummary holds p50 and p95 latencies across a window of processed frames.
@@ -370,6 +397,7 @@ type capturedItem struct {
 	binding    capsule.Binding
 	native     capsule.NativeFrame
 	err        error
+	markLost   bool
 	captureDur time.Duration
 	ack        chan struct{}
 }
@@ -409,6 +437,8 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 	next := s.clock.Now()
 	timer := s.clock.NewTimer(0)
 	defer timer.Stop()
+	consecutiveFailures := 0
+	consecutiveAbsenceFailures := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -440,7 +470,9 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 				}
 			}
 		}
+		attemptedCapture := false
 		if e == nil {
+			attemptedCapture = true
 			binding, native, e = s.source.Capture(capture, id)
 		}
 		if e == nil {
@@ -448,11 +480,44 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 		}
 		captureDur := time.Since(tCap)
 		cancel()
+		markLost := false
+		transientFailure := false
+		if e == nil {
+			consecutiveFailures = 0
+			consecutiveAbsenceFailures = 0
+		} else if !t.cancelled.Load() && ctx.Err() == nil {
+			consecutiveFailures++
+			if attemptedCapture && shouldMarkCaptureLost(e) {
+				consecutiveAbsenceFailures++
+			} else {
+				consecutiveAbsenceFailures = 0
+			}
+			if consecutiveFailures < confirmedLossCaptureFailures {
+				transientFailure = true
+			} else if consecutiveAbsenceFailures >= confirmedLossCaptureFailures {
+				markLost = true
+			}
+		}
 		if locked {
 			lock.Unlock()
 		}
 		if t.cancelled.Load() || ctx.Err() != nil {
 			return
+		}
+		if transientFailure {
+			next = next.Add(s.cfg.PollInterval)
+			now := s.clock.Now()
+			if !next.After(now) {
+				missed := now.Sub(next)/s.cfg.PollInterval + 1
+				s.recordSkippedPolls(id, uint64(missed))
+				next = now.Add(s.cfg.PollInterval - now.Sub(next)%s.cfg.PollInterval)
+			}
+			waitDur := next.Sub(now)
+			if !attemptedCapture && s.cfg.CaptureTimeout > 0 && waitDur > s.cfg.CaptureTimeout {
+				waitDur = s.cfg.CaptureTimeout
+			}
+			timer.Reset(waitDur)
+			continue
 		}
 		var ack chan struct{}
 		if s.cfg.Serial || !s.isRealClock() {
@@ -462,6 +527,7 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 			binding:    binding,
 			native:     native,
 			err:        e,
+			markLost:   markLost,
 			captureDur: captureDur,
 			ack:        ack,
 		}
@@ -559,6 +625,36 @@ func (s *Subscriptions) publishLoop(ctx context.Context, id string, t *task, pip
 				close(item.ack)
 			}
 		} else {
+			if failed {
+				if t.cancelled.Load() || ctx.Err() != nil {
+					return
+				}
+				if item.markLost {
+					if tm, ok := s.source.(LossMarker); ok {
+						lostEvent, _ := tm.BeginMarkLost(id)
+						if len(lostEvent) != 0 {
+							lossDelivery, stopLoss := context.WithTimeout(ctx, s.cfg.CaptureTimeout)
+							lossErr := s.emit(lossDelivery, lostEvent)
+							if lossErr == nil {
+								lossErr = lossDelivery.Err()
+							}
+							stopLoss()
+							delivered := lossErr == nil && !t.cancelled.Load() && ctx.Err() == nil
+							tm.CompleteLost(id, delivered)
+							if !delivered {
+								if t.cancelled.Load() || ctx.Err() != nil {
+									return
+								}
+								t.err = errors.Join(e, lossErr)
+								return
+							}
+						}
+					}
+				}
+				if waiter, ok := s.source.(lostDeliveryWaiter); ok {
+					waiter.WaitLostDelivered(ctx, id)
+				}
+			}
 			tEmit := time.Now()
 			delivery, stop := context.WithTimeout(ctx, s.cfg.CaptureTimeout)
 			deliveryErr := s.emit(delivery, msg)

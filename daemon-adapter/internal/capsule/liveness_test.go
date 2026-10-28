@@ -9,7 +9,7 @@ import (
 )
 
 func TestAutomaticLivenessFakeClock(t *testing.T) {
-	for _, mode := range []string{"lost", "healthy", "transient", "unknown", "destroyed", "custom-threshold"} {
+	for _, mode := range []string{"lost", "lost-refused", "healthy", "transient", "unknown", "destroyed", "custom-threshold"} {
 		t.Run(mode, func(t *testing.T) {
 			m := testManager(t, &scriptRunner{output: []byte(startOK)})
 			id := createID(t, m)
@@ -33,6 +33,9 @@ func TestAutomaticLivenessFakeClock(t *testing.T) {
 				}
 				if mode == "unknown" && calls == 2 {
 					return nil, &cli.Fault{Code: "uncertain", Detail: "timeout"}
+				}
+				if mode == "lost-refused" {
+					return nil, cli.ExitFault("srf-identity-surface", 6, "")
 				}
 				return nil, cli.ExitFault("srf-identity-surface", 4, "")
 			})
@@ -60,7 +63,7 @@ func TestAutomaticLivenessFakeClock(t *testing.T) {
 			}
 			wantCalls, wantReports := 3, 0
 			switch mode {
-			case "lost":
+			case "lost", "lost-refused":
 				wantCalls, wantReports = 2, 1
 			case "custom-threshold":
 				wantReports = 1
@@ -319,5 +322,85 @@ func TestLivenessProbeUsesLivenessTimeoutAndCountsUnavailableMisses(t *testing.T
 	}
 	if calls != 4 || reports != 1 || m.bindings[id].Surface.State != "lost" {
 		t.Fatalf("calls=%d reports=%d state=%s, want 4/1/lost", calls, reports, m.bindings[id].Surface.State)
+	}
+}
+
+func TestLivenessNonAbsenceExitCodesDoNotCountAsMiss(t *testing.T) {
+	for _, code := range []int{5, 7} {
+		m := testManager(t, &scriptRunner{output: []byte(startOK)})
+		id := createID(t, m)
+		calls, reports := 0, 0
+		m.runner = a2Runner(func(_ context.Context, _ []string, _ []byte) ([]byte, error) {
+			calls++
+			return nil, cli.ExitFault("srf-identity-surface", code, "non-absence")
+		})
+		ticks := make(chan time.Time)
+		done := make(chan error, 1)
+		go func() {
+			done <- m.monitorLiveness(context.Background(), ticks, func(context.Context, json.RawMessage) error {
+				reports++
+				return nil
+			})
+		}()
+		ticks <- time.Time{}
+		ticks <- time.Time{}
+		close(ticks)
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		if calls != 2 || reports != 0 || m.bindings[id].Surface.State != "active" {
+			t.Fatalf("exit %d treated as absence: calls=%d reports=%d state=%s", code, calls, reports, m.bindings[id].Surface.State)
+		}
+	}
+
+	// Interleaving [exit 4 (unavailable), exit 7 (cli_failed), exit 4 (unavailable)] must reset on exit 7.
+	m := testManager(t, &scriptRunner{output: []byte(startOK)})
+	id := createID(t, m)
+	seq := []int{4, 7, 4}
+	idx, reports := 0, 0
+	m.runner = a2Runner(func(_ context.Context, _ []string, _ []byte) ([]byte, error) {
+		c := seq[idx]
+		idx++
+		return nil, cli.ExitFault("srf-identity-surface", c, "")
+	})
+	ticks := make(chan time.Time)
+	done := make(chan error, 1)
+	go func() {
+		done <- m.monitorLiveness(context.Background(), ticks, func(context.Context, json.RawMessage) error {
+			reports++
+			return nil
+		})
+	}()
+	for range seq {
+		ticks <- time.Time{}
+	}
+	close(ticks)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if reports != 0 || m.bindings[id].Surface.State != "active" {
+		t.Fatalf("expected exit 7 to reset consecutive miss count: reports=%d state=%s", reports, m.bindings[id].Surface.State)
+	}
+}
+
+func TestMarkLostRefusesUnconfirmedLostBinding(t *testing.T) {
+	m := testManager(t, &scriptRunner{output: []byte(startOK)})
+	id := createID(t, m)
+	m.mu.Lock()
+	b := m.bindings[id]
+	b.Surface.State = "lost"
+	b.ConfirmedAbsent = false
+	m.bindings[id] = b
+	m.mu.Unlock()
+
+	ev, err := m.MarkLost(id, true)
+	if err == nil || len(ev) != 0 {
+		t.Fatalf("expected MarkLost on unconfirmed lost binding to fail, got ev=%s err=%v", ev, err)
+	}
+	m.mu.Lock()
+	confirmed := m.bindings[id].ConfirmedAbsent
+	m.mu.Unlock()
+	if confirmed {
+		t.Fatal("MarkLost must not flip ConfirmedAbsent=true on a lost binding without active disappearance proof")
 	}
 }

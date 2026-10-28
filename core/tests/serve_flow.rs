@@ -478,9 +478,11 @@ fn socket_flow_admission_control_and_replay() {
             .await;
         receipt["proposal_id"] = "cancel".into();
         daemon.send(receipt).await;
-        let drained = serde_json::to_value(agent.receive().await.body).unwrap();
-        assert_eq!(drained["verified"], false);
-        assert_ne!(drained["error"], "");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), read_frame(&mut agent.socket))
+                .await
+                .is_err()
+        );
         ui.send(control("release_control")).await;
         assert_eq!(
             serde_json::to_value(daemon.receive().await.body).unwrap()["op"],
@@ -498,14 +500,18 @@ fn socket_flow_admission_control_and_replay() {
         let mut changed = surface.clone();
         changed["state"] = "lost".into();
         daemon.send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":changed}})).await;
-        ui.receive().await;
-        agent
-            .verdict("refused", Some("SURFACE_NOT_AGENT_CONTROLLED"))
-            .await;
+        let lost_ui = serde_json::to_value(ui.receive().await.body).unwrap();
+        assert_eq!(lost_ui["event"], "state_changed");
+        assert_eq!(lost_ui["data"]["surface"]["state"], "lost");
+        let lost_cancel = serde_json::to_value(agent.receive().await.body).unwrap();
+        assert_eq!(lost_cancel["proposal_id"], "readmitted");
+        assert_eq!(lost_cancel["decision"], "refused");
+        assert_eq!(lost_cancel["reason_code"], "SURFACE_NOT_AGENT_CONTROLLED");
         agent.send(proposal("lost-surface", &frame.value(4))).await;
         agent
             .verdict("refused", Some("SURFACE_NOT_AGENT_CONTROLLED"))
             .await;
+        // Mutation: remove the !live drain suppression in Server::route_with_pixels or the !old.live Policy guard in LifecycleUpdate::Updated.
         let mut settled: Value = serde_json::from_str(include_str!(
             "../../contracts/examples/v0.2/action_receipt.valid.native-key.json"
         ))
@@ -514,30 +520,66 @@ fn socket_flow_admission_control_and_replay() {
         settled["after_frame"] = frame.value(4);
         settled["native_evidence"]["kind"] = "click".into();
         daemon.send(settled).await;
-        agent.receive().await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), read_frame(&mut agent.socket))
+                .await
+                .is_err()
+        );
+        let before_revive: Value =
+            serde_json::from_slice(&server.lock().unwrap().snapshot().unwrap()).unwrap();
+        assert_eq!(before_revive["draining"], json!({}));
+        assert_eq!(before_revive["surfaces"]["surface-demo"]["live"], false);
         daemon.send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":surface}})).await;
-        ui.receive().await;
-        agent
-            .send(proposal("updated-needs-frame", &frame.value(4)))
+        daemon.verdict("refused", Some("POLICY")).await;
+        let after_revive: Value =
+            serde_json::from_slice(&server.lock().unwrap().snapshot().unwrap()).unwrap();
+        assert_eq!(after_revive["surfaces"]["surface-demo"]["live"], false);
+        assert_eq!(
+            after_revive["surfaces"]["surface-demo"]["frame"],
+            before_revive["surfaces"]["surface-demo"]["frame"]
+        );
+        assert_eq!(
+            after_revive["surfaces"]["surface-demo"]["refresh_after"],
+            before_revive["surfaces"]["surface-demo"]["refresh_after"]
+        );
+        let mut replacement = surface.clone();
+        replacement["surface_id"] = "surface-demo-2".into();
+        replacement["display"] = ":100".into();
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"created","data":{"surface":replacement}}))
             .await;
+        ui.receive().await;
+        let mut f4_rep = frame.value(4);
+        f4_rep["surface_id"] = "surface-demo-2".into();
+        daemon.send(f4_rep.clone()).await;
+        ui.receive().await;
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":replacement}}))
+            .await;
+        ui.receive().await;
+        let mut p_needs_frame = proposal("updated-needs-frame", &f4_rep);
+        p_needs_frame["surface_id"] = "surface-demo-2".into();
+        agent.send(p_needs_frame).await;
         agent.verdict("refused", Some("STALE_FRAME")).await;
-        daemon.send(frame.value(5)).await;
+        let mut f5_rep = frame.value(5);
+        f5_rep["surface_id"] = "surface-demo-2".into();
+        daemon.send(f5_rep.clone()).await;
         ui.receive().await;
-        agent
-            .send(proposal("updated-admitted", &frame.value(5)))
-            .await;
+        let mut p_updated = proposal("updated-admitted", &f5_rep);
+        p_updated["surface_id"] = "surface-demo-2".into();
+        agent.send(p_updated).await;
         agent.verdict("admitted", None).await;
         daemon.receive().await;
-        let mut destroyed = surface.clone();
+        let mut destroyed = replacement.clone();
         destroyed["state"] = "destroyed".into();
         daemon.send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":destroyed}})).await;
         ui.receive().await;
         agent
             .verdict("refused", Some("SURFACE_NOT_AGENT_CONTROLLED"))
             .await;
-        agent
-            .send(proposal("destroyed-surface", &frame.value(5)))
-            .await;
+        let mut p_destroyed = proposal("destroyed-surface", &f5_rep);
+        p_destroyed["surface_id"] = "surface-demo-2".into();
+        agent.send(p_destroyed).await;
         agent
             .verdict("refused", Some("SURFACE_NOT_AGENT_CONTROLLED"))
             .await;

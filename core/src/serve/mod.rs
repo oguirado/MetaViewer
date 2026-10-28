@@ -362,10 +362,12 @@ impl Server {
                             }
                             if event["outcome"]["reason"].is_null() {
                                 if let Command::ActionReceipt(receipt) = &env.body {
-                                    let recomputed = Command::ActionReceipt(Box::new(
-                                        tool_state.recompute_daemon_receipt(receipt, &root),
-                                    ));
-                                    tool_state.retain(&recomputed);
+                                    if event["input"]["event"] != "Drain" {
+                                        let recomputed = Command::ActionReceipt(Box::new(
+                                            tool_state.recompute_daemon_receipt(receipt, &root),
+                                        ));
+                                        tool_state.retain(&recomputed);
+                                    }
                                 } else {
                                     tool_state.retain(&env.body);
                                 }
@@ -384,6 +386,14 @@ impl Server {
                 }
             }
         }
+        human_inputs.retain(|_, h| {
+            authority
+                .state()
+                .surfaces
+                .get(&h.surface_id)
+                .is_some_and(|s| s.live)
+                && !authority.state().is_destroyed(&h.surface_id)
+        });
         tool_state.prune(authority.state());
         for env in envelopes {
             // Journal order is authoritative across connection generations;
@@ -450,14 +460,18 @@ impl Server {
             self.subscriptions.retain(|(p, _)| p != peer);
             self.unsubscribed.retain(|(p, _)| p != peer);
             if peer.component == Component::Daemon {
-                let mut pending: Vec<_> =
-                    std::mem::take(&mut self.human_inputs).into_iter().collect();
+                let mut pending: Vec<_> = self
+                    .human_inputs
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
                 pending.sort_by_key(|(_, h)| h.seq);
                 let now_ns = self.now().unwrap_or(0);
                 for (daemon_pid, human) in pending {
                     let Ok(core_seq) = self.settle_human_input_in_journal(&daemon_pid) else {
                         continue;
                     };
+                    self.human_inputs.remove(&daemon_pid);
                     if self.connections.contains_key(&human.ui) {
                         let _ = self.refuse_at(
                             now_ns,
@@ -475,10 +489,11 @@ impl Server {
                     .filter(|(_, h)| &h.ui == peer)
                     .map(|(k, h)| (k.clone(), h.seq))
                     .collect();
-                self.human_inputs.retain(|_, h| &h.ui != peer);
                 dropped.sort_by_key(|(_, seq)| *seq);
                 for (daemon_pid, _) in dropped {
-                    let _ = self.settle_human_input_in_journal(&daemon_pid);
+                    if self.settle_human_input_in_journal(&daemon_pid).is_ok() {
+                        self.human_inputs.remove(&daemon_pid);
+                    }
                 }
             }
         }
@@ -728,7 +743,14 @@ impl Server {
         {
             return Err(invalid("invalid frame"));
         }
-        if self.authority.state().is_destroyed(&frame.surface_id) {
+        if self.authority.state().is_destroyed(&frame.surface_id)
+            || self
+                .authority
+                .state()
+                .surfaces
+                .get(&frame.surface_id)
+                .is_some_and(|s| !s.live)
+        {
             return Ok(());
         }
         let s = self
@@ -1148,7 +1170,11 @@ impl Server {
                 let sid = value["params"]["surface_id"].as_str();
                 if matches!(op, "destroy" | "frame_subscribe" | "frame_unsubscribe")
                     && !sid.is_some_and(|id| {
-                        self.authority.state().surfaces.contains_key(id)
+                        self.authority
+                            .state()
+                            .surfaces
+                            .get(id)
+                            .is_some_and(|s| s.live)
                             && !self.authority.state().is_destroyed(id)
                     })
                 {
@@ -1231,12 +1257,34 @@ impl Server {
                     self.notify_cancellations_at(now_ns, &out.cancelled, out.core_seq)?;
                 }
                 if let SurfaceEvent::Case1(e) = event.as_ref() {
-                    if matches!(
-                        e.data.surface.state,
-                        SurfaceState::Destroyed | SurfaceState::Lost
-                    ) {
+                    if e.data.surface.state == SurfaceState::Destroyed {
                         self.human_inputs
                             .retain(|_, h| h.surface_id != e.data.surface.surface_id);
+                    } else if e.data.surface.state == SurfaceState::Lost {
+                        let mut matching: Vec<_> = self
+                            .human_inputs
+                            .iter()
+                            .filter(|(_, h)| h.surface_id == e.data.surface.surface_id)
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        matching.sort_by_key(|(_, h)| h.seq);
+                        for (daemon_pid, human) in matching {
+                            let seq = self.settle_human_input_in_journal(&daemon_pid)?;
+                            self.human_inputs.remove(&daemon_pid);
+                            if self.connections.contains_key(&human.ui) {
+                                if let Err(error) = self.refuse_at(
+                                    now_ns,
+                                    &human.ui,
+                                    &human.ui_proposal_id,
+                                    Refusal::Policy,
+                                    seq,
+                                ) {
+                                    if error.downcast_ref::<SendFailure>().is_none() {
+                                        return Err(error);
+                                    }
+                                }
+                            }
+                        }
                     } else if e.data.surface.control != crate::wire::payload::SurfaceControl::Human
                     {
                         for h in self.human_inputs.values_mut() {
@@ -1246,6 +1294,12 @@ impl Server {
                         }
                     }
                 }
+                let prior_visibility = match event.as_ref() {
+                    SurfaceEvent::Case1(e) => self
+                        .tool_state
+                        .layout_visibility(&e.data.surface.surface_id),
+                    _ => None,
+                };
                 #[cfg(test)]
                 let t_fan = Instant::now();
                 self.tool_state.retain(&env.body);
@@ -1255,6 +1309,13 @@ impl Server {
                     SurfaceEvent::Case1(e) => self
                         .tool_state
                         .surface_event(&e.data.surface.surface_id, self.authority.state())
+                        .or_else(|| {
+                            tools::ToolState::terminal_surface_event(
+                                &e.data.surface,
+                                self.authority.state(),
+                                prior_visibility.as_deref(),
+                            )
+                        })
                         .unwrap_or_else(|| env.body.clone()),
                     _ => env.body.clone(),
                 };
@@ -1337,19 +1398,20 @@ impl Server {
                     .as_str()
                     .ok_or_else(|| invalid("surface required"))?
                     .to_string();
+                if !self
+                    .authority
+                    .state()
+                    .surfaces
+                    .get(&sid)
+                    .is_some_and(|s| s.live || self.authority.state().is_destroyed(&sid))
+                {
+                    return self.unsupported_at(now_ns, &env, boundary);
+                }
                 let input = if take {
                     Input::TakeControl { surface_id: sid }
                 } else {
                     Input::ReleaseControl { surface_id: sid }
                 };
-                if !self
-                    .authority
-                    .state()
-                    .surfaces
-                    .contains_key(value["params"]["surface_id"].as_str().unwrap_or(""))
-                {
-                    return self.unsupported_at(now_ns, &env, boundary);
-                }
                 let daemon = self
                     .config
                     .peers
@@ -1416,12 +1478,12 @@ impl Server {
                         out.core_seq,
                     );
                 }
-                let input = if self
+                let was_draining = self
                     .authority
                     .state()
                     .draining
-                    .contains_key(&receipt.proposal_id)
-                {
+                    .contains_key(&receipt.proposal_id);
+                let input = if was_draining {
                     Input::Drain {
                         proposal_id: receipt.proposal_id.clone(),
                         epoch,
@@ -1441,6 +1503,13 @@ impl Server {
                         reason,
                         out.core_seq,
                     );
+                }
+                if was_draining {
+                    self.tool_state
+                        .verification_contexts
+                        .remove(&receipt.proposal_id);
+                    self.poll_tool_waiters_at(now_ns)?;
+                    return Ok(());
                 }
                 let agent = self
                     .config
@@ -1780,13 +1849,18 @@ impl Server {
                 return Err(error);
             }
             let failed_seq = self.settle_human_input_in_journal(&daemon_proposal_id)?;
-            return self.refuse_at(
+            if let Err(ui_err) = self.refuse_at(
                 now_ns,
                 &env.from,
                 &input_req.params.proposal_id,
                 Refusal::Policy,
                 failed_seq,
-            );
+            ) {
+                if ui_err.downcast_ref::<SendFailure>().is_none() {
+                    return Err(ui_err);
+                }
+            }
+            return Ok(());
         }
         self.human_inputs.insert(
             daemon_proposal_id,

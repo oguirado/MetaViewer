@@ -10,11 +10,12 @@
 //! Each proposal is dispatched at most once, below its retry ceiling; retries
 //! require a new frame-bound admission. Receipt here settles execution only,
 //! and never claims that an outcome was verified.
-//! [TARGET, unit decision] Destroyed IDs are terminal tombstones. Metadata updates
-//! preserve admitted verbs; DispatchFailed releases only provably unqueued work,
-//! without refunding its admitted-attempt budget.
-//! [TARGET, unit decision] Metadata updates can restore liveness; only explicit
-//! Lost/Destroyed transitions revoke it. Control cession still cancels work.
+//! [TARGET, unit decision] Destroyed and Lost surfaces are terminal tombstones.
+//! Metadata updates preserve admitted verbs; DispatchFailed releases only provably
+//! unqueued work, without refunding its admitted-attempt budget.
+//! [TARGET, unit decision] Explicit Lost/Destroyed transitions permanently revoke
+//! liveness; metadata updates and late frames cannot resurrect a non-live surface.
+//! Control cession still cancels work.
 //! [TARGET, unit decision] HumanInput admits UI surface_request/v0.2 op="input"
 //! (click/key/type/scroll) only when the surface is live, not agent_controlled,
 //! free of lease/draining conflicts, within frame/delta bounds, and with budget.
@@ -257,10 +258,9 @@ impl CoreState {
                 if !matches!(
                     value["op"].as_str(),
                     Some("create" | "destroy" | "list" | "frame_subscribe" | "frame_unsubscribe")
-                ) || value["params"]["surface_id"]
-                    .as_str()
-                    .is_some_and(|id| self.is_destroyed(id))
-                    || !valid_surface_create_policy(request)
+                ) || value["params"]["surface_id"].as_str().is_some_and(|id| {
+                    self.is_destroyed(id) || self.surfaces.get(id).is_some_and(|s| !s.live)
+                }) || !valid_surface_create_policy(request)
                 {
                     out.reason = Some(Refusal::Policy);
                 } else if self.remaining_budget == 0 {
@@ -375,22 +375,34 @@ impl CoreState {
                                 if surface.display.is_empty() || surface.frame.is_some() {
                                     return Err(AdmissionError::InvalidInput);
                                 }
-                                old.display = surface.display.clone();
-                                old.live |= surface.live;
-                                old.agent_controlled &= surface.agent_controlled;
-                                // Wire metadata carries no capability grant.
+                                if !old.live {
+                                    out.reason = Some(Refusal::Policy);
+                                } else {
+                                    old.display = surface.display.clone();
+                                    old.live |= surface.live;
+                                    old.agent_controlled &= surface.agent_controlled;
+                                    // Wire metadata carries no capability grant.
+                                }
                             }
-                            LifecycleUpdate::Lost => old.live = false,
+                            LifecycleUpdate::Lost => {
+                                if !old.live {
+                                    out.reason = Some(Refusal::Policy);
+                                } else {
+                                    old.live = false;
+                                }
+                            }
                             LifecycleUpdate::Destroyed => {
                                 old.live = false;
                                 self.destroyed.insert(surface_id.clone());
                             }
                             LifecycleUpdate::Created(_) => unreachable!(),
                         }
-                        old.refresh_after = Some(next);
-                        if !old.live || !old.agent_controlled {
-                            out.cancelled = self.cancel_surface(surface_id);
-                            out.cancellation_reason = Some(Refusal::SurfaceNotAgentControlled);
+                        if out.reason.is_none() {
+                            old.refresh_after = Some(next);
+                            if !old.live || !old.agent_controlled {
+                                out.cancelled = self.cancel_surface(surface_id);
+                                out.cancellation_reason = Some(Refusal::SurfaceNotAgentControlled);
+                            }
                         }
                     } else {
                         out.reason = Some(Refusal::Policy);
@@ -421,16 +433,20 @@ impl CoreState {
                     .surfaces
                     .get_mut(surface_id)
                     .ok_or(AdmissionError::InvalidInput)?;
-                if s.frame
-                    .as_ref()
-                    .is_some_and(|f| frame.generation <= f.generation)
-                {
-                    return Err(AdmissionError::InvalidInput);
+                if !s.live {
+                    out.reason = Some(Refusal::Policy);
+                } else {
+                    if s.frame
+                        .as_ref()
+                        .is_some_and(|f| frame.generation <= f.generation)
+                    {
+                        return Err(AdmissionError::InvalidInput);
+                    }
+                    if s.refresh_after.is_some_and(|fence| next > fence) {
+                        s.refresh_after = None;
+                    }
+                    s.frame = Some(frame.clone());
                 }
-                if s.refresh_after.is_some_and(|fence| next > fence) {
-                    s.refresh_after = None;
-                }
-                s.frame = Some(frame.clone());
             }
             Input::Propose(r) => {
                 let p = r.proposal()?;
@@ -546,12 +562,16 @@ impl CoreState {
                     .surfaces
                     .get_mut(surface_id)
                     .ok_or(AdmissionError::InvalidInput)?;
-                s.agent_controlled = false;
-                s.refresh_after = Some(next);
-                out.cancelled = self.cancel_surface(surface_id);
-                out.control_ready = !self.draining.values().any(|sid| sid == surface_id);
-                // Each cancelled proposal carries the typed takeover refusal.
-                out.cancellation_reason = Some(Refusal::SurfaceNotAgentControlled);
+                if !s.live {
+                    out.reason = Some(Refusal::Policy);
+                } else {
+                    s.agent_controlled = false;
+                    s.refresh_after = Some(next);
+                    out.cancelled = self.cancel_surface(surface_id);
+                    out.control_ready = !self.draining.values().any(|sid| sid == surface_id);
+                    // Each cancelled proposal carries the typed takeover refusal.
+                    out.cancellation_reason = Some(Refusal::SurfaceNotAgentControlled);
+                }
             }
             Input::ReleaseControl { surface_id } => {
                 if self.draining.values().any(|sid| sid == surface_id) {
@@ -561,8 +581,12 @@ impl CoreState {
                         .surfaces
                         .get_mut(surface_id)
                         .ok_or(AdmissionError::InvalidInput)?;
-                    s.agent_controlled = true;
-                    s.refresh_after = Some(next);
+                    if !s.live {
+                        out.reason = Some(Refusal::Policy);
+                    } else {
+                        s.agent_controlled = true;
+                        s.refresh_after = Some(next);
+                    }
                 }
             }
             Input::Drain { proposal_id, epoch } => {

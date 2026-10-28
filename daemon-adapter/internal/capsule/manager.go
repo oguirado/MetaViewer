@@ -125,6 +125,7 @@ type Manager struct {
 	used        map[string]bool
 	refresh     map[string]bool
 	views       map[string]bool
+	lostDone    map[string]chan struct{}
 }
 
 var profileID = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
@@ -203,7 +204,7 @@ func NewManager(cfg Config, r cli.Runner, clock cli.Clock) (*Manager, error) {
 		copyProfiles[id] = p
 	}
 	cfg.Profiles = copyProfiles
-	return &Manager{cfg: cfg, runner: r, clock: clock, bindings: make(map[string]Binding), quarantined: make(map[string]bool), destroying: make(map[string]bool), pending: make(map[string]*pendingInput), inputEpochs: make(map[string]uint64), used: make(map[string]bool), refresh: make(map[string]bool), views: make(map[string]bool)}, nil
+	return &Manager{cfg: cfg, runner: r, clock: clock, bindings: make(map[string]Binding), quarantined: make(map[string]bool), destroying: make(map[string]bool), pending: make(map[string]*pendingInput), inputEpochs: make(map[string]uint64), used: make(map[string]bool), refresh: make(map[string]bool), views: make(map[string]bool), lostDone: make(map[string]chan struct{})}, nil
 }
 func withinRAM(path string) bool {
 	return path == "/dev/shm" || len(path) > 9 && path[:9] == "/dev/shm/" && filepath.Clean(path) == path
@@ -682,15 +683,22 @@ func (m *Manager) Capture(ctx context.Context, id string) (Binding, NativeFrame,
 func (m *Manager) MarkLost(id string, confirmedAbsent bool) (json.RawMessage, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.markLostLocked(id, confirmedAbsent)
+	return m.markLostLocked(id, confirmedAbsent, false)
 }
 
-func (m *Manager) markLostLocked(id string, confirmedAbsent bool) (json.RawMessage, error) {
+// BeginMarkLost transitions an active surface to lost and tracks in-flight delivery
+// until CompleteLost is called.
+func (m *Manager) BeginMarkLost(id string) (json.RawMessage, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.markLostLocked(id, true, true)
+}
+
+func (m *Manager) markLostLocked(id string, confirmedAbsent bool, trackDelivery bool) (json.RawMessage, error) {
 	b, ok := m.bindings[id]
-	if confirmedAbsent && ok && b.Surface.State == "lost" {
-		if !b.ConfirmedAbsent {
-			b.ConfirmedAbsent = true
-			m.bindings[id] = b
+	if ok && b.Surface.State == "lost" {
+		if !confirmedAbsent || !b.ConfirmedAbsent {
+			return nil, fault("surface", "confirmed active disappearance required")
 		}
 		return nil, nil
 	}
@@ -708,7 +716,42 @@ func (m *Manager) markLostLocked(id string, confirmedAbsent bool) (json.RawMessa
 	b.Surface.State = "lost"
 	b.ConfirmedAbsent = true
 	m.bindings[id] = b
+	if trackDelivery {
+		m.lostDone[id] = make(chan struct{})
+	}
 	return surfaceEvent("v0.2", "state_changed", b.Surface), nil
+}
+
+// CompleteLost finishes or rolls back a tracked state_changed(lost) emission.
+func (m *Manager) CompleteLost(id string, delivered bool) {
+	m.mu.Lock()
+	ch := m.lostDone[id]
+	delete(m.lostDone, id)
+	if !delivered {
+		if b, ok := m.bindings[id]; ok && b.Surface.State == "lost" && b.ConfirmedAbsent && !m.destroying[id] {
+			b.Surface.State = "active"
+			b.ConfirmedAbsent = false
+			m.bindings[id] = b
+		}
+	}
+	m.mu.Unlock()
+	if ch != nil {
+		close(ch)
+	}
+}
+
+// WaitLostDelivered waits (up to ctx) for an in-flight state_changed(lost) emission to finish.
+func (m *Manager) WaitLostDelivered(ctx context.Context, id string) {
+	m.mu.Lock()
+	ch := m.lostDone[id]
+	m.mu.Unlock()
+	if ch == nil {
+		return
+	}
+	select {
+	case <-ch:
+	case <-ctx.Done():
+	}
 }
 func (m *Manager) input(ctx context.Context, r Request, version string, evidence *InputEvidence) ([]json.RawMessage, error) {
 	var q struct {

@@ -63,14 +63,30 @@ struct Peer {
     config: Config,
     registration: Registration,
     seq: u64,
+    nonce_prefix: String,
 }
 impl Peer {
     async fn connect(path: &std::path::Path, component: &str) -> Self {
+        Self::connect_with_prefix(path, component, None).await
+    }
+    async fn reconnect(path: &std::path::Path, component: &str, gen: u64) -> Self {
+        let reg = registration(component);
+        let prefix = format!("{}-g{gen}", reg.endpoint.instance);
+        Self::connect_with_prefix(path, component, Some(prefix)).await
+    }
+    async fn connect_with_prefix(
+        path: &std::path::Path,
+        component: &str,
+        prefix: Option<String>,
+    ) -> Self {
+        let reg = registration(component);
+        let nonce_prefix = prefix.unwrap_or_else(|| reg.endpoint.instance.clone());
         let mut p = Self {
             socket: UnixStream::connect(path).await.unwrap(),
             config: config(),
-            registration: registration(component),
+            registration: reg,
             seq: 0,
+            nonce_prefix,
         };
         p.send(serde_json::to_value(&p.registration.hello).unwrap())
             .await;
@@ -84,7 +100,7 @@ impl Peer {
         write_frame(&mut self.socket, &env).await.unwrap();
     }
     fn envelope(&self, body: Value) -> Envelope {
-        decode_envelope(&json!({"schema":"envelope/v0.2","msg_id":format!("{}-{}", self.registration.endpoint.instance,self.seq),"ts_ns":0,"from":self.registration.endpoint,"to":self.config.core.endpoint,"session_id":self.config.session_id,"seq":self.seq,"nonce":format!("{}-{}",self.registration.endpoint.instance,self.seq),"body":body}).to_string()).unwrap()
+        decode_envelope(&json!({"schema":"envelope/v0.2","msg_id":format!("{}-{}", self.nonce_prefix,self.seq),"ts_ns":0,"from":self.registration.endpoint,"to":self.config.core.endpoint,"session_id":self.config.session_id,"seq":self.seq,"nonce":format!("{}-{}",self.nonce_prefix,self.seq),"body":body}).to_string()).unwrap()
     }
     async fn receive(&mut self) -> Envelope {
         // read_frame already enforces the transport's configured read deadline.
@@ -1289,6 +1305,649 @@ fn new_03_refused_frame_on_destroyed_surface_notifies_daemon_with_policy() {
         assert_eq!(first["decision"], "refused");
         assert_eq!(first["reason_code"], "POLICY");
         daemon.verdict("refused", Some("POLICY")).await;
+        close_server(server, task, daemon, _agent, ui).await;
+    });
+}
+
+#[test]
+fn w3_lost_capsule_journals_forwards_to_ui_and_refuses_new_input() {
+    support::run(async {
+        let (temp, server, task, mut daemon, mut agent, mut ui) = setup().await;
+        created(&mut daemon, &mut ui).await;
+        let shared = SharedFrame::new();
+        let frame = shared.value(1);
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"frame_ready","data":{"frame_ref":frame.clone()}}))
+            .await;
+        let _ = ui.receive().await;
+
+        ui.send(json!({
+            "schema": "ui_intent/v0.2",
+            "request_id": "fold-demo",
+            "op": "fold",
+            "params": {"slot_id": "surface-demo"}
+        }))
+        .await;
+        let folded = serde_json::to_value(ui.receive().await.body).unwrap();
+        assert_eq!(folded["data"]["surface"]["visibility"], "folded");
+
+        // Admit an in-flight agent proposal before the capsule is lost.
+        agent.send(proposal("inflight-before-loss", &frame)).await;
+        agent.verdict("admitted", None).await;
+        let _ = daemon.receive().await;
+
+        // Daemon reports confirmed capsule loss via state_changed(lost), even if
+        // its local snapshot carries stale control/visibility fields.
+        let mut lost_surface = surface();
+        lost_surface["state"] = "lost".into();
+        lost_surface["control"] = "human".into();
+        lost_surface["visibility"] = "unfolded".into();
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":lost_surface}}))
+            .await;
+        daemon_barrier(&mut daemon).await;
+        assert!(
+            !server.lock().unwrap().authority.state().surfaces["surface-demo"].live,
+            "core must journal and apply the Lost surface update"
+        );
+
+        // In-flight agent proposal is cancelled (refused) with SURFACE_NOT_AGENT_CONTROLLED.
+        agent
+            .verdict("refused", Some("SURFACE_NOT_AGENT_CONTROLLED"))
+            .await;
+
+        // UI receives state_changed(lost) with Core's authoritative control and visibility.
+        let ui_lost = serde_json::to_value(ui.receive().await.body).unwrap();
+        assert_eq!(ui_lost["schema"], "surface_event/v0.2");
+        assert_eq!(ui_lost["event"], "state_changed");
+        assert_eq!(ui_lost["data"]["surface"]["surface_id"], "surface-demo");
+        assert_eq!(ui_lost["data"]["surface"]["state"], "lost");
+        assert_eq!(ui_lost["data"]["surface"]["control"], "agent");
+        assert_eq!(ui_lost["data"]["surface"]["visibility"], "folded");
+
+        // Subsequent agent proposals on the lost surface are refused with existing frozen code.
+        agent.send(proposal("after-loss", &frame)).await;
+        agent
+            .verdict("refused", Some("SURFACE_NOT_AGENT_CONTROLLED"))
+            .await;
+
+        // Subsequent human input on the lost surface is refused with POLICY.
+        ui.send(json!({
+            "schema": "surface_request/v0.2",
+            "op": "input",
+            "params": {
+                "surface_id": "surface-demo",
+                "proposal_id": "human-input-after-loss",
+                "origin": "human",
+                "action": {"type": "key", "keys": ["Return"]}
+            }
+        }))
+        .await;
+        ui.verdict("refused", Some("POLICY")).await;
+
+        // Subsequent take_control on the lost surface is refused with POLICY.
+        ui.send(control("take_control")).await;
+        ui.verdict("refused", Some("POLICY")).await;
+
+        // Subsequent record_request on the lost surface is refused in the journal with Refusal::Policy.
+        ui.send(json!({
+            "schema": "record_request/v0.2",
+            "request_id": "rec-after-loss",
+            "op": "screenshot",
+            "params": {
+                "surface_id": "surface-demo",
+                "capture_id": "cap-after-loss"
+            }
+        }))
+        .await;
+        let meta_reply = serde_json::to_value(ui.receive().await.body).unwrap();
+        assert_eq!(meta_reply["schema"], "surface_event/v0.2");
+        assert_eq!(meta_reply["data"]["code"], "CAPTURE_REPLY");
+        let detail: Value =
+            serde_json::from_str(meta_reply["data"]["detail"].as_str().unwrap()).unwrap();
+        assert_eq!(detail["reply"]["ok"], false);
+        assert_eq!(detail["reply"]["code"], "SURFACE_UNKNOWN");
+
+        close_server(server, task, daemon, agent, ui).await;
+
+        let session_root = temp.0.join("state/sessions/serve-session");
+        let verified =
+            crate::journal::scan(&session_root.join("journal.jsonl"), &session_root).unwrap();
+        assert!(!verified.state.surfaces["surface-demo"].live);
+        let mut saw_lost_event = false;
+        for seq in 1..=verified.state.core_seq {
+            let ev: Value = serde_json::from_slice(
+                &std::fs::read(session_root.join("events").join(format!("{seq}.json"))).unwrap(),
+            )
+            .unwrap();
+            if ev["input"]["event"] == "Lifecycle"
+                && ev["input"]["surface_id"] == "surface-demo"
+                && ev["input"]["update"]["kind"] == "Lost"
+            {
+                saw_lost_event = true;
+            }
+        }
+        assert!(
+            saw_lost_event,
+            "journal events must record the Lost lifecycle transition"
+        );
+    });
+}
+
+#[test]
+fn w3_r2_ad1_late_active_and_frame_cannot_resurrect_lost_surface() {
+    support::run(async {
+        let (_temp, server, task, mut daemon, mut agent, mut ui) = setup().await;
+        created(&mut daemon, &mut ui).await;
+        let shared = SharedFrame::new();
+        let frame1 = shared.value(1);
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"frame_ready","data":{"frame_ref":frame1}}))
+            .await;
+        let _ = ui.receive().await;
+
+        let mut lost_surface = surface();
+        lost_surface["state"] = "lost".into();
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":lost_surface}}))
+            .await;
+        let ui_lost = serde_json::to_value(ui.receive().await.body).unwrap();
+        assert_eq!(ui_lost["data"]["surface"]["state"], "lost");
+        let fence_after_loss = server.lock().unwrap().authority.state().surfaces["surface-demo"]
+            .refresh_after
+            .expect("lost surface must keep refresh_after fence");
+
+        // Late out-of-order state_changed(active) must be refused with POLICY and not resurrect.
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":surface()}}))
+            .await;
+        daemon.verdict("refused", Some("POLICY")).await;
+
+        // Late frame_ready(gen=2) must also be refused with POLICY.
+        let frame2 = shared.value(2);
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"frame_ready","data":{"frame_ref":frame2.clone()}}))
+            .await;
+        daemon.verdict("refused", Some("POLICY")).await;
+
+        {
+            let guard = server.lock().unwrap();
+            let s = &guard.authority.state().surfaces["surface-demo"];
+            assert!(!s.live, "late active must not resurrect lost surface");
+            assert_eq!(s.frame.as_ref().unwrap().generation, 1);
+            assert_eq!(s.refresh_after, Some(fence_after_loss));
+        }
+
+        // Agent proposal after late active + frame_ready(gen=2) must still be refused.
+        agent
+            .send(proposal("prop-after-late-active", &frame2))
+            .await;
+        agent
+            .verdict("refused", Some("SURFACE_NOT_AGENT_CONTROLLED"))
+            .await;
+
+        close_server(server, task, daemon, agent, ui).await;
+    });
+}
+
+#[test]
+fn w3_r2_ad2_late_frame_ref_on_lost_surface_refused_with_policy_and_preserves_fence() {
+    support::run(async {
+        let (_temp, server, task, mut daemon, _agent, mut ui) = setup().await;
+        created(&mut daemon, &mut ui).await;
+        let shared = SharedFrame::new();
+        let frame1 = shared.value(1);
+        daemon.send(frame1.clone()).await;
+        let _ = ui.receive().await;
+
+        let mut lost_surface = surface();
+        lost_surface["state"] = "lost".into();
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":lost_surface}}))
+            .await;
+        let _ = ui.receive().await;
+
+        let (frame_before, fence_before) = {
+            let guard = server.lock().unwrap();
+            let s = &guard.authority.state().surfaces["surface-demo"];
+            (s.frame.clone(), s.refresh_after)
+        };
+        assert!(fence_before.is_some());
+
+        let frame2 = shared.value(2);
+        daemon.send(frame2).await;
+        let frame_msg_id = format!("daemon-test-{}", daemon.seq);
+        daemon
+            .send(tool_call("list", json!({"cursor":null,"limit":1})))
+            .await;
+        let first = serde_json::to_value(daemon.receive().await.body).unwrap();
+        assert_eq!(first["proposal_id"], frame_msg_id);
+        assert_eq!(first["decision"], "refused");
+        assert_eq!(first["reason_code"], "POLICY");
+        daemon.verdict("refused", Some("POLICY")).await;
+
+        {
+            let guard = server.lock().unwrap();
+            let s = &guard.authority.state().surfaces["surface-demo"];
+            assert_eq!(
+                s.frame, frame_before,
+                "late frame_ref must not replace frame"
+            );
+            assert_eq!(
+                s.refresh_after, fence_before,
+                "late frame_ref must not clear refresh_after fence"
+            );
+        }
+
+        close_server(server, task, daemon, _agent, ui).await;
+    });
+}
+
+#[test]
+fn w3_r2_ad3_lost_cancelled_dispatched_proposal_suppresses_late_receipt_double_settlement() {
+    support::run(async {
+        let (temp, server, task, mut daemon, mut agent, mut ui) = setup().await;
+        created(&mut daemon, &mut ui).await;
+        let shared = SharedFrame::new();
+        let frame1 = shared.value(1);
+        daemon.send(frame1.clone()).await;
+        let _ = ui.receive().await;
+
+        // 1. Takeover-cancelled draining work on a live surface must not double-settle.
+        agent.send(proposal("p0-takeover-drain", &frame1)).await;
+        agent.verdict("admitted", None).await;
+        let _ = daemon.receive().await;
+
+        ui.send(control("take_control")).await;
+        let _ = daemon.receive().await;
+        agent
+            .verdict("refused", Some("SURFACE_NOT_AGENT_CONTROLLED"))
+            .await;
+        assert!(server
+            .lock()
+            .unwrap()
+            .authority
+            .state()
+            .draining
+            .contains_key("p0-takeover-drain"));
+
+        let mut rec0: Value = serde_json::from_str(include_str!(
+            "../../../contracts/examples/v0.2/action_receipt.valid.json"
+        ))
+        .unwrap();
+        rec0["proposal_id"] = "p0-takeover-drain".into();
+        rec0["after_frame"] = frame1.clone();
+        daemon.send(rec0).await;
+        daemon_barrier(&mut daemon).await;
+
+        {
+            let guard = server.lock().unwrap();
+            assert!(
+                !guard
+                    .authority
+                    .state()
+                    .draining
+                    .contains_key("p0-takeover-drain"),
+                "takeover draining entry must be cleared by late receipt"
+            );
+            assert!(
+                !guard.tool_state.receipts.contains_key("p0-takeover-drain"),
+                "takeover-cancelled proposal receipt must not be retained as active receipt"
+            );
+        }
+
+        agent
+            .send(tool_call("list", json!({"cursor":null,"limit":1})))
+            .await;
+        let msg0 = serde_json::to_value(agent.receive().await.body).unwrap();
+        assert_eq!(
+            msg0["schema"], "mv_tool_result/v0.2",
+            "agent must not receive a late ActionReceipt after takeover refusal (got {msg0})"
+        );
+
+        ui.send(control("release_control")).await;
+        let _ = daemon.receive().await;
+        let frame2 = shared.value(2);
+        daemon.send(frame2.clone()).await;
+        let _ = ui.receive().await;
+
+        // 2. Lost-cancelled draining work must also not double-settle.
+        agent.send(proposal("p1-lost-drain", &frame2)).await;
+        agent.verdict("admitted", None).await;
+        let _ = daemon.receive().await;
+
+        let mut lost_surface = surface();
+        lost_surface["state"] = "lost".into();
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":lost_surface}}))
+            .await;
+        let _ = ui.receive().await;
+        agent
+            .verdict("refused", Some("SURFACE_NOT_AGENT_CONTROLLED"))
+            .await;
+        assert!(server
+            .lock()
+            .unwrap()
+            .authority
+            .state()
+            .draining
+            .contains_key("p1-lost-drain"));
+
+        // Late ActionReceipt from daemon for the cancelled proposal must drain in authority
+        // without forwarding a second terminal message to the agent or retaining in tool_state.
+        let mut rec: Value = serde_json::from_str(include_str!(
+            "../../../contracts/examples/v0.2/action_receipt.valid.json"
+        ))
+        .unwrap();
+        rec["proposal_id"] = "p1-lost-drain".into();
+        rec["after_frame"] = frame2;
+        daemon.send(rec).await;
+        daemon_barrier(&mut daemon).await;
+
+        {
+            let guard = server.lock().unwrap();
+            assert!(
+                !guard
+                    .authority
+                    .state()
+                    .draining
+                    .contains_key("p1-lost-drain"),
+                "draining entry must be cleared by late receipt"
+            );
+            assert!(
+                !guard.tool_state.receipts.contains_key("p1-lost-drain"),
+                "cancelled proposal receipt on lost surface must not be retained as active receipt"
+            );
+        }
+
+        // Send a barrier tool call from agent; the very next message on agent's stream must be
+        // the tool_result, proving no ActionReceipt was sent to agent.
+        agent
+            .send(tool_call("list", json!({"cursor":null,"limit":1})))
+            .await;
+        let next_agent_msg = serde_json::to_value(agent.receive().await.body).unwrap();
+        assert_eq!(
+            next_agent_msg["schema"], "mv_tool_result/v0.2",
+            "agent must not receive a late ActionReceipt after refusal verdict (got {next_agent_msg})"
+        );
+
+        close_server(server, task, daemon, agent, ui).await;
+
+        let reopened = Server::open(
+            config(),
+            &temp.0.join("state"),
+            serve::effective_uid().unwrap(),
+        )
+        .unwrap();
+        assert!(!reopened
+            .tool_state
+            .receipts
+            .contains_key("p0-takeover-drain"));
+        assert!(!reopened.tool_state.receipts.contains_key("p1-lost-drain"));
+    });
+}
+
+#[test]
+fn w3_r2_ad4_inflight_human_input_on_lost_surface_settles_with_policy_verdict_and_witness() {
+    support::run(async {
+        let (temp, server, task, mut daemon, agent, mut ui) = setup().await;
+        created(&mut daemon, &mut ui).await;
+        let shared = SharedFrame::new();
+        let frame1 = shared.value(1);
+        daemon.send(frame1).await;
+        let _ = ui.receive().await;
+
+        ui.send(control("take_control")).await;
+        let _ = daemon.receive().await;
+
+        ui.send(json!({
+            "schema": "surface_request/v0.2",
+            "op": "input",
+            "params": {
+                "surface_id": "surface-demo",
+                "proposal_id": "hi-inflight-lost",
+                "origin": "human",
+                "action": {"type": "key", "keys": ["Return"]}
+            }
+        }))
+        .await;
+        let forwarded = serde_json::to_value(daemon.receive().await.body).unwrap();
+        assert_eq!(forwarded["op"], "input");
+        assert!(server
+            .lock()
+            .unwrap()
+            .human_inputs
+            .contains_key("hi-inflight-lost"));
+
+        let mut lost_surface = surface();
+        lost_surface["state"] = "lost".into();
+        lost_surface["control"] = "human".into();
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":lost_surface}}))
+            .await;
+        daemon_barrier(&mut daemon).await;
+        ui.send(control("take_control")).await;
+
+        let first_ui = serde_json::to_value(ui.receive().await.body).unwrap();
+        let second_ui = serde_json::to_value(ui.receive().await.body).unwrap();
+        let (ev_msg, verdict_msg) = if first_ui["schema"] == "surface_event/v0.2" {
+            (first_ui, second_ui)
+        } else {
+            (second_ui, first_ui)
+        };
+        assert_eq!(ev_msg["event"], "state_changed");
+        assert_eq!(ev_msg["data"]["surface"]["state"], "lost");
+        assert_eq!(verdict_msg["schema"], "action_verdict/v0.2");
+        assert_eq!(verdict_msg["proposal_id"], "hi-inflight-lost");
+        assert_eq!(verdict_msg["decision"], "refused");
+        assert_eq!(verdict_msg["reason_code"], "POLICY");
+        ui.verdict("refused", Some("POLICY")).await;
+        assert!(server.lock().unwrap().human_inputs.is_empty());
+
+        // Also verify that if sending the POLICY verdict to UI fails (e.g. UI queue overflow),
+        // the settlement record is still journaled first and never lost.
+        let mut s2 = surface();
+        s2["surface_id"] = "surface-demo-2".into();
+        s2["display"] = ":100".into();
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"created","data":{"surface":s2.clone()}}))
+            .await;
+        let _ = ui.receive().await;
+        let mut f2 = shared.value(1);
+        f2["surface_id"] = "surface-demo-2".into();
+        daemon.send(f2).await;
+        let _ = ui.receive().await;
+        ui.send(json!({
+            "schema": "ui_intent/v0.2",
+            "request_id": "take-s2",
+            "op": "take_control",
+            "params": {"surface_id": "surface-demo-2"}
+        }))
+        .await;
+        let _ = daemon.receive().await;
+        ui.send(json!({
+            "schema": "surface_request/v0.2",
+            "op": "input",
+            "params": {
+                "surface_id": "surface-demo-2",
+                "proposal_id": "hi-inflight-lost-sendfail",
+                "origin": "human",
+                "action": {"type": "key", "keys": ["Return"]}
+            }
+        }))
+        .await;
+        let _ = daemon.receive().await;
+        let _keep_old_tx_alive = {
+            // Replace UI connection sender with a disconnected channel while keeping the old sender
+            // alive so writer_task does not retire ui_ep, forcing refuse_at to return SendFailure::Disconnected.
+            let mut guard = server.lock().unwrap();
+            assert!(guard.human_inputs.contains_key("hi-inflight-lost-sendfail"));
+            let ui_ep = registration("ui").endpoint;
+            let (dead_tx, dead_rx) = std::sync::mpsc::sync_channel(1);
+            drop(dead_rx);
+            guard
+                .connections
+                .get_mut(&ui_ep)
+                .map(|conn| std::mem::replace(&mut conn.queue, dead_tx))
+        };
+        s2["state"] = "lost".into();
+        s2["control"] = "human".into();
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":s2}}))
+            .await;
+        daemon_barrier(&mut daemon).await;
+        assert!(
+            server.lock().unwrap().human_inputs.is_empty(),
+            "send failure must not lose the settled human_input record"
+        );
+
+        close_server(server, task, daemon, agent, ui).await;
+
+        let reopened = Server::open(
+            config(),
+            &temp.0.join("state"),
+            serve::effective_uid().unwrap(),
+        )
+        .unwrap();
+        assert!(
+            reopened.human_inputs.is_empty(),
+            "settled human input on lost surface must not resurrect on recovery"
+        );
+    });
+}
+
+#[test]
+fn w3_r5_clean_reopen_after_journaled_lost_emits_nothing_spontaneously_and_snapshot_shows_lost() {
+    support::run(async {
+        let (temp, server, task, mut daemon, mut agent, mut ui) = setup().await;
+        created(&mut daemon, &mut ui).await;
+        let shared = SharedFrame::new();
+        let frame1 = shared.value(1);
+        daemon.send(frame1.clone()).await;
+        let _ = ui.receive().await;
+
+        agent.send(proposal("p-live-lost", &frame1)).await;
+        agent.verdict("admitted", None).await;
+        let _ = daemon.receive().await;
+
+        let mut lost_surface = surface();
+        lost_surface["state"] = "lost".into();
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":lost_surface}}))
+            .await;
+        let ui_live = serde_json::to_value(ui.receive().await.body).unwrap();
+        assert_eq!(ui_live["event"], "state_changed");
+        assert_eq!(ui_live["data"]["surface"]["state"], "lost");
+        agent
+            .verdict("refused", Some("SURFACE_NOT_AGENT_CONTROLLED"))
+            .await;
+
+        close_server(server, task, daemon, agent, ui).await;
+
+        let uid = serve::effective_uid().unwrap();
+        let reopened = Server::open(config(), &temp.0.join("state"), uid).unwrap();
+        let snap: Value = serde_json::from_slice(&reopened.snapshot().unwrap()).unwrap();
+        assert_eq!(
+            snap["surfaces"]["surface-demo"]["live"], false,
+            "reopened snapshot must show the surface lost (live == false)"
+        );
+
+        let socket1 = temp.0.join("runtime/core-rec1.sock");
+        let listener1 = serve::bind(&socket1, uid).await.unwrap();
+        let server1 = Arc::new(Mutex::new(reopened));
+        let task1 = tokio::spawn(serve::serve(listener1, server1.clone(), uid));
+        let daemon1 = Peer::reconnect(&socket1, "daemon", 1).await;
+        let mut agent1 = Peer::reconnect(&socket1, "agent", 1).await;
+        let mut ui1 = Peer::reconnect(&socket1, "ui", 1).await;
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), read_frame(&mut ui1.socket))
+                .await
+                .is_err(),
+            "clean reopen after journaled Lost must not spontaneously re-emit state_changed(lost) to UI"
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), read_frame(&mut agent1.socket))
+                .await
+                .is_err(),
+            "clean reopen after journaled Lost must not spontaneously re-emit refused verdicts to agent"
+        );
+
+        agent1
+            .send(tool_call("list", json!({"cursor":null,"limit":1})))
+            .await;
+        let listed = serde_json::to_value(agent1.receive().await.body).unwrap();
+        assert_eq!(listed["schema"], "mv_tool_result/v0.2");
+        assert_eq!(listed["op"], "list");
+        assert_eq!(listed["status"], "ok");
+        assert_eq!(listed["surfaces"], json!([]));
+
+        close_server(server1, task1, daemon1, agent1, ui1).await;
+    });
+}
+
+#[test]
+fn w3_r2_ad6_frame_subscribe_and_destroy_on_lost_surface_refused_with_policy_without_forwarding() {
+    support::run(async {
+        let (_temp, server, task, mut daemon, _agent, mut ui) = setup().await;
+        created(&mut daemon, &mut ui).await;
+
+        let mut lost_surface = surface();
+        lost_surface["state"] = "lost".into();
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":lost_surface}}))
+            .await;
+        let _ = ui.receive().await;
+
+        let budget_before = server.lock().unwrap().authority.state().remaining_budget;
+
+        ui.send(json!({
+            "schema": "surface_request/v0.2",
+            "op": "frame_subscribe",
+            "params": {"surface_id": "surface-demo"}
+        }))
+        .await;
+        let sub_msg_id = format!("ui-test-{}", ui.seq);
+        ui.send(control("take_control")).await;
+        let first_sub = serde_json::to_value(ui.receive().await.body).unwrap();
+        assert_eq!(first_sub["proposal_id"], sub_msg_id);
+        assert_eq!(first_sub["decision"], "refused");
+        assert_eq!(first_sub["reason_code"], "POLICY");
+        ui.verdict("refused", Some("POLICY")).await;
+
+        ui.send(json!({
+            "schema": "surface_request/v0.2",
+            "op": "destroy",
+            "params": {"surface_id": "surface-demo"}
+        }))
+        .await;
+        let destroy_msg_id = format!("ui-test-{}", ui.seq);
+        ui.send(control("take_control")).await;
+        let first_destroy = serde_json::to_value(ui.receive().await.body).unwrap();
+        assert_eq!(first_destroy["proposal_id"], destroy_msg_id);
+        assert_eq!(first_destroy["decision"], "refused");
+        assert_eq!(first_destroy["reason_code"], "POLICY");
+        ui.verdict("refused", Some("POLICY")).await;
+
+        {
+            let guard = server.lock().unwrap();
+            assert_eq!(
+                guard.authority.state().remaining_budget,
+                budget_before,
+                "refused frame_subscribe/destroy on lost surface must not burn budget"
+            );
+            assert!(
+                !guard
+                    .subscriptions
+                    .iter()
+                    .any(|(_, sid)| sid == "surface-demo"),
+                "lost surface must not be added to subscriptions"
+            );
+        }
+
+        // Verify nothing was forwarded to daemon by sending a barrier from daemon.
+        daemon_barrier(&mut daemon).await;
+
         close_server(server, task, daemon, _agent, ui).await;
     });
 }

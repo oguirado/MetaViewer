@@ -12,10 +12,12 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"metaviewer/daemon-adapter/internal/capsule"
+	"metaviewer/daemon-adapter/internal/cli"
 )
 
 type captureSource struct {
@@ -702,5 +704,664 @@ func TestResubscribeAfterUnsubscribeReconfirms(t *testing.T) {
 	subs.mu.Unlock()
 	if leakedConfirmed {
 		t.Fatal("expected Publisher.Release to delete confirmed entry for released surface")
+	}
+}
+
+type lossAwareCaptureSource struct {
+	mu        sync.Mutex
+	b         capsule.Binding
+	f         capsule.NativeFrame
+	failPolls map[int]error
+	calls     int
+	marked    int
+}
+
+func (s *lossAwareCaptureSource) Capture(_ context.Context, _ string) (capsule.Binding, capsule.NativeFrame, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	if err, ok := s.failPolls[s.calls]; ok && err != nil {
+		return capsule.Binding{}, capsule.NativeFrame{}, err
+	}
+	if s.b.Surface.State == "lost" {
+		return capsule.Binding{}, capsule.NativeFrame{}, &cli.Fault{Code: "POLICY", Detail: "surface is lost"}
+	}
+	s.f.Seq++
+	return s.b, s.f, nil
+}
+
+func (s *lossAwareCaptureSource) MarkLost(id string, confirmedAbsent bool) (json.RawMessage, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !confirmedAbsent || s.b.Surface.SurfaceID != id {
+		return nil, &cli.Fault{Code: "POLICY", Detail: "unconfirmed loss"}
+	}
+	if s.b.Surface.State == "lost" {
+		return nil, &cli.Fault{Code: "POLICY", Detail: "surface already lost"}
+	}
+	s.marked++
+	s.b.Surface.State = "lost"
+	raw, err := json.Marshal(struct {
+		Schema string `json:"schema"`
+		Event  string `json:"event"`
+		Data   struct {
+			Surface capsule.Surface `json:"surface"`
+		} `json:"data"`
+	}{
+		Schema: "surface_event/v0.2",
+		Event:  "state_changed",
+		Data: struct {
+			Surface capsule.Surface `json:"surface"`
+		}{Surface: s.b.Surface},
+	})
+	return raw, err
+}
+
+func TestSubscriptionConfirmedLossAndTransientRecovery(t *testing.T) {
+	root, b, f := ramFixture(t)
+	p := publisher(t, root)
+	absenceFault := cli.ExitFault("srf-identity-surface", 6, "")
+	src := &lossAwareCaptureSource{
+		b: b,
+		f: f,
+		failPolls: map[int]error{
+			// Poll 2 is a single transient capture failure; poll 3 recovers.
+			2: absenceFault,
+			// Polls 4 and 5 are 2 consecutive capture failures -> confirmed loss.
+			4: absenceFault,
+			5: absenceFault,
+		},
+	}
+	events := make(chan json.RawMessage, 16)
+	subs, err := NewSubscriptions(context.Background(), SubscriptionConfig{
+		MaxSubscriptions: 1,
+		PollInterval:     2 * time.Millisecond,
+		CaptureTimeout:   time.Second,
+		ShutdownTimeout:  time.Second,
+	}, src, p, func(ctx context.Context, msg json.RawMessage) error {
+		select {
+		case events <- msg:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = subs.Close(context.Background()) })
+
+	if err := subs.Subscribe(context.Background(), "a"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Expect two frame_ready events (from poll 1 and recovered poll 3); poll 2 must NOT mark lost.
+	for i := 1; i <= 2; i++ {
+		select {
+		case msg := <-events:
+			var ev struct {
+				Event string `json:"event"`
+				Data  struct {
+					FrameRef Ref             `json:"frame_ref"`
+					Surface  capsule.Surface `json:"surface"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(msg, &ev); err != nil {
+				t.Fatal(err)
+			}
+			if ev.Event != "frame_ready" {
+				t.Fatalf("transient capture failure prematurely terminated or marked lost on event %d: %s", i, msg)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("stalled waiting for frame_ready %d across transient failure", i)
+		}
+	}
+
+	// After polls 4 and 5 fail consecutively, expect state_changed(lost) followed by error(capture_failed).
+	select {
+	case msg := <-events:
+		var ev struct {
+			Schema string `json:"schema"`
+			Event  string `json:"event"`
+			Data   struct {
+				Surface capsule.Surface `json:"surface"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(msg, &ev); err != nil {
+			t.Fatal(err)
+		}
+		if ev.Schema != "surface_event/v0.2" || ev.Event != "state_changed" || ev.Data.Surface.SurfaceID != "a" || ev.Data.Surface.State != "lost" {
+			t.Fatalf("expected state_changed(lost) before capture_failed, got %s", msg)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stalled waiting for state_changed(lost) event")
+	}
+
+	select {
+	case msg := <-events:
+		var ev capsule.ErrorEvent
+		if err := json.Unmarshal(msg, &ev); err != nil {
+			t.Fatal(err)
+		}
+		if ev.Event != "error" || ev.Data.Code != "capture_failed" || ev.Data.SurfaceID != "a" {
+			t.Fatalf("expected error(capture_failed) after state_changed(lost), got %s", msg)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stalled waiting for error(capture_failed) event")
+	}
+
+	src.mu.Lock()
+	marked := src.marked
+	state := src.b.Surface.State
+	src.mu.Unlock()
+	if marked != 1 || state != "lost" {
+		t.Fatalf("expected MarkLost called once and state=lost, got marked=%d state=%s", marked, state)
+	}
+}
+
+func (s *lossAwareCaptureSource) BeginMarkLost(id string) (json.RawMessage, error) {
+	return s.MarkLost(id, true)
+}
+
+func (s *lossAwareCaptureSource) CompleteLost(id string, delivered bool) {
+	if !delivered {
+		s.mu.Lock()
+		if s.b.Surface.SurfaceID == id && s.b.Surface.State == "lost" {
+			s.b.Surface.State = "active"
+			s.marked--
+		}
+		s.mu.Unlock()
+	}
+}
+
+func (s *lossAwareCaptureSource) WaitLostDelivered(_ context.Context, _ string) {}
+
+func TestSubscriptionCaptureFaultClassificationDoesNotMarkLost(t *testing.T) {
+	for _, code := range []string{"malformed", "frame", "surface", "cli_failed", "POLICY", "uncertain"} {
+		t.Run(code, func(t *testing.T) {
+			root, b, f := ramFixture(t)
+			b.Surface.State = "active"
+			p := publisher(t, root)
+			faultErr := &cli.Fault{Code: code, Detail: "non-absence fault"}
+			src := &lossAwareCaptureSource{
+				b: b,
+				f: f,
+				failPolls: map[int]error{
+					1: faultErr,
+					2: faultErr,
+				},
+			}
+			events := make(chan json.RawMessage, 8)
+			subs, err := NewSubscriptions(context.Background(), SubscriptionConfig{
+				MaxSubscriptions: 1,
+				PollInterval:     2 * time.Millisecond,
+				CaptureTimeout:   time.Second,
+				ShutdownTimeout:  time.Second,
+			}, src, p, func(_ context.Context, msg json.RawMessage) error {
+				events <- msg
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = subs.Close(context.Background()) })
+
+			if err := subs.Subscribe(context.Background(), "a"); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case msg := <-events:
+				var ev capsule.ErrorEvent
+				if err := json.Unmarshal(msg, &ev); err != nil {
+					t.Fatal(err)
+				}
+				if ev.Event != "error" || ev.Data.Code != "capture_failed" {
+					t.Fatalf("code=%s: expected error(capture_failed), got %s", code, msg)
+				}
+			case <-time.After(time.Second):
+				t.Fatalf("code=%s: timed out waiting for capture_failed", code)
+			}
+			if len(events) != 0 {
+				t.Fatalf("code=%s: unexpected extra event emitted", code)
+			}
+			src.mu.Lock()
+			marked := src.marked
+			state := src.b.Surface.State
+			src.mu.Unlock()
+			if marked != 0 || state != "active" {
+				t.Fatalf("code=%s: non-absence fault marked lost (marked=%d state=%s)", code, marked, state)
+			}
+		})
+	}
+}
+
+func TestSubscriptionMixedTransientAndAbsenceFaultDoesNotMarkLost(t *testing.T) {
+	pairs := []struct {
+		name string
+		e1   error
+		e2   error
+	}{
+		{
+			name: "uncertain_then_frame",
+			e1:   &cli.Fault{Code: "uncertain", Detail: "timeout"},
+			e2:   &cli.Fault{Code: "frame", Detail: "bad frame"},
+		},
+		{
+			name: "uncertain_then_unavailable",
+			e1:   &cli.Fault{Code: "uncertain", Detail: "timeout"},
+			e2:   &cli.Fault{Code: "unavailable", Detail: "gone once"},
+		},
+		{
+			name: "unavailable_then_uncertain",
+			e1:   &cli.Fault{Code: "unavailable", Detail: "gone once"},
+			e2:   &cli.Fault{Code: "uncertain", Detail: "timeout"},
+		},
+	}
+	for _, tc := range pairs {
+		t.Run(tc.name, func(t *testing.T) {
+			root, b, f := ramFixture(t)
+			b.Surface.State = "active"
+			p := publisher(t, root)
+			src := &lossAwareCaptureSource{
+				b: b,
+				f: f,
+				failPolls: map[int]error{
+					1: tc.e1,
+					2: tc.e2,
+				},
+			}
+			events := make(chan json.RawMessage, 8)
+			subs, err := NewSubscriptions(context.Background(), SubscriptionConfig{
+				MaxSubscriptions: 1,
+				PollInterval:     2 * time.Millisecond,
+				CaptureTimeout:   time.Second,
+				ShutdownTimeout:  time.Second,
+			}, src, p, func(_ context.Context, msg json.RawMessage) error {
+				events <- msg
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = subs.Close(context.Background()) })
+
+			if err := subs.Subscribe(context.Background(), "a"); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case msg := <-events:
+				var ev struct {
+					Event string `json:"event"`
+				}
+				if err := json.Unmarshal(msg, &ev); err != nil {
+					t.Fatal(err)
+				}
+				if ev.Event != "error" {
+					t.Fatalf("%s: expected error(capture_failed), got %s", tc.name, msg)
+				}
+			case <-time.After(time.Second):
+				t.Fatalf("%s: timed out waiting for capture_failed", tc.name)
+			}
+			src.mu.Lock()
+			marked := src.marked
+			state := src.b.Surface.State
+			src.mu.Unlock()
+			if marked != 0 || state != "active" {
+				t.Fatalf("%s: mixed pair marked surface lost (marked=%d state=%s)", tc.name, marked, state)
+			}
+		})
+	}
+}
+
+func TestSubscriptionResubscribeRecoversAfterTwoTransientFrameFaults(t *testing.T) {
+	root, b, f := ramFixture(t)
+	p := publisher(t, root)
+	frameFault := &cli.Fault{Code: "frame", Detail: "torn frame"}
+	src := &lossAwareCaptureSource{
+		b: b,
+		f: f,
+		failPolls: map[int]error{
+			1: frameFault,
+			2: frameFault,
+		},
+	}
+	events := make(chan json.RawMessage, 8)
+	subs, err := NewSubscriptions(context.Background(), SubscriptionConfig{
+		MaxSubscriptions: 1,
+		PollInterval:     2 * time.Millisecond,
+		CaptureTimeout:   time.Second,
+		ShutdownTimeout:  time.Second,
+	}, src, p, func(_ context.Context, msg json.RawMessage) error {
+		events <- msg
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = subs.Close(context.Background()) })
+
+	if err := subs.Subscribe(context.Background(), "a"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case msg := <-events:
+		var ev capsule.ErrorEvent
+		if err := json.Unmarshal(msg, &ev); err != nil || ev.Event != "error" || ev.Data.Code != "capture_failed" {
+			t.Fatalf("expected capture_failed after 2 frame faults, got %s", msg)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for capture_failed")
+	}
+
+	subs.mu.Lock()
+	done := subs.tasks["a"]
+	subs.mu.Unlock()
+	if done != nil {
+		<-done.done
+	}
+
+	// Resubscribe on the still-active surface: poll 3 must emit frame_ready.
+	if err := subs.Subscribe(context.Background(), "a"); err != nil {
+		t.Fatalf("resubscribe failed: %v", err)
+	}
+	select {
+	case msg := <-events:
+		var ev struct {
+			Event string `json:"event"`
+		}
+		if err := json.Unmarshal(msg, &ev); err != nil || ev.Event != "frame_ready" {
+			t.Fatalf("expected frame_ready after resubscribe, got %s", msg)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for frame_ready after resubscribe")
+	}
+}
+
+func TestSubscriptionSingleLockContentionMissRecoversWithoutCaptureFailed(t *testing.T) {
+	root, b, f := ramFixture(t)
+	p := publisher(t, root)
+	src := &lossAwareCaptureSource{b: b, f: f}
+	var surfaceMu sync.Mutex
+	surfaceMu.Lock()
+
+	events := make(chan json.RawMessage, 8)
+	subs, err := NewSubscriptions(context.Background(), SubscriptionConfig{
+		MaxSubscriptions: 1,
+		PollInterval:     5 * time.Millisecond,
+		CaptureTimeout:   15 * time.Millisecond,
+		ShutdownTimeout:  time.Second,
+		SurfaceLock:      func(string) *sync.Mutex { return &surfaceMu },
+	}, src, p, func(_ context.Context, msg json.RawMessage) error {
+		events <- msg
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = subs.Close(context.Background()) })
+
+	if err := subs.Subscribe(context.Background(), "a"); err != nil {
+		t.Fatal(err)
+	}
+	// Hold SurfaceLock across 1.2 * CaptureTimeout (18ms) so the first poll times out on lock wait, then release.
+	time.Sleep(18 * time.Millisecond)
+	surfaceMu.Unlock()
+
+	select {
+	case msg := <-events:
+		var ev struct {
+			Event string `json:"event"`
+		}
+		if err := json.Unmarshal(msg, &ev); err != nil || ev.Event != "frame_ready" {
+			t.Fatalf("expected frame_ready after single lock contention miss, got %s", msg)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for frame_ready after releasing SurfaceLock")
+	}
+}
+
+func TestSubscriptionCancelDuringLostEmitRollsBackBinding(t *testing.T) {
+	root, b, f := ramFixture(t)
+	p := publisher(t, root)
+	absenceFault := cli.ExitFault("srf-identity-surface", 4, "")
+
+	runCase := func(blockCancel bool) (bool, bool) {
+		src := &lossAwareCaptureSource{
+			b: b,
+			f: f,
+			failPolls: map[int]error{
+				1: absenceFault,
+				2: absenceFault,
+			},
+		}
+		emitStarted := make(chan struct{})
+		emitDone := make(chan struct{})
+		var deliveredLost atomic.Int32
+		subs, err := NewSubscriptions(context.Background(), SubscriptionConfig{
+			MaxSubscriptions: 1,
+			PollInterval:     time.Millisecond,
+			CaptureTimeout:   time.Second,
+			ShutdownTimeout:  time.Second,
+		}, src, p, func(ctx context.Context, msg json.RawMessage) error {
+			var decoded map[string]any
+			_ = json.Unmarshal(msg, &decoded)
+			if decoded["event"] == "state_changed" {
+				close(emitStarted)
+				if blockCancel {
+					<-ctx.Done()
+					return ctx.Err()
+				}
+				deliveredLost.Add(1)
+				return nil
+			}
+			if !blockCancel && decoded["event"] == "error" {
+				close(emitDone)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := subs.Subscribe(context.Background(), "a"); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-emitStarted:
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for lost emit to start")
+		}
+		if !blockCancel {
+			select {
+			case <-emitDone:
+			case <-time.After(time.Second):
+				t.Fatal("timed out waiting for error emit after lost delivery")
+			}
+		}
+		if err := subs.Close(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		src.mu.Lock()
+		state := src.b.Surface.State
+		src.mu.Unlock()
+		lostDelivered := deliveredLost.Load() > 0
+		bindingActive := state == "active"
+		if lostDelivered == bindingActive {
+			t.Fatalf("expected lostDelivered XOR bindingActive (blockCancel=%v), got lostDelivered=%v state=%s", blockCancel, lostDelivered, state)
+		}
+		return lostDelivered, bindingActive
+	}
+
+	lostDeliveredCancel, activeCancel := runCase(true)
+	if lostDeliveredCancel || !activeCancel {
+		t.Fatalf("cancelled emit must roll back to active without delivery, got lostDelivered=%v active=%v", lostDeliveredCancel, activeCancel)
+	}
+	lostDeliveredOk, activeOk := runCase(false)
+	if !lostDeliveredOk || activeOk {
+		t.Fatalf("completed emit must deliver lost and transition binding to lost, got lostDelivered=%v active=%v", lostDeliveredOk, activeOk)
+	}
+}
+
+type coordinatedLossSource struct {
+	mu          sync.Mutex
+	b           capsule.Binding
+	calls       int
+	secondEnter chan struct{}
+	livenessSet chan struct{}
+	lostDone    chan struct{}
+}
+
+func (s *coordinatedLossSource) Capture(_ context.Context, _ string) (capsule.Binding, capsule.NativeFrame, error) {
+	s.mu.Lock()
+	s.calls++
+	call := s.calls
+	if s.b.Surface.State != "active" {
+		s.mu.Unlock()
+		return capsule.Binding{}, capsule.NativeFrame{}, &cli.Fault{Code: "surface", Detail: "capture requires an active surface"}
+	}
+	s.mu.Unlock()
+	if call == 2 {
+		close(s.secondEnter)
+		<-s.livenessSet
+		s.mu.Lock()
+		state := s.b.Surface.State
+		s.mu.Unlock()
+		if state != "active" {
+			return capsule.Binding{}, capsule.NativeFrame{}, &cli.Fault{Code: "surface", Detail: "capture requires an active surface"}
+		}
+	}
+	return capsule.Binding{}, capsule.NativeFrame{}, cli.ExitFault("srf-identity-surface", 4, "")
+}
+
+func (s *coordinatedLossSource) BeginMarkLost(id string) (json.RawMessage, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.b.Surface.State == "lost" {
+		return nil, nil
+	}
+	s.b.Surface.State = "lost"
+	s.b.ConfirmedAbsent = true
+	s.lostDone = make(chan struct{})
+	raw, _ := json.Marshal(struct {
+		Schema string `json:"schema"`
+		Event  string `json:"event"`
+		Data   struct {
+			Surface capsule.Surface `json:"surface"`
+		} `json:"data"`
+	}{
+		Schema: "surface_event/v0.2",
+		Event:  "state_changed",
+		Data: struct {
+			Surface capsule.Surface `json:"surface"`
+		}{Surface: s.b.Surface},
+	})
+	return raw, nil
+}
+
+func (s *coordinatedLossSource) CompleteLost(_ string, _ bool) {
+	s.mu.Lock()
+	ch := s.lostDone
+	s.lostDone = nil
+	s.mu.Unlock()
+	if ch != nil {
+		close(ch)
+	}
+}
+
+func (s *coordinatedLossSource) WaitLostDelivered(ctx context.Context, _ string) {
+	s.mu.Lock()
+	ch := s.lostDone
+	s.mu.Unlock()
+	if ch == nil {
+		return
+	}
+	select {
+	case <-ch:
+	case <-ctx.Done():
+	}
+}
+
+func TestLivenessAndSubscriptionConcurrentLossWireOrder(t *testing.T) {
+	root, b, _ := ramFixture(t)
+	b.Surface.State = "active"
+	p := publisher(t, root)
+	src := &coordinatedLossSource{
+		b:           b,
+		secondEnter: make(chan struct{}),
+		livenessSet: make(chan struct{}),
+	}
+	var surfaceMu sync.Mutex
+	var wireMu sync.Mutex
+	var wireEvents []string
+	allDone := make(chan struct{})
+
+	emit := func(_ context.Context, msg json.RawMessage) error {
+		var ev struct {
+			Event string `json:"event"`
+			Data  struct {
+				Code    string          `json:"code"`
+				Surface capsule.Surface `json:"surface"`
+			} `json:"data"`
+		}
+		_ = json.Unmarshal(msg, &ev)
+		wireMu.Lock()
+		if ev.Event == "state_changed" {
+			wireEvents = append(wireEvents, "state_changed:"+ev.Data.Surface.State)
+		} else {
+			wireEvents = append(wireEvents, ev.Event+":"+ev.Data.Code)
+		}
+		n := len(wireEvents)
+		wireMu.Unlock()
+		if n == 2 {
+			close(allDone)
+		}
+		return nil
+	}
+
+	subs, err := NewSubscriptions(context.Background(), SubscriptionConfig{
+		MaxSubscriptions: 1,
+		PollInterval:     time.Millisecond,
+		CaptureTimeout:   time.Second,
+		ShutdownTimeout:  time.Second,
+		SurfaceLock:      func(string) *sync.Mutex { return &surfaceMu },
+	}, src, p, emit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = subs.Close(context.Background()) })
+
+	if err := subs.Subscribe(context.Background(), "a"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait until 2nd Capture holds SurfaceLock("a"), then have liveness mark lost and wait for SurfaceLock("a") to emit.
+	select {
+	case <-src.secondEnter:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for 2nd capture")
+	}
+
+	lostEv, err := src.BeginMarkLost("a")
+	if err != nil || len(lostEv) == 0 {
+		t.Fatalf("BeginMarkLost failed: %v", err)
+	}
+	go func() {
+		surfaceMu.Lock()
+		_ = emit(context.Background(), lostEv)
+		surfaceMu.Unlock()
+		src.CompleteLost("a", true)
+	}()
+	close(src.livenessSet)
+
+	select {
+	case <-allDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for both events")
+	}
+
+	wireMu.Lock()
+	got := append([]string(nil), wireEvents...)
+	wireMu.Unlock()
+	if len(got) != 2 || got[0] != "state_changed:lost" || got[1] != "error:capture_failed" {
+		t.Fatalf("expected wire order [state_changed:lost, error:capture_failed], got %v", got)
 	}
 }

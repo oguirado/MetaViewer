@@ -2,8 +2,9 @@ package capsule
 
 // [TARGET, unit decision] No native liveness reply is admitted. Use the existing
 // bounded frame verb without publishing or reading pixels. Only its typed
-// unavailable result counts as a miss; deadlines/malformed/setup errors are
-// unknown, break the consecutive-miss sequence and never prove loss.
+// absence result (unavailable/refused) counts as a miss; deadlines, cli_failed,
+// malformed output and setup/usage errors are unknown, break the consecutive-miss
+// sequence and never prove loss.
 // Defaults [TARGET]: interval 5s, consecutive misses 2; one serial probe per
 // active capsule per tick, no overlapping sweeps or catch-up loop. Terminal
 // bindings are not probed. The session owns cancellation and event delivery.
@@ -15,6 +16,14 @@ import (
 
 	"metaviewer/daemon-adapter/internal/cli"
 )
+
+// IsAbsenceFault reports whether err is a native CLI fault proving the
+// capsule process or container is gone (unavailable or refused), as opposed
+// to a deadline, contention, execution (cli_failed), malformed, or setup/usage fault.
+func IsAbsenceFault(err error) bool {
+	var f *cli.Fault
+	return errors.As(err, &f) && (f.Code == "unavailable" || f.Code == "refused")
+}
 
 // MonitorLiveness runs until session cancellation or delivery failure. emit must
 // preserve transport ordering. A failed delivery ends the session, not a retry
@@ -83,20 +92,21 @@ func (m *Manager) monitorLiveness(ctx context.Context, ticks <-chan time.Time, e
 				m.mu.Unlock()
 				continue
 			}
-			var f *cli.Fault
-			if errors.As(err, &f) && f.Code == "unavailable" && probeErr == nil && ctx.Err() == nil {
+			if IsAbsenceFault(err) && probeErr == nil && ctx.Err() == nil {
 				misses[id]++
 			} else {
 				delete(misses, id)
 			}
 			var ev json.RawMessage
 			if misses[id] >= m.cfg.LivenessMisses {
-				ev, _ = m.markLostLocked(id, true)
+				ev, _ = m.markLostLocked(id, true, true)
 				delete(misses, id)
 			}
 			m.mu.Unlock()
 			if len(ev) != 0 {
-				if err := emit(ctx, ev); err != nil {
+				err := emit(ctx, ev)
+				m.CompleteLost(id, err == nil && ctx.Err() == nil)
+				if err != nil {
 					return err
 				}
 			}

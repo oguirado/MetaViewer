@@ -653,6 +653,51 @@ class SurfaceContractTests(unittest.TestCase):
         bad = dict(hello, contract_version="v9.9")
         self.assertInvalid(self.v2, bad, "hello.schema.json")
 
+    def test_killed_capsule_fault_and_lost_surface_event_contract(self):
+        stores = ["--store-root", "store", "--registry", "reg"]
+        started = parse_line(
+            run_fake(["--family", "identity", "start", "--identity", "wall",
+                      *stores]).stdout, 65536)
+        container = started["container"]
+        first_frame = parse_line(
+            run_fake(["--family", "identity", "frame", "--container",
+                      container, "--window", "w1", "--seq", "1",
+                      *stores]).stdout, 65536)
+        self.assertEqual(first_frame["seq"], 1)
+
+        # Simulate external container kill (exit 4 unavailable / exit 6 refused).
+        for fault_code in (4, 6):
+            with self.subTest(fault_code=fault_code):
+                killed = run_fake(["--fault", str(fault_code), "--family",
+                                   "identity", "frame", "--container",
+                                   container, "--window", "w1", "--seq", "2",
+                                   *stores])
+                self.assertEqual(killed.returncode, fault_code)
+                err_body = parse_line(killed.stdout, 65536)
+                self.assertEqual(err_body["error"]["code"], fault_code)
+
+        surface = json.loads(
+            (REPO / "contracts/examples/v0.2/surface.valid.json").read_text())
+        surface["state"] = "lost"
+        lost_event = {
+            "schema": "surface_event/v0.2",
+            "event": "state_changed",
+            "data": {"surface": surface},
+        }
+        self.v2.validate(lost_event, {"$ref": "surface_event.schema.json"})
+        envelope = {
+            "schema": "envelope/v0.2",
+            "msg_id": "lost-event-test",
+            "ts_ns": 2,
+            "from": {"component": "core", "instance": "core-test"},
+            "to": {"component": "ui", "instance": "ui-test"},
+            "session_id": "session-test",
+            "seq": 2,
+            "nonce": "nonce-lost-test",
+            "body": lost_event,
+        }
+        self.v2.validate(envelope, {"$ref": "envelope.schema.json"})
+
 
 class SocketFramingTests(unittest.TestCase):
     def setUp(self):
