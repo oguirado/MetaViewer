@@ -89,7 +89,8 @@ export { mapClientToFrame, mapKeyboardEvent };
  * @property {number} [submittedAtMs] - Submission timestamp in ms.
  * @property {number} [inputTimestampMs] - Originating input timestamp for input-to-present latency.
  * @property {number} [decodeDurationMs] - Upstream decode duration in ms.
- * @property {number} [estimatedPresentMs] - Estimated presentation cost in ms (defaults to 1).
+ * @property {number} [estimatedPresentMs] - Estimated presentation cost in ms (explicit positive
+ * values win verbatim; otherwise the tile's measured moving average when one exists, else 1).
  * @property {number} [leaseExpiresAtMs] - Optional lease expiration deadline in ms.
  */
 
@@ -401,17 +402,139 @@ function isValidSurfaceId(surfaceId) {
 }
 
 /**
+ * True on little-endian hosts (every supported target): packed RGBA bytes
+ * [r, g, b, 255] equal the Uint32 word 0xFF000000 | (b << 16) | (g << 8) | r.
+ * Evaluated once; any other host keeps the reference byte loop.
+ * @type {boolean}
+ */
+const IS_LITTLE_ENDIAN = (() => {
+  const probe = new Uint16Array([0x00ff]);
+  return new Uint8Array(probe.buffer)[0] === 0xff;
+})();
+
+/**
+ * Lower clamp for a measured present estimate: a tile never accounts below
+ * the historical 1 ms default, so admission only grows stricter as real
+ * cost is observed, never looser.
+ * @type {number}
+ */
+const MIN_MEASURED_ESTIMATE_MS = 1;
+
+/**
+ * Byte-exact RGB24 to RGBA conversion into a caller-provided row-major
+ * buffer. Pixel (x, y) maps to the same (x, y); alpha is always opaque.
+ * This is the reference loop (the historical per-present behaviour); the
+ * word path in convertRgb24ToRgba stays bit-identical to it.
+ * @param {Uint8Array} bytes Packed RGB24 bytes.
+ * @param {Uint8ClampedArray|Uint8Array|Array<number>} out RGBA output buffer.
+ * @param {number} wholePixels Pixels to convert, bounded by the input.
+ * @returns {void}
+ */
+function convertRgb24ToRgbaBytes(bytes, out, wholePixels) {
+  for (let px = 0, src = 0, dst = 0; px < wholePixels; px += 1, src += 3, dst += 4) {
+    out[dst] = bytes[src];
+    out[dst + 1] = bytes[src + 1];
+    out[dst + 2] = bytes[src + 2];
+    out[dst + 3] = 255;
+  }
+}
+
+/**
+ * Converts tightly packed top-left RGB24 bytes to row-major RGBA, covering
+ * every pixel of a width*height frame; alpha is always opaque. On
+ * little-endian hosts with a 4-byte-aligned ArrayBuffer-backed output this
+ * stores one 32-bit word per pixel, otherwise it takes the reference byte
+ * loop. Both paths are bit-identical.
+ * @param {Uint8Array} bytes Packed RGB24 bytes.
+ * @param {Uint8ClampedArray|Uint8Array|Array<number>} out RGBA output buffer.
+ * @param {number} width Frame width in pixels.
+ * @param {number} height Frame height in pixels.
+ * @returns {void}
+ */
+export function convertRgb24ToRgba(bytes, out, width, height) {
+  const pixelCount = width * height;
+  const wholePixels = Math.min(pixelCount, Math.floor(bytes.length / 3));
+  const candidate = /** @type {{ buffer?: unknown, byteOffset?: unknown, byteLength?: unknown }} */ (out);
+  const backing = candidate !== null && typeof candidate === 'object' ? candidate.buffer : null;
+  const byteOffset = candidate !== null && typeof candidate === 'object' ? candidate.byteOffset : null;
+  const byteLength = candidate !== null && typeof candidate === 'object' ? candidate.byteLength : null;
+  const aligned = ArrayBuffer.isView(out)
+    && !(out instanceof DataView)
+    && typeof byteOffset === 'number' && byteOffset % 4 === 0
+    && byteLength === pixelCount * 4
+    && (backing instanceof ArrayBuffer
+      || (typeof SharedArrayBuffer === 'function' && backing instanceof SharedArrayBuffer));
+  if (IS_LITTLE_ENDIAN && wholePixels === pixelCount && aligned) {
+    const words = new Uint32Array(
+      /** @type {ArrayBuffer|SharedArrayBuffer} */ (backing),
+      /** @type {number} */ (byteOffset),
+      pixelCount,
+    );
+    for (let px = 0, src = 0; px < pixelCount; px += 1, src += 3) {
+      words[px] = 0xFF000000 | (bytes[src + 2] << 16) | (bytes[src + 1] << 8) | bytes[src];
+    }
+    return;
+  }
+  convertRgb24ToRgbaBytes(bytes, out, wholePixels);
+}
+
+/**
+ * True when the slot holds an ImageData-like of exactly these dimensions
+ * with a full RGBA backing store worth overwriting in place.
+ * @param {unknown} slot Tile scratch slot (or null when none).
+ * @param {number} width Frame width in pixels.
+ * @param {number} height Frame height in pixels.
+ * @returns {boolean}
+ */
+function isReusableScratch(slot, width, height) {
+  if (slot === null || typeof slot !== 'object') return false;
+  const holder = /** @type {Record<string, unknown>} */ (slot);
+  if (holder.width !== width || holder.height !== height) return false;
+  const image = holder.image;
+  if (image === null || typeof image !== 'object') return false;
+  const frame = /** @type {Record<string, unknown>} */ (image);
+  if (frame.width !== width || frame.height !== height) return false;
+  const data = frame.data;
+  if (data === null || (typeof data !== 'object' && typeof data !== 'function')) return false;
+  return /** @type {{ length?: unknown }} */ (data).length === width * height * 4;
+}
+
+/**
+ * Folds one measured convert-plus-upload sample into the tile's moving
+ * average. Non-positive samples (a frozen test clock) and non-finite clock
+ * faults carry no signal and leave the average untouched, so frozen-clock
+ * suites keep the historical 1 ms default exactly.
+ * @param {{ measuredPresentMs?: unknown }} entry Tile entry.
+ * @param {unknown} sampleMs Measured milliseconds for one successful draw.
+ * @returns {void}
+ */
+function notePresentSample(entry, sampleMs) {
+  if (typeof sampleMs !== 'number' || !Number.isFinite(sampleMs) || sampleMs <= 0) return;
+  const prev = entry.measuredPresentMs;
+  entry.measuredPresentMs = typeof prev === 'number' && Number.isFinite(prev) && prev > 0
+    ? prev + (sampleMs - prev) / 2
+    : sampleMs;
+}
+
+/**
  * Converts tightly packed top-left RGB24 bytes to RGBA and uploads them to
  * a canvas 2D context. No flip, rotation, or channel reorder: pixel (x, y)
  * maps to the same (x, y). Alpha is always opaque.
+ *
+ * MVUI31: when the tile entry carries a same-dimension scratch ImageData it
+ * is reused (fully overwritten on every present); any dimension change,
+ * shape mismatch, or unsuitable scratch reallocates instead. Short or
+ * over-long inputs always take a fresh ImageData, preserving the historical
+ * prefix semantics.
  *
  * @param {any} canvas - Canvas element (or test double with getContext).
  * @param {Uint8Array} bytes - Packed RGB24 bytes, length width * height * 3.
  * @param {number} width - Frame width in pixels.
  * @param {number} height - Frame height in pixels.
+ * @param {{ presentScratch?: unknown }|null} [entry] - Tile entry holding the reusable scratch slot.
  * @returns {{ ok: true } | { ok: false, reason: string, detail: string }}
  */
-function drawRgb24ToCanvas(canvas, bytes, width, height) {
+function drawRgb24ToCanvas(canvas, bytes, width, height, entry = null) {
   if (!canvas || typeof canvas.getContext !== 'function') {
     return { ok: false, reason: SCHEDULER_REASONS.INVALID_BINDING, detail: 'Canvas handle is not drawable' };
   }
@@ -423,14 +546,19 @@ function drawRgb24ToCanvas(canvas, bytes, width, height) {
     canvas.width = width;
     canvas.height = height;
   }
-  const image = ctx.createImageData(width, height);
-  const out = image.data;
-  for (let src = 0, dst = 0; src < bytes.length; src += 3, dst += 4) {
-    out[dst] = bytes[src];
-    out[dst + 1] = bytes[src + 1];
-    out[dst + 2] = bytes[src + 2];
-    out[dst + 3] = 255;
+  const exactBytes = bytes.length === width * height * 3;
+  const slot = entry !== null && typeof entry === 'object' ? entry.presentScratch : null;
+  /** @type {any} */
+  let image = null;
+  if (exactBytes && isReusableScratch(slot, width, height)) {
+    image = /** @type {{ image: unknown }} */ (slot).image;
+  } else {
+    image = ctx.createImageData(width, height);
+    if (entry !== null && typeof entry === 'object' && exactBytes) {
+      entry.presentScratch = { width, height, image };
+    }
   }
+  convertRgb24ToRgba(bytes, image.data, width, height);
   ctx.putImageData(image, 0, 0);
   return { ok: true };
 }
@@ -671,6 +799,8 @@ export function createTileScheduler(options) {
       lastDetachedCanvas: sameLifetime ? existing.lastDetachedCanvas : null,
       lastPaint: sameLifetime ? existing.lastPaint : null,
       pendingPaint: sameLifetime ? keptPendingPaint : null,
+      presentScratch: null,
+      measuredPresentMs: sameLifetime ? existing.measuredPresentMs : null,
       lastRetiredHandle: sameLifetime ? existing.lastRetiredHandle : null,
       lastPresentedFrameGen: sameLifetime ? existing.lastPresentedFrameGen : 0,
       minAdmissibleFrameGen: sameLifetime ? existing.minAdmissibleFrameGen : 0,
@@ -739,6 +869,20 @@ export function createTileScheduler(options) {
       entry.minAdmissibleFrameGen = Math.max(entry.minAdmissibleFrameGen, witness.captureGeneration);
     }
     return { ok: true, captureCount: entry.metrics.captureCount, lastCaptureGeneration: entry.lastCaptureGeneration };
+  }
+
+  /**
+   * Admission estimate for a frame without a caller-supplied cost: the
+   * tile's measured convert-plus-upload moving average when one exists,
+   * clamped to the tick budget so an over-budget tile still presents one
+   * frame per tick, and never below the historical 1 ms default.
+   * @param {{ measuredPresentMs?: unknown }} entry Tile entry.
+   * @returns {number}
+   */
+  function defaultPresentEstimateMs(entry) {
+    const avg = entry.measuredPresentMs;
+    if (typeof avg !== 'number' || !Number.isFinite(avg) || avg <= 0) return MIN_MEASURED_ESTIMATE_MS;
+    return Math.min(Math.max(avg, MIN_MEASURED_ESTIMATE_MS), budget.maxPresentMsPerTick);
   }
 
   /**
@@ -845,7 +989,9 @@ export function createTileScheduler(options) {
       inputTimestampMs: typeof frame.inputTimestampMs === 'number' ? frame.inputTimestampMs : null,
       decodeDurationMs: typeof frame.decodeDurationMs === 'number' ? frame.decodeDurationMs : 0,
       estimatedPresentMs:
-        typeof frame.estimatedPresentMs === 'number' && frame.estimatedPresentMs > 0 ? frame.estimatedPresentMs : 1
+        typeof frame.estimatedPresentMs === 'number' && frame.estimatedPresentMs > 0
+          ? frame.estimatedPresentMs
+          : defaultPresentEstimateMs(entry)
     };
     return { ok: true, queuedFrameGeneration: frameGen, replacedFrameGeneration };
   }
@@ -1269,6 +1415,7 @@ export function createTileScheduler(options) {
     entry.canvasToken = null;
     entry.lastDetachedCanvas = null;
     entry.lastPaint = null;
+    entry.presentScratch = null;
     entry.destroyed = true;
     entry.captureLeaseActive = false;
     tombstones.add(entry.surfaceId);
@@ -1305,6 +1452,7 @@ export function createTileScheduler(options) {
     entry.lastDetachedCanvas = null;
     entry.lastPaint = null;
     entry.pendingPaint = null;
+    entry.presentScratch = null;
     entry.destroyed = true;
     entry.captureLeaseActive = false;
     surfaces.delete(entry.surfaceId);
@@ -1361,6 +1509,7 @@ export function createTileScheduler(options) {
       uploadSubmissions: entry.metrics.uploadSubmissions,
       bytesUploadedTotal: entry.metrics.bytesUploadedTotal,
       convertedBytesTotal: entry.metrics.convertedBytesTotal,
+      measuredPresentMs: entry.measuredPresentMs,
       mailboxReplacements: entry.metrics.mailboxReplacements,
       rejectedHiddenDraws: entry.metrics.rejectedHiddenDraws,
       rejectedStaleFrames: entry.metrics.rejectedStaleFrames,
@@ -1417,8 +1566,9 @@ export function createTileScheduler(options) {
       const retained = entry.pendingPaint;
       entry.pendingPaint = null;
       let painted = null;
+      const attachDrawStartedAtMs = clock();
       try {
-        painted = drawRgb24ToCanvas(args.canvas, retained.bytes, retained.width, retained.height);
+        painted = drawRgb24ToCanvas(args.canvas, retained.bytes, retained.width, retained.height, entry);
       } catch {
         painted = null;
       }
@@ -1428,6 +1578,7 @@ export function createTileScheduler(options) {
         entry.pendingPaint = retained;
         return { ok: true, surfaceId: entry.surfaceId, token: entry.canvasToken };
       }
+      notePresentSample(entry, clock() - attachDrawStartedAtMs);
       entry.lastPaint = { bytes: retained.bytes, width: retained.width, height: retained.height };
       entry.lastPresentedFrameGen = retained.frameGeneration;
       entry.lastPresentedHandle = retained.handle;
@@ -1442,7 +1593,7 @@ export function createTileScheduler(options) {
       notifyPresentation();
     } else if (entry.lastPaint !== null && previous !== args.canvas && !sameElementReattach) {
       try {
-        drawRgb24ToCanvas(args.canvas, entry.lastPaint.bytes, entry.lastPaint.width, entry.lastPaint.height);
+        drawRgb24ToCanvas(args.canvas, entry.lastPaint.bytes, entry.lastPaint.width, entry.lastPaint.height, entry);
       } catch { /* Repaint is best-effort; the attach stands for future presents. */ }
     }
     return { ok: true, surfaceId: entry.surfaceId, token: entry.canvasToken };
@@ -1501,10 +1652,12 @@ export function createTileScheduler(options) {
       return { ok: false, reason: SCHEDULER_REASONS.INVALID_BINDING, detail: 'No canvas attached' };
     }
     const slot = entry.presented;
-    const drawn = drawRgb24ToCanvas(entry.canvas, slot.bytes, slot.width, slot.height);
+    const drawStartedAtMs = clock();
+    const drawn = drawRgb24ToCanvas(entry.canvas, slot.bytes, slot.width, slot.height, entry);
     if (!drawn.ok) {
       return drawn;
     }
+    notePresentSample(entry, clock() - drawStartedAtMs);
     const convertedBytes = slot.width * slot.height * 4;
     entry.metrics.convertedBytesTotal += convertedBytes;
     // MVUI20: one retained frame feeds later (re-)attaches; a new surface
@@ -1550,6 +1703,7 @@ export function createTileScheduler(options) {
       entry.canvasToken = null;
       entry.lastDetachedCanvas = null;
       entry.lastPaint = null;
+      entry.presentScratch = null;
       entry.destroyed = true;
       entry.captureLeaseActive = false;
     }

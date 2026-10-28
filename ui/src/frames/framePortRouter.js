@@ -52,6 +52,9 @@
  * Plain JavaScript with JSDoc; no product imports, no dependencies; the only
  * timers are one bounded grace timer per kept stream and one bounded hold
  * timer per stream with an unbound delivery.
+ * MVUI31: a delivery may carry the host-set utilityVerified marker; on a
+ * trusted port event the marker skips the redundant re-hash, otherwise the
+ * digest runs exactly as before (malformed markers hash too).
  * @module frames/framePortRouter
  */
 
@@ -90,6 +93,20 @@ const NOTICE_KEYS = 'schema,surface_generation,surface_id,type';
 const DELIVERY_KEYS = ['schema', 'kind', 'correlation', 'principal', 'epoch',
   'surfaceId', 'surfaceGeneration', 'frameGeneration', 'leaseId', 'width',
   'height', 'format', 'byteLength', 'sha256', 'pixelSpec', 'bytes'].sort().join(',');
+
+/**
+ * Utility-verified marker key (MVUI31): the host sets `utilityVerified` to
+ * exactly true on deliveries whose digest equality already held at the
+ * utility read, so the renderer can skip its redundant re-hash.
+ * @type {string}
+ */
+export const FRAME_DELIVERY_MARKER_KEY = 'utilityVerified';
+
+/** Closed delivery key set with the utility-verified marker. @type {string} */
+const DELIVERY_KEYS_WITH_MARKER = ['schema', 'kind', 'correlation', 'principal', 'epoch',
+  'surfaceId', 'surfaceGeneration', 'frameGeneration', 'leaseId', 'width',
+  'height', 'format', 'byteLength', 'sha256', 'pixelSpec', 'bytes',
+  'utilityVerified'].sort().join(',');
 const SHA256_RE = /^[0-9a-f]{64}$/;
 const NULL_DIGEST = '0'.repeat(64);
 const RGB24_FORMAT = 'rgb24';
@@ -198,6 +215,30 @@ export function isFramePortNotice(data) {
     && notice.schema === FRAME_PORT_NOTICE_SCHEMA
     && isNonEmptyString(notice.surface_id)
     && isPositiveSafeInt(notice.surface_generation);
+}
+
+/**
+ * True when the delivery carries a well-formed utility-verified marker. The
+ * comparison is strict: any forged or malformed value (1, 'true', {}, ...)
+ * counts as absent and the digest runs as before.
+ * @param {unknown} raw Delivery under test.
+ * @returns {boolean}
+ */
+function hasUtilityVerifiedMarker(raw) {
+  if (raw === null || typeof raw !== 'object') return false;
+  return /** @type {Record<string, unknown>} */ (raw).utilityVerified === true;
+}
+
+/**
+ * True when the record may skip the renderer re-hash: a well-formed marker
+ * AND a trusted port event. Trustedness is captured from the UA-set
+ * read-only isTrusted flag at receipt, which page-content forgeries cannot
+ * set, so a marker replayed through a synthetic event still hashes.
+ * @param {{ raw: unknown, trusted?: unknown }} record Delivery record.
+ * @returns {boolean}
+ */
+function isMarkerVerifiedDelivery(record) {
+  return record.trusted === true && hasUtilityVerifiedMarker(record.raw);
 }
 
 /**
@@ -428,11 +469,14 @@ export function installFramePortRouter(options) {
    * @returns {Promise<void>}
    */
   async function verifyHeldDelivery(entry, held) {
+    const markerVerified = isMarkerVerifiedDelivery(held);
     let digest = null;
-    try {
-      digest = await digestSha256(held.raw.bytes);
-    } catch {
-      digest = null;
+    if (!markerVerified) {
+      try {
+        digest = await digestSha256(held.raw.bytes);
+      } catch {
+        digest = null;
+      }
     }
     if (entry.expiring === held) entry.expiring = null;
     if (disposed || entry.disposed || streams.get(entry.surfaceId) !== entry) {
@@ -446,13 +490,13 @@ export function installFramePortRouter(options) {
       settle(held, FRAME_OUTCOMES.SUPERSEDED);
       return;
     }
-    if (typeof digest !== 'string' || digest !== held.raw.sha256) {
+    if (!markerVerified && (typeof digest !== 'string' || digest !== held.raw.sha256)) {
       settle(held, FRAME_OUTCOMES.REFUSED);
       return;
     }
     entry.admittedFloor = Math.max(entry.admittedFloor, held.raw.frameGeneration);
     // An older kept frame drops silently: it was already acked at expiry.
-    entry.retained = { raw: held.raw };
+    entry.retained = { raw: held.raw, trusted: held.trusted === true };
     settle(held, FRAME_OUTCOMES.HIDDEN);
     if (hasBinding(entry.surfaceId) && !entry.registered) {
       drainRetained(entry);
@@ -532,7 +576,7 @@ export function installFramePortRouter(options) {
   function deliveryShapeOk(entry, raw) {
     if (raw === null || typeof raw !== 'object') return false;
     if (raw.schema !== FRAME_DELIVERY_SCHEMA || raw.kind !== 'frame') return false;
-    if (!hasExactKeys(raw, DELIVERY_KEYS)) return false;
+    if (!hasExactKeys(raw, DELIVERY_KEYS) && !hasExactKeys(raw, DELIVERY_KEYS_WITH_MARKER)) return false;
     if (!isNonEmptyString(raw.correlation)) return false;
     if (raw.surfaceId !== entry.surfaceId) return false;
     if (!isPositiveSafeInt(raw.surfaceGeneration)) return false;
@@ -591,9 +635,10 @@ export function installFramePortRouter(options) {
    * gap-refuse path in the caller.
    * @param {any} entry
    * @param {any} raw
+   * @param {boolean} [trusted] Port-event trust captured at receipt.
    * @returns {{ ok: true } | { ok: false }} Refusals ack inside.
    */
-  function holdDelivery(entry, raw) {
+  function holdDelivery(entry, raw, trusted = false) {
     const refuse = () => { refuseArrival(entry, raw); return { ok: /** @type {const} */ (false) }; };
     if (!deliveryShapeOk(entry, raw)) return refuse();
     if (entry.pending !== null && entry.pending !== undefined
@@ -624,7 +669,7 @@ export function installFramePortRouter(options) {
       // settled guard.
       settle(entry.expiring, FRAME_OUTCOMES.SUPERSEDED);
     }
-    entry.pending = { raw, port: entry.port, settled: false, superseded: false };
+    entry.pending = { raw, port: entry.port, settled: false, superseded: false, trusted: trusted === true };
     armPendingTimer(entry);
     return { ok: /** @type {const} */ (true) };
   }
@@ -647,7 +692,7 @@ export function installFramePortRouter(options) {
     }
     const admitted = admitDelivery(entry, held.raw);
     if (admitted.ok !== true) return;
-    enqueueRecord(entry, held.raw, held.port);
+    enqueueRecord(entry, held.raw, held.port, held.trusted === true);
   }
 
   /**
@@ -696,7 +741,7 @@ export function installFramePortRouter(options) {
         return;
       }
     }
-    const record = { raw: kept.raw, port: entry.port, settled: true, superseded: false };
+    const record = { raw: kept.raw, port: entry.port, settled: true, superseded: false, trusted: kept.trusted === true };
     for (const queued of entry.queue.splice(0)) settle(queued, FRAME_OUTCOMES.SUPERSEDED);
     entry.queue.push(record);
     pump(entry);
@@ -708,10 +753,11 @@ export function installFramePortRouter(options) {
    * @param {any} entry
    * @param {any} raw Admitted delivery.
    * @param {any} port Stream port the ack answers on.
+   * @param {boolean} [trusted] Port-event trust captured at receipt.
    * @returns {void}
    */
-  function enqueueRecord(entry, raw, port) {
-    const record = { raw, port, settled: false, superseded: false };
+  function enqueueRecord(entry, raw, port, trusted = false) {
+    const record = { raw, port, settled: false, superseded: false, trusted: trusted === true };
     if (entry.validating && entry.current) entry.current.superseded = true;
     for (const queued of entry.queue.splice(0)) settle(queued, FRAME_OUTCOMES.SUPERSEDED);
     entry.queue.push(record);
@@ -911,12 +957,15 @@ export function installFramePortRouter(options) {
    * @returns {Promise<void>}
    */
   async function validateAndPaint(entry, record) {
+    const markerVerified = isMarkerVerifiedDelivery(record);
     /** @type {string|null} */
     let digest = null;
-    try {
-      digest = await digestSha256(record.raw.bytes);
-    } catch {
-      digest = null;
+    if (!markerVerified) {
+      try {
+        digest = await digestSha256(record.raw.bytes);
+      } catch {
+        digest = null;
+      }
     }
     if (!canPaint(entry)) {
       settleDisplaced(entry, record);
@@ -926,7 +975,7 @@ export function installFramePortRouter(options) {
       settle(record, FRAME_OUTCOMES.SUPERSEDED);
       return;
     }
-    if (typeof digest !== 'string' || digest !== record.raw.sha256) {
+    if (!markerVerified && (typeof digest !== 'string' || digest !== record.raw.sha256)) {
       settleAndMaybeClose(entry, record, FRAME_OUTCOMES.REFUSED);
       return;
     }
@@ -988,13 +1037,14 @@ export function installFramePortRouter(options) {
     entry.onPortMessage = (/** @type {any} */ event) => {
       if (disposed || entry.disposed || streams.get(entry.surfaceId) !== entry) return;
       const raw = unwrapMessage(event);
+      const trusted = event !== null && typeof event === 'object' && event.isTrusted === true;
       if (!hasBinding(entry.surfaceId) && !entry.registered) {
-        holdDelivery(entry, raw);
+        holdDelivery(entry, raw, trusted);
         return;
       }
       const admitted = admitDelivery(entry, raw);
       if (admitted.ok !== true) return;
-      enqueueRecord(entry, raw, port);
+      enqueueRecord(entry, raw, port, trusted);
     };
     entry.onPortClose = () => {
       if (!entry.disposed && streams.get(entry.surfaceId) === entry) retireStream(entry, FRAME_OUTCOMES.SURFACE_DESTROYED);
