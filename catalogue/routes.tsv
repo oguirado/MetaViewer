@@ -664,6 +664,7 @@ guard_tests.rs	core/src/record/guard_tests.rs
 record-mod.rs	core/src/record/mod.rs
 record-tests.rs	core/src/record/tests.rs
 replay-mod.rs	core/src/replay/mod.rs
+canonical.rs	core/src/serve/canonical.rs
 serve-capture.rs	core/src/serve/capture.rs
 layout.rs	core/src/serve/layout.rs
 serve-mod.rs	core/src/serve/mod.rs
