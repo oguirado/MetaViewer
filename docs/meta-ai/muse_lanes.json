@@ -200,6 +200,21 @@
    "why": "Human-input renderer drop: key chords with punctuation or non-ASCII characters violate the host adapter key grammar; map them to X keysym names or drop them.",
    "orchestrator": "UI orchestrator"
   },
+  "mvui31": {
+   "stage": "perf",
+   "why": "AC-02 needs 4 capsules at >= 10 fps at live size; the renderer present path (per-frame RGBA conversion, ImageData allocation, wrong cost accounting, redundant re-hash) is the largest cost.",
+   "orchestrator": "UI orchestrator"
+  },
+  "mvui29s": {
+   "stage": "ui",
+   "why": "AC-08 is PARTIAL: settings persistence across a restart was never shown live; complete load-at-boot and save-on-change in the renderer and list host gaps for the on-disk side.",
+   "orchestrator": "UI orchestrator"
+  },
+  "mvui29": {
+   "stage": "ui",
+   "why": "AC-06 is PARTIAL: no real terminal session, provider menu or Copy capsule ID was ever seen working on the real app; complete the renderer path and list host gaps so the host lands its part together.",
+   "orchestrator": "UI orchestrator"
+  },
   "mvui25d": {
    "stage": "fix",
    "why": "Argon notes on the human-input renderer drop: an unavailable input port made the canvas focusable and swallow keys; fail closed, fix the strip oracle, harden mapper load failure and integer checks.",
@@ -263,6 +278,11 @@
   "mvui24": {
    "stage": "fix",
    "why": "Complete MV-UI13 with the remaining verified RV9 renderer items: capture refresh evicting rows, scheduler raw ids in DOM ids and never-destroyed entries, screenshot row ids/labels.",
+   "orchestrator": "UI orchestrator"
+  },
+  "mvui30": {
+   "stage": "fix",
+   "why": "AC-03: a lost capsule shows 'Connecting to surface' forever because App erases the backend lost signal; show the last frame frozen with a Lost badge so the operator sees what was lost.",
    "orchestrator": "UI orchestrator"
   },
   "mvui26": {
