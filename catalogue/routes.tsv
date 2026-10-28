@@ -785,6 +785,7 @@ lease_safety_test.go	daemon-adapter/internal/frames/lease_safety_test.go
 live_test.go	daemon-adapter/internal/frames/live_test.go
 multisurface_test.go	daemon-adapter/internal/frames/multisurface_test.go
 pacing_test.go	daemon-adapter/internal/frames/pacing_test.go
+pipeline_test.go	daemon-adapter/internal/frames/pipeline_test.go
 publisher.go	daemon-adapter/internal/frames/publisher.go
 publish-dae6dc777e52	daemon-adapter/internal/frames/publisher_release_test.go
 publisher_test.go	daemon-adapter/internal/frames/publisher_test.go
