@@ -14,6 +14,19 @@ const budgets = JSON.parse(readFileSync(new URL('./budgets.json', import.meta.ur
 const excludes = JSON.parse(process.env.MV_RSS_EXCLUDES || '[]');
 const identities = new Map();
 const samples = [];
+const consoleErrors = [];
+export const SETTLE_SELECTORS = ['.metaviewer[data-wall-settled="true"]', '.mv-terminal'];
+export const SETTLE_TIMEOUT_MS = 45000;
+export const SETTLE_POLL_MS = 100;
+const SETTLE_PROBE_SCRIPT = `(() => {
+  const selectors = ${JSON.stringify(SETTLE_SELECTORS)};
+  const missing = selectors.filter(selector => !document.querySelector(selector));
+  return {
+    settled: missing.length === 0,
+    missing,
+    readyState: typeof document?.readyState === 'string' ? document.readyState : 'unknown',
+  };
+})()`;
 let app, BrowserWindow, ipcMain, protocol, session, win, wire, deadline;
 if (process.versions.electron) {
   ({ app, BrowserWindow, ipcMain, protocol, session } = createRequire(new URL('../../ui/package.json', import.meta.url))('electron'));
@@ -84,12 +97,74 @@ export function snapshot(at_ms, io = {}) {
   recordedSamples.push(row);
 }
 
-async function settled() {
-  for (let i = 0; i < 100; i++) {
-    if (await win.webContents.executeJavaScript(`Boolean(document.querySelector('.metaviewer[data-wall-settled="true"]') && document.querySelector('.mv-terminal'))`)) return;
-    await new Promise(resolve => setTimeout(resolve, 100));
+function normalizeSettleProbe(probe) {
+  if (probe === true) {
+    return { settled: true, missing: [], readyState: 'complete', consoleErrors: [] };
   }
-  throw new Error('Shell did not settle');
+  if (!probe || typeof probe !== 'object') {
+    return { settled: false, missing: [...SETTLE_SELECTORS], readyState: 'unknown', consoleErrors: [] };
+  }
+  let missing;
+  if (Array.isArray(probe.missing)) {
+    missing = probe.missing.map(String);
+  } else if ('wallSettled' in probe || 'terminal' in probe) {
+    missing = [];
+    if (!probe.wallSettled) missing.push(SETTLE_SELECTORS[0]);
+    if (!probe.terminal) missing.push(SETTLE_SELECTORS[1]);
+  } else {
+    missing = probe.settled === true ? [] : [...SETTLE_SELECTORS];
+  }
+  const settledFlag = typeof probe.settled === 'boolean' ? probe.settled && missing.length === 0 : missing.length === 0;
+  const readyState = typeof probe.readyState === 'string' && probe.readyState.length > 0 ? probe.readyState : 'unknown';
+  const extraErrors = Array.isArray(probe.consoleErrors) ? probe.consoleErrors.map(String) : [];
+  return { settled: settledFlag, missing, readyState, consoleErrors: extraErrors };
+}
+
+export async function settled(io = {}) {
+  const opts = typeof io === 'function' ? { executeJavaScript: io } : io;
+  const target = opts.webContents ?? win?.webContents;
+  const exec = opts.executeJavaScript ?? (code => target.executeJavaScript(code));
+  const timeoutMs = opts.timeoutMs ?? SETTLE_TIMEOUT_MS;
+  const pollMs = opts.pollMs ?? SETTLE_POLL_MS;
+  const now = opts.now ?? (() => performance.now());
+  const sleep = opts.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
+  const seenErrors = [...(opts.consoleErrors ?? consoleErrors)];
+  const onConsole = (event, level, message) => {
+    const severity = event?.level ?? level;
+    const text = event?.message ?? message;
+    if (severity === 'error' || severity === 3) seenErrors.push(String(text));
+  };
+  const attachTempListener = target && target !== win?.webContents && typeof target.on === 'function';
+  if (attachTempListener) target.on('console-message', onConsole);
+  const startedAt = now();
+  let last = { settled: false, missing: [...SETTLE_SELECTORS], readyState: 'unknown', consoleErrors: [] };
+  try {
+    for (;;) {
+      try {
+        last = normalizeSettleProbe(await exec(SETTLE_PROBE_SCRIPT));
+        if (!attachTempListener && opts.consoleErrors === undefined && consoleErrors.length > seenErrors.length) {
+          for (let i = seenErrors.length; i < consoleErrors.length; i++) seenErrors.push(consoleErrors[i]);
+        }
+        if (last.settled) return;
+      } catch (error) {
+        const msg = error?.message || String(error);
+        if (!seenErrors.includes(msg)) seenErrors.push(msg);
+      }
+      const elapsed = now() - startedAt;
+      if (elapsed >= timeoutMs) break;
+      await sleep(Math.min(pollMs, Math.max(1, timeoutMs - elapsed)));
+    }
+  } finally {
+    if (attachTempListener && typeof target.removeListener === 'function') {
+      target.removeListener('console-message', onConsole);
+    }
+  }
+  const allErrors = [...seenErrors, ...last.consoleErrors];
+  const missingText = last.missing.length ? last.missing.join(', ') : 'none';
+  const errorsText = allErrors.length ? JSON.stringify(allErrors) : 'none';
+  throw new Error(
+    `Shell did not settle within ${timeoutMs}ms (missingSelectors=[${missingText}], readyState=${last.readyState}, consoleErrors=${errorsText})`
+  );
 }
 
 async function run() {
@@ -110,16 +185,30 @@ async function run() {
     wire = installAuthorityWire({ ipcMain, contents: win.webContents,
       env: { XDG_CONFIG_HOME: process.env.MV_RSS_PROFILE }, argv: [],
       core: { request: async () => ({ schema: 'action_verdict/v0.2', proposal_id: 'rss-probe', decision: 'admitted', core_seq: 1 }) } });
+    win.webContents.on('console-message', (event, level, message) => {
+      const severity = event?.level ?? level;
+      const text = event?.message ?? message;
+      if (severity === 'error' || severity === 3) consoleErrors.push(String(text));
+    });
+    win.webContents.on('preload-error', (_event, _path, error) => {
+      consoleErrors.push(String(error?.message || error));
+    });
     win.webContents.on('render-process-gone', () => app.exit(1));
     await win.loadURL(`${PRIVILEGED_ORIGIN}/index.html`);
     await settled();
     const workload = ['ready'];
-    const start = performance.now();
+    let start = performance.now();
     snapshot(0);
     for (let tick = 1; ; tick++) {
       await new Promise(resolve => setTimeout(resolve, Math.max(0, tick * budgets.sampleMs - (performance.now() - start))));
       if (tick === 1) { win.setSize(1100, 800); win.setSize(1280, 900); workload.push('resize'); }
-      if (tick === 2) { await win.loadURL(`${PRIVILEGED_ORIGIN}/index.html`); await settled(); workload.push('reload'); }
+      if (tick === 2) {
+        await win.loadURL(`${PRIVILEGED_ORIGIN}/index.html`);
+        const settleStart = performance.now();
+        await settled();
+        start += performance.now() - settleStart;
+        workload.push('reload');
+      }
       if (tick === 3) {
         const clicked = await win.webContents.executeJavaScript(`(() => { const button = document.querySelector('#shell-terminal'); if (!button) return false; button.click(); button.click(); return true; })()`);
         if (!clicked) throw new Error('Terminal toggle absent');

@@ -232,6 +232,91 @@ assert.throws(() => snapshot(25, {
             text=True, capture_output=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
 
+    def test_rss_probe_settled_diagnostics_and_never_settling_negative_control(self):
+        script = """
+import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { pathToFileURL } from 'node:url';
+const { settled, SETTLE_TIMEOUT_MS, SETTLE_SELECTORS } = await import(pathToFileURL(process.argv[1]).href);
+assert.equal(SETTLE_TIMEOUT_MS, 45000);
+assert.deepEqual(SETTLE_SELECTORS, ['.metaviewer[data-wall-settled="true"]', '.mv-terminal']);
+
+// Slow first load (> 10 s old limit, < 45 s bound) settles cleanly.
+let clock = 0;
+await settled({
+  now: () => clock,
+  sleep: async ms => { clock += ms; },
+  executeJavaScript: async code => {
+    const document = {
+      readyState: clock < 15000 ? 'interactive' : 'complete',
+      querySelector: sel => {
+        if (clock < 15000) return sel === '.metaviewer[data-wall-settled="true"]' ? {} : null;
+        return {};
+      },
+    };
+    return eval(code);
+  },
+});
+assert.equal(clock, 15000);
+
+// Diagnostic reports missing selector, document.readyState, and renderer console errors.
+let diagClock = 0;
+const webContents = new EventEmitter();
+webContents.executeJavaScript = async code => {
+  if (diagClock === 0) {
+    webContents.emit('console-message', { level: 'error', message: 'TypeError: terminal mount failed' });
+  }
+  const document = {
+    readyState: 'interactive',
+    querySelector: sel => (sel === '.metaviewer[data-wall-settled="true"]' ? {} : null),
+  };
+  return eval(code);
+};
+await assert.rejects(
+  () => settled({
+    webContents,
+    now: () => diagClock,
+    sleep: async ms => { diagClock += ms; },
+  }),
+  err => {
+    assert.match(err.message, /^Shell did not settle within 45000ms /);
+    assert.match(err.message, /missingSelectors=\\[\\.mv-terminal\\]/);
+    assert.doesNotMatch(err.message, /missingSelectors=\\[\\.metaviewer/);
+    assert.match(err.message, /readyState=interactive/);
+    assert.match(err.message, /consoleErrors=\\["TypeError: terminal mount failed"\\]/);
+    return true;
+  }
+);
+
+// Negative control: a never-settling page fails with the diagnostic message.
+let neverClock = 0;
+await assert.rejects(
+  () => settled({
+    now: () => neverClock,
+    sleep: async ms => { neverClock += ms; },
+    executeJavaScript: async code => {
+      const document = {
+        readyState: 'loading',
+        querySelector: () => null,
+      };
+      return eval(code);
+    },
+  }),
+  err => {
+    assert.equal(
+      err.message,
+      'Shell did not settle within 45000ms (missingSelectors=[.metaviewer[data-wall-settled="true"], .mv-terminal], readyState=loading, consoleErrors=none)'
+    );
+    return true;
+  }
+);
+assert.equal(neverClock, 45000);
+"""
+        result = subprocess.run(
+            ['node', '--input-type=module', '-e', script, str(ROOT / 'tests/perf/rss_probe.mjs')],
+            text=True, capture_output=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+
 
 if __name__ == '__main__':
     unittest.main()
