@@ -1248,6 +1248,7 @@ framePort.test.js	ui/test/framePort.test.js
 frameRe-465cff07ceeb	ui/test/frameReader-lexical.test.js
 frameReader.test.js	ui/test/frameReader.test.js
 frameTile.test.js	ui/test/frameTile.test.js
+hostset-f2d771cedde2	ui/test/host-settings-fps.test.js
 hostBindings.test.js	ui/test/hostBindings.test.js
 intents.test.js	ui/test/intents.test.js
 layout-load.test.js	ui/test/layout-load.test.js
@@ -1422,6 +1423,15 @@ mvui32q-17824ab4e66d	ui/test/mvui32-q-maxwait.test.js
 mvui32s-c1d201da6a36	ui/test/mvui32-s-attach-eligibility.test.js
 mvui32f-97065ec07539	ui/test/mvui32f-judge-notes.test.js
 mvui32g-c6eef01fe4e8	ui/test/mvui32g-new01-fixed-ordering.test.js
+mvui33a-70fbe000fe0f	ui/test/mvui33-actual-fps.test.js
+mvui33s-6ac7bdfea5a3	ui/test/mvui33-settings-boot.test.js
+mvui33s-745a928f7685	ui/test/mvui33-settings-panel.test.js
+mvui33s-674cd550e298	ui/test/mvui33-settings-store.test.js
+mvui33b-d1034ac8dcf9	ui/test/mvui33b-fps-decay.test.js
+mvui33b-58bc830a5ccd	ui/test/mvui33b-mono-clock.test.js
+mvui33b-b17f0385b51a	ui/test/mvui33b-recfps-parse.test.js
+mvui33c-c4624f1acb7c	ui/test/mvui33c-decay-edge.test.js
+mvui33c-6394fb65f473	ui/test/mvui33c-recfps-empty.test.js
 mvui4wa-768ad3f201a7	ui/test/mvui4-wall-states.test.js
 mvui5ac-09d04069a3a2	ui/test/mvui5-activity-app.test.js
 mvui5ac-97fc5e0a129e	ui/test/mvui5-activity-model.test.js
