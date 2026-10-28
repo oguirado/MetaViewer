@@ -256,3 +256,211 @@ func TestHumanOriginWireReceipts(t *testing.T) {
 		t.Fatalf("expected 3 events for applied agent input, got %s", appliedAgent)
 	}
 }
+
+type holdingsSettlementRunner struct {
+	root string
+}
+
+func (r *holdingsSettlementRunner) Run(_ context.Context, args []string, _ []byte) ([]byte, error) {
+	switch filepath.Base(args[0]) + ":" + args[1] {
+	case "srf-holdings-capsule:start":
+		framesDir := filepath.Join(r.root, "hc-0123456789ab/frames")
+		return json.Marshal([]map[string]any{{
+			"slot":        1,
+			"container":   "srf-ng-hcap-hc-0123456789ab-1",
+			"run_id":      "hc-0123456789ab",
+			"display":     ":100",
+			"width":       2,
+			"height":      1,
+			"lane_socket": "/tmp/lane.sock",
+			"ready_line":  "READY",
+			"ready_ms":    0,
+			"frames_dir":  framesDir,
+		}})
+	case "srf-holdings-capsule:frame":
+		path := filepath.Join(r.root, "hc-0123456789ab/frames/f.png")
+		return json.Marshal(map[string]any{
+			"sha256_rgb24":    fmt.Sprintf("%x", sha256.Sum256(make([]byte, 6))),
+			"path":            path,
+			"seq":             1,
+			"width":           2,
+			"height":          1,
+			"capture_mono_ns": 200,
+			"generation":      "srf-ng-hcap-hc-0123456789ab-1",
+		})
+	case "srf-holdings-capsule:input":
+		return []byte(`{"input_mono_ns":200}`), nil
+	}
+	return nil, errors.New("unexpected native command")
+}
+
+func TestHumanEmptyBaselineSettles(t *testing.T) {
+	root, err := os.MkdirTemp("/dev/shm", "mv-human-empty-baseline-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(root)
+	source := filepath.Join(root, "demo-run/frames/w1")
+	if err = os.MkdirAll(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(source, "f.png")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img := image.NewNRGBA(image.Rect(0, 0, 2, 1))
+	img.Set(0, 0, color.NRGBA{A: 255})
+	img.Set(1, 0, color.NRGBA{A: 255})
+	if err = png.Encode(f, img); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	profiles := map[string]capsule.Profile{"demo": {Kind: "browser", NativeKind: "browser", RAMRoot: root, Display: ":100", Width: 2, Height: 1}}
+	runner := &settlementRunner{initialRunner: initialRunner{root: root}, mode: "ok", started: make(chan struct{}), finish: make(chan struct{})}
+	m, err := capsule.NewManager(capsule.Config{BinDir: t.TempDir(), Profiles: profiles, MaxSurfaces: 1, MaxOutputBytes: 8192, Timeout: time.Second, OriginNS: 100}, runner, func() uint64 { return 200 })
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := frames.NewPublisher(frames.PublishConfig{RAMRoot: root, MaxFrameBytes: 8192, MaxPixels: 2, MaxSurfaces: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pub.Close()
+
+	// Create directly on Manager so wireHandler's lastFrames baseline is empty.
+	created, err := m.Handle(context.Background(), capsule.Request{
+		Schema: "surface_request/v0.2",
+		Op:     "create",
+		Params: json.RawMessage(`{"kind":"browser","profile_id":"demo","geometry":{"w":2,"h":1}}`),
+	})
+	if err != nil || len(created) != 1 {
+		t.Fatalf("create failed: %s %v", created, err)
+	}
+	var event struct {
+		Data struct{ Surface capsule.Surface }
+	}
+	if err = json.Unmarshal(created[0], &event); err != nil {
+		t.Fatal(err)
+	}
+	sid := event.Data.Surface.SurfaceID
+
+	h := wireHandler(m, profiles, map[string]*frames.Publisher{root: pub}, 100)
+	call := func(op string, params any) []json.RawMessage {
+		t.Helper()
+		body, _ := json.Marshal(map[string]any{"schema": "surface_request/v0.2", "op": op, "params": params})
+		events, err := h(context.Background(), ipc.Envelope{Body: body})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return events
+	}
+
+	call("take_control", map[string]any{"surface_id": sid, "owner": "human"})
+	action := map[string]any{"type": "key", "keys": []string{"a"}}
+	settled := call("input", map[string]any{"surface_id": sid, "proposal_id": "hi-empty-baseline", "origin": "human", "action": action})
+	if len(settled) != 2 {
+		t.Fatalf("expected input_applied + error action_receipt when lastFrames is empty, got %s", settled)
+	}
+	var applied struct {
+		Schema string `json:"schema"`
+		Event  string `json:"event"`
+		Data   struct {
+			SurfaceID  string `json:"surface_id"`
+			ProposalID string `json:"proposal_id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(settled[0], &applied); err != nil || applied.Schema != "surface_event/v0.2" || applied.Event != "input_applied" || applied.Data.ProposalID != "hi-empty-baseline" {
+		t.Fatalf("unexpected input_applied event: %s (%v)", settled[0], err)
+	}
+	var receipt map[string]any
+	if err := json.Unmarshal(settled[1], &receipt); err != nil {
+		t.Fatalf("unmarshal receipt: %s (%v)", settled[1], err)
+	}
+	if receipt["schema"] != "action_receipt/v0.2" || receipt["proposal_id"] != "hi-empty-baseline" || receipt["verified"] != false || receipt["error"] == "" || receipt["error"] == nil || receipt["after_frame"] == nil {
+		t.Fatalf("unexpected error receipt for empty baseline: %s", settled[1])
+	}
+
+	policy, err := ipc.NewPolicy(ipc.Config{SocketPath: filepath.Join(t.TempDir(), "core.sock"), MaxReplayEntries: 100, MaxConnections: 1, HelloTimeout: time.Second, ReadTimeout: time.Second, WriteTimeout: time.Second, ProbeTimeout: time.Second, ShutdownTimeout: time.Second, MaxFrameBytes: 1 << 20, MaxDepth: 32, MaxStringBytes: 65536, MaxKeys: 256, MaxArrayItems: 4096}, os.DirFS(filepath.Join("..", "..", "..", "contracts", "v0.2")), &lifecyclePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, _ := json.Marshal(ipc.Envelope{Schema: "envelope/v0.2", MsgID: "proof", From: ipc.Endpoint{Component: "daemon", Instance: "daemon"}, To: ipc.Endpoint{Component: "core", Instance: "core"}, SessionID: "proof", Seq: 1, Nonce: "proof", Body: settled[1]})
+	if _, err = policy.ValidateEnvelope(envelope); err != nil {
+		t.Fatalf("empty-baseline error receipt failed schema validation: %v (%s)", err, settled[1])
+	}
+
+	// Holdings human-origin input requires and invokes VerifyHoldingsInput.
+	hSource := filepath.Join(root, "hc-0123456789ab/frames")
+	if err = os.MkdirAll(hSource, 0700); err != nil {
+		t.Fatal(err)
+	}
+	hPath := filepath.Join(hSource, "f.png")
+	hf, err := os.OpenFile(hPath, os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = png.Encode(hf, img); err != nil {
+		t.Fatal(err)
+	}
+	hf.Close()
+
+	hProfiles := map[string]capsule.Profile{"game": {Kind: "game_capsule", NativeKind: "holdings", AppDir: "/opt/game", RAMRoot: root, Display: ":100", Width: 2, Height: 1}}
+	hRunner := &holdingsSettlementRunner{root: root}
+	var verifiedCalls int
+	var verifyErr error
+	hm, err := capsule.NewManager(capsule.Config{
+		BinDir:         t.TempDir(),
+		Profiles:       hProfiles,
+		MaxSurfaces:    1,
+		MaxOutputBytes: 8192,
+		Timeout:        time.Second,
+		OriginNS:       100,
+		VerifyHoldingsInput: func(_ context.Context, _ capsule.Binding, proposal string, _ json.RawMessage, stamp uint64) error {
+			verifiedCalls++
+			if proposal == "" || stamp != 200 {
+				return errors.New("invalid holdings verification args")
+			}
+			return verifyErr
+		},
+	}, hRunner, func() uint64 { return 200 })
+	if err != nil {
+		t.Fatal(err)
+	}
+	hPub, err := frames.NewPublisher(frames.PublishConfig{RAMRoot: root, MaxFrameBytes: 8192, MaxPixels: 2, MaxSurfaces: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hPub.Close()
+	hh := wireHandler(hm, hProfiles, map[string]*frames.Publisher{root: hPub}, 100)
+	hCall := func(op string, params any) []json.RawMessage {
+		t.Helper()
+		body, _ := json.Marshal(map[string]any{"schema": "surface_request/v0.2", "op": op, "params": params})
+		events, err := hh(context.Background(), ipc.Envelope{Body: body})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return events
+	}
+	hCreated := hCall("create", map[string]any{"kind": "game_capsule", "profile_id": "game", "geometry": map[string]int{"w": 2, "h": 1}})
+	var hEvent struct {
+		Data struct{ Surface capsule.Surface }
+	}
+	if err = json.Unmarshal(hCreated[0], &hEvent); err != nil {
+		t.Fatal(err)
+	}
+	hSID := hEvent.Data.Surface.SurfaceID
+	hCall("take_control", map[string]any{"surface_id": hSID, "owner": "human"})
+
+	verifyErr = errors.New("holdings proof rejected")
+	hFailed := hCall("input", map[string]any{"surface_id": hSID, "proposal_id": "hi-holdings-fail", "origin": "human", "action": action})
+	if len(hFailed) != 1 || verifiedCalls != 1 {
+		t.Fatalf("expected VerifyHoldingsInput refusal to settle with 1 error receipt, calls=%d events=%s", verifiedCalls, hFailed)
+	}
+	verifyErr = nil
+	hOK := hCall("input", map[string]any{"surface_id": hSID, "proposal_id": "hi-holdings-ok", "origin": "human", "action": action})
+	if len(hOK) != 2 || verifiedCalls != 2 {
+		t.Fatalf("expected verified holdings human input to emit 2 events, calls=%d events=%s", verifiedCalls, hOK)
+	}
+}

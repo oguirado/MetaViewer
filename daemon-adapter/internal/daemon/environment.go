@@ -13,8 +13,11 @@ package daemon
 // [TARGET, unit decision] MV_EXPECTED_CORE_COMMIT optionally pins the core hello
 // to a lowercase full revision; a configured invalid pin fails startup closed.
 // [TARGET, unit decision] Failed inputs settle with verified=false and the last
-// wire-published frame as diagnostic context, never as post-input proof. No new
-// capture is required to release a dispatched lease, including after takeover.
+// wire-published frame as diagnostic context, never as post-input proof. When
+// human-origin input executes without a prior wire-published baseline frame in
+// lastFrames, input_applied is retained and paired with a verified=false error
+// action_receipt/v0.2 carrying a diagnostic frame_ref. No new capture is
+// required to release a dispatched lease, including after takeover.
 import (
 	"context"
 	"encoding/json"
@@ -702,7 +705,39 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 				latestFrame = before
 			}
 			if len(latestFrame) == 0 {
-				return failure(configuration("post-input frame baseline required"))
+				w, h := uint32(1), uint32(1)
+				if b, bErr := m.SubscriptionBinding(id); bErr == nil && b.Surface.Geometry.W >= 1 && b.Surface.Geometry.H >= 1 {
+					w, h = uint32(b.Surface.Geometry.W), uint32(b.Surface.Geometry.H)
+				}
+				diagFrame := frames.Ref{
+					Schema:     "frame_ref/v0.2",
+					SurfaceID:  id,
+					Generation: 1,
+					Tick:       0,
+					TsNS:       completed - origin,
+					Width:      w,
+					Height:     h,
+					Format:     "rgb24",
+					RAMWSPath:  "/dev/shm/unverified",
+					SHA256:     strings.Repeat("0", 64),
+					CaptureUS:  0,
+				}
+				errMsg := "input failed: " + configuration("post-input frame baseline required").Error()
+				receipt, err := json.Marshal(map[string]any{
+					"schema":          "action_receipt/v0.2",
+					"proposal_id":     proposal,
+					"executed_at_ns":  completed - origin,
+					"after_frame":     diagFrame,
+					"native_evidence": evidence,
+					"verified":        false,
+					"verification":    map[string]string{"method": "pixel", "detail": "input failed; no wire-published frame baseline available; no post-input proof"},
+					"error":           errMsg,
+				})
+				if err != nil {
+					return nil, err
+				}
+				events = append(events, receipt)
+				return events, nil
 			}
 			receipt, err := json.Marshal(map[string]any{"schema": "action_receipt/v0.2", "proposal_id": proposal, "executed_at_ns": completed - origin, "after_frame": latestFrame, "native_evidence": evidence, "verified": false, "verification": map[string]string{"method": "pixel", "detail": "human-origin input; post-input pixel capture skipped"}, "error": ""})
 			if err != nil {
