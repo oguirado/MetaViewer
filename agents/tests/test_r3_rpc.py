@@ -666,6 +666,154 @@ class R3AgentsRpcTests(unittest.TestCase):
                         )
                         transport.assert_not_called()
 
+    def test_tool_client_receipt_cache_eviction_and_deepcopy_isolation(self) -> None:
+        cfg = cli_fixture.config()
+        with tempfile.TemporaryDirectory(prefix="mv-receipt-cache-") as tmp:
+            root = Path(tmp)
+            sock_file = root / "unused.sock"
+            sock_file.write_text("", encoding="utf-8")
+            sock_file.chmod(0o600)
+            seq_file = root / "receipt.seq"
+
+            pending_frames: list[dict] = []
+            recv_seq = 0
+
+            def fake_connect(self_core):
+                return copy.deepcopy(cfg["core"]["hello"])
+
+            def fake_call(self_core, envelope_msg):
+                nonlocal recv_seq
+                validated = validate_envelope(copy.deepcopy(envelope_msg))
+                self_core._next_seq += 1
+                recv_seq += 1
+                return validate_envelope(
+                    make_envelope(
+                        msg_id="hello-reply",
+                        from_component="core",
+                        from_instance="core-1",
+                        to_component="agent",
+                        to_instance="agent-1",
+                        session_id="sess-1",
+                        seq=recv_seq,
+                        body=copy.deepcopy(cfg["core"]["hello"]),
+                    )
+                )
+
+            def fake_send(self_core, envelope_msg):
+                nonlocal recv_seq
+                validated = validate_envelope(copy.deepcopy(envelope_msg))
+                self_core._next_seq += 1
+                req = validated["body"]
+                idx = int(req["request_id"].split("-")[-1])
+                receipt_body = {
+                    "schema": "action_receipt/v0.2",
+                    "proposal_id": f"prop-{idx}",
+                    "executed_at_ns": 1000 + idx,
+                    "after_frame": copy.deepcopy(cli_fixture.FRAME),
+                    "verified": True,
+                    "verification": {"method": "pixel", "detail": f"region-{idx}"},
+                    "error": "",
+                }
+                tool_body = {
+                    "schema": "mv_tool_result/v0.2",
+                    "request_id": req["request_id"],
+                    "op": "list",
+                    "status": "ok",
+                    "surfaces": [],
+                    "next_cursor": None,
+                }
+                recv_seq += 1
+                pending_frames.append(
+                    validate_envelope(
+                        make_envelope(
+                            msg_id=f"rcpt-{idx}",
+                            from_component="core",
+                            from_instance="core-1",
+                            to_component="agent",
+                            to_instance="agent-1",
+                            session_id="sess-1",
+                            seq=recv_seq,
+                            body=receipt_body,
+                        )
+                    )
+                )
+                recv_seq += 1
+                pending_frames.append(
+                    validate_envelope(
+                        make_envelope(
+                            msg_id=f"res-{idx}",
+                            from_component="core",
+                            from_instance="core-1",
+                            to_component="agent",
+                            to_instance="agent-1",
+                            session_id="sess-1",
+                            seq=recv_seq,
+                            body=tool_body,
+                        )
+                    )
+                )
+
+            def fake_recv(self_core):
+                return pending_frames.pop(0)
+
+            with patch.object(CoreClient, "_check_endpoint", lambda self_c, p: (1, 1)), \
+                    patch.object(CoreClient, "connect", fake_connect), \
+                    patch.object(CoreClient, "call", fake_call), \
+                    patch.object(CoreClient, "send", fake_send), \
+                    patch.object(CoreClient, "recv", fake_recv), \
+                    patch.object(CoreClient, "close", lambda self_core: None):
+                with ToolClient(
+                    str(sock_file),
+                    session_id="sess-1",
+                    local=cfg["peers"][0],
+                    core=cfg["core"],
+                    dependency_pins=[],
+                    sequence_path=str(seq_file),
+                    timeout_s=2.0,
+                    max_line_bytes=65536,
+                    max_reply_bytes=65536,
+                ) as tc:
+                    for i in range(130):
+                        res = tc.request(
+                            {
+                                "schema": "mv_tool_call/v0.2",
+                                "request_id": f"req-{i}",
+                                "op": "list",
+                                "args": {"cursor": None, "limit": 1},
+                            },
+                            "mv_tool_result/v0.2",
+                            timeout_ms=2000,
+                        )
+                        self.assertEqual(res["status"], "ok")
+
+                    first_id = "prop-0"
+                    second_id = "prop-1"
+                    oldest_retained_id = "prop-2"
+                    latest_id = "prop-129"
+
+                    self.assertIsNone(tc.receipt(first_id))
+                    self.assertIsNone(tc.receipt(second_id))
+                    self.assertIsNotNone(tc.receipt(oldest_retained_id))
+
+                    latest = tc.receipt(latest_id)
+                    self.assertIsNotNone(latest)
+                    assert latest is not None
+                    self.assertEqual(latest["proposal_id"], latest_id)
+                    self.assertEqual(latest["executed_at_ns"], 1129)
+                    self.assertEqual(latest["verification"]["detail"], "region-129")
+
+                    # Mutate returned receipt in place and verify cache isolation.
+                    latest["verified"] = False
+                    latest["after_frame"]["surface_id"] = "corrupted-surface"
+                    latest["verification"]["detail"] = "corrupted-detail"
+
+                    second_read = tc.receipt(latest_id)
+                    self.assertIsNotNone(second_read)
+                    assert second_read is not None
+                    self.assertIs(second_read["verified"], True)
+                    self.assertEqual(second_read["after_frame"]["surface_id"], "surf-1")
+                    self.assertEqual(second_read["verification"]["detail"], "region-129")
+
 
 if __name__ == "__main__":
     unittest.main()

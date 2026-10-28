@@ -1104,10 +1104,39 @@ class WaitVerifyTests(unittest.TestCase):
         fake = _FakeClient(
             [lambda call: _pending(call["request_id"],
                                    retry_after_ms=60000)])
+        real_sleep = time.sleep
+        seen_sleeps: list[float] = []
+
+        def bounded_sleep_spy(seconds: float) -> None:
+            seen_sleeps.append(seconds)
+            real_sleep(min(max(seconds, 0.0), 0.6))
+
         started = time.monotonic()
-        with self.assertRaises(TimeoutError):
-            tools.wait_verify("p-1", _expectation(), 10, client=fake)
-        self.assertLess(time.monotonic() - started, 5)
+        with unittest.mock.patch.object(tools.time, "sleep",
+                                        side_effect=bounded_sleep_spy):
+            with self.assertRaises(TimeoutError):
+                tools.wait_verify("p-1", _expectation(), 10, client=fake)
+        elapsed = time.monotonic() - started
+        self.assertLess(elapsed, 0.5)
+        self.assertGreaterEqual(len(seen_sleeps), 1)
+        for delay in seen_sleeps:
+            self.assertGreater(delay, 0.0)
+            self.assertLessEqual(delay, 0.01)
+
+        # Out-of-range hostile retry_after_ms (999999 > 60000 cap) fails closed
+        # immediately without sleeping.
+        over_cap_sleeps: list[float] = []
+        fake_over_cap = _FakeClient(
+            [lambda call: _pending(call["request_id"],
+                                   retry_after_ms=999999)])
+        started_over = time.monotonic()
+        with unittest.mock.patch.object(tools.time, "sleep",
+                                        side_effect=over_cap_sleeps.append):
+            with self.assertRaises(ToolValidationError):
+                tools.wait_verify("p-1", _expectation(), 10,
+                                  client=fake_over_cap)
+        self.assertLess(time.monotonic() - started_over, 0.5)
+        self.assertEqual(over_cap_sleeps, [])
 
     def test_client_timeout_propagates_without_poll(self):
         boom = TimeoutError("transport deadline")

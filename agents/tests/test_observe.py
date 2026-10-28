@@ -495,6 +495,8 @@ class BuildObservationTests(unittest.TestCase):
                 self.assertEqual(caught.exception.code, "unknown_version")
         for frame_arg, kwargs in (
             (frame_v01, {"surface_id": "surface-demo", "generation": 1}),
+            (frame_v01, {"surface_id": "surface-demo", "generation": 1, "vision": _vision(), "ground_truth": _truth()}),
+            (frame_v01, {"surface_id": "surface-demo", "generation": 1, "vision": _vision(), "contract_version": "v0.2"}),
             (frame_v01, {"surface_id": "surface-demo", "generation": 1, "contract_version": "v0.2"}),
             (_frame(), {"surface_id": "surface-demo", "generation": 1, "contract_version": "v0.1"}),
             (_frame(), {"surface_id": "surface-demo", "generation": 1, "contract_version": "v0.3"}),
@@ -503,6 +505,22 @@ class BuildObservationTests(unittest.TestCase):
                 with self.assertRaises(ObservationError) as caught:
                     build_observation(frame_arg, **kwargs)
                 self.assertEqual(caught.exception.code, "unknown_version")
+
+        # Omitted contract_version with a valid v0.1 frame and bound v0.1 vision
+        # payload (no ground_truth) resolves to legacy v0.1 observation.
+        fallback_v01 = build_observation(
+            frame_v01, surface_id="surface-demo", generation=1,
+            vision=_vision())
+        self.assertEqual(
+            fallback_v01,
+            {
+                "schema": "observation/v0.1",
+                "frame_ref": frame_v01,
+                "vision": _vision(),
+            },
+        )
+        validate_observation(fallback_v01, surface_id="surface-demo",
+                             generation=1, contract_version="v0.1")
 
     def test_build_isolated_from_later_caller_mutation(self):
         frame = _frame()

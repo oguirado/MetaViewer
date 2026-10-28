@@ -595,6 +595,49 @@ class RecordVerbTests(unittest.TestCase):
                 self.assertEqual(_tree_snapshot(root), before_each)
                 self.assertEqual(_tree_snapshot(ROOT), before_repo)
 
+    def test_record_stop_stream_event_cap_enforced(self) -> None:
+        # Positive boundary (negative control for cap refusal): 255 frame_captured
+        # events followed by terminal stopped event (256 total) succeeds.
+        ok_stream: list[dict] = []
+        ok_builders = [
+            lambda call, idx=i: _event(
+                call, "frame_captured", mono_ns=10 + idx,
+                ram_path=f"/dev/shm/mv-cap-{idx}.rgb",
+                sha256="ab" * 32, byte_count=32)
+            for i in range(255)
+        ] + [
+            lambda call: _event(
+                call, "stopped", mono_ns=300,
+                frame_count=255, byte_count=255 * 32),
+        ]
+        ok_client = tool_fixture._FakeClient(ok_builders)
+        stopped = tools.record_stop(
+            "surf-1", "rec-1", mode="ram",
+            client=ok_client, timeout_ms=5000, events=ok_stream)
+        self.assertEqual(stopped["event"], "stopped")
+        self.assertEqual(stopped["frame_count"], 255)
+        self.assertEqual(len(ok_client.calls), 256)
+        self.assertEqual(len(ok_stream), 256)
+
+        # Cap exceeded: 257 frame_captured events without a terminal stopped
+        # event must fail closed after 256 events with ToolValidationError.
+        exceed_stream: list[dict] = []
+        exceed_builders = [
+            lambda call, idx=i: _event(
+                call, "frame_captured", mono_ns=10 + idx,
+                ram_path=f"/dev/shm/mv-exceed-{idx}.rgb",
+                sha256="cd" * 32, byte_count=32)
+            for i in range(257)
+        ]
+        exceed_client = tool_fixture._FakeClient(exceed_builders)
+        with self.assertRaises(tools.ToolValidationError) as caught:
+            tools.record_stop(
+                "surf-1", "rec-1", mode="ram",
+                client=exceed_client, timeout_ms=200, events=exceed_stream)
+        self.assertIn("record event stream exceeded cap", caught.exception.detail)
+        self.assertEqual(len(exceed_client.calls), 256)
+        self.assertEqual(len(exceed_stream), 256)
+
 
 if __name__ == "__main__":
     unittest.main()
