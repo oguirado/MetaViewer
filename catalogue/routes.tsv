@@ -653,6 +653,7 @@ receipt-5b6711b5d5ee	core/src/serve/receipt_evidence_tests.rs
 reconnect_tests.rs	core/src/serve/reconnect_tests.rs
 regression.rs	core/src/serve/regression.rs
 serve-tests.rs	core/src/serve/tests.rs
+timings.rs	core/src/serve/timings.rs
 tools.rs	core/src/serve/tools.rs
 toolsst-160a6e8f731c	core/src/serve/tools_state_regression.rs
 supervisor-launch.rs	core/src/supervisor/launch.rs
@@ -676,6 +677,7 @@ ailoop_verify.rs	core/tests/ailoop_verify.rs
 catalog_authority.rs	core/tests/catalog_authority.rs
 control_facade.rs	core/tests/control_facade.rs
 decode_envelope.rs	core/tests/decode_envelope.rs
+frame_timings.rs	core/tests/frame_timings.rs
 framing.rs	core/tests/framing.rs
 handshake.rs	core/tests/handshake.rs
 humanin-088290955b09	core/tests/human_input_control.rs
