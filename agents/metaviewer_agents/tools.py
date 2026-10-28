@@ -797,9 +797,46 @@ class _VerifiedReceipt(dict):
         )
 
 
+_DEFAULT_WAIT_CLOCK = time.monotonic
+
+
+def _resolve_wait_clock(clock: object) -> object:
+    active_clock = time.monotonic if clock is _DEFAULT_WAIT_CLOCK else clock
+    if not callable(active_clock):
+        _fail("invalid clock")
+    return active_clock
+
+
+def _read_wait_clock(clock: object) -> float:
+    now = clock()  # type: ignore[operator]
+    if (type(now) is bool or not isinstance(now, (int, float))
+            or not math.isfinite(now)):
+        _fail("invalid clock reading")
+    return float(now)
+
+
+def _remaining_wait_ms(deadline: float, clock: object,
+                       budget_ms: int) -> int:
+    """Recompute remaining milliseconds from the single monotonic deadline."""
+    del budget_ms
+    return math.ceil(round((deadline - _read_wait_clock(clock)) * 1000, 6))
+
+
+def _wait_clock_sleep_fn(clock: object, *, custom_clock: bool) -> object | None:
+    sleep_fn = getattr(clock, "sleep", None)
+    if sleep_fn is None and hasattr(clock, "__self__"):
+        sleep_fn = getattr(getattr(clock, "__self__"), "sleep", None)
+    if callable(sleep_fn):
+        return sleep_fn
+    if not custom_clock:
+        return time.sleep
+    return None
+
+
 def wait_verify(proposal_id: str, expectation: dict, timeout_ms: int,
                 *, client: ToolClient,
-                surface_id: str | None = None) -> dict:
+                surface_id: str | None = None,
+                clock: object = _DEFAULT_WAIT_CLOCK) -> dict:
     """Block until the core reports a verified receipt or a deadline.
 
     The frozen call carries no expectation slot, so the expectation is
@@ -818,9 +855,12 @@ def wait_verify(proposal_id: str, expectation: dict, timeout_ms: int,
     _check_expectation(expectation)
     budget = _check_int(timeout_ms, minimum=1,
                         maximum=_WAIT_TIMEOUT_MAX_MS, what="timeout_ms")
-    deadline = time.monotonic() + budget / 1000
+    active_clock = _resolve_wait_clock(clock)
+    custom_clock = clock is not _DEFAULT_WAIT_CLOCK
+    sleep_fn = _wait_clock_sleep_fn(active_clock, custom_clock=custom_clock)
+    deadline = _read_wait_clock(active_clock) + budget / 1000
     while True:
-        remaining_ms = math.ceil((deadline - time.monotonic()) * 1000)
+        remaining_ms = _remaining_wait_ms(deadline, active_clock, budget)
         if remaining_ms <= 0:
             raise TimeoutError("wait_verify budget exhausted")
         call = {
@@ -886,12 +926,13 @@ def wait_verify(proposal_id: str, expectation: dict, timeout_ms: int,
             retry_ms = _check_int(body["retry_after_ms"], minimum=1,
                                   maximum=_WAIT_TIMEOUT_MAX_MS,
                                   what="retry_after_ms")
-            left_ms = math.ceil((deadline - time.monotonic()) * 1000)
-            if left_ms <= 0:
-                raise TimeoutError("wait_verify budget exhausted")
-            # Never sleep past the budget: a hostile retry_after_ms
-            # must not turn a bounded wait into a long stall.
-            time.sleep(min(retry_ms, left_ms) / 1000)
+            if sleep_fn is not None:
+                left_ms = _remaining_wait_ms(deadline, active_clock, budget)
+                if left_ms <= 0:
+                    raise TimeoutError("wait_verify budget exhausted")
+                # Never sleep past the budget: a hostile retry_after_ms
+                # must not turn a bounded wait into a long stall.
+                sleep_fn(min(retry_ms, left_ms) / 1000)  # type: ignore[operator]
             continue
         if status == "refused":
             _raise_refused(head)
