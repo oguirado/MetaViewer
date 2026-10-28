@@ -1,14 +1,63 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createServer } from 'node:net';
-import { once, EventEmitter } from 'node:events';
-import { mkdtemp, mkdir, chmod, writeFile, rm } from 'node:fs/promises';
+import { Socket, createServer } from 'node:net';
+import { EventEmitter } from 'node:events';
+import { mkdtemp, mkdir, chmod, writeFile, rm, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { createMainBindings } from '../electron/hostBindings.js';
 import { installAuthorityWire, deliverAuthorityFrame, WIRE_CHANNELS } from '../electron/authorityWire.js';
 import { installFrameDiag } from '../electron/frameDiag.js';
+
+const STEP_TIMEOUT_MS = 5000;
+
+/** @type {Map<string, Set<Socket>>} */
+const clientSocketsByPath = new Map();
+const origSocketConnect = Socket.prototype.connect;
+Socket.prototype.connect = function patchedConnect(...args) {
+  const first = args[0];
+  const targetPath =
+    typeof first === 'string'
+      ? first
+      : first && typeof first === 'object' && !Array.isArray(first) && typeof first.path === 'string'
+        ? first.path
+        : Array.isArray(first) && first[0] && typeof first[0].path === 'string'
+          ? first[0].path
+          : null;
+  if (targetPath && clientSocketsByPath.has(targetPath)) {
+    const set = clientSocketsByPath.get(targetPath);
+    set?.add(this);
+    this.once('close', () => set?.delete(this));
+  }
+  return origSocketConnect.apply(this, args);
+};
+
+async function withTimeout(promise, label, timeoutMs = STEP_TIMEOUT_MS) {
+  let timer;
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`Timed out after ${timeoutMs}ms awaiting ${label}`));
+    }, timeoutMs);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+async function waitFor(predicate, label = 'condition', timeoutMs = STEP_TIMEOUT_MS) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await withTimeout(Promise.resolve().then(() => predicate()), `waitFor(${label}) predicate`, timeoutMs)) {
+      return;
+    }
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  throw new Error(`waitFor timed out after ${timeoutMs}ms: ${label}`);
+}
 
 const baseSurface = Object.freeze({
   schema: 'surface/v0.2',
@@ -35,25 +84,31 @@ const registration = component => ({
 });
 
 async function createControlFrameFixture(t, { shouldDropIntent = () => false } = {}) {
-  const root = await mkdtemp(join(tmpdir(), 'mv-w3-ctl-'));
-  const ram = await mkdtemp('/dev/shm/mv-w3-ctl-');
+  const root = await withTimeout(mkdtemp(join(tmpdir(), 'mv-w3-ctl-')), 'mkdtemp root');
+  const ram = await withTimeout(mkdtemp('/dev/shm/mv-w3-ctl-'), 'mkdtemp ram');
   const config = {
     session_id: 'w3-ctl-session',
     core: registration('core'),
     peers: [registration('ui')],
   };
-  await mkdir(join(root, 'metaviewer'), { mode: 0o700 });
+  await withTimeout(mkdir(join(root, 'metaviewer'), { mode: 0o700 }), 'mkdir metaviewer');
   const configPath = join(root, 'config.json');
-  await writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
+  await withTimeout(writeFile(configPath, JSON.stringify(config), { mode: 0o600 }), 'writeFile config.json');
 
-  const sockets = new Set();
+  const sockPath = join(root, 'metaviewer/core.sock');
+  const acceptedSockets = new Set();
+  const clientSockets = new Set();
+  clientSocketsByPath.set(sockPath, clientSockets);
+  const cleanups = [];
   const requests = [];
   let peer = null;
+  let helloExchanged = false;
+  let closing = false;
   let seq = 0;
   let currentSurface = { ...baseSurface };
 
   const send = body => {
-    if (!peer || peer.destroyed) return;
+    assert.ok(peer && !peer.destroyed, 'expected active control fixture peer socket');
     seq += 1;
     peer.write(
       JSON.stringify({
@@ -71,9 +126,14 @@ async function createControlFrameFixture(t, { shouldDropIntent = () => false } =
   };
 
   const server = createServer(socket => {
+    if (closing) {
+      socket.destroy();
+      socket.unref?.();
+      return;
+    }
     peer = socket;
-    sockets.add(socket);
-    socket.on('close', () => sockets.delete(socket));
+    acceptedSockets.add(socket);
+    socket.on('close', () => acceptedSockets.delete(socket));
     let buffer = '';
     socket.on('data', data => {
       buffer += data;
@@ -84,6 +144,7 @@ async function createControlFrameFixture(t, { shouldDropIntent = () => false } =
         requests.push(env);
         if (env.body.schema === 'hello/v0.2') {
           send(config.core.hello);
+          helloExchanged = true;
         } else if (env.body.schema === 'ui_intent/v0.2') {
           if (shouldDropIntent(env.body)) continue;
           if (env.body.op === 'take_control') {
@@ -106,22 +167,73 @@ async function createControlFrameFixture(t, { shouldDropIntent = () => false } =
     });
   });
 
-  const sockPath = join(root, 'metaviewer/core.sock');
-  server.listen(sockPath);
-  await once(server, 'listening');
-  await chmod(sockPath, 0o600);
+  await withTimeout(
+    new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(sockPath, () => {
+        server.removeListener('error', reject);
+        resolve(null);
+      });
+    }),
+    'control fixture server.listen',
+  );
+  await withTimeout(chmod(sockPath, 0o600), 'chmod core.sock');
 
-  t.after(async () => {
-    for (const s of sockets) s.destroy();
-    await new Promise(resolve => server.close(resolve));
-    await rm(root, { recursive: true, force: true });
-    await rm(ram, { recursive: true, force: true });
-  });
+  function registerCleanup(fn) {
+    cleanups.push(fn);
+  }
+
+  let cleanupPromise = null;
+  async function cleanup() {
+    if (cleanupPromise) return cleanupPromise;
+    cleanupPromise = (async () => {
+      closing = true;
+      while (cleanups.length > 0) {
+        const fn = cleanups.pop();
+        if (fn) {
+          try {
+            await withTimeout(Promise.resolve().then(() => fn()), 'control fixture registered cleanup');
+          } catch {
+            // Continue socket and directory teardown even if a disposable throws.
+          }
+        }
+      }
+      for (const cs of clientSockets) {
+        cs.destroy();
+        cs.unref?.();
+      }
+      clientSockets.clear();
+      for (const as of acceptedSockets) {
+        as.destroy();
+        as.unref?.();
+      }
+      acceptedSockets.clear();
+      if (server.listening) {
+        await withTimeout(
+          new Promise(resolve => server.close(() => resolve(null))),
+          'control fixture server.close',
+        );
+      }
+      server.unref?.();
+      await withTimeout(
+        unlink(sockPath).catch(err => {
+          if (err?.code !== 'ENOENT') throw err;
+        }),
+        'unlink core.sock',
+      );
+      clientSocketsByPath.delete(sockPath);
+      await withTimeout(rm(root, { recursive: true, force: true }), 'rm root');
+      await withTimeout(rm(ram, { recursive: true, force: true }), 'rm ram');
+    })();
+    return cleanupPromise;
+  }
+
+  t.after(() => cleanup());
 
   async function writeFrame(generation, fillByte = generation & 0xff) {
     const bytes = Buffer.alloc(4 * 4 * 3, fillByte);
     const framePath = join(ram, `frame-${generation}.rgb`);
-    await writeFile(framePath, bytes, { mode: 0o600 });
+    await withTimeout(writeFile(framePath, bytes, { mode: 0o600 }), `writeFrame(${generation})`);
     return {
       schema: 'frame_ref/v0.2',
       surface_id: 's1',
@@ -139,13 +251,22 @@ async function createControlFrameFixture(t, { shouldDropIntent = () => false } =
 
   const portMessages = [];
   const channels = [];
+  registerCleanup(() => {
+    for (const ch of channels) {
+      ch.port1.close?.();
+      ch.port2.close?.();
+    }
+  });
   const createMessageChannel = () => {
     const port1 = new EventEmitter();
+    let closed = false;
     Object.assign(port1, {
       postMessage: value => {
+        if (closed) return;
         portMessages.push(value);
         // Auto-ACK every delivered frame so continuous generations flow.
         queueMicrotask(() => {
+          if (closed) return;
           port1.emit('message', {
             schema: 'frame_ack/v0.2',
             kind: 'ack',
@@ -161,7 +282,10 @@ async function createControlFrameFixture(t, { shouldDropIntent = () => false } =
         });
       },
       start() {},
-      close() {},
+      close() {
+        closed = true;
+        port1.removeAllListeners();
+      },
     });
     const port2 = { close() {} };
     channels.push({ port1, port2 });
@@ -172,24 +296,49 @@ async function createControlFrameFixture(t, { shouldDropIntent = () => false } =
     env: { MV_CORE_CONFIG: configPath, XDG_RUNTIME_DIR: root },
     root,
     ram,
+    sockPath,
     requests,
     portMessages,
     channels,
     createMessageChannel,
     send,
     writeFrame,
-    disconnect: () => peer?.destroy(),
+    registerCleanup,
+    cleanup,
+    async waitForReady(bindings) {
+      registerCleanup(() => bindings.core.dispose());
+      await waitFor(
+        () =>
+          helloExchanged &&
+          peer !== null &&
+          !peer.destroyed &&
+          bindings.core.getStatus().availability === 'live',
+        'control fixture hello handshake and live bindings availability',
+      );
+    },
+    disconnect: () => {
+      peer?.destroy();
+      peer?.unref?.();
+    },
     sendMalformed: raw => peer?.write(raw + '\n'),
   };
 }
 
 test('W3-CONTROL-TIMEOUT: take_control and release_control are not starved or clobbered by slow in-flight frame reads or rotated frame files; negative control reproduces pre-fix state drop and clobber', async t => {
+  await assert.rejects(
+    withTimeout(new Promise(() => {}), 'injected never-resolving await', 40),
+    /Timed out after 40ms awaiting injected never-resolving await/,
+  );
+
   const f = await createControlFrameFixture(t);
-  const bindings = await createMainBindings({
-    env: f.env,
-    createMessageChannel: f.createMessageChannel,
-  });
-  t.after(() => bindings.core.dispose());
+  const bindings = await withTimeout(
+    createMainBindings({
+      env: f.env,
+      createMessageChannel: f.createMessageChannel,
+    }),
+    'createMainBindings',
+  );
+  await f.waitForReady(bindings);
 
   const handlers = new Map();
   const senderFrame = { origin: 'app://metaviewer', url: 'app://metaviewer/index.html' };
@@ -203,6 +352,7 @@ test('W3-CONTROL-TIMEOUT: take_control and release_control are not starved or cl
     },
   };
   const diag = installFrameDiag({ env: {} });
+  f.registerCleanup(() => diag.dispose());
   const wire = installAuthorityWire({
     ipcMain: {
       handle: (ch, fn) => handlers.set(ch, fn),
@@ -213,15 +363,17 @@ test('W3-CONTROL-TIMEOUT: take_control and release_control are not starved or cl
     frames: bindings.wire.frames,
     frameDiag: diag,
   });
-  t.after(() => wire.dispose());
+  f.registerCleanup(() => wire.dispose());
 
-  await handlers.get(WIRE_CHANNELS.subscribeFrames)({ sender: contents, senderFrame });
+  await withTimeout(
+    handlers.get(WIRE_CHANNELS.subscribeFrames)({ sender: contents, senderFrame }),
+    'subscribeFrames',
+  );
 
   f.send({ schema: 'surface_event/v0.2', event: 'created', data: { surface: baseSurface } });
   const frame1 = await f.writeFrame(1, 0x11);
   f.send({ schema: 'surface_event/v0.2', event: 'frame_ready', data: { frame_ref: frame1 } });
-  await new Promise(resolve => setTimeout(resolve, 30));
-  assert.ok(notices.some(n => n.payload.frame_ref.generation === 1));
+  await waitFor(() => notices.some(n => n.payload.frame_ref.generation === 1), 'frame generation 1 notice');
   assert.equal(notices.at(-1).payload.surface.control, 'agent');
 
   // Stream frames 2..8 continuously while issuing take_control and release_control,
@@ -232,14 +384,17 @@ test('W3-CONTROL-TIMEOUT: take_control and release_control are not starved or cl
   }
 
   const takeStart = Date.now();
-  const takeRes = await handlers.get(WIRE_CHANNELS.intent)(
-    { sender: contents, senderFrame },
-    JSON.stringify({
-      schema: 'ui_intent/v0.2',
-      request_id: 'w3-take-1',
-      op: 'take_control',
-      params: { surface_id: 's1' },
-    }),
+  const takeRes = await withTimeout(
+    handlers.get(WIRE_CHANNELS.intent)(
+      { sender: contents, senderFrame },
+      JSON.stringify({
+        schema: 'ui_intent/v0.2',
+        request_id: 'w3-take-1',
+        op: 'take_control',
+        params: { surface_id: 's1' },
+      }),
+    ),
+    'take_control intent',
   );
   const takeElapsed = Date.now() - takeStart;
   assert.equal(takeRes, true);
@@ -247,13 +402,18 @@ test('W3-CONTROL-TIMEOUT: take_control and release_control are not starved or cl
 
   // Frame 5 is unlinked before read (simulating ring rotation), followed by frames 6..8.
   const frame5 = await f.writeFrame(5, 0x55);
-  await rm(frame5.ramws_path, { force: true });
+  await withTimeout(rm(frame5.ramws_path, { force: true }), 'rm frame5');
   f.send({ schema: 'surface_event/v0.2', event: 'frame_ready', data: { frame_ref: frame5 } });
   for (let gen = 6; gen <= 8; gen += 1) {
     const frameRef = await f.writeFrame(gen, gen);
     f.send({ schema: 'surface_event/v0.2', event: 'frame_ready', data: { frame_ref: frameRef } });
   }
-  await new Promise(resolve => setTimeout(resolve, 50));
+  await waitFor(
+    () =>
+      notices.some(n => n.payload.surface.control === 'human') &&
+      notices.some(n => n.payload.frame_ref.generation === 8),
+    'control=human and frame generation 8 notice',
+  );
 
   // Every notice emitted after take_control must preserve surface.control === 'human'
   // (never clobbered back to 'agent' by an in-flight or subsequent frame read).
@@ -269,14 +429,17 @@ test('W3-CONTROL-TIMEOUT: take_control and release_control are not starved or cl
 
   // Now issue release_control while frames 9..11 flow.
   const releaseStart = Date.now();
-  const releaseRes = await handlers.get(WIRE_CHANNELS.intent)(
-    { sender: contents, senderFrame },
-    JSON.stringify({
-      schema: 'ui_intent/v0.2',
-      request_id: 'w3-release-1',
-      op: 'release_control',
-      params: { surface_id: 's1' },
-    }),
+  const releaseRes = await withTimeout(
+    handlers.get(WIRE_CHANNELS.intent)(
+      { sender: contents, senderFrame },
+      JSON.stringify({
+        schema: 'ui_intent/v0.2',
+        request_id: 'w3-release-1',
+        op: 'release_control',
+        params: { surface_id: 's1' },
+      }),
+    ),
+    'release_control intent',
   );
   const releaseElapsed = Date.now() - releaseStart;
   assert.equal(releaseRes, true);
@@ -286,7 +449,12 @@ test('W3-CONTROL-TIMEOUT: take_control and release_control are not starved or cl
     const frameRef = await f.writeFrame(gen, gen);
     f.send({ schema: 'surface_event/v0.2', event: 'frame_ready', data: { frame_ref: frameRef } });
   }
-  await new Promise(resolve => setTimeout(resolve, 50));
+  await waitFor(
+    () =>
+      notices.at(-1)?.payload.surface.control === 'agent' &&
+      notices.at(-1)?.payload.frame_ref.generation === 11,
+    'control=agent and frame generation 11 notice',
+  );
 
   assert.equal(notices.at(-1).payload.surface.control, 'agent');
   assert.equal(notices.at(-1).payload.frame_ref.generation, 11);
@@ -311,7 +479,7 @@ test('W3-CONTROL-TIMEOUT: take_control and release_control are not starved or cl
       pixelEnvironment: { environmentId: 'w3-ctl-session', zoom: 1, dpr: 1 },
       onReleaseLease() {},
       async acquirePublishedLease() {
-        await slowReadGate;
+        await withTimeout(slowReadGate, 'slowReadGate');
         const bytes = Buffer.alloc(4 * 4 * 3, 0x20);
         return {
           identity: { ...slowBinding, frameGeneration: 20, leaseId: 'lease-20' },
@@ -341,7 +509,7 @@ test('W3-CONTROL-TIMEOUT: take_control and release_control are not starved or cl
     // While readFrame is blocked in acquirePublishedLease, control switches to 'human'.
     currentControl = 'human';
     releaseSlowRead();
-    assert.equal(await inFlightDelivery, true);
+    assert.equal(await withTimeout(inFlightDelivery, 'inFlightDelivery'), true);
     assert.equal(
       raceNotices[0].surface.control,
       'human',
@@ -349,7 +517,7 @@ test('W3-CONTROL-TIMEOUT: take_control and release_control are not starved or cl
     );
 
     // Negative control: without resolveLatestState(), the pre-fix entry projects stale control='agent'.
-    await new Promise(resolve => setImmediate(resolve));
+    await withTimeout(new Promise(resolve => setImmediate(resolve)), 'setImmediate drain');
     const slowFrameRef21 = await f.writeFrame(21, 0x21);
     const { resolveLatestState: _omitted, ...legacyBase } = slowEntry;
     const legacyEntry = {
@@ -371,10 +539,13 @@ test('W3-CONTROL-TIMEOUT: take_control and release_control are not starved or cl
     };
     const legacyNotices = [];
     assert.equal(
-      await deliverAuthorityFrame(
-        legacyEntry,
-        { postMessage: (_ch, payload) => legacyNotices.push(payload) },
-        slowStreams,
+      await withTimeout(
+        deliverAuthorityFrame(
+          legacyEntry,
+          { postMessage: (_ch, payload) => legacyNotices.push(payload) },
+          slowStreams,
+        ),
+        'legacyEntry deliverAuthorityFrame',
       ),
       true,
     );
@@ -385,7 +556,7 @@ test('W3-CONTROL-TIMEOUT: take_control and release_control are not starved or cl
     );
   } finally {
     for (const stream of slowStreams) {
-      await stream.reader.closeReader();
+      await withTimeout(stream.reader.closeReader(), 'closeReader');
       stream.port.revokeFramePort('SHUTDOWN');
     }
   }
@@ -403,36 +574,44 @@ test('W3-CONTROL-TIMEOUT resilience: a single CORE_TIMEOUT does not dispose a he
     },
   });
 
-  const bindings = await createMainBindings({
-    env: f.env,
-    createMessageChannel: f.createMessageChannel,
-  });
-  t.after(() => bindings.core.dispose());
-
-  f.send({ schema: 'surface_event/v0.2', event: 'created', data: { surface: baseSurface } });
-  const frame1 = await f.writeFrame(1, 0x10);
-  f.send({ schema: 'surface_event/v0.2', event: 'frame_ready', data: { frame_ref: frame1 } });
+  const bindings = await withTimeout(
+    createMainBindings({
+      env: f.env,
+      createMessageChannel: f.createMessageChannel,
+    }),
+    'createMainBindings',
+  );
+  await f.waitForReady(bindings);
 
   const deliveredEntries = [];
   bindings.wire.frames.subscribe(entry => {
     deliveredEntries.push(entry);
   });
-  await new Promise(resolve => setTimeout(resolve, 20));
+
+  f.send({ schema: 'surface_event/v0.2', event: 'created', data: { surface: baseSurface } });
+  const frame1 = await f.writeFrame(1, 0x10);
+  f.send({ schema: 'surface_event/v0.2', event: 'frame_ready', data: { frame_ref: frame1 } });
+
+  await waitFor(() => deliveredEntries.length === 1, 'frame 1 deliveredEntry');
   assert.equal(deliveredEntries.length, 1);
 
   // 1. Trigger a single CORE_TIMEOUT (3000 ms deadline) on an unanswered intent while the socket stays healthy.
   dropNextIntent = true;
-  await assert.rejects(
-    bindings.core.request({
-      op: 'intent',
-      json: JSON.stringify({
-        schema: 'ui_intent/v0.2',
-        request_id: 'req-timeout-once',
-        op: 'take_control',
-        params: { surface_id: 's1' },
+  await withTimeout(
+    assert.rejects(
+      bindings.core.request({
+        op: 'intent',
+        json: JSON.stringify({
+          schema: 'ui_intent/v0.2',
+          request_id: 'req-timeout-once',
+          op: 'take_control',
+          params: { surface_id: 's1' },
+        }),
       }),
-    }),
-    /^Error: CORE_TIMEOUT$/,
+      /^Error: CORE_TIMEOUT$/,
+    ),
+    'single CORE_TIMEOUT request',
+    10000,
   );
 
   // [TARGET, unit decision] Authority wire remains live after a single timeout on a healthy socket.
@@ -445,52 +624,64 @@ test('W3-CONTROL-TIMEOUT resilience: a single CORE_TIMEOUT does not dispose a he
 
   // 2. Subsequent take_control and release_control intents on the same session succeed without CORE_SEAMS_ABSENT.
   assert.equal(
-    await bindings.core.request({
-      op: 'intent',
-      json: JSON.stringify({
-        schema: 'ui_intent/v0.2',
-        request_id: 'req-take-after-timeout',
-        op: 'take_control',
-        params: { surface_id: 's1' },
+    await withTimeout(
+      bindings.core.request({
+        op: 'intent',
+        json: JSON.stringify({
+          schema: 'ui_intent/v0.2',
+          request_id: 'req-take-after-timeout',
+          op: 'take_control',
+          params: { surface_id: 's1' },
+        }),
       }),
-    }),
+      'take_control after timeout',
+    ),
     true,
   );
   assert.equal(
-    await bindings.core.request({
-      op: 'intent',
-      json: JSON.stringify({
-        schema: 'ui_intent/v0.2',
-        request_id: 'req-release-after-timeout',
-        op: 'release_control',
-        params: { surface_id: 's1' },
+    await withTimeout(
+      bindings.core.request({
+        op: 'intent',
+        json: JSON.stringify({
+          schema: 'ui_intent/v0.2',
+          request_id: 'req-release-after-timeout',
+          op: 'release_control',
+          params: { surface_id: 's1' },
+        }),
       }),
-    }),
+      'release_control after timeout',
+    ),
     true,
   );
 
   // Frame streaming also remains alive after the recovered timeout.
   const frame2 = await f.writeFrame(2, 0x20);
   f.send({ schema: 'surface_event/v0.2', event: 'frame_ready', data: { frame_ref: frame2 } });
-  await new Promise(resolve => setTimeout(resolve, 20));
+  await waitFor(() => deliveredEntries.at(-1)?.frameRef.generation === 2, 'frame 2 deliveredEntry after timeout');
   assert.equal(deliveredEntries.at(-1).frameRef.generation, 2);
 
   // 3. Negative control: an actual transport disconnect or wire protocol violation still calls shutdown()
   // and transitions the authority wire to unavailable (CORE_SEAMS_ABSENT).
   f.disconnect();
-  await new Promise(resolve => setTimeout(resolve, 30));
+  await waitFor(
+    () => bindings.core.getStatus().availability === 'unavailable',
+    'bindings status unavailable after disconnect',
+  );
   assert.equal(bindings.core.getStatus().availability, 'unavailable');
   assert.equal(bindings.core.getStatus().reason, 'CORE_SEAMS_ABSENT');
-  await assert.rejects(
-    bindings.core.request({
-      op: 'intent',
-      json: JSON.stringify({
-        schema: 'ui_intent/v0.2',
-        request_id: 'req-after-disconnect',
-        op: 'take_control',
-        params: { surface_id: 's1' },
+  await withTimeout(
+    assert.rejects(
+      bindings.core.request({
+        op: 'intent',
+        json: JSON.stringify({
+          schema: 'ui_intent/v0.2',
+          request_id: 'req-after-disconnect',
+          op: 'take_control',
+          params: { surface_id: 's1' },
+        }),
       }),
-    }),
-    /^Error: CORE_SEAMS_ABSENT$/,
+      /^Error: CORE_SEAMS_ABSENT$/,
+    ),
+    'request after disconnect',
   );
 });

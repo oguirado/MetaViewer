@@ -59,7 +59,7 @@ DEV_DEPENDENCIES = {'@vitejs/plugin-vue': '6.0.9', 'typescript': '5.9.3',
                     'vite': '8.3.4', 'vue-tsc': '3.3.12',
                     '@electron/packager': '20.3.0', '@electron/asar': '4.3.1'}
 RUST_DEPENDENCIES = {'serde', 'serde_json', 'sha2', 'libc', 'tokio'}
-SCRIPTS = {'test': 'node --test test/*.test.js',
+SCRIPTS = {'test': 'node --test --test-timeout=120000 test/*.test.js',
            'check': 'vue-tsc --noEmit -p tsconfig.json', 'build': 'vite build'}
 
 
@@ -1283,7 +1283,7 @@ def build_leg(leg, root, environment):
             shutil.copytree(installed, preserved)
             environment['ELECTRON_OVERRIDE_DIST_PATH'] = str(preserved)
         commands = [[tools['npm'], 'ci', '--offline'],
-                    [tools['node'], '--test', *[str(p.relative_to(directory)) for p in tests]]]
+                    [tools['node'], '--test', '--test-timeout=120000', *[str(p.relative_to(directory)) for p in tests]]]
     for command in commands:
         rc = bounded(command, directory, child)
         if rc:
