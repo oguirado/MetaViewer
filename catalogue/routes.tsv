@@ -519,6 +519,7 @@ surface-7baa97b9be92	contracts/examples/v0.2/surface_event.valid.variant-013.jso
 surface-0949e492dbd9	contracts/examples/v0.2/surface_event.valid.variant-014.json
 surface-6f1cd4e92e76	contracts/examples/v0.2/surface_event.valid.variant-015.json
 surface-cce8fc947a47	contracts/examples/v0.2/surface_input.invalid.bad_chord.json
+surface-490013812808	contracts/examples/v0.2/surface_input.invalid.chord_overflow.json
 surface-df6267c3939b	contracts/examples/v0.2/surface_input.invalid.empty_events.json
 surface-0fcdc08f8d06	contracts/examples/v0.2/surface_input.invalid.extra_field.json
 surface-f1b7b1d309f1	contracts/examples/v0.2/surface_input.invalid.seq_zero.json
