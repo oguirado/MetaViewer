@@ -66,7 +66,8 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 		return framer.Write(writeCtx, raw)
 	}
 	sessionCtx := ctx
-	ctx = context.WithValue(ctx, streamKey{}, streamSession{ctx: ctx, work: &sync.Mutex{}, emit: func(c context.Context, body json.RawMessage) error {
+	locks := &surfaceLocks{}
+	ctx = context.WithValue(ctx, streamKey{}, streamSession{ctx: ctx, work: &sync.Mutex{}, locks: locks, emit: func(c context.Context, body json.RawMessage) error {
 		// Once a line starts, drain it under the session deadline: cancelling an
 		// individual subscription must not interrupt framing or close the session.
 		if err := c.Err(); err != nil {
@@ -106,23 +107,22 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 			})
 		}
 	}
-	dispatch := func(in ipc.Envelope, locked bool) {
-		work := ctx.Value(streamKey{}).(streamSession).work
-		if locked {
-			work.Lock()
+	dispatch := func(in ipc.Envelope, lock *sync.Mutex) {
+		if lock != nil {
+			lock.Lock()
 		}
 		replies, err := handler(ctx, in)
 		if err != nil {
-			if locked {
-				work.Unlock()
+			if lock != nil {
+				lock.Unlock()
 			}
 			fail(fmt.Errorf("dispatch: %w", err))
 			return
 		}
 		for _, reply := range replies {
 			if err = write(ctx, in, reply); err != nil {
-				if locked {
-					work.Unlock()
+				if lock != nil {
+					lock.Unlock()
 				}
 				if ctx.Err() == nil {
 					fail(err)
@@ -130,8 +130,8 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 				return
 			}
 		}
-		if locked {
-			work.Unlock()
+		if lock != nil {
+			lock.Unlock()
 		}
 	}
 	var wg sync.WaitGroup
@@ -149,10 +149,23 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 			if ctx.Err() != nil {
 				return
 			}
-			var op struct{ Op string }
+			var op struct {
+				Op     string `json:"op"`
+				Params struct {
+					SurfaceID string `json:"surface_id"`
+				} `json:"params"`
+			}
 			_ = json.Unmarshal(item.in.Body, &op)
-			locked := op.Op != "frame_unsubscribe" && op.Op != "destroy"
-			dispatch(item.in, locked)
+			var lock *sync.Mutex
+			if op.Op != "frame_unsubscribe" && op.Op != "destroy" && op.Op != "frame_subscribe" {
+				session := ctx.Value(streamKey{}).(streamSession)
+				if op.Params.SurfaceID != "" {
+					lock = session.surfaceLock(op.Params.SurfaceID)
+				} else {
+					lock = session.work
+				}
+			}
+			dispatch(item.in, lock)
 		}
 	}()
 	go func() {
@@ -162,7 +175,7 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 				close(item.done)
 				return
 			}
-			dispatch(item.in, false)
+			dispatch(item.in, nil)
 			close(item.done)
 		}
 	}()
@@ -247,8 +260,43 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 // [TARGET, unit decision] Async delivery is session-bound, synchronous and bounded.
 // Keep this transport seam in daemon until IPC exposes a public stream API.
 type streamKey struct{}
+
+type surfaceLocks struct {
+	mu    sync.Mutex
+	byID  map[string]*sync.Mutex
+	other sync.Mutex
+}
+
+func (l *surfaceLocks) lock(id string) *sync.Mutex {
+	if l == nil {
+		return nil
+	}
+	if id == "" {
+		return &l.other
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.byID == nil {
+		l.byID = make(map[string]*sync.Mutex)
+	}
+	m := l.byID[id]
+	if m == nil {
+		m = &sync.Mutex{}
+		l.byID[id] = m
+	}
+	return m
+}
+
 type streamSession struct {
-	ctx  context.Context
-	work *sync.Mutex
-	emit func(context.Context, json.RawMessage) error
+	ctx   context.Context
+	work  *sync.Mutex
+	locks *surfaceLocks
+	emit  func(context.Context, json.RawMessage) error
+}
+
+func (s streamSession) surfaceLock(id string) *sync.Mutex {
+	if s.locks != nil {
+		return s.locks.lock(id)
+	}
+	return s.work
 }

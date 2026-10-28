@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -48,12 +49,11 @@ type PublishConfig struct {
 	Deduplicate     bool
 }
 type publication struct {
-	native        string
-	seq           uint64
-	refs          []Ref
-	published     []time.Time
-	encodedSum    [32]byte
-	hasEncodedSum bool
+	native    string
+	seq       uint64
+	refs      []Ref
+	published []time.Time
+	encoded   []byte
 }
 type Publisher struct {
 	mu           sync.Mutex
@@ -201,16 +201,14 @@ func openRAMRoot(path string, private bool) (*os.File, error) {
 	}
 	return file, nil
 }
-func (p *Publisher) readSource(root, path string) ([]byte, error) {
+func (p *Publisher) readSource(rootFd int, root, path string) ([]byte, error) {
 	rel, e := filepath.Rel(p.cfg.RAMRoot, path)
 	bindingRel, be := filepath.Rel(p.cfg.RAMRoot, root)
 	if e != nil || be != nil || filepath.Clean(path) != path || filepath.Clean(root) != root || bindingRel == ".." || strings.HasPrefix(bindingRel, "../") || !strings.HasPrefix(path, root+"/") || filepath.IsAbs(rel) || strings.HasPrefix(rel, "../") {
+		_ = syscall.Close(rootFd)
 		return nil, frameError()
 	}
-	fd, e := syscall.Dup(int(p.root.Fd()))
-	if e != nil {
-		return nil, e
-	}
+	fd := rootFd
 	parts := strings.Split(rel, "/")
 	for i, part := range parts {
 		if part == "" || part == "." || part == ".." {
@@ -249,18 +247,20 @@ func (p *Publisher) readSource(root, path string) ([]byte, error) {
 	return data, nil
 }
 func (p *Publisher) Publish(id string, b capsule.Binding, f capsule.NativeFrame) (Ref, error) {
-	ref, _, err := p.publish(id, b, f, false)
+	ref, _, err := p.publish(id, b, f, false, nil)
 	return ref, err
 }
 
 func (p *Publisher) PublishForced(id string, b capsule.Binding, f capsule.NativeFrame) (Ref, error) {
-	ref, _, err := p.publish(id, b, f, false)
+	ref, _, err := p.publish(id, b, f, false, nil)
 	return ref, err
 }
 
 func (p *Publisher) PublishIfChanged(id string, b capsule.Binding, f capsule.NativeFrame) (Ref, bool, error) {
-	return p.publish(id, b, f, true)
+	return p.publish(id, b, f, true, nil)
 }
+
+var errSubscriptionCancelled = errors.New("subscription cancelled before publish commit")
 
 func (p *Publisher) evictExpiredFloor(old *publication, now time.Time) error {
 	minWin := p.minRetention()
@@ -278,103 +278,146 @@ func (p *Publisher) evictExpiredFloor(old *publication, now time.Time) error {
 	return nil
 }
 
-func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame, deduplicate bool) (Ref, bool, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	old, exists := p.surfaces[id]
-	if p.closed || p.output == nil || id == "" || id != b.Surface.SurfaceID || b.Container != f.Generation || f.Seq == 0 || (exists && (old.native != f.Generation || f.Seq <= old.seq)) || (!exists && len(p.surfaces) >= p.cfg.MaxSurfaces) || f.Width < 1 || f.Height < 1 || f.Width > b.Surface.Geometry.W || f.Height > b.Surface.Geometry.H || uint64(f.Width) > p.cfg.MaxPixels/uint64(f.Height) || uint64(f.Width)*uint64(f.Height) > uint64(p.cfg.MaxFrameBytes)/3 || (b.Window != "" && (f.Window == nil || f.Window.ID != b.Window || f.Window.W != f.Width || f.Window.H != f.Height)) {
-		return Ref{}, false, frameError()
+func checkPNGDimensions(encoded []byte, width, height int) bool {
+	if len(encoded) < 24 || string(encoded[:16]) != "\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR" {
+		return false
 	}
-	encoded, e := p.readSource(b.FramesRoot, f.Path)
-	if e != nil {
-		return Ref{}, false, e
-	}
-	encodedSum := sha256.Sum256(encoded)
-	now := p.nowTime()
-	if deduplicate && exists && len(old.refs) > 0 {
-		last := old.refs[len(old.refs)-1]
-		if old.hasEncodedSum && encodedSum == old.encodedSum && last.SHA256 == f.SHA256RGB24 && last.Width == uint32(f.Width) && last.Height == uint32(f.Height) {
-			old.seq = f.Seq
-			if len(old.published) == len(old.refs) {
-				old.published[len(old.published)-1] = now
-			}
-			if err := p.evictExpiredFloor(&old, now); err != nil {
-				p.surfaces[id] = old
-				return Ref{}, false, err
-			}
-			p.surfaces[id] = old
-			return last, false, nil
-		}
-	}
-	hdr, e := png.DecodeConfig(bytes.NewReader(encoded))
-	if e != nil || hdr.Width != f.Width || hdr.Height != f.Height {
-		return Ref{}, false, frameError()
+	w := int(binary.BigEndian.Uint32(encoded[16:20]))
+	h := int(binary.BigEndian.Uint32(encoded[20:24]))
+	return w == width && h == height
+}
+
+func decodeAndVerifyPNG(encoded []byte, width, height int, expectedSHA string) ([]byte, string, error) {
+	if !checkPNGDimensions(encoded, width, height) {
+		return nil, "", frameError()
 	}
 	img, e := png.Decode(bytes.NewReader(encoded))
-	if e != nil {
-		return Ref{}, false, frameError()
+	if e != nil || img.Bounds().Dx() != width || img.Bounds().Dy() != height {
+		return nil, "", frameError()
 	}
-	raw, ok := extractRGB24(img, f.Width, f.Height)
+	raw, ok := extractRGB24(img, width, height)
 	if !ok {
-		return Ref{}, false, frameError()
+		return nil, "", frameError()
 	}
 	sum := sha256.Sum256(raw)
 	sha := hex.EncodeToString(sum[:])
-	if sha != f.SHA256RGB24 {
+	if sha != expectedSHA {
+		return nil, "", frameError()
+	}
+	return raw, sha, nil
+}
+
+func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame, deduplicate bool, isCancelled func() bool) (Ref, bool, error) {
+	p.mu.Lock()
+	old, exists := p.surfaces[id]
+	if p.closed || p.output == nil || p.root == nil || p.next == ^uint64(0) || id == "" || id != b.Surface.SurfaceID || b.Container != f.Generation || f.Seq == 0 || len(f.SHA256RGB24) != 64 || (exists && (old.native != f.Generation || f.Seq <= old.seq)) || (!exists && len(p.surfaces) >= p.cfg.MaxSurfaces) || f.Width < 1 || f.Height < 1 || f.Width > b.Surface.Geometry.W || f.Height > b.Surface.Geometry.H || uint64(f.Width) > p.cfg.MaxPixels/uint64(f.Height) || uint64(f.Width)*uint64(f.Height) > uint64(p.cfg.MaxFrameBytes)/3 || (b.Window != "" && (f.Window == nil || f.Window.ID != b.Window || f.Window.W != f.Width || f.Window.H != f.Height)) {
+		p.mu.Unlock()
 		return Ref{}, false, frameError()
 	}
-	if deduplicate && exists && len(old.refs) > 0 {
-		last := old.refs[len(old.refs)-1]
-		if last.SHA256 == sha && last.Width == uint32(f.Width) && last.Height == uint32(f.Height) {
-			old.seq = f.Seq
-			old.encodedSum = encodedSum
-			old.hasEncodedSum = true
-			if len(old.published) == len(old.refs) {
-				old.published[len(old.published)-1] = now
-			}
-			if err := p.evictExpiredFloor(&old, now); err != nil {
-				p.surfaces[id] = old
-				return Ref{}, false, err
-			}
-			p.surfaces[id] = old
-			return last, false, nil
+	var prevLast Ref
+	var hasPrev bool
+	var prevEncoded []byte
+	if exists && len(old.refs) > 0 {
+		prevLast = old.refs[len(old.refs)-1]
+		hasPrev = true
+		prevEncoded = old.encoded
+	}
+	rootFd, e := syscall.Dup(int(p.root.Fd()))
+	p.mu.Unlock()
+	if e != nil {
+		return Ref{}, false, e
+	}
+
+	encoded, e := p.readSource(rootFd, b.FramesRoot, f.Path)
+	if e != nil {
+		return Ref{}, false, e
+	}
+
+	var raw []byte
+	sha := f.SHA256RGB24
+	sameEncoded := hasPrev && len(prevEncoded) > 0 && bytes.Equal(encoded, prevEncoded) && prevLast.SHA256 == f.SHA256RGB24 && prevLast.Width == uint32(f.Width) && prevLast.Height == uint32(f.Height)
+	if !sameEncoded {
+		raw, sha, e = decodeAndVerifyPNG(encoded, f.Width, f.Height, f.SHA256RGB24)
+		if e != nil {
+			return Ref{}, false, e
 		}
 	}
-	if p.next == ^uint64(0) {
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if isCancelled != nil && isCancelled() {
+		return Ref{}, false, errSubscriptionCancelled
+	}
+	old, exists = p.surfaces[id]
+	if p.closed || p.output == nil || p.next == ^uint64(0) || (exists && (old.native != f.Generation || f.Seq <= old.seq)) || (!exists && len(p.surfaces) >= p.cfg.MaxSurfaces) {
 		return Ref{}, false, frameError()
 	}
+	now := p.nowTime()
+	unchanged := exists && len(old.refs) > 0 && old.refs[len(old.refs)-1].SHA256 == sha && old.refs[len(old.refs)-1].Width == uint32(f.Width) && old.refs[len(old.refs)-1].Height == uint32(f.Height)
+	if deduplicate && unchanged {
+		last := old.refs[len(old.refs)-1]
+		old.seq = f.Seq
+		old.encoded = encoded
+		if len(old.published) == len(old.refs) {
+			old.published[len(old.published)-1] = now
+		}
+		if err := p.evictExpiredFloor(&old, now); err != nil {
+			p.surfaces[id] = old
+			return Ref{}, false, err
+		}
+		p.surfaces[id] = old
+		return last, false, nil
+	}
+
 	random := make([]byte, 16)
 	if _, e = rand.Read(random); e != nil {
 		return Ref{}, false, e
 	}
 	name := hex.EncodeToString(random) + ".rgb"
-	tempName := name + ".tmp"
-	// Open relative to the held private directory, never through a mutable ancestor.
-	fd, e := syscall.Openat(int(p.output.Fd()), tempName, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0600)
-	if e != nil {
-		return Ref{}, false, e
-	}
-	out := os.NewFile(uintptr(fd), tempName)
-	written, we := out.Write(raw)
-	ce := out.Close()
-	if we != nil || ce != nil || written != len(raw) {
-		_ = syscall.Unlinkat(int(p.output.Fd()), tempName)
-		return Ref{}, false, frameError()
-	}
 	path := filepath.Join(p.outputPath, name)
 	info, se := os.Stat(p.outputPath)
 	held, he := p.output.Stat()
 	if se != nil || he != nil || !os.SameFile(info, held) {
-		_ = syscall.Unlinkat(int(p.output.Fd()), tempName)
 		return Ref{}, false, frameError()
 	}
-	if e = os.Link(filepath.Join(p.outputPath, tempName), path); e != nil {
-		_ = syscall.Unlinkat(int(p.output.Fd()), tempName)
-		return Ref{}, false, e
+	expectedBytes := int64(f.Width) * int64(f.Height) * 3
+	linkedUnchanged := false
+	if unchanged {
+		lastPath := old.refs[len(old.refs)-1].RAMWSPath
+		if st, stErr := os.Lstat(lastPath); stErr == nil && st.Mode().IsRegular() && st.Size() == expectedBytes {
+			if os.Link(lastPath, path) == nil {
+				linkedUnchanged = true
+			}
+		}
 	}
-	if e = syscall.Unlinkat(int(p.output.Fd()), tempName); e != nil {
-		_ = syscall.Unlinkat(int(p.output.Fd()), name)
-		return Ref{}, false, e
+	if !linkedUnchanged {
+		if raw == nil {
+			raw, sha, e = decodeAndVerifyPNG(encoded, f.Width, f.Height, f.SHA256RGB24)
+			if e != nil {
+				return Ref{}, false, e
+			}
+		}
+		tempName := name + ".tmp"
+		// Open relative to the held private directory, never through a mutable ancestor.
+		fd, e := syscall.Openat(int(p.output.Fd()), tempName, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0600)
+		if e != nil {
+			return Ref{}, false, e
+		}
+		out := os.NewFile(uintptr(fd), tempName)
+		written, we := out.Write(raw)
+		ce := out.Close()
+		if we != nil || ce != nil || written != len(raw) {
+			_ = syscall.Unlinkat(int(p.output.Fd()), tempName)
+			return Ref{}, false, frameError()
+		}
+		if e = os.Link(filepath.Join(p.outputPath, tempName), path); e != nil {
+			_ = syscall.Unlinkat(int(p.output.Fd()), tempName)
+			return Ref{}, false, e
+		}
+		if e = syscall.Unlinkat(int(p.output.Fd()), tempName); e != nil {
+			_ = syscall.Unlinkat(int(p.output.Fd()), name)
+			return Ref{}, false, e
+		}
 	}
 	refs := old.refs
 	published := old.published
@@ -382,7 +425,7 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 	maxBytes := p.maxRetainedBytes()
 	maxTotal := p.maxTotalRetainedBytes()
 	minWin := p.minRetention()
-	newBytes := int64(len(raw))
+	newBytes := expectedBytes
 	for len(refs) >= maxSlots || (len(refs) >= 2 && (retainedBytes(refs)+newBytes > maxBytes || (minWin > 0 && len(published) > 0 && !now.Before(published[0].Add(minWin))))) {
 		expired := refs[0]
 		if e = syscall.Unlinkat(int(p.output.Fd()), filepath.Base(expired.RAMWSPath)); e != nil {
@@ -462,7 +505,7 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 	ref := Ref{Schema: "frame_ref/v0.2", SurfaceID: id, Generation: p.next, Tick: f.Seq, TsNS: f.TSNS, Width: uint32(f.Width), Height: uint32(f.Height), Format: "rgb24", RAMWSPath: path, SHA256: sha, CaptureUS: f.CaptureUS}
 	refs = append(refs, ref)
 	published = append(published, now)
-	p.surfaces[id] = publication{native: f.Generation, seq: f.Seq, refs: refs, published: published, encodedSum: encodedSum, hasEncodedSum: true}
+	p.surfaces[id] = publication{native: f.Generation, seq: f.Seq, refs: refs, published: published, encoded: encoded}
 	return ref, true, nil
 }
 
@@ -473,15 +516,15 @@ func extractRGB24(img image.Image, width, height int) ([]byte, bool) {
 	case *image.RGBA:
 		b := typed.Bounds()
 		for y := 0; y < height; y++ {
-			row := (y - b.Min.Y) * typed.Stride
-			for x := 0; x < width; x++ {
-				off := row + (x-b.Min.X)*4
-				if typed.Pix[off+3] != 0xff {
+			off := (y-b.Min.Y)*typed.Stride - b.Min.X*4
+			row := typed.Pix[off : off+width*4]
+			for i := 0; i < len(row); i += 4 {
+				if row[i+3] != 0xff {
 					return nil, false
 				}
-				raw[n] = typed.Pix[off]
-				raw[n+1] = typed.Pix[off+1]
-				raw[n+2] = typed.Pix[off+2]
+				raw[n] = row[i]
+				raw[n+1] = row[i+1]
+				raw[n+2] = row[i+2]
 				n += 3
 			}
 		}
@@ -489,15 +532,15 @@ func extractRGB24(img image.Image, width, height int) ([]byte, bool) {
 	case *image.NRGBA:
 		b := typed.Bounds()
 		for y := 0; y < height; y++ {
-			row := (y - b.Min.Y) * typed.Stride
-			for x := 0; x < width; x++ {
-				off := row + (x-b.Min.X)*4
-				if typed.Pix[off+3] != 0xff {
+			off := (y-b.Min.Y)*typed.Stride - b.Min.X*4
+			row := typed.Pix[off : off+width*4]
+			for i := 0; i < len(row); i += 4 {
+				if row[i+3] != 0xff {
 					return nil, false
 				}
-				raw[n] = typed.Pix[off]
-				raw[n+1] = typed.Pix[off+1]
-				raw[n+2] = typed.Pix[off+2]
+				raw[n] = row[i]
+				raw[n+1] = row[i+1]
+				raw[n+2] = row[i+2]
 				n += 3
 			}
 		}

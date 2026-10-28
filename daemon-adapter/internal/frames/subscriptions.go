@@ -8,10 +8,16 @@ package frames
 // surface's prior failure on resubscription or explicit unsubscribe.
 // [TARGET, unit decision] Poll deadlines use the monotonic session clock.
 // Missed deadlines are skipped, counted across subscriptions, and never queued.
+// [TARGET, unit decision] Per-surface capture exclusion replaces the global
+// session lock so concurrent subscriptions hold cadence independently while
+// same-surface operations remain serialized; missed poll deadlines emit through
+// the diagnostics path alongside the atomic counter.
 import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -26,17 +32,24 @@ type Source interface {
 type Emit func(context.Context, json.RawMessage) error
 type SubscriptionConfig struct {
 	MaxSubscriptions int
-	// CaptureLock serializes capture/publication with synchronous runtime capture.
-	CaptureLock                                   *sync.Mutex
+	// CaptureLock serializes capture/publication when a single shared lock is configured.
+	CaptureLock *sync.Mutex
+	// SurfaceLock returns a per-surface mutex serializing capture/publication for a single surface.
+	// When both SurfaceLock and CaptureLock are nil, Subscriptions allocates a per-surface mutex automatically.
+	SurfaceLock                                   func(string) *sync.Mutex
 	PollInterval, CaptureTimeout, ShutdownTimeout time.Duration
 	DeduplicateUnchanged                          bool
 	InitialUnchangedPolls                         int
+	// Diagnostics receives human-readable diagnostic lines when poll deadlines are skipped.
+	Diagnostics io.Writer
+	// OnSkippedPolls is an optional diagnostic hook invoked when a poll deadline is missed.
+	OnSkippedPolls func(surfaceID string, missed, total uint64)
 }
 type task struct {
 	cancel    context.CancelFunc
 	done      chan struct{}
 	err       error
-	cancelled bool
+	cancelled atomic.Bool
 	emitted   uint64
 }
 
@@ -68,25 +81,77 @@ func (monotonicPollClock) NewTimer(d time.Duration) pollTimer {
 func (t realPollTimer) Ticks() <-chan time.Time { return t.C }
 
 type Subscriptions struct {
-	mu        sync.Mutex
-	ctx       context.Context
-	cancel    context.CancelFunc
-	cfg       SubscriptionConfig
-	source    Source
-	publisher *Publisher
-	emit      Emit
-	tasks     map[string]*task
-	failures  map[string]*task
-	confirmed map[string]uint64
-	failedIDs []string
-	closed    bool
-	clock     pollClock
-	skipped   atomic.Uint64
+	mu           sync.Mutex
+	diagMu       sync.Mutex
+	ctx          context.Context
+	cancel       context.CancelFunc
+	cfg          SubscriptionConfig
+	source       Source
+	publisher    *Publisher
+	emit         Emit
+	tasks        map[string]*task
+	failures     map[string]*task
+	confirmed    map[string]uint64
+	surfaceLocks map[string]*sync.Mutex
+	surfaceSkips map[string]uint64
+	failedIDs    []string
+	closed       bool
+	clock        pollClock
+	skipped      atomic.Uint64
 }
 
 // SkippedPolls returns missed cadence deadlines over this service's lifetime.
 // It excludes delivery drops, whose existing policy is unchanged.
 func (s *Subscriptions) SkippedPolls() uint64 { return s.skipped.Load() }
+
+// SkippedPollsFor returns missed cadence deadlines for a specific surface.
+func (s *Subscriptions) SkippedPollsFor(id string) uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.surfaceSkips[id]
+}
+
+// SurfaceLock returns the mutex serializing capture/publication for surface id.
+func (s *Subscriptions) SurfaceLock(id string) *sync.Mutex {
+	if s.cfg.SurfaceLock != nil {
+		if m := s.cfg.SurfaceLock(id); m != nil {
+			return m
+		}
+	}
+	if s.cfg.CaptureLock != nil {
+		return s.cfg.CaptureLock
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.surfaceLocks == nil {
+		s.surfaceLocks = make(map[string]*sync.Mutex)
+	}
+	m := s.surfaceLocks[id]
+	if m == nil {
+		m = &sync.Mutex{}
+		s.surfaceLocks[id] = m
+	}
+	return m
+}
+
+func (s *Subscriptions) recordSkippedPolls(id string, missed uint64) uint64 {
+	total := s.skipped.Add(missed)
+	s.mu.Lock()
+	if s.surfaceSkips == nil {
+		s.surfaceSkips = make(map[string]uint64)
+	}
+	s.surfaceSkips[id] += missed
+	s.mu.Unlock()
+	if s.cfg.OnSkippedPolls != nil {
+		s.cfg.OnSkippedPolls(id, missed, total)
+	}
+	if s.cfg.Diagnostics != nil {
+		s.diagMu.Lock()
+		_, _ = fmt.Fprintf(s.cfg.Diagnostics, "adapter: surface %s skipped_polls=%d total_skipped_polls=%d\n", id, missed, total)
+		s.diagMu.Unlock()
+	}
+	return total
+}
 
 func NewSubscriptions(ctx context.Context, cfg SubscriptionConfig, source Source, publisher *Publisher, emit Emit) (*Subscriptions, error) {
 	if ctx == nil || cfg.MaxSubscriptions < 1 || cfg.PollInterval <= 0 || cfg.CaptureTimeout <= 0 || cfg.ShutdownTimeout <= 0 || cfg.InitialUnchangedPolls < 0 || source == nil || publisher == nil || emit == nil {
@@ -96,7 +161,7 @@ func NewSubscriptions(ctx context.Context, cfg SubscriptionConfig, source Source
 		return nil, e
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	s := &Subscriptions{ctx: ctx, cancel: cancel, cfg: cfg, source: source, publisher: publisher, emit: emit, tasks: make(map[string]*task), failures: make(map[string]*task), confirmed: make(map[string]uint64), clock: monotonicPollClock{}}
+	s := &Subscriptions{ctx: ctx, cancel: cancel, cfg: cfg, source: source, publisher: publisher, emit: emit, tasks: make(map[string]*task), failures: make(map[string]*task), confirmed: make(map[string]uint64), surfaceLocks: make(map[string]*sync.Mutex), surfaceSkips: make(map[string]uint64), clock: monotonicPollClock{}}
 	publisher.addReleaseHook(func(id string) {
 		s.mu.Lock()
 		delete(s.confirmed, id)
@@ -163,13 +228,14 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 		var binding capsule.Binding
 		var native capsule.NativeFrame
 		var e error
+		lock := s.SurfaceLock(id)
 		locked := false
-		if s.cfg.CaptureLock != nil {
+		if lock != nil {
 			for {
 				if e = capture.Err(); e != nil {
 					break
 				}
-				if s.cfg.CaptureLock.TryLock() {
+				if lock.TryLock() {
 					locked = true
 					break
 				}
@@ -188,7 +254,7 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 		cancel()
 		if ctx.Err() != nil {
 			if locked {
-				s.cfg.CaptureLock.Unlock()
+				lock.Unlock()
 			}
 			return
 		}
@@ -197,18 +263,21 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 		if e == nil {
 			var ref Ref
 			s.mu.Lock()
-			cancelled := t.cancelled || s.closed || ctx.Err() != nil
+			cancelled := t.cancelled.Load() || s.closed || ctx.Err() != nil
+			dedup := (s.cfg.DeduplicateUnchanged || s.publisher.cfg.Deduplicate) && s.confirmed[id] >= s.initialUnchangedPolls() && t.emitted >= 1
+			s.mu.Unlock()
 			if !cancelled {
-				if (s.cfg.DeduplicateUnchanged || s.publisher.cfg.Deduplicate) && s.confirmed[id] >= s.initialUnchangedPolls() && t.emitted >= 1 {
-					ref, changed, e = s.publisher.PublishIfChanged(id, binding, native)
-				} else {
-					ref, _, e = s.publisher.publish(id, binding, native, false)
+				ref, changed, e = s.publisher.publish(id, binding, native, dedup, func() bool {
+					return t.cancelled.Load() || ctx.Err() != nil
+				})
+				if errors.Is(e, errSubscriptionCancelled) {
+					cancelled = true
+					e = nil
 				}
 			}
-			s.mu.Unlock()
-			if cancelled {
+			if cancelled || t.cancelled.Load() || ctx.Err() != nil {
 				if locked {
-					s.cfg.CaptureLock.Unlock()
+					lock.Unlock()
 				}
 				return
 			}
@@ -227,10 +296,10 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 		failed := e != nil
 		if failed {
 			var eventErr error
-			msg, eventErr = captureFailure(id)
+			msg, eventErr = captureFailure(id, s.SkippedPolls())
 			if eventErr != nil {
 				if locked {
-					s.cfg.CaptureLock.Unlock()
+					lock.Unlock()
 				}
 				t.err = eventErr
 				return
@@ -238,7 +307,7 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 		}
 		if !failed && !changed {
 			if locked {
-				s.cfg.CaptureLock.Unlock()
+				lock.Unlock()
 			}
 		} else {
 			delivery, stop := context.WithTimeout(ctx, s.cfg.CaptureTimeout)
@@ -248,14 +317,14 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 			}
 			stop()
 			if locked {
-				s.cfg.CaptureLock.Unlock()
+				lock.Unlock()
 			}
 			if deliveryErr != nil {
 				t.err = errors.Join(e, deliveryErr)
 				// A failed frame delivery gets one bounded failure notification.
 				// Do not retry a failure notification or emit after cancellation.
 				if !failed && ctx.Err() == nil {
-					if failure, eventErr := captureFailure(id); eventErr == nil {
+					if failure, eventErr := captureFailure(id, s.SkippedPolls()); eventErr == nil {
 						notice, stop := context.WithTimeout(ctx, s.cfg.CaptureTimeout)
 						_ = s.emit(notice, failure)
 						stop()
@@ -276,7 +345,7 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 		now := s.clock.Now()
 		if !next.After(now) {
 			missed := now.Sub(next)/s.cfg.PollInterval + 1
-			s.skipped.Add(uint64(missed))
+			s.recordSkippedPolls(id, uint64(missed))
 			// Advance from now by the remainder to avoid overflowing a
 			// duration when a long stall misses many intervals.
 			next = now.Add(s.cfg.PollInterval - now.Sub(next)%s.cfg.PollInterval)
@@ -285,8 +354,11 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 	}
 }
 
-func captureFailure(id string) (json.RawMessage, error) {
-	event, err := capsule.NewErrorEvent(id, &cli.Fault{Code: "capture_failed", Detail: "capture, publication or delivery refused"})
+func captureFailure(id string, skippedPolls uint64) (json.RawMessage, error) {
+	event, err := capsule.NewErrorEvent(id, &cli.Fault{
+		Code:   "capture_failed",
+		Detail: fmt.Sprintf("capture, publication or delivery refused (skipped_polls=%d)", skippedPolls),
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -298,7 +370,7 @@ func (s *Subscriptions) Unsubscribe(ctx context.Context, id string) error {
 	s.mu.Lock()
 	t, ok := s.tasks[id]
 	if ok {
-		t.cancelled = true
+		t.cancelled.Store(true)
 		t.cancel()
 	} else {
 		s.forgetFailure(id)
@@ -356,7 +428,7 @@ func (s *Subscriptions) Close(ctx context.Context) error {
 	clear(s.confirmed)
 	ids := make([]string, 0, len(s.tasks))
 	for id, t := range s.tasks {
-		t.cancelled = true
+		t.cancelled.Store(true)
 		t.cancel()
 		ids = append(ids, id)
 	}

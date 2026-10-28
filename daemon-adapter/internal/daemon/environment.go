@@ -147,6 +147,9 @@ func RuntimeFromEnv() (Runtime, error) {
 	cleanup := func() {
 		for _, s := range helloSession.subscriptions {
 			_ = s.Close(context.Background())
+			if skipped := s.SkippedPolls(); skipped > 0 {
+				_, _ = fmt.Fprintf(os.Stderr, "adapter: session closed with total_skipped_polls=%d\n", skipped)
+			}
 		}
 		if err := helloSession.closeManager(context.Background()); err != nil {
 			_, _ = fmt.Fprintln(os.Stderr, err)
@@ -658,9 +661,12 @@ func (s *helloState) accept(ctx context.Context, profiles map[string]capsule.Pro
 	if !ok {
 		return configuration("session emission required")
 	}
+	if session.locks == nil {
+		session.locks = &surfaceLocks{}
+	}
 	var pending []*frames.Subscriptions
 	for root, pub := range pubs {
-		sub, err := newSubscriptions(session.ctx, frames.SubscriptionConfig{MaxSubscriptions: 16, PollInterval: 100 * time.Millisecond, CaptureTimeout: 90 * time.Second, ShutdownTimeout: 5 * time.Second, CaptureLock: session.work, DeduplicateUnchanged: true, InitialUnchangedPolls: 2}, fresh, pub, session.emit)
+		sub, err := newSubscriptions(session.ctx, frames.SubscriptionConfig{MaxSubscriptions: 16, PollInterval: 100 * time.Millisecond, CaptureTimeout: 90 * time.Second, ShutdownTimeout: 5 * time.Second, SurfaceLock: session.surfaceLock, Diagnostics: os.Stderr, DeduplicateUnchanged: true, InitialUnchangedPolls: 2}, fresh, pub, session.emit)
 		if err != nil {
 			for _, staged := range pending {
 				_ = staged.Close(context.Background())
@@ -693,8 +699,17 @@ func (s *helloState) accept(ctx context.Context, profiles map[string]capsule.Pro
 	s.welcomed = true
 	go func() {
 		_ = fresh.MonitorLiveness(session.ctx, func(ctx context.Context, body json.RawMessage) error {
-			session.work.Lock()
-			defer session.work.Unlock()
+			var ev struct {
+				Data struct {
+					SurfaceID string `json:"surface_id"`
+				} `json:"data"`
+			}
+			_ = json.Unmarshal(body, &ev)
+			lock := session.surfaceLock(ev.Data.SurfaceID)
+			if lock != nil {
+				lock.Lock()
+				defer lock.Unlock()
+			}
 			return session.emit(ctx, body)
 		})
 	}()
