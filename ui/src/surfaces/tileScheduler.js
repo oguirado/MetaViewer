@@ -1571,6 +1571,10 @@ export function createTileScheduler(options) {
    * element — repaints nothing (MVUI22). MVUI23: a frame retained while no
    * canvas was attached paints on ANY successful attach (it was never
    * visible, so the MVUI22 no-repaint invariant does not apply to it).
+   * MVUI32 (R3-SCHEDULER-1): retained replays obey the same eligibility
+   * fence as submit/present/runTick — zero draws while folded, hidden, or
+   * context-lost; the attach still stands and the retained frame survives
+   * for a later eligible attach.
    * @param {any} args
    */
   function attachCanvas(args) {
@@ -1601,6 +1605,14 @@ export function createTileScheduler(options) {
     entry.canvas = args.canvas;
     entry.canvasToken = Symbol('canvas-owner');
     entry.lastDetachedCanvas = null;
+    // MVUI32 lane S (R3-SCHEDULER-1): fence retained replays on the same
+    // eligibility criteria as submit/present/runTick. The attach still
+    // stands (future presents work); only the draw is skipped, and both
+    // retained slots survive so a later eligible attach replays the newest
+    // permitted frame.
+    if (!evaluateTileEligibility(entry.state).eligible) {
+      return { ok: true, surfaceId: entry.surfaceId, token: entry.canvasToken };
+    }
     if (entry.pendingPaint !== null) {
       // MVUI23 guard: the newest frame retained while canvas-less was never
       // painted, so it paints on any attach (newest wins over lastPaint)
