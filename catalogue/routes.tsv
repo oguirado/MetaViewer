@@ -69,6 +69,7 @@ test_nesting.py	agents/tests/test_nesting.py
 test_observe.py	agents/tests/test_observe.py
 test_observe_cli.py	agents/tests/test_observe_cli.py
 test_planner.py	agents/tests/test_planner.py
+test_r3_codec.py	agents/tests/test_r3_codec.py
 test_r3_deps_lock.py	agents/tests/test_r3_deps_lock.py
 test_r3_perception.py	agents/tests/test_r3_perception.py
 test_r3_rpc.py	agents/tests/test_r3_rpc.py
