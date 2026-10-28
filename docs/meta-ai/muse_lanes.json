@@ -90,6 +90,11 @@
    "why": "Fix a blocking frame-port router defect (notice stream id compared with delivery surfaceGeneration would refuse every real frame) and align three legacy tests with the profile_id title contract.",
    "orchestrator": "UI orchestrator"
   },
+  "mvui28": {
+   "stage": "fix",
+   "why": "Human input refusals now arrive asynchronously from the adapter through a new host input result event; show them in Activity exactly once per batch so the operator sees why typing did not reach the capsule.",
+   "orchestrator": "UI orchestrator"
+  },
   "mvui3n": {
    "stage": "ui",
    "why": "Polish the MetaViewer wall for live data after the live G-W1 gate passed: a live-replay fixture through the real authority runtime, live tile states, multislot real terminal sessions and a receipt/verdict activity strip.",
