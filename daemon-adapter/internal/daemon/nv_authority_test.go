@@ -3,9 +3,11 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"metaviewer/daemon-adapter/internal/ipc"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
 
@@ -137,3 +139,116 @@ func TestNVWrapContinuityAfterFailure(t *testing.T) {
 	}
 }
 func jsonBody() []byte { return []byte(`{"schema":"test"}`) }
+
+func TestNVReplayLedgerFdAnchoredTornLineAndParentSync(t *testing.T) {
+	stateDir := filepath.Join(t.TempDir(), "state")
+	stateFile, err := openStateDir(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stateFile.Close()
+
+	fdLedgerPath := fmt.Sprintf("/proc/self/fd/%d/wire-replay.jsonl", stateFile.Fd())
+	key := ipc.SenderKey{SessionID: "nv-fd", Component: "core", Instance: "core"}
+
+	// Positive control: open via /proc/self/fd/<fd>/wire-replay.jsonl, reserve entries, close, and recover across restart.
+	auth, err := newClientAuthority(fdLedgerPath, monotonic())
+	if err != nil {
+		t.Fatalf("open fd-anchored ledger: %v", err)
+	}
+	if err := auth.Reserve(context.Background(), key, 1, "nonce-1"); err != nil {
+		_ = auth.file.Close()
+		t.Fatalf("reserve seq 1: %v", err)
+	}
+	if err := auth.Reserve(context.Background(), key, 2, "nonce-2"); err != nil {
+		_ = auth.file.Close()
+		t.Fatalf("reserve seq 2: %v", err)
+	}
+	if err := auth.file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	recovered, err := newClientAuthority(fdLedgerPath, monotonic())
+	if err != nil {
+		t.Fatalf("recover fd-anchored ledger: %v", err)
+	}
+	if recovered.count != 2 || recovered.seq[key] != 2 {
+		_ = recovered.file.Close()
+		t.Fatalf("recovered state mismatch: count=%d seq=%d", recovered.count, recovered.seq[key])
+	}
+	if err := recovered.Reserve(context.Background(), key, 2, "nonce-3"); err == nil {
+		_ = recovered.file.Close()
+		t.Fatal("duplicate sequence accepted after restart")
+	}
+	if err := recovered.Reserve(context.Background(), key, 3, "nonce-1"); err == nil {
+		_ = recovered.file.Close()
+		t.Fatal("duplicate nonce accepted after restart")
+	}
+	if err := recovered.Reserve(context.Background(), key, 3, "nonce-3"); err != nil {
+		_ = recovered.file.Close()
+		t.Fatalf("next sequence after recovery refused: %v", err)
+	}
+	if err := recovered.file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Negative control 1: torn trailing line (valid JSON entry missing trailing newline, and truncated JSON line) must fail closed.
+	diskLedgerPath := filepath.Join(stateDir, "wire-replay.jsonl")
+	cleanBytes, err := os.ReadFile(diskLedgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tornSuffix := range []string{
+		`{"Key":{"SessionID":"nv-fd","Component":"core","Instance":"core"},"Seq":4,"Nonce":"no-newline"}`,
+		`{"Key":{"SessionID":"nv-fd","Component":"core"`,
+	} {
+		if err := os.WriteFile(diskLedgerPath, append(append([]byte(nil), cleanBytes...), []byte(tornSuffix)...), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if bad, err := newClientAuthority(fdLedgerPath, monotonic()); err == nil {
+			_ = bad.file.Close()
+			t.Fatalf("torn trailing line %q accepted", tornSuffix)
+		}
+	}
+
+	// Restore clean ledger and verify it opens cleanly again.
+	if err := os.WriteFile(diskLedgerPath, cleanBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
+	cleanAgain, err := newClientAuthority(fdLedgerPath, monotonic())
+	if err != nil {
+		t.Fatalf("restored clean ledger refused: %v", err)
+	}
+	_ = cleanAgain.file.Close()
+
+	// Negative control 2: failing parent.Sync() must fail closed rather than silently succeeding.
+	// Kernel path walk resolves trapDir/link -> realSub and "../sub" -> realSub, while
+	// lexical filepath.Dir(path) cleans "trapDir/link/../sub" to "trapDir/sub" (a FIFO where Sync returns EINVAL).
+	base := t.TempDir()
+	realSub := filepath.Join(base, "real", "sub")
+	if err := os.MkdirAll(realSub, 0700); err != nil {
+		t.Fatal(err)
+	}
+	trapDir := filepath.Join(base, "trap")
+	if err := os.MkdirAll(trapDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realSub, filepath.Join(trapDir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	fifoPath := filepath.Join(trapDir, "sub")
+	if err := syscall.Mkfifo(fifoPath, 0600); err != nil {
+		t.Fatal(err)
+	}
+	fifoHolder, err := os.OpenFile(fifoPath, os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fifoHolder.Close()
+
+	unsyncedPath := trapDir + "/link/../sub/wire-replay.jsonl"
+	if bad, err := newClientAuthority(unsyncedPath, monotonic()); err == nil {
+		_ = bad.file.Close()
+		t.Fatal("authority client succeeded despite failing parent.Sync()")
+	}
+}

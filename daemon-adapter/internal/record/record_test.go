@@ -944,3 +944,94 @@ func TestTimestampCeilingPreCommitRefusal(t *testing.T) {
 		t.Fatalf("subsequent valid frame failed after oversized timestamp refusal: %+v %v", events, err)
 	}
 }
+
+func checkExportTarHeaderContract(hdr *tar.Header) error {
+	if hdr == nil {
+		return errors.New("nil tar header")
+	}
+	if hdr.Mode != 0600 || hdr.Mode&0o077 != 0 || hdr.Mode&0o007 != 0 {
+		return errors.New("tar header mode violates 0600 non-world-readable contract")
+	}
+	if hdr.Uid != 0 || hdr.Gid != 0 || hdr.Uname != "" || hdr.Gname != "" {
+		return errors.New("tar header leaked owner or group identity")
+	}
+	return nil
+}
+
+func TestRecordingExportEnforcesRestrictiveTarHeaderModeAndFilePermissions(t *testing.T) {
+	// Negative control on the contract checker: world/group permission bits must be rejected.
+	for _, badMode := range []int64{0666, 0777, 0644, 0640, 0604, 0606} {
+		if err := checkExportTarHeaderContract(&tar.Header{Name: "frame-000001.png", Mode: badMode, Size: 1}); err == nil {
+			t.Fatalf("world/group-accessible tar header mode %#o was accepted", badMode)
+		}
+	}
+
+	_, reply, size := fixture(t)
+	ctx := context.Background()
+
+	verifyArchive := func(t *testing.T, tarPath string, wantEntries int) {
+		t.Helper()
+		info, err := os.Stat(tarPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0600 || info.Mode().Perm()&0o077 != 0 {
+			t.Fatalf("exported archive file mode = %#o, want 0600", info.Mode().Perm())
+		}
+		data, err := os.ReadFile(tarPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tr := tar.NewReader(bytes.NewReader(data))
+		count := 0
+		for {
+			hdr, err := tr.Next()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			count++
+			if err := checkExportTarHeaderContract(hdr); err != nil {
+				t.Fatalf("entry %d (%s) mode=%#o uid=%d gid=%d uname=%q gname=%q: %v", count, hdr.Name, hdr.Mode, hdr.Uid, hdr.Gid, hdr.Uname, hdr.Gname, err)
+			}
+		}
+		if count != wantEntries {
+			t.Fatalf("archive entry count = %d, want %d", count, wantEntries)
+		}
+	}
+
+	// 1. Direct file export path (exportFile).
+	fileDest := filepath.Join(t.TempDir(), "capture.tar")
+	mFile := manager(t, &fakeRunner{reply: reply}, size, &Destination{CapabilityID: "cap", Path: fileDest})
+	if _, err := mFile.Handle(ctx, disk(fileDest, "cap")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mFile.Poll(ctx, "poll-1", "r"); err != nil {
+		t.Fatal(err)
+	}
+	events, err := mFile.Handle(ctx, stop("disk_stop"))
+	if err != nil || len(events) != 2 || events[1].Event != "exported" {
+		t.Fatalf("file export failed: %+v %v", events, err)
+	}
+	verifyArchive(t, fileDest, 1)
+
+	// 2. Directory export path (exportDir).
+	dirDest := t.TempDir()
+	mDir := manager(t, &fakeRunner{reply: reply}, size, &Destination{CapabilityID: "cap", Path: dirDest})
+	if _, err := mDir.Handle(ctx, start(size)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mDir.Poll(ctx, "poll-1", "r"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mDir.Handle(ctx, stop("ram_stop")); err != nil {
+		t.Fatal(err)
+	}
+	dirEvents, err := mDir.Handle(ctx, disk(dirDest, "cap"))
+	if err != nil || len(dirEvents) != 1 || dirEvents[0].Event != "exported" {
+		t.Fatalf("dir export failed: %+v %v", dirEvents, err)
+	}
+	verifyArchive(t, dirEvents[0].DestinationPath, 1)
+}

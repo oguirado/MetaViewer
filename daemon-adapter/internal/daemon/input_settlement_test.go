@@ -464,3 +464,116 @@ func TestHumanEmptyBaselineSettles(t *testing.T) {
 		t.Fatalf("expected verified holdings human input to emit 2 events, calls=%d events=%s", verifiedCalls, hOK)
 	}
 }
+
+func TestHumanInputReceiptAttachesLatestPublishedFrameRef(t *testing.T) {
+	root, err := os.MkdirTemp("/dev/shm", "mv-human-latest-frame-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(root)
+	source := filepath.Join(root, "demo-run/frames/w1")
+	if err = os.MkdirAll(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(source, "f.png")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img := image.NewNRGBA(image.Rect(0, 0, 2, 1))
+	img.Set(0, 0, color.NRGBA{A: 255})
+	img.Set(1, 0, color.NRGBA{A: 255})
+	if err = png.Encode(f, img); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	profiles := map[string]capsule.Profile{"demo": {Kind: "browser", NativeKind: "browser", RAMRoot: root, Display: ":100", Width: 2, Height: 1}}
+	runner := &settlementRunner{initialRunner: initialRunner{root: root}, mode: "ok", started: make(chan struct{}), finish: make(chan struct{})}
+	m, err := capsule.NewManager(capsule.Config{BinDir: t.TempDir(), Profiles: profiles, MaxSurfaces: 1, MaxOutputBytes: 8192, Timeout: time.Second, OriginNS: 100}, runner, func() uint64 { return 200 })
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := frames.NewPublisher(frames.PublishConfig{RAMRoot: root, MaxFrameBytes: 8192, MaxPixels: 2, MaxSurfaces: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pub.Close()
+
+	h := wireHandler(m, profiles, map[string]*frames.Publisher{root: pub}, 100)
+	call := func(op string, params any) []json.RawMessage {
+		t.Helper()
+		body, _ := json.Marshal(map[string]any{"schema": "surface_request/v0.2", "op": op, "params": params})
+		events, err := h(context.Background(), ipc.Envelope{Body: body})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return events
+	}
+
+	// 1. Create surface and record initial create-time frame ref A.
+	created := call("create", map[string]any{"kind": "browser", "profile_id": "demo", "geometry": map[string]int{"w": 2, "h": 1}})
+	if len(created) != 2 {
+		t.Fatalf("expected 2 events on create, got %s", created)
+	}
+	var createEv struct {
+		Data struct{ Surface capsule.Surface }
+	}
+	if err := json.Unmarshal(created[0], &createEv); err != nil {
+		t.Fatal(err)
+	}
+	sid := createEv.Data.Surface.SurfaceID
+
+	var readyA struct {
+		Data struct {
+			FrameRef frames.Ref `json:"frame_ref"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(created[1], &readyA); err != nil {
+		t.Fatal(err)
+	}
+	frameA := readyA.Data.FrameRef
+
+	// 2. Perform an agent input that publishes a new post-input frame ref B.
+	action := map[string]any{"type": "key", "keys": []string{"a"}}
+	agentEvents := call("input", map[string]any{"surface_id": sid, "proposal_id": "agent-1", "origin": "agent", "action": action})
+	if len(agentEvents) != 3 {
+		t.Fatalf("expected 3 events for agent input, got %s", agentEvents)
+	}
+	var readyB struct {
+		Data struct {
+			FrameRef frames.Ref `json:"frame_ref"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(agentEvents[1], &readyB); err != nil {
+		t.Fatal(err)
+	}
+	frameB := readyB.Data.FrameRef
+	if frameB.Generation == frameA.Generation || frameB.RAMWSPath == frameA.RAMWSPath {
+		t.Fatalf("post-input frame B (%+v) did not advance from create-time frame A (%+v)", frameB, frameA)
+	}
+
+	// 3. Take human control, perform a human input, and assert after_frame equals B (and NOT stale frame A).
+	call("take_control", map[string]any{"surface_id": sid, "owner": "human"})
+	humanEvents := call("input", map[string]any{"surface_id": sid, "proposal_id": "human-after-agent", "origin": "human", "action": action})
+	if len(humanEvents) != 2 {
+		t.Fatalf("expected 2 events for human input, got %s", humanEvents)
+	}
+	var humanReceipt struct {
+		ProposalID string     `json:"proposal_id"`
+		AfterFrame frames.Ref `json:"after_frame"`
+		Error      string     `json:"error"`
+	}
+	if err := json.Unmarshal(humanEvents[1], &humanReceipt); err != nil {
+		t.Fatal(err)
+	}
+	if humanReceipt.ProposalID != "human-after-agent" || humanReceipt.Error != "" {
+		t.Fatalf("unexpected human receipt: %+v", humanReceipt)
+	}
+	if humanReceipt.AfterFrame == frameA || humanReceipt.AfterFrame.Generation == frameA.Generation || humanReceipt.AfterFrame.RAMWSPath == frameA.RAMWSPath {
+		t.Fatalf("human receipt attached stale create-time frame A (%+v) instead of latest frame B (%+v)", humanReceipt.AfterFrame, frameB)
+	}
+	if humanReceipt.AfterFrame != frameB {
+		t.Fatalf("human receipt after_frame = %+v, want latest frame B %+v", humanReceipt.AfterFrame, frameB)
+	}
+}

@@ -257,3 +257,67 @@ func TestLivenessProbeDropsLockAndSkipsDestroyedInFlight(t *testing.T) {
 		t.Fatalf("in-flight probe double-transitioned destroyed surface: reports=%d state=%s", reports, m.bindings[id].Surface.State)
 	}
 }
+
+func TestLivenessProbeUsesLivenessTimeoutAndCountsUnavailableMisses(t *testing.T) {
+	m := testManager(t, &scriptRunner{output: []byte(startOK)})
+	m.cfg.LivenessTimeout = 50 * time.Millisecond
+	m.cfg.Timeout = 10 * time.Second
+	m.cfg.LivenessMisses = 2
+	id := createID(t, m)
+
+	calls := 0
+	reports := 0
+	m.runner = a2Runner(func(probeCtx context.Context, args []string, _ []byte) ([]byte, error) {
+		calls++
+		deadline, ok := probeCtx.Deadline()
+		if !ok {
+			t.Error("liveness probe context missing deadline")
+			return nil, &cli.Fault{Code: "uncertain", Detail: "no deadline"}
+		}
+		rem := time.Until(deadline)
+		if rem <= 0 || rem > m.cfg.LivenessTimeout {
+			t.Errorf("probe deadline remaining = %v, want within (0, %v] (Timeout=%v)", rem, m.cfg.LivenessTimeout, m.cfg.Timeout)
+		}
+		switch calls {
+		case 1:
+			// First unavailable miss (misses = 1).
+			return nil, cli.ExitFault("srf-identity-surface", 4, "")
+		case 2:
+			// Negative control: non-unavailable error resets consecutive miss counter (misses = 0).
+			return nil, &cli.Fault{Code: "uncertain", Detail: "transient non-unavailable"}
+		default:
+			// Calls 3 and 4: two consecutive unavailable misses declare liveness loss.
+			return nil, cli.ExitFault("srf-identity-surface", 4, "")
+		}
+	})
+
+	ticks := make(chan time.Time)
+	done := make(chan error, 1)
+	go func() {
+		done <- m.monitorLiveness(context.Background(), ticks, func(_ context.Context, raw json.RawMessage) error {
+			reports++
+			var ev struct {
+				Event string
+				Data  struct{ Surface Surface }
+			}
+			if json.Unmarshal(raw, &ev) != nil || ev.Event != "state_changed" || ev.Data.Surface.State != "lost" || ev.Data.Surface.SurfaceID != id {
+				t.Errorf("unexpected loss event: %s", raw)
+			}
+			return nil
+		})
+	}()
+
+	// After 3 ticks (unavailable, uncertain, unavailable), surface must still be active with 0 loss reports.
+	for i := 0; i < 3; i++ {
+		ticks <- time.Time{}
+	}
+	// Tick 4 delivers the second consecutive unavailable fault and triggers loss.
+	ticks <- time.Time{}
+	close(ticks)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if calls != 4 || reports != 1 || m.bindings[id].Surface.State != "lost" {
+		t.Fatalf("calls=%d reports=%d state=%s, want 4/1/lost", calls, reports, m.bindings[id].Surface.State)
+	}
+}

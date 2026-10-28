@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -415,6 +416,130 @@ except KeyboardInterrupt:
 			}
 			if err := syscall.Kill(sentinelPID, 0); err != nil {
 				t.Fatalf("unrelated sentinel process harmed: %v", err)
+			}
+		})
+	}
+}
+
+func TestInterruptGracePeriodAndOversizedAnnouncementRejection(t *testing.T) {
+	interpreter, err := exec.LookPath("python3")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Positive control: helper traps SIGINT, pauses briefly within the grace window,
+	// writes a cleanup marker, and exits 0 cleanly without premature SIGKILL.
+	t.Run("sigint_grace_cleanup", func(t *testing.T) {
+		root := t.TempDir()
+		state := filepath.Join(root, "state")
+		if err := os.Mkdir(state, 0700); err != nil {
+			t.Fatal(err)
+		}
+		markerPath := filepath.Join(root, "cleaned.marker")
+		script := "#!" + interpreter + "\n" + fmt.Sprintf(`import json, os, signal, sys, time
+def on_sigint(signum, frame):
+    time.sleep(0.08)
+    with open(%q, 'w') as mf:
+        mf.write('cleaned')
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, on_sigint)
+print(json.dumps({'url':'http://127.0.0.1:1234/', 'native':str(os.getpid()), 'socket':'/runtime/view.sock'}), flush=True)
+while True:
+    time.sleep(0.02)
+`, markerPath)
+		if err := os.WriteFile(filepath.Join(root, "srf-identity-surface"), []byte(script), 0700); err != nil {
+			t.Fatal(err)
+		}
+		r, err := NewProcessRunner(root, []string{"PATH=" + os.Getenv("PATH"), "MV_SRF_STATE_DIR=" + state})
+		if err != nil {
+			t.Fatal(err)
+		}
+		child, err := r.Start(context.Background(), []string{"srf-identity-surface", "view", "--container", "srf-id-demo"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := parseInfo(child.Announcement)
+		if err != nil {
+			child.Close()
+			t.Fatal(err)
+		}
+		pid, err := strconv.Atoi(info.Native)
+		if err != nil {
+			child.Close()
+			t.Fatal(err)
+		}
+		child.Close()
+		data, err := os.ReadFile(markerPath)
+		if err != nil || string(data) != "cleaned" {
+			t.Fatalf("SIGINT cleanup marker missing after Close (killed before grace finished): data=%q err=%v", data, err)
+		}
+		if !errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+			t.Fatal("helper still running after Close")
+		}
+	})
+
+	// 2. Negative control: helper emits an announcement line exceeding 65536 bytes;
+	// manager rejects it with malformed_cli and terminates the helper.
+	for _, withNewline := range []bool{true, false} {
+		name := "oversized_with_newline"
+		if !withNewline {
+			name = "oversized_without_newline"
+		}
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			state := filepath.Join(root, "state")
+			if err := os.Mkdir(state, 0700); err != nil {
+				t.Fatal(err)
+			}
+			lockPath := filepath.Join(root, "oversized.lock")
+			nl := `\n`
+			if !withNewline {
+				nl = ""
+			}
+			script := "#!" + interpreter + "\n" + fmt.Sprintf(`import fcntl, os, sys, time
+fd = os.open(%q, os.O_CREAT | os.O_RDWR, 0o600)
+fcntl.flock(fd, fcntl.LOCK_EX)
+payload = '{"url":"http://127.0.0.1:1234/","native":"' + ('9' * 70000) + '","socket":"/runtime/view.sock"}%s'
+sys.stdout.write(payload)
+sys.stdout.flush()
+try:
+    while True:
+        time.sleep(0.05)
+except KeyboardInterrupt:
+    pass
+`, lockPath, nl)
+			if err := os.WriteFile(filepath.Join(root, "srf-identity-surface"), []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			r, err := NewProcessRunner(root, []string{"PATH=" + os.Getenv("PATH"), "MV_SRF_STATE_DIR=" + state})
+			if err != nil {
+				t.Fatal(err)
+			}
+			mgr := NewManager(r)
+			t.Cleanup(mgr.Close)
+			err = mgr.Open(context.Background(), "srf-id-demo", false)
+			var f *cli.Fault
+			if !errors.As(err, &f) || f.Code != "malformed_cli" || !strings.Contains(f.Detail, "CLI") {
+				t.Fatalf("oversized announcement (%s) not rejected with malformed_cli: %v", name, err)
+			}
+			lockFile, err := os.OpenFile(lockPath, os.O_RDWR, 0600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer lockFile.Close()
+			deadline := time.Now().Add(3 * time.Second)
+			reaped := false
+			for time.Now().Before(deadline) {
+				if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err == nil {
+					_ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+					reaped = true
+					break
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			if !reaped {
+				t.Fatalf("oversized announcement helper (%s) was not terminated and reaped", name)
 			}
 		})
 	}

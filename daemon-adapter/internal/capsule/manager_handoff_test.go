@@ -312,3 +312,85 @@ func TestHumanOriginInputEnforcement(t *testing.T) {
 	_, e = m.Handle(ctx, req("input", `{"surface_id":"`+id+`","proposal_id":"h-after-release","origin":"human","action":{"type":"key","keys":["a"]}}`))
 	requireFault(t, e, "SURFACE_NOT_HUMAN_CONTROLLED")
 }
+
+func TestHoldingsHumanOriginVerificationContract(t *testing.T) {
+	r := &scriptRunner{output: []byte(`{"input_mono_ns":200}`)}
+	m := testManager(t, r)
+	id := holdingsBinding(m)
+	ctx := context.Background()
+
+	if _, e := m.Handle(ctx, req("take_control", `{"surface_id":"`+id+`","owner":"human"}`)); e != nil {
+		t.Fatal(e)
+	}
+	humanInput := func(proposal string) Request {
+		return req("input", `{"surface_id":"`+id+`","proposal_id":"`+proposal+`","origin":"human","action":{"type":"key","keys":["a"]}}`)
+	}
+
+	// Holdings input verification applies to human origin too: missing verifier fails closed.
+	_, e := m.Handle(ctx, humanInput("h-no-verifier"))
+	requireFault(t, e, "input")
+
+	// Negative control: extra receipt fields (result, surface_id, kind, focus_verified)
+	// on human-origin Holdings input must be refused before invoking VerifyHoldingsInput.
+	var poisonedCalls int
+	m.cfg.VerifyHoldingsInput = func(context.Context, Binding, string, json.RawMessage, uint64) error {
+		poisonedCalls++
+		t.Fatal("VerifyHoldingsInput invoked despite extra fields in Holdings receipt")
+		return nil
+	}
+	for i, receiptJSON := range []string{
+		`{"input_mono_ns":200,"result":"ok"}`,
+		`{"input_mono_ns":200,"surface_id":"w1"}`,
+		`{"input_mono_ns":200,"kind":"key"}`,
+		`{"input_mono_ns":200,"focus_verified":true}`,
+		`{"surface_id":"w1","kind":"key","input_mono_ns":200,"focus_verified":true,"result":"ok"}`,
+	} {
+		r.output = []byte(receiptJSON)
+		_, e = m.Handle(ctx, humanInput("h-extra-field-"+string(rune('0'+i))))
+		requireFault(t, e, "input")
+		if poisonedCalls != 0 {
+			t.Fatalf("verifier called %d times on extra-field receipt %s", poisonedCalls, receiptJSON)
+		}
+	}
+
+	// Positive control: timestamp-only receipt with configured verifier succeeds with input_applied.
+	r.output = []byte(`{"input_mono_ns":200}`)
+	var verifiedCalls int
+	m.cfg.VerifyHoldingsInput = func(_ context.Context, b Binding, p string, action json.RawMessage, stamp uint64) error {
+		verifiedCalls++
+		if b.Surface.SurfaceID != id || b.Surface.Control != "human" || p != "h-proved" || stamp != 200 {
+			return fault("input", "human holdings correlation mismatch")
+		}
+		var got struct {
+			Type string
+			Keys []string
+		}
+		if err := json.Unmarshal(action, &got); err != nil || got.Type != "key" || len(got.Keys) != 1 || got.Keys[0] != "a" {
+			return fault("input", "human holdings action mismatch")
+		}
+		return nil
+	}
+	_, e = m.Handle(ctx, humanInput("h-unproved"))
+	requireFault(t, e, "input")
+	if verifiedCalls != 1 {
+		t.Fatalf("verifier calls = %d, want 1", verifiedCalls)
+	}
+
+	out, e := m.Handle(ctx, humanInput("h-proved"))
+	if e != nil || len(out) != 1 {
+		t.Fatalf("human holdings verified input failed: %s %v", out, e)
+	}
+	if verifiedCalls != 2 {
+		t.Fatalf("verifier calls = %d, want 2", verifiedCalls)
+	}
+	var ev struct {
+		Event string `json:"event"`
+		Data  struct {
+			SurfaceID  string `json:"surface_id"`
+			ProposalID string `json:"proposal_id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out[0], &ev); err != nil || ev.Event != "input_applied" || ev.Data.SurfaceID != id || ev.Data.ProposalID != "h-proved" {
+		t.Fatalf("unexpected input_applied event: %s (%v)", out[0], err)
+	}
+}
