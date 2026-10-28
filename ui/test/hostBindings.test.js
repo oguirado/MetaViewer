@@ -1491,3 +1491,203 @@ test('RV10-04: consecutive intent timeouts separated only by frame traffic shut 
   ]);
 });
 
+test('R3-ELECTRON-2 (tg6_electron#2): post-hello core.sock inode swap is refused with CORE_SEAMS_ABSENT and disposes client; unswapped reaches live', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'mv-s-'));
+  const config = { session_id: 'host-test', core: registration('core'), peers: [registration('ui')] };
+  await mkdir(join(root, 'metaviewer'), { mode: 0o700 });
+  const configPath = join(root, 'config.json');
+  await writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
+  const sockPath = join(root, 'metaviewer/core.sock');
+  const origSockPath = join(root, 'metaviewer/orig.sock');
+  const replacementSockPath = join(root, 'metaviewer/next.sock');
+
+  const legitSockets = new Set();
+  const replacementSockets = new Set();
+  let helloReceived = false;
+  let swapPromise = null;
+  let resolveHelloReplyEmitted;
+  const helloReplyEmitted = new Promise(resolve => {
+    resolveHelloReplyEmitted = resolve;
+  });
+
+  const legitServer = createServer(socket => {
+    legitSockets.add(socket);
+    let buffer = '';
+    socket.on('data', data => {
+      buffer += data;
+      const nl = buffer.indexOf('\n');
+      if (nl < 0) return;
+      const env = JSON.parse(buffer.slice(0, nl));
+      buffer = buffer.slice(nl + 1);
+      if (env.body?.schema === 'hello/v0.2') {
+        helloReceived = true;
+        socket.write(
+          JSON.stringify({
+            schema: 'envelope/v0.2',
+            msg_id: 'reply-1',
+            ts_ns: 0,
+            from: config.core.endpoint,
+            to: config.peers[0].endpoint,
+            session_id: config.session_id,
+            seq: 1,
+            nonce: 'nonce-1',
+            body: config.core.hello,
+          }) + '\n',
+        );
+        swapPromise = (async () => {
+          await rename(sockPath, origSockPath);
+          await rename(replacementSockPath, sockPath);
+        })();
+        resolveHelloReplyEmitted();
+      }
+    });
+  });
+  legitServer.listen(sockPath);
+  await once(legitServer, 'listening');
+  await chmod(sockPath, 0o600);
+
+  const replacementServer = createServer(socket => {
+    replacementSockets.add(socket);
+  });
+  replacementServer.listen(replacementSockPath);
+  await once(replacementServer, 'listening');
+  await chmod(replacementSockPath, 0o600);
+
+  const origInfo = await lstat(sockPath);
+  const replacementInfo = await lstat(replacementSockPath);
+  assert.notEqual(origInfo.ino, replacementInfo.ino);
+
+  t.after(async () => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    for (const s of [...legitSockets, ...replacementSockets]) s.destroy();
+    await new Promise(resolve => legitServer.close(resolve));
+    await new Promise(resolve => replacementServer.close(resolve));
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const origConnect = net.createConnection;
+  const origLstat = fsPromises.lstat;
+  let clientSocket = null;
+  let socketStatCalls = 0;
+  t.mock.method(net, 'createConnection', (...args) => {
+    clientSocket = origConnect(...args);
+    return clientSocket;
+  });
+  t.mock.method(fsPromises, 'lstat', async (...args) => {
+    if (args[0] === sockPath && ++socketStatCalls === 2) {
+      await helloReplyEmitted;
+      await swapPromise;
+    }
+    return origLstat(...args);
+  });
+  syncBuiltinESMExports();
+
+  await assert.rejects(
+    createMainBindings({
+      env: { MV_CORE_CONFIG: configPath, XDG_RUNTIME_DIR: root },
+      createMessageChannel: () => ({ port1: { close() {} }, port2: { close() {} } }),
+    }),
+    /CORE_SEAMS_ABSENT/,
+  );
+
+  assert.equal(helloReceived, true, 'client must pass pre-hello peer check and send hello before post-hello lstat');
+  assert.equal(socketStatCalls, 2, 'post-hello lstat on core.sock must be reached');
+  assert.ok(clientSocket, 'client socket must have been created');
+  if (!clientSocket.destroyed) {
+    await once(clientSocket, 'close');
+  }
+  assert.equal(clientSocket.destroyed, true, 'post-hello socket swap refusal must dispose the client connection');
+  const swappedDiskInfo = await origLstat(sockPath);
+  assert.equal(swappedDiskInfo.ino, replacementInfo.ino);
+  assert.equal(replacementSockets.size, 0, 'replacement listener must never receive the initial connection');
+
+  t.mock.restoreAll();
+  syncBuiltinESMExports();
+
+  // Post-hello mode change on the same socket inode (0o600 -> 0o660 after hello reply) is also refused and disposes client.
+  const modeRoot = await mkdtemp(join(tmpdir(), 'mv-m-'));
+  await mkdir(join(modeRoot, 'metaviewer'), { mode: 0o700 });
+  const modeConfigPath = join(modeRoot, 'config.json');
+  await writeFile(modeConfigPath, JSON.stringify(config), { mode: 0o600 });
+  const modeSockPath = join(modeRoot, 'metaviewer/core.sock');
+  let modeChmodPromise = null;
+  let resolveModeHello;
+  const modeHelloEmitted = new Promise(resolve => {
+    resolveModeHello = resolve;
+  });
+  const modeServer = createServer(socket => {
+    legitSockets.add(socket);
+    let buffer = '';
+    socket.on('data', data => {
+      buffer += data;
+      const nl = buffer.indexOf('\n');
+      if (nl < 0) return;
+      const env = JSON.parse(buffer.slice(0, nl));
+      buffer = buffer.slice(nl + 1);
+      if (env.body?.schema === 'hello/v0.2') {
+        socket.write(
+          JSON.stringify({
+            schema: 'envelope/v0.2',
+            msg_id: 'reply-1',
+            ts_ns: 0,
+            from: config.core.endpoint,
+            to: config.peers[0].endpoint,
+            session_id: config.session_id,
+            seq: 1,
+            nonce: 'nonce-1',
+            body: config.core.hello,
+          }) + '\n',
+        );
+        modeChmodPromise = chmod(modeSockPath, 0o660);
+        resolveModeHello();
+      }
+    });
+  });
+  modeServer.listen(modeSockPath);
+  await once(modeServer, 'listening');
+  await chmod(modeSockPath, 0o600);
+  t.after(async () => {
+    await new Promise(resolve => modeServer.close(resolve));
+    await rm(modeRoot, { recursive: true, force: true });
+  });
+
+  let modeStatCalls = 0;
+  let modeClientSocket = null;
+  t.mock.method(net, 'createConnection', (...args) => {
+    modeClientSocket = origConnect(...args);
+    return modeClientSocket;
+  });
+  t.mock.method(fsPromises, 'lstat', async (...args) => {
+    if (args[0] === modeSockPath && ++modeStatCalls === 2) {
+      await modeHelloEmitted;
+      await modeChmodPromise;
+    }
+    return origLstat(...args);
+  });
+  syncBuiltinESMExports();
+
+  await assert.rejects(
+    createMainBindings({
+      env: { MV_CORE_CONFIG: modeConfigPath, XDG_RUNTIME_DIR: modeRoot },
+      createMessageChannel: () => ({ port1: { close() {} }, port2: { close() {} } }),
+    }),
+    /CORE_SEAMS_ABSENT/,
+  );
+  assert.equal(modeStatCalls, 2);
+  if (!modeClientSocket.destroyed) {
+    await once(modeClientSocket, 'close');
+  }
+  assert.equal(modeClientSocket.destroyed, true);
+
+  t.mock.restoreAll();
+  syncBuiltinESMExports();
+
+  // Negative control: unswapped core.sock reaches live state cleanly.
+  const f = await fixture(t);
+  const liveBindings = await createMainBindings({ ...f });
+  t.after(() => liveBindings.core.dispose());
+  assert.equal(liveBindings.core.getStatus().availability, 'live');
+});
+
+

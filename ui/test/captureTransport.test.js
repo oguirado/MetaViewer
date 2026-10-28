@@ -20,7 +20,7 @@ async function fixture(t, configured=true) {
   const config={session_id:'capture',core:reg('core'),peers:[reg('ui')]};
   await mkdir(join(root,'metaviewer'),{mode:0o700});
   await writeFile(join(root,'config.json'),JSON.stringify(config),{mode:0o600});
-  let peer,seq=0,refusal=null,malformed=false;const requests=[],sockets=new Set();
+  let peer,seq=0,refusal=null,malformed=false;const requests=[],journal=[],sockets=new Set();
   const send=body=>peer.write(JSON.stringify({schema:'envelope/v0.2',msg_id:`r-${++seq}`,ts_ns:0,from:config.core.endpoint,to:config.peers[0].endpoint,session_id:config.session_id,seq,nonce:`n-${seq}`,body})+'\n');
   const metadata=(code,value)=>send({schema:'surface_event/v0.2',event:'error',data:{surface_id:'capture',code,detail:JSON.stringify(value)}});
   const server=createServer(socket=>{peer=socket;sockets.add(socket);socket.on('close',()=>sockets.delete(socket));let buffer='';socket.on('data',data=>{
@@ -28,6 +28,17 @@ async function fixture(t, configured=true) {
       const env=JSON.parse(buffer.slice(0,offset));buffer=buffer.slice(offset+1);requests.push(env);
       if(env.body.schema==='hello/v0.2') {send(config.core.hello);continue;}
       const method=env.body.schema==='surface_request/v0.2'?'list':{ram_start:'recordStart',ram_stop:'recordStop',screenshot:'screenshot',disk_start:'export'}[env.body.op];
+      if(env.body.schema==='record_request/v0.2') {
+        journal.push({
+          schema:'session_record/v0.2',
+          kind:refusal?'capture_refused':'capture_event',
+          op:env.body.op,
+          request_id:env.body.request_id,
+          surface_id:env.body.params.surface_id,
+          capture_id:env.body.params.recording_id??env.body.params.capture_id,
+          code:refusal??'OK',
+        });
+      }
       let reply=refusal?{ok:false,code:refusal,request_id:env.body.request_id}:replies[method];
       if(malformed)reply={...reply,path:'/secret'};
       metadata('CAPTURE_REPLY',{request_id:env.msg_id,method,reply});
@@ -37,7 +48,7 @@ async function fixture(t, configured=true) {
   t.after(async()=>{for(const s of sockets)s.destroy();await new Promise(resolve=>server.close(resolve));await rm(root,{recursive:true,force:true});});
   const bindings=await createMainBindings({env:{MV_CORE_CONFIG:join(root,'config.json'),XDG_RUNTIME_DIR:root,MV_RECORDING_DESTINATION:configured?root:undefined},createMessageChannel:()=>{throw Error('no frames');}});
   t.after(()=>bindings.core.dispose());
-  return {root,core:bindings.core,requests,metadata,refuse:code=>{refusal=code;},malform:()=>{malformed=true;}};
+  return {root,core:bindings.core,requests,journal,metadata,refuse:code=>{refusal=code;},malform:()=>{malformed=true;}};
 }
 test('production capture transport routes every operation and closed state subscription',async t=>{
   const f=await fixture(t);const seen=[];const revoke=f.core.subscribeCapture(value=>seen.push(value));
@@ -46,7 +57,18 @@ test('production capture transport routes every operation and closed state subsc
     assert.ok(!JSON.stringify(reply).includes('path'));
   }
   assert.deepEqual(f.requests.slice(1).map(e=>e.body.op),['ram_start','screenshot','ram_stop','disk_start','list']);
+  assert.match(f.requests[1].body.params.recording_id,/^[0-9a-f-]{36}$/i);
+  assert.deepEqual(f.requests[1].body.params,{surface_id:'surface',recording_id:f.requests[1].body.params.recording_id,ring_bytes:8388608,max_fps:30});
+  assert.match(f.requests[2].body.params.capture_id,/^[0-9a-f-]{36}$/i);
+  assert.deepEqual(f.requests[2].body.params,{surface_id:'surface',capture_id:f.requests[2].body.params.capture_id});
+  assert.deepEqual(f.requests[3].body.params,{surface_id:'surface',recording_id:'record'});
   assert.deepEqual(f.requests.at(-2).body.params,{surface_id:'surface',recording_id:'record',destination_capability_id:'recording:configured',destination_path:f.root,max_fps:30});
+  assert.deepEqual(f.journal.map(r=>({op:r.op,surface_id:r.surface_id,code:r.code})),[
+    {op:'ram_start',surface_id:'surface',code:'OK'},
+    {op:'screenshot',surface_id:'surface',code:'OK'},
+    {op:'ram_stop',surface_id:'surface',code:'OK'},
+    {op:'disk_start',surface_id:'surface',code:'OK'},
+  ]);
   const count=f.requests.length;
   assert.deepEqual(await f.core.request({op:'capture',method:'export',request:{schema:req.schema,request_id:req.request_id,capture_id:'record',destination:null}}),{ok:false,code:'DESTINATION_UNSET',request_id:req.request_id});
   assert.equal(f.requests.length,count);
@@ -55,13 +77,55 @@ test('production capture transport routes every operation and closed state subsc
   revoke();f.metadata('CAPTURE_STATE',state);await new Promise(resolve=>setTimeout(resolve,10));assert.deepEqual(seen,[state]);
   await assert.rejects(f.core.request({op:'capture',method:'screenshot',request:{...req,path:'/secret'}}));
 });
-test('production capture refusals retain original renderer correlation',async t=>{
+test('production capture refusals retain original renderer correlation and pin fallback surface capture for unknown IDs',async t=>{
   const f=await fixture(t);
   for(const code of ['SURFACE_UNKNOWN','ALREADY_RECORDING','NOT_RECORDING','CAPTURE_UNAVAILABLE','LIMIT']) {
     f.refuse(code);assert.deepEqual(await f.core.request({op:'capture',method:'screenshot',request:req}),{ok:false,code,request_id:req.request_id});
   }
   f.refuse('NOT_RECORDING');
   assert.deepEqual(await f.core.request({op:'capture',method:'recordStop',request:{schema:req.schema,request_id:req.request_id,recording_id:'absent'}}),{ok:false,code:'NOT_RECORDING',request_id:req.request_id});
+  assert.deepEqual(f.requests.at(-1).body.params,{surface_id:'capture',recording_id:'absent'});
+  assert.equal(f.journal.at(-1).surface_id,'capture');
+  assert.notEqual(f.journal.at(-1).surface_id,'');
+  assert.equal(f.journal.at(-1).kind,'capture_refused');
+  assert.equal(f.journal.at(-1).op,'ram_stop');
+
+  f.refuse('CAPTURE_UNKNOWN');
+  assert.deepEqual(await f.core.request({op:'capture',method:'export',request:{schema:req.schema,request_id:req.request_id,capture_id:'absent-export',destination:'recording:configured'}}),{ok:false,code:'CAPTURE_UNKNOWN',request_id:req.request_id});
+  assert.deepEqual(f.requests.at(-1).body.params,{surface_id:'capture',recording_id:'absent-export',destination_capability_id:'recording:configured',destination_path:f.root,max_fps:30});
+  assert.equal(f.journal.at(-1).surface_id,'capture');
+  assert.notEqual(f.journal.at(-1).surface_id,'');
+  assert.equal(f.journal.at(-1).kind,'capture_refused');
+  assert.equal(f.journal.at(-1).op,'disk_start');
+
+  // Known-ID control and full start parameter assertions: once recordStart and screenshot succeed on 'surface',
+  // subsequent recordStop/export refusals and events resolve surface_id to 'surface' instead of fallback 'capture'.
+  f.refuse(null);
+  assert.deepEqual(await f.core.request({op:'capture',method:'recordStart',request:{...req,mode:'ai'}}),replies.recordStart);
+  const startParams=f.requests.at(-1).body.params;
+  assert.match(startParams.recording_id,/^[0-9a-f-]{36}$/i);
+  assert.deepEqual(startParams,{surface_id:'surface',recording_id:startParams.recording_id,ring_bytes:8388608,max_fps:30});
+  assert.equal(f.journal.at(-1).surface_id,'surface');
+
+  assert.deepEqual(await f.core.request({op:'capture',method:'screenshot',request:req}),replies.screenshot);
+  const shotParams=f.requests.at(-1).body.params;
+  assert.match(shotParams.capture_id,/^[0-9a-f-]{36}$/i);
+  assert.deepEqual(shotParams,{surface_id:'surface',capture_id:shotParams.capture_id});
+  assert.equal(f.journal.at(-1).surface_id,'surface');
+
+  f.refuse('NOT_RECORDING');
+  assert.deepEqual(await f.core.request({op:'capture',method:'recordStop',request:{schema:req.schema,request_id:req.request_id,recording_id:'record'}}),{ok:false,code:'NOT_RECORDING',request_id:req.request_id});
+  assert.deepEqual(f.requests.at(-1).body.params,{surface_id:'surface',recording_id:'record'});
+  assert.equal(f.journal.at(-1).surface_id,'surface');
+
+  f.refuse('NOT_SEALED');
+  assert.deepEqual(await f.core.request({op:'capture',method:'export',request:{schema:req.schema,request_id:req.request_id,capture_id:'record',destination:'recording:configured'}}),{ok:false,code:'NOT_SEALED',request_id:req.request_id});
+  assert.deepEqual(f.requests.at(-1).body.params,{surface_id:'surface',recording_id:'record',destination_capability_id:'recording:configured',destination_path:f.root,max_fps:30});
+  assert.equal(f.journal.at(-1).surface_id,'surface');
+
+  assert.deepEqual(await f.core.request({op:'capture',method:'export',request:{schema:req.schema,request_id:req.request_id,capture_id:'shot',destination:'recording:configured'}}),{ok:false,code:'NOT_SEALED',request_id:req.request_id});
+  assert.deepEqual(f.requests.at(-1).body.params,{surface_id:'surface',recording_id:'shot',destination_capability_id:'recording:configured',destination_path:f.root,max_fps:30});
+  assert.equal(f.journal.at(-1).surface_id,'surface');
 });
 test('production capture rejects capability-bearing replies and malformed state',async t=>{
   const f=await fixture(t);f.malform();
