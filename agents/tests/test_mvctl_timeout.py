@@ -5,11 +5,16 @@ import io
 import json
 from pathlib import Path
 import socket
+import sys
 import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 from metaviewer_agents import mvctl
 from test_mvctl_v02 import config, registration
 from metaviewer_agents.envelope import make_envelope, validate_envelope
@@ -33,18 +38,21 @@ class MvctlTimeoutTests(unittest.TestCase):
             trusted = Path(directory) / "config.json"
             trusted.write_text(json.dumps(config()))
             errors, calls = [], []
+            first_poll_replied = threading.Event()
+            second_poll_received = threading.Event()
             second_reply_ready = threading.Event()
+            client_returned = threading.Event()
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
                 listener.bind(str(path))
                 path.chmod(0o600)
                 listener.listen()
-                listener.settimeout(2)
+                listener.settimeout(5)
 
                 def serve():
                     try:
                         conn, _ = listener.accept()
                         with conn, conn.makefile("rb") as reader:
-                            conn.settimeout(2)
+                            conn.settimeout(5)
                             hello = validate_envelope(json.loads(reader.readline(65537)))
                             self.assertEqual(hello["body"], registration("agent")["hello"])
                             response = make_envelope(
@@ -56,8 +64,15 @@ class MvctlTimeoutTests(unittest.TestCase):
                                 request = validate_envelope(json.loads(reader.readline(65537)))
                                 call = request["body"]
                                 calls.append(call)
-                                time.sleep(delay)
-                                if seq == 2:
+                                if seq == 1:
+                                    time.sleep(delay)
+                                    first_poll_replied.set()
+                                elif seq == 2:
+                                    second_poll_received.set()
+                                    if verified:
+                                        time.sleep(delay)
+                                    else:
+                                        client_returned.wait(timeout=max(delay, budget_ms / 1000 * 2))
                                     second_reply_ready.set()
                                 body = {"schema": "mv_tool_result/v0.2",
                                         "request_id": call["request_id"], "op": "wait_verify"}
@@ -82,19 +97,39 @@ class MvctlTimeoutTests(unittest.TestCase):
                 thread = threading.Thread(target=serve, daemon=True)
                 thread.start()
                 out, err = io.StringIO(), io.StringIO()
+                original_monotonic = time.monotonic
+                baseline = original_monotonic()
+                poll2_origin = None
+                poll_end = None
+
+                def synchronized_monotonic():
+                    nonlocal poll2_origin
+                    if not first_poll_replied.is_set():
+                        return baseline
+                    if not second_poll_received.is_set():
+                        return baseline + delays[0]
+                    now = original_monotonic()
+                    if poll2_origin is None:
+                        poll2_origin = now
+                    return baseline + delays[0] + (now - poll2_origin)
+
                 try:
-                    started = time.monotonic()
-                    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-                        rc = mvctl.main([
-                            "wait-verify", "--config", str(trusted), "--socket", str(path),
-                            "--session-id", "sess-1", "--agent-instance", "agent-1",
-                            "--core-instance", "core-1", "--timeout-ms", str(budget_ms),
-                            "--max-line-bytes", "65536", "--max-reply-bytes", "65536",
-                            "--proposal-id", "p-1", "--json-arg", str(expectation)])
-                    elapsed = time.monotonic() - started
+                    with mock.patch("metaviewer_agents.tools.time.monotonic",
+                                    side_effect=synchronized_monotonic):
+                        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                            rc = mvctl.main([
+                                "wait-verify", "--config", str(trusted), "--socket", str(path),
+                                "--session-id", "sess-1", "--agent-instance", "agent-1",
+                                "--core-instance", "core-1", "--timeout-ms", str(budget_ms),
+                                "--max-line-bytes", "65536", "--max-reply-bytes", "65536",
+                                "--proposal-id", "p-1", "--json-arg", str(expectation)])
+                        poll_end = synchronized_monotonic()
+                    elapsed = poll_end - baseline
                     returned_before_second_reply = not second_reply_ready.is_set()
+                    client_returned.set()
                 finally:
-                    thread.join(3)
+                    client_returned.set()
+                    thread.join(5)
                 self.assertFalse(thread.is_alive(), "fake core did not stop")
                 if errors:
                     raise errors[0]
@@ -121,6 +156,23 @@ class MvctlTimeoutTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertLess(elapsed, 1)
         print(f"T2 elapsed_ms={elapsed * 1000:.3f} rc={rc}")
+
+    def test_negative_control_unshared_per_poll_budget_detected(self):
+        """Negative control: if wait_verify resets timeout_ms to full budget per poll, assertions fail."""
+        from metaviewer_agents import tools
+        original_wait_verify = tools.wait_verify
+
+        def broken_wait_verify(proposal_id, expectation, timeout_ms, *, client):
+            class UnsharedBudgetClient:
+                def request(self, body, expect, *, timeout_ms):
+                    broken_body = dict(body, args=dict(body["args"], timeout_ms=200))
+                    return client.request(broken_body, expect, timeout_ms=200)
+            return original_wait_verify(proposal_id, expectation, timeout_ms,
+                                        client=UnsharedBudgetClient())
+
+        with mock.patch("metaviewer_agents.tools.wait_verify", side_effect=broken_wait_verify):
+            with self.assertRaises(AssertionError):
+                self.test_two_delayed_pending_replies_share_budget()
 
 
 if __name__ == "__main__":

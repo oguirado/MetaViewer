@@ -33,14 +33,17 @@ func TestTimeoutAndCancelReapDescendants(t *testing.T) {
 			if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
 				t.Fatal(err)
 			}
-			r, err := NewProcessRunner(bin, []string{"PATH=" + os.Getenv("PATH"), "MV_SRF_STATE_DIR=" + filepath.Join(t.TempDir(), "state")}, 4096, 3*time.Second)
+			const runnerTimeout = 3 * time.Second
+			const deadlineTimeout = 500 * time.Millisecond
+			const reapBudget = 200 * time.Millisecond
+			r, err := NewProcessRunner(bin, []string{"PATH=" + os.Getenv("PATH"), "MV_SRF_STATE_DIR=" + filepath.Join(t.TempDir(), "state")}, 4096, runnerTimeout)
 			if err != nil {
 				t.Fatal(err)
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			if mode == "deadline" {
-				ctx, cancel = context.WithTimeout(ctx, 500*time.Millisecond)
+				ctx, cancel = context.WithTimeout(ctx, deadlineTimeout)
 				defer cancel()
 			}
 			done := make(chan error, 1)
@@ -55,7 +58,7 @@ func TestTimeoutAndCancelReapDescendants(t *testing.T) {
 					}
 				}
 			})
-			deadline := time.Now().Add(2 * time.Second)
+			deadline := time.Now().Add(runnerTimeout)
 			for time.Now().Before(deadline) {
 				raw, err := os.ReadFile(pidFile)
 				if err == nil && len(strings.Fields(string(raw))) == 2 {
@@ -97,21 +100,48 @@ func TestTimeoutAndCancelReapDescendants(t *testing.T) {
 				if !errors.As(err, &f) || f.Code != "uncertain" {
 					t.Fatalf("cancel result: %v", err)
 				}
-			case <-time.After(3 * time.Second):
+			case <-time.After(runnerTimeout):
 				t.Fatal("Run did not join")
 			}
 			// A zombie has exited and cannot execute or hold descriptors. Its
 			// adoption/reap belongs to init; require no surviving executable child.
-			for _, pid := range pids {
-				if identity, live := reapProcessIdentity(pid); live && identity == identities[pid] {
+			// SIGKILL to the process group is asynchronous across group members:
+			// cmd.Run() waits only for the leader, while the kernel may finish
+			// transitioning a sibling descendant to Z/X on another core shortly
+			// after the leader is reaped.
+			if surviving := waitDescendantsExited(pids, identities, reapBudget); len(surviving) != 0 {
+				for _, pid := range surviving {
 					t.Errorf("surviving native descendant pid=%d", pid)
 				}
 			}
 			if identity, live := reapProcessIdentity(sentinel.Process.Pid); !live || identity != sentinelIdentity {
 				t.Fatal("unrelated child was killed")
 			}
+			// Negative control: a live child with matching identity is detected as surviving.
+			if surviving := waitDescendantsExited([]int{sentinel.Process.Pid}, map[int]string{sentinel.Process.Pid: sentinelIdentity}, 5*time.Millisecond); len(surviving) != 1 || surviving[0] != sentinel.Process.Pid {
+				t.Fatalf("negative control failed to detect surviving process: %v", surviving)
+			}
 		})
 	}
+}
+
+func waitDescendantsExited(pids []int, identities map[int]string, budget time.Duration) []int {
+	deadline := time.Now().Add(budget)
+	var surviving []int
+	for _, pid := range pids {
+		for {
+			identity, live := reapProcessIdentity(pid)
+			if !live || identity != identities[pid] {
+				break
+			}
+			if !time.Now().Before(deadline) {
+				surviving = append(surviving, pid)
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	return surviving
 }
 
 func reapProcessIdentity(pid int) (string, bool) {
