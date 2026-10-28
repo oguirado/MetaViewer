@@ -138,11 +138,31 @@ impl SharedFrame {
         value["ts_ns"] = ts_ns.into();
         value
     }
+
+    fn sidecar_path(&self) -> std::path::PathBuf {
+        let parent = self.path.parent().unwrap();
+        let name = self.path.file_name().unwrap().to_str().unwrap();
+        parent.join(format!(".state-{name}"))
+    }
+
+    fn write_state(&self, raw: &[u8]) {
+        use std::os::unix::fs::OpenOptionsExt;
+        let path = self.sidecar_path();
+        let _ = std::fs::remove_file(&path);
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+            .unwrap();
+        std::io::Write::write_all(&mut file, raw).unwrap();
+    }
 }
 
 impl Drop for SharedFrame {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
+        let _ = std::fs::remove_file(self.sidecar_path());
     }
 }
 
@@ -1225,6 +1245,565 @@ fn observe_omits_witness_during_human_control_or_human_pending() {
         assert!(during_human_pending["observation"]
             .get("ground_truth")
             .is_none());
+
+        task.abort();
+    });
+}
+
+#[test]
+fn holdings_state_matching_canonicalises_and_settles_verified_true() {
+    // End-to-end: relay-escaped and unsorted state sidecars are re-canonicalised by Core,
+    // verified against state_sha256, and settle Case2 verified=true in action_receipt and wait_verify.
+    support::run(async {
+        let temp = support::Temp::new();
+        let socket = temp.0.join("runtime/core.sock");
+        let uid = support::uid();
+        let listener = serve::bind(&socket, uid).await.unwrap();
+        let server = Arc::new(Mutex::new(
+            Server::open(config(), &temp.0.join("state"), uid).unwrap(),
+        ));
+        let task = tokio::spawn(serve::serve(listener, server.clone(), uid));
+
+        let mut daemon = Peer::connect(&socket, "daemon").await;
+        let mut agent = Peer::connect(&socket, "agent").await;
+        let mut ui = Peer::connect(&socket, "ui").await;
+
+        let f1 = SharedFrame::new(b'u');
+        let f2 = SharedFrame::new(b'v');
+        let frame1 = f1.value("surface-holdings", 1, 1_000);
+        let mut frame1_obs = frame1.clone();
+        frame1_obs["tick"] = 3.into();
+        let mut frame2 = f2.value("surface-holdings", 2, 2_500);
+        frame2["tick"] = 5.into();
+
+        // Canonical bytes vs Go encoding/json relayed bytes (with \u003c\u003e\u0026 and unsorted keys).
+        let before_canonical =
+            br#"{"meta":{"tag":"<before>&ok","tick":3},"nodes":{"cash":"100","level":1}}"#;
+        let before_relayed = br#"{"nodes":{"level":1,"cash":"100"},"meta":{"tick":3,"tag":"\u003cbefore\u003e\u0026ok"}}"#;
+        let before_digest = sha256_hex(before_canonical);
+
+        let after_canonical =
+            br#"{"meta":{"tag":"<after>&ok","tick":5},"nodes":{"cash":"250","level":2}}"#;
+        let after_relayed = br#"{"nodes":{"level":2,"cash":"250"},"meta":{"tick":5,"tag":"\u003cafter\u003e\u0026ok"}}"#;
+        let after_digest = sha256_hex(after_canonical);
+
+        f1.write_state(before_relayed);
+        f2.write_state(after_relayed);
+
+        daemon
+            .send(json!({
+                "schema": "surface_event/v0.2",
+                "event": "created",
+                "data": {"surface": holdings_surface("surface-holdings")}
+            }))
+            .await;
+        ui.receive().await;
+        daemon
+            .send(json!({
+                "schema": "surface_event/v0.2",
+                "event": "frame_ready",
+                "data": {"frame_ref": frame1}
+            }))
+            .await;
+        ui.receive().await;
+
+        let prop = state_change_proposal(
+            "prop-h4-verified",
+            "surface-holdings",
+            &frame1,
+            &before_digest,
+            4,
+            10,
+        );
+        agent
+            .send(json!({
+                "schema": "mv_tool_call/v0.2",
+                "request_id": "req-propose-h4",
+                "op": "propose",
+                "args": {"proposal": prop}
+            }))
+            .await;
+        assert_eq!(agent.receive_json().await["status"], "admitted");
+        assert_eq!(daemon.receive_json().await["op"], "input");
+
+        daemon
+            .send(json!({
+                "schema": "surface_event/v0.2",
+                "event": "input_applied",
+                "data": {"surface_id": "surface-holdings", "proposal_id": "prop-h4-verified"}
+            }))
+            .await;
+        ui.receive().await;
+
+        // Before-input observation on frame1 (bound to tick 3) + after-input frame2 and observation (bound to tick 5).
+        daemon
+            .send(holdings_observation(&frame1_obs, &before_digest, 3))
+            .await;
+        daemon
+            .send(json!({
+                "schema": "surface_event/v0.2",
+                "event": "frame_ready",
+                "data": {"frame_ref": frame2}
+            }))
+            .await;
+        ui.receive().await;
+        daemon
+            .send(holdings_observation(&frame2, &after_digest, 5))
+            .await;
+        let mut rcpt = daemon_receipt("prop-h4-verified", &frame2);
+        rcpt["native_evidence"] = json!({
+            "surface_id": "surface-holdings",
+            "input_mono_ns": 2_100,
+            "input_ts_ns": 1_800
+        });
+        daemon.send(rcpt).await;
+
+        let settled = agent.receive_json().await;
+        assert_eq!(settled["schema"], "action_receipt/v0.2");
+        assert_eq!(settled["proposal_id"], "prop-h4-verified");
+        assert_eq!(settled["verified"], true);
+        assert_eq!(settled["verification"]["method"], "state_sha256");
+        assert_eq!(
+            settled["verification"]["detail"],
+            "frame-bound witness matched"
+        );
+
+        agent
+            .send(json!({
+                "schema": "mv_tool_call/v0.2",
+                "request_id": "req-wait-h4",
+                "op": "wait_verify",
+                "args": {"proposal_id": "prop-h4-verified", "timeout_ms": 100}
+            }))
+            .await;
+        let wait_res = agent.receive_json().await;
+        assert_eq!(wait_res["status"], "verified");
+        assert_eq!(wait_res["focus_verified"], true);
+        assert_eq!(wait_res["input_mono_ns"], 2_100);
+        assert_eq!(wait_res["frame_sha256"], frame2["sha256"]);
+        assert_eq!(wait_res["receipt"]["verified"], true);
+        assert_eq!(
+            wait_res["receipt"]["verification"]["method"],
+            "state_sha256"
+        );
+        assert_eq!(
+            wait_res["receipt"]["verification"]["detail"],
+            "frame-bound witness matched"
+        );
+
+        // Drop /dev/shm frames and sidecars, reopen Server from journal, and confirm
+        // wait_verify still settles verified=true from committed artifacts.
+        drop((f1, f2, daemon, agent, ui));
+        task.abort();
+        let _ = task.await;
+        while Arc::strong_count(&server) > 1 {
+            tokio::task::yield_now().await;
+        }
+        drop(server);
+        let _ = std::fs::remove_file(&socket);
+        let listener = serve::bind(&socket, uid).await.unwrap();
+        let server = Arc::new(Mutex::new(
+            Server::open(config(), &temp.0.join("state"), uid).unwrap(),
+        ));
+        let task = tokio::spawn(serve::serve(listener, server.clone(), uid));
+        let mut agent = Peer::connect(&socket, "agent").await;
+
+        agent
+            .send(json!({
+                "schema": "mv_tool_call/v0.2",
+                "request_id": "req-wait-h4-recovered",
+                "op": "wait_verify",
+                "args": {"proposal_id": "prop-h4-verified", "timeout_ms": 100}
+            }))
+            .await;
+        let recovered_wait = agent.receive_json().await;
+        assert_eq!(recovered_wait["status"], "verified");
+        assert_eq!(recovered_wait["input_mono_ns"], 2_100);
+        assert_eq!(recovered_wait["receipt"]["verified"], true);
+
+        task.abort();
+    });
+}
+
+#[test]
+fn negative_control_tampered_state_refused() {
+    // Named mutation: tamper with the relayed state JSON in the sidecar so it either
+    // violates canonical number rules (float) or differs from the claimed state_sha256.
+    support::run(async {
+        let temp = support::Temp::new();
+        let socket = temp.0.join("runtime/core.sock");
+        let uid = support::uid();
+        let listener = serve::bind(&socket, uid).await.unwrap();
+        let server = Arc::new(Mutex::new(
+            Server::open(config(), &temp.0.join("state"), uid).unwrap(),
+        ));
+        let task = tokio::spawn(serve::serve(listener, server.clone(), uid));
+
+        let mut daemon = Peer::connect(&socket, "daemon").await;
+        let mut agent = Peer::connect(&socket, "agent").await;
+        let mut ui = Peer::connect(&socket, "ui").await;
+
+        let f1 = SharedFrame::new(b'w');
+        let f2 = SharedFrame::new(b'x');
+        let frame1 = f1.value("surface-holdings", 1, 1_000);
+        let mut frame2 = f2.value("surface-holdings", 2, 1_500);
+        frame2["tick"] = 5.into();
+
+        let before_canonical = br#"{"meta":{"tick":3},"nodes":{"level":1}}"#;
+        let before_digest = sha256_hex(before_canonical);
+        let after_canonical = br#"{"meta":{"tick":5},"nodes":{"level":2}}"#;
+        let after_digest = sha256_hex(after_canonical);
+
+        // Tamper with f2's state bytes (level changed to 99 while claiming after_digest).
+        f2.write_state(br#"{"meta":{"tick":5},"nodes":{"level":99}}"#);
+
+        daemon
+            .send(json!({
+                "schema": "surface_event/v0.2",
+                "event": "created",
+                "data": {"surface": holdings_surface("surface-holdings")}
+            }))
+            .await;
+        ui.receive().await;
+        daemon
+            .send(json!({
+                "schema": "surface_event/v0.2",
+                "event": "frame_ready",
+                "data": {"frame_ref": frame1}
+            }))
+            .await;
+        ui.receive().await;
+
+        let prop = state_change_proposal(
+            "prop-tampered-state",
+            "surface-holdings",
+            &frame1,
+            &before_digest,
+            4,
+            10,
+        );
+        agent
+            .send(json!({
+                "schema": "mv_tool_call/v0.2",
+                "request_id": "req-propose-tampered",
+                "op": "propose",
+                "args": {"proposal": prop}
+            }))
+            .await;
+        assert_eq!(agent.receive_json().await["status"], "admitted");
+        daemon.receive().await;
+
+        daemon
+            .send(json!({
+                "schema": "surface_event/v0.2",
+                "event": "frame_ready",
+                "data": {"frame_ref": frame2}
+            }))
+            .await;
+        ui.receive().await;
+
+        daemon
+            .send(holdings_observation(&frame2, &after_digest, 5))
+            .await;
+        let refusal = daemon.receive_json().await;
+        assert_eq!(refusal["decision"], "refused");
+        assert_eq!(refusal["reason_code"], "POLICY");
+
+        // Also verify non-integer float in state sidecar is refused with POLICY.
+        f2.write_state(br#"{"meta":{"tick":5},"nodes":{"ratio":1.5}}"#);
+        daemon
+            .send(holdings_observation(&frame2, &after_digest, 5))
+            .await;
+        let float_refusal = daemon.receive_json().await;
+        assert_eq!(float_refusal["decision"], "refused");
+        assert_eq!(float_refusal["reason_code"], "POLICY");
+
+        task.abort();
+    });
+}
+
+#[test]
+fn negative_control_state_digest_mismatch_refused() {
+    // Named mutation: observation.ground_truth.state_sha256 does not match sha256(canonicalBytes(state)).
+    support::run(async {
+        let temp = support::Temp::new();
+        let socket = temp.0.join("runtime/core.sock");
+        let uid = support::uid();
+        let listener = serve::bind(&socket, uid).await.unwrap();
+        let server = Arc::new(Mutex::new(
+            Server::open(config(), &temp.0.join("state"), uid).unwrap(),
+        ));
+        let task = tokio::spawn(serve::serve(listener, server.clone(), uid));
+
+        let mut daemon = Peer::connect(&socket, "daemon").await;
+        let mut agent = Peer::connect(&socket, "agent").await;
+        let mut ui = Peer::connect(&socket, "ui").await;
+
+        let f1 = SharedFrame::new(b'y');
+        let f2 = SharedFrame::new(b'z');
+        let frame1 = f1.value("surface-holdings", 1, 1_000);
+        let mut frame2 = f2.value("surface-holdings", 2, 1_500);
+        frame2["tick"] = 5.into();
+
+        let before_canonical = br#"{"meta":{"tick":3},"nodes":{"level":1}}"#;
+        let before_digest = sha256_hex(before_canonical);
+        f2.write_state(br#"{"meta":{"tick":5},"nodes":{"level":2}}"#);
+        let mismatched_digest = "aa".repeat(32);
+
+        daemon
+            .send(json!({
+                "schema": "surface_event/v0.2",
+                "event": "created",
+                "data": {"surface": holdings_surface("surface-holdings")}
+            }))
+            .await;
+        ui.receive().await;
+        daemon
+            .send(json!({
+                "schema": "surface_event/v0.2",
+                "event": "frame_ready",
+                "data": {"frame_ref": frame1}
+            }))
+            .await;
+        ui.receive().await;
+
+        let prop = state_change_proposal(
+            "prop-digest-mismatch",
+            "surface-holdings",
+            &frame1,
+            &before_digest,
+            4,
+            10,
+        );
+        agent
+            .send(json!({
+                "schema": "mv_tool_call/v0.2",
+                "request_id": "req-propose-mismatch",
+                "op": "propose",
+                "args": {"proposal": prop}
+            }))
+            .await;
+        assert_eq!(agent.receive_json().await["status"], "admitted");
+        daemon.receive().await;
+
+        daemon
+            .send(json!({
+                "schema": "surface_event/v0.2",
+                "event": "frame_ready",
+                "data": {"frame_ref": frame2}
+            }))
+            .await;
+        ui.receive().await;
+
+        daemon
+            .send(holdings_observation(&frame2, &mismatched_digest, 5))
+            .await;
+        let refusal = daemon.receive_json().await;
+        assert_eq!(refusal["decision"], "refused");
+        assert_eq!(refusal["reason_code"], "POLICY");
+
+        task.abort();
+    });
+}
+
+#[test]
+fn negative_control_state_tick_mismatch_settles_verified_false() {
+    // Named mutation: frame_ref.tick does not match ground_truth.tick when canonical state bytes are present.
+    support::run(async {
+        let temp = support::Temp::new();
+        let socket = temp.0.join("runtime/core.sock");
+        let uid = support::uid();
+        let listener = serve::bind(&socket, uid).await.unwrap();
+        let server = Arc::new(Mutex::new(
+            Server::open(config(), &temp.0.join("state"), uid).unwrap(),
+        ));
+        let task = tokio::spawn(serve::serve(listener, server.clone(), uid));
+
+        let mut daemon = Peer::connect(&socket, "daemon").await;
+        let mut agent = Peer::connect(&socket, "agent").await;
+        let mut ui = Peer::connect(&socket, "ui").await;
+
+        let f1 = SharedFrame::new(b'1');
+        let f2 = SharedFrame::new(b'2');
+        let frame1 = f1.value("surface-holdings", 1, 1_000);
+        let mut frame1_obs = frame1.clone();
+        frame1_obs["tick"] = 3.into();
+        let mut frame2 = f2.value("surface-holdings", 2, 2_500);
+        // Frame tick is 4 while ground_truth.tick is 5 -> tick mismatch.
+        frame2["tick"] = 4.into();
+
+        let before_canonical = br#"{"meta":{"tick":3},"nodes":{"level":1}}"#;
+        let before_digest = sha256_hex(before_canonical);
+        let after_canonical = br#"{"meta":{"tick":5},"nodes":{"level":2}}"#;
+        let after_digest = sha256_hex(after_canonical);
+
+        f1.write_state(before_canonical);
+        f2.write_state(after_canonical);
+
+        daemon
+            .send(json!({
+                "schema": "surface_event/v0.2",
+                "event": "created",
+                "data": {"surface": holdings_surface("surface-holdings")}
+            }))
+            .await;
+        ui.receive().await;
+        daemon
+            .send(json!({
+                "schema": "surface_event/v0.2",
+                "event": "frame_ready",
+                "data": {"frame_ref": frame1}
+            }))
+            .await;
+        ui.receive().await;
+
+        let prop = state_change_proposal(
+            "prop-tick-mismatch",
+            "surface-holdings",
+            &frame1,
+            &before_digest,
+            4,
+            10,
+        );
+        agent
+            .send(json!({
+                "schema": "mv_tool_call/v0.2",
+                "request_id": "req-propose-tick-mismatch",
+                "op": "propose",
+                "args": {"proposal": prop}
+            }))
+            .await;
+        assert_eq!(agent.receive_json().await["status"], "admitted");
+        daemon.receive().await;
+
+        daemon
+            .send(holdings_observation(&frame1_obs, &before_digest, 3))
+            .await;
+        daemon
+            .send(json!({
+                "schema": "surface_event/v0.2",
+                "event": "frame_ready",
+                "data": {"frame_ref": frame2}
+            }))
+            .await;
+        ui.receive().await;
+        daemon
+            .send(holdings_observation(&frame2, &after_digest, 5))
+            .await;
+        daemon
+            .send(daemon_receipt("prop-tick-mismatch", &frame2))
+            .await;
+
+        let settled = agent.receive_json().await;
+        assert_eq!(settled["verified"], false);
+        assert_eq!(settled["verification"]["method"], "state_sha256");
+        assert_eq!(
+            settled["verification"]["detail"],
+            "witness tick does not match frame_ref.tick"
+        );
+
+        agent
+            .send(json!({
+                "schema": "mv_tool_call/v0.2",
+                "request_id": "req-wait-tick-mismatch",
+                "op": "wait_verify",
+                "args": {"proposal_id": "prop-tick-mismatch", "timeout_ms": 100}
+            }))
+            .await;
+        let wait_res = agent.receive_json().await;
+        assert_eq!(wait_res["status"], "error");
+        assert_eq!(wait_res["code"], "VERIFICATION_FAILED");
+        assert_eq!(
+            wait_res["detail"],
+            "witness tick does not match frame_ref.tick"
+        );
+
+        task.abort();
+    });
+}
+
+#[test]
+fn negative_control_oversize_state_refused() {
+    // Named mutation: state sidecar exceeds 1 MiB (1,048,576 bytes).
+    support::run(async {
+        let temp = support::Temp::new();
+        let socket = temp.0.join("runtime/core.sock");
+        let uid = support::uid();
+        let listener = serve::bind(&socket, uid).await.unwrap();
+        let server = Arc::new(Mutex::new(
+            Server::open(config(), &temp.0.join("state"), uid).unwrap(),
+        ));
+        let task = tokio::spawn(serve::serve(listener, server.clone(), uid));
+
+        let mut daemon = Peer::connect(&socket, "daemon").await;
+        let mut agent = Peer::connect(&socket, "agent").await;
+        let mut ui = Peer::connect(&socket, "ui").await;
+
+        let f1 = SharedFrame::new(b'3');
+        let f2 = SharedFrame::new(b'4');
+        let frame1 = f1.value("surface-holdings", 1, 1_000);
+        let mut frame2 = f2.value("surface-holdings", 2, 1_500);
+        frame2["tick"] = 5.into();
+
+        let before_digest = "11".repeat(32);
+        let mut oversize = br#"{"pad":""#.to_vec();
+        oversize.extend(std::iter::repeat_n(b'a', 1_048_576));
+        oversize.extend_from_slice(br#""}"#);
+        assert!(oversize.len() > 1_048_576);
+        let oversize_digest = sha256_hex(&oversize);
+        f2.write_state(&oversize);
+
+        daemon
+            .send(json!({
+                "schema": "surface_event/v0.2",
+                "event": "created",
+                "data": {"surface": holdings_surface("surface-holdings")}
+            }))
+            .await;
+        ui.receive().await;
+        daemon
+            .send(json!({
+                "schema": "surface_event/v0.2",
+                "event": "frame_ready",
+                "data": {"frame_ref": frame1}
+            }))
+            .await;
+        ui.receive().await;
+
+        let prop = state_change_proposal(
+            "prop-oversize-state",
+            "surface-holdings",
+            &frame1,
+            &before_digest,
+            4,
+            10,
+        );
+        agent
+            .send(json!({
+                "schema": "mv_tool_call/v0.2",
+                "request_id": "req-propose-oversize",
+                "op": "propose",
+                "args": {"proposal": prop}
+            }))
+            .await;
+        assert_eq!(agent.receive_json().await["status"], "admitted");
+        daemon.receive().await;
+
+        daemon
+            .send(json!({
+                "schema": "surface_event/v0.2",
+                "event": "frame_ready",
+                "data": {"frame_ref": frame2}
+            }))
+            .await;
+        ui.receive().await;
+
+        daemon
+            .send(holdings_observation(&frame2, &oversize_digest, 5))
+            .await;
+        let refusal = daemon.receive_json().await;
+        assert_eq!(refusal["decision"], "refused");
+        assert_eq!(refusal["reason_code"], "POLICY");
 
         task.abort();
     });

@@ -19,6 +19,9 @@ use crate::wire::payload::{ActionVerdict, MvToolCall};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 
+#[path = "canonical.rs"]
+pub(crate) mod canonical;
+
 // [TARGET, unit decision] Retain the latest 128 receipts by arrival, including replay.
 const RECEIPT_CAP: usize = 128;
 // [TARGET, unit decision] Bound unsettled proposal witness joins in arrival order.
@@ -120,7 +123,12 @@ impl ToolState {
                                 serde_json::to_value(&obs.frame_ref),
                                 serde_json::to_value(gt),
                             ) {
-                                if self.frames.get(sid) == Some(&frame_val) {
+                                let matches_current = self
+                                    .frames
+                                    .get(sid)
+                                    .is_some_and(|cur| frame_matches_committed(cur, &frame_val));
+                                if matches_current {
+                                    self.frames.insert(sid.clone(), frame_val.clone());
                                     let ring = self.ground_truths.entry(sid.clone()).or_default();
                                     ring.retain(|(gen, sha, _)| {
                                         !(*gen == obs.frame_ref.generation
@@ -145,7 +153,29 @@ impl ToolState {
                                         .map(|(pid, _)| pid.clone())
                                         .collect();
                                     for pid in active_ids {
-                                        if let Some(entry) = self.proposal_witnesses.get_mut(&pid) {
+                                        let is_based_on_frame = self
+                                            .verification_contexts
+                                            .get(&pid)
+                                            .is_some_and(|(action, _)| {
+                                                action["based_on_frame"]["generation"].as_u64()
+                                                    == Some(obs.frame_ref.generation)
+                                                    && action["based_on_frame"]["sha256"].as_str()
+                                                        == Some(obs.frame_ref.sha256.as_str())
+                                            });
+                                        if is_based_on_frame {
+                                            if let Some((_, before_frame)) =
+                                                self.verification_contexts.get_mut(&pid)
+                                            {
+                                                *before_frame = frame_val.clone();
+                                            }
+                                            if let Some(entry) =
+                                                self.proposal_witnesses.get_mut(&pid)
+                                            {
+                                                entry.0 = Some(gt_val.clone());
+                                            }
+                                        } else if let Some(entry) =
+                                            self.proposal_witnesses.get_mut(&pid)
+                                        {
                                             entry.1 = Some((frame_val.clone(), gt_val.clone()));
                                         }
                                     }
@@ -311,11 +341,12 @@ impl ToolState {
         &self,
         proposal_id: &str,
         receipt: &crate::wire::payload::ActionReceipt,
+        root: &std::path::Path,
     ) -> Option<String> {
         use crate::wire::payload::{
             ActionProposal, ActionProposalExpectation, FrameRef, ObservationGroundTruth,
         };
-        let (action, _) = self.verification_contexts.get(proposal_id)?;
+        let (action, before_frame) = self.verification_contexts.get(proposal_id)?;
         let p: ActionProposal = serde_json::from_value(action.clone()).ok()?;
         let ActionProposalExpectation::Case2(want) = &p.expectation else {
             return None;
@@ -333,9 +364,10 @@ impl ToolState {
         else {
             return Some("missing holdings_lane ground_truth witness".into());
         };
+        let after_frame_val = serde_json::to_value(&receipt.after_frame).ok()?;
         if witness_frame.surface_id != p.surface_id
             || receipt.after_frame.surface_id != p.surface_id
-            || witness_frame != receipt.after_frame
+            || !frame_matches_committed(witness_frame_val, &after_frame_val)
             || receipt.after_frame.generation <= p.based_on_frame.generation
         {
             return Some("witness bound to foreign frame or surface".into());
@@ -361,16 +393,32 @@ impl ToolState {
         {
             return Some("witness tick outside expectation window".into());
         }
-        Some(
-            "holdings_lane witness joined; canonical state JSON bytes absent from capsule output"
-                .into(),
-        )
+        let artifacts = root.join("artifacts");
+        let has_state_artifacts = before_gt.as_ref().is_some_and(|bgt| {
+            artifacts.join(&bgt.state_sha256).is_file()
+                && artifacts.join(&after_gt.state_sha256).is_file()
+        });
+        if !has_state_artifacts {
+            return Some(
+                "holdings_lane witness joined; canonical state JSON bytes absent from capsule output"
+                    .into(),
+            );
+        }
+        if witness_frame != receipt.after_frame
+            || receipt.after_frame.tick != after_gt.tick
+            || before_gt
+                .as_ref()
+                .is_some_and(|bgt| before_frame["tick"].as_u64() != Some(bgt.tick))
+        {
+            return Some("witness tick does not match frame_ref.tick".into());
+        }
+        None
     }
-    fn case2_wait_detail(&self, proposal_id: &str) -> Option<String> {
+    fn case2_wait_detail(&self, proposal_id: &str, root: &std::path::Path) -> Option<String> {
         let receipt_val = self.receipts.get(proposal_id)?;
         let receipt: crate::wire::payload::ActionReceipt =
             serde_json::from_value(receipt_val.clone()).ok()?;
-        self.case2_witness_detail(proposal_id, &receipt)
+        self.case2_witness_detail(proposal_id, &receipt, root)
     }
     pub(super) fn recompute_daemon_receipt(
         &self,
@@ -394,8 +442,9 @@ impl ToolState {
                 ActionProposalExpectation::Case2(_) => ActionReceiptVerificationMethod::StateSha256,
             })
             .unwrap_or_else(|| receipt.verification.method.clone());
-        let case2_detail = self.case2_witness_detail(&receipt.proposal_id, receipt);
-        if !receipt.verified {
+        let is_case2 = method == ActionReceiptVerificationMethod::StateSha256;
+        let case2_detail = self.case2_witness_detail(&receipt.proposal_id, receipt, root);
+        if !receipt.verified && !is_case2 {
             if recomputed.verification.method != method || case2_detail.is_some() {
                 recomputed.verification = ActionReceiptVerification {
                     method,
@@ -539,6 +588,20 @@ impl ToolState {
         self.waiters.retain(|w| &w.peer != peer);
     }
 }
+fn frame_matches_committed(committed: &Value, candidate: &Value) -> bool {
+    if committed == candidate {
+        return true;
+    }
+    let mut a = committed.clone();
+    let mut b = candidate.clone();
+    if let (Some(ao), Some(bo)) = (a.as_object_mut(), b.as_object_mut()) {
+        ao.remove("tick");
+        bo.remove("tick");
+        return ao == bo;
+    }
+    false
+}
+
 impl Server {
     pub(super) fn accept_daemon_observation(
         &self,
@@ -577,7 +640,12 @@ impl Server {
         let Ok(frame_val) = serde_json::to_value(&obs.frame_ref) else {
             return false;
         };
-        if self.tool_state.frames.get(sid) != Some(&frame_val) {
+        if !self
+            .tool_state
+            .frames
+            .get(sid)
+            .is_some_and(|cur| frame_matches_committed(cur, &frame_val))
+        {
             return false;
         }
         if self.human_inputs.values().any(|h| h.surface_id == *sid) {
@@ -591,6 +659,110 @@ impl Server {
                     && action["surface_id"].as_str() == Some(sid.as_str())
                     && is_dispatched_current_epoch_agent_pending(state, pid, Some(sid.as_str()))
             })
+    }
+    pub(super) fn accept_and_retain_daemon_observation(
+        &mut self,
+        obs: &crate::wire::payload::Observation,
+        boundary: Witness,
+    ) -> Result<Option<Vec<Witness>>> {
+        if !self.accept_daemon_observation(obs) {
+            return Ok(None);
+        }
+        let crate::wire::Optional::Present(gt) = &obs.ground_truth else {
+            return Ok(None);
+        };
+        let state_bytes =
+            match self.read_holdings_state_sidecar(&obs.frame_ref.ramws_path, &gt.state_sha256) {
+                Ok(bytes) => bytes,
+                Err(()) => return Ok(None),
+            };
+        let mut witnesses = vec![boundary];
+        if let Some(canonical_bytes) = state_bytes {
+            let w_state = self.authority.retain_witness(&canonical_bytes)?;
+            witnesses.push(w_state);
+        }
+        Ok(Some(witnesses))
+    }
+    fn read_holdings_state_sidecar(
+        &self,
+        ramws_path: &str,
+        expected_sha256: &str,
+    ) -> std::result::Result<Option<Vec<u8>>, ()> {
+        let frame_path = Path::new(ramws_path);
+        let Some(parent) = frame_path.parent() else {
+            return Err(());
+        };
+        let Some(name) = frame_path.file_name().and_then(|n| n.to_str()) else {
+            return Err(());
+        };
+        let mut candidates = vec![parent.join(format!(".state-{name}"))];
+        if let Some(grandparent) = parent.parent() {
+            if grandparent.starts_with("/dev/shm") {
+                candidates.push(grandparent.join(format!(".state-{name}")));
+            }
+        }
+        let uid = effective_uid().map_err(|_| ())?;
+        let mut found: Option<Vec<u8>> = None;
+        for cand in &candidates {
+            let Ok((_dir, anchored)) = Self::open_anchored_shm_dir(Path::new("/dev/shm"), cand)
+            else {
+                return Err(());
+            };
+            let before = match fs::symlink_metadata(&anchored) {
+                Ok(m) => m,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(_) => return Err(()),
+            };
+            if !before.is_file()
+                || before.file_type().is_symlink()
+                || before.uid() != uid
+                || (before.mode() & 0o077) != 0
+                || before.len() == 0
+                || before.len() > canonical::MAX_STATE_BYTES as u64
+            {
+                return Err(());
+            }
+            let file = fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(frame_open_flags().map_err(|_| ())?)
+                .open(&anchored)
+                .map_err(|_| ())?;
+            let meta = file.metadata().map_err(|_| ())?;
+            if !meta.is_file()
+                || before.dev() != meta.dev()
+                || before.ino() != meta.ino()
+                || meta.uid() != uid
+                || (meta.mode() & 0o077) != 0
+                || meta.len() != before.len()
+            {
+                return Err(());
+            }
+            let mut raw = Vec::with_capacity(meta.len() as usize);
+            (&file)
+                .take(canonical::MAX_STATE_BYTES as u64 + 1)
+                .read_to_end(&mut raw)
+                .map_err(|_| ())?;
+            if raw.len() as u64 != meta.len() || raw.len() > canonical::MAX_STATE_BYTES {
+                return Err(());
+            }
+            let after = file.metadata().map_err(|_| ())?;
+            if !after.is_file()
+                || after.dev() != meta.dev()
+                || after.ino() != meta.ino()
+                || after.uid() != uid
+                || (after.mode() & 0o077) != 0
+                || after.len() != meta.len()
+            {
+                return Err(());
+            }
+            let canonical_bytes =
+                canonical::canonicalise_and_verify_state(&raw, expected_sha256).map_err(|_| ())?;
+            if found.is_some() {
+                return Err(());
+            }
+            found = Some(canonical_bytes);
+        }
+        Ok(found)
     }
     fn tool_result(&mut self, peer: &Endpoint, id: &str, op: &str, fields: Value) -> Result<()> {
         let mut value = json!({"schema":"mv_tool_result/v0.2","request_id":id,"op":op});
@@ -793,7 +965,7 @@ impl Server {
                     .unwrap_or_else(|| {
                         let detail = self
                             .tool_state
-                            .case2_wait_detail(&proposal)
+                            .case2_wait_detail(&proposal, &self.root)
                             .unwrap_or_else(|| {
                                 if self.tool_state.receipts[&proposal]
                                     .get("native_evidence")
@@ -950,6 +1122,24 @@ fn verified_native_fields_with_witness(
         {
             return None;
         }
+        let read_state = |hash: &str| -> Option<Vec<u8>> {
+            if hash.len() != 64 || !hash.bytes().all(|c| c.is_ascii_hexdigit()) {
+                return None;
+            }
+            let file = std::fs::File::open(artifacts.join(hash)).ok()?;
+            let len = file.metadata().ok()?.len();
+            if len == 0 || len > canonical::MAX_STATE_BYTES as u64 {
+                return None;
+            }
+            let mut bytes = Vec::with_capacity(len as usize);
+            file.take(canonical::MAX_STATE_BYTES as u64 + 1)
+                .read_to_end(&mut bytes)
+                .ok()?;
+            if bytes.len() > canonical::MAX_STATE_BYTES {
+                return None;
+            }
+            Some(bytes)
+        };
         let mut b_obj = json!({"schema":"observation/v0.2", "frame_ref":before.clone()});
         if let Some(bgt) = before_gt {
             b_obj["ground_truth"] = bgt.clone();
@@ -958,6 +1148,14 @@ fn verified_native_fields_with_witness(
         a_obj["ground_truth"] = after_gt.clone();
         let b: Observation = serde_json::from_value(b_obj).ok()?;
         let a: Observation = serde_json::from_value(a_obj).ok()?;
+        let before_state = match &b.ground_truth {
+            Optional::Present(bgt) => read_state(&bgt.state_sha256),
+            Optional::Missing => None,
+        };
+        let after_state = match &a.ground_truth {
+            Optional::Present(agt) => read_state(&agt.state_sha256),
+            Optional::Missing => None,
+        };
         let before_rgb = read(&b.frame_ref.sha256);
         let after_rgb = read(&a.frame_ref.sha256);
         let verified = verify_receipt(
@@ -970,14 +1168,37 @@ fn verified_native_fields_with_witness(
                 after_rgb: after_rgb.as_deref(),
                 semantic_frame_sha256: Some(&a.frame_ref.sha256),
                 previous_state_sha256: Some(&want.before),
-                before_state: None,
-                after_state: None,
+                before_state: before_state.as_deref(),
+                after_state: after_state.as_deref(),
                 ..Evidence::default()
             },
         );
         if !verified.verified {
             return None;
         }
+        let input_mono_ns = match &r.native_evidence {
+            Optional::Present(native) => {
+                if native.surface_id != p.surface_id
+                    || native.input_mono_ns < native.input_ts_ns
+                    || native.input_ts_ns > r.executed_at_ns
+                    || matches!(
+                        &native.result,
+                        Optional::Present(res)
+                            if serde_json::to_value(res).ok().as_ref() != Some(&json!("ok"))
+                    )
+                {
+                    return None;
+                }
+                native.input_mono_ns
+            }
+            Optional::Missing => r.executed_at_ns,
+        };
+        let mut result = serde_json::to_value(&verified).ok()?;
+        result.as_object_mut()?.remove("native_evidence");
+        return Some(
+            json!({"status":"verified", "receipt":result, "focus_verified":true,
+            "input_mono_ns":input_mono_ns, "frame_sha256":r.after_frame.sha256}),
+        );
     }
     let Optional::Present(native) = &r.native_evidence else {
         return None;

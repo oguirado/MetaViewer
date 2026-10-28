@@ -109,14 +109,15 @@ type NativeFrame struct {
 // InputEvidence keeps the native clock and window identity alongside the public
 // surface binding and the hello-relative timestamp. No evidence is cached/reused.
 type InputEvidence struct {
-	SurfaceID       string       `json:"surface_id"`
-	NativeSurfaceID string       `json:"native_surface_id,omitempty"`
-	Kind            string       `json:"kind,omitempty"`
-	InputMonoNS     uint64       `json:"input_mono_ns"`
-	InputTSNS       uint64       `json:"input_ts_ns"`
-	FocusVerified   *bool        `json:"focus_verified,omitempty"`
-	Result          string       `json:"result,omitempty"`
-	GroundTruth     *GroundTruth `json:"ground_truth,omitempty"`
+	SurfaceID         string       `json:"surface_id"`
+	NativeSurfaceID   string       `json:"native_surface_id,omitempty"`
+	Kind              string       `json:"kind,omitempty"`
+	InputMonoNS       uint64       `json:"input_mono_ns"`
+	InputTSNS         uint64       `json:"input_ts_ns"`
+	FocusVerified     *bool        `json:"focus_verified,omitempty"`
+	Result            string       `json:"result,omitempty"`
+	BeforeGroundTruth *GroundTruth `json:"before_ground_truth,omitempty"`
+	GroundTruth       *GroundTruth `json:"ground_truth,omitempty"`
 }
 type Manager struct {
 	mu          sync.Mutex
@@ -836,11 +837,6 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 	pending := &pendingInput{surface: q.SurfaceID, epoch: m.nextInputEpoch(q.SurfaceID), cancel: cancel}
 	m.pending[q.ProposalID] = pending
 	m.used[q.ProposalID] = true
-	before := m.clock()
-	m.mu.Unlock()
-	out, e := m.execute(run, m.cfg.Profiles[b.Surface.ProfileID], args, stdin)
-	after := m.clock()
-	m.mu.Lock()
 	defer func() {
 		cancel()
 		pending.done = true
@@ -848,6 +844,37 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 			delete(m.pending, q.ProposalID)
 		}
 	}()
+	var beforeGroundTruth *GroundTruth
+	if b.NativeKind == "holdings" && origin == "agent" && evidence != nil {
+		profile := m.cfg.Profiles[b.Surface.ProfileID]
+		container := b.Container
+		m.mu.Unlock()
+		preObsOut, preObsErr := m.execute(run, profile, []string{"observe", "--container", container}, nil)
+		m.mu.Lock()
+		if pending.cancelled {
+			return nil, fault("SURFACE_NOT_AGENT_CONTROLLED", "input cancelled by control takeover")
+		}
+		b, ok = m.bindings[q.SurfaceID]
+		if !ok || b.Surface.State != "active" || m.destroying[q.SurfaceID] {
+			return nil, fault("surface", "surface lost during input")
+		}
+		if b.Surface.Control != origin {
+			return nil, fault("SURFACE_NOT_AGENT_CONTROLLED", "human control blocks agent input")
+		}
+		if e := run.Err(); e != nil {
+			return nil, e
+		}
+		if preObsErr == nil {
+			if gt, parseErr := ParseHoldingsObserve(preObsOut, m.cfg.MaxOutputBytes); parseErr == nil {
+				beforeGroundTruth = gt
+			}
+		}
+	}
+	before := m.clock()
+	m.mu.Unlock()
+	out, e := m.execute(run, m.cfg.Profiles[b.Surface.ProfileID], args, stdin)
+	after := m.clock()
+	m.mu.Lock()
 	if pending.cancelled {
 		return nil, fault("SURFACE_NOT_AGENT_CONTROLLED", "input cancelled by control takeover")
 	}
@@ -927,10 +954,15 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 			if e := run.Err(); e != nil {
 				return nil, e
 			}
-			if obsErr == nil {
+			if obsErr == nil && beforeGroundTruth != nil {
 				if gt, parseErr := ParseHoldingsObserve(obsOut, m.cfg.MaxOutputBytes); parseErr == nil {
-					groundTruth = gt
+					if (beforeGroundTruth.State == "") == (gt.State == "") {
+						groundTruth = gt
+					}
 				}
+			}
+			if groundTruth == nil {
+				beforeGroundTruth = nil
 			}
 		}
 	}
@@ -943,7 +975,8 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 			Kind: receipt.Kind, InputMonoNS: *receipt.InputMonoNS,
 			InputTSNS:     *receipt.InputMonoNS - m.cfg.OriginNS,
 			FocusVerified: receipt.FocusVerified, Result: receipt.Result,
-			GroundTruth: groundTruth,
+			BeforeGroundTruth: beforeGroundTruth,
+			GroundTruth:       groundTruth,
 		}
 	}
 	return []json.RawMessage{event(version, "input_applied", struct {

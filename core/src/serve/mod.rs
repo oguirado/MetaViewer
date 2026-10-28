@@ -1470,11 +1470,13 @@ impl Server {
                 if epoch != self.authority.state().epoch {
                     return Err(invalid("old executor"));
                 }
-                if !self.accept_daemon_observation(obs) {
+                let Some(witnesses) =
+                    self.accept_and_retain_daemon_observation(obs, boundary.clone())?
+                else {
                     return self.unsupported_at(now_ns, &env, boundary);
-                }
+                };
                 self.authority
-                    .apply_with_witnesses(Input::SurfaceNotice, vec![boundary])?;
+                    .apply_with_witnesses(Input::SurfaceNotice, witnesses)?;
                 self.tool_state.retain(&env.body);
             }
             (Component::Agent, Command::ActionProposal(proposal)) => {

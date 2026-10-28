@@ -13,11 +13,13 @@ import (
 )
 
 type witnessRunner struct {
-	calls      [][]string
-	inputOut   []byte
-	inputErr   error
-	observeOut []byte
-	observeErr error
+	calls           [][]string
+	inputOut        []byte
+	inputErr        error
+	observeOut      []byte
+	observeErr      error
+	observeQueue    [][]byte
+	observeErrQueue []error
 }
 
 func (r *witnessRunner) Run(_ context.Context, args []string, _ []byte) ([]byte, error) {
@@ -30,7 +32,21 @@ func (r *witnessRunner) Run(_ context.Context, args []string, _ []byte) ([]byte,
 	case "srf-holdings-capsule:input":
 		return r.inputOut, r.inputErr
 	case "srf-holdings-capsule:observe":
-		return r.observeOut, r.observeErr
+		var out []byte
+		var err error
+		if len(r.observeQueue) > 0 {
+			out = r.observeQueue[0]
+			r.observeQueue = r.observeQueue[1:]
+		} else {
+			out = r.observeOut
+		}
+		if len(r.observeErrQueue) > 0 {
+			err = r.observeErrQueue[0]
+			r.observeErrQueue = r.observeErrQueue[1:]
+		} else {
+			err = r.observeErr
+		}
+		return out, err
 	default:
 		return nil, fault("unexpected", "unexpected command: "+strings.Join(args, " "))
 	}
@@ -88,22 +104,27 @@ func TestHoldingsAgentOriginWitnessFetch(t *testing.T) {
 			if len(events) != 1 || verified != 1 {
 				t.Fatalf("expected 1 event and 1 verification call, got events=%d verified=%d", len(events), verified)
 			}
-			if len(r.calls) != 2 {
-				t.Fatalf("expected input + observe calls, got %d (%v)", len(r.calls), r.calls)
+			if len(r.calls) != 3 {
+				t.Fatalf("expected [observe, input, observe] calls, got %d (%v)", len(r.calls), r.calls)
 			}
-			if filepath.Base(r.calls[1][0]) != "srf-holdings-capsule" || len(r.calls[1]) != 4 || r.calls[1][1] != "observe" || r.calls[1][2] != "--container" || r.calls[1][3] != "srf-ng-hcap-hc-0123456789ab-1" {
-				t.Fatalf("unexpected observe argv: %v", r.calls[1])
+			for _, idx := range []int{0, 2} {
+				if filepath.Base(r.calls[idx][0]) != "srf-holdings-capsule" || len(r.calls[idx]) != 4 || r.calls[idx][1] != "observe" || r.calls[idx][2] != "--container" || r.calls[idx][3] != "srf-ng-hcap-hc-0123456789ab-1" {
+					t.Fatalf("unexpected observe argv at %d: %v", idx, r.calls[idx])
+				}
 			}
-			if evidence.GroundTruth == nil {
-				t.Fatal("expected GroundTruth on InputEvidence, got nil")
+			if r.calls[1][1] != "input" {
+				t.Fatalf("expected input call at index 1, got %v", r.calls[1])
+			}
+			if evidence.BeforeGroundTruth == nil || evidence.GroundTruth == nil {
+				t.Fatalf("expected BeforeGroundTruth and GroundTruth on InputEvidence, got before=%+v after=%+v", evidence.BeforeGroundTruth, evidence.GroundTruth)
 			}
 			want := GroundTruth{
 				Source:      "holdings_lane",
 				StateSHA256: stateDigest,
 				Tick:        tc.wantTick,
 			}
-			if *evidence.GroundTruth != want {
-				t.Fatalf("ground truth mismatch: got %+v, want %+v", *evidence.GroundTruth, want)
+			if *evidence.BeforeGroundTruth != want || *evidence.GroundTruth != want {
+				t.Fatalf("ground truth mismatch: before=%+v after=%+v want=%+v", *evidence.BeforeGroundTruth, *evidence.GroundTruth, want)
 			}
 		})
 	}
@@ -289,11 +310,11 @@ func TestHoldingsWitnessOmittedOnFailedOrMalformedObserve(t *testing.T) {
 			if err != nil || len(events) != 1 {
 				t.Fatalf("input failed on observe negative control %s: err=%v events=%d", tc.name, err, len(events))
 			}
-			if len(r.calls) != 2 || r.calls[1][1] != "observe" {
-				t.Fatalf("expected input + observe call on %s, got %v", tc.name, r.calls)
+			if len(r.calls) != 3 || r.calls[0][1] != "observe" || r.calls[1][1] != "input" || r.calls[2][1] != "observe" {
+				t.Fatalf("expected [observe, input, observe] calls on %s, got %v", tc.name, r.calls)
 			}
-			if evidence.GroundTruth != nil {
-				t.Fatalf("negative control %s attached GroundTruth: %+v", tc.name, evidence.GroundTruth)
+			if evidence.BeforeGroundTruth != nil || evidence.GroundTruth != nil {
+				t.Fatalf("negative control %s attached GroundTruth: before=%+v after=%+v", tc.name, evidence.BeforeGroundTruth, evidence.GroundTruth)
 			}
 		})
 	}
@@ -440,5 +461,116 @@ func TestHoldingsObserveNullOptionalFieldsConsistentRejection(t *testing.T) {
 				t.Fatalf("expected %s to be rejected as malformed, got gt=%+v err=%v", tc.name, gt, err)
 			}
 		})
+	}
+}
+
+func TestHoldingsObserveStateBeforeAfterAndSizeCap(t *testing.T) {
+	beforeDigest := "752988613fda42d018626fa551a2024dbf74fb41ce6542b7397a437072057da5"
+	afterDigest := "be76c7f6428412ebd2e657d1f9f4add0818cc8d8e43694d8fc83a36d858dcce8"
+	beforeState := `{"schema":"wender.state/v1","counts":{"raw":1,"nodes":1,"actionable":1}}`
+	afterState := `{"schema":"wender.state/v1","counts":{"raw":2,"nodes":2,"actionable":1}}`
+
+	r := &witnessRunner{
+		inputOut: []byte(`{"input_mono_ns":200}`),
+		observeQueue: [][]byte{
+			[]byte(`{"state_sha256":"` + beforeDigest + `","tick":10,"state":` + beforeState + `}`),
+			[]byte(`{"state_sha256":"` + afterDigest + `","tick":12,"observation":{"state":` + afterState + `}}`),
+		},
+	}
+	m := testManager(t, &scriptRunner{})
+	m.runner = r
+	id := holdingsBinding(m)
+	m.cfg.VerifyHoldingsInput = func(context.Context, Binding, string, json.RawMessage, uint64) error {
+		return nil
+	}
+
+	events, evidence, err := m.HandleInputWithEvidence(
+		context.Background(),
+		req("input", `{"surface_id":"`+id+`","proposal_id":"prop-state-ba","origin":"agent","action":{"type":"key","keys":["Return"]}}`),
+	)
+	if err != nil || len(events) != 1 {
+		t.Fatalf("HandleInputWithEvidence failed: err=%v events=%d", err, len(events))
+	}
+	if len(r.calls) != 3 || r.calls[0][1] != "observe" || r.calls[1][1] != "input" || r.calls[2][1] != "observe" {
+		t.Fatalf("expected [observe, input, observe], got %v", r.calls)
+	}
+	if evidence.BeforeGroundTruth == nil || evidence.GroundTruth == nil {
+		t.Fatalf("expected before and after GroundTruth, got before=%+v after=%+v", evidence.BeforeGroundTruth, evidence.GroundTruth)
+	}
+	if evidence.BeforeGroundTruth.Tick != 10 || evidence.BeforeGroundTruth.StateSHA256 != beforeDigest || evidence.BeforeGroundTruth.State != beforeState {
+		t.Fatalf("unexpected BeforeGroundTruth: %+v", evidence.BeforeGroundTruth)
+	}
+	if evidence.GroundTruth.Tick != 12 || evidence.GroundTruth.StateSHA256 != afterDigest || evidence.GroundTruth.State != afterState {
+		t.Fatalf("unexpected GroundTruth: %+v", evidence.GroundTruth)
+	}
+
+	// Partial observe failure (before succeeds, after fails; or before fails, after succeeds) must attach nothing.
+	for _, tc := range []struct {
+		name  string
+		queue [][]byte
+	}{
+		{
+			name: "before_fails_after_ok",
+			queue: [][]byte{
+				[]byte(`{"state_sha256":"bad","tick":10}`),
+				[]byte(`{"state_sha256":"` + afterDigest + `","tick":12,"state":` + afterState + `}`),
+			},
+		},
+		{
+			name: "before_ok_after_fails",
+			queue: [][]byte{
+				[]byte(`{"state_sha256":"` + beforeDigest + `","tick":10,"state":` + beforeState + `}`),
+				[]byte(`{"state_sha256":"bad","tick":12}`),
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r.calls = nil
+			r.observeQueue = tc.queue
+			_, ev, err := m.HandleInputWithEvidence(
+				context.Background(),
+				req("input", `{"surface_id":"`+id+`","proposal_id":"prop-`+tc.name+`","origin":"agent","action":{"type":"key","keys":["Return"]}}`),
+			)
+			if err != nil {
+				t.Fatalf("unexpected input error on %s: %v", tc.name, err)
+			}
+			if ev.BeforeGroundTruth != nil || ev.GroundTruth != nil {
+				t.Fatalf("expected nothing attached on %s, got before=%+v after=%+v", tc.name, ev.BeforeGroundTruth, ev.GroundTruth)
+			}
+		})
+	}
+
+	// Hard 1 MiB (1,048,576 B) cap on observation.state in ParseHoldingsObserve.
+	const wantCap = 1_048_576
+	if MaxHoldingsStateBytes != wantCap {
+		t.Fatalf("expected MaxHoldingsStateBytes == %d, got %d", wantCap, MaxHoldingsStateBytes)
+	}
+	exactState := `{"pad":"` + strings.Repeat("a", wantCap-10) + `"}`
+	if len(exactState) != wantCap {
+		t.Fatalf("expected exact 1 MiB state fixture, got %d", len(exactState))
+	}
+	exactRaw := []byte(`{"state_sha256":"` + beforeDigest + `","tick":1,"state":` + exactState + `}`)
+	gt, err := ParseHoldingsObserve(exactRaw, 0)
+	if err != nil || gt == nil || len(gt.State) != wantCap {
+		t.Fatalf("expected exact 1 MiB state to be accepted, got gt=%v err=%v", gt != nil, err)
+	}
+
+	oversizeState := `{"pad":"` + strings.Repeat("a", wantCap-9) + `"}`
+	oversizeRaw := []byte(`{"state_sha256":"` + beforeDigest + `","tick":1,"state":` + oversizeState + `}`)
+	if gt, err := ParseHoldingsObserve(oversizeRaw, 0); err == nil || gt != nil {
+		t.Fatalf("expected >1 MiB state (%d B) to be rejected, got gt=%+v err=%v", len(oversizeState), gt, err)
+	}
+
+	for _, badState := range []string{
+		`null`,
+		`[1,2,3]`,
+		`{"flt":1.5}`,
+		`{"exp":1e3}`,
+		`{"big":9007199254740992}`,
+	} {
+		raw := []byte(`{"state_sha256":"` + beforeDigest + `","tick":1,"state":` + badState + `}`)
+		if gt, err := ParseHoldingsObserve(raw, 8192); err == nil || gt != nil {
+			t.Fatalf("expected malformed state %s to be rejected, got gt=%+v err=%v", badState, gt, err)
+		}
 	}
 }

@@ -8,21 +8,31 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"metaviewer/daemon-adapter/internal/cli"
 	"strconv"
+	"unicode/utf8"
 )
 
 const MaxHoldingsTick uint64 = 9007199254740991
+const MaxHoldingsStateBytes int = 1 << 20
+const maxHoldingsStateDepth int = 64
 
 type GroundTruth struct {
 	Source      string `json:"source"`
 	StateSHA256 string `json:"state_sha256"`
 	Tick        uint64 `json:"tick"`
+	State       string `json:"-"`
 }
 
 func ValidateGroundTruth(gt *GroundTruth) error {
 	if gt == nil || gt.Source != "holdings_lane" || !digest.MatchString(gt.StateSHA256) || gt.Tick > MaxHoldingsTick {
 		return errors.New("invalid holdings ground truth")
+	}
+	if gt.State != "" {
+		if len(gt.State) > MaxHoldingsStateBytes || validateHoldingsStateJSON([]byte(gt.State)) != nil {
+			return errors.New("invalid holdings ground truth state")
+		}
 	}
 	return nil
 }
@@ -44,16 +54,271 @@ func parseHoldingsUint53(raw json.RawMessage) (uint64, error) {
 	return v, nil
 }
 
+func validateHoldingsStateJSON(raw []byte) error {
+	if len(raw) == 0 || len(raw) > MaxHoldingsStateBytes || !utf8.Valid(raw) {
+		return errors.New("holdings state size or utf8 invalid")
+	}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return errors.New("holdings state must be a JSON object")
+	}
+	p := stateJSONValidator{src: trimmed}
+	if err := p.parseValue(0); err != nil {
+		return err
+	}
+	p.skipWS()
+	if p.pos != len(p.src) {
+		return errors.New("trailing bytes in holdings state")
+	}
+	return nil
+}
+
+type stateJSONValidator struct {
+	src []byte
+	pos int
+}
+
+func (p *stateJSONValidator) skipWS() {
+	for p.pos < len(p.src) {
+		switch p.src[p.pos] {
+		case ' ', '\t', '\n', '\r':
+			p.pos++
+		default:
+			return
+		}
+	}
+}
+
+func (p *stateJSONValidator) parseValue(depth int) error {
+	if depth > maxHoldingsStateDepth {
+		return errors.New("holdings state exceeds max depth")
+	}
+	p.skipWS()
+	if p.pos >= len(p.src) {
+		return errors.New("unexpected end of holdings state")
+	}
+	switch p.src[p.pos] {
+	case '{':
+		return p.parseObject(depth)
+	case '[':
+		return p.parseArray(depth)
+	case '"':
+		return p.parseString()
+	case 't':
+		return p.parseLiteral("true")
+	case 'f':
+		return p.parseLiteral("false")
+	case 'n':
+		return p.parseLiteral("null")
+	case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+		return p.parseInteger()
+	default:
+		return errors.New("unexpected token in holdings state")
+	}
+}
+
+func (p *stateJSONValidator) parseLiteral(lit string) error {
+	if p.pos+len(lit) > len(p.src) || string(p.src[p.pos:p.pos+len(lit)]) != lit {
+		return errors.New("invalid literal in holdings state")
+	}
+	p.pos += len(lit)
+	return nil
+}
+
+func (p *stateJSONValidator) parseObject(depth int) error {
+	p.pos++ // '{'
+	p.skipWS()
+	if p.pos < len(p.src) && p.src[p.pos] == '}' {
+		p.pos++
+		return nil
+	}
+	seen := make(map[string]struct{})
+	for {
+		p.skipWS()
+		if p.pos >= len(p.src) || p.src[p.pos] != '"' {
+			return errors.New("expected object key in holdings state")
+		}
+		start := p.pos
+		if err := p.parseString(); err != nil {
+			return err
+		}
+		var key string
+		if err := json.Unmarshal(p.src[start:p.pos], &key); err != nil {
+			return err
+		}
+		if _, dup := seen[key]; dup {
+			return errors.New("duplicate key in holdings state")
+		}
+		seen[key] = struct{}{}
+		p.skipWS()
+		if p.pos >= len(p.src) || p.src[p.pos] != ':' {
+			return errors.New("expected ':' in holdings state")
+		}
+		p.pos++
+		if err := p.parseValue(depth + 1); err != nil {
+			return err
+		}
+		p.skipWS()
+		if p.pos >= len(p.src) {
+			return errors.New("unterminated object in holdings state")
+		}
+		if p.src[p.pos] == ',' {
+			p.pos++
+			continue
+		}
+		if p.src[p.pos] == '}' {
+			p.pos++
+			return nil
+		}
+		return errors.New("expected ',' or '}' in holdings state")
+	}
+}
+
+func (p *stateJSONValidator) parseArray(depth int) error {
+	p.pos++ // '['
+	p.skipWS()
+	if p.pos < len(p.src) && p.src[p.pos] == ']' {
+		p.pos++
+		return nil
+	}
+	for {
+		if err := p.parseValue(depth + 1); err != nil {
+			return err
+		}
+		p.skipWS()
+		if p.pos >= len(p.src) {
+			return errors.New("unterminated array in holdings state")
+		}
+		if p.src[p.pos] == ',' {
+			p.pos++
+			continue
+		}
+		if p.src[p.pos] == ']' {
+			p.pos++
+			return nil
+		}
+		return errors.New("expected ',' or ']' in holdings state")
+	}
+}
+
+func (p *stateJSONValidator) parseString() error {
+	start := p.pos
+	p.pos++ // '"'
+	for p.pos < len(p.src) {
+		b := p.src[p.pos]
+		if b == '"' {
+			p.pos++
+			var s string
+			return json.Unmarshal(p.src[start:p.pos], &s)
+		}
+		if b == '\\' {
+			p.pos += 2
+			continue
+		}
+		if b < 0x20 {
+			return errors.New("unescaped control char in holdings state")
+		}
+		p.pos++
+	}
+	return errors.New("unterminated string in holdings state")
+}
+
+func (p *stateJSONValidator) parseInteger() error {
+	if p.src[p.pos] == '-' {
+		p.pos++
+	}
+	digitsStart := p.pos
+	if p.pos >= len(p.src) {
+		return errors.New("missing digits in holdings state integer")
+	}
+	if p.src[p.pos] == '0' {
+		p.pos++
+		if p.pos < len(p.src) && p.src[p.pos] >= '0' && p.src[p.pos] <= '9' {
+			return errors.New("leading zero in holdings state integer")
+		}
+	} else if p.src[p.pos] >= '1' && p.src[p.pos] <= '9' {
+		for p.pos < len(p.src) && p.src[p.pos] >= '0' && p.src[p.pos] <= '9' {
+			p.pos++
+		}
+	} else {
+		return errors.New("invalid integer in holdings state")
+	}
+	if p.pos < len(p.src) && (p.src[p.pos] == '.' || p.src[p.pos] == 'e' || p.src[p.pos] == 'E') {
+		return errors.New("float or exponent forbidden in holdings state")
+	}
+	digits := string(p.src[digitsStart:p.pos])
+	v, err := strconv.ParseUint(digits, 10, 64)
+	if err != nil || v > MaxHoldingsTick {
+		return errors.New("integer out of safe range in holdings state")
+	}
+	return nil
+}
+
+func extractHoldingsObserveState(stateField, obsField json.RawMessage) (string, error) {
+	if len(stateField) > 0 && len(obsField) > 0 {
+		return "", errors.New("ambiguous holdings observe state")
+	}
+	raw := stateField
+	if len(obsField) > 0 {
+		trimmedObs := bytes.TrimSpace(obsField)
+		if len(trimmedObs) == 0 || trimmedObs[0] != '{' {
+			return "", errors.New("invalid holdings observation wrapper")
+		}
+		var nested struct {
+			State json.RawMessage `json:"state"`
+		}
+		dec := json.NewDecoder(bytes.NewReader(trimmedObs))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&nested); err != nil || dec.More() || len(nested.State) == 0 {
+			return "", errors.New("invalid holdings observation.state")
+		}
+		raw = nested.State
+	}
+	if len(raw) == 0 {
+		return "", nil
+	}
+	trimmed := bytes.TrimSpace(raw)
+	if len(raw) > MaxHoldingsStateBytes || len(trimmed) == 0 || len(trimmed) > MaxHoldingsStateBytes {
+		return "", errors.New("holdings observe state exceeds 1 MiB cap")
+	}
+	if err := validateHoldingsStateJSON(trimmed); err != nil {
+		return "", err
+	}
+	return string(trimmed), nil
+}
+
 func ParseHoldingsObserve(raw []byte, maxBytes int) (*GroundTruth, error) {
+	fail := func(detail string) (*GroundTruth, error) {
+		return nil, fault("malformed_cli", detail)
+	}
+	if maxBytes <= 0 {
+		maxBytes = MaxHoldingsStateBytes + (64 << 10)
+	}
+	if len(raw) == 0 || len(raw) > maxBytes || !utf8.Valid(raw) {
+		return fail("CLI output is not a bounded closed JSON object")
+	}
+	line := bytes.TrimSuffix(raw, []byte{'\n'})
+	trimmedLine := bytes.TrimSpace(line)
+	if len(trimmedLine) == 0 || bytes.ContainsAny(line, "\r\n") || trimmedLine[0] != '{' {
+		return fail("CLI output is not a bounded closed JSON object")
+	}
 	var obs struct {
 		StateSHA256      string          `json:"state_sha256"`
 		Tick             json.RawMessage `json:"tick"`
 		Revision         json.RawMessage `json:"revision,omitempty"`
 		FrameStateSHA256 json.RawMessage `json:"frame_state_sha256,omitempty"`
 		Elements         json.RawMessage `json:"elements,omitempty"`
+		State            json.RawMessage `json:"state,omitempty"`
+		Observation      json.RawMessage `json:"observation,omitempty"`
 	}
-	if err := cli.ParseLine(raw, maxBytes, &obs); err != nil {
-		return nil, err
+	dec := json.NewDecoder(bytes.NewReader(trimmedLine))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&obs); err != nil || dec.More() {
+		return fail("CLI output is not a bounded closed JSON object")
+	}
+	var tail any
+	if err := dec.Decode(&tail); !errors.Is(err, io.EOF) {
+		return fail("CLI output is not a bounded closed JSON object")
 	}
 	if !digest.MatchString(obs.StateSHA256) {
 		return nil, fault("malformed_cli", "invalid holdings state_sha256")
@@ -84,10 +349,15 @@ func ParseHoldingsObserve(raw []byte, maxBytes int) (*GroundTruth, error) {
 			return nil, fault("malformed_cli", "invalid holdings elements")
 		}
 	}
+	stateJSON, err := extractHoldingsObserveState(obs.State, obs.Observation)
+	if err != nil {
+		return nil, fault("malformed_cli", err.Error())
+	}
 	gt := &GroundTruth{
 		Source:      "holdings_lane",
 		StateSHA256: obs.StateSHA256,
 		Tick:        tick,
+		State:       stateJSON,
 	}
 	if err := ValidateGroundTruth(gt); err != nil {
 		return nil, fault("malformed_cli", err.Error())

@@ -24,12 +24,13 @@ import (
 )
 
 type holdingsWireWitnessRunner struct {
-	root       string
-	seq        uint64
-	calls      [][]string
-	inputRaw   []byte
-	observeRaw []byte
-	observeErr error
+	root         string
+	seq          uint64
+	calls        [][]string
+	inputRaw     []byte
+	observeRaw   []byte
+	observeErr   error
+	observeQueue [][]byte
 }
 
 func (r *holdingsWireWitnessRunner) Run(_ context.Context, args []string, _ []byte) ([]byte, error) {
@@ -71,6 +72,11 @@ func (r *holdingsWireWitnessRunner) Run(_ context.Context, args []string, _ []by
 		}
 		return []byte(`{"input_mono_ns":200}`), nil
 	case "srf-holdings-capsule:observe":
+		if len(r.observeQueue) > 0 {
+			out := r.observeQueue[0]
+			r.observeQueue = r.observeQueue[1:]
+			return out, r.observeErr
+		}
 		return r.observeRaw, r.observeErr
 	default:
 		return nil, errors.New("unexpected native command: " + strings.Join(args, " "))
@@ -249,11 +255,23 @@ func TestHoldingsAgentInputWireForwardsGroundTruthAndFrameBinding(t *testing.T) 
 	}
 	validateWireBodies(t, policy, events, &seq)
 
-	if len(runner.calls) != 3 || runner.calls[0][1] != "input" || runner.calls[1][1] != "observe" || runner.calls[2][1] != "frame" {
-		t.Fatalf("expected native call order [input, observe, frame], got %v", runner.calls)
+	if len(runner.calls) != 4 || runner.calls[0][1] != "observe" || runner.calls[1][1] != "input" || runner.calls[2][1] != "observe" || runner.calls[3][1] != "frame" {
+		t.Fatalf("expected native call order [observe, input, observe, frame], got %v", runner.calls)
 	}
-	if len(events) != 4 {
-		t.Fatalf("expected 4 wire events [input_applied, frame_ready, observation, action_receipt], got %d: %s", len(events), events)
+	if len(events) != 5 {
+		t.Fatalf("expected 5 wire events [input_applied, observation(before), frame_ready, observation(after), action_receipt], got %d: %s", len(events), events)
+	}
+
+	var beforeObs struct {
+		Schema      string               `json:"schema"`
+		FrameRef    frames.Ref           `json:"frame_ref"`
+		GroundTruth *capsule.GroundTruth `json:"ground_truth"`
+	}
+	if err := json.Unmarshal(events[1], &beforeObs); err != nil || beforeObs.Schema != "observation/v0.2" || beforeObs.GroundTruth == nil {
+		t.Fatalf("unexpected before observation event: %s (%v)", events[1], err)
+	}
+	if beforeObs.FrameRef.Tick != beforeObs.GroundTruth.Tick {
+		t.Fatalf("before observation frame_ref.tick %d != ground_truth.tick %d", beforeObs.FrameRef.Tick, beforeObs.GroundTruth.Tick)
 	}
 
 	var readyEv struct {
@@ -263,8 +281,8 @@ func TestHoldingsAgentInputWireForwardsGroundTruthAndFrameBinding(t *testing.T) 
 			FrameRef frames.Ref `json:"frame_ref"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(events[1], &readyEv); err != nil || readyEv.Schema != "surface_event/v0.2" || readyEv.Event != "frame_ready" {
-		t.Fatalf("unexpected frame_ready event: %s (%v)", events[1], err)
+	if err := json.Unmarshal(events[2], &readyEv); err != nil || readyEv.Schema != "surface_event/v0.2" || readyEv.Event != "frame_ready" {
+		t.Fatalf("unexpected frame_ready event: %s (%v)", events[2], err)
 	}
 
 	var obs struct {
@@ -272,11 +290,11 @@ func TestHoldingsAgentInputWireForwardsGroundTruthAndFrameBinding(t *testing.T) 
 		FrameRef    frames.Ref           `json:"frame_ref"`
 		GroundTruth *capsule.GroundTruth `json:"ground_truth"`
 	}
-	if err := json.Unmarshal(events[2], &obs); err != nil {
-		t.Fatalf("unmarshal observation: %s (%v)", events[2], err)
+	if err := json.Unmarshal(events[3], &obs); err != nil {
+		t.Fatalf("unmarshal observation: %s (%v)", events[3], err)
 	}
 	if obs.Schema != "observation/v0.2" || obs.GroundTruth == nil {
-		t.Fatalf("expected observation/v0.2 with ground_truth, got %s", events[2])
+		t.Fatalf("expected observation/v0.2 with ground_truth, got %s", events[3])
 	}
 	wantGT := capsule.GroundTruth{
 		Source:      "holdings_lane",
@@ -285,6 +303,9 @@ func TestHoldingsAgentInputWireForwardsGroundTruthAndFrameBinding(t *testing.T) 
 	}
 	if *obs.GroundTruth != wantGT {
 		t.Fatalf("ground_truth mismatch: got %+v, want %+v", *obs.GroundTruth, wantGT)
+	}
+	if obs.FrameRef.Tick != 19 || readyEv.Data.FrameRef.Tick != 19 {
+		t.Fatalf("expected after frame_ref.tick bound to 19, got obs=%d ready=%d", obs.FrameRef.Tick, readyEv.Data.FrameRef.Tick)
 	}
 	if !reflect.DeepEqual(obs.FrameRef, readyEv.Data.FrameRef) {
 		t.Fatalf("observation frame_ref %+v does not match post-input frame_ready %+v", obs.FrameRef, readyEv.Data.FrameRef)
@@ -297,11 +318,11 @@ func TestHoldingsAgentInputWireForwardsGroundTruthAndFrameBinding(t *testing.T) 
 		Verified   bool       `json:"verified"`
 		Error      string     `json:"error"`
 	}
-	if err := json.Unmarshal(events[3], &receipt); err != nil {
-		t.Fatalf("unmarshal action_receipt: %s (%v)", events[3], err)
+	if err := json.Unmarshal(events[4], &receipt); err != nil {
+		t.Fatalf("unmarshal action_receipt: %s (%v)", events[4], err)
 	}
 	if receipt.Schema != "action_receipt/v0.2" || receipt.ProposalID != "prop-agent-witness" || receipt.Verified || receipt.Error != "" {
-		t.Fatalf("unexpected action_receipt: %s", events[3])
+		t.Fatalf("unexpected action_receipt: %s", events[4])
 	}
 	if !reflect.DeepEqual(receipt.AfterFrame, readyEv.Data.FrameRef) {
 		t.Fatalf("action_receipt after_frame %+v does not match post-input frame_ready %+v", receipt.AfterFrame, readyEv.Data.FrameRef)
@@ -370,8 +391,8 @@ func TestHoldingsWireOmitsGroundTruthOnFailedOrMalformedObserve(t *testing.T) {
 			}
 			validateWireBodies(t, policy, events, &seq)
 
-			if len(runner.calls) != 3 || runner.calls[1][1] != "observe" {
-				t.Fatalf("expected [input, observe, frame] on %s, got %v", tc.name, runner.calls)
+			if len(runner.calls) != 4 || runner.calls[0][1] != "observe" || runner.calls[1][1] != "input" || runner.calls[2][1] != "observe" || runner.calls[3][1] != "frame" {
+				t.Fatalf("expected [observe, input, observe, frame] on %s, got %v", tc.name, runner.calls)
 			}
 			if len(events) != 3 {
 				t.Fatalf("expected 3 events [input_applied, frame_ready, action_receipt] without observation on %s, got %d: %s", tc.name, len(events), events)
@@ -806,5 +827,67 @@ func (r *customDimHoldingsRunner) Run(_ context.Context, args []string, _ []byte
 		return r.observeRaw, nil
 	default:
 		return nil, errors.New("unexpected native command")
+	}
+}
+
+func TestHoldingsAgentInputWireCarriesBeforeAfterStateAndTickBinding(t *testing.T) {
+	root, runner, _, _, h, sid := setupHoldingsWireFixture(t)
+	policy := newWireTestPolicy(t)
+	var seq uint64
+
+	beforeDigest := "752988613fda42d018626fa551a2024dbf74fb41ce6542b7397a437072057da5"
+	afterDigest := "be76c7f6428412ebd2e657d1f9f4add0818cc8d8e43694d8fc83a36d858dcce8"
+	beforeState := `{"schema":"wender.state/v1","counts":{"raw":1,"nodes":1,"actionable":1}}`
+	afterState := `{"schema":"wender.state/v1","counts":{"raw":2,"nodes":2,"actionable":1}}`
+	runner.observeQueue = [][]byte{
+		[]byte(`{"state_sha256":"` + beforeDigest + `","tick":7,"state":` + beforeState + `}`),
+		[]byte(`{"state_sha256":"` + afterDigest + `","tick":11,"state":` + afterState + `}`),
+	}
+	runner.calls = nil
+
+	reqBody, _ := json.Marshal(map[string]any{
+		"schema": "surface_request/v0.2",
+		"op":     "input",
+		"params": map[string]any{
+			"surface_id":  sid,
+			"proposal_id": "prop-state-sidecar",
+			"origin":      "agent",
+			"action":      map[string]any{"type": "click", "x": 1, "y": 0, "button": "left"},
+		},
+	})
+	events, err := h(context.Background(), ipc.Envelope{Body: reqBody})
+	if err != nil {
+		t.Fatalf("wire input failed: %v", err)
+	}
+	validateWireBodies(t, policy, events, &seq)
+	if len(events) != 5 {
+		t.Fatalf("expected 5 events, got %d: %s", len(events), events)
+	}
+
+	var beforeObs, afterObs struct {
+		Schema      string               `json:"schema"`
+		FrameRef    frames.Ref           `json:"frame_ref"`
+		GroundTruth *capsule.GroundTruth `json:"ground_truth"`
+	}
+	if err := json.Unmarshal(events[1], &beforeObs); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(events[3], &afterObs); err != nil {
+		t.Fatal(err)
+	}
+	if beforeObs.FrameRef.Tick != 7 || beforeObs.GroundTruth.Tick != 7 || beforeObs.GroundTruth.StateSHA256 != beforeDigest {
+		t.Fatalf("before observation mismatch: %+v", beforeObs)
+	}
+	if afterObs.FrameRef.Tick != 11 || afterObs.GroundTruth.Tick != 11 || afterObs.GroundTruth.StateSHA256 != afterDigest {
+		t.Fatalf("after observation mismatch: %+v", afterObs)
+	}
+
+	beforeSidecar, err := os.ReadFile(HoldingsStateSidecarPath(root, beforeObs.FrameRef.RAMWSPath))
+	if err != nil || string(beforeSidecar) != beforeState {
+		t.Fatalf("before state sidecar mismatch: %q (%v)", beforeSidecar, err)
+	}
+	afterSidecar, err := os.ReadFile(HoldingsStateSidecarPath(root, afterObs.FrameRef.RAMWSPath))
+	if err != nil || string(afterSidecar) != afterState {
+		t.Fatalf("after state sidecar mismatch: %q (%v)", afterSidecar, err)
 	}
 }

@@ -399,6 +399,7 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 	pendingRelease := map[string][]json.RawMessage{}
 	var frameMu sync.Mutex
 	lastFrames := map[string]json.RawMessage{}
+	stateSidecars := map[string][]string{}
 	syncSurface := func(surfaceID string) {
 		if recorder == nil || m == nil || surfaceID == "" {
 			return
@@ -672,6 +673,10 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 					return failure(err)
 				}
 				frameMu.Lock()
+				for _, pth := range stateSidecars[params.SurfaceID] {
+					_ = os.Remove(pth)
+				}
+				delete(stateSidecars, params.SurfaceID)
 				delete(owned, params.SurfaceID)
 				delete(pendingRelease, params.SurfaceID)
 				delete(lastFrames, params.SurfaceID)
@@ -704,6 +709,7 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 			// [TARGET, unit decision] Human-origin input settles immediately after
 			// native input execution without waiting for post-input pixel capture.
 			wireEvidence := evidence
+			wireEvidence.BeforeGroundTruth = nil
 			wireEvidence.GroundTruth = nil
 			frameMu.Lock()
 			latestFrame := lastFrames[id]
@@ -769,7 +775,9 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 		if err != nil {
 			return failure(err)
 		}
-		canObserve := capsule.ValidateGroundTruth(evidence.GroundTruth) == nil &&
+		canObserve := capsule.ValidateGroundTruth(evidence.BeforeGroundTruth) == nil &&
+			capsule.ValidateGroundTruth(evidence.GroundTruth) == nil &&
+			(evidence.BeforeGroundTruth.State == "") == (evidence.GroundTruth.State == "") &&
 			ctx.Err() == nil &&
 			ref.SurfaceID == id &&
 			ref.Generation > 0 &&
@@ -789,13 +797,63 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 				canObserve = false
 			}
 		}
+		var beforeRef frames.Ref
+		if canObserve {
+			if len(before) == 0 ||
+				json.Unmarshal(before, &beforeRef) != nil ||
+				beforeRef.SurfaceID != id ||
+				beforeRef.Generation == 0 ||
+				beforeRef.Generation >= ref.Generation ||
+				beforeRef.Width < 1 ||
+				beforeRef.Height < 1 ||
+				beforeRef.RAMWSPath == "" {
+				canObserve = false
+			} else if info, statErr := os.Stat(beforeRef.RAMWSPath); statErr != nil || !info.Mode().IsRegular() || uint64(info.Size()) != uint64(beforeRef.Width)*uint64(beforeRef.Height)*3 {
+				canObserve = false
+			}
+		}
+		var beforeSidecar, afterSidecar string
+		if canObserve && evidence.GroundTruth.State != "" {
+			var sErr error
+			beforeSidecar, sErr = writeHoldingsStateSidecar(profile.RAMRoot, beforeRef.RAMWSPath, evidence.BeforeGroundTruth.State)
+			if sErr != nil {
+				canObserve = false
+			} else {
+				afterSidecar, sErr = writeHoldingsStateSidecar(profile.RAMRoot, ref.RAMWSPath, evidence.GroundTruth.State)
+				if sErr != nil {
+					_ = os.Remove(beforeSidecar)
+					beforeSidecar = ""
+					canObserve = false
+				}
+			}
+		}
+		if canObserve {
+			beforeRef.Tick = evidence.BeforeGroundTruth.Tick
+			ref.Tick = evidence.GroundTruth.Tick
+		}
 		rawRef, _ := json.Marshal(ref)
 		frameMu.Lock()
 		if owned[id] == nil {
 			canObserve = false
 		}
+		if canObserve && beforeSidecar != "" {
+			recordStateSidecar(stateSidecars, id, beforeSidecar)
+			recordStateSidecar(stateSidecars, id, afterSidecar)
+		}
 		lastFrames[id] = rawRef
 		frameMu.Unlock()
+		if !canObserve {
+			if beforeSidecar != "" {
+				_ = os.Remove(beforeSidecar)
+			}
+			if afterSidecar != "" {
+				_ = os.Remove(afterSidecar)
+			}
+		}
+		if canObserve {
+			obsBefore, _ := json.Marshal(map[string]any{"schema": "observation/v0.2", "frame_ref": beforeRef, "ground_truth": evidence.BeforeGroundTruth})
+			events = append(events, obsBefore)
+		}
 		ready, _ := json.Marshal(map[string]any{"schema": "surface_event/v0.2", "event": "frame_ready", "data": map[string]any{"frame_ref": ref}})
 		events = append(events, ready)
 		if canObserve {
@@ -803,11 +861,68 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 			events = append(events, obs)
 		}
 		wireEvidence := evidence
+		wireEvidence.BeforeGroundTruth = nil
 		wireEvidence.GroundTruth = nil
 		receipt, _ := json.Marshal(map[string]any{"schema": "action_receipt/v0.2", "proposal_id": proposal, "executed_at_ns": completed - origin, "after_frame": ref, "native_evidence": wireEvidence, "verified": false, "verification": map[string]string{"method": "pixel", "detail": "post-input capture only; expectation verification belongs to core"}, "error": ""})
 		events = append(events, receipt)
 		return events, nil
 	}
+}
+
+const maxRetainedStateSidecars = 16
+
+func recordStateSidecar(stateSidecars map[string][]string, surfaceID, path string) {
+	if path == "" {
+		return
+	}
+	list := stateSidecars[surfaceID]
+	filtered := list[:0]
+	for _, existing := range list {
+		if existing != path {
+			filtered = append(filtered, existing)
+		}
+	}
+	filtered = append(filtered, path)
+	for len(filtered) > maxRetainedStateSidecars {
+		evicted := filtered[0]
+		filtered = filtered[1:]
+		_ = os.Remove(evicted)
+	}
+	stateSidecars[surfaceID] = filtered
+}
+
+func HoldingsStateSidecarPath(ramRoot, ramwsPath string) string {
+	return filepath.Join(ramRoot, ".state-"+filepath.Base(ramwsPath))
+}
+
+func writeHoldingsStateSidecar(ramRoot, ramwsPath, stateJSON string) (string, error) {
+	if len(stateJSON) == 0 || len(stateJSON) > capsule.MaxHoldingsStateBytes {
+		return "", errors.New("invalid holdings state sidecar size")
+	}
+	base := filepath.Base(ramwsPath)
+	if base == "" || base == "." || base == ".." || strings.Contains(base, "/") {
+		return "", syscall.EINVAL
+	}
+	dirFile, err := openStateDir(ramRoot)
+	if err != nil {
+		return "", err
+	}
+	defer dirFile.Close()
+	name := ".state-" + base
+	_ = syscall.Unlinkat(int(dirFile.Fd()), name)
+	fd, err := syscall.Openat(int(dirFile.Fd()), name, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0600)
+	if err != nil {
+		return "", err
+	}
+	fullPath := filepath.Join(ramRoot, name)
+	f := os.NewFile(uintptr(fd), fullPath)
+	n, wErr := f.WriteString(stateJSON)
+	cErr := f.Close()
+	if wErr != nil || cErr != nil || n != len(stateJSON) {
+		_ = syscall.Unlinkat(int(dirFile.Fd()), name)
+		return "", errors.New("holdings state sidecar write failed")
+	}
+	return fullPath, nil
 }
 
 func wireFailure(e ipc.Envelope, q capsule.Request, err error) ([]json.RawMessage, error) {
