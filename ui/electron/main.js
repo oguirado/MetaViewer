@@ -29,6 +29,11 @@ import { createAdapterLauncher, findForbiddenEnv } from './coreLauncher.js';
 // [TARGET, unit decision] When MV_SRF_BIN_DIR is configured, supervised adapter
 // failure aborts boot fail-closed with a typed ADAPTER_* MainError before
 // window construction and unwinds core; when unset, core-only boot is kept.
+// [TARGET, unit decision] Once the supervised adapter is live with
+// handshakeSeen=true, bootProductionMain issues exactly 1 surface_request/v0.2
+// create through the open core handle within a bounded 1500 ms wait inside the
+// boot budget; any create failure logs a typed SURFACE_CREATE_* code and keeps
+// the window.
 
 // [TARGET, unit decision] Packaging seals ASAR renderer bytes into the loaded
 // main module. A replaced archive cannot change the admitted asset contents.
@@ -1763,6 +1768,204 @@ function hardenSession(session) {
 }
 
 /**
+ * [TARGET, unit decision] Bounded wait (ms) for the optional first-surface
+ * auto-create request after a live adapter handshake, kept well inside the
+ * 10 s packaged boot budget (`MV_PKG_BOOT_BUDGET_MS`) and 3 s wire deadline.
+ * @type {number}
+ */
+export const FIRST_SURFACE_CREATE_TIMEOUT_MS = 1500;
+
+/**
+ * Build the single first-surface auto-create request (`surface_request/v0.2`)
+ * from the validated environment profile map or default live browser profile.
+ * @param {Record<string, unknown>} envRec Environment record.
+ * @returns {Readonly<{
+ *   schema: 'surface_request/v0.2',
+ *   op: 'create',
+ *   params: Readonly<{
+ *     kind: 'desktop_capsule' | 'browser' | 'game_capsule' | 'vm',
+ *     geometry: Readonly<{w: number, h: number}>,
+ *     profile_id: string,
+ *     nested_depth?: number,
+ *   }>,
+ * }>}
+ */
+function buildFirstSurfaceCreateRequest(envRec) {
+  /** @type {'desktop_capsule' | 'browser' | 'game_capsule' | 'vm'} */
+  let kind = 'browser';
+  let w = 1280;
+  let h = 900;
+  let profileId = 'mv-live-1';
+  /** @type {number | undefined} */
+  let nestedDepth = undefined;
+  const validProfileId = (/** @type {unknown} */ v) =>
+    typeof v === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(v);
+  if (validProfileId(envRec.MV_SRF_LIVE_PROFILE)) {
+    profileId = /** @type {string} */ (envRec.MV_SRF_LIVE_PROFILE);
+  }
+  const rawProfiles = envRec.MV_SRF_PROFILES;
+  if (typeof rawProfiles === 'string' && rawProfiles.length > 0 && rawProfiles.length <= 1048576) {
+    try {
+      const parsed = JSON.parse(rawProfiles);
+      if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const map = /** @type {Record<string, unknown>} */ (parsed);
+        const preferred =
+          validProfileId(envRec.MV_SRF_LIVE_PROFILE) &&
+          Object.hasOwn(map, /** @type {string} */ (envRec.MV_SRF_LIVE_PROFILE))
+            ? /** @type {string} */ (envRec.MV_SRF_LIVE_PROFILE)
+            : Object.keys(map).find(validProfileId);
+        if (preferred !== undefined) {
+          profileId = preferred;
+          const entry = map[preferred];
+          if (entry !== null && typeof entry === 'object' && !Array.isArray(entry)) {
+            const prof = /** @type {Record<string, unknown>} */ (entry);
+            const rawKind =
+              typeof prof.Kind === 'string'
+                ? prof.Kind
+                : typeof prof.kind === 'string'
+                  ? prof.kind
+                  : null;
+            if (
+              rawKind === 'desktop_capsule' ||
+              rawKind === 'browser' ||
+              rawKind === 'game_capsule' ||
+              rawKind === 'vm'
+            ) {
+              kind = rawKind;
+            }
+            const rawW = Number.isSafeInteger(prof.Width)
+              ? /** @type {number} */ (prof.Width)
+              : Number.isSafeInteger(prof.width)
+                ? /** @type {number} */ (prof.width)
+                : null;
+            if (rawW !== null && rawW >= 1 && rawW <= 16384) {
+              w = rawW;
+            }
+            const rawH = Number.isSafeInteger(prof.Height)
+              ? /** @type {number} */ (prof.Height)
+              : Number.isSafeInteger(prof.height)
+                ? /** @type {number} */ (prof.height)
+                : null;
+            if (rawH !== null && rawH >= 1 && rawH <= 16384) {
+              h = rawH;
+            }
+            const rawDepth = Number.isSafeInteger(prof.NestedDepth)
+              ? /** @type {number} */ (prof.NestedDepth)
+              : Number.isSafeInteger(prof.nested_depth)
+                ? /** @type {number} */ (prof.nested_depth)
+                : null;
+            if (kind === 'desktop_capsule' && (rawDepth === 0 || rawDepth === 1)) {
+              nestedDepth = rawDepth;
+            }
+          }
+        }
+      }
+    } catch {
+      /* malformed profile map falls back to the default create parameters */
+    }
+  }
+  const params = Object.freeze(
+    nestedDepth !== undefined
+      ? { kind, geometry: Object.freeze({ w, h }), profile_id: profileId, nested_depth: nestedDepth }
+      : { kind, geometry: Object.freeze({ w, h }), profile_id: profileId },
+  );
+  return Object.freeze({
+    schema: /** @type {const} */ ('surface_request/v0.2'),
+    op: /** @type {const} */ ('create'),
+    params,
+  });
+}
+
+/**
+ * Issue at most one `surface_request/v0.2` `create` through the live core
+ * handle with a bounded wait inside the boot budget. Any failure logs a typed
+ * `SURFACE_CREATE_*` diagnostic and keeps the window.
+ * @param {CoreLauncher} core Live core handle.
+ * @param {Record<string, unknown>} envRec Environment record.
+ * @returns {Promise<void>}
+ */
+async function requestFirstSurfaceCreate(core, envRec) {
+  const rawBudget = Number(envRec.MV_PKG_BOOT_BUDGET_MS);
+  const bootBudgetMs = Number.isFinite(rawBudget) && rawBudget > 0 ? rawBudget : 10000;
+  const timeoutMs = Math.max(1, Math.min(FIRST_SURFACE_CREATE_TIMEOUT_MS, Math.floor(bootBudgetMs / 2)));
+  const request = buildFirstSurfaceCreateRequest(envRec);
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let timer = null;
+  try {
+    const reply = await Promise.race([
+      Promise.resolve().then(() => core.request(request)),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          const timeoutErr = new Error('first surface create timed out');
+          /** @type {{code?: string}} */ (timeoutErr).code = 'SURFACE_CREATE_TIMEOUT';
+          reject(timeoutErr);
+        }, timeoutMs);
+        if (timer !== null && typeof timer === 'object' && typeof timer.unref === 'function') {
+          timer.unref();
+        }
+      }),
+    ]);
+    if (reply !== null && typeof reply === 'object' && !Array.isArray(reply)) {
+      const rec = /** @type {Record<string, unknown>} */ (reply);
+      if (rec.ok === false) {
+        const err = new Error(typeof rec.reason === 'string' ? rec.reason : 'surface create refused');
+        /** @type {{code?: string}} */ (err).code =
+          typeof rec.code === 'string' && rec.code.length > 0 ? rec.code : 'SURFACE_CREATE_REFUSED';
+        throw err;
+      }
+      if (rec.schema === 'surface_event/v0.2' && rec.event === 'error') {
+        const data =
+          rec.data !== null && typeof rec.data === 'object' && !Array.isArray(rec.data)
+            ? /** @type {Record<string, unknown>} */ (rec.data)
+            : {};
+        const err = new Error(typeof data.detail === 'string' ? data.detail : 'surface create error event');
+        /** @type {{code?: string}} */ (err).code =
+          typeof data.code === 'string' && data.code.length > 0 ? data.code : 'SURFACE_CREATE_ERROR';
+        throw err;
+      }
+      if (rec.schema === 'action_verdict/v0.2' && rec.decision === 'refused') {
+        const err = new Error('surface create refused by verdict');
+        /** @type {{code?: string}} */ (err).code =
+          typeof rec.reason_code === 'string' && rec.reason_code.length > 0
+            ? rec.reason_code
+            : 'SURFACE_CREATE_REFUSED';
+        throw err;
+      }
+    }
+  } catch (error) {
+    const rawCode =
+      error !== null &&
+      typeof error === 'object' &&
+      typeof (/** @type {{code?: unknown}} */ (error)).code === 'string'
+        ? /** @type {{code: string}} */ (error).code
+        : error instanceof Error && /^[A-Z][A-Z0-9_]{1,63}$/.test(error.message)
+          ? error.message
+          : '';
+    const code =
+      rawCode === 'SURFACE_CREATE_TIMEOUT' || rawCode === 'REQUEST_TIMEOUT' || rawCode === 'CORE_TIMEOUT'
+        ? 'SURFACE_CREATE_TIMEOUT'
+        : rawCode.startsWith('SURFACE_CREATE_')
+          ? rawCode
+          : rawCode.length > 0 && /^[A-Z][A-Z0-9_]{1,63}$/i.test(rawCode)
+            ? `SURFACE_CREATE_${rawCode.toUpperCase()}`
+            : 'SURFACE_CREATE_FAILED';
+    const reason =
+      error instanceof Error && error.message.length > 0
+        ? error.message
+        : 'first surface create failed';
+    try {
+      console.error(`METAVIEWER_SURFACE_CREATE_DEGRADED ${JSON.stringify({ code, reason })}`);
+    } catch {
+      /* diagnostics best-effort */
+    }
+  } finally {
+    if (timer !== null) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+/**
  * Boot the production main on injected handles. The acquisition ledger
  * unwinds the owned prefix on every failure: handlers removed, window
  * destroyed, scheme unhandled, core disposed. Nested display-only mode
@@ -2090,6 +2293,14 @@ export async function bootProductionMain(handles) {
               : 'adapter did not reach live';
         await unwind();
         fail(adapterCode, adapterDetail);
+      }
+      if (
+        adapterStartError === null &&
+        adapterStatus !== null &&
+        adapterStatus.availability === 'live' &&
+        adapterStatus.handshakeSeen === true
+      ) {
+        await requestFirstSurfaceCreate(core, envRec);
       }
     }
   }

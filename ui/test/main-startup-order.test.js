@@ -62,6 +62,7 @@ test('failed privilege registration remains retryable and never admits a boot', 
  *   argv?: ReadonlyArray<string>,
  *   adapterStart?: () => Promise<import('../electron/coreLauncher.js').AdapterStatus>,
  *   adapterStatus?: () => import('../electron/coreLauncher.js').AdapterStatus,
+ *   coreRequest?: (msg: unknown) => Promise<unknown>,
  * }} [options]
  */
 async function createStubBootFixture(baseDir, options = {}) {
@@ -77,6 +78,8 @@ async function createStubBootFixture(baseDir, options = {}) {
   const uid = typeof process.getuid === 'function' ? process.getuid() : 1000;
   /** @type {Array<string>} */
   const calls = [];
+  /** @type {Array<unknown>} */
+  const coreRequests = [];
   /** @type {Array<{channel: string, payload: unknown}>} */
   const ipcSent = [];
   let windowsConstructed = 0;
@@ -133,7 +136,14 @@ async function createStubBootFixture(baseDir, options = {}) {
       calls.push('core.start');
       return coreStatus;
     },
-    request: async (/** @type {unknown} */ msg) => ({ echo: msg }),
+    request: async (/** @type {unknown} */ msg) => {
+      calls.push('core.request');
+      coreRequests.push(msg);
+      if (typeof options.coreRequest === 'function') {
+        return options.coreRequest(msg);
+      }
+      return { echo: msg };
+    },
     dispose: async () => {
       calls.push('core.dispose');
     },
@@ -210,6 +220,7 @@ async function createStubBootFixture(baseDir, options = {}) {
   return {
     handles,
     calls,
+    coreRequests,
     ipcSent,
     getWindowsConstructed: () => windowsConstructed,
   };
@@ -274,7 +285,7 @@ test(
         const tc = failureCases[i];
         const caseDir = join(tempRoot, `case-${i}`);
         await mkdir(caseDir, { recursive: true });
-        const { handles, calls, getWindowsConstructed } = await createStubBootFixture(caseDir, {
+        const { handles, calls, coreRequests, getWindowsConstructed } = await createStubBootFixture(caseDir, {
           env: { MV_SRF_BIN_DIR: srfBinDir },
           adapterStart: tc.adapterStart,
         });
@@ -292,12 +303,14 @@ test(
         assert.equal(calls.includes('new-BrowserWindow'), false);
         assert.equal(calls.includes('core.start'), true);
         assert.equal(calls.includes('adapter.start'), true);
+        assert.equal(calls.includes('core.request'), false);
+        assert.equal(coreRequests.length, 0, `${tc.name}: must not issue surface create`);
         assert.equal(calls.includes('adapter.dispose'), true, `${tc.name}: must unwind adapter`);
         assert.equal(calls.includes('core.dispose'), true, `${tc.name}: must unwind core`);
         assert.equal(calls.includes('protocol.unhandle'), true, `${tc.name}: must unhandle scheme`);
       }
 
-      // Positive control with MV_SRF_BIN_DIR set: live adapter with handshakeSeen: true succeeds and opens window.
+      // Positive control with MV_SRF_BIN_DIR set: live adapter with handshakeSeen: true succeeds, issues 1 create, and opens window.
       const liveDir = join(tempRoot, 'case-live');
       await mkdir(liveDir, { recursive: true });
       const liveFixture = await createStubBootFixture(liveDir, {
@@ -316,6 +329,18 @@ test(
         assert.equal(liveFixture.getWindowsConstructed(), 1);
         assert.equal(liveFixture.calls.includes('new-BrowserWindow'), true);
         assert.equal(liveFixture.calls.includes('core.dispose'), false);
+        assert.equal(liveFixture.coreRequests.length, 1);
+        assert.deepEqual(liveFixture.coreRequests[0], {
+          schema: 'surface_request/v0.2',
+          op: 'create',
+          params: {
+            kind: 'browser',
+            geometry: { w: 1280, h: 900 },
+            profile_id: 'mv-live-1',
+          },
+        });
+        assert.ok(liveFixture.calls.indexOf('adapter.start') < liveFixture.calls.indexOf('core.request'));
+        assert.ok(liveFixture.calls.indexOf('core.request') < liveFixture.calls.indexOf('new-BrowserWindow'));
         assert.equal(liveFixture.ipcSent.length, 1);
         assert.equal(liveFixture.ipcSent[0].channel, 'metaviewer:adapter-status');
         assert.equal(
@@ -324,6 +349,46 @@ test(
         );
       } finally {
         await boot.dispose();
+      }
+
+      // Optional surface create failure when adapter is live logs typed code and keeps window.
+      const createErrDir = join(tempRoot, 'case-create-err');
+      await mkdir(createErrDir, { recursive: true });
+      /** @type {Array<string>} */
+      const logged = [];
+      const origError = console.error;
+      console.error = (...args) => {
+        logged.push(args.map(String).join(' '));
+      };
+      try {
+        const createErrFixture = await createStubBootFixture(createErrDir, {
+          env: { MV_SRF_BIN_DIR: srfBinDir },
+          adapterStart: async () => ({
+            availability: /** @type {const} */ ('live'),
+            pid: 5252,
+            handshakeSeen: true,
+            code: 'ADAPTER_LIVE',
+            reason: null,
+            userMessage: null,
+          }),
+          coreRequest: async () => ({
+            schema: 'surface_event/v0.2',
+            event: 'error',
+            data: { surface_id: 's1', code: 'adapter', detail: 'profile already bound' },
+          }),
+        });
+        const bootCreateErr = await bootProductionMain(createErrFixture.handles);
+        try {
+          assert.equal(createErrFixture.coreRequests.length, 1);
+          assert.equal(createErrFixture.getWindowsConstructed(), 1);
+          assert.equal(createErrFixture.calls.includes('new-BrowserWindow'), true);
+          assert.equal(createErrFixture.calls.includes('core.dispose'), false);
+          assert.ok(logged.some((line) => line.includes('METAVIEWER_SURFACE_CREATE_DEGRADED') && line.includes('SURFACE_CREATE_ADAPTER')));
+        } finally {
+          await bootCreateErr.dispose();
+        }
+      } finally {
+        console.error = origError;
       }
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
@@ -358,6 +423,7 @@ test(
         assert.equal(degradedFixture.getWindowsConstructed(), 1);
         assert.equal(degradedFixture.calls.includes('new-BrowserWindow'), true);
         assert.equal(degradedFixture.calls.includes('core.dispose'), false);
+        assert.equal(degradedFixture.coreRequests.length, 0);
         assert.equal(degradedFixture.ipcSent.length, 1);
         assert.equal(
           /** @type {{availability?: string}} */ (degradedFixture.ipcSent[0].payload).availability,
@@ -382,6 +448,7 @@ test(
         assert.equal(throwFixture.getWindowsConstructed(), 1);
         assert.equal(throwFixture.calls.includes('new-BrowserWindow'), true);
         assert.equal(throwFixture.calls.includes('core.dispose'), false);
+        assert.equal(throwFixture.coreRequests.length, 0);
       } finally {
         await bootThrow.dispose();
       }
@@ -403,6 +470,7 @@ test(
         assert.equal(nestedFixture.getWindowsConstructed(), 1);
         assert.equal(nestedFixture.calls.includes('core.start'), false);
         assert.equal(nestedFixture.calls.includes('adapter.start'), false);
+        assert.equal(nestedFixture.coreRequests.length, 0);
         assert.equal(nestedFixture.calls.includes('setUserAgent:MetaViewer --nested-depth=1'), true);
       } finally {
         await bootNested.dispose();

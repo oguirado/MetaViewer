@@ -99,11 +99,13 @@ function createFakeChild(pid = 5252) {
 
 /**
  * Create fake Electron handles for `bootProductionMain`.
- * @param {{root: string, xdg: string, adapter?: any}} opts
+ * @param {{root: string, xdg: string, adapter?: any, env?: Record<string, string | undefined>, coreRequest?: (msg: unknown) => Promise<unknown>}} opts
  */
 function createBootHandles(opts) {
   /** @type {Array<string>} */
   const calls = [];
+  /** @type {Array<unknown>} */
+  const coreRequests = [];
   /** @type {Array<{channel: string, payload: unknown}>} */
   const ipcSent = [];
   const appListeners = new Map();
@@ -149,7 +151,14 @@ function createBootHandles(opts) {
       calls.push('core.start');
       return coreStatus;
     },
-    request: async (/** @type {unknown} */ msg) => ({ echo: msg }),
+    request: async (/** @type {unknown} */ msg) => {
+      calls.push('core.request');
+      coreRequests.push(msg);
+      if (typeof opts.coreRequest === 'function') {
+        return opts.coreRequest(msg);
+      }
+      return { echo: msg };
+    },
     dispose: async () => {
       calls.push('core.dispose');
     },
@@ -183,7 +192,7 @@ function createBootHandles(opts) {
     electronVersion: ELECTRON_PIN,
     shellRoot: opts.root,
     argv: ['metaviewer'],
-    env: {},
+    env: opts.env ?? {},
     runtime: { xdgRuntimeDir: opts.xdg, uid },
     core,
     ...(opts.adapter ? { adapter: opts.adapter } : {}),
@@ -193,7 +202,7 @@ function createBootHandles(opts) {
     ],
     geometry: { width: 1280, height: 720 },
   };
-  return { handles, calls, ipcSent, appListeners };
+  return { handles, calls, coreRequests, ipcSent, appListeners };
 }
 
 describe('W3-PKG-FULLSTACK bundled adapter supervision next to core', () => {
@@ -282,6 +291,18 @@ describe('W3-PKG-FULLSTACK bundled adapter supervision next to core', () => {
       assert.equal(bootEnv.ipcSent.length, 1);
       assert.equal(bootEnv.ipcSent[0].channel, 'metaviewer:adapter-status');
       assert.deepEqual(bootEnv.ipcSent[0].payload, liveStatus);
+      assert.equal(bootEnv.coreRequests.length, 1);
+      assert.deepEqual(bootEnv.coreRequests[0], {
+        schema: 'surface_request/v0.2',
+        op: 'create',
+        params: {
+          kind: 'browser',
+          geometry: { w: 1280, h: 900 },
+          profile_id: 'mv-live-1',
+        },
+      });
+      assert.ok(bootEnv.calls.indexOf('core.start') < bootEnv.calls.indexOf('core.request'));
+      assert.ok(bootEnv.calls.indexOf('core.request') < bootEnv.calls.indexOf('new-BrowserWindow'));
 
       // Reap on quit via dispose()
       await boot.dispose();
@@ -322,6 +343,7 @@ describe('W3-PKG-FULLSTACK bundled adapter supervision next to core', () => {
       assert.match(String(st1?.userMessage), /Degraded mode \(OPENSUPERFICIES_ABSENT\)/);
       assert.equal(bootEnv1.ipcSent[0]?.channel, 'metaviewer:adapter-status');
       assert.deepEqual(bootEnv1.ipcSent[0]?.payload, st1);
+      assert.equal(bootEnv1.coreRequests.length, 0);
       assert.equal(boot1.core.getStatus().availability, 'live');
       await boot1.dispose();
 
@@ -347,6 +369,7 @@ describe('W3-PKG-FULLSTACK bundled adapter supervision next to core', () => {
       assert.match(String(st2?.userMessage), /Degraded mode \(ADAPTER_ABSENT\)/);
       assert.equal(bootEnv2.ipcSent[0]?.channel, 'metaviewer:adapter-status');
       assert.deepEqual(bootEnv2.ipcSent[0]?.payload, st2);
+      assert.equal(bootEnv2.coreRequests.length, 0);
       assert.equal(boot2.core.getStatus().availability, 'live');
       await boot2.dispose();
     } finally {
@@ -389,6 +412,7 @@ describe('W3-PKG-FULLSTACK bundled adapter supervision next to core', () => {
       const boot = await bootProductionMain(bootEnv.handles);
       assert.equal(boot.adapter?.getStatus().availability, 'live');
       assert.equal(spawns, 1);
+      assert.equal(bootEnv.coreRequests.length, 1);
 
       // Simulate unexpected adapter crash after handshake
       child.emit('exit', 137, 'SIGKILL');
@@ -405,12 +429,146 @@ describe('W3-PKG-FULLSTACK bundled adapter supervision next to core', () => {
       assert.equal(spawns, 1);
       assert.equal(retry1.availability, 'degraded');
       assert.equal(retry2.availability, 'degraded');
+      assert.equal(bootEnv.coreRequests.length, 1);
       assert.equal(boot.core.getStatus().availability, 'live');
 
       await boot.dispose();
       // Child already exited, so zero signals sent on dispose
       assert.deepEqual(killed, []);
+
+      // Negative control: adapter crashes before handshake (MV_SRF_BIN_DIR unset on handles.env) -> 0 creates
+      let crashSpawns = 0;
+      const crashChild = createFakeChild(7172);
+      const crashLauncher = createAdapterLauncher({
+        command: fx.adapterBin,
+        env: fx.env,
+        runtimeDir: fx.xdg,
+        selfPid: 100,
+        selfPgid: 100,
+        spawn: () => {
+          crashSpawns += 1;
+          setImmediate(() => {
+            crashChild.emit('exit', 2, null);
+          });
+          return crashChild;
+        },
+      });
+      const crashBootEnv = createBootHandles({ root: fx.root, xdg: fx.xdg, adapter: crashLauncher });
+      const crashBoot = await bootProductionMain(crashBootEnv.handles);
+      const preHandshakeCrashed = crashBoot.adapter?.getStatus();
+      assert.equal(preHandshakeCrashed?.availability, 'degraded');
+      assert.equal(preHandshakeCrashed?.code, 'ADAPTER_CRASHED');
+      assert.equal(preHandshakeCrashed?.handshakeSeen, false);
+      assert.equal(crashBootEnv.coreRequests.length, 0);
+      const crashRetry1 = await crashLauncher.start();
+      const crashRetry2 = await crashLauncher.start();
+      assert.equal(crashSpawns, 1);
+      assert.equal(crashRetry1.code, 'ADAPTER_CRASHED');
+      assert.equal(crashRetry2.code, 'ADAPTER_CRASHED');
+      assert.equal(crashBootEnv.coreRequests.length, 0);
+      await crashBoot.dispose();
     } finally {
+      fx.cleanup();
+    }
+  });
+
+  it('logs a typed SURFACE_CREATE_* code and keeps the window when first-surface create fails or times out', async () => {
+    const fx = createFullstackFixture();
+    const origConsoleError = console.error;
+    /** @type {Array<string>} */
+    const loggedErrors = [];
+    console.error = (...args) => {
+      loggedErrors.push(args.map(String).join(' '));
+    };
+    try {
+      // 1. Create rejects with a typed error -> logs SURFACE_CREATE_* and keeps window
+      const child1 = createFakeChild(9101);
+      const launcher1 = createAdapterLauncher({
+        command: fx.adapterBin,
+        env: fx.env,
+        runtimeDir: fx.xdg,
+        selfPid: 100,
+        selfPgid: 100,
+        spawn: () => {
+          setImmediate(() => child1.stdout.emit('data', 'ADAPTER_HANDSHAKE_OK\n'));
+          return child1;
+        },
+        killFn: () => {
+          child1.emit('exit', 0, 'SIGTERM');
+        },
+      });
+      const bootEnv1 = createBootHandles({
+        root: fx.root,
+        xdg: fx.xdg,
+        adapter: launcher1,
+        env: {
+          MV_SRF_BIN_DIR: fx.srfBinDir,
+          MV_SRF_PROFILES: JSON.stringify({
+            'smoke-browser': {
+              Kind: 'browser',
+              NativeKind: 'browser',
+              RAMRoot: '/dev/shm',
+              Display: ':100',
+              Width: 1280,
+              Height: 900,
+            },
+          }),
+        },
+        coreRequest: async () => {
+          const err = new Error('create refused by core');
+          /** @type {{code?: string}} */ (err).code = 'CORE_REFUSED';
+          throw err;
+        },
+      });
+      const boot1 = await bootProductionMain(bootEnv1.handles);
+      assert.equal(bootEnv1.coreRequests.length, 1);
+      assert.deepEqual(bootEnv1.coreRequests[0], {
+        schema: 'surface_request/v0.2',
+        op: 'create',
+        params: {
+          kind: 'browser',
+          geometry: { w: 1280, h: 900 },
+          profile_id: 'smoke-browser',
+        },
+      });
+      assert.ok(bootEnv1.calls.includes('new-BrowserWindow'));
+      assert.ok(loggedErrors.some((line) => line.includes('METAVIEWER_SURFACE_CREATE_DEGRADED') && line.includes('SURFACE_CREATE_CORE_REFUSED')));
+      await boot1.dispose();
+
+      // 2. Create hangs past bounded boot budget wait -> logs SURFACE_CREATE_TIMEOUT and keeps window
+      loggedErrors.length = 0;
+      const child2 = createFakeChild(9102);
+      const launcher2 = createAdapterLauncher({
+        command: fx.adapterBin,
+        env: fx.env,
+        runtimeDir: fx.xdg,
+        selfPid: 100,
+        selfPgid: 100,
+        spawn: () => {
+          setImmediate(() => child2.stdout.emit('data', 'ADAPTER_HANDSHAKE_OK\n'));
+          return child2;
+        },
+        killFn: () => {
+          child2.emit('exit', 0, 'SIGTERM');
+        },
+      });
+      const bootEnv2 = createBootHandles({
+        root: fx.root,
+        xdg: fx.xdg,
+        adapter: launcher2,
+        env: {
+          MV_SRF_BIN_DIR: fx.srfBinDir,
+          MV_PKG_BOOT_BUDGET_MS: '40',
+        },
+        coreRequest: () => new Promise(() => {}),
+      });
+      const boot2 = await bootProductionMain(bootEnv2.handles);
+      assert.equal(bootEnv2.coreRequests.length, 1);
+      assert.ok(bootEnv2.calls.includes('new-BrowserWindow'));
+      assert.ok(loggedErrors.some((line) => line.includes('METAVIEWER_SURFACE_CREATE_DEGRADED') && line.includes('SURFACE_CREATE_TIMEOUT')));
+      await boot2.dispose();
+    } finally {
+      console.error = origConsoleError;
       fx.cleanup();
     }
   });
