@@ -694,6 +694,7 @@ decode_envelope.rs	core/tests/decode_envelope.rs
 frame_timings.rs	core/tests/frame_timings.rs
 framing.rs	core/tests/framing.rs
 handshake.rs	core/tests/handshake.rs
+holdings_settle.rs	core/tests/holdings_settle.rs
 humanin-088290955b09	core/tests/human_input_control.rs
 humanin-144bc1eaecb9	core/tests/human_input_real_adapter.rs
 input_settlement.rs	core/tests/input_settlement.rs
@@ -732,6 +733,7 @@ external_lost_test.go	daemon-adapter/internal/capsule/external_lost_test.go
 fuzz_test.go	daemon-adapter/internal/capsule/fuzz_test.go
 geometry_test.go	daemon-adapter/internal/capsule/geometry_test.go
 handoff.go	daemon-adapter/internal/capsule/handoff.go
+holding-ccd017c9f1a2	daemon-adapter/internal/capsule/holdings_witness_test.go
 kinds_destroy_test.go	daemon-adapter/internal/capsule/kinds_destroy_test.go
 liveness.go	daemon-adapter/internal/capsule/liveness.go
 liveness_test.go	daemon-adapter/internal/capsule/liveness_test.go
@@ -767,6 +769,7 @@ environment_test.go	daemon-adapter/internal/daemon/environment_test.go
 fx2_adapter_a_test.go	daemon-adapter/internal/daemon/fx2_adapter_a_test.go
 hello_atomic_test.go	daemon-adapter/internal/daemon/hello_atomic_test.go
 hello_pin_test.go	daemon-adapter/internal/daemon/hello_pin_test.go
+holding-5c5526783e2d	daemon-adapter/internal/daemon/holdings_witness_wire_test.go
 inputse-0f34da3b3f23	daemon-adapter/internal/daemon/input_settlement_test.go
 nestedi-f72c7f52a5e1	daemon-adapter/internal/daemon/nested_isolation_test.go
 nv_authority_test.go	daemon-adapter/internal/daemon/nv_authority_test.go
