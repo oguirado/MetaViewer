@@ -38,7 +38,11 @@ fn destroy_and_settlement_churn_keeps_live_views_and_bounds_both_receipt_indexes
     ))
     .unwrap();
     state.retain(&surface_event(live, live_state));
-    for i in 0..1000 {
+    let prefixed_live = format!("cuk-ai-slot-{live}");
+    state.retain(&surface_event(&prefixed_live, live_state));
+    state.retain(&surface_event(&prefixed_live, "destroyed"));
+    assert!(state.destroyed.contains(&prefixed_live));
+    for i in 0..10_000 {
         let id = format!("surface-{i}");
         state.retain(&surface_event(&id, live_state));
         let mut frame = frame.clone();
@@ -54,9 +58,19 @@ fn destroy_and_settlement_churn_keeps_live_views_and_bounds_both_receipt_indexes
         assert!(!state.surfaces.contains_key(&id));
         assert!(!state.frames.contains_key(&id));
         assert!(!state.layout.contains_key(&id));
+        assert!(state.destroyed.len() <= DESTROYED_CAP);
+        assert_eq!(state.destroyed_order.len(), state.destroyed.len());
     }
     assert_eq!(state.surfaces.len(), 1);
     assert!(state.surfaces.contains_key(live));
+    assert_eq!(state.destroyed.len(), DESTROYED_CAP);
+    assert!(
+        state.destroyed.contains(&prefixed_live),
+        "prefixed tombstone shadowing a live unprefixed surface must never be evicted"
+    );
+    assert_eq!(state.slot_surface(&prefixed_live), prefixed_live);
+    assert!(!state.destroyed.contains("surface-0"));
+    assert!(state.destroyed.contains("surface-9999"));
     assert!(state.frames.is_empty());
     assert!(state.layout.is_empty());
 

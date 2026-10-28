@@ -120,14 +120,24 @@ async fn daemon_barrier(daemon: &mut Peer) {
 }
 struct SharedFrame(std::path::PathBuf);
 impl SharedFrame {
+    const WIDTH: u64 = 100;
+    const HEIGHT: u64 = 60;
+    const BYTES: usize = (Self::WIDTH as usize) * (Self::HEIGHT as usize) * 3;
     fn new() -> Self {
+        use std::os::unix::fs::OpenOptionsExt;
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let path = std::path::PathBuf::from(format!(
             "/dev/shm/mv-wire-{}-{}-frame",
             std::process::id(),
             NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
-        std::fs::write(&path, b"immutable fake frame").unwrap();
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+            .unwrap();
+        std::io::Write::write_all(&mut file, &vec![b'f'; Self::BYTES]).unwrap();
         Self(path)
     }
     fn value(&self, generation: u64) -> Value {
@@ -135,7 +145,9 @@ impl SharedFrame {
             "../../../contracts/examples/v0.2/frame_ref.valid.json"
         ))
         .unwrap();
-        value["sha256"] = sha256_hex(b"immutable fake frame").into();
+        value["width"] = Self::WIDTH.into();
+        value["height"] = Self::HEIGHT.into();
+        value["sha256"] = sha256_hex(&vec![b'f'; Self::BYTES]).into();
         value["ramws_path"] = self.0.to_str().unwrap().into();
         value["generation"] = generation.into();
         value
@@ -520,11 +532,12 @@ fn recovery_retains_only_live_views_and_recent_receipts() {
             agent.verdict("admitted", None).await;
             daemon.receive().await;
             let mut r: Value = serde_json::from_str(include_str!(
-                "../../../contracts/examples/v0.2/action_receipt.valid.json"
+                "../../../contracts/examples/v0.2/action_receipt.valid.native-key.json"
             ))
             .unwrap();
             r["proposal_id"] = id.into();
             r["after_frame"] = f.clone();
+            r["native_evidence"]["kind"] = "click".into();
             daemon.send(r).await;
             agent.receive().await;
         }
@@ -871,7 +884,17 @@ fn w3_control_intent_under_daemon_frame_burst_coalesces_and_preserves_checks() {
             "/dev/shm/mv-wire-{}-large-1280x900.rgb",
             std::process::id()
         ));
-        std::fs::write(&large_path, &large_bytes).unwrap();
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&large_path)
+                .unwrap();
+            std::io::Write::write_all(&mut file, &large_bytes).unwrap();
+        }
         let make_large_frame = |generation: u64| -> Value {
             let mut v = shared.value(generation);
             v["width"] = 1280.into();
@@ -1009,7 +1032,14 @@ fn rv10_01_invalid_lookahead_frame_does_not_skip_valid_predecessor() {
             std::process::id()
         ));
         {
-            let file = std::fs::File::create(&oversize_path).unwrap();
+            use std::os::unix::fs::OpenOptionsExt;
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&oversize_path)
+                .unwrap();
             file.set_len(65 * 1024 * 1024).unwrap();
         }
         let mut f34_bad = shared.value(34);

@@ -17,8 +17,9 @@ pub(super) struct Placement {
 
 impl tools::ToolState {
     pub(super) fn slot_surface<'a>(&self, slot: &'a str) -> &'a str {
-        // Exact identities win: a real ID may itself start with the DOM prefix.
-        if self.has_surface(slot) {
+        // Exact identities win: a real ID may itself start with the DOM prefix,
+        // and a destroyed exact ID retires as a tombstone rather than rebinding.
+        if self.has_surface(slot) || self.is_destroyed_surface(slot) {
             slot
         } else {
             slot.strip_prefix("cuk-ai-slot-").unwrap_or(slot)

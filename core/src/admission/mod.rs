@@ -260,6 +260,7 @@ impl CoreState {
                 ) || value["params"]["surface_id"]
                     .as_str()
                     .is_some_and(|id| self.is_destroyed(id))
+                    || !valid_surface_create_policy(request)
                 {
                     out.reason = Some(Refusal::Policy);
                 } else if self.remaining_budget == 0 {
@@ -317,7 +318,7 @@ impl CoreState {
                     } else if let ActionProposalAction::Case0(a) = &p.action {
                         if s.frame
                             .as_ref()
-                            .is_some_and(|f| a.x >= f.width || a.y >= f.height)
+                            .is_none_or(|f| a.x >= f.width || a.y >= f.height)
                         {
                             out.reason = Some(Refusal::OutOfBounds);
                         } else if self.remaining_budget == 0 {
@@ -417,7 +418,7 @@ impl CoreState {
                     .ok_or(AdmissionError::InvalidInput)?;
                 if s.frame
                     .as_ref()
-                    .is_some_and(|f| frame.generation < f.generation)
+                    .is_some_and(|f| frame.generation <= f.generation)
                 {
                     return Err(AdmissionError::InvalidInput);
                 }
@@ -723,8 +724,23 @@ fn deadline(r: &AdmissionRequest) -> Result<u64, AdmissionError> {
         .and_then(|n| r.received_ns.checked_add(n))
         .ok_or(AdmissionError::Overflow)
 }
+fn valid_surface_create_policy(request: &crate::wire::payload::SurfaceRequest) -> bool {
+    use crate::wire::payload::SurfaceRequest;
+    match request {
+        SurfaceRequest::Case0(r) => {
+            crate::catalog::CreateRequest::from_surface_request("surface-create", &r.params, 0)
+                .is_ok()
+        }
+        SurfaceRequest::CreateNested(r) => {
+            crate::catalog::CreateRequest::from_nested_surface_request("surface-create", &r.params)
+                .is_ok()
+        }
+        _ => true,
+    }
+}
 fn validate_frame(f: &Frame) -> Result<(), AdmissionError> {
-    if f.width == 0
+    if f.generation == 0
+        || f.width == 0
         || f.height == 0
         || f.sha256.len() != 64
         || !f

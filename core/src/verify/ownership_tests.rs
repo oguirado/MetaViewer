@@ -14,7 +14,14 @@ struct FrameFile(FrameRef);
 
 impl FrameFile {
     fn new(mode: u32) -> Self {
-        let path = format!("/dev/shm/mv-ownership-{}-{}", std::process::id(), mode);
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let path = format!(
+            "/dev/shm/mv-ownership-{}-{}-{}",
+            std::process::id(),
+            mode,
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        );
         let bytes = [1, 2, 3];
         let mut file = OpenOptions::new()
             .write(true)
@@ -124,4 +131,29 @@ fn foreign_uid_is_rejected() {
     assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidData);
     fixture.0.width = 1;
     assert_eq!(read_published_frame(&fixture.0).unwrap(), [1, 2, 3]);
+}
+
+#[test]
+fn r3_t1_02_04_serve_shm_reader_enforces_mode_uid_and_exact_rgb_byte_len() {
+    let shm_root = std::path::Path::new("/dev/shm");
+    for mode in [0o644, 0o640, 0o604, 0o666] {
+        let fixture = FrameFile::new(mode);
+        assert!(
+            crate::serve::Server::read_shm_pixels_under(shm_root, &fixture.0).is_err(),
+            "read_shm_pixels_under must reject mode {mode:o}"
+        );
+    }
+
+    // Negative control: 0600 3-byte 1x1 frame succeeds.
+    let mut valid = FrameFile::new(0o600);
+    let pixels = crate::serve::Server::read_shm_pixels_under(shm_root, &valid.0).unwrap();
+    assert_eq!(pixels.bytes(), &[1, 2, 3]);
+
+    // R3-T1-04: meta.len() != 3 * width * height must fail closed even when sha256 matches file bytes.
+    valid.0.width = 2;
+    valid.0.height = 1;
+    assert!(
+        crate::serve::Server::read_shm_pixels_under(shm_root, &valid.0).is_err(),
+        "read_shm_pixels_under must reject byte length != 3 * width * height"
+    );
 }

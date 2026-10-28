@@ -188,6 +188,20 @@ impl<'a> CreateRequest<'a> {
         nested_depth: u32,
     ) -> Result<Self, CatalogError> {
         use crate::wire::payload::SurfaceKind;
+        if nested_depth > 1 {
+            return Err(CatalogError::NestedDepth);
+        }
+        if nested_depth == 1 {
+            return Err(CatalogError::NestedPolicy);
+        }
+        let width_px = u32::try_from(params.geometry.w).map_err(|_| CatalogError::Geometry)?;
+        let height_px = u32::try_from(params.geometry.h).map_err(|_| CatalogError::Geometry)?;
+        if !(1..=16384).contains(&width_px) || !(1..=16384).contains(&height_px) {
+            return Err(CatalogError::Geometry);
+        }
+        if !valid_identity(&params.profile_id) {
+            return Err(CatalogError::InvalidProfile);
+        }
         let kind = match params.kind {
             SurfaceKind::Browser => "browser",
             SurfaceKind::DesktopCapsule => "desktop_capsule",
@@ -198,8 +212,8 @@ impl<'a> CreateRequest<'a> {
             surface_id,
             kind,
             profile_id: &params.profile_id,
-            width_px: u32::try_from(params.geometry.w).map_err(|_| CatalogError::Geometry)?,
-            height_px: u32::try_from(params.geometry.h).map_err(|_| CatalogError::Geometry)?,
+            width_px,
+            height_px,
             nested_depth,
         })
     }
@@ -217,12 +231,23 @@ impl<'a> CreateRequest<'a> {
         if params.kind != SurfaceKind::DesktopCapsule {
             return Err(CatalogError::NestedPolicy);
         }
+        let width_px = u32::try_from(params.geometry.w).map_err(|_| CatalogError::Geometry)?;
+        let height_px = u32::try_from(params.geometry.h).map_err(|_| CatalogError::Geometry)?;
+        if !(1..=16384).contains(&width_px) || !(1..=16384).contains(&height_px) {
+            return Err(CatalogError::Geometry);
+        }
+        if !valid_identity(&params.profile_id) {
+            return Err(CatalogError::InvalidProfile);
+        }
+        if nested_depth == 1 && (width_px, height_px) != (1280, 720) {
+            return Err(CatalogError::NestedPolicy);
+        }
         Ok(Self {
             surface_id,
             kind: "program",
             profile_id: &params.profile_id,
-            width_px: u32::try_from(params.geometry.w).map_err(|_| CatalogError::Geometry)?,
-            height_px: u32::try_from(params.geometry.h).map_err(|_| CatalogError::Geometry)?,
+            width_px,
+            height_px,
             nested_depth,
         })
     }
@@ -432,6 +457,17 @@ mod tests {
             assert_eq!(
                 decode_envelope(&base_env.to_string()),
                 Err(DecodeError::InvalidField)
+            );
+        }
+        for bad_profile in ["", "X", "!!!", &"a".repeat(49)] {
+            let bad_case0 = payload::SurfaceRequestCase0Params {
+                kind: payload::SurfaceKind::Browser,
+                geometry: payload::SurfaceGeometry { w: 1280, h: 720 },
+                profile_id: bad_profile.into(),
+            };
+            assert_eq!(
+                CreateRequest::from_surface_request("surface-bad", &bad_case0, 0).unwrap_err(),
+                CatalogError::InvalidProfile
             );
         }
     }

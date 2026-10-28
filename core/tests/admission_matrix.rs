@@ -307,7 +307,7 @@ fn valid_receipt_releases_once_and_lane_replay_is_persistent() {
     );
 }
 #[test]
-fn fresh_capture_same_generation_reopens_after_release() {
+fn fresh_capture_refuses_same_generation_and_reopens_on_newer_after_release() {
     let mut s = state();
     s.apply(&Input::Propose(proposal(1))).unwrap();
     let out = s
@@ -325,13 +325,27 @@ fn fresh_capture_same_generation_reopens_after_release() {
         surface_id: "surface-1".into(),
     })
     .unwrap();
-    let frame = s.surfaces["surface-1"].frame.clone().unwrap();
+    let mut frame = s.surfaces["surface-1"].frame.clone().unwrap();
+    // R3-T1-03: equal generation must be refused; strictly newer generation reopens.
+    assert_eq!(
+        s.apply(&Input::Frame {
+            surface_id: "surface-1".into(),
+            frame: frame.clone(),
+        }),
+        Err(AdmissionError::InvalidInput)
+    );
+    frame.generation = 8;
     s.apply(&Input::Frame {
         surface_id: "surface-1".into(),
-        frame,
+        frame: frame.clone(),
     })
     .unwrap();
-    assert_eq!(s.apply(&Input::Propose(proposal(2))).unwrap().reason, None);
+    let mut p2 = proposal(2);
+    let mut raw: serde_json::Value =
+        serde_json::from_str(serde_json::to_value(&p2).unwrap()["raw"].as_str().unwrap()).unwrap();
+    raw["body"]["based_on_frame"]["generation"] = 8.into();
+    p2 = AdmissionRequest::decode(&raw.to_string(), &sender(), "session-1", 1, 2).unwrap();
+    assert_eq!(s.apply(&Input::Propose(p2)).unwrap().reason, None);
 }
 #[test]
 fn checked_sequence_epoch_and_frame_regression_leave_state_unchanged() {
@@ -593,4 +607,134 @@ fn unsupported_wait_refuses_before_reservation_but_native_inputs_admit() {
             .dispatch
         );
     }
+}
+
+#[test]
+fn r3_t1_05_human_click_without_frame_refuses_before_budget_or_seen_and_admits_with_frame() {
+    use metaviewer_core::wire::payload::SurfaceRequestCase5;
+    let mut s = state();
+    let surface = s.surfaces.get_mut("surface-1").unwrap();
+    surface.agent_controlled = false;
+    let saved_frame = surface.frame.take().unwrap();
+    let budget_before = s.remaining_budget;
+
+    let click_req: SurfaceRequestCase5 = serde_json::from_value(json!({
+        "schema": "surface_request/v0.2",
+        "op": "input",
+        "params": {
+            "surface_id": "surface-1",
+            "proposal_id": "human-click-1",
+            "origin": "human",
+            "action": {"type": "click", "x": 1, "y": 1, "button": "left"}
+        }
+    }))
+    .unwrap();
+
+    let out = s
+        .apply(&Input::HumanInput {
+            request: click_req.clone(),
+        })
+        .unwrap();
+    assert_eq!(out.reason, Some(Refusal::OutOfBounds));
+    assert!(!out.dispatch);
+    assert_eq!(s.remaining_budget, budget_before);
+
+    // Negative control: once a frame is present, the same in-bounds click with the
+    // same proposal_id (proving it was not burned in `seen`) admits and dispatches,
+    // and a subsequent replay of the same proposal_id is refused as already seen.
+    s.surfaces.get_mut("surface-1").unwrap().frame = Some(saved_frame);
+    let out_ok = s
+        .apply(&Input::HumanInput {
+            request: click_req.clone(),
+        })
+        .unwrap();
+    assert_eq!(out_ok.reason, None);
+    assert!(out_ok.dispatch);
+    assert_eq!(s.remaining_budget, budget_before - 1);
+    let out_replay = s.apply(&Input::HumanInput { request: click_req }).unwrap();
+    assert_eq!(out_replay.reason, Some(Refusal::Policy));
+    assert!(!out_replay.dispatch);
+}
+
+#[test]
+fn r3_t1_13_surface_request_create_enforces_nested_catalog_policy_before_budget_or_forward() {
+    use metaviewer_core::wire::payload::SurfaceRequest;
+    let mut s = state();
+    let budget_before = s.remaining_budget;
+
+    for bad_create in [
+        json!({
+            "schema": "surface_request/v0.2",
+            "op": "create",
+            "params": {
+                "kind": "browser",
+                "geometry": {"w": 1280, "h": 720},
+                "profile_id": "inner-host-1",
+                "nested_depth": 1
+            }
+        }),
+        json!({
+            "schema": "surface_request/v0.2",
+            "op": "create",
+            "params": {
+                "kind": "desktop_capsule",
+                "geometry": {"w": 1280, "h": 720},
+                "profile_id": "inner-host-1",
+                "nested_depth": 2
+            }
+        }),
+        json!({
+            "schema": "surface_request/v0.2",
+            "op": "create",
+            "params": {
+                "kind": "desktop_capsule",
+                "geometry": {"w": 800, "h": 600},
+                "profile_id": "inner-host-1",
+                "nested_depth": 1
+            }
+        }),
+        json!({
+            "schema": "surface_request/v0.2",
+            "op": "create",
+            "params": {
+                "kind": "browser",
+                "geometry": {"w": 1280, "h": 720},
+                "profile_id": "!!!"
+            }
+        }),
+        json!({
+            "schema": "surface_request/v0.2",
+            "op": "create",
+            "params": {
+                "kind": "browser",
+                "geometry": {"w": 1280, "h": 720},
+                "profile_id": "X"
+            }
+        }),
+    ] {
+        let request: SurfaceRequest = serde_json::from_value(bad_create).unwrap();
+        let out = s.apply(&Input::SurfaceRequest { request }).unwrap();
+        assert_eq!(out.reason, Some(Refusal::Policy));
+        assert_eq!(s.remaining_budget, budget_before);
+    }
+
+    // Negative control: valid program (desktop_capsule wire DTO) depth-1 create admits.
+    let valid_nested: SurfaceRequest = serde_json::from_value(json!({
+        "schema": "surface_request/v0.2",
+        "op": "create",
+        "params": {
+            "kind": "desktop_capsule",
+            "geometry": {"w": 1280, "h": 720},
+            "profile_id": "inner-host-1",
+            "nested_depth": 1
+        }
+    }))
+    .unwrap();
+    let out_ok = s
+        .apply(&Input::SurfaceRequest {
+            request: valid_nested,
+        })
+        .unwrap();
+    assert_eq!(out_ok.reason, None);
+    assert_eq!(s.remaining_budget, budget_before - 1);
 }

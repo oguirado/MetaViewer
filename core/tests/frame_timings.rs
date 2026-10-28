@@ -105,9 +105,11 @@ fn accepted_full_size_frames_have_disjoint_stages_and_refusals_have_no_row() {
             ));
             let pixels = Pixels(path);
             let bytes = vec![37u8; 1280 * 900 * 3];
+            use std::os::unix::fs::OpenOptionsExt;
             let mut file = std::fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
+                .mode(0o600)
                 .open(&pixels.0)
                 .unwrap();
             std::io::Write::write_all(&mut file, &bytes).unwrap();

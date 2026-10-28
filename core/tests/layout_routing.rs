@@ -374,3 +374,124 @@ fn layout_ops_without_daemon_return_typed_refusals_and_never_forward() {
         let _ = task.await;
     });
 }
+
+#[test]
+fn r3_t1_06_destroyed_prefixed_slot_tombstone_returns_unknown_slot_without_mutating_collision_partner(
+) {
+    support::run(async {
+        let temp = support::Temp::new();
+        let socket = temp.0.join("runtime/core.sock");
+        let state_dir = temp.0.join("state");
+        let uid = support::uid();
+        let listener = serve::bind(&socket, uid).await.unwrap();
+        let server = Arc::new(Mutex::new(
+            Server::open(config("layout-tombstone"), &state_dir, uid).unwrap(),
+        ));
+        let task = tokio::spawn(serve::serve(listener, server.clone(), uid));
+
+        let mut daemon = Peer::connect(&socket, "layout-tombstone", "daemon").await;
+        let mut ui = Peer::connect(&socket, "layout-tombstone", "ui").await;
+
+        let base_surface: Value = serde_json::from_str(include_str!(
+            "../../contracts/examples/v0.2/surface.valid.json"
+        ))
+        .unwrap();
+        let mut unprefixed = base_surface.clone();
+        unprefixed["surface_id"] = "surface-demo".into();
+        unprefixed["control"] = "human".into();
+        let mut prefixed = base_surface.clone();
+        prefixed["surface_id"] = "cuk-ai-slot-surface-demo".into();
+        prefixed["display"] = ":101".into();
+        prefixed["control"] = "human".into();
+
+        for s in [&unprefixed, &prefixed] {
+            daemon
+                .send(json!({
+                    "schema": "surface_event/v0.2",
+                    "event": "created",
+                    "data": {"surface": s}
+                }))
+                .await;
+            assert_eq!(ui.receive_json().await["event"], "created");
+        }
+
+        // Negative control 1: while both are live, targeting "cuk-ai-slot-surface-demo"
+        // hits the exact prefixed surface, leaving "surface-demo" untouched.
+        ui.send(json!({
+            "schema": "ui_intent/v0.2",
+            "request_id": "hide-prefixed-live",
+            "op": "hide",
+            "params": {"slot_id": "cuk-ai-slot-surface-demo"}
+        }))
+        .await;
+        assert_eq!(ui.receive_json().await["op"], "hide");
+
+        // Negative control 2: a non-collision prefixed alias for another live surface resolves via prefix strip.
+        let mut other = base_surface.clone();
+        other["surface_id"] = "surface-other".into();
+        other["display"] = ":102".into();
+        other["control"] = "human".into();
+        daemon
+            .send(json!({
+                "schema": "surface_event/v0.2",
+                "event": "created",
+                "data": {"surface": other}
+            }))
+            .await;
+        assert_eq!(ui.receive_json().await["event"], "created");
+        ui.send(json!({
+            "schema": "ui_intent/v0.2",
+            "request_id": "hide-alias-other",
+            "op": "hide",
+            "params": {"slot_id": "cuk-ai-slot-surface-other"}
+        }))
+        .await;
+        assert_eq!(ui.receive_json().await["op"], "hide");
+
+        // Destroy the exact prefixed surface "cuk-ai-slot-surface-demo".
+        let mut destroyed_prefixed = prefixed.clone();
+        destroyed_prefixed["state"] = "destroyed".into();
+        daemon
+            .send(json!({
+                "schema": "surface_event/v0.2",
+                "event": "state_changed",
+                "data": {"surface": destroyed_prefixed}
+            }))
+            .await;
+        assert_eq!(ui.receive_json().await["event"], "state_changed");
+
+        // R3-T1-06: targeting the destroyed exact ID "cuk-ai-slot-surface-demo" must return
+        // LAYOUT_UNKNOWN_SLOT and must NOT strip the prefix to mutate live "surface-demo".
+        ui.send(json!({
+            "schema": "ui_intent/v0.2",
+            "request_id": "hide-destroyed-prefixed",
+            "op": "hide",
+            "params": {"slot_id": "cuk-ai-slot-surface-demo"}
+        }))
+        .await;
+        let verdict = ui.receive_json().await;
+        assert_eq!(verdict["decision"], "refused");
+        assert_eq!(verdict["reason_code"], "POLICY");
+        let err_event = ui.receive_json().await;
+        assert_eq!(err_event["data"]["code"], "LAYOUT_UNKNOWN_SLOT");
+        assert_eq!(err_event["data"]["surface_id"], "cuk-ai-slot-surface-demo");
+
+        // Verify surviving "surface-demo" was NOT hidden by the refused command above:
+        // a direct "hide" on "surface-demo" must still succeed (whereas hiding an already-hidden
+        // surface would fail with LAYOUT_ILLEGAL_TRANSITION).
+        ui.send(json!({
+            "schema": "ui_intent/v0.2",
+            "request_id": "hide-surviving-unprefixed",
+            "op": "hide",
+            "params": {"slot_id": "surface-demo"}
+        }))
+        .await;
+        let ok_hide = ui.receive_json().await;
+        assert_eq!(ok_hide["op"], "hide");
+        assert_eq!(ok_hide["request_id"], "hide-surviving-unprefixed");
+
+        drop((daemon, ui));
+        task.abort();
+        let _ = task.await;
+    });
+}

@@ -77,14 +77,24 @@ impl Peer {
 }
 struct SharedFrame(std::path::PathBuf);
 impl SharedFrame {
+    const WIDTH: u64 = 100;
+    const HEIGHT: u64 = 60;
+    const BYTES: usize = (Self::WIDTH as usize) * (Self::HEIGHT as usize) * 3;
     fn new() -> Self {
+        use std::os::unix::fs::OpenOptionsExt;
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let path = std::path::PathBuf::from(format!(
             "/dev/shm/mv-wire-{}-{}-frame",
             std::process::id(),
             NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
-        std::fs::write(&path, b"immutable fake frame").unwrap();
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+            .unwrap();
+        std::io::Write::write_all(&mut file, &vec![b'f'; Self::BYTES]).unwrap();
         Self(path)
     }
     fn value(&self, generation: u64) -> Value {
@@ -92,7 +102,9 @@ impl SharedFrame {
             "../../contracts/examples/v0.2/frame_ref.valid.json"
         ))
         .unwrap();
-        value["sha256"] = sha256_hex(b"immutable fake frame").into();
+        value["width"] = Self::WIDTH.into();
+        value["height"] = Self::HEIGHT.into();
+        value["sha256"] = sha256_hex(&vec![b'f'; Self::BYTES]).into();
         value["ramws_path"] = self.0.to_str().unwrap().into();
         value["generation"] = generation.into();
         value
@@ -151,11 +163,12 @@ fn live_frame_fanout_isolates_surface_subscriptions() {
         );
         let a = SharedFrame::new();
         let b = SharedFrame::new();
-        std::fs::write(&b.0, b"different immutable frame").unwrap();
+        let b_bytes = vec![b'b'; SharedFrame::BYTES];
+        std::fs::write(&b.0, &b_bytes).unwrap();
         let fa = a.value(1);
         let mut fb = b.value(1);
         fb["surface_id"] = "surface-b".into();
-        fb["sha256"] = sha256_hex(b"different immutable frame").into();
+        fb["sha256"] = sha256_hex(&b_bytes).into();
         // A subscribed UI receives B while the A-only agent must not.
         daemon.send(fb.clone()).await;
         assert_eq!(serde_json::to_value(ui.receive().await.body).unwrap(), fb);
@@ -224,15 +237,18 @@ fn lifecycle_requests_forward_and_replies_are_durable() {
         for peer in [&mut ui, &mut agent] {
             assert_eq!(serde_json::to_value(peer.receive().await.body).unwrap(), f);
         }
-        for op in ["frame_unsubscribe", "frame_subscribe"] {
+        for (idx, op) in ["frame_unsubscribe", "frame_subscribe"]
+            .into_iter()
+            .enumerate()
+        {
             let request = json!({"schema":"surface_request/v0.2","op":op,"params":{"surface_id":"surface-demo"}});
             agent.send(request.clone()).await;
             assert_eq!(
                 serde_json::to_value(daemon.receive().await.body).unwrap(),
                 request
             );
-            let event =
-                json!({"schema":"surface_event/v0.2","event":"frame_ready","data":{"frame_ref":f}});
+            let f_next = frame.value((idx + 2) as u64);
+            let event = json!({"schema":"surface_event/v0.2","event":"frame_ready","data":{"frame_ref":f_next}});
             daemon.send(event.clone()).await;
             assert_eq!(
                 serde_json::to_value(ui.receive().await.body).unwrap(),
@@ -454,9 +470,9 @@ fn socket_flow_admission_control_and_replay() {
         ui.verdict("refused", Some("POLICY")).await;
         // A fresh frame under human ownership proves ownership refusal independently
         // of the stale-frame fence's precedence in the admission reducer.
-        daemon.send(frame.value(2)).await;
+        daemon.send(frame.value(3)).await;
         ui.receive().await;
-        agent.send(proposal("human", &frame.value(2))).await;
+        agent.send(proposal("human", &frame.value(3))).await;
         agent
             .verdict("refused", Some("SURFACE_NOT_AGENT_CONTROLLED"))
             .await;
@@ -471,12 +487,12 @@ fn socket_flow_admission_control_and_replay() {
             "release_control"
         );
         agent
-            .send(proposal("before-refresh", &frame.value(2)))
+            .send(proposal("before-refresh", &frame.value(3)))
             .await;
         agent.verdict("refused", Some("STALE_FRAME")).await;
-        daemon.send(frame.value(3)).await;
+        daemon.send(frame.value(4)).await;
         ui.receive().await;
-        agent.send(proposal("readmitted", &frame.value(3))).await;
+        agent.send(proposal("readmitted", &frame.value(4))).await;
         agent.verdict("admitted", None).await;
         daemon.receive().await;
         let mut changed = surface.clone();
@@ -486,27 +502,29 @@ fn socket_flow_admission_control_and_replay() {
         agent
             .verdict("refused", Some("SURFACE_NOT_AGENT_CONTROLLED"))
             .await;
-        agent.send(proposal("lost-surface", &frame.value(3))).await;
+        agent.send(proposal("lost-surface", &frame.value(4))).await;
         agent
             .verdict("refused", Some("SURFACE_NOT_AGENT_CONTROLLED"))
             .await;
         let mut settled: Value = serde_json::from_str(include_str!(
-            "../../contracts/examples/v0.2/action_receipt.valid.json"
+            "../../contracts/examples/v0.2/action_receipt.valid.native-key.json"
         ))
         .unwrap();
         settled["proposal_id"] = "readmitted".into();
+        settled["after_frame"] = frame.value(4);
+        settled["native_evidence"]["kind"] = "click".into();
         daemon.send(settled).await;
         agent.receive().await;
         daemon.send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":surface}})).await;
         ui.receive().await;
         agent
-            .send(proposal("updated-needs-frame", &frame.value(3)))
+            .send(proposal("updated-needs-frame", &frame.value(4)))
             .await;
         agent.verdict("refused", Some("STALE_FRAME")).await;
-        daemon.send(frame.value(4)).await;
+        daemon.send(frame.value(5)).await;
         ui.receive().await;
         agent
-            .send(proposal("updated-admitted", &frame.value(4)))
+            .send(proposal("updated-admitted", &frame.value(5)))
             .await;
         agent.verdict("admitted", None).await;
         daemon.receive().await;
@@ -518,7 +536,7 @@ fn socket_flow_admission_control_and_replay() {
             .verdict("refused", Some("SURFACE_NOT_AGENT_CONTROLLED"))
             .await;
         agent
-            .send(proposal("destroyed-surface", &frame.value(4)))
+            .send(proposal("destroyed-surface", &frame.value(5)))
             .await;
         agent
             .verdict("refused", Some("SURFACE_NOT_AGENT_CONTROLLED"))

@@ -47,7 +47,7 @@ fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-fn byte_len(frame: &FrameRef) -> Option<u64> {
+pub(crate) fn byte_len(frame: &FrameRef) -> Option<u64> {
     if frame.width == 0 || frame.height == 0 || frame.generation == 0 {
         return None;
     }

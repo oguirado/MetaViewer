@@ -56,6 +56,7 @@ class MvctlCoreTests(unittest.TestCase):
         cls.build_temp.cleanup()
 
     def setUp(self):
+        self.ram = None
         temporary = tempfile.TemporaryDirectory(prefix="mvctl-real-")
         self.addCleanup(temporary.cleanup)
         self.directory = Path(temporary.name)
@@ -93,15 +94,21 @@ class MvctlCoreTests(unittest.TestCase):
         self.surface = self.fixture("surface")
         self.send({"schema": "surface_event/v0.2", "event": "created",
                    "data": {"surface": self.surface}})
-        ram = tempfile.NamedTemporaryFile(prefix="mvctl-frame-", dir="/dev/shm")
-        self.addCleanup(ram.close)
-        ram.write(b"immutable mvctl frame witness")
-        ram.flush()
+        self.ram = tempfile.NamedTemporaryFile(prefix="mvctl-frame-", dir="/dev/shm")
+        self.addCleanup(self.ram.close)
+        os.chmod(self.ram.name, 0o600)
+        frame_bytes = b"mvctl-rgb24!"
+        self.ram.write(frame_bytes)
+        self.ram.flush()
         self.frame = self.fixture("frame_ref")
-        self.frame.update(ramws_path=ram.name, generation=2,
-                          sha256=hashlib.sha256(Path(ram.name).read_bytes()).hexdigest())
+        self.frame.update(width=2, height=2, ramws_path=self.ram.name, generation=2,
+                          sha256=hashlib.sha256(frame_bytes).hexdigest())
         self.send(self.frame)
         self.barrier()
+
+    def tearDown(self):
+        if getattr(self, "ram", None) is not None:
+            self.ram.close()
 
     def stop_core(self):
         if self.process.poll() is None:
@@ -147,6 +154,9 @@ class MvctlCoreTests(unittest.TestCase):
         proposal["schema"] = schema
         proposal["based_on_frame"] = {"sha256": self.frame["sha256"],
                                       "generation": generation}
+        proposal["action"] = {"type": "click", "x": 0, "y": 0, "button": "left"}
+        proposal["expectation"] = {"type": "changed_region",
+                                   "bbox": {"x": 0, "y": 0, "w": 1, "h": 1}}
         path = self.directory / "proposal.json"
         path.write_text(json.dumps(proposal))
         return path, proposal

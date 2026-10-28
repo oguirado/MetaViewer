@@ -301,7 +301,14 @@ impl Server {
                                 }
                             }
                             if event["outcome"]["reason"].is_null() {
-                                tool_state.retain(&env.body);
+                                if let Command::ActionReceipt(receipt) = &env.body {
+                                    let recomputed = Command::ActionReceipt(Box::new(
+                                        tool_state.recompute_daemon_receipt(receipt, &root),
+                                    ));
+                                    tool_state.retain(&recomputed);
+                                } else {
+                                    tool_state.retain(&env.body);
+                                }
                             }
                             // One envelope can witness several journal records. A restarted
                             // sequence must not overwrite an older nonce witness.
@@ -479,16 +486,7 @@ impl Server {
     fn witness(&mut self, frame: &FrameRef) -> Result<Witness> {
         self.witness_pixels(frame).map(|(witness, _)| witness)
     }
-    fn read_shm_pixels(frame: &FrameRef) -> Result<VerifiedPixels> {
-        Self::read_shm_pixels_under(Path::new("/dev/shm"), frame)
-    }
-    fn read_shm_pixels_under(shm_root: &Path, frame: &FrameRef) -> Result<VerifiedPixels> {
-        let started = Instant::now();
-        #[cfg(test)]
-        let t_read = Instant::now();
-        #[cfg(test)]
-        let h_before = crate::journal::STAGE_TIMINGS.with(|c| c.get().hash_ns);
-        let path = Path::new(&frame.ramws_path);
+    fn open_anchored_shm_dir(shm_root: &Path, path: &Path) -> Result<(fs::File, PathBuf)> {
         if !path.starts_with("/dev/shm")
             || path == Path::new("/dev/shm")
             || path
@@ -535,7 +533,35 @@ impl Server {
             .file_name()
             .ok_or_else(|| invalid("missing frame filename"))?;
         let anchored = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd())).join(name);
+        Ok((directory, anchored))
+    }
+    fn read_shm_pixels(frame: &FrameRef) -> Result<VerifiedPixels> {
+        Self::read_shm_pixels_under(Path::new("/dev/shm"), frame)
+    }
+    pub(crate) fn read_shm_pixels_under(
+        shm_root: &Path,
+        frame: &FrameRef,
+    ) -> Result<VerifiedPixels> {
+        let started = Instant::now();
+        #[cfg(test)]
+        let t_read = Instant::now();
+        #[cfg(test)]
+        let h_before = crate::journal::STAGE_TIMINGS.with(|c| c.get().hash_ns);
+        let uid = effective_uid()?;
+        let expected_bytes = crate::verify::byte_len(frame)
+            .filter(|&len| len > 0 && len <= 64 * 1024 * 1024)
+            .ok_or_else(|| invalid("invalid frame witness"))?;
+        let path = Path::new(&frame.ramws_path);
+        let (_directory, anchored) = Self::open_anchored_shm_dir(shm_root, path)?;
         let before = fs::symlink_metadata(&anchored)?;
+        if !before.is_file()
+            || before.file_type().is_symlink()
+            || before.uid() != uid
+            || (before.mode() & 0o077) != 0
+            || before.len() != expected_bytes
+        {
+            return Err(invalid("invalid frame witness"));
+        }
         let file = fs::OpenOptions::new()
             .read(true)
             .custom_flags(frame_open_flags()?)
@@ -544,12 +570,13 @@ impl Server {
         if !meta.is_file()
             || before.dev() != meta.dev()
             || before.ino() != meta.ino()
-            || meta.len() == 0
-            || meta.len() > 64 * 1024 * 1024
+            || meta.uid() != uid
+            || (meta.mode() & 0o077) != 0
+            || meta.len() != expected_bytes
         {
             return Err(invalid("invalid frame witness"));
         }
-        let expected_len = meta.len() as usize;
+        let expected_len = expected_bytes as usize;
         let res = VerifiedPixels::read_verified(&file, expected_len, &frame.sha256);
         #[cfg(test)]
         crate::journal::STAGE_TIMINGS.with(|cell| {
@@ -559,6 +586,16 @@ impl Server {
             cell.set(s);
         });
         let mut verified = res?;
+        let after = file.metadata()?;
+        if !after.is_file()
+            || after.dev() != meta.dev()
+            || after.ino() != meta.ino()
+            || after.uid() != uid
+            || (after.mode() & 0o077) != 0
+            || after.len() != expected_bytes
+        {
+            return Err(invalid("invalid frame witness"));
+        }
         verified.read_started = Some(started);
         verified.shm_read_ns = started
             .elapsed()
@@ -574,8 +611,7 @@ impl Server {
     }
     fn precheck_frame_on_not_found(&self, frame: &FrameRef) -> Result<()> {
         if frame.generation < 1
-            || frame.width < 1
-            || frame.height < 1
+            || crate::verify::byte_len(frame).is_none_or(|n| n == 0 || n > 64 * 1024 * 1024)
             || frame.sha256.len() != 64
             || !frame
                 .sha256
@@ -595,7 +631,7 @@ impl Server {
             .ok_or_else(|| invalid("unknown surface"))?;
         if s.frame
             .as_ref()
-            .is_some_and(|f| frame.generation < f.generation)
+            .is_some_and(|f| frame.generation <= f.generation)
         {
             return Err(invalid("generation regression"));
         }
@@ -683,10 +719,16 @@ impl Server {
     // Uncommitted superseded frames skip pixel reads and SHA-256 verification by design:
     // skipped bytes never enter state, journal, capture, or display.
     fn can_supersede_frame(&self, epoch: u64, frame: &FrameRef) -> bool {
+        let Some(expected_bytes) =
+            crate::verify::byte_len(frame).filter(|&len| len > 0 && len <= 64 * 1024 * 1024)
+        else {
+            return false;
+        };
+        let Ok(uid) = effective_uid() else {
+            return false;
+        };
         if epoch != self.authority.state().epoch
             || frame.generation < 1
-            || frame.width < 1
-            || frame.height < 1
             || frame.sha256.len() != 64
             || !frame
                 .sha256
@@ -697,14 +739,19 @@ impl Server {
             return false;
         }
         let path = Path::new(&frame.ramws_path);
-        if !path.starts_with("/dev/shm")
-            || path == Path::new("/dev/shm")
-            || path
-                .components()
-                .any(|c| matches!(c, std::path::Component::ParentDir))
-            || !fs::symlink_metadata(path)
-                .is_ok_and(|m| m.is_file() && m.len() > 0 && m.len() <= 64 * 1024 * 1024)
-        {
+        let Ok((directory, anchored)) = Self::open_anchored_shm_dir(Path::new("/dev/shm"), path)
+        else {
+            return false;
+        };
+        let valid_leaf = fs::symlink_metadata(&anchored).is_ok_and(|m| {
+            m.is_file()
+                && !m.file_type().is_symlink()
+                && m.uid() == uid
+                && (m.mode() & 0o077) == 0
+                && m.len() == expected_bytes
+        });
+        drop(directory);
+        if !valid_leaf {
             return false;
         }
         if self.authority.state().is_destroyed(&frame.surface_id) {
@@ -717,7 +764,7 @@ impl Server {
             && surface
                 .frame
                 .as_ref()
-                .is_none_or(|f| frame.generation >= f.generation)
+                .is_none_or(|f| frame.generation > f.generation)
     }
     fn skip_superseded_frame(
         &mut self,
@@ -730,6 +777,7 @@ impl Server {
             return Ok(false);
         }
         peer.check_sender(env)?;
+        let _now_ns = self.now()?;
         self.replay
             .record(&env.session_id, &env.from, &env.nonce, env.seq)?;
         Ok(true)
@@ -1208,8 +1256,12 @@ impl Server {
                     .ok_or_else(|| invalid("no agent"))?
                     .endpoint
                     .clone();
-                self.tool_state.retain(&env.body);
-                if let Err(error) = self.send_at(now_ns, &agent, env.body.clone()) {
+                let recomputed = Command::ActionReceipt(Box::new(
+                    self.tool_state
+                        .recompute_daemon_receipt(receipt, &self.root),
+                ));
+                self.tool_state.retain(&recomputed);
+                if let Err(error) = self.send_at(now_ns, &agent, recomputed) {
                     if error.downcast_ref::<SendFailure>().is_none() {
                         return Err(error);
                     }
@@ -1287,6 +1339,7 @@ impl Server {
                 now_ns,
             })?;
             if out.dispatch {
+                self.tool_state.retain_proposal(proposal);
                 let body = serde_json::from_value(
                     serde_json::json!({"schema":"surface_request/v0.2","op":"input","params":{"surface_id":proposal.surface_id,"proposal_id":proposal.proposal_id,"origin":"agent","action":proposal.action}}),
                 )?;
@@ -1411,10 +1464,14 @@ impl Server {
         value: &serde_json::Value,
         boundary: Witness,
     ) -> Result<()> {
-        let sid = value["params"]["slot_id"]
+        let raw_slot = value["params"]["slot_id"]
             .as_str()
             .ok_or_else(|| invalid("slot required"))?;
-        let sid = self.tool_state.slot_surface(sid).to_owned();
+        let sid = if self.authority.state().is_destroyed(raw_slot) {
+            raw_slot.to_owned()
+        } else {
+            self.tool_state.slot_surface(raw_slot).to_owned()
+        };
         let extended = !matches!(value["op"].as_str(), Some("fold" | "unfold"));
         if !self
             .authority
@@ -2182,6 +2239,7 @@ mod nv_regressions {
 
     #[test]
     fn nv_a1_nested_frames_and_no_symlinks() {
+        use std::os::unix::fs::PermissionsExt;
         let mut f = Fixture::new();
         let root = PathBuf::from(format!(
             "/dev/shm/mv-nv-{}-{}",
@@ -2191,14 +2249,18 @@ mod nv_regressions {
         fs::create_dir(&root).unwrap();
         let direct = root.with_extension("frame");
         fs::write(&direct, b"pixels").unwrap();
+        fs::set_permissions(&direct, fs::Permissions::from_mode(0o600)).unwrap();
         let nested = root.join("frame");
         fs::write(&nested, b"pixels").unwrap();
+        fs::set_permissions(&nested, fs::Permissions::from_mode(0o600)).unwrap();
         let link = root.with_extension("link");
         std::os::unix::fs::symlink(&direct, &link).unwrap();
         let mut frame: FrameRef = serde_json::from_str(include_str!(
             "../../../contracts/examples/v0.2/frame_ref.valid.json"
         ))
         .unwrap();
+        frame.width = 2;
+        frame.height = 1;
         frame.sha256 = sha256_hex(b"pixels");
         frame.ramws_path = direct.to_str().unwrap().into();
         assert!(f.server.witness(&frame).is_ok());
@@ -2221,6 +2283,7 @@ mod nv_regressions {
     }
     #[test]
     fn nv_r2_contract_adapter_layout_and_component_guards() {
+        use std::os::unix::fs::PermissionsExt;
         let mut f = Fixture::new();
         let shm = ShmFixture::new();
         let root = &shm.0;
@@ -2228,6 +2291,7 @@ mod nv_regressions {
         fs::create_dir_all(&adapter).unwrap();
         let frame_path = adapter.join("f.rgb");
         fs::write(&frame_path, b"pixels").unwrap();
+        fs::set_permissions(&frame_path, fs::Permissions::from_mode(0o600)).unwrap();
         let alias = root.join("root-alias");
         std::os::unix::fs::symlink(root, &alias).unwrap();
         let inner_alias = root.join("alias");
@@ -2238,6 +2302,8 @@ mod nv_regressions {
             "../../../contracts/examples/v0.2/frame_ref.valid.json"
         ))
         .unwrap();
+        frame.width = 2;
+        frame.height = 1;
         frame.sha256 = sha256_hex(b"pixels");
         // Preserve the contract's nested layout under this test's exclusive root.
         let contract_path = root.join(
@@ -2254,12 +2320,14 @@ mod nv_regressions {
             .unwrap();
         use std::io::Write;
         contract_file.write_all(b"pixels").unwrap();
+        fs::set_permissions(&contract_path, fs::Permissions::from_mode(0o600)).unwrap();
         frame.ramws_path = contract_path.to_str().unwrap().into();
         let contract_admitted = f.server.witness(&frame).is_ok();
         frame.ramws_path = frame_path.to_str().unwrap().into();
         let adapter_admitted = f.server.witness(&frame).is_ok();
         let outside = f.root.join("outside.rgb");
         fs::write(&outside, b"pixels").unwrap();
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o600)).unwrap();
         let bad_paths = [
             alias.join("frames-ABC123/f.rgb"),
             inner_alias.join("f.rgb"),
@@ -2391,6 +2459,7 @@ mod nv_regressions {
     #[test]
     fn nv_r2_destroyed_frames_never_fanout() {
         run(async {
+            use std::os::unix::fs::PermissionsExt;
             let mut f = Fixture::new();
             f.seed();
             let ui = f.attach(Component::Ui, 8);
@@ -2401,10 +2470,14 @@ mod nv_regressions {
                 NEXT.fetch_add(1, Ordering::Relaxed)
             ));
             fs::write(&path, b"pixels").unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
             let mut frame: Value = serde_json::from_str(include_str!(
                 "../../../contracts/examples/v0.2/frame_ref.valid.json"
             ))
             .unwrap();
+            frame["width"] = 2.into();
+            frame["height"] = 1.into();
+            frame["generation"] = 2.into();
             frame["ramws_path"] = path.to_str().unwrap().into();
             frame["sha256"] = sha256_hex(b"pixels").into();
             // Negative control: a committed live frame is published.
@@ -2418,11 +2491,13 @@ mod nv_regressions {
                 })
                 .unwrap();
             let before = f.server.authority.state().domain_snapshot().unwrap();
+            frame["generation"] = 3.into();
             f.route(Component::Daemon, 3, frame.clone()).await.unwrap();
             assert!(
                 ui.try_recv().is_err(),
                 "refused FrameRef must not be published"
             );
+            frame["generation"] = 4.into();
             f.route(Component::Daemon, 4, json!({"schema":"surface_event/v0.2","event":"frame_ready","data":{"frame_ref":frame}})).await.unwrap();
             assert!(
                 ui.try_recv().is_err(),
@@ -2537,6 +2612,7 @@ mod nv_regressions {
             ))
             .unwrap();
             receipt["proposal_id"] = "nv-proposal".into();
+            receipt["verified"] = false.into();
             f.route(Component::Daemon, 2, receipt).await.unwrap();
             assert!(f.server.authority.state().pending.is_empty());
             assert!(f.server.authority.state().leases.is_empty());
@@ -3015,6 +3091,7 @@ mod nv_regressions {
         }
 
         run(async {
+            use std::os::unix::fs::PermissionsExt;
             let mut f = Fixture::new();
             f.seed();
             let _ui = f.attach(Component::Ui, 32);
@@ -3023,13 +3100,16 @@ mod nv_regressions {
             let session_root = f.server.root.clone();
             crate::journal::hold_sync_worker_for_test(&session_root);
             for gen in 2..=10u64 {
-                let bytes = format!("w3-frame-pixels-{gen}").into_bytes();
+                let bytes = format!("w3-frame-pixels-{gen:02}").into_bytes();
                 let frame_path = shm.0.join(format!("f-{gen}.rgb"));
                 fs::write(&frame_path, &bytes).unwrap();
+                fs::set_permissions(&frame_path, fs::Permissions::from_mode(0o600)).unwrap();
                 let mut frame: Value = serde_json::from_str(include_str!(
                     "../../../contracts/examples/v0.2/frame_ref.valid.json"
                 ))
                 .unwrap();
+                frame["width"] = 6.into();
+                frame["height"] = 1.into();
                 frame["generation"] = gen.into();
                 frame["ramws_path"] = frame_path.to_str().unwrap().into();
                 frame["sha256"] = sha256_hex(&bytes).into();
@@ -3079,13 +3159,16 @@ mod nv_regressions {
             let _daemon = f.attach(Component::Daemon, 32);
             crate::journal::hold_sync_worker_for_test(&session_root);
             for gen in 11..=19u64 {
-                let bytes = format!("w3-frame-pixels-{gen}").into_bytes();
+                let bytes = format!("w3-frame-pixels-{gen:02}").into_bytes();
                 let frame_path = shm.0.join(format!("f-{gen}.rgb"));
                 fs::write(&frame_path, &bytes).unwrap();
+                fs::set_permissions(&frame_path, fs::Permissions::from_mode(0o600)).unwrap();
                 let mut frame: Value = serde_json::from_str(include_str!(
                     "../../../contracts/examples/v0.2/frame_ref.valid.json"
                 ))
                 .unwrap();
+                frame["width"] = 6.into();
+                frame["height"] = 1.into();
                 frame["generation"] = gen.into();
                 frame["ramws_path"] = frame_path.to_str().unwrap().into();
                 frame["sha256"] = sha256_hex(&bytes).into();
@@ -3100,6 +3183,219 @@ mod nv_regressions {
                 serde_json::from_slice(&fs::read(session_root.join("checkpoint.json")).unwrap())
                     .unwrap();
             assert_eq!(cp_before_drop["count"], 11);
+        });
+    }
+    #[test]
+    fn r3_t1_16_superseded_frame_checks_clock_ceiling_before_replay_record() {
+        run(async {
+            use std::os::unix::fs::PermissionsExt;
+            let mut f = Fixture::new();
+            f.seed();
+            let _ui = f.attach(Component::Ui, 8);
+            let _daemon = f.attach(Component::Daemon, 8);
+            let shm = ShmFixture::new();
+            let p2 = shm.0.join("f2.rgb");
+            let p3 = shm.0.join("f3.rgb");
+            fs::write(&p2, b"rgb").unwrap();
+            fs::write(&p3, b"BGR").unwrap();
+            fs::set_permissions(&p2, fs::Permissions::from_mode(0o600)).unwrap();
+            fs::set_permissions(&p3, fs::Permissions::from_mode(0o600)).unwrap();
+
+            let make_frame = |gen: u64, path: &Path, bytes: &[u8]| -> Value {
+                let mut frame: Value = serde_json::from_str(include_str!(
+                    "../../../contracts/examples/v0.2/frame_ref.valid.json"
+                ))
+                .unwrap();
+                frame["width"] = 1.into();
+                frame["height"] = 1.into();
+                frame["generation"] = gen.into();
+                frame["ramws_path"] = path.to_str().unwrap().into();
+                frame["sha256"] = sha256_hex(bytes).into();
+                frame
+            };
+            let env2 = f.envelope(Component::Daemon, 2, make_frame(2, &p2, b"rgb"));
+            let env3 = f.envelope(Component::Daemon, 3, make_frame(3, &p3, b"BGR"));
+
+            let reg = f
+                .server
+                .config
+                .peers
+                .iter()
+                .find(|r| r.endpoint.component == Component::Daemon)
+                .unwrap()
+                .clone();
+            let policy = HandshakePolicy::new(
+                effective_uid().unwrap(),
+                reg.endpoint.clone(),
+                f.server.config.core.endpoint.clone(),
+                "nv-session".into(),
+                reg.hello.clone(),
+            )
+            .unwrap();
+            let hello = f.envelope(
+                Component::Daemon,
+                1,
+                serde_json::to_value(&reg.hello).unwrap(),
+            );
+            let (mut a, mut b) = UnixStream::pair().unwrap();
+            let task = tokio::spawn(async move { write_frame(&mut a, &hello).await.unwrap() });
+            let peer = handshake_at(
+                &mut b,
+                &policy,
+                &WireLimits::default(),
+                tokio::time::Instant::now(),
+            )
+            .await
+            .unwrap();
+            task.await.unwrap();
+
+            // At/above the clock ceiling, skipping a superseded frame in route_daemon_batch
+            // must fail with ClockCeilingError before recording replay state.
+            f.server.origin = Instant::now();
+            f.server.clock_offset = Duration::from_nanos(MAX_WIRE_INTEGER);
+            let before_state = f.server.snapshot().unwrap();
+            let frame2: FrameRef = serde_json::from_value(make_frame(2, &p2, b"rgb")).unwrap();
+            let err = f
+                .server
+                .skip_superseded_frame(&peer, 1, &env2, &frame2)
+                .unwrap_err();
+            assert!(
+                err.downcast_ref::<ClockCeilingError>().is_some(),
+                "skip_superseded_frame at ceiling must fail with ClockCeilingError: {err}"
+            );
+            assert_eq!(
+                f.server.snapshot().unwrap(),
+                before_state,
+                "replay state must remain untouched when clock ceiling refuses superseded frame"
+            );
+
+            // Negative control: once the clock is below the ceiling, the same seq=2
+            // envelope was not burned in replay and can be superseded cleanly by seq=3.
+            f.server.origin = Instant::now();
+            f.server.clock_offset = Duration::ZERO;
+            let skipped = f
+                .server
+                .skip_superseded_frame(&peer, 1, &env2, &frame2)
+                .unwrap();
+            assert!(skipped);
+            f.server.route(&peer, 1, env3).unwrap();
+            assert_eq!(
+                f.server.authority.state().surfaces["surface-demo"]
+                    .frame
+                    .as_ref()
+                    .unwrap()
+                    .generation,
+                3
+            );
+        });
+    }
+    #[test]
+    fn r3_t1_17_can_supersede_frame_rejects_symlink_parent_and_batch_retires_daemon() {
+        run(async {
+            use std::os::unix::fs::PermissionsExt;
+            let mut f = Fixture::new();
+            f.seed();
+            let _ui = f.attach(Component::Ui, 8);
+            let _daemon = f.attach(Component::Daemon, 8);
+            let shm = ShmFixture::new();
+            let real_dir = shm.0.join("real");
+            fs::create_dir(&real_dir).unwrap();
+            let symlink_dir = shm.0.join("symlink-parent");
+            std::os::unix::fs::symlink(&real_dir, &symlink_dir).unwrap();
+
+            let p2_target = real_dir.join("f2.rgb");
+            let p2_via_symlink = symlink_dir.join("f2.rgb");
+            let p3_legit = real_dir.join("f3.rgb");
+            fs::write(&p2_target, b"rgb").unwrap();
+            fs::write(&p3_legit, b"BGR").unwrap();
+            fs::set_permissions(&p2_target, fs::Permissions::from_mode(0o600)).unwrap();
+            fs::set_permissions(&p3_legit, fs::Permissions::from_mode(0o600)).unwrap();
+
+            let make_frame = |gen: u64, path: &Path, bytes: &[u8]| -> Value {
+                let mut frame: Value = serde_json::from_str(include_str!(
+                    "../../../contracts/examples/v0.2/frame_ref.valid.json"
+                ))
+                .unwrap();
+                frame["width"] = 1.into();
+                frame["height"] = 1.into();
+                frame["generation"] = gen.into();
+                frame["ramws_path"] = path.to_str().unwrap().into();
+                frame["sha256"] = sha256_hex(bytes).into();
+                frame
+            };
+            let frame2_bad: FrameRef =
+                serde_json::from_value(make_frame(2, &p2_via_symlink, b"rgb")).unwrap();
+            let frame3_ok: FrameRef =
+                serde_json::from_value(make_frame(3, &p3_legit, b"BGR")).unwrap();
+            assert!(
+                !f.server.can_supersede_frame(1, &frame2_bad),
+                "can_supersede_frame must reject a frame whose parent directory is a symlink"
+            );
+            assert!(
+                f.server.can_supersede_frame(1, &frame3_ok),
+                "negative control: legitimate anchored shm directory must be accepted"
+            );
+
+            let reg = f
+                .server
+                .config
+                .peers
+                .iter()
+                .find(|r| r.endpoint.component == Component::Daemon)
+                .unwrap()
+                .clone();
+            let policy = HandshakePolicy::new(
+                effective_uid().unwrap(),
+                reg.endpoint.clone(),
+                f.server.config.core.endpoint.clone(),
+                "nv-session".into(),
+                reg.hello.clone(),
+            )
+            .unwrap();
+            let hello = f.envelope(
+                Component::Daemon,
+                1,
+                serde_json::to_value(&reg.hello).unwrap(),
+            );
+            let (mut a, mut b) = UnixStream::pair().unwrap();
+            let task = tokio::spawn(async move { write_frame(&mut a, &hello).await.unwrap() });
+            let peer = handshake_at(
+                &mut b,
+                &policy,
+                &WireLimits::default(),
+                tokio::time::Instant::now(),
+            )
+            .await
+            .unwrap();
+            task.await.unwrap();
+
+            let env2_bad = f.envelope(Component::Daemon, 2, make_frame(2, &p2_via_symlink, b"rgb"));
+            let env3_ok = f.envelope(Component::Daemon, 3, make_frame(3, &p3_legit, b"BGR"));
+            assert!(
+                !f.server
+                    .skip_superseded_frame(&peer, 1, &env2_bad, &frame2_bad)
+                    .unwrap(),
+                "skip_superseded_frame must refuse symlink-parent shm path"
+            );
+            assert!(
+                f.server.route(&peer, 1, env2_bad).is_err(),
+                "routing symlink-parent frame must fail anchored check and retire daemon"
+            );
+            assert_eq!(
+                f.server.authority.state().surfaces["surface-demo"]
+                    .frame
+                    .as_ref()
+                    .unwrap()
+                    .generation,
+                1,
+                "failed frame must not commit"
+            );
+            assert!(
+                f.server
+                    .skip_superseded_frame(&peer, 1, &env3_ok, &frame3_ok)
+                    .unwrap(),
+                "negative control: legitimate frame passes skip_superseded_frame"
+            );
         });
     }
 }

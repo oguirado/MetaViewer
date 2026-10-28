@@ -421,3 +421,69 @@ fn serve_release_when_agent_controlled_commits_and_forwards_only_on_admission() 
         let _ = task.await;
     });
 }
+
+#[test]
+fn r3_t1_03_equal_generation_refused_and_newer_generation_reopens_after_release() {
+    use metaviewer_core::admission::AdmissionError;
+    let (root, mut authority, frame, witness) = fixture();
+    authority
+        .apply(Input::TakeControl {
+            surface_id: "surface".into(),
+        })
+        .unwrap();
+    authority
+        .apply(Input::ReleaseControl {
+            surface_id: "surface".into(),
+        })
+        .unwrap();
+    assert!(authority.state().surfaces["surface"]
+        .refresh_after
+        .is_some());
+
+    // Equal generation (g1 == current g1) is refused by both the control facade and the reducer.
+    let out = publish_frame(
+        &mut authority,
+        "surface",
+        Frame {
+            generation: 1,
+            ..frame.clone()
+        },
+        vec![witness.clone()],
+    )
+    .unwrap();
+    assert_eq!(out.reason, Some(Refusal::StaleFrame));
+    assert!(authority.state().surfaces["surface"]
+        .refresh_after
+        .is_some());
+
+    let mut state_copy = authority.state().clone();
+    let before_snap = state_copy.snapshot().unwrap();
+    assert_eq!(
+        state_copy.apply(&Input::Frame {
+            surface_id: "surface".into(),
+            frame: Frame {
+                generation: 1,
+                ..frame.clone()
+            },
+        }),
+        Err(AdmissionError::InvalidInput)
+    );
+    assert_eq!(state_copy.snapshot().unwrap(), before_snap);
+
+    // Negative control: strictly newer generation g8 after release succeeds and clears refresh_after.
+    let g8 = Frame {
+        generation: 8,
+        ..frame
+    };
+    assert_eq!(
+        publish_frame(&mut authority, "surface", g8.clone(), vec![witness])
+            .unwrap()
+            .reason,
+        None
+    );
+    assert_eq!(authority.state().surfaces["surface"].frame, Some(g8));
+    assert!(authority.state().surfaces["surface"]
+        .refresh_after
+        .is_none());
+    assert_recovered(authority, &root);
+}

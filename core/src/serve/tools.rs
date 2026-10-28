@@ -15,10 +15,16 @@ use std::collections::VecDeque;
 
 // [TARGET, unit decision] Retain the latest 128 receipts by arrival, including replay.
 const RECEIPT_CAP: usize = 128;
+// [TARGET, unit decision] Bound tool-view tombstones in arrival order; authority
+// owns permanent non-revival on the wire, and eviction never drops a prefixed
+// tombstone whose stripped surface ID is still live in `surfaces`.
+const DESTROYED_CAP: usize = 128;
 
 #[derive(Default)]
 pub(super) struct ToolState {
     surfaces: BTreeMap<String, Value>,
+    destroyed: BTreeSet<String>,
+    destroyed_order: VecDeque<String>,
     frames: BTreeMap<String, Value>,
     receipts: BTreeMap<String, Value>,
     verification_contexts: BTreeMap<String, (Value, Value)>,
@@ -49,7 +55,12 @@ impl ToolState {
                             self.frames.remove(id);
                             self.layout.remove(id);
                             self.placements.remove(id);
-                        } else {
+                            if surface["state"].as_str() == Some("destroyed") {
+                                self.record_destroyed(id);
+                            } else {
+                                self.evict_destroyed();
+                            }
+                        } else if !self.destroyed.contains(id) {
                             let mut surface = surface.clone();
                             if matches!(event.as_ref(), SurfaceEvent::Case1(_)) {
                                 if let Some(visibility) = self.layout.get(id) {
@@ -106,7 +117,7 @@ impl ToolState {
             _ => {}
         }
     }
-    fn retain_proposal(&mut self, proposal: &crate::wire::payload::ActionProposal) {
+    pub(super) fn retain_proposal(&mut self, proposal: &crate::wire::payload::ActionProposal) {
         if let Some(frame) = self.frames.get(&proposal.surface_id) {
             if let Ok(value) = serde_json::to_value(proposal) {
                 self.verification_contexts
@@ -114,8 +125,97 @@ impl ToolState {
             }
         }
     }
+    pub(super) fn verify_daemon_receipt(
+        &self,
+        receipt: &crate::wire::payload::ActionReceipt,
+        root: &std::path::Path,
+    ) -> Option<Value> {
+        let (action, before) = self.verification_contexts.get(&receipt.proposal_id)?;
+        let receipt_val = serde_json::to_value(receipt).ok()?;
+        verified_native_fields(action, before, &receipt_val, &root.join("artifacts"))
+    }
+    pub(super) fn recompute_daemon_receipt(
+        &self,
+        receipt: &crate::wire::payload::ActionReceipt,
+        root: &std::path::Path,
+    ) -> crate::wire::payload::ActionReceipt {
+        use crate::wire::payload::{
+            ActionProposal, ActionProposalExpectation, ActionReceiptVerification,
+            ActionReceiptVerificationMethod,
+        };
+        let mut recomputed = receipt.clone();
+        let method = self
+            .verification_contexts
+            .get(&receipt.proposal_id)
+            .and_then(|(action, _)| serde_json::from_value::<ActionProposal>(action.clone()).ok())
+            .map(|p| match p.expectation {
+                ActionProposalExpectation::Case0(_) => ActionReceiptVerificationMethod::Pixel,
+                ActionProposalExpectation::Case1(_) | ActionProposalExpectation::Case3(_) => {
+                    ActionReceiptVerificationMethod::Element
+                }
+                ActionProposalExpectation::Case2(_) => ActionReceiptVerificationMethod::StateSha256,
+            })
+            .unwrap_or_else(|| receipt.verification.method.clone());
+        if !receipt.verified {
+            if recomputed.verification.method != method {
+                recomputed.verification = ActionReceiptVerification {
+                    method,
+                    detail: "missing, invalid or unmatched witness".into(),
+                };
+            }
+            return recomputed;
+        }
+        recomputed.verified = false;
+        let verified_fields = if receipt.error.is_empty() {
+            self.verify_daemon_receipt(receipt, root)
+        } else {
+            None
+        };
+        if let Some(fields) = verified_fields {
+            recomputed.verified = true;
+            if let Ok(verification) =
+                serde_json::from_value(fields["receipt"]["verification"].clone())
+            {
+                recomputed.verification = verification;
+            } else {
+                recomputed.verification = ActionReceiptVerification {
+                    method,
+                    detail: "frame-bound witness matched".into(),
+                };
+            }
+        } else {
+            recomputed.verification = ActionReceiptVerification {
+                method,
+                detail: "missing, invalid or unmatched witness".into(),
+            };
+        }
+        recomputed
+    }
+    fn record_destroyed(&mut self, id: &str) {
+        self.destroyed_order.retain(|old| old != id);
+        self.destroyed_order.push_back(id.to_owned());
+        self.destroyed.insert(id.to_owned());
+        self.evict_destroyed();
+    }
+    fn evict_destroyed(&mut self) {
+        while self.destroyed_order.len() > DESTROYED_CAP {
+            let Some(pos) = self.destroyed_order.iter().position(|cand| {
+                !cand
+                    .strip_prefix("cuk-ai-slot-")
+                    .is_some_and(|base| self.surfaces.contains_key(base))
+            }) else {
+                break;
+            };
+            if let Some(evicted) = self.destroyed_order.remove(pos) {
+                self.destroyed.remove(&evicted);
+            }
+        }
+    }
     pub(super) fn has_surface(&self, id: &str) -> bool {
         self.surfaces.contains_key(id)
+    }
+    pub(super) fn is_destroyed_surface(&self, id: &str) -> bool {
+        self.destroyed.contains(id)
     }
     pub(super) fn surface_event(&self, id: &str, state: &CoreState) -> Option<Command> {
         let mut surface = self.surfaces.get(id)?.clone();
@@ -131,11 +231,21 @@ impl ToolState {
         Some(Command::SurfaceEvent(Box::new(event)))
     }
     pub(super) fn prune(&mut self, state: &CoreState) {
+        let dead: Vec<String> = self
+            .surfaces
+            .keys()
+            .filter(|id| state.is_destroyed(id))
+            .cloned()
+            .collect();
         let live = |id: &String| state.surfaces.get(id).is_some_and(|s| s.live);
         self.surfaces.retain(|id, _| live(id));
         self.frames.retain(|id, _| live(id));
         self.layout.retain(|id, _| live(id));
         self.placements.retain(|id, _| live(id));
+        for id in dead {
+            self.record_destroyed(&id);
+        }
+        self.evict_destroyed();
     }
     fn retain_frame(&mut self, frame: &Value) {
         if let Some(id) = frame["surface_id"].as_str() {
