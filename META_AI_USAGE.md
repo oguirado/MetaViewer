@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 569 | 55 | 514 |
-| Lanes finished OK | 569 | 55 | 514 |
-| Agent steps | 28,882 | 2,705 | 26,177 |
-| Lane-hours of agent work | 74.8 | 5.2 | 69.6 |
-| Fresh input tokens | 118,982,540 | 11,482,034 | 107,500,506 |
-| Cache-read input tokens | 2,623,070,505 | 226,255,212 | 2,396,815,293 |
+| Lanes launched | 571 | 55 | 516 |
+| Lanes finished OK | 571 | 55 | 516 |
+| Agent steps | 29,032 | 2,705 | 26,327 |
+| Lane-hours of agent work | 75.3 | 5.2 | 70.0 |
+| Fresh input tokens | 119,480,318 | 11,482,034 | 107,998,284 |
+| Cache-read input tokens | 2,641,052,714 | 226,255,212 | 2,414,797,502 |
 | Prompt cache hit % | 95.7 | 95.2 | 95.7 |
-| Output tokens | 25,328,072 | 2,135,708 | 23,192,364 |
-| Thinking tokens | 13,990,890 | 1,050,039 | 12,940,851 |
-| Cost (USD) | 22.21 | 2.0279 | 20.1821 |
-| Cost per lane (USD) | 0.039 | 0.0369 | 0.0393 |
+| Output tokens | 25,458,411 | 2,135,708 | 23,322,703 |
+| Thinking tokens | 14,055,802 | 1,050,039 | 13,005,763 |
+| Cost (USD) | 22.3218 | 2.0279 | 20.2939 |
+| Cost per lane (USD) | 0.0391 | 0.0369 | 0.0393 |
 
-Rooms: 123. Peak concurrent lanes [MEASURED from lane start/end]: 32.
+Rooms: 125. Peak concurrent lanes [MEASURED from lane start/end]: 32.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -43,7 +43,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
 | docs | 15 | 94.8 | 0.5371 |
-| fix | 57 | 96.9 | 3.159 |
+| fix | 58 | 96.9 | 3.1834 |
 | kit | 3 | 96.5 | 0.1997 |
 | ops | 4 | 88.1 | 0.0468 |
 | perf | 1 | 97.6 | 0.0694 |
@@ -54,7 +54,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | submission | 4 | 94.9 | 0.0995 |
 | test | 12 | 95.6 | 0.5657 |
 | testing | 73 | 96.1 | 3.1874 |
-| ui | 21 | 96.7 | 1.6041 |
+| ui | 22 | 96.8 | 1.6915 |
 | vision | 8 | 97.2 | 0.537 |
 
 ## By room (why and what for)
@@ -184,6 +184,8 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-ramctx | metaviewer-0 | Oct 28 18:55 | build | 10 | 89.2 | 0.1737 | RAM runaway study context lane |
 | mvui32 | UI orchestrator | Oct 28 21:33 | fix | 6 | 96.7 | 0.2899 | Round-3 external review found 10 confirmed renderer defects; plus the live run showed no rehash skip counters and a lost capsule never showing its badge; fix and verify before the product completion gate. |
 | mvui32f | UI orchestrator | Oct 28 21:54 | fix | 1 | 97.0 | 0.0668 | Judge notes on the frame router drop: a refused rehash report is not retried, and an older delivery can be admitted while a newer held delivery is still being verified; fix before the R3-FRAMES-1 drop ships. |
+| mvui33 | UI orchestrator | Oct 28 21:56 | ui | 1 | 97.7 | 0.0874 | Operator ruling: separate Live wall fps (3/30/60) and Recording fps (1..60) settings plus a real density control, persisted with the host's new closed settings key set, showing the actual wall fps the capture source reaches. |
+| mvui32g | UI orchestrator | Oct 28 22:12 | fix | 1 | 95.1 | 0.0244 | A committed router test pinned the defect fixed by the judge notes (an older frame painted over a newer held one); align it to the fixed ordering so the router drop gates green. |
 
 ## Every lane
 
@@ -758,6 +760,8 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | r_ctx | ui_peer_ctx | Oct 28 21:50 | yes | 41 | 93.6 | 0.029684 |
 | direct-direct | gs_e2e | holdings_e2e | Oct 28 21:50 | yes | 43 | 94.6 | 0.030273 |
 | mvui32f | F | router judge notes | Oct 28 21:54 | yes | 86 | 97.0 | 0.066759 |
+| mvui33 | S | wall fps, recording fps, density settings | Oct 28 21:56 | yes | 100 | 97.7 | 0.087376 |
+| mvui32g | T | align NEW-01 router test | Oct 28 22:12 | yes | 50 | 95.1 | 0.024435 |
 
 ## Method
 
