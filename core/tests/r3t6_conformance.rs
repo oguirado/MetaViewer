@@ -39,10 +39,7 @@ fn r3t6_nested_depth_and_surface_input_body_refusal() {
                 "nested_depth": depth
             }
         });
-        assert!(
-            decode_envelope(&env.to_string()).is_err(),
-            "depth {depth}"
-        );
+        assert!(decode_envelope(&env.to_string()).is_err(), "depth {depth}");
     }
 
     // 2. surface_input/v0.2 non-envelope batch is refused as envelope body
