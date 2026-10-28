@@ -19,31 +19,31 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 614 | 55 | 559 |
-| Lanes finished OK | 614 | 55 | 559 |
-| Agent steps | 30,565 | 2,705 | 27,860 |
-| Lane-hours of agent work | 79.5 | 5.2 | 74.2 |
-| Fresh input tokens | 126,243,434 | 11,482,034 | 114,761,400 |
-| Cache-read input tokens | 2,745,668,232 | 226,255,212 | 2,519,413,020 |
+| Lanes launched | 617 | 55 | 562 |
+| Lanes finished OK | 617 | 55 | 562 |
+| Agent steps | 30,666 | 2,705 | 27,961 |
+| Lane-hours of agent work | 79.8 | 5.2 | 74.5 |
+| Fresh input tokens | 126,682,279 | 11,482,034 | 115,200,245 |
+| Cache-read input tokens | 2,752,221,973 | 226,255,212 | 2,525,966,761 |
 | Prompt cache hit % | 95.6 | 95.2 | 95.6 |
-| Output tokens | 26,717,219 | 2,135,708 | 24,581,511 |
-| Thinking tokens | 14,863,085 | 1,050,039 | 13,813,046 |
-| Cost (USD) | 23.4591 | 2.0279 | 21.4312 |
-| Cost per lane (USD) | 0.0382 | 0.0369 | 0.0383 |
+| Output tokens | 26,807,428 | 2,135,708 | 24,671,720 |
+| Thinking tokens | 14,919,713 | 1,050,039 | 13,869,674 |
+| Cost (USD) | 23.5341 | 2.0279 | 21.5063 |
+| Cost per lane (USD) | 0.0381 | 0.0369 | 0.0383 |
 
-Rooms: 128. Peak concurrent lanes [MEASURED from lane start/end]: 32.
+Rooms: 129. Peak concurrent lanes [MEASURED from lane start/end]: 32.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 273 | 94.6 | 8.513 |
+| build | 275 | 94.6 | 8.5547 |
 | context | 42 | 95.9 | 1.9093 |
 | demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
 | docs | 15 | 94.8 | 0.5371 |
-| fix | 60 | 96.8 | 3.2504 |
+| fix | 61 | 96.8 | 3.2837 |
 | kit | 3 | 96.5 | 0.1997 |
 | ops | 4 | 88.1 | 0.0468 |
 | perf | 2 | 97.2 | 0.1217 |
@@ -176,7 +176,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui29c | UI orchestrator | Oct 28 08:58 | fix | 1 | 97.5 | 0.0624 | Terminal sessions wiring (AC-06) broke 58 committed App tests; restore the App mounting contract and finish the terminal tests so the drop can ship. |
 | mvui29sc | UI orchestrator | Oct 28 09:12 | fix | 1 | 97.3 | 0.0484 | Judge rejected the settings drop: a quick revert inside the debounce window is lost, a replaced host can receive a stale save, and boot can paint a scheme the store then replaces; fix before AC-08 can ship. |
 | mvui29d | UI orchestrator | Oct 28 09:13 | fix | 1 | 97.2 | 0.0587 | Judge notes on the terminal drop are real session lifecycle defects (events before registration, stale transport, cross-transport close, leaked port on close during attach, fixture broker unwired); fix before AC-06 ships. |
-| direct-adv | metaviewer-0 | Oct 28 09:30 | build | 30 | 94.0 | 0.8242 | adversarial advocate review before integration |
+| direct-adv | metaviewer-0 | Oct 28 09:30 | build | 32 | 93.8 | 0.866 | adversarial advocate review before integration |
 | direct-rv11 | metaviewer-0 | Oct 28 11:01 | build | 7 | 93.7 | 0.129 | cross-review verification |
 | direct-tg6 | metaviewer-0 | Oct 28 11:10 | build | 6 | 95.2 | 0.2593 | test-gap and mutation map |
 | direct-w5 | metaviewer-0 | Oct 28 11:20 | build | 4 | 94.4 | 0.1254 | W5 docs fact-check |
@@ -189,6 +189,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui33b | UI orchestrator | Oct 28 22:22 | fix | 1 | 96.4 | 0.0415 | Judge notes on the settings fps drop: the actual wall fps readout freezes when frames stop, the meter clock is not monotonic and the recording fps input accepts partial numbers; fix before the drop ships with the host settings unit. |
 | mvui33c | UI orchestrator | Oct 28 22:35 | fix | 1 | 94.6 | 0.0255 | Judge of the settings fps fix found that clearing the recording fps field saves 1 and that the readout decay can leave a stale rate at the window edge; fix before the drop ships with the host settings unit. |
 | mvui34 | UI orchestrator | Oct 28 23:39 | perf | 1 | 96.6 | 0.0523 | The fps review asks the renderer to paint only the newest frame per tile and never repaint retained bytes for a new digest, so higher selectable wall fps does not build a paint backlog or show stale pixels (AC-02). |
+| mvui34b | UI orchestrator | Oct 29 00:03 | fix | 1 | 96.0 | 0.0333 | The paced-paint drop ships tests only, and the judge found its negative controls test toy functions instead of the real router/scheduler; make them real mutants so the tests prove they would catch a regression. |
 
 ## Every lane
 
@@ -808,6 +809,9 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | cord | sec_record | Oct 28 23:52 | yes | 41 | 94.2 | 0.030672 |
 | direct-adv | setb | advsetb | Oct 28 23:56 | yes | 34 | 93.6 | 0.023336 |
 | direct-adv | seta | advseta | Oct 28 23:56 | yes | 23 | 90.4 | 0.017225 |
+| direct-adv | wha | advwha | Oct 29 00:01 | yes | 27 | 92.3 | 0.020858 |
+| direct-adv | whb | advwhb | Oct 29 00:01 | yes | 16 | 85.3 | 0.020851 |
+| mvui34b | T | real mutants for paced paint tests | Oct 29 00:03 | yes | 58 | 96.0 | 0.033325 |
 
 ## Method
 
