@@ -14,6 +14,7 @@
  */
 import { INTENT_OPS, mapSurfaceInputRefusal, recordingDestination, validateIntentBody, validateSurfaceInputBatch } from './authorityWire.js';
 export { INTENT_OPS };
+import { createTerminalHost } from './terminalHost.js';
 import { assertCaptureCall, assertCaptureReply, validCaptureState } from './captureBridge.js';
 import { createConnection } from 'node:net';
 import { spawnSync } from 'node:child_process';
@@ -152,12 +153,18 @@ export async function createMainBindings({env = process.env, createMessageChanne
     if (!id(config.session_id) || !hello(config.core, 'core') || peers?.length !== 1 || !hello(peers[0], 'ui')) throw fail();
     const ui = peers[0];
     const destination = recordingDestination(env);
-    if (!createMessageChannel) {
-      const electron = /** @type {any} */ (await import('electron'));
-      if (typeof electron.MessageChannelMain !== 'function') throw fail();
-      createMessageChannel = () => new electron.MessageChannelMain();
+    /** @type {any} */ let electronMod = null;
+    if (!createMessageChannel || process.versions?.electron) {
+      electronMod = /** @type {any} */ (await import('electron'));
+      if (!createMessageChannel) {
+        if (typeof electronMod.MessageChannelMain !== 'function') throw fail();
+        createMessageChannel = () => new electronMod.MessageChannelMain();
+      }
     }
     const channelFactory = createMessageChannel;
+    const clipboardMod = electronMod?.clipboard ?? { writeText() {} };
+    const terminal = createTerminalHost({ createMessageChannel: channelFactory, clipboard: clipboardMod, env });
+    electronMod?.app?.once?.('before-quit', () => { void terminal.dispose(); });
     /** @type {Set<(entry:any)=>any>} */ const listeners = new Set();
     /** @type {Map<string,any>} */ const surfaces = new Map();
     /** @type {Map<string,any>} */ const latestFrames = new Map();
@@ -185,6 +192,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
     const shutdown = () => {
       clearTimeout(helloTimer); clearInterval(keepalive);
       if (disposed) return; disposed = true; live = false;
+      void terminal.dispose();
       rejectReady(fail()); socket?.destroy();
       for (const item of pending.values()) {clearTimeout(item.timer);item.reject(fail());} pending.clear();
       for (const qState of surfaceInputQueues.values()) {
@@ -758,7 +766,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
           pending.set(key,{body,resolve,reject,timer});
           try {send(body);} catch {shutdown();}
         });
-      }},wire:{frames:{
+      }},wire:{terminal,profiles:terminal.profiles,frames:{
       /** @param {(entry:any)=>any} listener */
       subscribe(listener) {
         if (disposed || listeners.size) throw fail();listeners.add(listener);

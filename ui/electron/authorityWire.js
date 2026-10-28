@@ -26,6 +26,14 @@ export const WIRE_CHANNELS = Object.freeze({
   unsubscribeFrames:'metaviewer:authority.unsubscribe',
   terminalOpen:'metaviewer:side-terminal.open', terminalEnabled:'metaviewer:side-terminal.enabled',
 });
+export const SIDE_TERMINAL_CHANNELS = Object.freeze({
+  terminalAttach:'metaviewer:side-terminal.attach',
+  terminalResize:'metaviewer:side-terminal.resize',
+  terminalClose:'metaviewer:side-terminal.close',
+  terminalProviders:'metaviewer:side-terminal.providers',
+  terminalCopy:'metaviewer:side-terminal.copy',
+});
+const ALL_WIRE_CHANNELS = Object.freeze({...WIRE_CHANNELS, ...SIDE_TERMINAL_CHANNELS});
 export const SURFACE_INPUT_CHANNEL = WIRE_CHANNELS.intent;
 export const WIRE_MAX_BYTES = 256 * 1024;
 export const INTENT_OPS = Object.freeze({
@@ -346,7 +354,11 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
   const destinationToken = destination === null ? null : 'recording:configured';
   const identity = nestedIdentity(argv,env);
   const channels = /** @type {string[]} */([]);
-  const ownedProfiles = new Map([...profiles].map(([id,profile])=>[id,{args:[...validateProviderArgv([id,...profile.args])].slice(1)}]));
+  const ownedProfiles = new Map(profiles);
+  if (terminal?.profiles && typeof terminal.profiles.entries === 'function') {
+    for (const [k, v] of terminal.profiles.entries()) ownedProfiles.set(k, v);
+  }
+  if (!ownedProfiles.has('shell')) ownedProfiles.set('shell', { args: [] });
   let subscribed = false, enabled = false, disposed = false;
   /** @type {Map<string,number>} */ const inputLastSeq = new Map();
   /** @type {Map<string,number>} */ const inputInFlightSeq = new Map();
@@ -371,20 +383,76 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
       return true;
     },
     unsubscribeFrames: async () => { subscribed=false; return true; },
+    terminalAttach: async (/** @type {any} */value) => {
+      if (!exactDataKeys(value, 'session') || typeof value.session !== 'string') throw new Error('TERMINAL_IO_REFUSED');
+      if (!/^[A-Za-z0-9._-]{1,128}$/.test(value.session)) throw new Error('TERMINAL_UNKNOWN_SESSION');
+      if (!terminal || typeof terminal.attach !== 'function') throw new Error('TERMINAL_UNKNOWN_SESSION');
+      const result = await terminal.attach({ session: value.session });
+      if (!result || typeof result.port !== 'object' || result.port === null) throw new Error('OUTCOME');
+      return result;
+    },
+    terminalResize: async (/** @type {any} */value) => {
+      if (!exactDataKeys(value, 'cols,rows,session') || typeof value.session !== 'string'
+          || !Number.isSafeInteger(value.cols) || value.cols < 2 || value.cols > 500
+          || !Number.isSafeInteger(value.rows) || value.rows < 2 || value.rows > 300) throw new Error('TERMINAL_IO_REFUSED');
+      if (!/^[A-Za-z0-9._-]{1,128}$/.test(value.session)) throw new Error('TERMINAL_UNKNOWN_SESSION');
+      if (!terminal || typeof terminal.resize !== 'function') throw new Error('TERMINAL_UNKNOWN_SESSION');
+      if (await terminal.resize({ session: value.session, cols: value.cols, rows: value.rows }) !== true) throw new Error('OUTCOME');
+      return true;
+    },
+    terminalClose: async (/** @type {any} */value) => {
+      if (!exactDataKeys(value, 'session') || typeof value.session !== 'string') throw new Error('TERMINAL_IO_REFUSED');
+      if (!/^[A-Za-z0-9._-]{1,128}$/.test(value.session)) throw new Error('TERMINAL_UNKNOWN_SESSION');
+      if (!terminal || typeof terminal.close !== 'function') throw new Error('TERMINAL_UNKNOWN_SESSION');
+      if (await terminal.close({ session: value.session }) !== true) throw new Error('OUTCOME');
+      return true;
+    },
+    terminalProviders: async () => {
+      if (!terminal || typeof terminal.listProviders !== 'function') {
+        return {
+          entries: [{ id: 'shell', label: 'System shell', hint: 'Interactive login shell' }],
+          capabilities: [{ id: 'shell', available: false, reason: 'TERMINAL_UNAVAILABLE' }],
+        };
+      }
+      const result = await terminal.listProviders();
+      if (!exactDataKeys(result, 'capabilities,entries') || !Array.isArray(result.entries) || !Array.isArray(result.capabilities)) {
+        throw new Error('OUTCOME');
+      }
+      return result;
+    },
+    terminalCopy: async (/** @type {any} */value) => {
+      if (!exactDataKeys(value, 'text') || typeof value.text !== 'string'
+          || value.text.length < 1 || value.text.length > 128
+          || !HUMAN_ID_RE.test(value.text)) throw new Error('ERR_CLIPBOARD_INVALID');
+      if (!terminal || typeof terminal.copyText !== 'function') throw new Error('ERR_CLIPBOARD_INVALID');
+      if (await terminal.copyText({ text: value.text }) !== true) throw new Error('OUTCOME');
+      return true;
+    },
     terminalEnabled: async (/** @type {boolean} */value) => {
       if (typeof value !== 'boolean') throw new Error('PAYLOAD');
       if (!terminal || await terminal.setEnabled(value) !== true) throw new Error('OUTCOME'); enabled=value; return true;
     },
     terminalOpen: async (/** @type {any} */value) => {
-      if (!value || Object.keys(value).sort().join(',') !== 'args,cols,command,rows'
-          || typeof value.command !== 'string' || !Array.isArray(value.args)
+      if (!value || (!exactDataKeys(value, 'cols,command,rows') && !exactDataKeys(value, 'args,cols,command,rows'))
+          || typeof value.command !== 'string' || (value.args !== undefined && !Array.isArray(value.args))
           || !Number.isSafeInteger(value.cols) || value.cols < 2 || value.cols > 500
           || !Number.isSafeInteger(value.rows) || value.rows < 2 || value.rows > 300) throw new Error('PAYLOAD');
-      const argv = validateProviderArgv([value.command,...value.args]);
-      const profile=ownedProfiles.get(value.command);
-      if (!profile || JSON.stringify(profile.args) !== JSON.stringify(argv.slice(1))) throw new Error('COMMAND_NOT_ALLOWED');
+      const reqArgs = value.args ?? [];
+      if (reqArgs.length > 0) validateProviderArgv([value.command || 'x', ...reqArgs]);
+      if (!value.command || value.command.startsWith('-') || value.command.includes('\0') || !ownedProfiles.has(value.command)) {
+        throw new Error('COMMAND_NOT_ALLOWED');
+      }
+      const profile = ownedProfiles.get(value.command);
+      const profArgs = Array.isArray(profile?.args) ? profile.args : (Array.isArray(profile?.argv) ? profile.argv.slice(1) : []);
+      if (reqArgs.length > 0 && JSON.stringify(reqArgs) !== JSON.stringify(profArgs)) {
+        throw new Error('COMMAND_NOT_ALLOWED');
+      }
       if (!terminal || !enabled) throw new Error('TERMINAL_DISABLED');
-      const result=await terminal.open({command:'provider',provider:value.command,cols:value.cols,rows:value.rows});
+      const result = await terminal.open(
+        value.command === 'shell'
+          ? {command:'shell',cols:value.cols,rows:value.rows}
+          : {command:'provider',provider:value.command,cols:value.cols,rows:value.rows}
+      );
       if (!result || Object.keys(result).join(',') !== 'session' || typeof result.session !== 'string'
           || !/^[A-Za-z0-9._-]{1,128}$/.test(result.session)) throw new Error('OUTCOME');
       return {session:result.session};
@@ -427,13 +495,24 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
   };
   try {
     for (const [name,fn] of Object.entries(handlers)) {
-      const channel=WIRE_CHANNELS[/** @type {keyof typeof WIRE_CHANNELS} */(name)];
-      const arity=['saveSettings','propose','intent','terminalOpen','terminalEnabled'].includes(name) ? 1 : 0;
+      if (Object.hasOwn(SIDE_TERMINAL_CHANNELS, name) && terminal !== null && typeof terminal.attach !== 'function') {
+        continue;
+      }
+      const channel=ALL_WIRE_CHANNELS[/** @type {keyof typeof ALL_WIRE_CHANNELS} */(name)];
+      const arity=['saveSettings','propose','intent','terminalOpen','terminalEnabled','terminalAttach','terminalResize','terminalClose','terminalCopy'].includes(name) ? 1 : 0;
       ipcMain.handle(channel,/** @param {unknown} event @param {...any} args */ async (event,...args) => {
         if (disposed || observeSender(event,contents,PRIVILEGED_ORIGIN).verdict !== 'admit') throw new Error('SENDER');
         if (args.length !== arity) throw new Error('ARGS');
         if (arity && (JSON.stringify(args[0]) === undefined || Buffer.byteLength(typeof args[0] === 'string' ? args[0] : JSON.stringify(args[0]),'utf8') > WIRE_MAX_BYTES)) throw new Error('PAYLOAD');
-        return /** @type {any} */(fn)(...args);
+        const result=await /** @type {any} */(fn)(...args);
+        if(name==='terminalAttach'){
+          contents.postMessage('metaviewer:side-terminal.port',{session:args[0].session},[result.port]);
+          if (process.versions?.electron && result.port?.constructor?.name === 'MessagePortMain') {
+            return {session:args[0].session};
+          }
+          return {session:args[0].session,port:result.port};
+        }
+        return result;
       }); channels.push(channel);
     }
   } catch(e) { for (const channel of channels) ipcMain.removeHandler?.(channel); throw e; }

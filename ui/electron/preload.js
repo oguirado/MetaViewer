@@ -619,7 +619,10 @@ function assertSurfaceInputReply(reply, maxAccepted) {
 const WIRE_NAMES = Object.freeze({loadSettings:'settings.load',saveSettings:'settings.save',
   recordingDestination:'recording.destination',nestedDepth:'nested.depth',selfCapsuleId:'nested.self',
   propose:'authority.propose',intent:'authority.intent',subscribeFrames:'authority.subscribe',
-  unsubscribeFrames:'authority.unsubscribe',terminalOpen:'side-terminal.open',terminalEnabled:'side-terminal.enabled'});
+  unsubscribeFrames:'authority.unsubscribe',terminalOpen:'side-terminal.open',terminalEnabled:'side-terminal.enabled',
+  terminalAttach:'side-terminal.attach',terminalResize:'side-terminal.resize',
+  terminalClose:'side-terminal.close',terminalProviders:'side-terminal.providers',
+  terminalCopy:'side-terminal.copy'});
 /** @param {string} channel @param {ReadonlyArray<unknown>} args */
 function wireCall(channel,args) {
   if(channel===QA_ANCHORS_CHANNEL) return {channel,args:Object.freeze([assertQaSnapshot(args)])};
@@ -628,7 +631,7 @@ function wireCall(channel,args) {
   if(captureName){assertCaptureCall(captureName,args);return {channel,args:Object.freeze([...args])};}
   const name=Object.entries(WIRE_NAMES).find(([,suffix]) => channel === `metaviewer:${suffix}`)?.[0];
   if (!name) throw new ContractError('CHANNEL','unknown domain channel');
-  const arity=['saveSettings','propose','intent','terminalOpen','terminalEnabled'].includes(name) ? 1 : 0;
+  const arity=['saveSettings','propose','intent','terminalOpen','terminalEnabled','terminalAttach','terminalResize','terminalClose','terminalCopy'].includes(name) ? 1 : 0;
   if (!Array.isArray(args) || args.length !== arity) throw new ContractError('ARGS','wrong arity');
   if (name==='intent' && args[0] !== null && typeof args[0] === 'object') {
     const checked = validateSurfaceInputBatch(args[0]);
@@ -648,11 +651,29 @@ function wireCall(channel,args) {
   if (name==='terminalEnabled' && typeof args[0] !== 'boolean') throw new ContractError('PAYLOAD','expected boolean');
   if (name==='terminalOpen') {
     const v=/** @type {any} */(args[0]);
-    if (!v || Object.keys(v).sort().join(',') !== 'args,cols,command,rows'
-      || typeof v.command !== 'string' || !Array.isArray(v.args) || v.args.length>32
-      || !v.args.every((/** @type {unknown} */x)=>typeof x==='string' && utf8Bytes(x)<=4096 && !x.includes('\0'))
+    if (!v || (!captureKeys(v,'cols,command,rows') && !captureKeys(v,'args,cols,command,rows'))
+      || typeof v.command !== 'string'
+      || (v.args !== undefined && (!Array.isArray(v.args) || v.args.length>32 || !v.args.every((/** @type {unknown} */x)=>typeof x==='string' && utf8Bytes(x)<=4096 && !x.includes('\0'))))
       || !Number.isSafeInteger(v.cols) || v.cols<2 || v.cols>500
       || !Number.isSafeInteger(v.rows) || v.rows<2 || v.rows>300) throw new ContractError('PAYLOAD','terminal spec');
+  }
+  if (name==='terminalAttach' || name==='terminalClose') {
+    const v=/** @type {any} */(args[0]);
+    if (!captureKeys(v,'session') || typeof v.session !== 'string') throw new ContractError('TERMINAL_IO_REFUSED','terminal session');
+    if (!/^[A-Za-z0-9._-]{1,128}$/.test(v.session)) throw new ContractError('TERMINAL_UNKNOWN_SESSION','unknown session');
+  }
+  if (name==='terminalResize') {
+    const v=/** @type {any} */(args[0]);
+    if (!captureKeys(v,'cols,rows,session') || typeof v.session !== 'string'
+      || !Number.isSafeInteger(v.cols) || v.cols<2 || v.cols>500
+      || !Number.isSafeInteger(v.rows) || v.rows<2 || v.rows>300) throw new ContractError('TERMINAL_IO_REFUSED','terminal resize');
+    if (!/^[A-Za-z0-9._-]{1,128}$/.test(v.session)) throw new ContractError('TERMINAL_UNKNOWN_SESSION','unknown session');
+  }
+  if (name==='terminalCopy') {
+    const v=/** @type {any} */(args[0]);
+    if (!captureKeys(v,'text') || typeof v.text !== 'string' || v.text.length<1 || v.text.length>128 || !captureId(v.text)) {
+      throw new ContractError('ERR_CLIPBOARD_INVALID','clipboard text');
+    }
   }
   return {channel,args:Object.freeze([...args])};
 }
@@ -679,12 +700,28 @@ function validFrameNotice(value) {
 }
 /** @param {PreloadTransport} transport */
 function wireFacade(transport) {
+  /** @type {Map<string, any>} */ const terminalPorts=new Map();
+  let terminalPortSubscribed=false;
+  const ensureTerminalPortSubscription=()=>{
+    if (terminalPortSubscribed || typeof transport.subscribe !== 'function') return;
+    terminalPortSubscribed=true;
+    try {
+      transport.subscribe('metaviewer:side-terminal.port',(value,ports)=>{
+        if (value && typeof value.session === 'string' && Array.isArray(ports) && ports[0]) {
+          terminalPorts.set(value.session,ports[0]);
+        }
+      });
+    } catch {
+      // Transport double only supports authority.frames subscription.
+    }
+  };
   /** @param {keyof typeof WIRE_NAMES} name @param {unknown[]} args */
   const call=async(name,args) => {
     if (name==='intent' && args.length===1 && typeof args[0]!=='string') throw new ContractError('PAYLOAD','expected JSON text');
+    if (name==='terminalAttach') ensureTerminalPortSubscription();
     const admitted=wireCall(`metaviewer:${WIRE_NAMES[name]}`,args);
     const reply=await transport.invoke(admitted.channel,admitted.args);
-    if (['saveSettings','intent','subscribeFrames','unsubscribeFrames','terminalEnabled'].includes(name)) return assertSaveReply(reply);
+    if (['saveSettings','intent','subscribeFrames','unsubscribeFrames','terminalEnabled','terminalResize','terminalClose','terminalCopy'].includes(name)) return assertSaveReply(reply);
     if (['loadSettings','recordingDestination','selfCapsuleId'].includes(name)) return assertLoadReply(reply);
     if (name==='nestedDepth') {
       if (reply!==null && reply!==0 && reply!==1) throw new ContractError('OUTCOME','nested depth');return reply;
@@ -693,6 +730,26 @@ function wireFacade(transport) {
     if (name==='terminalOpen') {
       if (!value || Object.keys(value).join(',')!=='session' || typeof value.session!=='string'
           || !/^[A-Za-z0-9._-]{1,128}$/.test(value.session)) throw new ContractError('OUTCOME','session');return Object.freeze({session:value.session});
+    }
+    if (name==='terminalAttach') {
+      const reqSession=/** @type {any} */(admitted.args[0]).session;
+      const queuedPort=terminalPorts.get(reqSession);
+      terminalPorts.delete(reqSession);
+      const port=value?.port ?? queuedPort;
+      if (!port || typeof port !== 'object') throw new ContractError('OUTCOME','terminal port');
+      return Object.freeze({port});
+    }
+    if (name==='terminalProviders') {
+      if (!captureKeys(value,'capabilities,entries') || !Array.isArray(value.entries) || !Array.isArray(value.capabilities)
+          || !value.entries.some((/** @type {any} */e)=>e?.id==='shell')
+          || !value.entries.every((/** @type {any} */e)=>captureKeys(e,'hint,id,label') && typeof e.id==='string' && e.id.length>0 && typeof e.label==='string' && e.label.length>0 && typeof e.hint==='string')
+          || !value.capabilities.every((/** @type {any} */c)=>(captureKeys(c,'available,id') || captureKeys(c,'available,id,reason')) && typeof c.id==='string' && c.id.length>0 && typeof c.available==='boolean' && (c.reason===undefined || typeof c.reason==='string'))) {
+        throw new ContractError('OUTCOME','terminal providers');
+      }
+      return Object.freeze({
+        entries:Object.freeze(value.entries.map((/** @type {any} */e)=>Object.freeze({id:e.id,label:e.label,hint:e.hint}))),
+        capabilities:Object.freeze(value.capabilities.map((/** @type {any} */c)=>Object.freeze({id:c.id,available:c.available,reason:c.reason ?? ''}))),
+      });
     }
     const refused=value?.decision==='refused';
     if (!value || value.schema!=='action_verdict/v0.2' || typeof value.proposal_id!=='string'
@@ -1029,7 +1086,17 @@ function wireFacade(transport) {
     /** @param {...unknown} args */
     open:(...args)=>call('terminalOpen',args),
     /** @param {...unknown} args */
-    setEnabled:(...args)=>call('terminalEnabled',args)});
+    setEnabled:(...args)=>call('terminalEnabled',args),
+    /** @param {...unknown} args */
+    attach:(...args)=>call('terminalAttach',args),
+    /** @param {...unknown} args */
+    resize:(...args)=>call('terminalResize',args),
+    /** @param {...unknown} args */
+    close:(...args)=>call('terminalClose',args),
+    /** @param {...unknown} args */
+    listProviders:(...args)=>call('terminalProviders',args),
+    /** @param {...unknown} args */
+    copyText:(...args)=>call('terminalCopy',args)});
   if (transport.qa === true && !transport.nested) {
     api.qa = Object.freeze({
       /** @param {...unknown} args */
@@ -1112,7 +1179,7 @@ export function installPreload(electron) {
       subscribe: typeof /** @type {any} */(ipcRenderer).on === 'function' ?
       /** @param {string} channel @param {(value:any,ports?:MessagePort[])=>void} cb */
       (channel,cb) => {
-        if (!['metaviewer:authority.frames','metaviewer:capture.state'].includes(channel)) throw new ContractError('CHANNEL','subscription refused');
+        if (!['metaviewer:authority.frames','metaviewer:capture.state','metaviewer:side-terminal.port'].includes(channel)) throw new ContractError('CHANNEL','subscription refused');
         const native = /** @type {any} */(ipcRenderer);
         const listener = (/** @type {any} */event,/** @type {any} */value) => {
           // The facade validates this authenticated host channel before transfer.

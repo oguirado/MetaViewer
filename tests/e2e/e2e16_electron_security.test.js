@@ -26,7 +26,7 @@ function audit(report) {
     'recordingDestination', 'save', 'saveSettings', 'selfCapsuleId', 'sideTerminal']);
   assert.deepEqual(report.authority, ['intent', 'propose', 'subscribeFrames']);
   assert.deepEqual(report.capture, ['export', 'list', 'recordStart', 'recordStop', 'screenshot', 'subscribe']);
-  assert.deepEqual(report.terminal, ['open', 'setEnabled']);
+  assert.deepEqual(report.terminal, ['attach', 'close', 'copyText', 'listProviders', 'open', 'resize', 'setEnabled']);
 }
 
 test('Chromium enforces product flags, CSP, popup denial and preload allowlist; unsafe flags fail', () => {

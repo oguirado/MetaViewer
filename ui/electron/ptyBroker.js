@@ -1307,7 +1307,7 @@ export function runBroker({
     try {
       const spec =
         profile.command === 'shell'
-          ? buildShellSpawn([], profile.loginShell)
+          ? {file:profile.loginShell,args:[]}
           : buildProviderSpawn(profile.argv, profile.loginShell);
       file = spec.file;
       args = spec.args;
