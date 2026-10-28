@@ -1330,6 +1330,9 @@ mvui26b-473d80980723	ui/test/mvui26b-mode-drop.test.js
 mvui26b-7a512cd17596	ui/test/mvui26b-mode-refusals.test.js
 mvui27c-df671e5b26a7	ui/test/mvui27-canvas-noscroll.test.js
 mvui27s-de7f7adc38f2	ui/test/mvui27-shield-noscroll.test.js
+mvui28i-59667390d52d	ui/test/mvui28-input-activity.test.js
+mvui28i-8d374f22af4d	ui/test/mvui28-input-double-results.test.js
+mvui28i-2061431bf36e	ui/test/mvui28-input-results.test.js
 mvui3co-58b252aa0364	ui/test/mvui3-control-owner-wall.test.js
 mvui3cr-400b1a21a53e	ui/test/mvui3-creative-harness.js
 mvui3cr-3b8cf3406706	ui/test/mvui3-creative-integration.test.js
