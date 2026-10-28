@@ -4,7 +4,9 @@
 set -u
 
 usage() {
-    printf '%s\n' 'Usage: tools/gate.sh [--leg skeleton|laws|contracts|unit|agents|manifests|js|rust|go|ui|ui-smoke | --self-test]' >&2
+    printf '%s\n' \
+        'Usage: tools/gate.sh [--leg skeleton|laws|contracts|unit|agents|manifests|js|rust|go|ui|ui-smoke|perf | --self-test]' \
+        '  MV_GATE_PERF_LIVE=1 enables the live Electron RSS probe in the perf leg.' >&2
     exit 2
 }
 selector=skeleton
@@ -14,7 +16,7 @@ case $# in
     2) [[ $1 == --leg ]] || usage; selector=$2 ;;
     *) usage ;;
 esac
-case $selector in skeleton|laws|contracts|unit|agents|manifests|js|rust|go|ui|ui-smoke|self-test) ;; *) usage ;; esac
+case $selector in skeleton|laws|contracts|unit|agents|manifests|js|rust|go|ui|ui-smoke|perf|self-test) ;; *) usage ;; esac
 [[ $selector != self-test || ${1:-} == --self-test ]] || usage
 root=$(cd -- "${BASH_SOURCE[0]%/*}/.." && pwd -P) || exit 2
 if ! command -v python3 >/dev/null; then
@@ -42,7 +44,7 @@ import unittest
 ROOT = Path(sys.argv[1])
 SELECTOR = sys.argv[2]
 BASE_LEAVES = ('manifests', 'laws', 'contracts', 'unit', 'agents')
-LEAVES = (*BASE_LEAVES, 'js', 'rust', 'go', 'ui', 'ui-smoke')
+LEAVES = (*BASE_LEAVES, 'js', 'rust', 'go', 'ui', 'ui-smoke', 'perf')
 FILES = ('Cargo.toml', 'core/Cargo.toml', 'daemon-adapter/go.mod',
          'agents/pyproject.toml', 'ui/package.json', '.gitignore')
 ORIGINAL_IGNORE = ('__pycache__/', '*.py[cod]', '.venv/', 'venv/',
@@ -584,6 +586,122 @@ class GateTests(unittest.TestCase):
         binary.chmod(0o600)
         self.assertIn('BLOCKED ui-smoke', self.call('--leg', 'ui-smoke', expected=2, env=environment))
 
+    def prepare_perf_fixture(self, environment):
+        shutil.copyfile(ROOT / 'tools/budget_gate.py', self.fixture / 'tools/budget_gate.py')
+        shutil.copyfile(ROOT / 'tests/test_budget_gate.py', self.fixture / 'tests/test_budget_gate.py')
+        shutil.copytree(ROOT / 'tests/perf', self.fixture / 'tests/perf', dirs_exist_ok=True)
+        shutil.copytree(ROOT / 'ui/electron', self.fixture / 'ui/electron', dirs_exist_ok=True)
+        self.prepare_smoke_fixture(environment)
+        self.write('fake-xvfb',
+                   '#!/bin/sh\n'
+                   'while [ "$#" -gt 0 ]; do\n'
+                   '  case "$1" in -a) shift ;; -s) shift 2 ;; *) break ;; esac\n'
+                   'done\n'
+                   'exec "$@"\n')
+        (self.fixture / 'fake-xvfb').chmod(0o700)
+        self.write('electron-dist/electron',
+                   '#!' + sys.executable + '\n'
+                   'import json, os, pathlib, sys\n'
+                   'if "ELECTRON_RUN_AS_NODE" in os.environ:\n'
+                   '    sys.exit(99)\n'
+                   'source = os.environ.get("MV_FAKE_PROBE_RECEIPT", "clean.json")\n'
+                   'receipt = json.loads((pathlib.Path("tests/perf") / source).read_text())\n'
+                   'receipt.setdefault("identities", [])\n'
+                   'pathlib.Path(os.environ["MV_RSS_OUTPUT"]).write_text(json.dumps(receipt))\n')
+        (self.fixture / 'electron-dist/electron').chmod(0o700)
+
+    def test_perf_leg_negative_controls(self):
+        environment = dict(os.environ, ELECTRON_RUN_AS_NODE='1')
+        environment.pop('MV_GATE_PERF_LIVE', None)
+        self.prepare_perf_fixture(environment)
+        # When MV_GATE_PERF_LIVE is unset, the live probe is skipped even when
+        # all prerequisites resolve and a failing live receipt is planted.
+        output = self.call('--leg', 'perf',
+                           env=dict(environment, MV_FAKE_PROBE_RECEIPT='leak-renderer.json'))
+        self.assertIn('perf: live probe SKIPPED (MV_GATE_PERF_LIVE not set)', output)
+        self.assertIn('PASS perf', output)
+        self.assertIn('PASS aggregate', output)
+        # Offline checks still gate when MV_GATE_PERF_LIVE is unset.
+        clean_path = self.fixture / 'tests/perf/clean.json'
+        original_clean = clean_path.read_text()
+        try:
+            mutated = json.loads(original_clean)
+            mutated['samples'][0]['rss_renderer_bytes'] = 370000001
+            clean_path.write_text(json.dumps(mutated))
+            output = self.call('--leg', 'perf', expected=1, env=environment)
+            self.assertIn('FAIL perf', output)
+            self.assertIn('FAIL aggregate', output)
+        finally:
+            clean_path.write_text(original_clean)
+        environment['MV_GATE_PERF_LIVE'] = '1'
+        output = self.call('--leg', 'perf', env=environment)
+        self.assertIn('PASS perf', output)
+        self.assertNotIn('SKIPPED', output)
+        # Planted failing budget evidence in offline matrix forces leg rc 1.
+        try:
+            mutated = json.loads(original_clean)
+            mutated['samples'][0]['rss_renderer_bytes'] = 370000001
+            clean_path.write_text(json.dumps(mutated))
+            output = self.call('--leg', 'perf', expected=1, env=environment)
+            self.assertIn('FAIL perf', output)
+            self.assertIn('FAIL aggregate', output)
+        finally:
+            clean_path.write_text(original_clean)
+        # Negative control: leak-renderer.json exiting 0 must fail the leg.
+        gate_py = self.fixture / 'tools/budget_gate.py'
+        original_gate_py = gate_py.read_text()
+        try:
+            gate_py.write_text(original_gate_py.replace(
+                "return int(bool(summary['failed']))",
+                "return 0 if sys.argv[1:] == ['--receipt', 'tests/perf/leak-renderer.json'] "
+                "else int(bool(summary['failed']))"))
+            output = self.call('--leg', 'perf', expected=1, env=environment)
+            self.assertIn('expected 1', output)
+            self.assertIn('FAIL perf', output)
+            self.assertIn('FAIL aggregate', output)
+        finally:
+            gate_py.write_text(original_gate_py)
+        # Planted failing budget evidence in live probe forces leg rc 1.
+        output = self.call('--leg', 'perf', expected=1,
+                           env=dict(environment, MV_FAKE_PROBE_RECEIPT='leak-renderer.json'))
+        self.assertIn('FAIL perf', output)
+        self.assertIn('FAIL aggregate', output)
+        # Missing xvfb-run produces the SKIPPED line and leg rc 0 when offline is green.
+        (Path(environment['PATH']) / 'xvfb-run').unlink()
+        output = self.call('--leg', 'perf', expected=0, env=environment)
+        self.assertIn('perf: live probe SKIPPED (missing xvfb-run)', output)
+        self.assertIn('PASS perf', output)
+        self.assertIn('PASS aggregate', output)
+        # Offline failure still fails the leg when live prerequisites are missing.
+        try:
+            mutated = json.loads(original_clean)
+            mutated['samples'][0]['rss_main_bytes'] = 200000001
+            clean_path.write_text(json.dumps(mutated))
+            output = self.call('--leg', 'perf', expected=1, env=environment)
+            self.assertIn('FAIL perf', output)
+            self.assertIn('FAIL aggregate', output)
+        finally:
+            clean_path.write_text(original_clean)
+        (Path(environment['PATH']) / 'xvfb-run').symlink_to(self.fixture / 'fake-xvfb')
+        # Missing Electron produces the SKIPPED line and leg rc 0 when offline is green.
+        environment.pop('ELECTRON_OVERRIDE_DIST_PATH')
+        output = self.call('--leg', 'perf', expected=0, env=environment)
+        self.assertIn('perf: live probe SKIPPED (missing electron)', output)
+        self.assertIn('PASS perf', output)
+        self.assertIn('PASS aggregate', output)
+        self.write('ui/node_modules/electron/path.txt', 'electron\n')
+        self.write('ui/node_modules/electron/dist/electron',
+                   (self.fixture / 'electron-dist/electron').read_text())
+        binary = self.fixture / 'ui/node_modules/electron/dist/electron'
+        binary.chmod(0o700)
+        output = self.call('--leg', 'perf', expected=0, env=environment)
+        self.assertNotIn('SKIPPED', output)
+        self.assertIn('PASS perf', output)
+        binary.chmod(0o600)
+        output = self.call('--leg', 'perf', expected=0, env=environment)
+        self.assertIn('perf: live probe SKIPPED (missing electron)', output)
+        self.assertIn('PASS perf', output)
+
     def test_rust_leg_negative_controls(self):
         environment = self.prepare_build_fixture()
         self.assertIn('PASS rust', self.call('--leg', 'rust', env=environment))
@@ -658,6 +776,16 @@ class GateTests(unittest.TestCase):
                           ' print("METAVIEWER_MAIN_SMOKE_OK" if any("smoke-main" in arg for arg in sys.argv) else "METAVIEWER_SMOKE_OK")\n')
         self.write('tools/sync_kit.mjs', '')
         self.write('ui/kit.lock.json', '{}')
+        self.write('tools/budget_gate.py',
+                   'import sys\nsys.exit(1 if "--receipt" in sys.argv else 0)\n')
+        self.write('tests/test_budget_gate.py',
+                   'import unittest\nclass PerfWitness(unittest.TestCase):\n'
+                   '    def test_witness(self):\n'
+                   '        with open("perf.calls", "a") as f: f.write("asserted\\n")\n'
+                   '        self.assertEqual(2 + 2, 4)\n')
+        self.write('tests/perf/budgets.json', '{}\n')
+        self.write('tests/perf/leak-renderer.json', '{}\n')
+        self.write('tests/perf/proc_fields.test.mjs', '')
         environment['MV_KIT_CHECKOUT'] = str(self.fixture)
         # Manifests still use the genuine cargo for frozen metadata resolution.
         cargo = self.fixture / 'fixture-cargo'
@@ -673,6 +801,7 @@ class GateTests(unittest.TestCase):
         self.assertEqual((self.fixture / 'unit.calls').read_text(), 'asserted\n')
         self.assertEqual((self.fixture / 'contract.calls').read_text(), 'called\n')
         self.assertEqual((self.fixture / 'agents.calls').read_text(), 'asserted\n')
+        self.assertTrue((self.fixture / 'perf.calls').is_file())
         agents_test = self.fixture / 'agents/tests/test_witness.py'
         original_agents_test = agents_test.read_text()
         agents_test.write_text('import unittest\nclass T(unittest.TestCase):\n'
@@ -682,6 +811,7 @@ class GateTests(unittest.TestCase):
         self.assertIn('FAIL agents\n', output)
         self.assertIn('FAIL aggregate\n', output)
         self.assertIn('PASS ui-smoke\n', output)
+        self.assertIn('PASS perf\n', output)
         shutil.rmtree(agents_test.parent)
         output = self.call(expected=1, env=environment)
         self.assertIn('missing target: agents/tests', output)
@@ -1410,6 +1540,55 @@ def ui_smoke_leg(root, environment, timeout=90):
     return 0
 
 
+# [TARGET, unit decision] The perf leg always runs offline AC-14 budget checks
+# and negative controls; the live Electron RSS probe is opt-in via
+# MV_GATE_PERF_LIVE=1 (and requires node, xvfb-run, and a local Electron binary).
+def perf_leg(root, environment):
+    node = shutil.which(environment.get('NODE', 'node'), path=environment.get('PATH'))
+    if node is None:
+        print('perf: missing tool: node', file=sys.stderr)
+        return 2
+    child = dict(environment)
+    node_dir = str(Path(node).resolve().parent)
+    child['PATH'] = node_dir + (os.pathsep + child['PATH'] if child.get('PATH') else '')
+    for command, expected in (
+        (['python3', '-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_budget_gate*.py'], 0),
+        (['python3', 'tools/budget_gate.py', '--self-test'], 0),
+        ([node, '--test', 'tests/perf/proc_fields.test.mjs'], 0),
+        (['python3', 'tools/budget_gate.py', '--receipt', 'tests/perf/leak-renderer.json'], 1),
+    ):
+        rc = bounded(command, root, child)
+        if rc != expected:
+            print(f'perf: child rc={rc} (expected {expected}): {command!r}', file=sys.stderr)
+            return 124 if rc == 124 else 1
+    if environment.get('MV_GATE_PERF_LIVE') != '1':
+        print('perf: live probe SKIPPED (MV_GATE_PERF_LIVE not set)', file=sys.stderr)
+        return 0
+    dist = electron_dist(root, environment)
+    electron = (dist / 'electron') if dist is not None else None
+    has_electron = electron is not None and electron.is_file() and os.access(electron, os.X_OK)
+    xvfb = shutil.which('xvfb-run', path=environment.get('PATH'))
+    missing = [name for name, ok in (
+        ('node', node is not None),
+        ('xvfb-run', xvfb is not None),
+        ('electron', has_electron),
+    ) if not ok]
+    if missing:
+        print(f"perf: live probe SKIPPED (missing {', '.join(missing)})", file=sys.stderr)
+        return 0
+    live_env = dict(child, ELECTRON_OVERRIDE_DIST_PATH=str(dist.resolve()))
+    live_env.pop('ELECTRON_RUN_AS_NODE', None)
+    command = [
+        xvfb, '-a', '-s', '-screen 0 1280x900x24',
+        'python3', 'tools/budget_gate.py', '--probe', '--electron', str(electron.resolve()),
+    ]
+    rc = bounded(command, root, live_env, seconds=600)
+    if rc:
+        print(f'perf: child rc={rc}: {command!r}', file=sys.stderr)
+        return 124 if rc == 124 else 1
+    return 0
+
+
 def leaf(leg, root, environment):
     # [TARGET, unit decision] Match CI discovery with a bounded run; an absent
     # agents suite is a failed gate, rather than successful empty discovery.
@@ -1432,6 +1611,8 @@ def leaf(leg, root, environment):
         'go': ('daemon-adapter/go.mod',),
         'ui-smoke': ('ui/test/smoke.mjs', 'ui/test/smoke-main.mjs'),
         'ui': ('ui/package.json', 'ui/package-lock.json', 'ui/tsconfig.json'),
+        'perf': ('tools/budget_gate.py', 'tests/perf/budgets.json',
+                 'tests/perf/leak-renderer.json', 'tests/perf/proc_fields.test.mjs'),
     }
     for name in targets[leg]:
         path = root / name
@@ -1443,6 +1624,8 @@ def leaf(leg, root, environment):
         return go_leg(root, environment)
     if leg == 'ui-smoke':
         return ui_smoke_leg(root, environment)
+    if leg == 'perf':
+        return perf_leg(root, environment)
     if leg in ('rust', 'ui'):
         return build_leg(leg, root, environment)
     if leg == 'manifests':
