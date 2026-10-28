@@ -1,17 +1,17 @@
 {
  "schema": "metaviewer.meta_ai_usage/v1",
  "totals": {
-  "lanes": 366,
-  "ok": 366,
-  "input_tokens": 81945176,
-  "cache_read_tokens": 1930105572,
-  "output_tokens": 17908238,
-  "thinking_tokens": 9581086,
+  "lanes": 367,
+  "ok": 367,
+  "input_tokens": 82217474,
+  "cache_read_tokens": 1938861530,
+  "output_tokens": 17984216,
+  "thinking_tokens": 9631450,
   "cache_hit_pct": 95.9,
-  "usd": 15.6364,
-  "usd_per_lane": 0.0427,
-  "steps": 20331,
-  "lane_hours": 52.9
+  "usd": 15.6963,
+  "usd_per_lane": 0.0428,
+  "steps": 20420,
+  "lane_hours": 53.1
  },
  "peak_concurrent_lanes": 24,
  "rooms": {
@@ -8267,6 +8267,27 @@
    "thinking_tokens": 13209,
    "cache_hit_pct": 94.1,
    "usd": 0.021259
+  },
+  {
+   "room": "mvui27",
+   "lane": "S",
+   "title": "no page scroll from tile canvas clicks in any mode",
+   "stage": "fix",
+   "model": "muse-spark-1.3",
+   "orchestrator": "UI orchestrator",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-28T03:40:12.145000+00:00",
+   "duration_s": 925.2,
+   "end_utc": "2026-10-28T03:55:37.303000+00:00",
+   "phase": "build",
+   "steps": 89,
+   "input_tokens": 272298,
+   "cache_read_tokens": 8755958,
+   "output_tokens": 75978,
+   "thinking_tokens": 50364,
+   "cache_hit_pct": 97.0,
+   "usd": 0.059937
   }
  ]
 }

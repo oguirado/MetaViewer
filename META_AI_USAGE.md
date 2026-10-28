@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 366 | 55 | 311 |
-| Lanes finished OK | 366 | 55 | 311 |
-| Agent steps | 20,331 | 2,705 | 17,626 |
-| Lane-hours of agent work | 52.9 | 5.2 | 47.6 |
-| Fresh input tokens | 81,945,176 | 11,482,034 | 70,463,142 |
-| Cache-read input tokens | 1,930,105,572 | 226,255,212 | 1,703,850,360 |
+| Lanes launched | 367 | 55 | 312 |
+| Lanes finished OK | 367 | 55 | 312 |
+| Agent steps | 20,420 | 2,705 | 17,715 |
+| Lane-hours of agent work | 53.1 | 5.2 | 47.9 |
+| Fresh input tokens | 82,217,474 | 11,482,034 | 70,735,440 |
+| Cache-read input tokens | 1,938,861,530 | 226,255,212 | 1,712,606,318 |
 | Prompt cache hit % | 95.9 | 95.2 | 96.0 |
-| Output tokens | 17,908,238 | 2,135,708 | 15,772,530 |
-| Thinking tokens | 9,581,086 | 1,050,039 | 8,531,047 |
-| Cost (USD) | 15.6364 | 2.0279 | 13.6085 |
-| Cost per lane (USD) | 0.0427 | 0.0369 | 0.0438 |
+| Output tokens | 17,984,216 | 2,135,708 | 15,848,508 |
+| Thinking tokens | 9,631,450 | 1,050,039 | 8,581,411 |
+| Cost (USD) | 15.6963 | 2.0279 | 13.6684 |
+| Cost per lane (USD) | 0.0428 | 0.0369 | 0.0438 |
 
-Rooms: 101. Peak concurrent lanes [MEASURED from lane start/end]: 24.
+Rooms: 102. Peak concurrent lanes [MEASURED from lane start/end]: 24.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -43,7 +43,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
 | docs | 15 | 94.8 | 0.5371 |
-| fix | 42 | 96.8 | 2.3343 |
+| fix | 43 | 96.8 | 2.3942 |
 | kit | 3 | 96.5 | 0.1997 |
 | ops | 4 | 88.1 | 0.0468 |
 | plan | 12 | 92.6 | 0.3072 |
@@ -161,6 +161,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui26 | UI orchestrator | Oct 28 03:25 | fix | 2 | 96.7 | 0.1306 | RV10 cross-review of ui/src (verified against code) found an attach paint that ignores draw failure and skips presentation notify (HIGH), an unbound input facade send, and several LOW input/frame edge cases; fix them with regression tests before live input checks. |
 | mvui26b | UI orchestrator | Oct 28 03:43 | fix | 2 | 97.1 | 0.1417 | Live run of human input on the real app: clicking into the capsule scrolls the MetaViewer page, input mode stays WRITE after control release, and input refusals are invisible; fix the renderer side so live typing can pass. |
 | mvui26c | UI orchestrator | Oct 28 04:02 | fix | 1 | 94.1 | 0.0213 | Making the tile scheduler load synchronously (hosted e2e race) broke four data-URL mutant test harnesses; relink them so the combined input drop gates green with oracles unchanged. |
+| mvui27 | UI orchestrator | Oct 28 04:40 | fix | 1 | 97.0 | 0.0599 | Live run: in READ mode a click on the capsule picture in the multislot still scrolls the MetaViewer page out of view; find the cause and stop tile canvas clicks from scrolling the page in every mode. |
 
 ## Every lane
 
@@ -532,6 +533,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui26b | S | no page scroll on canvas click and focus; synchronous tileScheduler evaluation | Oct 28 03:43 | yes | 97 | 97.5 | 0.060308 |
 | mvui26b | M | mode drops to READ on release, refusals in Activity | Oct 28 03:44 | yes | 83 | 96.7 | 0.081362 |
 | mvui26c | H | relink data-URL harnesses | Oct 28 04:02 | yes | 37 | 94.1 | 0.021259 |
+| mvui27 | S | no page scroll from tile canvas clicks in any mode | Oct 28 04:40 | yes | 89 | 97.0 | 0.059937 |
 
 ## Method
 
