@@ -74,8 +74,117 @@ function collectProcessTreePids(rootPid) {
   return [...tree];
 }
 
+export const DEFAULT_TERMINAL_LIMITS = Object.freeze({
+  attachDeadlineMs: 10_000,
+  maxPreAttachFrames: 64,
+  maxPreAttachBytes: 65_536,
+  resizeBurst: 16,
+  resizePerSec: 16,
+  writeBytesBurst: 262_144,
+  writeBytesPerSec: 262_144,
+  writeOpsBurst: 64,
+  writeOpsPerSec: 64,
+});
+
+/**
+ * [TARGET, unit decision] Per-session token bucket for terminal resize and input rate limiting.
+ * @param {{ capacity: number, refillPerSec: number, now?: () => number }} options
+ */
+export function createTokenBucket({ capacity, refillPerSec, now = Date.now }) {
+  const cap = Number.isFinite(capacity) && capacity > 0 ? capacity : 1;
+  const rate = Number.isFinite(refillPerSec) && refillPerSec >= 0 ? refillPerSec : 0;
+  let tokens = cap;
+  let lastMs = now();
+  return {
+    /** @param {number} [cost] */
+    take(cost = 1) {
+      if (!Number.isFinite(cost) || cost <= 0) return false;
+      const currentMs = now();
+      const elapsedSec = Math.max(0, (currentMs - lastMs) / 1000);
+      lastMs = currentMs;
+      if (elapsedSec > 0 && rate > 0) {
+        tokens = Math.min(cap, tokens + elapsedSec * rate);
+      }
+      if (tokens < cost) {
+        return false;
+      }
+      tokens -= cost;
+      return true;
+    },
+  };
+}
+
+/** @param {unknown} rawSender @returns {unknown} */
+function resolveSenderKey(rawSender) {
+  if (rawSender === undefined || rawSender === null) return null;
+  if (typeof rawSender === 'number' || typeof rawSender === 'string' || typeof rawSender === 'symbol') {
+    return rawSender;
+  }
+  if (typeof rawSender === 'object') {
+    const rec = /** @type {Record<string, any>} */ (rawSender);
+    if (typeof rec.id === 'number' || typeof rec.id === 'string') {
+      return `id:${rec.id}`;
+    }
+    if (rec.sender && (typeof rec.sender.id === 'number' || typeof rec.sender.id === 'string')) {
+      return `id:${rec.sender.id}`;
+    }
+    return rawSender;
+  }
+  return null;
+}
+
+/** @returns {Error} */
+function createDisplayOnlyError() {
+  const err = /** @type {Error & { code?: string }} */ (new Error('DISPLAY_ONLY: side-terminal is disabled in nested display'));
+  err.code = 'DISPLAY_ONLY';
+  return err;
+}
+
+/** @param {any} value @param {unknown} explicitSender */
+function splitSenderArg(value, explicitSender) {
+  if (explicitSender !== undefined) {
+    return { cleanValue: value, senderKey: resolveSenderKey(explicitSender) };
+  }
+  if (value && typeof value === 'object' && !Array.isArray(value) && 'sender' in value) {
+    const { sender, ...rest } = value;
+    return { cleanValue: rest, senderKey: resolveSenderKey(sender) };
+  }
+  return { cleanValue: value, senderKey: null };
+}
+
 /** @param {any} options */
-export function createTerminalHost({ pty, createMessageChannel, clipboard, env = process.env, profiles = new Map() }) {
+export function createTerminalHost({
+  pty,
+  createMessageChannel,
+  clipboard,
+  env = process.env,
+  profiles = new Map(),
+  nested = false,
+  argv = [],
+  now = Date.now,
+  limits = {},
+  attachDeadlineMs,
+  maxPreAttachFrames,
+  maxPreAttachBytes,
+  resizeBurst,
+  resizePerSec,
+  writeBytesBurst,
+  writeBytesPerSec,
+  writeOpsBurst,
+  writeOpsPerSec,
+}) {
+  const isNested = nested === true || (Array.isArray(argv) && argv.includes('--nested-depth=1'));
+  const limitsConfig = {
+    attachDeadlineMs: attachDeadlineMs ?? limits.attachDeadlineMs ?? DEFAULT_TERMINAL_LIMITS.attachDeadlineMs,
+    maxPreAttachFrames: maxPreAttachFrames ?? limits.maxPreAttachFrames ?? DEFAULT_TERMINAL_LIMITS.maxPreAttachFrames,
+    maxPreAttachBytes: maxPreAttachBytes ?? limits.maxPreAttachBytes ?? DEFAULT_TERMINAL_LIMITS.maxPreAttachBytes,
+    resizeBurst: resizeBurst ?? limits.resizeBurst ?? DEFAULT_TERMINAL_LIMITS.resizeBurst,
+    resizePerSec: resizePerSec ?? limits.resizePerSec ?? DEFAULT_TERMINAL_LIMITS.resizePerSec,
+    writeBytesBurst: writeBytesBurst ?? limits.writeBytesBurst ?? DEFAULT_TERMINAL_LIMITS.writeBytesBurst,
+    writeBytesPerSec: writeBytesPerSec ?? limits.writeBytesPerSec ?? DEFAULT_TERMINAL_LIMITS.writeBytesPerSec,
+    writeOpsBurst: writeOpsBurst ?? limits.writeOpsBurst ?? DEFAULT_TERMINAL_LIMITS.writeOpsBurst,
+    writeOpsPerSec: writeOpsPerSec ?? limits.writeOpsPerSec ?? DEFAULT_TERMINAL_LIMITS.writeOpsPerSec,
+  };
   /** @type {{ shell: string | null, homedir: string }} */
   let osInfo = { shell: '/bin/sh', homedir: '/tmp' };
   try {
@@ -151,6 +260,51 @@ export function createTerminalHost({ pty, createMessageChannel, clipboard, env =
   /** @type {any} */
   let resolvedPty = pty ?? null;
 
+  /** @param {any} s */
+  const clearAttachTimer = (s) => {
+    if (s && s.attachTimer !== null && s.attachTimer !== undefined) {
+      clearTimeout(s.attachTimer);
+      s.attachTimer = null;
+    }
+  };
+
+  /** @param {string} sessionId */
+  const closeSessionInternal = async (sessionId) => {
+    const s = sessions.get(sessionId);
+    if (!s) return true;
+    clearAttachTimer(s);
+    if (!s.exited) {
+      send({ op: 'close', id: sessionId });
+      await s.exitPromise;
+    }
+    sessions.delete(sessionId);
+    if (!s.opened) {
+      try {
+        s.reject(new Error('TERMINAL_IO_REFUSED'));
+      } catch {}
+    }
+    try {
+      s.port?.close?.();
+    } catch {}
+    return true;
+  };
+
+  /** @param {any} s @param {string} id @param {any} frame */
+  const enqueuePreAttachFrame = (s, id, frame) => {
+    const frameBytes = frame && frame.bytes instanceof Uint8Array ? frame.bytes.byteLength : 64;
+    if (s.queue.length + 1 > limitsConfig.maxPreAttachFrames
+        || s.queuedBytes + frameBytes > limitsConfig.maxPreAttachBytes) {
+      s.queue = [];
+      s.queuedBytes = 0;
+      clearAttachTimer(s);
+      void closeSessionInternal(id).catch(() => {});
+      return false;
+    }
+    s.queue.push(frame);
+    s.queuedBytes += frameBytes;
+    return true;
+  };
+
   /** @param {number} pid */
   const reapOwnedPid = async (pid) => {
     if (!pids.delete(pid) || !Number.isSafeInteger(pid) || pid <= 1 || pid === process.pid) {
@@ -201,7 +355,11 @@ export function createTerminalHost({ pty, createMessageChannel, clipboard, env =
     transport: {
       onMessage: (fn) => {
         receive = fn;
-        return () => {};
+        return () => {
+          if (receive === fn) {
+            receive = () => {};
+          }
+        };
       },
       send: (message) => {
         const id = String(message.id ?? '');
@@ -215,6 +373,7 @@ export function createTerminalHost({ pty, createMessageChannel, clipboard, env =
         }
         if (message.ev === 'error') {
           if (!s.opened) {
+            clearAttachTimer(s);
             sessions.delete(id);
             s.resolveExit();
             s.reject(new Error('TERMINAL_IO_REFUSED'));
@@ -222,26 +381,27 @@ export function createTerminalHost({ pty, createMessageChannel, clipboard, env =
           }
           const errFrame = { session: id, error: 'TERMINAL_IO_REFUSED' };
           if (s.port) s.port.postMessage(errFrame);
-          else s.queue.push(errFrame);
+          else enqueuePreAttachFrame(s, id, errFrame);
           return;
         }
         const frame = message.ev === 'data'
           ? { session: id, seq: message.seq, bytes: new Uint8Array(Buffer.from(String(message.b64), 'base64')) }
           : { session: id, ...(message.ev === 'exit' ? { exitCode: message.code } : { error: 'TERMINAL_IO_REFUSED' }) };
-        if (s.port) s.port.postMessage(frame);
-        else s.queue.push(frame);
         if (message.ev === 'exit') {
+          clearAttachTimer(s);
           s.exited = true;
           s.resolveExit();
         }
+        if (s.port) s.port.postMessage(frame);
+        else enqueuePreAttachFrame(s, id, frame);
       },
     },
   });
 
   const send = (/** @type {any} */ message) => receive({ version: 1, generation: 1, ...message });
 
-  /** @param {any} value @param {string} [keys] @param {boolean} [allowExited] */
-  const getSession = (value, keys = 'session', allowExited = false) => {
+  /** @param {any} value @param {string} [keys] @param {boolean} [allowExited] @param {unknown} [senderKey] */
+  const getSession = (value, keys = 'session', allowExited = false, senderKey = null) => {
     if (!hasClosedKeys(value, keys) || typeof value.session !== 'string') {
       throw new Error('TERMINAL_IO_REFUSED');
     }
@@ -252,17 +412,25 @@ export function createTerminalHost({ pty, createMessageChannel, clipboard, env =
     if (!s || (!allowExited && s.exited)) {
       throw new Error('TERMINAL_UNKNOWN_SESSION');
     }
+    if (s.sender !== null || senderKey !== null) {
+      if (s.sender === null || senderKey === null || s.sender !== senderKey) {
+        throw new Error('TERMINAL_IO_REFUSED: SENDER');
+      }
+    }
     return s;
   };
 
   const host = {
     profiles: owned,
     setEnabled: async (/** @type {boolean} */ value) => {
+      if (isNested) throw createDisplayOnlyError();
       if (typeof value !== 'boolean') throw new Error('PAYLOAD');
       enabled = value;
       return true;
     },
-    open: async (/** @type {any} */ value) => {
+    open: async (/** @type {any} */ rawValue, /** @type {unknown} */ explicitSender) => {
+      if (isNested) throw createDisplayOnlyError();
+      const { cleanValue: value, senderKey } = splitSenderArg(rawValue, explicitSender);
       if (!value || typeof value !== 'object' || Array.isArray(value)) {
         throw new Error('PAYLOAD');
       }
@@ -302,16 +470,45 @@ export function createTerminalHost({ pty, createMessageChannel, clipboard, env =
         const exitPromise = new Promise((r) => {
           resolveExit = /** @type {() => void} */ (r);
         });
+        /** @type {ReturnType<typeof setTimeout> | null} */
+        let attachTimer = null;
+        if (Number.isFinite(limitsConfig.attachDeadlineMs) && limitsConfig.attachDeadlineMs > 0) {
+          attachTimer = setTimeout(() => {
+            const current = sessions.get(session);
+            if (current && !current.port && !current.exited) {
+              void closeSessionInternal(session).catch(() => {});
+            }
+          }, limitsConfig.attachDeadlineMs);
+          attachTimer.unref?.();
+        }
         sessions.set(session, {
           resolve,
           reject,
           queue: [],
+          queuedBytes: 0,
           inputSeq: 0,
           opened: false,
           exited: false,
           exitPromise,
           resolveExit,
           port: null,
+          sender: senderKey,
+          attachTimer,
+          resizeBucket: createTokenBucket({
+            capacity: limitsConfig.resizeBurst,
+            refillPerSec: limitsConfig.resizePerSec,
+            now,
+          }),
+          writeOpsBucket: createTokenBucket({
+            capacity: limitsConfig.writeOpsBurst,
+            refillPerSec: limitsConfig.writeOpsPerSec,
+            now,
+          }),
+          writeBytesBucket: createTokenBucket({
+            capacity: limitsConfig.writeBytesBurst,
+            refillPerSec: limitsConfig.writeBytesPerSec,
+            now,
+          }),
         });
         send({
           op: 'open',
@@ -323,9 +520,12 @@ export function createTerminalHost({ pty, createMessageChannel, clipboard, env =
         });
       });
     },
-    attach: async (/** @type {any} */ value) => {
-      const s = getSession(value, 'session', true);
+    attach: async (/** @type {any} */ rawValue, /** @type {unknown} */ explicitSender) => {
+      if (isNested) throw createDisplayOnlyError();
+      const { cleanValue: value, senderKey } = splitSenderArg(rawValue, explicitSender);
+      const s = getSession(value, 'session', true, senderKey);
       if (s.port) throw new Error('TERMINAL_IO_REFUSED');
+      clearAttachTimer(s);
       const { port1, port2 } = createMessageChannel();
       s.port = port1;
       port1.on('message', (/** @type {any} */ event) => {
@@ -336,17 +536,36 @@ export function createTerminalHost({ pty, createMessageChannel, clipboard, env =
           if (!m || typeof m !== 'object' || Array.isArray(m) || m.session !== value.session) {
             throw new Error('TERMINAL_IO_REFUSED');
           }
-          const active = getSession({ session: m.session }, 'session', false);
-          const keys = Object.keys(m).sort().join(',');
-          if (keys === 'bytes,seq,session'
+          const active = getSession({ session: m.session }, 'session', false, s.sender);
+          if (('cols' in m || 'rows' in m) && !('bytes' in m) && !('ack' in m) && !('seq' in m)) {
+            if (hasClosedKeys(m, 'cols,rows,session')
+                && Number.isSafeInteger(m.cols) && m.cols >= 2 && m.cols <= 500
+                && Number.isSafeInteger(m.rows) && m.rows >= 2 && m.rows <= 300
+                && enabled
+                && active.resizeBucket.take(1)) {
+              send({ op: 'resize', id: m.session, cols: m.cols, rows: m.rows });
+            } else {
+              try {
+                port1.postMessage({ session: value.session, error: 'TERMINAL_IO_REFUSED' });
+              } catch {}
+            }
+            return;
+          }
+          if (hasClosedKeys(m, 'bytes,seq,session')
               && m.bytes instanceof Uint8Array
               && m.bytes.byteLength <= 65536
               && Number.isSafeInteger(m.seq)
               && m.seq === active.inputSeq + 1
               && enabled) {
             active.inputSeq += 1;
+            if (!active.writeOpsBucket.take(1) || !active.writeBytesBucket.take(m.bytes.byteLength)) {
+              try {
+                port1.postMessage({ session: value.session, error: 'TERMINAL_IO_REFUSED' });
+              } catch {}
+              return;
+            }
             send({ op: 'write', id: m.session, b64: Buffer.from(m.bytes).toString('base64') });
-          } else if (keys === 'ack,bytes,session'
+          } else if (hasClosedKeys(m, 'ack,bytes,session')
               && Number.isSafeInteger(m.ack) && m.ack > 0
               && Number.isSafeInteger(m.bytes) && m.bytes >= 0) {
             send({ op: 'ack', id: m.session, ack_seq: m.ack, ack_bytes: m.bytes });
@@ -358,13 +577,13 @@ export function createTerminalHost({ pty, createMessageChannel, clipboard, env =
             port1.postMessage({ session: value.session, error: 'TERMINAL_IO_REFUSED' });
           } catch {}
           if (sessions.has(value.session)) {
-            void host.close({ session: value.session }).catch(() => {});
+            void closeSessionInternal(value.session).catch(() => {});
           }
         }
       });
       port1.on('close', () => {
         if (sessions.has(value.session)) {
-          void host.close({ session: value.session }).catch(() => {});
+          void closeSessionInternal(value.session).catch(() => {});
         }
       });
       port1.start?.();
@@ -372,45 +591,49 @@ export function createTerminalHost({ pty, createMessageChannel, clipboard, env =
         port1.postMessage(frame);
       }
       s.queue = [];
+      s.queuedBytes = 0;
       return { port: port2 };
     },
-    resize: async (/** @type {any} */ value) => {
-      getSession(value, 'cols,rows,session', false);
+    resize: async (/** @type {any} */ rawValue, /** @type {unknown} */ explicitSender) => {
+      if (isNested) throw createDisplayOnlyError();
+      const { cleanValue: value, senderKey } = splitSenderArg(rawValue, explicitSender);
+      const s = getSession(value, 'cols,rows,session', false, senderKey);
       if (!Number.isSafeInteger(value.cols) || value.cols < 2 || value.cols > 500
           || !Number.isSafeInteger(value.rows) || value.rows < 2 || value.rows > 300) {
         throw new Error('TERMINAL_IO_REFUSED');
       }
+      if (!s.resizeBucket.take(1)) {
+        throw new Error('TERMINAL_IO_REFUSED: RATE_LIMITED');
+      }
       send({ op: 'resize', id: value.session, cols: value.cols, rows: value.rows });
       return true;
     },
-    close: async (/** @type {any} */ value) => {
-      const s = getSession(value, 'session', true);
-      if (!s.exited) {
-        send({ op: 'close', id: value.session });
-        await s.exitPromise;
-      }
-      sessions.delete(value.session);
-      try {
-        s.port?.close?.();
-      } catch {}
-      return true;
+    close: async (/** @type {any} */ rawValue, /** @type {unknown} */ explicitSender) => {
+      if (isNested) throw createDisplayOnlyError();
+      const { cleanValue: value, senderKey } = splitSenderArg(rawValue, explicitSender);
+      getSession(value, 'session', true, senderKey);
+      return closeSessionInternal(value.session);
     },
-    listProviders: async () => ({
-      entries: [...owned.keys()].map((id) => {
-        const meta = providerMeta.get(id);
-        return {
+    listProviders: async () => {
+      if (isNested) throw createDisplayOnlyError();
+      return {
+        entries: [...owned.keys()].map((id) => {
+          const meta = providerMeta.get(id);
+          return {
+            id,
+            label: meta?.label ?? (id === 'shell' ? 'System shell' : id),
+            hint: meta?.hint ?? (id === 'shell' ? 'Interactive login shell' : ''),
+          };
+        }),
+        capabilities: [...owned.keys()].map((id) => ({
           id,
-          label: meta?.label ?? (id === 'shell' ? 'System shell' : id),
-          hint: meta?.hint ?? (id === 'shell' ? 'Interactive login shell' : ''),
-        };
-      }),
-      capabilities: [...owned.keys()].map((id) => ({
-        id,
-        available: !disposed,
-        reason: disposed ? 'DISPOSED' : '',
-      })),
-    }),
+          available: !disposed,
+          reason: disposed ? 'DISPOSED' : '',
+        })),
+      };
+    },
     copyText: async (/** @type {any} */ value) => {
+      if (isNested) throw createDisplayOnlyError();
       if (!hasClosedKeys(value, 'text')
           || typeof value.text !== 'string'
           || value.text.length < 1
@@ -427,6 +650,16 @@ export function createTerminalHost({ pty, createMessageChannel, clipboard, env =
       if (disposed) return;
       disposed = true;
       enabled = false;
+      for (const s of sessions.values()) {
+        clearAttachTimer(s);
+        s.exited = true;
+        s.resolveExit();
+        if (!s.opened) {
+          try {
+            s.reject(new Error('TERMINAL_DISABLED'));
+          } catch {}
+        }
+      }
       await engine.dispose();
       for (const pid of [...pids]) {
         try {
@@ -434,6 +667,9 @@ export function createTerminalHost({ pty, createMessageChannel, clipboard, env =
         } catch {}
       }
       for (const s of sessions.values()) {
+        clearAttachTimer(s);
+        s.exited = true;
+        s.resolveExit();
         try {
           s.port?.close?.();
         } catch {}

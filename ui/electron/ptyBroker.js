@@ -247,17 +247,6 @@ export function quoteShellArg(arg) {
 }
 
 /**
- * `exec -- <quoted argv>` replacing the login shell, so the provider TUI
- * owns the PTY and its exit code ends the session.
- * @param {unknown} providerArgv Validated provider argv.
- * @returns {string}
- */
-export function buildProviderExecCommand(providerArgv) {
-  const argv = validateProviderArgv(providerArgv);
-  return `exec -- ${argv.map((item) => quoteShellArg(item)).join(' ')}`;
-}
-
-/**
  * Basename of a shell path for hermetic-flag gating.
  * @param {string} shell Absolute shell path.
  * @returns {string}
@@ -1760,7 +1749,7 @@ export function registerTerminalIpc({
     fail('BRIDGE_SHAPE', 'serviceGeneration must be a safe integer >= 0');
   }
   const generation = /** @type {number} */ (serviceGeneration);
-  /** @type {Map<string, { session: string, epoch: number, attachGen: number, pid: number | null }>} */
+  /** @type {Map<string, { session: string, owner: string, epoch: number, attachGen: number, pid: number | null }>} */
   const live = new Map();
   /** @type {Set<string>} */
   const closed = new Set();
@@ -1979,6 +1968,7 @@ export function registerTerminalIpc({
       }
       live.set(context.session, {
         session: context.session,
+        owner: principal.owner,
         epoch: context.epoch,
         attachGen: 0,
         pid: null,
@@ -1988,6 +1978,10 @@ export function registerTerminalIpc({
     attach: async (principal, value) => {
       if (!isTerminalId(value.session)) return outcome(false, { reason: 'SESSION_SHAPE' });
       const session = /** @type {string} */ (value.session);
+      const bound = live.get(session);
+      if (bound && bound.owner !== principal.owner) {
+        return outcome(false, { reason: 'TERMINAL_OWNER' });
+      }
       const decided = await admit(principal, { operation: 'attach', session });
       if (disposed) return outcome(false, { reason: 'BRIDGE_DISPOSED' });
       if ('refusal' in decided) return decided.refusal;
@@ -1998,6 +1992,9 @@ export function registerTerminalIpc({
       const entry = live.get(session);
       if (!entry) {
         return outcome(false, { reason: closed.has(session) ? 'SESSION_CLOSED' : 'UNKNOWN_SESSION' });
+      }
+      if (entry.owner !== principal.owner) {
+        return outcome(false, { reason: 'TERMINAL_OWNER' });
       }
       entry.attachGen += 1;
       /** @type {{ firstSeq: number | null, lastSeq: number | null, bytes: Uint8Array, truncated: boolean }} */
@@ -2018,6 +2015,10 @@ export function registerTerminalIpc({
     close: async (principal, value) => {
       if (!isTerminalId(value.session)) return outcome(false, { reason: 'SESSION_SHAPE' });
       const session = /** @type {string} */ (value.session);
+      const bound = live.get(session);
+      if (bound && bound.owner !== principal.owner) {
+        return outcome(false, { reason: 'TERMINAL_OWNER' });
+      }
       const decided = await admit(principal, { operation: 'close', session });
       if (disposed) return outcome(false, { reason: 'BRIDGE_DISPOSED' });
       if ('refusal' in decided) return decided.refusal;
@@ -2025,9 +2026,13 @@ export function registerTerminalIpc({
       if (context === null || context.session !== session) {
         return outcome(false, { reason: 'ADMISSION_CONTEXT' });
       }
-      if (!live.has(session)) {
+      const entry = live.get(session);
+      if (!entry) {
         if (closed.has(session)) return outcome(true, { session });
         return outcome(false, { reason: 'UNKNOWN_SESSION' });
+      }
+      if (entry.owner !== principal.owner) {
+        return outcome(false, { reason: 'TERMINAL_OWNER' });
       }
       if (!forward({ op: 'close', id: session })) {
         return outcome(false, { reason: 'TRANSPORT_FAILED' });
@@ -2044,6 +2049,10 @@ export function registerTerminalIpc({
       if (Buffer.byteLength(raw, 'base64') > MAX_WRITE_BYTES) {
         return outcome(false, { reason: 'WRITE_TOO_LARGE' });
       }
+      const bound = live.get(session);
+      if (bound && bound.owner !== principal.owner) {
+        return outcome(false, { reason: 'TERMINAL_OWNER' });
+      }
       const decided = await admit(principal, { operation: 'write', session });
       if (disposed) return outcome(false, { reason: 'BRIDGE_DISPOSED' });
       if ('refusal' in decided) return decided.refusal;
@@ -2051,8 +2060,12 @@ export function registerTerminalIpc({
       if (context === null || context.session !== session) {
         return outcome(false, { reason: 'ADMISSION_CONTEXT' });
       }
-      if (!live.has(session)) {
+      const entry = live.get(session);
+      if (!entry) {
         return outcome(false, { reason: closed.has(session) ? 'SESSION_CLOSED' : 'UNKNOWN_SESSION' });
+      }
+      if (entry.owner !== principal.owner) {
+        return outcome(false, { reason: 'TERMINAL_OWNER' });
       }
       if (!forward({ op: 'write', id: session, b64: raw })) {
         return outcome(false, { reason: 'TRANSPORT_FAILED' });
@@ -2074,6 +2087,10 @@ export function registerTerminalIpc({
       ) {
         return outcome(false, { reason: 'DIMS_RANGE' });
       }
+      const bound = live.get(session);
+      if (bound && bound.owner !== principal.owner) {
+        return outcome(false, { reason: 'TERMINAL_OWNER' });
+      }
       const decided = await admit(principal, { operation: 'resize', session });
       if (disposed) return outcome(false, { reason: 'BRIDGE_DISPOSED' });
       if ('refusal' in decided) return decided.refusal;
@@ -2081,8 +2098,12 @@ export function registerTerminalIpc({
       if (context === null || context.session !== session) {
         return outcome(false, { reason: 'ADMISSION_CONTEXT' });
       }
-      if (!live.has(session)) {
+      const entry = live.get(session);
+      if (!entry) {
         return outcome(false, { reason: closed.has(session) ? 'SESSION_CLOSED' : 'UNKNOWN_SESSION' });
+      }
+      if (entry.owner !== principal.owner) {
+        return outcome(false, { reason: 'TERMINAL_OWNER' });
       }
       if (!forward({ op: 'resize', id: session, cols, rows })) {
         return outcome(false, { reason: 'TRANSPORT_FAILED' });
@@ -2097,6 +2118,10 @@ export function registerTerminalIpc({
       if (!isSafeInt(seq) || !isSafeInt(bytes) || /** @type {number} */ (seq) < 0 || /** @type {number} */ (bytes) < 0) {
         return outcome(false, { reason: 'ACK_SHAPE' });
       }
+      const bound = live.get(session);
+      if (bound && bound.owner !== principal.owner) {
+        return outcome(false, { reason: 'TERMINAL_OWNER' });
+      }
       const decided = await admit(principal, { operation: 'ack', session });
       if (disposed) return outcome(false, { reason: 'BRIDGE_DISPOSED' });
       if ('refusal' in decided) return decided.refusal;
@@ -2107,6 +2132,9 @@ export function registerTerminalIpc({
       const entry = live.get(session);
       if (!entry) {
         return outcome(false, { reason: closed.has(session) ? 'SESSION_CLOSED' : 'UNKNOWN_SESSION' });
+      }
+      if (entry.owner !== principal.owner) {
+        return outcome(false, { reason: 'TERMINAL_OWNER' });
       }
       if (!forward({ op: 'ack', id: session, ack_seq: seq, ack_bytes: bytes })) {
         return outcome(false, { reason: 'TRANSPORT_FAILED' });

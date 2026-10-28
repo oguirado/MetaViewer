@@ -738,12 +738,15 @@ function validFrameNotice(value) {
     || typeof s.profile_id!=='string' || !s.profile_id.length || s.profile_id.length>128) return false;
   return utf8Bytes(JSON.stringify(value))<=IPC_BOUNDS.maxLayoutBytes;
 }
+/** @type {Map<string, symbol>} */
+const TERMINAL_SESSION_SENDERS = new Map();
 /** @param {PreloadTransport} transport */
 function wireFacade(transport) {
   /** @type {Map<string, any>} */ const terminalPorts=new Map();
+  const terminalSenderToken=Symbol('terminal-sender');
   let terminalPortSubscribed=false;
   const ensureTerminalPortSubscription=()=>{
-    if (terminalPortSubscribed || typeof transport.subscribe !== 'function') return;
+    if (transport.nested || terminalPortSubscribed || typeof transport.subscribe !== 'function') return;
     terminalPortSubscribed=true;
     try {
       transport.subscribe('metaviewer:side-terminal.port',(value,ports)=>{
@@ -758,10 +761,27 @@ function wireFacade(transport) {
   /** @param {keyof typeof WIRE_NAMES} name @param {unknown[]} args */
   const call=async(name,args) => {
     if (name==='intent' && args.length===1 && typeof args[0]!=='string') throw new ContractError('PAYLOAD','expected JSON text');
+    if (transport.nested && name.startsWith('terminal')) {
+      throw new ContractError('DISPLAY_ONLY','side-terminal is disabled in nested display');
+    }
     if (name==='terminalAttach') ensureTerminalPortSubscription();
     const admitted=wireCall(`metaviewer:${WIRE_NAMES[name]}`,args);
+    if (name==='terminalAttach' || name==='terminalResize' || name==='terminalClose') {
+      const reqSession=/** @type {any} */(admitted.args[0]).session;
+      const ownerToken=TERMINAL_SESSION_SENDERS.get(reqSession);
+      if (ownerToken!==undefined && ownerToken!==terminalSenderToken) {
+        throw new ContractError('TERMINAL_IO_REFUSED','SENDER');
+      }
+    }
     const reply=await transport.invoke(admitted.channel,admitted.args);
-    if (['saveSettings','intent','subscribeFrames','unsubscribeFrames','terminalEnabled','terminalResize','terminalClose','terminalCopy'].includes(name)) return assertSaveReply(reply);
+    if (['saveSettings','intent','subscribeFrames','unsubscribeFrames','terminalEnabled','terminalResize','terminalClose','terminalCopy'].includes(name)) {
+      const out=assertSaveReply(reply);
+      if (name==='terminalClose') {
+        const reqSession=/** @type {any} */(admitted.args[0]).session;
+        TERMINAL_SESSION_SENDERS.delete(reqSession);
+      }
+      return out;
+    }
     if (['loadSettings','recordingDestination','selfCapsuleId'].includes(name)) return assertLoadReply(reply);
     if (name==='nestedDepth') {
       if (reply!==null && reply!==0 && reply!==1) throw new ContractError('OUTCOME','nested depth');return reply;
@@ -769,7 +789,13 @@ function wireFacade(transport) {
     const value=/** @type {any} */(reply);
     if (name==='terminalOpen') {
       if (!value || Object.keys(value).join(',')!=='session' || typeof value.session!=='string'
-          || !/^[A-Za-z0-9._-]{1,128}$/.test(value.session)) throw new ContractError('OUTCOME','session');return Object.freeze({session:value.session});
+          || !/^[A-Za-z0-9._-]{1,128}$/.test(value.session)) throw new ContractError('OUTCOME','session');
+      if (TERMINAL_SESSION_SENDERS.size>=256) {
+        const oldest=TERMINAL_SESSION_SENDERS.keys().next().value;
+        if (oldest!==undefined) TERMINAL_SESSION_SENDERS.delete(oldest);
+      }
+      TERMINAL_SESSION_SENDERS.set(value.session,terminalSenderToken);
+      return Object.freeze({session:value.session});
     }
     if (name==='terminalAttach') {
       const reqSession=/** @type {any} */(admitted.args[0]).session;
@@ -1290,6 +1316,7 @@ export function installPreload(electron) {
       subscribe: typeof /** @type {any} */(ipcRenderer).on === 'function' ?
       /** @param {string} channel @param {(value:any,ports?:MessagePort[])=>void} cb */
       (channel,cb) => {
+        if (nested && channel === 'metaviewer:side-terminal.port') throw new ContractError('DISPLAY_ONLY','side-terminal is disabled in nested display');
         if (!['metaviewer:authority.frames','metaviewer:capture.state','metaviewer:side-terminal.port'].includes(channel)) throw new ContractError('CHANNEL','subscription refused');
         const native = /** @type {any} */(ipcRenderer);
         const listener = (/** @type {any} */event,/** @type {any} */value) => {
@@ -1305,6 +1332,9 @@ export function installPreload(electron) {
        * @returns {Promise<unknown>} Main outcome.
        */
       invoke: (channel, args) => {
+        if (nested && channel.startsWith('metaviewer:side-terminal.')) {
+          throw new ContractError('DISPLAY_ONLY', 'side-terminal is disabled in nested display');
+        }
         if (channel === QA_ANCHORS_CHANNEL && !qaEnabled) {
           throw new ContractError('CHANNEL', 'qa channel disabled');
         }
