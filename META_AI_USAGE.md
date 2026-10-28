@@ -19,17 +19,17 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 598 | 55 | 543 |
-| Lanes finished OK | 598 | 55 | 543 |
-| Agent steps | 29,984 | 2,705 | 27,279 |
-| Lane-hours of agent work | 77.7 | 5.2 | 72.5 |
-| Fresh input tokens | 123,635,423 | 11,482,034 | 112,153,389 |
-| Cache-read input tokens | 2,705,425,338 | 226,255,212 | 2,479,170,126 |
+| Lanes launched | 605 | 55 | 550 |
+| Lanes finished OK | 605 | 55 | 550 |
+| Agent steps | 30,248 | 2,705 | 27,543 |
+| Lane-hours of agent work | 78.4 | 5.2 | 73.2 |
+| Fresh input tokens | 124,984,010 | 11,482,034 | 113,501,976 |
+| Cache-read input tokens | 2,724,840,069 | 226,255,212 | 2,498,584,857 |
 | Prompt cache hit % | 95.6 | 95.2 | 95.7 |
-| Output tokens | 26,205,180 | 2,135,708 | 24,069,472 |
-| Thinking tokens | 14,529,511 | 1,050,039 | 13,479,472 |
-| Cost (USD) | 23.0154 | 2.0279 | 20.9876 |
-| Cost per lane (USD) | 0.0385 | 0.0369 | 0.0387 |
+| Output tokens | 26,405,995 | 2,135,708 | 24,270,287 |
+| Thinking tokens | 14,652,894 | 1,050,039 | 13,602,855 |
+| Cost (USD) | 23.2293 | 2.0279 | 21.2014 |
+| Cost per lane (USD) | 0.0384 | 0.0369 | 0.0385 |
 
 Rooms: 127. Peak concurrent lanes [MEASURED from lane start/end]: 32.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
@@ -38,7 +38,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 258 | 94.6 | 8.1216 |
+| build | 265 | 94.6 | 8.3354 |
 | context | 42 | 95.9 | 1.9093 |
 | demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
@@ -82,7 +82,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 103 | 94.4 | 3.3695 | direct Muse job |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 108 | 94.4 | 3.5248 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -176,7 +176,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui29c | UI orchestrator | Oct 28 08:58 | fix | 1 | 97.5 | 0.0624 | Terminal sessions wiring (AC-06) broke 58 committed App tests; restore the App mounting contract and finish the terminal tests so the drop can ship. |
 | mvui29sc | UI orchestrator | Oct 28 09:12 | fix | 1 | 97.3 | 0.0484 | Judge rejected the settings drop: a quick revert inside the debounce window is lost, a replaced host can receive a stale save, and boot can paint a scheme the store then replaces; fix before AC-08 can ship. |
 | mvui29d | UI orchestrator | Oct 28 09:13 | fix | 1 | 97.2 | 0.0587 | Judge notes on the terminal drop are real session lifecycle defects (events before registration, stale transport, cross-transport close, leaked port on close during attach, fixture broker unwired); fix before AC-06 ships. |
-| direct-adv | metaviewer-0 | Oct 28 09:30 | build | 26 | 94.1 | 0.725 | adversarial advocate review before integration |
+| direct-adv | metaviewer-0 | Oct 28 09:30 | build | 28 | 94.0 | 0.7837 | adversarial advocate review before integration |
 | direct-rv11 | metaviewer-0 | Oct 28 11:01 | build | 7 | 93.7 | 0.129 | cross-review verification |
 | direct-tg6 | metaviewer-0 | Oct 28 11:10 | build | 6 | 95.2 | 0.2593 | test-gap and mutation map |
 | direct-w5 | metaviewer-0 | Oct 28 11:20 | build | 4 | 94.4 | 0.1254 | W5 docs fact-check |
@@ -572,7 +572,6 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui25c | P | keyMap chord grammar | Oct 28 01:39 | yes | 53 | 95.6 | 0.029741 |
 | mvui25d | C | unavailable port fails closed | Oct 28 01:50 | yes | 52 | 95.7 | 0.034515 |
 | mvui25d | P | safe integer checks | Oct 28 01:51 | yes | 40 | 94.8 | 0.021396 |
-| direct-direct | frames | mvrv10_frames | Oct 28 03:12 | yes | 44 | 94.5 | 0.036716 |
 | direct-direct | app | mvrv10_app | Oct 28 03:12 | yes | 37 | 92.9 | 0.02825 |
 | direct-direct | serve | mvrv10_serve | Oct 28 03:12 | yes | 33 | 92.0 | 0.027157 |
 | direct-direct | journal | mvrv10_journal | Oct 28 03:12 | yes | 31 | 92.0 | 0.024352 |
@@ -791,6 +790,14 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | plan | live24_plan | Oct 28 23:28 | yes | 48 | 95.5 | 0.033146 |
 | direct-direct | le | ac_table | Oct 28 23:28 | yes | 22 | 89.7 | 0.0233 |
 | direct-direct | nder | sec_wender | Oct 28 23:28 | yes | 28 | 91.7 | 0.028925 |
+| direct-direct | frames | mvrv10_frames | Oct 28 23:37 | yes | 47 | 94.5 | 0.037013 |
+| direct-direct | frames | parity_frames | Oct 28 23:37 | yes | 47 | 94.5 | 0.037013 |
+| direct-direct | re_serve | mut_core_serve | Oct 28 23:37 | yes | 35 | 92.5 | 0.029735 |
+| direct-direct | gs_live_plan | holdings_live_plan | Oct 28 23:37 | yes | 36 | 94.1 | 0.028201 |
+| direct-direct | re_admission | sec_core_admission | Oct 28 23:37 | yes | 36 | 92.9 | 0.029623 |
+| direct-direct | gentloop | perf_agentloop | Oct 28 23:37 | yes | 31 | 92.0 | 0.030352 |
+| direct-adv | h4b | advh4b | Oct 28 23:39 | yes | 47 | 94.9 | 0.031004 |
+| direct-adv | h4a | advh4a | Oct 28 23:39 | yes | 29 | 92.1 | 0.027628 |
 
 ## Method
 
