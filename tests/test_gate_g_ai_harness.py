@@ -22,6 +22,7 @@ spec.loader.exec_module(gate)
 class Session:
     def __init__(self, frame, post, state):
         self.frame, self.post, self.state = frame, post, state
+        self.current_frame = frame
         self.surface_id = frame['surface_id']
         self.report = {'commands': []}
         self.ops = []
@@ -49,16 +50,26 @@ class Session:
         self.ops.append(op)
         result = dict(schema=expect, request_id=call['request_id'], op=op)
         if op == 'observe':
-            result.update(status='ok', observation=dict(schema='observation/v0.2', frame_ref=self.frame))
+            result.update(status='ok', observation=dict(schema='observation/v0.2', frame_ref=self.current_frame))
         elif op == 'propose':
-            if call['args']['proposal']['proposal_id'].endswith('-stale'):
+            proposal = call['args']['proposal']
+            based = proposal.get('based_on_frame')
+            frame_id_mismatch = (
+                ('frame_id' in proposal or 'frame_id' in self.current_frame)
+                and proposal.get('frame_id') != self.current_frame.get('frame_id')
+            )
+            if (not isinstance(based, dict)
+                    or based.get('sha256') != self.current_frame['sha256']
+                    or based.get('generation') != self.current_frame['generation']
+                    or frame_id_mismatch):
                 result.update(status='refused', reason_code='STALE_FRAME', detail='fixture stale generation')
                 return result
-            self.proposal = call['args']['proposal']
+            self.proposal = proposal
             result.update(status='admitted', verdict=dict(schema='action_verdict/v0.2',
                 proposal_id=self.proposal['proposal_id'], decision='admitted', core_seq=1))
         else:
             assert op == 'wait_verify'
+            self.current_frame = self.post
             self.state['source']['title'] = 'changed'
             native = dict(surface_id='fixture', native_surface_id='w1', kind='click',
                           input_mono_ns=10, input_ts_ns=5, result='ok', focus_verified=True)
@@ -68,6 +79,12 @@ class Session:
             result.update(status='verified', receipt=receipt, focus_verified=True,
                           input_mono_ns=10, frame_sha256=self.post['sha256'])
         return result
+
+
+def _record_line(site_root: Path, file_path: Path) -> str:
+    data = file_path.read_bytes()
+    rel = file_path.relative_to(site_root).as_posix()
+    return f'{rel},sha256={hashlib.sha256(data).hexdigest()},{len(data)}'
 
 
 class HarnessTests(unittest.TestCase):
@@ -115,7 +132,15 @@ class HarnessTests(unittest.TestCase):
                 continue
             info = self.root / (pin['name'].replace('-', '_') + '-0.dist-info')
             info.mkdir()
-            (info / 'direct_url.json').write_text(json.dumps(dict(vcs_info=dict(vcs='git', commit_id=pin['commit']))))
+            direct_url = info / 'direct_url.json'
+            direct_url.write_text(json.dumps(dict(vcs_info=dict(vcs='git', commit_id=pin['commit']))))
+            if pin['name'] == 'vision-engine':
+                entries = [module / '__init__.py', module / 'cu_describe.py', direct_url]
+            else:
+                entries = [self.fake_wender, direct_url]
+            record_lines = [_record_line(self.root, entry) for entry in entries]
+            record_lines.append(f'{info.name}/RECORD,,')
+            (info / 'RECORD').write_text('\n'.join(record_lines) + '\n')
         self.env = patch.dict(os.environ, VQA_VE_ROOT=str(self.root), MV_WENDER_ROOT=str(self.root))
         self.env.start()
         os.environ.pop('MV_WENDER_PLANNER_CMD', None)
@@ -140,8 +165,11 @@ class HarnessTests(unittest.TestCase):
     def test_all_assertions_and_negative_controls_with_real_fake_subprocesses(self):
         self.run_harness()
         self.assertTrue(all(self.report['assertions'].values()), self.report)
-        self.assertTrue(all(self.report['negative_controls'].values()))
-        self.assertGreaterEqual(len(self.report['negative_controls']), 17)
+        self.assertEqual(set(self.report['negative_controls'].keys()), gate.REQUIRED_NEGATIVE_CONTROLS)
+        self.assertEqual(len(gate.REQUIRED_NEGATIVE_CONTROLS), 19)
+        self.assertIn('A4_float_validate', gate.REQUIRED_NEGATIVE_CONTROLS)
+        self.assertIn('A4_float_digest', gate.REQUIRED_NEGATIVE_CONTROLS)
+        self.assertTrue(all(self.report['negative_controls'][k] is True for k in gate.REQUIRED_NEGATIVE_CONTROLS))
         self.assertEqual(self.session.ops, ['observe', 'propose', 'dispatch', 'wait_verify', 'propose', 'canvas'])
         self.assertEqual(self.report['planner'], 'local:custody_click/v1')
         self.assertTrue(self.report['verified_receipt']['verified'])
@@ -152,7 +180,7 @@ class HarnessTests(unittest.TestCase):
         response = dict(state=self.state, target_node=self.state['nodes'][0],
                         action=dict(type='click', x=1, y=1, button='left'),
                         expectation=dict(type='changed_region', bbox=dict(x=0, y=0, w=4, h=4)))
-        planner = self.root / 'planner.py'
+        planner = self.ram / 'planner.py'
         planner.write_text('import json,sys\njson.load(sys.stdin)\nprint(' + repr(gate.canonical(response)) + ')\n')
         with patch.dict(os.environ, MV_WENDER_PLANNER_CMD=json.dumps([sys.executable, str(planner)])):
             self.run_harness()
@@ -213,6 +241,188 @@ class HarnessTests(unittest.TestCase):
                 self.assertEqual(gate.main(['--surface', 'mv-live-1', '--receipt-out', str(out)]), 5)
         self.assertEqual(out.read_text(), stream.getvalue())
         self.assertEqual(stream.getvalue().strip(), gate.canonical(json.loads(stream.getvalue())))
+
+    def test_untracked_sitecustomize_and_wheel_tampering_refused(self):
+        # 1. Wheel root: untracked sitecustomize.py, .pth, unrecorded .py, or modified wheel file fails closed.
+        for bad_name in ('sitecustomize.py', 'usercustomize.py', 'evil.pth', 'unrecorded.py'):
+            planted = self.root / bad_name
+            planted.write_text('raise RuntimeError("owned")\n')
+            try:
+                with self.assertRaises(gate.DependencyLockError) as caught:
+                    gate.resolve_locked_component('vision-engine')
+                self.assertEqual(caught.exception.code, 'dirty_tree')
+                if bad_name in ('sitecustomize.py', 'usercustomize.py', 'evil.pth'):
+                    with self.assertRaises(gate.PerceptionError) as vcore_exc:
+                        gate.vcore._scrubbed_env(self.root)
+                    self.assertEqual(vcore_exc.exception.code, 'dirty_tree')
+            finally:
+                planted.unlink()
+        cu_describe = self.root / 'vadapt' / 'cu_describe.py'
+        orig_bytes = cu_describe.read_bytes()
+        try:
+            cu_describe.write_bytes(orig_bytes + b'\n# tampered\n')
+            with self.assertRaises(gate.DependencyLockError) as caught:
+                gate.resolve_locked_component('vision-engine')
+            self.assertEqual(caught.exception.code, 'dirty_tree')
+        finally:
+            cu_describe.write_bytes(orig_bytes)
+        self.assertEqual(gate.resolve_locked_component('vision-engine'), self.root.resolve())
+
+        # 2. Git checkout root: untracked sitecustomize.py / .pth / .py / .so fails closed; backed __pycache__ passes.
+        repo = self.ram / 'checkout-repo'
+        repo.mkdir()
+        git_env = {
+            'PATH': os.environ.get('PATH', os.defpath),
+            'HOME': str(self.ram),
+            'LANG': 'C',
+            'GIT_CONFIG_NOSYSTEM': '1',
+            'GIT_AUTHOR_NAME': 'Fixture',
+            'GIT_AUTHOR_EMAIL': 'fixture@example.invalid',
+            'GIT_COMMITTER_NAME': 'Fixture',
+            'GIT_COMMITTER_EMAIL': 'fixture@example.invalid',
+        }
+        def run_git(*args):
+            return subprocess.run(
+                ['git', '-C', str(repo), *args],
+                env=git_env, check=True, capture_output=True, text=True, timeout=5,
+            ).stdout.strip()
+        run_git('init', '--quiet')
+        tracked_py = repo / 'mod.py'
+        tracked_py.write_text('X = 1\n')
+        blob = run_git('hash-object', '-w', 'mod.py')
+        run_git('update-index', '--add', '--cacheinfo', '100644', blob, 'mod.py')
+        tree = run_git('write-tree')
+        commit = run_git('commit-tree', tree, '-m', 'fixture')
+        run_git('update-ref', 'HEAD', commit)
+        lock_file = self.ram / 'deps.lock'
+        lock_file.write_text(json.dumps({'components': [
+            {'name': 'vision-engine', 'commit': commit},
+            {'name': 'wender-agent', 'commit': commit},
+        ]}))
+        with patch.dict(os.environ, VQA_VE_ROOT=str(repo)):
+            self.assertEqual(gate.resolve_locked_component('vision-engine', lock_path=lock_file), repo.resolve())
+            pycache = repo / '__pycache__'
+            pycache.mkdir()
+            (pycache / 'mod.cpython-312.pyc').write_bytes(b'bytecode')
+            self.assertEqual(gate.resolve_locked_component('vision-engine', lock_path=lock_file), repo.resolve())
+            for bad_rel in ('sitecustomize.py', 'hook.pth', 'extra.py', 'native.so', '__pycache__/evil.cpython-312.pyc'):
+                bad_path = repo / bad_rel
+                bad_path.write_text('payload\n')
+                try:
+                    with self.assertRaises(gate.DependencyLockError) as caught:
+                        gate.resolve_locked_component('vision-engine', lock_path=lock_file)
+                    self.assertEqual(caught.exception.code, 'dirty_tree')
+                finally:
+                    bad_path.unlink()
+
+    def test_dropping_a4_negative_control_fails_oracle(self):
+        orig_controls = gate.controls
+        for dropped in ('A4_float_validate', 'A4_float_digest'):
+            self.state['source']['title'] = 'before'
+            self.report = dict(assertions={f'A{i}': False for i in range(1, 9)}, negative_controls={})
+            self.roots = gate.preflight(self.report)
+            self.session = Session(self.frame, self.post, self.state)
+            def incomplete_controls(frame, raw, state, target, proposal, verdict, _drop=dropped):
+                flags = orig_controls(frame, raw, state, target, proposal, verdict)
+                flags.pop(_drop, None)
+                return flags
+            with patch.object(gate, 'controls', side_effect=incomplete_controls):
+                with self.assertRaisesRegex(gate.GateFailure, 'incomplete negative controls'):
+                    self.run_harness()
+
+    def test_frame_identity_stale_and_fresh_negative_controls(self):
+        action = dict(type='click', x=1, y=1, button='left')
+        expectation = dict(type='changed_region', bbox=dict(x=0, y=0, w=4, h=4))
+        # Negative control (b1): fresh proposal matching current frame_ref is accepted even with '-stale' suffix.
+        fresh_with_stale_suffix = gate.build_proposal(
+            self.frame, proposal_id='p-fresh-stale', action=action, expectation=expectation, max_ms=5000,
+        )
+        verdict = gate.tools.propose(fresh_with_stale_suffix, client=self.session, timeout_ms=5000)
+        self.assertEqual(verdict['decision'], 'admitted')
+
+        # Negative control (b2): mismatched frame generation/sha256 without '-stale' suffix is rejected with STALE_FRAME.
+        stale_without_suffix = gate.build_proposal(
+            self.post, proposal_id='p-mismatch-clean-name', action=action, expectation=expectation, max_ms=5000,
+        )
+        with self.assertRaises(gate.tools.ToolRefusal) as caught:
+            gate.tools.propose(stale_without_suffix, client=self.session, timeout_ms=5000)
+        self.assertEqual(caught.exception.reason_code, 'STALE_FRAME')
+
+        # Negative control (b3): explicit frame_id mismatch without '-stale' suffix is rejected with STALE_FRAME.
+        self.session.current_frame = dict(self.frame, frame_id='frame-current-1')
+        mismatched_frame_id = dict(
+            gate.build_proposal(self.frame, proposal_id='p-frame-id-check', action=action, expectation=expectation, max_ms=5000),
+            frame_id='frame-old-0',
+        )
+        reply = self.session.request(
+            dict(request_id='r-1', op='propose', args=dict(proposal=mismatched_frame_id)),
+            'mv_tool_result/v0.2', timeout_ms=5000,
+        )
+        self.assertEqual(reply['status'], 'refused')
+        self.assertEqual(reply['reason_code'], 'STALE_FRAME')
+
+    def test_mutant_harness_empty_cohort_errors_and_unattributed_kills_fail_closed(self):
+        rmh_spec = importlib.util.spec_from_file_location(
+            'run_mutant_harness', ROOT / 'agents/tests/run_mutant_harness.py',
+        )
+        rmh = importlib.util.module_from_spec(rmh_spec)
+        rmh_spec.loader.exec_module(rmh)
+
+        def green_baseline():
+            return {'tests_run': 10, 'failures': [], 'errors': []}
+
+        # 1. Empty cohort MUTANTS=[] fails closed with nonzero rc.
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc_empty, _ = rmh.evaluate_mutants(mutants=[], suite_runner=green_baseline)
+        self.assertEqual(rc_empty, 1)
+
+        # 2. Baseline-red test suite aborts before mutation with nonzero rc.
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc_red_base, _ = rmh.evaluate_mutants(
+                mutants=rmh.MUTANTS,
+                suite_runner=lambda: {'tests_run': 10, 'failures': ['test_x'], 'errors': []},
+            )
+        self.assertEqual(rc_red_base, 1)
+
+        # 3. Mutant run producing unittest errors > 0 fails closed with nonzero rc.
+        calls = {'n': 0}
+        def error_on_mutant():
+            calls['n'] += 1
+            if calls['n'] == 1:
+                return {'tests_run': 10, 'failures': [], 'errors': []}
+            return {'tests_run': 10, 'failures': ['test_expected'], 'errors': ['test_crash']}
+
+        cohort_err = [(f'M{i}', lambda: (lambda: None), ('test_expected',)) for i in range(1, 9)]
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc_err, results_err = rmh.evaluate_mutants(mutants=cohort_err, suite_runner=error_on_mutant)
+        self.assertEqual(rc_err, 1)
+        self.assertTrue(any(r[3] == 'error' for r in results_err))
+
+        # 4. Mutant killed only by unrelated test (missing expected killer) fails closed.
+        calls['n'] = 0
+        def unrelated_kill():
+            calls['n'] += 1
+            if calls['n'] == 1:
+                return {'tests_run': 10, 'failures': [], 'errors': []}
+            return {'tests_run': 10, 'failures': ['test_unrelated'], 'errors': []}
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc_unattr, results_unattr = rmh.evaluate_mutants(mutants=cohort_err, suite_runner=unrelated_kill)
+        self.assertEqual(rc_unattr, 1)
+        self.assertTrue(all(r[3] == 'unattributed kill' for r in results_unattr))
+
+        # 5. Positive control: all 8 mutants triggered by their declared expected killer with 0 errors pass.
+        calls['n'] = 0
+        def attributed_kill():
+            calls['n'] += 1
+            if calls['n'] == 1:
+                return {'tests_run': 10, 'failures': [], 'errors': []}
+            return {'tests_run': 10, 'failures': ['test_expected (sub=1)'], 'errors': []}
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc_ok, results_ok = rmh.evaluate_mutants(mutants=cohort_err, suite_runner=attributed_kill)
+        self.assertEqual(rc_ok, 0)
+        self.assertTrue(all(r[3] == 'conforming' for r in results_ok))
 
 
 if __name__ == '__main__':

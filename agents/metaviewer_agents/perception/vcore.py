@@ -224,9 +224,25 @@ def _resolve_ve_root(ve_root: str | Path | None, *,
     return root
 
 
+def _check_pythonpath_root(ve_root: Path) -> None:
+    try:
+        entries = list(os.scandir(ve_root))
+    except OSError as exc:
+        raise PerceptionError(
+            "unavailable", "vision-engine checkout is not readable") from exc
+    for entry in entries:
+        lowered = entry.name.lower()
+        if (lowered in ("sitecustomize.py", "usercustomize.py")
+                or lowered.startswith(("sitecustomize.", "usercustomize."))
+                or lowered.endswith(".pth")):
+            _fail("dirty_tree",
+                  "vision-engine root contains forbidden startup hook")
+
+
 def _scrubbed_env(ve_root: Path) -> dict[str, str]:
     # Children get a minimal environment so in-memory credentials held
     # by the parent process are never inherited across the spawn.
+    _check_pythonpath_root(ve_root)
     env: dict[str, str] = {}
     for key in ("PATH", "HOME", "LANG"):
         value = os.environ.get(key)

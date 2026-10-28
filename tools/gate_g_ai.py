@@ -99,6 +99,7 @@ print(schema.dumps(state))
 
 
 def wender_state(root, table, tree, *, command=None):
+    vcore._check_pythonpath_root(Path(root))
     env = {k: os.environ[k] for k in ('PATH', 'LANG') if k in os.environ}
     env.update(PYTHONPATH=str(root), PYTHONDONTWRITEBYTECODE='1')
     result = subprocess.run(command or [sys.executable, '-c', WENDER_SHIM], cwd=root, env=env,
@@ -122,9 +123,10 @@ def raw_description(frame, root):
             stream.write(vcore._png_bytes(pixels))
             stream.flush()
             stream.seek(0)
+            env = dict(vcore._scrubbed_env(root), PYTHONDONTWRITEBYTECODE='1')
             result = subprocess.run([sys.executable, '-m', 'vadapt.cu_describe', '--frame',
                                      '/proc/self/fd/' + str(fd), '--marks-out', str(Path(marks) / 'marks.png'),
-                                     '--json'], cwd=root, env=vcore._scrubbed_env(root), pass_fds=(fd,),
+                                     '--json'], cwd=root, env=env, pass_fds=(fd,),
                                     capture_output=True, text=True, timeout=30)
         if result.returncode:
             raise GateFailure('vision_subprocess_failed', result.stderr[-2000:])
@@ -186,6 +188,38 @@ def controls(frame, raw, state, target, proposal, verdict):
     flags['A8_no_change'] = rejected(lambda: tools.wait_verify(proposal['proposal_id'],
         proposal['expectation'], 1000, client=NoChange()), tools.VerificationFailed)
     return flags
+
+
+REQUIRED_NEGATIVE_CONTROLS = frozenset((
+    'vision-engine_missing',
+    'vision-engine_pin',
+    'wender-agent_missing',
+    'wender-agent_pin',
+    'A2_path',
+    'A2_digest',
+    'A3_binding',
+    'A3_float',
+    'A4_float_validate',
+    'A4_float_digest',
+    'A5_stop',
+    'A5_box',
+    'A5_custody',
+    'A6_binding',
+    'A6_stale',
+    'A7_focus',
+    'A7_timestamp',
+    'A8_window',
+    'A8_no_change',
+))
+
+
+def check_negative_controls(negative_controls):
+    require(
+        isinstance(negative_controls, dict)
+        and set(negative_controls.keys()) == REQUIRED_NEGATIVE_CONTROLS
+        and all(negative_controls.get(k) is True for k in REQUIRED_NEGATIVE_CONTROLS),
+        'incomplete negative controls',
+    )
 
 
 def preflight(report):
@@ -300,6 +334,7 @@ def run_gate(report, roots, session_factory=None):
             report['post_battery_state_sha256'] = compute_battery_state_sha256(post_state)
             require(report['post_battery_state_sha256'] != battery, 'post-action Wender state did not change')
             report['assertions']['A8'] = True
+            check_negative_controls(report['negative_controls'])
     finally:
         report['live_evidence'] = {k: v for k, v in session.report.items() if k != 'wire_evidence'}
         if hasattr(session, 'cleanup'):
@@ -319,7 +354,8 @@ def main(argv=None):
     try:
         roots = preflight(report)
         run_gate(report, roots)
-        require(all(report['assertions'].values()) and all(report['negative_controls'].values()), 'incomplete gates')
+        check_negative_controls(report['negative_controls'])
+        require(all(report['assertions'].values()), 'incomplete gates')
         require(report.get('cleanup', {}).get('ram_absent') is True
                 and not report.get('cleanup', {}).get('remaining'), 'cleanup proof missing')
         report.update(rc=0, status='DONE')
