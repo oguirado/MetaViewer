@@ -205,6 +205,11 @@
    "why": "Making the tile scheduler load synchronously (hosted e2e race) broke four data-URL mutant test harnesses; relink them so the combined input drop gates green with oracles unchanged.",
    "orchestrator": "UI orchestrator"
   },
+  "mvui27": {
+   "stage": "fix",
+   "why": "Live run: in READ mode a click on the capsule picture in the multislot still scrolls the MetaViewer page out of view; find the cause and stop tile canvas clicks from scrolling the page in every mode.",
+   "orchestrator": "UI orchestrator"
+  },
   "mvui19": {
    "stage": "fix",
    "why": "Fix the renderer items from the evening cross-review (capture rows, empty profile id) and the minor findings of real-app round 3 (activity count, sticky toast, folded tile height, screenshots list, contrast, multislot anchors).",
