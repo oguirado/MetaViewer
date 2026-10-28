@@ -415,20 +415,73 @@ await assert.rejects(
       return eval(code);
     },
   }),
-  err => {
-    assert.equal(
-      err.message,
-      'Shell did not settle within 45000ms (missingSelectors=[.metaviewer[data-wall-settled="true"], .mv-terminal], readyState=loading, consoleErrors=none)'
-    );
-    return true;
-  }
-);
-assert.equal(neverClock, 45000);
-"""
+            err => {
+                assert.equal(
+                    err.message,
+                    'Shell did not settle within 45000ms (missingSelectors=[.metaviewer[data-wall-settled="true"], .mv-terminal], readyState=loading, consoleErrors=none)'
+                );
+                return true;
+            }
+        );
+        assert.equal(neverClock, 45000);
+        """
         result = subprocess.run(
             ['node', '--input-type=module', '-e', script, str(ROOT / 'tests/perf/rss_probe.mjs')],
             text=True, capture_output=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+
+    def test_probe_passes_isolated_user_data_dir_and_cleans_up(self):
+        receipt_data = copy.deepcopy(self.clean)
+        receipt_data['identities'] = []
+        captured_calls = []
+
+        def fake_bounded(argv, cwd, env, seconds=180):
+            user_data_flags = [arg for arg in argv if arg.startswith('--user-data-dir=')]
+            profile_dir = user_data_flags[0].split('=', 1)[1] if len(user_data_flags) == 1 else ''
+            captured_calls.append({
+                'argv': list(argv),
+                'cwd': cwd,
+                'env': dict(env),
+                'seconds': seconds,
+                'dir_existed_during_run': bool(profile_dir) and Path(profile_dir).is_dir(),
+            })
+            Path(env['MV_RSS_OUTPUT']).write_text(json.dumps(receipt_data))
+            return 0
+
+        def verify_isolated_user_data_dir(call_record):
+            argv = call_record['argv']
+            flags = [arg for arg in argv if arg.startswith('--user-data-dir=')]
+            if len(flags) != 1:
+                raise AssertionError(f'expected exactly 1 --user-data-dir=<temp_dir> flag, got {flags!r}')
+            suffix = flags[0].split('=', 1)[1]
+            if not suffix:
+                raise AssertionError('--user-data-dir= suffix must be non-empty')
+            temp_path = Path(suffix).resolve()
+            home_path = Path.home().resolve()
+            if temp_path == home_path or home_path in temp_path.parents:
+                raise AssertionError(f'--user-data-dir={temp_path} is not isolated from home {home_path}')
+            if not Path(suffix).name.startswith('mv-rss-'):
+                raise AssertionError(f'expected mv-rss- temp directory prefix, got {suffix}')
+            if not call_record['dir_existed_during_run']:
+                raise AssertionError('isolated profile directory did not exist during probe run')
+            if Path(suffix).exists():
+                raise AssertionError(f'isolated profile directory {suffix} was not cleaned up after probe')
+            return suffix
+
+        with patch.object(gate, 'cleanup_api', return_value={'bounded': fake_bounded}):
+            receipt = gate.probe(__file__, self.budget, [])
+        self.assertEqual(len(captured_calls), 1)
+        isolated_dir = verify_isolated_user_data_dir(captured_calls[0])
+        self.assertEqual(captured_calls[0]['env']['MV_RSS_PROFILE'], isolated_dir)
+        self.assertEqual(receipt['argv'], captured_calls[0]['argv'])
+
+        # Negative control: omitting `--user-data-dir=` from argv fails the isolation assertion.
+        mutated_call = dict(
+            captured_calls[0],
+            argv=[arg for arg in captured_calls[0]['argv'] if not arg.startswith('--user-data-dir=')],
+        )
+        with self.assertRaisesRegex(AssertionError, 'expected exactly 1 --user-data-dir='):
+            verify_isolated_user_data_dir(mutated_call)
 
 
 if __name__ == '__main__':

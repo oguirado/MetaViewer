@@ -55,6 +55,52 @@ class ThemeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'G-THEME.*< 4.5'):
                 THEME.check(root)
 
+    def test_new_explicit_vue_pair_is_checked_and_compliant_passes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.copy_theme(root)
+            vue_file = root / 'ui/src/PlantedComponent.vue'
+            vue_file.write_text(
+                '<template><div class="planted-vue">x</div></template>\n'
+                '<style scoped>\n'
+                '.planted-vue { color: var(--mv-semantic-text-primary); '
+                'background-color: var(--mv-semantic-text-primary); }\n'
+                '</style>\n'
+            )
+            # Negative control: low-contrast pair in .vue file is rejected by check_theme.
+            with self.assertRaisesRegex(
+                ValueError,
+                r'G-THEME mv-light --mv-semantic-text-primary/--mv-semantic-text-primary: 1\.0000:1 < 4\.5:1',
+            ):
+                THEME.check(root)
+
+            # Surviving mutation control: mutating `('.css', '.vue')` to `('.css',)` on an
+            # in-memory copy ignores the .vue file and erroneously passes.
+            source = (ROOT / 'tools/check_theme.py').read_text(encoding='utf-8')
+            anchor = "if path.suffix not in ('.css', '.vue')"
+            self.assertIn(anchor, source)
+            mutated_ns = {}
+            exec(
+                compile(
+                    source.replace(anchor, "if path.suffix not in ('.css',)", 1),
+                    str(ROOT / 'tools/check_theme.py'),
+                    'exec',
+                ),
+                mutated_ns,
+            )
+            self.assertGreater(mutated_ns['check'](root), 0)
+
+            # Positive control: replacing the .vue pair with a compliant high-contrast pair (>= 4.5) passes.
+            baseline_count = THEME.check(ROOT)
+            vue_file.write_text(
+                '<template><div class="planted-vue">x</div></template>\n'
+                '<style scoped>\n'
+                '.planted-vue { color: var(--mv-semantic-text-primary); '
+                'background-color: var(--mv-semantic-surface-canvas); }\n'
+                '</style>\n'
+            )
+            self.assertEqual(THEME.check(root), baseline_count)
+
     def test_css_drift_fails_closed(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

@@ -1,14 +1,50 @@
+import ast
 import hashlib
+import io
 import json
+import os
 from pathlib import Path
+import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / 'tools/sync_kit.mjs'
 EXCLUDED = {'KIT_SOURCE.json', 'node_modules', '.git'}
+
+
+def load_gate_js_leg(bounded_fn, drop_check_command=False):
+    source = (ROOT / 'tools/gate.sh').read_text().split("<<'PY'\n", 1)[1]
+    source = source.rsplit('\nsys.exit(main())', 1)[0]
+    tree = ast.parse(source)
+    leaf_nodes = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == 'leaf'
+    ]
+    if len(leaf_nodes) != 1:
+        raise ValueError('leaf function absent in tools/gate.sh')
+    if drop_check_command:
+        mutated = 0
+        for node in ast.walk(leaf_nodes[0]):
+            if isinstance(node, ast.For) and isinstance(node.iter, ast.Tuple) and len(node.iter.elts) == 2:
+                second = ast.unparse(node.iter.elts[1])
+                if 'sync_kit.mjs' in second and '--check' in second:
+                    node.iter.elts = [node.iter.elts[0]]
+                    ast.fix_missing_locations(node)
+                    mutated += 1
+        if mutated != 1:
+            raise AssertionError(f'expected 1 sync_kit --check loop tuple to mutate, found {mutated}')
+    namespace = {'__name__': 'gate_js_leg_test'}
+    ast.fix_missing_locations(tree)
+    with patch.object(sys, 'argv', ['gate.sh', str(ROOT), 'self-test']):
+        exec(compile(tree, str(ROOT / 'tools/gate.sh'), 'exec'), namespace)
+    namespace['bounded'] = bounded_fn
+    return namespace['leaf']
 
 
 def digest(root):
@@ -215,6 +251,62 @@ catch(error) { console.error('ERROR: ' + error.message); process.exitCode = 1; }
         self.assertEqual(pin['contentHash'],
                          '1bee78c76a0a2a41d085beed918ca6ca791beaf53b952d4a9367dad660fd6dc2')
         self.assertIn('ui/.kit/', (ROOT / '.gitignore').read_text().splitlines())
+
+    def test_gate_js_leg_executes_sync_and_check(self):
+        recorded = []
+
+        def bounded_ok(argv, cwd, env, seconds=300):
+            recorded.append((list(argv), cwd, dict(env), seconds))
+            return 0
+
+        leaf_fn = load_gate_js_leg(bounded_ok)
+        env = {'CAPSULE_UI_KIT_REPO': str(self.repo)}
+        with patch.object(shutil, 'which', return_value='/stub/bin/node'), \
+                patch.object(sys, 'stderr', io.StringIO()):
+            rc = leaf_fn('js', ROOT, env)
+        self.assertEqual(rc, 0)
+        self.assertEqual(
+            [item[0] for item in recorded],
+            [['node', 'tools/sync_kit.mjs'], ['node', 'tools/sync_kit.mjs', '--check']],
+        )
+        for _, cwd, child_env, _ in recorded:
+            self.assertEqual(cwd, ROOT)
+            self.assertEqual(child_env['MV_KIT_CHECKOUT'], str(self.repo))
+
+        # Negative control: failing specifically on ['node', 'tools/sync_kit.mjs', '--check']
+        # causes the JS leg to fail with non-zero rc, and kills the mutation dropping --check.
+        recorded_check_fail = []
+
+        def bounded_fail_on_check(argv, cwd, env, seconds=300):
+            recorded_check_fail.append(list(argv))
+            if list(argv) == ['node', 'tools/sync_kit.mjs', '--check']:
+                return 1
+            return 0
+
+        leaf_check_fail = load_gate_js_leg(bounded_fail_on_check)
+        stderr_fail = io.StringIO()
+        with patch.object(shutil, 'which', return_value='/stub/bin/node'), \
+                patch.object(sys, 'stderr', stderr_fail):
+            rc_fail = leaf_check_fail('js', ROOT, env)
+        self.assertEqual(rc_fail, 1)
+        self.assertIn(['node', 'tools/sync_kit.mjs', '--check'], recorded_check_fail)
+        self.assertIn('js: child rc=1', stderr_fail.getvalue())
+
+        # Surviving mutation verification: dropping ['node', 'tools/sync_kit.mjs', '--check']
+        # fails to propagate the --check failure and omits --check from recorded commands.
+        recorded_mutated = []
+        mutated_leaf = load_gate_js_leg(
+            lambda argv, cwd, env, seconds=300: (
+                recorded_mutated.append(list(argv))
+                or (1 if list(argv) == ['node', 'tools/sync_kit.mjs', '--check'] else 0)
+            ),
+            drop_check_command=True,
+        )
+        with patch.object(shutil, 'which', return_value='/stub/bin/node'), \
+                patch.object(sys, 'stderr', io.StringIO()):
+            rc_mutated = mutated_leaf('js', ROOT, env)
+        self.assertNotIn(['node', 'tools/sync_kit.mjs', '--check'], recorded_mutated)
+        self.assertNotEqual(rc_mutated, 1)
 
 
 if __name__ == '__main__':

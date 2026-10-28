@@ -85,10 +85,20 @@ class TestT7R2CSanitizerSecrets(unittest.TestCase):
                         b"Authorization: Bearer [REDACTED]\n",
                         f"volume.yml block {idx} leaked {fam} with separator {sep}",
                     )
-        # Negative control: removing ghs_ from the sanitizer pattern leaks ghs_ tokens.
-        drifted_block = blocks[0].replace("'gh' + 's_', ", "")
-        leaked = run_sanitize_shell(drifted_block, b"Authorization: Bearer ghs_SecretTokenValue1234\n")
-        self.assertIn(b"ghs_SecretTokenValue1234", leaked)
+        # Positive & negative drift control with a runtime-constructed unredacted synthetic ghs_ token.
+        synthetic_token = ("gh" + "s_" + "A" * 36).encode("utf-8")
+        auth_line = b"Authorization: Bearer " + synthetic_token + b"\n"
+        redacted = run_sanitize_shell(blocks[0], auth_line)
+        self.assertEqual(redacted, b"Authorization: Bearer [REDACTED]\n")
+        self.assertNotIn(synthetic_token, redacted)
+
+        anchor = "'gh' + 's_', "
+        for idx, block in enumerate(blocks):
+            self.assertIn(anchor, block, f"volume.yml block {idx} missing drift anchor {anchor!r}")
+            drifted_block = block.replace(anchor, "", 1)
+            self.assertNotEqual(drifted_block, block)
+            leaked = run_sanitize_shell(drifted_block, auth_line)
+            self.assertIn(synthetic_token, leaked)
 
     def test_t7r3_005_double_encoded_hex_encoded_and_split_tokens_redacted_across_all_workflows(self):
         """Regression test for T7R3-005: all 18 sanitize() blocks redact double-encoded, hex-encoded, and split tokens."""
