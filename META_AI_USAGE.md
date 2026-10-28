@@ -19,17 +19,17 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 551 | 55 | 496 |
-| Lanes finished OK | 551 | 55 | 496 |
-| Agent steps | 28,132 | 2,705 | 25,427 |
-| Lane-hours of agent work | 73.1 | 5.2 | 67.8 |
-| Fresh input tokens | 115,866,065 | 11,482,034 | 104,384,031 |
-| Cache-read input tokens | 2,564,177,873 | 226,255,212 | 2,337,922,661 |
+| Lanes launched | 566 | 55 | 511 |
+| Lanes finished OK | 566 | 55 | 511 |
+| Agent steps | 28,705 | 2,705 | 26,000 |
+| Lane-hours of agent work | 74.3 | 5.2 | 69.1 |
+| Fresh input tokens | 118,353,563 | 11,482,034 | 106,871,529 |
+| Cache-read input tokens | 2,607,391,180 | 226,255,212 | 2,381,135,968 |
 | Prompt cache hit % | 95.7 | 95.2 | 95.7 |
-| Output tokens | 24,792,252 | 2,135,708 | 22,656,544 |
-| Thinking tokens | 13,670,013 | 1,050,039 | 12,619,974 |
-| Cost (USD) | 21.6734 | 2.0279 | 19.6455 |
-| Cost per lane (USD) | 0.0393 | 0.0369 | 0.0396 |
+| Output tokens | 25,186,057 | 2,135,708 | 23,050,349 |
+| Thinking tokens | 13,903,733 | 1,050,039 | 12,853,694 |
+| Cost (USD) | 22.0873 | 2.0279 | 20.0595 |
+| Cost per lane (USD) | 0.039 | 0.0369 | 0.0393 |
 
 Rooms: 122. Peak concurrent lanes [MEASURED from lane start/end]: 32.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
@@ -38,12 +38,12 @@ Pre-event lanes produced plans, research and specifications only; product code w
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 217 | 94.8 | 7.1005 |
+| build | 231 | 94.7 | 7.4391 |
 | context | 42 | 95.9 | 1.9093 |
 | demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
 | docs | 15 | 94.8 | 0.5371 |
-| fix | 55 | 96.8 | 3.0168 |
+| fix | 56 | 96.9 | 3.0922 |
 | kit | 3 | 96.5 | 0.1997 |
 | ops | 4 | 88.1 | 0.0468 |
 | perf | 1 | 97.6 | 0.0694 |
@@ -82,7 +82,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 68 | 94.7 | 2.476 | direct Muse job |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 80 | 94.5 | 2.7897 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -176,13 +176,13 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui29c | UI orchestrator | Oct 28 08:58 | fix | 1 | 97.5 | 0.0624 | Terminal sessions wiring (AC-06) broke 58 committed App tests; restore the App mounting contract and finish the terminal tests so the drop can ship. |
 | mvui29sc | UI orchestrator | Oct 28 09:12 | fix | 1 | 97.3 | 0.0484 | Judge rejected the settings drop: a quick revert inside the debounce window is lost, a replaced host can receive a stale save, and boot can paint a scheme the store then replaces; fix before AC-08 can ship. |
 | mvui29d | UI orchestrator | Oct 28 09:13 | fix | 1 | 97.2 | 0.0587 | Judge notes on the terminal drop are real session lifecycle defects (events before registration, stale transport, cross-transport close, leaked port on close during attach, fixture broker unwired); fix before AC-06 ships. |
-| direct-adv | metaviewer-0 | Oct 28 09:30 | build | 20 | 94.3 | 0.5975 | adversarial advocate review before integration |
+| direct-adv | metaviewer-0 | Oct 28 09:30 | build | 22 | 94.2 | 0.6224 | adversarial advocate review before integration |
 | direct-rv11 | metaviewer-0 | Oct 28 11:01 | build | 7 | 93.7 | 0.129 | cross-review verification |
 | direct-tg6 | metaviewer-0 | Oct 28 11:10 | build | 6 | 95.2 | 0.2593 | test-gap and mutation map |
 | direct-w5 | metaviewer-0 | Oct 28 11:20 | build | 4 | 94.4 | 0.1254 | W5 docs fact-check |
 | direct-asm | metaviewer-0 | Oct 28 16:32 | build | 6 | 93.3 | 0.1681 | assembly context room (MetaViewer + OpenSuperficies + vision-engine + wender-agent) |
 | direct-ramctx | metaviewer-0 | Oct 28 18:55 | build | 10 | 89.2 | 0.1737 | RAM runaway study context lane |
-| mvui32 | UI orchestrator | Oct 28 21:33 | fix | 5 | 96.3 | 0.2145 | Round-3 external review found 10 confirmed renderer defects; plus the live run showed no rehash skip counters and a lost capsule never showing its badge; fix and verify before the product completion gate. |
+| mvui32 | UI orchestrator | Oct 28 21:33 | fix | 6 | 96.7 | 0.2899 | Round-3 external review found 10 confirmed renderer defects; plus the live run showed no rehash skip counters and a lost capsule never showing its badge; fix and verify before the product completion gate. |
 
 ## Every lane
 
@@ -731,14 +731,29 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-ramctx | 3_c | ramctx3_c | Oct 28 19:31 | yes | 8 | 70.4 | 0.014052 |
 | direct-ramctx | 3_d | ramctx3_d | Oct 28 19:32 | yes | 25 | 89.9 | 0.030409 |
 | mvui32 | A | R3-APP-1 layout echo fenced on surface lifetime | Oct 28 21:33 | yes | 84 | 97.4 | 0.049487 |
+| mvui32 | F | R3-FRAMES-1 router floor, superseded repaint, retired stream ids; rehash counters | Oct 28 21:33 | yes | 97 | 97.7 | 0.075389 |
 | mvui32 | I | R3-INPUT-1 no buffered input after READ switch | Oct 28 21:34 | yes | 55 | 95.9 | 0.043105 |
 | mvui32 | S | R3-SCHEDULER-1 ineligible retained repaint on attach | Oct 28 21:34 | yes | 46 | 94.7 | 0.027323 |
 | mvui32 | Q | R3-QA-1 live QA reporting starved by churn | Oct 28 21:34 | yes | 45 | 92.6 | 0.033943 |
 | mvui32 | L | lost surface end-to-end check | Oct 28 21:35 | yes | 87 | 97.1 | 0.060663 |
 | direct-direct | kern | syn_vekern | Oct 28 21:44 | yes | 27 | 89.9 | 0.021103 |
+| direct-direct | m | syn_shm | Oct 28 21:44 | yes | 41 | 94.4 | 0.022372 |
+| direct-direct | sh | syn_hash | Oct 28 21:44 | yes | 27 | 91.9 | 0.022267 |
+| direct-direct | st | mut_lost | Oct 28 21:44 | yes | 30 | 92.2 | 0.027693 |
+| direct-direct | ly | mut_poly | Oct 28 21:44 | yes | 39 | 93.1 | 0.024299 |
+| direct-direct | ld | mut_hold | Oct 28 21:44 | yes | 63 | 95.8 | 0.038736 |
 | direct-direct | c | mut_rec | Oct 28 21:44 | yes | 29 | 92.3 | 0.022655 |
 | direct-direct | ges | web_pages | Oct 28 21:44 | yes | 31 | 91.8 | 0.018895 |
 | direct-direct | adme | doc_readme | Oct 28 21:44 | yes | 30 | 92.6 | 0.021338 |
+| direct-direct | deo | doc_video | Oct 28 21:44 | yes | 23 | 90.0 | 0.022164 |
+| direct-direct | age | wa_triage | Oct 28 21:44 | yes | 42 | 90.1 | 0.036153 |
+| direct-direct | s | ui_gaps | Oct 28 21:44 | yes | 58 | 95.5 | 0.031883 |
+| direct-direct | oreclient | ctx_vcoreclient | Oct 28 21:50 | yes | 23 | 89.2 | 0.014539 |
+| direct-direct | ngreader | ctx_ringreader | Oct 28 21:50 | yes | 31 | 91.6 | 0.03007 |
+| direct-direct | rveparallel | ctx_serveparallel | Oct 28 21:50 | yes | 27 | 93.5 | 0.013216 |
+| direct-adv | hostfps | adv_hostfps | Oct 28 21:50 | yes | 20 | 89.9 | 0.015362 |
+| direct-adv | ciasm | adv_ciasm | Oct 28 21:50 | yes | 9 | 78.6 | 0.009522 |
+| direct-direct | gs_e2e | holdings_e2e | Oct 28 21:50 | yes | 43 | 94.6 | 0.030273 |
 
 ## Method
 
