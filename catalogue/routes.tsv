@@ -65,6 +65,7 @@ test_loop_trials.py	agents/tests/test_loop_trials.py
 testmcp-793d126b3914	agents/tests/test_mcp_conformance.py
 test_mcp_server.py	agents/tests/test_mcp_server.py
 test_meta_muse.py	agents/tests/test_meta_muse.py
+testmut-a2a289b5491a	agents/tests/test_mut_rec_planner.py
 test_mvctl.py	agents/tests/test_mvctl.py
 test_mvctl_matrix.py	agents/tests/test_mvctl_matrix.py
 test_mvctl_timeout.py	agents/tests/test_mvctl_timeout.py
@@ -703,6 +704,7 @@ input_settlement.rs	core/tests/input_settlement.rs
 journal_upgrade.rs	core/tests/journal_upgrade.rs
 layout_routing.rs	core/tests/layout_routing.rs
 mut_lost.rs	core/tests/mut_lost.rs
+mut_rec_capture.rs	core/tests/mut_rec_capture.rs
 nv_lifecycle.rs	core/tests/nv_lifecycle.rs
 nvsuper-df27d9370197	core/tests/nv_supervisor_start.rs
 oneof_poly.rs	core/tests/oneof_poly.rs
