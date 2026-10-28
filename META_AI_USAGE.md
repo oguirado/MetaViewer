@@ -19,31 +19,31 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 377 | 55 | 322 |
-| Lanes finished OK | 377 | 55 | 322 |
-| Agent steps | 21,253 | 2,705 | 18,548 |
-| Lane-hours of agent work | 55.5 | 5.2 | 50.3 |
-| Fresh input tokens | 85,201,248 | 11,482,034 | 73,719,214 |
-| Cache-read input tokens | 2,041,231,460 | 226,255,212 | 1,814,976,248 |
-| Prompt cache hit % | 96.0 | 95.2 | 96.1 |
-| Output tokens | 18,731,367 | 2,135,708 | 16,595,659 |
-| Thinking tokens | 10,077,909 | 1,050,039 | 9,027,870 |
-| Cost (USD) | 16.3489 | 2.0279 | 14.321 |
-| Cost per lane (USD) | 0.0434 | 0.0369 | 0.0445 |
+| Lanes launched | 551 | 55 | 496 |
+| Lanes finished OK | 551 | 55 | 496 |
+| Agent steps | 28,132 | 2,705 | 25,427 |
+| Lane-hours of agent work | 73.1 | 5.2 | 67.8 |
+| Fresh input tokens | 115,866,065 | 11,482,034 | 104,384,031 |
+| Cache-read input tokens | 2,564,177,873 | 226,255,212 | 2,337,922,661 |
+| Prompt cache hit % | 95.7 | 95.2 | 95.7 |
+| Output tokens | 24,792,252 | 2,135,708 | 22,656,544 |
+| Thinking tokens | 13,670,013 | 1,050,039 | 12,619,974 |
+| Cost (USD) | 21.6734 | 2.0279 | 19.6455 |
+| Cost per lane (USD) | 0.0393 | 0.0369 | 0.0396 |
 
-Rooms: 112. Peak concurrent lanes [MEASURED from lane start/end]: 24.
+Rooms: 122. Peak concurrent lanes [MEASURED from lane start/end]: 32.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 48 | 95.7 | 1.9905 |
+| build | 217 | 94.8 | 7.1005 |
 | context | 42 | 95.9 | 1.9093 |
 | demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
 | docs | 15 | 94.8 | 0.5371 |
-| fix | 50 | 96.9 | 2.8023 |
+| fix | 55 | 96.8 | 3.0168 |
 | kit | 3 | 96.5 | 0.1997 |
 | ops | 4 | 88.1 | 0.0468 |
 | perf | 1 | 97.6 | 0.0694 |
@@ -82,6 +82,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 68 | 94.7 | 2.476 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -164,15 +165,24 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui26c | UI orchestrator | Oct 28 04:02 | fix | 1 | 94.1 | 0.0213 | Making the tile scheduler load synchronously (hosted e2e race) broke four data-URL mutant test harnesses; relink them so the combined input drop gates green with oracles unchanged. |
 | mvui27 | UI orchestrator | Oct 28 04:40 | fix | 1 | 97.0 | 0.0599 | Live run: in READ mode a click on the capsule picture in the multislot still scrolls the MetaViewer page out of view; find the cause and stop tile canvas clicks from scrolling the page in every mode. |
 | mvui28 | UI orchestrator | Oct 28 05:29 | fix | 1 | 96.3 | 0.0408 | Human input refusals now arrive asynchronously from the adapter through a new host input result event; show them in Activity exactly once per batch so the operator sees why typing did not reach the capsule. |
+| direct-w2 | metaviewer-0 | Oct 28 08:11 | build | 14 | 94.6 | 0.4178 | W2 context room |
 | mvui29 | UI orchestrator | Oct 28 08:15 | ui | 1 | 97.3 | 0.091 | AC-06 is PARTIAL: no real terminal session, provider menu or Copy capsule ID was ever seen working on the real app; complete the renderer path and list host gaps so the host lands its part together. |
 | mvui29s | UI orchestrator | Oct 28 08:16 | ui | 1 | 96.2 | 0.0841 | AC-08 is PARTIAL: settings persistence across a restart was never shown live; complete load-at-boot and save-on-change in the renderer and list host gaps for the on-disk side. |
 | mvui30 | UI orchestrator | Oct 28 08:17 | fix | 1 | 97.3 | 0.0829 | AC-03: a lost capsule shows 'Connecting to surface' forever because App erases the backend lost signal; show the last frame frozen with a Lost badge so the operator sees what was lost. |
 | mvui31 | UI orchestrator | Oct 28 08:19 | perf | 1 | 97.6 | 0.0694 | AC-02 needs 4 capsules at >= 10 fps at live size; the renderer present path (per-frame RGBA conversion, ImageData allocation, wrong cost accounting, redundant re-hash) is the largest cost. |
 | mvui29b | UI orchestrator | Oct 28 08:36 | fix | 1 | 97.5 | 0.0868 | Finish AC-06 terminal sessions in the renderer: the first pass ran out of budget with type errors, no App/main wiring and a port not yet matching the host API the host owner fixed. |
+| direct-r3 | metaviewer-0 | Oct 28 08:40 | build | 34 | 93.8 | 0.7632 | round-3 tester report verification and context |
 | mvui29sb | UI orchestrator | Oct 28 08:58 | fix | 1 | 95.8 | 0.0282 | Host owner ruling for AC-08: the host keeps a closed settings key set, so the renderer must drop unknown keys instead of round-tripping them. |
 | mvui29c | UI orchestrator | Oct 28 08:58 | fix | 1 | 97.5 | 0.0624 | Terminal sessions wiring (AC-06) broke 58 committed App tests; restore the App mounting contract and finish the terminal tests so the drop can ship. |
 | mvui29sc | UI orchestrator | Oct 28 09:12 | fix | 1 | 97.3 | 0.0484 | Judge rejected the settings drop: a quick revert inside the debounce window is lost, a replaced host can receive a stale save, and boot can paint a scheme the store then replaces; fix before AC-08 can ship. |
 | mvui29d | UI orchestrator | Oct 28 09:13 | fix | 1 | 97.2 | 0.0587 | Judge notes on the terminal drop are real session lifecycle defects (events before registration, stale transport, cross-transport close, leaked port on close during attach, fixture broker unwired); fix before AC-06 ships. |
+| direct-adv | metaviewer-0 | Oct 28 09:30 | build | 20 | 94.3 | 0.5975 | adversarial advocate review before integration |
+| direct-rv11 | metaviewer-0 | Oct 28 11:01 | build | 7 | 93.7 | 0.129 | cross-review verification |
+| direct-tg6 | metaviewer-0 | Oct 28 11:10 | build | 6 | 95.2 | 0.2593 | test-gap and mutation map |
+| direct-w5 | metaviewer-0 | Oct 28 11:20 | build | 4 | 94.4 | 0.1254 | W5 docs fact-check |
+| direct-asm | metaviewer-0 | Oct 28 16:32 | build | 6 | 93.3 | 0.1681 | assembly context room (MetaViewer + OpenSuperficies + vision-engine + wender-agent) |
+| direct-ramctx | metaviewer-0 | Oct 28 18:55 | build | 10 | 89.2 | 0.1737 | RAM runaway study context lane |
+| mvui32 | UI orchestrator | Oct 28 21:33 | fix | 5 | 96.3 | 0.2145 | Round-3 external review found 10 confirmed renderer defects; plus the live run showed no rehash skip counters and a lost capsule never showing its badge; fix and verify before the product completion gate. |
 
 ## Every lane
 
@@ -272,20 +282,28 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1frames | VIEW | W1-FRAMES-VIEW | Oct 26 18:41 | yes | 35 | 91.1 | 0.052826 |
 | mv0w1term | PROVIDERS | W1-TERM-PROVIDERS | Oct 26 18:41 | yes | 28 | 91.9 | 0.02418 |
 | mv0w1wall | PROJECTION | W1-WALL-PROJECTION | Oct 26 18:41 | yes | 62 | 96.8 | 0.0531 |
+| direct-direct | v_CORE | mv0w1rv_CORE | Oct 26 18:44 | yes | 44 | 91.5 | 0.048306 |
 | mv0w2pk1 | Q01 | Pack W2-AILOOP | Oct 26 18:44 | yes | 43 | 94.3 | 0.031738 |
 | mv0w2pk2 | Q08 | Pack R-W2-PERCEPTION | Oct 26 18:44 | yes | 35 | 93.5 | 0.031159 |
+| direct-direct | v_ADAPT | mv0w1rv_ADAPT | Oct 26 18:44 | yes | 27 | 92.6 | 0.022319 |
 | mv0w2pk1 | Q02 | Pack W2-HUMAN-INPUT | Oct 26 18:44 | yes | 78 | 96.2 | 0.065015 |
 | mv0w2pk2 | Q09 | Pack R-W2-TESTS | Oct 26 18:44 | yes | 76 | 97.0 | 0.051277 |
+| direct-direct | v_SHELL | mv0w1rv_SHELL | Oct 26 18:44 | yes | 53 | 95.4 | 0.034877 |
 | mv0w2pk1 | Q03 | Pack W2-REC | Oct 26 18:44 | yes | 53 | 94.9 | 0.042427 |
 | mv0w2pk2 | Q10 | Pack W2-CATALOG-CORE | Oct 26 18:44 | yes | 43 | 93.7 | 0.029309 |
+| direct-direct | v_CONTR | mv0w1rv_CONTR | Oct 26 18:44 | yes | 56 | 96.0 | 0.042677 |
 | mv0w2pk1 | Q04 | Pack R-W2-MULTISLOT | Oct 26 18:44 | yes | 64 | 96.7 | 0.049057 |
 | mv0w2pk2 | Q11 | Pack R-W2-DOCS-EARLY | Oct 26 18:44 | yes | 88 | 97.3 | 0.052906 |
+| direct-direct | v_CI | mv0w1rv_CI | Oct 26 18:44 | yes | 55 | 95.7 | 0.032664 |
 | mv0w2pk1 | Q05 | Pack R-W2-CATALOG | Oct 26 18:44 | yes | 101 | 96.6 | 0.082158 |
 | mv0w2pk2 | Q12 | Pack R-W3-TESTS-EARLY | Oct 26 18:44 | yes | 83 | 96.7 | 0.063206 |
+| direct-direct | v_ROUTER | mv0w1rv_ROUTER | Oct 26 18:44 | yes | 48 | 95.1 | 0.03112 |
 | mv0w2pk1 | Q06 | Pack R-W2-SETTINGS | Oct 26 18:44 | yes | 79 | 94.7 | 0.092337 |
 | mv0w2pk2 | Q13 | Pack W2-OPENWEIGHT | Oct 26 18:44 | yes | 43 | 95.6 | 0.028391 |
+| direct-direct | v_KIT | mv0w1rv_KIT | Oct 26 18:44 | yes | 28 | 87.5 | 0.028901 |
 | mv0w2pk1 | Q07 | Pack R-W2-NESTED | Oct 26 18:44 | yes | 53 | 94.7 | 0.039962 |
 | mv0w2pk2 | Q14 | Pack R-W2-MUSE-IMAGE | Oct 26 18:44 | yes | 45 | 94.4 | 0.042933 |
+| direct-direct | v_AGENTS | mv0w1rv_AGENTS | Oct 26 18:44 | yes | 44 | 94.5 | 0.034065 |
 | mv0w1fx | ROUTERFIX | Router fixes F6-F8 | Oct 26 19:07 | yes | 94 | 97.6 | 0.070623 |
 | mv0w1fx | CIKIT | CI and kit sync fix F4 | Oct 26 19:07 | yes | 66 | 96.8 | 0.04088 |
 | mv0cq | CQ1 | Continuity quiz 1 | Oct 26 19:17 | yes | 13 | 87.1 | 0.010361 |
@@ -528,33 +546,199 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui22 | F | MV-UI12 judge notes | Oct 27 21:06 | yes | 84 | 97.3 | 0.058729 |
 | mvui22b | T | toast z-index + strip height | Oct 27 21:26 | yes | 77 | 97.0 | 0.050467 |
 | mvui23 | S | startup race: deliveries before canvas binding | Oct 27 21:29 | yes | 62 | 96.7 | 0.05142 |
+| direct-direct | uisrc | mvrv9_uisrc | Oct 27 21:33 | yes | 67 | 96.3 | 0.038822 |
+| direct-direct | elec | mvrv10_elec | Oct 27 21:33 | yes | 57 | 95.6 | 0.039963 |
+| direct-direct | elec | mvrv9_elec | Oct 27 21:33 | yes | 57 | 95.6 | 0.039963 |
+| direct-direct | core | mvrv9_core | Oct 27 21:33 | yes | 33 | 92.4 | 0.024169 |
+| direct-direct | e2e | mvrv9_e2e | Oct 27 21:33 | yes | 42 | 94.1 | 0.032173 |
+| direct-direct | tests | mvrv9_tests | Oct 27 21:33 | yes | 45 | 93.9 | 0.035192 |
 | mvui23c | H | hold expiry keeps bytes | Oct 27 21:43 | yes | 65 | 96.5 | 0.04701 |
+| direct-direct | ci3 | mvrv9_ci3 | Oct 27 21:43 | yes | 50 | 95.1 | 0.046946 |
 | mvui23d | C | canvas dimensions + unmount + blanking | Oct 27 21:58 | yes | 75 | 95.5 | 0.070191 |
 | mvui23e | T | mvui18 tests vs new sizing contract | Oct 27 22:16 | yes | 63 | 96.4 | 0.048504 |
 | mvui24 | R | capture refresh + shot rows | Oct 27 22:37 | yes | 95 | 97.2 | 0.067596 |
 | mvui24 | S | scheduler DOM ids + entry lifecycle | Oct 27 22:37 | yes | 87 | 97.4 | 0.060989 |
+| direct-direct | mvdemo | mvdemo | Oct 27 23:08 | yes | 54 | 95.2 | 0.035354 |
+| direct-direct | mvsub | mvsub | Oct 27 23:08 | yes | 32 | 91.7 | 0.028663 |
+| direct-direct | mvtg5 | mvtg5 | Oct 27 23:08 | yes | 94 | 97.0 | 0.053385 |
 | mvui25 | P | input port, key map, frame map, double | Oct 28 01:08 | yes | 57 | 96.5 | 0.053615 |
 | mvui25 | A | mounting and gating in App | Oct 28 01:09 | yes | 100 | 97.6 | 0.066224 |
 | mvui25b | C | canvas capture gate fix | Oct 28 01:26 | yes | 97 | 97.3 | 0.056333 |
 | mvui25c | P | keyMap chord grammar | Oct 28 01:39 | yes | 53 | 95.6 | 0.029741 |
 | mvui25d | C | unavailable port fails closed | Oct 28 01:50 | yes | 52 | 95.7 | 0.034515 |
 | mvui25d | P | safe integer checks | Oct 28 01:51 | yes | 40 | 94.8 | 0.021396 |
+| direct-direct | frames | mvrv10_frames | Oct 28 03:12 | yes | 44 | 94.5 | 0.036716 |
+| direct-direct | app | mvrv10_app | Oct 28 03:12 | yes | 37 | 92.9 | 0.02825 |
+| direct-direct | serve | mvrv10_serve | Oct 28 03:12 | yes | 33 | 92.0 | 0.027157 |
+| direct-direct | journal | mvrv10_journal | Oct 28 03:12 | yes | 31 | 92.0 | 0.024352 |
+| direct-direct | adapter | mvrv10_adapter | Oct 28 03:12 | yes | 17 | 84.1 | 0.02279 |
 | mvui26 | F | frames and scheduler fixes | Oct 28 03:25 | yes | 81 | 95.5 | 0.064168 |
 | mvui26 | I | input port, canvas handlers and recording panel fixes | Oct 28 03:25 | yes | 101 | 97.6 | 0.066477 |
 | mvui26b | S | no page scroll on canvas click and focus; synchronous tileScheduler evaluation | Oct 28 03:43 | yes | 97 | 97.5 | 0.060308 |
 | mvui26b | M | mode drops to READ on release, refusals in Activity | Oct 28 03:44 | yes | 83 | 96.7 | 0.081362 |
 | mvui26c | H | relink data-URL harnesses | Oct 28 04:02 | yes | 37 | 94.1 | 0.021259 |
+| direct-direct | T2 | mvr3v4_T2 | Oct 28 04:36 | yes | 88 | 96.3 | 0.108765 |
+| direct-direct | T4 | mvr3v4_T4 | Oct 28 04:36 | yes | 80 | 96.1 | 0.088442 |
+| direct-direct | T5 | mvr3v4_T5 | Oct 28 04:36 | yes | 94 | 97.2 | 0.120765 |
+| direct-direct | T6 | mvr3v4_T6 | Oct 28 04:36 | yes | 100 | 95.6 | 0.182762 |
+| direct-direct | T7 | mvr3v4_T7 | Oct 28 04:36 | yes | 64 | 96.6 | 0.074008 |
+| direct-direct | T8 | mvr3v4_T8 | Oct 28 04:36 | yes | 79 | 96.9 | 0.096003 |
+| direct-direct | T1 | mvr3v4_T1 | Oct 28 04:36 | yes | 91 | 97.3 | 0.065526 |
+| direct-direct | T3 | mvr3v4_T3 | Oct 28 04:36 | yes | 77 | 97.2 | 0.070458 |
 | mvui27 | S | no page scroll from tile canvas clicks in any mode | Oct 28 04:40 | yes | 89 | 97.0 | 0.059937 |
 | mvui28 | R | input results into refusals, deduped | Oct 28 05:29 | yes | 63 | 96.3 | 0.040822 |
+| direct-direct | rod | gold_prod | Oct 28 07:13 | yes | 31 | 91.9 | 0.021622 |
+| direct-direct | rior | gold_prior | Oct 28 07:13 | yes | 23 | 89.1 | 0.020548 |
+| direct-direct | em | gold_mem | Oct 28 07:13 | yes | 20 | 87.4 | 0.015158 |
+| direct-direct | old | gold_gold | Oct 28 07:13 | yes | 18 | 86.0 | 0.01566 |
+| direct-direct | ewton | gold_newton | Oct 28 07:13 | yes | 27 | 90.5 | 0.020696 |
+| direct-direct | warmdisk | gold_swarmdisk | Oct 28 07:13 | yes | 22 | 90.6 | 0.01945 |
+| direct-direct | 01_a | gold_Q01_a | Oct 28 07:35 | yes | 28 | 91.4 | 0.022444 |
+| direct-direct | 01_b | gold_Q01_b | Oct 28 07:35 | yes | 34 | 92.8 | 0.0309 |
+| direct-direct | 02_a | gold_Q02_a | Oct 28 07:35 | yes | 25 | 90.9 | 0.023369 |
+| direct-direct | 02_b | gold_Q02_b | Oct 28 07:35 | yes | 50 | 94.1 | 0.045705 |
+| direct-direct | 03_a | gold_Q03_a | Oct 28 07:35 | yes | 21 | 89.5 | 0.015871 |
+| direct-direct | 03_b | gold_Q03_b | Oct 28 07:35 | yes | 46 | 93.8 | 0.042786 |
+| direct-direct | 04_a | gold_Q04_a | Oct 28 07:35 | yes | 25 | 90.2 | 0.021217 |
+| direct-direct | 04_b | gold_Q04_b | Oct 28 07:35 | yes | 37 | 92.6 | 0.026761 |
+| direct-direct | 05_a | gold_Q05_a | Oct 28 07:35 | yes | 10 | 74.6 | 0.01348 |
+| direct-direct | 05_b | gold_Q05_b | Oct 28 07:35 | yes | 22 | 89.3 | 0.018777 |
+| direct-direct | 06_a | gold_Q06_a | Oct 28 07:35 | yes | 20 | 88.8 | 0.017126 |
+| direct-direct | 06_b | gold_Q06_b | Oct 28 07:35 | yes | 45 | 93.8 | 0.041201 |
+| direct-direct | 07_a | gold_Q07_a | Oct 28 07:35 | yes | 15 | 84.5 | 0.019033 |
+| direct-direct | 07_b | gold_Q07_b | Oct 28 07:35 | yes | 40 | 93.4 | 0.03845 |
+| direct-direct | 08_a | gold_Q08_a | Oct 28 07:35 | yes | 14 | 82.2 | 0.019787 |
+| direct-direct | 08_b | gold_Q08_b | Oct 28 07:35 | yes | 24 | 88.2 | 0.025737 |
+| direct-direct | 09_a | gold_Q09_a | Oct 28 07:35 | yes | 21 | 88.2 | 0.020014 |
+| direct-direct | 09_b | gold_Q09_b | Oct 28 07:35 | yes | 36 | 92.9 | 0.027607 |
+| direct-direct | 10_a | gold_Q10_a | Oct 28 07:35 | yes | 25 | 90.4 | 0.01737 |
+| direct-direct | 10_b | gold_Q10_b | Oct 28 07:35 | yes | 39 | 93.8 | 0.032348 |
+| direct-direct | 11_a | gold_Q11_a | Oct 28 07:35 | yes | 37 | 94.0 | 0.022467 |
+| direct-direct | 11_b | gold_Q11_b | Oct 28 07:35 | yes | 37 | 90.6 | 0.035321 |
+| direct-direct | 12_a | gold_Q12_a | Oct 28 07:35 | yes | 25 | 91.6 | 0.014564 |
+| direct-direct | 12_b | gold_Q12_b | Oct 28 07:35 | yes | 44 | 93.7 | 0.029847 |
+| direct-direct | facts | gold_v_facts | Oct 28 07:53 | yes | 25 | 90.3 | 0.018624 |
+| direct-direct | format | gold_v_format | Oct 28 07:53 | yes | 24 | 90.1 | 0.021858 |
+| direct-direct | adv | gold_v_adv | Oct 28 07:53 | yes | 25 | 90.0 | 0.020697 |
+| direct-w2 | r1corea | w2r1corea | Oct 28 08:11 | yes | 51 | 94.8 | 0.035051 |
+| direct-w2 | r1coreb | w2r1coreb | Oct 28 08:11 | yes | 50 | 94.2 | 0.035583 |
+| direct-w2 | r2pkga | w2r2pkga | Oct 28 08:11 | yes | 34 | 93.6 | 0.020543 |
+| direct-w2 | r2pkgb | w2r2pkgb | Oct 28 08:11 | yes | 45 | 94.5 | 0.032339 |
+| direct-w2 | r3agenta | w2r3agenta | Oct 28 08:11 | yes | 48 | 94.3 | 0.025058 |
+| direct-w2 | r3agentb | w2r3agentb | Oct 28 08:11 | yes | 63 | 95.9 | 0.036073 |
+| direct-w2 | r5reca | w2r5reca | Oct 28 08:11 | yes | 47 | 94.1 | 0.031161 |
+| direct-w2 | r5recb | w2r5recb | Oct 28 08:11 | yes | 44 | 94.2 | 0.029707 |
+| direct-w2 | r6lifea | w2r6lifea | Oct 28 08:11 | yes | 53 | 94.8 | 0.029723 |
+| direct-w2 | r6lifeb | w2r6lifeb | Oct 28 08:11 | yes | 44 | 95.3 | 0.029277 |
+| direct-w2 | r8perfa | w2r8perfa | Oct 28 08:11 | yes | 31 | 93.4 | 0.021807 |
+| direct-w2 | r8perfb | w2r8perfb | Oct 28 08:11 | yes | 36 | 94.0 | 0.023414 |
 | mvui29 | T | terminal sessions live: provider menu, real session, Copy capsule ID | Oct 28 08:15 | yes | 100 | 97.3 | 0.090997 |
 | mvui29s | S | settings load at boot and save on change, restart-safe | Oct 28 08:16 | yes | 80 | 96.2 | 0.084067 |
 | mvui30 | L | lost state: frozen last frame with Lost badge | Oct 28 08:17 | yes | 96 | 97.3 | 0.082854 |
 | mvui31 | P | fast present path at 1280x900 | Oct 28 08:19 | yes | 99 | 97.6 | 0.069391 |
 | mvui29b | T | finish terminal sessions path: types, fixed host API, App/main wiring | Oct 28 08:36 | yes | 98 | 97.5 | 0.086802 |
+| direct-r3 | c5v | r3c5v | Oct 28 08:40 | yes | 49 | 95.9 | 0.025884 |
+| direct-r3 | c5x | r3c5x | Oct 28 08:40 | yes | 35 | 94.4 | 0.019743 |
+| direct-w2 | holdingsa | w2holdingsa | Oct 28 08:43 | yes | 56 | 95.8 | 0.041048 |
+| direct-w2 | holdingsb | w2holdingsb | Oct 28 08:43 | yes | 36 | 92.9 | 0.026986 |
+| direct-r3 | c1v | r3c1v | Oct 28 08:51 | yes | 32 | 93.2 | 0.019447 |
+| direct-r3 | c1w | r3c1w | Oct 28 08:51 | yes | 37 | 95.2 | 0.018918 |
+| direct-r3 | c1x | r3c1x | Oct 28 08:51 | yes | 28 | 91.3 | 0.025761 |
+| direct-r3 | c2v | r3c2v | Oct 28 08:51 | yes | 29 | 93.4 | 0.017601 |
+| direct-r3 | c2w | r3c2w | Oct 28 08:51 | yes | 22 | 91.9 | 0.012951 |
+| direct-r3 | c2x | r3c2x | Oct 28 08:51 | yes | 33 | 92.9 | 0.025762 |
+| direct-r3 | c6v | r3c6v | Oct 28 08:51 | yes | 36 | 94.4 | 0.024066 |
+| direct-r3 | c6w | r3c6w | Oct 28 08:52 | yes | 27 | 91.6 | 0.018065 |
+| direct-r3 | c6x | r3c6x | Oct 28 08:52 | yes | 34 | 94.2 | 0.019926 |
+| direct-r3 | c8v | r3c8v | Oct 28 08:52 | yes | 31 | 93.6 | 0.01669 |
+| direct-r3 | c8w | r3c8w | Oct 28 08:52 | yes | 28 | 94.0 | 0.015992 |
+| direct-r3 | c8x | r3c8x | Oct 28 08:52 | yes | 32 | 92.6 | 0.023787 |
 | mvui29sb | S | settings drop unknown keys | Oct 28 08:58 | yes | 47 | 95.8 | 0.028168 |
 | mvui29c | T | green terminal wiring | Oct 28 08:58 | yes | 99 | 97.5 | 0.062371 |
+| direct-r3 | c3v | r3c3v | Oct 28 08:59 | yes | 38 | 95.3 | 0.022784 |
+| direct-r3 | c3w | r3c3w | Oct 28 08:59 | yes | 35 | 89.6 | 0.028714 |
+| direct-r3 | c3x | r3c3x | Oct 28 08:59 | yes | 48 | 95.1 | 0.032844 |
+| direct-r3 | j4v | r3j4v | Oct 28 08:59 | yes | 17 | 85.4 | 0.016287 |
+| direct-r3 | j4x | r3j4x | Oct 28 08:59 | yes | 46 | 95.2 | 0.026675 |
 | mvui29sc | S | settings judge fixes | Oct 28 09:12 | yes | 77 | 97.3 | 0.048412 |
 | mvui29d | T | terminal session lifecycle fixes | Oct 28 09:13 | yes | 74 | 97.2 | 0.058665 |
+| direct-r3 | c4v | r3c4v | Oct 28 09:15 | yes | 44 | 95.3 | 0.026272 |
+| direct-r3 | c4w | r3c4w | Oct 28 09:15 | yes | 58 | 96.7 | 0.028085 |
+| direct-r3 | c4x | r3c4x | Oct 28 09:15 | yes | 37 | 94.8 | 0.018672 |
+| direct-r3 | c7v | r3c7v | Oct 28 09:15 | yes | 16 | 89.5 | 0.011275 |
+| direct-r3 | c7w | r3c7w | Oct 28 09:15 | yes | 43 | 95.0 | 0.025829 |
+| direct-r3 | c7x | r3c7x | Oct 28 09:15 | yes | 27 | 92.1 | 0.022201 |
+| direct-r3 | j5v | r3j5v | Oct 28 09:18 | yes | 28 | 92.1 | 0.023807 |
+| direct-r3 | j5w | r3j5w | Oct 28 09:18 | yes | 21 | 91.6 | 0.013516 |
+| direct-r3 | j5x | r3j5x | Oct 28 09:18 | yes | 24 | 92.4 | 0.01331 |
+| direct-r3 | j6v | r3j6v | Oct 28 09:18 | yes | 18 | 90.2 | 0.013113 |
+| direct-r3 | j6w | r3j6w | Oct 28 09:18 | yes | 35 | 93.5 | 0.024067 |
+| direct-r3 | j6x | r3j6x | Oct 28 09:18 | yes | 174 | 94.4 | 0.09157 |
+| direct-r3 | j1v | r3j1v | Oct 28 09:23 | yes | 20 | 92.0 | 0.015666 |
+| direct-r3 | j1w | r3j1w | Oct 28 09:23 | yes | 28 | 91.6 | 0.018234 |
+| direct-r3 | j1x | r3j1x | Oct 28 09:23 | yes | 9 | 85.8 | 0.005731 |
+| direct-adv | journala | advjournala | Oct 28 09:30 | yes | 27 | 90.0 | 0.021369 |
+| direct-adv | journalb | advjournalb | Oct 28 09:30 | yes | 29 | 93.0 | 0.02349 |
+| direct-adv | servea | advservea | Oct 28 10:05 | yes | 36 | 94.5 | 0.025234 |
+| direct-adv | serveb | advserveb | Oct 28 10:05 | yes | 43 | 95.2 | 0.032364 |
+| direct-adv | journal2 | advjournal2 | Oct 28 10:25 | yes | 36 | 93.4 | 0.025462 |
+| direct-adv | framesa | advframesa | Oct 28 10:28 | yes | 41 | 95.1 | 0.035091 |
+| direct-adv | framesb | advframesb | Oct 28 10:28 | yes | 61 | 95.9 | 0.03862 |
+| direct-adv | serve2 | advserve2 | Oct 28 10:49 | yes | 60 | 95.8 | 0.040594 |
+| direct-rv11 | v_adapter | rv11v_adapter | Oct 28 11:01 | yes | 29 | 92.0 | 0.01785 |
+| direct-rv11 | v_agents | rv11v_agents | Oct 28 11:01 | yes | 24 | 92.8 | 0.014047 |
+| direct-rv11 | v_core | rv11v_core | Oct 28 11:01 | yes | 21 | 91.4 | 0.014274 |
+| direct-rv11 | v_elec | rv11v_elec | Oct 28 11:01 | yes | 26 | 92.7 | 0.018543 |
+| direct-rv11 | v_journal | rv11v_journal | Oct 28 11:01 | yes | 20 | 90.9 | 0.016001 |
+| direct-rv11 | v_serve | rv11v_serve | Oct 28 11:01 | yes | 41 | 95.3 | 0.020511 |
+| direct-rv11 | v_ui | rv11v_ui | Oct 28 11:01 | yes | 48 | 95.5 | 0.027774 |
+| direct-tg6 | core | tg6_core | Oct 28 11:10 | yes | 55 | 95.2 | 0.034214 |
+| direct-tg6 | adapter | tg6_adapter | Oct 28 11:10 | yes | 46 | 94.4 | 0.042164 |
+| direct-tg6 | electron | tg6_electron | Oct 28 11:10 | yes | 64 | 95.8 | 0.04713 |
+| direct-tg6 | uisrc | tg6_uisrc | Oct 28 11:10 | yes | 93 | 97.0 | 0.056607 |
+| direct-tg6 | agents | tg6_agents | Oct 28 11:10 | yes | 50 | 93.2 | 0.049611 |
+| direct-tg6 | gates | tg6_gates | Oct 28 11:10 | yes | 26 | 90.5 | 0.029586 |
+| direct-adv | journal3 | advjournal3 | Oct 28 11:14 | yes | 40 | 93.6 | 0.031758 |
+| direct-w5 | fc_readme | w5fc_readme | Oct 28 11:20 | yes | 34 | 93.6 | 0.026569 |
+| direct-w5 | fc_runbook | w5fc_runbook | Oct 28 11:20 | yes | 64 | 96.0 | 0.041512 |
+| direct-w5 | fc_guides | w5fc_guides | Oct 28 11:20 | yes | 40 | 94.2 | 0.032981 |
+| direct-w5 | fc_video | w5fc_video | Oct 28 11:20 | yes | 24 | 90.0 | 0.024312 |
+| direct-adv | journal4 | advjournal4 | Oct 28 12:18 | yes | 52 | 95.1 | 0.038399 |
+| direct-adv | journal5 | advjournal5 | Oct 28 13:18 | yes | 44 | 94.3 | 0.029946 |
+| direct-adv | poly2a | advpoly2a | Oct 28 14:44 | yes | 40 | 93.9 | 0.031107 |
+| direct-adv | poly2b | advpoly2b | Oct 28 14:44 | yes | 33 | 92.6 | 0.029183 |
+| direct-adv | losta | advlosta | Oct 28 14:51 | yes | 32 | 92.6 | 0.023075 |
+| direct-adv | lostb | advlostb | Oct 28 14:51 | yes | 28 | 91.9 | 0.02181 |
+| direct-adv | holda | advholda | Oct 28 14:55 | yes | 30 | 93.0 | 0.025081 |
+| direct-adv | holdb | advholdb | Oct 28 14:55 | yes | 43 | 94.2 | 0.039664 |
+| direct-adv | lost2a | advlost2a | Oct 28 16:28 | yes | 28 | 90.8 | 0.02042 |
+| direct-adv | lost2b | advlost2b | Oct 28 16:28 | yes | 30 | 91.6 | 0.021856 |
+| direct-asm | wender | asm_wender | Oct 28 16:32 | yes | 40 | 94.0 | 0.029771 |
+| direct-asm | vision | asm_vision | Oct 28 16:32 | yes | 26 | 89.8 | 0.021398 |
+| direct-asm | capture | asm_capture | Oct 28 16:32 | yes | 47 | 94.4 | 0.033286 |
+| direct-asm | fps | asm_fps | Oct 28 16:32 | yes | 46 | 94.7 | 0.037779 |
+| direct-asm | web | asm_web | Oct 28 16:32 | yes | 28 | 90.6 | 0.01956 |
+| direct-asm | memoryweb | asm_memoryweb | Oct 28 16:47 | yes | 31 | 91.8 | 0.026302 |
+| direct-adv | lost3 | advlost3 | Oct 28 16:57 | yes | 66 | 96.3 | 0.042952 |
+| direct-ramctx | a | ramctx_a | Oct 28 18:55 | yes | 25 | 89.6 | 0.016995 |
+| direct-ramctx | b | ramctx_b | Oct 28 18:55 | yes | 26 | 89.5 | 0.018027 |
+| direct-ramctx | c | ramctx_c | Oct 28 18:55 | yes | 19 | 86.8 | 0.013027 |
+| direct-ramctx | 2_a | ramctx2_a | Oct 28 19:03 | yes | 20 | 87.4 | 0.014334 |
+| direct-ramctx | 2_b | ramctx2_b | Oct 28 19:03 | yes | 13 | 83.0 | 0.010128 |
+| direct-ramctx | 2_c | ramctx2_c | Oct 28 19:03 | yes | 18 | 87.7 | 0.014079 |
+| direct-ramctx | 3_a | ramctx3_a | Oct 28 19:31 | yes | 33 | 92.7 | 0.026721 |
+| direct-ramctx | 3_b | ramctx3_b | Oct 28 19:31 | yes | 23 | 90.0 | 0.01594 |
+| direct-ramctx | 3_c | ramctx3_c | Oct 28 19:31 | yes | 8 | 70.4 | 0.014052 |
+| direct-ramctx | 3_d | ramctx3_d | Oct 28 19:32 | yes | 25 | 89.9 | 0.030409 |
+| mvui32 | A | R3-APP-1 layout echo fenced on surface lifetime | Oct 28 21:33 | yes | 84 | 97.4 | 0.049487 |
+| mvui32 | I | R3-INPUT-1 no buffered input after READ switch | Oct 28 21:34 | yes | 55 | 95.9 | 0.043105 |
+| mvui32 | S | R3-SCHEDULER-1 ineligible retained repaint on attach | Oct 28 21:34 | yes | 46 | 94.7 | 0.027323 |
+| mvui32 | Q | R3-QA-1 live QA reporting starved by churn | Oct 28 21:34 | yes | 45 | 92.6 | 0.033943 |
+| mvui32 | L | lost surface end-to-end check | Oct 28 21:35 | yes | 87 | 97.1 | 0.060663 |
+| direct-direct | kern | syn_vekern | Oct 28 21:44 | yes | 27 | 89.9 | 0.021103 |
+| direct-direct | c | mut_rec | Oct 28 21:44 | yes | 29 | 92.3 | 0.022655 |
+| direct-direct | ges | web_pages | Oct 28 21:44 | yes | 31 | 91.8 | 0.018895 |
+| direct-direct | adme | doc_readme | Oct 28 21:44 | yes | 30 | 92.6 | 0.021338 |
 
 ## Method
 
