@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 357 | 55 | 302 |
-| Lanes finished OK | 357 | 55 | 302 |
-| Agent steps | 19,690 | 2,705 | 16,985 |
-| Lane-hours of agent work | 51.2 | 5.2 | 45.9 |
-| Fresh input tokens | 79,762,928 | 11,482,034 | 68,280,894 |
-| Cache-read input tokens | 1,867,169,886 | 226,255,212 | 1,640,914,674 |
+| Lanes launched | 359 | 55 | 304 |
+| Lanes finished OK | 359 | 55 | 304 |
+| Agent steps | 19,840 | 2,705 | 17,135 |
+| Lane-hours of agent work | 51.5 | 5.2 | 46.3 |
+| Fresh input tokens | 80,175,856 | 11,482,034 | 68,693,822 |
+| Cache-read input tokens | 1,879,797,870 | 226,255,212 | 1,653,542,658 |
 | Prompt cache hit % | 95.9 | 95.2 | 96.0 |
-| Output tokens | 17,450,924 | 2,135,708 | 15,315,216 |
-| Thinking tokens | 9,303,003 | 1,050,039 | 8,252,964 |
-| Cost (USD) | 15.2008 | 2.0279 | 13.1729 |
+| Output tokens | 17,548,549 | 2,135,708 | 15,412,841 |
+| Thinking tokens | 9,363,791 | 1,050,039 | 8,313,752 |
+| Cost (USD) | 15.2869 | 2.0279 | 13.259 |
 | Cost per lane (USD) | 0.0426 | 0.0369 | 0.0436 |
 
-Rooms: 95. Peak concurrent lanes [MEASURED from lane start/end]: 24.
+Rooms: 97. Peak concurrent lanes [MEASURED from lane start/end]: 24.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -43,7 +43,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
 | docs | 15 | 94.8 | 0.5371 |
-| fix | 33 | 96.9 | 1.8987 |
+| fix | 35 | 96.9 | 1.9848 |
 | kit | 3 | 96.5 | 0.1997 |
 | ops | 4 | 88.1 | 0.0468 |
 | plan | 12 | 92.6 | 0.3072 |
@@ -155,6 +155,8 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui23e | UI orchestrator | Oct 27 22:16 | fix | 1 | 96.4 | 0.0485 | Align seven older frame tests with the corrected canvas sizing contract (the reactive canvas dimensions they pinned wiped the first frame, L8-1). |
 | mvui24 | UI orchestrator | Oct 27 22:37 | fix | 2 | 97.3 | 0.1286 | Complete MV-UI13 with the remaining verified RV9 renderer items: capture refresh evicting rows, scheduler raw ids in DOM ids and never-destroyed entries, screenshot row ids/labels. |
 | mvui25 | UI orchestrator | Oct 28 01:08 | ui | 2 | 97.2 | 0.1198 | Live finding: human typing and clicks never reach the capsule in WRITE mode with human control; build the renderer side of surface_input/v1 (input port, focusable canvas capture, mounting) and fix the READ-ONLY strip label. |
+| mvui25b | UI orchestrator | Oct 28 01:26 | fix | 1 | 97.3 | 0.0563 | Fix pass for the human-input renderer drop: lane C's canvas capture broke 37 existing tests (new SFC imports unmapped in harnesses, unguarded blur) and vue-tsc; make the full gate green without weakening tests. |
+| mvui25c | UI orchestrator | Oct 28 01:39 | fix | 1 | 95.6 | 0.0297 | Human-input renderer drop: key chords with punctuation or non-ASCII characters violate the host adapter key grammar; map them to X keysym names or drop them. |
 
 ## Every lane
 
@@ -517,6 +519,8 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui24 | S | scheduler DOM ids + entry lifecycle | Oct 27 22:37 | yes | 87 | 97.4 | 0.060989 |
 | mvui25 | P | input port, key map, frame map, double | Oct 28 01:08 | yes | 57 | 96.5 | 0.053615 |
 | mvui25 | A | mounting and gating in App | Oct 28 01:09 | yes | 100 | 97.6 | 0.066224 |
+| mvui25b | C | canvas capture gate fix | Oct 28 01:26 | yes | 97 | 97.3 | 0.056333 |
+| mvui25c | P | keyMap chord grammar | Oct 28 01:39 | yes | 53 | 95.6 | 0.029741 |
 
 ## Method
 
