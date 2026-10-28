@@ -1249,9 +1249,29 @@ def run_demo_agent_drive(
                 "after_frame": after_frame,
             }
         )
-        native_ev = click_receipt.get("native_evidence", {})
-        focus_ok = bool(native_ev.get("focus_verified", True))
-        input_mono_ns = int(native_ev.get("input_mono_ns", click_receipt.get("executed_at_ns", 1)))
+        native_ev = (
+            click_receipt.get("native_evidence")
+            if isinstance(click_receipt.get("native_evidence"), dict)
+            else {}
+        )
+        raw_focus = getattr(
+            click_receipt,
+            "focus_verified",
+            click_receipt.get("focus_verified", native_ev.get("focus_verified")),
+        )
+        focus_ok = raw_focus is True
+        raw_input_mono_ns = getattr(
+            click_receipt,
+            "input_mono_ns",
+            click_receipt.get("input_mono_ns", native_ev.get("input_mono_ns")),
+        )
+        if (
+            raw_input_mono_ns is None
+            or isinstance(raw_input_mono_ns, bool)
+            or not isinstance(raw_input_mono_ns, int)
+        ):
+            raise RuntimeError("wait_verify receipt missing correlated input_mono_ns")
+        input_mono_ns = int(raw_input_mono_ns)
         if not click_receipt.get("verified") or not focus_ok:
             raise RuntimeError("wait_verify did not return a focus-verified receipt")
         if input_mono_ns <= 0:

@@ -75,13 +75,11 @@ TICK_SETTLE_MAX_S = 0.5
 TICK_QUIESCE_S = 0.15
 
 
-class StackError(RuntimeError):
-    """[TARGET, unit decision] Typed preflight and recorder error for stack.py."""
-
-    def __init__(self, code, message):
-        self.code = code
-        self.detail = message
-        super().__init__(f"{code}: {message}")
+StackError = live.StackError
+binary_provenance_path = live.binary_provenance_path
+compute_source_tree_sha256 = live.compute_source_tree_sha256
+write_binary_provenance = live.write_binary_provenance
+verify_binary_provenance = live.verify_binary_provenance
 
 
 def ttl_seconds(value):
@@ -269,8 +267,15 @@ def _recv_control_line(conn, timeout_s=2.0):
     return payload
 
 
-def _send_control_reply(conn, payload, fds=()):
+def _encode_control_reply(payload):
     raw = (json.dumps(payload, sort_keys=True) + "\n").encode("utf-8")
+    if len(raw) > MAX_CONTROL_BYTES:
+        raise StackError("CONTROL_PROTOCOL_ERROR", "control reply exceeds limit")
+    return raw
+
+
+def _send_control_reply(conn, payload, fds=()):
+    raw = _encode_control_reply(payload)
     if fds:
         cmsg = [(
             socket.SOL_SOCKET,
@@ -328,7 +333,28 @@ def handle_control_connection(
                 },
             )
             return False
-        fd = peer_sock.fileno()
+        try:
+            fd = peer_sock.fileno()
+        except OSError as exc:
+            _send_control_reply(
+                conn,
+                {
+                    "ok": False,
+                    "code": "CONTROL_IO_ERROR",
+                    "error": f"invalid agent socket fd: {exc}",
+                },
+            )
+            return False
+        if fd < 0:
+            _send_control_reply(
+                conn,
+                {
+                    "ok": False,
+                    "code": "CONTROL_IO_ERROR",
+                    "error": "agent socket fd is closed",
+                },
+            )
+            return False
         next_seq = int(getattr(peer, "next_seq", getattr(peer, "_next_seq", 1)))
         inbound_seq = int(live._lane_state(peer).get("inbound_seq", 0))
         rx_bytes = bytes(getattr(peer, "_rx", b""))
@@ -338,25 +364,69 @@ def handle_control_connection(
             "next_seq": next_seq,
             "inbound_seq": inbound_seq,
         }
-        state["agent_handoff"] = handoff_record
-        if save_state_fn is not None:
-            save_state_fn(root, state)
-        elif root is not None:
-            save_state(root, state)
-        _send_control_reply(
-            conn,
-            {
-                "ok": True,
-                "op": HANDOFF_OP,
-                "next_seq": next_seq,
-                "inbound_seq": inbound_seq,
-                "rx_hex": rx_bytes.hex(),
-                "handoff": handoff_record,
-            },
-            fds=(fd,),
-        )
-        peer.close()
-        peer_holder["peer"] = None
+        reply_payload = {
+            "ok": True,
+            "op": HANDOFF_OP,
+            "next_seq": next_seq,
+            "inbound_seq": inbound_seq,
+            "rx_hex": rx_bytes.hex(),
+            "handoff": handoff_record,
+        }
+        try:
+            _encode_control_reply(reply_payload)
+        except StackError as exc:
+            _send_control_reply(
+                conn,
+                {
+                    "ok": False,
+                    "code": exc.code,
+                    "error": exc.detail,
+                },
+            )
+            return False
+        try:
+            dup_fd = os.dup(fd)
+        except OSError as exc:
+            _send_control_reply(
+                conn,
+                {
+                    "ok": False,
+                    "code": "CONTROL_IO_ERROR",
+                    "error": f"failed to duplicate agent socket fd: {exc}",
+                },
+            )
+            return False
+        try:
+            peer.close()
+            peer_holder["peer"] = None
+            state["agent_handoff"] = handoff_record
+            if save_state_fn is not None:
+                save_state_fn(root, state)
+            elif root is not None:
+                save_state(root, state)
+            try:
+                _send_control_reply(
+                    conn,
+                    reply_payload,
+                    fds=(dup_fd,),
+                )
+            except Exception:
+                restored_fd = os.dup(dup_fd)
+                peer._sock = socket.socket(
+                    socket.AF_UNIX, socket.SOCK_STREAM, fileno=restored_fd
+                )
+                peer_holder["peer"] = peer
+                state.pop("agent_handoff", None)
+                if save_state_fn is not None:
+                    save_state_fn(root, state)
+                elif root is not None:
+                    save_state(root, state)
+                raise
+        finally:
+            try:
+                os.close(dup_fd)
+            except OSError:
+                pass
         return True
     finally:
         try:
@@ -689,14 +759,25 @@ def preflight(root, display_mode="private", record_path=None):
     return before
 
 
-def adapter_binary_stale(binary, source_root=None):
-    """Return True when a supplied Go adapter binary predates deduplication or daemon-adapter sources."""
+def adapter_binary_stale(binary, source_root=None, *, expected_commit=None, repo_root=None):
+    """Return True when a supplied Go adapter binary predates deduplication, sources, or provenance."""
     source_root = (ROOT / "daemon-adapter") if source_root is None else Path(source_root)
     try:
-        stat = Path(binary).stat()
+        stat_info = Path(binary).stat()
         data = Path(binary).read_bytes()
     except OSError:
         return True
+    if live.has_explicit_provenance_marker(binary):
+        try:
+            live.verify_binary_provenance(
+                binary,
+                "adapter",
+                expected_commit=expected_commit,
+                repo_root=ROOT if repo_root is None else repo_root,
+                source_root=source_root,
+            )
+        except StackError:
+            return True
     if b"\xff Go buildinf:" in data:
         if (
             b"PublishIfChanged" not in data
@@ -708,25 +789,65 @@ def adapter_binary_stale(binary, source_root=None):
             (p.stat().st_mtime_ns for p in source_root.rglob("*.go") if p.is_file()),
             default=0,
         )
-        if newest_src > stat.st_mtime_ns:
+        if newest_src > stat_info.st_mtime_ns:
             return True
-    return False
+        if expected_commit is not None and not live.has_explicit_provenance_marker(binary):
+            return True
+        return False
+    return not live.has_explicit_provenance_marker(binary)
 
 
-def binaries(work, *, env=None, checked_fn=None, source_root=None):
+def binaries(
+    work,
+    *,
+    env=None,
+    checked_fn=None,
+    source_root=None,
+    expected_commit=None,
+    require_provenance=None,
+):
     env = os.environ if env is None else env
     checked_fn = checked if checked_fn is None else checked_fn
-    source_root = (ROOT / "daemon-adapter") if source_root is None else Path(source_root)
+    default_adapter_root = ROOT / "daemon-adapter"
+    adapter_root = default_adapter_root if source_root is None else Path(source_root)
+    if require_provenance is not None:
+        enforce_provenance = bool(require_provenance)
+    else:
+        enforce_provenance = (
+            expected_commit is not None
+            or source_root is None
+            or adapter_root.resolve(strict=False) == default_adapter_root.resolve(strict=False)
+        )
+    commit = (
+        str(expected_commit).strip()
+        if expected_commit is not None
+        else live.resolve_head_commit(
+            repo_root=ROOT,
+            checked_fn=checked_fn if checked_fn is checked else None,
+        )
+    )
     result = {}
     for role, key in (("core", "MV_E2E_CORE_BIN"), ("adapter", "MV_E2E_ADAPTER_BIN")):
+        role_source_root = None if role == "core" else adapter_root
         supplied = env.get(key)
         if supplied:
-            binary = Path(supplied).resolve(strict=True)
-            if role == "adapter" and adapter_binary_stale(binary, source_root=source_root):
+            try:
+                binary = Path(supplied).resolve(strict=True)
+            except OSError as exc:
+                raise StackError("E2E_PREREQ", f"executable AUSENTE: {supplied}") from exc
+            if live.has_explicit_provenance_marker(binary) or enforce_provenance:
+                live.verify_binary_provenance(
+                    binary,
+                    role,
+                    expected_commit=commit,
+                    repo_root=ROOT,
+                    source_root=role_source_root,
+                )
+            elif role == "adapter" and adapter_binary_stale(binary, source_root=adapter_root):
                 binary = Path(work) / "mv-daemon-adapter"
                 checked_fn(
                     [env.get("GO", "go"), "build", "-o", binary, "./cmd/mv-daemon-adapter"],
-                    cwd=source_root,
+                    cwd=adapter_root,
                     env=dict(env, GOPROXY="off", GOSUMDB="off"),
                 )
         elif role == "core":
@@ -736,12 +857,22 @@ def binaries(work, *, env=None, checked_fn=None, source_root=None):
             checked_fn([env.get("CARGO", "cargo"), "build", "--offline", "--manifest-path",
                         ROOT / "core/Cargo.toml", "--bin", "metaviewer-core"], cwd=ROOT)
             binary = Path(target) / "debug/metaviewer-core"
+            if binary.is_file():
+                live.write_binary_provenance(binary, "core", commit=commit, repo_root=ROOT)
         else:
             binary = Path(work) / "mv-daemon-adapter"
             checked_fn([env.get("GO", "go"), "build", "-o", binary, "./cmd/mv-daemon-adapter"],
-                       cwd=source_root, env=dict(env, GOPROXY="off", GOSUMDB="off"))
+                       cwd=adapter_root, env=dict(env, GOPROXY="off", GOSUMDB="off"))
+            if binary.is_file():
+                live.write_binary_provenance(
+                    binary,
+                    "adapter",
+                    commit=commit,
+                    repo_root=ROOT,
+                    source_root=adapter_root,
+                )
         if not binary.is_file() or not os.access(binary, os.X_OK):
-            raise RuntimeError("executable AUSENTE: " + str(binary))
+            raise StackError("E2E_PREREQ", "executable AUSENTE: " + str(binary))
         result[role] = binary
     return result
 
@@ -1255,8 +1386,8 @@ def supervise(root, seconds, lock_fd):
     try:
         state["supervisor"] = {"pid": os.getpid(), "identity": identity(os.getpid())}
         save_state(root, state)
-        bins = binaries(work)
         commit = checked(["git", "rev-parse", "HEAD"], cwd=ROOT)
+        bins = binaries(work, expected_commit=commit)
         regs = {c: live.registration(c, commit, uuid.uuid4().hex) for c in ("core", "ui", "agent", "daemon")}
         config = {"session_id": "stack-" + uuid.uuid4().hex, "core": regs["core"],
                   "peers": [regs[c] for c in ("ui", "agent", "daemon")]}

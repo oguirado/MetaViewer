@@ -9,7 +9,9 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -294,14 +296,24 @@ class InjectedDemoPeer:
                     "detail": "Missing, stale or unmatched native/frame evidence",
                 }
             receipt = copy.deepcopy(stored["receipt"])
+            # Match core/src/serve/tools.rs:509-510: wait_verify strips nested
+            # native_evidence from the receipt projection and returns correlated
+            # focus_verified, input_mono_ns, and frame_sha256 at top level.
+            receipt.pop("native_evidence", None)
+            override = getattr(self, "wait_verify_override", None) or {}
+            if "executed_at_ns" in override:
+                receipt["executed_at_ns"] = int(override["executed_at_ns"])
+            input_mono_ns = int(
+                override.get("input_mono_ns", int(after["ts_ns"]) + 500)
+            )
             return {
                 "schema": "mv_tool_result/v0.2",
                 "request_id": req_id,
                 "op": "wait_verify",
                 "status": "verified",
                 "receipt": receipt,
-                "focus_verified": True,
-                "input_mono_ns": int(after["ts_ns"]) + 500,
+                "focus_verified": bool(override.get("focus_verified", True)),
+                "input_mono_ns": input_mono_ns,
                 "frame_sha256": str(after["sha256"]),
             }
 
@@ -968,6 +980,397 @@ class DemoAgentDriveUnitTests(unittest.TestCase):
             finally:
                 stack.close_control_socket(control_sock, root)
                 core_server_sock.close()
+
+    def test_t8_r3_02_handoff_prefill_bounds_and_pre_commit_refusal_retry(self) -> None:
+        with tempfile.TemporaryDirectory(dir="/tmp") as tmp:
+            os.chmod(tmp, 0o700)
+            root = Path(tmp) / "metaviewer-live-stack"
+            root.mkdir(mode=0o700)
+            work = root / "run-bounds"
+            work.mkdir(mode=0o700)
+            (work / "runtime/metaviewer").mkdir(parents=True, mode=0o700)
+
+            for prefill_len in (0, 512, 1024, 2048, 4096):
+                with self.subTest(prefill_len=prefill_len):
+                    state = {
+                        "schema": "metaviewer.live-stack/v1",
+                        "status": "ready",
+                        "work": str(work),
+                        "surface_id": "surface-live-bounds",
+                        "capsules": ["srf-id-12345678"],
+                        "supervisor": {
+                            "pid": os.getpid(),
+                            "identity": stack.identity(os.getpid()),
+                        },
+                    }
+                    stack.save_state(root, state)
+
+                    core_agent_sock, core_server_sock = socket.socketpair(
+                        socket.AF_UNIX, socket.SOCK_STREAM
+                    )
+                    control_sock = stack.open_control_socket(root)
+                    control_sock.settimeout(5.0)
+                    try:
+                        sup_peer = stack.live.CoreClient(
+                            str(work / "runtime/metaviewer/core.sock"),
+                            timeout_s=20,
+                            max_line_bytes=1 << 20,
+                            max_reply_bytes=1 << 20,
+                        )
+                        prefill = bytes((i % 251 for i in range(prefill_len)))
+                        sup_peer._sock = core_agent_sock
+                        sup_peer._rx = bytearray(prefill)
+                        sup_peer._next_seq = 11
+                        sup_peer._hello_complete = True
+                        stack.live._lane_state(sup_peer)["inbound_seq"] = 14
+                        peer_holder = {"peer": sup_peer}
+
+                        candidate_reply = {
+                            "ok": True,
+                            "op": stack.HANDOFF_OP,
+                            "next_seq": 11,
+                            "inbound_seq": 14,
+                            "rx_hex": prefill.hex(),
+                            "handoff": {
+                                "pid": os.getpid(),
+                                "uid": os.getuid(),
+                                "next_seq": 11,
+                                "inbound_seq": 14,
+                            },
+                        }
+                        encoded_len = len(
+                            (json.dumps(candidate_reply, sort_keys=True) + "\n").encode("utf-8")
+                        )
+                        fits_budget = encoded_len <= stack.MAX_CONTROL_BYTES
+
+                        def serve_n(count: int) -> None:
+                            for _ in range(count):
+                                try:
+                                    conn, _ = control_sock.accept()
+                                except OSError:
+                                    return
+                                stack.handle_control_connection(
+                                    conn, peer_holder, state, root
+                                )
+
+                        if fits_budget:
+                            t = threading.Thread(target=serve_n, args=(2,), daemon=True)
+                            t.start()
+                            res = stack.request_agent_handoff(root)
+                            try:
+                                self.assertEqual(bytes.fromhex(res["rx_hex"]), prefill)
+                                self.assertEqual(res["next_seq"], 11)
+                                self.assertEqual(res["inbound_seq"], 14)
+                                self.assertIsNone(peer_holder["peer"])
+                                self.assertEqual(
+                                    stack.load_state(root)["agent_handoff"]["next_seq"], 11
+                                )
+                                with self.assertRaises(stack.StackError) as ctx:
+                                    stack.request_agent_handoff(root)
+                                self.assertEqual(ctx.exception.code, "ALREADY_HANDED_OFF")
+                            finally:
+                                os.close(res["fd"])
+                                t.join(timeout=2.0)
+                        else:
+                            # Pre-commit refusal on oversize rx_hex (2048, 4096 bytes),
+                            # then drain _rx so retry succeeds, then second attach is refused.
+                            t = threading.Thread(target=serve_n, args=(3,), daemon=True)
+                            t.start()
+                            try:
+                                with self.assertRaises(stack.StackError) as ctx:
+                                    stack.request_agent_handoff(root)
+                                self.assertEqual(
+                                    ctx.exception.code, "CONTROL_PROTOCOL_ERROR"
+                                )
+                                # Handoff state was NOT committed and supervisor still owns peer.
+                                self.assertNotIn("agent_handoff", state)
+                                self.assertNotIn("agent_handoff", stack.load_state(root))
+                                self.assertIs(peer_holder["peer"], sup_peer)
+                                self.assertIsNotNone(sup_peer._sock)
+                                self.assertGreaterEqual(sup_peer._sock.fileno(), 0)
+
+                                # Drain buffered rx to fit budget and retry: must succeed.
+                                sup_peer._rx = bytearray(b"recovered")
+                                res = stack.request_agent_handoff(root)
+                                try:
+                                    self.assertEqual(
+                                        bytes.fromhex(res["rx_hex"]), b"recovered"
+                                    )
+                                    self.assertIsNone(peer_holder["peer"])
+                                    self.assertEqual(
+                                        stack.load_state(root)["agent_handoff"]["next_seq"],
+                                        11,
+                                    )
+                                    with self.assertRaises(stack.StackError) as second_ctx:
+                                        stack.request_agent_handoff(root)
+                                    self.assertEqual(
+                                        second_ctx.exception.code, "ALREADY_HANDED_OFF"
+                                    )
+                                finally:
+                                    os.close(res["fd"])
+                            finally:
+                                t.join(timeout=2.0)
+                    finally:
+                        stack.close_control_socket(control_sock, root)
+                        core_server_sock.close()
+                        try:
+                            core_agent_sock.close()
+                        except OSError:
+                            pass
+
+    def test_t8_r3_03_release_stale_probe_and_live_oracles_enforce_under_pythonoptimize(
+        self,
+    ) -> None:
+        probe_script = (
+            "import json, sys, tempfile\n"
+            "from pathlib import Path\n"
+            "from unittest.mock import patch\n"
+            "sys.path.insert(0, sys.argv[1])\n"
+            "import live\n"
+            "with tempfile.TemporaryDirectory() as tmp:\n"
+            "    archive = Path(tmp)\n"
+            "    (archive / 'events').mkdir()\n"
+            "    snap = {'surfaces': {}, 'leases': {}, 'pending': {},\n"
+            "            'draining': [], 'remaining_budget': 10, 'epoch': 1}\n"
+            "    (archive / 'events/1.json').write_text(json.dumps({\n"
+            "        'state': snap,\n"
+            "        'outcome': {'reason': 'ADMITTED', 'dispatch': True},\n"
+            "    }))\n"
+            "    (archive / 'journal.jsonl').write_text(\n"
+            "        '{}\\n' + json.dumps({'core_seq': 1, 'kind': 'admitted'}) + '\\n'\n"
+            "    )\n"
+            "    report = {'assertions': {}}\n"
+            "    bad_verdict = {\n"
+            "        'schema': 'action_verdict/v0.2',\n"
+            "        'proposal_id': 'live-release-stale',\n"
+            "        'decision': 'admitted',\n"
+            "        'reason_code': 'NONE',\n"
+            "        'core_seq': 1,\n"
+            "    }\n"
+            "    with patch.object(live, 'send'), \\\n"
+            "            patch.object(live, 'receive', return_value=bad_verdict):\n"
+            "        try:\n"
+            "            live.release_stale_probe(\n"
+            "                report, object(), {}, {}, 'surf-1',\n"
+            "                {'generation': 1, 'sha256': '0' * 64}, archive,\n"
+            "            )\n"
+            "        except live.StackError as exc:\n"
+            "            assert exc.code == 'E2E_PREREQ'\n"
+            "            assert 'release_stale_before_refresh' not in report['assertions']\n"
+            "            print('REFUSED_OK')\n"
+            "            sys.exit(0)\n"
+            "        print('UNEXPECTED_PASS:' + json.dumps(report))\n"
+            "        sys.exit(2)\n"
+        )
+        slice_dir = str(Path(__file__).resolve().parent)
+        for opt in ("0", "1", "2"):
+            with self.subTest(pythonoptimize=opt):
+                env = dict(os.environ, PYTHONOPTIMIZE=opt)
+                proc = subprocess.run(
+                    [sys.executable, "-c", probe_script, slice_dir],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                self.assertEqual(
+                    proc.returncode,
+                    0,
+                    f"PYTHONOPTIMIZE={opt} failed: stdout={proc.stdout!r} stderr={proc.stderr!r}",
+                )
+                self.assertEqual(proc.stdout.strip(), "REFUSED_OK")
+
+        node_bin = shutil.which("node")
+        if node_bin:
+            js_check = (
+                "const mod = require(process.argv[1]);\n"
+                "const env = mod.liveChildEnv({ PYTHONOPTIMIZE: '2', KEEP_VAR: '1' }, '/tmp/v');\n"
+                "if ('PYTHONOPTIMIZE' in env || env.KEEP_VAR !== '1') process.exit(1);\n"
+            )
+            js_proc = subprocess.run(
+                [node_bin, "-e", js_check, str(Path(__file__).resolve().with_name("index.js"))],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(js_proc.returncode, 0, js_proc.stderr)
+
+    def test_t8_r3_05_supplied_binary_provenance_refuses_unstamped_stale_or_mismatched(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp) / "work"
+            work.mkdir()
+            fake_repo = Path(tmp) / "repo"
+            (fake_repo / "core/src").mkdir(parents=True)
+            (fake_repo / "core/Cargo.toml").write_text("[package]\nname = \"mv\"\n", encoding="utf-8")
+            (fake_repo / "core/src/main.rs").write_text("fn main() {}\n", encoding="utf-8")
+            (fake_repo / "daemon-adapter").mkdir(parents=True)
+            (fake_repo / "daemon-adapter/go.mod").write_text("module mv\n", encoding="utf-8")
+            (fake_repo / "daemon-adapter/main.go").write_text("package main\n", encoding="utf-8")
+
+            head_commit = "a" * 40
+            other_commit = "b" * 40
+
+            core_bin = Path(tmp) / "metaviewer-core"
+            core_bin.write_bytes(b"#!/bin/sh\nexit 0\n")
+            core_bin.chmod(0o700)
+
+            adapter_bin = Path(tmp) / "mv-daemon-adapter"
+            adapter_bin.write_bytes(
+                b"\xff Go buildinf:go1.26\x00PublishIfChanged\x00DeduplicateUnchanged\x00PublishForced\x00"
+            )
+            adapter_bin.chmod(0o700)
+
+            # 1. Unstamped supplied core or adapter binary is refused with E2E_PREREQ.
+            with self.assertRaises(stack.StackError) as ctx_unstamped:
+                stack.verify_binary_provenance(
+                    core_bin,
+                    "core",
+                    expected_commit=head_commit,
+                    repo_root=fake_repo,
+                )
+            self.assertEqual(ctx_unstamped.exception.code, "E2E_PREREQ")
+
+            with patch.object(stack, "ROOT", fake_repo), patch.object(
+                stack.live, "ROOT", fake_repo
+            ):
+                with self.assertRaises(stack.StackError) as ctx_bins_unstamped:
+                    stack.binaries(
+                        work,
+                        env={
+                            "MV_E2E_CORE_BIN": str(core_bin),
+                            "MV_E2E_ADAPTER_BIN": str(adapter_bin),
+                        },
+                        expected_commit=head_commit,
+                    )
+                self.assertEqual(ctx_bins_unstamped.exception.code, "E2E_PREREQ")
+
+                # 2. Stamp both binaries for HEAD and current sources -> accepted.
+                stack.write_binary_provenance(
+                    core_bin,
+                    "core",
+                    commit=head_commit,
+                    repo_root=fake_repo,
+                )
+                stack.write_binary_provenance(
+                    adapter_bin,
+                    "adapter",
+                    commit=head_commit,
+                    repo_root=fake_repo,
+                    source_root=fake_repo / "daemon-adapter",
+                )
+                resolved = stack.binaries(
+                    work,
+                    env={
+                        "MV_E2E_CORE_BIN": str(core_bin),
+                        "MV_E2E_ADAPTER_BIN": str(adapter_bin),
+                    },
+                    expected_commit=head_commit,
+                )
+                self.assertEqual(resolved["core"], core_bin.resolve(strict=True))
+                self.assertEqual(resolved["adapter"], adapter_bin.resolve(strict=True))
+
+                # 3. Mismatched commit in provenance stamp -> refused with E2E_PREREQ.
+                stack.write_binary_provenance(
+                    core_bin,
+                    "core",
+                    commit=other_commit,
+                    repo_root=fake_repo,
+                )
+                with self.assertRaises(stack.StackError) as ctx_commit_mismatch:
+                    stack.binaries(
+                        work,
+                        env={
+                            "MV_E2E_CORE_BIN": str(core_bin),
+                            "MV_E2E_ADAPTER_BIN": str(adapter_bin),
+                        },
+                        expected_commit=head_commit,
+                    )
+                self.assertEqual(ctx_commit_mismatch.exception.code, "E2E_PREREQ")
+
+                # Restore valid core stamp, then mutate source tree so adapter stamp is stale.
+                stack.write_binary_provenance(
+                    core_bin,
+                    "core",
+                    commit=head_commit,
+                    repo_root=fake_repo,
+                )
+                (fake_repo / "daemon-adapter/main.go").write_text(
+                    "package main\n// mutated source\n", encoding="utf-8"
+                )
+                with self.assertRaises(stack.StackError) as ctx_stale_src:
+                    stack.binaries(
+                        work,
+                        env={
+                            "MV_E2E_CORE_BIN": str(core_bin),
+                            "MV_E2E_ADAPTER_BIN": str(adapter_bin),
+                        },
+                        expected_commit=head_commit,
+                    )
+                self.assertEqual(ctx_stale_src.exception.code, "E2E_PREREQ")
+
+    def test_t8_r3_15_wait_verify_preserves_top_level_input_mono_ns_without_native_evidence(
+        self,
+    ) -> None:
+        peer = InjectedDemoPeer()
+        peer.wait_verify_override = {
+            "input_mono_ns": 9001,
+            "executed_at_ns": 101,
+            "focus_verified": True,
+        }
+        out = io.StringIO()
+        receipt = run_demo_agent_drive(
+            peer,
+            peer.surface_id,
+            read_fn=peer.make_reader(),
+            out_stream=out,
+            env={},
+        )
+        lines = [json.loads(line) for line in out.getvalue().strip().splitlines()]
+        validate_transcript_and_receipt(lines, receipt)
+        wait_rec = lines[6]
+        self.assertEqual(wait_rec["checkpoint"], "wait_verify")
+        self.assertEqual(wait_rec["input_mono_ns"], 9001)
+        self.assertNotEqual(wait_rec["input_mono_ns"], 101)
+        self.assertEqual(wait_rec["receipt"]["executed_at_ns"], 101)
+        self.assertNotIn("native_evidence", wait_rec["receipt"])
+
+        # Negative control: if wait_verify returns a plain dict lacking both
+        # top-level input_mono_ns and nested native_evidence, demo_agent_drive
+        # refuses rather than relabeling executed_at_ns=101 as input_mono_ns.
+        bad_peer = InjectedDemoPeer()
+        bad_out = io.StringIO()
+
+        def stripped_wait_verify(proposal_id, expectation, timeout_ms, *, client, surface_id=None):
+            res = demo_agent_drive.tools._VerifiedReceipt(
+                {
+                    "schema": "action_receipt/v0.2",
+                    "proposal_id": proposal_id,
+                    "executed_at_ns": 101,
+                    "after_frame": bad_peer.current_frame(),
+                    "verified": True,
+                    "verification": {"method": "pixel", "detail": "changed_region verified"},
+                    "error": "",
+                },
+                focus_verified=True,
+                input_mono_ns=9001,
+                frame_sha256=bad_peer.current_frame()["sha256"],
+            )
+            plain = dict(res)
+            return plain
+
+        with patch.object(demo_agent_drive.tools, "wait_verify", side_effect=stripped_wait_verify):
+            with self.assertRaises(RuntimeError) as blk:
+                run_demo_agent_drive(
+                    bad_peer,
+                    bad_peer.surface_id,
+                    read_fn=bad_peer.make_reader(),
+                    out_stream=bad_out,
+                    env={},
+                )
+            self.assertEqual(blk.exception.partial_receipt["failed_checkpoint"], "wait_verify")
+            self.assertIn("input_mono_ns", blk.exception.partial_receipt["error"])
 
 
 if __name__ == "__main__":

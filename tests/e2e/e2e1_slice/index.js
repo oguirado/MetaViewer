@@ -14,6 +14,12 @@ function requireLive(env = process.env) {
     if (!env[key]) throw new E2EError('E2E_PREREQ', `LIVE requires ${key}`);
   }
 }
+function liveChildEnv(env = process.env, verifier) {
+  const childEnv = { ...env };
+  delete childEnv.PYTHONOPTIMIZE;
+  if (verifier !== undefined) childEnv.MV_E2E_VERIFY_BIN = verifier;
+  return childEnv;
+}
 function live() {
   requireLive();
   const scratch = makeScratch('mv-live-verify');
@@ -21,7 +27,7 @@ function live() {
     const verifier = compileRust(scratch, readFileSync(join(__dirname, 'verify-receipt.rs'), 'utf8'));
     const result = spawnSync(process.env.PYTHON || 'python3',
       [join(__dirname, 'live.py')], { encoding: 'utf8', timeout: 120000,
-        env: { ...process.env, MV_E2E_VERIFY_BIN: verifier } });
+        env: liveChildEnv(process.env, verifier) });
     if (result.error) throw result.error;
     if (!result.stdout.trim()) throw new E2EError('E2E_LIVE', result.stderr || 'probe returned no evidence');
     const report = JSON.parse(result.stdout);
@@ -46,6 +52,8 @@ function checkLiveResult(report, status) {
       || report.verify_negative_control?.baseline?.verified !== true
       || report.verify_negative_control?.different_surface?.verified !== false
       || report.verify_negative_control?.stale_generation?.verified !== false
+      || (report.assertions?.release_stale_before_refresh !== undefined
+          && report.assertions.release_stale_before_refresh !== 'PASS')
       || required.some(key => report.assertions?.[key] !== 'PASS'))) {
     throw new E2EError('E2E_LIVE', 'DONE requires every LIVE assertion and cleanup to pass');
   }
@@ -88,7 +96,7 @@ function hosted(externalScratch) {
     if (!externalScratch) removeScratch(scratch);
   }
 }
-module.exports = { hosted, requireLive, live, checkLiveResult };
+module.exports = { hosted, requireLive, live, liveChildEnv, checkLiveResult };
 if (require.main === module) {
   try {
     const result = process.argv.includes('--live') ? live() : hosted();

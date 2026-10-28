@@ -29,6 +29,14 @@ INNER_HOST_NATIVE_KIND = "program"
 INNER_HOST_PROGRAM = "metaviewer-nested"
 INNER_HOST_GEOMETRY = {"w": 1280, "h": 720}
 ADMITTED_PROGRAMS = frozenset({"notepad", INNER_HOST_PROGRAM})
+PROVENANCE_SCHEMA = "metaviewer.binary-provenance/v1"
+COMMIT_HEX_RE = re.compile(r"^[0-9a-f]{40}$")
+EMBEDDED_COMMIT_RE = re.compile(
+    rb"(?:MV_PROVENANCE_COMMIT=|MV_COMPONENT_COMMIT=|vcs\.revision=|GIT_COMMIT=)([0-9a-f]{40})\b"
+)
+EMBEDDED_SOURCE_SHA_RE = re.compile(
+    rb"MV_PROVENANCE_SOURCE_SHA256=([0-9a-f]{64})\b"
+)
 sys.path.insert(0, str(ROOT / "agents"))
 from metaviewer_agents.client import CoreClient  # noqa: E402
 from metaviewer_agents.envelope import (  # noqa: E402
@@ -36,6 +44,287 @@ from metaviewer_agents.envelope import (  # noqa: E402
     make_envelope,
     validate_envelope,
 )
+
+
+class StackError(RuntimeError, AssertionError):
+    """[TARGET, unit decision] Typed preflight, provenance, and oracle error."""
+
+    def __init__(self, code, message=None):
+        if message is None:
+            message = str(code)
+            code = "E2E_PREREQ"
+        self.code = str(code)
+        self.detail = str(message)
+        super().__init__(f"{self.code}: {self.detail}")
+
+
+def _require(condition, message, code="E2E_PREREQ"):
+    if not condition:
+        raise StackError(code, message)
+
+
+def binary_provenance_path(binary):
+    return Path(f"{Path(binary)}.provenance.json")
+
+
+def _binary_stamp_candidates(binary):
+    path = Path(binary)
+    return (
+        Path(f"{path}.provenance.json"),
+        Path(f"{path}.stamp.json"),
+    )
+
+
+def _iter_role_source_files(role, *, repo_root=None, source_root=None):
+    repo = Path(ROOT if repo_root is None else repo_root)
+    if role == "core":
+        base = Path(source_root) if source_root is not None else (repo / "core")
+        if not base.is_dir():
+            return base, []
+        files = []
+        for meta in ("Cargo.toml", "Cargo.lock"):
+            candidate = base / meta
+            if candidate.is_file():
+                files.append(candidate)
+        src_root = base / "src" if (base / "src").is_dir() else base
+        files.extend(
+            p
+            for p in src_root.rglob("*.rs")
+            if p.is_file() and "target" not in p.parts
+        )
+        return base, sorted(set(files))
+    if role == "adapter":
+        base = Path(source_root) if source_root is not None else (repo / "daemon-adapter")
+        if not base.is_dir():
+            return base, []
+        files = []
+        for meta in ("go.mod", "go.sum"):
+            candidate = base / meta
+            if candidate.is_file():
+                files.append(candidate)
+        files.extend(p for p in base.rglob("*.go") if p.is_file())
+        return base, sorted(set(files))
+    raise StackError("E2E_PREREQ", f"unsupported binary provenance role: {role!r}")
+
+
+def compute_source_tree_sha256(role, *, repo_root=None, source_root=None):
+    base, files = _iter_role_source_files(
+        role,
+        repo_root=repo_root,
+        source_root=source_root,
+    )
+    hasher = hashlib.sha256()
+    for path in files:
+        try:
+            rel = path.relative_to(base).as_posix()
+        except ValueError:
+            rel = path.name
+        file_sha = hashlib.sha256(path.read_bytes()).hexdigest()
+        hasher.update(f"{rel}:{file_sha}\n".encode("utf-8"))
+    return hasher.hexdigest()
+
+
+def resolve_head_commit(repo_root=None, checked_fn=None):
+    repo = Path(ROOT if repo_root is None else repo_root)
+    if checked_fn is not None:
+        try:
+            out = str(checked_fn(["git", "rev-parse", "HEAD"], cwd=repo)).strip()
+            if COMMIT_HEX_RE.fullmatch(out):
+                return out
+        except Exception:
+            pass
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    commit = result.stdout.strip()
+    if result.returncode != 0 or not COMMIT_HEX_RE.fullmatch(commit):
+        raise StackError("E2E_PREREQ", "git rev-parse HEAD unavailable for binary provenance")
+    return commit
+
+
+def write_binary_provenance(
+    binary,
+    role,
+    *,
+    commit=None,
+    repo_root=None,
+    source_root=None,
+):
+    path = Path(binary)
+    if not path.is_file():
+        raise StackError("E2E_PREREQ", f"{role} binary missing: {path}")
+    resolved_commit = (
+        resolve_head_commit(repo_root=repo_root)
+        if commit is None
+        else str(commit).strip()
+    )
+    if not COMMIT_HEX_RE.fullmatch(resolved_commit):
+        raise StackError("E2E_PREREQ", f"invalid provenance commit: {resolved_commit!r}")
+    source_sha = compute_source_tree_sha256(
+        role,
+        repo_root=repo_root,
+        source_root=source_root,
+    )
+    binary_sha = hashlib.sha256(path.read_bytes()).hexdigest()
+    stamp = {
+        "schema": PROVENANCE_SCHEMA,
+        "role": role,
+        "commit": resolved_commit,
+        "source_sha256": source_sha,
+        "binary_sha256": binary_sha,
+    }
+    stamp_path = binary_provenance_path(path)
+    stamp_path.write_text(json.dumps(stamp, sort_keys=True) + "\n", encoding="utf-8")
+    return stamp
+
+
+def has_explicit_provenance_marker(binary):
+    path = Path(binary)
+    for candidate in _binary_stamp_candidates(path):
+        if candidate.exists() or candidate.is_symlink():
+            return True
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return False
+    return bool(
+        EMBEDDED_COMMIT_RE.search(data) or EMBEDDED_SOURCE_SHA_RE.search(data)
+    )
+
+
+def verify_binary_provenance(
+    binary,
+    role,
+    *,
+    expected_commit=None,
+    repo_root=None,
+    source_root=None,
+):
+    if role not in ("core", "adapter"):
+        raise StackError("E2E_PREREQ", f"unsupported binary role: {role!r}")
+    path = Path(binary)
+    if not path.is_file() or not os.access(path, os.X_OK):
+        raise StackError("E2E_PREREQ", f"{role} executable AUSENTE: {path}")
+    commit = (
+        resolve_head_commit(repo_root=repo_root)
+        if expected_commit is None
+        else str(expected_commit).strip()
+    )
+    if not COMMIT_HEX_RE.fullmatch(commit):
+        raise StackError("E2E_PREREQ", f"invalid expected commit for {role}: {commit!r}")
+    try:
+        stat_info = path.stat()
+        data = path.read_bytes()
+    except OSError as exc:
+        raise StackError("E2E_PREREQ", f"unreadable {role} binary {path}: {exc}") from exc
+    actual_binary_sha = hashlib.sha256(data).hexdigest()
+    _, source_files = _iter_role_source_files(
+        role,
+        repo_root=repo_root,
+        source_root=source_root,
+    )
+    expected_source_sha = compute_source_tree_sha256(
+        role,
+        repo_root=repo_root,
+        source_root=source_root,
+    )
+    newest_src_ns = max(
+        (p.stat().st_mtime_ns for p in source_files if p.is_file()),
+        default=0,
+    )
+    if role == "adapter" and b"\xff Go buildinf:" in data:
+        if (
+            b"PublishIfChanged" not in data
+            or b"DeduplicateUnchanged" not in data
+            or b"PublishForced" not in data
+        ):
+            raise StackError(
+                "E2E_PREREQ",
+                f"adapter binary missing deduplication symbols: {path}",
+            )
+
+    stamp_files = [c for c in _binary_stamp_candidates(path) if c.exists() or c.is_symlink()]
+    if stamp_files:
+        stamp_file = stamp_files[0]
+        try:
+            stamp = json.loads(stamp_file.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise StackError(
+                "E2E_PREREQ",
+                f"malformed {role} provenance stamp {stamp_file}: {exc}",
+            ) from exc
+        if not isinstance(stamp, dict):
+            raise StackError("E2E_PREREQ", f"{role} provenance stamp must be a JSON object")
+        if stamp.get("schema") not in (None, PROVENANCE_SCHEMA):
+            raise StackError(
+                "E2E_PREREQ",
+                f"unsupported {role} provenance schema: {stamp.get('schema')!r}",
+            )
+        if stamp.get("role") not in (None, role):
+            raise StackError(
+                "E2E_PREREQ",
+                f"provenance role mismatch for {role}: {stamp.get('role')!r}",
+            )
+        if stamp.get("commit") != commit:
+            raise StackError(
+                "E2E_PREREQ",
+                f"{role} binary provenance commit mismatch: {stamp.get('commit')!r} != {commit!r}",
+            )
+        if stamp.get("binary_sha256") != actual_binary_sha:
+            raise StackError(
+                "E2E_PREREQ",
+                f"{role} binary sha256 mismatch against provenance stamp: {path}",
+            )
+        if stamp.get("source_sha256") != expected_source_sha:
+            raise StackError(
+                "E2E_PREREQ",
+                f"{role} binary source_sha256 stale or mismatched against current tree",
+            )
+        return {
+            "schema": PROVENANCE_SCHEMA,
+            "role": role,
+            "commit": commit,
+            "source_sha256": expected_source_sha,
+            "binary_sha256": actual_binary_sha,
+        }
+
+    commit_match = EMBEDDED_COMMIT_RE.search(data)
+    source_match = EMBEDDED_SOURCE_SHA_RE.search(data)
+    if commit_match is not None:
+        embedded_commit = commit_match.group(1).decode("ascii")
+        if embedded_commit != commit:
+            raise StackError(
+                "E2E_PREREQ",
+                f"{role} binary embedded commit mismatch: {embedded_commit!r} != {commit!r}",
+            )
+        if source_match is not None:
+            embedded_source = source_match.group(1).decode("ascii")
+            if embedded_source != expected_source_sha:
+                raise StackError(
+                    "E2E_PREREQ",
+                    f"{role} binary embedded source_sha256 stale or mismatched",
+                )
+        elif newest_src_ns > stat_info.st_mtime_ns:
+            raise StackError(
+                "E2E_PREREQ",
+                f"{role} binary is older than current source tree: {path}",
+            )
+        return {
+            "schema": PROVENANCE_SCHEMA,
+            "role": role,
+            "commit": commit,
+            "source_sha256": expected_source_sha,
+            "binary_sha256": actual_binary_sha,
+        }
+
+    raise StackError(
+        "E2E_PREREQ",
+        f"{role} binary lacks verifiable provenance stamp for HEAD {commit}: {path}",
+    )
 
 
 class UIWire:
@@ -336,9 +625,9 @@ def send(peer, reg, config, body):
                 raise RuntimeError(f"duplicate proposal_id: {prop_id}")
             state["active_proposals"].add(prop_id)
     if isinstance(peer, UIWire) and body.get("schema") == "ui_intent/v0.2":
-        assert set(body) == {"schema", "request_id", "op", "params"}
-        assert body["op"] in ("take_control", "release_control")
-        assert set(body["params"]) == {"surface_id"}
+        _require(set(body) == {"schema", "request_id", "op", "params"}, "invalid ui_intent keys")
+        _require(body["op"] in ("take_control", "release_control"), "invalid ui_intent op")
+        _require(set(body["params"]) == {"surface_id"}, "invalid ui_intent params")
         peer.send({"schema": "envelope/v0.2", "msg_id": body["request_id"], "ts_ns": 0,
                    "from": reg["endpoint"], "to": config["core"]["endpoint"],
                    "session_id": config["session_id"], "seq": peer.next_seq,
@@ -361,7 +650,7 @@ def replay_probe(report, archive, replay, scratch):
     expected = digest(state)
     outputs = [run(report, [replay, "--journal", journal, "--witness-root", archive])
                for _ in range(2)]
-    assert all(p.returncode == 0 and p.stdout.strip() == expected for p in outputs), "replay digest mismatch"
+    _require(all(p.returncode == 0 and p.stdout.strip() == expected for p in outputs), "replay digest mismatch")
     # Replay requires private state/sessions/archive directories even for copies.
     bad_state = scratch / "corrupt-state"
     bad_state.mkdir(mode=0o700)
@@ -374,7 +663,7 @@ def replay_probe(report, archive, replay, scratch):
     lines[-1] = json.dumps(record, separators=(",", ":"))
     (bad / "journal.jsonl").write_text("\n".join(lines) + "\n")
     corrupt = run(report, [replay, "--journal", bad / "journal.jsonl", "--witness-root", bad])
-    assert corrupt.returncode != 0 and not corrupt.stdout.strip(), "corrupt journal accepted"
+    _require(corrupt.returncode != 0 and not corrupt.stdout.strip(), "corrupt journal accepted")
     report["replay_probe"] = {"status": "PASS", "digest": expected,
                                "committed_records": record_count,
                                "corrupt_rc": corrupt.returncode,
@@ -507,30 +796,33 @@ def release_stale_probe(
         report,
         schemas=("action_verdict/v0.2",),
     )
-    assert (
-        stale.get("decision") == "refused" and stale.get("reason_code") == "STALE_FRAME"
-    ), f"pre-refresh frame after release was not refused with STALE_FRAME: {stale}"
+    _require(
+        stale.get("decision") == "refused" and stale.get("reason_code") == "STALE_FRAME",
+        f"pre-refresh frame after release was not refused with STALE_FRAME: {stale}",
+    )
     after_domain = domain(snapshot(archive))
-    assert before_domain == after_domain, "post-release stale refusal mutated domain state"
+    _require(before_domain == after_domain, "post-release stale refusal mutated domain state")
     core_seq = stale["core_seq"]
     event_path = archive / "events" / f"{core_seq}.json"
-    assert event_path.is_file(), f"missing journal event for stale core_seq {core_seq}"
+    _require(event_path.is_file(), f"missing journal event for stale core_seq {core_seq}")
     event_doc = json.loads(event_path.read_text())
     outcome = event_doc.get("outcome", {})
-    assert outcome.get("reason") == "STALE_FRAME", f"unexpected stale outcome reason: {outcome}"
-    assert outcome.get("dispatch") is False, "stale proposal outcome must not dispatch"
+    _require(outcome.get("reason") == "STALE_FRAME", f"unexpected stale outcome reason: {outcome}")
+    _require(outcome.get("dispatch") is False, "stale proposal outcome must not dispatch")
     records = [
         json.loads(line)
         for line in (archive / "journal.jsonl").read_text().splitlines()[1:]
         if line.strip()
     ]
     matching = [r for r in records if r.get("core_seq") == core_seq]
-    assert len(matching) == 1 and matching[0].get("kind") == "refused", (
-        f"stale proposal journal record must be refused: {matching}"
+    _require(
+        len(matching) == 1 and matching[0].get("kind") == "refused",
+        f"stale proposal journal record must be refused: {matching}",
     )
     if before_native is not None:
-        assert Path(native_actions_path).read_bytes() == before_native, (
-            "stale proposal dispatched native actions"
+        _require(
+            Path(native_actions_path).read_bytes() == before_native,
+            "stale proposal dispatched native actions",
         )
     report.setdefault("assertions", {})["release_stale_before_refresh"] = "PASS"
     report["release_stale_evidence"] = {
@@ -555,15 +847,17 @@ def verify_expiry_recovery(
     proposal_id="live-expired-frame",
 ):
     expired_path = Path(expired_path)
-    assert not expired_path.exists(), f"expired publication still present: {expired_path}"
+    _require(not expired_path.exists(), f"expired publication still present: {expired_path}")
     for body in report.get("wire_evidence", ()):
         if body.get("event") == "frame_ready":
             ref = body.get("data", {}).get("frame_ref", {})
-            assert ref.get("ramws_path") != str(expired_path), (
-                "expired publication ramws_path reached UI/agent wire evidence"
+            _require(
+                ref.get("ramws_path") != str(expired_path),
+                "expired publication ramws_path reached UI/agent wire evidence",
             )
-            assert ref.get("generation") != expired_gen, (
-                "expired publication generation reached UI/agent wire evidence"
+            _require(
+                ref.get("generation") != expired_gen,
+                "expired publication generation reached UI/agent wire evidence",
             )
     admitted_shas = set()
     for event_file in sorted((archive / "events").glob("*.json"), key=lambda p: int(p.stem)):
@@ -571,14 +865,16 @@ def verify_expiry_recovery(
         surf = doc.get("state", {}).get("surfaces", {}).get(surface_id, {})
         frame = surf.get("frame")
         if isinstance(frame, dict):
-            assert frame.get("generation") != expired_gen, (
-                f"expired generation {expired_gen} committed in authority state"
+            _require(
+                frame.get("generation") != expired_gen,
+                f"expired generation {expired_gen} committed in authority state",
             )
             if isinstance(frame.get("sha256"), str):
                 admitted_shas.add(frame["sha256"])
     if expired_sha256 and expired_sha256 not in admitted_shas:
-        assert not (archive / "artifacts" / expired_sha256).exists(), (
-            "expired publication pixels were retained as an authority witness"
+        _require(
+            not (archive / "artifacts" / expired_sha256).exists(),
+            "expired publication pixels were retained as an authority witness",
         )
     send(
         agent,
@@ -596,21 +892,24 @@ def verify_expiry_recovery(
         report,
         schemas=("action_verdict/v0.2",),
     )
-    assert (
+    _require(
         refused.get("decision") == "refused"
-        and refused.get("reason_code") == "STALE_FRAME"
-    ), f"expired publication proposal was not refused with STALE_FRAME: {refused}"
+        and refused.get("reason_code") == "STALE_FRAME",
+        f"expired publication proposal was not refused with STALE_FRAME: {refused}",
+    )
     current_state = snapshot(archive)
-    assert current_state["epoch"] == epoch_before, "expired publication retired daemon epoch"
-    assert recovered_frame["generation"] > expired_gen, (
-        "recovered frame generation did not advance past expired publication"
+    _require(current_state["epoch"] == epoch_before, "expired publication retired daemon epoch")
+    _require(
+        recovered_frame["generation"] > expired_gen,
+        "recovered frame generation did not advance past expired publication",
     )
     ui_pixels = Path(recovered_frame["ramws_path"]).read_bytes()
-    assert hashlib.sha256(ui_pixels).hexdigest() == recovered_frame["sha256"], (
-        "recovered frame digest mismatch"
+    _require(
+        hashlib.sha256(ui_pixels).hexdigest() == recovered_frame["sha256"],
+        "recovered frame digest mismatch",
     )
     retained = (archive / "artifacts" / recovered_frame["sha256"]).read_bytes()
-    assert retained == ui_pixels, "recovered frame retained witness mismatch"
+    _require(retained == ui_pixels, "recovered frame retained witness mismatch")
     report.setdefault("assertions", {})["expired_publication_recovery"] = "PASS"
     report["expiry_recovery"] = {
         "status": "PASS",
@@ -677,7 +976,7 @@ def expiry_recovery_probe(report, ui, agent, regs, config, surface_id, baseline_
         },
     )
     current = receive(agent, lambda b: b.get("request_id") == "observe-refresh", report)
-    assert current.get("status") == "ok", "post-release observe refused: " + str(current)
+    _require(current.get("status") == "ok", "post-release observe refused: " + str(current))
     recovered = current["observation"]["frame_ref"]
     ui_recovered = receive(
         ui,
@@ -685,7 +984,7 @@ def expiry_recovery_probe(report, ui, agent, regs, config, surface_id, baseline_
         and b["data"]["frame_ref"]["generation"] == recovered["generation"],
         report,
     )["data"]["frame_ref"]
-    assert ui_recovered == recovered, "post-expiry UI/agent fresh frame mismatch"
+    _require(ui_recovered == recovered, "post-expiry UI/agent fresh frame mismatch")
     return verify_expiry_recovery(
         report,
         agent,
@@ -707,12 +1006,14 @@ def verify_probe(report, agent, reg, config, action, frame, receipt, archive, sc
                                  "proposal_id": action["proposal_id"], "timeout_ms": 10000}})
     verdict = receive(agent, lambda b: b.get("request_id") == "verify-live", report)
     report["verify_verdict"] = verdict
-    assert verdict.get("status") == "verified" and verdict.get("receipt", {}).get("verified") is True, (
-        "positive wait_verify failed: " + json.dumps(verdict, sort_keys=True))
-    assert verdict["receipt"]["proposal_id"] == receipt["proposal_id"], "verification correlation mismatch"
-    assert verdict["focus_verified"] is True, "verification lacks focus proof"
-    assert verdict["input_mono_ns"] == receipt["native_evidence"]["input_mono_ns"], "input witness mismatch"
-    assert verdict["frame_sha256"] == receipt["after_frame"]["sha256"], "verified frame mismatch"
+    _require(
+        verdict.get("status") == "verified" and verdict.get("receipt", {}).get("verified") is True,
+        "positive wait_verify failed: " + json.dumps(verdict, sort_keys=True),
+    )
+    _require(verdict["receipt"]["proposal_id"] == receipt["proposal_id"], "verification correlation mismatch")
+    _require(verdict["focus_verified"] is True, "verification lacks focus proof")
+    _require(verdict["input_mono_ns"] == receipt["native_evidence"]["input_mono_ns"], "input witness mismatch")
+    _require(verdict["frame_sha256"] == receipt["after_frame"]["sha256"], "verified frame mismatch")
     report["assertions"]["observe_propose_dispatch_receipt"] = "PASS"
     # [TARGET, unit decision] The frozen wait call has no surface/generation
     # override. Apply the public core verifier to this SAME real receipt and
@@ -720,9 +1021,9 @@ def verify_probe(report, agent, reg, config, action, frame, receipt, archive, sc
     fixture = scratch / "verify-context.json"
     fixture.write_text(json.dumps({"proposal": action, "before": frame, "receipt": receipt}))
     result = run(report, [os.environ["MV_E2E_VERIFY_BIN"], fixture, archive / "artifacts"])
-    assert result.returncode == 0, "receipt binding negative control failed: " + result.stderr
+    _require(result.returncode == 0, "receipt binding negative control failed: " + result.stderr)
     report["verify_negative_control"] = json.loads(result.stdout)
-    assert report["verify_negative_control"]["status"] == "PASS", "negative verifier did not pass"
+    _require(report["verify_negative_control"]["status"] == "PASS", "negative verifier did not pass")
     report["assertions"]["receipt_binding_negative_control"] = "PASS"
 
 
@@ -738,7 +1039,7 @@ def electron_probe(report, scratch, frame, surface):
                           "--user-data-dir=" + str(scratch / "electron-profile")], env=child_env)
     report["electron_relay"] = {"rc": result.returncode, "stdout": result.stdout.strip()}
     report["assertions"]["electron_tile"] = "FAIL" if result.returncode else "PASS"
-    assert result.returncode == 0, "Electron relay: " + result.stdout.strip()
+    _require(result.returncode == 0, "Electron relay: " + result.stdout.strip())
 
 
 def main():
@@ -756,14 +1057,25 @@ def main():
             if os.environ.get("MV_E2E_LIVE") != "1" or profile != "mv-live-1":
                 raise RuntimeError("explicit MV_E2E_LIVE=1 and mv-live-1 profile required")
             before = run(report, ["docker", "ps", "--format", "{{.Names}}"])
-            assert before.returncode == 0, "docker inventory unavailable"
-            assert not profile_containers(profile), "profile already allocated; refusing to touch it"
-            assert not any(profile in name for name in before.stdout.splitlines()), "profile already running; refusing to touch it"
+            _require(before.returncode == 0, "docker inventory unavailable")
+            _require(not profile_containers(profile), "profile already allocated; refusing to touch it")
+            _require(not any(profile in name for name in before.stdout.splitlines()), "profile already running; refusing to touch it")
             ram_root = Path(os.environ["MV_SRF_LIVE_RAM_ROOT"]).resolve(strict=True)
             commit = run(report, ["git", "rev-parse", "HEAD"], cwd=ROOT)
-            assert commit.returncode == 0, "build pin unavailable"
+            _require(commit.returncode == 0, "build pin unavailable")
+            head_commit = commit.stdout.strip()
+            verified_binaries = {}
+            for name, key in (("core", "MV_E2E_CORE_BIN"), ("adapter", "MV_E2E_ADAPTER_BIN")):
+                resolved_bin = Path(os.environ[key]).resolve(strict=True)
+                verify_binary_provenance(
+                    resolved_bin,
+                    name,
+                    expected_commit=head_commit,
+                    repo_root=ROOT,
+                )
+                verified_binaries[name] = str(resolved_bin)
             suffix = uuid.uuid4().hex
-            regs = {c: registration(c, commit.stdout.strip(), suffix) for c in ("core", "ui", "agent", "daemon")}
+            regs = {c: registration(c, head_commit, suffix) for c in ("core", "ui", "agent", "daemon")}
             config = {"session_id": "gw1-" + suffix, "core": regs["core"],
                       "peers": [regs[c] for c in ("ui", "agent", "daemon")]}
             config_file = scratch / "core-config.json"
@@ -773,13 +1085,13 @@ def main():
                        MV_SESSION_ID=config["session_id"],
                        MV_CORE_INSTANCE=regs["core"]["endpoint"]["instance"],
                        MV_DAEMON_INSTANCE=regs["daemon"]["endpoint"]["instance"],
-                       MV_COMPONENT_COMMIT=commit.stdout.strip(), MV_SRF_PROFILES="",
+                       MV_COMPONENT_COMMIT=head_commit, MV_SRF_PROFILES="",
                        MV_CONTRACT_DIR=str(ROOT / "contracts/v0.2"))
             (scratch / "runtime").mkdir(mode=0o700)
             socket_path = scratch / "runtime/metaviewer/core.sock"
             logs = []
-            for name, key in (("core", "MV_E2E_CORE_BIN"), ("adapter", "MV_E2E_ADAPTER_BIN")):
-                binary = str(Path(env[key]).resolve(strict=True))
+            for name, _key in (("core", "MV_E2E_CORE_BIN"), ("adapter", "MV_E2E_ADAPTER_BIN")):
+                binary = verified_binaries[name]
                 log = open(scratch / (name + ".log"), "w+")
                 logs.append(log)
                 proc = subprocess.Popen([binary], cwd=ROOT, env=env, stdout=log, stderr=log)
@@ -798,7 +1110,7 @@ def main():
                     peer.connect()
                 send(peer, regs[role], config, regs[role]["hello"])
                 hello_reply = peer.recv()
-                assert hello_reply["body"] == regs["core"]["hello"], "core pin mismatch"
+                _require(hello_reply["body"] == regs["core"]["hello"], "core pin mismatch")
                 lane = _lane_state(peer)
                 lane["inbound_seq"] = hello_reply["seq"]
                 lane["seen_msg_ids"].add(hello_reply["msg_id"])
@@ -811,13 +1123,13 @@ def main():
             created = receive(ui, lambda b: b.get("event") == "created", report)
             surface_id = created["data"]["surface"]["surface_id"]
             owned = profile_containers(profile) - set(before.stdout.splitlines())
-            assert owned, "native capsule ownership witness absent"
+            _require(bool(owned), "native capsule ownership witness absent")
             report["owned_containers"] = sorted(owned)
             frame_body = receive(ui, lambda b: b.get("event") == "frame_ready", report)
             frame = frame_body["data"]["frame_ref"]
             pixels = Path(frame["ramws_path"]).read_bytes()
-            assert hashlib.sha256(pixels).hexdigest() == frame["sha256"], "UI frame bytes mismatch"
-            assert (archive / "artifacts" / frame["sha256"]).read_bytes() == pixels, "retained witness mismatch"
+            _require(hashlib.sha256(pixels).hexdigest() == frame["sha256"], "UI frame bytes mismatch")
+            _require((archive / "artifacts" / frame["sha256"]).read_bytes() == pixels, "retained witness mismatch")
             report["frame_witness"] = {"sha256": frame["sha256"], "generation": frame["generation"],
                                        "bytes": len(pixels), "surface_id": surface_id}
             report["assertions"]["capsule_frame_ui_fanout"] = "PASS"
@@ -827,7 +1139,7 @@ def main():
             observed = receive(agent, lambda b: b.get("schema") in
                                ("mv_tool_result/v0.2", "action_verdict/v0.2"), report)
             report["observe_response"] = observed
-            assert observed.get("schema") == "mv_tool_result/v0.2" and observed.get("status") == "ok", "observe refused: " + str(observed)
+            _require(observed.get("schema") == "mv_tool_result/v0.2" and observed.get("status") == "ok", "observe refused: " + str(observed))
             # [TARGET, unit decision] F6 changes browser focus visibly. Verify
             # retained pixels, rather than requesting unavailable OCR evidence.
             action = proposal(surface_id, frame, "live-action-1")
@@ -836,7 +1148,7 @@ def main():
                 "x": 0, "y": 0, "w": frame["width"], "h": frame["height"]}}
             send(agent, regs["agent"], config, action)
             verdict = receive(agent, lambda b: b.get("proposal_id") == "live-action-1", report)
-            assert verdict.get("decision") == "admitted", "fresh action refused: " + str(verdict)
+            _require(verdict.get("decision") == "admitted", "fresh action refused: " + str(verdict))
             receipt = receive(agent, lambda b: b.get("schema") == "action_receipt/v0.2"
                               and b.get("proposal_id") == "live-action-1", report)
             report["action_receipt"] = receipt
@@ -848,9 +1160,9 @@ def main():
             before_state = domain(snapshot(archive))
             send(agent, regs["agent"], config, proposal(surface_id, frame, "live-stale"))
             stale = receive(agent, lambda b: b.get("proposal_id") == "live-stale", report)
-            assert stale.get("reason_code") == "STALE_FRAME", "stale frame accepted"
+            _require(stale.get("reason_code") == "STALE_FRAME", "stale frame accepted")
             after_state = domain(snapshot(archive))
-            assert before_state == after_state, "stale refusal changed domain state"
+            _require(before_state == after_state, "stale refusal changed domain state")
             report["assertions"]["stale_no_state_change"] = "PASS"
             report["stale_evidence"] = {"verdict": stale, "domain_sha256": digest(after_state)}
             # [TARGET, unit decision] Pause only our real adapter to hold a
@@ -859,12 +1171,12 @@ def main():
             report["commands"].append({"argv": ["signal", "SIGSTOP", "owned-adapter"], "rc": 0})
             send(agent, regs["agent"], config, proposal(surface_id, advanced, "live-pending"))
             pending = receive(agent, lambda b: b.get("proposal_id") == "live-pending", report)
-            assert pending.get("decision") == "admitted", "pending action not admitted"
+            _require(pending.get("decision") == "admitted", "pending action not admitted")
             send(ui, regs["ui"], config, {"schema": "ui_intent/v0.2", "request_id": "take-1",
                                           "op": "take_control", "params": {"surface_id": surface_id}})
             cancelled = receive(agent, lambda b: b.get("proposal_id") == "live-pending", report)
-            assert cancelled.get("reason_code") == "SURFACE_NOT_AGENT_CONTROLLED", "pending not cancelled"
-            assert not snapshot(archive)["pending"], "take_control retained pending action"
+            _require(cancelled.get("reason_code") == "SURFACE_NOT_AGENT_CONTROLLED", "pending not cancelled")
+            _require(not snapshot(archive)["pending"], "take_control retained pending action")
             report["pending_cancellation"] = cancelled
             report["assertions"]["pending_cancellation"] = "PASS"
             processes[1].send_signal(signal.SIGCONT)
@@ -875,7 +1187,7 @@ def main():
                     and b.get("proposal_id") == "live-pending", report)
             send(agent, regs["agent"], config, proposal(surface_id, advanced, "live-human"))
             human = receive(agent, lambda b: b.get("proposal_id") == "live-human", report)
-            assert human.get("reason_code") == "SURFACE_NOT_AGENT_CONTROLLED", "human ownership not enforced"
+            _require(human.get("reason_code") == "SURFACE_NOT_AGENT_CONTROLLED", "human ownership not enforced")
             report["human_refusal"] = human
             send(ui, regs["ui"], config, {"schema": "ui_intent/v0.2", "request_id": "release-1",
                                           "op": "release_control", "params": {"surface_id": surface_id}})
@@ -892,7 +1204,7 @@ def main():
                 if refresh.get("event") == "error":
                     raise RuntimeError(json.dumps(refresh, sort_keys=True))
                 fresh = receive(agent, lambda b: b.get("event") == "frame_ready", report)["data"]["frame_ref"]
-                assert fresh == refresh["data"]["frame_ref"], "refresh fan-out mismatch"
+                _require(fresh == refresh["data"]["frame_ref"], "refresh fan-out mismatch")
                 # [TARGET, unit decision] Expire one subscribed publication past
                 # the 2-generation lease window while core is held, then verify
                 # core drops the expired publication, keeps the daemon, and
@@ -902,7 +1214,7 @@ def main():
                 )
                 send(agent, regs["agent"], config, proposal(surface_id, fresh, "live-readmitted"))
                 admitted = receive(agent, lambda b: b.get("proposal_id") == "live-readmitted", report)
-                assert admitted.get("decision") == "admitted", "fresh post-release action refused: " + str(admitted)
+                _require(admitted.get("decision") == "admitted", "fresh post-release action refused: " + str(admitted))
                 processes[1].send_signal(signal.SIGCONT)
                 report["commands"].append({"argv": ["signal", "SIGCONT", "owned-adapter"], "rc": 0})
                 receive(agent, lambda b: b.get("schema") == "action_receipt/v0.2"
@@ -918,7 +1230,7 @@ def main():
             send(agent, regs["agent"], config, {"schema": "mv_tool_call/v0.2",
                 "request_id": "replay-barrier", "op": "observe", "args": {"surface_id": surface_id}})
             barrier = receive(agent, lambda b: b.get("request_id") == "replay-barrier", report)
-            assert barrier.get("status") == "ok", "replay observe barrier refused: " + str(barrier)
+            _require(barrier.get("status") == "ok", "replay observe barrier refused: " + str(barrier))
             processes[0].send_signal(signal.SIGSTOP)
             report["commands"].append({"argv": ["signal", "SIGSTOP", "owned-core"], "rc": 0})
             replay_probe(report, archive, env["MV_E2E_REPLAY_BIN"], scratch)

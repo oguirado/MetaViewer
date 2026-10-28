@@ -752,6 +752,51 @@ def propose(proposal: dict, *, client: ToolClient,
     raise AssertionError("unreachable")
 
 
+class _VerifiedReceipt(dict):
+    """Verified action_receipt/v0.2 dict carrying top-level tool-result witnesses.
+
+    Preserves exact action_receipt/v0.2 dictionary keys for schema/equality
+    checks and JSON serialization while exposing validated top-level
+    ``input_mono_ns``, ``focus_verified``, and ``frame_sha256`` from
+    ``mv_tool_result/v0.2`` via attributes and ``.get()``.
+    """
+
+    def __init__(self, mapping: dict, *, focus_verified: bool,
+                 input_mono_ns: int, frame_sha256: str) -> None:
+        super().__init__(mapping)
+        self.focus_verified = focus_verified
+        self.input_mono_ns = input_mono_ns
+        self.frame_sha256 = frame_sha256
+
+    def get(self, key: str, default: object = None) -> object:
+        if key in self:
+            return super().get(key, default)
+        if key == "focus_verified":
+            return self.focus_verified
+        if key == "input_mono_ns":
+            return self.input_mono_ns
+        if key == "frame_sha256":
+            return self.frame_sha256
+        return default
+
+    def __copy__(self) -> "_VerifiedReceipt":
+        return _VerifiedReceipt(
+            super().copy(),
+            focus_verified=self.focus_verified,
+            input_mono_ns=self.input_mono_ns,
+            frame_sha256=self.frame_sha256,
+        )
+
+    def __deepcopy__(self, memo: dict) -> "_VerifiedReceipt":
+        return _VerifiedReceipt(
+            {copy.deepcopy(k, memo): copy.deepcopy(v, memo)
+             for k, v in self.items()},
+            focus_verified=self.focus_verified,
+            input_mono_ns=self.input_mono_ns,
+            frame_sha256=self.frame_sha256,
+        )
+
+
 def wait_verify(proposal_id: str, expectation: dict, timeout_ms: int,
                 *, client: ToolClient,
                 surface_id: str | None = None) -> dict:
@@ -801,13 +846,27 @@ def wait_verify(proposal_id: str, expectation: dict, timeout_ms: int,
             if receipt["proposal_id"] != want_proposal:
                 _fail("uncorrelated proposal_id")
             _check_const(body["focus_verified"], True, "focus_verified")
-            _check_int(body["input_mono_ns"], minimum=0,
-                       maximum=_MAX_SAFE_INT, what="input_mono_ns")
-            _check_str(body["frame_sha256"], min_length=64, max_length=64,
-                       pattern=_SHA_PATTERN, what="frame_sha256")
-            if body["frame_sha256"] != receipt["after_frame"]["sha256"]:
+            focus_verified = True
+            input_mono_ns = _check_int(
+                body["input_mono_ns"], minimum=0,
+                maximum=_MAX_SAFE_INT, what="input_mono_ns")
+            frame_sha256 = _check_str(
+                body["frame_sha256"], min_length=64, max_length=64,
+                pattern=_SHA_PATTERN, what="frame_sha256")
+            if frame_sha256 != receipt["after_frame"]["sha256"]:
                 _fail("uncorrelated frame_sha256")
-            return copy.deepcopy(receipt)
+            if "native_evidence" in receipt:
+                native_ev = receipt["native_evidence"]
+                if native_ev["input_mono_ns"] != input_mono_ns:
+                    _fail("uncorrelated input_mono_ns")
+                if native_ev.get("focus_verified", True) is not True:
+                    _fail("uncorrelated focus_verified")
+            return _VerifiedReceipt(
+                copy.deepcopy(receipt),
+                focus_verified=focus_verified,
+                input_mono_ns=input_mono_ns,
+                frame_sha256=frame_sha256,
+            )
         if status == "timeout":
             body = _check_exact(
                 head, frozenset({"schema", "request_id", "op", "status",
