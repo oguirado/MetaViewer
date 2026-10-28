@@ -37,6 +37,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import tomllib
 import unittest
@@ -327,6 +328,20 @@ class GateTests(unittest.TestCase):
         self.assertIn('planted agents failure', output)
         self.assertIn('FAIL agents\n', output)
         self.assertIn('FAIL aggregate\n', output)
+        for vacuous in (
+            '',
+            'import unittest\nclass T(unittest.TestCase):\n'
+            ' @unittest.skip("planted skip")\n def test_x(self): pass\n',
+            'import unittest\nclass T(unittest.TestCase):\n'
+            ' @unittest.expectedFailure\n def test_x(self): self.fail("xfail")\n',
+            'import unittest\nclass T(unittest.TestCase):\n'
+            ' @unittest.expectedFailure\n def test_x(self): pass\n',
+        ):
+            self.write('agents/tests/test_witness.py', vacuous)
+            output = self.call('--leg', 'agents', expected=1)
+            self.assertIn('FAIL agents\n', output)
+            self.assertIn('FAIL aggregate\n', output)
+            self.assertNotIn('PASS agents', output)
         shutil.rmtree(self.fixture / 'agents/tests')
         output = self.call('--leg', 'agents', expected=1)
         self.assertIn('missing target: agents/tests', output)
@@ -853,10 +868,12 @@ class GateTests(unittest.TestCase):
     def test_bounded_cleanup(self):
         saved = {key: os.environ.get(key) for key in SANITIZED_ENV_KEYS}
         try:
-            for key in ('LD_PRELOAD', 'LD_LIBRARY_PATH', 'NODE_OPTIONS', 'PYTHONPATH', 'BASH_ENV'):
+            for key in ('LD_PRELOAD', 'LD_LIBRARY_PATH', 'NODE_OPTIONS', 'PYTHONPATH',
+                        'BASH_ENV', 'RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS'):
                 os.environ[key] = '/tmp/planted-injected-value'
             with private_environment() as (_, environment):
-                for key in ('LD_PRELOAD', 'LD_LIBRARY_PATH', 'NODE_OPTIONS', 'PYTHONPATH', 'BASH_ENV'):
+                for key in ('LD_PRELOAD', 'LD_LIBRARY_PATH', 'NODE_OPTIONS', 'PYTHONPATH',
+                            'BASH_ENV', 'RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS'):
                     self.assertNotIn(key, environment)
                 paths = [Path(environment[key]) for key in
                          ('TMPDIR', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_RUNTIME_DIR')]
@@ -924,8 +941,59 @@ class GateTests(unittest.TestCase):
                                          self.fixture, environment, seconds=0.2), 124)
                 for marker_path in (setsid_parent, setsid_grandchild):
                     self.assertFalse(Path('/proc', marker_path.read_text()).exists())
+                # Child exiting 0 after spawning a setsid background sleeper must
+                # still have its reparented sleeper reaped, while unrelated sibling survives.
+                exit0_grandchild = Path(self.temp.name) / 'exit0-setsid-grandchild'
+                exit0_code = (
+                    "import os,pathlib,sys,time\n"
+                    "r, w = os.pipe()\n"
+                    "mid = os.fork()\n"
+                    "if mid == 0:\n"
+                    "    os.close(r)\n"
+                    "    gc = os.fork()\n"
+                    "    if gc == 0:\n"
+                    "        os.setsid()\n"
+                    "        pathlib.Path(sys.argv[1]).write_text(str(os.getpid()))\n"
+                    "        os.close(w)\n"
+                    "        time.sleep(2)\n"
+                    "        os._exit(0)\n"
+                    "    os._exit(0)\n"
+                    "os.close(w)\n"
+                    "os.waitpid(mid, 0)\n"
+                    "os.read(r, 1)\n"
+                    "sys.exit(0)\n"
+                )
+                sentinel = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(2)'],
+                                            start_new_session=True)
+                try:
+                    self.assertEqual(bounded([sys.executable, '-c', exit0_code,
+                                              str(exit0_grandchild)],
+                                             self.fixture, environment, seconds=5), 0)
+                    self.assertTrue(exit0_grandchild.is_file())
+                    self.assertFalse(Path('/proc', exit0_grandchild.read_text().strip()).exists())
+                    self.assertIsNone(sentinel.poll())
+                finally:
+                    sentinel.kill()
+                    sentinel.wait()
+                # Non-LIFO overlapping scopes: Scope A closes before Scope B;
+                # subreaper stays enabled until Scope B closes.
+                libc = ctypes.CDLL(None)
+                scope_a = subreaper_scope()
+                scope_b = subreaper_scope()
+                scope_a.__enter__()
+                scope_b.__enter__()
+                scope_a.__exit__(None, None, None)
                 subreaper = ctypes.c_int(-1)
-                if ctypes.CDLL(None).prctl(37, ctypes.byref(subreaper), 0, 0, 0) == 0:
+                if libc.prctl(37, ctypes.byref(subreaper), 0, 0, 0) == 0:
+                    self.assertEqual(subreaper.value, 1)
+                scope_b_gc = Path(self.temp.name) / 'scope-b-gc'
+                self.assertEqual(bounded([sys.executable, '-c', exit0_code, str(scope_b_gc)],
+                                         self.fixture, environment, seconds=5), 0)
+                self.assertFalse(Path('/proc', scope_b_gc.read_text().strip()).exists())
+                if libc.prctl(37, ctypes.byref(subreaper), 0, 0, 0) == 0:
+                    self.assertEqual(subreaper.value, 1)
+                scope_b.__exit__(None, None, None)
+                if libc.prctl(37, ctypes.byref(subreaper), 0, 0, 0) == 0:
                     self.assertEqual(subreaper.value, 0)
         finally:
             for key, val in saved.items():
@@ -984,10 +1052,114 @@ class GateTests(unittest.TestCase):
             "os.read(r, 1)\n"
             "time.sleep(30)\n",
         )
-        self.assertEqual(ui_smoke_leg(self.fixture, environment, timeout=0.2), 1)
+        self.assertEqual(ui_smoke_leg(self.fixture, environment, timeout=0.2), 124)
         for marker_path in (setsid_parent, setsid_grandchild):
             self.assertTrue(marker_path.is_file())
             self.assertFalse(Path('/proc', marker_path.read_text()).exists())
+        exit0_gc = Path(self.temp.name) / 'smoke-exit0-setsid-gc'
+        self.write(
+            'ui/test/smoke.mjs',
+            "import os,pathlib,time\n"
+            "r, w = os.pipe()\n"
+            "mid = os.fork()\n"
+            "if mid == 0:\n"
+            "    os.close(r)\n"
+            "    gc = os.fork()\n"
+            "    if gc == 0:\n"
+            "        os.setsid()\n"
+            f"        pathlib.Path({str(exit0_gc)!r}).write_text(str(os.getpid()))\n"
+            "        os.close(w)\n"
+            "        time.sleep(2)\n"
+            "        os._exit(0)\n"
+            "    os._exit(0)\n"
+            "os.close(w)\n"
+            "os.waitpid(mid, 0)\n"
+            "os.read(r, 1)\n"
+            "print('METAVIEWER_SMOKE_OK', flush=True)\n",
+        )
+        self.write('ui/test/smoke-main.mjs', 'print("METAVIEWER_MAIN_SMOKE_OK", flush=True)\n')
+        self.assertEqual(ui_smoke_leg(self.fixture, environment, timeout=5), 0)
+        self.assertTrue(exit0_gc.is_file())
+        self.assertFalse(Path('/proc', exit0_gc.read_text().strip()).exists())
+
+    def test_frozen_dependencies_scrubbed_environment(self):
+        bin_dir = Path(self.temp.name) / 'frozen-bin'
+        bin_dir.mkdir()
+        env_log = Path(self.temp.name) / 'frozen-env.jsonl'
+        for tool_name in ('rustc', 'cargo', 'npm'):
+            script = bin_dir / tool_name
+            script.write_text(
+                '#!' + sys.executable + '\n'
+                'import json, os, pathlib, sys\n'
+                f'entry = {{"tool": {tool_name!r}, '
+                '"NODE_OPTIONS": os.environ.get("NODE_OPTIONS"), '
+                '"RUSTFLAGS": os.environ.get("RUSTFLAGS"), '
+                '"CARGO_ENCODED_RUSTFLAGS": os.environ.get("CARGO_ENCODED_RUSTFLAGS"), '
+                '"TMPDIR": os.environ.get("TMPDIR")}\n'
+                f'with open({str(env_log)!r}, "a", encoding="utf-8") as f:\n'
+                '    f.write(json.dumps(entry) + "\\n")\n'
+                'if "-vV" in sys.argv:\n'
+                '    print("rustc 1.97.0\\nhost: aarch64-unknown-linux-gnu")\n'
+            )
+            script.chmod(0o700)
+        saved_node = os.environ.get('NODE_OPTIONS')
+        saved_rust = os.environ.get('RUSTFLAGS')
+        saved_enc = os.environ.get('CARGO_ENCODED_RUSTFLAGS')
+        try:
+            os.environ['NODE_OPTIONS'] = '--poisoned-node-option'
+            os.environ['RUSTFLAGS'] = '-C poisoned-rustflag'
+            os.environ['CARGO_ENCODED_RUSTFLAGS'] = '-C poisoned-encoded'
+            with private_environment() as (_, scrubbed):
+                scrubbed['PATH'] = str(bin_dir) + os.pathsep + scrubbed.get('PATH', '')
+                scrubbed['RUSTC'] = str(bin_dir / 'rustc')
+                scrubbed['CARGO'] = str(bin_dir / 'cargo')
+                scrubbed['NPM'] = str(bin_dir / 'npm')
+                validate_frozen_dependencies(self.fixture, scrubbed)
+                records = [json.loads(line) for line in env_log.read_text().splitlines()]
+                self.assertEqual([r['tool'] for r in records], ['rustc', 'cargo', 'npm'])
+                for rec in records:
+                    self.assertIsNone(rec['NODE_OPTIONS'])
+                    self.assertIsNone(rec['RUSTFLAGS'])
+                    self.assertIsNone(rec['CARGO_ENCODED_RUSTFLAGS'])
+                    self.assertEqual(rec['TMPDIR'], scrubbed['TMPDIR'])
+        finally:
+            for key, val in (('NODE_OPTIONS', saved_node),
+                             ('RUSTFLAGS', saved_rust),
+                             ('CARGO_ENCODED_RUSTFLAGS', saved_enc)):
+                if val is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = val
+
+    def test_leaf_timeout_124_and_precedence(self):
+        environment = self.prepare_build_fixture()
+        bin_dir = Path(self.temp.name) / 'timeout-bin'
+        bin_dir.mkdir()
+        stub = bin_dir / 'stub-tool'
+        stub.write_text(
+            '#!' + sys.executable + '\n'
+            'import os, sys\n'
+            'if "-p" in sys.argv:\n'
+            '    print("24")\n'
+            '    sys.exit(0)\n'
+            'if "--version" in sys.argv:\n'
+            '    sys.exit(0)\n'
+            'sys.exit(int(os.environ.get("MV_STUB_RC", "124")))\n'
+        )
+        stub.chmod(0o700)
+        for key in ('RUSTUP', 'CARGO', 'GO', 'NODE', 'NPM', 'VUE_TSC', 'VITE'):
+            environment[key] = str(stub)
+        with private_environment() as (_, scrubbed):
+            scrubbed.update(environment)
+            scrubbed['MV_STUB_RC'] = '124'
+            self.assertEqual(build_leg('rust', self.fixture, scrubbed), 124)
+            self.assertEqual(build_leg('ui', self.fixture, scrubbed), 124)
+            self.assertEqual(go_leg(self.fixture, scrubbed), 124)
+            # Negative control: normal nonzero exit still maps to 1.
+            scrubbed['MV_STUB_RC'] = '7'
+            self.assertEqual(build_leg('rust', self.fixture, scrubbed), 1)
+            self.assertEqual(build_leg('ui', self.fixture, scrubbed), 1)
+            self.assertEqual(go_leg(self.fixture, scrubbed), 1)
 
 
 def validate_rust_dependencies(table, section):
@@ -1034,7 +1206,13 @@ COMPONENT_PINS = {
 }
 
 
-def validate_frozen_dependencies(root):
+def validate_frozen_dependencies(root, environment=None):
+    if environment is None:
+        with private_environment() as (_, scrubbed):
+            return validate_frozen_dependencies(root, scrubbed)
+    child_env = dict(environment)
+    for key in SANITIZED_ENV_KEYS:
+        child_env.pop(key, None)
     data = json.loads((root / 'deps.lock').read_text())
     require(isinstance(data, dict) and set(data) == {'components'} and
             isinstance(data['components'], list), 'deps.lock: expected component list')
@@ -1066,13 +1244,14 @@ def validate_frozen_dependencies(root):
         require(locked_root.get(key) == package.get(key), 'package-lock.json: stale root ' + key)
     # Cargo resolves only the current host's graph: cross-platform archives need not
     # be present in the offline cache. --locked still checks the full lock resolution.
-    rustc = shutil.which(os.environ.get('RUSTC', 'rustc'))
-    cargo = shutil.which(os.environ.get('CARGO', 'cargo'))
+    rustc = shutil.which(child_env.get('RUSTC', 'rustc'), path=child_env.get('PATH'))
+    cargo = shutil.which(child_env.get('CARGO', 'cargo'), path=child_env.get('PATH'))
     require(rustc is not None and cargo is not None, 'Cargo.lock: missing Rust toolchain')
-    identity = subprocess.run([rustc, '-vV'], capture_output=True, text=True, timeout=30)
+    identity = subprocess.run([rustc, '-vV'], env=child_env,
+                              capture_output=True, text=True, timeout=30)
     host = re.search(r'^host: (\S+)$', identity.stdout, re.MULTILINE)
     require(identity.returncode == 0 and host is not None, 'Cargo.lock: unproven Rust host')
-    npm = shutil.which('npm')
+    npm = shutil.which(child_env.get('NPM', 'npm'), path=child_env.get('PATH'))
     require(npm is not None, 'package-lock.json: missing npm')
     with tempfile.TemporaryDirectory(prefix='metaviewer-frozen-') as temporary:
         scratch = Path(temporary)
@@ -1083,7 +1262,6 @@ def validate_frozen_dependencies(root):
             shutil.copyfile(root / name, target)
         (scratch / 'core/src').mkdir()
         (scratch / 'core/src/lib.rs').write_text('')
-        environment = os.environ.copy()
         commands = (
             ('Cargo.lock', [cargo, 'metadata', '--offline', '--locked', '--format-version', '1',
                             '--filter-platform', host.group(1)], scratch),
@@ -1091,13 +1269,13 @@ def validate_frozen_dependencies(root):
                                   '--no-audit', '--no-fund'], scratch / 'ui'),
         )
         for name, command, directory in commands:
-            result = subprocess.run(command, cwd=directory, env=environment,
+            result = subprocess.run(command, cwd=directory, env=child_env,
                                     capture_output=True, text=True, timeout=60)
             require(result.returncode == 0, name + ': frozen offline resolution failed: ' +
                     (result.stderr + result.stdout)[-4000:])
 
 
-def validate_manifests(root):
+def validate_manifests(root, environment=None):
     version = (root / 'VERSION').read_text().strip()
     require(bool(version), 'VERSION: missing release version')
     expected = {
@@ -1141,7 +1319,7 @@ def validate_manifests(root):
                         'scripts': SCRIPTS}
     require(json.dumps(package, sort_keys=True) == json.dumps(wanted, sort_keys=True),
             'package.json: metadata drift')
-    validate_frozen_dependencies(root)
+    validate_frozen_dependencies(root, environment)
     patterns = (root / '.gitignore').read_text().splitlines()
     require(all(pattern in patterns for pattern in (*ORIGINAL_IGNORE, *REQUIRED_IGNORE)),
             '.gitignore: missing exclusion')
@@ -1189,12 +1367,78 @@ sys.exit(0 if result.wasSuccessful() and not
          (result.skipped or result.expectedFailures or result.unexpectedSuccesses) else 1)
 '''
 
+AGENTS_UNIT_CODE = '''import sys, unittest
+suite = unittest.defaultTestLoader.discover(start_dir="agents/tests")
+if suite.countTestCases() == 0:
+    print("empty test selection; refusing silent pass", file=sys.stderr)
+    sys.exit(1)
+result = unittest.TextTestRunner(verbosity=2).run(suite)
+sys.exit(0 if result.wasSuccessful() and result.testsRun > 0 and not
+         (result.skipped or result.expectedFailures or result.unexpectedSuccesses) else 1)
+'''
+
 
 SANITIZED_ENV_KEYS = (
     'LD_PRELOAD', 'LD_LIBRARY_PATH', 'LD_AUDIT', 'LD_DEBUG',
     'NODE_OPTIONS', 'PYTHONPATH', 'PYTHONSTARTUP', 'PYTHONINSPECT',
     'BASH_ENV', 'ENV', 'DYLD_INSERT_LIBRARIES',
+    'RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'RUSTDOCFLAGS',
+    'RUSTC_WRAPPER', 'RUSTC_WORKSPACE_WRAPPER',
 )
+
+class subreaper_scope:
+    def __init__(self):
+        self._token = None
+
+    def __enter__(self):
+        import threading
+        state = stop_process_tree.__dict__
+        lock = state.setdefault('_lock', threading.Lock())
+        with lock:
+            scopes = state.setdefault('_scopes', set())
+            token = object()
+            self._token = token
+            try:
+                import ctypes
+                libc = ctypes.CDLL(None)
+                if not scopes:
+                    current = ctypes.c_int(0)
+                    state['_prior'] = (
+                        current.value if libc.prctl(37, ctypes.byref(current), 0, 0, 0) == 0 else None
+                    )
+                libc.prctl(36, 1, 0, 0, 0)
+            except Exception:
+                pass
+            scopes.add(token)
+        return self
+
+    def __exit__(self, kind, value, traceback):
+        import threading
+        state = stop_process_tree.__dict__
+        lock = state.setdefault('_lock', threading.Lock())
+        with lock:
+            scopes = state.setdefault('_scopes', set())
+            if self._token is not None:
+                scopes.discard(self._token)
+                self._token = None
+                if not scopes:
+                    prior = state.pop('_prior', None)
+                    try:
+                        import ctypes
+                        ctypes.CDLL(None).prctl(36, 1 if prior else 0, 0, 0, 0)
+                    except Exception:
+                        pass
+
+
+def register_subreaper_token(process, token):
+    token_bytes = token if isinstance(token, bytes) else f'MV_SUBREAPER_TOKEN={token}'.encode()
+    ident = process_identity(process.pid)
+    process._subreaper_token = token_bytes
+    process._start_time = ident
+    tokens = descendants.__dict__.setdefault('_tokens', {})
+    tokens[process.pid] = (token_bytes, ident)
+    if ident is not None:
+        tokens[(process.pid, ident)] = token_bytes
 
 
 def descendants(parent):
@@ -1211,11 +1455,20 @@ def descendants(parent):
                     parent_token = item
                     if parent_start is not None:
                         tokens[(parent, parent_start)] = item
+                        tokens[parent] = (item, parent_start)
                     break
         except OSError:
             pass
         if parent_token is None and parent_start is not None:
             parent_token = tokens.get((parent, parent_start))
+        if parent_token is None:
+            recorded = tokens.get(parent)
+            if isinstance(recorded, tuple):
+                parent_token, recorded_start = recorded
+                if parent_start is None:
+                    parent_start = recorded_start
+            elif isinstance(recorded, bytes):
+                parent_token = recorded
     for path in Path('/proc').glob('[0-9]*/stat'):
         try:
             pid = int(path.parent.name)
@@ -1250,26 +1503,36 @@ def descendants(parent):
 
 def stop_process_tree(process):
     # Only a recorded child tree in a separate session may receive signals.
-    prior = None
-    try:
-        import ctypes
-        libc = ctypes.CDLL(None)
-        state = ctypes.c_int(0)
-        if libc.prctl(37, ctypes.byref(state), 0, 0, 0) == 0:
-            prior = state.value
-        libc.prctl(36, 1, 0, 0, 0)
-    except Exception:
-        pass
+    import threading
+    state = stop_process_tree.__dict__
+    lock = state.setdefault('_lock', threading.Lock())
+    scope_token = object()
+    with lock:
+        scopes = state.setdefault('_scopes', set())
+        try:
+            import ctypes
+            libc = ctypes.CDLL(None)
+            if not scopes:
+                current = ctypes.c_int(0)
+                state['_prior'] = (
+                    current.value if libc.prctl(37, ctypes.byref(current), 0, 0, 0) == 0 else None
+                )
+            libc.prctl(36, 1, 0, 0, 0)
+        except Exception:
+            pass
+        scopes.add(scope_token)
     token = getattr(process, '_subreaper_token', None)
-    if isinstance(token, bytes) and hasattr(descendants, '__dict__'):
-        ident = process_identity(process.pid)
+    ident = getattr(process, '_start_time', None) or process_identity(process.pid)
+    tokens = descendants.__dict__.setdefault('_tokens', {}) if hasattr(descendants, '__dict__') else {}
+    if isinstance(token, bytes):
+        tokens[process.pid] = (token, ident)
         if ident is not None:
-            descendants.__dict__.setdefault('_tokens', {})[(process.pid, ident)] = token
+            tokens[(process.pid, ident)] = token
     pids = {}
 
     def refresh_pids():
-        roots = [process.pid, *[pid for pid, ident in pids.items()
-                                if ident is not None and process_identity(pid) == ident]]
+        roots = [process.pid, *[pid for pid, pid_ident in pids.items()
+                                if pid_ident is not None and process_identity(pid) == pid_ident]]
         visited = set()
         for root_pid in roots:
             if root_pid in visited:
@@ -1282,6 +1545,7 @@ def stop_process_tree(process):
     try:
         for sig in (signal.SIGTERM, signal.SIGKILL):
             refresh_pids()
+            signaled = False
             for pid in reversed(list(pids)):
                 if type(pid) is not int or pid <= 1 or pid == os.getpid():
                     raise ValueError('unsafe child pid')
@@ -1291,9 +1555,10 @@ def stop_process_tree(process):
                     if os.getpgid(pid) == os.getpgrp():
                         raise ValueError('child shares caller process group')
                     os.kill(pid, sig)
+                    signaled = True
                 except ProcessLookupError:
                     continue
-            if sig == signal.SIGTERM:
+            if sig == signal.SIGTERM and signaled:
                 for _ in range(5):
                     time.sleep(0.01)
                     refresh_pids()
@@ -1308,13 +1573,23 @@ def stop_process_tree(process):
                             break
                         time.sleep(0.005)
                     except ChildProcessError:
-                        break
+                        if not Path('/proc', str(pid)).exists():
+                            break
+                        time.sleep(0.005)
     finally:
-        try:
-            import ctypes
-            ctypes.CDLL(None).prctl(36, 1 if prior else 0, 0, 0, 0)
-        except Exception:
-            pass
+        tokens.pop(process.pid, None)
+        if ident is not None:
+            tokens.pop((process.pid, ident), None)
+        with lock:
+            scopes = state.setdefault('_scopes', set())
+            scopes.discard(scope_token)
+            if not scopes:
+                prior = state.pop('_prior', None)
+                try:
+                    import ctypes
+                    ctypes.CDLL(None).prctl(36, 1 if prior else 0, 0, 0, 0)
+                except Exception:
+                    pass
 
 
 def process_identity(pid):
@@ -1325,22 +1600,38 @@ def process_identity(pid):
 
 
 def bounded(argv, cwd, environment, seconds=300):
-    prior = None
-    try:
-        import ctypes
-        libc = ctypes.CDLL(None)
-        state = ctypes.c_int(0)
-        if libc.prctl(37, ctypes.byref(state), 0, 0, 0) == 0:
-            prior = state.value
-        libc.prctl(36, 1, 0, 0, 0)
-    except Exception:
-        pass
+    import threading
+    state = stop_process_tree.__dict__
+    lock = state.setdefault('_lock', threading.Lock())
+    scope_token = object()
+    with lock:
+        scopes = state.setdefault('_scopes', set())
+        try:
+            import ctypes
+            libc = ctypes.CDLL(None)
+            if not scopes:
+                current = ctypes.c_int(0)
+                state['_prior'] = (
+                    current.value if libc.prctl(37, ctypes.byref(current), 0, 0, 0) == 0 else None
+                )
+            libc.prctl(36, 1, 0, 0, 0)
+        except Exception:
+            pass
+        scopes.add(scope_token)
     process = None
     token = f'{os.getpid()}:{time.monotonic_ns()}:{os.urandom(8).hex()}'
     child_env = dict(environment, MV_SUBREAPER_TOKEN=token)
     try:
         process = subprocess.Popen(argv, cwd=cwd, env=child_env, start_new_session=True)
-        process._subreaper_token = f'MV_SUBREAPER_TOKEN={token}'.encode()
+        token_bytes = f'MV_SUBREAPER_TOKEN={token}'.encode()
+        ident = process_identity(process.pid)
+        process._subreaper_token = token_bytes
+        process._start_time = ident
+        if hasattr(descendants, '__dict__'):
+            tokens = descendants.__dict__.setdefault('_tokens', {})
+            tokens[process.pid] = (token_bytes, ident)
+            if ident is not None:
+                tokens[(process.pid, ident)] = token_bytes
         try:
             return process.wait(timeout=seconds)
         except subprocess.TimeoutExpired:
@@ -1348,14 +1639,19 @@ def bounded(argv, cwd, environment, seconds=300):
             return 124
     finally:
         try:
-            if process is not None and process.poll() is None:
+            if process is not None:
                 stop_process_tree(process)
         finally:
-            try:
-                import ctypes
-                ctypes.CDLL(None).prctl(36, 1 if prior else 0, 0, 0, 0)
-            except Exception:
-                pass
+            with lock:
+                scopes = state.setdefault('_scopes', set())
+                scopes.discard(scope_token)
+                if not scopes:
+                    prior = state.pop('_prior', None)
+                    try:
+                        import ctypes
+                        ctypes.CDLL(None).prctl(36, 1 if prior else 0, 0, 0, 0)
+                    except Exception:
+                        pass
 
 
 class private_environment:
@@ -1437,7 +1733,7 @@ def build_leg(leg, root, environment):
         rc = bounded(command, directory, child)
         if rc:
             print(f'{leg}: child rc={rc}: {command!r}', file=sys.stderr)
-            return 1
+            return 124 if rc == 124 else 1
     if leg == 'ui':
         for name, arguments in (('vue-tsc', ['--noEmit']), ('vite', ['build'])):
             tool = shutil.which(environment.get(name.upper().replace('-', '_'),
@@ -1449,7 +1745,7 @@ def build_leg(leg, root, environment):
             rc = bounded([tool, *arguments], directory, child)
             if rc:
                 print(f'ui: child rc={rc}: {name}', file=sys.stderr)
-                return 1
+                return 124 if rc == 124 else 1
     return 0
 
 
@@ -1479,7 +1775,7 @@ def go_leg(root, environment):
             rc = bounded([go, *arguments], root / 'daemon-adapter', env)
             if rc:
                 print(f'go: child rc={rc}: {arguments!r}', file=sys.stderr)
-                return 1
+                return 124 if rc == 124 else 1
     return 0
 
 
@@ -1515,39 +1811,22 @@ def ui_smoke_leg(root, environment, timeout=90):
                            ('smoke-main.mjs', 'METAVIEWER_MAIN_SMOKE_OK')):
         # Spool output to disk so diagnostics and marker checks remain bounded.
         with tempfile.TemporaryFile(mode='w+') as output:
-            prior = None
-            try:
-                import ctypes
-                libc = ctypes.CDLL(None)
-                state = ctypes.c_int(0)
-                if libc.prctl(37, ctypes.byref(state), 0, 0, 0) == 0:
-                    prior = state.value
-                libc.prctl(36, 1, 0, 0, 0)
-            except Exception:
-                pass
-            token = f'{os.getpid()}:{time.monotonic_ns()}:{os.urandom(8).hex()}'
-            smoke_env = dict(child, MV_SUBREAPER_TOKEN=token)
-            process = None
-            try:
-                process = subprocess.Popen([node, 'test/' + script], cwd=root / 'ui',
-                                           env=smoke_env, stdout=output, stderr=subprocess.STDOUT,
-                                           start_new_session=True)
-                process._subreaper_token = f'MV_SUBREAPER_TOKEN={token}'.encode()
+            with subreaper_scope():
+                token = f'{os.getpid()}:{time.monotonic_ns()}:{os.urandom(8).hex()}'
+                smoke_env = dict(child, MV_SUBREAPER_TOKEN=token)
+                process = None
                 try:
-                    rc = process.wait(timeout=timeout)
-                except subprocess.TimeoutExpired:
-                    stop_process_tree(process)
-                    rc = 124
-            finally:
-                try:
-                    if process is not None and process.poll() is None:
-                        stop_process_tree(process)
-                finally:
+                    process = subprocess.Popen([node, 'test/' + script], cwd=root / 'ui',
+                                               env=smoke_env, stdout=output, stderr=subprocess.STDOUT,
+                                               start_new_session=True)
+                    register_subreaper_token(process, token)
                     try:
-                        import ctypes
-                        ctypes.CDLL(None).prctl(36, 1 if prior else 0, 0, 0, 0)
-                    except Exception:
-                        pass
+                        rc = process.wait(timeout=timeout)
+                    except subprocess.TimeoutExpired:
+                        rc = 124
+                finally:
+                    if process is not None:
+                        stop_process_tree(process)
             output.seek(0)
             witnessed = False
             for line in output:
@@ -1555,7 +1834,7 @@ def ui_smoke_leg(root, environment, timeout=90):
                 print(line[-4000:], end='', flush=True)
         if rc or not witnessed:
             print(f'ui-smoke: {script}: child rc={rc}, marker={witnessed}', file=sys.stderr)
-            return 1
+            return 124 if rc == 124 else 1
     return 0
 
 
@@ -1620,7 +1899,7 @@ def leaf(leg, root, environment):
             return 1
         deadline = time.monotonic() + 300
         for command in (
-            ['python3', '-m', 'unittest', 'discover', '-s', 'agents/tests'],
+            ['python3', '-c', AGENTS_UNIT_CODE],
             ['python3', 'agents/tests/run_mutant_harness.py'],
         ):
             remaining = deadline - time.monotonic()
@@ -1662,8 +1941,8 @@ def leaf(leg, root, environment):
         previous = signal.signal(signal.SIGALRM, manifest_timeout)
         signal.setitimer(signal.ITIMER_REAL, 300)
         try:
-            validate_manifests(root)
-        except TimeoutError:
+            validate_manifests(root, environment)
+        except (TimeoutError, subprocess.TimeoutExpired):
             print('manifests: timeout', file=sys.stderr)
             return 124
         except (OSError, ValueError, TypeError) as error:
