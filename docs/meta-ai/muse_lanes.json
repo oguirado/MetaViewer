@@ -100,6 +100,11 @@
    "why": "Live finding: human typing and clicks never reach the capsule in WRITE mode with human control; build the renderer side of surface_input/v1 (input port, focusable canvas capture, mounting) and fix the READ-ONLY strip label.",
    "orchestrator": "UI orchestrator"
   },
+  "mvui26b": {
+   "stage": "fix",
+   "why": "Live run of human input on the real app: clicking into the capsule scrolls the MetaViewer page, input mode stays WRITE after control release, and input refusals are invisible; fix the renderer side so live typing can pass.",
+   "orchestrator": "UI orchestrator"
+  },
   "mvui14c": {
    "stage": "fix",
    "why": "Fix the judge's blocking notes on MV-UI7: SurfaceCanvas retired the live frame port on every generation update, and CONTEXT_LOST did not close the stream.",
@@ -243,6 +248,11 @@
   "mvui24": {
    "stage": "fix",
    "why": "Complete MV-UI13 with the remaining verified RV9 renderer items: capture refresh evicting rows, scheduler raw ids in DOM ids and never-destroyed entries, screenshot row ids/labels.",
+   "orchestrator": "UI orchestrator"
+  },
+  "mvui26": {
+   "stage": "fix",
+   "why": "RV10 cross-review of ui/src (verified against code) found an attach paint that ignores draw failure and skips presentation notify (HIGH), an unbound input facade send, and several LOW input/frame edge cases; fix them with regression tests before live input checks.",
    "orchestrator": "UI orchestrator"
   },
   "mvui16e": {
