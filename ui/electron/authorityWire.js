@@ -510,6 +510,13 @@ export function validateSettings(text) {
   }
   return { scheme, density, wallFps, recordingFps };
 }
+/** Preserve frozen decoding while enforcing product cadence before I/O or fan-out.
+ * @param {string} text */
+function validateHostSettings(text) {
+  const parsed = validateSettings(text);
+  validateCadence({ recordingFps: parsed.recordingFps });
+  return parsed;
+}
 const sourceRoot=fileURLToPath(new URL('../..',import.meta.url));
 /** @param {string} candidate */
 function outsideSource(candidate) {
@@ -629,7 +636,7 @@ export function createSettingsStore(env) {
         }
         const text = buffer.subarray(0,bytesRead).toString('utf8');
         try {
-          const parsed = validateSettings(text);
+          const parsed = validateHostSettings(text);
           notifySubscribers(parsed);
           return text;
         } catch (error) {
@@ -642,7 +649,7 @@ export function createSettingsStore(env) {
     },
     /** @param {string} json */
     async save(json) {
-      const parsed = validateSettings(json); await checkAncestors(); await mkdir(dir,{recursive:true,mode:0o700});await checkDirectory();
+      const parsed = validateHostSettings(json); await checkAncestors(); await mkdir(dir,{recursive:true,mode:0o700});await checkDirectory();
       const temp = join(dir,`.settings-${randomUUID()}.tmp`);
       try {
         const file = await open(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,0o600);
@@ -715,12 +722,12 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
   const handlers = {
     loadSettings: async () => {
       const loaded = await store.load();
-      const parsed = typeof loaded === 'string' ? validateSettings(loaded) : DEFAULT_SETTINGS;
+      const parsed = typeof loaded === 'string' ? validateHostSettings(loaded) : DEFAULT_SETTINGS;
       applySettingsFps(parsed);
       return loaded;
     },
     saveSettings: async (/** @type {string} */json) => {
-      const parsed = validateSettings(json);
+      const parsed = validateHostSettings(json);
       const saved = await store.save(json);
       applySettingsFps(parsed);
       return saved;
