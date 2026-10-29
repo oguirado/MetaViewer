@@ -19,17 +19,17 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 702 | 55 | 647 |
-| Lanes finished OK | 702 | 55 | 647 |
-| Agent steps | 33,216 | 2,705 | 30,511 |
-| Lane-hours of agent work | 86.3 | 5.2 | 81.1 |
-| Fresh input tokens | 138,775,971 | 11,482,034 | 127,293,937 |
-| Cache-read input tokens | 2,907,915,598 | 226,255,212 | 2,681,660,386 |
-| Prompt cache hit % | 95.4 | 95.2 | 95.5 |
-| Output tokens | 29,158,692 | 2,135,708 | 27,022,984 |
-| Thinking tokens | 16,530,045 | 1,050,039 | 15,480,006 |
-| Cost (USD) | 25.5252 | 2.0279 | 23.4973 |
-| Cost per lane (USD) | 0.0364 | 0.0369 | 0.0363 |
+| Lanes launched | 732 | 55 | 677 |
+| Lanes finished OK | 732 | 55 | 677 |
+| Agent steps | 34,158 | 2,705 | 31,453 |
+| Lane-hours of agent work | 88.5 | 5.2 | 83.3 |
+| Fresh input tokens | 143,175,277 | 11,482,034 | 131,693,243 |
+| Cache-read input tokens | 2,965,070,322 | 226,255,212 | 2,738,815,110 |
+| Prompt cache hit % | 95.4 | 95.2 | 95.4 |
+| Output tokens | 29,878,138 | 2,135,708 | 27,742,430 |
+| Thinking tokens | 17,003,233 | 1,050,039 | 15,953,194 |
+| Cost (USD) | 26.2233 | 2.0279 | 24.1954 |
+| Cost per lane (USD) | 0.0358 | 0.0369 | 0.0357 |
 
 Rooms: 132. Peak concurrent lanes [MEASURED from lane start/end]: 32.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
@@ -38,7 +38,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 359 | 94.3 | 10.5152 |
+| build | 389 | 94.2 | 11.2133 |
 | context | 42 | 95.9 | 1.9093 |
 | demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
@@ -82,7 +82,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 159 | 94.1 | 4.7737 | direct Muse job |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 168 | 94.1 | 5.0346 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -176,7 +176,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui29c | UI orchestrator | Oct 28 08:58 | fix | 1 | 97.5 | 0.0624 | Terminal sessions wiring (AC-06) broke 58 committed App tests; restore the App mounting contract and finish the terminal tests so the drop can ship. |
 | mvui29sc | UI orchestrator | Oct 28 09:12 | fix | 1 | 97.3 | 0.0484 | Judge rejected the settings drop: a quick revert inside the debounce window is lost, a replaced host can receive a stale save, and boot can paint a scheme the store then replaces; fix before AC-08 can ship. |
 | mvui29d | UI orchestrator | Oct 28 09:13 | fix | 1 | 97.2 | 0.0587 | Judge notes on the terminal drop are real session lifecycle defects (events before registration, stale transport, cross-transport close, leaked port on close during attach, fixture broker unwired); fix before AC-06 ships. |
-| direct-adv | metaviewer-0 | Oct 28 09:30 | build | 65 | 93.0 | 1.5499 | adversarial advocate review before integration |
+| direct-adv | metaviewer-0 | Oct 28 09:30 | build | 86 | 92.8 | 1.9871 | adversarial advocate review before integration |
 | direct-rv11 | metaviewer-0 | Oct 28 11:01 | build | 7 | 93.7 | 0.129 | cross-review verification |
 | direct-tg6 | metaviewer-0 | Oct 28 11:10 | build | 6 | 95.2 | 0.2593 | test-gap and mutation map |
 | direct-w5 | metaviewer-0 | Oct 28 11:20 | build | 8 | 93.6 | 0.2196 | W5 docs fact-check |
@@ -900,6 +900,36 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-adv | b1_a | adv_b1_a | Oct 29 08:45 | yes | 44 | 94.1 | 0.028559 |
 | direct-adv | b1_b | adv_b1_b | Oct 29 08:45 | yes | 51 | 94.8 | 0.031104 |
 | direct-adv | wav_r6 | adv_wav_r6 | Oct 29 08:56 | yes | 24 | 92.6 | 0.016256 |
+| direct-adv | webpack1_a | adv_webpack1_a | Oct 29 12:07 | yes | 12 | 81.1 | 0.013617 |
+| direct-adv | webpack1_b | adv_webpack1_b | Oct 29 12:07 | yes | 29 | 92.2 | 0.021376 |
+| direct-adv | webpack1r2_a | adv_webpack1r2_a | Oct 29 12:28 | yes | 23 | 89.3 | 0.021151 |
+| direct-adv | webpack1r3_a | adv_webpack1r3_a | Oct 29 13:14 | yes | 21 | 88.9 | 0.015951 |
+| direct-adv | webpack1r4_a | adv_webpack1r4_a | Oct 29 13:27 | yes | 28 | 91.5 | 0.021766 |
+| direct-adv | mvowner1_a | adv_mvowner1_a | Oct 29 15:30 | yes | 51 | 95.1 | 0.032121 |
+| direct-adv | mvowner1_b | adv_mvowner1_b | Oct 29 15:30 | yes | 27 | 91.1 | 0.021293 |
+| direct-direct | home_a | ctx_mwhome_a | Oct 29 15:56 | yes | 19 | 85.8 | 0.020077 |
+| direct-direct | topen_a | ctx_netopen_a | Oct 29 15:56 | yes | 33 | 92.1 | 0.025402 |
+| direct-direct | topen_b | ctx_netopen_b | Oct 29 15:56 | yes | 48 | 94.3 | 0.03128 |
+| direct-direct | ptcha_a | ctx_captcha_a | Oct 29 15:56 | yes | 31 | 92.1 | 0.024636 |
+| direct-direct | text_a | ctx_mwtext_a | Oct 29 15:56 | yes | 52 | 94.8 | 0.03663 |
+| direct-adv | mvowner1r2_b | adv_mvowner1r2_b | Oct 29 16:09 | yes | 39 | 94.6 | 0.025381 |
+| direct-adv | mvowner1r2_a | adv_mvowner1r2_a | Oct 29 16:09 | yes | 42 | 94.3 | 0.030422 |
+| direct-adv | mwhome_a | adv_mwhome_a | Oct 29 16:14 | yes | 18 | 87.0 | 0.013876 |
+| direct-adv | netopen_a | adv_netopen_a | Oct 29 16:29 | yes | 28 | 87.1 | 0.028387 |
+| direct-adv | netopen_b | adv_netopen_b | Oct 29 16:29 | yes | 39 | 94.7 | 0.02208 |
+| direct-direct | mo2mw_a | ctx_demo2mw_a | Oct 29 16:34 | yes | 36 | 92.9 | 0.023362 |
+| direct-direct | ent1_a | ctx_ident1_a | Oct 29 16:34 | yes | 58 | 95.1 | 0.041341 |
+| direct-direct | lticap_a | ctx_multicap_a | Oct 29 16:34 | yes | 45 | 93.8 | 0.034996 |
+| direct-direct | ententry_a | ctx_agententry_a | Oct 29 16:34 | yes | 36 | 92.9 | 0.023216 |
+| direct-adv | mwhome_r2_a | adv_mwhome_r2_a | Oct 29 16:37 | yes | 17 | 86.7 | 0.013809 |
+| direct-adv | mvowner1r4_a | adv_mvowner1r4_a | Oct 29 16:48 | yes | 10 | 78.8 | 0.01101 |
+| direct-adv | netopen_r3_b | adv_netopen_r3_b | Oct 29 16:49 | yes | 18 | 86.4 | 0.012973 |
+| direct-adv | mwtext_b | adv_mwtext_b | Oct 29 17:05 | yes | 31 | 92.9 | 0.023117 |
+| direct-adv | ident1_b | adv_ident1_b | Oct 29 17:05 | yes | 53 | 95.7 | 0.037145 |
+| direct-adv | ident1_a | adv_ident1_a | Oct 29 17:05 | yes | 29 | 91.8 | 0.02054 |
+| direct-adv | mwtext_a | adv_mwtext_a | Oct 29 17:05 | yes | 14 | 87.1 | 0.011319 |
+| direct-adv | multicap_a | adv_multicap_a | Oct 29 17:18 | yes | 31 | 93.0 | 0.022521 |
+| direct-adv | captcha_a | adv_captcha_a | Oct 29 17:23 | yes | 24 | 90.3 | 0.017335 |
 
 ## Method
 
