@@ -776,6 +776,8 @@ process.go	daemon-adapter/internal/capsule/process.go
 process-23b8a8b760ec	daemon-adapter/internal/capsule/process_boundary_test.go
 process_test.go	daemon-adapter/internal/capsule/process_test.go
 program_inner_test.go	daemon-adapter/internal/capsule/program_inner_test.go
+protect.go	daemon-adapter/internal/capsule/protect.go
+protect_min_test.go	daemon-adapter/internal/capsule/protect_min_test.go
 r2regre-d63f27719b98	daemon-adapter/internal/capsule/r2_regressions_test.go
 reap_test.go	daemon-adapter/internal/capsule/reap_test.go
 receipt-e7a340c634f2	daemon-adapter/internal/capsule/receipt_evidence_test.go
@@ -866,6 +868,7 @@ session_test.go	daemon-adapter/internal/ipc/session_test.go
 socket.go	daemon-adapter/internal/ipc/socket.go
 capture.go	daemon-adapter/internal/record/capture.go
 export_test.go	daemon-adapter/internal/record/export_test.go
+protect_test.go	daemon-adapter/internal/record/protect_test.go
 record.go	daemon-adapter/internal/record/record.go
 record_test.go	daemon-adapter/internal/record/record_test.go
 release-a6f568fd66b9	daemon-adapter/internal/record/release_test.go
@@ -873,6 +876,7 @@ setting-003db8e816e1	daemon-adapter/internal/record/settings_parity_test.go
 environ-62320127da7b	daemon-adapter/internal/view/environment_test.go
 view-process.go	daemon-adapter/internal/view/process.go
 view-process_test.go	daemon-adapter/internal/view/process_test.go
+view-protect_test.go	daemon-adapter/internal/view/protect_test.go
 view.go	daemon-adapter/internal/view/view.go
 view_test.go	daemon-adapter/internal/view/view_test.go
 cliiden-e5ce120f22de	daemon-adapter/testdata/cli_identity_valid.json
