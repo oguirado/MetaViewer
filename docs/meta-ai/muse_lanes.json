@@ -125,6 +125,11 @@
    "why": "Judge of the settings fps fix found that clearing the recording fps field saves 1 and that the readout decay can leave a stale rate at the window edge; fix before the drop ships with the host settings unit.",
    "orchestrator": "UI orchestrator"
   },
+  "mvui35": {
+   "stage": "build",
+   "why": "Cross-language parity tests found the renderer settings decoders accept a 30.0 float lexeme as an integer fps (D3) and keep unknown stored keys (D4) while the frozen host side refuses both; align the renderer so stored settings decode identically everywhere.",
+   "orchestrator": "UI orchestrator"
+  },
   "mvui29c": {
    "stage": "fix",
    "why": "Terminal sessions wiring (AC-06) broke 58 committed App tests; restore the App mounting contract and finish the terminal tests so the drop can ship.",
