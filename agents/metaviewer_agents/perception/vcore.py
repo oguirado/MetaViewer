@@ -19,31 +19,48 @@ nearest-integer ppm (ties to even), matching the local vision boundary.
 Optional lock verification requires the environment-selected checkout to match
 ve_root and maps resolver failures to typed perception errors.
 [TARGET, unit decision] Persistent vserve client lifecycle: lazy spawn with a
-pinned numpy>=2.0.0 interpreter, affirmative ve.vserve.hello/v1 caps handshake,
-bounded in-flight request queue (cap 1..4, abort backpressure policy),
-restart-once on crash, per-frame latency reporting, and one-shot fallback
-preserving typed error codes.
+pinned numpy>=2.0.0 interpreter resolved to an absolute canonical path under a
+fixed minimal PATH/HOME with PYTHONNOUSERSITE=1 and PYTHONSAFEPATH=1, optional
+parent-resolved canonical extra site directory (MV_VCORE_SITE or parent
+site.getusersitepackages(), accepted only if absolute, realpath-canonical,
+existing directory owned by current UID, with a root/current-UID owned
+ancestor chain without group/other write, bounded non-writable contents,
+no customization modules, and identity revalidation before probe/spawn)
+passed explicitly via PYTHONPATH to both the numpy>=2 probe and child spawns
+and recorded in adapter status/diagnostics, explicit FD/session isolation
+(close_fds=True, pass_fds=(), start_new_session=True), open-time frame path
+verification (O_NOFOLLOW, regular file, owner, size == header), lock-serialized
+bounded in-flight request queue and pipe I/O, unified restart budget across all
+respawn paths with recovery after _VSERVE_RESTART_RECOVERY_REPLIES=4
+successful replies, strict request_id/op correlation on all replies with
+close-and-respawn on stream desync, and graceful stdin-EOF -> SIGTERM ->
+SIGKILL shutdown escalation with full reap.
 """
 
 from __future__ import annotations
 
 import atexit
 import errno
+import grp
 import hashlib
 import json
 import math
 import os
+import pwd
 import re
 import selectors
+import shutil
+import site
 import stat
 import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import weakref
 import zlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Any
@@ -65,7 +82,9 @@ __all__ = [
     "VQA_SCHEMAS",
     "VCORE_VERBS",
     "MAX_MARKS",
+    "_VSERVE_RESTART_RECOVERY_REPLIES",
     "project_element_table",
+    "_resolve_extra_site",
     "_resolve_pinned_python",
     "_parse_vserve_reply",
 ]
@@ -133,6 +152,14 @@ _STDERR_RAW_CAP = 1024 * 1024
 _VSERVE_MAX_CONTROL_BYTES = 65536
 _VSERVE_MAX_FRAME_BYTES = 33554432
 _VSERVE_MAX_SESSIONS = 16
+# [TARGET, unit decision] Consecutive successful non-hello replies required to restore _vserve_restarts to 0.
+_VSERVE_RESTART_RECOVERY_REPLIES = 4
+_VSERVE_SHUTDOWN_EOF_WAIT = 0.1
+_VSERVE_SHUTDOWN_TERM_WAIT = 0.2
+_VSERVE_SHUTDOWN_KILL_WAIT = 0.2
+_MINIMAL_PATH = "/usr/bin:/bin"
+_PINNED_HOME = "/nonexistent"
+_PINNED_LANG = "C.UTF-8"
 _VSERVE_REPLY_KEYS = frozenset((
     "code", "detail", "ok", "op", "rc", "request_id", "result", "schema",
 ))
@@ -274,16 +301,149 @@ def _check_pythonpath_root(ve_root: Path) -> None:
                   "vision-engine root contains forbidden startup hook")
 
 
-def _scrubbed_env(ve_root: Path) -> dict[str, str]:
+_UNSET = object()
+
+
+def _is_trusted_site_stat(info: os.stat_result) -> bool:
+    uid = os.geteuid()
+    if info.st_uid != uid or info.st_mode & stat.S_IWOTH:
+        return False
+    if not info.st_mode & stat.S_IWGRP:
+        return True
+    try:
+        user = pwd.getpwuid(uid)
+        group = grp.getgrgid(info.st_gid)
+    except (KeyError, OSError):
+        return False
+    return (
+        info.st_gid == os.getgid() == user.pw_gid
+        and group.gr_name == user.pw_name
+        and group.gr_mem in ([], [user.pw_name])
+    )
+
+
+# [TARGET, unit decision] Bound content inspection and cache only successful scans.
+_SITE_ENTRY_CAP = 200_000
+
+
+def _check_site_chain(path: str) -> os.stat_result:
+    current = Path(path)
+    leaf = None
+    while True:
+        info = current.lstat()
+        if (not stat.S_ISDIR(info.st_mode)
+                or info.st_uid not in (0, os.geteuid())
+                or info.st_mode & (stat.S_IWGRP | stat.S_IWOTH)):
+            _fail("unavailable", f"extra site refused: unsafe parent-chain directory: {current}")
+        if leaf is None:
+            leaf = info
+        if current == current.parent:
+            return leaf
+        current = current.parent
+
+
+def _check_extra_hooks(path: str) -> None:
+    # PYTHONPATH does not process .pth files; customization modules still run.
+    with os.scandir(path) as entries:
+        for entry in entries:
+            name = entry.name.lower()
+            if name.startswith(("sitecustomize.", "usercustomize.")) or name in (
+                    "sitecustomize", "usercustomize"):
+                _fail("unavailable", "extra site refused: forbidden startup hook")
+
+
+def _check_site_contents(path: str) -> None:
+    count = 0
+    pending = [path]
+    while pending:
+        with os.scandir(pending.pop()) as entries:
+            for entry in entries:
+                count += 1
+                if count > _SITE_ENTRY_CAP:
+                    _fail("unavailable", "extra site refused: entry cap exceeded")
+                info = entry.stat(follow_symlinks=False)
+                if info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+                    _fail("unavailable", "extra site refused: writable content")
+                # Symlinks could redirect imports outside the inspected tree.
+                if stat.S_ISLNK(info.st_mode):
+                    _fail("unavailable", "extra site refused: symlink content")
+                if stat.S_ISDIR(info.st_mode):
+                    pending.append(entry.path)
+
+
+def _validate_extra_site(raw: object, *, identity: tuple[int, int] | None = None,
+                         cache: set[tuple[int, int, int]] | None = None) -> str:
+    if (not isinstance(raw, str) or not raw or _NUL in raw
+            or os.pathsep in raw or not os.path.isabs(raw)):
+        _fail("unavailable", "extra site refused: malformed path")
+    norm = os.path.normpath(raw)
+    if (raw.rstrip("/") or "/") != norm or os.path.realpath(norm) != norm:
+        _fail("unavailable", "extra site refused: noncanonical path")
+    info = os.lstat(norm)
+    if not stat.S_ISDIR(info.st_mode) or not _is_trusted_site_stat(info):
+        _fail("unavailable", "extra site refused: untrusted directory")
+    info = _check_site_chain(norm)
+    if identity is not None and (info.st_dev, info.st_ino) != identity:
+        _fail("unavailable", "extra site refused: directory identity changed")
+    key = (info.st_dev, info.st_ino, info.st_mtime_ns)
+    if cache is None or key not in cache:
+        _check_site_contents(norm)
+        _check_extra_hooks(norm)
+        after = _check_site_chain(norm)
+        if (after.st_dev, after.st_ino, after.st_mtime_ns) != key:
+            _fail("unavailable", "extra site refused: directory changed during validation")
+        if cache is not None:
+            cache.clear()
+            cache.add(key)
+    return norm
+
+
+def _extra_site_candidate() -> object:
+    raw = os.environ.get("MV_VCORE_SITE")
+    if raw is None:
+        try:
+            return site.getusersitepackages()
+        except Exception:
+            return None
+    return raw
+
+
+def _resolve_extra_site(candidate: str | Path | None | object = _UNSET) -> str | None:
+    raw = _extra_site_candidate() if candidate is _UNSET else candidate
+    try:
+        return _validate_extra_site(str(raw) if isinstance(raw, Path) else raw)
+    except (PerceptionError, OSError, ValueError):
+        return None
+
+
+def _scrubbed_env(
+    ve_root: Path | None = None,
+    *,
+    extra_site: str | Path | None = None,
+) -> dict[str, str]:
     # Children get a minimal environment so in-memory credentials held
     # by the parent process are never inherited across the spawn.
-    _check_pythonpath_root(ve_root)
-    env: dict[str, str] = {}
-    for key in ("PATH", "HOME", "LANG"):
-        value = os.environ.get(key)
-        if value is not None:
-            env[key] = value
-    env["PYTHONPATH"] = str(ve_root)
+    if extra_site is not None and (
+            not isinstance(extra_site, (str, Path)) or not str(extra_site)
+            or _NUL in str(extra_site) or os.pathsep in str(extra_site)):
+        _fail("bad_shape", "extra site malformed")
+    validated_site = str(extra_site) if extra_site is not None else None
+    env: dict[str, str] = {
+        "PATH": _MINIMAL_PATH,
+        "HOME": _PINNED_HOME,
+        "LANG": _PINNED_LANG,
+        "PYTHONNOUSERSITE": "1",
+        "PYTHONSAFEPATH": "1",
+    }
+    if ve_root is not None:
+        _check_pythonpath_root(ve_root)
+        root_str = str(ve_root)
+        if validated_site is not None and validated_site != root_str:
+            env["PYTHONPATH"] = f"{root_str}{os.pathsep}{validated_site}"
+        else:
+            env["PYTHONPATH"] = root_str
+    elif validated_site is not None:
+        env["PYTHONPATH"] = validated_site
     return env
 
 
@@ -349,17 +509,150 @@ def _fd_path(value: str) -> str | None:
 
 def _existing_frame_path(value: str | Path) -> str:
     if isinstance(value, str):
+        if not value or _NUL in value:
+            _fail("bad_shape", "frame path malformed")
         direct = _fd_path(value)
         if direct is not None:
             return direct
+    elif not isinstance(value, Path):
+        _fail("bad_shape", "frame path malformed")
+    candidate = Path(value)
     try:
-        resolved = Path(value).resolve()
+        if candidate.is_symlink():
+            _fail("bad_shape", "frame path leaves shared memory")
+        resolved = candidate.resolve()
     except (OSError, ValueError):
         _fail("bad_shape", "frame path malformed")
         raise AssertionError("unreachable")
-    if not resolved.is_relative_to(_SHM_ROOT):
+    if (
+        not resolved.is_relative_to(_SHM_ROOT)
+        or resolved == Path(_SHM_ROOT)
+        or resolved != candidate
+    ):
         _fail("bad_shape", "frame path leaves shared memory")
     return str(resolved)
+
+
+def _verify_png_header(data: bytes, *, width: int, height: int) -> None:
+    if len(data) < 33 or data[:8] != b"\x89PNG\r\n\x1a\n":
+        _fail("bad_shape", "PNG frame header malformed")
+    ihdr_len = struct.unpack(">I", data[8:12])[0]
+    if ihdr_len != 13 or data[12:16] != b"IHDR":
+        _fail("bad_shape", "PNG IHDR chunk malformed")
+    png_w, png_h = struct.unpack(">II", data[16:24])
+    if (png_w, png_h) != (width, height):
+        _fail("bad_shape", "PNG dimensions disagree with frame_ref")
+    pos = 8
+    saw_iend = False
+    while pos < len(data):
+        if pos + 8 > len(data):
+            _fail("bad_shape", "PNG chunk header truncated")
+        chunk_len = struct.unpack(">I", data[pos:pos + 4])[0]
+        chunk_type = data[pos + 4:pos + 8]
+        next_pos = pos + 12 + chunk_len
+        if next_pos > len(data):
+            _fail("bad_shape", "PNG chunk payload truncated")
+        pos = next_pos
+        if chunk_type == b"IEND":
+            if chunk_len != 0 or pos != len(data):
+                _fail("bad_shape", "PNG trailing bytes after IEND")
+            saw_iend = True
+            break
+    if not saw_iend or pos != len(data):
+        _fail("bad_shape", "PNG stream missing IEND")
+
+
+def _verify_and_pin_frame_path(
+    value: str | Path,
+    *,
+    width: int,
+    height: int,
+    stack: ExitStack | None = None,
+    deadline: float | None = None,
+) -> str:
+    if isinstance(value, str):
+        if not value or _NUL in value:
+            _fail("bad_shape", "frame path malformed")
+        direct = _fd_path(value)
+        if direct is not None:
+            return direct
+    elif not isinstance(value, Path):
+        _fail("bad_shape", "frame path malformed")
+    resolved_str = _existing_frame_path(value)
+    expected_rgb = width * height * 3
+    if expected_rgb > _VSERVE_MAX_FRAME_BYTES:
+        _fail("BUDGET_EXCEEDED", "Frame exceeds vserve max_frame_bytes")
+    flags = (
+        os.O_RDONLY | os.O_NONBLOCK
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    try:
+        fd = os.open(resolved_str, flags)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            _fail("bad_shape", "frame path leaves shared memory")
+        raise PerceptionError(
+            "unavailable", "frame path is not readable") from exc
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            _fail("bad_shape", "frame descriptor is not a regular file")
+        if info.st_uid != os.geteuid():
+            _fail("bad_shape", "frame descriptor owner mismatch")
+        if info.st_size <= 0 or info.st_size > _VSERVE_MAX_FRAME_BYTES:
+            _fail("bad_shape", "frame descriptor size out of bounds")
+        target_size = info.st_size
+        chunks: list[bytes] = []
+        remaining = target_size + 1
+        while remaining > 0:
+            if deadline is not None and time.monotonic() >= deadline:
+                _fail("timeout", "RAM frame verification timed out")
+            chunk = os.read(fd, min(65536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        data = b"".join(chunks)
+    except OSError as exc:
+        raise PerceptionError(
+            "unavailable", "frame path is not readable") from exc
+    finally:
+        os.close(fd)
+    if len(data) != target_size:
+        _fail("bad_shape", "frame bytes disagree with descriptor size")
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        _verify_png_header(data, width=width, height=height)
+        suffix = ".png"
+    else:
+        if target_size != expected_rgb or len(data) != expected_rgb:
+            _fail("bad_shape", "frame bytes disagree with frame_ref dimensions")
+        suffix = ".rgb"
+    if stack is None:
+        return resolved_str
+    try:
+        pin_fd, pin_path = tempfile.mkstemp(
+            prefix="mv-vcore-frame-", suffix=suffix, dir=_SHM_ROOT)
+    except OSError as exc:
+        raise PerceptionError(
+            "unavailable", "RAM frame handoff allocation failed") from exc
+
+    def _cleanup() -> None:
+        try:
+            os.unlink(pin_path)
+        except OSError:
+            pass
+
+    stack.callback(_cleanup)
+    try:
+        os.fchmod(pin_fd, 0o600)
+        with os.fdopen(pin_fd, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+    except OSError as exc:
+        raise PerceptionError(
+            "unavailable", "RAM frame handoff write failed") from exc
+    return pin_path
 
 
 def _ramws_frame(frame_ref: Mapping[str, Any],
@@ -386,6 +679,8 @@ def _ramws_frame(frame_ref: Mapping[str, Any],
     ):
         _fail("bad_shape", "ramws_path leaves shared memory")
     expected = width * height * 3
+    if expected > _VSERVE_MAX_FRAME_BYTES:
+        _fail("BUDGET_EXCEEDED", "Frame exceeds vserve max_frame_bytes")
     flags = (
         os.O_RDONLY | os.O_NONBLOCK
         | getattr(os, "O_NOFOLLOW", 0)
@@ -400,7 +695,9 @@ def _ramws_frame(frame_ref: Mapping[str, Any],
             "unavailable", "bound ramws bytes are not readable") from exc
     try:
         info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_size != expected:
+        if (not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.geteuid()
+                or info.st_size != expected):
             _fail("bad_shape", "ramws descriptor is not a regular RGB24 file")
         chunks: list[bytes] = []
         remaining = expected + 1
@@ -568,6 +865,11 @@ def _run_bounded(
     if any(not isinstance(arg, str) or _NUL in arg for arg in command):
         _fail("bad_shape", "subprocess argv malformed")
     if subprocess.run is not _STDLIB_RUN:
+        env = {
+            k: (v.split(os.pathsep, 1)[0] if k == "PYTHONPATH" else v)
+            for k, v in env.items()
+            if k in ("PATH", "HOME", "LANG", "PYTHONPATH")
+        }
         if pass_fds:
             return subprocess.run(
                 command, cwd=cwd, env=env, capture_output=True,
@@ -576,14 +878,17 @@ def _run_bounded(
             command, cwd=cwd, env=env, capture_output=True,
             stdin=stdin, timeout=timeout)
     deadline = time.monotonic() + timeout
-    proc = subprocess.Popen(
+    popen = subprocess.Popen
+    proc = popen(
         command,
         cwd=cwd,
         env=env,
         stdin=stdin,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        close_fds=True,
         pass_fds=pass_fds,
+        start_new_session=True,
     )
     assert proc.stdout is not None and proc.stderr is not None
     stdout_chunks: list[bytes] = []
@@ -663,18 +968,52 @@ def _parse_numpy_version(raw: object) -> tuple[int, int, int] | None:
     return (major, minor, patch)
 
 
+def _canonicalize_python_candidate(candidate: str) -> str | None:
+    if any(ch.isspace() for ch in candidate):
+        return None
+    if "/" not in candidate:
+        located = shutil.which(candidate, path=_MINIMAL_PATH)
+        if located is None:
+            return None
+    else:
+        if not os.path.isabs(candidate):
+            return None
+        located = os.path.normpath(candidate)
+    try:
+        real = os.path.realpath(located)
+    except (OSError, ValueError):
+        return None
+    if not os.path.isfile(real) or not os.access(real, os.X_OK):
+        return None
+    if (candidate == sys.executable
+            and os.path.isabs(located)
+            and located == os.path.join(
+                os.path.realpath(os.path.dirname(located)),
+                os.path.basename(located),
+            )):
+        return located
+    return real
+
+
 def _resolve_pinned_python(
     python: str = "python3",
     *,
     ve_root: Path | str | None = None,
     timeout: float = 2.0,
     candidates: Sequence[str] | None = None,
+    extra_site: str | Path | None | object = _UNSET,
+    child_env: dict[str, str] | None = None,
+    site_validator: Callable[[], dict[str, str]] | None = None,
 ) -> str:
     """Resolve a Python interpreter whose ``import numpy`` resolves ``>=2.0.0``.
 
-    Rejects NUL or empty strings with ``bad_shape``, rejects isolated flag
-    forms such as ``python3 -I`` (which see only system numpy ``1.26.4``), and
-    raises ``unavailable`` when no candidate satisfies ``numpy>=2.0.0``.
+    Canonicalizes candidates to an absolute path under a fixed minimal
+    ``PATH``, ``HOME=/nonexistent``, ``PYTHONNOUSERSITE=1``, and
+    ``PYTHONSAFEPATH=1``, using the exact child environment (including any
+    validated ``extra_site`` passed via ``PYTHONPATH``). Rejects NUL or empty
+    strings with ``bad_shape``, rejects flag-bearing strings such as
+    ``python3 -I``, and raises ``unavailable`` when no candidate satisfies
+    ``numpy>=2.0.0``.
     """
     _validate_timeout(timeout)
     if not isinstance(python, str) or not python or _NUL in python:
@@ -700,25 +1039,30 @@ def _resolve_pinned_python(
     resolved_root: Path | None = None
     if ve_root is not None:
         resolved_root = Path(ve_root).resolve()
-    env = (_scrubbed_env(resolved_root)
-           if resolved_root is not None
-           else {
-               "PATH": os.environ.get("PATH", os.defpath),
-               "HOME": "/nonexistent",
-               "LANG": "C.UTF-8",
-           })
+    if child_env is not None:
+        env = dict(child_env)
+    else:
+        resolved_site = (_resolve_extra_site() if extra_site is _UNSET else
+                         _resolve_extra_site(extra_site) if extra_site is not None else None)
+        env = _scrubbed_env(resolved_root, extra_site=resolved_site)
     cwd = str(resolved_root) if resolved_root is not None else "/"
     probe_code = (
-        "import json, numpy, sys; "
-        " flags = getattr(sys, 'flags', None); "
-        " isolated = bool(getattr(flags, 'isolated', 0) or getattr(flags, 'no_user_site', 0)); "
-        " print(json.dumps({'version': getattr(numpy, '__version__', ''), 'isolated': isolated}))"
+        "import json, numpy; "
+        "print(json.dumps({'version': getattr(numpy, '__version__', ''), "
+        "'isolated': bool(__import__('sys').flags.isolated)}))"
     )
     for candidate in ordered:
-        # Reject flag-bearing strings like "python3 -I" or "python3 -s".
-        if any(ch.isspace() for ch in candidate):
+        canon = _canonicalize_python_candidate(candidate)
+        if canon is None:
             continue
-        argv = [candidate, "-c", probe_code]
+        argv = [canon, "-c", probe_code]
+        if site_validator is not None:
+            env = site_validator()
+        elif extra_site is not _UNSET and extra_site is not None:
+            try:
+                _validate_extra_site(str(extra_site))
+            except (OSError, ValueError) as exc:
+                raise PerceptionError("unavailable", "extra site refused: validation failed") from exc
         try:
             proc = _bounded_probe(
                 argv, cwd=cwd, env=env,
@@ -737,9 +1081,57 @@ def _resolve_pinned_python(
             continue
         parsed_ver = _parse_numpy_version(info.get("version"))
         if parsed_ver is not None and parsed_ver >= (2, 0, 0):
-            return candidate
+            return canon
     _fail("unavailable", "no python interpreter with numpy>=2.0.0 available")
     raise AssertionError("unreachable")
+
+
+def _is_correlated_app_error(
+    raw: bytes | str,
+    *,
+    expected_id: int | str | None,
+    expected_op: str | None,
+) -> bool:
+    try:
+        text = (raw.decode("utf-8", errors="strict")
+                if isinstance(raw, bytes) else raw)
+        payload = json.loads(text.strip())
+    except Exception:
+        return False
+    if not isinstance(payload, dict) or set(payload.keys()) != _VSERVE_REPLY_KEYS:
+        return False
+    if payload.get("schema") != VSERVE_REPLY_SCHEMA:
+        return False
+    req_id = payload.get("request_id")
+    if req_id is None:
+        return False
+    if _is_int(req_id):
+        if req_id < 1:
+            return False
+    elif isinstance(req_id, str):
+        if not req_id or _NUL in req_id:
+            return False
+    else:
+        return False
+    if expected_id is not None and (
+            type(req_id) is not type(expected_id) or req_id != expected_id):
+        return False
+    op = payload.get("op")
+    if not isinstance(op, str) or not op:
+        return False
+    if expected_op is not None and op != expected_op:
+        return False
+    if payload.get("ok") is not False:
+        return False
+    rc = payload.get("rc")
+    if not _is_int(rc) or rc not in (2, 3, 4, 5, 6):
+        return False
+    code = payload.get("code")
+    if not isinstance(code, str) or not code or code == "OK":
+        return False
+    if not isinstance(payload.get("detail"), (dict, str)):
+        return False
+    return payload.get("result") is None
 
 
 def _parse_vserve_reply(
@@ -787,7 +1179,7 @@ def _parse_vserve_reply(
 
     req_id = payload.get("request_id")
     if req_id is None:
-        if expected_id is not None and payload.get("ok") is True:
+        if expected_id is not None:
             _fail("bad_shape", "vserve reply missing request_id")
     elif _is_int(req_id):
         if req_id < 1:
@@ -805,7 +1197,7 @@ def _parse_vserve_reply(
     op = payload.get("op")
     if not isinstance(op, str) or not op:
         _fail("bad_shape", "vserve op malformed")
-    if expected_op is not None and op != expected_op and payload.get("ok") is True:
+    if expected_op is not None and op != expected_op:
         _fail("bad_shape", "vserve op mismatch")
 
     ok = payload.get("ok")
@@ -931,6 +1323,7 @@ class _BoundedRequestQueue:
         self._capacity = _check_int(
             capacity, minimum=1, maximum=4, name="queue_cap")
         self._in_flight = 0
+        self._lock = threading.Lock()
         self.policy = "abort"
 
     @property
@@ -939,29 +1332,34 @@ class _BoundedRequestQueue:
 
     @property
     def in_flight(self) -> int:
-        return self._in_flight
+        with self._lock:
+            return self._in_flight
 
     def __len__(self) -> int:
-        return self._in_flight
+        with self._lock:
+            return self._in_flight
 
     def acquire(self) -> None:
-        if self._in_flight >= self._capacity:
-            _fail(
-                "BUDGET_EXCEEDED",
-                "vserve request queue capacity (%d) exhausted (policy=abort)"
-                % self._capacity,
-            )
-        self._in_flight += 1
+        with self._lock:
+            if self._in_flight >= self._capacity:
+                _fail(
+                    "BUDGET_EXCEEDED",
+                    "vserve request queue capacity (%d) exhausted (policy=abort)"
+                    % self._capacity,
+                )
+            self._in_flight += 1
 
     def release(self) -> None:
-        if self._in_flight > 0:
+        with self._lock:
+            if self._in_flight <= 0:
+                _fail("bad_shape", "vserve request queue released when empty")
             self._in_flight -= 1
 
     @contextmanager
     def slot(self):
         self.acquire()
         try:
-            yield self._in_flight
+            yield self.in_flight
         finally:
             self.release()
 
@@ -982,6 +1380,9 @@ def _spawn_vserve_proc(
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        close_fds=True,
+        pass_fds=(),
+        start_new_session=True,
     )
 
 
@@ -1096,6 +1497,13 @@ def _close_weak_adapter(ref: weakref.ReferenceType[VCorePerceptionAdapter]) -> N
         adapter.close()
 
 
+class _AdapterDiagnostics(dict):
+    """Mapping of adapter status/diagnostics that is also callable as a method."""
+
+    def __call__(self) -> dict[str, Any]:
+        return dict(self)
+
+
 class VCorePerceptionAdapter(PerceptionAdapter):
     """Subprocess adapter over the pinned vision-engine checkout.
 
@@ -1132,6 +1540,19 @@ class VCorePerceptionAdapter(PerceptionAdapter):
         self.ve_root = _resolve_ve_root(ve_root, verify_lock=verify_lock)
         self.timeout = timeout
         self.python = python
+        self.extra_site: str | None = None
+        self.extra_site_error: str | None = None
+        self._site_cache: set[tuple[int, int, int]] = set()
+        self._site_identity: tuple[int, int] | None = None
+        raw_site = _extra_site_candidate()
+        if raw_site is not None:
+            try:
+                self.extra_site = _validate_extra_site(raw_site, cache=self._site_cache)
+                dev, ino, _ = next(iter(self._site_cache))
+                self._site_identity = (dev, ino)
+            except (PerceptionError, OSError, ValueError) as exc:
+                self.extra_site_error = str(exc)
+        self._spawn_env = _scrubbed_env(self.ve_root, extra_site=self.extra_site)
         self.marks_out = (_ram_marks_path(marks_out)
                           if marks_out is not None else None)
         self.ocr_marks = ocr_marks
@@ -1142,19 +1563,79 @@ class VCorePerceptionAdapter(PerceptionAdapter):
         self.last_vserve_error: PerceptionError | None = None
         self.last_fallback_error: PerceptionError | None = None
         self._vserve_queue = _BoundedRequestQueue(capacity=queue_cap)
+        self._vserve_io_lock = threading.RLock()
         self._max_restarts = max_restarts
         self._vserve_restarts = 0
+        self._vserve_has_started = False
+        self._vserve_success_streak = 0
         self._fallback_oneshot = fallback_oneshot
         self._pinned_python: str | None = None
         self._vserve_proc: subprocess.Popen[bytes] | None = None
         self._vserve_hello_info: dict[str, Any] | None = None
         self._vserve_req_seq = 0
         self._vserve_rx_buf = bytearray()
+        self._atexit_cb: Callable[[], None] | None = None
         if pin_python:
             self._pinned_python = _resolve_pinned_python(
-                self.python, ve_root=self.ve_root, timeout=self.timeout)
+                self.python,
+                ve_root=self.ve_root,
+                timeout=self.timeout,
+                extra_site=self.extra_site,
+                child_env=self._child_env(),
+                site_validator=self._child_env,
+            )
             self.python = self._pinned_python
-        atexit.register(_close_weak_adapter, weakref.ref(self))
+
+    def _child_env(self) -> dict[str, str]:
+        if self.extra_site is not None:
+            try:
+                _validate_extra_site(self.extra_site, identity=self._site_identity,
+                                     cache=self._site_cache)
+            except (PerceptionError, OSError, ValueError) as exc:
+                self.extra_site_error = str(exc)
+                raise PerceptionError("unavailable", f"extra site refused: {exc}") from exc
+        return dict(self._spawn_env)
+
+    def _build_diagnostics(self) -> _AdapterDiagnostics:
+        return _AdapterDiagnostics({
+            "ve_root": str(self.ve_root),
+            "python": self.python,
+            "pinned_python": self._pinned_python,
+            "extra_site": self.extra_site,
+            "extra_site_error": self.extra_site_error,
+            "vserve_running": (
+                self._vserve_proc is not None
+                and self._vserve_proc.poll() is None
+            ),
+            "vserve_restarts": self._vserve_restarts,
+            "max_restarts": self._max_restarts,
+            "last_transport": self.last_transport,
+            "last_timing_us": self.last_timing_us,
+            "last_latency_us": self.last_latency_us,
+        })
+
+    @property
+    def status(self) -> _AdapterDiagnostics:
+        """Return adapter status/diagnostics (usable as dict or 0-arg callable)."""
+        return self._build_diagnostics()
+
+    @property
+    def diagnostics(self) -> _AdapterDiagnostics:
+        """Return adapter diagnostics (usable as dict or 0-arg callable)."""
+        return self._build_diagnostics()
+
+    @contextmanager
+    def _vserve_lock_scope(self, deadline: float | None = None):
+        if deadline is None:
+            self._vserve_io_lock.acquire()
+        else:
+            rem = _remaining_timeout(deadline)
+            if not self._vserve_io_lock.acquire(timeout=rem):
+                _fail("timeout", "perception deadline exhausted")
+        try:
+            yield
+        finally:
+            self._vserve_io_lock.release()
 
     def _vserve_available(self) -> bool:
         try:
@@ -1169,7 +1650,14 @@ class VCorePerceptionAdapter(PerceptionAdapter):
         rem = (_remaining_timeout(deadline)
                if deadline is not None else self.timeout)
         self._pinned_python = _resolve_pinned_python(
-            self.python, ve_root=self.ve_root, timeout=rem)
+            self.python,
+            ve_root=self.ve_root,
+            timeout=rem,
+            extra_site=self.extra_site,
+            child_env=self._child_env(),
+            site_validator=self._child_env,
+        )
+        self.python = self._pinned_python
         return self._pinned_python
 
     def _next_request_id(self) -> int:
@@ -1177,28 +1665,67 @@ class VCorePerceptionAdapter(PerceptionAdapter):
         return self._vserve_req_seq
 
     def _vserve_close_proc(self) -> None:
-        proc = self._vserve_proc
-        self._vserve_proc = None
-        self._vserve_hello_info = None
-        self._vserve_rx_buf.clear()
-        if proc is None:
-            return
-        for stream in (proc.stdin, proc.stdout, proc.stderr):
-            if stream is not None:
+        with self._vserve_io_lock:
+            proc = self._vserve_proc
+            self._vserve_proc = None
+            self._vserve_hello_info = None
+            self._vserve_rx_buf.clear()
+            self._vserve_success_streak = 0
+            if self._atexit_cb is not None:
                 try:
-                    stream.close()
+                    atexit.unregister(self._atexit_cb)
+                except Exception:
+                    pass
+                self._atexit_cb = None
+            if proc is None:
+                return
+            if proc.stdin is not None:
+                try:
+                    proc.stdin.close()
                 except OSError:
                     pass
-        try:
-            if proc.poll() is None:
-                proc.kill()
-            proc.wait(timeout=0.5)
-        except (OSError, subprocess.TimeoutExpired):
             try:
-                proc.kill()
-                proc.wait(timeout=0.2)
-            except (OSError, subprocess.TimeoutExpired):
+                if proc.poll() is None:
+                    try:
+                        proc.wait(timeout=_VSERVE_SHUTDOWN_EOF_WAIT)
+                    except subprocess.TimeoutExpired:
+                        pass
+                if proc.poll() is None:
+                    try:
+                        proc.terminate()
+                    except OSError:
+                        pass
+                    try:
+                        proc.wait(timeout=_VSERVE_SHUTDOWN_TERM_WAIT)
+                    except subprocess.TimeoutExpired:
+                        pass
+                if proc.poll() is None:
+                    try:
+                        proc.kill()
+                    except OSError:
+                        pass
+                    try:
+                        proc.wait(timeout=_VSERVE_SHUTDOWN_KILL_WAIT)
+                    except subprocess.TimeoutExpired:
+                        proc.wait()
+            except OSError:
                 pass
+            finally:
+                for stream in (proc.stdout, proc.stderr):
+                    if stream is not None:
+                        try:
+                            stream.close()
+                        except OSError:
+                            pass
+                if proc.poll() is None:
+                    try:
+                        proc.kill()
+                    except OSError:
+                        pass
+                    try:
+                        proc.wait()
+                    except OSError:
+                        pass
 
     def close(self) -> None:
         """Close and reap the persistent ``vserve`` process if running."""
@@ -1212,6 +1739,8 @@ class VCorePerceptionAdapter(PerceptionAdapter):
 
     def __del__(self) -> None:
         try:
+            if sys is None or getattr(sys, "is_finalizing", lambda: False)():
+                return
             self.close()
         except Exception:
             pass
@@ -1222,125 +1751,173 @@ class VCorePerceptionAdapter(PerceptionAdapter):
         *,
         deadline: float,
     ) -> dict[str, Any]:
-        proc = self._vserve_proc
-        if proc is None or proc.poll() is not None:
-            _fail("unavailable", "vserve process is not running")
-        assert proc.stdin is not None and proc.stdout is not None
-        req_id = request.get("request_id")
-        op = request.get("op")
-        try:
-            encoded = (json.dumps(request, separators=(",", ":")) + "\n").encode("utf-8")
-        except (TypeError, ValueError) as exc:
-            raise PerceptionError("bad_shape", "vserve request is not JSON-serializable") from exc
-        if len(encoded) > _VSERVE_MAX_CONTROL_BYTES:
-            _fail("BUDGET_EXCEEDED", "vserve request exceeds max_control_line_bytes")
-        _remaining_timeout(deadline)
-        try:
-            proc.stdin.write(encoded)
-            proc.stdin.flush()
-        except (BrokenPipeError, OSError) as exc:
-            self._vserve_close_proc()
-            raise PerceptionError("unavailable", "vserve stdin write failed") from exc
+        with self._vserve_lock_scope(deadline):
+            proc = self._vserve_proc
+            if proc is None or proc.poll() is not None:
+                self._vserve_close_proc()
+                _fail("unavailable", "vserve process is not running")
+            assert proc.stdin is not None and proc.stdout is not None
+            if len(self._vserve_rx_buf) > 0:
+                self._vserve_close_proc()
+                desync_err = PerceptionError(
+                    "bad_shape", "vserve rx buffer not empty before request")
+                desync_err._vserve_desync = True  # type: ignore[attr-defined]
+                raise desync_err
+            req_id = request.get("request_id")
+            op = request.get("op")
+            try:
+                encoded = (json.dumps(request, separators=(",", ":")) + "\n").encode("utf-8")
+            except (TypeError, ValueError) as exc:
+                raise PerceptionError("bad_shape", "vserve request is not JSON-serializable") from exc
+            if len(encoded) > _VSERVE_MAX_CONTROL_BYTES:
+                _fail("BUDGET_EXCEEDED", "vserve request exceeds max_control_line_bytes")
+            _remaining_timeout(deadline)
+            try:
+                proc.stdin.write(encoded)
+                proc.stdin.flush()
+            except (BrokenPipeError, OSError) as exc:
+                self._vserve_close_proc()
+                raise PerceptionError("unavailable", "vserve stdin write failed") from exc
 
-        stdout_fd = proc.stdout.fileno()
-        try:
-            os.set_blocking(stdout_fd, False)
-        except OSError:
-            pass
-        try:
-            with selectors.DefaultSelector() as sel:
-                sel.register(proc.stdout, selectors.EVENT_READ)
-                while True:
-                    nl_idx = self._vserve_rx_buf.find(b"\n")
-                    if nl_idx != -1:
-                        line = bytes(self._vserve_rx_buf[:nl_idx + 1])
-                        del self._vserve_rx_buf[:nl_idx + 1]
-                        break
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        self._vserve_close_proc()
-                        _fail("timeout", "vserve request timed out")
-                    events = sel.select(timeout=remaining)
-                    if not events:
-                        self._vserve_close_proc()
-                        _fail("timeout", "vserve request timed out")
-                    try:
-                        chunk = os.read(stdout_fd, 65536)
-                    except BlockingIOError:
-                        continue
-                    except OSError as exc:
-                        self._vserve_close_proc()
-                        raise PerceptionError(
-                            "unavailable", "vserve stdout read failed") from exc
-                    if not chunk:
-                        stderr_detail = ""
-                        if proc.stderr is not None:
-                            try:
-                                os.set_blocking(proc.stderr.fileno(), False)
-                                stderr_detail = os.read(
-                                    proc.stderr.fileno(), _STDERR_CAP
-                                ).decode("utf-8", errors="replace")[:_STDERR_CAP]
-                            except OSError:
-                                stderr_detail = ""
-                        self._vserve_close_proc()
-                        _fail(
-                            "unavailable",
-                            "vserve process closed stdout (EOF)%s"
-                            % (": " + stderr_detail if stderr_detail else ""),
-                        )
-                    self._vserve_rx_buf.extend(chunk)
-                    if len(self._vserve_rx_buf) > _STDOUT_CAP:
-                        self._vserve_close_proc()
-                        _fail("BUDGET_EXCEEDED", "vserve reply exceeds maximum size")
-        except PerceptionError:
-            raise
-        except Exception as exc:
-            self._vserve_close_proc()
-            raise PerceptionError("unavailable", "vserve I/O failure") from exc
+            stdout_fd = proc.stdout.fileno()
+            try:
+                os.set_blocking(stdout_fd, False)
+            except OSError:
+                pass
+            try:
+                with selectors.DefaultSelector() as sel:
+                    sel.register(proc.stdout, selectors.EVENT_READ)
+                    while True:
+                        nl_idx = self._vserve_rx_buf.find(b"\n")
+                        if nl_idx != -1:
+                            line = bytes(self._vserve_rx_buf[:nl_idx + 1])
+                            del self._vserve_rx_buf[:nl_idx + 1]
+                            if len(self._vserve_rx_buf) > 0:
+                                self._vserve_close_proc()
+                                pipe_err = PerceptionError(
+                                    "bad_shape",
+                                    "vserve sent pipelined bytes after reply newline",
+                                )
+                                pipe_err._vserve_desync = True  # type: ignore[attr-defined]
+                                raise pipe_err
+                            break
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            self._vserve_close_proc()
+                            _fail("timeout", "vserve request timed out")
+                        events = sel.select(timeout=remaining)
+                        if not events:
+                            self._vserve_close_proc()
+                            _fail("timeout", "vserve request timed out")
+                        try:
+                            chunk = os.read(stdout_fd, 65536)
+                        except BlockingIOError:
+                            continue
+                        except OSError as exc:
+                            self._vserve_close_proc()
+                            raise PerceptionError(
+                                "unavailable", "vserve stdout read failed") from exc
+                        if not chunk:
+                            stderr_detail = ""
+                            if proc.stderr is not None:
+                                try:
+                                    os.set_blocking(proc.stderr.fileno(), False)
+                                    stderr_detail = os.read(
+                                        proc.stderr.fileno(), _STDERR_CAP
+                                    ).decode("utf-8", errors="replace")[:_STDERR_CAP]
+                                except OSError:
+                                    stderr_detail = ""
+                            self._vserve_close_proc()
+                            _fail(
+                                "unavailable",
+                                "vserve process closed stdout (EOF)%s"
+                                % (": " + stderr_detail if stderr_detail else ""),
+                            )
+                        self._vserve_rx_buf.extend(chunk)
+                        if len(self._vserve_rx_buf) > _STDOUT_CAP:
+                            self._vserve_close_proc()
+                            _fail("BUDGET_EXCEEDED", "vserve reply exceeds maximum size")
+            except PerceptionError:
+                raise
+            except Exception as exc:
+                self._vserve_close_proc()
+                raise PerceptionError("unavailable", "vserve I/O failure") from exc
 
-        return _parse_vserve_reply(
-            line,
-            expected_id=req_id if isinstance(req_id, (int, str)) else None,
-            expected_op=op if isinstance(op, str) else None,
-        )
+            expected_id = req_id if isinstance(req_id, (int, str)) else None
+            expected_op = op if isinstance(op, str) else None
+            try:
+                parsed_reply = _parse_vserve_reply(
+                    line,
+                    expected_id=expected_id,
+                    expected_op=expected_op,
+                )
+            except PerceptionError as exc:
+                if not _is_correlated_app_error(
+                    line, expected_id=expected_id, expected_op=expected_op
+                ):
+                    self._vserve_close_proc()
+                    exc._vserve_desync = True  # type: ignore[attr-defined]
+                raise
+            if expected_op != "hello":
+                self._vserve_success_streak += 1
+                if (self._vserve_restarts > 0
+                        and self._vserve_success_streak >= _VSERVE_RESTART_RECOVERY_REPLIES):
+                    self._vserve_restarts = 0
+            return parsed_reply
 
     def _vserve_start(self, *, deadline: float | None = None) -> dict[str, Any]:
         """Start the persistent ``vserve`` process lazily and verify ``hello``."""
         _validate_timeout(self.timeout)
         active_deadline = (deadline if deadline is not None
                            else time.monotonic() + self.timeout)
-        if (self._vserve_proc is not None
-                and self._vserve_proc.poll() is None
-                and self._vserve_hello_info is not None):
-            return dict(self._vserve_hello_info)
-        self._vserve_close_proc()
-        if not self._vserve_available():
-            _fail("unavailable", "vadapt/vserve.py not available in checkout")
-        pinned = self._ensure_pinned_python(deadline=active_deadline)
-        _remaining_timeout(active_deadline)
-        argv = [pinned, "-m", "vadapt.vserve"]
-        try:
-            proc = _spawn_vserve_proc(
-                argv,
-                cwd=str(self.ve_root),
-                env=_scrubbed_env(self.ve_root),
-            )
-        except OSError as exc:
-            raise PerceptionError(
-                "unavailable", "vserve subprocess could not execute") from exc
-        self._vserve_proc = proc
-        try:
-            req_id = self._next_request_id()
-            reply = self._vserve_roundtrip(
-                {"request_id": req_id, "op": "hello"},
-                deadline=active_deadline,
-            )
-            hello_info = _validate_hello_result(reply["result"])
-        except Exception:
+        with self._vserve_lock_scope(active_deadline):
+            if (self._vserve_proc is not None
+                    and self._vserve_proc.poll() is None
+                    and self._vserve_hello_info is not None):
+                return dict(self._vserve_hello_info)
             self._vserve_close_proc()
-            raise
-        self._vserve_hello_info = hello_info
-        return dict(hello_info)
+            if not self._vserve_available():
+                _fail("unavailable", "vadapt/vserve.py not available in checkout")
+            if self._vserve_has_started:
+                if self._vserve_restarts >= self._max_restarts:
+                    _fail("unavailable", "vserve restart budget exhausted")
+                self._vserve_restarts += 1
+            else:
+                self._vserve_has_started = True
+            self._vserve_success_streak = 0
+            pinned = self._ensure_pinned_python(deadline=active_deadline)
+            _remaining_timeout(active_deadline)
+            argv = [pinned, "-m", "vadapt.vserve"]
+            try:
+                proc = _spawn_vserve_proc(
+                    argv,
+                    cwd=str(self.ve_root),
+                    env=self._child_env(),
+                )
+            except OSError as exc:
+                raise PerceptionError(
+                    "unavailable", "vserve subprocess could not execute") from exc
+            self._vserve_proc = proc
+            ref = weakref.ref(self)
+
+            def _atexit_hook() -> None:
+                _close_weak_adapter(ref)
+
+            self._atexit_cb = _atexit_hook
+            atexit.register(_atexit_hook)
+            try:
+                req_id = self._next_request_id()
+                reply = self._vserve_roundtrip(
+                    {"request_id": req_id, "op": "hello"},
+                    deadline=active_deadline,
+                )
+                hello_info = _validate_hello_result(reply["result"])
+                hello_info["extra_site"] = self.extra_site
+            except Exception:
+                self._vserve_close_proc()
+                raise
+            self._vserve_hello_info = hello_info
+            return dict(hello_info)
 
     def _vserve_health(
         self,
@@ -1352,18 +1929,19 @@ class VCorePerceptionAdapter(PerceptionAdapter):
         _validate_timeout(self.timeout)
         active_deadline = (deadline if deadline is not None
                            else time.monotonic() + self.timeout)
-        if (self._vserve_proc is None
-                or self._vserve_proc.poll() is not None
-                or self._vserve_hello_info is None):
-            self._vserve_start(deadline=active_deadline)
         try:
-            with self._vserve_queue.slot():
+            with self._vserve_queue.slot(), self._vserve_lock_scope(active_deadline):
+                if (self._vserve_proc is None
+                        or self._vserve_proc.poll() is not None
+                        or self._vserve_hello_info is None):
+                    self._vserve_start(deadline=active_deadline)
                 ping_id = self._next_request_id()
                 ping_reply = self._vserve_roundtrip(
                     {"request_id": ping_id, "op": "ping"},
                     deadline=active_deadline,
                 )
                 hello_info = _validate_hello_result(ping_reply["result"])
+                hello_info["extra_site"] = self.extra_site
                 if include_status:
                     status_id = self._next_request_id()
                     status_reply = self._vserve_roundtrip(
@@ -1371,6 +1949,7 @@ class VCorePerceptionAdapter(PerceptionAdapter):
                         deadline=active_deadline,
                     )
                     status_info = _validate_status_result(status_reply["result"])
+                    status_info["extra_site"] = self.extra_site
                     hello_info["status"] = status_info
         except PerceptionError:
             self._vserve_close_proc()
@@ -1382,11 +1961,10 @@ class VCorePerceptionAdapter(PerceptionAdapter):
         _validate_timeout(self.timeout)
         active_deadline = (deadline if deadline is not None
                            else time.monotonic() + self.timeout)
-        self._vserve_close_proc()
-        if self._vserve_restarts >= self._max_restarts:
-            _fail("unavailable", "vserve restart budget exhausted")
-        self._vserve_restarts += 1
-        return self._vserve_start(deadline=active_deadline)
+        with self._vserve_lock_scope(active_deadline):
+            self._vserve_close_proc()
+            self._vserve_has_started = True
+            return self._vserve_start(deadline=active_deadline)
 
     def _perceive_vserve(
         self,
@@ -1405,7 +1983,9 @@ class VCorePerceptionAdapter(PerceptionAdapter):
             if isinstance(frame, Frame):
                 req_body["frame_raw"] = _write_raw_shm_frame(frame, stack)
             else:
-                path_str = _existing_frame_path(frame)
+                path_str = _verify_and_pin_frame_path(
+                    frame, width=width, height=height,
+                    stack=stack, deadline=deadline)
                 if path_str.startswith(_PROC_FD_PREFIX):
                     _fail("unavailable", "procfd requires one-shot pass_fds")
                 req_body["frame"] = path_str
@@ -1414,7 +1994,9 @@ class VCorePerceptionAdapter(PerceptionAdapter):
                 if isinstance(prev, Frame):
                     req_body["prev_raw"] = _write_raw_shm_frame(prev, stack)
                 else:
-                    prev_str = _existing_frame_path(prev)
+                    prev_str = _verify_and_pin_frame_path(
+                        prev, width=width, height=height,
+                        stack=stack, deadline=deadline)
                     if prev_str.startswith(_PROC_FD_PREFIX):
                         _fail("unavailable", "procfd prev requires one-shot pass_fds")
                     req_body["prev"] = prev_str
@@ -1424,21 +2006,23 @@ class VCorePerceptionAdapter(PerceptionAdapter):
             if self.ocr_marks:
                 req_body["ocr_marks"] = True
 
-            self._vserve_start(deadline=deadline)
-            try:
-                req_id = self._next_request_id()
-                req = {"request_id": req_id, **req_body}
-                reply = self._vserve_roundtrip(req, deadline=deadline)
-            except PerceptionError as exc:
-                if (exc.code == "unavailable"
-                        and self._vserve_proc is None
-                        and self._vserve_restarts < self._max_restarts):
-                    self._vserve_restart(deadline=deadline)
+            with self._vserve_lock_scope(deadline):
+                self._vserve_start(deadline=deadline)
+                try:
                     req_id = self._next_request_id()
                     req = {"request_id": req_id, **req_body}
                     reply = self._vserve_roundtrip(req, deadline=deadline)
-                else:
-                    raise
+                except PerceptionError as exc:
+                    if ((exc.code == "unavailable"
+                            or getattr(exc, "_vserve_desync", False))
+                            and self._vserve_proc is None
+                            and self._vserve_restarts < self._max_restarts):
+                        self._vserve_restart(deadline=deadline)
+                        req_id = self._next_request_id()
+                        req = {"request_id": req_id, **req_body}
+                        reply = self._vserve_roundtrip(req, deadline=deadline)
+                    else:
+                        raise
 
         c2_bytes = json.dumps(reply["result"]).encode("utf-8")
         parsed = _parse_c2_payload(
@@ -1494,7 +2078,6 @@ class VCorePerceptionAdapter(PerceptionAdapter):
                 if exc.code == "identity_mismatch" or not self._fallback_oneshot:
                     raise
                 vserve_error = exc
-        env = _scrubbed_env(self.ve_root)
         try:
             with ExitStack() as stack:
                 fds: list[int] = []
@@ -1530,7 +2113,7 @@ class VCorePerceptionAdapter(PerceptionAdapter):
                 timeout = _remaining_timeout(deadline)
                 try:
                     result = _run_bounded(
-                        command, cwd=str(self.ve_root), env=env,
+                        command, cwd=str(self.ve_root), env=self._child_env(),
                         stdin=subprocess.DEVNULL,
                         timeout=timeout, pass_fds=tuple(fds))
                 except subprocess.TimeoutExpired as exc:
@@ -1609,7 +2192,7 @@ class VCorePerceptionAdapter(PerceptionAdapter):
         try:
             result = _run_bounded(
                 command, cwd=str(self.ve_root),
-                env=_scrubbed_env(self.ve_root),
+                env=self._child_env(),
                 stdin=subprocess.DEVNULL,
                 timeout=self.timeout)
         except subprocess.TimeoutExpired as exc:

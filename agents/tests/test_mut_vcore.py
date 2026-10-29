@@ -550,8 +550,11 @@ class MutVServeBoundedQueueTests(unittest.TestCase):
 
     def test_release_on_empty_slot_yield_and_exception_cleanup(self) -> None:
         q = _BoundedRequestQueue(capacity=2)
-        # Release on empty is a no-op and does not underflow below 0.
-        q.release()
+        # MUT-VS-EMPTY-RELEASE: clamping at zero masks an unmatched release.
+        # slot() acquires before its try/finally, so cleanup owns a slot.
+        with self.assertRaises(PerceptionError) as ctx:
+            q.release()
+        self.assertEqual(ctx.exception.code, "bad_shape")
         self.assertEqual(len(q), 0)
         self.assertEqual(q.in_flight, 0)
 
@@ -560,6 +563,12 @@ class MutVServeBoundedQueueTests(unittest.TestCase):
             self.assertEqual(s1, 1)
             with q.slot() as s2:
                 self.assertEqual(s2, 2)
+                # A failed acquire never enters slot()'s cleanup block.
+                with self.assertRaises(PerceptionError) as full:
+                    with q.slot():
+                        self.fail("over-capacity slot admitted")
+                self.assertEqual(full.exception.code, "BUDGET_EXCEEDED")
+                self.assertEqual(q.in_flight, 2)
             self.assertEqual(len(q), 1)
         self.assertEqual(len(q), 0)
 
@@ -809,7 +818,9 @@ class MutVServePinnedPythonBoundaryTests(unittest.TestCase):
     def test_isolated_probe_skip_and_tab_candidate_and_pin_once_caching(self) -> None:
         root = _setup_fake_ve_root(self, numpy_version="2.4.2")
 
-        # 1. Isolated probe skipped: first candidate returns isolated=True, falls through to second.
+        # 1. MUT-VS-NONCANONICAL-PROBE: nonexistent candidates never reach probe.
+        canonical = vcore._canonicalize_python_candidate(sys.executable)
+        self.assertIsNotNone(canonical)
         calls: list[str] = []
 
         def fake_probe(argv, *, cwd, env, stdin, timeout):
@@ -827,7 +838,19 @@ class MutVServePinnedPythonBoundaryTests(unittest.TestCase):
                 ve_root=root,
                 candidates=["/fake/iso-python", sys.executable],
             )
-        self.assertEqual(chosen, sys.executable)
+        self.assertEqual(chosen, canonical)
+        self.assertEqual(calls, [canonical])
+
+        # MUT-VS-ISOLATED-ACCEPT: retain the isolated-result rejection oracle
+        # independently of filesystem candidate admission.
+        calls.clear()
+        with mock.patch.object(vcore, "_canonicalize_python_candidate", side_effect=lambda c: c), \
+                mock.patch.object(vcore, "_bounded_probe", side_effect=fake_probe):
+            isolated_chosen = _resolve_pinned_python(
+                "/fake/iso-python", ve_root=root,
+                candidates=["/fake/iso-python", sys.executable],
+            )
+        self.assertEqual(isolated_chosen, sys.executable)
         self.assertEqual(calls, ["/fake/iso-python", sys.executable])
 
         # 2. Tab-bearing candidate skipped without invoking subprocess probe.
@@ -844,11 +867,10 @@ class MutVServePinnedPythonBoundaryTests(unittest.TestCase):
                 ve_root=root,
                 candidates=["python3\t-I", sys.executable],
             )
-        self.assertEqual(chosen_tab, sys.executable)
-        self.assertEqual(tab_calls, [sys.executable])
+        self.assertEqual(chosen_tab, canonical)
+        self.assertEqual(tab_calls, [canonical])
 
-        # 3. Default candidates auto-appends sys.executable when python="python3":
-        # if "python3" fails probe, sys.executable succeeds.
+        # 3. Bare python3 is resolved before probing; no PATH lookup in child.
         def fail_bare_python3(argv, *, cwd, env, stdin, timeout):
             if argv[0] == "python3":
                 return subprocess.CompletedProcess(argv, 1, b"", b"no numpy")
@@ -857,7 +879,7 @@ class MutVServePinnedPythonBoundaryTests(unittest.TestCase):
 
         with mock.patch.object(vcore, "_bounded_probe", side_effect=fail_bare_python3):
             auto_chosen = _resolve_pinned_python("python3", ve_root=root)
-        self.assertEqual(auto_chosen, sys.executable)
+        self.assertEqual(auto_chosen, vcore._canonicalize_python_candidate("python3"))
 
         # 4. pin_python=True resolves once at init and caches across two perceives.
         with mock.patch.object(
@@ -954,8 +976,16 @@ class MutVServeRawShmAndIdentityGateTests(unittest.TestCase):
         last_req = json.loads(
             (vserve_root / "last_describe_req.json").read_text(encoding="utf-8")
         )
-        self.assertEqual(last_req["frame"], str(shm_png.resolve()))
-        self.assertEqual(last_req["prev"], str(shm_png.resolve()))
+        # MUT-VS-CALLER-PATH: both inputs must be separate private snapshots,
+        # cleaned after the roundtrip; forwarding the caller path fails here.
+        for key in ("frame", "prev"):
+            pinned = Path(last_req[key])
+            self.assertEqual(pinned.parent, shm_dir)
+            self.assertTrue(pinned.name.startswith("mv-vcore-frame-"))
+            self.assertEqual(pinned.suffix, ".png")
+            self.assertNotEqual(pinned, shm_png.resolve())
+            self.assertFalse(pinned.exists())
+        self.assertNotEqual(last_req["frame"], last_req["prev"])
         self.assertEqual(last_req["marks_out"], str(marks_file.resolve()))
         self.assertIs(last_req["ocr_marks"], True)
 
