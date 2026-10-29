@@ -35,6 +35,11 @@ impl JournalSink for Events {
     }
 }
 impl Host {
+    /// Sealed captures use the export path, independent of live sampling limits.
+    pub(crate) fn is_sealed(&self, id: &str) -> bool {
+        self.rows.get(id).is_some_and(|row| row["sealed"] == true)
+    }
+
     pub fn with_serial(serial: u64) -> Self {
         Self {
             serial,

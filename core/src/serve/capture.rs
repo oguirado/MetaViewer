@@ -320,7 +320,11 @@ impl Server {
             else {
                 return self.unsupported_at(now_ns, env, boundary);
             };
-            if fps > crate::record::capture::MAX_FPS {
+            if fps > crate::record::capture::MAX_FPS
+                && !self
+                    .capture
+                    .is_sealed(raw["params"]["recording_id"].as_str().unwrap_or(""))
+            {
                 let out = self.authority.apply_with_witnesses(
                     Input::Refuse {
                         reason: Refusal::BudgetExceeded,

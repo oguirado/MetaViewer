@@ -13,7 +13,7 @@ use std::path::PathBuf;
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
 
-const EXPORT_LIMIT: usize = 16 * 1024 * 1024;
+const EXPORT_LIMIT: usize = crate::record::EXPORT_BYTE_LIMIT as usize;
 #[cfg(test)]
 static SERIAL: AtomicU64 = AtomicU64::new(0);
 

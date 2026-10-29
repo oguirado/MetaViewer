@@ -20,6 +20,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Component, Path};
 
 const CAP: u64 = 1 << 30;
+/// Maximum archive size, shared by the exporter and receipt admission.
+pub const EXPORT_BYTE_LIMIT: u64 = 16 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Error {
@@ -399,7 +401,7 @@ impl Coordinator {
                     || r.mode != "disk"
                     || r.surface_id != f.surface_id
                     || f.byte_count == 0
-                    || f.byte_count > CAP
+                    || f.byte_count > EXPORT_BYTE_LIMIT
                     || f.sha256.len() != 64
                     || !f
                         .sha256
