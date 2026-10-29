@@ -19,14 +19,14 @@ The live perception and state reader (`default_live_reader`) calls `resolve_lock
 | Environment Variable | Component | Pinned Version | Pinned `deps.lock` Commit |
 | --- | --- | --- | --- |
 | `VQA_VE_ROOT` | `vision-engine` | `v0.2.0` [CITED: deps.lock] | `3bb54835db8a2e545311cfcc45185a0dfbd9313a` [CITED: deps.lock] |
-| `MV_WENDER_ROOT` | `wender-agent` | `v0.3.0` [CITED: deps.lock] | `b95277804ee112fc8ab213c1e6148d752427e3eb` [CITED: deps.lock] |
+| `MV_WENDER_ROOT` | `wender-agent` | `v0.3.0` [CITED: deps.lock] | `96120967b435b72fc6d29635f3844dae140388a9` [CITED: deps.lock] |
 | `MV_SRF_BIN_DIR` | `opensuperficies` | `os-cu-w9-mv1` [CITED: deps.lock] | `a9ac1ac8543872b428990ea23fa2629cd0a6d1d5` [CITED: deps.lock] |
 
 If a local clone is on a different branch or has tracked modifications, create clean detached worktrees at the `deps.lock` commits (`git worktree add --detach <dir> <commit>`) before running the live script:
 
 ```bash
 git -C <vision-engine-clone> worktree add --detach <dir>/vision-engine 3bb54835db8a2e545311cfcc45185a0dfbd9313a
-git -C <wender-agent-clone> worktree add --detach <dir>/wender-agent b95277804ee112fc8ab213c1e6148d752427e3eb
+git -C <wender-agent-clone> worktree add --detach <dir>/wender-agent 96120967b435b72fc6d29635f3844dae140388a9
 export VQA_VE_ROOT=<dir>/vision-engine
 export MV_WENDER_ROOT=<dir>/wender-agent
 ```
