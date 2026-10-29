@@ -19,19 +19,19 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 630 | 55 | 575 |
-| Lanes finished OK | 630 | 55 | 575 |
-| Agent steps | 31,067 | 2,705 | 28,362 |
-| Lane-hours of agent work | 81.0 | 5.2 | 75.8 |
-| Fresh input tokens | 128,642,719 | 11,482,034 | 117,160,685 |
-| Cache-read input tokens | 2,778,114,588 | 226,255,212 | 2,551,859,376 |
+| Lanes launched | 631 | 55 | 576 |
+| Lanes finished OK | 631 | 55 | 576 |
+| Agent steps | 31,124 | 2,705 | 28,419 |
+| Lane-hours of agent work | 81.1 | 5.2 | 75.9 |
+| Fresh input tokens | 128,799,223 | 11,482,034 | 117,317,189 |
+| Cache-read input tokens | 2,782,187,378 | 226,255,212 | 2,555,932,166 |
 | Prompt cache hit % | 95.6 | 95.2 | 95.6 |
-| Output tokens | 27,231,146 | 2,135,708 | 25,095,438 |
-| Thinking tokens | 15,223,365 | 1,050,039 | 14,173,326 |
-| Cost (USD) | 23.8667 | 2.0279 | 21.8389 |
+| Output tokens | 27,265,010 | 2,135,708 | 25,129,302 |
+| Thinking tokens | 15,243,339 | 1,050,039 | 14,193,300 |
+| Cost (USD) | 23.8973 | 2.0279 | 21.8694 |
 | Cost per lane (USD) | 0.0379 | 0.0369 | 0.038 |
 
-Rooms: 130. Peak concurrent lanes [MEASURED from lane start/end]: 32.
+Rooms: 131. Peak concurrent lanes [MEASURED from lane start/end]: 32.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
@@ -43,7 +43,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
 | docs | 15 | 94.8 | 0.5371 |
-| fix | 61 | 96.8 | 3.2837 |
+| fix | 62 | 96.8 | 3.3143 |
 | kit | 3 | 96.5 | 0.1997 |
 | ops | 4 | 88.1 | 0.0468 |
 | perf | 2 | 97.2 | 0.1217 |
@@ -191,6 +191,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui34 | UI orchestrator | Oct 28 23:39 | perf | 1 | 96.6 | 0.0523 | The fps review asks the renderer to paint only the newest frame per tile and never repaint retained bytes for a new digest, so higher selectable wall fps does not build a paint backlog or show stale pixels (AC-02). |
 | mvui34b | UI orchestrator | Oct 29 00:03 | fix | 1 | 96.0 | 0.0333 | The paced-paint drop ships tests only, and the judge found its negative controls test toy functions instead of the real router/scheduler; make them real mutants so the tests prove they would catch a regression. |
 | mvui35 | UI orchestrator | Oct 29 02:26 | build | 1 | 96.0 | 0.0477 | Cross-language parity tests found the renderer settings decoders accept a 30.0 float lexeme as an integer fps (D3) and keep unknown stored keys (D4) while the frozen host side refuses both; align the renderer so stored settings decode identically everywhere. |
+| mvui35b | UI orchestrator | Oct 29 02:59 | fix | 1 | 96.3 | 0.0306 | The D4 parity fix makes stored settings with unknown keys refuse and fall back to full defaults; three committed tests still pin the old lenient load and must move to the strict assertion so the suite matches the reversed ruling. |
 
 ## Every lane
 
@@ -826,6 +827,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | blive_runner | sec_weblive_runner | Oct 29 02:37 | yes | 26 | 90.5 | 0.022165 |
 | direct-direct | c_harden | mut_rec_harden | Oct 29 02:37 | yes | 39 | 93.5 | 0.027361 |
 | direct-direct | gestskip | mut_digestskip | Oct 29 02:37 | yes | 18 | 87.4 | 0.018265 |
+| mvui35b | T | strict D4 test updates | Oct 29 02:59 | yes | 57 | 96.3 | 0.030569 |
 
 ## Method
 

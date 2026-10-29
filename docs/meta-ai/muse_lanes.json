@@ -1,17 +1,17 @@
 {
  "schema": "metaviewer.meta_ai_usage/v1",
  "totals": {
-  "lanes": 630,
-  "ok": 630,
-  "input_tokens": 128642719,
-  "cache_read_tokens": 2778114588,
-  "output_tokens": 27231146,
-  "thinking_tokens": 15223365,
+  "lanes": 631,
+  "ok": 631,
+  "input_tokens": 128799223,
+  "cache_read_tokens": 2782187378,
+  "output_tokens": 27265010,
+  "thinking_tokens": 15243339,
   "cache_hit_pct": 95.6,
-  "usd": 23.8667,
+  "usd": 23.8973,
   "usd_per_lane": 0.0379,
-  "steps": 31067,
-  "lane_hours": 81.0
+  "steps": 31124,
+  "lane_hours": 81.1
  },
  "peak_concurrent_lanes": 32,
  "rooms": {
@@ -228,6 +228,11 @@
   "mvui20b": {
    "stage": "fix",
    "why": "Live tile turns black after a multislot round trip (second canvas for the same surface replaces and then removes the binding); black placeholder before the first frame.",
+   "orchestrator": "UI orchestrator"
+  },
+  "mvui35b": {
+   "stage": "fix",
+   "why": "The D4 parity fix makes stored settings with unknown keys refuse and fall back to full defaults; three committed tests still pin the old lenient load and must move to the strict assertion so the suite matches the reversed ruling.",
    "orchestrator": "UI orchestrator"
   },
   "mvui32": {
@@ -13951,6 +13956,27 @@
    "thinking_tokens": 22148,
    "cache_hit_pct": 87.4,
    "usd": 0.018265
+  },
+  {
+   "room": "mvui35b",
+   "lane": "T",
+   "title": "strict D4 test updates",
+   "stage": "fix",
+   "model": "muse-spark-1.3",
+   "orchestrator": "UI orchestrator",
+   "effort": "max",
+   "ok": true,
+   "start_utc": "2026-10-29T01:59:27.031000+00:00",
+   "duration_s": 436.2,
+   "end_utc": "2026-10-29T02:06:43.263000+00:00",
+   "phase": "build",
+   "steps": 57,
+   "input_tokens": 156504,
+   "cache_read_tokens": 4072790,
+   "output_tokens": 33864,
+   "thinking_tokens": 19974,
+   "cache_hit_pct": 96.3,
+   "usd": 0.030569
   }
  ]
 }
