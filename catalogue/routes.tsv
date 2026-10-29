@@ -765,6 +765,7 @@ holding-ccd017c9f1a2	daemon-adapter/internal/capsule/holdings_witness_test.go
 kinds_destroy_test.go	daemon-adapter/internal/capsule/kinds_destroy_test.go
 liveness.go	daemon-adapter/internal/capsule/liveness.go
 liveness_test.go	daemon-adapter/internal/capsule/liveness_test.go
+lostset-d04bd8c51b72	daemon-adapter/internal/capsule/lost_settle_v3v6_test.go
 lost_slot_test.go	daemon-adapter/internal/capsule/lost_slot_test.go
 manager.go	daemon-adapter/internal/capsule/manager.go
 manager_a2_test.go	daemon-adapter/internal/capsule/manager_a2_test.go
