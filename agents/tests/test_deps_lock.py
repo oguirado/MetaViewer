@@ -265,7 +265,7 @@ class DependencyLockTests(unittest.TestCase):
         self.assertEqual(deps_lock._locked_commit("vision-engine", deps_lock._LOCK_PATH),
                          "3bb54835db8a2e545311cfcc45185a0dfbd9313a")
         self.assertEqual(deps_lock._locked_commit("wender-agent", deps_lock._LOCK_PATH),
-                         "41493681a2f4d92aae50c476ed13c219c31a0a02")
+                         "b95277804ee112fc8ab213c1e6148d752427e3eb")
         self.assert_code("commit_mismatch", lambda: resolve_locked_component("vision-engine"))
 
 
