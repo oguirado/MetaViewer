@@ -705,6 +705,7 @@ frame_timings.rs	core/tests/frame_timings.rs
 frames_parity.rs	core/tests/frames_parity.rs
 framing.rs	core/tests/framing.rs
 handshake.rs	core/tests/handshake.rs
+holdings_mut.rs	core/tests/holdings_mut.rs
 holdings_settle.rs	core/tests/holdings_settle.rs
 humanin-088290955b09	core/tests/human_input_control.rs
 humanin-144bc1eaecb9	core/tests/human_input_real_adapter.rs
@@ -749,6 +750,7 @@ external_lost_test.go	daemon-adapter/internal/capsule/external_lost_test.go
 fuzz_test.go	daemon-adapter/internal/capsule/fuzz_test.go
 geometry_test.go	daemon-adapter/internal/capsule/geometry_test.go
 handoff.go	daemon-adapter/internal/capsule/handoff.go
+holdings_mut_test.go	daemon-adapter/internal/capsule/holdings_mut_test.go
 holding-ccd017c9f1a2	daemon-adapter/internal/capsule/holdings_witness_test.go
 kinds_destroy_test.go	daemon-adapter/internal/capsule/kinds_destroy_test.go
 liveness.go	daemon-adapter/internal/capsule/liveness.go
