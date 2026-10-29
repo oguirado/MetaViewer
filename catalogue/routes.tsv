@@ -1045,6 +1045,7 @@ relay.html	tests/e2e/e2e1_slice/relay.html
 scenario.rs	tests/e2e/e2e1_slice/scenario.rs
 stack.py	tests/e2e/e2e1_slice/stack.py
 testdem-9e6566157486	tests/e2e/e2e1_slice/test_demo_agent_drive.py
+testdem-e48f14c474ff	tests/e2e/e2e1_slice/test_demo_agent_drive_gai.py
 test_stack_demo.py	tests/e2e/e2e1_slice/test_stack_demo.py
 verify-receipt.rs	tests/e2e/e2e1_slice/verify-receipt.rs
 e2e1_wall.test.js	tests/e2e/e2e1_wall.test.js
