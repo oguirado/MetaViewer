@@ -53,7 +53,10 @@ export function installReadOnlyLayout(ipcMain, contents, registered = []) {
   for (const channel of [CHANNELS.save, 'metaviewer:settings.save',
     'metaviewer:authority.propose', 'metaviewer:authority.intent',
     'metaviewer:authority.subscribe', 'metaviewer:authority.unsubscribe',
-    'metaviewer:side-terminal.open', 'metaviewer:side-terminal.enabled']) {
+    'metaviewer:side-terminal.open', 'metaviewer:side-terminal.enabled',
+    'metaviewer:side-terminal.attach', 'metaviewer:side-terminal.resize',
+    'metaviewer:side-terminal.close', 'metaviewer:side-terminal.providers',
+    'metaviewer:side-terminal.copy']) {
     ipcMain.handle(channel, () => { throw new Error('DISPLAY_ONLY: layout persistence is disabled; privileged actions are disabled'); });
     registered.push(channel);
   }

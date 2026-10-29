@@ -653,28 +653,28 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
       return true;
     },
     unsubscribeFrames: async () => { subscribed=false; return true; },
-    terminalAttach: async (/** @type {any} */value) => {
+    terminalAttach: async (/** @type {any} */value, /** @type {unknown} */sender) => {
       if (!exactDataKeys(value, 'session') || typeof value.session !== 'string') throw new Error('TERMINAL_IO_REFUSED');
       if (!/^[A-Za-z0-9._-]{1,128}$/.test(value.session)) throw new Error('TERMINAL_UNKNOWN_SESSION');
       if (!terminal || typeof terminal.attach !== 'function') throw new Error('TERMINAL_UNKNOWN_SESSION');
-      const result = await terminal.attach({ session: value.session });
+      const result = await terminal.attach({ session: value.session }, sender);
       if (!result || typeof result.port !== 'object' || result.port === null) throw new Error('OUTCOME');
       return result;
     },
-    terminalResize: async (/** @type {any} */value) => {
+    terminalResize: async (/** @type {any} */value, /** @type {unknown} */sender) => {
       if (!exactDataKeys(value, 'cols,rows,session') || typeof value.session !== 'string'
           || !Number.isSafeInteger(value.cols) || value.cols < 2 || value.cols > 500
           || !Number.isSafeInteger(value.rows) || value.rows < 2 || value.rows > 300) throw new Error('TERMINAL_IO_REFUSED');
       if (!/^[A-Za-z0-9._-]{1,128}$/.test(value.session)) throw new Error('TERMINAL_UNKNOWN_SESSION');
       if (!terminal || typeof terminal.resize !== 'function') throw new Error('TERMINAL_UNKNOWN_SESSION');
-      if (await terminal.resize({ session: value.session, cols: value.cols, rows: value.rows }) !== true) throw new Error('OUTCOME');
+      if (await terminal.resize({ session: value.session, cols: value.cols, rows: value.rows }, sender) !== true) throw new Error('OUTCOME');
       return true;
     },
-    terminalClose: async (/** @type {any} */value) => {
+    terminalClose: async (/** @type {any} */value, /** @type {unknown} */sender) => {
       if (!exactDataKeys(value, 'session') || typeof value.session !== 'string') throw new Error('TERMINAL_IO_REFUSED');
       if (!/^[A-Za-z0-9._-]{1,128}$/.test(value.session)) throw new Error('TERMINAL_UNKNOWN_SESSION');
       if (!terminal || typeof terminal.close !== 'function') throw new Error('TERMINAL_UNKNOWN_SESSION');
-      if (await terminal.close({ session: value.session }) !== true) throw new Error('OUTCOME');
+      if (await terminal.close({ session: value.session }, sender) !== true) throw new Error('OUTCOME');
       return true;
     },
     terminalProviders: async () => {
@@ -702,7 +702,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
       if (typeof value !== 'boolean') throw new Error('PAYLOAD');
       if (!terminal || await terminal.setEnabled(value) !== true) throw new Error('OUTCOME'); enabled=value; return true;
     },
-    terminalOpen: async (/** @type {any} */value) => {
+    terminalOpen: async (/** @type {any} */value, /** @type {unknown} */sender) => {
       if (!value || (!exactDataKeys(value, 'cols,command,rows') && !exactDataKeys(value, 'args,cols,command,rows'))
           || typeof value.command !== 'string' || (value.args !== undefined && !Array.isArray(value.args))
           || !Number.isSafeInteger(value.cols) || value.cols < 2 || value.cols > 500
@@ -721,7 +721,8 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
       const result = await terminal.open(
         value.command === 'shell'
           ? {command:'shell',cols:value.cols,rows:value.rows}
-          : {command:'provider',provider:value.command,cols:value.cols,rows:value.rows}
+          : {command:'provider',provider:value.command,cols:value.cols,rows:value.rows},
+        sender
       );
       if (!result || Object.keys(result).join(',') !== 'session' || typeof result.session !== 'string'
           || !/^[A-Za-z0-9._-]{1,128}$/.test(result.session)) throw new Error('OUTCOME');
@@ -858,7 +859,9 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
         if (disposed || observeSender(event,contents,PRIVILEGED_ORIGIN).verdict !== 'admit') throw new Error('SENDER');
         if (args.length !== arity) throw new Error('ARGS');
         if (arity && (JSON.stringify(args[0]) === undefined || Buffer.byteLength(typeof args[0] === 'string' ? args[0] : JSON.stringify(args[0]),'utf8') > WIRE_MAX_BYTES)) throw new Error('PAYLOAD');
-        const result=await /** @type {any} */(fn)(...args);
+        const result=await (['terminalOpen','terminalAttach','terminalResize','terminalClose'].includes(name)
+          ? /** @type {any} */(fn)(args[0], /** @type {any} */(event).sender)
+          : /** @type {any} */(fn)(...args));
         if(name==='terminalAttach'){
           contents.postMessage('metaviewer:side-terminal.port',{session:args[0].session},[result.port]);
           if (process.versions?.electron && result.port?.constructor?.name === 'MessagePortMain') {

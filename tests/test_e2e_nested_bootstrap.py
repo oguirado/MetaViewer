@@ -34,7 +34,10 @@ const reads={'metaviewer:layout.load':null,'metaviewer:nested.depth':1,
 const writes=['metaviewer:layout.save','metaviewer:settings.save',
   'metaviewer:authority.propose','metaviewer:authority.intent',
   'metaviewer:authority.subscribe','metaviewer:authority.unsubscribe',
-  'metaviewer:side-terminal.open','metaviewer:side-terminal.enabled'];
+  'metaviewer:side-terminal.open','metaviewer:side-terminal.enabled',
+  'metaviewer:side-terminal.attach','metaviewer:side-terminal.resize',
+  'metaviewer:side-terminal.close','metaviewer:side-terminal.providers',
+  'metaviewer:side-terminal.copy'];
 assert.deepEqual([...handlers.keys()].sort(),[...Object.keys(reads),...writes].sort());
 for(const [channel,expected] of Object.entries(reads)) {
   const read=handlers.get(channel);

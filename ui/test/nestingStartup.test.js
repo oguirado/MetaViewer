@@ -290,17 +290,28 @@ test('R2-T4-013 startDisplay removes registered IPC handlers and window-all-clos
     else delete process.versions.electron;
   });
 
+  const expectedChannels = [
+    'metaviewer:layout.load', 'metaviewer:nested.depth',
+    'metaviewer:nested.self', 'metaviewer:recording.destination',
+    'metaviewer:settings.load', 'metaviewer:layout.save',
+    'metaviewer:settings.save', 'metaviewer:authority.propose',
+    'metaviewer:authority.intent', 'metaviewer:authority.subscribe',
+    'metaviewer:authority.unsubscribe', 'metaviewer:side-terminal.open',
+    'metaviewer:side-terminal.enabled', 'metaviewer:side-terminal.attach',
+    'metaviewer:side-terminal.resize', 'metaviewer:side-terminal.close',
+    'metaviewer:side-terminal.providers', 'metaviewer:side-terminal.copy',
+  ].sort();
   const makeTrackedFixture = async (shouldFailLoad) => {
     const base = await displayFixture();
     const handlers = new Map();
-    let removed = 0;
+    const removed = [];
     const appListeners = new Map();
     base.electron.ipcMain = {
       handle(channel, fn) {
         handlers.set(channel, fn);
       },
       removeHandler(channel) {
-        if (handlers.delete(channel)) removed += 1;
+        if (handlers.delete(channel)) removed.push(channel);
       },
     };
     base.electron.app.on = (event, fn) => {
@@ -325,20 +336,20 @@ test('R2-T4-013 startDisplay removes registered IPC handlers and window-all-clos
   try {
     await assert.rejects(startDisplay(failed.electron), /^Error: DISPLAY_ONLY: ERR_FAILED$/);
     assert.equal(failed.handlers.size, 0, 'all registered IPC handlers must be removed on failed startup');
-    assert.equal(failed.getRemoved(), 13, 'all 13 read-only layout handlers must be removed');
+    assert.deepEqual(failed.getRemoved().sort(), expectedChannels, 'all 18 read-only layout handlers must be removed');
     assert.equal(failed.appListeners.get('window-all-closed')?.size ?? 0, 0);
   } finally {
     await failed.cleanup();
   }
 
-  // Negative control: successful startup keeps all 13 handlers and the window-all-closed listener.
+  // Negative control: successful startup keeps all 18 handlers and the window-all-closed listener.
   const succeeded = await makeTrackedFixture(false);
   const log = console.log;
   console.log = () => {};
   try {
     await startDisplay(succeeded.electron);
-    assert.equal(succeeded.handlers.size, 13);
-    assert.equal(succeeded.getRemoved(), 0);
+    assert.deepEqual([...succeeded.handlers.keys()].sort(), expectedChannels);
+    assert.deepEqual(succeeded.getRemoved(), []);
     assert.equal(succeeded.appListeners.get('window-all-closed')?.size ?? 0, 1);
   } finally {
     console.log = log;
