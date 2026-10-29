@@ -12,6 +12,7 @@ is pinned in the private evidence directory. Configured planner argv permits
 only one executable under the lock-verified Wender root (no interpreter flags).
 Fixture bytes are allowlisted; deliberate fixture changes need reviewed pins.
 """
+import argparse
 import hashlib
 import json
 import os
@@ -32,11 +33,6 @@ ROOT = Path(__file__).resolve().parents[3]
 PAGES = ROOT / 'tests/e2e/asm_web_pages'
 # OpenSuperficies src/browserid/inject/inject.go rejects type input above 2000 runes.
 TYPE_TEXT_CAP = 2000
-BUDGETS = {'T1': 8, 'T2': 12, 'T3': 0}
-EXPECTED = {'T1': ['EMPTY', 'Hello, Ada Lovelace'],
-            'T2': ['FLOW_STEP_2_CONFIRMED', 'FLOW_STAGE_A_READY'],
-            'T3': ['auth-gateway', 'eu-central', '14', 'ledger-core', 'us-east',
-                   '27', 'stream-index', 'ap-north', '41']}
 REQUIRED_ENV = ('MV_E2E_CORE_BIN', 'MV_E2E_ADAPTER_BIN', 'MV_E2E_REPLAY_BIN',
                 'MV_SRF_BIN_DIR', 'MV_SRF_LIVE_PROFILE', 'MV_SRF_LIVE_RAM_ROOT',
                 'MV_SRF_STATE_DIR', 'SRF_IDENTITY_STORE_ROOT', 'SRF_PROXY_REGISTRY')
@@ -70,16 +66,20 @@ def digest(value):
                                     ensure_ascii=False).encode()).hexdigest()
 
 
-# Reviewed immutable offline fixture allowlist, not a network API denylist.
-FIXTURE_PINS = {
-    'flow_a': '8d587349a3e972c50479d255bc539db7fbc2f383ae81537ff3e631414671b8a5',
-    'flow_b': '1f96e5c04be23236addd534a41dd60cce4390c6457a598b1be69cce9d2eedbe5',
-    'form': '9d7c0905793094dcbb2854fc300b87d9ee9bcad90930c0f14063fb9ca6149082',
-    'table': '232f50c0e1cb253375e243116aa4c62a45ae6b2b9b159f7caa019f9cdca322dc',
-}
+# The import path is explicit because hosted hardening also execs this file.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from automation_pack import BUILTINS, load_packs
+
+# Compatibility fixture helper for existing security mutation tests. Pins come
+# from the same built-in documents; execution uses each admitted pack snapshot.
+FIXTURE_PINS = {page: pin for path in sorted(BUILTINS.glob('*/automation.json'))
+                for page, pin in json.loads(path.read_text())['fixtures'].items()}
 
 
-def fixture(page):
+def fixture(page, pack=None):
+    if pack is not None:
+        require(page in pack.pages, 'fixture not pinned', 'E2E_PACK_PIN')
+        return pack.pages[page]
     require(page in FIXTURE_PINS, 'fixture not allowlisted')
     raw = (PAGES / (page + '.html')).read_bytes()
     require(hashlib.sha256(raw).hexdigest() == FIXTURE_PINS[page], 'fixture bytes not allowlisted')
@@ -147,14 +147,14 @@ def planner_command(raw, root):
         raise Failure('planner argv not allowlisted', 'E2E_PREREQ') from error
 
 
-def page_url(page):
-    html = fixture(page)
+def page_url(page, pack=None):
+    html = fixture(page, pack)
     if page == 'flow_a':
         # Finite local A -> B -> A chain; the final A is the original fixture.
         back = '<script>document.getElementById("back-btn").href=URL.createObjectURL('
         back += 'new Blob([' + json.dumps(html).replace('</script', '<\\/script')
         back += '],{type:"text/html"}));</script>'
-        second = fixture('flow_b') + back
+        second = fixture('flow_b', pack) + back
         html += '<script>document.getElementById("next-btn").href=URL.createObjectURL('
         html += 'new Blob([' + json.dumps(second).replace('</script', '<\\/script')
         html += '],{type:"text/html"}));</script>'
@@ -175,13 +175,13 @@ def prove_ax(task, sensed, tree, expected):
                                   frame_ref=sensed['frame'], tree_sha256=digest(tree)))
 
 
-def seal_task(task):
+def seal_task(task, pack):
     # Independent completion gate: deleting the final prove_ax call cannot pass.
-    required = EXPECTED[task['task']]
+    required = pack.document['expect']
     proven = [x for proof in task['ax_proofs'] for x in proof['expected']
               if x in proof['texts']]
     require(proven == required, 'mandatory final AX proof absent')
-    require(task['steps'] <= BUDGETS[task['task']], 'task action budget exceeded')
+    require(task['steps'] <= pack.document['budget'], 'task action budget exceeded')
     task['verdict'] = 'PASS'
 
 
@@ -192,6 +192,7 @@ class HostedRPC:
             # Exercise the real navigation implementation with hosted boundaries.
             self.call('navigate_begin', **args)
             native = object.__new__(LiveBackend)
+            native.packs = self.packs
             for name in ('offline_proof', 'observe', 'propose', 'wait_verify', 'ax'):
                 def boundary(*values, _name=name):
                     keys = dict(offline_proof=(), observe=('timeout_ms',),
@@ -216,6 +217,9 @@ class HostedRPC:
 
 
 def run(backend, report):
+    packs = backend.packs
+    typing_target = None
+
     def stage(task, name, **args):
         started = time.monotonic_ns()
         try:
@@ -243,10 +247,14 @@ def run(backend, report):
         return result
 
     def step(task, goal):
-        require(task['steps'] < BUDGETS[task['task']], 'action budget exhausted')
+        nonlocal typing_target
+        require(task['steps'] < pack.document['budget'], 'action budget exhausted')
         # Retry admission refusals only; dispatched actions are never replayed.
         for attempt in range(3):
             sensed = sense(task)
+            if goal.startswith('type:'):
+                require(typing_target is not None, 'typing requires a prior verified named click')
+                sensed['typing_target'] = typing_target
             planned = stage(task, 'plan', sensed=sensed, goal=goal)
             require(stage(task, 'offline_proof').get('fixtures_offline') is True, 'offline fixture proof failed')
             stage(task, 'ownership')
@@ -271,8 +279,37 @@ def run(backend, report):
                     verified['input_mono_ns'] == admitted['native_evidence']['input_mono_ns'],
                     'receipt binding mismatch')
             task['action_receipts'].append(verified)
+            typing_target = goal[6:] if goal.startswith('click:') else None
             return
         raise Failure('stale admission exhausted')
+
+    def prove_cell(task, tree, expected):
+        cells = [x for x in texts(tree) if x in expected]
+        require(cells == expected, 'read document order mismatch')
+        require(task['read_plan'].get('values') == cells, 'read plan differs from AX values')
+        task['reported_values'] = cells
+        cell = pack.document.get('report_cell')
+        if cell:
+            row, col, index = cell['row'], cell['col'], cell['index']
+            require(index < len(cells), 'reported table cell absent')
+            task['reported_cell'] = dict(row=row, col=col, value=cells[index])
+            require(task['read_plan'].get('row') == row and task['read_plan'].get('col') == col and
+                    task['read_plan'].get('value') == cells[index], 'read plan differs from AX cell')
+
+    def plan_read(task, sensed, goal):
+        expected = pack.read_expected[goal[5:]]
+        sensed['read_expected'] = expected
+        if 'report_cell' in pack.document:
+            sensed['report_cell'] = pack.document['report_cell']
+        task['read_plan'] = stage(task, 'plan', sensed=sensed, goal=goal)
+        return expected
+
+    def prove_read(task, sensed, goal, pack):
+        region = goal[5:]
+        expected = plan_read(task, sensed, goal)
+        tree = stage(task, 'ax')
+        prove_ax(task, sensed, tree, expected)
+        prove_cell(task, tree, expected)
 
     try:
         report['ownership'] = backend.call('start')
@@ -280,44 +317,36 @@ def run(backend, report):
                 len(report['ownership']['capsules']) == 1, 'one owned capsule required')
         report['net'] = backend.call('offline_proof')
         require(report['net'].get('fixtures_offline') is True, 'offline fixture proof failed')
-        for task_id, page in [('T1', 'form'), ('T2', 'flow_a'), ('T3', 'table')]:
+        for pack in packs:
+            spec = pack.document
+            typing_target = None
+            task_id, page = spec['name'], spec['start']
             task = dict(task=task_id, verdict='FAIL', steps=0, latency_ms={},
                         observations=[], action_receipts=[], ax_proofs=[])
             report['tasks'].append(task)
             stage(task, 'ownership')
-            url = page_url(page)
-            task['page'] = dict(file=str(PAGES / (page + '.html')), data_url_length=len(url),
-                                source_sha256=hashlib.sha256(fixture(page).encode()).hexdigest())
+            url = page_url(page, pack)
+            task['page'] = dict(file=str(pack.root / 'pages' / (page + '.html')), data_url_length=len(url),
+                                source_sha256=hashlib.sha256(fixture(page, pack).encode()).hexdigest())
             require(stage(task, 'offline_proof').get('fixtures_offline') is True,
                     'offline proof before navigation')
-            task['fixture_setup'] = stage(task, 'navigate', page=page, url=url)
-            if task_id == 'T1':
-                initial = sense(task)
-                prove_ax(task, initial, stage(task, 'ax'), ['EMPTY'])
-                # EMPTY is proved above without an empty submit whose unchanged
-                # pixels could not satisfy a changed_region expectation.
-                for goal in ['click:Operator Name', 'type:Ada Lovelace', 'click:Submit Greeting']:
+            task['fixture_setup'] = stage(task, 'navigate', page=page, url=url, marker=pack.marker)
+            # Reads are independent AX checkpoints and never consume proposals.
+            # Hold the final proof separately so the independent seal still
+            # rejects deleting that proof (the existing AX-skip mutation).
+            for goal in spec['steps'][:-1]:
+                if goal.startswith('read:'):
+                    checkpoint = sense(task)
+                    prove_read(task, checkpoint, goal, pack)
+                else:
                     step(task, goal)
-                expected = ['Hello, Ada Lovelace']
-            elif task_id == 'T2':
-                step(task, 'click:Continue to Step 2')
-                middle = sense(task)
-                prove_ax(task, middle, stage(task, 'ax'), ['FLOW_STEP_2_CONFIRMED'])
-                step(task, 'click:Return to Step 1')
-                expected = ['FLOW_STAGE_A_READY']
-            else:
-                expected = EXPECTED['T3']
             final = sense(task)
-            if task_id == 'T3':
-                task['read_plan'] = stage(task, 'plan', sensed=final, goal='read:table')
+            region = spec['steps'][-1][5:]
+            expected = plan_read(task, final, spec['steps'][-1])
             final_tree = stage(task, 'ax')
             prove_ax(task, final, final_tree, expected)
-            if task_id == 'T3':
-                cells = [x for x in texts(final_tree) if x in expected]
-                require(cells == expected, 'table document order mismatch')
-                task['reported_cell'] = dict(row=1, col=2, value=cells[5])
-                require(task['read_plan'].get('value') == cells[5], 'read plan differs from AX cell')
-            seal_task(task)
+            prove_cell(task, final_tree, expected)
+            seal_task(task, pack)
         report['replay_probe'] = backend.call('replay')
         replay = report['replay_probe']
         require(replay.get('status') == 'PASS' and type(replay.get('corrupt_rc')) is int and
@@ -333,7 +362,7 @@ def run(backend, report):
         except Exception as error:
             report['cleanup_error'] = str(error)
     complete = (not report.get('error') and not report.get('cleanup_error') and
-                len(report['tasks']) == 3 and all(t['verdict'] == 'PASS' for t in report['tasks']) and
+                len(report['tasks']) == len(packs) and all(t['verdict'] == 'PASS' for t in report['tasks']) and
                 report.get('container_cleanup') == 'PASS' and
                 report.get('process_cleanup', {}).get('temporary_tree_absent') is True and
                 report.get('process_cleanup', {}).get('socket_absent') is True and
@@ -510,14 +539,30 @@ class LiveBackend:
         expectation = dict(type='changed_region', bbox=dict(x=0, y=0, w=frame['width'], h=frame['height']))
         kind, value = goal.split(':', 1)
         if kind == 'read':
-            cells = [n.get('name') for n in state['nodes'] if n.get('name') in EXPECTED['T3']]
-            require(cells == EXPECTED['T3'], 'Wender table plan order mismatch')
-            return dict(row=1, col=2, value=cells[5], state_sha256=digest(state))
+            expected = sensed.get('read_expected', [])
+            require(bool(expected), 'read expectations absent')
+            cells = [n.get('name') for n in state['nodes'] if n.get('name') in expected]
+            require(cells == expected, 'Wender read plan order mismatch')
+            planned = dict(values=cells, state_sha256=digest(state))
+            cell = sensed.get('report_cell')
+            if cell:
+                require(cell['index'] < len(cells), 'reported table cell absent')
+                planned.update(row=cell['row'], col=cell['col'], value=cells[cell['index']])
+            return planned
         if kind == 'type':
             # The immediately prior verified click focused this custody-bound field.
-            require(any(n.get('name') == 'Operator Name' and n['id'] in state['actionable']
+            require(bool(sensed.get('typing_target')) and
+                    any(n.get('name') == sensed['typing_target'] and n['id'] in state['actionable']
                         for n in state['nodes']), 'typing target absent')
             return dict(action=dict(type='type', text=value), expectation=expectation)
+        if kind == 'key':
+            from automation_pack import PAGE_KEYS
+            require(value in PAGE_KEYS, 'key chord is not page-safe', 'E2E_PACK_STEPS')
+            return dict(action=dict(type='key', keys=value.split('+')), expectation=expectation)
+        if kind == 'scroll':
+            return dict(action=dict(type='scroll', dx={'left': -120, 'right': 120}.get(value, 0),
+                                    dy={'up': -120, 'down': 120}.get(value, 0)), expectation=expectation)
+        require(kind == 'click', 'unsupported pack action', 'E2E_PACK_STEPS')
         configured = os.environ.get('MV_WENDER_PLANNER_CMD')
         if configured:
             planner = WenderSubprocessAdapter(command=planner_command(configured, self.roots['wender-agent']),
@@ -607,9 +652,18 @@ class LiveBackend:
                 0 < action['x'] < width // 2 and height // 2 < action['y'] < height,
                 'prelude outside safe content geometry')
 
-    def op_navigate(self, page, url):
+    def op_navigate(self, page, url, marker=None):
         setup = []
-        require(url == page_url(page), 'navigation outside pinned local fixture')
+        # Match both URL and marker to an admitted pack snapshot.
+        packs = getattr(self, 'packs', None)
+        if packs is None:  # Direct built-in unit probes use the same fixture pins.
+            require(url == page_url(page), 'navigation outside pinned local fixture')
+            marker = marker or {'form': 'EMPTY', 'flow_a': 'FLOW_STAGE_A_READY',
+                                'table': 'auth-gateway'}[page]
+        else:
+            require(any(page in pack.pages and url == page_url(page, pack) and
+                        marker == pack.marker for pack in packs),
+                    'navigation outside pinned local fixture')
         require(self.op_offline_proof().get('fixtures_offline') is True, 'offline proof before navigation')
         before = self.op_observe(5000)['frame_ref']
         # Removing omnibox selection changes browser chrome even when page
@@ -638,7 +692,6 @@ class LiveBackend:
                 setup.append(dict(kind='focus_prelude' if index == 0 else 'navigation',
                                   verdict=admitted['verdict'], verify_verdict=verified))
                 break
-        marker = dict(form='EMPTY', flow_a='FLOW_STAGE_A_READY', table='auth-gateway')[page]
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline:
             after = self.op_observe(5000)['frame_ref']
@@ -759,7 +812,11 @@ class LiveBackend:
 
 
 def main():
-    hosted = '--hosted-rpc' in sys.argv
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--hosted-rpc', action='store_true')
+    parser.add_argument('--pack', action='append', default=[])
+    options = parser.parse_args()
+    hosted = options.hosted_rpc
     if not hosted and os.environ.get('MV_LIVE_WEB') != '1':
         print(json.dumps(dict(status='SKIPPED', reason='MV_LIVE_WEB=1 required')))
         return 0
@@ -772,7 +829,9 @@ def main():
                     'explicit live gate and mv-live-1 identity required', 'E2E_PREREQ')
             for key in REQUIRED_ENV:
                 require(bool(os.environ.get(key)), 'missing ' + key, 'E2E_PREREQ')
+        packs = load_packs(options.pack, os.environ.get('MV_AUTOMATIONS_DIR'))
         backend = HostedRPC() if hosted else LiveBackend()
+        backend.packs = packs
         rc = run(backend, report)
     except Exception as error:
         report.update(status='BLOCKED', error=dict(code=getattr(error, 'code', 'E2E_PREREQ'), detail=str(error)))

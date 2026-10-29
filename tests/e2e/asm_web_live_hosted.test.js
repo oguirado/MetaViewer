@@ -30,8 +30,8 @@ async function dryRun(mutation = '') {
     'MUT-CHUNK-OVER-CAP': ['TYPE_TEXT_CAP = 2000', 'TYPE_TEXT_CAP = 2001'],
     'MUT-OMNIBOX-PREFOCUSED': ["[self.prelude_point(before),", "["],
     'MUT-PRELUDE-ON-BUBBLE': ["x=width // 4, y=3 * height // 4", "x=7 * width // 8, y=height // 8"],
-    'MUT-PRELUDE-COUNTS': ["task['fixture_setup'] = stage(task, 'navigate', page=page, url=url)",
-      "task['fixture_setup'] = stage(task, 'navigate', page=page, url=url); task['steps'] += 1"],
+    'MUT-PRELUDE-COUNTS': ["task['fixture_setup'] = stage(task, 'navigate', page=page, url=url, marker=pack.marker)",
+      "task['fixture_setup'] = stage(task, 'navigate', page=page, url=url, marker=pack.marker); task['steps'] += 1"],
   };
   const args = sourceMutants[mutation]
     ? ['-c', `import sys,json; p=sys.argv[1]; a,b=json.loads(sys.argv[2]); s=open(p).read(); assert s.count(a)==1; s=s.replace(a,b); sys.argv=[p,'--hosted-rpc']; exec(compile(s,p,'exec'),{'__file__':p,'__name__':'__main__'})`, runner, JSON.stringify(sourceMutants[mutation])]
@@ -181,7 +181,12 @@ async function dryRun(mutation = '') {
       case 'plan': {
         const separator = args.goal.indexOf(':');
         const kind = args.goal.slice(0, separator), value = args.goal.slice(separator + 1);
-        if (kind === 'read') return { row: 1, col: 2, value: '27' };
+        if (kind === 'read') {
+          assert.ok(args.sensed.read_expected?.length);
+          const values = args.sensed.state.nodes.map(e => e.name)
+            .filter(name => args.sensed.read_expected.includes(name));
+          return { values, ...(args.sensed.report_cell ? { row: 1, col: 2, value: '27' } : {}) };
+        }
         if (kind === 'type') return { action: { kind: 'type', text: value } };
         const target = capsule.pageState.elements.find(e => e.name === value);
         assert.ok(target, `target ${value} exists`);

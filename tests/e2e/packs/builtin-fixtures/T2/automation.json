@@ -1,0 +1,22 @@
+{
+  "schema": "metaviewer.automation/v1",
+  "name": "T2",
+  "version": "1.0.0",
+  "mode": "offline",
+  "start": "flow_a",
+  "steps": [
+    "click:Continue to Step 2",
+    "read:FLOW_STEP_2_CONFIRMED",
+    "click:Return to Step 1",
+    "read:FLOW_STAGE_A_READY"
+  ],
+  "budget": 12,
+  "expect": [
+    "FLOW_STEP_2_CONFIRMED",
+    "FLOW_STAGE_A_READY"
+  ],
+  "fixtures": {
+    "flow_a": "8d587349a3e972c50479d255bc539db7fbc2f383ae81537ff3e631414671b8a5",
+    "flow_b": "1f96e5c04be23236addd534a41dd60cce4390c6457a598b1be69cce9d2eedbe5"
+  }
+}

@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>ASM Web Acceptance — Form</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 640px;
+    height: 360px;
+    overflow: hidden;
+    background: #0f172a;
+    color: #e2e8f0;
+    font: 14px/20px monospace;
+  }
+  #stage {
+    position: relative;
+    width: 640px;
+    height: 360px;
+    padding: 24px;
+  }
+  #page-title {
+    position: absolute;
+    left: 24px;
+    top: 20px;
+    width: 592px;
+    height: 24px;
+    font-weight: 700;
+  }
+  #name-label {
+    position: absolute;
+    left: 24px;
+    top: 64px;
+    width: 140px;
+    height: 28px;
+  }
+  #name-input {
+    position: absolute;
+    left: 24px;
+    top: 96px;
+    width: 320px;
+    height: 40px;
+    padding: 8px 12px;
+    background: #1e293b;
+    color: #f8fafc;
+    border: 2px solid #38bdf8;
+    font: 14px/20px monospace;
+  }
+  #submit-btn {
+    position: absolute;
+    left: 360px;
+    top: 96px;
+    width: 160px;
+    height: 40px;
+    background: #2563eb;
+    color: #ffffff;
+    border: 2px solid #93c5fd;
+    font: 700 14px/20px monospace;
+    cursor: pointer;
+  }
+  #result-panel {
+    position: absolute;
+    left: 24px;
+    top: 164px;
+    width: 496px;
+    height: 64px;
+    padding: 16px;
+    background: #111827;
+    border: 2px solid #475569;
+  }
+</style>
+</head>
+<body>
+<main id="stage" data-page-id="form" data-viewport="640x360">
+  <h1 id="page-title">Capsule Form Acceptance</h1>
+  <label id="name-label" for="name-input">Operator Name</label>
+  <form id="greeting-form" action="javascript:void(0)">
+    <input
+      id="name-input"
+      name="operator_name"
+      type="text"
+      value=""
+      tabindex="1"
+      autocomplete="off"
+      spellcheck="false"
+      aria-label="Operator Name"
+      data-role="textbox"
+      data-bbox="24,96,320,40"
+    >
+    <button
+      id="submit-btn"
+      type="submit"
+      tabindex="2"
+      aria-label="Submit Greeting"
+      data-role="button"
+      data-bbox="360,96,160,40"
+    >Submit</button>
+  </form>
+  <section id="result-panel" aria-live="polite">
+    <output id="result-text" for="name-input" data-role="status" data-empty-token="EMPTY" data-bbox="24,164,496,64">EMPTY</output>
+  </section>
+</main>
+<script>
+  (function () {
+    var form = document.getElementById('greeting-form');
+    var input = document.getElementById('name-input');
+    var output = document.getElementById('result-text');
+    function applySubmission(ev) {
+      if (ev && typeof ev.preventDefault === 'function') {
+        ev.preventDefault();
+      }
+      var raw = String(input.value || '');
+      output.textContent = raw.length === 0 ? 'EMPTY' : 'Hello, ' + raw;
+      output.setAttribute('data-submitted', 'true');
+    }
+    form.addEventListener('submit', applySubmission);
+    document.getElementById('submit-btn').addEventListener('click', applySubmission);
+  })();
+</script>
+</body>
+</html>

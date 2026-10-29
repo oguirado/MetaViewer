@@ -1,0 +1,22 @@
+{
+  "schema": "metaviewer.automation/v1",
+  "name": "T1",
+  "version": "1.0.0",
+  "mode": "offline",
+  "start": "form",
+  "steps": [
+    "read:EMPTY",
+    "click:Operator Name",
+    "type:Ada Lovelace",
+    "click:Submit Greeting",
+    "read:Hello, Ada Lovelace"
+  ],
+  "budget": 8,
+  "expect": [
+    "EMPTY",
+    "Hello, Ada Lovelace"
+  ],
+  "fixtures": {
+    "form": "9d7c0905793094dcbb2854fc300b87d9ee9bcad90930c0f14063fb9ca6149082"
+  }
+}

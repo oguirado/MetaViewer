@@ -345,3 +345,103 @@ the existing receipt verifier offline with tools from PATH and `CARGO_TARGET_DIR
 the `propose` latency includes admission and native input settlement. Run both
 the dry-run and full gate in foreground
 `systemd-run --user --scope -q -p MemoryMax=8G -p MemorySwapMax=0` scopes.
+
+Pack admission rejects unsafe meta directives, URL attributes and CSS URLs,
+and enforces static HTML for external packs before backend startup. The runner
+requires the read-only offline fixture proof before navigation and every action
+attempt; it never changes capsule network policy. CSP and attribute checks
+provide defense in depth for local fixture navigation, without attesting native
+egress isolation. The conservative script token scan applies only to built-in pages.
+
+Offline automation packs use the closed tooling schema
+`tests/e2e/packs/automation.schema.json` (`metaviewer.automation/v1`), outside the
+frozen wire contracts. `[TARGET, unit decision]` Each pack is one task:
+`automation.json` plus pinned `pages/<id>.html`. The built-in collection at
+`tests/e2e/packs/builtin-fixtures/{T1,T2,T3}/` copies the original fixture bytes;
+its proposal budgets remain 8/12/0 [TARGET], with the same goals and AX proofs.
+No product API is added.
+
+External offline packs are static HTML: no scripts or `on*` event handlers,
+no `<iframe>`, `<frame>`, `<object>` or `<embed>`, and no form action except an
+absent attribute or the exact inert action ruled below. Each CSP must disable
+scripts with `script-src 'none'` or the `default-src 'none'` fallback. Violations
+return `E2E_PACK_SCRIPT` before backend startup. Only packs whose realpath is
+inside `tests/e2e/packs/builtin-fixtures/` retain inline script support; copying
+a built-in page elsewhere does not grant that privilege. Interactive or real-site
+automations use live packs (WEB-NET-2, with an egress allowlist).
+
+For a minimal external pack, save these exact UTF-8 bytes (including the final
+newline) as `pages/form.html`, then write this `automation.json`:
+
+```html
+<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src 'none'"><p>EMPTY</p>
+```
+
+```json
+{
+  "schema": "metaviewer.automation/v1",
+  "name": "form-ready",
+  "version": "1.0.0",
+  "mode": "offline",
+  "start": "form",
+  "steps": ["read:EMPTY"],
+  "budget": 0,
+  "expect": ["EMPTY"],
+  "fixtures": {
+    "form": "04915b5187699f82191ffb79041a4568b053a42b551490919b46661ab00e9901"
+  }
+}
+```
+
+For your own HTML, require a CSP meta policy with `default-src 'none'`, include
+only source tokens `'none'`, `'self'`, or `'unsafe-inline'` in every directive
+(with only `'none'` permitted for the external script policy),
+agreeing CSP meta tags, and an expected visible marker on the start page, and replace the pin with the
+SHA-256 of the exact UTF-8 page bytes (for example, `sha256sum pages/form.html`).
+Pages must have no `<base>`, speculative resource links, navigation sinks, or
+remote/scheme URLs in URL-bearing attributes or CSS. Only CSP and content-type
+meta `http-equiv` values are admitted. URL checks trim edge C0 controls/spaces and
+refuse internal C0 controls. Per conductor ruling WEB-PACK-1-R3b, only an `action`
+value equal to `javascript:void(0)` after that trim is admitted (ASCII case-insensitive
+scheme only, exact `void(0)`, no internal whitespace or extra characters); every
+other `javascript:` occurrence, including `href="javascript:void(0)"`, is refused.
+Hash/nonce CSP tokens are not needed by built-ins and are
+not admitted. A `flow_a` start requires pinned `flow_b` for runner-generated blob links.
+Fixture ids are simple names, resolved only under `pages/`; traversal and
+symlink escapes are refused. The loader snapshots verified HTML before backend
+startup, checks every declared fixture, and refuses malformed or duplicate JSON
+keys, unknown fields, invalid steps, oversized files and mismatched pins with
+`E2E_PACK_*` errors. `mode: "live"` fails with `E2E_PACK_LIVE` naming WEB-NET-2;
+`navigate:` and live host fields are outside this schema.
+
+`--pack <directory>` is repeatable and replaces the built-ins in caller order.
+`MV_AUTOMATIONS_DIR=<directory>` appends its immediate subdirectory packs in
+sorted order to the explicit selection (or the built-ins when no `--pack` is
+supplied). Pack names must be unique. Use these options with the runner's
+existing opt-in and hosted RPC interface; they do not enable live execution.
+Hosted RPC is a test backend protocol, not a standalone browser command.
+
+Steps are named `click:`, nonempty `type:`, `key:` chords separated by `+`,
+`scroll:up|down|left|right`, and `read:` checkpoints. Admitted keys are Return,
+Enter, Tab, shift+Tab, Escape, Space, Backspace, Left/Right/Up/Down, Home, End,
+PageUp and PageDown; other modifiers and function keys are refused at admission. Typing requires a prior
+verified named click. `[TARGET, unit decision]` A read region is an exact marker
+in `expect`, or `table`. A sole read names the first expected marker (or
+`table`) and proves all expected markers in AX document
+order and reports `reported_values`; multiple checkpoints prove their respective
+markers in order. Optional closed `report_cell: {row, col, index}` selects a
+reported value by zero-based marker index. T3 declares row 1, col 2, index 5
+[TARGET] and retains its historical ordered proof and value `27`. Reads must cover `expect` exactly once in order and the
+last step must be a read; reads consume no proposals. Each marker is independently
+proved in both AX and perceived state, and the final seal requires all proofs.
+Inputs retain custody, network-down, budget and verified-receipt gates.
+
+Admission caps [TARGET]: metadata 64 KiB, each page 1 MiB, total page bytes 8 MiB,
+64 fixtures, 256 steps/markers, 32 selected packs, and budget at most 10000.
+Run the pack mutation and external-pack hosted checks alongside the unchanged
+suite:
+
+```sh
+systemd-run --user --scope -q -p MemoryMax=8G -p MemorySwapMax=0 \
+  node --test tests/e2e/asm_web_live_hosted.test.js tests/e2e/asm_web_packs_hosted.test.js
+```
