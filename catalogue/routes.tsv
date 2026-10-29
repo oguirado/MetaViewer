@@ -758,6 +758,7 @@ external_lost_test.go	daemon-adapter/internal/capsule/external_lost_test.go
 fuzz_test.go	daemon-adapter/internal/capsule/fuzz_test.go
 geometry_test.go	daemon-adapter/internal/capsule/geometry_test.go
 handoff.go	daemon-adapter/internal/capsule/handoff.go
+holding-8a05492b9778	daemon-adapter/internal/capsule/holdings_dupkey_test.go
 holdings_mut_test.go	daemon-adapter/internal/capsule/holdings_mut_test.go
 holding-ccd017c9f1a2	daemon-adapter/internal/capsule/holdings_witness_test.go
 kinds_destroy_test.go	daemon-adapter/internal/capsule/kinds_destroy_test.go
