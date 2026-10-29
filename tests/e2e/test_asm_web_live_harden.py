@@ -27,6 +27,8 @@ sys.path.insert(0, str(ROOT / 'agents'))
 
 # Each named regression must fail its security contract if the gate is removed.
 MUTATIONS = {
+    'MUT-MISSING-EVIDENCE-KEYERROR': ('test_failed_action_receipts',
+        "evidence = receipt_evidence(receipt)", "evidence = receipt['native_evidence']"),
     'planner-out-of-box-click': ('test_planner_custody',
         "require(action.get('type') == 'click'", "require(True or action.get('type') == 'click'"),
     'midrun-gate-flap': ('test_admission_gate_flap',
@@ -136,6 +138,64 @@ class HardenTests(unittest.TestCase):
         b.stack = SimpleNamespace(inventory=lambda: {'owned', 'foreign'})
         with self.assertRaises(web.Failure):
             web.LiveBackend.op_ownership(b)
+
+    def test_failed_action_receipts(self):
+        b = self.backend
+        b.session = Mock()
+        b.pending = {}
+        b.tools = SimpleNamespace(propose=Mock(return_value={'admitted': True}),
+                                  ToolRefusal=RuntimeError)
+        b.op_ownership = Mock(return_value={})
+        b.op_offline_proof = Mock(return_value={'fixtures_offline': True})
+        for receipt in [
+                dict(error='input failed: usage: CLI failed with exit status 2',
+                     verified=False, verification={'detail': 'input failed'}),
+                dict(verified=True, verification={'detail': 'missing witness'}),
+                dict(native_evidence={}, verified=True),
+                dict(native_evidence={'input_mono_ns': 1}, error='native error')]:
+            with self.subTest(receipt=receipt):
+                b.session.receive.return_value = receipt
+                with patch('metaviewer_agents.verify.build_proposal',
+                           return_value={'proposal_id': 'p'}):
+                    try:
+                        b.op_propose({'frame': {}}, {'action': {}, 'expectation': {}}, 100)
+                    except Exception as error:
+                        self.assertIsInstance(error, web.Failure)
+                        self.assertEqual(error.code, 'VERIFICATION_FAILED')
+                        self.assertIn(json.dumps(receipt.get('error')), str(error))
+                        self.assertIn(json.dumps(receipt.get('verification')), str(error))
+                    else:
+                        self.fail('failed receipt accepted')
+                self.assertEqual(b.pending, {})
+        good = dict(native_evidence={'input_mono_ns': 1}, verified=False, error='')
+        b.session.receive.return_value = good
+        with patch('metaviewer_agents.verify.build_proposal', return_value={'proposal_id': 'p'}):
+            self.assertEqual(b.op_propose({'frame': {}}, {'action': {}, 'expectation': {}}, 100)
+                             ['native_evidence'], good['native_evidence'])
+        self.assertEqual(b.pending['p'][2], good)
+
+    def test_navigation_unicode_chunks(self):
+        b = self.backend
+        url = 'data:text/plain,' + '😀é' * 2300
+        frame = dict(width=1280, height=900, sha256='before')
+        b.op_offline_proof = Mock(return_value={'fixtures_offline': True})
+        b.op_observe = Mock(return_value={'frame_ref': frame})
+        b.op_ax = Mock(return_value={'elements': [{'name': 'EMPTY'}]})
+        b.op_propose = Mock(return_value=dict(proposal_id='p', verdict={'admitted': True}))
+        def verify(*args):
+            b.op_observe.return_value = {'frame_ref': dict(frame, sha256='after')}
+            return dict(receipt={'verified': True})
+        b.op_wait_verify = Mock(side_effect=verify)
+        with patch.object(web, 'page_url', return_value=url):
+            setup = b.op_navigate('form', url)
+        chunks = [c.args[1]['action']['text'] for c in b.op_propose.call_args_list
+                  if c.args[1]['action']['type'] == 'type']
+        self.assertEqual(''.join(chunks), url)
+        self.assertEqual([len(c) for c in chunks], [2000, 2000, len(url) - 4000])
+        self.assertTrue(all(c.encode('utf-8').decode('utf-8') == c for c in chunks))
+        self.assertEqual(len(setup), 3 + len(chunks))
+        self.assertEqual(b.op_wait_verify.call_count, len(setup))
+        self.assertTrue(all(s['kind'] == 'navigation' for s in setup[1:]))
 
     def test_binary_pins(self):
         path = self.executable()
@@ -287,22 +347,25 @@ class HardenTests(unittest.TestCase):
         b = self.backend
         frame = dict(width=1280, height=900, sha256='before', surface_id='owned')
         b.op_offline_proof = Mock(return_value={'fixtures_offline': True})
-        b.op_observe = Mock(side_effect=[{'frame_ref': frame}] * 6 +
+        url = web.page_url('form')
+        chunks = [url[i:i + 2000] for i in range(0, len(url), 2000)]
+        count = 3 + len(chunks)
+        b.op_observe = Mock(side_effect=[{'frame_ref': frame}] * (count + 2) +
                            [{'frame_ref': dict(frame, sha256='after')}])
         b.op_ax = Mock(return_value={'elements': [{'name': 'EMPTY'}]})
         b.op_propose = Mock(side_effect=[web.Failure('stale', 'STALE_FRAME')] +
-                          [dict(proposal_id=str(i), verdict={'admitted': True}) for i in range(4)])
+                          [dict(proposal_id=str(i), verdict={'admitted': True}) for i in range(count)])
         verified = dict(status='verified', receipt={'verified': True})
         b.op_wait_verify = Mock(return_value=verified)
         setup = b.op_navigate('form', web.page_url('form'))
-        self.assertEqual(len(setup), 4)
+        self.assertEqual(len(setup), count)
         self.assertEqual(setup[0]['kind'], 'focus_prelude')
-        self.assertEqual(b.op_wait_verify.call_count, 4)
+        self.assertEqual(b.op_wait_verify.call_count, count)
         calls = b.op_propose.call_args_list
         self.assertEqual(calls[0].args[1], calls[1].args[1])
         actions = [call.args[1]['action'] for call in calls[1:]]
         self.assertEqual(actions, [web.LiveBackend.prelude_point(frame),
-            dict(type='key', keys=['ctrl', 'l']), dict(type='type', text=web.page_url('form')),
+            dict(type='key', keys=['ctrl', 'l']), *[dict(type='type', text=c) for c in chunks],
             dict(type='key', keys=['Return'])])
         for call in calls:
             self.assertEqual(call.args[0]['frame'], frame)
@@ -316,7 +379,7 @@ class HardenTests(unittest.TestCase):
         with self.assertRaises(web.Failure) as caught:
             b.op_navigate('form', web.page_url('form'))
         self.assertEqual(caught.exception.code, 'VERIFICATION_FAILED')
-        self.assertEqual(b.op_wait_verify.call_count, 5)  # Never retry dispatched input.
+        self.assertEqual(b.op_wait_verify.call_count, count + 1)  # Never retry dispatched input.
 
     def test_named_mutations(self):
         for name, (test_name, _, _) in MUTATIONS.items():

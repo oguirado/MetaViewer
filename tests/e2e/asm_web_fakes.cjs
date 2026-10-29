@@ -314,10 +314,21 @@ class HostedWebCapsuleFake {
     return null;
   }
 
+  typeRefusal(action) {
+    // Match srf's rune cap and failed adapter receipt (no native_evidence).
+    if (action?.kind === 'type' && Array.from(action.text || '').length > 2000) {
+      return { error: 'input failed: usage: CLI failed with exit status 2',
+        verified: false, verification: { method: 'pixel', detail: 'input failed' } };
+    }
+    return null;
+  }
+
   injectInputSingleOp(action) {
     if (!action || typeof action !== 'object' || Array.isArray(action)) {
       throw new Error('INPUT_SINGLE_OP_REQUIRED: input accepts exactly 1 action');
     }
+    const refusal = this.typeRefusal(action);
+    if (refusal) return refusal;
     this.monoNs += 5_000_000;
     const inputMonoNs = this.monoNs;
     let focusVerified = false;

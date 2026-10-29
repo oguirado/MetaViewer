@@ -30,6 +30,8 @@ from urllib.parse import quote
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[3]
 PAGES = ROOT / 'tests/e2e/asm_web_pages'
+# OpenSuperficies src/browserid/inject/inject.go rejects type input above 2000 runes.
+TYPE_TEXT_CAP = 2000
 BUDGETS = {'T1': 8, 'T2': 12, 'T3': 0}
 EXPECTED = {'T1': ['EMPTY', 'Hello, Ada Lovelace'],
             'T2': ['FLOW_STEP_2_CONFIRMED', 'FLOW_STAGE_A_READY'],
@@ -49,6 +51,18 @@ class Failure(RuntimeError):
 def require(condition, message, code='E2E_WITNESS'):
     if not condition:
         raise Failure(message, code)
+
+
+def receipt_evidence(receipt):
+    # Reuse VERIFICATION_FAILED for failed input and absent native witnesses.
+    # Propose receipts remain unverified until the separate wait_verify call.
+    require(not receipt.get('error') and
+            isinstance(receipt.get('native_evidence'), dict) and receipt['native_evidence'],
+            'action receipt: ' + json.dumps(dict(error=receipt.get('error'),
+                verification=receipt.get('verification'),
+                native_evidence_present=bool(receipt.get('native_evidence'))), ensure_ascii=False),
+            'VERIFICATION_FAILED')
+    return receipt['native_evidence']
 
 
 def digest(value):
@@ -183,7 +197,10 @@ class HostedRPC:
                     keys = dict(offline_proof=(), observe=('timeout_ms',),
                                 propose=('sensed', 'plan', 'max_ms'),
                                 wait_verify=('admitted', 'timeout_ms'), ax=())[_name]
-                    return self.call('navigation_' + _name, **dict(zip(keys, values)))
+                    result = self.call('navigation_' + _name, **dict(zip(keys, values)))
+                    if _name == 'propose':
+                        receipt_evidence(result)
+                    return result
                 setattr(native, 'op_' + name, boundary)
             setup = native.op_navigate(**args)
             self.request('navigate', **args)
@@ -545,9 +562,10 @@ class LiveBackend:
         receipt = self.session.receive(self.session.agent, lambda b:
                                        b.get('schema') == 'action_receipt/v0.2' and
                                        b.get('proposal_id') == proposal['proposal_id'])
+        evidence = receipt_evidence(receipt)
         self.pending[proposal['proposal_id']] = (proposal, sensed['frame'], receipt)
         return dict(proposal_id=proposal['proposal_id'], verdict=verdict,
-                    native_evidence=receipt['native_evidence'])
+                    native_evidence=evidence)
 
     def op_wait_verify(self, admitted, timeout_ms):
         proposal, before, native = self.pending.pop(admitted['proposal_id'])
@@ -598,7 +616,10 @@ class LiveBackend:
         # pixels are blank. Keep changed_region fail-closed for this input too;
         # native AX is not used as an unproven alternate focus-state ABI.
         for index, action in enumerate([self.prelude_point(before),
-                       dict(type='key', keys=['ctrl', 'l']), dict(type='type', text=url),
+                       dict(type='key', keys=['ctrl', 'l']),
+                       # Python str slices preserve Unicode code points (srf runes).
+                       *[dict(type='type', text=url[offset:offset + TYPE_TEXT_CAP])
+                         for offset in range(0, len(url), TYPE_TEXT_CAP)],
                        dict(type='key', keys=['Return'])]):
             for attempt in range(3):
                 obs = self.op_observe(5000)

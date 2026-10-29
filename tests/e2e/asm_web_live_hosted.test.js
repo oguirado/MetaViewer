@@ -24,6 +24,10 @@ async function dryRun(mutation = '') {
   const wire = [];
   const python = process.env.PYTHON || 'python3';
   const sourceMutants = {
+    'MUT-GUARD-ON-VERIFIED': ["require(not receipt.get('error') and",
+      "require(not receipt.get('error') and receipt.get('verified') is not False and"],
+    'MUT-TYPE-UNCHUNKED': ["url[offset:offset + TYPE_TEXT_CAP]", "url"],
+    'MUT-CHUNK-OVER-CAP': ['TYPE_TEXT_CAP = 2000', 'TYPE_TEXT_CAP = 2001'],
     'MUT-OMNIBOX-PREFOCUSED': ["[self.prelude_point(before),", "["],
     'MUT-PRELUDE-ON-BUBBLE': ["x=width // 4, y=3 * height // 4", "x=7 * width // 8, y=height // 8"],
     'MUT-PRELUDE-COUNTS': ["task['fixture_setup'] = stage(task, 'navigate', page=page, url=url)",
@@ -43,6 +47,7 @@ async function dryRun(mutation = '') {
   // [TARGET, unit decision] Navigation boundary fake: chrome begins with its
   // omnibox selected and retains an untouched restore bubble. Real op_navigate
   // owns the sequence and changed_region plans; this fake renders the focus cue.
+  const navigationUrls = [];
   let navigation, navFrame, navPending, navGeneration = 0;
   const navigationFrame = () => {
     const pixels = Buffer.alloc(1280 * 900 * 3, 255);
@@ -54,8 +59,8 @@ async function dryRun(mutation = '') {
     for (let y = 80; y < 210; y++) {
       pixels.fill(100, (y * 1280 + 950) * 3, (y * 1280 + 1270) * 3);
     } // Persistent restore bubble.
-    if (navigation.typed) pixels[0] = 10;
-    if (navigation.loaded) pixels[1] = 20;
+    if (navigation.typed) pixels.writeUInt32LE(navigation.text.length, 0);
+    if (navigation.loaded) pixels[4] = 20;
     navFrame = { surface_id: capsule.surfaceId, width: 1280, height: 900,
       generation: ++navGeneration, sha256: sha(pixels) };
     return navFrame;
@@ -72,9 +77,10 @@ async function dryRun(mutation = '') {
       case 'offline_proof': return { fixtures_offline: !(mutation === 'net-up' ||
         (mutation === 'midrun-gate-flap' && calls.includes('propose')) ) };
       case 'navigate_begin':
+        navigationUrls.push(args.url);
         assert.equal(calls.at(-2), 'offline_proof');
         navigation = { focus: 'omnibox', selected: true, typed: false,
-          loaded: false, page: args.page, url: args.url };
+          loaded: false, text: '', page: args.page, url: args.url };
         return {};
       case 'navigation_offline_proof': return { fixtures_offline: true };
       case 'navigation_observe': return { frame_ref: navigationFrame() };
@@ -87,6 +93,8 @@ async function dryRun(mutation = '') {
         assert.deepEqual(args.plan.expectation, { type: 'changed_region',
           bbox: { x: 0, y: 0, w: 1280, h: 900 } });
         const action = args.plan.action;
+        const refusal = capsule.typeRefusal({ kind: action.type, text: action.text });
+        if (refusal) return refusal;
         if (action.type === 'click') {
           assert.ok(action.x > 0 && action.x < 640 && action.y > 450 && action.y < 900);
           navigation.focus = 'content';
@@ -95,17 +103,21 @@ async function dryRun(mutation = '') {
           navigation.focus = 'omnibox'; navigation.selected = true;
         } else if (action.type === 'type') {
           assert.equal(navigation.focus, 'omnibox');
-          assert.equal(navigation.selected, true);
-          assert.equal(action.text, navigation.url);
+          assert.equal(navigation.selected, navigation.text.length === 0);
+          assert.ok(Array.from(action.text).length <= 2000);
+          navigation.text += action.text;
+          assert.ok(navigation.url.startsWith(navigation.text));
+          navigation.selected = false;
           navigation.typed = true;
         } else {
           assert.deepEqual(action, { type: 'key', keys: ['Return'] });
           assert.equal(navigation.typed, true);
+          assert.equal(navigation.text, navigation.url);
           navigation.loaded = true;
         }
         const id = `navigation-${navGeneration}`;
         navPending = { before: args.sensed.frame, after: navigationFrame(), id };
-        return { proposal_id: id, verdict: { admitted: true },
+        return { proposal_id: id, verdict: { admitted: true }, verified: false, error: '',
           native_evidence: { input_mono_ns: navGeneration } };
       }
       case 'navigation_wait_verify': {
@@ -190,7 +202,7 @@ async function dryRun(mutation = '') {
         pending = core.proposeAndExecute(proposal, args.plan.bbox, { skipWaitVerify: true });
         pending.receipt.proposal_id = proposal.nonce;
         wire.push(pending.verdict, pending.receipt);
-        return { proposal_id: proposal.nonce, native_evidence: {
+        return { proposal_id: proposal.nonce, verified: false, error: '', native_evidence: {
           input_mono_ns: pending.receipt.input_mono_ns }, verdict: pending.verdict };
       }
       case 'wait_verify': {
@@ -235,7 +247,7 @@ async function dryRun(mutation = '') {
     });
     assert.ok(report, `runner emitted report: ${stderr}`);
     assert.ok(!calls.some(x => /^net(?:_|$)/.test(x)));
-    return { rc, report, calls };
+    return { rc, report, calls, navigationUrls };
   } finally {
     clearTimeout(timer);
     lines.close();
@@ -259,7 +271,7 @@ test('explicit opt-in fails before allocation when identity/prerequisites are ab
 });
 
 test('hosted dry-run drives all tasks on one capsule with measured stages and AX proof', async () => {
-  const { rc, report, calls } = await dryRun();
+  const { rc, report, calls, navigationUrls } = await dryRun();
   assert.equal(rc, 0, JSON.stringify(report.error));
   assert.equal(report.status, 'DONE');
   assert.equal(calls.filter(x => x === 'start').length, 1);
@@ -267,7 +279,9 @@ test('hosted dry-run drives all tasks on one capsule with measured stages and AX
   assert.deepEqual(report.tasks.map(t => t.verdict), ['PASS', 'PASS', 'PASS']);
   assert.equal(report.tasks[2].reported_cell.value, '27');
   for (const task of report.tasks) {
-    assert.equal(task.fixture_setup.length, 4);
+    const url = navigationUrls[report.tasks.indexOf(task)];
+    assert.equal(task.fixture_setup.length, 3 + Math.ceil(Array.from(url).length / 2000));
+    assert.ok(task.fixture_setup.slice(1).every(s => s.kind === 'navigation'));
     assert.equal(task.fixture_setup[0].kind, 'focus_prelude');
     assert.ok(task.fixture_setup.every(s => s.verdict.admitted &&
       s.verify_verdict.receipt.verified));
@@ -310,6 +324,9 @@ test('backend hardening contracts and named mutation controls (no live imports)'
 });
 
 for (const [mutation, detail] of [
+  ['MUT-GUARD-ON-VERIFIED', /action receipt:/],
+  ['MUT-TYPE-UNCHUNKED', /CLI failed with exit status 2/],
+  ['MUT-CHUNK-OVER-CAP', /CLI failed with exit status 2/],
   ['MUT-OMNIBOX-PREFOCUSED', /VERIFICATION_FAILED/],
   ['MUT-PRELUDE-ON-BUBBLE', /prelude outside safe content geometry/],
   ['MUT-PRELUDE-COUNTS', /task action budget exceeded/],
@@ -319,7 +336,7 @@ for (const [mutation, detail] of [
     assert.equal(rc, 1);
     assert.equal(report.status, 'BLOCKED');
     assert.match(report.error.detail, detail);
-    if (mutation === 'MUT-OMNIBOX-PREFOCUSED') {
+    if (['MUT-GUARD-ON-VERIFIED', 'MUT-OMNIBOX-PREFOCUSED', 'MUT-TYPE-UNCHUNKED', 'MUT-CHUNK-OVER-CAP'].includes(mutation)) {
       assert.equal(report.error.code, 'VERIFICATION_FAILED');
     }
   });

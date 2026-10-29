@@ -326,7 +326,10 @@ and upper-right restore bubble; the bubble is left untouched. The prelude uses
 strict full-frame `changed_region` verification: losing omnibox selection is the
 visible cue even on a blank page. No AX focus schema is assumed; if that cue is
 absent, verification fails closed. Ctrl+L, URL typing and Return retain their
-existing strict pixel expectations. Prelude and navigation receipts belong to
+existing strict pixel expectations. URL typing uses consecutive chunks of at most
+2000 Unicode code points, matching the srf input rune cap; every chunk has its
+own admitted proposal and full-frame verification. Failed receipts or absent
+native evidence produce `VERIFICATION_FAILED` with the receipt details. Prelude and navigation receipts belong to
 `fixture_setup`, never task steps; task budgets remain unchanged. Hosted tests
 exercise the real navigation loop against a preselected omnibox and kill
 `MUT-OMNIBOX-PREFOCUSED`, `MUT-PRELUDE-ON-BUBBLE` and `MUT-PRELUDE-COUNTS`.
