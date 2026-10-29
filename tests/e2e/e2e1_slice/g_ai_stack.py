@@ -23,7 +23,13 @@ import stack
 
 
 class Session:
-    def __init__(self):
+    def __init__(self, ttl=None):
+        # [TARGET, unit decision] Explicit TTL bounds the active context, as in
+        # stack's supervisor; callers without TTL keep their existing lifecycle.
+        if ttl is not None and (type(ttl) is not int or not 0 < ttl <= 86400):
+            raise ValueError('TTL requires positive integer seconds, at most one day')
+        self.ttl = ttl
+        self._alarm = None
         self.report = {'commands': [], 'assertions': {}}
         self.processes = []
         self.peers = []
@@ -32,10 +38,22 @@ class Session:
 
     def __enter__(self):
         try:
-            return self.start()
+            session = self.start()
+            if self.ttl is not None:
+                previous_handler = signal.getsignal(signal.SIGALRM)
+                previous_timer = signal.getitimer(signal.ITIMER_REAL)
+                if previous_timer != (0.0, 0.0):
+                    raise RuntimeError('TTL unavailable: an alarm is already active')
+                signal.signal(signal.SIGALRM, self._expire)
+                self._alarm = previous_handler
+                signal.setitimer(signal.ITIMER_REAL, self.ttl)
+            return session
         except BaseException:
             self.__exit__(None, None, None)
             raise
+
+    def _expire(self, *unused):
+        raise TimeoutError('G-AI session TTL expired')
 
     def start(self):
         if os.environ.get('MV_E2E_LIVE') != '1' or os.environ.get('MV_SRF_LIVE_PROFILE') != 'mv-live-1':
@@ -165,6 +183,10 @@ class Session:
         live.electron_probe(self.report, self.work, frame, self.surface)
 
     def __exit__(self, *unused):
+        if self._alarm is not None:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, self._alarm)
+            self._alarm = None
         try:
             if self.state is not None:
                 for proc in self.processes:
