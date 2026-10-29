@@ -241,7 +241,7 @@ test('MUT-S1: settings.load hydrates requestedWallFps, recordingFps, and core.se
   assert.equal(wireLegacy.recordingFps, 3);
   assert.deepEqual(coreCallsLegacy, [3]);
 
-  // 3. No file on disk: load returns null, getters stay at 30 and 3, core double is never called.
+  // 3. No file on disk: load returns null and actively fans out defaults, including over stale memory.
   const xdgEmpty = join(root, 'xdg-empty');
   await mkdir(xdgEmpty, { mode: 0o700 });
   await chmod(xdgEmpty, 0o700);
@@ -268,7 +268,16 @@ test('MUT-S1: settings.load hydrates requestedWallFps, recordingFps, and core.se
   assert.equal(loadedEmpty, null);
   assert.equal(wireEmpty.requestedWallFps, 30);
   assert.equal(wireEmpty.recordingFps, 3);
-  assert.deepEqual(coreCallsEmpty, []);
+  assert.deepEqual(coreCallsEmpty, [3]);
+
+  await handlersEmpty.get(WIRE_CHANNELS.saveSettings)(event, fourPayload);
+  assert.equal(wireEmpty.requestedWallFps, 60);
+  assert.equal(wireEmpty.recordingFps, 18);
+  await rm(join(xdgEmpty, 'metaviewer', 'settings.json'));
+  assert.equal(await handlersEmpty.get(WIRE_CHANNELS.loadSettings)(event), null);
+  assert.equal(wireEmpty.requestedWallFps, 30);
+  assert.equal(wireEmpty.recordingFps, 3);
+  assert.deepEqual(coreCallsEmpty, [3, 18, 3]);
 });
 
 test('MUT-S2: settings.save fans out to all six cadence consumers and frames.onCadence validates input', async (t) => {
@@ -373,24 +382,30 @@ test('MUT-S2: settings.save fans out to all six cadence consumers and frames.onC
   assert.equal(/** @type {any} */ (realDiag.getSnapshot().main).requestedWallFps, 60);
   assert.deepEqual(diagRecordCadence.at(-1), { wallFps: 60 });
 
-  // 3. Drive onCadence with non-integer wall values (string, float, null, undefined, NaN, object) and assert unchanged.
-  const countBeforeBad = diagRecordCadence.length;
-  for (const badCadence of [
-    { wallFps: '60' },
-    { wallFps: 30.5 },
-    { wallFps: null },
-    { wallFps: undefined },
-    { wallFps: Number.NaN },
-    { wallFps: Number.POSITIVE_INFINITY },
-    null,
-    undefined,
-    {},
+  // 3. Every malformed or unrepresentable cadence is refused atomically at the wire.
+  const consumers = () => structuredClone({
+    framesRequestCadence, framesSetCadence, coreRequestCadence, coreSetCadence,
+    coreSetRecordingFps, diagRecordCadence,
+  });
+  const beforeBad = consumers();
+  for (const [badCadence, error] of [
+    ...['60', 30.5, null, undefined, Number.NaN, Number.POSITIVE_INFINITY, 1, 25, 45, 61]
+      .map((wallFps) => [{ wallFps, recordingFps: 18 }, /SETTINGS_WALL_FPS/]),
+    [null, /PAYLOAD/], [undefined, /PAYLOAD/], [{}, /SETTINGS_WALL_FPS/],
+    [{ wallFps: 30, extra: true }, /SETTINGS_UNKNOWN_KEY/],
+    ...[0, 61, 1.5, '18', null].map((recordingFps) => [
+      { wallFps: 30, recordingFps }, /SETTINGS_RECORDING_FPS/,
+    ]),
   ]) {
-    /** @type {(cadence: any) => void} */ (onCadenceListener)(badCadence);
+    assert.throws(() => /** @type {(cadence: any) => void} */ (onCadenceListener)(badCadence),
+      /** @type {RegExp} */ (error));
     assert.equal(wire.requestedWallFps, 60);
+    assert.equal(wire.recordingFps, 42);
     assert.equal(realDiag.requestedWallFps, 60);
+    assert.equal(realDiag.getSnapshot().requestedWallFps, 60);
+    assert.equal(/** @type {any} */ (realDiag.getSnapshot().main).requestedWallFps, 60);
+    assert.deepEqual(consumers(), beforeBad);
   }
-  assert.equal(diagRecordCadence.length, countBeforeBad);
 
   wire.dispose();
   assert.equal(cadenceUnsubscribed, true);
@@ -585,7 +600,7 @@ test('MUT-S3: capture max_fps/maxFps override parser pins camelCase alias, both-
   }
 });
 
-test('MUT-S4: explicit recordingFps wins over disk reload and direct setters validate 1..60 / wallFps bounds', async (t) => {
+test('MUT-S4: in-memory recordingFps wins over disk edits, restart hydrates, and direct setters validate bounds', async (t) => {
   const { configHome, env, requests } = await createUnixCoreFixture(t);
   const bindings = await createMainBindings({
     env,
@@ -600,7 +615,7 @@ test('MUT-S4: explicit recordingFps wins over disk reload and direct setters val
   await mkdir(settingsDir, { mode: 0o700 });
   await chmod(settingsDir, 0o700);
 
-  // 1. With no explicit recordingFps set, writing recordingFps 25 to disk refreshes effective max_fps to 25.
+  // 1. A disk edit after bootstrap cannot change capture cadence, even before an explicit setter.
   await writeFile(
     settingsFile,
     JSON.stringify({ scheme: 'mv-dark', density: 'compact', wallFps: 60, recordingFps: 25 }),
@@ -618,11 +633,41 @@ test('MUT-S4: explicit recordingFps wins over disk reload and direct setters val
       mode: 'ai',
     },
   });
-  assert.equal(requests.at(-1).body.params.max_fps, 25);
-  assert.equal(bindings.core.recordingFps, 25);
-  assert.equal(bindings.core.requestedWallFps, 60);
+  assert.equal(requests.at(-1).body.params.max_fps, 3);
+  assert.equal(bindings.core.recordingFps, 3);
+  assert.equal(bindings.core.requestedWallFps, 30);
+  await bindings.core.request({
+    op: 'capture', method: 'export', request: {
+      schema: 'capture_request/v1', request_id: 'req-disk-25-export',
+      capture_id: 'rec-1', destination: 'recording:configured',
+    },
+  });
+  assert.equal(requests.at(-1).body.params.max_fps, 3);
+  assert.equal(bindings.core.recordingFps, 3);
+  assert.equal(bindings.core.requestedWallFps, 30);
 
-  // 2. Save recording 18 through the wire (sets explicitRecordingFps), then rewrite disk to 9: effective stays 18.
+  // Bootstrap is an admitted hydration point: a fresh binding reads the persisted 25/60.
+  const restarted = await createMainBindings({
+    env, createMessageChannel: () => { throw new Error('no frames'); },
+  });
+  t.after(() => restarted.core.dispose());
+  assert.equal(restarted.core.recordingFps, 25);
+  assert.equal(restarted.core.requestedWallFps, 60);
+  for (const method of ['recordStart', 'export']) {
+    await restarted.core.request({
+      op: 'capture', method, request: {
+        schema: 'capture_request/v1', request_id: `req-restart-${method}`,
+        ...(method === 'recordStart' ? { surface_id: 's1', mode: 'ai' }
+          : { capture_id: 'rec-1', destination: 'recording:configured' }),
+      },
+    });
+    assert.equal(requests.at(-1).body.params.max_fps, 25);
+    assert.equal(restarted.core.recordingFps, 25);
+    assert.equal(restarted.core.requestedWallFps, 60);
+  }
+  restarted.core.dispose();
+
+  // 2. Save recording 18 through the wire, then rewrite disk to 9: effective stays 18.
   const handlers = new Map();
   const frame = { origin: PRIVILEGED_ORIGIN, url: `${PRIVILEGED_ORIGIN}/index.html` };
   const contents = { id: 1, mainFrame: frame, isDestroyed: () => false, postMessage() {} };
@@ -665,6 +710,8 @@ test('MUT-S4: explicit recordingFps wins over disk reload and direct setters val
     },
   });
   assert.equal(requests.at(-1).body.params.max_fps, 18);
+  assert.equal(bindings.core.recordingFps, 18);
+  assert.equal(bindings.core.requestedWallFps, 30);
 
   await bindings.core.request({
     op: 'capture',
@@ -677,6 +724,8 @@ test('MUT-S4: explicit recordingFps wins over disk reload and direct setters val
     },
   });
   assert.equal(requests.at(-1).body.params.max_fps, 18);
+  assert.equal(bindings.core.recordingFps, 18);
+  assert.equal(bindings.core.requestedWallFps, 30);
 
   // 3. Direct setRecordingFps and op: 'cadence' / setCadence / requestCadence accept 1 and 60 and throw on 0 and 61.
   bindings.core.setRecordingFps(1);
@@ -725,7 +774,7 @@ test('MUT-S4: explicit recordingFps wins over disk reload and direct setters val
       /SETTINGS_WALL_FPS/,
     );
   }
-  assert.throws(() => bindings.core.setCadence(/** @type {any} */ (null)), /SETTINGS_WALL_FPS/);
+  assert.throws(() => bindings.core.setCadence(/** @type {any} */ (null)), /PAYLOAD/);
 });
 
 test('MUT-S5: reportDiag keeps per-session monotonic max, frame.diag merges without zeroing, and disabled path enforces checks', async (t) => {

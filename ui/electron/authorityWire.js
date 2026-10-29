@@ -338,6 +338,56 @@ export const DEFAULT_SETTINGS = Object.freeze({
 });
 const SETTINGS_KEY_SET = new Set(['scheme', 'density', 'wallFps', 'recordingFps']);
 const SETTINGS_WALL_FPS_SET = new Set([3, 30, 60]);
+const CADENCE_KEY_SET = new Set(['wallFps', 'recordingFps']);
+
+/** @param {string} code */
+function settingsStoreError(code) {
+  return Object.assign(new Error(code), { code });
+}
+
+/** Validate a closed cadence update ({wallFps?, recordingFps?}, non-empty).
+ * @param {unknown} cadence
+ * @returns {Readonly<{ wallFps?: number, recordingFps?: number }>} */
+export function validateCadence(cadence) {
+  if (!cadence || typeof cadence !== 'object' || Array.isArray(cadence)) {
+    throw new MainError('PAYLOAD', 'PAYLOAD');
+  }
+  const proto = Object.getPrototypeOf(cadence);
+  if (proto !== Object.prototype && proto !== null) {
+    throw new MainError('PAYLOAD', 'PAYLOAD');
+  }
+  if (Object.getOwnPropertySymbols(cadence).length !== 0) {
+    throw new MainError('SETTINGS_UNKNOWN_KEY', 'SETTINGS_UNKNOWN_KEY');
+  }
+  const keys = Object.keys(cadence);
+  if (keys.length === 0) {
+    throw new MainError('SETTINGS_WALL_FPS', 'SETTINGS_WALL_FPS');
+  }
+  for (const key of keys) {
+    const desc = Object.getOwnPropertyDescriptor(cadence, key);
+    if (!desc || !('value' in desc) || !CADENCE_KEY_SET.has(key)) {
+      throw new MainError('SETTINGS_UNKNOWN_KEY', 'SETTINGS_UNKNOWN_KEY');
+    }
+  }
+  const rec = /** @type {Record<string, unknown>} */ (cadence);
+  /** @type {{ wallFps?: number, recordingFps?: number }} */
+  const out = {};
+  if (Object.hasOwn(rec, 'wallFps')) {
+    const wallFps = rec.wallFps;
+    if (typeof wallFps !== 'number' || !Number.isSafeInteger(wallFps) || !SETTINGS_WALL_FPS_SET.has(wallFps)) {
+      throw new MainError('SETTINGS_WALL_FPS', 'SETTINGS_WALL_FPS');
+    }
+    out.wallFps = wallFps;
+  }
+  if (Object.hasOwn(rec, 'recordingFps')) {
+    const recordingFps = rec.recordingFps;
+    if (typeof recordingFps !== 'number' || !Number.isSafeInteger(recordingFps) || recordingFps < 1 || recordingFps > 60) {
+      throw new MainError('SETTINGS_RECORDING_FPS', 'SETTINGS_RECORDING_FPS');
+    }
+    out.recordingFps = recordingFps;
+  }
+  return Object.freeze(out);
+}
 
 /** Renderer preferences use the exact closed settingsModel.js shape.
  * Missing keys default only as decodeMvSettings does. Invalid input never
@@ -376,7 +426,7 @@ const sourceRoot=fileURLToPath(new URL('../..',import.meta.url));
 /** @param {string} candidate */
 function outsideSource(candidate) {
   const rel=relative(sourceRoot,resolve(candidate));
-  if(rel==='' || (rel!=='..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))) throw new Error('SETTINGS_IN_REPO');
+  if(rel==='' || (rel!=='..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))) throw settingsStoreError('SETTINGS_IN_REPO');
 }
 /** [TARGET, unit decision] Recording is host configuration, separate from
  * renderer preferences. MV_RECORDING_DESTINATION is an explicit operator
@@ -403,14 +453,27 @@ export function recordingDestination(env) {
   }
   return path;
 }
+/** @type {Map<string, Set<(parsed: Readonly<{ wallFps: number, recordingFps: number }>) => void>>} */
+const settingsSubscriptions = new Map();
+
 /** Atomic private settings file. No caller-supplied pathname.
  * @param {NodeJS.ProcessEnv} env */
 export function createSettingsStore(env) {
   const base = env.XDG_CONFIG_HOME || join(env.HOME || homedir(), '.config');
-  if (!isAbsolute(base)) throw new Error('CONFIG_PATH');
+  if (!isAbsolute(base)) throw settingsStoreError('CONFIG_PATH');
   const dir = join(base,'metaviewer');
   const path = join(dir,'settings.json');
   outsideSource(path);
+  const subKey = resolve(path);
+  /** @param {{ wallFps: number, recordingFps: number }} parsed */
+  const notifySubscribers = (parsed) => {
+    const subs = settingsSubscriptions.get(subKey);
+    if (!subs || subs.size === 0) return;
+    const notice = Object.freeze({ wallFps: parsed.wallFps, recordingFps: parsed.recordingFps });
+    for (const fn of [...subs]) {
+      try { fn(notice); } catch {}
+    }
+  };
   // Check the nearest existing ancestor before mkdir can follow parent aliases.
   const checkAncestors=async()=> {
     let ancestor=dir;
@@ -419,7 +482,7 @@ export function createSettingsStore(env) {
       catch(e) {
         if(/** @type {NodeJS.ErrnoException} */(e).code!=='ENOENT') throw e;
         const parent=dirname(ancestor);
-        if(parent===ancestor) throw new Error('CONFIG_PATH');
+        if(parent===ancestor) throw settingsStoreError('CONFIG_PATH');
         ancestor=parent; continue;
       }
       // An existing but unresolvable entry is not an absent directory. Live
@@ -427,7 +490,7 @@ export function createSettingsStore(env) {
       let canonical;
       try { canonical=await realpath(ancestor); }
       catch(e) {
-        if(/** @type {NodeJS.ErrnoException} */(e).code==='ENOENT') throw new Error('SETTINGS_DIRECTORY');
+        if(/** @type {NodeJS.ErrnoException} */(e).code==='ENOENT') throw settingsStoreError('SETTINGS_DIRECTORY');
         throw e;
       }
       outsideSource(canonical); return;
@@ -436,44 +499,75 @@ export function createSettingsStore(env) {
   const checkDirectory=async()=> {
     const info=await lstat(dir);
     if(!info.isDirectory() || info.isSymbolicLink() || (info.mode&0o777)!==0o700
-      || (process.getuid && info.uid!==process.getuid())) throw new Error('SETTINGS_DIRECTORY');
+      || (process.getuid && info.uid!==process.getuid())) throw settingsStoreError('SETTINGS_DIRECTORY');
     outsideSource(await realpath(dir));
   };
   return Object.freeze({
+    /** @param {(parsed: Readonly<{ wallFps: number, recordingFps: number }>) => void} listener */
+    subscribe(listener) {
+      let subs = settingsSubscriptions.get(subKey);
+      if (!subs) {
+        subs = new Set();
+        settingsSubscriptions.set(subKey, subs);
+      }
+      subs.add(listener);
+      return () => {
+        subs?.delete(listener);
+        if (subs && subs.size === 0) settingsSubscriptions.delete(subKey);
+      };
+    },
     async load() {
       let file;
       try { await checkAncestors(); await checkDirectory(); file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW); }
-      catch (e) { if (/** @type {NodeJS.ErrnoException} */(e).code === 'ENOENT') return null; throw e; }
+      catch (e) {
+        const code = /** @type {NodeJS.ErrnoException} */(e).code;
+        if (code === 'ENOENT') {
+          notifySubscribers(DEFAULT_SETTINGS);
+          return null;
+        }
+        if (code === 'ELOOP') throw settingsStoreError('SETTINGS_FILE');
+        throw e;
+      }
       try {
         const stat = await file.stat();
         if (!stat.isFile() || (stat.mode & 0o777) !== 0o600
-            || (process.getuid && stat.uid !== process.getuid())) throw new Error('SETTINGS_FILE');
+            || (process.getuid && stat.uid !== process.getuid())) throw settingsStoreError('SETTINGS_FILE');
         const buffer = Buffer.alloc(WIRE_MAX_BYTES + 1);
         const {bytesRead} = await file.read(buffer,0,buffer.length,0);
         if (stat.size > WIRE_MAX_BYTES || bytesRead > WIRE_MAX_BYTES) {
-          console.warn('MetaViewer settings: file exceeds byte cap; using defaults'); return null;
+          console.warn('MetaViewer settings: file exceeds byte cap; using defaults');
+          notifySubscribers(DEFAULT_SETTINGS);
+          return null;
         }
         const text = buffer.subarray(0,bytesRead).toString('utf8');
-        try { validateSettings(text); return text; }
-        catch { console.warn('MetaViewer settings: invalid JSON or schema; using defaults'); return null; }
+        try {
+          const parsed = validateSettings(text);
+          notifySubscribers(parsed);
+          return text;
+        } catch {
+          console.warn('MetaViewer settings: invalid JSON or schema; using defaults');
+          notifySubscribers(DEFAULT_SETTINGS);
+          return null;
+        }
       } finally { await file.close(); }
     },
     /** @param {string} json */
     async save(json) {
-      validateSettings(json); await checkAncestors(); await mkdir(dir,{recursive:true,mode:0o700});await checkDirectory();
+      const parsed = validateSettings(json); await checkAncestors(); await mkdir(dir,{recursive:true,mode:0o700});await checkDirectory();
       const temp = join(dir,`.settings-${randomUUID()}.tmp`);
       try {
         const file = await open(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,0o600);
         try { await file.writeFile(json,'utf8'); await file.sync(); } finally { await file.close(); }
         try {
           const st = await lstat(path);
-          if (st.isSymbolicLink() || !st.isFile()) throw new Error('SETTINGS_FILE');
+          if (st.isSymbolicLink() || !st.isFile()) throw settingsStoreError('SETTINGS_FILE');
         } catch (e) {
           if (/** @type {NodeJS.ErrnoException} */ (e).code !== 'ENOENT') throw e;
         }
         await rename(temp,path);
         const directory = await open(dir,constants.O_RDONLY);
         try { await directory.sync(); } finally { await directory.close(); }
+        notifySubscribers(parsed);
         return true;
       } finally { await unlink(temp).catch(e => { if(e.code !== 'ENOENT') throw e; }); }
     },
@@ -518,29 +612,28 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     }
     knownSurfaces.add(sid);
   };
+  const applySettingsFps = (/** @type {{ wallFps: number, recordingFps: number }} */ parsed) => {
+    requestedWallFps = parsed.wallFps;
+    currentRecordingFps = parsed.recordingFps;
+    const cadence = Object.freeze({ wallFps: parsed.wallFps });
+    frames?.requestCadence?.(cadence);
+    frames?.setCadence?.(cadence);
+    core?.requestCadence?.(cadence);
+    core?.setCadence?.(cadence);
+    core?.setRecordingFps?.(parsed.recordingFps);
+    frameDiag?.recordCadence?.(cadence);
+  };
   const handlers = {
     loadSettings: async () => {
       const loaded = await store.load();
-      if (typeof loaded === 'string') {
-        const parsed = validateSettings(loaded);
-        requestedWallFps = parsed.wallFps;
-        currentRecordingFps = parsed.recordingFps;
-        core?.setRecordingFps?.(parsed.recordingFps);
-      }
+      const parsed = typeof loaded === 'string' ? validateSettings(loaded) : DEFAULT_SETTINGS;
+      applySettingsFps(parsed);
       return loaded;
     },
     saveSettings: async (/** @type {string} */json) => {
       const parsed = validateSettings(json);
       const saved = await store.save(json);
-      requestedWallFps = parsed.wallFps;
-      currentRecordingFps = parsed.recordingFps;
-      const cadence = Object.freeze({ wallFps: parsed.wallFps });
-      frames?.requestCadence?.(cadence);
-      frames?.setCadence?.(cadence);
-      core?.requestCadence?.(cadence);
-      core?.setCadence?.(cadence);
-      core?.setRecordingFps?.(parsed.recordingFps);
-      frameDiag?.recordCadence?.(cadence);
+      applySettingsFps(parsed);
       return saved;
     },
     recordingDestination: async () => destinationToken,
@@ -880,9 +973,15 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
   let stopCadence = () => {};
   if (frames && typeof frames.onCadence === 'function') {
     stopCadence = frames.onCadence((/** @type {any} */ cadence) => {
-      if (!disposed && cadence && Number.isSafeInteger(cadence.wallFps)) {
-        requestedWallFps = cadence.wallFps;
-        frameDiag?.recordCadence?.(cadence);
+      if (disposed) return;
+      const parsed = validateCadence(cadence);
+      if (parsed.wallFps !== undefined) {
+        requestedWallFps = parsed.wallFps;
+        frameDiag?.recordCadence?.(Object.freeze({ wallFps: parsed.wallFps }));
+      }
+      if (parsed.recordingFps !== undefined) {
+        currentRecordingFps = parsed.recordingFps;
+        core?.setRecordingFps?.(parsed.recordingFps);
       }
     });
   }

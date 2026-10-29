@@ -16,7 +16,7 @@
  * [TARGET, unit decision] Store and expose requestedWallFps on host bindings and
  * default capture recording max_fps to recordingFps (default 3) unless overridden per request.
  */
-import { createSettingsStore, DEFAULT_SETTINGS, INTENT_OPS, mapSurfaceInputRefusal, recordingDestination, validateIntentBody, validateProposalBody, validateSettings, validateSurfaceInputBatch } from './authorityWire.js';
+import { createSettingsStore, DEFAULT_SETTINGS, INTENT_OPS, mapSurfaceInputRefusal, recordingDestination, validateCadence, validateIntentBody, validateProposalBody, validateSettings, validateSurfaceInputBatch } from './authorityWire.js';
 export { INTENT_OPS };
 import { createTerminalHost } from './terminalHost.js';
 import { assertCaptureCall, assertCaptureReply, validCaptureState } from './captureBridge.js';
@@ -192,46 +192,38 @@ export async function createMainBindings({env = process.env, createMessageChanne
     let requestedWallFps = DEFAULT_SETTINGS.wallFps;
     /** @type {number} */
     let recordingFps = DEFAULT_SETTINGS.recordingFps;
-    /** @type {number | null} */
-    let explicitRecordingFps = null;
     /** @type {ReturnType<typeof createSettingsStore> | null} */
     let settingsStore = null;
     if (typeof env.XDG_CONFIG_HOME === 'string' && env.XDG_CONFIG_HOME.length > 0) {
-      try {
-        settingsStore = createSettingsStore(env);
-        const initialSettings = await settingsStore.load().catch(() => null);
-        if (typeof initialSettings === 'string') {
-          const parsed = validateSettings(initialSettings);
-          requestedWallFps = parsed.wallFps;
-          recordingFps = parsed.recordingFps;
-        }
-      } catch {
-        settingsStore = null;
+      settingsStore = createSettingsStore(env);
+      const initialSettings = await settingsStore.load();
+      if (typeof initialSettings === 'string') {
+        const parsed = validateSettings(initialSettings);
+        requestedWallFps = parsed.wallFps;
+        recordingFps = parsed.recordingFps;
       }
     }
     /** @type {Set<(cadence: { wallFps: number }) => void>} */
     const cadenceListeners = new Set();
-    /** @param {{ wallFps?: unknown, recordingFps?: unknown }} cadence */
+    /** @param {unknown} cadence */
     const applyCadence = (cadence) => {
-      if (!cadence || typeof cadence !== 'object') throw new Error('SETTINGS_WALL_FPS');
-      if (cadence.wallFps !== undefined) {
-        if (typeof cadence.wallFps !== 'number' || !Number.isSafeInteger(cadence.wallFps) || ![3, 30, 60].includes(cadence.wallFps)) {
-          throw new Error('SETTINGS_WALL_FPS');
-        }
-        requestedWallFps = cadence.wallFps;
+      const parsed = validateCadence(cadence);
+      if (parsed.wallFps !== undefined) {
+        requestedWallFps = parsed.wallFps;
         const notice = Object.freeze({ wallFps: requestedWallFps });
         for (const notify of [...cadenceListeners]) {
           try { notify(notice); } catch {}
         }
       }
-      if (cadence.recordingFps !== undefined) {
-        if (typeof cadence.recordingFps !== 'number' || !Number.isSafeInteger(cadence.recordingFps) || cadence.recordingFps < 1 || cadence.recordingFps > 60) {
-          throw new Error('SETTINGS_RECORDING_FPS');
-        }
-        recordingFps = cadence.recordingFps;
-        explicitRecordingFps = cadence.recordingFps;
+      if (parsed.recordingFps !== undefined) {
+        recordingFps = parsed.recordingFps;
       }
     };
+    const stopSettings = settingsStore
+      ? settingsStore.subscribe((parsed) => {
+          applyCadence(parsed);
+        })
+      : () => {};
     /** @type {ReturnType<typeof setInterval> | undefined} */ let keepalive;
     /** @type {(value?:any)=>void} */ let ready;
     /** @type {(error:Error)=>void} */ let rejectReady;
@@ -241,6 +233,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
     const shutdown = () => {
       clearTimeout(helloTimer); clearInterval(keepalive);
       if (disposed) return; disposed = true; live = false;
+      stopSettings();
       void terminal.dispose();
       rejectReady(fail()); socket?.destroy();
       for (const item of pending.values()) {clearTimeout(item.timer);item.reject(fail());} pending.clear();
@@ -807,17 +800,31 @@ export async function createMainBindings({env = process.env, createMessageChanne
       },
       /** @param {number} fps */
       setRecordingFps(fps) {
-        if (typeof fps !== 'number' || !Number.isSafeInteger(fps) || fps < 1 || fps > 60) {
-          throw new Error('SETTINGS_RECORDING_FPS');
-        }
-        recordingFps = fps;
-        explicitRecordingFps = fps;
+        applyCadence({ recordingFps: fps });
       },
       start:async()=>getStatus(),getStatus,dispose:async()=>shutdown(),
       /** @param {any} message */
       async request(message) {
         if (message?.op === 'cadence') {
-          applyCadence(message);
+          const proto = Object.getPrototypeOf(message);
+          if (proto !== Object.prototype && proto !== null) throw new Error('PAYLOAD');
+          if (Object.getOwnPropertySymbols(message).length !== 0) {
+            throw Object.assign(new Error('SETTINGS_UNKNOWN_KEY'), { code: 'SETTINGS_UNKNOWN_KEY' });
+          }
+          const opDesc = Object.getOwnPropertyDescriptor(message, 'op');
+          if (!opDesc || !('value' in opDesc)) {
+            throw Object.assign(new Error('SETTINGS_UNKNOWN_KEY'), { code: 'SETTINGS_UNKNOWN_KEY' });
+          }
+          const cadence = /** @type {Record<string, unknown>} */ ({});
+          for (const key of Object.keys(message)) {
+            if (key === 'op') continue;
+            const desc = Object.getOwnPropertyDescriptor(message, key);
+            if (!desc || !('value' in desc)) {
+              throw Object.assign(new Error('SETTINGS_UNKNOWN_KEY'), { code: 'SETTINGS_UNKNOWN_KEY' });
+            }
+            cadence[key] = desc.value;
+          }
+          applyCadence(cadence);
           return true;
         }
         if (message?.op === 'capture') {
@@ -848,16 +855,6 @@ export async function createMainBindings({env = process.env, createMessageChanne
           assertCaptureCall(message.method,callReq === undefined ? [] : [callReq]);
           if (message.method === 'export' && (destination === null || message.request.destination === null)) {
             return {ok:false,code:'DESTINATION_UNSET',request_id:message.request.request_id};
-          }
-          if (overrideMaxFps === null && (message.method === 'recordStart' || message.method === 'export') && settingsStore !== null && explicitRecordingFps === null) {
-            try {
-              const stored = await settingsStore.load();
-              if (typeof stored === 'string') {
-                const parsed = validateSettings(stored);
-                recordingFps = parsed.recordingFps;
-                requestedWallFps = parsed.wallFps;
-              }
-            } catch {}
           }
           const effectiveMaxFps = overrideMaxFps ?? recordingFps;
           const key = message.method === 'list' ? `capture-list:${randomUUID()}` : randomUUID();
@@ -992,7 +989,10 @@ export async function createMainBindings({env = process.env, createMessageChanne
       }}}};
   } catch (error) {
     socket?.destroy();
-    if (error && typeof error === 'object' && ['SETTINGS_DESTINATION', 'SETTINGS_IN_REPO'].includes(/** @type {any} */ (error).code)) {
+    const errCode = error && typeof error === 'object'
+      ? (/** @type {any} */ (error).code ?? /** @type {any} */ (error).message)
+      : null;
+    if (['SETTINGS_DESTINATION', 'SETTINGS_IN_REPO', 'SETTINGS_FILE', 'SETTINGS_DIRECTORY', 'CONFIG_PATH'].includes(errCode)) {
       throw error;
     }
     throw fail();

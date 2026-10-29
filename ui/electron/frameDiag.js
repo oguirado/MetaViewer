@@ -379,7 +379,7 @@ export async function writeFrameDiagSnapshot(runDir, snapshot) {
 /**
  * Install the opt-in MV_FRAME_DIAG collector and preload IPC receiver when enabled.
  * Registers nothing in retail or nested launches.
- * @param {{ ipcMain?: { handle: (channel: string, listener: (event: unknown, ...args: unknown[]) => Promise<unknown>) => unknown, removeHandler?: (channel: string) => unknown }, contents?: unknown, env?: NodeJS.ProcessEnv, runtime?: { xdgRuntimeDir?: string, uid?: number }, runDir?: string, packaged?: boolean, nested?: boolean, argv?: ReadonlyArray<string> }} [options]
+ * @param {{ ipcMain?: { handle: (channel: string, listener: (event: unknown, ...args: unknown[]) => Promise<unknown>) => unknown, removeHandler?: (channel: string) => unknown }, contents?: unknown, env?: NodeJS.ProcessEnv, runtime?: { xdgRuntimeDir?: string, uid?: number }, runDir?: string, packaged?: boolean, nested?: boolean, argv?: ReadonlyArray<string>, now?: () => number }} [options]
  * @returns {Readonly<{
  *   enabled: boolean,
  *   runDir: string | null,
@@ -414,10 +414,15 @@ export function installFrameDiag(options = {}) {
 
   let disposed = false;
   let requestedWallFps = 30;
+  const hasCustomClock = typeof options.now === 'function';
+  const clock = hasCustomClock ? /** @type {() => number} */ (options.now) : Date.now;
+  const ZERO_REHASH_MAX = Object.freeze({ rehashSkipped: 0, rehashDone: 0 });
   /** @type {WeakMap<object, Readonly<{ rehashSkipped: number, rehashDone: number }>>} */
   const sessionRehashMax = new WeakMap();
+  /** @type {Map<unknown, Readonly<{ rehashSkipped: number, rehashDone: number }>>} */
+  const scalarSessionRehashMax = new Map();
   /** @type {Readonly<{ rehashSkipped: number, rehashDone: number }>} */
-  let defaultSessionRehashMax = Object.freeze({ rehashSkipped: 0, rehashDone: 0 });
+  let latestRehashMax = ZERO_REHASH_MAX;
 
   /**
    * @param {unknown} sessionKey
@@ -425,9 +430,9 @@ export function installFrameDiag(options = {}) {
    */
   function getSessionMax(sessionKey) {
     if (sessionKey !== null && (typeof sessionKey === 'object' || typeof sessionKey === 'function')) {
-      return sessionRehashMax.get(sessionKey) ?? defaultSessionRehashMax;
+      return sessionRehashMax.get(sessionKey) ?? ZERO_REHASH_MAX;
     }
-    return defaultSessionRehashMax;
+    return scalarSessionRehashMax.get(sessionKey) ?? ZERO_REHASH_MAX;
   }
 
   /**
@@ -437,14 +442,19 @@ export function installFrameDiag(options = {}) {
   function setSessionMax(sessionKey, next) {
     if (sessionKey !== null && (typeof sessionKey === 'object' || typeof sessionKey === 'function')) {
       sessionRehashMax.set(sessionKey, next);
+    } else {
+      scalarSessionRehashMax.set(sessionKey, next);
     }
-    defaultSessionRehashMax = next;
+    latestRehashMax = Object.freeze({
+      rehashSkipped: Math.max(latestRehashMax.rehashSkipped, next.rehashSkipped),
+      rehashDone: Math.max(latestRehashMax.rehashDone, next.rehashDone),
+    });
   }
 
   /**
    * @param {unknown} payload
    * @param {unknown} [sessionKey]
-   * @returns {Readonly<{ rehashSkipped: number, rehashDone: number }>}
+   * @returns {{ next: Readonly<{ rehashSkipped: number, rehashDone: number }>, changed: boolean }}
    */
   function applyRehashDiag(payload, sessionKey = contents) {
     const validated = validateFrameRehashDiag(payload);
@@ -456,8 +466,9 @@ export function installFrameDiag(options = {}) {
       rehashSkipped: Math.max(prev.rehashSkipped, validated.rehashSkipped),
       rehashDone: Math.max(prev.rehashDone, validated.rehashDone),
     });
+    const changed = next.rehashSkipped !== prev.rehashSkipped || next.rehashDone !== prev.rehashDone;
     setSessionMax(sessionKey, next);
-    return next;
+    return { next, changed };
   }
 
   if (!config.enabled || config.runDir === null) {
@@ -502,7 +513,7 @@ export function installFrameDiag(options = {}) {
         }
       },
       recordRehashDiag(payload, sessionKey = contents) {
-        return applyRehashDiag(payload, sessionKey);
+        return applyRehashDiag(payload, sessionKey).next;
       },
       handleReportDiag: handleReportDiagDisabled,
       recordDelivery: () => {},
@@ -518,8 +529,8 @@ export function installFrameDiag(options = {}) {
           main: Object.freeze({ requestedWallFps }),
           preload: Object.freeze({
             schema: FRAME_DIAG_PRELOAD_SCHEMA,
-            rehashSkipped: defaultSessionRehashMax.rehashSkipped,
-            rehashDone: defaultSessionRehashMax.rehashDone,
+            rehashSkipped: latestRehashMax.rehashSkipped,
+            rehashDone: latestRehashMax.rehashDone,
           }),
         }),
       flush: async () => {},
@@ -610,8 +621,38 @@ export function installFrameDiag(options = {}) {
 
   /** @type {Promise<unknown>} */
   let writeChain = Promise.resolve();
-  /** @type {{ snapshot: Record<string, unknown>, batch: Promise<true> } | null} */
+  /** @type {{ snapshot: Record<string, unknown>, batch: Promise<true>, fromReportDiag: boolean } | null} */
   let pendingBatch = null;
+  /** @type {WeakMap<object, number>} */
+  const sessionLastReportWriteAt = new WeakMap();
+  /** @type {Map<unknown, number>} */
+  const scalarSessionLastReportWriteAt = new Map();
+  let reportDiagDirty = false;
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let reportDiagTimer = null;
+
+  /**
+   * @param {unknown} sessionKey
+   * @returns {number}
+   */
+  function getSessionLastWriteAt(sessionKey) {
+    if (sessionKey !== null && (typeof sessionKey === 'object' || typeof sessionKey === 'function')) {
+      return sessionLastReportWriteAt.get(sessionKey) ?? -Infinity;
+    }
+    return scalarSessionLastReportWriteAt.get(sessionKey) ?? -Infinity;
+  }
+
+  /**
+   * @param {unknown} sessionKey
+   * @param {number} ts
+   */
+  function setSessionLastWriteAt(sessionKey, ts) {
+    if (sessionKey !== null && (typeof sessionKey === 'object' || typeof sessionKey === 'function')) {
+      sessionLastReportWriteAt.set(sessionKey, ts);
+    } else {
+      scalarSessionLastReportWriteAt.set(sessionKey, ts);
+    }
+  }
 
   function buildSnapshot() {
     return Object.freeze({
@@ -642,29 +683,40 @@ export function installFrameDiag(options = {}) {
   }
 
   /**
+   * @param {{ fromReportDiag?: boolean }} [opts]
    * @returns {Promise<true>}
    */
-  function scheduleWrite() {
+  function scheduleWrite(opts = {}) {
     if (disposed) {
       return Promise.resolve(/** @type {true} */ (true));
     }
+    const fromReportDiag = opts.fromReportDiag === true;
+    if (reportDiagTimer !== null) {
+      clearTimeout(reportDiagTimer);
+      reportDiagTimer = null;
+    }
+    reportDiagDirty = false;
     seq += 1;
     const snap = buildSnapshot();
     if (pendingBatch !== null) {
       pendingBatch.snapshot = snap;
+      if (fromReportDiag) {
+        pendingBatch.fromReportDiag = true;
+      }
       return pendingBatch.batch;
     }
-    /** @type {{ snapshot: Record<string, unknown>, batch: Promise<true> }} */
+    /** @type {{ snapshot: Record<string, unknown>, batch: Promise<true>, fromReportDiag: boolean }} */
     const entry = {
       snapshot: snap,
       batch: /** @type {any} */ (null),
+      fromReportDiag,
     };
     pendingBatch = entry;
     const runQueued = async () => {
       if (pendingBatch === entry) {
         pendingBatch = null;
       }
-      if (disposed) {
+      if (disposed && !entry.fromReportDiag) {
         throw new MainError('FRAME_DIAG_DISPOSED', 'frame diag bridge is disposed');
       }
       return writeFrameDiagSnapshot(targetDir, entry.snapshot);
@@ -673,6 +725,87 @@ export function installFrameDiag(options = {}) {
     entry.batch = next;
     writeChain = next.catch(() => {});
     return next;
+  }
+
+  /**
+   * @param {Record<string, unknown>} a
+   * @param {Record<string, unknown>} b
+   * @returns {boolean}
+   */
+  function preloadStatesEqual(a, b) {
+    if (a === b) return true;
+    const keys = Object.keys(a);
+    if (keys.length !== Object.keys(b).length) return false;
+    for (const k of keys) {
+      if (!Object.is(a[k], b[k])) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Coalesce preload/reportDiag snapshot writes: write only when preload state
+   * changes, and at most once per second per session.
+   * @param {unknown} sessionKey
+   * @param {typeof preloadState} nextPreload
+   * @returns {Promise<true>}
+   */
+  function schedulePreloadDiagWrite(sessionKey, nextPreload) {
+    if (!preloadStatesEqual(preloadState, nextPreload)) {
+      preloadState = nextPreload;
+      reportDiagDirty = true;
+    }
+    return scheduleDiagWrite(sessionKey);
+  }
+
+  /**
+   * Share the write budget across renderer diagnostics and cadence changes.
+   * @param {unknown} sessionKey
+   * @returns {Promise<true>}
+   */
+  function scheduleDiagWrite(sessionKey) {
+    if (!reportDiagDirty) {
+      return Promise.resolve(/** @type {true} */ (true));
+    }
+    const nowMs = clock();
+    const lastWriteMs = getSessionLastWriteAt(sessionKey);
+    const elapsed = nowMs - lastWriteMs;
+    if (elapsed >= 1000) {
+      setSessionLastWriteAt(sessionKey, nowMs);
+      return scheduleWrite({ fromReportDiag: true });
+    }
+    if (reportDiagTimer === null) {
+      const delayMs = Math.max(1, 1000 - elapsed);
+      reportDiagTimer = setTimeout(() => {
+        reportDiagTimer = null;
+        if (
+          !disposed &&
+          reportDiagDirty &&
+          (!hasCustomClock || clock() - getSessionLastWriteAt(sessionKey) >= 1000)
+        ) {
+          setSessionLastWriteAt(sessionKey, clock());
+          void scheduleWrite({ fromReportDiag: true });
+        }
+      }, delayMs);
+      reportDiagTimer.unref?.();
+    }
+    return Promise.resolve(/** @type {true} */ (true));
+  }
+
+  /**
+   * Coalesce reportDiag snapshot writes: merge per-session max monotonically
+   * into global preloadState, write only on change, and at most once per second
+   * per session.
+   * @param {unknown} sessionKey
+   * @param {Readonly<{ rehashSkipped: number, rehashDone: number }>} next
+   * @returns {Promise<true>}
+   */
+  function scheduleReportDiagWrite(sessionKey, next) {
+    const nextPreload = Object.freeze({
+      ...preloadState,
+      rehashSkipped: Math.max(preloadState.rehashSkipped, next.rehashSkipped),
+      rehashDone: Math.max(preloadState.rehashDone, next.rehashDone),
+    });
+    return schedulePreloadDiagWrite(sessionKey, nextPreload);
   }
 
   // Write initial baseline snapshot immediately upon installation.
@@ -698,13 +831,8 @@ export function installFrameDiag(options = {}) {
       event !== null && typeof event === 'object' && 'sender' in event && event.sender
         ? event.sender
         : contents;
-    const next = applyRehashDiag(args[0], senderKey);
-    preloadState = Object.freeze({
-      ...preloadState,
-      rehashSkipped: next.rehashSkipped,
-      rehashDone: next.rehashDone,
-    });
-    await scheduleWrite();
+    const { next } = applyRehashDiag(args[0], senderKey);
+    await scheduleReportDiagWrite(senderKey, next);
     return true;
   }
 
@@ -745,15 +873,17 @@ export function installFrameDiag(options = {}) {
       ) {
         throw new MainError('FRAME_DIAG_DECREASE', 'rehash diag counters must not decrease');
       }
-      const mergedSkipped = Math.max(prev.rehashSkipped, validated.rehashSkipped);
-      const mergedDone = Math.max(prev.rehashDone, validated.rehashDone);
-      setSessionMax(senderKey, Object.freeze({ rehashSkipped: mergedSkipped, rehashDone: mergedDone }));
-      preloadState = Object.freeze({
-        ...validated,
-        rehashSkipped: mergedSkipped,
-        rehashDone: mergedDone,
+      const sessionNext = Object.freeze({
+        rehashSkipped: Math.max(prev.rehashSkipped, validated.rehashSkipped),
+        rehashDone: Math.max(prev.rehashDone, validated.rehashDone),
       });
-      await scheduleWrite();
+      setSessionMax(senderKey, sessionNext);
+      const nextPreload = Object.freeze({
+        ...validated,
+        rehashSkipped: Math.max(preloadState.rehashSkipped, sessionNext.rehashSkipped),
+        rehashDone: Math.max(preloadState.rehashDone, sessionNext.rehashDone),
+      });
+      await schedulePreloadDiagWrite(senderKey, nextPreload);
       return true;
     },
   );
@@ -769,21 +899,19 @@ export function installFrameDiag(options = {}) {
         return;
       }
       if (typeof cadence.wallFps === 'number' && Number.isSafeInteger(cadence.wallFps) && [3, 30, 60].includes(cadence.wallFps)) {
-        requestedWallFps = cadence.wallFps;
-        void scheduleWrite();
+        if (requestedWallFps !== cadence.wallFps) {
+          requestedWallFps = cadence.wallFps;
+          reportDiagDirty = true;
+          void scheduleDiagWrite(contents);
+        }
       }
     },
     recordRehashDiag(payload, sessionKey = contents) {
       if (disposed) {
         throw new MainError('FRAME_DIAG_DISPOSED', 'frame diag bridge is disposed');
       }
-      const next = applyRehashDiag(payload, sessionKey);
-      preloadState = Object.freeze({
-        ...preloadState,
-        rehashSkipped: next.rehashSkipped,
-        rehashDone: next.rehashDone,
-      });
-      void scheduleWrite();
+      const { next } = applyRehashDiag(payload, sessionKey);
+      void scheduleReportDiagWrite(sessionKey, next);
       return next;
     },
     handleReportDiag,
@@ -918,12 +1046,25 @@ export function installFrameDiag(options = {}) {
       return buildSnapshot();
     },
     async flush() {
+      if (reportDiagTimer !== null) {
+        clearTimeout(reportDiagTimer);
+        reportDiagTimer = null;
+      }
+      if (reportDiagDirty && !disposed) {
+        await scheduleWrite({ fromReportDiag: true });
+      }
       await writeChain;
     },
     async dispose() {
       if (disposed) {
         return;
       }
+      if (reportDiagTimer !== null) {
+        clearTimeout(reportDiagTimer);
+        reportDiagTimer = null;
+      }
+      const flushDirty = reportDiagDirty;
+      reportDiagDirty = false;
       disposed = true;
       try {
         if (typeof ipcMain.removeHandler === 'function') {
@@ -932,6 +1073,16 @@ export function installFrameDiag(options = {}) {
         }
       } catch {
         /* teardown best-effort */
+      }
+      if (flushDirty) {
+        seq += 1;
+        const snap = buildSnapshot();
+        if (pendingBatch !== null && pendingBatch.fromReportDiag) {
+          pendingBatch.snapshot = snap;
+        } else {
+          const writeFinal = () => writeFrameDiagSnapshot(targetDir, snap);
+          writeChain = writeChain.then(writeFinal, writeFinal).catch(() => {});
+        }
       }
       await writeChain;
     },
