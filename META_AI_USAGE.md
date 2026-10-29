@@ -19,16 +19,16 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 701 | 55 | 646 |
-| Lanes finished OK | 701 | 55 | 646 |
-| Agent steps | 33,192 | 2,705 | 30,487 |
-| Lane-hours of agent work | 86.3 | 5.2 | 81.0 |
-| Fresh input tokens | 138,680,140 | 11,482,034 | 127,198,106 |
-| Cache-read input tokens | 2,906,722,855 | 226,255,212 | 2,680,467,643 |
+| Lanes launched | 702 | 55 | 647 |
+| Lanes finished OK | 702 | 55 | 647 |
+| Agent steps | 33,216 | 2,705 | 30,511 |
+| Lane-hours of agent work | 86.3 | 5.2 | 81.1 |
+| Fresh input tokens | 138,775,971 | 11,482,034 | 127,293,937 |
+| Cache-read input tokens | 2,907,915,598 | 226,255,212 | 2,681,660,386 |
 | Prompt cache hit % | 95.4 | 95.2 | 95.5 |
-| Output tokens | 29,137,256 | 2,135,708 | 27,001,548 |
-| Thinking tokens | 16,515,114 | 1,050,039 | 15,465,075 |
-| Cost (USD) | 25.5089 | 2.0279 | 23.481 |
+| Output tokens | 29,158,692 | 2,135,708 | 27,022,984 |
+| Thinking tokens | 16,530,045 | 1,050,039 | 15,480,006 |
+| Cost (USD) | 25.5252 | 2.0279 | 23.4973 |
 | Cost per lane (USD) | 0.0364 | 0.0369 | 0.0363 |
 
 Rooms: 132. Peak concurrent lanes [MEASURED from lane start/end]: 32.
@@ -38,7 +38,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 358 | 94.3 | 10.4989 |
+| build | 359 | 94.3 | 10.5152 |
 | context | 42 | 95.9 | 1.9093 |
 | demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
@@ -176,7 +176,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui29c | UI orchestrator | Oct 28 08:58 | fix | 1 | 97.5 | 0.0624 | Terminal sessions wiring (AC-06) broke 58 committed App tests; restore the App mounting contract and finish the terminal tests so the drop can ship. |
 | mvui29sc | UI orchestrator | Oct 28 09:12 | fix | 1 | 97.3 | 0.0484 | Judge rejected the settings drop: a quick revert inside the debounce window is lost, a replaced host can receive a stale save, and boot can paint a scheme the store then replaces; fix before AC-08 can ship. |
 | mvui29d | UI orchestrator | Oct 28 09:13 | fix | 1 | 97.2 | 0.0587 | Judge notes on the terminal drop are real session lifecycle defects (events before registration, stale transport, cross-transport close, leaked port on close during attach, fixture broker unwired); fix before AC-06 ships. |
-| direct-adv | metaviewer-0 | Oct 28 09:30 | build | 64 | 93.0 | 1.5337 | adversarial advocate review before integration |
+| direct-adv | metaviewer-0 | Oct 28 09:30 | build | 65 | 93.0 | 1.5499 | adversarial advocate review before integration |
 | direct-rv11 | metaviewer-0 | Oct 28 11:01 | build | 7 | 93.7 | 0.129 | cross-review verification |
 | direct-tg6 | metaviewer-0 | Oct 28 11:10 | build | 6 | 95.2 | 0.2593 | test-gap and mutation map |
 | direct-w5 | metaviewer-0 | Oct 28 11:20 | build | 8 | 93.6 | 0.2196 | W5 docs fact-check |
@@ -899,6 +899,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-adv | hl_b | adv_hl_b | Oct 29 08:29 | yes | 41 | 88.7 | 0.040238 |
 | direct-adv | b1_a | adv_b1_a | Oct 29 08:45 | yes | 44 | 94.1 | 0.028559 |
 | direct-adv | b1_b | adv_b1_b | Oct 29 08:45 | yes | 51 | 94.8 | 0.031104 |
+| direct-adv | wav_r6 | adv_wav_r6 | Oct 29 08:56 | yes | 24 | 92.6 | 0.016256 |
 
 ## Method
 
