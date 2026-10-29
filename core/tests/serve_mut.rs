@@ -11,7 +11,12 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
+
+// Each saturation fixture routes hundreds of durable events on a single-thread
+// runtime. Keep these fixtures from starving each other's live socket deadlines.
+static SATURATION: Mutex<()> = Mutex::new(());
 
 fn registration(instance: &str) -> Registration {
     let component = if instance.starts_with("ui") {
@@ -57,14 +62,14 @@ fn unsupported() -> Value {
     json!({"schema":"ui_intent/v0.2","request_id":"fill","op":"fold","params":{"slot_id":"missing"}})
 }
 struct Peer {
-    socket: UnixStream,
+    socket: BufReader<UnixStream>,
     component: String,
     seq: u64,
 }
 impl Peer {
     async fn connect(path: &Path, component: &str) -> Self {
         let mut p = Self {
-            socket: UnixStream::connect(path).await.unwrap(),
+            socket: BufReader::new(UnixStream::connect(path).await.unwrap()),
             component: component.into(),
             seq: 0,
         };
@@ -75,13 +80,21 @@ impl Peer {
     }
     fn envelope(&mut self, body: Value) -> Envelope {
         self.seq += 1;
-        decode_envelope(&json!({"schema":"envelope/v0.2","msg_id":format!("{}-{}",self.component,self.seq),
+        serde_json::from_value(json!({"schema":"envelope/v0.2","msg_id":format!("{}-{}",self.component,self.seq),
             "ts_ns":0,"from":registration(&self.component).endpoint,"to":registration("core").endpoint,
-            "session_id":"serve-mut","seq":self.seq,"nonce":format!("{}-{}",self.component,self.seq),"body":body}).to_string()).unwrap()
+            "session_id":"serve-mut","seq":self.seq,"nonce":format!("{}-{}",self.component,self.seq),"body":body})).unwrap()
     }
     async fn send(&mut self, body: Value) {
         let env = self.envelope(body);
-        write_frame(&mut self.socket, &env).await.unwrap();
+        // Fixture construction needs no second full contract validation: the
+        // authenticated server still decodes every byte, and receive validates
+        // its replies. Buffer reads to avoid one socket syscall per reply byte.
+        let mut bytes = serde_json::to_vec(&env).unwrap();
+        bytes.push(b'\n');
+        tokio::time::timeout(Duration::from_secs(15), self.socket.write_all(&bytes))
+            .await
+            .expect("bounded fixture write")
+            .unwrap();
     }
     async fn receive(&mut self) -> Value {
         let env = tokio::time::timeout(Duration::from_secs(15), read_frame(&mut self.socket))
@@ -109,7 +122,7 @@ impl Peer {
             bytes.push(b'\n');
         }
         assert_eq!(
-            self.socket.try_write(&bytes).unwrap(),
+            self.socket.get_ref().try_write(&bytes).unwrap(),
             bytes.len(),
             "burst must be preloaded atomically"
         );
@@ -191,11 +204,14 @@ impl Harness {
             })
             .collect()
     }
-    async fn finish(mut self) {
+    async fn finish(self) {
+        let _ = self.finish_with_events().await;
+    }
+    async fn finish_with_events(mut self) -> Vec<Value> {
         self.task.abort();
         let _ = (&mut self.task).await;
         self.server.lock().unwrap().shutdown().unwrap();
-        self.events();
+        self.events()
     }
 }
 
@@ -228,6 +244,7 @@ fn m1_missing_daemon_refuses_once_and_connected_control_dispatches() {
 
 #[test]
 fn m4_refused_overflow_does_not_dispatch_fail_but_admitted_overflow_does() {
+    let _saturation = SATURATION.lock().unwrap();
     for admitted in [false, true] {
         support::run(async {
             let h = Harness::new(false).await;
@@ -250,7 +267,25 @@ fn m4_refused_overflow_does_not_dispatch_fail_but_admitted_overflow_does() {
             // that terminal overflow on the agent did not poison the server.
             ui.send(unsupported()).await;
             ui.verdict("fill", "refused", Some("POLICY")).await;
-            let events = h.events();
+            assert_eq!(h.state()["leases"], json!({}));
+            assert_eq!(h.state()["pending"], json!({}));
+            let mut overflow = false;
+            for _ in 0..=MAX_SEND_QUEUE {
+                let v = agent.receive().await;
+                if v["data"]["code"] == "QUEUE_OVERFLOW" {
+                    overflow = true;
+                    break;
+                }
+            }
+            assert!(
+                overflow,
+                "must exercise queue overflow, not a disconnected peer"
+            );
+            drop((agent, daemon, ui));
+            // Drain the live overflow reply before doing the expensive replay.
+            // Teardown returns the same fully replay-checked journal used for the
+            // refusal/admission assertions; no second identical replay is needed.
+            let events = h.finish_with_events().await;
             let events = &events[before..];
             let attempts: Vec<_> = events
                 .iter()
@@ -276,22 +311,6 @@ fn m4_refused_overflow_does_not_dispatch_fail_but_admitted_overflow_does() {
                 usize::from(admitted),
                 "only admitted unsent work needs release"
             );
-            assert_eq!(h.state()["leases"], json!({}));
-            assert_eq!(h.state()["pending"], json!({}));
-            let mut overflow = false;
-            for _ in 0..=MAX_SEND_QUEUE {
-                let v = agent.receive().await;
-                if v["data"]["code"] == "QUEUE_OVERFLOW" {
-                    overflow = true;
-                    break;
-                }
-            }
-            assert!(
-                overflow,
-                "must exercise queue overflow, not a disconnected peer"
-            );
-            drop((agent, daemon, ui));
-            h.finish().await;
         });
     }
 }
@@ -481,10 +500,12 @@ async fn fanout_with_saturated_first_ui(frames: bool) {
 }
 #[test]
 fn m2_notice_fanout_continues_after_saturated_first_ui() {
+    let _saturation = SATURATION.lock().unwrap();
     support::run(fanout_with_saturated_first_ui(false));
 }
 #[test]
 fn m2_frame_fanout_continues_after_saturated_first_ui() {
+    let _saturation = SATURATION.lock().unwrap();
     support::run(fanout_with_saturated_first_ui(true));
 }
 async fn capture_message(ui: &mut Peer, code: &str) -> Value {
