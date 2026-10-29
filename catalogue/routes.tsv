@@ -62,6 +62,7 @@ test_fx2_agents_a.py	agents/tests/test_fx2_agents_a.py
 test_fx2_agents_b.py	agents/tests/test_fx2_agents_b.py
 test_hello.py	agents/tests/test_hello.py
 test_holdings_e2e.py	agents/tests/test_holdings_e2e.py
+testhol-6fe8b066bffc	agents/tests/test_holdings_live_driver.py
 test_holdings_loop.py	agents/tests/test_holdings_loop.py
 test_loop_trials.py	agents/tests/test_loop_trials.py
 testmcp-793d126b3914	agents/tests/test_mcp_conformance.py
@@ -1038,6 +1039,7 @@ asm_web_live.py	tests/e2e/e2e1_slice/asm_web_live.py
 demo_agent_drive.py	tests/e2e/e2e1_slice/demo_agent_drive.py
 electron-relay.mjs	tests/e2e/e2e1_slice/electron-relay.mjs
 g_ai_stack.py	tests/e2e/e2e1_slice/g_ai_stack.py
+holding-c2f589966bd0	tests/e2e/e2e1_slice/holdings_live_trials.py
 index.js	tests/e2e/e2e1_slice/index.js
 live.py	tests/e2e/e2e1_slice/live.py
 relay-renderer.mjs	tests/e2e/e2e1_slice/relay-renderer.mjs
