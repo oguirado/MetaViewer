@@ -672,6 +672,7 @@ guard_tests.rs	core/src/record/guard_tests.rs
 record-mod.rs	core/src/record/mod.rs
 record-tests.rs	core/src/record/tests.rs
 replay-mod.rs	core/src/replay/mod.rs
+b1stale-69333dbae5b5	core/src/serve/b1_stale_frame_tests.rs
 canonical.rs	core/src/serve/canonical.rs
 serve-capture.rs	core/src/serve/capture.rs
 layout.rs	core/src/serve/layout.rs
@@ -793,6 +794,7 @@ stress_test.go	daemon-adapter/internal/capsule/stress_test.go
 srf-identity-surface	daemon-adapter/internal/capsule/testdata/srf-identity-surface
 runner.go	daemon-adapter/internal/cli/runner.go
 runner_test.go	daemon-adapter/internal/cli/runner_test.go
+b1stale-813879d52247	daemon-adapter/internal/daemon/b1_stale_verdict_test.go
 client_authority.go	daemon-adapter/internal/daemon/client_authority.go
 compensation_test.go	daemon-adapter/internal/daemon/compensation_test.go
 dispatch.go	daemon-adapter/internal/daemon/dispatch.go
