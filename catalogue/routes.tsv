@@ -34,6 +34,7 @@ export.py	agents/metaviewer_agents/export.py
 loop_trials.py	agents/metaviewer_agents/loop_trials.py
 mcp_server.py	agents/metaviewer_agents/mcp_server.py
 mvctl.py	agents/metaviewer_agents/mvctl.py
+mw_home.py	agents/metaviewer_agents/mw_home.py
 observe.py	agents/metaviewer_agents/observe.py
 init-844197da0d1b	agents/metaviewer_agents/perception/__init__.py
 base.py	agents/metaviewer_agents/perception/base.py
@@ -76,6 +77,7 @@ test_mvctl_matrix.py	agents/tests/test_mvctl_matrix.py
 test_mvctl_timeout.py	agents/tests/test_mvctl_timeout.py
 test_mvctl_v02.py	agents/tests/test_mvctl_v02.py
 test_mvctl_v02_e2e.py	agents/tests/test_mvctl_v02_e2e.py
+test_mw_home.py	agents/tests/test_mw_home.py
 testnat-bd9857859b1f	agents/tests/test_native_receipts.py
 test_nesting.py	agents/tests/test_nesting.py
 test_observe.py	agents/tests/test_observe.py
@@ -1185,6 +1187,7 @@ test_kill_guard.py	tests/test_kill_guard.py
 test_kit_source.py	tests/test_kit_source.py
 testlay-30db08e8ee29	tests/test_layout_intents.py
 test_live_teardown.py	tests/test_live_teardown.py
+test_mw_home_cli.py	tests/test_mw_home_cli.py
 test_net_scope.py	tests/test_net_scope.py
 test_novac_matrix.py	tests/test_novac_matrix.py
 testnvo-3cc17c3863ab	tests/test_nv_offline_uid.py
@@ -1205,6 +1208,7 @@ check_laws.py	tools/check_laws.py
 check_theme.py	tools/check_theme.py
 tools-gate.sh	tools/gate.sh
 gate_g_ai.py	tools/gate_g_ai.py
+mw_home_check.py	tools/mw_home_check.py
 router_index.py	tools/router_index.py
 sync_kit.mjs	tools/sync_kit.mjs
 ui-README.md	ui/README.md
