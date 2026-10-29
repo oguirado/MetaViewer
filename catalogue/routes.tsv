@@ -814,6 +814,7 @@ wire_binary_test.go	daemon-adapter/internal/daemon/wire_binary_test.go
 wire_live_test.go	daemon-adapter/internal/daemon/wire_live_test.go
 ac02_cadence_test.go	daemon-adapter/internal/frames/ac02_cadence_test.go
 cancelrace_test.go	daemon-adapter/internal/frames/cancelrace_test.go
+digest_skip_test.go	daemon-adapter/internal/frames/digest_skip_test.go
 frames.go	daemon-adapter/internal/frames/frames.go
 lease_safety_test.go	daemon-adapter/internal/frames/lease_safety_test.go
 live_test.go	daemon-adapter/internal/frames/live_test.go
