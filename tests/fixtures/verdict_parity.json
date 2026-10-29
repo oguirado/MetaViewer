@@ -1,0 +1,1005 @@
+{
+  "schema": "metaviewer.verdict_parity/v1",
+  "contract_version": "v0.2",
+  "envelope_template": {
+    "schema": "envelope/v0.2",
+    "msg_id": "parity-msg-1",
+    "ts_ns": 1000000,
+    "from": {
+      "component": "agent",
+      "instance": "agent-parity"
+    },
+    "to": {
+      "component": "core",
+      "instance": "core-parity"
+    },
+    "session_id": "session-parity",
+    "seq": 1,
+    "nonce": "0123456789abcdef0123456789abcdef"
+  },
+  "vectors": [
+    {
+      "id": "verdict_STALE_FRAME",
+      "family": "action_verdict",
+      "contract_verdict": "accept",
+      "findings": {
+        "go_stream": "FINDING GO-REFUSAL-ENUM"
+      },
+      "payload": {
+        "schema": "action_verdict/v0.2",
+        "proposal_id": "p",
+        "decision": "refused",
+        "reason_code": "STALE_FRAME",
+        "core_seq": 1
+      }
+    },
+    {
+      "id": "verdict_SURFACE_NOT_AGENT_CONTROLLED",
+      "family": "action_verdict",
+      "contract_verdict": "accept",
+      "findings": {
+        "go_stream": "FINDING GO-REFUSAL-ENUM"
+      },
+      "payload": {
+        "schema": "action_verdict/v0.2",
+        "proposal_id": "p",
+        "decision": "refused",
+        "reason_code": "SURFACE_NOT_AGENT_CONTROLLED",
+        "core_seq": 1
+      }
+    },
+    {
+      "id": "verdict_LOCKED_BY_OTHER",
+      "family": "action_verdict",
+      "contract_verdict": "accept",
+      "findings": {
+        "go_stream": "FINDING GO-REFUSAL-ENUM"
+      },
+      "payload": {
+        "schema": "action_verdict/v0.2",
+        "proposal_id": "p",
+        "decision": "refused",
+        "reason_code": "LOCKED_BY_OTHER",
+        "core_seq": 1
+      }
+    },
+    {
+      "id": "verdict_BUDGET_EXCEEDED",
+      "family": "action_verdict",
+      "contract_verdict": "accept",
+      "findings": {
+        "go_stream": "FINDING GO-REFUSAL-ENUM"
+      },
+      "payload": {
+        "schema": "action_verdict/v0.2",
+        "proposal_id": "p",
+        "decision": "refused",
+        "reason_code": "BUDGET_EXCEEDED",
+        "core_seq": 1
+      }
+    },
+    {
+      "id": "verdict_OUT_OF_BOUNDS",
+      "family": "action_verdict",
+      "contract_verdict": "accept",
+      "findings": {
+        "go_stream": "FINDING GO-REFUSAL-ENUM"
+      },
+      "payload": {
+        "schema": "action_verdict/v0.2",
+        "proposal_id": "p",
+        "decision": "refused",
+        "reason_code": "OUT_OF_BOUNDS",
+        "core_seq": 1
+      }
+    },
+    {
+      "id": "verdict_POLICY",
+      "family": "action_verdict",
+      "contract_verdict": "accept",
+      "findings": {},
+      "payload": {
+        "schema": "action_verdict/v0.2",
+        "proposal_id": "p",
+        "decision": "refused",
+        "reason_code": "POLICY",
+        "core_seq": 1
+      }
+    },
+    {
+      "id": "verdict_admitted",
+      "family": "action_verdict",
+      "contract_verdict": "accept",
+      "findings": {
+        "go_stream": "FINDING GO-ADMITTED"
+      },
+      "payload": {
+        "schema": "action_verdict/v0.2",
+        "proposal_id": "p",
+        "decision": "admitted",
+        "core_seq": 1
+      }
+    },
+    {
+      "id": "verdict_proposal_id_0",
+      "family": "action_verdict",
+      "contract_verdict": "refuse",
+      "findings": {
+        "go_stream": "FINDING GO-VERDICT-SHAPE"
+      },
+      "payload": {
+        "schema": "action_verdict/v0.2",
+        "proposal_id": "",
+        "decision": "refused",
+        "reason_code": "POLICY",
+        "core_seq": 1
+      }
+    },
+    {
+      "id": "verdict_proposal_id_1",
+      "family": "action_verdict",
+      "contract_verdict": "refuse",
+      "findings": {
+        "go_stream": "FINDING GO-VERDICT-SHAPE"
+      },
+      "payload": {
+        "schema": "action_verdict/v0.2",
+        "proposal_id": null,
+        "decision": "refused",
+        "reason_code": "POLICY",
+        "core_seq": 1
+      }
+    },
+    {
+      "id": "verdict_proposal_id_2",
+      "family": "action_verdict",
+      "contract_verdict": "refuse",
+      "findings": {
+        "go_stream": "FINDING GO-VERDICT-SHAPE",
+        "js_row": "FINDING JS-PROPOSAL-ID"
+      },
+      "payload": {
+        "schema": "action_verdict/v0.2",
+        "proposal_id": "ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp",
+        "decision": "refused",
+        "reason_code": "POLICY",
+        "core_seq": 1
+      }
+    },
+    {
+      "id": "verdict_proposal_id_3",
+      "family": "action_verdict",
+      "contract_verdict": "refuse",
+      "findings": {
+        "js_row": "FINDING JS-PROPOSAL-ID"
+      },
+      "payload": {
+        "schema": "action_verdict/v0.2",
+        "proposal_id": 17,
+        "decision": "refused",
+        "reason_code": "POLICY",
+        "core_seq": 1
+      }
+    },
+    {
+      "id": "verdict_reason_code_0",
+      "family": "action_verdict",
+      "contract_verdict": "refuse",
+      "findings": {
+        "js_matcher": "FINDING JS-MATCHER-SHAPE"
+      },
+      "payload": {
+        "schema": "action_verdict/v0.2",
+        "proposal_id": "p",
+        "decision": "refused",
+        "reason_code": "BOGUS",
+        "core_seq": 1
+      }
+    },
+    {
+      "id": "verdict_reason_code_1",
+      "family": "action_verdict",
+      "contract_verdict": "refuse",
+      "findings": {
+        "js_matcher": "FINDING JS-MATCHER-SHAPE"
+      },
+      "payload": {
+        "schema": "action_verdict/v0.2",
+        "proposal_id": "p",
+        "decision": "refused",
+        "reason_code": null,
+        "core_seq": 1
+      }
+    },
+    {
+      "id": "verdict_core_seq_0",
+      "family": "action_verdict",
+      "contract_verdict": "refuse",
+      "findings": {
+        "go_stream": "FINDING GO-VERDICT-SHAPE",
+        "js_matcher": "FINDING JS-MATCHER-SHAPE"
+      },
+      "payload": {
+        "schema": "action_verdict/v0.2",
+        "proposal_id": "p",
+        "decision": "refused",
+        "reason_code": "POLICY",
+        "core_seq": null
+      }
+    },
+    {
+      "id": "verdict_core_seq_1",
+      "family": "action_verdict",
+      "contract_verdict": "refuse",
+      "findings": {
+        "go_stream": "FINDING GO-VERDICT-SHAPE",
+        "js_matcher": "FINDING JS-MATCHER-SHAPE"
+      },
+      "payload": {
+        "schema": "action_verdict/v0.2",
+        "proposal_id": "p",
+        "decision": "refused",
+        "reason_code": "POLICY",
+        "core_seq": 0
+      }
+    },
+    {
+      "id": "verdict_core_seq_2",
+      "family": "action_verdict",
+      "contract_verdict": "refuse",
+      "findings": {
+        "go_stream": "FINDING GO-VERDICT-SHAPE",
+        "js_matcher": "FINDING JS-MATCHER-SHAPE"
+      },
+      "payload": {
+        "schema": "action_verdict/v0.2",
+        "proposal_id": "p",
+        "decision": "refused",
+        "reason_code": "POLICY",
+        "core_seq": 9007199254740992
+      }
+    },
+    {
+      "id": "verdict_core_seq_3",
+      "family": "action_verdict",
+      "contract_verdict": "refuse",
+      "findings": {
+        "go_stream": "FINDING GO-VERDICT-SHAPE",
+        "js_matcher": "FINDING JS-MATCHER-SHAPE"
+      },
+      "payload": {
+        "schema": "action_verdict/v0.2",
+        "proposal_id": "p",
+        "decision": "refused",
+        "reason_code": "POLICY",
+        "core_seq": true
+      }
+    },
+    {
+      "id": "verdict_core_seq_4",
+      "family": "action_verdict",
+      "contract_verdict": "refuse",
+      "findings": {
+        "go_stream": "FINDING GO-VERDICT-SHAPE",
+        "js_matcher": "FINDING JS-MATCHER-SHAPE"
+      },
+      "payload": {
+        "schema": "action_verdict/v0.2",
+        "proposal_id": "p",
+        "decision": "refused",
+        "reason_code": "POLICY",
+        "core_seq": 1.5
+      }
+    },
+    {
+      "id": "verdict_missing_proposal_id",
+      "family": "action_verdict",
+      "contract_verdict": "refuse",
+      "findings": {
+        "go_stream": "FINDING GO-VERDICT-SHAPE"
+      },
+      "payload": {
+        "schema": "action_verdict/v0.2",
+        "decision": "refused",
+        "reason_code": "POLICY",
+        "core_seq": 1
+      }
+    },
+    {
+      "id": "verdict_missing_reason_code",
+      "family": "action_verdict",
+      "contract_verdict": "refuse",
+      "findings": {
+        "js_matcher": "FINDING JS-MATCHER-SHAPE"
+      },
+      "payload": {
+        "schema": "action_verdict/v0.2",
+        "proposal_id": "p",
+        "decision": "refused",
+        "core_seq": 1
+      }
+    },
+    {
+      "id": "verdict_missing_core_seq",
+      "family": "action_verdict",
+      "contract_verdict": "refuse",
+      "findings": {
+        "go_stream": "FINDING GO-VERDICT-SHAPE",
+        "js_matcher": "FINDING JS-MATCHER-SHAPE"
+      },
+      "payload": {
+        "schema": "action_verdict/v0.2",
+        "proposal_id": "p",
+        "decision": "refused",
+        "reason_code": "POLICY"
+      }
+    },
+    {
+      "id": "verdict_extra",
+      "family": "action_verdict",
+      "contract_verdict": "refuse",
+      "findings": {
+        "go_stream": "FINDING GO-VERDICT-SHAPE",
+        "js_row": "FINDING JS-UNKNOWN-KEYS",
+        "js_matcher": "FINDING JS-MATCHER-SHAPE"
+      },
+      "payload": {
+        "schema": "action_verdict/v0.2",
+        "proposal_id": "p",
+        "decision": "refused",
+        "reason_code": "POLICY",
+        "core_seq": 1,
+        "extra": 1
+      }
+    },
+    {
+      "id": "verdict_admitted_reason_POLICY",
+      "family": "action_verdict",
+      "contract_verdict": "refuse",
+      "findings": {
+        "js_row": "FINDING JS-ADMITTED-REASON",
+        "js_matcher": "FINDING JS-MATCHER-SHAPE"
+      },
+      "payload": {
+        "schema": "action_verdict/v0.2",
+        "proposal_id": "p",
+        "decision": "admitted",
+        "core_seq": 1,
+        "reason_code": "POLICY"
+      }
+    },
+    {
+      "id": "verdict_admitted_reason_None",
+      "family": "action_verdict",
+      "contract_verdict": "refuse",
+      "findings": {
+        "js_row": "FINDING JS-ADMITTED-REASON",
+        "js_matcher": "FINDING JS-MATCHER-SHAPE"
+      },
+      "payload": {
+        "schema": "action_verdict/v0.2",
+        "proposal_id": "p",
+        "decision": "admitted",
+        "core_seq": 1,
+        "reason_code": null
+      }
+    },
+    {
+      "id": "event_STALE_FRAME",
+      "family": "record_event",
+      "contract_verdict": "accept",
+      "findings": {},
+      "payload": {
+        "schema": "record_event/v0.2",
+        "request_id": "q",
+        "surface_id": "s",
+        "recording_id": "r",
+        "event": "refused",
+        "mono_ns": 0,
+        "reason_code": "STALE_FRAME",
+        "detail": ""
+      }
+    },
+    {
+      "id": "event_SURFACE_NOT_AGENT_CONTROLLED",
+      "family": "record_event",
+      "contract_verdict": "accept",
+      "findings": {},
+      "payload": {
+        "schema": "record_event/v0.2",
+        "request_id": "q",
+        "surface_id": "s",
+        "recording_id": "r",
+        "event": "refused",
+        "mono_ns": 0,
+        "reason_code": "SURFACE_NOT_AGENT_CONTROLLED",
+        "detail": ""
+      }
+    },
+    {
+      "id": "event_LOCKED_BY_OTHER",
+      "family": "record_event",
+      "contract_verdict": "accept",
+      "findings": {},
+      "payload": {
+        "schema": "record_event/v0.2",
+        "request_id": "q",
+        "surface_id": "s",
+        "recording_id": "r",
+        "event": "refused",
+        "mono_ns": 0,
+        "reason_code": "LOCKED_BY_OTHER",
+        "detail": ""
+      }
+    },
+    {
+      "id": "event_BUDGET_EXCEEDED",
+      "family": "record_event",
+      "contract_verdict": "accept",
+      "findings": {},
+      "payload": {
+        "schema": "record_event/v0.2",
+        "request_id": "q",
+        "surface_id": "s",
+        "recording_id": "r",
+        "event": "refused",
+        "mono_ns": 0,
+        "reason_code": "BUDGET_EXCEEDED",
+        "detail": ""
+      }
+    },
+    {
+      "id": "event_OUT_OF_BOUNDS",
+      "family": "record_event",
+      "contract_verdict": "accept",
+      "findings": {},
+      "payload": {
+        "schema": "record_event/v0.2",
+        "request_id": "q",
+        "surface_id": "s",
+        "recording_id": "r",
+        "event": "refused",
+        "mono_ns": 0,
+        "reason_code": "OUT_OF_BOUNDS",
+        "detail": ""
+      }
+    },
+    {
+      "id": "event_POLICY",
+      "family": "record_event",
+      "contract_verdict": "accept",
+      "findings": {},
+      "payload": {
+        "schema": "record_event/v0.2",
+        "request_id": "q",
+        "surface_id": "s",
+        "recording_id": "r",
+        "event": "refused",
+        "mono_ns": 0,
+        "reason_code": "POLICY",
+        "detail": ""
+      }
+    },
+    {
+      "id": "event_reason_code_BOGUS",
+      "family": "record_event",
+      "contract_verdict": "refuse",
+      "findings": {},
+      "payload": {
+        "schema": "record_event/v0.2",
+        "request_id": "q",
+        "surface_id": "s",
+        "recording_id": "r",
+        "event": "refused",
+        "mono_ns": 0,
+        "reason_code": "BOGUS",
+        "detail": ""
+      }
+    },
+    {
+      "id": "event_reason_code_None",
+      "family": "record_event",
+      "contract_verdict": "refuse",
+      "findings": {},
+      "payload": {
+        "schema": "record_event/v0.2",
+        "request_id": "q",
+        "surface_id": "s",
+        "recording_id": "r",
+        "event": "refused",
+        "mono_ns": 0,
+        "reason_code": null,
+        "detail": ""
+      }
+    },
+    {
+      "id": "event_detail_None",
+      "family": "record_event",
+      "contract_verdict": "refuse",
+      "findings": {},
+      "payload": {
+        "schema": "record_event/v0.2",
+        "request_id": "q",
+        "surface_id": "s",
+        "recording_id": "r",
+        "event": "refused",
+        "mono_ns": 0,
+        "reason_code": "POLICY",
+        "detail": null
+      }
+    },
+    {
+      "id": "event_detail_xxxxxxxx",
+      "family": "record_event",
+      "contract_verdict": "refuse",
+      "findings": {},
+      "payload": {
+        "schema": "record_event/v0.2",
+        "request_id": "q",
+        "surface_id": "s",
+        "recording_id": "r",
+        "event": "refused",
+        "mono_ns": 0,
+        "reason_code": "POLICY",
+        "detail": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      }
+    },
+    {
+      "id": "event_extra_1",
+      "family": "record_event",
+      "contract_verdict": "refuse",
+      "findings": {},
+      "payload": {
+        "schema": "record_event/v0.2",
+        "request_id": "q",
+        "surface_id": "s",
+        "recording_id": "r",
+        "event": "refused",
+        "mono_ns": 0,
+        "reason_code": "POLICY",
+        "detail": "",
+        "extra": 1
+      }
+    },
+    {
+      "id": "ram_start_fps_1",
+      "family": "record_request",
+      "contract_verdict": "accept",
+      "findings": {},
+      "payload": {
+        "schema": "record_request/v0.2",
+        "request_id": "q",
+        "op": "ram_start",
+        "params": {
+          "surface_id": "s",
+          "recording_id": "r",
+          "max_fps": 1,
+          "ring_bytes": 1
+        }
+      }
+    },
+    {
+      "id": "ram_start_fps_60",
+      "family": "record_request",
+      "contract_verdict": "accept",
+      "findings": {},
+      "payload": {
+        "schema": "record_request/v0.2",
+        "request_id": "q",
+        "op": "ram_start",
+        "params": {
+          "surface_id": "s",
+          "recording_id": "r",
+          "max_fps": 60,
+          "ring_bytes": 1
+        }
+      }
+    },
+    {
+      "id": "ram_start_fps_61",
+      "family": "record_request",
+      "contract_verdict": "accept",
+      "findings": {
+        "js_preload": "FINDING REC-CEILING",
+        "js_capture": "FINDING REC-CEILING"
+      },
+      "payload": {
+        "schema": "record_request/v0.2",
+        "request_id": "q",
+        "op": "ram_start",
+        "params": {
+          "surface_id": "s",
+          "recording_id": "r",
+          "max_fps": 61,
+          "ring_bytes": 1
+        }
+      }
+    },
+    {
+      "id": "ram_start_fps_120",
+      "family": "record_request",
+      "contract_verdict": "accept",
+      "findings": {
+        "js_preload": "FINDING REC-CEILING",
+        "js_capture": "FINDING REC-CEILING"
+      },
+      "payload": {
+        "schema": "record_request/v0.2",
+        "request_id": "q",
+        "op": "ram_start",
+        "params": {
+          "surface_id": "s",
+          "recording_id": "r",
+          "max_fps": 120,
+          "ring_bytes": 1
+        }
+      }
+    },
+    {
+      "id": "ram_start_fps_0",
+      "family": "record_request",
+      "contract_verdict": "refuse",
+      "findings": {},
+      "payload": {
+        "schema": "record_request/v0.2",
+        "request_id": "q",
+        "op": "ram_start",
+        "params": {
+          "surface_id": "s",
+          "recording_id": "r",
+          "max_fps": 0,
+          "ring_bytes": 1
+        }
+      }
+    },
+    {
+      "id": "ram_start_fps_121",
+      "family": "record_request",
+      "contract_verdict": "refuse",
+      "findings": {},
+      "payload": {
+        "schema": "record_request/v0.2",
+        "request_id": "q",
+        "op": "ram_start",
+        "params": {
+          "surface_id": "s",
+          "recording_id": "r",
+          "max_fps": 121,
+          "ring_bytes": 1
+        }
+      }
+    },
+    {
+      "id": "ram_start_fps_None",
+      "family": "record_request",
+      "contract_verdict": "refuse",
+      "findings": {},
+      "payload": {
+        "schema": "record_request/v0.2",
+        "request_id": "q",
+        "op": "ram_start",
+        "params": {
+          "surface_id": "s",
+          "recording_id": "r",
+          "max_fps": null,
+          "ring_bytes": 1
+        }
+      }
+    },
+    {
+      "id": "ram_start_fps_True",
+      "family": "record_request",
+      "contract_verdict": "refuse",
+      "findings": {},
+      "payload": {
+        "schema": "record_request/v0.2",
+        "request_id": "q",
+        "op": "ram_start",
+        "params": {
+          "surface_id": "s",
+          "recording_id": "r",
+          "max_fps": true,
+          "ring_bytes": 1
+        }
+      }
+    },
+    {
+      "id": "ram_start_fps_1.5",
+      "family": "record_request",
+      "contract_verdict": "refuse",
+      "findings": {},
+      "payload": {
+        "schema": "record_request/v0.2",
+        "request_id": "q",
+        "op": "ram_start",
+        "params": {
+          "surface_id": "s",
+          "recording_id": "r",
+          "max_fps": 1.5,
+          "ring_bytes": 1
+        }
+      }
+    },
+    {
+      "id": "ram_start_fps_missing",
+      "family": "record_request",
+      "contract_verdict": "refuse",
+      "findings": {
+        "js_preload": "FINDING REC-MISSING-FPS",
+        "js_capture": "FINDING REC-MISSING-FPS"
+      },
+      "payload": {
+        "schema": "record_request/v0.2",
+        "request_id": "q",
+        "op": "ram_start",
+        "params": {
+          "surface_id": "s",
+          "recording_id": "r",
+          "ring_bytes": 1
+        }
+      }
+    },
+    {
+      "id": "ram_start_extra_top",
+      "family": "record_request",
+      "contract_verdict": "refuse",
+      "findings": {},
+      "payload": {
+        "schema": "record_request/v0.2",
+        "request_id": "q",
+        "op": "ram_start",
+        "params": {
+          "surface_id": "s",
+          "recording_id": "r",
+          "max_fps": 1,
+          "ring_bytes": 1
+        },
+        "extra": 1
+      }
+    },
+    {
+      "id": "ram_start_extra_params",
+      "family": "record_request",
+      "contract_verdict": "refuse",
+      "findings": {},
+      "payload": {
+        "schema": "record_request/v0.2",
+        "request_id": "q",
+        "op": "ram_start",
+        "params": {
+          "surface_id": "s",
+          "recording_id": "r",
+          "max_fps": 1,
+          "ring_bytes": 1,
+          "extra": 1
+        }
+      }
+    },
+    {
+      "id": "disk_start_fps_1",
+      "family": "record_request",
+      "contract_verdict": "accept",
+      "findings": {},
+      "payload": {
+        "schema": "record_request/v0.2",
+        "request_id": "q",
+        "op": "disk_start",
+        "params": {
+          "surface_id": "s",
+          "recording_id": "r",
+          "max_fps": 1,
+          "destination_capability_id": "dest",
+          "destination_path": "/tmp/parity.tar"
+        }
+      }
+    },
+    {
+      "id": "disk_start_fps_60",
+      "family": "record_request",
+      "contract_verdict": "accept",
+      "findings": {},
+      "payload": {
+        "schema": "record_request/v0.2",
+        "request_id": "q",
+        "op": "disk_start",
+        "params": {
+          "surface_id": "s",
+          "recording_id": "r",
+          "max_fps": 60,
+          "destination_capability_id": "dest",
+          "destination_path": "/tmp/parity.tar"
+        }
+      }
+    },
+    {
+      "id": "disk_start_fps_61",
+      "family": "record_request",
+      "contract_verdict": "accept",
+      "findings": {
+        "js_preload": "FINDING REC-CEILING",
+        "js_capture": "FINDING REC-CEILING"
+      },
+      "payload": {
+        "schema": "record_request/v0.2",
+        "request_id": "q",
+        "op": "disk_start",
+        "params": {
+          "surface_id": "s",
+          "recording_id": "r",
+          "max_fps": 61,
+          "destination_capability_id": "dest",
+          "destination_path": "/tmp/parity.tar"
+        }
+      }
+    },
+    {
+      "id": "disk_start_fps_120",
+      "family": "record_request",
+      "contract_verdict": "accept",
+      "findings": {
+        "js_preload": "FINDING REC-CEILING",
+        "js_capture": "FINDING REC-CEILING"
+      },
+      "payload": {
+        "schema": "record_request/v0.2",
+        "request_id": "q",
+        "op": "disk_start",
+        "params": {
+          "surface_id": "s",
+          "recording_id": "r",
+          "max_fps": 120,
+          "destination_capability_id": "dest",
+          "destination_path": "/tmp/parity.tar"
+        }
+      }
+    },
+    {
+      "id": "disk_start_fps_0",
+      "family": "record_request",
+      "contract_verdict": "refuse",
+      "findings": {},
+      "payload": {
+        "schema": "record_request/v0.2",
+        "request_id": "q",
+        "op": "disk_start",
+        "params": {
+          "surface_id": "s",
+          "recording_id": "r",
+          "max_fps": 0,
+          "destination_capability_id": "dest",
+          "destination_path": "/tmp/parity.tar"
+        }
+      }
+    },
+    {
+      "id": "disk_start_fps_121",
+      "family": "record_request",
+      "contract_verdict": "refuse",
+      "findings": {},
+      "payload": {
+        "schema": "record_request/v0.2",
+        "request_id": "q",
+        "op": "disk_start",
+        "params": {
+          "surface_id": "s",
+          "recording_id": "r",
+          "max_fps": 121,
+          "destination_capability_id": "dest",
+          "destination_path": "/tmp/parity.tar"
+        }
+      }
+    },
+    {
+      "id": "disk_start_fps_None",
+      "family": "record_request",
+      "contract_verdict": "refuse",
+      "findings": {},
+      "payload": {
+        "schema": "record_request/v0.2",
+        "request_id": "q",
+        "op": "disk_start",
+        "params": {
+          "surface_id": "s",
+          "recording_id": "r",
+          "max_fps": null,
+          "destination_capability_id": "dest",
+          "destination_path": "/tmp/parity.tar"
+        }
+      }
+    },
+    {
+      "id": "disk_start_fps_True",
+      "family": "record_request",
+      "contract_verdict": "refuse",
+      "findings": {},
+      "payload": {
+        "schema": "record_request/v0.2",
+        "request_id": "q",
+        "op": "disk_start",
+        "params": {
+          "surface_id": "s",
+          "recording_id": "r",
+          "max_fps": true,
+          "destination_capability_id": "dest",
+          "destination_path": "/tmp/parity.tar"
+        }
+      }
+    },
+    {
+      "id": "disk_start_fps_1.5",
+      "family": "record_request",
+      "contract_verdict": "refuse",
+      "findings": {},
+      "payload": {
+        "schema": "record_request/v0.2",
+        "request_id": "q",
+        "op": "disk_start",
+        "params": {
+          "surface_id": "s",
+          "recording_id": "r",
+          "max_fps": 1.5,
+          "destination_capability_id": "dest",
+          "destination_path": "/tmp/parity.tar"
+        }
+      }
+    },
+    {
+      "id": "disk_start_fps_missing",
+      "family": "record_request",
+      "contract_verdict": "refuse",
+      "findings": {
+        "js_preload": "FINDING REC-MISSING-FPS",
+        "js_capture": "FINDING REC-MISSING-FPS"
+      },
+      "payload": {
+        "schema": "record_request/v0.2",
+        "request_id": "q",
+        "op": "disk_start",
+        "params": {
+          "surface_id": "s",
+          "recording_id": "r",
+          "destination_capability_id": "dest",
+          "destination_path": "/tmp/parity.tar"
+        }
+      }
+    },
+    {
+      "id": "disk_start_extra_top",
+      "family": "record_request",
+      "contract_verdict": "refuse",
+      "findings": {},
+      "payload": {
+        "schema": "record_request/v0.2",
+        "request_id": "q",
+        "op": "disk_start",
+        "params": {
+          "surface_id": "s",
+          "recording_id": "r",
+          "max_fps": 1,
+          "destination_capability_id": "dest",
+          "destination_path": "/tmp/parity.tar"
+        },
+        "extra": 1
+      }
+    },
+    {
+      "id": "disk_start_extra_params",
+      "family": "record_request",
+      "contract_verdict": "refuse",
+      "findings": {},
+      "payload": {
+        "schema": "record_request/v0.2",
+        "request_id": "q",
+        "op": "disk_start",
+        "params": {
+          "surface_id": "s",
+          "recording_id": "r",
+          "max_fps": 1,
+          "destination_capability_id": "dest",
+          "destination_path": "/tmp/parity.tar",
+          "extra": 1
+        }
+      }
+    }
+  ]
+}
