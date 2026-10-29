@@ -718,6 +718,7 @@ nv_lifecycle.rs	core/tests/nv_lifecycle.rs
 nvsuper-df27d9370197	core/tests/nv_supervisor_start.rs
 oneof_poly.rs	core/tests/oneof_poly.rs
 r3t6_conformance.rs	core/tests/r3t6_conformance.rs
+record_harden.rs	core/tests/record_harden.rs
 record_release.rs	core/tests/record_release.rs
 replay_table.rs	core/tests/replay_table.rs
 rv11vf1-c97dd49bc702	core/tests/rv11v_f1_frame_bounds.rs
