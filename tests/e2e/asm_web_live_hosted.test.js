@@ -23,7 +23,15 @@ async function dryRun(mutation = '') {
   const calls = [];
   const wire = [];
   const python = process.env.PYTHON || 'python3';
-  const args = mutation === 'skip-final-ax'
+  const sourceMutants = {
+    'MUT-OMNIBOX-PREFOCUSED': ["[self.prelude_point(before),", "["],
+    'MUT-PRELUDE-ON-BUBBLE': ["x=width // 4, y=3 * height // 4", "x=7 * width // 8, y=height // 8"],
+    'MUT-PRELUDE-COUNTS': ["task['fixture_setup'] = stage(task, 'navigate', page=page, url=url)",
+      "task['fixture_setup'] = stage(task, 'navigate', page=page, url=url); task['steps'] += 1"],
+  };
+  const args = sourceMutants[mutation]
+    ? ['-c', `import sys,json; p=sys.argv[1]; a,b=json.loads(sys.argv[2]); s=open(p).read(); assert s.count(a)==1; s=s.replace(a,b); sys.argv=[p,'--hosted-rpc']; exec(compile(s,p,'exec'),{'__file__':p,'__name__':'__main__'})`, runner, JSON.stringify(sourceMutants[mutation])]
+    : mutation === 'skip-final-ax'
     ? ['-c', `import sys; p=sys.argv[1]; s=open(p).read(); old='            prove_ax(task, final, final_tree, expected)'; assert s.count(old)==1; s=s.replace(old,'            pass # M-LIVE-AX-SKIP'); sys.argv=[p,'--hosted-rpc']; exec(compile(s,p,'exec'),{'__file__':p,'__name__':'__main__'})`, runner]
     : [runner, '--hosted-rpc'];
   const child = spawn(python, args, { env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
@@ -32,6 +40,26 @@ async function dryRun(mutation = '') {
   child.stderr.on('data', chunk => { stderr += chunk; });
   const timer = setTimeout(() => child.kill('SIGKILL'), 60000);
   const reply = result => child.stdin.write(JSON.stringify({ result }) + '\n');
+  // [TARGET, unit decision] Navigation boundary fake: chrome begins with its
+  // omnibox selected and retains an untouched restore bubble. Real op_navigate
+  // owns the sequence and changed_region plans; this fake renders the focus cue.
+  let navigation, navFrame, navPending, navGeneration = 0;
+  const navigationFrame = () => {
+    const pixels = Buffer.alloc(1280 * 900 * 3, 255);
+    // Selection/focus cue in browser chrome, outside blank page content.
+    for (let y = 30; y < 60; y++) {
+      pixels.fill(navigation.focus === 'omnibox' ? 50 : 240,
+        (y * 1280 + 100) * 3, (y * 1280 + 700) * 3);
+    }
+    for (let y = 80; y < 210; y++) {
+      pixels.fill(100, (y * 1280 + 950) * 3, (y * 1280 + 1270) * 3);
+    } // Persistent restore bubble.
+    if (navigation.typed) pixels[0] = 10;
+    if (navigation.loaded) pixels[1] = 20;
+    navFrame = { surface_id: capsule.surfaceId, width: 1280, height: 900,
+      generation: ++navGeneration, sha256: sha(pixels) };
+    return navFrame;
+  };
   const dispatch = (stage, args) => {
     calls.push(stage);
     switch (stage) {
@@ -43,8 +71,55 @@ async function dryRun(mutation = '') {
         return { profile: 'mv-live-1', capsules: [capsule.capsuleId] };
       case 'offline_proof': return { fixtures_offline: !(mutation === 'net-up' ||
         (mutation === 'midrun-gate-flap' && calls.includes('propose')) ) };
-      case 'navigate': {
+      case 'navigate_begin':
         assert.equal(calls.at(-2), 'offline_proof');
+        navigation = { focus: 'omnibox', selected: true, typed: false,
+          loaded: false, page: args.page, url: args.url };
+        return {};
+      case 'navigation_offline_proof': return { fixtures_offline: true };
+      case 'navigation_observe': return { frame_ref: navigationFrame() };
+      case 'navigation_ax': return { elements: [{ name: {
+        form: 'EMPTY', flow_a: 'FLOW_STAGE_A_READY', table: 'auth-gateway',
+      }[navigation.page] }] };
+      case 'navigation_propose': {
+        assert.deepEqual(args.sensed.frame, navFrame, 'fresh custody-bound setup frame');
+        assert.equal(args.max_ms, 30000);
+        assert.deepEqual(args.plan.expectation, { type: 'changed_region',
+          bbox: { x: 0, y: 0, w: 1280, h: 900 } });
+        const action = args.plan.action;
+        if (action.type === 'click') {
+          assert.ok(action.x > 0 && action.x < 640 && action.y > 450 && action.y < 900);
+          navigation.focus = 'content';
+          navigation.selected = false;
+        } else if (action.type === 'key' && action.keys.join('+') === 'ctrl+l') {
+          navigation.focus = 'omnibox'; navigation.selected = true;
+        } else if (action.type === 'type') {
+          assert.equal(navigation.focus, 'omnibox');
+          assert.equal(navigation.selected, true);
+          assert.equal(action.text, navigation.url);
+          navigation.typed = true;
+        } else {
+          assert.deepEqual(action, { type: 'key', keys: ['Return'] });
+          assert.equal(navigation.typed, true);
+          navigation.loaded = true;
+        }
+        const id = `navigation-${navGeneration}`;
+        navPending = { before: args.sensed.frame, after: navigationFrame(), id };
+        return { proposal_id: id, verdict: { admitted: true },
+          native_evidence: { input_mono_ns: navGeneration } };
+      }
+      case 'navigation_wait_verify': {
+        assert.equal(args.admitted.proposal_id, navPending.id);
+        if (navPending.before.sha256 === navPending.after.sha256) {
+          throw Object.assign(new Error('VERIFICATION_FAILED: unchanged chrome pixels'),
+            { code: 'VERIFICATION_FAILED' });
+        }
+        return { status: 'verified', receipt: { proposal_id: navPending.id,
+          verified: true, after_frame: navPending.after }, focus_verified: true,
+          input_mono_ns: navGeneration, frame_sha256: navPending.after.sha256,
+          receipt_binding_negative_control: 'PASS' };
+      }
+      case 'navigate': {
         assert.ok(!calls.some(x => /^net(?:_|$)/.test(x)));
         assert.equal(capsule.netPolicy, 'down');
         const html = decodeURIComponent(args.url.split(',').slice(1).join(','));
@@ -74,7 +149,7 @@ async function dryRun(mutation = '') {
         core = new HostedCoreAdmissionFake(capsule, { stepBudget: args.page === 'table'
           ? STEP_BUDGETS.T3_READ_TABLE : args.page === 'form'
             ? STEP_BUDGETS.T1_FORM_FILL : STEP_BUDGETS.T2_TWO_PAGE_FLOW });
-        return []; // Address-bar setup is native-only; task inputs use fake admission.
+        return {}; // Setup receipts come from the real Python navigation loop.
       }
       case 'observe':
         assert.equal(args.timeout_ms, 5000);
@@ -192,6 +267,10 @@ test('hosted dry-run drives all tasks on one capsule with measured stages and AX
   assert.deepEqual(report.tasks.map(t => t.verdict), ['PASS', 'PASS', 'PASS']);
   assert.equal(report.tasks[2].reported_cell.value, '27');
   for (const task of report.tasks) {
+    assert.equal(task.fixture_setup.length, 4);
+    assert.equal(task.fixture_setup[0].kind, 'focus_prelude');
+    assert.ok(task.fixture_setup.every(s => s.verdict.admitted &&
+      s.verify_verdict.receipt.verified));
     assert.ok(task.ax_proofs.length);
     for (const values of Object.values(task.latency_ms)) {
       assert.ok(values.every(v => v.provenance === 'MEASURED' && v.value >= 0));
@@ -229,3 +308,19 @@ test('backend hardening contracts and named mutation controls (no live imports)'
     { encoding: 'utf8', timeout: 60000, env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } });
   assert.equal(result.status, 0, result.stdout + result.stderr);
 });
+
+for (const [mutation, detail] of [
+  ['MUT-OMNIBOX-PREFOCUSED', /VERIFICATION_FAILED/],
+  ['MUT-PRELUDE-ON-BUBBLE', /prelude outside safe content geometry/],
+  ['MUT-PRELUDE-COUNTS', /task action budget exceeded/],
+]) {
+  test(`navigation negative control: ${mutation}`, async () => {
+    const { rc, report } = await dryRun(mutation);
+    assert.equal(rc, 1);
+    assert.equal(report.status, 'BLOCKED');
+    assert.match(report.error.detail, detail);
+    if (mutation === 'MUT-OMNIBOX-PREFOCUSED') {
+      assert.equal(report.error.code, 'VERIFICATION_FAILED');
+    }
+  });
+}

@@ -319,6 +319,18 @@ operator-supplied (`:174-185`). Reports state
 all such subcommands with `E2E_FORBIDDEN_VERB` before spawning. Optional
 `MV_WENDER_PLANNER_CMD` is a JSON argv using the existing custody-bound click
 protocol; otherwise it uses the pinned G-AI state shim and named targets.
+Before address-bar navigation, a custody-bound, admitted click at the frame's
+quarter-width and three-quarter-height moves focus from the initially selected
+omnibox into content. A lower-left content geometry gate excludes the toolbar
+and upper-right restore bubble; the bubble is left untouched. The prelude uses
+strict full-frame `changed_region` verification: losing omnibox selection is the
+visible cue even on a blank page. No AX focus schema is assumed; if that cue is
+absent, verification fails closed. Ctrl+L, URL typing and Return retain their
+existing strict pixel expectations. Prelude and navigation receipts belong to
+`fixture_setup`, never task steps; task budgets remain unchanged. Hosted tests
+exercise the real navigation loop against a preselected omnibox and kill
+`MUT-OMNIBOX-PREFOCUSED`, `MUT-PRELUDE-ON-BUBBLE` and `MUT-PRELUDE-COUNTS`.
+This pixel focus cue still requires confirmation in the operator's live run.
 Typing is deterministic against the focused field; table reading admits no
 input. Runtime blob links bind the flow fixtures without network access
 `[TARGET, unit decision]`. Stdout reports task budgets, measured stage latencies,

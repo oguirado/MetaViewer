@@ -174,6 +174,23 @@ def seal_task(task):
 class HostedRPC:
     """Test-only pipe protocol. It never loads native/live modules."""
     def call(self, stage, **args):
+        if stage == 'navigate':
+            # Exercise the real navigation implementation with hosted boundaries.
+            self.call('navigate_begin', **args)
+            native = object.__new__(LiveBackend)
+            for name in ('offline_proof', 'observe', 'propose', 'wait_verify', 'ax'):
+                def boundary(*values, _name=name):
+                    keys = dict(offline_proof=(), observe=('timeout_ms',),
+                                propose=('sensed', 'plan', 'max_ms'),
+                                wait_verify=('admitted', 'timeout_ms'), ax=())[_name]
+                    return self.call('navigation_' + _name, **dict(zip(keys, values)))
+                setattr(native, 'op_' + name, boundary)
+            setup = native.op_navigate(**args)
+            self.request('navigate', **args)
+            return setup
+        return self.request(stage, **args)
+
+    def request(self, stage, **args):
         print(json.dumps(dict(rpc=stage, args=args)), flush=True)
         reply = json.loads(sys.stdin.readline())
         if 'error' in reply:
@@ -554,16 +571,40 @@ class LiveBackend:
                     input_mono_ns=receipt.get('input_mono_ns'), frame_sha256=receipt.get('frame_sha256'),
                     receipt_binding_negative_control=negative['status'], verify_negative_control=negative)
 
+    @staticmethod
+    def prelude_point(frame):
+        # [TARGET, unit decision] Restrict setup to the lower-left content
+        # quadrant. This excludes the toolbar and the upper-right restore bubble
+        # observed in the operator's frame; never dismiss that bubble here.
+        width, height = frame['width'], frame['height']
+        require(type(width) is int and type(height) is int and width >= 4 and height >= 4,
+                'prelude frame geometry invalid')
+        return dict(type='click', x=width // 4, y=3 * height // 4, button='left')
+
+    @staticmethod
+    def check_prelude(frame, action):
+        width, height = frame['width'], frame['height']
+        require('click' == action.get('type') and action.get('button') == 'left' and
+                type(action.get('x')) is int and type(action.get('y')) is int and
+                0 < action['x'] < width // 2 and height // 2 < action['y'] < height,
+                'prelude outside safe content geometry')
+
     def op_navigate(self, page, url):
         setup = []
         require(url == page_url(page), 'navigation outside pinned local fixture')
         require(self.op_offline_proof().get('fixtures_offline') is True, 'offline proof before navigation')
         before = self.op_observe(5000)['frame_ref']
-        for action in [dict(type='key', keys=['ctrl', 'l']), dict(type='type', text=url),
-                       dict(type='key', keys=['Return'])]:
+        # Removing omnibox selection changes browser chrome even when page
+        # pixels are blank. Keep changed_region fail-closed for this input too;
+        # native AX is not used as an unproven alternate focus-state ABI.
+        for index, action in enumerate([self.prelude_point(before),
+                       dict(type='key', keys=['ctrl', 'l']), dict(type='type', text=url),
+                       dict(type='key', keys=['Return'])]):
             for attempt in range(3):
                 obs = self.op_observe(5000)
                 frame = obs['frame_ref']
+                if index == 0 and action.get('type') == 'click':
+                    self.check_prelude(frame, action)
                 plan = dict(action=action, expectation=dict(type='changed_region', bbox=dict(
                     x=0, y=0, w=frame['width'], h=frame['height'])))
                 try:
@@ -573,7 +614,8 @@ class LiveBackend:
                         continue
                     raise
                 verified = self.op_wait_verify(admitted, 30000)
-                setup.append(dict(verdict=admitted['verdict'], verify_verdict=verified))
+                setup.append(dict(kind='focus_prelude' if index == 0 else 'navigation',
+                                  verdict=admitted['verdict'], verify_verdict=verified))
                 break
         marker = dict(form='EMPTY', flow_a='FLOW_STAGE_A_READY', table='auth-gateway')[page]
         deadline = time.monotonic() + 3

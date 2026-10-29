@@ -269,6 +269,55 @@ class HardenTests(unittest.TestCase):
         self.assertNotIn(token, path.read_text())
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
+    def test_prelude_geometry(self):
+        for width, height in [(1280, 900), (1920, 1080), (800, 600)]:
+            frame = dict(width=width, height=height)
+            point = web.LiveBackend.prelude_point(frame)
+            self.assertEqual((point['x'], point['y']), (width // 4, 3 * height // 4))
+            web.LiveBackend.check_prelude(frame, point)
+            for x, y in [(7 * width // 8, height // 8), (width // 4, 20),
+                         (-1, height * 3 // 4), (width, height), (True, height * 3 // 4)]:
+                with self.assertRaises(web.Failure):
+                    web.LiveBackend.check_prelude(frame, dict(point, x=x, y=y))
+        for width, height in [(None, 900), (1280, 0), (True, 900)]:
+            with self.assertRaises(web.Failure):
+                web.LiveBackend.prelude_point(dict(width=width, height=height))
+
+    def test_navigation_prelude_receipt_and_stale_admission(self):
+        b = self.backend
+        frame = dict(width=1280, height=900, sha256='before', surface_id='owned')
+        b.op_offline_proof = Mock(return_value={'fixtures_offline': True})
+        b.op_observe = Mock(side_effect=[{'frame_ref': frame}] * 6 +
+                           [{'frame_ref': dict(frame, sha256='after')}])
+        b.op_ax = Mock(return_value={'elements': [{'name': 'EMPTY'}]})
+        b.op_propose = Mock(side_effect=[web.Failure('stale', 'STALE_FRAME')] +
+                          [dict(proposal_id=str(i), verdict={'admitted': True}) for i in range(4)])
+        verified = dict(status='verified', receipt={'verified': True})
+        b.op_wait_verify = Mock(return_value=verified)
+        setup = b.op_navigate('form', web.page_url('form'))
+        self.assertEqual(len(setup), 4)
+        self.assertEqual(setup[0]['kind'], 'focus_prelude')
+        self.assertEqual(b.op_wait_verify.call_count, 4)
+        calls = b.op_propose.call_args_list
+        self.assertEqual(calls[0].args[1], calls[1].args[1])
+        actions = [call.args[1]['action'] for call in calls[1:]]
+        self.assertEqual(actions, [web.LiveBackend.prelude_point(frame),
+            dict(type='key', keys=['ctrl', 'l']), dict(type='type', text=web.page_url('form')),
+            dict(type='key', keys=['Return'])])
+        for call in calls:
+            self.assertEqual(call.args[0]['frame'], frame)
+            self.assertEqual(call.args[1]['expectation'], dict(type='changed_region',
+                bbox=dict(x=0, y=0, w=1280, h=900)))
+        b.op_wait_verify.side_effect = web.Failure('VERIFICATION_FAILED', 'VERIFICATION_FAILED')
+        b.op_propose.side_effect = None
+        b.op_propose.return_value = dict(proposal_id='failed', verdict={'admitted': True})
+        b.op_observe.side_effect = None
+        b.op_observe.return_value = {'frame_ref': frame}
+        with self.assertRaises(web.Failure) as caught:
+            b.op_navigate('form', web.page_url('form'))
+        self.assertEqual(caught.exception.code, 'VERIFICATION_FAILED')
+        self.assertEqual(b.op_wait_verify.call_count, 5)  # Never retry dispatched input.
+
     def test_named_mutations(self):
         for name, (test_name, _, _) in MUTATIONS.items():
             with self.subTest(mutation=name):
