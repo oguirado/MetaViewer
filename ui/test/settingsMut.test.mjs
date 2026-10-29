@@ -10,6 +10,8 @@ import { fileURLToPath } from 'node:url';
 
 import {
   DEFAULT_SETTINGS,
+  createSettingsStore,
+  decodeSettingsV02,
   installAuthorityWire,
   validateSettings,
   WIRE_CHANNELS,
@@ -1008,7 +1010,7 @@ test(
 );
 
 test(
-  'PARITY-D3: JSON float lexeme 30.0 is refused for recordingFps and wallFps per strict integer contract',
+  'PARITY-D3 renderer FINDING: JSON float lexeme 30.0 is refused for recordingFps and wallFps per strict integer contract',
   { skip: 'FINDING D3' },
   async () => {
     const vectors = JSON.parse(await readFile(PARITY_FIXTURE_PATH, 'utf8'));
@@ -1016,10 +1018,8 @@ test(
     const wallFloatJson = vectors.d3_float_lexeme.ui_prefs_wall_30_0_json;
 
     assert.equal(decodeMvSettings(recFloatJson).ok, false);
-    assert.throws(() => validateSettings(recFloatJson), /SETTINGS_RECORDING_FPS/);
 
     assert.equal(decodeMvSettings(wallFloatJson).ok, false);
-    assert.throws(() => validateSettings(wallFloatJson), /SETTINGS_WALL_FPS/);
   },
 );
 
@@ -1040,7 +1040,7 @@ test(
 );
 
 test(
-  'PARITY-D5: renderer and host settings decode frozen settings/v0.2 limits.max_fps documents',
+  'PARITY-D5 renderer FINDING: settings decode frozen settings/v0.2 limits.max_fps documents',
   { skip: 'FINDING D5' },
   async () => {
     const vectors = JSON.parse(await readFile(PARITY_FIXTURE_PATH, 'utf8'));
@@ -1048,13 +1048,75 @@ test(
       const rawJson = JSON.stringify(entry.doc);
       const decoded = decodeMvSettings(rawJson);
       assert.equal(decoded.ok, true);
-      const hostParsed = validateSettings(rawJson);
-      assert.equal(hostParsed.recordingFps, entry.doc.limits.max_fps);
     }
     for (const entry of vectors.d5_settings_limits.invalid_settings_v02) {
       const rawJson = JSON.stringify(entry.doc);
       assert.equal(decodeMvSettings(rawJson).ok, false);
-      assert.throws(() => validateSettings(rawJson));
     }
   },
 );
+
+
+test('PARITY-D3 host: integer lexemes survive JSON parsing', () => {
+  for (const [key, code] of [['recordingFps', 'SETTINGS_RECORDING_FPS'], ['wallFps', 'SETTINGS_WALL_FPS']]) {
+    for (const lexeme of ['30.0', '3e1', '30E+0', '30.000']) {
+      assert.throws(() => validateSettings(`{"${key}":${lexeme}}`), new RegExp(code));
+    }
+    assert.equal(validateSettings(`{"${key}":30}`)[key], 30);
+    assert.equal(validateSettings(`{"${key}":30.0,"${key}":30}`)[key], 30);
+    assert.throws(() => validateSettings(`{"${key}":30,"${key}":30.0}`), new RegExp(code));
+  }
+  assert.throws(() => validateSettings('{"recording\\u0046ps":30.0}'), /SETTINGS_RECORDING_FPS/);
+});
+
+test('PARITY-D4 host: unknown stored keys default with typed diagnostic', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'mv-settings-load-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = createSettingsStore({ XDG_CONFIG_HOME: root });
+  await store.save(JSON.stringify({ recordingFps: 18 }));
+  const warnings = [];
+  t.mock.method(console, 'warn', (...args) => warnings.push(args.join(' ')));
+  const notifications = [];
+  const stop = store.subscribe(settings => notifications.push(settings));
+  t.after(stop);
+  const vectors = JSON.parse(await readFile(PARITY_FIXTURE_PATH, 'utf8'));
+  for (const text of [vectors.d4_unknown_keys.ui_prefs_unknown_key_json,
+    vectors.d4_unknown_keys.ui_prefs_with_contract_limits_json]) {
+    await writeFile(join(root, 'metaviewer', 'settings.json'), text, { mode: 0o600 });
+    assert.equal(await store.load(), null);
+    assert.deepEqual(notifications.at(-1), { wallFps: DEFAULT_SETTINGS.wallFps, recordingFps: DEFAULT_SETTINGS.recordingFps });
+    assert.match(warnings.at(-1), /SETTINGS_UNKNOWN_KEY/);
+  }
+});
+
+test('PARITY-D5 host: decode complete frozen settings/v0.2 documents', async () => {
+  const vectors = JSON.parse(await readFile(PARITY_FIXTURE_PATH, 'utf8'));
+  for (const { doc } of vectors.d5_settings_limits.valid_settings_v02) {
+    assert.deepEqual(decodeSettingsV02(JSON.stringify(doc)), doc);
+    assert.equal(validateSettings(JSON.stringify(doc)).recordingFps, doc.limits.max_fps);
+  }
+  for (const { doc } of vectors.d5_settings_limits.invalid_settings_v02) {
+    assert.throws(() => decodeSettingsV02(JSON.stringify(doc)));
+    assert.throws(() => validateSettings(JSON.stringify(doc)));
+  }
+  const base = vectors.d5_settings_limits.valid_settings_v02[1].doc;
+  const provider = { id: 'local:1', label: 'Local', enabled: true, model: 'model' };
+  assert.deepEqual(decodeSettingsV02(JSON.stringify({ ...base, providers: [provider] })).providers, [provider]);
+  const invalid = [
+    { ...base, extra: true }, { ...base, schema: 'settings/v0.3' },
+    { ...base, theme: 'mv-dark' }, { ...base, providers: Array(33).fill(provider) },
+    ...[null, { ...provider, extra: 1 }, { ...provider, enabled: 1 },
+      { ...provider, id: 'bad\n' }, { ...provider, label: '' },
+      { ...provider, model: 'x'.repeat(257) }].map(p => ({ ...base, providers: [p] })),
+    ...[{ capability_id: 'a', path: 'relative' }, { capability_id: 'a', path: '/bad\n' },
+      { capability_id: 'a', path: '/ok', extra: 1 }].map(d => ({ ...base, recording_destination: d })),
+    ...['memory_bytes', 'max_fps', 'ring_bytes'].flatMap(key =>
+      [0, true, null, '30', 1073741825].map(value => ({ ...base, limits: { ...base.limits, [key]: value } }))),
+    { ...base, limits: { ...base.limits, extra: 1 } },
+  ];
+  for (const doc of invalid) assert.throws(() => decodeSettingsV02(JSON.stringify(doc)));
+  for (const key of ['memory_bytes', 'max_fps', 'ring_bytes']) {
+    const text = JSON.stringify({ ...base, limits: { ...base.limits, [key]: 30 } });
+    assert.throws(() => decodeSettingsV02(text.replace(`"${key}":30`, `"${key}":30.0`)));
+  }
+});

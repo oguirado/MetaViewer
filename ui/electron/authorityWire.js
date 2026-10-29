@@ -10,6 +10,8 @@
  * [TARGET, unit decision] Closed settings schema {scheme, density, wallFps, recordingFps}
  * with defaults (mv-light, compact, 30, 3); settings.save emits {wallFps} cadence
  * requests and updates default recordingFps.
+ * [TARGET, unit decision] Frozen settings/v0.2 is decoded separately, then
+ * projected to host preferences; its limits do not change UI preference caps.
  */
 import { open, mkdir, rename, unlink, lstat, realpath } from 'node:fs/promises';
 import { constants, realpathSync, statSync } from 'node:fs';
@@ -389,12 +391,98 @@ export function validateCadence(cadence) {
   return Object.freeze(out);
 }
 
+/** Parse settings numbers without losing the JSON integer/float distinction.
+ * Node's reviver source preserves escaped keys and the final duplicate value.
+ * @param {string} text
+ * @returns {any} */
+function parseSettings(text) {
+  if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > WIRE_MAX_BYTES) {
+    throw new MainError('PAYLOAD', 'PAYLOAD');
+  }
+  return JSON.parse(text, (/** @type {string} */ key, /** @type {any} */ value,
+    /** @type {{source?: string}} */ context = {}) => {
+    // Keep float numbers distinguishable until the owning field validates them.
+    if (typeof value === 'number' && context.source && /[.eE]/.test(context.source)) {
+      return Object.freeze({ settingsFloat: value });
+    }
+    return value;
+  });
+}
+
+/** @param {any} value @param {string[]} keys */
+function closedSettingsObject(value, keys) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new MainError('PAYLOAD', 'PAYLOAD');
+  }
+  if (Object.keys(value).some(key => !keys.includes(key))) {
+    throw new MainError('SETTINGS_UNKNOWN_KEY', 'SETTINGS_UNKNOWN_KEY');
+  }
+  if (keys.some(key => !Object.hasOwn(value, key))) {
+    throw new MainError('PAYLOAD', 'PAYLOAD');
+  }
+}
+
+/** Decode the complete frozen wire document, retaining providers and destination.
+ * @param {string} text */
+export function decodeSettingsV02(text) {
+  const value = parseSettings(text);
+  closedSettingsObject(value, ['schema', 'theme', 'providers', 'recording_destination', 'limits']);
+  if (value.schema !== 'settings/v0.2'
+      || !['metaviewer-light', 'metaviewer-dark'].includes(value.theme)) {
+    throw new MainError('SETTINGS_SCHEME', 'SETTINGS_SCHEME');
+  }
+  /** @param {any} text @param {number} max */
+  const string = (text, max) => typeof text === 'string'
+    && [...text].length >= 1 && [...text].length <= max
+    && Buffer.byteLength(text, 'utf8') <= 65536;
+  /** @param {any} id */
+  const identifier = id => string(id, 128) && /^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(id)
+    && !/[\r\n]/.test(id);
+  if (!Array.isArray(value.providers) || value.providers.length > 32) {
+    throw new MainError('PAYLOAD', 'PAYLOAD');
+  }
+  for (const provider of value.providers) {
+    closedSettingsObject(provider, ['id', 'label', 'enabled', 'model']);
+    if (!identifier(provider.id) || !string(provider.label, 256)
+        || typeof provider.enabled !== 'boolean' || !string(provider.model, 256)) {
+      throw new MainError('PAYLOAD', 'PAYLOAD');
+    }
+  }
+  const destination = value.recording_destination;
+  if (destination !== null) {
+    closedSettingsObject(destination, ['capability_id', 'path']);
+    if (!identifier(destination.capability_id) || !string(destination.path, 4096)
+        || !destination.path.startsWith('/') || /[\0\r\n]/.test(destination.path)) {
+      throw new MainError('PAYLOAD', 'PAYLOAD');
+    }
+  }
+  closedSettingsObject(value.limits, ['memory_bytes', 'max_fps', 'ring_bytes']);
+  for (const key of ['memory_bytes', 'max_fps', 'ring_bytes']) {
+    const number = value.limits[key];
+    if (!Number.isSafeInteger(number) || number < 1 || number > (key === 'max_fps' ? 120 : 1073741824)) {
+      const code = key === 'max_fps' ? 'SETTINGS_RECORDING_FPS' : 'PAYLOAD';
+      throw new MainError(code, code);
+    }
+  }
+  return value;
+}
+
 /** Renderer preferences use the exact closed settingsModel.js shape.
  * Missing keys default only as decodeMvSettings does. Invalid input never
  * replaces disk; corrupt storage returns the renderer's defaults signal.
  * @param {string} text */
 export function validateSettings(text) {
-  const value = jsonObject(text);
+  const value = parseSettings(text);
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new MainError('PAYLOAD', 'PAYLOAD');
+  if (Object.hasOwn(value, 'schema')) {
+    const wire = decodeSettingsV02(text);
+    return {
+      scheme: wire.theme === 'metaviewer-dark' ? 'mv-dark' : 'mv-light',
+      density: DEFAULT_SETTINGS.density,
+      wallFps: DEFAULT_SETTINGS.wallFps,
+      recordingFps: wire.limits.max_fps,
+    };
+  }
   const proto = Object.getPrototypeOf(value);
   if (proto !== Object.prototype && proto !== null) throw new MainError('PAYLOAD', 'PAYLOAD');
   if (Object.getOwnPropertySymbols(value).length !== 0) throw new MainError('SETTINGS_UNKNOWN_KEY', 'SETTINGS_UNKNOWN_KEY');
@@ -544,8 +632,9 @@ export function createSettingsStore(env) {
           const parsed = validateSettings(text);
           notifySubscribers(parsed);
           return text;
-        } catch {
-          console.warn('MetaViewer settings: invalid JSON or schema; using defaults');
+        } catch (error) {
+          const code = error instanceof MainError ? error.code : 'PAYLOAD';
+          console.warn(`MetaViewer settings: ${code}; invalid JSON or schema; using defaults`);
           notifySubscribers(DEFAULT_SETTINGS);
           return null;
         }
