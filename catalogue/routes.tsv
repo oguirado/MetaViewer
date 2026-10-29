@@ -779,6 +779,8 @@ r2regre-d63f27719b98	daemon-adapter/internal/capsule/r2_regressions_test.go
 reap_test.go	daemon-adapter/internal/capsule/reap_test.go
 receipt-e7a340c634f2	daemon-adapter/internal/capsule/receipt_evidence_test.go
 regressions_test.go	daemon-adapter/internal/capsule/regressions_test.go
+ringmode.go	daemon-adapter/internal/capsule/ringmode.go
+ringmode_test.go	daemon-adapter/internal/capsule/ringmode_test.go
 statedir.go	daemon-adapter/internal/capsule/statedir.go
 statedir_test.go	daemon-adapter/internal/capsule/statedir_test.go
 stress_test.go	daemon-adapter/internal/capsule/stress_test.go
@@ -832,6 +834,9 @@ publisher.go	daemon-adapter/internal/frames/publisher.go
 publish-dae6dc777e52	daemon-adapter/internal/frames/publisher_release_test.go
 publisher_test.go	daemon-adapter/internal/frames/publisher_test.go
 release_test.go	daemon-adapter/internal/frames/release_test.go
+frames-ringmode.go	daemon-adapter/internal/frames/ringmode.go
+ringsource.go	daemon-adapter/internal/frames/ringsource.go
+ringsource_test.go	daemon-adapter/internal/frames/ringsource_test.go
 subscri-9958bbe84c90	daemon-adapter/internal/frames/subscription_lock_test.go
 subscri-389c0b86d2cf	daemon-adapter/internal/frames/subscriptions.go
 subscri-c7aa812bfc6a	daemon-adapter/internal/frames/subscriptions_cadence_test.go
