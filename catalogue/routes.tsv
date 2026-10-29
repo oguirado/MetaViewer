@@ -1028,6 +1028,7 @@ ai-provider.py	tests/e2e/ai-provider.py
 asm_web_fakes.cjs	tests/e2e/asm_web_fakes.cjs
 asmwebh-3a1146a20598	tests/e2e/asm_web_hosted.test.js
 asmwebl-2124e5a7f0ee	tests/e2e/asm_web_live_hosted.test.js
+asmwebp-e337fa34cbf8	tests/e2e/asm_web_packs_hosted.test.js
 flow_a.html	tests/e2e/asm_web_pages/flow_a.html
 flow_b.html	tests/e2e/asm_web_pages/flow_b.html
 form.html	tests/e2e/asm_web_pages/form.html
@@ -1047,6 +1048,7 @@ e2e19_nested.test.js	tests/e2e/e2e19_nested.test.js
 e2e1_slice.test.js	tests/e2e/e2e1_slice.test.js
 e2e1_slice-README.md	tests/e2e/e2e1_slice/README.md
 asm_web_live.py	tests/e2e/e2e1_slice/asm_web_live.py
+automation_pack.py	tests/e2e/e2e1_slice/automation_pack.py
 demo_agent_drive.py	tests/e2e/e2e1_slice/demo_agent_drive.py
 electron-relay.mjs	tests/e2e/e2e1_slice/electron-relay.mjs
 g_ai_stack.py	tests/e2e/e2e1_slice/g_ai_stack.py
@@ -1084,6 +1086,14 @@ launcher-fixture.mjs	tests/e2e/launcher-fixture.mjs
 live-main.cjs	tests/e2e/live-main.cjs
 live-multislot.cjs	tests/e2e/live-multislot.cjs
 nested-main.mjs	tests/e2e/nested-main.mjs
+automat-f43807d640b1	tests/e2e/packs/automation.schema.json
+automation.json	tests/e2e/packs/builtin-fixtures/T1/automation.json
+pages-form.html	tests/e2e/packs/builtin-fixtures/T1/pages/form.html
+T2-automation.json	tests/e2e/packs/builtin-fixtures/T2/automation.json
+pages-flow_a.html	tests/e2e/packs/builtin-fixtures/T2/pages/flow_a.html
+pages-flow_b.html	tests/e2e/packs/builtin-fixtures/T2/pages/flow_b.html
+T3-automation.json	tests/e2e/packs/builtin-fixtures/T3/automation.json
+pages-table.html	tests/e2e/packs/builtin-fixtures/T3/pages/table.html
 perf-build.mjs	tests/e2e/perf-build.mjs
 perf-main.cjs	tests/e2e/perf-main.cjs
 perf-wall-fixture.mjs	tests/e2e/perf-wall-fixture.mjs
