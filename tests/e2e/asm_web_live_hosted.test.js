@@ -36,7 +36,13 @@ async function dryRun(mutation = '') {
     calls.push(stage);
     switch (stage) {
       case 'start': return { profile: 'mv-live-1', capsules: [capsule.capsuleId] };
-      case 'net_down': return { network: mutation === 'net-up' ? 'up' : capsule.netPolicy };
+      case 'ownership':
+        if (mutation === 'midrun-foreign' && calls.includes('propose')) {
+          throw new Error('single owned profile capsule no longer proven');
+        }
+        return { profile: 'mv-live-1', capsules: [capsule.capsuleId] };
+      case 'net_down': return { network: mutation === 'net-up' ||
+        (mutation === 'midrun-gate-flap' && calls.includes('propose')) ? 'up' : capsule.netPolicy };
       case 'navigate': {
         assert.ok(calls.indexOf('net_down') < calls.indexOf('navigate'));
         assert.equal(capsule.netPolicy, 'down');
@@ -198,14 +204,24 @@ test('stale refusal refreshes and replans without repeating dispatched inputs', 
 });
 
 for (const mutation of ['skip-final-ax', 'ax-missing', 'net-up', 'c2-mismatch',
-  'unverified', 'receipt-mismatch', 'replay-accepted', 'ram-leak']) {
+  'unverified', 'receipt-mismatch', 'replay-accepted', 'ram-leak',
+  'midrun-gate-flap', 'midrun-foreign']) {
   test(`fail closed: ${mutation}`, async () => {
     const { rc, report, calls } = await dryRun(mutation);
     assert.equal(rc, 1);
     assert.equal(report.status, 'BLOCKED');
     assert.equal(calls.at(-1), 'cleanup');
     if (mutation !== 'ram-leak') assert.equal(report.error.code, 'E2E_WITNESS');
+    if (mutation.startsWith('midrun-')) assert.equal(calls.filter(x => x === 'propose').length, 1);
     if (mutation === 'net-up') assert.ok(!calls.includes('navigate'));
     if (mutation === 'skip-final-ax') assert.match(report.error.detail, /mandatory final AX proof/);
   });
 }
+
+// Include Python backend security contracts in hosted JS discovery as well.
+test('backend hardening contracts and named mutation controls (no live imports)', () => {
+  const result = spawnSync(process.env.PYTHON || 'python3', [
+    fileURLToPath(new URL('./test_asm_web_live_harden.py', import.meta.url))],
+    { encoding: 'utf8', timeout: 60000, env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+});

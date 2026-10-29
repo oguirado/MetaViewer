@@ -5,6 +5,12 @@ The optional MV_WENDER_PLANNER_CMD plans custody-bound clicks; deterministic
 typing and the read-only table report use the same pinned state. A single
 VCore client survives every tick. Runtime blob links bind the local flow pages
 without a server. Hosted RPC substitutes only the backend, never task checks.
+[TARGET, unit decision] MV_WEB_EXEC_PINS is an operator-supplied JSON object:
+{"node": {"path": "/absolute/executable", "sha256": "..."}, "verifier": {...}}.
+Explicit NODE/MV_E2E_VERIFY_BIN must match those pins. A locally built verifier
+is pinned in the private evidence directory. Configured planner argv permits
+only one executable under the lock-verified Wender root (no interpreter flags).
+Fixture bytes are allowlisted; deliberate fixture changes need reviewed pins.
 """
 import hashlib
 import json
@@ -50,12 +56,81 @@ def digest(value):
                                     ensure_ascii=False).encode()).hexdigest()
 
 
+# Reviewed immutable offline fixture allowlist, not a network API denylist.
+FIXTURE_PINS = {
+    'flow_a': '8d587349a3e972c50479d255bc539db7fbc2f383ae81537ff3e631414671b8a5',
+    'flow_b': '1f96e5c04be23236addd534a41dd60cce4390c6457a598b1be69cce9d2eedbe5',
+    'form': '9d7c0905793094dcbb2854fc300b87d9ee9bcad90930c0f14063fb9ca6149082',
+    'table': '232f50c0e1cb253375e243116aa4c62a45ae6b2b9b159f7caa019f9cdca322dc',
+}
+
+
 def fixture(page):
-    html = (PAGES / (page + '.html')).read_text()
+    require(page in FIXTURE_PINS, 'fixture not allowlisted')
+    raw = (PAGES / (page + '.html')).read_bytes()
+    require(hashlib.sha256(raw).hexdigest() == FIXTURE_PINS[page], 'fixture bytes not allowlisted')
+    html = raw.decode('utf-8')
     require("default-src 'none'" in html, 'fixture CSP missing')
-    require(not re.search(r'https?://|\bfetch\s*\(|XMLHttpRequest|WebSocket|Math\.random|'
-                          r'\bDate\b|performance\.now', html), 'fixture is not offline/deterministic')
     return html
+
+
+def private_write(path, data):
+    # Never follow an existing symlink when persisting evidence.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'wb') as stream:
+        os.fchmod(stream.fileno(), 0o600)
+        stream.write(data if isinstance(data, bytes) else data.encode())
+
+
+def redact(value):
+    if isinstance(value, dict):
+        return {k: ('[REDACTED]' if re.search(
+            r'token|secret|password|credential|authorization|cookie|^argv$|^stderr$|^stdout$', k, re.I)
+                    else redact(v)) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [redact(v) for v in value]
+    if not isinstance(value, str):
+        return value
+    sensitive = [v for k, v in os.environ.items() if v and (
+        re.search(r'token|secret|password|credential|cookie|api.?key', k, re.I) or
+        (k.startswith(('MV_', 'SRF_')) and ('/' in v or k.endswith('CMD'))) or k == 'HOME')]
+    for secret in sorted(sensitive, key=len, reverse=True):
+        value = value.replace(secret, '[REDACTED]')
+    value = re.sub(r'(?i)(bearer\s+|(?:token|secret|password|api_key)[=:]\s*)[^\s,;]+',
+                   r'\1[REDACTED]', value)
+    return re.sub(r'/(?:home|Users|tmp|run|dev/shm)/[^\s\"\'<>]*', '[PRIVATE_PATH]', value)
+
+
+def minimal_env():
+    return {k: os.environ[k] for k in ('PATH', 'LANG', 'CARGO_TARGET_DIR') if k in os.environ}
+
+
+def pinned_executable(role, supplied, pins):
+    entry = pins.get(role, {})
+    require(isinstance(entry, dict) and isinstance(supplied, str) and
+            Path(supplied).is_absolute() and entry.get('path') == supplied and
+            re.fullmatch(r'[0-9a-f]{64}', str(entry.get('sha256', ''))),
+            'executable path/pin not admitted: ' + role, 'E2E_PREREQ')
+    path = Path(supplied)
+    require(path.resolve(strict=True) == path and path.is_file() and os.access(path, os.X_OK),
+            'executable must be canonical and executable: ' + role, 'E2E_PREREQ')
+    require(hashlib.sha256(path.read_bytes()).hexdigest() == entry['sha256'],
+            'executable hash mismatch: ' + role, 'E2E_PREREQ')
+    return str(path)
+
+
+def planner_command(raw, root):
+    try:
+        argv = json.loads(raw)
+        require(isinstance(argv, list) and len(argv) == 1 and isinstance(argv[0], str) and
+                '\x00' not in argv[0] and Path(argv[0]).is_absolute(),
+                'planner argv not allowlisted', 'E2E_PREREQ')
+        path = Path(argv[0]).resolve(strict=True)
+        require(path.is_relative_to(Path(root).resolve(strict=True)) and path.is_file() and
+                os.access(path, os.X_OK), 'planner outside locked root', 'E2E_PREREQ')
+        return [str(path)]
+    except (ValueError, OSError, TypeError) as error:
+        raise Failure('planner argv not allowlisted', 'E2E_PREREQ') from error
 
 
 def page_url(page):
@@ -139,6 +214,8 @@ def run(backend, report):
         for attempt in range(3):
             sensed = sense(task)
             planned = stage(task, 'plan', sensed=sensed, goal=goal)
+            require(stage(task, 'net_down').get('network') == 'down', 'network down not proven')
+            stage(task, 'ownership')
             try:
                 admitted = stage(task, 'propose', sensed=sensed, plan=planned, max_ms=30000)
             except Failure as error:
@@ -173,6 +250,7 @@ def run(backend, report):
             task = dict(task=task_id, verdict='FAIL', steps=0, latency_ms={},
                         observations=[], action_receipts=[], ax_proofs=[])
             report['tasks'].append(task)
+            stage(task, 'ownership')
             url = page_url(page)
             task['page'] = dict(file=str(PAGES / (page + '.html')), data_url_length=len(url),
                                 source_sha256=hashlib.sha256(fixture(page).encode()).hexdigest())
@@ -228,11 +306,18 @@ def run(backend, report):
                 report.get('ram_cleanup', {}).get('status') == 'PASS' and
                 bool(report.get('wire_evidence')))
     report['status'] = 'DONE' if complete else 'BLOCKED'
+    report.update(redact(report))
     return 0 if complete else 1
 
 
 class LiveBackend:
     def __init__(self):
+        require(os.environ.get('MV_LIVE_WEB') == '1' and
+                os.environ.get('MV_E2E_LIVE') == '1' and
+                os.environ.get('MV_SRF_LIVE_PROFILE') == 'mv-live-1',
+                'explicit backend live opt-in required', 'E2E_PREREQ')
+        for key in REQUIRED_ENV:
+            require(bool(os.environ.get(key)), 'missing ' + key, 'E2E_PREREQ')
         sys.path.insert(0, str(ROOT / 'agents'))
         sys.path.insert(0, str(ROOT / 'tools'))
         import gate_g_ai as glue
@@ -272,12 +357,26 @@ class LiveBackend:
         require(not Path(tempfile.gettempdir()).resolve().is_relative_to(ROOT),
                 'temporary evidence root must be outside repo', 'E2E_PREREQ')
         self.evidence = Path(tempfile.mkdtemp(prefix='mv-web-evidence-'))
-        require(not self.evidence.resolve().is_relative_to(ROOT), 'evidence must be outside repo')
+        try:
+            self.evidence.chmod(0o700)
+        except BaseException:
+            shutil.rmtree(self.evidence, ignore_errors=True)
+            raise
 
     def call(self, stage, **args):
         return getattr(self, 'op_' + stage)(**args)
 
     def op_start(self):
+        try:
+            return self._start()
+        except BaseException:
+            try:
+                self.op_cleanup()
+            finally:
+                shutil.rmtree(self.evidence, ignore_errors=True)
+            raise
+
+    def _start(self):
         from metaviewer_agents.perception.deps_lock import resolve_locked_component
         from metaviewer_agents.perception.vcore import VCorePerceptionAdapter
         self.roots = {name: resolve_locked_component(name) for name in ('wender-agent', 'vision-engine')}
@@ -291,20 +390,33 @@ class LiveBackend:
         # Reuse the public-core verifier and its same-receipt negative controls.
         # No verifier implementation or alternate component ABI is invented.
         configured_verifier = os.environ.get('MV_E2E_VERIFY_BIN')
+        try:
+            pins = json.loads(os.environ.get('MV_WEB_EXEC_PINS', '{}'))
+            require(isinstance(pins, dict), 'executable pins must be an object', 'E2E_PREREQ')
+        except ValueError as error:
+            raise Failure('invalid executable pins', 'E2E_PREREQ') from error
+        self.exec_pins = pins
         if configured_verifier:
-            self.verifier = configured_verifier
+            self.verifier = pinned_executable('verifier', configured_verifier, pins)
         else:
+            node = pinned_executable('node', os.environ.get('NODE') or shutil.which('node'), pins)
             code = ("const fs=require('node:fs'); const {compileRust}=require(process.argv[1]);"
                     "process.stdout.write(compileRust(process.argv[2],fs.readFileSync(process.argv[3],'utf8')));")
-            env = dict(os.environ)
-            env.setdefault('CARGO_TARGET_DIR', str(Path.home() / '.cache/cargo-target' / ('mv-' + ROOT.name)))
-            build = subprocess.run([os.environ.get('NODE', 'node'), '-e', code,
+            env = minimal_env()
+            require(Path(env.get('CARGO_TARGET_DIR', '')).is_absolute(),
+                    'absolute per-worktree CARGO_TARGET_DIR required', 'E2E_PREREQ')
+            build = subprocess.run([node, '-e', code,
                                     str(ROOT / 'tests/e2e/core-driver.js'), str(self.evidence),
                                     str(Path(__file__).with_name('verify-receipt.rs'))],
                                    env=env, capture_output=True, text=True, timeout=180)
-            require(build.returncode == 0, 'offline receipt verifier build failed: ' + build.stderr[-2000:],
+            require(build.returncode == 0, 'offline receipt verifier build failed: ' + redact(build.stderr[-2000:]),
                     'E2E_PREREQ')
-            self.verifier = build.stdout.strip()
+            built = self.evidence / 'driver'
+            require(build.stdout.strip() == str(built) and built.is_file() and not built.is_symlink(),
+                    'verifier build output escaped custody', 'E2E_PREREQ')
+            self.exec_pins = dict(pins, verifier=dict(path=str(built),
+                sha256=hashlib.sha256(built.read_bytes()).hexdigest()))
+            self.verifier = pinned_executable('verifier', str(built), self.exec_pins)
         self.session.start()
         return dict(profile='mv-live-1', capsules=self.session.state['capsules'],
                     surface_id=self.session.surface_id)
@@ -317,12 +429,20 @@ class LiveBackend:
         require(value.get('network') == 'down', 'native network down failed')
         return value
 
+    def op_ownership(self):
+        owned = set((self.session.state or {}).get('capsules', []))
+        current = self.live.profile_containers('mv-live-1')
+        active = self.stack.inventory()
+        require(len(owned) == 1 and current == owned and owned <= active,
+                'single owned profile capsule no longer proven')
+        return dict(profile='mv-live-1', capsules=sorted(owned))
+
     def retain(self, frame):
         pixels = self.glue.checked_frame(frame).data
         require((self.session.archive / 'artifacts' / frame['sha256']).read_bytes() == pixels,
                 'retained core frame differs from live pixels')
         target = self.evidence / (frame['sha256'] + '.rgb')
-        target.write_bytes(pixels)
+        private_write(target, pixels)
         return dict(sha256=frame['sha256'], generation=frame['generation'], bytes=len(pixels),
                     surface_id=frame['surface_id'], artifact=str(target))
 
@@ -362,7 +482,7 @@ class LiveBackend:
             return dict(action=dict(type='type', text=value), expectation=expectation)
         configured = os.environ.get('MV_WENDER_PLANNER_CMD')
         if configured:
-            planner = WenderSubprocessAdapter(command=json.loads(configured),
+            planner = WenderSubprocessAdapter(command=planner_command(configured, self.roots['wender-agent']),
                                               wender_root=self.roots['wender-agent'],
                                               timeout=30, verify_lock=True)
             action, expectation, planned, target = planner.plan_step(
@@ -373,15 +493,30 @@ class LiveBackend:
             targets = [n for n in state['nodes'] if n.get('name') == value and n['id'] in state['actionable']]
             require(len(targets) == 1, 'unique Wender target absent: ' + value)
             target = targets[0]
-            AdmittedExecutor.check_target(target, latest=state['nodes'], frame=frame)
             x, y, w, h = target['box']
             action = dict(type='click', x=x + w // 2, y=y + h // 2, button='left')
+        targets = [n for n in state['nodes'] if n.get('name') == value and n['id'] in state['actionable']]
+        require(len(targets) == 1 and target == targets[0], 'unique actionable custody target absent')
+        try:
+            AdmittedExecutor.check_target(target, latest=state['nodes'], frame=frame)
+        except ValueError as error:
+            raise Failure('target custody refused') from error
+        x, y, w, h = target['box']
+        require(action.get('type') == 'click' and action.get('button') == 'left' and
+                set(action) == {'type', 'button', 'x', 'y'} and
+                type(action.get('x')) is int and type(action.get('y')) is int and
+                x <= action['x'] < x + w and y <= action['y'] < y + h,
+                'planner click outside custody box')
+        # Planner expectations cannot replace the independently bounded witness.
+        expectation = dict(type='changed_region', bbox=dict(x=0, y=0, w=frame['width'], h=frame['height']))
         return dict(action=action, expectation=expectation)
 
     def op_propose(self, sensed, plan, max_ms):
         from metaviewer_agents.verify import build_proposal
         proposal = build_proposal(sensed['frame'], proposal_id='asm-web-' + uuid.uuid4().hex,
                                   action=plan['action'], expectation=plan['expectation'], max_ms=max_ms)
+        self.op_ownership()
+        require(self.op_net_down().get('network') == 'down', 'network down not proven')
         try:
             verdict = self.tools.propose(proposal, client=self.session, timeout_ms=max_ms)
         except self.tools.ToolRefusal as error:
@@ -401,9 +536,11 @@ class LiveBackend:
                 'native input clock differs')
         self.retain(receipt['after_frame'])
         context = self.evidence / (proposal['proposal_id'] + '.json')
-        context.write_text(json.dumps(dict(proposal=proposal, before=before, receipt=native)))
-        check = self.live.run(self.session.report, [self.verifier, context, self.session.archive / 'artifacts'])
-        require(check.returncode == 0, 'same-receipt binding negative control failed: ' + check.stderr[-2000:])
+        private_write(context, json.dumps(dict(proposal=proposal, before=before, receipt=native)))
+        verifier = pinned_executable('verifier', self.verifier, self.exec_pins)
+        check = subprocess.run([verifier, str(context), str(self.session.archive / 'artifacts')],
+                               env=minimal_env(), capture_output=True, text=True, timeout=30)
+        require(check.returncode == 0, 'same-receipt binding negative control failed: ' + redact(check.stderr[-2000:]))
         negative = json.loads(check.stdout)
         require(negative.get('status') == 'PASS' and negative['baseline']['verified'] is True and
                 negative['different_surface']['verified'] is False and
@@ -447,21 +584,30 @@ class LiveBackend:
 
     def op_replay(self):
         self.op_observe(5000)  # Completed observe barrier, then freeze owned writers.
-        for proc in self.session.processes:
-            proc.send_signal(signal.SIGSTOP)
+        stopped = []
         try:
+            for proc in self.session.processes:
+                proc.send_signal(signal.SIGSTOP)
+                stopped.append(proc)
             self.live.replay_probe(self.session.report, self.session.archive,
                                    os.environ['MV_E2E_REPLAY_BIN'], self.session.work)
             # Preserve journal and retained artifacts before removing runtime state.
             shutil.copytree(self.session.archive, self.evidence / 'archive')
         finally:
-            for proc in self.session.processes:
-                proc.send_signal(signal.SIGCONT)
+            resume_errors = []
+            for proc in stopped:
+                try:
+                    proc.send_signal(signal.SIGCONT)
+                except Exception as error:
+                    resume_errors.append(redact(str(error)))
+            require(not resume_errors, 'writer resume failed: ' + repr(resume_errors))
         return self.session.report['replay_probe']
 
     def op_cleanup(self):
         # Deliberately do not call Session.__exit__/stack.cleanup: those union
         # profile-wide containers into ownership. Only this create's names qualify.
+        if hasattr(self, '_cleanup_result'):
+            return self._cleanup_result
         errors = []
 
         def attempt(label, action):
@@ -481,13 +627,19 @@ class LiveBackend:
         if s.state:
             attempt('process inventory', lambda: self.stack.remember_tree(s.state, s.root))
         inventory = attempt('container inventory', self.stack.inventory)
-        for name in sorted(owned & (inventory or set())):
+        for name in sorted(owned):
             if not self.live.CAPSULE_ID_RE.fullmatch(name):
                 errors.append('unsafe capsule cleanup name')
                 continue
-            attempt('capsule stop', lambda: self.stack.checked([
-                Path(os.environ['MV_SRF_BIN_DIR']) / 'srf-identity-surface',
-                'stop', '--container', name, '--state-dir', os.environ['MV_SRF_STATE_DIR']]))
+            for retry in range(2):
+                try:
+                    self.stack.checked([
+                        Path(os.environ['MV_SRF_BIN_DIR']) / 'srf-identity-surface',
+                        'stop', '--container', name, '--state-dir', os.environ['MV_SRF_STATE_DIR']])
+                    break
+                except Exception as error:
+                    if retry == 1:
+                        errors.append('capsule stop: ' + str(error))
         if s.state:
             for sig in (signal.SIGTERM, signal.SIGKILL):
                 for row in reversed(s.state['pids']):
@@ -500,26 +652,42 @@ class LiveBackend:
         processes_absent = (not s.state or not any(self.stack.alive(r) for r in s.state['pids']))
         processes_absent = processes_absent and (perception_process is None or perception_process.poll() is not None)
         active = attempt('final container inventory', self.stack.inventory)
-        container_absent = active is not None and not owned & active
+        foreign = attempt('foreign profile inventory', lambda: self.live.profile_containers('mv-live-1') - owned)
+        if foreign:
+            errors.append('foreign profile capsules remain: ' + repr(sorted(foreign)))
+        container_absent = active is not None and not owned & active and foreign == set()
         ram = None
         if active is not None:
             ram = attempt('RAM', lambda: self.live.cleanup_capsule_ram(
                 Path(os.environ['MV_SRF_LIVE_RAM_ROOT']), owned,
                 (s.state or {}).get('published', []), active))
-        if s.temp is not None and processes_absent and container_absent and ram and ram['ram_absent']:
+        if s.temp is not None:
             socket = s.work / 'runtime/metaviewer/core.sock'
+            if s.root.exists():
+                attempt('forensics', lambda: shutil.copytree(s.root, self.evidence / 'runtime-forensics',
+                    ignore=lambda directory, names: [n for n in names
+                        if not (Path(directory) / n).is_file() and not (Path(directory) / n).is_dir()
+                        or (Path(directory) / n).is_symlink()]))
             attempt('temporary tree', s.temp.cleanup)
             absent, socket_absent = not s.root.exists(), not socket.exists()
         else:
-            absent = socket_absent = s.temp is None
-        wire = s.report.get('wire_evidence', [])
-        (self.evidence / 'wire.json').write_text(json.dumps(wire))
-        return dict(container_cleanup='PASS' if container_absent else 'FAIL',
-                    cleanup_errors=errors,
+            absent = socket_absent = True
+        wire = redact(s.report.get('wire_evidence', []))
+        private_write(self.evidence / 'wire.json', json.dumps(wire))
+        # Copied archives/logs inherit no public permissions from source trees.
+        for directory, dirs, files in os.walk(self.evidence):
+            Path(directory).chmod(0o700)
+            for name in files:
+                (Path(directory) / name).chmod(0o600)
+        self._cleanup_result = redact(dict(container_cleanup='PASS' if container_absent else 'FAIL',
+                    cleanup_errors=errors, foreign_capsules=sorted(foreign) if foreign is not None else None,
                     process_cleanup=dict(status='PASS' if absent and socket_absent and processes_absent and not errors else 'FAIL',
                     temporary_tree_absent=absent, socket_absent=socket_absent),
                     ram_cleanup=ram or dict(status='FAIL', ram_absent=False),
-                    wire_evidence=wire, evidence_directory=str(self.evidence))
+                    wire_evidence=wire, evidence_directory=str(self.evidence)))
+        # Keep the private destination internally; publication scrubs its path.
+        self._cleanup_result['evidence_directory'] = str(self.evidence)
+        return self._cleanup_result
 
 
 def main():
@@ -528,6 +696,7 @@ def main():
         print(json.dumps(dict(status='SKIPPED', reason='MV_LIVE_WEB=1 required')))
         return 0
     report = dict(schema='metaviewer.asm-web-live/v1', mode='hosted' if hosted else 'live', tasks=[])
+    backend = None
     try:
         if not hosted:
             require(os.environ.get('MV_E2E_LIVE') == '1' and
@@ -540,10 +709,16 @@ def main():
     except Exception as error:
         report.update(status='BLOCKED', error=dict(code=getattr(error, 'code', 'E2E_PREREQ'), detail=str(error)))
         rc = 1
-    if not hosted and report.get('evidence_directory'):
-        target = Path(report['evidence_directory']) / 'report.json'
+    evidence = getattr(backend, 'evidence', None)
+    if not hosted and evidence is not None and evidence.is_dir():
+        target = evidence / 'report.json'
         report['report_file'] = str(target)
-        target.write_text(json.dumps(report, sort_keys=True))
+        try:
+            private_write(target, json.dumps(redact(report), sort_keys=True))
+        except Exception as error:
+            report.update(status='BLOCKED', persistence_error=redact(str(error)))
+            rc = 1
+    report = redact(report)
     print(json.dumps(dict(report=report) if hosted else report, sort_keys=True), flush=True)
     return rc
 
