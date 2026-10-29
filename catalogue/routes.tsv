@@ -1517,6 +1517,7 @@ r3t4sti-e4ad61eabbd1	ui/test/r3t4-still-open.test.js
 r4-refresh.test.js	ui/test/r4-refresh.test.js
 rv9elec-3b07d2eb24f6	ui/test/rv9-elec-regressions.test.js
 security.test.js	ui/test/security.test.js
+setting-c22b53627f2f	ui/test/settingsHarden.test.mjs
 settingsMut.test.mjs	ui/test/settingsMut.test.mjs
 shellFixture.html	ui/test/shellFixture.html
 shellFixture.js	ui/test/shellFixture.js
