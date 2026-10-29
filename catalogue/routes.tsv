@@ -1539,6 +1539,7 @@ t5frame-5e2ca93fda52	ui/test/t5-frame-reader-regression.test.js
 terminal-host.test.js	ui/test/terminal-host.test.js
 termina-e0e91adcec21	ui/test/terminalClient.test.js
 termina-2c7c56d01ffb	ui/test/terminalHarden.test.mjs
+termina-2f6caa9661e4	ui/test/terminalHardenWire.test.mjs
 tileScheduler.test.js	ui/test/tileScheduler.test.js
 uielfra-c6a2b4801769	ui/test/uiel-frame-fold.test.js
 uielhos-3b469827fb84	ui/test/uiel-host-bindings.test.js
