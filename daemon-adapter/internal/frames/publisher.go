@@ -89,6 +89,7 @@ type publication struct {
 	encoded   []byte
 }
 type Publisher struct {
+	ringSource   *RingSource
 	mu           sync.Mutex
 	cfg          PublishConfig
 	root, output *os.File
@@ -391,7 +392,7 @@ func decodeAndVerifyPNG(encoded []byte, width, height int, expectedSHA string) (
 	return raw, sha, decodeDur, hashDur, nil
 }
 
-func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame, deduplicate bool, isCancelled func() bool) (result Ref, changed bool, timing StageDurations, resultErr error) {
+func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame, deduplicate bool, isCancelled func() bool, rawInput ...[]byte) (result Ref, changed bool, timing StageDurations, resultErr error) {
 	defer func() {
 		if resultErr != nil {
 			p.mu.Lock()
@@ -403,7 +404,26 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 		}
 	}()
 	tStart := time.Now()
+	var supplied []byte
+	rawMode := len(rawInput) > 0 || (p.ringSource != nil && filepath.Base(f.Path) == "ring.rgb24")
+	if len(rawInput) > 0 {
+		supplied = rawInput[0]
+	} else if rawMode {
+		var err error
+		supplied, err = p.ringSource.take(id, f)
+		if err != nil {
+			return Ref{}, false, StageDurations{}, err
+		}
+	}
 	var stages StageDurations
+	if rawMode {
+		start := time.Now()
+		sum := sha256.Sum256(supplied)
+		stages.Hash = time.Since(start)
+		if f.Width < 1 || f.Height < 1 || uint64(f.Width)*uint64(f.Height) > uint64(p.cfg.MaxFrameBytes)/3 || uint64(len(supplied)) != uint64(f.Width)*uint64(f.Height)*3 || hex.EncodeToString(sum[:]) != f.SHA256RGB24 {
+			return Ref{}, false, stages, frameError()
+		}
+	}
 	p.mu.Lock()
 	if isCancelled != nil && isCancelled() {
 		p.mu.Unlock()
@@ -438,7 +458,11 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 		stages.Total = time.Since(tStart)
 		return prevLast, false, stages, nil
 	}
-	rootFd, e := syscall.Dup(int(p.root.Fd()))
+	rootFd := -1
+	var e error
+	if !rawMode {
+		rootFd, e = syscall.Dup(int(p.root.Fd()))
+	}
 	p.mu.Unlock()
 	if e != nil {
 		return Ref{}, false, stages, e
@@ -448,7 +472,10 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 	if read == nil {
 		read = p.readSource
 	}
-	encoded, e := read(rootFd, b.FramesRoot, f.Path)
+	var encoded []byte
+	if !rawMode {
+		encoded, e = read(rootFd, b.FramesRoot, f.Path)
+	}
 	if e != nil {
 		return Ref{}, false, stages, e
 	}
@@ -459,7 +486,9 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 	var raw []byte
 	sha := f.SHA256RGB24
 	sameEncoded := hasPrev && len(prevEncoded) > 0 && bytes.Equal(encoded, prevEncoded) && prevLast.SHA256 == f.SHA256RGB24 && prevLast.Width == uint32(f.Width) && prevLast.Height == uint32(f.Height)
-	if !sameEncoded {
+	if rawMode {
+		raw = supplied
+	} else if !sameEncoded {
 		raw, sha, stages.Decode, stages.Hash, e = decodeAndVerifyPNG(encoded, f.Width, f.Height, f.SHA256RGB24)
 		if e != nil {
 			return Ref{}, false, stages, e

@@ -32,6 +32,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -1042,7 +1043,17 @@ func (s *helloState) accept(ctx context.Context, profiles map[string]capsule.Pro
 		return configuration("CLOCK_MONOTONIC unavailable")
 	}
 	byRoot := map[string]*frames.Subscriptions{}
-	fresh, err := newRuntime(capsule.Config{Profiles: profiles, OriginNS: origin, MaxSurfaces: 16, MaxOutputBytes: 1 << 20, Timeout: 90 * time.Second, View: s.view, BeforeDestroy: unsubscribeSurface(byRoot)}, clock)
+	var ring *frames.RingSource
+	beforeDestroy := func(ctx context.Context, id string) error {
+		if err := unsubscribeSurface(byRoot)(ctx, id); err != nil {
+			return err
+		}
+		if ring != nil {
+			ring.Forget(id)
+		}
+		return nil
+	}
+	fresh, err := newRuntime(capsule.Config{Profiles: profiles, OriginNS: origin, MaxSurfaces: 16, MaxOutputBytes: 1 << 20, Timeout: 90 * time.Second, View: s.view, BeforeDestroy: beforeDestroy}, clock)
 	if err != nil {
 		return err
 	}
@@ -1053,9 +1064,20 @@ func (s *helloState) accept(ctx context.Context, profiles map[string]capsule.Pro
 	if session.locks == nil {
 		session.locks = &surfaceLocks{}
 	}
+	// [TARGET, unit decision] Requested FPS defaults to the ring contract's
+	// default; MV_RING_FPS supplies cadence without changing the compiled root.
+	fps := 60
+	if requested, e := strconv.Atoi(os.Getenv("MV_RING_FPS")); e == nil {
+		fps = requested
+	}
+	source, pollInterval := frames.SelectRingSource(fresh, os.Getenv("MV_CAPTURE_RING") == "1", fps, os.Stderr, func() (*frames.RingSource, error) { return frames.NewRingSource(fresh, clock, origin) })
+	ring, _ = source.(*frames.RingSource)
 	var pending []*frames.Subscriptions
 	for root, pub := range pubs {
-		sub, err := newSubscriptions(session.ctx, frames.SubscriptionConfig{MaxSubscriptions: 16, PollInterval: 100 * time.Millisecond, CaptureTimeout: 90 * time.Second, ShutdownTimeout: 5 * time.Second, SurfaceLock: session.surfaceLock, Diagnostics: os.Stderr, DeduplicateUnchanged: true, InitialUnchangedPolls: 2}, fresh, pub, session.emit)
+		if ring != nil {
+			pub.UseRingSource(ring)
+		}
+		sub, err := newSubscriptions(session.ctx, frames.SubscriptionConfig{MaxSubscriptions: 16, PollInterval: pollInterval, CaptureTimeout: 90 * time.Second, ShutdownTimeout: 5 * time.Second, SurfaceLock: session.surfaceLock, Diagnostics: os.Stderr, DeduplicateUnchanged: true, InitialUnchangedPolls: 2}, source, pub, session.emit)
 		if err != nil {
 			for _, staged := range pending {
 				_ = staged.Close(context.Background())
