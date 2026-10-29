@@ -66,6 +66,7 @@ test_loop_trials.py	agents/tests/test_loop_trials.py
 testmcp-793d126b3914	agents/tests/test_mcp_conformance.py
 test_mcp_server.py	agents/tests/test_mcp_server.py
 test_meta_muse.py	agents/tests/test_meta_muse.py
+testmut-f2d1ef201036	agents/tests/test_mut_agents_loop.py
 testmut-a2a289b5491a	agents/tests/test_mut_rec_planner.py
 test_mut_vcore.py	agents/tests/test_mut_vcore.py
 test_mvctl.py	agents/tests/test_mvctl.py
