@@ -721,7 +721,12 @@ def gw1_active():
     return False
 
 
+ForbiddenVerb = live.ForbiddenVerb
+
+
 def checked(argv, **kwargs):
+    argv = [str(x) for x in argv]
+    live.refuse_net_argv(argv)
     result = subprocess.run([str(x) for x in argv], capture_output=True, text=True,
                             timeout=300, **kwargs)
     if result.returncode:

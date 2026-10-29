@@ -41,10 +41,11 @@ async function dryRun(mutation = '') {
           throw new Error('single owned profile capsule no longer proven');
         }
         return { profile: 'mv-live-1', capsules: [capsule.capsuleId] };
-      case 'net_down': return { network: mutation === 'net-up' ||
-        (mutation === 'midrun-gate-flap' && calls.includes('propose')) ? 'up' : capsule.netPolicy };
+      case 'offline_proof': return { fixtures_offline: !(mutation === 'net-up' ||
+        (mutation === 'midrun-gate-flap' && calls.includes('propose')) ) };
       case 'navigate': {
-        assert.ok(calls.indexOf('net_down') < calls.indexOf('navigate'));
+        assert.equal(calls.at(-2), 'offline_proof');
+        assert.ok(!calls.some(x => /^net(?:_|$)/.test(x)));
         assert.equal(capsule.netPolicy, 'down');
         const html = decodeURIComponent(args.url.split(',').slice(1).join(','));
         assert.ok(html.includes("default-src 'none'"));
@@ -102,6 +103,8 @@ async function dryRun(mutation = '') {
           y: y + Math.floor(h / 2), button: 'left' }, bbox: target.bbox };
       }
       case 'propose': {
+        assert.deepEqual(calls.slice(-3), ['offline_proof', 'ownership', 'propose']);
+        assert.ok(!calls.some(x => /^net(?:_|$)/.test(x)));
         assert.equal(args.max_ms, 30000);
         if (mutation === 'stale-once' && !stale) {
           stale = true;
@@ -156,6 +159,7 @@ async function dryRun(mutation = '') {
       child.on('close', resolve);
     });
     assert.ok(report, `runner emitted report: ${stderr}`);
+    assert.ok(!calls.some(x => /^net(?:_|$)/.test(x)));
     return { rc, report, calls };
   } finally {
     clearTimeout(timer);

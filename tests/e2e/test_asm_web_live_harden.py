@@ -30,8 +30,8 @@ MUTATIONS = {
     'planner-out-of-box-click': ('test_planner_custody',
         "require(action.get('type') == 'click'", "require(True or action.get('type') == 'click'"),
     'midrun-gate-flap': ('test_admission_gate_flap',
-        "require(self.op_net_down().get('network') == 'down', 'network down not proven')",
-        "require(True, 'network down not proven')"),
+        "require(self.op_offline_proof().get('fixtures_offline') is True, 'offline fixture proof failed')",
+        "require(True, 'offline fixture proof failed')"),
     'unpinned-verifier-exec': ('test_binary_pins',
         "require(hashlib.sha256(path.read_bytes()).hexdigest() == entry['sha256']",
         "require(True or hashlib.sha256(path.read_bytes()).hexdigest() == entry['sha256']"),
@@ -123,10 +123,12 @@ class HardenTests(unittest.TestCase):
         b.pending = {}
         b.tools = SimpleNamespace(propose=Mock(), ToolRefusal=RuntimeError)
         b.op_ownership = Mock(return_value={})
-        b.op_net_down = Mock(return_value={'network': 'up'})
+        b.op_offline_proof = Mock(return_value={'fixtures_offline': False})
+        b.stack = SimpleNamespace(checked=Mock(side_effect=AssertionError('native call during proof')))
         with patch('metaviewer_agents.verify.build_proposal', return_value={'proposal_id': 'p'}):
             with self.assertRaises(web.Failure):
                 b.op_propose({'frame': {}}, {'action': {}, 'expectation': {}}, 100)
+        b.stack.checked.assert_not_called()
         b.tools.propose.assert_not_called()
         b.session.receive.assert_not_called()
         b.session.state = {'capsules': ['owned']}

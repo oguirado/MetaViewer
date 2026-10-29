@@ -1583,8 +1583,7 @@ class AttachedLiveStackSession:
         )
 
     def native_tree(self) -> dict:
-        out = subprocess.check_output(
-            [
+        argv = [
                 Path(os.environ["MV_SRF_BIN_DIR"]) / "srf-identity-surface",
                 "ax",
                 "--container",
@@ -1593,7 +1592,10 @@ class AttachedLiveStackSession:
                 "w1",
                 "--state-dir",
                 os.environ["MV_SRF_STATE_DIR"],
-            ],
+            ]
+        live.refuse_net_argv(argv)
+        out = subprocess.check_output(
+            argv,
             text=True,
             timeout=15,
         )

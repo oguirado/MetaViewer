@@ -541,7 +541,30 @@ def cleanup_capsule_ram(ram_root, capsules, published=(), active_containers=()):
     }
 
 
+class ForbiddenVerb(RuntimeError):
+    code = "E2E_FORBIDDEN_VERB"
+
+
+def refuse_net_argv(argv):
+    # [TARGET, unit decision] Global network lifecycle is operator-only.
+    argv = [str(x) for x in argv]
+    if len(argv) < 2:
+        return
+    executable = Path(argv[0])
+    names = {executable.name, executable.resolve().name}
+    resolved = shutil.which(argv[0])
+    if resolved:
+        names.add(Path(resolved).resolve().name)
+    native_net = "srf-identity-surface" in names and argv[1] == "net"
+    shell_net = (bool(names & {"sh", "bash"}) and argv[1] == "-c"
+                 and len(argv) > 2 and "srf-identity-surface" in argv[2]
+                 and re.search(r"\snet\s", argv[2]) is not None)
+    if native_net or shell_net:
+        raise ForbiddenVerb("E2E_FORBIDDEN_VERB: operator-only network lifecycle")
+
+
 def run(report, argv, **kwargs):
+    refuse_net_argv(argv)
     result = subprocess.run([str(x) for x in argv], capture_output=True,
                             text=True, timeout=30, **kwargs)
     report["commands"].append({"argv": [str(x) for x in argv],

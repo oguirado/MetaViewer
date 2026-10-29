@@ -214,7 +214,7 @@ def run(backend, report):
         for attempt in range(3):
             sensed = sense(task)
             planned = stage(task, 'plan', sensed=sensed, goal=goal)
-            require(stage(task, 'net_down').get('network') == 'down', 'network down not proven')
+            require(stage(task, 'offline_proof').get('fixtures_offline') is True, 'offline fixture proof failed')
             stage(task, 'ownership')
             try:
                 admitted = stage(task, 'propose', sensed=sensed, plan=planned, max_ms=30000)
@@ -244,8 +244,8 @@ def run(backend, report):
         report['ownership'] = backend.call('start')
         require(report['ownership']['profile'] == 'mv-live-1' and
                 len(report['ownership']['capsules']) == 1, 'one owned capsule required')
-        report['net'] = backend.call('net_down')
-        require(report['net'].get('network') == 'down', 'network down not proven')
+        report['net'] = backend.call('offline_proof')
+        require(report['net'].get('fixtures_offline') is True, 'offline fixture proof failed')
         for task_id, page in [('T1', 'form'), ('T2', 'flow_a'), ('T3', 'table')]:
             task = dict(task=task_id, verdict='FAIL', steps=0, latency_ms={},
                         observations=[], action_receipts=[], ax_proofs=[])
@@ -254,6 +254,8 @@ def run(backend, report):
             url = page_url(page)
             task['page'] = dict(file=str(PAGES / (page + '.html')), data_url_length=len(url),
                                 source_sha256=hashlib.sha256(fixture(page).encode()).hexdigest())
+            require(stage(task, 'offline_proof').get('fixtures_offline') is True,
+                    'offline proof before navigation')
             task['fixture_setup'] = stage(task, 'navigate', page=page, url=url)
             if task_id == 'T1':
                 initial = sense(task)
@@ -421,13 +423,15 @@ class LiveBackend:
         return dict(profile='mv-live-1', capsules=self.session.state['capsules'],
                     surface_id=self.session.surface_id)
 
-    def op_net_down(self):
-        binary = Path(os.environ['MV_SRF_BIN_DIR']) / 'srf-identity-surface'
-        value = json.loads(self.stack.checked([binary, 'net', 'down', '--state-dir',
-                                               os.environ['MV_SRF_STATE_DIR']]))
-        # CLI emits the value directly, as documented by its emit function.
-        require(value.get('network') == 'down', 'native network down failed')
-        return value
+    def op_offline_proof(self):
+        # [TARGET, unit decision] Fixture-only fallback: the pinned CLI has no
+        # capsule network-state query (OpenSuperficies a9ac1ac8,
+        # cmd/srf-identity-surface/main.go:137-149, 174-185). Operator policy
+        # is not exported by that CLI. Never infer native isolation from CSP.
+        for page in FIXTURE_PINS:
+            fixture(page)
+        return dict(fixtures_offline=True, scope='pinned fixtures and local data/blob URLs',
+                    network='not altered (read-only check unavailable at pin)')
 
     def op_ownership(self):
         owned = set((self.session.state or {}).get('capsules', []))
@@ -516,7 +520,7 @@ class LiveBackend:
         proposal = build_proposal(sensed['frame'], proposal_id='asm-web-' + uuid.uuid4().hex,
                                   action=plan['action'], expectation=plan['expectation'], max_ms=max_ms)
         self.op_ownership()
-        require(self.op_net_down().get('network') == 'down', 'network down not proven')
+        require(self.op_offline_proof().get('fixtures_offline') is True, 'offline fixture proof failed')
         try:
             verdict = self.tools.propose(proposal, client=self.session, timeout_ms=max_ms)
         except self.tools.ToolRefusal as error:
@@ -552,7 +556,8 @@ class LiveBackend:
 
     def op_navigate(self, page, url):
         setup = []
-        require(self.op_net_down().get('network') == 'down', 'net down before navigation')
+        require(url == page_url(page), 'navigation outside pinned local fixture')
+        require(self.op_offline_proof().get('fixtures_offline') is True, 'offline proof before navigation')
         before = self.op_observe(5000)['frame_ref']
         for action in [dict(type='key', keys=['ctrl', 'l']), dict(type='type', text=url),
                        dict(type='key', keys=['Return'])]:

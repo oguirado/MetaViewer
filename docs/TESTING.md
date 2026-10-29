@@ -306,8 +306,17 @@ plus the pinned `MV_WENDER_ROOT` and `VQA_VE_ROOT` checkouts. With the identity
 unallocated, run `python3 tests/e2e/e2e1_slice/asm_web_live.py`. The conductor
 runs this live command; hosted CI must leave `MV_LIVE_WEB` unset.
 
-The runner creates one owned browser capsule, asserts network down before local
-fixture navigation, and retains one perception client across tasks. Optional
+The runner creates one owned browser capsule, revalidates the read-only offline
+fixture proof before every action attempt and navigation, and retains one perception
+client across tasks. The proof checks immutable fixture hashes, CSP, and pinned
+local data/blob navigation; it does not attest native capsule egress isolation.
+The pinned OpenSuperficies CLI has no read-only capsule network-state query
+(`a9ac1ac8`, `cmd/srf-identity-surface/main.go:137-149`); its policy path is
+operator-supplied (`:174-185`). Reports state
+`network: not altered (read-only check unavailable at pin)`.
+`net` verbs are operator-only: the October 29 incident deleted the shared proxy
+(`src/browserid/surface/network.go:199-236` at that pin); `stack.checked` rejects
+all such subcommands with `E2E_FORBIDDEN_VERB` before spawning. Optional
 `MV_WENDER_PLANNER_CMD` is a JSON argv using the existing custody-bound click
 protocol; otherwise it uses the pinned G-AI state shim and named targets.
 Typing is deterministic against the focused field; table reading admits no
