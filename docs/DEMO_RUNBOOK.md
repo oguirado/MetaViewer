@@ -114,6 +114,8 @@ systemd-run --user --scope --unit mv-demo -p MemoryMax=8G -p MemoryHigh=6G -p Me
   python3 tests/e2e/e2e1_slice/stack.py start --ttl 45m
 ```
 
+- I leave `MV_CAPTURE_RING` unset until the OpenSuperficies ring pin and host mount are ready; `MV_CAPTURE_RING=1` opts into the validated reader [CITED: `daemon-adapter/internal/frames/ringsource.go`].
+- I use `MV_LIVE_WEB=1` only for `tests/e2e/e2e1_slice/asm_web_live.py`; I leave it unset in hosted CI [CITED: that runner].
 - I use `--tolerate-capsule-loss` (or `MV_LIVE_TOLERATE_LOSS=1`) when I need the UI and core to remain available after `LIVE_CAPSULE_LOST`; default supervision tears down the stack on capsule loss [CITED: tests/e2e/e2e1_slice/stack.py].
 - `--agent-tick-page` (default off): opt-in agent-driven ticking `data:text/html` page (`TICK_URL`, percent-encoded with `urllib.parse.quote` so `#` color literals are never truncated as URL fragments) after the first `frame_ready` (`LIVE_STACK_TICK step=N outcome=...`, fail-open); for test/QA only, not for the demo recording [CITED: tests/e2e/e2e1_slice/stack.py].
 
@@ -149,7 +151,7 @@ Once `LIVE_STACK_READY` is printed, I drive the following walkthrough in the Met
    - I click the **Screenshot** control in the tile chrome to capture an immediate frame witness into the capture store and verify the updated capture badge.
 4. **Human ↔ agent control handoff**:
    - There is one **Control** button per tile (live-verified on the wall; confirm the exact accessible name in the staged `ui/.kit` package); the tile badge flips between `"Agent acting"` and `"Human control"` (there are no separate Take/Release buttons).
-   - I click **Control** on the browser tile (`ui_intent/v0.2` takeover): a `"Request sent."` toast appears over the tile footer, the badge flips from `"Agent acting"` to `"Human control"` while the tile canvas height stays stable at `307` px [MEASURED] (Activity strip rows grow below the tile), and the Rust core immediately cancels any pending agent proposal with `SURFACE_NOT_AGENT_CONTROLLED` and transfers input authority to me [CITED: docs/ARCHITECTURE.md].
+   - I click **Control** on the browser tile (`ui_intent/v0.2` takeover): a `"Request sent."` toast appears over the tile footer, the badge flips from `"Agent acting"` to `"Human control"` while I check that Activity strip rows grow below the tile (the stable `307` px canvas height is historical live21 evidence [CITED: historical live21 note], unmeasured at this head), and the Rust core immediately cancels any pending agent proposal with `SURFACE_NOT_AGENT_CONTROLLED` and transfers input authority to me [CITED: docs/ARCHITECTURE.md].
    - I interact with the live browser surface directly, check typing and refusal receipts, then click **Control** again to return control to the agent: the badge flips back to `"Agent acting"`, multislot returns to `READ` mode (where clicks on the wall tile or multislot cause zero scroll and emit `0` [MEASURED] `"op":"input"` journal entries), and the core holds agent admission closed until a fresh post-release frame generation arrives.
 5. **Fold and unfold**:
    - I click **Fold** on the tile header: the tile body blanks and the label becomes **Unfold** while the capsule continues running and publishing frames in the background (folded tile height behavior is unverified at this head); I then click **Unfold** to restore the live canvas.

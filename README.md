@@ -4,13 +4,13 @@ I build MetaViewer as a Linux-first desktop wall of live, isolated application s
 
 ## Status
 
-`VERSION` is **0.1.2** [MEASURED: `cat VERSION`; CITED: `VERSION`]. The repository is at commit `3882a2cce` [MEASURED: `git rev-parse --short HEAD`] (`924` commits on the branch [MEASURED: `git rev-list --count HEAD`]), integrating toward **v0.2.0** [TARGET].
+`VERSION` is **0.1.2** [MEASURED: `cat VERSION`; CITED: `VERSION`]. The repository is at commit `5226718ae` [MEASURED: `git rev-parse --short HEAD`] (`977` commits on the branch [MEASURED: `git rev-list --count HEAD`]), integrating toward **v0.2.0** [TARGET].
 
 I verify this assembly with `bash tools/gate.sh` and `bash tools/gate.sh --self-test`; I do not carry forward suite pass totals from an earlier head. The gate covers manifests, laws, contracts, Python units and agents, kit/JavaScript checks, Rust, Go, UI, Electron smoke, and performance budgets [CITED: `tools/gate.sh`]. I run live acceptance separately; an offline pass does not establish live frame rate.
 
 - **Contracts.** I maintain `10` v0.1 schemas, `21` v0.2 schemas, `20` v0.1 fixtures and `489` v0.2 fixtures [MEASURED: Python `Path.glob` over `contracts/v0.1/*.schema.json`, `contracts/v0.2/*.schema.json`, `contracts/examples/*.json`, `contracts/examples/v0.2/*.json`].
-- **End-to-end journeys.** I keep `36` Node journey files and `2` Python E2E suites [MEASURED: `ls -1 tests/e2e/*.test.js | wc -l`; `ls -1 tests/e2e/test_*.py | wc -l`]. I run `xvfb-run -a -s "-screen 0 1280x900x24" python3 tests/e2e/run.py` separately from the default gate [CITED: `tests/e2e/run.py`].
-- **CI workflows (`.github/workflows/`).** `6` workflow files [MEASURED: `ls -1 .github/workflows/*.yml | wc -l`] define `28` job keys [MEASURED: `grep -E '^  [a-z0-9-]+:$' .github/workflows/*.yml | wc -l`], with `15` job keys in `.github/workflows/ci.yml` [MEASURED: `grep -E '^  [a-z0-9-]+:$' .github/workflows/ci.yml | wc -l`] where `ci-required` aggregates `10` required `needs` jobs across `x64` (`ubuntu-24.04`) and `arm64` (`ubuntu-24.04-arm`) [CITED: `.github/workflows/ci.yml`]. See [docs/TESTING.md](docs/TESTING.md) for the full job matrix and local commands.
+- **End-to-end journeys.** I keep `37` Node journey files and `3` Python E2E suites [MEASURED: `ls -1 tests/e2e/*.test.js | wc -l`; `ls -1 tests/e2e/test_*.py | wc -l`]. I run `xvfb-run -a -s "-screen 0 1280x900x24" python3 tests/e2e/run.py` separately from the default gate [CITED: `tests/e2e/run.py`].
+- **CI workflows (`.github/workflows/`).** `6` workflow files [MEASURED: `ls -1 .github/workflows/*.yml | wc -l`] define `20` job definitions [MEASURED: job keys below `jobs:` in each workflow] (`28` raw two-space keys, including triggers) [MEASURED: `grep -E '^  [a-z0-9-]+:$' .github/workflows/*.yml | wc -l`], with `13` job definitions [MEASURED: job keys below `jobs:`] (`15` raw two-space keys) in `.github/workflows/ci.yml` [MEASURED: `grep -E '^  [a-z0-9-]+:$' .github/workflows/ci.yml | wc -l`] where `ci-required` aggregates `10` required `needs` jobs across `x64` (`ubuntu-24.04`) and `arm64` (`ubuntu-24.04-arm`) [CITED: `.github/workflows/ci.yml`]. See [docs/TESTING.md](docs/TESTING.md) for the full job matrix and local commands.
 
 ## Features
 
@@ -77,7 +77,7 @@ Electron renders state and submits intents; it never injects input [CITED: `docs
 | Capsule UI kit | `0.2.1` (`bf31bc201987206d16dbd88d93102f9d5ce026f9`) [MEASURED: `python3 -c 'import json; print(json.load(open("ui/kit.lock.json"))["version"])'`; CITED: `ui/kit.lock.json`] | via `CAPSULE_UI_KIT_REPO` |
 | Electron dist | `44.9.2` local files [CITED: `ui/package.json`] | via `ELECTRON_OVERRIDE_DIST_PATH` |
 
-External components stay in their own repositories, pinned in `deps.lock` (`3` components [MEASURED: `python3 -c 'import json; print(len(json.load(open("deps.lock"))["components"]))'`]) and never copied: `vision-engine` `v0.2.0` (`3bb54835db8a2e545311cfcc45185a0dfbd9313a`), `wender-agent` `v0.3.0` (`41493681a2f4d92aae50c476ed13c219c31a0a02`), and `opensuperficies` `os-cu-w9-mv1` (`a9ac1ac8543872b428990ea23fa2629cd0a6d1d5`) [CITED: `deps.lock`].
+External components stay in their own repositories, pinned in `deps.lock` (`3` components [MEASURED: `python3 -c 'import json; print(len(json.load(open("deps.lock"))["components"]))'`]) and never copied: `vision-engine` `v0.2.0` (`3bb54835db8a2e545311cfcc45185a0dfbd9313a`), `wender-agent` `v0.3.0` (`b95277804ee112fc8ab213c1e6148d752427e3eb`), and `opensuperficies` `os-cu-w9-mv1` (`a9ac1ac8543872b428990ea23fa2629cd0a6d1d5`) [CITED: `deps.lock`].
 
 
 I assemble MetaViewer, OpenSuperficies, vision-engine, and wender-agent from separate repositories; I keep external component commits in `deps.lock`. Its version fields are release labels, while the exact commit is the checkout authority; I do not imply that a pin equals its release tag. I use persistent `vadapt.vserve` when the pinned checkout supplies it and the `frame_raw`/`raw_shm` handshake succeeds with a typed `ring` capability; otherwise the adapter uses one-shot `vadapt.cu_describe` [CITED: `agents/metaviewer_agents/perception/vcore.py`]. I plan through `wender.plan.cli` over the pipe-only observation/element-table/goal boundary; MetaViewer retains admission and execution authority [CITED: `agents/metaviewer_agents/wender_bridge.py`]. Assembly CI requires the real planner with `--require-planner` [CITED: `.github/workflows/assembly.yml`].
@@ -112,6 +112,9 @@ python3 agents/metaviewer_agents/mvctl.py propose --json-arg FILE --timeout-ms 5
 node tests/e2e/e2e1_slice/index.js
 ```
 
+I leave `MV_CAPTURE_RING` unset until the OpenSuperficies ring pin and host mount are ready; `MV_CAPTURE_RING=1` opts into the validated resident reader [CITED: `daemon-adapter/internal/frames/ringsource.go`].
+I use `MV_LIVE_WEB=1` only for the opt-in live web runner; I leave it unset in hosted CI [CITED: `tests/e2e/e2e1_slice/asm_web_live.py`].
+
 ### Checks
 
 ```sh
@@ -145,7 +148,7 @@ git config core.hooksPath .githooks
 | `daemon-adapter/` | Go surface-daemon bridge (`mv-daemon-adapter`) |
 | `agents/` | Python agent adapters, `mvctl`, MCP server |
 | `ui/` | Electron `44.9.2` + Vue `3.5.43` wall, frame port router, terminal, multislot, capture |
-| `tests/e2e/` | `36` Node E2E journeys [MEASURED: `ls -1 tests/e2e/*.test.js | wc -l`], `2` Python E2E suites [MEASURED: `ls -1 tests/e2e/test_*.py | wc -l`], and `e2e1_slice/` |
+| `tests/e2e/` | `37` Node E2E journeys [MEASURED: `ls -1 tests/e2e/*.test.js | wc -l`], `3` Python E2E suites [MEASURED: `ls -1 tests/e2e/test_*.py | wc -l`], and `e2e1_slice/` |
 | `tools/gate.sh` | Unified `11`-leg offline gate and harness self-test [CITED: `tools/gate.sh`] |
 | `tools/`, `tests/`, `.githooks/` | Checkers, unit suites, budget gate (`tools/budget_gate.py`), commit hook |
 | `.github/workflows/` | `6` CI workflow files (`ci.yml`, `secrets.yml`, `package.yml`, `build-other.yml`, `volume.yml`, `assembly.yml`) [MEASURED: `ls -1 .github/workflows/*.yml | wc -l`] |
@@ -158,7 +161,7 @@ git config core.hooksPath .githooks
 | [docs/UI_ARCHITECTURE.md](docs/UI_ARCHITECTURE.md) | Shared capsule visual architecture |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Hackathon day-by-day plan and gates |
 | [docs/PREEXISTING.md](docs/PREEXISTING.md) | Pre-existing work declaration |
-| [META_AI_USAGE.md](META_AI_USAGE.md) | Meta model usage ledger (`619` lanes across `129` rooms [MEASURED: `python3 -c 'import json; d=json.load(open("docs/meta-ai/muse_lanes.json")); print(len(d["lanes"]), len({x["room"] for x in d["lanes"]}))'`]) |
+| [META_AI_USAGE.md](META_AI_USAGE.md) | Meta model usage ledger (`643` lanes across `131` rooms [MEASURED: `python3 -c 'import json; d=json.load(open("docs/meta-ai/muse_lanes.json")); print(len(d["lanes"]), len({x["room"] for x in d["lanes"]}))'`]) |
 
 ## Contributing
 

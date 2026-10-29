@@ -4,12 +4,12 @@ I verify MetaViewer across six overlapping layers:
 
 1. **The local eleven-leg gate** (`bash tools/gate.sh`) and its **self-test** (`bash tools/gate.sh --self-test`).
 2. **Live gates** against a real running capsule (`node tests/e2e/e2e1_slice/index.js --live`, `python3 tools/gate_g_ai.py --surface mv-live-1`).
-3. **End-to-end journeys** in real headless Electron (`tests/e2e/run.py`, `35` `[MEASURED: ls -1 tests/e2e/*.test.js | wc -l]` Node journey files under `tests/e2e/*.test.js`, and `2` `[MEASURED: ls -1 tests/e2e/test_*.py | wc -l]` Python live-stack suites under `tests/e2e/test_*.py`).
-4. **Hosted CI and nightly/soak workflows** (`19` `[MEASURED: grep -E '^  [a-z0-9-]+:$' .github/workflows/*.yml | wc -l]` jobs across `5` `[MEASURED: ls -1 .github/workflows/*.yml | wc -l]` GitHub Actions workflows in `.github/workflows/*.yml`, gated on pull requests and `main` by the `ci-required` aggregate job).
+3. **End-to-end journeys** in real headless Electron (`tests/e2e/run.py`, `37` `[MEASURED: ls -1 tests/e2e/*.test.js | wc -l]` Node journey files under `tests/e2e/*.test.js`, and `3` `[MEASURED: ls -1 tests/e2e/test_*.py | wc -l]` Python live-stack suites under `tests/e2e/test_*.py`).
+4. **Hosted CI and nightly/soak workflows** (`20` jobs across `6` workflows [MEASURED: job keys below `jobs:` in `.github/workflows/*.yml`], gated by `ci-required`; assembly is a separate pinned-component smoke workflow).
 5. **Mutation proofs, budget gate, and negative controls** (`tests/test_contract_mutants.py`, `agents/tests/run_mutant_harness.py`, `tests/supervisor/check_mutations.py`, `tools/budget_gate.py --self-test`, and `tools/gate.sh --self-test`).
 6. **External testers** (two independent external testers across three adversarial rounds).
 
-Every numeric count in this document is measured on the current tree at commit `a768a684` `[MEASURED: git rev-parse --short HEAD]` (`769` `[MEASURED: git rev-list --count HEAD]` commits on the branch, version `0.1.2` `[MEASURED: cat VERSION]`).
+I measure source inventories on commit `5226718ae` [MEASURED: `git rev-parse --short HEAD`] (`977` commits [MEASURED: `git rev-list --count HEAD`], version `0.1.2` [MEASURED: `cat VERSION`]). I retain execution totals and pass results below as historical measurements recorded in this document at `a768a684` [CITED: prior document snapshot]; I do not claim those totals or live performance for this head. Current-head execution results are AUSENTE until rerun. Source counts and commands are verified separately.
 
 ---
 
@@ -30,13 +30,13 @@ bash tools/gate.sh --leg laws
 bash tools/gate.sh --leg contracts
 ```
 
-`tools/gate.sh` executes `11` `[MEASURED: bash tools/gate.sh]` legs in order (`manifests`, `laws`, `contracts`, `unit`, `agents`, `js`, `rust`, `go`, `ui`, `ui-smoke`, `perf`). Every leg must pass (`PASS aggregate` `[MEASURED: bash tools/gate.sh]`) before a change is integrated.
+`tools/gate.sh` executes `11` `[MEASURED: bash tools/gate.sh]` legs in order (`manifests`, `laws`, `contracts`, `unit`, `agents`, `js`, `rust`, `go`, `ui`, `ui-smoke`, `perf`). Every leg must pass (`PASS aggregate` [TARGET]) before a change is integrated.
 
-| Order | Leg (`--leg`) | What it runs | Measured result on current tree |
+| Order | Leg (`--leg`) | What it runs | Historical result at `a768a684` |
 | ---: | :--- | :--- | :--- |
 | 1 | `manifests` | Runs `validate_manifests()` (`tools/gate.sh`): verifies `VERSION` and the `6` `[MEASURED]` manifest/ignore files in `FILES` (`Cargo.toml` with `rust-version = "1.97"`, `core/Cargo.toml`, `daemon-adapter/go.mod` with `go 1.26.0`, `agents/pyproject.toml`, `ui/package.json`, `.gitignore`), then runs `validate_frozen_dependencies()` in a disposable scratch tree against `deps.lock`, `Cargo.lock` (`cargo metadata --offline --locked`), and `ui/package-lock.json` (`npm ci --offline --ignore-scripts --dry-run`). | `PASS manifests` (`VERSION`, `6` `[MEASURED]` manifest/ignore files, and frozen offline locks validated) `[MEASURED: bash tools/gate.sh --leg manifests]` |
 | 2 | `laws` | Runs `python3 tools/check_laws.py --version` and `LAWS_CODE` (`tools/check_laws.py` excluding only `refs/stash` from `git rev-list --all`): enforces `LAWS.md` on tracked files and git history — author identity, English-only tracked files, no secrets/keys/host paths, and no third-party or model attribution strings. | `PASS laws` (`Laws check: OK` twice) `[MEASURED: bash tools/gate.sh --leg laws]` |
-| 3 | `contracts` | Runs `python3 tools/check_contracts.py`: validates every JSON Schema under `contracts/v0.1/` (`10` `[MEASURED: ls -1 contracts/v0.1/*.schema.json | wc -l]` schemas) and `contracts/v0.2/` (`21` `[MEASURED: ls -1 contracts/v0.2/*.schema.json | wc -l]` schemas) against `20` `[MEASURED: ls -1 contracts/examples/*.json | wc -l]` v0.1 example fixtures (`10` `[MEASURED]` valid + `10` `[MEASURED]` invalid) and `488` `[MEASURED: ls -1 contracts/examples/v0.2/*.json | wc -l]` v0.2 example fixtures (every schema has at least one `.valid.json` and one `.invalid.json` fixture, including `surface_request/v0.2` with `nested_depth` and `surface_input/v0.2`). | `PASS contracts` (`Contracts check: OK`) `[MEASURED: bash tools/gate.sh --leg contracts]` |
+| 3 | `contracts` | Runs `python3 tools/check_contracts.py`: validates every JSON Schema under `contracts/v0.1/` (`10` `[MEASURED: ls -1 contracts/v0.1/*.schema.json | wc -l]` schemas) and `contracts/v0.2/` (`21` `[MEASURED: ls -1 contracts/v0.2/*.schema.json | wc -l]` schemas) against `20` `[MEASURED: ls -1 contracts/examples/*.json | wc -l]` v0.1 example fixtures (`10` `[MEASURED]` valid + `10` `[MEASURED]` invalid) and `489` `[MEASURED: ls -1 contracts/examples/v0.2/*.json | wc -l]` v0.2 example fixtures (every schema has at least one `.valid.json` and one `.invalid.json` fixture, including `surface_request/v0.2` with `nested_depth` and `surface_input/v0.2`). | `PASS contracts` (`Contracts check: OK`) `[MEASURED: bash tools/gate.sh --leg contracts]` |
 | 4 | `unit` | Runs `UNIT_CODE` (`unittest.defaultTestLoader.discover(start_dir="tests")` plus `tests/e2e/e2e1_slice`): executes all Python unit, contract, router, packaging, and CI-policy suites under `tests/` (`tests/test_*.py`, `tests/ci/test_*.py`, `tests/e2e/test_*.py`, `tests/integration/test_*.py`, and `tests/e2e/e2e1_slice/test_*.py`). Note: `tests/test_t7r2c_reproducibility.py` imports `ui/tools/package.js` (`@electron/asar`), so `ui/node_modules` must be installed (`npm --prefix ui ci --offline`) before running `--leg unit`. | `408` `[MEASURED: bash tools/gate.sh --leg unit]` tests, `OK` (`PASS unit`) |
 | 5 | `agents` | Runs `AGENTS_UNIT_CODE` (`unittest.defaultTestLoader.discover(start_dir="agents/tests")`) followed by `python3 agents/tests/run_mutant_harness.py` (`SW-0065` mutant injection matrix `M1`–`M8`). | `584` `[MEASURED: bash tools/gate.sh --leg agents]` unit tests (`OK`) + `8` `[MEASURED: python3 agents/tests/run_mutant_harness.py]` mutants (`M1`–`M8`, `100%` conforming, `PASS agents`) |
 | 6 | `js` | Resolves `capsule-ui-kit` at locked version `0.2.1` `[MEASURED: python3 -c 'import json; print(json.load(open("ui/kit.lock.json"))["version"])']` (`MV_KIT_CHECKOUT` or `CAPSULE_UI_KIT_REPO`) and runs `node tools/sync_kit.mjs` and `node tools/sync_kit.mjs --check`. | `PASS js` (kit `0.2.1` synced and contentHash verified) `[MEASURED: bash tools/gate.sh --leg js]` |
@@ -54,7 +54,7 @@ bash tools/gate.sh --leg contracts
 bash tools/gate.sh --self-test
 ```
 
-Measured count: `30` `[MEASURED: bash tools/gate.sh --self-test]` self-tests in `GateTests`, `OK` (`PASS self-test`, `PASS aggregate`; note that `grep -c 'def test_' tools/gate.sh` returns `37` `[MEASURED]` because `7` `[MEASURED]` inline fixture strings inside `GateTests` also define synthetic `def test_` functions).
+Historical count at `a768a684`: `30` `[MEASURED: bash tools/gate.sh --self-test]` self-tests in `GateTests`, `OK` (`PASS self-test`, `PASS aggregate`). I count `42` [MEASURED: `grep -c 'def test_' tools/gate.sh`] source lines containing `def test_`; inline synthetic fixture functions make this distinct from the executed self-test total.
 
 ---
 
@@ -66,7 +66,7 @@ In the measured live End-to-End slice (`live21`), `1` `[MEASURED]` live capsule 
 
 ### G-W1 (`node tests/e2e/e2e1_slice/index.js --live`)
 
-`node tests/e2e/e2e1_slice/index.js --live` (with `tests/e2e/e2e1_slice/live.py`, `electron-relay.mjs`, and `mv-replay`) exercises `11` live verification stages containing `67` `[MEASURED: grep -c 'assert' tests/e2e/e2e1_slice/live.py]` `assert` statements in `tests/e2e/e2e1_slice/live.py`:
+`node tests/e2e/e2e1_slice/index.js --live` (with `tests/e2e/e2e1_slice/live.py`, `electron-relay.mjs`, and `mv-replay`) exercises `11` live verification stages containing `16` `[MEASURED: grep -c 'assert' tests/e2e/e2e1_slice/live.py]` `assert` statements in `tests/e2e/e2e1_slice/live.py`:
 
 1. Capsule frame publication, UI fan-out, and retained witness bytes (`1280x900` `rgb24`).
 2. Observe → admitted → dispatched → receipt → pixel verification (`status: "verified"`, `focus_verified: true`, `receipt.verified: true`, `method: "pixel"`).
@@ -90,11 +90,11 @@ In the measured live End-to-End slice (`live21`), `1` `[MEASURED]` live capsule 
 
 ### Inventory of E2E suites
 
-`tests/e2e/` contains `35` `[MEASURED: ls -1 tests/e2e/*.test.js | wc -l]` Node journey files (`tests/e2e/*.test.js`) and `2` `[MEASURED: ls -1 tests/e2e/test_*.py | wc -l]` Python live-stack test files (`tests/e2e/test_*.py`).
+`tests/e2e/` contains `37` `[MEASURED: ls -1 tests/e2e/*.test.js | wc -l]` Node journey files (`tests/e2e/*.test.js`) and `3` `[MEASURED: ls -1 tests/e2e/test_*.py | wc -l]` Python live-stack test files (`tests/e2e/test_*.py`).
 
-`tests/e2e/run.py` syncs `capsule-ui-kit` (`node tools/sync_kit.mjs`), builds the E2E bundle (`node tests/e2e/build.mjs`), globs all `35` `[MEASURED: ls -1 tests/e2e/*.test.js | wc -l]` `sorted((ROOT / "tests/e2e").glob("*.test.js"))` files and runs them sequentially under `node --test --test-concurrency=1`, and then runs the cross-routing negative control (`MV_E2E_CROSS_ROUTE=1` on `tests/e2e/e2e1_wall.test.js`, verifying `is_cross_route_mutant_killed` on `"wall renders four tiles without cross-routing (AC-02)"` with `E2E_ROUTING`).
+`tests/e2e/run.py` syncs `capsule-ui-kit` (`node tools/sync_kit.mjs`), builds the E2E bundle (`node tests/e2e/build.mjs`), globs all `37` `[MEASURED: ls -1 tests/e2e/*.test.js | wc -l]` `sorted((ROOT / "tests/e2e").glob("*.test.js"))` files and runs them sequentially under `node --test --test-concurrency=1`, and then runs the cross-routing negative control (`MV_E2E_CROSS_ROUTE=1` on `tests/e2e/e2e1_wall.test.js`, verifying `is_cross_route_mutant_killed` on `"wall renders four tiles without cross-routing (AC-02)"` with `E2E_ROUTING`).
 
-#### Node E2E journey files executed by `tests/e2e/run.py` (`35` files)
+#### Node E2E journey files executed by `tests/e2e/run.py` (`37` files)
 
 1. `tests/e2e/ac02_oracle_regression.test.js` — AC-02 pixel oracle regression checks on rendered canvas surfaces.
 2. `tests/e2e/ac02_wall.test.js` — AC-02 wall pixel verification journey.
@@ -132,10 +132,14 @@ In the measured live End-to-End slice (`live21`), `1` `[MEASURED]` live capsule 
 34. `tests/e2e/harness_fresh_build.test.js` — verifies fresh E2E harness bundle build and artifact isolation.
 35. `tests/e2e/volume_bootstrap.test.js` — volume and soak bootstrap journey.
 
-#### Python E2E suites (`2` files)
+36. `tests/e2e/asm_web_hosted.test.js` — hosted web assembly harness.
+37. `tests/e2e/asm_web_live_hosted.test.js` — hosted dry-run of the opt-in live web runner.
 
+#### Python E2E suites (`3` files)
+
+- `tests/e2e/test_asm_web_live_harden.py` — live web runner hardening and negative controls.
 - `tests/e2e/test_live_stack.py` — live stack integration tests across the Rust core, Go daemon-adapter, and headless Electron harness.
-- `tests/e2e/test_volume_bootstrap.py` — volume and soak bootstrap harness verification (`29` `[MEASURED: python3 -m unittest tests/e2e/test_live_stack.py tests/e2e/test_volume_bootstrap.py -v]` tests across both Python E2E files, `OK`).
+- `tests/e2e/test_volume_bootstrap.py` — volume and soak bootstrap harness verification (`29` `[MEASURED: python3 -m unittest tests/e2e/test_live_stack.py tests/e2e/test_volume_bootstrap.py -v]` historical tests across these two Python E2E files, `OK`).
 
 ### Running the E2E suite and individual journeys locally
 
@@ -150,7 +154,7 @@ node tools/sync_kit.mjs /path/to/capsule-ui-kit
 
 #### Step 2: Run the full E2E orchestrator (`tests/e2e/run.py`)
 
-`tests/e2e/run.py` automatically syncs `capsule-ui-kit`, builds the E2E fixture bundle via `tests/e2e/build.mjs`, runs all `35` `[MEASURED: ls -1 tests/e2e/*.test.js | wc -l]` `tests/e2e/*.test.js` suites under Xvfb, and then runs the `MV_E2E_CROSS_ROUTE=1` negative control on `tests/e2e/e2e1_wall.test.js`:
+`tests/e2e/run.py` automatically syncs `capsule-ui-kit`, builds the E2E fixture bundle via `tests/e2e/build.mjs`, runs all `37` `[MEASURED: ls -1 tests/e2e/*.test.js | wc -l]` `tests/e2e/*.test.js` suites under Xvfb, and then runs the `MV_E2E_CROSS_ROUTE=1` negative control on `tests/e2e/e2e1_wall.test.js`:
 
 ```sh
 CAPSULE_UI_KIT_REPO=/path/to/capsule-ui-kit \
@@ -180,13 +184,13 @@ MV_E2E_STRICT_RENDERER=1 \
   node --test tests/e2e/e2e25_production_frames.test.js
 ```
 
-Measured result for `tests/e2e/e2e25_production_frames.test.js` with `MV_E2E_STRICT_RENDERER=1`: `5` `[MEASURED: MV_E2E_STRICT_RENDERER=1 xvfb-run -a -s "-screen 0 1280x900x24" node --test tests/e2e/e2e25_production_frames.test.js]` tests, `5` `[MEASURED]` pass, `0` fail, `0` todo.
+Historical result at `a768a684` for `tests/e2e/e2e25_production_frames.test.js` with `MV_E2E_STRICT_RENDERER=1`: `5` `[MEASURED: MV_E2E_STRICT_RENDERER=1 xvfb-run -a -s "-screen 0 1280x900x24" node --test tests/e2e/e2e25_production_frames.test.js]` tests, `5` `[MEASURED]` pass, `0` fail, `0` todo.
 
 ---
 
 ## 4. Hosted CI and workflow jobs (`.github/workflows/*.yml`)
 
-The repository defines `5` `[MEASURED: ls -1 .github/workflows/*.yml | wc -l]` workflow files in `.github/workflows/*.yml` containing `19` `[MEASURED: grep -E '^  [a-z0-9-]+:$' .github/workflows/*.yml | wc -l]` job definitions (`13` `[MEASURED: grep -E '^  [a-z0-9-]+:$' .github/workflows/ci.yml | wc -l]` in `.github/workflows/ci.yml`, `1` `[MEASURED: grep -E '^  [a-z0-9-]+:$' .github/workflows/secrets.yml | wc -l]` in `.github/workflows/secrets.yml`, `1` `[MEASURED: grep -E '^  [a-z0-9-]+:$' .github/workflows/package.yml | wc -l]` in `.github/workflows/package.yml`, `1` `[MEASURED: grep -E '^  [a-z0-9-]+:$' .github/workflows/build-other.yml | wc -l]` in `.github/workflows/build-other.yml`, and `3` `[MEASURED: grep -E '^  [a-z0-9-]+:$' .github/workflows/volume.yml | wc -l]` in `.github/workflows/volume.yml`).
+I count `6` workflow files and `20` job definitions [MEASURED: inventory of `.github/workflows/*.yml`, counting two-space keys only below `jobs:`]. The raw `grep -E '^  [a-z0-9-]+:$' .github/workflows/*.yml | wc -l` returns `28` [MEASURED], including `8` trigger keys [MEASURED]; I exclude those triggers from the job total. I count `13` jobs in `ci.yml`, one each in `assembly.yml`, `secrets.yml`, `package.yml`, and `build-other.yml`, and `3` in `volume.yml` [MEASURED: keys below `jobs:`].
 
 ### How required status is decided
 
@@ -196,12 +200,13 @@ In `.github/workflows/ci.yml`, the aggregate gate job `ci-required` declares:
 needs: [ci-policy, laws-contracts, router, rust, go, python, js, e2e, novac, package]
 ```
 
-`ci-required` runs with `if: always()` on `[x64, arm64]` and fails unless every one of those `10` `[MEASURED: grep -F 'for r in (' .github/workflows/ci.yml | wc -l]` upstream jobs succeeded and emitted valid `gate_receipt/v1` artifacts. `build-macos` and `build-windows` are excluded from `ci-required.needs`, carry `continue-on-error: true`, and emit `NOT_APPLICABLE` receipts. `.github/workflows/secrets.yml` (`Secrets / secrets`) runs as a separate workflow on every push and pull request; `.github/workflows/package.yml`, `.github/workflows/build-other.yml`, and `.github/workflows/volume.yml` are standalone packaging, reference, or scheduled/manual soak workflows.
+`ci-required` runs with `if: always()` on `[x64, arm64]` and fails unless every one of those `10` [CITED: `.github/workflows/ci.yml`, `ci-required.needs`] upstream jobs succeeded and emitted valid `gate_receipt/v1` artifacts. `build-macos` and `build-windows` are excluded from `ci-required.needs`, carry `continue-on-error: true`, and emit `NOT_APPLICABLE` receipts. `.github/workflows/secrets.yml` (`Secrets / secrets`) runs as a separate workflow on every push and pull request; `.github/workflows/package.yml`, `.github/workflows/build-other.yml`, and `.github/workflows/volume.yml` are standalone packaging, reference, or scheduled/manual soak workflows.
 
-### Complete workflow job inventory (`19` jobs across `5` files)
+### Complete workflow job inventory (`20` jobs across `6` files) [MEASURED: keys below `jobs:`]
 
 | Workflow file | Job key (`name`) | Runners / matrix | Required (`ci-required`) | What it runs |
 | :--- | :--- | :--- | :--- | :--- |
+| `.github/workflows/assembly.yml` | `pinned-assembly` | `ubuntu-24.04` | **No** (separate assembly workflow) | I verify the pinned private assembly with `--require-planner`; fork pull requests are refused [CITED: `.github/workflows/assembly.yml`]. |
 | `.github/workflows/ci.yml` | `ci-policy` (`ci-policy (x64)`) | `ubuntu-24.04` (`x64`) | **Yes** (in `ci-required.needs`) | Runs the embedded Python policy fixture verifier (`policy-fixtures`) checking workflow structure, permissions, SHA-pinned actions, and `gate_receipt/v1` compliance; the standalone CI policy suites in `tests/ci/` comprise `7` `[MEASURED: node --test tests/ci/*.test.cjs]` Node tests and `112` `[MEASURED: python3 -m unittest discover -s tests/ci -p 'test_*.py' -v]` Python tests. |
 | `.github/workflows/ci.yml` | `laws-contracts` (`laws-contracts (x64)`) | `ubuntu-24.04` (`x64`) | **Yes** (in `ci-required.needs`) | Runs `python3 tools/check_laws.py --range` (`laws-range`), `python3 tools/check_laws.py --version` (`laws-version`), `python3 tools/check_contracts.py` (`contracts`), and `python3 -m unittest discover -s tests` (`unittest-root`). |
 | `.github/workflows/ci.yml` | `router` (`router (x64)`) | `ubuntu-24.04` (`x64`) | **Yes** (in `ci-required.needs`) | Runs `python3 tools/router_index.py --check` (`router-check`). |
@@ -214,7 +219,7 @@ needs: [ci-policy, laws-contracts, router, rust, go, python, js, e2e, novac, pac
 | `.github/workflows/ci.yml` | `package` (`package (${{ matrix.arch }})`) | `ubuntu-24.04` (`x64`), `ubuntu-24.04-arm` (`arm64`) | **Yes** (in `ci-required.needs`) | Runs `python3 tests/ci/test_package_identity.py --build` (`package`) inside an offline network namespace. |
 | `.github/workflows/ci.yml` | `build-macos` (`build-macos (non-blocking)`) | `macos-latest` | **No** (`continue-on-error: true`, not in `ci-required.needs`) | Emits a `NOT_APPLICABLE` `gate_receipt/v1` receipt (`packager argv ABSENT in W0, build-only leg`). |
 | `.github/workflows/ci.yml` | `build-windows` (`build-windows (non-blocking)`) | `windows-latest` | **No** (`continue-on-error: true`, not in `ci-required.needs`) | Emits a `NOT_APPLICABLE` `gate_receipt/v1` receipt (`packager argv ABSENT in W0, build-only leg`). |
-| `.github/workflows/ci.yml` | `ci-required` (`ci-required (${{ matrix.arch }})`) | `ubuntu-24.04` (`x64`), `ubuntu-24.04-arm` (`arm64`) | **Yes** (aggregate required gate job) | Aggregate required check (`if: always()`); runs `python3 tests/ci/test_package_identity.py --build`, `python3 tests/ci/test_package_identity.py --distribution`, `python3 tools/budget_gate.py --self-test`, and `xvfb-run -a -s "-screen 0 1280x900x24" node --test tests/e2e/e2e18_budgets.test.js tests/e2e/e2e14_perf.test.js`, then verifies all `10` `[MEASURED: grep -F 'for r in (' .github/workflows/ci.yml | wc -l]` upstream `needs` jobs succeeded. |
+| `.github/workflows/ci.yml` | `ci-required` (`ci-required (${{ matrix.arch }})`) | `ubuntu-24.04` (`x64`), `ubuntu-24.04-arm` (`arm64`) | **Yes** (aggregate required gate job) | Aggregate required check (`if: always()`); runs `python3 tests/ci/test_package_identity.py --build`, `python3 tests/ci/test_package_identity.py --distribution`, `python3 tools/budget_gate.py --self-test`, and `xvfb-run -a -s "-screen 0 1280x900x24" node --test tests/e2e/e2e18_budgets.test.js tests/e2e/e2e14_perf.test.js`, then verifies all `10` [CITED: `.github/workflows/ci.yml`, `ci-required.needs`] upstream `needs` jobs succeeded. |
 | `.github/workflows/secrets.yml` | `secrets` (`secrets (x64)`) | `ubuntu-24.04` (`x64`) | Separate branch-protection check (`Secrets / secrets`; not in `ci-required.needs`) | Downloads `gitleaks` `v8.18.4` (`checksum verified`), runs `python3 tests/fixtures/secrets/gate.py`, `gitleaks detect --config .gitleaks.toml`, `python3 tests/fixtures/secrets/gate.py controls`, and `python3 -m unittest tests/test_gitleaks_config.py`. |
 | `.github/workflows/package.yml` | `linux-package` (`linux-package (${{ matrix.arch }})`) | `ubuntu-24.04` (`x64`), `ubuntu-24.04-arm` (`arm64`) | **No** (standalone packaging workflow on `v*` tags / `push` / `pull_request` / `workflow_dispatch`) | Runs `bash scripts/bootstrap.sh`, `node ui/tools/package.js --verify-install "$MV_PKG_OUT/MetaViewer-linux-${{ matrix.arch }}.tar"`, and `node ui/tools/package.js --smoke "$MV_PKG_OUT/MetaViewer-linux-${{ matrix.arch }}.tar"`. |
 | `.github/workflows/build-other.yml` | `build-other-reference` (`build-other (${{ matrix.os }}, non-blocking)`) | `macos-latest`, `windows-latest` | **No** (`workflow_dispatch` only, `continue-on-error: true`) | Manual UI build reference check on macOS and Windows: runs `npm --prefix ui ci --offline`, `node tools/sync_kit.mjs`, `node tools/sync_kit.mjs --check`, `npm --prefix ui test`, `npm --prefix ui run check`, and `npm --prefix ui run build`. |
@@ -233,7 +238,7 @@ Hosted Ubuntu runners differ from a developer workstation in four ways that I te
      python3 -m unittest tests/ci/test_t7r2c_receipt_identity.py -v
    ```
 
-   Measured result: `10` `[MEASURED: GIT_CONFIG_GLOBAL=/dev/null python3 -m unittest tests/ci/test_t7r2c_receipt_identity.py -v]` tests, `OK`.
+   Historical result at `a768a684`: `10` `[MEASURED: GIT_CONFIG_GLOBAL=/dev/null python3 -m unittest tests/ci/test_t7r2c_receipt_identity.py -v]` tests, `OK`.
 
 2. **Python stdlib-only (`PyYAML` absent):** the `ci-policy`, `laws-contracts`, and `router` jobs can run on system Python 3 without `PyYAML`. All workflow parsers in `tests/ci/` must work with `yaml` blocked (`sys.modules['yaml'] = None`):
 
@@ -241,7 +246,7 @@ Hosted Ubuntu runners differ from a developer workstation in four ways that I te
    GIT_CONFIG_GLOBAL=/dev/null python3 -c "import sys, unittest; sys.modules['yaml']=None; suite=unittest.defaultTestLoader.discover('tests/ci', pattern='test_t7r2c_*.py'); res=unittest.TextTestRunner(verbosity=2).run(suite); sys.exit(0 if res.wasSuccessful() else 1)"
    ```
 
-   Measured result: `41` `[MEASURED: GIT_CONFIG_GLOBAL=/dev/null python3 -c "import sys, unittest; sys.modules['yaml']=None; suite=unittest.defaultTestLoader.discover('tests/ci', pattern='test_t7r2c_*.py'); res=unittest.TextTestRunner(verbosity=2).run(suite); sys.exit(0 if res.wasSuccessful() else 1)"]` tests across `tests/ci/test_t7r2c_*.py`, `OK`.
+   Historical result at `a768a684`: `41` `[MEASURED: GIT_CONFIG_GLOBAL=/dev/null python3 -c "import sys, unittest; sys.modules['yaml']=None; suite=unittest.defaultTestLoader.discover('tests/ci', pattern='test_t7r2c_*.py'); res=unittest.TextTestRunner(verbosity=2).run(suite); sys.exit(0 if res.wasSuccessful() else 1)"]` tests across `tests/ci/test_t7r2c_*.py`, `OK`.
 
 3. **Empty npm and Electron caches (`npm_config_cache`, `ELECTRON_CACHE`, `electron_config_cache`):** offline packaging scripts must fail closed with a deterministic prerequisite diagnostic (`PKG_CLEAN_CI_PREREQ_NPM_CACHE_MISSING` / `PKG_CLEAN_CI_PREREQ_ELECTRON_ZIP_MISSING`) instead of hanging or attempting network fetches when caches are empty:
 
@@ -252,7 +257,7 @@ Hosted Ubuntu runners differ from a developer workstation in four ways that I te
      python3 -m unittest tests/ci/test_fx2_package.py -v
    ```
 
-   Measured result: `4` `[MEASURED: npm_config_cache=/tmp/mv-empty-npm-cache ELECTRON_CACHE=/tmp/mv-empty-electron-cache electron_config_cache=/tmp/mv-empty-electron-cache python3 -m unittest tests/ci/test_fx2_package.py -v]` tests, `OK` (emits `CLEAN_CI_REPRO_PREREQ: PKG_CLEAN_CI_PREREQ_NPM_CACHE_MISSING`).
+   Historical result at `a768a684`: `4` `[MEASURED: npm_config_cache=/tmp/mv-empty-npm-cache ELECTRON_CACHE=/tmp/mv-empty-electron-cache electron_config_cache=/tmp/mv-empty-electron-cache python3 -m unittest tests/ci/test_fx2_package.py -v]` tests, `OK` (emits `CLEAN_CI_REPRO_PREREQ: PKG_CLEAN_CI_PREREQ_NPM_CACHE_MISSING`).
 
 4. **Cross-architecture `GOARCH=amd64` Go vet and compile check on `arm64` hosts:** `daemon-adapter/` includes architecture-specific syscalls and struct fields (`uint64` vs `uint32`), so `tools/gate.sh --leg go` runs both native `go test -race` and `GOARCH=amd64` compilation/vetting:
 
@@ -261,7 +266,7 @@ Hosted Ubuntu runners differ from a developer workstation in four ways that I te
    GOARCH=amd64 go -C daemon-adapter test -run '^$' -exec /bin/true ./...
    ```
 
-   Measured result: `0` `[MEASURED: GOARCH=amd64 go -C daemon-adapter vet ./...]` warnings (`rc=0`) and `7` `[MEASURED: GOARCH=amd64 go -C daemon-adapter test -run '^$' -exec /bin/true ./...]` packages compiled cleanly.
+   Historical result at `a768a684`: `0` `[MEASURED: GOARCH=amd64 go -C daemon-adapter vet ./...]` warnings (`rc=0`) and `7` `[MEASURED: GOARCH=amd64 go -C daemon-adapter test -run '^$' -exec /bin/true ./...]` packages compiled cleanly.
 
 ---
 
@@ -278,7 +283,7 @@ To prevent vacuous green suites, I ship automated mutation and negative-control 
 | E2E cross-routing negative control | `xvfb-run -a -s "-screen 0 1280x900x24" python3 tests/e2e/run.py` | Runs `tests/e2e/e2e1_wall.test.js` with `MV_E2E_CROSS_ROUTE=1` and asserts that `LIVE_WALL_TEST_NAME` (`"wall renders four tiles without cross-routing (AC-02)"`) fails with `E2E_ROUTING`. |
 | Gate fault-injection self-test | `bash tools/gate.sh --self-test` | Injects synthetic failures into each leg of `tools/gate.sh` and asserts the gate exits non-zero (`30` `[MEASURED: bash tools/gate.sh --self-test]` tests in `tools/gate.sh` `GateTests`, `OK`). |
 
-Across a full `bash tools/gate.sh` run, `56` `[MEASURED: bash tools/gate.sh]` mutant-named test cases execute and pass inside the standard legs in addition to the standalone harnesses above.
+In the historical `a768a684` full `bash tools/gate.sh` run, `56` `[MEASURED: bash tools/gate.sh]` mutant-named test cases execute and pass inside the standard legs in addition to the standalone harnesses above.
 
 ---
 

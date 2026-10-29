@@ -107,7 +107,7 @@ I follow law L3 ([LAWS.md](../LAWS.md)): a schema and its positive/negative
 examples land before any producer or consumer, a breaking change opens a new
 contract directory, and old versions stay until no pin uses them.
 `contracts/v0.1/` is untouched; v0.2 is the integrated set (`21` [MEASURED: `ls -1 contracts/v0.2/*.schema.json | wc -l`] v0.2 schemas
-against `10` [MEASURED: `ls -1 contracts/v0.1/*.schema.json | wc -l`] v0.1 schemas, validated against `488` [MEASURED: `ls -1 contracts/examples/v0.2/*.json | wc -l`] v0.2 fixtures and `20` [MEASURED: `ls -1 contracts/examples/*.json | wc -l`] v0.1 fixtures).
+against `10` [MEASURED: `ls -1 contracts/v0.1/*.schema.json | wc -l`] v0.1 schemas, validated against `489` [MEASURED: `ls -1 contracts/examples/v0.2/*.json | wc -l`] v0.2 fixtures and `20` [MEASURED: `ls -1 contracts/examples/*.json | wc -l`] v0.1 fixtures).
 Draft **2020-12**
 is the schema dialect, every object sets `additionalProperties: false`, every
 message value carries a `<name>/v0.2` discriminator const, and `$ref` names a
@@ -167,7 +167,7 @@ I use persistent `vadapt.vserve` when available, accepting the hello only with `
 | Core frame witness | `/dev/shm` prefix, no `..`, per-component symlink walk, `O_NOFOLLOW`, regular file up to 64 MiB, digest match (`core/src/serve/mod.rs`) | A path-shaped string is not authorization; mismatches are refused, never journaled as frames |
 | Electron frame reader | `/dev/shm/` prefix, no `..`, generation ≥ 1, `^[0-9a-f]{64}$` digest, per-surface generation lease, null-digest fail-closed (`ui/electron/frameReader.js`) | Verify before handing bytes to tiles through the frame port (`34/34` [MEASURED] live deliveries verified with `isTrusted=true` and `utilityVerified=true`); paths never cross IPC |
 | vision-engine | Pin `v0.2.0`, commit `3bb54835db8a2e545311cfcc45185a0dfbd9313a` [CITED: deps.lock] | Integrated via `VCorePerceptionAdapter.perceive` and `vadapt.cu_describe` (`agents/metaviewer_agents/perception/`, `tools/gate_g_ai.py`); current-pin live acceptance is unmeasured |
-| wender-agent | Pin `v0.3.0`, commit `41493681a2f4d92aae50c476ed13c219c31a0a02` [CITED: deps.lock] | Integrated via `agents/metaviewer_agents/wender_bridge.py`, `AdmittedExecutor.check_target`, and `tools/gate_g_ai.py` (live acceptance runner: `tests/e2e/e2e1_slice/demo_agent_drive.py`; current-pin live result unmeasured); the agent loop (`agents/metaviewer_agents/verify.py`, `agents/metaviewer_agents/planner.py`) can use `wender-agent` as planner via `MV_WENDER_PLANNER_CMD`, resolving the checkout through `deps.lock` (`resolve_locked_component("wender-agent")`) and refusing `commit_mismatch` before spawn |
+| wender-agent | Pin `v0.3.0`, commit `b95277804ee112fc8ab213c1e6148d752427e3eb` [CITED: deps.lock] | Integrated via `agents/metaviewer_agents/wender_bridge.py`, `AdmittedExecutor.check_target`, and `tools/gate_g_ai.py` (live acceptance runner: `tests/e2e/e2e1_slice/demo_agent_drive.py`; current-pin live result unmeasured); the agent loop (`agents/metaviewer_agents/verify.py`, `agents/metaviewer_agents/planner.py`) can use `wender-agent` as planner via `MV_WENDER_PLANNER_CMD`, resolving the checkout through `deps.lock` (`resolve_locked_component("wender-agent")`) and refusing `commit_mismatch` before spawn |
 | OpenSuperficies | Pin `os-cu-w9-mv1`, commit `a9ac1ac8543872b428990ea23fa2629cd0a6d1d5` [CITED: deps.lock] | Integrated via `daemon-adapter/` invoking `srf-identity-surface` and `srf-holdings-capsule` under `MV_SRF_BIN_DIR` (historical live21/live22 evidence is scoped above; current-pin live result unmeasured) |
 | Holdings lane | `lane_submit` verb plus `state_sha256` witness in v0.2 contracts; strict hex/tick `GroundTruth` parse (`daemon-adapter/internal/capsule/capsule.go`), core `holdings_lane` witness join (`core/src/serve/tools.rs`), and `input` + `state_sha256_change` planner (`agents/metaviewer_agents/planner.py`) | Bind lane to capsule, admit `holdings_lane` ground truth for the dispatched unsettled proposal, join the witness, and recompute receipts through `verify_receipt` (`core/src/serve/tools.rs`); digest-only capsule output still settles unverified with reason |
 
@@ -488,18 +488,17 @@ selector runs all `11` [MEASURED: `bash tools/gate.sh`] leaf legs (`manifests`,
 directory with valid/invalid fixture pairs per schema. The `unit` and `agents`
 legs run the Python suites in `tests/` and `agents/tests/`; Rust (`fmt`,
 `clippy`, `test`), Go (`vet`, `test -race`, and `GOARCH=amd64` cross-checks),
-and Node (`npm ci --offline`, `npm test`, `npm run check:types`, `npm run build`,
+and Node (`npm ci --offline`, `npm test`, `npm run check`, `npm run build`,
 and headless Electron `ui-smoke`) run under `rust`, `go`, `ui`, and `ui-smoke`;
 `js` verifies the staged `capsule-ui-kit` lock; `perf` enforces the core and
-renderer budget gates; and `laws` enforces the repository laws. CI runs `28`
-[MEASURED: `grep -E '^  [a-z0-9-]+:$' .github/workflows/*.yml | wc -l`] jobs
+renderer budget gates; and `laws` enforces the repository laws. I count `20` jobs [MEASURED: two-space keys below `jobs:` in each workflow] (`28` raw two-space keys including triggers [MEASURED: `grep -E '^  [a-z0-9-]+:$' .github/workflows/*.yml | wc -l`])
 across `6` [MEASURED: `ls -1 .github/workflows/*.yml | wc -l`] workflows on
 pushes, pull requests, and manual runs
 ([.github/workflows/ci.yml](../.github/workflows/ci.yml), `secrets.yml`,
 `package.yml`, `build-other.yml`, `volume.yml`, `assembly.yml`). I require the pinned Wender planner in the assembly smoke [CITED: `.github/workflows/assembly.yml`]. On a live `mv-live-1` capsule,
-`node tests/e2e/e2e1_slice/index.js --live` exercises `11` [MEASURED: `grep -c 'assert' tests/e2e/e2e1_slice/live.py`]
+`node tests/e2e/e2e1_slice/index.js --live` exercises `16` [MEASURED: `grep -c 'assert' tests/e2e/e2e1_slice/live.py`]
 live assertions (`tests/e2e/e2e1_slice/live.py`), `python3 tools/gate_g_ai.py --surface mv-live-1`
-exercises `8` [MEASURED: `grep -c '"A[1-8]"' tools/gate_g_ai.py`] AI-loop assertions,
+exercises `8` [MEASURED: `grep -c "'A[1-8]'" tools/gate_g_ai.py`] AI-loop assertions,
 and I use `python3 tests/e2e/e2e1_slice/demo_agent_drive.py` to verify the narrated agent-drive checkpoints; I have not rerun that live acceptance at the current pins ([DEMO_AGENT_SCRIPT.md](DEMO_AGENT_SCRIPT.md)).
 Exact suites, commands, and measured counts live in [TESTING.md](TESTING.md). Assembly
 negatives (stale-frame and cross-display controls, replay refusal, crash
