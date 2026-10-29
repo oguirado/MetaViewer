@@ -1275,6 +1275,40 @@ def validate_frozen_dependencies(root, environment=None):
                     (result.stderr + result.stdout)[-4000:])
 
 
+# [TARGET, unit decision] Manifest-only exports have no Git index; validate their
+# root lock. In checkouts, enumerate the index (including worktree .git files),
+# never an untracked build tree. Index/read/parse failures must fail admission.
+def validate_release_locks(root, version):
+    members = {'metaviewer-core'}
+    workspace = tomllib.loads((root / 'Cargo.toml').read_text())['workspace']
+    excluded = {path for pattern in workspace.get('exclude', []) for path in root.glob(pattern)}
+    for pattern in workspace.get('members', []):
+        for member in root.glob(pattern):
+            if member not in excluded:
+                package = tomllib.loads((member / 'Cargo.toml').read_text())['package']
+                members.add(package['name'])
+    locks = {'Cargo.lock'}
+    if (root / '.git').exists():
+        result = subprocess.run(['git', '-C', str(root), 'ls-files', '--cached', '-z'],
+                                capture_output=True, timeout=30)
+        require(result.returncode == 0, 'LOCK_INDEX_ERROR: cannot enumerate tracked Cargo.lock files')
+        locks.update(name for name in os.fsdecode(result.stdout).split('\0')
+                     if name and Path(name).name == 'Cargo.lock')
+    for name in sorted(locks):
+        try:
+            packages = tomllib.loads((root / name).read_text()).get('package', [])
+            require(isinstance(packages, list) and all(isinstance(p, dict) for p in packages),
+                    'invalid package table')
+        except (OSError, ValueError) as error:
+            raise InvalidMetadata(f'LOCK_METADATA_ERROR: {name}: {error}') from error
+        for package in packages:
+            if (package.get('name') == 'metaviewer-core' or
+                    package.get('name') in members and 'source' not in package):
+                require(package.get('version') == version,
+                        f'LOCK_VERSION_DRIFT: {name}: {package.get("name")}: '
+                        f'expected {version}, found {package.get("version")!r}')
+
+
 def validate_manifests(root, environment=None):
     version = (root / 'VERSION').read_text().strip()
     require(bool(version), 'VERSION: missing release version')
@@ -1319,6 +1353,7 @@ def validate_manifests(root, environment=None):
                         'scripts': SCRIPTS}
     require(json.dumps(package, sort_keys=True) == json.dumps(wanted, sort_keys=True),
             'package.json: metadata drift')
+    validate_release_locks(root, version)
     validate_frozen_dependencies(root, environment)
     patterns = (root / '.gitignore').read_text().splitlines()
     require(all(pattern in patterns for pattern in (*ORIGINAL_IGNORE, *REQUIRED_IGNORE)),

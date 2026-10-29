@@ -4,8 +4,10 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -100,6 +102,78 @@ class DependencyAdmissionTests(unittest.TestCase):
         path = self.root / 'Cargo.lock'
         path.write_text(path.read_text().replace('version = "1.0.229"', 'version = "1.0.228"'))
         self.gate(1, 'Cargo.lock')
+
+    def git(self, *args):
+        result = subprocess.run(['git', '-C', str(self.root), *args],
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_mut_second_lock(self):
+        """MUT-SECOND-LOCK: inspect tracked working bytes, not only the root/index."""
+        self.git('init', '-q')
+        path = self.root / 'tests' / 'supervisor Música' / 'Cargo.lock'
+        path.parent.mkdir(parents=True)
+        version = (self.root / 'VERSION').read_text().strip()
+        clean = ('version = 4\n[[package]]\nname = "metaviewer-core"\n'
+                 f'version = "{version}"\n')
+        path.write_text(clean)
+        self.git('add', '.')
+        self.gate()
+        path.write_text(clean.replace(version, '0.0.0'))
+        self.gate(1, 'LOCK_VERSION_DRIFT: tests/supervisor Música/Cargo.lock')
+        path.write_text(clean)
+        self.gate()
+
+    def test_untracked_lock_and_unrelated_registry_package(self):
+        self.git('init', '-q')
+        self.git('add', '.')
+        path = self.root / 'scratch' / 'Cargo.lock'
+        path.parent.mkdir()
+        path.write_text('[[package]]\nname = "metaviewer-core"\nversion = "0.0.0"\n')
+        self.gate()
+        path.write_text('[[package]]\nname = "serde"\nversion = "0.0.0"\n'
+                        'source = "registry+https://example.invalid/index"\n')
+        self.git('add', 'scratch/Cargo.lock')
+        self.gate()
+
+    def test_tracked_lock_parse_and_missing_file_fail_closed(self):
+        self.git('init', '-q')
+        path = self.root / 'secondary' / 'Cargo.lock'
+        path.parent.mkdir()
+        path.write_text('[[package]]\nname = "unrelated"\nversion = "0.0.0"\n')
+        self.git('add', '.')
+        path.write_text('invalid = [')
+        self.gate(1, 'LOCK_METADATA_ERROR: secondary/Cargo.lock')
+        path.unlink()
+        self.gate(1, 'LOCK_METADATA_ERROR: secondary/Cargo.lock')
+
+    def test_other_workspace_path_package_and_registry_namesake(self):
+        source = (ROOT / 'tools/gate.sh').read_text().split("<<'PY'\n", 1)[1]
+        source = source.rsplit('\nsys.exit(main())', 1)[0]
+        namespace = {'__name__': 'release_lock_fixture'}
+        with patch.object(sys, 'argv', ['gate.sh', str(self.root), 'manifests']):
+            exec(compile(source, str(ROOT / 'tools/gate.sh'), 'exec'), namespace)
+        manifest = self.root / 'Cargo.toml'
+        manifest.write_text(manifest.read_text().replace('members = ["core"]',
+                                                        'members = ["core", "extra-*"]'))
+        member = self.root / 'extra-member'
+        member.mkdir()
+        (member / 'Cargo.toml').write_text('[package]\nname = "workspace-helper"\nversion = "0.2.0"\n')
+        self.git('init', '-q')
+        path = self.root / 'secondary' / 'Cargo.lock'
+        path.parent.mkdir()
+        package = '[[package]]\nname = "workspace-helper"\nversion = "0.0.0"\n'
+        path.write_text(package + 'source = "registry+https://example.invalid/index"\n')
+        self.git('add', '.')
+        validate = namespace['validate_release_locks']
+        version = (self.root / 'VERSION').read_text().strip()
+        validate(self.root, version)
+        path.write_text(package)
+        with self.assertRaisesRegex(namespace['InvalidMetadata'],
+                                    'LOCK_VERSION_DRIFT: secondary/Cargo.lock: workspace-helper'):
+            validate(self.root, version)
+        path.write_text(package.replace('0.0.0', version))
+        validate(self.root, version)
 
 
 if __name__ == '__main__':
