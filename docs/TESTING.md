@@ -289,3 +289,30 @@ Two independent external testers reviewed the repository across three adversaria
 - **Round 1:** audited early contract schemas, daemon-adapter process lifecycle, and local gate coverage; surfaced missing negative controls and cross-architecture `GOARCH=amd64` build checks.
 - **Round 2:** audited hosted-CI parity (`GIT_CONFIG_GLOBAL=/dev/null`, stdlib-only Python without `PyYAML`, offline packaging prerequisites), Electron security (`contextIsolation`, `sandbox`, preload surface), and multi-slot isolation (`ac06_multislot.test.js`).
 - **Round 3:** audited production renderer frame delivery (`frame_port/v1`, `frame_delivery/v0.2`, and `frame_ack/v0.2`), `nested_depth` (`0` / `1` / `>= 2` refusal) on `surface_request/v0.2`, QA anchors retail gating (`MV_E2E_LIVE=1` in `ui/electron/qaAnchors.js`), capture state refresh (`MvRecordingPanel.vue`), and documentation/test-count parity (`tests/test_docs_presence.py`).
+
+## Opt-in assembly web acceptance
+
+Run `node --test tests/e2e/asm_web_live_hosted.test.js` for the hosted dry-run
+and AX-skip mutation control. The native runner is Python beside `g_ai_stack.py`
+to reuse its ownership and wire harness. It stays inert unless `MV_LIVE_WEB=1`,
+`MV_E2E_LIVE=1`, and `MV_SRF_LIVE_PROFILE=mv-live-1` are explicit. Supply all
+`requireLive` environment keys documented by `tests/e2e/e2e1_slice/index.js`,
+plus the pinned `MV_WENDER_ROOT` and `VQA_VE_ROOT` checkouts. With the identity
+unallocated, run `python3 tests/e2e/e2e1_slice/asm_web_live.py`. The conductor
+runs this live command; hosted CI must leave `MV_LIVE_WEB` unset.
+
+The runner creates one owned browser capsule, asserts network down before local
+fixture navigation, and retains one perception client across tasks. Optional
+`MV_WENDER_PLANNER_CMD` is a JSON argv using the existing custody-bound click
+protocol; otherwise it uses the pinned G-AI state shim and named targets.
+Typing is deterministic against the focused field; table reading admits no
+input. Runtime blob links bind the flow fixtures without network access
+`[TARGET, unit decision]`. Stdout reports task budgets, measured stage latencies,
+frame/state digests, AX proofs, receipts, replay and cleanup. Evidence files
+(frames, journal/archive, wire and report JSON) remain in the printed private
+temporary evidence directory outside the repository. Failure retains available
+evidence and returns nonzero. The native run reuses `MV_E2E_VERIFY_BIN` or builds
+the existing receipt verifier offline with tools from PATH and `CARGO_TARGET_DIR`;
+the `propose` latency includes admission and native input settlement. Run both
+the dry-run and full gate in foreground
+`systemd-run --user --scope -q -p MemoryMax=8G -p MemorySwapMax=0` scopes.

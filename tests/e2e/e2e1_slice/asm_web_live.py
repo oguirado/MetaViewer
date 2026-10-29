@@ -1,0 +1,552 @@
+"""Opt-in assembly web acceptance; stdout JSON, retained evidence outside the repo.
+
+[TARGET, unit decision] Reuse the G-AI session and pinned Wender state shim.
+The optional MV_WENDER_PLANNER_CMD plans custody-bound clicks; deterministic
+typing and the read-only table report use the same pinned state. A single
+VCore client survives every tick. Runtime blob links bind the local flow pages
+without a server. Hosted RPC substitutes only the backend, never task checks.
+"""
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import signal
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+import uuid
+from urllib.parse import quote
+
+sys.dont_write_bytecode = True
+ROOT = Path(__file__).resolve().parents[3]
+PAGES = ROOT / 'tests/e2e/asm_web_pages'
+BUDGETS = {'T1': 8, 'T2': 12, 'T3': 0}
+EXPECTED = {'T1': ['EMPTY', 'Hello, Ada Lovelace'],
+            'T2': ['FLOW_STEP_2_CONFIRMED', 'FLOW_STAGE_A_READY'],
+            'T3': ['auth-gateway', 'eu-central', '14', 'ledger-core', 'us-east',
+                   '27', 'stream-index', 'ap-north', '41']}
+REQUIRED_ENV = ('MV_E2E_CORE_BIN', 'MV_E2E_ADAPTER_BIN', 'MV_E2E_REPLAY_BIN',
+                'MV_SRF_BIN_DIR', 'MV_SRF_LIVE_PROFILE', 'MV_SRF_LIVE_RAM_ROOT',
+                'MV_SRF_STATE_DIR', 'SRF_IDENTITY_STORE_ROOT', 'SRF_PROXY_REGISTRY')
+
+
+class Failure(RuntimeError):
+    def __init__(self, message, code='E2E_WITNESS'):
+        self.code = code
+        super().__init__(message)
+
+
+def require(condition, message, code='E2E_WITNESS'):
+    if not condition:
+        raise Failure(message, code)
+
+
+def digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'),
+                                    ensure_ascii=False).encode()).hexdigest()
+
+
+def fixture(page):
+    html = (PAGES / (page + '.html')).read_text()
+    require("default-src 'none'" in html, 'fixture CSP missing')
+    require(not re.search(r'https?://|\bfetch\s*\(|XMLHttpRequest|WebSocket|Math\.random|'
+                          r'\bDate\b|performance\.now', html), 'fixture is not offline/deterministic')
+    return html
+
+
+def page_url(page):
+    html = fixture(page)
+    if page == 'flow_a':
+        # Finite local A -> B -> A chain; the final A is the original fixture.
+        back = '<script>document.getElementById("back-btn").href=URL.createObjectURL('
+        back += 'new Blob([' + json.dumps(html).replace('</script', '<\\/script')
+        back += '],{type:"text/html"}));</script>'
+        second = fixture('flow_b') + back
+        html += '<script>document.getElementById("next-btn").href=URL.createObjectURL('
+        html += 'new Blob([' + json.dumps(second).replace('</script', '<\\/script')
+        html += '],{type:"text/html"}));</script>'
+    return 'data:text/html;charset=utf-8,' + quote(html, safe='')
+
+
+def texts(tree):
+    return [str(n.get('text') or n.get('name') or '')
+            for n in tree.get('elements', tree.get('nodes', []))]
+
+
+def prove_ax(task, sensed, tree, expected):
+    rows = texts(tree)
+    require(all(token in rows for token in expected), 'AX readback differs from expected page')
+    names = [n.get('name', '') for n in sensed['state']['nodes']]
+    require(all(token in names for token in expected), 'AX differs from perceived Wender state')
+    task['ax_proofs'].append(dict(expected=expected, texts=rows,
+                                  frame_ref=sensed['frame'], tree_sha256=digest(tree)))
+
+
+def seal_task(task):
+    # Independent completion gate: deleting the final prove_ax call cannot pass.
+    required = EXPECTED[task['task']]
+    proven = [x for proof in task['ax_proofs'] for x in proof['expected']
+              if x in proof['texts']]
+    require(proven == required, 'mandatory final AX proof absent')
+    require(task['steps'] <= BUDGETS[task['task']], 'task action budget exceeded')
+    task['verdict'] = 'PASS'
+
+
+class HostedRPC:
+    """Test-only pipe protocol. It never loads native/live modules."""
+    def call(self, stage, **args):
+        print(json.dumps(dict(rpc=stage, args=args)), flush=True)
+        reply = json.loads(sys.stdin.readline())
+        if 'error' in reply:
+            raise Failure(reply['error'], reply.get('code', 'E2E_WITNESS'))
+        return reply['result']
+
+
+def run(backend, report):
+    def stage(task, name, **args):
+        started = time.monotonic_ns()
+        try:
+            return backend.call(name, **args)
+        finally:
+            task['latency_ms'].setdefault(name, []).append(
+                dict(value=(time.monotonic_ns() - started) / 1e6, provenance='MEASURED'))
+
+    def sense(task):
+        observed = stage(task, 'observe', timeout_ms=5000)
+        result = stage(task, 'perceive', observed=observed)
+        require(result['table']['frame_sha256'] == result['frame']['sha256'], 'C2 frame mismatch')
+        witness = result['frame_witness']
+        require(witness.get('sha256') == result['frame']['sha256'] and
+                witness.get('generation') == result['frame']['generation'] and
+                witness.get('surface_id') == result['frame']['surface_id'] and
+                type(witness.get('bytes')) is int and witness['bytes'] > 0 and witness.get('artifact'),
+                'frame byte witness absent or uncorrelated')
+        result['state'] = stage(task, 'state', sensed=result)
+        task['observations'].append(dict(frame_ref=result['frame'],
+                                        element_table_sha256=digest(result['table']),
+                                        wender_state_sha256=digest(result['state']),
+                                        perception_transport=result.get('transport', 'hosted'),
+                                        frame_witness=witness))
+        return result
+
+    def step(task, goal):
+        require(task['steps'] < BUDGETS[task['task']], 'action budget exhausted')
+        # Retry admission refusals only; dispatched actions are never replayed.
+        for attempt in range(3):
+            sensed = sense(task)
+            planned = stage(task, 'plan', sensed=sensed, goal=goal)
+            try:
+                admitted = stage(task, 'propose', sensed=sensed, plan=planned, max_ms=30000)
+            except Failure as error:
+                if error.code == 'STALE_FRAME' and attempt < 2:
+                    continue
+                raise
+            task['steps'] += 1
+            verified = stage(task, 'wait_verify', admitted=admitted, timeout_ms=30000)
+            receipt = verified['receipt']
+            require(verified['status'] == 'verified' and receipt.get('verified') is True,
+                    'receipt is not verified')
+            require(verified['focus_verified'] is True and verified['input_mono_ns'] > 0,
+                    'native focus/input proof missing')
+            require(verified.get('receipt_binding_negative_control') == 'PASS',
+                    'receipt binding negative control missing')
+            require(receipt['proposal_id'] == admitted['proposal_id'] and
+                    receipt['after_frame']['surface_id'] == sensed['frame']['surface_id'] and
+                    verified['frame_sha256'] == receipt['after_frame']['sha256'] and
+                    verified['input_mono_ns'] == admitted['native_evidence']['input_mono_ns'],
+                    'receipt binding mismatch')
+            task['action_receipts'].append(verified)
+            return
+        raise Failure('stale admission exhausted')
+
+    try:
+        report['ownership'] = backend.call('start')
+        require(report['ownership']['profile'] == 'mv-live-1' and
+                len(report['ownership']['capsules']) == 1, 'one owned capsule required')
+        report['net'] = backend.call('net_down')
+        require(report['net'].get('network') == 'down', 'network down not proven')
+        for task_id, page in [('T1', 'form'), ('T2', 'flow_a'), ('T3', 'table')]:
+            task = dict(task=task_id, verdict='FAIL', steps=0, latency_ms={},
+                        observations=[], action_receipts=[], ax_proofs=[])
+            report['tasks'].append(task)
+            url = page_url(page)
+            task['page'] = dict(file=str(PAGES / (page + '.html')), data_url_length=len(url),
+                                source_sha256=hashlib.sha256(fixture(page).encode()).hexdigest())
+            task['fixture_setup'] = stage(task, 'navigate', page=page, url=url)
+            if task_id == 'T1':
+                initial = sense(task)
+                prove_ax(task, initial, stage(task, 'ax'), ['EMPTY'])
+                # EMPTY is proved above without an empty submit whose unchanged
+                # pixels could not satisfy a changed_region expectation.
+                for goal in ['click:Operator Name', 'type:Ada Lovelace', 'click:Submit Greeting']:
+                    step(task, goal)
+                expected = ['Hello, Ada Lovelace']
+            elif task_id == 'T2':
+                step(task, 'click:Continue to Step 2')
+                middle = sense(task)
+                prove_ax(task, middle, stage(task, 'ax'), ['FLOW_STEP_2_CONFIRMED'])
+                step(task, 'click:Return to Step 1')
+                expected = ['FLOW_STAGE_A_READY']
+            else:
+                expected = EXPECTED['T3']
+            final = sense(task)
+            if task_id == 'T3':
+                task['read_plan'] = stage(task, 'plan', sensed=final, goal='read:table')
+            final_tree = stage(task, 'ax')
+            prove_ax(task, final, final_tree, expected)
+            if task_id == 'T3':
+                cells = [x for x in texts(final_tree) if x in expected]
+                require(cells == expected, 'table document order mismatch')
+                task['reported_cell'] = dict(row=1, col=2, value=cells[5])
+                require(task['read_plan'].get('value') == cells[5], 'read plan differs from AX cell')
+            seal_task(task)
+        report['replay_probe'] = backend.call('replay')
+        replay = report['replay_probe']
+        require(replay.get('status') == 'PASS' and type(replay.get('corrupt_rc')) is int and
+                replay['corrupt_rc'] != 0 and type(replay.get('committed_records')) is int and
+                replay['committed_records'] > 0 and
+                re.fullmatch(r'[0-9a-f]{64}', replay.get('digest', '')),
+                'replay negative control absent')
+    except Exception as error:
+        report['error'] = dict(code=getattr(error, 'code', 'E2E_WITNESS'), detail=str(error))
+    finally:
+        try:
+            report.update(backend.call('cleanup'))
+        except Exception as error:
+            report['cleanup_error'] = str(error)
+    complete = (not report.get('error') and not report.get('cleanup_error') and
+                len(report['tasks']) == 3 and all(t['verdict'] == 'PASS' for t in report['tasks']) and
+                report.get('container_cleanup') == 'PASS' and
+                report.get('process_cleanup', {}).get('temporary_tree_absent') is True and
+                report.get('process_cleanup', {}).get('socket_absent') is True and
+                report.get('process_cleanup', {}).get('status') == 'PASS' and
+                report.get('ram_cleanup', {}).get('ram_absent') is True and
+                report.get('ram_cleanup', {}).get('status') == 'PASS' and
+                bool(report.get('wire_evidence')))
+    report['status'] = 'DONE' if complete else 'BLOCKED'
+    return 0 if complete else 1
+
+
+class LiveBackend:
+    def __init__(self):
+        sys.path.insert(0, str(ROOT / 'agents'))
+        sys.path.insert(0, str(ROOT / 'tools'))
+        import gate_g_ai as glue
+        import g_ai_stack
+        import live
+        import stack
+        from metaviewer_agents import tools
+        self.glue, self.live, self.stack, self.tools = glue, live, stack, tools
+
+        class TimedSession(g_ai_stack.Session):
+            def request(session, body, expect, *, timeout_ms):
+                # The shared wrapper ignores timeout_ms. Bound the entire wire
+                # request here, including unrelated inbound events.
+                deadline = time.monotonic() + timeout_ms / 1000
+                recv = session.agent.recv
+                prior = session.agent._timeout_s
+
+                def bounded_recv():
+                    left = deadline - time.monotonic()
+                    if left <= 0:
+                        raise TimeoutError('live web request deadline exceeded')
+                    session.agent._timeout_s = left
+                    return recv()
+
+                session.agent.recv = bounded_recv
+                session.agent._timeout_s = timeout_ms / 1000
+                try:
+                    return super().request(body, expect, timeout_ms=timeout_ms)
+                finally:
+                    session.agent.recv = recv
+                    session.agent._timeout_s = prior
+
+        self.session = TimedSession()
+        self.adapter = None
+        self.pending = {}
+        self.observations = {}
+        require(not Path(tempfile.gettempdir()).resolve().is_relative_to(ROOT),
+                'temporary evidence root must be outside repo', 'E2E_PREREQ')
+        self.evidence = Path(tempfile.mkdtemp(prefix='mv-web-evidence-'))
+        require(not self.evidence.resolve().is_relative_to(ROOT), 'evidence must be outside repo')
+
+    def call(self, stage, **args):
+        return getattr(self, 'op_' + stage)(**args)
+
+    def op_start(self):
+        from metaviewer_agents.perception.deps_lock import resolve_locked_component
+        from metaviewer_agents.perception.vcore import VCorePerceptionAdapter
+        self.roots = {name: resolve_locked_component(name) for name in ('wender-agent', 'vision-engine')}
+        require(not self.live.profile_containers('mv-live-1'), 'profile already allocated', 'E2E_PREREQ')
+        state = Path(os.environ['MV_SRF_STATE_DIR']).stat()
+        require(state.st_uid == os.getuid() and stat.S_IMODE(state.st_mode) == 0o700,
+                'state directory must be current-uid mode 0700', 'E2E_PREREQ')
+        self.adapter = VCorePerceptionAdapter(self.roots['vision-engine'], timeout=30,
+                                             verify_lock=True, pin_python=True,
+                                             fallback_oneshot=False)
+        # Reuse the public-core verifier and its same-receipt negative controls.
+        # No verifier implementation or alternate component ABI is invented.
+        configured_verifier = os.environ.get('MV_E2E_VERIFY_BIN')
+        if configured_verifier:
+            self.verifier = configured_verifier
+        else:
+            code = ("const fs=require('node:fs'); const {compileRust}=require(process.argv[1]);"
+                    "process.stdout.write(compileRust(process.argv[2],fs.readFileSync(process.argv[3],'utf8')));")
+            env = dict(os.environ)
+            env.setdefault('CARGO_TARGET_DIR', str(Path.home() / '.cache/cargo-target' / ('mv-' + ROOT.name)))
+            build = subprocess.run([os.environ.get('NODE', 'node'), '-e', code,
+                                    str(ROOT / 'tests/e2e/core-driver.js'), str(self.evidence),
+                                    str(Path(__file__).with_name('verify-receipt.rs'))],
+                                   env=env, capture_output=True, text=True, timeout=180)
+            require(build.returncode == 0, 'offline receipt verifier build failed: ' + build.stderr[-2000:],
+                    'E2E_PREREQ')
+            self.verifier = build.stdout.strip()
+        self.session.start()
+        return dict(profile='mv-live-1', capsules=self.session.state['capsules'],
+                    surface_id=self.session.surface_id)
+
+    def op_net_down(self):
+        binary = Path(os.environ['MV_SRF_BIN_DIR']) / 'srf-identity-surface'
+        value = json.loads(self.stack.checked([binary, 'net', 'down', '--state-dir',
+                                               os.environ['MV_SRF_STATE_DIR']]))
+        # CLI emits the value directly, as documented by its emit function.
+        require(value.get('network') == 'down', 'native network down failed')
+        return value
+
+    def retain(self, frame):
+        pixels = self.glue.checked_frame(frame).data
+        require((self.session.archive / 'artifacts' / frame['sha256']).read_bytes() == pixels,
+                'retained core frame differs from live pixels')
+        target = self.evidence / (frame['sha256'] + '.rgb')
+        target.write_bytes(pixels)
+        return dict(sha256=frame['sha256'], generation=frame['generation'], bytes=len(pixels),
+                    surface_id=frame['surface_id'], artifact=str(target))
+
+    def op_observe(self, timeout_ms):
+        s = self.session
+        s.frame = self.stack.settle_latest_frame(s.ui, s.surface_id, s.frame, s.report)
+        obs = self.tools.observe(s.surface_id, client=s, timeout_ms=timeout_ms)
+        self.observations[obs['frame_ref']['sha256']] = obs
+        return obs
+
+    def op_perceive(self, observed):
+        from metaviewer_agents.perception.vcore import project_element_table
+        frame = observed['frame_ref']
+        vision = self.adapter.perceive(frame)
+        observed['vision'] = vision
+        self.observations[frame['sha256']] = observed
+        return dict(frame=frame, table=project_element_table(frame, vision),
+                    frame_witness=self.retain(frame), transport=self.adapter.last_transport)
+
+    def op_state(self, sensed):
+        return self.glue.wender_state(self.roots['wender-agent'], sensed['table'], self.op_ax())
+
+    def op_plan(self, sensed, goal):
+        from metaviewer_agents.executor import AdmittedExecutor
+        from metaviewer_agents.wender_bridge import WenderSubprocessAdapter
+        frame, state = sensed['frame'], sensed['state']
+        expectation = dict(type='changed_region', bbox=dict(x=0, y=0, w=frame['width'], h=frame['height']))
+        kind, value = goal.split(':', 1)
+        if kind == 'read':
+            cells = [n.get('name') for n in state['nodes'] if n.get('name') in EXPECTED['T3']]
+            require(cells == EXPECTED['T3'], 'Wender table plan order mismatch')
+            return dict(row=1, col=2, value=cells[5], state_sha256=digest(state))
+        if kind == 'type':
+            # The immediately prior verified click focused this custody-bound field.
+            require(any(n.get('name') == 'Operator Name' and n['id'] in state['actionable']
+                        for n in state['nodes']), 'typing target absent')
+            return dict(action=dict(type='type', text=value), expectation=expectation)
+        configured = os.environ.get('MV_WENDER_PLANNER_CMD')
+        if configured:
+            planner = WenderSubprocessAdapter(command=json.loads(configured),
+                                              wender_root=self.roots['wender-agent'],
+                                              timeout=30, verify_lock=True)
+            action, expectation, planned, target = planner.plan_step(
+                self.observations[frame['sha256']], sensed['table'], 'Click ' + value)
+            require(digest(planned) == digest(state), 'planner changed observed state')
+            require(target.get('name') == value, 'planner chose wrong task target')
+        else:
+            targets = [n for n in state['nodes'] if n.get('name') == value and n['id'] in state['actionable']]
+            require(len(targets) == 1, 'unique Wender target absent: ' + value)
+            target = targets[0]
+            AdmittedExecutor.check_target(target, latest=state['nodes'], frame=frame)
+            x, y, w, h = target['box']
+            action = dict(type='click', x=x + w // 2, y=y + h // 2, button='left')
+        return dict(action=action, expectation=expectation)
+
+    def op_propose(self, sensed, plan, max_ms):
+        from metaviewer_agents.verify import build_proposal
+        proposal = build_proposal(sensed['frame'], proposal_id='asm-web-' + uuid.uuid4().hex,
+                                  action=plan['action'], expectation=plan['expectation'], max_ms=max_ms)
+        try:
+            verdict = self.tools.propose(proposal, client=self.session, timeout_ms=max_ms)
+        except self.tools.ToolRefusal as error:
+            raise Failure(str(error), error.reason_code) from error
+        receipt = self.session.receive(self.session.agent, lambda b:
+                                       b.get('schema') == 'action_receipt/v0.2' and
+                                       b.get('proposal_id') == proposal['proposal_id'])
+        self.pending[proposal['proposal_id']] = (proposal, sensed['frame'], receipt)
+        return dict(proposal_id=proposal['proposal_id'], verdict=verdict,
+                    native_evidence=receipt['native_evidence'])
+
+    def op_wait_verify(self, admitted, timeout_ms):
+        proposal, before, native = self.pending.pop(admitted['proposal_id'])
+        receipt = self.tools.wait_verify(proposal['proposal_id'], proposal['expectation'], timeout_ms,
+                                         client=self.session, surface_id=self.session.surface_id)
+        require(receipt.get('input_mono_ns') == native['native_evidence']['input_mono_ns'],
+                'native input clock differs')
+        self.retain(receipt['after_frame'])
+        context = self.evidence / (proposal['proposal_id'] + '.json')
+        context.write_text(json.dumps(dict(proposal=proposal, before=before, receipt=native)))
+        check = self.live.run(self.session.report, [self.verifier, context, self.session.archive / 'artifacts'])
+        require(check.returncode == 0, 'same-receipt binding negative control failed: ' + check.stderr[-2000:])
+        negative = json.loads(check.stdout)
+        require(negative.get('status') == 'PASS' and negative['baseline']['verified'] is True and
+                negative['different_surface']['verified'] is False and
+                negative['stale_generation']['verified'] is False,
+                'receipt binding negative control accepted')
+        return dict(status='verified', receipt=dict(receipt), focus_verified=receipt.get('focus_verified'),
+                    input_mono_ns=receipt.get('input_mono_ns'), frame_sha256=receipt.get('frame_sha256'),
+                    receipt_binding_negative_control=negative['status'], verify_negative_control=negative)
+
+    def op_navigate(self, page, url):
+        setup = []
+        require(self.op_net_down().get('network') == 'down', 'net down before navigation')
+        before = self.op_observe(5000)['frame_ref']
+        for action in [dict(type='key', keys=['ctrl', 'l']), dict(type='type', text=url),
+                       dict(type='key', keys=['Return'])]:
+            for attempt in range(3):
+                obs = self.op_observe(5000)
+                frame = obs['frame_ref']
+                plan = dict(action=action, expectation=dict(type='changed_region', bbox=dict(
+                    x=0, y=0, w=frame['width'], h=frame['height'])))
+                try:
+                    admitted = self.op_propose(dict(frame=frame), plan, 30000)
+                except Failure as error:
+                    if error.code == 'STALE_FRAME' and attempt < 2:
+                        continue
+                    raise
+                verified = self.op_wait_verify(admitted, 30000)
+                setup.append(dict(verdict=admitted['verdict'], verify_verdict=verified))
+                break
+        marker = dict(form='EMPTY', flow_a='FLOW_STAGE_A_READY', table='auth-gateway')[page]
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            after = self.op_observe(5000)['frame_ref']
+            if after['sha256'] != before['sha256'] and marker in texts(self.op_ax()):
+                return setup
+            time.sleep(0.05)
+        raise Failure('fixture navigation did not produce pixels and AX marker')
+
+    def op_ax(self):
+        return self.session.native_tree()
+
+    def op_replay(self):
+        self.op_observe(5000)  # Completed observe barrier, then freeze owned writers.
+        for proc in self.session.processes:
+            proc.send_signal(signal.SIGSTOP)
+        try:
+            self.live.replay_probe(self.session.report, self.session.archive,
+                                   os.environ['MV_E2E_REPLAY_BIN'], self.session.work)
+            # Preserve journal and retained artifacts before removing runtime state.
+            shutil.copytree(self.session.archive, self.evidence / 'archive')
+        finally:
+            for proc in self.session.processes:
+                proc.send_signal(signal.SIGCONT)
+        return self.session.report['replay_probe']
+
+    def op_cleanup(self):
+        # Deliberately do not call Session.__exit__/stack.cleanup: those union
+        # profile-wide containers into ownership. Only this create's names qualify.
+        errors = []
+
+        def attempt(label, action):
+            try:
+                return action()
+            except Exception as error:
+                errors.append(label + ': ' + str(error))
+                return None
+
+        perception_process = getattr(self.adapter, '_vserve_proc', None)
+        if self.adapter is not None:
+            attempt('perception', self.adapter.close)
+        s = self.session
+        owned = set((s.state or {}).get('capsules', []))
+        for peer in s.peers:
+            attempt('peer', peer.close)
+        if s.state:
+            attempt('process inventory', lambda: self.stack.remember_tree(s.state, s.root))
+        inventory = attempt('container inventory', self.stack.inventory)
+        for name in sorted(owned & (inventory or set())):
+            if not self.live.CAPSULE_ID_RE.fullmatch(name):
+                errors.append('unsafe capsule cleanup name')
+                continue
+            attempt('capsule stop', lambda: self.stack.checked([
+                Path(os.environ['MV_SRF_BIN_DIR']) / 'srf-identity-surface',
+                'stop', '--container', name, '--state-dir', os.environ['MV_SRF_STATE_DIR']]))
+        if s.state:
+            for sig in (signal.SIGTERM, signal.SIGKILL):
+                for row in reversed(s.state['pids']):
+                    attempt('process stop', lambda: self.stack.signal_record(row, sig))
+                deadline = time.monotonic() + 5
+                while any(self.stack.alive(r) for r in s.state['pids']) and time.monotonic() < deadline:
+                    time.sleep(0.05)
+            for proc in s.processes:
+                attempt('process wait', lambda: proc.wait(timeout=10))
+        processes_absent = (not s.state or not any(self.stack.alive(r) for r in s.state['pids']))
+        processes_absent = processes_absent and (perception_process is None or perception_process.poll() is not None)
+        active = attempt('final container inventory', self.stack.inventory)
+        container_absent = active is not None and not owned & active
+        ram = None
+        if active is not None:
+            ram = attempt('RAM', lambda: self.live.cleanup_capsule_ram(
+                Path(os.environ['MV_SRF_LIVE_RAM_ROOT']), owned,
+                (s.state or {}).get('published', []), active))
+        if s.temp is not None and processes_absent and container_absent and ram and ram['ram_absent']:
+            socket = s.work / 'runtime/metaviewer/core.sock'
+            attempt('temporary tree', s.temp.cleanup)
+            absent, socket_absent = not s.root.exists(), not socket.exists()
+        else:
+            absent = socket_absent = s.temp is None
+        wire = s.report.get('wire_evidence', [])
+        (self.evidence / 'wire.json').write_text(json.dumps(wire))
+        return dict(container_cleanup='PASS' if container_absent else 'FAIL',
+                    cleanup_errors=errors,
+                    process_cleanup=dict(status='PASS' if absent and socket_absent and processes_absent and not errors else 'FAIL',
+                    temporary_tree_absent=absent, socket_absent=socket_absent),
+                    ram_cleanup=ram or dict(status='FAIL', ram_absent=False),
+                    wire_evidence=wire, evidence_directory=str(self.evidence))
+
+
+def main():
+    hosted = '--hosted-rpc' in sys.argv
+    if not hosted and os.environ.get('MV_LIVE_WEB') != '1':
+        print(json.dumps(dict(status='SKIPPED', reason='MV_LIVE_WEB=1 required')))
+        return 0
+    report = dict(schema='metaviewer.asm-web-live/v1', mode='hosted' if hosted else 'live', tasks=[])
+    try:
+        if not hosted:
+            require(os.environ.get('MV_E2E_LIVE') == '1' and
+                    os.environ.get('MV_SRF_LIVE_PROFILE') == 'mv-live-1',
+                    'explicit live gate and mv-live-1 identity required', 'E2E_PREREQ')
+            for key in REQUIRED_ENV:
+                require(bool(os.environ.get(key)), 'missing ' + key, 'E2E_PREREQ')
+        backend = HostedRPC() if hosted else LiveBackend()
+        rc = run(backend, report)
+    except Exception as error:
+        report.update(status='BLOCKED', error=dict(code=getattr(error, 'code', 'E2E_PREREQ'), detail=str(error)))
+        rc = 1
+    if not hosted and report.get('evidence_directory'):
+        target = Path(report['evidence_directory']) / 'report.json'
+        report['report_file'] = str(target)
+        target.write_text(json.dumps(report, sort_keys=True))
+    print(json.dumps(dict(report=report) if hosted else report, sort_keys=True), flush=True)
+    return rc
+
+
+if __name__ == '__main__':
+    sys.exit(main())
