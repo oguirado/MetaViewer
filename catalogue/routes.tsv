@@ -108,6 +108,10 @@ testvis-383820f1bf91	agents/tests/test_vision_ram_path.py
 test_w2_fx_agents.py	agents/tests/test_w2_fx_agents.py
 test_wender_bridge.py	agents/tests/test_wender_bridge.py
 test_width_probe.py	agents/tests/test_width_probe.py
+test_ws3_muse_fd.py	agents/tests/test_ws3_muse_fd.py
+testws3-2bbbb8ab2b11	agents/tests/test_ws3_muse_identity.py
+testws3-f00ce2c95fe6	agents/tests/test_ws3_untracked_payload.py
+testws3-5a6f7cc82936	agents/tests/test_ws3_wheel_record.py
 protocol.json	catalogue/protocol.json
 actionp-0ef0ddb499b4	contracts/examples/action_proposal.invalid.schema.json
 actionp-215c1416bbcf	contracts/examples/action_proposal.valid.json
@@ -1590,6 +1594,9 @@ w3human-ae6e9f701b17	ui/test/w3-human-input.test.js
 wall.test.js	ui/test/wall.test.js
 wireaut-1b048c3b3100	ui/test/wire-authority.test.js
 wirepre-95bfb7c6fbc5	ui/test/wire-preload-origin.test.js
+ws3capt-dbcad7f79ea5	ui/test/ws3-capture-accessor.test.mjs
+ws3capt-e2bce1be507d	ui/test/ws3-capture-call-bounds.test.mjs
+ws3capt-fa30f768e517	ui/test/ws3-capture-state.test.mjs
 package.js	ui/tools/package.js
 testpac-77161fb71059	ui/tools/test_package_clean_install.mjs
 tsconfig.json	ui/tsconfig.json
