@@ -80,14 +80,16 @@ func (m *Manager) monitorLiveness(ctx context.Context, ticks <-chan time.Time, e
 			}
 			m.mu.Unlock()
 
+			before := m.clock()
 			probeCtx, cancel := context.WithTimeout(ctx, m.cfg.LivenessTimeout)
-			_, err := m.execute(probeCtx, profile, args, nil)
+			out, err := m.execute(probeCtx, profile, args, nil)
+			finished := m.clock()
 			probeErr := probeCtx.Err()
 			cancel()
 
 			m.mu.Lock()
 			after, ok := m.bindings[id]
-			if !ok || after.Surface.State != "active" || m.destroying[id] || after.Container != current.Container || after.RunID != current.RunID {
+			if !ok || after.Surface.State != "active" || m.destroying[id] || after.Container != current.Container || after.RunID != current.RunID || after.recoveryProbe != current.recoveryProbe {
 				delete(misses, id)
 				m.mu.Unlock()
 				continue
@@ -96,6 +98,15 @@ func (m *Manager) monitorLiveness(ctx context.Context, ticks <-chan time.Time, e
 				misses[id]++
 			} else {
 				delete(misses, id)
+			}
+			// A successful, bound frame is positive evidence only for the recovery
+			// token captured before this probe; unknown or malformed replies stay closed.
+			if after.recoveryProbe != nil && err == nil && probeErr == nil && ctx.Err() == nil {
+				var f NativeFrame
+				if cli.ParseLine(out, m.cfg.MaxOutputBytes, &f) == nil && f.Seq > 0 && f.Generation == after.Container && f.Width > 0 && f.Height > 0 && f.Width <= after.Surface.Geometry.W && f.Height <= after.Surface.Geometry.H && digest.MatchString(f.SHA256RGB24) && under(after.FramesRoot, f.Path) && f.CaptureMonoNS >= m.cfg.OriginNS && f.CaptureMonoNS >= before && f.CaptureMonoNS <= finished && finished >= before && ((after.Window == "" && f.Window == nil && f.Width == after.Surface.Geometry.W && f.Height == after.Surface.Geometry.H) || (f.Window != nil && f.Window.ID == after.Window && f.Window.W == f.Width && f.Window.H == f.Height)) {
+					after.recoveryProbe = nil
+					m.bindings[id] = after
+				}
 			}
 			var ev json.RawMessage
 			if misses[id] >= m.cfg.LivenessMisses {

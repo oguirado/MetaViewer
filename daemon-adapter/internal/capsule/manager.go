@@ -93,6 +93,9 @@ type Binding struct {
 	Surface                                                   Surface
 	Container, RunID, Window, FramesRoot, NativeKind, Program string
 	ConfirmedAbsent                                           bool
+	// [TARGET, unit decision] Delivery rollback requires a fresh positive probe.
+	// A distinct token prevents a probe started before rollback from reopening I/O.
+	recoveryProbe *bool
 }
 type NativeFrame struct {
 	Path            string          `json:"path"`
@@ -641,6 +644,8 @@ func (m *Manager) destroy(ctx context.Context, r Request, version string) ([]jso
 }
 
 // stopNative requires mu and preserves the same removal proof for rollback and destroy.
+// An unavailable stop settles only previously proven absence; Holdings also
+// requires its independent ownership/removal verifier. Unknown outcomes retain the slot.
 func (m *Manager) stopNative(ctx context.Context, b Binding) error {
 	out, e := m.execute(ctx, m.cfg.Profiles[b.Surface.ProfileID], []string{"stop", "--container", b.Container}, nil)
 	if e != nil {
@@ -685,7 +690,7 @@ func (m *Manager) stopNative(ctx context.Context, b Binding) error {
 func (m *Manager) Capture(ctx context.Context, id string) (Binding, NativeFrame, error) {
 	m.mu.Lock()
 	b, ok := m.bindings[id]
-	if !ok || b.Surface.State != "active" || m.destroying[id] {
+	if !ok || b.Surface.State != "active" || b.recoveryProbe != nil || m.destroying[id] {
 		m.mu.Unlock()
 		return Binding{}, NativeFrame{}, fault("surface", "capture requires an active surface")
 	}
@@ -706,7 +711,7 @@ func (m *Manager) Capture(ctx context.Context, id string) (Binding, NativeFrame,
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	current, ok := m.bindings[id]
-	if !ok || current.Surface.State != "active" || m.destroying[id] || current.Container != b.Container || current.RunID != b.RunID {
+	if !ok || current.Surface.State != "active" || current.recoveryProbe != nil || m.destroying[id] || current.Container != b.Container || current.RunID != b.RunID {
 		return Binding{}, NativeFrame{}, fault("surface", "capture requires an active surface")
 	}
 	if m.hasPending(id) || m.inputEpochs[id] != epoch {
@@ -785,6 +790,7 @@ func (m *Manager) CompleteLost(id string, delivered bool) {
 		if b, ok := m.bindings[id]; ok && b.Surface.State == "lost" && b.ConfirmedAbsent && !m.destroying[id] {
 			b.Surface.State = "active"
 			b.ConfirmedAbsent = false
+			b.recoveryProbe = new(bool)
 			m.bindings[id] = b
 		}
 	}
@@ -832,7 +838,7 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 		return nil, fault("input", "invalid input origin")
 	}
 	b, ok := m.bindings[q.SurfaceID]
-	if !ok || b.Surface.State != "active" || q.ProposalID == "" || len(q.ProposalID) > 128 {
+	if !ok || b.Surface.State != "active" || b.recoveryProbe != nil || q.ProposalID == "" || len(q.ProposalID) > 128 {
 		return nil, fault("surface", "input identity required")
 	}
 	if m.destroying[q.SurfaceID] {
@@ -917,6 +923,7 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 			}
 		}
 	}
+	dispatched := b
 	before := m.clock()
 	m.mu.Unlock()
 	out, e := m.execute(run, m.cfg.Profiles[b.Surface.ProfileID], args, stdin)
@@ -926,7 +933,7 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 		return nil, fault("SURFACE_NOT_AGENT_CONTROLLED", "input cancelled by control takeover")
 	}
 	b, ok = m.bindings[q.SurfaceID]
-	if !ok || b.Surface.State != "active" {
+	if !ok || b.Surface.State != "active" || b.recoveryProbe != nil || m.destroying[q.SurfaceID] || b.Container != dispatched.Container || b.RunID != dispatched.RunID {
 		return nil, fault("surface", "surface lost during input")
 	}
 	if b.Surface.Control != origin {
@@ -1085,7 +1092,7 @@ func (m *Manager) SubscriptionBinding(id string) (Binding, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	b, ok := m.bindings[id]
-	if !ok || b.Surface.State != "active" || m.destroying[id] {
+	if !ok || b.Surface.State != "active" || b.recoveryProbe != nil || m.destroying[id] {
 		return Binding{}, fault("surface", "subscription requires an active surface")
 	}
 	return b, nil
