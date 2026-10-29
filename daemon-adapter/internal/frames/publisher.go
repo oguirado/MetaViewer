@@ -16,6 +16,9 @@ package frames
 // [TARGET, unit decision] The configured producer root may be group-writable
 // (OpenSuperficies uses 0775); world writes are refused. Output stays 0700
 // and source files retain owner, mode, no-follow, immutability and hash checks.
+// [TARGET, unit decision] Native digest equality may skip source IO only after a
+// successful publication with identical geometry; any failed attempt disables the
+// gate until another verified publication. Skipped counts digest-gated polls.
 import (
 	"bytes"
 	"crypto/rand"
@@ -70,6 +73,7 @@ type PublishConfig struct {
 
 // StageDurations records the per-frame execution time of each pipeline stage.
 type StageDurations struct {
+	Skipped uint64
 	Capture time.Duration
 	Decode  time.Duration
 	Hash    time.Duration
@@ -77,6 +81,7 @@ type StageDurations struct {
 	Total   time.Duration
 }
 type publication struct {
+	skipReady bool
 	native    string
 	seq       uint64
 	refs      []Ref
@@ -93,6 +98,7 @@ type Publisher struct {
 	onRelease    []func(string)
 	closed       bool
 	now          func() time.Time
+	sourceRead   func(int, string, string) ([]byte, error)
 }
 
 func (p *Publisher) addReleaseHook(fn func(string)) {
@@ -385,7 +391,17 @@ func decodeAndVerifyPNG(encoded []byte, width, height int, expectedSHA string) (
 	return raw, sha, decodeDur, hashDur, nil
 }
 
-func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame, deduplicate bool, isCancelled func() bool) (Ref, bool, StageDurations, error) {
+func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame, deduplicate bool, isCancelled func() bool) (result Ref, changed bool, timing StageDurations, resultErr error) {
+	defer func() {
+		if resultErr != nil {
+			p.mu.Lock()
+			if old, ok := p.surfaces[id]; ok {
+				old.skipReady = false
+				p.surfaces[id] = old
+			}
+			p.mu.Unlock()
+		}
+	}()
 	tStart := time.Now()
 	var stages StageDurations
 	p.mu.Lock()
@@ -406,13 +422,33 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 		hasPrev = true
 		prevEncoded = old.encoded
 	}
+	if deduplicate && old.skipReady && hasPrev && prevLast.SHA256 == f.SHA256RGB24 && prevLast.Width == uint32(f.Width) && prevLast.Height == uint32(f.Height) {
+		old.seq = f.Seq
+		now := p.nowTime()
+		if len(old.published) == len(old.refs) {
+			old.published[len(old.published)-1] = now
+		}
+		err := p.evictExpiredFloor(&old, now)
+		p.surfaces[id] = old
+		p.mu.Unlock()
+		if err != nil {
+			return Ref{}, false, stages, err
+		}
+		stages.Skipped = 1
+		stages.Total = time.Since(tStart)
+		return prevLast, false, stages, nil
+	}
 	rootFd, e := syscall.Dup(int(p.root.Fd()))
 	p.mu.Unlock()
 	if e != nil {
 		return Ref{}, false, stages, e
 	}
 
-	encoded, e := p.readSource(rootFd, b.FramesRoot, f.Path)
+	read := p.sourceRead
+	if read == nil {
+		read = p.readSource
+	}
+	encoded, e := read(rootFd, b.FramesRoot, f.Path)
 	if e != nil {
 		return Ref{}, false, stages, e
 	}
@@ -445,6 +481,7 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 		last := old.refs[len(old.refs)-1]
 		old.seq = f.Seq
 		old.encoded = encoded
+		old.skipReady = true
 		if len(old.published) == len(old.refs) {
 			old.published[len(old.published)-1] = now
 		}
@@ -678,7 +715,7 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 	ref := Ref{Schema: "frame_ref/v0.2", SurfaceID: id, Generation: p.next, Tick: f.Seq, TsNS: f.TSNS, Width: uint32(f.Width), Height: uint32(f.Height), Format: "rgb24", RAMWSPath: path, SHA256: sha, CaptureUS: f.CaptureUS}
 	refs = append(refs, ref)
 	published = append(published, now)
-	p.surfaces[id] = publication{native: f.Generation, seq: f.Seq, refs: refs, published: published, encoded: encoded}
+	p.surfaces[id] = publication{skipReady: true, native: f.Generation, seq: f.Seq, refs: refs, published: published, encoded: encoded}
 	stages.Total = time.Since(tStart)
 	if stages.Total > stages.Decode+stages.Hash {
 		stages.Write = stages.Total - stages.Decode - stages.Hash
