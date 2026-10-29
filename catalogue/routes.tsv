@@ -765,6 +765,9 @@ bounds_test.go	daemon-adapter/internal/capsule/bounds_test.go
 capsule.go	daemon-adapter/internal/capsule/capsule.go
 capsule_test.go	daemon-adapter/internal/capsule/capsule_test.go
 clock_test.go	daemon-adapter/internal/capsule/clock_test.go
+egress.go	daemon-adapter/internal/capsule/egress.go
+egress_policy.go	daemon-adapter/internal/capsule/egress_policy.go
+egress_test.go	daemon-adapter/internal/capsule/egress_test.go
 exitmatrix_test.go	daemon-adapter/internal/capsule/exitmatrix_test.go
 external_lost_test.go	daemon-adapter/internal/capsule/external_lost_test.go
 fuzz_test.go	daemon-adapter/internal/capsule/fuzz_test.go
@@ -820,6 +823,7 @@ hello_pin_test.go	daemon-adapter/internal/daemon/hello_pin_test.go
 holding-5c5526783e2d	daemon-adapter/internal/daemon/holdings_witness_wire_test.go
 inputse-0f34da3b3f23	daemon-adapter/internal/daemon/input_settlement_test.go
 nestedi-f72c7f52a5e1	daemon-adapter/internal/daemon/nested_isolation_test.go
+netenvi-9c2abf147155	daemon-adapter/internal/daemon/net_environment_test.go
 nv_authority_test.go	daemon-adapter/internal/daemon/nv_authority_test.go
 nvenvir-8ce129bf69f1	daemon-adapter/internal/daemon/nv_environment_test.go
 nv_handoff_test.go	daemon-adapter/internal/daemon/nv_handoff_test.go
