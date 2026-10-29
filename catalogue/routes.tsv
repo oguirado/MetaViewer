@@ -1070,6 +1070,7 @@ slice-fixture.mjs	tests/e2e/slice-fixture.mjs
 slice-main.cjs	tests/e2e/slice-main.cjs
 slice-native.py	tests/e2e/slice-native.py
 slice.html	tests/e2e/slice.html
+testasm-3dc2f23130cc	tests/e2e/test_asm_web_live_harden.py
 test_live_stack.py	tests/e2e/test_live_stack.py
 testvol-fa0645094684	tests/e2e/test_volume_bootstrap.py
 volumeb-fd6fcd819519	tests/e2e/volume_bootstrap.test.js
