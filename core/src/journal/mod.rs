@@ -1644,7 +1644,14 @@ impl Journal {
         if !safe_component(&state.session_id) || state.core_seq != 0 {
             return Err(JournalError::Invalid);
         }
+        let mut created_state_parents = Vec::new();
         if !state_dir.exists() {
+            let mut created = state_dir;
+            while !created.exists() {
+                let parent = created.parent().ok_or(JournalError::Invalid)?;
+                created_state_parents.push(parent.to_path_buf());
+                created = parent;
+            }
             let ancestor = state_dir
                 .ancestors()
                 .find(|p| p.exists())
@@ -1739,7 +1746,13 @@ impl Journal {
         };
         remove_committed_surface_witnesses(&journal.root);
         checkpoint(&journal.root, &journal.closure())?;
-        sync_dir(&sessions)?;
+        // Persist the directory entries all the way through the first existing
+        // ancestor, including sessions in state_dir on first-ever creation.
+        sync_dir_traced(&sessions, &journal.root, "..")?;
+        sync_dir_traced(state_dir, &journal.root, "../..")?;
+        for parent in created_state_parents {
+            sync_dir_traced(&parent, &journal.root, "state-parent")?;
+        }
         Ok(journal)
     }
     fn closure(&self) -> Checkpoint {
@@ -3535,6 +3548,37 @@ fn verify_prefix_and_classify_tail(
                 if saw_torn {
                     break;
                 }
+                // Tail records are uncommitted, but must satisfy the same state
+                // and witness checks before they can veto rollback as valid data.
+                let valid_tail = (|| -> Option<()> {
+                    let envelope_raw = json(&ev.envelope).ok()?;
+                    let decoded =
+                        crate::decode_envelope(std::str::from_utf8(&envelope_raw).ok()?).ok()?;
+                    if decoded != audit_envelope(&rec, &header.session_id)
+                        || required_witness(&ev.input, &ev.outcome)
+                            .is_some_and(|hash| !ev.witnesses.iter().any(|w| w.sha256 == hash))
+                    {
+                        return None;
+                    }
+                    archive_budget = archive_budget.checked_add(ev_bytes.len() as u64)?;
+                    if archive_budget > MAX_BYTES {
+                        return None;
+                    }
+                    let outcome = state.apply(&ev.input).ok()?;
+                    if outcome != ev.outcome || rec.kind != event_kind(&ev.input, &outcome) {
+                        return None;
+                    }
+                    let snapshot = state.snapshot().ok()?;
+                    if snapshot != canonical_bytes(&ev.state).ok()? {
+                        return None;
+                    }
+                    archive_budget = archive_budget.checked_add(snapshot.len() as u64)?;
+                    (archive_budget <= MAX_BYTES).then_some(())
+                })();
+                if valid_tail.is_none() {
+                    saw_torn = true;
+                    break;
+                }
                 if matches!(ev.input, Input::Frame { .. }) {
                     if non_frame_tail_records > 0 {
                         return None;
@@ -3660,6 +3704,7 @@ fn try_rollback_uncommitted_tail(
             }
         }
     }
+    candidates.sort_by_key(|a| std::cmp::Reverse(a.count));
     for cp in candidates {
         if let Some((prefix_end_offset, committed_witnesses)) =
             verify_prefix_and_classify_tail(path, root, &cp)
@@ -5383,6 +5428,12 @@ mod directory_tests {
             release_test_sync_hold(&session);
             drop(j);
 
+            // [TARGET, unit decision] Make the torn-next fixture explicit: a
+            // valid newer checkpoint must now win over the older committed one.
+            let next_path = session.join("checkpoint.next");
+            let next = fs::read(&next_path).unwrap();
+            fs::write(&next_path, &next[..next.len() / 2]).unwrap();
+
             // First recover crashes at `step`.
             fail_next_recovery_at_step(&session, step);
             assert_eq!(
@@ -6989,4 +7040,13 @@ mod directory_tests {
         drop(j);
         fs::remove_dir_all(root).unwrap();
     }
+}
+
+// Keep regression fixtures beside integration tests while reusing private,
+// test-only crash injection and sync tracing without exposing product APIs.
+#[cfg(test)]
+mod recovery_fix {
+    use super::*;
+    include!("../../tests/journal_recovery_fix.rs");
+    journal_recovery_regressions!();
 }
