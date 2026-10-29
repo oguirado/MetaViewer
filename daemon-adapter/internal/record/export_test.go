@@ -344,6 +344,16 @@ func TestExportTypedDestinationFailures(t *testing.T) {
 		if _, err := m.Poll(ctx, "poll", "r"); err != nil {
 			t.Fatal(err)
 		}
+		if os.Geteuid() == 0 {
+			// Namespace root bypasses DAC; a regular-file parent is uncreatable for every UID.
+			t.Log("euid=0: exercise ENOTDIR destination refusal instead of DAC denial")
+			if err := os.Remove(roDir); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(roDir, []byte("obstruction"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
 		if err := os.Chmod(roDir, 0500); err != nil {
 			t.Fatal(err)
 		}

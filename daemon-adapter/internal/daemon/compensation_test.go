@@ -210,12 +210,19 @@ func TestCreateCompensationReleasesPartiallyPublishedFrameLease(t *testing.T) {
 	if err != nil || len(peerOutDirs) != 1 {
 		t.Fatalf("peer output dir: %v %v", peerOutDirs, err)
 	}
-	// Make the peer publisher's output directory read-only so eviction Unlinkat fails
-	// AFTER the new surface's raw .rgb frame has already been linked in p's output dir.
-	if err := os.Chmod(peerOutDirs[0], 0500); err != nil {
-		t.Fatal(err)
+	// Unlinkat without AT_REMOVEDIR rejects a directory even as namespace root.
+	peerFiles, err := filepath.Glob(filepath.Join(peerOutDirs[0], "*.rgb"))
+	if err != nil || len(peerFiles) != 3 {
+		t.Fatalf("peer files: %v %v", peerFiles, err)
 	}
-	defer os.Chmod(peerOutDirs[0], 0700)
+	for _, path := range peerFiles {
+		if err := os.Rename(path, path+".saved"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(path, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	createPNG := filepath.Join(root, "demo-run/frames/w1/f.png")
 	createSHA := writeCompTestPNG(t, createPNG, color.NRGBA{R: 200, A: 255}, color.NRGBA{B: 100, A: 255})
@@ -271,11 +278,16 @@ func TestCreateCompensationReleasesPartiallyPublishedFrameLease(t *testing.T) {
 		t.Fatalf("partially published raw frame file leaked in output dir: %v %v", orphaned, err)
 	}
 
-	// Negative control: once peer output dir permissions are restored, normal create succeeds,
-	// evicts the oldest peer frame to stay within the 18-byte budget, and retains its published file on disk.
-	if err := os.Chmod(peerOutDirs[0], 0700); err != nil {
-		t.Fatal(err)
+	// Negative control: restore the peer files; eviction and normal create succeed.
+	for _, path := range peerFiles {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(path+".saved", path); err != nil {
+			t.Fatal(err)
+		}
 	}
+
 	r.calls = nil
 	events, err = h(context.Background(), createEnv)
 	if err != nil || len(events) != 2 {

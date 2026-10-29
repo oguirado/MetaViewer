@@ -660,6 +660,7 @@ async function runProductionFrameJourney({
             });
             lastSample = sample;
             if (
+              currentDiag?.preload?.framesReceived === gen &&
               currentDiag?.main?.deliveriesPosted >= gen &&
               currentDiag?.main?.acksReceived >= gen &&
               currentDiag?.main?.lastAck?.frameGeneration === gen &&
@@ -944,6 +945,7 @@ async function runProductionFrameJourney({
           const sample = await callProbeControl(ctlSock, { op: 'sampleSlot', selector: wallSlotSelector });
           lastSample = sample;
           if (
+            currentDiag?.preload?.framesReceived === 7 &&
             currentDiag?.main?.deliveriesPosted >= 7 &&
             currentDiag?.main?.acksReceived >= 7 &&
             currentDiag?.main?.acksByOutcome?.PRESENTED === basePresented + 4 &&
@@ -1077,6 +1079,7 @@ test('W2-FRAME-LIVE-DIAG: MV_FRAME_DIAG is off by default, adds no window.metavi
     assert.deepEqual(Object.keys(api).sort(), [
       'authority',
       'capture',
+      'frames',
       'input',
       'load',
       'loadSettings',
@@ -1092,6 +1095,7 @@ test('W2-FRAME-LIVE-DIAG: MV_FRAME_DIAG is off by default, adds no window.metavi
       'propose',
       'subscribeFrames',
     ]);
+    assert.deepEqual(Object.keys(api.frames), ['reportDiag']);
     assert.equal(invocations.length, 0);
   } finally {
     await rm(root, { recursive: true, force: true });

@@ -304,14 +304,20 @@ func TestUnregisterSurfaceReportsRemoveErrorAccountsReservationAndRetries(t *tes
 	}
 	ownedPath := ev[0].RAMPath
 
-	// Drop write permission on the manager root so os.Remove fails during UnregisterSurface.
-	if err := os.Chmod(m.root, 0500); err != nil {
+	// A nonempty directory cannot be unlinked, including as namespace root.
+	savedPath := ownedPath + ".saved"
+	if err := os.Rename(ownedPath, savedPath); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(m.root, 0700) })
+	if err := os.Mkdir(ownedPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ownedPath, "obstruction"), []byte("retain"), 0600); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := m.UnregisterSurface("s1"); err == nil {
-		t.Fatal("expected UnregisterSurface to return Remove error when root is non-writable")
+		t.Fatal("expected UnregisterSurface to return Remove error for a nonempty directory")
 	}
 	if _, err := os.Stat(ownedPath); err != nil {
 		t.Fatalf("expected owned copy to still exist after failed unlink: %v", err)
@@ -323,10 +329,14 @@ func TestUnregisterSurfaceReportsRemoveErrorAccountsReservationAndRetries(t *tes
 		t.Fatalf("expected BUDGET_EXCEEDED while failed unlink retains reservation, got %+v", overEvents)
 	}
 
-	// Restore write permission and retry UnregisterSurface: copy is unlinked and reservation freed.
-	if err := os.Chmod(m.root, 0700); err != nil {
+	// Restore the owned file and retry the same unlink and reservation release.
+	if err := os.RemoveAll(ownedPath); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Rename(savedPath, ownedPath); err != nil {
+		t.Fatal(err)
+	}
+
 	if err := m.UnregisterSurface("s1"); err != nil {
 		t.Fatalf("retry UnregisterSurface failed: %v", err)
 	}
