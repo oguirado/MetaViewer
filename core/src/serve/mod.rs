@@ -1671,7 +1671,13 @@ impl Server {
             .endpoint
             .clone();
         if !self.connections.contains_key(&daemon) {
-            return self.proposal_refusal(env, tool, Refusal::Policy, boundary);
+            return self.proposal_refusal(
+                env,
+                tool,
+                &proposal.proposal_id,
+                Refusal::Policy,
+                boundary,
+            );
         }
         let request = AdmissionRequest::decode(
             &serde_json::to_string(env)?,

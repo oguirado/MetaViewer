@@ -206,9 +206,8 @@ fn m1_missing_daemon_refuses_once_and_connected_control_dispatches() {
         let mut agent = h.peer("agent").await;
         let before = h.events().len();
         agent.send(proposal("offline", 1)).await;
-        // Current generic refusal correlates by msg_id; the separate finding
-        // below specifies the proposal-id contract.
-        agent.verdict("agent-2", "refused", Some("POLICY")).await;
+        // Refusals echo the proposal id, distinct from the envelope msg_id.
+        agent.verdict("offline", "refused", Some("POLICY")).await;
         let events = h.events();
         assert_eq!(events.len(), before + 1);
         assert_eq!(events.last().unwrap()["input"]["event"], "Refuse");
@@ -544,7 +543,6 @@ fn m3_capture_publishes_recording_state_for_frames_and_stop() {
 }
 
 #[test]
-#[ignore = "FINDING TESTS-CORESERVE-M1-CORRELATION"]
 fn missing_daemon_refusal_must_echo_proposal_id() {
     support::run(async {
         let h = Harness::new(false).await;

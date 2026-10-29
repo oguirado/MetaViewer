@@ -1032,13 +1032,14 @@ impl Server {
         &mut self,
         env: &Envelope,
         tool: Option<&str>,
+        proposal: &str,
         reason: Refusal,
         boundary: Witness,
     ) -> Result<()> {
         let out = self
             .authority
             .apply_with_witnesses(Input::Refuse { reason }, vec![boundary])?;
-        self.proposal_dispatch_refusal(env, tool, &env.msg_id, reason, out.core_seq)
+        self.proposal_dispatch_refusal(env, tool, proposal, reason, out.core_seq)
     }
     pub(super) fn proposal_dispatch_refusal(
         &mut self,
