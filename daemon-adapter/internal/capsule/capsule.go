@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"metaviewer/daemon-adapter/internal/cli"
+	"metaviewer/daemon-adapter/internal/ipc"
 	"strconv"
 	"unicode/utf8"
 )
@@ -17,6 +18,12 @@ import (
 const MaxHoldingsTick uint64 = 9007199254740991
 const MaxHoldingsStateBytes int = 1 << 20
 const maxHoldingsStateDepth int = 64
+
+// ValidateJSON rejects containers at depth >= MaxDepth, starting at zero.
+// Allow state containers through depth 64 plus the outer CLI object and optional
+// observation wrapper (2 levels), then add 1 for the exclusive bound. The state
+// validator remains responsible for enforcing the core's depth > 64 rule.
+const maxHoldingsObserveDepth = maxHoldingsStateDepth + 2 + 1
 
 type GroundTruth struct {
 	Source      string `json:"source"`
@@ -300,6 +307,17 @@ func ParseHoldingsObserve(raw []byte, maxBytes int) (*GroundTruth, error) {
 	line := bytes.TrimSuffix(raw, []byte{'\n'})
 	trimmedLine := bytes.TrimSpace(line)
 	if len(trimmedLine) == 0 || bytes.ContainsAny(line, "\r\n") || trimmedLine[0] != '{' {
+		return fail("CLI output is not a bounded closed JSON object")
+	}
+	// Check every object before struct decoding can discard repeated keys,
+	// including observation wrappers and objects inside elements arrays.
+	// Allow the state depth budget through either CLI envelope;
+	// line-sized string/key/item limits preserve large Holdings states that IPC
+	// transport defaults would reject. State-specific limits apply below.
+	bound := len(trimmedLine)
+	if err := ipc.ValidateJSON(trimmedLine, ipc.Config{
+		MaxDepth: maxHoldingsObserveDepth, MaxStringBytes: bound, MaxKeys: bound, MaxArrayItems: bound,
+	}); err != nil {
 		return fail("CLI output is not a bounded closed JSON object")
 	}
 	var obs struct {
