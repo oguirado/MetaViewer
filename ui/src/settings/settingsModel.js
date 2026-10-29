@@ -11,10 +11,13 @@
  * typed refusal with a fixed literal reason so host error text never
  * reaches the screen.
  *
- * The store ignores unknown keys on load: the host's closed key set is the
- * fail-closed contract, so saves carry only the four known keys. Missing or
- * invalid values fall back to defaults per value, so a valid scheme survives
- * an invalid density and vice versa. Saves are leading-edge debounced so
+ * Load refuses as a whole since mvui35 (the earlier "load ignores unknown
+ * keys" design is reversed): stored text with an unknown key, or a wallFps /
+ * recordingFps number written with a fraction or exponent (30.0, 3e1),
+ * refuses, so the store and boot paths fall back to FULL defaults, matching
+ * the host. Invalid values of known keys still fall back to defaults per
+ * value, so a valid scheme survives an invalid density and vice versa.
+ * Saves carry only the four known keys and are leading-edge debounced so
  * bursts collapse to an immediate write plus one last-wins trailing write.
  *
  * @module settings/settingsModel
@@ -79,8 +82,7 @@ export const MV_DEFAULT_RECORDING_FPS = 3;
 
 /**
  * The closed host settings key set, in canonical save order. Every save
- * carries exactly these keys; unknown keys refuse on save and are ignored
- * on load.
+ * carries exactly these keys; unknown keys refuse on save and on load.
  * @type {ReadonlyArray<string>}
  */
 export const MV_SETTINGS_KEYS = Object.freeze(['scheme', 'density', 'wallFps', 'recordingFps']);
@@ -135,6 +137,94 @@ function isPlainObject(value) {
   }
   const proto = Object.getPrototypeOf(value);
   return proto === Object.prototype || proto === null;
+}
+
+/**
+ * Top-level fps keys whose JSON text lexeme must be a plain integer.
+ * @type {ReadonlyArray<string>}
+ */
+const FPS_LEXEME_KEYS = Object.freeze(['wallFps', 'recordingFps']);
+
+/**
+ * @param {string} source One JSON number source slice.
+ * @returns {boolean} True for a plain integer lexeme (no fraction/exponent).
+ */
+function isIntegerLexeme(source) {
+  return /^-?\d+$/.test(source.trim());
+}
+
+/**
+ * Parse settings JSON text, capturing the source lexeme of every top-level
+ * wallFps / recordingFps number through the JSON.parse reviver context
+ * (`context.source`, node v24 and Chromium). Only entries whose holder is
+ * the parsed root count, so nested objects can never poison the reading;
+ * no whole-text pattern is used, so string values cannot fool it either.
+ * @param {string} text
+ * @returns {{ candidate: unknown, lexemes: Map<string, Array<string|null>> }}
+ *   A null lexeme means the engine did not provide the source text.
+ */
+function parseSettingsText(text) {
+  /** @type {Array<{ holder: unknown, key: string, source: string|null }>} */
+  const hits = [];
+  const candidate = JSON.parse(
+    text,
+    /**
+     * @this {unknown} Holder of the current key.
+     * @param {string} key
+     * @param {unknown} value
+     * @param {{ source?: unknown }} [context] Reviver context; source is the raw slice.
+     * @returns {unknown}
+     */
+    function (key, value, context) {
+      if ((key === 'wallFps' || key === 'recordingFps') && typeof value === 'number') {
+        const offered = context === undefined ? undefined : context.source;
+        const source = typeof offered === 'string' ? offered : null;
+        hits.push({ holder: this, key, source });
+      }
+      return value;
+    },
+  );
+  /** @type {Map<string, Array<string|null>>} */
+  const lexemes = new Map();
+  for (const hit of hits) {
+    if (hit.holder !== candidate) continue;
+    const list = lexemes.get(hit.key);
+    if (list === undefined) lexemes.set(hit.key, [hit.source]);
+    else list.push(hit.source);
+  }
+  return { candidate, lexemes };
+}
+
+/**
+ * D3 float-lexeme refusal for text input, checked before the integer check:
+ * a top-level wallFps / recordingFps number that parses to an integer but
+ * was not written as one (fraction or exponent, e.g. 30.0 or 3e1) is not an
+ * integer for these keys, even though JSON.parse collapses it. A missing
+ * source reading refuses too (strict fallback). Non-integer values fall
+ * through to the normal integer handling.
+ * @param {unknown} candidate Parsed root.
+ * @param {Map<string, Array<string|null>>} lexemes
+ * @returns {{ code: string, message: string }|null}
+ */
+function floatFpsLexemeRefusal(candidate, lexemes) {
+  const record = isPlainObject(candidate) ? candidate : null;
+  for (const key of FPS_LEXEME_KEYS) {
+    const sources = lexemes.get(key);
+    if (sources === undefined) continue;
+    const value = record === null ? undefined : record[key];
+    if (typeof value !== 'number' || !Number.isInteger(value)) continue;
+    for (const source of sources) {
+      if (source === null || !isIntegerLexeme(source)) {
+        const shown = source === null ? String(value) : source.trim();
+        const wall = key === 'wallFps';
+        return {
+          code: wall ? 'ERR_SETTINGS_UNKNOWN_WALL_FPS' : 'ERR_SETTINGS_UNKNOWN_RECORDING_FPS',
+          message: wall ? `Unknown wall fps: ${shown}` : `Unknown recording fps: ${shown}`,
+        };
+      }
+    }
+  }
+  return null;
 }
 
 /**
@@ -224,15 +314,22 @@ export function defaultMvSettings() {
 /**
  * Closed decode of stored settings. Accepts an object or its JSON text;
  * rejects unknown keys and every unknown value. Missing keys read back as
- * their defaults, so old two-key files stay valid.
+ * their defaults, so old two-key files stay valid. Text input additionally
+ * refuses wallFps / recordingFps numbers written with a fraction or
+ * exponent (30.0, 3e1) via the reviver source lexeme, even when the value
+ * parses to an integer.
  * @param {unknown} raw
  * @returns {{ ok: true, settings: Readonly<MvSettings> } | { ok: false, error: { code: string, message: string } }}
  */
 export function decodeMvSettings(raw) {
   let candidate = raw;
+  /** @type {Map<string, Array<string|null>>} */
+  let lexemes = new Map();
   if (typeof candidate === 'string') {
     try {
-      candidate = JSON.parse(candidate);
+      const parsed = parseSettingsText(candidate);
+      candidate = parsed.candidate;
+      lexemes = parsed.lexemes;
     } catch {
       return {
         ok: false,
@@ -253,6 +350,10 @@ export function decodeMvSettings(raw) {
         error: { code: 'ERR_SETTINGS_UNKNOWN_KEY', message: `Unknown settings key: ${key}` },
       };
     }
+  }
+  const lexemeRefusal = floatFpsLexemeRefusal(candidate, lexemes);
+  if (lexemeRefusal !== null) {
+    return { ok: false, error: lexemeRefusal };
   }
   const scheme = candidate.scheme === undefined ? MV_PRIMARY_SCHEME : candidate.scheme;
   if (typeof scheme !== 'string' || !isMvScheme(scheme)) {
@@ -294,19 +395,28 @@ export function decodeMvSettings(raw) {
 }
 
 /**
- * Stored-text decode shared by the store and the entry boot parser: unknown
- * keys are ignored (the closed host key set is fail-closed), then each known
- * value falls back to its default independently, so a valid scheme survives
- * an invalid density and vice versa. Missing keys take defaults; malformed
- * text and non-objects refuse with the same codes.
+ * Stored-text decode shared by the store and the entry boot parser: any key
+ * outside the closed set refuses the whole payload with
+ * ERR_SETTINGS_UNKNOWN_KEY, and a wallFps / recordingFps number written with
+ * a fraction or exponent (30.0, 3e1) refuses the whole payload with the
+ * existing fps codes, so the store and boot paths fall back to FULL
+ * defaults, matching the host. Invalid values of known keys still fall back
+ * to their defaults independently, so a valid scheme survives an invalid
+ * density and vice versa; missing keys take defaults. Malformed text and
+ * non-objects refuse with the same codes. Object input keeps the
+ * text-independent behaviour (no lexeme is visible there).
  * @param {unknown} raw
  * @returns {{ ok: true, settings: Readonly<MvSettings> } | { ok: false, error: { code: string, message: string } }}
  */
 export function decodeStoredSettings(raw) {
   let candidate = raw;
+  /** @type {Map<string, Array<string|null>>} */
+  let lexemes = new Map();
   if (typeof candidate === 'string') {
     try {
-      candidate = JSON.parse(candidate);
+      const parsed = parseSettingsText(candidate);
+      candidate = parsed.candidate;
+      lexemes = parsed.lexemes;
     } catch {
       return {
         ok: false,
@@ -319,6 +429,18 @@ export function decodeStoredSettings(raw) {
       ok: false,
       error: { code: 'ERR_SETTINGS_MALFORMED', message: 'Settings must be an object' },
     };
+  }
+  for (const key of Object.keys(candidate)) {
+    if (!MV_SETTINGS_KEYS.includes(key)) {
+      return {
+        ok: false,
+        error: { code: 'ERR_SETTINGS_UNKNOWN_KEY', message: `Unknown settings key: ${key}` },
+      };
+    }
+  }
+  const lexemeRefusal = floatFpsLexemeRefusal(candidate, lexemes);
+  if (lexemeRefusal !== null) {
+    return { ok: false, error: lexemeRefusal };
   }
   const scheme = isMvScheme(candidate.scheme)
     ? /** @type {string} */ (candidate.scheme)
@@ -433,9 +555,10 @@ export function createDebouncedRunner(fn, delayMs) {
 /**
  * Creates a settings store over an injected host port. The host shape is
  * validated eagerly so a missing method fails at wiring time, never at
- * save time. Unknown keys seen on load are ignored, missing or invalid
- * values fall back to defaults per value; every save carries the full
- * four-key object.
+ * save time. Unknown keys, float fps lexemes and malformed text seen on load
+ * throw their coded error so the caller falls back to FULL defaults; missing
+ * or invalid values of known keys fall back to defaults per value; every
+ * save carries the full four-key object.
  * @param {HostSettingsPort} host Injected host settings interface.
  * @returns {Readonly<{ load: () => Promise<Readonly<MvSettings>>, save: (settings: unknown) => Promise<true> }>}
  */
@@ -451,8 +574,9 @@ export function createHostSettingsStore(host) {
   return Object.freeze({
     /**
      * Load settings; absent storage resolves defaults. Missing or invalid
-     * known values resolve per-field defaults; malformed storage throws its
-     * coded error so the caller can fall back.
+     * values of known keys resolve per-field defaults; malformed,
+     * unknown-key or float-lexeme storage throws its coded error so the
+     * caller falls back to FULL defaults.
      * @returns {Promise<Readonly<MvSettings>>}
      */
     async load() {

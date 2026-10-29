@@ -1010,8 +1010,7 @@ test(
 );
 
 test(
-  'PARITY-D3 renderer FINDING: JSON float lexeme 30.0 is refused for recordingFps and wallFps per strict integer contract',
-  { skip: 'FINDING D3' },
+  'PARITY-D3 renderer: JSON float lexeme 30.0 is refused for recordingFps and wallFps per strict integer contract',
   async () => {
     const vectors = JSON.parse(await readFile(PARITY_FIXTURE_PATH, 'utf8'));
     const recFloatJson = vectors.d3_float_lexeme.ui_prefs_recording_30_0_json;
@@ -1025,7 +1024,6 @@ test(
 
 test(
   'PARITY-D4: decodeStoredSettings refuses unknown keys and contract limits key like strict decode',
-  { skip: 'FINDING D4' },
   async () => {
     const vectors = JSON.parse(await readFile(PARITY_FIXTURE_PATH, 'utf8'));
     for (const rawJson of [

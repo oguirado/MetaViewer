@@ -8,6 +8,7 @@ import {
   createHostSettingsStore,
   createMemorySettingsHost,
   decodeMvSettings,
+  defaultMvSettings,
   encodeMvSettings,
 } from '../src/settings/settingsModel.js';
 
@@ -54,12 +55,13 @@ test('negative control: a fresh double boots defaults, proving values came from 
   );
 });
 
-test('unknown keys from a load are ignored and never sent on save', async () => {
+test('unknown keys from a load refuse with full-default fallback and never send on save', async () => {
   const host = createMemorySettingsHost(
     '{"scheme":"mv-dark","density":"compact","panel-width":320,"experimental":true}',
   );
   const store = createHostSettingsStore(host);
-  assert.deepEqual({ ...(await store.load()) }, { scheme: 'mv-dark', density: 'compact', wallFps: 30, recordingFps: 3 });
+  await assert.rejects(store.load(), /ERR_SETTINGS_UNKNOWN_KEY/);
+  assert.deepEqual({ ...(await store.load().catch(() => defaultMvSettings())) }, { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 });
   assert.equal(await store.save({ scheme: 'mv-light', density: 'compact' }), true);
   assert.equal(host.calls.at(-1)?.json, settings('mv-light'));
   assert.deepEqual(JSON.parse(/** @type {string} */ (host.calls.at(-1)?.json)), {
@@ -80,7 +82,8 @@ test('negative control: a host double that refuses unknown keys would refuse the
     'the double refuses unknown keys, proving the save below can fail',
   );
   const store = createHostSettingsStore(host);
-  assert.deepEqual({ ...(await store.load()) }, { scheme: 'mv-dark', density: 'compact', wallFps: 30, recordingFps: 3 });
+  await assert.rejects(store.load(), /ERR_SETTINGS_UNKNOWN_KEY/);
+  assert.deepEqual({ ...(await store.load().catch(() => defaultMvSettings())) }, { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 });
   assert.equal(await store.save({ scheme: 'mv-light', density: 'compact' }), true);
   assert.equal(host.calls.at(-1)?.json, settings('mv-light'));
 });
@@ -89,7 +92,8 @@ test('invalid values fall back per field while missing keys resolve defaults', a
   const empty = createHostSettingsStore(createMemorySettingsHost('{}'));
   assert.deepEqual({ ...(await empty.load()) }, { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 });
   const unknownOnly = createHostSettingsStore(createMemorySettingsHost('{"future":1}'));
-  assert.deepEqual({ ...(await unknownOnly.load()) }, { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 });
+  await assert.rejects(unknownOnly.load(), /ERR_SETTINGS_UNKNOWN_KEY/);
+  assert.deepEqual({ ...(await unknownOnly.load().catch(() => defaultMvSettings())) }, { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 });
   const badScheme = createHostSettingsStore(createMemorySettingsHost('{"scheme":"invented"}'));
   assert.deepEqual({ ...(await badScheme.load()) }, { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 });
   const badDensity = createHostSettingsStore(createMemorySettingsHost('{"density":"huge"}'));

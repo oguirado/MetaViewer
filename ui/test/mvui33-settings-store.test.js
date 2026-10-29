@@ -11,6 +11,7 @@ import {
   createHostSettingsStore,
   createMemorySettingsHost,
   decodeStoredSettings,
+  defaultMvSettings,
   encodeMvSettings,
 } from '../src/settings/settingsModel.js';
 
@@ -54,12 +55,13 @@ test('negative control: a save missing a key still lands whole, proving the shap
   );
 });
 
-test('unknown keys are ignored on load and never sent on save', async () => {
+test('unknown keys refuse on load with full-default fallback and never send on save', async () => {
   const host = createMemorySettingsHost(
     '{"scheme":"mv-dark","density":"comfortable","wallFps":60,"recordingFps":12,"panel-width":320,"future":true}',
   );
   const store = createHostSettingsStore(host);
-  assert.deepEqual({ ...(await store.load()) }, FULL);
+  await assert.rejects(store.load(), /ERR_SETTINGS_UNKNOWN_KEY/);
+  assert.deepEqual({ ...(await store.load().catch(() => defaultMvSettings())) }, { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 });
   assert.equal(await store.save({ ...FULL }), true);
   for (const json of savedPayloads(host.calls)) {
     assert.deepEqual(Object.keys(JSON.parse(json)).sort(), ['density', 'recordingFps', 'scheme', 'wallFps']);

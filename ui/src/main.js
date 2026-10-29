@@ -127,8 +127,9 @@ async function readBootSettings(settingsHost) {
 /**
  * MVUI29SC: boot-scheme parse through the store decode shared via the
  * settings-host factory static, so boot paints exactly the scheme the store
- * will load (per-field defaults); malformed or absent storage paints the
- * primary scheme silently here.
+ * will load; whole refusals (malformed text, unknown keys, float fps
+ * lexemes) or absent storage paint the primary scheme silently here, which
+ * is the full-defaults fallback.
  * @param {string|null} text Settled boot read.
  * @returns {string} mv-light or mv-dark.
  */
@@ -141,8 +142,9 @@ function bootSchemeFromText(text) {
 
 /**
  * MVUI33: boot-density parse through the same shared store decode, so boot
- * paints exactly the density the store will load (per-field defaults);
- * malformed or absent storage paints compact silently here.
+ * paints exactly the density the store will load; whole refusals (malformed
+ * text, unknown keys, float fps lexemes) or absent storage paint compact
+ * silently here, which is the full-defaults fallback.
  * @param {string|null} text Settled boot read.
  * @returns {string} compact or comfortable.
  */

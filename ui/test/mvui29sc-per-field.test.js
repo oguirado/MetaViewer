@@ -1,5 +1,5 @@
 // MVUI29SC lane S: one stored decode with per-field fallback. A valid scheme
-// survives an invalid density and vice versa, unknown keys stay ignored, and
+// survives an invalid density and vice versa, unknown keys refuse the whole, and
 // the boot parser shares the exact store decode so boot never paints a scheme
 // the store will then replace. Strict encode on save stays intact. Every
 // behaviour ships with a negative control.
@@ -21,7 +21,7 @@ import {
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const settings = scheme => JSON.stringify({ scheme, density: 'compact', wallFps: 30, recordingFps: 3 });
 
-test('stored decode falls back per field and ignores unknown keys', () => {
+test('stored decode falls back per field and refuses unknown keys', () => {
   assert.deepEqual(decodeStoredSettings('{"scheme":"mv-dark","density":7}'), {
     ok: true,
     settings: { scheme: 'mv-dark', density: 'compact', wallFps: 30, recordingFps: 3 },
@@ -31,8 +31,8 @@ test('stored decode falls back per field and ignores unknown keys', () => {
     settings: { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 },
   });
   assert.deepEqual(decodeStoredSettings('{"scheme":"mv-dark","future":1}'), {
-    ok: true,
-    settings: { scheme: 'mv-dark', density: 'compact', wallFps: 30, recordingFps: 3 },
+    ok: false,
+    error: { code: 'ERR_SETTINGS_UNKNOWN_KEY', message: 'Unknown settings key: future' },
   });
   assert.deepEqual(decodeStoredSettings({}), {
     ok: true,
