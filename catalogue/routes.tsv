@@ -800,6 +800,7 @@ statedir.go	daemon-adapter/internal/capsule/statedir.go
 statedir_test.go	daemon-adapter/internal/capsule/statedir_test.go
 stress_test.go	daemon-adapter/internal/capsule/stress_test.go
 srf-identity-surface	daemon-adapter/internal/capsule/testdata/srf-identity-surface
+textcap_test.go	daemon-adapter/internal/capsule/textcap_test.go
 runner.go	daemon-adapter/internal/cli/runner.go
 runner_test.go	daemon-adapter/internal/cli/runner_test.go
 b1stale-813879d52247	daemon-adapter/internal/daemon/b1_stale_verdict_test.go
@@ -895,6 +896,7 @@ view_test.go	daemon-adapter/internal/view/view_test.go
 cliiden-e5ce120f22de	daemon-adapter/testdata/cli_identity_valid.json
 cli_malformed.txt	daemon-adapter/testdata/cli_malformed.txt
 deps.lock	deps.lock
+ADAPTER-f520074e84c0	docs/ADAPTER_INPUT_LIMITS.md
 ARCHITECTURE.md	docs/ARCHITECTURE.md
 COMMIT_LAWS.md	docs/COMMIT_LAWS.md
 DEMO_AGENT_SCRIPT.md	docs/DEMO_AGENT_SCRIPT.md
