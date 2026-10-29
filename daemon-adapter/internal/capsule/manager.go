@@ -23,10 +23,12 @@ package capsule
 // configured timeout/output caps and attaches a strictly validated GroundTruth
 // to InputEvidence. Human-origin input never calls observe or attaches
 // GroundTruth; observe failures/refusals/malformed replies omit GroundTruth.
+// [TARGET, unit decision] Long text uses one permit and serial verified native calls.
 import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -37,6 +39,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"metaviewer/daemon-adapter/internal/cli"
 )
@@ -110,18 +114,43 @@ type NativeFrame struct {
 	TSNS, CaptureUS uint64          `json:"-"`
 }
 
-// InputEvidence keeps the native clock and window identity alongside the public
-// surface binding and the hello-relative timestamp. No evidence is cached/reused.
+// NativeTextMaxRunes follows OpenSuperficies src/browserid/inject/inject.go:279-281
+// at deps.lock commit a9ac1ac8543872b428990ea23fa2629cd0a6d1d5 [CITED].
+const NativeTextMaxRunes = 2000
+
+// AdapterTextMaxRunes caps each proposal [TARGET, unit decision].
+const AdapterTextMaxRunes = 16384
+
+type NativeInputReceipt struct {
+	SurfaceID     string  `json:"surface_id,omitempty"`
+	Kind          string  `json:"kind,omitempty"`
+	InputMonoNS   *uint64 `json:"input_mono_ns"`
+	FocusVerified *bool   `json:"focus_verified,omitempty"`
+	Result        string  `json:"result,omitempty"`
+}
+type TextChunkEvidence struct {
+	NativeInputReceipt
+	Runes  int    `json:"runes"`
+	SHA256 string `json:"sha256"`
+}
+type TextSequenceEvidence struct {
+	Chunks []TextChunkEvidence `json:"chunks"`
+}
+
+// InputEvidence keeps request-local native proof. TextSequence is adapter-local:
+// contracts/v0.2/action_receipt.schema.json:107 closes the wire evidence fields.
+// The final native result is published only after the whole sequence verifies.
 type InputEvidence struct {
-	SurfaceID         string       `json:"surface_id"`
-	NativeSurfaceID   string       `json:"native_surface_id,omitempty"`
-	Kind              string       `json:"kind,omitempty"`
-	InputMonoNS       uint64       `json:"input_mono_ns"`
-	InputTSNS         uint64       `json:"input_ts_ns"`
-	FocusVerified     *bool        `json:"focus_verified,omitempty"`
-	Result            string       `json:"result,omitempty"`
-	BeforeGroundTruth *GroundTruth `json:"before_ground_truth,omitempty"`
-	GroundTruth       *GroundTruth `json:"ground_truth,omitempty"`
+	TextSequence      *TextSequenceEvidence `json:"-"`
+	SurfaceID         string                `json:"surface_id"`
+	NativeSurfaceID   string                `json:"native_surface_id,omitempty"`
+	Kind              string                `json:"kind,omitempty"`
+	InputMonoNS       uint64                `json:"input_mono_ns"`
+	InputTSNS         uint64                `json:"input_ts_ns"`
+	FocusVerified     *bool                 `json:"focus_verified,omitempty"`
+	Result            string                `json:"result,omitempty"`
+	BeforeGroundTruth *GroundTruth          `json:"before_ground_truth,omitempty"`
+	GroundTruth       *GroundTruth          `json:"ground_truth,omitempty"`
 }
 type Manager struct {
 	mu          sync.Mutex
@@ -859,6 +888,7 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 		args = append(args, "--window", b.Window)
 	}
 	var stdin []byte
+	var textChunks [][]byte
 	nativeAction := q.Action.Type
 	switch q.Action.Type {
 	case "click":
@@ -877,8 +907,22 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 		}
 		args = append(args, "--key", key)
 	case "type":
-		if b.NativeKind == "holdings" || len(q.Action.Text) == 0 || len(q.Action.Text) > 16384 || q.Action.X != nil || q.Action.Y != nil || q.Action.Button != "" || len(q.Action.Keys) != 0 {
+		if b.NativeKind == "holdings" || len(q.Action.Text) == 0 || q.Action.X != nil || q.Action.Y != nil || q.Action.Button != "" || len(q.Action.Keys) != 0 {
 			return nil, fault("input", "invalid text")
+		}
+		if utf8.RuneCountInString(q.Action.Text) > AdapterTextMaxRunes {
+			return nil, fault("TEXT_TOO_LONG", "text exceeds adapter rune limit")
+		}
+		for _, r := range q.Action.Text {
+			if !unicode.IsPrint(r) {
+				return nil, fault("input", "text must contain printable runes")
+			}
+		}
+		runes := []rune(q.Action.Text)
+		for len(runes) > 0 {
+			n := min(len(runes), NativeTextMaxRunes)
+			textChunks = append(textChunks, []byte(string(runes[:n])))
+			runes = runes[n:]
 		}
 		nativeAction = "text"
 		args = append(args, "--type-stdin")
@@ -924,42 +968,54 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 		}
 	}
 	dispatched := b
-	before := m.clock()
-	m.mu.Unlock()
-	out, e := m.execute(run, m.cfg.Profiles[b.Surface.ProfileID], args, stdin)
-	after := m.clock()
-	m.mu.Lock()
-	if pending.cancelled {
-		return nil, fault("SURFACE_NOT_AGENT_CONTROLLED", "input cancelled by control takeover")
+	var receipt NativeInputReceipt
+	var sequence *TextSequenceEvidence
+	inputs := [][]byte{stdin}
+	if len(textChunks) > 0 {
+		inputs = textChunks
 	}
-	b, ok = m.bindings[q.SurfaceID]
-	if !ok || b.Surface.State != "active" || b.recoveryProbe != nil || m.destroying[q.SurfaceID] || b.Container != dispatched.Container || b.RunID != dispatched.RunID {
-		return nil, fault("surface", "surface lost during input")
+	if len(textChunks) > 1 {
+		sequence = &TextSequenceEvidence{}
 	}
-	if b.Surface.Control != origin {
-		if origin == "human" {
-			return nil, fault("SURFACE_NOT_HUMAN_CONTROLLED", "agent control blocks human input")
+	for _, chunk := range inputs {
+		if err := run.Err(); err != nil {
+			return nil, err
 		}
-		return nil, fault("SURFACE_NOT_AGENT_CONTROLLED", "human control blocks agent input")
-	}
-	if e != nil {
-		return nil, e
-	}
-	var receipt struct {
-		SurfaceID     string  `json:"surface_id,omitempty"`
-		Kind          string  `json:"kind,omitempty"`
-		InputMonoNS   *uint64 `json:"input_mono_ns"`
-		FocusVerified *bool   `json:"focus_verified,omitempty"`
-		Result        string  `json:"result,omitempty"`
-	}
-	if e := cli.ParseLine(out, m.cfg.MaxOutputBytes, &receipt); e != nil {
-		return nil, e
-	}
-	if receipt.Result == "refused" {
-		return nil, fault("refused", "native input refused")
-	}
-	if receipt.InputMonoNS == nil || *receipt.InputMonoNS < m.cfg.OriginNS || *receipt.InputMonoNS > 9007199254740991 || *receipt.InputMonoNS < before || *receipt.InputMonoNS > after || after < before || (b.Window != "" && (receipt.SurfaceID != b.Window || receipt.Kind != nativeAction || receipt.FocusVerified == nil || !*receipt.FocusVerified || receipt.Result != "ok")) {
-		return nil, fault("input", "unverified input receipt")
+		before := m.clock()
+		m.mu.Unlock()
+		out, e := m.execute(run, m.cfg.Profiles[b.Surface.ProfileID], args, chunk)
+		after := m.clock()
+		m.mu.Lock()
+		if pending.cancelled {
+			return nil, fault("SURFACE_NOT_AGENT_CONTROLLED", "input cancelled by control takeover")
+		}
+		b, ok = m.bindings[q.SurfaceID]
+		if !ok || b.Surface.State != "active" || b.recoveryProbe != nil || m.destroying[q.SurfaceID] || b.Container != dispatched.Container || b.RunID != dispatched.RunID {
+			return nil, fault("surface", "surface lost during input")
+		}
+		if b.Surface.Control != origin {
+			if origin == "human" {
+				return nil, fault("SURFACE_NOT_HUMAN_CONTROLLED", "agent control blocks human input")
+			}
+			return nil, fault("SURFACE_NOT_AGENT_CONTROLLED", "human control blocks agent input")
+		}
+		if e != nil {
+			return nil, e
+		}
+		receipt = NativeInputReceipt{}
+		if e := cli.ParseLine(out, m.cfg.MaxOutputBytes, &receipt); e != nil {
+			return nil, e
+		}
+		if receipt.Result == "refused" {
+			return nil, fault("refused", "native input refused")
+		}
+		if receipt.InputMonoNS == nil || *receipt.InputMonoNS < m.cfg.OriginNS || *receipt.InputMonoNS > 9007199254740991 || *receipt.InputMonoNS < before || *receipt.InputMonoNS > after || after < before || (b.Window != "" && (receipt.SurfaceID != b.Window || receipt.Kind != nativeAction || receipt.FocusVerified == nil || !*receipt.FocusVerified || receipt.Result != "ok")) {
+			return nil, fault("input", "unverified input receipt")
+		}
+		if sequence != nil {
+			digest := sha256.Sum256(chunk)
+			sequence.Chunks = append(sequence.Chunks, TextChunkEvidence{NativeInputReceipt: receipt, Runes: utf8.RuneCount(chunk), SHA256: hex.EncodeToString(digest[:])})
+		}
 	}
 	var groundTruth *GroundTruth
 	if b.NativeKind == "holdings" {
@@ -1025,7 +1081,8 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 	}
 	if evidence != nil {
 		*evidence = InputEvidence{
-			SurfaceID: q.SurfaceID, NativeSurfaceID: receipt.SurfaceID,
+			TextSequence: sequence,
+			SurfaceID:    q.SurfaceID, NativeSurfaceID: receipt.SurfaceID,
 			Kind: receipt.Kind, InputMonoNS: *receipt.InputMonoNS,
 			InputTSNS:     *receipt.InputMonoNS - m.cfg.OriginNS,
 			FocusVerified: receipt.FocusVerified, Result: receipt.Result,
