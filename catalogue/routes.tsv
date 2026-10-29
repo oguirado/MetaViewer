@@ -726,6 +726,7 @@ rv11vf1-c97dd49bc702	core/tests/rv11v_f1_frame_bounds.rs
 rv11vf2-a9895a3be902	core/tests/rv11v_f2_scroll_policy.rs
 rv11v_f5_key_chord.rs	core/tests/rv11v_f5_key_chord.rs
 serve_flow.rs	core/tests/serve_flow.rs
+serve_mut.rs	core/tests/serve_mut.rs
 serve_reconnect.rs	core/tests/serve_reconnect.rs
 serve_v02_tags.rs	core/tests/serve_v02_tags.rs
 settings_parity.rs	core/tests/settings_parity.rs
