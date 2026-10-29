@@ -752,6 +752,8 @@ t1_anchor.rs	core/tests/t1_anchor.rs
 t1_journal_verify.rs	core/tests/t1_journal_verify.rs
 t1socke-3fc3474cb77f	core/tests/t1_socket_publication.rs
 verdict_parity.rs	core/tests/verdict_parity.rs
+ws3_gap_admission.rs	core/tests/ws3_gap_admission.rs
+ws3_gap_serve.rs	core/tests/ws3_gap_serve.rs
 README-effee8d55115	daemon-adapter/README.md
 main.go	daemon-adapter/cmd/mv-daemon-adapter/main.go
 go.mod	daemon-adapter/go.mod
@@ -1597,6 +1599,7 @@ wirepre-95bfb7c6fbc5	ui/test/wire-preload-origin.test.js
 ws3capt-dbcad7f79ea5	ui/test/ws3-capture-accessor.test.mjs
 ws3capt-e2bce1be507d	ui/test/ws3-capture-call-bounds.test.mjs
 ws3capt-fa30f768e517	ui/test/ws3-capture-state.test.mjs
+ws3gaps-d98fd62bde12	ui/test/ws3_gap_settings_fresh_reject.test.mjs
 package.js	ui/tools/package.js
 testpac-77161fb71059	ui/tools/test_package_clean_install.mjs
 tsconfig.json	ui/tsconfig.json
