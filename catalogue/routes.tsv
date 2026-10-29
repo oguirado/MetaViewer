@@ -100,6 +100,7 @@ test_tools.py	agents/tests/test_tools.py
 test_vcore.py	agents/tests/test_vcore.py
 test_vcore_serve.py	agents/tests/test_vcore_serve.py
 testvco-9ce1ffeaa20f	agents/tests/test_vcore_v02_element_table.py
+testver-b310fa6bdd33	agents/tests/test_verdict_parity.py
 test_verify_budget.py	agents/tests/test_verify_budget.py
 testver-43e66b9c8501	agents/tests/test_verify_v02_loop.py
 testvis-383820f1bf91	agents/tests/test_vision_ram_path.py
@@ -743,6 +744,7 @@ support-mod.rs	core/tests/support/mod.rs
 t1_anchor.rs	core/tests/t1_anchor.rs
 t1_journal_verify.rs	core/tests/t1_journal_verify.rs
 t1socke-3fc3474cb77f	core/tests/t1_socket_publication.rs
+verdict_parity.rs	core/tests/verdict_parity.rs
 README-effee8d55115	daemon-adapter/README.md
 main.go	daemon-adapter/cmd/mv-daemon-adapter/main.go
 go.mod	daemon-adapter/go.mod
@@ -810,6 +812,7 @@ runtime_test.go	daemon-adapter/internal/daemon/runtime_test.go
 stream.go	daemon-adapter/internal/daemon/stream.go
 subscriptions.go	daemon-adapter/internal/daemon/subscriptions.go
 subscriptions_test.go	daemon-adapter/internal/daemon/subscriptions_test.go
+verdict-14622cfe90c9	daemon-adapter/internal/daemon/verdict_parity_test.go
 view_wire_test.go	daemon-adapter/internal/daemon/view_wire_test.go
 wire_binary_test.go	daemon-adapter/internal/daemon/wire_binary_test.go
 wire_live_test.go	daemon-adapter/internal/daemon/wire_live_test.go
@@ -1083,6 +1086,7 @@ gate.py	tests/fixtures/secrets/gate.py
 test_gate.py	tests/fixtures/secrets/test_gate.py
 testt7s-c9ae673cb577	tests/fixtures/secrets/test_t7_secrets_adversarial.py
 settings_parity.json	tests/fixtures/settings_parity.json
+verdict_parity.json	tests/fixtures/verdict_parity.json
 init-6ec5224a3ecf	tests/integration/__init__.py
 adapter-4b3b01576ec1	tests/integration/adapter_contract_test.go
 fake_capsule.py	tests/integration/fake_capsule.py
@@ -1557,6 +1561,7 @@ uiel-reap.test.js	ui/test/uiel-reap.test.js
 uielshe-44fcbd32601d	ui/test/uiel-shell-version.test.js
 uielsmo-2d86eec1e39f	ui/test/uiel-smoke-rss.test.js
 uiel2au-1c86966804a4	ui/test/uiel2-authority-confinement.test.js
+verdict-f74b75134886	ui/test/verdictParity.test.mjs
 vmarkde-f640a1549e17	ui/test/vmark-delivery.test.js
 w3contr-ee4ed320402b	ui/test/w3-control-timeout.test.js
 w3frame-6611301ee8f6	ui/test/w3-frame-acquire.test.js
