@@ -344,20 +344,13 @@ func TestExportTypedDestinationFailures(t *testing.T) {
 		if _, err := m.Poll(ctx, "poll", "r"); err != nil {
 			t.Fatal(err)
 		}
-		if os.Geteuid() == 0 {
-			// Namespace root bypasses DAC; a regular-file parent is uncreatable for every UID.
-			t.Log("euid=0: exercise ENOTDIR destination refusal instead of DAC denial")
-			if err := os.Remove(roDir); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(roDir, []byte("obstruction"), 0600); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if err := os.Chmod(roDir, 0500); err != nil {
+		// A regular-file parent prevents creation for every UID, including root.
+		if err := os.Remove(roDir); err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { _ = os.Chmod(roDir, 0700) })
+		if err := os.WriteFile(roDir, []byte("obstruction"), 0600); err != nil {
+			t.Fatal(err)
+		}
 		events, err := m.Handle(ctx, stop("disk_stop"))
 		requireDestinationRefusal(t, events, err, "DESTINATION_UNAVAILABLE")
 		validateEventsAgainstContractAndTools(t, events...)
