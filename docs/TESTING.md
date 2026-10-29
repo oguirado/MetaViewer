@@ -1,5 +1,27 @@
 # How MetaViewer is tested
 
+## MemoryWeb home
+
+Each user's sites live in the checkout's gitignored `/memoryweb/`, created with
+mode 0700 and owned by the current uid (U-DEC-0110/0111). Run
+`python3 tools/mw_home_check.py --repo <checkout> [--home <absolute-path>]` for
+one JSON admission result (exit 0 accepted, 6 refused, 2 usage). Refusal codes
+are `MW_HOME_TRACKED`, `MW_HOME_NOT_IGNORED`, `MW_HOME_MODE`, `MW_HOME_SYMLINK`,
+`MW_HOME_PROFILE`, `MW_HOME_SIZE`, `MW_HOME_CAPACITY`, `MW_HOME_PATH` and
+`MW_HOME_GIT` and `MW_HOME_NESTED_REPO`. Repository and home paths are canonicalized
+before Git admission; a symlink in the home or any ancestor is refused first.
+Browser profile names are matched with casefold, including SQLite sidecars;
+SQLite database and WAL magic are refused at any depth. Browser profile directories
+(including Default, Profile <n>, leveldb, storage and browser caches) and nested
+`.git` files or directories are refused. LevelDB directories are refused wholesale,
+including their CURRENT, LOCK, LOG, LOG.old, MANIFEST-*, *.ldb and *.log files;
+workflow files are capped at 65536 bytes and other files at 1 MiB [CITED:
+MemoryWeb ARCHITECTURE.md, byte caps/publication lint]. Traversal caps are
+10000 entries and 32 directory levels [TARGET, unit decision]. Hosted checks:
+`(cd agents && python3 -m unittest tests.test_mw_home tests.test_tg_hygiene)` and
+`python3 -m unittest discover -s tests -p test_mw_home_cli.py`, each foreground under
+`systemd-run --user --scope -q -p MemoryMax=8G -p MemorySwapMax=0`.
+
 I verify MetaViewer across six overlapping layers:
 
 1. **The local eleven-leg gate** (`bash tools/gate.sh`) and its **self-test** (`bash tools/gate.sh --self-test`).

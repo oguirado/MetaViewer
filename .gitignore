@@ -19,3 +19,5 @@ ui/.kit/
 operator.token
 launch.token
 .beckett/token
+# U-DEC-0110/0111: each user's private MemoryWeb home stays outside Git.
+/memoryweb/
