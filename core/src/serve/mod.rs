@@ -868,7 +868,23 @@ impl Server {
         }
         let witness = verified.retain_in_authority(&mut self.authority)?;
         let pixels = verified.into_bytes();
-        let out = self.authority.apply_with_witnesses(
+        // [TARGET, unit decision] Only the daemon boundary translates these
+        // validated frames into recoverable refusals. Direct admission retains
+        // its atomic InvalidInput contract; witness failures above still retire.
+        let state = self.authority.state();
+        let surface = state.surfaces.get(&frame.surface_id);
+        let unknown = surface.is_none() && !state.is_destroyed(&frame.surface_id);
+        let stale = surface.is_some_and(|s| {
+            s.live
+                && s.frame
+                    .as_ref()
+                    .is_some_and(|f| frame.generation <= f.generation)
+        });
+        let input = if unknown || stale {
+            Input::Refuse {
+                reason: Refusal::StaleFrame,
+            }
+        } else {
             Input::Frame {
                 surface_id: frame.surface_id.clone(),
                 frame: Frame {
@@ -877,9 +893,11 @@ impl Server {
                     width: frame.width,
                     height: frame.height,
                 },
-            },
-            vec![boundary, witness],
-        )?;
+            }
+        };
+        let out = self
+            .authority
+            .apply_with_witnesses(input, vec![boundary, witness])?;
         if let Some(clock) = &mut self.frame_clock {
             clock.row.witness_journal_ns += witness_started.elapsed().as_nanos();
             clock.accepted = out.reason.is_none();
@@ -5229,3 +5247,6 @@ mod nv_regressions {
 
 #[cfg(test)]
 mod reconnect_tests;
+
+#[cfg(test)]
+mod b1_stale_frame_tests;

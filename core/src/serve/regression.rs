@@ -1004,13 +1004,10 @@ fn w3_control_intent_under_daemon_frame_burst_coalesces_and_preserves_checks() {
         daemon
             .send(json!({"schema":"surface_event/v0.2","event":"frame_ready","data":{"frame_ref":f_newer}}))
             .await;
-        assert!(
-            read_frame(&mut daemon.socket)
-                .await
-                .unwrap_or(None)
-                .is_none(),
-            "generation regression in a frame burst must retire the daemon connection"
-        );
+        daemon.verdict("refused", Some("STALE_FRAME")).await;
+        let admitted = serde_json::to_value(ui.receive().await.body).unwrap();
+        assert_eq!(admitted["data"]["frame_ref"]["generation"], 33);
+        daemon_barrier(&mut daemon).await;
 
         close_server(server, task, daemon, _agent, ui).await;
         let session_root = temp.0.join("state/sessions/serve-session");
@@ -1022,7 +1019,7 @@ fn w3_control_intent_under_daemon_frame_burst_coalesces_and_preserves_checks() {
                 .as_ref()
                 .unwrap()
                 .generation,
-            32
+            33
         );
     });
 }

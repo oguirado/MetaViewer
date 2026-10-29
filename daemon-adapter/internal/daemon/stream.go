@@ -10,6 +10,7 @@ package daemon
 // cancellation on clean EOF while abnormal read/framing/validation/route/schema/auth
 // failures cancel the session before worker join, and sessionErr is checked on exit.
 import (
+	"container/list"
 	"context"
 	"encoding/json"
 	"errors"
@@ -51,6 +52,11 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 	}
 	var outbound sync.Mutex
 	var authority sync.Mutex
+	// [TARGET, unit decision] Bound FRAME verdict correlation by the session replay
+	// window. Proposal verdicts never gain admission merely from their reason code.
+	var frameMu sync.Mutex
+	frameIDs := make(map[string]*list.Element)
+	frameOrder := list.New()
 	write := func(writeCtx context.Context, in ipc.Envelope, body json.RawMessage) error {
 		outbound.Lock()
 		defer outbound.Unlock()
@@ -66,6 +72,23 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 		}
 		if _, err = policy.ValidateEnvelope(raw); err != nil {
 			return fmt.Errorf("outbound contract: %w", err)
+		}
+		var published struct {
+			Schema string `json:"schema"`
+			Event  string `json:"event"`
+		}
+		_ = json.Unmarshal(body, &published)
+		if published.Schema == "frame_ref/v0.2" || (published.Schema == "surface_event/v0.2" && published.Event == "frame_ready") {
+			frameMu.Lock()
+			if _, exists := frameIDs[out.MsgID]; !exists {
+				frameIDs[out.MsgID] = frameOrder.PushBack(out.MsgID)
+			}
+			for frameOrder.Len() > cfg.MaxReplayEntries {
+				oldest := frameOrder.Front()
+				delete(frameIDs, oldest.Value.(string))
+				frameOrder.Remove(oldest)
+			}
+			frameMu.Unlock()
 		}
 		return framer.Write(writeCtx, raw)
 	}
@@ -276,7 +299,11 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 		}
 		isHello := first && body.Schema == "hello/v0.2" && body.Component == "core"
 		isPolicyRefusal := body.Schema == "action_verdict/v0.2" && body.Decision == "refused" && body.ReasonCode == "POLICY"
-		if !isHello && !isPolicyRefusal && body.Schema != "surface_request/v0.2" && body.Schema != "record_request/v0.2" {
+		frameMu.Lock()
+		_, sentFrame := frameIDs[body.ProposalID]
+		frameMu.Unlock()
+		isFrameRefusal := body.Schema == "action_verdict/v0.2" && body.Decision == "refused" && body.ReasonCode == "STALE_FRAME" && sentFrame
+		if !isHello && !isPolicyRefusal && !isFrameRefusal && body.Schema != "surface_request/v0.2" && body.Schema != "record_request/v0.2" {
 			err = errors.New("core surface request required")
 			fail(err)
 			return exitLoop(err)
@@ -292,6 +319,15 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 			return exitLoop(err)
 		}
 		first = false
+		if isFrameRefusal {
+			frameMu.Lock()
+			if item := frameIDs[body.ProposalID]; item != nil {
+				frameOrder.Remove(item)
+				delete(frameIDs, body.ProposalID)
+			}
+			frameMu.Unlock()
+			continue
+		}
 		if isPolicyRefusal {
 			fmt.Fprintf(os.Stderr, "daemon: consumed policy refusal proposal_id=%.128s\n", body.ProposalID)
 			continue

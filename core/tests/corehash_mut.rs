@@ -1189,14 +1189,94 @@ fn timings_rows_carry_skipped_hash_keys_with_disjoint_totals() {
                 ui.receive().await;
             }
 
-            // Send regressed generation (1 <= committed generation 2): must be refused with no timing row.
-            frame["generation"] = 1.into();
-            daemon.send(frame.clone()).await;
-            let refused =
-                tokio::time::timeout(Duration::from_secs(5), read_frame(&mut daemon.socket))
+            // A stale envelope yields exactly one correlated refusal, without UI fan-out.
+            async fn assert_stale_refusal(daemon: &mut Peer, ui: &mut Peer, frame: &Value) {
+                let mut regressed = frame.clone();
+                regressed["generation"] = 1.into();
+                daemon.send(regressed).await;
+                let verdict = serde_json::to_value(daemon.receive().await.body).unwrap();
+                assert_eq!(verdict["schema"], "action_verdict/v0.2");
+                assert_eq!(verdict["decision"], "refused");
+                assert_eq!(verdict["reason_code"], "STALE_FRAME");
+                assert_eq!(
+                    verdict["proposal_id"],
+                    daemon.envelope(frame.clone()).msg_id
+                );
+                assert!(
+                    tokio::time::timeout(
+                        Duration::from_millis(100),
+                        read_frame(&mut daemon.socket)
+                    )
                     .await
-                    .unwrap();
-            assert!(!matches!(refused, Ok(Some(_))), "{refused:?}");
+                    .is_err(),
+                    "stale envelope must not produce another verdict or close the daemon"
+                );
+                assert!(
+                    tokio::time::timeout(Duration::from_millis(100), read_frame(&mut ui.socket))
+                        .await
+                        .is_err(),
+                    "regressed generation must not fan out to the UI"
+                );
+            }
+            assert_stale_refusal(&mut daemon, &mut ui, &frame).await;
+
+            // Keep the original two-row and restart/hash assertions below intact.
+            // Exercise same-connection continuation in an isolated timing/journal fixture.
+            {
+                let continuation = private_temp();
+                let continuation_state = continuation.0.join("state");
+                let continuation_socket = continuation.0.join("runtime/core.sock");
+                let listener = serve::bind(&continuation_socket, uid).await.unwrap();
+                let continuation_server = Arc::new(Mutex::new(
+                    Server::open(serve_config(), &continuation_state, uid).unwrap(),
+                ));
+                let continuation_task =
+                    tokio::spawn(serve::serve(listener, continuation_server.clone(), uid));
+                let mut daemon = Peer::connect(&continuation_socket, "daemon", "continue").await;
+                let mut ui = Peer::connect(&continuation_socket, "ui", "continue").await;
+                daemon
+                    .send(json!({
+                        "schema": "surface_event/v0.2",
+                        "event": "created",
+                        "data": {"surface": surface}
+                    }))
+                    .await;
+                ui.receive().await;
+                for generation in [1_u64, 2_u64] {
+                    frame["generation"] = generation.into();
+                    daemon.send(frame.clone()).await;
+                    ui.receive().await;
+                }
+                assert_stale_refusal(&mut daemon, &mut ui, &frame).await;
+                frame["generation"] = 3.into();
+                daemon.send(frame.clone()).await;
+                let admitted = serde_json::to_value(ui.receive().await.body).unwrap();
+                assert_eq!(admitted, frame, "generation 3 must reach the UI unchanged");
+                continuation_server.lock().unwrap().shutdown().unwrap();
+                continuation_task.abort();
+                let _ = continuation_task.await;
+                drop(daemon);
+                drop(ui);
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    while Arc::strong_count(&continuation_server) != 1 {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
+                let timings = continuation_state
+                    .join("sessions/serve-corehash-mut/artifacts/frame_timings.jsonl");
+                let generations: Vec<_> = read_timing_rows(&timings)
+                    .iter()
+                    .map(|row| row["generation"].as_u64().unwrap())
+                    .collect();
+                assert_eq!(
+                    generations,
+                    [1, 2, 3],
+                    "stale frame must emit no timing row"
+                );
+                evict_root_via_recover(&continuation_state.join("sessions/serve-corehash-mut"));
+            }
 
             server.lock().unwrap().shutdown().unwrap();
             task.abort();

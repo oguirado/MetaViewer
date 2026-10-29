@@ -144,13 +144,35 @@ fn accepted_full_size_frames_have_disjoint_stages_and_refusals_have_no_row() {
                     .unwrap(),
                 _ => unreachable!(),
             }
+            let refusal_msg_id = format!(
+                "{}-{}",
+                daemon.registration.endpoint.instance,
+                daemon.seq + 1
+            );
             daemon.send(frame).await;
-            // Invalid frames retain the existing connection-refusal behavior.
-            let refused =
-                tokio::time::timeout(Duration::from_secs(5), read_frame(&mut daemon.socket))
+            if refusal == "unknown" {
+                let verdict = serde_json::to_value(daemon.receive().await.body).unwrap();
+                assert_eq!(verdict["schema"], "action_verdict/v0.2");
+                assert_eq!(verdict["decision"], "refused");
+                assert_eq!(verdict["reason_code"], "STALE_FRAME");
+                assert_eq!(verdict["proposal_id"], refusal_msg_id);
+                assert!(
+                    tokio::time::timeout(
+                        Duration::from_millis(100),
+                        read_frame(&mut daemon.socket)
+                    )
                     .await
-                    .unwrap();
-            assert!(!matches!(refused, Ok(Some(_))), "{refused:?}");
+                    .is_err(),
+                    "unknown surface must yield exactly one verdict and keep the connection"
+                );
+            } else {
+                // Witness and oversize failures retain teardown.
+                let refused =
+                    tokio::time::timeout(Duration::from_secs(5), read_frame(&mut daemon.socket))
+                        .await
+                        .unwrap();
+                assert!(!matches!(refused, Ok(Some(_))), "{refused:?}");
+            }
             server.lock().unwrap().shutdown().unwrap();
             let path = state.join("sessions/serve-session/artifacts/frame_timings.jsonl");
             let rows = rows(&path);
