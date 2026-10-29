@@ -42,6 +42,9 @@ func NewProcessRunner(root string, environment []string) (*ProcessRunner, error)
 	return r, nil
 }
 func (r *ProcessRunner) Run(ctx context.Context, args []string, input []byte) ([]byte, error) {
+	if err := capsule.RefuseProtectedContainer(args); err != nil {
+		return nil, err
+	}
 	if len(args) < 2 || args[0] != "srf-identity-surface" || (args[1] != "view-stop" && args[1] != "paste-text") {
 		return nil, fault("usage", "unsupported operator command")
 	}
@@ -50,6 +53,9 @@ func (r *ProcessRunner) Run(ctx context.Context, args []string, input []byte) ([
 	return r.short.Run(ctx, argv, input)
 }
 func (r *ProcessRunner) Start(ctx context.Context, args []string) (*Process, error) {
+	if err := capsule.RefuseProtectedContainer(args); err != nil {
+		return nil, err
+	}
 	if len(args) != 4 || args[0] != "srf-identity-surface" || (args[1] != "view" && args[1] != "login") || args[2] != "--container" || !identity.MatchString(args[3]) {
 		return nil, fault("usage", "invalid view command")
 	}

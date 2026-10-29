@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"image/png"
 	"io"
+	"metaviewer/daemon-adapter/internal/capsule"
 	"metaviewer/daemon-adapter/internal/cli"
 	"os"
 	"path/filepath"
@@ -68,6 +69,9 @@ func (m *Manager) capture(ctx context.Context, requestID, id string, r *recordin
 	argv := []string{filepath.Join(m.cfg.BinDir, s.Family), "frame", "--container", s.Container}
 	if s.Family == "srf-identity-surface" {
 		argv = append(argv, "--window", s.Window)
+	}
+	if err := capsule.RefuseProtectedContainer(argv); err != nil {
+		return nil, err
 	}
 	out, err := m.cfg.Runner.Run(ctx, argv, nil)
 	if err != nil {

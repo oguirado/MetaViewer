@@ -8,7 +8,8 @@ package capsule
 // Local observation IDs are opaque and never reused within this manager's session.
 // Uncertain native effects quarantine the profile until explicit reconciliation.
 // [TARGET, unit decision] Failed readiness is compensated only for a validated,
-// non-conflicting container identity. Verified removal releases quarantine;
+// non-conflicting identity correlated with a pending create before native start.
+// Verified removal releases quarantine;
 // otherwise an uncertain fault exposes the retained quarantine. Create has no
 // request dedup key: an uncertain start must never be retried automatically.
 // [TARGET, unit decision] Profile geometry caps identity readiness; surface and
@@ -126,6 +127,7 @@ type Manager struct {
 	clock       cli.Clock
 	bindings    map[string]Binding
 	quarantined map[string]bool
+	creates     map[string]pendingCreate
 	destroying  map[string]bool
 	pending     map[string]*pendingInput
 	inputEpochs map[string]uint64
@@ -217,6 +219,9 @@ func withinRAM(path string) bool {
 	return path == "/dev/shm" || len(path) > 9 && path[:9] == "/dev/shm/" && filepath.Clean(path) == path
 }
 func (m *Manager) execute(ctx context.Context, p Profile, args []string, in []byte) ([]byte, error) {
+	if err := refuseProtectedContainer(args); err != nil {
+		return nil, err
+	}
 	name := "srf-identity-surface"
 	if p.NativeKind == "holdings" {
 		name = "srf-holdings-capsule"
@@ -225,6 +230,9 @@ func (m *Manager) execute(ctx context.Context, p Profile, args []string, in []by
 	defer cancel()
 	out, err := m.runner.Run(ctx, append([]string{filepath.Join(m.cfg.BinDir, name)}, args...), in)
 	if err != nil {
+		if len(out) <= m.cfg.MaxOutputBytes {
+			return out, err // Failed starts may still identify their pending create.
+		}
 		return nil, err
 	}
 	if len(out) > m.cfg.MaxOutputBytes {
@@ -406,6 +414,19 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 	if p.Kind == "desktop_capsule" && (p.NativeKind != "program" || !admittedProgram(p.Program, p.NestedDepth) || (p.NestedDepth == 1 && (p.Width != 1280 || p.Height != 720))) {
 		return nil, fault("profile", "unadmitted profile, kind or geometry")
 	}
+	// Refuse protected profile collisions before any create state or native call.
+	var profileContainer string
+	switch p.NativeKind {
+	case "browser":
+		profileContainer = "srf-id-" + q.ProfileID
+	case "program":
+		profileContainer = "srf-pg-" + q.ProfileID
+	case "vm":
+		profileContainer = "srf-vm-" + q.ProfileID
+	}
+	if e := refuseProtectedContainer([]string{"--container", profileContainer}); e != nil {
+		return nil, e
+	}
 	// Lost bindings retain their profile and capacity: native state may be orphaned.
 	// Only destroy with a verified stop receipt releases both; keep the old ID
 	// as a tombstone and generate a fresh ID for the replacement.
@@ -435,28 +456,44 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 	}
 	// Quarantine before execution; clear only on a proven pre-spawn refusal.
 	m.quarantined[q.ProfileID] = true
+	// [TARGET, unit decision] The profile slot and generation establish cleanup
+	// authority before start. A reply alone cannot create that authority.
+	if m.creates == nil {
+		m.creates = make(map[string]pendingCreate)
+	}
+	pending := pendingCreate{Generation: id, NativeKind: p.NativeKind, Slot: 1}
+	switch p.NativeKind {
+	case "browser":
+		pending.Container = "srf-id-" + q.ProfileID
+	case "program":
+		pending.Container = "srf-pg-" + q.ProfileID
+	case "vm":
+		pending.Container = "srf-vm-" + q.ProfileID
+	}
+	m.creates[q.ProfileID] = pending
+	defer delete(m.creates, q.ProfileID)
 	out, e := m.execute(ctx, p, args, nil)
-	if e != nil {
-		var refused *preSpawnRefusal
-		if errors.As(e, &refused) {
-			delete(m.quarantined, q.ProfileID)
-		}
+	var refused *preSpawnRefusal
+	if errors.As(e, &refused) {
+		delete(m.quarantined, q.ProfileID)
 		return nil, e
 	}
 	b := Binding{Surface: Surface{Schema: "surface/" + version, SurfaceID: id, Kind: p.Kind, Display: p.Display, Geometry: q.Geometry, State: "active", Visibility: "unfolded", Control: "agent", ProfileID: q.ProfileID}, NativeKind: p.NativeKind, Program: p.Program}
 	// Recover only the cleanup identity from syntactically valid bounded JSON.
 	// Readiness validation below remains closed and authoritative for admission.
 	var cleanup struct {
+		Slot      int    `json:"slot"`
 		Container string `json:"container"`
 		RunID     string `json:"run_id"`
 	}
 	if p.NativeKind == "holdings" {
 		var records []struct {
+			Slot      int    `json:"slot"`
 			Container string `json:"container"`
 			RunID     string `json:"run_id"`
 		}
 		if len(out) <= m.cfg.MaxOutputBytes && json.Unmarshal(out, &records) == nil && len(records) == 1 {
-			cleanup.Container, cleanup.RunID = records[0].Container, records[0].RunID
+			cleanup.Slot, cleanup.Container, cleanup.RunID = records[0].Slot, records[0].Container, records[0].RunID
 		}
 	} else if len(out) <= m.cfg.MaxOutputBytes {
 		if json.Unmarshal(out, &cleanup) != nil {
@@ -472,6 +509,7 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 			valid = holdingsContainer.MatchString(cleanup.Container)
 		}
 		valid = valid && runID.MatchString(cleanup.RunID)
+		valid = valid && m.pendingCleanup(q.ProfileID, id, p.NativeKind, cleanup.Slot, cleanup.Container)
 		for _, old := range m.bindings {
 			if old.Container == cleanup.Container && old.Surface.State != "destroyed" {
 				valid = false
@@ -487,8 +525,14 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 				return
 			}
 		}
+		if e != nil {
+			return // Preserve the native fault while retaining quarantine.
+		}
 		err = fault("uncertain", "profile "+q.ProfileID+" remains quarantined after failed create: "+err.Error())
 	}()
+	if e != nil {
+		return nil, e
+	}
 	if p.NativeKind == "holdings" {
 		var records []struct {
 			Slot       int    `json:"slot"`
@@ -533,6 +577,9 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 		b.Window = c.Windows[0].ID
 		b.Surface.Geometry = Geometry{W: c.Windows[0].W, H: c.Windows[0].H}
 		b.FramesRoot = filepath.Join(p.RAMRoot, c.RunID, "frames", b.Window)
+	}
+	if err := refuseProtectedContainer([]string{"--container", b.Container}); err != nil {
+		return nil, err
 	}
 	for _, old := range m.bindings {
 		if old.Container == b.Container && old.Surface.State != "destroyed" {

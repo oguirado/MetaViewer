@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"metaviewer/daemon-adapter/internal/capsule"
 	"metaviewer/daemon-adapter/internal/cli"
 )
 
@@ -63,6 +64,10 @@ func NewManager(r Runner) *Manager {
 }
 func fault(code, detail string) error { return &cli.Fault{Code: code, Detail: detail} }
 func (b *Manager) check(ctx context.Context, id string) error {
+	if err := capsule.RefuseProtectedContainer([]string{"--container", id}); err != nil {
+		return err
+	}
+
 	if err := ctx.Err(); err != nil {
 		return err
 	}
