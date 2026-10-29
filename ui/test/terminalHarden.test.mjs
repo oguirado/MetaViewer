@@ -239,7 +239,7 @@ test('B3: per-session token bucket throttles resize and write bursts without kil
     // Port resize when bucket is empty emits TERMINAL_IO_REFUSED on port without killing session.
     const resizeRateErrP = nextPortFrame(port);
     port.postMessage({ session, cols: 94, rows: 25 });
-    assert.deepEqual(await resizeRateErrP, { session, error: 'TERMINAL_IO_REFUSED' });
+    assert.deepEqual(await resizeRateErrP, { session, error: 'TERMINAL_IO_REFUSED', retryable: true, expectedSeq: 1 });
     assert.equal(pty.handles[0].killed, false);
 
     // Burst 64 KiB port write consumes the 65536-byte bucket; immediate second 64 KiB write is throttled without killing session.
@@ -251,18 +251,25 @@ test('B3: per-session token bucket throttles resize and write bursts without kil
 
     const writeRateErrP = nextPortFrame(port);
     port.postMessage({ session, seq: 2, bytes: chunk64k });
-    assert.deepEqual(await writeRateErrP, { session, error: 'TERMINAL_IO_REFUSED' });
+    assert.deepEqual(await writeRateErrP, { session, error: 'TERMINAL_IO_REFUSED', retryable: true, expectedSeq: 2 });
     assert.equal(pty.handles[0].writes.length, 1);
     assert.equal(pty.handles[0].killed, false);
 
     // Advance clock by 1 second: buckets refill and session accepts both resize and write again.
     clockMs += 1000;
     await host.resize({ session, cols: 100, rows: 30 });
-    port.postMessage({ session, seq: 3, bytes: new TextEncoder().encode('alive') });
+    port.postMessage({ session, seq: 2, bytes: new TextEncoder().encode('alive') });
     await new Promise((r) => setTimeout(r, 15));
     assert.equal(pty.handles[0].killed, false);
     assert.deepEqual(pty.handles[0].resizes.at(-1), [100, 30]);
     assert.equal(pty.handles[0].writes.at(-1), 'alive');
+    assert.equal(pty.handles[0].writes.length, 2);
+
+    // Skipping the next sequence remains a fatal protocol refusal.
+    const skippedSeqErrP = nextPortFrame(port);
+    port.postMessage({ session, seq: 4, bytes: new TextEncoder().encode('skipped') });
+    assert.deepEqual(await skippedSeqErrP, { session, error: 'TERMINAL_IO_REFUSED' });
+    assert.equal(pty.handles[0].writes.length, 2);
   } finally {
     port?.close?.();
     await host.dispose();

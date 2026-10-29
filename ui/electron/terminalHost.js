@@ -1,5 +1,7 @@
 // @ts-check
-/** [TARGET, unit decision] Main-only capability: admitted server spec is copied
+/** [TARGET, unit decision] Retryable port refusals preserve the next input sequence.
+ * Renderer handling requires the matching client contract.
+ * Main-only capability: admitted server spec is copied
  * before utilityProcess launch. Caller authenticates renderer before transfer. */
 import { fileURLToPath } from 'node:url';
 import { validateSpawnSpec } from './ptySession.js';
@@ -74,6 +76,9 @@ function collectProcessTreePids(rootPid) {
   return [...tree];
 }
 
+// [TARGET, unit decision] Bound consecutive retryable refusals without admitted input.
+export const MAX_CONSECUTIVE_RETRYABLE_REFUSALS = 64;
+
 export const DEFAULT_TERMINAL_LIMITS = Object.freeze({
   attachDeadlineMs: 10_000,
   maxPreAttachFrames: 64,
@@ -96,6 +101,13 @@ export function createTokenBucket({ capacity, refillPerSec, now = Date.now }) {
   let tokens = cap;
   let lastMs = now();
   return {
+    /** Non-consuming admission check; refusal leaves tokens and refill accounting intact.
+     * @param {number} [cost] */
+    canTake(cost = 1) {
+      if (!Number.isFinite(cost) || cost <= 0) return false;
+      const elapsedSec = Math.max(0, (now() - lastMs) / 1000);
+      return Math.min(cap, tokens + elapsedSec * rate) >= cost;
+    },
     /** @param {number} [cost] */
     take(cost = 1) {
       if (!Number.isFinite(cost) || cost <= 0) return false;
@@ -487,6 +499,7 @@ export function createTerminalHost({
           queue: [],
           queuedBytes: 0,
           inputSeq: 0,
+          consecutiveRetryableRefusals: 0,
           opened: false,
           exited: false,
           exitPromise,
@@ -537,12 +550,25 @@ export function createTerminalHost({
             throw new Error('TERMINAL_IO_REFUSED');
           }
           const active = getSession({ session: m.session }, 'session', false, s.sender);
+          const refuseRetryable = () => {
+            if (active.consecutiveRetryableRefusals >= MAX_CONSECUTIVE_RETRYABLE_REFUSALS) {
+              throw new Error('TERMINAL_IO_REFUSED');
+            }
+            active.consecutiveRetryableRefusals += 1;
+            try {
+              port1.postMessage({ session: value.session, error: 'TERMINAL_IO_REFUSED',
+                retryable: true, expectedSeq: active.inputSeq + 1 });
+            } catch {}
+          };
           if (('cols' in m || 'rows' in m) && !('bytes' in m) && !('ack' in m) && !('seq' in m)) {
             if (hasClosedKeys(m, 'cols,rows,session')
                 && Number.isSafeInteger(m.cols) && m.cols >= 2 && m.cols <= 500
-                && Number.isSafeInteger(m.rows) && m.rows >= 2 && m.rows <= 300
-                && enabled
-                && active.resizeBucket.take(1)) {
+                && Number.isSafeInteger(m.rows) && m.rows >= 2 && m.rows <= 300) {
+              if (!enabled || !active.resizeBucket.take(1)) {
+                refuseRetryable();
+                return;
+              }
+              active.consecutiveRetryableRefusals = 0;
               send({ op: 'resize', id: m.session, cols: m.cols, rows: m.rows });
             } else {
               try {
@@ -557,18 +583,17 @@ export function createTerminalHost({
               && Number.isSafeInteger(m.seq)
               && m.seq === active.inputSeq + 1) {
             if (!enabled) {
-              try {
-                port1.postMessage({ session: value.session, error: 'TERMINAL_IO_REFUSED' });
-              } catch {}
+              refuseRetryable();
               return;
             }
+            if (!active.writeOpsBucket.canTake(1) || !active.writeBytesBucket.canTake(m.bytes.byteLength)) {
+              refuseRetryable();
+              return;
+            }
+            active.writeOpsBucket.take(1);
+            active.writeBytesBucket.take(m.bytes.byteLength);
+            active.consecutiveRetryableRefusals = 0;
             active.inputSeq += 1;
-            if (!active.writeOpsBucket.take(1) || !active.writeBytesBucket.take(m.bytes.byteLength)) {
-              try {
-                port1.postMessage({ session: value.session, error: 'TERMINAL_IO_REFUSED' });
-              } catch {}
-              return;
-            }
             send({ op: 'write', id: m.session, b64: Buffer.from(m.bytes).toString('base64') });
           } else if (hasClosedKeys(m, 'ack,bytes,session')
               && Number.isSafeInteger(m.ack) && m.ack > 0
@@ -610,6 +635,7 @@ export function createTerminalHost({
       if (!s.resizeBucket.take(1)) {
         throw new Error('TERMINAL_IO_REFUSED: RATE_LIMITED');
       }
+      s.consecutiveRetryableRefusals = 0;
       send({ op: 'resize', id: value.session, cols: value.cols, rows: value.rows });
       return true;
     },
