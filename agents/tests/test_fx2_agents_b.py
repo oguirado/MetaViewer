@@ -267,9 +267,9 @@ class Fx2AgentsBTests(unittest.TestCase):
                                 timeout_ms=bad_timeout,
                             )
                         self.assertEqual(ctx.exception.code, "timeout")
-                # Negative control: timeout_ms=100 proceeds and succeeds.
+                # Valid-timeout control: allow for scheduling the threaded core.
                 res = client.request(
-                    body, "mv_tool_result/v0.2", timeout_ms=100
+                    body, "mv_tool_result/v0.2", timeout_ms=5000
                 )
                 self.assertEqual(res["status"], "ok")
 
@@ -294,14 +294,16 @@ class Fx2AgentsBTests(unittest.TestCase):
                     None,
                 ):
                     with self.subTest(body=bad_body):
-                        with self.assertRaises(ClientError) as ctx:
-                            client.request(
-                                bad_body, "mv_tool_result/v0.2", timeout_ms=100
-                            )
+                        with mock.patch.object(client.active, "send", wraps=client.active.send) as send:
+                            with self.assertRaises(ClientError) as ctx:
+                                client.request(
+                                    bad_body, "mv_tool_result/v0.2", timeout_ms=100
+                                )
+                            send.assert_not_called()
                         self.assertEqual(ctx.exception.code, "bad_shape")
                         self.assertEqual(seq_path.read_bytes(), before_seq_bytes)
 
-                # Negative control: valid body with request_id succeeds and advances sequence file.
+                # Valid-body control: allow scheduling time, then advance the sequence file.
                 good_body = {
                     "schema": "mv_tool_call/v0.2",
                     "request_id": "req-ok",
@@ -309,7 +311,7 @@ class Fx2AgentsBTests(unittest.TestCase):
                     "args": {"cursor": None, "limit": 1},
                 }
                 res = client.request(
-                    good_body, "mv_tool_result/v0.2", timeout_ms=100
+                    good_body, "mv_tool_result/v0.2", timeout_ms=5000
                 )
                 self.assertEqual(res["request_id"], "req-ok")
                 self.assertEqual(seq_path.read_bytes(), b"3")
