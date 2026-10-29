@@ -140,6 +140,30 @@ class DepsLockParserTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "owner/name"):
             assembly_smoke.parse_deps_lock_data(bad_repo)
 
+    def test_refuses_unallowlisted_repo_including_attacker_evil(self) -> None:
+        disallowed_repos = (
+            "attacker/evil",
+            "oguirado/opensuperficies",
+            "Oguirado/vision-engine",
+            "oguirado/Wender-Agent",
+            "oguirado/other-repo",
+        )
+        for comp_idx in range(3):
+            for bad_slug in disallowed_repos:
+                with self.subTest(comp_idx=comp_idx, repo=bad_slug):
+                    data = _valid_lock_dict()
+                    data["components"][comp_idx]["repo"] = bad_slug
+                    with self.assertRaisesRegex(ValueError, "not in allowlist"):
+                        assembly_smoke.parse_deps_lock_data(data)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            evil_lock = Path(tmp) / "evil.lock"
+            evil_data = _valid_lock_dict()
+            evil_data["components"][0]["repo"] = "attacker/evil"
+            evil_lock.write_text(json.dumps(evil_data), encoding="utf-8")
+            rc = assembly_smoke.main(["--lock", str(evil_lock), "--print-pins"])
+            self.assertEqual(rc, 1)
+
     def test_schema_version_validation_and_duplicate_json_keys(self) -> None:
         valid_with_schema = _valid_lock_dict()
         valid_with_schema["schema_version"] = "metaviewer.deps.lock/v1"
@@ -706,6 +730,72 @@ class WenderPlannerSmokeTest(unittest.TestCase):
             self.assertTrue(ok)
             self.assertEqual(note, "SKIP (planner not pinned yet)")
 
+    def test_planner_absent_stub_tree_fails_under_require_planner_and_passes_without_it(
+        self,
+    ) -> None:
+        pin = assembly_smoke.PinnedComponent(
+            name="wender-agent",
+            kind="python_package",
+            repo="oguirado/wender-agent",
+            version="v0.3.0",
+            commit="7648b258d1d04953bacffe8627de5acd7c75d817",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            stub_dir = Path(tmp) / "wender-no-planner"
+            _write_wender_stub_tree(stub_dir)
+
+            ok_opt, note_opt = assembly_smoke.run_wender_planner_check(
+                stub_dir,
+                timeout_s=5.0,
+                require_planner=False,
+            )
+            self.assertTrue(ok_opt)
+            self.assertEqual(note_opt, "SKIP (planner not pinned yet)")
+
+            ok_req, note_req = assembly_smoke.run_wender_planner_check(
+                stub_dir,
+                timeout_s=5.0,
+                require_planner=True,
+            )
+            self.assertFalse(ok_req)
+            self.assertIn("--require-planner", note_req)
+            self.assertNotIn("SKIP", note_req)
+
+            res_pass = assembly_smoke.smoke_wender_agent(
+                stub_dir,
+                pin,
+                timeout_s=10.0,
+                require_planner=False,
+            )
+            self.assertEqual(res_pass.status, "PASS", res_pass.detail)
+            self.assertEqual(res_pass.planner_note, "SKIP (planner not pinned yet)")
+
+            res_fail = assembly_smoke.smoke_wender_agent(
+                stub_dir,
+                pin,
+                timeout_s=10.0,
+                require_planner=True,
+            )
+            self.assertEqual(res_fail.status, "FAIL", res_fail.detail)
+            self.assertIn("--require-planner", res_fail.detail)
+
+        with mock.patch.object(
+            assembly_smoke,
+            "run_all_smokes",
+            return_value=(True, [], ["PASS all"]),
+        ) as mocked_run:
+            rc_with_flag = assembly_smoke.main(
+                ["--lock", str(REPO_ROOT / "deps.lock"), "--require-planner"]
+            )
+            self.assertEqual(rc_with_flag, 0)
+            self.assertTrue(mocked_run.call_args.kwargs["require_planner"])
+
+            rc_without_flag = assembly_smoke.main(
+                ["--lock", str(REPO_ROOT / "deps.lock")]
+            )
+            self.assertEqual(rc_without_flag, 0)
+            self.assertFalse(mocked_run.call_args.kwargs["require_planner"])
+
     def test_planner_cli_valid_and_invalid_proposal_validation(self) -> None:
         valid_proposal = _valid_proposal_body()
         parsed = assembly_smoke.validate_planner_proposal_output(
@@ -1182,6 +1272,114 @@ sys.exit(2)
                     "built=[srf-identity-surface,srf-holdings-capsule] daemon-adapter=ok",
                     res_ok.detail,
                 )
+
+
+class AssemblyWorkflowHardeningTest(unittest.TestCase):
+    def _read_assembly_workflow(self) -> str:
+        return (REPO_ROOT / ".github" / "workflows" / "assembly.yml").read_text(
+            encoding="utf-8"
+        )
+
+    def _read_go_mod_version(self) -> str:
+        go_mod = (REPO_ROOT / "daemon-adapter" / "go.mod").read_text(encoding="utf-8")
+        for line in go_mod.splitlines():
+            parts = line.strip().split()
+            if len(parts) == 2 and parts[0] == "go":
+                return parts[1]
+        self.fail("daemon-adapter/go.mod has no 'go <version>' directive")
+
+    def _assert_workflow_hardened(self, text: str, expected_go_version: str) -> None:
+        fork_expr = "github.event.pull_request.head.repo.fork"
+        secret_expr = "secrets.ASSEMBLY_READ_TOKEN"
+
+        self.assertIn(fork_expr, text)
+        self.assertIn(secret_expr, text)
+        fork_pos = text.index(fork_expr)
+        secret_pos = text.index(secret_expr)
+        self.assertLess(
+            fork_pos,
+            secret_pos,
+            "fork guard must appear before any step that references secrets.ASSEMBLY_READ_TOKEN",
+        )
+
+        pre_secret_block = text[:secret_pos]
+        self.assertIn("::error::", pre_secret_block)
+        self.assertIn("exit 1", pre_secret_block)
+
+        self.assertNotIn("exit 0", text)
+        self.assertNotIn("skip=true", text)
+        self.assertNotIn("::notice::ASSEMBLY_READ_TOKEN is empty", text)
+
+        self.assertIn("python3 -m unittest tests.test_assembly_smoke -v", text)
+        self.assertNotIn("unittest discover", text)
+
+        self.assertIn(
+            "python3 tools/assembly_smoke.py --deps-root ./_deps --strict-head --require-planner --timeout 60",
+            text,
+        )
+
+        self.assertNotIn("go-version-file", text)
+        self.assertIn(f'go-version: "{expected_go_version}"', text)
+        self.assertIn("check-latest: false", text)
+
+    def test_workflow_fork_guard_before_secret_and_no_silent_skip_exit_zero(
+        self,
+    ) -> None:
+        text = self._read_assembly_workflow()
+        self._assert_workflow_hardened(text, self._read_go_mod_version())
+
+    def test_workflow_explicit_unittest_and_require_planner_and_literal_go_version(
+        self,
+    ) -> None:
+        text = self._read_assembly_workflow()
+        expected_go_version = self._read_go_mod_version()
+
+        self.assertIn("python3 -m unittest tests.test_assembly_smoke -v", text)
+        self.assertNotIn("unittest discover", text)
+
+        self.assertIn(
+            "python3 tools/assembly_smoke.py --deps-root ./_deps --strict-head --require-planner --timeout 60",
+            text,
+        )
+
+        self.assertNotIn("go-version-file", text)
+        self.assertIn(f'go-version: "{expected_go_version}"', text)
+        self.assertIn("check-latest: false", text)
+
+    def test_named_workflow_mutations_fail_assertions(self) -> None:
+        base_text = self._read_assembly_workflow()
+        go_ver = self._read_go_mod_version()
+
+        # Mutation 1: delete the fork guard
+        mut_no_fork = base_text.replace(
+            "github.event.pull_request.head.repo.fork", "github.event_name"
+        )
+        with self.assertRaises(AssertionError):
+            self._assert_workflow_hardened(mut_no_fork, go_ver)
+
+        # Mutation 2: restore exit 0 on pull_request
+        mut_exit_zero = base_text.replace(
+            'echo "::error::ASSEMBLY_READ_TOKEN secret is empty on pull_request; failing closed."\n              exit 1',
+            'echo "::notice::ASSEMBLY_READ_TOKEN is empty on pull_request (fork); skipping pinned assembly smoke."\n              echo "skip=true" >> "${GITHUB_OUTPUT}"\n              exit 0',
+        )
+        self.assertNotEqual(mut_exit_zero, base_text)
+        with self.assertRaises(AssertionError):
+            self._assert_workflow_hardened(mut_exit_zero, go_ver)
+
+        # Mutation 3: drop --require-planner from workflow
+        mut_no_req_planner = base_text.replace(" --require-planner", "")
+        self.assertNotEqual(mut_no_req_planner, base_text)
+        with self.assertRaises(AssertionError):
+            self._assert_workflow_hardened(mut_no_req_planner, go_ver)
+
+        # Mutation 5: restore go-version-file
+        mut_go_file = base_text.replace(
+            f'go-version: "{go_ver}"\n          check-latest: false',
+            "go-version-file: daemon-adapter/go.mod",
+        )
+        self.assertNotEqual(mut_go_file, base_text)
+        with self.assertRaises(AssertionError):
+            self._assert_workflow_hardened(mut_go_file, go_ver)
 
 
 if __name__ == "__main__":

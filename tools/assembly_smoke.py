@@ -26,6 +26,13 @@ REQUIRED_COMPONENTS: tuple[str, ...] = (
     "wender-agent",
     "opensuperficies",
 )
+ALLOWED_COMPONENT_REPOS: frozenset[str] = frozenset(
+    {
+        "oguirado/vision-engine",
+        "oguirado/wender-agent",
+        "oguirado/OpenSuperficies",
+    }
+)
 HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
 REPO_SLUG_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
@@ -115,6 +122,11 @@ def parse_deps_lock_data(raw: Any) -> dict[str, PinnedComponent]:
         if not isinstance(repo, str) or not REPO_SLUG_RE.match(repo):
             raise ValueError(
                 f"deps.lock component {name!r} repo must match 'owner/name', got {repo!r}"
+            )
+        if repo not in ALLOWED_COMPONENT_REPOS:
+            raise ValueError(
+                f"deps.lock component {name!r} repo {repo!r} is not in allowlist "
+                f"{sorted(ALLOWED_COMPONENT_REPOS)}"
             )
         if not isinstance(version, str) or not version.strip():
             raise ValueError(
@@ -616,12 +628,15 @@ def run_wender_planner_check(
     tree_dir: Path,
     *,
     timeout_s: float,
+    require_planner: bool = False,
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> tuple[bool, str]:
     """Execute wender.plan.cli with the provider's observation/table/goal request."""
     cli_file = tree_dir / "wender" / "plan" / "cli.py"
     cli_pkg_init = tree_dir / "wender" / "plan" / "cli" / "__init__.py"
     if not cli_file.is_file() and not cli_pkg_init.is_file():
+        if require_planner:
+            return False, "wender.plan.cli is required (--require-planner) but absent in pinned tree"
         return True, "SKIP (planner not pinned yet)"
 
     planner_req = build_wender_planner_request()
@@ -660,6 +675,7 @@ def smoke_wender_agent(
     pin: PinnedComponent,
     *,
     timeout_s: float,
+    require_planner: bool = False,
 ) -> SmokeResult:
     """Verify wender-agent public entry points and optional wender.plan.cli."""
     t0 = time.monotonic()
@@ -747,6 +763,7 @@ print(json.dumps({"imported": list(entrypoints), "schema": state["schema"], "dig
         planner_ok, planner_note = run_wender_planner_check(
             tree_dir,
             timeout_s=timeout_s,
+            require_planner=require_planner,
         )
     except subprocess.TimeoutExpired:
         elapsed = int((time.monotonic() - t0) * 1000)
@@ -944,6 +961,7 @@ def run_all_smokes(
     deps_root: Path,
     strict_head: bool,
     timeout_s: float,
+    require_planner: bool = False,
 ) -> tuple[bool, list[SmokeResult], list[str]]:
     """Parse deps.lock, prepare each pinned checkout, run all smokes, and aggregate."""
     pins = parse_deps_lock(lock_path)
@@ -979,7 +997,12 @@ def run_all_smokes(
                 )
             elif comp_name == "wender-agent":
                 results.append(
-                    smoke_wender_agent(tree_dir, pin, timeout_s=timeout_s)
+                    smoke_wender_agent(
+                        tree_dir,
+                        pin,
+                        timeout_s=timeout_s,
+                        require_planner=require_planner,
+                    )
                 )
             elif comp_name == "opensuperficies":
                 results.append(
@@ -1042,6 +1065,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Require git HEAD in each component checkout to match the pinned commit",
     )
     parser.add_argument(
+        "--require-planner",
+        action="store_true",
+        help="Fail wender-agent smoke if wender.plan.cli is absent instead of skipping",
+    )
+    parser.add_argument(
         "--print-pins",
         action="store_true",
         help="Validate deps.lock and print JSON summary of pinned components, then exit",
@@ -1085,6 +1113,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         deps_root=args.deps_root,
         strict_head=args.strict_head,
         timeout_s=args.timeout,
+        require_planner=args.require_planner,
     )
     for line in lines:
         print(line)
