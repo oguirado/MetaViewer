@@ -12,7 +12,11 @@ export function createTerminalClient({session,port,write,onStatus}) {
     if(!active) return;
     const m=event.data;
     if(!m || m.session!==session) {active=false;onStatus('Terminal binding refused');return;}
-    if(typeof m.error==='string' || Number.isInteger(m.exitCode)) {active=false;onStatus(m.error??`Exited (${m.exitCode})`);return;}
+    if(typeof m.error==='string' || Number.isInteger(m.exitCode)) {
+      if(m.error==='TERMINAL_IO_REFUSED'&&m.retryable===true&&Number.isSafeInteger(m.expectedSeq)&&m.expectedSeq>0
+        &&Object.keys(m).sort().join(',')==='error,expectedSeq,retryable,session'){inputSeq=m.expectedSeq-1;return;}
+      active=false;onStatus(m.error??`Exited (${m.exitCode})`);return;
+    }
     if(Object.keys(m).sort().join(',')!=='bytes,seq,session' || !(m.bytes instanceof Uint8Array)
       || m.seq!==received+1 || m.bytes.length>65536 || pending.size>=256) {
       active=false;onStatus('Terminal stream refused');return;
