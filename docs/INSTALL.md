@@ -1,6 +1,6 @@
 # Installing and Building MetaViewer on Linux (`arm64` and `x64`)
 
-I build and test MetaViewer on Linux as a desktop shell for isolated application surfaces governed by a Rust admission and journaling core (multi-capsule wall `[TARGET]`, verified in E2E harnesses; live acceptance `live21` runs `1` capsule at `2.71` fps `[CITED]` with `52.11` ms p50 core processing per `1280x900` frame `[CITED]`) [CITED: `docs/ARCHITECTURE.md`]. This guide covers platform and toolchain requirements, installing and verifying the deterministic Linux release tarball, building from source and running the offline gate, resolving optional pinned external components, the RAM-first capture policy and XDG storage layout, uninstallation, and troubleshooting with exact gate and package error codes.
+I build and test MetaViewer on Linux as a desktop shell for isolated application surfaces governed by a Rust admission and journaling core (multi-capsule acceptance remains [TARGET]; current-pin live wall fps and latency are unmeasured). I distinguish the earlier debug-core live21 and release-core live22 results in [historical live evidence](../README.md#historical-live-evidence). This guide covers platform and toolchain requirements, installing and verifying the deterministic Linux release tarball, building from source and running the offline gate, resolving optional pinned external components, the RAM-first capture policy and XDG storage layout, uninstallation, and troubleshooting with exact gate and package error codes.
 
 ## 1. Platform and Requirements
 
@@ -45,7 +45,7 @@ Each release archive contains:
 - `MetaViewer-linux-<arch>/INSTALL.md` — the bundled launch and manifest verification note [CITED: `ui/tools/package.js`].
 - `MetaViewer-linux-<arch>.sha256` — the SHA-256 manifest covering every regular file in `MetaViewer-linux-<arch>/` [CITED: `ui/tools/package.js`].
 
-OS-level desktop installers (`.deb`, `.rpm`, Flatpak, AppImage, or `.desktop` file registration) are not documented yet.
+OS-level desktop installers (`.deb`, `.rpm`, Flatpak, AppImage, or `.desktop` file registration) are not available.
 
 ### Extract and Verify the SHA-256 Manifest
 
@@ -116,6 +116,7 @@ npm test
 npm run check
 npm run build
 npm run smoke
+cd ..
 ```
 
 ### Build the Release Package Tarball (`scripts/bootstrap.sh`)
@@ -176,6 +177,8 @@ External runtime components are pinned in `deps.lock` by component name, kind, r
 | `vision-engine` | `python_package` | `oguirado/vision-engine` | `v0.2.0` [CITED] | `3bb54835db8a2e545311cfcc45185a0dfbd9313a` [CITED] | `VQA_VE_ROOT` [CITED: `agents/metaviewer_agents/perception/deps_lock.py`] |
 | `wender-agent` | `python_package` | `oguirado/wender-agent` | `v0.3.0` [CITED] | `41493681a2f4d92aae50c476ed13c219c31a0a02` [CITED] | `MV_WENDER_ROOT` [CITED: `agents/metaviewer_agents/perception/deps_lock.py`] |
 | `opensuperficies` | `go_binary` | `oguirado/OpenSuperficies` | `os-cu-w9-mv1` [CITED] | `a9ac1ac8543872b428990ea23fa2629cd0a6d1d5` [CITED] | `MV_SRF_BIN_DIR` [CITED: `daemon-adapter/internal/daemon/environment.go`] |
+
+I keep MetaViewer, OpenSuperficies, vision-engine, and wender-agent in their own repositories. I use the exact commit column as checkout authority; version fields are release labels [CITED: `deps.lock`]. I use persistent `vadapt.vserve` when its raw-frame handshake succeeds (including a typed `ring` capability), with one-shot `vadapt.cu_describe` fallback. I use `wender.plan.cli` over the pipe-only planner boundary; MetaViewer retains action admission and execution [CITED: `agents/metaviewer_agents/perception/vcore.py`, `agents/metaviewer_agents/wender_bridge.py`]. Assembly CI runs that boundary with `--require-planner` [CITED: `.github/workflows/assembly.yml`].
 
 ### Python Agent Component Resolution (`agents/metaviewer_agents/perception/deps_lock.py`)
 

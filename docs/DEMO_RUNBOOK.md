@@ -4,30 +4,30 @@ I use `tests/e2e/e2e1_slice/stack.py` as the single launcher to boot the real Me
 
 ## 1. Prerequisites
 
-Before I run `stack.py start`, preflight verifies every prerequisite and fails closed if any check is unsatisfied:
+Before I run `stack.py start`, I provide the tools below. Stack preflight fails closed on its checked prerequisites; I check `ffprobe` separately for the recording post-check. I substitute all angle-bracket placeholders before executing examples from my clone root:
 
 - **Tools on `PATH`**:
   - `--display private` (default): `docker`, `Xvfb`, `xauth`, `xdpyinfo`, `xwininfo`.
   - `--display visible`: `docker`, `xdpyinfo`, `xwininfo` (uses my existing desktop `$DISPLAY` and `$XAUTHORITY`).
-  - `--record <path.mp4>`: `ffmpeg` on `PATH` (checked before any process or container starts).
+  - `--record <path.mp4>`: `ffmpeg` on `PATH` (checked before any process or container starts), plus `ffprobe` for my post-stop validation (not checked by stack preflight).
   - Optional operator-side helpers (not used by repository code): `xdotool`, `python3` (`>=3.11` [CITED: agents/pyproject.toml]) with Pillow.
 - **Staged `capsule-ui-kit` and prebuilt shipped UI in `<clone>`**:
   - `<clone>/ui/.kit/capsule-ui-kit` is git-ignored (`ui/.kit/` in `.gitignore`) and absent on a fresh clone. Before running `npm ci --offline` or `npm run build` in `<clone>/ui`, I stage the pinned `capsule-ui-kit` package with `node tools/sync_kit.mjs <capsule-ui-kit-checkout>` (or by setting `MV_KIT_CHECKOUT` / `CAPSULE_UI_KIT_REPO`) and verify the materialized tree with `node tools/sync_kit.mjs --check` [CITED: tools/sync_kit.mjs].
   - `tools/sync_kit.mjs` requires the local `capsule-ui-kit` git checkout (either the repository root or `<checkout>/packages/capsule-ui-kit`) to match every pin in `ui/kit.lock.json`: `git remote get-url origin` must equal `https://github.com/oguirado/capsule-ui-kit.git` [CITED: ui/kit.lock.json], `git rev-parse HEAD` must equal `bf31bc201987206d16dbd88d93102f9d5ce026f9` [CITED: ui/kit.lock.json], `version` must equal `0.2.1` [CITED: ui/kit.lock.json], and the length-framed SHA-256 tree digest (`contentHash`) must equal `1bee78c76a0a2a41d085beed918ca6ca791beaf53b952d4a9367dad660fd6dc2` [CITED: ui/kit.lock.json].
   - `<clone>/ui/dist/renderer/index.html` and `<clone>/ui/dist/preload/preload.cjs` must exist on disk (produced by `npm ci --offline` followed by `npm run build` inside `<clone>/ui`).
 - **Authority core and adapter binaries**:
-  - Rust toolchain (`1.97` [CITED: Cargo.toml]) for `metaviewer-core`: `stack.py` runs `cargo build --offline --manifest-path core/Cargo.toml --bin metaviewer-core` using an absolute per-worktree `CARGO_TARGET_DIR`. Do not set `MV_E2E_CORE_BIN` for live or demo runs because prebuilt overrides risk stale binaries.
+  - Rust toolchain (`1.97` [CITED: Cargo.toml]) for `metaviewer-core`: `stack.py` runs `cargo build --offline --release --manifest-path core/Cargo.toml --bin metaviewer-core` using an absolute per-worktree `CARGO_TARGET_DIR`. I use `--debug` / `--debug-core` or `MV_LIVE_DEBUG_CORE=1` to request a debug core instead [CITED: tests/e2e/e2e1_slice/stack.py]. Do not set `MV_E2E_CORE_BIN` for live or demo runs because prebuilt overrides risk stale binaries.
   - Go toolchain (`1.26.0` [CITED: daemon-adapter/go.mod]) for `mv-daemon-adapter`: `stack.py` runs `go build -o <work>/mv-daemon-adapter ./cmd/mv-daemon-adapter` with `GOPROXY=off` and `GOSUMDB=off`. Do not set `MV_E2E_ADAPTER_BIN` for live or demo runs because prebuilt overrides risk stale binaries.
 - **OpenSuperficies runtime and `mv-live-1` identity**:
   - `MV_SRF_BIN_DIR` contains executable `srf-identity-surface`.
   - `SRF_IDENTITY_STORE_ROOT` and `SRF_PROXY_REGISTRY` point to the provisioned identity store and registry for `mv-live-1`. I never read `identity.env`, tokens, cookies, or private keys.
 - **Clean session state**:
-  - `MV_CORE_BOOTSTRAP` must be unset so the shipped `ui/electron/hostBindings.js` runs unmodified.
+  - `MV_CORE_BOOTSTRAP` must be unset so `ui/electron/main.js` loads the shipped `ui/electron/hostBindings.js` [CITED: ui/electron/main.js].
   - Profile `mv-live-1` must be free: no running or stopped Docker container allocated to `mv-live-1`, and no active `state.json` under `$XDG_RUNTIME_DIR/metaviewer-live-stack`.
 
 ## 2. Environment Variables
 
-I export absolute paths using `$HOME`-relative, `<clone>`, or `/dev/shm` locations (never hard-coding personal host paths in tracked files). Because `stack.py` preflight rejects a missing `MV_SRF_LIVE_RAM_ROOT` or `MV_SRF_STATE_DIR` with `"live path AUSENTE"` [CITED: tests/e2e/e2e1_slice/stack.py], I run `mkdir -p` to create both directories first; only one live stack runs per `$XDG_RUNTIME_DIR` (`$XDG_RUNTIME_DIR/metaviewer-live-stack/state.json` is a singleton that refuses concurrent runs [CITED: tests/e2e/e2e1_slice/stack.py]), and I use fresh RAM and state directories per sequential run. `MV_RECORDING_DESTINATION` also enables the **Export** control in the UI: without it, the **Export** control is disabled (`"No export destination advertised by the host"` [CITED: ui/src/recording/recordingModel.js]); with it, **Export** writes a `.tar` archive there, and the destination directory must exist (`mkdir -p`):
+I export absolute paths using `$HOME`-relative, `<clone>`, or `/dev/shm` locations (never hard-coding personal host paths in tracked files). Because `stack.py` preflight rejects a missing `MV_SRF_LIVE_RAM_ROOT` or `MV_SRF_STATE_DIR` with `"live path AUSENTE"` [CITED: tests/e2e/e2e1_slice/stack.py], I run `mkdir -p` to create both directories first; only one live stack runs per `$XDG_RUNTIME_DIR` (`$XDG_RUNTIME_DIR/metaviewer-live-stack/state.json` is a singleton that refuses concurrent runs [CITED: tests/e2e/e2e1_slice/stack.py]), and I use fresh RAM and state directories per sequential run. `MV_RECORDING_DESTINATION` also enables the **Export** control in the UI: without it, the **Export** control is disabled (`"No export destination advertised by the host"` [CITED: ui/src/recording/recordingModel.js]); with it, **Export** writes a `.tar` archive there, and I provide an absolute path of at most `4096` characters [CITED: ui/electron/authorityWire.js] outside the repository to an existing directory (`mkdir -p`); invalid paths fail with `SETTINGS_DESTINATION` / `SETTINGS_IN_REPO`:
 
 ```bash
 export MV_E2E_LIVE=1
@@ -60,7 +60,7 @@ mkdir -p "$MV_SRF_LIVE_RAM_ROOT" "$MV_SRF_STATE_DIR" "$MV_RECORDING_DESTINATION"
 | `MV_SRF_STATE_DIR` | Dedicated OpenSuperficies identity state directory in `/dev/shm` (use a fresh directory per sequential run; must be created first with `mkdir -p`, or preflight rejects it with `"live path AUSENTE"`) |
 | `SRF_IDENTITY_STORE_ROOT` | Provisioned OpenSuperficies identity store root (`$HOME/.local/share/opensuperficies/identities`) |
 | `SRF_PROXY_REGISTRY` | Provisioned OpenSuperficies proxy registry JSON (`$HOME/.local/state/opensuperficies/identity/registry/registry.json`) |
-| `MV_RECORDING_DESTINATION` | Existing destination directory outside `<clone>` (`mkdir -p`) for exported per-tile capture `.tar` archives; also enables the **Export** control in the UI (without it, **Export** is disabled with `"No export destination advertised by the host"` [CITED: ui/src/recording/recordingModel.js]) |
+| `MV_RECORDING_DESTINATION` | Existing absolute destination directory outside `<clone>` (`mkdir -p`), at most `4096` characters [CITED: ui/electron/authorityWire.js] for exported per-tile capture `.tar` archives; also enables the **Export** control in the UI (without it, **Export** is disabled with `"No export destination advertised by the host"` [CITED: ui/src/recording/recordingModel.js]) |
 | `MV_KIT_CHECKOUT` / `CAPSULE_UI_KIT_REPO` | Optional local `capsule-ui-kit` git checkout path read by `tools/sync_kit.mjs` when no positional `[kit-repo]` argument is passed [CITED: tools/sync_kit.mjs] |
 
 ## 3. Capped Start (`systemd-run --user --scope`)
@@ -72,13 +72,13 @@ On a fresh clone, `<clone>/ui/.kit/capsule-ui-kit` is git-ignored and absent. Be
 To obtain an offline kit checkout `<dir>` from a local `capsule-ui-kit` clone whose `origin` remote URL equals the lock URL in `ui/kit.lock.json`:
 
 ```bash
-git clone --local --no-checkout <local capsule-ui-kit clone> <dir> && git -C <dir> checkout <commit from ui/kit.lock.json> && git -C <dir> remote set-url origin <url from ui/kit.lock.json>
+git clone --local --no-checkout <local capsule-ui-kit clone> <dir> && git -C <dir> checkout bf31bc201987206d16dbd88d93102f9d5ce026f9 && git -C <dir> remote set-url origin https://github.com/oguirado/capsule-ui-kit.git
 ```
 
 I run `tools/sync_kit.mjs`, `npm ci --offline`, and `npm run build` inside a memory-capped `systemd-run --user --scope` unit (`MemoryMax=8G`, `MemoryHigh=6G`, `MemorySwapMax=0` [TARGET]) too:
 
 ```bash
-cd /path/to/metaviewer
+cd <clone>
 systemd-run --user --scope -p MemoryMax=8G -p MemoryHigh=6G -p MemorySwapMax=0 -- bash -c '
   node tools/sync_kit.mjs <dir>
   node tools/sync_kit.mjs --check
@@ -97,23 +97,24 @@ I always launch the stack inside a memory-capped `systemd-run --user --scope` un
 When I drive the demo live on my desktop display, I pass `--display visible` so `stack.py` uses my existing `$DISPLAY` and `$XAUTHORITY` instead of starting `Xvfb` (relying on the Section 2 exports being inherited by the `--scope` unit from the caller environment):
 
 ```bash
-cd /path/to/metaviewer
+cd <clone>
 systemd-run --user --scope --unit mv-demo -p MemoryMax=8G -p MemoryHigh=6G -p MemorySwapMax=0 \
-  -p AllowedCPUs=0-9,15-19 -p RuntimeMaxSec=2700 -- \
+  -p RuntimeMaxSec=2700 -- \
   python3 tests/e2e/e2e1_slice/stack.py start --ttl 45m --display visible
 ```
 
 ### Dedicated headless Xvfb display (`--display private`, default)
 
-When I run an isolated display (`1600x1000x24` [TARGET] on a free high display `:91`..`:65535` [TARGET]), I omit `--display` or pass `--display private` (relying on the Section 2 exports being inherited by the `--scope` unit from the caller environment):
+When I run an isolated display (`1600x1000x24` [CITED: tests/e2e/e2e1_slice/stack.py] on a free high display `:91`..`:65535` [CITED: tests/e2e/e2e1_slice/stack.py]), I omit `--display` or pass `--display private` (relying on the Section 2 exports being inherited by the `--scope` unit from the caller environment):
 
 ```bash
-cd /path/to/metaviewer
+cd <clone>
 systemd-run --user --scope --unit mv-demo -p MemoryMax=8G -p MemoryHigh=6G -p MemorySwapMax=0 \
-  -p AllowedCPUs=0-9,15-19 -p RuntimeMaxSec=2700 -- \
+  -p RuntimeMaxSec=2700 -- \
   python3 tests/e2e/e2e1_slice/stack.py start --ttl 45m
 ```
 
+- I use `--tolerate-capsule-loss` (or `MV_LIVE_TOLERATE_LOSS=1`) when I need the UI and core to remain available after `LIVE_CAPSULE_LOST`; default supervision tears down the stack on capsule loss [CITED: tests/e2e/e2e1_slice/stack.py].
 - `--agent-tick-page` (default off): opt-in agent-driven ticking `data:text/html` page (`TICK_URL`, percent-encoded with `urllib.parse.quote` so `#` color literals are never truncated as URL fragments) after the first `frame_ready` (`LIVE_STACK_TICK step=N outcome=...`, fail-open); for test/QA only, not for the demo recording [CITED: tests/e2e/e2e1_slice/stack.py].
 
 ### Startup sequence and readiness receipt
@@ -123,12 +124,12 @@ systemd-run --user --scope --unit mv-demo -p MemoryMax=8G -p MemoryHigh=6G -p Me
 1. Validates preflight, display reachability (`xdpyinfo`), and any `--record` path/tool constraints before starting processes.
 2. Builds or resolves `metaviewer-core` and `mv-daemon-adapter`, then writes `core-config.json` in `$XDG_RUNTIME_DIR/metaviewer-live-stack/run-<id>/`.
 3. Starts `metaviewer-core` and waits for `core.sock`; starts `mv-daemon-adapter` and waits for the initial handshake event (`events/1.json`).
-4. In `private` mode, allocates a free high display (`:91+` [TARGET]), writes an owner-only `0600` [TARGET] `Xauthority` cookie, and boots `Xvfb :NN -screen 0 1600x1000x24 -auth <run>/Xauthority -nolisten tcp`. In `visible` mode, binds the caller's `$DISPLAY` and `$XAUTHORITY` and verifies reachability with `xdpyinfo`.
+4. In `private` mode, allocates a free high display (`:91+` [CITED: tests/e2e/e2e1_slice/stack.py]), writes an owner-only `0600` [CITED: tests/e2e/e2e1_slice/stack.py] `Xauthority` cookie, and boots `Xvfb :NN -screen 0 1600x1000x24 -auth <run>/Xauthority -nolisten tcp`. In `visible` mode, binds the caller's `$DISPLAY` and `$XAUTHORITY` and verifies reachability with `xdpyinfo`.
 5. Launches the shipped Electron entry (`$MV_E2E_ELECTRON_BIN <clone>/ui --user-data-dir=<run>/electron-profile --ozone-platform=x11`) with loader injection variables (`LD_*`, `NODE_*`, `ELECTRON_*`, `PYTHON*`) stripped, and waits until `"MetaViewer"` appears in `xwininfo -root -tree`.
 6. Connects as the agent peer, opens the owner-only `0600` [CITED: tests/e2e/e2e1_slice/stack.py] control socket at `$XDG_RUNTIME_DIR/metaviewer-live-stack/control.sock`, completes `hello/v0.2`, and sends `surface_request/v0.2` `create` (`{kind: "browser", geometry: {w: 1280, h: 900}, profile_id: "mv-live-1"}` [TARGET]), verifying ownership of the single `srf-id-<hash>` capsule container.
 7. Waits for the first `frame_ready` event (frames published under `$MV_SRF_LIVE_RAM_ROOT/srf-id-<hash>/frames/w1/`).
 8. If `--record <path.mp4>` was passed, starts `ffmpeg -f x11grab` against the stack display and records its birth-verified PID in `state.json`.
-9. Prints the readiness line and continues draining agent fan-out with a `10` s [TARGET] `list` heartbeat (until a same-UID `handoff-agent` request on `control.sock` transfers the agent connection fd via `SCM_RIGHTS` or `--ttl` expires / `stack.py stop` is invoked):
+9. Prints the readiness line and continues draining agent fan-out with a `10` s [CITED: tests/e2e/e2e1_slice/stack.py] `list` heartbeat (until a same-UID `handoff-agent` request on `control.sock` transfers the agent connection fd via `SCM_RIGHTS` or `--ttl` expires / `stack.py stop` is invoked):
 
 ```text
 LIVE_STACK_READY display=:91 xauthority=/run/user/1000/metaviewer-live-stack/run-xxxx/Xauthority capsule=srf-id-xxxxxxxx
@@ -136,10 +137,12 @@ LIVE_STACK_READY display=:91 xauthority=/run/user/1000/metaviewer-live-stack/run
 
 ## 4. Demo Story Steps in the App
 
+I treat the earlier typing, layout, and control observations below as historical live21 evidence (`holdings-e1/design/vision/live21_NOTE.md`, outside this repository); I have not reverified them at the current assembly pins. My timing numbers do not establish current acceptance.
+
 Once `LIVE_STACK_READY` is printed, I drive the following walkthrough in the MetaViewer window (`1280x720` window [TARGET]):
 
 1. **Wall with live browser capsule tile**:
-   - I observe the single `mv-live-1` browser capsule tile rendering live `1280x900` `rgb24` frames on the wall (`2.71` fps [MEASURED] over `61.0` s [MEASURED], `192` [MEASURED] `PRESENTED` deliveries with `0` [MEASURED] `REFUSED` and `0` [MEASURED] `SUPERSEDED`, `34/34` [MEASURED] deliveries verified with `isTrusted=true` and `utilityVerified=true`; the Rust core processes each `3,456,000`-byte frame in `52.11` ms [MEASURED] p50 / `58.67` ms [MEASURED] p95, where SHA-256 hashing is `40.65` ms [MEASURED] p50 = `78`% [MEASURED] of core time, while the `2.71` fps [MEASURED] ceiling is upstream in capsule/adapter polling).
+   - I observe the `mv-live-1` browser capsule tile rendering RGB24 frames. I have not measured live wall fps or latency after the current assembly pins. I keep the older debug-core live21 and release-core live22 results in [historical live evidence](../README.md#historical-live-evidence), and rerun the live gate before claiming new numbers.
 2. **Per-tile record (`Record` / `Stop`)**:
    - I click the **Record** control in the browser tile header chrome to start a bounded in-RAM capture segment (`metaviewer.capture`), let several frame generations accumulate, and click **Stop** to seal the capture in RAM and the session journal.
 3. **Per-tile screenshot**:
@@ -147,7 +150,7 @@ Once `LIVE_STACK_READY` is printed, I drive the following walkthrough in the Met
 4. **Human ↔ agent control handoff**:
    - There is one **Control** button per tile (live-verified on the wall; confirm the exact accessible name in the staged `ui/.kit` package); the tile badge flips between `"Agent acting"` and `"Human control"` (there are no separate Take/Release buttons).
    - I click **Control** on the browser tile (`ui_intent/v0.2` takeover): a `"Request sent."` toast appears over the tile footer, the badge flips from `"Agent acting"` to `"Human control"` while the tile canvas height stays stable at `307` px [MEASURED] (Activity strip rows grow below the tile), and the Rust core immediately cancels any pending agent proposal with `SURFACE_NOT_AGENT_CONTROLLED` and transfers input authority to me [CITED: docs/ARCHITECTURE.md].
-   - I interact with the live browser surface directly (human typing bursts at `80` ms/key [MEASURED] and `20` ms/key [MEASURED] pass with `0` [MEASURED] lost characters and `0` [MEASURED] refusals), then click **Control** again to return control to the agent: the badge flips back to `"Agent acting"`, multislot returns to `READ` mode (where clicks on the wall tile or multislot cause zero scroll and emit `0` [MEASURED] `"op":"input"` journal entries), and the core holds agent admission closed until a fresh post-release frame generation arrives.
+   - I interact with the live browser surface directly, check typing and refusal receipts, then click **Control** again to return control to the agent: the badge flips back to `"Agent acting"`, multislot returns to `READ` mode (where clicks on the wall tile or multislot cause zero scroll and emit `0` [MEASURED] `"op":"input"` journal entries), and the core holds agent admission closed until a fresh post-release frame generation arrives.
 5. **Fold and unfold**:
    - I click **Fold** on the tile header: the tile body blanks and the label becomes **Unfold** while the capsule continues running and publishing frames in the background (folded tile height behavior is unverified at this head); I then click **Unfold** to restore the live canvas.
 6. **Multislot layout**:
@@ -161,14 +164,14 @@ Once `LIVE_STACK_READY` is printed, I drive the following walkthrough in the Met
 To record the entire stack display automatically into an H.264 `.mp4` video starting right after the first `frame_ready`, I pass `--record <path.mp4>` with a destination path **outside** `<clone>` that does not yet exist (this `systemd-run --user --scope` command relies on the Section 2 exports being inherited, as a `--scope` unit keeps the caller environment):
 
 ```bash
-cd /path/to/metaviewer
+cd <clone>
 systemd-run --user --scope --unit mv-demo -p MemoryMax=8G -p MemoryHigh=6G -p MemorySwapMax=0 \
-  -p AllowedCPUs=0-9,15-19 -p RuntimeMaxSec=2700 -- \
+  -p RuntimeMaxSec=2700 -- \
   python3 tests/e2e/e2e1_slice/stack.py start --ttl 45m --display visible --record /tmp/metaviewer-demo.mp4
 ```
 
 - **Recorder invocation**: After the first `frame_ready`, `stack.py` queries `xdpyinfo` on the active stack display for `dimensions: <W>x<H> pixels` and spawns:
-  `ffmpeg -f x11grab -video_size <W>x<H> -framerate 30 -i <display> -c:v libx264 -preset veryfast -pix_fmt yuv420p <path.mp4>` (`30` fps [TARGET]).
+  `ffmpeg -f x11grab -video_size <W>x<H> -framerate 30 -i <display> -c:v libx264 -preset veryfast -pix_fmt yuv420p <path.mp4>` (`30` fps [CITED: tests/e2e/e2e1_slice/stack.py]).
 - **PID tracking**: `stack.py` stores `{"pid": <int>, "identity": "<proc_stat_starttime>"}` in `$XDG_RUNTIME_DIR/metaviewer-live-stack/state.json` under `recorder` (and in `pids`).
 - **Pre-launch refusals**: `stack.py` refuses `--record` before starting any process if the path resolves inside `<clone>`, if the target file or symlink already exists, if the filename does not end with `.mp4` or its parent directory is absent, or if `ffmpeg` is missing from `PATH`.
 
@@ -177,7 +180,7 @@ systemd-run --user --scope --unit mv-demo -p MemoryMax=8G -p MemoryHigh=6G -p Me
 When I finish the demo, I stop the stack from `<clone>` with the same environment variables set:
 
 ```bash
-cd /path/to/metaviewer
+cd <clone>
 python3 tests/e2e/e2e1_slice/stack.py stop
 ```
 
@@ -191,9 +194,9 @@ LIVE_STACK_STOPPED processes=absent capsule=absent sockets=absent ram=absent sta
 
 `stack.py` never uses process-name killers; `state.json` is the single source of truth and every signal verifies birth identity in `/proc/<pid>/stat`:
 
-1. **Finalize recording first**: If `state.json` records a live `recorder` PID, `stop` sends `SIGINT` to that recorded PID first and waits up to `10` s [TARGET] for `ffmpeg` to flush and finalize the MP4 container while the display and window are still intact.
+1. **Finalize recording first**: If `state.json` records a live `recorder` PID, `stop` sends `SIGINT` to that recorded PID first and waits up to `10` s [CITED: tests/e2e/e2e1_slice/stack.py] for `ffmpeg` to flush and finalize the MP4 container while the display and window are still intact.
 2. **Destroy capsule**: Sends `surface_request/v0.2` `destroy` to the core and runs `srf-identity-surface stop --container srf-id-<hash> --state-dir "$MV_SRF_STATE_DIR"`.
-3. **Terminate stack processes**: Sends `SIGTERM` and then `SIGKILL` (with a `5` s poll window [TARGET]) in reverse spawn order to the remaining birth-verified PIDs in `state.json`.
+3. **Terminate stack processes**: Sends `SIGTERM` and then `SIGKILL` (with a `5` s poll window [CITED: tests/e2e/e2e1_slice/stack.py]) in reverse spawn order to the remaining birth-verified PIDs in `state.json`.
 4. **Verify RAM, sockets, and state removal**: Removes owned capsule directories under `$MV_SRF_LIVE_RAM_ROOT`, deletes the private `run-<id>` directory, verifies `/tmp/.X11-unix/X<NN>` is absent (when `--display private`), and unlinks `state.json`.
 
 ### Post-checks I run after `stop`
@@ -208,13 +211,13 @@ LIVE_STACK_STOPPED processes=absent capsule=absent sockets=absent ram=absent sta
 - **Chromium `"Restore pages?"` prompt after stop (`L2-9`, capsule owner scope)**:
   - Stopping the capsule container via `srf-identity-surface stop` terminates Chromium inside the container, so the persistent profile records an unclean exit and displays `"Restore pages?"` on subsequent launches (observed across live verification runs including `live15` [MEASURED]; re-confirm at the current head).
   - This behavior lives inside the OpenSuperficies capsule runtime (out of scope for `stack.py`) and is tracked for the capsule owner (either closing Chromium gracefully before container stop or passing `--hide-crash-restore-bubble` / `--disable-session-crashed-bubble` in the capsule entrypoint). During a live demo, I dismiss the bubble or click takeover and close it once.
-- **Lost-capsule UI state is pre-empted by `stack.py` supervisor teardown**:
-  - When a running `srf-id-*` capsule container exits unexpectedly, the wall tile retains the last painted frame (`status: "live"`, no `"Connecting to surface"` placeholder), and within `~1.5` s [MEASURED] the `stack.py` supervisor logs `native surface error … code capture_failed` and runs `LIVE_STACK_CLEANUP`, stopping X, Electron, `metaviewer-core`, and `mv-daemon-adapter` before a `"Capsule lost"` badge can be observed under `stack.py`.
+- **Lost-capsule supervision**:
+  - I use `--tolerate-capsule-loss` / `MV_LIVE_TOLERATE_LOSS=1` to keep UI and core up after `LIVE_CAPSULE_LOST`; without that opt-in the supervisor cleans up the stack. In historical live22 the tile retained its last frame without showing a lost badge; I must recheck that UI behavior at the current pins [MEASURED: `live22_NOTE.md`, lost-tile check, 2026-10-28; CITED: tests/e2e/e2e1_slice/stack.py].
 - **Settings persistence across `stack.py stop` / `start` runs**:
-  - `stack.py` isolates `XDG_CONFIG_HOME=<work>/config` inside the per-run work directory (`tests/e2e/e2e1_slice/stack.py:1268`) and removes `<work>` on `stop`. Switching the theme to `mv-dark` in Settings applies live and writes `<run>/config/metaviewer/settings.json`, but a subsequent `stack.py start` creates a fresh `<work>/config` and boots in `mv-light` (density is a fixed `"Compact"` readout).
+  - I keep `XDG_CONFIG_HOME` in persistent `<state_root>/config` (normally `$XDG_RUNTIME_DIR/metaviewer-live-stack/config`) or the absolute `MV_LIVE_CONFIG_DIR` override. The directory is owner-only `0700` [CITED: tests/e2e/e2e1_slice/stack.py, resolve_config_dir/ensure_config_dir]; `stop` removes the run directory while retaining this config, so my theme survives restart. I reset it explicitly after stopping with `python3 tests/e2e/e2e1_slice/stack.py reset-config`. Blank/relative, unsafe, and in-repository paths are refused with `CONFIG_DIR_INVALID`, `CONFIG_DIR_UNSAFE`, and `CONFIG_DIR_IN_REPO` [CITED: tests/e2e/e2e1_slice/stack.py, resolve_config_dir/reset_config].
 - **Resolved earlier notes**:
-  - `L8-1` (wall tile black until first multislot round trip): resolved and holding (`PASS 3/3` [MEASURED] first paint directly from `LIVE_STACK_READY` without a multislot round trip).
-  - `L7-1` (tile rescale when an Activity row appears): not reproduced on current live runs (`307` px [MEASURED] tile canvas height remains constant before, during, and after control take/release while Activity rows append below the tile).
+  - `L8-1` (wall tile black until first multislot round trip): resolved and holding (historical first paint directly from `LIVE_STACK_READY` without a multislot round trip; I recheck it before recording).
+  - `L7-1` (tile rescale when an Activity row appears): not reproduced in the historical live21 run (`307` px [MEASURED] tile canvas height remains constant before, during, and after control take/release while Activity rows append below the tile).
 
 ## 8. Troubleshooting (`tools/sync_kit.mjs` and `stack.py` Typed Errors)
 
@@ -271,8 +274,10 @@ In addition to the live stack environment in Section 2, export the locked siblin
 export VQA_VE_ROOT="<vision-engine-checkout>"
 export MV_WENDER_ROOT="<wender-agent-checkout>"
 # Optional: override local:custody_click/v1 with an external Wender subprocess planner
-# export MV_WENDER_PLANNER_CMD='["python3", "-m", "wender.planner_cli"]'
+# export MV_WENDER_PLANNER_CMD='["python3", "-m", "wender.plan.cli"]'
 ```
+
+I require the current `wender-agent` commit in `deps.lock` for this planner module; the older locked checkout lacked it. I pass `{observation, element_table, goal}` over pipes and keep action admission and execution in MetaViewer [CITED: `agents/metaviewer_agents/wender_bridge.py`, `.github/workflows/assembly.yml`].
 
 ### Running alongside an active `stack.py` session
 
@@ -303,7 +308,7 @@ export MV_WENDER_ROOT="<wender-agent-checkout>"
 
 ### Offline self-test (injected peer)
 
-To verify the ordered checkpoints, `STALE_FRAME` negative control, transient retry loop (`3` [MEASURED] max attempts), `MV_WENDER_PLANNER_CMD` subprocess path, transcript schema validator, `SCM_RIGHTS` `control.sock` handoff, and session state guards without live containers, `python3 tests/e2e/e2e1_slice/demo_agent_drive.py --self-test` runs the `12` [MEASURED] unit tests in `tests/e2e/e2e1_slice/test_demo_agent_drive.py` [CITED: tests/e2e/e2e1_slice/demo_agent_drive.py], and `python3 -m unittest tests.e2e.e2e1_slice.test_stack_demo -v` runs the `16` [MEASURED] unit tests in `tests/e2e/e2e1_slice/test_stack_demo.py`:
+To verify the ordered checkpoints, `STALE_FRAME` negative control, transient retry loop (`3` [MEASURED] max attempts), `MV_WENDER_PLANNER_CMD` subprocess path, transcript schema validator, `SCM_RIGHTS` `control.sock` handoff, and session state guards without live containers, `python3 tests/e2e/e2e1_slice/demo_agent_drive.py --self-test` runs the `16` [MEASURED: test method count in test_demo_agent_drive.py] unit tests in `tests/e2e/e2e1_slice/test_demo_agent_drive.py` [CITED: tests/e2e/e2e1_slice/demo_agent_drive.py], and `python3 -m unittest tests.e2e.e2e1_slice.test_stack_demo -v` runs the `17` [MEASURED: test method count in test_stack_demo.py] unit tests in `tests/e2e/e2e1_slice/test_stack_demo.py`:
 
 ```bash
 python3 tests/e2e/e2e1_slice/demo_agent_drive.py --self-test

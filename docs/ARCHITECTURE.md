@@ -155,6 +155,10 @@ retain their own schema discriminator.
 
 ## Capture and integration seams
 
+I assemble MetaViewer with OpenSuperficies, vision-engine, and wender-agent in separate repositories. I treat the exact commits in `deps.lock` as authoritative; its version fields are release labels, not assertions that the locked commits equal tags. I have not measured live performance at the current pins. I scope earlier results to [historical live evidence](../README.md#historical-live-evidence).
+
+I use persistent `vadapt.vserve` when available, accepting the hello only with `describe`/`frame_raw`, affirmative `raw_shm`/`frame_raw`, and a boolean `ring` capability; on persistent failure I fall back to one-shot `vadapt.cu_describe` [CITED: `agents/metaviewer_agents/perception/vcore.py`]. I use `wender.plan.cli` through the pipe-only `{observation, element_table, goal}` boundary; Wender proposes a plan and MetaViewer admits and dispatches the action [CITED: `agents/metaviewer_agents/wender_bridge.py`]. I require that planner in assembly CI (`--require-planner`) [CITED: `.github/workflows/assembly.yml`].
+
 | Component or seam | Verified fact [CITED] | Adapter behavior |
 | --- | --- | --- |
 | Capsule CLIs | `srf-identity-surface` and `srf-holdings-capsule` under `MV_SRF_BIN_DIR`; allowlisted env; single-line bounded closed JSON replies; exit map 2 usage, 3 setup, 4 unavailable, 5 malformed, 6 refused, 7 cli_failed (`daemon-adapter/internal/cli/runner.go`, `daemon-adapter/internal/capsule/process.go`) | Run CLIs only from the pinned bin dir with the allowlisted environment; parse with `cli.ParseLine`; map exits to typed faults |
@@ -162,9 +166,9 @@ retain their own schema discriminator.
 | RAM capture | Publisher requires a `/dev/shm/` RAM root on tmpfs owned by the current uid, writes `0600` files with `O_NOFOLLOW`/`O_EXCL`, and verifies sha256 before publishing (`daemon-adapter/internal/frames/publisher.go`) | Publish complete immutable generations with dimensions, digest and capture duration; read only after publication |
 | Core frame witness | `/dev/shm` prefix, no `..`, per-component symlink walk, `O_NOFOLLOW`, regular file up to 64 MiB, digest match (`core/src/serve/mod.rs`) | A path-shaped string is not authorization; mismatches are refused, never journaled as frames |
 | Electron frame reader | `/dev/shm/` prefix, no `..`, generation ≥ 1, `^[0-9a-f]{64}$` digest, per-surface generation lease, null-digest fail-closed (`ui/electron/frameReader.js`) | Verify before handing bytes to tiles through the frame port (`34/34` [MEASURED] live deliveries verified with `isTrusted=true` and `utilityVerified=true`); paths never cross IPC |
-| vision-engine | Pin `v0.2.0`, commit `9bbb49f220837388e1ab90c34ae0eedee27a66eb` [CITED: deps.lock] | Integrated via `VCorePerceptionAdapter.perceive` and `vadapt.cu_describe` (`agents/metaviewer_agents/perception/`, `tools/gate_g_ai.py`; verified live extracting `24` [MEASURED] vision marks and `24` [MEASURED] elements on `mv-live-1`) |
-| wender-agent | Pin `v0.3.0`, commit `7648b258d1d04953bacffe8627de5acd7c75d817` [CITED: deps.lock] | Integrated via `agents/metaviewer_agents/wender_bridge.py`, `AdmittedExecutor.check_target`, and `tools/gate_g_ai.py` (verified `8/8` [MEASURED] live on `mv-live-1` via `tests/e2e/e2e1_slice/demo_agent_drive.py`); the agent loop (`agents/metaviewer_agents/verify.py`, `agents/metaviewer_agents/planner.py`) can use `wender-agent` as planner via `MV_WENDER_PLANNER_CMD`, resolving the checkout through `deps.lock` (`resolve_locked_component("wender-agent")`) and refusing `commit_mismatch` before spawn |
-| OpenSuperficies | Pin `os-cu-w9-mv1`, commit `a9ac1ac8543872b428990ea23fa2629cd0a6d1d5` [CITED: deps.lock] | Integrated via `daemon-adapter/` invoking `srf-identity-surface` and `srf-holdings-capsule` under `MV_SRF_BIN_DIR` (verified live on `1` [MEASURED] `mv-live-1` browser capsule streaming `192` [MEASURED] `PRESENTED` frames at `2.71` fps [MEASURED] with `0` [MEASURED] refusals) |
+| vision-engine | Pin `v0.2.0`, commit `3bb54835db8a2e545311cfcc45185a0dfbd9313a` [CITED: deps.lock] | Integrated via `VCorePerceptionAdapter.perceive` and `vadapt.cu_describe` (`agents/metaviewer_agents/perception/`, `tools/gate_g_ai.py`); current-pin live acceptance is unmeasured |
+| wender-agent | Pin `v0.3.0`, commit `41493681a2f4d92aae50c476ed13c219c31a0a02` [CITED: deps.lock] | Integrated via `agents/metaviewer_agents/wender_bridge.py`, `AdmittedExecutor.check_target`, and `tools/gate_g_ai.py` (live acceptance runner: `tests/e2e/e2e1_slice/demo_agent_drive.py`; current-pin live result unmeasured); the agent loop (`agents/metaviewer_agents/verify.py`, `agents/metaviewer_agents/planner.py`) can use `wender-agent` as planner via `MV_WENDER_PLANNER_CMD`, resolving the checkout through `deps.lock` (`resolve_locked_component("wender-agent")`) and refusing `commit_mismatch` before spawn |
+| OpenSuperficies | Pin `os-cu-w9-mv1`, commit `a9ac1ac8543872b428990ea23fa2629cd0a6d1d5` [CITED: deps.lock] | Integrated via `daemon-adapter/` invoking `srf-identity-surface` and `srf-holdings-capsule` under `MV_SRF_BIN_DIR` (historical live21/live22 evidence is scoped above; current-pin live result unmeasured) |
 | Holdings lane | `lane_submit` verb plus `state_sha256` witness in v0.2 contracts; strict hex/tick `GroundTruth` parse (`daemon-adapter/internal/capsule/capsule.go`), core `holdings_lane` witness join (`core/src/serve/tools.rs`), and `input` + `state_sha256_change` planner (`agents/metaviewer_agents/planner.py`) | Bind lane to capsule, admit `holdings_lane` ground truth for the dispatched unsettled proposal, join the witness, and recompute receipts through `verify_receipt` (`core/src/serve/tools.rs`); digest-only capsule output still settles unverified with reason |
 
 Capture generations increase when a framebuffer allocation or display is
@@ -174,9 +178,7 @@ records `(sha256, generation, width, height)` per surface, and the Electron
 reader binds each lease to its surface generation. End-to-end frame lease
 lifetimes across crash recovery remain an open question.
 
-Because the core verifies and journals each `3,456,000`-byte (`1280x900` RGB24)
-frame witness before fanning `frame_ready` out to the UI
-(`52.74 ms` mean, `54.87 ms` max per frame with `40.51 ms` SHA-256 hash time in the harness test [MEASURED: `cargo test --manifest-path core/Cargo.toml frame_ready_latency_and_concurrent_generations_on_3_45mb_frames -- --nocapture`], and `52.11 ms` p50 / `58.67 ms` p95 with `40.65 ms` p50 hash time = `78`% [MEASURED] of core time on the live `mv-live-1` stack, where `1` [MEASURED] capsule streams at `2.71` fps [MEASURED] while core headroom is `~19` fps [TARGET]),
+I verify and journal each frame witness in the core before fanning `frame_ready` out to the UI. Earlier debug-core timings do not establish current release-core latency; I retain the dated live21/live22 comparison in [README.md](../README.md#historical-live-evidence). To preserve witness availability,
 the publisher retains each `/dev/shm` generation for at least `4 s` (`>= 2 s`
 floor [TARGET, unit decision]), bounded by `128` [CITED] MiB per surface (`~38`
 full-resolution frames [TARGET, unit decision]), `512` [CITED] MiB globally across
@@ -481,7 +483,7 @@ macOS display control is outside this design.
 I gate every change with [tools/gate.sh](../tools/gate.sh): the default `skeleton`
 selector runs all `11` [MEASURED: `bash tools/gate.sh`] leaf legs (`manifests`,
 `laws`, `contracts`, `unit`, `agents`, `js`, `rust`, `go`, `ui`, `ui-smoke`,
-`perf`), plus the `30`-test [MEASURED: `bash tools/gate.sh --self-test`] harness
+`perf`), plus the positive/negative-control harness [CITED: `tools/gate.sh`]
 `--self-test`. The `contracts` leg runs the schema checker over every version
 directory with valid/invalid fixture pairs per schema. The `unit` and `agents`
 legs run the Python suites in `tests/` and `agents/tests/`; Rust (`fmt`,
@@ -489,17 +491,16 @@ legs run the Python suites in `tests/` and `agents/tests/`; Rust (`fmt`,
 and Node (`npm ci --offline`, `npm test`, `npm run check:types`, `npm run build`,
 and headless Electron `ui-smoke`) run under `rust`, `go`, `ui`, and `ui-smoke`;
 `js` verifies the staged `capsule-ui-kit` lock; `perf` enforces the core and
-renderer budget gates; and `laws` enforces the repository laws. CI runs `26`
+renderer budget gates; and `laws` enforces the repository laws. CI runs `28`
 [MEASURED: `grep -E '^  [a-z0-9-]+:$' .github/workflows/*.yml | wc -l`] jobs
-across `5` [MEASURED: `ls -1 .github/workflows/*.yml | wc -l`] workflows on
+across `6` [MEASURED: `ls -1 .github/workflows/*.yml | wc -l`] workflows on
 pushes, pull requests, and manual runs
 ([.github/workflows/ci.yml](../.github/workflows/ci.yml), `secrets.yml`,
-`package.yml`, `build-other.yml`, `volume.yml`). On a live `mv-live-1` capsule,
+`package.yml`, `build-other.yml`, `volume.yml`, `assembly.yml`). I require the pinned Wender planner in the assembly smoke [CITED: `.github/workflows/assembly.yml`]. On a live `mv-live-1` capsule,
 `node tests/e2e/e2e1_slice/index.js --live` exercises `11` [MEASURED: `grep -c 'assert' tests/e2e/e2e1_slice/live.py`]
 live assertions (`tests/e2e/e2e1_slice/live.py`), `python3 tools/gate_g_ai.py --surface mv-live-1`
 exercises `8` [MEASURED: `grep -c '"A[1-8]"' tools/gate_g_ai.py`] AI-loop assertions,
-and `python3 tests/e2e/e2e1_slice/demo_agent_drive.py` passes all `8/8` [MEASURED]
-narrated agent-drive checkpoints across repeated live runs ([DEMO_AGENT_SCRIPT.md](DEMO_AGENT_SCRIPT.md)).
+and I use `python3 tests/e2e/e2e1_slice/demo_agent_drive.py` to verify the narrated agent-drive checkpoints; I have not rerun that live acceptance at the current pins ([DEMO_AGENT_SCRIPT.md](DEMO_AGENT_SCRIPT.md)).
 Exact suites, commands, and measured counts live in [TESTING.md](TESTING.md). Assembly
 negatives (stale-frame and cross-display controls, replay refusal, crash
 recovery, Holdings state/tick verification) ship with the suites that own
@@ -513,7 +514,7 @@ them.
 - Agree end-to-end frame buffer lease lifetimes across crash recovery, capture
   generation rollover, and retention of replay witnesses; sustain multi-capsule
   streaming (`>= 4` [TARGET] capsules at `>= 10` [TARGET] fps for `10` min [TARGET];
-  live evidence today covers `1` [MEASURED] capsule at `2.71` fps [MEASURED]).
+  current-pin live performance is unmeasured; historical evidence is scoped above).
 - Decide whether `pin` and `layout_save`/`layout_load` should become core-admitted
   `ui_intent` operations (today `fold`, `unfold`, `hide`, `show`, `move`, `tab`,
   and `float` are core-admitted in `core/src/serve/layout.rs`, while `pin` stays
