@@ -555,8 +555,13 @@ export function createTerminalHost({
               && m.bytes instanceof Uint8Array
               && m.bytes.byteLength <= 65536
               && Number.isSafeInteger(m.seq)
-              && m.seq === active.inputSeq + 1
-              && enabled) {
+              && m.seq === active.inputSeq + 1) {
+            if (!enabled) {
+              try {
+                port1.postMessage({ session: value.session, error: 'TERMINAL_IO_REFUSED' });
+              } catch {}
+              return;
+            }
             active.inputSeq += 1;
             if (!active.writeOpsBucket.take(1) || !active.writeBytesBucket.take(m.bytes.byteLength)) {
               try {

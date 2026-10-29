@@ -977,7 +977,10 @@ export async function createMainBindings({env = process.env, createMessageChanne
       },
       /** @param {(entry:any)=>any} listener */
       subscribe(listener) {
-        if (disposed || listeners.size) throw fail();listeners.add(listener);
+        if (disposed || listeners.size) throw fail();
+        // Each registration owns its listener, even when callbacks are reused.
+        const subscription = (/** @type {any} */ entry) => listener(entry);
+        listeners.add(subscription);
         try {
           for (const state of surfaces.values()) {
             subscribeSurface(state);
@@ -985,7 +988,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
             if (latest && state.state === 'active') publish(latest);
           }
         } catch {shutdown();throw fail();}
-        return () => listeners.delete(listener);
+        return () => listeners.delete(subscription);
       }}}};
   } catch (error) {
     socket?.destroy();
