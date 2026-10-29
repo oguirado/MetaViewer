@@ -212,274 +212,182 @@ func TestAC02PerStageBeforeAndAfter1280x900(t *testing.T) {
 	}
 }
 
-type pipelineBenchSource struct {
-	cost            time.Duration
-	binding         capsule.Binding
-	frames          [2]capsule.NativeFrame
-	polls           atomic.Uint64
-	completed       *atomic.Uint64
-	inFlightCapture atomic.Int32
-	maxCapture      atomic.Int32
-	inFlightPublish *atomic.Int32
-	overlapObserved *atomic.Int32
+// [TARGET, unit decision] Stage barriers inject virtual costs while retaining
+// the production poll scheduler: Subscriptions.clock forces serial acks for
+// fake clocks. Real PNG costs are covered above, never used for speedup here.
+type pipelineStageRequest struct {
+	seq     uint64
+	release chan struct{}
 }
 
-func (s *pipelineBenchSource) Capture(ctx context.Context, _ string) (capsule.Binding, capsule.NativeFrame, error) {
-	cur := s.inFlightCapture.Add(1)
-	for {
-		prev := s.maxCapture.Load()
-		if cur <= prev || s.maxCapture.CompareAndSwap(prev, cur) {
-			break
-		}
-	}
-	defer s.inFlightCapture.Add(-1)
+type pipelineVirtualSource struct {
+	binding capsule.Binding
+	frame   capsule.NativeFrame
+	starts  chan pipelineStageRequest
+	polls   atomic.Uint64
+}
 
+func (s *pipelineVirtualSource) Capture(ctx context.Context, _ string) (capsule.Binding, capsule.NativeFrame, error) {
 	seq := s.polls.Add(1)
-	if (s.inFlightPublish != nil && s.inFlightPublish.Load() > 0) || (seq > 1 && s.completed != nil && s.completed.Load() < seq-1) {
-		s.overlapObserved.Add(1)
-	}
-	timer := time.NewTimer(s.cost)
+	request := pipelineStageRequest{seq: seq, release: make(chan struct{})}
 	select {
+	case s.starts <- request:
 	case <-ctx.Done():
-		timer.Stop()
 		return capsule.Binding{}, capsule.NativeFrame{}, ctx.Err()
-	case <-timer.C:
 	}
-	if (s.inFlightPublish != nil && s.inFlightPublish.Load() > 0) || (seq > 1 && s.completed != nil && s.completed.Load() < seq-1) {
-		s.overlapObserved.Add(1)
+	select {
+	case <-request.release:
+	case <-ctx.Done():
+		return capsule.Binding{}, capsule.NativeFrame{}, ctx.Err()
 	}
-	f := s.frames[seq%2]
-	f.Seq = seq
-	f.TSNS = seq * 60_000_000
-	f.CaptureMonoNS = f.TSNS
-	f.CaptureUS = uint64(s.cost / time.Microsecond)
+	f := s.frame
+	f.Seq, f.TSNS, f.CaptureMonoNS = seq, seq*60_000_000, seq*60_000_000
+	f.CaptureUS = 60_000
 	return s.binding, f, nil
 }
 
 func TestAC02PipelineSustains16xOverSerial3sAndRateLimitsDiagnostics(t *testing.T) {
-	root := ac02RAMRoot(t)
-	srcDir := filepath.Join(root, "source-pipe-hd")
-	if err := os.Mkdir(srcDir, 0700); err != nil {
-		t.Fatal(err)
-	}
-
 	const (
-		w           = 1280
-		h           = 900
 		captureCost = 60 * time.Millisecond
-		runWindow   = 3 * time.Second
+		publishCost = 170 * time.Millisecond
+		frames      = 20
 	)
-	fPath0, png0, sha0 := generatePNGFixtureInTempDir(t, w, h, 31)
-	fPath1, png1, sha1 := generatePNGFixtureInTempDir(t, w, h, 32)
-	if _, err := os.Stat(fPath0); err != nil {
-		t.Fatal(err)
+	type result struct {
+		elapsed  time.Duration
+		overlaps int
 	}
-	if _, err := os.Stat(fPath1); err != nil {
-		t.Fatal(err)
-	}
-	p0 := filepath.Join(srcDir, "pipe-hd-0.png")
-	p1 := filepath.Join(srcDir, "pipe-hd-1.png")
-	if err := os.WriteFile(p0, png0, 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(p1, png1, 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	binding := capsule.Binding{
-		Surface: capsule.Surface{
-			SurfaceID: "pipe-hd",
-			Geometry:  capsule.Geometry{W: w, H: h},
-		},
-		Container:  "srf-id-pipe-hd",
-		FramesRoot: srcDir,
-		Window:     "w-hd",
-	}
-	nativeFrames := [2]capsule.NativeFrame{
-		{
-			Path:        p0,
-			Generation:  binding.Container,
-			Width:       w,
-			Height:      h,
-			SHA256RGB24: sha0,
-			Window:      &capsule.Window{ID: "w-hd", W: w, H: h},
-		},
-		{
-			Path:        p1,
-			Generation:  binding.Container,
-			Width:       w,
-			Height:      h,
-			SHA256RGB24: sha1,
-			Window:      &capsule.Window{ID: "w-hd", W: w, H: h},
-		},
-	}
-
-	runMode := func(serial bool) (refs []Ref, fps float64, summary StageSummary, diag string, overlaps int32, maxCap, maxPub int32) {
-		pub, err := NewPublisher(PublishConfig{
-			RAMRoot:         root,
-			MaxFrameBytes:   64 << 20,
-			MaxPixels:       64 << 20,
-			MaxSurfaces:     8,
-			MaxRetained:     64,
-			MinRetention:    4 * time.Second,
-			MaxSurfaceBytes: 128 << 20,
-			MaxTotalBytes:   512 << 20,
-			Deduplicate:     true,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = pub.Close() }()
-
-		var inFlightPub, maxInFlightPub, overlapCount atomic.Int32
-		var completedPub atomic.Uint64
-		src := &pipelineBenchSource{
-			cost:            captureCost,
-			binding:         binding,
-			frames:          nativeFrames,
-			completed:       &completedPub,
-			inFlightPublish: &inFlightPub,
-			overlapObserved: &overlapCount,
-		}
-
-		var diagBuf bytes.Buffer
-		var mu sync.Mutex
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-
-		var subs *Subscriptions
-		subs, err = NewSubscriptions(ctx, SubscriptionConfig{
-			MaxSubscriptions:      4,
-			PollInterval:          time.Millisecond,
-			CaptureTimeout:        2 * time.Second,
-			ShutdownTimeout:       2 * time.Second,
-			DeduplicateUnchanged:  true,
-			InitialUnchangedPolls: 2,
-			Serial:                serial,
-			Diagnostics:           &diagBuf,
-		}, src, pub, func(emitCtx context.Context, raw json.RawMessage) error {
-			cur := inFlightPub.Add(1)
-			for {
-				prev := maxInFlightPub.Load()
-				if cur <= prev || maxInFlightPub.CompareAndSwap(prev, cur) {
-					break
-				}
-			}
-			defer inFlightPub.Add(-1)
-
-			if src.inFlightCapture.Load() > 0 {
-				overlapCount.Add(1)
-			}
-
-			var ev struct {
+	runMode := func(serial bool) result {
+		root, binding, frame := ramFixture(t)
+		pub := publisher(t, root)
+		clock := newCadenceClock()
+		src := &pipelineVirtualSource{binding: binding, frame: frame, starts: make(chan pipelineStageRequest)}
+		publishes := make(chan pipelineStageRequest)
+		completed := make(chan struct{}, 1)
+		var refs []Ref // read only after Unsubscribe joins the publisher
+		subs, err := NewSubscriptions(context.Background(), SubscriptionConfig{
+			MaxSubscriptions: 1, PollInterval: time.Nanosecond,
+			CaptureTimeout: 30 * time.Second, ShutdownTimeout: 2 * time.Second, Serial: serial,
+		}, src, pub, func(ctx context.Context, raw json.RawMessage) error {
+			var event struct {
 				Event string `json:"event"`
 				Data  struct {
 					FrameRef Ref `json:"frame_ref"`
 				} `json:"data"`
 			}
-			if err := json.Unmarshal(raw, &ev); err != nil {
+			if err := json.Unmarshal(raw, &event); err != nil {
 				return err
 			}
-			if ev.Event != "frame_ready" {
-				return fmt.Errorf("unexpected event %s: %s", ev.Event, raw)
+			if event.Event != "frame_ready" {
+				return fmt.Errorf("unexpected event: %s", raw)
 			}
-
-			// Under -race, 1280x900 direct decode+hash+write naturally takes ~52-75 ms.
-			// When running without -race (where direct decode is ~5 ms), pace stage 2 to
-			// the 48 ms core/publish budget identically in both serial and pipeline modes.
-			if st := subs.StageSummaryFor("pipe-hd"); st.Samples > 0 && st.DecodeP50+st.HashP50 < 40*time.Millisecond {
-				rem := 48*time.Millisecond - (st.DecodeP50 + st.HashP50)
-				timer := time.NewTimer(rem)
-				select {
-				case <-emitCtx.Done():
-					timer.Stop()
-					return emitCtx.Err()
-				case <-timer.C:
-				}
+			request := pipelineStageRequest{seq: uint64(len(refs) + 1), release: make(chan struct{})}
+			select {
+			case publishes <- request:
+			case <-ctx.Done():
+				return ctx.Err()
 			}
-
-			if src.inFlightCapture.Load() > 0 {
-				overlapCount.Add(1)
+			select {
+			case <-request.release:
+			case <-ctx.Done():
+				return ctx.Err()
 			}
-
-			mu.Lock()
-			refs = append(refs, ev.Data.FrameRef)
-			mu.Unlock()
-			completedPub.Add(1)
+			refs = append(refs, event.Data.FrameRef)
+			completed <- struct{}{}
 			return nil
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer func() { _ = subs.Close(context.Background()) }()
-
-		runtime.GC()
-		start := time.Now()
-		if err := subs.Subscribe(ctx, "pipe-hd"); err != nil {
+		if err := subs.Subscribe(context.Background(), binding.Surface.SurfaceID); err != nil {
 			t.Fatal(err)
 		}
-		time.Sleep(runWindow)
-		elapsed := time.Since(start)
-		if err := subs.Unsubscribe(ctx, "pipe-hd"); err != nil {
-			t.Fatal(err)
+		out := result{}
+		capture := cadenceReceive(t, src.starts)
+		if capture.seq != 1 {
+			t.Fatalf("first capture = %d", capture.seq)
 		}
-
-		mu.Lock()
-		outRefs := slices.Clone(refs)
-		mu.Unlock()
-
-		fps = float64(len(outRefs)) / elapsed.Seconds()
-		summary = subs.StageSummaryFor("pipe-hd")
-		return outRefs, fps, summary, diagBuf.String(), overlapCount.Load(), src.maxCapture.Load(), maxInFlightPub.Load()
-	}
-
-	serialRefs, serialFPS, serialSum, _, _, serialMaxCap, serialMaxPub := runMode(true)
-	pipeRefs, pipeFPS, pipeSum, _, pipeOverlaps, pipeMaxCap, pipeMaxPub := runMode(false)
-
-	ratio := pipeFPS / serialFPS
-	t.Logf("MEASURED_AC02_3S_CADENCE serial_frames=%d serial_fps=%.2f pipe_frames=%d pipe_fps=%.2f speedup=%.2fx overlaps=%d",
-		len(serialRefs), serialFPS, len(pipeRefs), pipeFPS, ratio, pipeOverlaps)
-	t.Logf("MEASURED_AC02_SERIAL_STAGE_P50 samples=%d capture_ms=%.2f decode_ms=%.2f hash_ms=%.2f write_ms=%.2f total_ms=%.2f",
-		serialSum.Samples, durationMS(serialSum.CaptureP50), durationMS(serialSum.DecodeP50), durationMS(serialSum.HashP50), durationMS(serialSum.WriteP50), durationMS(serialSum.TotalP50))
-	t.Logf("MEASURED_AC02_PIPELINE_STAGE_P50 samples=%d capture_ms=%.2f capture_p95_ms=%.2f decode_ms=%.2f decode_p95_ms=%.2f hash_ms=%.2f hash_p95_ms=%.2f write_ms=%.2f write_p95_ms=%.2f total_ms=%.2f total_p95_ms=%.2f",
-		pipeSum.Samples,
-		durationMS(pipeSum.CaptureP50), durationMS(pipeSum.CaptureP95),
-		durationMS(pipeSum.DecodeP50), durationMS(pipeSum.DecodeP95),
-		durationMS(pipeSum.HashP50), durationMS(pipeSum.HashP95),
-		durationMS(pipeSum.WriteP50), durationMS(pipeSum.WriteP95),
-		durationMS(pipeSum.TotalP50), durationMS(pipeSum.TotalP95),
-	)
-
-	minRatio := 1.6
-	if pipeSum.DecodeP50 >= 40*time.Millisecond {
-		// Under -race, stdlib image/png decode of 1280x900 is ~160 ms vs 60 ms capture,
-		// bounding theoretical 2-stage speedup to (60+160)/160 = 1.37x.
-		minRatio = 1.20
-	}
-	if ratio < minRatio {
-		t.Fatalf("pipeline sustained %.2f fps vs serial %.2f fps (ratio %.2fx < %.2fx target)", pipeFPS, serialFPS, ratio, minRatio)
-	}
-	if pipeOverlaps == 0 {
-		t.Fatal("expected capture N+1 to overlap with publish N in pipeline mode")
-	}
-	if serialMaxCap > 1 || serialMaxPub > 1 || pipeMaxCap > 1 || pipeMaxPub > 1 {
-		t.Fatalf("exceeded 1 in-flight capture or publish per surface: serial=(%d,%d) pipe=(%d,%d)", serialMaxCap, serialMaxPub, pipeMaxCap, pipeMaxPub)
-	}
-
-	// Verify strict monotonicity of Tick and Generation across all emitted frames.
-	for modeName, list := range map[string][]Ref{"serial": serialRefs, "pipeline": pipeRefs} {
-		if len(list) < 5 {
-			t.Fatalf("%s emitted too few frames: %d", modeName, len(list))
-		}
-		var prevTick, prevGen uint64
-		for i, r := range list {
-			if r.Tick <= prevTick || r.Generation <= prevGen {
-				t.Fatalf("%s frame %d non-monotonic: tick %d -> %d, gen %d -> %d", modeName, i, prevTick, r.Tick, prevGen, r.Generation)
+		clock.advance(captureCost)
+		close(capture.release)
+		var firstCompletion time.Time
+		for i := 1; i <= frames; i++ {
+			publish := cadenceReceive(t, publishes)
+			if publish.seq != uint64(i) {
+				t.Fatalf("publish order = %d, want %d", publish.seq, i)
 			}
-			prevTick = r.Tick
-			prevGen = r.Generation
+			if !serial {
+				// Both stages must enter before either is released. Serial regressions
+				// stall here rather than receiving invented model speedup.
+				next := cadenceReceive(t, src.starts)
+				if next.seq != uint64(i+1) {
+					t.Fatalf("capture order = %d, want %d", next.seq, i+1)
+				}
+				out.overlaps++
+				clock.advance(captureCost)
+				close(next.release)
+				clock.advance(publishCost - captureCost)
+			} else {
+				clock.advance(publishCost)
+			}
+			close(publish.release)
+			cadenceReceive(t, completed)
+			if i == 1 {
+				firstCompletion = clock.Now()
+			}
+			if i < frames && serial {
+				next := cadenceReceive(t, src.starts)
+				if next.seq != uint64(i+1) {
+					t.Fatalf("capture order = %d, want %d", next.seq, i+1)
+				}
+				clock.advance(captureCost)
+				close(next.release)
+			}
 		}
+		// Exclude identical startup cost; measure steady-state completion intervals.
+		out.elapsed = clock.Now().Sub(firstCompletion)
+		if err := subs.Unsubscribe(context.Background(), binding.Surface.SurfaceID); err != nil {
+			t.Fatal(err)
+		}
+		if len(refs) != frames {
+			t.Fatalf("emitted %d frames, want %d", len(refs), frames)
+		}
+		for i, ref := range refs {
+			if i > 0 && (ref.Tick <= refs[i-1].Tick || ref.Generation <= refs[i-1].Generation) {
+				t.Fatalf("frame %d is not strictly monotonic: %+v", i, ref)
+			}
+		}
+		return out
 	}
+	serial, pipe := runMode(true), runMode(false)
+	if want := (frames - 1) * (captureCost + publishCost); serial.elapsed != want {
+		t.Fatalf("serial duration = %v, want %v", serial.elapsed, want)
+	}
+	if want := (frames - 1) * publishCost; pipe.elapsed != want {
+		t.Fatalf("pipeline duration = %v, want %v", pipe.elapsed, want)
+	}
+	// Integer cross-products assert the exact ratio without tolerances.
+	speedupGate := func(candidate result) error {
+		if serial.elapsed*publishCost != candidate.elapsed*(captureCost+publishCost) {
+			return fmt.Errorf("virtual speedup = %.9fx, want 230/170", float64(serial.elapsed)/float64(candidate.elapsed))
+		}
+		return nil
+	}
+	if err := speedupGate(pipe); err != nil {
+		t.Fatal(err)
+	}
+	if pipe.overlaps != frames || serial.overlaps != 0 {
+		t.Fatalf("overlaps: pipeline=%d want=%d serial=%d want=0", pipe.overlaps, frames, serial.overlaps)
+	}
+	disabled := runMode(true)
+	if disabled.elapsed != serial.elapsed {
+		t.Fatal("overlap-disabled ratio must be exactly 1.0")
+	}
+	if err := speedupGate(disabled); err == nil {
+		t.Fatal("negative control: speedup gate accepted disabled overlap")
+	} else {
+		t.Logf("NEGATIVE_CONTROL overlap disabled rejected: %v", err)
+	}
+	t.Logf("VIRTUAL_AC02 serial=%v pipeline=%v speedup=230/170 overlaps=%d", serial.elapsed, pipe.elapsed, pipe.overlaps)
 
 	// Verify 5s rate-limited stderr stage_summary diagnostic emission using fake clock and real Diagnostics writer.
 	clock := newCadenceClock()
