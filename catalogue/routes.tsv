@@ -99,6 +99,8 @@ test_tg_record.py	agents/tests/test_tg_record.py
 test_tg_vision.py	agents/tests/test_tg_vision.py
 test_tools.py	agents/tests/test_tools.py
 test_vcore.py	agents/tests/test_vcore.py
+test_vcore_harden.py	agents/tests/test_vcore_harden.py
+testvco-265129d61a2c	agents/tests/test_vcore_harden_r5.py
 test_vcore_serve.py	agents/tests/test_vcore_serve.py
 testvco-9ce1ffeaa20f	agents/tests/test_vcore_v02_element_table.py
 testver-b310fa6bdd33	agents/tests/test_verdict_parity.py
