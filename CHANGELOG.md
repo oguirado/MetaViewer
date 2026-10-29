@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0 (unreleased draft)
+- I made the capsule wall and agent loop safer under failure: stale or unknown daemon frames get a journalled STALE_FRAME verdict without dropping the daemon, a capsule is only reused after proven absence, and input after a revive waits for a fresh probe.
+- I made perception faster: the agents keep one persistent vision-engine client (p50 7.6 ms per 1280x900 frame on the trusted path), and wender-agent uses the same persistent bridge with raw RGB frames.
+- I hardened the perception interpreter: a pinned Python and a trusted extra site checked through its parent chain, contents and hooks before every spawn.
+- I added opt-in live runners for web automation (three local fixture tasks with the network down) and for the Holdings trial, each with a verifiable receipt; their live results are not claimed in this release.
+- I added an opt-in shared-memory capture ring reader; the wall keeps the legacy capture path until the ring is installed.
+- I made the terminal tile survive throttled input (retryable refusals), refused Holdings output with duplicate keys, and kept the recording ceiling at 60 fps.
+- I added test-gap suites for agent perception, Electron capture, core admission, serve and settings, and fixed a load-sensitive core test.
+
 ## 0.1.2 (2026-10-27)
 - I connected the real core, daemon adapter and Electron tile over one live capsule, and passed G-W1 with verified agent receipts.
 - I passed the G-AI live gate with vision-engine and wender-agent pinned by commit and loaded externally, never vendored.
