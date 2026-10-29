@@ -16,6 +16,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURE_PATH = join(HERE, '..', '..', 'tests', 'fixtures', 'frames_parity.json');
 const FRAME_READER_PATH = join(HERE, '..', 'electron', 'frameReader.js');
 
+// D8 NON-FINDING for box containment: frozen observation.schema.json has no such rule.
+// JS observation decoder absence remains a separate peer finding.
 export const FINDINGS = Object.freeze({
   'js_host_bindings:frame_ref_valid_width_8192': 'FINDING D2',
   'js_host_bindings:frame_ref_valid_max_16384': 'FINDING D2',
@@ -28,15 +30,6 @@ export const FINDINGS = Object.freeze({
   'js_host_bindings:frame_ref_invalid_ramws_overlong': 'FINDING D6',
   'js_host_bindings:frame_ref_invalid_ramws_9_segments': 'FINDING D6',
   'js_host_bindings:frame_ref_invalid_ramws_hidden_segment': 'FINDING D6',
-  'js_reader:frame_ref_invalid_width_16385': 'FINDING D2',
-  'js_reader:frame_ref_invalid_height_16385': 'FINDING D2',
-  'js_reader:frame_ref_invalid_surface_id_pattern': 'FINDING D6',
-  'js_reader:frame_ref_invalid_ramws_overlong': 'FINDING D6',
-  'js_reader:frame_ref_invalid_ramws_9_segments': 'FINDING D6',
-  'js_reader:frame_ref_invalid_ramws_hidden_segment': 'FINDING D6',
-  'js_preload:frame_ref_invalid_width_16385': 'FINDING D2',
-  'js_preload:frame_ref_invalid_height_16385': 'FINDING D2',
-  'js_preload:frame_ref_invalid_surface_id_pattern': 'FINDING D6',
   'js_observation:observation_valid_full': 'FINDING D8',
   'js_observation:observation_valid_minimal': 'FINDING D8',
   'js_observation:observation_invalid_null_vision': 'FINDING D8',
@@ -289,7 +282,7 @@ test('JS decoders parity across shared frames_parity.json vectors', async (t) =>
     if (vec.family === 'frame_ref') {
       await t.test(`js_reader/${vec.id}`, async (sub) => {
         const actualAccept = await decodeWithFrameReader(vec.payload);
-        const finding = vec.findings.js_reader;
+        const finding = FINDINGS[`js_reader:${vec.id}`];
         if (finding) {
           assert.notEqual(actualAccept, expectedAccept, `${finding} resolved on ${vec.id}`);
           recordedFindings[`js_reader:${vec.id}`] = finding;
@@ -303,7 +296,7 @@ test('JS decoders parity across shared frames_parity.json vectors', async (t) =>
       if (!touchesRamwsOnly) {
         await t.test(`js_preload/${vec.id}`, (sub) => {
           const actualAccept = decodeWithPreloadNotice(vec.payload, fixture.surface_template);
-          const finding = vec.findings.js_preload;
+          const finding = FINDINGS[`js_preload:${vec.id}`];
           if (finding) {
             assert.notEqual(actualAccept, expectedAccept, `${finding} resolved on ${vec.id}`);
             recordedFindings[`js_preload:${vec.id}`] = finding;

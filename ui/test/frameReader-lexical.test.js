@@ -66,7 +66,7 @@ test('ARG-r_ui-3: oversized ASCII path is refused without code-point iteration o
   } finally { await reader.closeReader(); }
 });
 
-test('ARG-r_ui-3: oversized astral path avoids iteration and Unicode boundary stays admitted', async () => {
+test('ARG-r_ui-3: oversized astral path and former Unicode boundary are refused without iteration', async () => {
   const surface_id = '😀'.repeat(128);
   const { reader, acquired } = harness(surface_id);
   try {
@@ -77,9 +77,13 @@ test('ARG-r_ui-3: oversized astral path avoids iteration and Unicode boundary st
     assert.deepEqual(acquired, []);
     const boundary = { ...ref, surface_id,
       ramws_path: '/dev/shm/' + '😀'.repeat(65536 - '/dev/shm/'.length) };
-    const outcome = await reader.readFrame(boundary);
-    assert.equal(outcome.ok, true, JSON.stringify(outcome));
-    assert.deepEqual(acquired, [boundary]);
+    const boundaryObserved = observeIteration(boundary.ramws_path,
+      () => reader.readFrame(boundary));
+    assert.equal((await boundaryObserved.result).reason, FRAME_REASONS.INVALID_PATH);
+    assert.equal(boundaryObserved.iterations, 0);
+    const surfaceOnly = await reader.readFrame({ ...ref, surface_id });
+    assert.equal(surfaceOnly.reason, FRAME_REASONS.INVALID_CONTRACT);
+    assert.deepEqual(acquired, []);
   } finally { await reader.closeReader(); }
 });
 

@@ -394,7 +394,7 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 		return Ref{}, false, stages, errSubscriptionCancelled
 	}
 	old, exists := p.surfaces[id]
-	if p.closed || p.output == nil || p.root == nil || p.next == ^uint64(0) || id == "" || id != b.Surface.SurfaceID || b.Container != f.Generation || f.Seq == 0 || len(f.SHA256RGB24) != 64 || (exists && (old.native != f.Generation || f.Seq <= old.seq)) || (!exists && len(p.surfaces) >= p.cfg.MaxSurfaces) || f.Width < 1 || f.Height < 1 || f.Width > b.Surface.Geometry.W || f.Height > b.Surface.Geometry.H || uint64(f.Width) > p.cfg.MaxPixels/uint64(f.Height) || uint64(f.Width)*uint64(f.Height) > uint64(p.cfg.MaxFrameBytes)/3 || (b.Window != "" && (f.Window == nil || f.Window.ID != b.Window || f.Window.W != f.Width || f.Window.H != f.Height)) {
+	if p.closed || p.output == nil || p.root == nil || p.next == ^uint64(0) || id == "" || id != b.Surface.SurfaceID || b.Container != f.Generation || f.Seq == 0 || (len(f.SHA256RGB24) != 64 || strings.Trim(f.SHA256RGB24, "0123456789abcdef") != "") || (exists && (old.native != f.Generation || f.Seq <= old.seq)) || (!exists && len(p.surfaces) >= p.cfg.MaxSurfaces) || f.Width < 1 || f.Height < 1 || f.Width > b.Surface.Geometry.W || f.Height > b.Surface.Geometry.H || uint64(f.Width) > p.cfg.MaxPixels/uint64(f.Height) || uint64(f.Width)*uint64(f.Height) > uint64(p.cfg.MaxFrameBytes)/3 || (b.Window != "" && (f.Window == nil || f.Window.ID != b.Window || f.Window.W != f.Width || f.Window.H != f.Height)) {
 		p.mu.Unlock()
 		return Ref{}, false, stages, frameError()
 	}

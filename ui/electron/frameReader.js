@@ -403,13 +403,15 @@ function checkRamwsPath(value) {
   if (typeof value !== 'string') {
     return refusal(FRAME_REASONS.INVALID_PATH, 'bad-path');
   }
-  // One code point occupies at most two UTF-16 units; preserve the schema's
-  // Unicode boundary while bounding allocation before spreading untrusted text.
-  if (value.length > 2 * 65536 || [...value].length > 65536) {
+  // The frozen schema admits ASCII paths only; bound length before matching.
+  if (value.length > 255) {
     return refusal(FRAME_REASONS.INVALID_PATH, 'path-too-long');
   }
   if (!value.startsWith(SHM_PREFIX) || value.length === SHM_PREFIX.length) {
     return refusal(FRAME_REASONS.INVALID_PATH, 'wrong-root');
+  }
+  if (!/^\/dev\/shm(?:\/[A-Za-z0-9_][A-Za-z0-9._-]{0,127}){1,8}$/.test(value)) {
+    return refusal(FRAME_REASONS.INVALID_PATH, 'bad-path-pattern');
   }
   if (value.includes('\0')) {
     return refusal(FRAME_REASONS.INVALID_PATH, 'nul-byte');
@@ -437,8 +439,13 @@ function admitFrameRef(frameRef) {
   if (raw.schema !== FRAME_REF_SCHEMA) {
     return { ok: false, outcome: refusal(FRAME_REASONS.INVALID_CONTRACT, 'bad-schema') };
   }
+  // Preserve INVALID_PATH precedence when a reference also has a bad identifier.
+  const pathOutcome = checkRamwsPath(raw.ramws_path);
+  if (pathOutcome !== null) {
+    return { ok: false, outcome: pathOutcome };
+  }
   if (typeof raw.surface_id !== 'string' || raw.surface_id.length < 1
-    || raw.surface_id.length > 512 || [...raw.surface_id].length > 128) {
+    || raw.surface_id.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(raw.surface_id)) {
     return { ok: false, outcome: refusal(FRAME_REASONS.INVALID_CONTRACT, 'bad-surface-id') };
   }
   if (!isPositiveInt(raw.generation)) {
@@ -447,18 +454,19 @@ function admitFrameRef(frameRef) {
   if (!isNonNegativeInt(raw.tick) || !isNonNegativeInt(raw.ts_ns) || !isNonNegativeInt(raw.capture_us)) {
     return { ok: false, outcome: refusal(FRAME_REASONS.INVALID_CONTRACT, 'bad-witness') };
   }
-  if (!isPositiveInt(raw.width) || !isPositiveInt(raw.height)) {
+  if (typeof raw.width !== 'number' || typeof raw.height !== 'number'
+    || !isPositiveInt(raw.width) || !isPositiveInt(raw.height)) {
     return { ok: false, outcome: refusal(FRAME_REASONS.INVALID_CONTRACT, 'bad-dimensions') };
+  }
+  if (raw.width > 16384 || raw.height > 16384) {
+    const detail = Number.isSafeInteger(raw.width * raw.height * 3) ? 'bad-dimensions' : 'dimension-product-overflow';
+    return { ok: false, outcome: refusal(FRAME_REASONS.SIZE_MISMATCH, detail) };
   }
   if (raw.format !== 'rgb24') {
     return { ok: false, outcome: refusal(FRAME_REASONS.INVALID_CONTRACT, 'bad-format') };
   }
   if (typeof raw.sha256 !== 'string' || raw.sha256.length !== 64 || !/^[0-9a-f]{64}$/.test(raw.sha256)) {
     return { ok: false, outcome: refusal(FRAME_REASONS.INVALID_CONTRACT, 'bad-sha256') };
-  }
-  const pathOutcome = checkRamwsPath(raw.ramws_path);
-  if (pathOutcome !== null) {
-    return { ok: false, outcome: pathOutcome };
   }
   const ref = Object.freeze({
     schema: FRAME_REF_SCHEMA,

@@ -1,3 +1,5 @@
+# D8 NON-FINDING: frozen observation.schema.json does not require box containment.
+# Retained fixture skip markers describe a stronger observe policy, not a wire-contract defect.
 """Cross-language parity tests for frame_ref, surface_event, and observation v0.2."""
 
 from __future__ import annotations

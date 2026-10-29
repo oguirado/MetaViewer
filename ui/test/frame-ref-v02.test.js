@@ -63,17 +63,31 @@ for (const boundary of [0, Number.MAX_SAFE_INTEGER]) {
   });
 }
 
-test('v0.2 admits schema string length boundaries in Unicode code points', async () => {
-  const ref = { ...liveRef, surface_id: '😀'.repeat(128),
-    ramws_path: '/dev/shm/' + '😀'.repeat(65536 - '/dev/shm/'.length) };
+test('v0.2 admits ASCII schema boundaries and refuses the former Unicode boundaries', async () => {
+  const ref = { ...liveRef, surface_id: 'a'.repeat(128),
+    ramws_path: '/dev/shm/' + 'a'.repeat(128) + '/' + 'b'.repeat(117) };
   const { reader, acquired } = harness(ref);
   try {
+    assert.equal(ref.ramws_path.length, 255);
     assert.equal((await reader.readFrame(ref)).ok, true);
     assert.deepEqual(acquired, [ref]);
     const badSurface = await reader.readFrame({ ...ref, surface_id: ref.surface_id + 'a' });
     assert.equal(badSurface.reason, FRAME_REASONS.INVALID_CONTRACT);
     const badPath = await reader.readFrame({ ...ref, ramws_path: ref.ramws_path + 'a' });
     assert.equal(badPath.reason, FRAME_REASONS.INVALID_PATH);
+    const unicodeSurface = '😀'.repeat(128);
+    const unicodePath = '/dev/shm/' + '😀'.repeat(65536 - '/dev/shm/'.length);
+    assert.equal((await reader.readFrame({ ...ref, surface_id: unicodeSurface })).reason,
+      FRAME_REASONS.INVALID_CONTRACT);
+    assert.equal((await reader.readFrame({ ...ref, ramws_path: unicodePath })).reason,
+      FRAME_REASONS.INVALID_PATH);
+    assert.equal((await reader.readFrame({ ...ref, surface_id: unicodeSurface,
+      ramws_path: unicodePath })).reason, FRAME_REASONS.INVALID_PATH);
+    // Isolate ASCII pattern refusal from the independent length caps.
+    assert.equal((await reader.readFrame({ ...ref, surface_id: '😀' })).reason,
+      FRAME_REASONS.INVALID_CONTRACT);
+    assert.equal((await reader.readFrame({ ...ref, ramws_path: '/dev/shm/😀' })).reason,
+      FRAME_REASONS.INVALID_PATH);
     assert.equal(acquired.length, 1);
   } finally { await reader.closeReader(); }
 });

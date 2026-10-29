@@ -726,6 +726,8 @@ function validFrameNotice(value) {
     || f.schema!=='frame_ref/v0.2' || f.format!=='rgb24'
     || typeof f.sha256!=='string' || f.sha256.length!==64 || !/^[a-f0-9]{64}$/.test(f.sha256)
     || typeof f.surface_id!=='string' || !f.surface_id.length || f.surface_id.length>128
+    || !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(f.surface_id)
+    || f.width>16384 || f.height>16384
     || !['generation','width','height'].every(key=>Number.isSafeInteger(f[key]) && f[key]>0)
     || !['tick','ts_ns','capture_us'].every(key=>Number.isSafeInteger(f[key]) && f[key]>=0)
     || s.schema!=='surface/v0.2' || s.surface_id!==f.surface_id

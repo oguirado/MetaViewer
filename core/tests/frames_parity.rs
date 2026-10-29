@@ -1,3 +1,5 @@
+// D8 NON-FINDING: frozen observation.schema.json does not require box containment.
+// Retained fixture skip markers describe a stronger observe policy, not a wire-contract defect.
 use metaviewer_core::decode_envelope;
 use serde::Deserialize;
 use serde_json::Value;
