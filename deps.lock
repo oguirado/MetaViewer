@@ -5,14 +5,14 @@
       "kind": "python_package",
       "repo": "oguirado/vision-engine",
       "version": "v0.2.0",
-      "commit": "88803ee54585da96d33cf1df6c7bd2fcc76786c1"
+      "commit": "3bb54835db8a2e545311cfcc45185a0dfbd9313a"
     },
     {
       "name": "wender-agent",
       "kind": "python_package",
       "repo": "oguirado/wender-agent",
       "version": "v0.3.0",
-      "commit": "1fa2d36abb67ddf4fc79c09dcf23698f467fb7ab"
+      "commit": "41493681a2f4d92aae50c476ed13c219c31a0a02"
     },
     {
       "name": "opensuperficies",
