@@ -57,8 +57,33 @@ func monotonic() uint64 {
 }
 func configuration(detail string) error { return &cli.Fault{Code: "configuration", Detail: detail} }
 
+// [TARGET, unit decision] MV_SRF_NET_MODES is a trusted JSON array copied from
+// the deployed binary's capabilities.net_modes; absent knowledge means legacy.
+func networkModesFromEnv() ([]string, error) {
+	raw, present := os.LookupEnv("MV_SRF_NET_MODES")
+	if !present {
+		return nil, nil
+	}
+	var modes []string
+	if err := json.Unmarshal([]byte(raw), &modes); err != nil || modes == nil {
+		return nil, configuration("MV_SRF_NET_MODES must be a JSON array of network modes")
+	}
+	seen := map[string]bool{}
+	for _, mode := range modes {
+		if (mode != "legacy" && mode != "open" && mode != "proxied") || seen[mode] {
+			return nil, configuration("invalid MV_SRF_NET_MODES mode")
+		}
+		seen[mode] = true
+	}
+	return modes, nil
+}
+
 func RuntimeFromEnv() (Runtime, error) {
 	var zero Runtime
+	netModes, err := networkModesFromEnv()
+	if err != nil {
+		return zero, err
+	}
 	for _, key := range []string{"MV_SRF_BIN_DIR", "MV_SRF_STATE_DIR", "SRF_IDENTITY_STORE_ROOT", "SRF_PROXY_REGISTRY", "XDG_RUNTIME_DIR"} {
 		if !filepath.IsAbs(os.Getenv(key)) {
 			return zero, configuration(key + " must be absolute")
@@ -112,7 +137,7 @@ func RuntimeFromEnv() (Runtime, error) {
 		viewMgr.Close()
 		return zero, err
 	}
-	manager, err := capsule.NewRuntime(capsule.Config{Profiles: profiles, OriginNS: origin, MaxSurfaces: 16, MaxOutputBytes: 1 << 20, Timeout: 90 * time.Second, View: viewMgr}, monotonic)
+	manager, err := capsule.NewRuntime(capsule.Config{NetModes: netModes, Profiles: profiles, OriginNS: origin, MaxSurfaces: 16, MaxOutputBytes: 1 << 20, Timeout: 90 * time.Second, View: viewMgr}, monotonic)
 	if err != nil {
 		_ = recorder.Close()
 		viewMgr.Close()
@@ -148,7 +173,7 @@ func RuntimeFromEnv() (Runtime, error) {
 		}
 		pubs[profile.RAMRoot] = p
 	}
-	helloSession := helloState{manager: manager, view: viewMgr, recorder: recorder, newRecorder: record.NewFromEnvironment}
+	helloSession := helloState{netModes: netModes, manager: manager, view: viewMgr, recorder: recorder, newRecorder: record.NewFromEnvironment}
 
 	helloSession.handler = wireHandler(manager, profiles, pubs, origin, recorder)
 	cfg := ipc.Config{SocketPath: filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "metaviewer", "core.sock"), UID: uint32(os.Getuid()), MaxFrameBytes: 1 << 20, MaxDepth: 32, MaxStringBytes: 65536, MaxKeys: 256, MaxArrayItems: 4096, MaxReplayEntries: 100000, MaxConnections: 1, HelloTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, ProbeTimeout: time.Second, ShutdownTimeout: 5 * time.Second}
@@ -991,6 +1016,7 @@ func openStateDir(path string) (*os.File, error) {
 // helloState owns the state published by an accepted session handshake.
 // Constructor arguments permit deterministic failure testing without global hooks.
 type helloState struct {
+	netModes      []string
 	manager       *capsule.Manager
 	handler       ipc.Handler
 	subscriptions []*frames.Subscriptions
@@ -1053,7 +1079,7 @@ func (s *helloState) accept(ctx context.Context, profiles map[string]capsule.Pro
 		}
 		return nil
 	}
-	fresh, err := newRuntime(capsule.Config{Profiles: profiles, OriginNS: origin, MaxSurfaces: 16, MaxOutputBytes: 1 << 20, Timeout: 90 * time.Second, View: s.view, BeforeDestroy: beforeDestroy}, clock)
+	fresh, err := newRuntime(capsule.Config{NetModes: s.netModes, Profiles: profiles, OriginNS: origin, MaxSurfaces: 16, MaxOutputBytes: 1 << 20, Timeout: 90 * time.Second, View: s.view, BeforeDestroy: beforeDestroy}, clock)
 	if err != nil {
 		return err
 	}

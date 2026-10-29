@@ -55,7 +55,9 @@ type ViewBackend interface {
 }
 
 type Config struct {
-	BinDir                      string
+	BinDir string
+	// NetModes is trusted startup knowledge; absence preserves legacy argv/env.
+	NetModes                    []string
 	Profiles                    map[string]Profile
 	MaxSurfaces, MaxOutputBytes int
 	Timeout                     time.Duration
@@ -214,6 +216,14 @@ func NewManager(cfg Config, r cli.Runner, clock cli.Clock) (*Manager, error) {
 	if cfg.LivenessInterval < time.Millisecond || cfg.LivenessInterval > time.Hour || cfg.LivenessMisses < 1 || cfg.LivenessMisses > 100 {
 		return nil, fault("configuration", "bounded liveness configuration required")
 	}
+	seenModes := map[string]bool{}
+	for _, mode := range cfg.NetModes {
+		if (mode != "legacy" && mode != "open" && mode != "proxied") || seenModes[mode] {
+			return nil, fault("configuration", "invalid native network capability declaration")
+		}
+		seenModes[mode] = true
+	}
+	cfg.NetModes = append([]string(nil), cfg.NetModes...)
 	copyProfiles := make(map[string]Profile, len(cfg.Profiles))
 	for id, p := range cfg.Profiles {
 		if !profileID.MatchString(id) || p.Width < 1 || p.Height < 1 || p.Width > 8192 || p.Height > 8192 || p.NestedDepth < 0 || p.NestedDepth > 1 || !displayID.MatchString(p.Display) || !filepath.IsAbs(p.RAMRoot) || !withinRAM(p.RAMRoot) {
@@ -260,7 +270,13 @@ func (m *Manager) execute(ctx context.Context, p Profile, args []string, in []by
 	}
 	ctx, cancel := context.WithTimeout(ctx, m.cfg.Timeout)
 	defer cancel()
-	out, err := m.runner.Run(ctx, append([]string{filepath.Join(m.cfg.BinDir, name)}, args...), in)
+	runner := m.runner
+	if r, ok := runner.(*ProcessRunner); ok {
+		if mode, _ := ctx.Value(networkModeKey{}).(string); mode != "" {
+			runner = networkRunner(r, mode)
+		}
+	}
+	out, err := runner.Run(ctx, append([]string{filepath.Join(m.cfg.BinDir, name)}, args...), in)
 	if err != nil {
 		if len(out) <= m.cfg.MaxOutputBytes {
 			return out, err // Failed starts may still identify their pending create.
@@ -485,6 +501,17 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 	}
 	if p.NativeKind == "holdings" {
 		args = []string{"start", "--slots", "1", "--app", p.AppDir}
+	}
+	if p.NativeKind == "browser" {
+		_, mode, policy, netErr := m.browserNetwork(q.ProfileID, profileContainer)
+		if netErr != nil {
+			return nil, netErr
+		}
+		args, netErr = networkStartArgs(args, mode, policy)
+		if netErr != nil {
+			return nil, netErr
+		}
+		ctx = context.WithValue(ctx, networkModeKey{}, mode)
 	}
 	// Quarantine before execution; clear only on a proven pre-spawn refusal.
 	m.quarantined[q.ProfileID] = true

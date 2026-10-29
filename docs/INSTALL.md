@@ -273,3 +273,64 @@ If you built from source, also remove your external `MV_PKG_OUT` and `CARGO_TARG
 | `DependencyLockError` (`unavailable`, `commit_mismatch`, `dirty_tree`, `bad_lockfile`) | `agents/metaviewer_agents/perception/deps_lock.py` | Set `VQA_VE_ROOT` (`vision-engine` at `3bb54835db8a2e545311cfcc45185a0dfbd9313a`) and `MV_WENDER_ROOT` (`wender-agent` at `96120967b435b72fc6d29635f3844dae140388a9`) to clean checkouts or PEP 610 wheels matching `deps.lock` [CITED: `agents/metaviewer_agents/perception/deps_lock.py`, `deps.lock`]. |
 | `CONFIG_PATH` / `SETTINGS_DIRECTORY` / `SETTINGS_FILE` / `SETTINGS_IN_REPO` / `SETTINGS_DESTINATION` | `ui/electron/authorityWire.js` | `XDG_CONFIG_HOME` and `MV_RECORDING_DESTINATION` must be absolute paths outside the repository, with `$XDG_CONFIG_HOME/metaviewer` owned by the current UID at mode `0700` and `settings.json` at mode `0600` [CITED: `ui/electron/authorityWire.js`]. |
 | `DESTINATION_UNSET` / `NOT_SEALED` / `DESTINATION_UNAVAILABLE` / `DESTINATION_EXISTS` / `LIMIT` / `CAPTURE_UNAVAILABLE` | `ui/electron/captureBridge.js`, `core/src/record/capture/export.rs` | Recording export requires a `sealed` recording, `MV_RECORDING_DESTINATION` set to an existing writable directory outside the repository, and an archive size within `16 MiB` (`4096` frames max) [CITED: `ui/electron/captureBridge.js`, `core/src/record/capture/export.rs`]. |
+
+## Capsule network
+
+Browser capsules use `--net open` by default when trusted startup knowledge
+includes `open`. Set `MV_SRF_NET_MODES` to a JSON array copied from the deployed
+binary's capabilities v1 `net_modes`, for example
+`MV_SRF_NET_MODES='["legacy","open","proxied"]'`, only after verifying that binary
+supports those modes and only after the deployment is re-pinned to the
+os-cu-0 net-modes commit. `MV_SRF_NET_MODES` is the deployment switch.
+Open means public internet only, with no LAN access or host services. Before
+live open mode, the operator must approve an identity image rebuild whose
+entrypoint supports `SRF_NET_MODE=open`, and install the native DOCKER-USER/INPUT
+firewall rules. Native start refuses open with exit code 3 until its root-owned
+firewall witness matches those rules. The adapter returns the typed
+`NET_OPEN_PREREQ` fault naming the image rebuild and firewall witness; it never
+retries or downgrades that refusal to legacy or proxied.
+[TARGET, unit decision] This operator declaration is parsed
+once during daemon startup; the adapter makes no capability probe during startup
+or capsule creation. An absent variable or empty array means legacy; malformed,
+null, unknown or duplicate modes refuse daemon startup. Open mode passes no egress proxy
+environment variable. Capsule isolation remains the native runtime's responsibility.
+
+An operator may opt a capsule into a dedicated proxy with an exact domain
+allowlist. The adapter reads
+`$MV_SRF_STATE_DIR/egress/<profile_id>.json`, keyed by the admitted identity:
+
+```json
+{"schema":"metaviewer.capsule_egress/v1","mode":"allowlisted","domains":["example.com","docs.example.com"]}
+```
+
+The directory must be private (`0700`) and records private (`0600`), owned by the
+current user, with no symlink components. Documents are bounded to 64 KiB;
+allowlists contain 1–256 unique lowercase ASCII hostnames. Unicode names must
+already be encoded as ASCII IDNA labels. Wildcards, IP addresses, ports, URLs,
+empty lists, single-label names, localhost, and names ending in `.localhost`,
+`.local`, `.internal`, `.lan` or `.home.arpa` are refused, as are trailing dots. The Go `StoreEgress` helper validates
+and atomically stores records. Missing records mean open. An explicit `open`
+record has an empty `domains` array. Invalid records never fall back to open.
+
+Only browser kinds receive network flags; program/vm retain legacy argv even
+with an open record. For allowlisted mode the adapter generates `<profile_id>.policy.json` alongside
+the record, using `browserid.proxy-policy/v1`, with the capsule's exact hosts in
+`approved` and an empty `denied` array. It requests native `--net proxied --policy <file> --proxy-bin <absolute executable>`
+and never passes `--audit`, starts or names the shared proxy container, or requests
+proxy audit logs. The accepted native names are `--net legacy|open|proxied`;
+`--policy <file>` and `--proxy-bin` are required for proxied. The proxy executable
+is `$MV_SRF_BIN_DIR/srf-egress-proxy`, the same binary used by native `net up`;
+native start owns one proxy container per capsule. An absent or non-executable
+proxy binary refuses with `NET_EGRESS_INVALID` before quarantine or spawn.
+Legacy omits all network flags entirely.
+
+The accepted os-cu-0 v1 native flag interface is isolated in the adapter's
+`networkStartArgs` function. Absent startup capability knowledge keeps the prior
+start argv and environment. Legacy behavior may still require the pin's shared proxy.
+Opting into an allowlist on such a pin or an injected runner refuses with
+`NET_PROXIED_UNSUPPORTED`; it never silently starts open. After policy publication
+the adapter re-loads the record and refuses `NET_EGRESS_CHANGED` on mismatch.
+Created events retain the frozen surface-only shape for every mode. An existing
+out-of-band effective-mode reporting channel is AUSENTE; UI reporting requires
+a later request. These adapter-local settings do not change the frozen contracts.
+The hosted web runner retains its explicit offline barrier.
