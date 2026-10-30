@@ -408,7 +408,7 @@ ADAPTER_RUNTIME_MJS = textwrap.dedent(
       if (process.env.MV_SRF_PROFILES) {
         capsuleInfo = { status: 'CAPSULE_READY', surface_id: 'srf-smoke-browser' };
       } else {
-        process.stderr.write('configuration: profile map or live profile/root required (CAPSULE_BIN_MISSING)\n');
+        process.stderr.write('configuration: profile map or live profile/root required\n');
         process.exit(1);
       }
     } else {
@@ -1114,7 +1114,10 @@ class PackagedInstallAndCapsuleBootTests(unittest.TestCase):
         )
 
     @classmethod
-    def _build_packaged_tarball(cls, dist_dir: Path, runtime_mjs: str = METAVIEWER_RUNTIME_MJS) -> Path:
+    def _build_packaged_tarball(
+        cls, dist_dir: Path, runtime_mjs: str = METAVIEWER_RUNTIME_MJS,
+        *, adapter_runtime_mjs: str = ADAPTER_RUNTIME_MJS,
+    ) -> Path:
         """Assemble a complete packaged MetaViewer-linux-<arch>.tar using ui/tools/package.js."""
         dist_dir.mkdir(parents=True, exist_ok=True)
         staged = dist_dir / cls.pkg_name
@@ -1123,7 +1126,7 @@ class PackagedInstallAndCapsuleBootTests(unittest.TestCase):
         # Compile native ELF64 binaries for metaviewer, metaviewer-core, and mv-daemon-adapter.
         _compile_elf_script_runner(cls.cc_bin, runtime_mjs, staged / "metaviewer", include_fuses=True)
         _compile_elf_script_runner(cls.cc_bin, CORE_RUNTIME_MJS, staged / "resources" / "bin" / "metaviewer-core", include_fuses=False)
-        _compile_elf_script_runner(cls.cc_bin, ADAPTER_RUNTIME_MJS, staged / "resources" / "bin" / "mv-daemon-adapter", include_fuses=False)
+        _compile_elf_script_runner(cls.cc_bin, adapter_runtime_mjs, staged / "resources" / "bin" / "mv-daemon-adapter", include_fuses=False)
 
         # Copy contracts/v0.2, deps.lock, and ui/kit.lock.json into resources/.
         shutil.copytree(ROOT / "contracts" / "v0.2", staged / "resources" / "contracts" / "v0.2")
@@ -1357,6 +1360,26 @@ class PackagedInstallAndCapsuleBootTests(unittest.TestCase):
             self.assertIn("METAVIEWER_MAIN_READY", smoke_proc.stderr)
             self.assertIn("METAVIEWER_MAIN_SMOKE_OK", smoke_proc.stderr)
             self.assertNotIn("METAVIEWER_RENDERER_READY", smoke_proc.stderr)
+
+    def test_u02n_simulation_refusal_on_stdout_refuses_smoke(self) -> None:
+        """MUT-SIM-REFUSAL-STDOUT: the exact refusal on fd 1 cannot pass packaged smoke."""
+        refusal_line = r"process.stderr.write('configuration: profile map or live profile/root required\n');"
+        self.assertEqual(ADAPTER_RUNTIME_MJS.count(refusal_line), 1)
+        mutant_adapter = ADAPTER_RUNTIME_MJS.replace(
+            refusal_line, refusal_line.replace("process.stderr", "process.stdout"),
+        )
+        with tempfile.TemporaryDirectory(prefix="mv-sim-refusal-stdout-") as tmp:
+            artifact = self._build_packaged_tarball(
+                Path(tmp) / "dist", adapter_runtime_mjs=mutant_adapter,
+            )
+            smoke_proc = self._run_node_packaging(
+                f"""
+                import * as pkg from './ui/tools/package.js';
+                await pkg.cleanInstallSmoke({json.dumps(str(artifact))});
+                """
+            )
+            self.assertNotEqual(smoke_proc.returncode, 0, smoke_proc.stdout + smoke_proc.stderr)
+            self.assertIn("PKG_ADAPTER_CONFIG_REFUSAL_MISSING", smoke_proc.stderr)
 
     def test_u02n_negative_controls_tampered_payload_refuses_before_hello(self) -> None:
         """E2E-U02n negative: tampered payload in scratch install or capsule refuses before authenticated hello."""
