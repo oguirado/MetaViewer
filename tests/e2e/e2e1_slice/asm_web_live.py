@@ -249,7 +249,8 @@ def ax_failure_evidence(task, sensed, tree, expected):
     files['frame'] = filename
     task.setdefault('ax_failure_evidence', []).append(dict(
         directory=str(directory), files=files, expected=expected,
-        frame_format=frame_format, width=width, height=height))
+        frame_format=frame_format, width=width, height=height,
+        perception_transport=sensed.get('transport'), mark_count=sensed.get('mark_count')))
 
 
 def prove_ax(task, sensed, tree, expected):
@@ -336,6 +337,7 @@ def run(backend, report):
                                         element_table_sha256=digest(result['table']),
                                         wender_state_sha256=digest(result['state']),
                                         perception_transport=result.get('transport', 'hosted'),
+                                        mark_count=result.get('mark_count'),
                                         frame_witness=witness))
         return result
 
@@ -518,9 +520,27 @@ class LiveBackend:
         state = Path(os.environ['MV_SRF_STATE_DIR']).stat()
         require(state.st_uid == os.getuid() and stat.S_IMODE(state.st_mode) == 0o700,
                 'state directory must be current-uid mode 0700', 'E2E_PREREQ')
+        marks_root = Path('/dev/shm/vqa-cu')
+        marks_root.mkdir(exist_ok=True)
+        require(not marks_root.is_symlink() and marks_root.is_dir(),
+                'unsafe RAM marks root', 'E2E_PREREQ')
+        marks = Path(tempfile.mkdtemp(prefix='mv-web-marks-', dir=marks_root))
+        try:
+            marks.chmod(0o700)
+            info = marks.lstat()
+            require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() and
+                    stat.S_IMODE(info.st_mode) == 0o700 and
+                    marks.resolve().is_relative_to(marks_root.resolve()),
+                    'unsafe private RAM marks directory', 'E2E_PREREQ')
+        except BaseException:
+            # Nothing else knows this fresh directory yet; never leak it.
+            shutil.rmtree(marks, ignore_errors=True)
+            raise
+        self.marks_directory, self.marks_identity = marks, (info.st_dev, info.st_ino)
         self.adapter = VCorePerceptionAdapter(self.roots['vision-engine'], timeout=30,
                                              verify_lock=True, pin_python=True,
-                                             fallback_oneshot=False)
+                                             fallback_oneshot=False,
+                                             marks_out=self.marks_directory / 'marks.png')
         # Reuse the public-core verifier and its same-receipt negative controls.
         # No verifier implementation or alternate component ABI is invented.
         configured_verifier = os.environ.get('MV_E2E_VERIFY_BIN')
@@ -595,8 +615,23 @@ class LiveBackend:
         vision = self.adapter.perceive(frame)
         observed['vision'] = vision
         self.observations[frame['sha256']] = observed
-        return dict(frame=frame, table=project_element_table(frame, vision),
-                    frame_witness=self.retain(frame), transport=self.adapter.last_transport)
+        table = project_element_table(frame, vision)
+        # The normalized C2 summary preserves the engine's mark count, even
+        # when crops also exist. Do not mistake crop count for mark count.
+        count = re.search(r'\bmarks=(\d+)\b', vision.get('summary', ''))
+        mark_count = int(count[1]) if count else None
+        transport = self.adapter.last_transport
+        self.session.report.setdefault('perception_ticks', []).append(dict(
+            frame_ref=frame, transport=transport, mark_count=mark_count,
+            element_count=len(table['elements'])))
+        # Blank prelude frames may legitimately have no elements. A non-empty
+        # AX fixture tree requires localized vision; prove_ax still checks names.
+        witness = self.retain(frame)  # Keep the frame even when the guard below fails.
+        tree = self.op_ax() if not table['elements'] else {}
+        require(table['elements'] or not tree.get('elements', tree.get('nodes', [])),
+                'live perception produced no elements (marks absent)')
+        return dict(frame=frame, table=table, mark_count=mark_count,
+                    frame_witness=witness, transport=transport)
 
     def op_state(self, sensed):
         return self.glue.wender_state(self.roots['wender-agent'], sensed['table'], self.op_ax())
@@ -786,6 +821,18 @@ class LiveBackend:
         perception_process = getattr(self.adapter, '_vserve_proc', None)
         if self.adapter is not None:
             attempt('perception', self.adapter.close)
+        marks = getattr(self, 'marks_directory', None)
+        def remove_marks():
+            info = marks.lstat()
+            require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() and
+                    stat.S_IMODE(info.st_mode) == 0o700 and
+                    (info.st_dev, info.st_ino) == self.marks_identity and
+                    marks.resolve().is_relative_to(Path('/dev/shm/vqa-cu').resolve()),
+                    'private RAM marks directory custody changed')
+            shutil.rmtree(marks)
+        if marks is not None and os.path.lexists(marks):
+            attempt('marks directory', remove_marks)
+        marks_absent = marks is None or not os.path.lexists(marks)
         s = self.session
         owned = set((s.state or {}).get('capsules', []))
         for peer in s.peers:
@@ -846,6 +893,8 @@ class LiveBackend:
             for name in files:
                 (Path(directory) / name).chmod(0o600)
         self._cleanup_result = redact(dict(container_cleanup='PASS' if container_absent else 'FAIL',
+                    marks_directory_absent=marks_absent,
+                    perception_ticks=s.report.get('perception_ticks', []),
                     cleanup_errors=errors, foreign_capsules=sorted(foreign) if foreign is not None else None,
                     process_cleanup=dict(status='PASS' if absent and socket_absent and processes_absent and not errors else 'FAIL',
                     temporary_tree_absent=absent, socket_absent=socket_absent),

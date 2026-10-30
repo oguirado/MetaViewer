@@ -353,3 +353,5 @@ the existing receipt verifier offline with tools from PATH and `CARGO_TARGET_DIR
 the `propose` latency includes admission and native input settlement. Run both
 the dry-run and full gate in foreground
 `systemd-run --user --scope -q -p MemoryMax=8G -p MemorySwapMax=0` scopes.
+
+Live perception uses a private RAM marks directory under `/dev/shm/vqa-cu`, removed at cleanup; the mark count per tick is in the report.

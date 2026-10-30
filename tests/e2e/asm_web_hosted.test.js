@@ -142,9 +142,9 @@ test('Real metaviewer_agents loop integration: VCorePerceptionAdapter, project_e
   const capsule = new HostedWebCapsuleFake({ initialPage: 'flow_a' });
   const core = new HostedCoreAdmissionFake(capsule, { stepBudget: STEP_BUDGETS.T2_TWO_PAGE_FLOW });
   try {
-    const obs1 = core.observe();
+    const obs1 = core.observe({ marks_out: '/dev/shm/vqa-cu/asm-web-marks.png' });
     capsule.loadPage('flow_b');
-    const obs2 = core.observe();
+    const obs2 = core.observe({ marks_out: '/dev/shm/vqa-cu/asm-web-marks.png' });
 
     const planOut = runPythonAgentsBridge({
       mode: 'perceive_and_plan',
@@ -188,14 +188,14 @@ test('Real metaviewer_agents loop integration: VCorePerceptionAdapter, project_e
 test('Must-fail mutations M1, M2, M3 and task-specific negative controls', () => {
   // M1a: Bbox shifted out-of-frame fails hosted element_table projection AND real Python VCore/planner.
   assert.throws(
-    () => runTask1FormFill({ shiftBboxOutOfFrame: true }),
+    () => runTask1FormFill({ shiftBboxOutOfFrame: true, marks_out: '/dev/shm/vqa-cu/asm-web-marks.png' }),
     (err) => err.code === 'out_of_bounds' && /out of frame bounds/.test(err.message),
   );
 
   const capsule = new HostedWebCapsuleFake({ initialPage: 'form' });
   try {
     const frameRef = capsule.captureFrame();
-    const badC2 = buildC2Describe(capsule, frameRef, { shiftBboxOutOfFrame: true });
+    const badC2 = buildC2Describe(capsule, frameRef, { shiftBboxOutOfFrame: true, marks_out: '/dev/shm/vqa-cu/asm-web-marks.png' });
     const pyMut = runPythonAgentsBridge({
       mode: 'perceive_and_plan',
       capsule_id: capsule.capsuleId,
@@ -301,4 +301,25 @@ test('Must-fail mutations M1, M2, M3 and task-specific negative controls', () =>
     () => runTask3ReadTable({ allowExtraInputsMutation: true, injectUnexpectedInputMutation: true }),
     (err) => err.code === 'T3_READ_ONLY_VIOLATION',
   );
+});
+
+
+test('C2 without marks projects no elements on a settled frame', () => {
+  const capsule = new HostedWebCapsuleFake({ initialPage: 'form' });
+  try {
+    const frame = capsule.captureFrame();
+    const first = buildC2Describe(capsule, frame);
+    assert.ok(first.crops.length > 0);
+    const settled = buildC2Describe(capsule, frame);
+    assert.equal(Object.hasOwn(settled, 'marks'), false);
+    assert.equal(Object.hasOwn(settled, 'marks_png'), false);
+    assert.equal(settled.crops.length, 0);
+    assert.equal(projectElementTable(frame, settled).elements.length, 0);
+    const marked = buildC2Describe(capsule, frame, { marks_out: '/dev/shm/vqa-cu/asm-web-marks.png' });
+    assert.equal(marked.crops.length, 0);
+    assert.ok(marked.marks.length > 0);
+    assert.ok(projectElementTable(frame, marked).elements.length > 0);
+  } finally {
+    capsule.cleanup();
+  }
 });

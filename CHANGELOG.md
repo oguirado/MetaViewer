@@ -2,6 +2,7 @@
 
 ## 0.2.0 (unreleased draft)
 
+- Live perception now requests marks every tick; earlier v0.2.0 candidates perceived zero elements on settled pages.
 - Web fixtures now expose synchronized chassis-role names; the pinned Wender omits plain paragraphs, table cells and unnamed status text, which agents must read via AX (srf) or vision.
 - I fixed fixture navigation with capsule clipboard paste, bounded post-input repaint settling, and the shorter equivalent data URL.
 - I made the capsule wall and agent loop safer under failure: stale or unknown daemon frames get a journalled STALE_FRAME verdict without dropping the daemon, a capsule is only reused after proven absence, and input after a revive waits for a fresh probe.

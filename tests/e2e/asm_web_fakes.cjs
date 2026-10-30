@@ -489,6 +489,9 @@ function mapRoleToMarkKind(role) {
   return 'unknown';
 }
 
+// Per-capsule previous regions model C2's changed-frame crops. Marks are
+// opt-in, as in vision-engine 3bb5483 vadapt/vserve.py:295 and vcore._vision_from_c2.
+const previousC2Regions = new WeakMap();
 function buildC2Describe(capsule, frameRef, options = {}) {
   const frameSha = options.overrideFrameSha256 || frameRef.sha256;
   const shiftOutOfFrame = Boolean(options.shiftBboxOutOfFrame);
@@ -514,7 +517,11 @@ function buildC2Describe(capsule, frameRef, options = {}) {
     };
   });
 
-  const changedRegions = elements.slice(0, 16).map((el) => ({
+  const previous = previousC2Regions.get(capsule) || new Map();
+  const current = new Map(elements.map((el) => [el.dom_id, JSON.stringify(el)]));
+  const changedElements = elements.filter((el) => previous.get(el.dom_id) !== current.get(el.dom_id));
+  previousC2Regions.set(capsule, current);
+  const changedRegions = changedElements.slice(0, 16).map((el) => ({
     x: el.bbox.x,
     y: el.bbox.y,
     w: el.bbox.w,
@@ -522,7 +529,7 @@ function buildC2Describe(capsule, frameRef, options = {}) {
     score: el.score,
   }));
 
-  const crops = elements.slice(0, 8).map((el) => ({
+  const crops = changedElements.slice(0, 8).map((el) => ({
     x: el.bbox.x,
     y: el.bbox.y,
     w: el.bbox.w,
@@ -561,11 +568,13 @@ function buildC2Describe(capsule, frameRef, options = {}) {
     changed: null,
     changed_regions: changedRegions,
     crops,
-    marks,
-    marks_png: '/dev/shm/vqa-cu/asm-web-marks.png',
+    ...(options.marks_out ? { marks, marks_png: options.marks_out } : {}),
     timing_us: 420,
     mark_cap_reached: false,
-    regions,
+    regions: options.marks_out ? regions : crops.map((crop) => ({
+      bbox: { x: crop.x, y: crop.y, w: crop.w, h: crop.h },
+      role: 'crop', name: crop.reason, score_ppm: 500_000,
+    })),
   };
 }
 
@@ -952,6 +961,8 @@ with tempfile.TemporaryDirectory(prefix="mv_ve_fake_") as ve_dir:
         "crops": req["c2"]["crops"],
         "timing_us": 420,
     }
+    if "marks" in req["c2"]:
+        c2_clean.update(marks=req["c2"]["marks"], marks_png=req["c2"]["marks_png"])
     c2_json_str = json.dumps(c2_clean)
     (vadapt_dir / "cu_describe.py").write_text(
         "import sys\\n"
@@ -1120,6 +1131,7 @@ function runTask1FormFill(options = {}) {
   try {
     // 1. Observe initial form state (result-text is EMPTY).
     const obs0 = core.observe({
+      marks_out: '/dev/shm/vqa-cu/asm-web-marks.png',
       shiftBboxOutOfFrame: options.shiftBboxOutOfFrame,
       overrideFrameSha256: options.overrideFrameSha256,
       overrideSurfaceId: options.overrideSurfaceId,
@@ -1148,7 +1160,7 @@ function runTask1FormFill(options = {}) {
     });
     finalizeReceiptVerification(core, stepEmpty, options.skipWaitVerify);
 
-    const obsAfterEmpty = core.observe();
+    const obsAfterEmpty = core.observe({ marks_out: '/dev/shm/vqa-cu/asm-web-marks.png' });
     const emptyAfterSubmit = obsAfterEmpty.ax.nodes.find((n) => n.id === 'result-text-text');
     if (!emptyAfterSubmit || emptyAfterSubmit.text !== 'EMPTY') {
       throw new Error(`T1 empty submit must keep EMPTY, got ${emptyAfterSubmit && emptyAfterSubmit.text}`);
@@ -1173,7 +1185,7 @@ function runTask1FormFill(options = {}) {
     finalizeReceiptVerification(core, stepFocus, options.skipWaitVerify);
 
     // 4. Type operator name into focused #name-input.
-    const obsFocused = core.observe();
+    const obsFocused = core.observe({ marks_out: '/dev/shm/vqa-cu/asm-web-marks.png' });
     const typeProposal = makeProposal(
       capsule.capsuleId,
       obsFocused.frameRef,
@@ -1187,7 +1199,7 @@ function runTask1FormFill(options = {}) {
     finalizeReceiptVerification(core, stepType, options.skipWaitVerify);
 
     // 5. Click #submit-btn to submit form.
-    const obsTyped = core.observe();
+    const obsTyped = core.observe({ marks_out: '/dev/shm/vqa-cu/asm-web-marks.png' });
     const submitNode = obsTyped.wenderState.nodes.find((n) => n.dom_id === 'submit-btn');
     const clickSubmitProposal = makeProposal(
       capsule.capsuleId,
@@ -1207,7 +1219,7 @@ function runTask1FormFill(options = {}) {
     finalizeReceiptVerification(core, stepSubmit, options.skipWaitVerify);
 
     // 6. Final observe + AX readback verification.
-    const obsFinal = core.observe();
+    const obsFinal = core.observe({ marks_out: '/dev/shm/vqa-cu/asm-web-marks.png' });
     const resultNode = obsFinal.ax.nodes.find((n) => n.id === 'result-text-text');
     const expectedText = `Hello, ${inputText}`;
     let resultVerified = false;
@@ -1258,6 +1270,7 @@ function runTask2TwoPageFlow(options = {}) {
   try {
     // 1. Observe Step 1 (flow_a.html).
     const obsPage1 = core.observe({
+      marks_out: '/dev/shm/vqa-cu/asm-web-marks.png',
       shiftBboxOutOfFrame: options.shiftBboxOutOfFrame,
       overrideFrameSha256: options.overrideFrameSha256,
     });
@@ -1289,7 +1302,7 @@ function runTask2TwoPageFlow(options = {}) {
     finalizeReceiptVerification(core, stepNext, options.skipWaitVerify);
 
     // 3. Observe Step 2 (flow_b.html) and verify confirmation marker.
-    const obsPage2 = core.observe();
+    const obsPage2 = core.observe({ marks_out: '/dev/shm/vqa-cu/asm-web-marks.png' });
     const confirmNode = obsPage2.ax.nodes.find((n) => n.id === 'flow-confirmation-text');
     if (!confirmNode || confirmNode.text !== 'FLOW_STEP_2_CONFIRMED') {
       throw new Error('T2 expected FLOW_STEP_2_CONFIRMED on flow_b.html');
@@ -1314,7 +1327,7 @@ function runTask2TwoPageFlow(options = {}) {
     });
     finalizeReceiptVerification(core, stepBack, options.skipWaitVerify);
 
-    const obsReturned = core.observe();
+    const obsReturned = core.observe({ marks_out: '/dev/shm/vqa-cu/asm-web-marks.png' });
     const returnedMarker = obsReturned.ax.nodes.find((n) => n.id === 'flow-step-marker-text');
     if (!returnedMarker || returnedMarker.text !== 'FLOW_STAGE_A_READY') {
       throw new Error('T2 expected return to flow_a.html FLOW_STAGE_A_READY');
@@ -1350,6 +1363,7 @@ function runTask3ReadTable(options = {}) {
 
   try {
     const obs = core.observe({
+      marks_out: '/dev/shm/vqa-cu/asm-web-marks.png',
       transposeTableOrder: options.transposeTableOrder,
       shiftBboxOutOfFrame: options.shiftBboxOutOfFrame,
       overrideFrameSha256: options.overrideFrameSha256,
