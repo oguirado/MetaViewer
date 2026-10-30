@@ -407,3 +407,40 @@ Created events retain the frozen surface-only shape for every mode. An existing
 out-of-band effective-mode reporting channel is AUSENTE; UI reporting requires
 a later request. These adapter-local settings do not change the frozen contracts.
 The hosted web runner retains its explicit offline barrier.
+
+### Concurrent identities and RAM admission
+
+[TARGET, unit decision] Configure `MV_SRF_PROFILES` with separate browser profile
+IDs and existing, canonical, nonoverlapping `/dev/shm/` RAMRoot directories.
+Each entry uses the existing Profile fields (`Kind`, `NativeKind`, `RAMRoot`,
+`Display`, `Width`, `Height`). Use separate Display values for the pair.
+One daemon/core connection multiplexes both surface IDs; the existing surface
+capacity remains 16 [CITED: daemon configuration].
+
+For separate live-stack instances, set `MV_SRF_LIVE_PROFILE` and
+`MV_SRF_LIVE_RAM_ROOT` to the selected entry before each invocation. Each profile
+gets its own stack lock, runtime, display, Electron user-data directory, and
+workflow run. Nondefault identities require the explicit profile map. Preserve
+that environment for status/stop; cleanup uses the saved identity and allocation.
+The legacy default retains its existing stack directory. No live launch is needed
+for the hosted fake-native tests in `ram_admission_test.go`.
+
+Before each native create and again after initial capture, RAM admission requires
+`MemAvailable_kB >= ramFloorKB + ramReserveKB * live_capsules`, counting incumbent
+capsules across daemon processes conservatively, including lost bindings and
+unbound quarantined profiles. A uid-owned `0700` admission directory is locked
+with `flock` throughout read/check/start/initial capture. Reservations are written
+before native start and released only after verified cleanup. The named floor defaults to
+20 GiB [CITED: campaign L1]; the reserve is 512 MiB per incumbent [TARGET, unit
+decision], matching the configured shared frame budget. Unreadable or malformed
+meminfo refuses with `RAM_ADMISSION_REFUSED`. A failed post-check removes only the
+new surface; sibling allocations are never reclaimed to make admission pass.
+
+[TARGET, unit decision] The shared directory defaults to
+`$XDG_RUNTIME_DIR/metaviewer/ram-admission`. `MV_RAM_ADMISSION_DIR` selects the
+same canonical directory for daemons with private IPC runtime directories; live
+stacks preserve the parent runtime admission directory through this variable.
+All MetaViewer daemons of the uid must use the same admission directory.
+Records from crashed daemons remain counted: a dead PID does not prove that its
+native container is gone. Reclaim such records only after independently verifying
+native removal; automatic stale-record reclamation is deliberately conservative.

@@ -147,7 +147,9 @@ def state_root():
     runtime = os.environ.get("XDG_RUNTIME_DIR", "")
     if not runtime or not Path(runtime).is_absolute():
         raise RuntimeError("XDG_RUNTIME_DIR AUSENTE or not absolute")
-    root = private_dir(Path(runtime)) / "metaviewer-live-stack"
+    profile = live.selected_profile()
+    suffix = "" if profile == "mv-live-1" else "-" + profile
+    root = private_dir(Path(runtime)) / ("metaviewer-live-stack" + suffix)
     root.mkdir(mode=0o700, exist_ok=True)
     return private_dir(root)
 
@@ -861,8 +863,9 @@ def preflight(root, display_mode="private", record_path=None):
     missing = [key for key in REQUIRED if not os.environ.get(key)]
     if missing:
         raise RuntimeError("live env AUSENTE: " + ", ".join(missing))
-    if os.environ.get("MV_E2E_LIVE") != "1" or os.environ["MV_SRF_LIVE_PROFILE"] != "mv-live-1":
-        raise RuntimeError("explicit MV_E2E_LIVE=1 and mv-live-1 required")
+    if os.environ.get("MV_E2E_LIVE") != "1" or not live.selected_profile():
+        raise RuntimeError("explicit MV_E2E_LIVE=1 and valid profile required")
+    live.validate_live_profile()
     for key in REQUIRED:
         if key != "MV_SRF_LIVE_PROFILE":
             path = Path(os.environ[key])
@@ -876,7 +879,7 @@ def preflight(root, display_mode="private", record_path=None):
     if os.environ.get("MV_CORE_BOOTSTRAP") is not None:
         raise RuntimeError("shipped host bindings require MV_CORE_BOOTSTRAP unset")
     before = inventory()
-    if live.profile_containers("mv-live-1") or any("mv-live-1" in name for name in before):
+    if live.profile_containers(live.selected_profile()):
         raise RuntimeError("profile already allocated; refusing")
     for path in (ROOT / "ui/dist/renderer/index.html", ROOT / "ui/dist/preload/preload.cjs"):
         if not path.is_file():
@@ -1065,7 +1068,7 @@ def cleanup(state, root, *, signal_fn=None, alive_fn=None, monotonic_fn=None, sl
     recorder_key = (recorder.get("pid"), recorder.get("identity")) if isinstance(recorder, dict) else None
     # Stop native capsule only with ownership bound to this run's create receipt.
     owned = set(state.get("capsules", ()))
-    owned |= live.profile_containers("mv-live-1")
+    owned |= live.profile_containers(state.get("profile_id", live.selected_profile()))
     state["capsules"] = sorted(owned)
     save_state(root, state)
     for name in sorted(owned & inventory()):
@@ -1084,9 +1087,9 @@ def cleanup(state, root, *, signal_fn=None, alive_fn=None, monotonic_fn=None, sl
     if any(alive_fn(r) for r in state["pids"]):
         raise RuntimeError("process cleanup failed")
     active = inventory()
-    if (owned & active) or live.profile_containers("mv-live-1"):
+    if (owned & active) or live.profile_containers(state.get("profile_id", live.selected_profile())):
         raise RuntimeError("capsule cleanup failed")
-    ram_root = Path(os.environ["MV_SRF_LIVE_RAM_ROOT"]).resolve(strict=True)
+    ram_root = Path(state.get("ram_root", os.environ["MV_SRF_LIVE_RAM_ROOT"])).resolve(strict=True)
     ram_receipt = live.cleanup_capsule_ram(ram_root, owned, state.get("published", ()), active)
     # Adapter normally releases published frames; retain receipt on any leak.
     if not ram_receipt["ram_absent"]:
@@ -1492,11 +1495,11 @@ def bootstrap_agent_surface(
     if peer.recv()["body"] != regs["core"]["hello"]:
         raise RuntimeError("core pin mismatch")
     send_fn(peer, regs["agent"], config, {"schema": "surface_request/v0.2", "op": "create", "params": {
-        "kind": "browser", "geometry": {"w": 1280, "h": 900}, "profile_id": "mv-live-1"}})
+        "kind": "browser", "geometry": {"w": 1280, "h": 900}, "profile_id": state.setdefault("profile_id", live.selected_profile())}})
     report = {}
     created = receive_fn(peer, lambda b: b.get("event") == "created", report)
     state["surface_id"] = created["data"]["surface"]["surface_id"]
-    state["capsules"] = sorted(containers_fn("mv-live-1"))
+    state["capsules"] = sorted(containers_fn(state["profile_id"]))
     if len(state["capsules"]) != 1:
         raise RuntimeError("expected exactly one ownership-proven capsule")
     save_state(root, state)
@@ -1569,6 +1572,8 @@ def supervise(root, seconds, lock_fd):
             time.sleep(0.1)
 
     try:
+        state["profile_id"] = live.selected_profile()
+        state["ram_root"] = os.environ["MV_SRF_LIVE_RAM_ROOT"]
         state["supervisor"] = {"pid": os.getpid(), "identity": identity(os.getpid())}
         save_state(root, state)
         commit = checked(["git", "rev-parse", "HEAD"], cwd=ROOT)
@@ -1583,11 +1588,17 @@ def supervise(root, seconds, lock_fd):
         cfg_dir = ensure_config_dir(root, env=os.environ)
         state["config_dir"] = str(cfg_dir)
         save_state(root, state)
-        env = dict(os.environ, MV_CORE_CONFIG=str(config_file), XDG_RUNTIME_DIR=str(runtime),
+        # Preserve uid-wide admission despite the stack's private IPC runtime.
+        admission = os.environ.get("MV_RAM_ADMISSION_DIR")
+        if not admission:
+            admission_parent = Path(os.environ["XDG_RUNTIME_DIR"]) / "metaviewer"
+            admission_parent.mkdir(mode=0o700, exist_ok=True)
+            admission = str(admission_parent / "ram-admission")
+        env = dict(os.environ, MV_RAM_ADMISSION_DIR=admission, MV_CORE_CONFIG=str(config_file), XDG_RUNTIME_DIR=str(runtime),
                    XDG_STATE_HOME=str(work / "state"), XDG_CONFIG_HOME=str(cfg_dir),
                    MV_SESSION_ID=config["session_id"], MV_CORE_INSTANCE=regs["core"]["endpoint"]["instance"],
                    MV_DAEMON_INSTANCE=regs["daemon"]["endpoint"]["instance"], MV_COMPONENT_COMMIT=commit,
-                   MV_SRF_PROFILES="", MV_CONTRACT_DIR=str(ROOT / "contracts/v0.2"), MV_QA_RUN_DIR=str(work))
+                   MV_CONTRACT_DIR=str(ROOT / "contracts/v0.2"), MV_QA_RUN_DIR=str(work))
         socket_path = runtime / "metaviewer/core.sock"
         spawn([bins["core"]], env)
         wait(socket_path.exists, "core socket")
@@ -1683,7 +1694,7 @@ def supervise(root, seconds, lock_fd):
     finally:
         close_control_socket(control_sock, root)
         stop_recorder(state)
-        state["capsules"] = sorted(set(state.get("capsules", ())) | live.profile_containers("mv-live-1"))
+        state["capsules"] = sorted(set(state.get("capsules", ())) | live.profile_containers(state.get("profile_id", live.selected_profile())))
         save_state(root, state)
         active_peer = peer_holder.get("peer")
         if active_peer:
@@ -1756,7 +1767,7 @@ def start(
                         for line in (root / "supervisor.log").read_text(errors="replace").splitlines():
                             if line.startswith("LIVE_STACK_TICK "):
                                 print(line, flush=True)
-                    print(f"LIVE_STACK_READY display={state['display']} xauthority={state['xauthority']} capsule={state['capsules'][0]}", flush=True)
+                    print(f"LIVE_STACK_READY display={state['display']} xauthority={state['xauthority']} capsule={state['capsules'][0]} profile={state['profile_id']} surface_id={state['surface_id']}", flush=True)
                     return
                 if state["status"] in ("failed", "cleanup_failed"):
                     raise RuntimeError(state["error"])

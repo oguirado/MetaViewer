@@ -362,7 +362,43 @@ def digest(value):
                                      ensure_ascii=False).encode()).hexdigest()
 
 
-def capsule_from_receipt(receipt, profile="mv-live-1"):
+def selected_profile(env=None):
+    """[TARGET, unit decision] Each stack instance owns one explicit identity."""
+    env = os.environ if env is None else env
+    profile = env.get("MV_SRF_LIVE_PROFILE", "mv-live-1")
+    if not isinstance(profile, str) or not PROFILE_ID_RE.fullmatch(profile):
+        raise RuntimeError("valid live profile required")
+    return profile
+
+
+def validate_live_profile(env=None):
+    """Require an explicit allocation map when opting into another identity."""
+    env = os.environ if env is None else env
+    profile = selected_profile(env)
+    raw = env.get("MV_SRF_PROFILES", "")
+    if not raw:
+        if profile != "mv-live-1":
+            raise RuntimeError("non-mv-live-1 profile requires explicit MV_SRF_PROFILES")
+        return profile
+    profiles = json.loads(raw)
+    if not isinstance(profiles, dict) or profile not in profiles:
+        raise RuntimeError("selected profile absent from MV_SRF_PROFILES")
+    roots = []
+    for entry in profiles.values():
+        root = Path(entry["RAMRoot"]).resolve(strict=True)
+        if not root.is_relative_to(Path("/dev/shm")) or root == Path("/dev/shm"):
+            raise RuntimeError("profile allocation must be private RAM")
+        if any(root == other or root.is_relative_to(other) or other.is_relative_to(root) for other in roots):
+            raise RuntimeError("profile RAM allocations must be disjoint")
+        roots.append(root)
+    if not env.get("MV_SRF_LIVE_RAM_ROOT"):
+        raise RuntimeError("MV_SRF_LIVE_RAM_ROOT required with MV_SRF_PROFILES")
+    if Path(env["MV_SRF_LIVE_RAM_ROOT"]).resolve(strict=True) != Path(profiles[profile]["RAMRoot"]).resolve(strict=True):
+        raise RuntimeError("selected profile RAM root mismatch")
+    return profile
+
+
+def capsule_from_receipt(receipt, profile):
     """Extract only an identity-surface capsule ID bound to the admitted profile."""
     if not isinstance(receipt, dict):
         return None
@@ -1073,12 +1109,12 @@ def main():
         "expired_publication_recovery": "BLOCKED", "human_cancel_release_refresh": "BLOCKED",
         "action_journal_replay_corruption": "BLOCKED", "electron_tile": "PENDING"}}
     processes, peers, owned = [], [], set()
-    profile = os.environ["MV_SRF_LIVE_PROFILE"]
+    profile = validate_live_profile()
     with tempfile.TemporaryDirectory(prefix="mv-gw1-") as temp:
         scratch = Path(temp)
         try:
-            if os.environ.get("MV_E2E_LIVE") != "1" or profile != "mv-live-1":
-                raise RuntimeError("explicit MV_E2E_LIVE=1 and mv-live-1 profile required")
+            if os.environ.get("MV_E2E_LIVE") != "1" or profile != selected_profile():
+                raise RuntimeError("explicit MV_E2E_LIVE=1 and valid profile required")
             before = run(report, ["docker", "ps", "--format", "{{.Names}}"])
             _require(before.returncode == 0, "docker inventory unavailable")
             _require(not profile_containers(profile), "profile already allocated; refusing to touch it")
@@ -1108,7 +1144,7 @@ def main():
                        MV_SESSION_ID=config["session_id"],
                        MV_CORE_INSTANCE=regs["core"]["endpoint"]["instance"],
                        MV_DAEMON_INSTANCE=regs["daemon"]["endpoint"]["instance"],
-                       MV_COMPONENT_COMMIT=head_commit, MV_SRF_PROFILES="",
+                       MV_COMPONENT_COMMIT=head_commit,
                        MV_CONTRACT_DIR=str(ROOT / "contracts/v0.2"))
             (scratch / "runtime").mkdir(mode=0o700)
             socket_path = scratch / "runtime/metaviewer/core.sock"

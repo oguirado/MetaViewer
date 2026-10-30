@@ -124,6 +124,9 @@ func RuntimeFromEnv() (Runtime, error) {
 		}
 		profiles[id] = capsule.Profile{Kind: "browser", NativeKind: "browser", RAMRoot: root, Display: ":100", Width: 1280, Height: 900}
 	}
+	if err := validateProfileRoots(profiles); err != nil {
+		return zero, err
+	}
 	origin := monotonic()
 	if origin == 0 {
 		return zero, configuration("CLOCK_MONOTONIC unavailable")
@@ -403,7 +406,7 @@ func (s *recordScheduler) stopAll() {
 	}
 }
 
-func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs map[string]*frames.Publisher, origin uint64, recorders ...*record.Manager) ipc.Handler {
+func wireHandlerWithoutAdmission(m *capsule.Manager, profiles map[string]capsule.Profile, pubs map[string]*frames.Publisher, origin uint64, recorders ...*record.Manager) ipc.Handler {
 	var recorder *record.Manager
 	if len(recorders) > 0 {
 		recorder = recorders[0]
@@ -959,7 +962,12 @@ func wireFailure(e ipc.Envelope, q capsule.Request, err error) ([]json.RawMessag
 	if params.SurfaceID == "" {
 		params.SurfaceID = e.MsgID
 	}
-	b, _ := json.Marshal(map[string]any{"schema": "surface_event/v0.2", "event": "error", "data": map[string]string{"surface_id": params.SurfaceID, "code": "adapter", "detail": err.Error()}})
+	code := "adapter"
+	var fault *cli.Fault
+	if errors.As(err, &fault) && fault.Code == "RAM_ADMISSION_REFUSED" {
+		code = fault.Code
+	}
+	b, _ := json.Marshal(map[string]any{"schema": "surface_event/v0.2", "event": "error", "data": map[string]string{"surface_id": params.SurfaceID, "code": code, "detail": err.Error()}})
 	return []json.RawMessage{b}, nil
 }
 
@@ -1050,8 +1058,27 @@ func (s *helloState) closeManager(ctx context.Context) error {
 			continue
 		}
 		params, _ := json.Marshal(map[string]string{"surface_id": ev.Data.Surface.SurfaceID})
-		if _, e := s.manager.Handle(ctx, capsule.Request{Schema: "surface_request/v0.2", Op: "destroy", Params: params}); e != nil && firstErr == nil {
-			firstErr = e
+		request := capsule.Request{Schema: "surface_request/v0.2", Op: "destroy", Params: params}
+		var stopErr error
+		if s.handler == nil {
+			_, stopErr = s.manager.Handle(ctx, request)
+		} else {
+			// Keep verified shutdown on the same host-admission lifecycle path.
+			body, _ := json.Marshal(request)
+			events, err := s.handler(ctx, ipc.Envelope{Body: body})
+			stopErr = err
+			for _, raw := range events {
+				var ev struct {
+					Event string
+					Data  struct{ Detail string }
+				}
+				if json.Unmarshal(raw, &ev) == nil && ev.Event == "error" {
+					stopErr = errors.New(ev.Data.Detail)
+				}
+			}
+		}
+		if stopErr != nil && firstErr == nil {
+			firstErr = stopErr
 		}
 	}
 	return firstErr
