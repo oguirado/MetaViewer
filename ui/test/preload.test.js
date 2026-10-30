@@ -514,10 +514,16 @@ describe('native entry qualification', () => {
       throw new Error(`unexpected require: ${spec}`);
     };
 
+    let readyPing;
     const cjsContext = vm.createContext({
       module: { exports: {} },
       exports: {},
       require: cjsRequire,
+      addEventListener: (name, callback, options) => {
+        assert.equal(name, 'load');
+        assert.equal(options.once, true);
+        readyPing = callback;
+      },
       URL,
     });
     vm.runInContext(cjsExecutableSource, cjsContext, { filename: PRELOAD_PATH });
@@ -534,6 +540,11 @@ describe('native entry qualification', () => {
     assert.equal(await /** @type {() => Promise<unknown>} */ (api.load)(), '{"cjs":1}');
     assert.equal(await /** @type {(s: string) => Promise<unknown>} */ (api.save)('{"cjs":1}'), true);
     assert.equal(nativeCalls.length, 2);
+
+    readyPing();
+    assert.equal(nativeCalls.length, 3);
+    assert.equal(nativeCalls[2].channel, 'metaviewer:renderer-ready');
+    assert.equal(nativeCalls[2].args.length, 0);
 
     // Negative control: when the CJS guard is not satisfied (require is not a function or module is undefined), metaviewer is not exposed.
     /** @type {Array<FakeExposure>} */

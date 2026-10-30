@@ -1480,4 +1480,11 @@ if (typeof module !== 'undefined' && module !== null && typeof require === 'func
   // installPreload still have to supply data properties.
   const { contextBridge, ipcRenderer } = require('electron');
   installPreload({ contextBridge, ipcRenderer });
+  // Private native handshake after the index document and its resources load.
+  // No renderer-world method is exposed for this channel.
+  if (typeof navigator === 'undefined' || !navigator.userAgent.split(' ').includes('--nested-depth=1')) {
+    globalThis.addEventListener('load', () => {
+      void ipcRenderer.invoke('metaviewer:renderer-ready').catch(() => {});
+    }, { once: true });
+  }
 }

@@ -140,7 +140,8 @@ test('ASAR modification and manifest path escapes are rejected',async () => {
 test('zero exit without exact smoke marker is insufficient',() => {
   assert.throws(() => assertSmokeOutput('METAVIEWER_MAIN_READY\n'),/PKG_SMOKE_MARKER_MISSING/);
   assert.throws(() => assertSmokeOutput('prefix METAVIEWER_MAIN_SMOKE_OK\n'),/PKG_SMOKE_MARKER_MISSING/);
-  assertSmokeOutput('METAVIEWER_MAIN_SMOKE_OK\n');
+  assert.throws(() => assertSmokeOutput('METAVIEWER_MAIN_SMOKE_OK\n'), /PKG_SMOKE_MARKER_MISSING/);
+  assertSmokeOutput('METAVIEWER_MAIN_SMOKE_OK\nMETAVIEWER_RENDERER_READY\n');
 });
 
 test('archive bytes ignore mtimes and preserve pinned file bytes',async () => {
@@ -283,7 +284,7 @@ test('R2-T4-002 extended seal covers executed JS and boot self-check refuses tam
       [
         'const PACKAGED_ASSET_DIGESTS = /** @type {Readonly<Record<string, string>>} */ (Object.freeze({}));',
         'export function validateRetailLaunch() { return { ok: true }; }',
-        'export async function mainDirectEntry() { console.log("BOOT_MAIN_DIRECT_ENTRY_OK"); setTimeout(() => console.log("METAVIEWER_MAIN_READY"), 10); return { dispose: async () => {} }; }',
+        'export async function mainDirectEntry() { console.log("BOOT_MAIN_DIRECT_ENTRY_OK"); setTimeout(() => { console.log("METAVIEWER_MAIN_READY"); console.log("METAVIEWER_RENDERER_READY"); }, 10); return { dispose: async () => {} }; }',
         'export { PACKAGED_ASSET_DIGESTS };',
         '',
       ].join('\n'),
@@ -471,7 +472,7 @@ test('R2-T4-024 packaged boot enforces one total budget across socket wait and h
       [
         'const PACKAGED_ASSET_DIGESTS = /** @type {Readonly<Record<string, string>>} */ (Object.freeze({}));',
         'export function validateRetailLaunch() { return { ok: true }; }',
-        'export async function mainDirectEntry() { await new Promise(r => setTimeout(r, 200)); console.log("METAVIEWER_MAIN_READY"); return { dispose: async () => {} }; }',
+        'export async function mainDirectEntry() { await new Promise(r => setTimeout(r, 200)); console.log("METAVIEWER_MAIN_READY"); console.log("METAVIEWER_RENDERER_READY"); return { dispose: async () => {} }; }',
         'export { PACKAGED_ASSET_DIGESTS };',
         '',
       ].join('\n'),
@@ -677,7 +678,7 @@ test('W3-PKG-SMOKE2 diagnostics on PKG_SMOKE_MARKER_MISSING and non-zero child e
   const okResult = await runSmokeCommand(async () => ({
     code: 0,
     signal: null,
-    stdout: `${longStdout}\nMETAVIEWER_MAIN_SMOKE_OK\n`,
+    stdout: `${longStdout}\nMETAVIEWER_MAIN_SMOKE_OK\nMETAVIEWER_RENDERER_READY\n`,
     stderr: longStderr,
   }));
   assert.equal(okResult.code, 0);
@@ -751,7 +752,7 @@ test('W3-PKG-SMOKE2 productionEntry flushes smoke marker and errors to non-TTY p
         '  process.stderr.cork();',
         '  writeSync(1, "NON_TTY_STDOUT_PIPE=" + String(Boolean(process.stdout.isTTY)) + "\\n");',
         '  app.on("window-all-closed", () => { app.quit(); });',
-        '  setTimeout(() => console.log("METAVIEWER_MAIN_READY"), 10);',
+        '  setTimeout(() => { console.log("METAVIEWER_MAIN_READY"); console.log("METAVIEWER_RENDERER_READY"); }, 10);',
         '  return {',
         '    adapter: process.env.MV_TEST_ADAPTER_FAIL === "1"',
         '      ? { getStatus: () => ({ availability: "degraded", handshakeSeen: false }) }',
@@ -1526,7 +1527,7 @@ test(
       for (const dir of ['electron', 'dist/renderer', 'dist/preload']) {
         await fs.mkdir(join(app, dir), { recursive: true });
       }
-      await fs.writeFile(join(app, 'dist/renderer/index.html'), '<!doctype html><title>MetaViewer</title>', 'utf8');
+      await fs.writeFile(join(app, 'dist/renderer/index.html'), '<!doctype html><html><head><title>MetaViewer</title></head><body>MetaViewer</body></html>', 'utf8');
       await fs.writeFile(join(app, 'dist/preload/preload.cjs'), '"use strict";\n', 'utf8');
       await packaging.stageElectronModules(app);
       await fs.appendFile(join(app, 'electron/main.js'), '\nexport { mainDirectEntry };\n');
@@ -1607,9 +1608,12 @@ test(
           '  getAppPath: () => resolve(__dirname, "../.."),',
           '  getPath: () => resolve(__dirname, "../../user-data"),',
           '};',
+          'let protocolHandler;',
+          'const ipcHandlers = new Map();',
+          'const contentsListeners = new Map();',
           'const protocol = {',
           '  registerSchemesAsPrivileged: () => {},',
-          '  handle: () => {},',
+          '  handle: (_, handler) => { protocolHandler = handler; },',
           '  unhandle: () => {},',
           '};',
           'const session = {',
@@ -1619,7 +1623,7 @@ test(
           '  },',
           '};',
           'const ipcMain = {',
-          '  handle: () => {},',
+          '  handle: (channel, handler) => { ipcHandlers.set(channel, handler); },',
           '  removeHandler: () => {},',
           '};',
           'class BrowserWindow {',
@@ -1639,9 +1643,13 @@ test(
           '        setPermissionCheckHandler: () => {},',
           '      },',
           '      setWindowOpenHandler: () => {},',
-          '      on: () => {},',
+          '      on: (name, handler) => { contentsListeners.set(name, handler); },',
           '      setUserAgent: () => {},',
-          '      loadURL: async () => {},',
+          '      loadURL: async (url) => {',
+          '        await protocolHandler({ url });',
+          '        contentsListeners.get("did-finish-load")?.();',
+          '        ipcHandlers.get("metaviewer:renderer-ready")?.({ sender: this.webContents, senderFrame: this.webContents.mainFrame });',
+          '      },',
           '      send: () => {},',
           '    };',
           '  }',
@@ -1724,6 +1732,34 @@ test(
         source_access: false,
         negative_controls: 'PASS',
       });
+
+      // MUT-RENDERER-FORBIDDEN: mutate the real protocol handler, not a marker.
+      const stagedMain = join(stagedApp, 'electron/main.js');
+      const savedMain = await fs.readFile(stagedMain, 'utf8');
+      const mutantMain = savedMain.replace('export async function handleAppRequest(rendererRoot, request, options) {',
+        'export async function handleAppRequest(rendererRoot, request, options) { return new Response("forbidden", { status: 403 });');
+      assert.notEqual(mutantMain, savedMain);
+      try {
+        await fs.writeFile(stagedMain, mutantMain);
+        await sealRendererAssets(stagedApp);
+        await fs.rm(`${root}.sha256`, { force: true });
+        await writeManifest(root, `${root}.sha256`);
+        await fs.rm(artifact, { force: true });
+        await bundlePackage(root, arch);
+        await assert.rejects(() => packaging.cleanInstallSmoke(artifact), err => {
+          assert.match(err.message, /PKG_RENDERER_READY_TIMEOUT/);
+          assert.doesNotMatch(String(err.stdout ?? ''), /^METAVIEWER_RENDERER_READY$/m);
+          assert.doesNotMatch(String(err.stdout ?? ''), /^METAVIEWER_MAIN_SMOKE_OK$/m);
+          return true;
+        });
+      } finally {
+        await fs.writeFile(stagedMain, savedMain);
+        await sealRendererAssets(stagedApp);
+        await fs.rm(`${root}.sha256`, { force: true });
+        await writeManifest(root, `${root}.sha256`);
+        await fs.rm(artifact, { force: true });
+        await bundlePackage(root, arch);
+      }
 
       const afterPassShm = await listShmDirs();
       for (const name of afterPassShm) {

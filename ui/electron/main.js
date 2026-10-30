@@ -862,13 +862,21 @@ function canonicalizeRoot(root) {
   return /** @type {string} */ (canonical);
 }
 
+/** Electron's ASAR wrapper treats the archive itself as a virtual directory.
+ * Use its original filesystem only for the physical archive identity.
+ * @returns {typeof import('node:fs')}
+ */
+function physicalArchiveFs() {
+  return createRequire(import.meta.url)('original-fs');
+}
+
 /**
  * Pinned bundle root identity captured at scheme registration.
  * @typedef {object} PinnedRootIdentity
  * @property {string} canonicalRoot Canonical path at registration time.
- * @property {number} dev Device id of the canonical directory.
- * @property {number} ino Inode number of the canonical directory.
- * @property {number | null} fd Open O_DIRECTORY descriptor when backed by host fs.
+ * @property {number} dev Device id of the directory or physical archive.
+ * @property {number} ino Inode number of the directory or physical archive.
+ * @property {number | null} fd Open descriptor pinning the directory or physical ASAR archive.
  */
 
 /**
@@ -921,7 +929,12 @@ export async function handleAppRequest(rendererRoot, request, options) {
     if (currentRootStat === null || !currentRootStat.isDirectory() || (!isAsar && currentRootStat.isSymbolicLink())) {
       return refusal(403, 'forbidden');
     }
-    if (pinnedRoot !== undefined && (currentRootStat.dev !== pinnedRoot.dev || currentRootStat.ino !== pinnedRoot.ino)) {
+    // Electron synthesizes a fresh inode on every virtual ASAR stat. Pin the
+    // physical archive instead; virtual asset bytes remain digest-verified.
+    const identityPath = isAsar ? canonicalRoot.slice(0, canonicalRoot.indexOf('.asar/') + 5) : canonicalRoot;
+    const identityStat = isAsar ? physicalArchiveFs().lstatSync(identityPath) : currentRootStat;
+    if (isAsar && (!identityStat.isFile() || identityStat.isSymbolicLink())) return refusal(403, 'forbidden');
+    if (pinnedRoot !== undefined && (identityStat.dev !== pinnedRoot.dev || identityStat.ino !== pinnedRoot.ino)) {
       return refusal(403, 'forbidden');
     }
     const nonceEnabled = typeof options === 'object' && options !== null && !Array.isArray(options)
@@ -1028,6 +1041,13 @@ export async function handleAppRequest(rendererRoot, request, options) {
       // The admitted root is pinned before opening any descendant. ASAR paths
       // are Electron's immutable build namespace (package gate forbids links).
       if (isAsar) {
+        if (pinnedRoot?.fd !== null && pinnedRoot?.fd !== undefined) {
+          const archive = fstatSync(pinnedRoot.fd);
+          if (!archive.isFile() || archive.nlink < 1 || archive.dev !== expectedDev ||
+              archive.ino !== expectedIno || realpathSync(`/proc/self/fd/${pinnedRoot.fd}`) !== identityPath) {
+            return refusal(403, 'forbidden');
+          }
+        }
         fd = openSync(real, 'r');
       } else {
         if (pinnedRoot?.fd !== null && pinnedRoot?.fd !== undefined) {
@@ -1122,6 +1142,34 @@ export async function handleAppRequest(rendererRoot, request, options) {
   }
 }
 
+// [TARGET, unit decision] Renderer startup needs all three independent witnesses.
+// This private preload channel exposes no product capability or caller payload.
+/** @param {any} contents @param {() => void} ready */
+export function createRendererReadyGate(contents, ready) {
+  let served = false, finished = false, pinged = false, emitted = false;
+  const maybeReady = () => {
+    if (!emitted && served && finished && pinged &&
+        contents.mainFrame?.url === `${PRIVILEGED_ORIGIN}/index.html` && !contents.isDestroyed()) {
+      emitted = true;
+      ready();
+    }
+  };
+  return {
+    /** @param {number} status */
+    response(status) { served = status === 200; maybeReady(); },
+    finish() { finished = true; maybeReady(); },
+    /** @param {unknown} event @param {...unknown} args */
+    ping(event, ...args) {
+      if (args.length !== 0 || observeSender(event, contents, PRIVILEGED_ORIGIN).verdict !== 'admit' ||
+          contents.mainFrame?.url !== `${PRIVILEGED_ORIGIN}/index.html`) {
+        throw new MainError('RENDERER_READY', 'renderer ready sender refused');
+      }
+      pinged = true;
+      maybeReady();
+    },
+  };
+}
+
 /**
  * @typedef {object} MainSchemePrivileges
  * @property {true} standard
@@ -1173,7 +1221,7 @@ export function registerPrivilegedScheme(protocol) {
  * header on every response.
  * @param {unknown} protocol Alleged protocol with handle.
  * @param {unknown} root Alleged absolute bundle-root directory.
- * @param {{styleNonce?: boolean, beforeOpen?: () => void}} [options] Main-owned style policy.
+ * @param {{styleNonce?: boolean, beforeOpen?: () => void, onIndexResponse?: (status: number) => void}} [options] Main-owned style policy.
  * @returns {MainServeSummary} Frozen serving summary with the canonical root.
  */
 export function serveBundled(protocol, root, options) {
@@ -1186,8 +1234,17 @@ export function serveBundled(protocol, root, options) {
   /** @type {PinnedRootIdentity} */
   let pinnedRoot;
   if (isAsar) {
-    const rootStat = statSync(canonicalRoot);
-    pinnedRoot = Object.freeze({ canonicalRoot, dev: rootStat.dev, ino: rootStat.ino, fd: null });
+    const archivePath = canonicalRoot.slice(0, canonicalRoot.indexOf('.asar/') + 5);
+    const archiveFd = physicalArchiveFs().openSync(archivePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    const archiveStat = fstatSync(archiveFd);
+    if (!archiveStat.isFile() || realpathSync(`/proc/self/fd/${archiveFd}`) !== archivePath) {
+      closeSync(archiveFd);
+      fail('ROOT', 'archive identity mismatch');
+    }
+    const priorFd = pinnedProtocolFds.get(rec);
+    if (typeof priorFd === 'number') closeSync(priorFd);
+    pinnedProtocolFds.set(rec, archiveFd);
+    pinnedRoot = Object.freeze({ canonicalRoot, dev: archiveStat.dev, ino: archiveStat.ino, fd: archiveFd });
   } else {
     let rootFd = null;
     try {
@@ -1239,11 +1296,18 @@ export function serveBundled(protocol, root, options) {
      * @param {Request} request Fetch-API request delivered by Electron.
      * @returns {Promise<Response>} File or refusal, always with the CSP header.
      */
-    (request) => handleAppRequest(canonicalRoot, request, {
-      styleNonce: nonceEnabled,
-      ...(beforeOpen !== undefined ? { beforeOpen } : {}),
-      pinnedRoot,
-    }),
+    async (request) => {
+      const response = await handleAppRequest(canonicalRoot, request, {
+        styleNonce: nonceEnabled,
+        ...(beforeOpen !== undefined ? { beforeOpen } : {}),
+        pinnedRoot,
+      });
+      // Refusal must remain total even for malformed injected request handles.
+      let indexRequest = false;
+      try { indexRequest = request?.url === `${PRIVILEGED_ORIGIN}/index.html`; } catch {}
+      if (indexRequest) options?.onIndexResponse?.(response.status);
+      return response;
+    },
   );
   return Object.freeze({ scheme: PRIVILEGED_SCHEME, root: canonicalRoot });
 }
@@ -2075,6 +2139,8 @@ export async function bootProductionMain(handles) {
   let captureBridge = /** @type {{dispose:()=>Promise<void>} | null} */(null);
   let qaBridge = /** @type {{enabled:boolean, dispose:()=>Promise<void>} | null} */(null);
   let frameDiagBridge = /** @type {{enabled:boolean, dispose:()=>Promise<void>} | null} */(null);
+  let rendererReadyGate = /** @type {ReturnType<typeof createRendererReadyGate> | null} */ (null);
+  let indexStatus = 0;
   let schemeRegistered = false;
   let unwound = false;
 
@@ -2198,7 +2264,10 @@ export async function bootProductionMain(handles) {
     throw error;
   }
   try {
-    serveBundled(protocol, paths.rendererRoot, { styleNonce: true });
+    serveBundled(protocol, paths.rendererRoot, { styleNonce: true, onIndexResponse: status => {
+      indexStatus = status;
+      rendererReadyGate?.response(status);
+    } });
   } catch {
     await unwind();
     fail('PROTOCOL', 'bundle serving refused');
@@ -2440,6 +2509,14 @@ export async function bootProductionMain(handles) {
     fail('LOAD', 'contents cannot load the bundle URL');
   }
   try {
+    if (!retail.nested) {
+      rendererReadyGate = createRendererReadyGate(contentsHandle, () => console.log('METAVIEWER_RENDERER_READY'));
+      rendererReadyGate.response(indexStatus);
+      if (typeof contentsHandle.on !== 'function') fail('LOAD', 'contents cannot witness document load');
+      contentsHandle.on.call(contentsHandle, 'did-finish-load', () => rendererReadyGate?.finish());
+      ipcMain.handle('metaviewer:renderer-ready', rendererReadyGate.ping);
+      registered.push('metaviewer:renderer-ready');
+    }
     await /** @type {(url: string) => Promise<unknown>} */ (contentsHandle.loadURL).call(
       contentsHandle,
       `${PRIVILEGED_ORIGIN}/index.html`,
