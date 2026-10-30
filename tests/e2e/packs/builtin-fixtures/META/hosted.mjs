@@ -14,6 +14,12 @@ const { HostedWebCapsuleFake, HostedCoreAdmissionFake, makeProposal } = require(
 const root = fileURLToPath(new URL('../../../../../', import.meta.url));
 const runner = path.join(root, 'tests/e2e/e2e1_slice/asm_web_live.py');
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+// The runner sends the shorter of the percent-encoded and base64 data URLs.
+const dataUrlHtml = url => {
+  const [head, ...rest] = url.split(',');
+  const body = rest.join(',');
+  return head.endsWith(';base64') ? Buffer.from(body, 'base64').toString('utf8') : decodeURIComponent(body);
+};
 async function hosted(t, mutation = '') {
   const secret = 'private prompt Ω';
   const wenderRoot = process.env.MV_MW_WENDER_ROOT || process.env.MV_WENDER_ROOT;
@@ -160,9 +166,9 @@ sys.exit(runtime['main']())
       case 'navigate':
         assert.ok(calls.includes('offline_proof'));
         assert.equal(args.page, 'meta-chat');
-        assert.equal(decodeURIComponent(args.url.split(',').slice(1).join(',')), html);
+        assert.equal(dataUrlHtml(args.url), html);
         assert.equal(args.marker, 'EMPTY');
-        assert.ok(decodeURIComponent(args.url).includes("default-src 'none'"));
+        assert.ok(dataUrlHtml(args.url).includes("default-src 'none'"));
         capsule.loadPage('form');
         core = new HostedCoreAdmissionFake(capsule, { stepBudget: 8 });
         return [];

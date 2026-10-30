@@ -55,6 +55,7 @@ witness and final Open-ready native pin [CITED: `docs/INSTALL.md#capsule-network
 - Check every tracked Cargo.lock against the release version (`b5587d602`) [CITED: git history].
 
 ## 0.2.0 (candidate) [CITED: `VERSION`]
+- I fixed fixture navigation with capsule clipboard paste, bounded post-input repaint settling, and the shorter equivalent data URL.
 - I made the capsule wall and agent loop safer under failure: stale or unknown daemon frames get a journalled STALE_FRAME verdict without dropping the daemon, a capsule is only reused after proven absence, and input after a revive waits for a fresh probe.
 - I made perception faster: the agents keep one persistent vision-engine client (p50 7.6 ms per 1280x900 frame on the trusted path), and wender-agent uses the same persistent bridge with raw RGB frames.
 - I hardened the perception interpreter: a pinned Python and a trusted extra site checked through its parent chain, contents and hooks before every spawn.

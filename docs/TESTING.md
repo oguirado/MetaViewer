@@ -319,6 +319,12 @@ Two independent external testers reviewed the repository across three adversaria
 
 ## Opt-in assembly web acceptance
 
+The web runner launches its adapter with `MV_SRF_LIVE_TEXT_INPUT=paste`, using
+capsule clipboard input while retaining the native text chunk cap. After agent
+text or key input drains, the adapter captures at least 50 ms apart for at most
+1500 ms until pixels change; on timeout it publishes the last unchanged frame
+so core verification still fails closed instead of racing Chromium repaint.
+
 Run `node --test tests/e2e/asm_web_live_hosted.test.js` for the hosted dry-run
 and AX-skip mutation control. The native runner is Python beside `g_ai_stack.py`
 to reuse its ownership and wire harness. It stays inert unless `MV_LIVE_WEB=1`,

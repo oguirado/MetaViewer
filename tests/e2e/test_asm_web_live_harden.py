@@ -3,6 +3,8 @@
 [TARGET, unit decision] Stub only native/session/process boundaries. All refusal,
 cleanup and publication logic under test is the actual runner implementation.
 """
+import base64
+from urllib.parse import quote, unquote
 import contextlib
 import hashlib
 import importlib.util
@@ -27,6 +29,11 @@ sys.path.insert(0, str(ROOT / 'agents'))
 
 # Each named regression must fail its security contract if the gate is removed.
 MUTATIONS = {
+    'MUT-PASTE-NOT-WIRED': ('test_live_launch_paste_mode',
+        "os.environ['MV_SRF_LIVE_TEXT_INPUT'] = 'paste'",
+        "os.environ['MV_SRF_LIVE_TEXT_INPUT'] = 'type'"),
+    'MUT-URL-LONGER': ('test_shortest_fixture_url',
+        'return min((encoded, compact), key=len)', 'return max((encoded, compact), key=len)'),
     'MUT-MISSING-EVIDENCE-KEYERROR': ('test_failed_action_receipts',
         "evidence = receipt_evidence(receipt)", "evidence = receipt['native_evidence']"),
     'planner-out-of-box-click': ('test_planner_custody',
@@ -380,6 +387,34 @@ class HardenTests(unittest.TestCase):
             b.op_navigate('form', web.page_url('form'))
         self.assertEqual(caught.exception.code, 'VERIFICATION_FAILED')
         self.assertEqual(b.op_wait_verify.call_count, count + 1)  # Never retry dispatched input.
+
+    def test_live_launch_paste_mode(self):
+        session = SimpleNamespace(start=lambda: os.environ.get('MV_SRF_LIVE_TEXT_INPUT'))
+        for prior in ('type', 'bad', None):
+            with patch.dict(os.environ):
+                if prior is None:
+                    os.environ.pop('MV_SRF_LIVE_TEXT_INPUT', None)
+                else:
+                    os.environ['MV_SRF_LIVE_TEXT_INPUT'] = prior
+                self.assertEqual(web.start_live_session(session), 'paste')
+                self.assertEqual(os.environ.get('MV_SRF_LIVE_TEXT_INPUT'), prior)
+                session.start = Mock(side_effect=RuntimeError('launch failed'))
+                with self.assertRaises(RuntimeError):
+                    web.start_live_session(session)
+                self.assertEqual(os.environ.get('MV_SRF_LIVE_TEXT_INPUT'), prior)
+                session.start = lambda: os.environ.get('MV_SRF_LIVE_TEXT_INPUT')
+
+    def test_shortest_fixture_url(self):
+        for page in ('form', 'flow_a', 'flow_b', 'table'):
+            html = web.page_html(page)
+            encoded = 'data:text/html;charset=utf-8,' + quote(html, safe='')
+            compact = 'data:text/html;charset=utf-8;base64,' + base64.b64encode(html.encode()).decode('ascii')
+            url = web.page_url(page)
+            self.assertEqual(len(url), min(len(encoded), len(compact)))
+            header, payload = url.split(',', 1)
+            decoded = base64.b64decode(payload).decode() if header.endswith(';base64') else unquote(payload)
+            self.assertEqual(decoded, html)
+            self.assertIn(web.fixture(page), decoded)
 
     def test_named_mutations(self):
         for name, (test_name, _, _) in MUTATIONS.items():

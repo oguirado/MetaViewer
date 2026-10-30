@@ -24,6 +24,8 @@ async function dryRun(mutation = '') {
   const wire = [];
   const python = process.env.PYTHON || 'python3';
   const sourceMutants = {
+    'MUT-PASTE-NOT-WIRED': ["os.environ['MV_SRF_LIVE_TEXT_INPUT'] = 'paste'",
+      "os.environ['MV_SRF_LIVE_TEXT_INPUT'] = 'type'"],
     'MUT-GUARD-ON-VERIFIED': ["require(not receipt.get('error') and",
       "require(not receipt.get('error') and receipt.get('verified') is not False and"],
     'MUT-TYPE-UNCHUNKED': ["url[offset:offset + TYPE_TEXT_CAP]", "url"],
@@ -68,7 +70,10 @@ async function dryRun(mutation = '') {
   const dispatch = (stage, args) => {
     calls.push(stage);
     switch (stage) {
-      case 'start': return { profile: 'mv-live-1', capsules: [capsule.capsuleId] };
+      case 'start':
+        capsule.textInputMode = args.text_input;
+        if (['type-delayed', 'MUT-NO-SETTLE'].includes(mutation)) capsule.textInputMode = 'type';
+        return { profile: 'mv-live-1', capsules: [capsule.capsuleId] };
       case 'ownership':
         if (mutation === 'midrun-foreign' && calls.includes('propose')) {
           throw new Error('single owned profile capsule no longer proven');
@@ -116,7 +121,18 @@ async function dryRun(mutation = '') {
           navigation.loaded = true;
         }
         const id = `navigation-${navGeneration}`;
-        navPending = { before: args.sensed.frame, after: navigationFrame(), id };
+        const before = args.sensed.frame;
+        const capture = capsule.navigationCapture(action, before, navigationFrame(),
+          mutation === 'MUT-SETTLE-PUBLISHES-BEFORE' && action.type === 'type');
+        if (action.type === 'type' && !['type-delayed', 'MUT-NO-SETTLE'].includes(mutation)) {
+          assert.ok(capsule.navigationInputs.at(-1).argv.includes('--paste'), 'paste argv missing --paste');
+        }
+        let after = capture();
+        // Model the adapter's bounded polling at the native boundary. Actual Go
+        // capture/epoch/publication wiring is covered by TestPostInputDelayedPaint.
+        for (let elapsed = 50; mutation !== 'MUT-NO-SETTLE' && elapsed <= 1500 &&
+            before.sha256 === after.sha256; elapsed += 50) after = capture();
+        navPending = { before, after, id };
         return { proposal_id: id, verdict: { admitted: true }, verified: false, error: '',
           native_evidence: { input_mono_ns: navGeneration } };
       }
@@ -134,7 +150,9 @@ async function dryRun(mutation = '') {
       case 'navigate': {
         assert.ok(!calls.some(x => /^net(?:_|$)/.test(x)));
         assert.equal(capsule.netPolicy, 'down');
-        const html = decodeURIComponent(args.url.split(',').slice(1).join(','));
+        const [header, payload] = args.url.split(',', 2);
+        const html = header.endsWith(';base64') ? Buffer.from(payload, 'base64').toString('utf8')
+          : decodeURIComponent(payload);
         assert.ok(html.includes("default-src 'none'"));
         assert.ok(html.includes(loadPageSpec(args.page).html));
         if (args.page === 'flow_a') {
@@ -252,7 +270,7 @@ async function dryRun(mutation = '') {
     });
     assert.ok(report, `runner emitted report: ${stderr}`);
     assert.ok(!calls.some(x => /^net(?:_|$)/.test(x)));
-    return { rc, report, calls, navigationUrls };
+    return { rc, report, calls, navigationUrls, navigationInputs: capsule.navigationInputs };
   } finally {
     clearTimeout(timer);
     lines.close();
@@ -329,6 +347,7 @@ test('backend hardening contracts and named mutation controls (no live imports)'
 });
 
 for (const [mutation, detail] of [
+  ['MUT-PASTE-NOT-WIRED', /paste argv missing --paste/],
   ['MUT-GUARD-ON-VERIFIED', /action receipt:/],
   ['MUT-TYPE-UNCHUNKED', /CLI failed with exit status 2/],
   ['MUT-CHUNK-OVER-CAP', /CLI failed with exit status 2/],
@@ -344,5 +363,30 @@ for (const [mutation, detail] of [
     if (['MUT-GUARD-ON-VERIFIED', 'MUT-OMNIBOX-PREFOCUSED', 'MUT-TYPE-UNCHUNKED', 'MUT-CHUNK-OVER-CAP'].includes(mutation)) {
       assert.equal(report.error.code, 'VERIFICATION_FAILED');
     }
+  });
+}
+
+
+test('hosted type mode waits past the first old capture', async () => {
+  const {rc, report, navigationInputs} = await dryRun('type-delayed');
+  assert.equal(rc, 0, JSON.stringify(report.error));
+  assert.ok(navigationInputs.some(input => input.argv.includes('--type-stdin')));
+  assert.ok(navigationInputs.every(input => !input.argv.includes('--paste')));
+});
+
+test('hosted paste mode records native clipboard argv', async () => {
+  const {rc, navigationInputs} = await dryRun();
+  assert.equal(rc, 0);
+  const text = navigationInputs.filter(input => input.argv.includes('--type-stdin'));
+  assert.ok(text.length > 0);
+  assert.ok(text.every(input => input.mode === 'paste' && input.argv.includes('--paste')));
+});
+
+for (const mutation of ['MUT-NO-SETTLE', 'MUT-SETTLE-PUBLISHES-BEFORE']) {
+  test(`hosted delayed/unchanged negative control: ${mutation}`, async () => {
+    const {rc, report} = await dryRun(mutation);
+    assert.equal(rc, 1);
+    assert.equal(report.error.code, 'VERIFICATION_FAILED');
+    assert.match(report.error.detail, /unchanged chrome pixels/);
   });
 }

@@ -24,13 +24,14 @@ import (
 )
 
 type holdingsWireWitnessRunner struct {
-	root         string
-	seq          uint64
-	calls        [][]string
-	inputRaw     []byte
-	observeRaw   []byte
-	observeErr   error
-	observeQueue [][]byte
+	framePath, frameSHA string
+	root                string
+	seq                 uint64
+	calls               [][]string
+	inputRaw            []byte
+	observeRaw          []byte
+	observeErr          error
+	observeQueue        [][]byte
 }
 
 func (r *holdingsWireWitnessRunner) Run(_ context.Context, args []string, _ []byte) ([]byte, error) {
@@ -57,8 +58,12 @@ func (r *holdingsWireWitnessRunner) Run(_ context.Context, args []string, _ []by
 	case "srf-holdings-capsule:frame":
 		r.seq++
 		path := filepath.Join(r.root, "hc-0123456789ab/frames/f.png")
+		digest := fmt.Sprintf("%x", sha256.Sum256(make([]byte, 6)))
+		if r.framePath != "" {
+			path, digest = r.framePath, r.frameSHA
+		}
 		return json.Marshal(map[string]any{
-			"sha256_rgb24":    fmt.Sprintf("%x", sha256.Sum256(make([]byte, 6))),
+			"sha256_rgb24":    digest,
 			"path":            path,
 			"seq":             r.seq,
 			"width":           2,
@@ -366,7 +371,7 @@ func TestHoldingsWireOmitsGroundTruthOnFailedOrMalformedObserve(t *testing.T) {
 		},
 	}
 
-	for _, tc := range cases {
+	for index, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, _, err := m.Capture(context.Background(), sid); err != nil {
 				t.Fatal(err)
@@ -374,6 +379,11 @@ func TestHoldingsWireOmitsGroundTruthOnFailedOrMalformedObserve(t *testing.T) {
 			runner.observeRaw = tc.observeRaw
 			runner.observeErr = tc.observeErr
 			runner.calls = nil
+			// Keep this witness-refusal test's single-capture oracle: pixels
+			// repaint immediately, independently of unavailable ground truth.
+			runner.framePath, runner.frameSHA = writeTestPNGNamed(t,
+				filepath.Join(runner.root, "hc-0123456789ab/frames"),
+				fmt.Sprintf("paint-%d.png", index), color.NRGBA{R: uint8(index + 1), A: 255})
 
 			reqBody, _ := json.Marshal(map[string]any{
 				"schema": "surface_request/v0.2",

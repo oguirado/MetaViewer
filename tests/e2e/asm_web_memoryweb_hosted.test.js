@@ -184,7 +184,14 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         assert.ok(calls.includes('offline_proof'));
         assert.equal(args.page, 'form');
         assert.equal(args.marker, 'EMPTY');
-        assert.ok(decodeURIComponent(args.url).includes("default-src 'none'"));
+        {
+          // The runner sends the shorter of the percent-encoded and base64 data URLs.
+          const head = args.url.slice(0, args.url.indexOf(','));
+          const payload = args.url.slice(args.url.indexOf(',') + 1);
+          const html = head.endsWith(';base64') ? Buffer.from(payload, 'base64').toString('utf8')
+            : decodeURIComponent(payload);
+          assert.ok(html.includes("default-src 'none'"));
+        }
         capsule.loadPage('form');
         core = new HostedCoreAdmissionFake(capsule, { stepBudget: 8 });
         return [];

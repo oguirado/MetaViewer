@@ -157,7 +157,11 @@ async function hosted(packArgs = [], environment = {}, mutation = '') {
         assert.ok(!calls.some(x => /^net(?:_|$)/.test(x)));
         assert.equal(navigation.loaded, true);
         assert.equal(navigation.text, args.url);
-        const html = decodeURIComponent(args.url.slice(args.url.indexOf(',') + 1));
+        // The runner sends the shorter of the percent-encoded and base64 data URLs.
+        const head = args.url.slice(0, args.url.indexOf(','));
+        const payload = args.url.slice(args.url.indexOf(',') + 1);
+        const html = head.endsWith(';base64') ? Buffer.from(payload, 'base64').toString('utf8')
+          : decodeURIComponent(payload);
         assert.ok(html.includes("default-src 'none'"));
         external = args.page === 'external';
         if (external) {

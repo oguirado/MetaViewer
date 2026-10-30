@@ -46,9 +46,16 @@ import (
 )
 
 type Profile struct {
+	TextInput                                           string `json:"text_input,omitempty"`
 	Kind, NativeKind, Program, AppDir, RAMRoot, Display string
 	Width, Height, NestedDepth                          int
 }
+
+// ValidTextInput admits only the default or the two native text modes.
+func ValidTextInput(mode string) bool {
+	return mode == "" || mode == "type" || mode == "paste"
+}
+
 type ViewBackend interface {
 	Open(context.Context, string, bool) error
 	Stop(context.Context, string) error
@@ -227,6 +234,9 @@ func NewManager(cfg Config, r cli.Runner, clock cli.Clock) (*Manager, error) {
 	cfg.NetModes = append([]string(nil), cfg.NetModes...)
 	copyProfiles := make(map[string]Profile, len(cfg.Profiles))
 	for id, p := range cfg.Profiles {
+		if !ValidTextInput(p.TextInput) {
+			return nil, fault("configuration", "invalid text input mode")
+		}
 		if !profileID.MatchString(id) || p.Width < 1 || p.Height < 1 || p.Width > 8192 || p.Height > 8192 || p.NestedDepth < 0 || p.NestedDepth > 1 || !displayID.MatchString(p.Display) || !filepath.IsAbs(p.RAMRoot) || !withinRAM(p.RAMRoot) {
 			return nil, fault("configuration", "invalid profile geometry or allocation")
 		}
@@ -1019,6 +1029,9 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 		}
 		nativeAction = "text"
 		args = append(args, "--type-stdin")
+		if origin == "agent" && m.cfg.Profiles[b.Surface.ProfileID].TextInput == "paste" {
+			args = append(args, "--paste")
+		}
 		stdin = []byte(q.Action.Text)
 	default:
 		return nil, cli.Unsupported("input action")
