@@ -1,3 +1,31 @@
+// @ts-check
+/** [TARGET, unit decision] Operator button calls carry references only.
+ * The host owns document paths, argv, clipboard contents and recording lifetime. */
+export const BUTTON_METHODS=Object.freeze(['entry.copy','demo.start','demo.stop','demo.prompt','demo.check']);
+/** @param {any} v @param {string[]} keys */
+const buttonExact=(v,keys)=>!!v && typeof v==='object' && !Array.isArray(v) && Reflect.ownKeys(v).length===keys.length && keys.every(k=>Object.hasOwn(v,k)) && Object.values(Object.getOwnPropertyDescriptors(v)).every(d=>'value' in d);
+/** @param {any} x @param {number} max */
+const buttonId=(x,max)=>typeof x==='string' && x.length<=max && /^[a-z0-9][a-z0-9-]*$/.test(x) && !/\s/.test(x);
+/** @param {string} method @param {any[]} args */
+export function assertButtonCall(method,args) {
+  const empty=['entry.copy','demo.stop'].includes(method);
+  if(!BUTTON_METHODS.includes(method) || args.length!==(empty?0:1))throw new Error('BUTTON_ARGS');
+  if(empty)return;
+  const v=args[0],keys=method==='demo.start'?['identity','demo']:method==='demo.prompt'?['demo','site']:['site'];
+  if(!buttonExact(v,keys) || (keys.includes('identity') && (!buttonId(v.identity,40)||v.identity.length<2)) || (keys.includes('demo') && !buttonId(v.demo,40)) || (keys.includes('site') && !buttonId(v.site,64)))throw new Error('BUTTON_ARGS');
+}
+/** @param {any} value */
+export function viewerUrl(value) {
+  if(typeof value!=='string' || value.length>2048 || /[\x00-\x20\x7f]/.test(value))return false;
+  try {const u=new URL(value);return u.protocol==='http:' && ['127.0.0.1','localhost','[::1]'].includes(u.hostname) && !u.username && !u.password;}catch{return false;}
+}
+/** @param {string} method @param {any} v */
+export function assertButtonReply(method,v) {
+  if(buttonExact(v,['ok','code']) && v.ok===false && ['BUTTON_UNAVAILABLE','DEMO_REFUSED','DEMO_BUSY','DEMO_NOT_RECORDING'].includes(v.code))return v;
+  if(v?.ok===true && (method==='demo.start'?buttonExact(v,['ok','url']) && viewerUrl(v.url):buttonExact(v,['ok'])))return v;
+  throw new Error('BUTTON_REPLY');
+}
+
 /**
  * MetaViewer bootstrap preload facade (sandbox-loadable).
  * [TARGET, unit decision] Snapshot trusted native lazy exports at the CJS
@@ -23,7 +51,7 @@
 
 /** [TARGET, unit decision] Closed operator-only metadata seam. No argv, paths,
  * credentials or arbitrary channels are exposed. Bounds are transport limits. */
-export const OPERATOR_METHODS = Object.freeze(['identity.list','identity.show','identity.create','identity.delete','identity.login','egress.get','egress.set','handoff.list','handoff.ack']);
+export const OPERATOR_METHODS = Object.freeze([...BUTTON_METHODS,'identity.list','identity.show','identity.create','identity.delete','identity.login','egress.get','egress.set','handoff.list','handoff.ack']);
 /** @param {any} v @param {string[]} names */
 export function operatorKeys(v,names) {
   return !!v && typeof v==='object' && !Array.isArray(v)
@@ -59,6 +87,7 @@ export function validHandoff(v) {
 }
 /** @param {string} method @param {any[]} args */
 export function assertOperatorCall(method,args) {
+  if(BUTTON_METHODS.includes(method))return assertButtonCall(method,args);
   if (!OPERATOR_METHODS.includes(method) || args.length!==(['identity.list','handoff.list'].includes(method)?0:1)) throw new Error('OPERATOR_ARGS');
   if (!args.length) return;
   const v=args[0];
@@ -71,6 +100,7 @@ export function assertOperatorCall(method,args) {
 }
 /** @param {string} method @param {any} v */
 export function assertOperatorReply(method,v) {
+  if(BUTTON_METHODS.includes(method))return assertButtonReply(method,v);
   if(operatorKeys(v,['ok','code']) && v.ok===false && ['IDENTITY_UNAVAILABLE','IDENTITY_REFUSED','NET_EGRESS_IO','NET_EGRESS_INVALID','NET_PROXIED_UNSUPPORTED','NET_OPEN_PREREQ','HANDOFF_UNAVAILABLE'].includes(v.code)) return v;
   if(!v || v.ok!==true) throw new Error('OPERATOR_REPLY');
   if(method==='handoff.list') {
@@ -87,7 +117,7 @@ export function assertOperatorReply(method,v) {
 /** @param {any} transport */
 export function createOperatorFacade(transport) {
   /** @type {any} */ const out={};
-  for(const group of ['identity','egress','handoff']) out[group]={};
+  for(const group of ['identity','egress','handoff','entry','demo']) out[group]={};
   for(const method of OPERATOR_METHODS) {
     const [group,verb]=method.split('.');
     out[group][verb]=async(/** @type {any[]} */...args)=>{

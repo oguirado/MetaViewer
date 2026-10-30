@@ -40,6 +40,28 @@ import {
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+test('MUT-STAGED-IMPORT: every transitive host import is staged and sealed', async () => {
+  const app = await fs.mkdtemp(join(tmpdir(), 'mv-staged-import-'));
+  try {
+    await packaging.stageElectronModules(app);
+    await fs.mkdir(join(app, 'dist/renderer'), { recursive: true });
+    await fs.mkdir(join(app, 'dist/preload'), { recursive: true });
+    await fs.writeFile(join(app, 'dist/renderer/index.html'), '<html></html>');
+    await fs.writeFile(join(app, 'dist/preload/preload.cjs'), '');
+    await sealRendererAssets(app);
+    const main = await fs.readFile(join(app, 'electron/main.js'), 'utf8');
+    for (const name of ['operatorBridge.js', 'buttonBridge.js', 'preload.js']) {
+      assert.ok(main.includes(`electron/${name}`), `${name} must be sealed`);
+      const path = join(app, 'electron', name);
+      const original = await fs.readFile(path);
+      await fs.rm(path);
+      await assert.rejects(packaging.verifyStagedImports(app), /PKG_STAGED_IMPORT_MISSING/);
+      await fs.writeFile(path, original);
+    }
+    await packaging.verifyStagedImports(app);
+  } finally { await fs.rm(app, { recursive: true, force: true }); }
+});
+
 async function fixture(run) {
   const temporary=await fs.mkdtemp(join(tmpdir(),'mv-pkg-test-'));
   const root=join(temporary,'MetaViewer-linux-arm64');
@@ -1456,7 +1478,7 @@ test(
       }
       await fs.writeFile(join(app, 'dist/renderer/index.html'), '<!doctype html><title>MetaViewer</title>', 'utf8');
       await fs.writeFile(join(app, 'dist/preload/preload.cjs'), '"use strict";\n', 'utf8');
-      await fs.copyFile(join(electronSrc, 'main.js'), join(app, 'electron/main.js'));
+      await packaging.stageElectronModules(app);
       await fs.appendFile(join(app, 'electron/main.js'), '\nexport { mainDirectEntry };\n');
       await fs.copyFile(join(electronSrc, 'coreLauncher.js'), join(app, 'electron/coreLauncher.js'));
       await fs.writeFile(
@@ -1500,6 +1522,7 @@ test(
         JSON.stringify({ name: 'metaviewer', version: '0.1.2', type: 'module', main: 'electron/nesting.js' }),
         'utf8',
       );
+      await packaging.verifyStagedImports(app);
       await sealRendererAssets(app);
       await createPackage(app, join(root, 'resources/app.asar'));
 

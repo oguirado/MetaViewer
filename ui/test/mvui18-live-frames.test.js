@@ -648,6 +648,7 @@ async function loadAppHarness(captured, row) {
     './nested/nested.js': { resolveNestedMode, applyNestedWall },
     './surfaces/tileScheduler.js': { createTileScheduler },
   };
+  addOperatorStubs(deps);
   globalThis.__mvui18AppDeps = deps;
   try {
     const { descriptor } = parse(appSource);

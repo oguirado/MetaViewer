@@ -2391,6 +2391,9 @@ export async function bootProductionMain(handles) {
     if (!retail.nested) operatorBridge = (await import('./operatorBridge.js')).installOperatorBridge({
       ipcMain, contents: contentsUnknown, env: typed.env,
       tool: resolve(paths.rendererRoot, '../../../tools/mv_identity.py'),
+      demoRoot: packagedLaunch ? (/** @type {any} */(typed.env).MV_OPERATOR_REPO ?? null) : fileURLToPath(new URL('../../',import.meta.url)),
+      buttonRoot: packagedLaunch ? join(process.resourcesPath ?? resolve(paths.rendererRoot,'../../..'),'operator') : fileURLToPath(new URL('../../',import.meta.url)),
+      clipboard: {writeText:(/** @type {string} */text)=>{const {clipboard}=createRequire(import.meta.url)('electron');clipboard.writeText(text);}},
       admit: (/** @type {unknown} */ event) => observeSender(event,contentsUnknown,PRIVILEGED_ORIGIN).verdict==='admit',
       openLogin: async (/** @type {string} */url) => { const {shell}=await import('electron'); await shell.openExternal(url); },
     });

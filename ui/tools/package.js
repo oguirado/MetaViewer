@@ -47,6 +47,35 @@ export function writeFdSync(fd, value) {
 const execute = promisify(execFile);
 const ui = fileURLToPath(new URL('../', import.meta.url));
 const repo = resolve(ui, '..');
+/** Stage the complete host module tree, shared by packaging and smoke fixtures.
+ * @param {string} app
+ */
+export async function stageElectronModules(app) {
+  await fs.cp(join(ui, 'electron'), join(app, 'electron'), { recursive: true });
+  await verifyStagedImports(app);
+}
+
+/** Verify local static and dynamic JS imports, including transitive imports.
+ * @param {string} app
+ */
+export async function verifyStagedImports(app) {
+  const seen = new Set();
+  /** @param {string} file */
+  async function visit(file) {
+    if (seen.has(file)) return;
+    seen.add(file);
+    const source = await fs.readFile(file, 'utf8').catch(() => {
+      throw new Error(`PKG_STAGED_IMPORT_MISSING: ${relative(app, file)}`);
+    });
+    const imports = source.matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s*)['"](\.\.?\/[^'"]+\.js)['"]/g);
+    for (const match of imports) {
+      // The kit is staged independently; this gate owns Electron host modules.
+      const target = resolve(dirname(file), match[1]);
+      if (target.startsWith(resolve(app, 'electron') + sep)) await visit(target);
+    }
+  }
+  await visit(join(app, 'electron/main.js'));
+}
 const DEFAULT_UMASK_FILE_MODE = (() => {
   const probe = join(tmpdir(), `.mv-mode-probe-${process.pid}-${Date.now()}`);
   try {
@@ -2003,7 +2032,7 @@ export async function packageShell(env = process.env) {
       dest: join(builder, '.kit/capsule-ui-kit'), lockPath: join(ui, 'kit.lock.json') });
     await execute(process.execPath, [join(ui, 'node_modules/vite/bin/vite.js'), 'build',
       '--outDir', join(app, 'dist/renderer')], { cwd: builder, env, maxBuffer: 1024 * 1024 });
-    await fs.cp(join(ui, 'electron'), join(app, 'electron'), { recursive: true });
+    await stageElectronModules(app);
     const pkgVersion = JSON.parse(await fs.readFile(join(ui,'package.json'),'utf8')).version;
     const commit = (await execute('git',['rev-parse','HEAD'],{cwd:repo})).stdout.trim();
     if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error('PKG_REVISION_INVALID');
@@ -2051,11 +2080,22 @@ export async function packageShell(env = process.env) {
     await fs.cp(native,join(built[0],'resources/bin'),{recursive:true});
     await fs.cp(join(repo,'contracts/v0.2'),join(built[0],'resources/contracts/v0.2'),{recursive:true});
     await fs.copyFile(join(repo,'deps.lock'),join(built[0],'resources/deps.lock'));
+    // [TARGET, unit decision] Host-owned button runtime; no renderer-selected paths.
+    const operatorRoot=join(built[0],'resources/operator');
+    for(const relative of ['docs/AGENT_ENTRY.md','docs/AUTOMATE_FROM_DEMO.md']) {
+      await fs.mkdir(dirname(join(operatorRoot,relative)),{recursive:true});
+      await fs.copyFile(join(repo,relative),join(operatorRoot,relative));
+    }
+
     await fs.copyFile(join(ui,'kit.lock.json'),join(built[0],'resources/kit.lock.json'));
     await fs.writeFile(join(built[0],'INSTALL.md'), `# MetaViewer Linux ${architecture.arch}
 
 Run ./metaviewer to start the production UI with its bundled real core.
 Use --nested-depth=1 only for the separate display-only view.
+Automate from a demo requires MV_OPERATOR_REPO pointing to the operator-owned
+MetaViewer Git checkout with tools/mv_demo.py; configure the identity and
+MemoryWeb environment described in that checkout's docs/AUTOMATE_FROM_DEMO.md.
+Use MetaViewer copies the bundled resources/operator/docs/AGENT_ENTRY.md prompt.
 Verify every delivered file from this directory with:
 sha256sum -c ../${architecture.name}.sha256
 

@@ -12,7 +12,7 @@ const open={schema:'metaviewer.capsule_egress/v1',mode:'open',domains:[]};
 const proxy={...open,mode:'allowlisted',domains:['example.com']};
 const handoff={schema:'metaviewer.handoff/v1',surface_id:'surface-1',step_index:7,reason:'captcha_wall',confidence:100,evidence_kinds:['ax_role_name']};
 const native={profile_id:'account-a',account_label:'Account A',allowed_domains:['example.com'],last_login_unix:0};
-const requests={ 'identity.list':[], 'identity.show':[{id:'account-a'}], 'identity.create':[{id:'account-a',label:'Account A',domains:['example.com']}], 'identity.delete':[{id:'account-a'}], 'identity.login':[{id:'account-a'}], 'egress.get':[{identity:'account-a'}], 'egress.set':[{identity:'account-a',record:proxy}], 'handoff.list':[], 'handoff.ack':[{surface_id:'surface-1',step_index:7,gesture:'operator-acknowledge'}] };
+const requests={ 'entry.copy':[], 'demo.start':[{identity:'account-a',demo:'demo'}], 'demo.stop':[], 'demo.prompt':[{demo:'demo',site:'site'}], 'demo.check':[{site:'site'}], 'identity.list':[], 'identity.show':[{id:'account-a'}], 'identity.create':[{id:'account-a',label:'Account A',domains:['example.com']}], 'identity.delete':[{id:'account-a'}], 'identity.login':[{id:'account-a'}], 'egress.get':[{identity:'account-a'}], 'egress.set':[{identity:'account-a',record:proxy}], 'handoff.list':[], 'handoff.ack':[{surface_id:'surface-1',step_index:7,gesture:'operator-acknowledge'}] };
 function fixture(t) {
   const root=mkdtempSync(join(tmpdir(),'mv-idnet-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
   const path=join(root,'run.handoff.json');writeFileSync(path,JSON.stringify(handoff),{mode:0o600});
@@ -21,7 +21,7 @@ function fixture(t) {
 }
 test('all operator handlers admit only the window sender and exact positional arity',async t=>{
   const {env}=fixture(t),handlers=new Map();
-  const bridge=installOperatorBridge({ipcMain:{handle:(c,h)=>handlers.set(c,h),removeHandler:c=>handlers.delete(c)},contents:{send(){}},env,tool:'unused',admit:e=>e==='owner',runIdentity:async method=>['delete','login'].includes(method)?{ok:true}:{ok:true,rows:[publicIdentity(native)]}});
+  const bridge=installOperatorBridge({ipcMain:{handle:(c,h)=>handlers.set(c,h),removeHandler:c=>handlers.delete(c)},contents:{send(){}},env,buttons:{request:async method=>method==='demo.start'?{ok:true,url:'http://127.0.0.1:1234/'}:{ok:true},dispose(){}},tool:'unused',admit:e=>e==='owner',runIdentity:async method=>['delete','login'].includes(method)?{ok:true}:{ok:true,rows:[publicIdentity(native)]}});
   t.after(()=>bridge.dispose());
   assert.equal(handlers.size,OPERATOR_METHODS.length);
   for(const method of OPERATOR_METHODS) {

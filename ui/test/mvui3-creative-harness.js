@@ -10,6 +10,7 @@ globalThis.__creativeModules = modules;
 export async function loadSfc(path, deps) {
   const key = ++serial;
   modules.set(key, {
+    './demo/DemoDialog.vue': vue.defineComponent({render:()=>null}),
     '../../.kit/capsule-ui-kit/src/ui/UiPage.vue': ui.UiPage,
     '../../.kit/capsule-ui-kit/src/ui/UiToolbar.vue': ui.UiToolbar,
     ...deps,

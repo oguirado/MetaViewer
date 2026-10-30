@@ -3,6 +3,6 @@
 import {defineComponent} from 'vue';
 const stub=defineComponent({render:()=>null});
 export function addOperatorStubs(deps) {
-  for(const path of ['./identities/IdentitiesDialog.vue','./handoff/HandoffNotice.vue','../netmode/NetworkPanel.vue']) deps[path]??=stub;
+  for(const path of ['./demo/DemoDialog.vue','./identities/IdentitiesDialog.vue','./handoff/HandoffNotice.vue','../netmode/NetworkPanel.vue']) deps[path]??=stub;
   return deps;
 }

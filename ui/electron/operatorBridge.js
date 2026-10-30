@@ -1,3 +1,4 @@
+import {createButtonService} from './buttonBridge.js';
 // @ts-check
 /** [TARGET, unit decision] Host-only operator seam. The launcher supplies
  * MV_HANDOFF_PATHS as a JSON array of owner output.with_suffix('.handoff.json')
@@ -9,7 +10,7 @@ import * as fs from 'node:fs';
 import { dirname, basename, join, isAbsolute, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { OPERATOR_METHODS, assertOperatorCall, assertOperatorReply, operatorKeys, validEgress, validHandoff } from './preload.js';
+import { BUTTON_METHODS, OPERATOR_METHODS, assertOperatorCall, assertOperatorReply, operatorKeys, validEgress, validHandoff } from './preload.js';
 
 /** Hold every directory descriptor during traversal, refusing symlinks. The
  * final directory and files must be private and owned by the current uid.
@@ -106,7 +107,7 @@ export function identityRunner({tool,env=process.env,spawnTool=spawn,openLogin=a
   });
 }
 /** @param {any} options */
-export function createOperatorService({env=process.env,runIdentity,notify=()=>{}}) {
+export function createOperatorService({env=process.env,runIdentity,buttons,notify=()=>{}}) {
   /** @type {Map<string,{path:string,record:any,acked:boolean}>} */ const latched=new Map();
   /** @type {string[]} */ let paths=[];
   let configError=false;
@@ -133,6 +134,7 @@ export function createOperatorService({env=process.env,runIdentity,notify=()=>{}
   /** @param {string} method @param {any[]} args */
   async function request(method,args) {
     assertOperatorCall(method,args);
+    if(BUTTON_METHODS.includes(method))return buttons.request(method,args);
     const v=args[0];
     if(method.startsWith('identity.')) {
       try {return assertOperatorReply(method,await runIdentity(method.split('.')[1],v));}
@@ -171,9 +173,9 @@ export function createOperatorService({env=process.env,runIdentity,notify=()=>{}
   return {request,refresh};
 }
 /** @param {any} options */
-export function installOperatorBridge({ipcMain,contents,env,tool,admit,openLogin,runIdentity=identityRunner({tool,env,openLogin})}) {
+export function installOperatorBridge({ipcMain,contents,env,tool,buttonRoot,demoRoot,clipboard,admit,openLogin,buttons=createButtonService({root:buttonRoot,demoRoot,clipboard,env}),runIdentity=identityRunner({tool,env,openLogin})}) {
   let disposed=false;
-  const service=createOperatorService({env,runIdentity,notify:(/** @type {any} */v)=>{if(!disposed)contents.send('metaviewer:handoff.state',v);}});
+  const service=createOperatorService({env,runIdentity,buttons,notify:(/** @type {any} */v)=>{if(!disposed)contents.send('metaviewer:handoff.state',v);}});
   /** @type {string[]} */ const installed=[];
   try {
     for(const method of OPERATOR_METHODS) {
@@ -185,5 +187,5 @@ export function installOperatorBridge({ipcMain,contents,env,tool,admit,openLogin
     }
   }catch(e){for(const c of installed)ipcMain.removeHandler(c);throw e;}
   const timer=setInterval(()=>service.refresh(),1000);timer.unref();
-  return {async dispose(){disposed=true;clearInterval(timer);for(const c of installed)ipcMain.removeHandler(c);}};
+  return {async dispose(){disposed=true;clearInterval(timer);for(const c of installed)ipcMain.removeHandler(c);await buttons.dispose();}};
 }

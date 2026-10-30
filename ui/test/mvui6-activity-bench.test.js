@@ -16,6 +16,7 @@ const app = readFileSync(APP_URL, 'utf8');
 
 const PINNED_IMPORTS = [
   'vue',
+  './demo/DemoDialog.vue',
   './identities/IdentitiesDialog.vue',
   './handoff/HandoffNotice.vue',
   './creative/CreativeCapsule.vue',
@@ -89,6 +90,7 @@ async function loadApp(captured) {
   const strip = vue.defineComponent({ props: ['entries'],
     setup: props => { captured.stripEntries = () => props.entries; return () => vue.h('section', { id: 'test-activity' }); } });
   globalThis.__vdeps = {
+    './demo/DemoDialog.vue': stub,
     './core/HostOutcome.vue': stub,
     './activity/ActivityStrip.vue': strip,
     'capsule-ui-kit/DockWorkspace': stub,

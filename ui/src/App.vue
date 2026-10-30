@@ -3,6 +3,7 @@
  * Canvas status reads successful presentation witnesses; bytes stay external.
  */
 import { computed, defineComponent, h, inject, markRaw, onBeforeUnmount, onMounted, provide, ref, shallowRef, watch } from 'vue';
+import DemoDialog from './demo/DemoDialog.vue';
 import IdentitiesDialog from './identities/IdentitiesDialog.vue';
 import HandoffNotice from './handoff/HandoffNotice.vue';
 import CreativeCapsule from './creative/CreativeCapsule.vue';
@@ -28,6 +29,8 @@ import { createTileScheduler } from './surfaces/tileScheduler.js';
 /** @typedef {Pick<InstanceType<typeof WallWorkspace>['$props'], 'projectionView'|'intentBuilders'|'controlRegistry'|'scheduler'|'tileScheduler'>} WallRuntime */
 /** @typedef {{readRaw:()=>Promise<string|null>,writeAtomic:(json:string)=>Promise<void>}} LayoutStorage */
 const identitiesOpen = ref(false);
+const demoOpen=ref(false), entryMessage=ref('');
+async function copyEntry(){try{const result=await (/** @type {any} */(globalThis).metaviewer?.operator)?.entry.copy();entryMessage.value=result?.ok?'Copied':'Copy unavailable';}catch{entryMessage.value='Copy unavailable';}}
 const props = defineProps({
   authorityHost: { type: /** @type {import('vue').PropType<ReturnType<typeof import('./core/hostAdapters.js').createAuthorityAdapter>|null>} */ (Object), default: null },
   terminalBroker: { type: /** @type {import('vue').PropType<ReturnType<typeof import('./core/hostAdapters.js').createTerminalBroker>>} */ (Object), default: null },
@@ -752,6 +755,9 @@ const chromeWorkspace = markRaw(defineComponent({
     <TopBar v-if="!nestedMode.displayOnly" product="MetaViewer" new-label="Add capsule" search-placeholder="Find a capsule…" :nav-expanded="railOpen"
       :palette-items="catalog" @toggle-nav="railOpen = !railOpen" @new-capsule="launcherOpen = true" @open="openCapsule">
       <template #actions>
+        <UiButton id="shell-use-metaviewer" data-semantic-anchor="entry/copy" label="Use MetaViewer" @click="copyEntry" />
+        <span role="status" aria-live="polite">{{ entryMessage }}</span>
+        <UiButton id="shell-automate-demo" data-semantic-anchor="demo/open" label="Automate from a demo" :aria-expanded="demoOpen" @click="demoOpen=true" />
         <UiButton id="shell-identities" data-semantic-anchor="identities/open" label="Identities" :aria-expanded="identitiesOpen" @click="identitiesOpen = true" />
         <UiButton id="shell-creative" data-semantic-anchor="creative/open" label="Storyboard" :aria-expanded="creativeOpen" :disabled="!selectedSurface" @click="toggleCreative" />
         <UiButton id="shell-settings" data-semantic-anchor="settings/open" label="Settings" :aria-expanded="settingsOpen" @click="toggleSettings" />
@@ -820,6 +826,7 @@ const chromeWorkspace = markRaw(defineComponent({
     <div class="mv-terminal" :hidden="!terminalOpen || nestedMode.displayOnly || multislotOpen">
       <SideTerminalOverlay v-if="!nestedMode.displayOnly && !multislotOpen && !creativeOpen" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" v-model:open="terminalOpen" :storage="preferences" :top-offset="terminalTop" :bottom-offset="terminalBottom" />
     </div>
+    <DemoDialog v-if="!nestedMode.displayOnly" :open="demoOpen" @close="demoOpen=false" />
     <IdentitiesDialog v-if="!nestedMode.displayOnly" :open="identitiesOpen" @close="identitiesOpen=false" />
     <CatalogLauncher v-if="!nestedMode.displayOnly" v-model:visible="launcherOpen" @create="onCreateCapsule" />
     <AgentLaneHost :screen="nestedMode.displayOnly ? 'nested' : creativeOpen ? 'creative' : settingsOpen ? 'settings' : multislotOpen ? 'multislot' : 'wall'" :fixture-key="props.fixture?.key ?? ''" />

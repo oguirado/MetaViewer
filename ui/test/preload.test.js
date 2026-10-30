@@ -622,9 +622,9 @@ describe('receiver handoff', () => {
 
 describe('export inventory', () => {
   it('exports exactly the specified surface', () => {
-    assert.deepEqual(Object.keys(preloadModule).sort(), ['CHANNELS', 'ContractError',
-      'FACADE_NAME', 'IPC_BOUNDS', 'OPERATOR_METHODS', 'PRELOAD_METHODS', 'assertFixedCall',
+    assert.deepEqual(Object.keys(preloadModule).sort(), ['BUTTON_METHODS', 'CHANNELS', 'ContractError',
+       'FACADE_NAME', 'IPC_BOUNDS', 'OPERATOR_METHODS', 'PRELOAD_METHODS', 'assertButtonCall', 'assertButtonReply', 'assertFixedCall',
       'assertOperatorCall', 'assertOperatorReply', 'createOperatorFacade', 'createPreloadFacade',
-      'exactEgressHost', 'identityId', 'identityLabel', 'installPreload', 'operatorKeys', 'validEgress', 'validHandoff']);
+      'exactEgressHost', 'identityId', 'identityLabel', 'installPreload', 'operatorKeys', 'validEgress', 'validHandoff', 'viewerUrl']);
   });
 });
