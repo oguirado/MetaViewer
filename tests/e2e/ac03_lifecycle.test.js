@@ -65,6 +65,7 @@ const {
   writeProbeFile,
 } = require('./ac-harness.cjs');
 const { runRust } = require('./core-driver.js');
+const { waitForAdapterConnection } = require('./adapter-startup.cjs');
 
 /** Env flag arming the live journey; anything else refuses the run. */
 
@@ -781,11 +782,17 @@ describe('ac03 live lifecycle journey (Layer 2)', () => {
         pngChunk('IDAT', idat),
         pngChunk('IEND', Buffer.alloc(0)),
       ]);
+      // [TARGET, unit decision] Mirror the native per-identity RAM isolation:
+      // the adapter refuses shared or nested profile roots before connecting.
+      const profileRoots = {};
       for (const profile of ['kill-target', 'destroyed-target']) {
-        const frameDir = join(ramRoot, `run-${profile}`, 'frames', 'w1');
+        const profileRoot = join(ramRoot, profile);
+        profileRoots[profile] = profileRoot;
+        mkdirSync(profileRoot, { mode: 0o700 });
+        const frameDir = join(profileRoot, `run-${profile}`, 'frames', 'w1');
         mkdirSync(frameDir, { recursive: true, mode: 0o700 });
-        chmodSync(join(ramRoot, `run-${profile}`), 0o700);
-        chmodSync(join(ramRoot, `run-${profile}`, 'frames'), 0o700);
+        chmodSync(join(profileRoot, `run-${profile}`), 0o700);
+        chmodSync(join(profileRoot, `run-${profile}`, 'frames'), 0o700);
         chmodSync(frameDir, 0o700);
         const frameFile = join(frameDir, 'f.png');
         writeFileSync(frameFile, pngBytes, { mode: 0o600 });
@@ -870,7 +877,7 @@ elif op == "frame":
         sys.exit(4)
     now = time.monotonic_ns()
     print(json.dumps({
-        "path": os.path.join(${JSON.stringify(ramRoot)}, meta["run_id"], "frames", "w1", "f.png"),
+        "path": os.path.join(${JSON.stringify(profileRoots)}[meta["identity"]], meta["run_id"], "frames", "w1", "f.png"),
         "seq": now,
         "sha256_rgb24": ${JSON.stringify(digestHex)},
         "width": 2,
@@ -954,7 +961,7 @@ else:
         'kill-target': {
           Kind: 'browser',
           NativeKind: 'browser',
-          RAMRoot: ramRoot,
+          RAMRoot: profileRoots['kill-target'],
           Display: ':100',
           Width: 2,
           Height: 1,
@@ -962,7 +969,7 @@ else:
         'destroyed-target': {
           Kind: 'browser',
           NativeKind: 'browser',
-          RAMRoot: ramRoot,
+          RAMRoot: profileRoots['destroyed-target'],
           Display: ':100',
           Width: 2,
           Height: 1,
@@ -979,7 +986,7 @@ else:
           MV_SRF_BIN_DIR: binDir,
           MV_SRF_STATE_DIR: stateDir,
           MV_SRF_PROFILES: profiles,
-          MV_SRF_LIVE_RAM_ROOT: ramRoot,
+          MV_SRF_LIVE_RAM_ROOT: profileRoots['kill-target'],
           MV_SRF_LIVE_PROFILE: 'kill-target',
           SRF_IDENTITY_STORE_ROOT: ramRoot,
           SRF_PROXY_REGISTRY: join(ramRoot, 'proxies.json'),
@@ -1000,7 +1007,7 @@ else:
         adapterStderr += chunk;
       });
 
-      await connected;
+      await waitForAdapterConnection(connected, adapter, () => adapterStderr);
       let coreSeq = 0;
       let daemonSeq = 0;
       const sendCore = (body) => {
@@ -1190,9 +1197,10 @@ else:
     } finally {
       if (conn) conn.destroy();
       if (server) server.close();
-      if (adapter && adapter.exitCode === null) {
+      if (adapter?.pid && adapter.exitCode === null && adapter.signalCode === null) {
+        const exited = new Promise((wake) => adapter.once('exit', wake));
         adapter.kill('SIGKILL');
-        await new Promise((wake) => adapter.once('exit', wake));
+        await exited;
       }
       for (const pid of spawnedPids) {
         try {

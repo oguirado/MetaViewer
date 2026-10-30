@@ -27,6 +27,10 @@ try {
   writeFileSync(join(assets, 'probe.js'), `window.securityReport=(async()=>{
     const report={node:typeof require,process:typeof process,inline:window.inlineExecuted===true,
       facade:Object.keys(window.metaviewer||{}).sort(),
+      operator:Object.fromEntries(Object.entries(window.metaviewer?.operator||{}).map(
+        ([group,verbs])=>[group,Object.keys(verbs).sort()])),
+      operatorCallable:Object.values(window.metaviewer?.operator||{}).every(
+        verbs=>Object.values(verbs).every(verb=>typeof verb==='function')),
       capture:Object.keys(window.metaviewer?.capture||{}).sort(),
       authority:Object.keys(window.metaviewer?.authority||{}).sort(),
       terminal:Object.keys(window.metaviewer?.sideTerminal||{}).sort(),

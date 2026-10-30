@@ -22,8 +22,16 @@ function audit(report) {
   assert.equal(report.popupDenied, true, 'E2E_WINDOW_OPEN: popup allowed');
   assert.equal(report.windows, 1);
   assert.equal(report.frozen, true);
-  assert.deepEqual(report.facade, ['authority', 'capture', 'frames', 'input', 'load', 'loadSettings', 'nestedDepth',
+  assert.deepEqual(report.facade, ['authority', 'capture', 'frames', 'input', 'load', 'loadSettings', 'nestedDepth', 'operator',
     'recordingDestination', 'save', 'saveSettings', 'selfCapsuleId', 'sideTerminal']);
+  assert.deepEqual(report.operator, {
+    demo: ['check', 'prompt', 'start', 'stop'],
+    entry: ['copy'],
+    identity: ['create', 'delete', 'list', 'login', 'show'],
+    egress: ['get', 'set'],
+    handoff: ['ack', 'list', 'subscribe'],
+  });
+  assert.equal(report.operatorCallable, true, 'operator members must be functions');
   assert.deepEqual(report.authority, ['intent', 'propose', 'subscribeFrames']);
   assert.deepEqual(report.capture, ['export', 'list', 'recordStart', 'recordStop', 'screenshot', 'subscribe']);
   assert.deepEqual(report.terminal, ['attach', 'close', 'copyText', 'listProviders', 'open', 'resize', 'setEnabled']);
@@ -41,7 +49,16 @@ test('Chromium enforces product flags, CSP, popup denial and preload allowlist; 
       assert.equal(outcome.status, 0, JSON.stringify(outcome));
       return JSON.parse(readFileSync(report, 'utf8'));
     };
-    audit(run('clean'));
+    const clean = run('clean');
+    audit(clean);
+    assert.throws(() => audit({ ...clean, facade: [...clean.facade, 'unexpected'].sort() }),
+      { code: 'ERR_ASSERTION' });
+    assert.throws(() => audit({ ...clean, operator: { ...clean.operator, unexpected: [] } }),
+      { code: 'ERR_ASSERTION' });
+    assert.throws(() => audit({ ...clean, operator: {
+      ...clean.operator, demo: [...clean.operator.demo, 'unexpected'].sort(),
+    } }), { code: 'ERR_ASSERTION' });
+    assert.throws(() => audit({ ...clean, operatorCallable: false }), /operator members/);
     assert.throws(() => audit(run('unsafe')), /E2E_SECURITY/);
   } finally { harness.removeScratch(scratch); }
 });

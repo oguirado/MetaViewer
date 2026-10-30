@@ -1084,12 +1084,30 @@ test('W2-FRAME-LIVE-DIAG: MV_FRAME_DIAG is off by default, adds no window.metavi
       'load',
       'loadSettings',
       'nestedDepth',
+      'operator',
       'recordingDestination',
       'save',
       'saveSettings',
       'selfCapsuleId',
       'sideTerminal',
     ]);
+    const facadeKeys = Object.keys(api).sort();
+    assert.throws(() => assert.deepEqual(Object.keys({ ...api, unexpected() {} }).sort(), facadeKeys),
+      { code: 'ERR_ASSERTION' });
+    const operatorKeys = ['demo', 'egress', 'entry', 'handoff', 'identity'];
+    assert.deepEqual(Object.keys(api.operator).sort(), operatorKeys);
+    assert.throws(() => assert.deepEqual(Object.keys({ ...api.operator, unexpected: {} }).sort(), operatorKeys),
+      { code: 'ERR_ASSERTION' });
+    assert.deepEqual(Object.keys(api.operator.demo).sort(), ['check', 'prompt', 'start', 'stop']);
+    assert.deepEqual(Object.keys(api.operator.entry).sort(), ['copy']);
+    assert.throws(() => assert.deepEqual(Object.keys({ ...api.operator.demo, unexpected() {} }).sort(),
+      ['check', 'prompt', 'start', 'stop']), { code: 'ERR_ASSERTION' });
+    assert.deepEqual(Object.keys(api.operator.identity).sort(), ['create', 'delete', 'list', 'login', 'show']);
+    assert.deepEqual(Object.keys(api.operator.egress).sort(), ['get', 'set']);
+    assert.deepEqual(Object.keys(api.operator.handoff).sort(), ['ack', 'list', 'subscribe']);
+    for (const group of Object.values(api.operator)) {
+      for (const member of Object.values(group)) assert.equal(typeof member, 'function');
+    }
     assert.deepEqual(Object.keys(api.authority).sort(), [
       'intent',
       'propose',
