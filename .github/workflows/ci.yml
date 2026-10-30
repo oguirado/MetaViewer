@@ -1371,6 +1371,11 @@ jobs:
           }
           verify_head "wender-agent" "_deps/wender-agent" "${PIN_WENDER_AGENT}"
 
+      - name: Install pinned numpy for vision-engine
+        run: |
+          set -euo pipefail
+          python3 -m pip install --no-cache-dir --only-binary=:all: numpy==2.4.2
+
       - name: Run Python agent gates
         env:
           MV_MW_WENDER_ROOT: ${{ github.workspace }}/_deps/wender-agent

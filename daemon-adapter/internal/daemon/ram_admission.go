@@ -2,8 +2,9 @@ package daemon
 
 // [TARGET, unit decision] Serialize native creates and destroys on the one core
 // connection and across processes using a shared directory flock. Admission reads host
-// MemAvailable before create and after initial capture. Floor: 20 GiB [CITED,
-// campaign L1]; reserve: 512 MiB per incumbent [TARGET], matching the frame budget.
+// MemAvailable before create and after initial capture. Floor: min(20 GiB,
+// MemTotal/4) [TARGET, conductor decision]; reserve: 512 MiB per incumbent
+// [TARGET], matching the frame budget.
 // Failed post-checks compensate only the new surface; rollback errors stay visible.
 import (
 	"context"
@@ -29,38 +30,57 @@ import (
 const ramFloorKB uint64 = 20 * 1024 * 1024
 const ramReserveKB uint64 = 512 * 1024
 
-func memAvailableKB() (uint64, error) {
-	data, err := os.ReadFile("/proc/meminfo")
-	if err != nil {
-		return 0, err
-	}
-	return parseMemAvailable(data)
+// Test seam: installed before tests run; production reads one /proc/meminfo
+// snapshot per check. There is no environment override for memory accounting.
+var admissionMemory = hostMemoryKB
+
+type ramMemory struct {
+	available uint64
+	total     uint64
 }
-func parseMemAvailable(data []byte) (uint64, error) {
-	var value uint64
-	found := false
+
+func hostMemoryKB() (ramMemory, error) { return readMemoryKB("/proc/meminfo") }
+
+func readMemoryKB(path string) (ramMemory, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ramMemory{}, err
+	}
+	return parseMemoryKB(data)
+}
+
+func parseMemoryKB(data []byte) (ramMemory, error) {
+	var memory ramMemory
+	found := map[string]bool{}
 	for _, line := range strings.Split(string(data), "\n") {
 		f := strings.Fields(line)
-		if len(f) == 0 || f[0] != "MemAvailable:" {
+		if len(f) == 0 || (f[0] != "MemAvailable:" && f[0] != "MemTotal:") {
 			continue
 		}
-		if found || len(f) != 3 || f[2] != "kB" {
-			return 0, fmt.Errorf("invalid MemAvailable")
+		if found[f[0]] || len(f) != 3 || f[2] != "kB" {
+			return ramMemory{}, fmt.Errorf("invalid %s", f[0])
 		}
 		n, err := strconv.ParseUint(f[1], 10, 64)
 		if err != nil {
-			return 0, err
+			return ramMemory{}, err
 		}
-		value, found = n, true
+		found[f[0]] = true
+		if f[0] == "MemTotal:" {
+			memory.total = n
+		} else {
+			memory.available = n
+		}
 	}
-	if !found {
-		return 0, fmt.Errorf("MemAvailable absent")
+	if !found["MemTotal:"] || !found["MemAvailable:"] || memory.total == 0 || memory.available > memory.total {
+		return ramMemory{}, fmt.Errorf("missing or inconsistent host memory")
 	}
-	return value, nil
+	return memory, nil
 }
-func checkRAM(read func() (uint64, error), live int) error {
-	available, err := read()
-	if err != nil || live < 0 || uint64(live) > (^uint64(0)-ramFloorKB)/ramReserveKB || available < ramFloorKB+ramReserveKB*uint64(live) {
+
+func checkRAM(read func() (ramMemory, error), live int) error {
+	memory, err := read()
+	floor := min(ramFloorKB, memory.total/4)
+	if err != nil || memory.total == 0 || memory.available > memory.total || live < 0 || uint64(live) > (^uint64(0)-floor)/ramReserveKB || memory.available < floor+ramReserveKB*uint64(live) {
 		return &cli.Fault{Code: "RAM_ADMISSION_REFUSED", Detail: "host MemAvailable below floor plus incumbent reserves, or unreadable"}
 	}
 	return nil
@@ -83,9 +103,9 @@ func validateProfileRoots(profiles map[string]capsule.Profile) error {
 	return nil
 }
 func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs map[string]*frames.Publisher, origin uint64, recorders ...*record.Manager) ipc.Handler {
-	return admittedHandler(m, wireHandlerWithoutAdmission(m, profiles, pubs, origin, recorders...), memAvailableKB)
+	return admittedHandler(m, wireHandlerWithoutAdmission(m, profiles, pubs, origin, recorders...), admissionMemory)
 }
-func admittedHandler(m *capsule.Manager, next ipc.Handler, read func() (uint64, error)) ipc.Handler {
+func admittedHandler(m *capsule.Manager, next ipc.Handler, read func() (ramMemory, error)) ipc.Handler {
 	var mu sync.Mutex
 	token := make([]byte, 16)
 	_, tokenErr := rand.Read(token)

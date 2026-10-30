@@ -100,7 +100,7 @@ func TestWireReceiptNativeEvidence(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer pub.Close()
-			handler := wireHandler(manager, profiles, map[string]*frames.Publisher{root: pub}, origin)
+			handler := isolatedWireHandler(t, manager, profiles, map[string]*frames.Publisher{root: pub}, origin)
 			request := func(op string, params any) []json.RawMessage {
 				t.Helper()
 				raw, _ := json.Marshal(map[string]any{"schema": "surface_request/v0.2", "op": op, "params": params})

@@ -104,7 +104,7 @@ func TestPostInputUnknownProfileRefusesWithoutPanic(t *testing.T) {
 	t.Cleanup(func() { _ = pub.Close() })
 
 	// Unknown profile in wireHandler profiles map: must refuse without nil-panicking.
-	unknownHandler := wireHandler(m, map[string]capsule.Profile{}, map[string]*frames.Publisher{root: pub}, origin)
+	unknownHandler := isolatedWireHandler(t, m, map[string]capsule.Profile{}, map[string]*frames.Publisher{root: pub}, origin)
 	inputEnv := ipc.Envelope{
 		MsgID: "msg-1",
 		Body:  json.RawMessage(`{"schema":"surface_request/v0.2","op":"input","params":{"surface_id":"` + surfaceID + `","proposal_id":"p-1","action":{"type":"click","x":0,"y":0,"button":"left"}}}`),
@@ -122,7 +122,7 @@ func TestPostInputUnknownProfileRefusesWithoutPanic(t *testing.T) {
 	}
 
 	// Negative control: with configured profile and publisher, post-input capture succeeds.
-	validHandler := wireHandler(m, managerProfiles, map[string]*frames.Publisher{root: pub}, origin)
+	validHandler := isolatedWireHandler(t, m, managerProfiles, map[string]*frames.Publisher{root: pub}, origin)
 	inputEnv2 := ipc.Envelope{
 		MsgID: "msg-2",
 		Body:  json.RawMessage(`{"schema":"surface_request/v0.2","op":"input","params":{"surface_id":"` + surfaceID + `","proposal_id":"p-2","action":{"type":"click","x":0,"y":0,"button":"left"}}}`),

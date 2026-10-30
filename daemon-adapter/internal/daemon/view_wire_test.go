@@ -102,7 +102,7 @@ else: sys.exit(2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	unconfHandler := wireHandler(unconfMgr, unconfProfiles, nil, 100)
+	unconfHandler := isolatedWireHandler(t, unconfMgr, unconfProfiles, nil, 100)
 	for _, op := range []string{"view", "login", "view-stop"} {
 		raw, _ := json.Marshal(map[string]any{"schema": "surface_request/v0.2", "op": op, "params": map[string]string{"surface_id": "srf-id-demo"}})
 		out, err := unconfHandler(context.Background(), ipc.Envelope{MsgID: "msg-unconf-" + op, Body: raw})

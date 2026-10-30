@@ -40,7 +40,7 @@ func TestDirectHandlersListSnapshots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, handler := range map[string]ipc.Handler{"configured": direct, "wire": wireHandler(m, profiles, nil, 100)} {
+	for name, handler := range map[string]ipc.Handler{"configured": direct, "wire": isolatedWireHandler(t, m, profiles, nil, 100)} {
 		t.Run(name, func(t *testing.T) {
 			for range 2 {
 				out, err := handler(ctx, ipc.Envelope{Body: json.RawMessage(`{"schema":"surface_request/v0.2","op":"list","params":{}}`)})

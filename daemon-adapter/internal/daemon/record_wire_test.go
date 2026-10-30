@@ -29,7 +29,7 @@ func TestUnconfiguredRecordWireRefusesWithoutEffects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := wireHandler(m, profiles, nil, 100)
+	h := isolatedWireHandler(t, m, profiles, nil, 100)
 	for _, op := range []string{"record_start", "record_stop"} {
 		raw, err := json.Marshal(map[string]any{"schema": "surface_request/v0.2", "op": op, "params": map[string]string{"surface_id": "surface", "recording_id": "recording"}})
 		if err != nil {
@@ -596,7 +596,7 @@ func TestRecordWirePeriodicPollLifecycleAndSurfaceDestroy(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = recMgr.Close() })
 
-	h := wireHandler(capMgr, profiles, map[string]*frames.Publisher{root: pub}, 100, recMgr)
+	h := isolatedWireHandler(t, capMgr, profiles, map[string]*frames.Publisher{root: pub}, 100, recMgr)
 
 	type tickerControl struct {
 		ch      chan time.Time
@@ -897,7 +897,7 @@ func TestRecordSchedulerConcurrentStartIdempotentAndFailedInitialPollReleasesRes
 
 	// 2. Failed initial Poll during ram_start must release the recording reservation
 	// so repeated failed ram_start calls do not exhaust the session memory budget.
-	h := wireHandler(capMgr, profiles, map[string]*frames.Publisher{root: pub}, 100, recMgr)
+	h := isolatedWireHandler(t, capMgr, profiles, map[string]*frames.Publisher{root: pub}, 100, recMgr)
 	ctx := context.Background()
 	createOut, err := h(ctx, ipc.Envelope{Body: json.RawMessage(`{"schema":"surface_request/v0.2","op":"create","params":{"kind":"browser","profile_id":"demo","geometry":{"w":2,"h":1}}}`)})
 	if err != nil || len(createOut) != 2 {

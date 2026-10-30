@@ -112,12 +112,12 @@ func newPair(t *testing.T) *pairFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.h = admittedHandler(m, wireHandlerWithoutAdmission(m, f.profiles, pubs, origin), func() (uint64, error) {
+	f.h = admittedHandler(m, wireHandlerWithoutAdmission(m, f.profiles, pubs, origin), func() (ramMemory, error) {
 		f.reads++
 		if f.afterStartLow && f.reads%2 == 0 {
-			return 0, nil
+			return ramMemory{total: 121 * 1024 * 1024}, nil
 		}
-		return f.available, f.readErr
+		return ramMemory{available: f.available, total: 121 * 1024 * 1024}, f.readErr
 	})
 	return f
 }
@@ -219,22 +219,54 @@ func TestMultiCapsuleH2(t *testing.T) {
 	}
 }
 func TestRAMAdmissionParserAndBoundary(t *testing.T) {
-	for _, raw := range []string{"", "MemFree: 999 kB", "MemAvailable: -1 kB", "MemAvailable: 2 MB", "MemAvailable: 3 kB\nMemAvailable: 4 kB", "MemAvailable: 18446744073709551616 kB"} {
-		if _, err := parseMemAvailable([]byte(raw)); err == nil {
+	for _, raw := range []string{
+		"", "MemFree: 999 kB", "MemTotal: 8 kB\nMemAvailable: -1 kB", "MemTotal: 8 kB\nMemAvailable: 2 MB",
+		"MemTotal: 8 kB\nMemAvailable: 3 kB\nMemAvailable: 4 kB", "MemTotal: 8 kB\nMemAvailable: 18446744073709551616 kB",
+		"MemTotal: 0 kB\nMemAvailable: 0 kB", "MemTotal: 4 kB\nMemAvailable: 5 kB",
+		"MemTotal: 8 kB\nMemTotal: 8 kB\nMemAvailable: 4 kB",
+		"MemTotal: -1 kB\nMemAvailable: 0 kB", "MemTotal: 8 MB\nMemAvailable: 0 kB",
+		"MemTotal: 18446744073709551616 kB\nMemAvailable: 0 kB",
+		"MemTotal: 8 kB", "MemAvailable: 0 kB",
+	} {
+		if _, err := parseMemoryKB([]byte(raw)); err == nil {
 			t.Fatalf("accepted %q", raw)
 		}
 	}
-	n, err := parseMemAvailable([]byte("MemFree: 0 kB\nMemAvailable: 0 kB\n"))
-	if err != nil || n != 0 {
-		t.Fatal(n, err)
+	memory, err := parseMemoryKB([]byte("MemTotal: 8 kB\nMemAvailable: 0 kB\n"))
+	if err != nil || memory.available != 0 {
+		t.Fatal(memory, err)
 	}
-	for _, live := range []int{0, 1, 2} {
-		n := ramFloorKB + ramReserveKB*uint64(live)
-		if checkRAM(func() (uint64, error) { return n, nil }, live) != nil {
-			t.Fatal("boundary refused")
-		}
-		if checkRAM(func() (uint64, error) { return n - 1, nil }, live) == nil {
-			t.Fatal("below boundary accepted")
+	for _, host := range []struct {
+		name         string
+		total, floor uint64
+	}{
+		{"large", 121 * 1024 * 1024, 20 * 1024 * 1024},
+		{"small", 16 * 1024 * 1024, 4 * 1024 * 1024},
+	} {
+		t.Run(host.name, func(t *testing.T) {
+			for _, live := range []int{0, 1, 2} {
+				n := host.floor + ramReserveKB*uint64(live)
+				path := filepath.Join(t.TempDir(), "meminfo")
+				read := func() (ramMemory, error) { return readMemoryKB(path) }
+				for _, available := range []uint64{n, n - 1} {
+					raw := fmt.Sprintf("MemTotal: %d kB\nMemAvailable: %d kB\n", host.total, available)
+					if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+						t.Fatal(err)
+					}
+					if err := checkRAM(read, live); (err == nil) != (available == n) {
+						t.Fatalf("boundary available=%d live=%d: %v", available, live, err)
+					}
+				}
+			}
+		})
+	}
+	missing := filepath.Join(t.TempDir(), "absent")
+	if checkRAM(func() (ramMemory, error) { return readMemoryKB(missing) }, 0) == nil {
+		t.Fatal("unreadable meminfo admitted")
+	}
+	for _, live := range []int{-1, int(^uint(0) >> 1)} {
+		if checkRAM(func() (ramMemory, error) { return ramMemory{total: ^uint64(0), available: ^uint64(0)}, nil }, live) == nil {
+			t.Fatal("invalid reservation count admitted")
 		}
 	}
 }
@@ -306,7 +338,9 @@ func bareAdmissionManager(t *testing.T, orphan bool) (*capsule.Manager, ipc.Hand
 		}
 		return events, nil
 	}
-	return m, admittedHandler(m, next, func() (uint64, error) { return ramFloorKB + ramReserveKB - 1, nil })
+	return m, admittedHandler(m, next, func() (ramMemory, error) {
+		return ramMemory{available: ramFloorKB + ramReserveKB - 1, total: 121 * 1024 * 1024}, nil
+	})
 }
 func admissionCreate(h ipc.Handler, profile string) []json.RawMessage {
 	body, _ := json.Marshal(map[string]any{"schema": "surface_request/v0.2", "op": "create", "params": map[string]any{"kind": "browser", "profile_id": profile, "geometry": map[string]int{"w": 2, "h": 1}}})

@@ -30,6 +30,8 @@ For headless UI smoke tests (`ui-smoke` leg in `tools/gate.sh`) and clean-instal
 
 Distribution-specific package manager commands (`apt`, `dnf`, `pacman`) for installing system packages are not documented yet.
 
+RAM admission serializes native creates across daemons and reserves 512 MiB per incumbent above a host `MemAvailable` floor of min(20 GiB, 25 percent of `MemTotal`) [TARGET, conductor decision; CITED: `daemon-adapter/internal/daemon/ram_admission.go`]. Reservations live in the uid-owned `0700` directory `$MV_RAM_ADMISSION_DIR`, or `$XDG_RUNTIME_DIR/metaviewer/ram-admission` when the override is unset; all daemons for the uid must share it. PID death alone never releases a reservation. Run `python3 tools/mv_ram_admission.py reclaim --dry-run` as the operator to print each proposed removal and its proof, then explicitly use `--apply` after review. The command holds the admission lock, checks owner death, and reads the local Docker inventory (including stopped containers); because reservation hashes cannot identify random native run IDs, any `srf-` container or unknown/remote inventory keeps the reservations [TARGET, unit decision]. Only proven global native absence permits removal of a valid stale record. Reclaim is never automatic; run it with the same Docker context and admission directory as the daemon. Offline tests use private admission directories and never reclaim host records.
+
 ## Identities
 
 Browser sessions are credentials: the operator logs in by hand inside the native
@@ -436,9 +438,10 @@ Before each native create and again after initial capture, RAM admission require
 capsules across daemon processes conservatively, including lost bindings and
 unbound quarantined profiles. A uid-owned `0700` admission directory is locked
 with `flock` throughout read/check/start/initial capture. Reservations are written
-before native start and released only after verified cleanup. The named floor defaults to
-20 GiB [CITED: campaign L1]; the reserve is 512 MiB per incumbent [TARGET, unit
-decision], matching the configured shared frame budget. Unreadable or malformed
+before native start and released only after verified cleanup. The floor is the smaller of
+20 GiB and 25 percent of host `MemTotal` [TARGET, conductor decision]; the reserve
+is 512 MiB per incumbent [TARGET, unit decision], matching the configured shared
+frame budget. Unreadable or malformed
 meminfo refuses with `RAM_ADMISSION_REFUSED`. A failed post-check removes only the
 new surface; sibling allocations are never reclaimed to make admission pass.
 
@@ -448,5 +451,8 @@ same canonical directory for daemons with private IPC runtime directories; live
 stacks preserve the parent runtime admission directory through this variable.
 All MetaViewer daemons of the uid must use the same admission directory.
 Records from crashed daemons remain counted: a dead PID does not prove that its
-native container is gone. Reclaim such records only after independently verifying
-native removal; automatic stale-record reclamation is deliberately conservative.
+native container is gone. Run `python3 tools/mv_ram_admission.py reclaim --dry-run` to inspect records,
+then explicitly choose `reclaim --apply` to remove verified stale records. The
+command requires both a dead owner PID and a read-only local Docker inventory
+proving all native `srf-*` containers absent (including stopped containers);
+present or unknown inventories keep reservations. Reclamation is never automatic.

@@ -55,7 +55,7 @@ func TestNVWireTakeoverDrains(t *testing.T) {
 	if _, err = m.Handle(context.Background(), request("release_control", surface)); err == nil {
 		t.Fatal("release without takeover")
 	}
-	h := wireHandler(m, nil, nil, 100)
+	h := isolatedWireHandler(t, m, nil, nil, 100)
 	done := make(chan error, 1)
 	go func() {
 		body, _ := json.Marshal(request("input", `{"surface_id":"`+id+`","proposal_id":"nv","action":{"type":"key","keys":["a"]}}`))

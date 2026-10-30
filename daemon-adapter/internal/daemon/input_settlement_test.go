@@ -86,7 +86,7 @@ func TestInputFailuresSettleWithProposal(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer pub.Close()
-			h := wireHandler(m, profiles, map[string]*frames.Publisher{root: pub}, 100)
+			h := isolatedWireHandler(t, m, profiles, map[string]*frames.Publisher{root: pub}, 100)
 			call := func(op string, params any) []json.RawMessage {
 				t.Helper()
 				body, _ := json.Marshal(map[string]any{"schema": "surface_request/v0.2", "op": op, "params": params})
@@ -201,7 +201,7 @@ func TestHumanOriginWireReceipts(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pub.Close()
-	h := wireHandler(m, profiles, map[string]*frames.Publisher{root: pub}, 100)
+	h := isolatedWireHandler(t, m, profiles, map[string]*frames.Publisher{root: pub}, 100)
 	call := func(op string, params any) []json.RawMessage {
 		t.Helper()
 		body, _ := json.Marshal(map[string]any{"schema": "surface_request/v0.2", "op": op, "params": params})
@@ -346,7 +346,7 @@ func TestHumanEmptyBaselineSettles(t *testing.T) {
 	}
 	sid := event.Data.Surface.SurfaceID
 
-	h := wireHandler(m, profiles, map[string]*frames.Publisher{root: pub}, 100)
+	h := isolatedWireHandler(t, m, profiles, map[string]*frames.Publisher{root: pub}, 100)
 	call := func(op string, params any) []json.RawMessage {
 		t.Helper()
 		body, _ := json.Marshal(map[string]any{"schema": "surface_request/v0.2", "op": op, "params": params})
@@ -433,7 +433,7 @@ func TestHumanEmptyBaselineSettles(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer hPub.Close()
-	hh := wireHandler(hm, hProfiles, map[string]*frames.Publisher{root: hPub}, 100)
+	hh := isolatedWireHandler(t, hm, hProfiles, map[string]*frames.Publisher{root: hPub}, 100)
 	hCall := func(op string, params any) []json.RawMessage {
 		t.Helper()
 		body, _ := json.Marshal(map[string]any{"schema": "surface_request/v0.2", "op": op, "params": params})
@@ -500,7 +500,7 @@ func TestHumanInputReceiptAttachesLatestPublishedFrameRef(t *testing.T) {
 	}
 	defer pub.Close()
 
-	h := wireHandler(m, profiles, map[string]*frames.Publisher{root: pub}, 100)
+	h := isolatedWireHandler(t, m, profiles, map[string]*frames.Publisher{root: pub}, 100)
 	call := func(op string, params any) []json.RawMessage {
 		t.Helper()
 		body, _ := json.Marshal(map[string]any{"schema": "surface_request/v0.2", "op": op, "params": params})

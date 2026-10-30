@@ -36,7 +36,7 @@ def run_sanitize_shell(func_body: str, raw_bytes: bytes) -> bytes:
 class TestT7R2CSanitizerSecrets(unittest.TestCase):
     def test_o2_ci_yml_all_blocks_redact_all_token_families_and_encodings(self):
         blocks = extract_sanitize_blocks("ci.yml")
-        self.assertEqual(len(blocks), 13)
+        self.assertEqual(len(blocks), 14)
         families = ("ghp_", "ghs_", "gho_", "ghu_", "ghr_", "github_pat_", "AKIA", "xoxb-", "MV0-SYNTHETIC-SENTINEL-")
         for idx, block in enumerate(blocks):
             for fam in families:
@@ -101,8 +101,8 @@ class TestT7R2CSanitizerSecrets(unittest.TestCase):
             self.assertIn(synthetic_token, leaked)
 
     def test_t7r3_005_double_encoded_hex_encoded_and_split_tokens_redacted_across_all_workflows(self):
-        """Regression test for T7R3-005: all 18 sanitize() blocks redact double-encoded, hex-encoded, and split tokens."""
-        expected_counts = {"ci.yml": 13, "volume.yml": 3, "package.yml": 1, "build-other.yml": 1}
+        """Regression test for T7R3-005: all 19 sanitize() blocks redact double-encoded, hex-encoded, and split tokens."""
+        expected_counts = {"ci.yml": 14, "volume.yml": 3, "package.yml": 1, "build-other.yml": 1}
         unique_blocks = set()
         for wf, exp_count in expected_counts.items():
             blocks = extract_sanitize_blocks(wf)
@@ -124,7 +124,7 @@ class TestT7R2CSanitizerSecrets(unittest.TestCase):
                         b"header: [REDACTED]\nplain line 42\n",
                         f"{wf} block {idx} failed to redact {raw_token!r}",
                     )
-        self.assertEqual(len(unique_blocks), 1, "All 18 sanitize() blocks across 4 workflows must be identical")
+        self.assertEqual(len(unique_blocks), 1, "All 19 sanitize() blocks across 4 workflows must be identical")
 
 
 if __name__ == "__main__":

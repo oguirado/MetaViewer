@@ -371,7 +371,7 @@ func TestT2R206DestroyRetryRecoversFailedRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pub.Close()
-	h := wireHandler(m, profiles, map[string]*frames.Publisher{root: pub}, 100)
+	h := isolatedWireHandler(t, m, profiles, map[string]*frames.Publisher{root: pub}, 100)
 	call := func(op string, params any) []json.RawMessage {
 		t.Helper()
 		raw, _ := json.Marshal(map[string]any{"schema": "surface_request/v0.2", "op": op, "params": params})
@@ -501,7 +501,7 @@ func TestT2R202StreamTakeoverCancelsBlockedInput(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pub.Close()
-	handler := wireHandler(m, profiles, map[string]*frames.Publisher{root: pub}, 100)
+	handler := isolatedWireHandler(t, m, profiles, map[string]*frames.Publisher{root: pub}, 100)
 
 	sockDir := t.TempDir()
 	if err := os.Chmod(sockDir, 0700); err != nil {
@@ -728,7 +728,7 @@ func TestStreamControlSequenceGateDrainingAndSessionErr(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pub.Close()
-	handler := wireHandler(m, profiles, map[string]*frames.Publisher{root: pub}, 100)
+	handler := isolatedWireHandler(t, m, profiles, map[string]*frames.Publisher{root: pub}, 100)
 
 	sockDir := t.TempDir()
 	if err := os.Chmod(sockDir, 0700); err != nil {

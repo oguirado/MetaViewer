@@ -204,7 +204,7 @@ func setupHoldingsWireFixture(t *testing.T) (string, *holdingsWireWitnessRunner,
 	}
 	t.Cleanup(func() { _ = pub.Close() })
 
-	h := wireHandler(m, profiles, map[string]*frames.Publisher{root: pub}, 100)
+	h := isolatedWireHandler(t, m, profiles, map[string]*frames.Publisher{root: pub}, 100)
 	createBody, _ := json.Marshal(map[string]any{
 		"schema": "surface_request/v0.2",
 		"op":     "create",
@@ -577,7 +577,7 @@ func TestHoldingsWireSuppressesObservationWhenPublishFailsOrSurfaceInactive(t *t
 		}
 		t.Cleanup(func() { _ = pub.Close() })
 
-		h := wireHandler(m, profiles, map[string]*frames.Publisher{root: pub}, 100)
+		h := isolatedWireHandler(t, m, profiles, map[string]*frames.Publisher{root: pub}, 100)
 		createBody, _ := json.Marshal(map[string]any{
 			"schema": "surface_request/v0.2",
 			"op":     "create",
@@ -713,7 +713,7 @@ func TestHoldingsWireSuppressesObservationWhenPublishFailsOrSurfaceInactive(t *t
 			t.Fatal(err)
 		}
 
-		h := wireHandler(m, profiles, map[string]*frames.Publisher{root: pub}, 100)
+		h := isolatedWireHandler(t, m, profiles, map[string]*frames.Publisher{root: pub}, 100)
 		createBody, _ := json.Marshal(map[string]any{
 			"schema": "surface_request/v0.2",
 			"op":     "create",
