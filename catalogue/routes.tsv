@@ -1245,6 +1245,7 @@ router_index.py	tools/router_index.py
 sync_kit.mjs	tools/sync_kit.mjs
 ui-README.md	ui/README.md
 authorityWire.js	ui/electron/authorityWire.js
+buttonBridge.js	ui/electron/buttonBridge.js
 bytePlane.js	ui/electron/bytePlane.js
 captureBridge.js	ui/electron/captureBridge.js
 coreLauncher.js	ui/electron/coreLauncher.js
@@ -1282,6 +1283,7 @@ hostAdapters.js	ui/src/core/hostAdapters.js
 intents.js	ui/src/core/intents.js
 projection.js	ui/src/core/projection.js
 CreativeCapsule.vue	ui/src/creative/CreativeCapsule.vue
+DemoDialog.vue	ui/src/demo/DemoDialog.vue
 metaviewer.css	ui/src/design/metaviewer.css
 metavie-41403f9e44a5	ui/src/design/metaviewer.tokens.json
 fixtureRuntime.js	ui/src/fixtures/fixtureRuntime.js
@@ -1638,6 +1640,8 @@ terminalFix3.test.mjs	ui/test/terminalFix3.test.mjs
 termina-2c7c56d01ffb	ui/test/terminalHarden.test.mjs
 termina-2f6caa9661e4	ui/test/terminalHardenWire.test.mjs
 tileScheduler.test.js	ui/test/tileScheduler.test.js
+uibutto-2f688ef06072	ui/test/ui-buttons-components.test.js
+ui-buttons.test.js	ui/test/ui-buttons.test.js
 uiidnet-249add1eb6e1	ui/test/ui-idnet-components.test.js
 ui-idnet-host.test.js	ui/test/ui-idnet-host.test.js
 uielfra-c6a2b4801769	ui/test/uiel-frame-fold.test.js
