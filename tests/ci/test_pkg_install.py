@@ -983,6 +983,10 @@ METAVIEWER_RUNTIME_MJS = textwrap.dedent(
       await stopAll();
       if (process.env.MV_PACKAGE_SMOKE === '1') {
         console.log('METAVIEWER_MAIN_SMOKE_OK');
+        // [TARGET, unit decision] Simulated packaged-app smoke contract only.
+        // Real renderer loading and MUT-RENDERER-FORBIDDEN are proved with
+        // Electron in ui/tools/test_package_clean_install.mjs.
+        console.log('METAVIEWER_RENDERER_READY');
       }
       process.exit(0);
     } catch (error) {
@@ -1110,14 +1114,14 @@ class PackagedInstallAndCapsuleBootTests(unittest.TestCase):
         )
 
     @classmethod
-    def _build_packaged_tarball(cls, dist_dir: Path) -> Path:
+    def _build_packaged_tarball(cls, dist_dir: Path, runtime_mjs: str = METAVIEWER_RUNTIME_MJS) -> Path:
         """Assemble a complete packaged MetaViewer-linux-<arch>.tar using ui/tools/package.js."""
         dist_dir.mkdir(parents=True, exist_ok=True)
         staged = dist_dir / cls.pkg_name
         (staged / "resources" / "bin").mkdir(parents=True, exist_ok=True)
 
         # Compile native ELF64 binaries for metaviewer, metaviewer-core, and mv-daemon-adapter.
-        _compile_elf_script_runner(cls.cc_bin, METAVIEWER_RUNTIME_MJS, staged / "metaviewer", include_fuses=True)
+        _compile_elf_script_runner(cls.cc_bin, runtime_mjs, staged / "metaviewer", include_fuses=True)
         _compile_elf_script_runner(cls.cc_bin, CORE_RUNTIME_MJS, staged / "resources" / "bin" / "metaviewer-core", include_fuses=False)
         _compile_elf_script_runner(cls.cc_bin, ADAPTER_RUNTIME_MJS, staged / "resources" / "bin" / "mv-daemon-adapter", include_fuses=False)
 
@@ -1334,6 +1338,25 @@ class PackagedInstallAndCapsuleBootTests(unittest.TestCase):
                     smoke_res,
                     {"marker": "METAVIEWER_MAIN_SMOKE_OK", "source_access": False, "negative_controls": "PASS"},
                 )
+
+    def test_u02n_simulation_without_renderer_marker_refuses_smoke(self) -> None:
+        """MUT-SIM-NO-RENDERER: a successful main-only simulation cannot pass packaged smoke."""
+        marker_line = "console.log('METAVIEWER_RENDERER_READY');"
+        self.assertEqual(METAVIEWER_RUNTIME_MJS.count(marker_line), 1)
+        mutant_runtime = METAVIEWER_RUNTIME_MJS.replace(marker_line, "")
+        with tempfile.TemporaryDirectory(prefix="mv-sim-no-renderer-") as tmp:
+            artifact = self._build_packaged_tarball(Path(tmp) / "dist", mutant_runtime)
+            smoke_proc = self._run_node_packaging(
+                f"""
+                import * as pkg from './ui/tools/package.js';
+                await pkg.cleanInstallSmoke({json.dumps(str(artifact))});
+                """
+            )
+            self.assertNotEqual(smoke_proc.returncode, 0, smoke_proc.stdout + smoke_proc.stderr)
+            self.assertIn("PKG_SMOKE_MARKER_MISSING", smoke_proc.stderr)
+            self.assertIn("METAVIEWER_MAIN_READY", smoke_proc.stderr)
+            self.assertIn("METAVIEWER_MAIN_SMOKE_OK", smoke_proc.stderr)
+            self.assertNotIn("METAVIEWER_RENDERER_READY", smoke_proc.stderr)
 
     def test_u02n_negative_controls_tampered_payload_refuses_before_hello(self) -> None:
         """E2E-U02n negative: tampered payload in scratch install or capsule refuses before authenticated hello."""
