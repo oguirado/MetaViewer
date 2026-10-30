@@ -579,3 +579,16 @@ and refusal of native network/input verbs; no live capsule or network is used.
 Run the agent suite with `python3 -m unittest tests.test_mw_run` from `agents`
 and the host suites with `python3 -m unittest discover -s tests -p "test_*entry*.py"`
 and `python3 -m unittest discover -s tests -p test_mw_run_backend.py`.
+
+DEMO-TO-MW uses hosted `unittest` fakes only: run
+`python3 -m unittest discover -s tests -p test_mv_demo.py`. Mutation controls
+cover fixed argv and shared network refusal before spawn, raw text rejection,
+evidence digest tampering, prompt template paths, and invalid-site refusal.
+`MV_MEMORYWEB_REPO` selects an existing offline MemoryWeb authoring checkout;
+validation builds and checks a disposable copy after the complete home gate.
+No test opens a capsule, records operator input, or performs network access.
+The argv refusal cases use a complete recording context and assert no identity
+lookup, network guard, or subprocess call; a valid-id control reaches the guard
+and the exact fixed viewer argv. Prompt/check ids, interpreter selection and
+interrupted-check JSON refusal are covered too. The operator stops recording;
+the host wait has no deadline by design.
