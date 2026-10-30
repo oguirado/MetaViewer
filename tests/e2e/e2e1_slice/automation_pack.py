@@ -19,6 +19,8 @@ from check_contracts import Validator, ValidationError, loads_strict
 
 SCHEMA_PATH = ROOT / 'tests/e2e/packs/automation.schema.json'
 BUILTINS = ROOT / 'tests/e2e/packs/builtin-fixtures'
+# [TARGET, unit decision] Release tasks stay fixed; reviewed additions are opt-in.
+DEFAULT_PACK_NAMES = ('T1', 'T2', 'T3')
 JSON_CAP = 64 * 1024
 PAGE_CAP = 1024 * 1024
 TOTAL_CAP = 8 * PAGE_CAP
@@ -261,7 +263,7 @@ class Pack:
 def load_packs(explicit=(), automations_dir=None):
     """Explicit packs replace built-ins; environment subdirectories append to either."""
     try:
-        directories = list(explicit) or sorted(p for p in BUILTINS.iterdir() if p.is_dir())
+        directories = list(explicit) or [BUILTINS / name for name in DEFAULT_PACK_NAMES]
         if automations_dir:
             root = Path(automations_dir).resolve(strict=True)
             for child in sorted(root.iterdir()):

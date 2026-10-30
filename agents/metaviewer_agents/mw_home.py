@@ -200,3 +200,28 @@ def check_home(path, is_tracked):
         raise HomeError("MW_HOME_SYMLINK" if error.errno == errno.ELOOP
                         else "MW_HOME_MODE") from error
     return path
+
+
+# [TARGET, unit decision] Select an entire site, never merge workflow files.
+# Built-ins are a read-only source; callers never install them into the home.
+def site_root(home, site, repo_root=None):
+    if not isinstance(site, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", site):
+        raise HomeError("MW_SITE_ID")
+    home = Path(home).absolute()
+    candidate = home / "sites" / site
+    for part in (candidate, *candidate.parents):
+        if part.is_symlink():
+            raise HomeError("MW_HOME_SYMLINK")
+    if candidate.exists():
+        if not candidate.is_dir():
+            raise HomeError("MW_SITE_PATH")
+        return home
+    repo = Path(repo_root) if repo_root is not None else Path(__file__).resolve().parents[2]
+    builtin = repo / "memoryweb-builtin"
+    candidate = builtin / "sites" / site
+    for part in (candidate, *candidate.parents):
+        if part.is_symlink():
+            raise HomeError("MW_HOME_SYMLINK")
+    if not candidate.is_dir():
+        raise HomeError("MW_SITE_MISSING")
+    return builtin

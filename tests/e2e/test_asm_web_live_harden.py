@@ -220,7 +220,7 @@ class HardenTests(unittest.TestCase):
                         '<iframe src="/outside"></iframe>', '<form action="/leak">',
                         '<style>body{background:url(/leak)}</style>']:
             (self.root / 'form.html').write_text(original + payload)
-            with patch.object(web, 'PAGES', self.root):
+            with patch.dict(web.FIXTURE_ROOTS, {'form': self.root}):
                 with self.assertRaises(web.Failure):
                     web.fixture('form')
         for page in web.FIXTURE_PINS:

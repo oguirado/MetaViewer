@@ -1,0 +1,22 @@
+{
+  "schema": "metaviewer.automation/v1",
+  "name": "META",
+  "version": "1.0.0",
+  "mode": "offline",
+  "start": "meta-chat",
+  "steps": [
+    "read:EMPTY",
+    "click:Prompt",
+    "type:Offline question",
+    "key:Return",
+    "read:ANSWER_READY"
+  ],
+  "budget": 8,
+  "expect": [
+    "EMPTY",
+    "ANSWER_READY"
+  ],
+  "fixtures": {
+    "meta-chat": "4a62bd7feb3bb003061dc161b9c27665db0b7856b36d99a47329feb3935dfdd2"
+  }
+}

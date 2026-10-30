@@ -271,6 +271,28 @@ test('built-in packs reproduce T1-T3 through hosted RPC', async () => {
   }
 });
 
+test('MUT-DEFAULT-PACKS: discovery stays exactly T1-T3 with META available only explicitly', () => {
+  const result = spawnSync(process.env.PYTHON || 'python3', ['-c', `
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(sys.argv[1]).parent))
+from automation_pack import BUILTINS, load_packs
+assert [p.document['name'] for p in load_packs()] == ['T1', 'T2', 'T3']
+assert [p.document['budget'] for p in load_packs()] == [8, 12, 0]
+assert [p.document['name'] for p in load_packs([BUILTINS / 'META'])] == ['META']
+# Negative contrast: indiscriminate directory discovery must violate the default.
+assert [p.document['name'] for p in load_packs(sorted(BUILTINS.iterdir()))] != ['T1', 'T2', 'T3']
+`, runner], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('explicit META pack replays MemoryWeb through hosted RPC using its own pinned page', () => {
+  const result = spawnSync(process.execPath, [path.join(builtins, 'META', 'hosted.mjs')],
+    { encoding: 'utf8', timeout: 90000 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).status, 'PASS');
+});
+
 function editHTML(dir, change) {
   const page = path.join(dir, 'pages/form.html');
   const html = change(fs.readFileSync(page, 'utf8'));

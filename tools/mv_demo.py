@@ -264,7 +264,8 @@ def prompt(demo, site):
 def check(site):
     identifier(site, SITE)
     home = admitted_home()
-    source = private_tree(home / 'sites' / site)
+    from metaviewer_agents.mw_home import site_root
+    source = private_tree(site_root(home, site) / 'sites' / site)
     need(source.is_dir(), 'SITE_MISSING')
     checkout = authoring_checkout()
     with tempfile.TemporaryDirectory(prefix='mv-demo-check-') as temp:

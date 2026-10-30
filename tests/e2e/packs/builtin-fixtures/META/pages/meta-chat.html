@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>Offline conversation fixture</title>
+<style>
+body { background: #f4f1e9; color: #182d31; font: 16px sans-serif; }
+main { width: 592px; margin: 24px; }
+input { position: absolute; left: 24px; top: 96px; width: 320px; height: 40px; }
+button { position: absolute; left: 360px; top: 96px; width: 160px; height: 40px; }
+output { position: absolute; left: 24px; top: 164px; width: 496px; height: 64px; }
+</style></head><body><main>
+<h1>Local conversation</h1><label for="name-input">Prompt</label>
+<form id="chat-form" action="javascript:void(0)">
+<input id="name-input" type="text" value="" tabindex="1" autocomplete="off" aria-label="Prompt" data-role="textbox" data-bbox="24,96,320,40">
+<button id="submit-btn" type="submit" tabindex="2" aria-label="Send" data-role="button" data-bbox="360,96,160,40">Send</button>
+</form>
+<output id="result-text" aria-live="polite" data-role="status" data-bbox="24,164,496,64">EMPTY</output>
+</main><script>
+(function () {
+  var input = document.getElementById('name-input');
+  var output = document.getElementById('result-text');
+  document.getElementById('chat-form').addEventListener('submit', function (event) {
+    event.preventDefault();
+    output.textContent = input.value.length ? 'ANSWER_READY' : 'EMPTY';
+  });
+})();
+</script></body></html>

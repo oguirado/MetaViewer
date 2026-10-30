@@ -30,7 +30,6 @@ from urllib.parse import quote
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[3]
-PAGES = ROOT / 'tests/e2e/asm_web_pages'
 # OpenSuperficies src/browserid/inject/inject.go rejects type input above 2000 runes.
 TYPE_TEXT_CAP = 2000
 REQUIRED_ENV = ('MV_E2E_CORE_BIN', 'MV_E2E_ADAPTER_BIN', 'MV_E2E_REPLAY_BIN',
@@ -74,6 +73,8 @@ from automation_pack import BUILTINS, load_packs
 # from the same built-in documents; execution uses each admitted pack snapshot.
 FIXTURE_PINS = {page: pin for path in sorted(BUILTINS.glob('*/automation.json'))
                 for page, pin in json.loads(path.read_text())['fixtures'].items()}
+FIXTURE_ROOTS = {page: path.parent / 'pages' for path in sorted(BUILTINS.glob('*/automation.json'))
+                 for page in json.loads(path.read_text())['fixtures']}
 
 
 def fixture(page, pack=None):
@@ -81,7 +82,7 @@ def fixture(page, pack=None):
         require(page in pack.pages, 'fixture not pinned', 'E2E_PACK_PIN')
         return pack.pages[page]
     require(page in FIXTURE_PINS, 'fixture not allowlisted')
-    raw = (PAGES / (page + '.html')).read_bytes()
+    raw = (FIXTURE_ROOTS[page] / (page + '.html')).read_bytes()
     require(hashlib.sha256(raw).hexdigest() == FIXTURE_PINS[page], 'fixture bytes not allowlisted')
     html = raw.decode('utf-8')
     require("default-src 'none'" in html, 'fixture CSP missing')
@@ -491,8 +492,14 @@ class LiveBackend:
         # capsule network-state query (OpenSuperficies a9ac1ac8,
         # cmd/srf-identity-surface/main.go:137-149, 174-185). Operator policy
         # is not exported by that CLI. Never infer native isolation from CSP.
-        for page in FIXTURE_PINS:
-            fixture(page)
+        packs = getattr(self, 'packs', None)
+        if packs is None:
+            for page in FIXTURE_PINS:
+                fixture(page)
+        else:
+            for pack in packs:
+                for page in pack.pages:
+                    fixture(page, pack)
         return dict(fixtures_offline=True, scope='pinned fixtures and local data/blob URLs',
                     network='not altered (read-only check unavailable at pin)')
 
@@ -835,7 +842,7 @@ def run_memoryweb(backend, report, corpus):
         require(report['ownership'].get('profile') == 'mv-live-1' and
                 len(report['ownership'].get('capsules', [])) == 1, 'one owned capsule required')
         owner.check_network()
-        report['fixture_setup'] = backend.call('navigate', page=page, url=page_url(page),
+        report['fixture_setup'] = backend.call('navigate', page=page, url=page_url(page, starts[0]),
                                                marker=starts[0].marker)
         result = owner.run()
         summary_schema_validated = False
@@ -899,7 +906,6 @@ def main():
                 '--mw-root and --mw-workflow are required together', 'MW_SELECTOR')
         corpus = None
         if options.mw_root:
-            require(not options.pack, '--pack cannot be combined with MemoryWeb', 'MW_SELECTOR')
             sys.path.insert(0, str(ROOT / 'agents'))
             from metaviewer_agents.mw_owner import Corpus
             corpus = Corpus(options.mw_root, options.mw_workflow)

@@ -33,7 +33,7 @@ def module(name, path):
 live = module('mv_entry_live', ROOT / 'tests/e2e/e2e1_slice/live.py')
 from metaviewer_agents import tools
 from metaviewer_agents.client import ClientError, ToolClient
-from metaviewer_agents.mw_home import HomeError, canonical_home, check_home, resolve_home
+from metaviewer_agents.mw_home import HomeError, canonical_home, check_home, resolve_home, site_root
 from metaviewer_agents.mw_owner import Corpus, OwnerRefused, ReplayOwner, bounded_read, need
 from metaviewer_agents.verify import build_proposal
 
@@ -306,7 +306,7 @@ def slots(values):
 
 
 def execute(args, home, evidence, backend, *, corpus_factory=Corpus, owner_factory=ReplayOwner):
-    corpus = corpus_factory(home, args.site + '/' + args.workflow)
+    corpus = corpus_factory(site_root(home, args.site), args.site + '/' + args.workflow)
     network = backend.call('network_context')['mode']
     output = evidence / 'memoryweb-run.json'
     owner = owner_factory(backend, corpus, output, mode='site',
