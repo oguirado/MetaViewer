@@ -919,6 +919,7 @@ deps.lock	deps.lock
 ADAPTER-f520074e84c0	docs/ADAPTER_INPUT_LIMITS.md
 AGENT_ENTRY.md	docs/AGENT_ENTRY.md
 ARCHITECTURE.md	docs/ARCHITECTURE.md
+AUTOMATE_FROM_DEMO.md	docs/AUTOMATE_FROM_DEMO.md
 COMMIT_LAWS.md	docs/COMMIT_LAWS.md
 DEMO_AGENT_SCRIPT.md	docs/DEMO_AGENT_SCRIPT.md
 DEMOREC-37656a7d648c	docs/DEMO_RECURSIVE_SCRIPT.md
@@ -1210,6 +1211,7 @@ test_kit_source.py	tests/test_kit_source.py
 testlay-30db08e8ee29	tests/test_layout_intents.py
 test_live_teardown.py	tests/test_live_teardown.py
 test_multi_capsule.py	tests/test_multi_capsule.py
+test_mv_demo.py	tests/test_mv_demo.py
 test_mv_identity.py	tests/test_mv_identity.py
 testmvr-a9d3d841457c	tests/test_mv_ram_admission.py
 test_mw_home_cli.py	tests/test_mw_home_cli.py
@@ -1234,6 +1236,7 @@ check_laws.py	tools/check_laws.py
 check_theme.py	tools/check_theme.py
 tools-gate.sh	tools/gate.sh
 gate_g_ai.py	tools/gate_g_ai.py
+mv_demo.py	tools/mv_demo.py
 mv_identity.py	tools/mv_identity.py
 mv_ram_admission.py	tools/mv_ram_admission.py
 mw_home_check.py	tools/mw_home_check.py
