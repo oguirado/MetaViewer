@@ -1,6 +1,9 @@
 <script setup>
 /** The optional runtime supplies authoritative rows and the tile scheduler.
  * Canvas status reads successful presentation witnesses; bytes stay external.
+ * [TARGET, unit decision] The entry supplies a runtime only with an authority
+ * subscription. Its presence distinguishes waiting for frames from no runtime;
+ * it does not attest transport health or adapter availability.
  */
 import { computed, defineComponent, h, inject, markRaw, onBeforeUnmount, onMounted, provide, ref, shallowRef, watch } from 'vue';
 import DemoDialog from './demo/DemoDialog.vue';
@@ -30,7 +33,9 @@ import { createTileScheduler } from './surfaces/tileScheduler.js';
 /** @typedef {{readRaw:()=>Promise<string|null>,writeAtomic:(json:string)=>Promise<void>}} LayoutStorage */
 const identitiesOpen = ref(false);
 const demoOpen=ref(false), entryMessage=ref('');
-async function copyEntry(){try{const result=await (/** @type {any} */(globalThis).metaviewer?.operator)?.entry.copy();entryMessage.value=result?.ok?'Copied':'Copy unavailable';}catch{entryMessage.value='Copy unavailable';}}
+let entryTimer=/** @type {ReturnType<typeof setTimeout>|undefined} */(undefined);
+onBeforeUnmount(()=>clearTimeout(entryTimer));
+async function copyEntry(){clearTimeout(entryTimer);entryMessage.value='';try{const result=await (/** @type {any} */(globalThis).metaviewer?.operator)?.entry.copy();entryMessage.value=result?.ok?'Copied':'Copy unavailable';}catch{entryMessage.value='Copy unavailable';}entryTimer=setTimeout(()=>{entryMessage.value='';},2000);}
 const props = defineProps({
   authorityHost: { type: /** @type {import('vue').PropType<ReturnType<typeof import('./core/hostAdapters.js').createAuthorityAdapter>|null>} */ (Object), default: null },
   terminalBroker: { type: /** @type {import('vue').PropType<ReturnType<typeof import('./core/hostAdapters.js').createTerminalBroker>>} */ (Object), default: null },
@@ -755,8 +760,8 @@ const chromeWorkspace = markRaw(defineComponent({
     <TopBar v-if="!nestedMode.displayOnly" product="MetaViewer" new-label="Add capsule" search-placeholder="Find a capsule…" :nav-expanded="railOpen"
       :palette-items="catalog" @toggle-nav="railOpen = !railOpen" @new-capsule="launcherOpen = true" @open="openCapsule">
       <template #actions>
-        <UiButton id="shell-use-metaviewer" data-semantic-anchor="entry/copy" label="Use MetaViewer" @click="copyEntry" />
-        <span role="status" aria-live="polite">{{ entryMessage }}</span>
+        <span class="mv-entry-copy"><UiButton id="shell-use-metaviewer" data-semantic-anchor="entry/copy" label="Use MetaViewer" @click="copyEntry" />
+        <span class="mv-entry-feedback" role="status" aria-live="polite" aria-atomic="true">{{ entryMessage }}</span></span>
         <UiButton id="shell-automate-demo" data-semantic-anchor="demo/open" label="Automate from a demo" :aria-expanded="demoOpen" @click="demoOpen=true" />
         <UiButton id="shell-identities" data-semantic-anchor="identities/open" label="Identities" :aria-expanded="identitiesOpen" @click="identitiesOpen = true" />
         <UiButton id="shell-creative" data-semantic-anchor="creative/open" label="Storyboard" :aria-expanded="creativeOpen" :disabled="!selectedSurface" @click="toggleCreative" />
@@ -820,7 +825,7 @@ const chromeWorkspace = markRaw(defineComponent({
     <!-- L2-7: strong tone keeps the wall crumb at AA on the sunken bar in
       mv-light and mv-dark; the kit accent default measures 4.35:1 rendered. -->
     <StatusBar v-if="!nestedMode.displayOnly" :crumbs="[{ id: 'wall', label: 'Main wall', tone: 'strong' }]" :shortcuts="[]">
-      <template #telemetry><span id="shell-feed-status" class="mv-feed-status" role="status"><i aria-hidden="true"></i>{{ snapshot?.envelope ? 'Core connected' : 'Core not connected' }}</span></template>
+      <template #telemetry><span id="shell-feed-status" class="mv-feed-status" role="status"><i aria-hidden="true"></i>{{ snapshot?.envelope ? 'Core connected' : props.runtime ? 'Waiting for capsule frames' : 'Core not connected' }}</span></template>
       <template #shortcuts><span class="mv-shell-caption">{{ rows.length ? `${rows.length} capsules` : 'Ready when you are' }}</span></template>
     </StatusBar>
     <div class="mv-terminal" :hidden="!terminalOpen || nestedMode.displayOnly || multislotOpen">
@@ -878,4 +883,14 @@ body { font-family:var(--cuk-semantic-typography-font-family-sans, system-ui, sa
 .mv-shell--nested > .mv-shell-body { grid-row:1; }
 .mv-nested-wall { display:grid; height:100%; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); }
 .mv-nested-wall article { min-width:0; min-height:0; }
+</style>
+
+<style scoped>
+.mv-entry-copy { position: relative; display: inline-flex; }
+.mv-entry-feedback {
+  position: absolute; top: 100%; left: 0; white-space: nowrap;
+  background: var(--cuk-semantic-surface-elevated);
+  color: var(--cuk-semantic-text-primary);
+  z-index: var(--cuk-component-dialog-host-z-index);
+}
 </style>

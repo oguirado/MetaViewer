@@ -60,3 +60,18 @@ for(const pending of [false,true])test(`Demo dialog unmount stops ${pending?'pen
   if(pending)announce({ok:true,url:'http://localhost:1234/'});
   await tick();assert.deepEqual(calls,['stop']);
 });
+
+test('demo first impression distinguishes empty identities from tool failure and labels both inputs',async t=>{
+  for(const result of [{ok:true,rows:[]},{ok:false,code:'IDENTITY_UNAVAILABLE'}]){
+    const view=mount(await component('demo/DemoDialog.vue'),{open:true,host:{identity:{list:async()=>result}}});
+    try{
+      await tick();
+      for(const label of ['Demo id','Site'])assert.ok(nodes(view.root).some(n=>n.tag==='label'&&text(n).startsWith(label)));
+      assert.match(text(view.root),result.ok?/No identities yet: create one in Identities first/:/The identity tool could not run: IDENTITY_UNAVAILABLE/);
+      assert.doesNotMatch(text(view.root),/Identities unavailable\./);
+    }finally{view.close();}
+  }
+  const source=readFileSync(new URL('../src/demo/DemoDialog.vue',import.meta.url),'utf8');
+  for(const example of ['pplx-ask-1','perplexity'])assert.ok(source.includes(`placeholder="${example}"`));
+  assert.match(source,/:deep\(#demo-dialog-back\)\s*\{\s*display: none;/,'duplicate kit back action is hidden from layout and accessibility');
+});

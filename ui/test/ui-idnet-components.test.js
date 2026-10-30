@@ -76,3 +76,25 @@ test('handoff model never removes a row on absent snapshots or transport failure
   model.receive({ok:true,rows:[row]});model.receive({ok:true,rows:[]});model.receive({ok:false});
   await assert.rejects(model.load());await assert.rejects(model.acknowledge(row));assert.equal(model.rows().length,1);
 });
+
+test('identity first impression labels, placeholders, grammar and typed tool failure',async t=>{
+  let creates=0;
+  const host={identity:{list:async()=>({ok:false,code:'IDENTITY_UNAVAILABLE'}),create:async()=>{creates++;return {ok:true};}}};
+  const view=mount(await component('identities/IdentitiesDialog.vue'),{open:true,host});t.after(view.close);await tick();
+  for(const label of ['Identity id','Label','Domains (comma separated)'])assert.ok(nodes(view.root).some(n=>n.tag==='label'&&text(n).startsWith(label)));
+  const source=readFileSync(new URL('../src/identities/IdentitiesDialog.vue',import.meta.url),'utf8');
+  for(const example of ['perplexity-main','Perplexity main','perplexity.ai'])assert.ok(source.includes(`placeholder="${example}"`));
+  assert.match(text(view.root),/The identity tool could not run: IDENTITY_UNAVAILABLE/);
+  assert.match(text(view.root),/2–40 chars: a–z\/0–9 first/);
+  const field=label=>nodes(view.root).find(n=>n.props?.['aria-label']===label);
+  for(const [label,value] of [['Account label','Account'],['Domains (comma separated)','example.com']])field(label).props.onInput({target:{value}});
+  for(const id of ['', 'a','Bad-id','-account','aa bb','a'.repeat(41)]){
+    field('Identity id').props.onInput({target:{value:id}});await tick();
+    const create=nodes(view.root).find(n=>n.tag==='button'&&n.text==='Create identity');
+    assert.equal(create.props.disabled,true,id);create.props.onClick();await tick();assert.equal(creates,0);
+  }
+  for(const id of ['aa','perplexity-main','1-account','a'.repeat(40)]){
+    field('Identity id').props.onInput({target:{value:id}});await tick();
+    assert.equal(nodes(view.root).find(n=>n.tag==='button'&&n.text==='Create identity').props.disabled,false,id);
+  }
+});

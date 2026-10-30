@@ -26,7 +26,7 @@ function storageFor(facade) {
   });
 }
 const tick = async () => { await new Promise(resolve => setImmediate(resolve)); await vue.nextTick(); };
-async function mountApp(storage, scheme = 'mv-light', displayOnly = false) {
+async function mountApp(storage, scheme = 'mv-light', displayOnly = false, runtime) {
   const oldWindow = globalThis.window, oldDocument = globalThis.document;
   globalThis.window = { addEventListener() {}, removeEventListener() {} };
   globalThis.document = { documentElement: { dataset: {} }, getElementById: () => null };
@@ -59,7 +59,7 @@ async function mountApp(storage, scheme = 'mv-light', displayOnly = false) {
     const fixture = resolveFixture('one').fixture;
     const layout = createWallLayout(SCOPE, [...fixture.capsules]);
     const view = mount(App, { fixture: { ...fixture, scheme }, layout, scope: SCOPE, storage,
-      runtime: createFixtureRuntime(fixture).mount.runtime,
+      runtime: runtime ?? createFixtureRuntime(fixture).mount.runtime,
       nestedHost: { getNestedDepth: () => displayOnly ? 1 : 0, getSelfCapsuleId: () => null } });
     await captured.ready; await tick();
     return { ...captured, view, layout, close() { view.close(); globalThis.window = oldWindow; globalThis.document = oldDocument; } };
@@ -262,4 +262,36 @@ for (const displayOnly of [false, true]) test(`notice grid mode renders correctl
     assert.match(declarationsFor(styles, displayOnly ? '.mv-shell--nested' : '.mv-shell'),
       displayOnly ? /grid-template-rows:minmax\(0,1fr\)/ : /grid-template-rows:var\(--cuk-component-app-shell-topbar-height\) auto minmax\(0,1fr\)/);
   } finally { app.close(); }
+});
+
+test('entry copy feedback expires, restarts on repeat, and unmount cancels its timer',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const previous=globalThis.metaviewer;
+  globalThis.metaviewer={operator:{entry:{copy:async()=>({ok:true})}}};
+  const app=await mountApp({readRaw:async()=>null,writeAtomic:async()=>{}});
+  try{
+    const click=async()=>{byId(app.view.root,'shell-use-metaviewer').props.onClick();await tick();};
+    await click();
+    const feedback=()=>nodes(app.view.root).find(n=>n.props?.class==='mv-entry-feedback');
+    assert.equal(text(feedback()),'Copied');assert.equal(feedback().props.role,'status');assert.equal(feedback().props['aria-live'],'polite');
+    t.mock.timers.tick(1500);await tick();assert.equal(text(feedback()),'Copied');
+    await click();t.mock.timers.tick(1000);await tick();assert.equal(text(feedback()),'Copied');
+    t.mock.timers.tick(1000);await tick();assert.equal(text(feedback()),'');
+    await click();
+    const {descriptor}=parse(appSource);
+    assert.ok(descriptor.styles.some(s=>/\.mv-entry-feedback\s*\{[^}]*position:\s*absolute/s.test(s.content)),'feedback cannot reflow top-bar actions');
+  }finally{app.close();globalThis.metaviewer=previous;}
+  t.mock.timers.tick(2000);
+});
+
+test('empty frame projection with an authority runtime waits for capsule frames',async()=>{
+  const runtime=adapters.createAuthorityRuntime({subscribeFrames:()=>()=>{}});
+  assert.ok(runtime);
+  const app=await mountApp({readRaw:async()=>null,writeAtomic:async()=>{}},'mv-light',false,runtime);
+  try{
+    const status=text(byId(app.view.root,'shell-feed-status'));
+    assert.match(status,/Waiting for capsule frames/);
+    assert.doesNotMatch(status,/Core not connected/);
+    assert.doesNotMatch(status,/Core connected/);
+  }finally{app.close();runtime.dispose();}
 });
