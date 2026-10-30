@@ -64,7 +64,7 @@ test('closed panel sets match the ratified enums and are frozen', () => {
     ['STALE_FRAME', 'SURFACE_NOT_AGENT_CONTROLLED', 'LOCKED_BY_OTHER', 'BUDGET_EXCEEDED',
       'OUT_OF_BOUNDS', 'POLICY']);
   assert.deepEqual(pureModule.PANEL_ACTIONS,
-    ['fold', 'pin', 'control', 'close', 'popout', 'dock-back']);
+    ['fold', 'pin', 'control', 'close', 'popout', 'dock-back', 'network']);
   for (const set of [pureModule.BACKEND_LIFECYCLES, pureModule.UI_REQUEST_PHASES,
     pureModule.AI_SESSION_ACTIVITIES, pureModule.ATTACHMENT_STATES,
     pureModule.DISPATCH_OUTCOMES, pureModule.REFUSAL_CODES, pureModule.PANEL_ACTIONS]) {
@@ -148,7 +148,7 @@ test('surface host stays visible except for terminal destroyed state', () => {
 
 test('semantic anchors use the exact capsule id action template', () => {
   const { buildSemanticAnchor } = pureModule;
-  for (const action of ['fold', 'pin', 'control', 'close', 'popout', 'dock-back']) {
+  for (const action of ['fold', 'pin', 'control', 'close', 'popout', 'dock-back', 'network']) {
     assert.equal(buildSemanticAnchor('a1', action), `capsule/a1/${action}`);
   }
   for (const badId of ['', '   ', 'a 1', ' a1', 'a1 ', '42', 42, null, undefined, {}]) {

@@ -3,6 +3,8 @@
  * Canvas status reads successful presentation witnesses; bytes stay external.
  */
 import { computed, defineComponent, h, inject, markRaw, onBeforeUnmount, onMounted, provide, ref, shallowRef, watch } from 'vue';
+import IdentitiesDialog from './identities/IdentitiesDialog.vue';
+import HandoffNotice from './handoff/HandoffNotice.vue';
 import CreativeCapsule from './creative/CreativeCapsule.vue';
 import HostOutcome from './core/HostOutcome.vue';
 import DockWorkspace from 'capsule-ui-kit/DockWorkspace';
@@ -25,6 +27,7 @@ import { createTileScheduler } from './surfaces/tileScheduler.js';
 /** @typedef {import('capsule-ui-kit/layout').LayoutProfileScope} LayoutScope */
 /** @typedef {Pick<InstanceType<typeof WallWorkspace>['$props'], 'projectionView'|'intentBuilders'|'controlRegistry'|'scheduler'|'tileScheduler'>} WallRuntime */
 /** @typedef {{readRaw:()=>Promise<string|null>,writeAtomic:(json:string)=>Promise<void>}} LayoutStorage */
+const identitiesOpen = ref(false);
 const props = defineProps({
   authorityHost: { type: /** @type {import('vue').PropType<ReturnType<typeof import('./core/hostAdapters.js').createAuthorityAdapter>|null>} */ (Object), default: null },
   terminalBroker: { type: /** @type {import('vue').PropType<ReturnType<typeof import('./core/hostAdapters.js').createTerminalBroker>>} */ (Object), default: null },
@@ -157,6 +160,11 @@ const selectedFolded = computed(() => selectedSurface.value
 const selectedSurface = computed(() => rows.value.find(row => row.id === selectedCapsuleId.value) ?? rows.value[0] ?? null);
 /** Renderer intents remain events until a host supplies an authoritative dispatcher. */
 const emit = defineEmits(['submit-intent', 'create-capsule']);
+/** @param {string} surfaceId */
+function takeHandoffControl(surfaceId) {
+  const builders=props.runtime?.intentBuilders;
+  if(builders)dispatch(builders.control({capsuleId:surfaceId,verb:'take_control'}));
+}
 /** @param {unknown} intent */
 function dispatch(intent) {
   if (nestedMode.displayOnly) return;
@@ -744,6 +752,7 @@ const chromeWorkspace = markRaw(defineComponent({
     <TopBar v-if="!nestedMode.displayOnly" product="MetaViewer" new-label="Add capsule" search-placeholder="Find a capsule…" :nav-expanded="railOpen"
       :palette-items="catalog" @toggle-nav="railOpen = !railOpen" @new-capsule="launcherOpen = true" @open="openCapsule">
       <template #actions>
+        <UiButton id="shell-identities" data-semantic-anchor="identities/open" label="Identities" :aria-expanded="identitiesOpen" @click="identitiesOpen = true" />
         <UiButton id="shell-creative" data-semantic-anchor="creative/open" label="Storyboard" :aria-expanded="creativeOpen" :disabled="!selectedSurface" @click="toggleCreative" />
         <UiButton id="shell-settings" data-semantic-anchor="settings/open" label="Settings" :aria-expanded="settingsOpen" @click="toggleSettings" />
         <UiButton id="shell-multislot" data-semantic-anchor="capsule/open-multislot" label="Open in multislot" :aria-expanded="multislotOpen" :disabled="!selectedSurface" @click="openMultislot" />
@@ -798,7 +807,10 @@ const chromeWorkspace = markRaw(defineComponent({
         </section>
       </main>
     </div>
-    <ActivityStrip v-if="!nestedMode.displayOnly" :entries="activityFeed" />
+    <div v-if="!nestedMode.displayOnly">
+      <HandoffNotice @activity="recordActivity" @take-control="takeHandoffControl" />
+      <ActivityStrip v-if="!nestedMode.displayOnly" :entries="activityFeed" />
+    </div>
     <!-- L2-7: strong tone keeps the wall crumb at AA on the sunken bar in
       mv-light and mv-dark; the kit accent default measures 4.35:1 rendered. -->
     <StatusBar v-if="!nestedMode.displayOnly" :crumbs="[{ id: 'wall', label: 'Main wall', tone: 'strong' }]" :shortcuts="[]">
@@ -808,6 +820,7 @@ const chromeWorkspace = markRaw(defineComponent({
     <div class="mv-terminal" :hidden="!terminalOpen || nestedMode.displayOnly || multislotOpen">
       <SideTerminalOverlay v-if="!nestedMode.displayOnly && !multislotOpen && !creativeOpen" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" v-model:open="terminalOpen" :storage="preferences" :top-offset="terminalTop" :bottom-offset="terminalBottom" />
     </div>
+    <IdentitiesDialog v-if="!nestedMode.displayOnly" :open="identitiesOpen" @close="identitiesOpen=false" />
     <CatalogLauncher v-if="!nestedMode.displayOnly" v-model:visible="launcherOpen" @create="onCreateCapsule" />
     <AgentLaneHost :screen="nestedMode.displayOnly ? 'nested' : creativeOpen ? 'creative' : settingsOpen ? 'settings' : multislotOpen ? 'multislot' : 'wall'" :fixture-key="props.fixture?.key ?? ''" />
   </div>

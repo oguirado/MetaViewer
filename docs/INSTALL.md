@@ -466,3 +466,25 @@ then explicitly choose `reclaim --apply` to remove verified stale records. The
 command requires both a dead owner PID and a read-only local Docker inventory
 proving all native `srf-*` containers absent (including stopped containers);
 present or unknown inventories keep reservations. Reclamation is never automatic.
+
+The **Identities** menu manages public account labels and domains; several
+accounts for the same site are supported. Use **Log in** to open the operator's
+loopback login view, and enter credentials only there. Agent input remains
+refused by the native identity reservation while that view is open. Current
+authentication is shown as unknown because the native tool exposes login history
+without a current-session witness.
+
+Each capsule's **Network** action edits its admitted profile's adapter egress
+record for the next start: **Open (default)** or **Dedicated proxy with allowlist**
+(exact hostnames, one per line). Profiles shared by capsules share this policy.
+An unset `MV_SRF_NET_MODES` displays **legacy**. Dedicated proxy requires the
+`proxied` capability; Open requires identity image `0.2.0` [CITED] and the
+operator-installed firewall witness. Network is separate from global settings.
+
+[TARGET, unit decision] The trusted launcher supplies `MV_HANDOFF_PATHS`, a JSON
+array of owner handoff paths (`output.with_suffix('.handoff.json')`), to Electron.
+The host watches only these private files; paths never cross renderer IPC.
+The persistent activity row says “CAPTCHA or bot check: solve it in the capsule,
+then re-run”. **Take control** uses the existing control intent. **Acknowledge**
+saves a private adjacent `.ack.json` record before hiding the row; failed
+persistence leaves it visible. Acknowledgement does not resume an agent run.

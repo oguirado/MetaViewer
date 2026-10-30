@@ -203,6 +203,8 @@ const App = await (async () => {
     setup: (_, ctx) => () => h('div', {}, Object.values(ctx.slots).flatMap((slot) => slot?.() ?? [])),
   });
   globalThis.__mvui32Ldeps = {
+    './identities/IdentitiesDialog.vue': stub,
+    './handoff/HandoffNotice.vue': stub,
     './core/HostOutcome.vue': stub,
     './activity/ActivityStrip.vue': stub,
     'capsule-ui-kit/DockWorkspace': stub,

@@ -16,6 +16,8 @@ const app = readFileSync(APP_URL, 'utf8');
 
 const PINNED_IMPORTS = [
   'vue',
+  './identities/IdentitiesDialog.vue',
+  './handoff/HandoffNotice.vue',
   './creative/CreativeCapsule.vue',
   './core/HostOutcome.vue',
   'capsule-ui-kit/DockWorkspace',
@@ -63,7 +65,7 @@ describe('bench hook source shape', () => {
   test('App import surface stays closed for the stub harnesses', () => {
     const specifiers = [...app.matchAll(/^import\s+[^\n]+?\s+from\s+(['"])(.*?)\1;?$/gm)]
       .map(match => match[2]);
-    assert.deepEqual(specifiers, PINNED_IMPORTS, 'zero new imports: boot and app stub maps keep working');
+    assert.deepEqual(specifiers, PINNED_IMPORTS, 'exact admitted imports: boot and app stub maps keep working');
   });
 
   test('negative control: unguarded install and widened imports fail', () => {

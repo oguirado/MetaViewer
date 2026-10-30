@@ -6,7 +6,7 @@
  */
 
 /** @typedef {{ code: string, message: string }} PanelAdmissionError */
-/** @typedef {{ id: string, surfaceId: string, backendLifecycle: string, generation: number, visibility: string, control: string, attachmentState?: string, refusal?: PanelAdmissionError|null, readinessError?: PanelAdmissionError|null }} PanelSurfaceRow */
+/** @typedef {{ id: string, surfaceId: string, backendLifecycle: string, generation: number, visibility: string, control: string, attachmentState?: string, profile_id?: string, refusal?: PanelAdmissionError|null, readinessError?: PanelAdmissionError|null }} PanelSurfaceRow */
 /** @typedef {{ rows: readonly PanelSurfaceRow[] }} PanelProjectionBody */
 /** @typedef {{ schema: string, epoch: number, revision: number, query: string, projection: PanelProjectionBody }} PanelProjectionEnvelope */
 /** @typedef {{ status: string, stale: boolean, envelope: PanelProjectionEnvelope|null, error: PanelAdmissionError|null }} PanelProjectionSnapshot */
@@ -45,7 +45,7 @@ export const REFUSAL_CODES = Object.freeze(['STALE_FRAME', 'SURFACE_NOT_AGENT_CO
 
 /** Wall panel control actions from the allowed control-family inventory. */
 export const PANEL_ACTIONS = Object.freeze(['fold', 'pin', 'control', 'close', 'popout',
-  'dock-back']);
+  'dock-back', 'network']);
 
 /** Lifecycles whose frames the canvas host may show; the frames lane keeps final say. */
 export const DRAWABLE_LIFECYCLES = Object.freeze(['active', 'standby', 'ceded']);
@@ -351,10 +351,12 @@ export function mirrorKitFoldedSnapshot(snapshot) {
 </script>
 <script setup>
 import { computed, onBeforeUnmount, provide, shallowRef, watch } from 'vue';
+import NetworkPanel from '../netmode/NetworkPanel.vue';
 import CapsulePanel from 'capsule-ui-kit/CapsulePanel';
 import TileCaptureChrome from './TileCaptureChrome.vue';
 import { deriveTileState, controlVerbForRow, frameFreshnessText, isAgentActingRow, presentedFrameHandle, TILE_ERROR_DISPLAY_STATUS } from './tileStates.js';
 import './wall.css';
+const networkOpen=shallowRef(false);
 
 const props = defineProps({
   capsuleId: { type: String, required: true },
@@ -608,6 +610,7 @@ function onActivateSurface() {
 </script>
 <template>
   <div class="mv-tile" :data-tile-state="tile.tile" :data-error-code="row?.refusal?.code ?? snapshot?.error?.code">
+  <NetworkPanel :open="networkOpen && !props.displayOnly" :display-only="props.displayOnly" :capsule-id="props.capsuleId" :identity="row?.profile_id ?? ''" :refusal-code="row?.refusal?.code ?? row?.readinessError?.code ?? ''" @open="networkOpen=true" @close="networkOpen=false" />
   <TileCaptureChrome
     :capsule-id="props.capsuleId"
     :capsule-label="props.title"

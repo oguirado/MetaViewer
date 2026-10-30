@@ -2071,6 +2071,7 @@ export async function bootProductionMain(handles) {
   /** @type {Array<string>} */
   const registered = [];
   let wireBridge = /** @type {{dispose:()=>Promise<void>} | null} */(null);
+  let operatorBridge = /** @type {{dispose:()=>Promise<void>} | null} */(null);
   let captureBridge = /** @type {{dispose:()=>Promise<void>} | null} */(null);
   let qaBridge = /** @type {{enabled:boolean, dispose:()=>Promise<void>} | null} */(null);
   let frameDiagBridge = /** @type {{enabled:boolean, dispose:()=>Promise<void>} | null} */(null);
@@ -2104,6 +2105,8 @@ export async function bootProductionMain(handles) {
       }
       qaBridge = null;
     }
+    await operatorBridge?.dispose();
+    operatorBridge=null;
     if (captureBridge !== null && captureBridge !== undefined) {
       try {
         await captureBridge.dispose();
@@ -2385,6 +2388,12 @@ export async function bootProductionMain(handles) {
         argv: /** @type {ReadonlyArray<string>} */ (typed.argv),
       });
     }
+    if (!retail.nested) operatorBridge = (await import('./operatorBridge.js')).installOperatorBridge({
+      ipcMain, contents: contentsUnknown, env: typed.env,
+      tool: resolve(paths.rendererRoot, '../../../tools/mv_identity.py'),
+      admit: (/** @type {unknown} */ event) => observeSender(event,contentsUnknown,PRIVILEGED_ORIGIN).verdict==='admit',
+      openLogin: async (/** @type {string} */url) => { const {shell}=await import('electron'); await shell.openExternal(url); },
+    });
     if (!retail.nested) captureBridge = (await import('./captureBridge.js')).installCaptureBridge({ipcMain, contents:contentsUnknown, core, nested:retail.nested, env:typed.env});
     if (!retail.nested) wireBridge = (await import('./authorityWire.js')).installAuthorityWire({ ...(typed.wire || {}), ipcMain,
       contents: contentsUnknown, core, env: typed.env, argv: typed.argv,

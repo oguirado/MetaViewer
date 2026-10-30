@@ -1,3 +1,4 @@
+import {addOperatorStubs} from './operator-stubs.mjs';
 // MVUI18 lane J: live frames paint (L3-1), frame scale jitter (L2-8), kit
 // subscribe mirror. REAL-like numbers throughout: the notice stream id is
 // 886 while deliveries pin surfaceGeneration 1 / epoch E, and the tile
@@ -128,6 +129,7 @@ function rewriteImports(code, deps) {
   let out = code.replace(/^import\s+['"][^'"]+['"];?\s*$/gm, '');
   out = out.replace(/import\s+([\s\S]*?)\s+from\s+(['"])(.*?)\2;?/g, (all, bindings, _q, spec) => {
     if (spec === 'vue') return all.replace(/(['"])vue\1/, vueUrl);
+    addOperatorStubs(deps);
     assert.ok(spec in deps, `Unmapped SFC dependency: ${spec}`);
     const target = deps[spec];
     if (typeof target === 'string') return `const ${bindings.trim()} = await import(${target});`;

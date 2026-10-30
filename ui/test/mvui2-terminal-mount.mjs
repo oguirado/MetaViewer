@@ -1,3 +1,4 @@
+import {addOperatorStubs} from './operator-stubs.mjs';
 // Minimal SFC mount harness for the mvui2 terminal suites (node:test, no DOM).
 // Mirrors the compile + custom-renderer approach of mvui-f1-lifecycle.test.js.
 import assert from 'node:assert/strict';
@@ -25,6 +26,7 @@ export async function compileSfc(file, deps) {
       return all.replace(/(['"])vue\1/, JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve('vue')).href));
     }
     if (file === 'multislot/MultislotHost.vue' && spec === 'capsule-ui-kit/ui') deps[spec] = { UiButton };
+    addOperatorStubs(deps);
     assert.ok(spec in deps, `Unmapped SFC dependency: ${spec}`);
     return `const ${bindings.trim()} = globalThis.__mvui2v1Deps[${JSON.stringify(spec)}];`;
   });

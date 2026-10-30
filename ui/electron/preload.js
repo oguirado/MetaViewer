@@ -21,8 +21,94 @@
  * typecheck) never installs and never touches the electron module.
  */
 
+/** [TARGET, unit decision] Closed operator-only metadata seam. No argv, paths,
+ * credentials or arbitrary channels are exposed. Bounds are transport limits. */
+export const OPERATOR_METHODS = Object.freeze(['identity.list','identity.show','identity.create','identity.delete','identity.login','egress.get','egress.set','handoff.list','handoff.ack']);
+/** @param {any} v @param {string[]} names */
+export function operatorKeys(v,names) {
+  return !!v && typeof v==='object' && !Array.isArray(v)
+    && Reflect.ownKeys(v).length===names.length && names.every(k=>Object.hasOwn(v,k))
+    && Object.values(Object.getOwnPropertyDescriptors(v)).every(d=>'value' in d);
+}
+/** @param {any} v */
+export function identityId(v) { return typeof v==='string' && /^[a-z0-9][a-z0-9-]{1,39}$/.test(v); }
+/** @param {any} v */
+export function identityLabel(v) { return typeof v==='string' && v===v.trim() && v.length>0 && [...v].length<=128 && !/[\x00-\x1f\x7f;`$|&<>\\]/.test(v); }
+/** @param {any} h */
+export function exactEgressHost(h) {
+  return typeof h==='string' && h.length<=253 && h.includes('.') && /[a-z]/.test(h)
+    && !/(^|\.)(localhost|local|internal|lan|home\.arpa)$/.test(h)
+    && h.split('.').every(x=>/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(x) && !/^0x[0-9a-f]*$/.test(x));
+}
+/** @param {any} v */
+export function validEgress(v) {
+  return operatorKeys(v,['schema','mode','domains']) && v.schema==='metaviewer.capsule_egress/v1'
+    && Array.isArray(v.domains) && new Set(v.domains).size===v.domains.length
+    && (v.mode==='open'?v.domains.length===0:v.mode==='allowlisted' && v.domains.length>=1 && v.domains.length<=256)
+    && v.domains.every(exactEgressHost);
+}
+/** @param {any} v */
+export function validHandoff(v) {
+  return operatorKeys(v,['schema','surface_id','step_index','reason','confidence','evidence_kinds'])
+    && v.schema==='metaviewer.handoff/v1' && typeof v.surface_id==='string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(v.surface_id)
+    && Number.isSafeInteger(v.step_index) && v.step_index>=0
+    && ['google_sorry','recaptcha_v2','turnstile_challenge','cloudflare_challenge','unusual_traffic','login_wall','captcha_wall'].includes(v.reason)
+    && Number.isInteger(v.confidence) && v.confidence>=0 && v.confidence<=100
+    && Array.isArray(v.evidence_kinds) && v.evidence_kinds.length<=16
+    && v.evidence_kinds.every((/** @type {any} */x)=>typeof x==='string' && /^[a-z_]{1,64}$/.test(x));
+}
+/** @param {string} method @param {any[]} args */
+export function assertOperatorCall(method,args) {
+  if (!OPERATOR_METHODS.includes(method) || args.length!==(['identity.list','handoff.list'].includes(method)?0:1)) throw new Error('OPERATOR_ARGS');
+  if (!args.length) return;
+  const v=args[0];
+  if(method.startsWith('identity.')) {
+    if(!operatorKeys(v,method==='identity.create'?['id','label','domains']:['id']) || !identityId(v.id)) throw new Error('OPERATOR_PAYLOAD');
+    if(method==='identity.create' && (!identityLabel(v.label) || !Array.isArray(v.domains) || !v.domains.length || v.domains.length>256 || !v.domains.every((/** @type {any} */d)=>typeof d==='string' && d.length<=253 && /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(d)))) throw new Error('OPERATOR_PAYLOAD');
+  } else if(method.startsWith('egress.')) {
+    if(!operatorKeys(v,method==='egress.set'?['identity','record']:['identity']) || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(v.identity) || typeof v.identity!=='string' || (method==='egress.set' && !validEgress(v.record))) throw new Error('OPERATOR_PAYLOAD');
+  } else if(!operatorKeys(v,['surface_id','step_index','gesture']) || !validHandoff({schema:'metaviewer.handoff/v1',surface_id:v.surface_id,step_index:v.step_index,reason:'captcha_wall',confidence:100,evidence_kinds:[]}) || v.gesture!=='operator-acknowledge') throw new Error('OPERATOR_PAYLOAD');
+}
+/** @param {string} method @param {any} v */
+export function assertOperatorReply(method,v) {
+  if(operatorKeys(v,['ok','code']) && v.ok===false && ['IDENTITY_UNAVAILABLE','IDENTITY_REFUSED','NET_EGRESS_IO','NET_EGRESS_INVALID','NET_PROXIED_UNSUPPORTED','NET_OPEN_PREREQ','HANDOFF_UNAVAILABLE'].includes(v.code)) return v;
+  if(!v || v.ok!==true) throw new Error('OPERATOR_REPLY');
+  if(method==='handoff.list') {
+    if(!operatorKeys(v,['ok','rows']) || !Array.isArray(v.rows) || v.rows.length>64 || !v.rows.every(validHandoff)) throw new Error('OPERATOR_REPLY');
+  } else if(method.startsWith('egress.')) {
+    if(!operatorKeys(v,['ok','record','net_mode']) || !validEgress(v.record) || !['legacy','open','proxied'].includes(v.net_mode)) throw new Error('OPERATOR_REPLY');
+  } else if(['identity.delete','identity.login','handoff.ack'].includes(method)) {
+    if(!operatorKeys(v,['ok'])) throw new Error('OPERATOR_REPLY');
+  } else {
+    if(!operatorKeys(v,['ok','rows']) || !Array.isArray(v.rows) || v.rows.length>256 || !v.rows.every((/** @type {any} */r)=>operatorKeys(r,['id','label','domains','logged_in']) && identityId(r.id) && identityLabel(r.label) && Array.isArray(r.domains) && r.domains.length<=256 && r.domains.every((/** @type {any} */d)=>typeof d==='string' && /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(d)) && ['unknown','yes','no'].includes(r.logged_in))) throw new Error('OPERATOR_REPLY');
+  }
+  return v;
+}
+/** @param {any} transport */
+export function createOperatorFacade(transport) {
+  /** @type {any} */ const out={};
+  for(const group of ['identity','egress','handoff']) out[group]={};
+  for(const method of OPERATOR_METHODS) {
+    const [group,verb]=method.split('.');
+    out[group][verb]=async(/** @type {any[]} */...args)=>{
+      if(transport.nested) throw new Error('NESTED_DISPLAY_ONLY');
+      assertOperatorCall(method,args);
+      return assertOperatorReply(method,await transport.invoke(`metaviewer:${method}`,args));
+    };
+  }
+  out.handoff.subscribe=(/** @type {(v:any)=>void} */cb)=>{
+    if(transport.nested) throw new Error('NESTED_DISPLAY_ONLY');
+    return transport.subscribe?.('metaviewer:handoff.state',(/** @type {any} */v)=>{
+      try { assertOperatorReply('handoff.list',v); } catch { return; } cb(v);
+    }) ?? (()=>{});
+  };
+  for(const group of Object.values(out)) Object.freeze(group);
+  return Object.freeze(out);
+}
+
 /**
  * @typedef {object} MetaViewerFacade Narrow renderer API.
+ * @property {any} operator
  * @property {() => Promise<string|null>} loadSettings
  * @property {(json:string) => Promise<true>} saveSettings
  * @property {() => Promise<string|null>} recordingDestination
@@ -1208,6 +1294,7 @@ function wireFacade(transport) {
 
     },
   });
+  api.operator=createOperatorFacade(transport);
   api.frames=Object.freeze({
     /** @param {...unknown} args */
     reportDiag:async(...args)=>{
@@ -1319,7 +1406,7 @@ export function installPreload(electron) {
       /** @param {string} channel @param {(value:any,ports?:MessagePort[])=>void} cb */
       (channel,cb) => {
         if (nested && channel === 'metaviewer:side-terminal.port') throw new ContractError('DISPLAY_ONLY','side-terminal is disabled in nested display');
-        if (!['metaviewer:authority.frames','metaviewer:capture.state','metaviewer:side-terminal.port'].includes(channel)) throw new ContractError('CHANNEL','subscription refused');
+        if (!['metaviewer:authority.frames','metaviewer:capture.state','metaviewer:side-terminal.port','metaviewer:handoff.state'].includes(channel)) throw new ContractError('CHANNEL','subscription refused');
         const native = /** @type {any} */(ipcRenderer);
         const listener = (/** @type {any} */event,/** @type {any} */value) => {
           // The facade validates this authenticated host channel before transfer.
@@ -1342,6 +1429,10 @@ export function installPreload(electron) {
         }
         if (channel === FRAME_DIAG_CHANNEL && !frameDiagEnabled) {
           throw new ContractError('CHANNEL', 'frame diag channel disabled');
+        }
+        if (OPERATOR_METHODS.some(method=>channel===`metaviewer:${method}`)) {
+          assertOperatorCall(channel.slice('metaviewer:'.length),[...args]);
+          return renderer.invoke(channel,...args);
         }
         const call = channel.startsWith('metaviewer:layout.') ? assertFixedCall(channel, args) : wireCall(channel,args);
         return renderer.invoke(call.channel, ...call.args);

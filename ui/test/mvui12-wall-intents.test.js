@@ -1,3 +1,4 @@
+import {addOperatorStubs} from './operator-stubs.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -37,6 +38,7 @@ function mutatedCompiler(target, mutate) {
     code = code.replace(/^import\s+['"][^'"]+['"];?\s*$/gm, '');
     code = code.replace(/import\s+([\s\S]*?)\s+from\s+(['"])(.*?)\2;?/g, (all, bindings, _q, spec) => {
       if (spec === 'vue') return all.replace(/(['"])vue\1/, JSON.stringify(import.meta.resolve('vue')));
+      addOperatorStubs(deps);
       assert.ok(spec in deps, `Unmapped mutant dependency: ${spec}`);
       return `const ${bindings.trim()} = globalThis.__mvui11NegativeDeps[${JSON.stringify(spec)}];`;
     });

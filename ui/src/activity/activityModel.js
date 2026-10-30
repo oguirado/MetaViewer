@@ -52,6 +52,7 @@ export const MV_ACTIVITY_EMPTY_TEXT = 'No authority activity yet.';
  * @type {Readonly<Record<string, Readonly<{type:string,tone:string,text:string}>>>}
  */
 const ACTIVITY_ROWS = Object.freeze({
+  CAPTCHA_HANDOFF: Object.freeze({ type: 'request-refused', tone: 'refusal', text: 'CAPTCHA or bot check: solve it in the capsule, then re-run' }),
   INTENT_ACKNOWLEDGED: Object.freeze({ type: 'intent-ack', tone: 'success', text: 'Request sent.' }),
   ACTION_ADMITTED: Object.freeze({ type: 'verdict-admitted', tone: 'success', text: 'Action admitted.' }),
   STALE_FRAME: Object.freeze({ type: 'verdict-refused', tone: 'refusal', text: 'The surface changed. Try again.' }),
