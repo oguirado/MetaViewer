@@ -349,24 +349,30 @@ If you built from source, also remove your external `MV_PKG_OUT` and `CARGO_TARG
 
 ## Capsule network
 
-Browser capsules use `--net open` by default when trusted startup knowledge
-includes `open`. Set `MV_SRF_NET_MODES` to a JSON array copied from the deployed
-binary's capabilities v1 `net_modes`, for example
-`MV_SRF_NET_MODES='["legacy","open","proxied"]'`, only after verifying that binary
-supports those modes and only after the deployment is re-pinned to the
-os-cu-0 net-modes commit. `MV_SRF_NET_MODES` is the deployment switch.
-Open means public internet only, with no LAN access or host services. Before
-live open mode, the operator must approve an identity image rebuild whose
-entrypoint supports `SRF_NET_MODE=open`, and install the native DOCKER-USER/INPUT
-firewall rules. Native start refuses open with exit code 3 until its root-owned
-firewall witness matches those rules. The adapter returns the typed
-`NET_OPEN_PREREQ` fault naming the image rebuild and firewall witness; it never
-retries or downgrades that refusal to legacy or proxied.
-[TARGET, unit decision] This operator declaration is parsed
-once during daemon startup; the adapter makes no capability probe during startup
-or capsule creation. An absent variable or empty array means legacy; malformed,
-null, unknown or duplicate modes refuse daemon startup. Open mode passes no egress proxy
-environment variable. Capsule isolation remains the native runtime's responsibility.
+OpenSuperficies is pinned to `3cb86d752f38457b6730eefd235d4da4c4039721`
+[CITED: `deps.lock`]. This is the interim net-modes pin, not the final open-ready
+pin. Legacy and proxied remain usable. Browser capsules use `--net open` by
+default when the deployed binary advertises `open`.
+
+[TARGET, unit decision] The Electron launcher probes
+`$MV_SRF_BIN_DIR/srf-identity-surface capabilities` once before spawning the
+adapter. It copies the capabilities v1 `net_modes=…` token into the child-only
+`MV_SRF_NET_MODES` JSON array. Parent environment declarations are ignored.
+Missing tokens, unavailable binaries and invalid or failed replies leave it
+unset, retaining legacy behavior. The adapter reads this snapshot at startup.
+
+Open means public internet only, with no LAN access or host services. Open
+requires the operator-built `opensuperficies-identity-browser-arm64:0.2.0` image
+[CITED: os-cu-0 `net_open_step0_v1.md`] with an entrypoint supporting
+`SRF_NET_MODE=open`, the subsequent native pin enabling `openImageReady`, and
+the installed native DOCKER-USER/INPUT firewall with a matching root-owned
+witness. At this interim pin, native `start --net open` still returns exit code
+`3` [CITED: os-cu-0 `net_open_step0_v1.md`] by design even with the firewall
+installed. The adapter reports `NET_OPEN_PREREQ`, naming the image and firewall
+prerequisites; it never retries or downgrades that refusal. Legacy remains
+available when explicitly selected, and proxied remains usable with its policy
+and proxy binary. Open mode passes no egress proxy environment variable.
+Capsule isolation remains the native runtime's responsibility.
 
 An operator may opt a capsule into a dedicated proxy with an exact domain
 allowlist. The adapter reads

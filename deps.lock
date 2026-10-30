@@ -19,7 +19,7 @@
       "kind": "go_binary",
       "repo": "oguirado/OpenSuperficies",
       "version": "os-cu-w9-mv1",
-      "commit": "a9ac1ac8543872b428990ea23fa2629cd0a6d1d5"
+      "commit": "3cb86d752f38457b6730eefd235d4da4c4039721"
     }
   ]
 }

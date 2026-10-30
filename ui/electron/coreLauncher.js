@@ -7,6 +7,8 @@
  * [TARGET, unit decision] Pass the validated host recording destination grant
  * separately from the generic environment allowlist, including the adapter's
  * bounded, nonempty recording capability ID when supplied.
+ * [TARGET, unit decision] Derive adapter network modes only from the deployed
+ * native capabilities reply; absent or invalid knowledge keeps legacy usable.
  * Main supervises; Rust owns state. This module spawns the pinned core
  * binary at most once per instance (never respawns), scrubs the child
  * environment to an allowlist, bounds every stdio and queue byte, and
@@ -18,7 +20,7 @@
 
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { realpathSync, statSync } from 'node:fs';
-import { spawn as defaultSpawn } from 'node:child_process';
+import { execFile, spawn as defaultSpawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 /**
@@ -99,6 +101,7 @@ export const ALLOWED_ADAPTER_ENV = Object.freeze([
   'MV_EXPECTED_CORE_COMMIT',
   'MV_SRF_BIN_DIR',
   'MV_SRF_STATE_DIR',
+  'MV_SRF_NET_MODES',
   'SRF_IDENTITY_STORE_ROOT',
   'SRF_PROXY_REGISTRY',
   'SRF_EGRESS_PROXY',
@@ -297,8 +300,8 @@ export function scrubAdapterEnv(rawEnv, runtimeDir) {
   const parent = /** @type {Record<string, unknown>} */ (rawEnv);
   const out = /** @type {Record<string, string>} */ ({});
   for (const name of ALLOWED_ADAPTER_ENV) {
-    // Recording grants use the validated, nonempty path below, never raw values.
-    if (name === 'MV_RECORDING_DESTINATION' || name === 'MV_RECORDING_CAPABILITY_ID') {
+    // Recording grants are validated below; network modes come only from the native probe.
+    if (name === 'MV_RECORDING_DESTINATION' || name === 'MV_RECORDING_CAPABILITY_ID' || name === 'MV_SRF_NET_MODES') {
       continue;
     }
     if (Object.hasOwn(base, name)) {
@@ -1129,6 +1132,37 @@ export function createCoreLauncher(options) {
  */
 
 /**
+ * [TARGET, unit decision] Probe the deployed native capabilities v1 text once at
+ * launcher startup. Parent declarations never grant network modes. Missing,
+ * failed or malformed replies preserve legacy by leaving the variable absent.
+ * @param {Readonly<Record<string, string>>} env Scrubbed adapter environment.
+ * @param {AbortSignal} signal Launcher disposal signal.
+ * @returns {Promise<Readonly<Record<string, string>>>} Frozen startup snapshot.
+ */
+function discoverAdapterNetModes(env, signal) {
+  const binDir = env.MV_SRF_BIN_DIR;
+  if (!binDir || !isAbsolute(binDir)) return Promise.resolve(env);
+  return new Promise((resolveReply) => {
+    execFile(join(binDir, 'srf-identity-surface'), ['capabilities'], {
+      env, encoding: 'utf8', timeout: 1500, maxBuffer: 8192,
+      shell: false, signal, killSignal: 'SIGKILL',
+    }, (error, stdout) => {
+      if (error) return resolveReply(env);
+      const lines = stdout.trimEnd().split('\n');
+      if (lines.length !== 2 || lines[0] !== 'srf-identity-surface capabilities v1') {
+        return resolveReply(env);
+      }
+      const tokens = lines[1].split(/\s+/).filter((token) => token.startsWith('net_modes='));
+      if (tokens.length !== 1) return resolveReply(env);
+      const modes = tokens[0].slice('net_modes='.length).split(',');
+      if (modes.some((mode) => !['legacy', 'open', 'proxied'].includes(mode)) ||
+          new Set(modes).size !== modes.length) return resolveReply(env);
+      resolveReply(Object.freeze({ ...env, MV_SRF_NET_MODES: JSON.stringify(modes) }));
+    });
+  });
+}
+
+/**
  * Default preflight check for the bundled adapter and OpenSuperficies (`MV_SRF_BIN_DIR`).
  * @param {string} command Bundled adapter binary path.
  * @param {Readonly<Record<string, string>>} env Scrubbed adapter environment.
@@ -1221,6 +1255,7 @@ export function createAdapterLauncher(options) {
     fail('LIMITS', 'handshakeTimeoutMs exceeds the startup budget');
   }
   const scrubbed = scrubAdapterEnv(typed.env, typed.runtimeDir);
+  const capabilityController = new AbortController();
   const preflight = typeof typed.preflight === 'function'
     ? /** @type {(command: string, env: Readonly<Record<string, string>>) => {ok: true} | {ok: false, code: 'ADAPTER_ABSENT' | 'OPENSUPERFICIES_ABSENT', reason: string}} */ (typed.preflight)
     : defaultAdapterPreflight;
@@ -1587,6 +1622,8 @@ export function createAdapterLauncher(options) {
     if (!check.ok) {
       return setDegraded(check.code, check.reason);
     }
+    const adapterEnv = await discoverAdapterNetModes(scrubbed, capabilityController.signal);
+    if (disposing) return getStatus();
     availability = 'starting';
     spawnCount += 1;
     emitStatus();
@@ -1596,7 +1633,7 @@ export function createAdapterLauncher(options) {
       const result = spawnFn(command, hostArgs, {
         stdio: ['pipe', 'pipe', 'pipe'],
         shell: false,
-        env: scrubbed,
+        env: adapterEnv,
       });
       if (typeof result === 'object' && result !== null) {
         spawned = result;
@@ -1664,7 +1701,7 @@ export function createAdapterLauncher(options) {
     }
     try {
       await withTimeout(
-        (signal) => handshakeFn({ pid: /** @type {number} */ (pid), env: scrubbed, signal }),
+        (signal) => handshakeFn({ pid: /** @type {number} */ (pid), env: adapterEnv, signal }),
         bounds.handshakeTimeoutMs,
         'ADAPTER_HANDSHAKE_TIMEOUT',
       );
@@ -1710,6 +1747,7 @@ export function createAdapterLauncher(options) {
       return disposePromise;
     }
     disposing = true;
+    capabilityController.abort();
     if (availability !== 'degraded' && availability !== 'unavailable') {
       availability = 'unavailable';
       code = 'ADAPTER_DISPOSED';

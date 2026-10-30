@@ -154,6 +154,17 @@ class GateTests(unittest.TestCase):
             with self.subTest(name=name, before=before):
                 self.refused_manifest(name, (self.fixture / name).read_text().replace(before, after))
 
+    def test_opensuperficies_release_pin_drift(self):
+        data = json.loads((self.fixture / 'deps.lock').read_text())
+        component = next(item for item in data['components']
+                         if item['name'] == 'opensuperficies')
+        component['commit'] = 'a9ac1ac8543872b428990ea23fa2629cd0a6d1d5'
+        self.assertNotEqual(component['commit'], COMPONENT_PINS['opensuperficies'][3])
+        self.write('deps.lock', json.dumps(data))
+        output = self.call('--leg', 'manifests', expected=1)
+        self.assertIn('deps.lock: opensuperficies: release pin drift', output)
+        self.assertIn('FAIL manifests', output)
+
     def test_release_version_consistency(self):
         version = (self.fixture / 'VERSION').read_text().strip()
         for name in ('Cargo.toml', 'agents/pyproject.toml', 'ui/package.json',
@@ -1202,7 +1213,7 @@ COMPONENT_PINS = {
     'wender-agent': ('python_package', 'oguirado/wender-agent', 'v0.3.0',
                      '96120967b435b72fc6d29635f3844dae140388a9'),
     'opensuperficies': ('go_binary', 'oguirado/OpenSuperficies', 'os-cu-w9-mv1',
-                       'a9ac1ac8543872b428990ea23fa2629cd0a6d1d5'),
+                       '3cb86d752f38457b6730eefd235d4da4c4039721'),
 }
 
 

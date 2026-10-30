@@ -623,3 +623,62 @@ describe('W3-PKG-FULLSTACK bundled adapter supervision next to core', () => {
     }
   });
 });
+
+// Native discovery fixtures execute only `capabilities`; no capsule or live runtime.
+describe('deployed native network capability discovery', () => {
+  const header = 'srf-identity-surface capabilities v1\n';
+  const cases = [
+    { name: 'advertised modes override the parent', reply: header + '--paste net_modes=legacy,open,proxied\n', expected: '["legacy","open","proxied"]' },
+    { name: 'legacy token stays legacy', reply: header + 'net_modes=legacy\n', expected: '["legacy"]' },
+    { name: 'older native without the token stays unset', reply: header + '--paste downloads\n' },
+    { name: 'missing native stays unset' },
+    { name: 'failed command stays unset', reply: header + 'net_modes=legacy,open,proxied\n', exit: 3 },
+    { name: 'wrong header stays unset', reply: 'other capabilities v1\nnet_modes=open\n' },
+    { name: 'unknown mode stays unset', reply: header + 'net_modes=legacy,unsafe\n' },
+    { name: 'duplicate mode stays unset', reply: header + 'net_modes=open,open\n' },
+    { name: 'duplicate token stays unset', reply: header + 'net_modes=open net_modes=legacy\n' },
+    { name: 'empty token stays unset', reply: header + 'net_modes=\n' },
+    { name: 'extra reply line stays unset', reply: header + 'net_modes=open\nextra\n' },
+    { name: 'oversized reply stays unset', reply: header + 'net_modes=open ' + 'x'.repeat(9000) },
+    { name: 'timeout stays unset', hang: true },
+  ];
+  for (const fixture of cases) {
+    it(fixture.name, async () => {
+      const fx = createFullstackFixture();
+      const child = createFakeChild();
+      /** @type {Record<string, string> | undefined} */
+      let received;
+      let spawns = 0;
+      const env = { ...fx.env, MV_SRF_NET_MODES: '["open"]' };
+      assert.equal(scrubAdapterEnv(env, fx.xdg).MV_SRF_NET_MODES, undefined);
+      if (fixture.reply !== undefined || fixture.hang) {
+        const body = fixture.hang ? "trap '' TERM; while :; do :; done" :
+          `printf '%s' '${fixture.reply}'; exit ${fixture.exit ?? 0}`;
+        writeFileSync(join(fx.srfBinDir, 'srf-identity-surface'),
+          `#!/bin/sh\n[ "$#" = 1 ] && [ "$1" = capabilities ] || exit 9\n${body}\n`, { mode: 0o755 });
+      }
+      const launcher = createAdapterLauncher({
+        command: fx.adapterBin, env, runtimeDir: fx.xdg,
+        selfPid: 100, selfPgid: 100,
+        spawn: (_command, _args, options) => {
+          received = /** @type {Record<string, string>} */ (options.env);
+          spawns += 1;
+          return child;
+        },
+        handshake: async () => {},
+        killFn: (_target, signal) => { child.emit('exit', 0, signal); },
+      });
+      try {
+        const [first, second] = await Promise.all([launcher.start(), launcher.start()]);
+        assert.equal(first.availability, 'live');
+        assert.deepEqual(second, first);
+        assert.equal(spawns, 1);
+        assert.equal(received?.MV_SRF_NET_MODES, fixture.expected);
+        assert.ok(Object.isFrozen(received));
+      } finally {
+        await launcher.dispose();
+        fx.cleanup();
+      }
+    });
+  }
+});
