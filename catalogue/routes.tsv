@@ -797,6 +797,7 @@ process_test.go	daemon-adapter/internal/capsule/process_test.go
 program_inner_test.go	daemon-adapter/internal/capsule/program_inner_test.go
 protect.go	daemon-adapter/internal/capsule/protect.go
 protect_min_test.go	daemon-adapter/internal/capsule/protect_min_test.go
+quarantine_count.go	daemon-adapter/internal/capsule/quarantine_count.go
 r2regre-d63f27719b98	daemon-adapter/internal/capsule/r2_regressions_test.go
 reap_test.go	daemon-adapter/internal/capsule/reap_test.go
 receipt-e7a340c634f2	daemon-adapter/internal/capsule/receipt_evidence_test.go
@@ -830,6 +831,8 @@ nv_authority_test.go	daemon-adapter/internal/daemon/nv_authority_test.go
 nvenvir-8ce129bf69f1	daemon-adapter/internal/daemon/nv_environment_test.go
 nv_handoff_test.go	daemon-adapter/internal/daemon/nv_handoff_test.go
 policyr-8ee96f8b1ec8	daemon-adapter/internal/daemon/policy_refusal_poly_test.go
+ram_admission.go	daemon-adapter/internal/daemon/ram_admission.go
+ram_admission_test.go	daemon-adapter/internal/daemon/ram_admission_test.go
 receipt-86c2be55964c	daemon-adapter/internal/daemon/receipt_evidence_test.go
 record_wire_test.go	daemon-adapter/internal/daemon/record_wire_test.go
 revision_test.go	daemon-adapter/internal/daemon/revision_test.go
@@ -1193,6 +1196,7 @@ test_kill_guard.py	tests/test_kill_guard.py
 test_kit_source.py	tests/test_kit_source.py
 testlay-30db08e8ee29	tests/test_layout_intents.py
 test_live_teardown.py	tests/test_live_teardown.py
+test_multi_capsule.py	tests/test_multi_capsule.py
 test_mv_identity.py	tests/test_mv_identity.py
 test_mw_home_cli.py	tests/test_mw_home_cli.py
 test_net_scope.py	tests/test_net_scope.py
