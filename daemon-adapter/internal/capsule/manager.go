@@ -168,6 +168,7 @@ type Manager struct {
 	used        map[string]bool
 	refresh     map[string]bool
 	views       map[string]bool
+	loginLocks  map[string]bool
 	lostDone    map[string]chan struct{}
 }
 
@@ -398,6 +399,18 @@ func (m *Manager) view(ctx context.Context, r Request, version string) ([]json.R
 	if r.Op != "view-stop" && m.views[b.Container] {
 		return nil, fault("refused", "view unavailable or already registered")
 	}
+	if r.Op == "login" {
+		if m.hasPending(b.Surface.SurfaceID) {
+			return nil, fault("POLICY", "input must drain before operator login")
+		}
+		if m.loginLocks == nil {
+			m.loginLocks = make(map[string]bool)
+		}
+		if m.loginLocks[b.Container] {
+			return nil, fault("LOGIN_ACTIVE", "operator login is already opening")
+		}
+		m.loginLocks[b.Container] = true
+	}
 	m.mu.Unlock()
 	var err error
 	if r.Op == "view-stop" {
@@ -407,10 +420,13 @@ func (m *Manager) view(ctx context.Context, r Request, version string) ([]json.R
 	}
 	m.mu.Lock()
 	if err != nil {
+		// Keep the lock after uncertain native failures: only a verified stop
+		// may reopen agent admission.
 		return nil, err
 	}
 	current, ok := m.bindings[b.Surface.SurfaceID]
 	if r.Op == "view-stop" {
+		delete(m.loginLocks, b.Container)
 		delete(m.views, b.Container)
 		if !ok || current.Surface.State != "active" || m.destroying[b.Surface.SurfaceID] || current.Container != b.Container || current.RunID != b.RunID {
 			return nil, fault("surface", "active surface required")
@@ -421,9 +437,12 @@ func (m *Manager) view(ctx context.Context, r Request, version string) ([]json.R
 		delete(m.views, b.Container)
 		m.mu.Unlock()
 		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), m.cfg.Timeout)
-		_ = m.cfg.View.Stop(stopCtx, b.Container)
+		stopErr := m.cfg.View.Stop(stopCtx, b.Container)
 		cancel()
 		m.mu.Lock()
+		if stopErr == nil {
+			delete(m.loginLocks, b.Container)
+		}
 		return nil, fault("surface", "active surface required")
 	}
 	if m.views[b.Container] {
@@ -692,6 +711,7 @@ func (m *Manager) destroy(ctx context.Context, r Request, version string) ([]jso
 		return nil, e
 	}
 	delete(m.quarantined, b.Surface.ProfileID)
+	delete(m.loginLocks, b.Container)
 	b.Surface.State = "destroyed"
 	m.bindings[q.SurfaceID] = b
 	delete(m.inputEpochs, q.SurfaceID)
@@ -899,6 +919,11 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 	}
 	if m.destroying[q.SurfaceID] {
 		return nil, fault("POLICY", "surface is draining")
+	}
+	if origin == "agent" {
+		if err := m.refuseLoginInput(b.Container); err != nil {
+			return nil, err
+		}
 	}
 	if origin == "human" {
 		if b.Surface.Control != "human" {

@@ -30,6 +30,79 @@ For headless UI smoke tests (`ui-smoke` leg in `tools/gate.sh`) and clean-instal
 
 Distribution-specific package manager commands (`apt`, `dnf`, `pacman`) for installing system packages are not documented yet.
 
+## Identities
+
+Browser sessions are credentials: the operator logs in by hand inside the native
+capsule view. MetaViewer has no password vault and agents never type credentials.
+Distinct identity ids may use the same domains for separate accounts.
+
+The operator-only host tool is `python3 tools/mv_identity.py`. Configure absolute
+`MV_SRF_BIN_DIR`, `SRF_IDENTITY_STORE_ROOT`, `MV_SRF_STATE_DIR` and the native
+`SRF_PROXY_REGISTRY`. Set `MV_MW_HOME` to the MemoryWeb home (or supply
+`--memoryweb-home` before the verb). This explicit home declaration is required
+even when MemoryWeb is unused; choose a separate reserved home directory.
+The identity store must be outside both the repository and MemoryWeb home;
+overlapping paths, including symlink aliases, are refused as
+`MUT-PROFILE-IN-REPO`. Control directories must be private to the current user.
+Host identity ids are limited to a suffix of at most 40 characters [TARGET],
+so an explicit `srf-id-<identity>` fits native `capsuleRE` [CITED:
+OpenSuperficies `a9ac1ac8`, `src/browserid/surface/surface.go:184`].
+Login requests that explicit capsule on start and uses the validated native reply;
+an active lease may instead name any native-valid capsule, including a random
+`srf-id-<hex>` capsule started elsewhere.
+
+Before a real start, the operator must provision `profiles/<identity>` as a
+private directory with mode `0700` and owner uid `10001` [CITED: OpenSuperficies
+`a9ac1ac8`, `src/browserid/surface/surface.go:392-393`]. Native admin creation
+alone does not satisfy this ownership prerequisite; arrange it with the native
+profile-management permissions before running login. Keep metadata, locks and
+state directories owned by the calling operator.
+
+```bash
+python3 tools/mv_identity.py create --id account-main --label 'Main account' --domains example.com
+python3 tools/mv_identity.py list
+python3 tools/mv_identity.py show --id account-main
+python3 tools/mv_identity.py login --id account-main
+python3 tools/mv_identity.py delete --id account-main
+```
+
+Each invocation emits a single JSON line with schema `metaviewer.identity/v1`.
+Login reuses an active identity capsule or starts it, prints the native loopback
+view URL to stderr, and waits for the operator to close the native session using
+Ctrl+C or native `view-stop`. Closing a browser tab alone does not stop the native
+view. Native teardown restores read-only mode; capsule stop/start keeps the same
+profile directory. The tool does not inspect cookies, Local Storage or any
+profile payload and does not assert that authentication succeeded.
+
+[TARGET, unit decision] The pinned native admin exposes only create/show, so
+list enumerates metadata names and obtains native show replies. Delete removes
+only the exact validated identity while holding the native per-id guard; an
+active or malformed lease refuses deletion. Deletion never releases another
+identity's lease and leaves other identities' metadata and profiles untouched.
+It may require the operator's existing native profile-removal permissions.
+
+During a registered login view, the adapter refuses agent-origin input with
+`LOGIN_ACTIVE`, including while login opens or teardown is uncertain. Human
+input retains the existing `take_control` requirement. Native registration is
+`views/<container>.pid` under the state directory (OpenSuperficies
+`src/browserid/surface/viewstop.go:20-31`); the host also reserves a pending marker
+before launching login. If a crash leaves `views/<container>.login-pending`,
+first stop the native login view and verify that no login process is still
+opening or holding that capsule. Set `container` to the exact validated capsule
+name from the native start reply or active lease. Run
+`"$MV_SRF_BIN_DIR/srf-identity-surface" view-stop --container "$container" --state-dir "$MV_SRF_STATE_DIR" --store-root "$SRF_IDENTITY_STORE_ROOT"`.
+Only after verified teardown (or native confirmation that no view exists),
+remove the stale reservation:
+
+```bash
+rm -- "$MV_SRF_STATE_DIR/views/$container.login-pending"
+```
+
+An absent view registration alone is insufficient while a login is opening.
+Wire contracts remain unchanged. UI integration should
+provide an identities menu (create, log in, list, delete) and a human-control
+banner during login; all credential entry remains in the capsule view.
+
 ## 2. Installing from the Release Package Tarball
 
 The packaging pipeline (`scripts/bootstrap.sh` and `ui/tools/package.js`) produces a deterministic GNU tar archive outside the repository at `$MV_PKG_OUT/MetaViewer-linux-<arch>.tar` (`MetaViewer-linux-arm64.tar` on `arm64`, `MetaViewer-linux-x64.tar` on `x64`) alongside `$MV_PKG_OUT/MetaViewer-linux-<arch>.sha256` [CITED: `ui/tools/package.js`].
