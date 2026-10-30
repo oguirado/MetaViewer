@@ -1621,6 +1621,8 @@ r3t4new-abd5a83eee59	ui/test/r3t4-new-surface.test.js
 r3t4reg-2bf6b1d454e0	ui/test/r3t4-regressions.test.js
 r3t4sti-e4ad61eabbd1	ui/test/r3t4-still-open.test.js
 r4-refresh.test.js	ui/test/r4-refresh.test.js
+renderer-asar.test.js	ui/test/renderer-asar.test.js
+rendere-0907683c0d40	ui/test/renderer-ready.test.js
 rv9elec-3b07d2eb24f6	ui/test/rv9-elec-regressions.test.js
 security.test.js	ui/test/security.test.js
 setting-c22b53627f2f	ui/test/settingsHarden.test.mjs
