@@ -837,6 +837,7 @@ nv_handoff_test.go	daemon-adapter/internal/daemon/nv_handoff_test.go
 policyr-8ee96f8b1ec8	daemon-adapter/internal/daemon/policy_refusal_poly_test.go
 ram_admission.go	daemon-adapter/internal/daemon/ram_admission.go
 ram_admission_test.go	daemon-adapter/internal/daemon/ram_admission_test.go
+ram_hermetic_test.go	daemon-adapter/internal/daemon/ram_hermetic_test.go
 receipt-86c2be55964c	daemon-adapter/internal/daemon/receipt_evidence_test.go
 record_wire_test.go	daemon-adapter/internal/daemon/record_wire_test.go
 revision_test.go	daemon-adapter/internal/daemon/revision_test.go
@@ -1204,6 +1205,7 @@ testlay-30db08e8ee29	tests/test_layout_intents.py
 test_live_teardown.py	tests/test_live_teardown.py
 test_multi_capsule.py	tests/test_multi_capsule.py
 test_mv_identity.py	tests/test_mv_identity.py
+testmvr-a9d3d841457c	tests/test_mv_ram_admission.py
 test_mw_home_cli.py	tests/test_mw_home_cli.py
 test_net_scope.py	tests/test_net_scope.py
 test_novac_matrix.py	tests/test_novac_matrix.py
@@ -1226,6 +1228,7 @@ check_theme.py	tools/check_theme.py
 tools-gate.sh	tools/gate.sh
 gate_g_ai.py	tools/gate_g_ai.py
 mv_identity.py	tools/mv_identity.py
+mv_ram_admission.py	tools/mv_ram_admission.py
 mw_home_check.py	tools/mw_home_check.py
 router_index.py	tools/router_index.py
 sync_kit.mjs	tools/sync_kit.mjs
