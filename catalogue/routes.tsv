@@ -927,6 +927,7 @@ DEMOREC-37656a7d648c	docs/DEMO_RECURSIVE_SCRIPT.md
 DEMO_RUNBOOK.md	docs/DEMO_RUNBOOK.md
 HOLDING-41388780e954	docs/HOLDINGS_LESSONS_UI_ORCHESTRATOR.md
 INSTALL.md	docs/INSTALL.md
+JUDGES.md	docs/JUDGES.md
 PREEXISTING.md	docs/PREEXISTING.md
 RESEARCH_LOG.md	docs/RESEARCH_LOG.md
 ROADMAP.md	docs/ROADMAP.md
@@ -944,6 +945,18 @@ REPORTU-f0598c20baeb	docs/research/REPORT_UIARCH_SOL_PASS2.md
 queries.byobu.v1.json	docs/research/queries.byobu.v1.json
 queries.v1.json	docs/research/queries.v1.json
 llms.txt	llms.txt
+NOTES.md	memoryweb-builtin/sites/meta-ai/NOTES.md
+wf-ask-fixture.json	memoryweb-builtin/sites/meta-ai/nodes/wf-ask-fixture.json
+wf-ask.json	memoryweb-builtin/sites/meta-ai/nodes/wf-ask.json
+wf-new-chat.json	memoryweb-builtin/sites/meta-ai/nodes/wf-new-chat.json
+site.json	memoryweb-builtin/sites/meta-ai/site.json
+ask-fixture.json	memoryweb-builtin/sites/meta-ai/workflows/ask-fixture.json
+ask.json	memoryweb-builtin/sites/meta-ai/workflows/ask.json
+new-chat.json	memoryweb-builtin/sites/meta-ai/workflows/new-chat.json
+run.v1.json	memoryweb-builtin/standards/schemas/run.v1.json
+site.v1.json	memoryweb-builtin/standards/schemas/site.v1.json
+step.v1.json	memoryweb-builtin/standards/schemas/step.v1.json
+workflow.v1.json	memoryweb-builtin/standards/schemas/workflow.v1.json
 DEVIATIONS.md	router/kit/DEVIATIONS.md
 bootstr-2d9d88d48c6a	router/kit/bootstrap_receipt.json
 bootstrap_ui.md	router/kit/docs/bootstrap_ui.md
@@ -1116,7 +1129,10 @@ live-main.cjs	tests/e2e/live-main.cjs
 live-multislot.cjs	tests/e2e/live-multislot.cjs
 nested-main.mjs	tests/e2e/nested-main.mjs
 automat-f43807d640b1	tests/e2e/packs/automation.schema.json
-automation.json	tests/e2e/packs/builtin-fixtures/T1/automation.json
+automation.json	tests/e2e/packs/builtin-fixtures/META/automation.json
+hosted.mjs	tests/e2e/packs/builtin-fixtures/META/hosted.mjs
+meta-chat.html	tests/e2e/packs/builtin-fixtures/META/pages/meta-chat.html
+T1-automation.json	tests/e2e/packs/builtin-fixtures/T1/automation.json
 pages-form.html	tests/e2e/packs/builtin-fixtures/T1/pages/form.html
 T2-automation.json	tests/e2e/packs/builtin-fixtures/T2/automation.json
 pages-flow_a.html	tests/e2e/packs/builtin-fixtures/T2/pages/flow_a.html
@@ -1213,6 +1229,7 @@ test_kill_guard.py	tests/test_kill_guard.py
 test_kit_source.py	tests/test_kit_source.py
 testlay-30db08e8ee29	tests/test_layout_intents.py
 test_live_teardown.py	tests/test_live_teardown.py
+test_meta_site.py	tests/test_meta_site.py
 test_multi_capsule.py	tests/test_multi_capsule.py
 test_mv_demo.py	tests/test_mv_demo.py
 test_mv_identity.py	tests/test_mv_identity.py
