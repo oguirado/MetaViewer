@@ -214,6 +214,14 @@ The top-bar **Storyboard** button opens the Storyboard screen, where creative se
 
 ---
 
+## Known limits
+
+The pinned Wender perceives only chassis roles. On real sites, plain paragraphs,
+table cells and unnamed status text are absent from the Wender state. Agents must
+read this content through AX (srf) or vision. Adding StaticText/cell support is a
+v0.3 request to the wender-agent owner. The web fixtures explicitly name chassis
+roles from the same source as their visible text.
+
 ## Further reading
 
 - [Project overview](../README.md)

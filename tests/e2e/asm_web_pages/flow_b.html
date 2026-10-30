@@ -59,7 +59,7 @@
 <body>
 <main id="stage" data-page-id="flow_b" data-flow-step="2" data-viewport="640x360">
   <h1 id="flow-heading">Two-Page Navigation — Step 2 of 2</h1>
-  <p id="flow-confirmation" data-role="status" data-bbox="24,68,480,36">FLOW_STEP_2_CONFIRMED</p>
+  <p role="status" id="flow-confirmation" data-role="status" data-bbox="24,68,480,36">FLOW_STEP_2_CONFIRMED</p>
   <a
     id="back-btn"
     href="flow_a.html"
@@ -73,6 +73,8 @@
 </main>
 <script>
   (function () {
+    var marker = document.getElementById('flow-confirmation');
+    marker.setAttribute('aria-label', marker.textContent);
     var back = document.getElementById('back-btn');
     back.setAttribute('data-nav-ready', 'true');
   })();

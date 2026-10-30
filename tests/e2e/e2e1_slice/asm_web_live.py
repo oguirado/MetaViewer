@@ -73,10 +73,10 @@ def digest(value):
 
 # Reviewed immutable offline fixture allowlist, not a network API denylist.
 FIXTURE_PINS = {
-    'flow_a': '8d587349a3e972c50479d255bc539db7fbc2f383ae81537ff3e631414671b8a5',
-    'flow_b': '1f96e5c04be23236addd534a41dd60cce4390c6457a598b1be69cce9d2eedbe5',
-    'form': '9d7c0905793094dcbb2854fc300b87d9ee9bcad90930c0f14063fb9ca6149082',
-    'table': '232f50c0e1cb253375e243116aa4c62a45ae6b2b9b159f7caa019f9cdca322dc',
+    'flow_a': 'cf84b7e1d63b9bb688a8c739ed4db8ea4cfe4227bb7a4789615c8e02a207b26e',
+    'flow_b': 'c2b7715125ee8b6969f22a8149847cdc157683458ec5500f7dd2a6b8d988571f',
+    'form': '30e968f35330d9bea194052c4659b5f4ac98bac8619ad500330b226a134dae33',
+    'table': '4a884197a357af3c5d049b67d9f59f3edb0bef64810bacc965ca22ea7d388fe9',
 }
 
 
@@ -187,10 +187,81 @@ def texts(tree):
             for n in tree.get('elements', tree.get('nodes', []))]
 
 
+def evidence_directory(retained):
+    # Reuse only the runner's own private evidence directory; anything else
+    # gets a fresh 0700 directory, and no foreign directory is ever chmodded.
+    if retained is not None and retained.parent.name.startswith('mv-web-evidence-'):
+        try:
+            info = os.lstat(retained.parent)
+        except OSError:
+            info = None
+        if (info is not None and stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid()
+                and stat.S_IMODE(info.st_mode) == 0o700):
+            return retained.parent
+    return Path(tempfile.mkdtemp(prefix='mv-web-ax-evidence-'))
+
+
+def ax_failure_evidence(task, sensed, tree, expected):
+    # Only called by the pinned fixture runner; never persist actions or URLs.
+    witness = sensed.get('frame_witness', {})
+    retained = Path(witness['artifact']) if witness.get('artifact') else None
+    directory = evidence_directory(retained)
+    prefix = task['task'] + '-ax-failure'
+    def clean(value):
+        encoded = json.dumps(redact(value), ensure_ascii=False)
+        encoded = encoded.replace(EXPECTED['T1'][1].removeprefix('Hello, '), '[REDACTED]')
+        return re.sub(r'data:[^"\s]*', '[REDACTED_URL]', encoded)
+    def rows(nodes, with_name=True):
+        return [dict(role=n.get('role'), box=n.get('box', n.get('bbox')),
+                     **({'name': n.get('name', n.get('text', ''))} if with_name else {}))
+                for n in nodes]
+    files = {}
+    for label, data in (
+        ('ax', rows(tree.get('elements', tree.get('nodes', [])))),
+        ('vision', rows(sensed['table']['elements'], False)),
+        ('wender', rows(sensed['state']['nodes']))):
+        filename = prefix + '-' + label + '.json'
+        private_write(directory / filename, clean(data))
+        files[label] = filename
+    frame = sensed['frame']
+    width, height = frame['width'], frame['height']
+    require(retained is not None, 'AX evidence frame absent')
+    try:
+        fd = os.open(retained, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        raise Failure('AX evidence frame absent', 'E2E_WITNESS') from None
+    with os.fdopen(fd, 'rb') as stream:
+        require(stat.S_ISREG(os.fstat(stream.fileno()).st_mode), 'AX evidence frame absent')
+        pixels = stream.read()
+    require(len(pixels) == width * height * 3, 'AX evidence frame size mismatch')
+    try:
+        from PIL import Image
+        import io
+        output = io.BytesIO()
+        Image.frombytes('RGB', (width, height), pixels).save(output, format='PNG')
+        filename = prefix + '.png'
+        private_write(directory / filename, output.getvalue())
+        frame_format = 'PNG'
+    except ImportError:
+        filename = prefix + '.rgb'
+        private_write(directory / filename, pixels)
+        frame_format = 'RGB24'
+    files['frame'] = filename
+    task.setdefault('ax_failure_evidence', []).append(dict(
+        directory=str(directory), files=files, expected=expected,
+        frame_format=frame_format, width=width, height=height))
+
+
 def prove_ax(task, sensed, tree, expected):
     rows = texts(tree)
-    require(all(token in rows for token in expected), 'AX readback differs from expected page')
     names = [n.get('name', '') for n in sensed['state']['nodes']]
+    if not all(token in rows for token in expected) or not all(token in names for token in expected):
+        try:
+            ax_failure_evidence(task, sensed, tree, expected)
+        except Exception as error:
+            # Evidence is best effort: the AX verdict below must stay the reported failure.
+            task.setdefault('ax_failure_evidence_errors', []).append(redact(str(error)))
+    require(all(token in rows for token in expected), 'AX readback differs from expected page')
     require(all(token in names for token in expected), 'AX differs from perceived Wender state')
     task['ax_proofs'].append(dict(expected=expected, texts=rows,
                                   frame_ref=sensed['frame'], tree_sha256=digest(tree)))
@@ -339,7 +410,8 @@ def run(backend, report):
             final_tree = stage(task, 'ax')
             prove_ax(task, final, final_tree, expected)
             if task_id == 'T3':
-                cells = [x for x in texts(final_tree) if x in expected]
+                cells = [n.get('name') for n in final_tree.get('elements', final_tree.get('nodes', []))
+                         if n.get('role') == 'group' and n.get('name') in expected]
                 require(cells == expected, 'table document order mismatch')
                 task['reported_cell'] = dict(row=1, col=2, value=cells[5])
                 require(task['read_plan'].get('value') == cells[5], 'read plan differs from AX cell')

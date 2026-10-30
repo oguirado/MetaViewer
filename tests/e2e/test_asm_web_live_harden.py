@@ -29,6 +29,9 @@ sys.path.insert(0, str(ROOT / 'agents'))
 
 # Each named regression must fail its security contract if the gate is removed.
 MUTATIONS = {
+    'MUT-EVIDENCE-ABSENT': ('test_ax_failure_evidence',
+        '            ax_failure_evidence(task, sensed, tree, expected)',
+        '            pass # MUT-EVIDENCE-ABSENT'),
     'MUT-PASTE-NOT-WIRED': ('test_live_launch_paste_mode',
         "os.environ['MV_SRF_LIVE_TEXT_INPUT'] = 'paste'",
         "os.environ['MV_SRF_LIVE_TEXT_INPUT'] = 'type'"),
@@ -415,6 +418,98 @@ class HardenTests(unittest.TestCase):
             decoded = base64.b64decode(payload).decode() if header.endswith(';base64') else unquote(payload)
             self.assertEqual(decoded, html)
             self.assertIn(web.fixture(page), decoded)
+
+    def test_ax_failure_evidence(self):
+        pixels = bytes([20, 30, 40]) * 6
+        retained = self.root / 'retained.rgb'
+        web.private_write(retained, pixels)
+        task = dict(task='T1', ax_proofs=[])
+        typed = 'Ada Lovelace'
+        url = web.page_url('form')
+        sensed = dict(frame=dict(width=3, height=2),
+            frame_witness=dict(artifact=str(retained)),
+            table=dict(elements=[dict(role='row', bbox=[0, 0, 3, 2], name=typed, url=url)]),
+            state=dict(nodes=[dict(role='status', name=typed, box=[0, 0, 3, 2], url=url)]))
+        tree = dict(elements=[dict(role='StaticText', name='EMPTY', box=[0, 0, 3, 2], url=url),
+                              dict(role='textbox', name=typed, box=[0, 0, 1, 1])])
+        with self.assertRaisesRegex(web.Failure, 'AX differs from perceived Wender state'):
+            web.prove_ax(task, sensed, tree, ['EMPTY'])
+        self.assertIn('ax_failure_evidence', task)
+        evidence = task['ax_failure_evidence'][0]
+        self.assertEqual(evidence['expected'], ['EMPTY'])
+        self.assertEqual(set(evidence['files']), {'ax', 'vision', 'wender', 'frame'})
+        directory = Path(evidence['directory'])
+        self.assertNotEqual(directory, retained.parent)  # a foreign parent is never reused
+        self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
+        for label, filename in evidence['files'].items():
+            path = directory / filename
+            data = path.read_bytes()
+            self.assertNotIn(typed.encode(), data)
+            self.assertNotIn(url.encode(), data)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            if label != 'frame':
+                for row in json.loads(data):
+                    self.assertEqual(set(row), {'role', 'box'} if label == 'vision'
+                                     else {'role', 'box', 'name'})
+        frame = directory / evidence['files']['frame']
+        self.assertTrue(frame.read_bytes().startswith(b'\x89PNG') if evidence['frame_format'] == 'PNG'
+                        else frame.read_bytes() == pixels)
+        # Exercise the PIL-absent fallback even on hosts that have PIL.
+        with patch.dict(sys.modules, {'PIL': None}):
+            with self.assertRaisesRegex(web.Failure, 'AX differs from perceived Wender state'):
+                web.prove_ax(task, sensed, tree, ['EMPTY'])
+        fallback = task['ax_failure_evidence'][-1]
+        self.assertEqual(fallback['frame_format'], 'RGB24')
+        self.assertEqual((fallback['width'], fallback['height']), (3, 2))
+        self.assertEqual((Path(fallback['directory']) / fallback['files']['frame']).read_bytes(), pixels)
+        self.assertEqual(task['ax_proofs'], [])
+        print('AX failure evidence: PNG-or-RGB24, redacted AX/vision/Wender retained')
+
+    def ax_mismatch(self, artifact):
+        task = dict(task='T1', ax_proofs=[])
+        sensed = dict(frame=dict(width=1, height=1), frame_witness=dict(artifact=str(artifact)),
+                      table=dict(elements=[]), state=dict(nodes=[dict(role='status', name='', box=[0, 0, 1, 1])]))
+        tree = dict(elements=[dict(role='StaticText', name='EMPTY', box=[0, 0, 1, 1])])
+        with self.assertRaisesRegex(web.Failure, 'AX differs from perceived Wender state'):
+            web.prove_ax(task, sensed, tree, ['EMPTY'])
+        return task
+
+    def test_ax_evidence_never_masks_failure(self):
+        # A missing or symlinked retained frame records an evidence error; the AX verdict still wins.
+        task = self.ax_mismatch(self.root / 'absent.rgb')
+        self.assertEqual(task['ax_failure_evidence_errors'], ['AX evidence frame absent'])
+        target = self.root / 'real.rgb'
+        web.private_write(target, b'\x00\x00\x00')
+        link = self.root / 'link.rgb'
+        link.symlink_to(target)
+        task = self.ax_mismatch(link)
+        self.assertEqual(task['ax_failure_evidence_errors'], ['AX evidence frame absent'])
+
+    def test_ax_evidence_directory_custody(self):
+        foreign = self.root / 'foreign'
+        foreign.mkdir(mode=0o755)
+        foreign.chmod(0o755)
+        web.private_write(foreign / 'f.rgb', b'\x00\x00\x00')
+        task = self.ax_mismatch(foreign / 'f.rgb')
+        self.assertNotEqual(Path(task['ax_failure_evidence'][0]['directory']), foreign)
+        self.assertEqual(sorted(p.name for p in foreign.iterdir()), ['f.rgb'])
+        self.assertEqual(foreign.stat().st_mode & 0o777, 0o755)
+        own = self.root / 'mv-web-evidence-own'
+        own.mkdir(mode=0o700)
+        own.chmod(0o700)
+        web.private_write(own / 'f.rgb', b'\x00\x00\x00')
+        task = self.ax_mismatch(own / 'f.rgb')
+        self.assertEqual(Path(task['ax_failure_evidence'][0]['directory']), own)
+
+    def test_evidence_absent_mutant(self):
+        # MUT-EVIDENCE-ABSENT must kill the evidence assertions, not the AX gate.
+        env = dict(os.environ, MV_WEB_TEST_MUTATION='MUT-EVIDENCE-ABSENT',
+                   PYTHONDONTWRITEBYTECODE='1')
+        result = subprocess.run([sys.executable, str(Path(__file__).resolve()),
+            'HardenTests.test_ax_failure_evidence'], env=env, capture_output=True, text=True, timeout=15)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('ax_failure_evidence', result.stderr)
+        print('KILLED MUT-EVIDENCE-ABSENT: missing ax_failure_evidence')
 
     def test_named_mutations(self):
         for name, (test_name, _, _) in MUTATIONS.items():

@@ -106,12 +106,17 @@
     var form = document.getElementById('greeting-form');
     var input = document.getElementById('name-input');
     var output = document.getElementById('result-text');
+    function setResult(value) {
+      output.textContent = value;
+      output.setAttribute('aria-label', value);
+    }
+    setResult('EMPTY');
     function applySubmission(ev) {
       if (ev && typeof ev.preventDefault === 'function') {
         ev.preventDefault();
       }
       var raw = String(input.value || '');
-      output.textContent = raw.length === 0 ? 'EMPTY' : 'Hello, ' + raw;
+      setResult(raw.length === 0 ? 'EMPTY' : 'Hello, ' + raw);
       output.setAttribute('data-submitted', 'true');
     }
     form.addEventListener('submit', applySubmission);
