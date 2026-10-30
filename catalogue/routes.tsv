@@ -37,6 +37,7 @@ mvctl.py	agents/metaviewer_agents/mvctl.py
 mw_handoff.py	agents/metaviewer_agents/mw_handoff.py
 mw_home.py	agents/metaviewer_agents/mw_home.py
 mw_owner.py	agents/metaviewer_agents/mw_owner.py
+mw_run.py	agents/metaviewer_agents/mw_run.py
 observe.py	agents/metaviewer_agents/observe.py
 init-844197da0d1b	agents/metaviewer_agents/perception/__init__.py
 base.py	agents/metaviewer_agents/perception/base.py
@@ -82,6 +83,7 @@ test_mvctl_v02_e2e.py	agents/tests/test_mvctl_v02_e2e.py
 test_mw_handoff.py	agents/tests/test_mw_handoff.py
 test_mw_home.py	agents/tests/test_mw_home.py
 test_mw_owner.py	agents/tests/test_mw_owner.py
+test_mw_run.py	agents/tests/test_mw_run.py
 testnat-bd9857859b1f	agents/tests/test_native_receipts.py
 test_nesting.py	agents/tests/test_nesting.py
 test_observe.py	agents/tests/test_observe.py
@@ -771,6 +773,8 @@ capsule_test.go	daemon-adapter/internal/capsule/capsule_test.go
 clock_test.go	daemon-adapter/internal/capsule/clock_test.go
 egress.go	daemon-adapter/internal/capsule/egress.go
 egress_policy.go	daemon-adapter/internal/capsule/egress_policy.go
+egress_started.go	daemon-adapter/internal/capsule/egress_started.go
+egresss-311e24e3d769	daemon-adapter/internal/capsule/egress_started_test.go
 egress_test.go	daemon-adapter/internal/capsule/egress_test.go
 exitmatrix_test.go	daemon-adapter/internal/capsule/exitmatrix_test.go
 external_lost_test.go	daemon-adapter/internal/capsule/external_lost_test.go
@@ -913,6 +917,7 @@ cliiden-e5ce120f22de	daemon-adapter/testdata/cli_identity_valid.json
 cli_malformed.txt	daemon-adapter/testdata/cli_malformed.txt
 deps.lock	deps.lock
 ADAPTER-f520074e84c0	docs/ADAPTER_INPUT_LIMITS.md
+AGENT_ENTRY.md	docs/AGENT_ENTRY.md
 ARCHITECTURE.md	docs/ARCHITECTURE.md
 COMMIT_LAWS.md	docs/COMMIT_LAWS.md
 DEMO_AGENT_SCRIPT.md	docs/DEMO_AGENT_SCRIPT.md
@@ -1167,6 +1172,7 @@ check_mutations.py	tests/supervisor/check_mutations.py
 supervisor-process.rs	tests/supervisor/process.rs
 run_process_gate.sh	tests/supervisor/run_process_gate.sh
 test_mutations.py	tests/supervisor/test_mutations.py
+testage-f3850bae48b0	tests/test_agent_entry_prompt.py
 testass-670edc3dc170	tests/test_assembly_smoke.py
 test_budget_basis.py	tests/test_budget_basis.py
 test_budget_gate.py	tests/test_budget_gate.py
@@ -1207,6 +1213,7 @@ test_multi_capsule.py	tests/test_multi_capsule.py
 test_mv_identity.py	tests/test_mv_identity.py
 testmvr-a9d3d841457c	tests/test_mv_ram_admission.py
 test_mw_home_cli.py	tests/test_mw_home_cli.py
+testmwr-cf2f3fed6e97	tests/test_mw_run_backend.py
 test_net_scope.py	tests/test_net_scope.py
 test_novac_matrix.py	tests/test_novac_matrix.py
 testnvo-3cc17c3863ab	tests/test_nv_offline_uid.py
@@ -1230,6 +1237,7 @@ gate_g_ai.py	tools/gate_g_ai.py
 mv_identity.py	tools/mv_identity.py
 mv_ram_admission.py	tools/mv_ram_admission.py
 mw_home_check.py	tools/mw_home_check.py
+mw_run_backend.py	tools/mw_run_backend.py
 router_index.py	tools/router_index.py
 sync_kit.mjs	tools/sync_kit.mjs
 ui-README.md	ui/README.md
