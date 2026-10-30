@@ -97,7 +97,11 @@ func RuntimeFromEnv() (Runtime, error) {
 		if id == "" || root == "" {
 			return zero, configuration("profile map or live profile/root required")
 		}
-		profiles[id] = capsule.Profile{Kind: "browser", NativeKind: "browser", RAMRoot: root, Display: ":100", Width: 1280, Height: 900}
+		mode := os.Getenv("MV_SRF_LIVE_TEXT_INPUT")
+		if !capsule.ValidTextInput(mode) {
+			return zero, configuration("invalid MV_SRF_LIVE_TEXT_INPUT")
+		}
+		profiles[id] = capsule.Profile{TextInput: mode, Kind: "browser", NativeKind: "browser", RAMRoot: root, Display: ":100", Width: 1280, Height: 900}
 	}
 	origin := monotonic()
 	if origin == 0 {
@@ -700,6 +704,9 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 			SurfaceID  string `json:"surface_id"`
 			ProposalID string `json:"proposal_id"`
 			Origin     string `json:"origin,omitempty"`
+			Action     struct {
+				Type string `json:"type"`
+			} `json:"action"`
 		}
 		_ = json.Unmarshal(q.Params, &params)
 		id, proposal, reqOrigin := params.SurfaceID, params.ProposalID, params.Origin
@@ -760,7 +767,16 @@ func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs m
 			events = append(events, receipt)
 			return events, nil
 		}
-		binding, native, err := m.Capture(ctx, id)
+		capture := func(c context.Context) (capsule.Binding, capsule.NativeFrame, error) { return m.Capture(c, id) }
+		var baseline frames.Ref
+		_ = json.Unmarshal(before, &baseline)
+		var binding capsule.Binding
+		var native capsule.NativeFrame
+		if params.Action.Type == "type" || params.Action.Type == "key" {
+			binding, native, err = settleInput(ctx, baseline.SHA256, capture, time.Now, waitInputCapture)
+		} else {
+			binding, native, err = capture(ctx)
+		}
 		if err != nil {
 			return failure(err)
 		}
@@ -938,6 +954,59 @@ func wireFailure(e ipc.Envelope, q capsule.Request, err error) ([]json.RawMessag
 	return []json.RawMessage{b}, nil
 }
 
+// [TARGET, unit decision] Settle only drained agent text/key input. Clicks and
+// human-origin input retain their existing capture policy. Never invent a change.
+const postInputSettleBound = 1500 * time.Millisecond
+const postInputCaptureInterval = 50 * time.Millisecond
+
+func waitInputCapture(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func settleInput(ctx context.Context, before string,
+	capture func(context.Context) (capsule.Binding, capsule.NativeFrame, error),
+	now func() time.Time, wait func(context.Context, time.Duration) error,
+) (capsule.Binding, capsule.NativeFrame, error) {
+	deadline := now().Add(postInputSettleBound)
+	bounded, cancel := context.WithTimeout(ctx, postInputSettleBound)
+	defer cancel()
+	var binding capsule.Binding
+	var last capsule.NativeFrame
+	for {
+		b, frame, err := capture(bounded)
+		if err != nil {
+			if last.Seq != 0 && bounded.Err() != nil && ctx.Err() == nil {
+				return binding, last, nil
+			}
+			return b, frame, err
+		}
+		binding, last = b, frame
+		// Without a published baseline no pixel change can be established.
+		if before == "" || frame.SHA256RGB24 != before {
+			return binding, last, nil
+		}
+		if deadline.Sub(now()) < postInputCaptureInterval {
+			return binding, last, nil
+		}
+		if err := wait(bounded, postInputCaptureInterval); err != nil {
+			if bounded.Err() != nil && ctx.Err() == nil {
+				return binding, last, nil
+			}
+			return binding, last, err
+		}
+		if !now().Before(deadline) {
+			return binding, last, nil
+		}
+	}
+}
+
 func decodeProfiles(raw string, dst *map[string]capsule.Profile) error {
 	if len(raw) > 1<<20 {
 		return configuration("profile map byte capacity refused")
@@ -947,7 +1016,15 @@ func decodeProfiles(raw string, dst *map[string]capsule.Profile) error {
 	}
 	decoder := json.NewDecoder(strings.NewReader(raw))
 	decoder.DisallowUnknownFields()
-	return decoder.Decode(dst)
+	if err := decoder.Decode(dst); err != nil {
+		return err
+	}
+	for _, profile := range *dst {
+		if !capsule.ValidTextInput(profile.TextInput) {
+			return configuration("invalid profile text_input")
+		}
+	}
+	return nil
 }
 
 // [TARGET, unit decision] Hold each directory descriptor while opening the next

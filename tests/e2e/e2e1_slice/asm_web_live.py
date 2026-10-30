@@ -12,6 +12,7 @@ is pinned in the private evidence directory. Configured planner argv permits
 only one executable under the lock-verified Wender root (no interpreter flags).
 Fixture bytes are allowlisted; deliberate fixture changes need reviewed pins.
 """
+import base64
 import hashlib
 import json
 import os
@@ -147,7 +148,7 @@ def planner_command(raw, root):
         raise Failure('planner argv not allowlisted', 'E2E_PREREQ') from error
 
 
-def page_url(page):
+def page_html(page):
     html = fixture(page)
     if page == 'flow_a':
         # Finite local A -> B -> A chain; the final A is the original fixture.
@@ -158,7 +159,27 @@ def page_url(page):
         html += '<script>document.getElementById("next-btn").href=URL.createObjectURL('
         html += 'new Blob([' + json.dumps(second).replace('</script', '<\\/script')
         html += '],{type:"text/html"}));</script>'
-    return 'data:text/html;charset=utf-8,' + quote(html, safe='')
+    return html
+
+
+def page_url(page):
+    html = page_html(page)
+    encoded = 'data:text/html;charset=utf-8,' + quote(html, safe='')
+    compact = 'data:text/html;charset=utf-8;base64,' + base64.b64encode(html.encode()).decode('ascii')
+    return min((encoded, compact), key=len)
+
+
+def start_live_session(session):
+    # Scope the adapter configuration to this launch, restoring caller state.
+    prior = os.environ.get('MV_SRF_LIVE_TEXT_INPUT')
+    os.environ['MV_SRF_LIVE_TEXT_INPUT'] = 'paste'
+    try:
+        return session.start()
+    finally:
+        if prior is None:
+            os.environ.pop('MV_SRF_LIVE_TEXT_INPUT', None)
+        else:
+            os.environ['MV_SRF_LIVE_TEXT_INPUT'] = prior
 
 
 def texts(tree):
@@ -188,6 +209,11 @@ def seal_task(task):
 class HostedRPC:
     """Test-only pipe protocol. It never loads native/live modules."""
     def call(self, stage, **args):
+        if stage == 'start':
+            class Launch:
+                def start(_):
+                    return self.request('start', text_input=os.environ.get('MV_SRF_LIVE_TEXT_INPUT'))
+            return start_live_session(Launch())
         if stage == 'navigate':
             # Exercise the real navigation implementation with hosted boundaries.
             self.call('navigate_begin', **args)
@@ -453,7 +479,7 @@ class LiveBackend:
             self.exec_pins = dict(pins, verifier=dict(path=str(built),
                 sha256=hashlib.sha256(built.read_bytes()).hexdigest()))
             self.verifier = pinned_executable('verifier', str(built), self.exec_pins)
-        self.session.start()
+        start_live_session(self.session)
         return dict(profile='mv-live-1', capsules=self.session.state['capsules'],
                     surface_id=self.session.surface_id)
 

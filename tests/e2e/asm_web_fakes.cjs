@@ -198,6 +198,8 @@ class HostedWebCapsuleFake {
     this.lastFrame = null;
     this.geometryChangedSinceFrame = false;
     this.inputLog = [];
+    this.textInputMode = options.textInputMode || 'type';
+    this.navigationInputs = [];
     this.wrongGreetingMutation = Boolean(options.wrongGreetingMutation);
     this.loadPage(options.initialPage || 'form');
   }
@@ -312,6 +314,21 @@ class HostedWebCapsuleFake {
       }
     }
     return null;
+  }
+
+  navigationCapture(action, before, after, neverChanges = false) {
+    const argv = ['input', '--container', this.capsuleId];
+    if (action.type === 'type') {
+      argv.push('--type-stdin');
+      if (this.textInputMode === 'paste') argv.push('--paste');
+    } else argv.push(action.type === 'key' ? '--key' : '--click');
+    this.navigationInputs.push({ mode: this.textInputMode, argv, text: action.text });
+    let captures = 0;
+    return () => {
+      captures++;
+      const delayed = action.type === 'type' && this.textInputMode === 'type' && captures === 1;
+      return neverChanges || delayed ? before : after;
+    };
   }
 
   typeRefusal(action) {
