@@ -1231,8 +1231,149 @@ jobs:
           rustup toolchain install 1.97.0 --profile minimal
           rustup override set 1.97.0
           cargo fetch --locked
+      # [TARGET, unit decision] Owner tests require the assembly-locked Wender checkout.
+      - name: Require Wender access
+        env:
+          JOB_ID: python
+          PLATFORM: ${{ matrix.platform }}
+          ASSEMBLY_READ_TOKEN: ${{ secrets.ASSEMBLY_READ_TOKEN }}
+        run: |
+          set +e
+          set -u -o pipefail
+          EVDIR="${RUNNER_TEMP}/metaviewer-ci/${JOB_ID}/${PLATFORM}"
+          mkdir -p "${EVDIR}"
+          WF_SHA="$(python3 -c 'import hashlib; print(hashlib.sha256(open(".github/workflows/ci.yml","rb").read()).hexdigest())')"
+          ISSUER="CI/${JOB_ID}/${GITHUB_RUN_ID} [VM]"
+          sanitize() {
+            python3 - "$1" "$2" <<'PYEOF'
+          import re, sys
+          text = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
+          for prefix in ('gh' + 'p_', 'gh' + 's_', 'gh' + 'o_', 'gh' + 'u_', 'gh' + 'r_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
+              p_pat = r'(?:\\?\r?\n)?'.join(r'(?:%s|%%(?:25)*(?:%02x|%02x))' % (re.escape(c), ord(c.lower()), ord(c.upper())) for c in prefix)
+              text = re.sub(p_pat + r'(?:[A-Za-z0-9_\-]|%(?:25)*[0-9a-fA-F]{2}|\\\r?\n){4,}', '[REDACTED]', text, flags=re.I)
+          text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
+          open(sys.argv[2], 'w').write(text)
+          PYEOF
+          }
+          finish_gate() {
+            local gate="$1" rc="$2" outcome="$3" reason="$4" raw="$5" fixture="$6" countsrc="$7" parseut="$8"
+            shift 8
+            [ "${1:-}" = "--" ] && shift
+            local sane="${raw}.sane"
+            sanitize "$raw" "$sane" || return 2
+            GATE="$gate" PLATFORM="$PLATFORM" ISSUER="$ISSUER" WF_SHA="$WF_SHA" RC="$rc" OUTCOME="$outcome" \
+            REASON="$reason" EVDIR="$EVDIR" RAW="$raw" SANE="$sane" FIXTURE="$fixture" COUNTSRC="$countsrc" \
+            PARSEUT="$parseut" CWD="$(pwd -P)" GCWD="${GCWD:-}" SHA="$GITHUB_SHA" \
+            ARGV_JSON="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@")" \
+            python3 <<'PYEOF' || return 2
+          import hashlib, json, os, re
+          e = os.environ
+          def sha_file(p):
+              with open(p, 'rb') as f:
+                  return hashlib.sha256(f.read()).hexdigest()
+          rc = None if e['RC'] == 'UNEXEC' else int(e['RC'])
+          passed = failed = skipped = None
+          if e['PARSEUT'] == '1':
+              text = open(e['SANE']).read()
+              m = re.search(r'^Ran (\d+) tests?', text, re.M)
+              if m:
+                  total = int(m.group(1))
+                  f = re.search(r'^FAILED \((.*)\)', text, re.M)
+                  if f:
+                      g = lambda n: (lambda m: int(m.group(1)) if m else 0)(re.search(n + r'=(\d+)', f.group(1)))
+                      failed = g('failures') + g('errors')
+                      skipped = g('skipped')
+                      passed = total - failed - skipped
+                  elif re.search(r'^OK', text, re.M):
+                      s = re.search(r'^OK \(skipped=(\d+)\)', text, re.M)
+                      skipped = int(s.group(1)) if s else 0
+                      failed = 0
+                      passed = total - skipped
+          receipt = {
+              'schema': 'gate_receipt/v1', 'gate_id': e['GATE'], 'leg': e['GATE'], 'profile': 'W0',
+              'owner': 'W0-CI-MATRIX', 'issuer': e['ISSUER'],
+              'scope': {'unit': 'W0-CI-MATRIX', 'platform': e['PLATFORM'], 'feature': e['GATE'],
+                        'artifact': e['GATE'] + '.receipt.json'},
+              'argv': json.loads(e['ARGV_JSON']), 'cwd': e['GCWD'] or e['CWD'],
+              'rc': rc, 'outcome': e['OUTCOME'], 'reason': e['REASON'],
+              'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
+                             'sanitized_log_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
+                             'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
+              'product_identity': None,
+              'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
+                              'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
+                              'accepted': e['OUTCOME'] == 'PASS'}],
+              'counts': {'passed': passed, 'failed': failed, 'skipped': skipped, 'source': e['COUNTSRC']}}
+          out = os.path.join(e['EVDIR'], e['GATE'] + '.receipt.json')
+          with open(out, 'w') as f:
+              json.dump(receipt, f, indent=2)
+          print('receipt: ' + out)
+          PYEOF
+            {
+              echo "## ${gate} [VM] rc ${rc/UNEXEC/UNKNOWN}"
+              echo "outcome ${outcome}: ${reason}"
+              echo '```'
+              tail -n 40 "$sane"
+              echo '```'
+              echo '```'
+              grep -E '^FAIL' "$sane" | head -40
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            tail -n 40 "$sane"
+          }
+          blocked() {
+            local gate="$1" reason="$2" fixture="$3"
+            shift 3
+            [ "${1:-}" = "--" ] && shift
+            local raw="$EVDIR/${gate}.log"
+            printf 'BLOCKED: %s\n' "$reason" > "$raw"
+            finish_gate "$gate" UNEXEC BLOCKED "$reason" "$raw" "$fixture" "unexecuted" 0 -- "$@"
+            return 2
+          }
+          if [ -z "${ASSEMBLY_READ_TOKEN:-}" ]; then
+            blocked python-agents "ASSEMBLY_READ_TOKEN_MISSING: pinned Wender checkout required" agents/pyproject.toml -- python3 -m unittest discover -s agents/tests -v
+            exit 2
+          fi
+      - name: Parse deps.lock pins (require 40-hex commits)
+        id: pins
+        run: |
+          set -euo pipefail
+          python3 tools/assembly_smoke.py \
+            --lock deps.lock \
+            --github-output "${GITHUB_OUTPUT}" \
+            --print-pins
+
+      - name: Checkout wender-agent at pinned commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ steps.pins.outputs.wender_agent_repo }}
+          ref: ${{ steps.pins.outputs.wender_agent_commit }}
+          token: ${{ secrets.ASSEMBLY_READ_TOKEN }}
+          path: _deps/wender-agent
+          persist-credentials: false
+
+      - name: Verify Wender HEAD matches deps.lock
+        env:
+          PIN_WENDER_AGENT: ${{ steps.pins.outputs.wender_agent_commit }}
+        run: |
+          set -euo pipefail
+          verify_head() {
+            local name="$1"
+            local dir="$2"
+            local expected="$3"
+            local actual
+            actual="$(git -C "${dir}" rev-parse HEAD)"
+            echo "${name}: HEAD=${actual} (expected=${expected})"
+            if [ "${actual}" != "${expected}" ]; then
+              echo "::error::${name} HEAD ${actual} does not match pinned commit ${expected}"
+              exit 1
+            fi
+          }
+          verify_head "wender-agent" "_deps/wender-agent" "${PIN_WENDER_AGENT}"
+
       - name: Run Python agent gates
         env:
+          MV_MW_WENDER_ROOT: ${{ github.workspace }}/_deps/wender-agent
           JOB_ID: python
           PLATFORM: ${{ matrix.platform }}
           EXPECT_ARCH: ${{ matrix.arch }}

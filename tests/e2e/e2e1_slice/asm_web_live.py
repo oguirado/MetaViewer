@@ -811,10 +811,76 @@ class LiveBackend:
         return self._cleanup_result
 
 
+def run_memoryweb(backend, report, corpus):
+    from metaviewer_agents.mw_owner import ReplayOwner
+    evidence = getattr(backend, 'evidence', None)
+    if evidence is None:
+        evidence = Path(tempfile.mkdtemp(prefix='mv-mw-evidence-'))
+        os.chmod(evidence, 0o700)
+        backend.evidence = evidence
+    notice = dict(mode='replay', network='offline fixtures', acknowledged=True,
+                  mono_ns=time.monotonic_ns())
+    owner = ReplayOwner(backend, corpus, evidence / 'memoryweb-run.json', notice=notice)
+    owner.validate_corpus()
+    pages = corpus.workflow['evaluation_profile']['fixture_ids']
+    require(len(pages) == 1 and pages[0] in FIXTURE_PINS,
+            'MemoryWeb replay requires one pinned built-in fixture', 'MW_FIXTURE')
+    page = pages[0]
+    starts = [pack for pack in backend.packs if pack.document['start'] == page]
+    require(len(starts) == 1, 'MemoryWeb fixture has no unique pinned start', 'MW_FIXTURE')
+    private_write(evidence / 'memoryweb-notice.json', json.dumps(notice, sort_keys=True))
+    try:
+        report['net'] = owner.check_network()
+        report['ownership'] = backend.call('start')
+        require(report['ownership'].get('profile') == 'mv-live-1' and
+                len(report['ownership'].get('capsules', [])) == 1, 'one owned capsule required')
+        owner.check_network()
+        report['fixture_setup'] = backend.call('navigate', page=page, url=page_url(page),
+                                               marker=starts[0].marker)
+        result = owner.run()
+        summary_schema_validated = False
+        if result.summary is not None:
+            emitted = corpus.gate.strict_load(owner.output.read_bytes())
+            summary_schema_validated = (emitted == result.summary and corpus.gate.conforms(
+                emitted, corpus.schemas['run'], corpus.bundle['$defs']))
+            require(summary_schema_validated, 'MemoryWeb run summary schema failed', 'MW_RUN_SCHEMA')
+        report['memoryweb'] = dict(rc=result.rc, verdict_code=result.verdict_code,
+                                   summary_schema_validated=summary_schema_validated,
+                                   summary=result.summary, receipts=owner.receipts,
+                                   summary_file=str(owner.output))
+        require(result.rc == 0 and result.summary is not None and owner.output.is_file(),
+                'MemoryWeb replay refused: ' + result.verdict_code, 'MW_RUN')
+        report['replay_probe'] = backend.call('replay')
+        replay = report['replay_probe']
+        require(replay.get('status') == 'PASS' and type(replay.get('corrupt_rc')) is int and
+                replay['corrupt_rc'] != 0 and type(replay.get('committed_records')) is int and
+                replay['committed_records'] > 0 and
+                re.fullmatch(r'[0-9a-f]{64}', replay.get('digest', '')), 'replay proof absent')
+    except Exception as error:
+        report['error'] = dict(code=getattr(error, 'code', 'MW_RUN'), detail=str(error))
+    finally:
+        try:
+            report.update(backend.call('cleanup'))
+        except Exception as error:
+            report['cleanup_error'] = str(error)
+        owner.dispatch.close()
+    complete = (not report.get('error') and not report.get('cleanup_error') and
+                report.get('container_cleanup') == 'PASS' and
+                report.get('process_cleanup', {}).get('status') == 'PASS' and
+                report.get('process_cleanup', {}).get('temporary_tree_absent') is True and
+                report.get('process_cleanup', {}).get('socket_absent') is True and
+                report.get('ram_cleanup', {}).get('status') == 'PASS' and
+                report.get('ram_cleanup', {}).get('ram_absent') is True and bool(report.get('wire_evidence')))
+    report['status'] = 'DONE' if complete else 'BLOCKED'
+    return 0 if complete else 1
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--hosted-rpc', action='store_true')
     parser.add_argument('--pack', action='append', default=[])
+    parser.add_argument('--mw-root', type=Path)
+    parser.add_argument('--mw-workflow')
     options = parser.parse_args()
     hosted = options.hosted_rpc
     if not hosted and os.environ.get('MV_LIVE_WEB') != '1':
@@ -829,10 +895,18 @@ def main():
                     'explicit live gate and mv-live-1 identity required', 'E2E_PREREQ')
             for key in REQUIRED_ENV:
                 require(bool(os.environ.get(key)), 'missing ' + key, 'E2E_PREREQ')
+        require(bool(options.mw_root) == bool(options.mw_workflow),
+                '--mw-root and --mw-workflow are required together', 'MW_SELECTOR')
+        corpus = None
+        if options.mw_root:
+            require(not options.pack, '--pack cannot be combined with MemoryWeb', 'MW_SELECTOR')
+            sys.path.insert(0, str(ROOT / 'agents'))
+            from metaviewer_agents.mw_owner import Corpus
+            corpus = Corpus(options.mw_root, options.mw_workflow)
         packs = load_packs(options.pack, os.environ.get('MV_AUTOMATIONS_DIR'))
         backend = HostedRPC() if hosted else LiveBackend()
         backend.packs = packs
-        rc = run(backend, report)
+        rc = run_memoryweb(backend, report, corpus) if corpus else run(backend, report)
     except Exception as error:
         report.update(status='BLOCKED', error=dict(code=getattr(error, 'code', 'E2E_PREREQ'), detail=str(error)))
         rc = 1

@@ -328,6 +328,86 @@ plus the pinned `MV_WENDER_ROOT` and `VQA_VE_ROOT` checkouts. With the identity
 unallocated, run `python3 tests/e2e/e2e1_slice/asm_web_live.py`. The conductor
 runs this live command; hosted CI must leave `MV_LIVE_WEB` unset.
 
+MemoryWeb replay uses `--mw-root "$MEMORYWEB_ROOT" --mw-workflow '<site>/<workflow>'`
+on the same Python entry point. The checkout is read-only; workflows are loaded
+from `sites/<site>/workflows/<workflow>.json` alongside `site.json`. Its schema
+projections must match Wender's pinned bundle, and the real MemoryWeb gate checks
+canonical bytes, provenance and supported capabilities before backend startup.
+`evaluation_profile.fixture_ids` names one built-in offline fixture. This unit
+supports draft replay with T1 element anchors (`ax:<exact name>`) and registered
+`mv.ax.present.v1` / `mv.ax.focus.v1` boolean predicates. Bind exactly one string
+named `name`; comparisons use `truth` with no snapshot or evidence references.
+AX absence refuses. No site or workflow bytes grant authorization.
+
+The transport translates click, key, type and point-free scroll through the
+existing core admission and AdmittedExecutor path, checks the exact proposal,
+surface and input-clock receipt binding, and never retries a send. Drag, double
+click, point scroll, pixel-template targets, masked visual verifiers and
+shadow/promoted/repair modes refuse. [TARGET, unit decision] Trusted Python callers
+supply `ReplayOwner(..., slot_values={slot_id: value})` in process; corpus JSON,
+argv and environment never provision values. Wender `paste` requires a declared
+slot and focused precondition, then `private_pipe` maps it to one admitted `type`
+proposal with a verified receipt. Fresh focused AX `value` (or `text`) measures
+initial and accepted Unicode code-point lengths. Missing length evidence refuses.
+No clipboard transport or native paste is used. Slot max_length, Wender slot-byte
+limits and core type limits apply before propose; controls (including tabs and
+newlines), bidi controls, surrogates and empty text refuse. The core disallows
+empty type proposals even when slot metadata permits an empty editor. A nonempty
+editor with clear_first refuses because this owner has no clearing action.
+Receipts retain only binding metadata; summary/evidence never include the input.
+The hosted text fixture supplies values on a private stdin pipe to a trusted test
+composition, asserts click/type/Return, and verifies an answer marker via existing
+state_signal/truth predicates. The public runner CLI has no secret provisioning
+flag; production callers must compose the in-process owner.
+The hosted workflow exercises click, click, focused key, then point-free scroll,
+asserting the exact proposal sequence and validating the emitted run schema.
+[TARGET, unit decision] Text entry uses the existing schemas without extension.
+
+`memoryweb-run.json` (MemoryWeb `mw.run.v1`), the private offline operator notice,
+and an authenticated metadata event journal are retained beside the runner's
+receipts in its private evidence directory. Uncertain input keeps the intent
+journal and produces no successful run summary, following Wender's fence.
+[TARGET, unit decision] Delivery budgets must be in 1–60000 ms and policy pacing
+must be in 0–5000 ms; larger values refuse at admission. Chord parts are checked
+individually against Escape/Esc and both forbidden-key policies; empty parts
+refuse. Pacing never sleeps to or beyond the run deadline. Static target, action,
+focus and predicate support is checked before any input.
+Policies requiring write go-ahead refuse; advance notice must have actually
+elapsed. Core admission checks the held injection lease for every action.
+
+With the existing live-run prerequisites and executable pins supplied by the
+operator, a later **offline replay using the native backend** is:
+
+```sh
+MV_LIVE_WEB=1 MV_E2E_LIVE=1 MV_SRF_LIVE_PROFILE=mv-live-1 \
+  python3 tests/e2e/e2e1_slice/asm_web_live.py \
+  --mw-root "$MEMORYWEB_ROOT" --mw-workflow "$MW_WORKFLOW"
+```
+
+Fixture replay requires offline proof before startup and every input. Real-site
+owners require a declared capsule network mode (open, allowlisted/proxied, or
+legacy); open network is the default operator policy and proxy/allowlist use is
+optional per capsule. [TARGET, unit decision] The read-only backend seam is
+`network_context` returning `{mode: "open" | "allowlisted/proxied" | "legacy"}`.
+Missing, unknown or changed declarations refuse with `MW_NETWORK`; the operator
+notice must match the declaration and verified owner receipts retain it. The
+pinned Wender runner uses its replay execution lane for both owner contexts;
+this does not declare or alter the capsule network policy. `MUT-OWNER-NET-DOWN`
+scans owner/runner sources and proves forbidden-call injection is detected;
+`MUT-SITE-MODE-MISSING` and `MUT-REPLAY-NO-PROOF` refuse missing declarations
+and absent/revoked fixture proofs before input. Hosted verification
+uses `node --test tests/e2e/asm_web_memoryweb_hosted.test.js`; provide the locked
+Wender checkout through `MV_WENDER_ROOT`. The fixture builder derives a temporary
+MemoryWeb checkout from the pinned schemas and exercises the real Wender runner
+and state shim. Negative controls cover schema rejection before backend startup,
+unsupported actions before input, receipt mismatch without retry, and absence
+of any native input import or process launcher in the owner.
+For the aggregate test suite, set `MV_MW_WENDER_ROOT` to that same checkout and
+leave `MV_WENDER_ROOT` unset globally. The new tests scope `MV_WENDER_ROOT` to
+their owners and child runners; setting it globally opts older planner tests
+into a different execution mode. This alias is test configuration only.
+
+
 The runner creates one owned browser capsule, revalidates the read-only offline
 fixture proof before every action attempt and navigation, and retains one perception
 client across tasks. The proof checks immutable fixture hashes, CSP, and pinned
@@ -456,7 +536,7 @@ reported value by zero-based marker index. T3 declares row 1, col 2, index 5
 [TARGET] and retains its historical ordered proof and value `27`. Reads must cover `expect` exactly once in order and the
 last step must be a read; reads consume no proposals. Each marker is independently
 proved in both AX and perceived state, and the final seal requires all proofs.
-Inputs retain custody, network-down, budget and verified-receipt gates.
+Inputs retain custody, offline-fixture proof, budget and verified-receipt gates.
 
 Admission caps [TARGET]: metadata 64 KiB, each page 1 MiB, total page bytes 8 MiB,
 64 fixtures, 256 steps/markers, 32 selected packs, and budget at most 10000.
@@ -467,3 +547,26 @@ suite:
 systemd-run --user --scope -q -p MemoryMax=8G -p MemorySwapMax=0 \
   node --test tests/e2e/asm_web_live_hosted.test.js tests/e2e/asm_web_packs_hosted.test.js
 ```
+
+CAPTCHA-HANDOFF: the offline owner invokes the pinned Wender STOP detector
+(`wender/perceive/stopstate.py:89–176`) on a fresh observation after pacing in the pre-intent `check('send')` phase,
+immediately before returning authorization. The transport consumes that observation
+without another STOP check after intent. `HUMAN_HANDOFF` uses the pinned MemoryWeb protocol's human
+handoff return code (`docs/spec/MEMORYWEB_PROTOCOL.md:555`).
+[TARGET, unit decision] The minimal observed-wall seam is an observation
+`observed_wall: {kind: "login_wall" | "captcha_wall", observed: true}`; login
+controls alone remain negative. Extra marker metadata is allowed. Marker walls
+report evidence kind `ax_role_name` synthetically, without claiming an AX cue. STOP is absorbing for that owner: no input,
+retry, reset, or observation polling. A private `metaviewer.handoff/v1` JSON
+file beside the summary contains only surface identity, step index, reason,
+confidence and evidence kinds. `result.handoff_path` and the summary's
+`evidence_refs` expose its path without changing the closed run schema.
+The operator uses existing `take_control` and solves by hand. Continuing
+requires an explicitly authorized new run; already-satisfied steps retain the
+runner's skip behavior. Run `python3 -m unittest tests.test_mw_owner
+tests.test_mw_handoff` from `agents` with `MV_MW_WENDER_ROOT` set to the pinned
+checkout, and run the Node hosted MemoryWeb suite with that dependency scoped
+to the command. The tests cover MUT-RETRY-LOOP, MUT-AUTO-SOLVE, MUT-NO-NOTIFY,
+MUT-LEAK, every pinned STOP reason, and consent/generic-Verify negatives.
+
+The hosted Python agent suite checks out Wender at the `deps.lock` pin using `ASSEMBLY_READ_TOKEN`, verifies HEAD, and scopes `MV_MW_WENDER_ROOT` to the agent step; a missing token fails closed with `ASSEMBLY_READ_TOKEN_MISSING`.
