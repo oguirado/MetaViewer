@@ -178,7 +178,7 @@ async function hosted(packArgs = [], environment = {}, mutation = '') {
         core = new HostedCoreAdmissionFake(capsule, { stepBudget: args.page === 'table' || external ? 0 : 12 });
         return [];
       }
-      case 'observe': latest = core.observe(); wire.push(latest.observation); return latest.observation;
+      case 'observe': latest = core.observe({ marks_out: '/dev/shm/vqa-cu/asm-web-marks.png' }); wire.push(latest.observation); return latest.observation;
       case 'perceive': {
         const frame = latest.frameRef, bytes = fs.readFileSync(frame.shm_path);
         assert.equal(sha(bytes), frame.sha256);

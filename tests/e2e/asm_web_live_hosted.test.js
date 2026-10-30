@@ -195,7 +195,7 @@ async function dryRun(mutation = '') {
       }
       case 'observe':
         assert.equal(args.timeout_ms, 5000);
-        latest = core.observe();
+        latest = core.observe({ marks_out: '/dev/shm/vqa-cu/asm-web-marks.png' });
         wire.push(latest.observation);
         return latest.observation;
       case 'perceive': {

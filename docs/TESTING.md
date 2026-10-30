@@ -600,3 +600,5 @@ lookup, network guard, or subprocess call; a valid-id control reaches the guard
 and the exact fixed viewer argv. Prompt/check ids, interpreter selection and
 interrupted-check JSON refusal are covered too. The operator stops recording;
 the host wait has no deadline by design.
+
+Live perception uses a private RAM marks directory under `/dev/shm/vqa-cu`, removed at cleanup; the mark count per tick is in the report.

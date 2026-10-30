@@ -165,7 +165,7 @@ sys.exit(runtime['main']())
         core = new HostedCoreAdmissionFake(capsule, { stepBudget: 8 });
         return [];
       case 'observe':
-        latest = core.observe();
+        latest = core.observe({ marks_out: '/dev/shm/vqa-cu/asm-web-marks.png' });
         latest.observation.frame_ref = latest.frameRef;
         if (mutation === 'captcha') latest.observation.url = 'https://google.com/sorry?secret=private';
         if (mutation === 'login-wall') latest.observation.observed_wall = { kind: 'login_wall', observed: true };

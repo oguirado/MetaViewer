@@ -32,6 +32,9 @@ MUTATIONS = {
     'MUT-EVIDENCE-MASKS-FAILURE': ('test_ax_evidence_never_masks_failure',
         "        try:\n            ax_failure_evidence(task, sensed, tree, expected)\n        except Exception as error:\n            # Evidence is best effort: the AX verdict below must stay the reported failure.\n            task.setdefault('ax_failure_evidence_errors', []).append(redact(str(error)))",
         "        ax_failure_evidence(task, sensed, tree, expected)"),
+    'LIVE-ADAPTER-NO-MARKS': ('test_live_adapter_marks_out',
+        ",\n                                             marks_out=self.marks_directory / 'marks.png'",
+        ''),
     'MUT-EVIDENCE-ABSENT': ('test_ax_failure_evidence',
         '            ax_failure_evidence(task, sensed, tree, expected)',
         '            pass # MUT-EVIDENCE-ABSENT'),
@@ -514,6 +517,107 @@ class HardenTests(unittest.TestCase):
         self.assertIn('ax_failure_evidence', result.stderr)
         print('KILLED MUT-EVIDENCE-ABSENT: missing ax_failure_evidence')
 
+    def marks_backend(self):
+        from metaviewer_agents.perception import vcore, deps_lock
+
+        class FaithfulAdapter:
+            # vcore._vision_from_c2: elements come from marks, otherwise crops.
+            # vision-engine 3bb5483 vadapt/vserve.py:295 computes marks only
+            # with marks_out; crops localize changes, not settled page content.
+            def __init__(adapter, root, *, marks_out=None, **kwargs):
+                adapter.marks_out = marks_out
+                adapter.previous = None
+                adapter.last_transport = 'vserve'
+                adapter._vserve_proc = None
+                if marks_out is not None:
+                    parent = Path(marks_out).parent
+                    info = parent.lstat()
+                    self.assertFalse(parent.is_symlink())
+                    self.assertTrue(parent.is_dir())
+                    self.assertEqual(info.st_uid, os.getuid())
+                    self.assertEqual(info.st_mode & 0o777, 0o700)
+                    self.assertTrue(parent.resolve().is_relative_to(Path('/dev/shm/vqa-cu').resolve()))
+
+            def perceive(adapter, frame):
+                changed = adapter.previous != frame['sha256']
+                adapter.previous = frame['sha256']
+                box = dict(x=0, y=0, w=2, h=2)
+                parsed = dict(changed=None, regions=[], timing_us=1, mark_cap_reached=False,
+                    marks=[dict(box, id=1, kind='button', score=0.9)] if adapter.marks_out else [],
+                    crops=[dict(box, reason='salient')] if changed else [])
+                return vcore._BoundVision(vcore._vision_from_c2(parsed, 2, 2), frame['sha256'])
+
+            def close(adapter):
+                pass
+
+        b = self.cleanup_backend()
+        b.observations = {}
+        b.session.state = None
+        b.stack.inventory = Mock(return_value=set())
+        b.live.profile_containers = Mock(return_value=set())
+        b.retain = Mock(return_value={})
+        b.op_ax = Mock(return_value={'nodes': [{'name': 'Operator Name'}]})
+        self.root.chmod(0o700)
+        env = dict(MV_SRF_STATE_DIR=str(self.root), MV_E2E_VERIFY_BIN=str(self.root / 'verifier'),
+                   MV_SRF_BIN_DIR=str(self.root), MV_SRF_LIVE_RAM_ROOT=str(self.root))
+        self.enterContext(patch.dict(os.environ, env))
+        self.enterContext(patch.object(deps_lock, 'resolve_locked_component', return_value=self.root))
+        self.enterContext(patch.object(vcore, 'VCorePerceptionAdapter', FaithfulAdapter))
+        self.enterContext(patch.object(web, 'pinned_executable', return_value=str(self.root / 'verifier')))
+        self.enterContext(patch.object(web, 'start_live_session', side_effect=lambda session: (
+            setattr(session, 'state', {'capsules': [], 'pids': [], 'published': []}),
+            setattr(session, 'surface_id', 'fixture'))))
+        return b
+
+    def test_live_adapter_marks_out(self):
+        b = self.marks_backend()
+        b._start()
+        self.addCleanup(b.op_cleanup)
+        frame = dict(sha256='a' * 64, width=2, height=2, generation=1, surface_id='fixture')
+        try:
+            for _ in range(2):
+                sensed = b.op_perceive({'frame_ref': frame})
+                self.assertTrue(sensed['table']['elements'])
+                self.assertEqual(sensed['transport'], 'vserve')
+        except web.Failure as error:
+            self.fail(str(error))
+        self.assertEqual([tick['mark_count'] for tick in b.session.report['perception_ticks']], [1, 1])
+        marks = Path(b.adapter.marks_out)
+        self.assertEqual(marks.name, 'marks.png')
+        self.assertTrue(marks.parent.name.startswith('mv-web-marks-'))
+        self.assertEqual(marks.parent.parent, Path('/dev/shm/vqa-cu'))
+        self.assertEqual(marks.parent.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(marks.parent.stat().st_uid, os.getuid())
+        result = b.op_cleanup()
+        self.assertTrue(result['marks_directory_absent'])
+        self.assertFalse(marks.parent.exists())
+        self.assertEqual(len(result['perception_ticks']), 2)
+        self.assertEqual(result['cleanup_errors'], [])
+
+    def test_live_adapter_marks_cleanup_on_start_failure(self):
+        b = self.marks_backend()
+        with patch.object(web, 'start_live_session', side_effect=web.Failure('after marks allocation')):
+            with self.assertRaisesRegex(web.Failure, 'after marks allocation'):
+                b.op_start()
+        self.assertTrue(b.marks_directory.name.startswith('mv-web-marks-'))
+        self.assertFalse(b.marks_directory.exists())
+        self.assertTrue(b._cleanup_result['marks_directory_absent'])
+
+    def test_live_adapter_marks_cleanup_refuses_symlink(self):
+        b = self.marks_backend()
+        b._start()
+        marks = b.marks_directory
+        marks.rmdir()
+        target = self.root / 'foreign-marks'
+        target.mkdir(mode=0o700)
+        (target / 'keep').write_text('foreign')
+        marks.symlink_to(target, target_is_directory=True)
+        self.addCleanup(marks.unlink)
+        result = b.op_cleanup()
+        self.assertFalse(result['marks_directory_absent'])
+        self.assertTrue(any('marks directory' in error for error in result['cleanup_errors']))
+        self.assertTrue((target / 'keep').exists())
+
     def test_named_mutations(self):
         for name, (test_name, _, _) in MUTATIONS.items():
             with self.subTest(mutation=name):
@@ -523,7 +627,12 @@ class HardenTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0, 'surviving mutation: ' + name)
                 self.assertIn('FAIL:', result.stderr, result.stderr)
                 self.assertNotIn('ERROR:', result.stderr, result.stderr)
-                print('KILLED ' + name)
+                if name == 'LIVE-ADAPTER-NO-MARKS':
+                    detail = 'live perception produced no elements (marks absent)'
+                    self.assertIn(detail, result.stderr)
+                    print('KILLED ' + name + ': ' + detail)
+                else:
+                    print('KILLED ' + name)
 
 
 if __name__ == '__main__':
