@@ -917,10 +917,15 @@ else if (process.argv.includes('--nested-depth=1')) {
     let entry;
     if (process.env.MV_PACKAGE_SMOKE === '1') {
       let smokeHandled = false;
+      const rendererTimer = setTimeout(() => {
+        writeFdSync(2, 'PKG_RENDERER_READY_TIMEOUT');
+        void stop().finally(() => app.exit(1));
+      }, Math.max(1, deadline - Date.now()));
       console.log = (...args) => {
         writeFdSync(1, format(...args));
-        if (!smokeHandled && args[0] === 'METAVIEWER_MAIN_READY') {
+        if (!smokeHandled && args[0] === 'METAVIEWER_RENDERER_READY') {
           smokeHandled = true;
+          clearTimeout(rendererTimer);
           void Promise.resolve().then(() => entry).then(async resolvedBoot => {
             boot = resolvedBoot;
             if (process.env.MV_SRF_BIN_DIR) {
@@ -1671,7 +1676,8 @@ export function assertSmokeOutput(stdout, details = {}) {
   const signal = merged.signal !== undefined ? merged.signal : null;
   const outText = String(merged.stdout ?? '');
   const errText = String(merged.stderr ?? '');
-  if (!outText.split('\n').includes('METAVIEWER_MAIN_SMOKE_OK')) {
+  if (!outText.split('\n').includes('METAVIEWER_MAIN_SMOKE_OK') ||
+      !outText.split('\n').includes('METAVIEWER_RENDERER_READY')) {
     throw createSmokeDiagnosticError('PKG_SMOKE_MARKER_MISSING', { code, signal, stdout: outText, stderr: errText });
   }
 }

@@ -7,6 +7,7 @@
 - I added opt-in live runners for web automation (three local fixture tasks with the network down) and for the Holdings trial, each with a verifiable receipt; their live results are not claimed in this release.
 - I added an opt-in shared-memory capture ring reader; the wall keeps the legacy capture path until the ring is installed.
 - I made the terminal tile survive throttled input (retryable refusals), refused Holdings output with duplicate keys, and kept the recording ceiling at 60 fps.
+- I fixed the packaged app showing only "forbidden": since eb6d8fbab the bundled renderer handler compared the archive directory's device and inode with a startup pin, and Electron reports changing inode values for directories inside an ASAR archive, so every renderer request got 403. Packages of 0.1.1 and 0.1.2 were affected. The handler now pins the physical archive and keeps the asset digests and URL and path refusals, and the package smoke requires the renderer to load.
 - I added test-gap suites for agent perception, Electron capture, core admission, serve and settings, and fixed a load-sensitive core test.
 
 ## 0.1.2 (2026-10-27)
