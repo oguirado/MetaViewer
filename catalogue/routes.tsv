@@ -779,6 +779,8 @@ holding-ccd017c9f1a2	daemon-adapter/internal/capsule/holdings_witness_test.go
 kinds_destroy_test.go	daemon-adapter/internal/capsule/kinds_destroy_test.go
 liveness.go	daemon-adapter/internal/capsule/liveness.go
 liveness_test.go	daemon-adapter/internal/capsule/liveness_test.go
+login_lock.go	daemon-adapter/internal/capsule/login_lock.go
+login_lock_test.go	daemon-adapter/internal/capsule/login_lock_test.go
 lostset-d04bd8c51b72	daemon-adapter/internal/capsule/lost_settle_v3v6_test.go
 lost_slot_test.go	daemon-adapter/internal/capsule/lost_slot_test.go
 manager.go	daemon-adapter/internal/capsule/manager.go
@@ -1191,6 +1193,7 @@ test_kill_guard.py	tests/test_kill_guard.py
 test_kit_source.py	tests/test_kit_source.py
 testlay-30db08e8ee29	tests/test_layout_intents.py
 test_live_teardown.py	tests/test_live_teardown.py
+test_mv_identity.py	tests/test_mv_identity.py
 test_mw_home_cli.py	tests/test_mw_home_cli.py
 test_net_scope.py	tests/test_net_scope.py
 test_novac_matrix.py	tests/test_novac_matrix.py
@@ -1212,6 +1215,7 @@ check_laws.py	tools/check_laws.py
 check_theme.py	tools/check_theme.py
 tools-gate.sh	tools/gate.sh
 gate_g_ai.py	tools/gate_g_ai.py
+mv_identity.py	tools/mv_identity.py
 mw_home_check.py	tools/mw_home_check.py
 router_index.py	tools/router_index.py
 sync_kit.mjs	tools/sync_kit.mjs
