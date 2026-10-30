@@ -800,6 +800,7 @@ statedir.go	daemon-adapter/internal/capsule/statedir.go
 statedir_test.go	daemon-adapter/internal/capsule/statedir_test.go
 stress_test.go	daemon-adapter/internal/capsule/stress_test.go
 srf-identity-surface	daemon-adapter/internal/capsule/testdata/srf-identity-surface
+text_input_test.go	daemon-adapter/internal/capsule/text_input_test.go
 runner.go	daemon-adapter/internal/cli/runner.go
 runner_test.go	daemon-adapter/internal/cli/runner_test.go
 b1stale-813879d52247	daemon-adapter/internal/daemon/b1_stale_verdict_test.go
@@ -815,6 +816,7 @@ fx2_adapter_a_test.go	daemon-adapter/internal/daemon/fx2_adapter_a_test.go
 hello_atomic_test.go	daemon-adapter/internal/daemon/hello_atomic_test.go
 hello_pin_test.go	daemon-adapter/internal/daemon/hello_pin_test.go
 holding-5c5526783e2d	daemon-adapter/internal/daemon/holdings_witness_wire_test.go
+input_settle_test.go	daemon-adapter/internal/daemon/input_settle_test.go
 inputse-0f34da3b3f23	daemon-adapter/internal/daemon/input_settlement_test.go
 nestedi-f72c7f52a5e1	daemon-adapter/internal/daemon/nested_isolation_test.go
 nv_authority_test.go	daemon-adapter/internal/daemon/nv_authority_test.go
