@@ -392,6 +392,8 @@ empty lists, single-label names, localhost, and names ending in `.localhost`,
 `.local`, `.internal`, `.lan` or `.home.arpa` are refused, as are trailing dots. The Go `StoreEgress` helper validates
 and atomically stores records. Missing records mean open. An explicit `open`
 record has an empty `domains` array. Invalid records never fall back to open.
+The network mode is the one declared before the capsule started; change it,
+then restart the capsule.
 
 Only browser kinds receive network flags; program/vm retain legacy argv even
 with an open record. For allowlisted mode the adapter generates `<profile_id>.policy.json` alongside
@@ -411,9 +413,17 @@ start argv and environment. Legacy behavior may still require the pin's shared p
 Opting into an allowlist on such a pin or an injected runner refuses with
 `NET_PROXIED_UNSUPPORTED`; it never silently starts open. After policy publication
 the adapter re-loads the record and refuses `NET_EGRESS_CHANGED` on mismatch.
-Created events retain the frozen surface-only shape for every mode. An existing
-out-of-band effective-mode reporting channel is AUSENTE; UI reporting requires
-a later request. These adapter-local settings do not change the frozen contracts.
+Created events retain the frozen surface-only shape for every mode. The adapter atomically publishes the private, owner-readable (`0400`)
+`egress/<profile_id>.started.json` start witness after verified readiness,
+replacing it on every start and removing it on verified stop. Its schema is
+`metaviewer.capsule_egress_started/v1`: `capsule_id`, `effective_mode`
+(`open`, `proxied`, or `legacy`, exactly as passed to native start),
+`record_sha256` (SHA-256 of the pre-start record bytes or `absent`),
+`start_mono_ns` and `start_wall_ns` (adapter clocks sampled before native start).
+The agent entry requires that witness and matching current record bytes; it
+reports the witness's effective mode and refuses changed settings with a restart
+message. Capabilities are not probed again by the backend: only the adapter's
+startup snapshot determines the argv used for that capsule. These adapter-local settings do not change the frozen contracts.
 The hosted web runner retains its explicit offline barrier.
 
 ### Concurrent identities and RAM admission

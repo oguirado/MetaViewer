@@ -99,6 +99,9 @@ func egressDirectory(state string, create bool) (*os.File, error) {
 	return os.NewFile(uintptr(fd), filepath.Join(state, "egress")), nil
 }
 func readEgressFile(dir *os.File, name string) ([]byte, error) {
+	return readPrivateEgressFile(dir, name, 0600)
+}
+func readPrivateEgressFile(dir *os.File, name string, mode os.FileMode) ([]byte, error) {
 	fd, err := syscall.Openat(int(dir.Fd()), name, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, err
@@ -110,7 +113,7 @@ func readEgressFile(dir *os.File, name string) ([]byte, error) {
 		return nil, err
 	}
 	owner, ok := st.Sys().(*syscall.Stat_t)
-	if !ok || owner.Uid != uint32(os.Getuid()) || st.Mode() != 0600 || st.Size() > egressLimit {
+	if !ok || owner.Uid != uint32(os.Getuid()) || st.Mode() != mode || st.Size() > egressLimit {
 		return nil, syscall.EACCES
 	}
 	b, err := io.ReadAll(io.LimitReader(f, egressLimit+1))
@@ -151,6 +154,9 @@ func LoadEgress(state, identity string) (Egress, error) {
 	return e, e.Validate()
 }
 func writeEgressFile(state, name string, value any) (string, error) {
+	return writePrivateEgressFile(state, name, value, 0600)
+}
+func writePrivateEgressFile(state, name string, value any, mode os.FileMode) (string, error) {
 	b, err := json.Marshal(value)
 	if err != nil || len(b) > egressLimit {
 		return "", fault("NET_EGRESS_INVALID", "oversized egress document")
@@ -161,7 +167,7 @@ func writeEgressFile(state, name string, value any) (string, error) {
 	}
 	defer dir.Close()
 	// Existing special files, links or permissive files are refused, not replaced.
-	if _, err = readEgressFile(dir, name); err != nil && !errors.Is(err, syscall.ENOENT) {
+	if _, err = readPrivateEgressFile(dir, name, mode); err != nil && !errors.Is(err, syscall.ENOENT) {
 		return "", fault("NET_EGRESS_IO", err.Error())
 	}
 	var nonce [16]byte
@@ -169,7 +175,7 @@ func writeEgressFile(state, name string, value any) (string, error) {
 		return "", err
 	}
 	tmp := ".egress-" + hex.EncodeToString(nonce[:])
-	fd, err := syscall.Openat(int(dir.Fd()), tmp, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0600)
+	fd, err := syscall.Openat(int(dir.Fd()), tmp, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, uint32(mode))
 	if err != nil {
 		return "", fault("NET_EGRESS_IO", err.Error())
 	}

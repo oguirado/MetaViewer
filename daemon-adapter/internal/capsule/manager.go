@@ -521,14 +521,45 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 	if p.NativeKind == "holdings" {
 		args = []string{"start", "--slots", "1", "--app", p.AppDir}
 	}
+	var started *EgressStarted
+	witnessState := m.egressState()
 	if p.NativeKind == "browser" {
-		_, mode, policy, netErr := m.browserNetwork(q.ProfileID, profileContainer)
+		var frozen string
+		if witnessState != "" {
+			if runner, ok := m.runner.(*ProcessRunner); ok {
+				if err := runner.validateStateDir(); err != nil {
+					return nil, err
+				}
+			}
+			var snapshotErr error
+			frozen, snapshotErr = egressRecordDigest(witnessState, q.ProfileID)
+			if snapshotErr != nil {
+				return nil, fault("NET_EGRESS_IO", snapshotErr.Error())
+			}
+		}
+		egress, mode, policy, netErr := m.browserNetwork(q.ProfileID, profileContainer)
 		if netErr != nil {
 			return nil, netErr
 		}
 		args, netErr = networkStartArgs(args, mode, policy)
 		if netErr != nil {
 			return nil, netErr
+		}
+		if witnessState != "" {
+			if err := verifyEgressRecord(witnessState, q.ProfileID, egress); err != nil {
+				return nil, err
+			}
+			current, err := egressRecordDigest(witnessState, q.ProfileID)
+			if err != nil || current != frozen {
+				return nil, fault("NET_EGRESS_CHANGED", "egress record changed during start preparation")
+			}
+			started = &EgressStarted{Schema: egressStartedSchema, CapsuleID: profileContainer, EffectiveMode: mode, RecordSHA256: frozen, StartMonoNS: m.clock(), StartWallNS: time.Now().UnixNano()}
+			if started.EffectiveMode == "" {
+				started.EffectiveMode = "legacy"
+			}
+			if err := removeEgressStarted(witnessState, q.ProfileID); err != nil {
+				return nil, err
+			}
 		}
 		ctx = context.WithValue(ctx, networkModeKey{}, mode)
 	}
@@ -664,6 +695,11 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 			return nil, fault("binding", "native container already observed")
 		}
 	}
+	if started != nil {
+		if _, err := writePrivateEgressFile(witnessState, q.ProfileID+".started.json", started, 0400); err != nil {
+			return nil, err
+		}
+	}
 	m.bindings[id] = b
 	delete(m.quarantined, q.ProfileID)
 	return []json.RawMessage{surfaceEvent(version, "created", b.Surface)}, nil
@@ -722,7 +758,12 @@ func (m *Manager) destroy(ctx context.Context, r Request, version string) ([]jso
 // stopNative requires mu and preserves the same removal proof for rollback and destroy.
 // An unavailable stop settles only previously proven absence; Holdings also
 // requires its independent ownership/removal verifier. Unknown outcomes retain the slot.
-func (m *Manager) stopNative(ctx context.Context, b Binding) error {
+func (m *Manager) stopNative(ctx context.Context, b Binding) (err error) {
+	defer func() {
+		if err == nil && b.NativeKind == "browser" && m.egressState() != "" {
+			err = removeEgressStarted(m.egressState(), b.Surface.ProfileID)
+		}
+	}()
 	out, e := m.execute(ctx, m.cfg.Profiles[b.Surface.ProfileID], []string{"stop", "--container", b.Container}, nil)
 	if e != nil {
 		var f *cli.Fault

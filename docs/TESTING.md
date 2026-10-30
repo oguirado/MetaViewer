@@ -570,3 +570,12 @@ to the command. The tests cover MUT-RETRY-LOOP, MUT-AUTO-SOLVE, MUT-NO-NOTIFY,
 MUT-LEAK, every pinned STOP reason, and consent/generic-Verify negatives.
 
 The hosted Python agent suite checks out Wender at the `deps.lock` pin using `ASSEMBLY_READ_TOKEN`, verifies HEAD, and scopes `MV_MW_WENDER_ROOT` to the agent step; a missing token fails closed with `ASSEMBLY_READ_TOKEN_MISSING`.
+
+The Use MetaViewer entry is covered by `agents/tests/test_mw_run.py`,
+`tests/test_mw_run_backend.py`, and `tests/test_agent_entry_prompt.py`. These
+hosted fakes check prompt drift, extra flags, private home admission, summary
+publication, CAPTCHA handoff, ownership ambiguity, undeclared network mode,
+and refusal of native network/input verbs; no live capsule or network is used.
+Run the agent suite with `python3 -m unittest tests.test_mw_run` from `agents`
+and the host suites with `python3 -m unittest discover -s tests -p "test_*entry*.py"`
+and `python3 -m unittest discover -s tests -p test_mw_run_backend.py`.
