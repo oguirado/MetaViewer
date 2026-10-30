@@ -95,7 +95,7 @@ export function assertOperatorCall(method,args) {
     if(!operatorKeys(v,method==='identity.create'?['id','label','domains']:['id']) || !identityId(v.id)) throw new Error('OPERATOR_PAYLOAD');
     if(method==='identity.create' && (!identityLabel(v.label) || !Array.isArray(v.domains) || !v.domains.length || v.domains.length>256 || !v.domains.every((/** @type {any} */d)=>typeof d==='string' && d.length<=253 && /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(d)))) throw new Error('OPERATOR_PAYLOAD');
   } else if(method.startsWith('egress.')) {
-    if(!operatorKeys(v,method==='egress.set'?['identity','record']:['identity']) || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(v.identity) || typeof v.identity!=='string' || (method==='egress.set' && !validEgress(v.record))) throw new Error('OPERATOR_PAYLOAD');
+    if(!(method==='egress.set'?(operatorKeys(v,['identity','record']) || (operatorKeys(v,['identity','record','confirm']) && typeof v.confirm==='boolean')):operatorKeys(v,['identity'])) || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(v.identity) || typeof v.identity!=='string' || (method==='egress.set' && !validEgress(v.record))) throw new Error('OPERATOR_PAYLOAD');
   } else if(!operatorKeys(v,['surface_id','step_index','gesture']) || !validHandoff({schema:'metaviewer.handoff/v1',surface_id:v.surface_id,step_index:v.step_index,reason:'captcha_wall',confidence:100,evidence_kinds:[]}) || v.gesture!=='operator-acknowledge') throw new Error('OPERATOR_PAYLOAD');
 }
 /** @param {string} method @param {any} v */
@@ -106,7 +106,7 @@ export function assertOperatorReply(method,v) {
   if(method==='handoff.list') {
     if(!operatorKeys(v,['ok','rows']) || !Array.isArray(v.rows) || v.rows.length>64 || !v.rows.every(validHandoff)) throw new Error('OPERATOR_REPLY');
   } else if(method.startsWith('egress.')) {
-    if(!operatorKeys(v,['ok','record','net_mode']) || !validEgress(v.record) || !['legacy','open','proxied'].includes(v.net_mode)) throw new Error('OPERATOR_REPLY');
+    if(!operatorKeys(v,['ok','record','net_mode','reason']) || !(typeof v.reason==='string' && (['binary_missing','timeout','oversize','malformed','ok'].includes(v.reason) || /^exit_(?:0|[1-9][0-9]{0,2})$/.test(v.reason) && Number(v.reason.slice(5))<=255)) || !validEgress(v.record) || !['legacy','open','proxied'].includes(v.net_mode)) throw new Error('OPERATOR_REPLY');
   } else if(['identity.delete','identity.login','handoff.ack'].includes(method)) {
     if(!operatorKeys(v,['ok'])) throw new Error('OPERATOR_REPLY');
   } else {

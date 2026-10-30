@@ -118,6 +118,29 @@ class PrivateSlots:
         self.owner = owner
         self.values = dict(values or {})
         self.pending = None
+        self.normalized = {}
+
+    def normalize(self, slot):
+        # [TARGET, unit decision] Normalize one terminal line ending only.
+        slot_id = slot['slot_id']
+        value = self.values[slot_id]
+        if type(value) is str and value.endswith('\n'):
+            value = value[:-2] if value.endswith('\r\n') else value[:-1]
+        if type(value) is str:
+            # Match printable Unicode plus space separators (native IsPrint).
+            need(all(c.isprintable() or (c.isspace() and ord(c) >= 160 and
+                     c not in '\u2028\u2029') for c in value),
+                 'MW_TEXT_UNPRINTABLE: ' + slot_id)
+        try:
+            self.owner.check_text(value, slot['max_length'])
+        except OwnerRefused as error:
+            if error.code == 'MW_TEXT_ENCODING':
+                raise OwnerRefused('MW_TEXT_UNPRINTABLE: ' + slot_id) from None
+            raise
+        if value != self.values[slot_id]:
+            self.values[slot_id] = value
+            self.normalized[slot_id] = 'trailing_newline_removed'
+        return value
 
     def admit(self, slot, state):
         o = self.owner
@@ -128,7 +151,7 @@ class PrivateSlots:
     def read(self, slot, state, max_bytes):
         o = self.owner
         self.admit(slot, state)
-        value = self.values[slot['slot_id']]
+        value = self.normalize(slot)
         o.check_text(value, min(slot['max_length'], max_bytes))
         binding = o.length_binding(slot['slot_id'])
         initial = o.acquire(binding.predicate, state.deadline_ns).value
@@ -408,12 +431,13 @@ class ReplayOwner:
             _check_action(dict(type='scroll', dx=action.get('dx_px'), dy=action.get('dy_px')))
 
     def supports(self, workflow):
+        self.text_refusal = None
         try:
             self.pace()
             need(workflow['status'] == 'draft')
             for slot in workflow['text_slots']:
                 need(slot['slot_id'] in self.slots.values and not slot['chip_clear_steps'])
-                self.check_text(self.slots.values[slot['slot_id']], slot['max_length'])
+                self.slots.normalize(slot)
                 self.length_binding(slot['slot_id'])
             need(bool(workflow['oracle']['postconditions']))
             predicates = list(workflow['preconditions']) + list(workflow['oracle']['postconditions'])
@@ -441,7 +465,9 @@ class ReplayOwner:
                 need(self.verifier(step['verify']).result is self.Truth.TRUE)
             need(all(self.predicate_supported(p) for p in predicates))
             return self.answer(True)
-        except (OwnerRefused, ValueError):
+        except (OwnerRefused, ValueError) as error:
+            if isinstance(error, OwnerRefused) and error.code.startswith('MW_TEXT_UNPRINTABLE:'):
+                self.text_refusal = error.code
             return self.answer(False)
 
     @staticmethod
@@ -613,6 +639,10 @@ class ReplayOwner:
                 after_frame={k: receipt['after_frame'][k] for k in
                              ('surface_id', 'sha256', 'generation') if k in receipt['after_frame']},
                 native_evidence=dict(surface_id=frame['surface_id'], input_mono_ns=input_ns))))
+        if action.get('kind') == 'type' and self.slots.pending:
+            normalization = self.slots.normalized.get(self.slots.pending[0])
+            if normalization:
+                self.receipts[-1]['normalized'] = normalization
         self.last_send = input_ns
         return input_ns
 
@@ -702,6 +732,14 @@ class ReplayOwner:
         need(inventory == expected and (summary['rc'] != 0 or self.final_pass), 'MW_JOURNAL')
         if self.handoff.latched:
             summary['evidence_refs'].append(self.handoff.path.name)
+        if self.slots.normalized:
+            # Run report evidence contains slot identifiers and reasons only.
+            report = self.output.with_suffix('.normalization.json')
+            if not report.exists():
+                self.write(report, (self.gate.canon({'slots': [
+                    {'slot': slot, 'normalized': reason}
+                    for slot, reason in sorted(self.slots.normalized.items())]}) + '\n').encode())
+            summary['evidence_refs'].append(report.name)
         raw = (self.gate.canon(summary) + '\n').encode()
         path = self.output.parent / ('.mw-inactive-' + uuid.uuid4().hex + '.json')
         self.write(path, raw)
@@ -753,7 +791,8 @@ class ReplayOwner:
             mode='replay', output=self.output)
 
     def validate_corpus(self):
-        need(self.supports(self.corpus.workflow).result is self.Truth.TRUE, 'MW_UNSUPPORTED_WORKFLOW')
+        supported = self.supports(self.corpus.workflow).result is self.Truth.TRUE
+        need(supported, self.text_refusal or 'MW_UNSUPPORTED_WORKFLOW')
         for path in (self.corpus.root / 'sites' / self.corpus.site['id'] / 'site.json', self.corpus.path):
             result = self.gate.validate_file(path, self.corpus.bundle, context=self.context_value)
             need(result.rc == 0, 'MW_GATE_' + result.category)

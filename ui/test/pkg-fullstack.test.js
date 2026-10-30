@@ -10,6 +10,7 @@ import { join } from 'node:path';
 
 import {
   ALLOWED_ADAPTER_ENV,
+  adapterNetworkProbe,
   createAdapterLauncher,
   scrubAdapterEnv,
   scrubChildEnv,
@@ -649,13 +650,13 @@ describe('deployed native network capability discovery', () => {
       /** @type {Record<string, string> | undefined} */
       let received;
       let spawns = 0;
-      const env = { ...fx.env, MV_SRF_NET_MODES: '["open"]' };
+      const env = { ...fx.env, MV_SRF_NET_MODES: '["open"]', SRF_EGRESS_PROXY: 'secret-proxy' };
       assert.equal(scrubAdapterEnv(env, fx.xdg).MV_SRF_NET_MODES, undefined);
       if (fixture.reply !== undefined || fixture.hang) {
         const body = fixture.hang ? "trap '' TERM; while :; do :; done" :
           `printf '%s' '${fixture.reply}'; exit ${fixture.exit ?? 0}`;
         writeFileSync(join(fx.srfBinDir, 'srf-identity-surface'),
-          `#!/bin/sh\n[ "$#" = 1 ] && [ "$1" = capabilities ] || exit 9\n${body}\n`, { mode: 0o755 });
+          `#!/bin/sh\n[ -z "$SRF_EGRESS_PROXY" ] || exit 8\n[ "$#" = 1 ] && [ "$1" = capabilities ] || exit 9\n${body}\n`, { mode: 0o755 });
       }
       const launcher = createAdapterLauncher({
         command: fx.adapterBin, env, runtimeDir: fx.xdg,
@@ -674,6 +675,10 @@ describe('deployed native network capability discovery', () => {
         assert.deepEqual(second, first);
         assert.equal(spawns, 1);
         assert.equal(received?.MV_SRF_NET_MODES, fixture.expected);
+        const reason = adapterNetworkProbe(env)?.reason;
+        assert.equal(reason, fixture.expected ? 'ok' : fixture.hang ? 'timeout' :
+          fixture.reply === undefined ? 'binary_missing' : fixture.exit ? `exit_${fixture.exit}` :
+          fixture.name.startsWith('oversized') ? 'oversize' : 'malformed');
         assert.ok(Object.isFrozen(received));
       } finally {
         await launcher.dispose();

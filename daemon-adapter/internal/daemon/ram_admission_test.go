@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -413,5 +414,32 @@ func TestRAMAdmissionRetainsUnknownDeadDaemon(t *testing.T) {
 	_, h := bareAdmissionManager(t, false)
 	if out := admissionCreate(h, "pair-a"); !strings.Contains(string(out[0]), "RAM_ADMISSION_REFUSED") {
 		t.Fatalf("dead pid treated as container absence: %s", out)
+	}
+}
+
+func TestReservationProfileSuffixAndUnsafeName(t *testing.T) {
+	dir := t.TempDir()
+	owner := "12345-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	profile := "mv-example"
+	legacy := fmt.Sprintf("%s-%x", owner, sha256.Sum256([]byte(profile)))
+	if err := os.WriteFile(filepath.Join(dir, legacy), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := syncAdmissionRecords(dir, owner, map[string]bool{profile: true}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 || entries[0].Name() != legacy+"--"+profile {
+		t.Fatalf("profile reservation: %v %v", entries, err)
+	}
+	if err := syncAdmissionRecords(dir, owner, map[string]bool{"../escape": true}); err == nil {
+		t.Fatal("unsafe profile accepted")
+	}
+	if err := syncAdmissionRecords(dir, owner, map[string]bool{}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err = os.ReadDir(dir)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("released reservation: %v %v", entries, err)
 	}
 }

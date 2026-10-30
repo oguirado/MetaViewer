@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -256,10 +257,17 @@ func lockAdmissionDirectory() (*os.File, error) {
 	return dir, nil
 }
 
+// [TARGET, unit decision] Add the validated profile to new reservation names;
+// legacy hash-only records remain readable by explicit operator reclaim.
+var reservationProfile = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
+
 func syncAdmissionRecords(dir, owner string, profiles map[string]bool) error {
 	wanted := map[string]bool{}
 	for profile := range profiles {
-		name := fmt.Sprintf("%s-%x", owner, sha256.Sum256([]byte(profile)))
+		if !reservationProfile.MatchString(profile) {
+			return fmt.Errorf("invalid reservation profile")
+		}
+		name := fmt.Sprintf("%s-%x--%s", owner, sha256.Sum256([]byte(profile)), profile)
 		wanted[name] = true
 		path := filepath.Join(dir, name)
 		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|syscall.O_NOFOLLOW, 0600)

@@ -1131,6 +1131,14 @@ export function createCoreLauncher(options) {
  * @property {() => AdapterStatus} getStatus Frozen snapshot.
  */
 
+// [TARGET, unit decision] Main-process snapshot only; parent input cannot set it.
+/** @type {Map<string, Readonly<{reason: string, modes: readonly string[]}>>} */
+const networkProbes = new Map();
+/** @param {{MV_SRF_BIN_DIR?: string}} env */
+export function adapterNetworkProbe(env) {
+  return networkProbes.get(env.MV_SRF_BIN_DIR ?? '');
+}
+
 /**
  * [TARGET, unit decision] Probe the deployed native capabilities v1 text once at
  * launcher startup. Parent declarations never grant network modes. Missing,
@@ -1139,25 +1147,39 @@ export function createCoreLauncher(options) {
  * @param {AbortSignal} signal Launcher disposal signal.
  * @returns {Promise<Readonly<Record<string, string>>>} Frozen startup snapshot.
  */
-function discoverAdapterNetModes(env, signal) {
+export function discoverAdapterNetModes(env, signal) {
   const binDir = env.MV_SRF_BIN_DIR;
-  if (!binDir || !isAbsolute(binDir)) return Promise.resolve(env);
+  /** @param {string} reason @param {string[]=} modes */
+  const finish = (reason, modes) => {
+    const snapshot = Object.freeze({reason, modes: Object.freeze(modes ?? [])});
+    networkProbes.set(binDir ?? '', snapshot);
+    console.info(`[metaviewer] network capability probe: ${reason}`);
+    return Object.freeze({...env, ...(modes ? {MV_SRF_NET_MODES: JSON.stringify(modes)} : {})});
+  };
+  if (!binDir || !isAbsolute(binDir)) return Promise.resolve(finish('binary_missing'));
+  const probeEnv = Object.fromEntries(Object.entries(env).filter(([key]) => !/proxy/i.test(key)));
   return new Promise((resolveReply) => {
     execFile(join(binDir, 'srf-identity-surface'), ['capabilities'], {
-      env, encoding: 'utf8', timeout: 1500, maxBuffer: 8192,
+      env: probeEnv, encoding: 'utf8', timeout: 1500, maxBuffer: 8192,
       shell: false, signal, killSignal: 'SIGKILL',
     }, (error, stdout) => {
-      if (error) return resolveReply(env);
+      if (error) {
+        const code = error.code;
+        return resolveReply(finish(code === 'ENOENT' ? 'binary_missing' :
+          code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? 'oversize' :
+          error.killed || code === 'ABORT_ERR' ? 'timeout' :
+          typeof code === 'number' ? `exit_${code}` : 'malformed'));
+      }
       const lines = stdout.trimEnd().split('\n');
       if (lines.length !== 2 || lines[0] !== 'srf-identity-surface capabilities v1') {
-        return resolveReply(env);
+        return resolveReply(finish('malformed'));
       }
       const tokens = lines[1].split(/\s+/).filter((token) => token.startsWith('net_modes='));
-      if (tokens.length !== 1) return resolveReply(env);
+      if (tokens.length !== 1) return resolveReply(finish('malformed'));
       const modes = tokens[0].slice('net_modes='.length).split(',');
       if (modes.some((mode) => !['legacy', 'open', 'proxied'].includes(mode)) ||
-          new Set(modes).size !== modes.length) return resolveReply(env);
-      resolveReply(Object.freeze({ ...env, MV_SRF_NET_MODES: JSON.stringify(modes) }));
+          new Set(modes).size !== modes.length) return resolveReply(finish('malformed'));
+      resolveReply(finish('ok', modes));
     });
   });
 }
@@ -1618,12 +1640,12 @@ export function createAdapterLauncher(options) {
    * @returns {Promise<AdapterStatus>}
    */
   async function runStart() {
+    const adapterEnv = await discoverAdapterNetModes(scrubbed, capabilityController.signal);
+    if (disposing) return getStatus();
     const check = preflight(command, scrubbed);
     if (!check.ok) {
       return setDegraded(check.code, check.reason);
     }
-    const adapterEnv = await discoverAdapterNetModes(scrubbed, capabilityController.signal);
-    if (disposing) return getStatus();
     availability = 'starting';
     spawnCount += 1;
     emitStatus();

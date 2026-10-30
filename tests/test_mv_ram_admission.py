@@ -133,6 +133,53 @@ class ReclaimTests(unittest.TestCase):
         with patch.dict(os.environ, {"DOCKER_HOST": "tcp://remote:2375"}, clear=True):
             self.assertIsNone(ram.NativeInventory(lambda argv: self.fail("remote call")).absent())
 
+    def test_per_profile_inventory_ignores_protected_and_unrelated(self):
+        import hashlib
+        profile = 'mv-example'
+        self.path.unlink()
+        self.path = self.root / ("12345-" + "a" * 32 + "-" +
+            hashlib.sha256(profile.encode()).hexdigest() + "--" + profile)
+        self.path.touch(mode=0o600)
+        protected = "srf-id-cuentas-1\nsrf-id-perplexity-1\nsrf-pg-notepad-1\nsrf-egress-proxy\nsrf-id-other\n"
+        for extra, expected in (("", "would_remove"), ("srf-id-mv-example\n", "keep"),
+                                ("srf-pg-mv-example\n", "keep"),
+                                ("srf-ng-hcap-hc-abcdef123456-1\n", "keep")):
+            def run(argv):
+                return '"unix:///fake/docker.sock"' if argv[1] == 'context' else protected + extra
+            with patch.dict(os.environ, {}, clear=True):
+                result = ram.reclaim(self.root, False, ram.NativeInventory(run), lambda pid: True)
+            self.assertEqual(result[0]['action'], expected)
+            self.assertTrue(self.path.exists())
+
+    def test_legacy_only_blocks_metaviewer_capsules(self):
+        for raw, expected in (("srf-id-cuentas-1\nsrf-egress-proxy\n", "removed"),
+                              ("srf-id-mv-live\n", "keep"), ("srf-pg-mv-live\n", "keep"),
+                              ("srf-vm-mv-x\n", "keep")):
+            self.path.touch(mode=0o600)
+            def run(argv):
+                return '"unix:///fake/docker.sock"' if argv[1] == 'context' else raw
+            with patch.dict(os.environ, {}, clear=True):
+                result = ram.reclaim(self.root, True, ram.NativeInventory(run), lambda pid: True)
+            self.assertEqual(result[0]['action'], expected)
+
+    def test_vm_profile_reclaim_requires_matching_capsule_absence(self):
+        import hashlib
+        profile = "mv-vm1"
+        self.path.unlink()
+        self.path = self.root / ("12345-" + "a" * 32 + "-" +
+            hashlib.sha256(profile.encode()).hexdigest() + "--" + profile)
+        unrelated = "srf-id-cuentas-1\nsrf-egress-proxy\nsrf-vm-other\n"
+        for extra, expected in (("srf-vm-mv-vm1\n", "keep"), ("", "removed")):
+            with self.subTest(capsule_present=bool(extra)):
+                self.path.touch(mode=0o600)
+                def run(argv):
+                    return ('"unix:///fake/docker.sock"' if argv[1] == "context"
+                            else unrelated + extra)
+                with patch.dict(os.environ, {}, clear=True):
+                    result = ram.reclaim(self.root, True, ram.NativeInventory(run), lambda pid: True)
+                self.assertEqual(result[0]["action"], expected)
+                self.assertEqual(self.path.exists(), expected == "keep")
+
     def test_cli_requires_explicit_mode(self):
         with self.assertRaises(SystemExit) as result:
             ram.main(["reclaim"])

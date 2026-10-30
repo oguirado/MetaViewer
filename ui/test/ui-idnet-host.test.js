@@ -122,3 +122,38 @@ test('identity runner refuses oversized output, deadline expiry and non-loopback
   const late=runner('list');t.mock.timers.tick(30000);await assert.rejects(late,/TIMEOUT/);
   const login=runner('login',{id:'account-a'});child.stderr.write('Operator login view: http://example.com/login (close with Ctrl+C)');await assert.rejects(login,/LOGIN_URL/);assert.equal(opened,0);
 });
+
+test('Open prerequisites refuse persistence on a legacy deployment', async t=>{
+  const {env,root}=fixture(t);
+  const legacy=createOperatorService({env:{...env,MV_SRF_NET_MODES:'["legacy"]'}});
+  assert.deepEqual(await legacy.request('egress.set',[{identity:'account-a',record:open}]),{ok:false,code:'NET_OPEN_PREREQ'});
+  assert.throws(()=>readFileSync(join(root,'egress/account-a.json')));
+  const ready=createOperatorService({env});
+  assert.equal((await ready.request('egress.set',[{identity:'account-a',record:open}])).net_mode,'open');
+});
+
+ test('egress reason enum and confirmation are closed, typed facade payloads', async()=>{
+  for(const reason of ['binary_missing','exit_0','exit_255','timeout','oversize','malformed','ok'])
+    assert.equal(assertOperatorReply('egress.get',{ok:true,record:open,net_mode:'legacy',reason}).reason,reason);
+  for(const reason of ['unknown','exit_-1','exit_256','exit_01','exit_1.5',null,0])
+    assert.throws(()=>assertOperatorReply('egress.get',{ok:true,record:open,net_mode:'legacy',reason}),/OPERATOR_REPLY/);
+  assert.throws(()=>assertOperatorReply('egress.get',{ok:true,record:open,net_mode:'legacy',reason:'ok',extra:true}),/OPERATOR_REPLY/);
+  assert.throws(()=>assertOperatorReply('egress.get',{ok:true,record:open,net_mode:'legacy'}),/OPERATOR_REPLY/);
+  let invoked=0;
+  const facade=createOperatorFacade({invoke:async()=>{invoked++;return {ok:true,record:open,net_mode:'legacy',reason:'binary_missing'};}});
+  for(const confirm of ['true',1,null,undefined])await assert.rejects(facade.egress.set({identity:'account-a',record:open,confirm}),/OPERATOR_PAYLOAD/);
+  await assert.rejects(facade.egress.set({identity:'account-a',record:open,confirm:true,extra:true}),/OPERATOR_PAYLOAD/);
+  assert.equal(invoked,0);
+  await facade.egress.set({identity:'account-a',record:open,confirm:true});assert.equal(invoked,1);
+ });
+ test('unavailable Open persists only after explicit boolean confirmation', async t=>{
+  const {env,root}=fixture(t),service=createOperatorService({env:{...env,MV_SRF_NET_MODES:'["legacy"]'}});
+  for(const options of [{},{confirm:false}]){
+    assert.deepEqual(await service.request('egress.set',[{identity:'account-a',record:open,...options}]),{ok:false,code:'NET_OPEN_PREREQ'});
+    assert.throws(()=>readFileSync(join(root,'egress/account-a.json')));
+  }
+  const reply=await service.request('egress.set',[{identity:'account-a',record:open,confirm:true}]);
+  assertOperatorReply('egress.set',reply);assert.equal(reply.net_mode,'legacy');
+  assert.deepEqual(JSON.parse(readFileSync(join(root,'egress/account-a.json'),'utf8')),open);
+  assert.deepEqual(await service.request('egress.set',[{identity:'account-a',record:proxy,confirm:true}]),{ok:false,code:'NET_PROXIED_UNSUPPORTED'});
+ });

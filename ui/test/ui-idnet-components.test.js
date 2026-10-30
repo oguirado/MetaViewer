@@ -48,11 +48,15 @@ test('Identities dialog lists multiple accounts per site, creates, confirms dele
   assert.equal(nodes(view.root).filter(n=>n.tag==='input').length,3);
 });
 test('Network panel edits only selected profile and shows typed refusal and legacy',async t=>{
-  const calls=[];const host={egress:{get:async v=>{calls.push(['get',v]);return {ok:true,record:{schema:'metaviewer.capsule_egress/v1',mode:'open',domains:[]},net_mode:'legacy'};},set:async v=>{calls.push(['set',v]);return {ok:false,code:'NET_PROXIED_UNSUPPORTED'};}}};
+  const calls=[];const host={egress:{get:async v=>{calls.push(['get',v]);return {ok:true,record:{schema:'metaviewer.capsule_egress/v1',mode:'open',domains:[]},net_mode:'legacy',reason:'binary_missing'};},set:async v=>{calls.push(['set',v]);return {ok:false,code:'NET_PROXIED_UNSUPPORTED'};}}};
   const view=mount(await component('netmode/NetworkPanel.vue'),{open:true,identity:'account-a',host});t.after(view.close);await tick();
-  assert.match(text(view.root),/legacy/);assert.match(text(view.root),/Open \(default\)/);assert.match(text(view.root),/Dedicated proxy with allowlist/);
+  assert.match(text(view.root),/legacy: capability binary missing/);assert.match(text(view.root),/Open \(default\)/);assert.match(text(view.root),/Dedicated proxy with allowlist/);
   button(view.root,'Save network');await tick();assert.equal(calls[1][1].identity,'account-a');assert.equal(calls[1][1].record.mode,'open');assert.match(text(view.root),/NET_PROXIED_UNSUPPORTED/);
-  host.egress.set=async()=>({ok:false,code:'NET_OPEN_PREREQ'});button(view.root,'Save network');await tick();assert.match(text(view.root),/NET_OPEN_PREREQ.*image 0.2.0.*firewall witness/);
+  host.egress.set=async v=>{calls.push(['set',v]);return v.confirm===true?{ok:true,record:v.record,net_mode:'legacy',reason:'binary_missing'}:{ok:false,code:'NET_OPEN_PREREQ'};};button(view.root,'Save network');await tick();assert.match(text(view.root),/NET_OPEN_PREREQ.*image 0.2.0.*final OpenSuperficies pin.*morning report.*step 0/);
+  assert.equal(calls.length,3);assert.equal(calls[2][1].confirm,undefined);
+  assert.equal(nodes(view.root).find(n=>n.tag==='button' && n.text==='Save network').props.disabled,true);
+  button(view.root,'Confirm save for next start anyway');await tick();assert.equal(calls.length,4);assert.equal(calls[3][1].confirm,true);
+  assert.doesNotMatch(text(view.root),/NET_OPEN_PREREQ/);
 });
 test('MUT-AUTO-DISMISS-HANDOFF component stays after empty events and failed ack, emits control once',async t=>{
   t.mock.timers.enable({apis:['setTimeout']});

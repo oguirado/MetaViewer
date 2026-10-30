@@ -1,3 +1,4 @@
+import {adapterNetworkProbe} from './coreLauncher.js';
 import {createButtonService} from './buttonBridge.js';
 // @ts-check
 /** [TARGET, unit decision] Host-only operator seam. The launcher supplies
@@ -143,6 +144,9 @@ export function createOperatorService({env=process.env,runIdentity,buttons,notif
     if(method.startsWith('egress.')) {
       try {
         let modes=['legacy'];if(env.MV_SRF_NET_MODES!==undefined){modes=JSON.parse(env.MV_SRF_NET_MODES);if(!Array.isArray(modes)||!modes.length||!modes.every(x=>['legacy','open','proxied'].includes(x)))throw new Error('MODES');}
+        const probe=adapterNetworkProbe(env);
+        if(probe)modes=probe.reason==='ok'?[...probe.modes]:['legacy'];
+        if(method==='egress.set' && v.record.mode==='open' && !modes.includes('open') && v.confirm!==true)return {ok:false,code:'NET_OPEN_PREREQ'};
         if(method==='egress.set' && v.record.mode==='allowlisted' && !modes.includes('proxied'))return {ok:false,code:'NET_PROXIED_UNSUPPORTED'};
         const record=privateDirectory(env.MV_SRF_STATE_DIR,root=>{
           try{fs.mkdirSync(join(root,'egress'),{mode:0o700});}catch(e){if(/** @type {any} */(e).code!=='EEXIST')throw e;}
@@ -156,7 +160,7 @@ export function createOperatorService({env=process.env,runIdentity,buttons,notif
             if(!validEgress(value))throw new Error('EGRESS_RECORD');return value;
           }finally{fs.closeSync(fd);}
         });
-        return {ok:true,record,net_mode:record.mode==='allowlisted'?(modes.includes('proxied')?'proxied':'legacy'):(modes.includes('open')?'open':'legacy')};
+        return {ok:true,record,reason:probe?.reason ?? 'binary_missing',net_mode:record.mode==='allowlisted'?(modes.includes('proxied')?'proxied':'legacy'):(modes.includes('open')?'open':'legacy')};
       }catch{return {ok:false,code:'NET_EGRESS_IO'};}
     }
     refresh();

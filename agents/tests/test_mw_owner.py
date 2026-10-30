@@ -654,6 +654,38 @@ class OwnerTests(unittest.TestCase):
         for path in self.evidence.iterdir():
             self.assertNotIn('private prompt Ω'.encode(), path.read_bytes())
 
+    def assert_slot_newline(self, ending):
+        self.prepare_text('private prompt Ω' + ending)
+        result = self.owner.run()
+        self.assertEqual(result.rc, 0, result)
+        self.assert_summary(result)
+        report = self.owner.output.with_suffix('.normalization.json')
+        self.assertEqual(json.loads(report.read_text()), {'slots': [{'slot': 'prompt', 'normalized': 'trailing_newline_removed'}]})
+        self.assertNotIn('private prompt Ω', report.read_text())
+        self.assertIn(report.name, json.loads(self.owner.output.read_text())['evidence_refs'])
+        self.assertEqual(self.proposals[1]['text'], 'private prompt Ω')
+        self.assertEqual(self.owner.receipts[1]['normalized'], 'trailing_newline_removed')
+        self.assertNotIn('private prompt Ω', json.dumps(self.owner.receipts))
+
+    def test_slot_terminal_lf_normalizes_once_without_disclosure(self):
+        self.assert_slot_newline('\n')
+
+    def test_slot_terminal_crlf_normalizes_once_without_disclosure(self):
+        self.assert_slot_newline('\r\n')
+
+    def test_slot_other_controls_name_slot_without_value(self):
+        for value in ('secret\n\n', 'secret\t', 'secret\r', 'secret\x00',
+                      'secret\u200b', 'secret\u2028', 'secret\ufeff'):
+            self.prepare_text(value)
+            slot = self.corpus.workflow['text_slots'][0]
+            for _ in range(2):
+                with self.assertRaisesRegex(OwnerRefused, 'MW_TEXT_UNPRINTABLE: prompt') as failure:
+                    self.owner.slots.normalize(slot)
+                self.assertNotIn('secret', str(failure.exception))
+            with self.assertRaisesRegex(OwnerRefused, 'MW_TEXT_UNPRINTABLE: prompt'):
+                self.owner.validate_corpus()
+            self.assertEqual(self.proposals, [])
+
     def test_mut_slot_from_corpus_and_missing_invocation_value(self):
         self.prepare_text()
         workflow = copy.deepcopy(self.corpus.workflow)
@@ -668,7 +700,7 @@ class OwnerTests(unittest.TestCase):
     def test_mut_unbounded_text_never_reaches_propose(self):
         self.prepare_text()
         for value in ('', 'x' * 4097, 'é' * 2049, 'x' * 65537,
-                      'a\n', 'a\t', 'a\x00', 'a\x7f', 'a\u0085',
+                      'a\n\n', 'a\t', 'a\x00', 'a\x7f', 'a\u0085',
                       'a\u202e', 'a\u2066', 'a\ud800', 'a\u200f', 'a\u061c'):
             with self.subTest(length=len(value)):
                 self.owner.slots.values = {'prompt': value}

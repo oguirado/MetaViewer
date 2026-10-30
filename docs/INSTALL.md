@@ -30,7 +30,7 @@ For headless UI smoke tests (`ui-smoke` leg in `tools/gate.sh`) and clean-instal
 
 Distribution-specific package manager commands (`apt`, `dnf`, `pacman`) for installing system packages are not documented yet.
 
-RAM admission serializes native creates across daemons and reserves 512 MiB per incumbent above a host `MemAvailable` floor of min(20 GiB, 25 percent of `MemTotal`) [TARGET, conductor decision; CITED: `daemon-adapter/internal/daemon/ram_admission.go`]. Reservations live in the uid-owned `0700` directory `$MV_RAM_ADMISSION_DIR`, or `$XDG_RUNTIME_DIR/metaviewer/ram-admission` when the override is unset; all daemons for the uid must share it. PID death alone never releases a reservation. Run `python3 tools/mv_ram_admission.py reclaim --dry-run` as the operator to print each proposed removal and its proof, then explicitly use `--apply` after review. The command holds the admission lock, checks owner death, and reads the local Docker inventory (including stopped containers); because reservation hashes cannot identify random native run IDs, any `srf-` container or unknown/remote inventory keeps the reservations [TARGET, unit decision]. Only proven global native absence permits removal of a valid stale record. Reclaim is never automatic; run it with the same Docker context and admission directory as the daemon. Offline tests use private admission directories and never reclaim host records.
+RAM admission serializes native creates across daemons and reserves 512 MiB per incumbent above a host `MemAvailable` floor of min(20 GiB, 25 percent of `MemTotal`) [TARGET, conductor decision; CITED: `daemon-adapter/internal/daemon/ram_admission.go`]. Reservations live in the uid-owned `0700` directory `$MV_RAM_ADMISSION_DIR`, or `$XDG_RUNTIME_DIR/metaviewer/ram-admission` when the override is unset; all daemons for the uid must share it. PID death alone never releases a reservation. Run `python3 tools/mv_ram_admission.py reclaim --dry-run` as the operator to print each proposed removal and its proof, then explicitly use `--apply` after review. The command holds the admission lock, checks owner death, and reads the local Docker inventory (including stopped containers); named records require absence of the matching `srf-id-<profile>`, `srf-pg-<profile>`, and `srf-vm-<profile>` containers. Legacy hash-only records require absence of `srf-id-mv-*`, `srf-pg-mv-*`, and `srf-vm-mv-*` capsules. Random holdings names (`srf-ng-hcap-*`) cannot be mapped to profiles and conservatively keep reservations, as does unknown/remote inventory [TARGET, unit decision]. Unrelated protected containers do not block reclaim; the command never changes containers. Reclaim is never automatic; run it with the same Docker context and admission directory as the daemon. Offline tests use private admission directories and never reclaim host records.
 
 ## Identities
 
@@ -464,8 +464,14 @@ Records from crashed daemons remain counted: a dead PID does not prove that its
 native container is gone. Run `python3 tools/mv_ram_admission.py reclaim --dry-run` to inspect records,
 then explicitly choose `reclaim --apply` to remove verified stale records. The
 command requires both a dead owner PID and a read-only local Docker inventory
-proving all native `srf-*` containers absent (including stopped containers);
-present or unknown inventories keep reservations. Reclamation is never automatic.
+proving the recorded profile's `srf-id-<profile>`, `srf-pg-<profile>`, and `srf-vm-<profile>`
+containers absent (including stopped containers). New reservation names append
+`--<profile>` after the profile hash. Legacy hash-only records require absence
+of `srf-id-mv-*`, `srf-pg-mv-*`, and `srf-vm-mv-*` capsules. Random holdings container names cannot
+be mapped to profiles, so any `srf-ng-hcap-*` container conservatively keeps
+reservations. Unknown inventories keep reservations. Unrelated protected
+containers do not block reclaim; the command never changes containers.
+Reclamation is never automatic.
 
 The **Identities** menu manages public account labels and domains; several
 accounts for the same site are supported. Use **Log in** to open the operator's
@@ -481,8 +487,14 @@ The startup capability snapshot displays **legacy** when Open is unavailable,
 including when `MV_SRF_NET_MODES` is unset. Dedicated proxy requires the
 `proxied` capability; Open requires identity image `0.2.0` [CITED] and the
 operator-installed firewall witness and the final Open-ready native pin. The
-current interim pin does not satisfy that final prerequisite. Network is separate
-from global settings.
+current interim pin does not satisfy that final prerequisite.
+The host refuses saving an
+unavailable Open mode with `NET_OPEN_PREREQ`. The launch probe logs one typed
+reason (`binary_missing`, `exit_<n>`, `timeout`, `oversize`, `malformed`, `ok`)
+and runs without proxy variables. The Network panel displays `legacy: <reason>`
+in plain words. After `NET_OPEN_PREREQ`, nothing is saved by default; the
+operator may explicitly choose **Confirm save for next start anyway** to save
+the record for a future start once Open is available. Network is separate from global settings.
 
 [TARGET, unit decision] The trusted launcher supplies `MV_HANDOFF_PATHS`, a JSON
 array of owner handoff paths (`output.with_suffix('.handoff.json')`), to Electron.

@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Explicit operator reclaim; never called by the daemon.
 
-[TARGET, unit decision] Reservation hashes cannot identify random native run IDs.
-Prove global native absence instead: every srf-* container (including stopped
-ones) must be absent from the local Docker inventory. Any native container or
-unknown inventory keeps all records. This intentionally sacrifices reclaim
-precision. Native backends: OpenSuperficies src/browserid/surface/surface.go
-(docker run), src/holdingscap/holdingscap.go (docker run).
+[TARGET, unit decision] New names append a validated profile after the hash.
+Require dead PID plus absence of that profile's browser/program/VM containers.
+Hash-only records require absence of MetaViewer mv-* browser/program/VM capsules.
+Random holdings names cannot be mapped back to a profile; keep conservatively
+while any holdings capsule exists. Inventory is read-only, including protected
+containers, which never prevent reclaim of unrelated profile reservations.
 """
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -18,8 +19,10 @@ import stat
 import subprocess
 import sys
 
-RECORD = re.compile(r"([1-9][0-9]*)-[0-9a-f]{32}-[0-9a-f]{64}\Z")
+RECORD = re.compile(r"([1-9][0-9]*)-[0-9a-f]{32}-([0-9a-f]{64})(?:--([a-z0-9][a-z0-9-]{0,63}))?\Z")
 NAME = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*\Z")
+# Profile container names created by internal/capsule/manager.go (start/rebind).
+PROFILE_PREFIXES = ("srf-id-", "srf-pg-", "srf-vm-")
 
 
 def command(argv):
@@ -37,7 +40,7 @@ class NativeInventory:
     def __init__(self, run=command):
         self.run = run
 
-    def absent(self):
+    def absent(self, profile=None):
         """True means proven absent; False/None mean present/unknown."""
         try:
             host = os.environ.get("DOCKER_HOST")
@@ -56,7 +59,15 @@ class NativeInventory:
             names = raw.splitlines()
             if any(not NAME.fullmatch(name) for name in names):
                 return None
-            return not any(name.startswith("srf-") for name in names)
+            if profile is None:
+                return not any(name.startswith("srf-") for name in names)
+            if any(name.startswith("srf-ng-hcap-") for name in names):
+                return False  # random native IDs cannot prove profile absence
+            if profile:
+                return not any(name in tuple(prefix + profile for prefix in PROFILE_PREFIXES)
+                               for name in names)
+            return not any(name.startswith(tuple(prefix + "mv-" for prefix in PROFILE_PREFIXES))
+                           for name in names)
         except (OSError, subprocess.SubprocessError, ValueError, TypeError):
             return None
 
@@ -98,15 +109,18 @@ def reclaim(directory, apply=False, inventory=None, dead=pid_dead):
             before = os.stat(name, dir_fd=fd, follow_symlinks=False)
             if match is None or not reservation(before):
                 item["reason"] = "unknown_or_unsafe_reservation"
+            elif match[3] and hashlib.sha256(match[3].encode()).hexdigest() != match[2]:
+                item["reason"] = "unknown_or_unsafe_reservation"
             elif not dead(int(match[1])):
                 item["reason"] = "owner_alive_or_unknown"
             else:
-                absent = inventory.absent()
+                absent = (inventory.absent(match[3] or "") if isinstance(inventory, NativeInventory)
+                          else inventory.absent())
                 if absent is not True:
                     item["reason"] = ("native_capsule_present" if absent is False
                                       else "native_inventory_unknown")
                 else:
-                    item.update(action="would_remove", reason="owner_dead_and_native_inventory_empty")
+                    item.update(action="would_remove", reason="owner_dead_and_matching_native_absent")
                     if apply:
                         # Recheck owner and inode after the external read, while
                         # admission is still locked. Never follow a symlink.
