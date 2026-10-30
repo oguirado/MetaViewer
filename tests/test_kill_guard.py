@@ -10,13 +10,16 @@ paths raise before signalling, and audit fixtures call the predicate directly wi
 No negative control can reach a host signal primitive.
 """
 import ast
+import hashlib
 import os
 import re
 import signal
+import struct
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -62,8 +65,6 @@ KILL_FUNCS = ('kill', 'killpg')
 LOWER_TOKENS = ('> 1', '>= 2', '<= 1', '< 2', '>1', '>=2', '<=1', '<2')
 GROUP_TOKENS = ('getpgid', 'getpgrp')
 TYPE_RE = re.compile(r'\btype\s*\(.+?\)\s+is\s+(not\s+)?int\b|\bisinstance\s*\(')
-SKIP_DIRS = frozenset(('.git', '__pycache__', '.pytest_cache', '.venv', 'venv',
-                       'node_modules', 'target', 'dist', 'build', 'coverage'))
 KILL_BY_NAME = re.compile(r'\b(pkill|killall|taskkill|killbyname)\b')
 CODE_SUFFIXES = ('.py', '.js', '.mjs', '.cjs', '.go', '.rs', '.sh')
 
@@ -112,13 +113,43 @@ def unguarded_kill_lines(source):
 
 
 def _first_party(root, suffix):
-    for path in sorted(root.rglob('*' + suffix)):
+    """Select indexed code only; unavailable Git/index evidence fails closed."""
+    try:
+        result = subprocess.run(['git', '-C', str(root), 'ls-files', '-z', '--cached'],
+                                check=True, capture_output=True)
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise RuntimeError('kill guard: cannot enumerate git-tracked files: %s' % error) from error
+    names = result.stdout.split(b'\0')
+    if not any(names):
+        raise RuntimeError('kill guard: git-tracked file manifest is empty')
+    for name in sorted(set(names) - {b''}):
+        path = root / os.fsdecode(name)
+        if path.suffix != suffix:
+            continue
         if path.name == 'test_kill_guard.py':
             # Own refusal fixtures exercise the runtime hook, not the static rule.
             continue
-        if any(part in SKIP_DIRS for part in path.relative_to(root).parts):
-            continue
         yield path
+
+
+def _fixture_git_index(root, sources):
+    """Write a minimal Git index fixture without any mutating Git command."""
+    git = root / '.git'
+    (git / 'objects').mkdir(parents=True)
+    (git / 'refs' / 'heads').mkdir(parents=True)
+    (git / 'HEAD').write_text('ref: refs/heads/fixture\n', encoding='ascii')
+    index = b'DIRC' + struct.pack('!II', 2, len(sources))
+    for name, source in sorted(sources.items()):
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = source.encode('utf-8')
+        path.write_bytes(data)
+        blob = hashlib.sha1(b'blob %d\0' % len(data) + data).digest()
+        encoded = os.fsencode(name)
+        entry = (struct.pack('!10I', 0, 0, 0, 0, 0, 0, 0o100644, 0, 0, len(data))
+                 + blob + struct.pack('!H', len(encoded)) + encoded + b'\0')
+        index += entry + b'\0' * (-len(entry) % 8)
+    (git / 'index').write_bytes(index + hashlib.sha1(index).digest())
 
 
 def read_gate_python(root):
@@ -256,9 +287,45 @@ class KillGuardTests(unittest.TestCase):
     def test_by_name_scanner_fixture(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            (root / 'clean.py').write_text('import os\nos.kill(pid, 9)\n', encoding='utf-8')
-            (root / 'dirty.sh').write_text('#!/bin/sh\npkill -f worker\n', encoding='utf-8')
+            _fixture_git_index(root, {
+                'clean.py': 'import os\nos.kill(pid, 9)\n',
+                'dirty.sh': '#!/bin/sh\npkill -f worker\n',
+            })
             self.assertEqual(kill_by_name_hits(root), ['dirty.sh:2'])
+
+    def test_index_excludes_untracked_dependencies_but_audits_tracked_code(self):
+        with tempfile.TemporaryDirectory(prefix='kill-Música-') as temp:
+            root = Path(temp)
+            tracked = 'src/owned space\nfile.py'
+            _fixture_git_index(root, {tracked: 'pass\n'})
+            dependency = root / '_deps/wender-agent/tests/x.py'
+            dependency.parent.mkdir(parents=True)
+            dependency.write_text('import os\nos.killpg(pid, 9)\n# pkill worker\n',
+                                  encoding='utf-8')
+
+            def missing():
+                return [(path.relative_to(root).as_posix(), line)
+                        for path in _first_party(root, '.py')
+                        for line in unguarded_kill_lines(path.read_text(encoding='utf-8'))]
+
+            self.assertEqual(list(_first_party(root, '.py')), [root / tracked])
+            self.assertEqual(missing(), [])
+            self.assertEqual(kill_by_name_hits(root), [])
+            # The indexed path is scanned from the working tree, even when modified.
+            (root / tracked).write_text(dependency.read_text(encoding='utf-8'), encoding='utf-8')
+            self.assertEqual(missing(), [(tracked, 2)])
+            self.assertEqual(kill_by_name_hits(root), [tracked + ':3'])
+
+    def test_index_enumeration_fails_closed(self):
+        failures = (FileNotFoundError('git unavailable'),
+                    subprocess.CalledProcessError(128, ['git']))
+        for error in failures:
+            with self.subTest(error=error), patch('subprocess.run', side_effect=error):
+                with self.assertRaisesRegex(RuntimeError, 'cannot enumerate git-tracked files'):
+                    list(_first_party(ROOT, '.py'))
+        with patch('subprocess.run', return_value=subprocess.CompletedProcess(['git'], 0, b'')):
+            with self.assertRaisesRegex(RuntimeError, 'manifest is empty'):
+                list(_first_party(ROOT, '.py'))
 
 
 if __name__ == '__main__':
