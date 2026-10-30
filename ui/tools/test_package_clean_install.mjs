@@ -1349,6 +1349,56 @@ if (shouldRunCleanNpmCiRepro) {
   });
 }
 
+test('FLAKE-PIN config refusal uses a completed child write despite lost forwarding and dbus noise', async () => {
+  const temporary = await fs.mkdtemp(join(tmpdir(), 'mv-config-refusal-'));
+  try {
+    const diagnostic = 'configuration: profile map or live profile/root required\n';
+    // Model the startup race without timing: the parent consumes the adapter's
+    // diagnostic, then exits without forwarding it. strace still witnesses it.
+    const program = `
+      const { spawnSync } = require('node:child_process');
+      const { writeSync } = require('node:fs');
+      const child = spawnSync(process.execPath, ['-e', ${JSON.stringify(
+        `require('node:fs').writeSync(2, ${JSON.stringify(diagnostic)}); process.exit(2);`,
+      )}], { encoding: 'utf8' });
+      if (child.status !== 2 || child.stderr !== ${JSON.stringify(diagnostic)}) process.exit(99);
+      writeSync(2, '[123:456:ERROR:dbus/bus.cc:408] Failed to connect to the bus: No such file or directory\\n');
+      process.exit(2);
+    `;
+    const prefix = join(temporary, 'writes');
+    const run = spawnSync('strace', ['-ff', '-e', 'trace=write', '-s', '256', '-o', prefix,
+      process.execPath, '-e', program], { encoding: 'utf8', timeout: 30000 });
+    assert.equal(run.status, 2, run.stderr || run.error?.message);
+    const result = { code: run.status, signal: run.signal, stdout: run.stdout, stderr: run.stderr };
+    assert.match(run.stderr, /Failed to connect to the bus/);
+    assert.doesNotMatch(run.stderr + run.stdout, /configuration:/);
+    const traces = await Promise.all((await fs.readdir(temporary))
+      .filter(name => name.startsWith('writes.'))
+      .map(name => fs.readFile(join(temporary, name), 'utf8')));
+    packaging.assertAdapterConfigRefusal(result, traces);
+
+    const length = Buffer.byteLength(diagnostic);
+    const write = `write(2, ${JSON.stringify(diagnostic)}, ${length})`;
+    const complete = `${write} = ${length}\n`;
+    // Noise alone, wrong reasons, failed/partial writes, and unobserved writes
+    // cannot pass even if a diagnostic happens to appear in forwarded output.
+    for (const trace of ['', run.stderr, complete.replace('profile map', 'wrong map'),
+      `${write} = -1 EPIPE (Broken pipe)\n`, `${write} = ${length - 1}\n`,
+      `${write} <unfinished ...>\n`, complete.replace('write(2,', 'write(1,')]) {
+      assert.throws(() => packaging.assertAdapterConfigRefusal(
+        { ...result, stderr: diagnostic }, [trace]), /PKG_ADAPTER_CONFIG_REFUSAL_MISSING/);
+    }
+    for (const invalid of [
+      { ...result, code: 0 }, { ...result, code: 'ETIMEDOUT' },
+      { ...result, code: null, signal: 'SIGTERM' },
+      { ...result, stdout: 'METAVIEWER_MAIN_SMOKE_OK\n' },
+    ]) {
+      assert.throws(() => packaging.assertAdapterConfigRefusal(invalid, [complete]),
+        /PKG_ADAPTER_CONFIG_REFUSAL_MISSING/);
+    }
+  } finally { await fs.rm(temporary, { recursive: true, force: true }); }
+});
+
 test(
   'W2-AC01-PKGSTART cleanInstallSmoke runs real Go mv-daemon-adapter leg with /dev/shm MV_SRF_PROFILES, enforces negative control without MV_SRF_PROFILES, and removes /dev/shm dir in every exit path',
   { timeout: 120000 },

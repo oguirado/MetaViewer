@@ -735,6 +735,7 @@ fn per_root_byte_cap_and_count_cap_evict_oldest_at_boundary() {
     for retained_idx in [1_usize, 32_usize] {
         let (sid, payload, sha) = &tiny_surfaces[retained_idx];
         assert!(journal_c.has_committed_surface_witness(sid, sha));
+        let started = Instant::now();
         let v_ret = VerifiedPixels::read_verified_for_surface(
             &session_c,
             sid,
@@ -747,9 +748,14 @@ fn per_root_byte_cap_and_count_cap_evict_oldest_at_boundary() {
             sha,
         )
         .unwrap();
+        let elapsed = started.elapsed().as_nanos();
         assert!(v_ret.hash_skipped());
         assert_eq!(v_ret.hash_ns(), 0);
-        assert!(v_ret.skipped_hash_ns() > 0);
+        // Cache retention is a branch decision, not a minimum clock duration:
+        // a tiny memcmp may complete within one monotonic clock tick.
+        assert_eq!(v_ret.bytes(), payload.as_slice());
+        assert_eq!(v_ret.sha256(), sha);
+        assert!(v_ret.shm_read_ns() + v_ret.skipped_hash_ns() <= elapsed);
     }
 
     journal_c.close().unwrap();

@@ -1845,6 +1845,33 @@ export async function verifySmokeAdapterReceipt(receiptPath, expectedSrfBinDir) 
   return receipt;
 }
 
+/**
+ * [TARGET, unit decision] Observe the adapter's diagnostic at its write boundary.
+ * Electron can exit before forwarding child stderr; unrelated dbus diagnostics
+ * neither establish nor invalidate the refusal. Per-thread (-ff) traces avoid
+ * interleaved unfinished/resumed syscall records. Require a completed write,
+ * as well as a failed app launch without a success marker.
+ * @param {{code?: unknown, signal?: unknown, stdout?: unknown, stderr?: unknown}} result
+ * @param {string[]} traces
+ */
+export function assertAdapterConfigRefusal(result, traces) {
+  const diagnostic = 'configuration: profile map or live profile/root required\n';
+  const length = Buffer.byteLength(diagnostic);
+  const write = `write(2, ${JSON.stringify(diagnostic)}, ${length})`;
+  const wroteRefusal = traces.some(trace => trace.split('\n').some(line => {
+    const [call, returned] = line.split(/\s+=\s+/);
+    return call?.trim() === write && returned?.trim() === String(length);
+  }));
+  if (typeof result.code !== 'number' || result.code === 0 || result.signal ||
+      /^METAVIEWER_MAIN_SMOKE_OK$/m.test(String(result.stdout ?? '')) || !wroteRefusal) {
+    throw createSmokeDiagnosticError('PKG_ADAPTER_CONFIG_REFUSAL_MISSING', {
+      code: typeof result.code === 'number' || typeof result.code === 'string' ? result.code : null,
+      signal: typeof result.signal === 'string' ? result.signal : null,
+      stdout: String(result.stdout ?? ''), stderr: String(result.stderr ?? ''),
+    });
+  }
+}
+
 /** Extract actual product bytes, trace all descendants, refuse source access.
  * @param {string} artifact */
 export async function cleanInstallSmoke(artifact) {
@@ -1944,21 +1971,20 @@ export async function cleanInstallSmoke(artifact) {
         MV_SRF_STATE_DIR:negSrfStateDir,
         SRF_IDENTITY_STORE_ROOT:negSrfIdentityDir,
       };
-      let configRefused=false, configRefusalDetail='';
+      const configTrace=join(clean,'config-refusal.trace');
+      let configResult;
       try {
-        await execute('xvfb-run',['-a',join(installed,'metaviewer'),
+        const result=await execute('xvfb-run',['-a','strace','-ff','-e','trace=write',
+          '-s','256','-o',configTrace,join(installed,'metaviewer'),
           `--user-data-dir=${join(clean,'no-profiles-profile')}`],
           {cwd:clean,env:noProfilesEnv,timeout:60000,maxBuffer:1024*1024});
+        configResult={...result,code:0};
       } catch (error) {
-        const combined=String(error.stderr ?? '') + '\n' + String(error.stdout ?? '');
-        configRefusalDetail=JSON.stringify({code:error.code,signal:error.signal,stdout:error.stdout,stderr:error.stderr,message:error.message}).slice(-3000);
-        configRefused=
-          typeof error.code === 'number' &&
-          error.code !== 0 &&
-          !/^METAVIEWER_MAIN_SMOKE_OK$/m.test(String(error.stdout ?? '')) &&
-          /configuration:\s*profile map or live profile\/root required/.test(combined);
+        configResult=error;
       }
-      if (!configRefused) throw new Error(`PKG_ADAPTER_CONFIG_REFUSAL_MISSING: ${configRefusalDetail}`);
+      const traceNames=(await fs.readdir(clean)).filter(name => name.startsWith('config-refusal.trace.'));
+      const configTraces=await Promise.all(traceNames.map(name => fs.readFile(join(clean,name),'utf8')));
+      assertAdapterConfigRefusal(configResult,configTraces);
     } finally {
       await fs.rm(shmRoot,{recursive:true,force:true});
     }
