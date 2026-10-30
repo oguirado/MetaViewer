@@ -1049,6 +1049,8 @@ ac04_control.test.js	tests/e2e/ac04_control.test.js
 ac05_ai.test.js	tests/e2e/ac05_ai.test.js
 ac06mul-4dadd8d01577	tests/e2e/ac06_multislot.test.js
 ac07ram-e57b96199e4e	tests/e2e/ac07_ram_first.test.js
+adapter-startup.cjs	tests/e2e/adapter-startup.cjs
+adapter-3715047a763b	tests/e2e/adapter_startup.test.js
 ai-provider.py	tests/e2e/ai-provider.py
 asm_web_fakes.cjs	tests/e2e/asm_web_fakes.cjs
 asmwebh-3a1146a20598	tests/e2e/asm_web_hosted.test.js
