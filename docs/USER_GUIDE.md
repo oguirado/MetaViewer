@@ -1,8 +1,13 @@
 # MetaViewer User Guide
 
-I built MetaViewer as a Linux desktop workspace where a multi-capsule wall is my design target `[TARGET]` and the current live End-to-End slice (`live21`) is verified with `1` `[MEASURED]` live isolated application capsule at `2.71` fps `[MEASURED]` (`34` `[MEASURED]` frames over `12.528` s `[MEASURED]`, `1` `[MEASURED]` `create_surface` call), while `metaviewer-core` spends `52.11` ms p50 `[MEASURED]` (`54.02` ms p95 `[MEASURED]`) per `1280x900` (`3,456,000` B `[MEASURED]`) `rgb24` frame. Every action is admitted by the Rust core (`metaviewer-core`) and journaled; the Electron renderer paints live `rgb24` frames (`frame_delivery/v0.2`) over a dedicated `MessagePort` (`frame_port/v1`) with per-frame `frame_ack/v0.2` acknowledgments and submits typed intents without injecting raw input directly.
+MetaViewer is a Linux desktop wall of isolated application capsules. The Rust core
+admits and journals actions; the Electron wall paints frames and sends typed intents.
+Multiple capsules share host RAM admission; current live performance is not measured
+by this documentation update. Historical results are scoped in the [README](../README.md#historical-live-evidence).
 
-This guide covers version `0.1.2` `[MEASURED: cat VERSION]` (locked `capsule-ui-kit` `0.2.1` `[MEASURED: python3 -c 'import json; print(json.load(open("ui/kit.lock.json"))["version"])']`): installing and launching the app, the window layout, opening capsules (including nested `metaviewer-nested` capsules at `nested_depth: 1`), watching the agent, taking control, status and refusal indicators, replaying a session journal (`mv-replay`), `mvctl` basics, the multislot and recording panel, diagnostics, and troubleshooting. For full host setup and offline packaging, see [INSTALL.md](INSTALL.md); for verification suites and CI jobs, see [TESTING.md](TESTING.md).
+This guide covers the `0.2.0` candidate and subsequent unreleased features
+[CITED: `../VERSION`, `../CHANGELOG.md`]. See [INSTALL.md](INSTALL.md) for host
+setup and [TESTING.md](TESTING.md) for verification.
 
 ---
 
@@ -40,7 +45,7 @@ I run the full `11`-leg `[MEASURED: bash tools/gate.sh]` verification gate (`man
 
 ### Launch the stack
 
-1. **Start `metaviewer-core`:** requires `MV_CORE_CONFIG` pointing at a JSON configuration file (`session_id`, one `core` registration, and `peers` containing one `agent` and one `daemon` registration, each carrying a `hello/v0.2` matching component version `0.1.2` `[MEASURED: cat VERSION]`) and `XDG_RUNTIME_DIR` for `$XDG_RUNTIME_DIR/metaviewer/core.sock`:
+1. **Start `metaviewer-core`:** requires `MV_CORE_CONFIG` pointing at a JSON configuration file (`session_id`, one `core` registration, and `peers` containing one `agent` and one `daemon` registration, each carrying a `hello/v0.2` matching component version `0.2.0` [CITED: `../VERSION`]) and `XDG_RUNTIME_DIR` for `$XDG_RUNTIME_DIR/metaviewer/core.sock`:
 
    ```sh
    MV_CORE_CONFIG=/absolute/path/to/core-config.json \
@@ -213,6 +218,105 @@ The top-bar **Storyboard** button opens the Storyboard screen, where creative se
 | `mv-replay` exits `2`, `3`, or `4` | Invalid/corrupt journal (`2`), duplicate record (`3`), or witness mismatch (`4`). |
 
 ---
+
+## Accounts and automation
+
+### Identities and login
+
+Open **Identities** in the top bar to list accounts, create an identity with an id,
+account label and comma-separated domains, or delete an identity after confirmation.
+Several accounts may share a site's domains; choose a distinct id and label for each.
+**Log in** opens the operator's loopback login view. Type credentials only there,
+complete login yourself and close the view before automation. Native reservation
+refuses agent input while login is open. The menu reports authentication as unknown;
+login history is not proof that the session is currently authenticated.
+[CITED: `../ui/src/identities/IdentitiesDialog.vue`, `../tools/mv_identity.py`]
+
+### Capsule Network
+
+Open **Network** on the chosen capsule, select a mode, and press **Save network**.
+Restart the capsule for the change to take effect. The policy belongs to the admitted
+profile, so capsules sharing that profile also share its policy.
+
+| Choice or status | Behavior |
+| --- | --- |
+| **Open (default)** | Public internet with LAN and host services blocked. Requires identity image `0.2.0` [CITED: `INSTALL.md#capsule-network`], the operator firewall witness and the final Open-ready native pin. |
+| **Dedicated proxy with allowlist** | Explicit opt-in. Enter exact hostnames on separate lines. Native proxied support and the proxy binary are required; unsupported policy is refused. |
+| **legacy** | Effective mode shown when startup capabilities lack Open. The interim pinned OpenSuperficies is not Open-ready; this status does not establish public-only egress. |
+
+`NET_OPEN_PREREQ` means the deployment cannot start Open; an explicit Open refusal
+is never retried or downgraded. See [Capsule network](INSTALL.md#capsule-network)
+for installation prerequisites and allowlist rules.
+[CITED: `../ui/src/netmode/NetworkPanel.vue`, `INSTALL.md`]
+
+### Use MetaViewer
+
+Click **Use MetaViewer** to copy the text fenced prompt from
+[AGENT_ENTRY.md](AGENT_ENTRY.md), verbatim including its final newline. **Copied**
+confirms clipboard completion; the button launches no workflow. Give the prompt
+to your chosen agent with the operator present. It selects a stored workflow and
+runs `python3 -m metaviewer_agents.mw_run` from the agents directory against an
+already running browser identity. It neither starts a browser nor types credentials.
+Read the JSON result and its private receipt/report before accepting success;
+slot values must not contain secrets because process arguments expose them.
+[CITED: `../ui/electron/buttonBridge.js`, `AGENT_ENTRY.md`]
+
+### Automate from a demo
+
+Open **Automate from a demo**, choose an existing running identity, and enter a
+**Demo id** and **Site name**. Log in yourself before recording and use dummy data:
+frames can reveal field contents, although recorded text events retain lengths only.
+
+- **Start** runs the host `tools/mv_demo.py record` command and provides a loopback
+  viewer URL. Open it and demonstrate manually.
+- **Stop** ends recording and waits for sealed private evidence and read-only restoration.
+- **Copy prompt** runs `tools/mv_demo.py prompt` for the sealed demo, then copies its
+  authoring prompt with the admitted evidence and site destination substituted.
+- **Check site** runs `tools/mv_demo.py check`. It validates through a temporary
+  MemoryWeb checkout copy and never runs the authored workflow. Review before replay.
+
+Configure `MV_MEMORYWEB_REPO` for the existing authoring checkout. Packaged demos
+also require `MV_OPERATOR_REPO` pointing to an operator-owned MetaViewer checkout.
+Evidence is under `$XDG_STATE_HOME/metaviewer/demos/<demo>` (fallback
+`$HOME/.local/state/metaviewer/demos/<demo>`), outside the site home.
+[CITED: `AUTOMATE_FROM_DEMO.md`, `../ui/src/demo/DemoDialog.vue`, `../ui/tools/package.js`]
+
+### CAPTCHA and bot checks
+
+Execution stops on a CAPTCHA, bot check or login wall with `HUMAN_HANDOFF`.
+The notice “CAPTCHA or bot check: solve it in the capsule, then re-run” remains
+visible until **Acknowledge** is durably saved; it has no automatic timeout.
+Use **Take control**, solve the challenge yourself, then acknowledge the notice.
+Release control and explicitly re-run when ready. Acknowledgement only dismisses
+the notice: it does not resume, retry or authorize agent CAPTCHA solving.
+[CITED: `../ui/src/handoff/HandoffNotice.vue`, `AGENT_ENTRY.md`, `INSTALL.md`]
+
+### Multiple capsules, RAM admission, and private site data
+
+Use **Add capsule** for additional configured profiles. Separate profiles need
+nonoverlapping RAM roots; separate live stacks also need distinct runtime/display
+allocations. Admission preserves a floor of `min(20 GiB, MemTotal / 4)` plus
+`512 MiB` per incumbent capsule [TARGET; CITED: `INSTALL.md#concurrent-identities-and-ram-admission`].
+Unknown memory state refuses admission. A failed new capsule never evicts siblings.
+Crash reservations remain counted until the operator proves cleanup:
+
+```sh
+python3 tools/mv_ram_admission.py reclaim --dry-run
+python3 tools/mv_ram_admission.py reclaim --apply
+```
+
+Inspect the dry run before applying. Reclaim requires a dead owner and a local
+Docker inventory proving native containers absent; unknown inventories keep records.
+Use the same `MV_RAM_ADMISSION_DIR` as the daemons if overriding the runtime default.
+
+The default `memoryweb/` home beneath the checkout is private and gitignored.
+`MV_MW_HOME` may select an absolute admitted home. Store sites and workflows there,
+never browser profiles, cookies or credential databases. The native identity store
+must stay outside both this home and the repository. Home admission refuses unsafe
+permissions, symlinks and profile content; it does not repair them silently.
+Use `python3 tools/mw_home_check.py --repo .` to check admission before authoring or running.
+[CITED: `../tools/mv_ram_admission.py`, `../tools/mw_home_check.py`,
+`../agents/metaviewer_agents/mw_home.py`, `INSTALL.md`]
 
 ## Further reading
 

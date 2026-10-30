@@ -4,13 +4,40 @@ I build MetaViewer as a Linux-first desktop wall of live, isolated application s
 
 ## Status
 
-`VERSION` is **0.1.2** [MEASURED: `cat VERSION`; CITED: `VERSION`]. The repository is at commit `5226718ae` [MEASURED: `git rev-parse --short HEAD`] (`977` commits on the branch [MEASURED: `git rev-list --count HEAD`]), integrating toward **v0.2.0** [TARGET].
+`VERSION` is **0.2.0** [CITED: `VERSION`], the release candidate. Changes after the candidate belong to [Unreleased](CHANGELOG.md#unreleased).
 
 I verify this assembly with `bash tools/gate.sh` and `bash tools/gate.sh --self-test`; I do not carry forward suite pass totals from an earlier head. The gate covers manifests, laws, contracts, Python units and agents, kit/JavaScript checks, Rust, Go, UI, Electron smoke, and performance budgets [CITED: `tools/gate.sh`]. I run live acceptance separately; an offline pass does not establish live frame rate.
 
 - **Contracts.** I maintain `10` v0.1 schemas, `21` v0.2 schemas, `20` v0.1 fixtures and `489` v0.2 fixtures [MEASURED: Python `Path.glob` over `contracts/v0.1/*.schema.json`, `contracts/v0.2/*.schema.json`, `contracts/examples/*.json`, `contracts/examples/v0.2/*.json`].
 - **End-to-end journeys.** I keep `37` Node journey files and `3` Python E2E suites [MEASURED: `ls -1 tests/e2e/*.test.js | wc -l`; `ls -1 tests/e2e/test_*.py | wc -l`]. I run `xvfb-run -a -s "-screen 0 1280x900x24" python3 tests/e2e/run.py` separately from the default gate [CITED: `tests/e2e/run.py`].
 - **CI workflows (`.github/workflows/`).** `6` workflow files [MEASURED: `ls -1 .github/workflows/*.yml | wc -l`] define `20` job definitions [MEASURED: job keys below `jobs:` in each workflow] (`28` raw two-space keys, including triggers) [MEASURED: `grep -E '^  [a-z0-9-]+:$' .github/workflows/*.yml | wc -l`], with `13` job definitions [MEASURED: job keys below `jobs:`] (`15` raw two-space keys) in `.github/workflows/ci.yml` [MEASURED: `grep -E '^  [a-z0-9-]+:$' .github/workflows/ci.yml | wc -l`] where `ci-required` aggregates `10` required `needs` jobs across `x64` (`ubuntu-24.04`) and `arm64` (`ubuntu-24.04-arm`) [CITED: `.github/workflows/ci.yml`]. See [docs/TESTING.md](docs/TESTING.md) for the full job matrix and local commands.
+
+## Accounts, automation, and capsule resources
+
+Use **Identities** to manage separate accounts for the same site. Choose **Log in**
+and type credentials yourself only in the operator login view. Each capsule's
+**Network** action offers **Open (default)** or an opt-in dedicated proxy with an
+exact hostname allowlist, applied on its next start. The interim OpenSuperficies
+pin still shows **legacy** where Open is unavailable. Open requires identity image
+`0.2.0` [CITED: `docs/INSTALL.md`], the operator firewall witness, and the final
+Open-ready native pin; selecting Open does not bypass those prerequisites.
+
+**Use MetaViewer** copies the exact prompt in [AGENT_ENTRY.md](docs/AGENT_ENTRY.md)
+for your chosen agent to run a stored workflow on an already running identity.
+**Automate from a demo** opens manual recording controls, then copies an authoring
+prompt and checks the resulting site; see the [user guide](docs/USER_GUIDE.md#accounts-and-automation).
+A CAPTCHA or bot check stops execution. Its notice persists until acknowledged;
+solve it yourself, then explicitly re-run the workflow. Acknowledgement does not resume it.
+
+Multiple capsules are admitted against host RAM. The free-memory floor is
+`min(20 GiB, MemTotal / 4)` [TARGET; CITED: `docs/INSTALL.md#concurrent-identities-and-ram-admission`],
+with an additional reserve for incumbent capsules. Use the documented explicit
+[reclaim command](docs/INSTALL.md#concurrent-identities-and-ram-admission) for stale reservations.
+The gitignored, private `memoryweb/` home stores site/workflow data separately
+from browser profiles; `MV_MW_HOME` selects an admitted alternative.
+Setup and restrictions are in [INSTALL.md](docs/INSTALL.md).
+[CITED: `ui/src/identities/IdentitiesDialog.vue`, `ui/src/netmode/NetworkPanel.vue`,
+`ui/electron/buttonBridge.js`, `agents/metaviewer_agents/mw_home.py`]
 
 ## Features
 

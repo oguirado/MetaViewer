@@ -384,9 +384,9 @@ allowlist. The adapter reads
 {"schema":"metaviewer.capsule_egress/v1","mode":"allowlisted","domains":["example.com","docs.example.com"]}
 ```
 
-The directory must be private (`0700`) and records private (`0600`), owned by the
-current user, with no symlink components. Documents are bounded to 64 KiB;
-allowlists contain 1–256 unique lowercase ASCII hostnames. Unicode names must
+The directory must be private (`0700`) and records private (`0600`) [CITED: adapter egress validation], owned by the
+current user, with no symlink components. Documents are bounded to `64 KiB`;
+allowlists contain `1–256` unique lowercase ASCII hostnames [CITED: adapter egress validation]. Unicode names must
 already be encoded as ASCII IDNA labels. Wildcards, IP addresses, ports, URLs,
 empty lists, single-label names, localhost, and names ending in `.localhost`,
 `.local`, `.internal`, `.lan` or `.home.arpa` are refused, as are trailing dots. The Go `StoreEgress` helper validates
@@ -449,7 +449,7 @@ capsules across daemon processes conservatively, including lost bindings and
 unbound quarantined profiles. A uid-owned `0700` admission directory is locked
 with `flock` throughout read/check/start/initial capture. Reservations are written
 before native start and released only after verified cleanup. The floor is the smaller of
-20 GiB and 25 percent of host `MemTotal` [TARGET, conductor decision]; the reserve
+`20 GiB` and `MemTotal / 4` [TARGET, conductor decision]; the reserve
 is 512 MiB per incumbent [TARGET, unit decision], matching the configured shared
 frame budget. Unreadable or malformed
 meminfo refuses with `RAM_ADMISSION_REFUSED`. A failed post-check removes only the
@@ -477,9 +477,12 @@ without a current-session witness.
 Each capsule's **Network** action edits its admitted profile's adapter egress
 record for the next start: **Open (default)** or **Dedicated proxy with allowlist**
 (exact hostnames, one per line). Profiles shared by capsules share this policy.
-An unset `MV_SRF_NET_MODES` displays **legacy**. Dedicated proxy requires the
+The startup capability snapshot displays **legacy** when Open is unavailable,
+including when `MV_SRF_NET_MODES` is unset. Dedicated proxy requires the
 `proxied` capability; Open requires identity image `0.2.0` [CITED] and the
-operator-installed firewall witness. Network is separate from global settings.
+operator-installed firewall witness and the final Open-ready native pin. The
+current interim pin does not satisfy that final prerequisite. Network is separate
+from global settings.
 
 [TARGET, unit decision] The trusted launcher supplies `MV_HANDOFF_PATHS`, a JSON
 array of owner handoff paths (`output.with_suffix('.handoff.json')`), to Electron.
@@ -488,3 +491,50 @@ The persistent activity row says “CAPTCHA or bot check: solve it in the capsul
 then re-run”. **Take control** uses the existing control intent. **Acknowledge**
 saves a private adjacent `.ack.json` record before hiding the row; failed
 persistence leaves it visible. Acknowledgement does not resume an agent run.
+
+
+## Automation entry, demo authoring, and private MemoryWeb home
+
+Configure `MV_MW_HOME` as an absolute private site-data directory, or use the
+checkout's gitignored `memoryweb/` default. Home admission requires an owner-only
+`0700` home directory [CITED: `agents/metaviewer_agents/mw_home.py`],
+refuses symlinks and browser profile material, and requires Git exclusion.
+Keep `SRF_IDENTITY_STORE_ROOT` outside the repository and this home. Existing
+unsafe homes are refused rather than repaired. Check with:
+
+```sh
+python3 tools/mw_home_check.py --repo .
+```
+
+The home stores sites and workflows, not browser sessions. `MV_MEMORYWEB_REPO`
+selects the existing MemoryWeb authoring checkout for demo prompt generation and
+site validation; it is distinct from the private home. No dependency download is
+performed by that flow. Configure the native paths described under **Identities**.
+Packaged demo operations additionally require `MV_OPERATOR_REPO` pointing to an
+operator-owned MetaViewer checkout with the host tools and Git admission.
+[CITED: `tools/mw_home_check.py`, `tools/mv_demo.py`, `ui/tools/package.js`]
+
+**Use MetaViewer** copies only the fenced prompt in [AGENT_ENTRY.md](AGENT_ENTRY.md),
+verbatim including its final newline, then displays **Copied**. It launches no
+workflow. The operator gives that prompt to an agent with an already running,
+logged-in identity and the configured core connection. The entry stops on
+refusal or `HUMAN_HANDOFF`; credentials must never be passed as text slots.
+[CITED: `ui/electron/buttonBridge.js`, `AGENT_ENTRY.md`]
+
+**Automate from a demo** opens the recording dialog. **Start** invokes
+`tools/mv_demo.py record`; demonstrate manually in the printed loopback viewer
+and use **Stop** to seal evidence and restore read-only access. **Copy prompt**
+invokes `tools/mv_demo.py prompt` and copies the substituted authoring prompt
+from [AUTOMATE_FROM_DEMO.md](AUTOMATE_FROM_DEMO.md). **Check site** invokes
+`tools/mv_demo.py check` against a temporary checkout copy. A successful check
+validates authored data; review and explicit workflow execution remain separate.
+Log in before recording and demonstrate with dummy data: text events retain only
+lengths, but frames can expose field contents. Recordings live under
+`$XDG_STATE_HOME/metaviewer/demos/<demo>` (fallback
+`$HOME/.local/state/metaviewer/demos/<demo>`), outside the MemoryWeb home.
+[CITED: `ui/src/demo/DemoDialog.vue`, `tools/mv_demo.py`]
+
+On CAPTCHA or bot-check handoff, execution stops and the notice stays until
+acknowledged. Take control and solve the challenge yourself. Acknowledge only
+persists dismissal; release control and explicitly re-run when ready. There is
+no automatic resume or retry [CITED: `ui/src/handoff/HandoffNotice.vue`, `AGENT_ENTRY.md`].

@@ -1,6 +1,60 @@
 # Changelog
 
-## 0.2.0 (unreleased draft)
+## [Unreleased]
+
+Changes after candidate `2a1ee6d5c` through `7a4aad3ae`
+[CITED: `git log --oneline 2a1ee6d5c..7a4aad3ae`].
+Open remains gated on the operator-provisioned identity image `0.2.0`, firewall
+witness and final Open-ready native pin [CITED: `docs/INSTALL.md#capsule-network`].
+
+### Added
+
+- Add the Use MetaViewer and Automate from a demo buttons (`306479a8f`) [CITED: git history].
+- Add the demo recording flow behind Automate from a demo (`937b8511d`) [CITED: git history].
+- Add the identities menu, capsule network setting and hand-off notice (`2505650dc`) [CITED: git history].
+- Add the agent entry that runs one MemoryWeb workflow (`4f412d55d`) [CITED: git history].
+- Add the custodied MemoryWeb owner with text and CAPTCHA hand-off (`ff477f464`) [CITED: git history].
+- Add host-wide RAM admission for several live capsules (`4a5fca630`) [CITED: git history].
+- Add identities as logged-in browser profiles (`3145a2f0e`) [CITED: git history].
+- Add per-capsule network modes to the daemon adapter (`a54aee7b7`) [CITED: git history].
+- Add a private MemoryWeb home that refuses browser profiles (`da3b333a6`) [CITED: git history].
+- Add automation packs to the web runner (`8fd79043b`) [CITED: git history].
+
+### Changed
+
+- Update the router index (`7a4aad3ae`) [CITED: git history].
+- Update the router index (`52193bb11`) [CITED: git history].
+- Update the usage ledger (`158f91f9a`) [CITED: git history].
+- Update the router index (`e29810087`) [CITED: git history].
+- Update the router index (`0dce1585e`) [CITED: git history].
+- Update the router index (`3fa973d47`) [CITED: git history].
+- Update the router index (`22b586dbc`) [CITED: git history].
+- Update the usage ledger (`ad1f1a6b6`) [CITED: git history].
+- Update the usage ledger (`ef3a0eee5`) [CITED: git history].
+- Update the usage ledger (`63411cb08`) [CITED: git history].
+- Update the router index (`12c7236a7`) [CITED: git history].
+- Pin OpenSuperficies to the net-modes commit 3cb86d7 (`3e3704303`) [CITED: git history].
+- Update the usage ledger (`d96b1d8df`) [CITED: git history].
+- Update the router index (`4d1d6a057`) [CITED: git history].
+- Update the router index (`a1d178417`) [CITED: git history].
+- Update the router index (`44b1b336e`) [CITED: git history].
+- Update the router index (`1554105df`) [CITED: git history].
+- Update the usage ledger (`d1b02311f`) [CITED: git history].
+- Update the router index (`c007f1f34`) [CITED: git history].
+- Update the router index (`1abd0ce46`) [CITED: git history].
+- Enforce capsule-sized type calls for agent text in the adapter (`b4da97547`) [CITED: git history].
+- Update the usage ledger (`86de7ec88`) [CITED: git history].
+- Update the router index (`d8684995f`) [CITED: git history].
+- Update the usage ledger (`3d4ecbf36`) [CITED: git history].
+- Update the router index (`48adc3668`) [CITED: git history].
+
+### Fixed
+
+- Fix the e2e lifecycle hang and run MemoryWeb e2e with Wender (`319ea1912`) [CITED: git history].
+- Keep RAM admission usable on small hosts and its tests hermetic (`1899ab357`) [CITED: git history].
+- Check every tracked Cargo.lock against the release version (`b5587d602`) [CITED: git history].
+
+## 0.2.0 (candidate) [CITED: `VERSION`]
 - I made the capsule wall and agent loop safer under failure: stale or unknown daemon frames get a journalled STALE_FRAME verdict without dropping the daemon, a capsule is only reused after proven absence, and input after a revive waits for a fresh probe.
 - I made perception faster: the agents keep one persistent vision-engine client (p50 7.6 ms per 1280x900 frame on the trusted path), and wender-agent uses the same persistent bridge with raw RGB frames.
 - I hardened the perception interpreter: a pinned Python and a trusted extra site checked through its parent chain, contents and hooks before every spawn.
