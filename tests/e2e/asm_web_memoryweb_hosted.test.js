@@ -66,7 +66,9 @@ async function hosted(t, mutation = '') {
     capsule._submitForm = () => {
       submit();
       capsule.pageState.resultText = 'ANSWER_READY';
-      capsule.pageState.elements.find(e => e.id === 'result-text').text = 'ANSWER_READY';
+      const output = capsule.pageState.elements.find(e => e.id === 'result-text');
+      output.text = 'ANSWER_READY';
+      output.name = 'ANSWER_READY';
     };
   }
   const calls = [], wire = [], proposals = [], receipts = [];
@@ -220,7 +222,7 @@ runpy.run_path(sys.argv[0], run_name='__main__')
           'print(json.dumps(wender_state(os.environ["MV_WENDER_ROOT"],v["table"],v["tree"])))', root], {
           input: JSON.stringify({ table: latest.elementTable, tree: { window: {},
             elements: capsule.readAxTextContainer().nodes.map(n => ({ role: n.role,
-              name: n.id === 'result-text' ? n.text : n.name,
+              name: n.name,
               box: [n.bbox.x, n.bbox.y, n.bbox.w, n.bbox.h],
               states: { focused: String(n.focused) } })) } }),
           encoding: 'utf8', env: environment,

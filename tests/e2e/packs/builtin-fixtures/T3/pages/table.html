@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
 <title>ASM Web Acceptance — Table</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -65,22 +65,27 @@
     </thead>
     <tbody>
       <tr id="row-0" data-row="0">
-        <td id="cell-r0-c0" data-row="0" data-col="0" data-role="cell" data-bbox="24,104,192,44">auth-gateway</td>
-        <td id="cell-r0-c1" data-row="0" data-col="1" data-role="cell" data-bbox="216,104,192,44">eu-central</td>
-        <td id="cell-r0-c2" data-row="0" data-col="2" data-role="cell" data-bbox="408,104,192,44">14</td>
+        <td id="cell-r0-c0" data-row="0" data-col="0" data-role="cell" data-bbox="24,104,192,44"><span role="group">auth-gateway</span></td>
+        <td id="cell-r0-c1" data-row="0" data-col="1" data-role="cell" data-bbox="216,104,192,44"><span role="group">eu-central</span></td>
+        <td id="cell-r0-c2" data-row="0" data-col="2" data-role="cell" data-bbox="408,104,192,44"><span role="group">14</span></td>
       </tr>
       <tr id="row-1" data-row="1">
-        <td id="cell-r1-c0" data-row="1" data-col="0" data-role="cell" data-bbox="24,148,192,44">ledger-core</td>
-        <td id="cell-r1-c1" data-row="1" data-col="1" data-role="cell" data-bbox="216,148,192,44">us-east</td>
-        <td id="cell-r1-c2" data-row="1" data-col="2" data-role="cell" data-bbox="408,148,192,44">27</td>
+        <td id="cell-r1-c0" data-row="1" data-col="0" data-role="cell" data-bbox="24,148,192,44"><span role="group">ledger-core</span></td>
+        <td id="cell-r1-c1" data-row="1" data-col="1" data-role="cell" data-bbox="216,148,192,44"><span role="group">us-east</span></td>
+        <td id="cell-r1-c2" data-row="1" data-col="2" data-role="cell" data-bbox="408,148,192,44"><span role="group">27</span></td>
       </tr>
       <tr id="row-2" data-row="2">
-        <td id="cell-r2-c0" data-row="2" data-col="0" data-role="cell" data-bbox="24,192,192,44">stream-index</td>
-        <td id="cell-r2-c1" data-row="2" data-col="1" data-role="cell" data-bbox="216,192,192,44">ap-north</td>
-        <td id="cell-r2-c2" data-row="2" data-col="2" data-role="cell" data-bbox="408,192,192,44">41</td>
+        <td id="cell-r2-c0" data-row="2" data-col="0" data-role="cell" data-bbox="24,192,192,44"><span role="group">stream-index</span></td>
+        <td id="cell-r2-c1" data-row="2" data-col="1" data-role="cell" data-bbox="216,192,192,44"><span role="group">ap-north</span></td>
+        <td id="cell-r2-c2" data-row="2" data-col="2" data-role="cell" data-bbox="408,192,192,44"><span role="group">41</span></td>
       </tr>
     </tbody>
   </table>
 </main>
+<script>
+  document.querySelectorAll('td span').forEach(function (value) {
+    value.setAttribute('aria-label', value.textContent);
+  });
+</script>
 </body>
 </html>

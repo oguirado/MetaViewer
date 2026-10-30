@@ -17,7 +17,19 @@ const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 // [TARGET, unit decision] Only the backend is substituted. Task orchestration,
 // budgets, frame/receipt binding, AX completion and cleanup gates run in Python.
 async function dryRun(mutation = '') {
-  const capsule = new HostedWebCapsuleFake({ identity: 'mv-live-1' });
+  const fixtureTransform = html => {
+    if (mutation === 'MUT-OUTPUT-NO-SYNC') {
+      return html.replace("output.setAttribute('aria-label', value);",
+        "if (value === 'EMPTY') output.setAttribute('aria-label', value);");
+    }
+    if (mutation === 'MUT-T3-SPAN-NO-ROLE') return html.replace('<span role="group">', '<span>');
+    if (['MUT-FLOW-NO-NAME', 'MUT-FAKE-NAME-FROM-CONTENTS'].includes(mutation)) {
+      return html.replace('role="status" id="flow-confirmation"', 'id="flow-confirmation"')
+        .replace("marker.setAttribute('aria-label', marker.textContent);", '');
+    }
+    return html;
+  };
+  const capsule = new HostedWebCapsuleFake({ identity: 'mv-live-1', fixtureTransform });
   let core = new HostedCoreAdmissionFake(capsule);
   let latest, pending, report, stale = false;
   const calls = [];
@@ -195,7 +207,16 @@ async function dryRun(mutation = '') {
         frame_witness: { sha256: sha(bytes), bytes: bytes.length, generation: frame.generation,
           surface_id: frame.surface_id, artifact: frame.shm_path } };
       }
-      case 'state': return latest.wenderState;
+      case 'state': {
+        if (mutation === 'MUT-FAKE-NAME-FROM-CONTENTS') {
+          // Historical fake: every visual element survived with a content name,
+          // even paragraphs/cells. Deliberately bypass the real role pruning.
+          return { ...latest.wenderState, nodes: capsule.pageState.elements.map(el => ({
+            name: el.value || el.text || el.name, role: el.role, bbox: el.bbox,
+          })) };
+        }
+        return latest.wenderState;
+      }
       case 'plan': {
         const separator = args.goal.indexOf(':');
         const kind = args.goal.slice(0, separator), value = args.goal.slice(separator + 1);
@@ -390,3 +411,29 @@ for (const mutation of ['MUT-NO-SETTLE', 'MUT-SETTLE-PUBLISHES-BEFORE']) {
     assert.match(report.error.detail, /unchanged chrome pixels/);
   });
 }
+
+for (const mutation of ['MUT-OUTPUT-NO-SYNC', 'MUT-T3-SPAN-NO-ROLE', 'MUT-FLOW-NO-NAME']) {
+  test(`AX semantic negative control: ${mutation}`, async () => {
+    const result = await dryRun(mutation);
+    assert.equal(result.rc, 1);
+    assert.equal(result.report.error.detail, 'AX differs from perceived Wender state');
+    console.log(`${mutation}: ${result.report.error.detail}`);
+    const task = result.report.tasks.at(-1);
+    assert.ok(task.ax_failure_evidence[0].files.ax);
+    if (mutation === 'MUT-OUTPUT-NO-SYNC') {
+      assert.deepEqual(task.ax_proofs[0].expected, ['EMPTY']);
+      assert.deepEqual(task.ax_failure_evidence[0].expected, ['Hello, Ada Lovelace']);
+    }
+    assert.equal((await dryRun()).rc, 0, 'reverted fixture passes');
+  });
+}
+
+test('MUT-FAKE-NAME-FROM-CONTENTS falsely passes an unnamed paragraph', async () => {
+  const old = await dryRun('MUT-FAKE-NAME-FROM-CONTENTS');
+  assert.equal(old.rc, 0, JSON.stringify(old.report.error));
+  const faithful = await dryRun('MUT-FLOW-NO-NAME');
+  assert.equal(faithful.rc, 1);
+  assert.equal(faithful.report.error.detail, 'AX differs from perceived Wender state');
+  console.log('MUT-FAKE-NAME-FROM-CONTENTS: old fake PASS (false positive); faithful fake: ' +
+    faithful.report.error.detail);
+});

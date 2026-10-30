@@ -318,6 +318,14 @@ Use `python3 tools/mw_home_check.py --repo .` to check admission before authorin
 [CITED: `../tools/mv_ram_admission.py`, `../tools/mw_home_check.py`,
 `../agents/metaviewer_agents/mw_home.py`, `INSTALL.md`]
 
+## Known limits
+
+The pinned Wender perceives only chassis roles. On real sites, plain paragraphs,
+table cells and unnamed status text are absent from the Wender state. Agents must
+read this content through AX (srf) or vision. Adding StaticText/cell support is a
+v0.3 request to the wender-agent owner. The web fixtures explicitly name chassis
+roles from the same source as their visible text.
+
 ## Further reading
 
 - [Project overview](../README.md)

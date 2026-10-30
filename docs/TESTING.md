@@ -319,6 +319,8 @@ Two independent external testers reviewed the repository across three adversaria
 
 ## Opt-in assembly web acceptance
 
+On AX proof failure, the web runner retains redacted AX, vision and Wender JSON tables and the observed PNG (or RGB24 with width/height when PIL is absent), listing filenames and expected tokens in the task report.
+
 The web runner launches its adapter with `MV_SRF_LIVE_TEXT_INPUT=paste`, using
 capsule clipboard input while retaining the native text chunk cap. After agent
 text or key input drains, the adapter captures at least 50 ms apart for at most

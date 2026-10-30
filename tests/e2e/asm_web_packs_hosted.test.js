@@ -14,7 +14,7 @@ const { HostedWebCapsuleFake, HostedCoreAdmissionFake, makeProposal } = require(
 const runner = fileURLToPath(new URL('./e2e1_slice/asm_web_live.py', import.meta.url));
 const builtins = fileURLToPath(new URL('./packs/builtin-fixtures/', import.meta.url));
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
-const externalHTML = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'"></head><body><p id="external-marker" data-bbox="0,0,100,20">EXTERNAL_READY</p><p id="second-marker">EXTERNAL_SECOND</p><a href="#external-marker">Marker</a></body></html>\n`;
+const externalHTML = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'"></head><body><p role="status" aria-label="EXTERNAL_READY" id="external-marker" data-bbox="0,0,100,20">EXTERNAL_READY</p><p role="status" aria-label="EXTERNAL_SECOND" id="second-marker">EXTERNAL_SECOND</p><a href="#external-marker">Marker</a></body></html>\n`;
 
 function temporary(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mv-packs-Música-'));
@@ -554,4 +554,15 @@ test('MUT-FLOW-PIN: flow_a requires flow_b before backend allocation', async t =
   assert.equal(result.rc, 1);
   assert.equal(result.report.error.code, 'E2E_PACK_START');
   assert.deepEqual(result.calls, []);
+});
+
+test('MUT-META-OUTPUT-NO-SYNC rejects an unnamed ANSWER_READY', () => {
+  const result = spawnSync(process.execPath, [path.join(builtins, 'META', 'hosted.mjs'),
+    'MUT-META-OUTPUT-NO-SYNC'], { encoding: 'utf8', env: process.env });
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  assert.match(result.stdout, /MUT-META-OUTPUT-NO-SYNC: AX differs from perceived Wender state/);
+  console.log(result.stdout.trim());
+  const reverted = spawnSync(process.execPath, [path.join(builtins, 'META', 'hosted.mjs'),
+    'AX-META-BASELINE'], { encoding: 'utf8', env: process.env });
+  assert.equal(reverted.status, 0, reverted.stderr + reverted.stdout);
 });

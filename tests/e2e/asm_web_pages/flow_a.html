@@ -58,7 +58,7 @@
 <body>
 <main id="stage" data-page-id="flow_a" data-flow-step="1" data-viewport="640x360">
   <h1 id="flow-heading">Two-Page Navigation — Step 1 of 2</h1>
-  <p id="flow-step-marker" data-role="status" data-bbox="24,68,480,36">FLOW_STAGE_A_READY</p>
+  <p role="status" id="flow-step-marker" data-role="status" data-bbox="24,68,480,36">FLOW_STAGE_A_READY</p>
   <a
     id="next-btn"
     href="flow_b.html"
@@ -72,6 +72,8 @@
 </main>
 <script>
   (function () {
+    var marker = document.getElementById('flow-step-marker');
+    marker.setAttribute('aria-label', marker.textContent);
     var next = document.getElementById('next-btn');
     next.setAttribute('data-nav-ready', 'true');
   })();

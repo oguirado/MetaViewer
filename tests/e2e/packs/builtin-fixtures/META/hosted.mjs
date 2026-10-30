@@ -7,10 +7,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import vm from 'node:vm';
 
 const require = createRequire(import.meta.url);
-const { HostedWebCapsuleFake, HostedCoreAdmissionFake, makeProposal } = require('../../../asm_web_fakes.cjs');
+const { HostedWebCapsuleFake, HostedCoreAdmissionFake, makeProposal, loadPageSpec } = require('../../../asm_web_fakes.cjs');
 const root = fileURLToPath(new URL('../../../../../', import.meta.url));
 const runner = path.join(root, 'tests/e2e/e2e1_slice/asm_web_live.py');
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
@@ -29,29 +28,20 @@ async function hosted(t, mutation = '') {
   t.after(() => fs.rmSync(checkout, { recursive: true, force: true }));
   const capsule = new HostedWebCapsuleFake({ identity: 'mv-live-1' });
   const html = fs.readFileSync(new URL('pages/meta-chat.html', import.meta.url), 'utf8');
-  // Hosted geometry/AX comes from this reviewed fixture, not another page.
-  const elements = [...html.matchAll(/<(input|button|output)\b([^>]+)>([^<]*)/g)].map(m => {
-    const attrs = Object.fromEntries([...m[2].matchAll(/([\w-]+)="([^"]*)"/g)].map(a => [a[1], a[2]]));
-    const [x,y,w,h] = attrs['data-bbox'].split(',').map(Number);
-    return { id: attrs.id, role: attrs['data-role'], name: attrs['aria-label'] || m[3],
-      text: m[1] === 'input' ? '' : m[3].trim(), value: attrs.value || '', tabindex: Number(attrs.tabindex) || null, bbox: {x,y,w,h} };
-  });
-  assert.equal(elements.length, 3);
+  // Execute the pinned page script for both initial and submitted AX names.
+  const fixtureTransform = source => mutation === 'MUT-META-OUTPUT-NO-SYNC'
+    ? source.replace("output.setAttribute('aria-label', value);",
+      "if (value === 'EMPTY') output.setAttribute('aria-label', value);") : source;
   capsule.loadPage = () => {
+    const spec = loadPageSpec(fileURLToPath(new URL('pages/meta-chat.html', import.meta.url)), fixtureTransform);
+    assert.equal(spec.elements.length, 3);
+    capsule.spec = spec;
     capsule.pageState = { pageKey: 'form', width: 640, height: 360, focusedId: null,
-      inputValue: '', resultText: 'EMPTY', submitted: false,
-      elements: elements.map(e => ({...e, bbox:{...e.bbox}})) };
+      inputValue: '', resultText: 'EMPTY', submitted: false, elements: spec.elements };
   };
   capsule._submitForm = () => {
-    const dom = Object.fromEntries(capsule.pageState.elements.map(e => [e.id,
-      { value: e.id === 'name-input' ? capsule.pageState.inputValue : '', textContent: e.text }]));
-    let submit;
-    dom['chat-form'] = { addEventListener: (name, fn) => { assert.equal(name, 'submit'); submit = fn; } };
-    vm.runInNewContext(html.match(/<script>([\s\S]*?)<\/script>/)[1],
-      { document: { getElementById: id => dom[id] } }, { timeout: 1000 });
-    submit({ preventDefault() {} });
-    capsule.pageState.resultText = dom['result-text'].textContent;
-    capsule.pageState.elements.find(e => e.id === 'result-text').text = dom['result-text'].textContent;
+    capsule.spec.submit(capsule.pageState.inputValue);
+    capsule.pageState.resultText = capsule.pageState.elements.find(e => e.id === 'result-text').text;
   };
   let core, latest, report, stderr = '';
   const calls = [], wire = [], proposals = [], receipts = [];
@@ -71,9 +61,10 @@ runtime = runpy.run_path(sys.argv[0])
 sys.exit(runtime['main']())
 `;
   const prefix = ['-c', bootstrap, root, runner];
+  const axControl = ['MUT-META-OUTPUT-NO-SYNC', 'AX-META-BASELINE'].includes(mutation);
   const child = spawn(process.env.PYTHON || 'python3', [...prefix, '--hosted-rpc',
     '--pack', fileURLToPath(new URL('./', import.meta.url)),
-    '--mw-root', path.join(root, 'memoryweb-builtin'), '--mw-workflow', mutation === 'draft-new-chat' ? 'meta-ai/new-chat' : mutation === 'draft-ask' ? 'meta-ai/ask' : 'meta-ai/ask-fixture'], {
+    ...(axControl ? [] : ['--mw-root', path.join(root, 'memoryweb-builtin'), '--mw-workflow', mutation === 'draft-new-chat' ? 'meta-ai/new-chat' : mutation === 'draft-ask' ? 'meta-ai/ask' : 'meta-ai/ask-fixture'])], {
     env: { ...environment, MV_LIVE_WEB: '', TMPDIR: checkout },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
@@ -104,7 +95,8 @@ sys.exit(runtime['main']())
     calls.push(stage);
     switch (stage) {
       case 'start':
-        assert.ok(calls.includes('offline_proof'));
+        if (!axControl) assert.ok(calls.includes('offline_proof'));
+        else assert.deepEqual(calls, ['start']);
         return { profile: 'mv-live-1', capsules: [capsule.capsuleId] };
       case 'ownership': return { profile: 'mv-live-1', capsules: [capsule.capsuleId] };
       case 'offline_proof': return { fixtures_offline: mutation !== 'no-proof' };
@@ -193,7 +185,7 @@ sys.exit(runtime['main']())
           'print(json.dumps(wender_state(os.environ["MV_WENDER_ROOT"],v["table"],v["tree"])))', root], {
           input: JSON.stringify({ table: latest.elementTable, tree: { window: {},
             elements: capsule.readAxTextContainer().nodes.map(n => ({ role: n.role,
-              name: n.id === 'result-text' ? n.text : n.name,
+              name: n.name,
               box: [n.bbox.x, n.bbox.y, n.bbox.w, n.bbox.h],
               states: { focused: String(n.focused) } })) } }),
           encoding: 'utf8', env: environment,
@@ -202,10 +194,22 @@ sys.exit(runtime['main']())
         return JSON.parse(state.stdout);
       }
       case 'ax': return capsule.readAxTextContainer();
+      case 'plan': {
+        const [kind, ...parts] = args.goal.split(':');
+        const value = parts.join(':');
+        if (kind === 'read') return { values: args.sensed.state.nodes.map(n => n.name)
+          .filter(name => args.sensed.read_expected.includes(name)) };
+        if (kind === 'type') return { action: { type: kind, text: value } };
+        if (kind === 'key') return { action: { type: kind, keys: [value] } };
+        const target = capsule.pageState.elements.find(e => e.name === value);
+        assert.ok(target);
+        const {x,y,w,h} = target.bbox;
+        return { action: { type: 'click', x: x + w / 2, y: y + h / 2, button: 'left' }, bbox: target.bbox };
+      }
       case 'propose': {
         assert.equal(args.plan.action.type, ['click', 'type', 'key'][proposals.length]);
         if (args.plan.action.type === 'key') assert.deepEqual(args.plan.action.keys, ['Return']);
-        if (args.plan.action.type === 'type') assert.equal(args.plan.action.text, secret);
+        if (args.plan.action.type === 'type') assert.equal(args.plan.action.text, axControl ? 'Offline question' : secret);
         const action = { ...args.plan.action, kind: args.plan.action.type };
         delete action.type;
         if (action.kind === 'key') action.key = action.keys[0];
@@ -280,6 +284,15 @@ try {
     assert.equal(r.report.memoryweb.summary.steps_verified, 3);
     assert.deepEqual(r.proposals.map(p => p.action.kind), ['click', 'type', 'key']);
     assert.equal(r.receipts.length, 3);
+  } else if (mutation === 'AX-META-BASELINE') {
+    assert.equal(r.rc, 0, JSON.stringify(r.report.error));
+    assert.equal(r.report.status, 'DONE');
+    assert.deepEqual(r.report.tasks.at(-1).ax_proofs.at(-1).expected, ['ANSWER_READY']);
+  } else if (mutation === 'MUT-META-OUTPUT-NO-SYNC') {
+    assert.equal(r.rc, 1);
+    assert.equal(r.report.error.detail, 'AX differs from perceived Wender state');
+    assert.deepEqual(r.report.tasks.at(-1).ax_failure_evidence[0].expected, ['ANSWER_READY']);
+    console.log(mutation + ': ' + r.report.error.detail);
   } else if (mutation.startsWith('draft-')) {
     assert.notEqual(r.rc, 0);
     assert.equal(r.report.error.code, 'MW_UNSUPPORTED_WORKFLOW');

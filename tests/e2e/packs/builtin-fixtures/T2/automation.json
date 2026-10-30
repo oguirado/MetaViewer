@@ -16,7 +16,7 @@
     "FLOW_STAGE_A_READY"
   ],
   "fixtures": {
-    "flow_a": "8d587349a3e972c50479d255bc539db7fbc2f383ae81537ff3e631414671b8a5",
-    "flow_b": "1f96e5c04be23236addd534a41dd60cce4390c6457a598b1be69cce9d2eedbe5"
+    "flow_a": "cf84b7e1d63b9bb688a8c739ed4db8ea4cfe4227bb7a4789615c8e02a207b26e",
+    "flow_b": "c2b7715125ee8b6969f22a8149847cdc157683458ec5500f7dd2a6b8d988571f"
   }
 }

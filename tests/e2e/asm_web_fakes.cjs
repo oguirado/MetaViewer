@@ -4,6 +4,14 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const vm = require('node:vm');
+
+// wender/perceive/ax.py:36-45, deps.lock pin 96120967b435b72fc6d29635f3844dae140388a9.
+const CHASSIS_ROLES = new Set(`RootWebArea main navigation banner contentinfo complementary
+region search form dialog alertdialog toolbar menu menubar menuitem menuitemcheckbox
+menuitemradio tablist tab tabpanel heading button link textbox searchbox combobox
+listbox option checkbox radio switch slider spinbutton status alert log progressbar
+timer marquee article note group application`.split(/\s+/));
 const { spawnSync } = require('node:child_process');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
@@ -87,10 +95,13 @@ function validateDeterministicPageSource(fileName, html) {
   return true;
 }
 
-function loadPageSpec(pageKey) {
-  const fileName = PAGE_FILES[pageKey] || pageKey;
-  const filePath = path.join(PAGES_DIR, fileName);
-  const html = fs.readFileSync(filePath, 'utf8');
+function loadPageSpec(pageKey, transform = html => html) {
+  const fileName = path.basename(PAGE_FILES[pageKey] || pageKey);
+  const pack = { form: 'T1', flow_a: 'T2', flow_b: 'T2', table: 'T3' }[pageKey];
+  const filePath = path.isAbsolute(pageKey) ? pageKey : pack
+    ? path.join(__dirname, 'packs', 'builtin-fixtures', pack, 'pages', fileName)
+    : path.join(PAGES_DIR, fileName);
+  const html = transform(fs.readFileSync(filePath, 'utf8'));
   validateDeterministicPageSource(fileName, html);
 
   const dataUrl = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
@@ -110,8 +121,10 @@ function loadPageSpec(pageKey) {
     elements.push({
       id: attrs.id,
       tag,
-      role: attrs['data-role'] || (tag === 'th' ? 'columnheader' : tag === 'td' ? 'cell' : tag),
-      name: attrs['aria-label'] || text || attrs.id,
+      role: attrs.role || ({ input: 'textbox', output: 'status', p: 'paragraph', th: 'columnheader', td: 'cell', a: 'link' }[tag] || tag),
+      name: attrs['aria-label'] || (['button', 'a', 'th'].includes(tag) ? text : ''),
+      attrs,
+      inner,
       text,
       value: attrs.value || '',
       tabindex: attrs.tabindex ? Number.parseInt(attrs.tabindex, 10) : null,
@@ -122,7 +135,52 @@ function loadPageSpec(pageKey) {
     });
   }
 
+  // Accessible form names come from explicit ARIA references or labels, never values.
+  const labels = new Map([...html.matchAll(/<label\b([^>]*)>([\s\S]*?)<\/label>/g)]
+    .map(match => [extractAttributes(match[1]).for, stripTags(match[2])]));
+  const idTexts = new Map([...html.matchAll(/<([a-z]+)\b([^>]*)>([^<]*)<\/\1>/g)]
+    .map(match => [extractAttributes(match[2]).id, stripTags(match[3])]));
+  for (const el of elements) {
+    const references = el.attrs['aria-labelledby'];
+    if (references) el.name = references.split(/\s+/).map(id => idTexts.get(id) || '').join(' ').trim();
+    else if (el.tag === 'input' && !el.attrs['aria-label']) el.name = labels.get(el.id) || '';
+  }
+
+  // Execute the fixture's actual name/text synchronization, including submit.
+  const dom = new Map();
+  function node(el, attrs = el.attrs) {
+    return { get textContent() { return el.text; },
+      set textContent(value) { el.text = value; },
+      get value() { return el.value; },
+      setAttribute(key, value) { attrs[key] = value; if (key === 'aria-label') el.name = value; },
+      addEventListener(event, callback) { if (event === 'submit') dom.submit = callback; } };
+  }
+  const spans = [];
+  for (const el of elements) {
+    dom.set(el.id, node(el));
+    const span = el.inner.match(/<span\b([^>]*)>([\s\S]*?)<\/span>/);
+    if (span) {
+      const attrs = extractAttributes(span[1]);
+      el.axChild = { ...el, id: el.id + '-value', role: attrs.role || 'generic',
+        name: attrs['aria-label'] || '', text: stripTags(span[2]), attrs };
+      spans.push(node(el.axChild, attrs));
+    }
+  }
+  const context = { document: {
+    getElementById: id => dom.get(id) || { addEventListener(event, callback) {
+      if (event === 'submit') dom.submit = callback;
+    } },
+    querySelectorAll: () => spans,
+  } };
+  for (const script of html.matchAll(/<script>([\s\S]*?)<\/script>/g)) {
+    vm.runInNewContext(script[1], context);
+  }
   return {
+    submit(value) {
+      const input = elements.find(el => el.id === 'name-input');
+      if (input) input.value = value;
+      if (dom.submit) dom.submit({ preventDefault() {} });
+    },
     pageKey: fileName.replace(/\.html$/, ''),
     fileName,
     filePath,
@@ -201,11 +259,13 @@ class HostedWebCapsuleFake {
     this.textInputMode = options.textInputMode || 'type';
     this.navigationInputs = [];
     this.wrongGreetingMutation = Boolean(options.wrongGreetingMutation);
+    this.fixtureTransform = options.fixtureTransform;
     this.loadPage(options.initialPage || 'form');
   }
 
   loadPage(pageKey) {
-    const spec = loadPageSpec(pageKey);
+    const spec = loadPageSpec(pageKey, this.fixtureTransform);
+    this.spec = spec;
     this.pageState = {
       pageKey: spec.pageKey,
       fileName: spec.fileName,
@@ -216,7 +276,7 @@ class HostedWebCapsuleFake {
       inputValue: '',
       resultText: 'EMPTY',
       submitted: false,
-      elements: spec.elements.map((el) => ({ ...el, bbox: { ...el.bbox } })),
+      elements: spec.elements,
     };
     return this.pageState;
   }
@@ -281,11 +341,15 @@ class HostedWebCapsuleFake {
     if (this.geometryChangedSinceFrame) {
       throw new Error('AX_GEOMETRY_CHANGED: fresh frame required before ax readback');
     }
-    const nodes = this.pageState.elements.map((el) => ({
+    const nodes = this.pageState.elements.flatMap(el => {
+      const child = el.axChild || el;
+      return [el, ...(el.axChild ? [el.axChild] : []),
+        ...(child.text ? [{ ...child, id: el.id + '-text', role: 'StaticText', name: child.text }] : [])];
+    }).map((el) => ({
       id: el.id,
       role: el.role,
       name: el.name,
-      text: el.id === 'result-text' ? this.pageState.resultText : (el.value || el.text),
+      text: el.role === 'StaticText' ? el.text : (['status', 'paragraph', 'cell', 'group', 'generic'].includes(el.role) ? '' : (el.value || el.text)),
       bbox: { ...el.bbox },
       focused: this.pageState.focusedId === el.id,
     }));
@@ -411,9 +475,11 @@ class HostedWebCapsuleFake {
     } else {
       this.pageState.resultText = `Hello, ${raw}`;
     }
-    const outEl = this.pageState.elements.find((e) => e.id === 'result-text');
-    if (outEl) {
+    this.spec.submit(raw);
+    if (this.wrongGreetingMutation) {
+      const outEl = this.pageState.elements.find(e => e.id === 'result-text');
       outEl.text = this.pageState.resultText;
+      outEl.name = this.pageState.resultText;
     }
   }
 }
@@ -582,13 +648,12 @@ function buildWenderState(capsule, frameRef, elementTable, options = {}) {
       err.code = 'out_of_bounds';
       throw err;
     }
-    const textVal = el.id === 'result-text'
-      ? capsule.pageState.resultText
-      : (el.value || el.text || el.name);
+    const axEl = el.axChild || el;
+    const textVal = axEl.name;
     return {
       node_id: `el-${idx}`,
       dom_id: el.id,
-      role: el.role,
+      role: axEl.role,
       name: textVal,
       bbox: { ...bbox },
       score_ppm: tableEl.score_ppm,
@@ -596,7 +661,7 @@ function buildWenderState(capsule, frameRef, elementTable, options = {}) {
       col: el.col,
       actionable: el.role === 'textbox' || el.role === 'button',
     };
-  });
+  }).filter(node => CHASSIS_ROLES.has(node.role));
 
   const digestInput = JSON.stringify({
     frame_sha256: frameRef.sha256,
@@ -1062,7 +1127,7 @@ function runTask1FormFill(options = {}) {
       overrideFrameSha256: options.overrideFrameSha256,
       overrideSurfaceId: options.overrideSurfaceId,
     });
-    const emptyCheck = obs0.ax.nodes.find((n) => n.id === 'result-text');
+    const emptyCheck = obs0.ax.nodes.find((n) => n.id === 'result-text-text');
     if (!emptyCheck || emptyCheck.text !== 'EMPTY') {
       throw new Error(`T1 initial result-text must be EMPTY, got ${emptyCheck && emptyCheck.text}`);
     }
@@ -1087,7 +1152,7 @@ function runTask1FormFill(options = {}) {
     finalizeReceiptVerification(core, stepEmpty, options.skipWaitVerify);
 
     const obsAfterEmpty = core.observe();
-    const emptyAfterSubmit = obsAfterEmpty.ax.nodes.find((n) => n.id === 'result-text');
+    const emptyAfterSubmit = obsAfterEmpty.ax.nodes.find((n) => n.id === 'result-text-text');
     if (!emptyAfterSubmit || emptyAfterSubmit.text !== 'EMPTY') {
       throw new Error(`T1 empty submit must keep EMPTY, got ${emptyAfterSubmit && emptyAfterSubmit.text}`);
     }
@@ -1146,7 +1211,7 @@ function runTask1FormFill(options = {}) {
 
     // 6. Final observe + AX readback verification.
     const obsFinal = core.observe();
-    const resultNode = obsFinal.ax.nodes.find((n) => n.id === 'result-text');
+    const resultNode = obsFinal.ax.nodes.find((n) => n.id === 'result-text-text');
     const expectedText = `Hello, ${inputText}`;
     let resultVerified = false;
     if (!options.skipResultTextCheck) {
@@ -1199,7 +1264,7 @@ function runTask2TwoPageFlow(options = {}) {
       shiftBboxOutOfFrame: options.shiftBboxOutOfFrame,
       overrideFrameSha256: options.overrideFrameSha256,
     });
-    const marker1 = obsPage1.ax.nodes.find((n) => n.id === 'flow-step-marker');
+    const marker1 = obsPage1.ax.nodes.find((n) => n.id === 'flow-step-marker-text');
     if (!marker1 || marker1.text !== 'FLOW_STAGE_A_READY') {
       throw new Error('T2 expected FLOW_STAGE_A_READY on flow_a.html');
     }
@@ -1228,7 +1293,7 @@ function runTask2TwoPageFlow(options = {}) {
 
     // 3. Observe Step 2 (flow_b.html) and verify confirmation marker.
     const obsPage2 = core.observe();
-    const confirmNode = obsPage2.ax.nodes.find((n) => n.id === 'flow-confirmation');
+    const confirmNode = obsPage2.ax.nodes.find((n) => n.id === 'flow-confirmation-text');
     if (!confirmNode || confirmNode.text !== 'FLOW_STEP_2_CONFIRMED') {
       throw new Error('T2 expected FLOW_STEP_2_CONFIRMED on flow_b.html');
     }
@@ -1253,7 +1318,7 @@ function runTask2TwoPageFlow(options = {}) {
     finalizeReceiptVerification(core, stepBack, options.skipWaitVerify);
 
     const obsReturned = core.observe();
-    const returnedMarker = obsReturned.ax.nodes.find((n) => n.id === 'flow-step-marker');
+    const returnedMarker = obsReturned.ax.nodes.find((n) => n.id === 'flow-step-marker-text');
     if (!returnedMarker || returnedMarker.text !== 'FLOW_STAGE_A_READY') {
       throw new Error('T2 expected return to flow_a.html FLOW_STAGE_A_READY');
     }
@@ -1318,7 +1383,7 @@ function runTask3ReadTable(options = {}) {
       throw err;
     }
 
-    const cellNodes = obs.wenderState.nodes.filter((n) => n.role === 'cell');
+    const cellNodes = obs.wenderState.nodes.filter((n) => n.role === 'group');
     if (cellNodes.length !== 9) {
       throw new Error(`T3 expected 9 table data cells (3x3), got ${cellNodes.length}`);
     }

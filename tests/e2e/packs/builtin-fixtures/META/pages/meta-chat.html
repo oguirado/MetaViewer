@@ -19,9 +19,14 @@ output { position: absolute; left: 24px; top: 164px; width: 496px; height: 64px;
 (function () {
   var input = document.getElementById('name-input');
   var output = document.getElementById('result-text');
+  function setResult(value) {
+    output.textContent = value;
+    output.setAttribute('aria-label', value);
+  }
+  setResult('EMPTY');
   document.getElementById('chat-form').addEventListener('submit', function (event) {
     event.preventDefault();
-    output.textContent = input.value.length ? 'ANSWER_READY' : 'EMPTY';
+    setResult(input.value.length ? 'ANSWER_READY' : 'EMPTY');
   });
 })();
 </script></body></html>
