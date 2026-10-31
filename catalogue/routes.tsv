@@ -1366,8 +1366,12 @@ networkCopy.js	ui/src/netmode/networkCopy.js
 operatorHost.js	ui/src/operatorHost.js
 anchorCollector.js	ui/src/qa/anchorCollector.js
 MvRecordingPanel.vue	ui/src/recording/MvRecordingPanel.vue
+RecordingBadge.vue	ui/src/recording/RecordingBadge.vue
 recording.css	ui/src/recording/recording.css
+recordingBadge.js	ui/src/recording/recordingBadge.js
+recordingClock.js	ui/src/recording/recordingClock.js
 recordingModel.js	ui/src/recording/recordingModel.js
+useReco-5f379bfd9fa4	ui/src/recording/useRecordingElapsed.js
 MvSettingsPanel.vue	ui/src/settings/MvSettingsPanel.vue
 settings.css	ui/src/settings/settings.css
 settingsHost.js	ui/src/settings/settingsHost.js
@@ -1697,6 +1701,11 @@ r3t4new-abd5a83eee59	ui/test/r3t4-new-surface.test.js
 r3t4reg-2bf6b1d454e0	ui/test/r3t4-regressions.test.js
 r3t4sti-e4ad61eabbd1	ui/test/r3t4-still-open.test.js
 r4-refresh.test.js	ui/test/r4-refresh.test.js
+recstat-2155f1da462f	ui/test/recstate-badge.test.js
+recstat-4421aee2626c	ui/test/recstate-clock.test.js
+recstat-0d25c7c5145b	ui/test/recstate-elapsed.test.js
+recstate-helpers.mjs	ui/test/recstate-helpers.mjs
+recstat-62bb4709a239	ui/test/recstate-panel.test.js
 renderer-asar.test.js	ui/test/renderer-asar.test.js
 rendere-0907683c0d40	ui/test/renderer-ready.test.js
 reopena-3e5702fcbea8	ui/test/reopen-app-create.test.js
