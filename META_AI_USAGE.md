@@ -19,26 +19,26 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 901 | 55 | 846 |
-| Lanes finished OK | 901 | 55 | 846 |
-| Agent steps | 39,208 | 2,705 | 36,503 |
-| Lane-hours of agent work | 99.5 | 5.2 | 94.3 |
-| Fresh input tokens | 164,834,559 | 11,482,034 | 153,352,525 |
-| Cache-read input tokens | 3,261,470,189 | 226,255,212 | 3,035,214,977 |
+| Lanes launched | 924 | 55 | 869 |
+| Lanes finished OK | 924 | 55 | 869 |
+| Agent steps | 40,115 | 2,705 | 37,410 |
+| Lane-hours of agent work | 101.4 | 5.2 | 96.2 |
+| Fresh input tokens | 168,254,967 | 11,482,034 | 156,772,933 |
+| Cache-read input tokens | 3,326,301,481 | 226,255,212 | 3,100,046,269 |
 | Prompt cache hit % | 95.2 | 95.2 | 95.2 |
-| Output tokens | 33,550,210 | 2,135,708 | 31,414,502 |
-| Thinking tokens | 19,342,012 | 1,050,039 | 18,291,973 |
-| Cost (USD) | 29.7164 | 2.0279 | 27.6886 |
-| Cost per lane (USD) | 0.033 | 0.0369 | 0.0327 |
+| Output tokens | 34,144,867 | 2,135,708 | 32,009,159 |
+| Thinking tokens | 19,732,203 | 1,050,039 | 18,682,164 |
+| Cost (USD) | 30.3071 | 2.0279 | 28.2792 |
+| Cost per lane (USD) | 0.0328 | 0.0369 | 0.0325 |
 
-Rooms: 135. Peak concurrent lanes [MEASURED from lane start/end]: 32.
+Rooms: 136. Peak concurrent lanes [MEASURED from lane start/end]: 32.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 525 | 94.0 | 13.927 |
+| build | 535 | 94.0 | 14.0596 |
 | context | 42 | 95.9 | 1.9093 |
 | context packs + test ideation (U-DEC-0139) | 13 | 91.1 | 0.2195 |
 | demo | 4 | 90.7 | 0.0557 |
@@ -47,6 +47,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | fix | 62 | 96.8 | 3.3143 |
 | kit | 3 | 96.5 | 0.1997 |
 | operator-path sweep (U-DEC-0133/0134) | 16 | 95.3 | 0.4825 |
+| operator-path sweep 2 (U-DEC-0144) | 13 | 95.3 | 0.458 |
 | ops | 4 | 88.1 | 0.0468 |
 | perf | 2 | 97.2 | 0.1217 |
 | pillar audit (U-DEC-0136) | 4 | 91.7 | 0.0775 |
@@ -179,7 +180,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui29c | UI orchestrator | Oct 28 08:58 | fix | 1 | 97.5 | 0.0624 | Terminal sessions wiring (AC-06) broke 58 committed App tests; restore the App mounting contract and finish the terminal tests so the drop can ship. |
 | mvui29sc | UI orchestrator | Oct 28 09:12 | fix | 1 | 97.3 | 0.0484 | Judge rejected the settings drop: a quick revert inside the debounce window is lost, a replaced host can receive a stale save, and boot can paint a scheme the store then replaces; fix before AC-08 can ship. |
 | mvui29d | UI orchestrator | Oct 28 09:13 | fix | 1 | 97.2 | 0.0587 | Judge notes on the terminal drop are real session lifecycle defects (events before registration, stale transport, cross-transport close, leaked port on close during attach, fixture broker unwired); fix before AC-06 ships. |
-| direct-adv | metaviewer-0 | Oct 28 09:30 | build | 162 | 92.7 | 3.447 | adversarial advocate review before integration |
+| direct-adv | metaviewer-0 | Oct 28 09:30 | build | 172 | 92.7 | 3.5796 | adversarial advocate review before integration |
 | direct-rv11 | metaviewer-0 | Oct 28 11:01 | build | 7 | 93.7 | 0.129 | cross-review verification |
 | direct-tg6 | metaviewer-0 | Oct 28 11:10 | build | 6 | 95.2 | 0.2593 | test-gap and mutation map |
 | direct-w5 | metaviewer-0 | Oct 28 11:20 | build | 8 | 93.6 | 0.2196 | W5 docs fact-check |
@@ -199,6 +200,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | sweep | conductor | Oct 31 11:47 | operator-path sweep (U-DEC-0133/0134) | 16 | 95.3 | 0.4825 | OPERATOR-PATH SWEEP of the packaged P8 app: 13 read-only flow lanes predicting operator-path failures share one byte-identical PIN-01 prefix (w1/sweep/prefix.md, churn only in the flow tail), launched together for a warm cache; the 3 UI follow-up design lanes share a second identical prefix variant; 1 x64 inventory lane is standalone. |
 | pillar | conductor | Oct 31 12:20 | pillar audit (U-DEC-0136) | 4 | 91.7 | 0.0775 | Read-only audit of the four desktop-environment pillars P1-P4 on the packaged P8.1 line; 4 lanes share one byte-identical PIN-01 prefix launched together. |
 | packs | conductor | Oct 31 13:00 | context packs + test ideation (U-DEC-0139) | 13 | 91.1 | 0.2195 | Ready context packs for every queued or held writer unit and test/mutant ideation for INPUT-ARM and MULTI-CAPSULE; all lanes share one byte-identical PIN-01 prefix launched together. |
+| sweep2 | conductor | Oct 31 13:47 | operator-path sweep 2 (U-DEC-0144) | 13 | 95.3 | 0.458 | Second read-only operator-path sweep on the newest bridge head; 13 flow lanes share one byte-identical PIN-01 prefix launched together. |
 
 ## Every lane
 
@@ -1105,6 +1107,29 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | rd_pointer | idist_rd_pointer | Oct 31 13:21 | yes | 38 | 95.3 | 0.019697 |
 | direct-direct | x11vnc_inject | idist2_x11vnc_inject | Oct 31 13:21 | yes | 32 | 94.5 | 0.017852 |
 | direct-direct | x11vnc_inject | idist_x11vnc_inject | Oct 31 13:21 | yes | 32 | 94.5 | 0.017852 |
+| direct-adv | 7_SETTINGS-FIX-R2_b | adv7_SETTINGS-FIX-R2_b | Oct 31 13:47 | yes | 27 | 93.9 | 0.01541 |
+| direct-adv | 7_INPUT-ARM_a | adv7_INPUT-ARM_a | Oct 31 13:47 | yes | 18 | 93.0 | 0.009892 |
+| direct-adv | 7_MULTISLOT-FIX-R2_a | adv7_MULTISLOT-FIX-R2_a | Oct 31 13:47 | yes | 12 | 88.9 | 0.007253 |
+| direct-adv | 7_ESH-REVIEWFIX_a | adv7_ESH-REVIEWFIX_a | Oct 31 13:47 | yes | 29 | 92.8 | 0.015628 |
+| direct-adv | 7_SETTINGS-FIX-R2_a | adv7_SETTINGS-FIX-R2_a | Oct 31 13:47 | yes | 34 | 95.2 | 0.013152 |
+| direct-adv | 7_IDT-FIX_a | adv7_IDT-FIX_a | Oct 31 13:47 | yes | 18 | 92.2 | 0.008646 |
+| direct-adv | 7_IDT-FIX_b | adv7_IDT-FIX_b | Oct 31 13:47 | yes | 34 | 94.5 | 0.018194 |
+| direct-adv | 7_MULTISLOT-FIX-R2_b | adv7_MULTISLOT-FIX-R2_b | Oct 31 13:47 | yes | 24 | 94.0 | 0.01026 |
+| direct-adv | 7_INPUT-ARM_b | adv7_INPUT-ARM_b | Oct 31 13:47 | yes | 30 | 92.2 | 0.020313 |
+| direct-adv | 7_ESH-REVIEWFIX_b | adv7_ESH-REVIEWFIX_b | Oct 31 13:47 | yes | 23 | 93.4 | 0.013844 |
+| sweep2 | app_close | app_close | Oct 31 13:47 | yes | 57 | 96.2 | 0.035447 |
+| sweep2 | chatgpt_gemini | chatgpt_gemini | Oct 31 13:47 | yes | 49 | 95.1 | 0.035759 |
+| sweep2 | network | network | Oct 31 13:47 | yes | 66 | 96.2 | 0.035475 |
+| sweep2 | terminal | terminal | Oct 31 13:47 | yes | 54 | 96.2 | 0.033883 |
+| sweep2 | settings | settings | Oct 31 13:47 | yes | 55 | 96.3 | 0.039155 |
+| sweep2 | launch | launch | Oct 31 13:47 | yes | 39 | 94.6 | 0.040534 |
+| sweep2 | multislot | multislot | Oct 31 13:47 | yes | 49 | 93.6 | 0.038683 |
+| sweep2 | automate_demo | automate_demo | Oct 31 13:47 | yes | 52 | 96.3 | 0.027545 |
+| sweep2 | capsule_close_reopen | capsule_close_reopen | Oct 31 13:47 | yes | 65 | 94.5 | 0.047278 |
+| sweep2 | use_metaviewer | use_metaviewer | Oct 31 13:47 | yes | 62 | 96.6 | 0.041642 |
+| sweep2 | identities | identities | Oct 31 13:47 | yes | 23 | 92.3 | 0.019208 |
+| sweep2 | storyboard | storyboard | Oct 31 13:47 | yes | 37 | 93.3 | 0.034455 |
+| sweep2 | captcha_handoff | captcha_handoff | Oct 31 13:47 | yes | 50 | 93.8 | 0.02898 |
 
 ## Method
 
