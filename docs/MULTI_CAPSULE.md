@@ -18,27 +18,36 @@ startup always uses the preferred profile (`MV_SRF_LIVE_PROFILE`).
    for you and never reads their credentials; it only asks the Identities list for
    the ids.
 2. **Describe the profiles in `MV_SRF_PROFILES`.** The value is one JSON object
-   keyed by profile id. Example for two capsules:
+   keyed by profile id. Example for four capsules:
 
    ```json
    {
      "mv-live-1": {
        "Kind": "browser", "NativeKind": "browser",
        "RAMRoot": "/dev/shm/vqa-ramws/opensuperficies/os-cu-0",
-       "Display": ":100", "Width": 1280, "Height": 900, "TextInput": "paste"
+       "Display": ":100", "Width": 1280, "Height": 900, "text_input": "paste"
      },
      "mv-live-2": {
        "Kind": "browser", "NativeKind": "browser",
        "RAMRoot": "/dev/shm/vqa-ramws/opensuperficies/os-cu-0",
-       "Display": ":101", "Width": 1280, "Height": 900, "TextInput": "paste"
+       "Display": ":101", "Width": 1280, "Height": 900, "text_input": "paste"
+     },
+     "mv-live-3": {
+       "Kind": "browser", "NativeKind": "browser",
+       "RAMRoot": "/dev/shm/vqa-ramws/opensuperficies/os-cu-0",
+       "Display": ":102", "Width": 1280, "Height": 900, "text_input": "paste"
+     },
+     "mv-live-4": {
+       "Kind": "browser", "NativeKind": "browser",
+       "RAMRoot": "/dev/shm/vqa-ramws/opensuperficies/os-cu-0",
+       "Display": ":103", "Width": 1280, "Height": 900, "text_input": "paste"
      }
    }
    ```
 
-   Keep `MV_SRF_LIVE_PROFILE` set to the first id. Add `mv-live-3` and `mv-live-4`
-   the same way for up to four capsules. Profile ids use lowercase letters, digits
-   and `-`, up to 64 characters. Extra profiles beyond four are accepted in the
-   map but never run together.
+   Keep `MV_SRF_LIVE_PROFILE` set to the first id (`mv-live-1`). Profile ids use
+   lowercase letters, digits and `-`, up to 64 characters. Extra profiles beyond
+   four are accepted in the map but never run together.
 3. **Use the one fixed RAM root for every profile.** The native stack writes every
    capsule's frames beneath `/dev/shm/vqa-ramws/opensuperficies/os-cu-0`, one
    subdirectory per run id, so each profile's `RAMRoot` must be exactly that
@@ -64,7 +73,7 @@ Then set the launcher environment to this line before starting MetaViewer
 
 ```sh
 export MV_SRF_LIVE_PROFILE=mv-live-1
-export MV_SRF_PROFILES='{"mv-live-1":{"Kind":"browser","NativeKind":"browser","RAMRoot":"/dev/shm/vqa-ramws/opensuperficies/os-cu-0","Display":":100","Width":1280,"Height":900,"TextInput":"paste"},"mv-live-2":{"Kind":"browser","NativeKind":"browser","RAMRoot":"/dev/shm/vqa-ramws/opensuperficies/os-cu-0","Display":":101","Width":1280,"Height":900,"TextInput":"paste"},"mv-live-3":{"Kind":"browser","NativeKind":"browser","RAMRoot":"/dev/shm/vqa-ramws/opensuperficies/os-cu-0","Display":":102","Width":1280,"Height":900,"TextInput":"paste"},"mv-live-4":{"Kind":"browser","NativeKind":"browser","RAMRoot":"/dev/shm/vqa-ramws/opensuperficies/os-cu-0","Display":":103","Width":1280,"Height":900,"TextInput":"paste"}}'
+export MV_SRF_PROFILES='{"mv-live-1":{"Kind":"browser","NativeKind":"browser","RAMRoot":"/dev/shm/vqa-ramws/opensuperficies/os-cu-0","Display":":100","Width":1280,"Height":900,"text_input":"paste"},"mv-live-2":{"Kind":"browser","NativeKind":"browser","RAMRoot":"/dev/shm/vqa-ramws/opensuperficies/os-cu-0","Display":":101","Width":1280,"Height":900,"text_input":"paste"},"mv-live-3":{"Kind":"browser","NativeKind":"browser","RAMRoot":"/dev/shm/vqa-ramws/opensuperficies/os-cu-0","Display":":102","Width":1280,"Height":900,"text_input":"paste"},"mv-live-4":{"Kind":"browser","NativeKind":"browser","RAMRoot":"/dev/shm/vqa-ramws/opensuperficies/os-cu-0","Display":":103","Width":1280,"Height":900,"text_input":"paste"}}'
 ```
 
 Restart the launcher with that environment, then press **Add capsule** for each

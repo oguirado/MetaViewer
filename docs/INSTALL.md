@@ -466,10 +466,36 @@ The hosted web runner retains its explicit offline barrier.
 ### Concurrent identities and RAM admission
 
 [TARGET, unit decision] Configure `MV_SRF_PROFILES` with separate browser profile
-IDs and existing, canonical, nonoverlapping `/dev/shm/` RAMRoot directories.
-Each entry uses the existing Profile fields (`Kind`, `NativeKind`, `RAMRoot`,
-`Display`, `Width`, `Height`). Use separate Display values for the pair.
-One daemon/core connection multiplexes both surface IDs; the existing surface
+IDs (`mv-live-1` through `mv-live-4`), the one shared existing canonical `/dev/shm/vqa-ramws/opensuperficies/os-cu-0` `RAMRoot` (or disjoint canonical `/dev/shm/` roots), and distinct `Display` values (`:100` to `:103`).
+Each entry uses the exact `capsule.Profile` JSON fields (`Kind`, `NativeKind`, `RAMRoot`,
+`Display`, `Width`, `Height`, `text_input`):
+
+```json
+{
+  "mv-live-1": {
+    "Kind": "browser", "NativeKind": "browser",
+    "RAMRoot": "/dev/shm/vqa-ramws/opensuperficies/os-cu-0",
+    "Display": ":100", "Width": 1280, "Height": 900, "text_input": "paste"
+  },
+  "mv-live-2": {
+    "Kind": "browser", "NativeKind": "browser",
+    "RAMRoot": "/dev/shm/vqa-ramws/opensuperficies/os-cu-0",
+    "Display": ":101", "Width": 1280, "Height": 900, "text_input": "paste"
+  },
+  "mv-live-3": {
+    "Kind": "browser", "NativeKind": "browser",
+    "RAMRoot": "/dev/shm/vqa-ramws/opensuperficies/os-cu-0",
+    "Display": ":102", "Width": 1280, "Height": 900, "text_input": "paste"
+  },
+  "mv-live-4": {
+    "Kind": "browser", "NativeKind": "browser",
+    "RAMRoot": "/dev/shm/vqa-ramws/opensuperficies/os-cu-0",
+    "Display": ":103", "Width": 1280, "Height": 900, "text_input": "paste"
+  }
+}
+```
+
+One daemon/core connection multiplexes the surface IDs; the existing surface
 capacity remains 16 [CITED: daemon configuration].
 
 For separate live-stack instances, set `MV_SRF_LIVE_PROFILE` and

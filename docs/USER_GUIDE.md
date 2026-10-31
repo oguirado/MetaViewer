@@ -316,10 +316,38 @@ Release control and explicitly re-run when ready. Acknowledgement only dismisses
 the notice: it does not resume, retry or authorize agent CAPTCHA solving.
 [CITED: `../ui/src/handoff/HandoffNotice.vue`, `AGENT_ENTRY.md`, `INSTALL.md`]
 
+### More than one capsule
+
 ### Multiple capsules, RAM admission, and private site data
 
-Use **Add capsule** for additional configured profiles. Separate profiles need
-nonoverlapping RAM roots; separate live stacks also need distinct runtime/display
+Use **Add capsule** for additional configured profiles (up to `4` `[TARGET]` live capsules, with `MV_SRF_LIVE_PROFILE=mv-live-1`). Create one identity per extra profile in **Identities** (`mv-live-2`..`mv-live-4`), and configure `MV_SRF_PROFILES` with the four browser profiles sharing the canonical `/dev/shm/vqa-ramws/opensuperficies/os-cu-0` `RAMRoot` and distinct displays (`:100` to `:103`):
+
+```json
+{
+  "mv-live-1": {
+    "Kind": "browser", "NativeKind": "browser",
+    "RAMRoot": "/dev/shm/vqa-ramws/opensuperficies/os-cu-0",
+    "Display": ":100", "Width": 1280, "Height": 900, "text_input": "paste"
+  },
+  "mv-live-2": {
+    "Kind": "browser", "NativeKind": "browser",
+    "RAMRoot": "/dev/shm/vqa-ramws/opensuperficies/os-cu-0",
+    "Display": ":101", "Width": 1280, "Height": 900, "text_input": "paste"
+  },
+  "mv-live-3": {
+    "Kind": "browser", "NativeKind": "browser",
+    "RAMRoot": "/dev/shm/vqa-ramws/opensuperficies/os-cu-0",
+    "Display": ":102", "Width": 1280, "Height": 900, "text_input": "paste"
+  },
+  "mv-live-4": {
+    "Kind": "browser", "NativeKind": "browser",
+    "RAMRoot": "/dev/shm/vqa-ramws/opensuperficies/os-cu-0",
+    "Display": ":103", "Width": 1280, "Height": 900, "text_input": "paste"
+  }
+}
+```
+
+Separate live stacks also need distinct runtime/display
 allocations. Admission preserves a floor of `min(20 GiB, MemTotal / 4)` plus
 `512 MiB` per incumbent capsule [TARGET; CITED: `INSTALL.md#concurrent-identities-and-ram-admission`].
 Unknown memory state refuses admission. A failed new capsule never evicts siblings.
