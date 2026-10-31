@@ -96,12 +96,12 @@ export function controlAxisTile(row) {
 /**
  * Acting evidence for the agent chip. The tile state stays on the control
  * axis (an agent-owned tile is `agent-acting` whatever the agent does), but
- * the chip copy claims motion only with evidence: a busy AI session, an
- * in-flight proposal outcome, or — when the row projects neither signal —
- * exclusive agent ownership derived from what the live host provides. The
- * authority feed carries no activity or dispatch fields, so a live row with
- * no finer signal and the agent holding the surface reads acting; any
- * present-but-quiet signal (ready session, settled proposal) reads ready.
+ * the chip copy claims motion only with evidence: a busy AI session or an
+ * in-flight proposal outcome. Ownership alone is not motion: the authority
+ * feed carries no activity or dispatch fields, so an idle live row held by
+ * the agent reads ready, exactly like a present-but-quiet signal (ready
+ * session, settled proposal). UI-TILE: the former ownership fallback made
+ * every idle live agent tile read 'Agent acting'.
  * @param {TileSurfaceRow|null} row
  * @returns {boolean}
  */
@@ -114,11 +114,6 @@ export function isAgentActingRow(row) {
   if (typeof row.dispatchOutcome === 'string'
     && AGENT_ACTING_OUTCOMES.includes(row.dispatchOutcome)) {
     return true;
-  }
-  if (row.aiSessionActivity === undefined && row.dispatchOutcome === undefined) {
-    const owner = row.controlOwner;
-    const control = owner === 'human' || owner === 'agent' ? owner : row.control;
-    return control === 'agent';
   }
   return false;
 }

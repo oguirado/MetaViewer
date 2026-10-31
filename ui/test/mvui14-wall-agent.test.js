@@ -2,8 +2,9 @@
 // Regression: every control==='agent' tile rendered 'Agent acting', even when
 // the agent was idle. The tile state derivation is untouched (control axis
 // pins stay green); only the chip copy turns honest: 'Agent acting' with a
-// busy session, an in-flight proposal, or exclusive agent ownership on a
-// live feed that projects no finer signal — otherwise 'Agent ready'.
+// busy session or an in-flight proposal — otherwise 'Agent ready'.
+// UI-TILE: ownership alone (a live row with no finer signal) no longer reads
+// acting; the old fallback pinned the idle-tile 'Agent acting' defect.
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import * as vue from 'vue';
@@ -142,12 +143,12 @@ describe('acting evidence', () => {
     }
   });
 
-  test('rows without either signal fall back to exclusive agent ownership', () => {
-    assert.equal(isAgentActingRow(agentRow()), true);
+  test('rows without either signal read ready: ownership alone is not motion', () => {
+    assert.equal(isAgentActingRow(agentRow()), false);
     const { aiSessionActivity, dispatchOutcome, ...rest } = agentRow();
     assert.equal(aiSessionActivity, undefined);
     assert.equal(dispatchOutcome, undefined);
-    assert.equal(isAgentActingRow(rest), true);
+    assert.equal(isAgentActingRow(rest), false);
     assert.equal(isAgentActingRow({ ...rest, controlOwner: 'human' }), false);
     assert.equal(isAgentActingRow({ ...rest, control: 'shared', controlOwner: 'none' }), false);
   });
@@ -196,7 +197,7 @@ describe('mounted agent chip', () => {
     } finally { ready.close(); }
   });
 
-  test('live authority rows without signals keep Agent acting', async () => {
+  test('live authority rows without signals read Agent ready', async () => {
     let emit;
     const runtime = createAuthorityRuntime({
       subscribeFrames(callback) { emit = callback; return () => {}; },
@@ -217,7 +218,8 @@ describe('mounted agent chip', () => {
     try {
       await flush();
       assert.equal(tileState(mounted.root), 'agent-acting');
-      assert.match(chipCopy(mounted.root), /Agent acting/);
+      assert.match(chipCopy(mounted.root), /Agent ready/);
+      assert.doesNotMatch(chipCopy(mounted.root), /Agent acting/);
     } finally { mounted.close(); runtime.dispose(); }
   });
 

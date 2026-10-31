@@ -251,6 +251,28 @@
   background: var(--cuk-semantic-status-success-border);
 }
 
+/* UI-TILE: the Network toolbar and the capture chrome share one rail row so
+ * the canvas keeps the vertical space; the rail wraps only when narrow. */
+.mv-tile-rail {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  min-width: 0;
+  background: var(--cuk-semantic-surface-panel);
+  border-bottom: var(--cuk-semantic-border-width) solid var(--cuk-semantic-border-subtle);
+}
+
+.mv-tile-rail > div[role="toolbar"] {
+  flex: 0 0 auto;
+  padding-inline-start: var(--cuk-semantic-spacing-sm);
+}
+
+.mv-tile-rail > .mv-tile-chrome {
+  flex: 1 1 auto;
+  border-bottom: 0;
+}
+
 /* The kit panel fills the tile body below the chrome rail. */
 .mv-tile > .cuk-capsule-panel {
   flex: 1 1 auto;

@@ -22,6 +22,38 @@
  */
 
 /**
+ * @typedef {Object} ContainFit
+ * @property {number} scale - Uniform frame-to-box scale.
+ * @property {number} width - Displayed frame width (box px).
+ * @property {number} height - Displayed frame height (box px).
+ * @property {number} offsetX - Left band width (box px).
+ * @property {number} offsetY - Top band height (box px).
+ */
+
+/**
+ * object-fit:contain placement of a frame inside a box: the largest uniform
+ * scale that fits both axes, centred, with bands on the free axis. The paint
+ * (CSS object-fit:contain, object-position 50% 50%) and the input mapping
+ * below share this one transform. Null on non-positive or non-finite sizes.
+ *
+ * @param {number} boxWidth
+ * @param {number} boxHeight
+ * @param {number} frameWidth
+ * @param {number} frameHeight
+ * @returns {ContainFit | null}
+ */
+export function containFit(boxWidth, boxHeight, frameWidth, frameHeight) {
+  for (const value of [boxWidth, boxHeight, frameWidth, frameHeight]) {
+    if (typeof value !== 'number' || !Number.isFinite(value) || !(value > 0)) return null;
+  }
+  const scale = Math.min(boxWidth / frameWidth, boxHeight / frameHeight);
+  if (!(scale > 0) || !Number.isFinite(scale)) return null;
+  const width = frameWidth * scale;
+  const height = frameHeight * scale;
+  return { scale, width, height, offsetX: (boxWidth - width) / 2, offsetY: (boxHeight - height) / 2 };
+}
+
+/**
  * Maps a client point to frame pixels, or null when outside the frame image.
  *
  * @param {ClientToFrameInput} input
@@ -51,15 +83,12 @@ export function mapClientToFrame(input) {
   if (typeof top !== 'number' || !Number.isFinite(top)) return null;
   if (typeof width !== 'number' || !Number.isFinite(width) || !(width > 0)) return null;
   if (typeof height !== 'number' || !Number.isFinite(height) || !(height > 0)) return null;
-  const scale = Math.min(width / frameWidth, height / frameHeight);
-  if (!(scale > 0) || !Number.isFinite(scale)) return null;
-  const displayedWidth = frameWidth * scale;
-  const displayedHeight = frameHeight * scale;
-  const originX = left + (width - displayedWidth) / 2;
-  const originY = top + (height - displayedHeight) / 2;
-  const px = clientX - originX;
-  const py = clientY - originY;
-  if (px < 0 || py < 0 || px >= displayedWidth || py >= displayedHeight) return null;
+  const fit = containFit(width, height, frameWidth, frameHeight);
+  if (fit === null) return null;
+  const scale = fit.scale;
+  const px = clientX - (left + fit.offsetX);
+  const py = clientY - (top + fit.offsetY);
+  if (px < 0 || py < 0 || px >= fit.width || py >= fit.height) return null;
   const x = Math.max(0, Math.min(frameWidth - 1, Math.floor(px / scale)));
   const y = Math.max(0, Math.min(frameHeight - 1, Math.floor(py / scale)));
   return { x, y };

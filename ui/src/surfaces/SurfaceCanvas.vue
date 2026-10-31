@@ -677,6 +677,7 @@ onBeforeUnmount(() => {
 </template>
 <style scoped>
 .mv-surface {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -724,11 +725,20 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* UI-TILE: the state word sits at the start of the witness strip line (both
+ * render together under showWitness) instead of taking its own row, so the
+ * canvas keeps that height. */
 .mv-surface__state {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  z-index: 1;
+  box-sizing: border-box;
+  width: 48px;
   margin: 0;
-  padding: 2px 8px;
+  padding: 0 8px;
   font-size: 11px;
-  line-height: 1.4;
+  line-height: 23px;
   color: var(--mv-primitive-color-neutral-300, #ced0d4);
 }
 .mv-surface__strip {
@@ -736,7 +746,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 12px;
   min-height: 22px;
-  padding: 0 8px;
+  padding: 0 8px 0 48px;
   overflow: hidden;
   white-space: nowrap;
   border-top: 1px solid var(--mv-primitive-color-neutral-600, #525b66);

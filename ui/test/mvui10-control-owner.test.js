@@ -123,7 +123,9 @@ test('MVUI10 real kit button takes, releases and returns to authoritative agent-
     assertButton(h, 'release_control'); // Release also waits for authority.
     await h.update('agent');
     assert.equal(h.tile(), 'agent-acting', 'release restores authoritative tile state');
-    assert.ok(nodes(h.root).some(n => n.text === 'Agent acting'));
+    // UI-TILE: an idle agent-owned row (no busy session, no in-flight
+    // proposal) reads 'Agent ready'; the tile state stays agent-acting.
+    assert.ok(nodes(h.root).some(n => n.text === 'Agent ready'));
     assertButton(h, 'take_control');
     await click(h, 'take_control');
     assert.deepEqual(h.sent.map(body => body.op), ['take_control', 'release_control', 'take_control']);

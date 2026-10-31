@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Give the tile canvas more height by sharing one rail row for Network and capture chrome and moving the state word onto the witness strip line; frame paint and pointer input share one contain transform.
+- Show 'Agent acting' only while a busy session or in-flight proposal is present; an idle agent-owned tile reads 'Agent ready'.
 - Admit strictly bounded surface creates through the host and retain created surfaces for frame delivery.
 - Keep idle daemon connections live with tagged list probes and acknowledged notices while retaining silent-peer deadlines.
 - Return visible `TERMINAL_UNAVAILABLE` when native terminal support is absent from a package.

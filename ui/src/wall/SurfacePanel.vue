@@ -478,8 +478,8 @@ const tile = computed(() => {
   const current = row.value;
   const decision = deriveTileState(snapshotValue, current, lastRow.value);
   // Agent chip honesty: motion is claimed only with acting evidence on the
-  // row (busy session, in-flight proposal, or exclusive agent ownership with
-  // no finer live signal); otherwise the chip reads 'Agent ready'. Tile
+  // row (busy session or in-flight proposal; ownership alone is not motion);
+  // otherwise the chip reads 'Agent ready'. Tile
   // state, chip role, anchors and treatment stay untouched.
   const labels = new Map([['folded', 'Folded'], ['human-control', 'Human control'],
     ['agent-acting', isAgentActingRow(current) ? 'Agent acting' : 'Agent ready']]);
@@ -610,6 +610,7 @@ function onActivateSurface() {
 </script>
 <template>
   <div class="mv-tile" :data-tile-state="tile.tile" :data-error-code="row?.refusal?.code ?? snapshot?.error?.code">
+  <div class="mv-tile-rail">
   <NetworkPanel :open="networkOpen && !props.displayOnly" :display-only="props.displayOnly" :capsule-id="props.capsuleId" :identity="row?.profile_id ?? ''" :refusal-code="row?.refusal?.code ?? row?.readinessError?.code ?? ''" @open="networkOpen=true" @close="networkOpen=false" />
   <TileCaptureChrome
     :capsule-id="props.capsuleId"
@@ -617,6 +618,7 @@ function onActivateSurface() {
     :capture-state="props.captureState"
     :display-only="props.displayOnly"
   />
+  </div>
   <CapsulePanel
     :capsule-id="props.capsuleId"
     :external-ai-slot="true"
