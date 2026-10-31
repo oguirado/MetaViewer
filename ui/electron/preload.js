@@ -101,7 +101,7 @@ export function assertOperatorCall(method,args) {
 /** @param {string} method @param {any} v */
 export function assertOperatorReply(method,v) {
   if(BUTTON_METHODS.includes(method))return assertButtonReply(method,v);
-  if(operatorKeys(v,['ok','code']) && v.ok===false && ['IDENTITY_UNAVAILABLE','IDENTITY_REFUSED','NET_EGRESS_IO','NET_EGRESS_INVALID','NET_PROXIED_UNSUPPORTED','NET_OPEN_PREREQ','HANDOFF_UNAVAILABLE'].includes(v.code)) return v;
+  if(operatorKeys(v,['ok','code']) && v.ok===false && ['IDENTITY_UNAVAILABLE','IDENTITY_REFUSED','PROFILE_NOT_PROVISIONED','PROFILE_MISSING','NET_EGRESS_IO','NET_EGRESS_INVALID','NET_PROXIED_UNSUPPORTED','NET_OPEN_PREREQ','HANDOFF_UNAVAILABLE'].includes(v.code)) return v;
   if(!v || v.ok!==true) throw new Error('OPERATOR_REPLY');
   if(method==='handoff.list') {
     if(!operatorKeys(v,['ok','rows']) || !Array.isArray(v.rows) || v.rows.length>64 || !v.rows.every(validHandoff)) throw new Error('OPERATOR_REPLY');

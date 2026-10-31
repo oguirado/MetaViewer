@@ -24,7 +24,7 @@ async function invoke(method,request) {
     if(!listed.ok)throw new Error(listed.code);rows.value=listed.rows;
     if(method==='create'){id.value='';label.value='';domains.value='';}
     pendingDelete.value='';
-  }catch(reason){error.value=identityErrorText(reason instanceof Error ? reason.message : '');}
+  }catch(reason){error.value=identityErrorText(reason instanceof Error ? reason.message : '',request?.id);}
   finally{busy.value=false;login.value=false;}
 }
 function create(){if(!validForm.value)return;void invoke('create',{id:id.value,label:cleanLabel.value,domains:cleanDomains.value});}

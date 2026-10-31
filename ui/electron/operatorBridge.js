@@ -85,15 +85,19 @@ export function identityEnvironment(env,tool) {
 /** Tool codes that mean the tool or its native binaries could not operate
  * (missing configuration, unreadable store, native binary absent). */
 const TOOL_UNAVAILABLE = new Set(['IDENTITY_UNAVAILABLE','NATIVE_UNAVAILABLE','ABSOLUTE_PATH_REQUIRED']);
-/** A refusal is the tool's own closed reply: exit != 0 with a single JSON line
- * {schema, ok:false, error} naming a decision (bound, invalid, native refusal).
- * Anything else means the tool could not run.
- * @param {string} stdout */
-function toolRefused(stdout) {
+/** Closed identity refusal codes surfaced across the host-to-renderer seam. */
+const IDENTITY_REFUSALS = new Set(['IDENTITY_REFUSED','PROFILE_NOT_PROVISIONED','PROFILE_MISSING']);
+/** [TARGET, unit decision] Missing native profile provisioning (uid 10001, 0700)
+ * is a distinct operator prerequisite before login; other closed tool refusals
+ * map to IDENTITY_REFUSED. Everything else means the tool could not run.
+ * @param {string} stdout @returns {string|null} */
+export function toolRefusedCode(stdout) {
   try {
     const reply=JSON.parse(stdout);
-    return operatorKeys(reply,['schema','ok','error']) && reply.schema==='metaviewer.identity/v1' && reply.ok===false && typeof reply.error==='string' && /^[A-Z][A-Z0-9_-]{0,63}$/.test(reply.error) && !TOOL_UNAVAILABLE.has(reply.error);
-  }catch{return false;}
+    if(!operatorKeys(reply,['schema','ok','error']) || reply.schema!=='metaviewer.identity/v1' || reply.ok!==false || typeof reply.error!=='string' || !/^[A-Z][A-Z0-9_-]{0,63}$/.test(reply.error) || TOOL_UNAVAILABLE.has(reply.error))return null;
+    if(reply.error==='PROFILE_MISSING' || reply.error==='PROFILE_NOT_PROVISIONED')return reply.error;
+    return 'IDENTITY_REFUSED';
+  }catch{return null;}
 }
 /** Bound for the tool's own cleanup (view-stop waits up to 180 s) before SIGKILL. */
 const LOGIN_STOP_GRACE_MS=200000;
@@ -138,7 +142,7 @@ export function identityRunner({tool,env=process.env,spawnTool=spawn,openLogin=a
     child.once('close',(/** @type {number} */rc)=>{
       live.delete(terminate);clearTimeout(killTimer);
       try {
-        if(rc!==0)throw new Error(toolRefused(stdout)?'IDENTITY_REFUSED':'IDENTITY_EXIT');
+        if(rc!==0)throw new Error(toolRefusedCode(stdout)??'IDENTITY_EXIT');
         const reply=JSON.parse(stdout);
         if(!operatorKeys(reply,['schema','ok','result']) || reply.schema!=='metaviewer.identity/v1' || reply.ok!==true || (method==='login' && !opened))throw new Error('IDENTITY_REPLY');
         if(method==='delete') {if(!operatorKeys(reply.result,['deleted']) || reply.result.deleted!==v.id)throw new Error('IDENTITY_REPLY');finish(null,{ok:true});}
@@ -225,7 +229,7 @@ export function createOperatorService({env=process.env,runIdentity,buttons,notif
     const v=args[0];
     if(method.startsWith('identity.')) {
       try {return assertOperatorReply(method,await runIdentity(method.split('.')[1],v));}
-      catch(e){return {ok:false,code:/** @type {any} */(e)?.message==='IDENTITY_REFUSED'?'IDENTITY_REFUSED':'IDENTITY_UNAVAILABLE'};}
+      catch(e){const code=/** @type {any} */(e)?.message;return {ok:false,code:IDENTITY_REFUSALS.has(code)?code:'IDENTITY_UNAVAILABLE'};}
     }
     if(method.startsWith('egress.')) {
       try {

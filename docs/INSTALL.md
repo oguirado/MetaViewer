@@ -83,13 +83,21 @@ an active lease may instead name any native-valid capsule, including a random
 
 Before a real start, the operator must provision `profiles/<identity>` as a
 private directory with mode `0700` and owner uid `10001` [CITED: OpenSuperficies
-`a9ac1ac8`, `src/browserid/surface/surface.go:392-393`]. Native admin creation
-alone does not satisfy this ownership prerequisite; arrange it with the native
-profile-management permissions before running login. Keep metadata, locks and
-state directories owned by the calling operator.
+`a9ac1ac8`, `src/browserid/surface/surface.go:392-393`; `3cb86d752`,
+`src/browserid/surface/surface.go:404-407`].
+Native `srf-identity-admin create` creates `profiles/<identity>` owned by the
+calling operator and exposes no chown or container provisioning verb; changing
+ownership to uid `10001` on the host requires a one-time operator provisioning
+command before the first login:
+`sudo install -d -m 0700 -o 10001 -g 10001 "$SRF_IDENTITY_STORE_ROOT/profiles/<identity>"`.
+Without this step, `login` refuses before native start with
+`PROFILE_NOT_PROVISIONED` (or `PROFILE_MISSING` if `profiles/<identity>` was
+removed) and surfaces that command in the Identities dialog. Keep `metadata`,
+`locks` and `state` directories owned by the calling operator.
 
 ```bash
 python3 tools/mv_identity.py create --id account-main --label 'Main account' --domains example.com
+# One-time host provisioning before login: sudo install -d -m 0700 -o 10001 -g 10001 "$SRF_IDENTITY_STORE_ROOT/profiles/account-main"
 python3 tools/mv_identity.py list
 python3 tools/mv_identity.py show --id account-main
 python3 tools/mv_identity.py login --id account-main
