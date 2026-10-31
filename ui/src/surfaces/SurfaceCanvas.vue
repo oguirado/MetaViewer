@@ -46,6 +46,19 @@ const props = defineProps({
 
 const emit = defineEmits(['canvas-ready', 'canvas-released']);
 
+// INPUT-U3: local click echo (see ./pointerEcho.js, [TARGET, unit decision]).
+// The SFC keeps its closed static dependency map (vue plus ./tileScheduler.js:
+// MVUI25B pins it, and many harnesses compile this file with that closed map),
+// so the echo module loads lazily. A failed load (harness without the module,
+// chunk error) leaves the tile fully functional with no echo.
+/** @type {any} */
+let echoModule = null;
+/** @type {any} */
+let echoController = null;
+let unmounted = false;
+/** Echo dot position in section CSS px; null while no dot shows. */
+const echoDot = ref(/** @type {{ left: number, top: number } | null} */ (null));
+
 /** @type {{ attachCanvas: (args: any) => { ok: boolean, token?: symbol }, detachCanvas: (id: string, token: symbol | null) => void, getInstrumentation: (surfaceId: unknown) => any, evictSurface: (surfaceId: unknown) => unknown } | null} */
 const scheduler = /** @type {any} */ (inject('tileScheduler', null));
 /** Live-only frame-port router provided by the entry; null keeps the legacy path. */
@@ -235,11 +248,80 @@ function inputGateOpen() {
  * @returns {void}
  */
 function closeInputGate(surfaceId) {
+  // INPUT-U3: every gate closure (blur, READ, control loss, lost, stream or
+  // surface change, unmount) also drops the local echo dot.
+  clearEcho('gate');
   const port = /** @type {any} */ (inputPort);
   if (port === null || typeof port.closeGate !== 'function') return;
   try {
     port.closeGate(typeof surfaceId === 'string' ? surfaceId : props.surfaceId);
   } catch { /* Gate closure never breaks the tile. */ }
+}
+
+/**
+ * INPUT-U3: loads the echo module and builds the controller. Optional by design:
+ * any failure leaves input capture untouched and simply draws no dot.
+ */
+function loadEcho() {
+  import('./pointerEcho.js').then((module) => {
+    if (unmounted) return;
+    echoModule = module;
+    echoController = module.createPointerEcho({
+      onChange: (/** @type {any} */ snapshot) => {
+        if (snapshot === null) echoDot.value = null;
+      },
+    });
+  }).catch(() => { /* The echo is optional; the tile works without it. */ });
+}
+
+/** @param {string} cause */
+function clearEcho(cause) {
+  echoDot.value = null;
+  if (echoController !== null) {
+    try { echoController.clear(cause); } catch { /* Echo faults never break input. */ }
+  }
+}
+
+/**
+ * INPUT-U3: echoes one queued click. Draws only at an in-frame point (the
+ * letterbox maps to null), through the same contain transform as the paint.
+ * @param {{ clientX: number, clientY: number }} point
+ */
+function showEcho(point) {
+  const canvas = canvasRef.value;
+  if (echoController === null || echoModule === null || canvas === null) return;
+  try {
+    const rect = canvas.getBoundingClientRect();
+    const framePoint = echoModule.echoPointFromClient({
+      clientX: point.clientX,
+      clientY: point.clientY,
+      rect,
+      frameWidth: canvas.width,
+      frameHeight: canvas.height,
+    });
+    if (framePoint === null) return;
+    const placement = echoModule.echoPlacement(framePoint,
+      { width: rect.width, height: rect.height },
+      { width: canvas.width, height: canvas.height });
+    if (placement === null) return;
+    if (!echoController.show(framePoint)) return;
+    echoDot.value = {
+      left: (Number.isFinite(canvas.offsetLeft) ? canvas.offsetLeft : 0) + placement.left,
+      top: (Number.isFinite(canvas.offsetTop) ? canvas.offsetTop : 0) + placement.top,
+    };
+  } catch { /* Echo faults never break input. */ }
+}
+
+/**
+ * INPUT-U3: a presented frame arrived; a frame whose input timestamp is newer
+ * than the echoed click retires the dot.
+ */
+function observeEchoFrame() {
+  if (echoController === null || echoModule === null || scheduler === null) return;
+  try {
+    const stamp = echoModule.frameInputTimestampMs(scheduler.getInstrumentation(props.surfaceId));
+    echoController.observeFrame({ inputTimestampMs: stamp });
+  } catch { /* Echo faults never break painting. */ }
 }
 
 /** PointerEvent.button index to contract button name; other buttons ignored. */
@@ -399,6 +481,20 @@ function onCanvasPointerUp(event) {
   const point = clientToFramePoint(event);
   if (point === null) return;
   inputPort?.queue(props.surfaceId, props.streamId, { kind: 'click', x: point.x, y: point.y, button });
+  showEcho(event);
+}
+
+/**
+ * INPUT-U3 (distillation N8): while input is armed, the context menu and the
+ * auxiliary-button click on the tile belong to the capsule, never to
+ * Electron/Chromium. Right and middle presses already travel as clicks;
+ * preventDefault on pointerdown alone does not stop either default. READ and
+ * every non-armed state leave both events untouched.
+ * @param {Event} event
+ */
+function onCanvasButtonDefault(event) {
+  if (!canvasFocusable.value) return;
+  event.preventDefault();
 }
 
 /**
@@ -592,6 +688,10 @@ function maybeEvictSurface(surfaceId) {
 
 onMounted(attachCanvas);
 onMounted(bindFramePort);
+onMounted(loadEcho);
+
+// INPUT-U3: a newly presented frame may answer the echoed click.
+watch(() => [props.frame, props.digest], observeEchoFrame);
 
 watch(() => [props.surfaceId, props.generation, props.epoch], (_current, previous) => {
   // Only a surface change rebinds the router: generation/epoch-only updates
@@ -630,6 +730,11 @@ watch(() => [props.surfaceId, props.generation, props.epoch], (_current, previou
 onBeforeUnmount(() => {
   // MVUI32 lane I (R3-INPUT-1): unmount closes the gate — drop queued input.
   closeInputGate(props.surfaceId);
+  unmounted = true;
+  if (echoController !== null) {
+    try { echoController.dispose(); } catch { /* Echo faults never break teardown. */ }
+    echoController = null;
+  }
   unbindFramePort(props.surfaceId, true);
   if (scheduler !== null) {
     scheduler.detachCanvas(props.surfaceId, canvasToken);
@@ -656,7 +761,8 @@ onBeforeUnmount(() => {
     :data-state="resolvedState"
     :aria-label="accessibleName"
   >
-    <canvas ref="canvasRef" :hidden="resolvedState !== 'live' && resolvedState !== 'stale' && !showFrozen" class="mv-surface__canvas" :id="props.inputEnabled && resolvedState !== 'lost' ? inputAnchor : undefined" :data-semantic-anchor="props.inputEnabled && resolvedState !== 'lost' ? inputAnchor : undefined" :tabindex="canvasFocusable ? 0 : undefined" :aria-hidden="canvasFocusable ? undefined : 'true'" :aria-label="props.inputEnabled && resolvedState !== 'lost' ? inputName : undefined" @focus="onCanvasFocus" @blur="onCanvasBlur" @keydown="onCanvasKeyDown" @pointerdown="onCanvasPointerDown" @pointerup="onCanvasPointerUp" @pointercancel="onCanvasPointerCancel" @click="onCanvasClick" @wheel="onCanvasWheel" />
+    <canvas ref="canvasRef" :hidden="resolvedState !== 'live' && resolvedState !== 'stale' && !showFrozen" class="mv-surface__canvas" :id="props.inputEnabled && resolvedState !== 'lost' ? inputAnchor : undefined" :data-semantic-anchor="props.inputEnabled && resolvedState !== 'lost' ? inputAnchor : undefined" :tabindex="canvasFocusable ? 0 : undefined" :aria-hidden="canvasFocusable ? undefined : 'true'" :aria-label="props.inputEnabled && resolvedState !== 'lost' ? inputName : undefined" @focus="onCanvasFocus" @blur="onCanvasBlur" @keydown="onCanvasKeyDown" @pointerdown="onCanvasPointerDown" @pointerup="onCanvasPointerUp" @pointercancel="onCanvasPointerCancel" @click="onCanvasClick" @wheel="onCanvasWheel" @contextmenu="onCanvasButtonDefault" @auxclick="onCanvasButtonDefault" />
+    <svg v-if="echoDot !== null" class="mv-surface__echo" aria-hidden="true" focusable="false"><circle class="mv-surface__echo-dot" :cx="echoDot.left" :cy="echoDot.top" r="5" /></svg>
     <div v-if="showFrozen" :id="lostBadgeAnchor" class="mv-surface__lost" role="status" :data-semantic-anchor="lostBadgeAnchor" :aria-label="lostBadgeName">
       <span class="mv-surface__lost-badge">Lost</span>
       <span class="mv-surface__lost-note">Showing the last frame.</span>
@@ -697,6 +803,24 @@ onBeforeUnmount(() => {
 }
 .mv-surface__canvas[hidden] {
   display: none;
+}
+/* INPUT-U3: local click echo. A full-tile SVG layer positioned by circle
+ * attributes (cx, cy), so no inline style is ever written (strict CSP). */
+.mv-surface__echo {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  pointer-events: none;
+}
+.mv-surface__echo-dot {
+  fill: var(--cuk-semantic-accent-primary);
+  fill-opacity: 0.35;
+  stroke: var(--cuk-semantic-accent-primary);
+  stroke-width: 2;
 }
 .mv-surface__canvas:focus-visible {
   outline-width: var(--cuk-semantic-focus-ring-width);
