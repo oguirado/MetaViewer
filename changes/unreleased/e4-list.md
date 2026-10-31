@@ -1,0 +1,1 @@
+- Wire the profile picker's `listIdentities` callback in `ui/electron/main.js` through `operatorBridge.resolveIdentityTool` and `identityEnvironment` so packaged launches without an explicit `MV_MW_HOME` read the identity list and report `NO_IDENTITY` (naming `mv-live-2`) or open a capsule when provisioned instead of refusing with `IDENTITY_LIST_UNAVAILABLE`.

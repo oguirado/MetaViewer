@@ -2531,8 +2531,14 @@ export async function bootProductionMain(handles) {
     if (!retail.nested) captureBridge = (await import('./captureBridge.js')).installCaptureBridge({ipcMain, contents:contentsUnknown, core, nested:retail.nested, env:typed.env});
     if (!retail.nested) wireBridge = (await import('./authorityWire.js')).installAuthorityWire({ ...(typed.wire || {}), ipcMain,
       contents: contentsUnknown, core, env: typed.env, argv: typed.argv, capsuleStates,
-      listIdentities: () => (import('./operatorBridge.js')).then(({identityRunner}) =>
-        identityRunner({tool:resolveIdentityTool({ packaged: packagedLaunch, resourcesPath: process.resourcesPath, rendererRoot: paths.rendererRoot }),env:typed.env})('list', {})),
+      listIdentities: () => (import('./operatorBridge.js')).then(({identityEnvironment, identityRunner, resolveIdentityTool: resolveOperatorIdentityTool}) => {
+        const env = /** @type {NodeJS.ProcessEnv} */ (typed.env);
+        const resolved = resolveOperatorIdentityTool({
+          tool: resolveIdentityTool({ packaged: packagedLaunch, resourcesPath: process.resourcesPath, rendererRoot: paths.rendererRoot }),
+          env,
+        });
+        return identityRunner({ tool: resolved, env: identityEnvironment(env, resolved) })('list', {});
+      }),
       ...(frameDiagBridge?.enabled ? { frameDiag: frameDiagBridge } : {}) });
     if (!retail.nested && typed.wire && typeof /** @type {any} */ (typed.wire).display?.subscribe === 'function') {
       displayBridge = (await import('./displayReader.js')).installDisplayBridge({ ipcMain, contents: contentsUnknown, display: /** @type {any} */ (typed.wire).display });
