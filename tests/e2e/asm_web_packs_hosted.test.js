@@ -78,6 +78,9 @@ async function hosted(packArgs = [], environment = {}, mutation = '') {
   // owns the sequence and changed_region plans; this fake renders the focus cue.
   const navigationUrls = [];
   let navigation, navFrame, navPending, navGeneration = 0;
+  // Focus persists across navigations as in Chromium: a completed load leaves
+  // focus in content, so later navigations start at ctrl+L (live 2026-10-31 07:02).
+  let focus = 'omnibox';
   const navigationFrame = () => {
     const pixels = Buffer.alloc(1280 * 900 * 3, 255);
     // Selection/focus cue in browser chrome, outside blank page content.
@@ -102,7 +105,7 @@ async function hosted(packArgs = [], environment = {}, mutation = '') {
       case 'navigate_begin':
         navigationUrls.push(args.url);
         assert.equal(calls.at(-2), 'offline_proof');
-        navigation = { focus: 'omnibox', selected: true, typed: false,
+        navigation = { focus, selected: focus === 'omnibox', typed: false,
           loaded: false, text: '', page: args.page, url: args.url, marker: args.marker };
         return {};
       case 'navigation_offline_proof': return { fixtures_offline: true };
@@ -135,8 +138,10 @@ async function hosted(packArgs = [], environment = {}, mutation = '') {
           assert.equal(navigation.typed, true);
           assert.equal(navigation.text, navigation.url);
           navigation.loaded = true;
+          navigation.focus = 'content'; navigation.selected = false;
         }
         const id = `navigation-${navGeneration}`;
+        focus = navigation.focus;
         navPending = { before: args.sensed.frame, after: navigationFrame(), id };
         return { proposal_id: id, verdict: { admitted: true }, verified: false, error: '',
           native_evidence: { input_mono_ns: navGeneration } };

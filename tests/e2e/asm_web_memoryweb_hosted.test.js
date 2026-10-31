@@ -103,6 +103,9 @@ runpy.run_path(sys.argv[0], run_name='__main__')
   // [TARGET, unit decision] Mirror the admitted navigation boundary for this hosted backend.
   const navigationUrls = [];
   let navigation, navFrame, navPending, navGeneration = 0;
+  // Focus persists across navigations as in Chromium: a completed load leaves
+  // focus in content, so later navigations start at ctrl+L (live 2026-10-31 07:02).
+  let focus = 'omnibox';
   const navigationFrame = () => {
     const pixels = Buffer.alloc(1280 * 900 * 3, 255);
     // Selection/focus cue in browser chrome, outside blank page content.
@@ -130,7 +133,7 @@ runpy.run_path(sys.argv[0], run_name='__main__')
       case 'navigate_begin':
         navigationUrls.push(args.url);
         assert.equal(calls.at(-2), 'offline_proof');
-        navigation = { focus: 'omnibox', selected: true, typed: false,
+        navigation = { focus, selected: focus === 'omnibox', typed: false,
           loaded: false, text: '', page: args.page, url: args.url };
         return {};
       case 'navigation_offline_proof': return { fixtures_offline: true };
@@ -165,8 +168,10 @@ runpy.run_path(sys.argv[0], run_name='__main__')
           assert.equal(navigation.typed, true);
           assert.equal(navigation.text, navigation.url);
           navigation.loaded = true;
+          navigation.focus = 'content'; navigation.selected = false;
         }
         const id = `navigation-${navGeneration}`;
+        focus = navigation.focus;
         navPending = { before: args.sensed.frame, after: navigationFrame(), id };
         return { proposal_id: id, verdict: { admitted: true }, verified: false, error: '',
           native_evidence: { input_mono_ns: navGeneration } };

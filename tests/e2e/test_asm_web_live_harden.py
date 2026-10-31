@@ -359,6 +359,35 @@ class HardenTests(unittest.TestCase):
             with self.assertRaises(web.Failure):
                 web.LiveBackend.prelude_point(dict(width=width, height=height))
 
+    def test_navigation_prelude_first_only(self):
+        # Live run 2026-10-31 07:02: after T1, focus is in page content and a
+        # blank prelude click changes no pixel. Later navigations start at ctrl+L.
+        b = self.backend
+        frame = dict(width=1280, height=900, sha256='before', surface_id='owned')
+        b.op_offline_proof = Mock(return_value={'fixtures_offline': True})
+        b.op_ax = Mock(return_value={'elements': [{'name': 'FLOW_STAGE_A_READY'}]})
+        b.op_wait_verify = Mock(return_value=dict(status='verified', receipt={'verified': True}))
+        b.op_propose = Mock(return_value=dict(proposal_id='p', verdict={'admitted': True}))
+        for nth in range(2):
+            url = web.page_url('flow_a')
+            chunks = [url[i:i + 2000] for i in range(0, len(url), 2000)]
+            count = (3 if nth == 0 else 2) + len(chunks)
+            b.op_observe = Mock(side_effect=[{'frame_ref': frame}] * (count + 1) +
+                               [{'frame_ref': dict(frame, sha256='after')}])
+            b.op_propose.reset_mock()
+            setup = b.op_navigate('flow_a', url)
+            self.assertEqual(len(setup), count)
+            self.assertEqual(b.navigations, nth + 1)
+            actions = [call.args[1]['action'] for call in b.op_propose.call_args_list]
+            tail = [dict(type='key', keys=['ctrl', 'l']), *[dict(type='type', text=c) for c in chunks],
+                    dict(type='key', keys=['Return'])]
+            if nth == 0:
+                self.assertEqual(setup[0]['kind'], 'focus_prelude')
+                self.assertEqual(actions, [web.LiveBackend.prelude_point(frame), *tail])
+            else:
+                self.assertTrue(all(step['kind'] == 'navigation' for step in setup))
+                self.assertEqual(actions, tail)
+
     def test_navigation_prelude_receipt_and_stale_admission(self):
         b = self.backend
         frame = dict(width=1280, height=900, sha256='before', surface_id='owned')

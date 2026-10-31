@@ -44,6 +44,8 @@ async function dryRun(mutation = '') {
     'MUT-CHUNK-OVER-CAP': ['TYPE_TEXT_CAP = 2000', 'TYPE_TEXT_CAP = 2001'],
     'MUT-OMNIBOX-PREFOCUSED': ["[self.prelude_point(before),", "["],
     'MUT-PRELUDE-ON-BUBBLE': ["x=width // 4, y=3 * height // 4", "x=7 * width // 8, y=height // 8"],
+    'MUT-PRELUDE-ALWAYS': ["        if getattr(self, 'navigations', 0):\n            actions = actions[1:]\n",
+      ''],
     'MUT-PRELUDE-COUNTS': ["task['fixture_setup'] = stage(task, 'navigate', page=page, url=url, marker=pack.marker)",
       "task['fixture_setup'] = stage(task, 'navigate', page=page, url=url, marker=pack.marker); task['steps'] += 1"],
   };
@@ -61,6 +63,10 @@ async function dryRun(mutation = '') {
   // [TARGET, unit decision] Navigation boundary fake: chrome begins with its
   // omnibox selected and retains an untouched restore bubble. Real op_navigate
   // owns the sequence and changed_region plans; this fake renders the focus cue.
+  // Focus persists across navigations as in Chromium: a completed load (and
+  // every later page interaction) leaves focus in content, so a blank-content
+  // click on a later navigation changes no pixel (live R'''' 07:02, T2).
+  let focus = 'omnibox';
   const navigationUrls = [];
   let navigation, navFrame, navPending, navGeneration = 0;
   const navigationFrame = () => {
@@ -96,7 +102,7 @@ async function dryRun(mutation = '') {
       case 'navigate_begin':
         navigationUrls.push(args.url);
         assert.equal(calls.at(-2), 'offline_proof');
-        navigation = { focus: 'omnibox', selected: true, typed: false,
+        navigation = { focus, selected: focus === 'omnibox', typed: false,
           loaded: false, text: '', page: args.page, url: args.url };
         return {};
       case 'navigation_offline_proof': return { fixtures_offline: true };
@@ -131,6 +137,7 @@ async function dryRun(mutation = '') {
           assert.equal(navigation.typed, true);
           assert.equal(navigation.text, navigation.url);
           navigation.loaded = true;
+          navigation.focus = 'content'; navigation.selected = false;
         }
         const id = `navigation-${navGeneration}`;
         const before = args.sensed.frame;
@@ -144,6 +151,7 @@ async function dryRun(mutation = '') {
         // capture/epoch/publication wiring is covered by TestPostInputDelayedPaint.
         for (let elapsed = 50; mutation !== 'MUT-NO-SETTLE' && elapsed <= 1500 &&
             before.sha256 === after.sha256; elapsed += 50) after = capture();
+        focus = navigation.focus;
         navPending = { before, after, id };
         return { proposal_id: id, verdict: { admitted: true }, verified: false, error: '',
           native_evidence: { input_mono_ns: navGeneration } };
@@ -323,10 +331,13 @@ test('hosted dry-run drives all tasks on one capsule with measured stages and AX
   assert.deepEqual(report.tasks.map(t => t.verdict), ['PASS', 'PASS', 'PASS']);
   assert.equal(report.tasks[2].reported_cell.value, '27');
   for (const task of report.tasks) {
-    const url = navigationUrls[report.tasks.indexOf(task)];
-    assert.equal(task.fixture_setup.length, 3 + Math.ceil(Array.from(url).length / 2000));
-    assert.ok(task.fixture_setup.slice(1).every(s => s.kind === 'navigation'));
-    assert.equal(task.fixture_setup[0].kind, 'focus_prelude');
+    const index = report.tasks.indexOf(task);
+    const url = navigationUrls[index];
+    // Only the session's first navigation needs the focus prelude.
+    const prelude = index === 0 ? 1 : 0;
+    assert.equal(task.fixture_setup.length, prelude + 2 + Math.ceil(Array.from(url).length / 2000));
+    assert.ok(task.fixture_setup.slice(prelude).every(s => s.kind === 'navigation'));
+    if (prelude) assert.equal(task.fixture_setup[0].kind, 'focus_prelude');
     assert.ok(task.fixture_setup.every(s => s.verdict.admitted &&
       s.verify_verdict.receipt.verified));
     assert.ok(task.ax_proofs.length);
@@ -375,13 +386,14 @@ for (const [mutation, detail] of [
   ['MUT-OMNIBOX-PREFOCUSED', /VERIFICATION_FAILED/],
   ['MUT-PRELUDE-ON-BUBBLE', /prelude outside safe content geometry/],
   ['MUT-PRELUDE-COUNTS', /task action budget exceeded/],
+  ['MUT-PRELUDE-ALWAYS', /VERIFICATION_FAILED/],
 ]) {
   test(`navigation negative control: ${mutation}`, async () => {
     const { rc, report } = await dryRun(mutation);
     assert.equal(rc, 1);
     assert.equal(report.status, 'BLOCKED');
     assert.match(report.error.detail, detail);
-    if (['MUT-GUARD-ON-VERIFIED', 'MUT-OMNIBOX-PREFOCUSED', 'MUT-TYPE-UNCHUNKED', 'MUT-CHUNK-OVER-CAP'].includes(mutation)) {
+    if (['MUT-GUARD-ON-VERIFIED', 'MUT-OMNIBOX-PREFOCUSED', 'MUT-PRELUDE-ALWAYS', 'MUT-TYPE-UNCHUNKED', 'MUT-CHUNK-OVER-CAP'].includes(mutation)) {
       assert.equal(report.error.code, 'VERIFICATION_FAILED');
     }
   });

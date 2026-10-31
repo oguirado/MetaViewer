@@ -56,6 +56,7 @@ witness and final Open-ready native pin [CITED: `docs/INSTALL.md#capsule-network
 
 ## 0.2.0 (candidate) [CITED: `VERSION`]
 
+- Fixture navigation clicks the focus prelude only on the session's first navigation; later tasks start at ctrl+L, because a blank-content click after a page interaction changes no pixel.
 - Live perception now requests marks every tick; earlier v0.2.0 candidates perceived zero elements on settled pages.
 - Web fixtures now expose synchronized chassis-role names; the pinned Wender omits plain paragraphs, table cells and unnamed status text, which agents must read via AX (srf) or vision.
 - I fixed fixture navigation with capsule clipboard paste, bounded post-input repaint settling, and the shorter equivalent data URL.

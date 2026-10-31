@@ -292,6 +292,7 @@ class HostedRPC:
             self.call('navigate_begin', **args)
             native = object.__new__(LiveBackend)
             native.packs = self.packs
+            native.navigations = getattr(self, 'navigations', 0)
             for name in ('offline_proof', 'observe', 'propose', 'wait_verify', 'ax'):
                 def boundary(*values, _name=name):
                     keys = dict(offline_proof=(), observe=('timeout_ms',),
@@ -303,6 +304,7 @@ class HostedRPC:
                     return result
                 setattr(native, 'op_' + name, boundary)
             setup = native.op_navigate(**args)
+            self.navigations = native.navigations
             self.request('navigate', **args)
             return setup
         return self.request(stage, **args)
@@ -814,16 +816,23 @@ class LiveBackend:
         # Removing omnibox selection changes browser chrome even when page
         # pixels are blank. Keep changed_region fail-closed for this input too;
         # native AX is not used as an unproven alternate focus-state ABI.
-        for index, action in enumerate([self.prelude_point(before),
+        actions = [self.prelude_point(before),
                        dict(type='key', keys=['ctrl', 'l']),
                        # Python str slices preserve Unicode code points (srf runes).
                        *[dict(type='type', text=url[offset:offset + TYPE_TEXT_CAP])
                          for offset in range(0, len(url), TYPE_TEXT_CAP)],
-                       dict(type='key', keys=['Return'])]):
+                       dict(type='key', keys=['Return'])]
+        # [TARGET, unit decision] Only the session's first navigation starts
+        # with the omnibox focused. Every later task follows a page interaction
+        # (or a completed load), so focus is already in content and a blank
+        # click changes no pixel; ctrl+L always changes the chrome instead.
+        if getattr(self, 'navigations', 0):
+            actions = actions[1:]
+        for action in actions:
             for attempt in range(3):
                 obs = self.op_observe(5000)
                 frame = obs['frame_ref']
-                if index == 0 and action.get('type') == 'click':
+                if action.get('type') == 'click':
                     self.check_prelude(frame, action)
                 plan = dict(action=action, expectation=dict(type='changed_region', bbox=dict(
                     x=0, y=0, w=frame['width'], h=frame['height'])))
@@ -834,13 +843,14 @@ class LiveBackend:
                         continue
                     raise
                 verified = self.op_wait_verify(admitted, 30000)
-                setup.append(dict(kind='focus_prelude' if index == 0 else 'navigation',
+                setup.append(dict(kind='focus_prelude' if action.get('type') == 'click' else 'navigation',
                                   verdict=admitted['verdict'], verify_verdict=verified))
                 break
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline:
             after = self.op_observe(5000)['frame_ref']
             if after['sha256'] != before['sha256'] and marker in texts(self.op_ax()):
+                self.navigations = getattr(self, 'navigations', 0) + 1
                 return setup
             time.sleep(0.05)
         raise Failure('fixture navigation did not produce pixels and AX marker')
