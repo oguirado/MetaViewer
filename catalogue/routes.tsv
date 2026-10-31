@@ -1387,6 +1387,7 @@ EmptyWallView.vue	ui/src/wall/EmptyWallView.vue
 SurfacePanel.vue	ui/src/wall/SurfacePanel.vue
 TileCaptureChrome.vue	ui/src/wall/TileCaptureChrome.vue
 WallWorkspace.vue	ui/src/wall/WallWorkspace.vue
+capsuleId.js	ui/src/wall/capsuleId.js
 layout.js	ui/src/wall/layout.js
 tileCapture.js	ui/src/wall/tileCapture.js
 tileStates.js	ui/src/wall/tileStates.js
@@ -1401,6 +1402,7 @@ capfixc-07d233bbe14d	ui/test/capfix-capture-port.test.js
 capfixc-0658638aca13	ui/test/capfix-capture-wire.test.js
 capfix-helpers.mjs	ui/test/capfix-helpers.mjs
 capfixr-9aa831b2a8d3	ui/test/capfix-recording-panel.test.js
+capid-copy-id.test.js	ui/test/capid-copy-id.test.js
 capture-43df8ccddcb6	ui/test/capture-export.test.js
 capture.test.js	ui/test/capture.test.js
 captureShell.mjs	ui/test/captureShell.mjs
