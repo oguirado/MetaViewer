@@ -19,26 +19,26 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 811 | 55 | 756 |
-| Lanes finished OK | 811 | 55 | 756 |
-| Agent steps | 36,587 | 2,705 | 33,882 |
-| Lane-hours of agent work | 94.0 | 5.2 | 88.8 |
-| Fresh input tokens | 154,544,663 | 11,482,034 | 143,062,629 |
-| Cache-read input tokens | 3,120,907,690 | 226,255,212 | 2,894,652,478 |
+| Lanes launched | 825 | 55 | 770 |
+| Lanes finished OK | 825 | 55 | 770 |
+| Agent steps | 36,976 | 2,705 | 34,271 |
+| Lane-hours of agent work | 94.9 | 5.2 | 89.7 |
+| Fresh input tokens | 156,279,709 | 11,482,034 | 144,797,675 |
+| Cache-read input tokens | 3,140,898,360 | 226,255,212 | 2,914,643,148 |
 | Prompt cache hit % | 95.3 | 95.2 | 95.3 |
-| Output tokens | 31,807,469 | 2,135,708 | 29,671,761 |
-| Thinking tokens | 18,287,835 | 1,050,039 | 17,237,796 |
-| Cost (USD) | 28.0578 | 2.0279 | 26.0299 |
-| Cost per lane (USD) | 0.0346 | 0.0369 | 0.0344 |
+| Output tokens | 32,078,292 | 2,135,708 | 29,942,584 |
+| Thinking tokens | 18,467,427 | 1,050,039 | 17,417,388 |
+| Cost (USD) | 28.3254 | 2.0279 | 26.2975 |
+| Cost per lane (USD) | 0.0343 | 0.0369 | 0.0342 |
 
-Rooms: 133. Peak concurrent lanes [MEASURED from lane start/end]: 32.
+Rooms: 134. Peak concurrent lanes [MEASURED from lane start/end]: 32.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 452 | 94.0 | 12.5652 |
+| build | 462 | 94.0 | 12.7554 |
 | context | 42 | 95.9 | 1.9093 |
 | demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
@@ -48,6 +48,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | operator-path sweep (U-DEC-0133/0134) | 16 | 95.3 | 0.4825 |
 | ops | 4 | 88.1 | 0.0468 |
 | perf | 2 | 97.2 | 0.1217 |
+| pillar audit (U-DEC-0136) | 4 | 91.7 | 0.0775 |
 | plan | 12 | 92.6 | 0.3072 |
 | release | 5 | 93.2 | 0.0945 |
 | research | 14 | 94.6 | 0.5673 |
@@ -83,7 +84,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 179 | 94.0 | 5.3783 | direct Muse job |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 181 | 94.0 | 5.4356 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -177,7 +178,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui29c | UI orchestrator | Oct 28 08:58 | fix | 1 | 97.5 | 0.0624 | Terminal sessions wiring (AC-06) broke 58 committed App tests; restore the App mounting contract and finish the terminal tests so the drop can ship. |
 | mvui29sc | UI orchestrator | Oct 28 09:12 | fix | 1 | 97.3 | 0.0484 | Judge rejected the settings drop: a quick revert inside the debounce window is lost, a replaced host can receive a stale save, and boot can paint a scheme the store then replaces; fix before AC-08 can ship. |
 | mvui29d | UI orchestrator | Oct 28 09:13 | fix | 1 | 97.2 | 0.0587 | Judge notes on the terminal drop are real session lifecycle defects (events before registration, stale transport, cross-transport close, leaked port on close during attach, fixture broker unwired); fix before AC-06 ships. |
-| direct-adv | metaviewer-0 | Oct 28 09:30 | build | 138 | 92.4 | 2.9954 | adversarial advocate review before integration |
+| direct-adv | metaviewer-0 | Oct 28 09:30 | build | 146 | 92.4 | 3.1283 | adversarial advocate review before integration |
 | direct-rv11 | metaviewer-0 | Oct 28 11:01 | build | 7 | 93.7 | 0.129 | cross-review verification |
 | direct-tg6 | metaviewer-0 | Oct 28 11:10 | build | 6 | 95.2 | 0.2593 | test-gap and mutation map |
 | direct-w5 | metaviewer-0 | Oct 28 11:20 | build | 8 | 93.6 | 0.2196 | W5 docs fact-check |
@@ -195,6 +196,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui35b | UI orchestrator | Oct 29 02:59 | fix | 1 | 96.3 | 0.0306 | The D4 parity fix makes stored settings with unknown keys refuse and fall back to full defaults; three committed tests still pin the old lenient load and must move to the strict assertion so the suite matches the reversed ruling. |
 | mvui36 | UI orchestrator | Oct 29 07:44 | build | 1 | 95.2 | 0.0225 | The host terminal port now sends retryable input refusals with the expected seq, but the renderer terminal client treats every refusal as fatal, so one transient refusal kills the side terminal; make the client resync its seq and keep running. |
 | sweep | conductor | Oct 31 11:47 | operator-path sweep (U-DEC-0133/0134) | 16 | 95.3 | 0.4825 | OPERATOR-PATH SWEEP of the packaged P8 app: 13 read-only flow lanes predicting operator-path failures share one byte-identical PIN-01 prefix (w1/sweep/prefix.md, churn only in the flow tail), launched together for a warm cache; the 3 UI follow-up design lanes share a second identical prefix variant; 1 x64 inventory lane is standalone. |
+| pillar | conductor | Oct 31 12:20 | pillar audit (U-DEC-0136) | 4 | 91.7 | 0.0775 | Read-only audit of the four desktop-environment pillars P1-P4 on the packaged P8.1 line; 4 lanes share one byte-identical PIN-01 prefix launched together. |
 
 ## Every lane
 
@@ -1011,6 +1013,20 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | sweep | captcha_handoff | Operator flow: captcha handoff | Oct 31 11:47 | yes | 47 | 94.6 | 0.027801 |
 | direct-direct | ventory | x64_inventory | Oct 31 11:50 | yes | 17 | 87.9 | 0.014995 |
 | direct-direct | sweep_b | judge_sweep_b | Oct 31 11:56 | yes | 13 | 81.9 | 0.016596 |
+| direct-direct | sweep_a | judge_sweep_a | Oct 31 11:56 | yes | 20 | 78.8 | 0.039984 |
+| pillar | p1_hide | p1_hide | Oct 31 12:20 | yes | 24 | 90.8 | 0.018646 |
+| pillar | p2_copy_id | p2_copy_id | Oct 31 12:20 | yes | 40 | 94.1 | 0.023068 |
+| pillar | p4_record_user | p4_record_user | Oct 31 12:20 | yes | 16 | 86.2 | 0.013298 |
+| pillar | p3_record_automation | p3_record_automation | Oct 31 12:20 | yes | 26 | 91.1 | 0.022441 |
+| direct-adv | 4_DEMO-FLOW-R2_b | adv4_DEMO-FLOW-R2_b | Oct 31 12:50 | yes | 29 | 94.9 | 0.013721 |
+| direct-adv | 4_HANDOFF-NOTICE-R2_b | adv4_HANDOFF-NOTICE-R2_b | Oct 31 12:50 | yes | 29 | 92.9 | 0.016349 |
+| direct-adv | 4_REOPEN-FLOW-R2_a | adv4_REOPEN-FLOW-R2_a | Oct 31 12:50 | yes | 22 | 93.4 | 0.011341 |
+| direct-adv | 4_DEMO-FLOW-R2_a | adv4_DEMO-FLOW-R2_a | Oct 31 12:50 | yes | 22 | 90.3 | 0.011428 |
+| direct-adv | 4_HANDOFF-NOTICE-R2_a | adv4_HANDOFF-NOTICE-R2_a | Oct 31 12:50 | yes | 22 | 90.3 | 0.012251 |
+| direct-adv | 4_IDENT-PERSIST-R2_b | adv4_IDENT-PERSIST-R2_b | Oct 31 12:50 | yes | 28 | 92.5 | 0.025204 |
+| direct-adv | 4_IDENT-PERSIST-R2_a | adv4_IDENT-PERSIST-R2_a | Oct 31 12:50 | yes | 21 | 89.7 | 0.016489 |
+| direct-adv | 4_REOPEN-FLOW-R2_b | adv4_REOPEN-FLOW-R2_b | Oct 31 12:50 | yes | 62 | 96.4 | 0.02611 |
+| direct-direct | v_integration | term_mv_integration | Oct 31 12:54 | yes | 28 | 90.9 | 0.01732 |
 
 ## Method
 
