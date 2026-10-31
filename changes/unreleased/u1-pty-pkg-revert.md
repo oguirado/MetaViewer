@@ -1,0 +1,1 @@
+- Revert the node-pty staging outside `app.asar` (U1-PTY-PKG): hosted CI has no `pty.node` prebuilt (`PKG_NATIVE_MISSING` in the package jobs) and its tests assumed an arm64 prebuilt on x64 runners; it returns with an x64-aware, CI-provisioned runtime.
