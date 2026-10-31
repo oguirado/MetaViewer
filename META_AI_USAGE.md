@@ -19,16 +19,16 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 1,096 | 55 | 1,041 |
-| Lanes finished OK | 1,096 | 55 | 1,041 |
-| Agent steps | 46,502 | 2,705 | 43,797 |
-| Lane-hours of agent work | 114.5 | 5.2 | 109.2 |
-| Fresh input tokens | 189,328,437 | 11,482,034 | 177,846,403 |
-| Cache-read input tokens | 3,681,440,054 | 226,255,212 | 3,455,184,842 |
+| Lanes launched | 1,098 | 55 | 1,043 |
+| Lanes finished OK | 1,098 | 55 | 1,043 |
+| Agent steps | 46,588 | 2,705 | 43,883 |
+| Lane-hours of agent work | 114.8 | 5.2 | 109.5 |
+| Fresh input tokens | 189,754,412 | 11,482,034 | 178,272,378 |
+| Cache-read input tokens | 3,687,860,298 | 226,255,212 | 3,461,605,086 |
 | Prompt cache hit % | 95.1 | 95.2 | 95.1 |
-| Output tokens | 38,284,781 | 2,135,708 | 36,149,073 |
-| Thinking tokens | 22,468,738 | 1,050,039 | 21,418,699 |
-| Cost (USD) | 33.9527 | 2.0279 | 31.9248 |
+| Output tokens | 38,405,617 | 2,135,708 | 36,269,909 |
+| Thinking tokens | 22,562,822 | 1,050,039 | 21,512,783 |
+| Cost (USD) | 34.0323 | 2.0279 | 32.0044 |
 | Cost per lane (USD) | 0.031 | 0.0369 | 0.0307 |
 
 Rooms: 136. Peak concurrent lanes [MEASURED from lane start/end]: 40.
@@ -38,7 +38,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 707 | 94.0 | 17.7052 |
+| build | 709 | 94.0 | 17.7848 |
 | context | 42 | 95.9 | 1.9093 |
 | context packs + test ideation (U-DEC-0139) | 13 | 91.1 | 0.2195 |
 | demo | 4 | 90.7 | 0.0557 |
@@ -86,7 +86,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 374 | 94.1 | 9.527 | direct Muse job |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 376 | 94.1 | 9.6066 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -1267,6 +1267,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | 7_package | eve2_r7_package | Oct 31 19:13 | yes | 64 | 96.1 | 0.032755 |
 | direct-direct | 7_package | eve3_r7_package | Oct 31 19:13 | yes | 64 | 96.1 | 0.032755 |
 | direct-direct | 1 | eve4_t1 | Oct 31 19:22 | yes | 34 | 92.3 | 0.029268 |
+| direct-direct | 2 | eve4_t2 | Oct 31 19:22 | yes | 31 | 91.5 | 0.037953 |
 | direct-direct | 3 | eve4_t3 | Oct 31 19:22 | yes | 8 | 67.9 | 0.015659 |
 | direct-direct | 4 | eve4_t4 | Oct 31 19:22 | yes | 28 | 91.9 | 0.018839 |
 | direct-direct | 3_IDT-FIX-R4_a | eve5_r3_IDT-FIX-R4_a | Oct 31 19:25 | yes | 38 | 94.4 | 0.021614 |
@@ -1302,6 +1303,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | 8_e1_a | eve5_r8_e1_a | Oct 31 19:25 | yes | 35 | 94.3 | 0.017444 |
 | direct-direct | 8_e1_b | eve5_r8_e1_b | Oct 31 19:25 | yes | 37 | 94.3 | 0.021923 |
 | direct-direct | 8_e4_a | eve5_r8_e4_a | Oct 31 19:25 | yes | 22 | 92.5 | 0.013726 |
+| direct-direct | 8_e4_b | eve5_r8_e4_b | Oct 31 19:25 | yes | 55 | 95.1 | 0.041653 |
 
 ## Method
 
