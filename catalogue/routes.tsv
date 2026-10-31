@@ -125,6 +125,8 @@ testws3-2bbbb8ab2b11	agents/tests/test_ws3_muse_identity.py
 testws3-f00ce2c95fe6	agents/tests/test_ws3_untracked_payload.py
 testws3-5a6f7cc82936	agents/tests/test_ws3_wheel_record.py
 protocol.json	catalogue/protocol.json
+changes-README.md	changes/README.md
+changel-6ee9fc48ce48	changes/unreleased/changelog-fragments.md
 actionp-0ef0ddb499b4	contracts/examples/action_proposal.invalid.schema.json
 actionp-215c1416bbcf	contracts/examples/action_proposal.valid.json
 actionr-3778f6831d07	contracts/examples/action_receipt.invalid.schema.json
@@ -1234,6 +1236,7 @@ testage-f3850bae48b0	tests/test_agent_entry_prompt.py
 testass-670edc3dc170	tests/test_assembly_smoke.py
 test_budget_basis.py	tests/test_budget_basis.py
 test_budget_gate.py	tests/test_budget_gate.py
+testcha-299836a4c858	tests/test_changelog_assemble.py
 testche-26b4e1734899	tests/test_check_contracts.py
 test_check_laws.py	tests/test_check_laws.py
 test_checker_t6.py	tests/test_checker_t6.py
@@ -1290,6 +1293,7 @@ test_theme.py	tests/test_theme.py
 test_video_seal.py	tests/test_video_seal.py
 assembly_smoke.py	tools/assembly_smoke.py
 budget_gate.py	tools/budget_gate.py
+changelog_assemble.py	tools/changelog_assemble.py
 check_contracts.py	tools/check_contracts.py
 check_laws.py	tools/check_laws.py
 check_theme.py	tools/check_theme.py
