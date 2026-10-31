@@ -19,26 +19,26 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 1,033 | 55 | 978 |
-| Lanes finished OK | 1,033 | 55 | 978 |
-| Agent steps | 43,957 | 2,705 | 41,252 |
-| Lane-hours of agent work | 109.5 | 5.2 | 104.2 |
-| Fresh input tokens | 181,192,401 | 11,482,034 | 169,710,367 |
-| Cache-read input tokens | 3,539,883,120 | 226,255,212 | 3,313,627,908 |
+| Lanes launched | 1,047 | 55 | 992 |
+| Lanes finished OK | 1,047 | 55 | 992 |
+| Agent steps | 44,509 | 2,705 | 41,804 |
+| Lane-hours of agent work | 110.9 | 5.2 | 105.7 |
+| Fresh input tokens | 183,278,666 | 11,482,034 | 171,796,632 |
+| Cache-read input tokens | 3,570,645,805 | 226,255,212 | 3,344,390,593 |
 | Prompt cache hit % | 95.1 | 95.2 | 95.1 |
-| Output tokens | 36,687,321 | 2,135,708 | 34,551,613 |
-| Thinking tokens | 21,423,433 | 1,050,039 | 20,373,394 |
-| Cost (USD) | 32.5364 | 2.0279 | 30.5086 |
-| Cost per lane (USD) | 0.0315 | 0.0369 | 0.0312 |
+| Output tokens | 37,061,334 | 2,135,708 | 34,925,626 |
+| Thinking tokens | 21,682,795 | 1,050,039 | 20,632,756 |
+| Cost (USD) | 32.8814 | 2.0279 | 30.8535 |
+| Cost per lane (USD) | 0.0314 | 0.0369 | 0.0311 |
 
-Rooms: 136. Peak concurrent lanes [MEASURED from lane start/end]: 44.
+Rooms: 136. Peak concurrent lanes [MEASURED from lane start/end]: 42.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 644 | 94.0 | 16.2889 |
+| build | 658 | 94.0 | 16.6339 |
 | context | 42 | 95.9 | 1.9093 |
 | context packs + test ideation (U-DEC-0139) | 13 | 91.1 | 0.2195 |
 | demo | 4 | 90.7 | 0.0557 |
@@ -86,7 +86,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 311 | 94.0 | 8.1108 | direct Muse job |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 325 | 94.0 | 8.4557 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -1204,7 +1204,6 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | 4_launch | eve2_r4_launch | Oct 31 16:09 | yes | 38 | 93.5 | 0.032373 |
 | direct-direct | 4_multislot | eve2_r4_multislot | Oct 31 16:09 | yes | 64 | 96.7 | 0.039296 |
 | direct-direct | 4_network | eve2_r4_network | Oct 31 16:09 | yes | 46 | 95.0 | 0.026456 |
-| direct-direct | 4_settings | eve2_r4_settings | Oct 31 16:09 | yes | 40 | 94.3 | 0.028844 |
 | direct-direct | 4_storyboard | eve2_r4_storyboard | Oct 31 16:09 | yes | 61 | 96.4 | 0.036259 |
 | direct-direct | 4_terminal | eve2_r4_terminal | Oct 31 16:09 | yes | 50 | 94.8 | 0.031956 |
 | direct-direct | 6_input_u5_a | eve2_r6_input_u5_a | Oct 31 16:09 | yes | 22 | 92.7 | 0.011289 |
@@ -1220,7 +1219,6 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | 7_contracts | eve2_r7_contracts | Oct 31 16:09 | yes | 82 | 96.9 | 0.040138 |
 | direct-direct | 7_docs | eve2_r7_docs | Oct 31 16:09 | yes | 54 | 96.2 | 0.020452 |
 | direct-direct | 7_errors | eve2_r7_errors | Oct 31 16:09 | yes | 34 | 94.2 | 0.019992 |
-| direct-direct | 7_launcher | eve2_r7_launcher | Oct 31 16:09 | yes | 36 | 94.3 | 0.02241 |
 | direct-direct | 7_package | eve2_r7_package | Oct 31 16:09 | yes | 27 | 92.9 | 0.015369 |
 | direct-direct | aptcha | fps1_captcha | Oct 31 16:54 | yes | 27 | 92.0 | 0.018163 |
 | direct-direct | oldings_a | fps1_holdings_a | Oct 31 16:54 | yes | 28 | 93.5 | 0.015181 |
@@ -1239,6 +1237,22 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | LTI-CAPSULE-ROOTS-R2_b | r1c_MULTI-CAPSULE-ROOTS-R2_b | Oct 31 17:34 | yes | 52 | 95.9 | 0.02786 |
 | direct-direct | S-INDICATOR_b | r1c_FPS-INDICATOR_b | Oct 31 17:34 | yes | 39 | 94.1 | 0.023257 |
 | direct-direct | LTI-CAPSULE-ROOTS-R2_a | r1c_MULTI-CAPSULE-ROOTS-R2_a | Oct 31 17:34 | yes | 39 | 95.7 | 0.017178 |
+| direct-direct | DISPLAY-READER-R2 | r1d_r3_DISPLAY-READER-R2 | Oct 31 18:42 | yes | 68 | 96.1 | 0.034782 |
+| direct-direct | SPLAY-TAP-R2_c | r1d_DISPLAY-TAP-R2_c | Oct 31 18:42 | yes | 42 | 94.6 | 0.025012 |
+| direct-direct | DISPLAY-TAP-R2 | r1d_r3_DISPLAY-TAP-R2 | Oct 31 18:42 | yes | 50 | 95.1 | 0.026774 |
+| direct-direct | SPLAY-READER-R2_c | r1d_DISPLAY-READER-R2_c | Oct 31 18:42 | yes | 46 | 94.0 | 0.032713 |
+| direct-direct | SPLAY-TAP-R2_a | r1d_DISPLAY-TAP-R2_a | Oct 31 18:42 | yes | 41 | 94.3 | 0.022067 |
+| direct-direct | SPLAY-READER-R2_a | r1d_DISPLAY-READER-R2_a | Oct 31 18:42 | yes | 33 | 92.8 | 0.019279 |
+| direct-direct | SPLAY-TAP-R2_b | r1d_DISPLAY-TAP-R2_b | Oct 31 18:42 | yes | 31 | 92.6 | 0.021786 |
+| direct-direct | hema | r5a_schema | Oct 31 18:55 | yes | 56 | 95.3 | 0.035648 |
+| direct-direct | tching | r5a_batching | Oct 31 18:55 | yes | 38 | 86.5 | 0.05373 |
+| direct-direct | mit | r5a_limit | Oct 31 18:55 | yes | 49 | 95.6 | 0.029567 |
+| direct-direct | T-FIX-R3_b | r1e_IDT-FIX-R3_b | Oct 31 19:13 | yes | 25 | 90.6 | 0.016414 |
+| direct-direct | T-FIX-R3_a | r1e_IDT-FIX-R3_a | Oct 31 19:13 | yes | 25 | 91.5 | 0.013474 |
+| direct-direct | 4_settings | eve2_r4_settings | Oct 31 19:13 | yes | 15 | 84.6 | 0.012102 |
+| direct-direct | 4_settings | eve3_r4_settings | Oct 31 19:13 | yes | 15 | 84.6 | 0.012102 |
+| direct-direct | 7_launcher | eve2_r7_launcher | Oct 31 19:13 | yes | 47 | 95.2 | 0.02038 |
+| direct-direct | 7_launcher | eve3_r7_launcher | Oct 31 19:13 | yes | 47 | 95.2 | 0.02038 |
 
 ## Method
 
