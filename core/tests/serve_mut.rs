@@ -18,6 +18,15 @@ use tokio::net::UnixStream;
 // runtime. Keep these fixtures from starving each other's live socket deadlines.
 static SATURATION: Mutex<()> = Mutex::new(());
 
+// [TARGET, unit decision] Allow 120 seconds for an observable socket/state
+// transition under CI CPU and durable-journal load. This is a failure ceiling,
+// never evidence that an event occurred (or did not occur).
+const EVENT_BOUND: Duration = Duration::from_secs(120);
+
+fn reply_limits() -> WireLimits {
+    WireLimits::new(MAX_FRAME_BYTES, 32, 256, 65536, EVENT_BOUND, EVENT_BOUND).unwrap()
+}
+
 fn registration(instance: &str) -> Registration {
     let component = if instance.starts_with("ui") {
         "ui"
@@ -65,13 +74,20 @@ struct Peer {
     socket: BufReader<UnixStream>,
     component: String,
     seq: u64,
+    received_ns: u64,
 }
 impl Peer {
     async fn connect(path: &Path, component: &str) -> Self {
         let mut p = Self {
-            socket: BufReader::new(UnixStream::connect(path).await.unwrap()),
+            socket: BufReader::new(
+                tokio::time::timeout(EVENT_BOUND, UnixStream::connect(path))
+                    .await
+                    .expect("bounded fixture connect")
+                    .unwrap(),
+            ),
             component: component.into(),
             seq: 0,
+            received_ns: 0,
         };
         p.send(serde_json::to_value(registration(component).hello).unwrap())
             .await;
@@ -85,24 +101,42 @@ impl Peer {
             "session_id":"serve-mut","seq":self.seq,"nonce":format!("{}-{}",self.component,self.seq),"body":body})).unwrap()
     }
     async fn send(&mut self, body: Value) {
+        self.send_if_connected(body).await.unwrap();
+    }
+    async fn send_if_connected(&mut self, body: Value) -> std::io::Result<()> {
         let env = self.envelope(body);
         // Fixture construction needs no second full contract validation: the
         // authenticated server still decodes every byte, and receive validates
         // its replies. Buffer reads to avoid one socket syscall per reply byte.
         let mut bytes = serde_json::to_vec(&env).unwrap();
         bytes.push(b'\n');
-        tokio::time::timeout(Duration::from_secs(15), self.socket.write_all(&bytes))
+        tokio::time::timeout(EVENT_BOUND, self.socket.write_all(&bytes))
             .await
             .expect("bounded fixture write")
-            .unwrap();
     }
     async fn receive(&mut self) -> Value {
-        let env = tokio::time::timeout(Duration::from_secs(15), read_frame(&mut self.socket))
-            .await
-            .expect("bounded reply wait")
-            .expect("valid frame")
-            .expect("peer remains connected");
-        serde_json::to_value(env.body).unwrap()
+        tokio::time::timeout(EVENT_BOUND, async {
+            loop {
+                let env = read_frame_with_limits(&mut self.socket, &reply_limits())
+                    .await
+                    .expect("valid frame")
+                    .expect("peer remains connected");
+                self.received_ns = env.ts_ns.get();
+                // A loaded fixture can cross the real server's probe interval.
+                // Acknowledge probes as a daemon would; they are not test replies.
+                if self.component == "daemon" && env.msg_id.starts_with("core-keepalive-") {
+                    assert_eq!(serde_json::to_value(&env.body).unwrap()["op"], "list");
+                    self.send(json!({"schema":"surface_event/v0.2","event":"error",
+                        "data":{"surface_id":"daemon","code":"DAEMON_KEEPALIVE",
+                        "detail":"core-keepalive"}}))
+                        .await;
+                    continue;
+                }
+                return serde_json::to_value(env.body).unwrap();
+            }
+        })
+        .await
+        .expect("bounded reply wait")
     }
     async fn verdict(&mut self, id: &str, decision: &str, reason: Option<&str>) {
         let v = self.receive().await;
@@ -244,7 +278,7 @@ fn m1_missing_daemon_refuses_once_and_connected_control_dispatches() {
 
 #[test]
 fn m4_refused_overflow_does_not_dispatch_fail_but_admitted_overflow_does() {
-    let _saturation = SATURATION.lock().unwrap();
+    let _saturation = SATURATION.lock().unwrap_or_else(|error| error.into_inner());
     for admitted in [false, true] {
         support::run(async {
             let h = Harness::new(false).await;
@@ -463,16 +497,46 @@ async fn fanout_with_saturated_first_ui(frames: bool) {
     // Each healthy receive is a routing barrier, preventing frame batch
     // supersession and continuously draining the healthy observer.
     let messages = MAX_SEND_QUEUE * if frames { 5 } else { 3 } / 2;
+    let mut heartbeat_ns = healthy.received_ns;
+    let mut victim_retired = false;
     for i in 0..messages {
-        // Keep read deadlines alive without draining the victim or
-        // adding replies to its send queue. Endpoint order is explicit:
-        // the saturated UI must precede the healthy UI in fanout.
-        if i % 64 == 0 {
-            for peer in [&mut victim, &mut healthy] {
-                peer.send(json!({"schema":"surface_request/v0.2","op":"list","params":{}}))
-                    .await;
-                assert_eq!(daemon.receive().await["op"], "list");
+        // Use observed server-clock progress, not a count of frames assumed to
+        // finish before the idle deadline. Never drain the saturation victim.
+        if healthy.received_ns.saturating_sub(heartbeat_ns) >= (IDLE_DEADLINE.as_nanos() / 4) as u64
+        {
+            if !victim_retired {
+                match victim
+                    .send_if_connected(json!({"schema":"surface_request/v0.2",
+                    "op":"list","params":{}}))
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+                        ) =>
+                    {
+                        victim_retired = true
+                    }
+                    Err(error) => panic!("victim heartbeat: {error}"),
+                }
             }
+            // Distinct operation marks the healthy barrier even if the victim
+            // has just retired. The final overflow assertion still proves why
+            // that peer closed; a disconnect alone can never pass this test.
+            healthy
+                .send(json!({"schema":"surface_request/v0.2",
+                "op":"frame_subscribe","params":{"surface_id":"surface-demo"}}))
+                .await;
+            loop {
+                let command = daemon.receive().await;
+                if command["op"] == "frame_subscribe" {
+                    break;
+                }
+                assert_eq!(command["op"], "list");
+            }
+            heartbeat_ns = daemon.received_ns;
         }
         let body = if frames {
             pixels.frame(i as u64 + 2)
@@ -500,12 +564,12 @@ async fn fanout_with_saturated_first_ui(frames: bool) {
 }
 #[test]
 fn m2_notice_fanout_continues_after_saturated_first_ui() {
-    let _saturation = SATURATION.lock().unwrap();
+    let _saturation = SATURATION.lock().unwrap_or_else(|error| error.into_inner());
     support::run(fanout_with_saturated_first_ui(false));
 }
 #[test]
 fn m2_frame_fanout_continues_after_saturated_first_ui() {
-    let _saturation = SATURATION.lock().unwrap();
+    let _saturation = SATURATION.lock().unwrap_or_else(|error| error.into_inner());
     support::run(fanout_with_saturated_first_ui(true));
 }
 async fn capture_message(ui: &mut Peer, code: &str) -> Value {
@@ -533,7 +597,22 @@ fn m3_capture_publishes_recording_state_for_frames_and_stop() {
         let state = capture_message(&mut ui, "CAPTURE_STATE").await;
         assert_eq!(state["recording_id"], "state-recording");
         assert_eq!(state["frames"], 1);
-        tokio::time::sleep(Duration::from_millis(40)).await;
+        // The start state and its envelope share the capture's server clock.
+        // Wait for that clock to cross the configured decimation period through
+        // ordered request/reply barriers, rather than guessing with a sleep.
+        let capture_ns = ui.received_ns;
+        // A separate observer keeps the recording UI's pending record events
+        // in order for capture_message to consume, just as before.
+        let mut clock_peer = h.peer("ui-healthy").await;
+        tokio::time::timeout(EVENT_BOUND, async {
+            while clock_peer.received_ns / 1_000_000 < capture_ns / 1_000_000 + 1000 / 30 {
+                clock_peer.send(unsupported()).await;
+                clock_peer.verdict("fill", "refused", Some("POLICY")).await;
+            }
+        })
+        .await
+        .expect("capture clock reaches next frame period");
+        drop(clock_peer);
         daemon.send(pixels.frame(3)).await;
         let state = capture_message(&mut ui, "CAPTURE_STATE").await;
         assert_eq!(state["type"], "capture.state");
