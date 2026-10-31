@@ -19,27 +19,28 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 825 | 55 | 770 |
-| Lanes finished OK | 825 | 55 | 770 |
-| Agent steps | 36,976 | 2,705 | 34,271 |
-| Lane-hours of agent work | 94.9 | 5.2 | 89.7 |
-| Fresh input tokens | 156,279,709 | 11,482,034 | 144,797,675 |
-| Cache-read input tokens | 3,140,898,360 | 226,255,212 | 2,914,643,148 |
-| Prompt cache hit % | 95.3 | 95.2 | 95.3 |
-| Output tokens | 32,078,292 | 2,135,708 | 29,942,584 |
-| Thinking tokens | 18,467,427 | 1,050,039 | 17,417,388 |
-| Cost (USD) | 28.3254 | 2.0279 | 26.2975 |
-| Cost per lane (USD) | 0.0343 | 0.0369 | 0.0342 |
+| Lanes launched | 864 | 55 | 809 |
+| Lanes finished OK | 864 | 55 | 809 |
+| Agent steps | 38,080 | 2,705 | 35,375 |
+| Lane-hours of agent work | 97.2 | 5.2 | 91.9 |
+| Fresh input tokens | 160,782,608 | 11,482,034 | 149,300,574 |
+| Cache-read input tokens | 3,200,033,399 | 226,255,212 | 2,973,778,187 |
+| Prompt cache hit % | 95.2 | 95.2 | 95.2 |
+| Output tokens | 32,852,845 | 2,135,708 | 30,717,137 |
+| Thinking tokens | 18,953,821 | 1,050,039 | 17,903,782 |
+| Cost (USD) | 29.0489 | 2.0279 | 27.021 |
+| Cost per lane (USD) | 0.0336 | 0.0369 | 0.0334 |
 
-Rooms: 134. Peak concurrent lanes [MEASURED from lane start/end]: 32.
+Rooms: 135. Peak concurrent lanes [MEASURED from lane start/end]: 32.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 462 | 94.0 | 12.7554 |
+| build | 488 | 94.0 | 13.2594 |
 | context | 42 | 95.9 | 1.9093 |
+| context packs + test ideation (U-DEC-0139) | 13 | 91.1 | 0.2195 |
 | demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
 | docs | 15 | 94.8 | 0.5371 |
@@ -84,7 +85,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 181 | 94.0 | 5.4356 | direct Muse job |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 193 | 93.9 | 5.6643 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -178,7 +179,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui29c | UI orchestrator | Oct 28 08:58 | fix | 1 | 97.5 | 0.0624 | Terminal sessions wiring (AC-06) broke 58 committed App tests; restore the App mounting contract and finish the terminal tests so the drop can ship. |
 | mvui29sc | UI orchestrator | Oct 28 09:12 | fix | 1 | 97.3 | 0.0484 | Judge rejected the settings drop: a quick revert inside the debounce window is lost, a replaced host can receive a stale save, and boot can paint a scheme the store then replaces; fix before AC-08 can ship. |
 | mvui29d | UI orchestrator | Oct 28 09:13 | fix | 1 | 97.2 | 0.0587 | Judge notes on the terminal drop are real session lifecycle defects (events before registration, stale transport, cross-transport close, leaked port on close during attach, fixture broker unwired); fix before AC-06 ships. |
-| direct-adv | metaviewer-0 | Oct 28 09:30 | build | 146 | 92.4 | 3.1283 | adversarial advocate review before integration |
+| direct-adv | metaviewer-0 | Oct 28 09:30 | build | 160 | 92.7 | 3.4036 | adversarial advocate review before integration |
 | direct-rv11 | metaviewer-0 | Oct 28 11:01 | build | 7 | 93.7 | 0.129 | cross-review verification |
 | direct-tg6 | metaviewer-0 | Oct 28 11:10 | build | 6 | 95.2 | 0.2593 | test-gap and mutation map |
 | direct-w5 | metaviewer-0 | Oct 28 11:20 | build | 8 | 93.6 | 0.2196 | W5 docs fact-check |
@@ -197,6 +198,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui36 | UI orchestrator | Oct 29 07:44 | build | 1 | 95.2 | 0.0225 | The host terminal port now sends retryable input refusals with the expected seq, but the renderer terminal client treats every refusal as fatal, so one transient refusal kills the side terminal; make the client resync its seq and keep running. |
 | sweep | conductor | Oct 31 11:47 | operator-path sweep (U-DEC-0133/0134) | 16 | 95.3 | 0.4825 | OPERATOR-PATH SWEEP of the packaged P8 app: 13 read-only flow lanes predicting operator-path failures share one byte-identical PIN-01 prefix (w1/sweep/prefix.md, churn only in the flow tail), launched together for a warm cache; the 3 UI follow-up design lanes share a second identical prefix variant; 1 x64 inventory lane is standalone. |
 | pillar | conductor | Oct 31 12:20 | pillar audit (U-DEC-0136) | 4 | 91.7 | 0.0775 | Read-only audit of the four desktop-environment pillars P1-P4 on the packaged P8.1 line; 4 lanes share one byte-identical PIN-01 prefix launched together. |
+| packs | conductor | Oct 31 13:00 | context packs + test ideation (U-DEC-0139) | 13 | 91.1 | 0.2195 | Ready context packs for every queued or held writer unit and test/mutant ideation for INPUT-ARM and MULTI-CAPSULE; all lanes share one byte-identical PIN-01 prefix launched together. |
 
 ## Every lane
 
@@ -1026,7 +1028,46 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-adv | 4_IDENT-PERSIST-R2_b | adv4_IDENT-PERSIST-R2_b | Oct 31 12:50 | yes | 28 | 92.5 | 0.025204 |
 | direct-adv | 4_IDENT-PERSIST-R2_a | adv4_IDENT-PERSIST-R2_a | Oct 31 12:50 | yes | 21 | 89.7 | 0.016489 |
 | direct-adv | 4_REOPEN-FLOW-R2_b | adv4_REOPEN-FLOW-R2_b | Oct 31 12:50 | yes | 62 | 96.4 | 0.02611 |
+| direct-direct | resnel_wall | term_fresnel_wall | Oct 31 12:54 | yes | 28 | 92.6 | 0.018737 |
 | direct-direct | v_integration | term_mv_integration | Oct 31 12:54 | yes | 28 | 90.9 | 0.01732 |
+| direct-direct | ewton_deck | term_newton_deck | Oct 31 12:54 | yes | 34 | 92.4 | 0.021699 |
+| packs | pack_CAPID-UI | pack_CAPID-UI | Oct 31 13:00 | yes | 30 | 92.7 | 0.02824 |
+| packs | pack_NETWORK-COPY-R2 | pack_NETWORK-COPY-R2 | Oct 31 13:00 | yes | 22 | 90.1 | 0.014189 |
+| packs | pack_HANDOFF-STYLE | pack_HANDOFF-STYLE | Oct 31 13:00 | yes | 18 | 87.7 | 0.013304 |
+| packs | test_MULTI-CAPSULE_a | test_MULTI-CAPSULE_a | Oct 31 13:00 | yes | 14 | 88.3 | 0.009584 |
+| packs | pack_REC-STATE | pack_REC-STATE | Oct 31 13:00 | yes | 45 | 93.8 | 0.03209 |
+| packs | test_INPUT-ARM_b | test_INPUT-ARM_b | Oct 31 13:00 | yes | 18 | 91.3 | 0.009767 |
+| packs | pack_SETTINGS-FIX-R2 | pack_SETTINGS-FIX-R2 | Oct 31 13:00 | yes | 13 | 84.3 | 0.014184 |
+| packs | pack_MULTISLOT-FIX-R2 | pack_MULTISLOT-FIX-R2 | Oct 31 13:00 | yes | 13 | 81.7 | 0.01089 |
+| packs | test_MULTI-CAPSULE_b | test_MULTI-CAPSULE_b | Oct 31 13:00 | yes | 25 | 90.8 | 0.018114 |
+| packs | pack_UI-GEOMETRY-B | pack_UI-GEOMETRY-B | Oct 31 13:00 | yes | 27 | 91.5 | 0.016026 |
+| packs | pack_MULTI-CAPSULE | pack_MULTI-CAPSULE | Oct 31 13:00 | yes | 26 | 92.0 | 0.017233 |
+| packs | test_INPUT-ARM_a | test_INPUT-ARM_a | Oct 31 13:00 | yes | 29 | 91.5 | 0.020318 |
+| packs | pack_PKG-CONTENT | pack_PKG-CONTENT | Oct 31 13:00 | yes | 21 | 90.1 | 0.015534 |
+| direct-adv | 5_CAP-FIX_a | adv5_CAP-FIX_a | Oct 31 13:01 | yes | 27 | 91.3 | 0.016564 |
+| direct-adv | 5_SIT-FIX_b | adv5_SIT-FIX_b | Oct 31 13:01 | yes | 46 | 94.9 | 0.024729 |
+| direct-adv | 5_CAP-FIX_b | adv5_CAP-FIX_b | Oct 31 13:01 | yes | 52 | 95.9 | 0.031176 |
+| direct-adv | 5_TEST-HYGIENE-R2_a | adv5_TEST-HYGIENE-R2_a | Oct 31 13:01 | yes | 20 | 92.1 | 0.015209 |
+| direct-adv | 5_E2E-REAL-ELECTRON-R3_b | adv5_E2E-REAL-ELECTRON-R3_b | Oct 31 13:01 | yes | 39 | 95.6 | 0.019961 |
+| direct-adv | 5_E2E-REAL-ELECTRON-R3_a | adv5_E2E-REAL-ELECTRON-R3_a | Oct 31 13:01 | yes | 38 | 95.8 | 0.016619 |
+| direct-adv | 5_ESH-FIX_b | adv5_ESH-FIX_b | Oct 31 13:01 | yes | 63 | 94.6 | 0.044114 |
+| direct-adv | 5_SIT-FIX_a | adv5_SIT-FIX_a | Oct 31 13:01 | yes | 21 | 93.2 | 0.010141 |
+| direct-adv | 5_ESH-FIX_a | adv5_ESH-FIX_a | Oct 31 13:01 | yes | 14 | 86.2 | 0.009149 |
+| direct-direct | sule_binding | tl_capsule_binding | Oct 31 13:03 | yes | 27 | 92.7 | 0.020652 |
+| direct-direct | backend | tl_pty_backend | Oct 31 13:03 | yes | 34 | 92.1 | 0.01902 |
+| direct-direct | derer_wall | tl_renderer_wall | Oct 31 13:03 | yes | 15 | 84.7 | 0.017953 |
+| direct-direct | ton_deck_layers | tl_newton_deck_layers | Oct 31 13:03 | yes | 44 | 93.5 | 0.031806 |
+| direct-direct | cess_supervision | tl_process_supervision | Oct 31 13:03 | yes | 29 | 92.6 | 0.019846 |
+| direct-direct | mpt_injection | tl_prompt_injection | Oct 31 13:03 | yes | 25 | 89.8 | 0.018483 |
+| direct-direct | ts_taxonomy | tl_slots_taxonomy | Oct 31 13:03 | yes | 17 | 89.8 | 0.011903 |
+| direct-direct | urity_limits | tl_security_limits | Oct 31 13:03 | yes | 18 | 87.3 | 0.013226 |
+| direct-direct | alogue_patterns | tl_catalogue_patterns | Oct 31 13:03 | yes | 22 | 89.3 | 0.01609 |
+| direct-direct | snel_layers | tl_fresnel_layers | Oct 31 13:03 | yes | 29 | 92.9 | 0.019315 |
+| direct-adv | 6_DAM-FIX_a | adv6_DAM-FIX_a | Oct 31 13:05 | yes | 44 | 96.1 | 0.018167 |
+| direct-adv | 6_UI-GEOMETRY_b | adv6_UI-GEOMETRY_b | Oct 31 13:05 | yes | 40 | 95.5 | 0.023341 |
+| direct-adv | 6_PKG-FIX_b | adv6_PKG-FIX_b | Oct 31 13:05 | yes | 39 | 95.2 | 0.022054 |
+| direct-adv | 6_PKG-FIX_a | adv6_PKG-FIX_a | Oct 31 13:05 | yes | 14 | 89.5 | 0.010526 |
+| direct-adv | 6_UI-GEOMETRY_a | adv6_UI-GEOMETRY_a | Oct 31 13:05 | yes | 24 | 93.0 | 0.013518 |
 
 ## Method
 
