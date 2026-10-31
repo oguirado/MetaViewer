@@ -19,17 +19,17 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 864 | 55 | 809 |
-| Lanes finished OK | 864 | 55 | 809 |
-| Agent steps | 38,080 | 2,705 | 35,375 |
-| Lane-hours of agent work | 97.2 | 5.2 | 91.9 |
-| Fresh input tokens | 160,782,608 | 11,482,034 | 149,300,574 |
-| Cache-read input tokens | 3,200,033,399 | 226,255,212 | 2,973,778,187 |
+| Lanes launched | 881 | 55 | 826 |
+| Lanes finished OK | 881 | 55 | 826 |
+| Agent steps | 38,614 | 2,705 | 35,909 |
+| Lane-hours of agent work | 98.4 | 5.2 | 93.2 |
+| Fresh input tokens | 162,853,716 | 11,482,034 | 151,371,682 |
+| Cache-read input tokens | 3,232,180,321 | 226,255,212 | 3,005,925,109 |
 | Prompt cache hit % | 95.2 | 95.2 | 95.2 |
-| Output tokens | 32,852,845 | 2,135,708 | 30,717,137 |
-| Thinking tokens | 18,953,821 | 1,050,039 | 17,903,782 |
-| Cost (USD) | 29.0489 | 2.0279 | 27.021 |
-| Cost per lane (USD) | 0.0336 | 0.0369 | 0.0334 |
+| Output tokens | 33,178,203 | 2,135,708 | 31,042,495 |
+| Thinking tokens | 19,145,493 | 1,050,039 | 18,095,454 |
+| Cost (USD) | 29.3854 | 2.0279 | 27.3575 |
+| Cost per lane (USD) | 0.0334 | 0.0369 | 0.0331 |
 
 Rooms: 135. Peak concurrent lanes [MEASURED from lane start/end]: 32.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
@@ -38,7 +38,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 488 | 94.0 | 13.2594 |
+| build | 505 | 94.0 | 13.5959 |
 | context | 42 | 95.9 | 1.9093 |
 | context packs + test ideation (U-DEC-0139) | 13 | 91.1 | 0.2195 |
 | demo | 4 | 90.7 | 0.0557 |
@@ -85,7 +85,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 193 | 93.9 | 5.6643 | direct Muse job |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 208 | 93.9 | 5.9574 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -179,7 +179,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui29c | UI orchestrator | Oct 28 08:58 | fix | 1 | 97.5 | 0.0624 | Terminal sessions wiring (AC-06) broke 58 committed App tests; restore the App mounting contract and finish the terminal tests so the drop can ship. |
 | mvui29sc | UI orchestrator | Oct 28 09:12 | fix | 1 | 97.3 | 0.0484 | Judge rejected the settings drop: a quick revert inside the debounce window is lost, a replaced host can receive a stale save, and boot can paint a scheme the store then replaces; fix before AC-08 can ship. |
 | mvui29d | UI orchestrator | Oct 28 09:13 | fix | 1 | 97.2 | 0.0587 | Judge notes on the terminal drop are real session lifecycle defects (events before registration, stale transport, cross-transport close, leaked port on close during attach, fixture broker unwired); fix before AC-06 ships. |
-| direct-adv | metaviewer-0 | Oct 28 09:30 | build | 160 | 92.7 | 3.4036 | adversarial advocate review before integration |
+| direct-adv | metaviewer-0 | Oct 28 09:30 | build | 162 | 92.7 | 3.447 | adversarial advocate review before integration |
 | direct-rv11 | metaviewer-0 | Oct 28 11:01 | build | 7 | 93.7 | 0.129 | cross-review verification |
 | direct-tg6 | metaviewer-0 | Oct 28 11:10 | build | 6 | 95.2 | 0.2593 | test-gap and mutation map |
 | direct-w5 | metaviewer-0 | Oct 28 11:20 | build | 8 | 93.6 | 0.2196 | W5 docs fact-check |
@@ -1048,6 +1048,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-adv | 5_SIT-FIX_b | adv5_SIT-FIX_b | Oct 31 13:01 | yes | 46 | 94.9 | 0.024729 |
 | direct-adv | 5_CAP-FIX_b | adv5_CAP-FIX_b | Oct 31 13:01 | yes | 52 | 95.9 | 0.031176 |
 | direct-adv | 5_TEST-HYGIENE-R2_a | adv5_TEST-HYGIENE-R2_a | Oct 31 13:01 | yes | 20 | 92.1 | 0.015209 |
+| direct-adv | 5_TEST-HYGIENE-R2_b | adv5_TEST-HYGIENE-R2_b | Oct 31 13:01 | yes | 44 | 95.3 | 0.021679 |
 | direct-adv | 5_E2E-REAL-ELECTRON-R3_b | adv5_E2E-REAL-ELECTRON-R3_b | Oct 31 13:01 | yes | 39 | 95.6 | 0.019961 |
 | direct-adv | 5_E2E-REAL-ELECTRON-R3_a | adv5_E2E-REAL-ELECTRON-R3_a | Oct 31 13:01 | yes | 38 | 95.8 | 0.016619 |
 | direct-adv | 5_ESH-FIX_b | adv5_ESH-FIX_b | Oct 31 13:01 | yes | 63 | 94.6 | 0.044114 |
@@ -1064,10 +1065,26 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | alogue_patterns | tl_catalogue_patterns | Oct 31 13:03 | yes | 22 | 89.3 | 0.01609 |
 | direct-direct | snel_layers | tl_fresnel_layers | Oct 31 13:03 | yes | 29 | 92.9 | 0.019315 |
 | direct-adv | 6_DAM-FIX_a | adv6_DAM-FIX_a | Oct 31 13:05 | yes | 44 | 96.1 | 0.018167 |
+| direct-adv | 6_DAM-FIX_b | adv6_DAM-FIX_b | Oct 31 13:05 | yes | 33 | 95.0 | 0.021688 |
 | direct-adv | 6_UI-GEOMETRY_b | adv6_UI-GEOMETRY_b | Oct 31 13:05 | yes | 40 | 95.5 | 0.023341 |
 | direct-adv | 6_PKG-FIX_b | adv6_PKG-FIX_b | Oct 31 13:05 | yes | 39 | 95.2 | 0.022054 |
 | direct-adv | 6_PKG-FIX_a | adv6_PKG-FIX_a | Oct 31 13:05 | yes | 14 | 89.5 | 0.010526 |
 | direct-adv | 6_UI-GEOMETRY_a | adv6_UI-GEOMETRY_a | Oct 31 13:05 | yes | 24 | 93.0 | 0.013518 |
+| direct-direct | workspaces | jd_j4_workspaces | Oct 31 13:11 | yes | 25 | 93.3 | 0.015287 |
+| direct-direct | fresnel_deep | jd_j2_fresnel_deep | Oct 31 13:11 | yes | 51 | 95.6 | 0.023113 |
+| direct-direct | wsl2 | jd_j1_wsl2 | Oct 31 13:11 | yes | 59 | 96.8 | 0.037263 |
+| direct-direct | ram_admission | jd_j1_ram_admission | Oct 31 13:11 | yes | 14 | 84.9 | 0.015645 |
+| direct-direct | display_x11 | jd_j1_display_x11 | Oct 31 13:11 | yes | 40 | 94.8 | 0.02044 |
+| direct-direct | cpu_mem | jd_j1_cpu_mem | Oct 31 13:11 | yes | 19 | 87.6 | 0.014443 |
+| direct-direct | newton_pairing | jd_j3_newton_pairing | Oct 31 13:11 | yes | 29 | 93.0 | 0.021555 |
+| direct-direct | images_arch | jd_j1_images_arch | Oct 31 13:11 | yes | 34 | 92.6 | 0.024528 |
+| direct-direct | docker_net | jd_j1_docker_net | Oct 31 13:11 | yes | 35 | 93.9 | 0.026983 |
+| direct-direct | pins_gpu | jd_j1_pins_gpu | Oct 31 13:11 | yes | 28 | 92.8 | 0.016506 |
+| direct-direct | judge_path | jd_j1_judge_path | Oct 31 13:11 | yes | 24 | 91.8 | 0.017632 |
+| direct-direct | paths_env | jd_j1_paths_env | Oct 31 13:11 | yes | 23 | 92.3 | 0.014191 |
+| direct-direct | enigo_x11 | idist_enigo_x11 | Oct 31 13:21 | yes | 18 | 86.9 | 0.0136 |
+| direct-direct | mv_gap | idist_mv_gap | Oct 31 13:21 | yes | 31 | 93.5 | 0.01747 |
+| direct-direct | rd_architecture | idist_rd_architecture | Oct 31 13:21 | yes | 27 | 93.2 | 0.014453 |
 
 ## Method
 
