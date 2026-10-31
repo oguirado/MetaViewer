@@ -1364,6 +1364,7 @@ settingsHost.js	ui/src/settings/settingsHost.js
 settingsModel.js	ui/src/settings/settingsModel.js
 SurfaceCanvas.vue	ui/src/surfaces/SurfaceCanvas.vue
 frameTile.js	ui/src/surfaces/frameTile.js
+pointerEcho.js	ui/src/surfaces/pointerEcho.js
 tileScheduler.js	ui/src/surfaces/tileScheduler.js
 BrokerL-921ee8c1c9e6	ui/src/terminal/BrokerLaunchControls.vue
 SideTer-dd1d47225092	ui/src/terminal/SideTerminalOverlay.vue
@@ -1422,6 +1423,9 @@ ident-dialog.test.js	ui/test/ident-dialog.test.js
 ident-persist.test.js	ui/test/ident-persist.test.js
 inputar-41c9945ee3e5	ui/test/inputarm-wall-input.test.js
 inputu2-port.test.js	ui/test/inputu2-port.test.js
+inputu3-c2420a5d6d39	ui/test/inputu3-canvas-echo.test.js
+inputu3-harness.mjs	ui/test/inputu3-harness.mjs
+inputu3-9651b47c7e57	ui/test/inputu3-pointer-echo.test.js
 intents.test.js	ui/test/intents.test.js
 layout-load.test.js	ui/test/layout-load.test.js
 mainsta-a4716a4c64fe	ui/test/main-startup-order.test.js
