@@ -1644,6 +1644,8 @@ operator-stubs.mjs	ui/test/operator-stubs.mjs
 originc-568d530772a3	ui/test/origin-contract.test.js
 packageOutput.test.js	ui/test/packageOutput.test.js
 pkg-fullstack.test.js	ui/test/pkg-fullstack.test.js
+pkgfixm-e990d26c7b4f	ui/test/pkgfix-main-quit.test.js
+pkgfixp-8cb06ca34469	ui/test/pkgfix-packaged-entry.test.js
 polish2.test.js	ui/test/polish2.test.js
 preload-ports.test.js	ui/test/preload-ports.test.js
 preload-f111f04ca6a8	ui/test/preload-v02-notice.test.js
