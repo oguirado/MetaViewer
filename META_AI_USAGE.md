@@ -19,17 +19,17 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 881 | 55 | 826 |
-| Lanes finished OK | 881 | 55 | 826 |
-| Agent steps | 38,614 | 2,705 | 35,909 |
-| Lane-hours of agent work | 98.4 | 5.2 | 93.2 |
-| Fresh input tokens | 162,853,716 | 11,482,034 | 151,371,682 |
-| Cache-read input tokens | 3,232,180,321 | 226,255,212 | 3,005,925,109 |
+| Lanes launched | 901 | 55 | 846 |
+| Lanes finished OK | 901 | 55 | 846 |
+| Agent steps | 39,208 | 2,705 | 36,503 |
+| Lane-hours of agent work | 99.5 | 5.2 | 94.3 |
+| Fresh input tokens | 164,834,559 | 11,482,034 | 153,352,525 |
+| Cache-read input tokens | 3,261,470,189 | 226,255,212 | 3,035,214,977 |
 | Prompt cache hit % | 95.2 | 95.2 | 95.2 |
-| Output tokens | 33,178,203 | 2,135,708 | 31,042,495 |
-| Thinking tokens | 19,145,493 | 1,050,039 | 18,095,454 |
-| Cost (USD) | 29.3854 | 2.0279 | 27.3575 |
-| Cost per lane (USD) | 0.0334 | 0.0369 | 0.0331 |
+| Output tokens | 33,550,210 | 2,135,708 | 31,414,502 |
+| Thinking tokens | 19,342,012 | 1,050,039 | 18,291,973 |
+| Cost (USD) | 29.7164 | 2.0279 | 27.6886 |
+| Cost per lane (USD) | 0.033 | 0.0369 | 0.0327 |
 
 Rooms: 135. Peak concurrent lanes [MEASURED from lane start/end]: 32.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
@@ -38,7 +38,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 505 | 94.0 | 13.5959 |
+| build | 525 | 94.0 | 13.927 |
 | context | 42 | 95.9 | 1.9093 |
 | context packs + test ideation (U-DEC-0139) | 13 | 91.1 | 0.2195 |
 | demo | 4 | 90.7 | 0.0557 |
@@ -85,7 +85,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 208 | 93.9 | 5.9574 | direct Muse job |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 228 | 93.9 | 6.2885 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -1082,9 +1082,29 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | pins_gpu | jd_j1_pins_gpu | Oct 31 13:11 | yes | 28 | 92.8 | 0.016506 |
 | direct-direct | judge_path | jd_j1_judge_path | Oct 31 13:11 | yes | 24 | 91.8 | 0.017632 |
 | direct-direct | paths_env | jd_j1_paths_env | Oct 31 13:11 | yes | 23 | 92.3 | 0.014191 |
+| direct-direct | enigo_x11 | idist2_enigo_x11 | Oct 31 13:21 | yes | 18 | 86.9 | 0.0136 |
 | direct-direct | enigo_x11 | idist_enigo_x11 | Oct 31 13:21 | yes | 18 | 86.9 | 0.0136 |
 | direct-direct | mv_gap | idist_mv_gap | Oct 31 13:21 | yes | 31 | 93.5 | 0.01747 |
+| direct-direct | novnc_keyboard | idist2_novnc_keyboard | Oct 31 13:21 | yes | 28 | 93.6 | 0.012764 |
+| direct-direct | novnc_keyboard | idist_novnc_keyboard | Oct 31 13:21 | yes | 28 | 93.6 | 0.012764 |
+| direct-direct | novnc_pointer | idist2_novnc_pointer | Oct 31 13:21 | yes | 29 | 93.7 | 0.015678 |
+| direct-direct | novnc_pointer | idist_novnc_pointer | Oct 31 13:21 | yes | 29 | 93.7 | 0.015678 |
+| direct-direct | papers_control_a | idist_papers_control_a | Oct 31 13:21 | yes | 32 | 94.0 | 0.019093 |
+| direct-direct | papers_control_b | idist_papers_control_b | Oct 31 13:21 | yes | 27 | 92.0 | 0.018021 |
+| direct-direct | rd_architecture | idist2_rd_architecture | Oct 31 13:21 | yes | 27 | 93.2 | 0.014453 |
 | direct-direct | rd_architecture | idist_rd_architecture | Oct 31 13:21 | yes | 27 | 93.2 | 0.014453 |
+| direct-direct | rd_clipboard | idist2_rd_clipboard | Oct 31 13:21 | yes | 39 | 95.2 | 0.020292 |
+| direct-direct | rd_clipboard | idist_rd_clipboard | Oct 31 13:21 | yes | 39 | 95.2 | 0.020292 |
+| direct-direct | rd_keyboard | idist2_rd_keyboard | Oct 31 13:21 | yes | 25 | 92.1 | 0.015143 |
+| direct-direct | rd_keyboard | idist_rd_keyboard | Oct 31 13:21 | yes | 25 | 92.1 | 0.015143 |
+| direct-direct | rd_linux_inject | idist2_rd_linux_inject | Oct 31 13:21 | yes | 26 | 91.3 | 0.017996 |
+| direct-direct | rd_linux_inject | idist_rd_linux_inject | Oct 31 13:21 | yes | 26 | 91.3 | 0.017996 |
+| direct-direct | rd_modifiers | idist2_rd_modifiers | Oct 31 13:21 | yes | 28 | 93.3 | 0.013526 |
+| direct-direct | rd_modifiers | idist_rd_modifiers | Oct 31 13:21 | yes | 28 | 93.3 | 0.013526 |
+| direct-direct | rd_pointer | idist2_rd_pointer | Oct 31 13:21 | yes | 38 | 95.3 | 0.019697 |
+| direct-direct | rd_pointer | idist_rd_pointer | Oct 31 13:21 | yes | 38 | 95.3 | 0.019697 |
+| direct-direct | x11vnc_inject | idist2_x11vnc_inject | Oct 31 13:21 | yes | 32 | 94.5 | 0.017852 |
+| direct-direct | x11vnc_inject | idist_x11vnc_inject | Oct 31 13:21 | yes | 32 | 94.5 | 0.017852 |
 
 ## Method
 
