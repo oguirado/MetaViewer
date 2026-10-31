@@ -772,6 +772,7 @@ bounds_test.go	daemon-adapter/internal/capsule/bounds_test.go
 capsule.go	daemon-adapter/internal/capsule/capsule.go
 capsule_test.go	daemon-adapter/internal/capsule/capsule_test.go
 clock_test.go	daemon-adapter/internal/capsule/clock_test.go
+dam_wire_code_test.go	daemon-adapter/internal/capsule/dam_wire_code_test.go
 egress.go	daemon-adapter/internal/capsule/egress.go
 egress_policy.go	daemon-adapter/internal/capsule/egress_policy.go
 egress_started.go	daemon-adapter/internal/capsule/egress_started.go
@@ -824,6 +825,7 @@ runner_test.go	daemon-adapter/internal/cli/runner_test.go
 b1stale-813879d52247	daemon-adapter/internal/daemon/b1_stale_verdict_test.go
 client_authority.go	daemon-adapter/internal/daemon/client_authority.go
 compensation_test.go	daemon-adapter/internal/daemon/compensation_test.go
+dam_admission_test.go	daemon-adapter/internal/daemon/dam_admission_test.go
 dispatch.go	daemon-adapter/internal/daemon/dispatch.go
 dispatc-9bef9af11cbf	daemon-adapter/internal/daemon/dispatch_compensation_test.go
 dispatch_list_test.go	daemon-adapter/internal/daemon/dispatch_list_test.go
