@@ -15,6 +15,7 @@
 - Return visible `TERMINAL_UNAVAILABLE` when native terminal support is absent from a package.
 - Refuse browser proposals before IPC when a live surface or frame is absent and show typed refusal codes.
 - Forward only validated live text-input modes and hold package smoke to check create delivery and adapter liveness.
+- Make packaged identities usable and typed: fall back to the operator checkout's `tools/mv_identity.py`, default `MV_MW_HOME`, stop a login with SIGINT so its reservation is released, return `IDENTITY_REFUSED` apart from `IDENTITY_UNAVAILABLE`, and normalize dialog input.
 
 - Refuse required-adapter boot with a typed, redacted configuration reason and honest startup guidance.
 - Identify native capability replies without network modes as `legacy_binary`, preserving legacy behavior.

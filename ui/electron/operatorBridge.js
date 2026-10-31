@@ -60,16 +60,62 @@ export function publicIdentity(row) {
   assertOperatorReply('identity.show',{ok:true,rows:[result]});
   return result;
 }
+/** [TARGET, unit decision] The packaged resources do not ship tools/mv_identity.py;
+ * the operator-owned checkout named by MV_OPERATOR_REPO (the same trust root as
+ * the demo tool) supplies it when the bundled path is absent.
+ * @param {{tool:string,env?:NodeJS.ProcessEnv,exists?:(path:string)=>boolean}} options */
+export function resolveIdentityTool({tool,env=process.env,exists=p=>fs.existsSync(p)}) {
+  if(typeof tool==='string' && exists(tool))return tool;
+  const repo=env.MV_OPERATOR_REPO;
+  if(typeof repo==='string' && isAbsolute(repo) && resolve(repo)===repo) {
+    const candidate=join(repo,'tools/mv_identity.py');
+    if(exists(candidate))return candidate;
+  }
+  return tool;
+}
+/** [TARGET, unit decision] MV_MW_HOME is required by the tool only to prove
+ * store separation; when the launcher does not set it, default to the tool
+ * checkout's gitignored memoryweb/ directory. The runner still copies only its
+ * fixed allowlist.
+ * @param {NodeJS.ProcessEnv} env @param {string} tool */
+export function identityEnvironment(env,tool) {
+  if(typeof env.MV_MW_HOME==='string' || typeof tool!=='string' || !isAbsolute(tool))return env;
+  return {...env,MV_MW_HOME:join(dirname(dirname(tool)),'memoryweb')};
+}
+/** Tool codes that mean the tool or its native binaries could not operate
+ * (missing configuration, unreadable store, native binary absent). */
+const TOOL_UNAVAILABLE = new Set(['IDENTITY_UNAVAILABLE','NATIVE_UNAVAILABLE','ABSOLUTE_PATH_REQUIRED']);
+/** A refusal is the tool's own closed reply: exit != 0 with a single JSON line
+ * {schema, ok:false, error} naming a decision (bound, invalid, native refusal).
+ * Anything else means the tool could not run.
+ * @param {string} stdout */
+function toolRefused(stdout) {
+  try {
+    const reply=JSON.parse(stdout);
+    return operatorKeys(reply,['schema','ok','error']) && reply.schema==='metaviewer.identity/v1' && reply.ok===false && typeof reply.error==='string' && /^[A-Z][A-Z0-9_-]{0,63}$/.test(reply.error) && !TOOL_UNAVAILABLE.has(reply.error);
+  }catch{return false;}
+}
+/** Bound for the tool's own cleanup (view-stop waits up to 180 s) before SIGKILL. */
+const LOGIN_STOP_GRACE_MS=200000;
 /** Spawn one fixed tool, never a shell. Login stderr is inspected solely for
  * the tool's loopback operator-view announcement; it is never sent to the UI.
+ * Login is stopped with SIGINT (the tool's documented Ctrl+C close, which runs
+ * its cleanup of the login-pending reservation); SIGTERM would skip that cleanup.
  * @param {any} options */
 export function identityRunner({tool,env=process.env,spawnTool=spawn,openLogin=async()=>{}}) {
-  return (/** @type {string} */method,/** @type {any} */v)=>new Promise((accept,reject)=>{
+  /** @type {Set<()=>void>} */ const live=new Set();
+  const run=(/** @type {string} */method,/** @type {any} */v)=>new Promise((accept,reject)=>{
     const argv=[tool,method,...(method==='list'?[]:['--id',v.id]),...(method==='create'?['--label',v.label,'--domains',v.domains.join(',')]:[])];
-    const childEnv=Object.fromEntries(['PATH','LANG','LC_ALL','TMPDIR','TZ','HOME','XDG_RUNTIME_DIR','XDG_STATE_HOME','XDG_CONFIG_HOME','MV_SRF_BIN_DIR','MV_SRF_STATE_DIR','SRF_IDENTITY_STORE_ROOT','MV_MW_HOME'].filter(k=>typeof env[k]==='string').map(k=>[k,env[k]]));
-    const child=spawnTool('python3',argv,{shell:false,env:childEnv,stdio:['ignore','pipe','pipe'],detached:true});
+    const child=spawnTool('python3',argv,{shell:false,env:Object.fromEntries(['PATH','LANG','LC_ALL','TMPDIR','TZ','HOME','XDG_RUNTIME_DIR','XDG_STATE_HOME','XDG_CONFIG_HOME','MV_SRF_BIN_DIR','MV_SRF_STATE_DIR','SRF_IDENTITY_STORE_ROOT','MV_MW_HOME'].filter(k=>typeof env[k]==='string').map(k=>[k,env[k]])),stdio:['ignore','pipe','pipe'],detached:true});
     let stdout='',stderr='',bytes=0,settled=false,opened=false;
-    const terminate=()=>{try{if(child.pid)process.kill(-child.pid,'SIGTERM');}catch{/* Already exited. */}};
+    /** @type {ReturnType<typeof setTimeout>|undefined} */ let killTimer;
+    const signalGroup=(/** @type {NodeJS.Signals} */signal)=>{try{if(child.pid)process.kill(-child.pid,signal);}catch{/* Already exited. */}};
+    const terminate=()=>{
+      if(method!=='login'){signalGroup('SIGTERM');return;}
+      signalGroup('SIGINT');
+      if(!killTimer){killTimer=setTimeout(()=>signalGroup('SIGKILL'),LOGIN_STOP_GRACE_MS);killTimer.unref?.();}
+    };
+    live.add(terminate);
     const timer=setTimeout(()=>{terminate();finish(new Error('IDENTITY_TIMEOUT'));},method==='login'?1800000:30000);
     /** @param {any} error @param {any} [value] */
     function finish(error,value) {if(settled)return;settled=true;clearTimeout(timer);if(error)reject(error);else accept(value);}
@@ -88,10 +134,11 @@ export function identityRunner({tool,env=process.env,spawnTool=spawn,openLogin=a
       }
     }
     child.stdout.on('data',(/** @type {any} */b)=>data(b,false));child.stderr.on('data',(/** @type {any} */b)=>data(b,true));
-    child.once('error',(/** @type {any} */e)=>finish(e));
+    child.once('error',(/** @type {any} */e)=>{live.delete(terminate);finish(e);});
     child.once('close',(/** @type {number} */rc)=>{
+      live.delete(terminate);clearTimeout(killTimer);
       try {
-        if(rc!==0)throw new Error('IDENTITY_REFUSED');
+        if(rc!==0)throw new Error(toolRefused(stdout)?'IDENTITY_REFUSED':'IDENTITY_EXIT');
         const reply=JSON.parse(stdout);
         if(!operatorKeys(reply,['schema','ok','result']) || reply.schema!=='metaviewer.identity/v1' || reply.ok!==true || (method==='login' && !opened))throw new Error('IDENTITY_REPLY');
         if(method==='delete') {if(!operatorKeys(reply.result,['deleted']) || reply.result.deleted!==v.id)throw new Error('IDENTITY_REPLY');finish(null,{ok:true});}
@@ -106,6 +153,9 @@ export function identityRunner({tool,env=process.env,spawnTool=spawn,openLogin=a
       }catch(e){finish(e);}
     });
   });
+  /** App teardown: ask every in-flight child to stop through the same path. */
+  run.dispose=()=>{for(const stop of [...live])stop();};
+  return run;
 }
 /** @param {any} options */
 export function createOperatorService({env=process.env,runIdentity,buttons,notify=()=>{}}) {
@@ -139,7 +189,7 @@ export function createOperatorService({env=process.env,runIdentity,buttons,notif
     const v=args[0];
     if(method.startsWith('identity.')) {
       try {return assertOperatorReply(method,await runIdentity(method.split('.')[1],v));}
-      catch{return {ok:false,code:'IDENTITY_UNAVAILABLE'};}
+      catch(e){return {ok:false,code:/** @type {any} */(e)?.message==='IDENTITY_REFUSED'?'IDENTITY_REFUSED':'IDENTITY_UNAVAILABLE'};}
     }
     if(method.startsWith('egress.')) {
       try {
@@ -177,7 +227,7 @@ export function createOperatorService({env=process.env,runIdentity,buttons,notif
   return {request,refresh};
 }
 /** @param {any} options */
-export function installOperatorBridge({ipcMain,contents,env,tool,buttonRoot,demoRoot,clipboard,admit,openLogin,buttons=createButtonService({root:buttonRoot,demoRoot,clipboard,env}),runIdentity=identityRunner({tool,env,openLogin})}) {
+export function installOperatorBridge({ipcMain,contents,env,tool,buttonRoot,demoRoot,clipboard,admit,openLogin,spawnTool=spawn,buttons=createButtonService({root:buttonRoot,demoRoot,clipboard,env}),runIdentity=(()=>{const resolved=resolveIdentityTool({tool,env});return identityRunner({tool:resolved,env:identityEnvironment(env,resolved),spawnTool,openLogin});})()}) {
   let disposed=false;
   const service=createOperatorService({env,runIdentity,buttons,notify:(/** @type {any} */v)=>{if(!disposed)contents.send('metaviewer:handoff.state',v);}});
   /** @type {string[]} */ const installed=[];
@@ -191,5 +241,5 @@ export function installOperatorBridge({ipcMain,contents,env,tool,buttonRoot,demo
     }
   }catch(e){for(const c of installed)ipcMain.removeHandler(c);throw e;}
   const timer=setInterval(()=>service.refresh(),1000);timer.unref();
-  return {async dispose(){disposed=true;clearInterval(timer);for(const c of installed)ipcMain.removeHandler(c);await buttons.dispose();}};
+  return {async dispose(){disposed=true;clearInterval(timer);for(const c of installed)ipcMain.removeHandler(c);runIdentity.dispose?.();await buttons.dispose();}};
 }

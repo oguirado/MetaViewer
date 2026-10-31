@@ -3,11 +3,15 @@ import { computed, ref, watch } from 'vue';
 import { UiButton, UiTextInput } from 'capsule-ui-kit/ui';
 import ConfirmDialog from '../../.kit/capsule-ui-kit/src/overlays/ConfirmDialog.vue';
 import { operatorHost } from '../operatorHost.js';
+import { identityErrorText, normalizeDomains, validDomains, validLabel } from './identityForm.js';
 const props=defineProps({open:{type:Boolean,default:false},host:{type:Object,default:operatorHost}});
 const emit=defineEmits(['close']);
 const rows=ref(/** @type {any[]} */([])), id=ref(''), label=ref(''), domains=ref('');
 const busy=ref(false), login=ref(false), error=ref(''), pendingDelete=ref('');
 const validId=computed(()=>/^[a-z0-9][a-z0-9-]{1,39}$/.test(id.value));
+const cleanLabel=computed(()=>label.value.trim());
+const cleanDomains=computed(()=>normalizeDomains(domains.value));
+const validForm=computed(()=>validId.value && validLabel(cleanLabel.value) && validDomains(cleanDomains.value));
 /** @param {string} method @param {any} [request] */
 async function invoke(method,request) {
   if(busy.value)return;
@@ -20,14 +24,14 @@ async function invoke(method,request) {
     if(!listed.ok)throw new Error(listed.code);rows.value=listed.rows;
     if(method==='create'){id.value='';label.value='';domains.value='';}
     pendingDelete.value='';
-  }catch(reason){error.value=`The identity tool could not run: ${reason instanceof Error ? reason.message : 'AUSENTE — no reason supplied'}`;}
+  }catch(reason){error.value=identityErrorText(reason instanceof Error ? reason.message : '');}
   finally{busy.value=false;login.value=false;}
 }
-function create(){if(!validId.value || !label.value || !domains.value)return;void invoke('create',{id:id.value,label:label.value,domains:domains.value.split(',').map(x=>x.trim())});}
+function create(){if(!validForm.value)return;void invoke('create',{id:id.value,label:cleanLabel.value,domains:cleanDomains.value});}
 watch(()=>props.open,open=>{if(open)void invoke('list');},{immediate:true});
 </script>
 <template>
-  <ConfirmDialog id="identities-dialog" :open="open" title="Identities" description="Several accounts per site are allowed. Enter credentials only in the operator login view." confirm-label="Create identity" back-label="Close" :busy="busy" :confirm-disabled="!validId || !label || !domains" @confirm="create" @back="emit('close')">
+  <ConfirmDialog id="identities-dialog" :open="open" title="Identities" description="Several accounts per site are allowed. Enter credentials only in the operator login view." confirm-label="Create identity" back-label="Close" :busy="busy" :confirm-disabled="!validForm" @confirm="create" @back="emit('close')">
     <p v-if="login" role="status">Operator login view is open. Agent input stays refused until it closes.</p>
     <ul aria-label="Saved identities">
       <li v-for="row in rows" :key="row.id">
