@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Reopen a closed browser tile: a create refused as a bound profile now returns a typed `SURFACE_PROFILE_BOUND` and shows the live tile again, a stopping capsule's late error no longer settles the next create, and the wall offers Add capsule after every tile was closed.
 - Preserve the shared packaged RAM admission ledger and drain adapter shutdown before runtime cleanup.
 - Register and validate retail frame reports and cover the complete preload invoke surface.
 - Track initial capsule creation asynchronously with an independent final deadline and typed busy refusals.

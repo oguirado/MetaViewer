@@ -116,7 +116,7 @@ export const WALL_PRESENTATION_VERBS = Object.freeze(['close', 'hide', 'show', '
  * @property {WallProjectionView | null} [projectionView]
  */
 
-/** @typedef {'submit-intent' | 'activate-surface'} WallForwardedEmit */
+/** @typedef {'submit-intent' | 'activate-surface' | 'panel-closed'} WallForwardedEmit */
 
 /** @typedef {(name: WallForwardedEmit, payload: unknown) => void} WallEmitFn */
 
@@ -568,7 +568,12 @@ export function createWallWorkspaceController(options = {}) {
     return Object.freeze({
       onSubmitIntent: (/** @type {unknown} */ body) => { emit('submit-intent', body); },
       onActivateSurface: (/** @type {unknown} */ payload) => { emit('activate-surface', payload); },
-      onPresentationIntent: (/** @type {unknown} */ intent) => applyPresentationIntent(intent),
+      onPresentationIntent: (/** @type {unknown} */ intent) => {
+        const result = applyPresentationIntent(intent);
+        // The close (x) removes only the dock panel; the shell must learn it to offer the way back.
+        if (result.ok && result.value.type === 'close') emit('panel-closed', Object.freeze({ capsuleId: /** @type {any} */ (intent).capsuleId }));
+        return result;
+      },
     });
   }
 
@@ -657,6 +662,7 @@ const emit = defineEmits([
   'active-panel-change',
   'submit-intent',
   'activate-surface',
+  'panel-closed',
 ]);
 
 const controller = createWallWorkspaceController({ projectionView: props.projectionView, allowLostSurface: props.allowLostSurface });

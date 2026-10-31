@@ -401,6 +401,30 @@ function assertLiveProposal(body) {
     throw Object.assign(new Error('NO_BROWSER_CAPSULE: no live browser capsule and frame'), {code:'NO_BROWSER_CAPSULE'});
   }
 }
+// [TARGET, unit decision] Tile close (x) leaves the capsule running, so rows stay admitted while
+// their panels are gone. Closed ids are tracked here only to show the empty-wall hint and the
+// way back (Add capsule -> open browser reveals the live tile) when every tile was closed.
+const closedPanels = ref(/** @type {string[]} */ ([]));
+/** @param {any} payload */
+function onPanelClosed(payload) {
+  const id = payload?.capsuleId;
+  if (typeof id === 'string' && !closedPanels.value.includes(id)) closedPanels.value = [...closedPanels.value, id];
+}
+/** @param {string} id */
+function markPanelOpen(id) {
+  if (closedPanels.value.includes(id)) closedPanels.value = closedPanels.value.filter(closed => closed !== id);
+}
+const allTilesClosed = computed(() => rows.value.length > 0 && rows.value.every(row => closedPanels.value.includes(row.id)));
+/** Reveals every live admitted surface in the wall (a closed tile's panel is gone, its row is not).
+ * @returns {boolean} true when at least one tile is shown. */
+function reopenLiveSurfaces() {
+  let shown = false;
+  for (const row of rows.value) {
+    if (!['active', 'standby', 'ceded'].includes(row.backendLifecycle)) continue;
+    if (wall.value?.revealSurface(row.id, 'tab')?.ok === true) { shown = true; markPanelOpen(row.id); }
+  }
+  return shown;
+}
 /** @param {unknown} intent */
 function onCreateCapsule(intent) {
   if (nestedMode.displayOnly) return;
@@ -411,7 +435,17 @@ function onCreateCapsule(intent) {
       if (body?.kind !== 'browser' || !props.authorityHost?.createSurface) {
         throw Object.assign(new Error('NO_BROWSER_CAPSULE'), {code:'NO_BROWSER_CAPSULE'});
       }
-      return props.authorityHost.createSurface();
+      try {
+        return await props.authorityHost.createSurface();
+      } catch (error) {
+        // [TARGET, unit decision] The tile close (x) is presentation-only: the capsule keeps
+        // running under its profile, so a second create is refused as bound. Reopen means
+        // showing the live surface again, never a second create.
+        if (/** @type {{code?:unknown}} */ (error)?.code === 'SURFACE_PROFILE_BOUND' && reopenLiveSurfaces()) {
+          return /** @type {const} */ ({ code: 'INTENT_ACKNOWLEDGED', message: 'Request sent.', tone: 'success' });
+        }
+        throw error;
+      }
     });
     return;
   }
@@ -734,7 +768,7 @@ watch(() => snapshot.value, () => {
 const wallView = computed(() => nestedMode.displayOnly ? 'nested' : creativeOpen.value ? 'creative' : rows.value.length ? 'workspace' : 'empty');
 let firstFrame = 0;
 function cancelFirstFrame() { if (firstFrame) window.cancelAnimationFrame(firstFrame); firstFrame = 0; }
-watch(wallView, () => { settled.value = false; revealed.clear(); cancelFirstFrame(); }, { flush: 'sync' });
+watch(wallView, () => { settled.value = false; revealed.clear(); closedPanels.value = []; cancelFirstFrame(); }, { flush: 'sync' });
 onMounted(() => {
   watch(wallView, view => {
     if (view === 'workspace' || typeof window.requestAnimationFrame !== 'function') return; // The workspace owns its restoration witness.
@@ -771,7 +805,7 @@ function openCapsule(payload) {
   const id = payload?.type?.id ?? payload?.id;
   if (typeof id === 'string') selectedCapsuleId.value = id;
   if (id === 'add') { launcherOpen.value = true; return; }
-  if (rows.value.some(row => row.id === id)) wall.value?.revealSurface(id, payload?.placement ?? 'tab');
+  if (rows.value.some(row => row.id === id) && wall.value?.revealSurface(id, payload?.placement ?? 'tab')?.ok === true) markPanelOpen(id);
 }
 const chromeWorkspace = markRaw(defineComponent({
   inheritAttrs: false,
@@ -815,12 +849,12 @@ const chromeWorkspace = markRaw(defineComponent({
         <WallWorkspace v-else-if="!creativeOpen" :key="wallView" :hidden="!rows.length" ref="wall" :workspace-component="chromeWorkspace" :scope="props.scope" :default-profile="props.layout" :storage="workspaceStorage"
           owner-window-id="main-wall" :projection-view="feed" :capture-state="captureAvailable ? captureState : undefined" :display-only="nestedMode.displayOnly" :allow-lost-surface="admitLostRows" :intent-builders="props.runtime?.intentBuilders ?? intentBuilders"
           :control-registry="props.runtime?.controlRegistry ?? controlRegistry" :scheduler="props.runtime?.scheduler ?? scheduler" :tile-scheduler="props.runtime?.tileScheduler ?? tileScheduler"
-          :color-scheme="scheme === 'mv-dark' ? 'dark' : 'light'" :density="density" @ready="onWallReady" @wall-settled="onWorkspaceSettled" @activate-surface="selectCapsule" @submit-intent="dispatch">
+          :color-scheme="scheme === 'mv-dark' ? 'dark' : 'light'" :density="density" @ready="onWallReady" @wall-settled="onWorkspaceSettled" @activate-surface="selectCapsule" @panel-closed="onPanelClosed" @submit-intent="dispatch">
           <template #surface="{ surface, capsuleId }">
             <SurfaceCanvas v-if="surface && (!multislotOpen || capsuleId !== selectedSurface?.id)" :surface-id="capsuleId" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :frame-width="surfaceWitness(surface).width" :frame-height="surfaceWitness(surface).height" :state="canvasStateFor(surface)" :input-enabled="inputEnabledFor(surface)" :stream-id="surfaceStreamId(surface)" />
           </template>
         </WallWorkspace>
-        <EmptyWallView v-if="!rows.length && !nestedMode.displayOnly && !creativeOpen" @add-capsule="launcherOpen = true" />
+        <EmptyWallView v-if="(!rows.length || allTilesClosed) && !nestedMode.displayOnly && !creativeOpen" @add-capsule="launcherOpen = true" />
         <section v-if="creativeOpen && selectedSurface && !nestedMode.displayOnly" class="mv-creative-screen" aria-label="Creative capsule">
           <CreativeCapsule :capsule-id="selectedSurface.id" :frames="creativeFrames" title="Storyboard" @submit-intent="dispatch" />
         </section>

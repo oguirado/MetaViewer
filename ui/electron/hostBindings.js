@@ -172,6 +172,10 @@ export async function createMainBindings({env = process.env, createMessageChanne
     electronMod?.app?.once?.('before-quit', () => { void terminal.dispose(); });
     /** @type {Set<(entry:any)=>any>} */ const listeners = new Set();
     /** @type {Map<string,any>} */ const surfaces = new Map();
+    // [TARGET, unit decision] Ids of destroyed or lost surfaces (bounded, oldest first). A late error
+    // of a capsule that is still stopping names an id that is no longer in `surfaces`; it must not
+    // settle the create of the reopened capsule as if it were the create's own adapter error.
+    /** @type {Set<string>} */ const departed = new Set();
     /** @type {Map<string,any>} */ const latestFrames = new Map();
     /** @type {Map<string,number>} */ const streamIds = new Map();
     /** @type {Map<string,any>} */ const channels = new Map();
@@ -455,6 +459,8 @@ export async function createMainBindings({env = process.env, createMessageChanne
         if (['destroyed','lost'].includes(state.state)) {
           if (body.event === 'state_changed') publishState(state);
           surfaces.delete(state.surface_id);
+          departed.delete(state.surface_id); departed.add(state.surface_id);
+          if (departed.size > MAX_ITEMS) departed.delete(/** @type {string} */ (departed.values().next().value));
           surfaceInputQueues.delete(state.surface_id);
           latestFrames.delete(state.surface_id);
           streamIds.delete(state.surface_id);
@@ -471,6 +477,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
         } else {
           if (!surfaces.has(state.surface_id) && surfaces.size >= MAX_ITEMS) throw fail();
           surfaces.set(state.surface_id,Object.freeze({...state}));
+          departed.delete(state.surface_id);
           subscribeSurface(state);
           if (body.event === 'state_changed') publishState(state);
         }
@@ -494,11 +501,15 @@ export async function createMainBindings({env = process.env, createMessageChanne
               && body.data?.surface?.profile_id === item.body.params.profile_id) result = body;
           else if (body.schema === 'surface_event/v0.2' && body.event === 'error' && !layoutError
               && typeof body.data?.surface_id === 'string'
-              && !surfaces.has(body.data.surface_id)) result = body;
+              && !surfaces.has(body.data.surface_id) && !departed.has(body.data.surface_id)) result = body;
           else if (body.schema === 'action_verdict/v0.2' && body.proposal_id === key) result = body;
           if (result !== undefined) {
             console.log('METAVIEWER_SURFACE_CREATE_WIRE_REPLY');
-            clearTimeout(item.timer); pending.delete(key); item.resolve(result); continue;
+            clearTimeout(item.timer); pending.delete(key);
+            const refused = createProfileRefusal(result);
+            if (refused !== null) item.reject(Object.assign(new Error(refused), {code:refused}));
+            else item.resolve(result);
+            continue;
           }
         }
         if (layoutError && item.body.schema === 'ui_intent/v0.2' && layoutError.detail === key && layoutError.surface_id === item.body.params?.slot_id) {
@@ -1038,6 +1049,18 @@ export async function createMainBindings({env = process.env, createMessageChanne
     }
     throw fail();
   }
+}
+
+/** [TARGET, unit decision] The adapter reports a reopen onto a profile whose capsule is still
+ * bound (running, stopping or lost) as a lower-case `adapter` error code whose detail names the
+ * cause; the renderer needs a typed code to bring the existing tile back instead of a generic
+ * failure. Every other create reply keeps its pass-through shape.
+ * @param {any} body @returns {'SURFACE_PROFILE_BOUND'|'SURFACE_PROFILE_QUARANTINED'|null} */
+export function createProfileRefusal(body) {
+  if (body?.schema !== 'surface_event/v0.2' || body.event !== 'error' || typeof body.data?.detail !== 'string') return null;
+  if (body.data.detail.includes('profile already bound')) return 'SURFACE_PROFILE_BOUND';
+  if (body.data.detail.includes('remains quarantined') || body.data.detail.includes('unresolved native outcome')) return 'SURFACE_PROFILE_QUARANTINED';
+  return null;
 }
 
 /** Validate and snapshot exactly the first-surface create vocabulary.
