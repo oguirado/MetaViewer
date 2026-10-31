@@ -1421,6 +1421,7 @@ hostMax-44a31ed4a05c	ui/test/hostMaxFpsOrder.test.mjs
 ident-dialog.test.js	ui/test/ident-dialog.test.js
 ident-persist.test.js	ui/test/ident-persist.test.js
 inputar-41c9945ee3e5	ui/test/inputarm-wall-input.test.js
+inputu2-port.test.js	ui/test/inputu2-port.test.js
 intents.test.js	ui/test/intents.test.js
 layout-load.test.js	ui/test/layout-load.test.js
 mainsta-a4716a4c64fe	ui/test/main-startup-order.test.js
