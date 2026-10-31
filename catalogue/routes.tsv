@@ -98,6 +98,7 @@ test_record.py	agents/tests/test_record.py
 testres-d06e75457090	agents/tests/test_resource_bounds.py
 testrou-1e6213ca9682	agents/tests/test_round1_regressions.py
 testset-f61b79de8e01	agents/tests/test_settings_parity.py
+test_sitfix_owner.py	agents/tests/test_sitfix_owner.py
 test_tg_cli.py	agents/tests/test_tg_cli.py
 test_tg_contracts.py	agents/tests/test_tg_contracts.py
 testtgd-42af8c6a31e8	agents/tests/test_tg_determinism.py
