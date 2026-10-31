@@ -132,7 +132,7 @@ e4-create.md	changes/unreleased/e4-create.md
 flakepi-0268f441f2d7	changes/unreleased/flake-pin-procbound.md
 p12-display-reader.md	changes/unreleased/p12-display-reader.md
 p12-display-tap.md	changes/unreleased/p12-display-tap.md
-u1-pty-pkg.md	changes/unreleased/u1-pty-pkg.md
+u1-pty-pkg-revert.md	changes/unreleased/u1-pty-pkg-revert.md
 actionp-0ef0ddb499b4	contracts/examples/action_proposal.invalid.schema.json
 actionp-215c1416bbcf	contracts/examples/action_proposal.valid.json
 actionr-3778f6831d07	contracts/examples/action_receipt.invalid.schema.json
@@ -1715,7 +1715,6 @@ netcopy-panel.test.js	ui/test/netcopy-panel.test.js
 operator-stubs.mjs	ui/test/operator-stubs.mjs
 originc-568d530772a3	ui/test/origin-contract.test.js
 packageOutput.test.js	ui/test/packageOutput.test.js
-packagePty.test.js	ui/test/packagePty.test.js
 pkg-fullstack.test.js	ui/test/pkg-fullstack.test.js
 pkgfixm-e990d26c7b4f	ui/test/pkgfix-main-quit.test.js
 pkgfixp-8cb06ca34469	ui/test/pkgfix-packaged-entry.test.js
