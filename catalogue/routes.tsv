@@ -1376,6 +1376,10 @@ argshel-6ecedb311e55	ui/test/arg-shell-regressions.test.js
 assertions.js	ui/test/assertions.js
 bundleLayout.test.js	ui/test/bundleLayout.test.js
 bytePlane.test.js	ui/test/bytePlane.test.js
+capfixc-07d233bbe14d	ui/test/capfix-capture-port.test.js
+capfixc-0658638aca13	ui/test/capfix-capture-wire.test.js
+capfix-helpers.mjs	ui/test/capfix-helpers.mjs
+capfixr-9aa831b2a8d3	ui/test/capfix-recording-panel.test.js
 capture-43df8ccddcb6	ui/test/capture-export.test.js
 capture.test.js	ui/test/capture.test.js
 captureShell.mjs	ui/test/captureShell.mjs
