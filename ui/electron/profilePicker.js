@@ -262,3 +262,48 @@ export function refusalReply(refusal) {
     action: copy.action,
   });
 }
+
+/**
+ * Operator sentences for every create-path refusal code [TARGET, unit decision].
+ * Reuses the picker copy above and names the default second profile (`mv-live-2`)
+ * for `NO_IDENTITY` when no specific missing profile id is supplied.
+ */
+export const CREATE_REFUSAL_REASONS = Object.freeze({
+  NO_BROWSER_CAPSULE: 'No browser capsule with a live frame.',
+  CAPSULE_LIMIT_REACHED: REFUSAL_COPY.CAPSULE_LIMIT_REACHED.message,
+  NO_FREE_PROFILE: REFUSAL_COPY.NO_FREE_PROFILE.message,
+  NO_IDENTITY: 'No free capsule profile has an identity yet. Create an identity (mv-live-2) whose id matches a profile in MV_SRF_PROFILES, then press Add capsule again.',
+  IDENTITY_LIST_UNAVAILABLE: REFUSAL_COPY.IDENTITY_LIST_UNAVAILABLE.message,
+  PICKER_INPUT_INVALID: REFUSAL_COPY.PICKER_INPUT_INVALID.message,
+  SURFACE_PROFILE_BOUND: 'Every configured capsule profile is already bound to a running capsule. Close or reuse the existing capsule, or add another profile to MV_SRF_PROFILES.',
+  PROFILE_ALREADY_BOUND: 'The selected capsule profile is already bound to a running capsule. Close the running capsule or add another profile to MV_SRF_PROFILES.',
+  SURFACE_CAPACITY_OR_QUARANTINE: 'No capsule slot is free or the profile is quarantined. Close a capsule or clear the quarantined profile before trying again.',
+  SURFACE_PROFILE_QUARANTINED: 'The capsule profile is quarantined after a previous failure. Clear the quarantine before opening a new capsule.',
+  IDENTITY_UNAVAILABLE: 'The capsule identity is unavailable or already held by another capsule. Check Identities and try again.',
+  IDENTITY_REFUSED: 'The capsule identity was refused by the host. Check Identities and try again.',
+  RAM_ADMISSION_REFUSED: 'Not enough live RAM is free to start another capsule. Close a capsule or reclaim stale RAM reservations and try again.',
+  SURFACE_CREATE_BUSY: 'Another capsule is already starting. Wait for it to finish, then try again.',
+  SURFACE_CREATE_TIMEOUT: 'Starting the capsule timed out before it became ready. Try again.',
+  SURFACE_CREATE_FAILED: 'The host could not start the capsule. Check the host logs and try again.',
+  SURFACE_CREATE_KIND_UNAVAILABLE: 'Only browser capsules can be created on this host.',
+  SURFACE_CREATE_INVALID: 'The capsule create request was rejected as invalid. Please try again.',
+  DISPLAY_ONLY: 'Nested walls are display-only and cannot open new capsules.',
+  ADAPTER_ERROR: 'The surface adapter refused the capsule create request. Please try again.',
+});
+
+/**
+ * Resolve the actionable operator sentence for a create refusal code.
+ * @param {string} code
+ * @param {string} [missingId]
+ * @returns {string}
+ */
+export function createRefusalReason(code, missingId = 'mv-live-2') {
+  if (code === 'NO_IDENTITY') {
+    const target = typeof missingId === 'string' && validId(missingId) ? missingId : 'mv-live-2';
+    return `No free capsule profile has an identity yet. Create an identity (${target}) whose id matches a profile in MV_SRF_PROFILES, then press Add capsule again.`;
+  }
+  return Object.hasOwn(CREATE_REFUSAL_REASONS, code)
+    ? CREATE_REFUSAL_REASONS[/** @type {keyof typeof CREATE_REFUSAL_REASONS} */ (code)]
+    : 'This request is unavailable. Please try again.';
+}
+

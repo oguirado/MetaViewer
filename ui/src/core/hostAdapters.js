@@ -181,6 +181,36 @@ export function hostOutcomeFor(row) {
   if (Object.hasOwn(LAYOUT_REFUSAL_COPY, row.code)) return { code: row.code,
     message: LAYOUT_REFUSAL_COPY[/** @type {keyof typeof LAYOUT_REFUSAL_COPY} */ (row.code)], tone: 'refusal' };
   if (row.code === 'NO_BROWSER_CAPSULE') return {code:row.code,message:'No browser capsule with a live frame.',tone:'refusal'};
+  const createReasons = {
+    CAPSULE_LIMIT_REACHED: 'At most 4 capsules run at once because they share the same CPU cores: frame rate drops as more run. Close a capsule to open another.',
+    NO_FREE_PROFILE: 'Every configured capsule profile is already in use. To run more capsules, add profiles to MV_SRF_PROFILES (up to 4 in total) and restart MetaViewer; see "More than one capsule" in the User Guide.',
+    NO_IDENTITY: 'No free capsule profile has an identity yet. Create an identity (mv-live-2) whose id matches a profile in MV_SRF_PROFILES, then press Add capsule again.',
+    IDENTITY_LIST_UNAVAILABLE: 'The identity list could not be read, so no new capsule was opened. Open Identities to check the identity tool, then try again.',
+    PICKER_INPUT_INVALID: 'The capsule request could not be prepared. Please try again.',
+    SURFACE_PROFILE_BOUND: 'Every configured capsule profile is already bound to a running capsule. Close or reuse the existing capsule, or add another profile to MV_SRF_PROFILES.',
+    PROFILE_ALREADY_BOUND: 'The selected capsule profile is already bound to a running capsule. Close the running capsule or add another profile to MV_SRF_PROFILES.',
+    SURFACE_CAPACITY_OR_QUARANTINE: 'No capsule slot is free or the profile is quarantined. Close a capsule or clear the quarantined profile before trying again.',
+    SURFACE_PROFILE_QUARANTINED: 'The capsule profile is quarantined after a previous failure. Clear the quarantine before opening a new capsule.',
+    IDENTITY_UNAVAILABLE: 'The capsule identity is unavailable or already held by another capsule. Check Identities and try again.',
+    IDENTITY_REFUSED: 'The capsule identity was refused by the host. Check Identities and try again.',
+    RAM_ADMISSION_REFUSED: 'Not enough live RAM is free to start another capsule. Close a capsule or reclaim stale RAM reservations and try again.',
+    SURFACE_CREATE_BUSY: 'Another capsule is already starting. Wait for it to finish, then try again.',
+    SURFACE_CREATE_TIMEOUT: 'Starting the capsule timed out before it became ready. Try again.',
+    SURFACE_CREATE_FAILED: 'The host could not start the capsule. Check the host logs and try again.',
+    SURFACE_CREATE_KIND_UNAVAILABLE: 'Only browser capsules can be created on this host.',
+    SURFACE_CREATE_INVALID: 'The capsule create request was rejected as invalid. Please try again.',
+    DISPLAY_ONLY: 'Nested walls are display-only and cannot open new capsules.',
+    ADAPTER_ERROR: 'The surface adapter refused the capsule create request. Please try again.',
+  };
+  const missingMatch = typeof row.code === 'string'
+    ? ((/^NO_IDENTITY__([A-Z0-9_]{1,48})$/.exec(row.code)?.[1]?.toLowerCase().replace(/__/g, '\0').replace(/_/g, '-').replace(/\0/g, '_'))
+      ?? (/^NO_IDENTITY:([a-z0-9][a-z0-9-]{0,63})$/.exec(row.code)?.[1])
+      ?? (row.code === 'NO_IDENTITY' && typeof (/** @type {any} */ (row)).missingId === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test((/** @type {any} */ (row)).missingId) ? (/** @type {any} */ (row)).missingId : null))
+    : null;
+  if (missingMatch) return { code: 'NO_IDENTITY',
+    message: `NO_IDENTITY: No free capsule profile has an identity yet. Create an identity (${missingMatch}) whose id matches a profile in MV_SRF_PROFILES, then press Add capsule again.`, tone: 'refusal' };
+  if (Object.hasOwn(createReasons, row.code)) return { code: row.code,
+    message: `${row.code}: ${createReasons[/** @type {keyof typeof createReasons} */ (row.code)]}`, tone: 'refusal' };
   return { code: row.code, message: Object.hasOwn(REASONS, row.code)
     ? REASONS[/** @type {keyof typeof REASONS} */ (row.code)]
     : 'This request is unavailable. Please try again.', tone: 'refusal' };

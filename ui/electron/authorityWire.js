@@ -758,8 +758,41 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     // [TARGET, unit decision] Browser creation has no action/frame authority.
     // Zero renderer arguments: profile and geometry remain host-owned.
     createSurface: async () => {
-      if (identity.depth !== null) return {ok:false,code:'DISPLAY_ONLY'};
-      if (creatingCapsule) return {ok:false,code:'SURFACE_CREATE_BUSY'};
+      /** @type {Record<string, string>} */
+      const createReasons = {
+        CAPSULE_LIMIT_REACHED: 'At most 4 capsules run at once because they share the same CPU cores: frame rate drops as more run. Close a capsule to open another.',
+        NO_FREE_PROFILE: 'Every configured capsule profile is already in use. To run more capsules, add profiles to MV_SRF_PROFILES (up to 4 in total) and restart MetaViewer; see "More than one capsule" in the User Guide.',
+        IDENTITY_LIST_UNAVAILABLE: 'The identity list could not be read, so no new capsule was opened. Open Identities to check the identity tool, then try again.',
+        PICKER_INPUT_INVALID: 'The capsule request could not be prepared. Please try again.',
+        SURFACE_PROFILE_BOUND: 'Every configured capsule profile is already bound to a running capsule. Close or reuse the existing capsule, or add another profile to MV_SRF_PROFILES.',
+        PROFILE_ALREADY_BOUND: 'The selected capsule profile is already bound to a running capsule. Close the running capsule or add another profile to MV_SRF_PROFILES.',
+        SURFACE_CAPACITY_OR_QUARANTINE: 'No capsule slot is free or the profile is quarantined. Close a capsule or clear the quarantined profile before trying again.',
+        SURFACE_PROFILE_QUARANTINED: 'The capsule profile is quarantined after a previous failure. Clear the quarantine before opening a new capsule.',
+        IDENTITY_UNAVAILABLE: 'The capsule identity is unavailable or already held by another capsule. Check Identities and try again.',
+        IDENTITY_REFUSED: 'The capsule identity was refused by the host. Check Identities and try again.',
+        RAM_ADMISSION_REFUSED: 'Not enough live RAM is free to start another capsule. Close a capsule or reclaim stale RAM reservations and try again.',
+        SURFACE_CREATE_BUSY: 'Another capsule is already starting. Wait for it to finish, then try again.',
+        SURFACE_CREATE_TIMEOUT: 'Starting the capsule timed out before it became ready. Try again.',
+        SURFACE_CREATE_FAILED: 'The host could not start the capsule. Check the host logs and try again.',
+        SURFACE_CREATE_KIND_UNAVAILABLE: 'Only browser capsules can be created on this host.',
+        SURFACE_CREATE_INVALID: 'The capsule create request was rejected as invalid. Please try again.',
+        DISPLAY_ONLY: 'Nested walls are display-only and cannot open new capsules.',
+        ADAPTER_ERROR: 'The surface adapter refused the capsule create request. Please try again.',
+      };
+      const refuse = (/** @type {string} */ code, /** @type {string} */ missingId = 'mv-live-2') => {
+        const target = typeof missingId === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(missingId) ? missingId : 'mv-live-2';
+        const reason = code === 'NO_IDENTITY'
+          ? `No free capsule profile has an identity yet. Create an identity (${target}) whose id matches a profile in MV_SRF_PROFILES, then press Add capsule again.`
+          : (Object.hasOwn(createReasons, code) ? createReasons[code] : 'This request is unavailable. Please try again.');
+        console.error(`[metaviewer] create refused ${code}: ${reason}`);
+        const encodedId = target.replace(/_/g, '__').replace(/-/g, '_').toUpperCase();
+        const wireCode = code === 'NO_IDENTITY' && target !== 'mv-live-2' && `NO_IDENTITY__${encodedId}`.length <= 64
+          ? `NO_IDENTITY__${encodedId}`
+          : code;
+        return {ok:false,code:wireCode};
+      };
+      if (identity.depth !== null) return refuse('DISPLAY_ONLY');
+      if (creatingCapsule) return refuse('SURFACE_CREATE_BUSY');
       creatingCapsule = true;
       try {
         /** @type {any} */ let request;
@@ -767,14 +800,14 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
         if (typeof listIdentities === 'function') {
           const pick = await pickCreateRequest({env, surfaces:capsuleStates, listIdentities});
           // Preload currently admits only {ok,code}; renderer copy is a conductor hook.
-          if (!pick.ok) return {ok:false,code:pick.code};
+          if (!pick.ok) return refuse(pick.code, pick.missing?.[0] ?? 'mv-live-2');
           request = pick.request;
           key = `pending:${pick.profile_id}`;
           // Keep uncertain creates reserved until a native state reconciles them.
           capsuleStates.set(key, {profile_id:pick.profile_id,state:'creating'});
         } else {
           request = buildFirstSurfaceCreateRequest(env);
-          if (request.params.kind !== 'browser') return {ok:false,code:'SURFACE_CREATE_KIND_UNAVAILABLE'};
+          if (request.params.kind !== 'browser') return refuse('SURFACE_CREATE_KIND_UNAVAILABLE');
         }
         const reply = await core.request(request);
         if (reply?.schema === 'surface_event/v0.2' && reply.event === 'created') {
@@ -783,16 +816,16 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
         }
         if (key !== null && reply?.schema === 'action_verdict/v0.2' && reply.decision === 'refused') capsuleStates.delete(key);
         const raw = reply?.data?.code ?? reply?.reason_code ?? 'SURFACE_CREATE_FAILED';
-        if (typeof raw === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(raw)) return {ok:false,code:raw};
+        if (typeof raw === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(raw)) return refuse(raw);
         // [TARGET, unit decision] Legacy adapters report lowercase code `adapter` with the
         // reason in `detail`; the detail is passive data, mapped only through this closed table.
         const mapped = typeof reply?.data?.detail === 'string' ? ADAPTER_DETAIL_CODES.get(reply.data.detail) : undefined;
-        return {ok:false,code:mapped ?? 'SURFACE_CREATE_FAILED'};
+        return refuse(mapped ?? 'SURFACE_CREATE_FAILED');
       } catch (error) {
         const raw = /** @type {any} */ (error)?.code ?? /** @type {any} */ (error)?.message;
-        if (typeof raw === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(raw)) return {ok:false,code:raw};
+        if (typeof raw === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(raw)) return refuse(raw);
         const detail = /** @type {any} */ (error)?.message;
-        return {ok:false,code:(typeof detail === 'string' ? ADAPTER_DETAIL_CODES.get(detail) : undefined) ?? 'SURFACE_CREATE_FAILED'};
+        return refuse((typeof detail === 'string' ? ADAPTER_DETAIL_CODES.get(detail) : undefined) ?? 'SURFACE_CREATE_FAILED');
       } finally { creatingCapsule = false; }
     },
     propose: async (/** @type {string} */json) => {

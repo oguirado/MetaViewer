@@ -1,0 +1,1 @@
+- Admit the catalog `identity-browser` capsule kind on create, show the refusal code and actionable operator sentence in both the outcome toast and the Activity strip across picker and adapter refusals (naming `mv-live-2` on `NO_IDENTITY`), and log `[metaviewer] create refused <CODE>: <reason>` on host `createSurface` refusals.

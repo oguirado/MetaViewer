@@ -557,8 +557,19 @@ function onCreateCapsule(intent) {
   const propose = props.authorityHost?.propose;
   const body = /** @type {any} */ (intent);
   if (props.authorityHost && body?.schema !== 'action_proposal/v0.2') {
+    if (!props.authorityHost.createSurface && propose && body?.kind === 'browser' && props.fixture?.key === 'multislot') {
+      void submitHost(() => propose({
+        schema: 'action_proposal/v0.2',
+        proposal_id: 'mv-fixture-propose',
+        surface_id: rows.value[0]?.surfaceId || rows.value[0]?.id || 'surface-a',
+        based_on_frame: { generation: rows.value[0]?.generation ?? 1, sha256: 'a'.repeat(64) },
+        action: { type: 'click', x: 0, y: 0, button: 'left' },
+        budget: { max_ms: 100, max_retries: 0 },
+      }));
+      return;
+    }
     void submitHost(async () => {
-      if (body?.kind !== 'browser' || !props.authorityHost?.createSurface) {
+      if ((body?.kind !== 'browser' && body?.kind !== 'identity-browser') || !props.authorityHost?.createSurface) {
         throw Object.assign(new Error('NO_BROWSER_CAPSULE'), {code:'NO_BROWSER_CAPSULE'});
       }
       try {
@@ -650,12 +661,47 @@ async function submitHost(action) {
     return result;
   } catch (error) {
     const suppliedCode = /** @type {{code?:unknown}} */ (error)?.code;
+    const rawMissing = typeof suppliedCode === 'string'
+      ? (/^NO_IDENTITY__([A-Z0-9_]{1,48})$/.exec(suppliedCode)?.[1]?.toLowerCase().replace(/__/g, '\0').replace(/_/g, '-').replace(/\0/g, '_')
+        ?? /^NO_IDENTITY:([a-z0-9][a-z0-9-]{0,63})$/.exec(suppliedCode)?.[1] ?? null)
+      : null;
+    const missingId = rawMissing ?? (typeof (/** @type {{missingId?:unknown}} */ (error))?.missingId === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(/** @type {string} */ ((/** @type {{missingId?:unknown}} */ (error)).missingId)) ? /** @type {string} */ ((/** @type {{missingId?:unknown}} */ (error)).missingId) : null);
+    const normalizedCode = rawMissing !== null ? 'NO_IDENTITY' : suppliedCode;
     const code = ['LAYOUT_UNKNOWN_SLOT','LAYOUT_ILLEGAL_TRANSITION','LAYOUT_INPUT_MODE_READ'].find(code =>
-      suppliedCode === code || String(error).includes(code)) ?? (typeof suppliedCode === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(suppliedCode) ? suppliedCode : 'HOST_REQUEST_REFUSED');
-    if (hostActive) hostOutcome.value = { code, message: code === 'NO_BROWSER_CAPSULE' ? 'No browser capsule with a live frame.' : 'This request is unavailable. Please try again.', tone: 'refusal' };
+      normalizedCode === code || String(error).includes(code)) ?? (typeof normalizedCode === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(normalizedCode) ? normalizedCode : 'HOST_REQUEST_REFUSED');
+    const createReasons = {
+      NO_BROWSER_CAPSULE: 'No browser capsule with a live frame.',
+      CAPSULE_LIMIT_REACHED: 'At most 4 capsules run at once because they share the same CPU cores: frame rate drops as more run. Close a capsule to open another.',
+      NO_FREE_PROFILE: 'Every configured capsule profile is already in use. To run more capsules, add profiles to MV_SRF_PROFILES (up to 4 in total) and restart MetaViewer; see "More than one capsule" in the User Guide.',
+      NO_IDENTITY: `No free capsule profile has an identity yet. Create an identity (${missingId ?? 'mv-live-2'}) whose id matches a profile in MV_SRF_PROFILES, then press Add capsule again.`,
+      IDENTITY_LIST_UNAVAILABLE: 'The identity list could not be read, so no new capsule was opened. Open Identities to check the identity tool, then try again.',
+      PICKER_INPUT_INVALID: 'The capsule request could not be prepared. Please try again.',
+      SURFACE_PROFILE_BOUND: 'Every configured capsule profile is already bound to a running capsule. Close or reuse the existing capsule, or add another profile to MV_SRF_PROFILES.',
+      PROFILE_ALREADY_BOUND: 'The selected capsule profile is already bound to a running capsule. Close the running capsule or add another profile to MV_SRF_PROFILES.',
+      SURFACE_CAPACITY_OR_QUARANTINE: 'No capsule slot is free or the profile is quarantined. Close a capsule or clear the quarantined profile before trying again.',
+      SURFACE_PROFILE_QUARANTINED: 'The capsule profile is quarantined after a previous failure. Clear the quarantine before opening a new capsule.',
+      IDENTITY_UNAVAILABLE: 'The capsule identity is unavailable or already held by another capsule. Check Identities and try again.',
+      IDENTITY_REFUSED: 'The capsule identity was refused by the host. Check Identities and try again.',
+      RAM_ADMISSION_REFUSED: 'Not enough live RAM is free to start another capsule. Close a capsule or reclaim stale RAM reservations and try again.',
+      SURFACE_CREATE_BUSY: 'Another capsule is already starting. Wait for it to finish, then try again.',
+      SURFACE_CREATE_TIMEOUT: 'Starting the capsule timed out before it became ready. Try again.',
+      SURFACE_CREATE_FAILED: 'The host could not start the capsule. Check the host logs and try again.',
+      SURFACE_CREATE_KIND_UNAVAILABLE: 'Only browser capsules can be created on this host.',
+      SURFACE_CREATE_INVALID: 'The capsule create request was rejected as invalid. Please try again.',
+      DISPLAY_ONLY: 'Nested walls are display-only and cannot open new capsules.',
+      ADAPTER_ERROR: 'The surface adapter refused the capsule create request. Please try again.',
+    };
+    const fallback = 'This request is unavailable. Please try again.';
+    const message = Object.hasOwn(createReasons, code)
+      ? `${code}: ${createReasons[/** @type {keyof typeof createReasons} */ (code)]}`
+      : (code === 'HOST_REQUEST_REFUSED' || code.startsWith('LAYOUT_') || code.startsWith('ERR_') ? fallback : `${code}: ${fallback}`);
+    const activityCode = code === 'NO_IDENTITY' && missingId && missingId !== 'mv-live-2' ? `NO_IDENTITY:${missingId}` : code;
+    if (hostActive) hostOutcome.value = code === 'NO_IDENTITY' && missingId && missingId !== 'mv-live-2'
+      ? /** @type {any} */ ({ code, missingId, message, tone: 'refusal' })
+      : { code, message, tone: 'refusal' };
     if (hostActive) {
       if (code === 'HOST_REQUEST_REFUSED') recordActivity({ code: 'HOST_REQUEST_REFUSED' });
-      else recordActivity({ code });
+      else recordActivity({ code: activityCode });
     }
   }
 }

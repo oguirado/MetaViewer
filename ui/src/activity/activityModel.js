@@ -62,6 +62,26 @@ const ACTIVITY_ROWS = Object.freeze({
   OUT_OF_BOUNDS: Object.freeze({ type: 'verdict-refused', tone: 'refusal', text: 'The action is outside the surface.' }),
   POLICY: Object.freeze({ type: 'verdict-refused', tone: 'refusal', text: 'This action is unavailable under the current policy.' }),
   HOST_REQUEST_REFUSED: Object.freeze({ type: 'request-refused', tone: 'refusal', text: 'This request is unavailable. Please try again.' }),
+  NO_BROWSER_CAPSULE: Object.freeze({ type: 'request-refused', tone: 'refusal', text: 'NO_BROWSER_CAPSULE: No browser capsule with a live frame.' }),
+  CAPSULE_LIMIT_REACHED: Object.freeze({ type: 'request-refused', tone: 'refusal', text: 'CAPSULE_LIMIT_REACHED: At most 4 capsules run at once because they share the same CPU cores: frame rate drops as more run. Close a capsule to open another.' }),
+  NO_FREE_PROFILE: Object.freeze({ type: 'request-refused', tone: 'refusal', text: 'NO_FREE_PROFILE: Every configured capsule profile is already in use. To run more capsules, add profiles to MV_SRF_PROFILES (up to 4 in total) and restart MetaViewer; see "More than one capsule" in the User Guide.' }),
+  NO_IDENTITY: Object.freeze({ type: 'request-refused', tone: 'refusal', text: 'NO_IDENTITY: No free capsule profile has an identity yet. Create an identity (mv-live-2) whose id matches a profile in MV_SRF_PROFILES, then press Add capsule again.' }),
+  IDENTITY_LIST_UNAVAILABLE: Object.freeze({ type: 'request-refused', tone: 'refusal', text: 'IDENTITY_LIST_UNAVAILABLE: The identity list could not be read, so no new capsule was opened. Open Identities to check the identity tool, then try again.' }),
+  PICKER_INPUT_INVALID: Object.freeze({ type: 'request-refused', tone: 'refusal', text: 'PICKER_INPUT_INVALID: The capsule request could not be prepared. Please try again.' }),
+  SURFACE_PROFILE_BOUND: Object.freeze({ type: 'request-refused', tone: 'refusal', text: 'SURFACE_PROFILE_BOUND: Every configured capsule profile is already bound to a running capsule. Close or reuse the existing capsule, or add another profile to MV_SRF_PROFILES.' }),
+  PROFILE_ALREADY_BOUND: Object.freeze({ type: 'request-refused', tone: 'refusal', text: 'PROFILE_ALREADY_BOUND: The selected capsule profile is already bound to a running capsule. Close the running capsule or add another profile to MV_SRF_PROFILES.' }),
+  SURFACE_CAPACITY_OR_QUARANTINE: Object.freeze({ type: 'request-refused', tone: 'refusal', text: 'SURFACE_CAPACITY_OR_QUARANTINE: No capsule slot is free or the profile is quarantined. Close a capsule or clear the quarantined profile before trying again.' }),
+  SURFACE_PROFILE_QUARANTINED: Object.freeze({ type: 'request-refused', tone: 'refusal', text: 'SURFACE_PROFILE_QUARANTINED: The capsule profile is quarantined after a previous failure. Clear the quarantine before opening a new capsule.' }),
+  IDENTITY_UNAVAILABLE: Object.freeze({ type: 'request-refused', tone: 'refusal', text: 'IDENTITY_UNAVAILABLE: The capsule identity is unavailable or already held by another capsule. Check Identities and try again.' }),
+  IDENTITY_REFUSED: Object.freeze({ type: 'request-refused', tone: 'refusal', text: 'IDENTITY_REFUSED: The capsule identity was refused by the host. Check Identities and try again.' }),
+  RAM_ADMISSION_REFUSED: Object.freeze({ type: 'request-refused', tone: 'refusal', text: 'RAM_ADMISSION_REFUSED: Not enough live RAM is free to start another capsule. Close a capsule or reclaim stale RAM reservations and try again.' }),
+  SURFACE_CREATE_BUSY: Object.freeze({ type: 'request-refused', tone: 'refusal', text: 'SURFACE_CREATE_BUSY: Another capsule is already starting. Wait for it to finish, then try again.' }),
+  SURFACE_CREATE_TIMEOUT: Object.freeze({ type: 'request-refused', tone: 'refusal', text: 'SURFACE_CREATE_TIMEOUT: Starting the capsule timed out before it became ready. Try again.' }),
+  SURFACE_CREATE_FAILED: Object.freeze({ type: 'request-refused', tone: 'refusal', text: 'SURFACE_CREATE_FAILED: The host could not start the capsule. Check the host logs and try again.' }),
+  SURFACE_CREATE_KIND_UNAVAILABLE: Object.freeze({ type: 'request-refused', tone: 'refusal', text: 'SURFACE_CREATE_KIND_UNAVAILABLE: Only browser capsules can be created on this host.' }),
+  SURFACE_CREATE_INVALID: Object.freeze({ type: 'request-refused', tone: 'refusal', text: 'SURFACE_CREATE_INVALID: The capsule create request was rejected as invalid. Please try again.' }),
+  DISPLAY_ONLY: Object.freeze({ type: 'request-refused', tone: 'refusal', text: 'DISPLAY_ONLY: Nested walls are display-only and cannot open new capsules.' }),
+  ADAPTER_ERROR: Object.freeze({ type: 'request-refused', tone: 'refusal', text: 'ADAPTER_ERROR: The surface adapter refused the capsule create request. Please try again.' }),
 });
 
 /**
@@ -132,10 +152,25 @@ export function normalizeActivityEntry(input) {
       : `Input refused: ${reason} (${code}).`;
     return Object.freeze({ seq, type: 'request-refused', tone: 'refusal', text });
   }
-  const row = Object.hasOwn(ACTIVITY_ROWS, code)
-    ? ACTIVITY_ROWS[/** @type {keyof typeof ACTIVITY_ROWS} */ (code)]
-    : ACTIVITY_FALLBACK;
-  return Object.freeze({ seq, type: row.type, tone: row.tone, text: row.text });
+  const missingMatch = (/^NO_IDENTITY__([A-Z0-9_]{1,48})$/.exec(code)?.[1]?.toLowerCase().replace(/__/g, '\0').replace(/_/g, '-').replace(/\0/g, '_'))
+    ?? (/^NO_IDENTITY:([a-z0-9][a-z0-9-]{0,63})$/.exec(code)?.[1])
+    ?? (code === 'NO_IDENTITY' && typeof (/** @type {{missingId?:unknown}} */ (record)).missingId === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(/** @type {string} */ ((/** @type {{missingId?:unknown}} */ (record)).missingId)) ? /** @type {string} */ ((/** @type {{missingId?:unknown}} */ (record)).missingId) : null);
+  if (missingMatch) {
+    return Object.freeze({
+      seq,
+      type: 'request-refused',
+      tone: 'refusal',
+      text: `NO_IDENTITY: No free capsule profile has an identity yet. Create an identity (${missingMatch}) whose id matches a profile in MV_SRF_PROFILES, then press Add capsule again.`,
+    });
+  }
+  if (Object.hasOwn(ACTIVITY_ROWS, code)) {
+    const row = ACTIVITY_ROWS[/** @type {keyof typeof ACTIVITY_ROWS} */ (code)];
+    return Object.freeze({ seq, type: row.type, tone: row.tone, text: row.text });
+  }
+  if (/^[A-Z][A-Z0-9]*_[A-Z0-9_]+$/.test(code) && !code.startsWith('ERR_') && !code.startsWith('LAYOUT_')) {
+    return Object.freeze({ seq, type: 'request-refused', tone: 'refusal', text: `${code}: ${ACTIVITY_FALLBACK.text}` });
+  }
+  return Object.freeze({ seq, type: ACTIVITY_FALLBACK.type, tone: ACTIVITY_FALLBACK.tone, text: ACTIVITY_FALLBACK.text });
 }
 
 /**
