@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+- Require distinct displays only among profiles that share one RAM root, so separate roots may reuse a display number again (the AC-03 lifecycle e2e boots two such profiles).
+- Coalesce consecutive human `type` keystrokes in the renderer input port over a 40 ms [TARGET, unit decision] window so sustained typing and 30 keys/s bursts stay well below the 60 batches/s limit, flush pending text before non-printable keys, clicks and scroll to keep exact order, drop and count pending events on gate closure so nothing sends after release, and admit `release_all` in the preload and main authority wire relays so closing the input gate never emits a `SCHEMA` refusal.
+- Show each wall tile's capsule id (short form, full id on hover) with a keyboard-reachable Copy ID for AI action that copies the id plus the documented `mw_run` attach usage and confirms with a transient Copied; the control is disabled on lost or error tiles and hidden in nested display-only tiles.
+- Give the handoff notice its own classes and stylesheet with a content-sized list instead of the activity strip's fixed-height box, and mark handoff rows with the refusal tone instead of the green success dot.
+- Explain legacy network mode in the Network panel (cause, effect, what Open and Dedicated proxy need), announce every save outcome, validate allowlists locally, warn about a stored allowlist the binary cannot enforce, and use kit inputs.
+- Show the Record button state: a red dot with the Stop label and a live `mm:ss` timer that keeps ticking between host capture events (interpolated from the last host `elapsed_ms`, `--:--` when unknown), a typed `RECORDING_FAILED` reason when the host reports a recording error, and a tile `RecordingBadge` (wall hook reported separately); the frame-rate hint now cites the measured live rate of about 2 fps.
+- Rate-limit per-surface `skipped_polls` and `stage_summary` adapter diagnostics to one aggregated line per `30` s `[TARGET]` window by default while keeping errors, warnings, and session-close totals unthrottled (`MV_ADAPTER_DIAG=verbose` restores per-event output).
+- Add the judge doctor, install, run and stop scripts with typed `JUDGE_*` refusals, an AppArmor user-namespace profile, a consented one-step egress firewall and a deterministic install receipt; offline tests use fakes and one mutant per code.
+- Add the judge quickstart (`docs/JUDGE_QUICKSTART.md`), Hardware and Ubuntu packages sections in `docs/INSTALL.md`, and the evaluation notice for hackathon judges (`NOTICE-EVALUATION.md`, README section); the LICENSE text is unchanged.
 - Admit shared canonical capsule RAM roots with distinct displays, refuse live run/frame allocation collisions, and wire identity-aware capsule creation.
 - Add the pure multi-capsule profile picker (first free browser profile with an existing identity, 4-capsule ceiling, typed refusals and renderer copy) and the More than one capsule guide.
 - Ship the identity and RAM-admission reclaim tools under `resources/operator/tools` and resolve the packaged identity tool there.
