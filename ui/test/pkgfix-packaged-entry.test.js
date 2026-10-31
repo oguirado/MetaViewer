@@ -259,6 +259,8 @@ test('PKG-FIX L-01 + L-03 entry: refusals happen before any core spawn (with mut
     assert.equal(ram.code, 1);
     assert.match(ram.stderr, /METAVIEWER_BOOT_REFUSED RAM_ROOT_ABSENT: MV_SRF_LIVE_RAM_ROOT .*absent-ram/);
     assert.doesNotMatch(ram.stdout, /CORE_SPAWN/);
+    // A refused boot never publishes the attach pointer; checked before the mutants, which do spawn and may publish it.
+    assert.equal(existsSync(join(host, 'metaviewer', 'attach', 'current.json')), false);
     const ramMutant = seamless.replace('const ramRoot = await preflightLiveRamRoot(process.env);', 'const ramRoot = null;');
     assert.notEqual(ramMutant, seamless);
     assert.match((await runEntry({source: ramMutant, env: ramEnv, onLine: (l, c) => { if (l === 'CORE_SPAWN') c.kill('SIGKILL'); }})).stdout, /CORE_SPAWN/);
@@ -267,9 +269,9 @@ test('PKG-FIX L-01 + L-03 entry: refusals happen before any core spawn (with mut
     assert.equal(second.code, 1);
     assert.match(second.stderr, /METAVIEWER_BOOT_REFUSED SINGLE_INSTANCE: MetaViewer is already running/);
     assert.doesNotMatch(second.stdout, /CORE_SPAWN/);
+    assert.equal(existsSync(join(host, 'metaviewer', 'attach', 'current.json')), false);
     const lockMutant = seamless.replace("if (typeof app.requestSingleInstanceLock === 'function') {", 'if (false) {');
     assert.notEqual(lockMutant, seamless);
     assert.match((await runEntry({source: lockMutant, env, lock: false, onLine: (l, c) => { if (l === 'CORE_SPAWN') c.kill('SIGKILL'); }})).stdout, /CORE_SPAWN/);
-    assert.equal(existsSync(join(host, 'metaviewer', 'attach', 'current.json')), false);
   } finally { await rm(host, {recursive: true, force: true}); }
 });
