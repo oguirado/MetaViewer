@@ -1306,10 +1306,432 @@ export async function verifyBinary(path, arch = architecture.arch) {
   } finally {await file.close();}
 }
 
+// [TARGET, unit decision] U1-PTY-PKG stages node-pty outside app.asar under resources/build-native/pty-runtime/node-pty.
+export const PACKAGED_NODE_PTY_DIR = 'build-native/pty-runtime/node-pty';
+export const PACKAGED_NODE_PTY_FILES = Object.freeze(['package.json', 'LICENSE']);
+export const PACKAGED_NODE_PTY_REQUIRED = Object.freeze([
+  'package.json',
+  'LICENSE',
+  'lib/index.js',
+  'lib/unixTerminal.js',
+  'build/Release/pty.node',
+]);
+export const PACKAGED_NODE_PTY_ADDON = 'build/Release/pty.node';
+export const PACKAGED_NODE_PTY_EXCLUDED = /(?:\.test\.js|\.map|\.d\.ts)$|^testUtils\./;
+export const MAX_GLIBC_VERSION = '2.34';
+export const MAX_GLIBCXX_VERSION = '3.4.22';
+
+/**
+ * @param {string} code
+ * @param {string} message
+ * @param {Record<string, unknown>} [details]
+ */
+function createTypedPkgError(code, message, details = {}) {
+  const error = /** @type {Error & { code: string } & Record<string, unknown>} */ (new Error(`${code}: ${message}`));
+  error.code = code;
+  Object.assign(error, details);
+  return error;
+}
+
+/** @param {string} version */
+export function parseVersionTuple(version) {
+  if (typeof version !== 'string' || !/^[0-9]+(?:\.[0-9]+)+$/.test(version)) {
+    throw createTypedPkgError('PKG_ABI_UNREADABLE', `invalid version tuple ${String(version)}`);
+  }
+  return version.split('.').map(part => Number.parseInt(part, 10));
+}
+
+/**
+ * @param {string | readonly number[]} left
+ * @param {string | readonly number[]} right
+ */
+export function compareVersionTuples(left, right) {
+  const a = typeof left === 'string' ? parseVersionTuple(left) : left;
+  const b = typeof right === 'string' ? parseVersionTuple(right) : right;
+  const length = Math.max(a.length, b.length);
+  for (let index = 0; index < length; index++) {
+    const av = a[index] ?? 0;
+    const bv = b[index] ?? 0;
+    if (av !== bv) return av < bv ? -1 : 1;
+  }
+  return 0;
+}
+
+/**
+ * Parses required GLIBC_* and GLIBCXX_* symbol versions from an ELF64 little-endian binary.
+ * Reads SHT_GNU_verneed (.gnu.version_r) linked to .dynstr when section headers exist,
+ * and also scans null-terminated version tags in string tables.
+ * @param {Buffer} bytes
+ * @param {string} [label]
+ */
+export function parseElfSymbolVersions(bytes, label = 'pty.node') {
+  if (!Buffer.isBuffer(bytes) || bytes.length < 64) {
+    throw createTypedPkgError('PKG_ELF_INVALID', `${label} truncated (<64 bytes)`);
+  }
+  const glibc = new Set();
+  const glibcxx = new Set();
+  const recordTag = (/** @type {string} */ raw) => {
+    const glibcMatch = /^GLIBC_([0-9]+(?:\.[0-9]+)+)$/.exec(raw);
+    if (glibcMatch) {
+      glibc.add(glibcMatch[1]);
+      return;
+    }
+    const glibcxxMatch = /^GLIBCXX_([0-9]+(?:\.[0-9]+)+)$/.exec(raw);
+    if (glibcxxMatch) {
+      glibcxx.add(glibcxxMatch[1]);
+    }
+  };
+  const readCString = (/** @type {Buffer} */ buf, /** @type {number} */ offset) => {
+    if (offset < 0 || offset >= buf.length) {
+      throw createTypedPkgError('PKG_ELF_INVALID', `${label} string offset out of bounds`);
+    }
+    const end = buf.indexOf(0, offset);
+    if (end < 0) {
+      throw createTypedPkgError('PKG_ELF_INVALID', `${label} unterminated string in table`);
+    }
+    return buf.subarray(offset, end).toString('utf8');
+  };
+
+  const shoffBig = bytes.readBigUInt64LE(40);
+  const shentsize = bytes.readUInt16LE(58);
+  const shnum = bytes.readUInt16LE(60);
+  if (shnum > 0) {
+    if (shentsize < 64 || shoffBig > BigInt(bytes.length)) {
+      throw createTypedPkgError('PKG_ELF_INVALID', `${label} invalid section header geometry`);
+    }
+    const shoff = Number(shoffBig);
+    if (shoff + shnum * shentsize > bytes.length) {
+      throw createTypedPkgError('PKG_ELF_INVALID', `${label} section header table exceeds file size`);
+    }
+    const SHT_GNU_VERNEED = 0x6ffffffe;
+    for (let index = 0; index < shnum; index++) {
+      const sh = shoff + index * shentsize;
+      const shType = bytes.readUInt32LE(sh + 4);
+      if (shType !== SHT_GNU_VERNEED) continue;
+      const shLink = bytes.readUInt32LE(sh + 40);
+      if (shLink >= shnum) {
+        throw createTypedPkgError('PKG_ELF_INVALID', `${label} SHT_GNU_verneed sh_link out of range`);
+      }
+      const verneedOff = Number(bytes.readBigUInt64LE(sh + 24));
+      const verneedSize = Number(bytes.readBigUInt64LE(sh + 32));
+      const strSh = shoff + shLink * shentsize;
+      const strOff = Number(bytes.readBigUInt64LE(strSh + 24));
+      const strSize = Number(bytes.readBigUInt64LE(strSh + 32));
+      if (
+        verneedOff < 0 || verneedSize < 0 || verneedOff + verneedSize > bytes.length ||
+        strOff < 0 || strSize <= 0 || strOff + strSize > bytes.length
+      ) {
+        throw createTypedPkgError('PKG_ELF_INVALID', `${label} SHT_GNU_verneed or dynstr section out of bounds`);
+      }
+      const dynstr = bytes.subarray(strOff, strOff + strSize);
+      let vnPos = 0;
+      let vnGuard = 0;
+      while (vnPos + 16 <= verneedSize) {
+        if (++vnGuard > 4096) throw createTypedPkgError('PKG_ELF_INVALID', `${label} verneed cycle detected`);
+        const vnCnt = bytes.readUInt16LE(verneedOff + vnPos + 2);
+        const vnAux = bytes.readUInt32LE(verneedOff + vnPos + 8);
+        const vnNext = bytes.readUInt32LE(verneedOff + vnPos + 12);
+        let auxPos = vnPos + vnAux;
+        for (let a = 0; a < vnCnt; a++) {
+          if (auxPos < 0 || auxPos + 16 > verneedSize) {
+            throw createTypedPkgError('PKG_ELF_INVALID', `${label} vernaux entry out of bounds`);
+          }
+          const vnaName = bytes.readUInt32LE(verneedOff + auxPos + 8);
+          const vnaNext = bytes.readUInt32LE(verneedOff + auxPos + 12);
+          recordTag(readCString(dynstr, vnaName));
+          if (vnaNext === 0) break;
+          auxPos += vnaNext;
+        }
+        if (vnNext === 0) break;
+        vnPos += vnNext;
+      }
+    }
+  }
+
+  // Also scan null-terminated ASCII GLIBC_* and GLIBCXX_* version strings in the binary
+  // so compact synthetic ELF fixtures without full section tables are inspected identically.
+  const text = bytes.toString('latin1');
+  for (const match of text.matchAll(/(?:^|\0)(GLIBC(?:XX)?_[0-9]+(?:\.[0-9]+)+)\0/g)) {
+    recordTag(match[1]);
+  }
+
+  const glibcList = [...glibc].sort(compareVersionTuples);
+  const glibcxxList = [...glibcxx].sort(compareVersionTuples);
+  if (glibcList.length === 0 || glibcxxList.length === 0) {
+    throw createTypedPkgError(
+      'PKG_ABI_UNREADABLE',
+      `${label} missing required GLIBC/GLIBCXX version metadata (glibc=${glibcList.length}, glibcxx=${glibcxxList.length})`,
+      { glibcVersions: glibcList, glibcxxVersions: glibcxxList },
+    );
+  }
+  return {
+    glibcVersions: Object.freeze(glibcList),
+    glibcxxVersions: Object.freeze(glibcxxList),
+    maxGlibc: glibcList[glibcList.length - 1],
+    maxGlibcxx: glibcxxList[glibcxxList.length - 1],
+  };
+}
+
+/**
+ * Verifies a staged or candidate native Node addon (.node shared object):
+ * - Regular file, not a symlink (does not require +x executable mode bit)
+ * - ELF64 little-endian shared object (ET_DYN or ET_EXEC)
+ * - ELF e_machine matches target arch (183 for arm64, 62 for x64); throws typed refusal on mismatch
+ * - Symbol versions satisfy GLIBC <= 2.34 and GLIBCXX <= 3.4.22 [TARGET]
+ * @param {string} addonPath
+ * @param {string} [arch]
+ * @param {{ maxGlibc?: string, maxGlibcxx?: string }} [options]
+ */
+export async function verifyNativeAddon(addonPath, arch = architecture.arch, options = {}) {
+  const { machine } = packageArchitecture(arch);
+  const maxGlibc = options.maxGlibc ?? MAX_GLIBC_VERSION;
+  const maxGlibcxx = options.maxGlibcxx ?? MAX_GLIBCXX_VERSION;
+  const label = basename(addonPath);
+  const info = await fs.lstat(addonPath).catch(() => null);
+  if (!info?.isFile() || info.isSymbolicLink()) {
+    throw createTypedPkgError('PKG_NATIVE_MISSING', label, {
+      reason: 'TERMINAL_UNAVAILABLE',
+      targetArch: arch,
+      addonPath,
+    });
+  }
+  const bytes = await fs.readFile(addonPath);
+  if (
+    bytes.length < 64 ||
+    bytes.subarray(0, 4).toString('hex') !== '7f454c46' ||
+    bytes[4] !== 2 ||
+    bytes[5] !== 1
+  ) {
+    throw createTypedPkgError('PKG_ELF_INVALID', `${label} is not a 64-bit little-endian ELF binary`, {
+      reason: 'TERMINAL_UNAVAILABLE',
+      targetArch: arch,
+    });
+  }
+  const elfType = bytes.readUInt16LE(16);
+  if (elfType !== 2 && elfType !== 3) {
+    throw createTypedPkgError('PKG_ELF_INVALID', `${label} unexpected ELF type ${elfType}`, {
+      reason: 'TERMINAL_UNAVAILABLE',
+      targetArch: arch,
+      elfType,
+    });
+  }
+  const actualMachine = bytes.readUInt16LE(18);
+  if (actualMachine !== machine) {
+    throw createTypedPkgError(
+      'PKG_ARCH_MISMATCH',
+      `${label} prebuilt architecture mismatch for ${arch} (expected e_machine=${machine}, got e_machine=${actualMachine}; TERMINAL_UNAVAILABLE)`,
+      {
+        reason: 'TERMINAL_UNAVAILABLE',
+        targetArch: arch,
+        expectedMachine: machine,
+        actualMachine,
+      },
+    );
+  }
+  const abi = parseElfSymbolVersions(bytes, label);
+  if (compareVersionTuples(abi.maxGlibc, maxGlibc) > 0) {
+    throw createTypedPkgError(
+      'PKG_GLIBC_VERSION_FORBIDDEN',
+      `${label} requires GLIBC_${abi.maxGlibc} > ${maxGlibc}`,
+      {
+        symbolFamily: 'GLIBC',
+        foundVersion: abi.maxGlibc,
+        maxVersion: maxGlibc,
+      },
+    );
+  }
+  if (compareVersionTuples(abi.maxGlibcxx, maxGlibcxx) > 0) {
+    throw createTypedPkgError(
+      'PKG_GLIBCXX_VERSION_FORBIDDEN',
+      `${label} requires GLIBCXX_${abi.maxGlibcxx} > ${maxGlibcxx}`,
+      {
+        symbolFamily: 'GLIBCXX',
+        foundVersion: abi.maxGlibcxx,
+        maxVersion: maxGlibcxx,
+      },
+    );
+  }
+  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  return Object.freeze({
+    arch,
+    machine: actualMachine,
+    sha256,
+    maxGlibc: abi.maxGlibc,
+    maxGlibcxx: abi.maxGlibcxx,
+    glibcVersions: abi.glibcVersions,
+    glibcxxVersions: abi.glibcxxVersions,
+  });
+}
+
+/**
+ * Collects deterministic relative paths -> sha256 digests for a directory tree,
+ * refusing symlinks and non-regular files.
+ * @param {string} rootDir
+ */
+async function collectTreeDigests(rootDir) {
+  /** @type {Record<string, string>} */
+  const files = {};
+  /** @param {string} relDir */
+  async function walk(relDir) {
+    const absDir = relDir ? join(rootDir, relDir) : rootDir;
+    const entries = (await fs.readdir(absDir, { withFileTypes: true })).slice().sort(compareEntryNames);
+    for (const entry of entries) {
+      const relPath = relDir ? `${relDir}/${entry.name}` : entry.name;
+      const fullPath = join(rootDir, relPath);
+      const st = await fs.lstat(fullPath);
+      if (st.isSymbolicLink() || entry.isSymbolicLink()) {
+        throw createTypedPkgError('PKG_ALIAS_FORBIDDEN', relPath);
+      }
+      if (st.isDirectory()) {
+        await walk(relPath);
+        continue;
+      }
+      if (!st.isFile()) {
+        throw createTypedPkgError('PKG_ENTRY_INVALID', relPath);
+      }
+      files[relPath] = await digest(fullPath);
+    }
+  }
+  await walk('');
+  return Object.freeze(files);
+}
+
+/**
+ * Stages the node-pty runtime outside app.asar under `<resources>/build-native/pty-runtime/node-pty`,
+ * verifying ELF64, target architecture, and GLIBC/GLIBCXX ceiling before copying, and returns
+ * the sealed SHA-256 file inventory.
+ * @param {string} resources
+ * @param {{ nodePtyRoot?: string, arch?: string, maxGlibc?: string, maxGlibcxx?: string }} [options]
+ */
+export async function stageNodePty(resources, options = {}) {
+  const nodePtyRoot = options.nodePtyRoot ?? join(ui, 'node_modules/node-pty');
+  const arch = options.arch ?? architecture.arch;
+  const addonSource = join(nodePtyRoot, PACKAGED_NODE_PTY_ADDON);
+  const addonInfo = await verifyNativeAddon(addonSource, arch, {
+    maxGlibc: options.maxGlibc,
+    maxGlibcxx: options.maxGlibcxx,
+  });
+  for (const file of PACKAGED_NODE_PTY_FILES) {
+    const src = join(nodePtyRoot, file);
+    const st = await fs.lstat(src).catch(() => null);
+    if (!st || st.isSymbolicLink() || !st.isFile()) {
+      throw createTypedPkgError('PKG_NATIVE_MISSING', file, { reason: 'TERMINAL_UNAVAILABLE', targetArch: arch });
+    }
+  }
+  const libSource = join(nodePtyRoot, 'lib');
+  const libStat = await fs.lstat(libSource).catch(() => null);
+  if (!libStat || libStat.isSymbolicLink() || !libStat.isDirectory()) {
+    throw createTypedPkgError('PKG_NATIVE_MISSING', 'lib', { reason: 'TERMINAL_UNAVAILABLE', targetArch: arch });
+  }
+
+  const target = join(resources, PACKAGED_NODE_PTY_DIR);
+  await fs.rm(target, { recursive: true, force: true });
+  await fs.mkdir(join(target, 'build/Release'), { recursive: true });
+  for (const file of PACKAGED_NODE_PTY_FILES) {
+    await fs.copyFile(join(nodePtyRoot, file), join(target, file));
+  }
+
+  /**
+   * @param {string} srcDir
+   * @param {string} dstDir
+   */
+  async function copyLibDir(srcDir, dstDir) {
+    await fs.mkdir(dstDir, { recursive: true });
+    const entries = (await fs.readdir(srcDir, { withFileTypes: true })).slice().sort(compareEntryNames);
+    for (const entry of entries) {
+      if (PACKAGED_NODE_PTY_EXCLUDED.test(entry.name)) continue;
+      const srcPath = join(srcDir, entry.name);
+      const dstPath = join(dstDir, entry.name);
+      const st = await fs.lstat(srcPath);
+      if (st.isSymbolicLink() || entry.isSymbolicLink()) {
+        throw createTypedPkgError('PKG_ALIAS_FORBIDDEN', entry.name);
+      }
+      if (st.isDirectory()) {
+        await copyLibDir(srcPath, dstPath);
+      } else if (st.isFile()) {
+        await fs.copyFile(srcPath, dstPath);
+      } else {
+        throw createTypedPkgError('PKG_ENTRY_INVALID', entry.name);
+      }
+    }
+  }
+  await copyLibDir(libSource, join(target, 'lib'));
+  await fs.copyFile(addonSource, join(target, PACKAGED_NODE_PTY_ADDON));
+
+  const verified = await verifyStagedNodePty(resources, {
+    arch,
+    maxGlibc: options.maxGlibc,
+    maxGlibcxx: options.maxGlibcxx,
+  });
+  if (verified.addon.sha256 !== addonInfo.sha256) {
+    throw createTypedPkgError('PKG_MANIFEST_MISMATCH', PACKAGED_NODE_PTY_ADDON);
+  }
+  return verified;
+}
+
+/**
+ * Verifies a staged `<resources>/build-native/pty-runtime/node-pty` tree:
+ * required files, no excluded test/map/d.ts files, no symlinks, ELF/arch/ABI gates on pty.node,
+ * and optional exact SHA-256 inventory verification.
+ * @param {string} resources
+ * @param {{ arch?: string, maxGlibc?: string, maxGlibcxx?: string, expectedFiles?: Record<string, string> }} [options]
+ */
+export async function verifyStagedNodePty(resources, options = {}) {
+  const arch = options.arch ?? architecture.arch;
+  const target = join(resources, PACKAGED_NODE_PTY_DIR);
+  const rootStat = await fs.lstat(target).catch(() => null);
+  if (!rootStat || rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+    throw createTypedPkgError('PKG_NATIVE_MISSING', PACKAGED_NODE_PTY_DIR, {
+      reason: 'TERMINAL_UNAVAILABLE',
+      targetArch: arch,
+    });
+  }
+  for (const requiredRel of PACKAGED_NODE_PTY_REQUIRED) {
+    const st = await fs.lstat(join(target, requiredRel)).catch(() => null);
+    if (!st || st.isSymbolicLink() || !st.isFile()) {
+      throw createTypedPkgError('PKG_NATIVE_MISSING', requiredRel, {
+        reason: 'TERMINAL_UNAVAILABLE',
+        targetArch: arch,
+      });
+    }
+  }
+  const addon = await verifyNativeAddon(join(target, PACKAGED_NODE_PTY_ADDON), arch, {
+    maxGlibc: options.maxGlibc,
+    maxGlibcxx: options.maxGlibcxx,
+  });
+  const files = await collectTreeDigests(target);
+  for (const relPath of Object.keys(files)) {
+    if (PACKAGED_NODE_PTY_EXCLUDED.test(basename(relPath))) {
+      throw createTypedPkgError('PKG_ENTRY_INVALID', relPath);
+    }
+  }
+  if (options.expectedFiles) {
+    const expectedKeys = Object.keys(options.expectedFiles).sort(compareEntryNames);
+    const actualKeys = Object.keys(files).sort(compareEntryNames);
+    for (const relPath of actualKeys) {
+      if (!(relPath in options.expectedFiles) || options.expectedFiles[relPath] !== files[relPath]) {
+        throw createTypedPkgError('PKG_MANIFEST_MISMATCH', `${PACKAGED_NODE_PTY_DIR}/${relPath}`);
+      }
+    }
+    if (actualKeys.length !== expectedKeys.length) {
+      throw createTypedPkgError('PKG_MANIFEST_MISSING', PACKAGED_NODE_PTY_DIR);
+    }
+  }
+  return Object.freeze({
+    target,
+    arch,
+    addon,
+    files,
+  });
+}
+
 /** Complete exact inventory: extras, aliases, mode drift and omissions all fail closed.
  * @param {string} root */
 export async function verifyInstall(root, arch = architecture.arch) {
   for (const name of ['metaviewer','resources/bin/metaviewer-core','resources/bin/mv-daemon-adapter']) await verifyBinary(join(root,name), arch);
+  if (await fs.lstat(join(root, 'resources', PACKAGED_NODE_PTY_DIR)).catch(() => null)) {
+    await verifyStagedNodePty(join(root, 'resources'), { arch });
+  }
   const manifest = await fs.readFile(`${root}.sha256`,'utf8');
   /** @type {Map<string, { digest: string, mode: number }>} */
   const expected = new Map();
@@ -2448,6 +2870,7 @@ export async function packageShell(env = process.env) {
     await fs.writeFile(join(operatorRoot,'ATTACH.md'),ATTACH_GUIDE);
 
     await fs.copyFile(join(ui,'kit.lock.json'),join(built[0],'resources/kit.lock.json'));
+    await stageNodePty(join(built[0], 'resources'), { arch: architecture.arch });
     await fs.writeFile(join(built[0],'INSTALL.md'), `# MetaViewer Linux ${architecture.arch}
 
 Run ./metaviewer to start the production UI with its bundled real core.
