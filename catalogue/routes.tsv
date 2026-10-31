@@ -1238,6 +1238,7 @@ test_live_teardown.py	tests/test_live_teardown.py
 test_meta_site.py	tests/test_meta_site.py
 test_multi_capsule.py	tests/test_multi_capsule.py
 test_mv_demo.py	tests/test_mv_demo.py
+test_mv_demo_flow.py	tests/test_mv_demo_flow.py
 test_mv_identity.py	tests/test_mv_identity.py
 testmvr-a9d3d841457c	tests/test_mv_ram_admission.py
 test_mw_home_cli.py	tests/test_mw_home_cli.py
@@ -1382,6 +1383,7 @@ capture-3d7a966c605e	ui/test/captureTransport.test.js
 contrast.test.js	ui/test/contrast.test.js
 coreLauncher.test.js	ui/test/coreLauncher.test.js
 creativ-f3bdf7f2988d	ui/test/creativeCapsule.test.js
+demoflo-dbdd4f1e86e9	ui/test/demoflow-dialog.test.js
 frame-ref-v02.test.js	ui/test/frame-ref-v02.test.js
 frame-wait.mjs	ui/test/frame-wait.mjs
 framePort.test.js	ui/test/framePort.test.js
@@ -1390,6 +1392,7 @@ frameReader.test.js	ui/test/frameReader.test.js
 frameRe-ec3058eeff9f	ui/test/frameReaderOnePass.test.mjs
 frameTile.test.js	ui/test/frameTile.test.js
 framesParity.test.mjs	ui/test/framesParity.test.mjs
+handoff-8d0c5534ac13	ui/test/handoff-notice.test.js
 hostset-f2d771cedde2	ui/test/host-settings-fps.test.js
 hostBindings.test.js	ui/test/hostBindings.test.js
 hostFix2.test.mjs	ui/test/hostFix2.test.mjs
