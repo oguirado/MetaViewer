@@ -193,6 +193,11 @@ func RuntimeFromEnv() (Runtime, error) {
 	}
 	authority.expectedCoreCommit = expectedCoreCommit
 	cleanup := func() {
+		if helloSession.displayTaps != nil {
+			stop, cancel := context.WithTimeout(context.Background(), time.Second)
+			_ = helloSession.displayTaps.Close(stop)
+			cancel()
+		}
 		for _, s := range helloSession.subscriptions {
 			_ = s.Close(context.Background())
 			if skipped := s.SkippedPolls(); skipped > 0 {
@@ -1103,6 +1108,7 @@ type helloState struct {
 	manager       *capsule.Manager
 	handler       ipc.Handler
 	subscriptions []*frames.Subscriptions
+	displayTaps   *frames.DisplayTaps
 	view          capsule.ViewBackend
 	recorder      *record.Manager
 	newRecorder   func(uint64, cli.Clock) (*record.Manager, error)
@@ -1221,7 +1227,16 @@ func (s *helloState) accept(ctx context.Context, profiles map[string]capsule.Pro
 	}
 	byRoot := map[string]*frames.Subscriptions{}
 	var ring *frames.RingSource
+	var displayTaps *frames.DisplayTaps
 	beforeDestroy := func(ctx context.Context, id string) error {
+		if err := displayTaps.Stop(ctx, id); err != nil {
+			fmt.Fprintf(os.Stderr, "adapter: DISPLAY stop %s: %v; VERIFIED cleanup continues\n", id, err)
+			// [TARGET, unit decision] DISPLAY may consume the destroy deadline.
+			// Give VERIFIED its existing bounded drain window independently.
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			ctx = cleanupCtx
+		}
 		if err := unsubscribeSurface(byRoot)(ctx, id); err != nil {
 			return err
 		}
@@ -1284,6 +1299,59 @@ func (s *helloState) accept(ctx context.Context, profiles map[string]capsule.Pro
 	s.recorder = freshRecorder
 	s.subscriptions = append(s.subscriptions, pending...)
 	s.handler = subscriptionHandler(fresh, profiles, byRoot, wireHandler(fresh, profiles, pubs, origin, s.recorder))
+	// [TARGET, unit decision] DISPLAY starts once the admitted create binding
+	// exists. Use the host RAM floor plus all persisted incumbent reservations.
+	displayTaps = frames.NewDisplayTaps(session.ctx, frames.DisplayTapConfig{
+		RuntimeDir: displayBaseDir(), Diagnostics: os.Stderr,
+		Resolve: func(id string) (frames.DisplayTarget, error) {
+			b, err := fresh.SubscriptionBinding(id)
+			if err != nil {
+				return frames.DisplayTarget{}, err
+			}
+			return frames.ResolveDisplayTarget(b, os.Getenv("MV_SRF_STATE_DIR"))
+		},
+		Admit: func() error {
+			// DISPLAY never waits behind a native create's admission lock.
+			path := os.Getenv("MV_RAM_ADMISSION_DIR")
+			if path == "" {
+				path = filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "metaviewer", "ram-admission")
+			}
+			dir, err := openStateDir(path)
+			if err != nil {
+				return err
+			}
+			defer dir.Close()
+			info, err := dir.Stat()
+			if err != nil {
+				return err
+			}
+			owner, ok := info.Sys().(*syscall.Stat_t)
+			if !ok || owner.Uid != uint32(os.Getuid()) || info.Mode() != os.ModeDir|0700 {
+				return configuration("private RAM admission directory required")
+			}
+			if err := syscall.Flock(int(dir.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+				return err
+			}
+			defer syscall.Flock(int(dir.Fd()), syscall.LOCK_UN)
+			entries, err := os.ReadDir(dir.Name())
+			if err != nil {
+				return err
+			}
+			return checkRAM(admissionMemory, len(entries))
+		},
+	})
+	s.displayTaps = displayTaps
+	nextDisplay := s.handler
+	s.handler = func(ctx context.Context, envelope ipc.Envelope) ([]json.RawMessage, error) {
+		events, err := nextDisplay(ctx, envelope)
+		if err == nil {
+			var request capsule.Request
+			if json.Unmarshal(envelope.Body, &request) == nil && request.Op == "create" {
+				displayTaps.StartReplies(events)
+			}
+		}
+		return events, err
+	}
 	s.welcomed = true
 	go func() {
 		_ = fresh.MonitorLiveness(session.ctx, func(ctx context.Context, body json.RawMessage) error {
@@ -1309,4 +1377,16 @@ func (s *helloState) accept(ctx context.Context, profiles map[string]capsule.Pro
 		})
 	}()
 	return nil
+}
+
+// displayBaseDir is the DISPLAY ring base (spec v1.1): MV_DISPLAY_DIR, else
+// /dev/shm/metaviewer-display-<uid> (tmpfs). The packaged app's private
+// XDG_RUNTIME_DIR lives under /tmp, which is not tmpfs on every host. The
+// base and its metaviewer child are created 0700 here; the ring writer
+// re-checks owner, mode and tmpfs without following symlinks.
+func displayBaseDir() string {
+	base := frames.DisplayBaseDir()
+	_ = os.Mkdir(base, 0700)
+	_ = os.Mkdir(filepath.Join(base, "metaviewer"), 0700)
+	return base
 }
