@@ -84,8 +84,15 @@ class Corpus:
         self.bundle = gate.strict_load(bundle_raw)
         self.schemas = {}
         for kind in ('site', 'workflow', 'step', 'run'):
-            schema = gate.strict_load(bounded_read(
-                self.root / 'standards' / 'schemas' / (kind + '.v1.json'), self.root, 1024 * 1024))
+            # [TARGET, unit decision] A home without standards/schemas (the operator
+            # MemoryWeb home holds only sites/) uses the projection of the pinned
+            # bundle, which has just been verified against SCHEMA_PIN. A schema file
+            # that exists is still read and compared below, never replaced.
+            schema_path = self.root / 'standards' / 'schemas' / (kind + '.v1.json')
+            if os.path.lexists(self.root / 'standards'):
+                schema = gate.strict_load(bounded_read(schema_path, self.root, 1024 * 1024))
+            else:
+                schema = dict(self.bundle['$defs'][kind], **{'$defs': self.bundle['$defs']})
             # MemoryWeb projections must be byte-semantically identical to the
             # definitions pinned by Wender, including their closed root shape.
             projection = {k: v for k, v in schema.items() if k not in ('$defs', '$schema', '$id')}

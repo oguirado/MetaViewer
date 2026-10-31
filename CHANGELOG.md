@@ -25,6 +25,8 @@
 - Discover agent handoff records from the newest private run directories so the human-handoff notice can appear without a launcher path list; an explicit `MV_HANDOFF_PATHS` keeps its closed behaviour.
 - Give an operator demo Stop 300 seconds to seal evidence before escalating, keeping the 10 second budget for quit-time disposal, and refuse a check result that declares a non-user site source.
 - Report the adapter's "profile already bound" create refusal as the stable `PROFILE_ALREADY_BOUND` code instead of a generic failure.
+- Let the MemoryWeb owner validate a home that carries no `standards/schemas` against the pinned bundle, while a present schema directory is still compared and never replaced.
+- Make the operator ChatGPT and Gemini MemoryWeb sites runnable: real provenance files, zero minimum notice, a 16000-character Gemini prompt cap, a polled Gemini completion step and documented re-ask and wall procedures.
 
 - Refuse required-adapter boot with a typed, redacted configuration reason and honest startup guidance.
 - Identify native capability replies without network modes as `legacy_binary`, preserving legacy behavior.
