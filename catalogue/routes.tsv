@@ -1426,6 +1426,7 @@ hostFix2.test.mjs	ui/test/hostFix2.test.mjs
 hostMax-44a31ed4a05c	ui/test/hostMaxFpsOrder.test.mjs
 ident-dialog.test.js	ui/test/ident-dialog.test.js
 ident-persist.test.js	ui/test/ident-persist.test.js
+inputco-077df8bd212c	ui/test/input-coalesce.test.js
 inputar-41c9945ee3e5	ui/test/inputarm-wall-input.test.js
 inputu2-port.test.js	ui/test/inputu2-port.test.js
 inputu3-c2420a5d6d39	ui/test/inputu3-canvas-echo.test.js
