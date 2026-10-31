@@ -1416,6 +1416,7 @@ export function installFramePortRouter(options) {
    */
   function onWindowMessage(event) {
     if (disposed) return;
+    if (event?.data?.type === 'metaviewer:display-port') return;
     const ports = event?.ports;
     if (event === null || typeof event !== 'object') {
       closePorts(ports);

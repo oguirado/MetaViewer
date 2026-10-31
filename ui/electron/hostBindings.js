@@ -19,6 +19,7 @@
 import { createSettingsStore, DEFAULT_SETTINGS, INTENT_OPS, mapSurfaceInputRefusal, recordingDestination, validateCadence, validateIntentBody, validateProposalBody, validateSettings, validateSurfaceInputBatch } from './authorityWire.js';
 export { INTENT_OPS };
 import { createTerminalHost } from './terminalHost.js';
+import { createDisplayHost, displayBaseDir } from './displayReader.js';
 import { assertCaptureCall, assertCaptureReply, validCaptureState } from './captureBridge.js';
 import { createConnection } from 'node:net';
 import { spawnSync } from 'node:child_process';
@@ -169,7 +170,8 @@ export async function createMainBindings({env = process.env, createMessageChanne
     const channelFactory = createMessageChannel;
     const clipboardMod = electronMod?.clipboard ?? { writeText() {} };
     const terminal = createTerminalHost({ createMessageChannel: channelFactory, clipboard: clipboardMod, env });
-    electronMod?.app?.once?.('before-quit', () => { void terminal.dispose(); });
+    const display = createDisplayHost({ root: displayBaseDir(env), env, createDisplayChannel: channelFactory });  // ring spec v1.1 base
+    electronMod?.app?.once?.('before-quit', () => { void terminal.dispose(); void display.dispose(); });
     /** @type {Set<(entry:any)=>any>} */ const listeners = new Set();
     /** @type {Map<string,any>} */ const surfaces = new Map();
     // [TARGET, unit decision] Ids of destroyed or lost surfaces (bounded, oldest first). A late error
@@ -240,6 +242,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
       if (disposed) return; disposed = true; live = false;
       stopSettings();
       void terminal.dispose();
+      void display.dispose();
       rejectReady(fail()); socket?.destroy();
       for (const item of pending.values()) {clearTimeout(item.timer);item.reject(fail());} pending.clear();
       for (const qState of surfaceInputQueues.values()) {
@@ -458,6 +461,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
         if (state?.schema !== 'surface/v0.2' || !id(state.surface_id)) throw fail();
         if (['destroyed','lost'].includes(state.state)) {
           if (body.event === 'state_changed') publishState(state);
+          display.removeSurface(state.surface_id);
           surfaces.delete(state.surface_id);
           departed.delete(state.surface_id); departed.add(state.surface_id);
           if (departed.size > MAX_ITEMS) departed.delete(/** @type {string} */ (departed.values().next().value));
@@ -478,6 +482,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
           if (!surfaces.has(state.surface_id) && surfaces.size >= MAX_ITEMS) throw fail();
           surfaces.set(state.surface_id,Object.freeze({...state}));
           departed.delete(state.surface_id);
+          display.updateSurface(state);
           subscribeSurface(state);
           if (body.event === 'state_changed') publishState(state);
         }
@@ -541,6 +546,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
           if (satisfied) result = true;
         } else if (request.schema === 'ui_intent/v0.2' && !['take_control','release_control','fold','unfold'].includes(request.op)
             && isDeepStrictEqual(body, request)) {
+          if (['hide','show'].includes(request.op) && surfaces.has(target)) display.updateSurface({...surfaces.get(target), visibility: request.op === 'hide' ? 'hidden' : 'unfolded'});
           result = true;
         }
         if (result !== undefined) {clearTimeout(item.timer);pending.delete(key);if (request.schema === 'ui_intent/v0.2') lastIntentReplySeq = received;item.resolve(result);}
@@ -1006,7 +1012,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
           pending.set(key,{body,resolve,reject,timer});
           try {send(body);} catch {shutdown();}
         });
-      }},wire:{terminal,profiles:terminal.profiles,frames:{
+      }},wire:{terminal,profiles:terminal.profiles,display,frames:{
       get requestedWallFps() {
         return requestedWallFps;
       },
@@ -1030,14 +1036,16 @@ export async function createMainBindings({env = process.env, createMessageChanne
         // Each registration owns its listener, even when callbacks are reused.
         const subscription = (/** @type {any} */ entry) => listener(entry);
         listeners.add(subscription);
+        display.setSubscribed(true);
         try {
           for (const state of surfaces.values()) {
+            display.updateSurface(state);
             subscribeSurface(state);
             const latest = latestFrames.get(state.surface_id);
             if (latest && state.state === 'active') publish(latest);
           }
         } catch {shutdown();throw fail();}
-        return () => listeners.delete(subscription);
+        return () => { listeners.delete(subscription); if (listeners.size === 0) display.setSubscribed(false); };
       }}}};
   } catch (error) {
     socket?.destroy();

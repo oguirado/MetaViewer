@@ -158,6 +158,8 @@ export function createOperatorFacade(transport) {
 
 /**
  * @typedef {object} PreloadTransport Injected main-side invoke handle.
+ * @property {(surfaceId:string)=>void} [displayRequest] Private DISPLAY pull.
+ * @property {(value:any)=>void} [displayDiagnostic] Bounded private DISPLAY stages.
  * @property {(channel: string, args: ReadonlyArray<unknown>) => Promise<unknown>} invoke
  * Fixed-channel invoke returning the main outcome.
  * @property {boolean} [nested]
@@ -846,6 +848,10 @@ function wireCall(channel,args) {
   return {channel,args:Object.freeze([...args])};
 }
 /** @param {any} value @returns {boolean} */
+function validDisplayNotice(value) {
+  return captureKeys(value,'schema,surface_id') && value.schema==='display_port/v1' && captureId(value.surface_id);
+}
+/** @param {any} value @returns {boolean} */
 function validFrameNotice(value) {
   if (!value || Object.keys(value).sort().join(',')!=='frame_ref,surface') return false;
   const f=value.frame_ref,s=value.surface;
@@ -971,6 +977,67 @@ function wireFacade(transport) {
   }
   /** @type {Set<(frame:any)=>void>} */ const listeners=new Set();
   /** @type {null|(()=>void)} */ let revokeFrames=null;
+  // [TARGET, unit decision] A DISPLAY port may precede the lazy renderer
+  // router. Retain one port per surface (at most 256 [TARGET]) until the
+  // same-origin router announces readiness; never alter VERIFIED notices.
+  let displayRouterReady=false;
+  /** @type {Map<string, Set<string>>} */ const displayStages=new Map();
+  /** @param {any} value */
+  const reportDisplayStage=(value)=>{
+    if(transport.nested || !captureId(value.surface_id)
+        || !['PRELOAD_GOT_PORT','PRELOAD_FORWARDED','ROUTER_ATTACHED','FIRST_FRAME','FIRST_PAINT','REFUSED','VISIBILITY'].includes(value.stage)) return;
+    let seen=displayStages.get(value.surface_id);
+    if(!seen) {
+      if(displayStages.size>=256) return;
+      seen=new Set();displayStages.set(value.surface_id,seen);
+    }
+    if(seen.has(value.stage)) return;
+    seen.add(value.stage);
+    transport.displayDiagnostic?.(value);
+  };
+  /** @type {Map<string,{value:any,port:any}>} */ const pendingDisplayPorts=new Map();
+  const clearDisplayPorts=()=>{
+    for(const {port} of pendingDisplayPorts.values()) { try { port.close?.(); } catch {} }
+    pendingDisplayPorts.clear();
+  };
+  /** @param {any} value @param {any} port */
+  const forwardDisplayPort=(value,port)=>{
+    try {
+      window.postMessage({type:'metaviewer:display-port',schema:'display_port/v1',surface_id:value.surface_id},PRIVILEGED_ORIGIN,[port]);
+      reportDisplayStage({schema:'display_diagnostic/v1',surface_id:value.surface_id,stage:'PRELOAD_FORWARDED',detail:'OK'});
+    } catch {
+      reportDisplayStage({schema:'display_diagnostic/v1',surface_id:value.surface_id,stage:'REFUSED',detail:'TRANSFER_FAILED'});
+      try { port.close?.(); } catch {}
+    }
+  };
+  if(typeof window!=='undefined' && typeof window.addEventListener==='function') {
+    window.addEventListener('message',(event)=>{
+      if(event.origin===PRIVILEGED_ORIGIN && captureKeys(event.data,'detail,schema,stage,surface_id,type')
+          && event.data.type==='metaviewer:display-diagnostic' && event.data.schema==='display_diagnostic/v1'
+          && captureId(event.data.surface_id)) {
+        const {schema,surface_id,stage,detail}=event.data;
+        reportDisplayStage({schema,surface_id,stage,detail});
+        return;
+      }
+      if(event.origin===PRIVILEGED_ORIGIN && captureKeys(event.data,'schema,surface_id,type')
+          && event.data.type==='metaviewer:display-request' && event.data.schema==='display_request/v1'
+          && typeof event.data.surface_id==='string' && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(event.data.surface_id)) {
+        // A pull also proves router readiness: no one-shot ready message is
+        // required for convergence after a missed or early announcement.
+        displayRouterReady=true;
+        for(const {value,port} of pendingDisplayPorts.values()) forwardDisplayPort(value,port);
+        pendingDisplayPorts.clear();
+        transport.displayRequest?.(event.data.surface_id);
+        return;
+      }
+      if(event.origin!==PRIVILEGED_ORIGIN || !captureKeys(event.data,'schema,type')
+          || event.data.type!=='metaviewer:display-ready' || event.data.schema!=='display_ready/v1') return;
+      displayRouterReady=true;
+      for(const {value,port} of pendingDisplayPorts.values()) forwardDisplayPort(value,port);
+      pendingDisplayPorts.clear();
+    });
+    window.addEventListener('unload',clearDisplayPorts,{once:true});
+  }
   let subscriptionGeneration=0;
   let diagFramesReceived=0,diagInvalidNotices=0,diagPortsReceived=0,diagNoticesForwarded=0,diagLegacyNoticesForwarded=0,diagPortsClosed=0;
   let diagRehashSkipped=0,diagRehashDone=0;
@@ -1276,6 +1343,25 @@ function wireFacade(transport) {
               try { port.close?.(); } catch { /* Continue releasing unused ports. */ }
             }
           };
+          if (validDisplayNotice(value)) {
+            reportDisplayStage({schema:'display_diagnostic/v1',surface_id:value.surface_id,stage:'PRELOAD_GOT_PORT',detail:ports?.length===1?'OK':'INVALID_PORTS'});
+            if (ports?.length===1 && typeof window!=='undefined' && window.location?.origin===PRIVILEGED_ORIGIN) {
+              if(displayRouterReady) forwardDisplayPort(value,ports[0]);
+              else {
+                const old=pendingDisplayPorts.get(value.surface_id);
+                try { old?.port.close?.(); } catch {}
+                pendingDisplayPorts.delete(value.surface_id);
+                if(pendingDisplayPorts.size>=256) {
+                  const first=pendingDisplayPorts.keys().next().value;
+                  if(first!==undefined) { try { pendingDisplayPorts.get(first)?.port.close?.(); } catch {} pendingDisplayPorts.delete(first); }
+                }
+                pendingDisplayPorts.set(value.surface_id,{value,port:ports[0]});
+              }
+            } else {
+              closePorts();
+            }
+            return;
+          }
           if (!validFrameNotice(value)) {
             diagInvalidNotices+=1;
             if (ports?.length) diagPortsClosed+=1;
@@ -1331,13 +1417,13 @@ function wireFacade(transport) {
         });
         void call('subscribeFrames',[]).catch(()=>{
           if(generation!==subscriptionGeneration) return;
-          ++subscriptionGeneration;listeners.clear();clearFrameDiagTimer();revokeFrames?.();revokeFrames=null;
+          ++subscriptionGeneration;listeners.clear();clearFrameDiagTimer();clearDisplayPorts();revokeFrames?.();revokeFrames=null;
         });
       }
       return ()=>{
         if(!active) return;active=false;listeners.delete(listener);
         if(!listeners.size && revokeFrames) {
-          ++subscriptionGeneration;clearFrameDiagTimer();revokeFrames();revokeFrames=null;
+          ++subscriptionGeneration;clearFrameDiagTimer();clearDisplayPorts();revokeFrames();revokeFrames=null;
           void call('unsubscribeFrames',[]).catch(()=>{});
         }
       };
@@ -1450,6 +1536,8 @@ export function installPreload(electron) {
   return createPreloadFacade({
     transport: {
       nested,
+      displayDiagnostic: (/** @type {any} */ value) => { if (!nested) /** @type {any} */(ipcRenderer).send?.('metaviewer:display-diagnostic', value); },
+      displayRequest: (/** @type {string} */ surfaceId) => { if (!nested) /** @type {any} */(ipcRenderer).send?.('metaviewer:display-request', {schema:'display_request/v1',surface_id:surfaceId}); },
       ...(qaEnabled ? { qa: true } : {}),
       ...(frameDiagEnabled ? { frameDiag: true } : {}),
       subscribe: typeof /** @type {any} */(ipcRenderer).on === 'function' ?
@@ -1463,6 +1551,9 @@ export function installPreload(electron) {
           cb(value,event.ports);
         };
         native.on(channel,listener);
+        // Private DISPLAY handshake: the native receiver must exist before
+        // main transfers ports. No renderer capability or VERIFIED change.
+        if (channel === 'metaviewer:authority.frames') native.send?.('metaviewer:display-receiver-ready');
         return () => native.removeListener(channel,listener);
       } : undefined,
       /**

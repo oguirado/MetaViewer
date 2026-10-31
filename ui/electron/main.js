@@ -2169,6 +2169,7 @@ export async function bootProductionMain(handles) {
   /** @type {Map<string, any>} */
   const capsuleStates = new Map();
   let wireBridge = /** @type {{dispose:()=>Promise<void>} | null} */(null);
+  let displayBridge = /** @type {{dispose:()=>Promise<void>} | null} */(null);
   let operatorBridge = /** @type {{dispose:()=>Promise<void>} | null} */(null);
   let captureBridge = /** @type {{dispose:()=>Promise<void>} | null} */(null);
   let qaBridge = /** @type {{enabled:boolean, dispose:()=>Promise<void>} | null} */(null);
@@ -2227,6 +2228,14 @@ export async function bootProductionMain(handles) {
         /* unwind best-effort */
       }
       captureBridge = null;
+    }
+    if (displayBridge !== null && displayBridge !== undefined) {
+      try {
+        await displayBridge.dispose();
+      } catch {
+        /* unwind best-effort */
+      }
+      displayBridge = null;
     }
     if (wireBridge !== null && wireBridge !== undefined) {
       try {
@@ -2525,6 +2534,9 @@ export async function bootProductionMain(handles) {
       listIdentities: () => (import('./operatorBridge.js')).then(({identityRunner}) =>
         identityRunner({tool:resolveIdentityTool({ packaged: packagedLaunch, resourcesPath: process.resourcesPath, rendererRoot: paths.rendererRoot }),env:typed.env})('list', {})),
       ...(frameDiagBridge?.enabled ? { frameDiag: frameDiagBridge } : {}) });
+    if (!retail.nested && typed.wire && typeof /** @type {any} */ (typed.wire).display?.subscribe === 'function') {
+      displayBridge = (await import('./displayReader.js')).installDisplayBridge({ ipcMain, contents: contentsUnknown, display: /** @type {any} */ (typed.wire).display });
+    }
     if (!retail.nested && envRec.MV_E2E_LIVE !== undefined && envRec.MV_E2E_LIVE !== '') {
       qaBridge = (await import('./qaAnchors.js')).installQaAnchors({
         ipcMain,

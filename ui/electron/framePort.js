@@ -1225,3 +1225,146 @@ export function createFramePort(options) {
     Object.freeze({ postFrame, acceptAck, revokeFramePort, getInstrumentation })
   );
 }
+
+/** Wire notice type and schemas for the unverified DISPLAY tier (U-DEC-0153). */
+export const DISPLAY_PORT_NOTICE_TYPE = 'metaviewer:display-port';
+export const DISPLAY_PORT_NOTICE_SCHEMA = 'display_port/v1';
+export const DISPLAY_DELIVERY_SCHEMA = 'display_frame/v1';
+export const DISPLAY_STATE_SCHEMA = 'display_state/v1';
+export const DISPLAY_ACK_SCHEMA = 'display_ack/v1';
+
+/**
+ * Create a dedicated unverified DISPLAY sender port for one surface. Uses a
+ * separate schema (`display_frame/v1`, `display_state/v1`) and port so display
+ * frames can never enter VERIFIED admission, frame_ref handling or receipts.
+ *
+ * @param {{
+ *   port: any,
+ *   surfaceId: string,
+ *   onVisibilityChange?: (visible: boolean) => void,
+ *   onRevoke?: () => void,
+ * }} options
+ */
+export function createDisplayPort(options) {
+  const isObj = (/** @type {unknown} */ v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+  if (
+    !isObj(options) ||
+    !isObj(options.port) ||
+    typeof options.port.postMessage !== 'function' ||
+    !isNonEmptyString(options.surfaceId)
+  ) {
+    fail(FRAME_REASONS.INVALID_CONTRACT, 'createDisplayPort requires { port, surfaceId }');
+  }
+  const { port, surfaceId, onVisibilityChange, onRevoke } = options;
+  let closed = false;
+  let framesSent = 0;
+  let statesSent = 0;
+  let acksReceived = 0;
+
+  /** @param {any} event */
+  function onMessage(event) {
+    if (closed) return;
+    const raw = event !== null && typeof event === 'object' && 'data' in event ? event.data : event;
+    if (!isObj(raw) || raw.schema !== DISPLAY_ACK_SCHEMA || raw.surfaceId !== surfaceId) return;
+    if (raw.kind === 'display_visibility' && typeof raw.hidden === 'boolean') {
+      if (typeof onVisibilityChange === 'function') {
+        try { onVisibilityChange(!raw.hidden); } catch { /* ignore owner fault */ }
+      }
+    } else if (raw.kind === 'display_ack') {
+      acksReceived += 1;
+      if (raw.outcome === 'HIDDEN' && typeof onVisibilityChange === 'function') {
+        try { onVisibilityChange(false); } catch { /* ignore owner fault */ }
+      }
+    }
+  }
+
+  function close() {
+    if (closed) return;
+    closed = true;
+    if (typeof port.off === 'function') {
+      port.off('message', onMessage);
+      port.off('close', close);
+    } else if (typeof port.removeListener === 'function') {
+      port.removeListener('message', onMessage);
+      port.removeListener('close', close);
+    } else if (typeof port.removeEventListener === 'function') {
+      port.removeEventListener('message', onMessage);
+      port.removeEventListener('close', close);
+    }
+    if (typeof port.close === 'function') {
+      try { port.close(); } catch { /* best-effort */ }
+    }
+    if (typeof onRevoke === 'function') {
+      try { onRevoke(); } catch { /* best-effort */ }
+    }
+  }
+
+  if (typeof port.on === 'function') {
+    port.on('message', onMessage);
+    port.on('close', close);
+  } else if (typeof port.addEventListener === 'function') {
+    port.addEventListener('message', onMessage);
+    port.addEventListener('close', close);
+  }
+  if (typeof port.start === 'function') {
+    try { port.start(); } catch { /* best-effort */ }
+  }
+
+  return Object.freeze({
+    /**
+     * @param {{
+     *   generation: number | string,
+     *   seq: number | string,
+     *   captureMonoNs: string,
+     *   width: number,
+     *   height: number,
+     *   bytes: Uint8Array,
+     * }} frame
+     */
+    postDisplayFrame(frame) {
+      if (closed || !isObj(frame) || !(frame.bytes instanceof Uint8Array)) return false;
+      try {
+        port.postMessage({
+          schema: DISPLAY_DELIVERY_SCHEMA,
+          kind: 'display_frame',
+          surfaceId,
+          generation: frame.generation,
+          seq: frame.seq,
+          captureMonoNs: frame.captureMonoNs,
+          width: frame.width,
+          height: frame.height,
+          format: 'rgb24',
+          byteLength: frame.bytes.byteLength,
+          bytes: frame.bytes,
+        });
+        framesSent += 1;
+        return true;
+      } catch {
+        close();
+        return false;
+      }
+    },
+    /** @param {'active' | 'stale' | 'absent'} state @param {number | string} [generation] */
+    postDisplayState(state, generation = 0) {
+      if (closed || (state !== 'active' && state !== 'stale' && state !== 'absent')) return false;
+      try {
+        port.postMessage({
+          schema: DISPLAY_STATE_SCHEMA,
+          kind: 'display_state',
+          surfaceId,
+          state,
+          generation,
+        });
+        statesSent += 1;
+        return true;
+      } catch {
+        close();
+        return false;
+      }
+    },
+    close,
+    getInstrumentation() {
+      return Object.freeze({ closed, framesSent, statesSent, acksReceived });
+    },
+  });
+}

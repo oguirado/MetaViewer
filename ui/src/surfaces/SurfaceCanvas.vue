@@ -42,6 +42,13 @@ const props = defineProps({
   // MVUI25 lane C: frame stream id the tile is bound to (the same value the
   // frame router uses); forwarded verbatim on every queued input event.
   streamId: { type: Number, default: 0 },
+  // FPS-INDICATOR (U-DEC-0153): optional latest frame_ref.capture_us (or a
+  // frame_ref object carrying capture_us) for the tile footer CAP readout,
+  // plus an optional injected clock (() => number | { now: () => number })
+  // for deterministic sliding-window FPS tests.
+  captureUs: { type: Number, default: null },
+  frameRef: { type: Object, default: null },
+  fpsClock: { type: [Function, Object], default: null },
 });
 
 const emit = defineEmits(['canvas-ready', 'canvas-released']);
@@ -58,11 +65,18 @@ let echoController = null;
 let unmounted = false;
 /** Echo dot position in section CSS px; null while no dot shows. */
 const echoDot = ref(/** @type {{ left: number, top: number } | null} */ (null));
-
-/** @type {{ attachCanvas: (args: any) => { ok: boolean, token?: symbol }, detachCanvas: (id: string, token: symbol | null) => void, getInstrumentation: (surfaceId: unknown) => any, evictSurface: (surfaceId: unknown) => unknown } | null} */
+/** @type {{ attachCanvas: (args: any) => { ok: boolean, token?: symbol }, detachCanvas: (id: string, token: symbol | null) => void, getInstrumentation: (surfaceId: unknown) => any, evictSurface: (surfaceId: unknown) => unknown, subscribePresentation?: (listener: () => void) => () => void } | null} */
 const scheduler = /** @type {any} */ (inject('tileScheduler', null));
 /** Live-only frame-port router provided by the entry; null keeps the legacy path. */
 const framePortRouter = /** @type {{ bindSurface?: (binding: any) => boolean, unbindSurface?: (surfaceId: unknown, bindToken?: unknown, options?: { keepStream?: boolean }) => void, getSurfaceStatus?: (surfaceId?: string) => unknown } | null} */ (inject('framePortRouter', null));
+/** Unverified 20-30 fps DISPLAY port router (injected by test harnesses or loaded lazily on mount). */
+const injectedDisplayPortRouter = /** @type {any} */ (inject('displayPortRouter', null));
+/** @type {any} */
+let activeDisplayRouter = injectedDisplayPortRouter;
+const displayBindToken = Symbol('mv-display-binding');
+/** @type {import('vue').Ref<'absent' | 'active' | 'stale'>} */
+const displayMode = ref(/** @type {'absent' | 'active' | 'stale'} */ ('absent'));
+const displayActive = computed(() => displayMode.value === 'active' || displayMode.value === 'stale');
 /**
  * MVUI25 lane C: human-input port provided by the entry (`inputPort`); null
  * in hosts without input (fixtures that predate the port, bare mounts).
@@ -153,6 +167,9 @@ const effectiveDigest = computed(() => props.frame.length > 0 ? props.digest : r
 // A retained handle from the same surface keeps the last painted frame.
 const resolvedState = computed(() => {
   const normalized = props.state === 'stale' ? 'stale' : normalizeSurfaceState(props.state);
+  if (normalized === 'lost') return 'lost';
+  if (displayMode.value === 'stale') return 'stale';
+  if (displayMode.value === 'active') return 'live';
   if (normalized === 'live' && effectiveFrame.value.length === 0) {
     return 'connecting';
   }
@@ -164,7 +181,7 @@ const resolvedState = computed(() => {
 const showFrozen = computed(() => resolvedState.value === 'lost' && effectiveFrame.value.length > 0);
 // The witness strip follows resolved live/stale only (R2-16): a frozen tile
 // names its frame through the Lost badge and the panel Frame badge instead.
-const showWitness = computed(() => effectiveFrame.value.length > 0
+const showWitness = computed(() => (effectiveFrame.value.length > 0 || displayActive.value)
   && (resolvedState.value === 'live' || resolvedState.value === 'stale'));
 
 /**
@@ -200,6 +217,316 @@ const stripName = computed(() => {
   if (strip.value.readOnlyText.length > 0) parts.push(strip.value.readOnlyText);
   return parts.length > 0 ? parts.join(', ') : 'Frame state unavailable';
 });
+
+// ---------------------------------------------------------------------------
+// FPS-INDICATOR (U-DEC-0153): delivered painted FPS over a 2 s sliding window
+// [TARGET, unit decision] and latest frame_ref.capture_us in ms. Counts ONLY
+// painted frames (where the scheduler actually painted onto the canvas and
+// advanced presentCount / lastPresentedHandle), never received or dropped
+// frames. Updates the displayed text at most 2 times per second (every 500 ms)
+// so footer text refreshes never cost frames.
+// ---------------------------------------------------------------------------
+
+const FPS_WINDOW_MS = 2000;
+const FPS_UPDATE_INTERVAL_MS = 500;
+const FPS_PLACEHOLDER = '—';
+
+/** @returns {number} */
+function readFpsClock() {
+  const custom = props.fpsClock;
+  if (typeof custom === 'function') {
+    const val = /** @type {() => number} */ (custom)();
+    if (typeof val === 'number' && Number.isFinite(val)) return val;
+  }
+  if (typeof custom === 'object' && custom !== null && typeof /** @type {{ now?: unknown }} */ (custom).now === 'function') {
+    const val = /** @type {{ now: () => number }} */ (custom).now();
+    if (typeof val === 'number' && Number.isFinite(val)) return val;
+  }
+  if (typeof globalThis.performance?.now === 'function') {
+    return globalThis.performance.now();
+  }
+  return Date.now();
+}
+
+/** @type {number[]} */
+const paintedTimes = [];
+/** @type {number | null} */
+let latestCaptureUs = null;
+let totalPaintedFrames = 0;
+/** @type {number | null} */
+let lastFpsFlushAtMs = null;
+/** @type {ReturnType<typeof setTimeout> | null} */
+let fpsFlushTimer = null;
+/** @type {ReturnType<typeof setTimeout> | null} */
+let fpsStallTimer = null;
+/** @type {number} */
+let lastObservedPresentCount = 0;
+/** @type {string} */
+let lastObservedPresentedHandle = '';
+
+const fpsDisplayText = ref(FPS_PLACEHOLDER);
+const fpsDisplayAttr = ref(FPS_PLACEHOLDER);
+const capDisplayText = ref(FPS_PLACEHOLDER);
+const capDisplayAttr = ref(FPS_PLACEHOLDER);
+
+/**
+ * @param {unknown} raw
+ * @returns {number | null}
+ */
+function parseCaptureUsValue(raw) {
+  if (typeof raw === 'number' && Number.isSafeInteger(raw) && raw >= 0) return raw;
+  if (typeof raw === 'object' && raw !== null) {
+    const rec = /** @type {{ capture_us?: unknown, captureUs?: unknown, frame_ref?: { capture_us?: unknown } }} */ (raw);
+    const val = rec.capture_us ?? rec.captureUs ?? rec.frame_ref?.capture_us;
+    if (typeof val === 'number' && Number.isSafeInteger(val) && val >= 0) return val;
+  }
+  return null;
+}
+
+/**
+ * @param {number} now
+ */
+function prunePaintedTimes(now) {
+  const cutoff = now - FPS_WINDOW_MS + 1e-6;
+  while (paintedTimes.length > 0 && /** @type {number} */ (paintedTimes[0]) <= cutoff) {
+    paintedTimes.shift();
+  }
+}
+
+function clearFpsTimers() {
+  if (fpsFlushTimer !== null) {
+    try { clearTimeout(fpsFlushTimer); } catch { /* ignore */ }
+    fpsFlushTimer = null;
+  }
+  if (fpsStallTimer !== null) {
+    try { clearTimeout(fpsStallTimer); } catch { /* ignore */ }
+    fpsStallTimer = null;
+  }
+}
+
+/**
+ * @param {ReturnType<typeof setTimeout> | null} timer
+ */
+function unrefTimer(timer) {
+  if (timer !== null && typeof timer === 'object' && typeof /** @type {{ unref?: unknown }} */ (timer).unref === 'function') {
+    try { /** @type {{ unref: () => void }} */ (timer).unref(); } catch { /* ignore */ }
+  }
+}
+
+/**
+ * @param {number} now
+ */
+function flushFpsDisplay(now) {
+  prunePaintedTimes(now);
+  lastFpsFlushAtMs = now;
+  const count = paintedTimes.length;
+  const hasWindowFrames = count > 0;
+  const fpsVal = hasWindowFrames ? Math.round((count * 1000) / FPS_WINDOW_MS) : null;
+  fpsDisplayText.value = fpsVal !== null ? String(fpsVal) : FPS_PLACEHOLDER;
+  fpsDisplayAttr.value = fpsDisplayText.value;
+  const capMs = latestCaptureUs !== null ? Math.round(latestCaptureUs / 1000) : null;
+  if (capMs !== null && (hasWindowFrames || totalPaintedFrames === 0)) {
+    capDisplayText.value = `${capMs} ms`;
+    capDisplayAttr.value = String(capMs);
+  } else {
+    capDisplayText.value = FPS_PLACEHOLDER;
+    capDisplayAttr.value = FPS_PLACEHOLDER;
+  }
+}
+
+function armFpsStallTimer() {
+  if (fpsStallTimer !== null) {
+    try { clearTimeout(fpsStallTimer); } catch { /* ignore */ }
+    fpsStallTimer = null;
+  }
+  const now = readFpsClock();
+  prunePaintedTimes(now);
+  if (paintedTimes.length === 0) return;
+  const newest = /** @type {number} */ (paintedTimes[paintedTimes.length - 1]);
+  const waitMs = Math.max(1, Math.ceil(newest + FPS_WINDOW_MS - now + 1));
+  try {
+    fpsStallTimer = setTimeout(() => {
+      fpsStallTimer = null;
+      const at = readFpsClock();
+      prunePaintedTimes(at);
+      if (paintedTimes.length === 0) {
+        flushFpsDisplay(at);
+      } else {
+        flushFpsDisplay(at);
+        armFpsStallTimer();
+      }
+    }, waitMs);
+    unrefTimer(fpsStallTimer);
+  } catch {
+    fpsStallTimer = null;
+  }
+}
+
+/**
+ * Schedules or performs a throttled footer text update (at most 2 times/s).
+ * @param {boolean} [forceImmediate]
+ */
+function scheduleFpsDisplayUpdate(forceImmediate = false) {
+  const now = readFpsClock();
+  if (
+    forceImmediate
+    || lastFpsFlushAtMs === null
+    || now - lastFpsFlushAtMs >= FPS_UPDATE_INTERVAL_MS
+  ) {
+    if (fpsFlushTimer !== null) {
+      try { clearTimeout(fpsFlushTimer); } catch { /* ignore */ }
+      fpsFlushTimer = null;
+    }
+    flushFpsDisplay(now);
+    return;
+  }
+  if (fpsFlushTimer === null) {
+    const remaining = Math.max(1, Math.ceil(FPS_UPDATE_INTERVAL_MS - (now - lastFpsFlushAtMs)));
+    try {
+      fpsFlushTimer = setTimeout(() => {
+        fpsFlushTimer = null;
+        flushFpsDisplay(readFpsClock());
+      }, remaining);
+      unrefTimer(fpsFlushTimer);
+    } catch {
+      fpsFlushTimer = null;
+    }
+  }
+}
+
+/**
+ * Records one painted frame on this tile's canvas.
+ * @param {unknown} [captureHint]
+ */
+function onFramePainted(captureHint) {
+  const cap = parseCaptureUsValue(captureHint);
+  if (cap !== null) latestCaptureUs = cap;
+  const now = readFpsClock();
+  paintedTimes.push(now);
+  totalPaintedFrames += 1;
+  prunePaintedTimes(now);
+  const wasPlaceholder = fpsDisplayAttr.value === FPS_PLACEHOLDER;
+  scheduleFpsDisplayUpdate(wasPlaceholder);
+  armFpsStallTimer();
+}
+
+/**
+ * Updates latest capture_us from frame_ref without counting a painted frame.
+ * @param {unknown} rawCapture
+ */
+function onCaptureUsUpdated(rawCapture) {
+  const cap = parseCaptureUsValue(rawCapture);
+  if (cap === null) return;
+  const hadNone = latestCaptureUs === null;
+  latestCaptureUs = cap;
+  scheduleFpsDisplayUpdate(hadNone && capDisplayAttr.value === FPS_PLACEHOLDER);
+}
+
+function resetFpsState() {
+  clearFpsTimers();
+  paintedTimes.length = 0;
+  latestCaptureUs = null;
+  totalPaintedFrames = 0;
+  lastFpsFlushAtMs = null;
+  lastObservedPresentCount = 0;
+  lastObservedPresentedHandle = '';
+  const initialCap = parseCaptureUsValue(props.captureUs) ?? parseCaptureUsValue(props.frameRef);
+  if (initialCap !== null) latestCaptureUs = initialCap;
+  flushFpsDisplay(readFpsClock());
+}
+
+{
+  const initialCap = parseCaptureUsValue(props.captureUs) ?? parseCaptureUsValue(props.frameRef);
+  if (initialCap !== null) {
+    latestCaptureUs = initialCap;
+    flushFpsDisplay(readFpsClock());
+  }
+}
+
+watch(() => [props.captureUs, props.frameRef], () => {
+  const nextCap = parseCaptureUsValue(props.captureUs) ?? parseCaptureUsValue(props.frameRef);
+  if (nextCap !== null) onCaptureUsUpdated(nextCap);
+});
+
+/**
+ * Inspects scheduler instrumentation for this surface and records a painted
+ * frame only when the scheduler actually painted onto the canvas
+ * (`presentCount` / `lastPresentedHandle` advanced).
+ */
+function checkSchedulerPresentation() {
+  if (scheduler === null || typeof scheduler.getInstrumentation !== 'function') return;
+  let info = null;
+  try {
+    info = scheduler.getInstrumentation(props.surfaceId);
+  } catch {
+    return;
+  }
+  if (info === null || typeof info !== 'object' || info.destroyed === true) return;
+  const presentCount = typeof info.presentCount === 'number' && Number.isSafeInteger(info.presentCount)
+    ? info.presentCount
+    : 0;
+  const handle = typeof info.lastPresentedHandle === 'string' ? info.lastPresentedHandle : '';
+  const capHint = parseCaptureUsValue(info);
+  if (presentCount > lastObservedPresentCount) {
+    const delta = presentCount - lastObservedPresentCount;
+    lastObservedPresentCount = presentCount;
+    if (handle.length > 0) lastObservedPresentedHandle = handle;
+    for (let i = 0; i < delta; i += 1) {
+      onFramePainted(capHint);
+    }
+  } else if (handle.length > 0 && handle !== lastObservedPresentedHandle && presentCount > 0) {
+    lastObservedPresentedHandle = handle;
+    onFramePainted(capHint);
+  } else if (lastObservedPresentCount > 0) {
+    const now = readFpsClock();
+    prunePaintedTimes(now);
+    if (paintedTimes.length === 0 && fpsDisplayAttr.value !== FPS_PLACEHOLDER) {
+      flushFpsDisplay(now);
+    } else {
+      scheduleFpsDisplayUpdate(false);
+    }
+  }
+}
+
+/** @type {(() => void) | null} */
+let stopSchedulerPresentation = null;
+if (scheduler !== null && typeof scheduler.subscribePresentation === 'function') {
+  try {
+    const stop = scheduler.subscribePresentation(checkSchedulerPresentation);
+    if (typeof stop === 'function') stopSchedulerPresentation = /** @type {() => void} */ (stop);
+  } catch { /* Subscription is best-effort. */ }
+}
+
+/** @type {(() => void) | null} */
+let stopAuthorityFrames = null;
+function subscribeAuthorityCaptureUs() {
+  if (stopAuthorityFrames !== null) {
+    try { stopAuthorityFrames(); } catch { /* ignore */ }
+    stopAuthorityFrames = null;
+  }
+  const injectedPort = /** @type {{ subscribeFrames?: unknown } | null} */ (inject('framesPort', null));
+  const globalAuth = /** @type {{ subscribeFrames?: unknown } | null} */ (
+    (/** @type {Record<string, any>} */ (globalThis))?.window?.['metaviewer']?.['authority'] ?? null
+  );
+  const source = typeof injectedPort?.subscribeFrames === 'function'
+    ? injectedPort
+    : (typeof globalAuth?.subscribeFrames === 'function' ? globalAuth : null);
+  if (source === null) return;
+  try {
+    const stop = /** @type {(cb: (notice: unknown) => void) => unknown} */ (source.subscribeFrames).call(
+      source,
+      (notice) => {
+        if (typeof notice !== 'object' || notice === null) return;
+        const rec = /** @type {{ frame_ref?: { surface_id?: unknown, capture_us?: unknown }, surface?: { surface_id?: unknown } }} */ (notice);
+        const sid = rec.frame_ref?.surface_id ?? rec.surface?.surface_id;
+        if (sid !== props.surfaceId) return;
+        onCaptureUsUpdated(rec.frame_ref?.capture_us);
+      },
+    );
+    if (typeof stop === 'function') stopAuthorityFrames = /** @type {() => void} */ (stop);
+  } catch { /* Best-effort subscription. */ }
+}
+subscribeAuthorityCaptureUs();
 
 // ---------------------------------------------------------------------------
 // MVUI25 lane C: human keyboard/pointer capture on the canvas.
@@ -567,6 +894,7 @@ function attachCanvas() {
       canvas: canvasRef.value });
     if (result?.ok === true) {
       canvasToken = result.token ?? null;
+      checkSchedulerPresentation();
       // MVUI30 lane L: a tile mounting already lost keeps the synchronous
       // retained repaint above and immediately releases the binding, so no
       // later present can paint over the frozen frame.
@@ -612,6 +940,7 @@ function bindFramePort() {
             // as 'live' before its first frame arrives.
             retainedFrame.value = '';
             retainedDigest.value = '';
+            resetFpsState();
           }
           // MVUI18C: a newer stream re-registers with ITS delivery identity
           // and the scheduler drops the old canvas binding; the re-attach
@@ -686,8 +1015,56 @@ function maybeEvictSurface(surfaceId) {
   } catch { /* Eviction never breaks teardown. */ }
 }
 
+/**
+ * Bind this tile to the unverified DISPLAY port router.
+ * @param {any} router
+ */
+function bindDisplayRouterInstance(router) {
+  if (!router || typeof router.bindSurface !== 'function') return;
+  try {
+    router.bindSurface({
+      surfaceId: props.surfaceId,
+      bindToken: displayBindToken,
+      getCanvas: () => canvasRef.value,
+      isVisible: () => !unmounted && normalizeSurfaceState(props.state) !== 'lost',
+      onFrame: (/** @type {any} */ frame) => {
+        if (unmounted || frame.surfaceId !== props.surfaceId) return false;
+        if (normalizeSurfaceState(props.state) === 'lost') return false;
+        displayMode.value = 'active';
+        onFramePainted();
+        return true;
+      },
+      onState: (/** @type {{ surfaceId: string, state: 'active' | 'stale' | 'absent' }} */ notice) => {
+        if (unmounted || notice.surfaceId !== props.surfaceId) return;
+        displayMode.value = notice.state;
+      },
+    });
+  } catch { /* Display binding is optional and never breaks VERIFIED rendering. */ }
+}
+
+function bindDisplayPort() {
+  if (activeDisplayRouter !== null) {
+    bindDisplayRouterInstance(activeDisplayRouter);
+    return;
+  }
+  import('../frames/displayPortRouter.js').then((module) => {
+    if (unmounted) return;
+    activeDisplayRouter = module.getSharedDisplayPortRouter();
+    bindDisplayRouterInstance(activeDisplayRouter);
+  }).catch(() => { /* Optional in isolated SFC compile harnesses. */ });
+}
+
+/** @param {unknown} surfaceId */
+function unbindDisplayPort(surfaceId) {
+  if (activeDisplayRouter === null || typeof activeDisplayRouter.unbindSurface !== 'function') return;
+  try {
+    activeDisplayRouter.unbindSurface(String(surfaceId), displayBindToken);
+  } catch { /* Teardown never throws. */ }
+}
+
 onMounted(attachCanvas);
 onMounted(bindFramePort);
+onMounted(bindDisplayPort);
 onMounted(loadEcho);
 
 // INPUT-U3: a newly presented frame may answer the echoed click.
@@ -702,9 +1079,12 @@ watch(() => [props.surfaceId, props.generation, props.epoch], (_current, previou
     // tile — input queued for it is dropped, never dispatched.
     closeInputGate(String(previous[0]));
     unbindFramePort(previous[0]);
+    unbindDisplayPort(previous[0]);
+    displayMode.value = 'absent';
     // L3-1: the pinned delivery identity belongs to the old surface; the
     // rebind below receives a fresh notice for the new one.
     registeredIdentity = null;
+    resetFpsState();
   }
   if (!surfaceChanged && registeredIdentity !== null && canvasToken !== null) {
     // MVUI18D: the canvas is bound with the pinned delivery identity, which a
@@ -724,10 +1104,20 @@ watch(() => [props.surfaceId, props.generation, props.epoch], (_current, previou
     // that other tiles still bind stays live and is kept.
     maybeEvictSurface(String(previous[0]));
     bindFramePort();
+    bindDisplayPort();
   }
 });
 
 onBeforeUnmount(() => {
+  clearFpsTimers();
+  if (stopSchedulerPresentation !== null) {
+    try { stopSchedulerPresentation(); } catch { /* ignore */ }
+    stopSchedulerPresentation = null;
+  }
+  if (stopAuthorityFrames !== null) {
+    try { stopAuthorityFrames(); } catch { /* ignore */ }
+    stopAuthorityFrames = null;
+  }
   // MVUI32 lane I (R3-INPUT-1): unmount closes the gate — drop queued input.
   closeInputGate(props.surfaceId);
   unmounted = true;
@@ -735,6 +1125,7 @@ onBeforeUnmount(() => {
     try { echoController.dispose(); } catch { /* Echo faults never break teardown. */ }
     echoController = null;
   }
+  unbindDisplayPort(props.surfaceId);
   unbindFramePort(props.surfaceId, true);
   if (scheduler !== null) {
     scheduler.detachCanvas(props.surfaceId, canvasToken);
@@ -759,6 +1150,7 @@ onBeforeUnmount(() => {
     :id="domId"
     :data-anchor="anchor"
     :data-state="resolvedState"
+    :data-display-state="displayActive ? displayMode : undefined"
     :aria-label="accessibleName"
   >
     <canvas ref="canvasRef" :hidden="resolvedState !== 'live' && resolvedState !== 'stale' && !showFrozen" class="mv-surface__canvas" :id="props.inputEnabled && resolvedState !== 'lost' ? inputAnchor : undefined" :data-semantic-anchor="props.inputEnabled && resolvedState !== 'lost' ? inputAnchor : undefined" :tabindex="canvasFocusable ? 0 : undefined" :aria-hidden="canvasFocusable ? undefined : 'true'" :aria-label="props.inputEnabled && resolvedState !== 'lost' ? inputName : undefined" @focus="onCanvasFocus" @blur="onCanvasBlur" @keydown="onCanvasKeyDown" @pointerdown="onCanvasPointerDown" @pointerup="onCanvasPointerUp" @pointercancel="onCanvasPointerCancel" @click="onCanvasClick" @wheel="onCanvasWheel" @contextmenu="onCanvasButtonDefault" @auxclick="onCanvasButtonDefault" />
@@ -777,6 +1169,9 @@ onBeforeUnmount(() => {
       <span class="mv-surface__key">FRAME: {{ strip.frameText.length > 0 ? strip.frameText : '—' }}</span>
       <span class="mv-surface__key">GEN: {{ strip.generationText.length > 0 ? strip.generationText : '—' }}</span>
       <span class="mv-surface__key">SHA256: {{ strip.digestText.length > 0 ? strip.digestText : '—' }}</span>
+      <span class="mv-surface__key" :data-fps="fpsDisplayAttr">FPS: {{ fpsDisplayText }}</span>
+      <span class="mv-surface__key" :data-capture-ms="capDisplayAttr">CAP: {{ capDisplayText }}</span>
+      <span v-if="displayActive" class="mv-surface__display-chip" data-display-chip="unverified">DISPLAY · unverified</span>
       <span v-if="strip.readOnlyText.length > 0" class="mv-surface__guard">{{ strip.readOnlyText }}</span>
     </div>
   </section>
@@ -887,5 +1282,17 @@ onBeforeUnmount(() => {
   margin-left: auto;
   font-weight: 600;
   color: var(--mv-primitive-color-amber-300, #f2c14e);
+}
+.mv-surface__display-chip {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--mv-component-badge-background);
+  color: var(--mv-component-badge-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 14px;
+  pointer-events: none;
 }
 </style>

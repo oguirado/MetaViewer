@@ -1,0 +1,1 @@
+- Forward `MV_DISPLAY_TAP` in `ALLOWED_ADAPTER_ENV` (`ui/electron/coreLauncher.js`) so `MV_DISPLAY_TAP=off` also disables the daemon-adapter display tap loop, and move `.mv-surface__display-chip` (`DISPLAY · unverified`) into the `SurfaceCanvas.vue` footer witness strip next to `FPS`/`CAP` so the top-right tile input control chip never covers it.
