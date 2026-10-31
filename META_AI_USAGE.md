@@ -19,17 +19,17 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 1,176 | 55 | 1,121 |
-| Lanes finished OK | 1,176 | 55 | 1,121 |
-| Agent steps | 49,031 | 2,705 | 46,326 |
-| Lane-hours of agent work | 120.1 | 5.2 | 114.9 |
-| Fresh input tokens | 197,883,515 | 11,482,034 | 186,401,481 |
-| Cache-read input tokens | 3,809,240,097 | 226,255,212 | 3,582,984,885 |
-| Prompt cache hit % | 95.1 | 95.2 | 95.1 |
-| Output tokens | 40,187,004 | 2,135,708 | 38,051,296 |
-| Thinking tokens | 23,728,792 | 1,050,039 | 22,678,753 |
-| Cost (USD) | 35.4442 | 2.0279 | 33.4164 |
-| Cost per lane (USD) | 0.0301 | 0.0369 | 0.0298 |
+| Lanes launched | 1,183 | 55 | 1,128 |
+| Lanes finished OK | 1,183 | 55 | 1,128 |
+| Agent steps | 49,174 | 2,705 | 46,469 |
+| Lane-hours of agent work | 120.3 | 5.2 | 115.1 |
+| Fresh input tokens | 198,412,308 | 11,482,034 | 186,930,274 |
+| Cache-read input tokens | 3,814,495,890 | 226,255,212 | 3,588,240,678 |
+| Prompt cache hit % | 95.1 | 95.2 | 95.0 |
+| Output tokens | 40,273,648 | 2,135,708 | 38,137,940 |
+| Thinking tokens | 23,776,037 | 1,050,039 | 22,725,998 |
+| Cost (USD) | 35.5249 | 2.0279 | 33.4971 |
+| Cost per lane (USD) | 0.03 | 0.0369 | 0.0297 |
 
 Rooms: 136. Peak concurrent lanes [MEASURED from lane start/end]: 37.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
@@ -38,7 +38,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 787 | 94.0 | 19.1967 |
+| build | 794 | 94.0 | 19.2774 |
 | context | 42 | 95.9 | 1.9093 |
 | context packs + test ideation (U-DEC-0139) | 13 | 91.1 | 0.2195 |
 | demo | 4 | 90.7 | 0.0557 |
@@ -86,7 +86,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 449 | 94.1 | 10.9182 | direct Muse job |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 456 | 94.0 | 10.9989 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -883,10 +883,12 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | a | ctx_ui_a | Oct 29 07:32 | yes | 15 | 84.9 | 0.010515 |
 | direct-direct | a | fc_bk_a | Oct 29 07:32 | yes | 15 | 84.9 | 0.010515 |
 | direct-direct | a | fc_w4_a | Oct 29 07:32 | yes | 15 | 84.9 | 0.010515 |
+| direct-direct | a | r1n_U3_a | Oct 29 07:32 | yes | 15 | 84.9 | 0.010515 |
 | direct-direct | a | ws6_r4_a | Oct 29 07:32 | yes | 15 | 84.9 | 0.010515 |
 | direct-direct | b | ctx_ui_b | Oct 29 07:32 | yes | 17 | 89.4 | 0.013832 |
 | direct-direct | b | fc_bk_b | Oct 29 07:32 | yes | 17 | 89.4 | 0.013832 |
 | direct-direct | b | fc_w4_b | Oct 29 07:32 | yes | 17 | 89.4 | 0.013832 |
+| direct-direct | b | r1n_U3_b | Oct 29 07:32 | yes | 17 | 89.4 | 0.013832 |
 | direct-direct | b | ws6_r4_b | Oct 29 07:32 | yes | 17 | 89.4 | 0.013832 |
 | direct-direct | vb_a | ctx_wavb_a | Oct 29 07:33 | yes | 35 | 92.8 | 0.024915 |
 | direct-direct | vb_b | ctx_wavb_b | Oct 29 07:33 | yes | 23 | 89.8 | 0.015365 |
@@ -1382,6 +1384,11 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | -BROKER-CLASSES_2 | r1k_U3-BROKER-CLASSES_2 | Oct 31 22:10 | yes | 20 | 89.9 | 0.01452 |
 | direct-direct | a-MULTISLOT-UI_2 | r1k_U5a-MULTISLOT-UI_2 | Oct 31 22:10 | yes | 37 | 95.3 | 0.023256 |
 | direct-direct | AKE-PIN-PROCBOUND_2 | r1k_FLAKE-PIN-PROCBOUND_2 | Oct 31 22:10 | yes | 22 | 90.5 | 0.015544 |
+| direct-direct | SPLAY-POLISH | r1l_DISPLAY-POLISH | Oct 31 22:33 | yes | 11 | 81.7 | 0.008648 |
+| direct-direct | a_b | r1m_U5a_b | Oct 31 22:42 | yes | 36 | 95.3 | 0.014255 |
+| direct-direct | a_a | r1m_U5a_a | Oct 31 22:42 | yes | 27 | 91.6 | 0.013798 |
+| direct-direct | -LIST_b | r1o_E4-LIST_b | Oct 31 22:52 | yes | 16 | 86.4 | 0.010833 |
+| direct-direct | -LIST_a | r1o_E4-LIST_a | Oct 31 22:52 | yes | 21 | 92.8 | 0.008839 |
 
 ## Method
 
