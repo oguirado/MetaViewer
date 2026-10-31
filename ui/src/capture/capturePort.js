@@ -18,7 +18,7 @@
  * @module capture/capturePort
  */
 import { reactive } from 'vue';
-import { MV_RECORDING_PHASES } from '../recording/recordingModel.js';
+import { MV_RECORDING_FAILED_CODE, MV_RECORDING_PHASES } from '../recording/recordingModel.js';
 
 /**
  * Closed host refusal codes for the capture facade.
@@ -620,6 +620,10 @@ export function createCaptureState(port) {
     entry.frames = event.frames;
     entry.elapsedMs = event.elapsed_ms;
     entry.recordingId = ACTIVE_PHASES.includes(event.phase) ? event.recording_id : null;
+    // REC-STATE: a host-side failure surfaces a typed reason instead of a
+    // silent fall to idle. Cleared by the next successful start or stop.
+    if (event.phase === 'error') entry.lastCode = MV_RECORDING_FAILED_CODE;
+    else if (event.phase === 'recording' && entry.lastCode === MV_RECORDING_FAILED_CODE) entry.lastCode = '';
     // MVUI16B lane R (L2-2): a sealed row just landed on the host; relist
     // so the manifest shows it. Fire-and-forget, coalesced with any run.
     if (event.phase === 'sealed') queueAutoRefresh(event.surface_id);

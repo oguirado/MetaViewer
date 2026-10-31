@@ -74,6 +74,8 @@ import {
   recordToDiskGate,
   rowExportGateFor,
 } from './recordingModel.js';
+import { MV_RECORD_SOURCE_RATE_NOTE } from './recordingClock.js';
+import { useRecordingElapsed } from './useRecordingElapsed.js';
 
 /**
  * MetaViewer recording panel (AC-07): RAM record-for-AI toggle,
@@ -104,6 +106,9 @@ const props = defineProps({
   unavailableReason: { type: String, default: '' },
   captureState: { type: Object, default: null },
   captureAvailable: { type: Boolean, default: true },
+  // REC-STATE: optional injected clock ({ now, setInterval, clearInterval,
+  // tickMs }) so the live timer is testable; null uses the platform timers.
+  clock: { type: Object, default: null },
 });
 
 const emit = defineEmits(['submit-intent']);
@@ -127,11 +132,6 @@ const phaseEff = computed(() => (captureBound.value ? captureEntry.value?.phase 
 const shotStateEff = computed(() => {
   if (!captureBound.value) return props.screenshotState;
   return captureEntry.value?.lastShot ? 'done' : 'idle';
-});
-const elapsedEff = computed(() => {
-  if (!captureBound.value) return props.elapsedSeconds;
-  const ms = captureEntry.value?.elapsedMs;
-  return typeof ms === 'number' && Number.isFinite(ms) && ms >= 0 ? Math.floor(ms / 1000) : null;
 });
 const recordingsEff = computed(() => (captureBound.value
   ? captureRowsFor(props.captureState, props.capsuleId)
@@ -210,6 +210,18 @@ watch(() => props.captureState, (next) => {
 });
 
 const phaseN = computed(() => normalizeMvRecordPhase(phaseEff.value));
+// REC-STATE (FEEDBACK row 6): while recording, the readout interpolates from
+// the last host `elapsedMs` with a local tick, so the timer keeps moving
+// between sparse capture events; unknown elapsed stays `--:--`, never zero.
+const liveElapsedMs = useRecordingElapsed(
+  () => ({ phase: phaseN.value, elapsedMs: captureBound.value ? captureEntry.value?.elapsedMs : undefined }),
+  () => props.clock,
+);
+const elapsedEff = computed(() => {
+  if (!captureBound.value) return props.elapsedSeconds;
+  const ms = liveElapsedMs.value;
+  return ms === null ? null : Math.floor(ms / 1000);
+});
 const shotN = computed(() => normalizeMvScreenshotState(shotStateEff.value));
 const toggleBusy = computed(() => mvRecordPhaseBusy(phaseEff.value));
 const shotBusy = computed(() => mvScreenshotStateBusy(shotStateEff.value));
@@ -616,7 +628,8 @@ function onExport(entry) {
         :data-unavailable-reason="toggleReason || undefined"
         @click="onToggleClick"
       >
-        <SidebarIcon name="marker" aria-hidden="true" />
+        <span v-if="recordingNow" class="mv4-toggle-dot" data-recording-dot="true" aria-hidden="true"></span>
+        <SidebarIcon v-else name="marker" aria-hidden="true" />
         <span>{{ toggleLabel }}</span>
       </button>
       <span
@@ -626,7 +639,12 @@ function onExport(entry) {
         :data-semantic-anchor="mvPhaseAnchor(capsuleId)"
         :title="'Phase ' + phaseN"
       >{{ phaseN }}</span>
-      <span class="mv4-elapsed" :title="'Elapsed ' + elapsedLabel">{{ elapsedLabel }}</span>
+      <span
+        class="mv4-elapsed"
+        role="timer"
+        :data-recording-elapsed="recordingNow ? 'live' : undefined"
+        :title="'Elapsed ' + elapsedLabel"
+      >{{ elapsedLabel }}</span>
       <span
         :id="mvStoreChipDomId(capsuleId)"
         class="mv4-chip"
@@ -668,6 +686,7 @@ function onExport(entry) {
         :title="'Whole number from ' + fpsRangeText + ', or empty for the host default'"
       />
       <span :id="fpsHintId" class="mv4-fps-hint">{{ MV_RECORD_FPS_HINT }}</span>
+      <span class="mv4-fps-hint mv4-fps-rate" :title="MV_RECORD_SOURCE_RATE_NOTE">{{ MV_RECORD_SOURCE_RATE_NOTE }}</span>
     </div>
     <p
       v-if="refusalText"

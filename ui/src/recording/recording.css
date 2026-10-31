@@ -39,6 +39,7 @@
   outline-offset: var(--cuk-primitive-space-2);
 }
 .mv4-toggle-dot {
+  flex: none;
   width: var(--cuk-semantic-spacing-sm);
   height: var(--cuk-semantic-spacing-sm);
   border-radius: 999px;
@@ -80,6 +81,10 @@
 .mv4-elapsed {
   font-family: var(--cuk-semantic-typography-font-family-mono);
   color: var(--cuk-semantic-text-primary);
+}
+/* REC-STATE: the live readout is emphasised while a recording runs. */
+.mv4-elapsed[data-recording-elapsed="live"] {
+  font-weight: var(--cuk-semantic-typography-font-weight-semibold);
 }
 .mv4-empty {
   margin: 0;

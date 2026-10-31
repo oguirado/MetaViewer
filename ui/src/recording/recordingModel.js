@@ -33,6 +33,14 @@ export const MV_SCREENSHOT_STATES = Object.freeze(['idle', 'capturing', 'done', 
 export const MV_RECORDING_STORE = 'ram';
 
 /**
+ * Typed reason the capture store records when the host reports the `error`
+ * phase for a recording (REC-STATE). [TARGET, unit decision] Local code only;
+ * it never travels on the wire.
+ * @type {string}
+ */
+export const MV_RECORDING_FAILED_CODE = 'RECORDING_FAILED';
+
+/**
  * Typed refusal when no host destination is configured.
  * @type {string}
  */
@@ -599,6 +607,8 @@ export function mvCaptureRefusalText(code) {
       return 'The host refused: the memory or frame-rate budget is exceeded. Lower the frame rate or stop another recording.';
     case 'POLICY':
       return 'The host refused this capture by policy.';
+    case MV_RECORDING_FAILED_CODE:
+      return 'The recording failed on the host and stopped. Start a new one.';
     default:
       return 'Capture failed.';
   }
