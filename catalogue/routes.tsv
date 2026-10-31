@@ -1384,6 +1384,9 @@ contrast.test.js	ui/test/contrast.test.js
 coreLauncher.test.js	ui/test/coreLauncher.test.js
 creativ-f3bdf7f2988d	ui/test/creativeCapsule.test.js
 demoflo-dbdd4f1e86e9	ui/test/demoflow-dialog.test.js
+eshbutt-e35bca97f1a6	ui/test/esh-button-stop-budget.test.js
+eshcrea-1e9d7f1b3142	ui/test/esh-create-refusal-code.test.js
+eshhand-9cf159b4a09b	ui/test/esh-handoff-discovery.test.js
 frame-ref-v02.test.js	ui/test/frame-ref-v02.test.js
 frame-wait.mjs	ui/test/frame-wait.mjs
 framePort.test.js	ui/test/framePort.test.js
