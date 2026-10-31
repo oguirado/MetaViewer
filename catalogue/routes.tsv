@@ -937,6 +937,7 @@ DEMO_RUNBOOK.md	docs/DEMO_RUNBOOK.md
 HOLDING-41388780e954	docs/HOLDINGS_LESSONS_UI_ORCHESTRATOR.md
 INSTALL.md	docs/INSTALL.md
 JUDGES.md	docs/JUDGES.md
+MW_RUN_FIRST_RUN.md	docs/MW_RUN_FIRST_RUN.md
 PREEXISTING.md	docs/PREEXISTING.md
 RESEARCH_LOG.md	docs/RESEARCH_LOG.md
 ROADMAP.md	docs/ROADMAP.md
@@ -1129,6 +1130,14 @@ e2e4_seams.test.js	tests/e2e/e2e4_seams.test.js
 e2e6_slice.test.js	tests/e2e/e2e6_slice.test.js
 e2e7liv-16f7e17196af	tests/e2e/e2e7_live_slice_honesty.test.js
 e2e8ac0-dd24f70086f7	tests/e2e/e2e8_ac04_control_journey.test.js
+README-5c8f39a4517a	tests/e2e/fixtures/mw_perplexity/README.md
+answer.html	tests/e2e/fixtures/mw_perplexity/pages/answer.html
+captcha.html	tests/e2e/fixtures/mw_perplexity/pages/captcha.html
+home.html	tests/e2e/fixtures/mw_perplexity/pages/home.html
+login.html	tests/e2e/fixtures/mw_perplexity/pages/login.html
+repair-NOTES.md	tests/e2e/fixtures/mw_perplexity/repair/NOTES.md
+site-site.json	tests/e2e/fixtures/mw_perplexity/site/site.json
+workflows-ask.json	tests/e2e/fixtures/mw_perplexity/site/workflows/ask.json
 harness.js	tests/e2e/harness.js
 harness-d601b72d7d50	tests/e2e/harness_fresh_build.test.js
 index.html	tests/e2e/index.html
@@ -1165,6 +1174,7 @@ slice-native.py	tests/e2e/slice-native.py
 slice.html	tests/e2e/slice.html
 testasm-3dc2f23130cc	tests/e2e/test_asm_web_live_harden.py
 test_live_stack.py	tests/e2e/test_live_stack.py
+testmwr-c4e6fe25c97e	tests/e2e/test_mw_run_perplexity_offline.py
 testvol-fa0645094684	tests/e2e/test_volume_bootstrap.py
 volumeb-fd6fcd819519	tests/e2e/volume_bootstrap.test.js
 wall-fixture.mjs	tests/e2e/wall-fixture.mjs
