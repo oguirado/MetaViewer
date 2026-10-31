@@ -385,6 +385,7 @@ const props = defineProps({
   title: { type: String, default: '' },
   captureState: { type: Object, default: null },
   displayOnly: { type: Boolean, default: false },
+  clipboard: { type: /** @type {import('vue').PropType<import('./capsuleId.js').CapsuleClipboardLike | null>} */ (Object), default: null },
 });
 
 const emit = defineEmits(['submit-intent', 'presentation-intent', 'activate-surface']);
@@ -617,6 +618,10 @@ function onActivateSurface() {
     :capsule-label="props.title"
     :capture-state="props.captureState"
     :display-only="props.displayOnly"
+    :surface-id="(row ?? lastRow)?.surfaceId ?? props.capsuleId"
+    :profile-id="(row ?? lastRow)?.profile_id ?? ''"
+    :tile-state="tile.tile"
+    :clipboard="props.clipboard"
   />
   </div>
   <CapsulePanel

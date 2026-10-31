@@ -296,3 +296,33 @@ export function isCaptureUnavailable(captureState) {
   if (/** @type {Record<string, unknown>} */ (captureState).available === false) return true;
   return !hasCaptureActions(captureState);
 }
+
+/**
+ * @param {unknown} surfaceId Host-issued surface id.
+ * @returns {string} Stable DOM id and semantic anchor of the tile capsule id.
+ */
+export function tileCapsuleIdDomId(surfaceId) {
+  return `tile-${tileIdSegment(surfaceId)}-capsule-id`;
+}
+
+/**
+ * @param {unknown} surfaceId Host-issued surface id.
+ * @returns {string} Stable DOM id and semantic anchor of the Copy ID for AI control.
+ */
+export function tileCopyIdDomId(surfaceId) {
+  return `tile-${tileIdSegment(surfaceId)}-copy-id`;
+}
+
+// Capsule id chip and Copy ID for AI: the chrome reaches these pure helpers
+// through this module, its single pure-module import.
+export {
+  CAPSULE_COPY_STATES,
+  CAPSULE_COPY_LABEL,
+  CAPSULE_COPIED_TEXT,
+  CAPSULE_COPY_FAILED_TEXT,
+  buildCapsuleReadyLine,
+  capsuleCopyAvailable,
+  capsuleIdModel,
+  copyCapsuleReadyLine,
+  createCapsuleCopyFeedback,
+} from './capsuleId.js';

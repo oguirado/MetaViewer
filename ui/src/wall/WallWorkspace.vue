@@ -651,6 +651,8 @@ const props = defineProps({
   },
   captureState: { type: Object, default: null },
   displayOnly: { type: Boolean, default: false },
+  // Optional host clipboard ({ writeText }) for the tile Copy ID for AI action; null falls back to the ambient clipboard.
+  clipboard: { type: /** @type {import('vue').PropType<import('./capsuleId.js').CapsuleClipboardLike | null>} */ (Object), default: null },
 });
 
 const emit = defineEmits([
@@ -740,6 +742,7 @@ const WallSurfaceRouter = markRaw(defineComponent({
         tileScheduler: props.tileScheduler,
         captureState: props.captureState,
         displayOnly: props.displayOnly,
+        clipboard: props.clipboard,
         presentationInstance: instance,
         onSubmitIntent: callbacks.onSubmitIntent,
         onPresentationIntent: callbacks.onPresentationIntent,

@@ -5,7 +5,7 @@
   nested display-only mode. Kit owns the record toggle (SaasRecordButton)
   and the screenshot glyph (SidebarIcon); the lane owns layout and copy. -->
 <script setup>
-import { computed, shallowRef } from 'vue';
+import { computed, onBeforeUnmount, shallowRef } from 'vue';
 import SaasRecordButton from '../../.kit/capsule-ui-kit/src/saas/SaasRecordButton.vue';
 import SidebarIcon from '../../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue';
 import {
@@ -19,12 +19,21 @@ import {
   tileBadgeVariant,
   tileCapturePhaseBusy,
   tileChromeGroupName,
+  tileCapsuleIdDomId,
+  tileCopyIdDomId,
   tileRecordAnchor,
   tileRecordDomId,
   tileScreenshotAnchor,
   tileScreenshotDomId,
   tileShotAccessibleName,
   tileShotLabel,
+  CAPSULE_COPY_LABEL,
+  CAPSULE_COPIED_TEXT,
+  CAPSULE_COPY_FAILED_TEXT,
+  capsuleCopyAvailable,
+  capsuleIdModel,
+  copyCapsuleReadyLine,
+  createCapsuleCopyFeedback,
 } from './tileCapture.js';
 
 /**
@@ -44,6 +53,12 @@ const props = defineProps({
     default: null,
   },
   displayOnly: { type: Boolean, default: false },
+  // CAPID-UI: host-issued surface id and profile identity of the tile, the
+  // tile display state, and an optional host clipboard ({ writeText }).
+  surfaceId: { type: String, default: '' },
+  profileId: { type: String, default: '' },
+  tileState: { type: String, default: '' },
+  clipboard: { type: /** @type {import('vue').PropType<import('./capsuleId.js').CapsuleClipboardLike | null>} */ (Object), default: null },
 });
 
 const entry = computed(() => readSurfaceEntry(props.captureState, props.capsuleId));
@@ -88,6 +103,45 @@ const groupName = computed(() => tileChromeGroupName({
   capsuleLabel: props.capsuleLabel,
   capsuleId: props.capsuleId,
 }));
+
+// Capsule id chip + Copy ID for AI. Display-only: the host-issued ids are
+// formatted and written to the injected (else ambient) clipboard; nothing is
+// submitted to the authority. The chip renders only when the tile passes its
+// surface id; a bare chrome (no surface id) keeps the three-control rail.
+const capSurfaceId = computed(() => props.surfaceId);
+const capId = computed(() => capsuleIdModel({
+  surfaceId: capSurfaceId.value,
+  profileId: props.profileId,
+  tile: props.tileState,
+}));
+const copyState = shallowRef('ready');
+const copyReason = shallowRef('');
+const copyFeedback = createCapsuleCopyFeedback((state, reason) => {
+  copyState.value = state;
+  copyReason.value = reason;
+});
+onBeforeUnmount(() => { copyFeedback.dispose(); });
+const copyReachable = computed(() => capsuleCopyAvailable(props.clipboard));
+const copyDisabled = computed(() => !capId.value.canCopy || !copyReachable.value || copyState.value === 'copying');
+const copyDisabledReason = computed(() => {
+  if (!capId.value.canCopy) return capId.value.blockedReason;
+  if (!copyReachable.value) return CAPSULE_COPY_FAILED_TEXT;
+  return '';
+});
+const copyStatusText = computed(() => {
+  if (copyState.value === 'copied') return CAPSULE_COPIED_TEXT;
+  if (copyState.value === 'unavailable') return CAPSULE_COPY_FAILED_TEXT;
+  return '';
+});
+const capIdDomId = computed(() => tileCapsuleIdDomId(capSurfaceId.value));
+const copyIdDomId = computed(() => tileCopyIdDomId(capSurfaceId.value));
+const tileCopyIdAnchor = computed(() => tileCopyIdDomId(capSurfaceId.value));
+const tileCapsuleIdAnchor = computed(() => tileCapsuleIdDomId(capSurfaceId.value));
+function onCopyId() {
+  if (copyDisabled.value) return;
+  const ids = { surfaceId: capSurfaceId.value, profileId: props.profileId };
+  void copyFeedback.run(() => copyCapsuleReadyLine(ids, props.clipboard));
+}
 
 const recordWrapId = computed(() => tileRecordDomId(props.capsuleId));
 const recordAnchor = computed(() => tileRecordAnchor(props.capsuleId));
@@ -146,6 +200,22 @@ function onShotClick() {
       <SidebarIcon name="box" aria-hidden="true" />
       <span class="mv-tile-chrome__shot-label">{{ shotLabel }}</span>
     </button>
+    <span v-if="capId.visible" class="mv-tile-capid" :data-copy-state="copyState">
+      <code :id="capIdDomId" class="mv-tile-capid__id" :data-semantic-anchor="tileCapsuleIdAnchor" :title="capId.hover">{{ capId.text }}</code>
+      <button
+        :id="copyIdDomId"
+        type="button"
+        class="mv-tile-capid__copy"
+        :data-semantic-anchor="tileCopyIdAnchor"
+        :aria-label="capId.copyName"
+        :title="copyDisabledReason || capId.hover"
+        :disabled="copyDisabled"
+        :aria-busy="copyState === 'copying' ? 'true' : undefined"
+        :data-unavailable-reason="copyDisabledReason || undefined"
+        @click="onCopyId"
+      >{{ CAPSULE_COPY_LABEL }}</button>
+      <span v-if="copyStatusText !== ''" role="status" class="mv-tile-capid__status" :data-copy-outcome="copyState" :title="copyReason || undefined">{{ copyStatusText }}</span>
+    </span>
     <span
       :id="badgeId"
       class="mv-tile-chrome__badge"

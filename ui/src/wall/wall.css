@@ -361,3 +361,72 @@
   border-color: var(--cuk-semantic-status-error-border);
   opacity: 1;
 }
+
+/* CAPID-UI: capsule id chip and Copy ID for AI in the tile rail. The id
+ * ellipsizes before the rail wraps; the full id is on hover and in the
+ * accessible name. Kit tokens only. */
+.mv-tile-capid {
+  flex: 0 1 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--cuk-semantic-spacing-xs);
+  min-width: 0;
+  padding: var(--cuk-semantic-spacing-xs) var(--cuk-semantic-spacing-sm);
+  font-size: var(--cuk-semantic-typography-font-size-xs);
+  line-height: var(--cuk-semantic-typography-line-height-normal);
+  color: var(--cuk-semantic-text-primary);
+}
+.mv-tile-capid__id {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--cuk-semantic-typography-font-family-mono, monospace);
+  user-select: all;
+}
+.mv-tile-capid__copy {
+  flex: 0 0 auto;
+  padding: var(--cuk-semantic-spacing-xs) var(--cuk-semantic-spacing-sm);
+  font-size: var(--cuk-semantic-typography-font-size-xs);
+  line-height: var(--cuk-semantic-typography-line-height-normal);
+  color: var(--cuk-semantic-text-primary);
+  background: var(--cuk-semantic-surface-panel);
+  border: var(--cuk-semantic-border-width) solid var(--cuk-semantic-border-default);
+  border-radius: var(--cuk-semantic-radius-sm);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.mv-tile-capid__copy:hover {
+  border-color: var(--cuk-semantic-border-strong);
+}
+.mv-tile-capid__copy:disabled {
+  cursor: not-allowed;
+  opacity: var(--cuk-semantic-opacity-disabled);
+}
+.mv-tile-capid__copy:focus-visible {
+  outline: var(--cuk-semantic-focus-ring-width) var(--cuk-semantic-focus-ring-style) var(--cuk-semantic-focus-ring-color);
+  outline-offset: var(--cuk-semantic-focus-ring-offset);
+}
+.mv-tile-capid__status {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  color: var(--cuk-semantic-text-primary);
+}
+.mv-tile-capid__status[data-copy-outcome="copied"]::before {
+  content: "";
+  display: inline-block;
+  width: 0.6em;
+  height: 0.6em;
+  margin-right: var(--cuk-semantic-spacing-xs);
+  border-radius: var(--cuk-semantic-radius-pill);
+  background: var(--cuk-semantic-status-success-border);
+}
+.mv-tile-capid__status[data-copy-outcome="unavailable"]::before {
+  content: "";
+  display: inline-block;
+  width: 0.6em;
+  height: 0.6em;
+  margin-right: var(--cuk-semantic-spacing-xs);
+  border-radius: var(--cuk-semantic-radius-pill);
+  background: var(--cuk-semantic-status-error-border);
+}
