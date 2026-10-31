@@ -19,17 +19,17 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 1,165 | 55 | 1,110 |
-| Lanes finished OK | 1,165 | 55 | 1,110 |
-| Agent steps | 48,635 | 2,705 | 45,930 |
-| Lane-hours of agent work | 119.3 | 5.2 | 114.1 |
-| Fresh input tokens | 196,619,010 | 11,482,034 | 185,136,976 |
-| Cache-read input tokens | 3,787,758,226 | 226,255,212 | 3,561,503,014 |
+| Lanes launched | 1,176 | 55 | 1,121 |
+| Lanes finished OK | 1,176 | 55 | 1,121 |
+| Agent steps | 49,031 | 2,705 | 46,326 |
+| Lane-hours of agent work | 120.1 | 5.2 | 114.9 |
+| Fresh input tokens | 197,883,515 | 11,482,034 | 186,401,481 |
+| Cache-read input tokens | 3,809,240,097 | 226,255,212 | 3,582,984,885 |
 | Prompt cache hit % | 95.1 | 95.2 | 95.1 |
-| Output tokens | 39,938,356 | 2,135,708 | 37,802,648 |
-| Thinking tokens | 23,562,503 | 1,050,039 | 22,512,464 |
-| Cost (USD) | 35.2251 | 2.0279 | 33.1972 |
-| Cost per lane (USD) | 0.0302 | 0.0369 | 0.0299 |
+| Output tokens | 40,187,004 | 2,135,708 | 38,051,296 |
+| Thinking tokens | 23,728,792 | 1,050,039 | 22,678,753 |
+| Cost (USD) | 35.4442 | 2.0279 | 33.4164 |
+| Cost per lane (USD) | 0.0301 | 0.0369 | 0.0298 |
 
 Rooms: 136. Peak concurrent lanes [MEASURED from lane start/end]: 37.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
@@ -38,7 +38,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 776 | 94.0 | 18.9776 |
+| build | 787 | 94.0 | 19.1967 |
 | context | 42 | 95.9 | 1.9093 |
 | context packs + test ideation (U-DEC-0139) | 13 | 91.1 | 0.2195 |
 | demo | 4 | 90.7 | 0.0557 |
@@ -86,7 +86,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 439 | 94.1 | 10.7345 | direct Muse job |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 449 | 94.1 | 10.9182 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -175,7 +175,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui30 | UI orchestrator | Oct 28 08:17 | fix | 1 | 97.3 | 0.0829 | AC-03: a lost capsule shows 'Connecting to surface' forever because App erases the backend lost signal; show the last frame frozen with a Lost badge so the operator sees what was lost. |
 | mvui31 | UI orchestrator | Oct 28 08:19 | perf | 1 | 97.6 | 0.0694 | AC-02 needs 4 capsules at >= 10 fps at live size; the renderer present path (per-frame RGBA conversion, ImageData allocation, wrong cost accounting, redundant re-hash) is the largest cost. |
 | mvui29b | UI orchestrator | Oct 28 08:36 | fix | 1 | 97.5 | 0.0868 | Finish AC-06 terminal sessions in the renderer: the first pass ran out of budget with type errors, no App/main wiring and a port not yet matching the host API the host owner fixed. |
-| direct-r3 | metaviewer-0 | Oct 28 08:40 | build | 38 | 93.8 | 0.8281 | round-3 tester report verification and context |
+| direct-r3 | metaviewer-0 | Oct 28 08:40 | build | 39 | 93.9 | 0.8636 | round-3 tester report verification and context |
 | mvui29sb | UI orchestrator | Oct 28 08:58 | fix | 1 | 95.8 | 0.0282 | Host owner ruling for AC-08: the host keeps a closed settings key set, so the renderer must drop unknown keys instead of round-tripping them. |
 | mvui29c | UI orchestrator | Oct 28 08:58 | fix | 1 | 97.5 | 0.0624 | Terminal sessions wiring (AC-06) broke 58 committed App tests; restore the App mounting contract and finish the terminal tests so the drop can ship. |
 | mvui29sc | UI orchestrator | Oct 28 09:12 | fix | 1 | 97.3 | 0.0484 | Judge rejected the settings drop: a quick revert inside the debounce window is lost, a replaced host can receive a stale save, and boot can paint a scheme the store then replaces; fix before AC-08 can ship. |
@@ -1371,6 +1371,17 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | -PROFILES_b | r1j_E4-PROFILES_b | Oct 31 21:02 | yes | 23 | 93.0 | 0.011554 |
 | direct-direct | 5-R2_a | r1j_WJ5-R2_a | Oct 31 21:02 | yes | 24 | 93.4 | 0.01409 |
 | direct-direct | 5-R2_b | r1j_WJ5-R2_b | Oct 31 21:02 | yes | 41 | 94.1 | 0.019922 |
+| direct-r3 | p12_P12_b | r3p12_P12_b | Oct 31 22:06 | yes | 66 | 96.1 | 0.035456 |
+| direct-direct | -CREATE-R2_1 | r1k_E4-CREATE-R2_1 | Oct 31 22:09 | yes | 38 | 95.2 | 0.019845 |
+| direct-direct | -CREATE-R2_2 | r1k_E4-CREATE-R2_2 | Oct 31 22:09 | yes | 16 | 87.2 | 0.012141 |
+| direct-direct | AKE-PIN-PROCBOUND_1 | r1k_FLAKE-PIN-PROCBOUND_1 | Oct 31 22:09 | yes | 25 | 91.6 | 0.012478 |
+| direct-direct | -PTY-PKG_1 | r1k_U1-PTY-PKG_1 | Oct 31 22:09 | yes | 56 | 96.2 | 0.023881 |
+| direct-direct | -BROKER-CLASSES_1 | r1k_U3-BROKER-CLASSES_1 | Oct 31 22:09 | yes | 39 | 94.3 | 0.019643 |
+| direct-direct | a-MULTISLOT-UI_1 | r1k_U5a-MULTISLOT-UI_1 | Oct 31 22:09 | yes | 52 | 95.2 | 0.025593 |
+| direct-direct | -PTY-PKG_2 | r1k_U1-PTY-PKG_2 | Oct 31 22:10 | yes | 25 | 91.7 | 0.016787 |
+| direct-direct | -BROKER-CLASSES_2 | r1k_U3-BROKER-CLASSES_2 | Oct 31 22:10 | yes | 20 | 89.9 | 0.01452 |
+| direct-direct | a-MULTISLOT-UI_2 | r1k_U5a-MULTISLOT-UI_2 | Oct 31 22:10 | yes | 37 | 95.3 | 0.023256 |
+| direct-direct | AKE-PIN-PROCBOUND_2 | r1k_FLAKE-PIN-PROCBOUND_2 | Oct 31 22:10 | yes | 22 | 90.5 | 0.015544 |
 
 ## Method
 
