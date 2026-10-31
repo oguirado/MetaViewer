@@ -1,0 +1,1 @@
+- Separate the admitted-call timeout (`5` s scaled in CI) from the `delay` refusal timeout (`50` ms scaled in CI) in `TestProcessBoundary`, synchronize the fake CLI `delay` verb on a test-controlled FIFO pair so it blocks deterministically until killed under any runner load, and add a timeout-enforcement mutant guard.

@@ -27,7 +27,15 @@ elif verb in ("capabilities", "observe", "probe"):
 elif verb == "overflow":
     print("x" * 65536)
 elif verb == "delay":
-    time.sleep(5)
+    if len(sys.argv) > 3 and not sys.argv[2].startswith("-"):
+        with open(sys.argv[2], "w") as f:
+            f.write("ready")
+        with open(sys.argv[3], "r") as f:
+            f.read(1)
+        print(json.dumps({"delayed": True}))
+    else:
+        while True:
+            time.sleep(3600)
 elif verb == "environment":
     print(json.dumps({"clean": "UNADMITTED_TEST_SECRET" not in os.environ}))
 else:
