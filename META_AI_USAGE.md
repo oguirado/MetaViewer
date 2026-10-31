@@ -19,32 +19,33 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 793 | 55 | 738 |
-| Lanes finished OK | 793 | 55 | 738 |
-| Agent steps | 35,810 | 2,705 | 33,105 |
-| Lane-hours of agent work | 92.6 | 5.2 | 87.3 |
-| Fresh input tokens | 151,544,308 | 11,482,034 | 140,062,274 |
-| Cache-read input tokens | 3,063,280,088 | 226,255,212 | 2,837,024,876 |
+| Lanes launched | 811 | 55 | 756 |
+| Lanes finished OK | 811 | 55 | 756 |
+| Agent steps | 36,587 | 2,705 | 33,882 |
+| Lane-hours of agent work | 94.0 | 5.2 | 88.8 |
+| Fresh input tokens | 154,544,663 | 11,482,034 | 143,062,629 |
+| Cache-read input tokens | 3,120,907,690 | 226,255,212 | 2,894,652,478 |
 | Prompt cache hit % | 95.3 | 95.2 | 95.3 |
-| Output tokens | 31,313,290 | 2,135,708 | 29,177,582 |
-| Thinking tokens | 17,972,909 | 1,050,039 | 16,922,870 |
-| Cost (USD) | 27.5436 | 2.0279 | 25.5158 |
-| Cost per lane (USD) | 0.0347 | 0.0369 | 0.0346 |
+| Output tokens | 31,807,469 | 2,135,708 | 29,671,761 |
+| Thinking tokens | 18,287,835 | 1,050,039 | 17,237,796 |
+| Cost (USD) | 28.0578 | 2.0279 | 26.0299 |
+| Cost per lane (USD) | 0.0346 | 0.0369 | 0.0344 |
 
-Rooms: 132. Peak concurrent lanes [MEASURED from lane start/end]: 32.
+Rooms: 133. Peak concurrent lanes [MEASURED from lane start/end]: 32.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 450 | 94.0 | 12.5336 |
+| build | 452 | 94.0 | 12.5652 |
 | context | 42 | 95.9 | 1.9093 |
 | demo | 4 | 90.7 | 0.0557 |
 | design | 2 | 91.6 | 0.0547 |
 | docs | 15 | 94.8 | 0.5371 |
 | fix | 62 | 96.8 | 3.3143 |
 | kit | 3 | 96.5 | 0.1997 |
+| operator-path sweep (U-DEC-0133/0134) | 16 | 95.3 | 0.4825 |
 | ops | 4 | 88.1 | 0.0468 |
 | perf | 2 | 97.2 | 0.1217 |
 | plan | 12 | 92.6 | 0.3072 |
@@ -82,7 +83,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 177 | 94.1 | 5.3467 | direct Muse job |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 179 | 94.0 | 5.3783 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -193,6 +194,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui35 | UI orchestrator | Oct 29 02:26 | build | 1 | 96.0 | 0.0477 | Cross-language parity tests found the renderer settings decoders accept a 30.0 float lexeme as an integer fps (D3) and keep unknown stored keys (D4) while the frozen host side refuses both; align the renderer so stored settings decode identically everywhere. |
 | mvui35b | UI orchestrator | Oct 29 02:59 | fix | 1 | 96.3 | 0.0306 | The D4 parity fix makes stored settings with unknown keys refuse and fall back to full defaults; three committed tests still pin the old lenient load and must move to the strict assertion so the suite matches the reversed ruling. |
 | mvui36 | UI orchestrator | Oct 29 07:44 | build | 1 | 95.2 | 0.0225 | The host terminal port now sends retryable input refusals with the expected seq, but the renderer terminal client treats every refusal as fatal, so one transient refusal kills the side terminal; make the client resync its seq and keep running. |
+| sweep | conductor | Oct 31 11:47 | operator-path sweep (U-DEC-0133/0134) | 16 | 95.3 | 0.4825 | OPERATOR-PATH SWEEP of the packaged P8 app: 13 read-only flow lanes predicting operator-path failures share one byte-identical PIN-01 prefix (w1/sweep/prefix.md, churn only in the flow tail), launched together for a warm cache; the 3 UI follow-up design lanes share a second identical prefix variant; 1 x64 inventory lane is standalone. |
 
 ## Every lane
 
@@ -991,6 +993,24 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-adv | polish3_a | adv_polish3_a | Oct 31 10:57 | yes | 18 | 87.3 | 0.015955 |
 | direct-adv | polish3_b | adv_polish3_b | Oct 31 10:57 | yes | 38 | 91.5 | 0.038421 |
 | direct-adv | polish3_b2 | adv_polish3_b2 | Oct 31 11:19 | yes | 28 | 91.6 | 0.028894 |
+| sweep | multislot | Operator flow: multislot | Oct 31 11:47 | yes | 66 | 96.5 | 0.039293 |
+| sweep | automate_demo | Operator flow: automate demo | Oct 31 11:47 | yes | 38 | 94.0 | 0.029568 |
+| sweep | capsule_close_reopen | Operator flow: capsule close reopen | Oct 31 11:47 | yes | 45 | 94.6 | 0.02986 |
+| sweep | settings | Operator flow: settings | Oct 31 11:47 | yes | 57 | 95.6 | 0.037051 |
+| sweep | terminal | Operator flow: terminal | Oct 31 11:47 | yes | 23 | 88.9 | 0.020414 |
+| sweep | use_metaviewer | Operator flow: use metaviewer | Oct 31 11:47 | yes | 67 | 96.4 | 0.040451 |
+| sweep | ui_activity | UI follow-up: ui activity | Oct 31 11:47 | yes | 16 | 87.5 | 0.01298 |
+| sweep | ui_frame_fill | UI follow-up: ui frame fill | Oct 31 11:47 | yes | 20 | 88.3 | 0.014554 |
+| sweep | ui_geometry | UI follow-up: ui geometry | Oct 31 11:47 | yes | 24 | 90.7 | 0.013493 |
+| sweep | chatgpt_gemini | Operator flow: chatgpt gemini | Oct 31 11:47 | yes | 61 | 95.9 | 0.038476 |
+| sweep | network | Operator flow: network | Oct 31 11:47 | yes | 51 | 95.2 | 0.029852 |
+| sweep | launch | Operator flow: launch | Oct 31 11:47 | yes | 53 | 95.1 | 0.034531 |
+| sweep | identities | Operator flow: identities | Oct 31 11:47 | yes | 25 | 90.9 | 0.016953 |
+| sweep | app_close | Operator flow: app close | Oct 31 11:47 | yes | 65 | 96.1 | 0.047913 |
+| sweep | storyboard | Operator flow: storyboard | Oct 31 11:47 | yes | 89 | 97.0 | 0.049346 |
+| sweep | captcha_handoff | Operator flow: captcha handoff | Oct 31 11:47 | yes | 47 | 94.6 | 0.027801 |
+| direct-direct | ventory | x64_inventory | Oct 31 11:50 | yes | 17 | 87.9 | 0.014995 |
+| direct-direct | sweep_b | judge_sweep_b | Oct 31 11:56 | yes | 13 | 81.9 | 0.016596 |
 
 ## Method
 
