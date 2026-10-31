@@ -129,6 +129,7 @@ changes-README.md	changes/README.md
 changel-6ee9fc48ce48	changes/unreleased/changelog-fragments.md
 e4-create.md	changes/unreleased/e4-create.md
 flakepi-0268f441f2d7	changes/unreleased/flake-pin-procbound.md
+p12-display-tap.md	changes/unreleased/p12-display-tap.md
 u1-pty-pkg.md	changes/unreleased/u1-pty-pkg.md
 actionp-0ef0ddb499b4	contracts/examples/action_proposal.invalid.schema.json
 actionp-215c1416bbcf	contracts/examples/action_proposal.valid.json
@@ -876,6 +877,9 @@ cancelrace_test.go	daemon-adapter/internal/frames/cancelrace_test.go
 diag_limiter.go	daemon-adapter/internal/frames/diag_limiter.go
 digests-ab60251c633d	daemon-adapter/internal/frames/digest_skip_mut_test.go
 digest_skip_test.go	daemon-adapter/internal/frames/digest_skip_test.go
+displaytap.go	daemon-adapter/internal/frames/displaytap.go
+displaytap_ring.go	daemon-adapter/internal/frames/displaytap_ring.go
+displaytap_test.go	daemon-adapter/internal/frames/displaytap_test.go
 frames.go	daemon-adapter/internal/frames/frames.go
 lease_safety_test.go	daemon-adapter/internal/frames/lease_safety_test.go
 live_test.go	daemon-adapter/internal/frames/live_test.go
