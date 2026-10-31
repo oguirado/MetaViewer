@@ -1157,7 +1157,7 @@ else:
       // A lost profile remains reserved until destroy proves native removal.
       sendRequest('create', { kind: 'browser', profile_id: 'kill-target', geometry: { w: 2, h: 1 } });
       const reserved = checkSurfaceEventError(await readDaemon('lost-profile-refused', 5000));
-      assert.equal(reserved.data.code, 'adapter');
+      assert.equal(reserved.data.code, 'PROFILE_ALREADY_BOUND');
       assert.match(reserved.data.detail, /profile already bound/);
 
       sendRequest('destroy', { surface_id: idKill });

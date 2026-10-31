@@ -978,11 +978,9 @@ func wireFailure(e ipc.Envelope, q capsule.Request, err error) ([]json.RawMessag
 	if params.SurfaceID == "" {
 		params.SurfaceID = e.MsgID
 	}
-	code := "adapter"
-	var fault *cli.Fault
-	if errors.As(err, &fault) && fault.Code == "RAM_ADMISSION_REFUSED" {
-		code = fault.Code
-	}
+	// [TARGET, unit decision] close-F2: the wire code is stable and uppercase so
+	// the UI authority wire passes the real refusal through instead of masking it.
+	code := capsule.WireCode(err)
 	b, _ := json.Marshal(map[string]any{"schema": "surface_event/v0.2", "event": "error", "data": map[string]string{"surface_id": params.SurfaceID, "code": code, "detail": err.Error()}})
 	return []json.RawMessage{b}, nil
 }
@@ -1109,40 +1107,87 @@ type helloState struct {
 	recorder      *record.Manager
 	newRecorder   func(uint64, cli.Clock) (*record.Manager, error)
 	welcomed      bool
+	closeBudget   time.Duration // zero selects closeManagerBudget; tests inject a short one
+	minStopSlice  time.Duration // zero selects minStopSlice; tests inject a short one
+}
+
+// [TARGET, unit decision] QC-03 shutdown budgets. The host sends SIGTERM and
+// SIGKILLs the adapter after its grace period (45 s [TARGET], owned by the
+// packaging unit). The adapter's own worst case must finish strictly inside it:
+// createQuitGrace (an in-flight create may finish after cancellation) plus
+// closeManagerBudget (list plus every verified destroy) is capped by
+// shutdownBudgetCeiling, leaving >= 5 s [TARGET] for subscription, recorder,
+// view and publisher teardown. A native stop killed mid-destroy leaves a lost
+// binding and a kept reservation, so no stop may be cut by the host's SIGKILL.
+const (
+	closeManagerBudget    = 30 * time.Second // [CITED] unchanged value
+	createQuitGrace       = 10 * time.Second
+	shutdownBudgetCeiling = 40 * time.Second
+	// minStopSlice is the least share a destroy gets while budget remains, so
+	// one hung stop cannot starve the capsules queued behind it.
+	minStopSlice = 10 * time.Second
+)
+
+// stopSlice returns the context budget of the next destroy: an equal share of
+// the remaining budget over the destroys still queued, never below
+// min(remaining, minStopSlice). A lone destroy gets everything that remains.
+func stopSlice(remaining time.Duration, queued int, minSlice time.Duration) time.Duration {
+	if remaining <= 0 || queued < 1 {
+		return 0
+	}
+	slice := remaining / time.Duration(queued)
+	if floor := min(remaining, minSlice); slice < floor {
+		slice = floor
+	}
+	return slice
 }
 
 func (s *helloState) closeManager(ctx context.Context) error {
 	if s.manager == nil {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	events, err := s.manager.Handle(ctx, capsule.Request{Schema: "surface_request/v0.2", Op: "list", Params: json.RawMessage(`{}`)})
+	budget := s.closeBudget
+	if budget <= 0 {
+		budget = closeManagerBudget
+	}
+	minSlice := s.minStopSlice
+	if minSlice <= 0 {
+		minSlice = minStopSlice
+	}
+	deadline := time.Now().Add(budget)
+	listCtx, cancelList := context.WithDeadline(ctx, deadline)
+	events, err := s.manager.Handle(listCtx, capsule.Request{Schema: "surface_request/v0.2", Op: "list", Params: json.RawMessage(`{}`)})
+	cancelList()
 	if err != nil {
 		return err
 	}
-	var firstErr error
-	for _, raw := range events {
+	var errs []error
+	for i, raw := range events {
 		var ev struct {
 			Data struct {
 				Surface capsule.Surface `json:"surface"`
 			} `json:"data"`
 		}
 		if e := json.Unmarshal(raw, &ev); e != nil {
-			if firstErr == nil {
-				firstErr = e
-			}
+			errs = append(errs, e)
 			continue
 		}
+		slice := stopSlice(time.Until(deadline), len(events)-i, minSlice)
+		if slice <= 0 {
+			// Budget spent: never start a native stop that is already cancelled.
+			errs = append(errs, fmt.Errorf("shutdown budget exhausted before stopping %s", ev.Data.Surface.SurfaceID))
+			continue
+		}
+		stopCtx, cancelStop := context.WithTimeout(ctx, slice)
 		params, _ := json.Marshal(map[string]string{"surface_id": ev.Data.Surface.SurfaceID})
 		request := capsule.Request{Schema: "surface_request/v0.2", Op: "destroy", Params: params}
 		var stopErr error
 		if s.handler == nil {
-			_, stopErr = s.manager.Handle(ctx, request)
+			_, stopErr = s.manager.Handle(stopCtx, request)
 		} else {
 			// Keep verified shutdown on the same host-admission lifecycle path.
 			body, _ := json.Marshal(request)
-			events, err := s.handler(ctx, ipc.Envelope{Body: body})
+			events, err := s.handler(stopCtx, ipc.Envelope{Body: body})
 			stopErr = err
 			for _, raw := range events {
 				var ev struct {
@@ -1154,11 +1199,13 @@ func (s *helloState) closeManager(ctx context.Context) error {
 				}
 			}
 		}
-		if stopErr != nil && firstErr == nil {
-			firstErr = stopErr
+		cancelStop()
+		if stopErr != nil {
+			errs = append(errs, stopErr)
 		}
 	}
-	return firstErr
+	// Every failed or skipped stop is reported, not only the first.
+	return errors.Join(errs...)
 }
 
 func (s *helloState) accept(ctx context.Context, profiles map[string]capsule.Profile, pubs map[string]*frames.Publisher, authority *clientAuthority, clock cli.Clock,

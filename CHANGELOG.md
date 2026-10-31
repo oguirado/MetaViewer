@@ -12,6 +12,12 @@
 - Reopen a closed browser tile: a create refused as a bound profile now returns a typed `SURFACE_PROFILE_BOUND` and shows the live tile again, a stopping capsule's late error no longer settles the next create, and the wall offers Add capsule after every tile was closed.
 - Keep the host connection up when a recording stops or the coordinator refuses: admit the core `dropped_frames` key and the `BUDGET_EXCEEDED` and `POLICY` capture refusals in the main and preload capture asserts.
 - Let the renderer pick a recording frame rate (`max_fps`, whole number 1 to 60, "up to the source rate") and show typed capture refusals and the sealed frame and drop counts in the recording panel; correct the guide's capture API and terminal notes.
+- Verify shutdown budget parity against Electron’s actual grace, including IPC and subscription teardown, and align the lifecycle e2e assertion with `PROFILE_ALREADY_BOUND`.
+- Let an in-flight native create finish for a bounded grace (10 s [TARGET]) when the adapter session is cancelled, so a quit mid-create no longer kills the start and leaks its RAM reservation; shutdown then stops the capsule with verified removal.
+- Name the reservation records of other owners, and the documented reclaim dry run, in the RAM admission refusal detail.
+- Give each shutdown stop a fair share of the 30 s close budget, never start a stop on a spent budget, report every failed or skipped stop, and keep the adapter's worst case below the host grace (45 s [TARGET]).
+- Emit stable uppercase adapter refusal codes (`PROFILE_ALREADY_BOUND`, `SURFACE_CAPACITY_OR_QUARANTINE`, `IDENTITY_UNAVAILABLE`, `ADAPTER_<CODE>`) instead of the masking lowercase `adapter`, and type a native "identity unavailable or exclusively held" start refusal with its recovery limits.
+
 - Preserve the shared packaged RAM admission ledger and drain adapter shutdown before runtime cleanup.
 - Register and validate retail frame reports and cover the complete preload invoke surface.
 - Track initial capsule creation asynchronously with an independent final deadline and typed busy refusals.

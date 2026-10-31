@@ -188,6 +188,61 @@ var displayID = regexp.MustCompile(`^:[0-9]+(\.[0-9]+)?$`)
 
 func fault(code, detail string) error { return &cli.Fault{Code: code, Detail: detail} }
 
+// [TARGET, unit decision] DAM-FIX close-F2 / L-02: refusal reasons that the
+// operator can act on carry a stable uppercase wire code. The internal Fault
+// code stays lowercase (tests and callers key on it); WireCode maps it for the
+// surface_event error body. The detail strings below are the single source of
+// truth shared by the fault constructor and the mapping.
+const (
+	detailProfileBound         = "profile already bound"
+	detailCapacityOrQuarantine = "surface capacity or unresolved native outcome"
+	detailIdentityUnavailable  = "native start reported the identity unavailable (exit status 4): the identity may be " +
+		"exclusively held by a live capsule or by a lease abandoned by an earlier session; the adapter has no " +
+		"authority to reclaim a lease and no shipped native CLI reclaims it (ABSENT, do not invent); close the " +
+		"holder, or recover the lease out of band, before retrying"
+)
+
+// wireCodePattern is the code shape the UI authority wire passes through.
+var wireCodePattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]{1,63}$`)
+
+// WireCode maps an error to a stable uppercase code for the wire. Codes that
+// already match the wire shape pass through unchanged; known lowercase refusals
+// map to named codes; any other Fault becomes ADAPTER_<CODE>; a non-Fault error
+// is ADAPTER_ERROR. The result always matches wireCodePattern.
+func WireCode(err error) string {
+	var f *cli.Fault
+	if !errors.As(err, &f) {
+		return "ADAPTER_ERROR"
+	}
+	if wireCodePattern.MatchString(f.Code) {
+		return f.Code
+	}
+	switch {
+	case f.Code == "binding" && f.Detail == detailProfileBound:
+		return "PROFILE_ALREADY_BOUND"
+	case f.Code == "uncertain" && f.Detail == detailCapacityOrQuarantine:
+		return "SURFACE_CAPACITY_OR_QUARANTINE"
+	case f.Code == "identity_unavailable":
+		return "IDENTITY_UNAVAILABLE"
+	}
+	var b strings.Builder
+	b.WriteString("ADAPTER_")
+	for _, r := range strings.ToUpper(f.Code) {
+		if b.Len() >= 64 {
+			break
+		}
+		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('_')
+		}
+	}
+	if code := b.String(); wireCodePattern.MatchString(code) && code != "ADAPTER_" {
+		return code
+	}
+	return "ADAPTER_ERROR"
+}
+
 // [TARGET, unit decision] desktop_capsule program profiles admit only the
 // catalog-sanctioned programs ("notepad" at nested_depth 0, or
 // "metaviewer-nested" at nested_depth 0 or 1); nested_depth > 1 is refused.
@@ -511,13 +566,13 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 	for _, b := range m.bindings {
 		if b.Surface.State != "destroyed" {
 			if b.Surface.ProfileID == q.ProfileID {
-				return nil, fault("binding", "profile already bound")
+				return nil, fault("binding", detailProfileBound)
 			}
 			active++
 		}
 	}
 	if active >= m.cfg.MaxSurfaces || m.quarantined[q.ProfileID] {
-		return nil, fault("uncertain", "surface capacity or unresolved native outcome")
+		return nil, fault("uncertain", detailCapacityOrQuarantine)
 	}
 	idBytes := make([]byte, 16)
 	if _, e := rand.Read(idBytes); e != nil {
@@ -596,6 +651,14 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 	if errors.As(e, &refused) {
 		delete(m.quarantined, q.ProfileID)
 		return nil, e
+	}
+	// [TARGET, unit decision] L-02: exit status 4 of an identity start is a bare
+	// "unavailable"; give it a typed, actionable refusal. Quarantine is kept: exit
+	// 4 can also follow a retained lease after a native launch, so absence is
+	// unproven and the reservation must keep counting.
+	var native *cli.Fault
+	if e != nil && p.NativeKind != "holdings" && errors.As(e, &native) && native.Code == "unavailable" {
+		e = fault("identity_unavailable", detailIdentityUnavailable)
 	}
 	b := Binding{Surface: Surface{Schema: "surface/" + version, SurfaceID: id, Kind: p.Kind, Display: p.Display, Geometry: q.Geometry, State: "active", Visibility: "unfolded", Control: "agent", ProfileID: q.ProfileID}, NativeKind: p.NativeKind, Program: p.Program}
 	// Recover only the cleanup identity from syntactically valid bounded JSON.

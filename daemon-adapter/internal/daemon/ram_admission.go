@@ -11,6 +11,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,6 +35,10 @@ const ramReserveKB uint64 = 512 * 1024
 // Test seam: installed before tests run; production reads one /proc/meminfo
 // snapshot per check. There is no environment override for memory accounting.
 var admissionMemory = hostMemoryKB
+
+// createGrace is the test seam of createQuitGrace; zero reproduces the legacy
+// behavior in which a cancelled session group-SIGKILLs an in-flight create.
+var createGrace = createQuitGrace
 
 type ramMemory struct {
 	available uint64
@@ -145,8 +150,14 @@ func admittedHandler(m *capsule.Manager, next ipc.Handler, read func() (ramMemor
 			return wireFailure(e, q, admissionFault(err))
 		}
 		live := len(entries)
+		foreign := 0
+		for _, entry := range entries {
+			if !strings.HasPrefix(entry.Name(), owner+"-") {
+				foreign++
+			}
+		}
 		if err := checkRAM(read, live); err != nil {
-			return wireFailure(e, q, err)
+			return wireFailure(e, q, withReclaimHint(err, live, foreign))
 		}
 		var params struct {
 			ProfileID string `json:"profile_id"`
@@ -161,7 +172,14 @@ func admittedHandler(m *capsule.Manager, next ipc.Handler, read func() (ramMemor
 		}
 		// Persist before spawn; even a crash between native start and response
 		// leaves a conservative incumbent record.
-		events, err := next(ctx, e)
+		// [TARGET, unit decision] QC-01: a quit that cancels the session while the
+		// native start is in flight must not group-SIGKILL that start: the killed
+		// start leaves an unprovable capsule and a reservation nobody can release.
+		// Let it finish for createQuitGrace, so the shutdown path stops it with a
+		// verified removal (or compensates it) and releases the reservation.
+		createCtx, cancelCreate := graceContext(ctx, createGrace)
+		defer cancelCreate()
+		events, err := next(createCtx, e)
 		if syncErr := syncRecords(); syncErr != nil {
 			return wireFailure(e, q, admissionFault(syncErr))
 		}
@@ -212,6 +230,45 @@ func admittedHandler(m *capsule.Manager, next ipc.Handler, read func() (ramMemor
 		}
 		return events, nil
 	}
+}
+
+// graceContext returns a context that ignores the parent's cancellation for at
+// most grace after the parent is cancelled; parent values are preserved. The
+// returned cancel releases the timer and must be called.
+func graceContext(parent context.Context, grace time.Duration) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.WithoutCancel(parent))
+	var mu sync.Mutex
+	var timer *time.Timer
+	stop := context.AfterFunc(parent, func() {
+		mu.Lock()
+		defer mu.Unlock()
+		timer = time.AfterFunc(grace, cancel)
+	})
+	return ctx, func() {
+		stop()
+		mu.Lock()
+		if timer != nil {
+			timer.Stop()
+		}
+		mu.Unlock()
+		cancel()
+	}
+}
+
+// withReclaimHint makes the admission refusal actionable. Reservation records of
+// other owners persist after an aborted create or a crash and keep counting by
+// design (PID death never reclaims); say so and name the documented recovery.
+func withReclaimHint(err error, live, foreign int) error {
+	var f *cli.Fault
+	if !errors.As(err, &f) {
+		return err
+	}
+	detail := fmt.Sprintf("%s (reservation records counted: %d", f.Detail, live)
+	if foreign > 0 {
+		detail += fmt.Sprintf(", of which %d belong to other owners: an aborted create or a crashed daemon may have left them; "+
+			"inspect with `python3 tools/mv_ram_admission.py reclaim --dry-run`, apply only after the dry run proves the native containers absent", foreign)
+	}
+	return &cli.Fault{Code: f.Code, Detail: detail + ")"}
 }
 
 func admissionFault(err error) error {
