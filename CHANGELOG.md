@@ -19,6 +19,7 @@
 - Name the reservation records of other owners, and the documented reclaim dry run, in the RAM admission refusal detail.
 - Give each shutdown stop a fair share of the 30 s close budget, never start a stop on a spent budget, report every failed or skipped stop, and keep the adapter's worst case below the host grace (45 s [TARGET]).
 - Emit stable uppercase adapter refusal codes (`PROFILE_ALREADY_BOUND`, `SURFACE_CAPACITY_OR_QUARANTINE`, `IDENTITY_UNAVAILABLE`, `ADAPTER_<CODE>`) instead of the masking lowercase `adapter`, and type a native "identity unavailable or exclusively held" start refusal with its recovery limits.
+- Make the renderer input port handle the wheel and control loss like a remote-desktop client: wheel input that carries its DOM delta mode accumulates into whole 50 px steps with a carried remainder (line and page deltas count 19 px each), closing a capsule's input gate sends one key-up-only `release_all` after any dispatched input (never dropped by the epoch fence or the rate window; READ switches and host-driven closures send none), a drag released outside the frame can be mapped onto the frame edge, and the tile policy blocks `contextmenu` and `auxclick` only while input is armed. Tile wiring of the clamp and the block policy, the preload allowlist and the wire schema for `release_all` follow in the units that own those files.
 
 - Preserve the shared packaged RAM admission ledger and drain adapter shutdown before runtime cleanup.
 - Register and validate retail frame reports and cover the complete preload invoke surface.

@@ -1,7 +1,7 @@
 /**
  * @fileoverview Renderer-side human input port for capsule tiles (surface_input/v1).
  *
- * Plain JavaScript with JSDoc; no dependencies, no DOM access, no product imports.
+ * Plain JavaScript with JSDoc; no dependencies, no DOM access, one sibling import (frameMap).
  * The port owns the per-surface batch sequence, enforces the closed schema and the
  * contract limits (1..32 events per batch, payload <= 16 KiB, <= 60 batches/s per
  * surface), coalesces type text and scroll deltas per animation frame, and maps
@@ -17,7 +17,28 @@
  * When the facade exposes `onResult`, async input results join the same
  * refusal emitter, deduped per (surface_id, seq) against replies (either
  * order, at most one emission); ok results are silent.
+ *
+ * INPUT-U2 (distillation v2 section 6), decisions marked [TARGET, unit decision]:
+ * - Wheel accumulator: a queued scroll that carries the local-only `deltaMode`
+ *   (0 pixel, 1 line, 2 page) is converted to pixels (any non-zero mode x19),
+ *   accumulated per (surface, axis) and emitted as whole 50 px steps; the
+ *   remainder carries over. The emitted wire event holds signed STEP COUNTS in
+ *   dx/dy (the wire schema is unchanged: `deltaMode` never reaches the wire).
+ *   Scroll events without `deltaMode` keep the legacy caller-defined merge.
+ * - release_all: a new closed event kind `{ kind: 'release_all' }`. When a
+ *   gate closes (`closeGate`) on a surface that dispatched input since its
+ *   last release, one release_all is dispatched immediately under the NEW
+ *   epoch (it bypasses the epoch drop and the renderer rate window). It is
+ *   key-up only by contract (no press, no lock-key toggles). `closeGate(id,
+ *   { release: false })` or the port option `releaseAll: false` suppresses it
+ *   (READ switch, tests). A closure raised from inside the facade's own send
+ *   is host-driven and never releases. Benign host refusals of a release-only
+ *   batch (NOT_IN_CONTROL, INPUT_MODE_READ, STALE_STREAM, SURFACE_UNKNOWN) are
+ *   silent; SCHEMA stays loud: the preload allowlist and contracts/v0.2 do not
+ *   carry release_all yet (handoff outside this unit's surface).
  */
+
+import { containFit, mapClientToFrame } from './frameMap.js';
 
 /** Closed wire schema id. */
 export const INPUT_SCHEMA = 'surface_input/v1';
@@ -58,12 +79,27 @@ export const INPUT_LIMITS = Object.freeze({
   MAX_PENDING_PER_SURFACE: 1024,
 });
 
+/** Wheel accumulator constants (noVNC core/rfb.js:50-51 [CITED]); step cap is [TARGET, unit decision]. */
+export const WHEEL_STEP_PX = 50;
+export const WHEEL_LINE_PX = 19;
+export const WHEEL_MAX_STEPS_PER_EVENT = 1000;
+
+/** Host refusals of a release-only batch that carry no operator-facing meaning. */
+const BENIGN_RELEASE_REFUSALS = Object.freeze([
+  'NOT_IN_CONTROL', 'INPUT_MODE_READ', 'STALE_STREAM', 'SURFACE_UNKNOWN',
+]);
+/** Refusals proving the host holds no admitted input for the surface. */
+const NOT_ADMITTED_REFUSALS = Object.freeze(['NOT_IN_CONTROL', 'INPUT_MODE_READ', 'SURFACE_UNKNOWN']);
+
+/** Scroll events produced by the wheel accumulator (their dx/dy are step counts). */
+const WHEEL_STEP_EVENTS = new WeakSet();
+
 /** @type {TextEncoder} */
 const textEncoder = new TextEncoder();
 
 /**
  * @typedef {Object} InputEvent
- * @property {string} kind - click | key | type | scroll.
+ * @property {string} kind - click | key | type | scroll | release_all.
  * @property {string} [text] - type payload.
  * @property {string[]} [keys] - key chord.
  * @property {number} [x] - click/scroll frame x.
@@ -106,6 +142,7 @@ const textEncoder = new TextEncoder();
 /**
  * @typedef {Object} InputPortOptions
  * @property {() => number} [now] - ms clock (default Date.now).
+ * @property {boolean} [releaseAll] - false disables the closeGate release_all (default true).
  * @property {(cb: (time: number) => void) => unknown} [raf] - frame scheduler.
  * @property {(handle: unknown) => void} [cancelRaf] - frame cancellation.
  */
@@ -115,7 +152,7 @@ const textEncoder = new TextEncoder();
  * @property {boolean} available
  * @property {(surfaceId: unknown, streamId: unknown, events: unknown) => Promise<InputSendResult>} send
  * @property {(surfaceId: unknown, streamId: unknown, event: unknown) => void} queue
- * @property {(surfaceId: unknown) => void} closeGate
+ * @property {(surfaceId: unknown, options?: { release?: boolean }) => void} closeGate
  * @property {(cb: (refusal: InputRefusal) => void) => () => void} onRefusal
  * @property {() => void} dispose
  */
@@ -203,6 +240,10 @@ const KEY_KEYS = ['kind', 'keys'];
 const TYPE_KEYS = ['kind', 'text'];
 /** @type {string[]} */
 const SCROLL_KEYS = ['kind', 'dx', 'dy', 'x', 'y'];
+/** @type {string[]} */
+const RELEASE_KEYS = ['kind'];
+/** @type {string[]} Local-only wheel input: scroll plus the DOM deltaMode. */
+const WHEEL_INPUT_KEYS = ['kind', 'dx', 'dy', 'x', 'y', 'deltaMode'];
 
 /**
  * Closed-schema event check (renderer and host share it; frame bounds stay host-side).
@@ -239,7 +280,107 @@ export function isValidInputEvent(ev) {
       && isNonNegativeInt(ev.x)
       && isNonNegativeInt(ev.y);
   }
+  if (kind === 'release_all') {
+    return hasOnlyKeys(ev, RELEASE_KEYS);
+  }
   return false;
+}
+
+/**
+ * @param {any} ev
+ * @returns {boolean} True when the local scroll input carries a deltaMode key.
+ */
+function isWheelInput(ev) {
+  return ev !== null && typeof ev === 'object' && !Array.isArray(ev)
+    && ev.kind === 'scroll' && Object.hasOwn(ev, 'deltaMode');
+}
+
+/**
+ * Local wheel input check (never a wire shape): scroll plus deltaMode 0|1|2.
+ *
+ * @param {any} ev
+ * @returns {boolean}
+ */
+export function isValidWheelInput(ev) {
+  return hasOnlyKeys(ev, WHEEL_INPUT_KEYS)
+    && ev.kind === 'scroll'
+    && Number.isSafeInteger(ev.dx)
+    && Number.isSafeInteger(ev.dy)
+    && isNonNegativeInt(ev.x)
+    && isNonNegativeInt(ev.y)
+    && (ev.deltaMode === 0 || ev.deltaMode === 1 || ev.deltaMode === 2);
+}
+
+/**
+ * DOM wheel delta to pixels: pixel mode as is, every other mode (line and
+ * page alike) multiplied by 19 (noVNC core/rfb.js:1244-1254 [CITED]).
+ *
+ * @param {number} delta
+ * @param {number} deltaMode
+ * @returns {number | null} Pixels, or null for an unsafe or unknown input.
+ */
+export function wheelDeltaToPixels(delta, deltaMode) {
+  if (!Number.isSafeInteger(delta)) return null;
+  if (deltaMode !== 0 && deltaMode !== 1 && deltaMode !== 2) return null;
+  const px = deltaMode === 0 ? delta : delta * WHEEL_LINE_PX;
+  return Number.isSafeInteger(px) ? px : null;
+}
+
+/**
+ * Adds pixels to a carried remainder and splits off whole 50 px steps.
+ * Sign-preserving: -57 px is -1 step and a -7 px carry.
+ *
+ * @param {number} carry - Carried pixels (|carry| < 50).
+ * @param {number} deltaPx
+ * @returns {{ steps: number, carry: number }}
+ */
+export function accumulateWheel(carry, deltaPx) {
+  const total = carry + deltaPx;
+  const whole = Math.trunc(total / WHEEL_STEP_PX);
+  const rest = total - whole * WHEEL_STEP_PX;
+  const steps = Math.max(-WHEEL_MAX_STEPS_PER_EVENT, Math.min(WHEEL_MAX_STEPS_PER_EVENT, whole));
+  return { steps: steps === 0 ? 0 : steps, carry: rest === 0 ? 0 : rest };
+}
+
+/**
+ * Drag-release mapping [TARGET, unit decision; distillation N7]: a press that
+ * started inside the frame and is released outside it clamps to the nearest
+ * frame pixel, so the release is delivered at the frame edge instead of being
+ * dropped as letterbox (a dropped release is a stuck button). Callers use it
+ * only for the release of a press armed in-frame; presses stay strict
+ * (`mapClientToFrame` -> null in the letterbox).
+ *
+ * @param {import('./frameMap.js').ClientToFrameInput} input
+ * @returns {import('./frameMap.js').FramePoint | null} Null only for invalid geometry.
+ */
+export function mapClientToFrameClamped(input) {
+  if (input === null || typeof input !== 'object') return null;
+  /** @type {any} */
+  const r = input.rect;
+  if (r === null || typeof r !== 'object') return null;
+  const fit = containFit(r.width, r.height, /** @type {number} */ (input.frameWidth), /** @type {number} */ (input.frameHeight));
+  if (fit === null) return null;
+  if (typeof input.clientX !== 'number' || !Number.isFinite(input.clientX)) return null;
+  if (typeof input.clientY !== 'number' || !Number.isFinite(input.clientY)) return null;
+  const left = r.left + fit.offsetX;
+  const top = r.top + fit.offsetY;
+  // Half a frame pixel inside the far edge: the mapper's far edge is exclusive.
+  const inset = fit.scale / 2;
+  const clientX = Math.min(Math.max(input.clientX, left), left + fit.width - inset);
+  const clientY = Math.min(Math.max(input.clientY, top), top + fit.height - inset);
+  return mapClientToFrame({ ...input, clientX, clientY });
+}
+
+/** Pointer default actions the tile must cancel while WRITE is armed (noVNC core/rfb.js:596-601, :1112-1114 [CITED]). */
+export const TILE_BLOCKED_DEFAULTS = Object.freeze(['contextmenu', 'auxclick']);
+
+/**
+ * @param {unknown} eventType - DOM event type.
+ * @param {unknown} writeArmed - True only while human WRITE input is armed.
+ * @returns {boolean} True when the tile must call preventDefault (READ leaves the event alone).
+ */
+export function shouldBlockTileDefault(eventType, writeArmed) {
+  return writeArmed === true && typeof eventType === 'string' && TILE_BLOCKED_DEFAULTS.includes(eventType);
 }
 
 /**
@@ -280,7 +421,9 @@ function cloneEvent(event) {
   if (event.kind === 'key' && Array.isArray(event.keys)) {
     return { kind: 'key', keys: event.keys.slice() };
   }
-  return { ...event };
+  const copy = { ...event };
+  if (WHEEL_STEP_EVENTS.has(event)) WHEEL_STEP_EVENTS.add(copy);
+  return copy;
 }
 
 /**
@@ -298,7 +441,8 @@ function coalesceEvents(events) {
       prev.text = `${prev.text ?? ''}${ev.text ?? ''}`;
       continue;
     }
-    if (prev !== undefined && prev.kind === 'scroll' && ev.kind === 'scroll') {
+    if (prev !== undefined && prev.kind === 'scroll' && ev.kind === 'scroll'
+      && WHEEL_STEP_EVENTS.has(prev) === WHEEL_STEP_EVENTS.has(ev)) {
       // MVUI26 lane I (input RV10-02): an unsafe sum stays two events, so the
       // batch never carries a SCHEMA-invalid delta. Position still merges to
       // the latest (x, y): pinned by the committed scroll-merge test.
@@ -383,6 +527,7 @@ export function createInputPort(facade, options = {}) {
   const now = options.now ?? Date.now;
   const raf = options.raf ?? defaultRaf;
   const cancelRaf = options.cancelRaf ?? defaultCancelRaf;
+  const releaseEnabled = options.releaseAll !== false;
 
   /** @type {Map<string, number>} */
   const seqBySurface = new Map();
@@ -398,6 +543,14 @@ export function createInputPort(facade, options = {}) {
    * @type {Map<string, number>}
    */
   const gateEpochBySurface = new Map();
+  /** @type {Map<string, { streamId: number, cx: number, cy: number }>} Wheel remainders (px) per surface. */
+  const wheelCarryBySurface = new Map();
+  /** @type {Map<string, number>} Surface -> stream of input dispatched since its last release. */
+  const liveStreamBySurface = new Map();
+  /** @type {Map<string, boolean>} (surface_id, seq) keys of release-only batches, oldest first. */
+  const releaseSeqs = new Map();
+  /** Depth of facade send calls on the stack (a closure inside one is host-driven). */
+  let sendDepth = 0;
   /** @type {Set<(refusal: InputRefusal) => void>} */
   const refusalListeners = new Set();
   /** @type {Map<string, boolean>} Seen (surface_id, seq) refusal keys, oldest first. */
@@ -451,9 +604,36 @@ export function createInputPort(facade, options = {}) {
    */
   function emitResultRefusal(surfaceId, seq, code) {
     const key = JSON.stringify([surfaceId, seq]);
+    // The host proves it holds no admitted input here: nothing left to release.
+    if (NOT_ADMITTED_REFUSALS.includes(code)) liveStreamBySurface.delete(surfaceId);
     if (seenResults.has(key)) return;
     markResultSeen(key);
+    if (releaseSeqs.has(key) && BENIGN_RELEASE_REFUSALS.includes(code)) return;
     emitRefusal(surfaceId, code);
+  }
+
+  /**
+   * @param {InputEvent[]} events
+   * @returns {boolean} True when the batch is exactly release_all events.
+   */
+  function isReleaseOnly(events) {
+    return events.length > 0 && events.every((ev) => ev.kind === 'release_all');
+  }
+
+  /**
+   * Remembers a release-only (surface_id, seq) so benign refusals stay silent.
+   *
+   * @param {string} surfaceId
+   * @param {number} seq
+   * @returns {void}
+   */
+  function markReleaseSeq(surfaceId, seq) {
+    releaseSeqs.set(JSON.stringify([surfaceId, seq]), true);
+    while (releaseSeqs.size > INPUT_RESULT_DEDUP_LIMIT) {
+      const oldest = releaseSeqs.keys().next().value;
+      if (oldest === undefined) return;
+      releaseSeqs.delete(oldest);
+    }
   }
 
   /**
@@ -594,13 +774,22 @@ export function createInputPort(facade, options = {}) {
         emitRefusal(surfaceId, 'LIMIT');
         continue;
       }
-      if (!takeRateSlot(surfaceId, now())) {
+      // INPUT-U2: a release-only batch is never dropped by the renderer rate window.
+      const releaseOnly = isReleaseOnly(batchEvents);
+      if (!releaseOnly && !takeRateSlot(surfaceId, now())) {
         emitRefusal(surfaceId, 'LIMIT');
         continue;
       }
       seqBySurface.set(surfaceId, seq);
+      if (releaseOnly) {
+        markReleaseSeq(surfaceId, seq);
+        liveStreamBySurface.delete(surfaceId);
+      } else {
+        liveStreamBySurface.set(surfaceId, streamId);
+      }
       /** @type {any} */
       let pending;
+      sendDepth += 1;
       try {
         pending = sender(batch);
       } catch {
@@ -608,6 +797,8 @@ export function createInputPort(facade, options = {}) {
         // per-(surface_id, seq) dedup like any other reply refusal.
         emitResultRefusal(surfaceId, seq, 'CORE_UNAVAILABLE');
         continue;
+      } finally {
+        sendDepth -= 1;
       }
       Promise.resolve(pending).then(
         /** @param {any} reply @returns {void} */ (reply) => {
@@ -685,12 +876,27 @@ export function createInputPort(facade, options = {}) {
         events: events.map(cloneEvent),
       };
       if (inputBatchByteLength(batch) > INPUT_LIMITS.MAX_PAYLOAD_BYTES) return refused('LIMIT');
-      if (!takeRateSlot(batch.surface_id, now())) return refused('LIMIT');
+      const releaseOnly = isReleaseOnly(batch.events);
+      if (!releaseOnly && !takeRateSlot(batch.surface_id, now())) return refused('LIMIT');
       seqBySurface.set(batch.surface_id, seq);
+      if (releaseOnly) {
+        markReleaseSeq(batch.surface_id, seq);
+        liveStreamBySurface.delete(batch.surface_id);
+      } else {
+        liveStreamBySurface.set(batch.surface_id, batch.stream_id);
+      }
       /** @type {any} */
       let reply;
       try {
-        reply = await sendFn(batch);
+        /** @type {any} */
+        let replyPromise;
+        sendDepth += 1;
+        try {
+          replyPromise = sendFn(batch);
+        } finally {
+          sendDepth -= 1;
+        }
+        reply = await replyPromise;
       } catch {
         return refused('CORE_UNAVAILABLE');
       }
@@ -698,6 +904,36 @@ export function createInputPort(facade, options = {}) {
     } catch {
       return refused('CORE_UNAVAILABLE');
     }
+  }
+
+  /**
+   * Folds one validated wheel input into the per-surface pixel remainders.
+   * A remainder from another stream is discarded (stale pixels never leak
+   * across streams).
+   *
+   * @param {string} id
+   * @param {number} streamId
+   * @param {{ dx: number, dy: number, x: number, y: number, deltaMode: number }} input
+   * @returns {InputEvent | null} Step event (dx/dy are step counts), or null below one step.
+   */
+  function accumulateWheelEvent(id, streamId, input) {
+    const pxX = wheelDeltaToPixels(input.dx, input.deltaMode);
+    const pxY = wheelDeltaToPixels(input.dy, input.deltaMode);
+    if (pxX === null || pxY === null) throw new RangeError('wheel delta not a safe integer');
+    let state = wheelCarryBySurface.get(id);
+    if (state === undefined || state.streamId !== streamId) {
+      state = { streamId, cx: 0, cy: 0 };
+      wheelCarryBySurface.set(id, state);
+    }
+    const ax = accumulateWheel(state.cx, pxX);
+    const ay = accumulateWheel(state.cy, pxY);
+    state.cx = ax.carry;
+    state.cy = ay.carry;
+    if (ax.steps === 0 && ay.steps === 0) return null;
+    /** @type {InputEvent} */
+    const stepEvent = { kind: 'scroll', dx: ax.steps, dy: ay.steps, x: input.x, y: input.y };
+    WHEEL_STEP_EVENTS.add(stepEvent);
+    return stepEvent;
   }
 
   /**
@@ -713,7 +949,9 @@ export function createInputPort(facade, options = {}) {
     // MVUI26 lane I (MVVR10-NEW-01): hostile getters refuse as SCHEMA, never
     // throw; the file contract promises queue never throws on input.
     try {
-      if (!isValidSurfaceId(surfaceId) || !isValidStreamId(streamId) || !isValidInputEvent(event)) {
+      const wheel = isWheelInput(event);
+      if (!isValidSurfaceId(surfaceId) || !isValidStreamId(streamId)
+        || !(wheel ? isValidWheelInput(event) : isValidInputEvent(event))) {
         emitRefusal(typeof surfaceId === 'string' ? surfaceId : '', 'SCHEMA');
         return;
       }
@@ -731,9 +969,17 @@ export function createInputPort(facade, options = {}) {
         emitRefusal(id, 'LIMIT');
         return;
       }
+      /** @type {any} */
+      let accepted = event;
+      if (wheel) {
+        const stepEvent = accumulateWheelEvent(id, /** @type {number} */ (streamId), /** @type {any} */ (event));
+        // Sub-step wheel input only grows the carried remainder: nothing to send.
+        if (stepEvent === null) return;
+        accepted = stepEvent;
+      }
       list.push({
         streamId: /** @type {number} */ (streamId),
-        event: cloneEvent(event),
+        event: cloneEvent(accepted),
         epoch: gateEpochBySurface.get(id) ?? 0,
       });
     } catch {
@@ -758,10 +1004,17 @@ export function createInputPort(facade, options = {}) {
    * queued after it dispatch normally. Unknown, invalid or already-closed
    * surfaces and a disposed port are silent no-ops; never throws.
    *
+   * INPUT-U2: when the surface dispatched input since its last release (or a
+   * release_all was still queued), exactly one release_all is dispatched
+   * now under the new epoch, so the drop above never swallows it. The wheel
+   * remainder is discarded. `options.release === false` (READ switch) and a
+   * closure raised from inside the facade's own send skip the release.
+   *
    * @param {unknown} surfaceId
+   * @param {{ release?: boolean }} [options]
    * @returns {void}
    */
-  function closeGate(surfaceId) {
+  function closeGate(surfaceId, options) {
     if (disposed) return;
     if (!isValidSurfaceId(surfaceId)) return;
     const id = /** @type {string} */ (surfaceId);
@@ -773,7 +1026,22 @@ export function createInputPort(facade, options = {}) {
     } else {
       gateEpochBySurface.set(id, next);
     }
+    const dropped = pendingBySurface.get(id);
+    const queuedRelease = dropped?.find((it) => it.event.kind === 'release_all');
     pendingBySurface.delete(id);
+    wheelCarryBySurface.delete(id);
+    const live = liveStreamBySurface.get(id);
+    liveStreamBySurface.delete(id);
+    /** @type {number | undefined} */
+    let releaseStream;
+    if (queuedRelease !== undefined) {
+      releaseStream = queuedRelease.streamId;
+    } else if (live !== undefined && releaseEnabled && sendDepth === 0
+      && !(options !== null && typeof options === 'object' && options.release === false)) {
+      releaseStream = live;
+    }
+    if (releaseStream === undefined || sendFn === null) return;
+    flushRun(id, releaseStream, [{ kind: 'release_all' }], gateEpochBySurface.get(id) ?? 0);
   }
 
   /**
@@ -792,6 +1060,9 @@ export function createInputPort(facade, options = {}) {
     disposed = true;
     pendingBySurface.clear();
     gateEpochBySurface.clear();
+    wheelCarryBySurface.clear();
+    liveStreamBySurface.clear();
+    releaseSeqs.clear();
     refusalListeners.clear();
     seenResults.clear();
     const stop = stopResults;
