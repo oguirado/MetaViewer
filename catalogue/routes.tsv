@@ -1323,6 +1323,7 @@ framePortRouter.js	ui/src/frames/framePortRouter.js
 HandoffNotice.vue	ui/src/handoff/HandoffNotice.vue
 handoffModel.js	ui/src/handoff/handoffModel.js
 IdentitiesDialog.vue	ui/src/identities/IdentitiesDialog.vue
+identityForm.js	ui/src/identities/identityForm.js
 frameMap.js	ui/src/input/frameMap.js
 inputDouble.js	ui/src/input/inputDouble.js
 inputPort.js	ui/src/input/inputPort.js
@@ -1393,6 +1394,8 @@ hostset-f2d771cedde2	ui/test/host-settings-fps.test.js
 hostBindings.test.js	ui/test/hostBindings.test.js
 hostFix2.test.mjs	ui/test/hostFix2.test.mjs
 hostMax-44a31ed4a05c	ui/test/hostMaxFpsOrder.test.mjs
+ident-dialog.test.js	ui/test/ident-dialog.test.js
+ident-persist.test.js	ui/test/ident-persist.test.js
 intents.test.js	ui/test/intents.test.js
 layout-load.test.js	ui/test/layout-load.test.js
 mainsta-a4716a4c64fe	ui/test/main-startup-order.test.js
