@@ -19,17 +19,17 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 1,016 | 55 | 961 |
-| Lanes finished OK | 1,016 | 55 | 961 |
-| Agent steps | 43,350 | 2,705 | 40,645 |
-| Lane-hours of agent work | 108.4 | 5.2 | 103.2 |
-| Fresh input tokens | 179,180,227 | 11,482,034 | 167,698,193 |
-| Cache-read input tokens | 3,507,974,575 | 226,255,212 | 3,281,719,363 |
+| Lanes launched | 1,029 | 55 | 974 |
+| Lanes finished OK | 1,029 | 55 | 974 |
+| Agent steps | 43,788 | 2,705 | 41,083 |
+| Lane-hours of agent work | 109.2 | 5.2 | 103.9 |
+| Fresh input tokens | 180,638,550 | 11,482,034 | 169,156,516 |
+| Cache-read input tokens | 3,530,054,254 | 226,255,212 | 3,303,799,042 |
 | Prompt cache hit % | 95.1 | 95.2 | 95.1 |
-| Output tokens | 36,353,010 | 2,135,708 | 34,217,302 |
-| Thinking tokens | 21,217,671 | 1,050,039 | 20,167,632 |
-| Cost (USD) | 32.2046 | 2.0279 | 30.1767 |
-| Cost per lane (USD) | 0.0317 | 0.0369 | 0.0314 |
+| Output tokens | 36,600,652 | 2,135,708 | 34,464,944 |
+| Thinking tokens | 21,369,860 | 1,050,039 | 20,319,821 |
+| Cost (USD) | 32.4441 | 2.0279 | 30.4162 |
+| Cost per lane (USD) | 0.0315 | 0.0369 | 0.0312 |
 
 Rooms: 136. Peak concurrent lanes [MEASURED from lane start/end]: 44.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
@@ -38,7 +38,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 627 | 94.0 | 15.9571 |
+| build | 640 | 94.0 | 16.1966 |
 | context | 42 | 95.9 | 1.9093 |
 | context packs + test ideation (U-DEC-0139) | 13 | 91.1 | 0.2195 |
 | demo | 4 | 90.7 | 0.0557 |
@@ -86,7 +86,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 294 | 94.0 | 7.7789 | direct Muse job |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 307 | 94.0 | 8.0184 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -1222,6 +1222,19 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | 7_errors | eve2_r7_errors | Oct 31 16:09 | yes | 34 | 94.2 | 0.019992 |
 | direct-direct | 7_launcher | eve2_r7_launcher | Oct 31 16:09 | yes | 36 | 94.3 | 0.02241 |
 | direct-direct | 7_package | eve2_r7_package | Oct 31 16:09 | yes | 27 | 92.9 | 0.015369 |
+| direct-direct | aptcha | fps1_captcha | Oct 31 16:54 | yes | 27 | 92.0 | 0.018163 |
+| direct-direct | oldings_a | fps1_holdings_a | Oct 31 16:54 | yes | 28 | 93.5 | 0.015181 |
+| direct-direct | oldings_b | fps1_holdings_b | Oct 31 16:54 | yes | 49 | 95.0 | 0.025206 |
+| direct-direct | easure | fps1_measure | Oct 31 16:54 | yes | 42 | 94.2 | 0.023627 |
+| direct-direct | v_adapter_a | fps1_mv_adapter_a | Oct 31 16:54 | yes | 22 | 91.9 | 0.013333 |
+| direct-direct | v_adapter_b | fps1_mv_adapter_b | Oct 31 16:54 | yes | 34 | 94.4 | 0.014856 |
+| direct-direct | pennewton_a | fps1_opennewton_a | Oct 31 16:54 | yes | 42 | 95.0 | 0.023278 |
+| direct-direct | pennewton_b | fps1_opennewton_b | Oct 31 16:54 | yes | 27 | 90.9 | 0.015767 |
+| direct-direct | ptions_a | fps1_options_a | Oct 31 16:54 | yes | 25 | 92.2 | 0.012889 |
+| direct-direct | ptions_b | fps1_options_b | Oct 31 16:54 | yes | 35 | 94.1 | 0.022114 |
+| direct-direct | s_capture_a | fps1_os_capture_a | Oct 31 16:54 | yes | 34 | 92.4 | 0.016927 |
+| direct-direct | s_capture_b | fps1_os_capture_b | Oct 31 16:54 | yes | 36 | 94.4 | 0.016307 |
+| direct-direct | enderer | fps1_renderer | Oct 31 16:54 | yes | 37 | 94.2 | 0.021871 |
 
 ## Method
 
