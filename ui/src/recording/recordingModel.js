@@ -539,6 +539,118 @@ export function mvRowErrorText(row) {
 }
 
 /**
+ * [TARGET, unit decision] CAP-FIX (pillar P4): inclusive frame-rate bounds of
+ * the recording choice, mirroring the core `record_request` max_fps ceiling.
+ * @type {Readonly<{min:number,max:number}>}
+ */
+export const MV_RECORD_FPS_RANGE = Object.freeze({ min: 1, max: 60 });
+
+/**
+ * Operator copy next to the frame-rate field. The live source delivers only
+ * a few frames per second (about 2.7 [MEASURED]), so a high choice is an
+ * upper bound: it never produces frames the source did not deliver.
+ * @type {string}
+ */
+export const MV_RECORD_FPS_HINT = 'Frames are recorded up to the source rate. The live source delivers only a few frames per second, so a higher choice does not add frames.';
+
+/**
+ * Parse the frame-rate field. Empty means "use the host default"; anything
+ * that is not a plain integer within MV_RECORD_FPS_RANGE is invalid and
+ * never reaches the host.
+ * @param {unknown} text Raw field value (string or number).
+ * @returns {{ state: 'default' } | { state: 'ok', fps: number } | { state: 'invalid' }}
+ */
+export function parseMvRecordFps(text) {
+  if (text === null || text === undefined) return { state: 'default' };
+  const raw = typeof text === 'number' ? (Number.isFinite(text) ? String(text) : 'x') : typeof text === 'string' ? text.trim() : 'x';
+  if (raw === '') return { state: 'default' };
+  if (!/^\d{1,3}$/.test(raw)) return { state: 'invalid' };
+  const fps = Number(raw);
+  if (fps < MV_RECORD_FPS_RANGE.min || fps > MV_RECORD_FPS_RANGE.max) return { state: 'invalid' };
+  return { state: 'ok', fps };
+}
+
+/**
+ * Fixed user copy for a capture refusal code (record, stop, screenshot). The
+ * raw code rides a data attribute only. Unknown non-empty codes fail closed
+ * to a generic line; the empty code (healthy) renders nothing.
+ * @param {unknown} code Last refusal code from the capture store.
+ * @returns {string} Copy, or '' when there is nothing to say.
+ */
+export function mvCaptureRefusalText(code) {
+  switch (code) {
+    case undefined:
+    case null:
+    case '':
+      return '';
+    case 'SURFACE_UNKNOWN':
+      return 'The recorder does not know this capsule.';
+    case 'ALREADY_RECORDING':
+      return 'A recording is already running for this capsule.';
+    case 'NOT_RECORDING':
+      return 'No recording is running for this capsule.';
+    case 'CAPTURE_UNAVAILABLE':
+      return 'Capture is unavailable: no frame has arrived yet, or the host did not answer. Try again in a moment.';
+    case 'NESTED_DISPLAY_ONLY':
+      return 'Capture is not available in a nested display.';
+    case 'LIMIT':
+      return 'Capture limit reached. Stop a recording or free memory, then try again.';
+    case 'BUDGET_EXCEEDED':
+      return 'The host refused: the memory or frame-rate budget is exceeded. Lower the frame rate or stop another recording.';
+    case 'POLICY':
+      return 'The host refused this capture by policy.';
+    default:
+      return 'Capture failed.';
+  }
+}
+
+/**
+ * Receipt line after a recording is sealed.
+ * @param {unknown} recording Sealed recording from a stop reply.
+ * @returns {string} Copy, or '' when the shape is unreadable.
+ */
+export function mvRecordingSealedText(recording) {
+  if (recording === null || typeof recording !== 'object') return '';
+  const row = /** @type {{ frames?: unknown, dropped_frames?: unknown }} */ (recording);
+  if (typeof row.frames !== 'number' || !Number.isSafeInteger(row.frames) || row.frames < 0) return '';
+  const head = `Sealed ${row.frames} ${row.frames === 1 ? 'frame' : 'frames'}`;
+  if (typeof row.dropped_frames !== 'number' || !Number.isSafeInteger(row.dropped_frames) || row.dropped_frames < 0) return `${head}.`;
+  return `${head}, ${row.dropped_frames} dropped.`;
+}
+
+/**
+ * @param {string} capsuleId Host-issued capsule id.
+ * @returns {string} Stable DOM id for the frame-rate field.
+ */
+export function mvRecordFpsDomId(capsuleId) {
+  return `mv-recordings-fps-${mvRecordingIdSegment(capsuleId)}`;
+}
+
+/**
+ * @param {string} capsuleId Host-issued capsule id.
+ * @returns {string} Semantic anchor for the frame-rate field.
+ */
+export function mvRecordFpsAnchor(capsuleId) {
+  return `recording/${mvRecordingIdSegment(capsuleId)}/fps`;
+}
+
+/**
+ * @param {string} capsuleId Host-issued capsule id.
+ * @returns {string} Stable DOM id for the capture status line.
+ */
+export function mvCaptureStatusDomId(capsuleId) {
+  return `mv-recordings-capture-status-${mvRecordingIdSegment(capsuleId)}`;
+}
+
+/**
+ * @param {string} capsuleId Host-issued capsule id.
+ * @returns {string} Semantic anchor for the capture status line.
+ */
+export function mvCaptureStatusAnchor(capsuleId) {
+  return `recording/${mvRecordingIdSegment(capsuleId)}/capture-status`;
+}
+
+/**
  * @param {string} capsuleId Host-issued capsule id.
  * @returns {string} Stable DOM id for the record toggle control.
  */

@@ -174,3 +174,46 @@
   font-weight: var(--cuk-semantic-typography-font-weight-semibold);
   color: var(--cuk-semantic-text-primary);
 }
+/* CAP-FIX: frame-rate field, refusal line and sealed receipt. Kit tokens only. */
+.mv4-fps {
+  display: flex;
+  align-items: center;
+  gap: var(--cuk-semantic-spacing-sm);
+  flex-wrap: wrap;
+}
+.mv4-fps-input {
+  width: 6ch;
+  padding: var(--cuk-semantic-spacing-sm);
+  border: var(--cuk-semantic-border-width) solid var(--cuk-semantic-border-default);
+  border-radius: var(--cuk-semantic-radius-sm);
+  background: var(--cuk-semantic-surface-interactive);
+  color: var(--cuk-semantic-text-primary);
+  font-family: var(--cuk-semantic-typography-font-family-mono);
+  font-size: inherit;
+}
+.mv4-fps-input[aria-invalid='true'] {
+  border-color: var(--cuk-semantic-status-error-border);
+}
+.mv4-fps-input:disabled {
+  color: var(--cuk-semantic-text-disabled);
+  cursor: not-allowed;
+}
+.mv4-fps-input:focus-visible {
+  outline: var(--cuk-semantic-focus-ring-width) solid var(--cuk-semantic-focus-ring-color);
+  outline-offset: var(--cuk-primitive-space-2);
+}
+.mv4-fps-hint {
+  color: var(--cuk-semantic-text-primary);
+}
+.mv4-capture-status {
+  margin: 0;
+  padding: var(--cuk-semantic-spacing-sm) var(--cuk-semantic-spacing-md);
+  border: var(--cuk-semantic-border-width) solid var(--cuk-semantic-status-error-border);
+  border-radius: var(--cuk-semantic-radius-sm);
+  background: var(--cuk-semantic-status-error-surface);
+  color: var(--cuk-semantic-status-error-text);
+}
+.mv4-capture-sealed {
+  margin: 0;
+  color: var(--cuk-semantic-text-primary);
+}

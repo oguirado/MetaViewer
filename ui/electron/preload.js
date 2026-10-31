@@ -428,7 +428,9 @@ const CAPTURE_CHANNELS = Object.freeze({screenshot:'capture.screenshot',
   subscribe:'capture.subscribe',unsubscribe:'capture.unsubscribe'});
 const CAPTURE_CODES = new Set(['SURFACE_UNKNOWN','ALREADY_RECORDING','NOT_RECORDING',
   'CAPTURE_UNAVAILABLE','NESTED_DISPLAY_ONLY','LIMIT','DESTINATION_UNSET',
-  'CAPTURE_UNKNOWN','NOT_SEALED','DESTINATION_UNAVAILABLE','DESTINATION_EXISTS']);
+  'CAPTURE_UNKNOWN','NOT_SEALED','DESTINATION_UNAVAILABLE','DESTINATION_EXISTS',
+  // [TARGET, unit decision] CAP-FIX: mirror of captureBridge.js (typed core refusals).
+  'BUDGET_EXCEEDED','POLICY']);
 const CAPTURE_PHASES = new Set(['idle','starting','recording','stopping','sealed','error']);
 /** @param {any} v @param {string} keys */
 function captureKeys(v,keys) {
@@ -478,10 +480,15 @@ function assertCaptureReply(method,v,requestId='') {
     if(captureId(r.id) && captureId(r.surface_id) && digest(r.sha256) && captureNumber(r.created_ms)
       && captureNumber(r.width) && r.width>0 && captureNumber(r.height) && r.height>0) return Object.freeze({ok:true,shot:Object.freeze({...r})});
   }
-  if (method==='recordStop' && captureKeys(v,'ok,recording') && captureKeys(v.recording,'duration_ms,frames,id,sealed,sha256,surface_id')) {
+  // [TARGET, unit decision] CAP-FIX: mirror of captureBridge.js; core seals recordings
+  // with a 7th key, dropped_frames, which is optional so 6-key replies stay valid.
+  const stopKeys='duration_ms,frames,id,sealed,sha256,surface_id';
+  if (method==='recordStop' && captureKeys(v,'ok,recording')
+    && (captureKeys(v.recording,stopKeys) || captureKeys(v.recording,`dropped_frames,${stopKeys}`))) {
     const r=v.recording;
     if(captureId(r.id) && captureId(r.surface_id) && digest(r.sha256) && r.sealed===true
-      && captureNumber(r.frames) && captureNumber(r.duration_ms)) return Object.freeze({ok:true,recording:Object.freeze({...r})});
+      && captureNumber(r.frames) && captureNumber(r.duration_ms)
+      && (!Object.hasOwn(r,'dropped_frames') || captureNumber(r.dropped_frames))) return Object.freeze({ok:true,recording:Object.freeze({...r})});
   }
   if (['subscribe','unsubscribe'].includes(method) && captureKeys(v,'ok')) return Object.freeze({ok:true});
   return bad();

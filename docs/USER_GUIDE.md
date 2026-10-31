@@ -92,7 +92,7 @@ The window is a kit shell with a top bar, a navigation rail, the capsule wall, a
 - **Top bar:** renders `MvTopbar` (`ui/src/App.vue`) with `MetaViewer`, an `Add capsule` button (`@new-capsule="launcherOpen = true"`), a `Find a capsule…` search field, and `4` `[MEASURED]` top-bar actions (`Storyboard`, `Settings`, `Open in multislot`, and `Terminal` in `topbarActions` at `ui/src/App.vue`).
 - **Rail:** a collapsible overlay sidebar with one `Workspace` group (`Add capsule` plus one entry per connected surface).
 - **Wall:** a dockview tile workspace with one panel per capsule (`240x200` `[TARGET]` minimum tile size in `ui/src/wall/WallWorkspace.vue`), supporting tabs, splits, and floating panels.
-- **Side terminal:** a right-side resizable `xterm.js` overlay toggled with `Terminal`.
+- **Side terminal:** a right-side resizable `xterm.js` overlay toggled with `Terminal`. A package built without native terminal support (no `node-pty` in the package) cannot open a session: the overlay and the launch controls report `TERMINAL_UNAVAILABLE: terminal support is not bundled in this package` (`ui/electron/terminalHost.js`, `ui/src/terminal/BrokerLaunchControls.vue`) instead of a blank terminal.
 - **Activity strip:** above the status bar, lists up to `8` `[MEASURED: grep -c 'ACTIVITY_LIMIT = 8' ui/src/App.vue]` recent outcome entries (`ACTIVITY_LIMIT = 8` in `ui/src/App.vue` and `MV_ACTIVITY_LIMIT = 8` in `ui/src/activity/activityModel.js`) alongside the total live event count (`showing 8 of N`) in closed human sentences; raw reason codes never appear as visible text.
 - **Status bar:** shows the current view crumb (`Main wall`), `Core connected` / `Core not connected`, and the active capsule count.
 - **Settings:** switches the window between `Light` (`mv-light`, default) and `Dark` themes live.
@@ -186,9 +186,33 @@ I open the multislot screen with **Open in multislot** and return with **Back to
 
 Capture is RAM-first (`AC-07`, `ui/src/recording/MvRecordingPanel.vue`, `ui/electron/captureBridge.js`, `core/src/record/capture/export.rs`): while `idle`, zero bytes are written to disk. `MvRecordingPanel.vue` drives the per-capsule in-RAM capture state machine (`idle` -> `starting` -> `recording` -> `stopping` -> `sealed`, bounded at `16` MiB `[TARGET]` and `4096` `[TARGET]` frames in RAM) and in-RAM PNG screenshots (**Take screenshot**). Exporting to disk (**Save recording**, which writes a `ustar` archive of PNG frames to `MV_RECORDING_DESTINATION`) is only enabled after a recording reaches `sealed` and `MV_RECORDING_DESTINATION` is configured; live surfaces render through `ui/src/surfaces/SurfaceCanvas.vue`.
 
-`MvRecordingPanel.vue` queries `captureState.refresh(capsuleId)` (`ui/src/capture/capturePort.js` and `ui/src/recording/recordingModel.js`, backed by `window.metaviewer.capture.status(capsuleId)`) on initial mount, whenever the selected `capsuleId` or `captureState` store changes, and after each capture action (`start`, `stop`, `screenshot`, `exportRecording`, `discard`).
+`MvRecordingPanel.vue` queries `captureState.refresh(capsuleId)` (`ui/src/capture/capturePort.js` and `ui/src/recording/recordingModel.js`, backed by `window.metaviewer.capture.list()`) on initial mount, whenever the selected `capsuleId` or `captureState` store changes, after a screenshot, after a stop, and when a `sealed` capture event arrives. The capture facade has exactly six members: `screenshot`, `recordStart`, `recordStop`, `export`, `list` and `subscribe` (`ui/electron/preload.js`); there is no `status` member, so calling `window.metaviewer.capture.status(...)` in the developer tools throws a `TypeError`.
 
-The top-bar **Storyboard** button opens the Storyboard screen, where creative service operations are not wired yet and report `Creative service unavailable.`
+#### Frame rate and what a recording holds
+
+The panel has a **Frame rate (fps)** field next to **Record for AI**. Leave it empty to use the host default (the `recordingFps` setting, `3` `[CITED: core/src/record/capture.rs DEFAULT_FPS]` by default) or enter a whole number from `1` to `60` `[CITED: core/src/record/capture.rs MAX_FPS]`. Anything else disables **Record for AI** with the reason `Frame rate must be a whole number from 1 to 60`; a running recording is never blocked from stopping, and the field is locked while it records.
+
+The rate is an upper bound, not a promise: frames are recorded up to the source rate. The live source stream delivered about `2.7` fps `[MEASURED: operator sweep, W1 judge brief]`, so a choice above that does not add frames; a lower choice keeps fewer. When you stop, the panel shows `Sealed N frames, M dropped.` where `M` is the count the core sealed with the recording (`dropped_frames`).
+
+Frames reach the recording only while a live frame is arriving: **Record for AI** and **Take screenshot** are refused until the first frame lands. **Automate from a demo** records through its own command (`tools/mv_demo.py record`, see below), not through this panel; its sampling rate is `ABSENT — do not invent`.
+
+#### When a capture is refused
+
+A refused **Record for AI**, stop or **Take screenshot** now shows one line under the controls (role `status`, the typed code on its `data-error-code` attribute) instead of doing nothing, and the host connection stays up:
+
+| Code | Line shown | What to do |
+| :--- | :--- | :--- |
+| `CAPTURE_UNAVAILABLE` | `Capture is unavailable: no frame has arrived yet, or the host did not answer. Try again in a moment.` | Wait for the first frame of the capsule, then retry. |
+| `ALREADY_RECORDING` / `NOT_RECORDING` | A recording is already running / no recording is running for this capsule. | Stop the running recording, or start one. |
+| `SURFACE_UNKNOWN` | `The recorder does not know this capsule.` | Reopen the capsule. |
+| `LIMIT` | `Capture limit reached. Stop a recording or free memory, then try again.` | The core keeps at most `64` `[CITED: core/src/record/capture.rs]` captures and `8` `[CITED: core/src/record/capture.rs]` active recordings. |
+| `BUDGET_EXCEEDED` | `The host refused: the memory or frame-rate budget is exceeded. Lower the frame rate or stop another recording.` | Choose a lower rate or stop another recording. |
+| `POLICY` | `The host refused this capture by policy.` | None from the panel. |
+| `NESTED_DISPLAY_ONLY` | `Capture is not available in a nested display.` | Use the outer wall. |
+
+The tile buttons on the wall do not show this line yet `[TARGET, owned by the wall unit]`; the panel does.
+
+The top-bar **Storyboard** button opens the Storyboard screen, where creative service operations are not wired yet and report `Creative service unavailable.` The Storyboard screen has no frames to show today and no status text of its own (`creativeFrames` is `[]` outside fixtures, `ui/src/App.vue`), so it opens as an empty page with only **Close** and **Request new frame**; the `Creative service unavailable.` toast appears only after **Request new frame**.
 
 ---
 
@@ -213,6 +237,7 @@ The top-bar **Storyboard** button opens the Storyboard screen, where creative se
 | `This request is unavailable. Please try again.` banner | The host refused the last intent (`data-error-code` on the tile carries the typed code); the tile preserves its state. |
 | Nested capsule creation refused | `metaviewer-nested` is allowed at `nested_depth: 1` from an outer wall at `nested_depth: 0`; `nested_depth >= 2` is refused (`nested_depth_exceeded`). |
 | Keystrokes do nothing in multislot | Input mode defaults to `read`; toggle the surface input mode to `write`. |
+| **Record for AI** does nothing visible, or a red line appears under the controls | The line carries the typed refusal; see [When a capture is refused](#when-a-capture-is-refused). |
 | `Creative service unavailable.` | Storyboard wire schemas are not available yet (see [ROADMAP.md](ROADMAP.md)). |
 | `npm run smoke` fails early | Set `ELECTRON_OVERRIDE_DIST_PATH` to a local Electron `44.9.2` distribution, run `npm run build` in `ui/` first, and run under `xvfb-run`. |
 | `mv-replay` exits `2`, `3`, or `4` | Invalid/corrupt journal (`2`), duplicate record (`3`), or witness mismatch (`4`). |

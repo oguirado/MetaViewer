@@ -33,6 +33,10 @@ import { CAPTURE_SCHEMA } from './capturePort.js';
  *   refuses DESTINATION_UNAVAILABLE.
  * @property {number} [exportLimit] Max successful exports (default: none);
  *   further exports refuse LIMIT.
+ * @property {boolean} [reportDropped] CAP-FIX: sealed recordings carry
+ *   `dropped_frames: 0`, like the core reply (default: the legacy 6-key shape).
+ * @property {string} [refuseStart] CAP-FIX: recordStart refuses with this
+ *   closed code (e.g. BUDGET_EXCEEDED, POLICY) after request validation.
  */
 
 /**
@@ -162,8 +166,14 @@ export function createCaptureDouble(options) {
   function recordStart(request) {
     const req = requireRequest(request, ['surface_id']);
     if (req.mode !== 'ai') throw new TypeError('captureDouble: mode must be ai');
+    // CAP-FIX: optional max_fps is an integer 1..60, like the preload facade.
+    if (Object.hasOwn(req, 'max_fps')
+      && !(Number.isSafeInteger(req.max_fps) && req.max_fps >= 1 && req.max_fps <= 60)) {
+      throw new TypeError('captureDouble: max_fps must be an integer 1..60');
+    }
     const surfaceId = /** @type {string} */ (req.surface_id);
     if (nested) return refuse('NESTED_DISPLAY_ONLY', req.request_id);
+    if (typeof opts.refuseStart === 'string') return refuse(opts.refuseStart, req.request_id);
     if (unavailable) return refuse('CAPTURE_UNAVAILABLE', req.request_id);
     if (surfaces !== null && !surfaces.has(surfaceId)) return refuse('SURFACE_UNKNOWN', req.request_id);
     for (const rec of active.values()) {
@@ -201,6 +211,7 @@ export function createCaptureDouble(options) {
       id: rec.id,
       surface_id: rec.surface_id,
       frames: rec.frames,
+      ...(opts.reportDropped === true ? { dropped_frames: 0 } : {}),
       duration_ms: durationMs,
       sealed: true,
       sha256: 'f'.repeat(64),

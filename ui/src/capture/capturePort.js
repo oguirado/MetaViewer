@@ -34,6 +34,16 @@ export const CAPTURE_REFUSAL_CODES = Object.freeze([
 ]);
 
 /**
+ * [TARGET, unit decision] CAP-FIX: typed refusals the core coordinator emits
+ * for any capture method (`core/src/record/capture.rs`): BUDGET_EXCEEDED
+ * (memory or frame-rate budget) and POLICY. Kept apart from the pinned record
+ * set above; both sets are accepted, so these codes reach the operator
+ * instead of collapsing to CAPTURE_UNAVAILABLE.
+ * @type {ReadonlyArray<string>}
+ */
+export const CAPTURE_POLICY_REFUSAL_CODES = Object.freeze(['BUDGET_EXCEEDED', 'POLICY']);
+
+/**
  * Closed host refusal codes for capture export replies (MVUI11 lane E).
  * Export travels the same capture namespace but journals its own refusal
  * vocabulary; the record set above stays pinned for the record methods.
@@ -74,7 +84,7 @@ export const CAPTURE_UNAVAILABLE = 'CAPTURE_UNAVAILABLE';
 
 /**
  * @typedef {Readonly<{id:string,surface_id:string,width:number,height:number,sha256:string,created_ms:number}>} CaptureShot
- * @typedef {Readonly<{id:string,surface_id:string,frames:number,duration_ms:number,sealed:true,sha256:string}>} CaptureRecording
+ * @typedef {Readonly<{id:string,surface_id:string,frames:number,dropped_frames?:number,duration_ms:number,sealed:true,sha256:string}>} CaptureRecording
  * @typedef {Readonly<{id:string,kind:string,surface_id:string,phase:string,frames:number,duration_ms:number,sealed:boolean,created_ms:number}>} CaptureRow
  * @typedef {Readonly<{type:'capture.state',recording_id:string,surface_id:string,phase:string,frames:number,elapsed_ms:number}>} CaptureStateEvent
  * @typedef {Readonly<{ok:true,shot:CaptureShot}>|Readonly<{ok:false,code:string}>} CaptureScreenshotResult
@@ -87,10 +97,19 @@ export const CAPTURE_UNAVAILABLE = 'CAPTURE_UNAVAILABLE';
  */
 
 /**
+ * [TARGET, unit decision] CAP-FIX (pillar P4): optional recording options.
+ * `maxFps` is an integer 1..60 (core `record_request` ceiling); absent means
+ * the host default (settings `recordingFps`, core default 3). The source
+ * stream delivers fewer frames than a high choice asks for, so the value is
+ * an upper bound ("up to the source rate"), never a promise.
+ * @typedef {Readonly<{maxFps?:number}>} CaptureRecordOptions
+ */
+
+/**
  * @typedef {object} CapturePort
  * @property {boolean} available True when a callable facade was injected.
  * @property {(surfaceId:string)=>Promise<CaptureScreenshotResult>} screenshot
- * @property {(surfaceId:string)=>Promise<CaptureRecordStartResult>} recordStart
+ * @property {(surfaceId:string,options?:CaptureRecordOptions)=>Promise<CaptureRecordStartResult>} recordStart
  * @property {(recordingId:string)=>Promise<CaptureRecordStopResult>} recordStop
  * @property {(captureId:string)=>Promise<CaptureExportResult>} exportCapture
  * @property {()=>Promise<CaptureListResult>} list
@@ -140,6 +159,21 @@ function isMs(value) {
 }
 
 /**
+ * Inclusive recording frame-rate bounds (core `record_request` max_fps).
+ * @type {Readonly<{min:number,max:number}>}
+ */
+export const CAPTURE_FPS_RANGE = Object.freeze({ min: 1, max: 60 });
+
+/**
+ * @param {unknown} value
+ * @returns {value is number} Integer within CAPTURE_FPS_RANGE.
+ */
+export function isCaptureFps(value) {
+  return typeof value === 'number' && Number.isSafeInteger(value)
+    && value >= CAPTURE_FPS_RANGE.min && value <= CAPTURE_FPS_RANGE.max;
+}
+
+/**
  * @param {unknown} value
  * @returns {boolean} Lowercase hex sha256 digest guard.
  */
@@ -158,7 +192,8 @@ const EXPORT_MAX_BYTES = 16 * 1024 * 1024;
  * @returns {boolean} Membership in the closed refusal set.
  */
 function isClosedCode(code) {
-  return typeof code === 'string' && CAPTURE_REFUSAL_CODES.includes(code);
+  return typeof code === 'string'
+    && (CAPTURE_REFUSAL_CODES.includes(code) || CAPTURE_POLICY_REFUSAL_CODES.includes(code));
 }
 
 /**
@@ -174,7 +209,8 @@ function refusal(code) {
  * @returns {boolean} Membership in the closed export refusal set.
  */
 function isExportCode(code) {
-  return typeof code === 'string' && EXPORT_REFUSAL_CODES.includes(code);
+  return typeof code === 'string'
+    && (EXPORT_REFUSAL_CODES.includes(code) || CAPTURE_POLICY_REFUSAL_CODES.includes(code));
 }
 
 /**
@@ -250,12 +286,16 @@ function checkRecordStopReply(reply) {
   if (!isId(recording.id) || !isId(recording.surface_id) || !isId(recording.sha256)) return null;
   if (!isCount(recording.frames) || !isMs(recording.duration_ms)) return null;
   if (recording.sealed !== true) return null;
+  // CAP-FIX: core seals with dropped_frames; absent in older hosts, never invented.
+  const hasDropped = Object.hasOwn(recording, 'dropped_frames');
+  if (hasDropped && !isCount(recording.dropped_frames)) return null;
   return Object.freeze({
     ok: true,
     recording: Object.freeze({
       id: recording.id,
       surface_id: recording.surface_id,
       frames: recording.frames,
+      ...(hasDropped ? { dropped_frames: recording.dropped_frames } : {}),
       duration_ms: recording.duration_ms,
       sealed: true,
       sha256: recording.sha256,
@@ -382,10 +422,14 @@ export function createCapturePort(facade) {
 
   /**
    * @param {string} surfaceId
+   * @param {CaptureRecordOptions} [options] Optional frame-rate ceiling.
    * @returns {Promise<CaptureRecordStartResult>}
    */
-  async function recordStart(surfaceId) {
+  async function recordStart(surfaceId, options) {
     if (!isId(surfaceId) || bound === null) return unavailable();
+    const maxFps = isRecord(options) ? options.maxFps : undefined;
+    // An out-of-range or non-integer choice never reaches the host.
+    if (maxFps !== undefined && !isCaptureFps(maxFps)) return unavailable();
     /** @type {unknown} */
     let reply;
     try {
@@ -394,6 +438,7 @@ export function createCapturePort(facade) {
         request_id: nextRequestId(),
         surface_id: surfaceId,
         mode: 'ai',
+        ...(maxFps === undefined ? {} : { max_fps: maxFps }),
       });
     } catch {
       return unavailable();
@@ -520,7 +565,7 @@ export const CAPTURE_ROWS_CAP = 64;
  * at creation; `dispose()` releases that subscription, after which actions
  * resolve to CAPTURE_UNAVAILABLE without touching the facade.
  * @param {CapturePort} port Port from `createCapturePort`.
- * @returns {{bySurface:Record<string,CaptureSurfaceEntry>,rows:CaptureRow[],available:boolean,port:CapturePort,toggleRecord:(surfaceId:string)=>Promise<CaptureRecordStartResult|CaptureRecordStopResult>,screenshot:(surfaceId:string)=>Promise<CaptureScreenshotResult>,refresh:(surfaceId?:string)=>Promise<CaptureListResult>,exportCapture:(captureId:string)=>Promise<CaptureExportResult>,dispose:()=>void}} Reactive store.
+ * @returns {{bySurface:Record<string,CaptureSurfaceEntry>,rows:CaptureRow[],available:boolean,port:CapturePort,toggleRecord:(surfaceId:string,options?:CaptureRecordOptions)=>Promise<CaptureRecordStartResult|CaptureRecordStopResult>,screenshot:(surfaceId:string)=>Promise<CaptureScreenshotResult>,refresh:(surfaceId?:string)=>Promise<CaptureListResult>,exportCapture:(captureId:string)=>Promise<CaptureExportResult>,dispose:()=>void}} Reactive store.
  */
 export function createCaptureState(port) {
   if (!isRecord(port)
@@ -585,9 +630,10 @@ export function createCaptureState(port) {
   /**
    * Start recording when idle, stop the active recording otherwise.
    * @param {string} surfaceId Frame notice surface id.
+   * @param {CaptureRecordOptions} [options] Frame-rate ceiling, used only when starting.
    * @returns {Promise<CaptureRecordStartResult|CaptureRecordStopResult>}
    */
-  async function toggleRecord(surfaceId) {
+  async function toggleRecord(surfaceId, options) {
     if (!isId(surfaceId) || disposed) return unavailable();
     const entry = ensureEntry(surfaceId);
     if (entry.phase === 'starting' || entry.phase === 'stopping') return unavailable();
@@ -617,7 +663,9 @@ export function createCaptureState(port) {
     }
     pendingStarts.set(surfaceId, null);
     entry.phase = 'starting';
-    const started = await typed.recordStart(surfaceId);
+    const started = options === undefined
+      ? await typed.recordStart(surfaceId)
+      : await typed.recordStart(surfaceId, options);
     if (disposed) return unavailable();
     const event = pendingStarts.get(surfaceId);
     pendingStarts.delete(surfaceId);

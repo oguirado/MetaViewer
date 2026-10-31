@@ -15,7 +15,11 @@ export const CAPTURE_CHANNELS = Object.freeze({screenshot:'capture.screenshot',
   subscribe:'capture.subscribe',unsubscribe:'capture.unsubscribe'});
 const CAPTURE_CODES = new Set(['SURFACE_UNKNOWN','ALREADY_RECORDING','NOT_RECORDING',
   'CAPTURE_UNAVAILABLE','NESTED_DISPLAY_ONLY','LIMIT','DESTINATION_UNSET',
-  'CAPTURE_UNKNOWN','NOT_SEALED','DESTINATION_UNAVAILABLE','DESTINATION_EXISTS']);
+  'CAPTURE_UNKNOWN','NOT_SEALED','DESTINATION_UNAVAILABLE','DESTINATION_EXISTS',
+  // [TARGET, unit decision] CAP-FIX: the core coordinator refuses with these two
+  // typed codes (core/src/record/capture.rs); a closed set that lacks them turned
+  // a refusal into a thrown OUTCOME and shut the host connection down.
+  'BUDGET_EXCEEDED','POLICY']);
 const CAPTURE_PHASES = new Set(['idle','starting','recording','stopping','sealed','error']);
 /** @param {any} v @param {string} keys */
 function captureKeys(v,keys) {
@@ -34,12 +38,18 @@ export function assertCaptureCall(method,args) {
   if (!Array.isArray(args) || args.length!==(['list','subscribe','unsubscribe'].includes(method)?0:1)) throw new ContractError('ARGS','capture arity');
   if (!args.length) return;
   const v=/** @type {any} */(args[0]);
+  // [TARGET, unit decision] CAP-FIX (pillars P3/P4): recordStart and export may carry
+  // max_fps, an integer 1..60 (core record_request ceiling), exactly like the preload
+  // facade; hostBindings already consumes it. Absent means the host default.
   const keys=method==='export'?'capture_id,destination,request_id,schema':method==='recordStop'?'recording_id,request_id,schema':method==='recordStart'?'mode,request_id,schema,surface_id':'request_id,schema,surface_id';
-  if (!captureKeys(v,keys) || v.schema!=='capture_request/v1'
+  const keysWithFps=method==='export'?'capture_id,destination,max_fps,request_id,schema':method==='recordStart'?'max_fps,mode,request_id,schema,surface_id':null;
+  const hasFps=keysWithFps!==null && captureKeys(v,keysWithFps);
+  if ((!captureKeys(v,keys) && !hasFps) || v.schema!=='capture_request/v1'
     || typeof v.request_id!=='string' || !/^[\x20-\x7e]{1,64}$/.test(v.request_id)
     || !captureId(method==='export'?v.capture_id:method==='recordStop'?v.recording_id:v.surface_id)
     || (method==='export' && v.destination!==null && v.destination!=='recording:configured')
-    || (method==='recordStart' && v.mode!=='ai')) throw new ContractError('PAYLOAD','capture request');
+    || (method==='recordStart' && v.mode!=='ai')
+    || (hasFps && (!Number.isSafeInteger(v.max_fps) || v.max_fps<1 || v.max_fps>60))) throw new ContractError('PAYLOAD','capture request');
 }
 /** @param {string} method @param {any} v @param {string} [requestId] */
 export function assertCaptureReply(method,v,requestId='') {
@@ -62,10 +72,15 @@ export function assertCaptureReply(method,v,requestId='') {
     if(captureId(r.id) && captureId(r.surface_id) && digest(r.sha256) && captureNumber(r.created_ms)
       && captureNumber(r.width) && r.width>0 && captureNumber(r.height) && r.height>0) return Object.freeze({ok:true,shot:Object.freeze({...r})});
   }
-  if (method==='recordStop' && captureKeys(v,'ok,recording') && captureKeys(v.recording,'duration_ms,frames,id,sealed,sha256,surface_id')) {
+  // [TARGET, unit decision] CAP-FIX: core seals recordings with a 7th key,
+  // dropped_frames (core/src/record/capture.rs); it is optional so 6-key replies stay valid.
+  const stopKeys='duration_ms,frames,id,sealed,sha256,surface_id';
+  if (method==='recordStop' && captureKeys(v,'ok,recording')
+    && (captureKeys(v.recording,stopKeys) || captureKeys(v.recording,`dropped_frames,${stopKeys}`))) {
     const r=v.recording;
     if(captureId(r.id) && captureId(r.surface_id) && digest(r.sha256) && r.sealed===true
-      && captureNumber(r.frames) && captureNumber(r.duration_ms)) return Object.freeze({ok:true,recording:Object.freeze({...r})});
+      && captureNumber(r.frames) && captureNumber(r.duration_ms)
+      && (!Object.hasOwn(r,'dropped_frames') || captureNumber(r.dropped_frames))) return Object.freeze({ok:true,recording:Object.freeze({...r})});
   }
   if (['subscribe','unsubscribe'].includes(method) && captureKeys(v,'ok')) return Object.freeze({ok:true});
   return bad();

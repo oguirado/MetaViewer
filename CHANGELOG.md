@@ -6,6 +6,8 @@
 - Word the CAPTCHA and login-wall handoff notice per reason with ordered operator steps (take control, WRITE, solve, release, re-run) and show an unavailable handoff list instead of staying silent.
 - Arm wall input when the operator takes control of a capsule from the wall (tile Control action, the tile's view-only chip or the handoff notice): the tile turns interactive once the host grants human control, shows "View only — press Control to interact" otherwise, carries an outline, a crosshair pointer and a Release action while interactive, and the handoff take-control reveals the capsule's tile.
 - Reopen a closed browser tile: a create refused as a bound profile now returns a typed `SURFACE_PROFILE_BOUND` and shows the live tile again, a stopping capsule's late error no longer settles the next create, and the wall offers Add capsule after every tile was closed.
+- Keep the host connection up when a recording stops or the coordinator refuses: admit the core `dropped_frames` key and the `BUDGET_EXCEEDED` and `POLICY` capture refusals in the main and preload capture asserts.
+- Let the renderer pick a recording frame rate (`max_fps`, whole number 1 to 60, "up to the source rate") and show typed capture refusals and the sealed frame and drop counts in the recording panel; correct the guide's capture API and terminal notes.
 - Preserve the shared packaged RAM admission ledger and drain adapter shutdown before runtime cleanup.
 - Register and validate retail frame reports and cover the complete preload invoke surface.
 - Track initial capsule creation asynchronously with an independent final deadline and typed busy refusals.

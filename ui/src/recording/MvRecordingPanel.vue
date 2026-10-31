@@ -1,6 +1,6 @@
 <script setup>
 import SidebarIcon from '../../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue';
-import { computed, onMounted, reactive, watch } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import {
   buildRecordAiIntent,
   buildRecordingExportIntent,
@@ -10,6 +10,15 @@ import {
 import {
   MV_EXPORT_ALREADY_EXPORTED_REASON,
   MV_RECORD_EMPTY_TEXT,
+  MV_RECORD_FPS_HINT,
+  MV_RECORD_FPS_RANGE,
+  mvCaptureRefusalText,
+  mvCaptureStatusAnchor,
+  mvCaptureStatusDomId,
+  mvRecordFpsAnchor,
+  mvRecordFpsDomId,
+  mvRecordingSealedText,
+  parseMvRecordFps,
   captureEntryFor,
   captureRowsFor,
   captureShotsFor,
@@ -204,7 +213,32 @@ const phaseN = computed(() => normalizeMvRecordPhase(phaseEff.value));
 const shotN = computed(() => normalizeMvScreenshotState(shotStateEff.value));
 const toggleBusy = computed(() => mvRecordPhaseBusy(phaseEff.value));
 const shotBusy = computed(() => mvScreenshotStateBusy(shotStateEff.value));
-const toggleDisabled = computed(() => props.disabled || captureHeld.value || toggleBusy.value);
+// CAP-FIX (pillar P4): optional per-recording frame-rate ceiling. Empty uses
+// the host default; an invalid entry blocks only a start, never a stop.
+const fpsText = ref('');
+const fpsParsed = computed(() => parseMvRecordFps(fpsText.value));
+const fpsInvalid = computed(() => fpsParsed.value.state === 'invalid');
+const recordingNow = computed(() => phaseN.value === 'recording');
+const fpsBlocksStart = computed(() => fpsInvalid.value && !recordingNow.value);
+const fpsLocked = computed(() => props.disabled || captureHeld.value || recordingNow.value || toggleBusy.value);
+const fpsRangeText = `${MV_RECORD_FPS_RANGE.min} to ${MV_RECORD_FPS_RANGE.max}`;
+const fpsId = computed(() => mvRecordFpsDomId(props.capsuleId));
+const fpsHintId = computed(() => `${mvRecordFpsDomId(props.capsuleId)}-hint`);
+// CAP-FIX (story-F3): the store keeps the last refusal code per capsule but
+// nothing rendered it, so a refused click looked like a dead button.
+const refusalCode = computed(() => {
+  const code = captureBound.value ? captureEntry.value?.lastCode : '';
+  return typeof code === 'string' ? code : '';
+});
+const refusalText = computed(() => mvCaptureRefusalText(refusalCode.value));
+const sealedText = ref('');
+/** @param {Event | { target?: { value?: unknown } } | null | undefined} event Input event. */
+function onFpsInput(event) {
+  const next = /** @type {{ value?: unknown } | null | undefined} */ (event?.target)?.value;
+  fpsText.value = typeof next === 'string' ? next : '';
+}
+watch(() => props.capsuleId, () => { sealedText.value = ''; });
+const toggleDisabled = computed(() => props.disabled || captureHeld.value || toggleBusy.value || fpsBlocksStart.value);
 const shotDisabled = computed(() => props.disabled || captureHeld.value || shotBusy.value);
 const toggleLabel = computed(() => mvRecordToggleLabel(phaseEff.value));
 const shotLabel = computed(() => mvScreenshotButtonLabel(shotStateEff.value));
@@ -226,6 +260,7 @@ const toggleReason = computed(() => {
   if (props.unavailableReason) return 'Recording is unavailable';
   if (captureHeld.value) return 'Recording is unavailable';
   if (toggleBusy.value) return `Recording is ${phaseN.value}`;
+  if (fpsBlocksStart.value) return `Frame rate must be a whole number from ${fpsRangeText}`;
   return '';
 });
 const shotReason = computed(() => {
@@ -451,7 +486,19 @@ function onToggleClick() {
     // MVUI9: bound record-for-AI calls the store, never the intent channel.
     const action = props.captureState?.toggleRecord;
     if (typeof action === 'function') {
-      return Promise.resolve().then(() => action.call(props.captureState, props.capsuleId))
+      // The frame-rate choice rides only a start; a stop and the default
+      // choice keep the exact one-argument call.
+      const fps = fpsParsed.value;
+      const starting = !recordingNow.value;
+      return Promise.resolve().then(() => (starting && fps.state === 'ok'
+        ? action.call(props.captureState, props.capsuleId, { maxFps: fps.fps })
+        : action.call(props.captureState, props.capsuleId)))
+        .then((result) => {
+          if (result !== null && typeof result === 'object' && result.ok === true) {
+            sealedText.value = result.recording !== undefined ? mvRecordingSealedText(result.recording) : '';
+          }
+          return result;
+        })
         .catch(() => ({ ok: false, code: 'CAPTURE_UNAVAILABLE' }));
     }
     return;
@@ -603,6 +650,34 @@ function onExport(entry) {
         {{ shotLabel }}
       </button>
     </div>
+    <div v-if="captureBound" class="mv4-fps">
+      <label :for="fpsId" class="mv4-fps-label">Frame rate (fps)</label>
+      <input
+        :id="fpsId"
+        :value="fpsText"
+        type="text"
+        inputmode="numeric"
+        autocomplete="off"
+        class="mv4-fps-input"
+        aria-label="Recording frame rate in frames per second, empty for the host default"
+        :data-semantic-anchor="mvRecordFpsAnchor(capsuleId)"
+        :disabled="fpsLocked"
+        @input="onFpsInput"
+        :aria-invalid="fpsInvalid ? 'true' : undefined"
+        :aria-describedby="fpsHintId"
+        :title="'Whole number from ' + fpsRangeText + ', or empty for the host default'"
+      />
+      <span :id="fpsHintId" class="mv4-fps-hint">{{ MV_RECORD_FPS_HINT }}</span>
+    </div>
+    <p
+      v-if="refusalText"
+      :id="mvCaptureStatusDomId(capsuleId)"
+      class="mv4-capture-status"
+      role="status"
+      :data-semantic-anchor="mvCaptureStatusAnchor(capsuleId)"
+      :data-error-code="refusalCode"
+    >{{ refusalText }}</p>
+    <p v-if="sealedText && !refusalText" class="mv4-capture-sealed" role="status">{{ sealedText }}</p>
     <p v-if="!hasRows" class="mv4-empty" role="status">{{ MV_RECORD_EMPTY_TEXT }}</p>
     <table v-else class="mv4-table" aria-label="RAM recordings manifest">
       <thead>
