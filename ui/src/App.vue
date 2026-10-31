@@ -1019,13 +1019,14 @@ const chromeWorkspace = markRaw(defineComponent({
         <section v-if="creativeOpen && selectedSurface && !nestedMode.displayOnly" class="mv-creative-screen" aria-label="Creative capsule">
           <CreativeCapsule :capsule-id="selectedSurface.id" :frames="creativeFrames" title="Storyboard" @submit-intent="dispatch" />
         </section>
-        <section v-if="multislotOpen && selectedSurface && !nestedMode.displayOnly" class="mv-multislot-screen" aria-label="Capsule multislot">
+        <section v-if="multislotOpen && !nestedMode.displayOnly" class="mv-multislot-screen" aria-label="Capsule multislot">
           <UiButton id="multislot-back" data-semantic-anchor="multislot/back" label="Back to wall" @click="multislotOpen = false" />
-          <MultislotHost :capsule-id="selectedSurface.id" :capsule-label="selectedSurface.title" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" :terminal-session-port="props.terminalSessionPort" :host-providers="props.hostProviders" :broker-commands="props.brokerCommands" :clipboard="props.clipboard" :folded="selectedFolded" :hidden="selectedPlacement.hidden" :floating="selectedPlacement.floating"
+          <p v-if="!selectedSurface" id="multislot-empty" data-semantic-anchor="multislot/empty" role="status">No capsule is available. Go back to the wall or create one.</p>
+          <MultislotHost v-if="selectedSurface" :capsule-id="selectedSurface.id" :capsule-label="selectedSurface.title" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" :terminal-session-port="props.terminalSessionPort" :host-providers="props.hostProviders" :broker-commands="props.brokerCommands" :clipboard="props.clipboard" :folded="selectedFolded" :hidden="selectedPlacement.hidden" :floating="selectedPlacement.floating"
             :float-x="selectedPlacement.x" :float-y="selectedPlacement.y" :float-width="selectedPlacement.width" :float-height="selectedPlacement.height"
             :group-id="selectedPlacement.groupId" :placement-index="selectedPlacement.index"
             :last-dock-group-id="selectedPlacement.lastDockGroupId" :last-dock-index="selectedPlacement.lastDockIndex"
-            :layout-pending="placementPending[selectedSurface.id] === true" :agent-controlled="selectedSurface.control === 'agent'" v-model:input-mode="inputMode" @submit-intent="dispatchMultislot">
+            :surface-state="canvasStateFor(selectedSurface)" :layout-pending="placementPending[selectedSurface.id] === true" :agent-controlled="selectedSurface.control === 'agent'" v-model:input-mode="inputMode" @submit-intent="dispatchMultislot">
             <template #surface><SurfaceCanvas :surface-id="selectedSurface.id" :generation="selectedSurface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(selectedSurface).frame" :digest="surfaceWitness(selectedSurface).digest" :frame-width="surfaceWitness(selectedSurface).width" :frame-height="surfaceWitness(selectedSurface).height" :state="canvasStateFor(selectedSurface)" :input-enabled="inputEnabledFor(selectedSurface)" :stream-id="surfaceStreamId(selectedSurface)" /></template>
             <template #record><MvRecordingPanel :capsule-id="selectedSurface.id" :export-destination="props.exportDestination" :phase="props.fixture?.key === 'recording' ? 'recording' : 'idle'" :capture-state="captureState" :capture-available="captureAvailable" @submit-intent="dispatch" /></template>
           </MultislotHost>

@@ -64,6 +64,8 @@ import './multislot.css';
 /** @typedef {import('vue').PropType<{ writeText: (text: string) => Promise<void> } | null>} ClipboardProp */
 /** @typedef {{ sessionId: string, title?: string, kind?: string, activity?: string }} PaneSession */
 
+const AGENT_WRITE_REASON = 'The agent controls this slot. Take control to switch to WRITE.';
+const CLOSE_UNAVAILABLE_REASON = 'Closing a slot from here is not available yet.';
 const props = defineProps({
   terminalBroker: { type: /** @type {import('vue').PropType<ReturnType<typeof import('../core/hostAdapters.js').createTerminalBroker>>} */ (Object), default: null },
   capsuleId: { type: String, required: true },
@@ -132,9 +134,14 @@ const refusal = ref(null);
 /** Typed placement refusal row (codes stay in data attributes).
  * @type {import('vue').Ref<{ code: string, message: string } | null>} */
 const placementRefusal = ref(null);
+// A blank field means "keep the current value": the committed group/index
+// (else the dock default, like dock-back) shown beside the form, so the first
+// Move/Tab click is valid while a typed draft still wins.
 /** Placement form state: free-form group plus a 0..255 index. */
 const placementGroup = ref('');
 const placementIndexInput = ref('');
+const currentGroup = computed(() => props.groupId || MULTISLOT_DOCK_GROUP);
+const currentIndex = computed(() => props.placementIndex ?? MULTISLOT_DOCK_INDEX);
 /** @type {import('vue').Ref<unknown>} */
 const slotWrap = ref(null);
 /** Local placement gate: pending, agent control, READ mode, then hidden
@@ -573,12 +580,18 @@ function onSubmitIntent(intent) {
     requestPlacement(type);
     return;
   }
+  // No admitted ui_intent/v0.2 op closes a slot: the bar disables Close, and a
+  // direct close intent is dropped here, never forwarded or armed to nothing.
+  if (type === 'close') return;
   // Explicit props await parent acceptance. Omitted props retain the local
   // presentation mode for standalone hosts without a controlling parent.
   const supplied = instance?.vnode.props ?? {};
   const controlled = (/** @type {string} */ camel, /** @type {string} */ kebab = camel) =>
     Object.prototype.hasOwnProperty.call(supplied, camel) || Object.prototype.hasOwnProperty.call(supplied, kebab);
   if (type === 'input-mode-read' || type === 'input-mode-write') {
+    // The App forces READ on the next snapshot while the agent controls the
+    // slot, so a WRITE request is refused here instead of flashing and reverting.
+    if (type === 'input-mode-write' && props.agentControlled === true) return;
     // MVUI16D lane P (L2-1): input mode is a purely local lease toggle.
     emit('update:inputMode', type === 'input-mode-write' ? 'write' : 'read');
     return;
@@ -627,7 +640,8 @@ function requestPlacement(type) {
       props.lastDockIndex ?? props.placementIndex ?? MULTISLOT_DOCK_INDEX);
     else {
       const build = op === 'tab' ? buildMultislotTabIntent : buildMultislotMoveIntent;
-      body = build(props.capsuleId, placementGroup.value, parsePlacementIndex(placementIndexInput.value));
+      body = build(props.capsuleId, placementGroup.value.trim() === '' ? currentGroup.value : placementGroup.value,
+        parsePlacementIndex(placementIndexInput.value.trim() === '' ? currentIndex.value : placementIndexInput.value));
     }
     placementRefusal.value = null;
     emit('submit-intent', body, props.capsuleId);
@@ -881,6 +895,8 @@ function onSlotPointerGuard(event) {
           :capsule-id="capsuleId"
           :capsule-label="capsuleLabel"
           :input-mode="mode"
+          :input-mode-disabled="agentControlled" :input-mode-reason="agentControlled ? AGENT_WRITE_REASON : ''"
+          :close-disabled="true" :close-reason="CLOSE_UNAVAILABLE_REASON"
           :copy-state="copyState"
           :copy-disabled="!copyAvailableRef || !copyIdAllowedRef"
           :copy-reason="copyReasonRef"
@@ -956,6 +972,7 @@ function onSlotPointerGuard(event) {
       <UiButton :id="`mv-multislot-${capsuleId}-visibility`" :data-semantic-anchor="`capsule/${capsuleId}/placement/visibility`" type="button"
         :aria-label="hiddenRef ? 'Show slot' : 'Hide slot'" :disabled="Boolean(hiddenRef ? showAccess : hideAccess)" :aria-describedby="`mv-multislot-${capsuleId}-placement-reason`"
         :label="hiddenRef ? 'Show slot' : 'Hide slot'" :loading="layoutPending" @click="requestPlacement(hiddenRef ? 'show' : 'hide')" />
+      <p :id="`mv-multislot-${capsuleId}-placement-current`" :data-semantic-anchor="`capsule/${capsuleId}/placement/current`">Current placement: group {{ currentGroup }}, position {{ currentIndex }}. Blank fields keep it.</p>
       <label :for="`mv-multislot-${capsuleId}-group`">Group</label>
       <input :id="`mv-multislot-${capsuleId}-group`" :data-semantic-anchor="`capsule/${capsuleId}/placement/group`" aria-label="Placement group"
         :value="placementGroup" @input="placementGroup = /** @type {HTMLInputElement} */ ($event.target).value" :disabled="Boolean(moveAccess)" :aria-describedby="`mv-multislot-${capsuleId}-placement-reason`" maxlength="128" />

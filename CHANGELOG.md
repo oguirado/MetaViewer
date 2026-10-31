@@ -12,6 +12,7 @@
 - Register and validate retail frame reports and cover the complete preload invoke surface.
 - Track initial capsule creation asynchronously with an independent final deadline and typed busy refusals.
 - Delay packaged core spawn until native platform readiness and add an opt-in scrubbed operator smoke.
+- Fix the multislot flow: disable the unwired slot Close, block WRITE under agent control, make first Move/Tab submit the current placement, keep Back with an empty notice when the last capsule leaves, and show surface state on the folded rail.
 - Report unavailable terminal providers when native PTY support cannot load.
 - Give the tile canvas more height by sharing one rail row for Network and capture chrome and moving the state word onto the witness strip line; frame paint and pointer input share one contain transform.
 - Show 'Agent acting' only while a busy session or in-flight proposal is present; an idle agent-owned tile reads 'Agent ready'.
