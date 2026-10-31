@@ -905,7 +905,9 @@ else if (process.argv.includes('--nested-depth=1')) {
     if (isLiveCore(core)) {try {process.kill(core.pid,'SIGKILL');} catch {}}
     cleanupRuntimeSync();
   });
-  try {
+  // Electron emits ready only after the main module finishes evaluating, so a
+  // top-level await on whenReady() would deadlock the packaged boot.
+  void (async () => { try {
     // Native platform-init failure exits before any owned child exists.
     await app.whenReady();
     if (stopping) throw new Error('PKG_STOPPING');
@@ -1035,6 +1037,7 @@ else if (process.argv.includes('--nested-depth=1')) {
     });
     void entry.catch(async error => {writeFdSync(2, formatErrorLine(error));try {await stop();} catch {}app.exit(1);});
   } catch(error) {writeFdSync(2, formatErrorLine(error));try {await stop();} catch {}cleanupRuntimeSync();app.exit(1);}
+  })();
 }
 `;
 

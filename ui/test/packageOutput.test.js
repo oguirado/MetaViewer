@@ -645,6 +645,32 @@ test('POLISH-3 generated entry cannot spawn core before native platform readines
   assert.ok(productionEntry.indexOf('await preparePackagedAdmission(process.env)') < productionEntry.indexOf('process.env.XDG_RUNTIME_DIR = runtime'));
 });
 
+test('P8 boot: the generated entry never awaits whenReady at module top level (Electron emits ready after evaluation)', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mv-ready-Música-'));
+  try {
+    await writeFile(join(root,'package.json'), JSON.stringify({type:'module'}));
+    await writeFile(join(root,'main.js'), "export const validateRetailLaunch=()=>({ok:true}); export const mainDirectEntry=()=>{}; export const registerPrivilegedScheme=()=>{};");
+    await writeFile(join(root,'coreLauncher.js'), "export const scrubChildEnv=e=>e; export const validateKillTarget=()=>true;");
+    const source = productionEntry.replace('  verifyBootSeal(appRoot);', '  /* Seal fixture: tested by package seal suites. */');
+    // Like Electron, ready fires only once the main module has finished evaluating.
+    const electron = "export const app={on(){},removeAllListeners(){},exit:code=>process.exit(code),whenReady:()=>new Promise(r=>{globalThis.__mvReady=r;})}; export const protocol={};";
+    const bootstrap = `import {registerHooks} from 'node:module'; registerHooks({resolve(s,c,next){
+      const stub=s==='electron'?${JSON.stringify(electron)}:null;
+      return stub?{url:'data:text/javascript,'+encodeURIComponent(stub),shortCircuit:true}:next(s,c);
+    }}); await import(${JSON.stringify(pathToFileURL(join(root,'entry.js')).href)}); process.stdout.write('EVALUATED\\n'); globalThis.__mvReady?.();`;
+    await writeFile(join(root,'entry.js'), source);
+    const fixed = spawnSync(process.execPath,['--input-type=module','-e',bootstrap],{env:{},encoding:'utf8',timeout:5000});
+    assert.notEqual(fixed.signal,'SIGTERM','entry deadlocked waiting for ready during evaluation');
+    assert.match(fixed.stdout,/EVALUATED/);
+    // Mutant: the pre-fix top-level await never finishes evaluating.
+    const deadlock = source.replace('  void (async () => { try {', '  try {').replace('app.exit(1);}\n  })();\n}', 'app.exit(1);}\n}');
+    assert.notEqual(deadlock, source);
+    await writeFile(join(root,'entry.js'), deadlock);
+    const mutant = spawnSync(process.execPath,['--input-type=module','-e',bootstrap],{env:{},encoding:'utf8',timeout:3000});
+    assert.doesNotMatch(mutant.stdout,/EVALUATED/);
+  } finally {await rm(root,{recursive:true,force:true});}
+});
+
 test('POLISH-3 native platform initialization failure executes no core spawn (with eager-spawn mutant)', async () => {
   const root = await mkdtemp(join(tmpdir(), 'mv-platform-Música-'));
   try {
