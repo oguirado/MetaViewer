@@ -797,6 +797,7 @@ manager.go	daemon-adapter/internal/capsule/manager.go
 manager_a2_test.go	daemon-adapter/internal/capsule/manager_a2_test.go
 manager-26328fbfd05f	daemon-adapter/internal/capsule/manager_handoff_test.go
 manager_race_test.go	daemon-adapter/internal/capsule/manager_race_test.go
+manager_test.go	daemon-adapter/internal/capsule/manager_test.go
 mut_capsule_test.go	daemon-adapter/internal/capsule/mut_capsule_test.go
 mut_lost_test.go	daemon-adapter/internal/capsule/mut_lost_test.go
 native_test.go	daemon-adapter/internal/capsule/native_test.go
