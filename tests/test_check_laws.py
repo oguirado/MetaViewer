@@ -58,3 +58,14 @@ class LawsTests(unittest.TestCase):
         with patch.object(laws, 'git', side_effect=subprocess.CalledProcessError(128, 'git')):
             with self.assertRaises(subprocess.CalledProcessError):
                 laws.check_history('invalid..range')
+
+    def test_changelog_fragment_enforcement(self):
+        self.assertTrue(laws.check_changelog_changes(['core/src/lib.rs']))
+        self.assertEqual(laws.check_changelog_changes(
+            ['core/src/lib.rs', 'changes/unreleased/core-fix.md']), [])
+        self.assertEqual(laws.check_changelog_changes(['docs/COMMIT_LAWS.md']), [])
+        self.assertEqual(laws.check_changelog_changes(['CHANGELOG.md']), [])
+        self.assertEqual(laws.check_changelog_changes(
+            ['core/src/lib.rs', 'CHANGELOG.md'], allow_direct=True), [])
+        self.assertTrue(laws.check_changelog_changes(
+            ['core/src/lib.rs', 'CHANGELOG.md'], allow_direct=False))

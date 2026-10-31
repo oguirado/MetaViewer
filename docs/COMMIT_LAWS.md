@@ -29,6 +29,24 @@ section with the exact version. An unreleased entry is acceptable before a tag;
 replace `unreleased` with the actual release date before tagging. Component pins
 belong in `deps.lock`; a commit changing a pin must use `deps:`.
 
+Each unit that changes product code adds a changelog fragment at
+`changes/unreleased/<slug>.md` (lowercase `[a-z0-9-]`, one file per unit)
+containing one or more `- ` bullet lines in `CHANGELOG.md` style (see
+`changes/README.md`). At integration or release, the conductor assembles all
+fragments into `CHANGELOG.md` under `## [Unreleased]`, sorted by fragment file
+name after the existing lines, and deletes the consumed fragments:
+
+```sh
+python3 tools/changelog_assemble.py --dry-run
+python3 tools/changelog_assemble.py
+python3 tools/changelog_assemble.py --check
+```
+
+`tools/check_laws.py` rejects product-code commits that add no fragment. During
+the transition for in-flight units, `ALLOW_DIRECT_CHANGELOG = True` in
+`tools/check_laws.py` (or `MV_CHANGELOG_ALLOW_DIRECT=1`) keeps direct
+`CHANGELOG.md` edits valid until the conductor flips that switch to `False`.
+
 ## Enforcement
 
 Install `.githooks/commit-msg` with `git config core.hooksPath .githooks`.

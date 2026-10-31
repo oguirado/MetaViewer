@@ -1,0 +1,1 @@
+- Add per-unit changelog fragments under `changes/unreleased/<slug>.md`, deterministic assembly in `tools/changelog_assemble.py`, and fragment enforcement in `tools/check_laws.py` with a transition switch for direct `CHANGELOG.md` edits.
