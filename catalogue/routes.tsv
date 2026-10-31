@@ -127,8 +127,10 @@ testws3-5a6f7cc82936	agents/tests/test_ws3_wheel_record.py
 protocol.json	catalogue/protocol.json
 changes-README.md	changes/README.md
 changel-6ee9fc48ce48	changes/unreleased/changelog-fragments.md
+display-polish.md	changes/unreleased/display-polish.md
 e4-create.md	changes/unreleased/e4-create.md
 flakepi-0268f441f2d7	changes/unreleased/flake-pin-procbound.md
+p12-display-reader.md	changes/unreleased/p12-display-reader.md
 p12-display-tap.md	changes/unreleased/p12-display-tap.md
 u1-pty-pkg.md	changes/unreleased/u1-pty-pkg.md
 actionp-0ef0ddb499b4	contracts/examples/action_proposal.invalid.schema.json
@@ -1319,6 +1321,7 @@ buttonBridge.js	ui/electron/buttonBridge.js
 bytePlane.js	ui/electron/bytePlane.js
 captureBridge.js	ui/electron/captureBridge.js
 coreLauncher.js	ui/electron/coreLauncher.js
+displayReader.js	ui/electron/displayReader.js
 frameDiag.js	ui/electron/frameDiag.js
 framePort.js	ui/electron/framePort.js
 frameReader.js	ui/electron/frameReader.js
@@ -1364,6 +1367,7 @@ resolveState.js	ui/src/fixtures/resolveState.js
 states.js	ui/src/fixtures/states.js
 terminalLive.js	ui/src/fixtures/terminalLive.js
 tileChrome.js	ui/src/fixtures/tileChrome.js
+displayPortRouter.js	ui/src/frames/displayPortRouter.js
 framePortRouter.js	ui/src/frames/framePortRouter.js
 HandoffNotice.vue	ui/src/handoff/HandoffNotice.vue
 handoff.css	ui/src/handoff/handoff.css
@@ -1399,6 +1403,7 @@ settings.css	ui/src/settings/settings.css
 settingsHost.js	ui/src/settings/settingsHost.js
 settingsModel.js	ui/src/settings/settingsModel.js
 SurfaceCanvas.vue	ui/src/surfaces/SurfaceCanvas.vue
+fpsMeter.js	ui/src/surfaces/fpsMeter.js
 frameTile.js	ui/src/surfaces/frameTile.js
 pointerEcho.js	ui/src/surfaces/pointerEcho.js
 tileScheduler.js	ui/src/surfaces/tileScheduler.js
@@ -1441,10 +1446,16 @@ contrast.test.js	ui/test/contrast.test.js
 coreLauncher.test.js	ui/test/coreLauncher.test.js
 creativ-f3bdf7f2988d	ui/test/creativeCapsule.test.js
 demoflo-dbdd4f1e86e9	ui/test/demoflow-dialog.test.js
+display-b8cac33de3ce	ui/test/display-electron-main.mjs
+display-e269df34c2ff	ui/test/display-electron.test.js
+display-holds.test.js	ui/test/display-holds.test.js
+display-38e38244c4e9	ui/test/display-polish.test.js
+display-04c2f125230b	ui/test/display-reader.test.js
 e4-create.test.js	ui/test/e4-create.test.js
 eshbutt-e35bca97f1a6	ui/test/esh-button-stop-budget.test.js
 eshcrea-1e9d7f1b3142	ui/test/esh-create-refusal-code.test.js
 eshhand-9cf159b4a09b	ui/test/esh-handoff-discovery.test.js
+fps-indicator.test.js	ui/test/fps-indicator.test.js
 frame-ref-v02.test.js	ui/test/frame-ref-v02.test.js
 frame-wait.mjs	ui/test/frame-wait.mjs
 framePort.test.js	ui/test/framePort.test.js
