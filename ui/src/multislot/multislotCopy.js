@@ -71,7 +71,30 @@ function ambientClipboard() {
  * test doubles land here.
  * @property {((text: string) => Promise<unknown>) | null | undefined} [copyText]
  * Fixed-API clipboard path: used when no clipboard is injected.
+ * @property {unknown} [surfaceState] Live capsule surface state; `'lost'` or
+ * `'capsule_gone'` disables copying.
  */
+
+/**
+ * Resolves and validates the copy payload for a capsule or slot target
+ * (U5a-MULTISLOT-UI). Both targets require a valid `capsuleId` and must match
+ * the host `TERMINAL_COPYTEXT_TEXT_RE` grammar.
+ *
+ * @param {unknown} capsuleId Candidate capsule id.
+ * @param {'capsuleId'|'slotId'} [target='capsuleId'] Which identifier to copy.
+ * @returns {{ ok: true, text: string } | { ok: false, reason: string }}
+ */
+export function resolveSlotCopyText(capsuleId, target = 'capsuleId') {
+  const checked = validateCapsuleId(capsuleId);
+  if (checked.ok === false) {
+    return { ok: false, reason: checked.error.code };
+  }
+  const text = target === 'slotId' ? `cuk-ai-slot-${checked.id}` : checked.id;
+  if (!isCopyTextAllowed(text)) {
+    return { ok: false, reason: 'ERR_CLIPBOARD_INVALID' };
+  }
+  return { ok: true, text };
+}
 
 /**
  * Reports whether any copy path is currently available: the injected
@@ -81,7 +104,10 @@ function ambientClipboard() {
  * @param {CopyPorts} [options={}] Copy ports to probe.
  * @returns {boolean} True when a copy attempt can reach a clipboard.
  */
-export function copyAvailable({ clipboard, copyText } = {}) {
+export function copyAvailable({ clipboard, copyText, surfaceState } = {}) {
+  if (surfaceState === 'lost' || surfaceState === 'capsule_gone') {
+    return false;
+  }
   if (clipboard !== null && clipboard !== undefined) {
     return typeof clipboard.writeText === 'function';
   }
@@ -93,9 +119,9 @@ export function copyAvailable({ clipboard, copyText } = {}) {
  * @param {CopyPorts} [options={}] Injected clipboard; test doubles land here.
  * When omitted, the fixed-API copyText runs next and `navigator.clipboard`
  * is used when available.
- * @returns {{ copy: (capsuleId: unknown) => Promise<CopyOutcome> }} Copy action.
+ * @returns {{ copy: (capsuleId: unknown, options?: { target?: 'capsuleId'|'slotId', surfaceState?: unknown }) => Promise<CopyOutcome> }} Copy action.
  */
-export function createCopyCapsuleId({ clipboard, copyText } = {}) {
+export function createCopyCapsuleId({ clipboard, copyText, surfaceState } = {}) {
   const injected = clipboard !== null && clipboard !== undefined && typeof clipboard.writeText === 'function'
     ? clipboard
     : null;
@@ -104,24 +130,25 @@ export function createCopyCapsuleId({ clipboard, copyText } = {}) {
   return {
     /**
      * @param {unknown} capsuleId Host-issued capsule id to copy.
+     * @param {{ target?: 'capsuleId'|'slotId', surfaceState?: unknown }} [copyOptions={}]
      * @returns {Promise<CopyOutcome>} Never rejects.
      */
-    async copy(capsuleId) {
-      const checked = validateCapsuleId(capsuleId);
-      if (checked.ok === false) {
-        return { state: 'unavailable', reason: checked.error.code };
+    async copy(capsuleId, copyOptions = {}) {
+      const liveState = copyOptions?.surfaceState ?? surfaceState;
+      if (liveState === 'lost' || liveState === 'capsule_gone') {
+        return { state: 'unavailable', reason: 'ERR_SURFACE_LOST' };
       }
-      // The host admits only copytext-grammar text: check before calling
-      // so the typed code is projected without touching any target.
-      if (!isCopyTextAllowed(checked.id)) {
-        return { state: 'unavailable', reason: 'ERR_CLIPBOARD_INVALID' };
+      const targetKind = copyOptions?.target === 'slotId' ? 'slotId' : 'capsuleId';
+      const resolved = resolveSlotCopyText(capsuleId, targetKind);
+      if (resolved.ok === false) {
+        return { state: 'unavailable', reason: resolved.reason };
       }
       const target = injected ?? hostCopyTarget ?? ambientClipboard();
       if (!target) {
         return { state: 'unavailable', reason: 'ERR_CLIPBOARD_UNAVAILABLE' };
       }
       try {
-        await target.writeText(checked.id);
+        await target.writeText(resolved.text);
       } catch (error) {
         // The fixed-API host refuses non-id text with its typed code; that
         // code travels in the reason (never in visible text), while every

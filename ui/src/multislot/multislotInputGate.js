@@ -124,6 +124,197 @@ export const MULTISLOT_DOCK_INDEX = 0;
 export const MULTISLOT_PLACEMENT_INDEX_MIN = 0;
 export const MULTISLOT_PLACEMENT_INDEX_MAX = 255;
 
+/** Canonical expanded slot height presets in integer pixels (U5a-MULTISLOT-UI). */
+export const MULTISLOT_HEIGHT_PRESETS = Object.freeze([200, 360, 540]);
+
+/** Default expanded slot height in integer pixels. */
+export const MULTISLOT_DEFAULT_HEIGHT = 360;
+
+/** Folded slot rail height in integer pixels (fold without killing session). */
+export const MULTISLOT_FOLDED_HEIGHT = 38;
+
+/** Incremental slot height step in integer pixels. */
+export const MULTISLOT_HEIGHT_STEP = 40;
+
+/** Minimum expanded slot height in integer pixels. */
+export const MULTISLOT_MIN_HEIGHT = 140;
+
+/** Maximum expanded slot height in integer pixels. */
+export const MULTISLOT_MAX_HEIGHT = 1600;
+
+/** Typed refusal code when an unsupported slot height preset is requested. */
+export const MULTISLOT_HEIGHT_REFUSAL = 'ERR_INVALID_SLOT_HEIGHT';
+
+/** Closed activity states accepted by the kit AiMultiSlot shell. */
+export const MULTISLOT_ACTIVITY_STATES = Object.freeze([
+  'unknown',
+  'ready',
+  'busy',
+  'waiting-input',
+  'waiting-permission',
+  'exited',
+  'failed',
+]);
+
+/** Closed state-chip values projected in the slot header (U5a-MULTISLOT-UI). */
+export const MULTISLOT_STATE_CHIP_VALUES = Object.freeze([
+  'unknown',
+  'ready',
+  'busy',
+  'waiting-input',
+  'waiting-permission',
+  'exited',
+  'failed',
+  'capsule_gone',
+]);
+
+/** Human-readable labels for each closed state-chip value. */
+export const MULTISLOT_STATE_CHIP_LABELS = Object.freeze({
+  unknown: 'Idle',
+  ready: 'Ready',
+  busy: 'Busy',
+  'waiting-input': 'Waiting input',
+  'waiting-permission': 'Waiting permission',
+  exited: 'Exited',
+  failed: 'Failed',
+  capsule_gone: 'Capsule gone',
+});
+
+/**
+ * Normalizes a candidate session activity state to the closed set, failing
+ * closed to `'unknown'`.
+ *
+ * @param {unknown} state Candidate activity state.
+ * @returns {'unknown'|'ready'|'busy'|'waiting-input'|'waiting-permission'|'exited'|'failed'}
+ */
+export function normalizeMultislotActivityState(state) {
+  return typeof state === 'string' && MULTISLOT_ACTIVITY_STATES.includes(state)
+    ? /** @type {'unknown'|'ready'|'busy'|'waiting-input'|'waiting-permission'|'exited'|'failed'} */ (state)
+    : 'unknown';
+}
+
+/**
+ * Resolves the slot state chip exclusively from authenticated host/session
+ * lifecycle inputs (never from terminal output bytes).
+ *
+ * @param {{ surfaceState?: unknown, activityState?: unknown, attachmentState?: unknown, sessionCount?: unknown }} [options={}]
+ * @returns {Readonly<{ state: string, activityState: 'unknown'|'ready'|'busy'|'waiting-input'|'waiting-permission'|'exited'|'failed', label: string, tone: 'muted'|'ready'|'active'|'error' }>}
+ */
+export function resolveMultislotStateChip({
+  surfaceState = 'live',
+  activityState = 'unknown',
+  attachmentState = 'detached',
+  sessionCount = 0,
+} = {}) {
+  if (surfaceState === 'lost' || surfaceState === 'capsule_gone') {
+    return Object.freeze({
+      state: 'capsule_gone',
+      activityState: 'failed',
+      label: MULTISLOT_STATE_CHIP_LABELS.capsule_gone,
+      tone: 'error',
+    });
+  }
+  const normalized = normalizeMultislotActivityState(activityState);
+  if (normalized !== 'unknown') {
+    const tone = normalized === 'failed'
+      ? 'error'
+      : normalized === 'exited'
+        ? 'muted'
+        : normalized === 'ready'
+          ? 'ready'
+          : 'active';
+    return Object.freeze({
+      state: normalized,
+      activityState: normalized,
+      label: MULTISLOT_STATE_CHIP_LABELS[normalized],
+      tone,
+    });
+  }
+  if (attachmentState === 'live' && Number.isInteger(sessionCount) && /** @type {number} */ (sessionCount) > 0) {
+    return Object.freeze({
+      state: 'ready',
+      activityState: 'ready',
+      label: MULTISLOT_STATE_CHIP_LABELS.ready,
+      tone: 'ready',
+    });
+  }
+  return Object.freeze({
+    state: 'unknown',
+    activityState: 'unknown',
+    label: MULTISLOT_STATE_CHIP_LABELS.unknown,
+    tone: 'muted',
+  });
+}
+
+/**
+ * Clamps a candidate expanded slot height to `[MULTISLOT_MIN_HEIGHT, MULTISLOT_MAX_HEIGHT]`,
+ * falling back to `fallback` when the input is not a finite number.
+ *
+ * @param {unknown} rawHeight Candidate height in pixels.
+ * @param {number} [fallback=MULTISLOT_DEFAULT_HEIGHT] Fallback height when invalid.
+ * @returns {number} Integer pixel height within `[140, 1600]`.
+ */
+export function clampMultislotHeight(rawHeight, fallback = MULTISLOT_DEFAULT_HEIGHT) {
+  const base = typeof fallback === 'number' && Number.isFinite(fallback)
+    ? Math.round(fallback)
+    : MULTISLOT_DEFAULT_HEIGHT;
+  const safeFallback = Math.min(MULTISLOT_MAX_HEIGHT, Math.max(MULTISLOT_MIN_HEIGHT, base));
+  if (typeof rawHeight !== 'number' || !Number.isFinite(rawHeight)) {
+    return safeFallback;
+  }
+  const rounded = Math.round(rawHeight);
+  if (rounded < MULTISLOT_MIN_HEIGHT) return MULTISLOT_MIN_HEIGHT;
+  if (rounded > MULTISLOT_MAX_HEIGHT) return MULTISLOT_MAX_HEIGHT;
+  return rounded;
+}
+
+/**
+ * Validates that a candidate height preset is one of the canonical presets
+ * (`200`, `360`, `540`). Returns `null` for any other value.
+ *
+ * @param {unknown} rawPreset Candidate preset.
+ * @returns {200|360|540|null}
+ */
+export function normalizeMultislotHeightPreset(rawPreset) {
+  const numeric = typeof rawPreset === 'number' && Number.isInteger(rawPreset)
+    ? rawPreset
+    : typeof rawPreset === 'string' && /^\d+$/.test(rawPreset)
+      ? Number(rawPreset)
+      : NaN;
+  return MULTISLOT_HEIGHT_PRESETS.includes(numeric)
+    ? /** @type {200|360|540} */ (numeric)
+    : null;
+}
+
+/**
+ * Steps the expanded slot height by `deltaSteps * MULTISLOT_HEIGHT_STEP` (40px)
+ * within `[MULTISLOT_MIN_HEIGHT, MULTISLOT_MAX_HEIGHT]`.
+ *
+ * @param {unknown} currentHeight Current expanded height in pixels.
+ * @param {unknown} [deltaSteps=1] Integer step count.
+ * @returns {number} Clamped integer height in pixels.
+ */
+export function stepMultislotHeight(currentHeight, deltaSteps = 1) {
+  const base = clampMultislotHeight(currentHeight);
+  if (typeof deltaSteps !== 'number' || !Number.isInteger(deltaSteps)) {
+    return base;
+  }
+  return clampMultislotHeight(base + deltaSteps * MULTISLOT_HEIGHT_STEP, base);
+}
+
+/**
+ * Projects the effective slot height: `MULTISLOT_FOLDED_HEIGHT` (38px) when
+ * folded, or the clamped expanded height when unfolded.
+ *
+ * @param {unknown} expandedHeight Expanded height in pixels.
+ * @param {unknown} [folded=false] Whether the slot is folded.
+ * @returns {number} Effective integer pixel height.
+ */
+export function effectiveMultislotHeight(expandedHeight, folded = false) {
+  if (folded === true) return MULTISLOT_FOLDED_HEIGHT;
+  return clampMultislotHeight(expandedHeight);
+}
+
 /**
  * @param {string} code
  * @param {string} message

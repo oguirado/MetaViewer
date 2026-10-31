@@ -41,18 +41,32 @@ import {
   buildMultislotMoveIntent,
   buildMultislotShowIntent,
   buildMultislotTabIntent,
+  clampMultislotHeight,
+  effectiveMultislotHeight,
   leaseForInputMode,
+  normalizeMultislotHeightPreset,
   normalizeMultislotInputMode,
   parsePlacementIndex,
+  resolveMultislotStateChip,
   roundFloatBox,
+  stepMultislotHeight,
+  MULTISLOT_DEFAULT_HEIGHT,
   MULTISLOT_DOCK_GROUP,
   MULTISLOT_DOCK_INDEX,
+  MULTISLOT_FOLDED_HEIGHT,
+  MULTISLOT_HEIGHT_PRESETS,
+  MULTISLOT_HEIGHT_REFUSAL,
 } from './multislotInputGate.js';
 import { MULTISLOT_ATTACH_EPOCH, MULTISLOT_ATTACH_GENERATION, createMultislotPump } from './multislotAttach.js';
 import {
   CUSTOM_LAUNCH_ENTRY_ID,
   LAUNCH_REFUSALS,
+  MULTISLOT_MAX_SESSIONS,
   PROVIDER_DATA_REFUSAL,
+  SESSION_LIMIT_MESSAGE,
+  canLaunchSlotSession,
+  normalizeLaunchError,
+  resolveDefaultSlotLaunch,
   toKitMenuProviders,
   toKitMenuProvidersFromListing,
   validateLaunchRequest,
@@ -93,6 +107,12 @@ const props = defineProps({
   measureSlotBox: { type: /** @type {import('vue').PropType<(() => unknown) | null>} */ (Function), default: null },
   attachSide: { type: String, default: 'bottom' },
   surfaceState: { type: String, default: 'live' },
+  sessionActivityState: { type: String, default: '' },
+  slotHeight: { type: Number, default: 360 },
+  // [TARGET, unit decision] Cross-capsule active PTY session count stub
+  // enforcing the global 8-session broker cap across capsules (U4/C3 will
+  // populate the live global count).
+  globalSessionCount: { type: Number, default: null },
   clipboard: { type: /** @type {ClipboardProp} */ (Object), default: null },
   // MVUI29b lane T: injected fixed-API session transport source (or a
   // prebuilt port from main.js). Null on hosts without the methods; the
@@ -102,6 +122,7 @@ const props = defineProps({
 
 const emit = defineEmits([
   'update:inputMode',
+  'update:slotHeight',
   'submit-intent',
   'launch-refused',
   'select-session',
@@ -128,6 +149,21 @@ const floatingRef = ref(props.floating === true);
 const surfaceVisibleRef = ref(props.surfaceHidden !== true);
 const terminalVisibleRef = ref(props.terminalHidden !== true);
 const hiddenRef = ref(props.hidden === true);
+const clampHeight = (/** @type {unknown} */ raw, /** @type {number} */ fallback = 360) =>
+  typeof clampMultislotHeight === 'function'
+    ? clampMultislotHeight(raw, fallback)
+    : typeof raw === 'number' && Number.isFinite(raw)
+      ? Math.min(1600, Math.max(140, Math.round(raw)))
+      : fallback;
+const slotHeightRef = ref(clampHeight(props.slotHeight, MULTISLOT_DEFAULT_HEIGHT ?? 360));
+const effectiveSlotHeight = computed(() => (
+  typeof effectiveMultislotHeight === 'function'
+    ? effectiveMultislotHeight(slotHeightRef.value, foldedRef.value)
+    : foldedRef.value
+      ? (MULTISLOT_FOLDED_HEIGHT ?? 38)
+      : slotHeightRef.value
+));
+const isSurfaceLost = computed(() => props.surfaceState === 'lost' || props.surfaceState === 'capsule_gone');
 const copyState = ref('ready');
 /** @type {import('vue').Ref<{ code: string, message: string } | null>} */
 const refusal = ref(null);
@@ -220,8 +256,13 @@ const transportCopyText = computed(() => {
   return (/** @type {string} */ text) => Promise.resolve().then(() => copy({ text }));
 });
 const copyAvailableRef = computed(() => {
+  if (isSurfaceLost.value) return false;
   if (typeof copyAvailable !== 'function') return true;
-  return copyAvailable({ clipboard: props.clipboard, copyText: transportCopyText.value });
+  return copyAvailable({
+    clipboard: props.clipboard,
+    copyText: transportCopyText.value,
+    surfaceState: props.surfaceState,
+  });
 });
 // MVUI29c lane T: the host admits only copytext-grammar text, so the
 // control also disables when the slot's capsule id is off-grammar (the
@@ -231,10 +272,83 @@ const copyIdAllowedRef = computed(() => (
   typeof isCopyTextAllowed !== 'function' || isCopyTextAllowed(props.capsuleId)
 ));
 const copyReasonRef = computed(() => {
+  if (isSurfaceLost.value) return 'Copy unavailable: capsule surface is lost.';
   if (!copyAvailableRef.value) return 'Copy unavailable: no clipboard path.';
   if (!copyIdAllowedRef.value) return 'Copy unavailable: this capsule id cannot be copied.';
   return '';
 });
+const stateChip = computed(() => {
+  const explicit = typeof props.sessionActivityState === 'string' && props.sessionActivityState.length > 0
+    ? props.sessionActivityState
+    : activityState.value;
+  if (typeof resolveMultislotStateChip === 'function') {
+    return resolveMultislotStateChip({
+      surfaceState: props.surfaceState,
+      activityState: explicit,
+      attachmentState: attachmentState.value,
+      sessionCount: sessions.value.length,
+    });
+  }
+  return {
+    state: isSurfaceLost.value ? 'capsule_gone' : explicit,
+    activityState: isSurfaceLost.value ? 'failed' : explicit,
+    label: isSurfaceLost.value ? 'Capsule gone' : 'Idle',
+    tone: isSurfaceLost.value ? 'error' : 'muted',
+  };
+});
+const resolvedGlobalSessionCount = computed(() => {
+  if (typeof props.globalSessionCount === 'number' && Number.isInteger(props.globalSessionCount) && props.globalSessionCount >= 0) {
+    return props.globalSessionCount;
+  }
+  const brokerRaw = /** @type {{ getSessionCount?: () => unknown, sessionCount?: unknown } | null} */ (
+    props.terminalBroker ? /** @type {unknown} */ (toRaw(props.terminalBroker)) : null
+  );
+  const fromBrokerFn = typeof brokerRaw?.getSessionCount === 'function'
+    ? brokerRaw.getSessionCount()
+    : brokerRaw?.sessionCount;
+  if (typeof fromBrokerFn === 'number' && Number.isInteger(fromBrokerFn) && fromBrokerFn >= 0) {
+    return fromBrokerFn;
+  }
+  return null;
+});
+const slotSessionGate = computed(() => {
+  if (typeof canLaunchSlotSession === 'function') {
+    return canLaunchSlotSession({
+      sessionCount: sessions.value.length,
+      globalSessionCount: resolvedGlobalSessionCount.value,
+      maxSessions: MULTISLOT_MAX_SESSIONS ?? 8,
+      launching: launchingRef.value,
+      hidden: hiddenRef.value,
+      surfaceState: props.surfaceState,
+    });
+  }
+  const activeTotal = resolvedGlobalSessionCount.value !== null
+    ? Math.max(sessions.value.length, resolvedGlobalSessionCount.value)
+    : sessions.value.length;
+  if (isSurfaceLost.value || hiddenRef.value || launchingRef.value || activeTotal >= 8) {
+    return {
+      ok: false,
+      refusal: {
+        code: 'ERR_LAUNCH_SESSION_LIMIT',
+        message: SESSION_LIMIT_MESSAGE ?? 'Maximum 8 AI slot sessions reached across capsules. Close a session to open another.',
+      },
+    };
+  }
+  return { ok: true };
+});
+const defaultAiSlotLaunch = computed(() => {
+  if (typeof resolveDefaultSlotLaunch === 'function') {
+    return resolveDefaultSlotLaunch({
+      providers: kitProviders.value,
+      commands: commandsRef.value,
+    });
+  }
+  const firstCommand = commandsRef.value[0];
+  return firstCommand
+    ? { ok: true, launch: { entryId: 'shell', command: firstCommand, args: [], title: 'System shell', kind: 'shell' } }
+    : { ok: false, refusal: { code: 'ERR_LAUNCH_COMMAND_UNAVAILABLE', message: 'Launch unavailable.' } };
+});
+const canAddAiSlot = computed(() => slotSessionGate.value.ok && defaultAiSlotLaunch.value.ok);
 /** Transport-fetched provider listing when no direct host data is present.
  * @type {import('vue').Ref<{entries:unknown[],capabilities:unknown[]}|null>} */
 const fetchedListing = ref(null);
@@ -307,6 +421,9 @@ watch(() => props.folded, (value) => { foldedRef.value = value; });
 watch(() => props.floating, (value) => { floatingRef.value = value; });
 watch(() => props.surfaceHidden, (value) => { surfaceVisibleRef.value = !value; });
 watch(() => props.terminalHidden, (value) => { terminalVisibleRef.value = !value; });
+watch(() => props.slotHeight, (value) => {
+  slotHeightRef.value = clampHeight(value, slotHeightRef.value);
+});
 // MVUI16 lane P (ARG-pmui-6, memory-safe): the host stays mounted while the
 // rail switches capsules, so placement refusal + drafts reset on capsule id.
 // Primitive-id getter; the local refs it resets are never read by the getter.
@@ -426,7 +543,7 @@ function onPumpEvent(event) {
   writerTargets.delete(event.sessionId);
   if (selectedSessionId.value === event.sessionId) selectedSessionId.value = sessions.value[0]?.sessionId ?? '';
   attachmentState.value = sessions.value.length ? 'live' : 'disconnected';
-  activityState.value = sessions.value.length ? 'unknown' : outcome;
+  activityState.value = sessions.value.length ? 'ready' : outcome;
 }
 
 function unbind() {
@@ -461,6 +578,7 @@ function unbind() {
   sessions.value = [];
   selectedSessionId.value = '';
   sessionNotice.value = null;
+  activityState.value = 'unknown';
 }
 
 function bind() {
@@ -498,7 +616,7 @@ function bind() {
         try { registerSession(active, item); } catch { /* Isolate malformed attachment records. */ }
       }
       attachmentState.value = sessions.value.length ? 'live' : 'disconnected';
-      activityState.value = 'unknown';
+      activityState.value = sessions.value.length ? 'ready' : 'unknown';
     } catch {
       if (!current()) return;
       unbind();
@@ -531,6 +649,7 @@ function showSession(id, item) {
   sessions.value = [...sessions.value, { ...toPaneSession(id, item) }];
   if (!selectedSessionId.value) selectedSessionId.value = id;
   attachmentState.value = 'live';
+  activityState.value = 'ready';
   sessionNotice.value = null;
 }
 
@@ -560,15 +679,104 @@ onBeforeUnmount(() => {
   disposable.dispose?.();
 });
 
-async function runCopy() {
+/**
+ * @param {'capsuleId'|'slotId'} [target='capsuleId']
+ */
+async function runCopy(target = 'capsuleId') {
+  if (isSurfaceLost.value) {
+    copyState.value = 'unavailable';
+    return;
+  }
   copyState.value = 'copying';
-  const action = createCopyCapsuleId({ clipboard: props.clipboard, copyText: transportCopyText.value });
-  const outcome = await action.copy(props.capsuleId);
+  const action = createCopyCapsuleId({
+    clipboard: props.clipboard,
+    copyText: transportCopyText.value,
+    surfaceState: props.surfaceState,
+  });
+  const outcome = await action.copy(props.capsuleId, {
+    target,
+    surfaceState: props.surfaceState,
+  });
   copyState.value = outcome.state;
 }
 
 /**
- * @param {{ type?: unknown }} intent Kit slot intent.
+ * Selects a canonical expanded slot height preset (`200`, `360`, or `540` px).
+ *
+ * @param {unknown} preset
+ * @returns {boolean}
+ */
+function onSelectSlotHeight(preset) {
+  if (hiddenRef.value || isSurfaceLost.value) {
+    placementRefusal.value = {
+      code: 'LAYOUT_ILLEGAL_TRANSITION',
+      message: 'Show this slot before changing its height.',
+    };
+    return false;
+  }
+  const normalized = typeof normalizeMultislotHeightPreset === 'function'
+    ? normalizeMultislotHeightPreset(preset)
+    : preset === 200 || preset === 360 || preset === 540
+      ? preset
+      : null;
+  if (normalized === null) {
+    placementRefusal.value = {
+      code: MULTISLOT_HEIGHT_REFUSAL ?? 'ERR_INVALID_SLOT_HEIGHT',
+      message: 'Choose a supported slot height preset (200, 360, or 540 px).',
+    };
+    return false;
+  }
+  placementRefusal.value = null;
+  slotHeightRef.value = normalized;
+  emit('update:slotHeight', normalized);
+  return true;
+}
+
+/**
+ * Steps or clamps the expanded slot height on splitter resize.
+ *
+ * @param {{ size?: unknown } | null | undefined} payload
+ */
+function onSlotResize(payload) {
+  if (hiddenRef.value || isSurfaceLost.value) {
+    placementRefusal.value = {
+      code: 'LAYOUT_ILLEGAL_TRANSITION',
+      message: 'Show this slot before changing its height.',
+    };
+    return;
+  }
+  placementRefusal.value = null;
+  const next = clampHeight(payload?.size, slotHeightRef.value);
+  slotHeightRef.value = next;
+  emit('update:slotHeight', next);
+}
+
+/**
+ * Launches a new AI slot session from the header `+ AI slot` control. Starts
+ * in READ mode by default so no write lease is granted without explicit
+ * operator opt-in.
+ */
+async function onAddAiSlot() {
+  const gate = slotSessionGate.value;
+  if (gate.ok === false) {
+    refusal.value = gate.refusal ?? null;
+    emit('launch-refused', gate.refusal);
+    return;
+  }
+  const resolved = defaultAiSlotLaunch.value;
+  if (resolved.ok === false || !resolved.launch) {
+    refusal.value = resolved.refusal ?? null;
+    emit('launch-refused', resolved.refusal);
+    return;
+  }
+  if (mode.value !== 'read') {
+    emit('update:inputMode', 'read');
+  }
+  await onLaunchRequest(resolved.launch);
+}
+
+/**
+ * @param {{ type?: unknown, target?: unknown, height?: unknown, delta?: unknown }} intent Kit slot intent.
  */
 function onSubmitIntent(intent) {
   const type = typeof intent?.type === 'string' ? intent.type : '';
@@ -596,8 +804,33 @@ function onSubmitIntent(intent) {
     emit('update:inputMode', type === 'input-mode-write' ? 'write' : 'read');
     return;
   }
-  if (type === 'copy-id') {
-    void runCopy();
+  if (type === 'copy-id' || type === 'copy-slot-id') {
+    const copyTarget = type === 'copy-slot-id' || intent?.target === 'slotId' ? 'slotId' : 'capsuleId';
+    void runCopy(copyTarget);
+    return;
+  }
+  if (type === 'slot-height') {
+    onSelectSlotHeight(intent?.height);
+    return;
+  }
+  if (type === 'slot-height-step') {
+    if (hiddenRef.value || isSurfaceLost.value) {
+      placementRefusal.value = {
+        code: 'LAYOUT_ILLEGAL_TRANSITION',
+        message: 'Show this slot before changing its height.',
+      };
+      return;
+    }
+    placementRefusal.value = null;
+    const stepped = typeof stepMultislotHeight === 'function'
+      ? stepMultislotHeight(slotHeightRef.value, intent?.delta ?? 1)
+      : clampHeight(slotHeightRef.value + (Number.isInteger(intent?.delta) ? /** @type {number} */ (intent.delta) * 40 : 40));
+    slotHeightRef.value = stepped;
+    emit('update:slotHeight', stepped);
+    return;
+  }
+  if (type === 'add-ai-slot') {
+    void onAddAiSlot();
     return;
   }
   if (type === 'fold' || type === 'unfold') {
@@ -666,6 +899,12 @@ onUpdated(syncShellPlacementGate);
  * @param {{ entryId?: unknown, command?: unknown, args?: unknown, title?: unknown, kind?: unknown } | null | undefined} payload
  */
 async function onLaunchRequest(payload) {
+  const slotGate = slotSessionGate.value;
+  if (slotGate.ok === false) {
+    refusal.value = slotGate.refusal ?? null;
+    emit('launch-refused', slotGate.refusal);
+    return;
+  }
   const validated = validateLaunchRequest(payload, { commands: commandsRef.value, menuIds: menuIds.value });
   if (validated.ok === false) {
     refusal.value = validated.refusal;
@@ -774,10 +1013,12 @@ async function onLaunchRequest(payload) {
     }
     openedSession = undefined;
     refusal.value = null;
-  } catch {
+  } catch (error) {
     await closeOpenedSession();
     if (!current()) return;
-    const outcome = { code: LAUNCH_REFUSALS.COMMAND_UNAVAILABLE, message: 'Launch unavailable.' };
+    const outcome = typeof normalizeLaunchError === 'function'
+      ? normalizeLaunchError(error)
+      : { code: LAUNCH_REFUSALS.COMMAND_UNAVAILABLE, message: 'Launch unavailable.' };
     refusal.value = outcome;
     emit('launch-refused', outcome);
   } finally {
@@ -815,7 +1056,10 @@ function onCloseSession(payload) {
       const remaining = sessions.value.map((item) => item.sessionId);
       selectedSessionId.value = remaining.length > 0 ? /** @type {string} */ (remaining[remaining.length - 1]) : '';
     }
-    if (sessions.value.length === 0) attachmentState.value = 'disconnected';
+    if (sessions.value.length === 0) {
+      attachmentState.value = 'disconnected';
+      activityState.value = 'unknown';
+    }
   }
   emit('close-session', payload);
 }
@@ -854,7 +1098,7 @@ function onSlotPointerGuard(event) {
 }
 </script>
 <template>
-  <div ref="slotWrap" class="mv-multislot-host" :aria-busy="layoutPending" :data-layout-group="groupId" :data-layout-index="props.placementIndex" @pointerdown="onSlotPointerGuard" @mousedown="onSlotPointerGuard">
+  <div ref="slotWrap" class="mv-multislot-host" :aria-busy="layoutPending" :data-layout-group="groupId" :data-layout-index="props.placementIndex" :data-slot-folded="foldedRef ? 'true' : 'false'" :data-slot-height="effectiveSlotHeight" :data-slot-expanded-height="slotHeightRef" @pointerdown="onSlotPointerGuard" @mousedown="onSlotPointerGuard">
 
     <BrokerLaunchControls v-if="terminalBroker" :broker="terminalBroker" :show-menu="false" :anchor-prefix="`capsule/${capsuleId}`" :id-prefix="`mv-multislot-${capsuleId}-broker`" />
     <div :hidden="hiddenRef" class="mv-multislot-pair">
@@ -862,6 +1106,7 @@ function onSlotPointerGuard(event) {
       :capsule-id="capsuleId"
       :capsule-label="capsuleLabel"
       :attach-side="attachSide"
+      :pane-size="slotHeightRef"
       :folded="foldedRef"
       :surface-hidden="!surfaceVisibleRef"
       :terminal-hidden="!terminalVisibleRef"
@@ -872,7 +1117,7 @@ function onSlotPointerGuard(event) {
       :sessions="sessions"
       :selected-session-id="selectedSessionId"
       :attachment-state="attachmentState"
-      :activity-state="activityState"
+      :activity-state="stateChip.activityState"
       :has-control-lease="hasLease"
       :stream-registry="registry"
       :epoch="MULTISLOT_ATTACH_EPOCH"
@@ -881,6 +1126,7 @@ function onSlotPointerGuard(event) {
       :commands="commandsRef"
       :launching="launchingRef"
       @submit-intent="onSubmitIntent"
+      @resize="onSlotResize"
       @select-session="onSelectSession"
       @close-session="onCloseSession"
       @launch-request="onLaunchRequest"
@@ -891,23 +1137,85 @@ function onSlotPointerGuard(event) {
       @confirm-staged-paste="passThrough('confirm-staged-paste')"
     >
       <template #controls>
-        <AiSlotControlBar
-          :capsule-id="capsuleId"
-          :capsule-label="capsuleLabel"
-          :input-mode="mode"
-          :input-mode-disabled="agentControlled" :input-mode-reason="agentControlled ? AGENT_WRITE_REASON : ''"
-          :close-disabled="true" :close-reason="CLOSE_UNAVAILABLE_REASON"
-          :copy-state="copyState"
-          :copy-disabled="!copyAvailableRef || !copyIdAllowedRef"
-          :copy-reason="copyReasonRef"
-          :surface-visible="surfaceVisibleRef"
-          :terminal-visible="terminalVisibleRef"
-          :folded="foldedRef"
-          :floating="floatingRef"
-          :fold-disabled="hiddenRef" :fold-reason="hiddenRef ? 'Show this slot before changing its placement.' : ''"
-          :float-disabled="Boolean(floatAccess)" :float-reason="floatAccess?.message ?? ''"
-          @submit-intent="onSubmitIntent"
-        />
+        <div class="mv-multislot-host__controls">
+          <span
+            :id="`mv-multislot-${capsuleId}-state-chip`"
+            class="mv-multislot-host__state-chip"
+            :class="`mv-multislot-host__state-chip--${stateChip.tone}`"
+            role="status"
+            :aria-label="`AI slot state: ${stateChip.label}`"
+            :data-semantic-anchor="`capsule/${capsuleId}/state-chip`"
+            :data-state-chip="stateChip.state"
+          >{{ stateChip.label }}</span>
+          <UiButton
+            :id="`mv-multislot-${capsuleId}-add-ai-slot`"
+            type="button"
+            class="mv-multislot-host__button mv-multislot-host__add-slot"
+            :data-semantic-anchor="`capsule/${capsuleId}/add-ai-slot`"
+            aria-label="Add AI slot"
+            label="+ AI slot"
+            :disabled="!canAddAiSlot"
+            @click="onAddAiSlot"
+          />
+          <div class="mv-multislot-host__heights" role="group" aria-label="Slot heights">
+            <UiButton
+              :id="`mv-multislot-${capsuleId}-height-200`"
+              type="button"
+              class="mv-multislot-host__button mv-multislot-host__height-preset"
+              :class="{ 'mv-multislot-host__height-preset--active': slotHeightRef === 200 }"
+              :data-semantic-anchor="`capsule/${capsuleId}/height-200`"
+              data-height-preset="200"
+              aria-label="Set slot height 200 pixels"
+              label="200px"
+              :aria-pressed="slotHeightRef === 200"
+              :disabled="hiddenRef || isSurfaceLost"
+              @click="onSelectSlotHeight(200)"
+            />
+            <UiButton
+              :id="`mv-multislot-${capsuleId}-height-360`"
+              type="button"
+              class="mv-multislot-host__button mv-multislot-host__height-preset"
+              :class="{ 'mv-multislot-host__height-preset--active': slotHeightRef === 360 }"
+              :data-semantic-anchor="`capsule/${capsuleId}/height-360`"
+              data-height-preset="360"
+              aria-label="Set slot height 360 pixels"
+              label="360px"
+              :aria-pressed="slotHeightRef === 360"
+              :disabled="hiddenRef || isSurfaceLost"
+              @click="onSelectSlotHeight(360)"
+            />
+            <UiButton
+              :id="`mv-multislot-${capsuleId}-height-540`"
+              type="button"
+              class="mv-multislot-host__button mv-multislot-host__height-preset"
+              :class="{ 'mv-multislot-host__height-preset--active': slotHeightRef === 540 }"
+              :data-semantic-anchor="`capsule/${capsuleId}/height-540`"
+              data-height-preset="540"
+              aria-label="Set slot height 540 pixels"
+              label="540px"
+              :aria-pressed="slotHeightRef === 540"
+              :disabled="hiddenRef || isSurfaceLost"
+              @click="onSelectSlotHeight(540)"
+            />
+          </div>
+          <AiSlotControlBar
+            :capsule-id="capsuleId"
+            :capsule-label="capsuleLabel"
+            :input-mode="mode"
+            :input-mode-disabled="agentControlled" :input-mode-reason="agentControlled ? AGENT_WRITE_REASON : ''"
+            :close-disabled="true" :close-reason="CLOSE_UNAVAILABLE_REASON"
+            :copy-state="copyState"
+            :copy-disabled="!copyAvailableRef || !copyIdAllowedRef"
+            :copy-reason="copyReasonRef"
+            :surface-visible="surfaceVisibleRef"
+            :terminal-visible="terminalVisibleRef"
+            :folded="foldedRef"
+            :floating="floatingRef"
+            :fold-disabled="hiddenRef" :fold-reason="hiddenRef ? 'Show this slot before changing its placement.' : ''"
+            :float-disabled="Boolean(floatAccess)" :float-reason="floatAccess?.message ?? ''"
+            @submit-intent="onSubmitIntent"
+          />
+        </div>
       </template>
       <template #surface>
         <slot name="surface" />

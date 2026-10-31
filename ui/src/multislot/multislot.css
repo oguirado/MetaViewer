@@ -130,3 +130,68 @@
  * host gates Float through the DOM (syncShellPlacementGate), so the host owns
  * its disabled presentation too. Same muted/no-drop pair as above. */
 .mv-multislot-host .ai-slot__action:disabled { color:var(--cuk-semantic-text-muted); cursor:not-allowed; }
+
+.mv-multislot-host__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--cuk-semantic-spacing-xs);
+}
+
+.mv-multislot-host__heights {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--cuk-semantic-spacing-xs);
+}
+
+.mv-multislot-host__button {
+  color: var(--cuk-semantic-text-primary);
+  background-color: var(--cuk-semantic-surface-canvas);
+  border: var(--cuk-semantic-border-width) solid var(--cuk-semantic-border-default);
+  border-radius: var(--cuk-semantic-radius-sm);
+  padding: var(--cuk-semantic-spacing-xs);
+  font: inherit;
+  cursor: pointer;
+}
+
+.mv-multislot-host__button:disabled {
+  color: var(--cuk-semantic-text-muted);
+  cursor: not-allowed;
+}
+
+.mv-multislot-host__button:focus-visible {
+  outline: var(--cuk-semantic-focus-ring-width) solid var(--cuk-semantic-focus-ring-color);
+  outline-offset: var(--cuk-semantic-focus-ring-offset);
+}
+
+.mv-multislot-host__height-preset--active {
+  background-color: var(--cuk-semantic-surface-elevated);
+  border-color: var(--cuk-semantic-focus-ring-color);
+}
+
+.mv-multislot-host__state-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--cuk-semantic-spacing-xs);
+  border-radius: var(--cuk-semantic-radius-sm);
+  border: var(--cuk-semantic-border-width) solid var(--cuk-semantic-border-default);
+  background-color: var(--cuk-semantic-surface-canvas);
+  color: var(--cuk-semantic-text-primary);
+  font: inherit;
+}
+
+.mv-multislot-host__state-chip--muted {
+  color: var(--cuk-semantic-text-muted);
+}
+
+.mv-multislot-host__state-chip--ready,
+.mv-multislot-host__state-chip--active {
+  background-color: var(--cuk-semantic-surface-elevated);
+  color: var(--cuk-semantic-text-primary);
+}
+
+.mv-multislot-host__state-chip--error {
+  background-color: var(--cuk-semantic-status-error-surface);
+  color: var(--cuk-semantic-status-error-text);
+  border-color: var(--cuk-semantic-status-error-border);
+}

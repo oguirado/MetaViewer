@@ -39,12 +39,27 @@ export const LAUNCH_MAX_ARG_BYTES = 4096;
 /** Menu entry id the kit custom-executable dialog commits with. */
 export const CUSTOM_LAUNCH_ENTRY_ID = 'custom';
 
+/**
+ * [TARGET, unit decision] Maximum concurrent AI slot sessions across all
+ * capsules (mirrors the broker `MAX_SESSIONS = 8` global cap).
+ */
+export const MULTISLOT_MAX_SESSIONS = 8;
+
+/**
+ * Designed refusal message when the global 8-session ceiling is reached,
+ * naming the operator remedy (U5a-MULTISLOT-UI-R2).
+ */
+export const SESSION_LIMIT_MESSAGE = 'Maximum 8 AI slot sessions reached across capsules. Close a session to open another.';
+
 /** Typed launch-refusal codes surfaced as designed rows. */
 export const LAUNCH_REFUSALS = Object.freeze({
   COMMAND_UNAVAILABLE: 'ERR_LAUNCH_COMMAND_UNAVAILABLE',
   ENTRY_UNKNOWN: 'ERR_LAUNCH_ENTRY_UNKNOWN',
   ARGV_REJECTED: 'ERR_LAUNCH_ARGV_REJECTED',
   NO_BROKER: 'ERR_LAUNCH_NO_BROKER',
+  SESSION_LIMIT: 'ERR_LAUNCH_SESSION_LIMIT',
+  LAUNCH_BUSY: 'ERR_LAUNCH_IN_PROGRESS',
+  SURFACE_LOST: 'ERR_LAUNCH_SURFACE_LOST',
 });
 
 /** Typed refusal when host provider data fails validation (shell-only menu). */
@@ -282,6 +297,161 @@ export function parseCustomLaunch(executable, argumentText) {
   const parsed = parseCustomArgv(executable, argumentText);
   if (parsed.argv === null) return { ok: false, error: parsed.error };
   return { ok: true, argv: parsed.argv };
+}
+
+/**
+ * [TARGET, unit decision] Checks whether the capsule slot may launch another
+ * terminal session (U5a-MULTISLOT-UI / R2). Enforces surface availability,
+ * visibility, single in-flight launch, and the global session ceiling
+ * (`MULTISLOT_MAX_SESSIONS = 8`) using `Math.max(sessionCount, globalSessionCount)`
+ * when a host API or `globalSessionCount` prop supplies the cross-capsule
+ * session count (U4/C3 will wire the live global total).
+ *
+ * @param {{ sessionCount?: unknown, globalSessionCount?: unknown, maxSessions?: unknown, launching?: unknown, hidden?: unknown, surfaceState?: unknown }} [options={}]
+ * @returns {{ ok: true } | { ok: false, refusal: LaunchRefusal }}
+ */
+export function canLaunchSlotSession({
+  sessionCount = 0,
+  globalSessionCount = null,
+  maxSessions = MULTISLOT_MAX_SESSIONS,
+  launching = false,
+  hidden = false,
+  surfaceState = 'live',
+} = {}) {
+  if (surfaceState === 'lost' || surfaceState === 'capsule_gone') {
+    return {
+      ok: false,
+      refusal: {
+        code: LAUNCH_REFUSALS.SURFACE_LOST,
+        message: 'Launch unavailable: capsule surface is lost.',
+      },
+    };
+  }
+  if (hidden === true) {
+    return {
+      ok: false,
+      refusal: {
+        code: 'LAYOUT_ILLEGAL_TRANSITION',
+        message: 'Show this slot before launching a session.',
+      },
+    };
+  }
+  if (launching === true) {
+    return {
+      ok: false,
+      refusal: {
+        code: LAUNCH_REFUSALS.LAUNCH_BUSY,
+        message: 'Launch already in progress.',
+      },
+    };
+  }
+  const ceiling = typeof maxSessions === 'number' && Number.isInteger(maxSessions) && maxSessions > 0
+    ? maxSessions
+    : MULTISLOT_MAX_SESSIONS;
+  const localValid = Number.isInteger(sessionCount) && /** @type {number} */ (sessionCount) >= 0;
+  const globalProvided = globalSessionCount !== null && globalSessionCount !== undefined;
+  const globalValid = !globalProvided || (Number.isInteger(globalSessionCount) && /** @type {number} */ (globalSessionCount) >= 0);
+  const effectiveCount = localValid && globalValid
+    ? globalProvided
+      ? Math.max(/** @type {number} */ (sessionCount), /** @type {number} */ (globalSessionCount))
+      : /** @type {number} */ (sessionCount)
+    : ceiling;
+  if (!localValid || !globalValid || effectiveCount >= ceiling) {
+    return {
+      ok: false,
+      refusal: {
+        code: LAUNCH_REFUSALS.SESSION_LIMIT,
+        message: SESSION_LIMIT_MESSAGE,
+      },
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * Maps a broker or transport open error onto a typed `LaunchRefusal`. When the
+ * broker refuses with `SESSION_LIMIT` (or `ERR_LAUNCH_SESSION_LIMIT`), returns
+ * `LAUNCH_REFUSALS.SESSION_LIMIT` with the close-a-session remedy message so
+ * multi-capsule overflow surfaces as a typed limit refusal instead of a
+ * generic launch-unavailable row (U5a-MULTISLOT-UI-R2).
+ *
+ * @param {unknown} error Caught broker or transport error.
+ * @returns {LaunchRefusal}
+ */
+export function normalizeLaunchError(error) {
+  const code = typeof (/** @type {{ code?: unknown }} */ (error))?.code === 'string'
+    ? /** @type {{ code: string }} */ (error).code
+    : '';
+  const message = typeof (/** @type {{ message?: unknown }} */ (error))?.message === 'string'
+    ? /** @type {{ message: string }} */ (error).message
+    : String(error ?? '');
+  if (
+    code === 'SESSION_LIMIT'
+    || code === LAUNCH_REFUSALS.SESSION_LIMIT
+    || /\b(?:ERR_LAUNCH_)?SESSION_LIMIT\b/.test(message)
+  ) {
+    return {
+      code: LAUNCH_REFUSALS.SESSION_LIMIT,
+      message: SESSION_LIMIT_MESSAGE,
+    };
+  }
+  return {
+    code: LAUNCH_REFUSALS.COMMAND_UNAVAILABLE,
+    message: 'Launch unavailable.',
+  };
+}
+
+/**
+ * Resolves the default launch request for the `+ AI slot` header action
+ * (U5a-MULTISLOT-UI). Prefers the first admitted provider entry whose
+ * broker command is advertised, falling back to the system shell entry when
+ * advertised. Validates the resolved candidate through `validateLaunchRequest`.
+ *
+ * @param {{ providers?: unknown, commands?: unknown }} [options={}]
+ * @returns {{ ok: true, launch: ValidLaunch } | { ok: false, refusal: LaunchRefusal }}
+ */
+export function resolveDefaultSlotLaunch({ providers, commands } = {}) {
+  const entries = Array.isArray(providers) ? providers : [];
+  const allowed = Array.isArray(commands) ? commands : [];
+  const menuIds = entries
+    .map((entry) => (typeof entry?.id === 'string' ? entry.id : ''))
+    .filter((id) => id.length > 0);
+  const commandOf = (/** @type {any} */ entry) =>
+    typeof entry?.command === 'string' && entry.command.length > 0
+      ? entry.command
+      : entry?.id === SYSTEM_SHELL_ENTRY.id
+        ? SHELL_COMMAND
+        : PROVIDER_COMMAND;
+  const providerEntry = entries.find(
+    (entry) => typeof entry?.id === 'string'
+      && entry.id !== SYSTEM_SHELL_ENTRY.id
+      && allowed.includes(commandOf(entry)),
+  );
+  const shellEntry = entries.find(
+    (entry) => entry?.id === SYSTEM_SHELL_ENTRY.id
+      && allowed.includes(commandOf(entry)),
+  );
+  const chosen = providerEntry ?? shellEntry ?? null;
+  if (!chosen) {
+    return {
+      ok: false,
+      refusal: {
+        code: LAUNCH_REFUSALS.COMMAND_UNAVAILABLE,
+        message: 'Launch unavailable.',
+      },
+    };
+  }
+  const chosenCommand = commandOf(chosen);
+  return validateLaunchRequest(
+    {
+      entryId: chosen.id,
+      command: chosenCommand,
+      args: [],
+      title: typeof chosen.label === 'string' ? chosen.label : chosen.id,
+      kind: chosen.id === SYSTEM_SHELL_ENTRY.id ? 'shell' : 'provider',
+    },
+    { commands: allowed, menuIds },
+  );
 }
 
 export { CUSTOM_MAX_ARGV, CUSTOM_MAX_ARG_BYTES, PROVIDER_COMMAND, SHELL_COMMAND };
