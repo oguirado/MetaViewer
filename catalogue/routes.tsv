@@ -893,6 +893,7 @@ frame.go	daemon-adapter/internal/ipc/frame.go
 frames_parity_test.go	daemon-adapter/internal/ipc/frames_parity_test.go
 ipc_test.go	daemon-adapter/internal/ipc/ipc_test.go
 json.go	daemon-adapter/internal/ipc/json.go
+keepalive_test.go	daemon-adapter/internal/ipc/keepalive_test.go
 maxconn_test.go	daemon-adapter/internal/ipc/maxconn_test.go
 message.go	daemon-adapter/internal/ipc/message.go
 oneof_poly_test.go	daemon-adapter/internal/ipc/oneof_poly_test.go
@@ -1624,6 +1625,7 @@ operator-stubs.mjs	ui/test/operator-stubs.mjs
 originc-568d530772a3	ui/test/origin-contract.test.js
 packageOutput.test.js	ui/test/packageOutput.test.js
 pkg-fullstack.test.js	ui/test/pkg-fullstack.test.js
+polish2.test.js	ui/test/polish2.test.js
 preload-ports.test.js	ui/test/preload-ports.test.js
 preload-f111f04ca6a8	ui/test/preload-v02-notice.test.js
 preload.test.js	ui/test/preload.test.js
