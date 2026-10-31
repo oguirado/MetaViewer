@@ -19,17 +19,17 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 1,148 | 55 | 1,093 |
-| Lanes finished OK | 1,148 | 55 | 1,093 |
-| Agent steps | 48,117 | 2,705 | 45,412 |
-| Lane-hours of agent work | 118.4 | 5.2 | 113.1 |
-| Fresh input tokens | 195,056,795 | 11,482,034 | 183,574,761 |
-| Cache-read input tokens | 3,763,839,198 | 226,255,212 | 3,537,583,986 |
+| Lanes launched | 1,165 | 55 | 1,110 |
+| Lanes finished OK | 1,165 | 55 | 1,110 |
+| Agent steps | 48,635 | 2,705 | 45,930 |
+| Lane-hours of agent work | 119.3 | 5.2 | 114.1 |
+| Fresh input tokens | 196,619,010 | 11,482,034 | 185,136,976 |
+| Cache-read input tokens | 3,787,758,226 | 226,255,212 | 3,561,503,014 |
 | Prompt cache hit % | 95.1 | 95.2 | 95.1 |
-| Output tokens | 39,558,623 | 2,135,708 | 37,422,915 |
-| Thinking tokens | 23,302,864 | 1,050,039 | 22,252,825 |
-| Cost (USD) | 34.9451 | 2.0279 | 32.9172 |
-| Cost per lane (USD) | 0.0304 | 0.0369 | 0.0301 |
+| Output tokens | 39,938,356 | 2,135,708 | 37,802,648 |
+| Thinking tokens | 23,562,503 | 1,050,039 | 22,512,464 |
+| Cost (USD) | 35.2251 | 2.0279 | 33.1972 |
+| Cost per lane (USD) | 0.0302 | 0.0369 | 0.0299 |
 
 Rooms: 136. Peak concurrent lanes [MEASURED from lane start/end]: 37.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
@@ -38,7 +38,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 759 | 94.0 | 18.6976 |
+| build | 776 | 94.0 | 18.9776 |
 | context | 42 | 95.9 | 1.9093 |
 | context packs + test ideation (U-DEC-0139) | 13 | 91.1 | 0.2195 |
 | demo | 4 | 90.7 | 0.0557 |
@@ -86,7 +86,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 422 | 94.1 | 10.4545 | direct Muse job |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 439 | 94.1 | 10.7345 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -1353,7 +1353,24 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | 7_package | eve8_r7_package | Oct 31 20:20 | yes | 26 | 92.9 | 0.013183 |
 | direct-direct | J1-CPUSET | r1os_WJ1-CPUSET | Oct 31 20:26 | yes | 17 | 90.0 | 0.010188 |
 | direct-direct | NPUT-U4-SRF | r1os_INPUT-U4-SRF | Oct 31 20:26 | yes | 38 | 95.1 | 0.016238 |
+| direct-direct | 8_a | eve9_r8_a | Oct 31 20:27 | yes | 21 | 91.5 | 0.015751 |
 | direct-direct | 8_b | eve9_r8_b | Oct 31 20:27 | yes | 36 | 92.6 | 0.020637 |
+| direct-direct | r8_msi_a | eve10_r8_msi_a | Oct 31 20:31 | yes | 24 | 90.2 | 0.021388 |
+| direct-direct | r8_msi_b | eve10_r8_msi_b | Oct 31 20:31 | yes | 26 | 92.2 | 0.015054 |
+| direct-direct | r2_U1-PTY-PKG_a | eve11_r2_U1-PTY-PKG_a | Oct 31 20:57 | yes | 35 | 94.0 | 0.01895 |
+| direct-direct | r2_U1-PTY-PKG_b | eve11_r2_U1-PTY-PKG_b | Oct 31 20:57 | yes | 17 | 86.1 | 0.012161 |
+| direct-direct | r2_U3-BROKER-CLASSES_a | eve11_r2_U3-BROKER-CLASSES_a | Oct 31 20:57 | yes | 33 | 93.7 | 0.019522 |
+| direct-direct | r2_U3-BROKER-CLASSES_b | eve11_r2_U3-BROKER-CLASSES_b | Oct 31 20:57 | yes | 33 | 94.1 | 0.015966 |
+| direct-direct | r2_U5a-MULTISLOT-UI_a | eve11_r2_U5a-MULTISLOT-UI_a | Oct 31 20:57 | yes | 21 | 91.7 | 0.011811 |
+| direct-direct | r2_U5a-MULTISLOT-UI_b | eve11_r2_U5a-MULTISLOT-UI_b | Oct 31 20:57 | yes | 36 | 95.2 | 0.015975 |
+| direct-direct | ANGELOG-FRAGMENTS_a | r1j_CHANGELOG-FRAGMENTS_a | Oct 31 21:02 | yes | 24 | 93.3 | 0.011194 |
+| direct-direct | ANGELOG-FRAGMENTS_b | r1j_CHANGELOG-FRAGMENTS_b | Oct 31 21:02 | yes | 55 | 95.9 | 0.024744 |
+| direct-direct | -CREATE_a | r1j_E4-CREATE_a | Oct 31 21:02 | yes | 29 | 94.7 | 0.016448 |
+| direct-direct | -CREATE_b | r1j_E4-CREATE_b | Oct 31 21:02 | yes | 33 | 94.9 | 0.016394 |
+| direct-direct | -PROFILES_a | r1j_E4-PROFILES_a | Oct 31 21:02 | yes | 43 | 95.4 | 0.019081 |
+| direct-direct | -PROFILES_b | r1j_E4-PROFILES_b | Oct 31 21:02 | yes | 23 | 93.0 | 0.011554 |
+| direct-direct | 5-R2_a | r1j_WJ5-R2_a | Oct 31 21:02 | yes | 24 | 93.4 | 0.01409 |
+| direct-direct | 5-R2_b | r1j_WJ5-R2_b | Oct 31 21:02 | yes | 41 | 94.1 | 0.019922 |
 
 ## Method
 
