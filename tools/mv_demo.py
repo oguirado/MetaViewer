@@ -260,8 +260,8 @@ def record(who, demo):
         parsed = urlsplit(url)
         need(parsed.scheme == 'http' and parsed.hostname in ('127.0.0.1', 'localhost', '::1')
              and not parsed.username and not parsed.password and not any(ord(x) < 32 for x in url), 'NATIVE_VIEW_INVALID')
-        print(json.dumps({'url': url}), flush=True)
         try:
+            print(json.dumps({'url': url}), flush=True)
             rc = child.wait()
         except KeyboardInterrupt:
             child.send_signal(signal.SIGINT)

@@ -245,13 +245,13 @@ class RecordFlow(FlowBase):
             #!/bin/bash
             d="$FAKE_RAM/demo-1"
             mkdir -m 700 "$d" || exit 4
-            printf '%s\\n' '{"url":"http://127.0.0.1:1/","native":"n","socket":"s"}'
             seal() {
               printf '%s\\n' '{"seq":1,"mono_ns":1,"window":"w1","kind":"key","keysym":"Prior","modifiers":[],"before":"001_before.png","after":"001_after.png"}' \\
                 '{"seq":2,"mono_ns":2,"window":"","kind":"stop","reason":"operator","modifiers":[]}' > "$d/events.jsonl"
               echo secret-readme > "$d/README.md"; echo png > "$d/final.png"; echo png > "$d/001_before.png"
             }
             trap 'sleep 0.3; seal; exit 0' INT
+            printf '%s\\n' '{"url":"http://127.0.0.1:1/","native":"n","socket":"s"}'
             while :; do sleep 0.05; done
             '''))
         native.chmod(0o700)
@@ -277,7 +277,7 @@ class RecordFlow(FlowBase):
         self.assertEqual(announce, {'url': 'http://127.0.0.1:1/'})
         _signal_own_group(child.pid, signal.SIGINT)
         out, err = child.communicate(timeout=60)
-        self.assertEqual(child.returncode, 0, err.decode()[-2000:])
+        self.assertEqual(child.returncode, 0, f'stdout={out.decode()[-2000:]!r} stderr={err.decode()[-2000:]!r}')
         reply = json.loads(out.decode().strip().splitlines()[-1])
         self.assertTrue(reply['ok'])
         evidence = Path(reply['result']['evidence'])
@@ -290,6 +290,35 @@ class RecordFlow(FlowBase):
         for name, digest in reply['result']['sha256'].items():
             self.assertEqual(hashlib.sha256((evidence / name).read_bytes()).hexdigest(), digest)
             self.assertEqual((evidence / name).stat().st_mode & 0o777, 0o600)
+        self.assertFalse((ram / 'demo-1').exists())
+
+    def test_stop_signal_during_announce_flush_still_seals_and_exports(self):
+        self.seal([self.key('Prior'), self.stop(2)])
+        ram = self.root / 'record-ram'
+        ram.mkdir()
+        child = unittest.mock.MagicMock()
+        child.stdout.readline.return_value = b'{"url":"http://127.0.0.1:1234/"}\n'
+        child.wait.return_value = 0
+        child.poll.return_value = 0
+
+        def spawn(argv, **kwargs):
+            import shutil
+            shutil.copytree(self.source, ram / 'demo-1')
+            return child
+
+        class RaisingStdout(io.StringIO):
+            def flush(self):
+                super().flush()
+                raise KeyboardInterrupt()
+
+        with patch.dict(os.environ, self.record_env()), \
+                patch.object(demo.identity.Identities, 'show'), \
+                patch.object(demo, 'RAM', ram), \
+                patch.object(demo.subprocess, 'Popen', side_effect=spawn), \
+                contextlib.redirect_stdout(RaisingStdout()):
+            result = demo.record('example', 'demo-1')
+        child.send_signal.assert_called_once_with(signal.SIGINT)
+        self.assertTrue(Path(result['evidence']).is_dir())
         self.assertFalse((ram / 'demo-1').exists())
 
 
