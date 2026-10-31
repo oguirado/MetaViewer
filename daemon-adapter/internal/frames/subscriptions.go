@@ -16,8 +16,9 @@ package frames
 // with decode/publish/emit of frame N (at most one capture and one publish in
 // flight per surface via an unbuffered handoff channel), preserving strict FIFO
 // frame order, generation monotonicity, deduplication, and cancellation drain.
-// Per-stage durations (capture, decode, hash, write, total) emit rate-limited
-// p50/p95 summaries per surface every 5 s to Diagnostics without wire changes.
+// Per-stage durations (capture, decode, hash, write, total) and skipped-poll
+// counts emit rate-limited summaries per surface every 30 s to Diagnostics by
+// default (MV_ADAPTER_DIAG=verbose restores per-event lines) without wire changes.
 import (
 	"context"
 	"encoding/json"
@@ -93,9 +94,9 @@ type SubscriptionConfig struct {
 	// Serial disables capture/publish overlap when true, running both stages sequentially per poll.
 	Serial bool
 	// Diagnostics receives human-readable diagnostic lines when poll deadlines are skipped
-	// and rate-limited per-stage latency summaries every DiagnosticsInterval (default 5 s).
+	// and rate-limited per-stage latency summaries every DiagnosticsInterval (default 30 s).
 	Diagnostics io.Writer
-	// DiagnosticsInterval sets the rate-limit window for per-surface stage summary lines (default 5 s).
+	// DiagnosticsInterval sets the rate-limit window for per-surface diagnostic lines (default 30 s).
 	DiagnosticsInterval time.Duration
 	// OnSkippedPolls is an optional diagnostic hook invoked when a poll deadline is missed.
 	OnSkippedPolls func(surfaceID string, missed, total uint64)
@@ -163,17 +164,21 @@ type Subscriptions struct {
 	failedIDs    []string
 	closed       bool
 	clock        pollClock
+	limiter      *diagLimiter
 	skipped      atomic.Uint64
 }
 
 const (
-	defaultDiagnosticsInterval = 5 * time.Second
+	defaultDiagnosticsInterval = DefaultDiagnosticsInterval
 	maxStageSamples            = 4096
 )
 
 func (s *Subscriptions) diagnosticsInterval() time.Duration {
 	if s.cfg.DiagnosticsInterval > 0 {
 		return s.cfg.DiagnosticsInterval
+	}
+	if s.limiter != nil && s.limiter.isVerbose() {
+		return verboseStageSummaryInterval
 	}
 	return defaultDiagnosticsInterval
 }
@@ -265,7 +270,8 @@ func (s *Subscriptions) recordStageDurations(id string, d StageDurations) {
 	if len(st.all) < maxStageSamples {
 		st.all = append(st.all, d)
 	}
-	if !now.Before(st.windowStart.Add(interval)) && len(st.window) > 0 {
+	disableLimit := s.limiter != nil && s.limiter.isRateLimitDisabled()
+	if (disableLimit || !now.Before(st.windowStart.Add(interval))) && len(st.window) > 0 {
 		sum := summarizeStageDurations(st.window)
 		st.lastSummary = sum
 		st.summaries++
@@ -343,11 +349,38 @@ func (s *Subscriptions) recordSkippedPolls(id string, missed uint64) uint64 {
 		s.cfg.OnSkippedPolls(id, missed, total)
 	}
 	if s.cfg.Diagnostics != nil {
-		s.diagMu.Lock()
-		_, _ = fmt.Fprintf(s.cfg.Diagnostics, "adapter: surface %s skipped_polls=%d total_skipped_polls=%d\n", id, missed, total)
-		s.diagMu.Unlock()
+		emitCount, shouldEmit := s.limiter.recordSkippedPolls(id, missed, s.clock.Now(), s.diagnosticsInterval())
+		if shouldEmit {
+			s.diagMu.Lock()
+			_, _ = fmt.Fprintf(s.cfg.Diagnostics, "adapter: surface %s skipped_polls=%d total_skipped_polls=%d\n", id, emitCount, total)
+			s.diagMu.Unlock()
+		}
 	}
 	return total
+}
+
+func (s *Subscriptions) recordDiagnosticError(id string, err error) {
+	if err == nil || s.cfg.Diagnostics == nil {
+		return
+	}
+	if s.limiter != nil && !s.limiter.allowErrorOrWarning(id, s.clock.Now(), s.diagnosticsInterval()) {
+		return
+	}
+	s.diagMu.Lock()
+	_, _ = fmt.Fprintf(s.cfg.Diagnostics, "adapter: surface %s error: %v\n", id, err)
+	s.diagMu.Unlock()
+}
+
+func (s *Subscriptions) recordDiagnosticWarning(id string, detail string) {
+	if detail == "" || s.cfg.Diagnostics == nil {
+		return
+	}
+	if s.limiter != nil && !s.limiter.allowErrorOrWarning(id, s.clock.Now(), s.diagnosticsInterval()) {
+		return
+	}
+	s.diagMu.Lock()
+	_, _ = fmt.Fprintf(s.cfg.Diagnostics, "adapter: surface %s warning: %s\n", id, detail)
+	s.diagMu.Unlock()
 }
 
 func NewSubscriptions(ctx context.Context, cfg SubscriptionConfig, source Source, publisher *Publisher, emit Emit) (*Subscriptions, error) {
@@ -358,7 +391,7 @@ func NewSubscriptions(ctx context.Context, cfg SubscriptionConfig, source Source
 		return nil, e
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	s := &Subscriptions{ctx: ctx, cancel: cancel, cfg: cfg, source: source, publisher: publisher, emit: emit, tasks: make(map[string]*task), failures: make(map[string]*task), confirmed: make(map[string]uint64), surfaceLocks: make(map[string]*sync.Mutex), surfaceSkips: make(map[string]uint64), stageStats: make(map[string]*surfaceStageStats), clock: monotonicPollClock{}}
+	s := &Subscriptions{ctx: ctx, cancel: cancel, cfg: cfg, source: source, publisher: publisher, emit: emit, tasks: make(map[string]*task), failures: make(map[string]*task), confirmed: make(map[string]uint64), surfaceLocks: make(map[string]*sync.Mutex), surfaceSkips: make(map[string]uint64), stageStats: make(map[string]*surfaceStageStats), clock: monotonicPollClock{}, limiter: newDiagLimiter()}
 	publisher.addReleaseHook(func(id string) {
 		s.mu.Lock()
 		delete(s.confirmed, id)
@@ -435,6 +468,7 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 	}()
 
 	next := s.clock.Now()
+	s.limiter.initSurface(id, next)
 	timer := s.clock.NewTimer(0)
 	defer timer.Stop()
 	consecutiveFailures := 0
@@ -505,6 +539,7 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 			return
 		}
 		if transientFailure {
+			s.recordDiagnosticWarning(id, fmt.Sprintf("transient capture failure (%d/%d): %v", consecutiveFailures, confirmedLossCaptureFailures, e))
 			next = next.Add(s.cfg.PollInterval)
 			now := s.clock.Now()
 			if !next.After(now) {
@@ -610,6 +645,7 @@ func (s *Subscriptions) publishLoop(ctx context.Context, id string, t *task, pip
 		}
 		failed := e != nil
 		if failed {
+			s.recordDiagnosticError(id, e)
 			var eventErr error
 			msg, eventErr = captureFailure(id, s.SkippedPolls())
 			if eventErr != nil {
@@ -667,6 +703,7 @@ func (s *Subscriptions) publishLoop(ctx context.Context, id string, t *task, pip
 				if t.cancelled.Load() || ctx.Err() != nil {
 					return
 				}
+				s.recordDiagnosticError(id, deliveryErr)
 				t.err = errors.Join(e, deliveryErr)
 				// A failed frame delivery gets one bounded failure notification.
 				// Do not retry a failure notification or emit after cancellation.

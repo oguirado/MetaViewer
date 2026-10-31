@@ -449,6 +449,7 @@ func TestAC02FourSurfaceCadenceAndDiagnostics(t *testing.T) {
 
 	// Negative control: when stub capture cost (75 ms) exceeds PollInterval (25 ms),
 	// SkippedPolls and Diagnostics MUST report missed deadlines (> 0).
+	t.Setenv("MV_ADAPTER_DIAG", "verbose")
 	slowClock := newAC02FakeClock()
 	slowStub := &ac02StubSource{
 		clock:    slowClock,

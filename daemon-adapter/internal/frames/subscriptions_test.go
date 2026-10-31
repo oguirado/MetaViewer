@@ -1,6 +1,7 @@
 package frames
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1363,5 +1365,322 @@ func TestLivenessAndSubscriptionConcurrentLossWireOrder(t *testing.T) {
 	wireMu.Unlock()
 	if len(got) != 2 || got[0] != "state_changed:lost" || got[1] != "error:capture_failed" {
 		t.Fatalf("expected wire order [state_changed:lost, error:capture_failed], got %v", got)
+	}
+}
+
+type logQuietClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func newLogQuietClock() *logQuietClock {
+	return &logQuietClock{now: time.Unix(1_700_000_000, 0)}
+}
+
+func (c *logQuietClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *logQuietClock) advance(d time.Duration) {
+	c.mu.Lock()
+	c.now = c.now.Add(d)
+	c.mu.Unlock()
+}
+
+func (c *logQuietClock) NewTimer(time.Duration) pollTimer {
+	return &logQuietTimer{ch: make(chan time.Time)}
+}
+
+type logQuietTimer struct {
+	ch chan time.Time
+}
+
+func (t *logQuietTimer) Ticks() <-chan time.Time  { return t.ch }
+func (t *logQuietTimer) Reset(time.Duration) bool { return true }
+func (t *logQuietTimer) Stop() bool               { return true }
+
+func countLinesMatching(out, substr string) int {
+	n := 0
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if line != "" && strings.Contains(line, substr) {
+			n++
+		}
+	}
+	return n
+}
+
+func runTenSecondHarnessSample(t *testing.T, verbose bool) string {
+	t.Helper()
+	if verbose {
+		t.Setenv(DiagModeEnvVar, DiagModeVerbose)
+	} else {
+		t.Setenv(DiagModeEnvVar, "")
+	}
+	clock := newLogQuietClock()
+	var diag bytes.Buffer
+	root, b, f := ramFixture(t)
+	pub := publisher(t, root)
+	subs, err := NewSubscriptions(context.Background(), SubscriptionConfig{
+		MaxSubscriptions: 2,
+		PollInterval:     250 * time.Millisecond,
+		CaptureTimeout:   time.Second,
+		ShutdownTimeout:  time.Second,
+		Diagnostics:      &diag,
+	}, &captureSource{b: b, f: f}, pub, func(context.Context, json.RawMessage) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	subs.clock = clock
+	defer func() { _ = subs.Close(context.Background()) }()
+
+	const surfaceID = "srf-live-p9"
+	subs.limiter.initSurface(surfaceID, clock.Now())
+	stageDurations := StageDurations{
+		Capture: 280 * time.Millisecond,
+		Decode:  2 * time.Millisecond,
+		Hash:    1 * time.Millisecond,
+		Write:   2 * time.Millisecond,
+		Total:   285 * time.Millisecond,
+	}
+	// Simulate 10 seconds at 4 events/s (40 polls of 250 ms step where capture p50 is 285 ms).
+	for i := 1; i <= 40; i++ {
+		clock.advance(250 * time.Millisecond)
+		subs.recordSkippedPolls(surfaceID, 1)
+		subs.recordStageDurations(surfaceID, stageDurations)
+		if i == 16 {
+			subs.recordDiagnosticWarning(surfaceID, "transient capture failure (1/3): x11 shm busy")
+		}
+		if i == 32 {
+			subs.recordDiagnosticError(surfaceID, errors.New("x11 damage drawable lost"))
+		}
+	}
+	writeSessionCloseSkippedPolls(&diag, subs.SkippedPolls())
+	return diag.String()
+}
+
+func TestLogQuietDefaultRateLimitVerboseErrorsAndSessionClose(t *testing.T) {
+	t.Setenv(DiagModeEnvVar, "")
+	clock := newLogQuietClock()
+	var diag bytes.Buffer
+	root, b, f := ramFixture(t)
+	pub := publisher(t, root)
+	subs, err := NewSubscriptions(context.Background(), SubscriptionConfig{
+		MaxSubscriptions: 4,
+		PollInterval:     250 * time.Millisecond,
+		CaptureTimeout:   time.Second,
+		ShutdownTimeout:  time.Second,
+		Diagnostics:      &diag,
+	}, &captureSource{b: b, f: f}, pub, func(context.Context, json.RawMessage) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	subs.clock = clock
+	defer func() { _ = subs.Close(context.Background()) }()
+
+	subs.limiter.initSurface("srf-a", clock.Now())
+	subs.limiter.initSurface("srf-b", clock.Now())
+	stageSample := StageDurations{
+		Capture: 280 * time.Millisecond,
+		Decode:  2 * time.Millisecond,
+		Hash:    1 * time.Millisecond,
+		Write:   2 * time.Millisecond,
+		Total:   285 * time.Millisecond,
+	}
+
+	// Window 1: 120 steps of 250 ms = 30.0 s.
+	for i := 1; i <= 120; i++ {
+		clock.advance(250 * time.Millisecond)
+		subs.recordSkippedPolls("srf-a", 2)
+		subs.recordStageDurations("srf-a", stageSample)
+		subs.recordSkippedPolls("srf-b", 1)
+		subs.recordStageDurations("srf-b", stageSample)
+		if i == 40 {
+			// At 10 s, neither surface may have emitted skipped_polls or stage_summary yet.
+			if got := countLinesMatching(diag.String(), "skipped_polls="); got != 0 {
+				t.Fatalf("expected 0 skipped_polls lines before 30s window closes, got %d:\n%s", got, diag.String())
+			}
+			if got := countLinesMatching(diag.String(), "stage_summary"); got != 0 {
+				t.Fatalf("expected 0 stage_summary lines before 30s window closes, got %d:\n%s", got, diag.String())
+			}
+		}
+	}
+
+	// Exactly 1 skipped_polls line and 1 stage_summary line per surface after the first 30s window.
+	if got := countLinesMatching(diag.String(), "surface srf-a skipped_polls="); got != 1 {
+		t.Fatalf("expected 1 skipped_polls line for srf-a in 30s window, got %d:\n%s", got, diag.String())
+	}
+	if got := countLinesMatching(diag.String(), "surface srf-b skipped_polls="); got != 1 {
+		t.Fatalf("expected 1 skipped_polls line for srf-b in 30s window, got %d:\n%s", got, diag.String())
+	}
+	if !strings.Contains(diag.String(), "adapter: surface srf-a skipped_polls=240 total_skipped_polls=359\n") {
+		t.Fatalf("expected srf-a window sum 240 and running total 359, got:\n%s", diag.String())
+	}
+	if !strings.Contains(diag.String(), "adapter: surface srf-b skipped_polls=120 total_skipped_polls=360\n") {
+		t.Fatalf("expected srf-b window sum 120 and running total 360, got:\n%s", diag.String())
+	}
+	if got := countLinesMatching(diag.String(), "surface srf-a stage_summary"); got != 1 {
+		t.Fatalf("expected 1 stage_summary line for srf-a in 30s window, got %d:\n%s", got, diag.String())
+	}
+	if got := countLinesMatching(diag.String(), "surface srf-b stage_summary"); got != 1 {
+		t.Fatalf("expected 1 stage_summary line for srf-b in 30s window, got %d:\n%s", got, diag.String())
+	}
+
+	// Window 2: another 120 steps of 250 ms = 30.0 s (total 60.0 s).
+	for i := 1; i <= 120; i++ {
+		clock.advance(250 * time.Millisecond)
+		subs.recordSkippedPolls("srf-a", 1)
+		subs.recordStageDurations("srf-a", stageSample)
+	}
+	if got := countLinesMatching(diag.String(), "surface srf-a skipped_polls="); got != 2 {
+		t.Fatalf("expected 2 skipped_polls lines for srf-a across two 30s windows, got %d:\n%s", got, diag.String())
+	}
+	if !strings.Contains(diag.String(), "adapter: surface srf-a skipped_polls=120 total_skipped_polls=480\n") {
+		t.Fatalf("expected second window sum 120 and running total 480, got:\n%s", diag.String())
+	}
+
+	// Errors and warnings are never rate-limited even inside the same second.
+	for i := 1; i <= 4; i++ {
+		subs.recordDiagnosticError("srf-a", fmt.Errorf("capture fault #%d", i))
+		subs.recordDiagnosticWarning("srf-a", fmt.Sprintf("capture retry #%d", i))
+	}
+	if got := countLinesMatching(diag.String(), "surface srf-a error:"); got != 4 {
+		t.Fatalf("expected all 4 error lines immediately without rate-limiting, got %d:\n%s", got, diag.String())
+	}
+	if got := countLinesMatching(diag.String(), "surface srf-a warning:"); got != 4 {
+		t.Fatalf("expected all 4 warning lines immediately without rate-limiting, got %d:\n%s", got, diag.String())
+	}
+
+	// Wire refusal Detail at subscriptions.go:704 must remain unchanged.
+	wireFailure, err := captureFailure("srf-a", subs.SkippedPolls())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(wireFailure), `"detail":"capture, publication or delivery refused (skipped_polls=480)"`) {
+		t.Fatalf("unexpected wire refusal payload: %s", string(wireFailure))
+	}
+
+	// Final session close total still printed.
+	writeSessionCloseSkippedPolls(&diag, subs.SkippedPolls())
+	if !strings.Contains(diag.String(), "adapter: session closed with total_skipped_polls=480\n") {
+		t.Fatalf("expected final session total line, got:\n%s", diag.String())
+	}
+
+	// Log 10-second before/after harness samples.
+	before10s := runTenSecondHarnessSample(t, true)
+	after10s := runTenSecondHarnessSample(t, false)
+	if got := countLinesMatching(before10s, "skipped_polls="); got != 41 { // 40 per-event + 1 session close
+		t.Fatalf("expected 40 per-event skipped_polls lines + 1 session close in 10s verbose sample, got %d:\n%s", got, before10s)
+	}
+	if got := countLinesMatching(after10s, "surface srf-live-p9 skipped_polls="); got != 0 {
+		t.Fatalf("expected 0 per-surface skipped_polls lines in 10s default sample, got %d:\n%s", got, after10s)
+	}
+	if got := countLinesMatching(after10s, "error:"); got != 1 {
+		t.Fatalf("expected error line preserved in 10s default sample, got %d:\n%s", got, after10s)
+	}
+	if got := countLinesMatching(after10s, "warning:"); got != 1 {
+		t.Fatalf("expected warning line preserved in 10s default sample, got %d:\n%s", got, after10s)
+	}
+	if !strings.Contains(after10s, "adapter: session closed with total_skipped_polls=40\n") {
+		t.Fatalf("expected session close total in 10s default sample, got:\n%s", after10s)
+	}
+	t.Logf("HARNESS_10S_BEFORE_LINES=%d\n%s", len(strings.Split(strings.TrimSpace(before10s), "\n")), before10s)
+	t.Logf("HARNESS_10S_AFTER_LINES=%d\n%s", len(strings.Split(strings.TrimSpace(after10s), "\n")), after10s)
+}
+
+func evaluateLogQuietOracle(t *testing.T, mutant string) error {
+	t.Helper()
+	root, b, f := ramFixture(t)
+	pub := publisher(t, root)
+
+	// Rule 1 & Rule 2 check (default mode: rate limit active, errors never suppressed).
+	t.Setenv(DiagModeEnvVar, "")
+	clock := newLogQuietClock()
+	var defaultDiag bytes.Buffer
+	subs, err := NewSubscriptions(context.Background(), SubscriptionConfig{
+		MaxSubscriptions: 2,
+		PollInterval:     250 * time.Millisecond,
+		CaptureTimeout:   time.Second,
+		ShutdownTimeout:  time.Second,
+		Diagnostics:      &defaultDiag,
+	}, &captureSource{b: b, f: f}, pub, func(context.Context, json.RawMessage) error { return nil })
+	if err != nil {
+		return err
+	}
+	subs.clock = clock
+	defer func() { _ = subs.Close(context.Background()) }()
+
+	switch mutant {
+	case "limiter_off":
+		subs.limiter.faultDisableLimiter = true
+	case "errors_limited":
+		subs.limiter.faultRateLimitErrors = true
+	case "verbose_ignored":
+		subs.limiter.faultIgnoreVerbose = true
+	}
+
+	subs.limiter.initSurface("srf-m", clock.Now())
+	for i := 0; i < 10; i++ {
+		clock.advance(time.Second)
+		subs.recordSkippedPolls("srf-m", 1)
+	}
+	if got := countLinesMatching(defaultDiag.String(), "surface srf-m skipped_polls="); got > 1 {
+		return fmt.Errorf("rule 1 violated (limiter off): expected <= 1 skipped_polls line in 10s default window, got %d", got)
+	}
+
+	for i := 0; i < 3; i++ {
+		subs.recordDiagnosticError("srf-m", fmt.Errorf("err-%d", i))
+	}
+	if got := countLinesMatching(defaultDiag.String(), "surface srf-m error:"); got != 3 {
+		return fmt.Errorf("rule 2 violated (errors limited): expected all 3 error lines immediately, got %d", got)
+	}
+
+	// Rule 3 check (MV_ADAPTER_DIAG=verbose emits every event immediately).
+	t.Setenv(DiagModeEnvVar, DiagModeVerbose)
+	var verboseDiag bytes.Buffer
+	vSubs, err := NewSubscriptions(context.Background(), SubscriptionConfig{
+		MaxSubscriptions: 2,
+		PollInterval:     250 * time.Millisecond,
+		CaptureTimeout:   time.Second,
+		ShutdownTimeout:  time.Second,
+		Diagnostics:      &verboseDiag,
+	}, &captureSource{b: b, f: f}, pub, func(context.Context, json.RawMessage) error { return nil })
+	if err != nil {
+		return err
+	}
+	vSubs.clock = clock
+	defer func() { _ = vSubs.Close(context.Background()) }()
+	if mutant == "verbose_ignored" {
+		vSubs.limiter.faultIgnoreVerbose = true
+	}
+	vSubs.limiter.initSurface("srf-v", clock.Now())
+	for i := 0; i < 5; i++ {
+		clock.advance(time.Second)
+		vSubs.recordSkippedPolls("srf-v", 2)
+	}
+	if got := countLinesMatching(verboseDiag.String(), "surface srf-v skipped_polls=2"); got != 5 {
+		return fmt.Errorf("rule 3 violated (verbose ignored): expected 5 per-event skipped_polls lines in verbose mode, got %d", got)
+	}
+	return nil
+}
+
+func TestLogQuietMutantsMustFail(t *testing.T) {
+	if err := evaluateLogQuietOracle(t, ""); err != nil {
+		t.Fatalf("unmutated oracle failed: %v", err)
+	}
+	for _, tc := range []struct {
+		mutant string
+		want   string
+	}{
+		{mutant: "limiter_off", want: "rule 1 violated (limiter off)"},
+		{mutant: "errors_limited", want: "rule 2 violated (errors limited)"},
+		{mutant: "verbose_ignored", want: "rule 3 violated (verbose ignored)"},
+	} {
+		err := evaluateLogQuietOracle(t, tc.mutant)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("expected mutant %s to fail with %q, got %v", tc.mutant, tc.want, err)
+		}
+		t.Logf("MUTANT_KILLED[%s]: %v", tc.mutant, err)
 	}
 }

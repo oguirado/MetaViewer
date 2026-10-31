@@ -257,6 +257,7 @@ I keep MetaViewer, OpenSuperficies, vision-engine, and wender-agent in their own
 
 I leave `MV_CAPTURE_RING` unset until the OpenSuperficies ring pin and host mount are ready; `MV_CAPTURE_RING=1` opts into the validated resident reader [CITED: `daemon-adapter/internal/frames/ringsource.go`].
 I use `MV_LIVE_WEB=1` only for the opt-in live web runner and leave it unset in hosted CI [CITED: `tests/e2e/e2e1_slice/asm_web_live.py`].
+By default, `mv-daemon-adapter` rate-limits per-surface `skipped_polls` and `stage_summary` diagnostic lines on `stderr` to at most `1` [TARGET] aggregated line per surface per `30` s [TARGET] window (reporting the window sum of skipped polls alongside the running session total and the final session-close total), while errors and warnings are emitted immediately without rate-limiting; setting `MV_ADAPTER_DIAG=verbose` restores per-event `skipped_polls` diagnostic lines with their original byte format for debugging [CITED: `daemon-adapter/internal/frames/subscriptions.go`].
 
 ### Python Agent Component Resolution (`agents/metaviewer_agents/perception/deps_lock.py`)
 
