@@ -129,6 +129,7 @@ changes-README.md	changes/README.md
 changel-6ee9fc48ce48	changes/unreleased/changelog-fragments.md
 display-polish.md	changes/unreleased/display-polish.md
 e4-create.md	changes/unreleased/e4-create.md
+e4-list.md	changes/unreleased/e4-list.md
 flakepi-0268f441f2d7	changes/unreleased/flake-pin-procbound.md
 p12-display-reader.md	changes/unreleased/p12-display-reader.md
 p12-display-tap.md	changes/unreleased/p12-display-tap.md
@@ -1452,6 +1453,7 @@ display-holds.test.js	ui/test/display-holds.test.js
 display-38e38244c4e9	ui/test/display-polish.test.js
 display-04c2f125230b	ui/test/display-reader.test.js
 e4-create.test.js	ui/test/e4-create.test.js
+e4-list.test.js	ui/test/e4-list.test.js
 eshbutt-e35bca97f1a6	ui/test/esh-button-stop-budget.test.js
 eshcrea-1e9d7f1b3142	ui/test/esh-create-refusal-code.test.js
 eshhand-9cf159b4a09b	ui/test/esh-handoff-discovery.test.js
