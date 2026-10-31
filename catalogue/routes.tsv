@@ -1050,6 +1050,9 @@ route.py	router/kit/v1_frozen/route.py
 vocabulary.json	router/kit/v1_frozen/vocabulary.json
 vendor_manifest.json	router/kit/vendor_manifest.json
 bootstrap.sh	scripts/bootstrap.sh
+metaviewer	scripts/judge/apparmor/metaviewer
+metaviewer-judge.sh	scripts/judge/metaviewer-judge.sh
+preflight.sh	scripts/judge/preflight.sh
 volume_e2e.py	scripts/volume_e2e.py
 install-dcff74b4a1e8	tests/ci/install_electron.test.cjs
 install-d80e15635c74	tests/ci/install_electron_mutation.test.cjs
@@ -1201,6 +1204,13 @@ fake_capsule.py	tests/integration/fake_capsule.py
 test_core_adapter.py	tests/integration/test_core_adapter.py
 test_mvctl_core.py	tests/integration/test_mvctl_core.py
 testnat-f6628436a1fb	tests/integration/test_native_adapter.py
+judge-__init__.py	tests/judge/__init__.py
+judge_sandbox.py	tests/judge/judge_sandbox.py
+judge_scenarios.py	tests/judge/judge_scenarios.py
+test_flow.py	tests/judge/test_flow.py
+test_mutants.py	tests/judge/test_mutants.py
+test_preflight.py	tests/judge/test_preflight.py
+test_static.py	tests/judge/test_static.py
 perf-README.md	tests/perf/README.md
 budgets.json	tests/perf/budgets.json
 clean.json	tests/perf/clean.json
