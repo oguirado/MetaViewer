@@ -1344,6 +1344,7 @@ terminalLive.js	ui/src/fixtures/terminalLive.js
 tileChrome.js	ui/src/fixtures/tileChrome.js
 framePortRouter.js	ui/src/frames/framePortRouter.js
 HandoffNotice.vue	ui/src/handoff/HandoffNotice.vue
+handoff.css	ui/src/handoff/handoff.css
 handoffModel.js	ui/src/handoff/handoffModel.js
 IdentitiesDialog.vue	ui/src/identities/IdentitiesDialog.vue
 identityForm.js	ui/src/identities/identityForm.js
@@ -1426,6 +1427,7 @@ frameRe-ec3058eeff9f	ui/test/frameReaderOnePass.test.mjs
 frameTile.test.js	ui/test/frameTile.test.js
 framesParity.test.mjs	ui/test/framesParity.test.mjs
 handoff-8d0c5534ac13	ui/test/handoff-notice.test.js
+handoff-3ec2ac4efaee	ui/test/handoffstyle-notice.test.js
 hostset-f2d771cedde2	ui/test/host-settings-fps.test.js
 hostBindings.test.js	ui/test/hostBindings.test.js
 hostFix2.test.mjs	ui/test/hostFix2.test.mjs
