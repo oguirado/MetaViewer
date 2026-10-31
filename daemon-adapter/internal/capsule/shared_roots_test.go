@@ -23,6 +23,21 @@ func TestSharedRootDistinctDisplays(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+func TestSeparateRootsMayReuseDisplay(t *testing.T) {
+	m := testManager(t, &scriptRunner{})
+	cfg := m.cfg
+	a, b := cfg.Profiles["demo"], cfg.Profiles["demo"]
+	a.RAMRoot, b.RAMRoot = "/dev/shm/mv-root-a", "/dev/shm/mv-root-b"
+	cfg.Profiles = map[string]Profile{"a": a, "b": b}
+	if _, err := NewManager(cfg, &scriptRunner{}, m.clock); err != nil {
+		t.Fatalf("separate roots with one display refused: %v", err)
+	}
+	b.RAMRoot = a.RAMRoot
+	cfg.Profiles = map[string]Profile{"a": a, "b": b}
+	if _, err := NewManager(cfg, &scriptRunner{}, m.clock); err == nil {
+		t.Fatal("shared root with one display admitted")
+	}
+}
 func TestSharedRootRunIsolation(t *testing.T) {
 	for _, reused := range []bool{false, true} {
 		t.Run(map[bool]string{false: "distinct", true: "reused"}[reused], func(t *testing.T) {

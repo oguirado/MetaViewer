@@ -358,10 +358,13 @@ func NewManager(cfg Config, r cli.Runner, clock cli.Clock) (*Manager, error) {
 		default:
 			return nil, fault("configuration", "unsupported public kind")
 		}
-		if seenDisplays[p.Display] {
+		// Profiles that share one RAM root share its native stack, so their
+		// displays must differ; separate roots may reuse a display number.
+		displayKey := filepath.Clean(p.RAMRoot) + "\x00" + p.Display
+		if seenDisplays[displayKey] {
 			return nil, fault("configuration", "distinct profile displays required")
 		}
-		seenDisplays[p.Display] = true
+		seenDisplays[displayKey] = true
 		copyProfiles[id] = p
 	}
 	cfg.Profiles = copyProfiles
