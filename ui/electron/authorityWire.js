@@ -292,6 +292,11 @@ export function validateSurfaceInputBatch(raw) {
         return { ok: false, code: 'SCHEMA' };
       }
       events.push(Object.freeze({ kind: 'scroll', dx: ev.dx, dy: ev.dy, x: ev.x, y: ev.y }));
+    } else if (ev.kind === 'release_all') {
+      if (!exactDataKeys(ev, 'kind')) {
+        return { ok: false, code: 'SCHEMA' };
+      }
+      events.push(Object.freeze({ kind: 'release_all' }));
     } else {
       return { ok: false, code: 'SCHEMA' };
     }
@@ -896,21 +901,24 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     if (batch.seq <= prevSeq || (pSeq > 0 && batch.seq < pSeq) || (isRetryPartial && batch.events.length <= pApplied)) {
       return Object.freeze({ ok: false, code: 'SCHEMA' });
     }
+    const releaseOnly = batch.events.every((/** @type {any} */ ev) => ev.kind === 'release_all');
     const now = typeof clock === 'function' ? clock() : Date.now();
     const priorRate = inputRateWindow.get(sid);
     const recent = (priorRate ?? []).filter(t => now - t < 1000);
-    if (recent.length >= SURFACE_INPUT_MAX_BATCHES_PER_SEC) {
+    if (!releaseOnly && recent.length >= SURFACE_INPUT_MAX_BATCHES_PER_SEC) {
       setBoundedSurfaceEntry(inputRateWindow, sid, recent, inputLastSeq, inputInFlightSeq);
       return Object.freeze({ ok: false, code: 'LIMIT' });
     }
     const hadRateEntry = priorRate !== undefined && recent.length > 0;
-    recent.push(now);
+    if (!releaseOnly) {
+      recent.push(now);
+      setBoundedSurfaceEntry(inputRateWindow, sid, recent, inputLastSeq, inputInFlightSeq);
+    }
     if (pSeq > 0 && batch.seq > pSeq) {
       setBoundedSurfaceEntry(inputLastSeq, sid, Math.max(lastSeq, pSeq), inputLastSeq, inputInFlightSeq);
       inputPartialSeq.delete(sid);
       inputPartialApplied.delete(sid);
     }
-    setBoundedSurfaceEntry(inputRateWindow, sid, recent, inputLastSeq, inputInFlightSeq);
     setBoundedSurfaceEntry(inputInFlightSeq, sid, batch.seq, inputLastSeq, inputInFlightSeq);
     const coreTracksProgress = typeof core?.getInputProgress === 'function';
     const baseApplied = isRetryPartial && !coreTracksProgress ? pApplied : 0;
@@ -936,16 +944,25 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
       return false;
     };
     try {
-      const reply = await core.request({ op: 'input', batch: coreBatch });
+      const forwardEvents = coreBatch.events.filter((/** @type {any} */ ev) => ev.kind !== 'release_all');
+      if (forwardEvents.length === 0) {
+        setBoundedSurfaceEntry(inputLastSeq, sid, batch.seq, inputLastSeq, inputInFlightSeq);
+        return Object.freeze({ ok: true, accepted: batch.events.length });
+      }
+      const forwardBatch = forwardEvents.length === coreBatch.events.length
+        ? coreBatch
+        : Object.freeze({ ...coreBatch, events: Object.freeze(forwardEvents) });
+      const reply = await core.request({ op: 'input', batch: forwardBatch });
       if (exactDataKeys(reply, 'accepted,ok') && reply.ok === true
-          && Number.isSafeInteger(reply.accepted) && reply.accepted >= 1 && reply.accepted <= coreBatch.events.length) {
+          && Number.isSafeInteger(reply.accepted) && reply.accepted >= 1 && reply.accepted <= forwardBatch.events.length) {
         markKnownSurface(sid);
         inputPartialSeq.delete(sid);
         inputPartialApplied.delete(sid);
         setBoundedSurfaceEntry(inputLastSeq, sid, batch.seq, inputLastSeq, inputInFlightSeq);
-        const totalAccepted = baseApplied > 0 && reply.accepted === coreBatch.events.length
+        const releasedCount = coreBatch.events.length - forwardBatch.events.length;
+        const totalAccepted = baseApplied > 0 && reply.accepted === forwardBatch.events.length
           ? batch.events.length
-          : reply.accepted;
+          : reply.accepted + releasedCount;
         return Object.freeze({ ok: true, accepted: totalAccepted });
       }
       if ((exactDataKeys(reply, 'code,ok') || exactDataKeys(reply, 'applied,code,ok')) && reply.ok === false) {

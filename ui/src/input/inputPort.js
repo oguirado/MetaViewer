@@ -34,8 +34,17 @@
  *   (READ switch, tests). A closure raised from inside the facade's own send
  *   is host-driven and never releases. Benign host refusals of a release-only
  *   batch (NOT_IN_CONTROL, INPUT_MODE_READ, STALE_STREAM, SURFACE_UNKNOWN) are
- *   silent; SCHEMA stays loud: the preload allowlist and contracts/v0.2 do not
- *   carry release_all yet (handoff outside this unit's surface).
+ *   silent; SCHEMA stays loud for unsupported facades.
+ *
+ * INPUT-COALESCE, decisions marked [TARGET, unit decision]:
+ * - Consecutive `type`-only events are held for `TYPE_COALESCE_MS` (40 ms
+ *   [TARGET, unit decision], <= 25 type batches/s, well below the 60 batches/s
+ *   limit) after a `type` flush and sent as one coalesced `type` event in a
+ *   single batch. Non-`type` events (`key`, `click`, `scroll`, `release_all`)
+ *   flush pending text before them on the immediate frame to preserve exact
+ *   relative order. Closing the gate (`closeGate`) drops and counts pending
+ *   events (`droppedCount(surfaceId)`), never sending pending text after
+ *   control is gone.
  */
 
 import { containFit, mapClientToFrame } from './frameMap.js';
@@ -83,6 +92,9 @@ export const INPUT_LIMITS = Object.freeze({
 export const WHEEL_STEP_PX = 50;
 export const WHEEL_LINE_PX = 19;
 export const WHEEL_MAX_STEPS_PER_EVENT = 1000;
+
+/** Type-only keystroke coalescing window in ms [TARGET, unit decision]. */
+export const TYPE_COALESCE_MS = 40;
 
 /** Host refusals of a release-only batch that carry no operator-facing meaning. */
 const BENIGN_RELEASE_REFUSALS = Object.freeze([
@@ -143,8 +155,11 @@ const textEncoder = new TextEncoder();
  * @typedef {Object} InputPortOptions
  * @property {() => number} [now] - ms clock (default Date.now).
  * @property {boolean} [releaseAll] - false disables the closeGate release_all (default true).
+ * @property {number} [typeCoalesceMs] - ms window for holding consecutive type-only events (default TYPE_COALESCE_MS).
  * @property {(cb: (time: number) => void) => unknown} [raf] - frame scheduler.
  * @property {(handle: unknown) => void} [cancelRaf] - frame cancellation.
+ * @property {(cb: () => void, ms: number) => unknown} [setTimer] - timer scheduler for type coalescing.
+ * @property {(handle: unknown) => void} [clearTimer] - timer cancellation for type coalescing.
  */
 
 /**
@@ -153,6 +168,7 @@ const textEncoder = new TextEncoder();
  * @property {(surfaceId: unknown, streamId: unknown, events: unknown) => Promise<InputSendResult>} send
  * @property {(surfaceId: unknown, streamId: unknown, event: unknown) => void} queue
  * @property {(surfaceId: unknown, options?: { release?: boolean }) => void} closeGate
+ * @property {(surfaceId?: unknown) => number} droppedCount
  * @property {(cb: (refusal: InputRefusal) => void) => () => void} onRefusal
  * @property {() => void} dispose
  */
@@ -505,6 +521,23 @@ function defaultCancelRaf(handle) {
 }
 
 /**
+ * @param {() => void} cb
+ * @param {number} ms
+ * @returns {unknown}
+ */
+function defaultSetTimer(cb, ms) {
+  return setTimeout(cb, ms);
+}
+
+/**
+ * @param {unknown} handle
+ * @returns {void}
+ */
+function defaultClearTimer(handle) {
+  clearTimeout(/** @type {any} */ (handle));
+}
+
+/**
  * Creates the renderer-side surface_input/v1 port.
  *
  * When the facade exposes `onResult`, the port subscribes exactly once for
@@ -528,6 +561,14 @@ export function createInputPort(facade, options = {}) {
   const raf = options.raf ?? defaultRaf;
   const cancelRaf = options.cancelRaf ?? defaultCancelRaf;
   const releaseEnabled = options.releaseAll !== false;
+  const typeCoalesceMs = typeof options.typeCoalesceMs === 'number'
+    && Number.isFinite(options.typeCoalesceMs)
+    && options.typeCoalesceMs >= 0
+    ? options.typeCoalesceMs
+    : TYPE_COALESCE_MS;
+  const setTimer = options.setTimer ?? defaultSetTimer;
+  const clearTimer = options.clearTimer ?? defaultClearTimer;
+  const useCoalesceTimer = options.setTimer !== undefined || options.raf === undefined;
 
   /** @type {Map<string, number>} */
   const seqBySurface = new Map();
@@ -535,6 +576,12 @@ export function createInputPort(facade, options = {}) {
   const stampsBySurface = new Map();
   /** @type {Map<string, PendingItem[]>} */
   const pendingBySurface = new Map();
+  /** @type {Map<string, number>} Surface -> timestamp (ms) of the last flushed batch containing type text. */
+  const lastTypeFlushBySurface = new Map();
+  /** @type {Map<string, unknown>} Surface -> active coalesce timer handle. */
+  const coalesceTimerBySurface = new Map();
+  /** @type {Map<string, number>} Surface -> count of pending events dropped by closeGate. */
+  const droppedBySurface = new Map();
   /**
    * MVUI32 lane I (R3-INPUT-1): per-surface gate epoch. Every queued item is
    * tagged with the current epoch; `closeGate` advances it and purges the
@@ -829,6 +876,51 @@ export function createInputPort(facade, options = {}) {
     }
   }
 
+  /**
+   * @param {string} surfaceId
+   * @returns {void}
+   */
+  function clearSurfaceTimer(surfaceId) {
+    const handle = coalesceTimerBySurface.get(surfaceId);
+    if (handle === undefined) return;
+    coalesceTimerBySurface.delete(surfaceId);
+    try {
+      clearTimer(handle);
+    } catch {
+      // Timer cancellation never throws.
+    }
+  }
+
+  /**
+   * @param {string} surfaceId
+   * @param {number} remainingMs
+   * @returns {void}
+   */
+  function scheduleSurfaceCoalesce(surfaceId, remainingMs) {
+    if (disposed) return;
+    if (useCoalesceTimer) {
+      if (coalesceTimerBySurface.has(surfaceId)) return;
+      const delay = Math.max(1, Math.ceil(remainingMs));
+      try {
+        const handle = setTimer(() => {
+          coalesceTimerBySurface.delete(surfaceId);
+          flush();
+        }, delay);
+        coalesceTimerBySurface.set(surfaceId, handle);
+      } catch {
+        // Timer failure falls back to next queue/raf.
+      }
+    } else if (!rafScheduled) {
+      rafScheduled = true;
+      try {
+        rafHandle = raf(flush);
+      } catch {
+        rafScheduled = false;
+        rafHandle = null;
+      }
+    }
+  }
+
   /** @returns {void} */
   function flush() {
     rafScheduled = false;
@@ -836,12 +928,30 @@ export function createInputPort(facade, options = {}) {
     if (disposed) return;
     for (const [surfaceId, list] of pendingBySurface) {
       if (list.length === 0) continue;
-      const items = list.splice(0, list.length);
       // MVUI32 lane I (R3-INPUT-1): dispatch-time epoch fence — items queued
       // before the latest gate closure are dropped, never sent nor replayed.
       const expectedEpoch = gateEpochBySurface.get(surfaceId) ?? 0;
-      const fresh = items.filter((it) => it.epoch === expectedEpoch);
-      if (fresh.length === 0) continue;
+      const fresh = list.filter((it) => it.epoch === expectedEpoch);
+      if (fresh.length === 0) {
+        list.length = 0;
+        clearSurfaceTimer(surfaceId);
+        continue;
+      }
+      const onlyType = fresh.every((it) => it.event.kind === 'type');
+      const lastTypeAt = lastTypeFlushBySurface.get(surfaceId);
+      const tNow = now();
+      if (onlyType && typeCoalesceMs > 0 && lastTypeAt !== undefined && tNow - lastTypeAt < typeCoalesceMs) {
+        if (fresh.length !== list.length) {
+          list.splice(0, list.length, ...fresh);
+        }
+        scheduleSurfaceCoalesce(surfaceId, typeCoalesceMs - (tNow - lastTypeAt));
+        continue;
+      }
+      list.length = 0;
+      clearSurfaceTimer(surfaceId);
+      if (fresh.some((it) => it.event.kind === 'type')) {
+        lastTypeFlushBySurface.set(surfaceId, tNow);
+      }
       flushSurface(surfaceId, fresh, expectedEpoch);
     }
   }
@@ -1026,8 +1136,16 @@ export function createInputPort(facade, options = {}) {
     } else {
       gateEpochBySurface.set(id, next);
     }
+    clearSurfaceTimer(id);
+    lastTypeFlushBySurface.delete(id);
     const dropped = pendingBySurface.get(id);
     const queuedRelease = dropped?.find((it) => it.event.kind === 'release_all');
+    if (dropped !== undefined) {
+      const droppedEvents = dropped.filter((it) => it.event.kind !== 'release_all').length;
+      if (droppedEvents > 0) {
+        droppedBySurface.set(id, (droppedBySurface.get(id) ?? 0) + droppedEvents);
+      }
+    }
     pendingBySurface.delete(id);
     wheelCarryBySurface.delete(id);
     const live = liveStreamBySurface.get(id);
@@ -1045,6 +1163,23 @@ export function createInputPort(facade, options = {}) {
   }
 
   /**
+   * Returns the count of pending input events dropped on gate closure for one
+   * surface, or the sum across all surfaces when surfaceId is omitted.
+   *
+   * @param {unknown} [surfaceId]
+   * @returns {number}
+   */
+  function droppedCount(surfaceId) {
+    if (surfaceId === undefined) {
+      let total = 0;
+      for (const n of droppedBySurface.values()) total += n;
+      return total;
+    }
+    if (!isValidSurfaceId(surfaceId)) return 0;
+    return droppedBySurface.get(/** @type {string} */ (surfaceId)) ?? 0;
+  }
+
+  /**
    * @param {(refusal: InputRefusal) => void} cb
    * @returns {() => void} Unsubscribe.
    */
@@ -1058,7 +1193,12 @@ export function createInputPort(facade, options = {}) {
   function dispose() {
     if (disposed) return;
     disposed = true;
+    for (const surfaceId of Array.from(coalesceTimerBySurface.keys())) {
+      clearSurfaceTimer(surfaceId);
+    }
     pendingBySurface.clear();
+    lastTypeFlushBySurface.clear();
+    droppedBySurface.clear();
     gateEpochBySurface.clear();
     wheelCarryBySurface.clear();
     liveStreamBySurface.clear();
@@ -1085,5 +1225,5 @@ export function createInputPort(facade, options = {}) {
     rafHandle = null;
   }
 
-  return Object.freeze({ available, send, queue, closeGate, onRefusal, dispose });
+  return Object.freeze({ available, send, queue, closeGate, droppedCount, onRefusal, dispose });
 }

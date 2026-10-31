@@ -744,6 +744,11 @@ function validateSurfaceInputBatch(raw) {
         return { ok: false, code: 'SCHEMA' };
       }
       events.push(Object.freeze({ kind: 'scroll', dx: ev.dx, dy: ev.dy, x: ev.x, y: ev.y }));
+    } else if (ev.kind === 'release_all') {
+      if (!captureKeys(ev, 'kind')) {
+        return { ok: false, code: 'SCHEMA' };
+      }
+      events.push(Object.freeze({ kind: 'release_all' }));
     } else {
       return { ok: false, code: 'SCHEMA' };
     }
