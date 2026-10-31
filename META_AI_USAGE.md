@@ -19,17 +19,17 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 1,134 | 55 | 1,079 |
-| Lanes finished OK | 1,134 | 55 | 1,079 |
-| Agent steps | 47,839 | 2,705 | 45,134 |
-| Lane-hours of agent work | 117.4 | 5.2 | 112.2 |
-| Fresh input tokens | 194,202,428 | 11,482,034 | 182,720,394 |
-| Cache-read input tokens | 3,758,182,230 | 226,255,212 | 3,531,927,018 |
+| Lanes launched | 1,148 | 55 | 1,093 |
+| Lanes finished OK | 1,148 | 55 | 1,093 |
+| Agent steps | 48,117 | 2,705 | 45,412 |
+| Lane-hours of agent work | 118.4 | 5.2 | 113.1 |
+| Fresh input tokens | 195,056,795 | 11,482,034 | 183,574,761 |
+| Cache-read input tokens | 3,763,839,198 | 226,255,212 | 3,537,583,986 |
 | Prompt cache hit % | 95.1 | 95.2 | 95.1 |
-| Output tokens | 39,326,401 | 2,135,708 | 37,190,693 |
-| Thinking tokens | 23,154,714 | 1,050,039 | 22,104,675 |
-| Cost (USD) | 34.8019 | 2.0279 | 32.774 |
-| Cost per lane (USD) | 0.0307 | 0.0369 | 0.0304 |
+| Output tokens | 39,558,623 | 2,135,708 | 37,422,915 |
+| Thinking tokens | 23,302,864 | 1,050,039 | 22,252,825 |
+| Cost (USD) | 34.9451 | 2.0279 | 32.9172 |
+| Cost per lane (USD) | 0.0304 | 0.0369 | 0.0301 |
 
 Rooms: 136. Peak concurrent lanes [MEASURED from lane start/end]: 37.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
@@ -38,7 +38,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 745 | 94.0 | 18.5544 |
+| build | 759 | 94.0 | 18.6976 |
 | context | 42 | 95.9 | 1.9093 |
 | context packs + test ideation (U-DEC-0139) | 13 | 91.1 | 0.2195 |
 | demo | 4 | 90.7 | 0.0557 |
@@ -86,7 +86,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 412 | 94.1 | 10.3762 | direct Muse job |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 422 | 94.1 | 10.4545 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -175,7 +175,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mvui30 | UI orchestrator | Oct 28 08:17 | fix | 1 | 97.3 | 0.0829 | AC-03: a lost capsule shows 'Connecting to surface' forever because App erases the backend lost signal; show the last frame frozen with a Lost badge so the operator sees what was lost. |
 | mvui31 | UI orchestrator | Oct 28 08:19 | perf | 1 | 97.6 | 0.0694 | AC-02 needs 4 capsules at >= 10 fps at live size; the renderer present path (per-frame RGBA conversion, ImageData allocation, wrong cost accounting, redundant re-hash) is the largest cost. |
 | mvui29b | UI orchestrator | Oct 28 08:36 | fix | 1 | 97.5 | 0.0868 | Finish AC-06 terminal sessions in the renderer: the first pass ran out of budget with type errors, no App/main wiring and a port not yet matching the host API the host owner fixed. |
-| direct-r3 | metaviewer-0 | Oct 28 08:40 | build | 34 | 93.8 | 0.7632 | round-3 tester report verification and context |
+| direct-r3 | metaviewer-0 | Oct 28 08:40 | build | 38 | 93.8 | 0.8281 | round-3 tester report verification and context |
 | mvui29sb | UI orchestrator | Oct 28 08:58 | fix | 1 | 95.8 | 0.0282 | Host owner ruling for AC-08: the host keeps a closed settings key set, so the renderer must drop unknown keys instead of round-tripping them. |
 | mvui29c | UI orchestrator | Oct 28 08:58 | fix | 1 | 97.5 | 0.0624 | Terminal sessions wiring (AC-06) broke 58 committed App tests; restore the App mounting contract and finish the terminal tests so the drop can ship. |
 | mvui29sc | UI orchestrator | Oct 28 09:12 | fix | 1 | 97.3 | 0.0484 | Judge rejected the settings drop: a quick revert inside the debounce window is lost, a replaced host can receive a stale save, and boot can paint a scheme the store then replaces; fix before AC-08 can ship. |
@@ -1242,18 +1242,6 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | 4_storyboard | eve3_r4_storyboard | Oct 31 19:13 | yes | 45 | 95.4 | 0.019489 |
 | direct-direct | 4_terminal | eve2_r4_terminal | Oct 31 19:13 | yes | 43 | 94.4 | 0.03039 |
 | direct-direct | 4_terminal | eve3_r4_terminal | Oct 31 19:13 | yes | 43 | 94.4 | 0.03039 |
-| direct-direct | 7_changelog | eve2_r7_changelog | Oct 31 19:13 | yes | 36 | 93.3 | 0.019892 |
-| direct-direct | 7_changelog | eve3_r7_changelog | Oct 31 19:13 | yes | 36 | 93.3 | 0.019892 |
-| direct-direct | 7_contracts | eve2_r7_contracts | Oct 31 19:13 | yes | 82 | 96.5 | 0.040276 |
-| direct-direct | 7_contracts | eve3_r7_contracts | Oct 31 19:13 | yes | 82 | 96.5 | 0.040276 |
-| direct-direct | 7_docs | eve2_r7_docs | Oct 31 19:13 | yes | 47 | 95.7 | 0.02304 |
-| direct-direct | 7_docs | eve3_r7_docs | Oct 31 19:13 | yes | 47 | 95.7 | 0.02304 |
-| direct-direct | 7_errors | eve2_r7_errors | Oct 31 19:13 | yes | 37 | 93.4 | 0.024062 |
-| direct-direct | 7_errors | eve3_r7_errors | Oct 31 19:13 | yes | 37 | 93.4 | 0.024062 |
-| direct-direct | 7_launcher | eve2_r7_launcher | Oct 31 19:13 | yes | 47 | 95.2 | 0.02038 |
-| direct-direct | 7_launcher | eve3_r7_launcher | Oct 31 19:13 | yes | 47 | 95.2 | 0.02038 |
-| direct-direct | 7_package | eve2_r7_package | Oct 31 19:13 | yes | 64 | 96.1 | 0.032755 |
-| direct-direct | 7_package | eve3_r7_package | Oct 31 19:13 | yes | 64 | 96.1 | 0.032755 |
 | direct-direct | 4 | eve4_t4 | Oct 31 19:22 | yes | 28 | 91.9 | 0.018839 |
 | direct-direct | 3_IDT-FIX-R4_a | eve5_r3_IDT-FIX-R4_a | Oct 31 19:25 | yes | 38 | 94.4 | 0.021614 |
 | direct-direct | 1_FLAKE-PIN-DEMOSTOP | eve5_r1_FLAKE-PIN-DEMOSTOP | Oct 31 19:25 | yes | 22 | 89.9 | 0.013538 |
@@ -1327,6 +1315,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | r4_storyboard | eve6b_r4_storyboard | Oct 31 19:41 | yes | 60 | 95.5 | 0.032014 |
 | direct-direct | r4_terminal | eve6b_r4_terminal | Oct 31 19:41 | yes | 34 | 93.0 | 0.022676 |
 | direct-direct | 2_b | r1h_P12_b | Oct 31 19:44 | yes | 35 | 93.4 | 0.021023 |
+| direct-direct | 2_a | r1h_P12_a | Oct 31 19:44 | yes | 56 | 95.8 | 0.026462 |
 | direct-direct | 2_d5_4 | eve7_r2_d5_4 | Oct 31 19:54 | yes | 27 | 90.5 | 0.020117 |
 | direct-direct | 2_d5_5 | eve7_r2_d5_5 | Oct 31 19:54 | yes | 30 | 93.9 | 0.014732 |
 | direct-direct | 2_d5_6 | eve7_r2_d5_6 | Oct 31 19:54 | yes | 28 | 91.1 | 0.014488 |
@@ -1340,6 +1329,31 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | 3 | eve7_t3 | Oct 31 19:54 | yes | 25 | 92.0 | 0.025137 |
 | direct-direct | T-FIX-R4_a | r1i_IDT-FIX-R4_a | Oct 31 19:54 | yes | 34 | 93.3 | 0.018803 |
 | direct-direct | T-FIX-R4_b | r1i_IDT-FIX-R4_b | Oct 31 19:54 | yes | 24 | 92.8 | 0.018404 |
+| direct-r3 | f_HANDOFF-STYLE | r3f_HANDOFF-STYLE | Oct 31 20:07 | yes | 32 | 94.2 | 0.017295 |
+| direct-r3 | f_IDT-FIX-R4 | r3f_IDT-FIX-R4 | Oct 31 20:07 | yes | 23 | 92.1 | 0.018903 |
+| direct-r3 | f_P12-R1a | r3f_P12-R1a | Oct 31 20:07 | yes | 23 | 90.9 | 0.015955 |
+| direct-r3 | f_REC-STATE | r3f_REC-STATE | Oct 31 20:07 | yes | 25 | 93.3 | 0.012734 |
+| direct-direct | 7_changelog | eve2_r7_changelog | Oct 31 20:20 | yes | 40 | 95.2 | 0.0176 |
+| direct-direct | 7_changelog | eve3_r7_changelog | Oct 31 20:20 | yes | 40 | 95.2 | 0.0176 |
+| direct-direct | 7_changelog | eve8_r7_changelog | Oct 31 20:20 | yes | 40 | 95.2 | 0.0176 |
+| direct-direct | 7_contracts | eve2_r7_contracts | Oct 31 20:20 | yes | 40 | 94.7 | 0.019124 |
+| direct-direct | 7_contracts | eve3_r7_contracts | Oct 31 20:20 | yes | 40 | 94.7 | 0.019124 |
+| direct-direct | 7_contracts | eve8_r7_contracts | Oct 31 20:20 | yes | 40 | 94.7 | 0.019124 |
+| direct-direct | 7_docs | eve2_r7_docs | Oct 31 20:20 | yes | 49 | 95.3 | 0.024219 |
+| direct-direct | 7_docs | eve3_r7_docs | Oct 31 20:20 | yes | 49 | 95.3 | 0.024219 |
+| direct-direct | 7_docs | eve8_r7_docs | Oct 31 20:20 | yes | 49 | 95.3 | 0.024219 |
+| direct-direct | 7_errors | eve2_r7_errors | Oct 31 20:20 | yes | 25 | 92.7 | 0.013363 |
+| direct-direct | 7_errors | eve3_r7_errors | Oct 31 20:20 | yes | 25 | 92.7 | 0.013363 |
+| direct-direct | 7_errors | eve8_r7_errors | Oct 31 20:20 | yes | 25 | 92.7 | 0.013363 |
+| direct-direct | 7_launcher | eve2_r7_launcher | Oct 31 20:20 | yes | 38 | 94.6 | 0.021042 |
+| direct-direct | 7_launcher | eve3_r7_launcher | Oct 31 20:20 | yes | 38 | 94.6 | 0.021042 |
+| direct-direct | 7_launcher | eve8_r7_launcher | Oct 31 20:20 | yes | 38 | 94.6 | 0.021042 |
+| direct-direct | 7_package | eve2_r7_package | Oct 31 20:20 | yes | 26 | 92.9 | 0.013183 |
+| direct-direct | 7_package | eve3_r7_package | Oct 31 20:20 | yes | 26 | 92.9 | 0.013183 |
+| direct-direct | 7_package | eve8_r7_package | Oct 31 20:20 | yes | 26 | 92.9 | 0.013183 |
+| direct-direct | J1-CPUSET | r1os_WJ1-CPUSET | Oct 31 20:26 | yes | 17 | 90.0 | 0.010188 |
+| direct-direct | NPUT-U4-SRF | r1os_INPUT-U4-SRF | Oct 31 20:26 | yes | 38 | 95.1 | 0.016238 |
+| direct-direct | 8_b | eve9_r8_b | Oct 31 20:27 | yes | 36 | 92.6 | 0.020637 |
 
 ## Method
 
