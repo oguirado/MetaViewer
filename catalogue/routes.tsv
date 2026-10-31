@@ -128,6 +128,7 @@ protocol.json	catalogue/protocol.json
 changes-README.md	changes/README.md
 changel-6ee9fc48ce48	changes/unreleased/changelog-fragments.md
 e4-create.md	changes/unreleased/e4-create.md
+u1-pty-pkg.md	changes/unreleased/u1-pty-pkg.md
 actionp-0ef0ddb499b4	contracts/examples/action_proposal.invalid.schema.json
 actionp-215c1416bbcf	contracts/examples/action_proposal.valid.json
 actionr-3778f6831d07	contracts/examples/action_receipt.invalid.schema.json
@@ -1698,6 +1699,7 @@ netcopy-panel.test.js	ui/test/netcopy-panel.test.js
 operator-stubs.mjs	ui/test/operator-stubs.mjs
 originc-568d530772a3	ui/test/origin-contract.test.js
 packageOutput.test.js	ui/test/packageOutput.test.js
+packagePty.test.js	ui/test/packagePty.test.js
 pkg-fullstack.test.js	ui/test/pkg-fullstack.test.js
 pkgfixm-e990d26c7b4f	ui/test/pkgfix-main-quit.test.js
 pkgfixp-8cb06ca34469	ui/test/pkgfix-packaged-entry.test.js
