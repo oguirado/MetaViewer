@@ -96,11 +96,11 @@ func validateProfileRoots(profiles map[string]capsule.Profile) error {
 	for _, p := range profiles {
 		root := filepath.Clean(p.RAMRoot)
 		canonical, err := filepath.EvalSymlinks(root)
-		if err != nil || canonical != root {
+		if err != nil || canonical != root || p.RAMRoot != root || !filepath.IsAbs(root) {
 			return configuration("canonical existing profile RAM root required")
 		}
 		for _, other := range roots {
-			if root == other || strings.HasPrefix(root, other+string(filepath.Separator)) || strings.HasPrefix(other, root+string(filepath.Separator)) {
+			if root != other && (strings.HasPrefix(root, other+string(filepath.Separator)) || strings.HasPrefix(other, root+string(filepath.Separator))) {
 				return configuration("disjoint profile RAM roots required")
 			}
 		}

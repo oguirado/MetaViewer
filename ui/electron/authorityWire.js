@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { MainError, observeSender, PRIVILEGED_ORIGIN, buildFirstSurfaceCreateRequest } from './main.js';
+import { pickCreateRequest } from './profilePicker.js';
 import { createFrameReader } from './frameReader.js';
 import { createFramePort } from './framePort.js';
 import { createTerminalFacade, validateProviderArgv } from './ptyBroker.js';
@@ -682,7 +683,7 @@ export function nestedIdentity(argv,env) {
   return {depth:flags.length ? Number(flags[0].slice(-1)) : null,self};
 }
 /** @param {any} options */
-export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv=process.argv.slice(1),terminal=null,profiles=new Map(),frames=null,frameDiag=null,now:clock=Date.now}) {
+export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv=process.argv.slice(1),terminal=null,profiles=new Map(),capsuleStates=new Map(),listIdentities=null,frames=null,frameDiag=null,now:clock=Date.now}) {
   if (terminal?.request && terminal?.subscribe) terminal=createSideTerminalAdapter(terminal);
   const store = createSettingsStore(env);
   const destination = recordingDestination(env);
@@ -695,6 +696,16 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
   }
   if (!ownedProfiles.has('shell')) ownedProfiles.set('shell', { args: [] });
   let subscribed = false, enabled = false, disposed = false;
+  let creatingCapsule = false;
+  // [TARGET, unit decision] Main shares its boot reservation; frame states reconcile it.
+  const rememberCapsule = (/** @type {any} */ state) => {
+    if (!state || typeof state.surface_id !== 'string') return;
+    for (const [id, old] of capsuleStates) {
+      if (old.profile_id === state.profile_id && id.startsWith('pending:')) capsuleStates.delete(id);
+    }
+    if (state.state === 'destroyed' || state.state === 'lost') capsuleStates.delete(state.surface_id);
+    else capsuleStates.set(state.surface_id, state);
+  };
   /** @type {number} */
   let requestedWallFps = DEFAULT_SETTINGS.wallFps;
   /** @type {number} */
@@ -743,11 +754,29 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     // Zero renderer arguments: profile and geometry remain host-owned.
     createSurface: async () => {
       if (identity.depth !== null) return {ok:false,code:'DISPLAY_ONLY'};
-      const request = buildFirstSurfaceCreateRequest(env);
-      if (request.params.kind !== 'browser') return {ok:false,code:'SURFACE_CREATE_KIND_UNAVAILABLE'};
+      if (creatingCapsule) return {ok:false,code:'SURFACE_CREATE_BUSY'};
+      creatingCapsule = true;
       try {
+        /** @type {any} */ let request;
+        /** @type {string | null} */ let key = null;
+        if (typeof listIdentities === 'function') {
+          const pick = await pickCreateRequest({env, surfaces:capsuleStates, listIdentities});
+          // Preload currently admits only {ok,code}; renderer copy is a conductor hook.
+          if (!pick.ok) return {ok:false,code:pick.code};
+          request = pick.request;
+          key = `pending:${pick.profile_id}`;
+          // Keep uncertain creates reserved until a native state reconciles them.
+          capsuleStates.set(key, {profile_id:pick.profile_id,state:'creating'});
+        } else {
+          request = buildFirstSurfaceCreateRequest(env);
+          if (request.params.kind !== 'browser') return {ok:false,code:'SURFACE_CREATE_KIND_UNAVAILABLE'};
+        }
         const reply = await core.request(request);
-        if (reply?.schema === 'surface_event/v0.2' && reply.event === 'created') return {ok:true};
+        if (reply?.schema === 'surface_event/v0.2' && reply.event === 'created') {
+          rememberCapsule(reply.data?.surface);
+          return {ok:true};
+        }
+        if (key !== null && reply?.schema === 'action_verdict/v0.2' && reply.decision === 'refused') capsuleStates.delete(key);
         const raw = reply?.data?.code ?? reply?.reason_code ?? 'SURFACE_CREATE_FAILED';
         if (typeof raw === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(raw)) return {ok:false,code:raw};
         // [TARGET, unit decision] Legacy adapters report lowercase code `adapter` with the
@@ -759,7 +788,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
         if (typeof raw === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(raw)) return {ok:false,code:raw};
         const detail = /** @type {any} */ (error)?.message;
         return {ok:false,code:(typeof detail === 'string' ? ADAPTER_DETAIL_CODES.get(detail) : undefined) ?? 'SURFACE_CREATE_FAILED'};
-      }
+      } finally { creatingCapsule = false; }
     },
     propose: async (/** @type {string} */json) => {
       validateProposalBody(jsonObject(json)); return verdictReply(await core.request({op:'propose',json}));
@@ -1049,6 +1078,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     if (frames) {
       stopFrames = frames.subscribe(async (/** @type {any} */entry) => {
         if (disposed) return;
+        rememberCapsule(entry?.state);
         const sid = entry?.frameRef?.surface_id;
         const isTerminal = ['destroyed','lost'].includes(entry?.state?.state);
         if (!isTerminal && typeof sid === 'string' && sid.length > 0) {

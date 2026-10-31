@@ -327,6 +327,7 @@ func NewManager(cfg Config, r cli.Runner, clock cli.Clock) (*Manager, error) {
 	}
 	cfg.NetModes = append([]string(nil), cfg.NetModes...)
 	copyProfiles := make(map[string]Profile, len(cfg.Profiles))
+	seenDisplays := make(map[string]bool)
 	for id, p := range cfg.Profiles {
 		if !ValidTextInput(p.TextInput) {
 			return nil, fault("configuration", "invalid text input mode")
@@ -357,6 +358,10 @@ func NewManager(cfg Config, r cli.Runner, clock cli.Clock) (*Manager, error) {
 		default:
 			return nil, fault("configuration", "unsupported public kind")
 		}
+		if seenDisplays[p.Display] {
+			return nil, fault("configuration", "distinct profile displays required")
+		}
+		seenDisplays[p.Display] = true
 		copyProfiles[id] = p
 	}
 	cfg.Profiles = copyProfiles
@@ -732,7 +737,7 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 		valid = valid && runID.MatchString(cleanup.RunID)
 		valid = valid && m.pendingCleanup(q.ProfileID, id, p.NativeKind, cleanup.Slot, cleanup.Container)
 		for _, old := range m.bindings {
-			if old.Container == cleanup.Container && old.Surface.State != "destroyed" {
+			if (old.Container == cleanup.Container || old.RunID == cleanup.RunID) && old.Surface.State != "destroyed" {
 				valid = false
 			}
 		}
@@ -802,7 +807,15 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 	if err := refuseProtectedContainer([]string{"--container", b.Container}); err != nil {
 		return nil, err
 	}
+	// [TARGET, unit decision] Shared producer roots require unique live run IDs
+	// and disjoint frame allocations, including native-provided Holdings paths.
 	for _, old := range m.bindings {
+		if old.Surface.State != "destroyed" && (old.RunID == b.RunID || old.FramesRoot == b.FramesRoot || under(old.FramesRoot, b.FramesRoot) || under(b.FramesRoot, old.FramesRoot)) {
+			// A colliding allocation grants no authority to clean up native files.
+			cleanup.Container = ""
+			e = fault("binding", "native run or frame allocation already observed")
+			return nil, e
+		}
 		if old.Container == b.Container && old.Surface.State != "destroyed" {
 			return nil, fault("binding", "native container already observed")
 		}

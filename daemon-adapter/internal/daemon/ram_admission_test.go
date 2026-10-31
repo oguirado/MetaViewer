@@ -275,8 +275,8 @@ func TestMultiCapsuleRejectSharedRAM(t *testing.T) {
 	f := newPair(t)
 	a := f.profiles["pair-a"]
 	f.profiles["pair-b"] = a
-	if validateProfileRoots(f.profiles) == nil {
-		t.Fatal("shared roots admitted")
+	if err := validateProfileRoots(f.profiles); err != nil {
+		t.Fatalf("shared canonical roots refused: %v", err)
 	}
 	a.RAMRoot = filepath.Join(a.RAMRoot, "child")
 	if err := os.Mkdir(a.RAMRoot, 0700); err != nil {
@@ -285,6 +285,16 @@ func TestMultiCapsuleRejectSharedRAM(t *testing.T) {
 	f.profiles["pair-b"] = a
 	if validateProfileRoots(f.profiles) == nil {
 		t.Fatal("nested roots admitted")
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(f.profiles["pair-a"].RAMRoot, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{link, f.profiles["pair-a"].RAMRoot + "/", filepath.Join(f.profiles["pair-a"].RAMRoot, "missing")} {
+		f.profiles["pair-b"] = capsule.Profile{RAMRoot: bad}
+		if validateProfileRoots(f.profiles) == nil {
+			t.Fatalf("non-canonical root admitted: %s", bad)
+		}
 	}
 }
 

@@ -70,7 +70,7 @@ func (r *damRunner) Run(ctx context.Context, argv []string, _ []byte) ([]byte, e
 		r.mu.Lock()
 		r.active[id] = true
 		r.mu.Unlock()
-		return []byte(fmt.Sprintf(`{"container":"%s","run_id":"run","windows":[{"id":"w1","w":2,"h":1}]}`, id)), nil
+		return []byte(fmt.Sprintf(`{"container":"%s","run_id":"run-%x","windows":[{"id":"w1","w":2,"h":1}]}`, id, random)), nil
 	case "stop":
 		container := ""
 		for i, v := range argv {

@@ -2166,6 +2166,8 @@ export async function bootProductionMain(handles) {
   let window = null;
   /** @type {Array<string>} */
   const registered = [];
+  /** @type {Map<string, any>} */
+  const capsuleStates = new Map();
   let wireBridge = /** @type {{dispose:()=>Promise<void>} | null} */(null);
   let operatorBridge = /** @type {{dispose:()=>Promise<void>} | null} */(null);
   let captureBridge = /** @type {{dispose:()=>Promise<void>} | null} */(null);
@@ -2423,6 +2425,8 @@ export async function bootProductionMain(handles) {
         adapterStatus.availability === 'live' &&
         adapterStatus.handshakeSeen === true
       ) {
+        const bootProfile = buildFirstSurfaceCreateRequest(envRec).params.profile_id;
+        capsuleStates.set(`pending:${bootProfile}`, {profile_id:bootProfile,state:'creating'});
         void requestFirstSurfaceCreate(core, envRec);
       }
     }
@@ -2517,7 +2521,9 @@ export async function bootProductionMain(handles) {
     });
     if (!retail.nested) captureBridge = (await import('./captureBridge.js')).installCaptureBridge({ipcMain, contents:contentsUnknown, core, nested:retail.nested, env:typed.env});
     if (!retail.nested) wireBridge = (await import('./authorityWire.js')).installAuthorityWire({ ...(typed.wire || {}), ipcMain,
-      contents: contentsUnknown, core, env: typed.env, argv: typed.argv,
+      contents: contentsUnknown, core, env: typed.env, argv: typed.argv, capsuleStates,
+      listIdentities: () => (import('./operatorBridge.js')).then(({identityRunner}) =>
+        identityRunner({tool:resolveIdentityTool({ packaged: packagedLaunch, resourcesPath: process.resourcesPath, rendererRoot: paths.rendererRoot }),env:typed.env})('list', {})),
       ...(frameDiagBridge?.enabled ? { frameDiag: frameDiagBridge } : {}) });
     if (!retail.nested && envRec.MV_E2E_LIVE !== undefined && envRec.MV_E2E_LIVE !== '') {
       qaBridge = (await import('./qaAnchors.js')).installQaAnchors({

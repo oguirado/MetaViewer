@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Admit shared canonical capsule RAM roots with distinct displays, refuse live run/frame allocation collisions, and wire identity-aware capsule creation.
+- Add the pure multi-capsule profile picker (first free browser profile with an existing identity, 4-capsule ceiling, typed refusals and renderer copy) and the More than one capsule guide.
 - Ship the identity and RAM-admission reclaim tools under `resources/operator/tools` and resolve the packaged identity tool there.
 - Publish an owner-only attach pointer (`metaviewer.attach/v1`, `attach/current.env`) so an external AI reaches the live session's core and capsule identity; retract it on every stop path.
 - Refuse a packaged boot with an absent live RAM root (`RAM_ROOT_ABSENT`) or a second instance (`SINGLE_INSTANCE`, existing window raised) before any child starts.
