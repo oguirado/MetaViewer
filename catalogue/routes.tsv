@@ -815,6 +815,7 @@ receipt-e7a340c634f2	daemon-adapter/internal/capsule/receipt_evidence_test.go
 regressions_test.go	daemon-adapter/internal/capsule/regressions_test.go
 ringmode.go	daemon-adapter/internal/capsule/ringmode.go
 ringmode_test.go	daemon-adapter/internal/capsule/ringmode_test.go
+shared_roots_test.go	daemon-adapter/internal/capsule/shared_roots_test.go
 statedir.go	daemon-adapter/internal/capsule/statedir.go
 statedir_test.go	daemon-adapter/internal/capsule/statedir_test.go
 stress_test.go	daemon-adapter/internal/capsule/stress_test.go
@@ -854,6 +855,7 @@ revision_test.go	daemon-adapter/internal/daemon/revision_test.go
 run.go	daemon-adapter/internal/daemon/run.go
 run_test.go	daemon-adapter/internal/daemon/run_test.go
 runtime_test.go	daemon-adapter/internal/daemon/runtime_test.go
+sharedr-febf55a9219e	daemon-adapter/internal/daemon/shared_roots_test.go
 stream.go	daemon-adapter/internal/daemon/stream.go
 streamk-bc181826c3fe	daemon-adapter/internal/daemon/stream_keepalive_test.go
 subscriptions.go	daemon-adapter/internal/daemon/subscriptions.go
@@ -881,6 +883,7 @@ release_test.go	daemon-adapter/internal/frames/release_test.go
 frames-ringmode.go	daemon-adapter/internal/frames/ringmode.go
 ringsource.go	daemon-adapter/internal/frames/ringsource.go
 ringsource_test.go	daemon-adapter/internal/frames/ringsource_test.go
+sharedr-ee4beb3256da	daemon-adapter/internal/frames/shared_roots_test.go
 subscri-9958bbe84c90	daemon-adapter/internal/frames/subscription_lock_test.go
 subscri-389c0b86d2cf	daemon-adapter/internal/frames/subscriptions.go
 subscri-c7aa812bfc6a	daemon-adapter/internal/frames/subscriptions_cadence_test.go
@@ -938,6 +941,7 @@ DEMO_RUNBOOK.md	docs/DEMO_RUNBOOK.md
 HOLDING-41388780e954	docs/HOLDINGS_LESSONS_UI_ORCHESTRATOR.md
 INSTALL.md	docs/INSTALL.md
 JUDGES.md	docs/JUDGES.md
+MULTI_CAPSULE.md	docs/MULTI_CAPSULE.md
 MW_RUN_FIRST_RUN.md	docs/MW_RUN_FIRST_RUN.md
 PREEXISTING.md	docs/PREEXISTING.md
 RESEARCH_LOG.md	docs/RESEARCH_LOG.md
@@ -1298,6 +1302,7 @@ main.js	ui/electron/main.js
 nesting.js	ui/electron/nesting.js
 operatorBridge.js	ui/electron/operatorBridge.js
 preload.js	ui/electron/preload.js
+profilePicker.js	ui/electron/profilePicker.js
 ptyBroker.js	ui/electron/ptyBroker.js
 ptySession.js	ui/electron/ptySession.js
 ptyUtility.js	ui/electron/ptyUtility.js
@@ -1429,6 +1434,7 @@ inputu3-9651b47c7e57	ui/test/inputu3-pointer-echo.test.js
 intents.test.js	ui/test/intents.test.js
 layout-load.test.js	ui/test/layout-load.test.js
 mainsta-a4716a4c64fe	ui/test/main-startup-order.test.js
+multica-199756b14b9b	ui/test/multicap-profile-picker.test.js
 multisl-575193d23c36	ui/test/multislotfix-sweep.test.js
 mutFram-75dd51c221d3	ui/test/mutFrameRefFix.test.mjs
 mutSett-c59c7ff27d3d	ui/test/mutSettingsHarden.test.mjs
