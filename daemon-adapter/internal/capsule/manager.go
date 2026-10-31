@@ -130,6 +130,45 @@ const NativeTextMaxRunes = 2000
 // AdapterTextMaxRunes caps each proposal [TARGET, unit decision].
 const AdapterTextMaxRunes = 16384
 
+// [TARGET, unit decision] Human text and wheel lowering (input-control U1).
+// A human text batch goes through srf --paste only when it holds a rune outside
+// 0x20-0x7E, because xdotool type drops non-ASCII runes and a paste costs about
+// 1.7 s per call [MEASURED, OpenSuperficies io.go paste timers]; plain ASCII keeps
+// --type-stdin. Agent text keeps the profile rule. A human wheel delta (px) lowers
+// to one srf scroll call on the dominant axis: WheelStepPx per step
+// [CITED: noVNC core/rfb.js WHEEL_STEP], at least one step for a nonzero delta,
+// at most ScrollMaxSteps (the srf --count ceiling). The action carries no pointer
+// position in the closed core schema, so an absent x,y scrolls at the surface centre.
+const (
+	WheelStepPx    = 50
+	ScrollMaxSteps = 20
+)
+
+// needsPaste reports whether text holds a rune outside printable ASCII 0x20-0x7E.
+func needsPaste(text string) bool {
+	for _, r := range text {
+		if r < 0x20 || r > 0x7E {
+			return true
+		}
+	}
+	return false
+}
+
+// scrollSteps converts a pixel delta to srf wheel steps (see WheelStepPx).
+func scrollSteps(delta int64) int {
+	if delta < 0 {
+		delta = -delta
+	}
+	n := delta / WheelStepPx
+	if n < 1 {
+		n = 1
+	}
+	if n > ScrollMaxSteps {
+		n = ScrollMaxSteps
+	}
+	return int(n)
+}
+
 type NativeInputReceipt struct {
 	SurfaceID     string  `json:"surface_id,omitempty"`
 	Kind          string  `json:"kind,omitempty"`
@@ -1015,6 +1054,8 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 			Button string   `json:"button,omitempty"`
 			Keys   []string `json:"keys,omitempty"`
 			Text   string   `json:"text,omitempty"`
+			DX     *int64   `json:"dx,omitempty"`
+			DY     *int64   `json:"dy,omitempty"`
 		} `json:"action"`
 	}
 	if e := cli.ParseLine(r.Params, m.cfg.MaxOutputBytes, &q); e != nil {
@@ -1092,10 +1133,44 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 		}
 		nativeAction = "text"
 		args = append(args, "--type-stdin")
-		if origin == "agent" && m.cfg.Profiles[b.Surface.ProfileID].TextInput == "paste" {
+		if (origin == "agent" && m.cfg.Profiles[b.Surface.ProfileID].TextInput == "paste") || (origin == "human" && needsPaste(q.Action.Text)) {
 			args = append(args, "--paste")
 		}
 		stdin = []byte(q.Action.Text)
+	case "scroll":
+		if origin != "human" || b.NativeKind == "holdings" {
+			return nil, cli.Unsupported("input action")
+		}
+		const i32 = 1 << 31
+		if q.Action.DX == nil || q.Action.DY == nil || len(q.Action.Keys) != 0 || q.Action.Text != "" || q.Action.Button != "" || (q.Action.X == nil) != (q.Action.Y == nil) ||
+			*q.Action.DX < -i32 || *q.Action.DX >= i32 || *q.Action.DY < -i32 || *q.Action.DY >= i32 || (*q.Action.DX == 0 && *q.Action.DY == 0) {
+			return nil, fault("input", "invalid scroll")
+		}
+		px, py := b.Surface.Geometry.W/2, b.Surface.Geometry.H/2
+		if q.Action.X != nil {
+			px, py = *q.Action.X, *q.Action.Y
+			if px < 0 || py < 0 || px >= b.Surface.Geometry.W || py >= b.Surface.Geometry.H {
+				return nil, fault("input", "invalid scroll")
+			}
+		}
+		dx, dy := *q.Action.DX, *q.Action.DY
+		absDX, absDY := dx, dy
+		if absDX < 0 {
+			absDX = -absDX
+		}
+		if absDY < 0 {
+			absDY = -absDY
+		}
+		dir, delta := "down", dy
+		switch {
+		case absDX > absDY && dx < 0:
+			dir, delta = "left", dx
+		case absDX > absDY:
+			dir, delta = "right", dx
+		case dy < 0:
+			dir = "up"
+		}
+		args = append(args, "--scroll", strconv.Itoa(px)+","+strconv.Itoa(py), "--dir", dir, "--count", strconv.Itoa(scrollSteps(delta)))
 	default:
 		return nil, cli.Unsupported("input action")
 	}
@@ -1249,10 +1324,17 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 		return nil, fault("surface", "surface lost during input verification")
 	}
 	if evidence != nil {
+		// [TARGET, unit decision] contracts/v0.2 action_receipt native_evidence.kind
+		// admits only click|key|text (frozen, not editable here); a verified scroll
+		// receipt omits the optional kind instead of forging another value.
+		evidenceKind := receipt.Kind
+		if evidenceKind == "scroll" {
+			evidenceKind = ""
+		}
 		*evidence = InputEvidence{
 			TextSequence: sequence,
 			SurfaceID:    q.SurfaceID, NativeSurfaceID: receipt.SurfaceID,
-			Kind: receipt.Kind, InputMonoNS: *receipt.InputMonoNS,
+			Kind: evidenceKind, InputMonoNS: *receipt.InputMonoNS,
 			InputTSNS:     *receipt.InputMonoNS - m.cfg.OriginNS,
 			FocusVerified: receipt.FocusVerified, Result: receipt.Result,
 			BeforeGroundTruth: beforeGroundTruth,

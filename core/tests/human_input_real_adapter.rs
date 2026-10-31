@@ -163,7 +163,7 @@ func main() {
 		fmt.Printf(`{"path":%q,"seq":%d,"sha256_rgb24":%q,"width":2,"height":1,"capture_mono_ns":%d,"generation":"srf-id-demo","window":{"id":"w1","x":0,"y":0,"w":2,"h":1,"title":"fake","url":""}}`+"\n", pngPath, now, sha, now)
 	case "input":
 		kind := "key"
-		if hasFlag("--click") { kind = "click" } else if hasFlag("--type-stdin") { kind = "text" }
+		if hasFlag("--click") { kind = "click" } else if hasFlag("--scroll") { kind = "scroll" } else if hasFlag("--type-stdin") { kind = "text" }
 		fmt.Printf(`{"surface_id":"w1","kind":%q,"input_mono_ns":%d,"focus_verified":true,"result":"ok"}`+"\n", kind, monoNS())
 	case "stop":
 		fmt.Println(`{"stopped":"srf-id-demo","removed_verified":true}`)
@@ -593,6 +593,16 @@ fn real_core_and_real_daemon_adapter_accept_human_input_and_settle_outcomes() {
             ),
             ("hi-real-key", json!({ "type": "key", "keys": ["Return"] })),
             ("hi-real-type", json!({ "type": "type", "text": "a" })),
+            // Input-control U1: non-ASCII human text goes through srf --paste.
+            (
+                "hi-real-type-paste",
+                json!({ "type": "type", "text": "ñé漢" }),
+            ),
+            // Input-control U1: the human wheel is admitted and lowered to srf --scroll.
+            (
+                "hi-real-scroll",
+                json!({ "type": "scroll", "dx": 0, "dy": -120 }),
+            ),
         ] {
             let started = std::time::Instant::now();
             ui.send(json!({
@@ -655,26 +665,88 @@ fn real_core_and_real_daemon_adapter_accept_human_input_and_settle_outcomes() {
             "human-origin input must not trigger post-input frame capture, got {frame_calls:?}"
         );
 
-        // 4. Negative control: unsupported scroll action in adapter returns refused POLICY verdict to UI.
+        // 4. Human scroll and non-ASCII text reach the CLI with the documented argv; ASCII text does not paste.
+        let input_calls: Vec<Value> = fs::read_to_string(paths.shm_root.join("srf-calls.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str::<Value>(l).unwrap())
+            .filter(|v| v["op"] == "input")
+            .collect();
+        let has_arg = |v: &Value, flag: &str| {
+            v["argv"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|a| a.as_str() == Some(flag))
+        };
+        let scroll_call = input_calls
+            .iter()
+            .find(|v| has_arg(v, "--scroll"))
+            .expect("human scroll must reach the CLI");
+        let scroll_argv: Vec<&str> = scroll_call["argv"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a.as_str().unwrap())
+            .collect();
+        // The adapter appends --state-dir <dir> after the verb flags.
+        assert_eq!(scroll_argv.len(), 13);
+        assert_eq!(scroll_argv[11], "--state-dir");
+        assert_eq!(
+            scroll_argv[..11],
+            [
+                "input", "--container", "srf-id-demo", "--window", "w1", "--scroll", "1,0",
+                "--dir", "up", "--count", "2"
+            ]
+        );
+        let paste_call = input_calls
+            .iter()
+            .find(|v| has_arg(v, "--paste"))
+            .expect("non-ASCII human text must use --paste");
+        assert_eq!(paste_call["stdin"], "ñé漢");
+        assert!(!paste_call["argv"].to_string().contains("ñé漢"));
+        let ascii_call = input_calls
+            .iter()
+            .find(|v| v["stdin"] == "a")
+            .expect("ASCII human text must reach the CLI");
+        assert!(
+            !has_arg(ascii_call, "--paste"),
+            "ASCII human text must keep the type path, got {ascii_call}"
+        );
+        assert_eq!(
+            input_calls.iter().filter(|v| has_arg(v, "--paste")).count(),
+            1,
+            "only the non-ASCII batch may paste"
+        );
+
+        // 4b. Negative control: a zero-delta scroll is refused and never reaches the CLI.
+        let scrolls_before = input_calls.iter().filter(|v| has_arg(v, "--scroll")).count();
         ui.send(json!({
             "schema": "surface_request/v0.2",
             "op": "input",
             "params": {
                 "surface_id": surface_id,
-                "proposal_id": "hi-real-scroll",
+                "proposal_id": "hi-real-scroll-zero",
                 "origin": "human",
-                "action": { "type": "scroll", "dx": 0, "dy": -120 }
+                "action": { "type": "scroll", "dx": 0, "dy": 0 }
             }
         }))
         .await;
         loop {
             let body = ui.receive_json().await;
-            if body["schema"] == "action_verdict/v0.2" && body["proposal_id"] == "hi-real-scroll" {
+            if body["schema"] == "action_verdict/v0.2" && body["proposal_id"] == "hi-real-scroll-zero" {
                 assert_eq!(body["decision"], "refused");
                 assert_eq!(body["reason_code"], "POLICY");
                 break;
             }
         }
+        let scrolls_after = fs::read_to_string(paths.shm_root.join("srf-calls.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str::<Value>(l).unwrap())
+            .filter(|v| v["op"] == "input" && has_arg(v, "--scroll"))
+            .count();
+        assert_eq!(scrolls_before, scrolls_after);
 
         drop(agent);
         drop(ui);
