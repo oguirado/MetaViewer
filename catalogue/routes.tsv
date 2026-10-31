@@ -1678,6 +1678,9 @@ uiel-reap.test.js	ui/test/uiel-reap.test.js
 uielshe-44fcbd32601d	ui/test/uiel-shell-version.test.js
 uielsmo-2d86eec1e39f	ui/test/uiel-smoke-rss.test.js
 uiel2au-1c86966804a4	ui/test/uiel2-authority-confinement.test.js
+uitilea-0b101a34c8e4	ui/test/uitile-agent-chip.test.js
+uitilef-b94d5a4596e4	ui/test/uitile-frame-contain.test.js
+uitilet-3b557f6c35d4	ui/test/uitile-tile-rail.test.js
 verdict-f74b75134886	ui/test/verdictParity.test.mjs
 vmarkde-f640a1549e17	ui/test/vmark-delivery.test.js
 w3contr-ee4ed320402b	ui/test/w3-control-timeout.test.js
