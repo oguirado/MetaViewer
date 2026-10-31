@@ -1358,6 +1358,7 @@ multislotInputGate.js	ui/src/multislot/multislotInputGate.js
 multislotProviders.js	ui/src/multislot/multislotProviders.js
 nested.js	ui/src/nested/nested.js
 NetworkPanel.vue	ui/src/netmode/NetworkPanel.vue
+networkCopy.js	ui/src/netmode/networkCopy.js
 operatorHost.js	ui/src/operatorHost.js
 anchorCollector.js	ui/src/qa/anchorCollector.js
 MvRecordingPanel.vue	ui/src/recording/MvRecordingPanel.vue
@@ -1665,6 +1666,7 @@ mvui9ti-2e8e4a6be2b3	ui/test/mvui9-tile-chrome.test.js
 mvui9ti-aad882f902e1	ui/test/mvui9-tile-mount.test.js
 nesting.test.js	ui/test/nesting.test.js
 nesting-c224ecae31d5	ui/test/nestingStartup.test.js
+netcopy-panel.test.js	ui/test/netcopy-panel.test.js
 operator-stubs.mjs	ui/test/operator-stubs.mjs
 originc-568d530772a3	ui/test/origin-contract.test.js
 packageOutput.test.js	ui/test/packageOutput.test.js
