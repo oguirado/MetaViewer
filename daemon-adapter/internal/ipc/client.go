@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strings"
 	"sync"
 )
 
@@ -97,13 +96,12 @@ func Connect(ctx context.Context, cfg Config, policy Policy, registration Envelo
 		}
 	}
 	dispatch := func(in Envelope) {
-		// [TARGET, unit decision] A tagged, admitted list is a liveness probe:
-		// answer without enumerating surfaces or mutating capsule state.
-		var probe struct{ Schema, Op string }
+		// A tagged, admitted list is a liveness probe: answer without enumerating
+		// surfaces or mutating capsule state.
 		var replies []json.RawMessage
 		var err error
-		if json.Unmarshal(in.Body, &probe) == nil && probe.Schema == "surface_request/v0.2" && probe.Op == "list" && strings.HasPrefix(in.MsgID, "core-keepalive-") {
-			replies = []json.RawMessage{json.RawMessage(`{"schema":"surface_event/v0.2","event":"error","data":{"surface_id":"daemon","code":"DAEMON_KEEPALIVE","detail":"core-keepalive"}}`)}
+		if ack, probe := KeepaliveReply(in); probe {
+			replies = []json.RawMessage{ack}
 		} else {
 			replies, err = handler(ctx, in)
 			if err != nil {

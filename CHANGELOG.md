@@ -6,6 +6,7 @@
 - Show 'Agent acting' only while a busy session or in-flight proposal is present; an idle agent-owned tile reads 'Agent ready'.
 - Admit strictly bounded surface creates through the host and retain created surfaces for frame delivery.
 - Keep idle daemon connections live with tagged list probes and acknowledged notices while retaining silent-peer deadlines.
+- Answer the core keepalive probe on the adapter's streaming path, ahead of the data queue, through one shared helper.
 - Return visible `TERMINAL_UNAVAILABLE` when native terminal support is absent from a package.
 - Refuse browser proposals before IPC when a live surface or frame is absent and show typed refusal codes.
 - Forward only validated live text-input modes and hold package smoke to check create delivery and adapter liveness.

@@ -335,6 +335,19 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 		if isHello {
 			continue
 		}
+		// [TARGET, unit decision] The core liveness probe is answered here, in
+		// the reader, before any queue: a busy data lane or a held surface lock
+		// must not delay the reply past the core's idle deadline. It never
+		// reaches the handler, enumerates surfaces or touches capsule state.
+		if ack, probe := ipc.KeepaliveReply(in); probe {
+			if err = write(ctx, in, ack); err != nil {
+				if ctx.Err() == nil {
+					fail(err)
+				}
+				return exitLoop(err)
+			}
+			continue
+		}
 		var op struct{ Op string }
 		_ = json.Unmarshal(in.Body, &op)
 		target := dataIn
