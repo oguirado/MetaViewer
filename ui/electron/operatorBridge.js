@@ -1,5 +1,5 @@
 import {adapterNetworkProbe} from './coreLauncher.js';
-import {createButtonService} from './buttonBridge.js';
+import {createButtonService,OPERATOR_STOP_BUDGET_MS} from './buttonBridge.js';
 // @ts-check
 /** [TARGET, unit decision] Host-only operator seam. The launcher supplies
  * MV_HANDOFF_PATHS as a JSON array of owner output.with_suffix('.handoff.json')
@@ -157,19 +157,55 @@ export function identityRunner({tool,env=process.env,spawnTool=spawn,openLogin=a
   run.dispose=()=>{for(const stop of [...live])stop();};
   return run;
 }
+/** [TARGET, unit decision] Bounds of the run-dir handoff watcher. */
+export const HANDOFF_DISCOVERY=Object.freeze({maxScan:4096,maxRuns:32,maxAgeMs:6*3600*1000,maxLatched:64,fileName:'memoryweb-run.handoff.json'});
+/** Newest recent private run directories of tools/mw_run_backend.py, as the fixed
+ * handoff path inside each. Symlinked entries and foreign names are skipped; the
+ * private-directory and private-file reads at latch time stay the trust gate.
+ * @param {Record<string,string|undefined>} env @param {number} nowMs @returns {string[]} */
+export function discoverHandoffPaths(env,nowMs) {
+  const state=typeof env.XDG_STATE_HOME==='string' && env.XDG_STATE_HOME!==''?env.XDG_STATE_HOME:typeof env.HOME==='string' && env.HOME!==''?join(env.HOME,'.local/state'):'';
+  if(!isAbsolute(state) || resolve(state)!==state)return [];
+  const runs=join(state,'metaviewer/runs');
+  /** @type {{name:string,mtime:number}[]} */const found=[];
+  let dir;
+  try {
+    dir=fs.opendirSync(runs);
+    for(let i=0;i<HANDOFF_DISCOVERY.maxScan;i++) {
+      const entry=dir.readSync();if(!entry)break;
+      if(!/^[0-9a-f]{32}$/.test(entry.name))continue;
+      try {
+        const st=fs.lstatSync(join(runs,entry.name));
+        if(st.isDirectory() && nowMs-st.mtimeMs<=HANDOFF_DISCOVERY.maxAgeMs)found.push({name:entry.name,mtime:st.mtimeMs});
+      }catch{/* Raced removal. */}
+    }
+  }catch{return [];}
+  finally {try{dir?.closeSync();}catch{/* Already closed. */}}
+  return found.sort((a,b)=>b.mtime-a.mtime||(a.name<b.name?-1:1)).slice(0,HANDOFF_DISCOVERY.maxRuns).map(x=>join(runs,x.name,HANDOFF_DISCOVERY.fileName));
+}
 /** @param {any} options */
-export function createOperatorService({env=process.env,runIdentity,buttons,notify=()=>{}}) {
+export function createOperatorService({env=process.env,runIdentity,buttons,notify=()=>{},now=Date.now}) {
   /** @type {Map<string,{path:string,record:any,acked:boolean}>} */ const latched=new Map();
   /** @type {string[]} */ let paths=[];
   let configError=false;
   try {paths=JSON.parse(env.MV_HANDOFF_PATHS??'[]');if(!Array.isArray(paths) || paths.length>64 || !paths.every(p=>typeof p==='string' && isAbsolute(p) && p.endsWith('.handoff.json')) || new Set(paths).size!==paths.length)throw new Error();}
   catch {paths=[];configError=true;}
+  // [TARGET, unit decision] Run-dir discovery: each mw_run writes its handoff record under a
+  // fresh uuid directory, so a fixed launcher list can never name it. When MV_HANDOFF_PATHS is
+  // absent the host watches the newest private run directories instead.
+  const discover=env.MV_HANDOFF_PATHS===undefined;
   const rows=()=>[...latched.values()].filter(x=>!x.acked).map(x=>x.record);
   const state=()=>({ok:true,rows:rows()});
   function refresh() {
     let changed=false;
-    for(const path of paths) {
+    const candidates=discover?[...paths,...discoverHandoffPaths(env,now())]:paths;
+    for(const path of candidates) {
       if(latched.has(path))continue;
+      if(latched.size>=HANDOFF_DISCOVERY.maxLatched) {
+        const spent=[...latched.entries()].find(([,x])=>x.acked);
+        if(!spent)break;
+        latched.delete(spent[0]);
+      }
       try {
         privateDirectory(dirname(path),root=>{
           const record=readPrivate(root,basename(path));if(!validHandoff(record))throw new Error('HANDOFF_RECORD');
@@ -227,7 +263,7 @@ export function createOperatorService({env=process.env,runIdentity,buttons,notif
   return {request,refresh};
 }
 /** @param {any} options */
-export function installOperatorBridge({ipcMain,contents,env,tool,buttonRoot,demoRoot,clipboard,admit,openLogin,spawnTool=spawn,buttons=createButtonService({root:buttonRoot,demoRoot,clipboard,env}),runIdentity=(()=>{const resolved=resolveIdentityTool({tool,env});return identityRunner({tool:resolved,env:identityEnvironment(env,resolved),spawnTool,openLogin});})()}) {
+export function installOperatorBridge({ipcMain,contents,env,tool,buttonRoot,demoRoot,clipboard,admit,openLogin,spawnTool=spawn,buttons=createButtonService({root:buttonRoot,demoRoot,clipboard,env,stopBudgetMs:OPERATOR_STOP_BUDGET_MS}),runIdentity=(()=>{const resolved=resolveIdentityTool({tool,env});return identityRunner({tool:resolved,env:identityEnvironment(env,resolved),spawnTool,openLogin});})()}) {
   let disposed=false;
   const service=createOperatorService({env,runIdentity,buttons,notify:(/** @type {any} */v)=>{if(!disposed)contents.send('metaviewer:handoff.state',v);}});
   /** @type {string[]} */ const installed=[];

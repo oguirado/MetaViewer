@@ -343,6 +343,9 @@ const SETTINGS_KEY_SET = new Set(['scheme', 'density', 'wallFps', 'recordingFps'
 const SETTINGS_WALL_FPS_SET = new Set([3, 30, 60]);
 const CADENCE_KEY_SET = new Set(['wallFps', 'recordingFps']);
 
+/** Exact adapter refusal details with a stable public code (manager.go profile binding). */
+export const ADAPTER_DETAIL_CODES = new Map([['binding: profile already bound', 'PROFILE_ALREADY_BOUND']]);
+
 /** @param {string} code */
 function settingsStoreError(code) {
   return Object.assign(new Error(code), { code });
@@ -746,10 +749,16 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
         const reply = await core.request(request);
         if (reply?.schema === 'surface_event/v0.2' && reply.event === 'created') return {ok:true};
         const raw = reply?.data?.code ?? reply?.reason_code ?? 'SURFACE_CREATE_FAILED';
-        return {ok:false,code:typeof raw === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(raw) ? raw : 'SURFACE_CREATE_FAILED'};
+        if (typeof raw === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(raw)) return {ok:false,code:raw};
+        // [TARGET, unit decision] Legacy adapters report lowercase code `adapter` with the
+        // reason in `detail`; the detail is passive data, mapped only through this closed table.
+        const mapped = typeof reply?.data?.detail === 'string' ? ADAPTER_DETAIL_CODES.get(reply.data.detail) : undefined;
+        return {ok:false,code:mapped ?? 'SURFACE_CREATE_FAILED'};
       } catch (error) {
         const raw = /** @type {any} */ (error)?.code ?? /** @type {any} */ (error)?.message;
-        return {ok:false,code:typeof raw === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(raw) ? raw : 'SURFACE_CREATE_FAILED'};
+        if (typeof raw === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(raw)) return {ok:false,code:raw};
+        const detail = /** @type {any} */ (error)?.message;
+        return {ok:false,code:(typeof detail === 'string' ? ADAPTER_DETAIL_CODES.get(detail) : undefined) ?? 'SURFACE_CREATE_FAILED'};
       }
     },
     propose: async (/** @type {string} */json) => {

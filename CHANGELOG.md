@@ -20,6 +20,9 @@
 - Refuse browser proposals before IPC when a live surface or frame is absent and show typed refusal codes.
 - Forward only validated live text-input modes and hold package smoke to check create delivery and adapter liveness.
 - Make packaged identities usable and typed: fall back to the operator checkout's `tools/mv_identity.py`, default `MV_MW_HOME`, stop a login with SIGINT so its reservation is released, return `IDENTITY_REFUSED` apart from `IDENTITY_UNAVAILABLE`, and normalize dialog input.
+- Discover agent handoff records from the newest private run directories so the human-handoff notice can appear without a launcher path list; an explicit `MV_HANDOFF_PATHS` keeps its closed behaviour.
+- Give an operator demo Stop 300 seconds to seal evidence before escalating, keeping the 10 second budget for quit-time disposal, and refuse a check result that declares a non-user site source.
+- Report the adapter's "profile already bound" create refusal as the stable `PROFILE_ALREADY_BOUND` code instead of a generic failure.
 
 - Refuse required-adapter boot with a typed, redacted configuration reason and honest startup guidance.
 - Identify native capability replies without network modes as `legacy_binary`, preserving legacy behavior.
