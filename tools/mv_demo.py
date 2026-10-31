@@ -5,6 +5,20 @@
 checkout. Build then check a disposable copy, as in the conductor's draft gate.
 Only existing active identity leases are recorded; login/start remains operator
 work. Recording export rejects unknown files and character-bearing event fields.
+
+[TARGET, unit decision] DEMO-FLOW hardening, each point verified against the
+OpenSuperficies recorder source (read only, surface/record.go):
+- keysym names are the raw X names, so Page Up/Down arrive as Prior/Next and the
+  numeric keypad arrives as KP_* navigation names. Prior/Next and other
+  non-printable keys are admitted; KP_* digit/navigation names stay refused
+  because the recorder reads level 0, so keypad digits would leak as KP_End etc.
+- final frames are final.png or, for multi-window capsules, final_w<N>.png.
+- the after frame is named in advance and written 600 ms later; a failed capture
+  leaves a dangling name, so a reference to an absent frame is dropped instead of
+  discarding the whole demonstration.
+- the RAM copy is removed once the private export is sealed and digested.
+- a site written by an AI is untrusted data: check copies it without following
+  links, refuses special files and bounds the tree.
 """
 import argparse
 import hashlib
@@ -33,7 +47,21 @@ RAM = Path('/dev/shm/vqa-ramws/opensuperficies/os-cu-0/demos')
 DEMO = re.compile(r'[a-z0-9][a-z0-9-]{0,39}\Z')
 SITE = re.compile(r'[a-z0-9][a-z0-9-]{0,63}\Z')
 KEYS = {'Return', 'Tab', 'Escape', 'BackSpace', 'Delete', 'Left', 'Right',
-        'Up', 'Down', 'Home', 'End', 'Page_Up', 'Page_Down', 'Insert'}
+        'Up', 'Down', 'Home', 'End', 'Page_Up', 'Page_Down', 'Insert',
+        'Prior', 'Next', 'Begin', 'KP_Enter', 'ISO_Left_Tab', 'Print', 'Pause',
+        'Break', 'Menu', 'Linefeed', 'Clear', 'Find', 'Help', 'Cancel', 'Select',
+        'Execute', 'Undo', 'Redo', 'Sys_Req', 'unknown'}
+# Punctuation keysyms are admitted only inside ctrl/alt/super chords, like [a-zA-Z0-9].
+CHORD_KEYS = {'space', 'exclam', 'quotedbl', 'numbersign', 'dollar', 'percent', 'ampersand',
+              'apostrophe', 'parenleft', 'parenright', 'asterisk', 'plus', 'comma', 'minus',
+              'period', 'slash', 'colon', 'semicolon', 'less', 'equal', 'greater', 'question',
+              'at', 'bracketleft', 'backslash', 'bracketright', 'asciicircum', 'underscore',
+              'grave', 'braceleft', 'bar', 'braceright', 'asciitilde'}
+FRAME = re.compile(r'[0-9]+_(?:before|after)\.png\Z')
+FINAL = re.compile(r'final(?:_w[0-9]+)?\.png\Z')
+SITE_FILES = 8192
+SITE_BYTES = 128 * 1024 * 1024
+SITE_DEPTH = 12
 FIELDS = {'seq', 'mono_ns', 'window', 'kind', 'x', 'y', 'x2', 'y2', 'button',
           'dir', 'keysym', 'text_len', 'modifiers', 'reason', 'before', 'after'}
 
@@ -111,12 +139,14 @@ def validate_events(raw):
             need('text_len' not in row, 'RECORDING_TEXT_LEAK')
         key = row.get('keysym')
         if key is not None:
+            chord = bool(set(mods) & {'ctrl', 'alt', 'super'})
             need(kind == 'key' and isinstance(key, str) and
                  (key in KEYS or re.fullmatch(r'F(?:[1-9]|[12][0-9]|3[0-5])', key)
-                  or (bool(set(mods) & {'ctrl', 'alt', 'super'}) and re.fullmatch(r'[a-zA-Z0-9]', key))), 'RECORDING_TEXT_LEAK')
+                  or re.fullmatch(r'XF86[A-Za-z0-9]{1,40}', key)
+                  or (chord and (re.fullmatch(r'[a-zA-Z0-9]', key) or key in CHORD_KEYS))), 'RECORDING_TEXT_LEAK')
         for field in ('before', 'after'):
             if field in row:
-                need(isinstance(row[field], str) and re.fullmatch(r'[0-9]+_(?:before|after)\.png', row[field]), 'INVALID_RECORDING')
+                need(isinstance(row[field], str) and FRAME.match(row[field]), 'INVALID_RECORDING')
         for field in ('x', 'y', 'x2', 'y2', 'button'):
             if field in row:
                 need(type(row[field]) is int, 'INVALID_RECORDING')
@@ -128,20 +158,45 @@ def validate_events(raw):
     need(json.loads(rows[-1]).get('reason') in ('operator', 'limit', 'recorder_exited'), 'UNSEALED_RECORDING')
 
 
+def known_name(name):
+    return name in ('events.jsonl', 'README.md') or bool(FRAME.match(name) or FINAL.match(name))
+
+
+def drop_missing_frames(raw, names):
+    """Remove frame references whose file the recorder never wrote.
+
+    The after frame is named before it is captured; a failed capture leaves a
+    dangling name. Rows without a dangling name keep their exact bytes.
+    """
+    rows = []
+    changed = False
+    for line in raw.splitlines():
+        row = strict_json(line)
+        missing = [k for k in ('before', 'after') if k in row and row[k] not in names]
+        if missing:
+            changed = True
+            for key in missing:
+                del row[key]
+            line = json.dumps(row, separators=(',', ':')).encode()
+        rows.append(line)
+    return b''.join(line + b'\n' for line in rows) if changed else raw
+
+
 def export_demo(source, destination):
     private_tree(source)
     identity.private(source)
     files = {}
     total = 0
     for path in source.iterdir():
-        need(path.name in ('events.jsonl', 'README.md', 'final.png') or
-             re.fullmatch(r'[0-9]+_(?:before|after)\.png', path.name), 'UNSAFE_RECORDING')
+        need(known_name(path.name), 'UNSAFE_RECORDING')
         limit = 512 * 1024 if path.name == 'events.jsonl' else 32768 if path.name == 'README.md' else 32 * 1024 * 1024
         raw = read_regular(path, limit)
         total += len(raw)
         need(total <= 1024 * 1024 * 1024, 'RECORDING_CAPACITY')
         files[path.name] = raw
-    need({'events.jsonl', 'README.md', 'final.png'} <= files.keys(), 'UNSEALED_RECORDING')
+    need({'events.jsonl', 'README.md'} <= files.keys() and any(FINAL.match(n) for n in files), 'UNSEALED_RECORDING')
+    validate_events(files['events.jsonl'])
+    files['events.jsonl'] = drop_missing_frames(files['events.jsonl'], files.keys())
     validate_events(files['events.jsonl'])
     # Never copy free-form recorder README text: its bytes are not trusted prose.
     files['README.md'] = b'# Private operator demonstration\n\nData only. Events retain text_len, never typed characters. Frames may show private text.\n'
@@ -164,6 +219,14 @@ def export_demo(source, destination):
         shutil.rmtree(destination)
         raise
     return receipt
+
+
+def discard_ram(path):
+    """Remove the sealed RAM copy; the private export is the only record kept."""
+    try:
+        shutil.rmtree(private_tree(path))
+    except (OSError, Refused):
+        pass
 
 
 def record(who, demo):
@@ -213,7 +276,9 @@ def record(who, demo):
                 child.kill()
                 child.wait()
         child.stdout.close()
-    return {'evidence': str(target), **export_demo(RAM / demo, target)}
+    receipt = export_demo(RAM / demo, target)
+    discard_ram(RAM / demo)
+    return {'evidence': str(target), **receipt}
 
 
 def admitted_home():
@@ -248,9 +313,10 @@ def prompt(demo, site):
     need(isinstance(receipt, dict), 'INVALID_DIGESTS')
     need(receipt.get('schema') == 'metaviewer.demo/v1' and isinstance(receipt.get('sha256'), dict), 'INVALID_DIGESTS')
     for name, digest in receipt['sha256'].items():
-        need(name in ('events.jsonl', 'README.md', 'final.png') or re.fullmatch(r'[0-9]+_(?:before|after)\.png', name), 'INVALID_DIGESTS')
+        need(known_name(name), 'INVALID_DIGESTS')
         need(hashlib.sha256(read_regular(evidence / name, 32 * 1024 * 1024)).hexdigest() == digest, 'DIGEST_MISMATCH')
-    need({'events.jsonl', 'README.md', 'final.png'} <= receipt['sha256'].keys(), 'INVALID_DIGESTS')
+    names = receipt['sha256'].keys()
+    need({'events.jsonl', 'README.md'} <= names and any(FINAL.match(n) for n in names), 'INVALID_DIGESTS')
     validate_events(read_regular(evidence / 'events.jsonl', 512 * 1024))
     template = (ROOT / 'docs/AUTOMATE_FROM_DEMO.md').read_text().split('<!-- PROMPT -->\n', 1)[1].split('\n<!-- /PROMPT -->', 1)[0]
     values = {'@EVIDENCE@': str(evidence), '@SITE_DIR@': str(home / 'sites' / site),
@@ -261,11 +327,45 @@ def prompt(demo, site):
     return template
 
 
+def copy_site(source_fd, dest, state, depth=0):
+    """Copy an untrusted authored site without following links.
+
+    Links, devices, sockets and FIFOs refuse; the tree is bounded.
+    """
+    need(depth <= SITE_DEPTH, 'SITE_CAPACITY')
+    dest.mkdir(mode=0o700, parents=depth == 0)
+    with os.scandir(source_fd) as entries:
+        names = sorted(entry.name for entry in entries)
+    for name in names:
+        info = os.stat(name, dir_fd=source_fd, follow_symlinks=False)
+        state['files'] += 1
+        need(state['files'] <= SITE_FILES, 'SITE_CAPACITY')
+        if stat.S_ISDIR(info.st_mode):
+            child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=source_fd)
+            try:
+                copy_site(child, dest / name, state, depth + 1)
+            finally:
+                os.close(child)
+            continue
+        need(stat.S_ISREG(info.st_mode), 'UNSAFE_SITE')
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=source_fd)
+        with os.fdopen(fd, 'rb') as stream:
+            opened = os.fstat(stream.fileno())
+            need(stat.S_ISREG(opened.st_mode) and state['bytes'] + opened.st_size <= SITE_BYTES, 'SITE_CAPACITY')
+            data = stream.read(SITE_BYTES - state['bytes'] + 1)
+        state['bytes'] += len(data)
+        need(state['bytes'] <= SITE_BYTES, 'SITE_CAPACITY')
+        with open(dest / name, 'xb') as out:
+            out.write(data)
+
+
 def check(site):
     identifier(site, SITE)
     home = admitted_home()
     from metaviewer_agents.mw_home import site_root
-    source = private_tree(site_root(home, site) / 'sites' / site)
+    root = site_root(home, site)
+    origin = 'home' if Path(root) == Path(home).absolute() else 'builtin'
+    source = private_tree(root / 'sites' / site)
     need(source.is_dir(), 'SITE_MISSING')
     checkout = authoring_checkout()
     with tempfile.TemporaryDirectory(prefix='mv-demo-check-') as temp:
@@ -276,13 +376,17 @@ def check(site):
             dest.unlink()
         elif dest.exists():
             shutil.rmtree(dest)
-        shutil.copytree(source, dest)
+        source_fd = os.open(source, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            copy_site(source_fd, dest, {'files': 0, 'bytes': 0})
+        finally:
+            os.close(source_fd)
         for flags in ([], ['--check']):
             result = subprocess.run([sys.executable, '-I', str(copy / 'tools/build_index.py'), '--root', str(copy), *flags],
                                     cwd=copy, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                     stderr=subprocess.DEVNULL, timeout=180, check=False)
             need(result.returncode == 0, 'MEMORYWEB_CHECK_FAILED')
-    return {'site': site, 'validated': True}
+    return {'site': site, 'validated': True, 'source': origin}
 
 
 def main(argv=None):
