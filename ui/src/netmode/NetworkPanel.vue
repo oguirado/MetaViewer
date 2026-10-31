@@ -1,52 +1,64 @@
 <script setup>
 import { ref, watch } from 'vue';
-import { UiButton } from 'capsule-ui-kit/ui';
+import { UiButton, UiTextInput } from 'capsule-ui-kit/ui';
 import ConfirmDialog from '../../.kit/capsule-ui-kit/src/overlays/ConfirmDialog.vue';
 import { operatorHost } from '../operatorHost.js';
+import { allowlistProblem, hostHasEgress, legacyExplanation, parseAllowlist, plainReason, refusalText, storedAllowlistWarning } from './networkCopy.js';
 const props=defineProps({open:{type:Boolean,default:false},displayOnly:{type:Boolean,default:false},capsuleId:{type:String,default:''},identity:{type:String,default:''},refusalCode:{type:String,default:''},host:{type:Object,default:operatorHost}});
 const emit=defineEmits(['close','open']);
-const mode=ref('open'), domains=ref(''), netMode=ref(''), error=ref(''), busy=ref(false), loaded=ref(false), reason=ref(''), confirmOpen=ref(false);
-/** @type {Record<string,string>} */
-const reasonWords={binary_missing:'capability binary missing',timeout:'capability probe timed out',oversize:'capability reply too large',malformed:'invalid capability reply',legacy_binary:'legacy (binary has no network modes)',ok:'Open unavailable in declared network modes'};
-/** @param {string} value */
-function plainReason(value) { return reasonWords[value] ?? (/^exit_/.test(value)?`capability probe exited with status ${value.slice(5)}`:'capability probe unavailable'); }
-let generation=0;
+const mode=ref('open'), domains=ref(''), netMode=ref(''), error=ref(''), busy=ref(false), loaded=ref(false), reason=ref(''), stored=ref(''), confirmOpen=ref(false), saved=ref(false);
+let generation=0, applied='';
 /** @param {string} method */
 async function request(method, confirm=false) {
   const current=++generation, identity=props.identity;
-  busy.value=true;error.value='';if(method==='get'){loaded.value=false;confirmOpen.value=false;}
+  busy.value=true;error.value='';saved.value=false;
+  if(method==='get'){loaded.value=false;confirmOpen.value=false;netMode.value='';reason.value='';stored.value='';mode.value='open';domains.value='';applied=JSON.stringify(['open','']);}
   try {
-    if(!identity || !props.host?.egress)throw new Error();
-    const record={schema:'metaviewer.capsule_egress/v1',mode:mode.value,domains:mode.value==='open'?[]:domains.value.split('\n').map(x=>x.trim()).filter(Boolean)};
-    const result=await props.host.egress[method](method==='get'?{identity}:{identity,record,...(confirm?{confirm:true}:{})});
+    if(!identity){error.value='Network configuration unavailable: this capsule has no admitted profile identity.';return;}
+    if(!hostHasEgress(props.host,method)){error.value='Network configuration unavailable: this build has no operator network channel.';return;}
+    /** @type {Record<string,unknown>} */
+    let payload={identity};
+    if(method==='set'){
+      const list=mode.value==='open'?[]:parseAllowlist(domains.value), problem=mode.value==='open'?'':allowlistProblem(list);
+      if(problem){error.value=problem;return;}
+      payload={identity,record:{schema:'metaviewer.capsule_egress/v1',mode:mode.value,domains:list},...(confirm?{confirm:true}:{})};
+    }
+    const result=await /** @type {any} */ (props.host).egress[method](payload);
     if(current!==generation)return;
     if(!result.ok) {
-      confirmOpen.value=result.code==='NET_OPEN_PREREQ';
-      error.value=result.code==='NET_PROXIED_UNSUPPORTED'?'NET_PROXIED_UNSUPPORTED: Dedicated proxy requires a deployment with proxied network support.':result.code==='NET_OPEN_PREREQ'?'NET_OPEN_PREREQ: Open requires identity image 0.2.0 and the final OpenSuperficies pin (morning report, step 0).':'Network configuration unavailable.';
+      confirmOpen.value=method==='set' && result.code==='NET_OPEN_PREREQ';
+      error.value=refusalText(result.code,netMode.value==='legacy'?reason.value:undefined);
       return;
     }
-    confirmOpen.value=false;reason.value=result.reason;mode.value=result.record.mode;domains.value=result.record.domains.join('\n');netMode.value=result.net_mode;loaded.value=true;
-  }catch{if(current===generation)error.value='Network configuration unavailable: this capsule needs an admitted profile identity and private adapter state.';}
+    confirmOpen.value=false;reason.value=result.reason;mode.value=result.record.mode;domains.value=result.record.domains.join(', ');applied=JSON.stringify([mode.value,domains.value]);netMode.value=result.net_mode;stored.value=result.record.mode;loaded.value=true;saved.value=method==='set';
+  }catch{if(current===generation)error.value='Network configuration request failed before the adapter answered; nothing was saved.';}
   finally{if(current===generation)busy.value=false;}
 }
-watch(()=>[mode.value,domains.value],()=>{confirmOpen.value=false;});
+/** @param {string} next */
+function choose(next){if(!busy.value&&loaded.value)mode.value=next;}
+watch(()=>[mode.value,domains.value],()=>{if(JSON.stringify([mode.value,domains.value])!==applied){confirmOpen.value=false;saved.value=false;}});
 watch(()=>[props.open,props.identity],()=>{if(props.open)void request('get');else generation++;},{immediate:true});
 </script>
 <template>
   <div :hidden="displayOnly" role="toolbar" aria-label="Capsule network actions">
     <UiButton :id="`capsule-network-${capsuleId}`" :data-semantic-anchor="`capsule/${capsuleId}/network`" label="Network" :aria-expanded="open" @click="emit('open')" />
   </div>
-  <ConfirmDialog id="capsule-network-dialog" :open="open" title="Network" description="Per capsule; applies on the next start. Open requires identity image 0.2.0 and the final OpenSuperficies pin (morning report, step 0)." confirm-label="Save network" back-label="Close" :busy="busy" :confirm-disabled="!loaded || confirmOpen" @confirm="request('set')" @back="emit('close')">
+  <ConfirmDialog id="capsule-network-dialog" :open="open" title="Network" description="Per capsule; applies on the next start." confirm-label="Save network" back-label="Close" :busy="busy" :confirm-disabled="!loaded || confirmOpen" @confirm="request('set')" @back="emit('close')">
     <p v-if="refusalCode==='NET_OPEN_PREREQ'" role="alert">NET_OPEN_PREREQ: Open requires identity image 0.2.0 and the final OpenSuperficies pin (morning report, step 0).</p>
     <p v-if="refusalCode==='NET_PROXIED_UNSUPPORTED'" role="alert">NET_PROXIED_UNSUPPORTED: Dedicated proxy requires a deployment with proxied network support.</p>
-    <p v-if="netMode==='legacy'" role="status">legacy: {{ plainReason(reason) }}</p>
-    <div role="radiogroup" aria-label="Capsule network">
-      <label><input v-model="mode" type="radio" value="open" :disabled="busy || !loaded" />Open (default)</label>
-      <label><input v-model="mode" type="radio" value="allowlisted" :disabled="busy || !loaded" />Dedicated proxy with allowlist</label>
+    <template v-if="netMode==='legacy'">
+      <p role="status">legacy: {{ plainReason(reason) }}</p>
+      <p data-netcopy="legacy-explanation">{{ legacyExplanation(reason) }}</p>
+      <p v-if="stored==='allowlisted'" role="alert" data-netcopy="stored-allowlist">{{ storedAllowlistWarning }}</p>
+    </template>
+    <div role="group" aria-label="Capsule network">
+      <UiButton label="Open (default)" :intent="mode==='open'?'primary':'neutral'" :aria-pressed="mode==='open'" :disabled="busy || !loaded" @click="choose('open')" />
+      <UiButton label="Dedicated proxy with allowlist" :intent="mode==='allowlisted'?'primary':'neutral'" :aria-pressed="mode==='allowlisted'" :disabled="busy || !loaded" @click="choose('allowlisted')" />
     </div>
-    <label v-if="mode==='allowlisted'">Exact hostnames, one per line (1–256)<textarea v-model="domains" aria-label="Domain allowlist" :disabled="busy || !loaded" /></label>
+    <p v-if="mode==='allowlisted'"><label>Exact hostnames, separated by commas or spaces (1–256)<UiTextInput v-model="domains" label="Domain allowlist" :disabled="busy || !loaded" /></label></p>
     <UiButton v-if="confirmOpen" label="Confirm save for next start anyway" :disabled="busy" @click="request('set',true)" />
     <p v-if="confirmOpen">Nothing has been saved. Close to keep the current record, or explicitly confirm saving for a future start once Open is available.</p>
+    <p v-if="saved" role="status">Saved. Applies on the next start of this capsule.</p>
     <p v-if="error" role="alert">{{ error }}</p>
   </ConfirmDialog>
 </template>
