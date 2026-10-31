@@ -19,26 +19,26 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 1,047 | 55 | 992 |
-| Lanes finished OK | 1,047 | 55 | 992 |
-| Agent steps | 44,509 | 2,705 | 41,804 |
-| Lane-hours of agent work | 110.9 | 5.2 | 105.7 |
-| Fresh input tokens | 183,278,666 | 11,482,034 | 171,796,632 |
-| Cache-read input tokens | 3,570,645,805 | 226,255,212 | 3,344,390,593 |
+| Lanes launched | 1,096 | 55 | 1,041 |
+| Lanes finished OK | 1,096 | 55 | 1,041 |
+| Agent steps | 46,502 | 2,705 | 43,797 |
+| Lane-hours of agent work | 114.5 | 5.2 | 109.2 |
+| Fresh input tokens | 189,328,437 | 11,482,034 | 177,846,403 |
+| Cache-read input tokens | 3,681,440,054 | 226,255,212 | 3,455,184,842 |
 | Prompt cache hit % | 95.1 | 95.2 | 95.1 |
-| Output tokens | 37,061,334 | 2,135,708 | 34,925,626 |
-| Thinking tokens | 21,682,795 | 1,050,039 | 20,632,756 |
-| Cost (USD) | 32.8814 | 2.0279 | 30.8535 |
-| Cost per lane (USD) | 0.0314 | 0.0369 | 0.0311 |
+| Output tokens | 38,284,781 | 2,135,708 | 36,149,073 |
+| Thinking tokens | 22,468,738 | 1,050,039 | 21,418,699 |
+| Cost (USD) | 33.9527 | 2.0279 | 31.9248 |
+| Cost per lane (USD) | 0.031 | 0.0369 | 0.0307 |
 
-Rooms: 136. Peak concurrent lanes [MEASURED from lane start/end]: 42.
+Rooms: 136. Peak concurrent lanes [MEASURED from lane start/end]: 40.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
 
 ## By stage
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 658 | 94.0 | 16.6339 |
+| build | 707 | 94.0 | 17.7052 |
 | context | 42 | 95.9 | 1.9093 |
 | context packs + test ideation (U-DEC-0139) | 13 | 91.1 | 0.2195 |
 | demo | 4 | 90.7 | 0.0557 |
@@ -86,7 +86,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 325 | 94.0 | 8.4557 | direct Muse job |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 374 | 94.1 | 9.527 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -1156,8 +1156,6 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-adv | 8b_WJ5-JUDGE-SCRIPTS_a | adv8b_WJ5-JUDGE-SCRIPTS_a | Oct 31 15:04 | yes | 27 | 91.9 | 0.016437 |
 | direct-adv | 8b_FOREIGN-UID-FIXTURE_b | adv8b_FOREIGN-UID-FIXTURE_b | Oct 31 15:04 | yes | 43 | 95.2 | 0.015349 |
 | direct-adv | 8b_WJ8-JUDGE-DOCS_b | adv8b_WJ8-JUDGE-DOCS_b | Oct 31 15:04 | yes | 22 | 93.6 | 0.011269 |
-| direct-direct | 2_UI-GEOMETRY-WIRE_a | eve1_r2_UI-GEOMETRY-WIRE_a | Oct 31 15:28 | yes | 30 | 93.8 | 0.017098 |
-| direct-direct | 2_UI-GEOMETRY-WIRE_b | eve1_r2_UI-GEOMETRY-WIRE_b | Oct 31 15:28 | yes | 20 | 87.3 | 0.017341 |
 | direct-direct | 3_PKG-FIX-R2 | eve1_r3_PKG-FIX-R2 | Oct 31 15:28 | yes | 26 | 90.9 | 0.016031 |
 | direct-direct | 3_HANDOFF-STYLE | eve1_r3_HANDOFF-STYLE | Oct 31 15:28 | yes | 42 | 94.8 | 0.021857 |
 | direct-direct | 8_e1 | eve1_r8_e1 | Oct 31 15:28 | yes | 37 | 91.4 | 0.026351 |
@@ -1165,13 +1163,11 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | 3_MW-RUN-E2E-R2 | eve1_r3_MW-RUN-E2E-R2 | Oct 31 15:28 | yes | 47 | 95.6 | 0.027326 |
 | direct-direct | 2_WJ2-LAUNCHER-PORTABLE_b | eve1_r2_WJ2-LAUNCHER-PORTABLE_b | Oct 31 15:28 | yes | 16 | 90.5 | 0.007894 |
 | direct-direct | 3_REC-STATE | eve1_r3_REC-STATE | Oct 31 15:28 | yes | 54 | 93.6 | 0.035783 |
-| direct-direct | 2_PKG-CONTENT_b | eve1_r2_PKG-CONTENT_b | Oct 31 15:28 | yes | 33 | 89.8 | 0.030355 |
 | direct-direct | 2_WJ2-LAUNCHER-PORTABLE_a | eve1_r2_WJ2-LAUNCHER-PORTABLE_a | Oct 31 15:28 | yes | 20 | 91.2 | 0.014615 |
 | direct-direct | 3_NETWORK-COPY-R2 | eve1_r3_NETWORK-COPY-R2 | Oct 31 15:28 | yes | 35 | 93.5 | 0.020891 |
 | direct-direct | 8_p10input | eve1_r8_p10input | Oct 31 15:28 | yes | 38 | 94.2 | 0.023354 |
 | direct-direct | 2_MULTI-CAPSULE-WIRE_b | eve1_r2_MULTI-CAPSULE-WIRE_b | Oct 31 15:28 | yes | 21 | 88.4 | 0.015904 |
 | direct-direct | 2_INPUT-U5_a | eve1_r2_INPUT-U5_a | Oct 31 15:28 | yes | 20 | 89.5 | 0.017529 |
-| direct-direct | 2_PKG-CONTENT_a | eve1_r2_PKG-CONTENT_a | Oct 31 15:28 | yes | 37 | 94.9 | 0.016089 |
 | direct-direct | 2_MULTI-CAPSULE-WIRE_a | eve1_r2_MULTI-CAPSULE-WIRE_a | Oct 31 15:28 | yes | 26 | 90.8 | 0.017382 |
 | direct-direct | 3_CAPID-UI | eve1_r3_CAPID-UI | Oct 31 15:28 | yes | 41 | 94.5 | 0.028152 |
 | direct-direct | M-FIX_b | r1a_DAM-FIX_b | Oct 31 15:34 | yes | 41 | 94.0 | 0.021732 |
@@ -1195,19 +1191,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | 3_INPUT-U3-ECHO | eve1_r3_INPUT-U3-ECHO | Oct 31 16:08 | yes | 33 | 92.8 | 0.015357 |
 | direct-direct | 3_INPUT-U3-ECHO | eve2_r3_INPUT-U3-ECHO | Oct 31 16:08 | yes | 33 | 92.8 | 0.015357 |
 | direct-direct | 3_MULTI-CAPSULE-ROOTS | eve2_r3_MULTI-CAPSULE-ROOTS | Oct 31 16:08 | yes | 48 | 95.5 | 0.022687 |
-| direct-direct | 4_app_close | eve2_r4_app_close | Oct 31 16:08 | yes | 38 | 94.2 | 0.02452 |
-| direct-direct | 4_automate_demo | eve2_r4_automate_demo | Oct 31 16:08 | yes | 37 | 94.3 | 0.022767 |
-| direct-direct | 4_capsule_close_reopen | eve2_r4_capsule_close_reopen | Oct 31 16:08 | yes | 56 | 95.9 | 0.032241 |
-| direct-direct | 4_captcha_handoff | eve2_r4_captcha_handoff | Oct 31 16:08 | yes | 68 | 96.3 | 0.038251 |
-| direct-direct | 4_chatgpt_gemini | eve2_r4_chatgpt_gemini | Oct 31 16:09 | yes | 68 | 96.1 | 0.036639 |
-| direct-direct | 4_identities | eve2_r4_identities | Oct 31 16:09 | yes | 33 | 94.9 | 0.018481 |
-| direct-direct | 4_launch | eve2_r4_launch | Oct 31 16:09 | yes | 38 | 93.5 | 0.032373 |
-| direct-direct | 4_multislot | eve2_r4_multislot | Oct 31 16:09 | yes | 64 | 96.7 | 0.039296 |
-| direct-direct | 4_network | eve2_r4_network | Oct 31 16:09 | yes | 46 | 95.0 | 0.026456 |
-| direct-direct | 4_storyboard | eve2_r4_storyboard | Oct 31 16:09 | yes | 61 | 96.4 | 0.036259 |
-| direct-direct | 4_terminal | eve2_r4_terminal | Oct 31 16:09 | yes | 50 | 94.8 | 0.031956 |
 | direct-direct | 6_input_u5_a | eve2_r6_input_u5_a | Oct 31 16:09 | yes | 22 | 92.7 | 0.011289 |
-| direct-direct | 4_use_metaviewer | eve2_r4_use_metaviewer | Oct 31 16:09 | yes | 41 | 91.5 | 0.030942 |
 | direct-direct | 6_input_u5_b | eve2_r6_input_u5_b | Oct 31 16:09 | yes | 39 | 95.1 | 0.027076 |
 | direct-direct | 6_multicap_ux_a | eve2_r6_multicap_ux_a | Oct 31 16:09 | yes | 31 | 93.9 | 0.020469 |
 | direct-direct | 6_multicap_ux_b | eve2_r6_multicap_ux_b | Oct 31 16:09 | yes | 25 | 91.9 | 0.016736 |
@@ -1215,11 +1199,6 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | 6_terminal_wall_b | eve2_r6_terminal_wall_b | Oct 31 16:09 | yes | 22 | 91.2 | 0.014014 |
 | direct-direct | 6_workspaces_a | eve2_r6_workspaces_a | Oct 31 16:09 | yes | 32 | 93.8 | 0.013694 |
 | direct-direct | 6_workspaces_b | eve2_r6_workspaces_b | Oct 31 16:09 | yes | 23 | 90.8 | 0.019024 |
-| direct-direct | 7_changelog | eve2_r7_changelog | Oct 31 16:09 | yes | 42 | 95.3 | 0.023707 |
-| direct-direct | 7_contracts | eve2_r7_contracts | Oct 31 16:09 | yes | 82 | 96.9 | 0.040138 |
-| direct-direct | 7_docs | eve2_r7_docs | Oct 31 16:09 | yes | 54 | 96.2 | 0.020452 |
-| direct-direct | 7_errors | eve2_r7_errors | Oct 31 16:09 | yes | 34 | 94.2 | 0.019992 |
-| direct-direct | 7_package | eve2_r7_package | Oct 31 16:09 | yes | 27 | 92.9 | 0.015369 |
 | direct-direct | aptcha | fps1_captcha | Oct 31 16:54 | yes | 27 | 92.0 | 0.018163 |
 | direct-direct | oldings_a | fps1_holdings_a | Oct 31 16:54 | yes | 28 | 93.5 | 0.015181 |
 | direct-direct | oldings_b | fps1_holdings_b | Oct 31 16:54 | yes | 49 | 95.0 | 0.025206 |
@@ -1249,10 +1228,80 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | mit | r5a_limit | Oct 31 18:55 | yes | 49 | 95.6 | 0.029567 |
 | direct-direct | T-FIX-R3_b | r1e_IDT-FIX-R3_b | Oct 31 19:13 | yes | 25 | 90.6 | 0.016414 |
 | direct-direct | T-FIX-R3_a | r1e_IDT-FIX-R3_a | Oct 31 19:13 | yes | 25 | 91.5 | 0.013474 |
+| direct-direct | 4_app_close | eve2_r4_app_close | Oct 31 19:13 | yes | 91 | 97.0 | 0.055935 |
+| direct-direct | 4_app_close | eve3_r4_app_close | Oct 31 19:13 | yes | 91 | 97.0 | 0.055935 |
+| direct-direct | 4_automate_demo | eve2_r4_automate_demo | Oct 31 19:13 | yes | 40 | 94.0 | 0.024399 |
+| direct-direct | 4_automate_demo | eve3_r4_automate_demo | Oct 31 19:13 | yes | 40 | 94.0 | 0.024399 |
+| direct-direct | 4_capsule_close_reopen | eve2_r4_capsule_close_reopen | Oct 31 19:13 | yes | 37 | 93.8 | 0.019619 |
+| direct-direct | 4_capsule_close_reopen | eve3_r4_capsule_close_reopen | Oct 31 19:13 | yes | 37 | 93.8 | 0.019619 |
+| direct-direct | 4_captcha_handoff | eve2_r4_captcha_handoff | Oct 31 19:13 | yes | 55 | 96.2 | 0.026379 |
+| direct-direct | 4_captcha_handoff | eve3_r4_captcha_handoff | Oct 31 19:13 | yes | 55 | 96.2 | 0.026379 |
+| direct-direct | 4_chatgpt_gemini | eve2_r4_chatgpt_gemini | Oct 31 19:13 | yes | 52 | 95.1 | 0.029178 |
+| direct-direct | 4_chatgpt_gemini | eve3_r4_chatgpt_gemini | Oct 31 19:13 | yes | 52 | 95.1 | 0.029178 |
+| direct-direct | 4_identities | eve2_r4_identities | Oct 31 19:13 | yes | 35 | 93.2 | 0.021504 |
+| direct-direct | 4_identities | eve3_r4_identities | Oct 31 19:13 | yes | 35 | 93.2 | 0.021504 |
+| direct-direct | 4_launch | eve2_r4_launch | Oct 31 19:13 | yes | 40 | 93.9 | 0.022684 |
+| direct-direct | 4_launch | eve3_r4_launch | Oct 31 19:13 | yes | 40 | 93.9 | 0.022684 |
+| direct-direct | 4_multislot | eve2_r4_multislot | Oct 31 19:13 | yes | 60 | 95.7 | 0.034073 |
+| direct-direct | 4_multislot | eve3_r4_multislot | Oct 31 19:13 | yes | 60 | 95.7 | 0.034073 |
+| direct-direct | 4_network | eve2_r4_network | Oct 31 19:13 | yes | 46 | 94.7 | 0.02854 |
+| direct-direct | 4_network | eve3_r4_network | Oct 31 19:13 | yes | 46 | 94.7 | 0.02854 |
 | direct-direct | 4_settings | eve2_r4_settings | Oct 31 19:13 | yes | 15 | 84.6 | 0.012102 |
 | direct-direct | 4_settings | eve3_r4_settings | Oct 31 19:13 | yes | 15 | 84.6 | 0.012102 |
+| direct-direct | 4_storyboard | eve2_r4_storyboard | Oct 31 19:13 | yes | 45 | 95.4 | 0.019489 |
+| direct-direct | 4_storyboard | eve3_r4_storyboard | Oct 31 19:13 | yes | 45 | 95.4 | 0.019489 |
+| direct-direct | 4_terminal | eve2_r4_terminal | Oct 31 19:13 | yes | 43 | 94.4 | 0.03039 |
+| direct-direct | 4_terminal | eve3_r4_terminal | Oct 31 19:13 | yes | 43 | 94.4 | 0.03039 |
+| direct-direct | 4_use_metaviewer | eve2_r4_use_metaviewer | Oct 31 19:13 | yes | 59 | 95.5 | 0.035529 |
+| direct-direct | 4_use_metaviewer | eve3_r4_use_metaviewer | Oct 31 19:13 | yes | 59 | 95.5 | 0.035529 |
+| direct-direct | 7_changelog | eve2_r7_changelog | Oct 31 19:13 | yes | 36 | 93.3 | 0.019892 |
+| direct-direct | 7_changelog | eve3_r7_changelog | Oct 31 19:13 | yes | 36 | 93.3 | 0.019892 |
+| direct-direct | 7_contracts | eve2_r7_contracts | Oct 31 19:13 | yes | 82 | 96.5 | 0.040276 |
+| direct-direct | 7_contracts | eve3_r7_contracts | Oct 31 19:13 | yes | 82 | 96.5 | 0.040276 |
+| direct-direct | 7_docs | eve2_r7_docs | Oct 31 19:13 | yes | 47 | 95.7 | 0.02304 |
+| direct-direct | 7_docs | eve3_r7_docs | Oct 31 19:13 | yes | 47 | 95.7 | 0.02304 |
+| direct-direct | 7_errors | eve2_r7_errors | Oct 31 19:13 | yes | 37 | 93.4 | 0.024062 |
+| direct-direct | 7_errors | eve3_r7_errors | Oct 31 19:13 | yes | 37 | 93.4 | 0.024062 |
 | direct-direct | 7_launcher | eve2_r7_launcher | Oct 31 19:13 | yes | 47 | 95.2 | 0.02038 |
 | direct-direct | 7_launcher | eve3_r7_launcher | Oct 31 19:13 | yes | 47 | 95.2 | 0.02038 |
+| direct-direct | 7_package | eve2_r7_package | Oct 31 19:13 | yes | 64 | 96.1 | 0.032755 |
+| direct-direct | 7_package | eve3_r7_package | Oct 31 19:13 | yes | 64 | 96.1 | 0.032755 |
+| direct-direct | 1 | eve4_t1 | Oct 31 19:22 | yes | 34 | 92.3 | 0.029268 |
+| direct-direct | 3 | eve4_t3 | Oct 31 19:22 | yes | 8 | 67.9 | 0.015659 |
+| direct-direct | 4 | eve4_t4 | Oct 31 19:22 | yes | 28 | 91.9 | 0.018839 |
+| direct-direct | 3_IDT-FIX-R4_a | eve5_r3_IDT-FIX-R4_a | Oct 31 19:25 | yes | 38 | 94.4 | 0.021614 |
+| direct-direct | 1_FLAKE-PIN-DEMOSTOP | eve5_r1_FLAKE-PIN-DEMOSTOP | Oct 31 19:25 | yes | 22 | 89.9 | 0.013538 |
+| direct-direct | 3_IDT-FIX-R4_b | eve5_r3_IDT-FIX-R4_b | Oct 31 19:25 | yes | 40 | 94.2 | 0.02037 |
+| direct-direct | 1_LOG-QUIET-R2 | eve5_r1_LOG-QUIET-R2 | Oct 31 19:25 | yes | 36 | 95.8 | 0.016994 |
+| direct-direct | 1_WJ5-JUDGE-SCRIPTS | eve5_r1_WJ5-JUDGE-SCRIPTS | Oct 31 19:25 | yes | 45 | 94.4 | 0.024698 |
+| direct-direct | 3_INPUT-COALESCE_a | eve5_r3_INPUT-COALESCE_a | Oct 31 19:25 | yes | 50 | 96.1 | 0.021397 |
+| direct-direct | 3_INPUT-COALESCE_b | eve5_r3_INPUT-COALESCE_b | Oct 31 19:25 | yes | 27 | 94.0 | 0.014712 |
+| direct-direct | 1_WJ8-JUDGE-DOCS | eve5_r1_WJ8-JUDGE-DOCS | Oct 31 19:25 | yes | 41 | 95.7 | 0.016772 |
+| direct-direct | 2_PKG-CONTENT_a | eve1_r2_PKG-CONTENT_a | Oct 31 19:25 | yes | 39 | 95.1 | 0.017208 |
+| direct-direct | 2_PKG-CONTENT_a | eve5_r2_PKG-CONTENT_a | Oct 31 19:25 | yes | 39 | 95.1 | 0.017208 |
+| direct-direct | 2_PKG-CONTENT_b | eve1_r2_PKG-CONTENT_b | Oct 31 19:25 | yes | 51 | 94.8 | 0.025372 |
+| direct-direct | 2_PKG-CONTENT_b | eve5_r2_PKG-CONTENT_b | Oct 31 19:25 | yes | 51 | 94.8 | 0.025372 |
+| direct-direct | 2_UI-GEOMETRY-WIRE_a | eve1_r2_UI-GEOMETRY-WIRE_a | Oct 31 19:25 | yes | 25 | 93.8 | 0.010864 |
+| direct-direct | 2_UI-GEOMETRY-WIRE_a | eve5_r2_UI-GEOMETRY-WIRE_a | Oct 31 19:25 | yes | 25 | 93.8 | 0.010864 |
+| direct-direct | 2_UI-GEOMETRY-WIRE_b | eve1_r2_UI-GEOMETRY-WIRE_b | Oct 31 19:25 | yes | 19 | 88.0 | 0.013935 |
+| direct-direct | 2_UI-GEOMETRY-WIRE_b | eve5_r2_UI-GEOMETRY-WIRE_b | Oct 31 19:25 | yes | 19 | 88.0 | 0.013935 |
+| direct-direct | 3_CAPID-UI_a | eve5_r3_CAPID-UI_a | Oct 31 19:25 | yes | 37 | 95.3 | 0.01599 |
+| direct-direct | 3_CAPID-UI_b | eve5_r3_CAPID-UI_b | Oct 31 19:25 | yes | 58 | 96.4 | 0.022529 |
+| direct-direct | 3_HANDOFF-STYLE_a | eve5_r3_HANDOFF-STYLE_a | Oct 31 19:25 | yes | 45 | 93.9 | 0.031003 |
+| direct-direct | 3_HANDOFF-STYLE_b | eve5_r3_HANDOFF-STYLE_b | Oct 31 19:25 | yes | 28 | 91.8 | 0.019986 |
+| direct-direct | 3_NETWORK-COPY-R2_a | eve5_r3_NETWORK-COPY-R2_a | Oct 31 19:25 | yes | 46 | 95.7 | 0.024558 |
+| direct-direct | 3_NETWORK-COPY-R2_b | eve5_r3_NETWORK-COPY-R2_b | Oct 31 19:25 | yes | 14 | 88.8 | 0.008228 |
+| direct-direct | 3_REC-STATE_a | eve5_r3_REC-STATE_a | Oct 31 19:25 | yes | 41 | 95.4 | 0.019037 |
+| direct-direct | 3_REC-STATE_b | eve5_r3_REC-STATE_b | Oct 31 19:25 | yes | 52 | 94.9 | 0.028973 |
+| direct-direct | 6_twall_risk | eve5_r6_twall_risk | Oct 31 19:25 | yes | 53 | 95.4 | 0.025619 |
+| direct-direct | 6_twall_synth | eve5_r6_twall_synth | Oct 31 19:25 | yes | 15 | 84.8 | 0.012596 |
+| direct-direct | 6_twall_tests | eve5_r6_twall_tests | Oct 31 19:25 | yes | 26 | 92.6 | 0.016092 |
+| direct-direct | 6_ws_risk | eve5_r6_ws_risk | Oct 31 19:25 | yes | 25 | 91.1 | 0.015849 |
+| direct-direct | 6_ws_synth | eve5_r6_ws_synth | Oct 31 19:25 | yes | 14 | 89.0 | 0.010265 |
+| direct-direct | 6_ws_tests | eve5_r6_ws_tests | Oct 31 19:25 | yes | 29 | 93.6 | 0.014055 |
+| direct-direct | 8_e1_a | eve5_r8_e1_a | Oct 31 19:25 | yes | 35 | 94.3 | 0.017444 |
+| direct-direct | 8_e1_b | eve5_r8_e1_b | Oct 31 19:25 | yes | 37 | 94.3 | 0.021923 |
+| direct-direct | 8_e4_a | eve5_r8_e4_a | Oct 31 19:25 | yes | 22 | 92.5 | 0.013726 |
 
 ## Method
 
