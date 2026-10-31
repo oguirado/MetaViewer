@@ -5,6 +5,16 @@
  * W1-TERM-BROKER supervised PTY broker: parent transport, child engine,
  * main IPC bridge and renderer facade seam.
  *
+ * [TARGET, unit decision] U3-BROKER-CLASSES: per-class PTY limits for shell
+ * and ai sessions (measured node-pty throughput 4194304 B in 20.96 ms
+ * [MEASURED], SIGHUP exit 0.28 ms [MEASURED], SIGTERM exit 0.38 ms [MEASURED];
+ * maxShellSessions 4 [TARGET], maxAiSessions 4 [TARGET], shellSessionByteCap
+ * 8388608 B [CITED], aiSessionByteCap 67108864 B [TARGET], shellLifetimeMs
+ * 3600000 ms [CITED], aiLifetimeMs 14400000 ms [TARGET]), staged close
+ * (SIGHUP -> 100 ms [TARGET] -> SIGTERM -> 250 ms [TARGET] -> SIGKILL), and
+ * a small per-class spawn brake (burst 16 [TARGET], refill 1/s [TARGET],
+ * 3 [CITED] failures -> 60000 ms [CITED] cooldown).
+ *
  * Main supervises; the broker owns PTY handles; core owns admission. The
  * broker child directly spawns server-owned provider argv and
  * speaks versioned line-delimited JSON; renderer and child never exchange
@@ -93,9 +103,19 @@ export const BASE64_RE =
 
 export const MAX_WRITE_BYTES = 65536;
 export const SESSION_BYTE_CAP = 8388608;
+export const AI_SESSION_BYTE_CAP = 67108864;
 export const MAX_LINE_BYTES = 262144;
 export const MAX_SESSIONS = 8;
+export const MAX_SHELL_SESSIONS = 4;
+export const MAX_AI_SESSIONS = 4;
 export const MAX_LIFETIME_MS = 3600000;
+export const AI_MAX_LIFETIME_MS = 14400000;
+export const CLOSE_SIGHUP_WAIT_MS = 100;
+export const CLOSE_SIGTERM_WAIT_MS = 250;
+export const SPAWN_BRAKE_BURST = 16;
+export const SPAWN_BRAKE_REFILL_PER_SEC = 1;
+export const SPAWN_BRAKE_MAX_FAILURES = 3;
+export const SPAWN_BRAKE_COOLDOWN_MS = 60000;
 export const MAX_TOMBSTONES = 256;
 export const MIN_COLS = 2;
 export const MAX_COLS = 500;
@@ -131,6 +151,25 @@ const SECRET_ENV_RE = /(TOKEN|SECRET|PASSWORD|PASSWD|AUTH|CREDENTIAL|PRIVATE|KEY
 
 /** Fixed exit-reason tokens; no PTY output or env ever leaves in events. */
 const EXIT_REASONS = Object.freeze(['SESSION_CAP', 'SESSION_EXPIRED']);
+
+/** Fixed operator remedies for broker session admission refusals. */
+export const BROKER_REFUSAL_REMEDIES = Object.freeze({
+  SESSION_LIMIT: 'Close an existing terminal session before opening a new one.',
+  CLASS_LIMIT: 'Close an existing session of this class before opening another.',
+  SPAWN_BRAKE: 'Wait for the spawn cooldown or burst window to reset, then retry.',
+});
+
+/**
+ * Lookup the fixed operator remedy sentence for a broker refusal code, or null.
+ * @param {unknown} code Alleged refusal code.
+ * @returns {string | null}
+ */
+export function getBrokerRefusalRemedy(code) {
+  if (typeof code !== 'string') return null;
+  return Object.hasOwn(BROKER_REFUSAL_REMEDIES, code)
+    ? BROKER_REFUSAL_REMEDIES[/** @type {keyof typeof BROKER_REFUSAL_REMEDIES} */ (code)]
+    : null;
+}
 
 /**
  * True when the variable name must be scrubbed from every child env:
@@ -829,27 +868,55 @@ export function spawnTerminalBroker({ entry, cwd, env, runtime }) {
 }
 
 /**
+ * @typedef {'shell' | 'ai'} SessionClass Broker session class.
+ */
+
+/**
  * @typedef {object} BrokerLimits Tunable broker caps.
- * @property {number} maxSessions Concurrent live sessions.
+ * @property {number} maxSessions Concurrent live sessions across all classes.
+ * @property {number} maxShellSessions Concurrent live shell sessions [TARGET].
+ * @property {number} maxAiSessions Concurrent live ai sessions [TARGET].
  * @property {number} maxWriteBytes Decoded bytes per write op.
- * @property {number} sessionByteCap Lifetime output bytes per session.
- * @property {number} lifetimeMs Session lifetime before explicit expiry.
+ * @property {number} sessionByteCap Default/shell lifetime output bytes per session.
+ * @property {number} shellSessionByteCap Lifetime output bytes per shell session.
+ * @property {number} aiSessionByteCap Lifetime output bytes per ai session [TARGET].
+ * @property {number} lifetimeMs Default/shell session lifetime before explicit expiry.
+ * @property {number} shellLifetimeMs Shell session lifetime before explicit expiry.
+ * @property {number} aiLifetimeMs AI session lifetime before explicit expiry [TARGET].
  * @property {number} highWaterBytes Unacked bytes that pause the PTY.
  * @property {number} lowWaterBytes Unacked bytes below which the PTY resumes.
  * @property {number} maxPendingBytes Unacked bytes that fault the session.
  * @property {number} maxPendingFrames Unacked frames that fault the session.
+ * @property {number} closeSighupWaitMs Bounded wait after SIGHUP before SIGTERM [TARGET].
+ * @property {number} closeSigtermWaitMs Bounded wait after SIGTERM before SIGKILL [TARGET].
+ * @property {number} spawnBrakeBurst Per-class spawn token bucket capacity [TARGET].
+ * @property {number} spawnBrakeRefillPerSec Per-class spawn token refill per second [TARGET].
+ * @property {number} spawnBrakeMaxFailures Consecutive spawn failures before cooldown [CITED].
+ * @property {number} spawnBrakeCooldownMs Cooldown after consecutive spawn failures [CITED].
  */
 
 /** Default caps; hosts override per field with validated values. */
 export const DEFAULT_LIMITS = Object.freeze({
   maxSessions: MAX_SESSIONS,
+  maxShellSessions: MAX_SHELL_SESSIONS,
+  maxAiSessions: MAX_AI_SESSIONS,
   maxWriteBytes: MAX_WRITE_BYTES,
   sessionByteCap: SESSION_BYTE_CAP,
+  shellSessionByteCap: SESSION_BYTE_CAP,
+  aiSessionByteCap: AI_SESSION_BYTE_CAP,
   lifetimeMs: MAX_LIFETIME_MS,
+  shellLifetimeMs: MAX_LIFETIME_MS,
+  aiLifetimeMs: AI_MAX_LIFETIME_MS,
   highWaterBytes: HIGH_WATER_BYTES,
   lowWaterBytes: LOW_WATER_BYTES,
   maxPendingBytes: MAX_PENDING_BYTES,
   maxPendingFrames: MAX_PENDING_FRAMES,
+  closeSighupWaitMs: CLOSE_SIGHUP_WAIT_MS,
+  closeSigtermWaitMs: CLOSE_SIGTERM_WAIT_MS,
+  spawnBrakeBurst: SPAWN_BRAKE_BURST,
+  spawnBrakeRefillPerSec: SPAWN_BRAKE_REFILL_PER_SEC,
+  spawnBrakeMaxFailures: SPAWN_BRAKE_MAX_FAILURES,
+  spawnBrakeCooldownMs: SPAWN_BRAKE_COOLDOWN_MS,
 });
 
 /**
@@ -871,6 +938,19 @@ export function normalizeLimits(overrides = {}) {
     }
     base[key] = /** @type {number} */ (value);
   }
+  if ('sessionByteCap' in extra) {
+    if (!('shellSessionByteCap' in extra)) base.shellSessionByteCap = base.sessionByteCap;
+    if (!('aiSessionByteCap' in extra)) base.aiSessionByteCap = base.sessionByteCap;
+  }
+  if ('lifetimeMs' in extra) {
+    if (!('shellLifetimeMs' in extra)) base.shellLifetimeMs = base.lifetimeMs;
+    if (!('aiLifetimeMs' in extra)) base.aiLifetimeMs = base.lifetimeMs;
+  }
+  if ('maxSessions' in extra && base.maxSessions > MAX_SESSIONS) {
+    if (!('maxShellSessions' in extra)) base.maxShellSessions = base.maxSessions;
+    if (!('maxAiSessions' in extra)) base.maxAiSessions = base.maxSessions;
+    if (!('spawnBrakeBurst' in extra)) base.spawnBrakeBurst = Math.max(base.spawnBrakeBurst, base.maxSessions);
+  }
   if (!(base.lowWaterBytes < base.highWaterBytes)) {
     fail('LIMITS_WATER', 'need 0 < lowWaterBytes < highWaterBytes');
   }
@@ -881,8 +961,111 @@ export function normalizeLimits(overrides = {}) {
 }
 
 /**
+ * Resolve the broker session class from a validated profile command and
+ * an optional explicit class override.
+ * @param {unknown} command Profile command ('shell' | 'provider').
+ * @param {unknown} [explicitClass] Optional explicit class ('shell' | 'ai' | 'capsule-ai').
+ * @returns {SessionClass}
+ */
+export function resolveSessionClass(command, explicitClass = undefined) {
+  if (explicitClass !== undefined) {
+    if (explicitClass === 'shell') return 'shell';
+    if (explicitClass === 'ai' || explicitClass === 'capsule-ai') return 'ai';
+    fail('PROFILE_CLASS', 'profile class must be shell, ai, or capsule-ai');
+  }
+  if (command === 'shell') return 'shell';
+  if (command === 'provider') return 'ai';
+  fail('PROFILE_COMMAND', 'profile command must be shell or provider');
+}
+
+/**
+ * @typedef {object} SpawnBrake Small per-class spawn brake (token bucket + failure circuit breaker).
+ * @property {() => boolean} canAdmit Non-consuming check whether a spawn is currently allowed.
+ * @property {() => boolean} consumeAttempt Consume one spawn attempt token if available and not cooling down.
+ * @property {() => void} recordSuccess Reset consecutive failure count after a valid spawn.
+ * @property {() => void} recordFailure Record a spawn failure and trip cooldown when reaching maxFailures.
+ * @property {() => { tokens: number, failures: number, cooldownUntilMs: number }} snapshot Read current state.
+ */
+
+/**
+ * [TARGET, unit decision] Small spawn brake combining a token bucket for burst
+ * rate limiting with a consecutive-failure circuit breaker (OpenFresnel semantics).
+ * @param {object} [options]
+ * @param {number} [options.burst] Token bucket capacity.
+ * @param {number} [options.refillPerSec] Token refill rate per second.
+ * @param {number} [options.maxFailures] Consecutive spawn failures before tripping cooldown.
+ * @param {number} [options.cooldownMs] Cooldown duration in ms after tripping.
+ * @param {() => number} [options.now] Injected monotonic/wall clock in ms.
+ * @returns {SpawnBrake}
+ */
+export function createSpawnBrake({
+  burst = SPAWN_BRAKE_BURST,
+  refillPerSec = SPAWN_BRAKE_REFILL_PER_SEC,
+  maxFailures = SPAWN_BRAKE_MAX_FAILURES,
+  cooldownMs = SPAWN_BRAKE_COOLDOWN_MS,
+  now = Date.now,
+} = {}) {
+  if (!isSafeInt(burst) || burst <= 0) fail('BRAKE_SHAPE', 'burst must be a positive safe integer');
+  if (!isSafeInt(refillPerSec) || refillPerSec <= 0) {
+    fail('BRAKE_SHAPE', 'refillPerSec must be a positive safe integer');
+  }
+  if (!isSafeInt(maxFailures) || maxFailures <= 0) {
+    fail('BRAKE_SHAPE', 'maxFailures must be a positive safe integer');
+  }
+  if (!isSafeInt(cooldownMs) || cooldownMs <= 0) {
+    fail('BRAKE_SHAPE', 'cooldownMs must be a positive safe integer');
+  }
+  if (typeof now !== 'function') fail('BRAKE_SHAPE', 'now must be a function');
+  let tokens = burst;
+  let lastMs = now();
+  let failures = 0;
+  let cooldownUntilMs = 0;
+
+  /** @param {number} currentMs */
+  const advance = (currentMs) => {
+    const elapsedSec = Math.max(0, (currentMs - lastMs) / 1000);
+    lastMs = currentMs;
+    if (elapsedSec > 0) {
+      tokens = Math.min(burst, tokens + elapsedSec * refillPerSec);
+    }
+  };
+
+  return {
+    canAdmit() {
+      const currentMs = now();
+      if (currentMs < cooldownUntilMs) return false;
+      const elapsedSec = Math.max(0, (currentMs - lastMs) / 1000);
+      return Math.min(burst, tokens + elapsedSec * refillPerSec) >= 1;
+    },
+    consumeAttempt() {
+      const currentMs = now();
+      advance(currentMs);
+      if (currentMs < cooldownUntilMs) return false;
+      if (tokens < 1) return false;
+      tokens -= 1;
+      return true;
+    },
+    recordSuccess() {
+      failures = 0;
+      cooldownUntilMs = 0;
+    },
+    recordFailure() {
+      const currentMs = now();
+      failures += 1;
+      if (failures >= maxFailures) {
+        cooldownUntilMs = currentMs + cooldownMs;
+      }
+    },
+    snapshot() {
+      return { tokens, failures, cooldownUntilMs };
+    },
+  };
+}
+
+/**
  * @typedef {object} SpawnProfile Host-owned spawn spec, never renderer data.
  * @property {'shell' | 'provider'} command Spawn kind.
+ * @property {SessionClass} sessionClass Resolved session class ('shell' | 'ai').
  * @property {string} executable Absolute provider path, or the login shell.
  * @property {ReadonlyArray<string>} argv Provider argv; empty for shell.
  * @property {string} cwd Absolute working directory.
@@ -896,10 +1079,11 @@ export function normalizeLimits(overrides = {}) {
  * @param {unknown} profile Alleged spawn profile.
  * @returns {SpawnProfile} Frozen validated profile.
  */
-function assertSpawnProfile(profile) {
+export function assertSpawnProfile(profile) {
   if (!isRecord(profile)) fail('PROFILE_SHAPE', 'spawn profile must be a record');
   const record = /** @type {Record<string, unknown>} */ (profile);
-  const keys = Object.keys(record).sort();
+  const { class: explicitClass, sessionClass: explicitSessionClass, ...coreRecord } = record;
+  const keys = Object.keys(coreRecord).sort();
   const wanted = ['argv', 'command', 'cwd', 'env', 'executable', 'loginShell'].sort();
   if (keys.length !== wanted.length || keys.some((key, index) => key !== wanted[index])) {
     fail('PROFILE_SHAPE', 'spawn profile has an exact closed shape');
@@ -908,6 +1092,23 @@ function assertSpawnProfile(profile) {
     fail('PROFILE_COMMAND', 'profile command must be shell or provider');
   }
   const command = /** @type {'shell' | 'provider'} */ (record.command);
+  if (
+    explicitClass !== undefined &&
+    explicitSessionClass !== undefined &&
+    explicitClass !== explicitSessionClass
+  ) {
+    fail('PROFILE_CLASS', 'conflicting profile class keys');
+  }
+  const sessionClass = resolveSessionClass(
+    command,
+    explicitClass !== undefined ? explicitClass : explicitSessionClass,
+  );
+  if (
+    (command === 'shell' && sessionClass !== 'shell') ||
+    (command === 'provider' && sessionClass !== 'ai')
+  ) {
+    fail('PROFILE_CLASS', 'profile class conflicts with profile command');
+  }
   if (
     typeof record.executable !== 'string' ||
     !isAbsolute(/** @type {string} */ (record.executable))
@@ -941,6 +1142,7 @@ function assertSpawnProfile(profile) {
   }
   return {
     command,
+    sessionClass,
     executable: /** @type {string} */ (record.executable),
     argv,
     cwd: /** @type {string} */ (record.cwd),
@@ -991,6 +1193,8 @@ function assertSpawnProfile(profile) {
 /**
  * @typedef {object} BrokerSession Live child session.
  * @property {string} id Session id.
+ * @property {SessionClass} sessionClass Resolved session class ('shell' | 'ai').
+ * @property {number} byteCap Effective lifetime output byte cap for this session.
  * @property {PtyHandle} handle PTY handle.
  * @property {number} pid PTY leader pid.
  * @property {Record<string, unknown> | null} admission Main-issued admission, opaque.
@@ -1001,6 +1205,10 @@ function assertSpawnProfile(profile) {
  * @property {Map<number, number>} boundaries Output seq to cumulative sent bytes.
  * @property {boolean} paused PTY paused for backpressure.
  * @property {boolean} exited Exit already emitted.
+ * @property {boolean} closing Staged close in progress.
+ * @property {boolean} childExited Native PTY onExit already observed.
+ * @property {(() => void) | null} onChildExitWaiter Wakeup callback for staged close wait.
+ * @property {Promise<void> | null} closePromise In-flight close/reap promise.
  * @property {ReturnType<typeof setTimeout>} deadline Lifetime timer.
  * @property {Array<{ dispose: () => void }>} disposables PTY subscriptions.
  */
@@ -1023,6 +1231,8 @@ const CHILD_OPS = Object.freeze(['open', 'write', 'resize', 'close', 'ack', 'pau
  * @param {BrokerAuthority | null} [options.authority] Audit sink, if any.
  * @param {BrokerProcesses} options.processes Supervision hooks.
  * @param {number} [options.serviceGeneration] Own service generation.
+ * @param {() => number} [options.now] Injected clock in ms for spawn brake.
+ * @param {(ms: number) => Promise<void>} [options.sleep] Injected wait for staged close.
  * @returns {{ dispose: () => Promise<void> }} Engine handle.
  */
 export function runBroker({
@@ -1033,6 +1243,8 @@ export function runBroker({
   authority = null,
   processes,
   serviceGeneration = 1,
+  now = Date.now,
+  sleep = undefined,
 }) {
   if (transport === null || typeof transport !== 'object') fail('ENGINE_SHAPE', 'transport is required');
   const link = /** @type {BrokerLink} */ (transport);
@@ -1072,13 +1284,55 @@ export function runBroker({
   if (!isSafeInt(serviceGeneration) || /** @type {number} */ (serviceGeneration) < 0) {
     fail('ENGINE_SHAPE', 'serviceGeneration must be a safe integer >= 0');
   }
+  if (typeof now !== 'function') {
+    fail('ENGINE_SHAPE', 'now must be a function');
+  }
+  if (sleep !== undefined && typeof sleep !== 'function') {
+    fail('ENGINE_SHAPE', 'sleep must be a function when provided');
+  }
+  const waitMs =
+    sleep ??
+    ((/** @type {number} */ ms) =>
+      new Promise((resolve) => {
+        const timer = setTimeout(resolve, ms);
+        timer.unref?.();
+      }));
   const generation = /** @type {number} */ (serviceGeneration);
   /** @type {Map<string, BrokerSession>} */
   const sessions = new Map();
   /** @type {Set<string>} */
   const tombstones = new Set();
+  /** @type {Record<SessionClass, SpawnBrake>} */
+  const brakes = {
+    shell: createSpawnBrake({
+      burst: caps.spawnBrakeBurst,
+      refillPerSec: caps.spawnBrakeRefillPerSec,
+      maxFailures: caps.spawnBrakeMaxFailures,
+      cooldownMs: caps.spawnBrakeCooldownMs,
+      now,
+    }),
+    ai: createSpawnBrake({
+      burst: caps.spawnBrakeBurst,
+      refillPerSec: caps.spawnBrakeRefillPerSec,
+      maxFailures: caps.spawnBrakeMaxFailures,
+      cooldownMs: caps.spawnBrakeCooldownMs,
+      now,
+    }),
+  };
   const decoder = new TextDecoder('utf-8', { fatal: true });
   let disposed = false;
+
+  /**
+   * @param {SessionClass} sessionClass
+   * @returns {number}
+   */
+  const countLiveByClass = (sessionClass) => {
+    let count = 0;
+    for (const s of sessions.values()) {
+      if (!s.exited && s.sessionClass === sessionClass) count += 1;
+    }
+    return count;
+  };
 
   /** @param {Record<string, unknown>} event */
   const emit = (event) => {
@@ -1090,6 +1344,11 @@ export function runBroker({
   };
   /** @param {string | null} id @param {string} code */
   const sendError = (id, code) => {
+    const remedy = getBrokerRefusalRemedy(code);
+    if (remedy !== null) {
+      emit({ ev: 'error', id, code, remedy });
+      return;
+    }
     emit({ ev: 'error', id, code });
   };
   /** @param {unknown} id */
@@ -1118,44 +1377,104 @@ export function runBroker({
   };
 
   /**
+   * Wait until the session child exits or the bounded delay elapses.
+   * @param {BrokerSession} session
+   * @param {number} delayMs
+   * @returns {Promise<void>}
+   */
+  const waitForChildExitOrDelay = async (session, delayMs) => {
+    if (session.childExited || disposed || delayMs <= 0) return;
+    await new Promise((resolve) => {
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        if (session.onChildExitWaiter === done) session.onChildExitWaiter = null;
+        resolve(undefined);
+      };
+      session.onChildExitWaiter = done;
+      if (session.childExited || disposed) {
+        done();
+        return;
+      }
+      Promise.resolve(waitMs(delayMs)).then(done, done);
+    });
+  };
+
+  /**
    * @param {string} id
    * @param {number} exitCode
    * @param {string | null} reason Fixed token or null.
+   * @param {{ staged?: boolean }} [options]
    */
-  const closeSession = async (id, exitCode, reason) => {
+  const closeSession = async (id, exitCode, reason, { staged = false } = {}) => {
     const session = sessions.get(id);
     if (!session || session.exited) return;
-    session.exited = true;
-    sessions.delete(id);
-    clearTimeout(session.deadline);
-    session.boundaries.clear();
+    if (session.closing) {
+      if (session.closePromise) await session.closePromise;
+      return;
+    }
+    session.closing = true;
     addTombstone(id);
-    for (const disposable of session.disposables) {
-      try {
-        disposable.dispose();
-      } catch {
-        // Ignore disposal faults on the teardown path.
+    clearTimeout(session.deadline);
+    const runTeardown = async () => {
+      if (staged && !session.childExited && !disposed) {
+        try {
+          session.handle.kill('SIGHUP');
+        } catch {
+          // Ignore signal fault if child already exited.
+        }
+        await waitForChildExitOrDelay(session, caps.closeSighupWaitMs);
+        if (!session.childExited && !disposed) {
+          try {
+            session.handle.kill('SIGTERM');
+          } catch {
+            // Ignore signal fault if child already exited.
+          }
+          await waitForChildExitOrDelay(session, caps.closeSigtermWaitMs);
+        }
       }
-    }
-    session.disposables = [];
-    try {
-      session.handle.kill('SIGKILL');
-    } catch {
-      // The PTY is already gone; reaping still verifies.
-    }
-    try {
-      await hooks.reapOwned(session.pid);
-    } catch {
-      sendError(id, 'REAP_FAILED');
-    }
-    /** @type {Record<string, unknown>} */
-    const outcome = { event: 'exited', session: id, code: exitCode };
-    if (reason !== null) outcome.reason = reason;
-    await commit(session.admission, outcome, id);
-    /** @type {Record<string, unknown>} */
-    const event = { ev: 'exit', id, code: exitCode };
-    if (reason !== null) event.reason = reason;
-    emit(event);
+      session.onChildExitWaiter = null;
+      for (const disposable of session.disposables) {
+        try {
+          disposable.dispose();
+        } catch {
+          // Ignore disposal faults on the teardown path.
+        }
+      }
+      session.disposables = [];
+      if (!session.childExited || !staged) {
+        try {
+          session.handle.kill('SIGKILL');
+        } catch {
+          // The PTY is already gone; reaping still verifies.
+        }
+      }
+      let reapFailed = false;
+      try {
+        await hooks.reapOwned(session.pid);
+      } catch {
+        reapFailed = true;
+      }
+      session.exited = true;
+      session.closePromise = null;
+      sessions.delete(id);
+      session.boundaries.clear();
+      addTombstone(id);
+      if (reapFailed) {
+        sendError(id, 'REAP_FAILED');
+      }
+      /** @type {Record<string, unknown>} */
+      const outcome = { event: 'exited', session: id, code: exitCode };
+      if (reason !== null) outcome.reason = reason;
+      await commit(session.admission, outcome, id);
+      /** @type {Record<string, unknown>} */
+      const event = { ev: 'exit', id, code: exitCode };
+      if (reason !== null) event.reason = reason;
+      emit(event);
+    };
+    session.closePromise = runTeardown();
+    await session.closePromise;
   };
 
   /** @param {string} id */
@@ -1170,13 +1489,13 @@ export function runBroker({
    */
   const onPtyData = async (id, chunk) => {
     const session = sessions.get(id);
-    if (!session || session.exited) return;
+    if (!session || session.exited || session.closing) return;
     let bytes = null;
     if (typeof chunk === 'string') bytes = Buffer.from(chunk, 'utf8');
     else if (chunk instanceof Uint8Array) bytes = Buffer.from(chunk);
     if (bytes === null || bytes.length === 0) return;
-    const capped = bytes.length >= caps.sessionByteCap - session.sent;
-    bytes = bytes.subarray(0, caps.sessionByteCap - session.sent);
+    const capped = bytes.length >= session.byteCap - session.sent;
+    bytes = bytes.subarray(0, session.byteCap - session.sent);
     if (bytes.length === 0) {
       await closeSession(id, 0, 'SESSION_CAP');
       return;
@@ -1212,7 +1531,14 @@ export function runBroker({
    */
   const onPtyExit = async (id, code) => {
     const session = sessions.get(id);
-    if (!session || session.exited) return;
+    if (!session) return;
+    session.childExited = true;
+    if (session.onChildExitWaiter) {
+      const wake = session.onChildExitWaiter;
+      session.onChildExitWaiter = null;
+      wake();
+    }
+    if (session.exited || session.closing) return;
     await closeSession(id, isSafeInt(code) ? /** @type {number} */ (code) : -1, null);
   };
 
@@ -1220,8 +1546,9 @@ export function runBroker({
   const statusOf = (id) => {
     if (!isTerminalId(id)) return 'shape';
     const key = /** @type {string} */ (id);
-    if (sessions.has(key)) return 'live';
-    if (tombstones.has(key)) return 'closed';
+    const session = sessions.get(key);
+    if (session && !session.exited && !session.closing) return 'live';
+    if (session || tombstones.has(key)) return 'closed';
     return 'unknown';
   };
 
@@ -1235,11 +1562,12 @@ export function runBroker({
       return;
     }
     const id = /** @type {string} */ (rawId);
-    if (sessions.has(id)) {
+    const existing = sessions.get(id);
+    if (existing && !existing.closing && !existing.exited) {
       sendError(id, 'SESSION_DUPLICATE');
       return;
     }
-    if (tombstones.has(id)) {
+    if (existing || tombstones.has(id)) {
       sendError(id, 'SESSION_CLOSED');
       return;
     }
@@ -1256,7 +1584,11 @@ export function runBroker({
       sendError(id, code);
       void commit(admission, { event: 'refused', session: id, reason: code }, id);
     };
-    if (sessions.size >= caps.maxSessions) {
+    let liveCount = 0;
+    for (const s of sessions.values()) {
+      if (!s.exited) liveCount += 1;
+    }
+    if (liveCount >= caps.maxSessions) {
       refuse('SESSION_LIMIT');
       return;
     }
@@ -1277,6 +1609,13 @@ export function runBroker({
       refuse('COMMAND_MISMATCH');
       return;
     }
+    const sessionClass = profile.sessionClass;
+    const classLimit =
+      sessionClass === 'shell' ? caps.maxShellSessions : caps.maxAiSessions;
+    if (countLiveByClass(sessionClass) >= classLimit) {
+      refuse('CLASS_LIMIT');
+      return;
+    }
     const cols = msg.cols === undefined ? DEFAULT_COLS : msg.cols;
     const rows = msg.rows === undefined ? DEFAULT_ROWS : msg.rows;
     if (
@@ -1290,6 +1629,11 @@ export function runBroker({
       refuse('DIMS_RANGE');
       return;
     }
+    const brake = brakes[sessionClass];
+    if (!brake.consumeAttempt()) {
+      refuse('SPAWN_BRAKE');
+      return;
+    }
     let file = '';
     /** @type {ReadonlyArray<string>} */
     let args = [];
@@ -1301,6 +1645,7 @@ export function runBroker({
       file = spec.file;
       args = spec.args;
     } catch {
+      brake.recordFailure();
       refuse('SPAWN_SHAPE');
       return;
     }
@@ -1316,6 +1661,7 @@ export function runBroker({
         encoding: null,
       });
     } catch {
+      brake.recordFailure();
       refuse('SPAWN_FAILED');
       return;
     }
@@ -1340,6 +1686,7 @@ export function runBroker({
       } catch {
         // Best effort cleanup of the malformed handle.
       }
+      brake.recordFailure();
       refuse('PTY_SHAPE');
       return;
     }
@@ -1353,12 +1700,19 @@ export function runBroker({
       } catch {
         // Best effort cleanup after the record fault.
       }
+      brake.recordFailure();
       refuse('RECORD_FAILED');
       return;
     }
+    const effectiveByteCap =
+      sessionClass === 'shell' ? caps.shellSessionByteCap : caps.aiSessionByteCap;
+    const effectiveLifetimeMs =
+      sessionClass === 'shell' ? caps.shellLifetimeMs : caps.aiLifetimeMs;
     /** @type {BrokerSession} */
     const session = {
       id,
+      sessionClass,
+      byteCap: effectiveByteCap,
       handle: live,
       pid,
       admission,
@@ -1369,7 +1723,11 @@ export function runBroker({
       boundaries: new Map(),
       paused: false,
       exited: false,
-      deadline: setTimeout(expireSession, caps.lifetimeMs, id),
+      closing: false,
+      childExited: false,
+      onChildExitWaiter: null,
+      closePromise: null,
+      deadline: setTimeout(expireSession, effectiveLifetimeMs, id),
       disposables: [],
     };
     try {
@@ -1390,9 +1748,11 @@ export function runBroker({
       } catch {
         // Best effort cleanup after the subscribe fault.
       }
+      brake.recordFailure();
       refuse('PTY_SHAPE');
       return;
     }
+    brake.recordSuccess();
     sessions.set(id, session);
     emit({ ev: 'open', id, pid });
     await commit(admission, { event: 'started', session: id, pid }, id);
@@ -1567,7 +1927,7 @@ export function runBroker({
       return;
     }
     if (status === 'closed') return;
-    await closeSession(id, 0, null);
+    await closeSession(id, 0, null, { staged: true });
   };
 
   /** @param {unknown} message */
@@ -1618,9 +1978,16 @@ export function runBroker({
       } catch {
         // Best effort; disposal still completes.
       }
+      for (const s of sessions.values()) {
+        if (s.onChildExitWaiter) {
+          const wake = s.onChildExitWaiter;
+          s.onChildExitWaiter = null;
+          wake();
+        }
+      }
       for (const id of [...sessions.keys()]) {
         try {
-          await closeSession(id, 0, null);
+          await closeSession(id, 0, null, { staged: false });
         } catch {
           // Per-session faults must not block the remaining teardown.
         }
@@ -1936,7 +2303,9 @@ export function registerTerminalIpc({
       if (closed.has(context.session)) return outcome(false, { reason: 'SESSION_CLOSED' });
       try {
         const admitted = assertSpawnProfile(decided.admission.profile);
-        if (admitted.command !== known.command || admitted.executable !== known.executable ||
+        if (admitted.command !== known.command ||
+            admitted.sessionClass !== known.sessionClass ||
+            admitted.executable !== known.executable ||
             admitted.cwd !== known.cwd || admitted.loginShell !== known.loginShell ||
             admitted.argv.length !== known.argv.length ||
             admitted.argv.some((arg, index) => arg !== known.argv[index]) ||
@@ -2301,6 +2670,16 @@ export function registerTerminalIpc({
       if (event.id === null || isTerminalId(event.id)) payload.session = event.id;
       if (typeof event.code === 'string' && event.code.length > 0 && event.code.length <= 64) {
         payload.code = event.code;
+      }
+      const mappedRemedy = getBrokerRefusalRemedy(payload.code);
+      if (
+        typeof event.remedy === 'string' &&
+        event.remedy.length > 0 &&
+        event.remedy.length <= 256
+      ) {
+        payload.remedy = event.remedy;
+      } else if (mappedRemedy !== null) {
+        payload.remedy = mappedRemedy;
       }
       publishEvent(payload);
       return;
