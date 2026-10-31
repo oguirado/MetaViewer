@@ -32,6 +32,34 @@ Distribution-specific package manager commands (`apt`, `dnf`, `pacman`) for inst
 
 RAM admission serializes native creates across daemons and reserves 512 MiB per incumbent above a host `MemAvailable` floor of min(20 GiB, 25 percent of `MemTotal`) [TARGET, conductor decision; CITED: `daemon-adapter/internal/daemon/ram_admission.go`]. Reservations live in the uid-owned `0700` directory `$MV_RAM_ADMISSION_DIR`, or `$XDG_RUNTIME_DIR/metaviewer/ram-admission` when the override is unset; all daemons for the uid must share it. PID death alone never releases a reservation. Run `python3 tools/mv_ram_admission.py reclaim --dry-run` as the operator to print each proposed removal and its proof, then explicitly use `--apply` after review. The command holds the admission lock, checks owner death, and reads the local Docker inventory (including stopped containers); named records require absence of the matching `srf-id-<profile>`, `srf-pg-<profile>`, and `srf-vm-<profile>` containers. Legacy hash-only records require absence of `srf-id-mv-*`, `srf-pg-mv-*`, and `srf-vm-mv-*` capsules. Random holdings names (`srf-ng-hcap-*`) cannot be mapped to profiles and conservatively keep reservations, as does unknown/remote inventory [TARGET, unit decision]. Unrelated protected containers do not block reclaim; the command never changes containers. Reclaim is never automatic; run it with the same Docker context and admission directory as the daemon. Offline tests use private admission directories and never reclaim host records.
 
+### Hardware
+
+No hardware profile has been measured on a small machine; every figure is [TARGET] unless a source is cited. MetaViewer needs 64-bit Linux (`x86_64` or `aarch64`, Ubuntu 24.04 recommended) [CITED: `ui/tools/package.js`]. No GPU or CUDA is required: the pinned vision component is integer/CPU only [CITED: vision-engine README at the pinned commit]. A judge-oriented walkthrough is in [JUDGE_QUICKSTART.md](JUDGE_QUICKSTART.md).
+
+| Profile | CPU | RAM | `/dev/shm` free | Free disk | Other |
+| --- | --- | --- | --- | --- | --- |
+| Offline fixture | 2 cores [TARGET] | 4 GiB [TARGET] | n/a | 2 GB [TARGET] | Node `>=24` [CITED: `ui/package.json`] |
+| App without capsules | 2 cores [TARGET] | 4 GiB [TARGET]; resident size of Electron, core and adapter: ABSENT — do not invent | 512 MiB [CITED: frame budget] | 2 GB [TARGET]; tarball size: ABSENT — do not invent | X11 or XWayland; unprivileged user namespaces |
+| One live browser capsule, current pin | at least 15 logical CPUs [CITED: native runtime pins capsules to CPUs `10-14`] | 16 GiB [TARGET]: floor of min(20 GiB, 25 percent of `MemTotal`) [CITED], plus 4 GiB per capsule [CITED], plus 256 MiB proxy [CITED] | 2.5 GiB [CITED: 2 GiB plus 512 MiB] | 30 GB [TARGET]; about 1.12 GB per image [MEASURED, operator host] times 3-4 plus build layers | rootful Docker, `docker` group; one `sudo` step for the capsule profile (uid `10001`) |
+| One live capsule, after the CPU pinning is relaxed | 4 cores [TARGET] | 8 GiB marginal, 16 GiB recommended [TARGET] | 1.5 GiB [TARGET] | 30 GB [TARGET] | as above |
+| Up to 4 capsules | 8 cores [TARGET] | 32 GiB [TARGET] | 9 GiB [TARGET] | 30 GB [TARGET] | as above |
+
+Capsule RAM admission is described under [Concurrent identities and RAM admission](#concurrent-identities-and-ram-admission). VM-kind capsules are outside the judge matrix: they need `/dev/kvm` and at least 16 GiB of `MemAvailable` [CITED: operator strategy note].
+
+### Ubuntu packages
+
+On Ubuntu 24.04, for both architectures [TARGET; not yet verified on a clean host], install the host utilities named above plus the display and container tools:
+
+```text
+sudo apt-get install xvfb x11-utils xauth tar zip strace git coreutils util-linux python3 python3-pip docker.io
+```
+
+- Add `ffmpeg` only to record with the end-to-end stack.
+- Python is the Ubuntu 24.04 `3.12` [CITED: CI uses `3.12`]. The vision component additionally needs `python3 -m pip install --only-binary=:all: numpy==2.4.2` [CITED: `.github/workflows/ci.yml`].
+- Whether Ubuntu 24.04 repositories ship Node `>=24`: ABSENT — do not invent. The judge kit supplies Node `24` with a pinned digest [TARGET, decision D3].
+- Docker must be rootful Docker Engine reachable through the `docker` group (`sudo usermod -aG docker "$USER"`, then log in again). Rootless Docker is not supported: the adapter does not forward `DOCKER_HOST`. Docker Desktop on WSL2 is not supported; install `docker-ce` inside the same distro [TARGET, decision D2].
+- Ubuntu 24.04 may restrict unprivileged user namespaces (`kernel.apparmor_restrict_unprivileged_userns`), which the Electron sandbox needs [TARGET; to verify on a clean host].
+
 ## Identities
 
 Browser sessions are credentials: the operator logs in by hand inside the native

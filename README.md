@@ -198,6 +198,10 @@ Set both author and committer to the maintainer identity in [docs/COMMIT_LAWS.md
 
 Everything runnable in this repository is built during the event; the v0.1 scaffold, design notes, and external private components predate it. See [docs/PREEXISTING.md](docs/PREEXISTING.md) for the item-by-item declaration.
 
+## Evaluation by hackathon judges
+
+The licensor (the maintainer, `oguirado`) permits the hackathon judges to install and evaluate MetaViewer for the purpose of judging. This permission is stated in [NOTICE-EVALUATION.md](NOTICE-EVALUATION.md); the [LICENSE](LICENSE) text is unchanged. Judges can follow the [judge quickstart](docs/JUDGE_QUICKSTART.md).
+
 ## License
 
 MetaViewer is licensed under the [PolyForm Strict License 1.0.0](LICENSE). The external components it integrates (`wender-agent`, `vision-engine`, `OpenSuperficies`, and `capsule-ui-kit`) are proprietary and are not covered by this license.
