@@ -19,17 +19,17 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 1,183 | 55 | 1,128 |
-| Lanes finished OK | 1,183 | 55 | 1,128 |
-| Agent steps | 49,174 | 2,705 | 46,469 |
-| Lane-hours of agent work | 120.3 | 5.2 | 115.1 |
-| Fresh input tokens | 198,412,308 | 11,482,034 | 186,930,274 |
-| Cache-read input tokens | 3,814,495,890 | 226,255,212 | 3,588,240,678 |
-| Prompt cache hit % | 95.1 | 95.2 | 95.0 |
-| Output tokens | 40,273,648 | 2,135,708 | 38,137,940 |
-| Thinking tokens | 23,776,037 | 1,050,039 | 22,725,998 |
-| Cost (USD) | 35.5249 | 2.0279 | 33.4971 |
-| Cost per lane (USD) | 0.03 | 0.0369 | 0.0297 |
+| Lanes launched | 1,233 | 55 | 1,178 |
+| Lanes finished OK | 1,233 | 55 | 1,178 |
+| Agent steps | 50,568 | 2,705 | 47,863 |
+| Lane-hours of agent work | 123.2 | 5.2 | 117.9 |
+| Fresh input tokens | 204,237,583 | 11,482,034 | 192,755,549 |
+| Cache-read input tokens | 3,898,338,897 | 226,255,212 | 3,672,083,685 |
+| Prompt cache hit % | 95.0 | 95.2 | 95.0 |
+| Output tokens | 41,391,389 | 2,135,708 | 39,255,681 |
+| Thinking tokens | 24,450,257 | 1,050,039 | 23,400,218 |
+| Cost (USD) | 36.4987 | 2.0279 | 34.4708 |
+| Cost per lane (USD) | 0.0296 | 0.0369 | 0.0293 |
 
 Rooms: 136. Peak concurrent lanes [MEASURED from lane start/end]: 37.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
@@ -38,7 +38,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 794 | 94.0 | 19.2774 |
+| build | 844 | 94.0 | 20.2512 |
 | context | 42 | 95.9 | 1.9093 |
 | context packs + test ideation (U-DEC-0139) | 13 | 91.1 | 0.2195 |
 | demo | 4 | 90.7 | 0.0557 |
@@ -86,7 +86,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 456 | 94.0 | 10.9989 | direct Muse job |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 506 | 94.0 | 11.9727 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -792,6 +792,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | ore | mut_vcore | Oct 28 23:22 | yes | 23 | 90.2 | 0.020448 |
 | direct-direct | ore | sec_vcore | Oct 28 23:22 | yes | 23 | 90.2 | 0.020448 |
 | direct-direct | hunt | flake_hunt | Oct 28 23:22 | yes | 56 | 96.1 | 0.037389 |
+| direct-direct | settings | n2_r4_settings | Oct 28 23:22 | yes | 42 | 93.7 | 0.03284 |
 | direct-direct | settings | parity_settings | Oct 28 23:22 | yes | 42 | 93.7 | 0.03284 |
 | direct-direct | ext_ve | ext_ve | Oct 28 23:22 | yes | 44 | 94.4 | 0.029734 |
 | direct-direct | heck | docs_check | Oct 28 23:22 | yes | 34 | 93.8 | 0.021331 |
@@ -883,11 +884,31 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | a | ctx_ui_a | Oct 29 07:32 | yes | 15 | 84.9 | 0.010515 |
 | direct-direct | a | fc_bk_a | Oct 29 07:32 | yes | 15 | 84.9 | 0.010515 |
 | direct-direct | a | fc_w4_a | Oct 29 07:32 | yes | 15 | 84.9 | 0.010515 |
+| direct-direct | a | n1_e5_a | Oct 29 07:32 | yes | 15 | 84.9 | 0.010515 |
+| direct-direct | a | n1_r7_a | Oct 29 07:32 | yes | 15 | 84.9 | 0.010515 |
+| direct-direct | a | n1_u1_a | Oct 29 07:32 | yes | 15 | 84.9 | 0.010515 |
+| direct-direct | a | n1_wb_a | Oct 29 07:32 | yes | 15 | 84.9 | 0.010515 |
+| direct-direct | a | n3_u2_a | Oct 29 07:32 | yes | 15 | 84.9 | 0.010515 |
+| direct-direct | a | n3_u5b_a | Oct 29 07:32 | yes | 15 | 84.9 | 0.010515 |
+| direct-direct | a | n3_wj4_a | Oct 29 07:32 | yes | 15 | 84.9 | 0.010515 |
+| direct-direct | a | n3_ws_a | Oct 29 07:32 | yes | 15 | 84.9 | 0.010515 |
+| direct-direct | a | n4_r5a_a | Oct 29 07:32 | yes | 15 | 84.9 | 0.010515 |
+| direct-direct | a | n4_r5b_a | Oct 29 07:32 | yes | 15 | 84.9 | 0.010515 |
 | direct-direct | a | r1n_U3_a | Oct 29 07:32 | yes | 15 | 84.9 | 0.010515 |
 | direct-direct | a | ws6_r4_a | Oct 29 07:32 | yes | 15 | 84.9 | 0.010515 |
 | direct-direct | b | ctx_ui_b | Oct 29 07:32 | yes | 17 | 89.4 | 0.013832 |
 | direct-direct | b | fc_bk_b | Oct 29 07:32 | yes | 17 | 89.4 | 0.013832 |
 | direct-direct | b | fc_w4_b | Oct 29 07:32 | yes | 17 | 89.4 | 0.013832 |
+| direct-direct | b | n1_e5_b | Oct 29 07:32 | yes | 17 | 89.4 | 0.013832 |
+| direct-direct | b | n1_r7_b | Oct 29 07:32 | yes | 17 | 89.4 | 0.013832 |
+| direct-direct | b | n1_u1_b | Oct 29 07:32 | yes | 17 | 89.4 | 0.013832 |
+| direct-direct | b | n1_wb_b | Oct 29 07:32 | yes | 17 | 89.4 | 0.013832 |
+| direct-direct | b | n3_u2_b | Oct 29 07:32 | yes | 17 | 89.4 | 0.013832 |
+| direct-direct | b | n3_u5b_b | Oct 29 07:32 | yes | 17 | 89.4 | 0.013832 |
+| direct-direct | b | n3_wj4_b | Oct 29 07:32 | yes | 17 | 89.4 | 0.013832 |
+| direct-direct | b | n3_ws_b | Oct 29 07:32 | yes | 17 | 89.4 | 0.013832 |
+| direct-direct | b | n4_r5a_b | Oct 29 07:32 | yes | 17 | 89.4 | 0.013832 |
+| direct-direct | b | n4_r5b_b | Oct 29 07:32 | yes | 17 | 89.4 | 0.013832 |
 | direct-direct | b | r1n_U3_b | Oct 29 07:32 | yes | 17 | 89.4 | 0.013832 |
 | direct-direct | b | ws6_r4_b | Oct 29 07:32 | yes | 17 | 89.4 | 0.013832 |
 | direct-direct | vb_a | ctx_wavb_a | Oct 29 07:33 | yes | 35 | 92.8 | 0.024915 |
@@ -1389,6 +1410,35 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | a_a | r1m_U5a_a | Oct 31 22:42 | yes | 27 | 91.6 | 0.013798 |
 | direct-direct | -LIST_b | r1o_E4-LIST_b | Oct 31 22:52 | yes | 16 | 86.4 | 0.010833 |
 | direct-direct | -LIST_a | r1o_E4-LIST_a | Oct 31 22:52 | yes | 21 | 92.8 | 0.008839 |
+| direct-direct | m_a | n1_geom_a | Nov 01 00:09 | yes | 18 | 87.3 | 0.017099 |
+| direct-direct | m_b | n1_geom_b | Nov 01 00:09 | yes | 31 | 91.9 | 0.015314 |
+| direct-direct | c_a | n1_pkgc_a | Nov 01 00:09 | yes | 27 | 90.9 | 0.019955 |
+| direct-direct | c_b | n1_pkgc_b | Nov 01 00:09 | yes | 20 | 87.3 | 0.014872 |
+| direct-direct | app_close | n2_r4_app_close | Nov 01 00:12 | yes | 43 | 94.8 | 0.02703 |
+| direct-direct | automate_demo | n2_r4_automate_demo | Nov 01 00:12 | yes | 51 | 96.2 | 0.032761 |
+| direct-direct | capsule_close_reopen | n2_r4_capsule_close_reopen | Nov 01 00:12 | yes | 29 | 91.0 | 0.021167 |
+| direct-direct | captcha_handoff | n2_r4_captcha_handoff | Nov 01 00:12 | yes | 39 | 93.1 | 0.03799 |
+| direct-direct | chatgpt_gemini | n2_r4_chatgpt_gemini | Nov 01 00:12 | yes | 48 | 94.4 | 0.035022 |
+| direct-direct | display | n2_r4_display | Nov 01 00:12 | yes | 41 | 92.9 | 0.03902 |
+| direct-direct | identities | n2_r4_identities | Nov 01 00:12 | yes | 22 | 90.3 | 0.019822 |
+| direct-direct | launch | n2_r4_launch | Nov 01 00:12 | yes | 53 | 95.4 | 0.038717 |
+| direct-direct | multislot | n2_r4_multislot | Nov 01 00:12 | yes | 70 | 96.8 | 0.037265 |
+| direct-direct | network | n2_r4_network | Nov 01 00:12 | yes | 58 | 96.2 | 0.03079 |
+| direct-direct | storyboard | n2_r4_storyboard | Nov 01 00:13 | yes | 88 | 96.8 | 0.046406 |
+| direct-direct | terminal | n2_r4_terminal | Nov 01 00:13 | yes | 51 | 95.5 | 0.032012 |
+| direct-direct | use_metaviewer | n2_r4_use_metaviewer | Nov 01 00:13 | yes | 51 | 95.2 | 0.034142 |
+| direct-direct | ci_a | n3_x64ci_a | Nov 01 00:16 | yes | 15 | 86.3 | 0.014313 |
+| direct-direct | ci_b | n3_x64ci_b | Nov 01 00:16 | yes | 23 | 90.5 | 0.014086 |
+| direct-direct | ge_a | n3_judge_a | Nov 01 00:16 | yes | 15 | 84.7 | 0.012803 |
+| direct-direct | ge_b | n3_judge_b | Nov 01 00:16 | yes | 22 | 89.6 | 0.017347 |
+| direct-direct | ning_a | n3_morning_a | Nov 01 00:16 | yes | 9 | 84.7 | 0.008982 |
+| direct-direct | ning_b | n3_morning_b | Nov 01 00:16 | yes | 14 | 88.7 | 0.00976 |
+| direct-direct | -PACKAGED-DISPLAY_a | r1x_CI-PACKAGED-DISPLAY_a | Nov 01 00:24 | yes | 31 | 93.6 | 0.017143 |
+| direct-direct | -PACKAGED-DISPLAY_b | r1x_CI-PACKAGED-DISPLAY_b | Nov 01 00:24 | yes | 23 | 90.6 | 0.01539 |
+| direct-direct | o_a | n5_demo_a | Nov 01 00:27 | yes | 62 | 96.6 | 0.039628 |
+| direct-direct | o_b | n5_demo_b | Nov 01 00:27 | yes | 54 | 96.3 | 0.031236 |
+| direct-direct | all_a | n5_e4wall_a | Nov 01 00:27 | yes | 13 | 87.8 | 0.008341 |
+| direct-direct | all_b | n5_e4wall_b | Nov 01 00:27 | yes | 11 | 80.7 | 0.009034 |
 
 ## Method
 
