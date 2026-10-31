@@ -1,0 +1,25 @@
+# AppArmor profile for the MetaViewer judge kit (Ubuntu 24.04).
+#
+# Ubuntu 24.04 sets kernel.apparmor_restrict_unprivileged_userns=1, which stops
+# the Electron sandbox from creating its user namespace. This profile grants
+# exactly one extra permission, `userns`, to the packaged MetaViewer binary; it
+# is otherwise unconfined, and the app keeps its own sandbox (never --no-sandbox).
+# It is less invasive than switching the sysctl off for the whole machine.
+#
+# `metaviewer-judge.sh install` copies this file to /etc/apparmor.d/metaviewer-judge
+# and loads it with apparmor_parser -r, only after an explicit confirmation.
+# Remove it with: sudo apparmor_parser -R /etc/apparmor.d/metaviewer-judge &&
+# sudo rm /etc/apparmor.d/metaviewer-judge
+#
+# [TARGET, unit decision] The attachment glob matches the packaged directory
+# name MetaViewer-linux-<arch> wherever it is unpacked, so the install smoke
+# (which runs a temporary copy) is covered as well as the installed copy.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile metaviewer /**/MetaViewer-linux-{x64,arm64}/metaviewer flags=(unconfined) {
+  userns,
+
+  # Site-specific additions.
+  include if exists <local/metaviewer>
+}
