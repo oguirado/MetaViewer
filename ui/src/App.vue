@@ -168,12 +168,137 @@ const selectedFolded = computed(() => selectedSurface.value
 const selectedSurface = computed(() => rows.value.find(row => row.id === selectedCapsuleId.value) ?? rows.value[0] ?? null);
 /** Renderer intents remain events until a host supplies an authoritative dispatcher. */
 const emit = defineEmits(['submit-intent', 'create-capsule']);
-/** @param {string} surfaceId */
+/** HANDOFF F5 (INPUT-ARM): the handoff take-control also selects and reveals
+ * the capsule's tile, then takes control through the wall arming path.
+ * @param {string} surfaceId */
 function takeHandoffControl(surfaceId) {
   const builders=props.runtime?.intentBuilders;
-  if(builders)dispatch(builders.control({capsuleId:surfaceId,verb:'take_control'}));
+  revealHandoffSurface(surfaceId);
+  if(builders)onWallIntent(builders.control({capsuleId:surfaceId,verb:'take_control'}));
 }
-/** @param {unknown} intent */
+/** @param {unknown} surfaceId */
+function revealHandoffSurface(surfaceId) {
+  if (nestedMode.displayOnly || typeof surfaceId !== 'string') return;
+  const row = rows.value.find(row => row.id === surfaceId || row.surfaceId === surfaceId);
+  if (!row) return;
+  selectedCapsuleId.value = row.id;
+  // The tile lives on the wall: leave the screens that cover it.
+  creativeOpen.value = false;
+  settingsOpen.value = false;
+  multislotOpen.value = false;
+  if (wall.value?.revealSurface(row.id, 'tab')?.ok === true) markPanelOpen(row.id);
+}
+/**
+ * INPUT-ARM [TARGET, unit decision]: per-capsule wall input arming.
+ * Taking control from the wall (the tile Control action, the view-only chip
+ * or the handoff notice) asks the host for take_control and arms WRITE for
+ * that capsule only; the arm turns interactive once the authoritative row
+ * reports human control. Releasing control, a host refusal, a feed update
+ * that moves control away from human, or the row departing or going lost
+ * disarms it. The host still re-checks every batch (NOT_IN_CONTROL); agent
+ * control and nested display-only never enable input. The arm applies to
+ * wall tiles only: the multislot keeps its own shared inputMode toggle.
+ */
+const wallInputArmed = ref(/** @type {Record<string, true>} */ ({}));
+const wallInputPending = ref(/** @type {Record<string, true>} */ ({}));
+const ARMABLE_LIFECYCLES = Object.freeze(['active', 'standby', 'ceded']);
+/** @param {Record<string, true>} record @param {string} id */
+function withoutId(record, id) {
+  const next = { ...record };
+  delete next[id];
+  return next;
+}
+/** @param {unknown} intent @returns {{verb:'take_control'|'release_control', id:string}|null} */
+function wallControlRequestOf(intent) {
+  const record = /** @type {any} */ (intent);
+  if (record === null || typeof record !== 'object') return null;
+  const verb = record.op ?? record.type;
+  if (verb !== 'take_control' && verb !== 'release_control') return null;
+  const raw = record.params?.surface_id ?? record.surfaceId ?? record.capsuleId;
+  if (typeof raw !== 'string' || raw.length === 0) return null;
+  const row = rows.value.find(row => row.id === raw || row.surfaceId === raw);
+  return row ? { verb, id: row.id } : null;
+}
+/** @param {string} id */
+function disarmWallInput(id) {
+  if (Object.hasOwn(wallInputArmed.value, id)) wallInputArmed.value = withoutId(wallInputArmed.value, id);
+  if (Object.hasOwn(wallInputPending.value, id)) wallInputPending.value = withoutId(wallInputPending.value, id);
+}
+/** Arms a human row at once; any other control waits for the host grant.
+ * @param {string} id */
+function armWallInput(id) {
+  if (nestedMode.displayOnly) return;
+  const row = rows.value.find(row => row.id === id);
+  if (!row || !ARMABLE_LIFECYCLES.includes(row.backendLifecycle)) return;
+  if (row.control === 'human') {
+    wallInputArmed.value = { ...wallInputArmed.value, [id]: true };
+    if (Object.hasOwn(wallInputPending.value, id)) wallInputPending.value = withoutId(wallInputPending.value, id);
+  } else {
+    wallInputPending.value = { ...wallInputPending.value, [id]: true };
+  }
+}
+/** Feed reconcile: pending arms turn interactive on the human row; armed
+ * capsules drop on any non-human, departed or lost row (one-way). */
+function reconcileWallInput() {
+  const armed = Object.keys(wallInputArmed.value), pending = Object.keys(wallInputPending.value);
+  if (armed.length === 0 && pending.length === 0) return;
+  const byId = new Map(rows.value.map(row => [row.id, row]));
+  /** @type {Record<string, true>} */ const nextArmed = {};
+  /** @type {Record<string, true>} */ const nextPending = {};
+  for (const id of [...armed, ...pending]) {
+    const row = byId.get(id);
+    if (!row || !ARMABLE_LIFECYCLES.includes(row.backendLifecycle)) continue;
+    if (row.control === 'human') nextArmed[id] = true;
+    else if (pending.includes(id)) nextPending[id] = true;
+  }
+  const same = (/** @type {Record<string, true>} */ a, /** @type {Record<string, true>} */ b) =>
+    Object.keys(a).sort().join('\n') === Object.keys(b).sort().join('\n');
+  if (!same(nextArmed, wallInputArmed.value)) wallInputArmed.value = nextArmed;
+  if (!same(nextPending, wallInputPending.value)) wallInputPending.value = nextPending;
+}
+/** Wall and handoff intents: control verbs arm or disarm, then dispatch.
+ * @param {unknown} intent */
+function onWallIntent(intent) {
+  const request = nestedMode.displayOnly ? null : wallControlRequestOf(intent);
+  if (request?.verb === 'release_control') disarmWallInput(request.id);
+  else if (request) armWallInput(request.id);
+  const sent = dispatch(intent);
+  if (request?.verb === 'take_control' && sent !== undefined) {
+    void sent.then((result) => {
+      // A refused take never arms; an already armed human row stays armed.
+      const refused = result === undefined || (result !== null && typeof result === 'object'
+        && /** @type {{tone?:unknown}} */ (result).tone === 'refusal');
+      if (hostActive && refused && Object.hasOwn(wallInputPending.value, request.id)) {
+        wallInputPending.value = withoutId(wallInputPending.value, request.id);
+      }
+    });
+  }
+}
+/** View-only chip: the same take-control gesture as the tile Control action.
+ * A capsule already under human control arms locally (no second take).
+ * @param {{id:string,control?:unknown}} surface */
+function takeWallControl(surface) {
+  if (nestedMode.displayOnly || !surface) return;
+  if (surface.control === 'human') { armWallInput(surface.id); return; }
+  const builders = props.runtime?.intentBuilders;
+  if (!builders) {
+    hostOutcome.value = { code: 'HOST_REQUEST_REFUSED', message: 'This request is unavailable. Please try again.', tone: 'refusal' };
+    return;
+  }
+  try { onWallIntent(builders.control({ capsuleId: surface.id, verb: 'take_control' })); }
+  catch { hostOutcome.value = { code: 'HOST_REQUEST_REFUSED', message: 'This request is unavailable. Please try again.', tone: 'refusal' }; }
+}
+/** Interactive chip Release (HANDOFF F3): hands control back and disarms.
+ * @param {{id:string}} surface */
+function releaseWallControl(surface) {
+  if (nestedMode.displayOnly || !surface) return;
+  disarmWallInput(surface.id);
+  const builders = props.runtime?.intentBuilders;
+  if (!builders) return;
+  try { onWallIntent(builders.control({ capsuleId: surface.id, verb: 'release_control' })); }
+  catch { hostOutcome.value = { code: 'HOST_REQUEST_REFUSED', message: 'This request is unavailable. Please try again.', tone: 'refusal' }; }
+}
+/** @param {unknown} intent @returns {Promise<unknown>|undefined} */
 function dispatch(intent) {
   if (nestedMode.displayOnly) return;
   const record = /** @type {{schema?:string,op?:string,type?:string,capsuleId?:string}} */ (intent);
@@ -193,10 +318,11 @@ function dispatch(intent) {
       emit('submit-intent', intent);
       return;
     }
-    if (submitIntent) void submitHost(() => submitIntent(request));
+    if (submitIntent) return submitHost(() => submitIntent(request));
     else emit('submit-intent', intent);
-  } else if (propose) void submitHost(() => { assertLiveProposal(intent); return propose(intent); });
+  } else if (propose) return submitHost(() => { assertLiveProposal(intent); return propose(intent); });
   else emit('submit-intent', intent);
+  return undefined;
 }
 /** Committed placement echoes, keyed by surface; transport acceptance is never optimistic. */
 const placements = ref(/** @type {Record<string, {hidden:boolean, floating:boolean, groupId?:string, index?:number, x?:number, y?:number, width?:number, height?:number, lastDockGroupId?:string, lastDockIndex?:number}>} */ ({}));
@@ -661,6 +787,31 @@ function inputEnabledFor(surface) {
   if (/** @type {{ backendLifecycle?: unknown }} */ (surface).backendLifecycle === 'lost') return false;
   return /** @type {{ control?: unknown }} */ (surface).control === 'human' && inputMode.value === 'write';
 }
+/** INPUT-ARM: wall tiles also take input while armed from the wall, under the
+ * same rules: human control only, never lost, nested display-only never. The
+ * multislot and nested screens keep exactly the shared-mode gate above.
+ * @param {{id:string,control?:unknown}} surface */
+function wallArmedFor(surface) {
+  if (nestedMode.displayOnly === true) return false;
+  if (surface === null || typeof surface !== 'object') return false;
+  if (/** @type {{ backendLifecycle?: unknown }} */ (surface).backendLifecycle === 'lost') return false;
+  return surface.control === 'human' && wallInputArmed.value[surface.id] === true;
+}
+/** INPUT-ARM: tile input chip state for the wall: '' (no chip), 'view',
+ * 'pending', 'interactive' or 'unavailable' (no input port in this window).
+ * @param {{id:string,control?:unknown,backendLifecycle?:unknown,attachmentState?:unknown}|null} surface */
+function wallInputState(surface) {
+  if (nestedMode.displayOnly === true || surface === null || typeof surface !== 'object') return '';
+  if (!ARMABLE_LIFECYCLES.includes(/** @type {string} */ (surface.backendLifecycle)) || canvasStateFor(surface) !== 'live') return '';
+  const port = /** @type {{ available?: unknown } | null} */ (shellInputPort);
+  if (port === null || port.available !== true) return 'unavailable';
+  if (inputEnabledFor(surface) || wallArmedFor(surface)) return 'interactive';
+  return wallInputPending.value[surface.id] === true ? 'pending' : 'view';
+}
+/** @param {{id:string,title?:unknown}} surface */
+function surfaceLabel(surface) {
+  return typeof surface?.title === 'string' && surface.title.length > 0 ? surface.title : surface?.id ?? '';
+}
 /** MVUI25 lane A: frame stream id for input batches (router wins, else projection).
  * @param {{id:string,generation?:unknown}} surface */
 function surfaceStreamId(surface) {
@@ -764,6 +915,8 @@ watch(() => snapshot.value, () => {
     inputMode.value = 'read';
   }
 }, { immediate: true });
+// INPUT-ARM: wall arms follow the same feed signal (one-way on leaving human).
+watch(() => snapshot.value, () => { reconcileWallInput(); });
 // Readiness belongs to the branch actually rendered, including display-only walls.
 const wallView = computed(() => nestedMode.displayOnly ? 'nested' : creativeOpen.value ? 'creative' : rows.value.length ? 'workspace' : 'empty');
 let firstFrame = 0;
@@ -849,9 +1002,17 @@ const chromeWorkspace = markRaw(defineComponent({
         <WallWorkspace v-else-if="!creativeOpen" :key="wallView" :hidden="!rows.length" ref="wall" :workspace-component="chromeWorkspace" :scope="props.scope" :default-profile="props.layout" :storage="workspaceStorage"
           owner-window-id="main-wall" :projection-view="feed" :capture-state="captureAvailable ? captureState : undefined" :display-only="nestedMode.displayOnly" :allow-lost-surface="admitLostRows" :intent-builders="props.runtime?.intentBuilders ?? intentBuilders"
           :control-registry="props.runtime?.controlRegistry ?? controlRegistry" :scheduler="props.runtime?.scheduler ?? scheduler" :tile-scheduler="props.runtime?.tileScheduler ?? tileScheduler"
-          :color-scheme="scheme === 'mv-dark' ? 'dark' : 'light'" :density="density" @ready="onWallReady" @wall-settled="onWorkspaceSettled" @activate-surface="selectCapsule" @panel-closed="onPanelClosed" @submit-intent="dispatch">
+          :color-scheme="scheme === 'mv-dark' ? 'dark' : 'light'" :density="density" @ready="onWallReady" @wall-settled="onWorkspaceSettled" @activate-surface="selectCapsule" @panel-closed="onPanelClosed" @submit-intent="onWallIntent">
           <template #surface="{ surface, capsuleId }">
-            <SurfaceCanvas v-if="surface && (!multislotOpen || capsuleId !== selectedSurface?.id)" :surface-id="capsuleId" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :frame-width="surfaceWitness(surface).width" :frame-height="surfaceWitness(surface).height" :state="canvasStateFor(surface)" :input-enabled="inputEnabledFor(surface)" :stream-id="surfaceStreamId(surface)" />
+            <template v-if="surface && (!multislotOpen || capsuleId !== selectedSurface?.id)">
+            <SurfaceCanvas :surface-id="capsuleId" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :frame-width="surfaceWitness(surface).width" :frame-height="surfaceWitness(surface).height" :state="canvasStateFor(surface)" :input-enabled="inputEnabledFor(surface) || wallArmedFor(surface)" :stream-id="surfaceStreamId(surface)" />
+            <div v-if="wallInputState(surface) !== ''" class="mv-input-chip" :data-input-state="wallInputState(surface)" :data-semantic-anchor="`capsule/${capsuleId}/input`">
+              <UiButton v-if="wallInputState(surface) === 'view'" :id="`mv-input-take-${capsuleId}`" :data-semantic-anchor="`capsule/${capsuleId}/input/take`" class="mv-input-chip__action" label="View only — press Control to interact" :aria-label="`View only. Take control of ${surfaceLabel(surface)} to interact`" @click="takeWallControl(surface)" />
+              <span v-else-if="wallInputState(surface) === 'pending'" class="mv-input-chip__text" role="status">Taking control…</span>
+              <span v-else-if="wallInputState(surface) === 'unavailable'" class="mv-input-chip__text">View only — input unavailable in this window</span>
+              <template v-else><span class="mv-input-chip__text">Interactive</span><UiButton :id="`mv-input-release-${capsuleId}`" :data-semantic-anchor="`capsule/${capsuleId}/input/release`" class="mv-input-chip__action" label="Release" :aria-label="`Release control of ${surfaceLabel(surface)}`" @click="releaseWallControl(surface)" /></template>
+            </div>
+            </template>
           </template>
         </WallWorkspace>
         <EmptyWallView v-if="(!rows.length || allTilesClosed) && !nestedMode.displayOnly && !creativeOpen" @add-capsule="launcherOpen = true" />

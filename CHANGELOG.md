@@ -4,6 +4,7 @@
 
 - Make Automate from a demo complete end to end: export real recorder keys (Page Up/Down arrive as Prior/Next), multi-window final frames and recordings with a failed after-frame capture, keep keypad digits refused, free the RAM copy after sealing, check authored sites without following links, and give the dialog id validation, single-use ids, specific refusals and the recording location.
 - Word the CAPTCHA and login-wall handoff notice per reason with ordered operator steps (take control, WRITE, solve, release, re-run) and show an unavailable handoff list instead of staying silent.
+- Arm wall input when the operator takes control of a capsule from the wall (tile Control action, the tile's view-only chip or the handoff notice): the tile turns interactive once the host grants human control, shows "View only — press Control to interact" otherwise, carries an outline, a crosshair pointer and a Release action while interactive, and the handoff take-control reveals the capsule's tile.
 - Reopen a closed browser tile: a create refused as a bound profile now returns a typed `SURFACE_PROFILE_BOUND` and shows the live tile again, a stopping capsule's late error no longer settles the next create, and the wall offers Add capsule after every tile was closed.
 - Preserve the shared packaged RAM admission ledger and drain adapter shutdown before runtime cleanup.
 - Register and validate retail frame reports and cover the complete preload invoke surface.
