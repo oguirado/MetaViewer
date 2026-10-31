@@ -851,6 +851,7 @@ run.go	daemon-adapter/internal/daemon/run.go
 run_test.go	daemon-adapter/internal/daemon/run_test.go
 runtime_test.go	daemon-adapter/internal/daemon/runtime_test.go
 stream.go	daemon-adapter/internal/daemon/stream.go
+streamk-bc181826c3fe	daemon-adapter/internal/daemon/stream_keepalive_test.go
 subscriptions.go	daemon-adapter/internal/daemon/subscriptions.go
 subscriptions_test.go	daemon-adapter/internal/daemon/subscriptions_test.go
 verdict-14622cfe90c9	daemon-adapter/internal/daemon/verdict_parity_test.go
@@ -893,6 +894,8 @@ frame.go	daemon-adapter/internal/ipc/frame.go
 frames_parity_test.go	daemon-adapter/internal/ipc/frames_parity_test.go
 ipc_test.go	daemon-adapter/internal/ipc/ipc_test.go
 json.go	daemon-adapter/internal/ipc/json.go
+keepalive.go	daemon-adapter/internal/ipc/keepalive.go
+keepali-1cc90790da1e	daemon-adapter/internal/ipc/keepalive_helper_test.go
 keepalive_test.go	daemon-adapter/internal/ipc/keepalive_test.go
 maxconn_test.go	daemon-adapter/internal/ipc/maxconn_test.go
 message.go	daemon-adapter/internal/ipc/message.go
