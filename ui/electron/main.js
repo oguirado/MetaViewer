@@ -2033,6 +2033,37 @@ async function requestFirstSurfaceCreate(core, envRec) {
 }
 
 /**
+ * PKG-FIX ID-01/B1 [TARGET, unit decision]: a packaged launch resolves the
+ * identity tool from resources/operator/tools (staged by ui/tools/package.js
+ * OPERATOR_RESOURCES); a development launch uses the checkout above
+ * ui/dist/renderer. rendererRoot is <resources>/app.asar/dist/renderer when packaged.
+ * @param {{packaged: boolean, resourcesPath?: string | undefined, rendererRoot: string}} input
+ * @returns {string} Absolute tool path.
+ */
+export function resolveIdentityTool({ packaged, resourcesPath, rendererRoot }) {
+  return packaged
+    ? join(resourcesPath ?? resolve(rendererRoot, '../../..'), 'operator', 'tools', 'mv_identity.py')
+    : resolve(rendererRoot, '../../../tools/mv_identity.py');
+}
+
+/** PKG-FIX QC-03 [TARGET]: adapter SIGTERM grace, strictly above the adapter's
+ * 30 s [CITED] closeManager budget (daemon-adapter environment.go). */
+export const ADAPTER_SHUTDOWN_GRACE_MS = 45000;
+
+/**
+ * PKG-FIX QC-05 [TARGET, unit decision]: Ctrl+Q (no Alt/Shift/Meta) quits the app
+ * through the normal will-quit disposal; every other key passes through.
+ * @param {unknown} input Electron before-input-event input.
+ * @returns {boolean} True when the key event is the quit shortcut.
+ */
+export function isQuitShortcut(input) {
+  if (input === null || typeof input !== 'object') return false;
+  const i = /** @type {Record<string, unknown>} */ (input);
+  return i.type === 'keyDown' && i.control === true && i.alt !== true && i.shift !== true && i.meta !== true &&
+    typeof i.key === 'string' && i.key.toLowerCase() === 'q';
+}
+
+/**
  * Boot the production main on injected handles. The acquisition ledger
  * unwinds the owned prefix on every failure: handlers removed, window
  * destroyed, scheme unhandled, core disposed. Nested display-only mode
@@ -2154,6 +2185,15 @@ export async function bootProductionMain(handles) {
       return;
     }
     unwound = true;
+    // PKG-FIX QC-04: hide the window first so a slow bridge teardown (a demo
+    // recording stop waits up to 10 s) never leaves a frozen window on screen.
+    if (window !== null) {
+      try {
+        /** @type {{hide?: () => void}} */ (/** @type {unknown} */ (window)).hide?.();
+      } catch {
+        /* hide best-effort; destroy follows */
+      }
+    }
     const remove = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (ipcRec)).removeHandler;
     for (let index = registered.length - 1; index >= 0; index -= 1) {
       try {
@@ -2172,7 +2212,11 @@ export async function bootProductionMain(handles) {
       }
       qaBridge = null;
     }
-    await operatorBridge?.dispose();
+    try {
+      await operatorBridge?.dispose();
+    } catch {
+      /* unwind best-effort: the window and core must still be released */
+    }
     operatorBridge=null;
     if (captureBridge !== null && captureBridge !== undefined) {
       try {
@@ -2464,7 +2508,7 @@ export async function bootProductionMain(handles) {
     }
     if (!retail.nested) operatorBridge = (await import('./operatorBridge.js')).installOperatorBridge({
       ipcMain, contents: contentsUnknown, env: typed.env,
-      tool: resolve(paths.rendererRoot, '../../../tools/mv_identity.py'),
+      tool: resolveIdentityTool({ packaged: packagedLaunch, resourcesPath: process.resourcesPath, rendererRoot: paths.rendererRoot }),
       demoRoot: packagedLaunch ? (/** @type {any} */(typed.env).MV_OPERATOR_REPO ?? null) : fileURLToPath(new URL('../../',import.meta.url)),
       buttonRoot: packagedLaunch ? join(process.resourcesPath ?? resolve(paths.rendererRoot,'../../..'),'operator') : fileURLToPath(new URL('../../',import.meta.url)),
       clipboard: {writeText:(/** @type {string} */text)=>{const {clipboard}=createRequire(import.meta.url)('electron');clipboard.writeText(text);}},
@@ -2571,6 +2615,25 @@ export async function bootProductionMain(handles) {
         /* quit best-effort */
       }
     });
+    if (typeof contentsHandle.on === 'function') {
+      /** @type {(event: string, listener: (event: unknown, input: unknown) => void) => void} */ (contentsHandle.on).call(
+        contentsHandle,
+        'before-input-event',
+        (event, input) => {
+          if (!isQuitShortcut(input)) return;
+          try {
+            /** @type {{preventDefault: () => void}} */ (/** @type {unknown} */ (event)).preventDefault();
+          } catch {
+            /* prevent best-effort */
+          }
+          try {
+            app.quit();
+          } catch {
+            /* quit best-effort */
+          }
+        },
+      );
+    }
   } catch {
     await unwind();
     fail('LIFECYCLE', 'lifecycle wiring refused');
@@ -2705,7 +2768,10 @@ export async function loadMainBindings(env = process.env, options = {}) {
       };
       bindings.adapter = createAdapterLauncher({
         command: env.MV_ADAPTER_BIN,
-        limits: {shutdownTimeoutMs: 30000}, // [TARGET] Native verified capsule stop grace.
+        // PKG-FIX QC-03 [TARGET]: the adapter's closeManager spends up to 30 s [CITED]
+        // destroying capsules plus recorder/view close; a 45 s grace keeps SIGKILL
+        // from landing mid-destroy (equal budgets leaked the capsule).
+        limits: {shutdownTimeoutMs: ADAPTER_SHUTDOWN_GRACE_MS},
         env,
         runtimeDir: env.XDG_RUNTIME_DIR,
         spawn: typeof customSpawn === 'function' ? customSpawn : defaultSpawn,

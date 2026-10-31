@@ -2,7 +2,7 @@
 // [TARGET, unit decision] Deterministic Linux bundle with an owned real-core session.
 // Local archives are mandatory; packager never reaches its download branch.
 import { createHash, randomUUID } from 'node:crypto';
-import { createReadStream, closeSync, openSync, rmSync, statSync, unlinkSync, writeSync } from 'node:fs';
+import { createReadStream, closeSync, openSync, readFileSync, rmSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import { once } from 'node:events';
 import * as fs from 'node:fs/promises';
 import { dirname, basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -496,6 +496,182 @@ export async function preparePackagedAdmission(env) {
   return directories[2];
 }
 
+/** [TARGET, unit decision] PKG-FIX L-01: the live profile RAM root lives in RAM
+ * (/dev/shm) and is lost on reboot; the adapter then dies on a bare configuration
+ * error. Refuse before any owned child exists with a typed, actionable line.
+ * Mirrors the adapter's live-profile branch only (MV_SRF_PROFILES skips it).
+ * @param {NodeJS.ProcessEnv} env
+ * @returns {Promise<null | {code: string, path: string, line: string}>}
+ */
+export async function preflightLiveRamRoot(env) {
+  const root = env.MV_SRF_LIVE_RAM_ROOT;
+  if (!env.MV_SRF_BIN_DIR || env.MV_SRF_PROFILES || typeof root !== 'string' || root === '') return null;
+  const quoted = `'${root.replaceAll("'", "'\\''")}'`;
+  const refuse = (/** @type {string} */ code, /** @type {string} */ why) => ({code, path: root,
+    line: `METAVIEWER_BOOT_REFUSED ${code}: MV_SRF_LIVE_RAM_ROOT ${root} ${why}; the live profile ` +
+      `RAM root lives in RAM and is lost on reboot. Create it with: mkdir -p -m 700 ${quoted} ` +
+      '(or source the operator environment file), then start MetaViewer again.'});
+  let canonical;
+  try {
+    canonical = await fs.realpath(root);
+  } catch {
+    return refuse('RAM_ROOT_ABSENT', 'does not exist');
+  }
+  let st;
+  try { st = await fs.stat(canonical); } catch { return refuse('RAM_ROOT_ABSENT', 'does not exist'); }
+  if (!st.isDirectory()) return refuse('RAM_ROOT_INVALID', 'is not a directory');
+  const clean = resolve(root);
+  if (isAbsolute(root) && canonical !== clean) return refuse('RAM_ROOT_INVALID', `is not canonical (resolves to ${canonical})`);
+  return null;
+}
+
+/** [TARGET, unit decision] PKG-FIX UM-02 / P2 attach handoff. The packaged app owns a
+ * private runtime (core socket + MV_CORE_CONFIG) that an external AI cannot guess.
+ * While a session is live the entry publishes one owner-only pointer pair under the
+ * HOST runtime: <XDG_RUNTIME_DIR>/metaviewer/attach/current.json (schema
+ * metaviewer.attach/v1, closed keys, validated by validateAttachRecord) and
+ * current.env (POSIX sh exports of the same env). It holds paths and ids only, never
+ * secrets or identity-store contents, and is retracted on every stop/exit path.
+ * Source current.env in a subshell: it overrides XDG_RUNTIME_DIR for the core socket. */
+export const ATTACH_SCHEMA = 'metaviewer.attach/v1';
+
+/** @param {unknown} value */
+export function validateAttachRecord(value) {
+  const ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
+  const SESSION = /^pkg-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  const PATHS = ['XDG_RUNTIME_DIR', 'MV_CORE_CONFIG', 'MV_SRF_BIN_DIR', 'MV_SRF_STATE_DIR',
+    'SRF_IDENTITY_STORE_ROOT', 'SRF_PROXY_REGISTRY', 'MV_WENDER_ROOT', 'MV_MW_HOME', 'MV_OPERATOR_REPO',
+    'MV_MEMORYWEB_REPO'];
+  const isPath = (/** @type {unknown} */ v) => typeof v === 'string' && v.length > 1 && v.length <= 4096 &&
+    v.startsWith('/') && !/[\0\r\n]/.test(v);
+  const keys = (/** @type {any} */ o, /** @type {string[]} */ want) => o !== null && typeof o === 'object' &&
+    !Array.isArray(o) && Object.keys(o).length === want.length && want.every(k => Object.hasOwn(o, k));
+  const r = /** @type {any} */ (value);
+  if (!keys(r, ['schema', 'session_id', 'pid', 'core_socket', 'boot_profile', 'env'])) throw new Error('ATTACH_SHAPE');
+  if (r.schema !== 'metaviewer.attach/v1' || typeof r.session_id !== 'string' || !SESSION.test(r.session_id)) throw new Error('ATTACH_SHAPE');
+  if (!Number.isSafeInteger(r.pid) || r.pid < 2 || !isPath(r.core_socket)) throw new Error('ATTACH_SHAPE');
+  if (r.boot_profile !== null && (typeof r.boot_profile !== 'string' || !ID.test(r.boot_profile))) throw new Error('ATTACH_SHAPE');
+  const env = r.env;
+  if (env === null || typeof env !== 'object' || Array.isArray(env)) throw new Error('ATTACH_SHAPE');
+  for (const required of ['XDG_RUNTIME_DIR', 'MV_CORE_CONFIG', 'MV_SESSION_ID']) {
+    if (!Object.hasOwn(env, required)) throw new Error('ATTACH_SHAPE');
+  }
+  for (const [name, v] of Object.entries(env)) {
+    if (name === 'MV_SESSION_ID') { if (v !== r.session_id) throw new Error('ATTACH_SHAPE'); }
+    else if (name === 'MV_SRF_LIVE_PROFILE') { if (typeof v !== 'string' || !ID.test(v) || v !== r.boot_profile) throw new Error('ATTACH_SHAPE'); }
+    else if (!PATHS.includes(name) || !isPath(v)) throw new Error('ATTACH_SHAPE');
+  }
+  if (r.boot_profile !== null && env.MV_SRF_LIVE_PROFILE !== r.boot_profile) throw new Error('ATTACH_SHAPE');
+  if (r.core_socket !== join(env.XDG_RUNTIME_DIR, 'metaviewer/core.sock')) throw new Error('ATTACH_SHAPE');
+  return r;
+}
+
+/** Build the attach record from the private session and the operator environment;
+ * unset or malformed optional values are omitted, never guessed.
+ * @param {{sessionId: string, pid: number, runtime: string, configPath: string, env: NodeJS.ProcessEnv}} input */
+export function buildAttachRecord({sessionId, pid, runtime, configPath, env}) {
+  const optional = ['MV_SRF_BIN_DIR', 'MV_SRF_STATE_DIR', 'SRF_IDENTITY_STORE_ROOT', 'SRF_PROXY_REGISTRY',
+    'MV_WENDER_ROOT', 'MV_MW_HOME', 'MV_OPERATOR_REPO', 'MV_MEMORYWEB_REPO'];
+  /** @type {Record<string, string>} */
+  const out = {XDG_RUNTIME_DIR: runtime, MV_CORE_CONFIG: configPath, MV_SESSION_ID: sessionId};
+  for (const name of optional) {
+    const v = env[name];
+    if (typeof v === 'string' && v.length > 1 && v.length <= 4096 && v.startsWith('/') && !/[\0\r\n]/.test(v)) out[name] = v;
+  }
+  const profile = env.MV_SRF_LIVE_PROFILE;
+  const live = typeof profile === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(profile) ? profile : null;
+  if (live !== null) out.MV_SRF_LIVE_PROFILE = live;
+  return validateAttachRecord({schema: 'metaviewer.attach/v1', session_id: sessionId, pid,
+    core_socket: join(runtime, 'metaviewer/core.sock'), boot_profile: live, env: out});
+}
+
+/** @param {any} record */
+export function renderAttachEnv(record) {
+  const r = validateAttachRecord(record);
+  const lines = [`# metaviewer.attach/v1 session ${r.session_id} pid ${r.pid}.`,
+    '# Source in a subshell: it points XDG_RUNTIME_DIR at the private MetaViewer runtime.'];
+  for (const name of Object.keys(r.env).sort()) {
+    lines.push(`export ${name}='${String(r.env[name]).replaceAll("'", "'\\''")}'`);
+  }
+  return lines.join('\n') + '\n';
+}
+
+/** Publish current.json + current.env atomically (temp + rename, 0600) inside a
+ * verified owner-only <host runtime>/metaviewer/attach directory.
+ * @param {string} hostRuntime @param {any} record */
+export async function publishAttachPointer(hostRuntime, record) {
+  if (typeof hostRuntime !== 'string' || !isAbsolute(hostRuntime)) throw new Error('ATTACH_HOST_RUNTIME_REQUIRED');
+  const dir = join(hostRuntime, 'metaviewer', 'attach');
+  for (const directory of [join(hostRuntime, 'metaviewer'), dir]) {
+    await fs.mkdir(directory, {mode: 0o700}).catch(error => {if (error.code !== 'EEXIST') throw error;});
+    const st = await fs.lstat(directory);
+    if (!st.isDirectory() || st.isSymbolicLink() || st.uid !== process.getuid?.() || (st.mode & 0o777) !== 0o700
+        || await fs.realpath(directory) !== directory) throw new Error('ATTACH_DIR_UNSAFE');
+  }
+  const json = JSON.stringify(validateAttachRecord(record), null, 2) + '\n';
+  const files = [['current.json', json], ['current.env', renderAttachEnv(record)]];
+  for (const [name, body] of files) {
+    const temp = join(dir, `.${name}.${record.pid}.tmp`);
+    await fs.writeFile(temp, body, {mode: 0o600, flag: 'w'});
+    await fs.chmod(temp, 0o600);
+    await fs.rename(temp, join(dir, name));
+  }
+  return {json: join(dir, 'current.json'), env: join(dir, 'current.env')};
+}
+
+/** Remove the pointer pair only when it still names this session (never a newer
+ * instance's). Synchronous so exit paths can call it. Never throws.
+ * @param {string | null} hostRuntime @param {string | null} sessionId */
+export function retractAttachPointerSync(hostRuntime, sessionId) {
+  if (!hostRuntime || !sessionId) return false;
+  const dir = join(hostRuntime, 'metaviewer', 'attach');
+  try {
+    const current = JSON.parse(readFileSync(join(dir, 'current.json'), 'utf8'));
+    if (current?.session_id !== sessionId) return false;
+  } catch { return false; }
+  for (const name of ['current.env', 'current.json']) {
+    try { rmSync(join(dir, name), {force: true}); } catch {}
+  }
+  return true;
+}
+
+/** [TARGET, unit decision] Operator guide staged as resources/operator/ATTACH.md. */
+export const ATTACH_GUIDE = `# Attach an external AI to the running MetaViewer
+
+While a packaged MetaViewer session is live it publishes two owner-only files
+under the host runtime directory (the XDG_RUNTIME_DIR it was started with):
+
+- $XDG_RUNTIME_DIR/metaviewer/attach/current.json, schema metaviewer.attach/v1:
+  session_id, pid, core_socket, boot_profile and env (closed keys).
+- $XDG_RUNTIME_DIR/metaviewer/attach/current.env, the same env as POSIX exports.
+
+The app prints METAVIEWER_ATTACH <path of current.env> on its terminal once the
+session is live, and removes both files when it stops (window close, Ctrl+Q,
+SIGTERM, SIGINT, SIGHUP). A pointer whose pid is not running is stale: do not use it.
+
+boot_profile (MV_SRF_LIVE_PROFILE, e.g. mv-live-1) is the capsule profile key,
+not an identity id. mw_run requires an identity-store id shown in Identities
+(see tools/mw_run_backend.py: ownership validates it with srf-identity-admin show --id).
+The env block carries MV_CORE_CONFIG and XDG_RUNTIME_DIR (the private runtime
+holding metaviewer/core.sock) plus, when the operator set them, MV_SRF_BIN_DIR,
+MV_SRF_STATE_DIR, SRF_IDENTITY_STORE_ROOT, SRF_PROXY_REGISTRY, MV_SRF_LIVE_PROFILE,
+MV_WENDER_ROOT, MV_MW_HOME, MV_OPERATOR_REPO and MV_MEMORYWEB_REPO. It holds paths
+and identifiers only, never credentials or identity-store contents.
+
+Source it in a subshell, because it points XDG_RUNTIME_DIR at the private runtime:
+
+    ( . "$XDG_RUNTIME_DIR/metaviewer/attach/current.env" &&
+      cd "$MV_OPERATOR_REPO/agents" &&
+      python3 -m metaviewer_agents.mw_run --identity <id shown in Identities> \\
+        --site <site> --workflow <workflow> --slot name=value )
+`;
+
+/** Files staged from the repository into resources/operator. main.js resolves the
+ * identity tool here when packaged (PKG-FIX ID-01/B1); the RAM-admission reclaim
+ * tool ships next to it (L-04). */
+export const OPERATOR_RESOURCES = Object.freeze(['docs/AGENT_ENTRY.md', 'docs/AUTOMATE_FROM_DEMO.md',
+  'tools/mv_identity.py', 'tools/mv_ram_admission.py']);
+
 /**
  * Create a testable packaged boot and teardown lifecycle with injectable clock,
  * signal sender, child spawner, and environment scrubber (`R3-T4-008` / `T20`,
@@ -667,6 +843,10 @@ export async function createPackagedBootLifecycle(options = {}) {
     for (const signal of ['SIGTERM', 'SIGINT']) proc.on?.(signal, () => {
       void stop().finally(() => appObj.exit(0));
     });
+    // PKG-FIX QC-02: closing the launching terminal delivers SIGHUP; dispose as for SIGTERM.
+    proc.on?.('SIGHUP', () => {
+      void stop().finally(() => appObj.exit(0));
+    });
     proc.on?.('exit', () => {
       if (isLiveCore(core)) {
         try {
@@ -720,6 +900,12 @@ import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { format } from 'node:util';
 ${preparePackagedAdmission.toString().replace('export ', '')}
+${preflightLiveRamRoot.toString().replace('export ', '')}
+${validateAttachRecord.toString().replace('export ', '')}
+${buildAttachRecord.toString().replace('export ', '')}
+${renderAttachEnv.toString().replace('export ', '')}
+${publishAttachPointer.toString().replace('export ', '')}
+${retractAttachPointerSync.toString().replace('export ', '')}
 const PACKAGED_EXEC_DIGESTS = Object.freeze({});
 const root = dirname(fileURLToPath(import.meta.url));
 const appRoot = dirname(root);
@@ -832,7 +1018,7 @@ try {
   writeFdSync(2, error?.message || String(error));
   process.exit(1);
 }
-const { app, protocol } = await import('electron').catch(() => ({ app: { exit: code => process.exit(code), on: () => {}, removeAllListeners: () => {}, whenReady: async () => {} }, protocol: null }));
+const { app, protocol, BrowserWindow } = await import('electron').catch(() => ({ app: { exit: code => process.exit(code), on: () => {}, removeAllListeners: () => {}, whenReady: async () => {} }, protocol: null }));
 const mainModule = await import('./main.js');
 const { mainDirectEntry, validateRetailLaunch } = mainModule;
 const { scrubChildEnv, validateKillTarget } = await import('./coreLauncher.js');
@@ -851,7 +1037,12 @@ else if (process.argv.includes('--nested-depth=1')) {
   let entry = null;
   let stopping = false;
   let stopPromise = null;
+  // PKG-FIX UM-02: host runtime + session of the published attach pointer.
+  let attachHost = null;
+  let attachSession = null;
+  const retractAttach = () => { retractAttachPointerSync(attachHost, attachSession); };
   const cleanupRuntimeSync = () => {
+    retractAttach();
     if (!runtime) return;
     try { rmSync(runtime, { recursive: true, force: true }); } catch {}
   };
@@ -867,6 +1058,7 @@ else if (process.argv.includes('--nested-depth=1')) {
     if (stopPromise !== null) return stopPromise;
     stopping = true;
     stopPromise = (async () => {
+      retractAttach();
       try {
         app.removeAllListeners?.('window-all-closed');
         app.on?.('window-all-closed', () => {});
@@ -901,6 +1093,15 @@ else if (process.argv.includes('--nested-depth=1')) {
   for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => {
     void stop().finally(() => app.exit(0));
   });
+  // PKG-FIX QC-02: closing the launching terminal delivers SIGHUP; dispose the
+  // adapter (and its capsule) exactly as for SIGTERM. A hung-up terminal turns
+  // stdio writes into EIO/EPIPE; never let that abort the disposal.
+  process.on('SIGHUP', () => {
+    void stop().finally(() => app.exit(0));
+  });
+  for (const stream of [process.stdout, process.stderr]) {
+    try { stream?.on?.('error', () => {}); } catch {}
+  }
   process.on('exit', () => {
     if (isLiveCore(core)) {try {process.kill(core.pid,'SIGKILL');} catch {}}
     cleanupRuntimeSync();
@@ -911,6 +1112,31 @@ else if (process.argv.includes('--nested-depth=1')) {
     // Native platform-init failure exits before any owned child exists.
     await app.whenReady();
     if (stopping) throw new Error('PKG_STOPPING');
+    // PKG-FIX L-03: take the single-instance lock before any owned child exists; a
+    // second launch raises the running window instead of spawning a second core.
+    if (typeof app.requestSingleInstanceLock === 'function') {
+      if (app.requestSingleInstanceLock() !== true) {
+        writeFdSync(2, 'METAVIEWER_BOOT_REFUSED SINGLE_INSTANCE: MetaViewer is already running; its window was raised. Quit it (Ctrl+Q) before starting another.');
+        try { await stop(); } catch {}
+        app.exit(1);
+        return;
+      }
+      app.on?.('second-instance', () => {
+        try {
+          const win = BrowserWindow?.getAllWindows?.()?.[0];
+          if (win && !win.isDestroyed?.()) { if (win.isMinimized?.()) win.restore?.(); win.show?.(); win.focus?.(); }
+        } catch {}
+      });
+    }
+    // PKG-FIX L-01: typed refusal before any owned child when the live RAM root is absent.
+    const ramRoot = await preflightLiveRamRoot(process.env);
+    if (ramRoot) {
+      writeFdSync(2, ramRoot.line);
+      try { await stop(); } catch {}
+      app.exit(1);
+      return;
+    }
+    const hostRuntime = process.env.XDG_RUNTIME_DIR;
     await preparePackagedAdmission(process.env);
     const pin = JSON.parse(await fs.readFile(join(root, 'package-pin.json'), 'utf8'));
     runtime = await fs.mkdtemp(join(tmpdir(), 'mv-pkg-'));
@@ -1036,6 +1262,18 @@ else if (process.argv.includes('--nested-depth=1')) {
       if (bootTimer !== undefined) clearTimeout(bootTimer);
     });
     void entry.catch(async error => {writeFdSync(2, formatErrorLine(error));try {await stop();} catch {}app.exit(1);});
+    // PKG-FIX UM-02 / P2: publish the attach pointer once the session is live.
+    void entry.then(async () => {
+      if (stopping) return;
+      const record = buildAttachRecord({sessionId:config.session_id,pid:process.pid,runtime,configPath,env:process.env});
+      attachHost = hostRuntime;
+      attachSession = record.session_id;
+      const published = await publishAttachPointer(hostRuntime, record);
+      if (stopping) {retractAttach();return;}
+      writeFdSync(1, 'METAVIEWER_ATTACH ' + published.env);
+    }).catch(error => {
+      if (!stopping) writeFdSync(2, 'METAVIEWER_ATTACH_UNAVAILABLE ' + (error?.message || String(error)));
+    });
   } catch(error) {writeFdSync(2, formatErrorLine(error));try {await stop();} catch {}cleanupRuntimeSync();app.exit(1);}
   })();
 }
@@ -2203,10 +2441,11 @@ export async function packageShell(env = process.env) {
     await fs.copyFile(join(repo,'deps.lock'),join(built[0],'resources/deps.lock'));
     // [TARGET, unit decision] Host-owned button runtime; no renderer-selected paths.
     const operatorRoot=join(built[0],'resources/operator');
-    for(const relative of ['docs/AGENT_ENTRY.md','docs/AUTOMATE_FROM_DEMO.md']) {
+    for(const relative of OPERATOR_RESOURCES) {
       await fs.mkdir(dirname(join(operatorRoot,relative)),{recursive:true});
       await fs.copyFile(join(repo,relative),join(operatorRoot,relative));
     }
+    await fs.writeFile(join(operatorRoot,'ATTACH.md'),ATTACH_GUIDE);
 
     await fs.copyFile(join(ui,'kit.lock.json'),join(built[0],'resources/kit.lock.json'));
     await fs.writeFile(join(built[0],'INSTALL.md'), `# MetaViewer Linux ${architecture.arch}
@@ -2217,6 +2456,11 @@ Automate from a demo requires MV_OPERATOR_REPO pointing to the operator-owned
 MetaViewer Git checkout with tools/mv_demo.py; configure the identity and
 MemoryWeb environment described in that checkout's docs/AUTOMATE_FROM_DEMO.md.
 Use MetaViewer copies the bundled resources/operator/docs/AGENT_ENTRY.md prompt.
+An external AI attaches to the running session through the pointer described in
+resources/operator/ATTACH.md. The identity tool used by Identities and Automate
+is resources/operator/tools/mv_identity.py (python3, standard library only);
+resources/operator/tools/mv_ram_admission.py --dry-run|--apply reclaims RAM
+admission records left by dead sessions.
 Verify every delivered file from this directory with:
 sha256sum -c ../${architecture.name}.sha256
 

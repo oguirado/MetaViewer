@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Ship the identity and RAM-admission reclaim tools under `resources/operator/tools` and resolve the packaged identity tool there.
+- Publish an owner-only attach pointer (`metaviewer.attach/v1`, `attach/current.env`) so an external AI reaches the live session's core and capsule identity; retract it on every stop path.
+- Refuse a packaged boot with an absent live RAM root (`RAM_ROOT_ABSENT`) or a second instance (`SINGLE_INSTANCE`, existing window raised) before any child starts.
+- Dispose the adapter on SIGHUP, hide the window before bridge teardown, quit on Ctrl+Q, and give the adapter a 45 s [TARGET] stop grace above its 30 s [CITED] capsule close budget.
 - Make Automate from a demo complete end to end: export real recorder keys (Page Up/Down arrive as Prior/Next), multi-window final frames and recordings with a failed after-frame capture, keep keypad digits refused, free the RAM copy after sealing, check authored sites without following links, and give the dialog id validation, single-use ids, specific refusals and the recording location.
 - Word the CAPTCHA and login-wall handoff notice per reason with ordered operator steps (take control, WRITE, solve, release, re-run) and show an unavailable handoff list instead of staying silent.
 - Arm wall input when the operator takes control of a capsule from the wall (tile Control action, the tile's view-only chip or the handoff notice): the tile turns interactive once the host grants human control, shows "View only — press Control to interact" otherwise, carries an outline, a crosshair pointer and a Release action while interactive, and the handoff take-control reveals the capsule's tile.
