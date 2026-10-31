@@ -1,0 +1,66 @@
+/* Handoff notice styles: own classes, not the generic activity strip's.
+ * The list is content-sized (it never reserves the activity strip's fixed
+ * height) and scrolls only past a viewport-relative cap. Every handoff row is
+ * a refusal the operator must resolve, so its marker uses the refusal tone,
+ * never the success dot. Kit tokens only: no colour literals, no fonts, no
+ * remote loads. */
+
+.mv-handoff {
+  border-top: 1px solid var(--cuk-semantic-border-default);
+  background: var(--cuk-semantic-surface-panel);
+}
+
+.mv-handoff__list {
+  margin: 0;
+  padding: var(--cuk-semantic-spacing-sm) var(--cuk-semantic-spacing-md);
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--cuk-semantic-spacing-sm);
+  max-height: 40vh;
+  overflow: auto;
+}
+
+.mv-handoff__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--cuk-semantic-spacing-sm);
+  font-size: var(--cuk-semantic-typography-font-size-md);
+  line-height: var(--cuk-semantic-typography-line-height-normal);
+  color: var(--cuk-semantic-text-primary);
+}
+
+.mv-handoff__row::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--cuk-semantic-border-default);
+}
+
+.mv-handoff__row[data-handoff-tone='refusal']::before {
+  background: var(--cuk-semantic-status-error-border);
+}
+
+.mv-handoff__steps {
+  flex-basis: 100%;
+  margin: 0;
+  padding-left: var(--cuk-semantic-spacing-lg);
+  color: var(--cuk-semantic-text-muted);
+}
+
+.mv-handoff__actions {
+  display: flex;
+  gap: var(--cuk-semantic-spacing-sm);
+  flex-basis: 100%;
+}
+
+.mv-handoff__error {
+  margin: 0;
+  padding: var(--cuk-semantic-spacing-sm) var(--cuk-semantic-spacing-md);
+  font-size: var(--cuk-semantic-typography-font-size-md);
+  line-height: var(--cuk-semantic-typography-line-height-normal);
+  color: var(--cuk-semantic-status-error-text);
+}
