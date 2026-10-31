@@ -2,9 +2,10 @@
 'use strict';
 
 import { describe, it } from 'node:test';
+import { OPERATOR_METHODS } from '../electron/preload.js';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -112,6 +113,7 @@ function createBootHandles(opts) {
   /** @type {Array<{channel: string, payload: unknown}>} */
   const ipcSent = [];
   const appListeners = new Map();
+  const handlers = new Map();
   const uid = typeof process.getuid === 'function' ? process.getuid() : 1000;
   const frame = {
     origin: PRIVILEGED_ORIGIN,
@@ -178,8 +180,8 @@ function createBootHandles(opts) {
     },
     BrowserWindow: FakeWindow,
     ipcMain: {
-      handle: () => {},
-      removeHandler: () => {},
+      handle: (channel, handler) => { assert.equal(handlers.has(channel), false, channel); handlers.set(channel, handler); },
+      removeHandler: channel => {handlers.delete(channel);},
     },
     protocol: {
       registerSchemesAsPrivileged: () => {},
@@ -205,7 +207,7 @@ function createBootHandles(opts) {
     ],
     geometry: { width: 1280, height: 720 },
   };
-  return { handles, calls, coreRequests, ipcSent, appListeners };
+  return { handles, calls, coreRequests, ipcSent, appListeners, handlers, webContents };
 }
 
 describe('W3-PKG-FULLSTACK bundled adapter supervision next to core', () => {
@@ -476,7 +478,7 @@ describe('W3-PKG-FULLSTACK bundled adapter supervision next to core', () => {
     }
   });
 
-  it('logs a typed SURFACE_CREATE_* code and keeps the window when first-surface create fails or times out', async () => {
+  it('logs a typed SURFACE_CREATE_* code and keeps the window when first-surface create fails or times out', async (t) => {
     const fx = createFullstackFixture();
     const origConsoleError = console.error;
     /** @type {Array<string>} */
@@ -566,10 +568,16 @@ describe('W3-PKG-FULLSTACK bundled adapter supervision next to core', () => {
         },
         coreRequest: () => new Promise(() => {}),
       });
+      t.mock.timers.enable({apis:['setTimeout']});
       const boot2 = await bootProductionMain(bootEnv2.handles);
+      assert.equal(loggedErrors.length, 0, 'pending create must not be called degraded at readiness');
+      t.mock.timers.tick(60000);
+      await Promise.resolve();
+      await Promise.resolve();
       assert.equal(bootEnv2.coreRequests.length, 1);
       assert.ok(bootEnv2.calls.includes('new-BrowserWindow'));
       assert.ok(loggedErrors.some((line) => line.includes('METAVIEWER_SURFACE_CREATE_DEGRADED') && line.includes('SURFACE_CREATE_TIMEOUT')));
+      t.mock.timers.reset();
       await boot2.dispose();
     } finally {
       console.error = origConsoleError;
@@ -757,4 +765,70 @@ it('adapter diagnostics preserve configuration text while redacting credentials 
   assert.equal(redactAdapterDiagnostic('token=abc password="two words" https://user:pass@host/\nnext'),
     'token=[REDACTED] password=[REDACTED] https://[REDACTED]@host/ next');
   assert.equal(redactAdapterDiagnostic('failure: opaque-value', {MV_SECRET:'opaque-value'}), 'failure: [REDACTED]');
+});
+
+it('POLISH-3 production registers every retail preload invoke channel and validates frame reports', async () => {
+  const fx = createFullstackFixture();
+  const harness = createBootHandles({root:fx.root, xdg:fx.xdg});
+  harness.handles.app.isPackaged = true;
+  const boot = await bootProductionMain(harness.handles);
+  try {
+    const preloadSource = readFileSync(new URL('../electron/preload.js',import.meta.url),'utf8');
+    // Derive all fixed retail suffixes from preload's actual closed channel maps.
+    const suffixes = name => {
+      const start = preloadSource.indexOf(`const ${name} = Object.freeze({`);
+      assert.ok(start >= 0, name);
+      const end = preloadSource.indexOf('});', start);
+      assert.ok(end > start, name);
+      return [...preloadSource.slice(start,end).matchAll(/:\s*'([^']+)'/g)].map(match=>`metaviewer:${match[1]}`);
+    };
+    const productionChannels = [...Object.values(CHANNELS), ...suffixes('WIRE_NAMES'), ...suffixes('CAPTURE_CHANNELS'),
+      ...OPERATOR_METHODS.map(method=>`metaviewer:${method}`), 'metaviewer:frames.reportDiag','metaviewer:renderer-ready'];
+    for (const channel of productionChannels) assert.equal(harness.handlers.has(channel), true, channel);
+    const report = harness.handlers.get('metaviewer:frames.reportDiag');
+    const event = {sender:harness.webContents, senderFrame:harness.webContents.mainFrame};
+    assert.equal(await report(event, {rehashSkipped:1, rehashDone:2}), true);
+    await assert.rejects(report(event, {rehashSkipped:0, rehashDone:2}), /decrease/);
+    await assert.rejects(report(event, {rehashSkipped:1, rehashDone:2, extra:1}), /payload|plain object/);
+    await assert.rejects(report({sender:{}}, {rehashSkipped:1, rehashDone:2}));
+  } finally {await boot.dispose(); fx.cleanup();}
+});
+
+it('POLISH-3 a late create success remains pending through readiness without a degraded diagnostic', async () => {
+  const fx = createFullstackFixture();
+  let complete;
+  const reply = new Promise(resolve => {complete=resolve;});
+  const logs = [];
+  const error = console.error;
+  console.error = (...args) => logs.push(args.join(' '));
+  const harness = createBootHandles({root:fx.root, xdg:fx.xdg, env:{MV_SRF_BIN_DIR:fx.srfBinDir},
+    adapter:{start:async()=>({availability:'live',handshakeSeen:true}),getStatus:()=>({availability:'live',handshakeSeen:true}),dispose:async()=>{}}, coreRequest:()=>reply});
+  try {
+    const boot = await bootProductionMain(harness.handles);
+    assert.equal(harness.calls.includes('new-BrowserWindow'), true);
+    assert.equal(logs.length, 0);
+    complete({schema:'surface_event/v0.2',event:'created',data:{}});
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(logs.length, 0);
+    await boot.dispose();
+  } finally {console.error=error; fx.cleanup();}
+});
+
+it('POLISH-3 concurrent main and package disposers share adapter completion', async () => {
+  const fx = createFullstackFixture();
+  let release;
+  const barrier = new Promise(resolve => {release=resolve;});
+  const harness = createBootHandles({root:fx.root,xdg:fx.xdg,
+    adapter:{start:async()=>({availability:'live',handshakeSeen:true}),getStatus:()=>({availability:'live'}),dispose:()=>barrier}});
+  const boot = await bootProductionMain(harness.handles);
+  try {
+    const first = boot.dispose();
+    const second = boot.dispose();
+    assert.equal(first,second);
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(harness.calls.includes('core.dispose'),false);
+    release();
+    await Promise.all([first,second]);
+    assert.equal(harness.calls.filter(call=>call==='core.dispose').length,1);
+  } finally {release();await boot.dispose();fx.cleanup();}
 });

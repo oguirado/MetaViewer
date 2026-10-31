@@ -5,11 +5,13 @@ import { spawnSync } from 'node:child_process';
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createSettingsStore } from '../electron/authorityWire.js';
-import { scrubChildEnv, validateKillTarget } from '../electron/coreLauncher.js';
+import { scrubChildEnv, scrubAdapterEnv, validateKillTarget } from '../electron/coreLauncher.js';
 import {
   ELECTRON_PIN,
+  preparePackagedAdmission,
+  productionEntry,
    computeElectronDistTreeDigest,
   createPackagedBootLifecycle,
   packageArchitecture,
@@ -97,7 +99,7 @@ test('R3-T4-008 (T20) packaged boot cleans runtime on early ENV_PATH throw, norm
       () =>
         createPackagedBootLifecycle({
           tmpRoot: root,
-          env: { PATH: 'relative', HOME: root, LANG: 'C.UTF-8' },
+          env: { XDG_RUNTIME_DIR: root, PATH: 'relative', HOME: root, LANG: 'C.UTF-8' },
           scrubChildEnv,
           validateKillTarget,
         }),
@@ -123,7 +125,7 @@ test('R3-T4-008 (T20) packaged boot cleans runtime on early ENV_PATH throw, norm
 
     const lifecycle = await createPackagedBootLifecycle({
       tmpRoot: root,
-      env: { PATH: '/usr/bin:/bin', HOME: root, LANG: 'C.UTF-8' },
+      env: { XDG_RUNTIME_DIR: root, PATH: '/usr/bin:/bin', HOME: root, LANG: 'C.UTF-8' },
       scrubChildEnv,
       validateKillTarget,
       spawn: () => /** @type {any} */ (fakeChild),
@@ -171,7 +173,7 @@ test('R3-T4-008 (T20) packaged boot cleans runtime on early ENV_PATH throw, norm
     });
     const lifecycleHang = await createPackagedBootLifecycle({
       tmpRoot: root,
-      env: { PATH: '/usr/bin:/bin', HOME: root, LANG: 'C.UTF-8' },
+      env: { XDG_RUNTIME_DIR: root, PATH: '/usr/bin:/bin', HOME: root, LANG: 'C.UTF-8' },
       scrubChildEnv,
       validateKillTarget,
       spawn: () => /** @type {any} */ (fakeChildHang),
@@ -221,7 +223,7 @@ test('R3-T4-009 (T21) packaged settings persist across two launches in caller XD
     await mkdir(appRoot, { recursive: true });
 
     // Launch 1: boot packaged lifecycle, save settings via authorityWire settings store, then stop()
-    const env1 = {
+    const env1 = { XDG_RUNTIME_DIR: root,
       PATH: '/usr/bin:/bin',
       HOME: root,
       XDG_CONFIG_HOME: persistentConfigHome,
@@ -255,7 +257,7 @@ test('R3-T4-009 (T21) packaged settings persist across two launches in caller XD
     await assert.rejects(access(launch1.runtime), { code: 'ENOENT' });
 
     // Launch 2: fresh packaged boot with same caller XDG_CONFIG_HOME reads back Launch 1 settings
-    const env2 = {
+    const env2 = { XDG_RUNTIME_DIR: root,
       PATH: '/usr/bin:/bin',
       HOME: root,
       XDG_CONFIG_HOME: persistentConfigHome,
@@ -605,4 +607,65 @@ test('T7R3-008 & T7R3-009 manifest stock sha256sum -c grammar and cargo --offlin
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('POLISH-3 shared admission survives private runtime cleanup and disposal precedes removal', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mv-polish3-'));
+  const env = {XDG_RUNTIME_DIR:root, HOME:root, PATH:process.env.PATH};
+  try {
+    const child = Object.assign(new EventEmitter(), {pid:99999,exitCode:0,signalCode:null});
+    const lifecycle = await createPackagedBootLifecycle({tmpRoot:root,env,spawn:()=>child,
+      processObj:{pid:process.pid,on:()=>{},exit:()=>{}}});
+    const admission = join(root,'metaviewer','ram-admission');
+    assert.equal(env.MV_RAM_ADMISSION_DIR, admission);
+    assert.equal(scrubAdapterEnv(env,lifecycle.runtime).MV_RAM_ADMISSION_DIR, admission);
+    let release;
+    const barrier = new Promise(resolve => {release=resolve;});
+    lifecycle.setBoot({dispose:async()=>{await access(lifecycle.runtime);await barrier;await access(lifecycle.runtime);}});
+    const stopped = lifecycle.stop();
+    await access(lifecycle.runtime);
+    release();
+    await stopped;
+    await assert.rejects(access(lifecycle.runtime), {code:'ENOENT'});
+    await access(admission);
+    await assert.rejects(preparePackagedAdmission({XDG_RUNTIME_DIR:'relative'}), /REQUIRED/);
+    await chmod(admission,0o755);
+    await assert.rejects(preparePackagedAdmission({XDG_RUNTIME_DIR:root}), /UNSAFE/);
+    await chmod(admission,0o700);
+    await rm(admission,{recursive:true});
+    await symlink(root,admission);
+    await assert.rejects(preparePackagedAdmission({XDG_RUNTIME_DIR:root}), /UNSAFE/);
+  } finally {await rm(root,{recursive:true,force:true});}
+});
+
+test('POLISH-3 generated entry cannot spawn core before native platform readiness and drains quit', () => {
+  assert.ok(productionEntry.indexOf('await app.whenReady()') < productionEntry.indexOf("core = spawn("));
+  assert.match(productionEntry, /for \(const signal of \['SIGTERM', 'SIGINT'\]\)/);
+  assert.ok(productionEntry.indexOf('await boot?.dispose?.()') < productionEntry.indexOf('if (runtime) await fs.rm'));
+  assert.ok(productionEntry.indexOf('await preparePackagedAdmission(process.env)') < productionEntry.indexOf('process.env.XDG_RUNTIME_DIR = runtime'));
+});
+
+test('POLISH-3 native platform initialization failure executes no core spawn (with eager-spawn mutant)', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'mv-platform-Música-'));
+  try {
+    await writeFile(join(root,'package.json'), JSON.stringify({type:'module'}));
+    await writeFile(join(root,'main.js'), "export const validateRetailLaunch=()=>({ok:true}); export const mainDirectEntry=()=>{}; export const registerPrivilegedScheme=()=>{};");
+    await writeFile(join(root,'coreLauncher.js'), "export const scrubChildEnv=e=>e; export const validateKillTarget=()=>true;");
+    const source = productionEntry.replace('  verifyBootSeal(appRoot);', '  /* Seal fixture: tested by package seal suites. */');
+    const electron = "export const app={on(){},removeAllListeners(){},exit:code=>process.exit(code),whenReady:async()=>{throw Error('PLATFORM_INIT_FAILED')}}; export const protocol={};";
+    const children = "export function spawn(){process.stdout.write('CORE_SPAWN\\n');throw Error('EAGER_CORE_SPAWN')}";
+    const bootstrap = `import {registerHooks} from 'node:module'; registerHooks({resolve(s,c,next){
+      const stub=s==='electron'?${JSON.stringify(electron)}:s==='node:child_process'?${JSON.stringify(children)}:null;
+      return stub?{url:'data:text/javascript,'+encodeURIComponent(stub),shortCircuit:true}:next(s,c);
+    }}); await import(${JSON.stringify(pathToFileURL(join(root,'entry.js')).href)});`;
+    await writeFile(join(root,'entry.js'), source);
+    const normal = spawnSync(process.execPath,['--input-type=module','-e',bootstrap],{env:{},encoding:'utf8',timeout:5000});
+    assert.equal(normal.status,1);
+    assert.match(normal.stderr,/PLATFORM_INIT_FAILED/);
+    assert.doesNotMatch(normal.stdout,/CORE_SPAWN/);
+    await writeFile(join(root,'entry.js'), source.replace('await app.whenReady();', "spawn('eager-mutant'); await app.whenReady();"));
+    const mutant = spawnSync(process.execPath,['--input-type=module','-e',bootstrap],{env:{},encoding:'utf8',timeout:5000});
+    assert.equal(mutant.status,1);
+    assert.match(mutant.stdout,/CORE_SPAWN/);
+  } finally {await rm(root,{recursive:true,force:true});}
 });

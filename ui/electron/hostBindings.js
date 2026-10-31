@@ -28,6 +28,7 @@ import { isAbsolute, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 
+export const SURFACE_CREATE_DEADLINE_MS = 60000; // [TARGET, unit decision] Capsule startup bound, independent of boot readiness.
 const MAX_WIRE = 1024 * 1024, MAX_FRAME = 64 * 1024 * 1024, MAX_ITEMS = 64, DEADLINE = 3000;
 const MAX_SURFACE_INPUT_QUEUE_EVENTS = 256, MAX_ADAPTER_TYPE_TEXT_BYTES = 16384;
 const fail = () => new Error('CORE_SEAMS_ABSENT');
@@ -247,13 +248,13 @@ export async function createMainBindings({env = process.env, createMessageChanne
     };
     /** @type {Set<(state:any)=>void>} */ const captureListeners = new Set();
     const helloTimer = setTimeout(shutdown, DEADLINE);
-    /** @param {any} body @param {string} [messageId] */
-    function send(body, messageId = undefined) {
+    /** @param {any} body @param {string} [messageId] @param {(error?: Error | null) => void} [onWritten] */
+    function send(body, messageId = undefined, onWritten = undefined) {
       if (disposed || !socket || !Number.isSafeInteger(++seq)) throw fail();
       const value = {schema:'envelope/v0.2',msg_id:messageId || body.request_id || body.proposal_id || randomUUID(),ts_ns:0,
         from:ui.endpoint,to:config.core.endpoint,session_id:config.session_id,seq,nonce:randomUUID(),body};
       const line = JSON.stringify(value) + '\n'; if (Buffer.byteLength(line) > MAX_WIRE || socket.writableLength > MAX_WIRE) throw fail();
-      socket.write(line);
+      socket.write(line, onWritten);
     }
     /** @param {any} published @param {any} state */
     function buildFrameEntry(published, state) {
@@ -482,13 +483,21 @@ export async function createMainBindings({env = process.env, createMessageChanne
           || !id(layoutError.surface_id) || !id(layoutError.detail))) throw fail();
       for (const [key,item] of pending) {
         let result;
+        // [TARGET, unit decision] Creates are serialized (SURFACE_CREATE_BUSY), so the single
+        // in-flight create settles on: a created event of its profile; a contract-shaped error
+        // whose surface_id is not a known surface (the adapter fills it with the request param or
+        // a msg-id fallback, never a live surface); or an action_verdict whose proposal_id is the
+        // create msg-id (core refusals). Errors of any known surface belong to that live capsule
+        // and never settle the pending create, whatever its profile.
         if (item.body.schema === 'surface_request/v0.2' && item.body.op === 'create') {
           if (body.schema === 'surface_event/v0.2' && body.event === 'created'
               && body.data?.surface?.profile_id === item.body.params.profile_id) result = body;
-          else if (body.schema === 'surface_event/v0.2' && body.event === 'error') result = body;
+          else if (body.schema === 'surface_event/v0.2' && body.event === 'error' && !layoutError
+              && typeof body.data?.surface_id === 'string'
+              && !surfaces.has(body.data.surface_id)) result = body;
           else if (body.schema === 'action_verdict/v0.2' && body.proposal_id === key) result = body;
           if (result !== undefined) {
-            if (body.schema === 'surface_event/v0.2') console.log('METAVIEWER_SURFACE_CREATE_WIRE_REPLY');
+            console.log('METAVIEWER_SURFACE_CREATE_WIRE_REPLY');
             clearTimeout(item.timer); pending.delete(key); item.resolve(result); continue;
           }
         }
@@ -819,16 +828,19 @@ export async function createMainBindings({env = process.env, createMessageChanne
         // carry no request id. This closed path is never a wire passthrough.
         if (message?.schema === 'surface_request/v0.2' || message?.op === 'create') {
           const body = validateSurfaceCreateRequest(message);
-          if (!live || disposed || nonInputPendingCount() >= MAX_ITEMS
-              || [...pending.values()].some(item => item.body.op === 'create')) throw fail();
+          if (!live || disposed || nonInputPendingCount() >= MAX_ITEMS) throw fail();
+          if ([...pending.values()].some(item => item.body.op === 'create'))
+            throw Object.assign(new Error('SURFACE_CREATE_BUSY'), {code:'SURFACE_CREATE_BUSY'});
           const key = randomUUID();
           return new Promise((resolve, reject) => {
             const timer = setTimeout(() => {
               pending.delete(key);
               reject(Object.assign(new Error('SURFACE_CREATE_TIMEOUT'), {code:'SURFACE_CREATE_TIMEOUT'}));
-            }, DEADLINE);
+            }, SURFACE_CREATE_DEADLINE_MS);
             pending.set(key, {body, resolve, reject, timer});
-            try { send(body, key); } catch { shutdown(); }
+            // [TARGET, unit decision] The packaged smoke hold observes this marker; it is printed
+            // only from the core socket write callback of an admitted create, never before the write.
+            try { send(body, key, error => { if (!error) console.log('METAVIEWER_SURFACE_CREATE_SENT'); }); } catch { shutdown(); }
           });
         }
         if (message?.op === 'cadence') {

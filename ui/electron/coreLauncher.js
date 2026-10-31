@@ -106,6 +106,7 @@ export const ALLOWED_CORE_ENV = Object.freeze(['LANG', 'LC_ALL', 'PATH', 'TMPDIR
  * @type {ReadonlyArray<string>}
  */
 export const ALLOWED_ADAPTER_ENV = Object.freeze([
+  'MV_RAM_ADMISSION_DIR',
   ...ALLOWED_CORE_ENV,
   'HOME',
   'XDG_RUNTIME_DIR',

@@ -31,9 +31,9 @@ import { createAdapterLauncher, findForbiddenEnv, redactAdapterDiagnostic } from
 // window construction and unwinds core; when unset, core-only boot is kept.
 // [TARGET, unit decision] Once the supervised adapter is live with
 // handshakeSeen=true, bootProductionMain issues exactly 1 surface_request/v0.2
-// create through the open core handle within a bounded 1500 ms wait inside the
-// boot budget; any create failure logs a typed SURFACE_CREATE_* code and keeps
-// the window.
+// create through the open core handle asynchronously. A separate final deadline
+// bounds capsule startup; pending work does not consume the readiness budget.
+// Final failure logs a typed SURFACE_CREATE_* code and keeps the window.
 
 // [TARGET, unit decision] Packaging seals ASAR renderer bytes into the loaded
 // main module. A replaced archive cannot change the admitted asset contents.
@@ -1837,12 +1837,11 @@ function hardenSession(session) {
 }
 
 /**
- * [TARGET, unit decision] Bounded wait (ms) for the optional first-surface
- * auto-create request after a live adapter handshake, kept well inside the
- * 10 s packaged boot budget (`MV_PKG_BOOT_BUDGET_MS`) and 3 s wire deadline.
+ * [TARGET, unit decision] Capsule creation has a separate 60 s [TARGET] final
+ * bound, shared with hostBindings; it never consumes the readiness boot budget.
  * @type {number}
  */
-export const FIRST_SURFACE_CREATE_TIMEOUT_MS = 1500;
+export const FIRST_SURFACE_CREATE_TIMEOUT_MS = 60000;
 
 /**
  * Build the single first-surface auto-create request (`surface_request/v0.2`)
@@ -1947,22 +1946,21 @@ export function buildFirstSurfaceCreateRequest(envRec) {
 
 /**
  * Issue at most one `surface_request/v0.2` `create` through the live core
- * handle with a bounded wait inside the boot budget. Any failure logs a typed
+ * handle asynchronously with an independent final deadline. Any failure logs a typed
  * `SURFACE_CREATE_*` diagnostic and keeps the window.
  * @param {CoreLauncher} core Live core handle.
  * @param {Record<string, unknown>} envRec Environment record.
  * @returns {Promise<void>}
  */
 async function requestFirstSurfaceCreate(core, envRec) {
-  const rawBudget = Number(envRec.MV_PKG_BOOT_BUDGET_MS);
-  const bootBudgetMs = Number.isFinite(rawBudget) && rawBudget > 0 ? rawBudget : 10000;
-  const timeoutMs = Math.max(1, Math.min(FIRST_SURFACE_CREATE_TIMEOUT_MS, Math.floor(bootBudgetMs / 2)));
+  const timeoutMs = FIRST_SURFACE_CREATE_TIMEOUT_MS;
+  console.log('METAVIEWER_SURFACE_CREATE_PENDING');
   const request = buildFirstSurfaceCreateRequest(envRec);
   /** @type {ReturnType<typeof setTimeout> | null} */
   let timer = null;
   try {
     const reply = await Promise.race([
-      Promise.resolve().then(() => core.request(request)),
+      core.request(request),
       new Promise((_, reject) => {
         timer = setTimeout(() => {
           const timeoutErr = new Error('first surface create timed out');
@@ -2381,7 +2379,7 @@ export async function bootProductionMain(handles) {
         adapterStatus.availability === 'live' &&
         adapterStatus.handshakeSeen === true
       ) {
-        await requestFirstSurfaceCreate(core, envRec);
+        void requestFirstSurfaceCreate(core, envRec);
       }
     }
   }
@@ -2453,7 +2451,7 @@ export async function bootProductionMain(handles) {
     if (packagedLaunch && envRec.MV_FRAME_DIAG !== undefined && envRec.MV_FRAME_DIAG !== '') {
       fail('RETAIL_ENV', 'packaged launch refuses MV_FRAME_DIAG');
     }
-    if (!retail.nested && envRec.MV_FRAME_DIAG !== undefined && envRec.MV_FRAME_DIAG !== '') {
+    if (!retail.nested) {
       frameDiagBridge = (await import('./frameDiag.js')).installFrameDiag({
         ipcMain,
         contents: contentsUnknown,
@@ -2578,18 +2576,16 @@ export async function bootProductionMain(handles) {
     fail('LIFECYCLE', 'lifecycle wiring refused');
   }
 
-  let disposed = false;
+  /** @type {Promise<void> | null} */
+  let disposePromise = null;
   /**
-   * Idempotent boot teardown: close the window, unserve the scheme,
-   * dispose the core. Never rejects.
+   * Share completion across main and packaged quit listeners: every caller waits
+   * until adapter cleanup finishes, even when another listener started disposal.
    * @returns {Promise<void>}
    */
-  async function dispose() {
-    if (disposed) {
-      return;
-    }
-    disposed = true;
-    await unwind();
+  function dispose() {
+    if (disposePromise === null) disposePromise = unwind();
+    return disposePromise;
   }
 
   if (adapter !== null) bootedAdapters.add(adapter);
@@ -2709,6 +2705,7 @@ export async function loadMainBindings(env = process.env, options = {}) {
       };
       bindings.adapter = createAdapterLauncher({
         command: env.MV_ADAPTER_BIN,
+        limits: {shutdownTimeoutMs: 30000}, // [TARGET] Native verified capsule stop grace.
         env,
         runtimeDir: env.XDG_RUNTIME_DIR,
         spawn: typeof customSpawn === 'function' ? customSpawn : defaultSpawn,

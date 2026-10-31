@@ -11,6 +11,7 @@ import { createServer } from 'node:net';
 import { createPackage } from '@electron/asar';
 import { buildFuseConfig, ELECTRON_PIN as MAIN_ELECTRON_PIN } from '../electron/main.js';
 import { createAdapterLauncher } from '../electron/coreLauncher.js';
+import { validateSurfaceCreateRequest } from '../electron/hostBindings.js';
 import * as packaging from './package.js';
 import {
   LOCKED_ELECTRON_NPM_FILES,
@@ -85,7 +86,10 @@ async function fixture(run) {
     await createPackage(app,join(root,'resources/app.asar'));
     await writeManifest(root,`${root}.sha256`);
     await verifyInstall(root, 'arm64');
-    await run(root,app);
+    // POLISH-3: packaged boots need a 0700 host XDG_RUNTIME_DIR; keep it private to the fixture.
+    const hostRuntime=join(await fs.realpath(temporary),'host-runtime');
+    await fs.mkdir(hostRuntime,{mode:0o700});
+    await run(root,app,hostRuntime);
   } finally {await fs.rm(temporary,{recursive:true,force:true});}
 }
 
@@ -266,7 +270,7 @@ test('clean-install smoke fake adapter starts, completes core hello handshake, a
 
 test('R2-T4-002 extended seal covers executed JS and boot self-check refuses tampered non-renderer entry before mainDirectEntry', async () => {
   assert.equal(typeof packaging.productionEntry, 'string');
-  await fixture(async (root, app) => {
+  await fixture(async (root, app, hostRuntime) => {
     await fs.writeFile(
       join(app, 'package.json'),
       JSON.stringify({ name: 'metaviewer', version: '0.1.2', type: 'module', main: 'electron/nesting.js' }),
@@ -306,7 +310,7 @@ test('R2-T4-002 extended seal covers executed JS and boot self-check refuses tam
       // Negative control: intact sealed package boots and reaches mainDirectEntry.
       const intactRun = spawnSync(process.execPath, [join(stagedApp, 'electron/nesting.js')], {
         encoding: 'utf8',
-        env: { ...process.env, MV_PACKAGE_SMOKE: '1', MV_SRF_BIN_DIR: '' },
+        env: { ...process.env, XDG_RUNTIME_DIR: hostRuntime, MV_PACKAGE_SMOKE: '1', MV_SRF_BIN_DIR: '' },
         timeout: 10000,
       });
       assert.equal(intactRun.status, 0, intactRun.stderr || intactRun.stdout);
@@ -320,7 +324,7 @@ test('R2-T4-002 extended seal covers executed JS and boot self-check refuses tam
           await fs.appendFile(file, '\n// tampered\n');
           const tamperedBoot = spawnSync(process.execPath, [join(stagedApp, 'electron/nesting.js')], {
             encoding: 'utf8',
-            env: { ...process.env, MV_PACKAGE_SMOKE: '1', MV_SRF_BIN_DIR: '' },
+            env: { ...process.env, XDG_RUNTIME_DIR: hostRuntime, MV_PACKAGE_SMOKE: '1', MV_SRF_BIN_DIR: '' },
             timeout: 10000,
           });
           assert.notEqual(tamperedBoot.status, 0, `tampered ${target} must refuse boot`);
@@ -454,7 +458,7 @@ test('R2-T4-024 packaged boot enforces one total budget across socket wait and h
   }
 
   // Exercise productionEntry itself under a 250 ms total boot budget when socket wait + mainDirectEntry exceed 250 ms.
-  await fixture(async (root, app) => {
+  await fixture(async (root, app, hostRuntime) => {
     await fs.writeFile(
       join(app, 'package.json'),
       JSON.stringify({ name: 'metaviewer', version: '0.1.2', type: 'module', main: 'electron/nesting.js' }),
@@ -489,7 +493,7 @@ test('R2-T4-024 packaged boot enforces one total budget across socket wait and h
       // 150ms socket + 200ms mainDirectEntry > 250ms total budget -> fails with PKG_CORE_START_FAILED.
       const overBudget = spawnSync(process.execPath, [join(stagedApp, 'electron/nesting.js')], {
         encoding: 'utf8',
-        env: { ...process.env, MV_PACKAGE_SMOKE: '1', MV_SRF_BIN_DIR: '', MV_PKG_BOOT_BUDGET_MS: '250' },
+        env: { ...process.env, XDG_RUNTIME_DIR: hostRuntime, MV_PACKAGE_SMOKE: '1', MV_SRF_BIN_DIR: '', MV_PKG_BOOT_BUDGET_MS: '250' },
         timeout: 5000,
       });
       assert.notEqual(overBudget.status, 0);
@@ -498,7 +502,7 @@ test('R2-T4-024 packaged boot enforces one total budget across socket wait and h
       // Negative control: 150ms socket + 200ms mainDirectEntry < 1500ms total budget -> succeeds.
       const withinBudget = spawnSync(process.execPath, [join(stagedApp, 'electron/nesting.js')], {
         encoding: 'utf8',
-        env: { ...process.env, MV_PACKAGE_SMOKE: '1', MV_SRF_BIN_DIR: '', MV_PKG_BOOT_BUDGET_MS: '1500' },
+        env: { ...process.env, XDG_RUNTIME_DIR: hostRuntime, MV_PACKAGE_SMOKE: '1', MV_SRF_BIN_DIR: '', MV_PKG_BOOT_BUDGET_MS: '1500' },
         timeout: 5000,
       });
       assert.equal(withinBudget.status, 0, withinBudget.stderr || withinBudget.stdout);
@@ -686,7 +690,7 @@ test('W3-PKG-SMOKE2 diagnostics on PKG_SMOKE_MARKER_MISSING and non-zero child e
 });
 
 test('W3-PKG-SMOKE2 productionEntry flushes smoke marker and errors to non-TTY pipes before immediate app.exit', async () => {
-  await fixture(async (root, app) => {
+  await fixture(async (root, app, hostRuntime) => {
     const loaderPath = join(root, 'resources/electron-pipe-loader.mjs');
     // Loader simulates Electron's immediate C++ Browser::Exit on app.exit(code) when Node's
     // user-space stdout/stderr stream buffers are corked/unflushed on a non-TTY pipe, and
@@ -698,6 +702,7 @@ test('W3-PKG-SMOKE2 productionEntry flushes smoke marker and errors to non-TTY p
       '      "import { EventEmitter } from \\"node:events\\";",',
       '      "const emitter = new EventEmitter();",',
       '      "export const app = {",',
+      '      "  whenReady: async () => {},",',
       '      "  on: (ev, fn) => emitter.on(ev, fn),",',
       '      "  removeAllListeners: (ev) => emitter.removeAllListeners(ev),",',
       '      "  emit: (ev, ...args) => emitter.emit(ev, ...args),",',
@@ -784,7 +789,7 @@ test('W3-PKG-SMOKE2 productionEntry flushes smoke marker and errors to non-TTY p
         ['--import', `data:text/javascript,${encodeURIComponent(registerScript)}`, join(stagedApp, 'electron/nesting.js'), ...extraArgs],
         {
           stdio: ['ignore', 'pipe', 'pipe'],
-          env: { ...process.env, MV_PACKAGE_SMOKE: '1', MV_SRF_BIN_DIR: '/tmp/srf-bin', ...extraEnv },
+          env: { ...process.env, XDG_RUNTIME_DIR: hostRuntime, MV_PACKAGE_SMOKE: '1', MV_SRF_BIN_DIR: '/tmp/srf-bin', ...extraEnv },
         },
       );
       let stdout = '';
@@ -1535,12 +1540,23 @@ test(
       await fs.writeFile(
         join(app, 'electron/hostBindings.js'),
         [
+          // The stand-in embeds the real host create validator verbatim (self-contained
+          // function source), so a malformed boot create fails here exactly as it would live.
+          `export ${validateSurfaceCreateRequest.toString()}`,
           'export async function createMainBindings() {',
           '  const coreStatus = { availability: "live", pid: process.pid, authority_epoch: 1, reason: null };',
           '  return {',
           '    core: {',
           '      start: async () => coreStatus,',
-          '      request: async () => ({}),',
+          '      request: async (message) => {',
+          '        // Stand-in host: the real hostBindings validates the create, then prints this marker',
+          '        // from the core socket write callback; there is no core socket in this fixture.',
+          '        if (message?.schema === "surface_request/v0.2" || message?.op === "create") {',
+          '          validateSurfaceCreateRequest(message);',
+          '          console.log("METAVIEWER_SURFACE_CREATE_SENT");',
+          '        }',
+          '        return {};',
+          '      },',
           '      dispose: async () => {},',
           '      getStatus: () => coreStatus,',
           '    },',
@@ -1761,6 +1777,37 @@ test(
         await bundlePackage(root, arch);
       }
 
+      // MUT-HOST-CREATE-REFUSED (smoke-wiring control): it mutates the staged stand-in host,
+      // so it proves the smoke hold fails with PKG_SURFACE_CREATE_NOT_DELIVERED when a host
+      // core.request refuses op create; it does not exercise the real hostBindings admission,
+      // whose POLISH-2 regression proof is the hostBindings unit negative controls.
+      const stagedHost = join(stagedApp, 'electron/hostBindings.js');
+      const savedHost = await fs.readFile(stagedHost, 'utf8');
+      const mutantHost = savedHost.replace('request: async (message) => {',
+        'request: async (message) => { if (message?.op === "create") throw new Error("CORE_SEAMS_ABSENT");');
+      assert.notEqual(mutantHost, savedHost);
+      try {
+        await fs.writeFile(stagedHost, mutantHost);
+        await sealRendererAssets(stagedApp);
+        await fs.rm(`${root}.sha256`, { force: true });
+        await writeManifest(root, `${root}.sha256`);
+        await fs.rm(artifact, { force: true });
+        await bundlePackage(root, arch);
+        await assert.rejects(() => packaging.cleanInstallSmoke(artifact), err => {
+          assert.match(err.message, /PKG_SURFACE_CREATE_NOT_DELIVERED/);
+          assert.doesNotMatch(String(err.stdout ?? ''), /^METAVIEWER_SURFACE_CREATE_SENT$/m);
+          assert.doesNotMatch(String(err.stdout ?? ''), /^METAVIEWER_MAIN_SMOKE_OK$/m);
+          return true;
+        });
+      } finally {
+        await fs.writeFile(stagedHost, savedHost);
+        await sealRendererAssets(stagedApp);
+        await fs.rm(`${root}.sha256`, { force: true });
+        await writeManifest(root, `${root}.sha256`);
+        await fs.rm(artifact, { force: true });
+        await bundlePackage(root, arch);
+      }
+
       const afterPassShm = await listShmDirs();
       for (const name of afterPassShm) {
         assert.equal(beforeShm.has(name), true, `leaked /dev/shm/${name} after passing cleanInstallSmoke`);
@@ -1772,7 +1819,9 @@ test(
       const negSrfBin = await fs.mkdtemp(join(tempRoot, 'direct-neg-srf-bin-'));
       const negSrfState = await fs.mkdtemp(join(tempRoot, 'direct-neg-srf-state-'));
       const negSrfIdentity = await fs.mkdtemp(join(tempRoot, 'direct-neg-srf-id-'));
-      for (const d of [negSrfBin, negSrfState, negSrfIdentity]) await fs.chmod(d, 0o700);
+      // POLISH-3: the packaged entry requires the host XDG_RUNTIME_DIR for the shared RAM admission ledger.
+      const negRuntime = await fs.mkdtemp(join(tempRoot, 'direct-neg-runtime-'));
+      for (const d of [negSrfBin, negSrfState, negSrfIdentity, negRuntime]) await fs.chmod(d, 0o700);
       const directNoProfiles = spawnSync(
         join(root, 'metaviewer'),
         [`--user-data-dir=${join(tempRoot, 'direct-neg-profile')}`],
@@ -1783,6 +1832,7 @@ test(
             HOME: tempRoot,
             LANG: 'C.UTF-8',
             MV_PACKAGE_SMOKE: '1',
+            XDG_RUNTIME_DIR: negRuntime,
             MV_SRF_BIN_DIR: negSrfBin,
             MV_SRF_STATE_DIR: negSrfState,
             SRF_IDENTITY_STORE_ROOT: negSrfIdentity,

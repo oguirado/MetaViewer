@@ -32,7 +32,8 @@ function audit(report) {
     handoff: ['ack', 'list', 'subscribe'],
   });
   assert.equal(report.operatorCallable, true, 'operator members must be functions');
-  assert.deepEqual(report.authority, ['intent', 'propose', 'subscribeFrames']);
+  // POLISH-2 (6a635afdc): createSurface is the host-owned, zero-argument browser create.
+  assert.deepEqual(report.authority, ['createSurface', 'intent', 'propose', 'subscribeFrames']);
   assert.deepEqual(report.capture, ['export', 'list', 'recordStart', 'recordStop', 'screenshot', 'subscribe']);
   assert.deepEqual(report.terminal, ['attach', 'close', 'copyText', 'listProviders', 'open', 'resize', 'setEnabled']);
 }

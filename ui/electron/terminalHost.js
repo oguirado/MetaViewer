@@ -648,6 +648,7 @@ export function createTerminalHost({
     },
     listProviders: async () => {
       if (isNested) throw createDisplayOnlyError();
+      if (!resolvedPty) { try { resolvedPty = await import('node-pty'); } catch {} }
       return {
         entries: [...owned.keys()].map((id) => {
           const meta = providerMeta.get(id);
@@ -659,8 +660,8 @@ export function createTerminalHost({
         }),
         capabilities: [...owned.keys()].map((id) => ({
           id,
-          available: !disposed,
-          reason: disposed ? 'DISPOSED' : '',
+          available: !disposed && resolvedPty !== null,
+          reason: disposed ? 'DISPOSED' : resolvedPty === null ? 'TERMINAL_UNAVAILABLE' : '',
         })),
       };
     },

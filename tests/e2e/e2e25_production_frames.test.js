@@ -1108,7 +1108,9 @@ test('W2-FRAME-LIVE-DIAG: MV_FRAME_DIAG is off by default, adds no window.metavi
     for (const group of Object.values(api.operator)) {
       for (const member of Object.values(group)) assert.equal(typeof member, 'function');
     }
+    // POLISH-2 (6a635afdc): createSurface is the host-owned, zero-argument browser create.
     assert.deepEqual(Object.keys(api.authority).sort(), [
+      'createSurface',
       'intent',
       'propose',
       'subscribeFrames',

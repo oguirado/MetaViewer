@@ -1752,3 +1752,132 @@ test('POLISH-2 closed create reaches socket and admits the following real frame'
   const entry = await frame;
   assert.ok(entry);
 });
+
+test('POLISH-3 creates refuse concurrent requests with BUSY and ignore unrelated errors', async t => {
+  const f = await fixture(t);
+  const bindings = await createMainBindings({...f});
+  t.after(()=>bindings.core.dispose());
+  const body = {schema:'surface_request/v0.2',op:'create',params:{kind:'browser',geometry:{w:1,h:1},profile_id:'test'}};
+  const pending = bindings.core.request(body);
+  await waitForCondition(()=>f.requests.some(e=>e.body.op==='create'));
+  await assert.rejects(bindings.core.request(body), {code:'SURFACE_CREATE_BUSY'});
+  let settled = false;
+  void pending.then(()=>{settled=true;});
+  // Contract-shaped surface_event/v0.2 traffic for a KNOWN surface of another profile never
+  // settles the in-flight create: neither its created event nor its error event.
+  f.send({schema:'surface_event/v0.2',event:'created',data:{surface:{...surface,surface_id:'s2',profile_id:'other'}}});
+  f.send({schema:'surface_event/v0.2',event:'error',data:{surface_id:'s2',code:'OTHER',detail:'unrelated'}});
+  await new Promise(resolve=>setTimeout(resolve,20));
+  assert.equal(settled,false);
+  f.send({schema:'surface_event/v0.2',event:'created',data:{surface}});
+  assert.equal((await pending).event,'created');
+});
+
+/** @param {any} t */
+async function pendingCreate(t) {
+  const f = await fixture(t);
+  const bindings = await createMainBindings({...f});
+  t.after(()=>bindings.core.dispose());
+  const lines = [];
+  t.mock.method(console, 'log', (...args) => { lines.push(String(args[0])); });
+  const body = {schema:'surface_request/v0.2',op:'create',params:{kind:'browser',geometry:{w:1,h:1},profile_id:'test'}};
+  const started = Date.now();
+  const pending = bindings.core.request(body);
+  const env = await waitForCondition(()=>f.requests.find(e=>e.body.op==='create'));
+  return {f, pending, key: env.msg_id, lines, started};
+}
+
+test('POLISH3-FIX an adapter create error with an unknown surface_id settles the create promptly with its code', async t => {
+  const {f, pending, key, lines, started} = await pendingCreate(t);
+  // Exact adapter wireFailure shape: data {surface_id, code, detail}, surface_id = request param
+  // or the envelope msg-id fallback, never a live surface; no profile_id (forbidden by the contract).
+  f.send({schema:'surface_event/v0.2',event:'error',data:{surface_id:'core-fwd-'+key,code:'RAM_ADMISSION_REFUSED',detail:'ram admission refused'}});
+  const reply = await pending;
+  assert.equal(reply.event,'error');
+  assert.equal(reply.data.code,'RAM_ADMISSION_REFUSED');
+  assert.ok(Date.now() - started < 5000);
+  assert.ok(lines.includes('METAVIEWER_SURFACE_CREATE_WIRE_REPLY'));
+});
+
+test('POLISH3-FIX a core refused action_verdict with proposal_id = create msg-id settles the create', async t => {
+  const {f, pending, key, lines} = await pendingCreate(t);
+  f.send({schema:'action_verdict/v0.2',proposal_id:'unrelated-'+key,decision:'refused',reason_code:'POLICY',core_seq:1});
+  let settled = false;
+  void pending.then(()=>{settled=true;});
+  await new Promise(resolve=>setTimeout(resolve,20));
+  assert.equal(settled,false);
+  f.send({schema:'action_verdict/v0.2',proposal_id:key,decision:'refused',reason_code:'SURFACE_CREATE_REFUSED',core_seq:2});
+  const reply = await pending;
+  assert.equal(reply.schema,'action_verdict/v0.2');
+  assert.equal(reply.decision,'refused');
+  assert.equal(reply.reason_code,'SURFACE_CREATE_REFUSED');
+  assert.ok(lines.includes('METAVIEWER_SURFACE_CREATE_WIRE_REPLY'));
+});
+
+test('POLISH3-FIX a known surface of another profile does not settle the create; a matching created event does', async t => {
+  const {f, pending, lines} = await pendingCreate(t);
+  let settled = false;
+  void pending.then(()=>{settled=true;});
+  f.send({schema:'surface_event/v0.2',event:'created',data:{surface:{...surface,surface_id:'s2',profile_id:'other'}}});
+  f.send({schema:'surface_event/v0.2',event:'error',data:{surface_id:'s2',code:'RAM_ADMISSION_REFUSED',detail:'other capsule'}});
+  await new Promise(resolve=>setTimeout(resolve,20));
+  assert.equal(settled,false);
+  assert.equal(lines.includes('METAVIEWER_SURFACE_CREATE_WIRE_REPLY'),false);
+  f.send({schema:'surface_event/v0.2',event:'created',data:{surface}});
+  const reply = await pending;
+  assert.equal(reply.event,'created');
+  assert.equal(reply.data.surface.profile_id,'test');
+  assert.ok(lines.includes('METAVIEWER_SURFACE_CREATE_WIRE_REPLY'));
+});
+
+test('POLISH3-FIX an error for a known surface of the same profile does not settle the create', async t => {
+  const {f, pending, lines} = await pendingCreate(t);
+  let settled = false;
+  void pending.then(()=>{settled=true;});
+  f.send({schema:'surface_event/v0.2',event:'state_changed',data:{surface:{...surface,surface_id:'s1'}}});
+  f.send({schema:'surface_event/v0.2',event:'error',data:{surface_id:'s1',code:'RAM_ADMISSION_REFUSED',detail:'live capsule'}});
+  await new Promise(resolve=>setTimeout(resolve,20));
+  assert.equal(settled,false);
+  assert.equal(lines.includes('METAVIEWER_SURFACE_CREATE_WIRE_REPLY'),false);
+  f.send({schema:'surface_event/v0.2',event:'created',data:{surface}});
+  const reply = await pending;
+  assert.equal(reply.event,'created');
+});
+
+test('CI-GREEN create marker is printed only from the socket write callback of an admitted create', async t => {
+  const f = await fixture(t);
+  const bindings = await createMainBindings({...f});
+  t.after(()=>bindings.core.dispose());
+  const body = {schema:'surface_request/v0.2',op:'create',params:{kind:'browser',geometry:{w:1,h:1},profile_id:'test'}};
+  const events = [];
+  let failCreateWrite = false;
+  const realWrite = net.Socket.prototype.write;
+  t.mock.method(net.Socket.prototype, 'write', function (chunk, ...rest) {
+    if (typeof chunk === 'string' && chunk.includes('"schema":"surface_request/v0.2"')) {
+      events.push('write');
+      const done = rest.find(arg => typeof arg === 'function');
+      if (failCreateWrite) { queueMicrotask(() => done?.(new Error('EPIPE'))); return false; }
+    }
+    return realWrite.call(this, chunk, ...rest);
+  });
+  t.mock.method(console, 'log', (...args) => { events.push(String(args[0])); });
+  await assert.rejects(bindings.core.request({...body, extra:true}), /SURFACE_CREATE_INVALID/);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(events, []);
+  // Negative control: a failed core socket write never prints the marker.
+  failCreateWrite = true;
+  const refused = bindings.core.request(body);
+  await waitForCondition(()=>events.includes('write'));
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(events.includes('METAVIEWER_SURFACE_CREATE_SENT'), false);
+  f.send({schema:'surface_event/v0.2',event:'error',data:{surface_id:'unknown-create',code:'X',detail:'x'}});
+  assert.equal((await refused).event, 'error');
+  failCreateWrite = false;
+  events.length = 0;
+  const pending = bindings.core.request(body);
+  await waitForCondition(()=>events.includes('METAVIEWER_SURFACE_CREATE_SENT'));
+  assert.deepEqual(events.filter(e => e === 'write' || e === 'METAVIEWER_SURFACE_CREATE_SENT'), ['write', 'METAVIEWER_SURFACE_CREATE_SENT']);
+  await waitForCondition(()=>f.requests.some(e=>e.body.op==='create'));
+  f.send({schema:'surface_event/v0.2',event:'created',data:{surface}});
+  assert.equal((await pending).event,'created');
+});

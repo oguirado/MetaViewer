@@ -496,7 +496,7 @@ export function installFrameDiag(options = {}) {
       applyRehashDiag(args[0], senderKey);
       return true;
     };
-    if (!packaged && !nested && ipcMain && typeof ipcMain === 'object' && typeof ipcMain.handle === 'function') {
+    if (!nested && ipcMain && typeof ipcMain === 'object' && typeof ipcMain.handle === 'function') {
       ipcMain.handle(FRAME_REPORT_DIAG_CHANNEL, handleReportDiagDisabled);
       reportRegistered = true;
     }

@@ -478,6 +478,24 @@ export function resolvePackagedConfigHome(env, runtimeDir, appRootDir = '') {
   return join(runtimeResolved, 'config');
 }
 
+/** [TARGET, unit decision] Preserve the uid-wide ledger outside the private runtime.
+ * Refuse aliases, foreign owners and permissive modes rather than repairing them.
+ * @param {NodeJS.ProcessEnv} env
+ */
+export async function preparePackagedAdmission(env) {
+  const hostRuntime = env.XDG_RUNTIME_DIR;
+  if (!hostRuntime || !isAbsolute(hostRuntime)) throw new Error('PKG_HOST_RUNTIME_REQUIRED');
+  const directories = [hostRuntime, join(hostRuntime, 'metaviewer'), join(hostRuntime, 'metaviewer', 'ram-admission')];
+  for (const [index, directory] of directories.entries()) {
+    if (index > 0) await fs.mkdir(directory, {mode:0o700}).catch(error => {if (error.code !== 'EEXIST') throw error;});
+    const st = await fs.lstat(directory);
+    if (!st.isDirectory() || st.isSymbolicLink() || st.uid !== process.getuid?.() || (st.mode & 0o777) !== 0o700
+        || await fs.realpath(directory) !== directory) throw new Error('PKG_HOST_RUNTIME_UNSAFE');
+  }
+  env.MV_RAM_ADMISSION_DIR = directories[2];
+  return directories[2];
+}
+
 /**
  * Create a testable packaged boot and teardown lifecycle with injectable clock,
  * signal sender, child spawner, and environment scrubber (`R3-T4-008` / `T20`,
@@ -587,6 +605,7 @@ export async function createPackagedBootLifecycle(options = {}) {
   };
 
   try {
+    await preparePackagedAdmission(env);
     runtime = await fs.mkdtemp(join(tmpRoot, 'mv-pkg-'));
     await fs.chmod(runtime, 0o700);
     await fs.mkdir(join(runtime, 'metaviewer'), { mode: 0o700 });
@@ -642,19 +661,11 @@ export async function createPackagedBootLifecycle(options = {}) {
       shell: false,
     });
     appObj.on?.('will-quit', (event) => {
-      if (stopping || env.MV_PACKAGE_SMOKE === '1') {
-        try {
-          event?.preventDefault?.();
-        } catch {}
-      }
-      if (!stopping) {
-        if (isLiveCore(core)) {
-          try {
-            killFn(core.pid, 'SIGTERM');
-          } catch {}
-        }
-        cleanupRuntimeSync();
-      }
+      event?.preventDefault?.();
+      void stop().finally(() => appObj.exit(0));
+    });
+    for (const signal of ['SIGTERM', 'SIGINT']) proc.on?.(signal, () => {
+      void stop().finally(() => appObj.exit(0));
     });
     proc.on?.('exit', () => {
       if (isLiveCore(core)) {
@@ -708,6 +719,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { format } from 'node:util';
+${preparePackagedAdmission.toString().replace('export ', '')}
 const PACKAGED_EXEC_DIGESTS = Object.freeze({});
 const root = dirname(fileURLToPath(import.meta.url));
 const appRoot = dirname(root);
@@ -820,7 +832,7 @@ try {
   writeFdSync(2, error?.message || String(error));
   process.exit(1);
 }
-const { app, protocol } = await import('electron').catch(() => ({ app: { exit: code => process.exit(code), on: () => {}, removeAllListeners: () => {} }, protocol: null }));
+const { app, protocol } = await import('electron').catch(() => ({ app: { exit: code => process.exit(code), on: () => {}, removeAllListeners: () => {}, whenReady: async () => {} }, protocol: null }));
 const mainModule = await import('./main.js');
 const { mainDirectEntry, validateRetailLaunch } = mainModule;
 const { scrubChildEnv, validateKillTarget } = await import('./coreLauncher.js');
@@ -836,6 +848,7 @@ else if (process.argv.includes('--nested-depth=1')) {
   let runtime = null;
   let core = null;
   let boot = null;
+  let entry = null;
   let stopping = false;
   let stopPromise = null;
   const cleanupRuntimeSync = () => {
@@ -858,6 +871,7 @@ else if (process.argv.includes('--nested-depth=1')) {
         app.removeAllListeners?.('window-all-closed');
         app.on?.('window-all-closed', () => {});
       } catch {}
+      try { if (entry) await entry; } catch {}
       try { await boot?.dispose?.(); } catch {}
       if (isLiveCore(core)) {
         const exited = once(core,'exit');
@@ -881,17 +895,21 @@ else if (process.argv.includes('--nested-depth=1')) {
     return rawExit(code);
   };
   app.on('will-quit', event => {
-    if (stopping || process.env.MV_PACKAGE_SMOKE === '1') {try {event?.preventDefault?.();} catch {}}
-    if (!stopping) {
-      if (isLiveCore(core)) {try {process.kill(core.pid,'SIGTERM');} catch {}}
-      cleanupRuntimeSync();
-    }
+    event?.preventDefault?.();
+    void stop().finally(() => app.exit(0));
+  });
+  for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => {
+    void stop().finally(() => app.exit(0));
   });
   process.on('exit', () => {
     if (isLiveCore(core)) {try {process.kill(core.pid,'SIGKILL');} catch {}}
     cleanupRuntimeSync();
   });
   try {
+    // Native platform-init failure exits before any owned child exists.
+    await app.whenReady();
+    if (stopping) throw new Error('PKG_STOPPING');
+    await preparePackagedAdmission(process.env);
     const pin = JSON.parse(await fs.readFile(join(root, 'package-pin.json'), 'utf8'));
     runtime = await fs.mkdtemp(join(tmpdir(), 'mv-pkg-'));
     await fs.chmod(runtime, 0o700);
@@ -943,10 +961,10 @@ else if (process.argv.includes('--nested-depth=1')) {
       if (remainingPoll <= 0) throw new Error('PKG_CORE_START_FAILED');
       await new Promise(resolve => setTimeout(resolve, Math.min(25, remainingPoll)));
     }
-    let entry;
     if (process.env.MV_PACKAGE_SMOKE === '1') {
       let smokeHandled = false;
       let createWireReply = false;
+      let createSent = false;
       const rendererTimer = setTimeout(() => {
         writeFdSync(2, 'PKG_RENDERER_READY_TIMEOUT');
         void stop().finally(() => app.exit(1));
@@ -954,6 +972,7 @@ else if (process.argv.includes('--nested-depth=1')) {
       console.log = (...args) => {
         writeFdSync(1, format(...args));
         if (args[0] === 'METAVIEWER_SURFACE_CREATE_WIRE_REPLY') createWireReply = true;
+        if (args[0] === 'METAVIEWER_SURFACE_CREATE_SENT') createSent = true;
         if (!smokeHandled && args[0] === 'METAVIEWER_RENDERER_READY') {
           smokeHandled = true;
           clearTimeout(rendererTimer);
@@ -966,13 +985,26 @@ else if (process.argv.includes('--nested-depth=1')) {
               }
             }
             if (process.env.MV_PACKAGE_SMOKE_HOLD === '1') {
-              if (!createWireReply) throw new Error('PKG_SURFACE_CREATE_NOT_DELIVERED');
-              await new Promise(resolve => setTimeout(resolve, 1200));
+              // [TARGET, unit decision] The host prints SURFACE_CREATE_SENT only from the core
+              // socket write callback of an admitted create, so a refused boot create (the
+              // POLISH-2 bug) fails here within 10 s. Without real OpenSuperficies binaries no
+              // surface_event reply can arrive; only the operator leg waits for one (60 s bound).
+              const sentDeadline = Date.now() + 10000;
+              while (!createSent && Date.now() < sentDeadline) await new Promise(resolve => setTimeout(resolve, 25));
+              if (!createSent) throw new Error('PKG_SURFACE_CREATE_NOT_DELIVERED');
+              if (process.env.MV_PACKAGE_SMOKE_OPERATOR === '1') {
+                const replyDeadline = Date.now() + 60000;
+                while (!createWireReply && Date.now() < replyDeadline) await new Promise(resolve => setTimeout(resolve, 25));
+                if (!createWireReply) throw new Error('PKG_SURFACE_CREATE_NO_REPLY');
+              }
+              await new Promise(resolve => setTimeout(resolve, process.env.MV_PACKAGE_SMOKE_OPERATOR === '1' ? 31000 : 1200));
               const status = boot?.adapter?.getStatus?.();
               if (status?.availability !== 'live' || status.handshakeSeen !== true) throw new Error('PKG_ADAPTER_HOLD_FAILED');
               writeFdSync(1, 'METAVIEWER_ADAPTER_HOLD_OK\n');
             }
+            const ownedPids = [core?.pid, boot?.adapter?.getStatus?.().pid];
             await stop();
+            if (process.env.MV_PACKAGE_SMOKE_OPERATOR === '1') writeFdSync(1, 'METAVIEWER_STOPPED_PIDS ' + JSON.stringify(ownedPids));
             writeFdSync(1, 'METAVIEWER_MAIN_SMOKE_OK\n');
             app.exit(0);
           }).catch(async error => {
@@ -1889,6 +1921,39 @@ export function assertAdapterConfigRefusal(result, traces) {
   }
 }
 
+/** [TARGET, unit decision] Opt-in operator environment smoke; no network or container commands.
+ * @param {string} installed
+ * @param {NodeJS.ProcessEnv} source
+ */
+export async function operatorPackagedSmoke(installed, source = process.env) {
+  await verifyInstall(installed);
+  const names = ['HOME','PATH','USER','LANG','DISPLAY','XAUTHORITY','XDG_RUNTIME_DIR',
+    'DBUS_SESSION_BUS_ADDRESS','WAYLAND_DISPLAY','MV_SRF_BIN_DIR','MV_SRF_STATE_DIR',
+    'MV_SRF_LIVE_PROFILE','MV_SRF_LIVE_RAM_ROOT','SRF_IDENTITY_STORE_ROOT',
+    'SRF_PROXY_REGISTRY','MV_RECORDING_DESTINATION'];
+  const env = Object.fromEntries(names.filter(name => source[name] !== undefined).map(name => [name, source[name]]));
+  env.MV_SRF_LIVE_TEXT_INPUT = 'paste';
+  env.MV_PACKAGE_SMOKE = '1';
+  env.MV_PACKAGE_SMOKE_HOLD = '1';
+  env.MV_PACKAGE_SMOKE_OPERATOR = '1';
+  const admission = await preparePackagedAdmission(env);
+  const before = new Set(await fs.readdir(admission));
+  const result = await execute('xvfb-run', ['-a', join(resolve(installed), 'metaviewer')],
+    {cwd:installed, env, timeout:120000, maxBuffer:1024*1024});
+  assertSmokeOutput(result);
+  if (!result.stdout.includes('METAVIEWER_SURFACE_CREATE_WIRE_REPLY') || !result.stdout.includes('METAVIEWER_ADAPTER_HOLD_OK')) throw new Error('PKG_OPERATOR_HOLD_FAILED');
+  const line = result.stdout.split('\n').find(line => line.startsWith('METAVIEWER_STOPPED_PIDS '));
+  if (!line) throw new Error('PKG_OPERATOR_PID_RECEIPT_MISSING');
+  const pids = JSON.parse(line.slice('METAVIEWER_STOPPED_PIDS '.length));
+  if (!Array.isArray(pids) || !pids.length || pids.some(pid => !Number.isSafeInteger(pid) || pid <= 1)) throw new Error('PKG_OPERATOR_PID_RECEIPT_INVALID');
+  for (const pid of pids) {
+    try { process.kill(pid, 0); } catch (error) { if (error.code === 'ESRCH') continue; throw error; }
+    throw new Error('PKG_OPERATOR_ORPHAN: ' + pid);
+  }
+  if ((await fs.readdir(admission)).some(name => !before.has(name))) throw new Error('PKG_OPERATOR_RESERVATION_LEAK');
+  return {ok:true, capsuleVerification:'Adapter verified stop path and admission ledger; empty/fake SRF binaries do not prove a native capsule existed.'};
+}
+
 /** Extract actual product bytes, trace all descendants, refuse source access.
  * @param {string} artifact */
 export async function cleanInstallSmoke(artifact) {
@@ -1923,6 +1988,8 @@ export async function cleanInstallSmoke(artifact) {
     try {await expectReason('PKG_BINARY_MISSING: mv-daemon-adapter');}
     finally {await fs.rename(`${adapter}.control`,adapter);}
     await verifyInstall(installed);
+    const hostRuntime=join(clean,'host-runtime');
+    await fs.mkdir(hostRuntime,{mode:0o700});
     const srfBinDir=join(clean,'srf-bin');
     await fs.mkdir(srfBinDir,{mode:0o700});
     const receiptPath=join(clean,'adapter-smoke-receipt.json');
@@ -1930,7 +1997,7 @@ export async function cleanInstallSmoke(artifact) {
     try {
       await writeFakeSmokeAdapter(adapter,receiptPath);
       const trace=join(clean,'files.trace');
-      const env={PATH:process.env.PATH,HOME:clean,LANG:'C.UTF-8',MV_PACKAGE_SMOKE:'1',MV_SRF_BIN_DIR:srfBinDir};
+      const env={XDG_RUNTIME_DIR:hostRuntime,PATH:process.env.PATH,HOME:clean,LANG:'C.UTF-8',MV_PACKAGE_SMOKE:'1',MV_SRF_BIN_DIR:srfBinDir};
       await runSmokeCommand(() => execute('xvfb-run',['-a','strace','-f','-e','trace=file','-o',trace,
         join(installed,'metaviewer'),`--user-data-dir=${join(clean,'profile')}`],{cwd:clean,env,timeout:30000,maxBuffer:1024*1024}));
       await verifySmokeAdapterReceipt(receiptPath,srfBinDir);
@@ -1962,6 +2029,7 @@ export async function cleanInstallSmoke(artifact) {
       });
       const realTrace=join(clean,'real-files.trace');
       const realEnv={
+        XDG_RUNTIME_DIR:hostRuntime,
         PATH:process.env.PATH,
         HOME:clean,
         LANG:'C.UTF-8',
@@ -1974,6 +2042,11 @@ export async function cleanInstallSmoke(artifact) {
       };
       await runSmokeCommand(() => execute('xvfb-run',['-a','strace','-f','-e','trace=file','-o',realTrace,
         join(installed,'metaviewer'),`--user-data-dir=${join(clean,'real-profile')}`],{cwd:clean,env:realEnv,timeout:60000,maxBuffer:1024*1024}));
+      // An entry that never opened the shared ledger left no reservation; other errors fail.
+      // A missing host runtime directory itself is never read as an empty ledger.
+      if (!(await fs.lstat(hostRuntime).catch(() => null))?.isDirectory()) throw new Error('PKG_HOST_RUNTIME_REQUIRED');
+      const reservations=await fs.readdir(join(hostRuntime,'metaviewer','ram-admission')).catch(error => {if (error.code === 'ENOENT') return [];throw error;});
+      if (reservations.length) throw new Error('PKG_ADMISSION_RESERVATION_LEAK');
       const realAccesses=await fs.readFile(realTrace,'utf8');
       if (realAccesses.includes(repo) || realAccesses.includes(await fs.realpath(repo))) throw new Error('PKG_SOURCE_ACCESS');
 
@@ -1981,6 +2054,7 @@ export async function cleanInstallSmoke(artifact) {
       const negSrfIdentityDir=await fs.mkdtemp(join(clean,'neg-srf-identity-'));
       for (const dir of [negSrfStateDir,negSrfIdentityDir]) await fs.chmod(dir,0o700);
       const noProfilesEnv={
+        XDG_RUNTIME_DIR:hostRuntime,
         PATH:process.env.PATH,
         HOME:clean,
         LANG:'C.UTF-8',
@@ -2006,7 +2080,7 @@ export async function cleanInstallSmoke(artifact) {
     } finally {
       await fs.rm(shmRoot,{recursive:true,force:true});
     }
-    const env={PATH:process.env.PATH,HOME:clean,LANG:'C.UTF-8',MV_PACKAGE_SMOKE:'1'};
+    const env={XDG_RUNTIME_DIR:hostRuntime,PATH:process.env.PATH,HOME:clean,LANG:'C.UTF-8',MV_PACKAGE_SMOKE:'1'};
     let refused=false, refusalDetail='';
     try {
       await execute('xvfb-run',['-a',join(installed,'metaviewer'),
@@ -2170,6 +2244,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const action = process.argv[2] === '--verify'
     ? verifyPackagedSecurity(process.argv[3]) : process.argv[2] === '--verify-install'
     ? verifyInstall(process.argv[3]) : process.argv[2] === '--smoke'
-    ? cleanInstallSmoke(process.argv[3]).then(result => console.log(JSON.stringify(result))) : packageShell();
+    ? cleanInstallSmoke(process.argv[3]).then(result => console.log(JSON.stringify(result))) : process.argv[2] === '--smoke-operator'
+    ? operatorPackagedSmoke(process.argv[3]).then(result => console.log(JSON.stringify(result))) : packageShell();
   action.catch(error => { console.error(error.message); process.exitCode = 1; });
 }
