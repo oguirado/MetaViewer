@@ -19,17 +19,17 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 950 | 55 | 895 |
-| Lanes finished OK | 950 | 55 | 895 |
-| Agent steps | 40,836 | 2,705 | 38,131 |
-| Lane-hours of agent work | 102.9 | 5.2 | 97.7 |
-| Fresh input tokens | 170,659,889 | 11,482,034 | 159,177,855 |
-| Cache-read input tokens | 3,362,219,926 | 226,255,212 | 3,135,964,714 |
-| Prompt cache hit % | 95.2 | 95.2 | 95.2 |
-| Output tokens | 34,618,750 | 2,135,708 | 32,483,042 |
-| Thinking tokens | 20,057,568 | 1,050,039 | 19,007,529 |
-| Cost (USD) | 30.7142 | 2.0279 | 28.6863 |
-| Cost per lane (USD) | 0.0323 | 0.0369 | 0.0321 |
+| Lanes launched | 975 | 55 | 920 |
+| Lanes finished OK | 975 | 55 | 920 |
+| Agent steps | 41,678 | 2,705 | 38,973 |
+| Lane-hours of agent work | 104.9 | 5.2 | 99.6 |
+| Fresh input tokens | 173,581,659 | 11,482,034 | 162,099,625 |
+| Cache-read input tokens | 3,404,323,082 | 226,255,212 | 3,178,067,870 |
+| Prompt cache hit % | 95.1 | 95.2 | 95.1 |
+| Output tokens | 35,274,028 | 2,135,708 | 33,138,320 |
+| Thinking tokens | 20,503,301 | 1,050,039 | 19,453,262 |
+| Cost (USD) | 31.2216 | 2.0279 | 29.1937 |
+| Cost per lane (USD) | 0.032 | 0.0369 | 0.0317 |
 
 Rooms: 136. Peak concurrent lanes [MEASURED from lane start/end]: 32.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
@@ -38,7 +38,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 561 | 93.9 | 14.4667 |
+| build | 586 | 93.9 | 14.9741 |
 | context | 42 | 95.9 | 1.9093 |
 | context packs + test ideation (U-DEC-0139) | 13 | 91.1 | 0.2195 |
 | demo | 4 | 90.7 | 0.0557 |
@@ -86,7 +86,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 228 | 93.9 | 6.2885 | direct Muse job |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 253 | 93.9 | 6.7959 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -1156,6 +1156,31 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-adv | 8b_WJ5-JUDGE-SCRIPTS_a | adv8b_WJ5-JUDGE-SCRIPTS_a | Oct 31 15:04 | yes | 27 | 91.9 | 0.016437 |
 | direct-adv | 8b_FOREIGN-UID-FIXTURE_b | adv8b_FOREIGN-UID-FIXTURE_b | Oct 31 15:04 | yes | 43 | 95.2 | 0.015349 |
 | direct-adv | 8b_WJ8-JUDGE-DOCS_b | adv8b_WJ8-JUDGE-DOCS_b | Oct 31 15:04 | yes | 22 | 93.6 | 0.011269 |
+| direct-direct | 2_UI-GEOMETRY-WIRE_a | eve1_r2_UI-GEOMETRY-WIRE_a | Oct 31 15:28 | yes | 30 | 93.8 | 0.017098 |
+| direct-direct | 2_UI-GEOMETRY-WIRE_b | eve1_r2_UI-GEOMETRY-WIRE_b | Oct 31 15:28 | yes | 20 | 87.3 | 0.017341 |
+| direct-direct | 3_INPUT-U1-ADAPTER | eve1_r3_INPUT-U1-ADAPTER | Oct 31 15:28 | yes | 57 | 96.5 | 0.022914 |
+| direct-direct | 3_INPUT-U2-PORT | eve1_r3_INPUT-U2-PORT | Oct 31 15:28 | yes | 37 | 94.9 | 0.021133 |
+| direct-direct | 3_INPUT-U3-ECHO | eve1_r3_INPUT-U3-ECHO | Oct 31 15:28 | yes | 39 | 95.5 | 0.017196 |
+| direct-direct | 3_PKG-FIX-R2 | eve1_r3_PKG-FIX-R2 | Oct 31 15:28 | yes | 26 | 90.9 | 0.016031 |
+| direct-direct | 3_HANDOFF-STYLE | eve1_r3_HANDOFF-STYLE | Oct 31 15:28 | yes | 42 | 94.8 | 0.021857 |
+| direct-direct | 8_e1 | eve1_r8_e1 | Oct 31 15:28 | yes | 37 | 91.4 | 0.026351 |
+| direct-direct | 2_INPUT-U5_b | eve1_r2_INPUT-U5_b | Oct 31 15:28 | yes | 33 | 92.6 | 0.022807 |
+| direct-direct | 3_MW-RUN-E2E-R2 | eve1_r3_MW-RUN-E2E-R2 | Oct 31 15:28 | yes | 47 | 95.6 | 0.027326 |
+| direct-direct | 2_WJ2-LAUNCHER-PORTABLE_b | eve1_r2_WJ2-LAUNCHER-PORTABLE_b | Oct 31 15:28 | yes | 16 | 90.5 | 0.007894 |
+| direct-direct | 3_REC-STATE | eve1_r3_REC-STATE | Oct 31 15:28 | yes | 54 | 93.6 | 0.035783 |
+| direct-direct | 2_PKG-CONTENT_b | eve1_r2_PKG-CONTENT_b | Oct 31 15:28 | yes | 33 | 89.8 | 0.030355 |
+| direct-direct | 2_WJ2-LAUNCHER-PORTABLE_a | eve1_r2_WJ2-LAUNCHER-PORTABLE_a | Oct 31 15:28 | yes | 20 | 91.2 | 0.014615 |
+| direct-direct | 3_NETWORK-COPY-R2 | eve1_r3_NETWORK-COPY-R2 | Oct 31 15:28 | yes | 35 | 93.5 | 0.020891 |
+| direct-direct | 8_p10input | eve1_r8_p10input | Oct 31 15:28 | yes | 38 | 94.2 | 0.023354 |
+| direct-direct | 2_MULTI-CAPSULE-WIRE_b | eve1_r2_MULTI-CAPSULE-WIRE_b | Oct 31 15:28 | yes | 21 | 88.4 | 0.015904 |
+| direct-direct | 2_INPUT-U5_a | eve1_r2_INPUT-U5_a | Oct 31 15:28 | yes | 20 | 89.5 | 0.017529 |
+| direct-direct | 2_PKG-CONTENT_a | eve1_r2_PKG-CONTENT_a | Oct 31 15:28 | yes | 37 | 94.9 | 0.016089 |
+| direct-direct | 2_MULTI-CAPSULE-WIRE_a | eve1_r2_MULTI-CAPSULE-WIRE_a | Oct 31 15:28 | yes | 26 | 90.8 | 0.017382 |
+| direct-direct | 3_CAPID-UI | eve1_r3_CAPID-UI | Oct 31 15:28 | yes | 41 | 94.5 | 0.028152 |
+| direct-direct | M-FIX_b | r1a_DAM-FIX_b | Oct 31 15:34 | yes | 41 | 94.0 | 0.021732 |
+| direct-direct | M-FIX_a | r1a_DAM-FIX_a | Oct 31 15:34 | yes | 36 | 94.0 | 0.015216 |
+| direct-direct | G-FIX_a | r1a_PKG-FIX_a | Oct 31 15:34 | yes | 26 | 93.0 | 0.013665 |
+| direct-direct | G-FIX_b | r1a_PKG-FIX_b | Oct 31 15:34 | yes | 30 | 93.2 | 0.018822 |
 
 ## Method
 
