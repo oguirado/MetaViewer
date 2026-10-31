@@ -1411,6 +1411,7 @@ inputar-41c9945ee3e5	ui/test/inputarm-wall-input.test.js
 intents.test.js	ui/test/intents.test.js
 layout-load.test.js	ui/test/layout-load.test.js
 mainsta-a4716a4c64fe	ui/test/main-startup-order.test.js
+multisl-575193d23c36	ui/test/multislotfix-sweep.test.js
 mutFram-75dd51c221d3	ui/test/mutFrameRefFix.test.mjs
 mutSett-c59c7ff27d3d	ui/test/mutSettingsHarden.test.mjs
 mutTerm-33a768ed0f4f	ui/test/mutTerminalHarden.test.mjs
