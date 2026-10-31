@@ -1731,3 +1731,24 @@ test('R3-ELECTRON-2 (tg6_electron#2): post-hello core.sock inode swap is refused
 });
 
 
+
+test('POLISH-2 closed create reaches socket and admits the following real frame', async t => {
+  const f = await fixture(t);
+  const bindings = await loadMainBindings(f.env, {createMessageChannel:f.createMessageChannel});
+  t.after(() => bindings.core.dispose());
+  const body = {schema:'surface_request/v0.2',op:'create',params:{kind:'browser',geometry:{w:1,h:1},profile_id:'test'}};
+  const before = f.requests.length;
+  for (const bad of [ {...body, extra:true}, {...body,op:'destroy'}, {...body,params:{...body.params,geometry:{w:0,h:1}}}, {...body,params:{...body.params,profile_id:'../bad'}} ]) {
+    await assert.rejects(bindings.core.request(bad), /SURFACE_CREATE_INVALID/);
+  }
+  assert.equal(f.requests.length, before);
+  const pending = bindings.core.request(body);
+  await waitForCondition(() => f.requests.some(e => e.body.op === 'create'));
+  assert.deepEqual(f.requests.find(e => e.body.op === 'create').body, body);
+  const frame = new Promise(resolve => bindings.wire.frames.subscribe(resolve));
+  f.send({schema:'surface_event/v0.2',event:'created',data:{surface}});
+  assert.equal((await pending).event,'created');
+  f.send({schema:'surface_event/v0.2',event:'frame_ready',data:{frame_ref:f.frame}});
+  const entry = await frame;
+  assert.ok(entry);
+});

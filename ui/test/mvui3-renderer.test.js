@@ -195,7 +195,7 @@ for (const reply of ['false', 'undefined', 'truthy', 'typed', 'reject', 'true', 
       assert.ok(outcome, 'typed outcome row is rendered');
       assert.equal(outcome.props['data-outcome-code'], reply === 'true' ? 'INTENT_ACKNOWLEDGED'
         : reply === 'typed' ? 'ERR_DENIED' : 'HOST_REQUEST_REFUSED');
-      if (reply === 'typed') assert.equal(outcome.text, 'This request is unavailable. Please try again.', 'display sanitization keeps its existing safe message');
+      if (reply === 'typed') assert.equal(outcome.text, 'ERR_DENIED: This request is unavailable. Please try again.', 'generic refusal shows the typed code without host diagnostic text');
       assert.equal(outcome.props.role, reply === 'true' ? 'status' : 'alert');
       publish({}); await flush();
       assert.equal(button().props['aria-expanded'], reply === 'true', 'unchanged authority feed cannot create divergence after refusal');

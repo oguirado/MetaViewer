@@ -27,7 +27,7 @@ const validProposal=JSON.stringify({
 const calls={loadSettings:[],saveSettings:[settings],recordingDestination:[],nestedDepth:[],selfCapsuleId:[],
   propose:[validProposal],intent:[JSON.stringify({schema:'ui_intent/v0.2',request_id:'r1',op:'take_control',params:{surface_id:'s1'}})],subscribeFrames:[],unsubscribeFrames:[],
   terminalEnabled:[true],terminalOpen:[spec]};
-async function fixture(t,env={}) {
+async function fixture(t,env={},argv=['--nested-depth=1']) {
   const root=await mkdtemp(join(tmpdir(),'wire-'));
   t.after(()=>rm(root,{recursive:true,force:true}));
   const handlers=new Map(),forwarded=[];
@@ -37,7 +37,7 @@ async function fixture(t,env={}) {
   let intentReply=true,coreReply=verdict,terminalReply={session:'s1'};
   const coreCalls=[],terminalCalls=[];
   const ipcMain={handle:(channel,fn)=>handlers.set(channel,fn),removeHandler:channel=>handlers.delete(channel)};
-  const binding=installAuthorityWire({ipcMain,contents,env:{XDG_CONFIG_HOME:root,MV_SELF_CAPSULE_ID:'capsule-1',...env},argv:['--nested-depth=1'],
+  const binding=installAuthorityWire({ipcMain,contents,env:{XDG_CONFIG_HOME:root,MV_SELF_CAPSULE_ID:'capsule-1',...env},argv,
     core:{request:async value=>{coreCalls.push(value);return value.op==='intent'?intentReply:coreReply;}},
     profiles:new Map([['luna',{args:['--safe']}]]),terminal:{setEnabled:async()=>true,open:async value=>{terminalCalls.push(value);return terminalReply;}}});
   t.after(async()=>{await binding.dispose();await rm(root,{recursive:true,force:true});});
@@ -1106,3 +1106,30 @@ test('R3-ELECTRON-5: settings save invokes file.sync() before rename and aborts 
   assert.deepEqual(await readdir(dir), ['settings.json']);
 });
 
+
+test('POLISH-2 browser create has zero renderer arguments, host-owned profile and typed errors', async t => {
+  const f = await fixture(t, {}, []);
+  const api = createPreloadFacade({transport:{invoke:async (channel,args) => f.handlers.get(channel)(f.event,...args)},bridge:{exposeInMainWorld(){}}});
+  f.coreReply({schema:'surface_event/v0.2',event:'created',data:{surface}});
+  assert.deepEqual(await api.authority.createSurface(),{ok:true});
+  assert.deepEqual(f.coreCalls.at(-1),{schema:'surface_request/v0.2',op:'create',params:{kind:'browser',geometry:{w:1280,h:900},profile_id:'mv-live-1'}});
+  const count = f.coreCalls.length;
+  await assert.rejects(api.authority.createSurface({profile_id:'injected'}), /ARGS/);
+  const handler = f.handlers.get(WIRE_CHANNELS.createSurface);
+  await assert.rejects(handler({sender:{...f.contents},senderFrame:f.event.senderFrame}), /SENDER/);
+  assert.equal(f.coreCalls.length,count);
+  f.coreReply({schema:'surface_event/v0.2',event:'error',data:{surface_id:'none',code:'NATIVE_FAILED',detail:'private'}});
+  assert.deepEqual(await api.authority.createSurface(),{ok:false,code:'NATIVE_FAILED'});
+  const nested = await fixture(t);
+  assert.deepEqual(await nested.call('createSurface'),{ok:false,code:'DISPLAY_ONLY'});
+  assert.equal(nested.coreCalls.length,0);
+});
+
+test('POLISH-2 terminal missing support crosses preload as a typed reply',async t => {
+  const f=await fixture(t);
+  await f.call('terminalEnabled',true);
+  f.terminalReply({ok:false,code:'TERMINAL_UNAVAILABLE'});
+  const reply=await f.call('terminalOpen',spec);
+  assert.deepEqual(reply,{ok:false,code:'TERMINAL_UNAVAILABLE'});
+  assert.deepEqual(await facade(reply).sideTerminal.open(spec),reply);
+});

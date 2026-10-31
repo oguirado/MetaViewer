@@ -106,7 +106,7 @@ test('mounted HostOutcome uses closed literals, status roles, anchors and no inl
   for (const [code, tone, role, copy] of [
     ['ACTION_ADMITTED', 'success', 'status', 'Action admitted.'],
     ['LOCKED_BY_OTHER', 'refusal', 'alert', 'Another operator controls this surface.'],
-    ['ERR_PRIVATE', 'success', 'alert', 'This request is unavailable. Please try again.'],
+    ['ERR_PRIVATE', 'success', 'alert', 'ERR_PRIVATE: This request is unavailable. Please try again.'],
   ]) {
     const mounted = mountComponent(Outcome, { row: { code, tone, message: 'ERR_PRIVATE /secret' } });
     try {

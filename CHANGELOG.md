@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+- Admit strictly bounded surface creates through the host and retain created surfaces for frame delivery.
+- Keep idle daemon connections live with tagged list probes and acknowledged notices while retaining silent-peer deadlines.
+- Return visible `TERMINAL_UNAVAILABLE` when native terminal support is absent from a package.
+- Refuse browser proposals before IPC when a live surface or frame is absent and show typed refusal codes.
+- Forward only validated live text-input modes and hold package smoke to check create delivery and adapter liveness.
+
+- Refuse required-adapter boot with a typed, redacted configuration reason and honest startup guidance.
+- Identify native capability replies without network modes as `legacy_binary`, preserving legacy behavior.
+
 Changes after candidate `2a1ee6d5c` through `7a4aad3ae`
 [CITED: `git log --oneline 2a1ee6d5c..7a4aad3ae`].
 Open remains gated on the operator-provisioned identity image `0.2.0`, firewall

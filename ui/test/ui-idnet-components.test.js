@@ -98,3 +98,11 @@ test('identity first impression labels, placeholders, grammar and typed tool fai
     assert.equal(nodes(view.root).find(n=>n.tag==='button'&&n.text==='Create identity').props.disabled,false,id);
   }
 });
+
+test('Network panel explains a legacy binary without exposing a raw probe reason',async t=>{
+  const host={egress:{get:async()=>({ok:true,record:{schema:'metaviewer.capsule_egress/v1',mode:'open',domains:[]},net_mode:'legacy',reason:'legacy_binary'})}};
+  const view=mount(await component('netmode/NetworkPanel.vue'),{open:true,identity:'account-a',host});
+  t.after(view.close);await tick();
+  assert.match(text(view.root),/legacy \(binary has no network modes\)/);
+  assert.doesNotMatch(text(view.root),/invalid capability reply|legacy_binary/);
+});

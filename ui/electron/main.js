@@ -24,7 +24,7 @@ import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
-import { createAdapterLauncher, findForbiddenEnv } from './coreLauncher.js';
+import { createAdapterLauncher, findForbiddenEnv, redactAdapterDiagnostic } from './coreLauncher.js';
 
 // [TARGET, unit decision] When MV_SRF_BIN_DIR is configured, supervised adapter
 // failure aborts boot fail-closed with a typed ADAPTER_* MainError before
@@ -38,6 +38,9 @@ import { createAdapterLauncher, findForbiddenEnv } from './coreLauncher.js';
 // [TARGET, unit decision] Packaging seals ASAR renderer bytes into the loaded
 // main module. A replaced archive cannot change the admitted asset contents.
 const PACKAGED_ASSET_DIGESTS = /** @type {Readonly<Record<string, string>>} */ (Object.freeze({}));
+
+// Track completed boot separately from the frozen AdapterStatus contract.
+const bootedAdapters = new WeakSet();
 
 /**
  * Typed main failure; a failure admits nothing.
@@ -1856,7 +1859,7 @@ export const FIRST_SURFACE_CREATE_TIMEOUT_MS = 1500;
  *   }>,
  * }>}
  */
-function buildFirstSurfaceCreateRequest(envRec) {
+export function buildFirstSurfaceCreateRequest(envRec) {
   /** @type {'desktop_capsule' | 'browser' | 'game_capsule' | 'vm'} */
   let kind = 'browser';
   let w = 1280;
@@ -2365,8 +2368,12 @@ export async function bootProductionMain(handles) {
             : adapterStartError instanceof Error && adapterStartError.message.length > 0
               ? adapterStartError.message
               : 'adapter did not reach live';
+        const refusal = `the daemon adapter did not reach live (${redactAdapterDiagnostic(adapterDetail, envRec)}); MetaViewer will not start with MV_SRF_BIN_DIR set and no live adapter. Check MV_SRF_LIVE_PROFILE / MV_SRF_LIVE_RAM_ROOT or unset MV_SRF_BIN_DIR for core-only.`;
+        try {
+          console.error(`METAVIEWER_BOOT_REFUSED ${adapterCode}: ${refusal}`);
+        } catch { /* diagnostics best-effort; the typed error retains the reason */ }
         await unwind();
-        fail(adapterCode, adapterDetail);
+        fail(adapterCode, refusal);
       }
       if (
         adapterStartError === null &&
@@ -2585,6 +2592,7 @@ export async function bootProductionMain(handles) {
     await unwind();
   }
 
+  if (adapter !== null) bootedAdapters.add(adapter);
   return Object.freeze(adapter !== null ? { window: built, core, adapter, dispose } : { window: built, core, dispose });
 }
 
@@ -2645,7 +2653,7 @@ export async function loadMainBindings(env = process.env, options = {}) {
               const trimmed = line.trim();
               if (trimmed.length > 0) {
                 try {
-                  console.error(trimmed);
+                  console.error(redactAdapterDiagnostic(trimmed, env));
                 } catch {
                   /* diagnostics best-effort */
                 }
@@ -2659,7 +2667,7 @@ export async function loadMainBindings(env = process.env, options = {}) {
             stderrBuffer = '';
             if (trimmed.length > 0) {
               try {
-                console.error(trimmed);
+                console.error(redactAdapterDiagnostic(trimmed, env));
               } catch {
                 /* diagnostics best-effort */
               }
@@ -2706,7 +2714,7 @@ export async function loadMainBindings(env = process.env, options = {}) {
         spawn: typeof customSpawn === 'function' ? customSpawn : defaultSpawn,
         callbacks: {
           onStatus: (status) => {
-            if (status.availability === 'degraded') {
+            if (status.availability === 'degraded' && (!env.MV_SRF_BIN_DIR || bootedAdapters.has(bindings.adapter))) {
               try {
                 console.error(`METAVIEWER_ADAPTER_DEGRADED ${JSON.stringify({ code: status.code, reason: status.reason, userMessage: status.userMessage })}`);
               } catch {

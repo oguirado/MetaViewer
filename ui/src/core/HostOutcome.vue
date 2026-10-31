@@ -8,7 +8,7 @@ const outcome = computed(() => hostOutcomeFor(props.row));
 </script>
 <template>
   <p v-if="outcome" id="mv-host-outcome" data-semantic-anchor="host/outcome"
-    :role="outcome.tone === 'refusal' ? 'alert' : 'status'" :data-outcome-code="outcome.code">{{ outcome.message }}</p>
+    :role="outcome.tone === 'refusal' ? 'alert' : 'status'" :data-outcome-code="outcome.code">{{ (outcome.code === 'NO_BROWSER_CAPSULE' || outcome.message === 'This request is unavailable. Please try again.') ? `${outcome.code}: ${outcome.message}` : outcome.message }}</p>
 </template>
 
 <style scoped>

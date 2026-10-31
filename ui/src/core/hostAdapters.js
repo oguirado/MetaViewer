@@ -2,7 +2,7 @@ import { createWallProjection } from './projection.js';
 import { buildAuthorityIntent, createWallIntentBuilders } from './intents.js';
 
 /** @typedef {{schema:'action_verdict/v0.2',proposal_id:string,core_seq:number,decision:'admitted'|'refused',reason_code?:string}} ActionVerdict */
-/** @typedef {{propose?:(json:string)=>Promise<ActionVerdict>,intent?:(json:string)=>Promise<true>,subscribeFrames?:(callback:(notice:any)=>void)=>(()=>void)}} AuthorityPort */
+/** @typedef {{createSurface?:()=>Promise<any>,propose?:(json:string)=>Promise<ActionVerdict>,intent?:(json:string)=>Promise<true>,subscribeFrames?:(callback:(notice:any)=>void)=>(()=>void)}} AuthorityPort */
 /** @typedef {{command:string,args:readonly string[],cols:number,rows:number}} TerminalSpec */
 /** @typedef {{open?:(spec:TerminalSpec)=>Promise<{session:string}>,setEnabled?:(enabled:boolean)=>Promise<true>,close?:(spec:{session:string})=>Promise<unknown>}} TerminalPort */
 /** @typedef {{code:string,message:string,tone:'success'|'refusal'}} OutcomeRow */
@@ -39,9 +39,19 @@ export function verdictRow(value) {
 export function createAuthorityAdapter(port) {
   const intent = typeof port?.intent === 'function' ? port.intent.bind(port) : null;
   const propose = typeof port?.propose === 'function' ? port.propose.bind(port) : null;
+  const createSurface = typeof port?.createSurface === 'function' ? port.createSurface.bind(port) : null;
   return Object.freeze({
+    createSurface: createSurface ? async () => {
+      const reply = await createSurface();
+      if (reply?.ok === true) return {code:'INTENT_ACKNOWLEDGED',message:'Request sent.',tone:/** @type {const} */ ('success')};
+      const code = typeof reply?.code === 'string' ? reply.code : 'SURFACE_CREATE_FAILED';
+      throw Object.assign(new Error(code), {code});
+    } : null,
     intent: intent ? async (/** @type {unknown} */ body) => requireAck(await intent(JSON.stringify(buildAuthorityIntent(body)))) : null,
-    propose: propose ? async (/** @type {unknown} */ body) => verdictRow(await propose(JSON.stringify(body))) : null,
+    propose: propose ? async (/** @type {unknown} */ body) => {
+      assertProposalFrame(body);
+      return verdictRow(await propose(JSON.stringify(body)));
+    } : null,
   });
 }
 
@@ -55,6 +65,7 @@ export function createTerminalBroker(port) {
     open: open ? async (/** @type {TerminalSpec} */ spec) => {
       // The API accepts exactly these keys, with one positional argument.
       const reply = await open({ command: spec.command, args: [...spec.args], cols: spec.cols, rows: spec.rows });
+      if (/** @type {any} */ (reply)?.code === 'TERMINAL_UNAVAILABLE') throw Object.assign(new Error('TERMINAL_UNAVAILABLE: terminal support is not bundled in this package'), {code:'TERMINAL_UNAVAILABLE'});
       if (!reply || typeof reply.session !== 'string' || !/^[A-Za-z0-9._-]{1,128}$/.test(reply.session)) throw new Error('Invalid terminal session');
       return reply;
     } : null,
@@ -169,7 +180,16 @@ export function hostOutcomeFor(row) {
     message: success[/** @type {keyof typeof success} */ (row.code)], tone: 'success' };
   if (Object.hasOwn(LAYOUT_REFUSAL_COPY, row.code)) return { code: row.code,
     message: LAYOUT_REFUSAL_COPY[/** @type {keyof typeof LAYOUT_REFUSAL_COPY} */ (row.code)], tone: 'refusal' };
+  if (row.code === 'NO_BROWSER_CAPSULE') return {code:row.code,message:'No browser capsule with a live frame.',tone:'refusal'};
   return { code: row.code, message: Object.hasOwn(REASONS, row.code)
     ? REASONS[/** @type {keyof typeof REASONS} */ (row.code)]
     : 'This request is unavailable. Please try again.', tone: 'refusal' };
+}
+
+/** @param {any} body */
+export function assertProposalFrame(body) {
+  if (body?.schema !== 'action_proposal/v0.2' || typeof body.surface_id !== 'string' || !body.surface_id.length
+      || !Number.isSafeInteger(body.based_on_frame?.generation) || body.based_on_frame.generation < 1
+      || typeof body.based_on_frame?.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(body.based_on_frame.sha256)
+      || !body.budget) throw Object.assign(new Error('NO_BROWSER_CAPSULE: no live browser capsule and frame'), {code:'NO_BROWSER_CAPSULE'});
 }

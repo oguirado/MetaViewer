@@ -946,12 +946,14 @@ else if (process.argv.includes('--nested-depth=1')) {
     let entry;
     if (process.env.MV_PACKAGE_SMOKE === '1') {
       let smokeHandled = false;
+      let createWireReply = false;
       const rendererTimer = setTimeout(() => {
         writeFdSync(2, 'PKG_RENDERER_READY_TIMEOUT');
         void stop().finally(() => app.exit(1));
       }, Math.max(1, deadline - Date.now()));
       console.log = (...args) => {
         writeFdSync(1, format(...args));
+        if (args[0] === 'METAVIEWER_SURFACE_CREATE_WIRE_REPLY') createWireReply = true;
         if (!smokeHandled && args[0] === 'METAVIEWER_RENDERER_READY') {
           smokeHandled = true;
           clearTimeout(rendererTimer);
@@ -962,6 +964,13 @@ else if (process.argv.includes('--nested-depth=1')) {
               if (!st || st.availability !== 'live' || st.handshakeSeen !== true) {
                 throw new Error('PKG_ADAPTER_START_FAILED');
               }
+            }
+            if (process.env.MV_PACKAGE_SMOKE_HOLD === '1') {
+              if (!createWireReply) throw new Error('PKG_SURFACE_CREATE_NOT_DELIVERED');
+              await new Promise(resolve => setTimeout(resolve, 1200));
+              const status = boot?.adapter?.getStatus?.();
+              if (status?.availability !== 'live' || status.handshakeSeen !== true) throw new Error('PKG_ADAPTER_HOLD_FAILED');
+              writeFdSync(1, 'METAVIEWER_ADAPTER_HOLD_OK\n');
             }
             await stop();
             writeFdSync(1, 'METAVIEWER_MAIN_SMOKE_OK\n');
@@ -982,6 +991,8 @@ else if (process.argv.includes('--nested-depth=1')) {
     });
     entry = Promise.race([
       mainDirectEntry().then(resolved => {
+        // mainDirectEntry emits the typed ADAPTER_* refusal and reason to stderr
+        // before resolving a failed boot; keep the PKG_* smoke failure after it.
         if (!resolved || process.exitCode) throw new Error('PKG_MAIN_ENTRY_FAILED');
         boot = resolved;
         return resolved;
@@ -1959,6 +1970,7 @@ export async function cleanInstallSmoke(artifact) {
         MV_SRF_STATE_DIR:realSrfStateDir,
         SRF_IDENTITY_STORE_ROOT:realSrfIdentityDir,
         MV_SRF_PROFILES:srfProfiles,
+        MV_PACKAGE_SMOKE_HOLD:'1',
       };
       await runSmokeCommand(() => execute('xvfb-run',['-a','strace','-f','-e','trace=file','-o',realTrace,
         join(installed,'metaviewer'),`--user-data-dir=${join(clean,'real-profile')}`],{cwd:clean,env:realEnv,timeout:60000,maxBuffer:1024*1024}));

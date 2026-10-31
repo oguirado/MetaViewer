@@ -90,8 +90,8 @@ test('replay answers intents and proposals through the mounted adapter', async (
   assert.ok(adapter, 'replay binds the intent adapter to the fake port');
   const request = mounted.props.runtime.intentBuilders.control({ capsuleId: 'cap-01', verb: 'take_control' });
   assert.equal(await adapter.intent(request), true);
-  assert.equal((await adapter.propose({ action: 'example' })).code, 'ACTION_ADMITTED');
-  const refused = await adapter.propose({ action: 'example', refuse: true });
+  assert.equal((await adapter.propose({ schema:'action_proposal/v0.2',proposal_id:'p',surface_id:'cap-01',based_on_frame:{generation:1,sha256:'a'.repeat(64)},budget:{max_ms:100,max_retries:0},action:{type:'click',x:1,y:1,button:'left'},expectation:{type:'state_sha256_change'} })).code, 'ACTION_ADMITTED');
+  const refused = await adapter.propose({ schema:'action_proposal/v0.2',proposal_id:'p',surface_id:'cap-01',based_on_frame:{generation:1,sha256:'a'.repeat(64)},budget:{max_ms:100,max_retries:0},action:{type:'click',x:1,y:1,button:'left'},expectation:{type:'state_sha256_change'}, refuse: true });
   assert.equal(refused.code, 'POLICY');
   assert.doesNotMatch(refused.message, /POLICY|ERR_/);
 });

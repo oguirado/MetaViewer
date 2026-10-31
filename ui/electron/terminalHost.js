@@ -473,7 +473,8 @@ export function createTerminalHost({
         throw new Error('TERMINAL_DISABLED');
       }
       if (!resolvedPty) {
-        resolvedPty = await import('node-pty');
+        try { resolvedPty = await import('node-pty'); }
+        catch { return {ok:false, code:'TERMINAL_UNAVAILABLE', message:'TERMINAL_UNAVAILABLE: terminal support is not bundled in this package'}; }
       }
       const session = randomUUID();
       return new Promise((resolve, reject) => {

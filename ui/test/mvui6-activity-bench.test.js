@@ -158,6 +158,7 @@ describe('bench hook behavior', () => {
       let failIntent = false;
       const calls = [];
       const authorityHost = createAuthorityAdapter({
+        createSurface:async () => {calls.push('createSurface'); return {ok:true};},
         intent: async (json) => { calls.push(json); if (failIntent) throw new Error('closed'); return true; },
         propose: async (json) => { calls.push(json); return verdict; },
       });
@@ -189,7 +190,7 @@ describe('bench hook behavior', () => {
         op: 'take_control', params: { surface_id: 'surface-a' } }, 'closed hook control keeps the exact closed wire shape');
 
       verdict = { schema: 'action_verdict/v0.2', proposal_id: 'q', core_seq: 2, decision: 'refused', reason_code: 'POLICY' };
-      hook.dispatch({ action: 'open', target: 'surface-a' });
+      hook.dispatch({ schema:'action_proposal/v0.2',proposal_id:'p',surface_id:'surface-a',based_on_frame:{generation:1,sha256:'a'.repeat(64)},budget:{max_ms:100,max_retries:0},action:{type:'click',x:1,y:1,button:'left'},expectation:{type:'state_sha256_change'} });
       await tick();
       assert.deepEqual(renderedTexts(captured.stripEntries()),
         ['Request sent.', 'This action is unavailable under the current policy.']);
@@ -197,7 +198,7 @@ describe('bench hook behavior', () => {
       verdict = { schema: 'action_verdict/v0.2', proposal_id: 'r', core_seq: 3, decision: 'admitted' };
       hook.createCapsule({ kind: 'browser' });
       await tick();
-      assert.equal(renderedTexts(captured.stripEntries()).at(-1), 'Action admitted.');
+      assert.equal(renderedTexts(captured.stripEntries()).at(-1), 'Request sent.');
 
       const beforeFold = captured.stripEntries().length;
       const beforeFoldCalls = calls.length;

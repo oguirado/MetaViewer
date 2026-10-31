@@ -74,8 +74,11 @@ async function launch(entry) {
       return;
     }
     outcome.value = { code: 'TERMINAL_OPENED', message: 'Terminal session opened.' };
-  } catch {
-    if (active) outcome.value = { code: 'TERMINAL_LAUNCH_REFUSED', message: 'This terminal launch is unavailable.' };
+  } catch (error) {
+    const unavailable = String(error).includes('TERMINAL_UNAVAILABLE');
+    if (active) outcome.value = unavailable
+      ? {code:'TERMINAL_UNAVAILABLE', message:'TERMINAL_UNAVAILABLE: terminal support is not bundled in this package'}
+      : { code: 'TERMINAL_LAUNCH_REFUSED', message: 'This terminal launch is unavailable.' };
   } finally { if (active) launching.value = false; }
 }
 </script>

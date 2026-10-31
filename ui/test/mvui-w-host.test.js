@@ -49,6 +49,7 @@ function fakeHost({ depth = 0, destination = '/recordings', refused = false } = 
   method(host, 'recordingDestination', 0, none, () => destination);
   method(host, 'nestedDepth', 0, none, () => depth);
   method(host, 'selfCapsuleId', 0, none, () => 'self-capsule');
+  method(host.authority, 'createSurface', 0, none, () => ({ok:true}));
   method(host.authority, 'propose', 1, json, () => verdict);
   method(host.authority, 'intent', 1, value => {
     json(value); assert.equal(validates(intentSchema, JSON.parse(value)), true);
@@ -231,9 +232,9 @@ test('intents preserve literal op names, proposals are JSON text and acknowledge
       assert.deepEqual(body.params, { surface_id: 'surface-a' });
       assert.ok(body.request_id);
     }
-    assert.equal((await p.authorityHost.propose({ action: 'example' })).tone, 'success');
+    assert.equal((await p.authorityHost.propose({schema:'action_proposal/v0.2',surface_id:'surface-a',based_on_frame:{generation:1,sha256:'a'.repeat(64)},budget:{max_ms:100,max_retries:0},action:{type:'click',x:1,y:1,button:'left'}})).tone, 'success');
     fake.setVerdict({ schema: 'action_verdict/v0.2', proposal_id: 'p', core_seq: 2, decision: 'refused', reason_code: 'POLICY' });
-    const refused = await p.authorityHost.propose({ action: 'example' });
+    const refused = await p.authorityHost.propose({schema:'action_proposal/v0.2',surface_id:'surface-a',based_on_frame:{generation:1,sha256:'a'.repeat(64)},budget:{max_ms:100,max_retries:0},action:{type:'click',x:1,y:1,button:'left'}});
     assert.equal(refused.code, 'POLICY'); assert.doesNotMatch(refused.message, /POLICY|ERR_/);
     await assert.rejects(adapters.createAuthorityAdapter({ intent: async () => 1 }).intent({ op: 'take_control', surfaceId: 'surface-a' }));
     await assert.rejects(p.authorityHost.intent(builders.visibility({ capsuleId: 'surface-a', verb: 'fold' })));
@@ -295,7 +296,12 @@ test('mounted App routes wall controls and catalog proposals, renders typed verd
       assert.match(renderedText(mounted.root), /Request sent/);
     }
     fake.setVerdict({ schema: 'action_verdict/v0.2', proposal_id: 'p', core_seq: 2, decision: 'refused', reason_code: 'LOCKED_BY_OTHER' });
-    captured.catalog.emit('create', { kind: 'browser' }); await tick();
+    const beforeNoFrame = fake.calls.length;
+    captured.catalog.emit('create', {schema:'action_proposal/v0.2',surface_id:'surface-a',based_on_frame:{generation:1,sha256:'a'.repeat(64)},budget:{max_ms:100,max_retries:0}}); await tick();
+    assert.equal(fake.calls.length, beforeNoFrame, 'no frame means no proposal IPC');
+    assert.match(renderedText(mounted.root), /NO_BROWSER_CAPSULE/);
+    fake.emit(notice()); await tick();
+    captured.catalog.emit('create', {schema:'action_proposal/v0.2',surface_id:'surface-a',based_on_frame:{generation:1,sha256:'a'.repeat(64)},budget:{max_ms:100,max_retries:0},action:{type:'click',x:1,y:1,button:'left'}}); await tick();
     assert.equal(fake.calls.at(-1).name, 'propose');
     assert.equal(typeof fake.calls.at(-1).args[0], 'string');
     assert.match(renderedText(mounted.root), /Another operator/);
@@ -304,6 +310,11 @@ test('mounted App routes wall controls and catalog proposals, renders typed verd
     assert.equal(row.props['data-outcome-code'], 'LOCKED_BY_OTHER');
     assert.equal(row.props['data-semantic-anchor'], 'host/outcome');
     assert.equal(row.props.role, 'alert');
+    const callsBefore = fake.calls.length;
+    captured.catalog.emit('create', {kind:'browser'}); await tick();
+    assert.equal(fake.calls.at(-1).name, 'createSurface');
+    assert.equal(fake.calls.length, callsBefore + 1);
+    assert.deepEqual(fake.calls.at(-1).args, []);
   } finally { mounted.close(); booted.close(); }
   const fallbackEvents = [];
   const fallback = mountComponent(App, { ...booted.props, runtime: null,

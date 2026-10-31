@@ -12,6 +12,7 @@ import {
   ALLOWED_ADAPTER_ENV,
   adapterNetworkProbe,
   createAdapterLauncher,
+  redactAdapterDiagnostic,
   scrubAdapterEnv,
   scrubChildEnv,
   validateKillTarget,
@@ -21,6 +22,7 @@ import {
   ELECTRON_PIN,
   PRIVILEGED_ORIGIN,
   bootProductionMain,
+  loadMainBindings,
 } from '../electron/main.js';
 
 /**
@@ -423,6 +425,7 @@ describe('W3-PKG-FULLSTACK bundled adapter supervision next to core', () => {
       assert.equal(crashed?.spawnCount, 1);
       assert.match(String(crashed?.reason), /code=137/);
       assert.match(String(crashed?.userMessage), /Degraded mode \(ADAPTER_CRASHED\)/);
+      assert.match(String(crashed?.userMessage), /MetaViewer is running core-only/);
 
       // Repeated start() calls must never respawn the crashed adapter
       const retry1 = await launcher.start();
@@ -631,7 +634,7 @@ describe('deployed native network capability discovery', () => {
   const cases = [
     { name: 'advertised modes override the parent', reply: header + '--paste net_modes=legacy,open,proxied\n', expected: '["legacy","open","proxied"]' },
     { name: 'legacy token stays legacy', reply: header + 'net_modes=legacy\n', expected: '["legacy"]' },
-    { name: 'older native without the token stays unset', reply: header + '--paste downloads\n' },
+    { name: 'older native without the token stays unset', reply: header + '--paste downloads\n', reason: 'legacy_binary' },
     { name: 'missing native stays unset' },
     { name: 'failed command stays unset', reply: header + 'net_modes=legacy,open,proxied\n', exit: 3 },
     { name: 'wrong header stays unset', reply: 'other capabilities v1\nnet_modes=open\n' },
@@ -639,12 +642,15 @@ describe('deployed native network capability discovery', () => {
     { name: 'duplicate mode stays unset', reply: header + 'net_modes=open,open\n' },
     { name: 'duplicate token stays unset', reply: header + 'net_modes=open net_modes=legacy\n' },
     { name: 'empty token stays unset', reply: header + 'net_modes=\n' },
+    { name: 'extra blank line stays unset', reply: header + 'net_modes=open\n\n' },
     { name: 'extra reply line stays unset', reply: header + 'net_modes=open\nextra\n' },
     { name: 'oversized reply stays unset', reply: header + 'net_modes=open ' + 'x'.repeat(9000) },
     { name: 'timeout stays unset', hang: true },
   ];
   for (const fixture of cases) {
-    it(fixture.name, async () => {
+    it(fixture.name, async (t) => {
+      const lines = [];
+      t.mock.method(console, 'info', line => lines.push(line));
       const fx = createFullstackFixture();
       const child = createFakeChild();
       /** @type {Record<string, string> | undefined} */
@@ -678,7 +684,8 @@ describe('deployed native network capability discovery', () => {
         const reason = adapterNetworkProbe(env)?.reason;
         assert.equal(reason, fixture.expected ? 'ok' : fixture.hang ? 'timeout' :
           fixture.reply === undefined ? 'binary_missing' : fixture.exit ? `exit_${fixture.exit}` :
-          fixture.name.startsWith('oversized') ? 'oversize' : 'malformed');
+          fixture.name.startsWith('oversized') ? 'oversize' : fixture.reason ?? 'malformed');
+        assert.ok(lines.includes(`[metaviewer] network capability probe: ${reason}`));
         assert.ok(Object.isFrozen(received));
       } finally {
         await launcher.dispose();
@@ -686,4 +693,68 @@ describe('deployed native network capability discovery', () => {
       }
     });
   }
+});
+
+
+it('required adapter configuration exit prints an honest boot refusal without core-only runtime text', async t => {
+  const fx = createFullstackFixture();
+  t.after(fx.cleanup);
+  const lines = [];
+  t.mock.method(console, 'error', line => lines.push(line));
+  const bootstrap = join(fx.root, 'bootstrap.mjs');
+  writeFileSync(bootstrap, `export function createMainBindings() {
+    return {core:{start(){},request(){},dispose(){},getStatus(){}},wire:{frames:{subscribe(){}}}};
+  }`, {mode:0o600});
+  const child = createFakeChild();
+  const configuration = 'configuration: profile map or live profile/root required';
+  const bindings = await loadMainBindings({...fx.env, MV_CORE_BOOTSTRAP:bootstrap, MV_ADAPTER_BIN:fx.adapterBin}, {
+    adapterOptions:{
+      spawn:()=>{
+        setImmediate(()=>{
+          child.stderr.emit('data', configuration + '\n');
+          child.emit('exit', 2, null);
+        });
+        return child;
+      },
+      selfPid:100,selfPgid:100,
+    },
+  });
+  const bootEnv = createBootHandles({root:fx.root,xdg:fx.xdg,adapter:bindings.adapter,env:{MV_SRF_BIN_DIR:fx.srfBinDir}});
+  await assert.rejects(bootProductionMain(bootEnv.handles), error => {
+    assert.equal(error.code, 'ADAPTER_CRASHED');
+    assert.ok(error.message.includes(configuration));
+    assert.match(error.message, /MetaViewer will not start with MV_SRF_BIN_DIR set and no live adapter/);
+    assert.match(error.message, /Check MV_SRF_LIVE_PROFILE \/ MV_SRF_LIVE_RAM_ROOT/);
+    assert.doesNotMatch(error.message, /running core-only/);
+    return true;
+  });
+  assert.equal(lines.length, 1);
+  assert.ok(lines[0].startsWith('METAVIEWER_BOOT_REFUSED ADAPTER_CRASHED:'));
+  assert.ok(lines[0].includes(configuration));
+  assert.doesNotMatch(lines.join('\n'), /running core-only|METAVIEWER_ADAPTER_DEGRADED/);
+  assert.ok(bootEnv.calls.includes('core.dispose'));
+  assert.ok(!bootEnv.calls.includes('new-BrowserWindow'));
+
+  // Negative control: after completed boot the same callback reports core-only.
+  lines.length = 0;
+  const liveChild = createFakeChild(5253);
+  const liveBindings = await loadMainBindings({...fx.env, MV_CORE_BOOTSTRAP:bootstrap, MV_ADAPTER_BIN:fx.adapterBin}, {
+    adapterOptions:{spawn:()=>liveChild,handshake:async()=>{},selfPid:100,selfPgid:100},
+  });
+  const liveEnv = createBootHandles({root:fx.root,xdg:fx.xdg,adapter:liveBindings.adapter,env:{MV_SRF_BIN_DIR:fx.srfBinDir}});
+  const liveBoot = await bootProductionMain(liveEnv.handles);
+  liveChild.emit('exit', 2, null);
+  assert.equal(lines.length, 1);
+  assert.ok(lines[0].startsWith('METAVIEWER_ADAPTER_DEGRADED '));
+  assert.match(lines[0], /MetaViewer is running core-only/);
+  assert.doesNotMatch(lines[0], /METAVIEWER_BOOT_REFUSED/);
+  await liveBoot.dispose();
+});
+
+it('adapter diagnostics preserve configuration text while redacting credentials and controls', () => {
+  const configuration = 'configuration: profile map or live profile/root required';
+  assert.equal(redactAdapterDiagnostic(configuration), configuration);
+  assert.equal(redactAdapterDiagnostic('token=abc password="two words" https://user:pass@host/\nnext'),
+    'token=[REDACTED] password=[REDACTED] https://[REDACTED]@host/ next');
+  assert.equal(redactAdapterDiagnostic('failure: opaque-value', {MV_SECRET:'opaque-value'}), 'failure: [REDACTED]');
 });

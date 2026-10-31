@@ -482,6 +482,16 @@ export async function createMainBindings({env = process.env, createMessageChanne
           || !id(layoutError.surface_id) || !id(layoutError.detail))) throw fail();
       for (const [key,item] of pending) {
         let result;
+        if (item.body.schema === 'surface_request/v0.2' && item.body.op === 'create') {
+          if (body.schema === 'surface_event/v0.2' && body.event === 'created'
+              && body.data?.surface?.profile_id === item.body.params.profile_id) result = body;
+          else if (body.schema === 'surface_event/v0.2' && body.event === 'error') result = body;
+          else if (body.schema === 'action_verdict/v0.2' && body.proposal_id === key) result = body;
+          if (result !== undefined) {
+            if (body.schema === 'surface_event/v0.2') console.log('METAVIEWER_SURFACE_CREATE_WIRE_REPLY');
+            clearTimeout(item.timer); pending.delete(key); item.resolve(result); continue;
+          }
+        }
         if (layoutError && item.body.schema === 'ui_intent/v0.2' && layoutError.detail === key && layoutError.surface_id === item.body.params?.slot_id) {
           clearTimeout(item.timer);pending.delete(key);item.reject(new Error(layoutError.code));continue;
         }
@@ -547,7 +557,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
     if (after.ino !== socketInfo.ino || after.dev !== socketInfo.dev || after.mode !== socketInfo.mode || after.uid !== socketInfo.uid) {shutdown();throw fail();}
     if (disposed || !live) {shutdown();throw fail();}
     // [TARGET, unit decision] The frozen transport closes receive-idle peers
-    // after 30 s. An admitted list round trip keeps UI/core/daemon live even
+    // after 30 s. An admitted list round trip keeps this UI connection live even
     // when no user input or frame subscription is active. Never reconnect.
     keepalive = setInterval(() => {
       if (disposed || !live) return;
@@ -805,6 +815,22 @@ export async function createMainBindings({env = process.env, createMessageChanne
       start:async()=>getStatus(),getStatus,dispose:async()=>shutdown(),
       /** @param {any} message */
       async request(message) {
+        // [TARGET, unit decision] Serialize creates: v0.2 created/error events
+        // carry no request id. This closed path is never a wire passthrough.
+        if (message?.schema === 'surface_request/v0.2' || message?.op === 'create') {
+          const body = validateSurfaceCreateRequest(message);
+          if (!live || disposed || nonInputPendingCount() >= MAX_ITEMS
+              || [...pending.values()].some(item => item.body.op === 'create')) throw fail();
+          const key = randomUUID();
+          return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+              pending.delete(key);
+              reject(Object.assign(new Error('SURFACE_CREATE_TIMEOUT'), {code:'SURFACE_CREATE_TIMEOUT'}));
+            }, DEADLINE);
+            pending.set(key, {body, resolve, reject, timer});
+            try { send(body, key); } catch { shutdown(); }
+          });
+        }
         if (message?.op === 'cadence') {
           const proto = Object.getPrototypeOf(message);
           if (proto !== Object.prototype && proto !== null) throw new Error('PAYLOAD');
@@ -1000,4 +1026,24 @@ export async function createMainBindings({env = process.env, createMessageChanne
     }
     throw fail();
   }
+}
+
+/** Validate and snapshot exactly the first-surface create vocabulary.
+ * @param {any} value */
+export function validateSurfaceCreateRequest(value) {
+  const plain = (/** @type {any} */ v) => v !== null && typeof v === 'object'
+    && !Array.isArray(v) && [Object.prototype, null].includes(Object.getPrototypeOf(v))
+    && Reflect.ownKeys(v).every(key => typeof key === 'string' && 'value' in (Object.getOwnPropertyDescriptor(v, key) ?? {}));
+  const invalid = () => Object.assign(new Error('SURFACE_CREATE_INVALID'), {code:'SURFACE_CREATE_INVALID'});
+  if (!plain(value) || Object.keys(value).sort().join(',') !== 'op,params,schema'
+      || value.schema !== 'surface_request/v0.2' || value.op !== 'create' || !plain(value.params)) throw invalid();
+  const p = value.params, g = p.geometry;
+  if (!['geometry,kind,profile_id','geometry,kind,nested_depth,profile_id'].includes(Object.keys(p).sort().join(','))
+      || !['browser','desktop_capsule','game_capsule','vm'].includes(p.kind)
+      || typeof p.profile_id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(p.profile_id)
+      || !plain(g) || Object.keys(g).sort().join(',') !== 'h,w'
+      || ![g.w,g.h].every(v => Number.isSafeInteger(v) && v >= 1 && v <= 16384)
+      || (Object.hasOwn(p,'nested_depth') && (p.kind !== 'desktop_capsule' || ![0,1].includes(p.nested_depth)))) throw invalid();
+  return {schema:'surface_request/v0.2',op:'create',params:{kind:p.kind,geometry:{w:g.w,h:g.h},profile_id:p.profile_id,
+    ...(Object.hasOwn(p,'nested_depth') ? {nested_depth:p.nested_depth} : {})}};
 }

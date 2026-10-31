@@ -115,7 +115,7 @@ async function localToggleOracle(AppCompile) {
     assert.equal(f.intentCalls.length, 0, 'local toggles never reach intent');
     assert.equal(f.proposeCalls.length, 0, 'local toggles never reach propose');
     assert.equal(f.local.length, 0, 'local toggles are not even re-emitted');
-    assert.doesNotMatch(text(f.root), /Please try again/, 'no red unavailable toast');
+    assert.doesNotMatch(text(f.root), /Please try again|NO_BROWSER_CAPSULE|No browser capsule/, 'local toggles produce no authority refusal toast');
   } finally { f.close(); }
 }
 
@@ -123,7 +123,7 @@ test('purely local toggles never reach the host', async () => {
   await localToggleOracle(compileSfc);
 });
 
-test('negative control: mutant restoring the fall-through leaks toggles to propose', async () => {
+test('negative control: mutant restoring the fall-through leaks toggles to authority validation', async () => {
   const compile = mutatedCompiler('App.vue', (source) => source.replace(
     `  if (op || record?.type?.startsWith('creative/')) {`,
     '  if (true) {'));

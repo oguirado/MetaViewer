@@ -765,3 +765,29 @@ test(
     }
   },
 );
+
+
+test('packaged entry sees the typed adapter refusal before its PKG failure marker', async () => {
+  const source = await readFile(new URL('../electron/main.js', import.meta.url), 'utf8');
+  const direct = source.slice(source.indexOf('async function mainDirectEntry()'), source.lastIndexOf('\nif (typeof process'));
+  const events = [];
+  const reason = 'configuration: profile map or live profile/root required';
+  const error = new MainError('ADAPTER_CRASHED', `the daemon adapter did not reach live (${reason}); MetaViewer will not start with MV_SRF_BIN_DIR set and no live adapter.`);
+  const context = {
+    entryURL:new URL('../electron/main.js',import.meta.url).href,URL,Error,
+    createRequire:()=>()=>({protocol:{},app:{exit(){events.push('exit');}}}),
+    process:{argv:['electron','/app/main.js'],env:{},versions:{electron:ELECTRON_PIN}},
+    console:{error:message=>events.push(message),log(){}},
+    MainError,ELECTRON_PIN,registerPrivilegedScheme:()=>{},
+    validateRetailLaunch:()=>({ok:true}),loadMainBindings:async()=>({core:{},wire:{}}),
+    bootProductionMain:async()=>{throw error;},
+    fileURLToPath:()=>'/app/ui',DEFAULT_GEOMETRY:{},createLayoutBridge:()=>({}),
+  };
+  const resolved = await runInNewContext(direct.replaceAll('import.meta.url','entryURL')+'\nmainDirectEntry()',context);
+  // The packaged entry's existing undefined-result check must still fail.
+  assert.equal(resolved, undefined);
+  assert.throws(()=>{if(!resolved)throw new Error('PKG_MAIN_ENTRY_FAILED');},/PKG_MAIN_ENTRY_FAILED/);
+  assert.ok(events[0].startsWith('ADAPTER_CRASHED:'));
+  assert.ok(events[0].includes(reason));
+  assert.deepEqual(events.slice(1),['exit']);
+});

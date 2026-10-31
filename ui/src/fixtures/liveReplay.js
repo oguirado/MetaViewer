@@ -259,13 +259,13 @@ export const LIVE_REPLAY_STEP_MAP = deepFreeze([
   {
     step: 'propose-admitted', name: 'propose-admitted', kind: 'propose',
     description: 'Propose verdict admitted through the real dispatch path.',
-    frames: 8, bench: { kind: 'propose', body: { action: 'example' } },
+    frames: 8, bench: { kind: 'propose', body: { schema:'action_proposal/v0.2',proposal_id:'replay-proposal',surface_id:'cap-01',based_on_frame:{generation:1,sha256:'a'.repeat(64)},budget:{max_ms:100,max_retries:0},action:{type:'click',x:1,y:1,button:'left'},expectation:{type:'state_sha256_change'} } },
     expects: { activity: 'ACTION_ADMITTED', tone: 'success', text: 'Action admitted.' },
   },
   {
     step: 'propose-refused', name: 'propose-refused', kind: 'propose',
     description: 'Policy refusal through the real dispatch path.',
-    frames: 8, bench: { kind: 'propose', body: { action: 'example', refuse: true } },
+    frames: 8, bench: { kind: 'propose', body: { schema:'action_proposal/v0.2',proposal_id:'replay-proposal',surface_id:'cap-01',based_on_frame:{generation:1,sha256:'a'.repeat(64)},budget:{max_ms:100,max_retries:0},action:{type:'click',x:1,y:1,button:'left'},expectation:{type:'state_sha256_change'}, refuse: true } },
     expects: { activity: 'POLICY', tone: 'refusal', text: 'This action is unavailable under the current policy.' },
   },
   {

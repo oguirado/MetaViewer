@@ -99,9 +99,10 @@ describe('Electron main and preload surface security checks', () => {
     assert.throws(() => verdictReply(invalidVerdict), { message: 'OUTCOME' });
   });
 
-  it('3. Domain-wire channel closure (11 valid channels)', async () => {
+  it('3. Domain-wire channel closure (12 valid channels)', async () => {
     const validChannels = Object.values(WIRE_CHANNELS);
-    assert.equal(validChannels.length, 11);
+    assert.equal(validChannels.length, 12);
+    assert.ok(validChannels.includes('metaviewer:authority.createSurface'));
 
     const bridge = installPreload({
       contextBridge: { exposeInMainWorld: () => {} },

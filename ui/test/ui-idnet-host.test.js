@@ -133,7 +133,7 @@ test('Open prerequisites refuse persistence on a legacy deployment', async t=>{
 });
 
  test('egress reason enum and confirmation are closed, typed facade payloads', async()=>{
-  for(const reason of ['binary_missing','exit_0','exit_255','timeout','oversize','malformed','ok'])
+  for(const reason of ['binary_missing','exit_0','exit_255','timeout','oversize','malformed','legacy_binary','ok'])
     assert.equal(assertOperatorReply('egress.get',{ok:true,record:open,net_mode:'legacy',reason}).reason,reason);
   for(const reason of ['unknown','exit_-1','exit_256','exit_01','exit_1.5',null,0])
     assert.throws(()=>assertOperatorReply('egress.get',{ok:true,record:open,net_mode:'legacy',reason}),/OPERATOR_REPLY/);

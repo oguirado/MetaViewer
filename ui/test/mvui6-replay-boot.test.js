@@ -98,8 +98,8 @@ async function bootEntry(search, { hook = null, host = null, buttons = null } = 
 
 test('named propose steps mount full frames and call the real dispatch', async () => {
   for (const [step, body] of [
-    ['propose-admitted', { action: 'example' }],
-    ['propose-refused', { action: 'example', refuse: true }],
+    ['propose-admitted', { schema:'action_proposal/v0.2',proposal_id:'replay-proposal',surface_id:'cap-01',based_on_frame:{generation:1,sha256:'a'.repeat(64)},budget:{max_ms:100,max_retries:0},action:{type:'click',x:1,y:1,button:'left'},expectation:{type:'state_sha256_change'} }],
+    ['propose-refused', { schema:'action_proposal/v0.2',proposal_id:'replay-proposal',surface_id:'cap-01',based_on_frame:{generation:1,sha256:'a'.repeat(64)},budget:{max_ms:100,max_retries:0},action:{type:'click',x:1,y:1,button:'left'},expectation:{type:'state_sha256_change'}, refuse: true }],
   ]) {
     const calls = [];
     const hook = { dispatch: (intent) => calls.push(intent) };

@@ -314,10 +314,10 @@ describe('replay through the real authority runtime', () => {
     const adapter = createAuthorityAdapter(mount.authorityPort);
     const request = mount.runtime.intentBuilders.control({ capsuleId: 'cap-01', verb: 'release_control' });
     assert.equal(await adapter.intent?.(request), true);
-    const admitted = await adapter.propose?.({ action: 'example' });
+    const admitted = await adapter.propose?.({ schema:'action_proposal/v0.2',proposal_id:'p',surface_id:'cap-01',based_on_frame:{generation:1,sha256:'a'.repeat(64)},budget:{max_ms:100,max_retries:0},action:{type:'click',x:1,y:1,button:'left'},expectation:{type:'state_sha256_change'} });
     assert.equal(admitted?.code, 'ACTION_ADMITTED');
     assert.equal(admitted?.tone, 'success');
-    const refused = await adapter.propose?.({ action: 'example', refuse: true });
+    const refused = await adapter.propose?.({ schema:'action_proposal/v0.2',proposal_id:'p',surface_id:'cap-01',based_on_frame:{generation:1,sha256:'a'.repeat(64)},budget:{max_ms:100,max_retries:0},action:{type:'click',x:1,y:1,button:'left'},expectation:{type:'state_sha256_change'}, refuse: true });
     assert.equal(refused?.code, 'POLICY');
     assert.equal(refused?.tone, 'refusal');
     assert.doesNotMatch(refused?.message ?? '', /POLICY|ERR_/);

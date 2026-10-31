@@ -132,7 +132,8 @@ test('creative fixture boots, publishes controls, and routes creative requests t
     assert.deepEqual(hostCalls, [control], 'the exact closed control body reaches the host');
     assert.equal(byId(view.root, 'mv-host-outcome').props['data-outcome-code'], 'INTENT_ACKNOWLEDGED');
     captured.catalog.emit('create', { schema: 'proposal/v0.1', action: 'existing-catalog-event' }); await tick();
-    assert.deepEqual(hostCalls.at(-1), { schema: 'proposal/v0.1', action: 'existing-catalog-event' });
+    assert.deepEqual(hostCalls, [control], 'an invalid catalog payload never crosses proposal IPC');
+    assert.equal(byId(view.root, 'mv-host-outcome').props['data-outcome-code'], 'NO_BROWSER_CAPSULE');
     byId(view.root, 'shell-creative').props.onClick(); await tick();
     byId(view.root, `${prefix}/close`).props.onClick(); await tick();
     assert.equal(byId(view.root, `${prefix}/regenerate`), undefined);

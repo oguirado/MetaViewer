@@ -120,7 +120,7 @@ describe('activity feed behavior', () => {
         propose: async () => verdict,
       });
       const captured = {}, App = await loadApp(captured), root = { children: [] };
-      const rows = [{ id: 'surface-a', generation: 1, backendLifecycle: 'active' }];
+      const rows = [{ id: 'surface-a', surfaceId:'surface-a', attachmentState:'live', generation: 1, backendLifecycle: 'active' }];
       const runtime = { projectionView: { getSnapshot: () => ({ envelope: null }),
         getProjection: () => ({ rows }), subscribe: () => () => {} } };
       appHandle = renderer().createApp(App, { authorityHost, runtime, layout: {}, scope: {},
@@ -146,7 +146,7 @@ describe('activity feed behavior', () => {
         op: 'take_control', params: { surface_id: 'surface-a' } }, 'closed control keeps the exact closed wire shape');
 
       verdict = { schema: 'action_verdict/v0.2', proposal_id: 'q', core_seq: 2, decision: 'refused', reason_code: 'LOCKED_BY_OTHER' };
-      captured.catalog.emit('create', { kind: 'browser' });
+      captured.catalog.emit('create', { schema:'action_proposal/v0.2',proposal_id:'p',surface_id:'surface-a',based_on_frame:{generation:1,sha256:'a'.repeat(64)},budget:{max_ms:100,max_retries:0},action:{type:'click',x:1,y:1,button:'left'},expectation:{type:'state_sha256_change'} });
       await tick();
       assert.equal(captured.stripEntries().length, 2);
       assert.deepEqual(captured.stripEntries().at(-1), { seq: 2, code: 'LOCKED_BY_OTHER' });

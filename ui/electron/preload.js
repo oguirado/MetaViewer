@@ -106,7 +106,7 @@ export function assertOperatorReply(method,v) {
   if(method==='handoff.list') {
     if(!operatorKeys(v,['ok','rows']) || !Array.isArray(v.rows) || v.rows.length>64 || !v.rows.every(validHandoff)) throw new Error('OPERATOR_REPLY');
   } else if(method.startsWith('egress.')) {
-    if(!operatorKeys(v,['ok','record','net_mode','reason']) || !(typeof v.reason==='string' && (['binary_missing','timeout','oversize','malformed','ok'].includes(v.reason) || /^exit_(?:0|[1-9][0-9]{0,2})$/.test(v.reason) && Number(v.reason.slice(5))<=255)) || !validEgress(v.record) || !['legacy','open','proxied'].includes(v.net_mode)) throw new Error('OPERATOR_REPLY');
+    if(!operatorKeys(v,['ok','record','net_mode','reason']) || !(typeof v.reason==='string' && (['binary_missing','timeout','oversize','malformed','legacy_binary','ok'].includes(v.reason) || /^exit_(?:0|[1-9][0-9]{0,2})$/.test(v.reason) && Number(v.reason.slice(5))<=255)) || !validEgress(v.record) || !['legacy','open','proxied'].includes(v.net_mode)) throw new Error('OPERATOR_REPLY');
   } else if(['identity.delete','identity.login','handoff.ack'].includes(method)) {
     if(!operatorKeys(v,['ok'])) throw new Error('OPERATOR_REPLY');
   } else {
@@ -144,7 +144,7 @@ export function createOperatorFacade(transport) {
  * @property {() => Promise<string|null>} recordingDestination
  * @property {() => Promise<0|1|null>} nestedDepth
  * @property {() => Promise<string|null>} selfCapsuleId
- * @property {{propose:(json:string)=>Promise<any>,intent:(json:string)=>Promise<true>,subscribeFrames:(cb:(frame:any)=>void)=>(()=>void)}} authority
+ * @property {{createSurface:()=>Promise<any>,propose:(json:string)=>Promise<any>,intent:(json:string)=>Promise<true>,subscribeFrames:(cb:(frame:any)=>void)=>(()=>void)}} authority
  * @property {{send:(batch:any)=>Promise<{ok:true,accepted:number}|{ok:false,code:string}>,onResult:(cb:(result:{surface_id:string,seq:number,ok:boolean,code:string|null})=>void)=>(()=>void)}} input
  * @property {{screenshot:(req:any)=>Promise<any>,recordStart:(req:any)=>Promise<any>,recordStop:(req:any)=>Promise<any>,export:(req:any)=>Promise<any>,list:()=>Promise<any>,subscribe:(cb:(state:any)=>void)=>(()=>void)}} capture
  * @property {{reportDiag:(diag:{rehashSkipped:number,rehashDone:number})=>Promise<true>}} frames
@@ -773,7 +773,7 @@ function assertSurfaceInputReply(reply, maxAccepted) {
 }
 const WIRE_NAMES = Object.freeze({loadSettings:'settings.load',saveSettings:'settings.save',
   recordingDestination:'recording.destination',nestedDepth:'nested.depth',selfCapsuleId:'nested.self',
-  propose:'authority.propose',intent:'authority.intent',subscribeFrames:'authority.subscribe',
+  propose:'authority.propose',intent:'authority.intent',createSurface:'authority.createSurface',subscribeFrames:'authority.subscribe',
   unsubscribeFrames:'authority.unsubscribe',terminalOpen:'side-terminal.open',terminalEnabled:'side-terminal.enabled',
   terminalAttach:'side-terminal.attach',terminalResize:'side-terminal.resize',
   terminalClose:'side-terminal.close',terminalProviders:'side-terminal.providers',
@@ -905,7 +905,13 @@ function wireFacade(transport) {
       if (reply!==null && reply!==0 && reply!==1) throw new ContractError('OUTCOME','nested depth');return reply;
     }
     const value=/** @type {any} */(reply);
+    if (name==='createSurface') {
+      if (value?.ok === true && Object.keys(value).join(',') === 'ok') return Object.freeze({ok:true});
+      if (value?.ok === false && Object.keys(value).sort().join(',') === 'code,ok' && typeof value.code === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(value.code)) return Object.freeze({ok:false,code:value.code});
+      throw new ContractError('OUTCOME','create surface');
+    }
     if (name==='terminalOpen') {
+      if (value?.ok === false && value.code === 'TERMINAL_UNAVAILABLE' && Object.keys(value).sort().join(',') === 'code,ok') return Object.freeze({ok:false,code:'TERMINAL_UNAVAILABLE'});
       if (!value || Object.keys(value).join(',')!=='session' || typeof value.session!=='string'
           || !/^[A-Za-z0-9._-]{1,128}$/.test(value.session)) throw new ContractError('OUTCOME','session');
       if (TERMINAL_SESSION_SENDERS.size>=256) {
@@ -1232,6 +1238,8 @@ function wireFacade(transport) {
     },
   });
   api.authority=Object.freeze({
+    /** @param {...unknown} args */
+    createSurface:(...args)=>call('createSurface',args),
     /** @param {...unknown} args */
     propose:(...args)=>call('propose',args),
     /** @param {...unknown} args */

@@ -7,7 +7,7 @@ const props=defineProps({open:{type:Boolean,default:false},displayOnly:{type:Boo
 const emit=defineEmits(['close','open']);
 const mode=ref('open'), domains=ref(''), netMode=ref(''), error=ref(''), busy=ref(false), loaded=ref(false), reason=ref(''), confirmOpen=ref(false);
 /** @type {Record<string,string>} */
-const reasonWords={binary_missing:'capability binary missing',timeout:'capability probe timed out',oversize:'capability reply too large',malformed:'invalid capability reply',ok:'Open unavailable in declared network modes'};
+const reasonWords={binary_missing:'capability binary missing',timeout:'capability probe timed out',oversize:'capability reply too large',malformed:'invalid capability reply',legacy_binary:'legacy (binary has no network modes)',ok:'Open unavailable in declared network modes'};
 /** @param {string} value */
 function plainReason(value) { return reasonWords[value] ?? (/^exit_/.test(value)?`capability probe exited with status ${value.slice(5)}`:'capability probe unavailable'); }
 let generation=0;

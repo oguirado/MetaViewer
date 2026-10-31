@@ -553,13 +553,22 @@ impl Server {
         self.send_at(ts_ns, to, body)
     }
     fn send_at(&mut self, ts_ns: u64, to: &Endpoint, body: Command) -> Result<()> {
+        self.send_tagged_at(ts_ns, to, body, "core")
+    }
+    fn send_tagged_at(
+        &mut self,
+        ts_ns: u64,
+        to: &Endpoint,
+        body: Command,
+        tag: &str,
+    ) -> Result<()> {
         self.serial = self
             .serial
             .checked_add(1)
             .ok_or_else(|| invalid("sequence exhausted"))?;
         let env = Envelope {
             schema: "envelope/v0.2".into(),
-            msg_id: format!("core-{}-{}", self.authority.state().epoch, self.serial),
+            msg_id: format!("{tag}-{}-{}", self.authority.state().epoch, self.serial),
             ts_ns: Clock::new(ts_ns),
             from: self.config.core.endpoint.clone(),
             to: to.clone(),
@@ -1217,6 +1226,20 @@ impl Server {
         let boundary_started = Instant::now();
         self.replay
             .record(&env.session_id, &env.from, &env.nonce, env.seq)?;
+        // [TARGET, unit decision] An authenticated, replay-reserved probe ack
+        // changes no surface state and retains no journal witness.
+        if env.from.component == Component::Daemon {
+            if let Command::SurfaceEvent(event) = &env.body {
+                if let SurfaceEvent::Case4(e) = event.as_ref() {
+                    if e.data.surface_id == "daemon"
+                        && e.data.code == "DAEMON_KEEPALIVE"
+                        && e.data.detail == "core-keepalive"
+                    {
+                        return Ok(());
+                    }
+                }
+            }
+        }
         let raw = serde_json::to_string(&env)?;
         let boundary = VerifiedPixels::from_bytes(raw.into_bytes())?
             .retain_in_authority(&mut self.authority)?;
@@ -2221,10 +2244,29 @@ pub async fn serve(listener: UnixListener, server: Arc<Mutex<Server>>, uid: u32)
     }
 }
 async fn connection(
+    stream: UnixStream,
+    accepted: tokio::time::Instant,
+    server: Arc<Mutex<Server>>,
+    uid: u32,
+) -> Result<()> {
+    connection_with_liveness(
+        stream,
+        accepted,
+        server,
+        uid,
+        crate::wire::WireLimits::default(),
+        Duration::from_secs(10),
+    )
+    .await
+}
+
+async fn connection_with_liveness(
     mut stream: UnixStream,
     accepted: tokio::time::Instant,
     server: Arc<Mutex<Server>>,
     uid: u32,
+    limits: crate::wire::WireLimits,
+    probe_interval: Duration,
 ) -> Result<()> {
     verify_peer_cred(&stream, uid)?;
     let env = tokio::time::timeout_at(accepted + HANDSHAKE_DEADLINE, read_frame(&mut stream))
@@ -2335,12 +2377,16 @@ async fn connection(
     let is_daemon = ready.endpoint().component == Component::Daemon;
     let result = async {
         let mut batch: Vec<Envelope> = Vec::new();
+        // [TARGET, unit decision] Core initiates contract-valid list probes.
+        // Only daemon replies refresh read_frame's unchanged idle deadline;
+        // sending probes cannot keep a silent or wedged daemon alive.
+        let mut next_probe = Instant::now() + probe_interval;
         loop {
             if closed.load(std::sync::atomic::Ordering::Acquire) {
                 return Err(invalid("connection closed"));
             }
             // Polling avoids an unbounded channel or requiring extra Tokio features.
-            let reading = read_frame(&mut reader);
+            let reading = crate::transport::read_frame_with_limits(&mut reader, &limits);
             tokio::pin!(reading);
             let env = loop {
                 if !batch.is_empty() {
@@ -2378,6 +2424,18 @@ async fn connection(
                 .await
                 {
                     break result?;
+                }
+                if is_daemon && Instant::now() >= next_probe {
+                    let mut guard = server.lock().map_err(|_| invalid("poisoned authority"))?;
+                    let now = guard.now()?;
+                    guard.send_tagged_at(
+                        now, ready.endpoint(),
+                        Command::SurfaceRequest(Box::new(serde_json::from_value(
+                            serde_json::json!({"schema":"surface_request/v0.2","op":"list","params":{}}),
+                        )?)),
+                        "core-keepalive",
+                    )?;
+                    next_probe = Instant::now() + probe_interval;
                 }
                 server
                     .lock()
@@ -2644,6 +2702,86 @@ mod nv_regressions {
             .build()
             .unwrap()
             .block_on(future);
+    }
+
+    #[test]
+    fn daemon_liveness_probes_preserve_idle_connection_but_silent_peer_expires() {
+        run(async {
+            for responsive in [true, false] {
+                let f = Fixture::new();
+                let server = Arc::new(Mutex::new(
+                    Server::open(
+                        f.server.config.clone(),
+                        &f.root.join("liveness"),
+                        effective_uid().unwrap(),
+                    )
+                    .unwrap(),
+                ));
+                let reg = f
+                    .server
+                    .config
+                    .peers
+                    .iter()
+                    .find(|p| p.endpoint.component == Component::Daemon)
+                    .unwrap();
+                let hello = f.envelope(
+                    Component::Daemon,
+                    1,
+                    serde_json::to_value(&reg.hello).unwrap(),
+                );
+                let (a, mut b) = UnixStream::pair().unwrap();
+                let mut limits = crate::wire::WireLimits::default();
+                limits.read_deadline = Duration::from_millis(150);
+                let task = tokio::spawn(connection_with_liveness(
+                    a,
+                    tokio::time::Instant::now(),
+                    server.clone(),
+                    effective_uid().unwrap(),
+                    limits,
+                    Duration::from_millis(30),
+                ));
+                write_frame(&mut b, &hello).await.unwrap();
+                assert!(matches!(
+                    read_frame(&mut b).await.unwrap().unwrap().body,
+                    Command::Hello(_)
+                ));
+                let started = Instant::now();
+                let mut seq = 1;
+                while started.elapsed() < Duration::from_millis(400) {
+                    let next = tokio::time::timeout(Duration::from_millis(200), read_frame(&mut b))
+                        .await
+                        .unwrap();
+                    match next {
+                        Ok(Some(probe)) => {
+                            assert!(probe.msg_id.starts_with("core-keepalive-"));
+                            if responsive {
+                                seq += 1;
+                                let ack = f.envelope(Component::Daemon, seq, json!({"schema":"surface_event/v0.2","event":"error","data":{"surface_id":"daemon","code":"DAEMON_KEEPALIVE","detail":"core-keepalive"}}));
+                                write_frame(&mut b, &ack).await.unwrap();
+                            }
+                        }
+                        Ok(None) | Err(_) => {
+                            assert!(!responsive, "responsive daemon closed");
+                            break;
+                        }
+                    }
+                }
+                if responsive {
+                    assert!(
+                        !task.is_finished(),
+                        "daemon must survive multiple idle deadlines"
+                    );
+                    drop(b);
+                    assert!(task.await.unwrap().is_ok());
+                } else {
+                    assert!(
+                        task.await.unwrap().is_err(),
+                        "silent peer must time out despite probes"
+                    );
+                }
+                server.lock().unwrap().close().unwrap();
+            }
+        });
     }
 
     #[test]

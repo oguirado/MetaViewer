@@ -19,7 +19,7 @@ import { join, isAbsolute, relative, resolve, sep, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { MainError, observeSender, PRIVILEGED_ORIGIN } from './main.js';
+import { MainError, observeSender, PRIVILEGED_ORIGIN, buildFirstSurfaceCreateRequest } from './main.js';
 import { createFrameReader } from './frameReader.js';
 import { createFramePort } from './framePort.js';
 import { createTerminalFacade, validateProviderArgv } from './ptyBroker.js';
@@ -29,6 +29,7 @@ export const WIRE_CHANNELS = Object.freeze({
   recordingDestination:'metaviewer:recording.destination', nestedDepth:'metaviewer:nested.depth',
   selfCapsuleId:'metaviewer:nested.self', propose:'metaviewer:authority.propose',
   intent:'metaviewer:authority.intent',
+  createSurface:'metaviewer:authority.createSurface',
   subscribeFrames:'metaviewer:authority.subscribe',
   unsubscribeFrames:'metaviewer:authority.unsubscribe',
   terminalOpen:'metaviewer:side-terminal.open', terminalEnabled:'metaviewer:side-terminal.enabled',
@@ -735,6 +736,22 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     recordingDestination: async () => destinationToken,
     nestedDepth: async () => identity.depth,
     selfCapsuleId: async () => identity.self,
+    // [TARGET, unit decision] Browser creation has no action/frame authority.
+    // Zero renderer arguments: profile and geometry remain host-owned.
+    createSurface: async () => {
+      if (identity.depth !== null) return {ok:false,code:'DISPLAY_ONLY'};
+      const request = buildFirstSurfaceCreateRequest(env);
+      if (request.params.kind !== 'browser') return {ok:false,code:'SURFACE_CREATE_KIND_UNAVAILABLE'};
+      try {
+        const reply = await core.request(request);
+        if (reply?.schema === 'surface_event/v0.2' && reply.event === 'created') return {ok:true};
+        const raw = reply?.data?.code ?? reply?.reason_code ?? 'SURFACE_CREATE_FAILED';
+        return {ok:false,code:typeof raw === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(raw) ? raw : 'SURFACE_CREATE_FAILED'};
+      } catch (error) {
+        const raw = /** @type {any} */ (error)?.code ?? /** @type {any} */ (error)?.message;
+        return {ok:false,code:typeof raw === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(raw) ? raw : 'SURFACE_CREATE_FAILED'};
+      }
+    },
     propose: async (/** @type {string} */json) => {
       validateProposalBody(jsonObject(json)); return verdictReply(await core.request({op:'propose',json}));
     },
@@ -820,6 +837,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
           : {command:'provider',provider:value.command,cols:value.cols,rows:value.rows},
         sender
       );
+      if (result?.ok === false && result.code === 'TERMINAL_UNAVAILABLE') return {ok:false,code:'TERMINAL_UNAVAILABLE'};
       if (!result || Object.keys(result).join(',') !== 'session' || typeof result.session !== 'string'
           || !/^[A-Za-z0-9._-]{1,128}$/.test(result.session)) throw new Error('OUTCOME');
       return {session:result.session};

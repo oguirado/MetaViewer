@@ -24,6 +24,25 @@ import { execFile, spawn as defaultSpawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 /**
+ * [TARGET, unit decision] Bound adapter diagnostics and redact credentials before
+ * retaining stderr in a reason or printing it. No JS redactor existed here.
+ * @param {string} detail
+ * @param {Readonly<Record<string, unknown>>} [env]
+ */
+export function redactAdapterDiagnostic(detail, env = {}) {
+  let safe = detail.slice(-8192);
+  for (const [key, value] of Object.entries(env)) {
+    if (/token|secret|password|credential|proxy/i.test(key) && typeof value === 'string' && value.length > 0) {
+      safe = safe.split(value).join('[REDACTED]');
+    }
+  }
+  return safe
+    .replace(/(\b(?:token|secret|password|credential|authorization|api[_-]?key)\s*[:=]\s*)(?:"[^"\n]*"|'[^'\n]*'|[^\s;]+)/gi, '$1[REDACTED]')
+    .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/@]+:[^\s/@]+@/gi, '$1[REDACTED]@')
+    .replace(/[\x00-\x1f\x7f]/g, ' ');
+}
+
+/**
  * Typed launcher failure; a failure admits nothing.
  */
 export class CoreLauncherError extends Error {
@@ -107,6 +126,7 @@ export const ALLOWED_ADAPTER_ENV = Object.freeze([
   'SRF_EGRESS_PROXY',
   'MV_SRF_PROFILES',
   'MV_SRF_LIVE_PROFILE',
+  'MV_SRF_LIVE_TEXT_INPUT',
   'MV_SRF_LIVE_RAM_ROOT',
   'MV_RECORDING_DESTINATION',
   'MV_RECORDING_CAPABILITY_ID',
@@ -312,6 +332,7 @@ export function scrubAdapterEnv(rawEnv, runtimeDir) {
       continue;
     }
     const raw = parent[name];
+    if (name === 'MV_SRF_LIVE_TEXT_INPUT' && !['', 'type', 'paste'].includes(/** @type {string} */ (raw))) continue;
     if (!isKeepableValue(raw)) {
       continue;
     }
@@ -1170,11 +1191,12 @@ export function discoverAdapterNetModes(env, signal) {
           error.killed || code === 'ABORT_ERR' ? 'timeout' :
           typeof code === 'number' ? `exit_${code}` : 'malformed'));
       }
-      const lines = stdout.trimEnd().split('\n');
+      const lines = (stdout.endsWith('\n') ? stdout.slice(0, -1) : stdout).split('\n');
       if (lines.length !== 2 || lines[0] !== 'srf-identity-surface capabilities v1') {
         return resolveReply(finish('malformed'));
       }
       const tokens = lines[1].split(/\s+/).filter((token) => token.startsWith('net_modes='));
+      if (tokens.length === 0) return resolveReply(finish('legacy_binary'));
       if (tokens.length !== 1) return resolveReply(finish('malformed'));
       const modes = tokens[0].slice('net_modes='.length).split(',');
       if (modes.some((mode) => !['legacy', 'open', 'proxied'].includes(mode)) ||
@@ -1631,7 +1653,9 @@ export function createAdapterLauncher(options) {
     resolveStdoutHandshake?.();
     pendingLine = [];
     if (!disposing) {
-      setDegraded('ADAPTER_CRASHED', `adapter child exited (code=${String(exitCode)} signal=${String(exitSignal)})`);
+      const lastLine = Buffer.from(stderrTail).toString('utf8').trimEnd().split('\n').at(-1) ?? '';
+      const detail = redactAdapterDiagnostic(lastLine, /** @type {Record<string, unknown>} */ (typed.env));
+      setDegraded('ADAPTER_CRASHED', `adapter child exited (code=${String(exitCode)} signal=${String(exitSignal)})${detail ? `: ${detail}` : ''}`);
     }
   }
 

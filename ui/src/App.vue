@@ -195,7 +195,7 @@ function dispatch(intent) {
     }
     if (submitIntent) void submitHost(() => submitIntent(request));
     else emit('submit-intent', intent);
-  } else if (propose) void submitHost(() => propose(intent));
+  } else if (propose) void submitHost(() => { assertLiveProposal(intent); return propose(intent); });
   else emit('submit-intent', intent);
 }
 /** Committed placement echoes, keyed by surface; transport acceptance is never optimistic. */
@@ -391,11 +391,34 @@ async function dispatchMultislot(intent, capsuleId) {
     dispatch(intent);
   }
 }
+/** @param {any} body */
+function assertLiveProposal(body) {
+  const row = rows.value.find(row => (row.surfaceId || row.id) === body?.surface_id);
+  if (!row || !['active','standby','ceded'].includes(row.backendLifecycle)
+      || (row.attachmentState !== undefined && row.attachmentState !== 'live')
+      || !Number.isSafeInteger(row.generation) || row.generation < 1
+      || row.generation !== body?.based_on_frame?.generation) {
+    throw Object.assign(new Error('NO_BROWSER_CAPSULE: no live browser capsule and frame'), {code:'NO_BROWSER_CAPSULE'});
+  }
+}
 /** @param {unknown} intent */
 function onCreateCapsule(intent) {
   if (nestedMode.displayOnly) return;
   const propose = props.authorityHost?.propose;
-  if (propose) void submitHost(() => propose(intent));
+  const body = /** @type {any} */ (intent);
+  if (props.authorityHost && body?.schema !== 'action_proposal/v0.2') {
+    void submitHost(async () => {
+      if (body?.kind !== 'browser' || !props.authorityHost?.createSurface) {
+        throw Object.assign(new Error('NO_BROWSER_CAPSULE'), {code:'NO_BROWSER_CAPSULE'});
+      }
+      return props.authorityHost.createSurface();
+    });
+    return;
+  }
+  if (propose) void submitHost(() => {
+    assertLiveProposal(intent);
+    return propose(intent);
+  });
   else emit('create-capsule', intent);
 }
 const hostOutcome = ref(/** @type {import('./core/hostAdapters.js').OutcomeRow|null} */ (null));
@@ -468,8 +491,8 @@ async function submitHost(action) {
   } catch (error) {
     const suppliedCode = /** @type {{code?:unknown}} */ (error)?.code;
     const code = ['LAYOUT_UNKNOWN_SLOT','LAYOUT_ILLEGAL_TRANSITION','LAYOUT_INPUT_MODE_READ'].find(code =>
-      suppliedCode === code || String(error).includes(code)) ?? 'HOST_REQUEST_REFUSED';
-    if (hostActive) hostOutcome.value = { code, message: 'This request is unavailable. Please try again.', tone: 'refusal' };
+      suppliedCode === code || String(error).includes(code)) ?? (typeof suppliedCode === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(suppliedCode) ? suppliedCode : 'HOST_REQUEST_REFUSED');
+    if (hostActive) hostOutcome.value = { code, message: code === 'NO_BROWSER_CAPSULE' ? 'No browser capsule with a live frame.' : 'This request is unavailable. Please try again.', tone: 'refusal' };
     if (hostActive) {
       if (code === 'HOST_REQUEST_REFUSED') recordActivity({ code: 'HOST_REQUEST_REFUSED' });
       else recordActivity({ code });

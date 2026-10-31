@@ -174,9 +174,9 @@ describe('mount named bench steps', () => {
   test('propose and intent benches carry the exact dispatch bodies', () => {
     const admitted = createLiveReplayMount('?step=propose-admitted');
     assert.equal(admitted.ok, true);
-    if (admitted.ok) assert.deepEqual(admitted.mount.bench, { kind: 'propose', body: { action: 'example' } });
+    if (admitted.ok) assert.deepEqual(admitted.mount.bench, { kind: 'propose', body: { schema:'action_proposal/v0.2',proposal_id:'replay-proposal',surface_id:'cap-01',based_on_frame:{generation:1,sha256:'a'.repeat(64)},budget:{max_ms:100,max_retries:0},action:{type:'click',x:1,y:1,button:'left'},expectation:{type:'state_sha256_change'} } });
     const refused = createLiveReplayMount('?step=propose-refused');
-    if (refused.ok) assert.deepEqual(refused.mount.bench?.body, { action: 'example', refuse: true });
+    if (refused.ok) assert.deepEqual(refused.mount.bench?.body, { schema:'action_proposal/v0.2',proposal_id:'replay-proposal',surface_id:'cap-01',based_on_frame:{generation:1,sha256:'a'.repeat(64)},budget:{max_ms:100,max_retries:0},action:{type:'click',x:1,y:1,button:'left'},expectation:{type:'state_sha256_change'}, refuse: true });
     const acked = createLiveReplayMount('?step=intent-acked');
     if (acked.ok) assert.deepEqual(acked.mount.bench?.body, { op: 'take_control', surfaceId: 'cap-01' });
     const denied = createLiveReplayMount('?step=intent-refused');
@@ -231,9 +231,9 @@ describe('mount named bench steps', () => {
     assert.equal(created.ok, true);
     if (!created.ok) return;
     const adapter = createAuthorityAdapter(created.mount.authorityPort);
-    assert.equal((await adapter.propose?.({ action: 'example' }))?.code, 'ACTION_ADMITTED');
-    assert.equal((await adapter.propose?.({ action: 'example', refuse: true }))?.code, 'POLICY');
-    assert.equal((await adapter.propose?.({ action: 'example', refuse: 1 }))?.decision ?? 'admitted', 'admitted');
+    assert.equal((await adapter.propose?.({ schema:'action_proposal/v0.2',proposal_id:'p',surface_id:'cap-01',based_on_frame:{generation:1,sha256:'a'.repeat(64)},budget:{max_ms:100,max_retries:0},action:{type:'click',x:1,y:1,button:'left'},expectation:{type:'state_sha256_change'} }))?.code, 'ACTION_ADMITTED');
+    assert.equal((await adapter.propose?.({ schema:'action_proposal/v0.2',proposal_id:'p',surface_id:'cap-01',based_on_frame:{generation:1,sha256:'a'.repeat(64)},budget:{max_ms:100,max_retries:0},action:{type:'click',x:1,y:1,button:'left'},expectation:{type:'state_sha256_change'}, refuse: true }))?.code, 'POLICY');
+    assert.equal((await adapter.propose?.({ schema:'action_proposal/v0.2',proposal_id:'p',surface_id:'cap-01',based_on_frame:{generation:1,sha256:'a'.repeat(64)},budget:{max_ms:100,max_retries:0},action:{type:'click',x:1,y:1,button:'left'},expectation:{type:'state_sha256_change'}, refuse: 1 }))?.decision ?? 'admitted', 'admitted');
     const request = created.mount.runtime.intentBuilders.control({ capsuleId: 'cap-01', verb: 'take_control' });
     assert.equal(await adapter.intent?.(request), true);
   });
