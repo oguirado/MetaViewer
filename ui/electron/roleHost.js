@@ -149,7 +149,10 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
           capsuleSize:() => ({width:1280,height:900}),
           clientQuery:xpraClientQuery(role === 'human'),
           onState: (/** @type {string} */ state) => {
-            if (active()) viewStates.set(surfaceId,{state});
+            if (!active()) return;
+            viewStates.set(surfaceId,{state});
+            // Typed stage line, like the DISPLAY tier: never carries the token or the origin.
+            console.info(`METAVIEWER_XPRA_STAGE surface=${surfaceId} role=${role === 'human' ? 'human' : 'watch'} stage=${String(state).toUpperCase()}`);
           },
           onFailure: async (/** @type {any} */ error) => {
             if (!active()) return;
@@ -157,6 +160,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
               ? error.code : 'XPRA_TRACE_FAILED';
             const closing = close(surfaceId);
             viewStates.set(surfaceId,{state:'error',code});
+            console.info(`METAVIEWER_XPRA_STAGE surface=${surfaceId} role=${role === 'human' ? 'human' : 'watch'} stage=ERROR detail=${code}`);
             try { await closing; } catch { /* typed error remains available for Reopen */ }
           }}),
         closeTrace:() => recorder?.close(),
