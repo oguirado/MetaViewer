@@ -139,6 +139,7 @@ e4-list.md	changes/unreleased/e4-list.md
 e5-fixtures.md	changes/unreleased/e5-fixtures.md
 flakepi-626bf7f96335	changes/unreleased/flake-pin-procbound-r2.md
 flakepi-0268f441f2d7	changes/unreleased/flake-pin-procbound.md
+judge-sysdep-build.md	changes/unreleased/judge-sysdep-build.md
 mdisp-fix.md	changes/unreleased/mdisp-fix.md
 mw-sleep-ns.md	changes/unreleased/mw-sleep-ns.md
 p12-display-reader.md	changes/unreleased/p12-display-reader.md
