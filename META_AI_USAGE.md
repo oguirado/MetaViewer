@@ -19,17 +19,17 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 2,328 | 55 | 2,273 |
-| Lanes finished OK | 2,328 | 55 | 2,273 |
-| Agent steps | 74,398 | 2,705 | 71,693 |
-| Lane-hours of agent work | 168.2 | 5.2 | 162.9 |
-| Fresh input tokens | 286,245,950 | 11,482,034 | 274,763,916 |
-| Cache-read input tokens | 5,008,191,332 | 226,255,212 | 4,781,936,120 |
+| Lanes launched | 2,356 | 55 | 2,301 |
+| Lanes finished OK | 2,356 | 55 | 2,301 |
+| Agent steps | 75,742 | 2,705 | 73,037 |
+| Lane-hours of agent work | 170.6 | 5.2 | 165.4 |
+| Fresh input tokens | 290,755,368 | 11,482,034 | 279,273,334 |
+| Cache-read input tokens | 5,104,282,840 | 226,255,212 | 4,878,027,628 |
 | Prompt cache hit % | 94.6 | 95.2 | 94.6 |
-| Output tokens | 58,109,701 | 2,135,708 | 55,973,993 |
-| Thinking tokens | 35,514,432 | 1,050,039 | 34,464,393 |
-| Cost (USD) | 50.2629 | 2.0279 | 48.235 |
-| Cost per lane (USD) | 0.0216 | 0.0369 | 0.0212 |
+| Output tokens | 58,925,482 | 2,135,708 | 56,789,774 |
+| Thinking tokens | 36,014,181 | 1,050,039 | 34,964,142 |
+| Cost (USD) | 51.0692 | 2.0279 | 49.0413 |
+| Cost per lane (USD) | 0.0217 | 0.0369 | 0.0213 |
 
 Rooms: 136. Peak concurrent lanes [MEASURED from lane start/end]: 42.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
@@ -38,7 +38,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 1939 | 93.7 | 34.0154 |
+| build | 1967 | 93.7 | 34.8217 |
 | context | 42 | 95.9 | 1.9093 |
 | context packs + test ideation (U-DEC-0139) | 13 | 91.1 | 0.2195 |
 | demo | 4 | 90.7 | 0.0557 |
@@ -86,7 +86,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 1601 | 93.6 | 25.7369 | direct Muse job |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 1629 | 93.6 | 26.5432 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -2534,6 +2534,34 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | 85945_rev_UX-SCROLL_b | fill_085945_rev_UX-SCROLL_b | Nov 01 09:00 | yes | 14 | 89.2 | 0.009991 |
 | direct-direct | 90057_rev_UX-SCROLL_a | fill_090057_rev_UX-SCROLL_a | Nov 01 09:01 | yes | 11 | 86.3 | 0.008167 |
 | direct-direct | 90057_rev_UX-SCROLL_b | fill_090057_rev_UX-SCROLL_b | Nov 01 09:02 | yes | 13 | 88.0 | 0.009458 |
+| direct-direct | 90703_lane_r4_app_close | fill_090703_lane_r4_app_close | Nov 01 09:08 | yes | 58 | 96.2 | 0.034249 |
+| direct-direct | 90703_lane_r4_automate_demo | fill_090703_lane_r4_automate_demo | Nov 01 09:08 | yes | 38 | 94.9 | 0.020002 |
+| direct-direct | 90703_lane_r4_capsule_close_reopen | fill_090703_lane_r4_capsule_close_reopen | Nov 01 09:08 | yes | 37 | 93.1 | 0.021532 |
+| direct-direct | 90703_lane_r4_captcha_handoff | fill_090703_lane_r4_captcha_handoff | Nov 01 09:08 | yes | 38 | 94.5 | 0.021943 |
+| direct-direct | 90703_lane_r4_chatgpt_gemini | fill_090703_lane_r4_chatgpt_gemini | Nov 01 09:08 | yes | 64 | 96.3 | 0.037872 |
+| direct-direct | 90703_lane_r4_display | fill_090703_lane_r4_display | Nov 01 09:08 | yes | 73 | 96.8 | 0.04126 |
+| direct-direct | 90703_lane_r4_identities | fill_090703_lane_r4_identities | Nov 01 09:08 | yes | 35 | 94.7 | 0.021639 |
+| direct-direct | 90703_lane_r4_launch | fill_090703_lane_r4_launch | Nov 01 09:08 | yes | 37 | 93.0 | 0.042502 |
+| direct-direct | 90703_lane_r4_multislot | fill_090703_lane_r4_multislot | Nov 01 09:08 | yes | 77 | 97.0 | 0.040725 |
+| direct-direct | 90703_lane_r4_network | fill_090703_lane_r4_network | Nov 01 09:08 | yes | 48 | 95.6 | 0.02174 |
+| direct-direct | 90703_lane_r4_settings | fill_090703_lane_r4_settings | Nov 01 09:08 | yes | 31 | 92.0 | 0.022399 |
+| direct-direct | 90703_lane_r4_storyboard | fill_090703_lane_r4_storyboard | Nov 01 09:08 | yes | 55 | 96.1 | 0.029334 |
+| direct-direct | 90703_lane_r4_terminal | fill_090703_lane_r4_terminal | Nov 01 09:08 | yes | 29 | 93.0 | 0.017043 |
+| direct-direct | 90703_lane_r4_use_metaviewer | fill_090703_lane_r4_use_metaviewer | Nov 01 09:08 | yes | 40 | 94.9 | 0.023405 |
+| direct-direct | 90847_lane_r4_app_close | fill_090847_lane_r4_app_close | Nov 01 09:09 | yes | 67 | 96.3 | 0.047906 |
+| direct-direct | 90847_lane_r4_automate_demo | fill_090847_lane_r4_automate_demo | Nov 01 09:09 | yes | 40 | 95.2 | 0.020776 |
+| direct-direct | 90847_lane_r4_capsule_close_reopen | fill_090847_lane_r4_capsule_close_reopen | Nov 01 09:09 | yes | 58 | 95.8 | 0.039777 |
+| direct-direct | 90847_lane_r4_captcha_handoff | fill_090847_lane_r4_captcha_handoff | Nov 01 09:09 | yes | 42 | 94.7 | 0.022016 |
+| direct-direct | 90847_lane_r4_chatgpt_gemini | fill_090847_lane_r4_chatgpt_gemini | Nov 01 09:09 | yes | 64 | 96.3 | 0.036024 |
+| direct-direct | 90847_lane_r4_display | fill_090847_lane_r4_display | Nov 01 09:10 | yes | 33 | 93.3 | 0.01866 |
+| direct-direct | 90847_lane_r4_identities | fill_090847_lane_r4_identities | Nov 01 09:10 | yes | 37 | 94.9 | 0.025203 |
+| direct-direct | 90847_lane_r4_launch | fill_090847_lane_r4_launch | Nov 01 09:10 | yes | 56 | 95.9 | 0.036256 |
+| direct-direct | 90847_lane_r4_multislot | fill_090847_lane_r4_multislot | Nov 01 09:10 | yes | 45 | 95.7 | 0.025461 |
+| direct-direct | 90847_lane_r4_network | fill_090847_lane_r4_network | Nov 01 09:10 | yes | 43 | 95.4 | 0.022361 |
+| direct-direct | 90847_lane_r4_settings | fill_090847_lane_r4_settings | Nov 01 09:10 | yes | 72 | 96.7 | 0.02999 |
+| direct-direct | 90847_lane_r4_storyboard | fill_090847_lane_r4_storyboard | Nov 01 09:10 | yes | 62 | 96.2 | 0.038597 |
+| direct-direct | 90847_lane_r4_terminal | fill_090847_lane_r4_terminal | Nov 01 09:10 | yes | 29 | 92.7 | 0.020128 |
+| direct-direct | 90847_lane_r4_use_metaviewer | fill_090847_lane_r4_use_metaviewer | Nov 01 09:10 | yes | 36 | 93.9 | 0.027479 |
 
 ## Method
 
