@@ -146,6 +146,7 @@ pkg-content-revert.md	changes/unreleased/pkg-content-revert.md
 u1-pty-pkg-revert.md	changes/unreleased/u1-pty-pkg-revert.md
 u3-broker-classes.md	changes/unreleased/u3-broker-classes.md
 u5a-multislot-ui.md	changes/unreleased/u5a-multislot-ui.md
+ui-geometry-wire.md	changes/unreleased/ui-geometry-wire.md
 ux-chip.md	changes/unreleased/ux-chip.md
 witness-bind.md	changes/unreleased/witness-bind.md
 wj4admi-f9ed43f66238	changes/unreleased/wj4-admission-revert.md
@@ -1817,6 +1818,7 @@ termina-2f6caa9661e4	ui/test/terminalHardenWire.test.mjs
 tileScheduler.test.js	ui/test/tileScheduler.test.js
 uibutto-2f688ef06072	ui/test/ui-buttons-components.test.js
 ui-buttons.test.js	ui/test/ui-buttons.test.js
+uigeome-e2be2d4c92d7	ui/test/ui-geometry-wire.test.js
 uiidnet-249add1eb6e1	ui/test/ui-idnet-components.test.js
 ui-idnet-host.test.js	ui/test/ui-idnet-host.test.js
 uielfra-c6a2b4801769	ui/test/uiel-frame-fold.test.js
