@@ -943,10 +943,33 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
       return {session:result.session};
     },
   };
+  /** @type {Map<string, { code: string, count: number, loggedAt: number }>} */
+  const inputRefusalBurst = new Map();
+  const refuseSurfaceInput = (/** @type {string} */ sid, /** @type {string} */ code) => {
+    const ts = typeof clock === 'function' ? clock() : Date.now();
+    const safeSid = /^[A-Za-z0-9._:-]{1,64}$/.test(sid) ? sid : 'unknown';
+    const safeCode = /^[A-Z][A-Z0-9_]{1,63}$/.test(code) ? code : 'REFUSED';
+    const prior = inputRefusalBurst.get(safeSid);
+    if (prior !== undefined && prior.code === safeCode && ts - prior.loggedAt < 1000) {
+      prior.count += 1;
+      return Object.freeze({ ok: false, code });
+    }
+    const count = prior !== undefined && prior.code === safeCode ? prior.count + 1 : 1;
+    if (!inputRefusalBurst.has(safeSid) && inputRefusalBurst.size >= SURFACE_INPUT_MAX_SURFACES) {
+      const oldest = inputRefusalBurst.keys().next().value;
+      if (oldest !== undefined) inputRefusalBurst.delete(oldest);
+    }
+    inputRefusalBurst.set(safeSid, { code: safeCode, count, loggedAt: ts });
+    console.log(`METAVIEWER_INPUT_REFUSED surface=${safeSid} code=${safeCode} count=${count}`);
+    return Object.freeze({ ok: false, code });
+  };
   const handleSurfaceInput = async (/** @type {unknown} */raw) => {
-    if (identity.depth === 1) return Object.freeze({ ok: false, code: 'NESTED_DISPLAY_ONLY' });
+    const rawSid = raw !== null && typeof raw === 'object' && typeof /** @type {any} */ (raw).surface_id === 'string'
+      ? /** @type {string} */ (/** @type {any} */ (raw).surface_id)
+      : 'unknown';
+    if (identity.depth === 1) return refuseSurfaceInput(rawSid, 'NESTED_DISPLAY_ONLY');
     const checked = validateSurfaceInputBatch(raw);
-    if (!checked.ok) return Object.freeze({ ok: false, code: checked.code });
+    if (!checked.ok) return refuseSurfaceInput(rawSid, checked.code);
     const batch = checked.batch;
     const sid = batch.surface_id;
     const lastSeq = inputLastSeq.get(sid) ?? 0;
@@ -956,7 +979,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     const prevSeq = Math.max(lastSeq, inFlight);
     const isRetryPartial = pSeq > 0 && pApplied > 0 && batch.seq === pSeq && inFlight === 0;
     if (batch.seq <= prevSeq || (pSeq > 0 && batch.seq < pSeq) || (isRetryPartial && batch.events.length <= pApplied)) {
-      return Object.freeze({ ok: false, code: 'SCHEMA' });
+      return refuseSurfaceInput(sid, 'SCHEMA');
     }
     const releaseOnly = batch.events.every((/** @type {any} */ ev) => ev.kind === 'release_all');
     const now = typeof clock === 'function' ? clock() : Date.now();
@@ -964,7 +987,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     const recent = (priorRate ?? []).filter(t => now - t < 1000);
     if (!releaseOnly && recent.length >= SURFACE_INPUT_MAX_BATCHES_PER_SEC) {
       setBoundedSurfaceEntry(inputRateWindow, sid, recent, inputLastSeq, inputInFlightSeq);
-      return Object.freeze({ ok: false, code: 'LIMIT' });
+      return refuseSurfaceInput(sid, 'LIMIT');
     }
     const hadRateEntry = priorRate !== undefined && recent.length > 0;
     if (!releaseOnly) {
@@ -1013,6 +1036,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
       if (exactDataKeys(reply, 'accepted,ok') && reply.ok === true
           && Number.isSafeInteger(reply.accepted) && reply.accepted >= 1 && reply.accepted <= forwardBatch.events.length) {
         markKnownSurface(sid);
+        inputRefusalBurst.delete(sid);
         inputPartialSeq.delete(sid);
         inputPartialApplied.delete(sid);
         setBoundedSurfaceEntry(inputLastSeq, sid, batch.seq, inputLastSeq, inputInFlightSeq);
@@ -1041,13 +1065,13 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
           inputRateWindow.delete(sid);
           inputLastSeq.delete(sid);
         }
-        return Object.freeze({ ok: false, code: mapped });
+        return refuseSurfaceInput(sid, mapped);
       }
       if (!knownSurfaces.has(sid) && !inputLastSeq.has(sid) && !inputPartialSeq.has(sid)) {
         inputRateWindow.delete(sid);
         inputLastSeq.delete(sid);
       }
-      return Object.freeze({ ok: false, code: 'CORE_UNAVAILABLE' });
+      return refuseSurfaceInput(sid, 'CORE_UNAVAILABLE');
     } catch (error) {
       const synced = syncCoreProgress();
       const errApplied = /** @type {any} */ (error)?.applied;
@@ -1069,7 +1093,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
         inputRateWindow.delete(sid);
         inputLastSeq.delete(sid);
       }
-      return Object.freeze({ ok: false, code: mapped });
+      return refuseSurfaceInput(sid, mapped);
     } finally {
       inputInFlightSeq.delete(sid);
     }

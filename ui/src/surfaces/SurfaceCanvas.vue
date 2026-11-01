@@ -52,7 +52,7 @@ const props = defineProps({
   fpsClock: { type: [Function, Object], default: null },
 });
 
-const emit = defineEmits(['canvas-ready', 'canvas-released']);
+const emit = defineEmits(['canvas-ready', 'canvas-released', 'canvas-escape', 'canvas-focus']);
 
 // INPUT-U3: local click echo (see ./pointerEcho.js, [TARGET, unit decision]).
 // The SFC keeps its closed static dependency map (vue plus ./tileScheduler.js:
@@ -686,6 +686,7 @@ function clientToFramePoint(point) {
 /** @param {FocusEvent} _event */
 function onCanvasFocus(_event) {
   canvasFocused.value = true;
+  emit('canvas-focus', props.surfaceId);
 }
 
 /** @param {FocusEvent} _event */
@@ -730,6 +731,7 @@ function onCanvasKeyDown(event) {
   if (!inputGateOpen()) return;
   if (event.key === 'Escape') {
     blurCanvas();
+    emit('canvas-escape', props.surfaceId);
     return;
   }
   // MVUI25D lane C: a failed mapper import must fail closed inside DOM
@@ -771,6 +773,7 @@ function onCanvasPointerDown(event) {
   // MVUI30 lane L: a frozen tile never arms a press (focusCanvas above is a
   // no-op: a lost canvas carries no tabindex).
   if (resolvedState.value === 'lost') return;
+  emit('canvas-focus', props.surfaceId);
   activePress = {
     pointerId: event.pointerId,
     button: event.button,
@@ -847,16 +850,43 @@ function onCanvasWheel(event) {
   inputPort?.queue(props.surfaceId, props.streamId, { kind: 'scroll', dx, dy, x: point.x, y: point.y });
 }
 
+function isTypingInTextField() {
+  const doc = typeof globalThis.document === 'object' && globalThis.document !== null
+    ? /** @type {{ activeElement?: unknown }} */ (globalThis.document)
+    : null;
+  const active = /** @type {{ tagName?: unknown, isContentEditable?: unknown, contentEditable?: unknown } | null | undefined} */ (doc?.activeElement);
+  if (!active || typeof active !== 'object' || active === canvasRef.value) return false;
+  if (active.isContentEditable === true || active.contentEditable === 'true') return true;
+  const tag = typeof active.tagName === 'string' ? active.tagName.toUpperCase() : '';
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+}
+
+function focusCanvasOnEnable() {
+  if (unmounted || props.inputEnabled !== true || resolvedState.value === 'lost') return;
+  if (inputPort === null || inputPort.available !== true || isTypingInTextField()) return;
+  focusCanvas();
+}
+
 // Losing the gate releases focus, so a stale focused canvas can never keep
-// capturing after a control handoff or a READ switch.
+// capturing after a control handoff or a READ switch. Enabling input focuses
+// the canvas unless the operator is typing in another text field of the app.
 // MVUI32 lane I (R3-INPUT-1): the gate closure also drops queued input.
-watch(() => props.inputEnabled, (enabled) => {
+watch(() => props.inputEnabled, (enabled, previous) => {
   if (enabled !== true) {
-    activePress = null;
-    blurCanvas();
-    closeInputGate(props.surfaceId);
+    if (previous !== undefined) {
+      activePress = null;
+      blurCanvas();
+      closeInputGate(props.surfaceId);
+    }
+    return;
   }
-});
+  if (previous === false) {
+    focusCanvasOnEnable();
+    void Promise.resolve().then(focusCanvasOnEnable);
+  } else if (typeof globalThis.document === 'object' && globalThis.document !== null) {
+    void Promise.resolve().then(focusCanvasOnEnable);
+  }
+}, { immediate: true });
 
 // MVUI32 lane I (R3-INPUT-1): a stream change closes the previous stream's
 // gate — input queued under the old stream is dropped, never dispatched.

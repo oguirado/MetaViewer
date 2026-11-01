@@ -172,9 +172,8 @@ const emit = defineEmits(['submit-intent', 'create-capsule']);
  * the capsule's tile, then takes control through the wall arming path.
  * @param {string} surfaceId */
 function takeHandoffControl(surfaceId) {
-  const builders=props.runtime?.intentBuilders;
   revealHandoffSurface(surfaceId);
-  if(builders)onWallIntent(builders.control({capsuleId:surfaceId,verb:'take_control'}));
+  if (props.runtime?.intentBuilders) applyWallControl(surfaceId, 'take_control');
 }
 /** @param {unknown} surfaceId */
 function revealHandoffSurface(surfaceId) {
@@ -190,17 +189,21 @@ function revealHandoffSurface(surfaceId) {
 }
 /**
  * INPUT-ARM [TARGET, unit decision]: per-capsule wall input arming.
- * Taking control from the wall (the tile Control action, the view-only chip
- * or the handoff notice) asks the host for take_control and arms WRITE for
- * that capsule only; the arm turns interactive once the authoritative row
- * reports human control. Releasing control, a host refusal, a feed update
- * that moves control away from human, or the row departing or going lost
- * disarms it. The host still re-checks every batch (NOT_IN_CONTROL); agent
- * control and nested display-only never enable input. The arm applies to
- * wall tiles only: the multislot keeps its own shared inputMode toggle.
+ * Taking control from the wall (the tile Control action, the view-only chip,
+ * the handoff notice, or attaching to an already-human surface) routes through
+ * `applyWallControl` and arms WRITE for that capsule only; the arm turns
+ * interactive once the authoritative row reports human control. Releasing
+ * control, a host refusal, a feed update that moves control away from human,
+ * or the row departing or going lost disarms it. The host still re-checks
+ * every batch (NOT_IN_CONTROL); agent control and nested display-only never
+ * enable input. The arm applies to wall tiles only: the multislot keeps its
+ * own shared inputMode toggle.
  */
 const wallInputArmed = ref(/** @type {Record<string, true>} */ ({}));
 const wallInputPending = ref(/** @type {Record<string, true>} */ ({}));
+const wallInputEscaped = ref(/** @type {Record<string, true>} */ ({}));
+/** @type {Set<string>} */
+const seenLiveSurfaces = new Set();
 const ARMABLE_LIFECYCLES = Object.freeze(['active', 'standby', 'ceded']);
 /** @param {Record<string, true>} record @param {string} id */
 function withoutId(record, id) {
@@ -223,6 +226,7 @@ function wallControlRequestOf(intent) {
 function disarmWallInput(id) {
   if (Object.hasOwn(wallInputArmed.value, id)) wallInputArmed.value = withoutId(wallInputArmed.value, id);
   if (Object.hasOwn(wallInputPending.value, id)) wallInputPending.value = withoutId(wallInputPending.value, id);
+  if (Object.hasOwn(wallInputEscaped.value, id)) wallInputEscaped.value = withoutId(wallInputEscaped.value, id);
 }
 /** Arms a human row at once; any other control waits for the host grant.
  * @param {string} id */
@@ -230,6 +234,7 @@ function armWallInput(id) {
   if (nestedMode.displayOnly) return;
   const row = rows.value.find(row => row.id === id);
   if (!row || !ARMABLE_LIFECYCLES.includes(row.backendLifecycle)) return;
+  if (Object.hasOwn(wallInputEscaped.value, id)) wallInputEscaped.value = withoutId(wallInputEscaped.value, id);
   if (row.control === 'human') {
     wallInputArmed.value = { ...wallInputArmed.value, [id]: true };
     if (Object.hasOwn(wallInputPending.value, id)) wallInputPending.value = withoutId(wallInputPending.value, id);
@@ -237,33 +242,55 @@ function armWallInput(id) {
     wallInputPending.value = { ...wallInputPending.value, [id]: true };
   }
 }
-/** Feed reconcile: pending arms turn interactive on the human row; armed
- * capsules drop on any non-human, departed or lost row (one-way). */
-function reconcileWallInput() {
-  const armed = Object.keys(wallInputArmed.value), pending = Object.keys(wallInputPending.value);
-  if (armed.length === 0 && pending.length === 0) return;
-  const byId = new Map(rows.value.map(row => [row.id, row]));
-  /** @type {Record<string, true>} */ const nextArmed = {};
-  /** @type {Record<string, true>} */ const nextPending = {};
-  for (const id of [...armed, ...pending]) {
-    const row = byId.get(id);
-    if (!row || !ARMABLE_LIFECYCLES.includes(row.backendLifecycle)) continue;
-    if (row.control === 'human') nextArmed[id] = true;
-    else if (pending.includes(id)) nextPending[id] = true;
-  }
-  const same = (/** @type {Record<string, true>} */ a, /** @type {Record<string, true>} */ b) =>
-    Object.keys(a).sort().join('\n') === Object.keys(b).sort().join('\n');
-  if (!same(nextArmed, wallInputArmed.value)) wallInputArmed.value = nextArmed;
-  if (!same(nextPending, wallInputPending.value)) wallInputPending.value = nextPending;
+/** @param {string} id */
+function onCanvasEscape(id) {
+  if (typeof id !== 'string' || id.length === 0) return;
+  const row = rows.value.find(candidate => candidate.id === id);
+  if (!row || !(inputEnabledFor(row) || wallArmedFor(row))) return;
+  wallInputEscaped.value = { ...wallInputEscaped.value, [id]: true };
 }
-/** Wall and handoff intents: control verbs arm or disarm, then dispatch.
- * @param {unknown} intent */
-function onWallIntent(intent) {
-  const request = nestedMode.displayOnly ? null : wallControlRequestOf(intent);
-  if (request?.verb === 'release_control') disarmWallInput(request.id);
-  else if (request) armWallInput(request.id);
+/** @param {string} id */
+function onCanvasFocus(id) {
+  if (typeof id !== 'string' || !Object.hasOwn(wallInputEscaped.value, id)) return;
+  wallInputEscaped.value = withoutId(wallInputEscaped.value, id);
+}
+/** Unified wall control path: header Control, chip Take/Release, handoff
+ * take-control and attaching to an already-human surface all route here.
+ * @param {string} id
+ * @param {'take_control'|'release_control'} verb
+ * @param {unknown} [prebuiltIntent] */
+function applyWallControl(id, verb, prebuiltIntent) {
+  if (nestedMode.displayOnly || typeof id !== 'string' || id.length === 0) return;
+  const row = rows.value.find(candidate => candidate.id === id || candidate.surfaceId === id);
+  const targetId = row ? row.id : id;
+  if (verb === 'release_control') {
+    disarmWallInput(targetId);
+    let intent = prebuiltIntent;
+    if (intent === undefined) {
+      const builders = props.runtime?.intentBuilders;
+      if (!builders) return;
+      try { intent = builders.control({ capsuleId: targetId, verb: 'release_control' }); }
+      catch { hostOutcome.value = { code: 'HOST_REQUEST_REFUSED', message: 'This request is unavailable. Please try again.', tone: 'refusal' }; return; }
+    }
+    if (intent !== null && intent !== undefined) dispatch(intent);
+    return;
+  }
+  armWallInput(targetId);
+  if (prebuiltIntent === null || (prebuiltIntent === undefined && row?.control === 'human')) return;
+  /** @type {unknown} */
+  let intent = prebuiltIntent;
+  if (intent === undefined) {
+    const builders = props.runtime?.intentBuilders;
+    if (!builders) {
+      hostOutcome.value = { code: 'HOST_REQUEST_REFUSED', message: 'This request is unavailable. Please try again.', tone: 'refusal' };
+      return;
+    }
+    try { intent = builders.control({ capsuleId: targetId, verb: 'take_control' }); }
+    catch { hostOutcome.value = { code: 'HOST_REQUEST_REFUSED', message: 'This request is unavailable. Please try again.', tone: 'refusal' }; return; }
+  }
   const sent = dispatch(intent);
-  if (request?.verb === 'take_control' && sent !== undefined) {
+  if (sent !== undefined) {
+    const request = { id: targetId, verb };
     void sent.then((result) => {
       // A refused take never arms; an already armed human row stays armed.
       const refused = result === undefined || (result !== null && typeof result === 'object'
@@ -274,29 +301,64 @@ function onWallIntent(intent) {
     });
   }
 }
+/** Feed reconcile: pending arms turn interactive on the human row; armed
+ * capsules drop on any non-human, departed or lost row (one-way); newly
+ * attached already-human surfaces arm through the unified control path. */
+function reconcileWallInput() {
+  const port = /** @type {{ available?: unknown } | null} */ (shellInputPort);
+  const portAvailable = !nestedMode.displayOnly && port !== null && port.available === true;
+  for (const row of rows.value) {
+    if (!ARMABLE_LIFECYCLES.includes(row.backendLifecycle) || canvasStateFor(row) !== 'live') continue;
+    if (!seenLiveSurfaces.has(row.id)) {
+      seenLiveSurfaces.add(row.id);
+      if (portAvailable && row.control === 'human') {
+        applyWallControl(row.id, 'take_control', null);
+      }
+    }
+  }
+  const armed = Object.keys(wallInputArmed.value), pending = Object.keys(wallInputPending.value);
+  const escaped = Object.keys(wallInputEscaped.value);
+  if (armed.length === 0 && pending.length === 0 && escaped.length === 0) return;
+  const byId = new Map(rows.value.map(row => [row.id, row]));
+  /** @type {Record<string, true>} */ const nextArmed = {};
+  /** @type {Record<string, true>} */ const nextPending = {};
+  /** @type {Record<string, true>} */ const nextEscaped = {};
+  for (const id of [...new Set([...armed, ...pending])]) {
+    const row = byId.get(id);
+    if (!row || !ARMABLE_LIFECYCLES.includes(row.backendLifecycle)) continue;
+    if (row.control === 'human') {
+      nextArmed[id] = true;
+      if (wallInputEscaped.value[id] === true) nextEscaped[id] = true;
+    } else if (pending.includes(id)) nextPending[id] = true;
+  }
+  const same = (/** @type {Record<string, true>} */ a, /** @type {Record<string, true>} */ b) =>
+    Object.keys(a).sort().join('\n') === Object.keys(b).sort().join('\n');
+  if (!same(nextArmed, wallInputArmed.value)) wallInputArmed.value = nextArmed;
+  if (!same(nextPending, wallInputPending.value)) wallInputPending.value = nextPending;
+  if (!same(nextEscaped, wallInputEscaped.value)) wallInputEscaped.value = nextEscaped;
+}
+/** Wall and handoff intents: control verbs route through applyWallControl.
+ * @param {unknown} intent */
+function onWallIntent(intent) {
+  const request = nestedMode.displayOnly ? null : wallControlRequestOf(intent);
+  if (request) {
+    applyWallControl(request.id, request.verb, intent);
+    return;
+  }
+  dispatch(intent);
+}
 /** View-only chip: the same take-control gesture as the tile Control action.
  * A capsule already under human control arms locally (no second take).
  * @param {{id:string,control?:unknown}} surface */
 function takeWallControl(surface) {
   if (nestedMode.displayOnly || !surface) return;
-  if (surface.control === 'human') { armWallInput(surface.id); return; }
-  const builders = props.runtime?.intentBuilders;
-  if (!builders) {
-    hostOutcome.value = { code: 'HOST_REQUEST_REFUSED', message: 'This request is unavailable. Please try again.', tone: 'refusal' };
-    return;
-  }
-  try { onWallIntent(builders.control({ capsuleId: surface.id, verb: 'take_control' })); }
-  catch { hostOutcome.value = { code: 'HOST_REQUEST_REFUSED', message: 'This request is unavailable. Please try again.', tone: 'refusal' }; }
+  applyWallControl(surface.id, 'take_control');
 }
 /** Interactive chip Release (HANDOFF F3): hands control back and disarms.
  * @param {{id:string}} surface */
 function releaseWallControl(surface) {
   if (nestedMode.displayOnly || !surface) return;
-  disarmWallInput(surface.id);
-  const builders = props.runtime?.intentBuilders;
-  if (!builders) return;
-  try { onWallIntent(builders.control({ capsuleId: surface.id, verb: 'release_control' })); }
-  catch { hostOutcome.value = { code: 'HOST_REQUEST_REFUSED', message: 'This request is unavailable. Please try again.', tone: 'refusal' }; }
+  applyWallControl(surface.id, 'release_control');
 }
 /** @param {unknown} intent @returns {Promise<unknown>|undefined} */
 function dispatch(intent) {
@@ -617,16 +679,42 @@ function recordActivity(outcome) {
  * @typedef {{ onRefusal: (cb: (refusal: { surfaceId: string, code: string }) => void) => unknown }} ShellInputPort
  */
 const shellInputPort = /** @type {ShellInputPort | null} */ (inject('inputPort', null));
-/** Records one port refusal as a typed strip row. Consecutive repeats of
- * the same code coalesce into the last row (the sequence stays, only the
- * burst count grows), so a refusal burst is one row with a count instead
- * of feed spam; any other code or activity starts a fresh row.
+const wallInputRefusal = ref(/** @type {Record<string, string>} */ ({}));
+/** @type {Map<string, { code: string, at: number }>} */
+const wallInputRefusalBurst = new Map();
+/** @type {Map<string, unknown>} */
+const wallInputRefusalTimers = new Map();
+const REFUSAL_BURST_MS = 1000;
+const REFUSAL_DISPLAY_MS = 2500;
+/** Records one port refusal as a typed strip row and rate-limited chip notice.
+ * Consecutive repeats of the same code coalesce into the last row (the sequence
+ * stays, only the burst count grows), so a refusal burst is one row with a count
+ * instead of feed spam; any other code or activity starts a fresh row.
  * @param {unknown} refusal */
 function recordInputRefusal(refusal) {
   if (!hostActive) return;
-  const record = /** @type {{code?:unknown}} */ (refusal);
-  const code = typeof record?.code === 'string' ? record.code : '';
+  const record = /** @type {{surfaceId?:unknown,code?:unknown}} */ (refusal);
+  const code = typeof record?.code === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(record.code) ? record.code : '';
   if (code.length === 0) return;
+  const surfaceId = typeof record?.surfaceId === 'string' ? record.surfaceId : '';
+  if (surfaceId.length > 0) {
+    const ts = Date.now();
+    const prior = wallInputRefusalBurst.get(surfaceId);
+    if (!prior || prior.code !== code || ts - prior.at >= REFUSAL_BURST_MS) {
+      wallInputRefusalBurst.set(surfaceId, { code, at: ts });
+      wallInputRefusal.value = { ...wallInputRefusal.value, [surfaceId]: `Input refused: ${code}` };
+      const existing = wallInputRefusalTimers.get(surfaceId);
+      if (existing !== undefined) clearTimeout(/** @type {any} */ (existing));
+      const timer = setTimeout(() => {
+        wallInputRefusalTimers.delete(surfaceId);
+        if (!hostActive) return;
+        const next = { ...wallInputRefusal.value };
+        delete next[surfaceId];
+        wallInputRefusal.value = next;
+      }, REFUSAL_DISPLAY_MS);
+      wallInputRefusalTimers.set(surfaceId, timer);
+    }
+  }
   const feed = activityFeed.value;
   const last = feed.length > 0 ? feed[feed.length - 1] : undefined;
   if (last !== undefined && last.code === code && typeof last.count === 'number') {
@@ -644,6 +732,9 @@ try {
   }
 } catch { /* A broken port never breaks the shell. */ }
 onBeforeUnmount(() => {
+  for (const timer of wallInputRefusalTimers.values()) clearTimeout(/** @type {any} */ (timer));
+  wallInputRefusalTimers.clear();
+  wallInputRefusalBurst.clear();
   const stop = stopInputRefusals;
   stopInputRefusals = null;
   if (stop !== null) {
@@ -844,14 +935,16 @@ function wallArmedFor(surface) {
   return surface.control === 'human' && wallInputArmed.value[surface.id] === true;
 }
 /** INPUT-ARM: tile input chip state for the wall: '' (no chip), 'view',
- * 'pending', 'interactive' or 'unavailable' (no input port in this window).
+ * 'pending', 'interactive', 'paused' (Escape-blurred) or 'unavailable'.
  * @param {{id:string,control?:unknown,backendLifecycle?:unknown,attachmentState?:unknown}|null} surface */
 function wallInputState(surface) {
   if (nestedMode.displayOnly === true || surface === null || typeof surface !== 'object') return '';
   if (!ARMABLE_LIFECYCLES.includes(/** @type {string} */ (surface.backendLifecycle)) || canvasStateFor(surface) !== 'live') return '';
   const port = /** @type {{ available?: unknown } | null} */ (shellInputPort);
   if (port === null || port.available !== true) return 'unavailable';
-  if (inputEnabledFor(surface) || wallArmedFor(surface)) return 'interactive';
+  if (inputEnabledFor(surface) || wallArmedFor(surface)) {
+    return wallInputEscaped.value[surface.id] === true ? 'paused' : 'interactive';
+  }
   return wallInputPending.value[surface.id] === true ? 'pending' : 'view';
 }
 /** @param {{id:string,title?:unknown}} surface */
@@ -942,7 +1035,11 @@ watch(() => rows.value.map(row => row.id),
   (next, previous = /** @type {string[]} */ ([])) => {
     const alive = new Set(next);
     for (const id of previous) {
-      if (!alive.has(id)) bumpSurfaceLifetimeEpoch(id);
+      if (!alive.has(id)) {
+        seenLiveSurfaces.delete(id);
+        disarmWallInput(id);
+        bumpSurfaceLifetimeEpoch(id);
+      }
     }
   });
 // MVUI26B lane M: the shared input mode is only meaningful while the
@@ -963,6 +1060,7 @@ watch(() => snapshot.value, () => {
 }, { immediate: true });
 // INPUT-ARM: wall arms follow the same feed signal (one-way on leaving human).
 watch(() => snapshot.value, () => { reconcileWallInput(); });
+onMounted(() => { reconcileWallInput(); });
 // Readiness belongs to the branch actually rendered, including display-only walls.
 const wallView = computed(() => nestedMode.displayOnly ? 'nested' : creativeOpen.value ? 'creative' : rows.value.length ? 'workspace' : 'empty');
 let firstFrame = 0;
@@ -1053,11 +1151,12 @@ const chromeWorkspace = markRaw(defineComponent({
             <template v-if="surface && (!multislotOpen || capsuleId !== selectedSurface?.id)">
             <div v-if="wallInputState(surface) !== ''" class="mv-input-indicator" :data-input-state="wallInputState(surface)" :data-semantic-anchor="`capsule/${capsuleId}/input`">
               <UiButton v-if="wallInputState(surface) === 'view'" :id="`mv-input-take-${capsuleId}`" :data-semantic-anchor="`capsule/${capsuleId}/input/take`" class="mv-input-indicator__action" label="Take control" :aria-label="`Take control of ${surfaceLabel(surface)}`" @click="takeWallControl(surface)" />
-              <span v-else-if="wallInputState(surface) === 'pending'" class="mv-input-indicator__text" role="status">Taking control…</span>
+              <span v-if="wallInputRefusal[capsuleId] && wallInputState(surface) === 'view'" class="mv-input-indicator__text mv-input-indicator__refusal" role="status">{{ wallInputRefusal[capsuleId] }}</span>
+              <span v-else-if="wallInputState(surface) === 'pending'" class="mv-input-indicator__text" role="status">{{ wallInputRefusal[capsuleId] ?? 'Taking control…' }}</span>
               <span v-else-if="wallInputState(surface) === 'unavailable'" class="mv-input-indicator__text" role="status">Input unavailable in this window</span>
-              <template v-else><span class="mv-input-indicator__text" role="status">Interactive</span><UiButton :id="`mv-input-release-${capsuleId}`" :data-semantic-anchor="`capsule/${capsuleId}/input/release`" class="mv-input-indicator__action" label="Release" :aria-label="`Release control of ${surfaceLabel(surface)}`" @click="releaseWallControl(surface)" /></template>
+              <template v-else-if="wallInputState(surface) !== 'view'"><span class="mv-input-indicator__text" role="status">{{ wallInputRefusal[capsuleId] ?? (wallInputState(surface) === 'paused' ? 'Click the tile to type' : 'Interactive') }}</span><UiButton :id="`mv-input-release-${capsuleId}`" :data-semantic-anchor="`capsule/${capsuleId}/input/release`" class="mv-input-indicator__action" label="Release" :aria-label="`Release control of ${surfaceLabel(surface)}`" @click="releaseWallControl(surface)" /></template>
             </div>
-            <SurfaceCanvas :surface-id="capsuleId" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :frame-width="surfaceWitness(surface).width" :frame-height="surfaceWitness(surface).height" :state="canvasStateFor(surface)" :input-enabled="inputEnabledFor(surface) || wallArmedFor(surface)" :stream-id="surfaceStreamId(surface)" />
+            <SurfaceCanvas :surface-id="capsuleId" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :frame-width="surfaceWitness(surface).width" :frame-height="surfaceWitness(surface).height" :state="canvasStateFor(surface)" :input-enabled="inputEnabledFor(surface) || wallArmedFor(surface)" :stream-id="surfaceStreamId(surface)" @canvas-escape="onCanvasEscape(capsuleId)" @canvas-focus="onCanvasFocus(capsuleId)" />
             </template>
           </template>
         </WallWorkspace>

@@ -156,6 +156,8 @@ const textEncoder = new TextEncoder();
  * @property {() => number} [now] - ms clock (default Date.now).
  * @property {boolean} [releaseAll] - false disables the closeGate release_all (default true).
  * @property {number} [typeCoalesceMs] - ms window for holding consecutive type-only events (default TYPE_COALESCE_MS).
+ * @property {number} [refusalBurstMs] - ms window for rate-limiting refusal burst notifications (default 1000).
+ * @property {(refusal: { surfaceId: string, code: string, count: number }) => void} [onRefusalNotice] - rate-limited refusal notification hook.
  * @property {(cb: (time: number) => void) => unknown} [raf] - frame scheduler.
  * @property {(handle: unknown) => void} [cancelRaf] - frame cancellation.
  * @property {(cb: () => void, ms: number) => unknown} [setTimer] - timer scheduler for type coalescing.
@@ -600,6 +602,14 @@ export function createInputPort(facade, options = {}) {
   let sendDepth = 0;
   /** @type {Set<(refusal: InputRefusal) => void>} */
   const refusalListeners = new Set();
+  /** @type {Map<string, { code: string, count: number, notifiedAt: number }>} */
+  const refusalBurstBySurface = new Map();
+  const refusalBurstMs = typeof options.refusalBurstMs === 'number'
+    && Number.isFinite(options.refusalBurstMs)
+    && options.refusalBurstMs >= 0
+    ? options.refusalBurstMs
+    : 1000;
+  const onRefusalNotice = typeof options.onRefusalNotice === 'function' ? options.onRefusalNotice : null;
   /** @type {Map<string, boolean>} Seen (surface_id, seq) refusal keys, oldest first. */
   const seenResults = new Map();
   let disposed = false;
@@ -613,6 +623,21 @@ export function createInputPort(facade, options = {}) {
    * @returns {void}
    */
   function emitRefusal(surfaceId, code) {
+    const ts = now();
+    const prior = refusalBurstBySurface.get(surfaceId);
+    if (prior !== undefined && prior.code === code && ts - prior.notifiedAt < refusalBurstMs) {
+      prior.count += 1;
+    } else {
+      const count = prior !== undefined && prior.code === code ? prior.count + 1 : 1;
+      refusalBurstBySurface.set(surfaceId, { code, count, notifiedAt: ts });
+      if (onRefusalNotice !== null) {
+        try {
+          onRefusalNotice({ surfaceId, code, count });
+        } catch {
+          // One bad hook never breaks the port or its listeners.
+        }
+      }
+    }
     if (refusalListeners.size === 0) return;
     const refusal = { surfaceId, code };
     for (const cb of Array.from(refusalListeners)) {
@@ -850,7 +875,9 @@ export function createInputPort(facade, options = {}) {
       Promise.resolve(pending).then(
         /** @param {any} reply @returns {void} */ (reply) => {
           const result = normalizeReply(reply);
-          if (!result.ok && typeof result.code === 'string') {
+          if (result.ok) {
+            refusalBurstBySurface.delete(surfaceId);
+          } else if (typeof result.code === 'string') {
             emitResultRefusal(surfaceId, seq, result.code);
           }
         },
@@ -1204,6 +1231,7 @@ export function createInputPort(facade, options = {}) {
     liveStreamBySurface.clear();
     releaseSeqs.clear();
     refusalListeners.clear();
+    refusalBurstBySurface.clear();
     seenResults.clear();
     const stop = stopResults;
     stopResults = null;
