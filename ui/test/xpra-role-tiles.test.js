@@ -98,16 +98,26 @@ test('bridge requires main token and kills an upgraded websocket on close', asyn
  const root=await mkdtemp(join(tmpdir(),'role-bridge-'));t.after(()=>rm(root,{recursive:true,force:true}));
  const outer=join(root,'srf-id-demo'),inner=join(outer,'s');await mkdir(outer,{mode:0o700});await mkdir(inner,{mode:0o777});await chmod(inner,0o777);
  const socketPath=join(inner,'xpra.sock');
- const upstream=http.createServer((_q,r)=>r.end('xpra'));
+ let keyboardEncoding;
+ const upstream=http.createServer((q,r)=>{
+  if(q.url==='/js/Client.js') {keyboardEncoding=q.headers['accept-encoding'];r.end('var XpraClient=function(){};');}
+  else r.end('xpra');
+ });
  const sockets=new Set();upstream.on('connection',s=>{sockets.add(s);s.on('close',()=>sockets.delete(s));});
  upstream.on('upgrade',(_q,s)=>s.write('HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n'));
  await new Promise(r=>upstream.listen(socketPath,r));await chmod(socketPath,0o666);
  t.after(async()=>{for(const s of sockets)s.destroy();await new Promise(r=>upstream.close(r));});
- const bridge=await openXpraHumanBridge({viewRoot:root,capsule:'srf-id-demo',expectedSocketUid:process.getuid()});t.after(()=>bridge.close());
+ const bridge=await openXpraHumanBridge({viewRoot:root,capsule:'srf-id-demo',expectedSocketUid:process.getuid(),keyboard:{layout:'es',keycodes:{IntlBackslash:94}}});t.after(()=>bridge.close());
  const get=(headers,route='/')=>new Promise((resolve,reject)=>{http.get(bridge.origin+route,{headers},r=>{r.resume();resolve(r.statusCode);}).on('error',reject);});
  assert.equal(await get({}),403);assert.equal(await get(bridge.requestHeaders),200);
  assert.equal(await get({},'/metaviewer-tile.html'),403);
  assert.equal(await get(bridge.requestHeaders,'/metaviewer-tile.html'),200);
+ const script=await new Promise((resolve,reject)=>http.get(bridge.origin+'/js/Client.js',{headers:bridge.requestHeaders},r=>{
+  let text='';r.on('data',chunk=>{text+=chunk;});r.on('end',()=>resolve(text));r.on('error',reject);
+ }).on('error',reject));
+ assert.equal(keyboardEncoding,'identity');
+ assert.match(script,/var XpraClient=function\(\)\{\};/);
+ assert.match(script,/xkbmap_raw:true/);assert.match(script,/"IntlBackslash":94/);
  const url=new URL(bridge.origin);const client=net.createConnection({host:url.hostname,port:Number(url.port)});await once(client,'connect');
  client.write(`GET / HTTP/1.1\r\nHost: ${url.host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nx-metaviewer-xpra-session: ${bridge.requestHeaders['x-metaviewer-xpra-session']}\r\n\r\n`);
  const [reply]=await once(client,'data');assert.match(reply.toString(),/101 Switching/);
@@ -210,6 +220,36 @@ test('human role never instantiates the canvas input slot; agent keeps it', asyn
     }
    } finally { app.unmount(); }
   }
+  // The old pane retires only after the host acknowledges a replacement.
+  let finishSwitch;const lifecycleEvents=[],completions=[];
+  globalThis.metaviewerRoles={status:async()=>({role:'human'}),mount:async()=>({ok:true}),close:async()=>({ok:true}),
+   switchMode:()=>new Promise(resolve=>{finishSwitch=resolve;})};
+  const switching=node('root');
+  const switchingApp=renderer.createApp(Component,{surfaceId:'old-lifetime',control:'human',
+   onLifecycle:event=>completions.push(event),
+   onStopped:id=>lifecycleEvents.push(['stopped',id]),onReveal:id=>lifecycleEvents.push(['reveal',id])});
+  try {
+   switchingApp.mount(switching);await new Promise(r=>setTimeout(r,20));await vue.nextTick();
+   const all=n=>[n,...n.children.flatMap(all)];
+   all(switching).find(n=>n.tag==='button'&&n.text==='Switch to agent mode').props.onClick();
+   await new Promise(r=>setTimeout(r,20));await vue.nextTick();
+   assert(all(switching).some(n=>n.text==='Switching to agent…'));assert.deepEqual(lifecycleEvents,[]);
+   assert.equal(completions.length,1);assert.equal(completions[0].surfaceId,'old-lifetime');
+   finishSwitch({ok:true,surfaceId:'replacement'});
+   await new Promise(r=>setTimeout(r,20));await vue.nextTick();
+   assert.deepEqual(lifecycleEvents,[['reveal','replacement'],['stopped','old-lifetime']]);
+   assert.equal((await completions[0].completion).surfaceId,'replacement');
+  } finally {switchingApp.unmount();}
+  const departed=node('root'),parentCompletions=[];
+  const departedApp=renderer.createApp(Component,{surfaceId:'departing-agent',control:'human',onLifecycle:event=>{
+   event.completion.then(result=>parentCompletions.push(result.surfaceId));
+  }});
+  departedApp.mount(departed);await new Promise(r=>setTimeout(r,20));await vue.nextTick();
+  const allDeparted=n=>[n,...n.children.flatMap(allDeparted)];
+  allDeparted(departed).find(n=>n.tag==='button'&&n.text==='Switch to agent mode').props.onClick();
+  await new Promise(r=>setTimeout(r,20));departedApp.unmount();
+  finishSwitch({ok:true,surfaceId:'after-unmount'});await new Promise(r=>setTimeout(r,20));
+  assert.deepEqual(parentCompletions,['after-unmount'],'parent completion survives tile departure');
   let attempts=0;
   globalThis.metaviewerRoles={status:async()=>({role:'human'}),mount:async()=>{attempts++;return{ok:false,code:'XPRA_CLIENT_READY_TIMEOUT'};},close:async()=>({ok:true})};
   const failed=node('root');const failedApp=renderer.createApp(Component,{surfaceId:'failed',control:'human'});

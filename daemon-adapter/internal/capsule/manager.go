@@ -1021,6 +1021,9 @@ func (m *Manager) Capture(ctx context.Context, id string) (Binding, NativeFrame,
 	if e = cli.ParseLine(out, m.cfg.MaxOutputBytes, &f); e != nil {
 		return b, f, e
 	}
+	if !under(b.FramesRoot, f.Path) {
+		return b, f, fault("frame", "native frame allocation mismatch")
+	}
 	if f.Seq == 0 || f.Generation != b.Container || f.Width < 1 || f.Height < 1 || f.Width > b.Surface.Geometry.W || f.Height > b.Surface.Geometry.H || !digest.MatchString(f.SHA256RGB24) || !under(b.FramesRoot, f.Path) || f.CaptureMonoNS < m.cfg.OriginNS || f.CaptureMonoNS < before || f.CaptureMonoNS > after || after < before || (b.Window != "" && (f.Window == nil || f.Window.ID != b.Window || f.Window.W != f.Width || f.Window.H != f.Height)) || (b.Window == "" && (f.Window != nil || f.Width != b.Surface.Geometry.W || f.Height != b.Surface.Geometry.H)) {
 		return b, f, fault("frame", "native frame identity, time or allocation mismatch")
 	}

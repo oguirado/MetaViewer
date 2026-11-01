@@ -8,13 +8,13 @@ import { fileURLToPath } from 'node:url';
  * @param {{electron:typeof import('electron'),window:import('electron').BrowserWindow,
  * bridge:Awaited<ReturnType<typeof import('./xpraHumanBridge.js').openXpraHumanBridge>>,
  * bounds:{x:number,y:number,width:number,height:number},
- * trace:ReturnType<typeof import('./humanTrace.js').createHumanTrace>,isActive:()=>boolean,writable?:boolean,
+ * trace:ReturnType<typeof import('./humanTrace.js').createHumanTrace>,isActive:()=>boolean,writable?:boolean,rawKeyboard?:boolean,
  * capsuleSize:()=>{width:number,height:number},
  * axContext?:()=>{sensitive?:boolean,password?:boolean,row?:number}|null,clientQuery?:string,
  * recoverBridge?:()=>Promise<any>,onState?:(state:string)=>void,onFailure:(error:unknown)=>void}} options
  */
 export async function attachXpraHumanTile({ electron, window, bridge, bounds, trace,
-  isActive, capsuleSize, writable = true, axContext = () => null, clientQuery = xpraClientQuery(writable),
+  isActive, capsuleSize, writable = true, rawKeyboard = false, axContext = () => null, clientQuery = xpraClientQuery(writable),
   recoverBridge = async () => bridge, onState = () => {}, onFailure }) {
   const { WebContentsView, session, ipcMain } = electron;
   if (typeof isActive !== 'function' || isActive() !== true || typeof capsuleSize !== 'function' ||
@@ -127,7 +127,7 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
     resize(bounds);
     if (clientQuery && !/^\?[a-zA-Z0-9_=&.-]+$/.test(clientQuery)) throw Error('XPRA_QUERY_REFUSED');
     await wc.loadURL(origin + '/metaviewer-tile.html' + clientQuery);
-    await waitForXpraClient(wc, {writable, isActive:live});
+    await waitForXpraClient(wc, {writable, rawKeyboard, isActive:live});
     if (!live()) throw Error('XPRA_HUMAN_LEASE_LOST');
     publish('ready');
     if (writable) wc.focus();
@@ -136,7 +136,7 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
         // Bound a stalled renderer evaluation as well as a false result.
         let timer;
         try {
-          return await Promise.race([wc.executeJavaScript(xpraReadyExpression(writable)),
+          return await Promise.race([wc.executeJavaScript(xpraReadyExpression(writable,rawKeyboard)),
             new Promise(resolve => { timer = setTimeout(() => resolve(false), 2000); })]) === true;
         } finally { clearTimeout(timer); }
       },
@@ -149,7 +149,7 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
         // Reload through the same authenticated request hook. A replacement
         // bridge supplies a fresh origin and capability, never a cached token.
         await wc.loadURL(origin + '/metaviewer-tile.html' + clientQuery);
-        await waitForXpraClient(wc, {writable, isActive:live});
+        await waitForXpraClient(wc, {writable, rawKeyboard, isActive:live});
       }, onState:publish});
     return Object.freeze({ view, resize, close,
       /** @param {boolean} visible */

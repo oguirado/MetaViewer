@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { parse } from '@vue/compiler-sfc';
 import vm from 'node:vm';
-import { installRoleHost } from '../electron/roleHost.js';
+import { installRoleHost, surfaceCreateRefusal } from '../electron/roleHost.js';
 import { createHumanTraceFile } from '../electron/humanTrace.js';
 import { xpraClientQuery } from '../electron/xpraClient.js';
 import { identityMarkers } from '../electron/identityMarkers.js';
@@ -39,7 +39,7 @@ async function fixture(t, legacy = undefined) {
         states.set(surface.surface_id,surface);
         return {schema:'surface_event/v0.2',event:'state_changed',data:{surface}};
       }
-      if (failedCreate) return {schema:'surface_event/v0.2',event:'error'};
+      if (failedCreate) return typeof failedCreate === 'object' ? failedCreate : {schema:'surface_event/v0.2',event:'error'};
       const mode = JSON.parse(await readFile(join(root,'opening-modes/demo.json'),'utf8'));
       assert.equal(mode.profile_id,'demo'); stage = mode.mode; stageModes.push(stage);
       const surface = {surface_id:'surface-'+(++next),profile_id:'demo',state:'active',control:stage,geometry:{w:1280,h:900}};
@@ -105,6 +105,32 @@ test('P18 failed stop never starts replacement; failed replacement leaves identi
   assert.equal((await f.request('switch',{surfaceId:initial.surfaceId})).code,'SURFACE_CREATE_REFUSED');
   assert.equal((await f.request('choices'))[0].currentMode,'closed');
   assert.equal([...f.states.values()].filter(s=>s.state==='active').length,0);
+});
+
+test('P18 R2 destroy acknowledgement then create preserves the adapter fault code',async t=>{
+  const f = await fixture(t);
+  const initial = await f.request('create',{choice:{profileId:'demo',role:'human'}});
+  f.failCreate = {schema:'surface_event/v0.2',event:'error',data:{surface_id:'replacement',code:'frame',detail:'native frame allocation mismatch'}};
+  assert.deepEqual(await f.request('switch',{surfaceId:initial.surfaceId}),{ok:false,code:'ADAPTER_FRAME'});
+  assert.deepEqual(f.calls,['create','destroy','create']);
+  assert.equal(f.states.get(initial.surfaceId).state,'destroyed');
+  assert.equal((await f.request('choices'))[0].currentMode,'closed');
+});
+
+test('P18 R2 create refusals map fixed adapter faults and withhold arbitrary diagnostics',()=>{
+  const lines = [], prior = console.info; console.info = line => lines.push(line);
+  try {
+    for (const [code,detail,wanted] of [
+      ['binding','profile already bound','PROFILE_ALREADY_BOUND'],
+      ['uncertain','surface capacity or unresolved native outcome','SURFACE_CAPACITY_OR_QUARANTINE'],
+      ['configuration','human mode requires 1280x900 browser','ADAPTER_CONFIGURATION'],
+      ['profile','unadmitted profile, kind or geometry','ADAPTER_PROFILE'],
+      ['frame','native frame allocation mismatch','ADAPTER_FRAME'],
+      ['ADAPTER_FRAME','private-identity-data','ADAPTER_FRAME'],
+    ]) assert.equal(surfaceCreateRefusal({data:{code,detail}}),wanted);
+    assert.equal(lines.at(-1),'METAVIEWER_SURFACE_CREATE_REFUSED code=ADAPTER_FRAME detail=withheld');
+    assert(!lines.join('\n').includes('private-identity-data'));
+  } finally { console.info = prior; }
 });
 
 test('P18 last login is absent until explicit human operator confirmation',async t=>{

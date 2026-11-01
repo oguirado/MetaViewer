@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import re
 import subprocess
 import sys
 import tempfile
@@ -20,10 +21,10 @@ ELECTRON='/home/admin/Documentos/Games/Holdings-int/app/shell/node_modules/elect
 def record(**row):
  with LEDGER.open('a') as f:f.write(json.dumps(dict(unit='P18-MODES-TILES',**row))+'\n')
 
-def rpc(root,op,**body):
+def rpc(root,op,timeout=150,**body):
  request=dict(id=uuid.uuid4().hex,op=op,**body)
  temporary=root/'request.tmp';temporary.write_text(json.dumps(request));temporary.rename(root/'request.json')
- deadline=time.monotonic()+150
+ deadline=time.monotonic()+timeout
  while time.monotonic()<deadline:
   try:reply=json.loads((root/'reply.json').read_text())
   except (FileNotFoundError,json.JSONDecodeError):reply={}
@@ -32,6 +33,28 @@ def rpc(root,op,**body):
    return reply.get('result')
   time.sleep(.05)
  raise RuntimeError('DEV_RPC_TIMEOUT')
+
+def reap(state):
+ """Record and stop only still-matching descendants of this supervisor's PIDs."""
+ owned={}
+ def visit(pid,expected=None):
+  try:
+   fields=(Path('/proc')/str(pid)/'stat').read_text().rsplit(') ',1)[1].split()
+   if expected is not None and fields[19]!=expected:return
+   if pid in owned:return
+   owned[pid]=fields[19]
+   children=(Path('/proc')/str(pid)/'task'/str(pid)/'children').read_text().split()
+   for child in children:visit(int(child))
+  except (FileNotFoundError,ProcessLookupError):pass
+ for item in state['processes']:visit(item['pid'],item['starttime'])
+ for pid,starttime in owned.items():record(pid=pid,starttime=starttime,kind='owned cleanup descendant',root=state['root'])
+ def send(sig):
+  for pid,starttime in reversed(list(owned.items())):
+   try:
+    current=(Path('/proc')/str(pid)/'stat').read_text().rsplit(') ',1)[1].split()
+    if current[19]==starttime:os.kill(pid,sig)
+   except (FileNotFoundError,ProcessLookupError):pass
+ send(signal.SIGTERM);time.sleep(1);send(signal.SIGKILL)
 
 def refresh_bindings(state):
  root=Path(state['root'])
@@ -53,15 +76,10 @@ def main():
  if sys.argv[1]=='stop':
   state=refresh_bindings(json.loads(STATE.read_text()));root=Path(state['root'])
   if (root/'ready.json').exists():
-   try:rpc(root,'quit')
+   try:rpc(root,'quit',timeout=10)
    except Exception as error:print('QUIT '+str(error))
   time.sleep(2)
-  # Only this supervisor's recorded, still-matching child process IDs.
-  for item in reversed(state['processes']):
-   try:
-    stat=Path('/proc')/str(item['pid'])/'stat'
-    if stat.read_text().rsplit(') ',1)[1].split()[19]==item['starttime']:os.kill(item['pid'],signal.SIGTERM)
-   except (FileNotFoundError,ProcessLookupError):pass
+  reap(state)
   remaining=[]
   for capsule in state.get('containers',[]):
    active=subprocess.check_output(['docker','ps','-q','--filter','name=^/'+capsule+'$'],text=True).strip()
@@ -99,7 +117,14 @@ def main():
  p=spawn(['docker','run','--rm','--name',helper,'--network','none','--user','0:0','--read-only','--cap-drop','ALL','--cap-add','CHOWN','--mount','type=bind,src='+str(root/'identities/profiles/mv-live-3')+',dst=/profile','--entrypoint','/bin/chown','opensuperficies-identity-browser-arm64:0.1.0','10001:10001','/profile'],'provision-owner')
  if p.wait():raise RuntimeError('OWN_PROFILE_OWNER_UNPROVEN')
  # Normal native startup uses its existing network/egress configuration.
- ram=Path('/dev/shm')/('p18-'+uuid.uuid4().hex);ram.mkdir(mode=0o700)
+ # The native browser frame sink has a fixed producer root. A made-up private
+ # root passes human startup (no capture) but rejects the first agent frame.
+ # Bind admission to the producer allocation; never relax Capture's path gate.
+ native_source=(OSROOT/'src/browserid/surface/surface.go').read_text()
+ native_root=re.search(r'RAMRoot\s*=\s*"([^"]+)"',native_source)
+ if not native_root:raise RuntimeError('NATIVE_FRAME_ROOT_UNPROVEN')
+ ram=Path(native_root[1])
+ if not ram.is_absolute() or not str(ram).startswith('/dev/shm/'):raise RuntimeError('NATIVE_FRAME_ROOT_REFUSED')
  commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=REPO,text=True).strip()
  sys.path.insert(0,str(REPO/'tests/e2e/e2e1_slice'));import live
  regs={c:live.registration(c,commit,uuid.uuid4().hex) for c in ['core','ui','agent','daemon']}
@@ -110,7 +135,7 @@ def main():
  if subprocess.run(['xdpyinfo','-display',':97'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode:
   if Path('/tmp/.X97-lock').exists():raise RuntimeError('BLOCKED unowned X97 lock')
   spawn(['Xvfb',':97','-screen','0','1600x1100x24','-nolisten','tcp'],'dev-xvfb');time.sleep(.5)
- spawn([OSROOT/'.p18-package-final/MetaViewer-linux-arm64/resources/bin/metaviewer-core'],'dev-core')
+ spawn(['/home/admin/.cache/cargo-target/mv-wt-p18/debug/metaviewer-core'],'dev-core')
  for _ in range(100):
   if (root/'runtime/metaviewer/core.sock').exists():break
   time.sleep(.1)

@@ -1,7 +1,7 @@
 <script setup>
 import { onMounted, onBeforeUnmount, ref, watch } from 'vue';
 const props = defineProps({surfaceId:{type:String,required:true},control:{type:String,default:'agent'}});
-const emit = defineEmits(['mode','reveal']);
+const emit = defineEmits(['mode','reveal','stopped','lifecycle']);
 const progress = ref(''), confirmed = ref(false);
 const api = /** @type {any} */ (globalThis).metaviewerRoles;
 const root = ref(/** @type {HTMLElement|null} */ (null));
@@ -60,15 +60,22 @@ async function sync() {
 /** @param {string} operation */
 async function lifecycle(operation) {
   if (progress.value) return;
-  progress.value = operation === 'switchMode' ? 'Closing capsule, then reopening in the other mode…' : 'Stopping capsule…';
+  progress.value = operation === 'switchMode' ? `Switching to ${role.value === 'human' ? 'agent' : 'human'}…` : 'Stopping capsule…';
   error.value = '';
   try {
     while (busy && alive) await new Promise(resolve => setTimeout(resolve,10));
     await revoke();
-    const result = await api[operation](props.surfaceId);
+    const completion = api[operation](props.surfaceId);
+    // Agent departure can unmount this tile before the destroy/create reply.
+    // Its persistent parent must own presentation cleanup of that completion.
+    emit('lifecycle', {surfaceId:props.surfaceId,completion});
+    const result = await completion;
     if (!result.ok) throw Error(result.code);
     ended = true;
+    // Start reveal before retiring this component: closing its pane can unmount
+    // it synchronously, after which Vue suppresses further emitted events.
     if (result.surfaceId) emit('reveal', result.surfaceId);
+    emit('stopped', props.surfaceId);
   } catch (reason) { error.value = /** @type {Error} */(reason).message; }
   finally { progress.value = ''; }
 }

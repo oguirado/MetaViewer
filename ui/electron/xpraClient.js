@@ -19,11 +19,12 @@ addEventListener('resize',fit);fit();frame.src='/'+location.search;
 </script>`;
 
 /** Executed in the sandboxed wrapper; returns only readiness, never credentials.
- * @param {boolean} writable */
-export const xpraReadyExpression = writable => `Boolean((()=>{
+ * @param {boolean} writable @param {boolean} [rawKeyboard] */
+export const xpraReadyExpression = (writable, rawKeyboard = false) => `Boolean((()=>{
   const frame=document.getElementById('metaviewer-xpra-client');
   const page=frame?.contentWindow, doc=frame?.contentDocument, client=page?.client;
   return client?.connected && client.server_ok && client.server_readonly===${!writable} &&
+    ${rawKeyboard ? 'client.metaviewer_raw_keyboard===true &&' : ''}
     page.innerWidth===1280 && page.innerHeight===900 &&
     client.desktop_width===1280 && client.desktop_height===900 &&
     Object.keys(client.id_to_window||{}).length>0 &&
@@ -31,8 +32,8 @@ export const xpraReadyExpression = writable => `Boolean((()=>{
 })())`;
 
 /** @param {{executeJavaScript:(source:string)=>Promise<any>}} contents
- * @param {{writable:boolean,isActive:()=>boolean,timeoutMs?:number}} options */
-export async function waitForXpraClient(contents, {writable, isActive, timeoutMs = 30000}) {
+ * @param {{writable:boolean,rawKeyboard?:boolean,isActive:()=>boolean,timeoutMs?:number}} options */
+export async function waitForXpraClient(contents, {writable, rawKeyboard = false, isActive, timeoutMs = 30000}) {
   let stopped = false;
   const expired = Object.assign(Error('XPRA_CLIENT_READY_TIMEOUT'), {code:'XPRA_CLIENT_READY_TIMEOUT'});
   /** @type {ReturnType<typeof setTimeout>|undefined} */
@@ -43,7 +44,7 @@ export async function waitForXpraClient(contents, {writable, isActive, timeoutMs
   const probe = async () => {
     while (!stopped) {
       if (!isActive()) throw Object.assign(Error('XPRA_HUMAN_LEASE_LOST'), {code:'XPRA_HUMAN_LEASE_LOST'});
-      if (await contents.executeJavaScript(xpraReadyExpression(writable)) === true) return;
+      if (await contents.executeJavaScript(xpraReadyExpression(writable,rawKeyboard)) === true) return;
       await new Promise(resolve => setTimeout(resolve, 50));
     }
   };

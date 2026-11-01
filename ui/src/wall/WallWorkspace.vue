@@ -897,9 +897,11 @@ function revealSurface(capsuleId, placement) {
 /** @param {string} capsuleId @param {unknown} body */
 function applyLayoutEcho(capsuleId, body) { return controller.applyLayoutEcho(capsuleId, body); }
 function setPreset(/** @type {string|null} */ preset) { return controller.setPreset(preset); }
+/** Presentation only: used after an acknowledged capsule stop. @param {unknown} intent */
+function applyPresentationIntent(intent) { return controller.applyPresentationIntent(intent); }
 const presetTimer = setInterval(() => { controller.refreshPreset(); },150);
 presetTimer.unref?.();
-defineExpose({ revealSurface, applyLayoutEcho, setPreset });
+defineExpose({ revealSurface, applyLayoutEcho, setPreset, applyPresentationIntent });
 
 onBeforeUnmount(() => {
   clearInterval(presetTimer);

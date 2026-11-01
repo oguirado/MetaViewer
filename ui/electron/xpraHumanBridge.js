@@ -15,9 +15,11 @@ const identity = st => `${st.dev}:${st.ino}:${st.uid}:${st.mode}`;
  * This function never discovers capsules or accepts a renderer pathname.
  * expectedSocketUid is explicit: absence must never mean "current uid".
  * jquery is a host-supplied asset for Debian's missing client symlink.
- * @param {{viewRoot:string,capsule:string,expectedSocketUid:number,jquery?:Uint8Array}} options
+ * @param {{viewRoot:string,capsule:string,expectedSocketUid:number,jquery?:Uint8Array,keyboard?:{layout:string,keycodes:Record<string,number>}}} options
  */
-export async function openXpraHumanBridge({ viewRoot, capsule, expectedSocketUid, jquery }) {
+export async function openXpraHumanBridge({ viewRoot, capsule, expectedSocketUid, jquery, keyboard }) {
+  const patchKeyboard = keyboard ? (await import('./xpraKeyboard.js')).rawKeyboardPatch : undefined;
+  if (keyboard) patchKeyboard?.(keyboard); // Validate before opening any listener.
   if (!Number.isInteger(expectedSocketUid) || expectedSocketUid < 0 ||
       typeof viewRoot !== 'string' || resolve(viewRoot) !== viewRoot ||
       !/^srf-id-[a-z0-9-]+$/.test(capsule)) throw Error('XPRA_BINDING_REFUSED');
@@ -84,8 +86,12 @@ export async function openXpraHumanBridge({ viewRoot, capsule, expectedSocketUid
         res.end(jquery);
         return;
       }
+      const rawKeyboard = keyboard && req.url?.split('?')[0] === '/js/Client.js';
+      /** @type {import('node:http').OutgoingHttpHeaders} */
+      const requestHeaders = { ...headers(req.headers), host: authority };
+      if (rawKeyboard) requestHeaders['accept-encoding'] = 'identity';
       const upstream = http.request({ socketPath, path: req.url, method: 'GET',
-        headers: { ...headers(req.headers), host: authority } }, response => {
+        headers: requestHeaders }, response => {
         const outHeaders = { ...response.headers, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' };
         delete outHeaders['set-cookie'];
         // Do not allow an upstream redirect to navigate a privileged child view.
@@ -93,8 +99,18 @@ export async function openXpraHumanBridge({ viewRoot, capsule, expectedSocketUid
         if (status === undefined || (status >= 300 && status < 400)) {
           response.destroy(); res.writeHead(502).end(); return;
         }
-        res.writeHead(status, outHeaders);
-        response.pipe(res);
+        if (rawKeyboard && patchKeyboard && status === 200) {
+          if (response.headers['content-encoding'] && response.headers['content-encoding'] !== 'identity') {
+            response.destroy(); res.writeHead(502).end(); return;
+          }
+          delete outHeaders['content-length'];
+          res.writeHead(status, outHeaders);
+          response.pipe(res,{end:false});
+          response.on('end',()=>res.end(patchKeyboard(keyboard)));
+        } else {
+          res.writeHead(status, outHeaders);
+          response.pipe(res);
+        }
       });
       upstream.setTimeout(10000, () => upstream.destroy());
       upstream.on('socket', track);

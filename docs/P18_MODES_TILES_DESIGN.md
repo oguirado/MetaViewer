@@ -82,4 +82,45 @@ Packaging now includes the pinned kit decoder imported by the main layout bridge
 checks its transitive imports, and seals the staged kit bytes. The packaged layout
 smoke performs a renderer IPC save/load round trip in isolated user data.
 
+## R2
+
+The live refusal was an allocation mismatch in the previous dev fixture: it
+configured a private RAM root although the native browser frame sink uses its
+declared producer root. Human startup skips capture; switching to agent activates
+the existing frame-allocation gate and exposes the mismatch. The fixture now
+derives admission from that native declaration, and Capture retains its path
+gate with a fixed allocation-specific diagnostic. Main maps lowercase adapter
+faults to stable public codes and logs only an allowlist of fixed cause strings,
+including wrapped initial-capture failures. Other diagnostics are withheld.
+
+Switch shows its destination while closing and opening, then retires the ended
+Dockview pane so repeated switches retain the replacement tile's space. Its replay guard covers
+an acknowledged destroy followed by a create error, preserving the adapter code
+and leaving the old lifetime destroyed. An uncertain stop still blocks create.
+The persistent parent owns completion across an agent tile's unmount. Pane
+retirement waits for wall restore to settle and for the replacement to be admitted.
+Native browser Stop now requests window close through the window manager and
+requires a bounded browser-process release receipt before removal and lease release. This is needed
+because force removal discarded the synthetic cookie even when localStorage
+survived. Container termination alone also lost the cookie in the live check;
+it is not a profile-flush receipt. A missing browser-release receipt retains the lease.
+
+The shipped xpra HTML client uses a DOM keycode table with symbol fallback, which
+does not preserve Spanish dead keys and the ISO physical key. Main reads the
+app display's XKB physical positions at mount. The authenticated bridge streams
+the upstream Client.js and appends a raw-keyboard compatibility shim before the
+connection hello. It advertises the client layout and raw XKB keycodes; no glyph
+translation is performed. Capsule XKB composes accents, and duplicate browser
+IME text packets are suppressed. Readiness requires the raw-keyboard handshake
+marker. Unknown physical keys are dropped, and missing XKB metadata refuses
+mounting. There is no frame cache or persistent keyboard cache in main.
+
+Live fixtures operate only on the isolated dev display and its own identity.
+The file page checks localStorage. Chromium does not persist cookies on file or
+data origins, so the synthetic cookie check uses the fresh profile's reserved
+example.org origin and returns only whether the controlled marker matches.
+Keyboard input uses XTest physical positions from that display's XKB map;
+xdotool keysym lookup can select alternate Spanish levels and is not a faithful
+physical-key oracle.
+
 This design is limited to the supplied worktrees and their pinned contracts and UI kit.

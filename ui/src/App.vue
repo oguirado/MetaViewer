@@ -609,9 +609,28 @@ function onCapsuleMode(event) { capsuleModes.value = {...capsuleModes.value,[eve
 /** @param {string} surfaceId */
 async function revealOpenedIdentity(surfaceId) {
   for (let attempt = 0; attempt < 30 && hostActive; attempt++) {
-    if (wall.value?.revealSurface(surfaceId,'split')?.ok) { markPanelOpen(surfaceId); return; }
+    if (settled.value && wall.value?.revealSurface(surfaceId,'split')?.ok) { markPanelOpen(surfaceId); return true; }
     await new Promise(resolve => setTimeout(resolve,100));
   }
+  return false;
+}
+/** Remove the ended lifetime's pane only after the host acknowledged Stop/Switch.
+ * @param {string} surfaceId */
+function onCapsuleStopped(surfaceId) {
+  wall.value?.applyPresentationIntent?.({type:'close',capsuleId:surfaceId});
+  const modes = {...capsuleModes.value}; delete modes[surfaceId]; capsuleModes.value = modes;
+  closedPanels.value = closedPanels.value.filter(id => id !== surfaceId);
+}
+/** The tile may unmount on destroy before its replacement reply arrives.
+ * @param {{surfaceId:string,completion:Promise<any>}} event */
+function onCapsuleLifecycle({surfaceId,completion}) {
+  void submitHost(async () => {
+    const result = await completion;
+    if (!result.ok) throw Object.assign(Error(result.code),{code:result.code});
+    if (result.surfaceId && !await revealOpenedIdentity(result.surfaceId)) throw Object.assign(Error('TILE_REVEAL_UNPROVEN'),{code:'TILE_REVEAL_UNPROVEN'});
+    onCapsuleStopped(surfaceId);
+    return true;
+  });
 }
 const pendingModeSwitch = ref(/** @type {any} */ (null));
 async function confirmModeSwitch() {
@@ -620,7 +639,9 @@ async function confirmModeSwitch() {
   await submitHost(async () => {
     const result = await /** @type {any} */(globalThis).metaviewerRoles.switchMode(current.surfaceId);
     if (!result.ok) throw Object.assign(Error(result.code),{code:result.code});
-    void revealOpenedIdentity(result.surfaceId); return result;
+    await revealOpenedIdentity(result.surfaceId);
+    onCapsuleStopped(current.surfaceId);
+    return result;
   });
 }
 const closedPanels = ref(/** @type {string[]} */ ([]));
@@ -1243,7 +1264,7 @@ const chromeWorkspace = markRaw(defineComponent({
           :color-scheme="scheme === 'mv-dark' ? 'dark' : 'light'" :density="density" @ready="onWallReady" @wall-settled="onWorkspaceSettled" @activate-surface="selectCapsule" @panel-closed="onPanelClosed" @submit-intent="onWallIntent">
           <template #surface="{ surface, capsuleId }">
             <template v-if="surface && (!multislotOpen || capsuleId !== selectedSurface?.id)">
-            <RoleSurface :surface-id="capsuleId" :control="surface.control" @mode="onCapsuleMode" @reveal="revealOpenedIdentity">
+            <RoleSurface :surface-id="capsuleId" :control="surface.control" @mode="onCapsuleMode" @lifecycle="onCapsuleLifecycle">
             <div v-if="wallInputState(surface) !== ''" class="mv-input-indicator" :data-input-state="wallInputState(surface)" :data-semantic-anchor="`capsule/${capsuleId}/input`">
               <UiButton v-if="wallInputState(surface) === 'view'" :id="`mv-input-take-${capsuleId}`" :data-semantic-anchor="`capsule/${capsuleId}/input/take`" class="mv-input-indicator__action" label="Take control" :aria-label="`Take control of ${surfaceLabel(surface)}`" @click="takeWallControl(surface)" />
               <span v-if="wallInputRefusal[capsuleId] && wallInputState(surface) === 'view'" class="mv-input-indicator__text mv-input-indicator__refusal" role="status">{{ wallInputRefusal[capsuleId] }}</span>

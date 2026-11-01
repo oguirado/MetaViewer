@@ -21,6 +21,30 @@ const CHANNEL = 'metaviewer:roles.v0.3';
 const id = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value);
 /** @param {string} code */
 const refuse = code => Object.assign(new Error(code), {code});
+// Adapter details can contain native diagnostics. Log only fixed protocol text.
+const createDetails = new Set([
+  'profile already bound', 'surface capacity or unresolved native outcome',
+  'human mode requires 1280x900 browser', 'unadmitted profile, kind or geometry',
+  'private opening directory required', 'private opening request required',
+  'opening mode refused', 'native operation has no verified result',
+  'native frame identity, time or allocation mismatch', 'native frame allocation mismatch',
+]);
+/** @param {any} reply */
+export function surfaceCreateRefusal(reply) {
+  const raw = reply?.data?.code;
+  const code = typeof raw === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(raw) ? raw : 'unknown';
+  const rawDetail = reply?.data?.detail;
+  // wireFailure may wrap a Fault in a compensated initial-capture error. Emit
+  // its fixed cause only, never the wrapper's surface identity or native text.
+  const detail = typeof rawDetail === 'string' && rawDetail.length <= 65536
+    ? [...createDetails].find(text => rawDetail === text || rawDetail.includes(': ' + text)) || 'withheld' : 'withheld';
+  console.info(`METAVIEWER_SURFACE_CREATE_REFUSED code=${code} detail=${detail}`);
+  if (/^[A-Z][A-Z0-9_]{0,63}$/.test(code)) return code;
+  if (code === 'binding' && detail === 'profile already bound') return 'PROFILE_ALREADY_BOUND';
+  if (code === 'uncertain' && detail === 'surface capacity or unresolved native outcome') return 'SURFACE_CAPACITY_OR_QUARANTINE';
+  if (code === 'identity_unavailable') return 'IDENTITY_UNAVAILABLE';
+  return /^[a-z][a-z0-9_]{0,55}$/.test(code) && code !== 'unknown' ? 'ADAPTER_' + code.toUpperCase() : 'SURFACE_CREATE_REFUSED';
+}
 /** @param {any} v @param {string} keys */
 const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v) &&
   Reflect.ownKeys(v).sort().join(',') === keys && Object.values(Object.getOwnPropertyDescriptors(v)).every(d => 'value' in d);
@@ -71,7 +95,7 @@ export function runHumanMode({tool, stateDir, container, readonly, env}) {
 /** Renderer gets only role, profile ids, state, and opaque success. */
 /** @param {any} options */
 export function installRoleHost({electron, window, core, env, capsuleStates, admit,
-  listIdentities, keyboardLayout = () => hostKeyboardLayout({...process.env,...env}), stageMode = stageOpeningMode, mode = runHumanMode, bridgeFactory = openXpraHumanBridge, tileFactory = attachXpraHumanTile}) {
+  listIdentities, keyboardLayout, keyboardMap, stageMode = stageOpeningMode, mode = runHumanMode, bridgeFactory = openXpraHumanBridge, tileFactory = attachXpraHumanTile}) {
   const {ipcMain} = electron;
   const raw = env.MV_SRF_PROFILES ? JSON.parse(env.MV_SRF_PROFILES) : {};
   const profiles = configuredProfiles(env);
@@ -138,7 +162,11 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
         try { const s = authoritative(surfaceId); return !disposed && epochs.get(surfaceId) === epoch && sessions.has(surfaceId) &&
           roleFor(s) === role && s.control === (role === 'human' ? 'human' : 'agent'); } catch { return false; }
       };
-      const clientKeyboardLayout = await keyboardLayout();
+      const clientKeyboardLayout = await (keyboardLayout ? keyboardLayout() : hostKeyboardLayout({...process.env,...env}));
+      // Load physical keyboard support only for a mounted role view, keeping
+      // production main startup's memory surface unchanged.
+      const keycodes = keyboardMap ? await keyboardMap() : !keyboardLayout
+        ? await (await import('./xpraKeyboard.js')).hostPhysicalKeycodes({...process.env,...env}) : undefined;
       const recorder = trace;
       const dummyTrace = {record(){return false;}, setActive(){}};
       const session = createXpraHumanSession({role,
@@ -153,10 +181,11 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
           let jquery;
           try { jquery = await readFile(env.MV_XPRA_JQUERY || '/usr/share/javascript/jquery/jquery.js'); }
           catch (error) { if (env.MV_XPRA_JQUERY || /** @type {any} */ (error)?.code !== 'ENOENT') throw error; }
-          return bridgeFactory({viewRoot:join(env.MV_SRF_STATE_DIR,'view'),capsule:binding.container,expectedSocketUid:10001,jquery});
+          return bridgeFactory({viewRoot:join(env.MV_SRF_STATE_DIR,'view'),capsule:binding.container,expectedSocketUid:10001,jquery,
+            keyboard:keycodes ? {layout:clientKeyboardLayout,keycodes} : undefined});
         },
         showView: (bridge, recoverBridge) => tileFactory({electron,window,bridge,bounds,recoverBridge,
-          trace:recorder || dummyTrace,isActive:active,writable:role === 'human',
+          trace:recorder || dummyTrace,isActive:active,writable:role === 'human',rawKeyboard:!!keycodes,
           capsuleSize:() => ({width:1280,height:900}),
           clientQuery:xpraClientQuery(role === 'human',clientKeyboardLayout),
           onState: (/** @type {string} */ state) => {
@@ -219,7 +248,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       capsuleStates.set(key,{profile_id:profile.id,state:'creating'});
       clearMode = await stageMode(env.MV_SRF_STATE_DIR, profile.id, choice.role);
       const reply = await core.request(profile.request);
-      if (reply?.schema !== 'surface_event/v0.2' || reply.event !== 'created') throw refuse(typeof reply?.data?.code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(reply.data.code) ? reply.data.code : 'SURFACE_CREATE_REFUSED');
+      if (reply?.schema !== 'surface_event/v0.2' || reply.event !== 'created') throw refuse(surfaceCreateRefusal(reply));
       const surface = reply.data.surface;
       if (surface.profile_id !== profile.id || surface.state !== 'active' || surface.control !== choice.role) throw refuse('CAPSULE_MODE_UNPROVEN');
       openingRoles.set(surface.surface_id,choice.role);
