@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"metaviewer/daemon-adapter/internal/capsule"
+	"metaviewer/daemon-adapter/internal/cli"
 	"metaviewer/daemon-adapter/internal/frames"
 	"metaviewer/daemon-adapter/internal/ipc"
 )
@@ -119,7 +120,7 @@ func newPair(t *testing.T) *pairFixture {
 			return ramMemory{total: 121 * 1024 * 1024}, nil
 		}
 		return ramMemory{available: f.available, total: 121 * 1024 * 1024}, f.readErr
-	})
+	}, f.profiles)
 	return f
 }
 func (f *pairFixture) call(t *testing.T, op string, params any) []json.RawMessage {
@@ -246,7 +247,7 @@ func TestRAMAdmissionParserAndBoundary(t *testing.T) {
 	} {
 		t.Run(host.name, func(t *testing.T) {
 			for _, live := range []int{0, 1, 2} {
-				n := host.floor + ramReserveKB*uint64(live)
+				n := host.floor + ramReserveKB*(uint64(live)+1)
 				path := filepath.Join(t.TempDir(), "meminfo")
 				read := func() (ramMemory, error) { return readMemoryKB(path) }
 				for _, available := range []uint64{n, n - 1} {
@@ -324,7 +325,7 @@ func (r admissionRunner) Run(_ context.Context, args []string, _ []byte) ([]byte
 	if _, err := rand.Read(random[:]); err != nil {
 		return nil, err
 	}
-	return []byte(fmt.Sprintf(`{"container":"srf-id-%x","run_id":"run","windows":[{"id":"w1","w":2,"h":1}]}`, random)), nil
+	return []byte(fmt.Sprintf(`{"container":"srf-id-%x","run_id":"run-%x","windows":[{"id":"w1","w":2,"h":1}]}`, random, random)), nil
 }
 func bareAdmissionManager(t *testing.T, orphan bool) (*capsule.Manager, ipc.Handler) {
 	t.Helper()
@@ -333,10 +334,11 @@ func bareAdmissionManager(t *testing.T, orphan bool) (*capsule.Manager, ipc.Hand
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(root) })
-	m, err := capsule.NewManager(capsule.Config{BinDir: t.TempDir(), Profiles: map[string]capsule.Profile{
+	profiles := map[string]capsule.Profile{
 		"pair-a": {Kind: "browser", NativeKind: "browser", RAMRoot: root, Display: ":100", Width: 2, Height: 1},
 		"pair-b": {Kind: "browser", NativeKind: "browser", RAMRoot: root, Display: ":101", Width: 2, Height: 1},
-	}, MaxSurfaces: 16, MaxOutputBytes: 8192, Timeout: time.Second, OriginNS: 1}, admissionRunner{orphan: orphan}, monotonic)
+	}
+	m, err := capsule.NewManager(capsule.Config{BinDir: t.TempDir(), Profiles: profiles, MaxSurfaces: 16, MaxOutputBytes: 8192, Timeout: time.Second, OriginNS: 1}, admissionRunner{orphan: orphan}, monotonic)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,8 +352,8 @@ func bareAdmissionManager(t *testing.T, orphan bool) (*capsule.Manager, ipc.Hand
 		return events, nil
 	}
 	return m, admittedHandler(m, next, func() (ramMemory, error) {
-		return ramMemory{available: ramFloorKB + ramReserveKB - 1, total: 121 * 1024 * 1024}, nil
-	})
+		return ramMemory{available: ramFloorKB + 2*ramReserveKB - 1, total: 121 * 1024 * 1024}, nil
+	}, profiles)
 }
 func admissionCreate(h ipc.Handler, profile string) []json.RawMessage {
 	body, _ := json.Marshal(map[string]any{"schema": "surface_request/v0.2", "op": "create", "params": map[string]any{"kind": "browser", "profile_id": profile, "geometry": map[string]int{"w": 2, "h": 1}}})
@@ -451,5 +453,169 @@ func TestReservationProfileSuffixAndUnsafeName(t *testing.T) {
 	entries, err = os.ReadDir(dir)
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("released reservation: %v %v", entries, err)
+	}
+}
+
+// Constants in this table are independent of production reserve/floor constants.
+func TestRAMAdmissionJudgeTable(t *testing.T) {
+	old := admissionMemory
+	t.Cleanup(func() { admissionMemory = old })
+	for _, totalGiB := range []uint64{8, 12, 16, 32, 121} {
+		for live := 0; live <= 3; live++ {
+			t.Run(fmt.Sprintf("%dGiB/%d-incumbents", totalGiB, live), func(t *testing.T) {
+				total := totalGiB * 1024 * 1024
+				floor := min(uint64(20*1024*1024), total/4)
+				needed := floor + 4*1024*1024*uint64(live+1)
+				admissionMemory = func() (ramMemory, error) { return ramMemory{total: total, available: total}, nil }
+				err := checkRAM(admissionMemory, live)
+				if (err == nil) != (total >= needed) {
+					t.Fatalf("judge admission: needed=%d MiB available=%d MiB err=%v", needed/1024, total/1024, err)
+				}
+				// Force a numeric refusal even on hosts whose full capacity admits.
+				available := min(total, needed-1024)
+				admissionMemory = func() (ramMemory, error) { return ramMemory{total: total, available: available}, nil }
+				err = checkRAM(admissionMemory, live)
+				want := fmt.Sprintf("host MemAvailable below floor plus capsule reserves: needed %d MiB (floor %d MiB + reserve 4096 MiB x (%d incumbents + 1)), available %d MiB, total %d MiB, incumbents %d", needed/1024, floor/1024, live, available/1024, total/1024, live)
+				var fault *cli.Fault
+				if !errors.As(err, &fault) || fault.Code != "RAM_ADMISSION_REFUSED" || fault.Detail != want {
+					t.Fatalf("numeric refusal: got %v want %s", err, want)
+				}
+				t.Logf("needed=%d MiB capacity=%d MiB admit=%t", needed/1024, total/1024, total >= needed)
+			})
+		}
+	}
+	// Verify on the GB10 (121 GiB) that four capsules sequentially admit through the full handler.
+	t.Run("GB10-four-capsules", func(t *testing.T) {
+		t.Setenv("MV_RAM_ADMISSION_DIR", filepath.Join(t.TempDir(), "gb10"))
+		root, err := os.MkdirTemp("/dev/shm", "mv-gb10-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(root) })
+		profiles := map[string]capsule.Profile{}
+		for i := 1; i <= 4; i++ {
+			id := fmt.Sprintf("mv-live-%d", i)
+			profiles[id] = capsule.Profile{Kind: "browser", NativeKind: "browser", RAMRoot: root, Display: fmt.Sprintf(":%d", 99+i), Width: 2, Height: 1}
+		}
+		m, err := capsule.NewManager(capsule.Config{BinDir: t.TempDir(), Profiles: profiles, MaxSurfaces: 16, MaxOutputBytes: 8192, Timeout: time.Second, OriginNS: 1}, admissionRunner{}, monotonic)
+		if err != nil {
+			t.Fatal(err)
+		}
+		next := func(ctx context.Context, e ipc.Envelope) ([]json.RawMessage, error) {
+			var q capsule.Request
+			_ = json.Unmarshal(e.Body, &q)
+			events, err := m.Handle(ctx, q)
+			if err != nil {
+				return wireFailure(e, q, err)
+			}
+			return events, nil
+		}
+		h := admittedHandler(m, next, func() (ramMemory, error) {
+			return ramMemory{available: 121 * 1024 * 1024, total: 121 * 1024 * 1024}, nil
+		}, profiles)
+		for i := 1; i <= 4; i++ {
+			id := fmt.Sprintf("mv-live-%d", i)
+			if out := admissionCreate(h, id); !strings.Contains(string(out[0]), `"event":"created"`) {
+				t.Fatalf("GB10 capsule %d (%s) refused: %s", i, id, out)
+			}
+		}
+	})
+	// Verify an 8 GiB host admits the first capsule and refuses the second before Docker.
+	t.Run("8GiB-second-refused-before-docker", func(t *testing.T) {
+		f := newPair(t)
+		f.available = 8 * 1024 * 1024
+		m := capsuleMustManager(t, f)
+		next := func(ctx context.Context, e ipc.Envelope) ([]json.RawMessage, error) {
+			var q capsule.Request
+			_ = json.Unmarshal(e.Body, &q)
+			events, err := m.Handle(ctx, q)
+			if err != nil {
+				return wireFailure(e, q, err)
+			}
+			return events, nil
+		}
+		f.h = admittedHandler(m, next, func() (ramMemory, error) {
+			return ramMemory{available: 8 * 1024 * 1024, total: 8 * 1024 * 1024}, nil
+		}, f.profiles)
+		out1 := admissionCreate(f.h, "pair-a")
+		if !strings.Contains(string(out1[0]), `"event":"created"`) || f.native.starts != 1 {
+			t.Fatalf("8GiB first capsule failed: %s starts=%d", out1, f.native.starts)
+		}
+		out2 := admissionCreate(f.h, "pair-b")
+		if len(out2) != 1 || !strings.Contains(string(out2[0]), `"code":"RAM_ADMISSION_REFUSED"`) || !strings.Contains(string(out2[0]), "needed 10240 MiB") || f.native.starts != 1 {
+			t.Fatalf("8GiB second capsule was not refused before Docker: %s starts=%d", out2, f.native.starts)
+		}
+	})
+}
+
+func capsuleMustManager(t *testing.T, f *pairFixture) *capsule.Manager {
+	t.Helper()
+	m, err := capsule.NewManager(capsule.Config{BinDir: t.TempDir(), Profiles: f.profiles, MaxSurfaces: 16, MaxOutputBytes: 8192, Timeout: time.Second, OriginNS: 1}, f.native, monotonic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+func TestRAMAdmissionProfileCost(t *testing.T) {
+	f := newPair(t)
+	SetProfileMemoryMiB("pair-a", 8192)
+	t.Cleanup(func() { SetProfileMemoryMiB("pair-a", 0) })
+	f.available = ramFloorKB + 8192*1024 - 1
+	out := f.call(t, "create", map[string]any{"kind": "browser", "profile_id": "pair-a", "geometry": map[string]int{"w": 2, "h": 1}})
+	if len(out) != 1 || !strings.Contains(string(out[0]), "reserve 8192 MiB") || f.native.starts != 0 {
+		t.Fatalf("profile ceiling ignored: %s", out)
+	}
+	f.available++
+	f.create(t, "pair-a")
+	out = f.call(t, "create", map[string]any{"kind": "browser", "profile_id": "pair-b", "geometry": map[string]int{"w": 2, "h": 1}})
+	if len(out) != 1 || !strings.Contains(string(out[0]), "reserve 8192 MiB") {
+		t.Fatalf("incumbent profile ceiling ignored: %s", out)
+	}
+	SetProfileMemoryMiB("pair-b", 1024)
+	t.Cleanup(func() { SetProfileMemoryMiB("pair-b", 0) })
+	if profileReserveKB("pair-b") != 1024*1024 {
+		t.Fatal("declared profile ceiling ignored")
+	}
+}
+
+func TestRAMAdmissionSHMBeforeCreate(t *testing.T) {
+	old := admissionStatfs
+	t.Cleanup(func() { admissionStatfs = old })
+	for _, freeMiB := range []uint64{511, 512} {
+		t.Run(fmt.Sprint(freeMiB), func(t *testing.T) {
+			f := newPair(t)
+			admissionStatfs = func(fd int, st *syscall.Statfs_t) error {
+				if _, err := os.Stat(fmt.Sprintf("/proc/self/fd/%d", fd)); err != nil {
+					return err
+				}
+				st.Type = 0x01021994
+				st.Bsize = 4096
+				st.Bavail = freeMiB * 256
+				return nil
+			}
+			out := f.call(t, "create", map[string]any{"kind": "browser", "profile_id": "pair-a", "geometry": map[string]int{"w": 2, "h": 1}})
+			if freeMiB < 512 {
+				if len(out) != 1 || !strings.Contains(string(out[0]), `"code":"SHM_ADMISSION_REFUSED"`) || !strings.Contains(string(out[0]), "free 511 MiB, needed 512 MiB") || f.native.starts != 0 {
+					t.Fatalf("missing shm check before native create: %s starts=%d", out, f.native.starts)
+				}
+			} else if len(out) != 2 || f.native.starts != 1 {
+				t.Fatalf("shm boundary refused: %s", out)
+			}
+		})
+	}
+	if checkSHMFree(0, 4096) == nil || checkSHMFree(^uint64(0), 4096) == nil || checkSHMFree(1, 0) == nil {
+		t.Fatal("invalid/empty shm admitted")
+	}
+	if err := checkSHM(filepath.Join(t.TempDir(), "missing")); err == nil || capsule.WireCode(err) != "SHM_ADMISSION_REFUSED" {
+		t.Fatalf("unreadable shm admitted or untyped: %v", err)
+	}
+	admissionStatfs = func(_ int, _ *syscall.Statfs_t) error { return errors.New("probe failed") }
+	if err := checkSHM(t.TempDir()); err == nil || capsule.WireCode(err) != "SHM_ADMISSION_REFUSED" {
+		t.Fatalf("failed fstatfs admitted or untyped: %v", err)
+	}
+	admissionStatfs = func(_ int, st *syscall.Statfs_t) error { st.Type = 1; return nil }
+	if err := checkSHM(t.TempDir()); err == nil || capsule.WireCode(err) != "SHM_ADMISSION_REFUSED" {
+		t.Fatalf("non-tmpfs admitted or untyped: %v", err)
 	}
 }

@@ -3,8 +3,13 @@ package daemon
 // [TARGET, unit decision] Serialize native creates and destroys on the one core
 // connection and across processes using a shared directory flock. Admission reads host
 // MemAvailable before create and after initial capture. Floor: min(20 GiB,
-// MemTotal/4) [TARGET, conductor decision]; reserve: 512 MiB per incumbent
-// [TARGET], matching the frame budget.
+// MemTotal/4) [TARGET, conductor decision]; reserve: 4 GiB per capsule [CITED,
+// native Docker ceiling], including the incoming capsule, or a declared profile
+// ceiling via ProfileMemoryMiB [TARGET, unit decision]; mixed profiles use the
+// largest declared cost among the incoming and recorded profiles; unknown or
+// legacy zero-byte records retain the default ceiling. Before native spawn,
+// fstatfs the profile RAM root and refuse with SHM_ADMISSION_REFUSED when free
+// tmpfs space is below the 512 MiB [CITED] frame budget [TARGET, unit decision].
 // Failed post-checks compensate only the new surface; rollback errors stay visible.
 import (
 	"context"
@@ -30,15 +35,62 @@ import (
 )
 
 const ramFloorKB uint64 = 20 * 1024 * 1024
-const ramReserveKB uint64 = 512 * 1024
+const ramReserveKB uint64 = 4 * 1024 * 1024
+const shmNeededKB uint64 = 512 * 1024
+const shmAdmissionRefusedCode = "SHM_ADMISSION_REFUSED"
 
 // Test seam: installed before tests run; production reads one /proc/meminfo
 // snapshot per check. There is no environment override for memory accounting.
 var admissionMemory = hostMemoryKB
 
+// Test seam for the descriptor-based production tmpfs probe.
+var admissionStatfs = syscall.Fstatfs
+
 // createGrace is the test seam of createQuitGrace; zero reproduces the legacy
 // behavior in which a cancelled session group-SIGKILLs an in-flight create.
 var createGrace = createQuitGrace
+
+var (
+	profileMemoryMu  sync.RWMutex
+	profileMemoryMiB = map[string]uint64{}
+)
+
+// SetProfileMemoryMiB registers an optional per-profile RAM ceiling in MiB
+// (zero clears the override so the profile reverts to the 4 GiB default).
+func SetProfileMemoryMiB(profileID string, memoryMiB uint64) {
+	profileMemoryMu.Lock()
+	defer profileMemoryMu.Unlock()
+	if memoryMiB == 0 {
+		delete(profileMemoryMiB, profileID)
+	} else {
+		profileMemoryMiB[profileID] = memoryMiB
+	}
+}
+
+// ProfileMemoryMiB returns the declared per-profile RAM ceiling in MiB, or 0 for default.
+func ProfileMemoryMiB(profileID string) uint64 {
+	profileMemoryMu.RLock()
+	defer profileMemoryMu.RUnlock()
+	return profileMemoryMiB[profileID]
+}
+
+func profileReserveKB(profileID string) uint64 {
+	mib := ProfileMemoryMiB(profileID)
+	if mib == 0 {
+		return ramReserveKB
+	}
+	if mib > ^uint64(0)/1024 {
+		return ^uint64(0)
+	}
+	return mib * 1024
+}
+
+func profileRAMRoot(profiles map[string]capsule.Profile, profileID string) (string, bool) {
+	if p, ok := profiles[profileID]; ok {
+		return p.RAMRoot, true
+	}
+	return "", false
+}
 
 type ramMemory struct {
 	available uint64
@@ -83,14 +135,82 @@ func parseMemoryKB(data []byte) (ramMemory, error) {
 	return memory, nil
 }
 
-func checkRAM(read func() (ramMemory, error), live int) error {
-	memory, err := read()
+func admissionNeededKB(memory ramMemory, live int, reserve uint64) (uint64, error) {
 	floor := min(ramFloorKB, memory.total/4)
-	if err != nil || memory.total == 0 || memory.available > memory.total || live < 0 || uint64(live) > (^uint64(0)-floor)/ramReserveKB || memory.available < floor+ramReserveKB*uint64(live) {
-		return &cli.Fault{Code: "RAM_ADMISSION_REFUSED", Detail: "host MemAvailable below floor plus incumbent reserves, or unreadable"}
+	if memory.total == 0 || memory.available > memory.total || live < 0 || reserve == 0 || uint64(live) >= (^uint64(0)-floor)/reserve {
+		return 0, fmt.Errorf("invalid host memory or reservation accounting")
+	}
+	return floor + reserve*(uint64(live)+1), nil
+}
+
+func checkRAM(read func() (ramMemory, error), live int, reserves ...uint64) error {
+	memory, err := read()
+	if err != nil {
+		return &cli.Fault{Code: "RAM_ADMISSION_REFUSED", Detail: "host /proc/meminfo unreadable: " + err.Error()}
+	}
+	reserve := ramReserveKB
+	if len(reserves) > 0 {
+		reserve = reserves[0]
+	}
+	needed, err := admissionNeededKB(memory, live, reserve)
+	if err != nil {
+		return admissionFault(err)
+	}
+	if memory.available < needed {
+		floor := min(ramFloorKB, memory.total/4)
+		return &cli.Fault{
+			Code: "RAM_ADMISSION_REFUSED",
+			Detail: fmt.Sprintf(
+				"host MemAvailable below floor plus capsule reserves: needed %d MiB (floor %d MiB + reserve %d MiB x (%d incumbents + 1)), available %d MiB, total %d MiB, incumbents %d",
+				(needed+1023)/1024, floor/1024, reserve/1024, live, memory.available/1024, memory.total/1024, live,
+			),
+		}
 	}
 	return nil
 }
+
+func checkSHM(root string) error {
+	f, err := os.Open(root)
+	if err != nil {
+		return &cli.Fault{
+			Code:   shmAdmissionRefusedCode,
+			Detail: fmt.Sprintf("profile RAM root %q unreadable: %v; ensure /dev/shm is mounted as writable tmpfs with >= %d MiB free", root, err, shmNeededKB/1024),
+		}
+	}
+	defer f.Close()
+	var st syscall.Statfs_t
+	if err := admissionStatfs(int(f.Fd()), &st); err != nil {
+		return &cli.Fault{
+			Code:   shmAdmissionRefusedCode,
+			Detail: fmt.Sprintf("profile RAM root fstatfs failed: %v; ensure /dev/shm is mounted as tmpfs with >= %d MiB free", err, shmNeededKB/1024),
+		}
+	}
+	if st.Type != 0x01021994 {
+		return &cli.Fault{
+			Code:   shmAdmissionRefusedCode,
+			Detail: fmt.Sprintf("profile RAM root must be tmpfs (magic 0x01021994): remount /dev/shm as tmpfs with >= %d MiB free", shmNeededKB/1024),
+		}
+	}
+	return checkSHMFree(st.Bavail, uint64(st.Bsize))
+}
+
+func checkSHMFree(blocks, blockSize uint64) error {
+	if blockSize == 0 || blocks > ^uint64(0)/blockSize {
+		return &cli.Fault{
+			Code:   shmAdmissionRefusedCode,
+			Detail: fmt.Sprintf("invalid profile RAM root free space; ensure /dev/shm has >= %d MiB free", shmNeededKB/1024),
+		}
+	}
+	freeKB := blocks * blockSize / 1024
+	if freeKB < shmNeededKB {
+		return &cli.Fault{
+			Code:   shmAdmissionRefusedCode,
+			Detail: fmt.Sprintf("profile RAM root (/dev/shm) free %d MiB, needed %d MiB; free space in /dev/shm or increase tmpfs size and retry", freeKB/1024, shmNeededKB/1024),
+		}
+	}
+	return nil
+}
+
 func validateProfileRoots(profiles map[string]capsule.Profile) error {
 	roots := []string{}
 	for _, p := range profiles {
@@ -109,9 +229,13 @@ func validateProfileRoots(profiles map[string]capsule.Profile) error {
 	return nil
 }
 func wireHandler(m *capsule.Manager, profiles map[string]capsule.Profile, pubs map[string]*frames.Publisher, origin uint64, recorders ...*record.Manager) ipc.Handler {
-	return admittedHandler(m, wireHandlerWithoutAdmission(m, profiles, pubs, origin, recorders...), admissionMemory)
+	return admittedHandler(m, wireHandlerWithoutAdmission(m, profiles, pubs, origin, recorders...), admissionMemory, profiles)
 }
-func admittedHandler(m *capsule.Manager, next ipc.Handler, read func() (ramMemory, error)) ipc.Handler {
+func admittedHandler(m *capsule.Manager, next ipc.Handler, read func() (ramMemory, error), profileConfigs ...map[string]capsule.Profile) ipc.Handler {
+	var profiles map[string]capsule.Profile
+	if len(profileConfigs) > 0 {
+		profiles = profileConfigs[0]
+	}
 	var mu sync.Mutex
 	token := make([]byte, 16)
 	_, tokenErr := rand.Read(token)
@@ -156,14 +280,32 @@ func admittedHandler(m *capsule.Manager, next ipc.Handler, read func() (ramMemor
 				foreign++
 			}
 		}
-		if err := checkRAM(read, live); err != nil {
-			return wireFailure(e, q, withReclaimHint(err, live, foreign))
-		}
 		var params struct {
 			ProfileID string `json:"profile_id"`
 		}
 		if err := json.Unmarshal(q.Params, &params); err != nil {
 			return wireFailure(e, q, err)
+		}
+		reserve := profileReserveKB(params.ProfileID)
+		for _, entry := range entries {
+			_, id, found := strings.Cut(entry.Name(), "--")
+			cost := ramReserveKB
+			if found {
+				cost = profileReserveKB(id)
+			}
+			reserve = max(reserve, cost)
+		}
+		if err := checkRAM(read, live, reserve); err != nil {
+			return wireFailure(e, q, withReclaimHint(err, live, foreign))
+		}
+		if root, ok := profileRAMRoot(profiles, params.ProfileID); ok {
+			if err := checkSHM(root); err != nil {
+				return wireFailure(e, q, err)
+			}
+		} else {
+			if err := checkSHM("/dev/shm"); err != nil {
+				return wireFailure(e, q, err)
+			}
 		}
 		reserved := m.AdmissionProfiles()
 		reserved[params.ProfileID] = true
@@ -199,7 +341,7 @@ func admittedHandler(m *capsule.Manager, next ipc.Handler, read func() (ramMemor
 		if id == "" {
 			return events, nil
 		}
-		if err := checkRAM(read, live); err != nil {
+		if err := checkRAM(read, live, reserve); err != nil {
 			params, _ := json.Marshal(map[string]string{"surface_id": id})
 			body, _ := json.Marshal(capsule.Request{Schema: q.Schema, Op: "destroy", Params: params})
 			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
