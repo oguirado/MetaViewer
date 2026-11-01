@@ -1,0 +1,1 @@
+- Revert the packaged kit staging for layout save: it broke the hosted js job (MUT-STAGED-IMPORT, clean-install leg); layout save in the packaged app returns with a staging that keeps those checks green.
