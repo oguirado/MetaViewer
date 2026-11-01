@@ -2399,6 +2399,9 @@ export async function packageShell(env = process.env) {
     for (const name of ['src', 'index.html', 'vite.config.js', 'electron']) {
       await fs.cp(join(ui, name), join(builder, name), { recursive: true });
     }
+    // vite.config.js imports this build-time plugin; the builder needs it too.
+    await fs.mkdir(join(builder, 'tools'));
+    await fs.copyFile(join(ui, 'tools/kitQuarantineReason.js'), join(builder, 'tools/kitQuarantineReason.js'));
     await fs.copyFile(join(ui, 'package.json'), join(builder, 'package.json'));
     await fs.symlink(join(ui, 'node_modules'), join(builder, 'node_modules'), 'dir');
     await syncKit({ kitRepo: env.CAPSULE_UI_KIT_REPO,
