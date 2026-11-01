@@ -19,16 +19,16 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 1,451 | 55 | 1,396 |
-| Lanes finished OK | 1,451 | 55 | 1,396 |
-| Agent steps | 56,840 | 2,705 | 54,135 |
-| Lane-hours of agent work | 134.6 | 5.2 | 129.3 |
-| Fresh input tokens | 226,573,754 | 11,482,034 | 215,091,720 |
-| Cache-read input tokens | 4,230,675,109 | 226,255,212 | 4,004,419,897 |
+| Lanes launched | 1,452 | 55 | 1,397 |
+| Lanes finished OK | 1,452 | 55 | 1,397 |
+| Agent steps | 56,881 | 2,705 | 54,176 |
+| Lane-hours of agent work | 134.6 | 5.2 | 129.4 |
+| Fresh input tokens | 226,677,549 | 11,482,034 | 215,195,515 |
+| Cache-read input tokens | 4,233,216,062 | 226,255,212 | 4,006,960,850 |
 | Prompt cache hit % | 94.9 | 95.2 | 94.9 |
-| Output tokens | 45,354,219 | 2,135,708 | 43,218,511 |
-| Thinking tokens | 26,927,394 | 1,050,039 | 25,877,355 |
-| Cost (USD) | 40.1895 | 2.0279 | 38.1617 |
+| Output tokens | 45,375,383 | 2,135,708 | 43,239,675 |
+| Thinking tokens | 26,941,133 | 1,050,039 | 25,891,094 |
+| Cost (USD) | 40.2092 | 2.0279 | 38.1814 |
 | Cost per lane (USD) | 0.0277 | 0.0369 | 0.0273 |
 
 Rooms: 136. Peak concurrent lanes [MEASURED from lane start/end]: 42.
@@ -38,7 +38,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 1062 | 93.9 | 23.942 |
+| build | 1063 | 94.0 | 23.9617 |
 | context | 42 | 95.9 | 1.9093 |
 | context packs + test ideation (U-DEC-0139) | 13 | 91.1 | 0.2195 |
 | demo | 4 | 90.7 | 0.0557 |
@@ -86,7 +86,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 724 | 93.9 | 15.6635 | direct Muse job |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 725 | 93.9 | 15.6832 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -1652,6 +1652,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | 25755_rev_MDISP-FIX_b | fill_025755_rev_MDISP-FIX_b | Nov 01 02:58 | yes | 13 | 89.8 | 0.008009 |
 | direct-direct | 25755_rev_STALE-FRAME_a | fill_025755_rev_STALE-FRAME_a | Nov 01 02:59 | yes | 10 | 86.0 | 0.006793 |
 | direct-direct | 25755_rev_STALE-FRAME_b | fill_025755_rev_STALE-FRAME_b | Nov 01 02:59 | yes | 13 | 89.9 | 0.007812 |
+| direct-direct | ALE-FRAME_a | r1x_STALE-FRAME_a | Nov 01 02:59 | yes | 41 | 96.1 | 0.019694 |
 | direct-direct | ALE-FRAME_b | r1x_STALE-FRAME_b | Nov 01 02:59 | yes | 26 | 93.8 | 0.01417 |
 | direct-direct | 25907_rev_MDISP-FIX_a | fill_025907_rev_MDISP-FIX_a | Nov 01 03:00 | yes | 11 | 88.7 | 0.006219 |
 | direct-direct | 25907_rev_MDISP-FIX_b | fill_025907_rev_MDISP-FIX_b | Nov 01 03:00 | yes | 10 | 77.9 | 0.007968 |
