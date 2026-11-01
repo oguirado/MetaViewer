@@ -1186,6 +1186,7 @@ ask-1edde6c4a61b	tests/e2e/fixtures/mw_gemini/site/workflows/ask.json
 README-5c8f39a4517a	tests/e2e/fixtures/mw_perplexity/README.md
 packaged-answer.html	tests/e2e/fixtures/mw_perplexity/packaged/answer.html
 packaged-home.html	tests/e2e/fixtures/mw_perplexity/packaged/home.html
+home_focus.html	tests/e2e/fixtures/mw_perplexity/packaged/home_focus.html
 packaged-login.html	tests/e2e/fixtures/mw_perplexity/packaged/login.html
 answer-d074a0f4a694	tests/e2e/fixtures/mw_perplexity/pages/answer.html
 captcha-e95abc415571	tests/e2e/fixtures/mw_perplexity/pages/captcha.html
@@ -1321,8 +1322,10 @@ test_mv_demo.py	tests/test_mv_demo.py
 test_mv_demo_flow.py	tests/test_mv_demo_flow.py
 test_mv_identity.py	tests/test_mv_identity.py
 testmvr-a9d3d841457c	tests/test_mv_ram_admission.py
+test_mw_e1_receipt.py	tests/test_mw_e1_receipt.py
 test_mw_home_cli.py	tests/test_mw_home_cli.py
 testmwr-cf2f3fed6e97	tests/test_mw_run_backend.py
+testmws-8fd51d7e49a9	tests/test_mw_stale_frame.py
 test_net_scope.py	tests/test_net_scope.py
 test_novac_matrix.py	tests/test_novac_matrix.py
 testnvo-3cc17c3863ab	tests/test_nv_offline_uid.py
