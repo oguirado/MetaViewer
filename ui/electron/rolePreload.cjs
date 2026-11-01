@@ -5,7 +5,12 @@ if (process.isMainFrame && location.origin === 'app://metaviewer') {
   const invoke = (op, body = {}) => ipcRenderer.invoke(channel, {schema:'metaviewer.roles/v0.3', op, ...body});
   contextBridge.exposeInMainWorld('metaviewerRoles', Object.freeze({
     choices: () => invoke('choices'),
+    surfaces: () => invoke('surfaces'),
     create: choice => invoke('create', {choice}),
+    open: choice => invoke('open', {choice}),
+    switchMode: surfaceId => invoke('switch', {surfaceId}),
+    stop: surfaceId => invoke('stop', {surfaceId}),
+    confirmLogin: surfaceId => invoke('confirm-login', {surfaceId}),
     status: surfaceId => invoke('status', {surfaceId}),
     mount: (surfaceId, bounds) => invoke('mount', {surfaceId,bounds}),
     resize: (surfaceId, bounds) => invoke('resize', {surfaceId,bounds}),

@@ -1,0 +1,8 @@
+{
+  "schema": "metaviewer.roles/v0.3",
+  "op": "open",
+  "choice": {
+    "profileId": "demo",
+    "role": "human"
+  }
+}

@@ -603,7 +603,10 @@ func wireHandlerWithoutAdmission(m *capsule.Manager, profiles map[string]capsule
 					_ = json.Unmarshal(events[0], &created)
 					syncSurface(created.Data.Surface.SurfaceID)
 					frameMu.Lock()
-					owned[created.Data.Surface.SurfaceID] = pubs[profile.RAMRoot]
+					opening, bindingErr := m.SubscriptionBinding(created.Data.Surface.SurfaceID)
+					if bindingErr == nil && opening.Role != "human" {
+						owned[created.Data.Surface.SurfaceID] = pubs[profile.RAMRoot]
+					}
 					delete(pendingRelease, created.Data.Surface.SurfaceID)
 					frameMu.Unlock()
 					for _, raw := range events {
@@ -1350,7 +1353,22 @@ func (s *helloState) accept(ctx context.Context, profiles map[string]capsule.Pro
 		if err == nil {
 			var request capsule.Request
 			if json.Unmarshal(envelope.Body, &request) == nil && request.Op != "destroy" {
-				displayTaps.StartReplies(events)
+				for _, event := range events {
+					var ev struct {
+						Data struct {
+							Surface struct {
+								SurfaceID string `json:"surface_id"`
+							} `json:"surface"`
+						} `json:"data"`
+					}
+					if json.Unmarshal(event, &ev) != nil {
+						continue
+					}
+					b, bindingErr := fresh.SubscriptionBinding(ev.Data.Surface.SurfaceID)
+					if bindingErr == nil && b.Role != "human" {
+						displayTaps.StartReplies([]json.RawMessage{event})
+					}
+				}
 			}
 		}
 		return events, err

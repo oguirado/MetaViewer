@@ -124,7 +124,7 @@ async function roleHostFixture(t, role='human', failure=null, native=false) {
  await writeFile(join(root,'human-bindings',surface.surface_id+'.json'),JSON.stringify(binding),{mode:0o600});
  const f=fakeElectron(), modes=[], calls=[], queries=[], tileOptions=[];
  const states=new Map([[surface.surface_id,surface]]);
- const host=installRoleHost({...f,admit:event=>event==='trusted',env:{MV_SRF_PROFILES:JSON.stringify({demo:{Kind:'browser',role}}),MV_SRF_STATE_DIR:root,MV_SRF_BIN_DIR:'/host/bin',MV_RECORDING_DESTINATION:root},
+ const host=installRoleHost({...f,keyboardLayout:async()=>'us',admit:event=>event==='trusted',env:{MV_SRF_PROFILES:JSON.stringify({demo:{Kind:'browser',role}}),MV_SRF_STATE_DIR:root,MV_SRF_BIN_DIR:'/host/bin',MV_RECORDING_DESTINATION:root},
   capsuleStates:states,core:{getHumanSurface:()=>surface,request:async value=>{calls.push(value);return{};}},
   listIdentities:async()=>({ok:true,rows:[{id:'demo'}]}),mode:async value=>{modes.push(value.readonly);return true;},
   bridgeFactory:async()=>({origin:'http://127.0.0.1:12345',requestHeaders:{secret:'never-renderer'},close:async()=>calls.push('bridge-close')}),

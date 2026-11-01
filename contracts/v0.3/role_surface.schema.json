@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:metaviewer:role-surface:v0.3",
+  "title": "Native human lifecycle without a frame witness",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "role",
+    "surface"
+  ],
+  "properties": {
+    "schema": {
+      "const": "metaviewer.role_surface/v0.3"
+    },
+    "role": {
+      "const": "human"
+    },
+    "surface": {
+      "$ref": "https://metaviewer.local/contracts/v0.2/surface.schema.json"
+    }
+  }
+}

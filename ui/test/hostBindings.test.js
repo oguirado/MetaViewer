@@ -1970,3 +1970,16 @@ test('BOOT-FLAKE unsolicited hello cannot bypass pending peer authentication', a
   }, error => error.causeCode === 'HELLO_PROTOCOL');
   assert.equal(f.requests.length, 0, 'no unauthenticated hello was sent');
 });
+
+test('P18 host stop waits for the matching destroyed lifetime and refuses unknown identities',async t=>{
+ const f=await fixture(t);const bindings=await createMainBindings({...f});t.after(()=>bindings.core.dispose());
+ await bindings.core.start();f.send({schema:'surface_event/v0.2',event:'created',data:{surface}});
+ await waitForCondition(()=>bindings.core.getHumanSurface('s1'));
+ await assert.rejects(bindings.core.stopSurface('unknown'),/CAPSULE_STOP_REFUSED/);
+ let settled=false;const pending=bindings.core.stopSurface('s1').then(reply=>{settled=true;return reply;});
+ await waitForCondition(()=>f.requests.some(request=>request.body.op==='destroy'));
+ f.send({schema:'surface_event/v0.2',event:'state_changed',data:{surface:{...surface,state:'active'}}});
+ await new Promise(resolve=>setTimeout(resolve,20));assert.equal(settled,false);
+ const destroyed={schema:'surface_event/v0.2',event:'state_changed',data:{surface:{...surface,state:'destroyed'}}};
+ f.send(destroyed);assert.deepEqual(await pending,destroyed);assert.equal(bindings.core.getHumanSurface('s1'),null);
+});

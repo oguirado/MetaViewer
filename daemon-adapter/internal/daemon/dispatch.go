@@ -69,6 +69,14 @@ func NewHandler(manager *capsule.Manager, publisher *frames.Publisher) (ipc.Hand
 			return nil, err
 		}
 		id := created.Data.Surface.SurfaceID
+		// Native human openings have no agent frame consumer at all.
+		opening, bindingErr := manager.SubscriptionBinding(id)
+		if bindingErr != nil {
+			return nil, bindingErr
+		}
+		if opening.Role == "human" {
+			return events, nil
+		}
 		// [TARGET, unit decision] Cleanup survives caller cancellation but remains
 		// bounded; uncertain removal is reported with the committed identity.
 		compensate := func(cause error) ([]json.RawMessage, error) {

@@ -46,7 +46,8 @@ import (
 )
 
 type Profile struct {
-	Role                                                string `json:"role,omitempty"`
+	Role                                                string `json:"role,omitempty"` // Legacy opening default only.
+	DefaultMode                                         string `json:"default_mode,omitempty"`
 	TextInput                                           string `json:"text_input,omitempty"`
 	Kind, NativeKind, Program, AppDir, RAMRoot, Display string
 	Width, Height, NestedDepth                          int
@@ -331,6 +332,12 @@ func NewManager(cfg Config, r cli.Runner, clock cli.Clock) (*Manager, error) {
 	copyProfiles := make(map[string]Profile, len(cfg.Profiles))
 	seenDisplays := make(map[string]bool)
 	for id, p := range cfg.Profiles {
+		if p.DefaultMode != "" {
+			if p.DefaultMode != "agent" && p.DefaultMode != "human" {
+				return nil, fault("configuration", "invalid default mode")
+			}
+			p.Role = p.DefaultMode
+		}
 		if p.Role != "" && p.Role != "agent" && p.Role != "human" {
 			return nil, fault("configuration", "invalid capsule role")
 		}
@@ -628,6 +635,18 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 	}
 	if active >= m.cfg.MaxSurfaces || m.quarantined[q.ProfileID] {
 		return nil, fault("uncertain", detailCapacityOrQuarantine)
+	}
+	// Mode belongs to this opening. Legacy profile Role is only a default.
+	if selector, ok := m.runner.(interface {
+		ConsumeOpeningMode(string, string) (string, error)
+	}); ok {
+		p.Role, err = selector.ConsumeOpeningMode(q.ProfileID, p.Role)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if p.Role == "human" && (p.Kind != "browser" || p.Width != 1280 || p.Height != 900) {
+		return nil, fault("configuration", "human mode requires 1280x900 browser")
 	}
 	idBytes := make([]byte, 16)
 	if _, e := rand.Read(idBytes); e != nil {
@@ -1123,7 +1142,7 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 	if m.destroying[q.SurfaceID] {
 		return nil, fault("POLICY", "surface is draining")
 	}
-	if m.cfg.Profiles[b.Surface.ProfileID].Role == "human" {
+	if b.Role == "human" {
 		return nil, fault("POLICY", "human role excludes native input")
 	}
 	if origin == "agent" {

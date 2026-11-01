@@ -1,0 +1,6 @@
+- Choose human or agent mode for each identity opening; retain legacy profile roles as defaults.
+- Reveal existing identity tiles, offer mode replacement, and distinguish hiding from stopping a capsule.
+- Store explicit login confirmations separately and place human traces under each identity.
+- Add automatic tile presets while retaining existing floating, minimize and maximize operations.
+- Ship and seal the layout decoder required by packaged layout persistence.
+- Keep human openings outside agent capture, polling and DISPLAY consumers.

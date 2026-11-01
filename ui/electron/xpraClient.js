@@ -1,7 +1,10 @@
 // Host-owned HTML5 client contract; no bridge capability enters this document.
 const query = '?connect=1&username=worker&encoding=rgb&bandwidth_limit=0&clipboard=false&notifications=false&reconnect=false';
-/** @param {boolean} writable */
-export const xpraClientQuery = writable => query + (writable ? '' : '&readonly=1');
+/** @param {boolean} writable @param {string} [keyboardLayout] */
+export const xpraClientQuery = (writable, keyboardLayout) => {
+  if (keyboardLayout !== undefined && !/^[a-z0-9_-]{1,32}$/.test(keyboardLayout)) throw Error('XPRA_KEYMAP_INVALID');
+  return query + (writable ? '' : '&readonly=1') + (keyboardLayout ? '&keyboard_layout=' + encodeURIComponent(keyboardLayout) : '');
+};
 
 // A CSS transform changes presentation and native hit testing, not the iframe's
 // layout viewport. Electron page zoom is deliberately kept at one.

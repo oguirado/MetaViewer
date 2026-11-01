@@ -1,0 +1,5 @@
+{
+  "schema": "metaviewer.roles/v0.3",
+  "op": "confirm-login",
+  "surfaceId": "surface-demo"
+}

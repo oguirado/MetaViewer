@@ -8,6 +8,63 @@
  * which the kit emits after its cold restore settles.
  */
 import { defineComponent, h } from 'vue';
+// Presentation only: no capsule geometry, ownership, or lifecycle operations.
+export const TILE_PRESETS = Object.freeze(['single','side-by-side','grid','focus-strip']);
+
+/** @param {string} preset @param {Array<{id:string,hidden?:boolean,floating?:boolean,maximized?:boolean}>} tiles @param {number} width @param {number} height */
+export function presetRectangles(preset, tiles, width, height) {
+  if (!TILE_PRESETS.includes(preset) || ![width,height].every(n => Number.isFinite(n) && n > 0)) throw Error('LAYOUT_PRESET_INVALID');
+  const visible = tiles.filter(tile => !tile.hidden && !tile.floating);
+  if (visible.some(tile => tile.maximized)) return [];
+  if (new Set(visible.map(tile => tile.id)).size !== visible.length) throw Error('LAYOUT_PRESET_DUPLICATE');
+  const count = visible.length;
+  return visible.map((tile, index) => {
+    if (preset === 'focus-strip' && count > 1) {
+      if (index === 0) return {id:tile.id,x:0,y:0,width:width * 0.7,height};
+      const top = Math.floor((index - 1) * height / (count - 1));
+      return {id:tile.id,x:width * 0.7,y:top,width:width * 0.3,height:Math.floor(index * height / (count - 1)) - top};
+    }
+    const columns = preset === 'single' ? 1 : Math.min(2,count);
+    const column = index % columns, row = Math.floor(index / columns);
+    const rows = Math.ceil((count - column) / columns);
+    const x = Math.floor(column * width / columns), y = Math.floor(row * height / rows);
+    return {id:tile.id,x,y,width:Math.floor((column + 1) * width / columns) - x,height:Math.floor((row + 1) * height / rows) - y};
+  });
+}
+
+/** Preserve all hidden and floating panel records while rebuilding only visible grid leaves.
+ * @param {any} layout @param {string} preset @param {Array<any>} tiles @param {number} width @param {number} height */
+export function arrangePreset(layout, preset, tiles, width, height) {
+  const rectangles = presetRectangles(preset,tiles,width,height);
+  if (!rectangles.length) return null;
+  const result = structuredClone(layout), groups = new Map(), emptyHomes = /** @type {any[]} */ ([]);
+  const visit = (/** @type {any} */ node) => {
+    if (node.type === 'leaf') {
+      for (const id of node.data.views) groups.set(id,node.data.id);
+      if (!node.data.views.length) emptyHomes.push({...node,size:0,visible:false});
+    }
+    else for (const child of node.data) visit(child);
+  };
+  visit(result.grid.root);
+  const groupIds = new Set();
+  const leaf = (/** @type {string} */ id, /** @type {number} */ size, hidden = false) => {
+    let group = groups.get(id) || 'preset-' + id;
+    if (groupIds.has(group)) group = 'preset-' + id;
+    groupIds.add(group);
+    return {type:'leaf',size,visible:!hidden,data:{id:group,views:[id],activeView:id}};
+  };
+  const columns = [...new Set(rectangles.map(rect => rect.x))];
+  const data = columns.map(x => {
+    const members = rectangles.filter(rect => rect.x === x);
+    if (members.length === 1) return leaf(members[0].id,members[0].width);
+    return {type:'branch',size:members[0].width,data:members.map(rect => leaf(rect.id,rect.height))};
+  });
+  for (const tile of tiles.filter(tile => tile.hidden && !tile.floating)) data.push(leaf(tile.id,0,true));
+  for (const home of emptyHomes) if (!groupIds.has(home.data.id)) data.push(home);
+  result.grid = {width,height,orientation:'HORIZONTAL',root:{type:'branch',size:width,data}};
+  return result;
+}
+
 
 /** Panel id namespace: deterministic, reversible, never a bare numeric index. */
 export const WALL_PANEL_ID_PREFIX = 'panel-';
@@ -103,7 +160,7 @@ export const WALL_PRESENTATION_VERBS = Object.freeze(['close', 'hide', 'show', '
 
 /**
  * @typedef {Object} WallWindowPresentation
- * @property {(id: string) => { hidden: boolean }} state
+ * @property {(id: string) => { hidden: boolean, floating?: boolean, maximized?: boolean }} state
  * @property {(id: string) => void} show
  * @property {(id: string) => void} hide
  * @property {(id: string, bounds?: WallFloatBounds) => void} float
@@ -131,6 +188,8 @@ export const WALL_PRESENTATION_VERBS = Object.freeze(['close', 'hide', 'show', '
  * @typedef {Object} WallWorkspaceController
  * @property {(payload: unknown) => WallAdmissionResult<Readonly<{ ready: boolean }>>} handleReady
  * @property {() => void} dispose
+ * @property {(preset:string|null) => WallAdmissionResult<unknown>} setPreset
+ * @property {() => void} refreshPreset
  * @property {(capsuleId:string,body:any) => WallAdmissionResult<unknown>} applyLayoutEcho
  * @property {(capsuleId: unknown, placement: unknown) => WallAdmissionResult<Readonly<{ panelId: string }>>} revealSurface
  * @property {(intent: unknown) => WallAdmissionResult<Readonly<{ panelId: string, type: string }>>} applyPresentationIntent
@@ -329,6 +388,58 @@ export function createWallWorkspaceController(options = {}) {
   let api = null;
   /** @type {WallWindowPresentation | null} */
   let windows = null;
+  let preset = /** @type {string|null} */ (null), layoutSignature = '';
+  let host = /** @type {any} */ (null);
+  const presentationRows = () => {
+    if (!api || !windows) return [];
+    return (projectionView?.getProjection()?.rows || []).flatMap(row => {
+      const panelId = WALL_PANEL_ID_PREFIX + row.id;
+      if (!api?.getPanel(panelId)) return [];
+      return [{id:panelId,...windows?.state(panelId)}];
+    });
+  };
+  function refreshPreset() {
+    if (!preset || !api?.width || !api.height) return;
+    const tiles = presentationRows();
+    const signature = JSON.stringify([preset,api.width,api.height,tiles]);
+    if (signature === layoutSignature || tiles.some(tile => tile.maximized)) return;
+    const rectangles = presetRectangles(preset,tiles,api.width,api.height);
+    if (!rectangles.length) return;
+    const first = /** @type {any} */(api.getPanel(rectangles[0].id));
+    if (!first?.group) return;
+    // Reuse existing panels through the presentation API. Hidden groups retain
+    // their homes and floating windows retain their independent geometry.
+    for (const rect of rectangles.slice(1)) {
+      const panel = /** @type {any} */(api.getPanel(rect.id));
+      if (!panel?.api.moveTo) throw Error('LAYOUT_PRESET_UNAVAILABLE');
+      if (panel.group !== first.group) panel.api.moveTo({group:first.group,position:'center'});
+    }
+    const placed = [rectangles[0]];
+    for (const rect of rectangles.slice(1)) {
+      const column = placed.filter(candidate => candidate.x === rect.x);
+      const reference = column.at(-1) || placed[0];
+      const anchor = /** @type {any} */(api.getPanel(reference.id));
+      const panel = /** @type {any} */(api.getPanel(rect.id));
+      panel.api.moveTo({group:anchor.group,position:column.length ? 'bottom' : 'right'});
+      placed.push(rect);
+    }
+    for (const rect of rectangles) {
+      const panel = /** @type {any} */(api.getPanel(rect.id));
+      panel.group.api.setSize({width:rect.width,height:rect.height});
+    }
+    layoutSignature = JSON.stringify([preset,api.width,api.height,presentationRows()]);
+  }
+  function setPreset(/** @type {string|null} */ next) {
+    if (next !== null && !TILE_PRESETS.includes(next)) return fail('LAYOUT_PRESET_INVALID','Unknown tile preset.');
+    if (!api || !windows) return fail('ERR_NOT_READY','Wall is not ready.');
+    preset = next; layoutSignature = '';
+    try {
+      refreshPreset();
+      // The kit owns validated persistence and its settled/read-only gates.
+      void host?.completeUserGesture?.();
+      return succeed({preset});
+    } catch { return fail('LAYOUT_PRESET_FAILED','Tile layout is unavailable.'); }
+  }
 
   /**
    * @template T
@@ -377,6 +488,7 @@ export function createWallWorkspaceController(options = {}) {
     }
     api = /** @type {WallDockviewApi} */ (/** @type {unknown} */ (record.api));
     windows = /** @type {WallWindowPresentation} */ (/** @type {unknown} */ (record.windows));
+    host = record.host;
     collapseEmptyGroups();
     return succeed(Object.freeze({ ready: true }));
   }
@@ -577,7 +689,7 @@ export function createWallWorkspaceController(options = {}) {
     });
   }
 
-  return Object.freeze({ handleReady, dispose, revealSurface, applyPresentationIntent, applyLayoutEcho, createPanelCallbacks });
+  return Object.freeze({ handleReady, dispose, revealSurface, applyPresentationIntent, applyLayoutEcho, setPreset, refreshPreset, createPanelCallbacks });
 }
 
 /**
@@ -784,9 +896,13 @@ function revealSurface(capsuleId, placement) {
 
 /** @param {string} capsuleId @param {unknown} body */
 function applyLayoutEcho(capsuleId, body) { return controller.applyLayoutEcho(capsuleId, body); }
-defineExpose({ revealSurface, applyLayoutEcho });
+function setPreset(/** @type {string|null} */ preset) { return controller.setPreset(preset); }
+const presetTimer = setInterval(() => { controller.refreshPreset(); },150);
+presetTimer.unref?.();
+defineExpose({ revealSurface, applyLayoutEcho, setPreset });
 
 onBeforeUnmount(() => {
+  clearInterval(presetTimer);
   controller.dispose();
 });
 </script>

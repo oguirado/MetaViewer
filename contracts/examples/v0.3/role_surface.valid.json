@@ -1,0 +1,18 @@
+{
+  "schema": "metaviewer.role_surface/v0.3",
+  "role": "human",
+  "surface": {
+    "schema": "surface/v0.2",
+    "surface_id": "surface-demo",
+    "kind": "browser",
+    "display": ":100",
+    "geometry": {
+      "w": 1280,
+      "h": 900
+    },
+    "state": "active",
+    "visibility": "unfolded",
+    "control": "human",
+    "profile_id": "demo"
+  }
+}

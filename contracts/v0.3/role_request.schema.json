@@ -20,7 +20,12 @@
         "mount",
         "resize",
         "close",
-        "visibility"
+        "visibility",
+        "open",
+        "switch",
+        "stop",
+        "confirm-login",
+        "surfaces"
       ]
     },
     "surfaceId": {
@@ -88,7 +93,10 @@
       "if": {
         "properties": {
           "op": {
-            "const": "choices"
+            "enum": [
+              "choices",
+              "surfaces"
+            ]
           }
         }
       },
@@ -100,7 +108,10 @@
       "if": {
         "properties": {
           "op": {
-            "const": "create"
+            "enum": [
+              "create",
+              "open"
+            ]
           }
         }
       },
@@ -117,7 +128,10 @@
           "op": {
             "enum": [
               "status",
-              "close"
+              "close",
+              "switch",
+              "stop",
+              "confirm-login"
             ]
           }
         }

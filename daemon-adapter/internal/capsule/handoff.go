@@ -57,7 +57,7 @@ func (m *Manager) control(r Request, version string) ([]json.RawMessage, error) 
 	if m.destroying[q.SurfaceID] {
 		return nil, fault("POLICY", "surface is draining")
 	}
-	if m.cfg.Profiles[b.Surface.ProfileID].Role == "human" {
+	if b.Role == "human" {
 		return nil, fault("POLICY", "human capsule role is immutable")
 	}
 	if r.Op == "take_control" {

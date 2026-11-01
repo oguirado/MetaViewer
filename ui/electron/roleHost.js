@@ -1,3 +1,6 @@
+import { hostKeyboardLayout } from './keyboardLayout.js';
+import { stageOpeningMode } from './openingMode.js';
+import { identityMarkers } from './identityMarkers.js';
 import { xpraClientQuery } from './xpraClient.js';
 // Additive v0.3 role API. All capsule/socket selection stays in Electron main.
 import { open, realpath, readFile } from 'node:fs/promises';
@@ -68,13 +71,17 @@ export function runHumanMode({tool, stateDir, container, readonly, env}) {
 /** Renderer gets only role, profile ids, state, and opaque success. */
 /** @param {any} options */
 export function installRoleHost({electron, window, core, env, capsuleStates, admit,
-  listIdentities, mode = runHumanMode, bridgeFactory = openXpraHumanBridge, tileFactory = attachXpraHumanTile}) {
+  listIdentities, keyboardLayout = () => hostKeyboardLayout({...process.env,...env}), stageMode = stageOpeningMode, mode = runHumanMode, bridgeFactory = openXpraHumanBridge, tileFactory = attachXpraHumanTile}) {
   const {ipcMain} = electron;
   const raw = env.MV_SRF_PROFILES ? JSON.parse(env.MV_SRF_PROFILES) : {};
   const profiles = configuredProfiles(env);
   /** @param {string} profile */
-  const roleOf = profile => raw[profile]?.role ?? 'agent';
+  const roleOf = profile => raw[profile]?.default_mode ?? raw[profile]?.role ?? 'agent';
   if (profiles.some(p => !['human','agent'].includes(roleOf(p.id)))) throw refuse('CAPSULE_ROLE_INVALID');
+  const openingRoles = new Map();
+  const roleFor = (/** @type {any} */ surface) => openingRoles.get(surface.surface_id) ?? roleOf(surface.profile_id);
+  const markers = identityMarkers(join(electron.app?.getPath('userData') || env.MV_SRF_STATE_DIR, 'identity-markers'));
+  const transitions = new Map();
   const sessions = new Map();
   const viewStates = new Map();
   const locks = new Set();
@@ -90,16 +97,19 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
   /** @param {string} surfaceId */
   const status = surfaceId => {
     const s = authoritative(surfaceId);
-    return {role:roleOf(s.profile_id), profileId:s.profile_id, control:s.control,
-      view:viewStates.get(surfaceId) || {state:'closed'}};
+    return {role:roleFor(s), profileId:s.profile_id, control:s.control,
+      view:viewStates.get(surfaceId) || {state:'closed'}, transition:transitions.get(s.profile_id) || null};
   };
   /** @param {string} surfaceId */
   async function close(surfaceId) {
+    let closedRole = openingRoles.get(surfaceId);
+    try { closedRole = roleFor(authoritative(surfaceId)); } catch { /* terminal row */ }
     epochs.set(surfaceId,(epochs.get(surfaceId) || 0) + 1);
     const session = sessions.get(surfaceId);
     sessions.delete(surfaceId);
     viewStates.delete(surfaceId);
     await session?.close();
+    if (session) console.info(`METAVIEWER_XPRA_STAGE surface=${surfaceId} role=${closedRole === 'human' ? 'human' : 'watch'} stage=CLOSED detail=view_closed`);
   }
   /** @param {string} surfaceId @param {any} bounds */
   async function mount(surfaceId, bounds) {
@@ -109,25 +119,26 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     let trace = null;
     try {
       const current = authoritative(surfaceId);
-      if (current.control !== (roleOf(current.profile_id) === 'human' ? 'human' : 'agent')) throw refuse('XPRA_ROLE_OWNERSHIP');
+      if (current.control !== (roleFor(current) === 'human' ? 'human' : 'agent')) throw refuse('XPRA_ROLE_OWNERSHIP');
       if (sessions.get(surfaceId)?.active) {
         sessions.get(surfaceId).resize(bounds);
-        return {ok:true,role:roleOf(current.profile_id)};
+        return {ok:true,role:roleFor(current)};
       }
       await close(surfaceId);
       const epoch = epochs.get(surfaceId);
-      const surface = authoritative(surfaceId), role = roleOf(surface.profile_id);
+      const surface = authoritative(surfaceId), role = roleFor(surface);
       if (role === 'human' && surface.control !== 'human' || role === 'agent' && surface.control !== 'agent') throw refuse('XPRA_ROLE_OWNERSHIP');
       const binding = await readRoleBinding(env.MV_SRF_STATE_DIR, surface, role);
       if (role === 'human') {
         const directory = recordingDestination(env);
         if (!directory) throw refuse('TRACE_DESTINATION_UNSET');
-        trace = createHumanTraceFile({directory, sessionId:env.MV_SESSION_ID || randomUUID(), surfaceId, capsuleId:binding.container});
+        trace = createHumanTraceFile({directory, sessionId:env.MV_SESSION_ID || randomUUID(), surfaceId, capsuleId:binding.container,profileId:surface.profile_id});
       }
       const active = () => {
         try { const s = authoritative(surfaceId); return !disposed && epochs.get(surfaceId) === epoch && sessions.has(surfaceId) &&
-          roleOf(s.profile_id) === role && s.control === (role === 'human' ? 'human' : 'agent'); } catch { return false; }
+          roleFor(s) === role && s.control === (role === 'human' ? 'human' : 'agent'); } catch { return false; }
       };
+      const clientKeyboardLayout = await keyboardLayout();
       const recorder = trace;
       const dummyTrace = {record(){return false;}, setActive(){}};
       const session = createXpraHumanSession({role,
@@ -147,12 +158,14 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
         showView: (bridge, recoverBridge) => tileFactory({electron,window,bridge,bounds,recoverBridge,
           trace:recorder || dummyTrace,isActive:active,writable:role === 'human',
           capsuleSize:() => ({width:1280,height:900}),
-          clientQuery:xpraClientQuery(role === 'human'),
+          clientQuery:xpraClientQuery(role === 'human',clientKeyboardLayout),
           onState: (/** @type {string} */ state) => {
             if (!active()) return;
             viewStates.set(surfaceId,{state});
+            if (state === 'ready') console.info(`METAVIEWER_XPRA_STAGE surface=${surfaceId} role=${role === 'human' ? 'human' : 'watch'} stage=CLIENT_CONNECTED detail=readiness_verified`);
+            if (state === 'reconnecting') console.info(`METAVIEWER_XPRA_STAGE surface=${surfaceId} role=${role === 'human' ? 'human' : 'watch'} stage=LOST detail=probe_failed`);
             // Typed stage line, like the DISPLAY tier: never carries the token or the origin.
-            console.info(`METAVIEWER_XPRA_STAGE surface=${surfaceId} role=${role === 'human' ? 'human' : 'watch'} stage=${String(state).toUpperCase()}`);
+            console.info(`METAVIEWER_XPRA_STAGE surface=${surfaceId} role=${role === 'human' ? 'human' : 'watch'} stage=${(/** @type {Record<string,string>} */({connecting:'BRIDGE_UP',reconnecting:'RECONNECT',ready:'READY',lost:'LOST'}))[state] || String(state).toUpperCase()} detail=client_state`);
           },
           onFailure: async (/** @type {any} */ error) => {
             if (!active()) return;
@@ -170,7 +183,10 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       await session.open();
       if (!active()) { await close(surfaceId); throw refuse('XPRA_ROLE_OWNERSHIP'); }
       return {ok:true,role};
-    } catch (error) { await close(surfaceId); trace?.close(); throw error; }
+    } catch (error) {
+      if (/** @type {any} */(error)?.code === 'XPRA_CLIENT_READY_TIMEOUT') console.info(`METAVIEWER_XPRA_STAGE surface=${surfaceId} role=${roleFor(authoritative(surfaceId)) === 'human' ? 'human' : 'watch'} stage=TIMEOUT detail=XPRA_CLIENT_READY_TIMEOUT`);
+      await close(surfaceId); trace?.close(); throw error;
+    }
     finally { locks.delete(surfaceId); }
   }
   async function choices() {
@@ -178,40 +194,102 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     const reply = await listIdentities();
     if (reply?.ok !== true || !Array.isArray(reply.rows)) throw refuse('IDENTITY_LIST_UNAVAILABLE');
     const names = new Set(reply.rows.map((/** @type {any} */ row) => row.id));
-    return profiles.map(p => ({profileId:p.id,role:roleOf(p.id),available:names.has(p.id) && !bound.has(p.id)}));
+    return await Promise.all(profiles.map(async p => {
+      const entry = [...capsuleStates.values()].find(s => s.profile_id === p.id && !['destroyed','closed'].includes(s.state));
+      return {profileId:p.id,role:roleOf(p.id),defaultMode:roleOf(p.id),available:names.has(p.id),
+        currentMode:entry?.surface_id ? roleFor(entry) : 'closed', surfaceId:entry?.surface_id || null,
+        lastLogin:await markers.read(p.id),busy:bound.has(p.id) && !entry?.surface_id};
+    }));
   }
+
   /** @param {any} choice */
-  async function create(choice) {
+  async function create(choice, held = false) {
     if (!exact(choice,'profileId,role') || !['human','agent'].includes(choice.role) || !id(choice.profileId)) throw refuse('CAPSULE_ROLE_INVALID');
-    if (creating) throw refuse('SURFACE_CREATE_BUSY');
+    if (creating && !held) throw refuse('SURFACE_CREATE_BUSY');
     creating = true;
-    let key;
+    let key, clearMode;
     try {
       const {live,bound} = summarizeSurfaces(capsuleStates);
       if (bound.has(choice.profileId)) throw refuse('PROFILE_ALREADY_BOUND');
       if (live >= MAX_CAPSULES) throw refuse('CAPSULE_LIMIT_REACHED');
-      const profile = profiles.find(p => p.id === choice.profileId && roleOf(p.id) === choice.role);
+      const profile = profiles.find(p => p.id === choice.profileId);
       if (!profile) throw refuse('CAPSULE_ROLE_INVALID');
       if (!(await choices()).find(p => p.profileId === profile.id)?.available) throw refuse('NO_IDENTITY');
       key = `pending:${profile.id}`;
       capsuleStates.set(key,{profile_id:profile.id,state:'creating'});
+      clearMode = await stageMode(env.MV_SRF_STATE_DIR, profile.id, choice.role);
       const reply = await core.request(profile.request);
-      if (reply?.schema !== 'surface_event/v0.2' || reply.event !== 'created') throw refuse('SURFACE_CREATE_REFUSED');
-      capsuleStates.set(reply.data.surface.surface_id,reply.data.surface);
-      return {ok:true};
-    } finally { if (key) capsuleStates.delete(key); creating = false; }
+      if (reply?.schema !== 'surface_event/v0.2' || reply.event !== 'created') throw refuse(typeof reply?.data?.code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(reply.data.code) ? reply.data.code : 'SURFACE_CREATE_REFUSED');
+      const surface = reply.data.surface;
+      if (surface.profile_id !== profile.id || surface.state !== 'active' || surface.control !== choice.role) throw refuse('CAPSULE_MODE_UNPROVEN');
+      openingRoles.set(surface.surface_id,choice.role);
+      capsuleStates.set(surface.surface_id,surface);
+      return {ok:true,surfaceId:surface.surface_id,role:choice.role};
+    } finally { if (key) capsuleStates.delete(key); await clearMode?.(); if (!held) creating = false; }
+  }
+  /** Only an acknowledged destroy releases a profile for a fresh capsule. */
+  /** @param {string} surfaceId */
+  async function stop(surfaceId) {
+    const surface = authoritative(surfaceId);
+    await close(surfaceId);
+    if (typeof core.stopSurface !== 'function') throw refuse('CAPSULE_STOP_UNAVAILABLE');
+    const reply = await core.stopSurface(surfaceId);
+    if (reply?.schema !== 'surface_event/v0.2' || reply.event !== 'state_changed' ||
+        reply.data?.surface?.surface_id !== surfaceId || reply.data.surface.state !== 'destroyed') throw refuse('CAPSULE_STOP_UNPROVEN');
+    capsuleStates.set(surfaceId,reply.data.surface);
+    openingRoles.delete(surfaceId);
+    return {ok:true,profileId:surface.profile_id};
+  }
+  /** @param {string} surfaceId */
+  async function switchMode(surfaceId) {
+    if (creating) throw refuse('SURFACE_CREATE_BUSY');
+    const surface = authoritative(surfaceId), profileId = surface.profile_id;
+    const role = roleFor(surface) === 'human' ? 'agent' : 'human';
+    creating = true;
+    transitions.set(profileId,'stopping');
+    try {
+      await stop(surfaceId);
+      transitions.set(profileId,'starting');
+      // A new surface identity has no VERIFIED frame. Existing core/P14 fences
+      // require its first fresh capture before any proposal can be admitted.
+      return await create({profileId,role},true);
+    } finally { creating = false; transitions.delete(profileId); }
+  }
+  /** @param {any} choice */
+  async function openIdentity(choice) {
+    if (!exact(choice,'profileId,role') || !['human','agent'].includes(choice.role) || !id(choice.profileId)) throw refuse('CAPSULE_ROLE_INVALID');
+    const surface = [...capsuleStates.values()].find(s => s.profile_id === choice.profileId && s.state !== 'destroyed');
+    if (surface) {
+      if (!surface.surface_id || surface.state !== 'active') throw refuse('PROFILE_ALREADY_BOUND');
+      if (roleFor(surface) !== choice.role) return {ok:false,code:'PROFILE_ALREADY_BOUND',surfaceId:surface.surface_id,currentMode:roleFor(surface),requestedMode:choice.role};
+      return {ok:true,reused:true,surfaceId:surface.surface_id,role:choice.role};
+    }
+    return await create(choice);
   }
   /** @param {any} event @param {any} message */
   const handler = async (event, message) => {
     if (disposed || !admit(event) || !message || message.schema !== 'metaviewer.roles/v0.3') throw refuse('XPRA_SENDER_REFUSED');
     const {op} = message;
-    const keys = ['choices'].includes(op) ? 'op,schema' : op === 'create' ? 'choice,op,schema'
+    const keys = ['choices','surfaces'].includes(op) ? 'op,schema' : ['create','open'].includes(op) ? 'choice,op,schema'
       : ['mount','resize'].includes(op) ? 'bounds,op,schema,surfaceId'
       : op === 'visibility' ? 'op,schema,surfaceId,visible' : 'op,schema,surfaceId';
     if (!exact(message,keys)) throw refuse('XPRA_PAYLOAD_REFUSED');
     try {
       if (op === 'choices') return await choices();
+      if (op === 'surfaces') return [...capsuleStates.values()].filter(s => s.surface_id && s.state === 'active' && roleFor(s) === 'human')
+        .map(s => ({schema:'metaviewer.role_surface/v0.3',role:'human',surface:{...authoritative(s.surface_id)}}));
       if (op === 'create') return await create(message.choice);
+      if (op === 'open') return await openIdentity(message.choice);
+      if (op === 'switch') return await switchMode(message.surfaceId);
+      if (op === 'stop') {
+        if (creating) throw refuse('SURFACE_CREATE_BUSY');
+        creating = true; try { return await stop(message.surfaceId); } finally { creating = false; }
+      }
+      if (op === 'confirm-login') {
+        const surface = authoritative(message.surfaceId);
+        if (roleFor(surface) !== 'human' || surface.control !== 'human') throw refuse('LOGIN_CONFIRMATION_REQUIRES_HUMAN');
+        return {ok:true,lastLogin:await markers.confirm(surface.profile_id)};
+      }
       if (op === 'status') return status(message.surfaceId);
       if (op === 'mount') return await mount(message.surfaceId,message.bounds);
       if (op === 'resize') { authoritative(message.surfaceId); sessions.get(message.surfaceId)?.resize(validateRoleBounds(message.bounds)); return {ok:true}; }

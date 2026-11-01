@@ -520,6 +520,17 @@ export async function createMainBindings({env = process.env, createMessageChanne
         // a msg-id fallback, never a live surface); or an action_verdict whose proposal_id is the
         // create msg-id (core refusals). Errors of any known surface belong to that live capsule
         // and never settle the pending create, whatever its profile.
+        if (item.body.schema === 'surface_request/v0.2' && item.body.op === 'destroy') {
+          const target = item.body.params.surface_id;
+          if (body.schema === 'surface_event/v0.2' && body.event === 'state_changed' &&
+              body.data?.surface?.surface_id === target && body.data.surface.state === 'destroyed') {
+            clearTimeout(item.timer);pending.delete(key);item.resolve(body);
+          } else if (body.schema === 'surface_event/v0.2' && body.event === 'error' && body.data?.surface_id === target ||
+              body.schema === 'action_verdict/v0.2' && body.proposal_id === key && body.decision !== 'admitted') {
+            clearTimeout(item.timer);pending.delete(key);item.reject(Object.assign(Error('CAPSULE_STOP_REFUSED'),{code:'CAPSULE_STOP_REFUSED'}));
+          }
+          continue;
+        }
         if (item.body.schema === 'surface_request/v0.2' && item.body.op === 'create') {
           if (body.schema === 'surface_event/v0.2' && body.event === 'created'
               && body.data?.surface?.profile_id === item.body.params.profile_id) result = body;
@@ -884,6 +895,17 @@ export async function createMainBindings({env = process.env, createMessageChanne
         applyCadence({ recordingFps: fps });
       },
       start:async()=>getStatus(),getStatus,dispose:async()=>shutdown(),
+      /** Host-only lifecycle capability. No arbitrary request or renderer path. @param {string} surfaceId */
+      async stopSurface(surfaceId) {
+        if (!id(surfaceId) || !surfaces.has(surfaceId) || !live || disposed || nonInputPendingCount() >= MAX_ITEMS) throw Object.assign(Error('CAPSULE_STOP_REFUSED'),{code:'CAPSULE_STOP_REFUSED'});
+        const body = {schema:'surface_request/v0.2',op:'destroy',params:{surface_id:surfaceId}};
+        const key = randomUUID();
+        return new Promise((resolve,reject) => {
+          const timer = setTimeout(() => {pending.delete(key);reject(Object.assign(Error('CAPSULE_STOP_TIMEOUT'),{code:'CAPSULE_STOP_TIMEOUT'}));},90000);
+          pending.set(key,{body,resolve,reject,timer});
+          try {send(body,key);} catch {shutdown();}
+        });
+      },
       /** @param {any} message */
       async request(message) {
         // [TARGET, unit decision] Serialize creates: v0.2 created/error events

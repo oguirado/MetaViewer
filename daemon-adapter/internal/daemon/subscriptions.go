@@ -51,6 +51,10 @@ func subscriptionHandler(m *capsule.Manager, profiles map[string]capsule.Profile
 		if err != nil {
 			return fail(err)
 		}
+		// Human openings use only native xpra; never start a frame poll.
+		if b.Role == "human" {
+			return nil, nil
+		}
 		sub := subs[profiles[b.Surface.ProfileID].RAMRoot]
 		if sub == nil {
 			return fail(configuration("subscription publisher required"))

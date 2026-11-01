@@ -5,8 +5,11 @@ import ConfirmDialog from '../../.kit/capsule-ui-kit/src/overlays/ConfirmDialog.
 import { operatorHost } from '../operatorHost.js';
 import { identityErrorText, normalizeDomains, validDomains, validLabel } from './identityForm.js';
 const props=defineProps({open:{type:Boolean,default:false},host:{type:Object,default:operatorHost}});
-const emit=defineEmits(['close']);
+const roleApi = /** @type {any} */(globalThis).metaviewerRoles;
+const emit=defineEmits(['close','open-identity']);
 const rows=ref(/** @type {any[]} */([])), id=ref(''), label=ref(''), domains=ref('');
+const modes=ref(/** @type {any[]} */ ([]));
+const modeFor = (/** @type {string} */ id) => modes.value.find(row => row.profileId === id);
 const busy=ref(false), login=ref(false), error=ref(''), pendingDelete=ref('');
 const validId=computed(()=>/^[a-z0-9][a-z0-9-]{1,39}$/.test(id.value));
 const cleanLabel=computed(()=>label.value.trim());
@@ -22,6 +25,8 @@ async function invoke(method,request) {
     if(!result.ok)throw new Error(result.code);
     const listed=method==='list'?result:await api.list();
     if(!listed.ok)throw new Error(listed.code);rows.value=listed.rows;
+    const roleApi = /** @type {any} */(globalThis).metaviewerRoles;
+    if (roleApi) { const result = await roleApi.choices(); if (Array.isArray(result)) modes.value = result; }
     if(method==='create'){id.value='';label.value='';domains.value='';}
     pendingDelete.value='';
   }catch(reason){error.value=identityErrorText(reason instanceof Error ? reason.message : '',request?.id);}
@@ -35,8 +40,10 @@ watch(()=>props.open,open=>{if(open)void invoke('list');},{immediate:true});
     <p v-if="login" role="status">Operator login view is open. Agent input stays refused until it closes.</p>
     <ul aria-label="Saved identities">
       <li v-for="row in rows" :key="row.id">
-        {{ row.label }} ({{ row.id }}) — {{ row.domains.join(', ') }} — Logged in: {{ row.logged_in }}
-        <UiButton label="Log in" :disabled="busy" @click="invoke('login',{id:row.id})" />
+        {{ row.label }} ({{ row.id }}) — {{ row.domains.join(', ') }} — Mode: {{ modeFor(row.id)?.currentMode || 'closed' }} — Last login: {{ modeFor(row.id)?.lastLogin ? new Date(modeFor(row.id).lastLogin).toLocaleString() : 'Not confirmed' }}
+        <UiButton v-if="!roleApi" label="Log in" :disabled="busy" @click="invoke('login',{id:row.id})" />
+        <UiButton label="Open as human" :disabled="busy || !modeFor(row.id)?.available" @click="emit('open-identity',{profileId:row.id,role:'human'}); emit('close')" />
+        <UiButton label="Open as agent" :disabled="busy || !modeFor(row.id)?.available" @click="emit('open-identity',{profileId:row.id,role:'agent'}); emit('close')" />
         <UiButton label="Delete" :disabled="busy" @click="pendingDelete=row.id" />
       </li>
     </ul>

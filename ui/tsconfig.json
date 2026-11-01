@@ -41,6 +41,9 @@
       ],
       "capsule-ui-kit/TerminalView": [
         "src/types/TerminalView.d.ts"
+      ],
+      "capsule-ui-kit/ui": [
+        ".kit/capsule-ui-kit/types/ui.d.ts"
       ]
     }
   },

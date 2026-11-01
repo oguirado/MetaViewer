@@ -29,9 +29,9 @@ const emit = defineEmits(['update:visible', 'create', 'close']);
 const api = /** @type {any} */ (globalThis).metaviewerRoles;
 const roleChoice = ref('agent'), profileChoice = ref(''), choosingRole = ref(false), roleError = ref('');
 const pendingIntent = ref(/** @type {any} */ (null));
-const profileChoices = ref(/** @type {Array<{role:string,profileId:string,available:boolean}>} */ ([]));
-const matchingProfiles = computed(() => profileChoices.value.filter(p => p.role === roleChoice.value));
-watch(roleChoice, () => { profileChoice.value = matchingProfiles.value.find(p => p.available)?.profileId ?? ''; });
+const profileChoices = ref(/** @type {Array<{role:string,profileId:string,available:boolean,currentMode?:string}>} */ ([]));
+const matchingProfiles = computed(() => profileChoices.value);
+watch(profileChoice, id => { roleChoice.value = profileChoices.value.find(p => p.profileId === id)?.role || 'agent'; });
 function confirmRole() {
   const profile = matchingProfiles.value.find(p => p.profileId === profileChoice.value);
   if (!profile?.available) { roleError.value = profile ? 'PROFILE_ALREADY_BOUND' : 'NO_IDENTITY'; return; }
@@ -105,7 +105,7 @@ function onClose() {
   <div v-if="choosingRole" class="mv-role-dialog" role="dialog" aria-modal="true" aria-label="Capsule role and identity" @keydown.esc="choosingRole = false; emit('update:visible', false)">
     <h2>Capsule role and identity</h2>
     <label>Role <select v-model="roleChoice" autofocus><option value="agent">Agent</option><option value="human">Human</option></select></label>
-    <label>Identity <select v-model="profileChoice"><option value="" disabled>Choose an available identity</option><option v-for="profile in matchingProfiles" :key="profile.profileId" :value="profile.profileId" :disabled="!profile.available">{{ profile.profileId }}{{ profile.available ? '' : ' — unavailable' }}</option></select></label>
+    <label>Identity <select v-model="profileChoice"><option value="" disabled>Choose an available identity</option><option v-for="profile in matchingProfiles" :key="profile.profileId" :value="profile.profileId" :disabled="!profile.available">{{ profile.profileId }}{{ profile.available ? (profile.currentMode && profile.currentMode !== 'closed' ? ' — ' + profile.currentMode : '') : ' — unavailable' }}</option></select></label>
     <p v-if="roleError" role="alert">{{ roleError }}</p>
     <button type="button" @click="confirmRole">Open capsule</button>
     <button type="button" @click="choosingRole = false; emit('update:visible', false)">Cancel</button>

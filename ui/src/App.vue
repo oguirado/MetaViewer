@@ -263,6 +263,17 @@ function applyWallControl(id, verb, prebuiltIntent) {
   if (nestedMode.displayOnly || typeof id !== 'string' || id.length === 0) return;
   const row = rows.value.find(candidate => candidate.id === id || candidate.surfaceId === id);
   const targetId = row ? row.id : id;
+  // Native human capsules never enter the agent Control intent builder.
+  const roleApi = /** @type {any} */(globalThis).metaviewerRoles;
+  if (capsuleModes.value[targetId] === 'human') return;
+  if (roleApi && !capsuleModes.value[targetId]) {
+    void roleApi.status(targetId).then((/** @type {any} */ status) => {
+      if (!['human','agent'].includes(status.role)) return;
+      onCapsuleMode({surfaceId:targetId,mode:status.role});
+      if (status.role === 'agent') applyWallControl(targetId,verb,prebuiltIntent);
+    }).catch(() => {});
+    return;
+  }
   if (verb === 'release_control') {
     disarmWallInput(targetId);
     let intent = prebuiltIntent;
@@ -592,6 +603,26 @@ function assertLiveProposal(body) {
 // [TARGET, unit decision] Tile close (x) leaves the capsule running, so rows stay admitted while
 // their panels are gone. Closed ids are tracked here only to show the empty-wall hint and the
 // way back (Add capsule -> open browser reveals the live tile) when every tile was closed.
+const capsuleModes = ref(/** @type {Record<string,string>} */ ({}));
+/** @param {{surfaceId:string,mode:string}} event */
+function onCapsuleMode(event) { capsuleModes.value = {...capsuleModes.value,[event.surfaceId]:event.mode}; }
+/** @param {string} surfaceId */
+async function revealOpenedIdentity(surfaceId) {
+  for (let attempt = 0; attempt < 30 && hostActive; attempt++) {
+    if (wall.value?.revealSurface(surfaceId,'split')?.ok) { markPanelOpen(surfaceId); return; }
+    await new Promise(resolve => setTimeout(resolve,100));
+  }
+}
+const pendingModeSwitch = ref(/** @type {any} */ (null));
+async function confirmModeSwitch() {
+  const current = pendingModeSwitch.value; pendingModeSwitch.value = null;
+  if (!current) return;
+  await submitHost(async () => {
+    const result = await /** @type {any} */(globalThis).metaviewerRoles.switchMode(current.surfaceId);
+    if (!result.ok) throw Object.assign(Error(result.code),{code:result.code});
+    void revealOpenedIdentity(result.surfaceId); return result;
+  });
+}
 const closedPanels = ref(/** @type {string[]} */ ([]));
 /** @param {any} payload */
 function onPanelClosed(payload) {
@@ -613,6 +644,8 @@ function reopenLiveSurfaces() {
   }
   return shown;
 }
+/** @param {any} choice */
+function openIdentityChoice(choice) { onCreateCapsule({kind:'identity-browser',choice}); }
 /** @param {unknown} intent */
 function onCreateCapsule(intent) {
   if (nestedMode.displayOnly) return;
@@ -636,8 +669,13 @@ function onCreateCapsule(intent) {
       }
       try {
         if (body.choice && /** @type {any} */ (globalThis).metaviewerRoles) {
-          const reply = await /** @type {any} */ (globalThis).metaviewerRoles.create(body.choice);
+          const reply = await /** @type {any} */ (globalThis).metaviewerRoles.open(body.choice);
+          if (!reply.ok && reply.code === 'PROFILE_ALREADY_BOUND' && reply.surfaceId) {
+            pendingModeSwitch.value = reply;
+            return {code:'MODE_SWITCH_CONFIRMATION',message:'Choose Close and reopen to change mode.',tone:'success'};
+          }
           if (!reply.ok) throw Object.assign(new Error(reply.code), {code:reply.code});
+          if (reply.surfaceId) void revealOpenedIdentity(reply.surfaceId);
           return reply;
         }
         return await props.authorityHost.createSurface();
@@ -1010,7 +1048,51 @@ function surfaceWitness(surface) {
   // per-frame witness flash; sizes come from the presented delivery.
   return { frame: info.lastPresentedHandle, digest: info.lastPresentedDigest, ...sizeOf(info) };
 }
-const feed = props.runtime?.projectionView ?? projectionView;
+const baseFeed = props.runtime?.projectionView ?? projectionView;
+const nativeRows = shallowRef(/** @type {any[]} */([]));
+const nativeListeners = new Set();
+let nativeRevision = 0, nativePolling = false;
+const nativeApi = !props.fixture && !nestedMode.displayOnly ? /** @type {any} */(globalThis).metaviewerRoles : null;
+const mergedRows = () => {
+  const base = baseFeed.getProjection()?.rows || [];
+  const ids = new Set(base.map(row => row.id));
+  return [...base,...nativeRows.value.filter(row => !ids.has(row.id))];
+};
+const nativeSnapshot = () => {
+  const base = baseFeed.getSnapshot();
+  if (!nativeRows.value.length) return base;
+  return {status:'live',stale:false,error:null,envelope:{schema:'surface/v0.1',epoch:base?.envelope?.epoch || 1,
+    revision:nativeRevision,query:'wall',projection:{rows:mergedRows()}}};
+};
+const feed = nativeApi?.surfaces ? {
+  getProjection:() => ({rows:mergedRows()}),getSnapshot:nativeSnapshot,
+  subscribe:(/** @type {any} */ listener) => {
+    nativeListeners.add(listener);
+    const stop = baseFeed.subscribe(() => listener(nativeSnapshot()));
+    return () => {nativeListeners.delete(listener);stop();};
+  },
+} : baseFeed;
+async function pollNativeSurfaces() {
+  if (nativePolling || !hostActive || !nativeApi?.surfaces) return;
+  nativePolling = true;
+  try {
+    const listed = await nativeApi.surfaces();
+    if (!Array.isArray(listed) || !hostActive) return;
+    const admitted = listed.filter(item => item?.schema === 'metaviewer.role_surface/v0.3' && item.role === 'human'
+      && item.surface?.schema === 'surface/v0.2' && item.surface.state === 'active' && item.surface.control === 'human');
+    const next = admitted.map(({surface:s}) => ({id:s.surface_id,surfaceId:s.surface_id,title:s.profile_id,profile_id:s.profile_id,
+      backendLifecycle:s.state,generation:null,visibility:s.visibility,control:s.control,display:s.display,geometry:s.geometry,
+      attachmentState:'live',refusal:null}));
+    if (JSON.stringify(next) === JSON.stringify(nativeRows.value)) return;
+    nativeRows.value = next; nativeRevision++;
+    for (const row of next) onCapsuleMode({surfaceId:row.id,mode:'human'});
+    for (const listener of nativeListeners) listener(nativeSnapshot());
+  } finally { nativePolling = false; }
+}
+const nativeTimer = nativeApi?.surfaces ? setInterval(() => { void pollNativeSurfaces().catch(() => {}); },250) : undefined;
+nativeTimer?.unref?.();
+onMounted(() => { void pollNativeSurfaces().catch(() => {}); });
+onBeforeUnmount(() => {clearInterval(nativeTimer);nativeListeners.clear();});
 const snapshot = shallowRef(feed.getSnapshot());
 const diagnosticTileStates = props.fixture?.key === 'tile-states';
 /** Lost-row admission (MVUI4L lane V, for lane W MV-7): the live runtime
@@ -1131,6 +1213,13 @@ const chromeWorkspace = markRaw(defineComponent({
     </TopBar>
     <div v-if="!nestedMode.displayOnly" id="mv-layout-notice" class="mv-layout-notice">
       <!-- Reserve the longest outcome before the wall becomes interactive, including while panels open. -->
+      <div v-if="!nestedMode.displayOnly && wallView === 'workspace'" class="mv-tile-presets" aria-label="Tile layout presets">
+        <UiButton id="tile-preset-single" data-semantic-anchor="wall/preset/single" label="1 tile" @click="wall?.setPreset('single')" />
+        <UiButton id="tile-preset-side-by-side" data-semantic-anchor="wall/preset/side-by-side" label="2 side by side" @click="wall?.setPreset('side-by-side')" />
+        <UiButton id="tile-preset-grid" data-semantic-anchor="wall/preset/grid" label="2×2" @click="wall?.setPreset('grid')" />
+        <UiButton id="tile-preset-focus-strip" data-semantic-anchor="wall/preset/focus-strip" label="Focus + strip" @click="wall?.setPreset('focus-strip')" />
+        <UiButton id="tile-preset-floating" data-semantic-anchor="wall/preset/floating" label="Floating layout" @click="wall?.setPreset(null)" />
+      </div>
       <p class="mv-layout-notice-reserve" aria-hidden="true"><strong>Layout unavailable.</strong> The default layout is shown read-only. Changes will not be saved.</p>
       <p v-if="layoutUnavailable && !creativeOpen && !settingsOpen && !multislotOpen && !nestedMode.displayOnly" id="mv-layout-unavailable" data-semantic-anchor="layout/unavailable"
         class="mv-layout-unavailable" role="alert" :data-error-code="layoutUnavailable.code">
@@ -1154,7 +1243,7 @@ const chromeWorkspace = markRaw(defineComponent({
           :color-scheme="scheme === 'mv-dark' ? 'dark' : 'light'" :density="density" @ready="onWallReady" @wall-settled="onWorkspaceSettled" @activate-surface="selectCapsule" @panel-closed="onPanelClosed" @submit-intent="onWallIntent">
           <template #surface="{ surface, capsuleId }">
             <template v-if="surface && (!multislotOpen || capsuleId !== selectedSurface?.id)">
-            <RoleSurface :surface-id="capsuleId" :control="surface.control">
+            <RoleSurface :surface-id="capsuleId" :control="surface.control" @mode="onCapsuleMode" @reveal="revealOpenedIdentity">
             <div v-if="wallInputState(surface) !== ''" class="mv-input-indicator" :data-input-state="wallInputState(surface)" :data-semantic-anchor="`capsule/${capsuleId}/input`">
               <UiButton v-if="wallInputState(surface) === 'view'" :id="`mv-input-take-${capsuleId}`" :data-semantic-anchor="`capsule/${capsuleId}/input/take`" class="mv-input-indicator__action" label="Take control" :aria-label="`Take control of ${surfaceLabel(surface)}`" @click="takeWallControl(surface)" />
               <span v-if="wallInputRefusal[capsuleId] && wallInputState(surface) === 'view'" class="mv-input-indicator__text mv-input-indicator__refusal" role="status">{{ wallInputRefusal[capsuleId] }}</span>
@@ -1203,7 +1292,12 @@ const chromeWorkspace = markRaw(defineComponent({
       <SideTerminalOverlay v-if="!nestedMode.displayOnly && !multislotOpen && !creativeOpen" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" v-model:open="terminalOpen" :storage="preferences" :top-offset="terminalTop" :bottom-offset="terminalBottom" />
     </div>
     <DemoDialog v-if="!nestedMode.displayOnly" :open="demoOpen" @close="demoOpen=false" />
-    <IdentitiesDialog v-if="!nestedMode.displayOnly" :open="identitiesOpen" @close="identitiesOpen=false" />
+    <div v-if="pendingModeSwitch" class="mv-mode-confirm" role="dialog" aria-modal="true" aria-label="Switch capsule mode">
+      <p>This identity is open in {{ pendingModeSwitch.currentMode }} mode.</p>
+      <UiButton id="mode-switch-confirm" data-semantic-anchor="capsule/mode/confirm" :label="`Close and reopen in ${pendingModeSwitch.requestedMode} mode`" @click="confirmModeSwitch" />
+      <UiButton id="mode-switch-cancel" data-semantic-anchor="capsule/mode/cancel" label="Cancel" @click="pendingModeSwitch = null" />
+    </div>
+    <IdentitiesDialog v-if="!nestedMode.displayOnly" :open="identitiesOpen" @close="identitiesOpen=false" @open-identity="openIdentityChoice" />
     <CatalogLauncher v-if="!nestedMode.displayOnly" v-model:visible="launcherOpen" @create="onCreateCapsule" />
     <AgentLaneHost :screen="nestedMode.displayOnly ? 'nested' : creativeOpen ? 'creative' : settingsOpen ? 'settings' : multislotOpen ? 'multislot' : 'wall'" :fixture-key="props.fixture?.key ?? ''" />
   </div>

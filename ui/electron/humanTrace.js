@@ -1,6 +1,6 @@
 // Continuous human_trace/v0.3 recorder; frozen wire contracts are unchanged.
 import { open } from 'node:fs/promises';
-import { constants, openSync, writeSync, fsyncSync, closeSync } from 'node:fs';
+import { constants, mkdirSync, lstatSync, realpathSync, openSync, writeSync, fsyncSync, closeSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 export const HUMAN_TRACE_SCHEMA = 'metaviewer.human_trace/v0.3';
@@ -73,8 +73,15 @@ export function createHumanTrace({ sessionId, surfaceId, capsuleId, write,
 
 /** Host-owned directory, no-clobber private file; every event is written now,
  * rather than exported from a memory buffer when the tile closes.
- * @param {{directory:string,sessionId:string,surfaceId:string,capsuleId:string}} options */
-export function createHumanTraceFile({ directory, sessionId, surfaceId, capsuleId }) {
+ * @param {{directory:string,sessionId:string,surfaceId:string,capsuleId:string,profileId?:string}} options */
+export function createHumanTraceFile({ directory, sessionId, surfaceId, capsuleId, profileId }) {
+  if (profileId !== undefined) {
+    if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(profileId)) throw Error('TRACE_PROFILE_REFUSED');
+    directory = join(directory, profileId);
+    mkdirSync(directory, {mode:0o700,recursive:true});
+    const st = lstatSync(directory);
+    if (!st.isDirectory() || st.uid !== process.getuid?.() || (st.mode & 0o777) !== 0o700 || realpathSync(directory) !== directory) throw Error('TRACE_DIRECTORY_REFUSED');
+  }
   const filename = `human-trace-${randomUUID()}.jsonl`;
   const path = join(directory, filename);
   const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);

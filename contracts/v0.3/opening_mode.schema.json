@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:metaviewer:opening-mode:v0.3",
+  "title": "Private host-to-adapter opening mode, consumed before native create",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "profile_id", "mode"],
+  "properties": {
+    "schema": {"const": "metaviewer.opening_mode/v0.3"},
+    "profile_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"},
+    "mode": {"enum": ["human", "agent"]}
+  }
+}

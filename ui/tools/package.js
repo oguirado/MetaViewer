@@ -52,6 +52,9 @@ const repo = resolve(ui, '..');
  */
 export async function stageElectronModules(app) {
   await fs.cp(join(ui, 'electron'), join(app, 'electron'), { recursive: true });
+  // Main's layout.save imports this pure decoder at runtime, including in ASAR.
+  await syncKit({kitRepo:process.env.CAPSULE_UI_KIT_REPO,
+    dest:join(app,'.kit/capsule-ui-kit'),lockPath:join(ui,'kit.lock.json')});
   await verifyStagedImports(app);
 }
 
@@ -71,7 +74,7 @@ export async function verifyStagedImports(app) {
     for (const match of imports) {
       // The kit is staged independently; this gate owns Electron host modules.
       const target = resolve(dirname(file), match[1]);
-      if (target.startsWith(resolve(app, 'electron') + sep)) await visit(target);
+      if (target.startsWith(resolve(app, 'electron') + sep) || target.startsWith(resolve(app, '.kit') + sep)) await visit(target);
     }
   }
   await visit(join(app, 'electron/main.js'));
@@ -295,7 +298,7 @@ export async function verifyPackagedSecurity(root) {
     let sealKey = null;
     if (relPath.startsWith('dist/renderer/')) {
       sealKey = relPath.slice('dist/renderer/'.length);
-    } else if (relPath.startsWith('dist/preload/') || relPath.startsWith('electron/')) {
+    } else if (relPath.startsWith('dist/preload/') || relPath.startsWith('electron/') || relPath.startsWith('.kit/')) {
       sealKey = relPath;
     }
     if (sealKey !== null) {
@@ -361,6 +364,8 @@ export async function sealRendererAssets(app, options = {}) {
     if (electronStat.isSymbolicLink() || !electronStat.isDirectory()) throw new Error('Renderer alias refused');
     await walkSection(electronDir, 'electron/', 'electron/');
   }
+  const kitDir = join(app, '.kit');
+  if (await fs.lstat(kitDir).catch(() => null)) await walkSection(kitDir,'.kit/','.kit/');
   collected.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
   /** @type {Record<string, string>} */
   const hashes = {};
@@ -1008,6 +1013,7 @@ function verifyBootSeal(baseDir) {
   walkSection(join(baseDir, 'dist/renderer'), '', 'dist/renderer/');
   walkSection(join(baseDir, 'dist/preload'), 'dist/preload/', 'dist/preload/');
   walkSection(join(baseDir, 'electron'), 'electron/', 'electron/');
+  if (keys.some(key => key.startsWith('.kit/'))) walkSection(join(baseDir,'.kit'),'.kit/','.kit/');
   if (verifiedCount !== keys.length) {
     throw new Error('PKG_SEAL_INVENTORY_MISMATCH');
   }
@@ -1211,6 +1217,14 @@ else if (process.argv.includes('--nested-depth=1')) {
               if (!st || st.availability !== 'live' || st.handshakeSeen !== true) {
                 throw new Error('PKG_ADAPTER_START_FAILED');
               }
+            }
+            if (process.env.MV_PACKAGE_SMOKE_LAYOUT === '1') {
+              const { createDefaultLayoutProfile } = await import('../.kit/capsule-ui-kit/src/workspace/layoutProfile.js');
+              const raw = JSON.stringify(createDefaultLayoutProfile({product:'metaviewer',profileId:'default',workspaceId:'main-wall'}));
+              const saved = await boot.window.webContents.executeJavaScript('globalThis.metaviewer.save(' + JSON.stringify(raw) + ')');
+              const loaded = await boot.window.webContents.executeJavaScript('globalThis.metaviewer.load()');
+              if (saved !== true || loaded !== raw) throw new Error('PKG_LAYOUT_SAVE_FAILED');
+              writeFdSync(1,'METAVIEWER_LAYOUT_SAVE_PACKAGED_OK');
             }
             if (process.env.MV_PACKAGE_SMOKE_HOLD === '1') {
               // [TARGET, unit decision] The host prints SURFACE_CREATE_SENT only from the core

@@ -21,3 +21,6 @@ launch.token
 .beckett/token
 # U-DEC-0110/0111: each user's private MemoryWeb home stays outside Git.
 /memoryweb/
+
+# Local P18 verification command output; reports stay in the final response.
+/.p18-evidence/
