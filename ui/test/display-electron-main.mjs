@@ -19,6 +19,8 @@ const { findForbiddenEnv } = await import(moduleUrl('coreLauncher.js'));
 const { createMainBindings } = await import(moduleUrl('hostBindings.js'));
 const { bootProductionMain, registerPrivilegedScheme, createLayoutBridge, DEFAULT_GEOMETRY, ELECTRON_PIN } = await import(moduleUrl('main.js'));
 
+electron.app.disableHardwareAcceleration();
+for (const flag of ['disable-gpu', 'disable-gpu-compositing', 'disable-dev-shm-usage']) electron.app.commandLine.appendSwitch(flag);
 registerPrivilegedScheme(electron.protocol);
 void run();
 async function run() {

@@ -10,6 +10,12 @@ import { tmpdir } from 'node:os';
 import { extractAll, createPackage } from '@electron/asar';
 import { packageShell, sealRendererAssets } from '../tools/package.js';
 
+export const DISPLAY_ELECTRON_SOFTWARE_FLAGS = Object.freeze([
+  '--disable-gpu',
+  '--disable-gpu-compositing',
+  '--disable-dev-shm-usage',
+]);
+
 async function runArtifact(archive, dist) {
   // Retail launches start from an empty environment. Only host launch inputs
   // and the private harness artifact coordinate are admitted here.
@@ -19,10 +25,15 @@ async function runArtifact(archive, dist) {
   env.PATH = process.env.PATH ?? '';
   env.LANG ??= 'C.UTF-8';
   env.MV_DISPLAY_E2E_SHELL_ROOT = archive;
+  const electronFlags = process.env.MV_DISPLAY_E2E_ELECTRON_FLAGS !== undefined
+    ? process.env.MV_DISPLAY_E2E_ELECTRON_FLAGS.trim().split(/\s+/).filter(Boolean)
+    : DISPLAY_ELECTRON_SOFTWARE_FLAGS;
+  env.MV_DISPLAY_E2E_ELECTRON_FLAGS = electronFlags.join(' ');
   // OnlyLoadAppFromAsar forces the packaged executable into its owned-core
   // entry, ignoring a fake entry argument. The upstream pinned runtime loads
   // this test entry, which imports *all* production modules from sealed ASAR.
-  const child = spawn('xvfb-run', ['-a', join(dist, 'electron'),
+  const child = spawn('xvfb-run', ['-a', '-s', '-screen 0 1280x900x24', join(dist, 'electron'),
+    ...electronFlags,
     fileURLToPath(new URL('./display-electron-main.mjs', import.meta.url))],
   { env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
   let output = '';
@@ -60,6 +71,7 @@ test('packaged wall paints UnixNano DISPLAY generations after VERIFIED create; r
     assert.match(nominal.output, /METAVIEWER_RENDERER_READY/);
     assert.match(nominal.output, /METAVIEWER_SURFACE_CREATE_PENDING/);
     assert.doesNotMatch(nominal.output, /METAVIEWER_SURFACE_CREATE_DEGRADED/);
+    assert.doesNotMatch(nominal.output, /Creation of StagingBuffer's SharedImage failed\./);
     assert.match(nominal.output, /DISPLAY_E2E_OK fps=(\d+)/);
     assert.equal((nominal.output.match(/METAVIEWER_DISPLAY_PORT /g) ?? []).length, 1, nominal.output);
     assert.equal((nominal.output.match(/METAVIEWER_DISPLAY_ACK /g) ?? []).length, 1, nominal.output);

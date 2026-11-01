@@ -12,7 +12,25 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 CI_YML = ROOT / ".github" / "workflows" / "ci.yml"
 DISPLAY_TEST = ROOT / "ui" / "test" / "display-electron.test.js"
+DISPLAY_MAIN = ROOT / "ui" / "test" / "display-electron-main.mjs"
 TEST_TITLE = "packaged wall paints UnixNano DISPLAY generations after VERIFIED create; reverted guards fail"
+SOFTWARE_FLAGS = ("--disable-gpu", "--disable-gpu-compositing", "--disable-dev-shm-usage")
+
+
+def _assert_software_rendering_sources(test_src: str, main_src: str, step_src: str) -> None:
+    for flag in SOFTWARE_FLAGS:
+        if flag not in test_src:
+            raise AssertionError(f"display-electron.test.js missing {flag}")
+        if flag[2:] not in main_src:
+            raise AssertionError(f"display-electron-main.mjs missing {flag[2:]}")
+        if flag not in step_src:
+            raise AssertionError(f"Run packaged DISPLAY regression step missing {flag}")
+    if "disableHardwareAcceleration()" not in main_src:
+        raise AssertionError("display-electron-main.mjs missing disableHardwareAcceleration()")
+    if "Creation of StagingBuffer's SharedImage failed" not in test_src:
+        raise AssertionError("display-electron.test.js missing SharedImage staging-buffer failure guard")
+    if "Creation of StagingBuffer's SharedImage failed" not in step_src:
+        raise AssertionError("Run packaged DISPLAY regression step missing SharedImage staging-buffer failure guard")
 
 
 def _extract_step_run(ci_text: str, job_name: str, step_name: str) -> str:
@@ -76,7 +94,17 @@ class PackagedDisplayCiTests(unittest.TestCase):
         ):
             self.assertIn(marker, test_src)
 
-    def _run_pipeline(self, log_text: str, fixture_rc: int = 0) -> tuple[int, dict, int, dict, int]:
+        main_src = DISPLAY_MAIN.read_text(encoding="utf-8")
+        _assert_software_rendering_sources(test_src, main_src, self.display_step)
+
+    def _run_pipeline(
+        self,
+        log_text: str,
+        fixture_rc: int = 0,
+        platform: str = "x64",
+        flags_override: str | None = None,
+        display_step_override: str | None = None,
+    ) -> tuple[int, dict, int, dict, int]:
         with tempfile.TemporaryDirectory(prefix="mv-cipkgdisp-") as tmp:
             tmp_path = pathlib.Path(tmp)
             fixture_log = tmp_path / "display-fixture.log"
@@ -88,10 +116,10 @@ class PackagedDisplayCiTests(unittest.TestCase):
             pkg_out = tmp_path / "products"
             pkg_out.mkdir()
             evidence = {
-                "artifact": "MetaViewer-linux-x64.tar",
+                "artifact": f"MetaViewer-linux-{platform}.tar",
                 "artifact_sha256": "a" * 64,
                 "manifest_sha256": "b" * 64,
-                "architecture": "x64",
+                "architecture": platform,
                 "smoke_marker": "METAVIEWER_MAIN_SMOKE_OK",
             }
             (pkg_out / "product-evidence.json").write_text(json.dumps(evidence), encoding="utf-8")
@@ -101,7 +129,7 @@ class PackagedDisplayCiTests(unittest.TestCase):
                 os.environ,
                 RUNNER_TEMP=str(tmp_path),
                 JOB_ID="package",
-                PLATFORM="x64",
+                PLATFORM=platform,
                 GITHUB_RUN_ID="999",
                 GITHUB_SHA=rev,
                 GITHUB_STEP_SUMMARY=str(summary),
@@ -110,15 +138,20 @@ class PackagedDisplayCiTests(unittest.TestCase):
                 MV_PACKAGE_DISPLAY_LOG_FIXTURE=str(fixture_log),
                 MV_PACKAGE_DISPLAY_FIXTURE_RC=str(fixture_rc),
             )
+            if flags_override is not None:
+                base_env["MV_DISPLAY_E2E_ELECTRON_FLAGS_OVERRIDE"] = flags_override
+            else:
+                base_env.pop("MV_DISPLAY_E2E_ELECTRON_FLAGS_OVERRIDE", None)
+            step_script = display_step_override if display_step_override is not None else self.display_step
             disp_res = subprocess.run(
-                ["bash", "-c", self.display_step],
+                ["bash", "-c", step_script],
                 cwd=ROOT,
                 env=base_env,
                 capture_output=True,
                 text=True,
                 timeout=20,
             )
-            evdir = tmp_path / "metaviewer-ci" / "package" / "x64"
+            evdir = tmp_path / "metaviewer-ci" / "package" / platform
             disp_receipt = json.loads((evdir / "package-display.receipt.json").read_text(encoding="utf-8"))
 
             witness_script = self.witness_step.replace(
@@ -164,7 +197,7 @@ class PackagedDisplayCiTests(unittest.TestCase):
                 "issuer": "CI/ci-required/999 [VM]",
                 "scope": {
                     "unit": "W0-CI-MATRIX",
-                    "platform": "x64",
+                    "platform": platform,
                     "feature": "budgets",
                     "artifact": "budgets.receipt.json",
                 },
@@ -227,15 +260,107 @@ class PackagedDisplayCiTests(unittest.TestCase):
             "ℹ skipped 0\n"
             "ℹ todo 0\n"
         )
-        disp_rc, disp_rec, witness_rc, pkg_rec, agg_rc = self._run_pipeline(pass_log, fixture_rc=0)
-        self.assertEqual(disp_rc, 0)
-        self.assertEqual(disp_rec["outcome"], "PASS")
-        self.assertEqual(disp_rec["counts"], {"passed": 1, "failed": 0, "skipped": 0, "source": "parsed:node-test"})
-        self.assertTrue(all(a["accepted"] for a in disp_rec["assertions"]))
-        self.assertEqual(witness_rc, 0)
-        self.assertEqual(pkg_rec["outcome"], "PASS")
-        self.assertTrue(any(a["id"] == "packaged-display-regression" and a["accepted"] for a in pkg_rec["assertions"]))
-        self.assertEqual(agg_rc, 0)
+        for platform in ("x64", "arm64"):
+            with self.subTest(platform=platform):
+                disp_rc, disp_rec, witness_rc, pkg_rec, agg_rc = self._run_pipeline(
+                    pass_log, fixture_rc=0, platform=platform
+                )
+                self.assertEqual(disp_rc, 0)
+                self.assertEqual(disp_rec["outcome"], "PASS")
+                self.assertEqual(disp_rec["scope"]["platform"], platform)
+                self.assertEqual(
+                    disp_rec["counts"], {"passed": 1, "failed": 0, "skipped": 0, "source": "parsed:node-test"}
+                )
+                self.assertTrue(all(a["accepted"] for a in disp_rec["assertions"]))
+                sw_assertion = next(a for a in disp_rec["assertions"] if a["id"] == "software-rendering-flags")
+                self.assertTrue(sw_assertion["accepted"])
+                for flag in SOFTWARE_FLAGS:
+                    self.assertIn(flag, sw_assertion["observed"])
+                self.assertEqual(witness_rc, 0)
+                self.assertEqual(pkg_rec["outcome"], "PASS")
+                self.assertTrue(
+                    any(a["id"] == "packaged-display-regression" and a["accepted"] for a in pkg_rec["assertions"])
+                )
+                self.assertEqual(agg_rc, 0)
+
+    def test_software_rendering_flags_absent_mutant_fails(self) -> None:
+        pass_log = (
+            "METAVIEWER_DISPLAY_STAGE surface=display-e2e stage=FIRST_PAINT detail=OK\n"
+            "DISPLAY_E2E_OK fps=23\n"
+            "DISPLAY_PACKAGED_MUTANT_REJECTED\n"
+            "DISPLAY_U64_GENERATION_MUTANT_REJECTED\n"
+            "DISPLAY_UNBIND_MUTANT_REJECTED\n"
+            "DISPLAY_READY_LOSS_RECOVERED\n"
+            f"✔ {TEST_TITLE} (64200.12ms)\n"
+            "ℹ tests 1\n"
+            "ℹ suites 0\n"
+            "ℹ pass 1\n"
+            "ℹ fail 0\n"
+            "ℹ cancelled 0\n"
+            "ℹ skipped 0\n"
+            "ℹ todo 0\n"
+        )
+        # Mutant 1: arm64 step executed with missing software-rendering flags (env override or mutated step script).
+        for label, flags_override, step_override in (
+            ("empty-flags", "", None),
+            ("missing-disable-gpu", "--disable-gpu-compositing --disable-dev-shm-usage", None),
+            ("missing-disable-gpu-compositing", "--disable-gpu --disable-dev-shm-usage", None),
+            ("missing-disable-dev-shm-usage", "--disable-gpu --disable-gpu-compositing", None),
+            (
+                "mutated-step-default-flags-absent",
+                None,
+                self.display_step.replace(
+                    "--disable-gpu --disable-gpu-compositing --disable-dev-shm-usage",
+                    "--enable-logging",
+                ),
+            ),
+        ):
+            with self.subTest(mutant=label):
+                disp_rc, disp_rec, witness_rc, pkg_rec, agg_rc = self._run_pipeline(
+                    pass_log,
+                    fixture_rc=0,
+                    platform="arm64",
+                    flags_override=flags_override,
+                    display_step_override=step_override,
+                )
+                self.assertNotEqual(disp_rc, 0, label)
+                self.assertEqual(disp_rec["outcome"], "FAIL", label)
+                sw_assertion = next(a for a in disp_rec["assertions"] if a["id"] == "software-rendering-flags")
+                self.assertFalse(sw_assertion["accepted"], label)
+                self.assertNotEqual(witness_rc, 0, label)
+                self.assertEqual(pkg_rec["outcome"], "FAIL", label)
+                self.assertNotEqual(agg_rc, 0, label)
+
+        # Mutant 2: arm64 log containing Chromium OneCopyRasterBufferProvider SharedImage failure fails closed.
+        shared_image_flood_log = (
+            "[8491:1101/021912.279055:ERROR:cc/raster/one_copy_raster_buffer_provider.cc:286] "
+            "Creation of StagingBuffer's SharedImage failed.\n" + pass_log
+        )
+        disp_rc, disp_rec, witness_rc, pkg_rec, agg_rc = self._run_pipeline(
+            shared_image_flood_log,
+            fixture_rc=0,
+            platform="arm64",
+        )
+        self.assertNotEqual(disp_rc, 0)
+        self.assertEqual(disp_rec["outcome"], "FAIL")
+        self.assertNotEqual(witness_rc, 0)
+        self.assertEqual(pkg_rec["outcome"], "FAIL")
+        self.assertNotEqual(agg_rc, 0)
+
+        # Mutant 3: source-level flag removal in display-electron.test.js / display-electron-main.mjs / ci.yml is caught.
+        test_src = DISPLAY_TEST.read_text(encoding="utf-8")
+        main_src = DISPLAY_MAIN.read_text(encoding="utf-8")
+        for flag in SOFTWARE_FLAGS:
+            with self.assertRaises(AssertionError):
+                _assert_software_rendering_sources(test_src.replace(flag, ""), main_src, self.display_step)
+            with self.assertRaises(AssertionError):
+                _assert_software_rendering_sources(test_src, main_src.replace(flag[2:], ""), self.display_step)
+            with self.assertRaises(AssertionError):
+                _assert_software_rendering_sources(test_src, main_src, self.display_step.replace(flag, ""))
+        with self.assertRaises(AssertionError):
+            _assert_software_rendering_sources(
+                test_src, main_src.replace("disableHardwareAcceleration()", ""), self.display_step
+            )
 
     def test_skip_outputs_fail_step_and_ci_required(self) -> None:
         tap_skip_log = (

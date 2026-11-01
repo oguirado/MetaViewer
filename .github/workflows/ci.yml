@@ -2608,6 +2608,7 @@ jobs:
           MV_KIT_CHECKOUT: ${{ github.workspace }}/kit-checkout
           ELECTRON_OVERRIDE_DIST_PATH: ${{ github.workspace }}/ui/node_modules/electron/dist
           CARGO_TARGET_DIR: ${{ runner.temp }}/package-cargo-target
+          MV_DISPLAY_E2E_ELECTRON_FLAGS: "--disable-gpu --disable-gpu-compositing --disable-dev-shm-usage"
         run: |
           set +e
           set -u -o pipefail
@@ -2618,16 +2619,25 @@ jobs:
           LOG="$EVDIR/package-display.log"
           SANE="${LOG}.sane"
           : > "$LOG"
+          export MV_DISPLAY_E2E_ELECTRON_FLAGS="${MV_DISPLAY_E2E_ELECTRON_FLAGS_OVERRIDE---disable-gpu --disable-gpu-compositing --disable-dev-shm-usage}"
           if [ -n "${MV_PACKAGE_DISPLAY_LOG_FIXTURE:-}" ]; then
             cat "$MV_PACKAGE_DISPLAY_LOG_FIXTURE" > "$LOG"
             rc="${MV_PACKAGE_DISPLAY_FIXTURE_RC:-0}"
           else
-            bash .github/workflows/offline.sh timeout 1200 xvfb-run -a -s "-screen 0 1280x900x24" env -u XAUTHORITY node --test --test-reporter=spec ui/test/display-electron.test.js > "$LOG" 2>&1
+            bash .github/workflows/offline.sh timeout 1200 xvfb-run -a -s "-screen 0 1280x900x24" env -u XAUTHORITY MV_DISPLAY_E2E_ELECTRON_FLAGS="$MV_DISPLAY_E2E_ELECTRON_FLAGS" node --test --test-reporter=spec ui/test/display-electron.test.js > "$LOG" 2>&1
             rc=$?
           fi
           reason="packaged DISPLAY regression green"
           if [ "$rc" -ne 0 ]; then
             reason="packaged DISPLAY regression failed (rc $rc)"
+          elif [[ " ${MV_DISPLAY_E2E_ELECTRON_FLAGS:-} " != *" --disable-gpu "* ]] || [[ " ${MV_DISPLAY_E2E_ELECTRON_FLAGS:-} " != *" --disable-gpu-compositing "* ]] || [[ " ${MV_DISPLAY_E2E_ELECTRON_FLAGS:-} " != *" --disable-dev-shm-usage "* ]]; then
+            printf 'FAIL packaged DISPLAY regression missing software rendering flags\n' >> "$LOG"
+            rc=1
+            reason="packaged DISPLAY regression missing software rendering flags"
+          elif grep -Fq "Creation of StagingBuffer's SharedImage failed." "$LOG"; then
+            printf 'FAIL packaged DISPLAY regression hit GPU SharedImage staging buffer failure\n' >> "$LOG"
+            rc=1
+            reason="packaged DISPLAY regression hit GPU SharedImage staging buffer failure"
           elif grep -Eq '# SKIP|needs the pinned kit checkout and CARGO_TARGET_DIR|^﹣ |^[ℹ#] skipped [1-9]|^[ℹ#] fail [1-9]' "$LOG"; then
             printf 'FAIL packaged DISPLAY regression skipped or failed in node --test output\n' >> "$LOG"
             rc=1
@@ -2660,18 +2670,20 @@ jobs:
           m_skip = re.search(r'^[ℹ#] skipped (\d+)$', text, re.M)
           has_check = '✔ packaged wall paints UnixNano DISPLAY generations after VERIFIED create; reverted guards fail' in text
           has_skip_marker = bool(re.search(r'# SKIP|needs the pinned kit checkout and CARGO_TARGET_DIR|^﹣ ', text, re.M))
+          flags_str = ' ' + e.get('MV_DISPLAY_E2E_ELECTRON_FLAGS', '') + ' '
+          has_sw_flags = all(f in flags_str for f in (' --disable-gpu ', ' --disable-gpu-compositing ', ' --disable-dev-shm-usage '))
           passed = int(m_pass.group(1)) if m_pass else (1 if (e['OUTCOME'] == 'PASS' and has_check) else 0)
           failed = int(m_fail.group(1)) if m_fail else (0 if e['OUTCOME'] == 'PASS' else 1)
           skipped = int(m_skip.group(1)) if m_skip else (1 if has_skip_marker else 0)
           if e['OUTCOME'] != 'PASS' and failed == 0 and skipped == 0:
               failed = 1
-          unskipped_ok = (e['OUTCOME'] == 'PASS' and rc == 0 and has_check and not has_skip_marker and passed >= 1 and failed == 0 and skipped == 0)
+          unskipped_ok = (e['OUTCOME'] == 'PASS' and rc == 0 and has_check and not has_skip_marker and has_sw_flags and passed >= 1 and failed == 0 and skipped == 0)
           receipt = {
               'schema': 'gate_receipt/v1', 'gate_id': e['GATE'], 'leg': e['GATE'], 'profile': 'W0',
               'owner': 'W0-CI-MATRIX', 'issuer': e['ISSUER'],
               'scope': {'unit': 'W0-CI-MATRIX', 'platform': e['PLATFORM'], 'feature': e['GATE'],
                         'artifact': e['GATE'] + '.receipt.json'},
-              'argv': ['bash', '.github/workflows/offline.sh', 'timeout', '1200', 'xvfb-run', '-a', '-s', '-screen 0 1280x900x24', 'env', '-u', 'XAUTHORITY', 'node', '--test', '--test-reporter=spec', 'ui/test/display-electron.test.js'],
+              'argv': ['bash', '.github/workflows/offline.sh', 'timeout', '1200', 'xvfb-run', '-a', '-s', '-screen 0 1280x900x24', 'env', '-u', 'XAUTHORITY', 'MV_DISPLAY_E2E_ELECTRON_FLAGS=' + e.get('MV_DISPLAY_E2E_ELECTRON_FLAGS', ''), 'node', '--test', '--test-reporter=spec', 'ui/test/display-electron.test.js'],
               'cwd': e['CWD'],
               'rc': rc, 'outcome': e['OUTCOME'], 'reason': e['REASON'],
               'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
@@ -2680,6 +2692,10 @@ jobs:
               'product_identity': None,
               'assertions': [
                   {'id': 'exit-status', 'expected': 'rc 0', 'observed': 'rc %d' % rc, 'accepted': e['OUTCOME'] == 'PASS'},
+                  {'id': 'software-rendering-flags',
+                   'expected': '--disable-gpu --disable-gpu-compositing --disable-dev-shm-usage',
+                   'observed': e.get('MV_DISPLAY_E2E_ELECTRON_FLAGS', ''),
+                   'accepted': bool(has_sw_flags and e['OUTCOME'] == 'PASS')},
                   {'id': 'unskipped-packaged-display',
                    'expected': '✔ packaged wall paints UnixNano DISPLAY generations after VERIFIED create; reverted guards fail (skipped=0)',
                    'observed': 'passed=%d failed=%d skipped=%d check=%s' % (passed, failed, skipped, has_check),
