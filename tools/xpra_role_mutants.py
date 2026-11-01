@@ -12,6 +12,11 @@ UI = [NODE, '--test', '--test-force-exit', '--test-timeout=2500', 'test/xpra-rol
 GO = '/usr/local/go/bin/go'
 CORE_GUARD = '        if self.human_roles.contains(&p.surface_id) {\n            return Ok(Some(Refusal::Policy));\n        }'
 mutants = [
+    ('role-mutant-client-readiness', ROOT/'ui/electron/xpraHumanTile.js',
+     'await waitForXpraClient(wc, {writable, isActive});',
+     '// MUTANT: HTML load is treated as readiness', ROOT/'ui', UI),
+    ('role-mutant-client-connect', ROOT/'ui/electron/xpraClient.js',
+     '?connect=1&username=worker', '?username=worker', ROOT/'ui', UI),
     ('role-mutant-forward-click', ROOT/'ui/electron/xpraHumanTile.js',
      "wc.on('before-mouse-event', event => event.preventDefault());",
      "wc.on('before-mouse-event', () => {});", ROOT/'ui', UI),
@@ -26,7 +31,7 @@ mutants = [
      'const count = writeSync(fd, bytes, offset, bytes.length - offset);',
      'const count = bytes.length - offset;', ROOT/'ui', UI),
     ('role-mutant-token-url', ROOT/'ui/electron/xpraHumanTile.js',
-     "await wc.loadURL(origin + '/' + clientQuery);",
+     "await wc.loadURL(origin + '/metaviewer-tile.html' + clientQuery);",
      "await wc.loadURL(origin + '/?token=' + Object.values(bridge.requestHeaders)[0]);", ROOT/'ui', UI),
     ('role-mutant-open-websocket', ROOT/'ui/electron/xpraHumanBridge.js',
      'for (const socket of connections) socket.destroy();',

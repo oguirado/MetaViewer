@@ -1,5 +1,6 @@
 // Host-only authenticated bridge between role views and the capsule Unix socket.
 import http from 'node:http';
+import { xpraTileDocument } from './xpraClient.js';
 import net from 'node:net';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { lstat, realpath } from 'node:fs/promises';
@@ -71,6 +72,12 @@ export async function openXpraHumanBridge({ viewRoot, capsule, expectedSocketUid
   const server = http.createServer(async (req, res) => {
     try {
       if (!await admit(req) || closed) { res.writeHead(403).end(); return; }
+      if (req.url?.split('?')[0] === '/metaviewer-tile.html') {
+        res.writeHead(200, { 'content-type':'text/html; charset=utf-8', 'cache-control':'no-store',
+          'referrer-policy':'no-referrer', 'x-frame-options':'SAMEORIGIN' });
+        res.end(xpraTileDocument);
+        return;
+      }
       if (req.url === '/js/lib/jquery.js' && jquery !== undefined) {
         res.writeHead(200, { 'content-type': 'application/javascript', 'cache-control': 'no-store',
           'referrer-policy': 'no-referrer' });

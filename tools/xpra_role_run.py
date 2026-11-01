@@ -10,7 +10,7 @@ start = time.time()
 env = dict(os.environ)
 env.pop('MV_WENDER_ROOT', None)
 env['PATH'] = '/usr/local/go/bin:/home/admin/.nvm/versions/node/v24.14.0/bin:/home/admin/.cargo/bin:' + env.get('PATH','')
-env.update(MV_MW_WENDER_ROOT='/home/admin/Documentos/wender-agent-wt-pin', CARGO_TARGET_DIR='/home/admin/.cache/cargo-target/mv-wt-xtile')
+env.update(CAPSULE_UI_KIT_REPO='/home/admin/.cache/metaviewer-kit/kit-v0.2.1', ELECTRON_OVERRIDE_DIST_PATH='/home/admin/Documentos/Games/Holdings-int/app/shell/node_modules/electron/dist', MV_MW_WENDER_ROOT='/home/admin/Documentos/wender-agent-wt-pin', CARGO_TARGET_DIR='/home/admin/.cache/cargo-target/mv-wt-xtile')
 with open(logs / (label + '.log'), 'w') as output:
     p = subprocess.Popen(argv, stdout=output, stderr=subprocess.STDOUT, env=env)
     with open('/home/admin/Música/TeamWork_Antigravity2/campaigns/metaviewer-0/out/pids.log','a') as f:

@@ -12,7 +12,7 @@ async function revoke() {
   try { await api?.close(props.surfaceId); } catch { /* host window teardown also revokes */ }
 }
 async function sync() {
-  if (!api || busy || !alive) return;
+  if (!api || busy || !alive || error.value) return;
   const box = root.value?.getBoundingClientRect();
   const visible = box && box.width >= 1 && box.height >= 1 && box.x >= 0 && box.y >= 0 &&
     box.right <= innerWidth && box.bottom <= innerHeight && root.value?.getClientRects().length;
@@ -51,6 +51,7 @@ onBeforeUnmount(() => { alive = false; clearInterval(timer); void revoke(); });
     </div>
     <div ref="root" class="mv-role-viewport">
       <div v-if="role === 'agent'" v-show="!watching" :inert="watching" class="mv-role-agent-canvas"><slot /></div>
+      <button v-if="error" type="button" @click="error = ''; sync()">Retry browser</button>
       <p v-if="role === 'human' || watching" class="mv-role-status" role="status">{{ error || (role === 'human' ? 'Human capsule' : 'Read-only watch') }}</p>
       <p v-else-if="error" role="alert">{{ error }}</p>
     </div>

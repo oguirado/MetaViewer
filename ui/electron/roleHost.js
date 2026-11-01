@@ -1,3 +1,4 @@
+import { xpraClientQuery } from './xpraClient.js';
 // Additive v0.3 role API. All capsule/socket selection stays in Electron main.
 import { open, realpath, readFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
@@ -137,7 +138,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
         showView: bridge => tileFactory({electron,window,bridge,bounds,
           trace:recorder || dummyTrace,isActive:active,writable:role === 'human',
           capsuleSize:() => ({width:1280,height:900}),
-          clientQuery:role === 'agent' ? '?readonly=1&resize=0' : '?resize=0',
+          clientQuery:xpraClientQuery(role === 'human'),
           onFailure:() => { void close(surfaceId); }}),
         closeTrace:() => recorder?.close(),
       });

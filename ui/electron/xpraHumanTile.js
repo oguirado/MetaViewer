@@ -1,4 +1,5 @@
 // Native role view: separate sandboxed WebContentsView for native HTML5 input and pixels.
+import { xpraClientQuery, waitForXpraClient } from './xpraClient.js';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
@@ -11,7 +12,7 @@ import { fileURLToPath } from 'node:url';
  * axContext?:()=>{sensitive?:boolean,password?:boolean,row?:number}|null,clientQuery?:string,onFailure:(error:unknown)=>void}} options
  */
 export async function attachXpraHumanTile({ electron, window, bridge, bounds, trace,
-  isActive, capsuleSize, writable = true, axContext = () => null, clientQuery = '', onFailure }) {
+  isActive, capsuleSize, writable = true, axContext = () => null, clientQuery = xpraClientQuery(writable), onFailure }) {
   const { WebContentsView, session, ipcMain } = electron;
   if (typeof isActive !== 'function' || isActive() !== true || typeof capsuleSize !== 'function' ||
       typeof onFailure !== 'function') {
@@ -57,12 +58,8 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
     // The capsule stays fixed; fit its native viewport inside this tile only.
     const size = capsuleSize();
     if (size.width !== 1280 || size.height !== 900) throw Error('XPRA_FIXED_SIZE_REQUIRED');
-    const scale = Math.min(rect.width / size.width, rect.height / size.height);
-    const width = Math.max(1, Math.floor(size.width * scale));
-    const height = Math.max(1, Math.floor(size.height * scale));
-    wc.setZoomFactor(scale);
-    view.setBounds({x:rect.x + Math.floor((rect.width - width) / 2),
-      y:rect.y + Math.floor((rect.height - height) / 2),width,height});
+    wc.setZoomFactor(1);
+    view.setBounds(rect);
   }
   /** @param {import('electron').IpcMainEvent} event @param {Record<string,any>} row */
   const onTrace = (event, row) => {
@@ -96,7 +93,8 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
   try {
     resize(bounds);
     if (clientQuery && !/^\?[a-zA-Z0-9_=&.-]+$/.test(clientQuery)) throw Error('XPRA_QUERY_REFUSED');
-    await wc.loadURL(origin + '/' + clientQuery);
+    await wc.loadURL(origin + '/metaviewer-tile.html' + clientQuery);
+    await waitForXpraClient(wc, {writable, isActive});
     if (!isActive()) throw Error('XPRA_HUMAN_LEASE_LOST');
     trace.setActive(true);
     if (writable) wc.focus();
