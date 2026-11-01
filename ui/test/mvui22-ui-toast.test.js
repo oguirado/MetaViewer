@@ -1,3 +1,4 @@
+import * as p18cDesktopModel from '../electron/desktopLayout.js';
 // MVUI22 lane T: the take/release outcome toast stays visible for ~4 s.
 // Regression (live7): the outcome state persisted but the toast painted at
 // z-index 5, below every kit overlay layer, so wall/multislot overlays
@@ -209,6 +210,8 @@ async function loadApp(captured) {
     './nested/nested.js': { resolveNestedMode, applyNestedWall },
     'capsule-ui-kit/ui': { UiButton: stub },
     'capsule-ui-kit/theme': { setKitScheme() {} },
+    './wall/DesktopWorkspace.vue': wall,
+    '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue': wall,
     './surfaces/SurfaceCanvas.vue': stub,
     './surfaces/tileScheduler.js': { createTileScheduler },

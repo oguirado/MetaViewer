@@ -1,3 +1,4 @@
+import * as p18cDesktopModel from '../electron/desktopLayout.js';
 import test from 'node:test';
 import { validates, intentSchema } from './mvui-x-schema.js';
 import assert from 'node:assert/strict';
@@ -279,6 +280,8 @@ test('mounted App routes wall controls and catalog proposals, renders typed verd
     './core/HostOutcome.vue': HostOutcome, 'capsule-ui-kit/DockWorkspace': stub,
     '../.kit/capsule-ui-kit/src/index-shell.js': { ShellWorkspace: stub, TopBar: stub, Sidebar: stub, StatusBar: stub },
     'capsule-ui-kit/ui': { UiButton: stub }, 'capsule-ui-kit/theme': { setKitScheme() {} },
+    './wall/DesktopWorkspace.vue': wall,
+    '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue': wall, './wall/EmptyWallView.vue': stub, './catalog/CatalogLauncher.vue': catalog,
     './terminal/SideTerminalOverlay.vue': stub, './multislot/MultislotHost.vue': vue.defineComponent({ setup: (_p, ctx) => { captured.multislot = ctx; return () => vue.h('div'); } }),
     './recording/MvRecordingPanel.vue': stub, './settings/MvSettingsPanel.vue': stub,

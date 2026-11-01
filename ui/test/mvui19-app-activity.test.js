@@ -1,3 +1,4 @@
+import * as p18cDesktopModel from '../electron/desktopLayout.js';
 // MVUI19 lane A (L3-2): live intents, acks and refusals reach the activity
 // feed and the count advances on every recorded entry. Regression: the live
 // app froze at 2 rows because renderer-side refusals of the operator's own
@@ -60,6 +61,8 @@ async function loadApp(captured) {
     './nested/nested.js': { resolveNestedMode, applyNestedWall },
     'capsule-ui-kit/ui': { UiButton: stub },
     'capsule-ui-kit/theme': { setKitScheme() {} },
+    './wall/DesktopWorkspace.vue': wall,
+    '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue': wall,
     './surfaces/SurfaceCanvas.vue': stub,
     './surfaces/tileScheduler.js': { createTileScheduler },

@@ -1,3 +1,4 @@
+import * as p18cDesktopModel from '../electron/desktopLayout.js';
 import { installRoleMenuInput, openRoleMenuInput } from './role-menu-input-harness.mjs';
 // INPUT-ARM (FEEDBACK R-INPUT): the operator takes control of a capsule from
 // the wall and immediately clicks and types in it, and always sees the state.
@@ -123,6 +124,8 @@ async function loadApp(source, captured) {
     './nested/nested.js': { resolveNestedMode, applyNestedWall },
     'capsule-ui-kit/ui': { UiButton: buttonStub },
     'capsule-ui-kit/theme': { setKitScheme() {} },
+    './wall/DesktopWorkspace.vue': wallStub,
+    '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue': wallStub,
     './surfaces/SurfaceCanvas.vue': SurfaceCanvas,
     './surfaces/tileScheduler.js': { createTileScheduler },

@@ -1,3 +1,4 @@
+import * as p18cDesktopModel from '../electron/desktopLayout.js';
 // MVUI19 lane A (L3-3): the settled 'Request sent.'/refusal toast
 // auto-dismisses after a short timeout and never intercepts pointer events on
 // interactive rows. Regression: the toast never dismissed and covered the
@@ -48,6 +49,8 @@ async function loadApp(captured) {
     './nested/nested.js': { resolveNestedMode, applyNestedWall },
     'capsule-ui-kit/ui': { UiButton: stub },
     'capsule-ui-kit/theme': { setKitScheme() {} },
+    './wall/DesktopWorkspace.vue': wall,
+    '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue': wall,
     './surfaces/SurfaceCanvas.vue': stub,
     './surfaces/tileScheduler.js': { createTileScheduler },

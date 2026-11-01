@@ -1,3 +1,4 @@
+import * as p18cDesktopModel from '../electron/desktopLayout.js';
 /**
  * MVUI28 lane R: an async input refusal renders as one Activity row.
  *
@@ -58,6 +59,8 @@ async function loadResultApp(captured) {
     './nested/nested.js': { resolveNestedMode, applyNestedWall },
     'capsule-ui-kit/ui': { UiButton: stub },
     'capsule-ui-kit/theme': { setKitScheme() {} },
+    './wall/DesktopWorkspace.vue': wallStub,
+    '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue': wallStub,
     './surfaces/SurfaceCanvas.vue': stub,
     './surfaces/tileScheduler.js': { createTileScheduler },

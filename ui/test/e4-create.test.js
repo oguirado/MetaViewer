@@ -1,3 +1,4 @@
+import * as p18cDesktopModel from '../electron/desktopLayout.js';
 // @ts-check
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -119,6 +120,8 @@ async function compileApp(captured, transform = (s) => s, adaptersMod = hostAdap
     './nested/nested.js': { resolveNestedMode, applyNestedWall },
     'capsule-ui-kit/ui': { UiButton: stub },
     'capsule-ui-kit/theme': { setKitScheme() {} },
+    './wall/DesktopWorkspace.vue': wall,
+    '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue': wall,
     './surfaces/SurfaceCanvas.vue': stub,
     './surfaces/tileScheduler.js': { createTileScheduler },

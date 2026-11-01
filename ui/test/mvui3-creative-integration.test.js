@@ -1,3 +1,4 @@
+import * as p18cDesktopModel from '../electron/desktopLayout.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { loadSfc, mount, slotStub, ui, byId, nodes, vue } from './mvui3-creative-harness.js';
@@ -23,6 +24,8 @@ async function appComponent(captured) {
     'capsule-ui-kit/DockWorkspace': slotStub,
     '../.kit/capsule-ui-kit/src/index-shell.js': { ShellWorkspace: slotStub, TopBar: slotStub, Sidebar: slotStub, StatusBar: slotStub },
     'capsule-ui-kit/ui': ui, 'capsule-ui-kit/theme': { setKitScheme() {} },
+    './wall/DesktopWorkspace.vue': wall,
+    '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue': wall, './wall/EmptyWallView.vue': vue.defineComponent({
       setup: () => () => vue.h('section', { id: 'empty-wall' }),
     }),

@@ -1,3 +1,4 @@
+import * as p18cDesktopModel from '../electron/desktopLayout.js';
 // MVUI25 lane A: entry input-port wiring plus App gating. main.js keeps
 // its closed stub-map import surface (input names travel through the
 // fixtureRuntime re-export), builds the port from the double on fixtures
@@ -140,6 +141,8 @@ async function loadGatingApp(captured) {
     './activity/ActivityStrip.vue': stub,
     'capsule-ui-kit/DockWorkspace': stub,
     '../.kit/capsule-ui-kit/src/index-shell.js': { ShellWorkspace: stub, TopBar: stub, Sidebar: stub, StatusBar: stub },
+    './wall/DesktopWorkspace.vue': wallStub,
+    '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue': wallStub,
     './wall/EmptyWallView.vue': stub,
     './catalog/CatalogLauncher.vue': stub,

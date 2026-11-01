@@ -1,3 +1,4 @@
+import * as p18cDesktopModel from '../electron/desktopLayout.js';
 // MVUI29c lane T: App terminal wiring. The multislot child receives the
 // terminal session port, the provider list, the broker commands and the
 // clipboard; the auto-open keeps its key rule and additionally opens for
@@ -45,7 +46,9 @@ async function mountAppForTerminal(initial = {}) {
       './nested/nested.js': { resolveNestedMode, applyNestedWall },
       'capsule-ui-kit/ui': { UiButton },
       'capsule-ui-kit/theme': { setKitScheme() {} },
-      './wall/WallWorkspace.vue': stub,
+      './wall/DesktopWorkspace.vue': stub,
+    '../electron/desktopLayout.js': p18cDesktopModel,
+    './wall/WallWorkspace.vue': stub,
       './surfaces/SurfaceCanvas.vue': stub,
       './surfaces/tileScheduler.js': { createTileScheduler },
     });

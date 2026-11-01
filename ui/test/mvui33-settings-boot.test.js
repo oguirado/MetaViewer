@@ -1,3 +1,4 @@
+import * as p18cDesktopModel from '../electron/desktopLayout.js';
 // MVUI33 lane S: density boot and application. The entry resolves the stored
 // density before first paint and hands the frames port to App; App paints the
 // boot density on the root attribute and the wall, then follows the settings
@@ -173,7 +174,9 @@ async function mountAppForDensity(initial = {}) {
       './nested/nested.js': { resolveNestedMode, applyNestedWall },
       'capsule-ui-kit/ui': { UiButton: stub },
       'capsule-ui-kit/theme': { setKitScheme() {} },
-      './wall/WallWorkspace.vue': wall,
+      './wall/DesktopWorkspace.vue': wall,
+    '../electron/desktopLayout.js': p18cDesktopModel,
+    './wall/WallWorkspace.vue': wall,
       './surfaces/SurfaceCanvas.vue': stub,
       './surfaces/tileScheduler.js': { createTileScheduler },
     });

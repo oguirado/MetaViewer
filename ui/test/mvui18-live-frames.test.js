@@ -1,3 +1,4 @@
+import * as p18cDesktopModel from '../electron/desktopLayout.js';
 import {addOperatorStubs} from './operator-stubs.mjs';
 // MVUI18 lane J: live frames paint (L3-1), frame scale jitter (L2-8), kit
 // subscribe mirror. REAL-like numbers throughout: the notice stream id is
@@ -635,6 +636,8 @@ async function loadAppHarness(captured, row) {
     'capsule-ui-kit/ui': { UiButton: stub },
     'capsule-ui-kit/theme': { setKitScheme: () => {} },
     '../.kit/capsule-ui-kit/src/shell/SettingsModel.js': { SETTINGS_STORAGE_KEYS: { scheme: 'scheme' }, readStoredSetting: (_s, _k, d) => d, writeStoredSetting: () => {} },
+    './wall/DesktopWorkspace.vue': wall,
+    '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue': wall,
     './surfaces/SurfaceCanvas.vue': canvas,
     './wall/EmptyWallView.vue': stub,

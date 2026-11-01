@@ -1,3 +1,4 @@
+import * as p18cDesktopModel from '../electron/desktopLayout.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -20,6 +21,8 @@ async function loadApp(captured) {
     'capsule-ui-kit/ui': { UiButton: vue.defineComponent({ props: ['label'], setup: (props, ctx) => () => vue.h('button', ctx.attrs, props.label) }) },
     'capsule-ui-kit/theme': { setKitScheme() {} },
     '../.kit/capsule-ui-kit/src/shell/SettingsModel.js': { SETTINGS_STORAGE_KEYS: { scheme: 'scheme' }, readStoredSetting: (_s, _k, value) => value },
+    './wall/DesktopWorkspace.vue': vue.defineComponent({ setup: (_, ctx) => { captured.wallSettled = () => ctx.emit('wall-settled'); ctx.expose({ revealSurface: () => ({ ok: true }) }); return () => vue.h('div', { id: 'test-wall' }); } }),
+    '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue': vue.defineComponent({ setup: (_, ctx) => { captured.wallSettled = () => ctx.emit('wall-settled'); ctx.expose({ revealSurface: () => ({ ok: true }) }); return () => vue.h('div', { id: 'test-wall' }); } }), './wall/EmptyWallView.vue': stub, './catalog/CatalogLauncher.vue': stub,
     './terminal/SideTerminalOverlay.vue': overlay, './multislot/MultislotHost.vue': stub,
     './recording/MvRecordingPanel.vue': stub, './settings/MvSettingsPanel.vue': settings,

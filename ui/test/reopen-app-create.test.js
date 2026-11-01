@@ -1,3 +1,4 @@
+import * as p18cDesktopModel from '../electron/desktopLayout.js';
 // REOPEN-FLOW renderer half: the tile close (x) removes only the dock panel, the capsule row and
 // its profile stay bound. Open-browser then comes back SURFACE_PROFILE_BOUND from the host; the
 // shell must show the live tile again (never a second create) and surface every other typed
@@ -48,6 +49,8 @@ async function loadApp(captured, mutate = null) {
     './nested/nested.js': { resolveNestedMode, applyNestedWall },
     'capsule-ui-kit/ui': { UiButton: stub },
     'capsule-ui-kit/theme': { setKitScheme() {} },
+    './wall/DesktopWorkspace.vue': wall,
+    '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue': wall,
     './surfaces/SurfaceCanvas.vue': stub,
     './surfaces/tileScheduler.js': { createTileScheduler },

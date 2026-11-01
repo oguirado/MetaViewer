@@ -1,3 +1,4 @@
+import * as p18cDesktopModel from '../electron/desktopLayout.js';
 // MVUI30 lane L: a lost capsule shows its last presented frame frozen with a
 // Lost badge instead of "Connecting to surface". Canvas state maps from the
 // backend lifecycle (not the attachment); the frozen tile keeps its canvas
@@ -576,6 +577,8 @@ async function loadApp(captured) {
     '../.kit/capsule-ui-kit/src/index-shell.js': { ShellWorkspace: stub, TopBar: stub, Sidebar: stub, StatusBar: stub },
     'capsule-ui-kit/ui': { UiButton: stub },
     'capsule-ui-kit/theme': { setKitScheme() {} },
+    './wall/DesktopWorkspace.vue': wallStub,
+    '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue': wallStub,
     './wall/EmptyWallView.vue': stub,
     './catalog/CatalogLauncher.vue': stub,

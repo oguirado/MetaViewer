@@ -1,3 +1,4 @@
+import * as p18cDesktopModel from '../electron/desktopLayout.js';
 // MVUI26B lane M: the shared input mode drops to READ when control leaves
 // human or the selected surface goes away. Mounts the REAL App with stub
 // children (wall renders the surface slot per row, canvas stubs expose live
@@ -66,6 +67,8 @@ async function loadDropApp(captured) {
     './nested/nested.js': { resolveNestedMode, applyNestedWall },
     'capsule-ui-kit/ui': { UiButton: stub },
     'capsule-ui-kit/theme': { setKitScheme() {} },
+    './wall/DesktopWorkspace.vue': wallStub,
+    '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue': wallStub,
     './surfaces/SurfaceCanvas.vue': canvasStub,
     './surfaces/tileScheduler.js': { createTileScheduler },

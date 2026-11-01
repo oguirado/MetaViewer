@@ -1,3 +1,4 @@
+import * as p18cDesktopModel from '../electron/desktopLayout.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -23,6 +24,8 @@ async function loadApp(captured, row) {
     '../.kit/capsule-ui-kit/src/side-terminal/SideTerminalPanel.vue':stub,
     'capsule-ui-kit/ui':{UiButton:stub},'capsule-ui-kit/theme':{setKitScheme:()=>{}},
     '../.kit/capsule-ui-kit/src/shell/SettingsModel.js':{SETTINGS_STORAGE_KEYS:{scheme:'scheme'},readStoredSetting:(_s,_k,d)=>d,writeStoredSetting:()=>{}},
+    './wall/DesktopWorkspace.vue': wall,
+    '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue':wall,'./surfaces/SurfaceCanvas.vue':canvas,
     './wall/EmptyWallView.vue':stub, './catalog/CatalogLauncher.vue':stub,
     './terminal/SideTerminalOverlay.vue':stub, './multislot/MultislotHost.vue':stub,

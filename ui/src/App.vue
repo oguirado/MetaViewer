@@ -25,6 +25,8 @@ import { resolveNestedMode, applyNestedWall } from './nested/nested.js';
 import { UiButton } from 'capsule-ui-kit/ui';
 import { setKitScheme } from 'capsule-ui-kit/theme';
 import WallWorkspace from './wall/WallWorkspace.vue';
+import DesktopWorkspace from './wall/DesktopWorkspace.vue';
+import {createDesktopState, desktopRows} from '../electron/desktopLayout.js';
 import SurfaceCanvas from './surfaces/SurfaceCanvas.vue';
 import { createTileScheduler } from './surfaces/tileScheduler.js';
 /** @typedef {import('capsule-ui-kit/layout').LayoutProfileEnvelope} LayoutProfile */
@@ -617,6 +619,17 @@ function assertLiveProposal(body) {
 // [TARGET, unit decision] Tile close (x) leaves the capsule running, so rows stay admitted while
 // their panels are gone. Closed ids are tracked here only to show the empty-wall hint and the
 // way back (Add capsule -> open browser reveals the live tile) when every tile was closed.
+const desktopState = ref(createDesktopState());
+const desktopStateLoaded = ref(false);
+/** @param {import('../electron/desktopLayout.js').DesktopState} state */
+function onDesktopsChange(state) { desktopState.value = state; desktopStateLoaded.value = true; }
+/** @param {string} view */
+function selectGlobalView(view) {
+  creativeOpen.value = false; settingsOpen.value = false; multislotOpen.value = false;
+  terminalOpen.value = false; moreOpen.value = false; identitiesOpen.value = false;
+  launcherOpen.value = false; demoOpen.value = false; railOpen.value = false;
+  wall.value?.selectView?.(view);
+}
 const capsuleModes = ref(/** @type {Record<string,string>} */ ({}));
 const stoppedSurfaces = ref(/** @type {Record<string,boolean>} */ ({}));
 /** @param {{surfaceId:string,mode:string}} event */
@@ -629,10 +642,12 @@ function onCapsuleMode(event) {
     stoppedSurfaces.value = {...stoppedSurfaces.value,[event.surfaceId]:true};
   }
 }
-/** @param {string} surfaceId */
-async function revealOpenedIdentity(surfaceId) {
+/** @param {string} surfaceId @param {string} [mode] */
+async function revealOpenedIdentity(surfaceId, mode) {
+  if (mode && ['human','agent'].includes(mode)) onCapsuleMode({surfaceId,mode});
   await pollNativeSurfaces().catch(() => {});
   for (let attempt = 0; attempt < 30 && hostActive; attempt++) {
+    await wall.value?.followSurface?.(surfaceId,mode);
     if (settled.value && wall.value?.revealSurface(surfaceId,'split')?.ok) { markPanelOpen(surfaceId); return true; }
     await new Promise(resolve => setTimeout(resolve,100));
   }
@@ -641,7 +656,9 @@ async function revealOpenedIdentity(surfaceId) {
 /** Remove the ended lifetime's pane only after the host acknowledged Stop/Switch.
  * @param {string} surfaceId */
 function onCapsuleStopped(surfaceId) {
+  stoppedSurfaces.value = {...stoppedSurfaces.value,[surfaceId]:true};
   wall.value?.applyPresentationIntent?.({type:'close',capsuleId:surfaceId});
+  wall.value?.forgetSurface?.(surfaceId);
   const modes = {...capsuleModes.value}; delete modes[surfaceId]; capsuleModes.value = modes;
   closedPanels.value = closedPanels.value.filter(id => id !== surfaceId);
 }
@@ -651,7 +668,7 @@ function onCapsuleLifecycle({surfaceId,completion}) {
   void submitHost(async () => {
     const result = await completion;
     if (!result.ok) throw Object.assign(Error(result.code),{code:result.code});
-    if (result.surfaceId && !await revealOpenedIdentity(result.surfaceId)) throw Object.assign(Error('TILE_REVEAL_UNPROVEN'),{code:'TILE_REVEAL_UNPROVEN'});
+    if (result.surfaceId && !await revealOpenedIdentity(result.surfaceId,result.role)) throw Object.assign(Error('TILE_REVEAL_UNPROVEN'),{code:'TILE_REVEAL_UNPROVEN'});
     onCapsuleStopped(surfaceId);
     return true;
   });
@@ -681,7 +698,7 @@ async function confirmModeSwitch() {
       if (result.code === 'SURFACE_CREATE_BUSY' || result.busy) return null;
       throw Object.assign(Error(result.code),{code:result.code});
     }
-    await revealOpenedIdentity(result.surfaceId);
+    await revealOpenedIdentity(result.surfaceId,result.role);
     onCapsuleStopped(current.surfaceId);
     return null;
   });
@@ -696,7 +713,10 @@ function onPanelClosed(payload) {
 function markPanelOpen(id) {
   if (closedPanels.value.includes(id)) closedPanels.value = closedPanels.value.filter(closed => closed !== id);
 }
-const allTilesClosed = computed(() => rows.value.length > 0 && rows.value.every(row => closedPanels.value.includes(row.id)));
+const visibleRows = computed(() => desktopStateLoaded.value
+  ? desktopRows(desktopState.value,rows.value,desktopState.value.activeView,desktopState.value.views[desktopState.value.activeView].active)
+  : rows.value);
+const allTilesClosed = computed(() => visibleRows.value.length > 0 && visibleRows.value.every(row => closedPanels.value.includes(row.id)));
 /** Reveals every live admitted surface in the wall (a closed tile's panel is gone, its row is not).
  * @returns {boolean} true when at least one tile is shown. */
 function reopenLiveSurfaces() {
@@ -733,10 +753,12 @@ function onCreateCapsule(intent) {
       try {
         if (body.choice && /** @type {any} */ (globalThis).metaviewerRoles) {
           if (body.choice.busy) return null;
+          selectGlobalView(body.choice.role);
+          await nextTick();
           const reply = await /** @type {any} */ (globalThis).metaviewerRoles.open(body.choice);
           if (!reply.ok && reply.code === 'PROFILE_ALREADY_BOUND' && reply.surfaceId) {
             if (!reply.requestedMode || reply.requestedMode === reply.currentMode) {
-              void revealOpenedIdentity(reply.surfaceId);
+              void revealOpenedIdentity(reply.surfaceId,reply.role || reply.currentMode);
               return null;
             }
             pendingModeSwitch.value = reply;
@@ -744,11 +766,11 @@ function onCreateCapsule(intent) {
           }
           if (!reply.ok && reply.code === 'PROFILE_ALREADY_BOUND') {
             const bound = rows.value.find(row => (/** @type {any} */ (row).profile_id || row.title) === body.choice.profileId);
-            if (bound) { void revealOpenedIdentity(bound.id); return null; }
+            if (bound) { void revealOpenedIdentity(bound.id,capsuleModes.value[bound.id]); return null; }
           }
           if (!reply.ok && (reply.code === 'SURFACE_CREATE_BUSY' || reply.busy)) return null;
           if (!reply.ok) throw Object.assign(new Error(reply.code), {code:reply.code});
-          if (reply.surfaceId) void revealOpenedIdentity(reply.surfaceId);
+          if (reply.surfaceId) void revealOpenedIdentity(reply.surfaceId,reply.role || reply.currentMode);
           return null;
         }
         return await props.authorityHost.createSurface();
@@ -1014,7 +1036,7 @@ function measureChrome() {
 }
 onMounted(() => { measureChrome(); window.addEventListener('resize', measureChrome); });
 onBeforeUnmount(() => window.removeEventListener('resize', measureChrome));
-const wall = ref(/** @type {InstanceType<typeof WallWorkspace>|null} */ (null));
+const wall = ref(/** @type {InstanceType<typeof DesktopWorkspace>|null} */ (null));
 const activeTileScheduler = /** @type {ReturnType<typeof createTileScheduler>} */ (props.runtime?.tileScheduler ?? tileScheduler);
 provide('tileScheduler', activeTileScheduler);
 /** Live-only frame-port router provided by the entry; null on fixture/legacy boots. */
@@ -1229,8 +1251,12 @@ onMounted(() => { reconcileWallInput(); });
 // Readiness belongs to the branch actually rendered, including display-only walls.
 const wallView = computed(() => nestedMode.displayOnly ? 'nested' : creativeOpen.value ? 'creative' : rows.value.length ? 'workspace' : 'empty');
 let firstFrame = 0;
+let desktopWallReady = false;
 function cancelFirstFrame() { if (firstFrame) window.cancelAnimationFrame(firstFrame); firstFrame = 0; }
-watch(wallView, () => { settled.value = false; revealed.clear(); closedPanels.value = []; cancelFirstFrame(); }, { flush: 'sync' });
+watch(wallView, view => {
+  settled.value = view === 'workspace' && desktopWallReady;
+  revealed.clear(); closedPanels.value = []; cancelFirstFrame();
+}, { flush: 'sync' });
 onMounted(() => {
   watch(wallView, view => {
     if (view === 'workspace' || typeof window.requestAnimationFrame !== 'function') return; // The workspace owns its restoration witness.
@@ -1259,7 +1285,11 @@ function revealRows() {
 function onWorkspaceSettled() { if (wallView.value === 'workspace') onSettled(); }
 /** Wall @ready: reveal admitted rows, then replay layout echoes that failed
  * while the wall was not ready (MVUI16 lane P, ARG-pmui-4). */
-function onWallReady() { revealRows(); retryPendingEchoes(); }
+function onWallReady() {
+  desktopWallReady = true;
+  if (wallView.value === 'workspace') settled.value = true;
+  revealRows(); retryPendingEchoes();
+}
 function onSettled() { settled.value = true; revealRows(); }
 /** @param {any} payload */
 function openCapsule(payload) {
@@ -1267,6 +1297,7 @@ function openCapsule(payload) {
   const id = payload?.type?.id ?? payload?.id;
   if (typeof id === 'string') selectedCapsuleId.value = id;
   if (id === 'add') { launcherOpen.value = true; return; }
+  if (rows.value.some(row => row.id === id)) void wall.value?.followSurface?.(id,capsuleModes.value[id]);
   if (rows.value.some(row => row.id === id) && wall.value?.revealSurface(id, payload?.placement ?? 'tab')?.ok === true) markPanelOpen(id);
 }
 const chromeWorkspace = markRaw(defineComponent({
@@ -1278,6 +1309,18 @@ const chromeWorkspace = markRaw(defineComponent({
   <div class="metaviewer mv-shell" :data-wall-settled="String(settled)" :class="{ 'mv-shell--nested': nestedMode.displayOnly }">
     <TopBar v-if="!nestedMode.displayOnly" product="MetaViewer" new-label="Add capsule" search-placeholder="Find a capsule…" :nav-expanded="railOpen"
       :palette-items="catalog" @toggle-nav="railOpen = !railOpen" @new-capsule="launcherOpen = true" @open="openCapsule">
+      <template #context>
+        <div class="mv-views" role="group" aria-label="Capsule views">
+          <div v-for="view in ['human','agent']" :key="view" class="mv-view-column">
+            <button :id="`view-${view}`" class="mv-view-button" :aria-pressed="desktopState.activeView === view" @click="selectGlobalView(view)">{{ view === 'human' ? 'Humans' : 'Agents' }}</button>
+            <div v-if="desktopState.activeView === view" class="mv-desktop-numbers" :aria-label="`${view === 'human' ? 'Humans' : 'Agents'} desktops`">
+              <button v-for="desktop in desktopState.views[view].desktops" :key="desktop.id" :id="`desktop-${view}-${desktop.id}`" :aria-label="`Desktop ${desktop.id}`" :aria-pressed="desktopState.views[view].active === desktop.id" @click="selectGlobalView(view); wall?.selectDesktop(desktop.id)">{{ desktop.id }}</button>
+              <button id="desktop-add" aria-label="Add desktop" :disabled="!desktopStateLoaded" @click="selectGlobalView(desktopState.activeView); wall?.addDesktop()">+</button>
+              <button v-if="desktopState.views[view].active !== 1" id="desktop-remove" aria-label="Remove empty desktop" :disabled="Object.values(desktopState.assignments).some(home => home.view === view && home.desktop === desktopState.views[view].active)" @click="wall?.removeDesktop(desktopState.views[view].active)">−</button>
+            </div>
+          </div>
+        </div>
+      </template>
       <template #actions>
         <span class="mv-entry-copy"><UiButton id="shell-use-metaviewer" data-semantic-anchor="entry/copy" label="Use MetaViewer" @click="copyEntry" />
         <span class="mv-entry-feedback" role="status" aria-live="polite" aria-atomic="true">{{ entryMessage }}</span></span>
@@ -1320,13 +1363,13 @@ const chromeWorkspace = markRaw(defineComponent({
             <SurfaceCanvas :surface-id="surface.id" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :frame-width="surfaceWitness(surface).width" :frame-height="surfaceWitness(surface).height" :state="canvasStateFor(surface)" :input-enabled="inputEnabledFor(surface)" :stream-id="surfaceStreamId(surface)" />
           </article>
         </section>
-        <WallWorkspace v-else-if="!creativeOpen" :key="wallView" :hidden="!rows.length" ref="wall" :workspace-component="chromeWorkspace" :scope="props.scope" :default-profile="props.layout" :storage="workspaceStorage"
+        <DesktopWorkspace v-else :hidden="creativeOpen" :rows="rows" :modes="capsuleModes" @desktops-change="onDesktopsChange" @navigate="selectGlobalView" @layout-error="layoutUnavailable = {code:'LAYOUT_SAVE_REFUSED',saveRefused:true}" ref="wall" :workspace-component="chromeWorkspace" :scope="props.scope" :default-profile="props.layout" :storage="workspaceStorage"
           owner-window-id="main-wall" :projection-view="feed" :capture-state="captureAvailable ? captureState : undefined" :display-only="nestedMode.displayOnly" :allow-lost-surface="admitLostRows" :intent-builders="props.runtime?.intentBuilders ?? intentBuilders"
           :control-registry="props.runtime?.controlRegistry ?? controlRegistry" :scheduler="props.runtime?.scheduler ?? scheduler" :tile-scheduler="props.runtime?.tileScheduler ?? tileScheduler"
           :color-scheme="scheme === 'mv-dark' ? 'dark' : 'light'" :density="density" @ready="onWallReady" @wall-settled="onWorkspaceSettled" @activate-surface="selectCapsule" @panel-closed="onPanelClosed" @submit-intent="onWallIntent">
-          <template #surface="{ surface, capsuleId }">
+          <template #surface="{ surface, capsuleId, desktopActive }">
             <template v-if="surface && (!multislotOpen || capsuleId !== selectedSurface?.id)">
-            <RoleSurface :label="surfaceLabel(surface)" :surface-id="capsuleId" :control="surface.control" :can-take-control="wallInputState(surface) === 'view'" @take-control="takeWallControl(surface)" @mode="onCapsuleMode" @lifecycle="onCapsuleLifecycle">
+            <RoleSurface :presentation-active="desktopActive && !creativeOpen" :label="surfaceLabel(surface)" :surface-id="capsuleId" :control="surface.control" :can-take-control="wallInputState(surface) === 'view'" @take-control="takeWallControl(surface)" @mode="onCapsuleMode" @lifecycle="onCapsuleLifecycle">
             <div v-if="wallInputState(surface) !== ''" class="mv-input-indicator" :data-input-state="wallInputState(surface)" :data-semantic-anchor="`capsule/${capsuleId}/input`">
               <span v-if="wallInputRefusal[capsuleId] && wallInputState(surface) === 'view'" class="mv-input-indicator__text mv-input-indicator__refusal" role="status">{{ wallInputRefusal[capsuleId] }}</span>
               <span v-else-if="wallInputState(surface) === 'pending'" class="mv-input-indicator__text" role="status">{{ wallInputRefusal[capsuleId] ?? 'Taking control…' }}</span>
@@ -1337,8 +1380,8 @@ const chromeWorkspace = markRaw(defineComponent({
             </RoleSurface>
             </template>
           </template>
-        </WallWorkspace>
-        <EmptyWallView v-if="(!rows.length || allTilesClosed) && !nestedMode.displayOnly && !creativeOpen" @add-capsule="launcherOpen = true" />
+        </DesktopWorkspace>
+        <EmptyWallView v-if="(!visibleRows.length || allTilesClosed) && !nestedMode.displayOnly && !creativeOpen" @add-capsule="launcherOpen = true" />
         <section v-if="creativeOpen && selectedSurface && !nestedMode.displayOnly" class="mv-creative-screen" aria-label="Creative capsule">
           <CreativeCapsule :capsule-id="selectedSurface.id" :frames="creativeFrames" title="Storyboard" @submit-intent="dispatch" />
         </section>
@@ -1471,4 +1514,16 @@ body { font-family:var(--cuk-semantic-typography-font-family-sans, system-ui, sa
 /* Window-hidden is permanent presentation state, including the entire shell. */
 .mv-tile[hidden] { display:none !important; }
 .dv-resize-container:has([data-mv-window-hidden="true"]):not(:has([data-mv-window-hidden="false"])), .dv-groupview:has([data-mv-window-hidden="true"]):not(:has([data-mv-window-hidden="false"])) { display:none !important; }
+</style>
+
+<style>
+.mv-shell { --cuk-component-app-shell-topbar-height:72px; }
+.mv-views { display:flex; align-self:stretch; gap:4px; margin-right:12px; }
+.mv-view-column { display:flex; flex-direction:column; align-items:flex-start; min-width:88px; }
+.mv-view-button, .mv-desktop-numbers button { cursor:pointer; color:var(--cuk-semantic-text-primary); background:transparent; border:1px solid var(--cuk-semantic-border-default); border-radius:5px; padding:4px 10px; font:inherit; }
+.mv-view-button[aria-pressed="true"], .mv-desktop-numbers button[aria-pressed="true"] { background:var(--cuk-semantic-surface-canvas); font-weight:700; border-color:currentColor; }
+.mv-desktop-numbers { display:flex; gap:3px; margin-top:3px; max-width:240px; overflow-x:auto; }
+.mv-desktop-numbers button { padding:1px 6px; flex-shrink:0; }
+.mv-desktop-numbers button:disabled { opacity:.4; cursor:default; }
+.mv-view-button:focus-visible, .mv-desktop-numbers button:focus-visible { outline:2px solid currentColor; outline-offset:2px; }
 </style>

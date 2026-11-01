@@ -1,3 +1,4 @@
+import * as p18cDesktopModel from '../electron/desktopLayout.js';
 // MVUI32 lane L: lost surface end-to-end on the real renderer path.
 //
 // A dead capsule's core event
@@ -212,6 +213,8 @@ const App = await (async () => {
     '../.kit/capsule-ui-kit/src/index-shell.js': { ShellWorkspace: stub, TopBar: stub, Sidebar: stub, StatusBar: stub },
     'capsule-ui-kit/ui': { UiButton: stub },
     'capsule-ui-kit/theme': { setKitScheme() {} },
+    './wall/DesktopWorkspace.vue': stub,
+    '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue': stub,
     './wall/EmptyWallView.vue': stub,
     './catalog/CatalogLauncher.vue': stub,

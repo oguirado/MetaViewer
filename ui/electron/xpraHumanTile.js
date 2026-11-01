@@ -3,6 +3,7 @@ import { xpraClientQuery, xpraReadyExpression, waitForXpraClient } from './xpraC
 import { createXpraRecovery } from './xpraRecovery.js';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { interceptDesktopShortcut } from './desktopShortcuts.js';
 
 /** Per-event refusals of the trace recorder: the event is dropped, the view stays. */
 export const DROPPABLE_TRACE_CODES = Object.freeze(new Set(['TRACE_EVENT_REFUSED','TRACE_COORDINATE_REFUSED',
@@ -48,7 +49,11 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
   // This contents has its own input scope. Ignore Electron menu accelerators
   // without cancelling the DOM event: Ctrl+Q/W/T must reach the remote desktop.
   wc.setIgnoreMenuShortcuts(true);
-  wc.on('before-input-event', () => { wc.setIgnoreMenuShortcuts(true); });
+  const capturedDesktopKeys = new Set();
+  wc.on('before-input-event', (event, input) => {
+    wc.setIgnoreMenuShortcuts(true);
+    interceptDesktopShortcut(event, input, window, capturedDesktopKeys);
+  });
   // Defense in depth: the OS layer has already acknowledged readonly.
   if (!writable) {
     wc.on('before-input-event', event => event.preventDefault());

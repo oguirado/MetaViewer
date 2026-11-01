@@ -1,3 +1,4 @@
+import * as p18cDesktopModel from '../electron/desktopLayout.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -48,7 +49,9 @@ async function mountApp(storage, scheme = 'mv-light', displayOnly = false, runti
       'capsule-ui-kit/DockWorkspace': slotStub,
       '../.kit/capsule-ui-kit/src/index-shell.js': { ShellWorkspace: slotStub, TopBar: slotStub, Sidebar: slotStub, StatusBar: slotStub },
       'capsule-ui-kit/ui': ui, 'capsule-ui-kit/theme': { setKitScheme() {} },
-      './wall/WallWorkspace.vue': wall, './wall/EmptyWallView.vue': slotStub,
+      './wall/DesktopWorkspace.vue': wall,
+    '../electron/desktopLayout.js': p18cDesktopModel,
+    './wall/WallWorkspace.vue': wall, './wall/EmptyWallView.vue': slotStub,
       './catalog/CatalogLauncher.vue': slotStub, './terminal/SideTerminalOverlay.vue': slotStub,
       './multislot/MultislotHost.vue': slotStub, './recording/MvRecordingPanel.vue': slotStub,
       './settings/MvSettingsPanel.vue': slotStub, './agent/AgentLaneHost.vue': slotStub,

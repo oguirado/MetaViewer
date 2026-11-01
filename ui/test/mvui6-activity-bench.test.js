@@ -1,3 +1,4 @@
+import * as p18cDesktopModel from '../electron/desktopLayout.js';
 // Lane V bench hook: fixture-only dispatch handle driving production paths.
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -35,6 +36,8 @@ const PINNED_IMPORTS = [
   'capsule-ui-kit/ui',
   'capsule-ui-kit/theme',
   './wall/WallWorkspace.vue',
+  './wall/DesktopWorkspace.vue',
+  '../electron/desktopLayout.js',
   './surfaces/SurfaceCanvas.vue',
   './surfaces/tileScheduler.js',
 ];
@@ -95,6 +98,11 @@ async function loadApp(captured) {
     './activity/ActivityStrip.vue': strip,
     'capsule-ui-kit/DockWorkspace': stub,
     '../.kit/capsule-ui-kit/src/index-shell.js': { ShellWorkspace: stub, TopBar: stub, Sidebar: stub, StatusBar: stub },
+    './wall/DesktopWorkspace.vue': vue.defineComponent({ props: ['allowLostSurface'],
+      setup: (props, ctx) => { captured.wall = ctx; captured.wallProps = () => ({ ...props });
+        ctx.expose({ revealSurface: (id) => { (captured.revealed ??= []).push(id); return { ok: true }; } });
+        return () => vue.h('div'); } }),
+    '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue': vue.defineComponent({ props: ['allowLostSurface'],
       setup: (props, ctx) => { captured.wall = ctx; captured.wallProps = () => ({ ...props });
         ctx.expose({ revealSurface: (id) => { (captured.revealed ??= []).push(id); return { ok: true }; } });

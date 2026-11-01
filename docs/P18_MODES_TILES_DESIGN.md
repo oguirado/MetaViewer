@@ -136,4 +136,67 @@ and successful role opens or switches) do not emit refusal rows; unexpected
 failures report their real code. The mode-switch confirmation renders as a modal
 dialog setting `body[data-mv-modal]`.
 
+## P18c
+
+The header has global Humans and Agents buttons. The active button owns the
+numbered desktop row directly below it. Each view starts with desktop `1`
+[TARGET]. Adding a desktop allocates a monotonically increasing number and
+selects it; removed numbers are not reused. The base desktop is retained and
+only empty additional desktops can be removed. Capsule titles and identity
+labels keep their existing meanings; desktop renaming is outside this change.
+Use MetaViewer, Identities and More retain their existing handlers.
+
+`DesktopWorkspace` owns a persistent wall instance for every desktop. Each wall
+receives a projection filtered by capsule mode and desktop assignment, its own
+Dockview storage adapter, and its own automatic preset. View and desktop
+selection use `v-show`, preserving mounted role components, authenticated native
+sessions and agent watch state. An explicit presentation-active signal hides
+native role views even before the next geometry sample. P18b's shared hidden
+session pool still bounds retained hidden views; resource eviction continues to
+require the existing explicit reconnect action. View navigation never sends
+Stop or bridge-close requests. A capsule lifecycle change retains P18's existing
+acknowledged close-and-reopen semantics.
+
+Global view and desktop navigation exits auxiliary screens and overlays while
+retaining the desktop host. A view requested during asynchronous layout loading
+takes precedence after restore. The existing wall readiness witness survives an
+empty-to-populated transition because the desktop host remains mounted.
+
+Role openings from the launcher and Identities select the requested global view
+before opening. A successful role reply assigns the returned lifetime to the
+matching view's active desktop and follows it. Revealing an existing capsule
+returns to its existing home. A mode switch assigns the replacement lifetime to
+the destination view's active desktop, then retires the acknowledged old panel.
+Stopped lifetimes cannot be re-admitted by a late projection delivery.
+
+The existing packaged layout load/save bridge stores a product presentation
+envelope, `metaviewer.desktops/v1`. It contains the active view, each view's active
+desktop and next number, per-desktop preset and kit layout, and capsule homes.
+The main-process gate validates the closed envelope and passes every embedded
+layout through the unchanged pinned kit decoder and product scope gate.
+Duplicate capsule panels and cross-desktop panel references are rejected.
+Metadata and wall saves share a serialized writer so concurrent desktop saves
+cannot overwrite another desktop's state. Read failure locks persistence; an
+invalid embedded layout cannot become an accepted empty profile. Legacy kit
+profiles migrate into filtered initial walls. Startup retains the existing
+`5000 ms` [CITED: `WallWorkspace.vue`, `ORPHAN_GRACE_MS`] orphan grace before
+pruning departed assignments. Pruning retains surviving panel groups and geometry
+and produces a valid empty grid when the last panel departs.
+
+The renderer captures Ctrl+Tab and Ctrl plus desktop digits before tile input.
+Native xpra children intercept the same chords in Electron's before-input-event
+boundary, consume their key-down and key-up events, and dispatch a fixed
+presentation event to the parent renderer. A captured key-up is consumed even
+if Ctrl has already been released. Ordinary remote keyboard input retains its
+existing path; no bridge capability is included in the presentation event.
+
+Verification pairs the requested view, hidden-session, desktop allocation, mode
+move, persistence and keyboard oracles with mutations that remove the relevant
+invariant. Component tests also retain mounted wall identities across repeated
+navigation and restore independent active desktops after remount. The packaged
+bridge round-trip test rejects an embedded layout with a foreign product scope.
+The execution header's single-capsule limit takes precedence over the brief's
+simultaneous multi-capsule live scenario; isolated live work uses the unit's
+development display and own profile only.
+
 This design is limited to the supplied worktrees and their pinned contracts and UI kit.

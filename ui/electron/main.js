@@ -1627,6 +1627,13 @@ export function createLayoutBridge({directory,app} = {}) {
     const { decodeAndMigrateLayoutProfile } = await import('../.kit/capsule-ui-kit/src/workspace/layoutProfile.js');
     let value;
     try { value = JSON.parse(raw); } catch { return invalid(); }
+    if (value?.schema === 'metaviewer.desktops/v1') {
+      const {validateDesktopState} = await import('./desktopLayout.js');
+      if (!validateDesktopState(value, layout => decodeAndMigrateLayoutProfile(layout, {expectedScope:{
+        product:'metaviewer',profileId:'default',workspaceId:'main-wall',
+      }}).ok)) return invalid();
+      return raw;
+    }
     const result = decodeAndMigrateLayoutProfile(value, { expectedScope: {
       product:'metaviewer', profileId:'default', workspaceId:'main-wall',
     } });

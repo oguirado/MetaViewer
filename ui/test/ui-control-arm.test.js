@@ -1,3 +1,4 @@
+import * as p18cDesktopModel from '../electron/desktopLayout.js';
 import { installRoleMenuInput, openRoleMenuInput } from './role-menu-input-harness.mjs';
 /**
  * UI-CONTROL-ARM: taking Control arms keyboard input across all wall paths
@@ -137,6 +138,8 @@ async function loadApp(source, captured, canvasComponent = DefaultSurfaceCanvas)
     './nested/nested.js': { resolveNestedMode, applyNestedWall },
     'capsule-ui-kit/ui': { UiButton: buttonStub },
     'capsule-ui-kit/theme': { setKitScheme() {} },
+    './wall/DesktopWorkspace.vue': wallStub,
+    '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue': wallStub,
     './surfaces/SurfaceCanvas.vue': canvasComponent,
     './surfaces/tileScheduler.js': { createTileScheduler },

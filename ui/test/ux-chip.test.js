@@ -1,3 +1,4 @@
+import * as p18cDesktopModel from '../electron/desktopLayout.js';
 import { installRoleMenuInput, openRoleMenuInput } from './role-menu-input-harness.mjs';
 // UX-CHIP: verify the wall tile no longer renders the covering "View only —
 // press Control to interact" overlay chip, while keeping take/release control
@@ -84,6 +85,8 @@ async function loadApp(source) {
     './nested/nested.js': { resolveNestedMode, applyNestedWall },
     'capsule-ui-kit/ui': { UiButton: buttonStub },
     'capsule-ui-kit/theme': { setKitScheme() {} },
+    './wall/DesktopWorkspace.vue': wallStub,
+    '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue': wallStub,
     './surfaces/SurfaceCanvas.vue': SurfaceCanvas,
     './surfaces/tileScheduler.js': { createTileScheduler },

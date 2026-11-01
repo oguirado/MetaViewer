@@ -1,3 +1,4 @@
+import * as p18cDesktopModel from '../electron/desktopLayout.js';
 import {addOperatorStubs} from './operator-stubs.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -65,7 +66,9 @@ async function mountApp(initial={}, compile=compileSfc) {
     './multislot/MultislotHost.vue':slot,'./recording/MvRecordingPanel.vue':stub,'./settings/MvSettingsPanel.vue':stub,
     './agent/AgentLaneHost.vue':stub,'./activity/ActivityStrip.vue':stub,
     './nested/nested.js':{resolveNestedMode,applyNestedWall},'capsule-ui-kit/ui':{UiButton:stub},
-    'capsule-ui-kit/theme':{setKitScheme(){}},'./wall/WallWorkspace.vue':wall,'./surfaces/SurfaceCanvas.vue':stub,
+    'capsule-ui-kit/theme':{setKitScheme(){}},'./wall/DesktopWorkspace.vue': wall,
+    '../electron/desktopLayout.js': p18cDesktopModel,
+    './wall/WallWorkspace.vue':wall,'./surfaces/SurfaceCanvas.vue':stub,
     './surfaces/tileScheduler.js':{createTileScheduler},
   });
   const row=vue.reactive({id,surfaceId:id,title:'Capsule',generation:1,visibility:'unfolded',control:'human',backendLifecycle:'active'});

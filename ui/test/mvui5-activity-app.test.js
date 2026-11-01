@@ -1,3 +1,4 @@
+import * as p18cDesktopModel from '../electron/desktopLayout.js';
 // Lane V App wiring: strip mount, bounded feed, authority-only receipts.
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -75,6 +76,8 @@ async function loadApp(captured) {
     '../.kit/capsule-ui-kit/src/index-shell.js': { ShellWorkspace: stub, TopBar: stub, Sidebar: stub, StatusBar: stub },
     'capsule-ui-kit/ui': { UiButton: stub },
     'capsule-ui-kit/theme': { setKitScheme() {} },
+    './wall/DesktopWorkspace.vue': vue.defineComponent({ setup: (_, ctx) => { captured.wall = ctx; return () => vue.h('div'); } }),
+    '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue': vue.defineComponent({ setup: (_, ctx) => { captured.wall = ctx; return () => vue.h('div'); } }),
     './wall/EmptyWallView.vue': stub,
     './catalog/CatalogLauncher.vue': vue.defineComponent({ setup: (_, ctx) => { captured.catalog = ctx; return () => vue.h('div'); } }),

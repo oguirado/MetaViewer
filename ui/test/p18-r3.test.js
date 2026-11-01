@@ -9,6 +9,7 @@ import { resolveNestedMode, applyNestedWall } from '../src/nested/nested.js';
 import { createTileScheduler } from '../src/surfaces/tileScheduler.js';
 import { createAuthorityAdapter } from '../src/core/hostAdapters.js';
 import { normalizeActivityEntry } from '../src/activity/activityModel.js';
+import {createDesktopState, desktopRows} from '../electron/desktopLayout.js';
 
 const require = createRequire(import.meta.url);
 const VUE_URL = pathToFileURL(require.resolve('vue')).href;
@@ -61,7 +62,10 @@ async function loadApp(captured) {
   const wall = vue.defineComponent({
     setup: (_, ctx) => {
       captured.wall = ctx;
+      captured.follows = []; captured.views = [];
       ctx.expose({
+        selectView: view => captured.views.push(view),
+        followSurface: (id,mode) => captured.follows.push({id,mode}),
         applyLayoutEcho: () => undefined,
         revealSurface: (...args) => {
           captured.reveals.push(args);
@@ -103,6 +107,8 @@ async function loadApp(captured) {
     'capsule-ui-kit/ui': { UiButton: uiButton },
     'capsule-ui-kit/theme': { setKitScheme() {} },
     './wall/WallWorkspace.vue': wall,
+    './wall/DesktopWorkspace.vue': wall,
+    '../electron/desktopLayout.js': {createDesktopState,desktopRows},
     './surfaces/SurfaceCanvas.vue': stub,
     './surfaces/tileScheduler.js': { createTileScheduler },
     RoleSurface: roleSurface,
@@ -448,11 +454,22 @@ test('P18-R3 items 3 and 4: handled refusals create no error rows, unexpected fa
     app.mount(appRoot);
     await tick();
 
+    // The desktop host stays mounted while the admitted wall becomes empty.
+    // Its readiness witness must remain valid when the next capsule arrives.
+    captured.wall.emit('ready');
+    const initialRows = rows.splice(0);
+    await tick();
+    rows.push(...initialRows);
+    await tick();
+    assert.equal(findAll(appRoot,n=>n.props?.['data-wall-settled']==='true').length,1,
+      'an empty-to-populated wall keeps its mounted desktop readiness');
+
     // 1. Open as human on mv-live-1 already open in agent mode -> shows modal confirmation offer, zero error rows.
     captured.identities.emit('open-identity', { profileId: 'mv-live-1', role: 'human' });
     await tick();
     await tick();
 
+    assert.equal(captured.views.at(-1),'human','identity opening selects the requested global view');
     assert.deepEqual(captured.stripEntries(), [], 'mode-switch confirmation offer must not create an Activity error row');
     assert.equal(captured.outcome(), null, 'mode-switch confirmation offer must not show a refusal toast');
 
@@ -488,6 +505,7 @@ test('P18-R3 items 3 and 4: handled refusals create no error rows, unexpected fa
     assert.equal(captured.outcome(), null);
 
     // 2. Same-mode open returning reused surface or PROFILE_ALREADY_BOUND with same mode reveals without error row.
+    assert.deepEqual(captured.follows.at(-1),{id:'surface-2',mode:'human'},'mode switch follows the replacement into its matching view');
     nextOpenReply = { ok: true, reused: true, surfaceId: 'surface-2', role: 'human' };
     captured.identities.emit('open-identity', { profileId: 'mv-live-1', role: 'human' });
     await tick();

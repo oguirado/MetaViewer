@@ -70,7 +70,7 @@ export function collectClipRects(el) {
 </script>
 <script setup>
 import { onMounted, onBeforeUnmount, ref, watch, inject, nextTick } from 'vue';
-const props = defineProps({surfaceId:{type:String,required:true},label:{type:String,default:''},control:{type:String,default:'agent'},canTakeControl:{type:Boolean,default:false}});
+const props = defineProps({surfaceId:{type:String,required:true},label:{type:String,default:''},control:{type:String,default:'agent'},canTakeControl:{type:Boolean,default:false},presentationActive:{type:Boolean,default:true}});
 const emit = defineEmits(['mode','reveal','stopped','lifecycle','take-control']);
 const progress = ref(''), confirmed = ref(false);
 const overlays = /** @type {ReturnType<typeof import('./overlayCoordinator.js').createOverlayCoordinator>|null} */ (inject('overlayCoordinator', null));
@@ -89,6 +89,7 @@ function closeMenu(event) { if (!menuHost.value?.contains(/** @type {Node|null} 
 /** @param {()=>void} action */
 function runMenu(action) { menuOpen.value = false; action(); }
 function isGeometricallyShown() {
+  if (!props.presentationActive) return false;
   const {scrollAncestors, wallViewport} = collectClipRects(root.value);
   return clipRoleBounds(root.value?.getBoundingClientRect(), scrollAncestors, wallViewport).visible && !!root.value?.getClientRects().length;
 }
@@ -128,7 +129,7 @@ async function sync() {
     const box = root.value?.getBoundingClientRect();
     const {scrollAncestors, wallViewport} = collectClipRects(root.value);
     const clipped = clipRoleBounds(box, scrollAncestors, wallViewport);
-    const geometricallyShown = clipped.visible && !!root.value?.getClientRects().length;
+    const geometricallyShown = props.presentationActive && clipped.visible && !!root.value?.getClientRects().length;
     const visible = geometricallyShown && !isModalActive();
     if (mounted) hiddenSessions?.update(props.surfaceId, geometricallyShown, releaseHiddenSession, isGeometricallyShown);
     if (resourceReleased.value) return;
@@ -239,6 +240,7 @@ onMounted(async () => {
 watch(() => props.control, () => { if (props.control !== 'agent') watching.value = false; void sync(); });
 watch(watching, () => { void sync(); });
 watch(progress, () => { if (!progress.value && ended) void sync(); });
+watch(() => props.presentationActive, () => { menuOpen.value = false; void sync(); }, {flush:'sync'});
 onBeforeUnmount(() => { overlays?.set(menuOwner, false); globalThis.document?.removeEventListener?.('pointerdown', closeMenu, true); alive = false; clearInterval(timer); while (scrollCleanups.length) scrollCleanups.pop()?.(); void revoke(); });
 </script>
 <template>

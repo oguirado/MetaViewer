@@ -1,3 +1,4 @@
+import * as p18cDesktopModel from '../electron/desktopLayout.js';
 import {addOperatorStubs} from './operator-stubs.mjs';
 // MVUI16 lane P shared harness: bounded mounts for the ARG-pmui-3..7
 // regression tests. Every history array is capped; no watcher, no timers,
@@ -111,6 +112,7 @@ export async function mountApp(initial = {}, compile = compileSfc, options = {})
     setup: (_, ctx) => {
       captured.wall = ctx;
       ctx.expose({
+        revealSurface: () => ({ok:true}),
         applyLayoutEcho: (...args) => {
           boundedPush(echoes, args);
           return options.echoResult === undefined ? echoes.length : options.echoResult;
@@ -135,6 +137,8 @@ export async function mountApp(initial = {}, compile = compileSfc, options = {})
     './nested/nested.js': { resolveNestedMode, applyNestedWall },
     'capsule-ui-kit/ui': { UiButton: stub },
     'capsule-ui-kit/theme': { setKitScheme() {} },
+    './wall/DesktopWorkspace.vue': wall,
+    '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue': wall,
     './surfaces/SurfaceCanvas.vue': stub,
     './surfaces/tileScheduler.js': { createTileScheduler },

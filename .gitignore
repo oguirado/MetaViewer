@@ -25,3 +25,4 @@ launch.token
 # Local P18 verification command output; reports stay in the final response.
 /.p18-evidence/
 /.p18b-evidence/
+/.p18c-evidence/
