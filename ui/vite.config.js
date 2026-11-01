@@ -4,6 +4,7 @@ import vue from '@vitejs/plugin-vue';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { kitQuarantineReasonPlugin } from './tools/kitQuarantineReason.js';
 
 const kit = fileURLToPath(new URL('./.kit/capsule-ui-kit/', import.meta.url));
 const pkg = JSON.parse(readFileSync(`${kit}package.json`, 'utf8'));
@@ -16,7 +17,7 @@ const alias = Object.entries(pkg.exports).map(([key, value]) => ({
 export default defineConfig({
   base: './',
   build: { outDir: 'dist/renderer' },
-  plugins: [vue(), {
+  plugins: [kitQuarantineReasonPlugin(), vue(), {
     name: 'sandbox-preload',
     writeBundle(output) {
       // The preload is deliberately a single import-free JS source. Strip only

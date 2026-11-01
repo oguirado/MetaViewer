@@ -83,6 +83,40 @@ test('P18C prune preserves surviving geometry and leaves a valid empty layout',(
   assert.deepEqual(Object.keys(pruned.dockview.panels),['panel-h']);assert.equal(JSON.stringify(layout),before);
   assert(validLayout(model.pruneDesktopLayout(layout,()=>false)));
 });
+function emptyRestoreOracle(api) {
+  const state=api.createDesktopState();api.addDesktop(state);
+  for(const view of api.VIEWS)for(const desktop of state.views[view].desktops) {
+    desktop.layout=api.pruneDesktopLayout(createWallLayout(SCOPE),()=>false);
+    assert.equal(desktop.layout.dockview.grid.root.type,'branch','Dockview runtime requires a branch root');
+  }
+  const restored=JSON.parse(JSON.stringify(state));
+  assert(api.validateDesktopState(restored,validLayout));
+  api.assignSurface(restored,'h2','human');
+  assert.deepEqual(api.desktopRows(restored,[{id:'h2'}],'human',2),[{id:'h2'}]);
+  const layout=restored.views.human.desktops[1].layout;
+  layout.dockview.grid.root={type:'leaf',data:{id:'desktop-empty',views:[]}};
+  const original=JSON.stringify(layout),normalized=api.normalizeDesktopLayout(layout);
+  assert.equal(normalized.dockview.grid.root.type,'branch');
+  assert.deepEqual(normalized.dockview.grid.root.data,[layout.dockview.grid.root]);
+  assert.equal(JSON.stringify(layout),original,'normalization must not mutate its input');
+  assert(validLayout(normalized));
+}
+test('P18C restored empty desktop layouts are executable by Dockview and admit desktop 2 assignments',()=>emptyRestoreOracle(model));
+test('P18C mutant: persisting the original leaf-root empty grid is rejected',async()=>{
+  const api=await altered('../electron/desktopLayout.js',"{type:'branch',size,data:[{type:'leaf',size,data:{id,views:[]}}]}","{type:'leaf',data:{id,views:[]}}");
+  assert.throws(()=>emptyRestoreOracle(api),{code:'ERR_ASSERTION'});
+});
+test('P18C normalization preserves a populated legacy leaf and its floating geometry',()=>{
+  const layout=JSON.parse(JSON.stringify(createWallLayout(SCOPE,[rows[0]])));
+  layout.dockview.grid.root=layout.dockview.grid.root.data[0];
+  const expected=JSON.parse(JSON.stringify(layout));
+  const normalized=model.normalizeDesktopLayout(layout);
+  assert.deepEqual(normalized.dockview.grid.root.data,[expected.dockview.grid.root]);
+  assert.deepEqual(normalized.dockview.panels,expected.dockview.panels);
+  assert.equal(normalized.dockview.activeGroup,expected.dockview.activeGroup);
+  assert.deepEqual(normalized.savedWallPlacements,expected.savedWallPlacements);
+  assert.deepEqual(model.normalizeDesktopLayout(normalized),normalized,'normalization is idempotent');
+});
 test('P18C a floating-only desktop keeps its geometry without aliasing the empty dock group',()=>{
   const layout=JSON.parse(JSON.stringify(createWallLayout(SCOPE,[rows[0]])));
   layout.dockview.grid.root={type:'leaf',data:{id:'root-empty',views:[]}};
@@ -90,7 +124,8 @@ test('P18C a floating-only desktop keeps its geometry without aliasing the empty
   layout.dockview.activeGroup='desktop-empty';assert(validLayout(layout));
   const pruned=model.pruneDesktopLayout(layout,()=>true);assert(validLayout(pruned));
   assert.deepEqual(pruned.dockview.floatingGroups,layout.dockview.floatingGroups);
-  assert.notEqual(pruned.dockview.grid.root.data.id,'desktop-empty');
+  assert.equal(pruned.dockview.grid.root.type,'branch');
+  assert.notEqual(pruned.dockview.grid.root.data[0].data.id,'desktop-empty');
 });
 test('P18C packaged bridge saves and reloads the desktop envelope and refuses corrupt embedded layout',async t=>{
   const directory=await mkdtemp(join(tmpdir(),'p18c-layout-'));t.after(()=>rm(directory,{recursive:true,force:true}));

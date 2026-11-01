@@ -183,6 +183,40 @@ profiles migrate into filtered initial walls. Startup retains the existing
 pruning departed assignments. Pruning retains surviving panel groups and geometry
 and produces a valid empty grid when the last panel departs.
 
+### P18c-R2
+
+The desktop pruner previously serialized an empty grid with a leaf root. The
+pinned kit decoder accepts that shape, but Dockview's runtime requires a branch
+root and throws before its layout-loaded event. Restore therefore never emits
+readiness or settlement, preventing capsule admission. The apparent quarantine
+is the kit's initial read-only snapshot, whose reason is absent until restore
+finishes; this is independent of desktop scope and repeated group identifiers.
+
+Empty grids now retain a branch root containing the empty group. After the
+unchanged envelope and kit validation gates, desktop restoration wraps historical
+leaf roots in a branch without changing panel identities, placements, active
+groups, or floating geometry. Normalization is pure and idempotent. The shared
+kit scope and frozen contracts remain unchanged.
+
+The product's Vite integration applies a narrowly anchored banner compatibility
+overlay before compiling the pinned kit component. It preserves the materialized
+kit and its content pin, and fails the build if either source anchor drifts.
+The banner includes the kit's quarantine code and reason, or the explicit
+`LAYOUT_RESTORE_PENDING` / `LAYOUT_READ_ONLY` code when no reason is available.
+
+The real Dockview guard creates the second desktop, saves empty layouts through
+the wall adapters, unmounts and remounts the desktop host, assigns a human surface,
+and checks settlement, tile mounting and absence of quarantine. It also replays
+historical leaf-root layouts and visits every restored desktop. Reintroducing
+the original serialization and removing normalization must fail settlement;
+the banner guard separately rejects the original empty reason. The isolated
+live acceptance repeats desktop creation and a full app restart before opening
+the dedicated human identity, requires xpra's human READY witness, switches away
+and back, then checks that no started capsule remains. Its dedicated dev entry
+suppresses the boot auto-create request so that only the explicit identity
+opening can start a capsule; the Docker wrapper also rejects any further capsule
+launch for that run.
+
 The renderer captures Ctrl+Tab and Ctrl plus desktop digits before tile input.
 Native xpra children intercept the same chords in Electron's before-input-event
 boundary, consume their key-down and key-up events, and dispatch a fixed

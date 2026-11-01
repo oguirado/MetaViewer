@@ -76,11 +76,23 @@ export function removeDesktop(state, view, id) {
   if (group.active === id) group.active = 1;
   return true;
 }
+// Older desktop envelopes admitted leaf roots through the kit decoder, but
+// Dockview's runtime requires a branch root. Preserve the group and geometry.
+/** @param {any} layout */
+export function normalizeDesktopLayout(layout) {
+  if (!layout) return null;
+  const result = JSON.parse(JSON.stringify(layout));
+  const root = result.dockview.grid.root;
+  if (root.type === 'leaf') result.dockview.grid.root = {
+    type:'branch',size:result.dockview.grid.width,data:[root],
+  };
+  return result;
+}
 // Retire ended or moved panel references without reallocating surviving groups.
 /** @param {any} layout @param {(id:string)=>boolean} keep */
 export function pruneDesktopLayout(layout, keep) {
   if (!layout) return null;
-  const result = JSON.parse(JSON.stringify(layout)), groups = new Set();
+  const result = normalizeDesktopLayout(layout), groups = new Set();
   const panels = result.dockview.panels;
   for (const [id,panel] of Object.entries(panels)) if (!keep(panel.params?.capsuleId)) delete panels[id];
   /** @param {any} data */
@@ -102,7 +114,8 @@ export function pruneDesktopLayout(layout, keep) {
   if (!hasRoot) {
     let id = 'desktop-empty';
     while (groups.has(id)) id += '-';
-    result.dockview.grid.root = {type:'leaf',data:{id,views:[]}};
+    const size = result.dockview.grid.width;
+    result.dockview.grid.root = {type:'branch',size,data:[{type:'leaf',size,data:{id,views:[]}}]};
     groups.add(id);
   }
   if (!groups.has(result.dockview.activeGroup)) delete result.dockview.activeGroup;

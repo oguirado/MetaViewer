@@ -4,7 +4,7 @@ import WallWorkspace from './WallWorkspace.vue';
 import {createWallLayout} from './layout.js';
 import {decodeAndMigrateLayoutProfile} from '../../.kit/capsule-ui-kit/src/workspace/layoutProfile.js';
 import {DESKTOP_SCHEMA, VIEWS, createDesktopState, validateDesktopState, addDesktop as appendDesktop,
-  assignSurface, desktopRows, removeDesktop as deleteDesktop, pruneDesktopLayout} from '../../electron/desktopLayout.js';
+  assignSurface, desktopRows, removeDesktop as deleteDesktop, pruneDesktopLayout, normalizeDesktopLayout} from '../../electron/desktopLayout.js';
 import {desktopShortcut} from '../../electron/desktopShortcuts.js';
 defineOptions({inheritAttrs:false});
 const props = defineProps({
@@ -179,13 +179,14 @@ onMounted(async () => {
       const value = JSON.parse(raw);
       if (value?.schema === DESKTOP_SCHEMA) {
         if (!validateDesktopState(value,layout => decodeAndMigrateLayoutProfile(layout,{expectedScope:props.scope}).ok)) throw Error('LAYOUT_CONTRACT_INVALID');
+        for (const view of VIEWS) for (const desktop of value.views[view].desktops) desktop.layout = normalizeDesktopLayout(desktop.layout);
         state.value = value;
       } else {
         const checked = decodeAndMigrateLayoutProfile(value,{expectedScope:props.scope});
         if (!checked.ok) throw Error('LAYOUT_CONTRACT_INVALID');
         // Legacy mixed wall becomes two filtered copies; stale references are
         // removed at serialization and by the existing orphan prune in each wall.
-        for (const view of VIEWS) state.value.views[view].desktops[0].layout = JSON.parse(JSON.stringify(checked.profile));
+        for (const view of VIEWS) state.value.views[view].desktops[0].layout = normalizeDesktopLayout(checked.profile);
       }
     }
   } catch (error) { readOnly = true; emit('layout-error',error); }
