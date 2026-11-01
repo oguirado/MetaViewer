@@ -339,9 +339,13 @@ class ReplayOwner:
         validate_state(sensed['state'])
         sensed['observed'] = observed
         self.stop_check(sensed)
-        tree = self.backend.call('ax')
-        need(isinstance(tree, dict) and isinstance(tree.get('nodes', tree.get('elements')), list), 'MW_AX')
-        sensed['ax'] = tree.get('nodes', tree.get('elements'))
+        # One acquisition uses one AX snapshot for state, handoff and predicates.
+        # Backends without inline AX retain the explicit acquisition seam.
+        if 'ax' not in sensed:
+            tree = self.backend.call('ax')
+            need(isinstance(tree, dict) and isinstance(tree.get('nodes', tree.get('elements')), list), 'MW_AX')
+            sensed['ax'] = tree.get('nodes', tree.get('elements'))
+        need(isinstance(sensed['ax'], list), 'MW_AX')
         sensed['capture_start'] = start
         need(len(self.gate.canon(sensed).encode()) <= self.limits.peak_bytes, 'MW_CAPACITY')
         self.last_publication_frame = copy.deepcopy(frame)
@@ -631,8 +635,13 @@ class ReplayOwner:
         input_ns = verified.get('input_mono_ns')
         need(verified.get('status') == 'verified' and receipt.get('verified') is True and
              receipt.get('proposal_id') == admitted.get('proposal_id') and bool(admitted.get('proposal_id')) and
-             receipt.get('native_evidence', {}).get('input_mono_ns') == input_ns and
-             receipt.get('native_evidence', {}).get('surface_id') == frame['surface_id'] and
+             # Core's frozen wait projection carries witnesses at result level.
+             # If embedded evidence is present it must still agree.
+             ('native_evidence' not in receipt or
+              receipt['native_evidence'].get('input_mono_ns') == input_ns and
+              receipt['native_evidence'].get('surface_id') == frame['surface_id']) and
+             ('native_evidence' in receipt or
+              admitted.get('native_evidence', {}).get('surface_id') == frame['surface_id']) and
              admitted.get('native_evidence', {}).get('input_mono_ns') == input_ns and
              verified.get('focus_verified') is True and type(input_ns) is int and input_ns > 0 and
              boundary <= input_ns <= time.monotonic_ns() and

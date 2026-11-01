@@ -29,6 +29,14 @@ environment rides on the client as host_env for HostBackend.
 container holding the oracle's present anchor is read once with the documented
 read-only `ax --text-container` verb into the private evidence file answer.txt;
 the report names it. Capture failure never changes the run verdict.
+[TARGET, unit decision] A failed owner without a selected receipt preserves its
+verdict and diagnostic; a successful owner still requires a validated receipt.
+[TARGET, unit decision] Before submission, re-perceive and validate the same
+AX target/focus, then bind a latest verified frame with identical pixels. Only
+STALE_FRAME (an explicit non-execution) permits another attempt, at most three
+within the original delivery budget. Transport/settlement failures never retry.
+Answer capture removes standalone captions of AX buttons/links in its container;
+ambiguous caption placement refuses capture rather than deleting answer prose.
 """
 import copy
 import hashlib
@@ -387,6 +395,7 @@ class HostBackend:
     def observe(self, timeout_ms):
         observed = dict(tools.observe(self.surface_id, client=self.client, timeout_ms=timeout_ms))
         tree = self.ax()
+        observed['ax_snapshot'] = tree
         window = tree.get('window')
         if isinstance(window, dict) and isinstance(window.get('url'), str):
             observed['url'] = window['url']
@@ -401,7 +410,8 @@ class HostBackend:
                  if p.get('capability_id') == 'mv.ax.present.v1'
                  for b in p.get('bindings', []) if b.get('name') == 'name' and isinstance(b.get('value'), str)}
         try:
-            rows = [r for r in self.ax().get('elements', []) if isinstance(r, dict) and r.get('name') in names]
+            tree = self.ax()
+            rows = [r for r in tree.get('elements', []) if isinstance(r, dict) and r.get('name') in names]
             containers = {r['container']['id'] for r in rows if isinstance(r.get('container'), dict)
                           and isinstance(r['container'].get('id'), str) and r['container']['id']}
             if len(containers) != 1:
@@ -413,7 +423,7 @@ class HostBackend:
             text = reply.get('text')
             need(isinstance(text, dict) and text.get('container_id') == container and
                  isinstance(text.get('text'), str), 'MW_ANSWER_TEXT')
-            raw = text['text'].encode('utf-8')
+            raw = self.answer_only(text['text'], tree.get('elements', []), container).encode('utf-8')
             need(0 < len(raw) <= 65536, 'MW_ANSWER_TEXT')
             path = self.evidence / 'answer.txt'
             ReplayOwner.write(path, raw)
@@ -422,6 +432,28 @@ class HostBackend:
         except (OSError, ValueError, KeyError, TypeError, OwnerRefused, subprocess.SubprocessError) as error:
             return dict(captured=False, reason=getattr(error, 'code', 'MW_ANSWER_TEXT'),
                         detail=type(error).__name__)
+
+    @staticmethod
+    def answer_only(text, rows, container):
+        # Native container text is line-separated DOM text. Remove one standalone
+        # caption per AX control, never global substring replacement (answer prose
+        # can legitimately contain the same words). Ambiguity fails closed.
+        lines = text.splitlines()
+        for row in rows:
+            if (row.get('role') not in ('button', 'link') or
+                    not isinstance(row.get('container'), dict) or
+                    row['container'].get('id') != container):
+                continue
+            caption = row.get('name', '').strip()
+            if not caption:
+                continue
+            matches = [i for i, line in enumerate(lines) if line.strip() == caption]
+            need(len(matches) <= 1, 'MW_ANSWER_CAPTION_AMBIGUOUS')
+            if matches:
+                lines.pop(matches[0])
+            else:
+                need(caption not in text, 'MW_ANSWER_CAPTION_AMBIGUOUS')
+        return '\n'.join(lines).strip()
 
     def retain(self, frame):
         from metaviewer_agents.perception.vcore import _ramws_frame
@@ -438,7 +470,7 @@ class HostBackend:
     def perceive(self, observed):
         frame = observed['frame_ref']
         witness = self.retain(frame)
-        tree = self.ax()
+        tree = observed.get('ax_snapshot') or self.ax()
         need(isinstance(tree.get('elements'), list) and
              all(isinstance(row, dict) for row in tree['elements']), 'MW_AX')
         # AX supplies native geometry; no synthetic visual detections. The
@@ -452,7 +484,7 @@ class HostBackend:
                     elements.append(dict(bbox=dict(x=x, y=y, w=w, h=h)))
         table = dict(schema='vqa.element-table/v1', frame_sha256=frame['sha256'],
                      width=frame['width'], height=frame['height'], elements=elements)
-        return dict(frame=frame, table=table, frame_witness=witness)
+        return dict(frame=frame, table=table, frame_witness=witness, ax=tree['elements'], window=tree.get('window', {}))
 
     def state_for(self, sensed):
         # The pinned shim computes Wender IDs, AX hashes and actionable state.
@@ -461,7 +493,11 @@ class HostBackend:
         glue = self._glue
         argv = [sys.executable, '-c', glue.WENDER_SHIM]
         live.refuse_net_argv(argv)
-        payload = json.dumps(dict(element_table=sensed['table'], tree=self.ax()))
+        # [TARGET, unit decision] State and AX predicates share this acquisition's
+        # snapshot. Re-reading AX here multiplied native latency and expired the
+        # unchanged T1 target before Wender's fixed locate deadline.
+        tree = dict(elements=sensed['ax'], window=sensed['window'])
+        payload = json.dumps(dict(element_table=sensed['table'], tree=tree))
         result = subprocess.run(argv, input=payload, text=True, capture_output=True, timeout=30,
                                 cwd=self.wender, env={'PATH': os.defpath, 'PYTHONPATH': str(self.wender),
                                                      'PYTHONDONTWRITEBYTECODE': '1'})
@@ -471,26 +507,173 @@ class HostBackend:
         validate_state(state)
         return state
 
+    @staticmethod
+    def revalidate_action(before, fresh, action):
+        need(before['frame']['surface_id'] == fresh['frame']['surface_id'] and
+             all(before['frame'][k] == fresh['frame'][k] for k in ('width', 'height')),
+             'MW_REBIND_SURFACE')
+        def signature(row):
+            return {k: row.get(k) for k in ('id', 'role', 'name', 'box', 'actionable', 'focused', 'states', 'value', 'value_len')}
+        old, new = before['ax'], fresh['ax']
+        if action['type'] == 'click':
+            def candidates(rows):
+                return [r for r in rows if r.get('actionable') is True and
+                        isinstance(r.get('box'), list) and len(r['box']) == 4 and
+                        r['box'][0] <= action['x'] < r['box'][0] + r['box'][2] and
+                        r['box'][1] <= action['y'] < r['box'][1] + r['box'][3]]
+            a, b = candidates(old), candidates(new)
+        elif action['type'] in ('type', 'key'):
+            def focused(rows):
+                return [r for r in rows if r.get('focused') is True or
+                        r.get('states', {}).get('focused') in (True, 'true')]
+            a, b = focused(old), focused(new)
+        else:
+            need([signature(r) for r in old] == [signature(r) for r in new], 'MW_REBIND_TARGET')
+            return
+        need(len(a) == len(b) == 1 and bool(a[0].get('id')) and
+             signature(a[0]) == signature(b[0]), 'MW_REBIND_TARGET')
+
+    @staticmethod
+    def caret_only_change(before, after, rows, old_pixels, new_pixels):
+        """[TARGET, unit decision] Admit only a solid black one-pixel caret.
+
+        Measured E1 blink: one column, fifteen pixels, black versus the
+        surrounding flat editor background. Bound height at thirty-two pixels;
+        text/value/geometry/focus must independently survive AX revalidation.
+        """
+        if (before['surface_id'] != after['surface_id'] or
+                any(before[k] != after[k] for k in ('width', 'height'))):
+            return False
+        w, h = before['width'], before['height']
+        if len(old_pixels) != len(new_pixels) or len(old_pixels) != w * h * 3:
+            return False
+        focused = [r for r in rows if r.get('role') in ('textbox', 'combobox') and
+                   (r.get('focused') is True or r.get('states', {}).get('focused') in (True, 'true'))]
+        if len(focused) != 1:
+            return False
+        changed = sorted({i // 3 for i, (a, b) in enumerate(zip(old_pixels, new_pixels)) if a != b})
+        if not changed or len(changed) > 32:
+            return False
+        x, y = changed[0] % w, changed[0] // w
+        box = focused[0].get('box')
+        if (not isinstance(box, list) or len(box) != 4 or
+                not (box[0] < x < box[0] + box[2] - 1 and
+                     box[1] <= y < y + len(changed) <= box[1] + box[3])):
+            return False
+        if changed != [((y + dy) * w + x) for dy in range(len(changed))]:
+            return False
+        pair = (old_pixels[changed[0]*3:changed[0]*3+3], new_pixels[changed[0]*3:changed[0]*3+3])
+        if b'\0\0\0' not in pair or pair[0] == pair[1]:
+            return False
+        off = new_pixels if pair[0] == b'\0\0\0' else old_pixels
+        background = pair[1] if pair[0] == b'\0\0\0' else pair[0]
+        return all((old_pixels[i*3:i*3+3], new_pixels[i*3:i*3+3]) == pair and
+                   off[(i-1)*3:(i-1)*3+3] == off[(i+1)*3:(i+1)*3+3] == background
+                   for i in changed)
+
+    def rebind(self, sensed, plan, remaining):
+        observed = tools.observe(self.surface_id, client=self.client, timeout_ms=remaining)
+        fresh = self.perceive(observed)
+        need(not wall_kind(dict(elements=fresh['ax'])), 'MW_HANDOFF_REQUIRED')
+        self.revalidate_action(sensed, fresh, plan['action'])
+        # AX/geometry and pixels were re-perceived. A new generation requires
+        # identical pixels or the strictly classified caret blink below.
+        latest = tools.observe(self.surface_id, client=self.client, timeout_ms=remaining)['frame_ref']
+        same = all(latest[k] == fresh['frame'][k] for k in
+                   ('surface_id', 'sha256', 'width', 'height'))
+        if not same and hasattr(self, 'evidence'):
+            # Hash-check immutable raw frames before classifying a blink.
+            witness = self.retain(latest)
+            old_pixels = Path(fresh['frame_witness']['artifact']).read_bytes()
+            new_pixels = Path(witness['artifact']).read_bytes()
+            need(hashlib.sha256(old_pixels).hexdigest() == fresh['frame']['sha256'] and
+                 hashlib.sha256(new_pixels).hexdigest() == latest['sha256'], 'MW_FRAME_BINDING')
+            same = self.caret_only_change(fresh['frame'], latest, fresh['ax'], old_pixels, new_pixels)
+            # fresh AX was acquired between these frame publications and was
+            # already compared with the target's original AX snapshot above.
+        need(same and latest['generation'] >= fresh['frame']['generation'], 'MW_REBIND_PIXELS')
+        witness = self.retain(latest)
+        # Disk/hash and native AX work must precede the final publication read.
+        # Reuse only the already retained identical pixel content; never spend
+        # another native capture/file read between this binding and proposal.
+        final = tools.observe(self.surface_id, client=self.client, timeout_ms=remaining)['frame_ref']
+        need(all(final[k] == latest[k] for k in ('surface_id', 'sha256', 'width', 'height')) and
+             final['generation'] >= latest['generation'], 'MW_REBIND_PIXELS')
+        fresh['frame_witness'] = dict(witness, generation=final['generation'])
+        fresh['frame'] = final
+        return fresh
+
     def propose(self, sensed, plan, max_ms):
         self.ownership()
         self.network_context()
-        proposal = build_proposal(sensed['frame'], proposal_id='mw-' + uuid.uuid4().hex,
-                                  action=plan['action'], expectation=plan['expectation'], max_ms=max_ms)
-        verdict = tools.propose(proposal, client=self.client, timeout_ms=max_ms)
+        deadline = time.monotonic_ns() + max_ms * 1_000_000
+        self.frame_attempts = getattr(self, 'frame_attempts', [])
+        for attempt in range(3 if 'ax' in sensed else 1):
+            remaining = (deadline - time.monotonic_ns()) // 1_000_000
+            need(remaining > 0, 'MW_STALE_FRAME_EXHAUSTED')
+            # Older assembly callers supply only a frame: retain their single-shot
+            # core path; fresh-target retry requires the owner's AX evidence.
+            try:
+                fresh = self.rebind(sensed, plan, remaining) if 'ax' in sensed else sensed
+            except OwnerRefused as error:
+                # No proposal was sent. Reacquire after a caret/pixel race;
+                # changed targets and human handoff still refuse immediately.
+                if error.code != 'MW_REBIND_PIXELS':
+                    raise
+                self.frame_attempts.append(dict(attempt=attempt + 1, status=error.code,
+                                                submitted=False))
+                continue
+            remaining = (deadline - time.monotonic_ns()) // 1_000_000
+            need(remaining > 0, 'MW_STALE_FRAME_EXHAUSTED')
+            proposal = build_proposal(fresh['frame'], proposal_id='mw-' + uuid.uuid4().hex,
+                                      action=plan['action'], expectation=plan['expectation'], max_ms=remaining)
+            binding = proposal.get('based_on_frame')
+            if binding is None:
+                binding = {k: fresh['frame'][k] for k in ('sha256', 'generation') if k in fresh['frame']}
+            row = dict(attempt=attempt + 1, based_on_frame=binding,
+                       observed_generation=sensed['frame']['generation'], submit_mono_ns=time.monotonic_ns())
+            self.frame_attempts.append(row)
+            try:
+                verdict = tools.propose(proposal, client=self.client, timeout_ms=remaining)
+                row['status'] = 'admitted'
+                break
+            except tools.ToolRefusal as error:
+                self.last_core_refusal = error.reason_code
+                row['status'] = error.reason_code
+                if error.reason_code != 'STALE_FRAME' or 'ax' not in sensed:
+                    raise
+        else:
+            raise OwnerRefused('MW_STALE_FRAME_EXHAUSTED')
+        sensed = fresh
+        max_ms = max(1, (deadline - time.monotonic_ns()) // 1_000_000)
         # The owner's propose seam needs settlement evidence: wait once here,
         # then expose that same verification in its wait_verify stage.
         verified = tools.wait_verify(proposal['proposal_id'], proposal['expectation'], max_ms,
                                      client=self.client, surface_id=self.surface_id)
-        native = dict(verified)
-        need(isinstance(native, dict) and isinstance(native.get('native_evidence'), dict), 'MW_RECEIPT_MISMATCH')
+        native = self.native_witness(verified)
         self.pending[proposal['proposal_id']] = (proposal, copy.deepcopy(sensed['frame']), verified)
-        return dict(proposal_id=proposal['proposal_id'], verdict=verdict, native_evidence=native['native_evidence'])
+        return dict(proposal_id=proposal['proposal_id'], verdict=verdict, native_evidence=copy.deepcopy(native))
+
+    def native_witness(self, verified):
+        # [TARGET, unit decision] The frozen core wait projection strips native
+        # evidence and exposes validated witnesses on _VerifiedReceipt instead.
+        # Preserve the wire receipt; never synthesize input_ts_ns or native IDs.
+        native = verified.get('native_evidence')
+        if native is None:
+            need(isinstance(verified, tools._VerifiedReceipt), 'MW_RECEIPT_MISMATCH')
+            tools._check_receipt_verified(verified, surface_id=self.surface_id)
+            need(verified.get('focus_verified') is True and
+                 type(verified.get('input_mono_ns')) is int and verified.get('input_mono_ns') > 0 and
+                 verified.get('frame_sha256') == verified['after_frame']['sha256'], 'MW_RECEIPT_MISMATCH')
+            native = dict(surface_id=self.surface_id, input_mono_ns=verified.get('input_mono_ns'))
+        need(isinstance(native, dict), 'MW_RECEIPT_MISMATCH')
+        return native
 
     @staticmethod
     def binding(proposal, before, receipt):
         try:
             tools._check_receipt_verified(receipt, surface_id=proposal['surface_id'])
-            return (proposal['surface_id'] == before['surface_id'] == receipt['native_evidence']['surface_id']
+            return (proposal['surface_id'] == before['surface_id'] == receipt['after_frame']['surface_id']
                     and proposal['based_on_frame'] == {k: before[k] for k in ('sha256', 'generation')}
                     and receipt['proposal_id'] == proposal['proposal_id']
                     and receipt['after_frame']['generation'] > before['generation'])
@@ -548,10 +731,19 @@ def execute(args, home, evidence, backend, *, corpus_factory=Corpus, owner_facto
                          '; '.join(faults)[:2000] + '; fix the site data, then rerun tools/mw_home_check.py '
                          f'--repo <MetaViewer checkout> --workflow {args.site}/{args.workflow}') from error
         raise
+    if trace is not None:
+        trace['diagnostic'] = result.diagnostic
+        if hasattr(backend, 'frame_attempts'):
+            trace['frame_attempts'] = backend.frame_attempts
+        refusal = getattr(backend, 'last_core_refusal', None)
+        if refusal is not None:
+            trace['core_refusal'] = refusal
     if result.handoff_path:
         handoff = Path(result.handoff_path)
         need(handoff == output.with_suffix('.handoff.json') and handoff.is_file(), 'MW_HANDOFF_REQUIRED')
         return 4, 'HUMAN_HANDOFF', str(handoff)
+    if not output.is_file() and result.rc != 0:
+        return result.rc, result.verdict_code, None
     need(output.is_file(), 'receipt path absent')
     raw = bounded_read(output, evidence)
     summary = corpus.gate.strict_load(raw)

@@ -8,6 +8,10 @@ Logs, copied site data and output are retained in a private temporary directory.
 No identity-store or browser-profile files are opened by this driver.
 """
 import argparse
+import csv
+import io
+import shlex
+import re
 import functools
 import hashlib
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -174,6 +178,194 @@ def stage_home(work, origin):
     return home
 
 
+def check_fixture_encoding(raw):
+    from html.parser import HTMLParser
+    class Encoding(HTMLParser):
+        declared = False
+        def handle_starttag(self, tag, attrs):
+            if tag == 'meta' and dict(attrs).get('charset', '').lower() == 'utf-8':
+                self.declared = True
+    parser = Encoding()
+    parser.feed(raw.decode('utf-8'))
+    require(parser.declared, 'fixture must declare UTF-8 for native AX label identity')
+    return True
+
+
+def copy_fixture(capsule, destination, home_page="home"):
+    require(home_page in ("home", "home_focus"), "unapproved home fixture")
+    """Only tracked public fixture bytes enter the owned capsule's temporary RAM."""
+    require(safe_capsule(capsule), 'protected capsule refused')
+    require(destination.startswith('/tmp/mv-e1-probe-') and '..' not in destination,
+            'fixture destination refused')
+    for name in (home_page + '.html', 'answer.html', 'login.html'):
+        check_fixture_encoding((FIXTURE / 'packaged' / name).read_bytes())
+    command(['docker', 'exec', capsule, 'mkdir', '-p', destination])
+    for name in (home_page + '.html', 'answer.html', 'login.html'):
+        command(['docker', 'exec', '-i', capsule, 'sh', '-c', 'cat > "$1"',
+                 'fixture-copy', destination + '/' + name],
+                input=(FIXTURE / 'packaged' / name).read_text())
+    return True
+
+
+def measured_position(value):
+    require(re.fullmatch(r'[0-9]+,[0-9]+', value) is not None, 'invalid control coordinates')
+    x, y = map(int, value.split(','))
+    require(0 <= x < 1600 and 0 <= y < 1000, 'control coordinates outside dedicated screen')
+    return x, y
+
+
+def control_position(tsv, word):
+    rows = csv.DictReader(io.StringIO(tsv), delimiter='\t')
+    matches = [r for r in rows if r['text'].strip() == word]
+    require(len(matches) == 1, 'UI control ambiguous/absent: ' + word)
+    row = matches[0]
+    return (int(row['left']) + int(row['width']) // 2,
+            int(row['top']) + int(row['height']) // 2)
+
+
+def bind_operator_repo(text, repo):
+    """Override the single supplied launcher binding, without changing its source."""
+    text, count = re.subn(r'MV_OPERATOR_REPO=\S+',
+                          lambda _: 'MV_OPERATOR_REPO=' + shlex.quote(str(repo)), text)
+    require(count == 1, 'launcher operator-repo binding is ambiguous')
+    return text
+
+
+class ProbeStages:
+    """[TARGET, unit decision] Diagnostic failures persist and do not abort peers."""
+    def __init__(self, work):
+        self.path = work / 'stages.jsonl'
+        self.failed = False
+
+    def run(self, name, operation, *, forced=False):
+        try:
+            value = operation()
+            row = dict(stage=name, status='PASS', forced=forced)
+        except Exception as error:
+            self.failed = True
+            value = None
+            row = dict(stage=name, status='FAIL', forced=forced,
+                       error=type(error).__name__ + ': ' + str(error))
+        with self.path.open('a') as stream:
+            stream.write(json.dumps(row, ensure_ascii=False) + '\n')
+        print(json.dumps(row, ensure_ascii=False), flush=True)
+        return value
+
+
+def probe_entry(work, repo, redundant_ax_mutant=False):
+    """Instrument a temporary CLI copy; preserve real return values and exceptions."""
+    path = work / 'probe_entry.py'
+    path.write_text("""
+import importlib.util, json, sys, time, traceback
+from pathlib import Path
+repo, log = Path(sys.argv.pop(1)), Path(sys.argv.pop(1))
+sys.path.insert(0, str(repo / 'agents'))
+spec = importlib.util.spec_from_file_location('probe_backend', repo / 'tools/mw_run_backend.py')
+host = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(host)
+def emit(row):
+    with log.open('a') as stream:
+        stream.write(json.dumps(row, ensure_ascii=False, default=str) + '\\n')
+def wrap(cls, name):
+    original = getattr(cls, name)
+    def call(self, *args, **kwargs):
+        row = dict(method=name, mono_ns=time.monotonic_ns())
+        if name == 'propose':
+            row['action'] = kwargs.get('plan', {}).get('action')
+            row['frame'] = kwargs.get('sensed', {}).get('frame')
+        try:
+            result = original(self, *args, **kwargs)
+            row['status'] = 'PASS'
+            if name in ('observe', 'perceive', 'state_for', 'ax', 'capture_answer', 'network_context', 'propose', 'wait_verify'):
+                row['result'] = ({k: result[k] for k in ('frame', 'frame_ref', 'frame_witness') if k in result}
+                                 if name in ('observe', 'perceive') else result)
+            row['end_mono_ns'] = time.monotonic_ns()
+            if name == 'propose':
+                row['frame_attempts'] = getattr(self, 'frame_attempts', [])
+            emit(row)
+            return result
+        except Exception as error:
+            row.update(status='FAIL', error=str(error), traceback=traceback.format_exc())
+            if name == 'propose':
+                row['frame_attempts'] = getattr(self, 'frame_attempts', [])
+            if hasattr(error, 'receipt'):
+                row['receipt'] = error.receipt
+            emit(row)
+            raise
+    setattr(cls, name, call)
+for name in ('ownership', 'network_context', 'ax', 'observe', 'perceive', 'state_for',
+             'propose', 'wait_verify', 'capture_answer'):
+    wrap(host.HostBackend, name)
+original_command = host.command
+def command(*args, **kwargs):
+    result = original_command(*args, **kwargs)
+    if result.returncode:
+        emit(dict(method='native_command', argv=args[0], rc=result.returncode,
+                  stderr=result.stderr.decode('utf-8', 'replace')))
+    return result
+host.command = command
+from metaviewer_agents.mw_owner import wender_api
+mw = wender_api()[1]
+original_grounded = mw._grounded
+def diagnostic_grounded(value, target, state, owners, deadline):
+    now = owners.clock()
+    result = original_grounded(value, target, state, owners, deadline)
+    emit(dict(method='grounding_gate', passed=result, now_ns=now,
+              deadline_ns=deadline, expires_ns=value.expires_ns,
+              remaining_ns=min(deadline, value.expires_ns)-now))
+    return result
+mw._grounded = diagnostic_grounded
+original_need = mw._need
+def diagnostic_need(value, *args, **kwargs):
+    if not value:
+        emit(dict(method='workflow_gate', mono_ns=time.monotonic_ns(), args=args, stack=traceback.format_stack()))
+    return original_need(value, *args, **kwargs)
+mw._need = diagnostic_need
+from metaviewer_agents.mw_owner import ReplayOwner, PrivateSlots
+for name in ('acquire', 'send', 'check', 'focus'):
+    wrap(ReplayOwner, name)
+wrap(PrivateSlots, 'read')
+def owner_exceptions(frame, event, arg):
+    if not frame.f_code.co_filename.endswith(('mw_workflow.py', 'mw_owner.py')):
+        return None
+    if event == 'exception':
+        kind, error, _ = arg
+        if kind not in (StopIteration, GeneratorExit):
+            emit(dict(method='owner_exception', file=frame.f_code.co_filename,
+                      line=frame.f_lineno, error_type=kind.__name__, error=str(error)))
+    return owner_exceptions
+sys.settrace(owner_exceptions)
+from metaviewer_agents.mw_run import main
+sys.exit(main(runner=host.run_entry))
+""")
+    if redundant_ax_mutant:
+        source = path.read_text()
+        source = source.replace("from metaviewer_agents.mw_run import main", """
+# Negative control: restore the pre-fix repeated AX acquisitions.
+original_observe = host.HostBackend.observe
+def repeated_observe(self, *args, **kwargs):
+    result = original_observe(self, *args, **kwargs)
+    result.pop('ax_snapshot', None)
+    return result
+host.HostBackend.observe = repeated_observe
+original_state = host.HostBackend.state_for
+def repeated_state(self, sensed):
+    self.ax()
+    return original_state(self, sensed)
+host.HostBackend.state_for = repeated_state
+from metaviewer_agents.mw_owner import ReplayOwner
+original_sense = ReplayOwner.sense
+def repeated_sense(self, deadline):
+    result = original_sense(self, deadline)
+    tree = self.backend.call('ax')
+    result['ax'] = tree.get('nodes', tree.get('elements'))
+    return result
+ReplayOwner.sense = repeated_sense
+from metaviewer_agents.mw_run import main""")
+        path.write_text(source)
+    return path
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--launcher', type=Path, required=True)
@@ -182,6 +374,14 @@ def main(argv=None):
     parser.add_argument('--wender-root', type=Path, required=True)
     parser.add_argument('--proxy-registry', type=Path, required=True)
     parser.add_argument('--fixture-host', required=True, help='local host address reachable from the capsule')
+    parser.add_argument('--forward-probe', action='store_true')
+    parser.add_argument('--redundant-ax-mutant', action='store_true', help='negative control: restore repeated native AX reads')
+    parser.add_argument('--focused-home', action='store_true')
+    parser.add_argument('--home-only', action='store_true')
+    parser.add_argument('--control-cycle', action='store_true')
+    parser.add_argument('--take-control-at', help='screenshot-measured Xvfb x,y')
+    parser.add_argument('--release-control-at', help='screenshot-measured Xvfb x,y')
+    parser.add_argument('--file-fixture', action='store_true', help='use owned local files directly')
     parser.add_argument('--display', default=':98')
     parser.add_argument('--admission-timeout', type=int, default=600)
     args = parser.parse_args(argv)
@@ -189,6 +389,7 @@ def main(argv=None):
     print('EVIDENCE ' + str(work), flush=True)
     xvfb = app = server = None
     owned = {}
+    stages = ProbeStages(work)
     try:
         require(args.display == ':98', 'only the dedicated rehearsal display :98 is admitted')
         require(not Path('/tmp/.X98-lock').exists(), 'display :98 is occupied')
@@ -213,7 +414,11 @@ def main(argv=None):
                  10, 'Xvfb did not become ready')
         wait_empty(args.admission_timeout)
         start_wall_ns = time.time_ns()
-        app = subprocess.Popen(['bash', str(args.launcher), str(args.run_dir)], env=env,
+        # Pin only the operator checkout in a private copy of the supplied launcher.
+        launcher_text = bind_operator_repo(args.launcher.read_text(), args.operator_repo)
+        launcher = work / 'launcher.sh'
+        launcher.write_text(launcher_text)
+        app = subprocess.Popen(['bash', str(launcher), str(args.run_dir)], env=env,
                                stdout=(work / 'app.log').open('w'), stderr=subprocess.STDOUT)
         (work / 'pids.json').write_text(json.dumps(dict(xvfb=xvfb.pid, launcher=app.pid)))
         sys.path.insert(0, str(ROOT / 'agents'))
@@ -271,34 +476,207 @@ def main(argv=None):
                          *native_context(attached, args.proxy_registry), *flags])
             time.sleep(2)
 
+        def native_call(verb, *flags):
+            result = command([native, verb, '--container', capsule, '--window', 'w1',
+                              '--state-dir', attached['MV_SRF_STATE_DIR'],
+                              *native_context(attached, args.proxy_registry), *flags])
+            value = json.loads(result.stdout)
+            with (work / 'native.jsonl').open('a') as stream:
+                stream.write(json.dumps(dict(verb=verb, flags=flags, result=value), ensure_ascii=False) + '\n')
+            return value
+
+        def fixture_ax(page):
+            value = native_call('ax')
+            names = {row.get('name') for row in value.get('elements', [])}
+            require('Pregunta lo que sea…' in names,
+                    'fixture composer absent: ' + repr(sorted(str(n) for n in names)))
+            if page == 'login':
+                require('Inicia sesión o crea una cuenta' in names, 'login fixture dialog absent')
+            return value
+
+        def force_remaining():
+            # Independent diagnostic inputs never turn the workflow failure green.
+            tree = stages.run('forced.home.ax', lambda: native_call('ax'), forced=True)
+            rows = tree.get('elements', []) if isinstance(tree, dict) else []
+            composers = [row for row in rows if row.get('name') == 'Pregunta lo que sea…']
+            def focus():
+                require(len(composers) == 1, 'composer must be unique')
+                x, y, width, height = composers[0]['box']
+                return native_call('input', '--click', f'{x + width // 2},{y + height // 2}')
+            stages.run('forced.composer.click', focus, forced=True)
+            def type_prompt():
+                value = native_call('ax')
+                require(any(row.get('name') == 'Pregunta lo que sea…' and row.get('focused') is True
+                            for row in value.get('elements', [])), 'composer is not focused')
+                return native_call('input', '--type', 'What is the capital of France? Ω', '--paste')
+            stages.run('forced.prompt.type', type_prompt, forced=True)
+            def submit():
+                value = native_call('ax')
+                require(any(row.get('name') == 'Pregunta lo que sea…' and row.get('focused') is True
+                            and row.get('value_len') == len('What is the capital of France? Ω')
+                            for row in value.get('elements', [])), 'prompt not delivered to composer')
+                return native_call('input', '--key', 'Return')
+            stages.run('forced.submit', submit, forced=True)
+            def answer_tree():
+                value = native_call('ax')
+                return value if any(r.get('name') == 'Copiar' for r in value.get('elements', [])) else None
+            stages.run('forced.answer.wait', lambda: wait_for(answer_tree, 15, 'answer anchor absent'), forced=True)
+            def capture():
+                from unittest.mock import patch
+                with patch.dict(os.environ, MV_WENDER_ROOT=str(args.wender_root)), backend.connect(attached) as client:
+                    host = backend.HostBackend(client, 'mv-live-1', work, attached)
+                    workflow = json.loads((home / 'sites/perplexity/workflows/ask.json').read_text())
+                    result = host.capture_answer(workflow)
+                    require(result.get('captured') is True, json.dumps(result))
+                    require(Path(result['path']).read_text() == ANSWER, 'forced answer mismatch')
+                    return result
+            stages.run('forced.answer.extraction_and_file', capture, forced=True)
+
         caller = {k: v for k, v in env.items() if k not in backend.ATTACH_KEYS and k != 'MV_AGENT_INSTANCE'}
-        caller.update(MV_MW_HOME=str(home))
+        caller.update(MV_MW_HOME=str(home), MV_OPERATOR_REPO=str(args.operator_repo))
+        probe = probe_entry(work, args.operator_repo, args.redundant_ax_mutant) if args.forward_probe else None
         # Use the app's ordinary evidence location so its real handoff watcher sees the run.
         caller.pop('XDG_STATE_HOME', None)
         preflight = command([sys.executable, args.operator_repo / 'tools/mw_home_check.py', '--repo',
                              args.operator_repo, '--home', home, '--workflow', 'perplexity/ask'], env=caller)
         require(json.loads(preflight.stdout)['ok'], 'home preflight refused')
-        for page, expected in (('home', (0, 'VERIFIED')), ('login', (4, 'HUMAN_HANDOFF'))):
-            navigate(page)
+        forced_transport = False
+        if args.file_fixture:
+            destination = '/tmp/mv-e1-probe-' + work.name
+            stages.run('fixture.copy', lambda: copy_fixture(capsule, destination, 'home_focus' if args.focused_home else 'home'))
+            origin = 'file://' + destination
+        pages = [('home', (0, 'VERIFIED'))]
+        if not args.home_only:
+            pages.append(('login', (4, 'HUMAN_HANDOFF')))
+        for page, expected in pages:
+            navigate('home_focus' if page == 'home' and args.focused_home else page)
+            if args.forward_probe:
+                tree = stages.run(page + '.native_ax', lambda: fixture_ax(page), forced=forced_transport)
+                if page == 'home' and tree is None:
+                    # No proxy policy changes: tracked fixtures only, inside our proven capsule.
+                    destination = '/tmp/mv-e1-probe-' + work.name
+                    stages.run('forced.fixture.copy', lambda: copy_fixture(capsule, destination, 'home_focus' if args.focused_home else 'home'), forced=True)
+                    origin = 'file://' + destination
+                    forced_transport = True
+                    stages.run('forced.home.navigate', lambda: navigate(page), forced=True)
+                    stages.run('forced.home.native_ax', lambda: fixture_ax(page), forced=True)
+            if page == 'home' and args.forward_probe:
+                def sample_frames():
+                    samples = []
+                    with backend.connect(attached) as client:
+                        for _ in range(31):
+                            frame = backend.tools.observe(surface['surface_id'], client=client, timeout_ms=5000)['frame_ref']
+                            samples.append(dict(mono_ns=time.monotonic_ns(), frame=frame))
+                            time.sleep(0.1)
+                    (work / 'idle-frames.json').write_text(json.dumps(samples))
+                    return samples
+                if args.focused_home:
+                    def check_focus():
+                        value = native_call('ax')
+                        require(any(r.get('name') == 'Pregunta lo que sea…' and r.get('focused') is True
+                                    for r in value.get('elements', [])), 'autofocus composer not focused')
+                        return True
+                    stages.run('home.composer_focused', check_focus)
+                if args.control_cycle:
+                    def control_cycle():
+                        # Real UI buttons; core ownership is the independent oracle.
+                        from PIL import ImageGrab
+                        for word, ownership in (('Control', 'human'), ('Release', 'agent')):
+                            image = work / ('control-' + ownership + '.png')
+                            ImageGrab.grab(xdisplay=args.display).save(image)
+                            explicit = args.take_control_at if ownership == 'human' else args.release_control_at
+                            if explicit:
+                                x, y = measured_position(explicit)
+                            else:
+                                tsv = command(['tesseract', image, 'stdout', 'tsv']).stdout
+                                x, y = control_position(tsv, word)
+                            command(['xdotool', 'mousemove', '--sync', str(x), str(y), 'click', '1'],
+                                    env=dict(os.environ, DISPLAY=args.display))
+                            def owner():
+                                with backend.connect(attached) as client:
+                                    rows = backend.tools.list_surfaces(cursor=None, limit=64,
+                                               timeout_ms=5000, client=client)['surfaces']
+                                return next((r for r in rows if r['surface_id'] == surface['surface_id']
+                                             and r['control'] == ownership), None)
+                            wait_for(owner, 10, 'control transition absent: ' + ownership)
+                            time.sleep(1)
+                        return True
+                    cycled = stages.run('home.take_release_control', control_cycle)
+                    require(cycled is True, 'required take/release cycle did not complete')
+                    if args.focused_home:
+                        stages.run('home.composer_focused_after_release', check_focus)
+                stages.run('home.idle_verified_frames', sample_frames)
             if page == 'login':
-                require(not notice_visible(screenshot_text(work, args.display, 'before-login')),
-                        'a pre-existing login notice would invalidate the display oracle')
-            result = command([sys.executable, '-m', 'metaviewer_agents.mw_run', '--identity', 'mv-live-1',
+                def before_notice():
+                    require(not notice_visible(screenshot_text(work, args.display, 'before-login')),
+                            'a pre-existing login notice would invalidate the display oracle')
+                    return True
+                if args.forward_probe:
+                    stages.run('login.display_baseline', before_notice)
+                else:
+                    before_notice()
+            entry_argv = ([sys.executable, str(probe), str(args.operator_repo), str(work / (page + '.trace.jsonl'))]
+                          if probe else [sys.executable, '-m', 'metaviewer_agents.mw_run'])
+            result = command([*entry_argv, '--identity', 'mv-live-1',
                               '--site', 'perplexity', '--workflow', 'ask', '--slot',
                               'prompt=What is the capital of France? Ω'], cwd=args.operator_repo / 'agents',
                               env=caller, check=False, timeout=210)
+            # Preserve only our packaged session's authority evidence before the
+            # launcher removes its private runtime on exit. No identity data.
+            config_path = Path(attached['MV_CORE_CONFIG'])
+            config = json.loads(config_path.read_text())
+            session = config_path.parent / 'state/metaviewer/sessions' / config['session_id']
+            for name in ('journal.jsonl', 'checkpoint.json'):
+                if (session / name).is_file():
+                    shutil.copyfile(session / name, work / (page + '.core.' + name))
+            transitions = []
+            for event_path in (session / 'events').glob('*.json'):
+                event = json.loads(event_path.read_text())
+                if event['input'].get('event') not in ('Frame', 'Lifecycle', 'Propose', 'Dispatch', 'Receipt', 'TakeControl', 'ReleaseControl'):
+                    continue
+                row = {k: event[k] for k in ('input', 'outcome', 'record', 'state')}
+                row['boundaries'] = []
+                for witness in event['witnesses']:
+                    artifact = session / 'artifacts' / witness['sha256']
+                    if witness['byte_len'] > 12000 or not artifact.is_file():
+                        continue
+                    try:
+                        row['boundaries'].append(json.loads(artifact.read_text()))
+                    except (ValueError, UnicodeDecodeError):
+                        pass
+                transitions.append(row)
+            (work / (page + '.core.transitions.json')).write_text(json.dumps(transitions))
             (work / (page + '.stdout')).write_text(result.stdout)
             (work / (page + '.stderr')).write_text(result.stderr)
             print(result.stderr, end='', flush=True)
             print(result.stdout, end='', flush=True)
-            validate_run(result, expected)
+            if args.forward_probe:
+                outcome = stages.run(page + '.workflow', lambda: validate_run(result, expected), forced=forced_transport)
+                if page == 'home' and outcome is None:
+                    force_remaining()
+            else:
+                validate_run(result, expected)
             if page == 'login':
                 # A screenshot of our Xvfb display proves a new notice, independently of the JSON.
-                wait_for(lambda: notice_visible(screenshot_text(work, args.display, 'login-notice')),
-                         20, 'login handoff notice absent from the packaged UI')
+                def notice():
+                    return wait_for(lambda: notice_visible(screenshot_text(work, args.display, 'login-notice')),
+                                    20, 'login handoff notice absent from the packaged UI')
+                if args.forward_probe:
+                    stages.run('login.display_notice', notice)
+                else:
+                    notice()
+        if stages.failed:
+            print('FAIL forward probe; see ' + str(stages.path), flush=True)
+            return 1
         print('PASS packaged E1 answer and human handoff', flush=True)
         return 0
     finally:
+        # Release the native identity lease while its state still exists.
+        for name, container_id in owned.items():
+            if inventory().get(name) == container_id and 'attached' in locals():
+                command([str(Path(attached['MV_SRF_BIN_DIR']) / 'srf-identity-surface'),
+                         'stop', '--container', name, '--state-dir', attached['MV_SRF_STATE_DIR'],
+                         *native_context(attached, args.proxy_registry)], check=False)
         if app is not None and app.poll() is None:
             app.send_signal(signal.SIGTERM)
             try:
@@ -322,6 +700,121 @@ def self_test():
     from unittest.mock import patch
 
     class Guards(unittest.TestCase):
+        def test_failed_owner_keeps_verdict_without_forging_receipt(self):
+            import importlib.util
+            from types import SimpleNamespace
+            spec = importlib.util.spec_from_file_location('probe_failure_backend', ROOT / 'tools/mw_run_backend.py')
+            host = importlib.util.module_from_spec(spec)
+            sys.path.insert(0, str(ROOT / 'agents'))
+            spec.loader.exec_module(host)
+            args = SimpleNamespace(site='perplexity', workflow='ask', identity='mv-live-1', slot=[])
+            result = SimpleNamespace(rc=5, verdict_code='INPUT_UNCERTAIN', diagnostic='OWNER_FAILURE',
+                                     handoff_path=None)
+            backend = SimpleNamespace(call=lambda *a: {'mode': 'legacy'}, last_core_refusal='STALE_FRAME')
+            owner = SimpleNamespace(run=lambda: result)
+            with tempfile.TemporaryDirectory() as directory, \
+                 patch.object(host, 'stage_corpus', return_value=(ROOT, 'site_root')), \
+                 patch.object(host, 'wait_notice', return_value=time.monotonic_ns()):
+                trace = {}
+                outcome = host.execute(args, ROOT, Path(directory), backend,
+                    corpus_factory=lambda *a: object(), owner_factory=lambda *a, **kw: owner, trace=trace)
+                self.assertEqual(outcome, (5, 'INPUT_UNCERTAIN', None))
+                self.assertEqual(trace['core_refusal'], 'STALE_FRAME')
+                self.assertEqual(trace['diagnostic'], 'OWNER_FAILURE')
+                self.assertFalse((Path(directory) / 'memoryweb-run.json').exists())
+                real = object.__new__(host.HostBackend)
+                real.client = object()
+                with patch.object(real, 'ownership'), patch.object(real, 'network_context'), \
+                     patch.object(real, 'rebind', return_value={'frame': {'generation': 1}}), \
+                     patch.object(host, 'build_proposal', return_value={'based_on_frame': {}}), \
+                     patch.object(host.tools, 'propose', side_effect=host.tools.ToolRefusal('STALE_FRAME', None)), \
+                     patch.object(host.tools, 'wait_verify') as verify:
+                    with self.assertRaisesRegex(host.OwnerRefused, 'MW_STALE_FRAME_EXHAUSTED'):
+                        real.propose({'frame': {'generation': 1}, 'ax': []}, {'action': {}, 'expectation': {}}, 100)
+                    self.assertEqual(real.last_core_refusal, 'STALE_FRAME')
+                    verify.assert_not_called()
+
+                result.rc, result.verdict_code = 0, 'VERIFIED'
+                with self.assertRaisesRegex(host.OwnerRefused, 'receipt path absent'):
+                    host.execute(args, ROOT, Path(directory), backend,
+                        corpus_factory=lambda *a: object(), owner_factory=lambda *a, **kw: owner, trace={})
+
+        def test_measured_position_bounds_and_invalid_mutants(self):
+            self.assertEqual(measured_position('120,210'), (120, 210))
+            for mutant in ('-1,0', '1600,0', '0,1000', '0,0,0', 'x,y'):
+                with self.assertRaises(RuntimeError):
+                    measured_position(mutant)
+
+        def test_control_position_rejects_missing_and_ambiguous_labels(self):
+            header = 'left\ttop\twidth\theight\ttext\n'
+            row = '100\t200\t40\t20\tRelease\n'
+            self.assertEqual(control_position(header + row, 'Release'), (120, 210))
+            for mutant in (header, header + row + row, header + row.replace('Release', 'Other')):
+                with self.assertRaisesRegex(RuntimeError, 'ambiguous/absent'):
+                    control_position(mutant, 'Release')
+
+        def test_launcher_binding_exact_and_ambiguous_mutants(self):
+            source = 'env MV_OPERATOR_REPO=/old/admin/path MV_MEMORYWEB_REPO=/keep app'
+            self.assertEqual(bind_operator_repo(source, Path('/new/nonascii/ñ path')),
+                "env MV_OPERATOR_REPO='/new/nonascii/ñ path' MV_MEMORYWEB_REPO=/keep app")
+            for mutant in ('env app', source + ' MV_OPERATOR_REPO=/duplicate'):
+                with self.assertRaisesRegex(RuntimeError, 'binding is ambiguous'):
+                    bind_operator_repo(mutant, ROOT)
+
+        def test_focus_fixture_changes_only_autofocus(self):
+            original = (FIXTURE / 'packaged/home.html').read_bytes()
+            focused = (FIXTURE / 'packaged/home_focus.html').read_bytes()
+            self.assertEqual(focused.count(b'autofocus'), 1)
+            self.assertEqual(focused.replace(b'<textarea autofocus ', b'<textarea '), original)
+            self.assertNotEqual(focused, original)
+            with patch(__name__ + '.command') as run:
+                copy_fixture('srf-id-owned', '/tmp/mv-e1-probe-test', 'home_focus')
+                self.assertIn('autofocus', run.call_args_list[1].kwargs['input'])
+            with patch(__name__ + '.command') as run, self.assertRaises(RuntimeError):
+                copy_fixture('srf-id-owned', '/tmp/mv-e1-probe-test', '../foreign')
+            run.assert_not_called()
+
+        def test_fixture_charset_and_removed_declaration_mutant(self):
+            for path in (FIXTURE / 'packaged').glob('*.html'):
+                raw = path.read_bytes()
+                self.assertTrue(check_fixture_encoding(raw))
+                mutant = raw.replace(b'<meta charset="utf-8">', b'')
+                with self.assertRaisesRegex(RuntimeError, 'must declare UTF-8'):
+                    check_fixture_encoding(mutant)
+
+        def test_fixture_copy_only_public_files_and_protected_mutants(self):
+            with patch(__name__ + '.command') as run:
+                self.assertTrue(copy_fixture('srf-id-owned', '/tmp/mv-e1-probe-test'))
+                self.assertEqual(run.call_count, 4)
+                for call in run.call_args_list[1:]:
+                    self.assertEqual(call.args[0][:4], ['docker', 'exec', '-i', 'srf-id-owned'])
+                    self.assertIn('<meta charset="utf-8">', call.kwargs['input'])
+            for capsule, destination in (('srf-id-cuentas-1', '/tmp/mv-e1-probe-test'),
+                                         ('srf-id-owned', '/profile'),
+                                         ('srf-id-owned', '/tmp/mv-e1-probe-../profile')):
+                with patch(__name__ + '.command') as run, self.assertRaises(RuntimeError):
+                    copy_fixture(capsule, destination)
+                run.assert_not_called()
+
+        def test_probe_continues_after_failure_without_erasing_it(self):
+            with tempfile.TemporaryDirectory() as directory:
+                stages = ProbeStages(Path(directory))
+                def fail():
+                    raise RuntimeError('negative control')
+                self.assertIsNone(stages.run('broken', fail))
+                self.assertEqual(stages.run('later', lambda: 42, forced=True), 42)
+                rows = [json.loads(row) for row in stages.path.read_text().splitlines()]
+                self.assertEqual([row['status'] for row in rows], ['FAIL', 'PASS'])
+                self.assertTrue(rows[1]['forced'])
+                self.assertTrue(stages.failed)
+
+        def test_probe_wrapper_compiles_and_preserves_entry(self):
+            with tempfile.TemporaryDirectory() as directory:
+                path = probe_entry(Path(directory), ROOT)
+                compile(path.read_text(), str(path), 'exec')
+                self.assertIn('main(runner=host.run_entry)', path.read_text())
+                self.assertIn('raise', path.read_text())
+
         def test_native_ax_uses_discovered_context_without_mutating_caller(self):
             import importlib.util
             from types import SimpleNamespace

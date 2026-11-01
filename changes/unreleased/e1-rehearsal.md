@@ -3,3 +3,16 @@
 - Preserve the R2 finding: the original P12 witness used a profile-derived name instead of the opaque native container. P11h.1 resolves that producer mismatch; MW_NETWORK refusal remains intact.
 - P11h.1 rehearsal confirms WITNESS-BIND: the witness matches the native container and network admission reaches the countdown. The operator CLI then refuses OUT_OF_SUPPORT before any verified step; native AX lacks the discovered store and registry context. Discover SRF_PROXY_REGISTRY and forward the native context without changing the caller environment. Integration into the read-only operator checkout and a fresh packaged rehearsal remain required.
 - Pass explicit store-root and proxy-registry arguments during fixture navigation; guard tests cover relative-path rejection, discovered-context forwarding and conflicting caller registry refusal.
+- Add a forward diagnostic mode with persistent failure rows, backend/native traces, independent login execution, and explicitly marked local-file continuation when the proxy refuses the fixture port. Missing OCR data remains a failed display oracle.
+- Declare UTF-8 in packaged fixtures so Chromium exposes the exact composer label. Guard tests reject a removed charset declaration and protected fixture-copy destinations.
+- Preserve a failed owner's verdict and diagnostic when no receipt was selected, and retain core refusal codes in the report. A successful run still requires a validated receipt; uncertain input is never retried; explicit stale refusals require fresh target validation.
+- Verify composer focus and Unicode length before direct diagnostic submission; use the documented native paste flag for the public fixture prompt.
+- Re-perceive and validate AX target/focus before binding the latest verified pixels; retry only explicit STALE_FRAME refusals within the delivery budget, with typed exhaustion and no replay after uncertain execution.
+- Strip standalone AX button/link captions from answer.txt; ambiguous removal refuses capture and matching answer prose is retained.
+- Add local-file-first packaged probing, idle verified-frame samples and authority transition evidence; diagnose UI list heartbeat lifecycle fences combined with unchanged-frame suppression. The fixed package still cannot verify the first receipt without an adapter/core-boundary repair.
+- Add an autofocus-only local fixture and focused-frame/control-release probe options with guarded UI control selection and exact launcher checkout binding.
+- Share the acquisition AX snapshot to avoid expiring Wender's unchanged locate deadline before dispatch; add grounding timing and repeated-AX negative-control diagnostics.
+- Classify only the measured solid single-column caret blink within a uniquely focused editor; revalidate AX text/value, geometry, identity and focus, and refuse other pixel changes.
+- Consume the core's validated wait-result witnesses without inventing embedded native evidence; cover missing, foreign, mismatched and stripped-witness mutants.
+- Stop the owned capsule through the native API before application shutdown to release its identity lease.
+- Add a negative control proving that native AX null editor length cannot satisfy the empty-slot gate; an explicit empty string remains admissible.
