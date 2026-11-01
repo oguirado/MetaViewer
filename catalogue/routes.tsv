@@ -128,6 +128,7 @@ protocol.json	catalogue/protocol.json
 changes-README.md	changes/README.md
 boot-pending-clr.md	changes/unreleased/boot-pending-clr.md
 changel-6ee9fc48ce48	changes/unreleased/changelog-fragments.md
+cipacka-468d8ecfdb15	changes/unreleased/ci-packaged-display-arm64.md
 cipacka-ec89db0c8875	changes/unreleased/ci-packaged-display.md
 display-polish.md	changes/unreleased/display-polish.md
 e1-rehearsal.md	changes/unreleased/e1-rehearsal.md
