@@ -1,0 +1,1 @@
+- Lower the main process startup memory peak by about 7 MB: the capsule profile picker loads on first use, the settings file is read into a buffer sized to the file, and the 1 MB wire buffer is no longer allocated up front; every cap and the 200 MB budget are unchanged.
