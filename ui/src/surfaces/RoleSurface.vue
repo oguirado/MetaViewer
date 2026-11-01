@@ -23,8 +23,11 @@ async function sync() {
       if (status.view?.state === 'error') throw Error(status.view.code);
     }
     const box = root.value?.getBoundingClientRect();
-    const visible = box && box.width >= 1 && box.height >= 1 && box.x >= 0 && box.y >= 0 &&
-      box.right <= innerWidth && box.bottom <= innerHeight && root.value?.getClientRects().length;
+    // Clip the tile to the window instead of requiring full containment: a maximized or floating
+    // tile that overhangs by a fraction of a pixel must stay visible (operator, 1 Nov 17:1x).
+    const left = box ? Math.ceil(Math.max(0, box.x)) : 0, top = box ? Math.ceil(Math.max(0, box.y)) : 0;
+    const right = box ? Math.floor(Math.min(innerWidth, box.x + box.width)) : 0, bottom = box ? Math.floor(Math.min(innerHeight, box.y + box.height)) : 0;
+    const visible = !!box && right - left >= 1 && bottom - top >= 1 && !!root.value?.getClientRects().length;
     if (!wanted()) { if (mounted) await revoke(); return; }
     // Temporary clipping, docking and window visibility must not revoke the
     // authenticated session. Hide the native view and retain its connection.
@@ -41,7 +44,7 @@ async function sync() {
       if (!reply.ok) throw Error(reply.code);
       shown = true;
     }
-    const bounds = {x:Math.round(box.x),y:Math.round(box.y),width:Math.floor(box.width),height:Math.floor(box.height)};
+    const bounds = {x:left,y:top,width:right - left,height:bottom - top};
     const next = JSON.stringify(bounds);
     if (mounted && next === signature) return;
     const reply = mounted ? await api.resize(props.surfaceId,bounds) : await api.mount(props.surfaceId,bounds);
