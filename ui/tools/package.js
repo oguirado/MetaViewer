@@ -47,11 +47,43 @@ export function writeFdSync(fd, value) {
 const execute = promisify(execFile);
 const ui = fileURLToPath(new URL('../', import.meta.url));
 const repo = resolve(ui, '..');
+/** Kit modules imported by electron/main.js through ../.kit; each is import-free
+ * or its imports are listed here too. Paths are relative to the kit package root. */
+export const PACKAGED_KIT_MODULES = Object.freeze(['src/workspace/layoutProfile.js']);
+
+/** Copy the kit modules the host imports into the application directory (becomes app.asar).
+ * @param {string} app
+ * @param {{ kitRoot?: string }} [options] kitRoot is the verified kit package root (holds package.json). */
+export async function stagePackagedKit(app, { kitRoot = join(ui, '.kit/capsule-ui-kit') } = {}) {
+  for (const relativePath of PACKAGED_KIT_MODULES) {
+    const from = join(kitRoot, relativePath);
+    const info = await fs.lstat(from).catch(() => null);
+    if (!info?.isFile() || info.isSymbolicLink()) throw new Error(`PKG_KIT_MODULE_MISSING: ${relativePath}`);
+    const to = join(app, '.kit/capsule-ui-kit', relativePath);
+    await fs.mkdir(dirname(to), { recursive: true });
+    await fs.copyFile(from, to);
+  }
+}
+
+export const stageKitContent = stagePackagedKit;
+
 /** Stage the complete host module tree, shared by packaging and smoke fixtures.
  * @param {string} app
+ * @param {{ kitRoot?: string }} [options]
  */
-export async function stageElectronModules(app) {
+export async function stageElectronModules(app, options = {}) {
   await fs.cp(join(ui, 'electron'), join(app, 'electron'), { recursive: true });
+  const kitTarget = join(app, '.kit/capsule-ui-kit', PACKAGED_KIT_MODULES[0]);
+  const hasStagedKit = await fs.lstat(kitTarget).then(st => st.isFile() && !st.isSymbolicLink()).catch(() => false);
+  if (!hasStagedKit) {
+    const kitRoot = options.kitRoot ?? join(ui, '.kit/capsule-ui-kit');
+    const hasSourceKit = await fs.lstat(join(kitRoot, PACKAGED_KIT_MODULES[0]))
+      .then(st => st.isFile() && !st.isSymbolicLink())
+      .catch(() => false);
+    if (hasSourceKit || options.kitRoot !== undefined) {
+      await stagePackagedKit(app, { kitRoot });
+    }
+  }
   await verifyStagedImports(app);
 }
 
@@ -60,6 +92,8 @@ export async function stageElectronModules(app) {
  */
 export async function verifyStagedImports(app) {
   const seen = new Set();
+  const electronPrefix = resolve(app, 'electron') + sep;
+  const kitPrefix = resolve(app, '.kit') + sep;
   /** @param {string} file */
   async function visit(file) {
     if (seen.has(file)) return;
@@ -69,9 +103,10 @@ export async function verifyStagedImports(app) {
     });
     const imports = source.matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s*)['"](\.\.?\/[^'"]+\.js)['"]/g);
     for (const match of imports) {
-      // The kit is staged independently; this gate owns Electron host modules.
       const target = resolve(dirname(file), match[1]);
-      if (target.startsWith(resolve(app, 'electron') + sep)) await visit(target);
+      if (target.startsWith(electronPrefix) || target.startsWith(kitPrefix)) {
+        await visit(target);
+      }
     }
   }
   await visit(join(app, 'electron/main.js'));
@@ -295,7 +330,7 @@ export async function verifyPackagedSecurity(root) {
     let sealKey = null;
     if (relPath.startsWith('dist/renderer/')) {
       sealKey = relPath.slice('dist/renderer/'.length);
-    } else if (relPath.startsWith('dist/preload/') || relPath.startsWith('electron/')) {
+    } else if (relPath.startsWith('dist/preload/') || relPath.startsWith('electron/') || relPath.startsWith('.kit/')) {
       sealKey = relPath;
     }
     if (sealKey !== null) {
@@ -360,6 +395,12 @@ export async function sealRendererAssets(app, options = {}) {
   if (electronStat) {
     if (electronStat.isSymbolicLink() || !electronStat.isDirectory()) throw new Error('Renderer alias refused');
     await walkSection(electronDir, 'electron/', 'electron/');
+  }
+  const kitDir = join(app, '.kit');
+  const kitStat = await fs.lstat(kitDir).catch(() => null);
+  if (kitStat) {
+    if (kitStat.isSymbolicLink() || !kitStat.isDirectory()) throw new Error('Renderer alias refused');
+    await walkSection(kitDir, '.kit/', '.kit/');
   }
   collected.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
   /** @type {Record<string, string>} */
@@ -1008,6 +1049,9 @@ function verifyBootSeal(baseDir) {
   walkSection(join(baseDir, 'dist/renderer'), '', 'dist/renderer/');
   walkSection(join(baseDir, 'dist/preload'), 'dist/preload/', 'dist/preload/');
   walkSection(join(baseDir, 'electron'), 'electron/', 'electron/');
+  let hasKit = false;
+  try { hasKit = lstatSync(join(baseDir, '.kit')).isDirectory(); } catch {}
+  if (hasKit) walkSection(join(baseDir, '.kit'), '.kit/', '.kit/');
   if (verifiedCount !== keys.length) {
     throw new Error('PKG_SEAL_INVENTORY_MISMATCH');
   }
@@ -2391,7 +2435,8 @@ export async function packageShell(env = process.env) {
       dest: join(builder, '.kit/capsule-ui-kit'), lockPath: join(ui, 'kit.lock.json') });
     await execute(process.execPath, [join(ui, 'node_modules/vite/bin/vite.js'), 'build',
       '--outDir', join(app, 'dist/renderer')], { cwd: builder, env, maxBuffer: 1024 * 1024 });
-    await stageElectronModules(app);
+    await stagePackagedKit(app, { kitRoot: join(builder, '.kit/capsule-ui-kit') });
+    await stageElectronModules(app, { kitRoot: join(builder, '.kit/capsule-ui-kit') });
     const pkgVersion = JSON.parse(await fs.readFile(join(ui,'package.json'),'utf8')).version;
     const commit = (await execute('git',['rev-parse','HEAD'],{cwd:repo})).stdout.trim();
     if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error('PKG_REVISION_INVALID');
