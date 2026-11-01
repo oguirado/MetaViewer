@@ -19,17 +19,17 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 2,696 | 55 | 2,641 |
-| Lanes finished OK | 2,696 | 55 | 2,641 |
-| Agent steps | 83,281 | 2,705 | 80,576 |
-| Lane-hours of agent work | 184.9 | 5.2 | 179.7 |
-| Fresh input tokens | 313,479,714 | 11,482,034 | 301,997,680 |
-| Cache-read input tokens | 5,445,078,289 | 226,255,212 | 5,218,823,077 |
-| Prompt cache hit % | 94.6 | 95.2 | 94.5 |
-| Output tokens | 64,116,649 | 2,135,708 | 61,980,941 |
-| Thinking tokens | 39,491,089 | 1,050,039 | 38,441,050 |
-| Cost (USD) | 55.0614 | 2.0279 | 53.0336 |
-| Cost per lane (USD) | 0.0204 | 0.0369 | 0.0201 |
+| Lanes launched | 2,723 | 55 | 2,668 |
+| Lanes finished OK | 2,723 | 55 | 2,668 |
+| Agent steps | 83,766 | 2,705 | 81,061 |
+| Lane-hours of agent work | 185.8 | 5.2 | 180.6 |
+| Fresh input tokens | 315,143,498 | 11,482,034 | 303,661,464 |
+| Cache-read input tokens | 5,463,368,560 | 226,255,212 | 5,237,113,348 |
+| Prompt cache hit % | 94.5 | 95.2 | 94.5 |
+| Output tokens | 64,453,291 | 2,135,708 | 62,317,583 |
+| Thinking tokens | 39,723,244 | 1,050,039 | 38,673,205 |
+| Cost (USD) | 55.3317 | 2.0279 | 53.3039 |
+| Cost per lane (USD) | 0.0203 | 0.0369 | 0.02 |
 
 Rooms: 136. Peak concurrent lanes [MEASURED from lane start/end]: 42.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
@@ -38,7 +38,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 2307 | 93.7 | 38.8139 |
+| build | 2334 | 93.7 | 39.0842 |
 | context | 42 | 95.9 | 1.9093 |
 | context packs + test ideation (U-DEC-0139) | 13 | 91.1 | 0.2195 |
 | demo | 4 | 90.7 | 0.0557 |
@@ -86,7 +86,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 1969 | 93.6 | 30.5354 | direct Muse job |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 1996 | 93.6 | 30.8057 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -2899,9 +2899,36 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | 21534_rev_UI-CONTROL-ARM_a | fill_121534_rev_UI-CONTROL-ARM_a | Nov 01 12:16 | yes | 25 | 94.1 | 0.012657 |
 | direct-direct | 21534_rev_UI-CONTROL-ARM_b | fill_121534_rev_UI-CONTROL-ARM_b | Nov 01 12:16 | yes | 15 | 91.4 | 0.007653 |
 | direct-direct | 21646_rev_DISPLAY-READER-DEFLAKE-R2_a | fill_121646_rev_DISPLAY-READER-DEFLAKE-R2_a | Nov 01 12:17 | yes | 18 | 92.2 | 0.008961 |
+| direct-direct | 21646_rev_DISPLAY-READER-DEFLAKE-R2_b | fill_121646_rev_DISPLAY-READER-DEFLAKE-R2_b | Nov 01 12:17 | yes | 18 | 92.1 | 0.009872 |
 | direct-direct | 21646_rev_UI-CONTROL-ARM_a | fill_121646_rev_UI-CONTROL-ARM_a | Nov 01 12:17 | yes | 20 | 92.4 | 0.010536 |
+| direct-direct | 21646_rev_UI-CONTROL-ARM_b | fill_121646_rev_UI-CONTROL-ARM_b | Nov 01 12:17 | yes | 38 | 95.3 | 0.015857 |
 | direct-direct | 21758_rev_DISPLAY-READER-DEFLAKE-R2_a | fill_121758_rev_DISPLAY-READER-DEFLAKE-R2_a | Nov 01 12:18 | yes | 12 | 88.7 | 0.006022 |
+| direct-direct | 21758_rev_DISPLAY-READER-DEFLAKE-R2_b | fill_121758_rev_DISPLAY-READER-DEFLAKE-R2_b | Nov 01 12:19 | yes | 18 | 92.7 | 0.007872 |
+| direct-direct | 21758_rev_UI-CONTROL-ARM_a | fill_121758_rev_UI-CONTROL-ARM_a | Nov 01 12:19 | yes | 19 | 92.3 | 0.010654 |
 | direct-direct | 21758_rev_UI-CONTROL-ARM_b | fill_121758_rev_UI-CONTROL-ARM_b | Nov 01 12:19 | yes | 10 | 86.6 | 0.006681 |
+| direct-direct | 21911_rev_DISPLAY-READER-DEFLAKE-R2_a | fill_121911_rev_DISPLAY-READER-DEFLAKE-R2_a | Nov 01 12:20 | yes | 19 | 92.2 | 0.009868 |
+| direct-direct | 21911_rev_DISPLAY-READER-DEFLAKE-R2_b | fill_121911_rev_DISPLAY-READER-DEFLAKE-R2_b | Nov 01 12:20 | yes | 18 | 92.4 | 0.009493 |
+| direct-direct | 21911_rev_UI-CONTROL-ARM_a | fill_121911_rev_UI-CONTROL-ARM_a | Nov 01 12:20 | yes | 26 | 94.0 | 0.014338 |
+| direct-direct | 21911_rev_UI-CONTROL-ARM_b | fill_121911_rev_UI-CONTROL-ARM_b | Nov 01 12:20 | yes | 13 | 88.4 | 0.008183 |
+| direct-direct | 22023_rev_DISPLAY-READER-DEFLAKE-R2_a | fill_122023_rev_DISPLAY-READER-DEFLAKE-R2_a | Nov 01 12:21 | yes | 13 | 88.3 | 0.007316 |
+| direct-direct | 22023_rev_DISPLAY-READER-DEFLAKE-R2_b | fill_122023_rev_DISPLAY-READER-DEFLAKE-R2_b | Nov 01 12:21 | yes | 10 | 88.7 | 0.005695 |
+| direct-direct | 22023_rev_UI-CONTROL-ARM_a | fill_122023_rev_UI-CONTROL-ARM_a | Nov 01 12:21 | yes | 15 | 90.4 | 0.008574 |
+| direct-direct | 22023_rev_UI-CONTROL-ARM_b | fill_122023_rev_UI-CONTROL-ARM_b | Nov 01 12:21 | yes | 23 | 93.5 | 0.010641 |
+| direct-direct | 22331_rev_DISPLAY-READER-DEFLAKE-R2_a | fill_122331_rev_DISPLAY-READER-DEFLAKE-R2_a | Nov 01 13:25 | yes | 14 | 89.5 | 0.007147 |
+| direct-direct | 22331_rev_DISPLAY-READER-DEFLAKE-R2_b | fill_122331_rev_DISPLAY-READER-DEFLAKE-R2_b | Nov 01 13:25 | yes | 17 | 91.5 | 0.008578 |
+| direct-direct | 22331_rev_UI-CONTROL-ARM_a | fill_122331_rev_UI-CONTROL-ARM_a | Nov 01 13:25 | yes | 12 | 88.6 | 0.007429 |
+| direct-direct | 22331_rev_UI-CONTROL-ARM_b | fill_122331_rev_UI-CONTROL-ARM_b | Nov 01 13:25 | yes | 19 | 92.1 | 0.010091 |
+| direct-direct | SPLAY-READER-DEFLAKE-R2_a | r1x_DISPLAY-READER-DEFLAKE-R2_a | Nov 01 13:25 | yes | 19 | 92.6 | 0.009242 |
+| direct-direct | SPLAY-READER-DEFLAKE-R2_b | r1x_DISPLAY-READER-DEFLAKE-R2_b | Nov 01 13:25 | yes | 28 | 93.0 | 0.01529 |
+| direct-direct | 32515_rev_UI-CONTROL-ARM_a | fill_132515_rev_UI-CONTROL-ARM_a | Nov 01 13:26 | yes | 17 | 91.6 | 0.008858 |
+| direct-direct | 32515_rev_UI-CONTROL-ARM_b | fill_132515_rev_UI-CONTROL-ARM_b | Nov 01 13:26 | yes | 10 | 84.4 | 0.009623 |
+| direct-direct | 32515_rev_UI-CONTROL-ARM-R2_a | fill_132515_rev_UI-CONTROL-ARM-R2_a | Nov 01 13:26 | yes | 25 | 93.3 | 0.015522 |
+| direct-direct | 32515_rev_UI-CONTROL-ARM-R2_b | fill_132515_rev_UI-CONTROL-ARM-R2_b | Nov 01 13:26 | yes | 11 | 86.6 | 0.007769 |
+| direct-direct | 32627_rev_UI-CONTROL-ARM_a | fill_132627_rev_UI-CONTROL-ARM_a | Nov 01 13:27 | yes | 16 | 87.2 | 0.011767 |
+| direct-direct | 32627_rev_UI-CONTROL-ARM_b | fill_132627_rev_UI-CONTROL-ARM_b | Nov 01 13:27 | yes | 13 | 88.5 | 0.007947 |
+| direct-direct | 32734_rev_UI-CONTROL-ARM_a | fill_132734_rev_UI-CONTROL-ARM_a | Nov 01 13:28 | yes | 14 | 89.8 | 0.009726 |
+| direct-direct | 32734_rev_UI-CONTROL-ARM_b | fill_132734_rev_UI-CONTROL-ARM_b | Nov 01 13:28 | yes | 15 | 90.1 | 0.008426 |
+| direct-direct | 32840_rev_UI-CONTROL-ARM_b | fill_132840_rev_UI-CONTROL-ARM_b | Nov 01 13:29 | yes | 25 | 91.5 | 0.01451 |
 
 ## Method
 
