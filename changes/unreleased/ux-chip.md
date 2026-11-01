@@ -1,0 +1,1 @@
+- Remove the covering "View only — press Control to interact" tile overlay and move wall input take/release controls and pending/unavailable status into a non-overlapping tile indicator bar.

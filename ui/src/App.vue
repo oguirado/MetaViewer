@@ -1051,13 +1051,13 @@ const chromeWorkspace = markRaw(defineComponent({
           :color-scheme="scheme === 'mv-dark' ? 'dark' : 'light'" :density="density" @ready="onWallReady" @wall-settled="onWorkspaceSettled" @activate-surface="selectCapsule" @panel-closed="onPanelClosed" @submit-intent="onWallIntent">
           <template #surface="{ surface, capsuleId }">
             <template v-if="surface && (!multislotOpen || capsuleId !== selectedSurface?.id)">
-            <SurfaceCanvas :surface-id="capsuleId" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :frame-width="surfaceWitness(surface).width" :frame-height="surfaceWitness(surface).height" :state="canvasStateFor(surface)" :input-enabled="inputEnabledFor(surface) || wallArmedFor(surface)" :stream-id="surfaceStreamId(surface)" />
-            <div v-if="wallInputState(surface) !== ''" class="mv-input-chip" :data-input-state="wallInputState(surface)" :data-semantic-anchor="`capsule/${capsuleId}/input`">
-              <UiButton v-if="wallInputState(surface) === 'view'" :id="`mv-input-take-${capsuleId}`" :data-semantic-anchor="`capsule/${capsuleId}/input/take`" class="mv-input-chip__action" label="View only — press Control to interact" :aria-label="`View only. Take control of ${surfaceLabel(surface)} to interact`" @click="takeWallControl(surface)" />
-              <span v-else-if="wallInputState(surface) === 'pending'" class="mv-input-chip__text" role="status">Taking control…</span>
-              <span v-else-if="wallInputState(surface) === 'unavailable'" class="mv-input-chip__text">View only — input unavailable in this window</span>
-              <template v-else><span class="mv-input-chip__text">Interactive</span><UiButton :id="`mv-input-release-${capsuleId}`" :data-semantic-anchor="`capsule/${capsuleId}/input/release`" class="mv-input-chip__action" label="Release" :aria-label="`Release control of ${surfaceLabel(surface)}`" @click="releaseWallControl(surface)" /></template>
+            <div v-if="wallInputState(surface) !== ''" class="mv-input-indicator" :data-input-state="wallInputState(surface)" :data-semantic-anchor="`capsule/${capsuleId}/input`">
+              <UiButton v-if="wallInputState(surface) === 'view'" :id="`mv-input-take-${capsuleId}`" :data-semantic-anchor="`capsule/${capsuleId}/input/take`" class="mv-input-indicator__action" label="Take control" :aria-label="`Take control of ${surfaceLabel(surface)}`" @click="takeWallControl(surface)" />
+              <span v-else-if="wallInputState(surface) === 'pending'" class="mv-input-indicator__text" role="status">Taking control…</span>
+              <span v-else-if="wallInputState(surface) === 'unavailable'" class="mv-input-indicator__text" role="status">Input unavailable in this window</span>
+              <template v-else><span class="mv-input-indicator__text" role="status">Interactive</span><UiButton :id="`mv-input-release-${capsuleId}`" :data-semantic-anchor="`capsule/${capsuleId}/input/release`" class="mv-input-indicator__action" label="Release" :aria-label="`Release control of ${surfaceLabel(surface)}`" @click="releaseWallControl(surface)" /></template>
             </div>
+            <SurfaceCanvas :surface-id="capsuleId" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :frame-width="surfaceWitness(surface).width" :frame-height="surfaceWitness(surface).height" :state="canvasStateFor(surface)" :input-enabled="inputEnabledFor(surface) || wallArmedFor(surface)" :stream-id="surfaceStreamId(surface)" />
             </template>
           </template>
         </WallWorkspace>
@@ -1123,6 +1123,15 @@ body { font-family:var(--cuk-semantic-typography-font-family-sans, system-ui, sa
 .mv-layout-notice-reserve { visibility:hidden; }
 .mv-shell .cuk-capsule-panel { height:100%; }
 .mv-shell .mv-surface-host { width:100%; height:100%; min-height:0; }
+.mv-shell .mv-tile-capture-host { display:flex; flex-direction:column; min-height:0; }
+.mv-shell .mv-tile-capture-host > .mv-surface { flex:1 1 auto; min-height:0; }
+.mv-input-indicator { flex:0 0 auto; display:flex; align-items:center; justify-content:flex-end; gap:var(--cuk-semantic-spacing-xs); min-width:0; padding:var(--cuk-semantic-spacing-xs) var(--cuk-semantic-spacing-sm); font-size:var(--cuk-semantic-typography-font-size-xs); line-height:var(--cuk-semantic-typography-line-height-normal); color:var(--cuk-semantic-text-primary); background:var(--cuk-semantic-surface-panel); border-bottom:var(--cuk-semantic-border-width) solid var(--cuk-semantic-border-subtle); }
+.mv-input-indicator__text { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mv-input-indicator__action { min-width:0; max-width:100%; }
+.mv-tile-capture-host:has(> .mv-input-indicator[data-input-state="view"]) .mv-surface__canvas { cursor:default; }
+.mv-tile-capture-host:has(> .mv-input-indicator[data-input-state="interactive"]) { outline:var(--cuk-semantic-focus-ring-width) solid var(--cuk-semantic-accent-primary); outline-offset:calc(var(--cuk-semantic-focus-ring-width) * -1); }
+.mv-tile-capture-host:has(> .mv-input-indicator[data-input-state="interactive"]):has(.mv-surface__canvas:focus) { outline-color:var(--cuk-semantic-focus-ring-color); }
+.mv-tile-capture-host:has(> .mv-input-indicator[data-input-state="interactive"]) .mv-surface__canvas { cursor:crosshair; }
 .mv-shell .wall-workspace, .mv-shell .cuk-shell-workspace { height:100%; }
 .mv-shell #workspace-keyboard-toolbar { display:none; }
 .mv-shell .mv-dock-workspace { grid-template-rows:minmax(0,1fr); }
