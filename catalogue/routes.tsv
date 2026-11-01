@@ -146,6 +146,7 @@ pkg-content-revert.md	changes/unreleased/pkg-content-revert.md
 u1-pty-pkg-revert.md	changes/unreleased/u1-pty-pkg-revert.md
 u3-broker-classes.md	changes/unreleased/u3-broker-classes.md
 u5a-multislot-ui.md	changes/unreleased/u5a-multislot-ui.md
+ux-chip.md	changes/unreleased/ux-chip.md
 witness-bind.md	changes/unreleased/witness-bind.md
 wj4admi-f9ed43f66238	changes/unreleased/wj4-admission-revert.md
 actionp-0ef0ddb499b4	contracts/examples/action_proposal.invalid.schema.json
@@ -1829,6 +1830,7 @@ uiel2au-1c86966804a4	ui/test/uiel2-authority-confinement.test.js
 uitilea-0b101a34c8e4	ui/test/uitile-agent-chip.test.js
 uitilef-b94d5a4596e4	ui/test/uitile-frame-contain.test.js
 uitilet-3b557f6c35d4	ui/test/uitile-tile-rail.test.js
+ux-chip.test.js	ui/test/ux-chip.test.js
 verdict-f74b75134886	ui/test/verdictParity.test.mjs
 vmarkde-f640a1549e17	ui/test/vmark-delivery.test.js
 w3contr-ee4ed320402b	ui/test/w3-control-timeout.test.js
