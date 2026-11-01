@@ -31,6 +31,13 @@ import { isDeepStrictEqual } from 'node:util';
 
 export const SURFACE_CREATE_DEADLINE_MS = 60000; // [TARGET, unit decision] Capsule startup bound, independent of boot readiness.
 const MAX_WIRE = 1024 * 1024, MAX_FRAME = 64 * 1024 * 1024, MAX_ITEMS = 64, DEADLINE = 3000;
+// [TARGET, unit decision] Closed boot diagnostics: never export foreign messages or paths.
+export const BINDING_ACQUISITION_CAUSES = Object.freeze([
+  'CONFIG_ENV', 'RUNTIME_DIRECTORY', 'SOCKET_PATH', 'CONFIG_OPEN', 'CONFIG_READ',
+  'CONFIG_VALIDATE', 'HOST_CAPABILITIES', 'HOST_SETTINGS', 'SOCKET_CONNECT',
+  'PEER_CREDENTIALS', 'PEER_NOT_READY', 'PEER_PROBE_TIMEOUT', 'PEER_PROBE_IO', 'PEER_IDENTITY',
+  'HELLO_TIMEOUT', 'HELLO_CLOSED', 'HELLO_PROTOCOL', 'SOCKET_CHANGED',
+]);
 const MAX_SURFACE_INPUT_QUEUE_EVENTS = 256, MAX_ADAPTER_TYPE_TEXT_BYTES = 16384;
 const fail = () => new Error('CORE_SEAMS_ABSENT');
 /** @param {string} cause @param {string} [msg] */
@@ -82,7 +89,7 @@ const PEERCRED_PY = [
   'nl.close()',
   'peer_ino = table.get(cino, (None, None))[1]',
   'vfs_ino = table.get(peer_ino, (None, None))[0]',
-  'if vfs_ino is None: sys.exit(1)',
+  'if vfs_ino is None: sys.exit(75)',
   'print(f"{pid}:{uid}:{gid}:{vfs_ino}")',
 ].join('\n');
 /** Authenticate the connected unix domain socket peer via SO_PEERCRED and kernel peer VFS inode.
@@ -95,9 +102,12 @@ export function readPeerCredentials(socket) {
     stdio: ['ignore', 'pipe', 'pipe', fd], encoding: 'utf8', timeout: DEADLINE,
     env: {PATH: '/usr/bin:/bin'},
   });
-  if (res.status !== 0 || typeof res.stdout !== 'string') throw fail();
+  // A connected AF_UNIX peer need not appear in UNIX_DIAG until accept().
+  if (res.status === 75) throw acquireFail('PEER_NOT_READY');
+  if (/** @type {NodeJS.ErrnoException | undefined} */ (res.error)?.code === 'ETIMEDOUT') throw acquireFail('PEER_PROBE_TIMEOUT');
+  if (res.status !== 0 || typeof res.stdout !== 'string') throw acquireFail('PEER_PROBE_IO');
   const parts = res.stdout.trim().split(':').map(Number);
-  if (parts.length !== 4 || parts.some(n => !Number.isInteger(n))) throw fail();
+  if (parts.length !== 4 || parts.some(n => !Number.isInteger(n))) throw acquireFail('PEER_PROBE_IO');
   const [pid, uid, gid, ino] = parts;
   return Object.freeze({pid, uid, gid, ino});
 }
@@ -133,14 +143,19 @@ async function openPinned(path) {
  * @returns {Promise<{core: any, wire: any}>} */
 export async function createMainBindings({env = process.env, createMessageChannel, getPeerCredentials = readPeerCredentials, inputDeadlineMs = DEADLINE} = {}) {
   /** @type {import('node:net').Socket | undefined} */ let socket;
+  let acquisitionStep = 'CONFIG_ENV';
   try {
     if (!env.MV_CORE_CONFIG || !isAbsolute(env.MV_CORE_CONFIG) || !env.XDG_RUNTIME_DIR || !isAbsolute(env.XDG_RUNTIME_DIR)) throw fail();
+    acquisitionStep = 'RUNTIME_DIRECTORY';
     for (const path of [env.XDG_RUNTIME_DIR, join(env.XDG_RUNTIME_DIR, 'metaviewer')]) {
       const info = await lstat(path); owned(info, 0o700); if (!info.isDirectory() || info.isSymbolicLink()) throw fail();
     }
+    acquisitionStep = 'SOCKET_PATH';
     const socketPath = join(env.XDG_RUNTIME_DIR, 'metaviewer/core.sock');
     const socketInfo = await lstat(socketPath); owned(socketInfo, 0o600); if (!socketInfo.isSocket()) throw fail();
+    acquisitionStep = 'CONFIG_OPEN';
     const file = await openPinned(env.MV_CORE_CONFIG);
+    acquisitionStep = 'CONFIG_READ';
     /** @type {any} */ let config;
     try {
       const info = await file.stat();
@@ -149,6 +164,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
       if (bytesRead > MAX_WIRE) throw fail();
       config = JSON.parse(bytes.subarray(0, bytesRead).toString('utf8'));
     } finally { await file.close(); }
+    acquisitionStep = 'CONFIG_VALIDATE';
     const id = (/** @type {any} */ value) => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value);
     const endpoint = (/** @type {any} */ value, /** @type {string} */ component) => value?.component === component && id(value.instance) && Object.keys(value).sort().join(',') === 'component,instance';
     const hello = (/** @type {any} */ reg, /** @type {string} */ component) => endpoint(reg?.endpoint, component)
@@ -158,6 +174,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
     const peers = config.peers?.filter((/** @type {any} */ peer) => peer?.endpoint?.component === 'ui');
     if (!id(config.session_id) || !hello(config.core, 'core') || peers?.length !== 1 || !hello(peers[0], 'ui')) throw fail();
     const ui = peers[0];
+    acquisitionStep = 'HOST_CAPABILITIES';
     const destination = recordingDestination(env);
     /** @type {any} */ let electronMod = null;
     if (!createMessageChannel || process.versions?.electron) {
@@ -194,13 +211,14 @@ export async function createMainBindings({env = process.env, createMessageChanne
       }
       return count;
     };
-    let live = false, disposed = false, seq = 0, received = 0, lastIntentReplySeq = 1;
+    let live = false, disposed = false, peerAuthenticated = false, seq = 0, received = 0, lastIntentReplySeq = 1;
     /** @type {number} */
     let requestedWallFps = DEFAULT_SETTINGS.wallFps;
     /** @type {number} */
     let recordingFps = DEFAULT_SETTINGS.recordingFps;
     /** @type {ReturnType<typeof createSettingsStore> | null} */
     let settingsStore = null;
+    acquisitionStep = 'HOST_SETTINGS';
     if (typeof env.XDG_CONFIG_HOME === 'string' && env.XDG_CONFIG_HOME.length > 0) {
       settingsStore = createSettingsStore(env);
       const initialSettings = await settingsStore.load();
@@ -237,13 +255,14 @@ export async function createMainBindings({env = process.env, createMessageChanne
     const handshake = new Promise((resolve,reject) => {ready=resolve;rejectReady=reject;});
     // Attach the rejection handler before any socket callbacks can fire.
     void handshake.catch(() => {});
-    const shutdown = () => {
+    /** @param {Error} [reason] */
+    const shutdown = (reason = acquireFail('HELLO_CLOSED')) => {
       clearTimeout(helloTimer); clearInterval(keepalive);
       if (disposed) return; disposed = true; live = false;
       stopSettings();
       void terminal.dispose();
       void display.dispose();
-      rejectReady(fail()); socket?.destroy();
+      rejectReady(reason); socket?.destroy();
       for (const item of pending.values()) {clearTimeout(item.timer);item.reject(fail());} pending.clear();
       for (const qState of surfaceInputQueues.values()) {
         const queued = qState.queue.splice(0, qState.queue.length);
@@ -254,7 +273,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
       channels.clear();surfaces.clear();latestFrames.clear();streamIds.clear();subscriptions.clear();delivering.clear();pendingDeliveries.clear();failedFrameGenerations.clear();listeners.clear();captureListeners.clear();cadenceListeners.clear();
     };
     /** @type {Set<(state:any)=>void>} */ const captureListeners = new Set();
-    const helloTimer = setTimeout(shutdown, DEADLINE);
+    const helloTimer = setTimeout(() => shutdown(acquireFail('HELLO_TIMEOUT')), DEADLINE);
     /** @param {any} body @param {string} [messageId] @param {(error?: Error | null) => void} [onWritten] */
     function send(body, messageId = undefined, onWritten = undefined) {
       if (disposed || !socket || !Number.isSafeInteger(++seq)) throw fail();
@@ -554,21 +573,41 @@ export async function createMainBindings({env = process.env, createMessageChanne
       if (body.schema === 'frame_ref/v0.2') publish(body);
       else if (body.schema === 'surface_event/v0.2' && body.event === 'frame_ready') publish(body.data?.frame_ref);
     }
+    acquisitionStep = 'SOCKET_CONNECT';
     const clientSocket = createConnection(socketPath);
     socket = clientSocket;
     let buffer = Buffer.alloc(0);
-    clientSocket.on('error',shutdown);clientSocket.on('close',shutdown);
-    clientSocket.on('connect',() => {
+    clientSocket.on('error', () => shutdown(acquireFail('SOCKET_CONNECT')));
+    clientSocket.on('close', () => shutdown(acquireFail('HELLO_CLOSED')));
+    clientSocket.on('connect',async () => {
       try {
-        const cred = getPeerCredentials(clientSocket);
+        acquisitionStep = 'PEER_CREDENTIALS';
+        // [TARGET, unit decision] Retry only the kernel's not-yet-visible peer,
+        // on this same socket and within the existing hello timer. No hello is
+        // sent until uid and pinned VFS inode verification both succeed.
+        let cred;
+        for (;;) {
+          if (disposed) return;
+          try { cred = getPeerCredentials(clientSocket); break; } catch (error) {
+            if (/** @type {any} */ (error)?.causeCode !== 'PEER_NOT_READY') throw error;
+            await new Promise(resolve => setTimeout(resolve, 25));
+          }
+        }
+        if (disposed) return;
+        acquisitionStep = 'PEER_IDENTITY';
         if (!cred || typeof process.getuid !== 'function' || cred.uid !== process.getuid()
             || !Number.isInteger(cred.pid) || cred.pid < 1 || !Number.isInteger(cred.gid) || cred.gid < 0
             || typeof cred.ino !== 'number' || !Number.isInteger(cred.ino) || (cred.ino >>> 0) !== (socketInfo.ino >>> 0)) throw fail();
+        peerAuthenticated = true;
         send(ui.hello);
-      } catch {shutdown();}
+      } catch (error) {
+        const cause = /** @type {any} */ (error)?.causeCode;
+        shutdown(acquireFail(BINDING_ACQUISITION_CAUSES.includes(cause) ? cause : acquisitionStep));
+      }
     });
     clientSocket.on('data',data => {
       try {
+        if (!peerAuthenticated) throw fail();
         buffer = Buffer.concat([buffer,data]);let newline;
         while ((newline = buffer.indexOf(10)) !== -1) {
           if (newline >= MAX_WIRE) throw fail();
@@ -576,9 +615,10 @@ export async function createMainBindings({env = process.env, createMessageChanne
           receive(JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(raw)));
         }
         if (buffer.length >= MAX_WIRE) throw fail();
-      } catch {shutdown();}
+      } catch {shutdown(acquireFail('HELLO_PROTOCOL'));}
     });
     await handshake;
+    acquisitionStep = 'SOCKET_CHANGED';
     const after = await lstat(socketPath);
     if (after.ino !== socketInfo.ino || after.dev !== socketInfo.dev || after.mode !== socketInfo.mode || after.uid !== socketInfo.uid) {shutdown();throw fail();}
     if (disposed || !live) {shutdown();throw fail();}
@@ -1055,7 +1095,8 @@ export async function createMainBindings({env = process.env, createMessageChanne
     if (['SETTINGS_DESTINATION', 'SETTINGS_IN_REPO', 'SETTINGS_FILE', 'SETTINGS_DIRECTORY', 'CONFIG_PATH'].includes(errCode)) {
       throw error;
     }
-    throw fail();
+    const cause = /** @type {any} */ (error)?.causeCode;
+    throw acquireFail(BINDING_ACQUISITION_CAUSES.includes(cause) ? cause : acquisitionStep);
   }
 }
 

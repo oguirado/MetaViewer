@@ -1,0 +1,1 @@
+- Fix packaged boot races by retrying an unaccepted Unix peer’s missing diagnostic inode within the existing hello deadline, and retain closed acquisition cause codes through the main boot error.

@@ -1,6 +1,15 @@
 // @ts-check
 'use strict';
 
+// [TARGET, unit decision] Keep main imports inert when host seams are absent.
+// This closed diagnostic vocabulary mirrors hostBindings without eagerly loading it.
+const BINDING_ACQUISITION_CAUSES = Object.freeze([
+  'CONFIG_ENV', 'RUNTIME_DIRECTORY', 'SOCKET_PATH', 'CONFIG_OPEN', 'CONFIG_READ',
+  'CONFIG_VALIDATE', 'HOST_CAPABILITIES', 'HOST_SETTINGS', 'SOCKET_CONNECT',
+  'PEER_CREDENTIALS', 'PEER_NOT_READY', 'PEER_PROBE_TIMEOUT', 'PEER_PROBE_IO', 'PEER_IDENTITY',
+  'HELLO_TIMEOUT', 'HELLO_CLOSED', 'HELLO_PROTOCOL', 'SOCKET_CHANGED',
+]);
+
 /**
  * [TARGET, unit decision] Layout presentation storage is host-local and
  * validated by the pinned kit decoder; it carries no core authority.
@@ -2747,6 +2756,7 @@ export async function bootProductionMain(handles) {
 /** Resolve and validate host capabilities before constructing any window.
  * @param {NodeJS.ProcessEnv} [env] @param {any} [options] */
 export async function loadMainBindings(env = process.env, options = {}) {
+  let acquisitionStep = 'BOOTSTRAP_PATH';
   try {
     const bootstrap = env.MV_CORE_BOOTSTRAP;
     let bootstrapSpecifier = './hostBindings.js';
@@ -2772,13 +2782,17 @@ export async function loadMainBindings(env = process.env, options = {}) {
       }
       bootstrapSpecifier = (await import('node:url')).pathToFileURL(canonicalBootstrap).href;
     }
+    acquisitionStep = 'BOOTSTRAP_IMPORT';
     const host = await import(bootstrapSpecifier);
     if (typeof host.createMainBindings !== 'function') throw new Error();
+    acquisitionStep = 'HOST_ACQUIRE';
     const bindings = await host.createMainBindings({...options,env});
+    acquisitionStep = 'BINDINGS_SHAPE';
     if (!bindings?.core || ['start','request','dispose','getStatus'].some(name => typeof bindings.core[name] !== 'function')
         || typeof bindings.wire?.frames?.subscribe !== 'function') {
       await bindings?.core?.dispose?.();throw new Error();
     }
+    acquisitionStep = 'ADAPTER_SETUP';
     if (options?.adapter) {
       bindings.adapter = options.adapter;
     } else if (typeof env.MV_ADAPTER_BIN === 'string' && env.MV_ADAPTER_BIN.length > 0 && typeof env.XDG_RUNTIME_DIR === 'string' && isAbsolute(env.XDG_RUNTIME_DIR)) {
@@ -2883,7 +2897,11 @@ export async function loadMainBindings(env = process.env, options = {}) {
     if (error instanceof MainError && (error.code === 'SETTINGS_DESTINATION' || error.code === 'SETTINGS_IN_REPO')) {
       throw error;
     }
-    throw new MainError('CORE_SEAMS_ABSENT','trusted host bindings unavailable');
+    const cause = /** @type {{causeCode?: unknown} | null} */ (error)?.causeCode;
+    const causeCode = typeof cause === 'string' && BINDING_ACQUISITION_CAUSES.includes(cause) ? cause : acquisitionStep;
+    const refusal = new MainError('CORE_SEAMS_ABSENT', `trusted host bindings unavailable (${causeCode})`);
+    Object.assign(refusal, {causeCode});
+    throw refusal;
   }
 }
 

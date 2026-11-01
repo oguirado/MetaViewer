@@ -8,6 +8,7 @@ import { mkdtemp, mkdir, chmod, writeFile, rm, readFile, rename, lstat } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import { createMainBindings, readPeerCredentials, INTENT_OPS as HOST_INTENT_OPS } from '../electron/hostBindings.js';
 import { loadMainBindings, bootProductionMain, ELECTRON_PIN, CHANNELS } from '../electron/main.js';
 import { deliverAuthorityFrame, WIRE_CHANNELS, INTENT_OPS as WIRE_INTENT_OPS, validateIntentBody } from '../electron/authorityWire.js';
@@ -1880,4 +1881,92 @@ test('CI-GREEN create marker is printed only from the socket write callback of a
   await waitForCondition(()=>f.requests.some(e=>e.body.op==='create'));
   f.send({schema:'surface_event/v0.2',event:'created',data:{surface}});
   assert.equal((await pending).event,'created');
+});
+
+// [TARGET, unit decision] BOOT-FLAKE: a backlog peer is connected before accept()
+// but its VFS inode is not yet visible in UNIX_DIAG. Exercise the real kernel.
+test('BOOT-FLAKE kernel probe distinguishes not-yet-accepted peer from authenticated peer', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'mv-boot-peer-'));
+  t.after(() => rm(root, {recursive:true, force:true}));
+  const path = join(root, 'core.sock');
+  const child = spawn('python3', ['-S', '-u', '-c',
+    'import socket,sys,os; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); os.chmod(sys.argv[1],0o600); s.listen(); print("listening",flush=True); sys.stdin.readline(); peer,_=s.accept(); print("accepted",flush=True); sys.stdin.readline()', path], {stdio:['pipe','pipe','pipe']});
+  t.after(() => {child.kill();});
+  let output = '';
+  child.stdout.on('data', bytes => {output += bytes;});
+  await waitForCondition(() => output.includes('listening'), 'listener before accept');
+  const socket = net.createConnection(path);
+  t.after(() => socket.destroy());
+  await once(socket, 'connect');
+  assert.throws(() => readPeerCredentials(socket), error => error.causeCode === 'PEER_NOT_READY');
+  child.stdin.write('accept\n');
+  await waitForCondition(() => output.includes('accepted'), 'accepted kernel peer');
+  const cred = readPeerCredentials(socket);
+  assert.equal(cred.pid, child.pid);
+  assert.equal(cred.uid, process.getuid());
+  assert.equal(cred.ino, (await lstat(path)).ino >>> 0);
+});
+
+test('BOOT-FLAKE retries only not-ready peer on the same socket before sending hello', async t => {
+  const f = await fixture(t);
+  let probes = 0;
+  const bindings = await loadMainBindings(f.env, {createMessageChannel:f.createMessageChannel, getPeerCredentials(socket) {
+    probes++;
+    if (probes <= 3) {
+      assert.equal(f.requests.length, 0, 'no unauthenticated hello');
+      throw Object.assign(new Error('not visible'), {causeCode:'PEER_NOT_READY'});
+    }
+    return readPeerCredentials(socket);
+  }});
+  t.after(() => bindings.core.dispose());
+  assert.equal(probes, 4);
+  assert.equal(bindings.core.getStatus().availability, 'live');
+  assert.equal(f.requests.filter(x => x.body.schema === 'hello/v0.2').length, 1);
+});
+
+test('BOOT-FLAKE closed acquisition causes survive both error boundaries without foreign text', async t => {
+  await assert.rejects(loadMainBindings({}), error => error.code === 'CORE_SEAMS_ABSENT'
+    && error.causeCode === 'CONFIG_ENV' && error.message.endsWith('(CONFIG_ENV)'));
+  const bad = await fixture(t, {badHello:true});
+  await assert.rejects(loadMainBindings(bad.env, {createMessageChannel:bad.createMessageChannel}),
+    error => error.causeCode === 'HELLO_PROTOCOL');
+  for (const causeCode of ['PEER_PROBE_IO', 'PEER_PROBE_TIMEOUT', 'foreign/path/secret']) {
+    const f = await fixture(t);
+    let calls = 0;
+    await assert.rejects(loadMainBindings(f.env, {createMessageChannel:f.createMessageChannel, getPeerCredentials() {
+      calls++; throw Object.assign(new Error('foreign/path/secret'), {causeCode});
+    }}), error => error.code === 'CORE_SEAMS_ABSENT'
+      && error.causeCode === (causeCode.startsWith('PEER_') ? causeCode : 'PEER_CREDENTIALS')
+      && !error.message.includes('foreign/path/secret'));
+    assert.equal(calls, 1, 'other failures are never retried');
+    assert.equal(f.requests.length, 0);
+  }
+});
+
+test('BOOT-FLAKE not-ready retries expire within the hello budget and never send hello', async t => {
+  const f = await fixture(t);
+  let calls = 0;
+  const start = Date.now();
+  await assert.rejects(loadMainBindings(f.env, {createMessageChannel:f.createMessageChannel, getPeerCredentials() {
+    calls++; throw Object.assign(new Error('not visible'), {causeCode:'PEER_NOT_READY'});
+  }}), error => error.causeCode === 'HELLO_TIMEOUT');
+  assert.ok(Date.now() - start < 5000);
+  const stoppedCalls = calls;
+  await new Promise(resolve => setTimeout(resolve, 75));
+  assert.equal(calls, stoppedCalls, 'shutdown cancels pending probe retries');
+  assert.equal(f.requests.length, 0);
+});
+
+
+test('BOOT-FLAKE unsolicited hello cannot bypass pending peer authentication', async t => {
+  const f = await fixture(t);
+  let calls = 0;
+  await assert.rejects(async () => {
+    const bindings = await loadMainBindings(f.env, {createMessageChannel:f.createMessageChannel, getPeerCredentials() {
+      if (++calls === 1) queueMicrotask(() => f.send(registration('core').hello));
+      throw Object.assign(new Error('not visible'), {causeCode:'PEER_NOT_READY'});
+    }});
+    t.after(() => bindings.core.dispose());
+  }, error => error.causeCode === 'HELLO_PROTOCOL');
+  assert.equal(f.requests.length, 0, 'no unauthenticated hello was sent');
 });
