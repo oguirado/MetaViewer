@@ -19,17 +19,17 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 2,570 | 55 | 2,515 |
-| Lanes finished OK | 2,570 | 55 | 2,515 |
-| Agent steps | 80,652 | 2,705 | 77,947 |
-| Lane-hours of agent work | 179.9 | 5.2 | 174.6 |
-| Fresh input tokens | 305,612,637 | 11,482,034 | 294,130,603 |
-| Cache-read input tokens | 5,329,191,772 | 226,255,212 | 5,102,936,560 |
-| Prompt cache hit % | 94.6 | 95.2 | 94.6 |
-| Output tokens | 62,340,323 | 2,135,708 | 60,204,615 |
-| Thinking tokens | 38,311,851 | 1,050,039 | 37,261,812 |
-| Cost (USD) | 53.6877 | 2.0279 | 51.6598 |
-| Cost per lane (USD) | 0.0209 | 0.0369 | 0.0205 |
+| Lanes launched | 2,636 | 55 | 2,581 |
+| Lanes finished OK | 2,636 | 55 | 2,581 |
+| Agent steps | 82,193 | 2,705 | 79,488 |
+| Lane-hours of agent work | 182.9 | 5.2 | 177.6 |
+| Fresh input tokens | 310,467,257 | 11,482,034 | 298,985,223 |
+| Cache-read input tokens | 5,407,830,249 | 226,255,212 | 5,181,575,037 |
+| Prompt cache hit % | 94.6 | 95.2 | 94.5 |
+| Output tokens | 63,392,165 | 2,135,708 | 61,256,457 |
+| Thinking tokens | 39,004,948 | 1,050,039 | 37,954,909 |
+| Cost (USD) | 54.5408 | 2.0279 | 52.5129 |
+| Cost per lane (USD) | 0.0207 | 0.0369 | 0.0203 |
 
 Rooms: 136. Peak concurrent lanes [MEASURED from lane start/end]: 42.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
@@ -38,7 +38,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 2181 | 93.7 | 37.4402 |
+| build | 2247 | 93.7 | 38.2933 |
 | context | 42 | 95.9 | 1.9093 |
 | context packs + test ideation (U-DEC-0139) | 13 | 91.1 | 0.2195 |
 | demo | 4 | 90.7 | 0.0557 |
@@ -86,7 +86,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 1843 | 93.6 | 29.1617 | direct Muse job |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 1909 | 93.7 | 30.0148 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -2774,8 +2774,74 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | 13120_rev_KEYBOARD-TRIAGE-P13_b | fill_113120_rev_KEYBOARD-TRIAGE-P13_b | Nov 01 11:32 | yes | 18 | 94.0 | 0.006224 |
 | direct-direct | 13120_rev_MW-READBACK-TEXTOF-R2_a | fill_113120_rev_MW-READBACK-TEXTOF-R2_a | Nov 01 11:32 | yes | 10 | 84.2 | 0.007358 |
 | direct-direct | 13120_rev_MW-READBACK-TEXTOF-R2_b | fill_113120_rev_MW-READBACK-TEXTOF-R2_b | Nov 01 11:32 | yes | 18 | 91.5 | 0.010704 |
+| direct-direct | 13239_rev_KEYBOARD-TRIAGE-P13_a | fill_113239_rev_KEYBOARD-TRIAGE-P13_a | Nov 01 11:33 | yes | 30 | 94.4 | 0.01103 |
 | direct-direct | 13239_rev_KEYBOARD-TRIAGE-P13_b | fill_113239_rev_KEYBOARD-TRIAGE-P13_b | Nov 01 11:33 | yes | 17 | 92.6 | 0.006262 |
+| direct-direct | 13239_rev_MW-READBACK-TEXTOF-R2_a | fill_113239_rev_MW-READBACK-TEXTOF-R2_a | Nov 01 11:33 | yes | 17 | 92.4 | 0.008489 |
 | direct-direct | 13239_rev_MW-READBACK-TEXTOF-R2_b | fill_113239_rev_MW-READBACK-TEXTOF-R2_b | Nov 01 11:33 | yes | 10 | 85.0 | 0.008963 |
+| direct-direct | 13351_rev_KEYBOARD-TRIAGE-P13_a | fill_113351_rev_KEYBOARD-TRIAGE-P13_a | Nov 01 11:34 | yes | 9 | 90.1 | 0.004023 |
+| direct-direct | 13351_rev_KEYBOARD-TRIAGE-P13_b | fill_113351_rev_KEYBOARD-TRIAGE-P13_b | Nov 01 11:34 | yes | 22 | 93.7 | 0.007842 |
+| direct-direct | 13351_rev_MW-READBACK-TEXTOF-R2_a | fill_113351_rev_MW-READBACK-TEXTOF-R2_a | Nov 01 11:34 | yes | 10 | 85.3 | 0.007861 |
+| direct-direct | 13351_rev_MW-READBACK-TEXTOF-R2_b | fill_113351_rev_MW-READBACK-TEXTOF-R2_b | Nov 01 11:35 | yes | 28 | 94.2 | 0.013574 |
+| direct-direct | 13504_rev_MW-READBACK-TEXTOF-R2_a | fill_113504_rev_MW-READBACK-TEXTOF-R2_a | Nov 01 11:36 | yes | 12 | 81.1 | 0.01088 |
+| direct-direct | 13504_rev_MW-READBACK-TEXTOF-R2_b | fill_113504_rev_MW-READBACK-TEXTOF-R2_b | Nov 01 11:36 | yes | 14 | 89.7 | 0.008559 |
+| direct-direct | 13610_rev_MW-READBACK-TEXTOF-R2_a | fill_113610_rev_MW-READBACK-TEXTOF-R2_a | Nov 01 11:37 | yes | 12 | 81.2 | 0.010911 |
+| direct-direct | 13610_rev_MW-READBACK-TEXTOF-R2_b | fill_113610_rev_MW-READBACK-TEXTOF-R2_b | Nov 01 11:37 | yes | 19 | 92.5 | 0.010144 |
+| direct-direct | 13716_rev_MW-READBACK-TEXTOF-R2_a | fill_113716_rev_MW-READBACK-TEXTOF-R2_a | Nov 01 11:38 | yes | 23 | 92.7 | 0.012487 |
+| direct-direct | 13716_rev_MW-READBACK-TEXTOF-R2_b | fill_113716_rev_MW-READBACK-TEXTOF-R2_b | Nov 01 11:38 | yes | 15 | 89.8 | 0.008718 |
+| direct-direct | 13822_rev_MW-READBACK-TEXTOF-R2_a | fill_113822_rev_MW-READBACK-TEXTOF-R2_a | Nov 01 11:39 | yes | 11 | 85.8 | 0.009378 |
+| direct-direct | 13822_rev_MW-READBACK-TEXTOF-R2_b | fill_113822_rev_MW-READBACK-TEXTOF-R2_b | Nov 01 11:39 | yes | 18 | 90.9 | 0.013519 |
+| direct-direct | -READBACK-TEXTOF-R2_a | r1x_MW-READBACK-TEXTOF-R2_a | Nov 01 11:40 | yes | 23 | 93.5 | 0.010642 |
+| direct-direct | -READBACK-TEXTOF-R2_b | r1x_MW-READBACK-TEXTOF-R2_b | Nov 01 11:40 | yes | 36 | 94.8 | 0.015772 |
+| direct-direct | 13929_rev_MW-READBACK-TEXTOF-R2_a | fill_113929_rev_MW-READBACK-TEXTOF-R2_a | Nov 01 11:40 | yes | 39 | 95.7 | 0.019433 |
+| direct-direct | 13929_rev_MW-READBACK-TEXTOF-R2_b | fill_113929_rev_MW-READBACK-TEXTOF-R2_b | Nov 01 11:40 | yes | 22 | 92.8 | 0.014146 |
+| direct-direct | 15035_rev_ADAPTER-EPOCH-HANDOFF_a | fill_115035_rev_ADAPTER-EPOCH-HANDOFF_a | Nov 01 11:51 | yes | 12 | 89.8 | 0.005954 |
+| direct-direct | 15035_rev_ADAPTER-EPOCH-HANDOFF_b | fill_115035_rev_ADAPTER-EPOCH-HANDOFF_b | Nov 01 11:51 | yes | 15 | 89.8 | 0.012669 |
+| direct-direct | 15141_lane_r4_app_close | fill_115141_lane_r4_app_close | Nov 01 11:52 | yes | 43 | 94.8 | 0.025242 |
+| direct-direct | 15141_lane_r4_automate_demo | fill_115141_lane_r4_automate_demo | Nov 01 11:52 | yes | 20 | 90.5 | 0.017336 |
+| direct-direct | 15141_lane_r4_capsule_close_reopen | fill_115141_lane_r4_capsule_close_reopen | Nov 01 11:52 | yes | 54 | 95.8 | 0.033454 |
+| direct-direct | 15141_lane_r4_captcha_handoff | fill_115141_lane_r4_captcha_handoff | Nov 01 11:52 | yes | 41 | 94.5 | 0.024371 |
+| direct-direct | 15141_lane_r4_chatgpt_gemini | fill_115141_lane_r4_chatgpt_gemini | Nov 01 11:52 | yes | 42 | 94.7 | 0.026419 |
+| direct-direct | 15141_lane_r4_display | fill_115141_lane_r4_display | Nov 01 11:52 | yes | 39 | 94.7 | 0.029558 |
+| direct-direct | 15141_lane_r4_identities | fill_115141_lane_r4_identities | Nov 01 11:53 | yes | 42 | 94.8 | 0.031991 |
+| direct-direct | 15141_lane_r4_launch | fill_115141_lane_r4_launch | Nov 01 11:53 | yes | 49 | 95.5 | 0.032985 |
+| direct-direct | 15141_lane_r4_multislot | fill_115141_lane_r4_multislot | Nov 01 11:53 | yes | 39 | 94.8 | 0.021146 |
+| direct-direct | 15141_lane_r4_network | fill_115141_lane_r4_network | Nov 01 11:53 | yes | 43 | 95.3 | 0.025055 |
+| direct-direct | 15141_lane_r4_settings | fill_115141_lane_r4_settings | Nov 01 11:53 | yes | 67 | 96.8 | 0.035767 |
+| direct-direct | 15141_lane_r4_storyboard | fill_115141_lane_r4_storyboard | Nov 01 11:53 | yes | 76 | 96.9 | 0.042821 |
+| direct-direct | 15141_lane_r4_terminal | fill_115141_lane_r4_terminal | Nov 01 11:53 | yes | 71 | 96.8 | 0.031118 |
+| direct-direct | 15141_lane_r4_use_metaviewer | fill_115141_lane_r4_use_metaviewer | Nov 01 11:53 | yes | 58 | 96.0 | 0.03095 |
+| direct-direct | 15141_rev_ADAPTER-EPOCH-HANDOFF_a | fill_115141_rev_ADAPTER-EPOCH-HANDOFF_a | Nov 01 11:53 | yes | 16 | 92.2 | 0.006481 |
+| direct-direct | 15141_rev_ADAPTER-EPOCH-HANDOFF_b | fill_115141_rev_ADAPTER-EPOCH-HANDOFF_b | Nov 01 11:53 | yes | 10 | 88.8 | 0.00474 |
+| direct-direct | 15331_rev_ADAPTER-EPOCH-HANDOFF_a | fill_115331_rev_ADAPTER-EPOCH-HANDOFF_a | Nov 01 11:55 | yes | 12 | 90.1 | 0.005779 |
+| direct-direct | 15331_rev_ADAPTER-EPOCH-HANDOFF_b | fill_115331_rev_ADAPTER-EPOCH-HANDOFF_b | Nov 01 11:55 | yes | 15 | 90.0 | 0.007721 |
+| direct-direct | 15537_rev_ADAPTER-EPOCH-HANDOFF_a | fill_115537_rev_ADAPTER-EPOCH-HANDOFF_a | Nov 01 11:56 | yes | 15 | 92.5 | 0.005965 |
+| direct-direct | 15537_rev_ADAPTER-EPOCH-HANDOFF_b | fill_115537_rev_ADAPTER-EPOCH-HANDOFF_b | Nov 01 11:56 | yes | 16 | 91.3 | 0.007821 |
+| direct-direct | 15537_rev_DISPLAY-READER-DEFLAKE-R2_a | fill_115537_rev_DISPLAY-READER-DEFLAKE-R2_a | Nov 01 11:56 | yes | 17 | 92.5 | 0.005919 |
+| direct-direct | 15537_rev_DISPLAY-READER-DEFLAKE-R2_b | fill_115537_rev_DISPLAY-READER-DEFLAKE-R2_b | Nov 01 11:56 | yes | 11 | 88.7 | 0.005834 |
+| direct-direct | 15537_rev_UI-CONTROL-ARM_a | fill_115537_rev_UI-CONTROL-ARM_a | Nov 01 11:56 | yes | 21 | 93.5 | 0.008867 |
+| direct-direct | 15537_rev_UI-CONTROL-ARM_b | fill_115537_rev_UI-CONTROL-ARM_b | Nov 01 11:56 | yes | 20 | 92.3 | 0.009028 |
+| direct-direct | 15656_rev_ADAPTER-EPOCH-HANDOFF_a | fill_115656_rev_ADAPTER-EPOCH-HANDOFF_a | Nov 01 11:57 | yes | 15 | 91.1 | 0.007054 |
+| direct-direct | 15656_rev_ADAPTER-EPOCH-HANDOFF_b | fill_115656_rev_ADAPTER-EPOCH-HANDOFF_b | Nov 01 11:58 | yes | 16 | 91.6 | 0.00742 |
+| direct-direct | 15656_rev_DISPLAY-READER-DEFLAKE-R2_a | fill_115656_rev_DISPLAY-READER-DEFLAKE-R2_a | Nov 01 11:58 | yes | 13 | 90.6 | 0.005839 |
+| direct-direct | 15656_rev_DISPLAY-READER-DEFLAKE-R2_b | fill_115656_rev_DISPLAY-READER-DEFLAKE-R2_b | Nov 01 11:58 | yes | 18 | 92.9 | 0.00827 |
+| direct-direct | 15656_rev_UI-CONTROL-ARM_a | fill_115656_rev_UI-CONTROL-ARM_a | Nov 01 11:58 | yes | 14 | 89.2 | 0.007744 |
+| direct-direct | 15656_rev_UI-CONTROL-ARM_b | fill_115656_rev_UI-CONTROL-ARM_b | Nov 01 11:58 | yes | 25 | 92.6 | 0.012185 |
+| direct-direct | 15815_rev_ADAPTER-EPOCH-HANDOFF_a | fill_115815_rev_ADAPTER-EPOCH-HANDOFF_a | Nov 01 11:59 | yes | 11 | 89.5 | 0.005605 |
+| direct-direct | 15815_rev_ADAPTER-EPOCH-HANDOFF_b | fill_115815_rev_ADAPTER-EPOCH-HANDOFF_b | Nov 01 11:59 | yes | 9 | 87.4 | 0.005835 |
+| direct-direct | 15815_rev_DISPLAY-READER-DEFLAKE-R2_a | fill_115815_rev_DISPLAY-READER-DEFLAKE-R2_a | Nov 01 11:59 | yes | 14 | 91.2 | 0.006851 |
+| direct-direct | 15815_rev_DISPLAY-READER-DEFLAKE-R2_b | fill_115815_rev_DISPLAY-READER-DEFLAKE-R2_b | Nov 01 11:59 | yes | 8 | 87.4 | 0.003946 |
+| direct-direct | 15815_rev_UI-CONTROL-ARM_a | fill_115815_rev_UI-CONTROL-ARM_a | Nov 01 11:59 | yes | 15 | 91.0 | 0.009295 |
+| direct-direct | 15815_rev_UI-CONTROL-ARM_b | fill_115815_rev_UI-CONTROL-ARM_b | Nov 01 11:59 | yes | 18 | 92.1 | 0.007569 |
+| direct-direct | 15934_rev_ADAPTER-EPOCH-HANDOFF_a | fill_115934_rev_ADAPTER-EPOCH-HANDOFF_a | Nov 01 12:00 | yes | 14 | 90.8 | 0.007263 |
+| direct-direct | 15934_rev_ADAPTER-EPOCH-HANDOFF_b | fill_115934_rev_ADAPTER-EPOCH-HANDOFF_b | Nov 01 12:00 | yes | 10 | 87.9 | 0.005237 |
+| direct-direct | 15934_rev_DISPLAY-READER-DEFLAKE-R2_a | fill_115934_rev_DISPLAY-READER-DEFLAKE-R2_a | Nov 01 12:00 | yes | 12 | 90.7 | 0.007494 |
+| direct-direct | 15934_rev_DISPLAY-READER-DEFLAKE-R2_b | fill_115934_rev_DISPLAY-READER-DEFLAKE-R2_b | Nov 01 12:00 | yes | 25 | 93.9 | 0.010882 |
+| direct-direct | 15934_rev_UI-CONTROL-ARM_a | fill_115934_rev_UI-CONTROL-ARM_a | Nov 01 12:00 | yes | 13 | 88.3 | 0.009834 |
+| direct-direct | 15934_rev_UI-CONTROL-ARM_b | fill_115934_rev_UI-CONTROL-ARM_b | Nov 01 12:00 | yes | 19 | 91.8 | 0.009181 |
+| direct-direct | 20052_rev_ADAPTER-EPOCH-HANDOFF_a | fill_120052_rev_ADAPTER-EPOCH-HANDOFF_a | Nov 01 12:01 | yes | 11 | 87.8 | 0.006906 |
+| direct-direct | 20052_rev_DISPLAY-READER-DEFLAKE-R2_a | fill_120052_rev_DISPLAY-READER-DEFLAKE-R2_a | Nov 01 12:01 | yes | 12 | 90.9 | 0.004298 |
+| direct-direct | 20052_rev_DISPLAY-READER-DEFLAKE-R2_b | fill_120052_rev_DISPLAY-READER-DEFLAKE-R2_b | Nov 01 12:02 | yes | 10 | 88.8 | 0.00518 |
+| direct-direct | 20052_rev_UI-CONTROL-ARM_a | fill_120052_rev_UI-CONTROL-ARM_a | Nov 01 12:02 | yes | 15 | 91.1 | 0.006821 |
 
 ## Method
 
