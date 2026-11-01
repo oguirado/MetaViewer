@@ -137,6 +137,7 @@ flakepi-626bf7f96335	changes/unreleased/flake-pin-procbound-r2.md
 flakepi-0268f441f2d7	changes/unreleased/flake-pin-procbound.md
 p12-display-reader.md	changes/unreleased/p12-display-reader.md
 p12-display-tap.md	changes/unreleased/p12-display-tap.md
+pkg-content.md	changes/unreleased/pkg-content.md
 u1-pty-pkg-revert.md	changes/unreleased/u1-pty-pkg-revert.md
 u3-broker-classes.md	changes/unreleased/u3-broker-classes.md
 u5a-multislot-ui.md	changes/unreleased/u5a-multislot-ui.md
@@ -1730,6 +1731,7 @@ nesting-c224ecae31d5	ui/test/nestingStartup.test.js
 netcopy-panel.test.js	ui/test/netcopy-panel.test.js
 operator-stubs.mjs	ui/test/operator-stubs.mjs
 originc-568d530772a3	ui/test/origin-contract.test.js
+package-e6a014fafdab	ui/test/packageContent.test.js
 packageOutput.test.js	ui/test/packageOutput.test.js
 pkg-fullstack.test.js	ui/test/pkg-fullstack.test.js
 pkgfixm-e990d26c7b4f	ui/test/pkgfix-main-quit.test.js
