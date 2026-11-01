@@ -18,17 +18,20 @@ class NativeSlotTests(unittest.TestCase):
         backend.binary, backend.capsule, backend.state = Path('/fake/surface'), 'owned', Path('/fake/state')
         row = dict(id='editor', role='textbox', name='Composer', box=[1, 2, 30, 40], focused=True)
         for value in ('', 'éΩ🙂', 'e\u0301'):
+            row['value_len'] = len(value)
             reply = dict(elements=[row], truncated=False,
-                         text=dict(container_id='editor', bytes=len(value.encode()), text=value))
+                         editable_text=dict(id='editor', bytes=len(value.encode()), text=value,
+                                            value_len=len(value), length_unit='unicode_code_points',
+                                            truncated=False))
             backend.native = Mock(return_value=reply)
             self.assertEqual(backend.slot_text(row), value)
-            self.assertEqual(backend.native.call_args.args[1][-2:], ['--text-container', 'editor'])
+            self.assertEqual(backend.native.call_args.args[1][-2:], ['--text-of', 'editor'])
             for mutant in ('missing', 'foreign', 'bytes', 'truncated', 'focus', 'length'):
                 import copy
                 changed = copy.deepcopy(reply)
-                if mutant == 'missing': changed.pop('text')
-                if mutant == 'foreign': changed['text']['container_id'] = 'ancestor'
-                if mutant == 'bytes': changed['text']['bytes'] += 1
+                if mutant == 'missing': changed.pop('editable_text')
+                if mutant == 'foreign': changed['editable_text']['id'] = 'ancestor'
+                if mutant == 'bytes': changed['editable_text']['bytes'] += 1
                 if mutant == 'truncated': changed['truncated'] = True
                 if mutant == 'length': changed['elements'][0]['value_len'] = len(value) + 1
                 if mutant == 'focus': changed['elements'][0]['focused'] = False

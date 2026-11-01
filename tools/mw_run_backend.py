@@ -16,7 +16,7 @@ against the Wender pin. The site directory is copied whole, never merged.
 [TARGET, unit decision] min_notice_s is honoured by announcing the run on stderr
 and waiting before the owner starts; notices above 300 s refuse MW_NOTICE.
 [TARGET, unit decision] Slot evidence reads the focused editor's own native
-text-container ID when AX value text is absent. Length masks are not content
+text-of ID when AX value text is absent. Length masks are not content
 proof. Missing, truncated or differently bound native text refuses before input.
 [TARGET, unit decision] Observations carry the native window url and, from
 native AX only, an observed_wall marker for a CAPTCHA cue or a sign-in dialog.
@@ -462,29 +462,41 @@ class HostBackend:
         return tree
 
     def slot_text(self, row):
-        """Read the editor itself, never its label or a broader ancestor."""
+        """Bind exact editable text and length from one native AX response.
+
+        [TARGET, unit decision] Refresh the caller's length only after all
+        bindings pass; an earlier AX observation may predate the paste.
+        """
         selector = row.get('id')
         need(isinstance(selector, str) and bool(selector), 'MW_SLOT_LENGTH_MISSING_EDITOR_ID')
         try:
             reply = self.native(self.binary, ['ax', '--container', self.capsule, '--window', 'w1',
-                '--state-dir', str(self.state), '--text-container', selector])
+                '--state-dir', str(self.state), '--text-of', selector])
         except (OwnerRefused, OSError, ValueError, subprocess.SubprocessError) as error:
-            raise OwnerRefused('MW_SLOT_LENGTH_MISSING_READABLE_TEXT') from error
-        text = reply.get('text')
+            raise refuse('MW_SLOT_LENGTH_TEXT_OF_UNAVAILABLE',
+                         'Exact editable read-back failed; update srf-identity-surface '
+                         'to a build supporting ax --text-of and retry.') from error
+        text = reply.get('editable_text')
         rows = reply.get('elements', [])
+        need(isinstance(rows, list), 'MW_SLOT_LENGTH_EDITOR_BINDING')
         matches = [r for r in rows if isinstance(r, dict) and r.get('id') == selector]
-        need(len(matches) == 1 and all(matches[0].get(k) == row.get(k)
-             for k in ('id', 'role', 'name', 'box', 'focused')) and
+        binding_keys = ('id', 'role', 'name', 'box', 'focused')
+        need(len(matches) == 1 and all(k in row and k in matches[0] and
+             matches[0][k] == row[k] for k in binding_keys) and
              matches[0].get('focused') is True and reply.get('truncated') is False,
              'MW_SLOT_LENGTH_EDITOR_BINDING')
-        need(isinstance(text, dict) and text.get('container_id') == selector and
+        need(isinstance(text, dict) and text.get('id') == selector and
              isinstance(text.get('text'), str), 'MW_SLOT_LENGTH_MISSING_READABLE_TEXT')
         value = text['text']
-        need(text.get('bytes') == len(value.encode('utf-8')) and
-             len(value.encode('utf-8')) < 65536, 'MW_SLOT_LENGTH_TRUNCATED_TEXT')
+        need(text.get('truncated') is False and type(text.get('bytes')) is int and
+             text['bytes'] == len(value.encode('utf-8')) and text['bytes'] <= 65536,
+             'MW_SLOT_LENGTH_TRUNCATED_TEXT')
         native_length = matches[0].get('value_len')
-        need(native_length is None or type(native_length) is int and native_length == len(value),
+        need(text.get('length_unit') == 'unicode_code_points' and
+             type(text.get('value_len')) is int and text['value_len'] == len(value) and
+             type(native_length) is int and native_length == text['value_len'],
              'MW_SLOT_LENGTH_TEXT_MISMATCH')
+        row['value_len'] = native_length
         return value
 
     def observe(self, timeout_ms):

@@ -11,6 +11,9 @@ row and literal focused:true; satisfied_skip is never a core-action receipt.
 [TARGET, unit decision] slot_values is an invocation-only in-process mapping.
 Private slots use fresh focused AX text for code-point lengths and the existing
 core type proposal/receipt path. No clipboard owner or native paste exists.
+[TARGET, unit decision] Only post-receipt slot acquisition within the adapter
+read-back window polls stale content; each sample rechecks focus, frame and
+handoff, and exact content must match before Wender receives the observation.
 [TARGET, unit decision] Site backends expose read-only network_context returning
 {"mode": "open" | "allowlisted/proxied" | "legacy"}; no declaration is inferred.
 Replay backends expose offline_proof with fixtures_offline exactly True.
@@ -434,18 +437,26 @@ class ReplayOwner:
         length = any(predicate == self.length_binding(s['slot_id']).predicate
                      for s in self.corpus.workflow['text_slots'])
         need(length or self.predicate_supported(predicate))
-        sensed = self.sense(deadline)
-        name = predicate['bindings'][0]['value']
-        rows = [r for r in sensed['ax'] if (r.get('name') == name or r.get('text') == name)]
-        if length:
+        while True:
+            sensed = self.sense(deadline)
+            name = predicate['bindings'][0]['value']
+            rows = [r for r in sensed['ax'] if (r.get('name') == name or r.get('text') == name)]
+            if not length:
+                break
             need(len(rows) == 1 and (rows[0].get('focused') is True or
                  rows[0].get('states', {}).get('focused') in (True, 'true')), 'MW_SLOT_FOCUS')
             text = rows[0].get('value', rows[0].get('text'))
             need(type(text) is str, 'MW_SLOT_LENGTH_MISSING_READABLE_TEXT')
-            # [TARGET, unit decision] Keep exact private read-back for slot verification.
-            # Equal lengths, prefixes and nonempty strings are insufficient.
             self.slots.observed_text = text
-            return self.publication(predicate, sensed, len(text))
+            window = self.slot_readback_deadline_ns
+            if (window is None or deadline != window or self.slots.pending is None or
+                    text == self.slots.pending[1]):
+                return self.publication(predicate, sensed, len(text))
+            # A valid but stale value is retryable only in this read-back window.
+            # Native/binding failures above remain immediate refusals.
+            remaining = window - time.monotonic_ns()
+            need(remaining > 0, 'MW_SLOT_READBACK_DEADLINE')
+            time.sleep(min(10_000_000, remaining) / 1e9)
         focus_step = self.focus_predicates.get(id(predicate))
         if focus_step is not None:
             return self.publication(predicate, sensed,
