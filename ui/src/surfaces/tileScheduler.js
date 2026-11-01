@@ -428,6 +428,103 @@ export function formatFrameStrip(input = {}) {
   };
 }
 
+/** Default capsule browser surface width in pixels (1280x900, never 16:9). */
+export const DEFAULT_SURFACE_WIDTH = 1280;
+/** Default capsule browser surface height in pixels (1280x900, never 16:9). */
+export const DEFAULT_SURFACE_HEIGHT = 900;
+/** Default capsule aspect-ratio token string. */
+export const DEFAULT_SURFACE_ASPECT_RATIO = '1280 / 900';
+/** Reserved footer witness strip height in CSS pixels (22px min-height + 1px border). */
+export const DEFAULT_SURFACE_STRIP_HEIGHT = 23;
+
+/**
+ * Resolves the capsule surface dimensions and aspect ratio from a surface record
+ * or frame dimensions (`Width`/`Height`, `width`/`height`, `frameWidth`/`frameHeight`,
+ * or `geometry.{w,h,width,height,Width,Height}`), defaulting to 1280x900 (never 16:9).
+ * @param {unknown} [input]
+ * @returns {Readonly<{ width: number, height: number, aspect: number, aspectRatio: string }>}
+ */
+export function resolveSurfaceDimensions(input = {}) {
+  const rec = input !== null && typeof input === 'object'
+    ? /** @type {Record<string, any>} */ (input)
+    : {};
+  const geom = rec.geometry !== null && typeof rec.geometry === 'object'
+    ? /** @type {Record<string, any>} */ (rec.geometry)
+    : {};
+  const rawW = rec.frameWidth ?? rec.Width ?? rec.width ?? geom.Width ?? geom.width ?? geom.w;
+  const rawH = rec.frameHeight ?? rec.Height ?? rec.height ?? geom.Height ?? geom.height ?? geom.h;
+  const validW = typeof rawW === 'number' && Number.isFinite(rawW) && Math.round(rawW) > 0
+    ? Math.round(rawW)
+    : 0;
+  const validH = typeof rawH === 'number' && Number.isFinite(rawH) && Math.round(rawH) > 0
+    ? Math.round(rawH)
+    : 0;
+  const width = validW > 0 && validH > 0 ? validW : DEFAULT_SURFACE_WIDTH;
+  const height = validW > 0 && validH > 0 ? validH : DEFAULT_SURFACE_HEIGHT;
+  return Object.freeze({
+    width,
+    height,
+    aspect: width / height,
+    aspectRatio: `${width} / ${height}`,
+  });
+}
+
+/**
+ * Computes the aspect-constrained tile content box for 1–4+ capsules at any wall
+ * viewport size, reserving space for the witness footer strip so the frame fills
+ * its content box with zero letterbox bands and the DISPLAY chip/footer stays visible.
+ * @param {{ wallWidth?: unknown, wallHeight?: unknown, containerWidth?: unknown, containerHeight?: unknown, count?: unknown, capsuleCount?: unknown, stripHeight?: unknown, showStrip?: unknown, surface?: unknown, frameWidth?: unknown, frameHeight?: unknown, Width?: unknown, Height?: unknown, width?: unknown, height?: unknown, geometry?: unknown }} [input={}]
+ * @returns {Readonly<{ width: number, height: number, aspect: number, aspectRatio: string, surfaceWidth: number, surfaceHeight: number, cellWidth: number, cellHeight: number, stripHeight: number, stripVisible: boolean, columns: number, rows: number, offsetX: number, offsetY: number }>}
+ */
+export function computeTileContentBox(input = {}) {
+  const rec = input !== null && typeof input === 'object'
+    ? /** @type {Record<string, any>} */ (input)
+    : {};
+  const dims = resolveSurfaceDimensions(rec.surface ?? rec);
+  const rawWallW = rec.wallWidth ?? rec.containerWidth;
+  const rawWallH = rec.wallHeight ?? rec.containerHeight;
+  const wallWidth = typeof rawWallW === 'number' && Number.isFinite(rawWallW) && rawWallW > 0
+    ? rawWallW
+    : dims.width;
+  const wallHeight = typeof rawWallH === 'number' && Number.isFinite(rawWallH) && rawWallH > 0
+    ? rawWallH
+    : dims.height;
+  const rawCount = rec.capsuleCount ?? rec.count;
+  const count = typeof rawCount === 'number' && Number.isSafeInteger(rawCount) && rawCount > 0
+    ? rawCount
+    : 1;
+  const columns = count <= 2 ? count : (count <= 4 ? 2 : 3);
+  const rows = count <= 2 ? 1 : Math.ceil(count / columns);
+  const cellWidth = wallWidth / columns;
+  const cellHeight = wallHeight / rows;
+  const showStrip = rec.showStrip !== false;
+  const rawStrip = rec.stripHeight;
+  const stripHeight = !showStrip
+    ? 0
+    : (typeof rawStrip === 'number' && Number.isFinite(rawStrip) && rawStrip >= 0
+      ? rawStrip
+      : DEFAULT_SURFACE_STRIP_HEIGHT);
+  const availableHeight = Math.max(1, cellHeight - stripHeight);
+  const width = Math.min(cellWidth, availableHeight * dims.aspect);
+  const height = width / dims.aspect;
+  return Object.freeze({
+    width,
+    height,
+    aspect: width / height,
+    aspectRatio: dims.aspectRatio,
+    surfaceWidth: dims.width,
+    surfaceHeight: dims.height,
+    cellWidth,
+    cellHeight,
+    stripHeight,
+    stripVisible: stripHeight <= cellHeight && height + stripHeight <= cellHeight + 1e-6,
+    columns,
+    rows,
+    offsetX: 0,
+    offsetY: 0,
+  });
+}
+
 /**
  * Validates an immutable surface identifier: no empty strings, no bare numbers.
  * @param {unknown} surfaceId

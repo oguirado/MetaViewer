@@ -16,6 +16,7 @@ import {
   mapClientToFrame,
   mapKeyboardEvent,
   normalizeSurfaceState,
+  resolveSurfaceDimensions,
   shouldEvictSchedulerEntry,
   surfaceCanvasAccessibleName,
   surfaceCanvasAnchor,
@@ -205,6 +206,10 @@ const strip = computed(() => formatFrameStrip({
 
 const domId = computed(() => surfaceCanvasDomId(props.surfaceId));
 const anchor = computed(() => surfaceCanvasAnchor(props.surfaceId));
+const surfaceGeometry = computed(() => resolveSurfaceDimensions({
+  frameWidth: props.frameWidth,
+  frameHeight: props.frameHeight,
+}));
 const accessibleName = computed(() => surfaceCanvasAccessibleName({
   surfaceId: props.surfaceId,
   state: resolvedState.value,
@@ -1150,6 +1155,7 @@ onBeforeUnmount(() => {
     :id="domId"
     :data-anchor="anchor"
     :data-state="resolvedState"
+    :data-aspect-ratio="surfaceGeometry.aspectRatio"
     :data-display-state="displayActive ? displayMode : undefined"
     :aria-label="accessibleName"
   >
@@ -1182,17 +1188,23 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
   overflow: hidden;
   width: 100%;
   height: 100%;
   background: var(--cuk-semantic-surface-canvas);
   color: var(--cuk-semantic-text-primary);
 }
+.mv-surface:has(> .mv-surface__strip) {
+  width: min(100cqw, calc((100cqh - 23px) * 1280 / 900));
+  height: min(100cqh, calc(100cqw * 900 / 1280 + 23px));
+}
 .mv-surface__canvas {
   display: block;
   width: 100%;
   flex: 1;
   min-height: 0;
+  aspect-ratio: 1280 / 900;
   object-fit: contain;
   background-color: var(--mv-primitive-color-neutral-1100, #000000);
 }
@@ -1261,6 +1273,7 @@ onBeforeUnmount(() => {
   color: var(--mv-primitive-color-neutral-300, #ced0d4);
 }
 .mv-surface__strip {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 12px;
