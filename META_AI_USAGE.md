@@ -19,17 +19,17 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 2,356 | 55 | 2,301 |
-| Lanes finished OK | 2,356 | 55 | 2,301 |
-| Agent steps | 75,742 | 2,705 | 73,037 |
-| Lane-hours of agent work | 170.6 | 5.2 | 165.4 |
-| Fresh input tokens | 290,755,368 | 11,482,034 | 279,273,334 |
-| Cache-read input tokens | 5,104,282,840 | 226,255,212 | 4,878,027,628 |
+| Lanes launched | 2,505 | 55 | 2,450 |
+| Lanes finished OK | 2,505 | 55 | 2,450 |
+| Agent steps | 79,017 | 2,705 | 76,312 |
+| Lane-hours of agent work | 176.7 | 5.2 | 171.5 |
+| Fresh input tokens | 300,718,762 | 11,482,034 | 289,236,728 |
+| Cache-read input tokens | 5,249,467,096 | 226,255,212 | 5,023,211,884 |
 | Prompt cache hit % | 94.6 | 95.2 | 94.6 |
-| Output tokens | 58,925,482 | 2,135,708 | 56,789,774 |
-| Thinking tokens | 36,014,181 | 1,050,039 | 34,964,142 |
-| Cost (USD) | 51.0692 | 2.0279 | 49.0413 |
-| Cost per lane (USD) | 0.0217 | 0.0369 | 0.0213 |
+| Output tokens | 61,202,210 | 2,135,708 | 59,066,502 |
+| Thinking tokens | 37,550,140 | 1,050,039 | 36,500,101 |
+| Cost (USD) | 52.8112 | 2.0279 | 50.7834 |
+| Cost per lane (USD) | 0.0211 | 0.0369 | 0.0207 |
 
 Rooms: 136. Peak concurrent lanes [MEASURED from lane start/end]: 42.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
@@ -38,7 +38,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 1967 | 93.7 | 34.8217 |
+| build | 2116 | 93.7 | 36.5637 |
 | context | 42 | 95.9 | 1.9093 |
 | context packs + test ideation (U-DEC-0139) | 13 | 91.1 | 0.2195 |
 | demo | 4 | 90.7 | 0.0557 |
@@ -86,7 +86,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 1629 | 93.6 | 26.5432 | direct Muse job |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 1778 | 93.6 | 28.2852 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -2562,6 +2562,155 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | 90847_lane_r4_storyboard | fill_090847_lane_r4_storyboard | Nov 01 09:10 | yes | 62 | 96.2 | 0.038597 |
 | direct-direct | 90847_lane_r4_terminal | fill_090847_lane_r4_terminal | Nov 01 09:10 | yes | 29 | 92.7 | 0.020128 |
 | direct-direct | 90847_lane_r4_use_metaviewer | fill_090847_lane_r4_use_metaviewer | Nov 01 09:10 | yes | 36 | 93.9 | 0.027479 |
+| direct-direct | 01030_lane_r4_app_close | fill_101030_lane_r4_app_close | Nov 01 10:11 | yes | 60 | 96.1 | 0.035122 |
+| direct-direct | 01030_lane_r4_automate_demo | fill_101030_lane_r4_automate_demo | Nov 01 10:11 | yes | 46 | 95.5 | 0.026008 |
+| direct-direct | 01030_lane_r4_capsule_close_reopen | fill_101030_lane_r4_capsule_close_reopen | Nov 01 10:11 | yes | 34 | 92.6 | 0.02354 |
+| direct-direct | 01030_lane_r4_captcha_handoff | fill_101030_lane_r4_captcha_handoff | Nov 01 10:11 | yes | 34 | 93.9 | 0.022065 |
+| direct-direct | 01030_lane_r4_chatgpt_gemini | fill_101030_lane_r4_chatgpt_gemini | Nov 01 10:11 | yes | 88 | 97.2 | 0.04348 |
+| direct-direct | 01030_lane_r4_display | fill_101030_lane_r4_display | Nov 01 10:11 | yes | 69 | 96.6 | 0.030655 |
+| direct-direct | 01030_lane_r4_identities | fill_101030_lane_r4_identities | Nov 01 10:11 | yes | 50 | 96.1 | 0.024247 |
+| direct-direct | 01030_lane_r4_launch | fill_101030_lane_r4_launch | Nov 01 10:11 | yes | 65 | 96.3 | 0.037077 |
+| direct-direct | 01030_lane_r4_multislot | fill_101030_lane_r4_multislot | Nov 01 10:11 | yes | 51 | 95.5 | 0.027008 |
+| direct-direct | 01030_lane_r4_network | fill_101030_lane_r4_network | Nov 01 10:11 | yes | 38 | 94.5 | 0.020366 |
+| direct-direct | 01030_lane_r4_settings | fill_101030_lane_r4_settings | Nov 01 10:12 | yes | 24 | 91.1 | 0.016773 |
+| direct-direct | 01030_lane_r4_storyboard | fill_101030_lane_r4_storyboard | Nov 01 10:12 | yes | 78 | 97.1 | 0.04678 |
+| direct-direct | 01030_lane_r4_terminal | fill_101030_lane_r4_terminal | Nov 01 10:12 | yes | 46 | 95.6 | 0.023947 |
+| direct-direct | 01030_lane_r4_use_metaviewer | fill_101030_lane_r4_use_metaviewer | Nov 01 10:12 | yes | 51 | 95.5 | 0.027875 |
+| direct-direct | -SCROLL_a | r1x_UX-SCROLL_a | Nov 01 10:41 | yes | 22 | 89.6 | 0.01539 |
+| direct-direct | -SCROLL_b | r1x_UX-SCROLL_b | Nov 01 10:41 | yes | 31 | 94.3 | 0.014307 |
+| direct-direct | DGE-SYSDEP-BUILD_a | r1x_JUDGE-SYSDEP-BUILD_a | Nov 01 10:41 | yes | 29 | 95.4 | 0.010925 |
+| direct-direct | DGE-SYSDEP-BUILD_b | r1x_JUDGE-SYSDEP-BUILD_b | Nov 01 10:41 | yes | 17 | 91.1 | 0.009791 |
+| direct-direct | -AX-READBACK_a | r1x_B7-AX-READBACK_a | Nov 01 10:41 | yes | 34 | 95.1 | 0.019781 |
+| direct-direct | -AX-READBACK_b | r1x_B7-AX-READBACK_b | Nov 01 10:41 | yes | 34 | 93.6 | 0.018262 |
+| direct-direct | -NATIVE-MOVE_a | r1x_OS-NATIVE-MOVE_a | Nov 01 10:41 | yes | 25 | 94.3 | 0.011486 |
+| direct-direct | -NATIVE-MOVE_b | r1x_OS-NATIVE-MOVE_b | Nov 01 10:41 | yes | 17 | 90.4 | 0.010301 |
+| direct-direct | 04212_batch2_a | fill_104212_batch2_a | Nov 01 10:42 | yes | 21 | 91.7 | 0.0122 |
+| direct-direct | 04212_batch2_b | fill_104212_batch2_b | Nov 01 10:42 | yes | 28 | 94.5 | 0.011199 |
+| direct-direct | 04212_capstop_a | fill_104212_capstop_a | Nov 01 10:42 | yes | 50 | 95.6 | 0.024281 |
+| direct-direct | 04212_capstop_b | fill_104212_capstop_b | Nov 01 10:42 | yes | 39 | 94.6 | 0.018238 |
+| direct-direct | 04212_dispfps_a | fill_104212_dispfps_a | Nov 01 10:42 | yes | 24 | 93.1 | 0.011734 |
+| direct-direct | 04212_dispfps_b | fill_104212_dispfps_b | Nov 01 10:42 | yes | 37 | 94.5 | 0.016569 |
+| direct-direct | 04212_e5locale_a | fill_104212_e5locale_a | Nov 01 10:42 | yes | 16 | 89.5 | 0.011154 |
+| direct-direct | 04212_e5locale_b | fill_104212_e5locale_b | Nov 01 10:42 | yes | 22 | 92.8 | 0.012365 |
+| direct-direct | 04238_rev_CONTRACT-CORE-V03-R2_a | fill_104238_rev_CONTRACT-CORE-V03-R2_a | Nov 01 10:44 | yes | 31 | 94.9 | 0.013133 |
+| direct-direct | 04238_rev_CONTRACT-CORE-V03-R2_b | fill_104238_rev_CONTRACT-CORE-V03-R2_b | Nov 01 10:44 | yes | 18 | 90.2 | 0.011884 |
+| direct-direct | 04238_rev_MW-AX-DUMP_a | fill_104238_rev_MW-AX-DUMP_a | Nov 01 10:44 | yes | 12 | 89.8 | 0.005527 |
+| direct-direct | 04238_rev_MW-AX-DUMP_b | fill_104238_rev_MW-AX-DUMP_b | Nov 01 10:44 | yes | 19 | 94.0 | 0.007487 |
+| direct-direct | 04238_rev_MW-READBACK-TEXTOF_a | fill_104238_rev_MW-READBACK-TEXTOF_a | Nov 01 10:44 | yes | 9 | 86.0 | 0.009634 |
+| direct-direct | 04238_rev_MW-READBACK-TEXTOF_b | fill_104238_rev_MW-READBACK-TEXTOF_b | Nov 01 10:44 | yes | 22 | 93.0 | 0.01047 |
+| direct-direct | 04238_rev_MW-WALL-DEADLINE-R2_a | fill_104238_rev_MW-WALL-DEADLINE-R2_a | Nov 01 10:44 | yes | 15 | 91.0 | 0.009272 |
+| direct-direct | 04238_rev_MW-WALL-DEADLINE-R2_b | fill_104238_rev_MW-WALL-DEADLINE-R2_b | Nov 01 10:45 | yes | 25 | 93.9 | 0.01092 |
+| direct-direct | 04503_rev_CONTRACT-CORE-V03-R2_a | fill_104503_rev_CONTRACT-CORE-V03-R2_a | Nov 01 10:46 | yes | 9 | 85.3 | 0.005286 |
+| direct-direct | 04503_rev_CONTRACT-CORE-V03-R2_b | fill_104503_rev_CONTRACT-CORE-V03-R2_b | Nov 01 10:46 | yes | 11 | 85.6 | 0.007782 |
+| direct-direct | 04503_rev_MW-AX-DUMP_a | fill_104503_rev_MW-AX-DUMP_a | Nov 01 10:46 | yes | 14 | 91.4 | 0.006971 |
+| direct-direct | 04503_rev_MW-AX-DUMP_b | fill_104503_rev_MW-AX-DUMP_b | Nov 01 10:46 | yes | 14 | 90.1 | 0.007026 |
+| direct-direct | 04503_rev_MW-READBACK-TEXTOF_a | fill_104503_rev_MW-READBACK-TEXTOF_a | Nov 01 10:46 | yes | 35 | 93.9 | 0.015351 |
+| direct-direct | 04503_rev_MW-READBACK-TEXTOF_b | fill_104503_rev_MW-READBACK-TEXTOF_b | Nov 01 10:46 | yes | 29 | 94.4 | 0.013098 |
+| direct-direct | 04503_rev_MW-WALL-DEADLINE-R2_a | fill_104503_rev_MW-WALL-DEADLINE-R2_a | Nov 01 10:46 | yes | 24 | 94.0 | 0.01159 |
+| direct-direct | 04503_rev_MW-WALL-DEADLINE-R2_b | fill_104503_rev_MW-WALL-DEADLINE-R2_b | Nov 01 10:46 | yes | 28 | 94.0 | 0.013284 |
+| direct-direct | 04628_rev_CONTRACT-CORE-V03-R2_a | fill_104628_rev_CONTRACT-CORE-V03-R2_a | Nov 01 10:47 | yes | 13 | 87.8 | 0.00779 |
+| direct-direct | 04628_rev_CONTRACT-CORE-V03-R2_b | fill_104628_rev_CONTRACT-CORE-V03-R2_b | Nov 01 10:47 | yes | 12 | 88.3 | 0.007785 |
+| direct-direct | 04628_rev_MW-AX-DUMP_a | fill_104628_rev_MW-AX-DUMP_a | Nov 01 10:47 | yes | 39 | 95.4 | 0.017952 |
+| direct-direct | 04628_rev_MW-AX-DUMP_b | fill_104628_rev_MW-AX-DUMP_b | Nov 01 10:47 | yes | 9 | 84.9 | 0.005825 |
+| direct-direct | 04628_rev_MW-READBACK-TEXTOF_a | fill_104628_rev_MW-READBACK-TEXTOF_a | Nov 01 10:47 | yes | 25 | 94.6 | 0.009673 |
+| direct-direct | 04628_rev_MW-READBACK-TEXTOF_b | fill_104628_rev_MW-READBACK-TEXTOF_b | Nov 01 10:47 | yes | 24 | 93.9 | 0.010827 |
+| direct-direct | 04628_rev_MW-WALL-DEADLINE-R2_a | fill_104628_rev_MW-WALL-DEADLINE-R2_a | Nov 01 10:47 | yes | 25 | 93.9 | 0.011803 |
+| direct-direct | 04628_rev_MW-WALL-DEADLINE-R2_b | fill_104628_rev_MW-WALL-DEADLINE-R2_b | Nov 01 10:47 | yes | 12 | 87.6 | 0.008583 |
+| direct-direct | 04753_rev_CONTRACT-CORE-V03-R2_a | fill_104753_rev_CONTRACT-CORE-V03-R2_a | Nov 01 10:48 | yes | 13 | 89.1 | 0.00724 |
+| direct-direct | 04753_rev_CONTRACT-CORE-V03-R2_b | fill_104753_rev_CONTRACT-CORE-V03-R2_b | Nov 01 10:48 | yes | 15 | 90.1 | 0.008091 |
+| direct-direct | 04753_rev_MW-AX-DUMP_a | fill_104753_rev_MW-AX-DUMP_a | Nov 01 10:48 | yes | 11 | 89.0 | 0.006657 |
+| direct-direct | 04753_rev_MW-AX-DUMP_b | fill_104753_rev_MW-AX-DUMP_b | Nov 01 10:49 | yes | 25 | 93.8 | 0.011857 |
+| direct-direct | 04753_rev_MW-READBACK-TEXTOF_a | fill_104753_rev_MW-READBACK-TEXTOF_a | Nov 01 10:49 | yes | 17 | 88.6 | 0.01358 |
+| direct-direct | 04753_rev_MW-READBACK-TEXTOF_b | fill_104753_rev_MW-READBACK-TEXTOF_b | Nov 01 10:49 | yes | 7 | 86.8 | 0.004512 |
+| direct-direct | 04753_rev_MW-WALL-DEADLINE-R2_a | fill_104753_rev_MW-WALL-DEADLINE-R2_a | Nov 01 10:49 | yes | 23 | 93.4 | 0.010369 |
+| direct-direct | 04753_rev_MW-WALL-DEADLINE-R2_b | fill_104753_rev_MW-WALL-DEADLINE-R2_b | Nov 01 10:49 | yes | 26 | 93.8 | 0.011034 |
+| direct-direct | 04917_rev_CONTRACT-CORE-V03-R2_a | fill_104917_rev_CONTRACT-CORE-V03-R2_a | Nov 01 10:50 | yes | 13 | 88.9 | 0.00887 |
+| direct-direct | 04917_rev_CONTRACT-CORE-V03-R2_b | fill_104917_rev_CONTRACT-CORE-V03-R2_b | Nov 01 10:50 | yes | 35 | 95.6 | 0.014753 |
+| direct-direct | 04917_rev_MW-AX-DUMP_a | fill_104917_rev_MW-AX-DUMP_a | Nov 01 10:50 | yes | 16 | 91.7 | 0.00777 |
+| direct-direct | 04917_rev_MW-AX-DUMP_b | fill_104917_rev_MW-AX-DUMP_b | Nov 01 10:50 | yes | 26 | 93.3 | 0.012136 |
+| direct-direct | 04917_rev_MW-READBACK-TEXTOF_a | fill_104917_rev_MW-READBACK-TEXTOF_a | Nov 01 10:50 | yes | 14 | 90.6 | 0.006882 |
+| direct-direct | 04917_rev_MW-READBACK-TEXTOF_b | fill_104917_rev_MW-READBACK-TEXTOF_b | Nov 01 10:50 | yes | 16 | 92.2 | 0.008462 |
+| direct-direct | 04917_rev_MW-WALL-DEADLINE-R2_a | fill_104917_rev_MW-WALL-DEADLINE-R2_a | Nov 01 10:50 | yes | 16 | 92.3 | 0.007688 |
+| direct-direct | 04917_rev_MW-WALL-DEADLINE-R2_b | fill_104917_rev_MW-WALL-DEADLINE-R2_b | Nov 01 10:50 | yes | 16 | 91.6 | 0.008233 |
+| direct-direct | 05042_rev_CONTRACT-CORE-V03-R2_a | fill_105042_rev_CONTRACT-CORE-V03-R2_a | Nov 01 10:51 | yes | 10 | 85.1 | 0.006235 |
+| direct-direct | 05042_rev_CONTRACT-CORE-V03-R2_b | fill_105042_rev_CONTRACT-CORE-V03-R2_b | Nov 01 10:51 | yes | 15 | 90.4 | 0.007828 |
+| direct-direct | 05042_rev_MW-AX-DUMP_a | fill_105042_rev_MW-AX-DUMP_a | Nov 01 10:51 | yes | 26 | 94.1 | 0.010391 |
+| direct-direct | 05042_rev_MW-AX-DUMP_b | fill_105042_rev_MW-AX-DUMP_b | Nov 01 10:51 | yes | 9 | 85.0 | 0.007385 |
+| direct-direct | 05042_rev_MW-READBACK-TEXTOF_a | fill_105042_rev_MW-READBACK-TEXTOF_a | Nov 01 10:51 | yes | 18 | 92.6 | 0.008256 |
+| direct-direct | 05042_rev_MW-READBACK-TEXTOF_b | fill_105042_rev_MW-READBACK-TEXTOF_b | Nov 01 10:51 | yes | 13 | 89.7 | 0.00696 |
+| direct-direct | 05042_rev_MW-WALL-DEADLINE-R2_a | fill_105042_rev_MW-WALL-DEADLINE-R2_a | Nov 01 10:52 | yes | 24 | 93.7 | 0.01031 |
+| direct-direct | 05042_rev_MW-WALL-DEADLINE-R2_b | fill_105042_rev_MW-WALL-DEADLINE-R2_b | Nov 01 10:52 | yes | 16 | 91.0 | 0.010439 |
+| direct-direct | 05207_rev_CONTRACT-CORE-V03-R2_a | fill_105207_rev_CONTRACT-CORE-V03-R2_a | Nov 01 10:53 | yes | 13 | 86.8 | 0.009439 |
+| direct-direct | 05207_rev_CONTRACT-CORE-V03-R2_b | fill_105207_rev_CONTRACT-CORE-V03-R2_b | Nov 01 10:53 | yes | 12 | 88.1 | 0.007478 |
+| direct-direct | 05207_rev_MW-AX-DUMP_a | fill_105207_rev_MW-AX-DUMP_a | Nov 01 10:53 | yes | 18 | 90.5 | 0.010173 |
+| direct-direct | 05207_rev_MW-AX-DUMP_b | fill_105207_rev_MW-AX-DUMP_b | Nov 01 10:53 | yes | 19 | 92.4 | 0.00877 |
+| direct-direct | 05207_rev_MW-READBACK-TEXTOF_a | fill_105207_rev_MW-READBACK-TEXTOF_a | Nov 01 10:53 | yes | 14 | 90.7 | 0.008369 |
+| direct-direct | 05207_rev_MW-READBACK-TEXTOF_b | fill_105207_rev_MW-READBACK-TEXTOF_b | Nov 01 10:53 | yes | 15 | 90.5 | 0.007639 |
+| direct-direct | 05207_rev_MW-WALL-DEADLINE-R2_a | fill_105207_rev_MW-WALL-DEADLINE-R2_a | Nov 01 10:53 | yes | 19 | 92.4 | 0.009542 |
+| direct-direct | 05207_rev_MW-WALL-DEADLINE-R2_b | fill_105207_rev_MW-WALL-DEADLINE-R2_b | Nov 01 10:53 | yes | 23 | 92.8 | 0.012471 |
+| direct-direct | 05332_rev_CONTRACT-CORE-V03-R2_a | fill_105332_rev_CONTRACT-CORE-V03-R2_a | Nov 01 10:54 | yes | 15 | 89.3 | 0.011842 |
+| direct-direct | 05332_rev_CONTRACT-CORE-V03-R2_b | fill_105332_rev_CONTRACT-CORE-V03-R2_b | Nov 01 10:54 | yes | 8 | 85.0 | 0.005592 |
+| direct-direct | 05332_rev_MW-AX-DUMP_a | fill_105332_rev_MW-AX-DUMP_a | Nov 01 10:54 | yes | 20 | 90.4 | 0.013177 |
+| direct-direct | 05332_rev_MW-AX-DUMP_b | fill_105332_rev_MW-AX-DUMP_b | Nov 01 10:54 | yes | 35 | 95.8 | 0.013138 |
+| direct-direct | 05332_rev_MW-READBACK-TEXTOF_a | fill_105332_rev_MW-READBACK-TEXTOF_a | Nov 01 10:54 | yes | 11 | 89.7 | 0.006115 |
+| direct-direct | 05332_rev_MW-READBACK-TEXTOF_b | fill_105332_rev_MW-READBACK-TEXTOF_b | Nov 01 10:54 | yes | 12 | 90.8 | 0.0063 |
+| direct-direct | 05332_rev_MW-WALL-DEADLINE-R2_a | fill_105332_rev_MW-WALL-DEADLINE-R2_a | Nov 01 10:54 | yes | 13 | 90.7 | 0.007906 |
+| direct-direct | 05332_rev_MW-WALL-DEADLINE-R2_b | fill_105332_rev_MW-WALL-DEADLINE-R2_b | Nov 01 10:54 | yes | 10 | 89.1 | 0.005231 |
+| direct-direct | 05456_rev_CONTRACT-CORE-V03-R2_a | fill_105456_rev_CONTRACT-CORE-V03-R2_a | Nov 01 10:55 | yes | 19 | 91.1 | 0.010639 |
+| direct-direct | 05456_rev_CONTRACT-CORE-V03-R2_b | fill_105456_rev_CONTRACT-CORE-V03-R2_b | Nov 01 10:56 | yes | 20 | 93.1 | 0.009615 |
+| direct-direct | 05456_rev_MW-AX-DUMP_a | fill_105456_rev_MW-AX-DUMP_a | Nov 01 10:56 | yes | 13 | 89.0 | 0.009628 |
+| direct-direct | 05456_rev_MW-AX-DUMP_b | fill_105456_rev_MW-AX-DUMP_b | Nov 01 10:56 | yes | 30 | 94.1 | 0.01467 |
+| direct-direct | 05456_rev_MW-READBACK-TEXTOF_a | fill_105456_rev_MW-READBACK-TEXTOF_a | Nov 01 10:56 | yes | 17 | 92.1 | 0.008065 |
+| direct-direct | 05456_rev_MW-READBACK-TEXTOF_b | fill_105456_rev_MW-READBACK-TEXTOF_b | Nov 01 10:56 | yes | 15 | 92.2 | 0.006783 |
+| direct-direct | 05456_rev_MW-WALL-DEADLINE-R2_a | fill_105456_rev_MW-WALL-DEADLINE-R2_a | Nov 01 10:56 | yes | 12 | 88.3 | 0.01034 |
+| direct-direct | 05456_rev_MW-WALL-DEADLINE-R2_b | fill_105456_rev_MW-WALL-DEADLINE-R2_b | Nov 01 10:56 | yes | 12 | 89.0 | 0.006369 |
+| direct-direct | 05621_rev_MW-AX-DUMP_a | fill_105621_rev_MW-AX-DUMP_a | Nov 01 10:57 | yes | 16 | 89.3 | 0.014172 |
+| direct-direct | 05621_rev_MW-AX-DUMP_b | fill_105621_rev_MW-AX-DUMP_b | Nov 01 10:57 | yes | 31 | 95.3 | 0.012481 |
+| direct-direct | 05621_rev_MW-READBACK-TEXTOF_a | fill_105621_rev_MW-READBACK-TEXTOF_a | Nov 01 10:57 | yes | 13 | 84.4 | 0.008869 |
+| direct-direct | 05621_rev_MW-READBACK-TEXTOF_b | fill_105621_rev_MW-READBACK-TEXTOF_b | Nov 01 10:57 | yes | 10 | 89.0 | 0.005638 |
+| direct-direct | 05621_rev_MW-WALL-DEADLINE-R2_a | fill_105621_rev_MW-WALL-DEADLINE-R2_a | Nov 01 10:57 | yes | 14 | 90.6 | 0.00949 |
+| direct-direct | 05621_rev_MW-WALL-DEADLINE-R2_b | fill_105621_rev_MW-WALL-DEADLINE-R2_b | Nov 01 10:57 | yes | 12 | 86.1 | 0.010232 |
+| direct-direct | 05739_rev_MW-AX-DUMP_a | fill_105739_rev_MW-AX-DUMP_a | Nov 01 10:58 | yes | 20 | 92.4 | 0.010015 |
+| direct-direct | 05739_rev_MW-AX-DUMP_b | fill_105739_rev_MW-AX-DUMP_b | Nov 01 10:58 | yes | 24 | 93.7 | 0.010993 |
+| direct-direct | 05739_rev_MW-READBACK-TEXTOF_a | fill_105739_rev_MW-READBACK-TEXTOF_a | Nov 01 10:58 | yes | 16 | 91.5 | 0.00949 |
+| direct-direct | 05739_rev_MW-READBACK-TEXTOF_b | fill_105739_rev_MW-READBACK-TEXTOF_b | Nov 01 10:58 | yes | 22 | 93.7 | 0.0105 |
+| direct-direct | 05739_rev_MW-WALL-DEADLINE-R2_a | fill_105739_rev_MW-WALL-DEADLINE-R2_a | Nov 01 10:58 | yes | 10 | 86.7 | 0.007222 |
+| direct-direct | 05739_rev_MW-WALL-DEADLINE-R2_b | fill_105739_rev_MW-WALL-DEADLINE-R2_b | Nov 01 10:58 | yes | 11 | 89.0 | 0.005724 |
+| direct-direct | 05858_rev_DISPLAY-READER-DEFLAKE_a | fill_105858_rev_DISPLAY-READER-DEFLAKE_a | Nov 01 10:59 | yes | 17 | 93.1 | 0.006496 |
+| direct-direct | 05858_rev_DISPLAY-READER-DEFLAKE_b | fill_105858_rev_DISPLAY-READER-DEFLAKE_b | Nov 01 11:00 | yes | 12 | 90.3 | 0.005234 |
+| direct-direct | 05858_rev_MW-AX-DUMP_a | fill_105858_rev_MW-AX-DUMP_a | Nov 01 11:00 | yes | 22 | 93.3 | 0.009307 |
+| direct-direct | 05858_rev_MW-AX-DUMP_b | fill_105858_rev_MW-AX-DUMP_b | Nov 01 11:00 | yes | 34 | 95.7 | 0.012063 |
+| direct-direct | 05858_rev_MW-READBACK-TEXTOF_a | fill_105858_rev_MW-READBACK-TEXTOF_a | Nov 01 11:00 | yes | 14 | 91.1 | 0.007305 |
+| direct-direct | 05858_rev_MW-READBACK-TEXTOF_b | fill_105858_rev_MW-READBACK-TEXTOF_b | Nov 01 11:00 | yes | 17 | 91.7 | 0.010088 |
+| direct-direct | 05858_rev_MW-WALL-DEADLINE-R2_a | fill_105858_rev_MW-WALL-DEADLINE-R2_a | Nov 01 11:00 | yes | 22 | 93.2 | 0.011789 |
+| direct-direct | 05858_rev_MW-WALL-DEADLINE-R2_b | fill_105858_rev_MW-WALL-DEADLINE-R2_b | Nov 01 11:00 | yes | 12 | 88.6 | 0.007969 |
+| direct-direct | 10023_rev_DISPLAY-READER-DEFLAKE_a | fill_110023_rev_DISPLAY-READER-DEFLAKE_a | Nov 01 11:01 | yes | 13 | 89.2 | 0.007359 |
+| direct-direct | 10023_rev_DISPLAY-READER-DEFLAKE_b | fill_110023_rev_DISPLAY-READER-DEFLAKE_b | Nov 01 11:01 | yes | 15 | 91.0 | 0.007327 |
+| direct-direct | 10023_rev_MW-AX-DUMP_a | fill_110023_rev_MW-AX-DUMP_a | Nov 01 11:01 | yes | 19 | 91.9 | 0.011141 |
+| direct-direct | 10023_rev_MW-AX-DUMP_b | fill_110023_rev_MW-AX-DUMP_b | Nov 01 11:01 | yes | 23 | 93.5 | 0.011785 |
+| direct-direct | 10023_rev_MW-READBACK-TEXTOF_a | fill_110023_rev_MW-READBACK-TEXTOF_a | Nov 01 11:01 | yes | 16 | 91.9 | 0.007767 |
+| direct-direct | 10023_rev_MW-READBACK-TEXTOF_b | fill_110023_rev_MW-READBACK-TEXTOF_b | Nov 01 11:01 | yes | 11 | 85.2 | 0.010171 |
+| direct-direct | 10023_rev_MW-WALL-DEADLINE-R2_a | fill_110023_rev_MW-WALL-DEADLINE-R2_a | Nov 01 11:01 | yes | 10 | 86.8 | 0.007032 |
+| direct-direct | 10023_rev_MW-WALL-DEADLINE-R2_b | fill_110023_rev_MW-WALL-DEADLINE-R2_b | Nov 01 11:01 | yes | 22 | 88.9 | 0.017024 |
+| direct-direct | 10147_rev_DISPLAY-READER-DEFLAKE_a | fill_110147_rev_DISPLAY-READER-DEFLAKE_a | Nov 01 11:02 | yes | 16 | 91.4 | 0.006664 |
+| direct-direct | 10147_rev_DISPLAY-READER-DEFLAKE_b | fill_110147_rev_DISPLAY-READER-DEFLAKE_b | Nov 01 11:02 | yes | 11 | 89.4 | 0.005248 |
+| direct-direct | 10147_rev_MW-AX-DUMP_a | fill_110147_rev_MW-AX-DUMP_a | Nov 01 11:02 | yes | 21 | 92.9 | 0.010951 |
+| direct-direct | 10147_rev_MW-AX-DUMP_b | fill_110147_rev_MW-AX-DUMP_b | Nov 01 11:02 | yes | 14 | 86.5 | 0.009163 |
+| direct-direct | 10147_rev_MW-READBACK-TEXTOF_a | fill_110147_rev_MW-READBACK-TEXTOF_a | Nov 01 11:03 | yes | 24 | 93.3 | 0.012309 |
+| direct-direct | 10147_rev_MW-READBACK-TEXTOF_b | fill_110147_rev_MW-READBACK-TEXTOF_b | Nov 01 11:03 | yes | 18 | 87.1 | 0.013499 |
+| direct-direct | 10147_rev_MW-WALL-DEADLINE-R2_a | fill_110147_rev_MW-WALL-DEADLINE-R2_a | Nov 01 11:03 | yes | 22 | 93.2 | 0.009918 |
+| direct-direct | 10147_rev_MW-WALL-DEADLINE-R2_b | fill_110147_rev_MW-WALL-DEADLINE-R2_b | Nov 01 11:03 | yes | 9 | 85.9 | 0.006124 |
+| direct-direct | 10312_rev_DISPLAY-READER-DEFLAKE_a | fill_110312_rev_DISPLAY-READER-DEFLAKE_a | Nov 01 11:04 | yes | 10 | 90.6 | 0.004597 |
+| direct-direct | 10312_rev_DISPLAY-READER-DEFLAKE_b | fill_110312_rev_DISPLAY-READER-DEFLAKE_b | Nov 01 11:04 | yes | 13 | 89.8 | 0.005411 |
+| direct-direct | 10312_rev_MW-AX-DUMP_a | fill_110312_rev_MW-AX-DUMP_a | Nov 01 11:04 | yes | 13 | 89.3 | 0.008948 |
+| direct-direct | 10312_rev_MW-AX-DUMP_b | fill_110312_rev_MW-AX-DUMP_b | Nov 01 11:04 | yes | 23 | 93.4 | 0.010068 |
+| direct-direct | 10312_rev_MW-READBACK-TEXTOF_b | fill_110312_rev_MW-READBACK-TEXTOF_b | Nov 01 11:04 | yes | 24 | 93.8 | 0.01324 |
+| direct-direct | 10312_rev_MW-WALL-DEADLINE-R2_a | fill_110312_rev_MW-WALL-DEADLINE-R2_a | Nov 01 11:04 | yes | 20 | 89.4 | 0.013167 |
+| direct-direct | 10312_rev_MW-WALL-DEADLINE-R2_b | fill_110312_rev_MW-WALL-DEADLINE-R2_b | Nov 01 11:04 | yes | 25 | 94.4 | 0.011064 |
+| direct-direct | 10437_rev_DISPLAY-READER-DEFLAKE_a | fill_110437_rev_DISPLAY-READER-DEFLAKE_a | Nov 01 11:05 | yes | 17 | 91.1 | 0.007077 |
+| direct-direct | 10437_rev_MW-AX-DUMP_a | fill_110437_rev_MW-AX-DUMP_a | Nov 01 11:05 | yes | 15 | 91.7 | 0.007107 |
+| direct-direct | 10437_rev_MW-AX-DUMP_b | fill_110437_rev_MW-AX-DUMP_b | Nov 01 11:05 | yes | 17 | 91.7 | 0.007864 |
+| direct-direct | 10437_rev_MW-WALL-DEADLINE-R2_b | fill_110437_rev_MW-WALL-DEADLINE-R2_b | Nov 01 11:05 | yes | 16 | 91.8 | 0.007845 |
 
 ## Method
 
