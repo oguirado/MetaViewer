@@ -394,3 +394,156 @@ func TestHoldingsHumanOriginVerificationContract(t *testing.T) {
 		t.Fatalf("unexpected input_applied event: %s (%v)", out[0], err)
 	}
 }
+
+type straddleCaptureRunner struct {
+	frameStarted chan struct{}
+	frameFinish  chan struct{}
+}
+
+func (r *straddleCaptureRunner) Run(_ context.Context, args []string, _ []byte) ([]byte, error) {
+	switch args[1] {
+	case "start":
+		return []byte(startOK), nil
+	case "input":
+		return []byte(`{"surface_id":"w1","kind":"key","input_mono_ns":200,"focus_verified":true,"result":"ok"}`), nil
+	case "frame":
+		if r.frameStarted != nil {
+			close(r.frameStarted)
+		}
+		if r.frameFinish != nil {
+			<-r.frameFinish
+		}
+		return []byte(`{"path":"/dev/shm/demo-run/frames/w1/f.png","seq":1,"sha256_rgb24":"0000000000000000000000000000000000000000000000000000000000000000","width":2,"height":1,"capture_mono_ns":200,"generation":"srf-id-demo","window":{"id":"w1","w":2,"h":1}}`), nil
+	}
+	return nil, fault("unexpected", "unexpected test operation")
+}
+
+func TestOwnershipChangeInvalidatesInFlightCaptures(t *testing.T) {
+	type stepCase struct {
+		name  string
+		setup func(t *testing.T, m *Manager, id string)
+		mid   func(t *testing.T, m *Manager, id string)
+		after func(t *testing.T, m *Manager, id string)
+	}
+	cases := []stepCase{
+		{
+			name: "straddle_take_control",
+			mid: func(t *testing.T, m *Manager, id string) {
+				if _, e := m.Handle(context.Background(), req("take_control", `{"surface_id":"`+id+`","owner":"human"}`)); e != nil {
+					t.Fatal(e)
+				}
+			},
+			after: func(t *testing.T, m *Manager, id string) {
+				if _, e := m.Handle(context.Background(), req("release_control", `{"surface_id":"`+id+`"}`)); e != nil {
+					t.Fatal(e)
+				}
+			},
+		},
+		{
+			name: "straddle_release_control",
+			setup: func(t *testing.T, m *Manager, id string) {
+				if _, e := m.Handle(context.Background(), req("take_control", `{"surface_id":"`+id+`","owner":"human"}`)); e != nil {
+					t.Fatal(e)
+				}
+			},
+			mid: func(t *testing.T, m *Manager, id string) {
+				if _, e := m.Handle(context.Background(), req("release_control", `{"surface_id":"`+id+`"}`)); e != nil {
+					t.Fatal(e)
+				}
+			},
+		},
+		{
+			name: "straddle_take_and_release_no_human_input",
+			mid: func(t *testing.T, m *Manager, id string) {
+				if _, e := m.Handle(context.Background(), req("take_control", `{"surface_id":"`+id+`","owner":"human"}`)); e != nil {
+					t.Fatal(e)
+				}
+				if _, e := m.Handle(context.Background(), req("release_control", `{"surface_id":"`+id+`"}`)); e != nil {
+					t.Fatal(e)
+				}
+			},
+		},
+		{
+			name: "straddle_take_human_input_and_release",
+			mid: func(t *testing.T, m *Manager, id string) {
+				if _, e := m.Handle(context.Background(), req("take_control", `{"surface_id":"`+id+`","owner":"human"}`)); e != nil {
+					t.Fatal(e)
+				}
+				if _, e := m.Handle(context.Background(), req("input", `{"surface_id":"`+id+`","proposal_id":"h-mid","origin":"human","action":{"type":"key","keys":["a"]}}`)); e != nil {
+					t.Fatal(e)
+				}
+				if _, e := m.Handle(context.Background(), req("release_control", `{"surface_id":"`+id+`"}`)); e != nil {
+					t.Fatal(e)
+				}
+			},
+		},
+	}
+
+	for _, mode := range []string{"cli", "resident"} {
+		for _, tc := range cases {
+			t.Run(mode+"_"+tc.name, func(t *testing.T) {
+				r := &straddleCaptureRunner{
+					frameStarted: make(chan struct{}),
+					frameFinish:  make(chan struct{}),
+				}
+				m := testManager(t, &scriptRunner{})
+				m.runner = r
+				id := createID(t, m)
+				if tc.setup != nil {
+					tc.setup(t, m, id)
+				}
+				capErr := make(chan error, 1)
+				if mode == "cli" {
+					go func() {
+						_, _, err := m.Capture(context.Background(), id)
+						capErr <- err
+					}()
+				} else {
+					go func() {
+						_, _, err := m.CaptureResident(context.Background(), id, func(Binding) (NativeFrame, error) {
+							close(r.frameStarted)
+							<-r.frameFinish
+							return NativeFrame{CaptureMonoNS: 150}, nil
+						})
+						capErr <- err
+					}()
+				}
+				awaitSignal(t, r.frameStarted)
+				tc.mid(t, m, id)
+				close(r.frameFinish)
+				select {
+				case err := <-capErr:
+					requireFault(t, err, "POLICY")
+				case <-time.After(time.Second):
+					t.Fatal("capture completion timed out")
+				}
+				if tc.after != nil {
+					tc.after(t, m, id)
+				}
+				// Verify that the post-release refresh fence remains intact and blocks agent input
+				// until a fresh post-handoff capture succeeds.
+				_, e := m.Handle(context.Background(), req("input", `{"surface_id":"`+id+`","proposal_id":"agent-stale","action":{"type":"key","keys":["a"]}}`))
+				requireFault(t, e, "POLICY")
+
+				// Fresh capture after handoff succeeds and clears the refresh fence.
+				r.frameStarted = nil
+				r.frameFinish = nil
+				if mode == "cli" {
+					if _, _, e := m.Capture(context.Background(), id); e != nil {
+						t.Fatalf("fresh post-handoff CLI capture failed: %v", e)
+					}
+				} else {
+					if _, _, e := m.CaptureResident(context.Background(), id, func(Binding) (NativeFrame, error) {
+						return NativeFrame{CaptureMonoNS: 150}, nil
+					}); e != nil {
+						t.Fatalf("fresh post-handoff resident capture failed: %v", e)
+					}
+				}
+				if _, e := m.Handle(context.Background(), req("input", `{"surface_id":"`+id+`","proposal_id":"agent-fresh","action":{"type":"key","keys":["a"]}}`)); e != nil {
+					t.Fatalf("agent input after fresh capture failed: %v", e)
+				}
+			})
+		}
+	}
+}
+

@@ -62,6 +62,7 @@ func (m *Manager) control(r Request, version string) ([]json.RawMessage, error) 
 			return nil, fault("POLICY", "human takeover requires agent ownership")
 		}
 		b.Surface.Control = "human"
+		m.nextInputEpoch(q.SurfaceID)
 		for _, p := range m.pending {
 			if p.surface == q.SurfaceID {
 				p.cancelled = true
@@ -73,6 +74,7 @@ func (m *Manager) control(r Request, version string) ([]json.RawMessage, error) 
 			return nil, fault("POLICY", "takeover input must be drained before release")
 		}
 		b.Surface.Control = "agent"
+		m.nextInputEpoch(q.SurfaceID)
 		m.refresh[q.SurfaceID] = true
 	}
 	m.bindings[q.SurfaceID] = b

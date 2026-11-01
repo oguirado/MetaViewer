@@ -1,0 +1,1 @@
+- Advance the per-surface input epoch (`m.nextInputEpoch`) on every ownership transition (`take_control` and `release_control`) in `daemon-adapter/internal/capsule/handoff.go` so in-flight CLI and resident captures straddling a handoff are rejected with `POLICY` and cannot clear the post-release refresh fence.
