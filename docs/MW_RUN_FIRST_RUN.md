@@ -77,6 +77,7 @@ was started with, and `$MV_WENDER_ROOT` is the wender-agent checkout at its
 | `MW_GATE_IO` | Provenance file missing (message names the file) | Step 3 |
 | `MW_NETWORK` | Start witness missing or mismatched, or network setting changed | Restart after a network change; for a container binding mismatch, see below |
 | `MW_RUN_NO_SURFACE` / `MW_RUN_AMBIGUOUS` | Zero or several live surfaces for `mv-live-1` | Keep one capsule for the identity |
+| `MW_WALL_DEADLINE` | Run exceeded the wall-clock deadline (`rc 6`) because a native, socket, or sleep seam blocked | Inspect `report.json` and check core and capsule responsiveness before retrying |
 
 ### Packaged rehearsal finding
 
