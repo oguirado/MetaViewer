@@ -203,7 +203,7 @@ chk_bundle_arch() {
     fi
 }
 
-SYSDEP_BASE="Xvfb:xvfb xdpyinfo:x11-utils xauth:xauth tar:tar zip:zip strace:strace git:git sha256sum:coreutils python3:python3 pip3:python3-pip"
+SYSDEP_BASE="Xvfb:xvfb xdpyinfo:x11-utils xauth:xauth tar:tar zip:zip unzip:unzip strace:strace git:git sha256sum:coreutils python3:python3 pip3:python3-pip"
 missing_packages() {
     local pair tool pkg list="" want=$SYSDEP_BASE
     [ "$TIER" = T2 ] && want="$want docker:docker.io"

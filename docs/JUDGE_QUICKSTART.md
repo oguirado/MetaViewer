@@ -74,6 +74,16 @@ run the package checks `--verify-install` and `--smoke`. Success ends with
 `METAVIEWER_MAIN_SMOKE_OK` [CITED: `docs/INSTALL.md`] and writes `judge_receipt.json`
 (architecture, core count, memory, versions, digests; never identity-store contents).
 
+### System packages
+
+A clean Ubuntu host needs the system packages checked by `scripts/judge/preflight.sh` (`tar` plus):
+
+```text
+sudo apt-get install -y xvfb x11-utils xauth zip unzip strace git coreutils python3 python3-pip
+```
+
+Tier T2 (`--capsules`) additionally requires `docker.io` (or `docker-ce`, rootful Docker Engine) [CITED: `scripts/judge/preflight.sh`]. Building the Linux package from source (`scripts/bootstrap.sh` / `ui/tools/package.js`) additionally requires Node 24 (`>=24` [CITED: `ui/package.json`]), Go (`1.26.0` [CITED: `daemon-adapter/go.mod`]) and Rust (`1.97.0` compiler and Clippy, `1.92.0` formatter [CITED: `Cargo.toml`, `.github/workflows/ci.yml`]) per the CI pins in [INSTALL.md](INSTALL.md#required-toolchains-and-pins).
+
 ### Docker (tier T2 only)
 
 Docker must be rootful Docker Engine, reachable by your user through the `docker` group

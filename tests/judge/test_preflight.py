@@ -6,8 +6,15 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import judge_sandbox  # noqa: E402
 from judge_sandbox import Sandbox  # noqa: E402
 import judge_scenarios as sc  # noqa: E402
+
+# [TARGET, unit decision] Register unzip in the sandbox tool set so preflight's
+# SYSDEP_BASE check sees unzip on a clean sandboxed host without modifying
+# tests/judge/judge_sandbox.py (which lies outside this unit's surface).
+if "unzip" not in judge_sandbox.SIMPLE_TOOLS:
+    judge_sandbox.SIMPLE_TOOLS = (*judge_sandbox.SIMPLE_TOOLS, "unzip")
 
 
 class PreflightCase(unittest.TestCase):
@@ -96,6 +103,36 @@ class TestRefusals(PreflightCase):
         res = self.pf("--tier", "T1")
         self.assertIn("sudo apt-get install -y xvfb zip", res.err)
         self.assertEqual(self.pf("--sysdep-packages", "--tier", "T1").out.strip(), "xvfb zip")
+
+    def test_sysdep_unzip_missing_is_reported_in_fix_and_packages(self):
+        self.sb.drop_tool("unzip")
+        res = self.pf("--tier", "T1")
+        self.assertEqual(res.rc, 2)
+        self.assertIn("JUDGE_SYSDEP", res.codes, res.text)
+        self.assertIn("missing system tools (packages: unzip)", res.err)
+        self.assertIn("sudo apt-get install -y unzip", res.err)
+        self.assertEqual(self.pf("--sysdep-packages", "--tier", "T1").out.strip(), "unzip")
+
+    def test_sysdep_order_and_dedupe_with_unzip(self):
+        self.sb.drop_tool("Xvfb")
+        self.sb.drop_tool("zip")
+        self.sb.drop_tool("unzip")
+        self.sb.drop_tool("strace")
+        res = self.pf("--tier", "T1")
+        self.assertEqual(res.rc, 2)
+        self.assertIn("sudo apt-get install -y xvfb zip unzip strace", res.err)
+        self.assertEqual(self.pf("--sysdep-packages", "--tier", "T1").out.strip(), "xvfb zip unzip strace")
+
+    def test_sysdep_unzip_mutant_removed_from_sysdep_base_is_killed(self):
+        pf_script = self.sb.kit / "judge" / "preflight.sh"
+        original = pf_script.read_text(encoding="utf-8")
+        mutated = original.replace(" unzip:unzip", "")
+        self.assertNotEqual(mutated, original, "SYSDEP_BASE must include unzip:unzip")
+        pf_script.write_text(mutated, encoding="utf-8")
+        self.sb.drop_tool("unzip")
+        res = self.pf("--tier", "T1")
+        self.assertNotIn("JUDGE_SYSDEP", res.codes, "mutant without unzip:unzip fails to detect missing unzip")
+        self.assertEqual(self.pf("--sysdep-packages", "--tier", "T1").out.strip(), "")
 
     def test_docker_is_a_sysdep_only_at_t2(self):
         self.sb.drop_tool("docker")

@@ -1,0 +1,1 @@
+- Add `unzip:unzip` to `SYSDEP_BASE` in `scripts/judge/preflight.sh`, cover missing `unzip` and its removal mutant in `tests/judge/test_preflight.py`, and document clean Ubuntu system packages (`xvfb x11-utils xauth zip unzip strace git coreutils python3 python3-pip`, plus `docker.io` for T2) and source-build toolchain pins (Node 24, Go, Rust) in `docs/JUDGE_QUICKSTART.md`.
