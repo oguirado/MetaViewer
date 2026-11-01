@@ -19,17 +19,17 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 2,723 | 55 | 2,668 |
-| Lanes finished OK | 2,723 | 55 | 2,668 |
-| Agent steps | 83,766 | 2,705 | 81,061 |
-| Lane-hours of agent work | 185.8 | 5.2 | 180.6 |
-| Fresh input tokens | 315,143,498 | 11,482,034 | 303,661,464 |
-| Cache-read input tokens | 5,463,368,560 | 226,255,212 | 5,237,113,348 |
-| Prompt cache hit % | 94.5 | 95.2 | 94.5 |
-| Output tokens | 64,453,291 | 2,135,708 | 62,317,583 |
-| Thinking tokens | 39,723,244 | 1,050,039 | 38,673,205 |
-| Cost (USD) | 55.3317 | 2.0279 | 53.3039 |
-| Cost per lane (USD) | 0.0203 | 0.0369 | 0.02 |
+| Lanes launched | 2,990 | 55 | 2,935 |
+| Lanes finished OK | 2,990 | 55 | 2,935 |
+| Agent steps | 88,584 | 2,705 | 85,879 |
+| Lane-hours of agent work | 195.1 | 5.2 | 189.9 |
+| Fresh input tokens | 331,882,621 | 11,482,034 | 320,400,587 |
+| Cache-read input tokens | 5,661,359,078 | 226,255,212 | 5,435,103,866 |
+| Prompt cache hit % | 94.5 | 95.2 | 94.4 |
+| Output tokens | 67,988,505 | 2,135,708 | 65,852,797 |
+| Thinking tokens | 42,145,659 | 1,050,039 | 41,095,620 |
+| Cost (USD) | 58.1087 | 2.0279 | 56.0808 |
+| Cost per lane (USD) | 0.0194 | 0.0369 | 0.0191 |
 
 Rooms: 136. Peak concurrent lanes [MEASURED from lane start/end]: 42.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
@@ -38,7 +38,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 2334 | 93.7 | 39.0842 |
+| build | 2601 | 93.6 | 41.8612 |
 | context | 42 | 95.9 | 1.9093 |
 | context packs + test ideation (U-DEC-0139) | 13 | 91.1 | 0.2195 |
 | demo | 4 | 90.7 | 0.0557 |
@@ -86,7 +86,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 1996 | 93.6 | 30.8057 | direct Muse job |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 2263 | 93.5 | 33.5826 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -2928,7 +2928,274 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | 32627_rev_UI-CONTROL-ARM_b | fill_132627_rev_UI-CONTROL-ARM_b | Nov 01 13:27 | yes | 13 | 88.5 | 0.007947 |
 | direct-direct | 32734_rev_UI-CONTROL-ARM_a | fill_132734_rev_UI-CONTROL-ARM_a | Nov 01 13:28 | yes | 14 | 89.8 | 0.009726 |
 | direct-direct | 32734_rev_UI-CONTROL-ARM_b | fill_132734_rev_UI-CONTROL-ARM_b | Nov 01 13:28 | yes | 15 | 90.1 | 0.008426 |
+| direct-direct | 32840_rev_UI-CONTROL-ARM_a | fill_132840_rev_UI-CONTROL-ARM_a | Nov 01 13:29 | yes | 17 | 91.9 | 0.011493 |
 | direct-direct | 32840_rev_UI-CONTROL-ARM_b | fill_132840_rev_UI-CONTROL-ARM_b | Nov 01 13:29 | yes | 25 | 91.5 | 0.01451 |
+| direct-direct | 32946_rev_UI-CONTROL-ARM_a | fill_132946_rev_UI-CONTROL-ARM_a | Nov 01 13:30 | yes | 11 | 86.7 | 0.010877 |
+| direct-direct | 32946_rev_UI-CONTROL-ARM_b | fill_132946_rev_UI-CONTROL-ARM_b | Nov 01 13:30 | yes | 20 | 91.6 | 0.010721 |
+| direct-direct | 33052_rev_UI-CONTROL-ARM_a | fill_133052_rev_UI-CONTROL-ARM_a | Nov 01 13:31 | yes | 36 | 95.0 | 0.015019 |
+| direct-direct | 33052_rev_UI-CONTROL-ARM_b | fill_133052_rev_UI-CONTROL-ARM_b | Nov 01 13:31 | yes | 15 | 89.5 | 0.010583 |
+| direct-direct | 33158_rev_UI-CONTROL-ARM_a | fill_133158_rev_UI-CONTROL-ARM_a | Nov 01 13:32 | yes | 20 | 89.3 | 0.016197 |
+| direct-direct | 33158_rev_UI-CONTROL-ARM_b | fill_133158_rev_UI-CONTROL-ARM_b | Nov 01 13:33 | yes | 31 | 94.8 | 0.013836 |
+| direct-direct | 33304_rev_UI-CONTROL-ARM_a | fill_133304_rev_UI-CONTROL-ARM_a | Nov 01 13:34 | yes | 22 | 92.3 | 0.012853 |
+| direct-direct | 33304_rev_UI-CONTROL-ARM_b | fill_133304_rev_UI-CONTROL-ARM_b | Nov 01 13:34 | yes | 11 | 80.4 | 0.00983 |
+| direct-direct | 33411_rev_UI-CONTROL-ARM_a | fill_133411_rev_UI-CONTROL-ARM_a | Nov 01 13:35 | yes | 19 | 91.6 | 0.010934 |
+| direct-direct | 33411_rev_UI-CONTROL-ARM_b | fill_133411_rev_UI-CONTROL-ARM_b | Nov 01 13:35 | yes | 24 | 93.6 | 0.013395 |
+| direct-direct | 33517_rev_UI-CONTROL-ARM_a | fill_133517_rev_UI-CONTROL-ARM_a | Nov 01 13:36 | yes | 29 | 94.1 | 0.015568 |
+| direct-direct | 33517_rev_UI-CONTROL-ARM_b | fill_133517_rev_UI-CONTROL-ARM_b | Nov 01 13:36 | yes | 12 | 86.7 | 0.008224 |
+| direct-direct | 33623_rev_UI-CONTROL-ARM_a | fill_133623_rev_UI-CONTROL-ARM_a | Nov 01 13:37 | yes | 15 | 89.5 | 0.010021 |
+| direct-direct | 33623_rev_UI-CONTROL-ARM_b | fill_133623_rev_UI-CONTROL-ARM_b | Nov 01 13:37 | yes | 12 | 81.0 | 0.010799 |
+| direct-direct | 33729_rev_UI-CONTROL-ARM_a | fill_133729_rev_UI-CONTROL-ARM_a | Nov 01 13:38 | yes | 16 | 90.2 | 0.008849 |
+| direct-direct | 33729_rev_UI-CONTROL-ARM_b | fill_133729_rev_UI-CONTROL-ARM_b | Nov 01 13:38 | yes | 14 | 84.3 | 0.014205 |
+| direct-direct | 33835_rev_UI-CONTROL-ARM_a | fill_133835_rev_UI-CONTROL-ARM_a | Nov 01 13:39 | yes | 13 | 88.4 | 0.008142 |
+| direct-direct | 33835_rev_UI-CONTROL-ARM_b | fill_133835_rev_UI-CONTROL-ARM_b | Nov 01 13:39 | yes | 20 | 92.6 | 0.009783 |
+| direct-direct | 33941_rev_UI-CONTROL-ARM_a | fill_133941_rev_UI-CONTROL-ARM_a | Nov 01 13:40 | yes | 35 | 95.1 | 0.016594 |
+| direct-direct | 33941_rev_UI-CONTROL-ARM_b | fill_133941_rev_UI-CONTROL-ARM_b | Nov 01 13:40 | yes | 16 | 90.9 | 0.009921 |
+| direct-direct | 34047_rev_UI-CONTROL-ARM_a | fill_134047_rev_UI-CONTROL-ARM_a | Nov 01 13:41 | yes | 23 | 93.1 | 0.01451 |
+| direct-direct | 34047_rev_UI-CONTROL-ARM_b | fill_134047_rev_UI-CONTROL-ARM_b | Nov 01 13:41 | yes | 20 | 91.6 | 0.012581 |
+| direct-direct | 34154_rev_UI-CONTROL-ARM_a | fill_134154_rev_UI-CONTROL-ARM_a | Nov 01 13:42 | yes | 18 | 91.7 | 0.010948 |
+| direct-direct | 34154_rev_UI-CONTROL-ARM_b | fill_134154_rev_UI-CONTROL-ARM_b | Nov 01 13:42 | yes | 27 | 94.8 | 0.011723 |
+| direct-direct | 34154_rev_UI-CONTROL-ARM-R2_a | fill_134154_rev_UI-CONTROL-ARM-R2_a | Nov 01 13:43 | yes | 10 | 85.7 | 0.006154 |
+| direct-direct | 34154_rev_UI-CONTROL-ARM-R2_b | fill_134154_rev_UI-CONTROL-ARM-R2_b | Nov 01 13:43 | yes | 13 | 88.2 | 0.008781 |
+| direct-direct | 34306_rev_OS-VIEW-LOGIN-TOKEN_a | fill_134306_rev_OS-VIEW-LOGIN-TOKEN_a | Nov 01 13:44 | yes | 18 | 91.9 | 0.009249 |
+| direct-direct | 34306_rev_OS-VIEW-LOGIN-TOKEN_b | fill_134306_rev_OS-VIEW-LOGIN-TOKEN_b | Nov 01 13:44 | yes | 10 | 88.8 | 0.005734 |
+| direct-direct | 34306_rev_OS-XPRA-RESIZE_a | fill_134306_rev_OS-XPRA-RESIZE_a | Nov 01 13:44 | yes | 16 | 90.9 | 0.00896 |
+| direct-direct | 34306_rev_OS-XPRA-RESIZE_b | fill_134306_rev_OS-XPRA-RESIZE_b | Nov 01 13:44 | yes | 9 | 86.2 | 0.005418 |
+| direct-direct | 34306_rev_UI-CONTROL-ARM_a | fill_134306_rev_UI-CONTROL-ARM_a | Nov 01 13:44 | yes | 27 | 93.9 | 0.013114 |
+| direct-direct | 34306_rev_UI-CONTROL-ARM_b | fill_134306_rev_UI-CONTROL-ARM_b | Nov 01 13:44 | yes | 18 | 89.4 | 0.012153 |
+| direct-direct | 34306_rev_UI-CONTROL-ARM-R2_a | fill_134306_rev_UI-CONTROL-ARM-R2_a | Nov 01 13:44 | yes | 20 | 92.7 | 0.010275 |
+| direct-direct | 34306_rev_UI-CONTROL-ARM-R2_b | fill_134306_rev_UI-CONTROL-ARM-R2_b | Nov 01 13:44 | yes | 27 | 93.8 | 0.013348 |
+| direct-direct | 34431_rev_OS-VIEW-LOGIN-TOKEN_a | fill_134431_rev_OS-VIEW-LOGIN-TOKEN_a | Nov 01 13:45 | yes | 9 | 85.8 | 0.006192 |
+| direct-direct | 34431_rev_OS-VIEW-LOGIN-TOKEN_b | fill_134431_rev_OS-VIEW-LOGIN-TOKEN_b | Nov 01 13:45 | yes | 10 | 89.4 | 0.005908 |
+| direct-direct | 34431_rev_OS-XPRA-RESIZE_a | fill_134431_rev_OS-XPRA-RESIZE_a | Nov 01 13:45 | yes | 15 | 91.0 | 0.007789 |
+| direct-direct | 34431_rev_OS-XPRA-RESIZE_b | fill_134431_rev_OS-XPRA-RESIZE_b | Nov 01 13:45 | yes | 14 | 89.9 | 0.006855 |
+| direct-direct | 34431_rev_UI-CONTROL-ARM_a | fill_134431_rev_UI-CONTROL-ARM_a | Nov 01 13:45 | yes | 11 | 88.2 | 0.006453 |
+| direct-direct | 34431_rev_UI-CONTROL-ARM_b | fill_134431_rev_UI-CONTROL-ARM_b | Nov 01 13:45 | yes | 22 | 92.9 | 0.012037 |
+| direct-direct | 34431_rev_UI-CONTROL-ARM-R2_a | fill_134431_rev_UI-CONTROL-ARM-R2_a | Nov 01 13:45 | yes | 13 | 88.3 | 0.009751 |
+| direct-direct | 34431_rev_UI-CONTROL-ARM-R2_b | fill_134431_rev_UI-CONTROL-ARM-R2_b | Nov 01 13:45 | yes | 17 | 91.5 | 0.010269 |
+| direct-direct | 34555_rev_OS-VIEW-LOGIN-TOKEN_a | fill_134555_rev_OS-VIEW-LOGIN-TOKEN_a | Nov 01 13:46 | yes | 10 | 87.8 | 0.006126 |
+| direct-direct | 34555_rev_OS-VIEW-LOGIN-TOKEN_b | fill_134555_rev_OS-VIEW-LOGIN-TOKEN_b | Nov 01 13:46 | yes | 6 | 79.9 | 0.004796 |
+| direct-direct | 34555_rev_OS-XPRA-RESIZE_a | fill_134555_rev_OS-XPRA-RESIZE_a | Nov 01 13:47 | yes | 10 | 90.9 | 0.003689 |
+| direct-direct | 34555_rev_OS-XPRA-RESIZE_b | fill_134555_rev_OS-XPRA-RESIZE_b | Nov 01 13:47 | yes | 22 | 92.9 | 0.009305 |
+| direct-direct | 34555_rev_UI-CONTROL-ARM_a | fill_134555_rev_UI-CONTROL-ARM_a | Nov 01 13:47 | yes | 29 | 94.5 | 0.015829 |
+| direct-direct | 34555_rev_UI-CONTROL-ARM_b | fill_134555_rev_UI-CONTROL-ARM_b | Nov 01 13:47 | yes | 14 | 89.4 | 0.009424 |
+| direct-direct | 34555_rev_UI-CONTROL-ARM-R2_a | fill_134555_rev_UI-CONTROL-ARM-R2_a | Nov 01 13:47 | yes | 12 | 89.2 | 0.007534 |
+| direct-direct | 34555_rev_UI-CONTROL-ARM-R2_b | fill_134555_rev_UI-CONTROL-ARM-R2_b | Nov 01 13:47 | yes | 24 | 93.0 | 0.014377 |
+| direct-direct | 34720_lane_r4_app_close | fill_134720_lane_r4_app_close | Nov 01 13:48 | yes | 63 | 96.0 | 0.042141 |
+| direct-direct | 34720_lane_r4_automate_demo | fill_134720_lane_r4_automate_demo | Nov 01 13:48 | yes | 51 | 96.0 | 0.024771 |
+| direct-direct | 34720_lane_r4_capsule_close_reopen | fill_134720_lane_r4_capsule_close_reopen | Nov 01 13:48 | yes | 27 | 91.4 | 0.020201 |
+| direct-direct | 34720_lane_r4_captcha_handoff | fill_134720_lane_r4_captcha_handoff | Nov 01 13:48 | yes | 56 | 96.1 | 0.02962 |
+| direct-direct | 34720_lane_r4_chatgpt_gemini | fill_134720_lane_r4_chatgpt_gemini | Nov 01 13:48 | yes | 42 | 94.6 | 0.023529 |
+| direct-direct | 34720_lane_r4_display | fill_134720_lane_r4_display | Nov 01 13:48 | yes | 51 | 95.3 | 0.029923 |
+| direct-direct | 34720_lane_r4_identities | fill_134720_lane_r4_identities | Nov 01 13:48 | yes | 42 | 95.4 | 0.022727 |
+| direct-direct | 34720_lane_r4_launch | fill_134720_lane_r4_launch | Nov 01 13:48 | yes | 41 | 94.6 | 0.0316 |
+| direct-direct | 34720_lane_r4_multislot | fill_134720_lane_r4_multislot | Nov 01 13:48 | yes | 38 | 94.4 | 0.024607 |
+| direct-direct | 34720_lane_r4_network | fill_134720_lane_r4_network | Nov 01 13:48 | yes | 32 | 93.7 | 0.020508 |
+| direct-direct | 34720_lane_r4_settings | fill_134720_lane_r4_settings | Nov 01 13:48 | yes | 40 | 95.1 | 0.021938 |
+| direct-direct | 34720_lane_r4_storyboard | fill_134720_lane_r4_storyboard | Nov 01 13:48 | yes | 59 | 96.2 | 0.03304 |
+| direct-direct | 34720_lane_r4_terminal | fill_134720_lane_r4_terminal | Nov 01 13:48 | yes | 31 | 93.4 | 0.021277 |
+| direct-direct | 34720_lane_r4_use_metaviewer | fill_134720_lane_r4_use_metaviewer | Nov 01 13:49 | yes | 50 | 95.6 | 0.03062 |
+| direct-direct | 34720_rev_OS-VIEW-LOGIN-TOKEN_a | fill_134720_rev_OS-VIEW-LOGIN-TOKEN_a | Nov 01 13:49 | yes | 15 | 89.0 | 0.009809 |
+| direct-direct | 34720_rev_OS-VIEW-LOGIN-TOKEN_b | fill_134720_rev_OS-VIEW-LOGIN-TOKEN_b | Nov 01 13:49 | yes | 17 | 91.0 | 0.009815 |
+| direct-direct | 34720_rev_OS-XPRA-RESIZE_a | fill_134720_rev_OS-XPRA-RESIZE_a | Nov 01 13:49 | yes | 18 | 93.0 | 0.006383 |
+| direct-direct | 34720_rev_OS-XPRA-RESIZE_b | fill_134720_rev_OS-XPRA-RESIZE_b | Nov 01 13:49 | yes | 14 | 81.9 | 0.010213 |
+| direct-direct | -VIEW-LOGIN-TOKEN_a | r1x_OS-VIEW-LOGIN-TOKEN_a | Nov 01 13:49 | yes | 27 | 94.1 | 0.012642 |
+| direct-direct | -VIEW-LOGIN-TOKEN_b | r1x_OS-VIEW-LOGIN-TOKEN_b | Nov 01 13:49 | yes | 30 | 93.4 | 0.01792 |
+| direct-direct | 34720_rev_UI-CONTROL-ARM_a | fill_134720_rev_UI-CONTROL-ARM_a | Nov 01 13:51 | yes | 12 | 83.9 | 0.011069 |
+| direct-direct | 34720_rev_UI-CONTROL-ARM_b | fill_134720_rev_UI-CONTROL-ARM_b | Nov 01 13:51 | yes | 17 | 91.5 | 0.009805 |
+| direct-direct | 34720_rev_UI-CONTROL-ARM-R2_a | fill_134720_rev_UI-CONTROL-ARM-R2_a | Nov 01 13:51 | yes | 10 | 86.7 | 0.007029 |
+| direct-direct | 34720_rev_UI-CONTROL-ARM-R2_b | fill_134720_rev_UI-CONTROL-ARM-R2_b | Nov 01 13:51 | yes | 22 | 93.1 | 0.011581 |
+| direct-direct | 35127_rev_ADAPTER-VIEW-TOKEN_a | fill_135127_rev_ADAPTER-VIEW-TOKEN_a | Nov 01 13:52 | yes | 20 | 91.6 | 0.012416 |
+| direct-direct | 35127_rev_ADAPTER-VIEW-TOKEN_b | fill_135127_rev_ADAPTER-VIEW-TOKEN_b | Nov 01 13:52 | yes | 10 | 85.8 | 0.006458 |
+| direct-direct | 35127_rev_OS-XPRA-RESIZE_a | fill_135127_rev_OS-XPRA-RESIZE_a | Nov 01 13:52 | yes | 19 | 91.8 | 0.008774 |
+| direct-direct | 35127_rev_OS-XPRA-RESIZE_b | fill_135127_rev_OS-XPRA-RESIZE_b | Nov 01 13:52 | yes | 14 | 90.5 | 0.009125 |
+| direct-direct | 35127_rev_UI-CONTROL-ARM_a | fill_135127_rev_UI-CONTROL-ARM_a | Nov 01 13:53 | yes | 17 | 91.2 | 0.012101 |
+| direct-direct | 35127_rev_UI-CONTROL-ARM_b | fill_135127_rev_UI-CONTROL-ARM_b | Nov 01 13:53 | yes | 9 | 86.3 | 0.0059 |
+| direct-direct | 35127_rev_UI-CONTROL-ARM-R2_a | fill_135127_rev_UI-CONTROL-ARM-R2_a | Nov 01 13:53 | yes | 12 | 87.9 | 0.007577 |
+| direct-direct | 35127_rev_UI-CONTROL-ARM-R2_b | fill_135127_rev_UI-CONTROL-ARM-R2_b | Nov 01 13:53 | yes | 11 | 87.4 | 0.00813 |
+| direct-direct | 35352_rev_ADAPTER-VIEW-TOKEN_a | fill_135352_rev_ADAPTER-VIEW-TOKEN_a | Nov 01 13:54 | yes | 25 | 93.5 | 0.012685 |
+| direct-direct | 35352_rev_ADAPTER-VIEW-TOKEN_b | fill_135352_rev_ADAPTER-VIEW-TOKEN_b | Nov 01 13:54 | yes | 23 | 92.9 | 0.01221 |
+| direct-direct | 35352_rev_OS-XPRA-RESIZE_a | fill_135352_rev_OS-XPRA-RESIZE_a | Nov 01 13:54 | yes | 10 | 89.0 | 0.004798 |
+| direct-direct | 35352_rev_OS-XPRA-RESIZE_b | fill_135352_rev_OS-XPRA-RESIZE_b | Nov 01 13:55 | yes | 22 | 92.6 | 0.011561 |
+| direct-direct | 35352_rev_UI-CONTROL-ARM_a | fill_135352_rev_UI-CONTROL-ARM_a | Nov 01 13:55 | yes | 15 | 86.6 | 0.010782 |
+| direct-direct | 35352_rev_UI-CONTROL-ARM_b | fill_135352_rev_UI-CONTROL-ARM_b | Nov 01 13:55 | yes | 19 | 92.0 | 0.012535 |
+| direct-direct | 35352_rev_UI-CONTROL-ARM-R2_a | fill_135352_rev_UI-CONTROL-ARM-R2_a | Nov 01 13:55 | yes | 13 | 86.8 | 0.009586 |
+| direct-direct | 35352_rev_UI-CONTROL-ARM-R2_b | fill_135352_rev_UI-CONTROL-ARM-R2_b | Nov 01 13:55 | yes | 14 | 89.8 | 0.00842 |
+| direct-direct | 35517_rev_ADAPTER-VIEW-TOKEN_a | fill_135517_rev_ADAPTER-VIEW-TOKEN_a | Nov 01 13:56 | yes | 15 | 90.0 | 0.007653 |
+| direct-direct | 35517_rev_ADAPTER-VIEW-TOKEN_b | fill_135517_rev_ADAPTER-VIEW-TOKEN_b | Nov 01 13:56 | yes | 29 | 94.3 | 0.017744 |
+| direct-direct | 35517_rev_OS-XPRA-RESIZE_a | fill_135517_rev_OS-XPRA-RESIZE_a | Nov 01 13:56 | yes | 9 | 87.5 | 0.005944 |
+| direct-direct | 35517_rev_OS-XPRA-RESIZE_b | fill_135517_rev_OS-XPRA-RESIZE_b | Nov 01 13:56 | yes | 15 | 90.4 | 0.007468 |
+| direct-direct | 35517_rev_UI-CONTROL-ARM_a | fill_135517_rev_UI-CONTROL-ARM_a | Nov 01 13:56 | yes | 15 | 90.2 | 0.008345 |
+| direct-direct | 35517_rev_UI-CONTROL-ARM_b | fill_135517_rev_UI-CONTROL-ARM_b | Nov 01 13:56 | yes | 24 | 93.3 | 0.01121 |
+| direct-direct | 35517_rev_UI-CONTROL-ARM-R2_a | fill_135517_rev_UI-CONTROL-ARM-R2_a | Nov 01 13:56 | yes | 24 | 93.8 | 0.012185 |
+| direct-direct | 35517_rev_UI-CONTROL-ARM-R2_b | fill_135517_rev_UI-CONTROL-ARM-R2_b | Nov 01 13:56 | yes | 16 | 89.7 | 0.010417 |
+| direct-direct | 35641_rev_ADAPTER-VIEW-TOKEN_a | fill_135641_rev_ADAPTER-VIEW-TOKEN_a | Nov 01 13:57 | yes | 14 | 90.0 | 0.008081 |
+| direct-direct | 35641_rev_ADAPTER-VIEW-TOKEN_b | fill_135641_rev_ADAPTER-VIEW-TOKEN_b | Nov 01 13:57 | yes | 15 | 90.8 | 0.008009 |
+| direct-direct | 35641_rev_MAIN-RSS-MEASURE_a | fill_135641_rev_MAIN-RSS-MEASURE_a | Nov 01 13:57 | yes | 11 | 89.7 | 0.005184 |
+| direct-direct | 35641_rev_MAIN-RSS-MEASURE_b | fill_135641_rev_MAIN-RSS-MEASURE_b | Nov 01 13:57 | yes | 9 | 86.7 | 0.006834 |
+| direct-direct | 35641_rev_OS-XPRA-RESIZE_a | fill_135641_rev_OS-XPRA-RESIZE_a | Nov 01 13:57 | yes | 21 | 93.9 | 0.008525 |
+| direct-direct | 35641_rev_OS-XPRA-RESIZE_b | fill_135641_rev_OS-XPRA-RESIZE_b | Nov 01 13:57 | yes | 11 | 87.2 | 0.008059 |
+| direct-direct | 35641_rev_UI-CONTROL-ARM_a | fill_135641_rev_UI-CONTROL-ARM_a | Nov 01 13:58 | yes | 22 | 93.1 | 0.012595 |
+| direct-direct | 35641_rev_UI-CONTROL-ARM_b | fill_135641_rev_UI-CONTROL-ARM_b | Nov 01 13:58 | yes | 15 | 90.4 | 0.008803 |
+| direct-direct | 35641_rev_UI-CONTROL-ARM-R2_a | fill_135641_rev_UI-CONTROL-ARM-R2_a | Nov 01 13:58 | yes | 9 | 83.8 | 0.007351 |
+| direct-direct | 35641_rev_UI-CONTROL-ARM-R2_b | fill_135641_rev_UI-CONTROL-ARM-R2_b | Nov 01 13:58 | yes | 13 | 89.1 | 0.010255 |
+| direct-direct | 35812_rev_ADAPTER-VIEW-TOKEN_a | fill_135812_rev_ADAPTER-VIEW-TOKEN_a | Nov 01 13:59 | yes | 24 | 93.4 | 0.013226 |
+| direct-direct | 35812_rev_ADAPTER-VIEW-TOKEN_b | fill_135812_rev_ADAPTER-VIEW-TOKEN_b | Nov 01 13:59 | yes | 22 | 92.1 | 0.014746 |
+| direct-direct | 35812_rev_MAIN-RSS-MEASURE_a | fill_135812_rev_MAIN-RSS-MEASURE_a | Nov 01 13:59 | yes | 15 | 89.9 | 0.008296 |
+| direct-direct | 35812_rev_MAIN-RSS-MEASURE_b | fill_135812_rev_MAIN-RSS-MEASURE_b | Nov 01 13:59 | yes | 11 | 91.0 | 0.004495 |
+| direct-direct | 35812_rev_OS-XPRA-RESIZE_a | fill_135812_rev_OS-XPRA-RESIZE_a | Nov 01 13:59 | yes | 20 | 92.8 | 0.01012 |
+| direct-direct | 35812_rev_OS-XPRA-RESIZE_b | fill_135812_rev_OS-XPRA-RESIZE_b | Nov 01 13:59 | yes | 27 | 93.5 | 0.013939 |
+| direct-direct | 35812_rev_UI-CONTROL-ARM_a | fill_135812_rev_UI-CONTROL-ARM_a | Nov 01 13:59 | yes | 15 | 90.4 | 0.009208 |
+| direct-direct | 35812_rev_UI-CONTROL-ARM_b | fill_135812_rev_UI-CONTROL-ARM_b | Nov 01 13:59 | yes | 12 | 89.6 | 0.006686 |
+| direct-direct | 35812_rev_UI-CONTROL-ARM-R2_a | fill_135812_rev_UI-CONTROL-ARM-R2_a | Nov 01 13:59 | yes | 21 | 92.9 | 0.0111 |
+| direct-direct | 35812_rev_UI-CONTROL-ARM-R2_b | fill_135812_rev_UI-CONTROL-ARM-R2_b | Nov 01 13:59 | yes | 15 | 90.4 | 0.008939 |
+| direct-direct | 35943_rev_ADAPTER-VIEW-TOKEN_a | fill_135943_rev_ADAPTER-VIEW-TOKEN_a | Nov 01 14:00 | yes | 17 | 90.3 | 0.012505 |
+| direct-direct | 35943_rev_ADAPTER-VIEW-TOKEN_b | fill_135943_rev_ADAPTER-VIEW-TOKEN_b | Nov 01 14:00 | yes | 16 | 91.8 | 0.007598 |
+| direct-direct | 35943_rev_MAIN-RSS-MEASURE_a | fill_135943_rev_MAIN-RSS-MEASURE_a | Nov 01 14:00 | yes | 11 | 90.5 | 0.004893 |
+| direct-direct | 35943_rev_MAIN-RSS-MEASURE_b | fill_135943_rev_MAIN-RSS-MEASURE_b | Nov 01 14:00 | yes | 20 | 93.6 | 0.008282 |
+| direct-direct | 35943_rev_OS-XPRA-RESIZE_a | fill_135943_rev_OS-XPRA-RESIZE_a | Nov 01 14:00 | yes | 24 | 92.7 | 0.016117 |
+| direct-direct | 35943_rev_OS-XPRA-RESIZE_b | fill_135943_rev_OS-XPRA-RESIZE_b | Nov 01 14:00 | yes | 9 | 84.1 | 0.00666 |
+| direct-direct | 35943_rev_UI-CONTROL-ARM_a | fill_135943_rev_UI-CONTROL-ARM_a | Nov 01 14:01 | yes | 15 | 91.6 | 0.007355 |
+| direct-direct | 35943_rev_UI-CONTROL-ARM_b | fill_135943_rev_UI-CONTROL-ARM_b | Nov 01 14:01 | yes | 15 | 90.7 | 0.009228 |
+| direct-direct | 35943_rev_UI-CONTROL-ARM-R2_a | fill_135943_rev_UI-CONTROL-ARM-R2_a | Nov 01 14:01 | yes | 15 | 90.6 | 0.008343 |
+| direct-direct | 35943_rev_UI-CONTROL-ARM-R2_b | fill_135943_rev_UI-CONTROL-ARM-R2_b | Nov 01 14:01 | yes | 10 | 84.2 | 0.008606 |
+| direct-direct | 40113_rev_ADAPTER-VIEW-TOKEN_a | fill_140113_rev_ADAPTER-VIEW-TOKEN_a | Nov 01 14:02 | yes | 12 | 87.8 | 0.008237 |
+| direct-direct | 40113_rev_ADAPTER-VIEW-TOKEN_b | fill_140113_rev_ADAPTER-VIEW-TOKEN_b | Nov 01 14:02 | yes | 16 | 90.5 | 0.009771 |
+| direct-direct | 40113_rev_MAIN-RSS-MEASURE_a | fill_140113_rev_MAIN-RSS-MEASURE_a | Nov 01 14:02 | yes | 19 | 93.2 | 0.007716 |
+| direct-direct | 40113_rev_MAIN-RSS-MEASURE_b | fill_140113_rev_MAIN-RSS-MEASURE_b | Nov 01 14:02 | yes | 9 | 86.6 | 0.004711 |
+| direct-direct | 40113_rev_OS-XPRA-RESIZE_a | fill_140113_rev_OS-XPRA-RESIZE_a | Nov 01 14:02 | yes | 9 | 84.0 | 0.007249 |
+| direct-direct | 40113_rev_OS-XPRA-RESIZE_b | fill_140113_rev_OS-XPRA-RESIZE_b | Nov 01 14:02 | yes | 10 | 86.2 | 0.006187 |
+| direct-direct | 40113_rev_UI-CONTROL-ARM_a | fill_140113_rev_UI-CONTROL-ARM_a | Nov 01 14:02 | yes | 20 | 93.0 | 0.010509 |
+| direct-direct | 40113_rev_UI-CONTROL-ARM_b | fill_140113_rev_UI-CONTROL-ARM_b | Nov 01 14:02 | yes | 15 | 90.6 | 0.009407 |
+| direct-direct | 40113_rev_UI-CONTROL-ARM-R2_a | fill_140113_rev_UI-CONTROL-ARM-R2_a | Nov 01 14:02 | yes | 16 | 91.8 | 0.007971 |
+| direct-direct | 40113_rev_UI-CONTROL-ARM-R2_b | fill_140113_rev_UI-CONTROL-ARM-R2_b | Nov 01 14:02 | yes | 32 | 94.7 | 0.016107 |
+| direct-direct | 40244_rev_ADAPTER-VIEW-TOKEN_a | fill_140244_rev_ADAPTER-VIEW-TOKEN_a | Nov 01 14:03 | yes | 15 | 90.4 | 0.009753 |
+| direct-direct | 40244_rev_ADAPTER-VIEW-TOKEN_b | fill_140244_rev_ADAPTER-VIEW-TOKEN_b | Nov 01 14:03 | yes | 20 | 92.1 | 0.012829 |
+| direct-direct | 40244_rev_MAIN-RSS-MEASURE_a | fill_140244_rev_MAIN-RSS-MEASURE_a | Nov 01 14:03 | yes | 15 | 92.2 | 0.006116 |
+| direct-direct | 40244_rev_MAIN-RSS-MEASURE_b | fill_140244_rev_MAIN-RSS-MEASURE_b | Nov 01 14:03 | yes | 12 | 91.4 | 0.004914 |
+| direct-direct | 40244_rev_OS-XPRA-RESIZE_a | fill_140244_rev_OS-XPRA-RESIZE_a | Nov 01 14:03 | yes | 15 | 90.6 | 0.008272 |
+| direct-direct | 40244_rev_OS-XPRA-RESIZE_b | fill_140244_rev_OS-XPRA-RESIZE_b | Nov 01 14:04 | yes | 14 | 90.5 | 0.00901 |
+| direct-direct | 40244_rev_UI-CONTROL-ARM_a | fill_140244_rev_UI-CONTROL-ARM_a | Nov 01 14:04 | yes | 13 | 89.2 | 0.007378 |
+| direct-direct | 40244_rev_UI-CONTROL-ARM_b | fill_140244_rev_UI-CONTROL-ARM_b | Nov 01 14:04 | yes | 11 | 81.3 | 0.009209 |
+| direct-direct | 40244_rev_UI-CONTROL-ARM-R2_a | fill_140244_rev_UI-CONTROL-ARM-R2_a | Nov 01 14:04 | yes | 14 | 89.8 | 0.008432 |
+| direct-direct | 40244_rev_UI-CONTROL-ARM-R2_b | fill_140244_rev_UI-CONTROL-ARM-R2_b | Nov 01 14:04 | yes | 16 | 91.0 | 0.009424 |
+| direct-direct | -XPRA-RESIZE_a | r1x_OS-XPRA-RESIZE_a | Nov 01 14:04 | yes | 16 | 90.8 | 0.00958 |
+| direct-direct | -XPRA-RESIZE_b | r1x_OS-XPRA-RESIZE_b | Nov 01 14:04 | yes | 35 | 94.7 | 0.018848 |
+| direct-direct | 40415_rev_ADAPTER-VIEW-TOKEN_a | fill_140415_rev_ADAPTER-VIEW-TOKEN_a | Nov 01 14:05 | yes | 26 | 93.2 | 0.013183 |
+| direct-direct | 40415_rev_ADAPTER-VIEW-TOKEN_b | fill_140415_rev_ADAPTER-VIEW-TOKEN_b | Nov 01 14:05 | yes | 12 | 86.7 | 0.008639 |
+| direct-direct | 40415_rev_MAIN-RSS-MEASURE_a | fill_140415_rev_MAIN-RSS-MEASURE_a | Nov 01 14:05 | yes | 32 | 95.1 | 0.013574 |
+| direct-direct | 40415_rev_MAIN-RSS-MEASURE_b | fill_140415_rev_MAIN-RSS-MEASURE_b | Nov 01 14:05 | yes | 18 | 91.0 | 0.00947 |
+| direct-direct | 40415_rev_UI-CONTROL-ARM_a | fill_140415_rev_UI-CONTROL-ARM_a | Nov 01 14:05 | yes | 10 | 85.0 | 0.007461 |
+| direct-direct | 40415_rev_UI-CONTROL-ARM_b | fill_140415_rev_UI-CONTROL-ARM_b | Nov 01 14:05 | yes | 21 | 94.1 | 0.008383 |
+| direct-direct | 40415_rev_UI-CONTROL-ARM-R2_a | fill_140415_rev_UI-CONTROL-ARM-R2_a | Nov 01 14:05 | yes | 12 | 88.6 | 0.006844 |
+| direct-direct | 40415_rev_UI-CONTROL-ARM-R2_b | fill_140415_rev_UI-CONTROL-ARM-R2_b | Nov 01 14:05 | yes | 13 | 89.9 | 0.007426 |
+| direct-direct | 40540_rev_ADAPTER-VIEW-TOKEN_a | fill_140540_rev_ADAPTER-VIEW-TOKEN_a | Nov 01 14:06 | yes | 20 | 92.7 | 0.010884 |
+| direct-direct | 40540_rev_ADAPTER-VIEW-TOKEN_b | fill_140540_rev_ADAPTER-VIEW-TOKEN_b | Nov 01 14:06 | yes | 15 | 90.7 | 0.008451 |
+| direct-direct | 40540_rev_MAIN-RSS-MEASURE_a | fill_140540_rev_MAIN-RSS-MEASURE_a | Nov 01 14:06 | yes | 11 | 91.0 | 0.005466 |
+| direct-direct | 40540_rev_MAIN-RSS-MEASURE_b | fill_140540_rev_MAIN-RSS-MEASURE_b | Nov 01 14:06 | yes | 10 | 88.7 | 0.00496 |
+| direct-direct | 40540_rev_UI-CONTROL-ARM_a | fill_140540_rev_UI-CONTROL-ARM_a | Nov 01 14:06 | yes | 23 | 93.9 | 0.012128 |
+| direct-direct | 40540_rev_UI-CONTROL-ARM_b | fill_140540_rev_UI-CONTROL-ARM_b | Nov 01 14:06 | yes | 24 | 93.4 | 0.01362 |
+| direct-direct | 40540_rev_UI-CONTROL-ARM-R2_a | fill_140540_rev_UI-CONTROL-ARM-R2_a | Nov 01 14:06 | yes | 19 | 91.5 | 0.010876 |
+| direct-direct | 40540_rev_UI-CONTROL-ARM-R2_b | fill_140540_rev_UI-CONTROL-ARM-R2_b | Nov 01 14:07 | yes | 12 | 89.2 | 0.007375 |
+| direct-direct | 40704_rev_ADAPTER-VIEW-TOKEN_a | fill_140704_rev_ADAPTER-VIEW-TOKEN_a | Nov 01 14:08 | yes | 14 | 88.3 | 0.008935 |
+| direct-direct | 40704_rev_ADAPTER-VIEW-TOKEN_b | fill_140704_rev_ADAPTER-VIEW-TOKEN_b | Nov 01 14:08 | yes | 11 | 87.9 | 0.007231 |
+| direct-direct | 40704_rev_MAIN-RSS-MEASURE_a | fill_140704_rev_MAIN-RSS-MEASURE_a | Nov 01 14:08 | yes | 23 | 93.6 | 0.009891 |
+| direct-direct | 40704_rev_MAIN-RSS-MEASURE_b | fill_140704_rev_MAIN-RSS-MEASURE_b | Nov 01 14:08 | yes | 12 | 89.5 | 0.005568 |
+| direct-direct | 40704_rev_UI-CONTROL-ARM_a | fill_140704_rev_UI-CONTROL-ARM_a | Nov 01 14:08 | yes | 14 | 89.7 | 0.00814 |
+| direct-direct | 40704_rev_UI-CONTROL-ARM_b | fill_140704_rev_UI-CONTROL-ARM_b | Nov 01 14:08 | yes | 20 | 92.3 | 0.010748 |
+| direct-direct | 40704_rev_UI-CONTROL-ARM-R2_a | fill_140704_rev_UI-CONTROL-ARM-R2_a | Nov 01 14:08 | yes | 18 | 92.3 | 0.00974 |
+| direct-direct | 40704_rev_UI-CONTROL-ARM-R2_b | fill_140704_rev_UI-CONTROL-ARM-R2_b | Nov 01 14:08 | yes | 15 | 90.2 | 0.009362 |
+| direct-direct | 40829_rev_ADAPTER-VIEW-TOKEN_a | fill_140829_rev_ADAPTER-VIEW-TOKEN_a | Nov 01 14:09 | yes | 19 | 91.5 | 0.011038 |
+| direct-direct | 40829_rev_ADAPTER-VIEW-TOKEN_b | fill_140829_rev_ADAPTER-VIEW-TOKEN_b | Nov 01 14:09 | yes | 9 | 82.8 | 0.007352 |
+| direct-direct | 40829_rev_MAIN-RSS-MEASURE_a | fill_140829_rev_MAIN-RSS-MEASURE_a | Nov 01 14:09 | yes | 15 | 92.2 | 0.006498 |
+| direct-direct | 40829_rev_MAIN-RSS-MEASURE_b | fill_140829_rev_MAIN-RSS-MEASURE_b | Nov 01 14:09 | yes | 11 | 90.7 | 0.004766 |
+| direct-direct | 40829_rev_UI-CONTROL-ARM_a | fill_140829_rev_UI-CONTROL-ARM_a | Nov 01 14:09 | yes | 22 | 93.2 | 0.012591 |
+| direct-direct | 40829_rev_UI-CONTROL-ARM_b | fill_140829_rev_UI-CONTROL-ARM_b | Nov 01 14:09 | yes | 28 | 94.0 | 0.013516 |
+| direct-direct | 40829_rev_UI-CONTROL-ARM-R2_a | fill_140829_rev_UI-CONTROL-ARM-R2_a | Nov 01 14:09 | yes | 14 | 89.8 | 0.009766 |
+| direct-direct | 40829_rev_UI-CONTROL-ARM-R2_b | fill_140829_rev_UI-CONTROL-ARM-R2_b | Nov 01 14:09 | yes | 18 | 90.3 | 0.012049 |
+| direct-direct | 40954_rev_ADAPTER-VIEW-TOKEN_a | fill_140954_rev_ADAPTER-VIEW-TOKEN_a | Nov 01 14:10 | yes | 17 | 91.5 | 0.008975 |
+| direct-direct | 40954_rev_ADAPTER-VIEW-TOKEN_b | fill_140954_rev_ADAPTER-VIEW-TOKEN_b | Nov 01 14:10 | yes | 13 | 83.8 | 0.01044 |
+| direct-direct | 40954_rev_MAIN-RSS-MEASURE_a | fill_140954_rev_MAIN-RSS-MEASURE_a | Nov 01 14:11 | yes | 13 | 88.7 | 0.007905 |
+| direct-direct | 40954_rev_MAIN-RSS-MEASURE_b | fill_140954_rev_MAIN-RSS-MEASURE_b | Nov 01 14:11 | yes | 10 | 89.3 | 0.004576 |
+| direct-direct | 40954_rev_UI-CONTROL-ARM_a | fill_140954_rev_UI-CONTROL-ARM_a | Nov 01 14:11 | yes | 12 | 88.4 | 0.008247 |
+| direct-direct | 40954_rev_UI-CONTROL-ARM_b | fill_140954_rev_UI-CONTROL-ARM_b | Nov 01 14:11 | yes | 32 | 92.7 | 0.015702 |
+| direct-direct | 40954_rev_UI-CONTROL-ARM-R2_a | fill_140954_rev_UI-CONTROL-ARM-R2_a | Nov 01 14:11 | yes | 13 | 88.9 | 0.008853 |
+| direct-direct | 40954_rev_UI-CONTROL-ARM-R2_b | fill_140954_rev_UI-CONTROL-ARM-R2_b | Nov 01 14:11 | yes | 20 | 92.9 | 0.011043 |
+| direct-direct | 41118_rev_ADAPTER-VIEW-TOKEN_a | fill_141118_rev_ADAPTER-VIEW-TOKEN_a | Nov 01 14:12 | yes | 26 | 93.5 | 0.016611 |
+| direct-direct | 41118_rev_ADAPTER-VIEW-TOKEN_b | fill_141118_rev_ADAPTER-VIEW-TOKEN_b | Nov 01 14:12 | yes | 13 | 90.0 | 0.008007 |
+| direct-direct | 41118_rev_MAIN-RSS-MEASURE_a | fill_141118_rev_MAIN-RSS-MEASURE_a | Nov 01 14:12 | yes | 12 | 89.4 | 0.0057 |
+| direct-direct | 41118_rev_MAIN-RSS-MEASURE_b | fill_141118_rev_MAIN-RSS-MEASURE_b | Nov 01 14:12 | yes | 10 | 89.4 | 0.004835 |
+| direct-direct | 41118_rev_UI-CONTROL-ARM_a | fill_141118_rev_UI-CONTROL-ARM_a | Nov 01 14:12 | yes | 26 | 93.1 | 0.013721 |
+| direct-direct | 41118_rev_UI-CONTROL-ARM_b | fill_141118_rev_UI-CONTROL-ARM_b | Nov 01 14:12 | yes | 20 | 92.2 | 0.011463 |
+| direct-direct | 41118_rev_UI-CONTROL-ARM-R2_a | fill_141118_rev_UI-CONTROL-ARM-R2_a | Nov 01 14:12 | yes | 22 | 92.9 | 0.011624 |
+| direct-direct | 41118_rev_UI-CONTROL-ARM-R2_b | fill_141118_rev_UI-CONTROL-ARM-R2_b | Nov 01 14:12 | yes | 18 | 92.3 | 0.010319 |
+| direct-direct | 41243_rev_ADAPTER-VIEW-TOKEN_a | fill_141243_rev_ADAPTER-VIEW-TOKEN_a | Nov 01 14:13 | yes | 15 | 90.6 | 0.008586 |
+| direct-direct | 41243_rev_ADAPTER-VIEW-TOKEN_b | fill_141243_rev_ADAPTER-VIEW-TOKEN_b | Nov 01 14:13 | yes | 25 | 93.3 | 0.01202 |
+| direct-direct | 41243_rev_MAIN-RSS-MEASURE_a | fill_141243_rev_MAIN-RSS-MEASURE_a | Nov 01 14:13 | yes | 9 | 90.2 | 0.004458 |
+| direct-direct | 41243_rev_MAIN-RSS-MEASURE_b | fill_141243_rev_MAIN-RSS-MEASURE_b | Nov 01 14:13 | yes | 10 | 88.9 | 0.004946 |
+| direct-direct | 41243_rev_UI-CONTROL-ARM_a | fill_141243_rev_UI-CONTROL-ARM_a | Nov 01 14:13 | yes | 16 | 91.2 | 0.008958 |
+| direct-direct | 41243_rev_UI-CONTROL-ARM_b | fill_141243_rev_UI-CONTROL-ARM_b | Nov 01 14:13 | yes | 29 | 94.0 | 0.012883 |
+| direct-direct | 41243_rev_UI-CONTROL-ARM-R2_a | fill_141243_rev_UI-CONTROL-ARM-R2_a | Nov 01 14:14 | yes | 13 | 88.0 | 0.010859 |
+| direct-direct | 41243_rev_UI-CONTROL-ARM-R2_b | fill_141243_rev_UI-CONTROL-ARM-R2_b | Nov 01 14:14 | yes | 17 | 92.0 | 0.008753 |
+| direct-direct | 41408_rev_ADAPTER-VIEW-TOKEN_a | fill_141408_rev_ADAPTER-VIEW-TOKEN_a | Nov 01 14:15 | yes | 20 | 92.1 | 0.010918 |
+| direct-direct | 41408_rev_ADAPTER-VIEW-TOKEN_b | fill_141408_rev_ADAPTER-VIEW-TOKEN_b | Nov 01 14:15 | yes | 16 | 91.3 | 0.009696 |
+| direct-direct | 41408_rev_MAIN-RSS-MEASURE_a | fill_141408_rev_MAIN-RSS-MEASURE_a | Nov 01 14:15 | yes | 9 | 91.4 | 0.004431 |
+| direct-direct | 41408_rev_MAIN-RSS-MEASURE_b | fill_141408_rev_MAIN-RSS-MEASURE_b | Nov 01 14:15 | yes | 21 | 94.1 | 0.008177 |
+| direct-direct | 41408_rev_UI-CONTROL-ARM_a | fill_141408_rev_UI-CONTROL-ARM_a | Nov 01 14:15 | yes | 19 | 92.0 | 0.010741 |
+| direct-direct | 41408_rev_UI-CONTROL-ARM_b | fill_141408_rev_UI-CONTROL-ARM_b | Nov 01 14:15 | yes | 10 | 86.5 | 0.006741 |
+| direct-direct | 41408_rev_UI-CONTROL-ARM-R2_a | fill_141408_rev_UI-CONTROL-ARM-R2_a | Nov 01 14:15 | yes | 16 | 91.6 | 0.009039 |
+| direct-direct | 41408_rev_UI-CONTROL-ARM-R2_b | fill_141408_rev_UI-CONTROL-ARM-R2_b | Nov 01 14:15 | yes | 25 | 93.2 | 0.013968 |
+| direct-direct | 41532_rev_ADAPTER-VIEW-TOKEN_a | fill_141532_rev_ADAPTER-VIEW-TOKEN_a | Nov 01 14:16 | yes | 14 | 87.6 | 0.009125 |
+| direct-direct | 41532_rev_ADAPTER-VIEW-TOKEN_b | fill_141532_rev_ADAPTER-VIEW-TOKEN_b | Nov 01 14:16 | yes | 14 | 91.0 | 0.008338 |
+| direct-direct | 41532_rev_MAIN-RSS-MEASURE_a | fill_141532_rev_MAIN-RSS-MEASURE_a | Nov 01 14:16 | yes | 18 | 93.0 | 0.00778 |
+| direct-direct | 41532_rev_MAIN-RSS-MEASURE_b | fill_141532_rev_MAIN-RSS-MEASURE_b | Nov 01 14:16 | yes | 9 | 86.9 | 0.004719 |
+| direct-direct | 41532_rev_UI-CONTROL-ARM_a | fill_141532_rev_UI-CONTROL-ARM_a | Nov 01 14:16 | yes | 15 | 90.5 | 0.009229 |
+| direct-direct | 41532_rev_UI-CONTROL-ARM_b | fill_141532_rev_UI-CONTROL-ARM_b | Nov 01 14:16 | yes | 18 | 91.9 | 0.010578 |
+| direct-direct | 41532_rev_UI-CONTROL-ARM-R2_a | fill_141532_rev_UI-CONTROL-ARM-R2_a | Nov 01 14:16 | yes | 13 | 89.5 | 0.00783 |
+| direct-direct | 41532_rev_UI-CONTROL-ARM-R2_b | fill_141532_rev_UI-CONTROL-ARM-R2_b | Nov 01 14:16 | yes | 21 | 92.2 | 0.011197 |
+| direct-direct | 41657_rev_ADAPTER-VIEW-TOKEN_a | fill_141657_rev_ADAPTER-VIEW-TOKEN_a | Nov 01 14:17 | yes | 16 | 90.4 | 0.010578 |
+| direct-direct | 41657_rev_ADAPTER-VIEW-TOKEN_b | fill_141657_rev_ADAPTER-VIEW-TOKEN_b | Nov 01 14:18 | yes | 22 | 92.0 | 0.013676 |
+| direct-direct | 41657_rev_MAIN-RSS-MEASURE_a | fill_141657_rev_MAIN-RSS-MEASURE_a | Nov 01 14:18 | yes | 8 | 87.3 | 0.003844 |
+| direct-direct | 41657_rev_MAIN-RSS-MEASURE_b | fill_141657_rev_MAIN-RSS-MEASURE_b | Nov 01 14:18 | yes | 9 | 87.7 | 0.005002 |
+| direct-direct | 41657_rev_UI-CONTROL-ARM_a | fill_141657_rev_UI-CONTROL-ARM_a | Nov 01 14:18 | yes | 20 | 92.7 | 0.010183 |
+| direct-direct | 41657_rev_UI-CONTROL-ARM_b | fill_141657_rev_UI-CONTROL-ARM_b | Nov 01 14:18 | yes | 18 | 90.8 | 0.011268 |
+| direct-direct | 41657_rev_UI-CONTROL-ARM-R2_a | fill_141657_rev_UI-CONTROL-ARM-R2_a | Nov 01 14:18 | yes | 16 | 91.4 | 0.008428 |
+| direct-direct | 41657_rev_UI-CONTROL-ARM-R2_b | fill_141657_rev_UI-CONTROL-ARM-R2_b | Nov 01 14:18 | yes | 12 | 87.5 | 0.007991 |
+| direct-direct | 41822_rev_ADAPTER-VIEW-TOKEN_a | fill_141822_rev_ADAPTER-VIEW-TOKEN_a | Nov 01 14:19 | yes | 23 | 93.6 | 0.009872 |
+| direct-direct | 41822_rev_ADAPTER-VIEW-TOKEN_b | fill_141822_rev_ADAPTER-VIEW-TOKEN_b | Nov 01 14:19 | yes | 17 | 91.3 | 0.010771 |
+| direct-direct | 41822_rev_MAIN-RSS-MEASURE_a | fill_141822_rev_MAIN-RSS-MEASURE_a | Nov 01 14:19 | yes | 9 | 86.3 | 0.005231 |
+| direct-direct | 41822_rev_MAIN-RSS-MEASURE_b | fill_141822_rev_MAIN-RSS-MEASURE_b | Nov 01 14:19 | yes | 9 | 87.1 | 0.00482 |
+| direct-direct | 41822_rev_UI-CONTROL-ARM_a | fill_141822_rev_UI-CONTROL-ARM_a | Nov 01 14:19 | yes | 15 | 90.9 | 0.008421 |
+| direct-direct | 41822_rev_UI-CONTROL-ARM_b | fill_141822_rev_UI-CONTROL-ARM_b | Nov 01 14:19 | yes | 12 | 90.1 | 0.006031 |
+| direct-direct | 41822_rev_UI-CONTROL-ARM-R2_a | fill_141822_rev_UI-CONTROL-ARM-R2_a | Nov 01 14:19 | yes | 25 | 94.1 | 0.012113 |
+| direct-direct | 41822_rev_UI-CONTROL-ARM-R2_b | fill_141822_rev_UI-CONTROL-ARM-R2_b | Nov 01 14:19 | yes | 16 | 91.3 | 0.008437 |
+| direct-direct | 41946_rev_ADAPTER-VIEW-TOKEN_a | fill_141946_rev_ADAPTER-VIEW-TOKEN_a | Nov 01 14:20 | yes | 12 | 88.2 | 0.008164 |
+| direct-direct | 41946_rev_ADAPTER-VIEW-TOKEN_b | fill_141946_rev_ADAPTER-VIEW-TOKEN_b | Nov 01 14:20 | yes | 28 | 94.0 | 0.014363 |
+| direct-direct | 41946_rev_MAIN-RSS-MEASURE_a | fill_141946_rev_MAIN-RSS-MEASURE_a | Nov 01 14:20 | yes | 16 | 92.0 | 0.006971 |
+| direct-direct | 41946_rev_MAIN-RSS-MEASURE_b | fill_141946_rev_MAIN-RSS-MEASURE_b | Nov 01 14:20 | yes | 9 | 86.3 | 0.005017 |
+| direct-direct | 41946_rev_UI-CONTROL-ARM_a | fill_141946_rev_UI-CONTROL-ARM_a | Nov 01 14:20 | yes | 13 | 88.3 | 0.009618 |
+| direct-direct | 41946_rev_UI-CONTROL-ARM_b | fill_141946_rev_UI-CONTROL-ARM_b | Nov 01 14:21 | yes | 21 | 92.6 | 0.011092 |
+| direct-direct | 41946_rev_UI-CONTROL-ARM-R2_a | fill_141946_rev_UI-CONTROL-ARM-R2_a | Nov 01 14:21 | yes | 14 | 89.8 | 0.009233 |
+| direct-direct | 41946_rev_UI-CONTROL-ARM-R2_b | fill_141946_rev_UI-CONTROL-ARM-R2_b | Nov 01 14:21 | yes | 11 | 88.4 | 0.006386 |
+| direct-direct | 42111_rev_ADAPTER-VIEW-TOKEN_a | fill_142111_rev_ADAPTER-VIEW-TOKEN_a | Nov 01 14:22 | yes | 12 | 86.9 | 0.013769 |
+| direct-direct | 42111_rev_ADAPTER-VIEW-TOKEN_b | fill_142111_rev_ADAPTER-VIEW-TOKEN_b | Nov 01 14:22 | yes | 12 | 88.3 | 0.008445 |
+| direct-direct | 42111_rev_MAIN-RSS-MEASURE_a | fill_142111_rev_MAIN-RSS-MEASURE_a | Nov 01 14:22 | yes | 15 | 92.6 | 0.006635 |
+| direct-direct | 42111_rev_MAIN-RSS-MEASURE_b | fill_142111_rev_MAIN-RSS-MEASURE_b | Nov 01 14:22 | yes | 12 | 91.6 | 0.005449 |
+| direct-direct | 42111_rev_UI-CONTROL-ARM_a | fill_142111_rev_UI-CONTROL-ARM_a | Nov 01 14:22 | yes | 18 | 91.3 | 0.010325 |
+| direct-direct | 42111_rev_UI-CONTROL-ARM_b | fill_142111_rev_UI-CONTROL-ARM_b | Nov 01 14:22 | yes | 19 | 92.4 | 0.009044 |
+| direct-direct | 42111_rev_UI-CONTROL-ARM-R2_a | fill_142111_rev_UI-CONTROL-ARM-R2_a | Nov 01 14:22 | yes | 13 | 88.7 | 0.007947 |
+| direct-direct | 42111_rev_UI-CONTROL-ARM-R2_b | fill_142111_rev_UI-CONTROL-ARM-R2_b | Nov 01 14:22 | yes | 14 | 85.9 | 0.009956 |
+| direct-direct | 42236_rev_ADAPTER-VIEW-TOKEN_a | fill_142236_rev_ADAPTER-VIEW-TOKEN_a | Nov 01 14:23 | yes | 20 | 92.3 | 0.011834 |
+| direct-direct | 42236_rev_ADAPTER-VIEW-TOKEN_b | fill_142236_rev_ADAPTER-VIEW-TOKEN_b | Nov 01 14:23 | yes | 27 | 93.6 | 0.012999 |
+| direct-direct | 42236_rev_MAIN-RSS-MEASURE_a | fill_142236_rev_MAIN-RSS-MEASURE_a | Nov 01 14:23 | yes | 19 | 92.3 | 0.009152 |
+| direct-direct | 42236_rev_MAIN-RSS-MEASURE_b | fill_142236_rev_MAIN-RSS-MEASURE_b | Nov 01 14:23 | yes | 8 | 87.4 | 0.004548 |
+| direct-direct | 42236_rev_UI-CONTROL-ARM_a | fill_142236_rev_UI-CONTROL-ARM_a | Nov 01 14:23 | yes | 11 | 86.6 | 0.009426 |
+| direct-direct | 42236_rev_UI-CONTROL-ARM_b | fill_142236_rev_UI-CONTROL-ARM_b | Nov 01 14:23 | yes | 16 | 91.5 | 0.009304 |
+| direct-direct | 42236_rev_UI-CONTROL-ARM-R2_a | fill_142236_rev_UI-CONTROL-ARM-R2_a | Nov 01 14:23 | yes | 10 | 87.2 | 0.006994 |
+| direct-direct | 42236_rev_UI-CONTROL-ARM-R2_b | fill_142236_rev_UI-CONTROL-ARM-R2_b | Nov 01 14:23 | yes | 10 | 84.7 | 0.011459 |
+| direct-direct | 42400_rev_MAIN-RSS-MEASURE_b | fill_142400_rev_MAIN-RSS-MEASURE_b | Nov 01 14:25 | yes | 17 | 90.9 | 0.008654 |
+| direct-direct | 42400_rev_UI-CONTROL-ARM_a | fill_142400_rev_UI-CONTROL-ARM_a | Nov 01 14:25 | yes | 17 | 91.3 | 0.008898 |
+| direct-direct | 42400_rev_UI-CONTROL-ARM_b | fill_142400_rev_UI-CONTROL-ARM_b | Nov 01 14:25 | yes | 15 | 90.9 | 0.008766 |
+| direct-direct | 42400_rev_UI-CONTROL-ARM-R2_b | fill_142400_rev_UI-CONTROL-ARM-R2_b | Nov 01 14:25 | yes | 17 | 91.7 | 0.00831 |
 
 ## Method
 
