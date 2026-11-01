@@ -143,6 +143,7 @@ flakepi-0268f441f2d7	changes/unreleased/flake-pin-procbound.md
 judge-sysdep-build.md	changes/unreleased/judge-sysdep-build.md
 mdisp-fix.md	changes/unreleased/mdisp-fix.md
 mw-ax-dump.md	changes/unreleased/mw-ax-dump.md
+mw-readback-textof.md	changes/unreleased/mw-readback-textof.md
 mw-sleep-ns.md	changes/unreleased/mw-sleep-ns.md
 mw-wall-deadline.md	changes/unreleased/mw-wall-deadline.md
 p12-display-reader.md	changes/unreleased/p12-display-reader.md
@@ -988,6 +989,7 @@ ROUTER_BOOTSTRAP.md	docs/ROUTER_BOOTSTRAP.md
 TESTING.md	docs/TESTING.md
 UI_ARCHITECTURE.md	docs/UI_ARCHITECTURE.md
 USER_GUIDE.md	docs/USER_GUIDE.md
+docs-e1-rehearsal.md	docs/e1-rehearsal.md
 muse_lanes.json	docs/meta-ai/muse_lanes.json
 ACCEPTA-dacfa1f074ab	docs/research/ACCEPTANCE_REVIEW_PASS1.md
 BYOBUTE-1db9e61da6a2	docs/research/BYOBU_TERMINAL_WORKSPACES.md
@@ -1337,6 +1339,7 @@ test_mw_e1_receipt.py	tests/test_mw_e1_receipt.py
 test_mw_focus_skip.py	tests/test_mw_focus_skip.py
 test_mw_home_cli.py	tests/test_mw_home_cli.py
 testmwr-696ca082e4f0	tests/test_mw_readback_deadline.py
+testmwr-1a182b00c310	tests/test_mw_readback_textof.py
 testmwr-cf2f3fed6e97	tests/test_mw_run_backend.py
 testmws-a6db1334a46b	tests/test_mw_slot_length.py
 testmws-8fd51d7e49a9	tests/test_mw_stale_frame.py
