@@ -1,7 +1,7 @@
 // Presentation state only. Shared by the renderer and packaged layout gate.
 export const DESKTOP_SCHEMA = 'metaviewer.desktops/v1';
 export const VIEWS = Object.freeze(['human', 'agent']);
-export const PRESETS = Object.freeze(['single', 'side-by-side', 'grid', 'focus-strip']);
+export const PRESETS = Object.freeze(['single', 'side-by-side', 'grid', 'focus-strip', 'floating']);
 
 /** @typedef {{id:number,preset:string|null,layout:any}} Desktop */
 /** @typedef {{schema:string,activeView:string,views:Record<string,{active:number,next:number,desktops:Desktop[]}>,assignments:Record<string,{view:string,desktop:number}>}} DesktopState */
@@ -52,9 +52,9 @@ export function validateDesktopState(state, validateLayout = (_layout) => false)
 }
 /** @param {DesktopState} state @param {string} view */
 export function addDesktop(state, view = state.activeView) {
-  const group = state.views[view], id = group.next;
+  const group = state.views[view], id = group.desktops.length + 1;
   if (!number(id + 1)) throw Error('DESKTOP_LIMIT');
-  group.next++; group.desktops.push({id,preset:null,layout:null}); group.active = id;
+  group.next = id + 1; group.desktops.push({id,preset:null,layout:null}); group.active = id;
   return id;
 }
 /** @param {DesktopState} state @param {string} id @param {string} view */
@@ -74,6 +74,25 @@ export function removeDesktop(state, view, id) {
   if (id === 1 || !group.desktops.some(d => d.id === id) || Object.values(state.assignments).some(home => home.view === view && home.desktop === id)) return false;
   group.desktops = group.desktops.filter(d => d.id !== id);
   if (group.active === id) group.active = 1;
+  renumberDesktops(state,view);
+  return true;
+}
+/** Compact identities and remap ownership atomically, retaining desktop objects/layouts.
+ * @param {DesktopState} state @param {string} view */
+export function renumberDesktops(state,view) {
+  const group = state.views[view], ids = new Map(group.desktops.map((d,index)=>[d.id,index+1]));
+  group.active = ids.get(group.active) ?? 1;
+  for (const home of Object.values(state.assignments)) if (home.view === view) home.desktop = ids.get(home.desktop) ?? home.desktop;
+  group.desktops.forEach((desktop,index)=>{desktop.id = index+1;});
+  group.next = group.desktops.length+1;
+}
+/** Move within the existing view; role and backend identity are immutable.
+ * @param {DesktopState} state @param {string} id @param {number} desktop @param {boolean} [follow] */
+export function moveSurface(state,id,desktop,follow = false) {
+  const home = state.assignments[id];
+  if (!home || !state.views[home.view].desktops.some(d=>d.id === desktop)) return false;
+  home.desktop = desktop;
+  if (follow) {state.activeView = home.view;state.views[home.view].active = desktop;}
   return true;
 }
 // Older desktop envelopes admitted leaf roots through the kit decoder, but
@@ -90,26 +109,29 @@ export function normalizeDesktopLayout(layout) {
 }
 // Retire ended or moved panel references without reallocating surviving groups.
 /** @param {any} layout @param {(id:string)=>boolean} keep */
-export function pruneDesktopLayout(layout, keep) {
+export function pruneDesktopLayout(layout, keep, preserveEmpty = false) {
   if (!layout) return null;
   const result = normalizeDesktopLayout(layout), groups = new Set();
   const panels = result.dockview.panels;
   for (const [id,panel] of Object.entries(panels)) if (!keep(panel.params?.capsuleId)) delete panels[id];
-  /** @param {any} data */
-  const group = data => {
+  /** @param {any} data @param {boolean} keepEmpty */
+  const group = (data,keepEmpty) => {
     data.views = data.views.filter((/** @type {string} */ id) => Object.hasOwn(panels,id));
-    if (!data.views.length) return false;
+    if (!data.views.length) {
+      if (!keepEmpty) return false;
+      delete data.activeView; groups.add(data.id); return true;
+    }
     if (!data.views.includes(data.activeView)) data.activeView = data.views[0];
     groups.add(data.id); return true;
   };
-  /** @param {any} value @returns {boolean} */
-  const node = value => {
-    if (value.type === 'leaf') return group(value.data);
-    value.data = value.data.filter(node); return value.data.length > 0;
+  /** @param {any} value @param {boolean} keepEmpty @returns {boolean} */
+  const node = (value,keepEmpty) => {
+    if (value.type === 'leaf') return group(value.data,keepEmpty);
+    value.data = value.data.filter((/** @type {any} */ child)=>node(child,keepEmpty)); return value.data.length > 0;
   };
-  const hasRoot = node(result.dockview.grid.root);
+  const hasRoot = node(result.dockview.grid.root,preserveEmpty);
   for (const key of ['floatingGroups','popoutGroups']) if (result.dockview[key]) {
-    result.dockview[key] = result.dockview[key].filter((/** @type {any} */ item) => item.grid ? node(item.grid.root) : group(item.data));
+    result.dockview[key] = result.dockview[key].filter((/** @type {any} */ item) => item.grid ? node(item.grid.root,false) : group(item.data,false));
   }
   if (!hasRoot) {
     let id = 'desktop-empty';

@@ -24,6 +24,7 @@ const refuse = code => Object.assign(new Error(code), {code});
 // Adapter details can contain native diagnostics. Log only fixed protocol text.
 const createDetails = new Set([
   'profile already bound', 'surface capacity or unresolved native outcome',
+  'identity display pool exhausted; stop a capsule first', 'configured display is in use; stop its capsule first',
   'human mode requires 1280x900 browser', 'unadmitted profile, kind or geometry',
   'private opening directory required', 'private opening request required',
   'opening mode refused', 'native operation has no verified result',
@@ -42,6 +43,7 @@ export function surfaceCreateRefusal(reply) {
   if (/^[A-Z][A-Z0-9_]{0,63}$/.test(code)) return code;
   if (code === 'binding' && detail === 'profile already bound') return 'PROFILE_ALREADY_BOUND';
   if (code === 'uncertain' && detail === 'surface capacity or unresolved native outcome') return 'SURFACE_CAPACITY_OR_QUARANTINE';
+  if (code === 'profile' && ['identity display pool exhausted; stop a capsule first','configured display is in use; stop its capsule first'].includes(detail)) return 'CAPSULE_SLOT_UNAVAILABLE';
   if (code === 'identity_unavailable') return 'IDENTITY_UNAVAILABLE';
   return /^[a-z][a-z0-9_]{0,55}$/.test(code) && code !== 'unknown' ? 'ADAPTER_' + code.toUpperCase() : 'SURFACE_CREATE_REFUSED';
 }
@@ -159,7 +161,8 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       if (current.control !== (roleFor(current) === 'human' ? 'human' : 'agent')) throw refuse('XPRA_ROLE_OWNERSHIP');
       if (sessions.get(surfaceId)?.active) {
         sessions.get(surfaceId).resize(bounds);
-        return {ok:true,role:roleFor(current)};
+        sessions.get(surfaceId).setVisible(false);
+        return {ok:true,role:roleFor(current),visible:false};
       }
       await close(surfaceId);
       const epoch = epochs.get(surfaceId);
@@ -198,7 +201,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
             keyboard:keycodes ? {layout:clientKeyboardLayout,keycodes} : undefined});
         },
         showView: (bridge, recoverBridge) => tileFactory({electron,window,bridge,bounds,recoverBridge,
-          trace:recorder || dummyTrace,isActive:active,initiallyVisible:false,writable:role === 'human',rawKeyboard:!!keycodes,
+          trace:recorder || dummyTrace,isActive:active,initiallyVisible:false,capsuleId:surfaceId,writable:role === 'human',rawKeyboard:!!keycodes,
           capsuleSize:() => ({width:1280,height:900}),
           clientQuery:xpraClientQuery(role === 'human',clientKeyboardLayout),
           onState: (/** @type {string} */ state) => {

@@ -13,13 +13,13 @@ export const DROPPABLE_TRACE_CODES = Object.freeze(new Set(['TRACE_EVENT_REFUSED
  * @param {{electron:typeof import('electron'),window:import('electron').BrowserWindow,
  * bridge:Awaited<ReturnType<typeof import('./xpraHumanBridge.js').openXpraHumanBridge>>,
  * bounds:{x:number,y:number,width:number,height:number},
- * trace:ReturnType<typeof import('./humanTrace.js').createHumanTrace>,isActive:()=>boolean,writable?:boolean,rawKeyboard?:boolean,initiallyVisible?:boolean,
+ * trace:ReturnType<typeof import('./humanTrace.js').createHumanTrace>,isActive:()=>boolean,writable?:boolean,capsuleId?:string,rawKeyboard?:boolean,initiallyVisible?:boolean,
  * capsuleSize:()=>{width:number,height:number},
  * axContext?:()=>{sensitive?:boolean,password?:boolean,row?:number}|null,clientQuery?:string,
  * recoverBridge?:()=>Promise<any>,onState?:(state:string)=>void,onFailure:(error:unknown)=>void}} options
  */
 export async function attachXpraHumanTile({ electron, window, bridge, bounds, trace,
-  isActive, capsuleSize, writable = true, rawKeyboard = false, initiallyVisible = true, axContext = () => null, clientQuery = xpraClientQuery(writable),
+  isActive, capsuleSize, capsuleId, writable = true, rawKeyboard = false, initiallyVisible = true, axContext = () => null, clientQuery = xpraClientQuery(writable),
   recoverBridge = async () => bridge, onState = () => {}, onFailure }) {
   const { WebContentsView, session, ipcMain } = electron;
   if (typeof isActive !== 'function' || isActive() !== true || typeof capsuleSize !== 'function' ||
@@ -52,7 +52,7 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
   const capturedDesktopKeys = new Set();
   wc.on('before-input-event', (event, input) => {
     wc.setIgnoreMenuShortcuts(true);
-    interceptDesktopShortcut(event, input, window, capturedDesktopKeys);
+    interceptDesktopShortcut(event, input, window, capturedDesktopKeys, capsuleId);
   });
   // Defense in depth: the OS layer has already acknowledged readonly.
   if (!writable) {

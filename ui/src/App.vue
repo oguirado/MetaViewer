@@ -907,6 +907,7 @@ async function submitHost(action) {
       IDENTITY_LIST_UNAVAILABLE: 'The identity list could not be read, so no new capsule was opened. Open Identities to check the identity tool, then try again.',
       PICKER_INPUT_INVALID: 'The capsule request could not be prepared. Please try again.',
       SURFACE_PROFILE_BOUND: 'Every configured capsule profile is already bound to a running capsule. Close or reuse the existing capsule, or add another profile to MV_SRF_PROFILES.',
+      CAPSULE_SLOT_UNAVAILABLE: 'No free capsule slot. Stop another capsule first (up to 4 run at once).',
       PROFILE_ALREADY_BOUND: 'The selected capsule profile is already bound to a running capsule. Close the running capsule or add another profile to MV_SRF_PROFILES.',
       SURFACE_CAPACITY_OR_QUARANTINE: 'No capsule slot is free or the profile is quarantined. Close a capsule or clear the quarantined profile before trying again.',
       SURFACE_PROFILE_QUARANTINED: 'The capsule profile is quarantined after a previous failure. Clear the quarantine before opening a new capsule.',
@@ -922,7 +923,7 @@ async function submitHost(action) {
       ADAPTER_ERROR: 'The surface adapter refused the capsule create request. Please try again.',
     };
     const fallback = 'This request is unavailable. Please try again.';
-    const message = Object.hasOwn(createReasons, code)
+    const message = code === 'CAPSULE_SLOT_UNAVAILABLE' ? createReasons.CAPSULE_SLOT_UNAVAILABLE : Object.hasOwn(createReasons, code)
       ? `${code}: ${createReasons[/** @type {keyof typeof createReasons} */ (code)]}`
       : (code === 'HOST_REQUEST_REFUSED' || code.startsWith('LAYOUT_') || code.startsWith('ERR_') ? fallback : `${code}: ${fallback}`);
     const activityCode = code === 'NO_IDENTITY' && missingId && missingId !== 'mv-live-2' ? `NO_IDENTITY:${missingId}` : code;
@@ -1356,7 +1357,7 @@ const chromeWorkspace = markRaw(defineComponent({
         <UiButton id="tile-preset-side-by-side" data-semantic-anchor="wall/preset/side-by-side" label="2 side by side" :aria-pressed="activeDesktopPreset === 'side-by-side'" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('side-by-side')" />
         <UiButton id="tile-preset-grid" data-semantic-anchor="wall/preset/grid" label="2×2" :aria-pressed="activeDesktopPreset === 'grid'" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('grid')" />
         <UiButton id="tile-preset-focus-strip" data-semantic-anchor="wall/preset/focus-strip" label="Focus + strip" :aria-pressed="activeDesktopPreset === 'focus-strip'" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('focus-strip')" />
-        <UiButton id="tile-preset-floating" data-semantic-anchor="wall/preset/floating" label="Floating layout" :aria-pressed="activeDesktopPreset === null" title="Keep the current tile positions and arrange them manually" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset(null)" />
+        <UiButton id="tile-preset-floating" data-semantic-anchor="wall/preset/floating" label="Floating layout" :aria-pressed="activeDesktopPreset === 'floating'" title="Float every tile in a cascaded window" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('floating')" />
         <span v-if="presetError" role="status">{{ presetError }}</span>
       </div>
       <p class="mv-layout-notice-reserve" aria-hidden="true"><strong>Layout unavailable.</strong> The default layout is shown read-only. Changes will not be saved.</p>

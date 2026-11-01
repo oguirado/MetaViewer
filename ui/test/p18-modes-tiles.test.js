@@ -182,24 +182,23 @@ test('P18 host XKB layout is explicitly forwarded to the native client',()=>{
   assert.throws(()=>xpraClientQuery(true,'es&readonly=0'),/KEYMAP/);
 });
 
-test('P18 each preset produces expected independent rectangles for one, two and four tiles',()=>{
+test('P18 exact presets use tabs and reserve every grid cell',()=>{
   const tiles = Array.from({length:4},(_,i)=>({id:String(i)}));
-  for (const preset of wall.TILE_PRESETS) assert.deepEqual(wall.presetRectangles(preset,tiles.slice(0,1),1000,800),[{id:'0',x:0,y:0,width:1000,height:800}]);
-  for (const preset of ['side-by-side','grid']) {
-    assert.deepEqual(wall.presetRectangles(preset,tiles.slice(0,2),1000,800),[{id:'0',x:0,y:0,width:500,height:800},{id:'1',x:500,y:0,width:500,height:800}]);
-    assert.deepEqual(wall.presetRectangles(preset,tiles,1000,800),[{id:'0',x:0,y:0,width:500,height:400},{id:'1',x:500,y:0,width:500,height:400},{id:'2',x:0,y:400,width:500,height:400},{id:'3',x:500,y:400,width:500,height:400}]);
-  }
-  assert.deepEqual(wall.presetRectangles('single',tiles.slice(0,2),1000,800).map(r=>[r.x,r.y,r.width,r.height]),[[0,0,1000,400],[0,400,1000,400]]);
-  assert.deepEqual(wall.presetRectangles('single',tiles,1000,800).map(r=>[r.x,r.y,r.width,r.height]),[[0,0,1000,200],[0,200,1000,200],[0,400,1000,200],[0,600,1000,200]]);
+  for (const preset of ['single','side-by-side','focus-strip']) assert.deepEqual(wall.presetRectangles(preset,tiles.slice(0,1),1000,800),[{id:'0',x:0,y:0,width:1000,height:800}]);
+  assert.deepEqual(wall.presetRectangles('side-by-side',tiles,1000,800).map(r=>[r.x,r.y,r.width,r.height]),[[0,0,500,800],[500,0,500,800],[500,0,500,800],[500,0,500,800]]);
+  assert.deepEqual(wall.presetRectangles('grid',tiles,1000,800),[{id:'0',x:0,y:0,width:500,height:400},{id:'1',x:500,y:0,width:500,height:400},{id:'2',x:0,y:400,width:500,height:400},{id:'3',x:500,y:400,width:500,height:400}]);
+  assert.deepEqual(wall.presetRectangles('single',tiles.slice(0,2),1000,800).map(r=>[r.x,r.y,r.width,r.height]),[[0,0,1000,800],[0,0,1000,800]]);
+  assert.deepEqual(wall.presetRectangles('single',tiles,1000,800).map(r=>[r.x,r.y,r.width,r.height]),Array.from({length:4},()=>[0,0,1000,800]));
   assert.deepEqual(wall.presetRectangles('focus-strip',tiles.slice(0,2),1000,800).map(r=>[r.x,r.y,r.width,r.height]),[[0,0,700,800],[700,0,300,800]]);
   assert.deepEqual(wall.presetRectangles('focus-strip',tiles,1000,900).map(r=>[r.x,r.y,r.width,r.height]),[[0,0,700,900],[700,0,300,300],[700,300,300,300],[700,600,300,300]]);
+  assert.deepEqual(wall.presetRectangles('floating',tiles,1000,800).map(r=>[r.x,r.y,r.width,r.height]),[[0,0,600,480],[24,24,600,480],[48,48,600,480],[72,72,600,480]]);
 });
 
-test('P18 minimized and floating tiles are excluded; restore reenters preset; maximize defers layout',()=>{
+test('P18 hidden tiles stay excluded; presets arrange floats too; maximize defers layout',()=>{
   const tiles = [{id:'a'},{id:'b',hidden:true},{id:'c',floating:true}];
-  assert.deepEqual(wall.presetRectangles('grid',tiles,1000,800),[{id:'a',x:0,y:0,width:1000,height:800}]);
+  assert.deepEqual(wall.presetRectangles('grid',tiles,1000,800),[{id:'a',x:0,y:0,width:500,height:400},{id:'c',x:500,y:0,width:500,height:400}]);
   tiles[1].hidden = false;
-  assert.deepEqual(wall.presetRectangles('grid',tiles,1000,800).map(r=>r.width),[500,500]);
+  assert.deepEqual(wall.presetRectangles('grid',tiles,1000,800).map(r=>r.width),[500,500,500]);
   tiles[0].maximized = true;
   assert.deepEqual(wall.presetRectangles('grid',tiles,1000,800),[]);
 });

@@ -26,6 +26,9 @@ export function observeOverlays(coordinator, doc = globalThis.document) {
     }
     const nodes = doc.querySelectorAll('[role="dialog"],[role="menu"],[role="listbox"],details[open],[data-state="open"],[popover]');
     coordinator.set(owner, [...nodes].some(el => {
+      // Dockview floats are modeless dialogs. Treating them as a popup hides
+      // their own native human view for the entire lifetime of the float.
+      if (el.getAttribute('role') === 'dialog' && el.classList?.contains('dv-resize-container') && el.getAttribute('aria-modal') !== 'true') return false;
       // The sidebar's permanent navigation inventory also uses role=menu.
       // It is not a popup and must not occlude every native view at idle.
       if (el.getAttribute('role') === 'menu' && el.closest('aside,nav,[role="navigation"]')) return false;

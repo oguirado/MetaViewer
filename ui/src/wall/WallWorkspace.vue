@@ -9,62 +9,117 @@
  */
 import { defineComponent, h } from 'vue';
 // Presentation only: no capsule geometry, ownership, or lifecycle operations.
-export const TILE_PRESETS = Object.freeze(['single','side-by-side','grid','focus-strip']);
+export const TILE_PRESETS = Object.freeze(['single','side-by-side','grid','focus-strip','floating']);
 
-/** @param {string} preset @param {Array<{id:string,hidden?:boolean,floating?:boolean,maximized?:boolean}>} tiles @param {number} width @param {number} height */
+/** Exact cell geometry; equal rectangles denote tabs in the same cell.
+ * Floating presentation is included so switching presets also docks floats.
+ * @param {string} preset @param {Array<{id:string,hidden?:boolean,floating?:boolean,maximized?:boolean}>} tiles @param {number} width @param {number} height */
 export function presetRectangles(preset, tiles, width, height) {
   if (!TILE_PRESETS.includes(preset) || ![width,height].every(n => Number.isFinite(n) && n > 0)) throw Error('LAYOUT_PRESET_INVALID');
-  const visible = tiles.filter(tile => !tile.hidden && !tile.floating);
+  const visible = tiles.filter(tile => !tile.hidden);
   if (visible.some(tile => tile.maximized)) return [];
   if (new Set(visible.map(tile => tile.id)).size !== visible.length) throw Error('LAYOUT_PRESET_DUPLICATE');
   const count = visible.length;
   return visible.map((tile, index) => {
-    if (preset === 'focus-strip' && count > 1) {
-      if (index === 0) return {id:tile.id,x:0,y:0,width:width * 0.7,height};
-      const top = Math.floor((index - 1) * height / (count - 1));
-      return {id:tile.id,x:width * 0.7,y:top,width:width * 0.3,height:Math.floor(index * height / (count - 1)) - top};
+    if (preset === 'floating') {
+      const w = Math.min(640, Math.max(240,width * .6),width), h = Math.min(480,Math.max(200,height * .65),height);
+      return {id:tile.id,x:Math.min(24 * index, Math.max(0,width-w)),y:Math.min(24 * index,Math.max(0,height-h)),width:w,height:h};
     }
-    const columns = preset === 'single' ? 1 : Math.min(2,count);
-    const column = index % columns, row = Math.floor(index / columns);
-    const rows = Math.ceil((count - column) / columns);
-    const x = Math.floor(column * width / columns), y = Math.floor(row * height / rows);
-    return {id:tile.id,x,y,width:Math.floor((column + 1) * width / columns) - x,height:Math.floor((row + 1) * height / rows) - y};
+    if (preset === 'single') return {id:tile.id,x:0,y:0,width,height};
+    if (preset === 'focus-strip' && count > 1) {
+      const focusWidth = Math.floor(width * .7);
+      if (index === 0) return {id:tile.id,x:0,y:0,width:focusWidth,height};
+      const top = Math.floor((index - 1) * height / (count - 1));
+      return {id:tile.id,x:focusWidth,y:top,width:width-focusWidth,height:Math.floor(index * height / (count - 1)) - top};
+    }
+    if (preset === 'focus-strip' || preset === 'side-by-side' && count === 1) return {id:tile.id,x:0,y:0,width,height};
+    const cell = preset === 'grid' ? Math.min(index,3) : Math.min(index,1);
+    const column = cell % 2, row = preset === 'grid' ? Math.floor(cell / 2) : 0;
+    const rows = preset === 'grid' ? 2 : 1;
+    const x = Math.floor(column * width / 2), y = Math.floor(row * height / rows);
+    return {id:tile.id,x,y,width:Math.floor((column + 1) * width / 2) - x,height:Math.floor((row + 1) * height / rows) - y};
   });
 }
 
-/** Preserve all hidden and floating panel records while rebuilding only visible grid leaves.
+/** Serialized sizes omit each split's gap deduction. Restore that share
+ * before calling setSize, so opposite clicks are exact inverses.
+ * @param {any} layout @param {string} id @param {'width'|'height'} dimension */
+export function panelAllocation(layout,id,dimension) {
+  let allocation = /** @type {number|undefined} */ (undefined);
+  const visit = (/** @type {any} */ node, /** @type {string} */ axis, /** @type {number} */ width, /** @type {number} */ height) => {
+    if (!node) return false;
+    if (node.type === 'leaf') return node.data.views.includes(id);
+    const visible = node.data.filter((/** @type {any} */ child)=>child.visible !== false);
+    const total = visible.reduce((/** @type {number} */ sum,/** @type {any} */ child)=>sum+child.size,0);
+    const gapShare = Math.max(0,(axis === 'width' ? width : height)-total)/Math.max(1,visible.length);
+    for (const child of node.data) if (visit(child,axis === 'width' ? 'height' : 'width',axis === 'width' ? child.size : width,axis === 'height' ? child.size : height)) {
+      if (axis === dimension && allocation === undefined && Number.isFinite(child.size)) allocation = child.size + gapShare;
+      return true;
+    }
+    return false;
+  };
+  visit(layout?.grid?.root,layout?.grid?.orientation === 'VERTICAL' ? 'height' : 'width',layout?.grid?.width,layout?.grid?.height);
+  return allocation;
+}
+
+/** Rebuild presentation using Dockview's panel-reuse contract. Empty grid cells
+ * contain no placeholder capsule. Hidden records retain their presentation home.
  * @param {any} layout @param {string} preset @param {Array<any>} tiles @param {number} width @param {number} height */
 export function arrangePreset(layout, preset, tiles, width, height) {
   const rectangles = presetRectangles(preset,tiles,width,height);
   if (!rectangles.length) return null;
-  const result = structuredClone(layout), groups = new Map(), emptyHomes = /** @type {any[]} */ ([]);
-  const visit = (/** @type {any} */ node) => {
-    if (node.type === 'leaf') {
-      for (const id of node.data.views) groups.set(id,node.data.id);
-      if (!node.data.views.length) emptyHomes.push({...node,size:0,visible:false});
-    }
-    else for (const child of node.data) visit(child);
+  const result = structuredClone(layout);
+  const shown = new Set(rectangles.map(r=>r.id));
+  const hiddenLeaves = /** @type {any[]} */ ([]);
+  const hiddenGroupIds = new Set();
+  const retain = (/** @type {any} */ node) => {
+    if (node.type === 'branch') { node.data.forEach(retain); return; }
+    const views = node.data.views.filter((/** @type {string} */ id)=>!shown.has(id));
+    if (!views.length) return;
+    hiddenGroupIds.add(node.data.id);
+    hiddenLeaves.push({...node,size:0,visible:false,data:{...node.data,views,activeView:views.includes(node.data.activeView) ? node.data.activeView : views[0]}});
   };
-  visit(result.grid.root);
-  const groupIds = new Set();
-  const leaf = (/** @type {string} */ id, /** @type {number} */ size, hidden = false) => {
-    let group = groups.get(id) || 'preset-' + id;
-    if (groupIds.has(group)) group = 'preset-' + id;
-    groupIds.add(group);
-    return {type:'leaf',size,visible:!hidden,data:{id:group,views:[id],activeView:id}};
-  };
-  const columns = [...new Set(rectangles.map(rect => rect.x))];
-  const data = columns.map(x => {
-    const members = rectangles.filter(rect => rect.x === x);
-    if (members.length === 1) return leaf(members[0].id,members[0].width);
-    return {type:'branch',size:members[0].width,data:members.map(rect => leaf(rect.id,rect.height))};
+  retain(result.grid.root);
+  result.floatingGroups = (result.floatingGroups || []).filter((/** @type {any} */ item)=> {
+    item.data.views = item.data.views.filter((/** @type {string} */ id)=>!shown.has(id));
+    if (!item.data.views.length) return false;
+    if (!item.data.views.includes(item.data.activeView)) item.data.activeView = item.data.views[0];
+    hiddenGroupIds.add(item.data.id); return true;
   });
-  for (const tile of tiles.filter(tile => tile.hidden && !tile.floating)) data.push(leaf(tile.id,0,true));
-  for (const home of emptyHomes) if (!groupIds.has(home.data.id)) data.push(home);
+  let serial = 0;
+  const groupId = () => { let id; do { id = 'p18f-cell-' + serial++; } while(hiddenGroupIds.has(id)); return id; };
+  for (const id of shown) {
+    const panel = result.panels[id];
+    if (panel?.params?.viewMode?.startsWith('window-floating:')) panel.params.viewMode = null;
+  }
+  const cells = new Map();
+  for (const rect of rectangles) {
+    const key = [rect.x,rect.y].join(':');
+    if (!cells.has(key)) cells.set(key,{...rect,views:[]});
+    cells.get(key).views.push(rect.id);
+  }
+  if (preset === 'grid') for (const [x,y] of [[0,0],[Math.floor(width/2),0],[0,Math.floor(height/2)],[Math.floor(width/2),Math.floor(height/2)]]) {
+    const key = [x,y].join(':');
+    if (!cells.has(key)) cells.set(key,{x,y,width:x ? width-x : Math.floor(width/2),height:y ? height-y : Math.floor(height/2),views:[]});
+  }
+  const leaf = (/** @type {any} */ cell, /** @type {number} */ size) => ({type:'leaf',size,data:{id:groupId(),views:cell.views,...(cell.views.length ? {activeView:cell.views[0]} : {})}});
+  let data = /** @type {any[]} */ ([]);
+  if (preset === 'floating') {
+    // One independent window per tile, even when the prior preset used tabs.
+    for (const rect of rectangles) result.floatingGroups.push({data:{id:groupId(),views:[rect.id],activeView:rect.id},position:{left:rect.x,top:rect.y,width:rect.width,height:rect.height}});
+    data = [leaf({views:[]},width)];
+  } else {
+    const ordered = [...cells.values()].sort((a,b)=>a.x-b.x || a.y-b.y);
+    data = [...new Set(ordered.map(cell=>cell.x))].map(x => {
+      const column = ordered.filter(cell=>cell.x === x);
+      return column.length === 1 ? leaf(column[0],column[0].width) : {type:'branch',size:column[0].width,data:column.map(cell=>leaf(cell,cell.height))};
+    });
+  }
+  data.push(...hiddenLeaves);
   result.grid = {width,height,orientation:'HORIZONTAL',root:{type:'branch',size:width,data}};
+  result.activeGroup = preset === 'floating' ? result.floatingGroups.find((/** @type {any} */ g)=>g.data.views.includes(rectangles[0].id)).data.id : data[0].type === 'leaf' ? data[0].data.id : data[0].data[0].data.id;
   return result;
 }
-
 
 /** Panel id namespace: deterministic, reversible, never a bare numeric index. */
 export const WALL_PANEL_ID_PREFIX = 'panel-';
@@ -191,6 +246,8 @@ export const WALL_PRESENTATION_VERBS = Object.freeze(['close', 'hide', 'show', '
  * @typedef {Object} WallWorkspaceController
  * @property {(payload: unknown) => WallAdmissionResult<Readonly<{ ready: boolean }>>} handleReady
  * @property {() => void} dispose
+ * @property {(action:string) => WallAdmissionResult<unknown>} resizeFocused
+ * @property {(id:string,action:string) => WallAdmissionResult<unknown>} resizeTile
  * @property {(preset:string|null) => WallAdmissionResult<unknown>} setPreset
  * @property {() => void} refreshPreset
  * @property {(capsuleId:string,body:any) => WallAdmissionResult<unknown>} applyLayoutEcho
@@ -391,7 +448,7 @@ export function createWallWorkspaceController(options = {}) {
   let api = null;
   /** @type {WallWindowPresentation | null} */
   let windows = null;
-  let preset = /** @type {string|null} */ (null), layoutSignature = '';
+  let preset = /** @type {string|null} */ (null), layoutSignature = '', focusTile = '';
   let host = /** @type {any} */ (null);
   /** @type {Map<string, string>} */
   const panelIdentities = new Map();
@@ -496,44 +553,116 @@ export function createWallWorkspaceController(options = {}) {
     }
     if (!preset || !api?.width || !api.height) return;
     const tiles = presentationRows();
-    const signature = JSON.stringify([preset,api.width,api.height,tiles]);
+    const signature = JSON.stringify([preset,api.width,api.height,tiles.map(({id,hidden})=>({id,hidden}))]);
     if (signature === layoutSignature || tiles.some(tile => tile.maximized)) return;
+    if (focusTile && (preset === 'single' || preset === 'focus-strip')) tiles.sort((a,b)=>Number(b.id === focusTile)-Number(a.id === focusTile));
     const rectangles = presetRectangles(preset,tiles,api.width,api.height);
     if (!rectangles.length) return;
-    const first = /** @type {any} */(api.getPanel(rectangles[0].id));
-    if (!first?.group) return;
-    // Reuse existing panels through the presentation API. Hidden groups retain
-    // their homes and floating windows retain their independent geometry.
+    // Move existing panels; the kit remains the only layout-restore owner.
+    for (const rect of rectangles) if (windows?.state(rect.id).floating) {
+      let grid = (api.groups || []).find((/** @type {any} */ group)=>group.api.location.type === 'grid');
+      if (!grid) grid = /** @type {any} */ (api).addGroup({direction:'right',skipSetActive:true});
+      const panel = /** @type {any} */ (api.getPanel(rect.id));
+      panel.api.moveTo({group:grid,position:'center'});
+      if (panel.params?.viewMode?.startsWith('window-floating:')) panel.api.updateParameters({viewMode:null});
+    }
+    const first = /** @type {any} */ (api.getPanel(rectangles[0].id));
     for (const rect of rectangles.slice(1)) {
-      const panel = /** @type {any} */(api.getPanel(rect.id));
-      if (!panel?.api.moveTo) throw Error('LAYOUT_PRESET_UNAVAILABLE');
+      const panel = /** @type {any} */ (api.getPanel(rect.id));
       if (panel.group !== first.group) panel.api.moveTo({group:first.group,position:'center'});
     }
-    const placed = [rectangles[0]];
-    for (const rect of rectangles.slice(1)) {
-      const column = placed.filter(candidate => candidate.x === rect.x);
-      const reference = column.at(-1) || placed[0];
-      const anchor = /** @type {any} */(api.getPanel(reference.id));
-      const panel = /** @type {any} */(api.getPanel(rect.id));
-      panel.api.moveTo({group:anchor.group,position:column.length ? 'bottom' : 'right'});
-      placed.push(rect);
+    collapseEmptyGroups();
+    if (preset === 'floating') {
+      for (const rect of rectangles) /** @type {any} */ (api).addFloatingGroup(api.getPanel(rect.id),{position:{left:rect.x,top:rect.y},width:rect.width,height:rect.height});
+      // The kit decoder requires a branch root with an empty grid home.
+      if (!(api.groups || []).some((/** @type {any} */ group)=>group.api.location.type === 'grid')) /** @type {any} */ (api).addGroup({direction:'right',skipSetActive:true});
+    } else {
+      const cells = new Map();
+      for (const rect of rectangles) {
+        const key = [rect.x,rect.y].join(':');
+        if (!cells.has(key)) cells.set(key,{...rect,ids:[]});
+        cells.get(key).ids.push(rect.id);
+      }
+      if (preset === 'grid') for (const [x,y] of [[0,0],[Math.floor(api.width/2),0],[0,Math.floor(api.height/2)],[Math.floor(api.width/2),Math.floor(api.height/2)]]) {
+        const key = [x,y].join(':');
+        if (!cells.has(key)) cells.set(key,{x,y,width:x ? api.width-x : Math.floor(api.width/2),height:y ? api.height-y : Math.floor(api.height/2),ids:[]});
+      }
+      const placed = /** @type {any[]} */ ([]);
+      for (const cell of [...cells.values()].sort((a,b)=>a.y-b.y || a.x-b.x)) {
+        let group = first.group;
+        if (placed.length) {
+          const column = placed.filter(other=>other.x === cell.x);
+          const anchor = column.at(-1) || placed[0];
+          const position = column.length ? 'bottom' : 'right';
+          if (cell.ids.length) {
+            const panel = /** @type {any} */ (api.getPanel(cell.ids[0]));
+            panel.api.moveTo({group:anchor.group,position}); group = panel.group;
+          } else group = /** @type {any} */ (api).addGroup({referenceGroup:anchor.group,direction:column.length ? 'below' : 'right'});
+        }
+        for (const id of cell.ids.slice(1)) /** @type {any} */ (api.getPanel(id)).api.moveTo({group,position:'center'});
+        placed.push({...cell,group});
+      }
+      for (const cell of placed) cell.group.api.setSize({width:cell.width,height:cell.height});
+      first.api.setActive();
     }
-    for (const rect of rectangles) {
-      const panel = /** @type {any} */(api.getPanel(rect.id));
-      panel.group.api.setSize({width:rect.width,height:rect.height});
-    }
-    layoutSignature = JSON.stringify([preset,api.width,api.height,presentationRows()]);
+    layoutSignature = JSON.stringify([preset,api.width,api.height,presentationRows().map(({id,hidden})=>({id,hidden}))]);
+    void host?.completeUserGesture?.();
   }
+
   function setPreset(/** @type {string|null} */ next) {
     if (next !== null && !TILE_PRESETS.includes(next)) return fail('LAYOUT_PRESET_INVALID','Unknown tile preset.');
     if (!api || !windows) return fail('ERR_NOT_READY','Wall is not ready.');
-    preset = next; layoutSignature = '';
+    preset = next; layoutSignature = ''; focusTile = /** @type {any} */ (api).activePanel?.id || '';
     try {
       refreshPreset();
       // The kit owns validated persistence and its settled/read-only gates.
       void host?.completeUserGesture?.();
       return succeed({preset});
     } catch { return fail('LAYOUT_PRESET_FAILED','Tile layout is unavailable.'); }
+  }
+
+  function resizeFocused(/** @type {string} */ action) {
+    const id = /** @type {any} */ (api)?.activePanel?.id;
+    return typeof id === 'string' && id.startsWith(WALL_PANEL_ID_PREFIX) ? resizeTile(id.slice(WALL_PANEL_ID_PREFIX.length),action) : fail('ERR_NOT_READY','No focused tile.');
+  }
+  function resizeTile(/** @type {string} */ capsuleId, /** @type {string} */ action) {
+    if (!api || !windows || !api.width || !api.height) return fail('ERR_NOT_READY','Wall is not ready.');
+    const wallWidth = api.width, wallHeight = api.height;
+    const panel = /** @type {any} */ (api.getPanel(WALL_PANEL_ID_PREFIX + capsuleId));
+    if (!panel || !['wider','narrower','taller','shorter','fit'].includes(action)) return fail('LAYOUT_SIZE_INVALID','Unknown tile or size action.');
+    try {
+      panel.api.setActive();
+      const group = panel.group, box = group.api.boundingBox || group.element.getBoundingClientRect();
+      if (action === 'fit') {
+        if (windows.state(panel.id).floating) {
+          const titleHeight = group.element?.closest?.('.dv-resize-container')?.querySelector('.dv-floating-titlebar')?.offsetHeight || 0;
+          group.api.setSize({width:Math.min(640,wallWidth),height:Math.min(480,wallHeight)-titleHeight});
+        }
+        else {
+          const peers = (api.groups || []).filter((/** @type {any} */ candidate)=>candidate.size > 0 && candidate.api.location.type === 'grid' && candidate.api.isVisible !== false);
+          const boxes = peers.map((/** @type {any} */ candidate)=>candidate.api.boundingBox || candidate.element.getBoundingClientRect());
+          const columns = new Set(boxes.map((/** @type {any} */ rect)=>Math.round(rect.left ?? rect.x)));
+          const rows = boxes.filter((/** @type {any} */ rect)=>Math.abs((rect.left ?? rect.x)-(box.left ?? box.x)) < 2).length;
+          group.api.setSize({width:wallWidth/Math.max(1,columns.size),height:wallHeight/Math.max(1,rows)});
+        }
+      } else {
+        const horizontal = action === 'wider' || action === 'narrower';
+        const dimension = horizontal ? 'width' : 'height';
+        const step = Math.round((horizontal ? wallWidth : wallHeight) * .1);
+        // Dockview sizes grid allocations; floats use outer width and
+        // content height. Gap shares and titlebars must not accumulate drift.
+        const outer = windows.state(panel.id).floating ? group.element?.closest?.('.dv-resize-container')?.getBoundingClientRect() : null;
+        const allocated = outer ? undefined : panelAllocation(/** @type {any} */ (api).toJSON?.(),panel.id,dimension);
+        const current = outer?.[dimension] ?? allocated ?? (Number.isFinite(group.api[dimension]) && group.api[dimension] > 0 ? group.api[dimension] : box[dimension]);
+        const minimum = horizontal ? WALL_PANEL_MIN_WIDTH : WALL_PANEL_MIN_HEIGHT;
+        const maximum = horizontal ? wallWidth : wallHeight;
+        const value = Math.max(minimum,Math.min(maximum,current + (action === 'wider' || action === 'taller' ? step : -step)));
+        const titleHeight = !horizontal && outer ? group.element.closest('.dv-resize-container').querySelector('.dv-floating-titlebar')?.offsetHeight || 0 : 0;
+        group.api.setSize({[dimension]:value-titleHeight});
+      }
+      void host?.completeUserGesture?.();
+      return succeed({action});
+    } catch { return fail('LAYOUT_SIZE_FAILED','Tile size is unavailable.'); }
   }
 
   /**
@@ -824,7 +953,7 @@ export function createWallWorkspaceController(options = {}) {
     });
   }
 
-  return Object.freeze({ handleReady, dispose, revealSurface, applyPresentationIntent, applyLayoutEcho, setPreset, refreshPreset, createPanelCallbacks });
+  return Object.freeze({ handleReady, dispose, revealSurface, applyPresentationIntent, applyLayoutEcho, setPreset, resizeTile, resizeFocused, refreshPreset, createPanelCallbacks });
 }
 
 /**
@@ -1032,11 +1161,13 @@ function revealSurface(capsuleId, placement) {
 /** @param {string} capsuleId @param {unknown} body */
 function applyLayoutEcho(capsuleId, body) { return controller.applyLayoutEcho(capsuleId, body); }
 function setPreset(/** @type {string|null} */ preset) { return controller.setPreset(preset); }
+function resizeTile(/** @type {string} */ id, /** @type {string} */ action) { return controller.resizeTile(id,action); }
+function resizeFocused(/** @type {string} */ action) { return controller.resizeFocused(action); }
 /** Presentation only: used after an acknowledged capsule stop. @param {unknown} intent */
 function applyPresentationIntent(intent) { return controller.applyPresentationIntent(intent); }
 const presetTimer = setInterval(() => { controller.refreshPreset(); },150);
 presetTimer.unref?.();
-defineExpose({ revealSurface, applyLayoutEcho, setPreset, applyPresentationIntent });
+defineExpose({ revealSurface, applyLayoutEcho, setPreset, resizeTile, resizeFocused, applyPresentationIntent });
 
 onBeforeUnmount(() => {
   clearInterval(presetTimer);

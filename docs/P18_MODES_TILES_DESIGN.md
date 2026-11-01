@@ -380,3 +380,88 @@ has its own incremental-typing and submission assertions.
 
 This section scopes its mandate to the supplied MetaViewer and OpenSuperficies
 worktree corpus.
+
+## P18f — tile layout controls
+
+The mandate is presentation on the active desktop. Capsule identity, control,
+process lifetime, native network policy and the frozen contracts remain owned
+by their existing boundaries.
+
+The human-float failure has two independent causes. `observeOverlays` counted
+Dockview's modeless `dv-resize-container[role=dialog]` as a modal, continuously
+hiding its native view. `collectClipRects` clipped every ancestor and fell back
+to the wall even for floating renderers. Dockview actually portals native tile
+content under `dv-render-overlay-float`, separately from the resize container.
+Modeless float dialogs are now excluded from modal occlusion; real modals and
+menus retain it. A floating renderer clips against its content/window and any
+internal overflow clips. Docked renderers retain wall and overflow clipping.
+Pointer movement, viewport resizing and the existing bounded poll refresh native
+bounds. Neither clipping nor moving a panel revokes a mounted human session.
+Inactive Dockview tabs retain nonempty rectangles under visibility:hidden; the
+paint predicate explicitly excludes that state without closing the session.
+
+| Preset | Exact active-desktop presentation |
+| --- | --- |
+| Single | Focused panel fills the wall; remaining panels are tabs in that group. |
+| Side by side | Equal columns [TARGET]; first panels visible, excess tabs in the right column. A sole panel fills the wall. |
+| Grid | Equal grid cells, including empty cells [TARGET]; excess panels tab in the final cell. Empty cells contain no capsule. |
+| Focus + strip | Focus receives approximately 70 percent [TARGET]; remaining panels stack equally in the right column. |
+| Floating | Every panel has its own cascaded window, bounded by the wall [TARGET]. |
+
+Preset actions use public Dockview move, group and sizing APIs. The UI kit alone
+owns restoration and serialization. A floating-only layout keeps an empty grid
+home so the kit can validate and persist it. Grid persistence deliberately retains
+empty cells. Membership and wall-size changes reapply the active preset; manual
+floating or resizing alone does not trigger a preset reset. Repeated application
+keeps the same geometry and panel renderers. Presets persist independently per
+desktop. Legacy null presets keep their existing manual presentation.
+
+Compact header buttons request wider, narrower, taller, shorter and fit. Steps
+are ten percent of the wall dimension [TARGET]; Dockview enforces panel and
+neighbor constraints. Floating panels use the same sizing API. Fit equalizes
+row/column shares, or restores a floating window's default size. Serialized grid
+sizes omit the split-gap share, which is restored before sizing. Floating height
+requests exclude the floating titlebar. These conversions prevent inverse
+button presses from accumulating geometry drift. The renderer
+and native input boundary share the Ctrl+Alt+Arrow grammar; both keydown and
+keyup are consumed. Native shortcuts include the originating capsule identity,
+so the correct tile resizes even while keyboard focus is inside xpra.
+
+The tile menu lists destinations only from its current Humans/Agents view.
+Move preserves navigation; Move and go follows the destination. New desktop
+supports both operations. A local handoff token prevents the departing
+RoleSurface from revoking the native session. The arriving renderer adopts the
+existing host session, hides it while its desktop is inactive and reuses it on
+reveal. The surface ID and bridge do not change. Source/destination layout
+snapshots are pruned by ownership and persisted. No backend create/destroy
+request is part of a desktop move.
+
+Desktop removal compacts displayed/persisted IDs and remaps assignments and the
+active desktop. Desktop objects, layouts and renderer keys survive renumbering;
+adapter closures follow the desktop object instead of capturing a former ID.
+Legacy envelopes are compacted after validation. A later addition uses the next
+position. Occupied desktops and the initial desktop remain protected by the
+existing removal policy.
+
+Only the adapter's fixed display-pool-exhaustion/occupied-display faults map to
+`CAPSULE_SLOT_UNAVAILABLE`. The UI uses the shared capsule ceiling in its
+message. Other profile and frame faults retain their original codes.
+
+Verification gates and negative contrasts:
+
+| Change | Gate | Negative contrast |
+| --- | --- | --- |
+| Native float | Real isolated native view stays visible while dragging/resizing; bridge listener stays identical | Restore wall clipping or classify the float as modal |
+| Presets | Exact geometry/tab ownership for each preset and tile count, real Dockview cell bounds, idempotent reapplication | Mutate each preset's cell/ratio/cascade rule |
+| Size controls | Positive/negative steps return within two pixels [TARGET], constraints and fit hold | Mutate the step or drop shortcut interception |
+| Desktop move | Same host session, unchanged navigation for Move, navigation for Move and go | Drop reassignment, follow logic or session handoff |
+| Numbering | Populated surviving layouts/assignments follow compacted positions | Omit the renumber operation |
+| Capacity refusal | Exhaustion gets actionable copy and unrelated codes survive | Remove the specific adapter mapping |
+
+All build, test and dev processes use the operator's capped scope. Live work
+uses the isolated dev profile on display :97 [TARGET] and only its own test
+capsule; the packaged operator app is outside this mandate. Screenshots for
+multiple tiles use a controlled Dockview fixture with simulated transport, and
+native screenshots/checks use the sole owned live capsule. Verification artifacts
+and command receipts are local evidence, not a replacement for the final report.
+This section scopes the implementation mandate to the supplied MetaViewer and OpenSuperficies corpus.

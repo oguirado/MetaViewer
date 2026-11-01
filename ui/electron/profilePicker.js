@@ -269,6 +269,7 @@ export function refusalReply(refusal) {
  * for `NO_IDENTITY` when no specific missing profile id is supplied.
  */
 export const CREATE_REFUSAL_REASONS = Object.freeze({
+  CAPSULE_SLOT_UNAVAILABLE: `No free capsule slot. Stop another capsule first (up to ${MAX_CAPSULES} run at once).`,
   NO_BROWSER_CAPSULE: 'No browser capsule with a live frame.',
   CAPSULE_LIMIT_REACHED: REFUSAL_COPY.CAPSULE_LIMIT_REACHED.message,
   NO_FREE_PROFILE: REFUSAL_COPY.NO_FREE_PROFILE.message,

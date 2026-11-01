@@ -42,10 +42,10 @@ function desktopOracle(api) {
   assert.deepEqual(state.assignments.new,{view:'human',desktop:2});
   assert.equal(api.removeDesktop(state,'human',2),false);
   assert.equal(api.addDesktop(state),3);assert.equal(api.removeDesktop(state,'human',3),true);
-  assert.equal(api.addDesktop(state),4); // Removed numbers are never reused.
+  assert.equal(api.addDesktop(state),3); // Desktop numbers are positional.
   assert.deepEqual(state.views.agent.desktops.map(d=>d.id),[1]);
 }
-test('P18C numbered desktops allocate monotonically and new capsules use their matching active desktop',()=>desktopOracle(model));
+test('P18C numbered desktops reuse the removed final position and new capsules use their matching active desktop',()=>desktopOracle(model));
 test('P18C mutant: new capsule forced to desktop 1 is rejected',async()=>{
   const api=await altered('../electron/desktopLayout.js','desktop:state.views[view].active','desktop:1');
   assert.throws(()=>desktopOracle(api),{code:'ERR_ASSERTION'});

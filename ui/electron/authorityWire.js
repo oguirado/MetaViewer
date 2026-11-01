@@ -747,6 +747,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     PICKER_INPUT_INVALID: 'The capsule request could not be prepared. Please try again.',
     SURFACE_PROFILE_BOUND: 'Every configured capsule profile is already bound to a running capsule. Close or reuse the existing capsule, or add another profile to MV_SRF_PROFILES.',
     PROFILE_ALREADY_BOUND: 'The selected capsule profile is already bound to a running capsule. Close the running capsule or add another profile to MV_SRF_PROFILES.',
+    CAPSULE_SLOT_UNAVAILABLE: 'No free capsule slot. Stop another capsule first (up to 4 run at once).',
     SURFACE_CAPACITY_OR_QUARANTINE: 'No capsule slot is free or the profile is quarantined. Close a capsule or clear the quarantined profile before trying again.',
     SURFACE_PROFILE_QUARANTINED: 'The capsule profile is quarantined after a previous failure. Clear the quarantine before opening a new capsule.',
     IDENTITY_UNAVAILABLE: 'The capsule identity is unavailable or already held by another capsule. Check Identities and try again.',
