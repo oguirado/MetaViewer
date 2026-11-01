@@ -19,16 +19,16 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 2,568 | 55 | 2,513 |
-| Lanes finished OK | 2,568 | 55 | 2,513 |
-| Agent steps | 80,606 | 2,705 | 77,901 |
-| Lane-hours of agent work | 179.8 | 5.2 | 174.5 |
-| Fresh input tokens | 305,489,020 | 11,482,034 | 294,006,986 |
-| Cache-read input tokens | 5,327,385,742 | 226,255,212 | 5,101,130,530 |
+| Lanes launched | 2,570 | 55 | 2,515 |
+| Lanes finished OK | 2,570 | 55 | 2,515 |
+| Agent steps | 80,652 | 2,705 | 77,947 |
+| Lane-hours of agent work | 179.9 | 5.2 | 174.6 |
+| Fresh input tokens | 305,612,637 | 11,482,034 | 294,130,603 |
+| Cache-read input tokens | 5,329,191,772 | 226,255,212 | 5,102,936,560 |
 | Prompt cache hit % | 94.6 | 95.2 | 94.6 |
-| Output tokens | 62,308,710 | 2,135,708 | 60,173,002 |
-| Thinking tokens | 38,290,597 | 1,050,039 | 37,240,558 |
-| Cost (USD) | 53.6654 | 2.0279 | 51.6375 |
+| Output tokens | 62,340,323 | 2,135,708 | 60,204,615 |
+| Thinking tokens | 38,311,851 | 1,050,039 | 37,261,812 |
+| Cost (USD) | 53.6877 | 2.0279 | 51.6598 |
 | Cost per lane (USD) | 0.0209 | 0.0369 | 0.0205 |
 
 Rooms: 136. Peak concurrent lanes [MEASURED from lane start/end]: 42.
@@ -38,7 +38,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 2179 | 93.7 | 37.4179 |
+| build | 2181 | 93.7 | 37.4402 |
 | context | 42 | 95.9 | 1.9093 |
 | context packs + test ideation (U-DEC-0139) | 13 | 91.1 | 0.2195 |
 | demo | 4 | 90.7 | 0.0557 |
@@ -86,7 +86,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 1841 | 93.6 | 29.1394 | direct Muse job |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 1843 | 93.6 | 29.1617 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -2766,6 +2766,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | 13001_rev_KEYBOARD-TRIAGE-P13_b | fill_113001_rev_KEYBOARD-TRIAGE-P13_b | Nov 01 11:31 | yes | 12 | 93.6 | 0.003923 |
 | direct-direct | 13001_rev_MW-READBACK-TEXTOF-R2_a | fill_113001_rev_MW-READBACK-TEXTOF-R2_a | Nov 01 11:31 | yes | 13 | 88.3 | 0.008438 |
 | direct-direct | 13001_rev_MW-READBACK-TEXTOF-R2_b | fill_113001_rev_MW-READBACK-TEXTOF-R2_b | Nov 01 11:31 | yes | 9 | 87.5 | 0.004514 |
+| direct-direct | SPLAY-READER-DEFLAKE_a | r1x_DISPLAY-READER-DEFLAKE_a | Nov 01 11:32 | yes | 36 | 95.6 | 0.013333 |
 | direct-direct | SPLAY-READER-DEFLAKE_b | r1x_DISPLAY-READER-DEFLAKE_b | Nov 01 11:32 | yes | 17 | 90.2 | 0.010435 |
 | direct-direct | 13120_rev_DISPLAY-READER-DEFLAKE_a | fill_113120_rev_DISPLAY-READER-DEFLAKE_a | Nov 01 11:32 | yes | 15 | 89.9 | 0.011481 |
 | direct-direct | 13120_rev_DISPLAY-READER-DEFLAKE_b | fill_113120_rev_DISPLAY-READER-DEFLAKE_b | Nov 01 11:32 | yes | 10 | 84.7 | 0.0071 |
@@ -2774,6 +2775,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | 13120_rev_MW-READBACK-TEXTOF-R2_a | fill_113120_rev_MW-READBACK-TEXTOF-R2_a | Nov 01 11:32 | yes | 10 | 84.2 | 0.007358 |
 | direct-direct | 13120_rev_MW-READBACK-TEXTOF-R2_b | fill_113120_rev_MW-READBACK-TEXTOF-R2_b | Nov 01 11:32 | yes | 18 | 91.5 | 0.010704 |
 | direct-direct | 13239_rev_KEYBOARD-TRIAGE-P13_b | fill_113239_rev_KEYBOARD-TRIAGE-P13_b | Nov 01 11:33 | yes | 17 | 92.6 | 0.006262 |
+| direct-direct | 13239_rev_MW-READBACK-TEXTOF-R2_b | fill_113239_rev_MW-READBACK-TEXTOF-R2_b | Nov 01 11:33 | yes | 10 | 85.0 | 0.008963 |
 
 ## Method
 
