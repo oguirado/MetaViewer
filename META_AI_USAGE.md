@@ -19,17 +19,17 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 2,269 | 55 | 2,214 |
-| Lanes finished OK | 2,269 | 55 | 2,214 |
-| Agent steps | 73,409 | 2,705 | 70,704 |
-| Lane-hours of agent work | 165.9 | 5.2 | 160.7 |
-| Fresh input tokens | 282,829,377 | 11,482,034 | 271,347,343 |
-| Cache-read input tokens | 4,971,637,496 | 226,255,212 | 4,745,382,284 |
+| Lanes launched | 2,328 | 55 | 2,273 |
+| Lanes finished OK | 2,328 | 55 | 2,273 |
+| Agent steps | 74,398 | 2,705 | 71,693 |
+| Lane-hours of agent work | 168.2 | 5.2 | 162.9 |
+| Fresh input tokens | 286,245,950 | 11,482,034 | 274,763,916 |
+| Cache-read input tokens | 5,008,191,332 | 226,255,212 | 4,781,936,120 |
 | Prompt cache hit % | 94.6 | 95.2 | 94.6 |
-| Output tokens | 57,282,467 | 2,135,708 | 55,146,759 |
-| Thinking tokens | 34,923,043 | 1,050,039 | 33,873,004 |
-| Cost (USD) | 49.6827 | 2.0279 | 47.6548 |
-| Cost per lane (USD) | 0.0219 | 0.0369 | 0.0215 |
+| Output tokens | 58,109,701 | 2,135,708 | 55,973,993 |
+| Thinking tokens | 35,514,432 | 1,050,039 | 34,464,393 |
+| Cost (USD) | 50.2629 | 2.0279 | 48.235 |
+| Cost per lane (USD) | 0.0216 | 0.0369 | 0.0212 |
 
 Rooms: 136. Peak concurrent lanes [MEASURED from lane start/end]: 42.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
@@ -38,7 +38,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 1880 | 93.7 | 33.4352 |
+| build | 1939 | 93.7 | 34.0154 |
 | context | 42 | 95.9 | 1.9093 |
 | context packs + test ideation (U-DEC-0139) | 13 | 91.1 | 0.2195 |
 | demo | 4 | 90.7 | 0.0557 |
@@ -86,7 +86,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 1542 | 93.6 | 25.1567 | direct Muse job |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 1601 | 93.6 | 25.7369 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -2474,7 +2474,66 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | 84551_rev_JUDGE-SYSDEP-BUILD_b | fill_084551_rev_JUDGE-SYSDEP-BUILD_b | Nov 01 08:47 | yes | 15 | 91.4 | 0.006797 |
 | direct-direct | 84551_rev_UX-SCROLL_a | fill_084551_rev_UX-SCROLL_a | Nov 01 08:47 | yes | 11 | 88.2 | 0.006886 |
 | direct-direct | 84551_rev_UX-SCROLL_b | fill_084551_rev_UX-SCROLL_b | Nov 01 08:47 | yes | 16 | 91.1 | 0.00907 |
+| direct-direct | 84710_rev_CONTRACT-CORE-V03_a | fill_084710_rev_CONTRACT-CORE-V03_a | Nov 01 08:48 | yes | 31 | 93.7 | 0.017744 |
+| direct-direct | 84710_rev_CONTRACT-CORE-V03_b | fill_084710_rev_CONTRACT-CORE-V03_b | Nov 01 08:48 | yes | 14 | 89.8 | 0.00784 |
+| direct-direct | 84710_rev_JUDGE-SYSDEP-BUILD_a | fill_084710_rev_JUDGE-SYSDEP-BUILD_a | Nov 01 08:48 | yes | 18 | 90.3 | 0.013634 |
+| direct-direct | 84710_rev_JUDGE-SYSDEP-BUILD_b | fill_084710_rev_JUDGE-SYSDEP-BUILD_b | Nov 01 08:48 | yes | 9 | 85.4 | 0.005551 |
 | direct-direct | 84710_rev_UX-SCROLL_a | fill_084710_rev_UX-SCROLL_a | Nov 01 08:48 | yes | 12 | 87.8 | 0.006861 |
+| direct-direct | 84710_rev_UX-SCROLL_b | fill_084710_rev_UX-SCROLL_b | Nov 01 08:48 | yes | 18 | 91.3 | 0.012122 |
+| direct-direct | 84828_rev_CONTRACT-CORE-V03_a | fill_084828_rev_CONTRACT-CORE-V03_a | Nov 01 08:49 | yes | 13 | 89.1 | 0.007788 |
+| direct-direct | 84828_rev_CONTRACT-CORE-V03_b | fill_084828_rev_CONTRACT-CORE-V03_b | Nov 01 08:49 | yes | 15 | 89.6 | 0.012465 |
+| direct-direct | 84828_rev_JUDGE-SYSDEP-BUILD_a | fill_084828_rev_JUDGE-SYSDEP-BUILD_a | Nov 01 08:49 | yes | 10 | 86.1 | 0.006167 |
+| direct-direct | 84828_rev_JUDGE-SYSDEP-BUILD_b | fill_084828_rev_JUDGE-SYSDEP-BUILD_b | Nov 01 08:49 | yes | 14 | 91.1 | 0.006927 |
+| direct-direct | 84828_rev_UX-SCROLL_a | fill_084828_rev_UX-SCROLL_a | Nov 01 08:49 | yes | 12 | 88.0 | 0.007071 |
+| direct-direct | 84828_rev_UX-SCROLL_b | fill_084828_rev_UX-SCROLL_b | Nov 01 08:49 | yes | 14 | 90.7 | 0.007244 |
+| direct-direct | -WALL-DEADLINE_a | r1x_MW-WALL-DEADLINE_a | Nov 01 08:49 | yes | 37 | 93.9 | 0.02029 |
+| direct-direct | -WALL-DEADLINE_b | r1x_MW-WALL-DEADLINE_b | Nov 01 08:49 | yes | 37 | 94.9 | 0.023094 |
+| direct-direct | -CHIP_a | r1x_UX-CHIP_a | Nov 01 08:49 | yes | 16 | 90.2 | 0.009785 |
+| direct-direct | -CHIP_b | r1x_UX-CHIP_b | Nov 01 08:49 | yes | 26 | 94.3 | 0.011812 |
+| direct-direct | 84947_rev_CONTRACT-CORE-V03_a | fill_084947_rev_CONTRACT-CORE-V03_a | Nov 01 08:50 | yes | 22 | 93.1 | 0.010312 |
+| direct-direct | 84947_rev_CONTRACT-CORE-V03_b | fill_084947_rev_CONTRACT-CORE-V03_b | Nov 01 08:50 | yes | 27 | 93.3 | 0.01421 |
+| direct-direct | 84947_rev_JUDGE-SYSDEP-BUILD_a | fill_084947_rev_JUDGE-SYSDEP-BUILD_a | Nov 01 08:50 | yes | 10 | 85.6 | 0.008201 |
+| direct-direct | 84947_rev_JUDGE-SYSDEP-BUILD_b | fill_084947_rev_JUDGE-SYSDEP-BUILD_b | Nov 01 08:50 | yes | 19 | 92.0 | 0.009773 |
+| direct-direct | 84947_rev_UX-SCROLL_a | fill_084947_rev_UX-SCROLL_a | Nov 01 08:51 | yes | 19 | 92.1 | 0.010326 |
+| direct-direct | 84947_rev_UX-SCROLL_b | fill_084947_rev_UX-SCROLL_b | Nov 01 08:51 | yes | 23 | 94.1 | 0.008514 |
+| direct-direct | 85106_rev_CONTRACT-CORE-V03_a | fill_085106_rev_CONTRACT-CORE-V03_a | Nov 01 08:52 | yes | 14 | 89.3 | 0.008219 |
+| direct-direct | 85106_rev_CONTRACT-CORE-V03_b | fill_085106_rev_CONTRACT-CORE-V03_b | Nov 01 08:52 | yes | 16 | 91.7 | 0.009103 |
+| direct-direct | 85106_rev_JUDGE-SYSDEP-BUILD_a | fill_085106_rev_JUDGE-SYSDEP-BUILD_a | Nov 01 08:52 | yes | 15 | 91.1 | 0.007692 |
+| direct-direct | 85106_rev_JUDGE-SYSDEP-BUILD_b | fill_085106_rev_JUDGE-SYSDEP-BUILD_b | Nov 01 08:52 | yes | 19 | 93.1 | 0.008825 |
+| direct-direct | 85106_rev_UX-SCROLL_a | fill_085106_rev_UX-SCROLL_a | Nov 01 08:52 | yes | 13 | 90.2 | 0.007534 |
+| direct-direct | 85106_rev_UX-SCROLL_b | fill_085106_rev_UX-SCROLL_b | Nov 01 08:52 | yes | 8 | 82.8 | 0.006166 |
+| direct-direct | 85224_rev_CONTRACT-CORE-V03_a | fill_085224_rev_CONTRACT-CORE-V03_a | Nov 01 08:53 | yes | 32 | 95.0 | 0.016109 |
+| direct-direct | 85224_rev_CONTRACT-CORE-V03_b | fill_085224_rev_CONTRACT-CORE-V03_b | Nov 01 08:53 | yes | 15 | 90.0 | 0.010031 |
+| direct-direct | 85224_rev_JUDGE-SYSDEP-BUILD_a | fill_085224_rev_JUDGE-SYSDEP-BUILD_a | Nov 01 08:53 | yes | 10 | 86.3 | 0.007867 |
+| direct-direct | 85224_rev_JUDGE-SYSDEP-BUILD_b | fill_085224_rev_JUDGE-SYSDEP-BUILD_b | Nov 01 08:53 | yes | 17 | 91.2 | 0.009346 |
+| direct-direct | 85224_rev_UX-SCROLL_a | fill_085224_rev_UX-SCROLL_a | Nov 01 08:53 | yes | 12 | 87.7 | 0.009803 |
+| direct-direct | 85224_rev_UX-SCROLL_b | fill_085224_rev_UX-SCROLL_b | Nov 01 08:53 | yes | 16 | 91.9 | 0.006438 |
+| direct-direct | 85343_rev_JUDGE-SYSDEP-BUILD_a | fill_085343_rev_JUDGE-SYSDEP-BUILD_a | Nov 01 08:54 | yes | 12 | 88.9 | 0.006278 |
+| direct-direct | 85343_rev_JUDGE-SYSDEP-BUILD_b | fill_085343_rev_JUDGE-SYSDEP-BUILD_b | Nov 01 08:54 | yes | 14 | 90.1 | 0.007857 |
+| direct-direct | 85343_rev_UX-SCROLL_a | fill_085343_rev_UX-SCROLL_a | Nov 01 08:54 | yes | 12 | 85.5 | 0.012284 |
+| direct-direct | 85343_rev_UX-SCROLL_b | fill_085343_rev_UX-SCROLL_b | Nov 01 08:54 | yes | 17 | 91.1 | 0.009076 |
+| direct-direct | 85455_rev_JUDGE-SYSDEP-BUILD_a | fill_085455_rev_JUDGE-SYSDEP-BUILD_a | Nov 01 08:55 | yes | 15 | 91.1 | 0.006968 |
+| direct-direct | 85455_rev_JUDGE-SYSDEP-BUILD_b | fill_085455_rev_JUDGE-SYSDEP-BUILD_b | Nov 01 08:55 | yes | 18 | 92.0 | 0.010097 |
+| direct-direct | 85455_rev_UX-SCROLL_a | fill_085455_rev_UX-SCROLL_a | Nov 01 08:56 | yes | 18 | 91.3 | 0.011119 |
+| direct-direct | 85455_rev_UX-SCROLL_b | fill_085455_rev_UX-SCROLL_b | Nov 01 08:56 | yes | 12 | 88.2 | 0.006867 |
+| direct-direct | 85608_rev_JUDGE-SYSDEP-BUILD_a | fill_085608_rev_JUDGE-SYSDEP-BUILD_a | Nov 01 08:57 | yes | 13 | 89.9 | 0.007563 |
+| direct-direct | 85608_rev_JUDGE-SYSDEP-BUILD_b | fill_085608_rev_JUDGE-SYSDEP-BUILD_b | Nov 01 08:57 | yes | 15 | 90.4 | 0.008993 |
+| direct-direct | 85608_rev_UX-SCROLL_a | fill_085608_rev_UX-SCROLL_a | Nov 01 08:57 | yes | 11 | 87.1 | 0.007329 |
+| direct-direct | 85608_rev_UX-SCROLL_b | fill_085608_rev_UX-SCROLL_b | Nov 01 08:57 | yes | 12 | 88.4 | 0.00714 |
+| direct-direct | 85720_rev_JUDGE-SYSDEP-BUILD_a | fill_085720_rev_JUDGE-SYSDEP-BUILD_a | Nov 01 08:58 | yes | 12 | 88.9 | 0.006729 |
+| direct-direct | 85720_rev_JUDGE-SYSDEP-BUILD_b | fill_085720_rev_JUDGE-SYSDEP-BUILD_b | Nov 01 08:58 | yes | 13 | 89.0 | 0.007417 |
+| direct-direct | 85720_rev_UX-SCROLL_a | fill_085720_rev_UX-SCROLL_a | Nov 01 08:58 | yes | 15 | 89.7 | 0.011385 |
+| direct-direct | 85720_rev_UX-SCROLL_b | fill_085720_rev_UX-SCROLL_b | Nov 01 08:58 | yes | 17 | 90.6 | 0.011455 |
+| direct-direct | 85832_rev_JUDGE-SYSDEP-BUILD_a | fill_085832_rev_JUDGE-SYSDEP-BUILD_a | Nov 01 08:59 | yes | 18 | 90.7 | 0.014361 |
+| direct-direct | 85832_rev_JUDGE-SYSDEP-BUILD_b | fill_085832_rev_JUDGE-SYSDEP-BUILD_b | Nov 01 08:59 | yes | 18 | 91.2 | 0.009405 |
+| direct-direct | 85832_rev_UX-SCROLL_a | fill_085832_rev_UX-SCROLL_a | Nov 01 08:59 | yes | 18 | 92.2 | 0.009072 |
+| direct-direct | 85832_rev_UX-SCROLL_b | fill_085832_rev_UX-SCROLL_b | Nov 01 08:59 | yes | 13 | 88.4 | 0.008868 |
+| direct-direct | 85945_rev_JUDGE-SYSDEP-BUILD_a | fill_085945_rev_JUDGE-SYSDEP-BUILD_a | Nov 01 09:00 | yes | 27 | 94.3 | 0.013532 |
+| direct-direct | 85945_rev_JUDGE-SYSDEP-BUILD_b | fill_085945_rev_JUDGE-SYSDEP-BUILD_b | Nov 01 09:00 | yes | 31 | 94.7 | 0.013834 |
+| direct-direct | 85945_rev_UX-SCROLL_a | fill_085945_rev_UX-SCROLL_a | Nov 01 09:00 | yes | 9 | 82.2 | 0.006966 |
+| direct-direct | 85945_rev_UX-SCROLL_b | fill_085945_rev_UX-SCROLL_b | Nov 01 09:00 | yes | 14 | 89.2 | 0.009991 |
+| direct-direct | 90057_rev_UX-SCROLL_a | fill_090057_rev_UX-SCROLL_a | Nov 01 09:01 | yes | 11 | 86.3 | 0.008167 |
+| direct-direct | 90057_rev_UX-SCROLL_b | fill_090057_rev_UX-SCROLL_b | Nov 01 09:02 | yes | 13 | 88.0 | 0.009458 |
 
 ## Method
 
