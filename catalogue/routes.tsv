@@ -142,6 +142,7 @@ flakepi-0268f441f2d7	changes/unreleased/flake-pin-procbound.md
 judge-sysdep-build.md	changes/unreleased/judge-sysdep-build.md
 mdisp-fix.md	changes/unreleased/mdisp-fix.md
 mw-sleep-ns.md	changes/unreleased/mw-sleep-ns.md
+mw-wall-deadline.md	changes/unreleased/mw-wall-deadline.md
 p12-display-reader.md	changes/unreleased/p12-display-reader.md
 p12-display-tap.md	changes/unreleased/p12-display-tap.md
 pkg-content-revert.md	changes/unreleased/pkg-content-revert.md
@@ -1336,6 +1337,7 @@ testmwr-696ca082e4f0	tests/test_mw_readback_deadline.py
 testmwr-cf2f3fed6e97	tests/test_mw_run_backend.py
 testmws-a6db1334a46b	tests/test_mw_slot_length.py
 testmws-8fd51d7e49a9	tests/test_mw_stale_frame.py
+testmww-565d17f6f4d0	tests/test_mw_wall_deadline.py
 test_net_scope.py	tests/test_net_scope.py
 test_novac_matrix.py	tests/test_novac_matrix.py
 testnvo-3cc17c3863ab	tests/test_nv_offline_uid.py
