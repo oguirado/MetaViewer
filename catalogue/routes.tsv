@@ -142,6 +142,7 @@ u1-pty-pkg-revert.md	changes/unreleased/u1-pty-pkg-revert.md
 u3-broker-classes.md	changes/unreleased/u3-broker-classes.md
 u5a-multislot-ui.md	changes/unreleased/u5a-multislot-ui.md
 witness-bind.md	changes/unreleased/witness-bind.md
+wj4-admission-cost.md	changes/unreleased/wj4-admission-cost.md
 actionp-0ef0ddb499b4	contracts/examples/action_proposal.invalid.schema.json
 actionp-215c1416bbcf	contracts/examples/action_proposal.valid.json
 actionr-3778f6831d07	contracts/examples/action_receipt.invalid.schema.json
