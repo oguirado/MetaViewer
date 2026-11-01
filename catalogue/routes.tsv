@@ -129,6 +129,7 @@ changes-README.md	changes/README.md
 boot-pending-clr.md	changes/unreleased/boot-pending-clr.md
 changel-6ee9fc48ce48	changes/unreleased/changelog-fragments.md
 display-polish.md	changes/unreleased/display-polish.md
+e1-rehearsal.md	changes/unreleased/e1-rehearsal.md
 e4-create.md	changes/unreleased/e4-create.md
 e4-list.md	changes/unreleased/e4-list.md
 flakepi-626bf7f96335	changes/unreleased/flake-pin-procbound-r2.md
@@ -1161,10 +1162,13 @@ e2e6_slice.test.js	tests/e2e/e2e6_slice.test.js
 e2e7liv-16f7e17196af	tests/e2e/e2e7_live_slice_honesty.test.js
 e2e8ac0-dd24f70086f7	tests/e2e/e2e8_ac04_control_journey.test.js
 README-5c8f39a4517a	tests/e2e/fixtures/mw_perplexity/README.md
-answer.html	tests/e2e/fixtures/mw_perplexity/pages/answer.html
+answer.html	tests/e2e/fixtures/mw_perplexity/packaged/answer.html
+home.html	tests/e2e/fixtures/mw_perplexity/packaged/home.html
+login.html	tests/e2e/fixtures/mw_perplexity/packaged/login.html
+pages-answer.html	tests/e2e/fixtures/mw_perplexity/pages/answer.html
 captcha.html	tests/e2e/fixtures/mw_perplexity/pages/captcha.html
-home.html	tests/e2e/fixtures/mw_perplexity/pages/home.html
-login.html	tests/e2e/fixtures/mw_perplexity/pages/login.html
+pages-home.html	tests/e2e/fixtures/mw_perplexity/pages/home.html
+pages-login.html	tests/e2e/fixtures/mw_perplexity/pages/login.html
 repair-NOTES.md	tests/e2e/fixtures/mw_perplexity/repair/NOTES.md
 site-site.json	tests/e2e/fixtures/mw_perplexity/site/site.json
 workflows-ask.json	tests/e2e/fixtures/mw_perplexity/site/workflows/ask.json
@@ -1191,6 +1195,7 @@ perf-build.mjs	tests/e2e/perf-build.mjs
 perf-main.cjs	tests/e2e/perf-main.cjs
 perf-wall-fixture.mjs	tests/e2e/perf-wall-fixture.mjs
 preload.cjs	tests/e2e/preload.cjs
+rehears-143e86127233	tests/e2e/rehearse_e1_packaged.py
 replay-deny.c	tests/e2e/replay-deny.c
 rsselec-8e6ea6d42d1b	tests/e2e/rss-electron-wrapper.py
 rss-main.mjs	tests/e2e/rss-main.mjs
