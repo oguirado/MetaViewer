@@ -28,6 +28,34 @@ export function validLabel(label) {
     && !/[\x00-\x1f\x7f;`$|&<>\\]/.test(label);
 }
 
+/** @param {string} text */
+export function normalizeIdentityName(text) {
+  return String(text).toLowerCase().replace(/\s/g, '-').replace(/[^a-z0-9-]/g, '');
+}
+
+/** Preserve the original spelling of unchanged characters while the input
+ * displays its normalized id. This also handles edits in the middle.
+ * @param {string} previous @param {string} incoming */
+export function retainTypedIdentityName(previous, incoming) {
+  const old = normalizeIdentityName(previous);
+  let prefix = 0, suffix = 0;
+  while (prefix < old.length && prefix < incoming.length && old[prefix] === incoming[prefix]) prefix++;
+  while (suffix < old.length - prefix && suffix < incoming.length - prefix
+    && old[old.length - 1 - suffix] === incoming[incoming.length - 1 - suffix]) suffix++;
+  const chars = [...previous];
+  const boundary = (/** @type {number} */ count) => {
+    if (count === old.length) return chars.length;
+    let seen = 0;
+    for (let i = 0; i < chars.length; i++) {
+      if (seen === count) return i;
+      seen += normalizeIdentityName(chars[i]).length;
+    }
+    return chars.length;
+  };
+  return chars.slice(0, boundary(prefix)).join('') + incoming.slice(prefix, incoming.length - suffix)
+    + (suffix ? chars.slice(boundary(old.length - suffix)).join('') : '');
+}
+
 /** @param {string} name */
 export function validIdentityName(name) {
   return /^[a-z0-9][a-z0-9-]{1,39}$/.test(name) && !/^(mv-|cuentas-|perplexity-|srf-id-cuentas-|srf-id-perplexity-|srf-pg-)/.test(name);
@@ -45,6 +73,7 @@ export function identityFormRequest(name, displayName, sites) {
  * @param {string} code @param {string} [id] */
 export function identityErrorText(code, id) {
   const target = typeof id === 'string' && /^[a-z0-9][a-z0-9-]{1,39}$/.test(id) ? id : '<id>';
+  if (code === 'IDENTITY_PROTECTED') return 'Managed outside MetaViewer (IDENTITY_PROTECTED).';
   if (code === 'IDENTITY_BOUND') return 'This identity has an open capsule. Stop it first, then delete it.';
   if (code === 'PROFILE_NOT_PROVISIONED') {
     return `The identity profile is not provisioned for the native browser capsule: PROFILE_NOT_PROVISIONED. Before login, profiles/<id> must be a private 0700 directory owned by uid 10001; run once on the host: sudo install -d -m 0700 -o 10001 -g 10001 "$SRF_IDENTITY_STORE_ROOT/profiles/${target}" (see docs/INSTALL.md#identity-store).`;

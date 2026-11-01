@@ -1,3 +1,4 @@
+import { isProtectedIdentity } from './identityProtection.js';
 import {adapterNetworkProbe} from './coreLauncher.js';
 import {createButtonService,OPERATOR_STOP_BUDGET_MS} from './buttonBridge.js';
 // @ts-check
@@ -86,7 +87,7 @@ export function identityEnvironment(env,tool) {
  * (missing configuration, unreadable store, native binary absent). */
 const TOOL_UNAVAILABLE = new Set(['IDENTITY_UNAVAILABLE','NATIVE_UNAVAILABLE','ABSOLUTE_PATH_REQUIRED']);
 /** Closed identity refusal codes surfaced across the host-to-renderer seam. */
-const IDENTITY_REFUSALS = new Set(['IDENTITY_REFUSED','PROFILE_NOT_PROVISIONED','PROFILE_MISSING','IDENTITY_BOUND']);
+const IDENTITY_REFUSALS = new Set(['IDENTITY_REFUSED','IDENTITY_PROTECTED','PROFILE_NOT_PROVISIONED','PROFILE_MISSING','IDENTITY_BOUND']);
 /** [TARGET, unit decision] Missing native profile provisioning (uid 10001, 0700)
  * is a distinct operator prerequisite before login; other closed tool refusals
  * map to IDENTITY_REFUSED. Everything else means the tool could not run.
@@ -95,7 +96,7 @@ export function toolRefusedCode(stdout) {
   try {
     const reply=JSON.parse(stdout);
     if(!operatorKeys(reply,['schema','ok','error']) || reply.schema!=='metaviewer.identity/v1' || reply.ok!==false || typeof reply.error!=='string' || !/^[A-Z][A-Z0-9_-]{0,63}$/.test(reply.error) || TOOL_UNAVAILABLE.has(reply.error))return null;
-    if(reply.error==='PROFILE_MISSING' || reply.error==='PROFILE_NOT_PROVISIONED' || reply.error==='IDENTITY_BOUND')return reply.error;
+    if(reply.error==='IDENTITY_PROTECTED' || reply.error==='PROFILE_MISSING' || reply.error==='PROFILE_NOT_PROVISIONED' || reply.error==='IDENTITY_BOUND')return reply.error;
     return 'IDENTITY_REFUSED';
   }catch{return null;}
 }
@@ -109,6 +110,7 @@ const LOGIN_STOP_GRACE_MS=200000;
 export function identityRunner({tool,env=process.env,spawnTool=spawn,openLogin=async()=>{}}) {
   /** @type {Set<()=>void>} */ const live=new Set();
   const run=(/** @type {string} */method,/** @type {any} */v)=>new Promise((accept,reject)=>{
+    if(method==='delete' && isProtectedIdentity(v.id)){reject(new Error('IDENTITY_PROTECTED'));return;}
     const argv=[tool,method,...(method==='list'?[]:['--id',v.id]),...(method==='create'?['--label',v.label,'--domains',v.domains.join(',')]:[])];
     const child=spawnTool('python3',argv,{shell:false,env:Object.fromEntries(['PATH','LANG','LC_ALL','TMPDIR','TZ','HOME','XDG_RUNTIME_DIR','XDG_STATE_HOME','XDG_CONFIG_HOME','MV_SRF_BIN_DIR','MV_SRF_STATE_DIR','SRF_IDENTITY_STORE_ROOT','MV_MW_HOME'].filter(k=>typeof env[k]==='string').map(k=>[k,env[k]])),stdio:['ignore','pipe','pipe'],detached:true});
     let stdout='',stderr='',bytes=0,settled=false,opened=false;
@@ -228,6 +230,7 @@ export function createOperatorService({env=process.env,runIdentity,buttons,notif
     if(BUTTON_METHODS.includes(method))return buttons.request(method,args);
     const v=args[0];
     if(method.startsWith('identity.')) {
+      if(method==='identity.delete' && isProtectedIdentity(v.id))return {ok:false,code:'IDENTITY_PROTECTED'};
       try {return assertOperatorReply(method,await runIdentity(method.split('.')[1],v));}
       catch(e){const code=/** @type {any} */(e)?.message;return {ok:false,code:IDENTITY_REFUSALS.has(code)?code:'IDENTITY_UNAVAILABLE'};}
     }

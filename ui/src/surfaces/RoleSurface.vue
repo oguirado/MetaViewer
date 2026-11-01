@@ -104,14 +104,14 @@ const root = ref(/** @type {HTMLElement|null} */ (null));
 const role = ref(api ? '' : 'agent'), watching = ref(false), error = ref('');
 let ended = false, notifiedEnd = false, resync = false;
 let alive = true, mounted = false, busy = false, signature = '', shown = true;
-const viewState = ref('closed');
+const viewState = ref('closed'), hasConnected = ref(false);
 let timer = /** @type {ReturnType<typeof setInterval>|undefined} */ (undefined);
 /** @type {Array<() => void>} */
 const scrollCleanups = [];
 const wanted = () => role.value === 'human' || role.value === 'agent' && watching.value && props.control === 'agent';
 async function revoke() {
   hiddenSessions?.remove(props.surfaceId);
-  mounted = false; signature = ''; shown = true;
+  mounted = false; signature = ''; shown = true; hasConnected.value = false; viewState.value = 'closed';
   try { await api?.close(props.surfaceId); } catch { /* host window teardown also revokes */ }
 }
 async function sync() {
@@ -124,6 +124,7 @@ async function sync() {
       const status = await api.status(props.surfaceId);
       if (status.ok === false) throw Error(status.code || 'XPRA_REFUSED');
       viewState.value = status.view?.state || 'ready';
+      if (viewState.value === 'ready') hasConnected.value = true;
       if (status.view?.state === 'error') throw Error(status.view.code);
     }
     const box = root.value?.getBoundingClientRect();
@@ -159,7 +160,7 @@ async function sync() {
     if (!reply.ok) throw Error(reply.code);
     mounted = true; signature = next; error.value = '';
     if (attaching) {
-      viewState.value = 'ready';
+      viewState.value = 'ready'; hasConnected.value = true;
       // Native role views stay hidden through their initial async mount.
       // Reconcile against the current modal/geometry state before exposing one.
       if (reply.visible === false) { shown = false; resync = true; }
@@ -238,7 +239,8 @@ onMounted(async () => {
   } catch (e) { error.value = /** @type {Error} */(e).message; }
 });
 watch(() => props.control, () => { if (props.control !== 'agent') watching.value = false; void sync(); });
-watch(watching, () => { void sync(); });
+// Menu closure and the canvas visibility update must settle before measuring.
+watch(watching, () => { void sync(); }, {flush:'post'});
 watch(progress, () => { if (!progress.value && ended) void sync(); });
 watch(() => props.presentationActive, () => { menuOpen.value = false; void sync(); }, {flush:'sync'});
 onBeforeUnmount(() => { overlays?.set(menuOwner, false); globalThis.document?.removeEventListener?.('pointerdown', closeMenu, true); alive = false; clearInterval(timer); while (scrollCleanups.length) scrollCleanups.pop()?.(); void revoke(); });
@@ -260,10 +262,10 @@ onBeforeUnmount(() => { overlays?.set(menuOwner, false); globalThis.document?.re
     </Teleport>
     <span v-if="progress" role="status">{{ progress }}</span>
     <div ref="root" class="mv-role-viewport">
-      <div v-if="role === 'agent'" v-show="!watching" :inert="watching" class="mv-role-agent-canvas"><slot /></div>
+      <div v-if="role === 'agent'" :style="{visibility: watching ? 'hidden' : undefined}" :inert="watching" class="mv-role-agent-canvas"><slot /></div>
       <button v-if="resourceReleased" :id="`tile-reconnect-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/reconnect`" type="button" @click="reconnectReleased">Disconnected to save resources, click to reconnect</button>
       <button v-if="error" type="button" @click="error = ''; sync()">Reopen</button>
-      <p v-if="role === 'human' || watching" class="mv-role-status" role="status">{{ error || (resourceReleased ? 'Disconnected to save resources, click to reconnect' : viewState === 'reconnecting' ? 'Reconnecting…' : viewState === 'connecting' || !mounted ? 'Connecting…' : role === 'human' ? 'Human capsule' : 'Read-only watch') }}</p>
+      <p v-if="role === 'human' || watching" class="mv-role-status" role="status">{{ error || (resourceReleased ? 'Disconnected to save resources, click to reconnect' : viewState === 'reconnecting' && hasConnected ? 'Reconnecting…' : viewState === 'connecting' || !mounted ? 'Connecting…' : role === 'human' ? 'Human capsule' : 'Read-only watch') }}</p>
       <p v-else-if="error" role="alert">{{ error }}</p>
     </div>
   </div>
@@ -274,10 +276,10 @@ onBeforeUnmount(() => { overlays?.set(menuOwner, false); globalThis.document?.re
 .mv-role-menu-button { min-width:28px; min-height:28px; }
 .mv-role-menu-host hr { width:100%; }
 :global(.mv-tile:has([data-capsule-role="human"]) [data-semantic-anchor$="/control"]) { display:none; }
-.mv-role-surface { display:flex; flex-direction:column; width:100%; height:100%; min-height:0; }
+.mv-role-surface { flex:1 1 auto; display:flex; flex-direction:column; width:100%; height:100%; min-height:0; }
 .mv-role-viewport { position:relative; flex:1; min-height:0; overflow:hidden; }
 .mv-role-agent-canvas { width:100%; height:100%; }
-.mv-role-status { pointer-events:none; }
+.mv-role-status { position:absolute; top:0; left:0; pointer-events:none; }
 .mv-role-actions { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
 .mv-role-watch { display:flex; justify-content:flex-end; }
 </style>

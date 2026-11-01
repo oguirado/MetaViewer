@@ -1,27 +1,39 @@
 <script setup>
-import { computed, ref, watch, onBeforeUnmount } from 'vue';
+import { computed, ref, watch, onBeforeUnmount, nextTick } from 'vue';
 import { UiButton, UiTextInput } from 'capsule-ui-kit/ui';
 import ConfirmDialog from '../../.kit/capsule-ui-kit/src/overlays/ConfirmDialog.vue';
 import { operatorHost } from '../operatorHost.js';
-import { identityErrorText, identityFormRequest, validIdentityName } from './identityForm.js';
+import { identityErrorText, identityFormRequest, validIdentityName, normalizeIdentityName, retainTypedIdentityName } from './identityForm.js';
+import { isProtectedIdentity } from '../../electron/identityProtection.js';
 const props=defineProps({open:{type:Boolean,default:false},host:{type:Object,default:operatorHost}});
 const roleApi = /** @type {any} */(globalThis).metaviewerRoles;
 const emit=defineEmits(['close','open-identity']);
 const rows=ref(/** @type {any[]} */([])), id=ref(''), label=ref(''), domains=ref('');
+const typedName=ref(''), labelEdited=ref(false), nameInput=ref(/** @type {{ $el?: HTMLInputElement }|null} */(null));
+const displayName=computed({get:()=>labelEdited.value ? label.value : typedName.value,
+  set:value=>{labelEdited.value=true;label.value=value;}});
+/** @param {string} value */
+function updateName(value) {
+  typedName.value=retainTypedIdentityName(typedName.value,value); id.value=normalizeIdentityName(value);
+  // Also reconcile edits whose normalized value is unchanged (for example '!').
+  void nextTick(()=>{if(nameInput.value?.$el)nameInput.value.$el.value=id.value;});
+}
 const modes=ref(/** @type {any[]} */ ([]));
 const modeFor = (/** @type {string} */ id) => modes.value.find(row => row.profileId === id);
 const busy=ref(false), login=ref(false), error=ref(''), pendingDelete=ref('');
-const form=computed(()=>identityFormRequest(id.value,label.value,domains.value));
+const form=computed(()=>identityFormRequest(id.value,displayName.value,domains.value));
 const validForm=computed(()=>form.value!==null);
 const nameError=computed(()=>id.value && !validIdentityName(id.value) ? 'Use 2–40 lowercase letters, numbers and dashes. Start with a letter or number; product and protected names are reserved.' : '');
 const isOpen=(/** @type {string} */ name)=>{
   const mode=modeFor(name);return !!mode?.busy || !!mode?.surfaceId || ['human','agent'].includes(mode?.currentMode);
 };
 function askDelete(/** @type {string} */ name){
+  if(isProtectedIdentity(name)){error.value=identityErrorText('IDENTITY_PROTECTED',name);return;}
   if(isOpen(name)){error.value=identityErrorText('IDENTITY_BOUND',name);return;}
   error.value='';pendingDelete.value=name;
 }
 function deleteIdentity(){
+  if(isProtectedIdentity(pendingDelete.value)){error.value=identityErrorText('IDENTITY_PROTECTED',pendingDelete.value);pendingDelete.value='';return;}
   if(isOpen(pendingDelete.value)){error.value=identityErrorText('IDENTITY_BOUND',pendingDelete.value);pendingDelete.value='';return;}
   void invoke('delete',{id:pendingDelete.value});
 }
@@ -37,7 +49,7 @@ async function invoke(method,request) {
     if(!listed.ok)throw new Error(listed.code);rows.value=listed.rows;
     const roleApi = /** @type {any} */(globalThis).metaviewerRoles;
     if (roleApi) { const result = await roleApi.choices(); if (Array.isArray(result)) modes.value = result; }
-    if(method==='create'){id.value='';label.value='';domains.value='';}
+    if(method==='create'){id.value='';typedName.value='';labelEdited.value=false;label.value='';domains.value='';}
     pendingDelete.value='';
   }catch(reason){error.value=identityErrorText(reason instanceof Error ? reason.message : '',request?.id);}
   finally{busy.value=false;login.value=false;}
@@ -69,16 +81,17 @@ watch(()=>props.open,open=>{if(open)void invoke('list');},{immediate:true});
         <UiButton v-if="!roleApi" label="Log in" :disabled="busy" @click="invoke('login',{id:row.id})" />
         <UiButton label="Open as human" :disabled="busy || !modeFor(row.id)?.available || !!modeFor(row.id)?.busy" @click="emit('open-identity',{profileId:row.id,role:'human'}); emit('close')" />
         <UiButton label="Open as agent" :disabled="busy || !modeFor(row.id)?.available || !!modeFor(row.id)?.busy" @click="emit('open-identity',{profileId:row.id,role:'agent'}); emit('close')" />
-        <UiButton label="Delete" :disabled="busy" @click="askDelete(row.id)" />
+        <UiButton label="Delete" :disabled="busy || isProtectedIdentity(row.id)" :title="isProtectedIdentity(row.id) ? 'Managed outside MetaViewer' : undefined" @click="askDelete(row.id)" />
         </div>
       </li>
     </ul>
     <section class="identity-add" aria-label="Add identity">
       <h4>Add identity</h4>
-      <p><label>Name (required)<UiTextInput v-model="id" label="Name" placeholder="work-account" aria-describedby="identity-id-hint identity-name-error" :aria-invalid="!!nameError" :disabled="busy" /></label></p>
+      <p><label>Name (required)<UiTextInput ref="nameInput" :model-value="id" @update:model-value="updateName" label="Name" placeholder="work-account" aria-describedby="identity-id-hint identity-name-error" :aria-invalid="!!nameError" :disabled="busy" /></label></p>
       <p id="identity-id-hint">lowercase letters, numbers and dashes</p>
+      <p v-if="id" id="identity-normalized" role="status">Will be saved as {{ id }}</p>
       <p v-if="nameError" id="identity-name-error" role="alert">{{ nameError }}</p>
-      <p><label>Display name (optional)<UiTextInput v-model="label" label="Display name" :placeholder="id || 'Work account'" :disabled="busy" /></label></p>
+      <p><label>Display name (optional)<UiTextInput v-model="displayName" label="Display name" :placeholder="typedName || id || 'Work account'" :disabled="busy" /></label></p>
       <details><summary>Advanced</summary>
         <p><label>Allowed sites (optional)<UiTextInput v-model="domains" label="Allowed sites" placeholder="perplexity.ai, example.com" aria-describedby="identity-sites-hint" :disabled="busy" /></label></p>
         <p id="identity-sites-hint">Sites this identity may open, for example perplexity.ai. Leave empty to allow any site.</p>

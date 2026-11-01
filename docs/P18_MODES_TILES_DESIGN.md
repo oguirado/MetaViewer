@@ -336,3 +336,47 @@ unchanged; the conductor owns that wording change.
 
 This section scopes its mandate to the supplied MetaViewer and OpenSuperficies
 worktree corpus.
+
+
+## P18e — watch, active-desktop presets and protected identities
+
+The watch canvas remains in layout with `visibility:hidden` and `inert`, so a
+content-sized host retains a mountable viewport. Watch synchronization runs after
+the menu and canvas DOM update. Status text is an overlay rather than a sizing
+input. Each opened view tracks whether it has connected; “Reconnecting…” is
+reserved for a connection that was previously ready. Closing resets that state
+and revokes the native view. Native read-only admission remains unchanged.
+
+Preset actions explicitly select the active view and desktop before dispatch.
+The desktop host refuses cold or read-only walls and records the selection only
+after the wall accepts it. The selected button exposes `aria-pressed`; manual
+layout retains current positions and stops automatic reflow. Per-desktop storage
+and the existing rules for floating, hidden and maximized tiles are retained.
+The old-wall-ref hypothesis was not reproduced in the supplied source baseline;
+the new guards exercise actual toolbar dispatch, desktop isolation and remount.
+
+Name input lowercases, converts whitespace to dashes and removes other id
+characters. A separate original-spelling buffer supplies the default Display
+name, including incremental typing and middle edits. An explicitly edited Display
+name takes precedence. The normalized id is shown before submission; the input
+also reconciles edits whose normalized model value did not change.
+
+A shared renderer/host policy protects project prefixes and the existing named
+container list, including live-launcher identities. Protected rows disable Delete
+with “Managed outside MetaViewer”; forced UI actions are refused as well. The
+operator service and direct tool runner reject before dispatch. Python deletion
+independently returns `IDENTITY_PROTECTED` before reading the store, taking locks
+or invoking profile removal. The closed preload and tool-refusal paths preserve
+that code. The configured Python live profile is also protected.
+
+Verification gates use the real renderer with separate desktop layouts and a
+content-sized watch host, plus native watch readiness and read-only state in the
+isolated dev app. Negative controls restore canvas removal, route presets to the
+former wall, enable protected Delete, remove host/tool guards, and remove closed
+refusal admission. Synthetic tool tests cannot access real identity stores.
+Live identity creation and deletion are restricted to the own `p18e-` namespace.
+The earlier invalid-name guard now uses a reserved id; uppercase-name acceptance
+has its own incremental-typing and submission assertions.
+
+This section scopes its mandate to the supplied MetaViewer and OpenSuperficies
+worktree corpus.

@@ -9,7 +9,9 @@ import { pathToFileURL } from 'node:url';
 import { EventEmitter } from 'node:events';
 import { parse, compileScript } from '@vue/compiler-sfc';
 import * as vue from 'vue';
-import { identityFormRequest, validIdentityName, identityErrorText } from '../src/identities/identityForm.js';
+import { identityFormRequest, validIdentityName, identityErrorText, normalizeIdentityName, retainTypedIdentityName } from '../src/identities/identityForm.js';
+import { isProtectedIdentity } from '../electron/identityProtection.js';
+import { createOperatorService, identityRunner } from '../electron/operatorBridge.js';
 import { assertOperatorCall, assertOperatorReply } from '../electron/preload.js';
 import { installRoleHost } from '../electron/roleHost.js';
 import { toolRefusedCode } from '../electron/operatorBridge.js';
@@ -23,9 +25,9 @@ const Button=vue.defineComponent({props:['label','disabled'],emits:['click'],set
 const Input=vue.defineComponent({props:['label','modelValue'],emits:['update:modelValue'],setup:(p,{emit})=>()=>vue.h('input',{'aria-label':p.label,value:p.modelValue,onInput:e=>emit('update:modelValue',e.target.value)})});
 const Dialog=vue.defineComponent({props:['open','title','confirmLabel','busy','confirmDisabled'],emits:['confirm','back'],setup:(p,{emit,slots})=>()=>p.open?vue.h('section',{'aria-label':p.title},[...(slots.default?.()??[]),vue.h('button',{disabled:p.busy||p.confirmDisabled,onClick:()=>emit('confirm')},p.confirmLabel)]):null});
 let serial=0;
-async function dialog() {
+async function dialog(source) {
   const url=new URL('../src/identities/IdentitiesDialog.vue',import.meta.url);
-  const {descriptor}=parse(readFileSync(url,'utf8'));
+  const {descriptor}=parse(source ?? readFileSync(url,'utf8'));
   globalThis.__p18d={UiButton:Button,UiTextInput:Input,Dialog};
   const require=createRequire(import.meta.url);
   const code=compileScript(descriptor,{id:'p18d',inlineTemplate:true}).content.replace(/^import\s+([^\n]+?)\s+from\s+(['"])(.*?)\2;?/gm,(_all,binding,_q,spec)=>{
@@ -42,6 +44,74 @@ function mount(component,props){
     setText(n,text){n.text=text;},setElementText(n,text){n.text=text;n.children=[];},patchProp(n,k,_o,v){n.props[k]=v;},parentNode:n=>n.parent,nextSibling:n=>n.parent?.children[n.parent.children.indexOf(n)+1]??null,setScopeId(){}});
   const root={children:[]},app=renderer.createApp(component,props);app.mount(root);return {root,close:()=>app.unmount()};
 }
+
+test('P18E Name normalizes while retaining typed default Display name, including incremental edits',async t=>{
+  assert.equal(normalizeIdentityName('Prueba1'),'prueba1');
+  assert.equal(normalizeIdentityName('Work Account_!'),'work-account');
+  let original='';
+  for(const char of 'Prueba1') original=retainTypedIdentityName(original,normalizeIdentityName(original)+char);
+  assert.equal(original,'Prueba1');
+  assert.equal(retainTypedIdentityName('Prueba1','prueba12'),'Prueba12');
+  assert.equal(retainTypedIdentityName('Prueba1','prueXba1'),'PrueXba1');
+  const requests=[];
+  const view=mount(await dialog(),{open:true,host:{identity:{list:async()=>({ok:true,rows:[]}),create:async v=>{requests.push(v);return {ok:true};}}}});
+  t.after(view.close);await tick();
+  for(const char of 'Prueba1') {
+    const input=field(view.root,'Name');input.props.onInput({target:{value:input.props.value+char}});await tick();
+  }
+  assert.equal(field(view.root,'Name').props.value,'prueba1');
+  assert.equal(field(view.root,'Display name').props.value,'Prueba1');
+  assert.match(text(view.root),/Will be saved as prueba1/);
+  assert.equal(button(view.root,'Add identity').props.disabled,false);
+  button(view.root,'Add identity').props.onClick();await tick();
+  assert.deepEqual(requests,[{id:'prueba1',label:'Prueba1',domains:[]}]);
+});
+
+const protectedIds=['cuentas-1','cuentas-new','perplexity-1','perplexity-new',
+  'srf-id-cuentas-1','srf-id-perplexity-1','srf-pg-notepad-1','srf-pg-metaviewer-1',
+  'srf-egress-proxy','n8n','distil-box','mv-live-1'];
+async function protectionUiOracle(source) {
+  let deletes=0;
+  const view=mount(await dialog(source),{open:true,host:{identity:{
+    list:async()=>({ok:true,rows:protectedIds.map(id=>({id,label:id,domains:[]}))}),
+    delete:async()=>{deletes++;return {ok:true};},
+  }}});
+  try {
+    await tick();
+    const buttons=nodes(view.root).filter(n=>n.tag==='button' && n.text==='Delete');
+    assert.equal(buttons.length,protectedIds.length);
+    for(const control of buttons) {
+      assert.equal(control.props.disabled,true);
+      assert.equal(control.props.title,'Managed outside MetaViewer');
+      control.props.onClick();await tick();
+      assert.equal(button(view.root,'Delete identity'),undefined,'forced click cannot enter deletion confirmation');
+    }
+    assert.equal(deletes,0);
+  } finally {view.close();}
+}
+test('P18E all protected identities disable Delete and refuse forced clicks',()=>protectionUiOracle());
+test('P18E mutant enabling protected Delete is killed by the actual UI oracle',async()=>{
+  const source=readFileSync(new URL('../src/identities/IdentitiesDialog.vue',import.meta.url),'utf8');
+  const mutant=source.replace(':disabled="busy || isProtectedIdentity(row.id)"',':disabled="busy"');
+  assert.notEqual(mutant,source);
+  await assert.rejects(()=>protectionUiOracle(mutant),{code:'ERR_ASSERTION'});
+});
+test('P18E host service and direct runner reject protected deletion before invoking tools',async()=>{
+  let dispatched=0;
+  const service=createOperatorService({env:{MV_HANDOFF_PATHS:'[]'},runIdentity:async()=>{dispatched++;return {ok:true};}});
+  const runner=identityRunner({tool:'/not-invoked',spawnTool:()=>{dispatched++;throw Error('MUTANT_DISPATCHED');}});
+  for(const id of protectedIds) {
+    assert(isProtectedIdentity(id),id);
+    assert.deepEqual(await service.request('identity.delete',[{id}]),{ok:false,code:'IDENTITY_PROTECTED'});
+    await assert.rejects(runner('delete',{id}),/IDENTITY_PROTECTED/);
+  }
+  assert.equal(dispatched,0);
+  assert.doesNotThrow(()=>assertOperatorReply('identity.delete',{ok:false,code:'IDENTITY_PROTECTED'}));
+  assert.equal(toolRefusedCode(JSON.stringify({schema:'metaviewer.identity/v1',ok:false,error:'IDENTITY_PROTECTED'})),'IDENTITY_PROTECTED');
+  assert.equal(isProtectedIdentity('p18e-owned'),false);
+  assert.deepEqual(await service.request('identity.delete',[{id:'p18e-owned'}]),{ok:true});
+  assert.equal(dispatched,1,'unprotected names still reach the tool');
+});
 
 test('P18D required name, optional display name, any-site and sorted unique sites cross IPC',()=>{
   for(const name of ['', 'A-test', 'x', '-bad', 'a b', 'mv-live-1', 'cuentas-new', 'srf-pg-editor', 'a'.repeat(41)]){
@@ -62,7 +132,7 @@ test('P18D dialog creates with defaults and shows plain live validation',async t
   assert.equal(button(view.root,'Add identity').props.disabled,true);
   assert.match(text(view.root),/lowercase letters, numbers and dashes/);
   assert.match(text(view.root),/Leave empty to allow any site/);
-  field(view.root,'Name').props.onInput({target:{value:'Bad Name'}});await tick();
+  field(view.root,'Name').props.onInput({target:{value:'mv-live-1'}});await tick();
   assert.match(text(view.root),/product and protected names are reserved/);
   assert.equal(button(view.root,'Add identity').props.disabled,true);
   field(view.root,'Name').props.onInput({target:{value:'p18d-a'}});await tick();

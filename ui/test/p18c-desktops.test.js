@@ -206,11 +206,11 @@ test('P18C mutant: revoking instead of hiding a human view is rejected',async()=
 });
 
 async function workspaceFixture(run,source=read('../src/wall/DesktopWorkspace.vue'),initial=null) {
-  const restore=environment();let live;const saved=[],mounted=[],retired=[];
+  const restore=environment();let live;const saved=[],mounted=[],retired=[],presetCalls=[],presetReplies=new Map();
   let stored=initial;
   const Wall=vue.defineComponent({props:['projectionView','storage'],emits:['ready','wall-settled'],setup(p,ctx){
     const identity=++serial;mounted.push(identity);const revision=vue.ref(0),stop=p.projectionView.subscribe(()=>revision.value++);
-    ctx.expose({revealSurface:id=>({ok:p.projectionView.getProjection().rows.some(r=>r.id===id)}),setPreset:()=>({ok:true}),applyPresentationIntent:()=>({ok:true})});
+    ctx.expose({revealSurface:id=>({ok:p.projectionView.getProjection().rows.some(r=>r.id===id)}),setPreset:preset=>{const key=ctx.attrs['data-desktop'];presetCalls.push({key,preset});return presetReplies.get(key)??{ok:true};},applyPresentationIntent:()=>({ok:true})});
     vue.onMounted(()=>{ctx.emit('ready');ctx.emit('wall-settled');});vue.onBeforeUnmount(()=>{stop();retired.push(identity);});
     return()=>{void revision.value;return vue.h('section',{},p.projectionView.getProjection().rows.map(r=>vue.h('article',{id:r.id},r.id)));};
   }});
@@ -218,7 +218,7 @@ async function workspaceFixture(run,source=read('../src/wall/DesktopWorkspace.vu
     const Workspace=await compile(source,{'./WallWorkspace.vue':Wall,'./layout.js':{createWallLayout},'../../.kit/capsule-ui-kit/src/workspace/layoutProfile.js':{decodeAndMigrateLayoutProfile},'../../electron/desktopLayout.js':model,'../../electron/desktopShortcuts.js':keys});
     const props=vue.reactive({storage:{readRaw:async()=>stored,writeAtomic:async raw=>{stored=raw;saved.push(JSON.parse(raw));}},scope:SCOPE,defaultProfile:createWallLayout(SCOPE),projectionView:{getSnapshot:()=>({envelope:{projection:{rows}}})},rows:[...rows],modes:{h:'human',a:'agent'},intentBuilders:{},controlRegistry:{},scheduler:{},tileScheduler:{}});
     live=mount(Workspace,props);await tick();await tick();
-    await run({vm:live.vm,props,saved,mounted,retired,getStored:()=>stored});
+    await run({vm:live.vm,props,saved,mounted,retired,presetCalls,presetReplies,getStored:()=>stored});
   } finally {live?.app.unmount();restore();}
 }
 test('P18C actual desktop host keeps inactive walls mounted, routes openings, and persists navigation',()=>workspaceFixture(async({vm,props,saved,mounted,retired})=>{
@@ -256,4 +256,32 @@ test('P18C mutant: remounting walls on view switches is rejected',async()=>{
   await assert.rejects(()=>workspaceFixture(async({vm,retired})=>{
     vm.selectView('agent');await tick();vm.selectView('human');await tick();assert.equal(retired.length,0);
   },mutant),{code:'ERR_ASSERTION'});
+});
+
+async function activePresetOracle(source) {
+  await workspaceFixture(async({vm,presetCalls,presetReplies,saved})=>{
+    presetCalls.length=0;
+    assert(vm.setPreset('single').ok);await tick();
+    assert.deepEqual(presetCalls.at(-1),{key:'human-1',preset:'single'});
+    vm.addDesktop();await tick();
+    assert(vm.setPreset('grid').ok);await tick();
+    assert.deepEqual(presetCalls.at(-1),{key:'human-2',preset:'grid'});
+    vm.selectView('agent');await tick();
+    assert(vm.setPreset('focus-strip').ok);await tick();
+    assert.deepEqual(presetCalls.at(-1),{key:'agent-1',preset:'focus-strip'});
+    const state=saved.at(-1);
+    assert.equal(state.views.human.desktops[0].preset,'single');
+    assert.equal(state.views.human.desktops[1].preset,'grid');
+    assert.equal(state.views.agent.desktops[0].preset,'focus-strip');
+    presetReplies.set('agent-1',{ok:false,code:'LAYOUT_PRESET_INVALID'});
+    assert.equal(vm.setPreset('bad').ok,false);await tick();
+    assert.equal(saved.at(-1).views.agent.desktops[0].preset,'focus-strip','refused presets must not enter storage');
+  },source);
+}
+test('P18E each preset routes to the active desktop and persists only on acceptance',()=>activePresetOracle());
+test('P18E mutant routing presets to the former single wall is detected',async()=>{
+  const source=read('../src/wall/DesktopWorkspace.vue');
+  const mutant=source.replace('const result = walls.get(activeKey())?.setPreset(preset);',"const result = walls.get('human-1')?.setPreset(preset);");
+  assert.notEqual(mutant,source);
+  await assert.rejects(()=>activePresetOracle(mutant),{code:'ERR_ASSERTION'});
 });

@@ -76,6 +76,11 @@ def checked_id(value):
     return value
 
 
+def protected_identity(value):
+    return value.startswith(("mv-", "cuentas-", "perplexity-", "srf-id-cuentas-",
+                             "srf-id-perplexity-", "srf-pg-")) or value in PROTECTED_HOLDERS
+
+
 def fresh_id(value, live_profile=None):
     value = checked_id(value)
     if value.startswith(RESERVED_PREFIX) or (live_profile and value == live_profile):
@@ -172,6 +177,8 @@ class Identities:
 
     def delete(self, identity):
         identity = checked_id(identity)
+        if protected_identity(identity) or identity == self.live_profile:
+            raise Refused("IDENTITY_PROTECTED")
         self.show(identity)
         for name in ("metadata", "profiles", "locks"):
             private(self.root / name)

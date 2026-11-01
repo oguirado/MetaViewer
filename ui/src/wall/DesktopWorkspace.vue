@@ -147,10 +147,14 @@ function applyLayoutEcho(id,body) {
 }
 /** @param {string|null} preset */
 function setPreset(preset) {
-  const desktop = state.value.views[state.value.activeView].desktops.find(d => isActive(state.value.activeView,d.id));
-  if (!desktop) return;
+  if (!loaded.value || !ready.has(activeKey())) return {ok:false,code:'ERR_NOT_READY'};
+  if (readOnly) return {ok:false,code:'LAYOUT_SAVE_REFUSED'};
+  const group = state.value.views[state.value.activeView];
+  const desktop = group.desktops.find(d => d.id === group.active);
+  const result = walls.get(activeKey())?.setPreset(preset);
+  if (!desktop || !result?.ok) return result ?? {ok:false,code:'ERR_NOT_READY'};
   desktop.preset = preset;
-  return walls.get(activeKey())?.setPreset(preset);
+  return result;
 }
 /** @param {{type:string,desktop?:number}|null} chord */
 function shortcut(chord) {

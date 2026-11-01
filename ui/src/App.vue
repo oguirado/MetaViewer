@@ -1036,6 +1036,18 @@ function measureChrome() {
 }
 onMounted(() => { measureChrome(); window.addEventListener('resize', measureChrome); });
 onBeforeUnmount(() => window.removeEventListener('resize', measureChrome));
+const presetError = ref('');
+const activeDesktopPreset = computed(() => {
+  const group = desktopState.value.views[desktopState.value.activeView];
+  return group.desktops.find(desktop => desktop.id === group.active)?.preset ?? null;
+});
+function setActiveDesktopPreset(/** @type {string|null} */ preset) {
+  const state = desktopState.value, group = state.views[state.activeView];
+  wall.value?.selectView(state.activeView);
+  wall.value?.selectDesktop(group.active);
+  const result = wall.value?.setPreset(preset);
+  presetError.value = result?.ok ? '' : 'Tile layout is unavailable. Try again after the desktop is ready.';
+}
 const wall = ref(/** @type {InstanceType<typeof DesktopWorkspace>|null} */ (null));
 const activeTileScheduler = /** @type {ReturnType<typeof createTileScheduler>} */ (props.runtime?.tileScheduler ?? tileScheduler);
 provide('tileScheduler', activeTileScheduler);
@@ -1340,11 +1352,12 @@ const chromeWorkspace = markRaw(defineComponent({
     <div v-if="!nestedMode.displayOnly" id="mv-layout-notice" class="mv-layout-notice">
       <!-- Reserve the longest outcome before the wall becomes interactive, including while panels open. -->
       <div v-if="!nestedMode.displayOnly && wallView === 'workspace'" class="mv-tile-presets" aria-label="Tile layout presets">
-        <UiButton id="tile-preset-single" data-semantic-anchor="wall/preset/single" label="1 tile" @click="wall?.setPreset('single')" />
-        <UiButton id="tile-preset-side-by-side" data-semantic-anchor="wall/preset/side-by-side" label="2 side by side" @click="wall?.setPreset('side-by-side')" />
-        <UiButton id="tile-preset-grid" data-semantic-anchor="wall/preset/grid" label="2×2" @click="wall?.setPreset('grid')" />
-        <UiButton id="tile-preset-focus-strip" data-semantic-anchor="wall/preset/focus-strip" label="Focus + strip" @click="wall?.setPreset('focus-strip')" />
-        <UiButton id="tile-preset-floating" data-semantic-anchor="wall/preset/floating" label="Floating layout" @click="wall?.setPreset(null)" />
+        <UiButton id="tile-preset-single" data-semantic-anchor="wall/preset/single" label="1 tile" :aria-pressed="activeDesktopPreset === 'single'" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('single')" />
+        <UiButton id="tile-preset-side-by-side" data-semantic-anchor="wall/preset/side-by-side" label="2 side by side" :aria-pressed="activeDesktopPreset === 'side-by-side'" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('side-by-side')" />
+        <UiButton id="tile-preset-grid" data-semantic-anchor="wall/preset/grid" label="2×2" :aria-pressed="activeDesktopPreset === 'grid'" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('grid')" />
+        <UiButton id="tile-preset-focus-strip" data-semantic-anchor="wall/preset/focus-strip" label="Focus + strip" :aria-pressed="activeDesktopPreset === 'focus-strip'" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('focus-strip')" />
+        <UiButton id="tile-preset-floating" data-semantic-anchor="wall/preset/floating" label="Floating layout" :aria-pressed="activeDesktopPreset === null" title="Keep the current tile positions and arrange them manually" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset(null)" />
+        <span v-if="presetError" role="status">{{ presetError }}</span>
       </div>
       <p class="mv-layout-notice-reserve" aria-hidden="true"><strong>Layout unavailable.</strong> The default layout is shown read-only. Changes will not be saved.</p>
       <p v-if="layoutUnavailable && !creativeOpen && !settingsOpen && !multislotOpen && !nestedMode.displayOnly" id="mv-layout-unavailable" data-semantic-anchor="layout/unavailable"
@@ -1451,6 +1464,7 @@ body { font-family:var(--cuk-semantic-typography-font-family-sans, system-ui, sa
    below the overlay token) can never cover it; the corner placement stays. */
 #shell-wall #mv-host-outcome { pointer-events:none; z-index:var(--cuk-semantic-z-index-overlay); }
 /* Both paragraphs share one flow-sized cell; the reserve never enters the accessibility tree. */
+.mv-tile-presets [aria-pressed="true"] { outline:2px solid var(--cuk-semantic-accent-primary); outline-offset:-2px; }
 .mv-layout-notice { grid-row:2; display:grid; min-width:0; }
 .mv-layout-notice-reserve, .mv-layout-unavailable { grid-area:1 / 1; margin:0; padding:var(--cuk-semantic-spacing-sm); color:var(--cuk-semantic-text-primary); background:var(--cuk-semantic-surface-canvas); border:var(--cuk-semantic-border-width) solid var(--cuk-semantic-border-default); font-size:var(--cuk-semantic-typography-font-size-sm); }
 .mv-layout-notice-reserve { visibility:hidden; }
