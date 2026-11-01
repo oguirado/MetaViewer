@@ -19,17 +19,17 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 2,100 | 55 | 2,045 |
-| Lanes finished OK | 2,100 | 55 | 2,045 |
-| Agent steps | 70,194 | 2,705 | 67,489 |
-| Lane-hours of agent work | 159.7 | 5.2 | 154.5 |
-| Fresh input tokens | 270,556,350 | 11,482,034 | 259,074,316 |
-| Cache-read input tokens | 4,836,848,587 | 226,255,212 | 4,610,593,375 |
-| Prompt cache hit % | 94.7 | 95.2 | 94.7 |
-| Output tokens | 54,904,563 | 2,135,708 | 52,768,855 |
-| Thinking tokens | 33,302,557 | 1,050,039 | 32,252,518 |
-| Cost (USD) | 47.7102 | 2.0279 | 45.6824 |
-| Cost per lane (USD) | 0.0227 | 0.0369 | 0.0223 |
+| Lanes launched | 2,269 | 55 | 2,214 |
+| Lanes finished OK | 2,269 | 55 | 2,214 |
+| Agent steps | 73,409 | 2,705 | 70,704 |
+| Lane-hours of agent work | 165.9 | 5.2 | 160.7 |
+| Fresh input tokens | 282,829,377 | 11,482,034 | 271,347,343 |
+| Cache-read input tokens | 4,971,637,496 | 226,255,212 | 4,745,382,284 |
+| Prompt cache hit % | 94.6 | 95.2 | 94.6 |
+| Output tokens | 57,282,467 | 2,135,708 | 55,146,759 |
+| Thinking tokens | 34,923,043 | 1,050,039 | 33,873,004 |
+| Cost (USD) | 49.6827 | 2.0279 | 47.6548 |
+| Cost per lane (USD) | 0.0219 | 0.0369 | 0.0215 |
 
 Rooms: 136. Peak concurrent lanes [MEASURED from lane start/end]: 42.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
@@ -38,7 +38,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 1711 | 93.8 | 31.4627 |
+| build | 1880 | 93.7 | 33.4352 |
 | context | 42 | 95.9 | 1.9093 |
 | context packs + test ideation (U-DEC-0139) | 13 | 91.1 | 0.2195 |
 | demo | 4 | 90.7 | 0.0557 |
@@ -86,7 +86,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 1373 | 93.7 | 23.1842 | direct Muse job |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 1542 | 93.6 | 25.1567 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -2306,6 +2306,175 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | 4-R3_b | r1x_WJ4-R3_b | Nov 01 05:14 | yes | 41 | 95.3 | 0.020117 |
 | direct-direct | 51317_rev_READBACK-DEADLINE_a | fill_051317_rev_READBACK-DEADLINE_a | Nov 01 05:14 | yes | 17 | 90.8 | 0.009332 |
 | direct-direct | 51317_rev_READBACK-DEADLINE_b | fill_051317_rev_READBACK-DEADLINE_b | Nov 01 05:14 | yes | 15 | 89.4 | 0.009706 |
+| direct-direct | CUS-SKIP_a | r1x_FOCUS-SKIP_a | Nov 01 08:15 | yes | 32 | 92.8 | 0.02273 |
+| direct-direct | CUS-SKIP_b | r1x_FOCUS-SKIP_b | Nov 01 08:15 | yes | 40 | 94.8 | 0.024296 |
+| direct-direct | 81824_locale_a | fill_081824_locale_a | Nov 01 08:18 | yes | 30 | 91.9 | 0.016419 |
+| direct-direct | 81825_locale_b | fill_081825_locale_b | Nov 01 08:18 | yes | 31 | 92.9 | 0.015464 |
+| direct-direct | 81826_pollft_a | fill_081826_pollft_a | Nov 01 08:18 | yes | 33 | 92.2 | 0.01622 |
+| direct-direct | 81827_hangs_a | fill_081827_hangs_a | Nov 01 08:18 | yes | 35 | 92.7 | 0.02037 |
+| direct-direct | 81828_seams_a | fill_081828_seams_a | Nov 01 08:18 | yes | 21 | 89.5 | 0.013813 |
+| direct-direct | 81829_focus_live_a | fill_081829_focus_live_a | Nov 01 08:18 | yes | 19 | 88.1 | 0.013354 |
+| direct-direct | 81830_e5_a | fill_081830_e5_a | Nov 01 08:18 | yes | 28 | 91.9 | 0.015005 |
+| direct-direct | 81831_demo_a | fill_081831_demo_a | Nov 01 08:18 | yes | 10 | 78.9 | 0.00893 |
+| direct-direct | 81832_batch2_a | fill_081832_batch2_a | Nov 01 08:19 | yes | 22 | 90.1 | 0.015098 |
+| direct-direct | 81833_b7_a | fill_081833_b7_a | Nov 01 08:19 | yes | 26 | 91.5 | 0.015422 |
+| direct-direct | 81834_hover_a | fill_081834_hover_a | Nov 01 08:19 | yes | 37 | 94.4 | 0.018009 |
+| direct-direct | 81835_e4_a | fill_081835_e4_a | Nov 01 08:19 | yes | 13 | 84.0 | 0.008632 |
+| direct-direct | 81913_lane_r4_app_close | fill_081913_lane_r4_app_close | Nov 01 08:20 | yes | 57 | 95.1 | 0.031789 |
+| direct-direct | 81913_lane_r4_automate_demo | fill_081913_lane_r4_automate_demo | Nov 01 08:20 | yes | 38 | 93.1 | 0.019687 |
+| direct-direct | 81913_lane_r4_capsule_close_reopen | fill_081913_lane_r4_capsule_close_reopen | Nov 01 08:20 | yes | 38 | 93.7 | 0.025078 |
+| direct-direct | 81913_lane_r4_captcha_handoff | fill_081913_lane_r4_captcha_handoff | Nov 01 08:20 | yes | 42 | 90.3 | 0.034711 |
+| direct-direct | 81913_lane_r4_chatgpt_gemini | fill_081913_lane_r4_chatgpt_gemini | Nov 01 08:20 | yes | 58 | 95.7 | 0.02852 |
+| direct-direct | 81913_lane_r4_display | fill_081913_lane_r4_display | Nov 01 08:20 | yes | 65 | 95.9 | 0.038247 |
+| direct-direct | 81913_lane_r4_identities | fill_081913_lane_r4_identities | Nov 01 08:20 | yes | 27 | 91.5 | 0.025574 |
+| direct-direct | 81913_lane_r4_launch | fill_081913_lane_r4_launch | Nov 01 08:20 | yes | 58 | 95.7 | 0.034591 |
+| direct-direct | 81913_lane_r4_multislot | fill_081913_lane_r4_multislot | Nov 01 08:20 | yes | 51 | 93.4 | 0.041155 |
+| direct-direct | 81913_lane_r4_network | fill_081913_lane_r4_network | Nov 01 08:20 | yes | 43 | 94.7 | 0.031635 |
+| direct-direct | 81913_lane_r4_settings | fill_081913_lane_r4_settings | Nov 01 08:20 | yes | 65 | 96.0 | 0.033466 |
+| direct-direct | 81913_lane_r4_storyboard | fill_081913_lane_r4_storyboard | Nov 01 08:20 | yes | 49 | 94.9 | 0.027743 |
+| direct-direct | 81913_lane_r4_terminal | fill_081913_lane_r4_terminal | Nov 01 08:20 | yes | 34 | 92.9 | 0.028564 |
+| direct-direct | 81913_lane_r4_use_metaviewer | fill_081913_lane_r4_use_metaviewer | Nov 01 08:20 | yes | 53 | 95.5 | 0.029927 |
+| direct-direct | 81913_rev_B7-AX-READBACK_a | fill_081913_rev_B7-AX-READBACK_a | Nov 01 08:20 | yes | 13 | 84.1 | 0.009478 |
+| direct-direct | 81913_rev_B7-AX-READBACK_b | fill_081913_rev_B7-AX-READBACK_b | Nov 01 08:21 | yes | 13 | 84.8 | 0.010255 |
+| direct-direct | 81913_rev_MW-SLEEP-NS_a | fill_081913_rev_MW-SLEEP-NS_a | Nov 01 08:21 | yes | 7 | 67.6 | 0.006834 |
+| direct-direct | 81913_rev_MW-SLEEP-NS_b | fill_081913_rev_MW-SLEEP-NS_b | Nov 01 08:21 | yes | 10 | 89.2 | 0.005232 |
+| direct-direct | 81913_rev_MW-WALL-DEADLINE_a | fill_081913_rev_MW-WALL-DEADLINE_a | Nov 01 08:21 | yes | 10 | 81.4 | 0.006366 |
+| direct-direct | 81913_rev_MW-WALL-DEADLINE_b | fill_081913_rev_MW-WALL-DEADLINE_b | Nov 01 08:21 | yes | 16 | 87.8 | 0.008475 |
+| direct-direct | 81913_rev_UX-CHIP_a | fill_081913_rev_UX-CHIP_a | Nov 01 08:21 | yes | 17 | 93.0 | 0.00736 |
+| direct-direct | 81913_rev_UX-CHIP_b | fill_081913_rev_UX-CHIP_b | Nov 01 08:21 | yes | 18 | 90.9 | 0.011087 |
+| direct-direct | 81913_rev_UX-HOVER-DESIGN_a | fill_081913_rev_UX-HOVER-DESIGN_a | Nov 01 08:21 | yes | 9 | 79.9 | 0.006424 |
+| direct-direct | 81913_rev_UX-HOVER-DESIGN_b | fill_081913_rev_UX-HOVER-DESIGN_b | Nov 01 08:21 | yes | 11 | 81.6 | 0.007369 |
+| direct-direct | 81913_rev_UX-SCROLL_a | fill_081913_rev_UX-SCROLL_a | Nov 01 08:21 | yes | 12 | 81.7 | 0.009556 |
+| direct-direct | 81913_rev_UX-SCROLL_b | fill_081913_rev_UX-SCROLL_b | Nov 01 08:21 | yes | 15 | 86.2 | 0.010576 |
+| direct-direct | 82233_rev_MW-SLEEP-NS_a | fill_082233_rev_MW-SLEEP-NS_a | Nov 01 08:23 | yes | 18 | 88.6 | 0.010673 |
+| direct-direct | 82233_rev_MW-SLEEP-NS_b | fill_082233_rev_MW-SLEEP-NS_b | Nov 01 08:23 | yes | 17 | 88.7 | 0.011895 |
+| direct-direct | 82233_rev_MW-WALL-DEADLINE_a | fill_082233_rev_MW-WALL-DEADLINE_a | Nov 01 08:23 | yes | 14 | 90.0 | 0.008641 |
+| direct-direct | 82233_rev_MW-WALL-DEADLINE_b | fill_082233_rev_MW-WALL-DEADLINE_b | Nov 01 08:23 | yes | 13 | 84.7 | 0.009631 |
+| direct-direct | 82233_rev_UX-CHIP_a | fill_082233_rev_UX-CHIP_a | Nov 01 08:23 | yes | 23 | 88.2 | 0.016869 |
+| direct-direct | 82233_rev_UX-CHIP_b | fill_082233_rev_UX-CHIP_b | Nov 01 08:23 | yes | 17 | 87.5 | 0.010266 |
+| direct-direct | 82233_rev_UX-HOVER-DESIGN_a | fill_082233_rev_UX-HOVER-DESIGN_a | Nov 01 08:23 | yes | 22 | 92.8 | 0.010968 |
+| direct-direct | 82233_rev_UX-HOVER-DESIGN_b | fill_082233_rev_UX-HOVER-DESIGN_b | Nov 01 08:23 | yes | 22 | 90.0 | 0.013201 |
+| direct-direct | 82233_rev_UX-SCROLL_a | fill_082233_rev_UX-SCROLL_a | Nov 01 08:23 | yes | 24 | 93.5 | 0.012886 |
+| direct-direct | 82233_rev_UX-SCROLL_b | fill_082233_rev_UX-SCROLL_b | Nov 01 08:24 | yes | 11 | 80.6 | 0.009295 |
+| direct-direct | 82404_rev_MW-SLEEP-NS_a | fill_082404_rev_MW-SLEEP-NS_a | Nov 01 08:25 | yes | 13 | 91.1 | 0.006614 |
+| direct-direct | 82404_rev_MW-SLEEP-NS_b | fill_082404_rev_MW-SLEEP-NS_b | Nov 01 08:25 | yes | 12 | 88.4 | 0.006408 |
+| direct-direct | 82404_rev_MW-WALL-DEADLINE_a | fill_082404_rev_MW-WALL-DEADLINE_a | Nov 01 08:25 | yes | 18 | 91.9 | 0.012083 |
+| direct-direct | 82404_rev_MW-WALL-DEADLINE_b | fill_082404_rev_MW-WALL-DEADLINE_b | Nov 01 08:25 | yes | 15 | 90.8 | 0.00799 |
+| direct-direct | 82404_rev_UX-CHIP_a | fill_082404_rev_UX-CHIP_a | Nov 01 08:25 | yes | 27 | 91.9 | 0.012893 |
+| direct-direct | 82404_rev_UX-CHIP_b | fill_082404_rev_UX-CHIP_b | Nov 01 08:25 | yes | 12 | 90.4 | 0.00545 |
+| direct-direct | 82404_rev_UX-HOVER-DESIGN_a | fill_082404_rev_UX-HOVER-DESIGN_a | Nov 01 08:25 | yes | 22 | 90.3 | 0.012587 |
+| direct-direct | 82404_rev_UX-HOVER-DESIGN_b | fill_082404_rev_UX-HOVER-DESIGN_b | Nov 01 08:25 | yes | 23 | 92.9 | 0.010984 |
+| direct-direct | 82404_rev_UX-SCROLL_a | fill_082404_rev_UX-SCROLL_a | Nov 01 08:25 | yes | 14 | 85.0 | 0.011846 |
+| direct-direct | 82404_rev_UX-SCROLL_b | fill_082404_rev_UX-SCROLL_b | Nov 01 08:25 | yes | 11 | 88.9 | 0.006136 |
+| direct-direct | 82535_rev_MW-WALL-DEADLINE_a | fill_082535_rev_MW-WALL-DEADLINE_a | Nov 01 08:26 | yes | 18 | 93.5 | 0.00722 |
+| direct-direct | 82535_rev_MW-WALL-DEADLINE_b | fill_082535_rev_MW-WALL-DEADLINE_b | Nov 01 08:26 | yes | 11 | 88.7 | 0.005904 |
+| direct-direct | 82535_rev_UX-CHIP_a | fill_082535_rev_UX-CHIP_a | Nov 01 08:26 | yes | 15 | 86.4 | 0.009672 |
+| direct-direct | 82535_rev_UX-CHIP_b | fill_082535_rev_UX-CHIP_b | Nov 01 08:26 | yes | 18 | 93.0 | 0.00709 |
+| direct-direct | 82535_rev_UX-SCROLL_a | fill_082535_rev_UX-SCROLL_a | Nov 01 08:26 | yes | 22 | 91.9 | 0.013996 |
+| direct-direct | 82535_rev_UX-SCROLL_b | fill_082535_rev_UX-SCROLL_b | Nov 01 08:26 | yes | 13 | 87.9 | 0.009517 |
+| direct-direct | 82654_rev_MW-WALL-DEADLINE_a | fill_082654_rev_MW-WALL-DEADLINE_a | Nov 01 08:27 | yes | 21 | 90.9 | 0.011106 |
+| direct-direct | 82654_rev_MW-WALL-DEADLINE_b | fill_082654_rev_MW-WALL-DEADLINE_b | Nov 01 08:27 | yes | 10 | 78.6 | 0.009027 |
+| direct-direct | 82654_rev_UX-CHIP_a | fill_082654_rev_UX-CHIP_a | Nov 01 08:28 | yes | 14 | 89.0 | 0.007281 |
+| direct-direct | 82654_rev_UX-CHIP_b | fill_082654_rev_UX-CHIP_b | Nov 01 08:28 | yes | 11 | 88.5 | 0.007267 |
+| direct-direct | 82654_rev_UX-SCROLL_a | fill_082654_rev_UX-SCROLL_a | Nov 01 08:28 | yes | 21 | 90.7 | 0.011786 |
+| direct-direct | 82654_rev_UX-SCROLL_b | fill_082654_rev_UX-SCROLL_b | Nov 01 08:28 | yes | 11 | 88.5 | 0.006928 |
+| direct-direct | 82812_rev_CONTRACT-CORE-V03_a | fill_082812_rev_CONTRACT-CORE-V03_a | Nov 01 08:29 | yes | 32 | 92.5 | 0.019332 |
+| direct-direct | 82812_rev_CONTRACT-CORE-V03_b | fill_082812_rev_CONTRACT-CORE-V03_b | Nov 01 08:29 | yes | 16 | 91.5 | 0.00934 |
+| direct-direct | 82812_rev_MW-WALL-DEADLINE_a | fill_082812_rev_MW-WALL-DEADLINE_a | Nov 01 08:29 | yes | 8 | 84.2 | 0.006606 |
+| direct-direct | 82812_rev_MW-WALL-DEADLINE_b | fill_082812_rev_MW-WALL-DEADLINE_b | Nov 01 08:29 | yes | 16 | 87.6 | 0.011945 |
+| direct-direct | 82812_rev_OS-NATIVE-MOVE_a | fill_082812_rev_OS-NATIVE-MOVE_a | Nov 01 08:29 | yes | 14 | 90.1 | 0.008777 |
+| direct-direct | 82812_rev_OS-NATIVE-MOVE_b | fill_082812_rev_OS-NATIVE-MOVE_b | Nov 01 08:29 | yes | 13 | 89.3 | 0.007738 |
+| direct-direct | 82812_rev_UX-CHIP_a | fill_082812_rev_UX-CHIP_a | Nov 01 08:29 | yes | 16 | 87.0 | 0.011058 |
+| direct-direct | 82812_rev_UX-CHIP_b | fill_082812_rev_UX-CHIP_b | Nov 01 08:29 | yes | 12 | 90.8 | 0.006184 |
+| direct-direct | 82812_rev_UX-SCROLL_a | fill_082812_rev_UX-SCROLL_a | Nov 01 08:29 | yes | 26 | 93.4 | 0.014729 |
+| direct-direct | 82812_rev_UX-SCROLL_b | fill_082812_rev_UX-SCROLL_b | Nov 01 08:29 | yes | 10 | 88.4 | 0.006007 |
+| direct-direct | 82943_rev_CONTRACT-CORE-V03_a | fill_082943_rev_CONTRACT-CORE-V03_a | Nov 01 08:30 | yes | 16 | 91.4 | 0.009147 |
+| direct-direct | 82943_rev_CONTRACT-CORE-V03_b | fill_082943_rev_CONTRACT-CORE-V03_b | Nov 01 08:30 | yes | 17 | 91.2 | 0.010546 |
+| direct-direct | 82943_rev_MW-WALL-DEADLINE_a | fill_082943_rev_MW-WALL-DEADLINE_a | Nov 01 08:30 | yes | 10 | 87.8 | 0.006471 |
+| direct-direct | 82943_rev_MW-WALL-DEADLINE_b | fill_082943_rev_MW-WALL-DEADLINE_b | Nov 01 08:30 | yes | 11 | 88.2 | 0.005853 |
+| direct-direct | 82943_rev_OS-NATIVE-MOVE_a | fill_082943_rev_OS-NATIVE-MOVE_a | Nov 01 08:30 | yes | 7 | 87.0 | 0.004567 |
+| direct-direct | 82943_rev_OS-NATIVE-MOVE_b | fill_082943_rev_OS-NATIVE-MOVE_b | Nov 01 08:30 | yes | 35 | 95.3 | 0.016243 |
+| direct-direct | 82943_rev_UX-CHIP_a | fill_082943_rev_UX-CHIP_a | Nov 01 08:31 | yes | 13 | 89.4 | 0.00921 |
+| direct-direct | 82943_rev_UX-CHIP_b | fill_082943_rev_UX-CHIP_b | Nov 01 08:31 | yes | 12 | 89.7 | 0.006228 |
+| direct-direct | 82943_rev_UX-SCROLL_a | fill_082943_rev_UX-SCROLL_a | Nov 01 08:31 | yes | 15 | 91.2 | 0.007019 |
+| direct-direct | 82943_rev_UX-SCROLL_b | fill_082943_rev_UX-SCROLL_b | Nov 01 08:31 | yes | 13 | 86.5 | 0.012208 |
+| direct-direct | 83114_rev_CONTRACT-CORE-V03_a | fill_083114_rev_CONTRACT-CORE-V03_a | Nov 01 08:32 | yes | 23 | 90.5 | 0.015664 |
+| direct-direct | 83114_rev_CONTRACT-CORE-V03_b | fill_083114_rev_CONTRACT-CORE-V03_b | Nov 01 08:32 | yes | 15 | 89.3 | 0.008715 |
+| direct-direct | 83114_rev_MW-WALL-DEADLINE_a | fill_083114_rev_MW-WALL-DEADLINE_a | Nov 01 08:32 | yes | 13 | 90.4 | 0.007224 |
+| direct-direct | 83114_rev_MW-WALL-DEADLINE_b | fill_083114_rev_MW-WALL-DEADLINE_b | Nov 01 08:32 | yes | 17 | 87.6 | 0.010163 |
+| direct-direct | 83114_rev_UX-CHIP_a | fill_083114_rev_UX-CHIP_a | Nov 01 08:32 | yes | 7 | 68.8 | 0.006977 |
+| direct-direct | 83114_rev_UX-CHIP_b | fill_083114_rev_UX-CHIP_b | Nov 01 08:32 | yes | 11 | 88.3 | 0.005325 |
+| direct-direct | 83114_rev_UX-SCROLL_a | fill_083114_rev_UX-SCROLL_a | Nov 01 08:32 | yes | 19 | 87.7 | 0.013457 |
+| direct-direct | 83114_rev_UX-SCROLL_b | fill_083114_rev_UX-SCROLL_b | Nov 01 08:32 | yes | 11 | 88.2 | 0.006691 |
+| direct-direct | 83239_rev_CONTRACT-CORE-V03_a | fill_083239_rev_CONTRACT-CORE-V03_a | Nov 01 08:33 | yes | 21 | 92.6 | 0.012424 |
+| direct-direct | 83239_rev_CONTRACT-CORE-V03_b | fill_083239_rev_CONTRACT-CORE-V03_b | Nov 01 08:33 | yes | 11 | 83.1 | 0.008255 |
+| direct-direct | 83239_rev_MW-WALL-DEADLINE_a | fill_083239_rev_MW-WALL-DEADLINE_a | Nov 01 08:33 | yes | 12 | 88.8 | 0.006237 |
+| direct-direct | 83239_rev_MW-WALL-DEADLINE_b | fill_083239_rev_MW-WALL-DEADLINE_b | Nov 01 08:33 | yes | 13 | 90.8 | 0.006674 |
+| direct-direct | 83239_rev_UX-CHIP_a | fill_083239_rev_UX-CHIP_a | Nov 01 08:33 | yes | 8 | 73.4 | 0.008699 |
+| direct-direct | 83239_rev_UX-CHIP_b | fill_083239_rev_UX-CHIP_b | Nov 01 08:33 | yes | 18 | 91.8 | 0.009519 |
+| direct-direct | 83239_rev_UX-SCROLL_a | fill_083239_rev_UX-SCROLL_a | Nov 01 08:36 | yes | 11 | 80.0 | 0.011058 |
+| direct-direct | 83239_rev_UX-SCROLL_b | fill_083239_rev_UX-SCROLL_b | Nov 01 08:37 | yes | 11 | 87.9 | 0.008278 |
+| direct-direct | 83255_r1_osmove_a | fill_083255_r1_osmove_a | Nov 01 08:37 | yes | 14 | 88.6 | 0.01144 |
+| direct-direct | 83256_r1_osmove_b | fill_083256_r1_osmove_b | Nov 01 08:37 | yes | 15 | 89.5 | 0.009524 |
+| direct-direct | 83710_rev_CONTRACT-CORE-V03_a | fill_083710_rev_CONTRACT-CORE-V03_a | Nov 01 08:38 | yes | 16 | 91.3 | 0.009539 |
+| direct-direct | 83710_rev_CONTRACT-CORE-V03_b | fill_083710_rev_CONTRACT-CORE-V03_b | Nov 01 08:38 | yes | 14 | 90.6 | 0.009484 |
+| direct-direct | 83710_rev_MW-WALL-DEADLINE_a | fill_083710_rev_MW-WALL-DEADLINE_a | Nov 01 08:38 | yes | 13 | 88.8 | 0.007818 |
+| direct-direct | 83710_rev_MW-WALL-DEADLINE_b | fill_083710_rev_MW-WALL-DEADLINE_b | Nov 01 08:38 | yes | 19 | 92.9 | 0.011602 |
+| direct-direct | 83710_rev_UX-CHIP_a | fill_083710_rev_UX-CHIP_a | Nov 01 08:38 | yes | 16 | 92.0 | 0.008215 |
+| direct-direct | 83710_rev_UX-CHIP_b | fill_083710_rev_UX-CHIP_b | Nov 01 08:38 | yes | 14 | 89.1 | 0.007722 |
+| direct-direct | 83710_rev_UX-SCROLL_a | fill_083710_rev_UX-SCROLL_a | Nov 01 08:38 | yes | 14 | 84.9 | 0.010979 |
+| direct-direct | 83710_rev_UX-SCROLL_b | fill_083710_rev_UX-SCROLL_b | Nov 01 08:38 | yes | 18 | 88.3 | 0.011901 |
+| direct-direct | 83835_rev_CONTRACT-CORE-V03_a | fill_083835_rev_CONTRACT-CORE-V03_a | Nov 01 08:39 | yes | 17 | 92.4 | 0.007905 |
+| direct-direct | 83835_rev_CONTRACT-CORE-V03_b | fill_083835_rev_CONTRACT-CORE-V03_b | Nov 01 08:39 | yes | 10 | 85.0 | 0.007384 |
+| direct-direct | 83835_rev_MW-WALL-DEADLINE_a | fill_083835_rev_MW-WALL-DEADLINE_a | Nov 01 08:39 | yes | 12 | 89.0 | 0.006717 |
+| direct-direct | 83835_rev_MW-WALL-DEADLINE_b | fill_083835_rev_MW-WALL-DEADLINE_b | Nov 01 08:39 | yes | 12 | 89.7 | 0.006936 |
+| direct-direct | 83835_rev_UX-CHIP_a | fill_083835_rev_UX-CHIP_a | Nov 01 08:39 | yes | 20 | 92.3 | 0.010778 |
+| direct-direct | 83835_rev_UX-CHIP_b | fill_083835_rev_UX-CHIP_b | Nov 01 08:39 | yes | 14 | 89.8 | 0.008893 |
+| direct-direct | 83835_rev_UX-SCROLL_a | fill_083835_rev_UX-SCROLL_a | Nov 01 08:39 | yes | 24 | 92.9 | 0.014183 |
+| direct-direct | 83835_rev_UX-SCROLL_b | fill_083835_rev_UX-SCROLL_b | Nov 01 08:39 | yes | 13 | 87.8 | 0.009939 |
+| direct-direct | 84000_rev_CONTRACT-CORE-V03_a | fill_084000_rev_CONTRACT-CORE-V03_a | Nov 01 08:41 | yes | 9 | 81.7 | 0.008386 |
+| direct-direct | 84000_rev_CONTRACT-CORE-V03_b | fill_084000_rev_CONTRACT-CORE-V03_b | Nov 01 08:41 | yes | 19 | 88.7 | 0.012787 |
+| direct-direct | 84000_rev_MW-WALL-DEADLINE_a | fill_084000_rev_MW-WALL-DEADLINE_a | Nov 01 08:41 | yes | 9 | 86.0 | 0.007895 |
+| direct-direct | 84000_rev_MW-WALL-DEADLINE_b | fill_084000_rev_MW-WALL-DEADLINE_b | Nov 01 08:41 | yes | 19 | 92.8 | 0.010216 |
+| direct-direct | 84000_rev_UX-CHIP_a | fill_084000_rev_UX-CHIP_a | Nov 01 08:41 | yes | 15 | 90.9 | 0.007491 |
+| direct-direct | 84000_rev_UX-CHIP_b | fill_084000_rev_UX-CHIP_b | Nov 01 08:41 | yes | 13 | 90.2 | 0.007543 |
+| direct-direct | 84000_rev_UX-SCROLL_a | fill_084000_rev_UX-SCROLL_a | Nov 01 08:41 | yes | 14 | 89.4 | 0.00972 |
+| direct-direct | 84000_rev_UX-SCROLL_b | fill_084000_rev_UX-SCROLL_b | Nov 01 08:41 | yes | 12 | 88.1 | 0.007662 |
+| direct-direct | 84125_rev_CONTRACT-CORE-V03_a | fill_084125_rev_CONTRACT-CORE-V03_a | Nov 01 08:42 | yes | 13 | 89.4 | 0.007452 |
+| direct-direct | 84125_rev_CONTRACT-CORE-V03_b | fill_084125_rev_CONTRACT-CORE-V03_b | Nov 01 08:42 | yes | 27 | 93.7 | 0.012774 |
+| direct-direct | 84125_rev_JUDGE-SYSDEP-BUILD_a | fill_084125_rev_JUDGE-SYSDEP-BUILD_a | Nov 01 08:42 | yes | 12 | 91.2 | 0.004796 |
+| direct-direct | 84125_rev_JUDGE-SYSDEP-BUILD_b | fill_084125_rev_JUDGE-SYSDEP-BUILD_b | Nov 01 08:42 | yes | 12 | 88.5 | 0.007524 |
+| direct-direct | 84125_rev_MW-WALL-DEADLINE_a | fill_084125_rev_MW-WALL-DEADLINE_a | Nov 01 08:42 | yes | 13 | 90.1 | 0.007713 |
+| direct-direct | 84125_rev_MW-WALL-DEADLINE_b | fill_084125_rev_MW-WALL-DEADLINE_b | Nov 01 08:42 | yes | 15 | 91.9 | 0.007718 |
+| direct-direct | 84125_rev_UX-CHIP_a | fill_084125_rev_UX-CHIP_a | Nov 01 08:42 | yes | 11 | 82.0 | 0.007706 |
+| direct-direct | 84125_rev_UX-CHIP_b | fill_084125_rev_UX-CHIP_b | Nov 01 08:42 | yes | 23 | 90.2 | 0.015977 |
+| direct-direct | 84125_rev_UX-SCROLL_a | fill_084125_rev_UX-SCROLL_a | Nov 01 08:42 | yes | 21 | 92.0 | 0.014119 |
+| direct-direct | 84125_rev_UX-SCROLL_b | fill_084125_rev_UX-SCROLL_b | Nov 01 08:42 | yes | 18 | 91.2 | 0.010493 |
+| direct-direct | 84256_rev_CONTRACT-CORE-V03_a | fill_084256_rev_CONTRACT-CORE-V03_a | Nov 01 08:43 | yes | 38 | 94.9 | 0.018784 |
+| direct-direct | 84256_rev_CONTRACT-CORE-V03_b | fill_084256_rev_CONTRACT-CORE-V03_b | Nov 01 08:43 | yes | 13 | 87.3 | 0.008222 |
+| direct-direct | 84256_rev_JUDGE-SYSDEP-BUILD_a | fill_084256_rev_JUDGE-SYSDEP-BUILD_a | Nov 01 08:44 | yes | 16 | 90.5 | 0.008451 |
+| direct-direct | 84256_rev_JUDGE-SYSDEP-BUILD_b | fill_084256_rev_JUDGE-SYSDEP-BUILD_b | Nov 01 08:44 | yes | 15 | 87.3 | 0.009227 |
+| direct-direct | 84256_rev_MW-WALL-DEADLINE_a | fill_084256_rev_MW-WALL-DEADLINE_a | Nov 01 08:44 | yes | 16 | 91.4 | 0.010954 |
+| direct-direct | 84256_rev_MW-WALL-DEADLINE_b | fill_084256_rev_MW-WALL-DEADLINE_b | Nov 01 08:44 | yes | 14 | 91.3 | 0.007472 |
+| direct-direct | 84256_rev_UX-CHIP_a | fill_084256_rev_UX-CHIP_a | Nov 01 08:44 | yes | 16 | 90.3 | 0.010821 |
+| direct-direct | 84256_rev_UX-CHIP_b | fill_084256_rev_UX-CHIP_b | Nov 01 08:44 | yes | 19 | 88.8 | 0.012068 |
+| direct-direct | 84256_rev_UX-SCROLL_a | fill_084256_rev_UX-SCROLL_a | Nov 01 08:44 | yes | 19 | 90.9 | 0.011011 |
+| direct-direct | 84256_rev_UX-SCROLL_b | fill_084256_rev_UX-SCROLL_b | Nov 01 08:44 | yes | 14 | 84.7 | 0.010475 |
+| direct-direct | 84427_rev_CONTRACT-CORE-V03_a | fill_084427_rev_CONTRACT-CORE-V03_a | Nov 01 08:45 | yes | 13 | 89.6 | 0.007866 |
+| direct-direct | 84427_rev_CONTRACT-CORE-V03_b | fill_084427_rev_CONTRACT-CORE-V03_b | Nov 01 08:45 | yes | 17 | 91.5 | 0.010014 |
+| direct-direct | 84427_rev_JUDGE-SYSDEP-BUILD_a | fill_084427_rev_JUDGE-SYSDEP-BUILD_a | Nov 01 08:45 | yes | 18 | 88.6 | 0.012011 |
+| direct-direct | 84427_rev_JUDGE-SYSDEP-BUILD_b | fill_084427_rev_JUDGE-SYSDEP-BUILD_b | Nov 01 08:45 | yes | 10 | 88.2 | 0.005696 |
+| direct-direct | 84427_rev_UX-CHIP_a | fill_084427_rev_UX-CHIP_a | Nov 01 08:45 | yes | 13 | 89.2 | 0.007314 |
+| direct-direct | 84427_rev_UX-CHIP_b | fill_084427_rev_UX-CHIP_b | Nov 01 08:45 | yes | 11 | 90.1 | 0.005549 |
+| direct-direct | 84427_rev_UX-SCROLL_a | fill_084427_rev_UX-SCROLL_a | Nov 01 08:45 | yes | 19 | 92.8 | 0.009177 |
+| direct-direct | 84427_rev_UX-SCROLL_b | fill_084427_rev_UX-SCROLL_b | Nov 01 08:45 | yes | 17 | 90.7 | 0.011038 |
+| direct-direct | 84551_rev_CONTRACT-CORE-V03_a | fill_084551_rev_CONTRACT-CORE-V03_a | Nov 01 08:46 | yes | 12 | 87.7 | 0.00767 |
+| direct-direct | 84551_rev_CONTRACT-CORE-V03_b | fill_084551_rev_CONTRACT-CORE-V03_b | Nov 01 08:46 | yes | 17 | 90.6 | 0.011696 |
+| direct-direct | 84551_rev_JUDGE-SYSDEP-BUILD_a | fill_084551_rev_JUDGE-SYSDEP-BUILD_a | Nov 01 08:46 | yes | 12 | 89.9 | 0.006264 |
+| direct-direct | 84551_rev_JUDGE-SYSDEP-BUILD_b | fill_084551_rev_JUDGE-SYSDEP-BUILD_b | Nov 01 08:47 | yes | 15 | 91.4 | 0.006797 |
+| direct-direct | 84551_rev_UX-SCROLL_a | fill_084551_rev_UX-SCROLL_a | Nov 01 08:47 | yes | 11 | 88.2 | 0.006886 |
+| direct-direct | 84551_rev_UX-SCROLL_b | fill_084551_rev_UX-SCROLL_b | Nov 01 08:47 | yes | 16 | 91.1 | 0.00907 |
+| direct-direct | 84710_rev_UX-SCROLL_a | fill_084710_rev_UX-SCROLL_a | Nov 01 08:48 | yes | 12 | 87.8 | 0.006861 |
 
 ## Method
 
