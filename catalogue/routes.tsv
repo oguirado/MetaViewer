@@ -141,6 +141,7 @@ flakepi-626bf7f96335	changes/unreleased/flake-pin-procbound-r2.md
 flakepi-0268f441f2d7	changes/unreleased/flake-pin-procbound.md
 judge-sysdep-build.md	changes/unreleased/judge-sysdep-build.md
 mdisp-fix.md	changes/unreleased/mdisp-fix.md
+mw-ax-dump.md	changes/unreleased/mw-ax-dump.md
 mw-sleep-ns.md	changes/unreleased/mw-sleep-ns.md
 mw-wall-deadline.md	changes/unreleased/mw-wall-deadline.md
 p12-display-reader.md	changes/unreleased/p12-display-reader.md
@@ -1330,6 +1331,7 @@ test_mv_demo.py	tests/test_mv_demo.py
 test_mv_demo_flow.py	tests/test_mv_demo_flow.py
 test_mv_identity.py	tests/test_mv_identity.py
 testmvr-a9d3d841457c	tests/test_mv_ram_admission.py
+test_mw_ax_dump.py	tests/test_mw_ax_dump.py
 test_mw_e1_receipt.py	tests/test_mw_e1_receipt.py
 test_mw_focus_skip.py	tests/test_mw_focus_skip.py
 test_mw_home_cli.py	tests/test_mw_home_cli.py
@@ -1362,6 +1364,7 @@ gate_g_ai.py	tools/gate_g_ai.py
 mv_demo.py	tools/mv_demo.py
 mv_identity.py	tools/mv_identity.py
 mv_ram_admission.py	tools/mv_ram_admission.py
+mw_ax_dump.py	tools/mw_ax_dump.py
 mw_home_check.py	tools/mw_home_check.py
 mw_run_backend.py	tools/mw_run_backend.py
 router_index.py	tools/router_index.py
