@@ -8,7 +8,7 @@
  * Enter, Escape); this wrapper adds invoker focus return on close and
  * translates the kit choice into a create intent payload.
  */
-import { computed, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { NewCapsuleDialog } from '../../.kit/capsule-ui-kit/src/index-shell.js';
 import {
   CATALOG_KIND_IDS,
@@ -26,6 +26,19 @@ const props = defineProps({
 });
 const emit = defineEmits(['update:visible', 'create', 'close']);
 
+const api = /** @type {any} */ (globalThis).metaviewerRoles;
+const roleChoice = ref('agent'), profileChoice = ref(''), choosingRole = ref(false), roleError = ref('');
+const pendingIntent = ref(/** @type {any} */ (null));
+const profileChoices = ref(/** @type {Array<{role:string,profileId:string,available:boolean}>} */ ([]));
+const matchingProfiles = computed(() => profileChoices.value.filter(p => p.role === roleChoice.value));
+watch(roleChoice, () => { profileChoice.value = matchingProfiles.value.find(p => p.available)?.profileId ?? ''; });
+function confirmRole() {
+  const profile = matchingProfiles.value.find(p => p.profileId === profileChoice.value);
+  if (!profile?.available) { roleError.value = profile ? 'PROFILE_ALREADY_BOUND' : 'NO_IDENTITY'; return; }
+  emit('create', {...pendingIntent.value,choice:{role:roleChoice.value,profileId:profile.profileId}});
+  choosingRole.value = false;
+  emit('update:visible', false);
+}
 const normalized = computed(() => normalizeCatalogEntries(props.kinds));
 const dialogTypes = computed(() => [...normalized.value.types]);
 const catalogErrors = computed(() => normalized.value.errors);
@@ -46,9 +59,17 @@ function forwardVisible(value) {
 }
 
 /** @param {{ type?: { id?: unknown }, placement?: unknown } | null} payload */
-function onCreate(payload) {
+async function onCreate(payload) {
   const result = buildCreateIntent({ kind: payload?.type?.id, placement: payload?.placement });
-  if (result.ok) emit('create', result.intent);
+  if (!result.ok) return;
+  if (!api || !['browser','identity-browser'].includes(result.intent.kind)) { emit('create',result.intent); return; }
+  pendingIntent.value = result.intent; roleChoice.value = 'agent'; roleError.value = '';
+  try {
+    profileChoices.value = await api.choices();
+    if (!Array.isArray(profileChoices.value)) throw Error('IDENTITY_LIST_UNAVAILABLE');
+    profileChoice.value = matchingProfiles.value.find(p => p.available)?.profileId ?? '';
+  } catch { profileChoices.value = []; roleError.value = 'IDENTITY_LIST_UNAVAILABLE'; }
+  choosingRole.value = true;
 }
 
 function onClose() {
@@ -56,7 +77,7 @@ function onClose() {
 }
 </script>
 <template>
-  <NewCapsuleDialog
+  <NewCapsuleDialog v-if="!choosingRole"
     :visible="visible"
     :types="dialogTypes"
     :title="title"
@@ -81,5 +102,17 @@ function onClose() {
       </ul>
     </template>
   </NewCapsuleDialog>
+  <div v-if="choosingRole" class="mv-role-dialog" role="dialog" aria-modal="true" aria-label="Capsule role and identity" @keydown.esc="choosingRole = false; emit('update:visible', false)">
+    <h2>Capsule role and identity</h2>
+    <label>Role <select v-model="roleChoice" autofocus><option value="agent">Agent</option><option value="human">Human</option></select></label>
+    <label>Identity <select v-model="profileChoice"><option value="" disabled>Choose an available identity</option><option v-for="profile in matchingProfiles" :key="profile.profileId" :value="profile.profileId" :disabled="!profile.available">{{ profile.profileId }}{{ profile.available ? '' : ' — unavailable' }}</option></select></label>
+    <p v-if="roleError" role="alert">{{ roleError }}</p>
+    <button type="button" @click="confirmRole">Open capsule</button>
+    <button type="button" @click="choosingRole = false; emit('update:visible', false)">Cancel</button>
+  </div>
 </template>
 <style src="./catalog.css" scoped></style>
+
+<style scoped>
+.mv-role-dialog { position:fixed; z-index:100; inset:25% 25% auto; padding:1.5rem; background:Canvas; color:CanvasText; border:1px solid currentColor; border-radius:0.5rem; display:grid; gap:1rem; }
+</style>

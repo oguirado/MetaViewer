@@ -860,6 +860,11 @@ export async function createMainBindings({env = process.env, createMessageChanne
           partialApplied: qState.partialApplied,
         });
       },
+      /** Host-only authoritative state; never exported by preload. @param {string} surfaceId */
+      getHumanSurface(surfaceId) {
+        const state = surfaces.get(surfaceId);
+        return state ? Object.freeze({...state}) : null;
+      },
       get requestedWallFps() {
         return requestedWallFps;
       },

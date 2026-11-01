@@ -1,0 +1,1 @@
+- Add immutable human and agent capsule roles, isolated native xpra tiles, readonly agent watch, and continuous redacted human traces.

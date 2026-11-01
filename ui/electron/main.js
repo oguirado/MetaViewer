@@ -2204,6 +2204,7 @@ export async function bootProductionMain(handles) {
       : new Map();
   let wireBridge = /** @type {{dispose:()=>Promise<void>, notifyCreateRefusal?:(failure:unknown)=>unknown} | null} */(null);
   let displayBridge = /** @type {{dispose:()=>Promise<void>} | null} */(null);
+  let roleBridge = /** @type {{dispose:()=>Promise<void>} | null} */(null);
   let operatorBridge = /** @type {{dispose:()=>Promise<void>} | null} */(null);
   let captureBridge = /** @type {{dispose:()=>Promise<void>} | null} */(null);
   let qaBridge = /** @type {{enabled:boolean, dispose:()=>Promise<void>} | null} */(null);
@@ -2265,6 +2266,10 @@ export async function bootProductionMain(handles) {
         /* unwind best-effort */
       }
       captureBridge = null;
+    }
+    if (roleBridge) {
+      try { await roleBridge.dispose(); } catch { /* continue owned teardown */ }
+      roleBridge = null;
     }
     if (displayBridge !== null && displayBridge !== undefined) {
       try {
@@ -2564,6 +2569,20 @@ export async function bootProductionMain(handles) {
   try {
     const envRec = /** @type {Record<string, unknown>} */ (typed.env);
     const packagedLaunch = isPackaged || paths.rendererRoot.includes('.asar/');
+    if (!retail.nested && typeof /** @type {any} */ (core).getHumanSurface === 'function'
+        && typeof /** @type {any} */ (contentsUnknown)?.session?.registerPreloadScript === 'function') {
+      const electron = createRequire(import.meta.url)('electron');
+      roleBridge = (await import('./roleHost.js')).installRoleHost({electron, window:built, core,
+        env:typed.env, capsuleStates,
+        admit:(/** @type {unknown} */ event) => observeSender(event,contentsUnknown,PRIVILEGED_ORIGIN).verdict === 'admit',
+        listIdentities:async () => {
+          const {identityEnvironment,identityRunner,resolveIdentityTool:resolveOperatorIdentityTool} = await import('./operatorBridge.js');
+          const env = /** @type {NodeJS.ProcessEnv} */ (typed.env);
+          const tool = resolveOperatorIdentityTool({tool:resolveIdentityTool({packaged:packagedLaunch,
+            resourcesPath:process.resourcesPath,rendererRoot:paths.rendererRoot}),env});
+          return identityRunner({tool,env:identityEnvironment(env,tool)})('list',{});
+        }});
+    }
     if (packagedLaunch && envRec.MV_E2E_LIVE !== undefined && envRec.MV_E2E_LIVE !== '') {
       fail('RETAIL_ENV', 'packaged launch refuses MV_E2E_LIVE');
     }

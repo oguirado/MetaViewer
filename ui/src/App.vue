@@ -635,6 +635,11 @@ function onCreateCapsule(intent) {
         throw Object.assign(new Error('NO_BROWSER_CAPSULE'), {code:'NO_BROWSER_CAPSULE'});
       }
       try {
+        if (body.choice && /** @type {any} */ (globalThis).metaviewerRoles) {
+          const reply = await /** @type {any} */ (globalThis).metaviewerRoles.create(body.choice);
+          if (!reply.ok) throw Object.assign(new Error(reply.code), {code:reply.code});
+          return reply;
+        }
         return await props.authorityHost.createSurface();
       } catch (error) {
         // [TARGET, unit decision] The tile close (x) is presentation-only: the capsule keeps
@@ -1149,6 +1154,7 @@ const chromeWorkspace = markRaw(defineComponent({
           :color-scheme="scheme === 'mv-dark' ? 'dark' : 'light'" :density="density" @ready="onWallReady" @wall-settled="onWorkspaceSettled" @activate-surface="selectCapsule" @panel-closed="onPanelClosed" @submit-intent="onWallIntent">
           <template #surface="{ surface, capsuleId }">
             <template v-if="surface && (!multislotOpen || capsuleId !== selectedSurface?.id)">
+            <RoleSurface :surface-id="capsuleId" :control="surface.control">
             <div v-if="wallInputState(surface) !== ''" class="mv-input-indicator" :data-input-state="wallInputState(surface)" :data-semantic-anchor="`capsule/${capsuleId}/input`">
               <UiButton v-if="wallInputState(surface) === 'view'" :id="`mv-input-take-${capsuleId}`" :data-semantic-anchor="`capsule/${capsuleId}/input/take`" class="mv-input-indicator__action" label="Take control" :aria-label="`Take control of ${surfaceLabel(surface)}`" @click="takeWallControl(surface)" />
               <span v-if="wallInputRefusal[capsuleId] && wallInputState(surface) === 'view'" class="mv-input-indicator__text mv-input-indicator__refusal" role="status">{{ wallInputRefusal[capsuleId] }}</span>
@@ -1157,6 +1163,7 @@ const chromeWorkspace = markRaw(defineComponent({
               <template v-else-if="wallInputState(surface) !== 'view'"><span class="mv-input-indicator__text" role="status">{{ wallInputRefusal[capsuleId] ?? (wallInputState(surface) === 'paused' ? 'Click the tile to type' : 'Interactive') }}</span><UiButton :id="`mv-input-release-${capsuleId}`" :data-semantic-anchor="`capsule/${capsuleId}/input/release`" class="mv-input-indicator__action" label="Release" :aria-label="`Release control of ${surfaceLabel(surface)}`" @click="releaseWallControl(surface)" /></template>
             </div>
             <SurfaceCanvas :surface-id="capsuleId" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :frame-width="surfaceWitness(surface).width" :frame-height="surfaceWitness(surface).height" :state="canvasStateFor(surface)" :input-enabled="inputEnabledFor(surface) || wallArmedFor(surface)" :stream-id="surfaceStreamId(surface)" @canvas-escape="onCanvasEscape(capsuleId)" @canvas-focus="onCanvasFocus(capsuleId)" />
+            </RoleSurface>
             </template>
           </template>
         </WallWorkspace>

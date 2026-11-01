@@ -46,6 +46,7 @@ import (
 )
 
 type Profile struct {
+	Role                                                string `json:"role,omitempty"`
 	TextInput                                           string `json:"text_input,omitempty"`
 	Kind, NativeKind, Program, AppDir, RAMRoot, Display string
 	Width, Height, NestedDepth                          int
@@ -103,6 +104,7 @@ type Window struct {
 	URL   string `json:"url"`
 }
 type Binding struct {
+	Role                                                      string
 	Surface                                                   Surface
 	Container, RunID, Window, FramesRoot, NativeKind, Program string
 	ConfirmedAbsent                                           bool
@@ -329,6 +331,12 @@ func NewManager(cfg Config, r cli.Runner, clock cli.Clock) (*Manager, error) {
 	copyProfiles := make(map[string]Profile, len(cfg.Profiles))
 	seenDisplays := make(map[string]bool)
 	for id, p := range cfg.Profiles {
+		if p.Role != "" && p.Role != "agent" && p.Role != "human" {
+			return nil, fault("configuration", "invalid capsule role")
+		}
+		if p.Role == "human" && (p.Kind != "browser" || p.Width != 1280 || p.Height != 900) {
+			return nil, fault("configuration", "human role requires 1280x900 browser")
+		}
 		if !ValidTextInput(p.TextInput) {
 			return nil, fault("configuration", "invalid text input mode")
 		}
@@ -842,6 +850,16 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 			return nil, err
 		}
 	}
+	if p.Role == "human" {
+		b.Surface.Control = "human"
+	}
+	b.Role = p.Role
+	if b.Role == "" {
+		b.Role = "agent"
+	}
+	if err := m.publishHumanBinding(b); err != nil {
+		return nil, err
+	}
 	m.bindings[id] = b
 	delete(m.quarantined, q.ProfileID)
 	return []json.RawMessage{surfaceEvent(version, "created", b.Surface)}, nil
@@ -1104,6 +1122,9 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 	}
 	if m.destroying[q.SurfaceID] {
 		return nil, fault("POLICY", "surface is draining")
+	}
+	if m.cfg.Profiles[b.Surface.ProfileID].Role == "human" {
+		return nil, fault("POLICY", "human role excludes native input")
 	}
 	if origin == "agent" {
 		if err := m.refuseLoginInput(b.Container); err != nil {

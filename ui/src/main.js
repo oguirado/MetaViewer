@@ -1,3 +1,4 @@
+import RoleSurface from './surfaces/RoleSurface.vue';
 /// <reference path="./kit.d.ts" />
 import { createApp } from 'vue';
 import App from './App.vue';
@@ -447,6 +448,7 @@ async function bootstrap() {
       runtime: /** @type {InstanceType<typeof App>['$props']['runtime']} */ (/** @type {unknown} */ (fixtureMount?.runtime ?? liveRuntime)),
       terminal: fixtureMount?.terminal ?? null });
     if (framePortRouter) application.provide?.('framePortRouter', framePortRouter);
+    application.component('RoleSurface', RoleSurface);
     application.provide?.('inputPort', inputPort);
     installKitTheme(application);
     // Kit declaration predates its shipped MetaViewer schemes.

@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:metaviewer:roles:v0.3",
+  "title": "Host role tile requests",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "op"
+  ],
+  "properties": {
+    "schema": {
+      "const": "metaviewer.roles/v0.3"
+    },
+    "op": {
+      "enum": [
+        "choices",
+        "create",
+        "status",
+        "mount",
+        "resize",
+        "close"
+      ]
+    },
+    "surfaceId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "choice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "profileId"
+      ],
+      "properties": {
+        "role": {
+          "enum": [
+            "human",
+            "agent"
+          ]
+        },
+        "profileId": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+        }
+      }
+    },
+    "bounds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "properties": {
+        "x": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16384
+        },
+        "y": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16384
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16384
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16384
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "op": {
+            "const": "choices"
+          }
+        }
+      },
+      "then": {
+        "maxProperties": 2
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "op": {
+            "const": "create"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "choice"
+        ],
+        "maxProperties": 3
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "op": {
+            "enum": [
+              "status",
+              "close"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "surfaceId"
+        ],
+        "maxProperties": 3
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "op": {
+            "enum": [
+              "mount",
+              "resize"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "surfaceId",
+          "bounds"
+        ],
+        "maxProperties": 4
+      }
+    }
+  ]
+}

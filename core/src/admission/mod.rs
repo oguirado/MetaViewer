@@ -183,6 +183,9 @@ pub struct CoreState {
     pub draining: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     destroyed: BTreeSet<String>,
+    /// Immutable role inferred only from an authoritative human-owned creation.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    human_roles: BTreeSet<String>,
     seen: BTreeSet<String>,
     messages: BTreeSet<String>,
     lane_nonces: BTreeMap<String, BTreeSet<String>>,
@@ -211,6 +214,7 @@ impl CoreState {
             pending: BTreeMap::new(),
             draining: BTreeMap::new(),
             destroyed: BTreeSet::new(),
+            human_roles: BTreeSet::new(),
             seen: BTreeSet::new(),
             messages: BTreeSet::new(),
             lane_nonces: BTreeMap::new(),
@@ -226,7 +230,11 @@ impl CoreState {
         .map_err(|_| AdmissionError::InvalidInput)
     }
     pub fn domain_snapshot(&self) -> Result<Vec<u8>, AdmissionError> {
-        crate::journal::canonical_bytes(&serde_json::json!({"surfaces":self.surfaces,"leases":self.leases,"pending":self.pending,"draining":self.draining,"destroyed":self.destroyed,"budget":self.remaining_budget,"epoch":self.epoch})).map_err(|_|AdmissionError::InvalidInput)
+        let mut value = serde_json::json!({"surfaces":self.surfaces,"leases":self.leases,"pending":self.pending,"draining":self.draining,"destroyed":self.destroyed,"budget":self.remaining_budget,"epoch":self.epoch});
+        if !self.human_roles.is_empty() {
+            value["human_roles"] = serde_json::to_value(&self.human_roles).map_err(|_|AdmissionError::InvalidInput)?;
+        }
+        crate::journal::canonical_bytes(&value).map_err(|_|AdmissionError::InvalidInput)
     }
     pub fn is_destroyed(&self, id: &str) -> bool {
         self.destroyed.contains(id)
@@ -278,7 +286,8 @@ impl CoreState {
                         return Ok(out);
                     }
                 }
-                if self.is_destroyed(&p.surface_id)
+                if self.human_roles.contains(&p.surface_id)
+                    || self.is_destroyed(&p.surface_id)
                     || self.epoch == 0
                     || self.seen.contains(&p.proposal_id)
                     || self.pending.contains_key(&p.proposal_id)
@@ -365,6 +374,9 @@ impl CoreState {
                     {
                         out.reason = Some(Refusal::Policy);
                     } else {
+                        if !surface.agent_controlled {
+                            self.human_roles.insert(surface_id.clone());
+                        }
                         self.surfaces.insert(surface_id.clone(), surface.clone());
                     }
                 }
@@ -558,6 +570,11 @@ impl CoreState {
                 }
             }
             Input::TakeControl { surface_id } => {
+                if self.human_roles.contains(surface_id) {
+                    out.reason = Some(Refusal::Policy);
+                    self.core_seq = next;
+                    return Ok(out);
+                }
                 let s = self
                     .surfaces
                     .get_mut(surface_id)
@@ -574,7 +591,8 @@ impl CoreState {
                 }
             }
             Input::ReleaseControl { surface_id } => {
-                if self.draining.values().any(|sid| sid == surface_id) {
+                if self.human_roles.contains(surface_id)
+                    || self.draining.values().any(|sid| sid == surface_id) {
                     out.reason = Some(Refusal::Policy);
                 } else {
                     let s = self
@@ -647,6 +665,9 @@ impl CoreState {
         dispatch: bool,
     ) -> Result<Option<Refusal>, AdmissionError> {
         let p = r.proposal()?;
+        if self.human_roles.contains(&p.surface_id) {
+            return Ok(Some(Refusal::Policy));
+        }
         let Some(s) = self.surfaces.get(&p.surface_id) else {
             return Ok(Some(Refusal::StaleFrame));
         };
