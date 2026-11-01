@@ -19,17 +19,17 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 1,370 | 55 | 1,315 |
-| Lanes finished OK | 1,370 | 55 | 1,315 |
-| Agent steps | 54,476 | 2,705 | 51,771 |
-| Lane-hours of agent work | 130.1 | 5.2 | 124.8 |
-| Fresh input tokens | 218,529,264 | 11,482,034 | 207,047,230 |
-| Cache-read input tokens | 4,095,046,249 | 226,255,212 | 3,868,791,037 |
+| Lanes launched | 1,376 | 55 | 1,321 |
+| Lanes finished OK | 1,376 | 55 | 1,321 |
+| Agent steps | 54,692 | 2,705 | 51,987 |
+| Lane-hours of agent work | 130.9 | 5.2 | 125.6 |
+| Fresh input tokens | 219,267,332 | 11,482,034 | 207,785,298 |
+| Cache-read input tokens | 4,106,662,073 | 226,255,212 | 3,880,406,861 |
 | Prompt cache hit % | 94.9 | 95.2 | 94.9 |
-| Output tokens | 43,871,936 | 2,135,708 | 41,736,228 |
-| Thinking tokens | 25,991,420 | 1,050,039 | 24,941,381 |
-| Cost (USD) | 38.8174 | 2.0279 | 36.7895 |
-| Cost per lane (USD) | 0.0283 | 0.0369 | 0.028 |
+| Output tokens | 43,998,711 | 2,135,708 | 41,863,003 |
+| Thinking tokens | 26,071,933 | 1,050,039 | 25,021,894 |
+| Cost (USD) | 38.9398 | 2.0279 | 36.9119 |
+| Cost per lane (USD) | 0.0283 | 0.0369 | 0.0279 |
 
 Rooms: 136. Peak concurrent lanes [MEASURED from lane start/end]: 42.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
@@ -38,7 +38,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 981 | 93.9 | 22.5699 |
+| build | 987 | 93.9 | 22.6923 |
 | context | 42 | 95.9 | 1.9093 |
 | context packs + test ideation (U-DEC-0139) | 13 | 91.1 | 0.2195 |
 | demo | 4 | 90.7 | 0.0557 |
@@ -86,7 +86,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 643 | 93.9 | 14.2914 | direct Muse job |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 649 | 93.9 | 14.4138 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -1517,6 +1517,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | rning2_b | n10_morning2_b | Nov 01 01:56 | yes | 10 | 75.9 | 0.01195 |
 | direct-direct | DGE-PATH-FIX_a | r1x_JUDGE-PATH-FIX_a | Nov 01 01:59 | yes | 22 | 92.4 | 0.011742 |
 | direct-direct | DGE-PATH-FIX_b | r1x_JUDGE-PATH-FIX_b | Nov 01 01:59 | yes | 18 | 87.9 | 0.020668 |
+| direct-direct | -SITEPACK_a | r1x_E5-SITEPACK_a | Nov 01 02:01 | yes | 66 | 93.7 | 0.041551 |
 | direct-direct | -SITEPACK_b | r1x_E5-SITEPACK_b | Nov 01 02:01 | yes | 37 | 95.3 | 0.019901 |
 | direct-direct | path_a | n11_e5path_a | Nov 01 02:02 | yes | 76 | 96.5 | 0.042585 |
 | direct-direct | path_b | n11_e5path_b | Nov 01 02:02 | yes | 28 | 91.9 | 0.019728 |
@@ -1572,10 +1573,15 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | 6_judge1 | fill_26_judge1 | Nov 01 02:21 | yes | 26 | 92.6 | 0.016218 |
 | direct-direct | 7_launch1 | fill_27_launch1 | Nov 01 02:21 | yes | 21 | 91.5 | 0.010772 |
 | direct-direct | 8_e1doc | fill_28_e1doc | Nov 01 02:21 | yes | 44 | 95.9 | 0.017577 |
+| direct-direct | 9_e5doc | fill_29_e5doc | Nov 01 02:21 | yes | 36 | 94.3 | 0.021989 |
 | direct-direct | 0_mdisp1 | fill_30_mdisp1 | Nov 01 02:21 | yes | 17 | 90.9 | 0.011269 |
 | direct-direct | 1_geom1 | fill_31_geom1 | Nov 01 02:22 | yes | 10 | 84.6 | 0.007746 |
+| direct-direct | 2_u5b1 | fill_32_u5b1 | Nov 01 02:22 | yes | 32 | 94.3 | 0.017286 |
 | direct-direct | 3_demo1 | fill_33_demo1 | Nov 01 02:22 | yes | 11 | 87.0 | 0.008239 |
 | direct-direct | 4_pol2 | fill_34_pol2 | Nov 01 02:22 | yes | 25 | 94.1 | 0.011106 |
+| direct-direct | MO-CHAIN_a | r1x_DEMO-CHAIN_a | Nov 01 02:40 | yes | 34 | 95.0 | 0.01787 |
+| direct-direct | MO-CHAIN_b | r1x_DEMO-CHAIN_b | Nov 01 02:40 | yes | 26 | 93.6 | 0.014202 |
+| direct-direct | LISH-U2_b | r1x_POLISH-U2_b | Nov 01 02:43 | yes | 22 | 93.2 | 0.009494 |
 
 ## Method
 
