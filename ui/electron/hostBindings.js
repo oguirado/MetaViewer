@@ -160,7 +160,12 @@ export async function createMainBindings({env = process.env, createMessageChanne
     try {
       const info = await file.stat();
       if (!info.isFile() || info.uid !== process.getuid?.() || (info.mode & 0o022) || info.size > MAX_WIRE) throw fail();
-      const bytes = Buffer.alloc(MAX_WIRE + 1); const {bytesRead} = await file.read(bytes, 0, bytes.length, 0);
+      let bytes = Buffer.alloc(Math.min(info.size + 1, MAX_WIRE + 1));
+      let {bytesRead} = await file.read(bytes, 0, bytes.length, 0);
+      if (bytesRead === bytes.length && bytes.length <= MAX_WIRE) {
+        bytes = Buffer.alloc(MAX_WIRE + 1);
+        ({bytesRead} = await file.read(bytes, 0, bytes.length, 0));
+      }
       if (bytesRead > MAX_WIRE) throw fail();
       config = JSON.parse(bytes.subarray(0, bytesRead).toString('utf8'));
     } finally { await file.close(); }

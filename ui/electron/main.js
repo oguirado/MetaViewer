@@ -1137,11 +1137,16 @@ export async function handleAppRequest(rendererRoot, request, options) {
         `content="${CONTENT_SECURITY_POLICY}"`, `content="${csp}"`,
       ).replace('<head>', `<head><meta name="metaviewer-style-nonce" content="${nonce}">`));
     }
-    // ArrayBuffer (not the Node Buffer) so the body satisfies both the
-    // undici and DOM Response typings across every checkJs context.
-    const body = /** @type {ArrayBuffer} */ (
-      bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
-    );
+    // Stream a Uint8Array view over `bytes` rather than slicing its ArrayBuffer
+    // or passing an ArrayBuffer to `new Response(...)` (which clones the buffer
+    // twice inside undici's extractBody, retaining ~3x the bundle size in external memory).
+    const chunk = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(chunk);
+        controller.close();
+      },
+    });
     return new Response(body, {
       status: 200,
       headers: {
@@ -1674,8 +1679,12 @@ export function createLayoutBridge({directory,app} = {}) {
       try {
         const info = fstatSync(fd);
         if (!info.isFile() || info.size > LAYOUT_MAX_BYTES || info.uid !== process.getuid?.() || (info.mode & 0o022)) return invalid();
-        const bytes = Buffer.alloc(LAYOUT_MAX_BYTES + 1);
-        const size = readSync(fd, bytes, 0, bytes.length, 0);
+        let bytes = Buffer.alloc(Math.min(info.size + 1, LAYOUT_MAX_BYTES + 1));
+        let size = readSync(fd, bytes, 0, bytes.length, 0);
+        if (size === bytes.length && bytes.length <= LAYOUT_MAX_BYTES) {
+          bytes = Buffer.alloc(LAYOUT_MAX_BYTES + 1);
+          size = readSync(fd, bytes, 0, bytes.length, 0);
+        }
         if (size > LAYOUT_MAX_BYTES) return invalid();
         return await validate(new TextDecoder('utf-8', {fatal:true}).decode(bytes.subarray(0,size)));
       } finally { closeSync(fd); }

@@ -20,10 +20,12 @@ import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { MainError, observeSender, PRIVILEGED_ORIGIN, buildFirstSurfaceCreateRequest } from './main.js';
-import { pickCreateRequest } from './profilePicker.js';
 import { createFrameReader } from './frameReader.js';
 import { createFramePort } from './framePort.js';
 import { createTerminalFacade, validateProviderArgv } from './ptyBroker.js';
+
+/** @type {Promise<typeof import('./profilePicker.js')> | null} */
+let profilePickerModulePromise = null;
 
 export const WIRE_CHANNELS = Object.freeze({
   loadSettings:'metaviewer:settings.load', saveSettings:'metaviewer:settings.save',
@@ -637,8 +639,12 @@ export function createSettingsStore(env) {
         const stat = await file.stat();
         if (!stat.isFile() || (stat.mode & 0o777) !== 0o600
             || (process.getuid && stat.uid !== process.getuid())) throw settingsStoreError('SETTINGS_FILE');
-        const buffer = Buffer.alloc(WIRE_MAX_BYTES + 1);
-        const {bytesRead} = await file.read(buffer,0,buffer.length,0);
+        let buffer = Buffer.alloc(Math.min(stat.size + 1, WIRE_MAX_BYTES + 1));
+        let {bytesRead} = await file.read(buffer,0,buffer.length,0);
+        if (bytesRead === buffer.length && buffer.length <= WIRE_MAX_BYTES) {
+          buffer = Buffer.alloc(WIRE_MAX_BYTES + 1);
+          ({bytesRead} = await file.read(buffer,0,buffer.length,0));
+        }
         if (stat.size > WIRE_MAX_BYTES || bytesRead > WIRE_MAX_BYTES) {
           console.warn('MetaViewer settings: file exceeds byte cap; using defaults');
           notifySubscribers(DEFAULT_SETTINGS);
@@ -828,6 +834,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
       try {
         /** @type {any} */ let request;
         if (typeof listIdentities === 'function') {
+          const { pickCreateRequest } = await (profilePickerModulePromise ??= import('./profilePicker.js'));
           const pick = await pickCreateRequest({env, surfaces:capsuleStates, listIdentities});
           // Preload currently admits only {ok,code}; renderer copy is a conductor hook.
           if (!pick.ok) return refuse(pick.code, pick.missing?.[0] ?? 'mv-live-2');
