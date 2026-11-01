@@ -634,6 +634,7 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 		args = []string{"start", "--slots", "1", "--app", p.AppDir}
 	}
 	var started *EgressStarted
+	var startedPolicy *Egress
 	witnessState := m.egressState()
 	if p.NativeKind == "browser" {
 		var frozen string
@@ -657,6 +658,9 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 		if netErr != nil {
 			return nil, netErr
 		}
+		if policy != "" {
+			startedPolicy = &egress
+		}
 		if witnessState != "" {
 			if err := verifyEgressRecord(witnessState, q.ProfileID, egress); err != nil {
 				return nil, err
@@ -665,7 +669,7 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 			if err != nil || current != frozen {
 				return nil, fault("NET_EGRESS_CHANGED", "egress record changed during start preparation")
 			}
-			started = &EgressStarted{Schema: egressStartedSchema, CapsuleID: profileContainer, EffectiveMode: mode, RecordSHA256: frozen, StartMonoNS: m.clock(), StartWallNS: time.Now().UnixNano()}
+			started = &EgressStarted{Schema: egressStartedSchema, EffectiveMode: mode, RecordSHA256: frozen, StartMonoNS: m.clock(), StartWallNS: time.Now().UnixNano()}
 			if started.EffectiveMode == "" {
 				started.EffectiveMode = "legacy"
 			}
@@ -824,6 +828,16 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 		}
 	}
 	if started != nil {
+		// [TARGET, unit decision] Native readiness and binding checks above are
+		// authoritative: never publish a profile-derived container prediction.
+		started.CapsuleID = b.Container
+		if startedPolicy != nil {
+			// The proxy reloads its directory-mounted policy on each decision.
+			// Rebind its pre-start placeholder before publishing usable evidence.
+			if _, err := WriteEgressPolicy(witnessState, q.ProfileID, b.Container, *startedPolicy); err != nil {
+				return nil, err
+			}
+		}
 		if _, err := writePrivateEgressFile(witnessState, q.ProfileID+".started.json", started, 0400); err != nil {
 			return nil, err
 		}
