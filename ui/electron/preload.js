@@ -93,7 +93,7 @@ export function assertOperatorCall(method,args) {
   const v=args[0];
   if(method.startsWith('identity.')) {
     if(!operatorKeys(v,method==='identity.create'?['id','label','domains']:['id']) || !identityId(v.id)) throw new Error('OPERATOR_PAYLOAD');
-    if(method==='identity.create' && (!identityLabel(v.label) || !Array.isArray(v.domains) || !v.domains.length || v.domains.length>256 || !v.domains.every((/** @type {any} */d)=>typeof d==='string' && d.length<=253 && /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(d)))) throw new Error('OPERATOR_PAYLOAD');
+    if(method==='identity.create' && (!identityLabel(v.label) || !Array.isArray(v.domains) || v.domains.length>16 || !v.domains.every((/** @type {any} */d,/** @type {number} */i)=>typeof d==='string' && d.length<=253 && /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(d) && (i===0 || v.domains[i-1]<d)))) throw new Error('OPERATOR_PAYLOAD');
   } else if(method.startsWith('egress.')) {
     if(!(method==='egress.set'?(operatorKeys(v,['identity','record']) || (operatorKeys(v,['identity','record','confirm']) && typeof v.confirm==='boolean')):operatorKeys(v,['identity'])) || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(v.identity) || typeof v.identity!=='string' || (method==='egress.set' && !validEgress(v.record))) throw new Error('OPERATOR_PAYLOAD');
   } else if(!operatorKeys(v,['surface_id','step_index','gesture']) || !validHandoff({schema:'metaviewer.handoff/v1',surface_id:v.surface_id,step_index:v.step_index,reason:'captcha_wall',confidence:100,evidence_kinds:[]}) || v.gesture!=='operator-acknowledge') throw new Error('OPERATOR_PAYLOAD');
@@ -101,7 +101,7 @@ export function assertOperatorCall(method,args) {
 /** @param {string} method @param {any} v */
 export function assertOperatorReply(method,v) {
   if(BUTTON_METHODS.includes(method))return assertButtonReply(method,v);
-  if(operatorKeys(v,['ok','code']) && v.ok===false && ['IDENTITY_UNAVAILABLE','IDENTITY_REFUSED','PROFILE_NOT_PROVISIONED','PROFILE_MISSING','NET_EGRESS_IO','NET_EGRESS_INVALID','NET_PROXIED_UNSUPPORTED','NET_OPEN_PREREQ','HANDOFF_UNAVAILABLE'].includes(v.code)) return v;
+  if(operatorKeys(v,['ok','code']) && v.ok===false && ['IDENTITY_UNAVAILABLE','IDENTITY_REFUSED','IDENTITY_BOUND','PROFILE_NOT_PROVISIONED','PROFILE_MISSING','NET_EGRESS_IO','NET_EGRESS_INVALID','NET_PROXIED_UNSUPPORTED','NET_OPEN_PREREQ','HANDOFF_UNAVAILABLE'].includes(v.code)) return v;
   if(!v || v.ok!==true) throw new Error('OPERATOR_REPLY');
   if(method==='handoff.list') {
     if(!operatorKeys(v,['ok','rows']) || !Array.isArray(v.rows) || v.rows.length>64 || !v.rows.every(validHandoff)) throw new Error('OPERATOR_REPLY');

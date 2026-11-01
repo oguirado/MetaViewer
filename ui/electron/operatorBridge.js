@@ -86,7 +86,7 @@ export function identityEnvironment(env,tool) {
  * (missing configuration, unreadable store, native binary absent). */
 const TOOL_UNAVAILABLE = new Set(['IDENTITY_UNAVAILABLE','NATIVE_UNAVAILABLE','ABSOLUTE_PATH_REQUIRED']);
 /** Closed identity refusal codes surfaced across the host-to-renderer seam. */
-const IDENTITY_REFUSALS = new Set(['IDENTITY_REFUSED','PROFILE_NOT_PROVISIONED','PROFILE_MISSING']);
+const IDENTITY_REFUSALS = new Set(['IDENTITY_REFUSED','PROFILE_NOT_PROVISIONED','PROFILE_MISSING','IDENTITY_BOUND']);
 /** [TARGET, unit decision] Missing native profile provisioning (uid 10001, 0700)
  * is a distinct operator prerequisite before login; other closed tool refusals
  * map to IDENTITY_REFUSED. Everything else means the tool could not run.
@@ -95,7 +95,7 @@ export function toolRefusedCode(stdout) {
   try {
     const reply=JSON.parse(stdout);
     if(!operatorKeys(reply,['schema','ok','error']) || reply.schema!=='metaviewer.identity/v1' || reply.ok!==false || typeof reply.error!=='string' || !/^[A-Z][A-Z0-9_-]{0,63}$/.test(reply.error) || TOOL_UNAVAILABLE.has(reply.error))return null;
-    if(reply.error==='PROFILE_MISSING' || reply.error==='PROFILE_NOT_PROVISIONED')return reply.error;
+    if(reply.error==='PROFILE_MISSING' || reply.error==='PROFILE_NOT_PROVISIONED' || reply.error==='IDENTITY_BOUND')return reply.error;
     return 'IDENTITY_REFUSED';
   }catch{return null;}
 }

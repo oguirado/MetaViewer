@@ -588,7 +588,11 @@ func wireHandlerWithoutAdmission(m *capsule.Manager, profiles map[string]capsule
 				ProfileID string `json:"profile_id"`
 			}
 			_ = json.Unmarshal(q.Params, &p)
-			if profile, ok := profiles[p.ProfileID]; ok {
+			profile, ok := profiles[p.ProfileID]
+			if !ok {
+				profile, ok = m.ProfileFor(p.ProfileID)
+			}
+			if ok {
 				h, err := NewHandler(m, pubs[profile.RAMRoot])
 				if err != nil {
 					return nil, err
@@ -821,6 +825,9 @@ func wireHandlerWithoutAdmission(m *capsule.Manager, profiles map[string]capsule
 			return failure(configuration("post-input capture evidence refused"))
 		}
 		profile, ok := profiles[binding.Surface.ProfileID]
+		if !ok {
+			profile, ok = m.ProfileFor(binding.Surface.ProfileID)
+		}
 		pub := pubs[profile.RAMRoot]
 		if !ok || pub == nil {
 			return failure(configuration("post-input frame publisher required"))

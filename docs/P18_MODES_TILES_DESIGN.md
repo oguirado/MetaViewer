@@ -200,3 +200,105 @@ simultaneous multi-capsule live scenario; isolated live work uses the unit's
 development display and own profile only.
 
 This design is limited to the supplied worktrees and their pinned contracts and UI kit.
+
+## P18d
+
+The identities dialog separates saved browser identities from the bounded number
+of simultaneous capsule openings. Each row shows the identity name, display name,
+current opening mode, and explicit last-login confirmation, with human opening,
+agent opening, and confirmed deletion beside it. A bound or opening identity
+cannot be deleted: the dialog says “Stop it first”, and the tool independently
+checks the native lease while holding the identity guard. The guard inode remains
+in place after deletion so concurrent waiters cannot bypass exclusion.
+
+The add form requires only Name. Display name defaults to Name. Allowed sites
+is optional under Advanced, with plain examples and the empty-field explanation.
+Before IPC, sites are trimmed, lowercased, deduplicated, and sorted. The preload
+and Python boundary independently reject unsorted or repeated sites. The native
+admin and store accept an explicit empty array as the any-site metadata value;
+null remains invalid. This metadata change does not alter a capsule's configured
+egress mode, proxy policy, or network. The dialog and its nested delete confirmation
+retain the body modal marker that hides native views.
+
+Dynamic admission derives geometry, native browser kind, shared RAM root, and
+text-input policy from a deterministic configured browser template. Main requires
+an explicit matching template, rather than deriving one from picker defaults.
+The adapter independently requires a valid identity name and an affirmative public
+native-admin metadata lookup before native start. Protected identity prefixes are
+refused even when an adversarial store reports them present. Renderer requests
+cannot supply a template, executable, RAM root, or display.
+
+The finite display pool consists of compatible configured browser display slots.
+Static profiles retain their configured displays and opening defaults. Dynamic
+openings borrow a free compatible display; a static opening cannot collide with
+a borrowed slot. MaxSurfaces still bounds admission. A verified Stop releases a
+dynamic allocation. An uncertain native outcome or stop retains its reservation,
+so an absent receipt never proves that a display is free.
+
+Verification gates use real source mutations through Node loader substitutions,
+Go overlays, and isolated Python module copies. They exercise required names,
+display-name defaults, site normalization, local and native-lease deletion guards,
+store existence, protected names, distinct displays, display release, and static
+profile compatibility. A compile error does not count as killing a mutant.
+Every verification and development-app invocation uses the required memory-capped
+user scope; Node tests also receive the required per-test timeout.
+
+The development supervisor isolates user data, session data, runtime paths,
+identity metadata, and registry state, and proves its own single-instance lock
+before renderer interaction. It records owned processes and containers and cleans
+identities through the product UI even when an opening gate fails. Its live check
+opens only its own identity, switching modes sequentially with a verified Stop
+before restart, and never overlaps native capsules.
+
+Identity creation now provisions its native profile before returning success. The
+host tool admits the existing identity ID grammar and public store entry, then
+holds the native identity guard while checking that the lease is inactive. It
+rejects symbolic links, non-directory targets, mount delimiters, and canonical
+paths outside the private profiles directory. The only helper bind mount is that
+profiles directory. The already-installed identity browser image runs once as
+root, without networking or image pulls, under a random `mv-provision-<id>-<rand>`
+name. Its script creates the exact identity directory, pins its working directory,
+and assigns the native browser owner and private permissions. Host containment
+checks run again afterward, and lstat must verify the native owner, group, and
+exact private mode. A successful Docker exit without that stat evidence refuses.
+
+The helper deadline and its separate cleanup deadline fit inside the existing
+bridge request deadline. A failed or timed-out helper triggers bounded removal
+of only its own generated container name and retains PROFILE_NOT_PROVISIONED and
+the existing sudo repair hint. A failed create keeps its metadata for explicit
+repair or deletion; it does not falsely report a ready identity. The native
+browser's ownership check remains unchanged.
+
+Deletion keeps the same native guard and refuses an active or malformed lease
+before either metadata or profile removal. It removes the public store metadata
+and inactive lease record first, then invokes the helper to remove only the exact
+profile directory. The helper refuses removal while metadata remains or a lease
+is active, and the host verifies the directory is absent. The guard inode is
+retained. A helper failure after store deletion is reported rather than reversing
+the required ordering or claiming complete cleanup.
+
+The legacy dialog and persistence tests follow Name, Display name, Allowed sites,
+and Add identity while retaining invalid-name, native-refusal, damaged-profile,
+missing-profile, and repair checks. Synthetic Docker doubles keep those tests
+independent of host Docker. Dedicated tool tests and executable source mutations
+cover identity/path admission, actual stat enforcement, timeout cleanup, create
+provisioning, delete ordering, and the active-lease refusal.
+
+The isolated live supervisor records short-lived Docker helpers before launch,
+including the native singleton cleanup helper. It validates the own profile mount
+before admitting a native capsule. The panel check creates identities without
+sudo, verifies directory stat, opens one identity at a time, checks the human
+view, switches sequentially to agent mode, and checks its read-only watch. Paint
+evidence combines connected native windows, role-appropriate readonly state,
+and opaque pixels inside the fitted native viewport that differ from the wrapper
+background. Cleanup stops the capsule before panel deletion and checks both
+profile removal and empty own store/registry state.
+
+The login-confirmation button text and tooltip live in RoleSurface.vue, which
+this unit is explicitly forbidden to edit. The intended wording is “Mark as
+logged in”, with tooltip “Remembers that this identity has a signed-in session,
+shown in Identities.” Its existing operation and per-identity marker remain
+unchanged; the conductor owns that wording change.
+
+This section scopes its mandate to the supplied MetaViewer and OpenSuperficies
+worktree corpus.

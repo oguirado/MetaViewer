@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -96,6 +97,20 @@ class IdentityTests(unittest.TestCase):
         # The fake native process cannot chown to the native profile uid; the host
         # provisioning check is exercised against the real default in its own tests.
         self.tool = mv.Identities(str(self.root), str(self.home), str(self.bin), str(self.state), profile_uid=os.getuid())
+        # Lifecycle tests use synthetic profiles; privileged provisioning has
+        # dedicated ownership/stat and mutation coverage in test_p18d_identity.
+        self.tool.provision = Mock()
+        def remove_profile(identity, remove=False):
+            self.assertTrue(remove)
+            self.assertFalse((self.root/'metadata'/(identity+'.json')).exists())
+            shutil.rmtree(self.root/'profiles'/identity)
+        self.tool.profile_helper = Mock(side_effect=remove_profile)
+        docker = self.bin/'docker'
+        docker.write_text('#!'+sys.executable+'\nimport sys\nsys.exit(0)\n')
+        docker.chmod(0o700)
+        environment = patch.dict(os.environ, PATH=str(self.bin)+':'+os.environ['PATH'])
+        environment.start()
+        self.addCleanup(environment.stop)
 
     def holder(self, identity="account-a"):
         return json.loads((self.root / "locks" / (identity + ".json")).read_text()).get("holder", "srf-id-account-a")
@@ -250,7 +265,7 @@ class IdentityTests(unittest.TestCase):
 
     def test_cli_emits_one_json_line_and_keeps_credentials_absent(self):
         env = dict(os.environ, SRF_IDENTITY_STORE_ROOT=str(self.root), MV_MW_HOME=str(self.home), MV_SRF_BIN_DIR=str(self.bin))
-        for args, rc in ((["create", "--id", "account-a", "--label", "main", "--domains", "example.com"], 0),
+        for args, rc in ((["create", "--id", "account-a", "--label", "main", "--domains", "example.com"], 6),
                          (["show", "--id", "../escape"], 6), (["list"], 0), (["show"], 6)):
             p = subprocess.run([sys.executable, str(REPO / "tools/mv_identity.py"), *args], env=env, capture_output=True, text=True)
             self.assertEqual(p.returncode, rc, p.stderr)
@@ -295,7 +310,8 @@ class IdentityTests(unittest.TestCase):
 
     def test_login_after_ui_only_create_names_missing_provisioning(self):
         strict = mv.Identities(str(self.root), str(self.home), str(self.bin), str(self.state))  # real uid 10001 policy
-        strict.create("account-a", "account-a", "example.com")
+        with self.assertRaisesRegex(mv.Refused, "^PROFILE_NOT_PROVISIONED$"):
+            strict.create("account-a", "account-a", "example.com")
         with self.only_show(strict), self.assertRaisesRegex(mv.Refused, "^PROFILE_NOT_PROVISIONED$"):
             strict.login("account-a")
         self.assertFalse((self.root / "locks/account-a.json").exists())  # No native start was attempted.
@@ -315,10 +331,10 @@ class IdentityTests(unittest.TestCase):
         cmd_hint = 'sudo install -d -m 0700 -o 10001 -g 10001 "$SRF_IDENTITY_STORE_ROOT/profiles/<id>"'
         made = subprocess.run([sys.executable, tool, "create", "--id", "account-a", "--label", "a", "--domains", "example.com"],
                               env=env, capture_output=True, text=True)
-        self.assertEqual(made.returncode, 0)
+        self.assertEqual(made.returncode, 6)
         self.assertIn("uid 10001", made.stderr)
         self.assertIn(cmd_hint, made.stderr)
-        self.assertEqual(set(json.loads(made.stdout)["result"]), {"profile_id", "account_label", "allowed_domains"})
+        self.assertEqual(json.loads(made.stdout)["error"], "PROFILE_NOT_PROVISIONED")
         login = subprocess.run([sys.executable, tool, "login", "--id", "account-a"], env=env, capture_output=True, text=True)
         self.assertEqual(login.returncode, 6)
         self.assertEqual(json.loads(login.stdout)["error"], "PROFILE_NOT_PROVISIONED")

@@ -25,7 +25,8 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
+import stat
+import uuid
 import signal
 import subprocess
 import sys
@@ -38,6 +39,8 @@ CAPSULE = re.compile(r"srf-(?:id|pg|vm)-[a-z0-9][a-z0-9-]{0,39}\Z")
 REPO = Path(__file__).resolve().parent.parent
 # Native browser capsules own their profile as a fixed uid (surface.go:405).
 NATIVE_PROFILE_UID = 10001
+PROFILE_IMAGE = "opensuperficies-identity-browser-arm64:0.1.0"
+PROFILE_TIMEOUT = 15
 RESERVED_PREFIX = "mv-"
 # Mirror daemon-adapter/internal/capsule/protect.go RefuseProtectedContainer.
 PROTECTED_HOLDERS = frozenset({"srf-id-cuentas-1", "srf-id-perplexity-1", "srf-pg-notepad-1",
@@ -153,11 +156,14 @@ class Identities:
         fresh_id(identity, self.live_profile)
         if not label or label != label.strip() or len(label) > 128 or any(ord(c) < 32 for c in label):
             raise Refused("INVALID_LABEL")
-        if not domains or not all(re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?", d) for d in domains.split(",")):
+        sites = domains.split(",") if domains else []
+        if len(sites) > 16 or sites != sorted(set(sites)) or not all(re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?", d) for d in sites):
             raise Refused("INVALID_DOMAINS")
         self.native("srf-identity-admin", ["create", "--store-root", str(self.root), "--id", identity,
                                           "--label", label, "--domains", domains])
-        return self.show(identity)
+        result = self.show(identity)
+        self.provision(identity)
+        return result
 
     def list(self):
         metadata = self.root / "metadata"
@@ -182,17 +188,95 @@ class Identities:
                     raise Refused("IDENTITY_BOUND")
             # Native absence of a lock means never acquired (store.go:435-438).
             metadata = self.root / "metadata" / (identity + ".json")
-            profile = self.root / "profiles" / identity
+            profile = self.profile_path(identity)
             if metadata.is_symlink() or profile.is_symlink() or not metadata.is_file() or not profile.is_dir():
                 raise Refused("UNSAFE_IDENTITY_PATH")
-            # shutil.rmtree uses fd-relative, symlink-safe removal; no payload reads.
-            if not shutil.rmtree.avoids_symlink_attacks:
-                raise Refused("SAFE_DELETE_UNAVAILABLE")
-            shutil.rmtree(profile)
+            # Store deletion precedes privileged removal, under the native guard.
             metadata.unlink()
             record.unlink(missing_ok=True)
+            self.profile_helper(identity, remove=True)
             # Never unlink the guard: a waiter must retain the same flock inode.
         return {"deleted": identity}
+
+    def profile_path(self, identity):
+        """Validate only directory metadata; never inspect browser payloads."""
+        identity = checked_id(identity)
+        profiles = self.root / "profiles"
+        if any(c in str(profiles) for c in (",", "\n", "\r")):
+            raise Refused("UNSAFE_IDENTITY_PATH")
+        private(self.root)
+        private(profiles)
+        if profiles.resolve(strict=True) != profiles or profiles.parent != self.root:
+            raise Refused("UNSAFE_IDENTITY_PATH")
+        target = profiles / identity
+        if target.is_symlink() or target.resolve() != target or target.parent != profiles:
+            raise Refused("UNSAFE_IDENTITY_PATH")
+        if target.exists() and not stat.S_ISDIR(target.lstat().st_mode):
+            raise Refused("UNSAFE_IDENTITY_PATH")
+        return target
+
+    def profile_helper(self, identity, remove=False):
+        identity = checked_id(identity)
+        target = self.profile_path(identity)
+        # Admission differs deliberately: creation requires a store entry, removal
+        # requires its absence. Delete already holds the native per-id flock.
+        if remove:
+            metadata = self.root / "metadata" / (identity + ".json")
+            if metadata.exists() or metadata.is_symlink():
+                raise Refused("IDENTITY_BOUND")
+            lease = self.lease(identity)
+            if lease is not None and lease["active"]:
+                raise Refused("IDENTITY_BOUND")
+        else:
+            self.show(identity)
+        name = "mv-provision-" + identity + "-" + uuid.uuid4().hex[:12]
+        script = ('set -eu; p="/profiles/$1"; test ! -L "$p"; '
+                  'test "$(realpath "$p")" = "$p"; ')
+        if remove:
+            script += 'rm -rf -- "$p"; test ! -e "$p"; test ! -L "$p"'
+        else:
+            script += ('mkdir -p -- "$p"; test -d "$p"; test ! -L "$p"; '
+                       'cd -P -- "$p"; test "$PWD" = "$p"; chown 10001:10001 .; chmod 0700 .')
+        command = ["docker", "run", "--rm", "--pull=never", "--name", name,
+                   "--network", "none", "--user", "0", "--entrypoint", "/bin/sh",
+                   "--mount", "type=bind,src=" + str(target.parent) + ",dst=/profiles",
+                   PROFILE_IMAGE, "-c", script, "mv-profile-helper", identity]
+        try:
+            result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, timeout=PROFILE_TIMEOUT, check=False)
+            if result.returncode:
+                raise Refused("PROFILE_NOT_PROVISIONED")
+            self.profile_path(identity)  # Repeat containment after the helper.
+            if remove:
+                if target.exists() or target.is_symlink():
+                    raise Refused("PROFILE_NOT_PROVISIONED")
+            else:
+                st = target.lstat()
+                if (not stat.S_ISDIR(st.st_mode) or st.st_uid != NATIVE_PROFILE_UID or
+                        st.st_gid != NATIVE_PROFILE_UID or stat.S_IMODE(st.st_mode) != 0o700):
+                    raise Refused("PROFILE_NOT_PROVISIONED")
+        except (OSError, subprocess.TimeoutExpired, Refused) as exc:
+            # A timed-out docker client can leave its container running. Remove
+            # only this exact random helper name, with a separate bounded wait.
+            try:
+                subprocess.run(["docker", "rm", "-f", name], stdin=subprocess.DEVNULL,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               timeout=5, check=False)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+            raise Refused("PROFILE_NOT_PROVISIONED") from exc
+
+    def provision(self, identity):
+        identity = fresh_id(identity, self.live_profile)
+        locks = self.root / "locks"
+        private(locks)
+        fd = os.open(locks / (identity + ".guard"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "r+") as guard:
+            fcntl.flock(guard, fcntl.LOCK_EX)
+            lease = self.lease(identity)
+            if lease is not None and lease["active"]:
+                raise Refused("IDENTITY_BOUND")
+            self.profile_helper(identity)
 
     def profile_state(self, identity):
         """ok | missing | unsafe, from lstat metadata only (never opens the profile)."""

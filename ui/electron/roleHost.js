@@ -99,6 +99,19 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
   const {ipcMain} = electron;
   const raw = env.MV_SRF_PROFILES ? JSON.parse(env.MV_SRF_PROFILES) : {};
   const profiles = configuredProfiles(env);
+  // Identity names come from the trusted operator list, never from a renderer
+  // profile definition. Geometry comes from one configured browser template.
+  const template = [...profiles].sort((a,b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0).find(p => {
+    const configured = raw[p.id];
+    return configured?.Kind === 'browser' && configured.NativeKind === 'browser'
+      && configured.Width === 1280 && configured.Height === 900
+      && typeof configured.RAMRoot === 'string' && configured.RAMRoot.startsWith('/dev/shm')
+      && typeof configured.Display === 'string'
+      && !/^(cuentas-|perplexity-|srf-id-cuentas-|srf-id-perplexity-|srf-pg-)/.test(p.id);
+  });
+  const dynamicProfiles = new Map();
+  const allProfiles = () => [...profiles, ...dynamicProfiles.values()];
+  const identityAllowed = (/** @type {string} */ value) => /^[a-z0-9][a-z0-9-]{1,39}$/.test(value) && !/^(cuentas-|perplexity-|srf-id-cuentas-|srf-id-perplexity-|srf-pg-)/.test(value);
   /** @param {string} profile */
   const roleOf = profile => raw[profile]?.default_mode ?? raw[profile]?.role ?? 'agent';
   if (profiles.some(p => !['human','agent'].includes(roleOf(p.id)))) throw refuse('CAPSULE_ROLE_INVALID');
@@ -115,7 +128,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
   const authoritative = surfaceId => {
     if (!id(surfaceId)) throw refuse('SURFACE_UNKNOWN');
     const s = core.getHumanSurface?.(surfaceId);
-    if (!s || s.state !== 'active' || !profiles.some(p => p.id === s.profile_id)) throw refuse('SURFACE_UNKNOWN');
+    if (!s || s.state !== 'active' || !allProfiles().some(p => p.id === s.profile_id)) throw refuse('SURFACE_UNKNOWN');
     return s;
   };
   /** @param {string} surfaceId */
@@ -223,7 +236,14 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     const reply = await listIdentities();
     if (reply?.ok !== true || !Array.isArray(reply.rows)) throw refuse('IDENTITY_LIST_UNAVAILABLE');
     const names = new Set(reply.rows.map((/** @type {any} */ row) => row.id));
-    return await Promise.all(profiles.map(async p => {
+    if (template) {
+      for (const name of names) {
+        if (!identityAllowed(name) || profiles.some(p => p.id === name)) continue;
+        dynamicProfiles.set(name,{id:name,request:{...template.request,params:{...template.request.params,profile_id:name}}});
+      }
+      for (const name of dynamicProfiles.keys()) if (!names.has(name) && !bound.has(name)) dynamicProfiles.delete(name);
+    }
+    return await Promise.all(allProfiles().map(async p => {
       const entry = [...capsuleStates.values()].find(s => s.profile_id === p.id && !['destroyed','closed'].includes(s.state));
       return {profileId:p.id,role:roleOf(p.id),defaultMode:roleOf(p.id),available:names.has(p.id),
         currentMode:entry?.surface_id ? roleFor(entry) : 'closed', surfaceId:entry?.surface_id || null,
@@ -241,9 +261,9 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       const {live,bound} = summarizeSurfaces(capsuleStates);
       if (bound.has(choice.profileId)) throw refuse('PROFILE_ALREADY_BOUND');
       if (live >= MAX_CAPSULES) throw refuse('CAPSULE_LIMIT_REACHED');
-      const profile = profiles.find(p => p.id === choice.profileId);
-      if (!profile) throw refuse('CAPSULE_ROLE_INVALID');
-      if (!(await choices()).find(p => p.profileId === profile.id)?.available) throw refuse('NO_IDENTITY');
+      const available = await choices();
+      const profile = allProfiles().find(p => p.id === choice.profileId);
+      if (!profile || !available.find(p => p.profileId === profile.id)?.available) throw refuse('NO_IDENTITY');
       key = `pending:${profile.id}`;
       capsuleStates.set(key,{profile_id:profile.id,state:'creating'});
       clearMode = await stageMode(env.MV_SRF_STATE_DIR, profile.id, choice.role);

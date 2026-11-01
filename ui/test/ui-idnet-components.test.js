@@ -40,8 +40,8 @@ test('Identities dialog lists multiple accounts per site, creates, confirms dele
   const identity={list:async()=>({ok:true,rows}),create:async v=>{calls.push(['create',v]);return {ok:true,rows:[]};},delete:async v=>{calls.push(['delete',v]);return {ok:true};},login:v=>{calls.push(['login',v]);return new Promise(r=>{finishLogin=r;});}};
   const view=mount(await component('identities/IdentitiesDialog.vue'),{open:true,host:{identity}});t.after(view.close);await tick();
   assert.match(text(view.root),/account-a/);assert.match(text(view.root),/account-b/);
-  for(const [label,value] of [['Identity id','account-c'],['Account label','C'],['Domains (comma separated)','example.com']])nodes(view.root).find(n=>n.props?.['aria-label']===label).props.onInput({target:{value}});
-  await tick();button(view.root,'Create identity');await tick();assert.equal(calls[0][0],'create');assert.equal(calls[0][1].id,'account-c');
+  for(const [label,value] of [['Name','account-c'],['Display name','C'],['Allowed sites','example.com']])nodes(view.root).find(n=>n.props?.['aria-label']===label).props.onInput({target:{value}});
+  await tick();button(view.root,'Add identity');await tick();assert.equal(calls[0][0],'create');assert.equal(calls[0][1].id,'account-c');
   button(view.root,'Delete');await tick();assert.equal(calls.length,1);button(view.root,'Delete identity');await tick();assert.equal(calls[1][0],'delete');
   button(view.root,'Log in');await tick();assert.match(text(view.root),/Agent input stays refused/);finishLogin({ok:true});await tick();
   assert.doesNotMatch(text(view.root),/Agent input stays refused/);
@@ -81,21 +81,21 @@ test('identity first impression labels, placeholders, grammar and typed tool fai
   let creates=0;
   const host={identity:{list:async()=>({ok:false,code:'IDENTITY_UNAVAILABLE'}),create:async()=>{creates++;return {ok:true};}}};
   const view=mount(await component('identities/IdentitiesDialog.vue'),{open:true,host});t.after(view.close);await tick();
-  for(const label of ['Identity id','Label','Domains (comma separated)'])assert.ok(nodes(view.root).some(n=>n.tag==='label'&&text(n).startsWith(label)));
+  for(const label of ['Name (required)','Display name (optional)','Allowed sites (optional)'])assert.ok(nodes(view.root).some(n=>n.tag==='label'&&text(n).startsWith(label)));
   const source=readFileSync(new URL('../src/identities/IdentitiesDialog.vue',import.meta.url),'utf8');
-  for(const example of ['perplexity-main','Perplexity main','perplexity.ai'])assert.ok(source.includes(`placeholder="${example}"`));
+  for(const example of ['work-account','Work account','perplexity.ai, example.com'])assert.ok(source.includes(example));
   assert.match(text(view.root),/The identity tool could not run: IDENTITY_UNAVAILABLE/);
-  assert.match(text(view.root),/2–40 chars: a–z\/0–9 first/);
+  assert.match(text(view.root),/lowercase letters, numbers and dashes/);
   const field=label=>nodes(view.root).find(n=>n.props?.['aria-label']===label);
-  for(const [label,value] of [['Account label','Account'],['Domains (comma separated)','example.com']])field(label).props.onInput({target:{value}});
-  for(const id of ['', 'a','Bad-id','-account','aa bb','a'.repeat(41)]){
-    field('Identity id').props.onInput({target:{value:id}});await tick();
-    const create=nodes(view.root).find(n=>n.tag==='button'&&n.text==='Create identity');
+  for(const [label,value] of [['Display name','Account'],['Allowed sites','example.com']])field(label).props.onInput({target:{value}});
+  for(const id of ['', 'a','Bad-id','-account','aa bb','perplexity-main','cuentas-new','mv-live-1','a'.repeat(41)]){
+    field('Name').props.onInput({target:{value:id}});await tick();
+    const create=nodes(view.root).find(n=>n.tag==='button'&&n.text==='Add identity');
     assert.equal(create.props.disabled,true,id);create.props.onClick();await tick();assert.equal(creates,0);
   }
-  for(const id of ['aa','perplexity-main','1-account','a'.repeat(40)]){
-    field('Identity id').props.onInput({target:{value:id}});await tick();
-    assert.equal(nodes(view.root).find(n=>n.tag==='button'&&n.text==='Create identity').props.disabled,false,id);
+  for(const id of ['aa','work-account','1-account','a'.repeat(40)]){
+    field('Name').props.onInput({target:{value:id}});await tick();
+    assert.equal(nodes(view.root).find(n=>n.tag==='button'&&n.text==='Add identity').props.disabled,false,id);
   }
 });
 

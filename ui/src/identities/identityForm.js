@@ -13,12 +13,12 @@ export function normalizeDomains(text) {
     const domain = part.trim().toLowerCase();
     if (domain) seen.add(domain);
   }
-  return [...seen];
+  return [...seen].sort();
 }
 
 /** @param {string[]} domains */
 export function validDomains(domains) {
-  return domains.length > 0 && domains.length <= 256
+  return domains.length <= 16
     && domains.every(d => d.length <= 253 && DOMAIN.test(d));
 }
 
@@ -28,10 +28,24 @@ export function validLabel(label) {
     && !/[\x00-\x1f\x7f;`$|&<>\\]/.test(label);
 }
 
+/** @param {string} name */
+export function validIdentityName(name) {
+  return /^[a-z0-9][a-z0-9-]{1,39}$/.test(name) && !/^(mv-|cuentas-|perplexity-|srf-id-cuentas-|srf-id-perplexity-|srf-pg-)/.test(name);
+}
+
+/** @param {string} name @param {string} displayName @param {string} sites */
+export function identityFormRequest(name, displayName, sites) {
+  const label = displayName.trim() || name;
+  const domains = normalizeDomains(sites);
+  if (!validIdentityName(name) || !validLabel(label) || !validDomains(domains)) return null;
+  return {id:name,label,domains};
+}
+
 /** Operator-facing text for a typed host code. Every text keeps the raw code.
  * @param {string} code @param {string} [id] */
 export function identityErrorText(code, id) {
   const target = typeof id === 'string' && /^[a-z0-9][a-z0-9-]{1,39}$/.test(id) ? id : '<id>';
+  if (code === 'IDENTITY_BOUND') return 'This identity has an open capsule. Stop it first, then delete it.';
   if (code === 'PROFILE_NOT_PROVISIONED') {
     return `The identity profile is not provisioned for the native browser capsule: PROFILE_NOT_PROVISIONED. Before login, profiles/<id> must be a private 0700 directory owned by uid 10001; run once on the host: sudo install -d -m 0700 -o 10001 -g 10001 "$SRF_IDENTITY_STORE_ROOT/profiles/${target}" (see docs/INSTALL.md#identity-store).`;
   }

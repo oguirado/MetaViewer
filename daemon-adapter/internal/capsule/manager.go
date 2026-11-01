@@ -204,21 +204,24 @@ type InputEvidence struct {
 	GroundTruth       *GroundTruth          `json:"ground_truth,omitempty"`
 }
 type Manager struct {
-	mu          sync.Mutex
-	cfg         Config
-	runner      cli.Runner
-	clock       cli.Clock
-	bindings    map[string]Binding
-	quarantined map[string]bool
-	creates     map[string]pendingCreate
-	destroying  map[string]bool
-	pending     map[string]*pendingInput
-	inputEpochs map[string]uint64
-	used        map[string]bool
-	refresh     map[string]bool
-	views       map[string]bool
-	loginLocks  map[string]bool
-	lostDone    map[string]chan struct{}
+	mu               sync.Mutex
+	cfg              Config
+	runner           cli.Runner
+	clock            cli.Clock
+	bindings         map[string]Binding
+	quarantined      map[string]bool
+	creates          map[string]pendingCreate
+	destroying       map[string]bool
+	pending          map[string]*pendingInput
+	inputEpochs      map[string]uint64
+	used             map[string]bool
+	refresh          map[string]bool
+	views            map[string]bool
+	loginLocks       map[string]bool
+	lostDone         map[string]chan struct{}
+	identityTemplate *Profile
+	identityDisplays []string
+	dynamicProfiles  map[string]bool
 }
 
 var profileID = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
@@ -383,7 +386,9 @@ func NewManager(cfg Config, r cli.Runner, clock cli.Clock) (*Manager, error) {
 		copyProfiles[id] = p
 	}
 	cfg.Profiles = copyProfiles
-	return &Manager{cfg: cfg, runner: r, clock: clock, bindings: make(map[string]Binding), quarantined: make(map[string]bool), destroying: make(map[string]bool), pending: make(map[string]*pendingInput), inputEpochs: make(map[string]uint64), used: make(map[string]bool), refresh: make(map[string]bool), views: make(map[string]bool), lostDone: make(map[string]chan struct{})}, nil
+	m := &Manager{cfg: cfg, runner: r, clock: clock, bindings: make(map[string]Binding), quarantined: make(map[string]bool), destroying: make(map[string]bool), pending: make(map[string]*pendingInput), inputEpochs: make(map[string]uint64), used: make(map[string]bool), refresh: make(map[string]bool), views: make(map[string]bool), lostDone: make(map[string]chan struct{}), dynamicProfiles: make(map[string]bool)}
+	m.configureIdentityTemplate()
+	return m, nil
 }
 func withinRAM(path string) bool {
 	return path == "/dev/shm" || len(path) > 9 && path[:9] == "/dev/shm/" && filepath.Clean(path) == path
@@ -594,7 +599,10 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 	if q.NestedDepth != nil && q.Kind != "desktop_capsule" {
 		return nil, fault("nested_depth", "nested_depth requires desktop_capsule")
 	}
-	p, ok := m.cfg.Profiles[q.ProfileID]
+	if protectedIdentity(q.ProfileID) {
+		return nil, fault("protected_container", "protected identity refused")
+	}
+	p, ok := m.profileFor(q.ProfileID)
 	if !ok || !profileID.MatchString(q.ProfileID) || p.Kind != q.Kind || q.Geometry.W != p.Width || q.Geometry.H != p.Height {
 		return nil, fault("profile", "unadmitted profile, kind or geometry")
 	}
@@ -636,6 +644,10 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 	if active >= m.cfg.MaxSurfaces || m.quarantined[q.ProfileID] {
 		return nil, fault("uncertain", detailCapacityOrQuarantine)
 	}
+	if err := m.admitIdentityProfile(ctx, q.ProfileID, &p); err != nil {
+		return nil, err
+	}
+	defer func() { m.releaseIdleIdentityProfile(q.ProfileID) }()
 	// Mode belongs to this opening. Legacy profile Role is only a default.
 	if selector, ok := m.runner.(interface {
 		ConsumeOpeningMode(string, string) (string, error)
@@ -931,6 +943,7 @@ func (m *Manager) destroy(ctx context.Context, r Request, version string) ([]jso
 	m.bindings[q.SurfaceID] = b
 	delete(m.inputEpochs, q.SurfaceID)
 	delete(m.refresh, q.SurfaceID)
+	m.releaseIdleIdentityProfile(b.Surface.ProfileID)
 	return []json.RawMessage{surfaceEvent(version, "state_changed", b.Surface)}, nil
 }
 

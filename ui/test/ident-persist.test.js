@@ -22,9 +22,8 @@ async function until(check, what) {
 }
 
 /** Launcher-like tool wrapper: swaps only the host-incompatible uid 10001 check
- * for the fake native process's uid. Because NATIVE `create` leaves profiles/<id>
- * mode 0o750 (unprovisioned), login still refuses with PROFILE_NOT_PROVISIONED
- * until the explicit provisionProfile() step runs. */
+ * for the fake native process's uid. The fake Docker helper provisions synthetic profile permissions; production
+ * stat ownership and Docker arguments are verified by the Python tool tests. */
 function provisionedTool(base) {
   const wrapper = join(base, 'mv_identity_provisioned.py');
   writeFileSync(wrapper, `#!/usr/bin/env python3\nimport importlib.util as u, os, sys\n` +
@@ -34,9 +33,7 @@ function provisionedTool(base) {
   return wrapper;
 }
 
-// Fake native binaries: `create` leaves profiles/<id> mode 0o750 (unprovisioned,
-// modeling operator ownership before the one-time host provisioning command), and
-// `start` enforces mode 0o700. No profile payload files are written or read.
+// Synthetic native control metadata only; no browser payload is read or written.
 const NATIVE = String.raw`#!/usr/bin/env python3
 import json, os, sys
 from pathlib import Path
@@ -75,8 +72,7 @@ elif verb == 'stop':
 print(meta.read_text())
 `;
 
-/** One-time operator provisioning step corresponding to:
- * sudo install -d -m 0700 -o 10001 -g 10001 "$SRF_IDENTITY_STORE_ROOT/profiles/<id>" */
+/** Synthetic host repair for deliberately damaged test profiles. */
 function provisionProfile(w, id) {
   const dir = join(w.store, 'profiles', id);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -96,9 +92,20 @@ function world(t, { provisioned = true } = {}) {
   const dirs = Object.fromEntries(['bin', 'state', 'home'].map(n => [n, join(base, n)]));
   for (const d of Object.values(dirs)) mkdirSync(d, { mode: 0o700 });
   for (const name of ['srf-identity-admin', 'srf-identity-surface']) writeFileSync(join(dirs.bin, name), NATIVE, { mode: 0o700 });
+  // Hermetic helper double: these bridge tests must never invoke host Docker.
+  writeFileSync(join(dirs.bin, 'docker'), `#!/usr/bin/env python3
+import os, pathlib, shutil, sys
+a = sys.argv[1:]
+if a[0] == 'rm': sys.exit(0)
+mount = a[a.index('--mount')+1]
+root = pathlib.Path(mount.split('src=',1)[1].split(',dst=',1)[0])
+p = root/a[-1]
+if 'rm -rf' in a[-3]: shutil.rmtree(p)
+else: p.mkdir(exist_ok=True); p.chmod(0o700)
+`, {mode: 0o700});
   const store = join(base, 'store');
   const tool = provisioned ? provisionedTool(base) : TOOL;
-  const env = { PATH: process.env.PATH, HOME: dirs.home, MV_SRF_BIN_DIR: dirs.bin, MV_SRF_STATE_DIR: dirs.state, SRF_IDENTITY_STORE_ROOT: store, TMPDIR: base };
+  const env = { PATH: dirs.bin + ':' + process.env.PATH, HOME: dirs.home, MV_SRF_BIN_DIR: dirs.bin, MV_SRF_STATE_DIR: dirs.state, SRF_IDENTITY_STORE_ROOT: store, TMPDIR: base };
   return { base, store, env, dirs, tool };
 }
 const service = (env, opened = [], tool = TOOL) => createOperatorService({ env, runIdentity: identityRunner({ tool, env: identityEnvironment(env, TOOL), openLogin: url => { opened.push(url); } }) });
@@ -122,16 +129,11 @@ test('IDENT-TOOL: bundled tool preferred, operator checkout is the packaged fall
 const ids = rows => rows.map(r => r.id);
 const nativeRun = (w, verb, ...args) => spawnSync(join(w.dirs.bin, 'srf-identity-surface'), [verb, ...args, '--store-root', w.store], { encoding: 'utf8' });
 
-test('IDENT-PERSIST: create, provision, host restart, login, restart again and delete keep one identity store', async t => {
+test('IDENT-PERSIST: create provisions, host restart, login, restart again and delete keep one identity store', async t => {
   const w = world(t), opened = [];
   const created = await service(w.env, opened, w.tool).request('identity.create', [{ id: 'account-a', label: 'Account A', domains: ['example.com'] }]);
   assert.deepEqual(created, { ok: true, rows: [{ id: 'account-a', label: 'Account A', domains: ['example.com'], logged_in: 'unknown' }] });
-  assert.deepEqual(statusOf(w, 'account-a'), { profile_id: 'account-a', provisioned: false, lease: 'absent', login_pending: 'none', login_recorded: 'no' });
-  // Without the one-time operator provisioning step, login is refused with PROFILE_NOT_PROVISIONED.
-  assert.deepEqual(await service(w.env, opened, w.tool).request('identity.login', [{ id: 'account-a' }]), { ok: false, code: 'PROFILE_NOT_PROVISIONED' });
-  assert.deepEqual(opened, []);
-  provisionProfile(w, 'account-a');
-  assert.equal(statusOf(w, 'account-a').provisioned, true);
+  assert.deepEqual(statusOf(w, 'account-a'), { profile_id: 'account-a', provisioned: true, lease: 'absent', login_pending: 'none', login_recorded: 'no' });
   // Host restart: every object is rebuilt from the same scrubbed environment.
   const listed = await service(w.env, opened, w.tool).request('identity.list', []);
   assert.deepEqual(listed.rows, created.rows);
@@ -142,7 +144,7 @@ test('IDENT-PERSIST: create, provision, host restart, login, restart again and d
   assert.deepEqual(ids(again.rows), ['account-a']);
   assert.equal((await service(w.env, opened, w.tool).request('identity.show', [{ id: 'account-a' }])).rows[0].label, 'Account A');
   // The capsule lease is still active: delete is a typed refusal, not a generic failure.
-  assert.deepEqual(await service(w.env, [], w.tool).request('identity.delete', [{ id: 'account-a' }]), { ok: false, code: 'IDENTITY_REFUSED' });
+  assert.deepEqual(await service(w.env, [], w.tool).request('identity.delete', [{ id: 'account-a' }]), { ok: false, code: 'IDENTITY_BOUND' });
   assert.equal(nativeRun(w, 'stop', '--container', 'srf-id-account-a').status, 0);
   assert.deepEqual(await service(w.env, [], w.tool).request('identity.delete', [{ id: 'account-a' }]), { ok: true });
   assert.deepEqual((await service(w.env, [], w.tool).request('identity.list', [])).rows, []);
@@ -150,7 +152,7 @@ test('IDENT-PERSIST: create, provision, host restart, login, restart again and d
 
 test('IDENT-TYPED: specific provisioning refusals, generic refusals, missing configuration and missing tool are distinct typed codes', async t => {
   const w = world(t, { provisioned: false }), create = { id: 'account-a', label: 'Account A', domains: ['example.com'] };
-  assert.equal((await service(w.env).request('identity.create', [create])).ok, true);
+  assert.deepEqual(await service(w.env).request('identity.create', [create]), {ok:false, code:'PROFILE_NOT_PROVISIONED'}, 'stat ownership failure during create keeps the repair hint');
   assert.deepEqual(await service(w.env).request('identity.create', [create]), { ok: false, code: 'IDENTITY_REFUSED' }, 'native refusal of a duplicate id');
   assert.deepEqual(await service(w.env).request('identity.create', [{ id: 'mv-live-1', label: 'Live', domains: ['example.com'] }]), { ok: false, code: 'IDENTITY_REFUSED' }, 'reserved id still maps to IDENTITY_REFUSED');
   assert.deepEqual(await service(w.env).request('identity.show', [{ id: 'account-z' }]), { ok: false, code: 'IDENTITY_REFUSED' }, 'unknown identity');
@@ -212,15 +214,17 @@ test('IDENT-E2E-PROVISION-AND-MUTANTS: renderer dialog -> preload -> bridge -> t
   await tick();
 
   // 1. Create identity in the dialog once the initial list call settles.
-  for (const [name, value] of [['Identity id', 'account-a'], ['Account label', 'Account A'], ['Domains (comma separated)', 'example.com']]) {
+  for (const [name, value] of [['Name', 'account-a'], ['Display name', 'Account A'], ['Allowed sites', 'example.com']]) {
     allNodes(view.root).find(n => n.props?.['aria-label'] === name).props.onInput({ target: { value } });
   }
-  const createBtn = () => allNodes(view.root).find(n => n.tag === 'button' && n.text === 'Create identity');
+  const createBtn = () => allNodes(view.root).find(n => n.tag === 'button' && n.text === 'Add identity');
   await until(() => createBtn() && !createBtn().props.disabled, 'create button enabled after initial list');
   createBtn().props.onClick();
-  await until(() => allText(view.root).includes('Account A (account-a)'), 'created row in dialog');
+  await until(() => allText(view.root).includes('Account A') && allText(view.root).includes('account-a'), 'created row in dialog');
+  // Damage a provisioned profile to retain the refusal/repair regression coverage.
+  chmodSync(join(w.store, 'profiles/account-a'), 0o750);
 
-  // 2. Mutant 1 (provisioning skipped -> login refused): clicking Log in before provisioning surfaces PROFILE_NOT_PROVISIONED and the exact operator command.
+  // 2. Mutant 1 (provisioning damaged -> login refused): clicking Log in before provisioning surfaces PROFILE_NOT_PROVISIONED and the exact operator command.
   const loginButton = () => allNodes(view.root).find(n => n.tag === 'button' && n.text === 'Log in');
   await until(() => loginButton() && !loginButton().props.disabled, 'login button enabled');
   loginButton().props.onClick();
@@ -250,7 +254,7 @@ test('IDENT-E2E-PROVISION-AND-MUTANTS: renderer dialog -> preload -> bridge -> t
     const msg = identityErrorText(code);
     assert.match(msg, new RegExp(`${code}.*profiles/<id>.*0700.*uid 10001.*sudo install -d -m 0700 -o 10001 -g 10001 "\\$SRF_IDENTITY_STORE_ROOT/profiles/<id>".*docs/INSTALL\\.md#identity-store`));
   }
-  for (const unlisted of ['RESERVED_ID', 'IDENTITY_BOUND', 'LOGIN_IN_PROGRESS', 'UNKNOWN_REFUSAL']) {
+  for (const unlisted of ['RESERVED_ID', 'LOGIN_IN_PROGRESS', 'UNKNOWN_REFUSAL']) {
     assert.equal(toolRefusedCode(JSON.stringify({ schema: 'metaviewer.identity/v1', ok: false, error: unlisted })), 'IDENTITY_REFUSED');
     assert.throws(() => assertOperatorReply('identity.login', { ok: false, code: unlisted }), /OPERATOR_REPLY/);
   }

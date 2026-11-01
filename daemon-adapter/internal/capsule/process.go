@@ -92,7 +92,8 @@ func (b *cappedBuffer) Write(p []byte) (int, error) {
 	return b.buffer.Write(p)
 }
 func (r *ProcessRunner) Run(ctx context.Context, argv []string, stdin []byte) ([]byte, error) {
-	if len(argv) < 2 || filepath.Dir(argv[0]) != r.root || (filepath.Base(argv[0]) != "srf-identity-surface" && filepath.Base(argv[0]) != "srf-holdings-capsule") {
+	adminShow := len(argv) == 4 && filepath.Base(argv[0]) == "srf-identity-admin" && argv[1] == "show" && argv[2] == "--id" && storedIdentityID.MatchString(argv[3]) && !protectedIdentity(argv[3]) && len(stdin) == 0
+	if len(argv) < 2 || filepath.Dir(argv[0]) != r.root || (!adminShow && filepath.Base(argv[0]) != "srf-identity-surface" && filepath.Base(argv[0]) != "srf-holdings-capsule") {
 		return nil, fault("execution", "unadmitted executable")
 	}
 	if filepath.Base(argv[0]) == "srf-identity-surface" {
