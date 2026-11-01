@@ -19,17 +19,17 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 1,376 | 55 | 1,321 |
-| Lanes finished OK | 1,376 | 55 | 1,321 |
-| Agent steps | 54,692 | 2,705 | 51,987 |
-| Lane-hours of agent work | 130.9 | 5.2 | 125.6 |
-| Fresh input tokens | 219,267,332 | 11,482,034 | 207,785,298 |
-| Cache-read input tokens | 4,106,662,073 | 226,255,212 | 3,880,406,861 |
+| Lanes launched | 1,451 | 55 | 1,396 |
+| Lanes finished OK | 1,451 | 55 | 1,396 |
+| Agent steps | 56,840 | 2,705 | 54,135 |
+| Lane-hours of agent work | 134.6 | 5.2 | 129.3 |
+| Fresh input tokens | 226,573,754 | 11,482,034 | 215,091,720 |
+| Cache-read input tokens | 4,230,675,109 | 226,255,212 | 4,004,419,897 |
 | Prompt cache hit % | 94.9 | 95.2 | 94.9 |
-| Output tokens | 43,998,711 | 2,135,708 | 41,863,003 |
-| Thinking tokens | 26,071,933 | 1,050,039 | 25,021,894 |
-| Cost (USD) | 38.9398 | 2.0279 | 36.9119 |
-| Cost per lane (USD) | 0.0283 | 0.0369 | 0.0279 |
+| Output tokens | 45,354,219 | 2,135,708 | 43,218,511 |
+| Thinking tokens | 26,927,394 | 1,050,039 | 25,877,355 |
+| Cost (USD) | 40.1895 | 2.0279 | 38.1617 |
+| Cost per lane (USD) | 0.0277 | 0.0369 | 0.0273 |
 
 Rooms: 136. Peak concurrent lanes [MEASURED from lane start/end]: 42.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
@@ -38,7 +38,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 987 | 93.9 | 22.6923 |
+| build | 1062 | 93.9 | 23.942 |
 | context | 42 | 95.9 | 1.9093 |
 | context packs + test ideation (U-DEC-0139) | 13 | 91.1 | 0.2195 |
 | demo | 4 | 90.7 | 0.0557 |
@@ -86,7 +86,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 649 | 93.9 | 14.4138 | direct Muse job |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 724 | 93.9 | 15.6635 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -1582,6 +1582,81 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | MO-CHAIN_a | r1x_DEMO-CHAIN_a | Nov 01 02:40 | yes | 34 | 95.0 | 0.01787 |
 | direct-direct | MO-CHAIN_b | r1x_DEMO-CHAIN_b | Nov 01 02:40 | yes | 26 | 93.6 | 0.014202 |
 | direct-direct | LISH-U2_b | r1x_POLISH-U2_b | Nov 01 02:43 | yes | 22 | 93.2 | 0.009494 |
+| direct-direct | fa_a | n13b_sfa_a | Nov 01 02:43 | yes | 30 | 92.8 | 0.019365 |
+| direct-direct | fa_b | n13b_sfa_b | Nov 01 02:43 | yes | 52 | 95.8 | 0.021545 |
+| direct-direct | fb_a | n13b_sfb_a | Nov 01 02:43 | yes | 41 | 95.2 | 0.022919 |
+| direct-direct | fb_b | n13b_sfb_b | Nov 01 02:43 | yes | 35 | 94.6 | 0.019284 |
+| direct-direct | 24429_lane_r4_app_close | fill_024429_lane_r4_app_close | Nov 01 02:44 | yes | 69 | 95.9 | 0.042795 |
+| direct-direct | 24429_lane_r4_automate_demo | fill_024429_lane_r4_automate_demo | Nov 01 02:44 | yes | 36 | 95.1 | 0.021159 |
+| direct-direct | 24429_lane_r4_capsule_close_reopen | fill_024429_lane_r4_capsule_close_reopen | Nov 01 02:45 | yes | 29 | 92.4 | 0.018539 |
+| direct-direct | 24429_lane_r4_captcha_handoff | fill_024429_lane_r4_captcha_handoff | Nov 01 02:45 | yes | 93 | 97.4 | 0.040809 |
+| direct-direct | 24429_lane_r4_chatgpt_gemini | fill_024429_lane_r4_chatgpt_gemini | Nov 01 02:45 | yes | 69 | 96.8 | 0.032793 |
+| direct-direct | 24429_lane_r4_display | fill_024429_lane_r4_display | Nov 01 02:45 | yes | 33 | 92.5 | 0.026819 |
+| direct-direct | 24429_lane_r4_identities | fill_024429_lane_r4_identities | Nov 01 02:45 | yes | 32 | 94.3 | 0.019849 |
+| direct-direct | 24429_lane_r4_launch | fill_024429_lane_r4_launch | Nov 01 02:45 | yes | 60 | 95.5 | 0.037634 |
+| direct-direct | 24429_lane_r4_multislot | fill_024429_lane_r4_multislot | Nov 01 02:45 | yes | 35 | 94.1 | 0.02151 |
+| direct-direct | 24429_lane_r4_network | fill_024429_lane_r4_network | Nov 01 02:45 | yes | 30 | 93.9 | 0.015391 |
+| direct-direct | 24429_lane_r4_settings | fill_024429_lane_r4_settings | Nov 01 02:45 | yes | 48 | 94.9 | 0.026404 |
+| direct-direct | 24429_lane_r4_storyboard | fill_024429_lane_r4_storyboard | Nov 01 02:45 | yes | 39 | 94.3 | 0.020739 |
+| direct-direct | 24429_lane_r4_terminal | fill_024429_lane_r4_terminal | Nov 01 02:45 | yes | 35 | 94.0 | 0.021723 |
+| direct-direct | 24429_lane_r4_use_metaviewer | fill_024429_lane_r4_use_metaviewer | Nov 01 02:45 | yes | 54 | 96.1 | 0.028917 |
+| direct-direct | 24429_rev_DEMO-CHAIN-R2_a | fill_024429_rev_DEMO-CHAIN-R2_a | Nov 01 02:45 | yes | 16 | 90.1 | 0.009532 |
+| direct-direct | 24429_rev_DEMO-CHAIN-R2_b | fill_024429_rev_DEMO-CHAIN-R2_b | Nov 01 02:45 | yes | 13 | 88.6 | 0.007218 |
+| direct-direct | 24429_rev_IDENT-HANDOFF-R2_a | fill_024429_rev_IDENT-HANDOFF-R2_a | Nov 01 02:46 | yes | 12 | 86.9 | 0.008069 |
+| direct-direct | ENT-HANDOFF_a | r1x_IDENT-HANDOFF_a | Nov 01 02:47 | yes | 24 | 93.3 | 0.013196 |
+| direct-direct | ENT-HANDOFF_b | r1x_IDENT-HANDOFF_b | Nov 01 02:47 | yes | 30 | 93.9 | 0.016203 |
+| direct-direct | 24429_rev_IDENT-HANDOFF-R2_b | fill_024429_rev_IDENT-HANDOFF-R2_b | Nov 01 02:47 | yes | 14 | 88.9 | 0.008718 |
+| direct-direct | 24429_rev_MDISP-FIX_a | fill_024429_rev_MDISP-FIX_a | Nov 01 02:47 | yes | 17 | 86.2 | 0.013825 |
+| direct-direct | 24429_rev_MDISP-FIX_b | fill_024429_rev_MDISP-FIX_b | Nov 01 02:47 | yes | 15 | 91.2 | 0.007704 |
+| direct-direct | 24429_rev_STALE-FRAME_a | fill_024429_rev_STALE-FRAME_a | Nov 01 02:47 | yes | 9 | 85.8 | 0.005027 |
+| direct-direct | 24429_rev_STALE-FRAME_b | fill_024429_rev_STALE-FRAME_b | Nov 01 02:49 | yes | 17 | 92.3 | 0.009408 |
+| direct-direct | 24429_rev_WAIT-HARDEN-UI_a | fill_024429_rev_WAIT-HARDEN-UI_a | Nov 01 02:49 | yes | 14 | 89.7 | 0.009228 |
+| direct-direct | 24429_rev_WAIT-HARDEN-UI_b | fill_024429_rev_WAIT-HARDEN-UI_b | Nov 01 02:49 | yes | 17 | 90.8 | 0.009442 |
+| direct-direct | 24909_lane_r4_app_close | fill_024909_lane_r4_app_close | Nov 01 02:51 | yes | 71 | 96.7 | 0.028865 |
+| direct-direct | 24909_lane_r4_automate_demo | fill_024909_lane_r4_automate_demo | Nov 01 02:51 | yes | 41 | 95.3 | 0.026027 |
+| direct-direct | 24909_lane_r4_capsule_close_reopen | fill_024909_lane_r4_capsule_close_reopen | Nov 01 02:51 | yes | 43 | 94.3 | 0.029212 |
+| direct-direct | 24909_lane_r4_captcha_handoff | fill_024909_lane_r4_captcha_handoff | Nov 01 02:51 | yes | 64 | 96.3 | 0.034364 |
+| direct-direct | 24909_lane_r4_chatgpt_gemini | fill_024909_lane_r4_chatgpt_gemini | Nov 01 02:51 | yes | 46 | 95.2 | 0.031746 |
+| direct-direct | 24909_lane_r4_display | fill_024909_lane_r4_display | Nov 01 02:51 | yes | 50 | 95.3 | 0.032102 |
+| direct-direct | 24909_lane_r4_identities | fill_024909_lane_r4_identities | Nov 01 02:51 | yes | 52 | 95.2 | 0.029741 |
+| direct-direct | 24909_lane_r4_launch | fill_024909_lane_r4_launch | Nov 01 02:51 | yes | 62 | 96.6 | 0.028921 |
+| direct-direct | 24909_lane_r4_multislot | fill_024909_lane_r4_multislot | Nov 01 02:51 | yes | 40 | 94.5 | 0.023843 |
+| direct-direct | 24909_lane_r4_network | fill_024909_lane_r4_network | Nov 01 02:51 | yes | 38 | 94.5 | 0.022117 |
+| direct-direct | 24909_lane_r4_settings | fill_024909_lane_r4_settings | Nov 01 02:51 | yes | 36 | 93.5 | 0.02797 |
+| direct-direct | 24909_lane_r4_storyboard | fill_024909_lane_r4_storyboard | Nov 01 02:51 | yes | 73 | 96.7 | 0.034476 |
+| direct-direct | 24909_lane_r4_terminal | fill_024909_lane_r4_terminal | Nov 01 02:51 | yes | 25 | 90.7 | 0.022108 |
+| direct-direct | 24909_lane_r4_use_metaviewer | fill_024909_lane_r4_use_metaviewer | Nov 01 02:51 | yes | 54 | 96.0 | 0.036031 |
+| direct-direct | 24909_rev_DEMO-CHAIN-R2_a | fill_024909_rev_DEMO-CHAIN-R2_a | Nov 01 02:51 | yes | 13 | 90.0 | 0.007515 |
+| direct-direct | 24909_rev_DEMO-CHAIN-R2_b | fill_024909_rev_DEMO-CHAIN-R2_b | Nov 01 02:51 | yes | 18 | 91.6 | 0.011549 |
+| direct-direct | 24909_rev_MDISP-FIX_a | fill_024909_rev_MDISP-FIX_a | Nov 01 02:51 | yes | 9 | 74.4 | 0.010422 |
+| direct-direct | 24909_rev_MDISP-FIX_b | fill_024909_rev_MDISP-FIX_b | Nov 01 02:52 | yes | 20 | 91.6 | 0.010983 |
+| direct-direct | 24909_rev_STALE-FRAME_a | fill_024909_rev_STALE-FRAME_a | Nov 01 02:52 | yes | 13 | 90.1 | 0.008846 |
+| direct-direct | 24909_rev_STALE-FRAME_b | fill_024909_rev_STALE-FRAME_b | Nov 01 02:53 | yes | 14 | 88.6 | 0.010121 |
+| direct-direct | 24909_rev_WAIT-HARDEN-UI_a | fill_024909_rev_WAIT-HARDEN-UI_a | Nov 01 02:54 | yes | 17 | 91.0 | 0.0094 |
+| direct-direct | 24909_rev_WAIT-HARDEN-UI_b | fill_024909_rev_WAIT-HARDEN-UI_b | Nov 01 02:54 | yes | 11 | 87.5 | 0.007098 |
+| direct-direct | 25417_rev_DEMO-CHAIN-R2_a | fill_025417_rev_DEMO-CHAIN-R2_a | Nov 01 02:55 | yes | 31 | 94.2 | 0.017321 |
+| direct-direct | 25417_rev_DEMO-CHAIN-R2_b | fill_025417_rev_DEMO-CHAIN-R2_b | Nov 01 02:55 | yes | 12 | 85.2 | 0.00759 |
+| direct-direct | 25417_rev_MDISP-FIX_a | fill_025417_rev_MDISP-FIX_a | Nov 01 02:55 | yes | 9 | 85.9 | 0.005231 |
+| direct-direct | 25417_rev_MDISP-FIX_b | fill_025417_rev_MDISP-FIX_b | Nov 01 02:55 | yes | 10 | 88.6 | 0.005535 |
+| direct-direct | 25417_rev_STALE-FRAME_a | fill_025417_rev_STALE-FRAME_a | Nov 01 02:55 | yes | 18 | 91.4 | 0.01151 |
+| direct-direct | 25417_rev_STALE-FRAME_b | fill_025417_rev_STALE-FRAME_b | Nov 01 02:55 | yes | 10 | 89.3 | 0.005265 |
+| direct-direct | 25417_rev_WAIT-HARDEN-UI_a | fill_025417_rev_WAIT-HARDEN-UI_a | Nov 01 02:55 | yes | 25 | 93.5 | 0.014148 |
+| direct-direct | 25417_rev_WAIT-HARDEN-UI_b | fill_025417_rev_WAIT-HARDEN-UI_b | Nov 01 02:55 | yes | 9 | 86.1 | 0.006305 |
+| direct-direct | IT-HARDEN-UI_a.r1 | r1x_WAIT-HARDEN-UI_a.r1 | Nov 01 02:56 | yes | 20 | 92.6 | 0.010567 |
+| direct-direct | IT-HARDEN-UI_b.r1 | r1x_WAIT-HARDEN-UI_b.r1 | Nov 01 02:56 | yes | 14 | 88.4 | 0.009777 |
+| direct-direct | 25642_rev_MDISP-FIX_a | fill_025642_rev_MDISP-FIX_a | Nov 01 02:57 | yes | 13 | 90.0 | 0.007301 |
+| direct-direct | 25642_rev_MDISP-FIX_b | fill_025642_rev_MDISP-FIX_b | Nov 01 02:57 | yes | 13 | 87.8 | 0.008041 |
+| direct-direct | 25642_rev_STALE-FRAME_a | fill_025642_rev_STALE-FRAME_a | Nov 01 02:57 | yes | 10 | 85.7 | 0.006496 |
+| direct-direct | 25642_rev_STALE-FRAME_b | fill_025642_rev_STALE-FRAME_b | Nov 01 02:57 | yes | 12 | 89.7 | 0.007156 |
+| direct-direct | 25755_rev_MDISP-FIX_a | fill_025755_rev_MDISP-FIX_a | Nov 01 02:58 | yes | 10 | 85.3 | 0.007176 |
+| direct-direct | 25755_rev_MDISP-FIX_b | fill_025755_rev_MDISP-FIX_b | Nov 01 02:58 | yes | 13 | 89.8 | 0.008009 |
+| direct-direct | 25755_rev_STALE-FRAME_a | fill_025755_rev_STALE-FRAME_a | Nov 01 02:59 | yes | 10 | 86.0 | 0.006793 |
+| direct-direct | 25755_rev_STALE-FRAME_b | fill_025755_rev_STALE-FRAME_b | Nov 01 02:59 | yes | 13 | 89.9 | 0.007812 |
+| direct-direct | ALE-FRAME_b | r1x_STALE-FRAME_b | Nov 01 02:59 | yes | 26 | 93.8 | 0.01417 |
+| direct-direct | 25907_rev_MDISP-FIX_a | fill_025907_rev_MDISP-FIX_a | Nov 01 03:00 | yes | 11 | 88.7 | 0.006219 |
+| direct-direct | 25907_rev_MDISP-FIX_b | fill_025907_rev_MDISP-FIX_b | Nov 01 03:00 | yes | 10 | 77.9 | 0.007968 |
+| direct-direct | 30013_rev_WAIT-HARDEN-UI-R2_a | fill_030013_rev_WAIT-HARDEN-UI-R2_a | Nov 01 03:01 | yes | 14 | 91.2 | 0.006476 |
+| direct-direct | 30013_rev_WAIT-HARDEN-UI-R2_b | fill_030013_rev_WAIT-HARDEN-UI-R2_b | Nov 01 03:01 | yes | 7 | 85.9 | 0.003681 |
 
 ## Method
 
