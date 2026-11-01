@@ -4,6 +4,10 @@ import { createXpraRecovery } from './xpraRecovery.js';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
+/** Per-event refusals of the trace recorder: the event is dropped, the view stays. */
+export const DROPPABLE_TRACE_CODES = Object.freeze(new Set(['TRACE_EVENT_REFUSED','TRACE_COORDINATE_REFUSED',
+  'TRACE_BUTTON_REFUSED','TRACE_KEY_PHASE_REFUSED','TRACE_SCROLL_REFUSED','TRACE_GEOMETRY_REFUSED']));
+
 /** Host owns geometry and the lease. No bridge capability enters renderer IPC.
  * @param {{electron:typeof import('electron'),window:import('electron').BrowserWindow,
  * bridge:Awaited<ReturnType<typeof import('./xpraHumanBridge.js').openXpraHumanBridge>>,
@@ -93,6 +97,8 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
     wc.setZoomFactor(1);
     view.setBounds(rect);
   }
+  /** @type {Set<string>} */
+  const droppedCodes = new Set();
   /** @param {import('electron').IpcMainEvent} event @param {Record<string,any>} row */
   const onTrace = (event, row) => {
     if (detached || !isActive() || event.sender !== wc || event.senderFrame !== wc.mainFrame ||
@@ -103,8 +109,19 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
       trace.record(row, { width: row.width, height: row.height,
         capsuleWidth: size.width, capsuleHeight: size.height }, axContext());
     } catch (error) {
+      // One malformed input event (a drag leaving the page, an extra mouse
+      // button) is dropped, not fatal: the input still reached the capsule.
+      const code = error instanceof Error ? error.message : '';
+      if (DROPPABLE_TRACE_CODES.has(code)) {
+        if (!droppedCodes.has(code)) {
+          droppedCodes.add(code);
+          console.info(`METAVIEWER_XPRA_TRACE_DROPPED code=${code}`);
+        }
+        return;
+      }
       // Recording failure revokes the view and its open WebSocket. The host
       // must retain blocked core ownership; never resume an agent on this path.
+      console.info(`METAVIEWER_XPRA_TRACE_FATAL code=${/^TRACE_[A-Z_]{1,40}$/.test(code) ? code : 'UNKNOWN'}`);
       fail('XPRA_TRACE_FAILED');
     }
   };
