@@ -127,6 +127,7 @@ testws3-f00ce2c95fe6	agents/tests/test_ws3_untracked_payload.py
 testws3-5a6f7cc82936	agents/tests/test_ws3_wheel_record.py
 protocol.json	catalogue/protocol.json
 changes-README.md	changes/README.md
+adapter-cbafcbab0a3b	changes/unreleased/adapter-epoch-handoff.md
 boot-flake.md	changes/unreleased/boot-flake.md
 boot-pending-clr.md	changes/unreleased/boot-pending-clr.md
 changel-6ee9fc48ce48	changes/unreleased/changelog-fragments.md
