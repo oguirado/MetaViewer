@@ -19,17 +19,17 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 1,838 | 55 | 1,783 |
-| Lanes finished OK | 1,838 | 55 | 1,783 |
-| Agent steps | 64,352 | 2,705 | 61,647 |
-| Lane-hours of agent work | 148.4 | 5.2 | 143.1 |
-| Fresh input tokens | 251,532,502 | 11,482,034 | 240,050,468 |
-| Cache-read input tokens | 4,554,103,998 | 226,255,212 | 4,327,848,786 |
-| Prompt cache hit % | 94.8 | 95.2 | 94.7 |
-| Output tokens | 50,717,065 | 2,135,708 | 48,581,357 |
-| Thinking tokens | 30,490,325 | 1,050,039 | 29,440,286 |
-| Cost (USD) | 44.4048 | 2.0279 | 42.377 |
-| Cost per lane (USD) | 0.0242 | 0.0369 | 0.0238 |
+| Lanes launched | 1,986 | 55 | 1,931 |
+| Lanes finished OK | 1,986 | 55 | 1,931 |
+| Agent steps | 67,295 | 2,705 | 64,590 |
+| Lane-hours of agent work | 154.1 | 5.2 | 148.9 |
+| Fresh input tokens | 260,878,739 | 11,482,034 | 249,396,705 |
+| Cache-read input tokens | 4,683,446,986 | 226,255,212 | 4,457,191,774 |
+| Prompt cache hit % | 94.7 | 95.2 | 94.7 |
+| Output tokens | 52,922,877 | 2,135,708 | 50,787,169 |
+| Thinking tokens | 31,978,901 | 1,050,039 | 30,928,862 |
+| Cost (USD) | 46.0393 | 2.0279 | 44.0115 |
+| Cost per lane (USD) | 0.0232 | 0.0369 | 0.0228 |
 
 Rooms: 136. Peak concurrent lanes [MEASURED from lane start/end]: 42.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
@@ -38,7 +38,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 1449 | 93.8 | 28.1573 |
+| build | 1597 | 93.8 | 29.7918 |
 | context | 42 | 95.9 | 1.9093 |
 | context packs + test ideation (U-DEC-0139) | 13 | 91.1 | 0.2195 |
 | demo | 4 | 90.7 | 0.0557 |
@@ -86,7 +86,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 1111 | 93.7 | 19.8788 | direct Muse job |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 1259 | 93.7 | 21.5133 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -2043,7 +2043,155 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | 41456_rev_LOW-CONF_b | fill_041456_rev_LOW-CONF_b | Nov 01 04:16 | yes | 52 | 96.3 | 0.01838 |
 | direct-direct | 41608_rev_BOOT-FLAKE-R2_a | fill_041608_rev_BOOT-FLAKE-R2_a | Nov 01 04:17 | yes | 11 | 89.0 | 0.005865 |
 | direct-direct | 41608_rev_BOOT-FLAKE-R2_b | fill_041608_rev_BOOT-FLAKE-R2_b | Nov 01 04:17 | yes | 13 | 90.0 | 0.007044 |
+| direct-direct | 41714_rev_BOOT-FLAKE-R2_a | fill_041714_rev_BOOT-FLAKE-R2_a | Nov 01 04:18 | yes | 15 | 91.4 | 0.007524 |
 | direct-direct | 41714_rev_BOOT-FLAKE-R2_b | fill_041714_rev_BOOT-FLAKE-R2_b | Nov 01 04:18 | yes | 9 | 87.0 | 0.005076 |
+| direct-direct | 41714_rev_FENCE-DESIGN_a | fill_041714_rev_FENCE-DESIGN_a | Nov 01 04:18 | yes | 16 | 90.3 | 0.0086 |
+| direct-direct | 41714_rev_FENCE-DESIGN_b | fill_041714_rev_FENCE-DESIGN_b | Nov 01 04:18 | yes | 18 | 93.2 | 0.009164 |
+| direct-direct | 41714_rev_U1-BACK-R2_a | fill_041714_rev_U1-BACK-R2_a | Nov 01 04:18 | yes | 13 | 89.2 | 0.009098 |
+| direct-direct | 41714_rev_U1-BACK-R2_b | fill_041714_rev_U1-BACK-R2_b | Nov 01 04:18 | yes | 16 | 91.1 | 0.00788 |
+| direct-direct | 41714_rev_WJ4-R3_a | fill_041714_rev_WJ4-R3_a | Nov 01 04:18 | yes | 14 | 91.3 | 0.006334 |
+| direct-direct | 41714_rev_WJ4-R3_b | fill_041714_rev_WJ4-R3_b | Nov 01 04:18 | yes | 19 | 91.6 | 0.010884 |
+| direct-direct | 41724_01_e1slot | fill_041724_01_e1slot | Nov 01 04:18 | yes | 34 | 94.3 | 0.015364 |
+| direct-direct | 41724_02_e1verif | fill_041724_02_e1verif | Nov 01 04:18 | yes | 32 | 93.4 | 0.01806 |
+| direct-direct | 41724_03_e1regr | fill_041724_03_e1regr | Nov 01 04:18 | yes | 16 | 90.8 | 0.00819 |
+| direct-direct | 41724_04_rep1 | fill_041724_04_rep1 | Nov 01 04:18 | yes | 12 | 85.5 | 0.010533 |
+| direct-direct | 41724_05_rep2 | fill_041724_05_rep2 | Nov 01 04:18 | yes | 31 | 94.5 | 0.013732 |
+| direct-direct | 41724_06_wj4ci | fill_041724_06_wj4ci | Nov 01 04:18 | yes | 24 | 92.8 | 0.013434 |
+| direct-direct | 41724_07_u1prov | fill_041724_07_u1prov | Nov 01 04:18 | yes | 28 | 93.6 | 0.014434 |
+| direct-direct | 41724_08_r4app_close | fill_041724_08_r4app_close | Nov 01 04:19 | yes | 19 | 91.2 | 0.010096 |
+| direct-direct | 41724_09_r4capsule_close_reopen | fill_041724_09_r4capsule_close_reopen | Nov 01 04:19 | yes | 15 | 89.7 | 0.008044 |
+| direct-direct | 41724_10_r4identities | fill_041724_10_r4identities | Nov 01 04:19 | yes | 23 | 93.6 | 0.010431 |
+| direct-direct | 41724_11_r4launch | fill_041724_11_r4launch | Nov 01 04:19 | yes | 16 | 91.1 | 0.008634 |
+| direct-direct | 41724_12_r4multislot | fill_041724_12_r4multislot | Nov 01 04:19 | yes | 13 | 90.4 | 0.008437 |
+| direct-direct | 41724_13_r4use_metaviewer | fill_041724_13_r4use_metaviewer | Nov 01 04:20 | yes | 17 | 90.1 | 0.013853 |
+| direct-direct | 42019_rev_BOOT-FLAKE-R2_a | fill_042019_rev_BOOT-FLAKE-R2_a | Nov 01 04:21 | yes | 22 | 93.3 | 0.01105 |
+| direct-direct | 42019_rev_BOOT-FLAKE-R2_b | fill_042019_rev_BOOT-FLAKE-R2_b | Nov 01 04:21 | yes | 10 | 89.0 | 0.004948 |
+| direct-direct | 42019_rev_FENCE-DESIGN_a | fill_042019_rev_FENCE-DESIGN_a | Nov 01 04:21 | yes | 10 | 89.4 | 0.005439 |
+| direct-direct | 42019_rev_FENCE-DESIGN_b | fill_042019_rev_FENCE-DESIGN_b | Nov 01 04:21 | yes | 16 | 92.2 | 0.008651 |
+| direct-direct | 42019_rev_SLOT-LENGTH_a | fill_042019_rev_SLOT-LENGTH_a | Nov 01 04:21 | yes | 19 | 92.8 | 0.009725 |
+| direct-direct | 42019_rev_SLOT-LENGTH_b | fill_042019_rev_SLOT-LENGTH_b | Nov 01 04:21 | yes | 20 | 93.2 | 0.010566 |
+| direct-direct | 42019_rev_U1-BACK-R2_a | fill_042019_rev_U1-BACK-R2_a | Nov 01 04:21 | yes | 14 | 88.8 | 0.010501 |
+| direct-direct | 42019_rev_U1-BACK-R2_b | fill_042019_rev_U1-BACK-R2_b | Nov 01 04:21 | yes | 16 | 91.3 | 0.009181 |
+| direct-direct | 42019_rev_WJ4-R3_a | fill_042019_rev_WJ4-R3_a | Nov 01 04:21 | yes | 14 | 90.1 | 0.006983 |
+| direct-direct | 42019_rev_WJ4-R3_b | fill_042019_rev_WJ4-R3_b | Nov 01 04:21 | yes | 18 | 91.9 | 0.01027 |
+| direct-direct | 42150_rev_BOOT-FLAKE-R2_a | fill_042150_rev_BOOT-FLAKE-R2_a | Nov 01 04:22 | yes | 16 | 90.5 | 0.009944 |
+| direct-direct | 42150_rev_BOOT-FLAKE-R2_b | fill_042150_rev_BOOT-FLAKE-R2_b | Nov 01 04:22 | yes | 25 | 93.4 | 0.015943 |
+| direct-direct | 42150_rev_FENCE-DESIGN_a | fill_042150_rev_FENCE-DESIGN_a | Nov 01 04:22 | yes | 15 | 90.8 | 0.008063 |
+| direct-direct | 42150_rev_FENCE-DESIGN_b | fill_042150_rev_FENCE-DESIGN_b | Nov 01 04:22 | yes | 19 | 92.3 | 0.009981 |
+| direct-direct | 42150_rev_SLOT-LENGTH_a | fill_042150_rev_SLOT-LENGTH_a | Nov 01 04:23 | yes | 21 | 92.5 | 0.014555 |
+| direct-direct | 42150_rev_SLOT-LENGTH_b | fill_042150_rev_SLOT-LENGTH_b | Nov 01 04:23 | yes | 12 | 89.2 | 0.007278 |
+| direct-direct | 42150_rev_U1-BACK-R2_a | fill_042150_rev_U1-BACK-R2_a | Nov 01 04:23 | yes | 25 | 93.2 | 0.013641 |
+| direct-direct | 42150_rev_U1-BACK-R2_b | fill_042150_rev_U1-BACK-R2_b | Nov 01 04:23 | yes | 24 | 94.0 | 0.012183 |
+| direct-direct | 42150_rev_WJ4-R3_a | fill_042150_rev_WJ4-R3_a | Nov 01 04:23 | yes | 16 | 85.9 | 0.011433 |
+| direct-direct | 42150_rev_WJ4-R3_b | fill_042150_rev_WJ4-R3_b | Nov 01 04:23 | yes | 13 | 89.6 | 0.007207 |
+| direct-direct | 42321_rev_BOOT-FLAKE-R2_a | fill_042321_rev_BOOT-FLAKE-R2_a | Nov 01 04:24 | yes | 12 | 89.8 | 0.007291 |
+| direct-direct | 42321_rev_BOOT-FLAKE-R2_b | fill_042321_rev_BOOT-FLAKE-R2_b | Nov 01 04:24 | yes | 9 | 85.7 | 0.007809 |
+| direct-direct | 42321_rev_FENCE-DESIGN_a | fill_042321_rev_FENCE-DESIGN_a | Nov 01 04:24 | yes | 12 | 91.8 | 0.004727 |
+| direct-direct | 42321_rev_FENCE-DESIGN_b | fill_042321_rev_FENCE-DESIGN_b | Nov 01 04:24 | yes | 18 | 92.3 | 0.008128 |
+| direct-direct | 42321_rev_SLOT-LENGTH_a | fill_042321_rev_SLOT-LENGTH_a | Nov 01 04:24 | yes | 15 | 90.2 | 0.009788 |
+| direct-direct | 42321_rev_SLOT-LENGTH_b | fill_042321_rev_SLOT-LENGTH_b | Nov 01 04:24 | yes | 19 | 92.9 | 0.009147 |
+| direct-direct | 42321_rev_U1-BACK-R2_a | fill_042321_rev_U1-BACK-R2_a | Nov 01 04:24 | yes | 10 | 87.0 | 0.007751 |
+| direct-direct | 42321_rev_U1-BACK-R2_b | fill_042321_rev_U1-BACK-R2_b | Nov 01 04:24 | yes | 14 | 89.5 | 0.007519 |
+| direct-direct | 42321_rev_WJ4-R3_a | fill_042321_rev_WJ4-R3_a | Nov 01 04:24 | yes | 12 | 89.4 | 0.007013 |
+| direct-direct | 42321_rev_WJ4-R3_b | fill_042321_rev_WJ4-R3_b | Nov 01 04:24 | yes | 14 | 91.2 | 0.007584 |
+| direct-direct | 42452_rev_BOOT-FLAKE-R2_a | fill_042452_rev_BOOT-FLAKE-R2_a | Nov 01 04:25 | yes | 13 | 89.5 | 0.007123 |
+| direct-direct | 42452_rev_BOOT-FLAKE-R2_b | fill_042452_rev_BOOT-FLAKE-R2_b | Nov 01 04:25 | yes | 9 | 87.7 | 0.006198 |
+| direct-direct | 42452_rev_FENCE-DESIGN_a | fill_042452_rev_FENCE-DESIGN_a | Nov 01 04:25 | yes | 13 | 90.4 | 0.007701 |
+| direct-direct | 42452_rev_FENCE-DESIGN_b | fill_042452_rev_FENCE-DESIGN_b | Nov 01 04:26 | yes | 10 | 83.9 | 0.009992 |
+| direct-direct | 42452_rev_SLOT-LENGTH_a | fill_042452_rev_SLOT-LENGTH_a | Nov 01 04:26 | yes | 21 | 92.9 | 0.010041 |
+| direct-direct | 42452_rev_SLOT-LENGTH_b | fill_042452_rev_SLOT-LENGTH_b | Nov 01 04:26 | yes | 14 | 89.8 | 0.011144 |
+| direct-direct | 42452_rev_U1-BACK-R2_a | fill_042452_rev_U1-BACK-R2_a | Nov 01 04:26 | yes | 22 | 92.5 | 0.012744 |
+| direct-direct | 42452_rev_U1-BACK-R2_b | fill_042452_rev_U1-BACK-R2_b | Nov 01 04:26 | yes | 15 | 90.2 | 0.009152 |
+| direct-direct | 42452_rev_WJ4-R3_a | fill_042452_rev_WJ4-R3_a | Nov 01 04:26 | yes | 11 | 87.4 | 0.00753 |
+| direct-direct | 42452_rev_WJ4-R3_b | fill_042452_rev_WJ4-R3_b | Nov 01 04:26 | yes | 13 | 89.8 | 0.006637 |
+| direct-direct | 42622_rev_BOOT-FLAKE-R2_a | fill_042622_rev_BOOT-FLAKE-R2_a | Nov 01 04:27 | yes | 12 | 89.3 | 0.006654 |
+| direct-direct | 42622_rev_BOOT-FLAKE-R2_b | fill_042622_rev_BOOT-FLAKE-R2_b | Nov 01 04:27 | yes | 15 | 90.7 | 0.008758 |
+| direct-direct | 42622_rev_FENCE-DESIGN_a | fill_042622_rev_FENCE-DESIGN_a | Nov 01 04:27 | yes | 11 | 87.8 | 0.006508 |
+| direct-direct | 42622_rev_FENCE-DESIGN_b | fill_042622_rev_FENCE-DESIGN_b | Nov 01 04:27 | yes | 22 | 93.1 | 0.012185 |
+| direct-direct | 42622_rev_SLOT-LENGTH_a | fill_042622_rev_SLOT-LENGTH_a | Nov 01 04:27 | yes | 23 | 93.6 | 0.012039 |
+| direct-direct | 42622_rev_SLOT-LENGTH_b | fill_042622_rev_SLOT-LENGTH_b | Nov 01 04:27 | yes | 23 | 93.3 | 0.014821 |
+| direct-direct | 42622_rev_U1-BACK-R2_a | fill_042622_rev_U1-BACK-R2_a | Nov 01 04:27 | yes | 9 | 82.2 | 0.00825 |
+| direct-direct | 42622_rev_U1-BACK-R2_b | fill_042622_rev_U1-BACK-R2_b | Nov 01 04:27 | yes | 13 | 88.4 | 0.007546 |
+| direct-direct | 42622_rev_WJ4-R3_a | fill_042622_rev_WJ4-R3_a | Nov 01 04:28 | yes | 13 | 89.8 | 0.006447 |
+| direct-direct | 42622_rev_WJ4-R3_b | fill_042622_rev_WJ4-R3_b | Nov 01 04:28 | yes | 12 | 87.6 | 0.008283 |
+| direct-direct | 42854_rev_BOOT-FLAKE-R2_a | fill_042854_rev_BOOT-FLAKE-R2_a | Nov 01 04:29 | yes | 10 | 87.7 | 0.006342 |
+| direct-direct | 42854_rev_BOOT-FLAKE-R2_b | fill_042854_rev_BOOT-FLAKE-R2_b | Nov 01 04:29 | yes | 9 | 87.3 | 0.004953 |
+| direct-direct | 42854_rev_FENCE-DESIGN_a | fill_042854_rev_FENCE-DESIGN_a | Nov 01 04:30 | yes | 21 | 92.8 | 0.010955 |
+| direct-direct | 42854_rev_FENCE-DESIGN_b | fill_042854_rev_FENCE-DESIGN_b | Nov 01 04:30 | yes | 18 | 92.7 | 0.008076 |
+| direct-direct | 42854_rev_SLOT-LENGTH_a | fill_042854_rev_SLOT-LENGTH_a | Nov 01 04:30 | yes | 9 | 85.0 | 0.006293 |
+| direct-direct | 42854_rev_SLOT-LENGTH_b | fill_042854_rev_SLOT-LENGTH_b | Nov 01 04:30 | yes | 11 | 89.7 | 0.006012 |
+| direct-direct | 42854_rev_U1-BACK-R2_a | fill_042854_rev_U1-BACK-R2_a | Nov 01 04:30 | yes | 17 | 91.2 | 0.009771 |
+| direct-direct | 42854_rev_U1-BACK-R2_b | fill_042854_rev_U1-BACK-R2_b | Nov 01 04:30 | yes | 17 | 92.3 | 0.008001 |
+| direct-direct | 42854_rev_WJ4-R3_a | fill_042854_rev_WJ4-R3_a | Nov 01 04:30 | yes | 12 | 89.8 | 0.006396 |
+| direct-direct | 42854_rev_WJ4-R3_b | fill_042854_rev_WJ4-R3_b | Nov 01 04:30 | yes | 37 | 95.0 | 0.015689 |
+| direct-direct | 43025_rev_BOOT-FLAKE-R2_a | fill_043025_rev_BOOT-FLAKE-R2_a | Nov 01 04:31 | yes | 14 | 91.3 | 0.006919 |
+| direct-direct | 43025_rev_BOOT-FLAKE-R2_b | fill_043025_rev_BOOT-FLAKE-R2_b | Nov 01 04:31 | yes | 9 | 87.8 | 0.004495 |
+| direct-direct | 43025_rev_FENCE-DESIGN_a | fill_043025_rev_FENCE-DESIGN_a | Nov 01 04:31 | yes | 15 | 91.6 | 0.006516 |
+| direct-direct | 43025_rev_FENCE-DESIGN_b | fill_043025_rev_FENCE-DESIGN_b | Nov 01 04:31 | yes | 15 | 91.3 | 0.007402 |
+| direct-direct | 43025_rev_SLOT-LENGTH_a | fill_043025_rev_SLOT-LENGTH_a | Nov 01 04:31 | yes | 16 | 92.2 | 0.00797 |
+| direct-direct | 43025_rev_SLOT-LENGTH_b | fill_043025_rev_SLOT-LENGTH_b | Nov 01 04:31 | yes | 7 | 83.1 | 0.005556 |
+| direct-direct | 43025_rev_U1-BACK-R2_a | fill_043025_rev_U1-BACK-R2_a | Nov 01 04:31 | yes | 12 | 88.7 | 0.006786 |
+| direct-direct | 43025_rev_U1-BACK-R2_b | fill_043025_rev_U1-BACK-R2_b | Nov 01 04:31 | yes | 16 | 91.1 | 0.008348 |
+| direct-direct | 43025_rev_WJ4-R3_a | fill_043025_rev_WJ4-R3_a | Nov 01 04:31 | yes | 23 | 93.2 | 0.011576 |
+| direct-direct | 43025_rev_WJ4-R3_b | fill_043025_rev_WJ4-R3_b | Nov 01 04:31 | yes | 15 | 90.9 | 0.008332 |
+| direct-direct | 43155_rev_BOOT-FLAKE-R2_a | fill_043155_rev_BOOT-FLAKE-R2_a | Nov 01 04:32 | yes | 11 | 88.2 | 0.007203 |
+| direct-direct | 43155_rev_BOOT-FLAKE-R2_b | fill_043155_rev_BOOT-FLAKE-R2_b | Nov 01 04:32 | yes | 7 | 82.6 | 0.005463 |
+| direct-direct | 43155_rev_FENCE-DESIGN_a | fill_043155_rev_FENCE-DESIGN_a | Nov 01 04:33 | yes | 26 | 94.9 | 0.009651 |
+| direct-direct | 43155_rev_FENCE-DESIGN_b | fill_043155_rev_FENCE-DESIGN_b | Nov 01 04:33 | yes | 13 | 88.4 | 0.008681 |
+| direct-direct | 43155_rev_SLOT-LENGTH_a | fill_043155_rev_SLOT-LENGTH_a | Nov 01 04:33 | yes | 13 | 89.2 | 0.007261 |
+| direct-direct | OT-LENGTH_a | r1x_SLOT-LENGTH_a | Nov 01 04:33 | yes | 31 | 94.1 | 0.014551 |
+| direct-direct | OT-LENGTH_b | r1x_SLOT-LENGTH_b | Nov 01 04:33 | yes | 59 | 96.7 | 0.026758 |
+| direct-direct | 43155_rev_SLOT-LENGTH_b | fill_043155_rev_SLOT-LENGTH_b | Nov 01 04:33 | yes | 16 | 91.0 | 0.009632 |
+| direct-direct | 43155_rev_U1-BACK-R2_a | fill_043155_rev_U1-BACK-R2_a | Nov 01 04:33 | yes | 9 | 81.5 | 0.008973 |
+| direct-direct | 43155_rev_U1-BACK-R2_b | fill_043155_rev_U1-BACK-R2_b | Nov 01 04:33 | yes | 41 | 95.5 | 0.022648 |
+| direct-direct | 43155_rev_WJ4-R3_a | fill_043155_rev_WJ4-R3_a | Nov 01 04:33 | yes | 13 | 87.5 | 0.010477 |
+| direct-direct | 43155_rev_WJ4-R3_b | fill_043155_rev_WJ4-R3_b | Nov 01 04:33 | yes | 19 | 92.8 | 0.010437 |
+| direct-direct | 43326_rev_BOOT-FLAKE-R2_a | fill_043326_rev_BOOT-FLAKE-R2_a | Nov 01 04:34 | yes | 10 | 89.1 | 0.005373 |
+| direct-direct | 43326_rev_BOOT-FLAKE-R2_b | fill_043326_rev_BOOT-FLAKE-R2_b | Nov 01 04:34 | yes | 17 | 92.1 | 0.008731 |
+| direct-direct | 43326_rev_FENCE-DESIGN_a | fill_043326_rev_FENCE-DESIGN_a | Nov 01 04:34 | yes | 11 | 91.3 | 0.004448 |
+| direct-direct | 43326_rev_FENCE-DESIGN_b | fill_043326_rev_FENCE-DESIGN_b | Nov 01 04:34 | yes | 19 | 92.1 | 0.009836 |
+| direct-direct | 43326_rev_U1-BACK-R2_a | fill_043326_rev_U1-BACK-R2_a | Nov 01 04:34 | yes | 18 | 91.2 | 0.010061 |
+| direct-direct | 43326_rev_U1-BACK-R2_b | fill_043326_rev_U1-BACK-R2_b | Nov 01 04:34 | yes | 15 | 90.0 | 0.008988 |
+| direct-direct | 43326_rev_WJ4-R3_a | fill_043326_rev_WJ4-R3_a | Nov 01 04:34 | yes | 15 | 91.8 | 0.007483 |
+| direct-direct | 43326_rev_WJ4-R3_b | fill_043326_rev_WJ4-R3_b | Nov 01 04:34 | yes | 21 | 91.3 | 0.015608 |
+| direct-direct | 43451_lane_r4_app_close | fill_043451_lane_r4_app_close | Nov 01 04:35 | yes | 56 | 95.7 | 0.029098 |
+| direct-direct | 43451_lane_r4_automate_demo | fill_043451_lane_r4_automate_demo | Nov 01 04:35 | yes | 24 | 92.1 | 0.014241 |
+| direct-direct | 43451_lane_r4_capsule_close_reopen | fill_043451_lane_r4_capsule_close_reopen | Nov 01 04:35 | yes | 38 | 94.8 | 0.015848 |
+| direct-direct | 43451_lane_r4_captcha_handoff | fill_043451_lane_r4_captcha_handoff | Nov 01 04:36 | yes | 44 | 95.3 | 0.024975 |
+| direct-direct | 43451_lane_r4_chatgpt_gemini | fill_043451_lane_r4_chatgpt_gemini | Nov 01 04:36 | yes | 58 | 96.1 | 0.037012 |
+| direct-direct | 43451_lane_r4_display | fill_043451_lane_r4_display | Nov 01 04:36 | yes | 56 | 96.1 | 0.033696 |
+| direct-direct | 43451_lane_r4_identities | fill_043451_lane_r4_identities | Nov 01 04:36 | yes | 41 | 95.5 | 0.026316 |
+| direct-direct | 43451_lane_r4_launch | fill_043451_lane_r4_launch | Nov 01 04:36 | yes | 63 | 96.4 | 0.033846 |
+| direct-direct | 43451_lane_r4_multislot | fill_043451_lane_r4_multislot | Nov 01 04:36 | yes | 50 | 96.2 | 0.021051 |
+| direct-direct | 43451_lane_r4_network | fill_043451_lane_r4_network | Nov 01 04:36 | yes | 53 | 95.9 | 0.030265 |
+| direct-direct | 43451_lane_r4_settings | fill_043451_lane_r4_settings | Nov 01 04:36 | yes | 56 | 96.2 | 0.032926 |
+| direct-direct | 43451_lane_r4_storyboard | fill_043451_lane_r4_storyboard | Nov 01 04:36 | yes | 72 | 96.6 | 0.029395 |
+| direct-direct | 43451_lane_r4_terminal | fill_043451_lane_r4_terminal | Nov 01 04:36 | yes | 39 | 94.7 | 0.027116 |
+| direct-direct | 43451_lane_r4_use_metaviewer | fill_043451_lane_r4_use_metaviewer | Nov 01 04:36 | yes | 63 | 96.5 | 0.033994 |
+| direct-direct | 43451_rev_BOOT-FLAKE-R2_a | fill_043451_rev_BOOT-FLAKE-R2_a | Nov 01 04:36 | yes | 11 | 89.1 | 0.006762 |
+| direct-direct | 43451_rev_BOOT-FLAKE-R2_b | fill_043451_rev_BOOT-FLAKE-R2_b | Nov 01 04:36 | yes | 9 | 87.5 | 0.005305 |
+| direct-direct | 43451_rev_FENCE-DESIGN_a | fill_043451_rev_FENCE-DESIGN_a | Nov 01 04:37 | yes | 21 | 92.8 | 0.008872 |
+| direct-direct | 43451_rev_FENCE-DESIGN_b | fill_043451_rev_FENCE-DESIGN_b | Nov 01 04:38 | yes | 11 | 89.5 | 0.005159 |
+| direct-direct | 43451_rev_FOCUS-SKIP_a | fill_043451_rev_FOCUS-SKIP_a | Nov 01 04:38 | yes | 22 | 93.4 | 0.012176 |
+| direct-direct | 43451_rev_FOCUS-SKIP_b | fill_043451_rev_FOCUS-SKIP_b | Nov 01 04:38 | yes | 14 | 90.6 | 0.00801 |
+| direct-direct | 43451_rev_U1-BACK-R2_a | fill_043451_rev_U1-BACK-R2_a | Nov 01 04:38 | yes | 16 | 90.8 | 0.008981 |
+| direct-direct | 43451_rev_U1-BACK-R2_b | fill_043451_rev_U1-BACK-R2_b | Nov 01 04:38 | yes | 19 | 92.1 | 0.009247 |
+| direct-direct | 43451_rev_WJ4-R3_a | fill_043451_rev_WJ4-R3_a | Nov 01 04:38 | yes | 18 | 91.7 | 0.010035 |
+| direct-direct | 43451_rev_WJ4-R3_b | fill_043451_rev_WJ4-R3_b | Nov 01 04:40 | yes | 20 | 91.6 | 0.012557 |
+| direct-direct | OT-FLAKE-R2_a | r1x_BOOT-FLAKE-R2_a | Nov 01 04:40 | yes | 23 | 90.9 | 0.01582 |
+| direct-direct | OT-FLAKE-R2_b | r1x_BOOT-FLAKE-R2_b | Nov 01 04:40 | yes | 19 | 89.1 | 0.0115 |
+| direct-direct | 44005_rev_FENCE-DESIGN_a | fill_044005_rev_FENCE-DESIGN_a | Nov 01 04:41 | yes | 17 | 91.1 | 0.008033 |
+| direct-direct | 44005_rev_FENCE-DESIGN_b | fill_044005_rev_FENCE-DESIGN_b | Nov 01 04:41 | yes | 18 | 91.9 | 0.010102 |
+| direct-direct | 44005_rev_FOCUS-SKIP_a | fill_044005_rev_FOCUS-SKIP_a | Nov 01 04:41 | yes | 20 | 92.3 | 0.010967 |
+| direct-direct | 44005_rev_FOCUS-SKIP_b | fill_044005_rev_FOCUS-SKIP_b | Nov 01 04:41 | yes | 17 | 91.3 | 0.010474 |
+| direct-direct | 44005_rev_U1-BACK-R2_b | fill_044005_rev_U1-BACK-R2_b | Nov 01 04:41 | yes | 12 | 88.1 | 0.007368 |
+| direct-direct | 44005_rev_WJ4-R3_a | fill_044005_rev_WJ4-R3_a | Nov 01 04:41 | yes | 13 | 89.8 | 0.008235 |
+| direct-direct | 44005_rev_WJ4-R3_b | fill_044005_rev_WJ4-R3_b | Nov 01 04:41 | yes | 10 | 87.7 | 0.005225 |
+| direct-direct | 44130_rev_FENCE-DESIGN_a | fill_044130_rev_FENCE-DESIGN_a | Nov 01 04:42 | yes | 19 | 92.9 | 0.008049 |
+| direct-direct | 44130_rev_FOCUS-SKIP_a | fill_044130_rev_FOCUS-SKIP_a | Nov 01 04:42 | yes | 11 | 88.9 | 0.006868 |
+| direct-direct | 44130_rev_FOCUS-SKIP_b | fill_044130_rev_FOCUS-SKIP_b | Nov 01 04:42 | yes | 15 | 90.9 | 0.008616 |
+| direct-direct | 44130_rev_WJ4-R3_a | fill_044130_rev_WJ4-R3_a | Nov 01 04:42 | yes | 10 | 90.2 | 0.004057 |
+| direct-direct | 44130_rev_WJ4-R3_b | fill_044130_rev_WJ4-R3_b | Nov 01 04:42 | yes | 13 | 90.5 | 0.006847 |
 
 ## Method
 
