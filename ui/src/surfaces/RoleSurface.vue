@@ -4,24 +4,46 @@ const props = defineProps({surfaceId:{type:String,required:true},control:{type:S
 const api = /** @type {any} */ (globalThis).metaviewerRoles;
 const root = ref(/** @type {HTMLElement|null} */ (null));
 const role = ref(api ? '' : 'agent'), watching = ref(false), error = ref('');
-let alive = true, mounted = false, busy = false, signature = '';
+let alive = true, mounted = false, busy = false, signature = '', shown = true;
+const viewState = ref('closed');
 let timer = /** @type {ReturnType<typeof setInterval>|undefined} */ (undefined);
 const wanted = () => role.value === 'human' || role.value === 'agent' && watching.value && props.control === 'agent';
 async function revoke() {
-  mounted = false; signature = '';
+  mounted = false; signature = ''; shown = true;
   try { await api?.close(props.surfaceId); } catch { /* host window teardown also revokes */ }
 }
 async function sync() {
   if (!api || busy || !alive || error.value) return;
-  const box = root.value?.getBoundingClientRect();
-  const visible = box && box.width >= 1 && box.height >= 1 && box.x >= 0 && box.y >= 0 &&
-    box.right <= innerWidth && box.bottom <= innerHeight && root.value?.getClientRects().length;
-  if (!wanted() || !visible) { if (mounted) await revoke(); return; }
-  const bounds = {x:Math.round(box.x),y:Math.round(box.y),width:Math.floor(box.width),height:Math.floor(box.height)};
-  const next = JSON.stringify(bounds);
-  if (mounted && next === signature) return;
   busy = true;
   try {
+    if (mounted) {
+      const status = await api.status(props.surfaceId);
+      if (status.ok === false) throw Error(status.code || 'XPRA_REFUSED');
+      viewState.value = status.view?.state || 'ready';
+      if (status.view?.state === 'error') throw Error(status.view.code);
+    }
+    const box = root.value?.getBoundingClientRect();
+    const visible = box && box.width >= 1 && box.height >= 1 && box.x >= 0 && box.y >= 0 &&
+      box.right <= innerWidth && box.bottom <= innerHeight && root.value?.getClientRects().length;
+    if (!wanted()) { if (mounted) await revoke(); return; }
+    // Temporary clipping, docking and window visibility must not revoke the
+    // authenticated session. Hide the native view and retain its connection.
+    if (!visible) {
+      if (mounted && shown) {
+        const reply = await api.visibility(props.surfaceId,false);
+        if (!reply.ok) throw Error(reply.code);
+        shown = false;
+      }
+      return;
+    }
+    if (mounted && !shown) {
+      const reply = await api.visibility(props.surfaceId,true);
+      if (!reply.ok) throw Error(reply.code);
+      shown = true;
+    }
+    const bounds = {x:Math.round(box.x),y:Math.round(box.y),width:Math.floor(box.width),height:Math.floor(box.height)};
+    const next = JSON.stringify(bounds);
+    if (mounted && next === signature) return;
     const reply = mounted ? await api.resize(props.surfaceId,bounds) : await api.mount(props.surfaceId,bounds);
     if (!alive || !wanted()) { await revoke(); return; }
     if (!reply.ok) throw Error(reply.code);
@@ -51,8 +73,8 @@ onBeforeUnmount(() => { alive = false; clearInterval(timer); void revoke(); });
     </div>
     <div ref="root" class="mv-role-viewport">
       <div v-if="role === 'agent'" v-show="!watching" :inert="watching" class="mv-role-agent-canvas"><slot /></div>
-      <button v-if="error" type="button" @click="error = ''; sync()">Retry browser</button>
-      <p v-if="role === 'human' || watching" class="mv-role-status" role="status">{{ error || (role === 'human' ? 'Human capsule' : 'Read-only watch') }}</p>
+      <button v-if="error" type="button" @click="error = ''; sync()">Reopen</button>
+      <p v-if="role === 'human' || watching" class="mv-role-status" role="status">{{ error || (viewState === 'reconnecting' ? 'Reconnecting…' : role === 'human' ? 'Human capsule' : 'Read-only watch') }}</p>
       <p v-else-if="error" role="alert">{{ error }}</p>
     </div>
   </div>

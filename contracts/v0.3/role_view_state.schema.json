@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:metaviewer:role-view-state:v0.3",
+  "title": "Host role status view state (additive status reply field)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "state"
+  ],
+  "properties": {
+    "state": {
+      "enum": [
+        "closed",
+        "connecting",
+        "ready",
+        "reconnecting",
+        "error"
+      ]
+    },
+    "code": {
+      "enum": [
+        "XPRA_VIEW_CRASHED",
+        "XPRA_VIEW_UNRESPONSIVE",
+        "XPRA_TRACE_FAILED"
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "error"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "code"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "code"
+          ]
+        }
+      }
+    }
+  ]
+}

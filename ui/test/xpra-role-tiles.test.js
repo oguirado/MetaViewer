@@ -13,6 +13,7 @@ import { createXpraHumanSession } from '../electron/xpraHumanSession.js';
 import { attachXpraHumanTile } from '../electron/xpraHumanTile.js';
 import { openXpraHumanBridge } from '../electron/xpraHumanBridge.js';
 import { installRoleHost, readRoleBinding } from '../electron/roleHost.js';
+import { createXpraRecovery, xpraRetryDelay } from '../electron/xpraRecovery.js';
 
 const geometry = {width:1280,height:900,capsuleWidth:1280,capsuleHeight:900};
 const bounds = {x:0,y:0,width:1280,height:900};
@@ -22,12 +23,14 @@ function fakeElectron() {
  const requests = {}, children = [], readiness = {ready:true,probes:0};
  class WC extends EventEmitter {
   mainFrame = {}; url=''; closed=false;
+  menuShortcuts=[]; loads=[];
+  setIgnoreMenuShortcuts(value){this.menuShortcuts.push(value);}
   setWindowOpenHandler(){} setZoomFactor(value){this.zoom=value;}
-  async loadURL(url){this.url=url;} getURL(){return this.url;} focus(){this.focused=true;}
+  async loadURL(url){this.loads.push(url);this.url=url;} getURL(){return this.url;} focus(){this.focused=true;}
   async executeJavaScript(){readiness.probes++;return readiness.ready;}
   close(){this.closed=true;}
  }
- class WebContentsView {webContents=new WC();setBounds(b){this.bounds=b;}}
+ class WebContentsView {webContents=new WC();setBounds(b){this.bounds=b;}setVisible(v){this.visible=v;}}
  const isolated = new EventEmitter();
  Object.assign(isolated,{setPermissionRequestHandler(){},setPermissionCheckHandler(){},
   webRequest:{onBeforeRequest(_f,cb){requests.admit=cb;},onBeforeSendHeaders(_f,cb){requests.headers=cb;}},
@@ -79,8 +82,10 @@ test('readonly native tile suppresses keys and clicks and token stays in main re
   assert(prevented, name+' forwarded input');
  }
  assert(!tile.view.webContents.focused);
- let headers;f.requests.headers({requestHeaders:{}},v=>headers=v.requestHeaders);
+ let headers;f.requests.headers({url:bridge.origin+'/',requestHeaders:{}},v=>headers=v.requestHeaders);
  assert.equal(headers['x-metaviewer-xpra-session'],'main-only-secret');
+ let alien;f.requests.headers({url:'http://127.0.0.1:9999/',requestHeaders:{}},v=>alien=v);
+ assert.equal(alien.cancel,true);
  assert(!tile.view.webContents.getURL().includes('main-only-secret'));
  assert(!JSON.stringify(tile.view.bounds).includes('main-only-secret'));
  assert.equal(recorded,0);
@@ -111,23 +116,25 @@ test('bridge requires main token and kills an upgraded websocket on close', asyn
  await assert.rejects(get(bridge.requestHeaders));
 });
 
-async function roleHostFixture(t, role='human', failure=null) {
+async function roleHostFixture(t, role='human', failure=null, native=false) {
  const root=await mkdtemp(join(tmpdir(),'role-host-'));t.after(()=>rm(root,{recursive:true,force:true}));
  await mkdir(join(root,'human-bindings'),{mode:0o700});
  const surface={surface_id:'surface-human',profile_id:'demo',state:'active',control:role==='human'?'human':'agent'};
  const binding={schema:'metaviewer.human_binding/v0.3',profile_id:'demo',surface_id:surface.surface_id,container:'srf-id-demo',run_id:'run-demo',control_ready:true,input_epoch:0,width:1280,height:900,role};
  await writeFile(join(root,'human-bindings',surface.surface_id+'.json'),JSON.stringify(binding),{mode:0o600});
- const f=fakeElectron(), modes=[], calls=[], queries=[];
+ const f=fakeElectron(), modes=[], calls=[], queries=[], tileOptions=[];
  const states=new Map([[surface.surface_id,surface]]);
  const host=installRoleHost({...f,admit:event=>event==='trusted',env:{MV_SRF_PROFILES:JSON.stringify({demo:{Kind:'browser',role}}),MV_SRF_STATE_DIR:root,MV_SRF_BIN_DIR:'/host/bin',MV_RECORDING_DESTINATION:root},
   capsuleStates:states,core:{getHumanSurface:()=>surface,request:async value=>{calls.push(value);return{};}},
   listIdentities:async()=>({ok:true,rows:[{id:'demo'}]}),mode:async value=>{modes.push(value.readonly);return true;},
   bridgeFactory:async()=>({origin:'http://127.0.0.1:12345',requestHeaders:{secret:'never-renderer'},close:async()=>calls.push('bridge-close')}),
-  tileFactory:async options=>{if(failure)throw failure;queries.push(options.clientQuery);calls.push({writable:options.writable});return{resize(){},close:async()=>calls.push('tile-close')};}});
+  tileFactory:async options=>{if(failure)throw failure;tileOptions.push(options);queries.push(options.clientQuery);calls.push({writable:options.writable});
+   if(native)return attachXpraHumanTile(options);
+   return{resize(){},setVisible:v=>calls.push({visible:v}),close:async()=>calls.push('tile-close')};}});
  t.after(()=>host.dispose());
  const handler=f.handlers.get('metaviewer:roles.v0.3');
  const request=(op,body={})=>handler('trusted',{schema:'metaviewer.roles/v0.3',op,...body});
- return{root,host,surface,binding,f,modes,calls,queries,request,handler};
+ return{root,host,surface,binding,f,modes,calls,queries,tileOptions,request,handler};
 }
 
 test('human mount uses writable native view; IPC carries no bridge token',async t=>{
@@ -167,8 +174,9 @@ test('human role never instantiates the canvas input slot; agent keeps it', asyn
  const Component=(await import('data:text/javascript;base64,'+Buffer.from(code).toString('base64'))).default;
  const oldApi=globalThis.metaviewerRoles,oldWidth=globalThis.innerWidth,oldHeight=globalThis.innerHeight;
  globalThis.innerWidth=1600;globalThis.innerHeight=1100;
+ let viewport={x:0,y:0,width:1280,height:900,right:1280,bottom:900};
  const node=tag=>({tag,children:[],style:{display:''},props:{},parent:null,
-  getBoundingClientRect:()=>({x:0,y:0,width:1280,height:900,right:1280,bottom:900}),getClientRects:()=>[1]});
+  getBoundingClientRect:()=>viewport,getClientRects:()=>[1]});
  const renderer=vue.createRenderer({createElement:node,createText:text=>({...node('#text'),text}),createComment:text=>({...node('#comment'),text}),
   setText(n,text){n.text=text;},setComment(n,text){n.text=text;},setElementText(n,text){n.text=text;n.children=[];},
   patchProp(n,key,_prev,value){n.props[key]=value;},insert(n,parent,anchor){n.parent=parent;const at=parent.children.indexOf(anchor);if(at<0)parent.children.push(n);else parent.children.splice(at,0,n);},
@@ -176,14 +184,30 @@ test('human role never instantiates the canvas input slot; agent keeps it', asyn
  const tags=n=>[n.tag,...n.children.flatMap(tags)];
  try {
   for(const role of ['human','agent']) {
-   const mounts=[];
-   globalThis.metaviewerRoles={status:async()=>({role}),mount:async(...args)=>{mounts.push(args);return{ok:true};},resize:async()=>({ok:true}),close:async()=>({ok:true})};
+   const mounts=[],visibility=[];let closes=0,view={state:'ready'};
+   globalThis.metaviewerRoles={status:async()=>({role,view}),mount:async(...args)=>{mounts.push(args);return{ok:true};},
+    visibility:async(_id,value)=>{visibility.push(value);return{ok:true};},resize:async()=>({ok:true}),close:async()=>{closes++;return{ok:true};}};
    const root=node('root');
    const app=renderer.createApp({render:()=>vue.h(Component,{surfaceId:'surface',control:role==='human'?'human':'agent'},{default:()=>vue.h('canvas',{'data-input-path':true})})});
    try {
     app.mount(root);await new Promise(r=>setTimeout(r,20));await vue.nextTick();
     assert.equal(tags(root).includes('canvas'),role==='agent','canvas input path role isolation');
     assert.equal(mounts.length,role==='human'?1:0);
+    if(role==='human') {
+     viewport={...viewport,width:0};await new Promise(r=>setTimeout(r,130));
+     assert.deepEqual(visibility,[false]);assert.equal(closes,0);assert.equal(mounts.length,1);
+     viewport={...viewport,width:1280};await new Promise(r=>setTimeout(r,130));
+     assert.deepEqual(visibility,[false,true]);assert.equal(mounts.length,1);
+     view={state:'error',code:'XPRA_VIEW_CRASHED'};await new Promise(r=>setTimeout(r,130));await vue.nextTick();
+     const all=n=>[n,...n.children.flatMap(all)];
+     assert(all(root).some(n=>n.text==='XPRA_VIEW_CRASHED'));assert.equal(mounts.length,1);
+     const reopen=all(root).find(n=>n.tag==='button'&&n.text==='Reopen');assert(reopen);
+     view={state:'ready'};reopen.props.onClick();await new Promise(r=>setTimeout(r,20));assert.equal(mounts.length,2);
+     globalThis.metaviewerRoles.visibility=async()=>({ok:false,code:'XPRA_PAYLOAD_REFUSED'});
+     viewport={...viewport,width:0};await new Promise(r=>setTimeout(r,130));await vue.nextTick();
+     assert(all(root).some(n=>n.text==='XPRA_PAYLOAD_REFUSED'));
+     viewport={...viewport,width:1280};
+    }
    } finally { app.unmount(); }
   }
   let attempts=0;
@@ -218,6 +242,7 @@ test('both role mounts send the proven connection query; only watch requests rea
   assert.equal(q.get('connect'),'1');assert.equal(q.get('username'),'worker');
   assert.equal(q.get('encoding'),'rgb');assert.equal(q.get('bandwidth_limit'),'0');
   assert.equal(q.get('clipboard'),'false');assert.equal(q.get('notifications'),'false');
+  assert.equal(q.get('reconnect'),'false','host owns recovery instead of the broken native retry');
   assert.equal(q.get('readonly'),role==='agent'?'1':null);
   assert.equal(q.has('resize'),false);
  }
@@ -279,4 +304,131 @@ test('client readiness failure survives host IPC as a typed visible refusal',asy
 test('a renderer that never answers cannot bypass the readiness deadline',async()=>{
  await assert.rejects(waitForXpraClient({executeJavaScript:()=>new Promise(()=>{})},
   {writable:true,isActive:()=>true,timeoutMs:10}),{code:'XPRA_CLIENT_READY_TIMEOUT'});
+});
+
+// Deterministic scheduling proves retry bounds without wall-clock sleeps.
+test('recovery backoff resets only after readiness and stops on close',async()=>{
+ let active=true,ready=false,attempts=0;const queue=[],states=[];
+ const recovery=createXpraRecovery({isActive:()=>active,probe:async()=>false,
+  reconnect:async()=>{attempts++;if(!ready)throw Error('not ready');},onState:s=>states.push(s),
+  schedule:(fn,ms)=>{const row={fn,ms,cancelled:false};queue.push(row);return row;},cancel:row=>{if(row)row.cancelled=true;}});
+ const fire=async()=>{const row=queue.shift();assert(row);if(!row.cancelled)row.fn();await new Promise(r=>setImmediate(r));return row.ms;};
+ assert.equal(await fire(),250);assert.deepEqual(states,['reconnecting']);
+ for(const delay of [500,1000,2000,4000,5000,5000])assert.equal(await fire(),delay);
+ assert.equal(attempts,6);assert(!states.includes('ready'));
+ ready=true;assert.equal(await fire(),5000);assert.deepEqual(states,['reconnecting','ready']);
+ assert.equal(await fire(),250);assert.equal(queue[0].ms,500);
+ const pending=queue[0];recovery.stop();assert.equal(pending.cancelled,true);
+ active=false;await fire();assert.equal(attempts,7);assert.equal(queue.length,0);
+ assert.deepEqual([0,1,2,3,4,100].map(xpraRetryDelay),[500,1000,2000,4000,5000,5000]);
+});
+
+test('healthy bridge is reused; dead bridge is replaced without a stale capability',async()=>{
+ let healthy=true,bridgeCount=0,recover;const closed=[];
+ const make=()=>{const n=++bridgeCount;return{origin:'http://127.0.0.1:'+n,requestHeaders:{synthetic:'cap-'+n},
+  isHealthy:async()=>healthy,close:async()=>closed.push(n)};};
+ const session=createXpraHumanSession({role:'human',setReadonly:async()=>true,openBridge:async()=>make(),
+  showView:async(_bridge,fn)=>{recover=fn;return{close:async()=>{},resize(){},setVisible(){}};},closeTrace(){}});
+ await session.open();const initial=await recover();assert.equal(bridgeCount,1);
+ healthy=false;const next=await recover();assert.equal(bridgeCount,2);
+ assert.notEqual(next.origin,initial.origin);assert.notDeepEqual(next.requestHeaders,initial.requestHeaders);
+ assert.deepEqual(closed,[1]);await session.close();assert.deepEqual(closed,[1,2]);
+});
+
+test('close during bridge replacement revokes replacement before use',async()=>{
+ let recover,release,count=0;const closed=[];
+ const session=createXpraHumanSession({role:'agent',setReadonly:async()=>true,
+  openBridge:async()=>{const n=++count;if(n===2)await new Promise(r=>release=r);return{isHealthy:async()=>false,close:async()=>closed.push(n)};},
+  showView:async(_bridge,fn)=>{recover=fn;return{close:async()=>{},resize(){}};},closeTrace(){}});
+ await session.open();const flight=recover();await new Promise(r=>setImmediate(r));
+ const closing=session.close();release();await assert.rejects(flight,/SESSION_CLOSED/);await closing;
+ assert.deepEqual(closed,[1,2]);
+});
+
+test('human shortcuts reach contents while menu accelerators remain ignored',async()=>{
+ const f=fakeElectron();const tile=await attachXpraHumanTile({...f,bridge:{origin:'http://127.0.0.1:12345',requestHeaders:{}},bounds,
+  trace:{setActive(){},record(){}},isActive:()=>true,capsuleSize:()=>({width:1280,height:900}),onFailure:assert.fail});
+ const wc=tile.view.webContents;assert.equal(wc.menuShortcuts.at(-1),true);
+ for(const key of ['t','w','q','F4']){let prevented=false;wc.menuShortcuts.push(false);
+  wc.emit('before-input-event',{preventDefault(){prevented=true;}},{key,control:true,type:'keyDown'});
+  assert.equal(prevented,false);assert.equal(wc.menuShortcuts.at(-1),true);
+ }await tile.close();
+});
+
+test('child crash and hang are typed tile errors without closing parent',async()=>{
+ for(const [event,code] of [['render-process-gone','XPRA_VIEW_CRASHED'],['unresponsive','XPRA_VIEW_UNRESPONSIVE']]){
+  const f=fakeElectron(),failures=[],active=[];
+  const tile=await attachXpraHumanTile({...f,bridge:{origin:'http://127.0.0.1:12345',requestHeaders:{}},bounds,
+   trace:{setActive:v=>active.push(v),record(){}},isActive:()=>true,capsuleSize:()=>({width:1280,height:900}),onFailure:e=>failures.push(e)});
+  const wc=tile.view.webContents;wc.emit(event,{}, {reason:'crashed'});await new Promise(r=>setImmediate(r));
+  assert.equal(failures.length,1);assert.equal(failures[0].code,code);assert.equal(wc.closed,true);
+  assert.equal(f.children.length,0);assert.equal(active.at(-1),false);
+  wc.emit(event);await new Promise(r=>setImmediate(r));assert.equal(failures.length,1);
+  assert(f.window.contentView);await tile.close();
+ }
+});
+
+test('lost connection reloads current bridge and reruns readiness before recording',async()=>{
+ const f=fakeElectron(),states=[],active=[];let recoveries=0;
+ const initial={origin:'http://127.0.0.1:12345',requestHeaders:{synthetic:'first'}};
+ const replacement={origin:'http://127.0.0.1:12346',requestHeaders:{synthetic:'second'}};
+ const tile=await attachXpraHumanTile({...f,bridge:initial,bounds,trace:{setActive:v=>active.push(v),record(){}},
+  isActive:()=>true,capsuleSize:()=>({width:1280,height:900}),onFailure:assert.fail,onState:s=>states.push(s),
+  recoverBridge:async()=>{recoveries++;return replacement;}});
+ const wc=tile.view.webContents;f.readiness.ready=false;
+ const until=async check=>{const end=Date.now()+2500;while(!check()){if(Date.now()>end)assert.fail('deadline');await new Promise(r=>setTimeout(r,10));}};
+ await until(()=>states.includes('reconnecting'));assert.equal(active.at(-1),false);
+ await until(()=>wc.loads.length===2);assert.equal(recoveries,1);
+ assert(wc.loads.at(-1).startsWith(replacement.origin));assert.equal(states.at(-1),'reconnecting');
+ let result;f.requests.headers({url:replacement.origin+'/',requestHeaders:{}},r=>result=r);assert.equal(result.requestHeaders.synthetic,'second');
+ f.requests.headers({url:initial.origin+'/',requestHeaders:{}},r=>result=r);assert.equal(result.cancel,true);
+ f.readiness.ready=true;await until(()=>states.at(-1)==='ready');assert.equal(active.at(-1),true);
+ assert.equal(wc.loads.length,2);await tile.close();
+});
+
+test('blur bounds and visibility retain native contents and bridge',async()=>{
+ const f=fakeElectron();let failures=0;
+ const tile=await attachXpraHumanTile({...f,bridge:{origin:'http://127.0.0.1:12345',requestHeaders:{}},bounds,
+  trace:{setActive(){},record(){}},isActive:()=>true,capsuleSize:()=>({width:1280,height:900}),onFailure:()=>failures++});
+ const wc=tile.view.webContents;f.window.emit('blur');wc.emit('blur');
+ tile.setVisible(false);assert.equal(tile.view.visible,false);tile.resize({x:10,y:20,width:600,height:420});
+ tile.setVisible(true);f.window.emit('focus');wc.emit('focus');
+ assert.equal(wc.loads.length,1);assert.equal(wc.closed,false);assert.equal(failures,0);await tile.close();
+});
+
+test('host retains mounts across bounds and visibility and publishes typed child failures for Reopen',async t=>{
+ const f=await roleHostFixture(t);const surfaceId=f.surface.surface_id;
+ await f.request('mount',{surfaceId,bounds});
+ await f.request('mount',{surfaceId,bounds:{x:10,y:20,width:600,height:420}});
+ assert.equal(f.tileOptions.length,1);assert.equal(f.modes.length,1);
+ assert.deepEqual(await f.request('visibility',{surfaceId,visible:false}),{ok:true});
+ assert.deepEqual(await f.request('visibility',{surfaceId,visible:true}),{ok:true});
+ assert.deepEqual(await f.request('visibility',{surfaceId,visible:'false'}),{ok:false,code:'XPRA_PAYLOAD_REFUSED'});
+ f.tileOptions[0].onState('reconnecting');assert.equal((await f.request('status',{surfaceId})).view.state,'reconnecting');
+ await f.tileOptions[0].onFailure({code:'XPRA_VIEW_CRASHED'});
+ assert.deepEqual((await f.request('status',{surfaceId})).view,{state:'error',code:'XPRA_VIEW_CRASHED'});
+ assert(f.calls.includes('tile-close'));assert(f.calls.includes('bridge-close'));
+ await f.request('mount',{surfaceId,bounds});assert.equal(f.tileOptions.length,2);
+ await f.tileOptions[0].onFailure({code:'XPRA_VIEW_UNRESPONSIVE'});
+ assert.notEqual((await f.request('status',{surfaceId})).view.state,'error','stale failure cannot close the reopened session');
+});
+
+test('a child crash during initial readiness preserves its typed error',async()=>{
+ const f=fakeElectron(),failures=[];f.readiness.ready=false;
+ const pending=attachXpraHumanTile({...f,bridge:{origin:'http://127.0.0.1:12345',requestHeaders:{}},bounds,
+  trace:{setActive(){},record(){}},isActive:()=>true,capsuleSize:()=>({width:1280,height:900}),onFailure:e=>failures.push(e)});
+ await new Promise(r=>setTimeout(r,10));f.children[0].webContents.emit('render-process-gone',{}, {reason:'crashed'});
+ await assert.rejects(pending,{code:'XPRA_VIEW_CRASHED'});assert.equal(failures[0].code,'XPRA_VIEW_CRASHED');
+});
+
+test('host and native tile integrate child failure cleanup and explicit reopen',async t=>{
+ const f=await roleHostFixture(t,'human',null,true),surfaceId=f.surface.surface_id;
+ assert.deepEqual(await f.request('mount',{surfaceId,bounds}),{ok:true,role:'human'});
+ const old=f.f.children[0].webContents;old.emit('unresponsive');
+ await new Promise(r=>setTimeout(r,20));
+ assert.deepEqual((await f.request('status',{surfaceId})).view,{state:'error',code:'XPRA_VIEW_UNRESPONSIVE'});
+ assert.equal(f.f.children.length,0);assert(f.calls.includes('bridge-close'));
+ assert.deepEqual(await f.request('mount',{surfaceId,bounds}),{ok:true,role:'human'});
+ assert.equal(f.f.children.length,1);assert.notEqual(f.f.children[0].webContents,old);
+ assert.deepEqual((await f.request('status',{surfaceId})).view,{state:'ready'});
 });

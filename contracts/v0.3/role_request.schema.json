@@ -19,7 +19,8 @@
         "status",
         "mount",
         "resize",
-        "close"
+        "close",
+        "visibility"
       ]
     },
     "surfaceId": {
@@ -77,6 +78,9 @@
           "maximum": 16384
         }
       }
+    },
+    "visible": {
+      "type": "boolean"
     }
   },
   "allOf": [
@@ -140,6 +144,22 @@
         "required": [
           "surfaceId",
           "bounds"
+        ],
+        "maxProperties": 4
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "op": {
+            "const": "visibility"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "surfaceId",
+          "visible"
         ],
         "maxProperties": 4
       }

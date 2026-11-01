@@ -1,5 +1,6 @@
 // Native role view: separate sandboxed WebContentsView for native HTML5 input and pixels.
-import { xpraClientQuery, waitForXpraClient } from './xpraClient.js';
+import { xpraClientQuery, xpraReadyExpression, waitForXpraClient } from './xpraClient.js';
+import { createXpraRecovery } from './xpraRecovery.js';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
@@ -9,19 +10,20 @@ import { fileURLToPath } from 'node:url';
  * bounds:{x:number,y:number,width:number,height:number},
  * trace:ReturnType<typeof import('./humanTrace.js').createHumanTrace>,isActive:()=>boolean,writable?:boolean,
  * capsuleSize:()=>{width:number,height:number},
- * axContext?:()=>{sensitive?:boolean,password?:boolean,row?:number}|null,clientQuery?:string,onFailure:(error:unknown)=>void}} options
+ * axContext?:()=>{sensitive?:boolean,password?:boolean,row?:number}|null,clientQuery?:string,
+ * recoverBridge?:()=>Promise<any>,onState?:(state:string)=>void,onFailure:(error:unknown)=>void}} options
  */
 export async function attachXpraHumanTile({ electron, window, bridge, bounds, trace,
-  isActive, capsuleSize, writable = true, axContext = () => null, clientQuery = xpraClientQuery(writable), onFailure }) {
+  isActive, capsuleSize, writable = true, axContext = () => null, clientQuery = xpraClientQuery(writable),
+  recoverBridge = async () => bridge, onState = () => {}, onFailure }) {
   const { WebContentsView, session, ipcMain } = electron;
   if (typeof isActive !== 'function' || isActive() !== true || typeof capsuleSize !== 'function' ||
       typeof onFailure !== 'function') {
     throw Error('XPRA_HUMAN_LEASE_ABSENT');
   }
   const isolated = session.fromPartition(`xpra-human-${randomUUID()}`, { cache: false });
-  const origin = bridge.origin;
-  const websocketOrigin = origin.replace(/^http:/, 'ws:');
-  const filter = { urls: [`${origin}/*`, `${websocketOrigin}/*`] };
+  let origin = bridge.origin;
+  let websocketOrigin = origin.replace(/^http:/, 'ws:');
   /** @param {string} url */
   const localURL = url => url.startsWith(origin + '/') || url.startsWith(websocketOrigin + '/');
   isolated.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
@@ -30,15 +32,19 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
   isolated.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, (details, done) => {
     done({ cancel: !isActive() || !localURL(details.url) });
   });
-  isolated.webRequest.onBeforeSendHeaders(filter, (details, done) => {
-    if (!isActive()) { done({ cancel: true }); return; }
+  isolated.webRequest.onBeforeSendHeaders({ urls: ['<all_urls>'] }, (details, done) => {
+    if (!isActive() || !localURL(details.url)) { done({ cancel: true }); return; }
     done({ requestHeaders: { ...details.requestHeaders, ...bridge.requestHeaders } });
   });
   const view = new WebContentsView({ webPreferences: { session: isolated,
     sandbox: true, contextIsolation: true, nodeIntegration: false,
     preload: fileURLToPath(new URL('./xpraTracePreload.cjs', import.meta.url)),
-    webSecurity: true, allowRunningInsecureContent: false } });
+    backgroundThrottling: false, webSecurity: true, allowRunningInsecureContent: false } });
   const wc = view.webContents;
+  // This contents has its own input scope. Ignore Electron menu accelerators
+  // without cancelling the DOM event: Ctrl+Q/W/T must reach the remote desktop.
+  wc.setIgnoreMenuShortcuts(true);
+  wc.on('before-input-event', () => { wc.setIgnoreMenuShortcuts(true); });
   // Defense in depth: the OS layer has already acknowledged readonly.
   if (!writable) {
     wc.on('before-input-event', event => event.preventDefault());
@@ -50,6 +56,32 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
   wc.on('will-redirect', event => event.preventDefault());
   wc.setZoomFactor(1);
   let detached = false;
+  let failed = false;
+  let failure = /** @type {Error & {code:string}|undefined} */ (undefined);
+  let recovery = /** @type {ReturnType<typeof createXpraRecovery>|undefined} */ (undefined);
+  const live = () => !detached && !failed && isActive();
+  /** @param {string} code */
+  function fail(code) {
+    if (detached || failed) return;
+    failed = true;
+    recovery?.stop();
+    trace.setActive(false);
+    const error = Object.assign(Error(code), {code});
+    failure = error;
+    // Remove the failed contents so the parent's typed error and Reopen action
+    // can be seen. The host closes the bridge; never quit the app here.
+    void close().then(() => onFailure(error), () => onFailure(error));
+  }
+  wc.on('render-process-gone', () => fail('XPRA_VIEW_CRASHED'));
+  wc.on('unresponsive', () => fail('XPRA_VIEW_UNRESPONSIVE'));
+  /** @param {string} state */
+  function publish(state) {
+    if (!live()) return;
+    trace.setActive(state === 'ready');
+    onState(state);
+    void wc.executeJavaScript(`{const overlay=document.getElementById('metaviewer-reconnecting');if(overlay)overlay.hidden=${state === 'ready'};}`)
+      .catch(() => {});
+  }
   /** @param {{x:number,y:number,width:number,height:number}} rect */
   function resize(rect) {
     if (detached) throw Error('XPRA_VIEW_CLOSED');
@@ -73,8 +105,7 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
     } catch (error) {
       // Recording failure revokes the view and its open WebSocket. The host
       // must retain blocked core ownership; never resume an agent on this path.
-      trace.setActive(false);
-      void close().then(() => bridge.close()).then(() => onFailure(error), () => onFailure(error));
+      fail('XPRA_TRACE_FAILED');
     }
   };
   ipcMain.on('metaviewer:human-trace.v0.3', onTrace);
@@ -82,6 +113,7 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
   async function close() {
     if (detached) return;
     detached = true;
+    recovery?.stop();
     trace.setActive(false);
     ipcMain.removeListener('metaviewer:human-trace.v0.3', onTrace);
     try { window.contentView.removeChildView(view); } catch { /* parent already closed */ }
@@ -91,13 +123,36 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
     await isolated.clearStorageData();
   }
   try {
+    onState('connecting');
     resize(bounds);
     if (clientQuery && !/^\?[a-zA-Z0-9_=&.-]+$/.test(clientQuery)) throw Error('XPRA_QUERY_REFUSED');
     await wc.loadURL(origin + '/metaviewer-tile.html' + clientQuery);
-    await waitForXpraClient(wc, {writable, isActive});
-    if (!isActive()) throw Error('XPRA_HUMAN_LEASE_LOST');
-    trace.setActive(true);
+    await waitForXpraClient(wc, {writable, isActive:live});
+    if (!live()) throw Error('XPRA_HUMAN_LEASE_LOST');
+    publish('ready');
     if (writable) wc.focus();
-    return Object.freeze({ view, resize, close });
-  } catch (error) { await close(); throw error; }
+    recovery = createXpraRecovery({isActive:live,
+      probe:async () => {
+        // Bound a stalled renderer evaluation as well as a false result.
+        let timer;
+        try {
+          return await Promise.race([wc.executeJavaScript(xpraReadyExpression(writable)),
+            new Promise(resolve => { timer = setTimeout(() => resolve(false), 2000); })]) === true;
+        } finally { clearTimeout(timer); }
+      },
+      reconnect:async () => {
+        const nextBridge = await recoverBridge();
+        if (!live()) throw Error('XPRA_HUMAN_LEASE_LOST');
+        bridge = nextBridge;
+        origin = bridge.origin;
+        websocketOrigin = origin.replace(/^http:/, 'ws:');
+        // Reload through the same authenticated request hook. A replacement
+        // bridge supplies a fresh origin and capability, never a cached token.
+        await wc.loadURL(origin + '/metaviewer-tile.html' + clientQuery);
+        await waitForXpraClient(wc, {writable, isActive:live});
+      }, onState:publish});
+    return Object.freeze({ view, resize, close,
+      /** @param {boolean} visible */
+      setVisible(visible) { if (!detached) view.setVisible(visible); } });
+  } catch (error) { await close(); throw failure || error; }
 }

@@ -76,6 +76,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
   const roleOf = profile => raw[profile]?.role ?? 'agent';
   if (profiles.some(p => !['human','agent'].includes(roleOf(p.id)))) throw refuse('CAPSULE_ROLE_INVALID');
   const sessions = new Map();
+  const viewStates = new Map();
   const locks = new Set();
   const epochs = new Map();
   let creating = false, disposed = false;
@@ -89,13 +90,15 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
   /** @param {string} surfaceId */
   const status = surfaceId => {
     const s = authoritative(surfaceId);
-    return {role:roleOf(s.profile_id), profileId:s.profile_id, control:s.control};
+    return {role:roleOf(s.profile_id), profileId:s.profile_id, control:s.control,
+      view:viewStates.get(surfaceId) || {state:'closed'}};
   };
   /** @param {string} surfaceId */
   async function close(surfaceId) {
     epochs.set(surfaceId,(epochs.get(surfaceId) || 0) + 1);
     const session = sessions.get(surfaceId);
     sessions.delete(surfaceId);
+    viewStates.delete(surfaceId);
     await session?.close();
   }
   /** @param {string} surfaceId @param {any} bounds */
@@ -105,6 +108,12 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     locks.add(surfaceId);
     let trace = null;
     try {
+      const current = authoritative(surfaceId);
+      if (current.control !== (roleOf(current.profile_id) === 'human' ? 'human' : 'agent')) throw refuse('XPRA_ROLE_OWNERSHIP');
+      if (sessions.get(surfaceId)?.active) {
+        sessions.get(surfaceId).resize(bounds);
+        return {ok:true,role:roleOf(current.profile_id)};
+      }
       await close(surfaceId);
       const epoch = epochs.get(surfaceId);
       const surface = authoritative(surfaceId), role = roleOf(surface.profile_id);
@@ -135,11 +144,21 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
           catch (error) { if (env.MV_XPRA_JQUERY || /** @type {any} */ (error)?.code !== 'ENOENT') throw error; }
           return bridgeFactory({viewRoot:join(env.MV_SRF_STATE_DIR,'view'),capsule:binding.container,expectedSocketUid:10001,jquery});
         },
-        showView: bridge => tileFactory({electron,window,bridge,bounds,
+        showView: (bridge, recoverBridge) => tileFactory({electron,window,bridge,bounds,recoverBridge,
           trace:recorder || dummyTrace,isActive:active,writable:role === 'human',
           capsuleSize:() => ({width:1280,height:900}),
           clientQuery:xpraClientQuery(role === 'human'),
-          onFailure:() => { void close(surfaceId); }}),
+          onState: (/** @type {string} */ state) => {
+            if (active()) viewStates.set(surfaceId,{state});
+          },
+          onFailure: async (/** @type {any} */ error) => {
+            if (!active()) return;
+            const code = ['XPRA_VIEW_CRASHED','XPRA_VIEW_UNRESPONSIVE','XPRA_TRACE_FAILED'].includes(error?.code)
+              ? error.code : 'XPRA_TRACE_FAILED';
+            const closing = close(surfaceId);
+            viewStates.set(surfaceId,{state:'error',code});
+            try { await closing; } catch { /* typed error remains available for Reopen */ }
+          }}),
         closeTrace:() => recorder?.close(),
       });
       sessions.set(surfaceId,session);
@@ -183,7 +202,8 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     if (disposed || !admit(event) || !message || message.schema !== 'metaviewer.roles/v0.3') throw refuse('XPRA_SENDER_REFUSED');
     const {op} = message;
     const keys = ['choices'].includes(op) ? 'op,schema' : op === 'create' ? 'choice,op,schema'
-      : ['mount','resize'].includes(op) ? 'bounds,op,schema,surfaceId' : 'op,schema,surfaceId';
+      : ['mount','resize'].includes(op) ? 'bounds,op,schema,surfaceId'
+      : op === 'visibility' ? 'op,schema,surfaceId,visible' : 'op,schema,surfaceId';
     if (!exact(message,keys)) throw refuse('XPRA_PAYLOAD_REFUSED');
     try {
       if (op === 'choices') return await choices();
@@ -191,6 +211,12 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       if (op === 'status') return status(message.surfaceId);
       if (op === 'mount') return await mount(message.surfaceId,message.bounds);
       if (op === 'resize') { authoritative(message.surfaceId); sessions.get(message.surfaceId)?.resize(validateRoleBounds(message.bounds)); return {ok:true}; }
+      if (op === 'visibility') {
+        authoritative(message.surfaceId);
+        if (typeof message.visible !== 'boolean') throw refuse('XPRA_PAYLOAD_REFUSED');
+        sessions.get(message.surfaceId)?.setVisible(message.visible);
+        return {ok:true};
+      }
       if (op === 'close') { if (!id(message.surfaceId)) throw refuse('SURFACE_UNKNOWN'); await close(message.surfaceId); return {ok:true}; }
       throw refuse('XPRA_PAYLOAD_REFUSED');
     } catch (error) { return {ok:false,code:typeof /** @type {any} */ (error)?.code === 'string' ? /** @type {any} */ (error).code : 'XPRA_REFUSED'}; }

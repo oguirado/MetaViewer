@@ -140,6 +140,10 @@ export async function openXpraHumanBridge({ viewRoot, capsule, expectedSocketUid
   const origin = `http://${authority}`;
   return Object.freeze({
     origin,
+    async isHealthy() {
+      if (closed || !server.listening) return false;
+      try { return await inspect() === pinned; } catch { return false; }
+    },
     // Main-process capability only. Never return these headers over renderer IPC.
     requestHeaders: Object.freeze({ [AUTH]: token }),
     async close() {

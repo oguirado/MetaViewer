@@ -9,6 +9,7 @@ if (process.isMainFrame && location.origin === 'app://metaviewer') {
     status: surfaceId => invoke('status', {surfaceId}),
     mount: (surfaceId, bounds) => invoke('mount', {surfaceId,bounds}),
     resize: (surfaceId, bounds) => invoke('resize', {surfaceId,bounds}),
+    visibility: (surfaceId, visible) => invoke('visibility', {surfaceId,visible}),
     close: surfaceId => invoke('close', {surfaceId}),
   }));
 }
