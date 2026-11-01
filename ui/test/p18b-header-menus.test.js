@@ -81,7 +81,7 @@ async function modeOracle(source,role) {
     await openMenu(f);
     const actions=all(f.root).filter(n=>n.props?.role==='menuitem').map(text);
     assert.deepEqual(actions,role==='human'
-      ? ['Switch to agent mode','I logged in','Stop capsule']
+      ? ['Switch to agent mode','Mark as logged in','Stop capsule']
       : ['Switch to human mode','Watch read-only','Stop capsule','Take control (emergency)']);
     if(role==='agent')assert.equal(all(f.root).filter(n=>n.props?.role==='separator').length,1);
   },source);

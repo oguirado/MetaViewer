@@ -43,12 +43,16 @@ export function isModalActive(doc = globalThis.document) {
   if (body.dataset && body.dataset.mvModal !== undefined && body.dataset.mvModal !== 'false') return true;
   return Boolean(body.props?.['data-mv-modal']);
 }
+/** Ancestor walks stop here, and on a cycle, so a malformed tree cannot spin. */
+export const MAX_ANCESTORS = 64;
 /** @param {any} el */
-function collectClipRects(el) {
+export function collectClipRects(el) {
   const scrollAncestors = [];
   let wallViewport = null;
   const doc = globalThis.document;
-  for (let cur = el?.parentElement ?? el?.parent; cur && cur !== doc?.body && cur !== doc?.documentElement; cur = cur.parentElement ?? cur.parent) {
+  const seen = new Set();
+  for (let cur = el?.parentElement ?? el?.parent; cur && cur !== doc?.body && cur !== doc?.documentElement && !seen.has(cur) && seen.size < MAX_ANCESTORS; cur = cur.parentElement ?? cur.parent) {
+    seen.add(cur);
     if (cur.tag === 'root' || typeof cur.getBoundingClientRect !== 'function') continue;
     const rect = cur.getBoundingClientRect();
     if (!rect) continue;
@@ -172,7 +176,9 @@ function bindScrollListeners() {
   const targets = new Set();
   if (typeof globalThis.window?.addEventListener === 'function') targets.add(globalThis.window);
   if (typeof globalThis.document?.addEventListener === 'function') targets.add(globalThis.document);
-  for (let cur = /** @type {any} */ (root.value); cur; cur = cur.parentElement ?? cur.parent) {
+  const seen = new Set();
+  for (let cur = /** @type {any} */ (root.value); cur && !seen.has(cur) && seen.size < MAX_ANCESTORS; cur = cur.parentElement ?? cur.parent) {
+    seen.add(cur);
     if (typeof cur.addEventListener === 'function') targets.add(cur);
   }
   const wallEl = typeof globalThis.document?.getElementById === 'function' ? globalThis.document.getElementById('shell-wall') : null;
@@ -243,7 +249,7 @@ onBeforeUnmount(() => { overlays?.set(menuOwner, false); globalThis.document?.re
         <button type="button" :id="`tile-menu-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/menu`" class="mv-role-menu-button" :aria-label="`${label || surfaceId}: ${role} tile menu`" aria-haspopup="menu" :aria-controls="`tile-actions-${surfaceId}`" :aria-expanded="menuOpen" :disabled="!!progress" @click="menuOpen = !menuOpen">⋮</button>
         <div v-if="menuOpen" ref="menuPopup" :id="`tile-actions-${surfaceId}`" popover="manual" class="mv-menu-popover" role="menu" :aria-label="`${role} tile actions`">
           <button :id="`tile-switch-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/mode/switch`" role="menuitem" type="button" :disabled="!!progress" @click="runMenu(() => lifecycle('switchMode'))">Switch to {{ role === 'human' ? 'agent' : 'human' }} mode</button>
-          <button v-if="role === 'human'" role="menuitem" :id="`tile-login-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/login/confirm`" type="button" :disabled="confirmed || !!progress" @click="runMenu(confirmLogin)">{{ confirmed ? 'Login confirmed' : 'I logged in' }}</button>
+          <button v-if="role === 'human'" role="menuitem" :id="`tile-login-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/login/confirm`" title="Remembers that this identity has a signed-in session; shown as Last login in Identities." type="button" :disabled="confirmed || !!progress" @click="runMenu(confirmLogin)">{{ confirmed ? 'Marked as logged in' : 'Mark as logged in' }}</button>
           <button v-if="role === 'agent' && control === 'agent'" role="menuitem" :id="`tile-watch-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/watch`" type="button" @click="runMenu(() => watching = !watching)">{{ watching ? 'Close watch' : 'Watch read-only' }}</button>
           <button :id="`tile-stop-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/stop`" role="menuitem" type="button" :disabled="!!progress" @click="runMenu(() => lifecycle('stop'))">Stop capsule</button>
           <template v-if="role === 'agent'"><hr role="separator"><button :aria-label="`Take control of ${label || surfaceId} (emergency)`" :id="`tile-take-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/control/emergency`" role="menuitem" type="button" :disabled="!canTakeControl" @click="runMenu(() => emit('take-control'))">Take control (emergency)</button></template>
