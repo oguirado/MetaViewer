@@ -15,9 +15,9 @@ privately with the tracked memoryweb-builtin schemas; Corpus still checks them
 against the Wender pin. The site directory is copied whole, never merged.
 [TARGET, unit decision] min_notice_s is honoured by announcing the run on stderr
 and waiting before the owner starts; notices above 300 s refuse MW_NOTICE.
-[TARGET, unit decision] Native AX withholds field values and reports value_len
-code points; the owner's length seam reads len(value), so textbox/combobox rows
-gain a U+2022 mask of that length. No field content is read or stored.
+[TARGET, unit decision] Slot evidence reads the focused editor's own native
+text-container ID when AX value text is absent. Length masks are not content
+proof. Missing, truncated or differently bound native text refuses before input.
 [TARGET, unit decision] Observations carry the native window url and, from
 native AX only, an observed_wall marker for a CAPTCHA cue or a sign-in dialog.
 The marker only stops the run for a human; nothing is clicked or solved.
@@ -49,6 +49,7 @@ import stat
 import subprocess
 import sys
 import time
+from types import FunctionType
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -56,7 +57,6 @@ ATTACH_KEYS = ('MV_CORE_CONFIG', 'XDG_RUNTIME_DIR', 'MV_SRF_BIN_DIR', 'MV_SRF_ST
                'SRF_IDENTITY_STORE_ROOT', 'SRF_PROXY_REGISTRY')
 SCHEMA_KINDS = ('site', 'workflow', 'step', 'run')
 MAX_NOTICE_S = 300
-MASK = '•'
 CAPTCHA_CUES = {
     'checkbox': {"i'm not a robot", 'no soy un robot', 'verify you are human',
                  'verifica que eres un ser humano'},
@@ -80,9 +80,47 @@ home_check = module('mv_entry_home_check', ROOT / 'tools/mw_home_check.py')
 from metaviewer_agents import tools
 from metaviewer_agents.client import ClientError, ToolClient
 from metaviewer_agents.mw_home import HomeError, canonical_home, check_home, resolve_home, site_root
-from metaviewer_agents.mw_owner import Corpus, OwnerRefused, ReplayOwner, bounded_read, need
+from metaviewer_agents.mw_owner import Corpus, OwnerRefused, ReplayOwner, bounded_read, need, focus_only_steps
 from metaviewer_agents.perception.deps_lock import DependencyLockError
 from metaviewer_agents.verify import build_proposal
+
+
+def readback_runner(mw, owner):
+    """Invocation-local Wender namespace; never mutate the pinned dependency.
+
+    Its _observe precheck otherwise rejects the expired paste slot deadline
+    before the agent acquisition seam can run. Only post-receipt slot-length
+    acquisition receives the independent verification window. All other time
+    checks, including delivery and step verification, retain their deadlines.
+    """
+    namespace = dict(vars(mw))
+    for name, value in vars(mw).items():
+        if isinstance(value, FunctionType) and value.__globals__ is vars(mw):
+            namespace[name] = FunctionType(value.__code__, namespace, value.__name__,
+                                           value.__defaults__, value.__closure__)
+            namespace[name].__kwdefaults__ = value.__kwdefaults__
+    observe = namespace['_observe']
+
+    def bounded_observe(predicate, state, owners, deadline):
+        window = getattr(owner, 'slot_readback_deadline_ns', None)
+        if (owners.observations is owner and window is not None and
+                predicate.get('capability_id') == 'mv.ax.length.v1'):
+            try:
+                need(time.monotonic_ns() < window, 'MW_SLOT_READBACK_DEADLINE')
+                result = observe(predicate, state, owners, window)
+                need(time.monotonic_ns() < window, 'MW_SLOT_READBACK_DEADLINE')
+                return result
+            except BaseException as error:
+                if time.monotonic_ns() >= window:
+                    owner.slot_readback_error = 'MW_SLOT_READBACK_DEADLINE'
+                    raise OwnerRefused(owner.slot_readback_error) from error
+                raise
+            finally:
+                owner.slot_readback_deadline_ns = None
+        return observe(predicate, state, owners, deadline)
+
+    namespace['_observe'] = bounded_observe
+    return namespace['run_workflow']
 
 
 def command(argv, **kwargs):
@@ -174,6 +212,37 @@ def stage_corpus(home, site, evidence):
         ReplayOwner.write(target, raw)
     return staged, 'staged_builtin_schemas'
 
+
+
+def focus_corpus(corpus, evidence):
+    """[TARGET, unit decision] Explicit invocation projection; source stays sealed."""
+    steps = focus_only_steps(corpus.workflow)
+    if not steps:
+        return corpus, None
+    projected = copy.deepcopy(corpus.workflow)
+    for step in projected['steps']:
+        if any(s['seq'] == step['seq'] for s in steps):
+            step['already_satisfied'] = copy.deepcopy(step['verify']['predicate'])
+    root = Path(evidence) / 'focus-corpus'
+    for directory, names, files in os.walk(corpus.root, followlinks=False):
+        if Path(directory) == corpus.root:
+            names[:] = [name for name in names if name in ('sites', 'standards')]
+        for name in names + files:
+            need(not (Path(directory) / name).is_symlink(), 'MW_HOME_SYMLINK')
+        for name in files:
+            path = Path(directory) / name
+            # Corpus roots may contain invocation evidence: copy only site/schema data.
+            relative = path.relative_to(corpus.root)
+            if relative.parts[0] not in ('sites', 'standards'):
+                continue
+            target = root / relative
+            target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            raw = ((corpus.gate.canon(projected) + '\n').encode() if path == corpus.path
+                   else bounded_read(path, corpus.root, 1024 * 1024))
+            ReplayOwner.write(target, raw)
+    derived = Corpus(root, corpus.workflow['site_id'] + '/' + corpus.workflow['id'], corpus.api)
+    return derived, dict(rule='focus-only composer click before paste',
+        source_sha256=corpus.pins[corpus.path], projected_sha256=derived.pins[derived.path])
 
 def wait_notice(corpus, identity, network, clock=time.monotonic_ns, sleep=time.sleep):
     """Announce the run, then wait the declared advance notice; return its mono_ns."""
@@ -387,10 +456,36 @@ class HostBackend:
         tree = self.native(self.binary, ['ax', '--container', self.capsule, '--window', 'w1',
                                          '--state-dir', str(self.state)])
         for row in tree.get('elements', []) if isinstance(tree.get('elements'), list) else []:
-            if (isinstance(row, dict) and row.get('role') in ('textbox', 'combobox') and 'value' not in row
-                    and type(row.get('value_len')) is int and 0 <= row['value_len'] <= 65536):
-                row['value'] = MASK * row['value_len']
+            if (isinstance(row, dict) and row.get('role') in ('textbox', 'combobox')
+                    and row.get('focused') is True and not isinstance(row.get('value'), str)):
+                row['value'] = self.slot_text(row)
         return tree
+
+    def slot_text(self, row):
+        """Read the editor itself, never its label or a broader ancestor."""
+        selector = row.get('id')
+        need(isinstance(selector, str) and bool(selector), 'MW_SLOT_LENGTH_MISSING_EDITOR_ID')
+        try:
+            reply = self.native(self.binary, ['ax', '--container', self.capsule, '--window', 'w1',
+                '--state-dir', str(self.state), '--text-container', selector])
+        except (OwnerRefused, OSError, ValueError, subprocess.SubprocessError) as error:
+            raise OwnerRefused('MW_SLOT_LENGTH_MISSING_READABLE_TEXT') from error
+        text = reply.get('text')
+        rows = reply.get('elements', [])
+        matches = [r for r in rows if isinstance(r, dict) and r.get('id') == selector]
+        need(len(matches) == 1 and all(matches[0].get(k) == row.get(k)
+             for k in ('id', 'role', 'name', 'box', 'focused')) and
+             matches[0].get('focused') is True and reply.get('truncated') is False,
+             'MW_SLOT_LENGTH_EDITOR_BINDING')
+        need(isinstance(text, dict) and text.get('container_id') == selector and
+             isinstance(text.get('text'), str), 'MW_SLOT_LENGTH_MISSING_READABLE_TEXT')
+        value = text['text']
+        need(text.get('bytes') == len(value.encode('utf-8')) and
+             len(value.encode('utf-8')) < 65536, 'MW_SLOT_LENGTH_TRUNCATED_TEXT')
+        native_length = matches[0].get('value_len')
+        need(native_length is None or type(native_length) is int and native_length == len(value),
+             'MW_SLOT_LENGTH_TEXT_MISMATCH')
+        return value
 
     def observe(self, timeout_ms):
         observed = dict(tools.observe(self.surface_id, client=self.client, timeout_ms=timeout_ms))
@@ -714,6 +809,10 @@ def slots(values):
 def execute(args, home, evidence, backend, *, corpus_factory=Corpus, owner_factory=ReplayOwner, trace=None):
     root, basis = stage_corpus(home, args.site, evidence)
     corpus = corpus_factory(root, args.site + '/' + args.workflow)
+    if isinstance(corpus, Corpus):
+        corpus, projection = focus_corpus(corpus, evidence)
+        if trace is not None and projection is not None:
+            trace['focus_projection'] = projection
     network = backend.call('network_context')['mode']
     output = evidence / 'memoryweb-run.json'
     notice = wait_notice(corpus, args.identity, network)
@@ -721,7 +820,8 @@ def execute(args, home, evidence, backend, *, corpus_factory=Corpus, owner_facto
         trace.update(corpus=basis, notice_s=(time.monotonic_ns() - notice) // 1_000_000_000)
     owner = owner_factory(backend, corpus, output, mode='site',
                          notice=dict(mode='site', network=network, acknowledged=True, mono_ns=notice),
-                         slot_values=slots(args.slot))
+                         slot_values=slots(args.slot), readback_ci=bool(os.environ.get('CI')),
+                         readback_runner=readback_runner)
     try:
         result = owner.run()
     except OwnerRefused as error:
@@ -732,6 +832,7 @@ def execute(args, home, evidence, backend, *, corpus_factory=Corpus, owner_facto
                          f'--repo <MetaViewer checkout> --workflow {args.site}/{args.workflow}') from error
         raise
     if trace is not None:
+        trace['focus_steps'] = getattr(owner, 'focus_evidence', [])
         trace['diagnostic'] = result.diagnostic
         if hasattr(backend, 'frame_attempts'):
             trace['frame_attempts'] = backend.frame_attempts

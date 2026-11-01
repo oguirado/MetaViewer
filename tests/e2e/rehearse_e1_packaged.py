@@ -139,8 +139,14 @@ def validate_run(result, expected):
     require(report['attach'] == 'discovered', 'attach path was bypassed')
     if expected[0] == 0:
         require(receipt['rc'] == 0 and receipt['verdict_code'] == 'VERIFIED', 'receipt refused')
-        require((receipt['steps_total'], receipt['steps_verified'], receipt['steps_failed']) == (3, 3, 0),
-                'workflow steps not verified')
+        focus = report.get('focus_steps', [])
+        skipped = [step for step in focus if step.get('core_action_verified') is False
+                   and step.get('seq') == 1]
+        require(len(focus) == len(skipped) and len(skipped) <= 1
+                and receipt.get('steps_skipped_satisfied') == len(skipped),
+                'focus skip lacks core_action_verified:false')
+        require((receipt['steps_total'], receipt['steps_verified'], receipt['steps_failed']) ==
+                (3, 3 - len(skipped), 0), 'workflow steps not verified')
         answer = Path(report['answer']['path'])
         require(report['answer']['captured'] is True and answer.name == 'answer.txt'
                 and answer.read_text() == ANSWER, 'answer capture mismatch')
@@ -895,7 +901,8 @@ def self_test():
                 report = work / 'report.json'
                 report.write_text(json.dumps(dict(attach='discovered', answer=dict(captured=True, path=str(answer)))))
                 receipt = work / 'memoryweb-run.json'
-                summary = dict(rc=0, verdict_code='VERIFIED', steps_total=3, steps_verified=3, steps_failed=0)
+                summary = dict(rc=0, verdict_code='VERIFIED', steps_total=3, steps_verified=3,
+                               steps_failed=0, steps_skipped_satisfied=0)
                 receipt.write_text(json.dumps(summary))
                 value = dict(schema='metaviewer.mw_run/v1', rc=0, verdict_code='VERIFIED',
                              receipt=str(receipt), report=str(report))

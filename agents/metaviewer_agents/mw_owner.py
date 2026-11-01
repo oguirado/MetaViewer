@@ -5,6 +5,9 @@ perceive, state, ax, ownership, propose and wait_verify operations. Its propose
 operation owns the core/AdmittedExecutor boundary. This module has no native
 input capability. Only T1 element anchors and registered AX predicates are
 supported; pixel templates, visual masks and promotion refuse.
+[TARGET, unit decision] An invocation projection may declare already_satisfied
+for a focus-only composer click. Native evidence uses a unique grounded editor
+row and literal focused:true; satisfied_skip is never a core-action receipt.
 [TARGET, unit decision] slot_values is an invocation-only in-process mapping.
 Private slots use fresh focused AX text for code-point lengths and the existing
 core type proposal/receipt path. No clipboard owner or native paste exists.
@@ -33,6 +36,16 @@ from .executor import AdmittedExecutor
 from .tools import _check_action, _check_verdict_admitted
 
 
+# [TARGET, unit decision] Verification is separate from paste delivery: a fresh
+# bounded window starts only after the core receipt binding has been validated.
+SLOT_READBACK_WINDOW_MS = 10_000
+
+
+def slot_readback_window_ns(ci=False):
+    return SLOT_READBACK_WINDOW_MS * (2 if ci else 1) * 1_000_000
+
+
+
 class OwnerRefused(ValueError):
     def __init__(self, code):
         self.code = code
@@ -42,6 +55,12 @@ class OwnerRefused(ValueError):
 def need(value, code='OUT_OF_SUPPORT'):
     if not value:
         raise OwnerRefused(code)
+
+
+def sleep_ns(ns):
+    """Wender's RunOwners.sleep accepts nonnegative integer nanoseconds."""
+    need(type(ns) is int and ns >= 0, 'MW_SLEEP_NS')
+    time.sleep(ns / 1e9)
 
 
 def wender_api():
@@ -118,6 +137,33 @@ class Corpus:
                    for p, pin in self.pins.items())
 
 
+def focus_only_steps(workflow):
+    """Focus-only composer clicks, declared by focus verification then paste."""
+    result = []
+    for step, following in zip(workflow['steps'], workflow['steps'][1:]):
+        action, target, verify = step['action'], step['target'], step['verify']
+        predicate = verify.get('predicate')
+        if (action['kind'] != 'click' or action['button'] != 1 or
+                any(action.get(k) is not None for k in
+                    ('destination', 'text_slot', 'key_name', 'dx_px', 'dy_px')) or
+                action['path'] != 'coordinates' or target is None or
+                not ReplayOwner.target_supported(target) or
+                target['offset_dx_px'] != 0 or target['offset_dy_px'] != 0 or
+                step['already_satisfied'] is not None or step['when'] is not None or
+                step['repeat'] is not None or step['capture_before'] or step['fallback_targets'] or
+                verify['mode'] != 'state_signal' or verify['busy_predicate'] is not None or
+                verify['fallback_verifiers'] or not ReplayOwner.predicate_supported(predicate) or
+                predicate['capability_id'] != 'mv.ax.focus.v1'):
+            continue
+        present = dict(predicate, capability_id='mv.ax.present.v1')
+        if (target['anchor_ref'] == 'ax:' + predicate['bindings'][0]['value'] and
+                target['frame_predicate'] == present and
+                following['action']['kind'] == 'paste' and following['target'] is None and
+                predicate in following['preconditions']):
+            result.append(step)
+    return result
+
+
 class PrivateSlots:
     """Invocation-owned values; never resolve values or paths from corpus bytes."""
     def __init__(self, owner, values):
@@ -126,6 +172,7 @@ class PrivateSlots:
         self.values = dict(values or {})
         self.pending = None
         self.normalized = {}
+        self.observed_text = None
 
     def normalize(self, slot):
         # [TARGET, unit decision] Normalize one terminal line ending only.
@@ -162,6 +209,7 @@ class PrivateSlots:
         o.check_text(value, min(slot['max_length'], max_bytes))
         binding = o.length_binding(slot['slot_id'])
         initial = o.acquire(binding.predicate, state.deadline_ns).value
+        need(self.observed_text in ('', value), 'MW_SLOT_INITIAL_TEXT')
         need(not slot['clear_first'] or initial == 0 and initial in slot['empty_len_allowed'], 'MW_SLOT_INITIAL')
         self.pending = (slot['slot_id'], value, initial)
         return o.mw.PrivateSlot(value, initial, o.scope, o.authority, 'private_pipe', o.answer(True))
@@ -170,11 +218,17 @@ class PrivateSlots:
         o = self.owner
         return o.answer(self.pending is not None and self.pending[0] == slot['slot_id'] and
                         len(self.pending[1]) == length and self.pending[2] == initial and
+                        self.observed_text == self.pending[1] and
                         bool(o.receipts) and o.last_send == state.input_ns)
 
 
 class ReplayOwner:
-    def __init__(self, backend, corpus, output, *, mode='replay', notice=None, slot_values=None):
+    def __init__(self, backend, corpus, output, *, mode='replay', notice=None, slot_values=None, readback_ci=False, readback_runner=None):
+        need(type(readback_ci) is bool, 'MW_SLOT_READBACK_CONFIG')
+        self.readback_ci = readback_ci
+        self.readback_runner = readback_runner
+        self.slot_readback_deadline_ns = None
+        self.slot_readback_error = None
         need(mode in ('replay', 'site'), 'MW_NETWORK')
         self.mode = mode
         self.network = 'offline fixtures' if mode == 'replay' else None
@@ -193,6 +247,8 @@ class ReplayOwner:
         self.send_ready = False
         self.publications, self.targets = {}, {}
         self.receipts = []
+        self.focus_evidence = []
+        self.focus_predicates = {}
         self.events, self.staged = [], {}
         self.secret = os.urandom(32)
         self.used = 0
@@ -385,8 +441,15 @@ class ReplayOwner:
             need(len(rows) == 1 and (rows[0].get('focused') is True or
                  rows[0].get('states', {}).get('focused') in (True, 'true')), 'MW_SLOT_FOCUS')
             text = rows[0].get('value', rows[0].get('text'))
-            need(type(text) is str, 'MW_SLOT_LENGTH')
+            need(type(text) is str, 'MW_SLOT_LENGTH_MISSING_READABLE_TEXT')
+            # [TARGET, unit decision] Keep exact private read-back for slot verification.
+            # Equal lengths, prefixes and nonempty strings are insufficient.
+            self.slots.observed_text = text
             return self.publication(predicate, sensed, len(text))
+        focus_step = self.focus_predicates.get(id(predicate))
+        if focus_step is not None:
+            return self.publication(predicate, sensed,
+                                    self.focus_row(focus_step['target'], sensed) is not None)
         value = bool(rows)
         if predicate['capability_id'] == 'mv.ax.focus.v1':
             value = len(rows) == 1 and (rows[0].get('focused') is True or
@@ -529,8 +592,51 @@ class ReplayOwner:
     def equivalent(self, a, b):
         return self.answer(a == b)
 
+    def _bind_locator_run(self, state):
+        # The pinned runner exposes this hook before execution. Object identity
+        # keeps stricter skip evidence separate from ordinary paste focus checks.
+        self.focus_predicates = {id(s['already_satisfied']): s for s in state.workflow['steps']
+                                 if s['already_satisfied'] is not None and self.is_focus_projection(s)}
+
+    def is_focus_projection(self, step):
+        original = copy.deepcopy(self.corpus.workflow)
+        candidate = next(s for s in original['steps'] if s['seq'] == step['seq'])
+        candidate['already_satisfied'] = None
+        return (step['already_satisfied'] == step['verify']['predicate'] and
+                any(s['seq'] == step['seq'] for s in focus_only_steps(original)))
+
+    @staticmethod
+    def focus_row(spec, sensed):
+        # Wender IDs are derived, native IDs are opaque: bind their unique name,
+        # role and exact rectangle in the SAME acquisition, then retain native ID.
+        name = spec['anchor_ref'][3:]
+        grounded = [r for r in sensed['state']['nodes'] if r['name'] == name and r['actionable']]
+        rows = [r for r in sensed['ax'] if r.get('name') == name]
+        focused = [r for r in sensed['ax'] if r.get('focused') is True]
+        if len(grounded) != 1 or len(rows) != 1 or len(focused) != 1:
+            return None
+        row, target = rows[0], grounded[0]
+        if sum(r.get('id') == row.get('id') for r in sensed['ax']) != 1:
+            return None
+        if (row is not focused[0] or not isinstance(row.get('id'), str) or not row['id'] or
+                row.get('role') not in ('textbox', 'combobox') or
+                row['role'] != target['role'] or row.get('box') != target['box']):
+            return None
+        AdmittedExecutor.check_target(target, latest=sensed['state']['nodes'], frame=sensed['frame'])
+        return row
+
     def satisfaction(self, step, state):
         predicate = step['already_satisfied']
+        if self.is_focus_projection(step):
+            target = self.target(step['target'], state, state.deadline_ns)
+            row = self.focus_row(step['target'], self.latest)
+            if row is None or self.validate_target(step['target'], target, state).result is not self.Truth.TRUE:
+                return self.answer(False)
+            self.focus_evidence.append(dict(seq=step['seq'], status='met-by-evidence',
+                result='focus: already-focused (AX)', ax_row_id=row['id'],
+                role=row['role'], core_action_verified=False,
+                frame={k: self.latest['frame'][k] for k in ('surface_id', 'generation', 'sha256')}))
+            return self.answer(True)
         return self.answer(self.predicate_supported(predicate) and
                            self.acquire(predicate, state.deadline_ns).value is True)
 
@@ -659,6 +765,9 @@ class ReplayOwner:
             normalization = self.slots.normalized.get(self.slots.pending[0])
             if normalization:
                 self.receipts[-1]['normalized'] = normalization
+        if action.get('kind') == 'type' and self.slots.pending:
+            self.slot_readback_deadline_ns = min(
+                self.limits.deadline_ns, time.monotonic_ns() + slot_readback_window_ns(self.readback_ci))
         self.last_send = input_ns
         return input_ns
 
@@ -748,6 +857,11 @@ class ReplayOwner:
         need(inventory == expected and (summary['rc'] != 0 or self.final_pass), 'MW_JOURNAL')
         if self.handoff.latched:
             summary['evidence_refs'].append(self.handoff.path.name)
+        if self.focus_evidence:
+            evidence = self.output.with_suffix('.focus.json')
+            if not evidence.exists():
+                self.write(evidence, (self.gate.canon({'steps': self.focus_evidence}) + '\n').encode())
+            summary['evidence_refs'].append(evidence.name)
         if self.slots.normalized:
             # Run report evidence contains slot identifiers and reasons only.
             report = self.output.with_suffix('.normalization.json')
@@ -800,7 +914,7 @@ class ReplayOwner:
             authorization=self, capabilities=self, observations=self, ram=self, transport=self,
             slots=self.slots, slot_length_bindings=tuple(self.length_binding(s['slot_id'])
                 for s in self.corpus.workflow['text_slots']), resources=self, journal=self, dispatch=self.dispatch, surface=self.surface,
-            replay_policy=None, clock=time.monotonic_ns, sleep=time.sleep, limits=self.limits,
+            replay_policy=None, clock=time.monotonic_ns, sleep=sleep_ns, limits=self.limits,
             scope=self.scope, authority=self.authority, run_id='mv-mw-' + uuid.uuid4().hex,
             # Pinned Wender's replay execution lane also runs site workflows;
             # capsule network policy belongs solely to this owner's context.
@@ -821,6 +935,9 @@ class ReplayOwner:
         self.validate_corpus()
         self.check_network()
         owners = self.owners()
-        result = self.mw.run_workflow(self.corpus.path, bundle=self.corpus.bundle, owners=owners, limits=self.limits)
+        runner = (self.mw.run_workflow if self.readback_runner is None else
+                  self.readback_runner(self.mw, self))
+        result = runner(self.corpus.path, bundle=self.corpus.bundle, owners=owners, limits=self.limits)
+        need(not self.slot_readback_error, 'MW_SLOT_READBACK_DEADLINE')
         return HandoffResult(result.rc, result.verdict_code, result.summary, result.diagnostic,
                              str(self.handoff.path) if self.handoff.latched else None)

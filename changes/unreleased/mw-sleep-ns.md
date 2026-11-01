@@ -1,0 +1,1 @@
+- Convert Wender owner sleep durations from integer nanoseconds to seconds, refusing boolean, floating-point and negative durations with `MW_SLEEP_NS`. Cover delayed focus verification through the pinned replay loop with a virtual clock and a wall timeout, so a pending poll respects its deadline.
