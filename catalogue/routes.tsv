@@ -137,6 +137,7 @@ p12-display-tap.md	changes/unreleased/p12-display-tap.md
 u1-pty-pkg-revert.md	changes/unreleased/u1-pty-pkg-revert.md
 u3-broker-classes.md	changes/unreleased/u3-broker-classes.md
 u5a-multislot-ui.md	changes/unreleased/u5a-multislot-ui.md
+witness-bind.md	changes/unreleased/witness-bind.md
 actionp-0ef0ddb499b4	contracts/examples/action_proposal.invalid.schema.json
 actionp-215c1416bbcf	contracts/examples/action_proposal.valid.json
 actionr-3778f6831d07	contracts/examples/action_receipt.invalid.schema.json
@@ -811,6 +812,7 @@ manager_a2_test.go	daemon-adapter/internal/capsule/manager_a2_test.go
 manager-26328fbfd05f	daemon-adapter/internal/capsule/manager_handoff_test.go
 manager_race_test.go	daemon-adapter/internal/capsule/manager_race_test.go
 manager_test.go	daemon-adapter/internal/capsule/manager_test.go
+manager-45128b0f2097	daemon-adapter/internal/capsule/manager_witness_test.go
 mut_capsule_test.go	daemon-adapter/internal/capsule/mut_capsule_test.go
 mut_lost_test.go	daemon-adapter/internal/capsule/mut_lost_test.go
 native_test.go	daemon-adapter/internal/capsule/native_test.go
