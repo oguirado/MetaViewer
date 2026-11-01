@@ -3,6 +3,7 @@ package capsule
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -13,6 +14,8 @@ import (
 
 	"metaviewer/daemon-adapter/internal/cli"
 )
+
+const defaultHoldCleanupTimeout = 5 * time.Second
 
 func processTimeoutScale() time.Duration {
 	if raw := strings.TrimSpace(os.Getenv("MV_CI_TIMEOUT_SCALE")); raw != "" {
@@ -26,10 +29,25 @@ func processTimeoutScale() time.Duration {
 	return 1
 }
 
-// holdFifos creates a (ready, release) FIFO pair. A background goroutine waits
-// for the child to signal readiness on readyFifo, then holds releaseFifo open
-// until closeHold runs (or releases after releaseAfter if non-zero).
-func holdFifos(t *testing.T, releaseAfter time.Duration) (string, string) {
+type holdFifoHooks struct {
+	cleanupTimeout    time.Duration
+	beforeOpenReady   func()
+	afterOpenReady    func()
+	beforeOpenRelease func()
+	beforeWaitDone    func()
+}
+
+type fifoHold struct {
+	ready   string
+	release string
+	stop    chan struct{}
+	done    chan struct{}
+	timeout time.Duration
+	hooks   holdFifoHooks
+	closed  bool
+}
+
+func newHoldFifos(t *testing.T, releaseAfter time.Duration, hooks holdFifoHooks) *fifoHold {
 	t.Helper()
 	dir := t.TempDir()
 	ready := filepath.Join(dir, "ready.fifo")
@@ -40,47 +58,217 @@ func holdFifos(t *testing.T, releaseAfter time.Duration) (string, string) {
 	if err := syscall.Mkfifo(release, 0600); err != nil {
 		t.Fatal(err)
 	}
-	stop := make(chan struct{})
-	done := make(chan struct{})
-	var closed bool
-	t.Cleanup(func() {
-		if !closed {
-			closed = true
-			close(stop)
-		}
-		if f, err := syscall.Open(ready, syscall.O_WRONLY|syscall.O_NONBLOCK, 0); err == nil {
-			_ = syscall.Close(f)
-		}
-		if f, err := syscall.Open(release, syscall.O_RDONLY|syscall.O_NONBLOCK, 0); err == nil {
-			_ = syscall.Close(f)
-		}
-		<-done
-	})
-	go func() {
-		defer close(done)
-		rf, err := os.OpenFile(ready, os.O_RDONLY, 0)
+	timeout := hooks.cleanupTimeout
+	if timeout <= 0 {
+		timeout = defaultHoldCleanupTimeout * processTimeoutScale()
+	}
+	h := &fifoHold{
+		ready:   ready,
+		release: release,
+		stop:    make(chan struct{}),
+		done:    make(chan struct{}),
+		timeout: timeout,
+		hooks:   hooks,
+	}
+	// [TARGET, unit decision] Open both FIFO ends with O_RDWR and gate every stage
+	// on h.stop so the helper goroutine never blocks in open(2) when the child exits
+	// early or when cleanup runs before the goroutine reaches ready/release.
+	var rf *os.File
+	if hooks.beforeOpenReady == nil {
+		var err error
+		rf, err = os.OpenFile(ready, os.O_RDWR, 0)
 		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	go func() {
+		defer close(h.done)
+		if rf == nil {
+			hooks.beforeOpenReady()
+			select {
+			case <-h.stop:
+				return
+			default:
+			}
+			var err error
+			rf, err = os.OpenFile(ready, os.O_RDWR, 0)
+			if err != nil {
+				return
+			}
+		}
+		if hooks.afterOpenReady != nil {
+			hooks.afterOpenReady()
+		}
+		select {
+		case <-h.stop:
+			_ = rf.Close()
 			return
+		default:
 		}
 		buf := make([]byte, 8)
 		_, _ = rf.Read(buf)
 		_ = rf.Close()
-		wf, err := os.OpenFile(release, os.O_WRONLY, 0)
+		if hooks.beforeOpenRelease != nil {
+			hooks.beforeOpenRelease()
+		}
+		select {
+		case <-h.stop:
+			return
+		default:
+		}
+		wf, err := os.OpenFile(release, os.O_RDWR, 0)
 		if err != nil {
 			return
 		}
 		defer wf.Close()
 		if releaseAfter > 0 {
+			timer := time.NewTimer(releaseAfter)
+			defer timer.Stop()
 			select {
-			case <-time.After(releaseAfter):
+			case <-timer.C:
 				_, _ = wf.Write([]byte("x"))
-			case <-stop:
+			case <-h.stop:
+				return
 			}
-		} else {
-			<-stop
 		}
+		<-h.stop
 	}()
-	return ready, release
+	return h
+}
+
+func (h *fifoHold) Close() error {
+	if !h.closed {
+		h.closed = true
+		close(h.stop)
+	}
+	if f, err := syscall.Open(h.ready, syscall.O_RDWR|syscall.O_NONBLOCK, 0); err == nil {
+		_, _ = syscall.Write(f, []byte("x"))
+		defer syscall.Close(f)
+	}
+	if f, err := syscall.Open(h.release, syscall.O_RDWR|syscall.O_NONBLOCK, 0); err == nil {
+		defer syscall.Close(f)
+	}
+	if h.hooks.beforeWaitDone != nil {
+		h.hooks.beforeWaitDone()
+	}
+	timer := time.NewTimer(h.timeout)
+	defer timer.Stop()
+	select {
+	case <-h.done:
+		return nil
+	case <-timer.C:
+		return fmt.Errorf("holdFifos cleanup timed out after %v waiting for helper goroutine", h.timeout)
+	}
+}
+
+// holdFifos creates a (ready, release) FIFO pair. A background goroutine waits
+// for the child to signal readiness on readyFifo, then holds releaseFifo open
+// until cleanup runs (or releases after releaseAfter if non-zero).
+func holdFifos(t *testing.T, releaseAfter time.Duration) (string, string) {
+	t.Helper()
+	h := newHoldFifos(t, releaseAfter, holdFifoHooks{})
+	t.Cleanup(func() {
+		if err := h.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	return h.ready, h.release
+}
+
+func TestHoldFifosCleanupOrdering(t *testing.T) {
+	waitStage := func(t *testing.T, ch <-chan struct{}, label string) {
+		t.Helper()
+		select {
+		case <-ch:
+		case <-time.After(100 * time.Millisecond * processTimeoutScale()):
+			t.Fatalf("timed out waiting for %s", label)
+		}
+	}
+
+	t.Run("cleanup_before_release_open", func(t *testing.T) {
+		atRelease := make(chan struct{})
+		proceedRelease := make(chan struct{})
+		h := newHoldFifos(t, 0, holdFifoHooks{
+			cleanupTimeout: 100 * time.Millisecond * processTimeoutScale(),
+			beforeOpenRelease: func() {
+				close(atRelease)
+				<-proceedRelease
+			},
+			beforeWaitDone: func() {
+				close(proceedRelease)
+			},
+		})
+		f, err := os.OpenFile(h.ready, os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.Write([]byte("ready")); err != nil {
+			_ = f.Close()
+			t.Fatal(err)
+		}
+		_ = f.Close()
+		waitStage(t, atRelease, "beforeOpenRelease")
+		if err := h.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("cleanup_before_ready_open", func(t *testing.T) {
+		atReady := make(chan struct{})
+		proceedReady := make(chan struct{})
+		h := newHoldFifos(t, 0, holdFifoHooks{
+			cleanupTimeout: 100 * time.Millisecond * processTimeoutScale(),
+			beforeOpenReady: func() {
+				close(atReady)
+				<-proceedReady
+			},
+			beforeWaitDone: func() {
+				close(proceedReady)
+			},
+		})
+		waitStage(t, atReady, "beforeOpenReady")
+		if err := h.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("cleanup_without_child_activity", func(t *testing.T) {
+		readyOpened := make(chan struct{})
+		h := newHoldFifos(t, 0, holdFifoHooks{
+			cleanupTimeout: 100 * time.Millisecond * processTimeoutScale(),
+			afterOpenReady: func() {
+				close(readyOpened)
+			},
+		})
+		waitStage(t, readyOpened, "afterOpenReady")
+		if err := h.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("cleanup_bound_fires_when_helper_wedged", func(t *testing.T) {
+		atReady := make(chan struct{})
+		unblock := make(chan struct{})
+		h := newHoldFifos(t, 0, holdFifoHooks{
+			cleanupTimeout: 20 * time.Millisecond,
+			beforeOpenReady: func() {
+				close(atReady)
+				<-unblock
+			},
+		})
+		defer func() {
+			close(unblock)
+			select {
+			case <-h.done:
+			case <-time.After(100 * time.Millisecond * processTimeoutScale()):
+			}
+		}()
+		waitStage(t, atReady, "beforeOpenReady")
+		err := h.Close()
+		if err == nil || !strings.Contains(err.Error(), "holdFifos cleanup timed out") {
+			t.Fatalf("expected holdFifos cleanup timeout error, got %v", err)
+		}
+	})
 }
 
 func TestProcessBoundary(t *testing.T) {

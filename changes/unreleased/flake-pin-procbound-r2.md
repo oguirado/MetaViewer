@@ -1,0 +1,1 @@
+- Open `holdFifos` test FIFOs with `O_RDWR`, gate every helper stage on `stop`, bound cleanup waits on `done` by the CI timeout scale, and cover early-cleanup interleavings in `TestHoldFifosCleanupOrdering`.
