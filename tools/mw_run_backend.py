@@ -45,7 +45,7 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 ATTACH_KEYS = ('MV_CORE_CONFIG', 'XDG_RUNTIME_DIR', 'MV_SRF_BIN_DIR', 'MV_SRF_STATE_DIR',
-               'SRF_IDENTITY_STORE_ROOT')
+               'SRF_IDENTITY_STORE_ROOT', 'SRF_PROXY_REGISTRY')
 SCHEMA_KINDS = ('site', 'workflow', 'step', 'run')
 MAX_NOTICE_S = 300
 MASK = '•'
@@ -293,7 +293,15 @@ class HostBackend:
         live.refuse_net_argv(argv)
         need((Path(binary) == self.binary and args[0] == 'ax') or
              (Path(binary) == self.admin and args[0] == 'show'), 'MW_RUN_NATIVE_INPUT')
-        reply = command(argv)
+        # Discovery returns a mapping without changing the caller environment.
+        # Forward only native context, just as explicit-context callers do.
+        context = getattr(self.client, 'host_env', None)
+        native_env = dict(os.environ)
+        if isinstance(context, dict):
+            for key in ('SRF_IDENTITY_STORE_ROOT', 'SRF_PROXY_REGISTRY'):
+                if context.get(key):
+                    native_env[key] = context[key]
+        reply = command(argv, env=native_env)
         need(reply.returncode == 0 and len(reply.stdout) <= 1024 * 1024, 'MW_RUN_NATIVE')
         value = json.loads(reply.stdout)
         need(isinstance(value, dict), 'MW_RUN_NATIVE')

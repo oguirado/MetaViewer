@@ -75,8 +75,40 @@ was started with, and `$MV_WENDER_ROOT` is the wender-agent checkout at its
 | `MW_DEPENDENCY` | `MV_WENDER_ROOT` unset or not at the `deps.lock` commit | Export the pinned checkout |
 | `MW_HOME_*` | MemoryWeb home not admitted | Run step 2 and follow its code |
 | `MW_GATE_IO` | Provenance file missing (message names the file) | Step 3 |
-| `MW_NETWORK` | Capsule network setting changed after start | Restart the capsule |
+| `MW_NETWORK` | Start witness missing or mismatched, or network setting changed | Restart after a network change; for a container binding mismatch, see below |
 | `MW_RUN_NO_SURFACE` / `MW_RUN_AMBIGUOUS` | Zero or several live surfaces for `mv-live-1` | Keep one capsule for the identity |
+
+### Packaged rehearsal finding
+
+The packaged P12 build `e5c474cef` also refuses `MW_NETWORK` when the adapter's
+start witness names `srf-id-mv-live-1` but the native control receipt and Docker
+identify an opaque `srf-id-…` container. The real attach path reports
+`"attach":"discovered"`; refusal happens before the countdown or workflow input.
+Restarting does not repair this producer mismatch. Report both container IDs
+from the start witness and native control receipt, without sending identity
+store or browser profile files. The adapter must bind the witness to the
+container returned by native start before publishing it. Do not edit a running
+capsule's witness to bypass the refusal.
+
+The P11h.1 packaged rehearsal (`f5a5c11fc`) confirms that the witness now names
+the actual native container. Its operator checkout still returns
+`OUT_OF_SUPPORT` after the countdown: native AX requires explicit store and
+registry context, but the backend does not forward the discovered context to
+its subprocess. The backend fix in this worktree discovers
+`SRF_PROXY_REGISTRY` alongside the store path and forwards both to read-only
+native calls, without changing the caller environment. The conductor must
+integrate that fix into the operator checkout before repeating the packaged
+answer and handoff rehearsal. Verified answers and visible handoffs remain
+unproven on this package; do not treat the matching witness as E1 success.
+
+The packaged rehearsal driver is `tests/e2e/rehearse_e1_packaged.py`; supply
+`--launcher`, `--run-dir`, `--operator-repo`, `--wender-root`, and
+`--proxy-registry` (the launcher's explicit registry path, passed to native
+setup without reading its contents), and `--fixture-host` (a local host
+interface reachable from the capsule). It uses
+the dedicated rehearsal display, temporary fixture definitions, and the
+unmodified operator CLI. Its guard checks run with `--self-test`. A successful
+rehearsal must prove both the captured answer and a newly visible handoff notice.
 
 ## If it fails, send back
 

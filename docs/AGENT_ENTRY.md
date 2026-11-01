@@ -41,12 +41,15 @@ and `SRF_IDENTITY_STORE_ROOT`; dependency roots must satisfy `deps.lock`.
 [TARGET, unit decision] Without `MV_CORE_CONFIG` the backend attaches to the one
 running packaged app: the same-user `resources/bin/mv-daemon-adapter` whose parent
 is that app's `metaviewer` binary. It keeps only `MV_CORE_CONFIG`,
-`XDG_RUNTIME_DIR`, `MV_SRF_BIN_DIR`, `MV_SRF_STATE_DIR` and
-`SRF_IDENTITY_STORE_ROOT` from that process; a caller value that disagrees, no
-running app, or several running apps refuse `MW_RUN_ATTACH` with the remedy on
+`XDG_RUNTIME_DIR`, `MV_SRF_BIN_DIR`, `MV_SRF_STATE_DIR`,
+`SRF_IDENTITY_STORE_ROOT` and `SRF_PROXY_REGISTRY` from that process; a caller
+value that disagrees, no running app, or several running apps refuse
+`MW_RUN_ATTACH` with the remedy on
 stderr. The packaged app's runtime directory is private (`mv-pkg-*`), so a
 caller shell never has the right values by default. `MV_WENDER_ROOT` is not part
 of the app environment and must be exported by the caller.
+The discovered store and registry context is forwarded to native read-only
+subprocesses without exporting it into the caller's environment.
 
 [TARGET, unit decision] After a verified run only, the backend reads the visible
 text of the container holding the workflow oracle's present anchor once, with
