@@ -68,6 +68,8 @@ export function arrangePreset(layout, preset, tiles, width, height) {
 
 /** Panel id namespace: deterministic, reversible, never a bare numeric index. */
 export const WALL_PANEL_ID_PREFIX = 'panel-';
+/** How long a restored panel may lack a projection row before it is closed. */
+export const ORPHAN_GRACE_MS = 5000;
 /** Minimum live tile size, shared with the Holdings grid exemplar. */
 export const WALL_PANEL_MIN_WIDTH = 240;
 export const WALL_PANEL_MIN_HEIGHT = 200;
@@ -112,6 +114,7 @@ export const WALL_PRESENTATION_VERBS = Object.freeze(['close', 'hide', 'show', '
 /** @typedef {Object} WallDockviewApi
  * @property {(id: string) => WallDockviewPanel | undefined} getPanel
  * @property {Array<{id:string,size:number}>} [groups]
+ * @property {Array<{id:string, api:{close:() => void}}>} [panels]
  * @property {(group:{id:string,size:number}) => void} [removeGroup]
  * @property {(id:string) => unknown} [getGroup]
  * @property {(options:{id:string,referencePanel:string,direction:string}) => unknown} [addGroup]
@@ -461,7 +464,26 @@ export function createWallWorkspaceController(options = {}) {
     }
     return list;
   };
-  function refreshPreset() {
+  // A restored layout can hold panels of surfaces from an earlier run. Close a
+  // wall panel only after its surface has been absent from a loaded projection
+  // for ORPHAN_GRACE_MS, so a projection that is still filling never drops a
+  // live tile.
+  const orphanSince = new Map();
+  function pruneOrphanPanels(now = Date.now()) {
+    const rows = projectionView?.getProjection()?.rows;
+    if (!api || !Array.isArray(rows) || !Array.isArray(api.panels)) return;
+    const live = new Set(rows.filter(row => row?.backendLifecycle !== 'destroyed').map(row => WALL_PANEL_ID_PREFIX + row.id));
+    for (const panel of [...api.panels]) {
+      const id = panel?.id;
+      if (typeof id !== 'string' || !id.startsWith(WALL_PANEL_ID_PREFIX) || live.has(id)) { orphanSince.delete(id); continue; }
+      const since = orphanSince.get(id) ?? now;
+      orphanSince.set(id, since);
+      if (now - since < ORPHAN_GRACE_MS) continue;
+      orphanSince.delete(id);
+      captureSlot(id); panel.api.close(); collapseEmptyGroups();
+    }
+  }
+  function refreshPreset(now = Date.now()) {
     if (api) {
       for (const row of projectionView?.getProjection()?.rows || []) {
         if (row?.backendLifecycle === 'destroyed') {
@@ -470,6 +492,7 @@ export function createWallWorkspaceController(options = {}) {
           if (deadPanel) { captureSlot(deadId); deadPanel.api.close(); collapseEmptyGroups(); }
         }
       }
+      pruneOrphanPanels(now);
     }
     if (!preset || !api?.width || !api.height) return;
     const tiles = presentationRows();
