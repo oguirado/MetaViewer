@@ -1,1 +1,0 @@
-- Reserve each capsule's real memory cost (4 GiB default or declared profile ceiling) in host-wide RAM admission and check `/dev/shm` tmpfs free space (`fstatfs` >= 512 MiB) before native create, returning typed numeric refusals (`RAM_ADMISSION_REFUSED` and `SHM_ADMISSION_REFUSED`).

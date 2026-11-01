@@ -107,7 +107,7 @@ func TestMain(m *testing.M) {
 	}
 	// Installed once, before m.Run: no races and no host RAM dependency.
 	admissionMemory = func() (ramMemory, error) {
-		return ramMemory{available: ramFloorKB + 512*1024*1024, total: 1024 * 1024 * 1024}, nil
+		return ramMemory{available: ramFloorKB + 1024*ramReserveKB, total: 1024 * 1024 * 1024}, nil
 	}
 	rc := m.Run()
 	if err := guard.check(); err != nil {

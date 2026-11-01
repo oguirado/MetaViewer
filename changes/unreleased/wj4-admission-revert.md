@@ -1,0 +1,1 @@
+- Revert the 4 GiB per-capsule RAM admission reserve: it refused capsule creates on hosted CI runners; it returns with a CI-safe reserve.
