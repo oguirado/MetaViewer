@@ -1,0 +1,1 @@
+- Clear the pending capsule reservation (`pending:<profile>`) and publish a typed refusal outcome to the renderer (`metaviewer:authority.createSurface`) whenever the boot or subsequent capsule create fails, so the wall displays the refusal code and remedy and `+` retries a real create instead of refusing with `NO_FREE_PROFILE`.

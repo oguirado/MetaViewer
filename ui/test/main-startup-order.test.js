@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { runInNewContext } from 'node:vm';
 import {
   bootProductionMain,
@@ -63,6 +63,7 @@ test('failed privilege registration remains retryable and never admits a boot', 
  *   adapterStart?: () => Promise<import('../electron/coreLauncher.js').AdapterStatus>,
  *   adapterStatus?: () => import('../electron/coreLauncher.js').AdapterStatus,
  *   coreRequest?: (msg: unknown) => Promise<unknown>,
+ *   wire?: Record<string, unknown>,
  * }} [options]
  */
 async function createStubBootFixture(baseDir, options = {}) {
@@ -82,6 +83,10 @@ async function createStubBootFixture(baseDir, options = {}) {
   const coreRequests = [];
   /** @type {Array<{channel: string, payload: unknown}>} */
   const ipcSent = [];
+  /** @type {Map<string, Function>} */
+  const ipcHandlers = new Map();
+  /** @type {Map<string, any>} */
+  const capsuleStates = new Map();
   let windowsConstructed = 0;
 
   const frame = {
@@ -188,8 +193,12 @@ async function createStubBootFixture(baseDir, options = {}) {
     },
     BrowserWindow: StubWindow,
     ipcMain: {
-      handle: () => {},
-      removeHandler: () => {},
+      handle: (/** @type {string} */ channel, /** @type {Function} */ fn) => {
+        ipcHandlers.set(channel, fn);
+      },
+      removeHandler: (/** @type {string} */ channel) => {
+        ipcHandlers.delete(channel);
+      },
     },
     protocol: {
       registerSchemesAsPrivileged: () => {},
@@ -211,6 +220,7 @@ async function createStubBootFixture(baseDir, options = {}) {
     runtime: { xdgRuntimeDir: xdg, uid },
     core,
     adapter,
+    wire: { capsuleStates, ...(options.wire ?? {}) },
     bridge: [
       { channel: CHANNELS.load, decode: () => null, invoke: async () => null },
       { channel: CHANNELS.save, decode: (/** @type {unknown} */ v) => v, invoke: async () => true },
@@ -222,6 +232,9 @@ async function createStubBootFixture(baseDir, options = {}) {
     calls,
     coreRequests,
     ipcSent,
+    ipcHandlers,
+    capsuleStates,
+    webContents,
     getWindowsConstructed: () => windowsConstructed,
   };
 }
@@ -384,6 +397,20 @@ test(
           assert.equal(createErrFixture.calls.includes('new-BrowserWindow'), true);
           assert.equal(createErrFixture.calls.includes('core.dispose'), false);
           assert.ok(logged.some((line) => line.includes('METAVIEWER_SURFACE_CREATE_DEGRADED') && line.includes('SURFACE_CREATE_ADAPTER')));
+          assert.deepEqual(
+            [...createErrFixture.capsuleStates.keys()].filter((k) => k.startsWith('pending:')),
+            [],
+            'failed boot create must delete pending:<profile> from capsuleStates',
+          );
+          const createNotice = createErrFixture.ipcSent.find((m) => m.channel === 'metaviewer:authority.createSurface');
+          assert.ok(createNotice, 'failed boot create must emit a renderer notice on metaviewer:authority.createSurface');
+          assert.deepEqual(createNotice.payload, {
+            ok: false,
+            code: 'PROFILE_ALREADY_BOUND',
+            reason: 'The selected capsule profile is already bound to a running capsule. Close the running capsule or add another profile to MV_SRF_PROFILES.',
+            message: 'PROFILE_ALREADY_BOUND: The selected capsule profile is already bound to a running capsule. Close the running capsule or add another profile to MV_SRF_PROFILES.',
+            tone: 'refusal',
+          });
         } finally {
           await bootCreateErr.dispose();
         }
@@ -791,3 +818,244 @@ test('packaged entry sees the typed adapter refusal before its PKG failure marke
   assert.ok(events[0].includes(reason));
   assert.deepEqual(events.slice(1),['exit']);
 });
+
+test(
+  'BOOT-PENDING-CLR guards (a), (b), (c) and mutant checks: failed boot or subsequent create clears pending:<profile>, emits renderer refusal notice, and allows + to retry a real create',
+  { timeout: 60000 },
+  async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), 'mv-boot-pending-clr-'));
+    const origError = console.error;
+    /** @type {Array<string>} */
+    const logged = [];
+    console.error = (...args) => {
+      logged.push(args.map(String).join(' '));
+    };
+    try {
+      const srfBinDir = join(tempRoot, 'srf-bin');
+      await mkdir(srfBinDir, { recursive: true, mode: 0o700 });
+      const liveAdapterStatus = () => ({
+        availability: /** @type {const} */ ('live'),
+        pid: 5252,
+        handshakeSeen: true,
+        code: 'ADAPTER_LIVE',
+        reason: null,
+        userMessage: null,
+      });
+
+      // Guard (a) + Guard (b): boot create fails with stale lease (binding: profile already bound),
+      // deletes pending:mv-live-1, emits METAVIEWER_SURFACE_CREATE_DEGRADED + renderer notice,
+      // and subsequent + click is NOT refused as NO_FREE_PROFILE (retries real create).
+      const guardDir = join(tempRoot, 'guard-ab');
+      await mkdir(join(guardDir, 'tools'), { recursive: true, mode: 0o700 });
+      await writeFile(
+        join(guardDir, 'tools', 'mv_identity.py'),
+        [
+          '#!/usr/bin/env python3',
+          'import json',
+          'print(json.dumps({"schema":"metaviewer.identity/v1","ok":True,"result":[{"profile_id":"mv-live-1","browser":"chromium","account_label":"Account mv-live-1","allowed_domains":["example.test"],"created_unix":1,"last_login_unix":1}]}))',
+        ].join('\n') + '\n',
+        { mode: 0o700 },
+      );
+      let attempt = 0;
+      const fx = await createStubBootFixture(guardDir, {
+        env: { MV_SRF_BIN_DIR: srfBinDir, PATH: process.env.PATH ?? '/usr/bin:/bin' },
+        adapterStart: async () => liveAdapterStatus(),
+        adapterStatus: liveAdapterStatus,
+        coreRequest: async (msg) => {
+          attempt += 1;
+          if (attempt === 1) {
+            return {
+              schema: 'surface_event/v0.2',
+              event: 'error',
+              data: { surface_id: 's1', code: 'adapter', detail: 'binding: profile already bound' },
+            };
+          }
+          if (attempt === 2) {
+            // Second attempt (first + click) also fails with surface_event/v0.2 error -> must also clear pending:mv-live-1
+            return {
+              schema: 'surface_event/v0.2',
+              event: 'error',
+              data: { surface_id: 's1', code: 'adapter', detail: 'binding: profile already bound' },
+            };
+          }
+          const req = /** @type {{params: {profile_id: string, kind: string, geometry: {w: number, h: number}}}} */ (msg);
+          return {
+            schema: 'surface_event/v0.2',
+            event: 'created',
+            data: {
+              surface: {
+                surface_id: 's-recovered',
+                profile_id: req.params.profile_id,
+                kind: req.params.kind,
+                state: 'ready',
+                geometry: req.params.geometry,
+              },
+            },
+          };
+        },
+      });
+
+      const boot = await bootProductionMain(fx.handles);
+      try {
+        // (a) Boot-fail assertions: no pending:* remains, DEGRADED line logged, and renderer notice emitted.
+        assert.equal(fx.coreRequests.length, 1);
+        assert.equal(fx.capsuleStates.has('pending:mv-live-1'), false, 'Guard (a): pending:mv-live-1 must be deleted after boot create failure');
+        assert.deepEqual(
+          [...fx.capsuleStates.keys()].filter((k) => k.startsWith('pending:')),
+          [],
+          'Guard (a): zero pending:* keys may remain in capsuleStates',
+        );
+        assert.ok(
+          logged.some((line) => line.includes('METAVIEWER_SURFACE_CREATE_DEGRADED') && line.includes('SURFACE_CREATE_ADAPTER')),
+          'Guard (a): METAVIEWER_SURFACE_CREATE_DEGRADED must be logged',
+        );
+        const bootNotice = fx.ipcSent.find((m) => m.channel === 'metaviewer:authority.createSurface');
+        assert.ok(bootNotice, 'Guard (a): renderer notice must be sent on metaviewer:authority.createSurface');
+        assert.deepEqual(bootNotice.payload, {
+          ok: false,
+          code: 'PROFILE_ALREADY_BOUND',
+          reason: 'The selected capsule profile is already bound to a running capsule. Close the running capsule or add another profile to MV_SRF_PROFILES.',
+          message: 'PROFILE_ALREADY_BOUND: The selected capsule profile is already bound to a running capsule. Close the running capsule or add another profile to MV_SRF_PROFILES.',
+          tone: 'refusal',
+        });
+
+        // (b) Subsequent + click must NOT be refused as NO_FREE_PROFILE; it retries a real create.
+        const createHandler = fx.ipcHandlers.get('metaviewer:authority.createSurface');
+        assert.equal(typeof createHandler, 'function');
+        const invokeCreate = () =>
+          /** @type {(event: unknown) => Promise<{ok: boolean, code?: string}>} */ (createHandler)({
+            sender: fx.webContents,
+            senderFrame: fx.webContents.mainFrame,
+          });
+
+        // Attempt 2: + click retries core.request, gets adapter error (not NO_FREE_PROFILE), and clears pending:mv-live-1.
+        const secondOutcome = await invokeCreate();
+        assert.notEqual(secondOutcome.code, 'NO_FREE_PROFILE', 'Guard (b): + pick after stale boot failure must not be refused as NO_FREE_PROFILE');
+        assert.deepEqual(secondOutcome, { ok: false, code: 'PROFILE_ALREADY_BOUND' });
+        assert.equal(fx.coreRequests.length, 2, 'Guard (b): + pick must issue a real core.request create');
+        assert.equal(fx.capsuleStates.has('pending:mv-live-1'), false, 'Guard (b): failed + create must delete pending:mv-live-1');
+
+        // Attempt 3: + click retries core.request and succeeds once stale lease clears.
+        const thirdOutcome = await invokeCreate();
+        assert.deepEqual(thirdOutcome, { ok: true });
+        assert.equal(fx.coreRequests.length, 3);
+        assert.equal(fx.capsuleStates.has('pending:mv-live-1'), false);
+        assert.equal(fx.capsuleStates.get('s-recovered')?.profile_id, 'mv-live-1');
+
+      } finally {
+        await boot.dispose();
+      }
+
+      // Source-level Mutant (a) + Mutant (b): remove `capsuleStates.delete(pendingKey);` from onFailure in main.js,
+      // boot with a failing first-surface create, and verify that pending:mv-live-1 stays in capsuleStates
+      // and subsequent + click is refused as NO_FREE_PROFILE without issuing core.request.
+      const mainUrl = new URL('../electron/main.js', import.meta.url);
+      const electronDirHref = new URL('../electron/', import.meta.url).href;
+      const mainSrc = await readFile(fileURLToPath(mainUrl), 'utf8');
+      const deleteAnchor = 'onFailure: (error) => {\n            capsuleStates.delete(pendingKey);';
+      assert.equal(mainSrc.split(deleteAnchor).length, 2, 'unique deleteAnchor in ui/electron/main.js');
+      const mutatedMainSrc = mainSrc
+        .replace(deleteAnchor, 'onFailure: (error) => {')
+        .replaceAll('import.meta.url', JSON.stringify(mainUrl.href))
+        .replaceAll("from './", `from '${electronDirHref}`)
+        .replaceAll("import('./", `import('${electronDirHref}`);
+      const mutatedMainPath = join(tempRoot, 'main-mutant-no-delete.mjs');
+      await writeFile(mutatedMainPath, mutatedMainSrc, { mode: 0o600 });
+      const mutatedMain = await import(pathToFileURL(mutatedMainPath).href);
+
+      const mutDir = join(tempRoot, 'mutant-ab');
+      await mkdir(join(mutDir, 'tools'), { recursive: true, mode: 0o700 });
+      await writeFile(
+        join(mutDir, 'tools', 'mv_identity.py'),
+        [
+          '#!/usr/bin/env python3',
+          'import json',
+          'print(json.dumps({"schema":"metaviewer.identity/v1","ok":True,"result":[{"profile_id":"mv-live-1","browser":"chromium","account_label":"Account mv-live-1","allowed_domains":["example.test"],"created_unix":1,"last_login_unix":1}]}))',
+        ].join('\n') + '\n',
+        { mode: 0o700 },
+      );
+      const mutFx = await createStubBootFixture(mutDir, {
+        env: { MV_SRF_BIN_DIR: srfBinDir, PATH: process.env.PATH ?? '/usr/bin:/bin' },
+        adapterStart: async () => liveAdapterStatus(),
+        adapterStatus: liveAdapterStatus,
+        coreRequest: async () => ({
+          schema: 'surface_event/v0.2',
+          event: 'error',
+          data: { surface_id: 's1', code: 'adapter', detail: 'binding: profile already bound' },
+        }),
+      });
+      const mutBoot = await mutatedMain.bootProductionMain(mutFx.handles);
+      try {
+        assert.equal(
+          mutFx.capsuleStates.has('pending:mv-live-1'),
+          true,
+          'Mutant (a) killed: removing capsuleStates.delete(pendingKey) in main.js leaves pending:mv-live-1 in capsuleStates',
+        );
+        const mutCreateHandler = mutFx.ipcHandlers.get('metaviewer:authority.createSurface');
+        assert.equal(typeof mutCreateHandler, 'function');
+        const mutBeforeRequests = mutFx.coreRequests.length;
+        const mutOutcome = await /** @type {(event: unknown) => Promise<{ok: boolean, code?: string}>} */ (mutCreateHandler)({
+          sender: mutFx.webContents,
+          senderFrame: mutFx.webContents.mainFrame,
+        });
+        assert.deepEqual(
+          mutOutcome,
+          { ok: false, code: 'NO_FREE_PROFILE' },
+          'Mutant (b) killed: keeping pending:mv-live-1 after boot failure causes + to refuse with NO_FREE_PROFILE',
+        );
+        assert.equal(
+          mutFx.coreRequests.length,
+          mutBeforeRequests,
+          'Mutant (b) killed: NO_FREE_PROFILE blocks core.request retry',
+        );
+      } finally {
+        await mutBoot.dispose();
+      }
+
+      // Guard (c): successful boot happy path (created event) clears pending:mv-live-1, records the live surface,
+      // and sends only metaviewer:adapter-status with zero refusal notices.
+      logged.length = 0;
+      const okDir = join(tempRoot, 'guard-c');
+      await mkdir(okDir, { recursive: true });
+      const okFx = await createStubBootFixture(okDir, {
+        env: { MV_SRF_BIN_DIR: srfBinDir },
+        adapterStart: async () => liveAdapterStatus(),
+        adapterStatus: liveAdapterStatus,
+        coreRequest: async (msg) => {
+          const req = /** @type {{params: {profile_id: string, kind: string, geometry: {w: number, h: number}}}} */ (msg);
+          return {
+            schema: 'surface_event/v0.2',
+            event: 'created',
+            data: {
+              surface: {
+                surface_id: 's-boot-1',
+                profile_id: req.params.profile_id,
+                kind: req.params.kind,
+                state: 'ready',
+                geometry: req.params.geometry,
+              },
+            },
+          };
+        },
+      });
+      const okBoot = await bootProductionMain(okFx.handles);
+      try {
+        assert.equal(okFx.coreRequests.length, 1);
+        assert.equal(okFx.capsuleStates.has('pending:mv-live-1'), false, 'Guard (c): created boot surface reconciles pending:mv-live-1');
+        assert.equal(okFx.capsuleStates.get('s-boot-1')?.profile_id, 'mv-live-1');
+        assert.equal(okFx.ipcSent.length, 1, 'Guard (c): happy path sends only metaviewer:adapter-status');
+        assert.equal(okFx.ipcSent[0].channel, 'metaviewer:adapter-status');
+        assert.equal(
+          logged.some((line) => line.includes('METAVIEWER_SURFACE_CREATE_DEGRADED')),
+          false,
+          'Guard (c): happy path must not log METAVIEWER_SURFACE_CREATE_DEGRADED',
+        );
+      } finally {
+        await okBoot.dispose();
+      }
+    } finally {
+      console.error = origError;
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  },
+);

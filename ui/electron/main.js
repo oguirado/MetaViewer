@@ -1950,9 +1950,13 @@ export function buildFirstSurfaceCreateRequest(envRec) {
  * `SURFACE_CREATE_*` diagnostic and keeps the window.
  * @param {CoreLauncher} core Live core handle.
  * @param {Record<string, unknown>} envRec Environment record.
+ * @param {{
+ *   onCreated?: (surface: unknown) => void,
+ *   onFailure?: (error: unknown) => void,
+ * }} [onSettled] Optional settlement callbacks for boot reservation and notice delivery.
  * @returns {Promise<void>}
  */
-async function requestFirstSurfaceCreate(core, envRec) {
+async function requestFirstSurfaceCreate(core, envRec, onSettled) {
   const timeoutMs = FIRST_SURFACE_CREATE_TIMEOUT_MS;
   console.log('METAVIEWER_SURFACE_CREATE_PENDING');
   const request = buildFirstSurfaceCreateRequest(envRec);
@@ -1998,6 +2002,17 @@ async function requestFirstSurfaceCreate(core, envRec) {
             : 'SURFACE_CREATE_REFUSED';
         throw err;
       }
+      if (rec.schema === 'surface_event/v0.2' && rec.event === 'created') {
+        const data =
+          rec.data !== null && typeof rec.data === 'object' && !Array.isArray(rec.data)
+            ? /** @type {Record<string, unknown>} */ (rec.data)
+            : {};
+        try {
+          onSettled?.onCreated?.(data.surface);
+        } catch {
+          /* reservation reconciliation best-effort */
+        }
+      }
     }
   } catch (error) {
     const rawCode =
@@ -2024,6 +2039,11 @@ async function requestFirstSurfaceCreate(core, envRec) {
       console.error(`METAVIEWER_SURFACE_CREATE_DEGRADED ${JSON.stringify({ code, reason })}`);
     } catch {
       /* diagnostics best-effort */
+    }
+    try {
+      onSettled?.onFailure?.(error);
+    } catch {
+      /* failure cleanup best-effort */
     }
   } finally {
     if (timer !== null) {
@@ -2167,8 +2187,13 @@ export async function bootProductionMain(handles) {
   /** @type {Array<string>} */
   const registered = [];
   /** @type {Map<string, any>} */
-  const capsuleStates = new Map();
-  let wireBridge = /** @type {{dispose:()=>Promise<void>} | null} */(null);
+  const capsuleStates =
+    typed.wire !== null &&
+    typeof typed.wire === 'object' &&
+    /** @type {{capsuleStates?: unknown}} */ (typed.wire).capsuleStates instanceof Map
+      ? /** @type {Map<string, any>} */ (/** @type {{capsuleStates: Map<string, any>}} */ (typed.wire).capsuleStates)
+      : new Map();
+  let wireBridge = /** @type {{dispose:()=>Promise<void>, notifyCreateRefusal?:(failure:unknown)=>unknown} | null} */(null);
   let displayBridge = /** @type {{dispose:()=>Promise<void>} | null} */(null);
   let operatorBridge = /** @type {{dispose:()=>Promise<void>} | null} */(null);
   let captureBridge = /** @type {{dispose:()=>Promise<void>} | null} */(null);
@@ -2178,6 +2203,9 @@ export async function bootProductionMain(handles) {
   let indexStatus = 0;
   let schemeRegistered = false;
   let unwound = false;
+  /** @type {unknown} */
+  let pendingBootCreateError = null;
+  let bootReadyForNotices = false;
 
   /**
    * Release the owned acquisition prefix in reverse order. Never throws.
@@ -2435,8 +2463,33 @@ export async function bootProductionMain(handles) {
         adapterStatus.handshakeSeen === true
       ) {
         const bootProfile = buildFirstSurfaceCreateRequest(envRec).params.profile_id;
-        capsuleStates.set(`pending:${bootProfile}`, {profile_id:bootProfile,state:'creating'});
-        void requestFirstSurfaceCreate(core, envRec);
+        const pendingKey = `pending:${bootProfile}`;
+        capsuleStates.set(pendingKey, {profile_id:bootProfile,state:'creating'});
+        void requestFirstSurfaceCreate(core, envRec, {
+          onCreated: (surface) => {
+            capsuleStates.delete(pendingKey);
+            if (
+              surface !== null &&
+              typeof surface === 'object' &&
+              !Array.isArray(surface) &&
+              typeof (/** @type {{surface_id?: unknown}} */ (surface)).surface_id === 'string'
+            ) {
+              const s = /** @type {{surface_id: string, state?: unknown}} */ (surface);
+              if (s.state !== 'destroyed' && s.state !== 'lost') {
+                capsuleStates.set(s.surface_id, surface);
+              }
+            }
+          },
+          onFailure: (error) => {
+            capsuleStates.delete(pendingKey);
+            if (unwound) return;
+            if (bootReadyForNotices && wireBridge !== null && typeof wireBridge.notifyCreateRefusal === 'function') {
+              wireBridge.notifyCreateRefusal(error);
+            } else {
+              pendingBootCreateError = error;
+            }
+          },
+        });
       }
     }
   }
@@ -2610,6 +2663,18 @@ export async function bootProductionMain(handles) {
       }
     } catch {
       /* status publication best-effort */
+    }
+  }
+  if (!retail.nested) {
+    bootReadyForNotices = true;
+    if (pendingBootCreateError !== null) {
+      const failedBootError = pendingBootCreateError;
+      pendingBootCreateError = null;
+      try {
+        wireBridge?.notifyCreateRefusal?.(failedBootError);
+      } catch {
+        /* refusal notice best-effort */
+      }
     }
   }
   let quitting = false;
