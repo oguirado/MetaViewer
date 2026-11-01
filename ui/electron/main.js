@@ -2719,6 +2719,7 @@ export async function bootProductionMain(handles) {
         return;
       }
       quitting = true;
+      console.info('METAVIEWER_QUIT reason=will-quit');
       try {
         /** @type {{preventDefault: () => void}} */ (/** @type {unknown} */ (event)).preventDefault();
       } catch {
@@ -2732,7 +2733,19 @@ export async function bootProductionMain(handles) {
         }
       });
     });
+    if (typeof app.on === 'function') {
+      app.on('render-process-gone', (_event, _contents, details) => {
+        const reason = typeof details?.reason === 'string' && /^[a-z-]{1,32}$/.test(details.reason) ? details.reason : 'unknown';
+        console.info(`METAVIEWER_PROCESS_GONE kind=renderer reason=${reason}`);
+      });
+      app.on('child-process-gone', (_event, details) => {
+        const reason = typeof details?.reason === 'string' && /^[a-z-]{1,32}$/.test(details.reason) ? details.reason : 'unknown';
+        const type = typeof details?.type === 'string' && /^[A-Za-z-]{1,32}$/.test(details.type) ? details.type : 'unknown';
+        console.info(`METAVIEWER_PROCESS_GONE kind=${type} reason=${reason}`);
+      });
+    }
     app.on('window-all-closed', () => {
+      console.info('METAVIEWER_QUIT reason=window-all-closed');
       try {
         app.quit();
       } catch {
@@ -2745,6 +2758,7 @@ export async function bootProductionMain(handles) {
         'before-input-event',
         (event, input) => {
           if (!isQuitShortcut(input)) return;
+          console.info('METAVIEWER_QUIT reason=ctrl-q');
           try {
             /** @type {{preventDefault: () => void}} */ (/** @type {unknown} */ (event)).preventDefault();
           } catch {
