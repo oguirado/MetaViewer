@@ -19,17 +19,17 @@ every batch; the per-lane data is in [docs/meta-ai/muse_lanes.json](docs/meta-ai
 
 | Metric | All | Pre-event (design) | Build period |
 |---|---:|---:|---:|
-| Lanes launched | 2,505 | 55 | 2,450 |
-| Lanes finished OK | 2,505 | 55 | 2,450 |
-| Agent steps | 79,017 | 2,705 | 76,312 |
-| Lane-hours of agent work | 176.7 | 5.2 | 171.5 |
-| Fresh input tokens | 300,718,762 | 11,482,034 | 289,236,728 |
-| Cache-read input tokens | 5,249,467,096 | 226,255,212 | 5,023,211,884 |
+| Lanes launched | 2,568 | 55 | 2,513 |
+| Lanes finished OK | 2,568 | 55 | 2,513 |
+| Agent steps | 80,606 | 2,705 | 77,901 |
+| Lane-hours of agent work | 179.8 | 5.2 | 174.5 |
+| Fresh input tokens | 305,489,020 | 11,482,034 | 294,006,986 |
+| Cache-read input tokens | 5,327,385,742 | 226,255,212 | 5,101,130,530 |
 | Prompt cache hit % | 94.6 | 95.2 | 94.6 |
-| Output tokens | 61,202,210 | 2,135,708 | 59,066,502 |
-| Thinking tokens | 37,550,140 | 1,050,039 | 36,500,101 |
-| Cost (USD) | 52.8112 | 2.0279 | 50.7834 |
-| Cost per lane (USD) | 0.0211 | 0.0369 | 0.0207 |
+| Output tokens | 62,308,710 | 2,135,708 | 60,173,002 |
+| Thinking tokens | 38,290,597 | 1,050,039 | 37,240,558 |
+| Cost (USD) | 53.6654 | 2.0279 | 51.6375 |
+| Cost per lane (USD) | 0.0209 | 0.0369 | 0.0205 |
 
 Rooms: 136. Peak concurrent lanes [MEASURED from lane start/end]: 42.
 Pre-event lanes produced plans, research and specifications only; product code was written in the build period.
@@ -38,7 +38,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 
 | Stage | Lanes | Cache hit % | USD |
 |---|---:|---:|---:|
-| build | 2116 | 93.7 | 36.5637 |
+| build | 2179 | 93.7 | 37.4179 |
 | context | 42 | 95.9 | 1.9093 |
 | context packs + test ideation (U-DEC-0139) | 13 | 91.1 | 0.2195 |
 | demo | 4 | 90.7 | 0.0557 |
@@ -86,7 +86,7 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | mv0w1wall | conductor | Oct 26 18:41 | build | 4 | 96.2 | 0.2253 | Build the wall: workspace, surface panel, intents and projection. |
 | mv0w1frames | conductor | Oct 26 18:41 | build | 3 | 93.7 | 0.1298 | Build the frame reader, frame port and frame view that put live capsule frames on screen. |
 | mv0w1term | conductor | Oct 26 18:41 | build | 3 | 96.8 | 0.1848 | Build the terminal broker, byte plane and provider menu. |
-| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 1778 | 93.6 | 28.2852 | direct Muse job |
+| direct-direct | metaviewer-0 | Oct 26 18:44 | build | 1841 | 93.6 | 29.1394 | direct Muse job |
 | mv0w2pk1 | conductor | Oct 26 18:44 | context | 7 | 95.7 | 0.4027 | Write the W2 context packs (AI loop, human input, recording, multi-slot, catalog, settings, nested). |
 | mv0w2pk2 | conductor | Oct 26 18:44 | context | 7 | 96.1 | 0.2992 | Write the W2 context packs (perception, tests, catalog core, docs, open-weight model, Muse image). |
 | mv0w1fx | conductor | Oct 26 19:07 | fix | 2 | 97.4 | 0.1115 | Implement the judge's router fixes (F6-F8) and the CI/kit staging fix (F4). |
@@ -2704,13 +2704,76 @@ Pre-event lanes produced plans, research and specifications only; product code w
 | direct-direct | 10312_rev_DISPLAY-READER-DEFLAKE_b | fill_110312_rev_DISPLAY-READER-DEFLAKE_b | Nov 01 11:04 | yes | 13 | 89.8 | 0.005411 |
 | direct-direct | 10312_rev_MW-AX-DUMP_a | fill_110312_rev_MW-AX-DUMP_a | Nov 01 11:04 | yes | 13 | 89.3 | 0.008948 |
 | direct-direct | 10312_rev_MW-AX-DUMP_b | fill_110312_rev_MW-AX-DUMP_b | Nov 01 11:04 | yes | 23 | 93.4 | 0.010068 |
+| direct-direct | 10312_rev_MW-READBACK-TEXTOF_a | fill_110312_rev_MW-READBACK-TEXTOF_a | Nov 01 11:04 | yes | 33 | 95.0 | 0.015741 |
 | direct-direct | 10312_rev_MW-READBACK-TEXTOF_b | fill_110312_rev_MW-READBACK-TEXTOF_b | Nov 01 11:04 | yes | 24 | 93.8 | 0.01324 |
 | direct-direct | 10312_rev_MW-WALL-DEADLINE-R2_a | fill_110312_rev_MW-WALL-DEADLINE-R2_a | Nov 01 11:04 | yes | 20 | 89.4 | 0.013167 |
 | direct-direct | 10312_rev_MW-WALL-DEADLINE-R2_b | fill_110312_rev_MW-WALL-DEADLINE-R2_b | Nov 01 11:04 | yes | 25 | 94.4 | 0.011064 |
 | direct-direct | 10437_rev_DISPLAY-READER-DEFLAKE_a | fill_110437_rev_DISPLAY-READER-DEFLAKE_a | Nov 01 11:05 | yes | 17 | 91.1 | 0.007077 |
+| direct-direct | 10437_rev_DISPLAY-READER-DEFLAKE_b | fill_110437_rev_DISPLAY-READER-DEFLAKE_b | Nov 01 11:05 | yes | 31 | 94.3 | 0.011991 |
 | direct-direct | 10437_rev_MW-AX-DUMP_a | fill_110437_rev_MW-AX-DUMP_a | Nov 01 11:05 | yes | 15 | 91.7 | 0.007107 |
 | direct-direct | 10437_rev_MW-AX-DUMP_b | fill_110437_rev_MW-AX-DUMP_b | Nov 01 11:05 | yes | 17 | 91.7 | 0.007864 |
+| direct-direct | 10437_rev_MW-WALL-DEADLINE-R2_a | fill_110437_rev_MW-WALL-DEADLINE-R2_a | Nov 01 11:05 | yes | 21 | 93.7 | 0.008968 |
 | direct-direct | 10437_rev_MW-WALL-DEADLINE-R2_b | fill_110437_rev_MW-WALL-DEADLINE-R2_b | Nov 01 11:05 | yes | 16 | 91.8 | 0.007845 |
+| direct-direct | 10556_rev_DISPLAY-READER-DEFLAKE_a | fill_110556_rev_DISPLAY-READER-DEFLAKE_a | Nov 01 11:23 | yes | 15 | 91.5 | 0.006913 |
+| direct-direct | 10556_rev_DISPLAY-READER-DEFLAKE_b | fill_110556_rev_DISPLAY-READER-DEFLAKE_b | Nov 01 11:24 | yes | 13 | 87.7 | 0.011398 |
+| direct-direct | 10556_rev_MW-AX-DUMP_a | fill_110556_rev_MW-AX-DUMP_a | Nov 01 11:24 | yes | 26 | 93.5 | 0.015196 |
+| direct-direct | 10556_rev_MW-AX-DUMP_b | fill_110556_rev_MW-AX-DUMP_b | Nov 01 11:24 | yes | 10 | 87.7 | 0.006304 |
+| direct-direct | 10556_rev_MW-WALL-DEADLINE-R2_a | fill_110556_rev_MW-WALL-DEADLINE-R2_a | Nov 01 11:24 | yes | 33 | 94.4 | 0.018314 |
+| direct-direct | 10556_rev_MW-WALL-DEADLINE-R2_b | fill_110556_rev_MW-WALL-DEADLINE-R2_b | Nov 01 11:24 | yes | 23 | 93.2 | 0.012995 |
+| direct-direct | -WALL-DEADLINE-R2_a | r1x_MW-WALL-DEADLINE-R2_a | Nov 01 11:24 | yes | 24 | 91.6 | 0.013602 |
+| direct-direct | -WALL-DEADLINE-R2_b | r1x_MW-WALL-DEADLINE-R2_b | Nov 01 11:24 | yes | 37 | 95.3 | 0.019439 |
+| direct-direct | -AX-DUMP_a | r1x_MW-AX-DUMP_a | Nov 01 11:24 | yes | 23 | 94.0 | 0.010709 |
+| direct-direct | -AX-DUMP_b | r1x_MW-AX-DUMP_b | Nov 01 11:24 | yes | 42 | 95.7 | 0.018245 |
+| direct-direct | 12415_lane_r4_app_close | fill_112415_lane_r4_app_close | Nov 01 11:25 | yes | 44 | 94.9 | 0.027705 |
+| direct-direct | 12415_lane_r4_automate_demo | fill_112415_lane_r4_automate_demo | Nov 01 11:25 | yes | 38 | 94.6 | 0.024118 |
+| direct-direct | 12415_lane_r4_capsule_close_reopen | fill_112415_lane_r4_capsule_close_reopen | Nov 01 11:25 | yes | 30 | 92.8 | 0.01686 |
+| direct-direct | 12415_lane_r4_captcha_handoff | fill_112415_lane_r4_captcha_handoff | Nov 01 11:25 | yes | 47 | 96.0 | 0.020076 |
+| direct-direct | 12415_lane_r4_chatgpt_gemini | fill_112415_lane_r4_chatgpt_gemini | Nov 01 11:25 | yes | 62 | 96.6 | 0.031225 |
+| direct-direct | 12415_lane_r4_display | fill_112415_lane_r4_display | Nov 01 11:25 | yes | 55 | 95.8 | 0.036413 |
+| direct-direct | 12415_lane_r4_identities | fill_112415_lane_r4_identities | Nov 01 11:25 | yes | 24 | 93.1 | 0.015614 |
+| direct-direct | 12415_lane_r4_launch | fill_112415_lane_r4_launch | Nov 01 11:25 | yes | 60 | 96.5 | 0.029211 |
+| direct-direct | 12415_lane_r4_multislot | fill_112415_lane_r4_multislot | Nov 01 11:25 | yes | 49 | 95.9 | 0.025186 |
+| direct-direct | 12415_lane_r4_network | fill_112415_lane_r4_network | Nov 01 11:25 | yes | 38 | 94.4 | 0.022032 |
+| direct-direct | 12415_lane_r4_settings | fill_112415_lane_r4_settings | Nov 01 11:25 | yes | 58 | 95.7 | 0.036918 |
+| direct-direct | 12415_lane_r4_storyboard | fill_112415_lane_r4_storyboard | Nov 01 11:25 | yes | 52 | 95.8 | 0.02568 |
+| direct-direct | 12415_lane_r4_terminal | fill_112415_lane_r4_terminal | Nov 01 11:25 | yes | 19 | 88.9 | 0.013747 |
+| direct-direct | 12415_lane_r4_use_metaviewer | fill_112415_lane_r4_use_metaviewer | Nov 01 11:25 | yes | 68 | 96.6 | 0.038194 |
+| direct-direct | 12415_rev_DISPLAY-READER-DEFLAKE_a | fill_112415_rev_DISPLAY-READER-DEFLAKE_a | Nov 01 11:25 | yes | 16 | 91.5 | 0.008083 |
+| direct-direct | 12415_rev_DISPLAY-READER-DEFLAKE_b | fill_112415_rev_DISPLAY-READER-DEFLAKE_b | Nov 01 11:26 | yes | 13 | 88.8 | 0.00816 |
+| direct-direct | 12415_rev_KEYBOARD-TRIAGE-P13_a | fill_112415_rev_KEYBOARD-TRIAGE-P13_a | Nov 01 11:26 | yes | 18 | 92.5 | 0.007429 |
+| direct-direct | 12415_rev_KEYBOARD-TRIAGE-P13_b | fill_112415_rev_KEYBOARD-TRIAGE-P13_b | Nov 01 11:26 | yes | 9 | 90.3 | 0.004289 |
+| direct-direct | 12415_rev_MW-READBACK-TEXTOF-R2_a | fill_112415_rev_MW-READBACK-TEXTOF-R2_a | Nov 01 11:26 | yes | 21 | 93.0 | 0.011861 |
+| direct-direct | 12415_rev_MW-READBACK-TEXTOF-R2_b | fill_112415_rev_MW-READBACK-TEXTOF-R2_b | Nov 01 11:26 | yes | 18 | 91.7 | 0.011738 |
+| direct-direct | -AX-REVIEW-DEADLINE-R2_a | r1x_OS-AX-REVIEW-DEADLINE-R2_a | Nov 01 11:27 | yes | 16 | 90.9 | 0.007735 |
+| direct-direct | -AX-REVIEW-DEADLINE-R2_b | r1x_OS-AX-REVIEW-DEADLINE-R2_b | Nov 01 11:27 | yes | 28 | 95.1 | 0.011676 |
+| direct-direct | 12617_rev_DISPLAY-READER-DEFLAKE_a | fill_112617_rev_DISPLAY-READER-DEFLAKE_a | Nov 01 11:27 | yes | 11 | 87.8 | 0.006748 |
+| direct-direct | 12617_rev_DISPLAY-READER-DEFLAKE_b | fill_112617_rev_DISPLAY-READER-DEFLAKE_b | Nov 01 11:27 | yes | 17 | 91.7 | 0.00793 |
+| direct-direct | 12617_rev_KEYBOARD-TRIAGE-P13_a | fill_112617_rev_KEYBOARD-TRIAGE-P13_a | Nov 01 11:27 | yes | 32 | 94.1 | 0.013254 |
+| direct-direct | 12617_rev_KEYBOARD-TRIAGE-P13_b | fill_112617_rev_KEYBOARD-TRIAGE-P13_b | Nov 01 11:27 | yes | 30 | 93.8 | 0.012554 |
+| direct-direct | 12617_rev_MW-READBACK-TEXTOF-R2_a | fill_112617_rev_MW-READBACK-TEXTOF-R2_a | Nov 01 11:28 | yes | 36 | 92.2 | 0.023294 |
+| direct-direct | 12617_rev_MW-READBACK-TEXTOF-R2_b | fill_112617_rev_MW-READBACK-TEXTOF-R2_b | Nov 01 11:28 | yes | 26 | 93.5 | 0.013165 |
+| direct-direct | 12617_rev_OS-AX-REVIEW-DEADLINE-R2_a | fill_112617_rev_OS-AX-REVIEW-DEADLINE-R2_a | Nov 01 11:28 | yes | 20 | 92.7 | 0.008427 |
+| direct-direct | 12617_rev_OS-AX-REVIEW-DEADLINE-R2_b | fill_112617_rev_OS-AX-REVIEW-DEADLINE-R2_b | Nov 01 11:28 | yes | 10 | 87.6 | 0.005626 |
+| direct-direct | 12843_rev_DISPLAY-READER-DEFLAKE_a | fill_112843_rev_DISPLAY-READER-DEFLAKE_a | Nov 01 11:29 | yes | 15 | 91.9 | 0.007909 |
+| direct-direct | 12843_rev_DISPLAY-READER-DEFLAKE_b | fill_112843_rev_DISPLAY-READER-DEFLAKE_b | Nov 01 11:29 | yes | 12 | 89.1 | 0.008245 |
+| direct-direct | 12843_rev_KEYBOARD-TRIAGE-P13_a | fill_112843_rev_KEYBOARD-TRIAGE-P13_a | Nov 01 11:29 | yes | 18 | 92.7 | 0.007256 |
+| direct-direct | 12843_rev_KEYBOARD-TRIAGE-P13_b | fill_112843_rev_KEYBOARD-TRIAGE-P13_b | Nov 01 11:29 | yes | 10 | 92.2 | 0.003613 |
+| direct-direct | 12843_rev_MW-READBACK-TEXTOF-R2_a | fill_112843_rev_MW-READBACK-TEXTOF-R2_a | Nov 01 11:29 | yes | 24 | 92.9 | 0.01384 |
+| direct-direct | 12843_rev_MW-READBACK-TEXTOF-R2_b | fill_112843_rev_MW-READBACK-TEXTOF-R2_b | Nov 01 11:29 | yes | 11 | 87.9 | 0.008307 |
+| direct-direct | 13001_rev_DISPLAY-READER-DEFLAKE_a | fill_113001_rev_DISPLAY-READER-DEFLAKE_a | Nov 01 11:31 | yes | 11 | 87.3 | 0.006921 |
+| direct-direct | 13001_rev_DISPLAY-READER-DEFLAKE_b | fill_113001_rev_DISPLAY-READER-DEFLAKE_b | Nov 01 11:31 | yes | 22 | 92.9 | 0.011745 |
+| direct-direct | 13001_rev_KEYBOARD-TRIAGE-P13_a | fill_113001_rev_KEYBOARD-TRIAGE-P13_a | Nov 01 11:31 | yes | 9 | 87.4 | 0.004462 |
+| direct-direct | 13001_rev_KEYBOARD-TRIAGE-P13_b | fill_113001_rev_KEYBOARD-TRIAGE-P13_b | Nov 01 11:31 | yes | 12 | 93.6 | 0.003923 |
+| direct-direct | 13001_rev_MW-READBACK-TEXTOF-R2_a | fill_113001_rev_MW-READBACK-TEXTOF-R2_a | Nov 01 11:31 | yes | 13 | 88.3 | 0.008438 |
+| direct-direct | 13001_rev_MW-READBACK-TEXTOF-R2_b | fill_113001_rev_MW-READBACK-TEXTOF-R2_b | Nov 01 11:31 | yes | 9 | 87.5 | 0.004514 |
+| direct-direct | SPLAY-READER-DEFLAKE_b | r1x_DISPLAY-READER-DEFLAKE_b | Nov 01 11:32 | yes | 17 | 90.2 | 0.010435 |
+| direct-direct | 13120_rev_DISPLAY-READER-DEFLAKE_a | fill_113120_rev_DISPLAY-READER-DEFLAKE_a | Nov 01 11:32 | yes | 15 | 89.9 | 0.011481 |
+| direct-direct | 13120_rev_DISPLAY-READER-DEFLAKE_b | fill_113120_rev_DISPLAY-READER-DEFLAKE_b | Nov 01 11:32 | yes | 10 | 84.7 | 0.0071 |
+| direct-direct | 13120_rev_KEYBOARD-TRIAGE-P13_a | fill_113120_rev_KEYBOARD-TRIAGE-P13_a | Nov 01 11:32 | yes | 22 | 92.6 | 0.010664 |
+| direct-direct | 13120_rev_KEYBOARD-TRIAGE-P13_b | fill_113120_rev_KEYBOARD-TRIAGE-P13_b | Nov 01 11:32 | yes | 18 | 94.0 | 0.006224 |
+| direct-direct | 13120_rev_MW-READBACK-TEXTOF-R2_a | fill_113120_rev_MW-READBACK-TEXTOF-R2_a | Nov 01 11:32 | yes | 10 | 84.2 | 0.007358 |
+| direct-direct | 13120_rev_MW-READBACK-TEXTOF-R2_b | fill_113120_rev_MW-READBACK-TEXTOF-R2_b | Nov 01 11:32 | yes | 18 | 91.5 | 0.010704 |
+| direct-direct | 13239_rev_KEYBOARD-TRIAGE-P13_b | fill_113239_rev_KEYBOARD-TRIAGE-P13_b | Nov 01 11:33 | yes | 17 | 92.6 | 0.006262 |
 
 ## Method
 
