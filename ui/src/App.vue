@@ -604,10 +604,20 @@ function assertLiveProposal(body) {
 // their panels are gone. Closed ids are tracked here only to show the empty-wall hint and the
 // way back (Add capsule -> open browser reveals the live tile) when every tile was closed.
 const capsuleModes = ref(/** @type {Record<string,string>} */ ({}));
+const stoppedSurfaces = ref(/** @type {Record<string,boolean>} */ ({}));
 /** @param {{surfaceId:string,mode:string}} event */
-function onCapsuleMode(event) { capsuleModes.value = {...capsuleModes.value,[event.surfaceId]:event.mode}; }
+function onCapsuleMode(event) {
+  capsuleModes.value = {...capsuleModes.value,[event.surfaceId]:event.mode};
+  if (event.mode === 'closed') {
+    wall.value?.applyPresentationIntent?.({type:'close',capsuleId:event.surfaceId});
+    revealed.delete(event.surfaceId);
+    closedPanels.value = closedPanels.value.filter(closed => closed !== event.surfaceId);
+    stoppedSurfaces.value = {...stoppedSurfaces.value,[event.surfaceId]:true};
+  }
+}
 /** @param {string} surfaceId */
 async function revealOpenedIdentity(surfaceId) {
+  await pollNativeSurfaces().catch(() => {});
   for (let attempt = 0; attempt < 30 && hostActive; attempt++) {
     if (settled.value && wall.value?.revealSurface(surfaceId,'split')?.ok) { markPanelOpen(surfaceId); return true; }
     await new Promise(resolve => setTimeout(resolve,100));
@@ -633,15 +643,32 @@ function onCapsuleLifecycle({surfaceId,completion}) {
   });
 }
 const pendingModeSwitch = ref(/** @type {any} */ (null));
+const modalOpen = computed(() => !nestedMode.displayOnly && Boolean(pendingModeSwitch.value || launcherOpen.value || identitiesOpen.value || demoOpen.value));
+function syncModalAttr(open = modalOpen.value) {
+  const body = /** @type {any} */ (globalThis.document)?.body;
+  if (!body) return;
+  if (open) {
+    if (typeof body.setAttribute === 'function') body.setAttribute('data-mv-modal', 'true');
+    if (body.dataset) body.dataset.mvModal = 'true';
+  } else {
+    if (typeof body.removeAttribute === 'function') body.removeAttribute('data-mv-modal');
+    if (body.dataset) delete body.dataset.mvModal;
+  }
+}
+watch(modalOpen, open => { syncModalAttr(open); }, { immediate: true, flush: 'sync' });
+onBeforeUnmount(() => { syncModalAttr(false); });
 async function confirmModeSwitch() {
   const current = pendingModeSwitch.value; pendingModeSwitch.value = null;
   if (!current) return;
   await submitHost(async () => {
     const result = await /** @type {any} */(globalThis).metaviewerRoles.switchMode(current.surfaceId);
-    if (!result.ok) throw Object.assign(Error(result.code),{code:result.code});
+    if (!result.ok) {
+      if (result.code === 'SURFACE_CREATE_BUSY' || result.busy) return null;
+      throw Object.assign(Error(result.code),{code:result.code});
+    }
     await revealOpenedIdentity(result.surfaceId);
     onCapsuleStopped(current.surfaceId);
-    return result;
+    return null;
   });
 }
 const closedPanels = ref(/** @type {string[]} */ ([]));
@@ -690,14 +717,24 @@ function onCreateCapsule(intent) {
       }
       try {
         if (body.choice && /** @type {any} */ (globalThis).metaviewerRoles) {
+          if (body.choice.busy) return null;
           const reply = await /** @type {any} */ (globalThis).metaviewerRoles.open(body.choice);
           if (!reply.ok && reply.code === 'PROFILE_ALREADY_BOUND' && reply.surfaceId) {
+            if (!reply.requestedMode || reply.requestedMode === reply.currentMode) {
+              void revealOpenedIdentity(reply.surfaceId);
+              return null;
+            }
             pendingModeSwitch.value = reply;
-            return {code:'MODE_SWITCH_CONFIRMATION',message:'Choose Close and reopen to change mode.',tone:'success'};
+            return null;
           }
+          if (!reply.ok && reply.code === 'PROFILE_ALREADY_BOUND') {
+            const bound = rows.value.find(row => (/** @type {any} */ (row).profile_id || row.title) === body.choice.profileId);
+            if (bound) { void revealOpenedIdentity(bound.id); return null; }
+          }
+          if (!reply.ok && (reply.code === 'SURFACE_CREATE_BUSY' || reply.busy)) return null;
           if (!reply.ok) throw Object.assign(new Error(reply.code), {code:reply.code});
           if (reply.surfaceId) void revealOpenedIdentity(reply.surfaceId);
-          return reply;
+          return null;
         }
         return await props.authorityHost.createSurface();
       } catch (error) {
@@ -809,6 +846,7 @@ onBeforeUnmount(() => {
 async function submitHost(action) {
   try {
     const result = await action();
+    if (result === null || result === undefined) return result;
     if (hostActive) hostOutcome.value = result === true
       ? { code: 'INTENT_ACKNOWLEDGED', message: 'Request sent.', tone: 'success' }
       : /** @type {import('./core/hostAdapters.js').OutcomeRow} */ (result);
@@ -823,7 +861,7 @@ async function submitHost(action) {
     const missingId = rawMissing ?? (typeof (/** @type {{missingId?:unknown}} */ (error))?.missingId === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(/** @type {string} */ ((/** @type {{missingId?:unknown}} */ (error)).missingId)) ? /** @type {string} */ ((/** @type {{missingId?:unknown}} */ (error)).missingId) : null);
     const normalizedCode = rawMissing !== null ? 'NO_IDENTITY' : suppliedCode;
     const code = ['LAYOUT_UNKNOWN_SLOT','LAYOUT_ILLEGAL_TRANSITION','LAYOUT_INPUT_MODE_READ'].find(code =>
-      normalizedCode === code || String(error).includes(code)) ?? (typeof normalizedCode === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(normalizedCode) ? normalizedCode : 'HOST_REQUEST_REFUSED');
+      normalizedCode === code || String(error).includes(code)) ?? (typeof normalizedCode === 'string' && normalizedCode.length > 0 ? normalizedCode : 'HOST_REQUEST_REFUSED');
     const createReasons = {
       NO_BROWSER_CAPSULE: 'No browser capsule with a live frame.',
       CAPSULE_LIMIT_REACHED: 'At most 4 capsules run at once because they share the same CPU cores: frame rate drops as more run. Close a capsule to open another.',
@@ -1124,6 +1162,7 @@ const admitLostRows = computed(() => diagnosticTileStates || !props.fixture || p
 const rows = computed(() => {
   void snapshot.value;
   const admitted = feed.getProjection()?.rows.filter(row => row.backendLifecycle !== 'destroyed'
+    && !stoppedSurfaces.value[row.id]
     && (row.backendLifecycle !== 'lost' || admitLostRows.value)) ?? [];
   return admitted.filter(row => !nestedMode.displayOnly || applyNestedWall([row], nestedMode).rows.length > 0);
 });
@@ -1147,6 +1186,9 @@ watch(() => rows.value.map(row => row.id),
         seenLiveSurfaces.delete(id);
         disarmWallInput(id);
         bumpSurfaceLifetimeEpoch(id);
+        revealed.delete(id);
+        closedPanels.value = closedPanels.value.filter(closed => closed !== id);
+        wall.value?.applyPresentationIntent?.({type:'close',capsuleId:id});
       }
     }
   });
@@ -1313,10 +1355,15 @@ const chromeWorkspace = markRaw(defineComponent({
       <SideTerminalOverlay v-if="!nestedMode.displayOnly && !multislotOpen && !creativeOpen" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" v-model:open="terminalOpen" :storage="preferences" :top-offset="terminalTop" :bottom-offset="terminalBottom" />
     </div>
     <DemoDialog v-if="!nestedMode.displayOnly" :open="demoOpen" @close="demoOpen=false" />
-    <div v-if="pendingModeSwitch" class="mv-mode-confirm" role="dialog" aria-modal="true" aria-label="Switch capsule mode">
-      <p>This identity is open in {{ pendingModeSwitch.currentMode }} mode.</p>
-      <UiButton id="mode-switch-confirm" data-semantic-anchor="capsule/mode/confirm" :label="`Close and reopen in ${pendingModeSwitch.requestedMode} mode`" @click="confirmModeSwitch" />
-      <UiButton id="mode-switch-cancel" data-semantic-anchor="capsule/mode/cancel" label="Cancel" @click="pendingModeSwitch = null" />
+    <div v-if="pendingModeSwitch" class="mv-mode-confirm s1-confirm-backdrop" role="dialog" aria-modal="true" aria-label="Switch capsule mode" @keydown.esc="pendingModeSwitch = null">
+      <div class="mv-mode-confirm__panel s1-confirm-panel">
+        <h3 class="s1-confirm-title">Switch capsule mode</h3>
+        <p class="s1-confirm-body">This identity is open in {{ pendingModeSwitch.currentMode }} mode.</p>
+        <div class="mv-mode-confirm__actions s1-confirm-footer">
+          <UiButton id="mode-switch-confirm" data-semantic-anchor="capsule/mode/confirm" :label="`Close and reopen in ${pendingModeSwitch.requestedMode} mode`" @click="confirmModeSwitch" />
+          <UiButton id="mode-switch-cancel" data-semantic-anchor="capsule/mode/cancel" label="Cancel" @click="pendingModeSwitch = null" />
+        </div>
+      </div>
     </div>
     <IdentitiesDialog v-if="!nestedMode.displayOnly" :open="identitiesOpen" @close="identitiesOpen=false" @open-identity="openIdentityChoice" />
     <CatalogLauncher v-if="!nestedMode.displayOnly" v-model:visible="launcherOpen" @create="onCreateCapsule" />
@@ -1332,7 +1379,10 @@ body { font-family:var(--cuk-semantic-typography-font-family-sans, system-ui, sa
 .mv-terminal > * { pointer-events:auto; }
 .mv-shell-body { grid-row:3; display:flex; min-width:0; min-height:0; position:relative; }
 .mv-shell-rail { width:var(--cuk-semantic-size-rail-collapsed-width); flex:none; position:relative; }
-.mv-shell main { position:relative; flex:1; min-height:0; min-width:0; }
+.mv-shell main { position:relative; flex:1; min-height:0; min-width:0; overflow:auto; }
+.mv-mode-confirm { position:fixed; inset:0; z-index:var(--cuk-component-dialog-host-z-index); background:var(--cuk-component-dialog-host-backdrop); display:flex; align-items:center; justify-content:center; padding:var(--cuk-semantic-spacing-lg); }
+.mv-mode-confirm__panel { background:var(--cuk-semantic-surface-elevated); border:var(--cuk-semantic-border-width) solid var(--cuk-semantic-border-default); border-radius:var(--cuk-component-dialog-host-border-radius); color:var(--cuk-semantic-text-primary); padding:var(--cuk-primitive-space-8); max-width:calc(var(--cuk-primitive-space-16) * 12); width:100%; display:grid; gap:var(--cuk-semantic-spacing-md); }
+.mv-mode-confirm__actions { display:flex; justify-content:flex-end; gap:var(--cuk-semantic-spacing-sm); flex-wrap:wrap; }
 /* MVUI19 lane A (L3-3): the settled outcome toast is transient and never
    intercepts pointer events on interactive rows beneath it. MVUI22 lane T:
    hoist the toast to the kit overlay layer so wall/multislot overlays (all

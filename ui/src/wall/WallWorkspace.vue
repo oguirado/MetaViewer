@@ -144,7 +144,7 @@ export const WALL_PRESENTATION_VERBS = Object.freeze(['close', 'hide', 'show', '
  * @property {'always'} renderer
  * @property {number} minimumWidth
  * @property {number} minimumHeight
- * @property {{ direction: 'right' }} [position]
+ * @property {{ direction: 'right' } | { referencePanel?: string, direction: string }} [position]
  */
 
 /**
@@ -390,15 +390,87 @@ export function createWallWorkspaceController(options = {}) {
   let windows = null;
   let preset = /** @type {string|null} */ (null), layoutSignature = '';
   let host = /** @type {any} */ (null);
+  /** @type {Map<string, string>} */
+  const panelIdentities = new Map();
+  /** @type {Map<string, {panelId:string, groupId:string|null, index:number, referencePanel:string|null, direction:string, orderIndex:number}>} */
+  const identitySlots = new Map();
+  /** @type {string[]} */
+  const panelOrder = [];
+  /** @param {string} panelId */
+  function captureSlot(panelId) {
+    if (!api) return;
+    const capsuleId = panelId.startsWith(WALL_PANEL_ID_PREFIX) ? panelId.slice(WALL_PANEL_ID_PREFIX.length) : panelId;
+    const rows = projectionView?.getProjection()?.rows || [];
+    const row = rows.find((/** @type {any} */ candidate) => candidate?.id === capsuleId || candidate?.surfaceId === capsuleId);
+    const profileId = panelIdentities.get(panelId) ?? asNonEmptyString(/** @type {any} */ (row)?.profile_id);
+    if (!profileId) return;
+    const panel = /** @type {any} */ (api.getPanel(panelId));
+    const prev = identitySlots.get(profileId);
+    const orderIndex = panelOrder.indexOf(panelId) >= 0 ? panelOrder.indexOf(panelId) : (prev?.orderIndex ?? 0);
+    if (!panel) return;
+    const group = panel.group ?? null;
+    const groupId = asNonEmptyString(group?.id);
+    const groupPanels = Array.isArray(group?.panels) ? group.panels : [];
+    const index = groupPanels.indexOf(panel);
+    const sibling = groupPanels.find((/** @type {any} */ candidate) => candidate && candidate.id !== panelId && api?.getPanel(candidate.id));
+    if (sibling?.id) {
+      identitySlots.set(profileId, {panelId, groupId, index: index >= 0 ? index : 0, referencePanel: sibling.id, direction: 'within', orderIndex});
+      return;
+    }
+    let referencePanel = /** @type {string|null} */ (null);
+    let direction = 'left';
+    const candidates = [...new Set([...panelOrder, ...rows.map((/** @type {any} */ r) => `${WALL_PANEL_ID_PREFIX}${r.id}`)])]
+      .filter(id => id !== panelId && api?.getPanel(id));
+    if (candidates.length > 0) {
+      referencePanel = candidates[0];
+      const refPanelObj = /** @type {any} */ (api.getPanel(referencePanel));
+      const refGroup = refPanelObj?.group ?? null;
+      const groups = Array.isArray(api.groups) ? api.groups : [];
+      const myGroupIdx = group ? groups.indexOf(group) : -1;
+      const refGroupIdx = refGroup ? groups.indexOf(refGroup) : -1;
+      const myRect = group?.element?.getBoundingClientRect?.();
+      const refRect = refGroup?.element?.getBoundingClientRect?.();
+      if (myRect && refRect && (myRect.width > 0 || refRect.width > 0 || myRect.height > 0 || refRect.height > 0)) {
+        const dx = (myRect.x ?? myRect.left ?? 0) - (refRect.x ?? refRect.left ?? 0);
+        const dy = (myRect.y ?? myRect.top ?? 0) - (refRect.y ?? refRect.top ?? 0);
+        if (Math.abs(dx) >= Math.abs(dy)) direction = dx <= 0 ? 'left' : 'right';
+        else direction = dy <= 0 ? 'above' : 'below';
+      } else if (myGroupIdx >= 0 && refGroupIdx >= 0 && myGroupIdx !== refGroupIdx) {
+        direction = myGroupIdx < refGroupIdx ? 'left' : 'right';
+      } else {
+        const refOrder = panelOrder.indexOf(referencePanel);
+        if (orderIndex >= 0 && refOrder >= 0 && orderIndex !== refOrder) direction = orderIndex < refOrder ? 'left' : 'right';
+      }
+    }
+    identitySlots.set(profileId, {panelId, groupId, index: index >= 0 ? index : 0, referencePanel, direction, orderIndex});
+  }
   const presentationRows = () => {
     if (!api || !windows) return [];
-    return (projectionView?.getProjection()?.rows || []).flatMap(row => {
+    const list = (projectionView?.getProjection()?.rows || []).flatMap(row => {
+      if (row?.backendLifecycle === 'destroyed') return [];
       const panelId = WALL_PANEL_ID_PREFIX + row.id;
       if (!api?.getPanel(panelId)) return [];
       return [{id:panelId,...windows?.state(panelId)}];
     });
+    if (panelOrder.length > 1) {
+      list.sort((a, b) => {
+        const ia = panelOrder.indexOf(a.id), ib = panelOrder.indexOf(b.id);
+        if (ia < 0 || ib < 0) return 0;
+        return ia - ib;
+      });
+    }
+    return list;
   };
   function refreshPreset() {
+    if (api) {
+      for (const row of projectionView?.getProjection()?.rows || []) {
+        if (row?.backendLifecycle === 'destroyed') {
+          const deadId = WALL_PANEL_ID_PREFIX + row.id;
+          const deadPanel = api.getPanel(deadId);
+          if (deadPanel) { captureSlot(deadId); deadPanel.api.close(); collapseEmptyGroups(); }
+        }
+      }
+    }
     if (!preset || !api?.width || !api.height) return;
     const tiles = presentationRows();
     const signature = JSON.stringify([preset,api.width,api.height,tiles]);
@@ -576,7 +648,47 @@ export function createWallWorkspaceController(options = {}) {
         minimumHeight: WALL_PANEL_MIN_HEIGHT,
       };
       if (placement === 'split') options.position = { direction: 'right' };
+      const profileId = asNonEmptyString(/** @type {any} */ (rowCheck.value).profile_id);
+      const prior = profileId ? identitySlots.get(profileId) : null;
+      if (prior && prior.panelId !== panelId) {
+        const stalePanel = api.getPanel(prior.panelId);
+        if (stalePanel) { captureSlot(prior.panelId); stalePanel.api.close(); collapseEmptyGroups(); }
+      }
+      const slot = profileId ? identitySlots.get(profileId) : null;
+      if (slot && slot.panelId !== panelId) {
+        if (slot.groupId && typeof api.getGroup === 'function' && api.getGroup(slot.groupId)) {
+          if (slot.referencePanel && api.getPanel(slot.referencePanel)) {
+            options.position = { referencePanel: slot.referencePanel, direction: /** @type {any} */ ('within') };
+          }
+        } else if (slot.referencePanel && api.getPanel(slot.referencePanel)) {
+          options.position = { referencePanel: slot.referencePanel, direction: /** @type {any} */ (slot.direction) };
+        }
+      }
       const panel = api.addPanel(options);
+      if (slot && slot.panelId !== panelId && slot.groupId && typeof api.getGroup === 'function') {
+        const targetGroup = api.getGroup(slot.groupId);
+        if (targetGroup && typeof /** @type {any} */ (panel)?.api?.moveTo === 'function') {
+          /** @type {any} */ (panel).api.moveTo({ group: targetGroup, position: 'center', ...(Number.isInteger(slot.index) && slot.index >= 0 ? { index: slot.index } : {}) });
+        }
+      }
+      if (profileId) {
+        panelIdentities.set(panelId, profileId);
+        if (slot && slot.panelId !== panelId) {
+          const oldIdx = panelOrder.indexOf(slot.panelId);
+          if (oldIdx >= 0) panelOrder.splice(oldIdx, 1, panelId);
+          else if (!panelOrder.includes(panelId)) panelOrder.splice(Math.min(slot.orderIndex, panelOrder.length), 0, panelId);
+        } else if (!panelOrder.includes(panelId)) {
+          panelOrder.push(panelId);
+        }
+        identitySlots.set(profileId, {
+          panelId,
+          groupId: asNonEmptyString(/** @type {any} */ (panel)?.group?.id) ?? slot?.groupId ?? null,
+          index: slot?.index ?? 0,
+          referencePanel: slot?.referencePanel ?? null,
+          direction: slot?.direction ?? 'left',
+          orderIndex: panelOrder.indexOf(panelId),
+        });
+      }
       collapseEmptyGroups();
       if (placement === 'floating') windows.float(panelId);
       else panel.api.setActive();
@@ -607,7 +719,7 @@ export function createWallWorkspaceController(options = {}) {
       if (!panel) {
         return fail('ERR_UNKNOWN_PANEL', `unknown panel "${panelId}"`);
       }
-      if (intent.type === 'close') panel.api.close();
+      if (intent.type === 'close') { captureSlot(panelId); panel.api.close(); collapseEmptyGroups(); }
       else if (intent.type === 'hide') windows.hide(panelId);
       else if (intent.type === 'show') windows.show(panelId);
       else if (intent.type === 'float') windows.float(panelId);

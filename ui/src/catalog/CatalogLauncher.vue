@@ -34,6 +34,7 @@ const matchingProfiles = computed(() => profileChoices.value);
 watch(profileChoice, id => { roleChoice.value = profileChoices.value.find(p => p.profileId === id)?.role || 'agent'; });
 function confirmRole() {
   const profile = matchingProfiles.value.find(p => p.profileId === profileChoice.value);
+  if (/** @type {any} */ (profile)?.busy) return;
   if (!profile?.available) { roleError.value = profile ? 'PROFILE_ALREADY_BOUND' : 'NO_IDENTITY'; return; }
   emit('create', {...pendingIntent.value,choice:{role:roleChoice.value,profileId:profile.profileId}});
   choosingRole.value = false;

@@ -42,8 +42,8 @@ watch(()=>props.open,open=>{if(open)void invoke('list');},{immediate:true});
       <li v-for="row in rows" :key="row.id">
         {{ row.label }} ({{ row.id }}) — {{ row.domains.join(', ') }} — Mode: {{ modeFor(row.id)?.currentMode || 'closed' }} — Last login: {{ modeFor(row.id)?.lastLogin ? new Date(modeFor(row.id).lastLogin).toLocaleString() : 'Not confirmed' }}
         <UiButton v-if="!roleApi" label="Log in" :disabled="busy" @click="invoke('login',{id:row.id})" />
-        <UiButton label="Open as human" :disabled="busy || !modeFor(row.id)?.available" @click="emit('open-identity',{profileId:row.id,role:'human'}); emit('close')" />
-        <UiButton label="Open as agent" :disabled="busy || !modeFor(row.id)?.available" @click="emit('open-identity',{profileId:row.id,role:'agent'}); emit('close')" />
+        <UiButton label="Open as human" :disabled="busy || !modeFor(row.id)?.available || !!modeFor(row.id)?.busy" @click="emit('open-identity',{profileId:row.id,role:'human'}); emit('close')" />
+        <UiButton label="Open as agent" :disabled="busy || !modeFor(row.id)?.available || !!modeFor(row.id)?.busy" @click="emit('open-identity',{profileId:row.id,role:'agent'}); emit('close')" />
         <UiButton label="Delete" :disabled="busy" @click="pendingDelete=row.id" />
       </li>
     </ul>

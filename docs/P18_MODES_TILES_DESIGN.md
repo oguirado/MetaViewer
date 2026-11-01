@@ -122,5 +122,18 @@ example.org origin and returns only whether the controlled marker matches.
 Keyboard input uses XTest physical positions from that display's XKB map;
 xdotool keysym lookup can select alternate Spanish levels and is not a faithful
 physical-key oracle.
+## R3
+
+`RoleSurface` clips the native `WebContentsView` bounds to the intersection of the
+tile rectangle, every scrolling or clipping ancestor, the wall viewport, and the
+window viewport, updating immediately on scroll events and hiding the native view
+without closing the session or bridge when that intersection is empty or when
+`body[data-mv-modal]` is active. Stopping a capsule removes its panel from the
+wall while retaining its identity slot so a subsequent reopen of the same
+identity reuses that slot if the layout still has it. Handled role outcomes
+(mode-switch confirmation offers, `PROFILE_ALREADY_BOUND` reveals, busy flags,
+and successful role opens or switches) do not emit refusal rows; unexpected
+failures report their real code. The mode-switch confirmation renders as a modal
+dialog setting `body[data-mv-modal]`.
 
 This design is limited to the supplied worktrees and their pinned contracts and UI kit.
