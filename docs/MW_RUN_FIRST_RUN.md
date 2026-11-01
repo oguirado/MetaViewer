@@ -43,6 +43,24 @@ was started with, and `$MV_WENDER_ROOT` is the wender-agent checkout at its
    the external AI. Give it `MV_OPERATOR_REPO` and `MV_WENDER_ROOT` when it asks.
    Do not give it the app's own variables: `mw_run` attaches to the running app
    by itself.
+
+## Before the first run on a site: check the anchors
+
+Before dispatching `mw_run`, take a single read-only AX snapshot on the live
+capsule and compare the page's accessible names with the workflow's declared
+anchors (so locale drift is caught before any input):
+
+```bash
+python3 tools/mw_ax_dump.py --repo . --capsule mv-live-1 --site perplexity \
+  --workflow ask --out /tmp/mv-ax-dump.json
+```
+
+- `rc 0`: every workflow AX name anchor is present on the page; `/tmp/mv-ax-dump.json`
+  is written with mode `0600` (without row values).
+- `rc 3` (`MW_AX_ANCHOR_DRIFT`): at least one anchor is missing; the printed
+  `MW_AX_DUMP` JSON summary lists `candidates` from the live AX tree so the UI
+  language or workflow anchors can be aligned before running.
+
 5. **Watch the run.** The AI runs, from `$MV_OPERATOR_REPO/agents`:
 
    ```bash
