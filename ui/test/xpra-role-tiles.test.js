@@ -274,13 +274,16 @@ test('readiness requires healthy connection, native desktop, canvas, remote wind
   const frame={contentWindow:page,contentDocument:doc};
   return {client,page,canvas,frame,document:{getElementById:()=>frame}};
  }
+ // A capsule window need not be maximized: a restored or smaller window still paints (operator profile, 1 Nov).
+ { const f=fixture(); f.client.id_to_window={one:{w:900,h:700}}; f.canvas.width=900; f.canvas.height=700;
+   assert.equal(vm.runInNewContext(xpraReadyExpression(true),f),true); }
  for(const writable of [true,false]) {
   const good=fixture(!writable);
   assert.equal(vm.runInNewContext(xpraReadyExpression(writable),good),true);
  }
  const corrupt=[f=>f.client.connected=false,f=>f.client.server_ok=false,f=>f.client.server_readonly=true,
   f=>f.page.innerWidth=600,f=>f.page.innerHeight=422,f=>f.client.desktop_width=600,
-  f=>f.client.desktop_height=422,f=>f.client.id_to_window={},f=>f.canvas.width=600,f=>f.canvas.height=422];
+  f=>f.client.desktop_height=422,f=>f.client.id_to_window={},f=>f.canvas.width=0,f=>f.canvas.height=0];
  for(const change of corrupt) {
   const f=fixture();change(f);
   const wc={executeJavaScript:async source=>vm.runInNewContext(source,f)};

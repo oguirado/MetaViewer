@@ -23,8 +23,8 @@ export const xpraReadyExpression = writable => `Boolean((()=>{
   return client?.connected && client.server_ok && client.server_readonly===${!writable} &&
     page.innerWidth===1280 && page.innerHeight===900 &&
     client.desktop_width===1280 && client.desktop_height===900 &&
-    Object.values(client.id_to_window||{}).some(w=>w.w===1280&&w.h===900) &&
-    [...doc.querySelectorAll('canvas')].some(c=>c.width===1280&&c.height===900);
+    Object.keys(client.id_to_window||{}).length>0 &&
+    [...doc.querySelectorAll('canvas')].some(c=>c.width>0&&c.height>0);
 })())`;
 
 /** @param {{executeJavaScript:(source:string)=>Promise<any>}} contents
